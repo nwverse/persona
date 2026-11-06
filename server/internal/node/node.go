@@ -1171,6 +1171,8 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 		return map[string]any{"settings": list}, err
 	case "file.upload.begin", "file.upload.chunk", "file.upload.end", "file.upload.abort":
 		return n.uploadCall(method, params)
+	case "file.rename", "file.move", "file.trash", "file.restore":
+		return n.fileEditCall(method, params)
 	case "health.reports.list", "health.reports.delete":
 		return n.healthReportsCall(method, params)
 	case "file.chunk":

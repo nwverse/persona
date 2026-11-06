@@ -334,6 +334,7 @@ var Features = []string{
 	"conversation_origin",      // Session.origin on assistant conversations (docs/protocol/protocol.md "Origin of assistant conversations")
 	"builtin_presets",          // the hub's own provider presets in GET /api/v1/launchers/presets; POST /api/v1/launchers with a preset takes an empty name, display_name and assign (docs/integrations/launchers.md "Built-in presets")
 	"upload_dir",               // POST /api/v1/machines/{mid}/files?dest=dir&dir=&conflict=: into a folder of the home (docs/protocol/protocol.md "Changing files")
+	"file_edit",                // POST /api/v1/machines/{mid}/files/{rename,move,trash,restore} (docs/protocol/protocol.md "Changing files")
 	"task_push",                // Task.push on /api/v1/assistant/tasks: "Push when done", every run or only what a run sends (docs/assistant/assistant.md "Push when done")
 }
 
@@ -359,6 +360,8 @@ const (
 	// CodeReadOnly: the path is outside what the phone may change (409); CodeExists: the name is taken (409, name).
 	CodeReadOnly = "read_only"
 	CodeExists   = "exists"
+	// CodeNotFound: the file to rename, move, trash or put back is not there (404).
+	CodeNotFound = "not_found"
 	// CodeTooLarge: over MaxUploadBytes (413); CodeNodeOutdated: the machine's node predates the feature (409).
 	CodeTooLarge     = "too_large"
 	CodeNodeOutdated = "node_outdated"

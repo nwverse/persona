@@ -300,6 +300,8 @@ extension Theme {
         /// and the web mark it).
         static let home = "house"
         static let folderFilled = "folder.fill"
+        /// A folder that can't be opened (the file browser, the Move picker).
+        static let folderUnavailable = "folder.badge.questionmark"
         /// Up one folder (the new chat's directory browser, Parent Folder).
         static let parentFolder = "arrow.turn.left.up"
         /// A folder that is a git repository (the new chat's directory browser).

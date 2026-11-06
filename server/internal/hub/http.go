@@ -112,6 +112,10 @@ func (h *Hub) routes() http.Handler {
 	api.HandleFunc("POST /api/v1/machines/{mid}/git/pr", h.proxyBodyFor("git.pr_create", 2*time.Minute))
 	api.HandleFunc("POST /api/v1/machines/{mid}/git/pr/merge", h.proxyBodyFor("git.pr_merge", 3*time.Minute))
 	api.HandleFunc("POST /api/v1/machines/{mid}/files", h.withMachine(h.uploadFile))
+	api.HandleFunc("POST /api/v1/machines/{mid}/files/rename", h.fileEdit("rename"))
+	api.HandleFunc("POST /api/v1/machines/{mid}/files/move", h.fileEdit("move"))
+	api.HandleFunc("POST /api/v1/machines/{mid}/files/trash", h.fileEdit("trash"))
+	api.HandleFunc("POST /api/v1/machines/{mid}/files/restore", h.fileEdit("restore"))
 	api.HandleFunc("GET /api/v1/machines/{mid}/claude-settings", h.proxy("claude.settings", func(r *http.Request) any {
 		return map[string]any{"locale": h.requestLang(r)}
 	}))

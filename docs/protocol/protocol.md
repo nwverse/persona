@@ -1637,7 +1637,7 @@ The foundation shared by the file page and the various previews (spreadsheets, O
 
 ### Changing files
 
-The app's file browser (the session's Files pane, the machine page's Files row) can upload into a folder (#4858); rename, move and delete come in the second batch.
+The app's file browser (the session's Files pane, the machine page's Files row) and the web's Files panel can upload into a folder, rename, move, and move to the trash with Undo (#4858; web #4883). There is no permanent delete.
 
 - **Where writes are allowed** (`node/writeguard.go`): inside the home only. A path first passes the read guard (`pathguard.go`: links followed component by component; iCloud, key folders such as `.ssh`,
   private key names and the hub's keys are refused); the real path after following links must still be in the home (the home itself is fine); `~/.persona`, `~/.persona`, `~/Library` and the data folder `PERSONA_HOME` names (unless it is the home itself) are entirely unwritable, and so is a manager's folder anywhere (one holding a manager's `manager.json`, unless it is the home itself); nor may a client write a file named `manager.json*`.
@@ -1650,6 +1650,17 @@ The app's file browser (the session's Files pane, the machine page's Files row) 
     A name taken while the upload runs is not overwritten: the end answers `exists` and the partial file is removed.
   - An old node that does not know `dest=dir` (answers `unknown upload destination`, or an even older one ignores `dest`): 409 `code: node_outdated`. The hub requires begin to echo `dest`
     and aborts without the echo, so the file never lands in a temp folder quietly. `upload_dir` in the hello `features` says the hub takes these parameters.
+- **Rename, move, trash, restore** (`node/fileedit.go`, `hub/fileedit.go`): `POST /api/v1/machines/{mid}/files/{rename,move,trash,restore}` with a JSON body; paths as in a listing (`~/…`, absolute, or relative to `cwd`).
+  The folder an entry is in has its links followed and is checked like an upload's; the entry's own name is not followed, so a link is renamed, moved or trashed as the link. The home itself, `~/.persona`, `~/.jarvis` and `~/Library`
+  (and anything in them) are 409 `read_only`, as is a name that would land there. Answers give paths in the form the request used. `file_edit` in the hello `features` says the hub has these routes.
+  - `rename {path, cwd, name}` → `{path}`: in the same folder. `name` can't be empty, `.`, `..`, or contain `/` (400). A taken name is 409 `exists` (`name`) and nothing changes; changing only the case is allowed.
+  - `move {paths[], cwd, dir, conflict?}` → `{moved: [{from, to}]}`: into folder `dir`. Without `conflict`, any taken name refuses the whole move with 409 `exists` before anything moves; `keep` names it `name 2.ext`…;
+    `replace` first moves the file that was there to the trash (never a folder, and never by a folder: `exists`). A folder can't go into itself (502 with the reason); one already in `dir` is left as it is. Moving to another disk is not supported (502).
+  - `trash {paths[], cwd}` → `{trashed: [{path, trash_id}]}`: to the system's trash (macOS `~/.Trash`; Linux `$XDG_DATA_HOME/Trash` or `~/.local/share/Trash`, with a `.trashinfo` written first, freedesktop spec), named `name 2.ext`… if the trash has one.
+    Other systems: 502. `trash_id` is opaque to clients. It carries where the file went and where it came from, so Undo works after the node or hub restarts.
+  - `restore {trash_ids[]}` → `{restored: [{path}]}` (Undo): puts each back where it was, checked again like any write. A name taken there meanwhile is 409 `exists`; gone from the trash is 404 `not_found`.
+  - Errors: 400 for a body that can't be the request (missing `path` / `dir` / `paths`, more than 1000 paths, an unknown `conflict`); 404 `not_found` for an entry that is not there; 409 `read_only` / `exists` / `node_outdated`
+    (a node from before these: `unknown method`); anything else the node refuses is 502 `internal` with its reason. One request is not atomic: a failure part-way leaves the earlier ones done (a move checks every name first, so `exists` never does).
 - Full paired-device credentials only: extension tokens are refused (`testdata/route_scopes.txt` says `-`).
 
 ### Sending videos

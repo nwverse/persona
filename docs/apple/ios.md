@@ -333,7 +333,11 @@ Chat page:
     into the current folder under their own names, up to 2 GB; one after another, a row with progress and ✕ per file under the list. A taken name first asks Replace / Keep Both (Keep Both saves "name 2") before anything is sent;
     a folder that cannot be written (outside the home, `~/.persona`, `~/.persona`, `~/Library`), an outdated personad on the computer, and files over the cap each get a one-line reason. Leaving the page lets uploads finish; a pending name question counts as cancel.
     A file's long-press menu (also a VoiceOver action) has Save to Files: downloads to a temporary folder with progress, then the system's location picker; the temporary file is removed either way.
-    Rename, move and delete come in the second batch.
+  - **Rename, move, move to the trash** (#4858, `Views/Session/FolderEdits.swift`): a file's or folder's long-press menu (and VoiceOver actions) adds Rename (an alert with the name, refused names said before asking),
+    Move (a sheet with the browser's folders from its top, opened on the current one; Move Here is off for the folder they are already in, and the folders being moved can't be opened), and Move to Trash (asks first).
+    ⋯ › Select turns the list into checkmarks with a bar under it: the count, Move, and the trash button; Done ends it. A trash toast has Undo (puts it back through `files/restore`); there is no permanent delete.
+    A move to a taken name asks Replace (the one there goes to the trash) / Keep Both. These show only when hello's `features` has `file_edit` (or the hub sends none).
+    On an iPad, files dragged in from another app (Files, Photos) upload into the folder shown, with an accent outline while they are over it.
   - **Auto-refresh** (#3089, web #2439, `App/FsLive.swift`, `Views/Session/FsLiveModifier.swift`, `docs/protocol/protocol.md` ("Automatic file refresh")):
     foreground Files/Git sends WebSocket `fs_watch` (current directory/Git marks, Git state; same cwd combined),
     `fs_changed` debounced 200 ms then reread in place without loading animation (retain older loaded commits if latest unchanged); unsubscribe off foreground (`.onTabVisibility`),

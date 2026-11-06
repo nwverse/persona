@@ -80,6 +80,7 @@
         "conversation_origin",
         "builtin_presets",
         "upload_dir",
+        "file_edit",
         "task_push",
         "sessions_list",
         "sessions_lookup"
@@ -175,6 +176,7 @@
           "conversation_origin",
           "builtin_presets",
           "upload_dir",
+          "file_edit",
           "task_push",
           "sessions_list",
           "sessions_lookup"
@@ -261,6 +263,7 @@
         "conversation_origin",
         "builtin_presets",
         "upload_dir",
+        "file_edit",
         "task_push",
         "sessions_list",
         "sessions_lookup"
@@ -346,6 +349,7 @@
           "conversation_origin",
           "builtin_presets",
           "upload_dir",
+          "file_edit",
           "task_push",
           "sessions_list",
           "sessions_lookup"
