@@ -280,10 +280,8 @@ func (e *setupEnv) builtinManager(ctx context.Context, cfg *setupConfig) error {
 		e.sleep(time.Second)
 	}
 	// The hub runs and the phone can pair: say what is wrong and go on (its service keeps trying).
-	next := e.managerLog()
-	if e.switched {
-		next += "；要改回 hub 自己拉起它：personad hub manager-mode child，再重启 hub 的服务"
-	}
+	// (said every time: a switch an earlier run made is not known here)
+	next := e.managerLog() + "；要改回 hub 自己拉起它：personad hub manager-mode child，再重启 hub 的服务"
 	e.report("manager", false, fmt.Sprintf("内置管理者的常驻服务（%s）装好了，但 %d 秒内没连上 hub", unit, int(wait.Seconds())), next)
 	return nil
 }

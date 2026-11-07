@@ -313,7 +313,8 @@ func TestSetupBuiltinManagerProblems(t *testing.T) {
 			t.Fatalf("%v\n%s", err, out)
 		}
 		s := setupSteps(t, out.String())["manager"]
-		if s.OK || !strings.Contains(s.Next, "journalctl --user -u persona-manager-assistant") || !strings.Contains(out.String(), `"done":true`) {
+		if s.OK || !strings.Contains(s.Next, "journalctl --user -u persona-manager-assistant") || !strings.Contains(s.Next, "manager-mode child") ||
+			!strings.Contains(out.String(), `"done":true`) {
 			t.Fatalf("manager step %+v\n%s", s, out)
 		}
 	})
