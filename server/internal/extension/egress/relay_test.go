@@ -8,7 +8,6 @@ import (
 	"os"
 	"path/filepath"
 	"sync/atomic"
-	"syscall"
 	"testing"
 	"time"
 )
@@ -105,7 +104,17 @@ func TestProxyRelayUnixBoundsConnections(t *testing.T) {
 	if err := p.RelayUnix("notes", sock, target); err != nil {
 		t.Fatal(err)
 	}
-	// relayed says whether c reaches the target (an echo) or was closed by the relay.
+	dial := func() net.Conn {
+		t.Helper()
+		c, err := net.Dial("unix", sock)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = c.Close() })
+		return c
+	}
+	// relayed says whether c reaches the target (an echo) or was closed by the relay. A closed one fails however the
+	// platform says so (EOF, ECONNRESET, EPIPE, ENOTCONN on macOS…); only no answer at all is neither.
 	relayed := func(c net.Conn) bool {
 		t.Helper()
 		_ = c.SetDeadline(time.Now().Add(5 * time.Second))
@@ -114,26 +123,16 @@ func TestProxyRelayUnixBoundsConnections(t *testing.T) {
 		if err == nil {
 			_, err = io.ReadFull(c, b)
 		}
-		_ = c.SetDeadline(time.Time{})
-		switch {
-		case err == nil && b[0] == 'x':
-			return true
-		case errors.Is(err, io.EOF), errors.Is(err, io.ErrUnexpectedEOF), errors.Is(err, syscall.ECONNRESET),
-			errors.Is(err, syscall.EPIPE):
-			return false
+		if ne, ok := errors.AsType[net.Error](err); ok && ne.Timeout() {
+			t.Fatalf("neither relayed nor closed: %v", err)
 		}
-		t.Fatalf("neither relayed nor closed: %q %v", b, err)
-		return false
+		return err == nil && b[0] == 'x'
 	}
 	const over = 4
 	var open []net.Conn
 	closed := 0
 	for range runtimeConnsPerListener + over {
-		c, err := net.Dial("unix", sock)
-		if err != nil {
-			t.Fatal(err)
-		}
-		defer c.Close()
+		c := dial()
 		if relayed(c) {
 			open = append(open, c)
 		} else {
@@ -149,15 +148,12 @@ func TestProxyRelayUnixBoundsConnections(t *testing.T) {
 	open = open[1:]
 	deadline := time.Now().Add(5 * time.Second)
 	for {
-		c, err := net.Dial("unix", sock)
-		if err != nil {
-			t.Fatal(err)
-		}
-		defer c.Close()
+		c := dial()
 		if relayed(c) {
 			open = append(open, c)
 			break
 		}
+		_ = c.Close()
 		if time.Now().After(deadline) {
 			t.Fatal("a connection that ended kept its place")
 		}
