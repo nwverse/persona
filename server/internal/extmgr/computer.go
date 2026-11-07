@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"reflect"
 	"slices"
 	"strings"
 	"time"
@@ -171,10 +172,10 @@ func (h *Manager) keepComputer(m *Machine, c proto.Computer, asked time.Time) bo
 	return old == nil || !sameComputer(*old, c)
 }
 
+// sameComputer: the same apart from when it was checked; the job and the displays by value.
 func sameComputer(a, b proto.Computer) bool {
-	aj, bj := a.Job, b.Job
-	a.Checked, b.Checked, a.Job, b.Job = time.Time{}, time.Time{}, nil, nil
-	return a == b && (aj == nil) == (bj == nil) && (aj == nil || *aj == *bj)
+	a.Checked, b.Checked = time.Time{}, time.Time{}
+	return reflect.DeepEqual(a, b)
 }
 
 // computerChanged: the plugin was turned on or off, or its machines changed: ask the Macs again (every one while it is

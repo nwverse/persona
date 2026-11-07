@@ -250,6 +250,9 @@ type States struct {
 	// has it (Cfg; a manager from before leaves it out) and how it reaches it. The hub's mesh record lists them, and
 	// the hub keeps what each manager has from them (hub machine_entries.go).
 	Entries []RecMachine `json:"entries,omitempty"`
+	// OwnList: the manager keeps Entries as its own list in its manager.json (it was handed MachinesOwn and holds the
+	// list as its own): the hub may take them out of hub.json.
+	OwnList bool `json:"own_list,omitempty"`
 }
 
 // NodeEvent is devices.event's and devices.notify's params.

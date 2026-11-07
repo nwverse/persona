@@ -8941,6 +8941,20 @@ def mock_size(v):
 
 
 GIT_PULL_STATE = {"behind": 28, "mode": "success", "pulls": 0}
+# MOCK_PERSONAL_AGENTS=1 (#138): a few personal agent conversations, and Remove from list (POST …/hide, …/unhide,
+# GET /agents/hidden) kept in memory as the extension manager keeps it; GET /mock/personal-agents?reset=1 brings every one
+# back. Off: none, as on a hub without the Lark extension.
+PERSONAL_AGENTS = os.environ.get("MOCK_PERSONAL_AGENTS")
+PERSONAL_HIDDEN = {}  # session id -> when (ms)
+def personal_rows():
+    now = int(time.time() * 1000)
+    rows = [("muse", "周报助手", 0.1, 2), ("grok_bot", "旅行规划", 1.5, 0), ("cue", "读书笔记", 5, 1), ("muse", "代码评审", 30, 0),
+            ("grok_bot", "健身记录", 80, 0), ("cue", "菜谱整理", 200, 0)]
+    return [{"id": "lark-bridge:%s:%d" % (prov, i), "source": "lark-bridge", "sessionKey": "%s:%d" % (prov, i), "provider": prov,
+             "title": title, "canSend": True, "unreadCount": unread, "rankTimeMs": now - int(hours * 3600 * 1000), "hasAvatar": False}
+            for i, (prov, title, hours, unread) in enumerate(rows)]
+def personal_listed(hidden):
+    return [r for r in personal_rows() if (r["id"] in PERSONAL_HIDDEN) == hidden] if PERSONAL_AGENTS else []
 # MOCK_GIT_WRITE=1 (#6121): the Git panel's writes on a made-up repository that changes as they are made. GET
 # /mock/git-write?fail=<code>[&files=a,b] makes the next write refuse with that code (git_conflict lists the files);
 # ?reset=1 starts over. The branch's pull request: ?pr=none|review|ready|auto sets it, ?pr_fail=no_gh|not_signed_in makes
@@ -9701,18 +9715,37 @@ def png(w, h, rgb):
 # connecting (0: back).
 FAKE_SCREEN = {"account": "me", "password": "mock-pass", "port": 0, "signins": [], "typed": "",  # typed: keys after signing in
                "pointer": None, "clicks": [], "clipboard": "", "conns": [], "frames": 0, "slow": 0.0, "down": False}
-FAKE_W, FAKE_H = 480, 300
+# MOCK_SCREEN_DISPLAYS=2 (#80): the mock Mac has two 480×300 displays side by side, one picture 960×300 wide, each
+# numbered in its window (display 2 green). Its Screen Sharing sends their rectangles (ExtendedDesktopSize) when asked;
+# with "2:node" it sends none, as macOS's does, and MacBook's computer status carries them as the node reads them
+# (`displays`, points at a 2× scale).
+_displays = os.environ.get("MOCK_SCREEN_DISPLAYS", "1").split(":")
+FAKE_DISPLAYS = max(1, int(_displays[0] or "1"))
+FAKE_EXTENDED = FAKE_DISPLAYS > 1 and "node" not in _displays[1:]
+FAKE_W, FAKE_H = 480 * FAKE_DISPLAYS, 300
+FAKE_NODE_DISPLAYS = [{"id": i + 1, "x": 240 * i, "y": 0, "width": 240, "height": 150, **({"main": True} if i == 0 else {})}
+                      for i in range(FAKE_DISPLAYS)] if FAKE_DISPLAYS > 1 and not FAKE_EXTENDED else []
+# The displays' numbers, 3×5 cells each, drawn 12 pixels a cell.
+FAKE_DIGITS = {1: [".#.", "##.", ".#.", ".#.", "###"], 2: ["###", "..#", "###", "#..", "###"],
+               3: ["###", "..#", "###", "..#", "###"], 4: ["#.#", "#.#", "###", "..#", "..#"]}
 
 
 def fake_frame(t=0):
-    """The mock Mac's desktop as rows of (r, g, b): a gradient, a window, and a box that moves with t (animated)."""
+    """The mock Mac's desktop as rows of (r, g, b): a gradient, a window, and a box that moves with t (animated). With
+    several displays, each its own gradient and window with its number; the box stays on the first."""
     px = []
     bx, by = 80 + (t * 7) % 300, 120 + (t * 3) % 120
     for y in range(FAKE_H):
         for x in range(FAKE_W):
+            d, lx = divmod(x, 480)
             if bx <= x < bx + 40 and by <= y < by + 40: px.append((255, 159, 10))
-            elif 60 <= x < 420 and 50 <= y < 250: px.append((236, 236, 238) if y < 74 else (250, 250, 252))
-            else: px.append((40 + y // 6, 90 + y // 8, 160))
+            elif 60 <= lx < 420 and 50 <= y < 250:
+                digit = FAKE_DIGITS.get(d + 1) if FAKE_DISPLAYS > 1 else None
+                cx, cy = (lx - 222) // 12, (y - 120) // 12
+                if digit and 222 <= lx and 120 <= y and cx < 3 and cy < 5 and digit[cy][cx] == "#": px.append((60, 60, 67))
+                else: px.append((236, 236, 238) if y < 74 else (250, 250, 252))
+            elif d == 0: px.append((40 + y // 6, 90 + y // 8, 160))
+            else: px.append((40 + y // 8, 150 + y // 6 % 60, 90))
     return px
 
 
@@ -9801,8 +9834,11 @@ def fake_screen_sharing():
             encodings, z, t, sent = [], zlib.compressobj(6), 0, False
             frame = fake_frame()
 
-            def update(rects):
+            def update(rects, extended=False):
                 body = b""
+                if extended:  # ExtendedDesktopSize: reason 0, status 0, the framebuffer's size, then each display
+                    body += struct.pack(">HHHHi", 0, 0, FAKE_W, FAKE_H, -308) + struct.pack(">B3x", FAKE_DISPLAYS)
+                    body += b"".join(struct.pack(">IHHHHI", i + 1, 480 * i, 0, 480, FAKE_H, 0) for i in range(FAKE_DISPLAYS))
                 for (x, y, w, h) in rects:
                     if 16 in encodings:
                         body += struct.pack(">HHHHi", x, y, w, h, 16) + zrle_rect(frame, FAKE_W, x, y, w, h, z)
@@ -9810,7 +9846,7 @@ def fake_screen_sharing():
                         body += struct.pack(">HHHHi", x, y, w, h, 0) + b"".join(
                             bytes([*frame[(y + j) * FAKE_W + x + i][::-1], 0]) for j in range(h) for i in range(w))
                 with lock:
-                    c.sendall(struct.pack(">BxH", 0, len(rects)) + body)
+                    c.sendall(struct.pack(">BxH", 0, len(rects) + (1 if extended else 0)) + body)
                 FAKE_SCREEN["frames"] += 1
 
             while True:  # SetPixelFormat 20, SetEncodings 4 + 4n, FramebufferUpdateRequest 10, key 8, pointer 6, cut 8 + n
@@ -9823,7 +9859,7 @@ def fake_screen_sharing():
                     exact(c, 9)
                     if not sent:
                         sent = True
-                        update([(0, 0, FAKE_W, FAKE_H)])
+                        update([(0, 0, FAKE_W, FAKE_H)], extended=FAKE_EXTENDED and -308 in encodings)
                     elif os.environ.get("MOCK_SCREEN_ANIMATE") == "1":  # a box moving at ~30 frames a second
                         time.sleep(1 / 30)
                         old = (80 + (t * 7) % 300, 120 + (t * 3) % 120)
@@ -10297,7 +10333,10 @@ def computer_of(machine_id, enabled):
     """How Cua Driver is on that Mac, said for every Mac while the plugin is on (MacBook: MOCK_COMPUTER's state; Mac
     Studio: not installed), with whether it is turned on for it."""
     state = MOCK_COMPUTER if machine_id == "macbook" else "missing"
-    return {"enabled": enabled, **COMPUTER_STATES.get(state, COMPUTER_STATES["ready"])}
+    c = {"enabled": enabled, **COMPUTER_STATES.get(state, COMPUTER_STATES["ready"])}
+    if machine_id == "macbook" and c.get("screen_sharing") and FAKE_NODE_DISPLAYS:
+        c["displays"] = FAKE_NODE_DISPLAYS  # MOCK_SCREEN_DISPLAYS=2:node
+    return c
 
 
 if MOCK_COMPUTER:
@@ -12316,6 +12355,9 @@ class H(BaseHTTPRequestHandler):
             n = int((parse_qs(urlparse(self.path).query).get("n") or ["1"])[0])
             threading.Thread(target=replay_next, args=(n,), daemon=True).start()
             return self.send_json({"left": len(REPLAY["left"])})
+        if p == "/mock/agent_archives":  # ?close=refuse|offline|: how the next "Archive and close" ends (web_agent_archives_e2e.py)
+            ARCHIVE_CLOSE["mode"] = q.get("close", [""])[0]
+            return self.send_json({"close": ARCHIVE_CLOSE["mode"], "archived": [x["session_id"] for x in ARCHIVED_AGENTS]})
         if p == "/mock/reset":  # MachinePagesTests: each test starts from the same machines
             BOTMUX_ON.clear()
             SEND_FAIL["on"] = False  # a FailedSendPlacementTests run that died before turning it off
@@ -12335,6 +12377,8 @@ class H(BaseHTTPRequestHandler):
             INTERACTIONS.extend(SESSION_CLOSE["interactions"])
             SESSION_CLOSE.update(fail=False, attempts=[], closed=[], interactions=[])
             SESSIONS.extend(SESSION_DELETED); del SESSION_DELETED[:]
+            ARCHIVE_CLOSE["mode"] = os.environ.get("MOCK_ARCHIVE_CLOSE", "")
+            reset_agent_archives()  # MOCK_AGENT_ARCHIVES: the two archived agents again, the rest back in the list as they were
             PINS.update(spaces=["macbook/weather"], sessions=[])
             for sid, items in CHURN_ITEMS.items(): ITEMS[sid] = list(items)  # LiveUpdateTests, ChatFollowTests: what churn / say added goes
             for row in SESSIONS + ASSISTANT:
@@ -12479,7 +12523,11 @@ class H(BaseHTTPRequestHandler):
         # The Lark extension's personal agents (hub agents.go): none here, as on a hub without the Lark extension; the web's sidebar hid
         # the section only after these answered, and showed "Failed to load personal agents" on the 404 instead.
         if p == "/api/v1/agents": return self.send_json({"sources": []})
-        if p == "/api/v1/agents/sessions": return self.send_json({"sessions": [], "items": []})
+        if p == "/api/v1/agents/sessions": return self.send_json({"sessions": personal_listed(False), "items": []})
+        if p == "/api/v1/agents/hidden": return self.send_json({"sessions": personal_listed(True)})
+        if p == "/mock/personal-agents":
+            if q.get("reset"): PERSONAL_HIDDEN.clear()
+            return self.send_json({"hidden": sorted(PERSONAL_HIDDEN)})
         if p == "/api/v1/agents/prefs": return self.send_json({"pins": [], "view": {}, "sections": [], "assign": {}})
         if p == "/api/v1/personas": return self.send_json({"personas": personas() + ext_look_personas()})
         if looks_route(self, "GET", p, b""): return
@@ -12896,6 +12944,15 @@ class H(BaseHTTPRequestHandler):
         self.last_body = self.body()
         p = urlparse(self.path).path
         if preview_route and preview_route(self, self.command, p, parse_qs(urlparse(self.path).query)): return
+        if PERSONAL_AGENTS and p.startswith("/api/v1/agents/sessions/") and p.rsplit("/", 1)[-1] in ("hide", "unhide"):
+            sid, op = unquote(p[len("/api/v1/agents/sessions/"):].rsplit("/", 1)[0]), p.rsplit("/", 1)[-1]
+            if sid not in [r["id"] for r in personal_rows()]: return self.send_json({"error": "no such session"}, 404)
+            if op == "hide": PERSONAL_HIDDEN[sid] = int(time.time() * 1000)
+            else: PERSONAL_HIDDEN.pop(sid, None)
+            for c in list(CLIENTS.values()):
+                try: c["send"]({"type": "agents"})
+                except Exception: pass
+            return self.send_json({"ok": True, "hidden": op == "hide"})
         if p.startswith("/api/v1/assistant/conversations/" + ASK1 + "/always/") and self.command == "DELETE":
             key = p.rsplit("/", 1)[-1]
             ALWAYS_GRANTS[:] = [g for g in ALWAYS_GRANTS if g["key_hash"] != key]
@@ -15880,11 +15937,14 @@ MOCK_HELP.append("MOCK_READINESS=zero|offline|pending|no_claude|not_logged_in|ba
 # one (applied after MOCK_ULTRACODE_SECONDS, default 4), {"ultracode_dismiss_lost": true} takes the notice away, turning
 # on a session with a note answers 409 ultracode_unsupported with the note; other /modes requests go on as before. A
 # message to a session with a change queued is held back (409 ultracode_pending, the node on master) and goes once it is
-# through. GET /mock/ultracode: the requests, the starts that asked for it and the messages (held or not); ?reset=1 puts
-# the states back. Off: nothing changes.
+# through. With MOCK_TASKS=1 the open plan has three tasks (#12): one the assistant left off, one it turned on, and one on
+# Mac Studio it turned on where it can't run; Start's `tasks` edits are logged and their `ultracode` kept on the plan.
+# GET /mock/ultracode: the requests, the starts that asked for it, the plan starts and the messages (held or not);
+# ?reset=1 puts the states back. Off: nothing changes.
 ULTRACODE_MODE = os.environ.get("MOCK_ULTRACODE", "")
 ULTRACODE_LOG = []
 ULTRACODE_SENDS = []
+ULTRACODE_PLAN_STARTS = []
 ULTRACODE_NOTE = "请升级到 Claude Code 2.1.284 或更新版本，旧版不支持独立的 ultracode 开关"
 ULTRACODE_FIELDS = ("ultracode", "ultracode_note", "ultracode_pending", "ultracode_lost_at")
 ULTRACODE_CODEX_EFFORTS = ["low", "medium", "high", "xhigh", "ultra"]
@@ -15900,6 +15960,15 @@ def ultracode_reset():
         if x["session_id"] == ORDERS: x.update(effort="ultra", efforts=ULTRACODE_CODEX_EFFORTS)
     del ULTRACODE_LOG[:]
     del ULTRACODE_SENDS[:]
+    del ULTRACODE_PLAN_STARTS[:]
+    if MOCK_TASKS:
+        base = dict(TASK_PLANS["plan_mock_3"]["tasks"][0])
+        TASK_PLANS["plan_mock_3"].update(state="open", tasks=[
+            dict(base, ultracode=False),
+            dict(base, title="重构网络层的重试和缓存", prompt="重构网络层的重试和缓存，补齐测试。", model="", ultracode=True,
+                 why="改动跨十几个文件，要从多个角度检查。"),
+            dict(base, title="博客图片改成懒加载", prompt="博客的图片改成懒加载。", machine="studio", cwd="/Users/me/code/blog", model="",
+                 ultracode=True, why="博客在 Mac Studio 上。")])
 
 
 def ultracode_apply(s, on):
@@ -15916,8 +15985,21 @@ def ultracode_route(handler, p, body):
         if parse_qs(urlparse(handler.path).query).get("reset"):
             ultracode_reset()
             for m in MACHINES: push_machine(m["id"])
-        handler.send_json({"requests": ULTRACODE_LOG, "started": [b for b in STARTED if "ultracode" in b], "sends": ULTRACODE_SENDS})
+            if MOCK_TASKS:  # an open page draws the plan open again without a reload
+                for send, _ in list(LIVE):
+                    try: send(from_default({"type": "task_plan", "plan": TASK_PLANS["plan_mock_3"]}))
+                    except Exception: pass
+        handler.send_json({"requests": ULTRACODE_LOG, "started": [b for b in STARTED if "ultracode" in b], "plan_starts": ULTRACODE_PLAN_STARTS,
+                           "sends": ULTRACODE_SENDS})
         return True
+    m = re.fullmatch(r"/api/v1/task-plans/([^/]+)/start", p)
+    if m and handler.command == "POST" and m.group(1) in TASK_PLANS:
+        edits = json.loads(body or b"{}").get("tasks")
+        ULTRACODE_PLAN_STARTS.append({"plan": m.group(1), "tasks": edits})
+        if TASK_PLANS[m.group(1)]["state"] == "open":
+            for task, e in zip(TASK_PLANS[m.group(1)]["tasks"], edits or []):
+                if "ultracode" in e: task["ultracode"] = e["ultracode"]
+        return False  # the tasks mock starts it
     m = re.fullmatch(r"/api/v1/sessions/([^/]+)/([^/]+)/messages", p)
     if m and handler.command == "POST":
         s = next((x for x in SESSIONS if x["machine_id"] == m.group(1) and x["session_id"] == m.group(2)), None)
@@ -15974,6 +16056,99 @@ MOCK_HELP.append("MOCK_ULTRACODE=1  Claude Code 的 ultracode 开关（#3428）�
                  "发布说明那个带版本太旧的原因、博客那个关着、菜谱那个离线（node 还记着开）；Codex 的订单会话在「极高」档；Mac Studio 的 Claude Code 太旧，新建时不能开。"
                  "POST …/modes 的 ultracode 闲着立刻生效、工作中排队 MOCK_ULTRACODE_SECONDS 秒（默认 4）；有排队时发消息回 409 ultracode_pending；"
                  "GET /mock/ultracode 看请求和消息，?reset=1 复原")
+
+# Agent session archives (docs/protocol/protocol.md "Agent session archives"; web "Archived agents"): MOCK_AGENT_ARCHIVES=1
+# advertises archives and "Archive and close" (=archive: archives only, as behind an older manager), with two agents
+# already archived. Busy agents are refused (409 agent_busy) as the manager does; ?close=1 closes an open Claude agent
+# (it goes offline), and MOCK_ARCHIVE_CLOSE=refuse|offline makes the computer leave it open, as the manager reports.
+AGENT_ARCHIVES = os.environ.get("MOCK_AGENT_ARCHIVES", "")
+ARCHIVED_AGENTS = []
+ARCHIVE_ORIGINALS = {}  # (machine, session) -> the row as it was before it was archived here (/mock/reset puts it back)
+ARCHIVE_CLOSE = {"mode": os.environ.get("MOCK_ARCHIVE_CLOSE", "")}  # GET /mock/agent_archives?close= changes it
+if AGENT_ARCHIVES:
+    ARCHIVED_AGENTS.extend([
+        {"machine_id": "macbook", "session_id": "arch-1", "title": "迁移旧的 CI 配置", "cwd": "/Users/me/code/infra", "agent": "claude",
+         "status": "offline", "state": "offline", "updated_at": ago(days=3), "last_text": "CI 已经迁到新的 runner，旧配置删掉了。", "archived": True},
+        {"machine_id": "studio", "session_id": "arch-2", "title": "Release notes for 2.4", "cwd": "/Users/me/code/app", "agent": "codex",
+         "status": "offline", "state": "offline", "updated_at": ago(days=9), "last_text": "Drafted the notes and opened a PR.", "archived": True},
+    ])
+
+
+ARCHIVE_SEEDS = copy.deepcopy(ARCHIVED_AGENTS)
+
+
+def reset_agent_archives():
+    seeds = {(x["machine_id"], x["session_id"]) for x in ARCHIVE_SEEDS}
+    for key, orig in ARCHIVE_ORIGINALS.items():
+        SESSIONS[:] = [x for x in SESSIONS if (x["machine_id"], x["session_id"]) != key]
+        SESSIONS.append(copy.deepcopy(orig))
+    ARCHIVE_ORIGINALS.clear()
+    SESSIONS[:] = [x for x in SESSIONS if (x["machine_id"], x["session_id"]) not in seeds]
+    ARCHIVED_AGENTS[:] = copy.deepcopy(ARCHIVE_SEEDS)
+
+
+def agent_archive_busy(s):
+    return bool(s.get("starting") or s.get("status") in ("working", "blocked") or s.get("state") in ("working", "needs_you")
+                or s.get("background_working") or s.get("background_waiting") or (s.get("pending_interactions") or 0) > 0
+                or s.get("background") or any(x.get("running") for x in s.get("subagents") or []))
+
+
+def agent_archives_route(h, p, body):
+    if not AGENT_ARCHIVES: return False
+    if p == "/api/v1/sessions/archived" and h.command == "GET":
+        return h.send_json({"sessions": sorted(ARCHIVED_AGENTS, key=lambda s: s.get("updated_at", ""), reverse=True)}) or True
+    m = re.fullmatch(r"/api/v1/sessions/([^/]+)/([^/]+)/(archive|unarchive)", p)
+    if not m or h.command != "POST": return False
+    if is_read_only(h): return h.send_json({"error": "This device cannot archive or restore agents"}, 403) or True
+    mid, sid, action = m.groups()
+    close = parse_qs(urlparse(h.path).query).get("close", [""])[0] == "1"
+    if action == "unarchive":
+        s = next((x for x in ARCHIVED_AGENTS if x["machine_id"] == mid and x["session_id"] == sid), None)
+        if s is None: return h.send_json({"ok": True}) or True
+        ARCHIVED_AGENTS.remove(s)
+        SESSIONS.append({k: v for k, v in s.items() if k != "archived"})
+        push_machine(mid)
+        return h.send_json({"ok": True}) or True
+    s = next((x for x in SESSIONS if x["machine_id"] == mid and x["session_id"] == sid), None)
+    if s is None: return h.send_json({"error": "没有这个会话"}, 404) or True
+    if s.get("assistant"): return h.send_json({"error": "Persona's own conversations are archived from All chats"}, 400) or True
+    if close and AGENT_ARCHIVES == "archive":
+        return h.send_json({"error": "Update the manager to archive and close agents", "code": "agent_archive_close_unsupported"}, 501) or True
+    if agent_archive_busy(s) or (close and (s.get("loop") or s.get("queued") or s.get("ports"))):
+        return h.send_json({"error": "This agent is running or waiting for an answer", "code": "agent_busy"}, 409) or True
+    SESSIONS.remove(s)
+    ARCHIVE_ORIGINALS.setdefault((mid, sid), copy.deepcopy(s))
+    reply = {"ok": True}
+    if close:
+        how = ARCHIVE_CLOSE["mode"]
+        if s.get("status") == "offline": reply.update(archived=True, close={"closed": False, "outcome": "not_running"})
+        elif how == "refuse": reply.update(archived=True, close={"closed": False, "outcome": "refused", "reason": "Its engine or another tool keeps this session, so it was left open on the computer", "detail": "this engine continues sessions itself"})
+        elif how == "offline": reply.update(archived=True, close={"closed": False, "outcome": "offline", "reason": "Its computer is offline, so the agent is still open there"})
+        else:
+            s = dict(s, status="offline", state="offline", pane_id="")
+            reply.update(archived=True, close={"closed": True, "outcome": "closed"})
+    ARCHIVED_AGENTS.append(dict(s, archived=True))
+    push_machine(mid)
+    return h.send_json(reply) or True
+
+
+_plugins_route_without_agent_archives = plugins_route
+
+
+def plugins_route(handler, p, body):
+    return agent_archives_route(handler, p, body) or _plugins_route_without_agent_archives(handler, p, body)
+
+
+_features_without_agent_archives = features
+
+
+def features():
+    extra = {"1": ["agent_session_archives", "agent_session_archive_close"], "archive": ["agent_session_archives"]}.get(AGENT_ARCHIVES, [])
+    return _features_without_agent_archives() + extra
+
+
+MOCK_HELP.append("MOCK_AGENT_ARCHIVES=1|archive  Agent 归档：features 带 agent_session_archives 和 agent_session_archive_close（archive：只有归档，像旧管理器）；"
+                 "先有两个已归档的 Agent；忙的 Agent 回 409 agent_busy；?close=1 关闭开着的 Claude Agent。MOCK_ARCHIVE_CLOSE=refuse|offline：电脑没关它")
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="用于客户端测试的 mock hub")

@@ -157,18 +157,25 @@ func TestAgentSessionArchiveValidation(t *testing.T) {
 		{PendingInteractions: 1}, {BackgroundWorking: true}, {BackgroundWaiting: true},
 		{Subagents: []proto.Subagent{{Running: true}}},
 		{Background: []proto.BackgroundTask{{ID: "pending"}}}, {Workflows: []proto.Workflow{{Running: true}}},
-		{AwaitsReply: true}, {State: proto.StateNeedsYou},
+		{State: proto.StateNeedsYou},
 	} {
 		if !agentArchiveBusy(variant) {
 			t.Fatalf("busy session accepted: %+v", variant)
 		}
+	}
+	// A finished turn awaiting the user's reply is idle: archiving it is the user's answer ("Delete chat" took it too).
+	if agentArchiveBusy(proto.Session{AwaitsReply: true, Status: proto.StatusIdle}) {
+		t.Fatal("an idle agent awaiting a reply counted as busy")
 	}
 	for _, variant := range []struct {
 		row  proto.Session
 		want int
 	}{
 		{proto.Session{SessionID: "assistant", Agent: "claude", Cwd: machine.assistantCwd()}, 400},
-		{proto.Session{SessionID: "other", Agent: "pi"}, 400},
+		// every runtime archives the same way (a manager-owned record): pi, opencode, DSH, a Codex App thread…
+		{proto.Session{SessionID: "pi", Agent: "pi", SourceKind: "runtime", Status: proto.StatusIdle}, 200},
+		{proto.Session{SessionID: "opencode", Agent: "opencode", Status: proto.StatusDone}, 200},
+		{proto.Session{SessionID: "legacy", Status: proto.StatusOffline}, 200},
 		{proto.Session{SessionID: "working", Agent: "claude", Status: proto.StatusWorking}, 409},
 	} {
 		ft.d.setSessions("mac", []proto.Session{variant.row})

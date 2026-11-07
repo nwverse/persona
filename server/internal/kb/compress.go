@@ -2,6 +2,7 @@ package kb
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"regexp"
 	"slices"
@@ -23,6 +24,14 @@ const (
 	compressBatch = 50
 	compressQuiet = 10 * time.Minute
 	compressInput = 24000 // characters of new messages per call
+)
+
+// After a failed compression the chat waits compressRetry, doubled with every further failure in a row up to
+// compressRetryMax, so one chat the model cannot handle does not cost a call every round (2026-11-07: a chat the model
+// refused was sent again every two minutes for three days).
+const (
+	compressRetry    = 10 * time.Minute
+	compressRetryMax = 6 * time.Hour
 )
 
 var importanceRe = regexp.MustCompile(`^P[0-3]$`)
@@ -50,7 +59,7 @@ type chatDigest struct {
 func (e *Engine) DueForCompression(now time.Time) []*Chat {
 	var out []*Chat
 	for _, c := range e.Store.Chats() {
-		if c.Pending == 0 {
+		if c.Pending == 0 || now.Before(c.CompressRetryAt) {
 			continue
 		}
 		if c.Pending >= compressBatch || now.Sub(c.LastAt) >= compressQuiet || c.CompressedAt.IsZero() && now.Sub(c.Created) >= compressQuiet {
@@ -65,6 +74,41 @@ func (e *Engine) DueForCompression(now time.Time) []*Chat {
 		return out[i].Pending > out[j].Pending
 	})
 	return out
+}
+
+// compressFailed records that compressing c (the copy the call started from) failed with err, and returns the error to
+// log. The model declines the same messages again, so a refused batch is settled without a summary: the chat goes on
+// from the messages after it. Any other failure puts the chat off (compressRetry). A paused connection or an ended run
+// changes nothing: the chat stays due.
+func (e *Engine) compressFailed(ctx context.Context, c *Chat, err error) error {
+	if ai.IsPaused(err) || ctx.Err() != nil {
+		return err
+	}
+	current, ok := e.Store.Chat(c.ID) // archiving may have added messages while the model was called
+	if !ok {
+		return err
+	}
+	if errors.Is(err, ai.ErrRefused) {
+		current.CoveredUntil = c.LastAt.Add(time.Minute)
+		if !current.LastAt.After(c.LastAt) {
+			current.Pending = 0
+		}
+		current.CompressFailures, current.CompressRetryAt = 0, time.Time{}
+		if perr := e.Store.PutChat(current); perr != nil {
+			return perr
+		}
+		return fmt.Errorf("%w: skipped its messages up to %s", err, c.LastAt.UTC().Format(time.RFC3339))
+	}
+	current.CompressFailures++
+	wait := compressRetryMax
+	if n := current.CompressFailures - 1; n < 16 {
+		wait = min(compressRetry<<n, compressRetryMax)
+	}
+	current.CompressRetryAt = time.Now().Add(wait)
+	if perr := e.Store.PutChat(current); perr != nil {
+		return perr
+	}
+	return fmt.Errorf("%w (failed %d time(s) in a row, next try in %s)", err, current.CompressFailures, wait)
 }
 
 // Compress folds a chat's new messages into its summary and tags, then evolves the projects and people it mentions.
@@ -99,7 +143,7 @@ func (e *Engine) Compress(ctx context.Context, c *Chat) error {
 	cctx, cancel := context.WithTimeout(ctx, 3*time.Minute)
 	defer cancel()
 	if err := e.modelFor("kb.compress").JSONMax(cctx, prompts.RenderKBCompress(prompts.KBOwner{Owner: e.Owner}), in, 4000, &d); err != nil {
-		return err
+		return e.compressFailed(ctx, c, err)
 	}
 	if _, ok := e.Store.Chat(c.ID); !ok { // forgotten while the model wrote (ForgetSource): not written back
 		return nil
@@ -125,6 +169,7 @@ func (e *Engine) Compress(ctx context.Context, c *Chat) error {
 	c.CompressedAt = now
 	c.CoveredUntil = c.LastAt.Add(time.Minute)
 	c.TagRev = tagRev
+	c.CompressFailures, c.CompressRetryAt = 0, time.Time{}
 	if err := e.Store.PutChat(c); err != nil {
 		return err
 	}

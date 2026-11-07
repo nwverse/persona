@@ -79,5 +79,7 @@
   "unsent": "This message wasn't sent ({error}). It's still in the box.",
   "call_not_loaded": "That step is not in the loaded history; scroll up and try again",
   "refresh_failed": "Couldn’t refresh",
-  "preview": "Preview"
+  "preview": "Preview",
+  "archived_notice": "This agent is archived. Restore it to bring it back to Agents; a new message brings it back too.",
+  "restore": "Restore"
 }

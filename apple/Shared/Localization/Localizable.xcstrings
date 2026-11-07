@@ -10349,6 +10349,29 @@
       },
       "extractionState": "manual"
     },
+    "All Displays": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "All Displays"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "すべてのディスプレイ"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "全部显示器"
+          }
+        }
+      },
+      "extractionState": "manual"
+    },
     "Allow notifications for Persona in Settings.": {
       "extractionState": "manual",
       "localizations": {
@@ -31542,6 +31565,29 @@
       },
       "extractionState": "manual"
     },
+    "Couldn't remove from the list: %@": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Couldn't remove from the list: %1$@"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "削除できませんでした：%1$@"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "移除失败：%1$@"
+          }
+        }
+      },
+      "extractionState": "manual"
+    },
     "Couldn't remove: %@ [Computer Section 5005cd]": {
       "localizations": {
         "en": {
@@ -31675,6 +31721,29 @@
           "stringUnit": {
             "state": "translated",
             "value": "未能恢复，请检查本机存储空间后重试"
+          }
+        }
+      },
+      "extractionState": "manual"
+    },
+    "Couldn't restore: %@": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Couldn't restore: %1$@"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "元に戻せませんでした：%1$@"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "恢复失败：%1$@"
           }
         }
       },
@@ -36512,6 +36581,29 @@
       },
       "extractionState": "manual"
     },
+    "Display %lld": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Display %lld"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ディスプレイ%lld"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "显示器 %lld"
+          }
+        }
+      },
+      "extractionState": "manual"
+    },
     "Display name (optional)": {
       "localizations": {
         "en": {
@@ -36553,6 +36645,29 @@
           "stringUnit": {
             "state": "translated",
             "value": "表示名（空欄なら「%1$@」）"
+          }
+        }
+      },
+      "extractionState": "manual"
+    },
+    "Displays": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Displays"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ディスプレイ"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "显示器"
           }
         }
       },
@@ -43782,6 +43897,98 @@
         }
       }
     },
+    "Remove from List": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Remove from List"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "リストから削除"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "从列表移除"
+          }
+        }
+      },
+      "extractionState": "manual"
+    },
+    "Removed (%lld)": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Removed (%1$lld)"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "削除済み（%1$lld）"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "已移除（%1$lld）"
+          }
+        }
+      },
+      "extractionState": "manual"
+    },
+    "Removed chats stay with their source and come back on their own when a new message arrives.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Removed chats stay with their source and come back on their own when a new message arrives."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "削除したチャットは元のサービスに残り、新しいメッセージが届くと自動でリストに戻ります。"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "移除的对话仍保留在来源里，有新消息时会自动回到列表。"
+          }
+        }
+      },
+      "extractionState": "manual"
+    },
+    "Removed “%@”. It comes back when it gets a new message.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Removed “%1$@”. It comes back when it gets a new message."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "「%1$@」を削除しました。新しいメッセージが届くとリストに戻ります"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "已移除「%1$@」，有新消息时会自动回到列表"
+          }
+        }
+      },
+      "extractionState": "manual"
+    },
     "Requests to the gateway go direct, whatever proxy this computer has. Everything else, like web pages and the commands it runs, goes the way this computer does.": {
       "extractionState": "manual",
       "localizations": {
@@ -43804,6 +44011,52 @@
           }
         }
       }
+    },
+    "Restore": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Restore"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "元に戻す"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "恢复"
+          }
+        }
+      },
+      "extractionState": "manual"
+    },
+    "Restored “%@”": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Restored “%1$@”"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "「%1$@」を元に戻しました"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "已恢复「%1$@」"
+          }
+        }
+      },
+      "extractionState": "manual"
     },
     "Revise [Todo Decisions]": {
       "extractionState": "manual",
@@ -76137,6 +76390,29 @@
           }
         }
       }
+    },
+    "When the Mac has more than one display, choose one in “…” › Displays to show only that display. Zooming, taps and the pointer then stay on it.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "When the Mac has more than one display, choose one in “…” › Displays to show only that display. Zooming, taps and the pointer then stay on it."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Macに複数のディスプレイがあるときは、「…」›「ディスプレイ」で1台を選ぶと、そのディスプレイだけを表示します。拡大、タップ、ポインタもそのディスプレイの中に限られます。"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Mac 有多块显示器时，在「…」›「显示器」里选一块，就只显示那一块。缩放、点按和指针也只在这块显示器上。"
+          }
+        }
+      },
+      "extractionState": "manual"
     },
     "Why, and what was ruled out…": {
       "extractionState": "manual",

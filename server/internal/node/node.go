@@ -1246,6 +1246,12 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 		return n.gitDiff(ctx, p.Cwd, p.Path, p.Staged)
 	case "git.show":
 		return n.gitShow(ctx, p.Cwd, p.Hash)
+	case "git.review": // every file a scope changed, with its hunks, for the web's Review panel (gitreview.go)
+		var rv proto.GitReviewRequest
+		if err := json.Unmarshal(params, &rv); err != nil {
+			return nil, err
+		}
+		return n.gitReview(ctx, rv)
 	case "git.log":
 		list, err := n.gitLog(ctx, p.Cwd, p.Skip, p.Limit)
 		return map[string]any{"commits": list}, err

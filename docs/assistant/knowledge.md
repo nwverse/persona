@@ -125,6 +125,9 @@ Every chat, person, project, document, meeting and event has three fields, gener
 2. **Compress**: once a chat has 50 new messages or has been quiet for 10 minutes, send the old `summary.md` + new messages (up to 24k characters, keeping the latest) to a small model,
    producing a new summary (fixed sections: what this is / progress / to-dos and unresolved issues / about me), one line, tags, mentioned projects and people; write `summary.md` and `meta.json`.
    At most 8 chats per round, most relevant first. Direct-chat / email tags propagate to the other person; a person's `summary.md` is assembled from metadata and direct-chat context without a model call.
+   When the model declines the batch (a `refusal` stop reason, e.g. a safety classifier), it would decline it again: the batch is marked covered without a new summary and the chat continues with later messages.
+   Any other failure puts the chat off for 10 minutes, doubled with each failure in a row up to 6 hours (`compress_failures` / `compress_retry_at` in `meta.json`, cleared on success);
+   a paused model connection does not count. Before this, a chat whose batch the model refused was sent again every round, every two minutes for days.
 3. **Evolution (evo)**: merge projects mentioned in compression into `projects/` (names or aliases equal after stripping punctuation and case are merged; otherwise create), append progress to `log.md`
    and mark dirty. Only aliases belonging to this project are accepted: names / aliases of other unmerged projects, single characters or two-letter abbreviations, and generic terms are rejected; at most 12 automatic aliases per project
    (#2546: previously, several projects accumulated hundreds of aliases after a week and crossed into each other). Manual aliases from `kb_update` have no limit; `remove_aliases` deletes them. If several unmerged projects match a name,
