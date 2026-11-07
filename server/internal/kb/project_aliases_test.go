@@ -136,3 +136,48 @@ func TestMergeProjectsValidatesAliases(t *testing.T) {
 		t.Fatalf("示例乙 -> %+v", p)
 	}
 }
+
+// Aliases collected before the rules are pruned to what the rules allow: not another live project's name, not the
+// project's own name, a repeat or too generic, at most maxProjectAliases, plus the names of projects merged into
+// it. An alias two live projects share and aliases set by hand stay; recency does not change; a second pass is a no-op.
+func TestPruneProjectAliases(t *testing.T) {
+	e := testEngine(t, nil)
+	aliases := []string{"Beta 迁移", "阿尔法", "阿尔法", "Alpha发布", "ss", "项目", "共享名"}
+	for i := range 15 {
+		aliases = append(aliases, fmt.Sprintf("别名%02d", i))
+	}
+	aliases = append(aliases, "旧名")
+	_ = e.Store.PutProject(&Project{Slug: "alpha", Name: "Alpha 发布", Status: "active", Aliases: aliases})
+	_ = e.Store.PutProject(&Project{Slug: "beta", Name: "Beta 迁移", Status: "active", Aliases: []string{"共享名"}})
+	_ = e.Store.PutProject(&Project{Slug: "gamma", Name: "Gamma", Status: "active", Aliases: []string{"Alpha 发布", "ss"},
+		Tagging: Tagging{LockedFields: []string{"aliases"}}})
+	_ = e.Store.PutProject(&Project{Slug: "old", Name: "旧名", Status: "merged", MergedInto: "alpha"})
+	before, _ := e.Store.Project("alpha")
+
+	if n := e.PruneProjectAliases(); n != 10 {
+		t.Fatalf("pruned %d", n)
+	}
+	alpha, _ := e.Store.Project("alpha")
+	want := []string{"阿尔法", "共享名"}
+	for i := range maxProjectAliases - 2 {
+		want = append(want, fmt.Sprintf("别名%02d", i))
+	}
+	want = append(want, "旧名")
+	if !slices.Equal(alpha.Aliases, want) {
+		t.Fatalf("alpha aliases = %v\nwant %v", alpha.Aliases, want)
+	}
+	if !alpha.Updated.Equal(before.Updated) {
+		t.Fatalf("updated moved: %v -> %v", before.Updated, alpha.Updated)
+	}
+	for slug, want := range map[string]string{"beta": "共享名", "gamma": "Alpha 发布,ss"} {
+		if p, _ := e.Store.Project(slug); strings.Join(p.Aliases, ",") != want {
+			t.Fatalf("%s aliases = %v", slug, p.Aliases)
+		}
+	}
+	if p := e.FindProject("Beta 迁移"); p == nil || p.Slug != "beta" {
+		t.Fatalf("Beta 迁移 -> %+v", p)
+	}
+	if n := e.PruneProjectAliases(); n != 0 {
+		t.Fatalf("second pass pruned %d", n)
+	}
+}

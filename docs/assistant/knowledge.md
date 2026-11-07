@@ -129,6 +129,9 @@ Every chat, person, project, document, meeting and event has three fields, gener
    and mark dirty. Only aliases belonging to this project are accepted: names / aliases of other unmerged projects, single characters or two-letter abbreviations, and generic terms are rejected; at most 12 automatic aliases per project
    (#2546: previously, several projects accumulated hundreds of aliases after a week and crossed into each other). Manual aliases from `kb_update` have no limit; `remove_aliases` deletes them. If several unmerged projects match a name,
    exact names outrank aliases; ties use most recently updated, not directory order.
+   Aliases collected before these rules are pruned when the knowledge base opens (`PruneProjectAliases`): another unmerged project's name or slug, the project's own name, repeats, generic ones,
+   and everything past the first 12 go; names of projects merged into it stay and do not count. An alias two unmerged projects share stays on both (whose it is cannot be told),
+   and projects whose aliases are locked (set by hand) are not touched.
    Rewrite at most 3 dirty project summaries per round (old summary + latest 40 timeline entries + summaries of up to 8 related chats). Person / chat / project associations are written into each
    `meta.json` bidirectionally. Long-term projects (`long`) never revert to short-term.
 4. **Documents / meetings / events**: every 30 minutes read Lark calendar (yesterday through 8 days ahead, busy events) and the latest 30 meetings, fill titles for 10 documents (first line of Markdown export),
@@ -216,12 +219,20 @@ The same work often has different names in different groups. Previously the mode
 - **Periodic merging**: every 30 minutes, find pairs among active projects: shared people are at least 30% of the smaller side and at least 3, shared chats / documents,
   or at least two matching non-generic name terms. Rank by score, ask the model about at most 4 pairs per round (`kb/dedupe`: both names, aliases, one-line descriptions, goals, profiles and source groups),
   "when unsure, treat as different". Even if the model says they are the same, merge only with `sure: true` and no uncertainty words such as `存疑` / `不确定` ("doubtful" / "uncertain") in the reason; otherwise record them as different.
-  Judged pairs go in `projects/.dedupe.json`; different pairs are not asked again for 14 days.
+  Judged pairs go in `projects/.dedupe.json`; different pairs are not asked again for 14 days, pairs the user unmerged (`split`) never.
 - **Merge** (`MergeProjects`): the survivor absorbs the other's name and aliases (as aliases; reject collisions with a third unmerged project; the merged project's name is always accepted, possibly one beyond 12, while its existing aliases only fill up to 12), people, chats, documents, code directories, keywords and Moments;
   timelines interleave by time and add "Merged project …"; references from chats, people and documents change to the survivor; mark it dirty for profile rewriting next round.
   The merged project remains on disk (`status: merged`, `merged_into`) but is excluded from lists, prompts and Agent directory ownership; looking up the old name finds the survivor;
   opening it in the app shows "Merged" and a link to the survivor. The manually tagged (`locked`) side always survives.
 - **Manual**: send `merge_into: <other project>` through `kb_update` / `PUT /api/v1/kb/projects/<id>` (other fields do not apply simultaneously).
+- **Unmerge** (`kb/unmerge.go`): send `unmerge: true` for the merged project (slug or name) through `kb_update` / `PUT /api/v1/kb/projects/<id>` (other fields do not apply simultaneously;
+  not part of the extension protocol). The merge records on the merged project what it gave the survivor (`merge`: aliases, people, chats, items, code directories, keywords, Moments posts,
+  the chats / people / items it moved from the merged project, and the survivor's pinned facts before a manual merge). Unmerging takes exactly that back, points the moved chats, people and items
+  at the merged project again, restores its status, removes its lines from the survivor's timeline (its own timeline keeps them), marks both dirty for profile rewriting,
+  and records the pair as `split` so dedupe never merges it again. Pinned facts edited since the merge stay. A chain comes apart from its last merge back.
+  Merges made before the record (no `merge`) cannot tell which shared people, chats and items the survivor already had, and dedupe pairs projects by exactly those:
+  they stay on the survivor as well (take them off with `remove_people` / `remove_chats`), the merged project's chats, people and items name it again besides the survivor,
+  and only the merged project's name and aliases leave the survivor.
 
 ## Project Moments
 

@@ -358,7 +358,8 @@ export function Sidebar({ route, onSearch, onNewAgent, onNavigate }: { route: Ro
   const chats = !!assistant;
   // a conversation row's ⋯ / right click (iOS: its long press), and the section title's Unpin all
   const [convMenu, setConvMenu] = useState<{ s: Session; anchor: HTMLElement; at?: MenuAt } | null>(null);
-  const onConvMenu: RowMenuFn = (s, anchor, at) => setConvMenu((m) => (!at && m?.anchor === anchor ? null : { s, anchor, at }));
+  // one function for the sidebar's life: the conversation rows and the main row keep their memo across pushes
+  const onConvMenu = useCallback<RowMenuFn>((s, anchor, at) => setConvMenu((m) => (!at && m?.anchor === anchor ? null : { s, anchor, at })), []);
   const [chatsMenu, setChatsMenu] = useState<MenuAt | null>(null);
   const autoHolds = activeKey.startsWith("auto:") || isOpenAuto(assistant?.conversations, activeKey, convs);
   const [personaFolded, togglePersona] = useFolded("persona", false, { holds: activeKey === "history" || autoHolds || convs.some((c) => activeKey === `j:${c.session_id}`) });
@@ -390,7 +391,7 @@ export function Sidebar({ route, onSearch, onNewAgent, onNavigate }: { route: Ro
         {/* the main conversation is the column's first row, Persona with the app's mark, and only there (#2004, #5109); it
             stays at the top while the rest scrolls (#5581), its line and a fog under it once rows go beneath */}
         <div data-sidebar-sticky className="sticky top-0 z-30 flex flex-col gap-px bg-canvas pt-1">
-          <PersonaRow reg={reg} hover={hover} active={activeKey === "persona"} go={go} main={mainConversation} chord={bindings.persona} onMenu={mainConversation ? (el, at) => onConvMenu(mainConversation, el, at) : undefined} />
+          <PersonaRow reg={reg} hover={hover} active={activeKey === "persona"} go={go} main={mainConversation} chord={bindings.persona} onMenu={onConvMenu} />
           <span aria-hidden data-persona-divider className="mx-2 my-1 h-px shrink-0 bg-line" />
           <span aria-hidden data-persona-fog className={cx("pointer-events-none absolute inset-x-0 top-full h-3 bg-gradient-to-b from-canvas to-transparent transition-opacity duration-150", scrolled ? "opacity-100" : "opacity-0")} />
         </div>
@@ -1765,21 +1766,28 @@ type NodeMenuFn = (node: MenuNode, at: MenuAt, header?: string, toggle?: boolean
 // The small "Main chat" under the name keeps the brand row readable as a conversation, not a heading (#6293); a draft
 // waiting in the box takes that line (#5568).
 // Its menu (Copy session ID, End…: iOS's long press on the main row) opens on a right click, the menu key or its ⋯.
-export function PersonaRow({ reg, hover, active, go, main, chord, onMenu }: { reg: RegFn; hover: (k: string | null) => void; active: boolean; go: GoFn; main?: Session; /** The "Open Persona" shortcut as bound now ("": none). */ chord?: string; onMenu?: (anchor: HTMLElement, at?: MenuAt) => void }) {
+// Memoized like SessionRow: a push that leaves the main conversation as it was does not render it again.
+export const PersonaRow = memo(function PersonaRow({ reg, hover, active, go, main, chord, onMenu: menuOf }: { reg: RegFn; hover: (k: string | null) => void; active: boolean; go: GoFn; main?: Session; /** The "Open Persona" shortcut as bound now ("": none). */ chord?: string; /** The conversation rows' menu, opened on `main`: none without it. */ onMenu?: RowMenuFn }) {
   const to: Route = { name: "persona" };
   const st = main ? stateOf(main) : undefined;
   const pending = main?.pending_interactions ?? 0;
+  const onMenu = main && menuOf ? (anchor: HTMLElement, at?: MenuAt) => menuOf(main, anchor, at) : undefined;
   const row = useRef<HTMLAnchorElement | null>(null);
   const regRow = useMemo(() => reg("persona"), [reg]);
+  // one ref for the row's life, so a re-render does not let go of it and register it again (useGlide's reg)
+  const ref = useCallback(
+    (el: HTMLAnchorElement | null) => {
+      row.current = el;
+      regRow(el);
+    },
+    [regRow],
+  );
   const aside = onMenu && !active ? "group-hover/row:invisible" : undefined;
   // words left unsent in the main conversation's box, once you are not in it (#5568)
   const draft = draftLine(useLeftDraft(main ? `${main.machine_id}/${main.session_id}` : null));
   const link = (
     <a
-      ref={(el) => {
-        row.current = el;
-        regRow(el);
-      }}
+      ref={ref}
       href={href(to)}
       onClick={go(to)}
       {...(onMenu ? contextMenuProps((at, el) => onMenu(el, at)) : {})}
@@ -1822,7 +1830,7 @@ export function PersonaRow({ reg, hover, active, go, main, chord, onMenu }: { re
       </button>
     </div>
   );
-}
+});
 
 // The "Pinned" heading above the pinned conversations (iOS's pinned heading, Android's pinned section): its ⋯ and a right
 // click on it give "Unpin all", which a touch screen reaches through the ⋯.
