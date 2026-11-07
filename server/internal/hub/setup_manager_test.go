@@ -10,6 +10,8 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+
+	"github.com/nwverse/persona/server/internal/compat"
 )
 
 // setupSteps are the step lines of a --json run, by step.
@@ -201,13 +203,13 @@ func TestSetupManagerServiceChecksAndUndoes(t *testing.T) {
 		}
 		return e, out, cmds, file
 	}
-	t.Run("an older layout: only jarvisd", func(t *testing.T) {
+	t.Run("an older layout: only the binary under its former name", func(t *testing.T) {
 		e, out, cmds, file := newEnv(t)
 		bin := filepath.Join(e.root, "bin")
-		if err := os.Rename(filepath.Join(bin, "personad"), filepath.Join(bin, "jarvisd")); err != nil {
+		if err := os.Rename(filepath.Join(bin, "personad"), filepath.Join(bin, compat.DaemonBinary)); err != nil {
 			t.Fatal(err)
 		}
-		cmds.replies[filepath.Join(bin, "jarvisd")+" manager install --builtin --check"] = fakeReply{err: true, out: "flag provided but not defined: -builtin\n"}
+		cmds.replies[filepath.Join(bin, compat.DaemonBinary)+" manager install --builtin --check"] = fakeReply{err: true, out: "flag provided but not defined: -builtin\n"}
 		if err := e.setup(context.Background()); !errors.Is(err, ErrSetupStopped) || !strings.Contains(out.String(), "什么都没改") {
 			t.Fatalf("%v\n%s", err, out)
 		}
