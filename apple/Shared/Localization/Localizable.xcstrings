@@ -19019,6 +19019,29 @@
       },
       "extractionState": "manual"
     },
+    "Can't reach the proxy (%@)": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Can't reach the proxy (%1$@)"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "プロキシに接続できません（%1$@）"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "连不上代理（%1$@）"
+          }
+        }
+      }
+    },
     "Can't reach this computer": {
       "localizations": {
         "en": {
@@ -76187,6 +76210,29 @@
         }
       }
     },
+    "The hub's address must be 1 to 255 bytes long": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The hub's address must be 1 to 255 bytes long"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ハブのアドレスは1〜255バイトにしてください"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "hub 的地址长度要在 1 到 255 字节之间"
+          }
+        }
+      }
+    },
     "The network is unstable or the computer is asleep. Wait for it to wake up or switch networks, then reconnect": {
       "localizations": {
         "en": {
@@ -76232,6 +76278,52 @@
       },
       "extractionState": "manual"
     },
+    "The proxy accepts neither no login nor a username and password": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The proxy accepts neither no login nor a username and password"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "プロキシはログインなしにも、ユーザー名とパスワードにも対応していません"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "代理既不接受免登录，也不接受用户名和密码"
+          }
+        }
+      }
+    },
+    "The proxy asks for a username and password": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The proxy asks for a username and password"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "プロキシがユーザー名とパスワードを求めています"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "代理要求填写用户名和密码"
+          }
+        }
+      }
+    },
     "The proxy can't include a user name or password.": {
       "extractionState": "manual",
       "localizations": {
@@ -76255,6 +76347,121 @@
         }
       }
     },
+    "The proxy closed the connection": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The proxy closed the connection"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "プロキシが接続を切断しました"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "代理断开了连接"
+          }
+        }
+      }
+    },
+    "The proxy couldn't connect to the hub (%@)": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The proxy couldn't connect to the hub (%1$@)"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "プロキシがハブに接続できませんでした（%1$@）"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "代理连不上 hub（%1$@）"
+          }
+        }
+      }
+    },
+    "The proxy didn't accept the username or password": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The proxy didn't accept the username or password"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "プロキシがユーザー名またはパスワードを受け付けませんでした"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "代理没有接受这个用户名或密码"
+          }
+        }
+      }
+    },
+    "The proxy didn't answer as a SOCKS5 proxy": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The proxy didn't answer as a SOCKS5 proxy"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "プロキシがSOCKS5プロキシとして応答しません"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "代理的应答不像 SOCKS5 代理"
+          }
+        }
+      }
+    },
+    "The proxy didn't answer in time": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The proxy didn't answer in time"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "プロキシが時間内に応答しませんでした"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "代理没有及时应答"
+          }
+        }
+      }
+    },
     "The proxy starts with http://, https:// or socks5://, like http://127.0.0.1:7890.": {
       "extractionState": "manual",
       "localizations": {
@@ -76274,6 +76481,52 @@
           "stringUnit": {
             "state": "translated",
             "value": "代理要以 http://、https:// 或 socks5:// 开头，比如 http://127.0.0.1:7890。"
+          }
+        }
+      }
+    },
+    "The proxy's answer doesn't follow SOCKS5": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The proxy's answer doesn't follow SOCKS5"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "プロキシの応答がSOCKS5の仕様に沿っていません"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "代理的应答不符合 SOCKS5"
+          }
+        }
+      }
+    },
+    "The username and password can each be at most 255 bytes": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The username and password can each be at most 255 bytes"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ユーザー名とパスワードはそれぞれ255バイトまでです"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "用户名和密码各自最多 255 字节"
           }
         }
       }
