@@ -538,3 +538,14 @@ Closing is not durable merely because the card vanished: persist the interaction
 ## Profile acceptance must include launcher defaults
 
 A purpose-level model override does not change the managed launcher's default. Launcher health checks invoke the launcher without that override, and small-model and subagent paths read their own environment aliases. When testing a model profile, read back the launcher's main, small, subagent and alias fields, then exercise a real health check. Preserve sealed credentials and unrelated fields; capture the before-image in the same transaction as the switch. A purpose-only readback is not evidence that every execution path changed.
+
+## Each tool's own archive (measured 2026-11-07, codex-cli 0.163.0, Claude Code 2.1.291)
+
+- Codex's `thread/archive` / `thread/unarchive` (and `codex archive|unarchive <id>`) are not idempotent: a second archive answers `-32600 "no rollout found for thread id …"`
+  and the command exits 1 with only "Error: failed to archive session". Decide from where the rollout is (`sessions/…` or `archived_sessions/`), before and after the call, never from the answer alone.
+- An archived Codex thread can't be resumed (`thread/resume` and `codex resume` say "Run `codex unarchive …` first"): restore it natively before anything resumes it.
+- `codex archive` from another process fails while a Codex process still writes the thread (its cross-process writer lock); it succeeds once that process exits.
+  Through the app-server that has the thread loaded, archive shuts the thread down there first. Test with a throwaway `CODEX_HOME`: `thread/start` alone materializes a thread to archive, with no model call.
+- Claude Code has no archive for local sessions: its archive/unarchive is for cloud and Remote Control sessions (the sessions API). The Claude desktop app's Code sessions keep
+  their own `isArchived` in the app's private session records (`claude-code-sessions/…/local_<id>.json` plus an `archived-sessions.idx`), keyed by the app's own session id: an undocumented
+  store the running app writes, so Persona doesn't write it. Never move or delete `~/.claude/projects/*.jsonl` as an "archive": it breaks `--resume` and can't be told apart from a deletion.

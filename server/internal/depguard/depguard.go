@@ -27,9 +27,9 @@ var Shared = []string{"internal/acceptloop", "internal/aiwire", "internal/apierr
 	"internal/bus", "internal/channel", "internal/clitext", "internal/compat", "internal/connectorwire", "internal/db",
 	"internal/devicewire", "internal/dialogwire", "internal/errreport", "internal/extwire", "internal/i18n",
 	"internal/identity", "internal/kbwire", "internal/link", "internal/managerconf", "internal/netaddr",
-	"internal/nodeproto", "internal/osproc", "internal/pgdocker", "internal/prompts", "internal/proto", "internal/rpc",
-	"internal/screen", "internal/secretkey", "internal/sessionlist", "internal/streams", "internal/textfmt",
-	"internal/transcript", "internal/update", "internal/workspaceboard"}
+	"internal/nodeproto", "internal/osproc", "internal/pgdocker", "internal/preview", "internal/prompts",
+	"internal/proto", "internal/rpc", "internal/screen", "internal/secretkey", "internal/sessionlist", "internal/streams",
+	"internal/textfmt", "internal/transcript", "internal/update", "internal/workspaceboard"}
 
 // HubExceptions are manager-side packages the hub still links, and may only shrink: internal/extension (and what it
 // pulls in) for the looks the hub serves and the database's extension types, until extensions are a part of their own.

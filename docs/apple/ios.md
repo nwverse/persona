@@ -78,6 +78,9 @@ Chat page:
 - Lazy images: history pages and pushes omit image bytes (`lazy_images`, reducing pages from MB to hundreds of KB), dimensions only; visible rows fetch through
   `ImagePayload.ref` (`ChatImageLoader`: one download, NSCache + `Caches/chat-images`, immutable images valid forever),
   reserving dimensions before arrival to avoid jumps. Thumbnails and full viewer share it; locally sent images retain inline base64.
+  A failed load (hub unreachable, download failed) does not spin forever (#182): tool-result and file-page images (`Base64Image`) say
+  "Image didn't load. Tap to retry" on the placeholder, and the viewer's page says so with Retry, keeping its bars (and Close) and the
+  page's own backdrop while it is the page shown; downloaded bytes that are not an image are not kept on disk.
 - Links (`Views/Link/LinkSheet.swift`): chat http(s) opens an in-App bottom card like Telegram: full screen immediately, at 60% pulled down the chat remains usable, further down closes;
   behind a 60% card chat still scrolls and accepts input (`presentationBackgroundInteraction`). Lark docs / Knowledge use native `FeishuDocReader`,
   other websites `WebViewPool`: preload first 3 links in each appearing reply, at most 6 resident WKWebViews (LRU), sharing default disk website data (cache, login),
@@ -416,7 +419,7 @@ Shell tests: `ShellTests`, `ShellAvatarTests` (top-left avatar and Inbox badge),
 
 ## Foreground-only work (polling and reporting read state)
 
-Only two kinds of background work require "the view is in the window and its page is foregrounded" (`Views/TabActivity.swift`): **polling** and **reporting read state**.
+Foreground-only work requires "the view is in the window and its page is foregrounded" (`Views/TabActivity.swift`): **polling**, **reporting read state**, and a chat's **display subscription**.
 Previously the system `TabView` removed the old tab from the window on switching (`onDisappear`, cancellation of `.task`). The new shell's Assistant and Agents pages are a ZStack;
 the hidden page is merely transparent and noninteractive, **still mounted**, so `onDisappear` never fires: without a signal it would keep polling and mark messages read for the user.
 
@@ -424,7 +427,8 @@ the hidden page is merely transparent and noninteractive, **still mounted**, so 
 - `.tabActiveTask` / `.tabActiveTask(id:)` cancels when the page goes behind and restarts from scratch when foregrounded. `.onTabVisibility(appear:disappear:)` replaces paired
   `onAppear` / `onDisappear`, each called once; the system briefly remounting the old tab during a switch does not count as appearance.
 - Used for Lark chat's 60-second fallback polling and read reporting (catch up on foregrounding), and Machines-page (`MachinesView`) / machine-detail (`MachineDetailView`, including its computer-control and browser sections) polling.
-- **Not for** chat subscriptions, generating replies, Agent tasks, dictation or timers (work-row stopwatch, terminal 250ms tick, header auto-collapse). These continue regardless of the foreground page.
+- Shared `ChatView` transcript streams and visible/read ownership use paired visibility edges on iPhone as well as Mac. Hidden chats keep their store and scroll state but unsubscribe; returning resumes with the store's `since_seq`, without recreating the page or downloading all history.
+- **Not for** generating replies, Agent tasks, dictation or timers (work-row stopwatch, terminal 250ms tick, header auto-collapse). These continue regardless of the foreground page; releasing a display subscription does not interrupt work on the hub.
 - Under system `TabView`, timing matches window removal, so UI and behavior stay unchanged. New polling and read reporting must use these helpers, not direct `onDisappear` / `.task`.
 
 ## Persona top bar and sidebar (2026-10-30)

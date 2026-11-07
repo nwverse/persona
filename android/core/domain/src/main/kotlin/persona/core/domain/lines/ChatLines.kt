@@ -1,7 +1,6 @@
 package persona.core.domain.lines
 
 import java.time.Instant
-import java.util.regex.Pattern
 
 /** Pure transcript folding, in reading order. Live state is supplied by the session owner. */
 fun chatLines(items: List<LineItem>, options: LineOptions = LineOptions()): ChatSnapshot {
@@ -125,8 +124,9 @@ private class RawTurn(val id: String) {
             last?.let { candidates += it }
             val firstWake = order.indexOfFirst { it.type == "notice" && it.item?.item?.wake == true }
             if (firstWake >= 0) afterWake = order.drop(firstWake).filterNot { it.isUserInput }
-            // Java's extended grapheme matcher follows the same counting unit as Swift String.count.
-            val pick = candidates.maxWithOrNull(compareBy<Int> { graphemeCount(order[it].item?.text.orEmpty()) }.thenBy { it })
+            // The latest run's words are the answer, whatever their length (iOS pickAnswerAcrossWakes, the web's
+            // collectWakeRuns): the longest used to be, and a short reply after a wake went into the drawer.
+            val pick = candidates.lastOrNull()
             if (pick != null) {
                 tail = order.drop(pick + 1).filterNot { it.isUserInput }
                 order = order.take(pick + 1) + order.drop(pick + 1).filter { it.isUserInput }
@@ -141,14 +141,6 @@ private class RawTurn(val id: String) {
             (users + steps).firstNotNullOfOrNull { it.start },
             (steps + trailing).asReversed().firstNotNullOfOrNull { it.end })
     }
-}
-
-private val grapheme = Pattern.compile("\\X")
-private fun graphemeCount(text: String): Int {
-    val matcher = grapheme.matcher(text)
-    var count = 0
-    while (matcher.find()) count++
-    return count
 }
 
 private fun buildBlocks(rows: List<ChatRow>): List<Block> {
