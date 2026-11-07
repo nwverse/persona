@@ -210,6 +210,9 @@ func (s *Service) kbOpenLocked(ctx context.Context, set assistantwire.KBSettings
 		if n := e.IgnoreNoiseProjects(); n > 0 {
 			s.logf("kb: %d project(s) from notifications marked ignored", n)
 		}
+		if n := e.PruneProjectAliases(); n > 0 {
+			s.logf("kb: took %d alias(es) off projects: other projects' names, too generic, or past the bound", n)
+		}
 		if n := e.RetagMail(); n > 0 {
 			s.logf("kb: %d mail chat(s) queued to be tagged again under the current rules", n)
 		}

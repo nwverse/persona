@@ -8,6 +8,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -31,18 +32,44 @@ const (
 
 type dedupeVerdict struct {
 	Same   bool      `json:"same"`
+	Split  bool      `json:"split,omitempty"` // the user unmerged the pair (unmergeProject): never asked about again
 	Reason string    `json:"reason,omitempty"`
 	At     time.Time `json:"at"`
+}
+
+// settled: the pair is not asked about now.
+func (v dedupeVerdict) settled() bool {
+	return v.Same || v.Split || time.Since(v.At) < dedupeRecheck
 }
 
 func (s *Store) dedupePath() string { return filepath.Join(s.Dir, KindProject, ".dedupe.json") }
 
 func (s *Store) dedupeVerdicts() map[string]dedupeVerdict {
+	s.dedupeMu.Lock()
+	defer s.dedupeMu.Unlock()
+	return s.dedupeVerdictsLocked()
+}
+
+func (s *Store) dedupeVerdictsLocked() map[string]dedupeVerdict {
 	out := map[string]dedupeVerdict{}
 	if raw, err := os.ReadFile(s.dedupePath()); err == nil {
 		_ = json.Unmarshal(raw, &out)
 	}
 	return out
+}
+
+// putDedupeVerdict records one pair's verdict, reading the file again so a dedupe run and an unmerge do not
+// overwrite each other's.
+func (s *Store) putDedupeVerdict(key string, v dedupeVerdict) error {
+	s.dedupeMu.Lock()
+	defer s.dedupeMu.Unlock()
+	all := s.dedupeVerdictsLocked()
+	all[key] = v
+	raw, err := json.MarshalIndent(all, "", "  ")
+	if err != nil {
+		return err
+	}
+	return writeFile(s.dedupePath(), append(raw, '\n'))
 }
 
 func pairKey(a, b string) string {
@@ -138,10 +165,6 @@ func (e *Engine) DedupeProjects(ctx context.Context, max int) int {
 		return 0
 	}
 	verdicts := e.Store.dedupeVerdicts()
-	defer func() {
-		raw, _ := json.MarshalIndent(verdicts, "", "  ")
-		_ = writeFile(e.Store.dedupePath(), append(raw, '\n'))
-	}()
 	asked, merged := 0, 0
 	gone := map[string]bool{} // merged away this run: their other pairs are stale
 	for _, c := range dedupeCandidates(e.Store.Projects()) {
@@ -157,7 +180,7 @@ func (e *Engine) DedupeProjects(ctx context.Context, max int) int {
 			continue
 		}
 		key := pairKey(c.a.Slug, c.b.Slug)
-		if v, ok := verdicts[key]; ok && (v.Same || time.Since(v.At) < dedupeRecheck) {
+		if v, ok := verdicts[key]; ok && v.settled() {
 			continue
 		}
 		asked++
@@ -169,7 +192,12 @@ func (e *Engine) DedupeProjects(ctx context.Context, max int) int {
 			e.logf("dedupe %s: %v", key, err)
 			continue
 		}
-		verdicts[key] = dedupeVerdict{Same: same, Reason: reason, At: time.Now().UTC()}
+		if v, ok := e.Store.dedupeVerdicts()[key]; ok && v.Split { // unmerged while the model was asked
+			continue
+		}
+		if err := e.Store.putDedupeVerdict(key, dedupeVerdict{Same: same, Reason: reason, At: time.Now().UTC()}); err != nil {
+			e.logf("dedupe %s: %v", key, err)
+		}
 		if !same {
 			continue
 		}
@@ -237,8 +265,8 @@ func hedged(reason string) bool {
 
 // MergeProjects folds drop into keep: drop's name and aliases become keep's aliases; people, chats, documents,
 // code directories, keywords and Moments posts are joined; the timelines are interleaved; the chats, people and items
-// that named drop name keep. drop stays on disk as merged (merged_into), hidden from lists, so it can be undone by
-// hand. keep is marked dirty: its profile is rewritten from both.
+// that named drop name keep. drop stays on disk as merged (merged_into), hidden from lists, with what keep gained
+// (merge), so unmergeProject can undo it. keep is marked dirty: its profile is rewritten from both.
 func (e *Engine) MergeProjects(keepSlug, dropSlug, why string) error {
 	e.Store.applyMu.Lock()
 	defer e.Store.applyMu.Unlock()
@@ -283,6 +311,14 @@ func (e *Engine) mergeProjects(keepSlug, dropSlug, why string, manual bool) erro
 			}
 		}
 	}
+	// What keep gains is recorded on drop (ProjectMerge) so an unmerge takes back just that: the lists only grow
+	// at their ends here.
+	rec := &ProjectMerge{At: time.Now().UTC(), Status: drop.Status}
+	nAliases, nPeople, nChats, nItems, nDirs, nKeywords := len(keep.Aliases), len(keep.People), len(keep.Chats), len(keep.Items), len(keep.Dirs), len(keep.Keywords)
+	hadMoments := map[string]bool{}
+	for _, m := range keep.Moments {
+		hadMoments[m.ID] = true
+	}
 	// drop's name always becomes an alias (its mentions should find keep) unless a third project goes by it; its
 	// aliases join within the bound and without names of other projects.
 	taken := e.takenProjectNames(keep.Slug, drop.Slug)
@@ -296,6 +332,14 @@ func (e *Engine) mergeProjects(keepSlug, dropSlug, why string, manual bool) erro
 	keep.Dirs = addUnique(keep.Dirs, drop.Dirs...)
 	keep.Keywords = addUnique(keep.Keywords, drop.Keywords...)
 	keep.Moments = mergeMoments(keep.Moments, drop.Moments)
+	rec.Aliases = slices.Clone(keep.Aliases[nAliases:])
+	rec.People, rec.Chats, rec.Items = slices.Clone(keep.People[nPeople:]), slices.Clone(keep.Chats[nChats:]), slices.Clone(keep.Items[nItems:])
+	rec.Dirs, rec.Keywords = slices.Clone(keep.Dirs[nDirs:]), slices.Clone(keep.Keywords[nKeywords:])
+	for _, m := range keep.Moments {
+		if !hadMoments[m.ID] {
+			rec.Moments = append(rec.Moments, m.ID)
+		}
+	}
 	if drop.Kind == "long" {
 		keep.Kind = "long"
 	}
@@ -326,10 +370,9 @@ func (e *Engine) mergeProjects(keepSlug, dropSlug, why string, manual bool) erro
 	if manual {
 		// The target keeps its identity and scalar priorities. The merged source remains readable with its original
 		// protected metadata, while both sets of confirmed facts remain visible on the target.
-		if keep.Pinned == "" {
-			keep.Pinned = drop.Pinned
-		} else if drop.Pinned != "" && drop.Pinned != keep.Pinned {
-			keep.Pinned += "\n\n" + drop.Pinned
+		if joined := joinPinned(keep.Pinned, drop.Pinned); joined != keep.Pinned {
+			was := keep.Pinned
+			rec.Pinned, keep.Pinned = &was, joined
 		}
 		keep.LockedFields = addUnique(keep.LockedFields, drop.LockedFields...)
 		keep.Locked = keep.Locked || drop.Locked
@@ -352,7 +395,7 @@ func (e *Engine) mergeProjects(keepSlug, dropSlug, why string, manual bool) erro
 		}
 	}
 	// Who named drop names keep.
-	swap := func(list []string) ([]string, bool) {
+	swap := func(ref string, list []string) ([]string, bool) {
 		changed := false
 		var out []string
 		for _, s := range list {
@@ -361,11 +404,14 @@ func (e *Engine) mergeProjects(keepSlug, dropSlug, why string, manual bool) erro
 			}
 			out = addUnique(out, s)
 		}
+		if changed && !slices.Contains(list, keep.Slug) {
+			rec.Moved = append(rec.Moved, ref)
+		}
 		return out, changed
 	}
 	for _, id := range drop.Chats {
 		if c, ok := e.Store.Chat(id); ok {
-			if l, ch := swap(c.Projects); ch {
+			if l, ch := swap(KindChat+"/"+id, c.Projects); ch {
 				c.Projects = l
 				if err := e.Store.putEntity(KindChat, c.ID, c, &c.Tagging, manual); err != nil {
 					return err
@@ -375,7 +421,7 @@ func (e *Engine) mergeProjects(keepSlug, dropSlug, why string, manual bool) erro
 	}
 	for _, id := range drop.People {
 		if p, ok := e.Store.Person(id); ok {
-			if l, ch := swap(p.Projects); ch {
+			if l, ch := swap(KindPerson+"/"+id, p.Projects); ch {
 				p.Projects = l
 				if err := e.Store.putEntity(KindPerson, p.ID, p, &p.Tagging, manual); err != nil {
 					return err
@@ -389,7 +435,7 @@ func (e *Engine) mergeProjects(keepSlug, dropSlug, why string, manual bool) erro
 			continue
 		}
 		if it, ok := e.Store.Item(kind, id); ok {
-			if l, ch := swap(it.Projects); ch {
+			if l, ch := swap(ref, it.Projects); ch {
 				it.Projects = l
 				if err := e.Store.putEntity(it.Kind, it.ID, it, &it.Tagging, manual); err != nil {
 					return err
@@ -397,13 +443,24 @@ func (e *Engine) mergeProjects(keepSlug, dropSlug, why string, manual bool) erro
 			}
 		}
 	}
-	drop.Status, drop.MergedInto, drop.Dirty = "merged", keep.Slug, false
+	drop.Status, drop.MergedInto, drop.Merge, drop.Dirty = "merged", keep.Slug, rec, false
 	drop.Updated = time.Now().UTC()
 	if err := e.Store.putEntity(KindProject, drop.Slug, drop, &drop.Tagging, manual); err != nil {
 		return err
 	}
 	e.index(KindProject, keep.Slug, keep.Name, keep.Tagging, keep.OneLine, keep.Updated)
 	return nil
+}
+
+// joinPinned is keep's pinned facts with drop's added (a manual merge keeps both).
+func joinPinned(keep, drop string) string {
+	switch {
+	case keep == "":
+		return drop
+	case drop != "" && drop != keep:
+		return keep + "\n\n" + drop
+	}
+	return keep
 }
 
 // rank orders importance: P0 is 0, unset 4.
