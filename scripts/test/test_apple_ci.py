@@ -15,13 +15,15 @@ class AppleCIPreparationTests(unittest.TestCase):
     def test_matching_runtime_is_prepared_before_device_build(self):
         script = SCRIPT.read_text()
         self.assertLess(
-            script.index("Download matching iOS 26.0 simulator runtime"),
+            script.index('Download matching $platform 26.0 simulator runtime'),
             script.index("Unsigned iOS and embedded watch/extensions build"),
         )
 
     def test_runtime_remains_pinned_to_minimum_compiler(self):
         script = SCRIPT.read_text()
-        self.assertIn("xcodebuild -downloadPlatform iOS -architectureVariant universal", script)
+        self.assertIn('for platform in iOS watchOS; do', script)
+        self.assertIn('xcodebuild -downloadPlatform "$platform" -architectureVariant universal', script)
+        self.assertIn('--platform "$platform"', script)
         self.assertNotIn("-buildVersion 26.0", script)
         self.assertIn('--profile stock --runtime "$4"', script)
         self.assertIn('"$OUTPUT/simulator.log" "$IOS_RUNTIME"', script)
@@ -47,6 +49,13 @@ class AppleRuntimeTests(unittest.TestCase):
             with self.subTest(runtime=runtime):
                 self.assertIsNone(apple_runtime.select([runtime]))
         self.assertIsNone(apple_runtime.select([]))
+
+    def test_watch_runtime_is_selected_separately_from_ios(self):
+        ios = self.runtime("26.0.1")
+        watch = self.runtime("26.0", platform="watchOS")
+        self.assertEqual(apple_runtime.select([ios, watch], "watchOS"), watch["identifier"])
+        self.assertIsNone(apple_runtime.select([ios], "watchOS"))
+        self.assertIsNone(apple_runtime.select([self.runtime("26.2", platform="watchOS")], "watchOS"))
 
     def test_highest_compatible_patch_wins_without_selecting_newer_minor(self):
         expected = self.runtime("26.0.10")

@@ -103,19 +103,23 @@ if [ "$LANE" = all ] || [ "$LANE" = ios ]; then
   for sdk in iphoneos iphonesimulator watchos watchsimulator; do
     ci_run "Require $sdk SDK" 60 xcrun --sdk "$sdk" --show-sdk-version
   done
-  # Current macos-26 images include Xcode 26.0.1 but not the iOS 26.0 runtime.
-  # Xcode validates platform availability for generic device destinations too,
-  # so prepare the matching platform before resolving/building the device graph.
-  # The pinned Xcode downloads its compatible patch runtime (26.0.1), not
-  # necessarily the SDK's exact marketing version. Validate 26.0.x explicitly;
-  # never substitute a newer minor platform or compiler to make the gate pass.
-  ci_run 'List simulator runtimes' 120 bash -c 'xcrun simctl list runtimes -j > "$1"' -- "$OUTPUT/runtimes-before.json"
-  if ! IOS_RUNTIME=$(python3 "$CI_ROOT/scripts/ci/apple_runtime.py" "$OUTPUT/runtimes-before.json"); then
-    ci_run 'Download matching iOS 26.0 simulator runtime' 1200 xcodebuild -downloadPlatform iOS -architectureVariant universal
-    ci_run 'List downloaded simulator runtimes' 120 bash -c 'xcrun simctl list runtimes -j > "$1"' -- "$OUTPUT/runtimes-after.json"
-    IOS_RUNTIME=$(python3 "$CI_ROOT/scripts/ci/apple_runtime.py" "$OUTPUT/runtimes-after.json")
-  fi
-  printf 'apple-ci: selected compatible runtime %s\n' "$IOS_RUNTIME"
+  # Current hosted images omit the Xcode 26.0-compatible iOS/watch runtimes.
+  # Generic device builds validate both platforms for the embedded watch app,
+  # even though SDK lookup succeeds. Prepare both before resolving/building.
+  # The pinned Xcode selects compatible patch runtimes (such as iOS 26.0.1).
+  # Validate 26.0.x explicitly; never substitute a newer minor or compiler.
+  for platform in iOS watchOS; do
+    runtimes="$OUTPUT/runtimes-$platform-before.json"
+    ci_run "List $platform simulator runtimes" 120 bash -c 'xcrun simctl list runtimes -j > "$1"' -- "$runtimes"
+    if ! runtime=$(python3 "$CI_ROOT/scripts/ci/apple_runtime.py" "$runtimes" --platform "$platform"); then
+      ci_run "Download matching $platform 26.0 simulator runtime" 1200 xcodebuild -downloadPlatform "$platform" -architectureVariant universal
+      runtimes="$OUTPUT/runtimes-$platform-after.json"
+      ci_run "List downloaded $platform simulator runtimes" 120 bash -c 'xcrun simctl list runtimes -j > "$1"' -- "$runtimes"
+      runtime=$(python3 "$CI_ROOT/scripts/ci/apple_runtime.py" "$runtimes" --platform "$platform")
+    fi
+    printf 'apple-ci: selected compatible %s runtime %s\n' "$platform" "$runtime"
+    if [ "$platform" = iOS ]; then IOS_RUNTIME="$runtime"; fi
+  done
   resolve Persona
   # Generic device builds compile the actual watch/widget/notification/share
   # dependency graph; do not delete the watch target to accommodate the runner.
