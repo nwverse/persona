@@ -22,6 +22,7 @@ var (
 // claudePaste is what Claude Code (2.1.316, its paste handler) makes of pasted text. Each line is cut at every space
 // before a path; a line of several pieces that are not all paths stays as it is. Otherwise each piece that is a path
 // with an image extension, to a file that exists, becomes an attached image and leaves the text; a blank line goes.
+// A paste that attaches nothing is pasted as it was, blank lines included.
 func claudePaste(text string) (kept string, attached []string) {
 	notPath := func(p string) bool { return !pastedPathStart.MatchString(strings.TrimSpace(p)) }
 	var out []string
@@ -51,6 +52,9 @@ func claudePaste(text string) (kept string, attached []string) {
 			}
 			out = append(out, p)
 		}
+	}
+	if len(attached) == 0 {
+		return text, nil
 	}
 	return strings.Join(out, "\n"), attached
 }
@@ -110,9 +114,8 @@ func sendToClaude(t *testing.T, text string, images []map[string]any) string {
 	return typed
 }
 
-// #32: Claude Code turned each bare path in <attached_images> into an `[Image #n]` and dropped it, so the agent saw
-// the picture with an empty block and no file to copy into a project. Each picture is still attached once, and its
-// path now reaches the agent as text; the apps still show each photo once.
+// Claude Code turns each bare image path in <attached_images> into an `[Image #n]` and drops the line (#32). Each
+// picture is attached once, its path reaches the agent as text, and the apps show each photo once.
 func TestSendKeepsTheImagePathForClaude(t *testing.T) {
 	png := map[string]any{"mime": "image/png", "data": "iVBORw0KGgo="}
 	jpg := map[string]any{"mime": "image/jpeg", "data": "/9j/4AAQ"}
