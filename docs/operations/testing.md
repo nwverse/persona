@@ -80,10 +80,12 @@ A test binary never touches the developer's real `~/.persona`: the packages that
 Runs only relevant second-scale checks based on git changes, with independent checks in parallel; useful before committing:
 
 ```sh
-./scripts/check-fast.sh                  # compare changes from git merge-base HEAD origin/master to worktree, select by path
-./scripts/check-fast.sh --base master    # choose a comparison baseline
+./scripts/check-fast.sh                  # compare changes from git merge-base HEAD <default branch> to worktree, select by path
+./scripts/check-fast.sh --base main      # choose a comparison baseline
 ./scripts/check-fast.sh --all            # all fast local checks except full iOS/macOS and server Postgres tests
 ```
+
+Without `--base`, the base is the clone's default branch, read from local refs only (it works offline): `origin/HEAD` if it points at a commit, else `origin/main`, else `origin/master`. With none of them it stops with exit 2 and says how to fix it (`git fetch origin` then `git remote set-head origin --auto`, or `--base <ref>`).
 
 `--all` also runs all `scripts/**/test_*.py` like CI’s Scripts tests job (the same `find`; it skips only tests already covered by dedicated checks: `test_external_service_refs.py`, `test_sdk_bundle.py`, `test_extension_schema.py`, and `scripts/app/test_android_*`, see `script_test_add`; update this skip list when renaming or removing dedicated checks). They run sequentially in one check, each suite from its own directory with its own `CHECK_FAST_TIMEOUT_OTHER`. One failure does not stop the rest; the final summary lists failed and timed-out files.
 
