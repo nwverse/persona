@@ -1,5 +1,7 @@
 # Lessons: web UI and interactions
 
+- Keep React state updaters free of mutations to refs (#1165). Echo matching claims transcript IDs, so do it in the effect, then pass captured IDs and a timestamp into a pure pending-message filter. Exercise sending and transcript delivery under StrictMode to catch double-invocation failures.
+
 ## A word turned into an icon at a row's end (2026-11-07, sidebar source marks)
 
 - Everything at a sidebar row's end steps aside while the row is hovered (`group-hover/row:invisible`, for the ⋯). An icon's own `title` therefore never shows to a mouse user: the pointer that would hover the icon has already hidden it. Put the icon's name into the row's own tooltip as well, and keep `role=img` + `aria-label` on the icon for screen readers.

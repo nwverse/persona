@@ -309,10 +309,12 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
     users.forEach((user) => acknowledgeLaunch(mid, sid, user));
     settleOutbox(mid, sid, users);
     if (!pending.length) return;
+    const shown = echoed(pending, users, (p) => ({ id: p.id, text: p.msg.text, images: p.msg.images, at: p.at }), claimed.current);
+    const drop = new Set([...shown].map((p) => p.id));
+    const now = Date.now();
     setPending((ps) => {
-      const shown = echoed(ps, users, (p) => ({ id: p.id, text: p.msg.text, images: p.msg.images, at: p.at }), claimed.current);
       // one held back for an ultracode change waits as long as the turn does
-      return ps.filter((p) => !shown.has(p) && (p.waits || Date.now() - p.at < 30_000));
+      return ps.filter((p) => !drop.has(p.id) && (p.waits || now - p.at < 30_000));
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [segs]);
