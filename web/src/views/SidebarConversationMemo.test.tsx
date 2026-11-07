@@ -28,8 +28,9 @@ import { Sidebar } from "./Sidebar";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
+// `efforts`: a field that is not a plain value, so a list parsed anew gives it a new array
 const conversation = (session_id: string, title: string): Session => ({
-  machine_id: "hub", session_id, title, cwd: "/persona", status: "idle", state: "idle", assistant: true, origin: "user", updated_at: "2026-05-01T10:00:00Z",
+  machine_id: "hub", session_id, title, cwd: "/persona", status: "idle", state: "idle", assistant: true, origin: "user", updated_at: "2026-05-01T10:00:00Z", efforts: ["low", "high"],
 });
 const main = conversation("main", "Persona");
 const pinned = conversation("pinned", "Release notes");
@@ -156,6 +157,14 @@ describe("the Persona conversation rows", () => {
     }
     expect(host.textContent).toContain("Deploy 3");
     expect(reads("hub/hub-agent")).toBeGreaterThanOrEqual(3);
+    expect(reads("hub/main")).toBe(0);
+    expect(reads("hub/pinned")).toBe(0);
+    expect(reads("hub/recent")).toBe(0);
+
+    // the machine's full list, every session in it parsed anew
+    hubPush({ type: "sessions", machine_id: "hub", sessions: [main, pinned, recent, { ...hubAgent, title: "Deploy 4" }] });
+    await flush();
+    expect(host.textContent).toContain("Deploy 4");
     expect(reads("hub/main")).toBe(0);
     expect(reads("hub/pinned")).toBe(0);
     expect(reads("hub/recent")).toBe(0);
