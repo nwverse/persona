@@ -107,7 +107,9 @@ type Devices struct {
 	// as it is then.
 	early   bool
 	ownMu   sync.Mutex
-	ownSaid string        // the last trouble keeping the list said (ownMu)
+	ownSaid string // the last trouble keeping the list said (ownMu)
+	// ownHeld: the list running is the own list, held as its own in manager.json (reported: States.OwnList).
+	ownHeld bool
 	ownWait time.Duration // ownListWait as New found it
 	// ready is closed once the machines of the first config are made (the hub's, or the own list's: ownlist.go):
 	// nothing is reported before (an empty list would have the hub forget them). The hello's config is taken before
@@ -492,6 +494,9 @@ func (d *Devices) states() devicewire.States {
 		out.Absorbed[from.cfg.ID] = to.cfg.ID
 	}
 	d.fleet.mu.Unlock()
+	d.mu.Lock()
+	out.OwnList = d.ownHeld
+	d.mu.Unlock()
 	for _, m := range d.cfgMachines() {
 		avail, rtt := m.reachableHere()
 		// Its entry too, an absorbed one's included: the hub keeps what each manager has (hub machine_entries.go).

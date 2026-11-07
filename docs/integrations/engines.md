@@ -205,7 +205,7 @@ After reboot, launchd / systemd starts node, but no terminal has started classic
   After success, use POST result for that machine during this run until hub also reports running (GET may still use connection-time value). Web same (`web/src/lib/herdr-notice.ts`, `views/agents/HerdrNotices.tsx`), below filters in sidebar / mobile Agents section, polling every 10 seconds while visible,
   same rules / localized failures, with raw hub text, status, request ID (`X-Request-Id`) in Copy details button / context menu.
 - **Failure**: still `engine_missing`. Missing herdr copy unchanged; installed-but-failed says "Automatic start also failed." Details include exit code / final output lines,
-  output in `$TMPDIR/persona-herdr-server.log`, also node logs. No autostart on Windows; behavior unchanged.
+  output in `persona/herdr/persona-herdr-server.log` under the user's cache folder (`~/.cache` on Linux, `~/Library/Caches` on macOS; a folder of the node's own in the temp folder when there is none), also node logs. No autostart on Windows; behavior unchanged.
 
 ### When herdr is not installed
 

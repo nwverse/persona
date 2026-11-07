@@ -296,10 +296,7 @@ func (e *Engine) mergeProjects(keepSlug, dropSlug, why string, manual bool) erro
 	// at their ends here.
 	rec := &ProjectMerge{At: time.Now().UTC(), Status: drop.Status}
 	nAliases, nPeople, nChats, nItems, nDirs, nKeywords := len(keep.Aliases), len(keep.People), len(keep.Chats), len(keep.Items), len(keep.Dirs), len(keep.Keywords)
-	hadMoments := map[string]bool{}
-	for _, m := range keep.Moments {
-		hadMoments[m.ID] = true
-	}
+	keptMoments := keep.Moments
 	// drop's name always becomes an alias (its mentions should find keep) unless a third project goes by it; its
 	// aliases join within the bound and without names of other projects.
 	taken := e.takenProjectNames(keep.Slug, drop.Slug)
@@ -316,11 +313,9 @@ func (e *Engine) mergeProjects(keepSlug, dropSlug, why string, manual bool) erro
 	rec.Aliases = slices.Clone(keep.Aliases[nAliases:])
 	rec.People, rec.Chats, rec.Items = slices.Clone(keep.People[nPeople:]), slices.Clone(keep.Chats[nChats:]), slices.Clone(keep.Items[nItems:])
 	rec.Dirs, rec.Keywords = slices.Clone(keep.Dirs[nDirs:]), slices.Clone(keep.Keywords[nKeywords:])
-	for _, m := range keep.Moments {
-		if !hadMoments[m.ID] {
-			rec.Moments = append(rec.Moments, m.ID)
-		}
-	}
+	had, has := momentIDs(keptMoments), momentIDs(keep.Moments)
+	rec.Moments = removeStrings(has, had)
+	rec.Evicted = slices.DeleteFunc(slices.Clone(keptMoments), func(m ProjectMoment) bool { return slices.Contains(has, m.ID) })
 	if drop.Kind == "long" {
 		keep.Kind = "long"
 	}
@@ -355,8 +350,11 @@ func (e *Engine) mergeProjects(keepSlug, dropSlug, why string, manual bool) erro
 			was := keep.Pinned
 			rec.Pinned, keep.Pinned = &was, joined
 		}
-		keep.LockedFields = addUnique(keep.LockedFields, drop.LockedFields...)
-		keep.Locked = keep.Locked || drop.Locked
+		was := MergeLocks{Fields: slices.Clone(keep.LockedFields), Locked: keep.Locked}
+		if locks := joinLocks(was, drop); !locks.same(was) {
+			rec.Locks = &was
+			keep.LockedFields, keep.Locked = locks.Fields, locks.Locked
+		}
 		if e.Store.Summary(KindProject, keep.Slug) == "" {
 			mergedSummary = e.Store.Summary(KindProject, drop.Slug)
 		}
@@ -390,39 +388,8 @@ func (e *Engine) mergeProjects(keepSlug, dropSlug, why string, manual bool) erro
 		}
 		return out, changed
 	}
-	for _, id := range drop.Chats {
-		if c, ok := e.Store.Chat(id); ok {
-			if l, ch := swap(KindChat+"/"+id, c.Projects); ch {
-				c.Projects = l
-				if err := e.Store.putEntity(KindChat, c.ID, c, &c.Tagging, manual); err != nil {
-					return err
-				}
-			}
-		}
-	}
-	for _, id := range drop.People {
-		if p, ok := e.Store.Person(id); ok {
-			if l, ch := swap(KindPerson+"/"+id, p.Projects); ch {
-				p.Projects = l
-				if err := e.Store.putEntity(KindPerson, p.ID, p, &p.Tagging, manual); err != nil {
-					return err
-				}
-			}
-		}
-	}
-	for _, ref := range drop.Items {
-		kind, id, ok := strings.Cut(ref, "/")
-		if !ok {
-			continue
-		}
-		if it, ok := e.Store.Item(kind, id); ok {
-			if l, ch := swap(ref, it.Projects); ch {
-				it.Projects = l
-				if err := e.Store.putEntity(it.Kind, it.ID, it, &it.Tagging, manual); err != nil {
-					return err
-				}
-			}
-		}
+	if err := e.relinkRefs(drop, manual, swap); err != nil {
+		return err
 	}
 	drop.Status, drop.MergedInto, drop.Merge, drop.Dirty = "merged", keep.Slug, rec, false
 	drop.Updated = time.Now().UTC()
@@ -431,6 +398,74 @@ func (e *Engine) mergeProjects(keepSlug, dropSlug, why string, manual bool) erro
 	}
 	e.index(KindProject, keep.Slug, keep.Name, keep.Tagging, keep.OneLine, keep.Updated)
 	return nil
+}
+
+// projectRefs are p's chats, people and items as "<kind>/<id>".
+func projectRefs(p *Project) []string {
+	var refs []string
+	for _, id := range p.Chats {
+		refs = append(refs, KindChat+"/"+id)
+	}
+	for _, id := range p.People {
+		refs = append(refs, KindPerson+"/"+id)
+	}
+	return append(refs, p.Items...)
+}
+
+// relinkRefs gives each of p's chats, people and items the projects f makes of its own, and writes the ones f changes.
+func (e *Engine) relinkRefs(p *Project, manual bool, f func(ref string, projects []string) ([]string, bool)) error {
+	for _, ref := range projectRefs(p) {
+		kind, id, _ := strings.Cut(ref, "/")
+		var v any
+		var t *Tagging
+		var list *[]string
+		switch kind {
+		case KindChat:
+			c, ok := e.Store.Chat(id)
+			if !ok {
+				continue
+			}
+			v, t, list = c, &c.Tagging, &c.Projects
+		case KindPerson:
+			per, ok := e.Store.Person(id)
+			if !ok {
+				continue
+			}
+			v, t, list = per, &per.Tagging, &per.Projects
+		default:
+			it, ok := e.Store.Item(kind, id)
+			if !ok {
+				continue
+			}
+			kind, id, v, t, list = it.Kind, it.ID, it, &it.Tagging, &it.Projects
+		}
+		if l, changed := f(ref, *list); changed {
+			*list = l
+			if err := e.Store.putEntity(kind, id, v, t, manual); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// joinLocks is keep's locks with drop's added (a manual merge keeps both).
+func joinLocks(keep MergeLocks, drop *Project) MergeLocks {
+	return MergeLocks{Fields: addUnique(slices.Clone(keep.Fields), drop.LockedFields...), Locked: keep.Locked || drop.Locked}
+}
+
+// same: l and o lock the same, the fields in any order (an update sorts a project's locked fields).
+func (l MergeLocks) same(o MergeLocks) bool {
+	return l.Locked == o.Locked && slices.Equal(slices.Sorted(slices.Values(l.Fields)), slices.Sorted(slices.Values(o.Fields)))
+}
+
+// momentIDs are the ids of posts, in their order.
+func momentIDs(posts []ProjectMoment) []string {
+	ids := make([]string, 0, len(posts))
+	for _, m := range posts {
+		ids = append(ids, m.ID)
+	}
+	return ids
 }
 
 // joinPinned is keep's pinned facts with drop's added (a manual merge keeps both).

@@ -19,6 +19,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/coder/websocket"
@@ -41,9 +42,10 @@ const Usage = `usage:
                        用 App 里「新建管理者」给的安装码换这个管理者的 token，写进目录里的 manager.json
                        （默认 ~/.persona/managers/<id>）；数据库是它自己的 Postgres：install 时在 Docker 里建
                        （容器 persona-mgr-<id>-pg），或者 --database-url 给一个
-  personad manager join --builtin <hub address> <code> [--fingerprint <fingerprint>]
+  personad manager join --builtin <hub address> [<code>] [--fingerprint <fingerprint>] [--install]
                        bind the built-in manager's own service to the hub with a code from personad hub manager-code
-                       (the binding goes into ~/.persona/managers/assistant/manager.json)
+                       (given, or in PERSONA_MANAGER_CODE, which other users of the machine cannot read; the binding
+                       goes into ~/.persona/managers/assistant/manager.json); --install: then install its service
   personad manager run [--dir 目录] [--join <hub 地址> <安装码>]
                        运行这个管理者（--join：目录里还没有 manager.json 时先换码，容器用）
   personad manager install [--dir 目录]     建好它自己的 Postgres（Docker），装成常驻服务（Linux：systemd 用户服务；Mac：launchd）
@@ -51,6 +53,12 @@ const Usage = `usage:
                        停掉并去掉常驻服务；它的数据库容器停掉、数据卷留着（--purge：连容器和数据卷一起删掉）
   personad manager capabilities [--json]   只读列出这个程序支持的管理者能力
   personad manager status [--dir 目录]      这台电脑上的管理者和它们的服务
+  personad manager install --builtin [--join <hub address>] | --check
+                       install the built-in manager's own service (Linux: systemd user unit persona-manager-assistant;
+                       Mac: launchd); --join: bind it first with the code in PERSONA_MANAGER_CODE, unless its binding
+                       works (personad hub setup does this); --check: only say whether it can be installed here
+  personad manager uninstall --builtin    stop and remove that service; its binding and data stay
+  personad manager status --builtin       the built-in manager's binding and service
 `
 
 // errUsage: the arguments are wrong; the caller prints Usage.
@@ -73,8 +81,14 @@ func Main(ctx context.Context, build update.Build, args []string, stdout io.Writ
 	case "run":
 		return cmdRun(ctx, e, build, args[1:])
 	case "install":
+		if isBuiltin(args[1:]) {
+			return cmdInstallBuiltin(ctx, e, args[1:])
+		}
 		return cmdInstall(ctx, e, args[1:])
 	case "uninstall":
+		if isBuiltin(args[1:]) {
+			return cmdUninstallBuiltin(ctx, e, args[1:])
+		}
 		return cmdUninstall(ctx, e, args[1:])
 	case "status":
 		return cmdStatus(ctx, e, args[1:])
@@ -337,20 +351,28 @@ func cmdJoin(ctx context.Context, e *env, args []string) error {
 	if err != nil {
 		return err
 	}
+	if *builtin && len(pos) == 1 { // the code in the environment: no other user of the machine sees it
+		pos = append(pos, strings.TrimSpace(e.getenv(managerconf.BuiltinCodeEnv)))
+		_ = os.Unsetenv(managerconf.BuiltinCodeEnv)
+	}
 	if len(pos) != 2 {
 		return errUsage
 	}
 	if *builtin {
-		if *dir != "" || *dbURL != "" || *install {
-			return ConfigError{errors.New("--builtin takes the hub's address, the code, and --fingerprint or --allow-plaintext only")}
+		if *dir != "" || *dbURL != "" {
+			return ConfigError{errors.New("--builtin takes the hub's address, the code, and --fingerprint, --allow-plaintext or --install only")}
 		}
-		b, err := JoinBuiltin(ctx, JoinOptions{Hub: pos[0], Code: pos[1], Fingerprint: *fp, AllowPlaintext: *plain}, dataDir())
+		j := builtinJoin{hub: pos[0], code: pos[1], fingerprint: *fp, plaintext: *plain, always: true}
+		if *install { // what can stop the install is checked before the code is spent
+			return e.installBuiltin(ctx, dataDir(), j)
+		}
+		b, err := JoinBuiltin(ctx, JoinOptions{Hub: j.hub, Code: j.code, Fingerprint: j.fingerprint, AllowPlaintext: j.plaintext}, dataDir())
 		if err != nil {
 			return err
 		}
-		fmt.Fprintf(e.stdout, "Bound the built-in manager to the hub at %s (in %s).\n"+
-			"Next: run it as a service of its own (%s assistant, with PERSONA_ASSISTANT_DEPLOY=service).\n",
-			b.Hub, managerconf.DefaultFile(dataDir()), e.self())
+		fmt.Fprintf(e.stdout, "Bound the built-in manager to the hub at %s (in %s).\n", b.Hub, managerconf.DefaultFile(dataDir()))
+		fmt.Fprintf(e.stdout, "Next: install its service with %s manager install --builtin (or run %s assistant with "+
+			"PERSONA_ASSISTANT_DEPLOY=service yourself).\n", e.self(), e.self())
 		return nil
 	}
 	d, c, err := Join(ctx, JoinOptions{Hub: pos[0], Code: pos[1], Dir: *dir, DatabaseURL: *dbURL, Fingerprint: *fp,
@@ -551,7 +573,9 @@ func (e *env) runManager(ctx context.Context, build update.Build, dir string) er
 // binding in its manager.json. Not bound is a configuration error (exit 2: its unit does not restart it). Once the hub
 // refuses its token (bound again, or a hub that starts the built-in manager itself again: assistant.mode child, a
 // version from before the split) nothing of it runs until manager.json has another token or the hub takes this one
-// again (awaitRestart), so it never runs next to the one that has the token; then it starts again in place.
+// again (awaitRestart), so it never runs next to the one that has the token; then it starts again in place. It also
+// starts again in place on a new file where it runs from, one that runs, once it is idle (binaryWatch): nothing else
+// restarts its service after an update.
 func RunBuiltin(ctx context.Context, build update.Build, out io.Writer) error {
 	env := os.Environ()
 	home := dataDir()
@@ -566,12 +590,41 @@ func RunBuiltin(ctx context.Context, build update.Build, out io.Writer) error {
 		}
 		return err
 	}
+	watch := newBinaryWatch(out)
 	for {
 		before, err := managerconf.ReadBinding(home)
 		if err != nil { // not bound, or a manager.json that does not read: restarting cannot fix it (exit 2)
 			return ConfigError{err}
 		}
-		err = assistant.Main(ctx, build, nil)
+		// A new binary (an update): once it runs and nothing is going on, it stops and starts again on that one, as
+		// the hub's child would with the hub (watchBinary).
+		run, stop := context.WithCancel(ctx)
+		var idle atomic.Pointer[assistant.Idle]
+		var renew atomic.Bool
+		watched := make(chan struct{})
+		if watch != nil {
+			go func() {
+				defer close(watched)
+				if watch.next(run, func() assistant.Idle {
+					if p := idle.Load(); p != nil {
+						return *p
+					}
+					return nil
+				}) {
+					renew.Store(true)
+					stop()
+				}
+			}()
+		} else {
+			close(watched)
+		}
+		err = runAssistant(run, build, nil, assistant.MainHooks{Ready: func(p assistant.Idle) { idle.Store(&p) }})
+		stop()
+		<-watched
+		if renew.Load() && ctx.Err() == nil {
+			watch.restartOnNew(ctx, env) // returns when it did not: the manager runs again on this code
+			continue
+		}
 		if errors.Is(err, managerconf.ErrNotBound) {
 			return ConfigError{err}
 		}
@@ -586,12 +639,28 @@ func RunBuiltin(ctx context.Context, build update.Build, out io.Writer) error {
 			return err
 		}
 		if restart != nil {
+			// The file there may be a new one by now: only one that runs (as for a new binary, binaryWatch).
+			if watch != nil {
+				if err := checkBinary(ctx, watch.path); err != nil {
+					if ctx.Err() != nil {
+						return ctx.Err()
+					}
+					fmt.Fprintf(out, "assistant: %v: running it again here, on the code it has\n", err)
+					if fi, err := os.Stat(watch.path); err == nil {
+						watch.seen = fi
+					}
+					continue
+				}
+			}
 			if err := restart(env); err != nil {
 				fmt.Fprintf(out, "assistant: could not start again in place (%v): running it again here\n", err)
 			}
 		}
 	}
 }
+
+// runAssistant is the built-in manager itself (tests: a stand-in).
+var runAssistant = assistant.MainWith
 
 // builtinLock is the file in the built-in manager's directory its own service holds a lock on while it runs.
 const builtinLock = ".service.lock"

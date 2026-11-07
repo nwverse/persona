@@ -133,11 +133,23 @@ type ProjectMerge struct {
 	Dirs     []string  `json:"dirs,omitempty"`
 	Keywords []string  `json:"keywords,omitempty"`
 	Moments  []string  `json:"moments,omitempty"` // post ids
+	// Evicted: posts of the kept project's (its own, or another merged project's) past maxProjectMoments that come
+	// back as far as room allows when this merge is undone: those the merge pushed out, and those an unmerge of
+	// another project merged into it had no room for.
+	Evicted []ProjectMoment `json:"evicted,omitempty"`
 	// Moved: the chats, people and items ("<kind>/<id>") that named this project and not the kept one; the merge made
 	// them name the kept one instead.
 	Moved []string `json:"moved,omitempty"`
 	// Pinned: the kept project's pinned facts before a manual merge added this one's; unset when it did not change them.
 	Pinned *string `json:"pinned,omitempty"`
+	// Locks: the kept project's locks before a manual merge added this one's; unset when it did not change them.
+	Locks *MergeLocks `json:"locks,omitempty"`
+}
+
+// MergeLocks are a project's locked_fields and legacy locked.
+type MergeLocks struct {
+	Fields []string `json:"fields,omitempty"`
+	Locked bool     `json:"locked,omitempty"`
 }
 
 // Live: a project lists and is named (not merged into another).

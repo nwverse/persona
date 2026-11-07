@@ -242,8 +242,9 @@ func TestManagerCodeOutputUsesExplicitUTC(t *testing.T) {
 	if err := writeManagerCode(&out, "example-code", until, ":18660"); err != nil {
 		t.Fatal(err)
 	}
-	want := "example-code\n\nGood until 2026-11-07 16:05 UTC, once. On this machine (where the built-in manager's service runs):\n" +
-		"  persona-manager join --builtin http://127.0.0.1:18660 example-code\n"
+	want := "example-code\n\nGood until 2026-11-07 16:05 UTC, once. On this machine (where the built-in manager's service runs), with " +
+		"the code in the environment, where other users of the machine cannot read it:\n" +
+		"  PERSONA_MANAGER_CODE=<the code> persona-manager join --builtin http://127.0.0.1:18660 --install\n"
 	if got := out.String(); got != want {
 		t.Fatalf("manager-code output = %q; want %q", got, want)
 	}

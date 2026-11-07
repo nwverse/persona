@@ -80,7 +80,9 @@ func (h *Hub) pendingRestart(l i18n.Lang) restartView {
 	}
 	gone := []string{}
 	for id := range running {
-		if !seen[id] {
+		// One its manager keeps now left hub.json without a restart, and one removed from its own list is gone already
+		// (machines_kept.go).
+		if !seen[id] && h.keptBy(id) == "" && (h.knownEntry(id) != nil || h.machineByID(id) != nil) {
 			gone = append(gone, id)
 		}
 	}

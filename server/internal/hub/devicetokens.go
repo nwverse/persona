@@ -327,8 +327,8 @@ func (h *Hub) tokenRoutes(api *http.ServeMux) {
 		switch kind {
 		case "link":
 			machine, role = req.Machine, roleLink
-			if mc := h.cfgEntry(machine); mc == nil || mc.Kind != kindLink { // the hub.json entry (devices_relay.go)
-				writeErr(w, http.StatusBadRequest, fmt.Errorf("hub.json has no machine %q of kind link", machine))
+			if mc := h.knownEntry(machine); mc == nil || mc.Kind != kindLink { // hub.json's, or one its manager keeps (devices_relay.go)
+				writeErr(w, http.StatusBadRequest, fmt.Errorf("no machine %q of kind link", machine))
 				return
 			}
 		case "watch":
@@ -341,7 +341,7 @@ func (h *Hub) tokenRoutes(api *http.ServeMux) {
 		if name == "" || len([]rune(name)) > 80 {
 			name = map[string]string{"phone": "iPhone", "watch": "Apple Watch"}[kind]
 			if kind == "link" {
-				name = h.cfgEntry(machine).Name + " 的 Persona Link"
+				name = h.knownEntry(machine).Name + " 的 Persona Link"
 			}
 			if name == "" {
 				name = "设备"

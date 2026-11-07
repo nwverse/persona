@@ -8963,6 +8963,20 @@ def mock_size(v):
 
 
 GIT_PULL_STATE = {"behind": 28, "mode": "success", "pulls": 0}
+# MOCK_PERSONAL_AGENTS=1 (#138): a few personal agent conversations, and Remove from list (POST …/hide, …/unhide,
+# GET /agents/hidden) kept in memory as the extension manager keeps it; GET /mock/personal-agents?reset=1 brings every one
+# back. Off: none, as on a hub without the Lark extension.
+PERSONAL_AGENTS = os.environ.get("MOCK_PERSONAL_AGENTS")
+PERSONAL_HIDDEN = {}  # session id -> when (ms)
+def personal_rows():
+    now = int(time.time() * 1000)
+    rows = [("muse", "周报助手", 0.1, 2), ("grok_bot", "旅行规划", 1.5, 0), ("cue", "读书笔记", 5, 1), ("muse", "代码评审", 30, 0),
+            ("grok_bot", "健身记录", 80, 0), ("cue", "菜谱整理", 200, 0)]
+    return [{"id": "lark-bridge:%s:%d" % (prov, i), "source": "lark-bridge", "sessionKey": "%s:%d" % (prov, i), "provider": prov,
+             "title": title, "canSend": True, "unreadCount": unread, "rankTimeMs": now - int(hours * 3600 * 1000), "hasAvatar": False}
+            for i, (prov, title, hours, unread) in enumerate(rows)]
+def personal_listed(hidden):
+    return [r for r in personal_rows() if (r["id"] in PERSONAL_HIDDEN) == hidden] if PERSONAL_AGENTS else []
 # MOCK_GIT_WRITE=1 (#6121): the Git panel's writes on a made-up repository that changes as they are made. GET
 # /mock/git-write?fail=<code>[&files=a,b] makes the next write refuse with that code (git_conflict lists the files);
 # ?reset=1 starts over. The branch's pull request: ?pr=none|review|ready|auto sets it, ?pr_fail=no_gh|not_signed_in makes
@@ -12330,6 +12344,9 @@ class H(BaseHTTPRequestHandler):
             n = int((parse_qs(urlparse(self.path).query).get("n") or ["1"])[0])
             threading.Thread(target=replay_next, args=(n,), daemon=True).start()
             return self.send_json({"left": len(REPLAY["left"])})
+        if p == "/mock/agent_archives":  # ?close=refuse|offline|: how the next "Archive and close" ends (web_agent_archives_e2e.py)
+            ARCHIVE_CLOSE["mode"] = q.get("close", [""])[0]
+            return self.send_json({"close": ARCHIVE_CLOSE["mode"], "archived": [x["session_id"] for x in ARCHIVED_AGENTS]})
         if p == "/mock/reset":  # MachinePagesTests: each test starts from the same machines
             BOTMUX_ON.clear()
             SEND_FAIL["on"] = False  # a FailedSendPlacementTests run that died before turning it off
@@ -12349,6 +12366,8 @@ class H(BaseHTTPRequestHandler):
             INTERACTIONS.extend(SESSION_CLOSE["interactions"])
             SESSION_CLOSE.update(fail=False, attempts=[], closed=[], interactions=[])
             SESSIONS.extend(SESSION_DELETED); del SESSION_DELETED[:]
+            ARCHIVE_CLOSE["mode"] = os.environ.get("MOCK_ARCHIVE_CLOSE", "")
+            reset_agent_archives()  # MOCK_AGENT_ARCHIVES: the two archived agents again, the rest back in the list as they were
             PINS.update(spaces=["macbook/weather"], sessions=[])
             for sid, items in CHURN_ITEMS.items(): ITEMS[sid] = list(items)  # LiveUpdateTests, ChatFollowTests: what churn / say added goes
             for row in SESSIONS + ASSISTANT:
@@ -12493,7 +12512,11 @@ class H(BaseHTTPRequestHandler):
         # The Lark extension's personal agents (hub agents.go): none here, as on a hub without the Lark extension; the web's sidebar hid
         # the section only after these answered, and showed "Failed to load personal agents" on the 404 instead.
         if p == "/api/v1/agents": return self.send_json({"sources": []})
-        if p == "/api/v1/agents/sessions": return self.send_json({"sessions": [], "items": []})
+        if p == "/api/v1/agents/sessions": return self.send_json({"sessions": personal_listed(False), "items": []})
+        if p == "/api/v1/agents/hidden": return self.send_json({"sessions": personal_listed(True)})
+        if p == "/mock/personal-agents":
+            if q.get("reset"): PERSONAL_HIDDEN.clear()
+            return self.send_json({"hidden": sorted(PERSONAL_HIDDEN)})
         if p == "/api/v1/agents/prefs": return self.send_json({"pins": [], "view": {}, "sections": [], "assign": {}})
         if p == "/api/v1/personas": return self.send_json({"personas": personas() + ext_look_personas()})
         if looks_route(self, "GET", p, b""): return
@@ -12909,6 +12932,15 @@ class H(BaseHTTPRequestHandler):
             return self.upload()
         self.last_body = self.body()
         p = urlparse(self.path).path
+        if PERSONAL_AGENTS and p.startswith("/api/v1/agents/sessions/") and p.rsplit("/", 1)[-1] in ("hide", "unhide"):
+            sid, op = unquote(p[len("/api/v1/agents/sessions/"):].rsplit("/", 1)[0]), p.rsplit("/", 1)[-1]
+            if sid not in [r["id"] for r in personal_rows()]: return self.send_json({"error": "no such session"}, 404)
+            if op == "hide": PERSONAL_HIDDEN[sid] = int(time.time() * 1000)
+            else: PERSONAL_HIDDEN.pop(sid, None)
+            for c in list(CLIENTS.values()):
+                try: c["send"]({"type": "agents"})
+                except Exception: pass
+            return self.send_json({"ok": True, "hidden": op == "hide"})
         if p.startswith("/api/v1/assistant/conversations/" + ASK1 + "/always/") and self.command == "DELETE":
             key = p.rsplit("/", 1)[-1]
             ALWAYS_GRANTS[:] = [g for g in ALWAYS_GRANTS if g["key_hash"] != key]
@@ -15193,10 +15225,15 @@ _plugins_route_without_extensions = plugins_route
 
 
 def plugins_route(handler, p, body):
+    if PLUGINS_MODE and p == "/api/v1/extensions/showcase/-/ui/motion":
+        handler.send_json({"view": _motion_view(_MOTION_STEP[0])})
+        return True
     if PLUGINS_MODE and p.startswith("/api/v1/extensions/showcase/-/ui/"):
         return mock_showcase(handler, p.rsplit("/", 1)[-1], body)
     if p == "/mock/invalidate" and PLUGINS_MODE:
         return mock_invalidate(handler)
+    if p in ("/mock/motion/next", "/mock/motion/reset") and PLUGINS_MODE:
+        return mock_motion(handler, reset=p.endswith("/reset"))
     if EXTENSIONS_API and (p == "/api/v1/extensions" or p.startswith("/api/v1/extensions/")):
         if body:
             try:
@@ -15227,6 +15264,45 @@ def mock_showcase(handler, ui, body):
         handler.send_json({"toast": "快照测试不执行写操作"})
     else:
         handler.send_json({"view": view})
+    return True
+
+
+# showcase › motion (#37): a page the extension draws again with other values. `GET /mock/motion/next` moves it to the
+# other step (`/mock/motion/reset`: back to the first) and says so (`ui.invalidate`): numbers roll, a badge changes tone
+# and words, a row goes and another comes, the chart's bars move. Open it with
+# `-openExtension showcase -openExtensionPage motion` (`ExtensionMotionUITests`).
+_MOTION_STEP = [0]
+
+
+def _motion_view(step):
+    later = step % 2 == 1
+    tasks = [{"type": "row", "key": "build", "title": "Build", "icon": "gauge", "value": "5/5" if later else "3/5",
+              "badge": {"text": "Passed", "tone": "positive"} if later else {"text": "Running", "tone": "caution"}}]
+    if later:
+        tasks.append({"type": "row", "key": "deploy", "title": "Deploy", "icon": "clock", "value": "1 min",
+                      "badge": {"text": "Queued"}})
+    else:
+        tasks.append({"type": "row", "key": "review", "title": "Review", "icon": "doc", "value": "2 left",
+                      "badge": {"text": "Needs you", "tone": "danger"}})
+    return {"title": "Motion", "sections": [
+        {"key": "today", "title": "Today", "items": [
+            {"type": "stat_grid", "key": "stats", "stats": [
+                {"label": "Done", "value": "6/8" if later else "2/8"},
+                {"label": "Cost", "value": "$36.20" if later else "$1.20", "detail": "+12%", "tone": "caution"},
+                {"label": "Tokens", "value": "8.4M" if later else "1.2M"}]},
+            {"type": "metric", "key": "eta", "label": "Time left", "value": "4 min" if later else "12 min"},
+            {"type": "chart", "key": "chart", "kind": "bar", "title": "Runs", "series": [{"name": "Runs", "points": [
+                {"label": d, "value": v} for d, v in zip(["Mon", "Tue", "Wed", "Thu", "Fri"],
+                                                         [4, 9, 6, 12, 8] if later else [2, 5, 3, 4, 7])]}]}]},
+        {"key": "tasks", "title": "Tasks", "items": tasks}]}
+
+
+def mock_motion(handler, reset=False):
+    _MOTION_STEP[0] = 0 if reset else _MOTION_STEP[0] + 1
+    for send, _ in list(LIVE):
+        try: send({"type": "extension_ui", "extension": "showcase", "id": "motion", "invalidate": True})
+        except Exception: pass
+    handler.send_json({"step": _MOTION_STEP[0]})
     return True
 
 
@@ -15944,6 +16020,99 @@ MOCK_HELP.append("MOCK_ULTRACODE=1  Claude Code 的 ultracode 开关（#3428）�
                  "发布说明那个带版本太旧的原因、博客那个关着、菜谱那个离线（node 还记着开）；Codex 的订单会话在「极高」档；Mac Studio 的 Claude Code 太旧，新建时不能开。"
                  "POST …/modes 的 ultracode 闲着立刻生效、工作中排队 MOCK_ULTRACODE_SECONDS 秒（默认 4）；有排队时发消息回 409 ultracode_pending；"
                  "GET /mock/ultracode 看请求和消息，?reset=1 复原")
+
+# Agent session archives (docs/protocol/protocol.md "Agent session archives"; web "Archived agents"): MOCK_AGENT_ARCHIVES=1
+# advertises archives and "Archive and close" (=archive: archives only, as behind an older manager), with two agents
+# already archived. Busy agents are refused (409 agent_busy) as the manager does; ?close=1 closes an open Claude agent
+# (it goes offline), and MOCK_ARCHIVE_CLOSE=refuse|offline makes the computer leave it open, as the manager reports.
+AGENT_ARCHIVES = os.environ.get("MOCK_AGENT_ARCHIVES", "")
+ARCHIVED_AGENTS = []
+ARCHIVE_ORIGINALS = {}  # (machine, session) -> the row as it was before it was archived here (/mock/reset puts it back)
+ARCHIVE_CLOSE = {"mode": os.environ.get("MOCK_ARCHIVE_CLOSE", "")}  # GET /mock/agent_archives?close= changes it
+if AGENT_ARCHIVES:
+    ARCHIVED_AGENTS.extend([
+        {"machine_id": "macbook", "session_id": "arch-1", "title": "迁移旧的 CI 配置", "cwd": "/Users/me/code/infra", "agent": "claude",
+         "status": "offline", "state": "offline", "updated_at": ago(days=3), "last_text": "CI 已经迁到新的 runner，旧配置删掉了。", "archived": True},
+        {"machine_id": "studio", "session_id": "arch-2", "title": "Release notes for 2.4", "cwd": "/Users/me/code/app", "agent": "codex",
+         "status": "offline", "state": "offline", "updated_at": ago(days=9), "last_text": "Drafted the notes and opened a PR.", "archived": True},
+    ])
+
+
+ARCHIVE_SEEDS = copy.deepcopy(ARCHIVED_AGENTS)
+
+
+def reset_agent_archives():
+    seeds = {(x["machine_id"], x["session_id"]) for x in ARCHIVE_SEEDS}
+    for key, orig in ARCHIVE_ORIGINALS.items():
+        SESSIONS[:] = [x for x in SESSIONS if (x["machine_id"], x["session_id"]) != key]
+        SESSIONS.append(copy.deepcopy(orig))
+    ARCHIVE_ORIGINALS.clear()
+    SESSIONS[:] = [x for x in SESSIONS if (x["machine_id"], x["session_id"]) not in seeds]
+    ARCHIVED_AGENTS[:] = copy.deepcopy(ARCHIVE_SEEDS)
+
+
+def agent_archive_busy(s):
+    return bool(s.get("starting") or s.get("status") in ("working", "blocked") or s.get("state") in ("working", "needs_you")
+                or s.get("background_working") or s.get("background_waiting") or (s.get("pending_interactions") or 0) > 0
+                or s.get("background") or any(x.get("running") for x in s.get("subagents") or []))
+
+
+def agent_archives_route(h, p, body):
+    if not AGENT_ARCHIVES: return False
+    if p == "/api/v1/sessions/archived" and h.command == "GET":
+        return h.send_json({"sessions": sorted(ARCHIVED_AGENTS, key=lambda s: s.get("updated_at", ""), reverse=True)}) or True
+    m = re.fullmatch(r"/api/v1/sessions/([^/]+)/([^/]+)/(archive|unarchive)", p)
+    if not m or h.command != "POST": return False
+    if is_read_only(h): return h.send_json({"error": "This device cannot archive or restore agents"}, 403) or True
+    mid, sid, action = m.groups()
+    close = parse_qs(urlparse(h.path).query).get("close", [""])[0] == "1"
+    if action == "unarchive":
+        s = next((x for x in ARCHIVED_AGENTS if x["machine_id"] == mid and x["session_id"] == sid), None)
+        if s is None: return h.send_json({"ok": True}) or True
+        ARCHIVED_AGENTS.remove(s)
+        SESSIONS.append({k: v for k, v in s.items() if k != "archived"})
+        push_machine(mid)
+        return h.send_json({"ok": True}) or True
+    s = next((x for x in SESSIONS if x["machine_id"] == mid and x["session_id"] == sid), None)
+    if s is None: return h.send_json({"error": "没有这个会话"}, 404) or True
+    if s.get("assistant"): return h.send_json({"error": "Persona's own conversations are archived from All chats"}, 400) or True
+    if close and AGENT_ARCHIVES == "archive":
+        return h.send_json({"error": "Update the manager to archive and close agents", "code": "agent_archive_close_unsupported"}, 501) or True
+    if agent_archive_busy(s) or (close and (s.get("loop") or s.get("queued") or s.get("ports"))):
+        return h.send_json({"error": "This agent is running or waiting for an answer", "code": "agent_busy"}, 409) or True
+    SESSIONS.remove(s)
+    ARCHIVE_ORIGINALS.setdefault((mid, sid), copy.deepcopy(s))
+    reply = {"ok": True}
+    if close:
+        how = ARCHIVE_CLOSE["mode"]
+        if s.get("status") == "offline": reply.update(archived=True, close={"closed": False, "outcome": "not_running"})
+        elif how == "refuse": reply.update(archived=True, close={"closed": False, "outcome": "refused", "reason": "Its engine or another tool keeps this session, so it was left open on the computer", "detail": "this engine continues sessions itself"})
+        elif how == "offline": reply.update(archived=True, close={"closed": False, "outcome": "offline", "reason": "Its computer is offline, so the agent is still open there"})
+        else:
+            s = dict(s, status="offline", state="offline", pane_id="")
+            reply.update(archived=True, close={"closed": True, "outcome": "closed"})
+    ARCHIVED_AGENTS.append(dict(s, archived=True))
+    push_machine(mid)
+    return h.send_json(reply) or True
+
+
+_plugins_route_without_agent_archives = plugins_route
+
+
+def plugins_route(handler, p, body):
+    return agent_archives_route(handler, p, body) or _plugins_route_without_agent_archives(handler, p, body)
+
+
+_features_without_agent_archives = features
+
+
+def features():
+    extra = {"1": ["agent_session_archives", "agent_session_archive_close"], "archive": ["agent_session_archives"]}.get(AGENT_ARCHIVES, [])
+    return _features_without_agent_archives() + extra
+
+
+MOCK_HELP.append("MOCK_AGENT_ARCHIVES=1|archive  Agent 归档：features 带 agent_session_archives 和 agent_session_archive_close（archive：只有归档，像旧管理器）；"
+                 "先有两个已归档的 Agent；忙的 Agent 回 409 agent_busy；?close=1 关闭开着的 Claude Agent。MOCK_ARCHIVE_CLOSE=refuse|offline：电脑没关它")
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="用于客户端测试的 mock hub")

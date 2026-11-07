@@ -138,13 +138,16 @@ func copyFile(from, to string) error {
 }
 
 // pruneConverted removes copies older than convertKeep.
-func pruneConverted(dir string) {
+func pruneConverted(dir string) { pruneOlder(dir, convertKeep) }
+
+// pruneOlder removes the files in dir last written more than keep ago.
+func pruneOlder(dir string, keep time.Duration) {
 	ents, err := os.ReadDir(dir)
 	if err != nil {
 		return
 	}
 	for _, e := range ents {
-		if info, err := e.Info(); err == nil && time.Since(info.ModTime()) > convertKeep {
+		if info, err := e.Info(); err == nil && time.Since(info.ModTime()) > keep {
 			os.Remove(filepath.Join(dir, e.Name()))
 		}
 	}
