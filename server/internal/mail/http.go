@@ -8,6 +8,9 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+
+	"github.com/nwverse/persona/server/internal/apierr"
+	"github.com/nwverse/persona/server/internal/i18n"
 )
 
 // Handler returns the HTTP handler for /api/v1/mail/... . Authentication is
@@ -77,6 +80,10 @@ type statusRecorder struct {
 	body          bytes.Buffer
 }
 
+// Lang passes on the request's language (i18n.Carrier) without exposing the real writer: Unwrap would let
+// http.ResponseController flush past the buffer.
+func (r *statusRecorder) Lang() i18n.Lang { return i18n.OfWriter(r.ResponseWriter) }
+
 func (r *statusRecorder) WriteHeader(status int) {
 	if r.headerWritten {
 		return
@@ -102,6 +109,11 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 }
 
 func writeError(w http.ResponseWriter, status int, err error) {
+	var unknown *UnknownAccountError
+	if errors.As(err, &unknown) {
+		apierr.WriteCode(w, status, unknown.Code(), unknown)
+		return
+	}
 	writeJSON(w, status, map[string]string{"error": err.Error()})
 }
 
@@ -109,11 +121,13 @@ func writeError(w http.ResponseWriter, status int, err error) {
 func statusFor(err error) int {
 	msg := err.Error()
 	var ue userError
+	var unknown *UnknownAccountError
 	switch {
+	case errors.As(err, &unknown):
+		return unknown.HTTPStatus()
 	case errors.As(err, &ue):
 		return http.StatusBadRequest
-	case strings.HasPrefix(msg, "unknown account"),
-		strings.Contains(msg, "not found"),
+	case strings.Contains(msg, "not found"),
 		strings.Contains(msg, "unknown mailbox"):
 		return http.StatusNotFound
 	case errors.Is(err, ErrAccountExists):
