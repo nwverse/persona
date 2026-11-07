@@ -1602,6 +1602,7 @@ final class AppModel {
             c.screenStatus = status
             c.screenUpdatedAt = .now
         case .delta(let key, let text):
+            chat(key).heardStream()
             let newest = deltas.pendingText(key)
             // The stream's start and its end, not every delta (#3783).
             if text.isEmpty != chat(key).liveText.isEmpty {

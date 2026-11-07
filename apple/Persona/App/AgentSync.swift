@@ -5,7 +5,7 @@ import PersonaKit
 /// the hub pushes a tiny "this transcript changed" (each session's `rev`, in the session list and the `revs` event)
 /// and the app pulls only what is new (`after_seq`) — into the chat's store when it is in memory, else into the disk
 /// cache a chat paints from. Opening a chat then shows its latest messages at once. Chats on screen are live over
-/// their own subscription and are left alone.
+/// their own subscription and are left alone, unless that subscription stops bringing items (`checkStall`).
 @MainActor
 final class AgentSync {
     static let shared = AgentSync()
@@ -83,9 +83,10 @@ final class AgentSync {
         var later: Date?
         let now = Date.now
         for s in recent {
+            checkStall(s.key) // chats on screen only
             guard let rev = known[s.key] ?? s.rev, synced[s.id] != rev else { continue }
             if model.isSubscribed(s.key) {
-                synced[s.id] = rev // on screen: its subscription already brings everything
+                synced[s.id] = rev // on screen: its subscription brings what is new
             } else if !running.contains(s.key) {
                 if let at = Self.heldUntil(working: s.state == .working, lastPull: lastPull[s.key], now: now) {
                     later = min(later ?? at, at)
@@ -103,6 +104,60 @@ final class AgentSync {
     /// When a chat with news is pulled (`AgentSyncPacing.heldUntil`).
     nonisolated static func heldUntil(working: Bool, lastPull: Date?, now: Date) -> Date? {
         AgentSyncPacing.heldUntil(working: working, lastPull: lastPull, now: now)
+    }
+
+    // MARK: Chats on screen
+
+    /// When each chat on screen last asked for what its subscription lost, the `updatedAt` it asked about, when it is
+    /// looked at again, and those asking now (`checkStall`).
+    private var lastCatchUp: [SessionKey: Date] = [:]
+    private var caughtUpFor: [SessionKey: Date] = [:]
+    private var stallChecks: [SessionKey: Date] = [:]
+    private var catchingUp = Set<SessionKey>()
+
+    /// A chat on screen whose session is newer than its newest line while nothing came over its subscription for a
+    /// while: the stream has stopped (a node whose transcript watch ended, a lost push). Asks for what came after the
+    /// chat's `covered` and merges it (`AgentSyncPacing.catchUpAt`); looks again when its quiet or pacing ends. Not while
+    /// its group's socket is down (in the background, offline): no push is due then, and the subscription asks for what
+    /// it missed (`since_seq`) when the socket is back, whose next list looks again.
+    private func checkStall(_ key: SessionKey) {
+        let model = AppModel.shared
+        guard model.isSubscribed(key), model.isLive(key.group), let store = model.existingChat(key),
+              !catchingUp.contains(key)
+        else { return }
+        let updatedAt = model.latest(key)?.updatedAt // `session(_:)` keeps an older one on purpose
+        guard let at = AgentSyncPacing.catchUpAt(updatedAt: updatedAt, newestLine: store.newestLineAt,
+                                                lastArrival: store.arrivedAt, lastPull: lastCatchUp[key],
+                                                pulledFor: caughtUpFor[key])
+        else { return }
+        guard at <= .now else { return lookAgain(key, at: at) }
+        guard let api = model.api(key.group) else { return }
+        lastCatchUp[key] = .now
+        catchingUp.insert(key)
+        ChatTrace.shared.note(key, "catch up: no items after covered=\(store.covered)")
+        Task {
+            do {
+                // Not asked again for this write once one page held all of it: the write may have added no line. After
+                // more pages (`fill`, `reload`, which keep their failures to themselves) the next look asks once more.
+                if try await Self.pullInto(store, key, api) == .none { caughtUpFor[key] = updatedAt }
+            } catch {
+                ChatTrace.shared.note(key, "catch up failed: \(error.localizedDescription)")
+            }
+            catchingUp.remove(key)
+            checkStall(key) // a newer write meanwhile, or a failure: when to ask again
+        }
+    }
+
+    /// Looks at a chat on screen again at `date`: one wait per chat, the earliest wins.
+    private func lookAgain(_ key: SessionKey, at date: Date) {
+        if let due = stallChecks[key], due <= date { return }
+        stallChecks[key] = date
+        Task {
+            try? await Task.sleep(for: .seconds(max(date.timeIntervalSinceNow, 0.05)))
+            guard stallChecks[key] == date else { return }
+            stallChecks[key] = nil
+            checkStall(key)
+        }
     }
 
     private func replan(at date: Date) {
@@ -143,12 +198,7 @@ final class AgentSync {
 
         do {
             if let store = model.existingChat(key), !store.items.isEmpty {
-                let r = try await api.items(key, afterSeq: store.covered)
-                switch store.apply(r.items, span: r.span, moreAfter: r.moreAfter == true) {
-                case .none: break
-                case .fill: await model.fill(key)
-                case .reload: await model.reload(key)
-                }
+                try await Self.pullInto(store, key, api)
                 return true
             }
             try await Self.pullToDisk(key, api)
@@ -156,6 +206,20 @@ final class AgentSync {
         } catch {
             return false
         }
+    }
+
+    /// A store in memory: what came after its `covered` goes into it (filling a hole, or starting over, when the batch
+    /// says so). Returns what the first batch left to do.
+    @discardableResult
+    private static func pullInto(_ store: ChatStore, _ key: SessionKey, _ api: APIClient) async throws -> ChatStore.Gap {
+        let r = try await api.items(key, afterSeq: store.covered)
+        let gap = store.apply(r.items, span: r.span, moreAfter: r.moreAfter == true)
+        switch gap {
+        case .none: break
+        case .fill: await AppModel.shared.fill(key)
+        case .reload: await AppModel.shared.reload(key)
+        }
+        return gap
     }
 
     /// No store in memory: update the disk cache the chat will open from (decoding and writing off the main thread).

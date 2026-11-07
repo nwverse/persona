@@ -264,8 +264,11 @@ export interface Session {
   background_waiting?: boolean;
   rev?: number;
   suggestion?: string;
-  /** An assistant conversation moved out of the list (docs/assistant/assistant.md "Managing its own conversations"). */
+  /** An assistant conversation moved out of the list (docs/assistant/assistant.md "Managing its own conversations"), or
+   *  an archived agent (docs/protocol/protocol.md "Agent session archives": only the Archived list has those). */
   archived?: boolean;
+  /** The HTTP ports its processes listen on (docs/operations/ports.md): closing it would stop those servers. */
+  ports?: { port: number; addr?: string }[];
   /** Who opened an assistant conversation (docs/protocol/protocol.md "Assistant conversation origins"): user, channel, inbox, task, spawned,
    *  lark_agent, extension, or one this page doesn't know; none is the user's (older hubs never say). */
   origin?: string;
