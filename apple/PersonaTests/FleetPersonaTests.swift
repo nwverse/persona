@@ -8,7 +8,7 @@ import UIKit
 /// The persona on the Live Activity (docs/apple/live-activity.md「形象」): which state it shows for a fleet, and the look
 /// the app hands the widget extension.
 struct FleetPersonaTests {
-    private nonisolated static let packID = "nwverse"
+    private nonisolated static let packID = "custom-mint"
 
     @Test func stateFollowsThePhase() {
         #expect(FleetPersona.state(FleetState(phase: .needsYou, needsYou: 1, working: 2), stale: false) == .needsYou)
@@ -54,10 +54,15 @@ struct FleetPersonaTests {
             #expect(FleetState(look: old).drawnLook == .standard)
             #expect(old.supported == .standard)
         }
-        let removed = FleetLook(design: "mochi", light: 1, dark: 2, package: "other/1")
-        #expect(removed.supported == .standard)
-        let frog = FleetLook(design: "visor", light: 1, dark: 2, package: "\(Self.packID)/1")
-        #expect(frog.supported.package == "\(Self.packID)/1" && frog.supported.faceDesign == .mochi)
+        for id in PersonaSelectionTests.removed {
+            let removed = FleetLook(design: "mochi", light: 1, dark: 2, package: "\(id)/1")
+            #expect(removed.supported == .standard)
+        }
+        for id in [Self.packID, "nwverse", "extension-look"] {
+            let package = FleetLook(design: "visor", light: 1, dark: 2, package: "\(id)/1")
+            #expect(package.supported.package == "\(id)/1" && package.supported.faceDesign == .mochi)
+            #expect(package.supported.light == 1 && package.supported.dark == 2)
+        }
     }
 
     @Test func lookRoundTrips() throws {
@@ -111,7 +116,7 @@ struct FleetPersonaTests {
     /// for idle / working / thinking and none for needs you or offline.
     static let colors: [String: UInt32] = ["idle": 0x40B2A0, "working": 0xE08A2E, "thinking": 0x7D5BDC, "avatar": 0x3D89BC]
     static let manifest = """
-    {"format":1,"id":"nwverse","name":"小薄荷","avatar":{"sizes":{"128":"avatar/128.png"}},
+    {"format":1,"id":"custom-mint","name":"小薄荷","avatar":{"sizes":{"128":"avatar/128.png"}},
      "dot":{"size":144,"states":{"idle":{"file":"dot/idle.png"},"working":{"file":"dot/working.png"},"thinking":{"file":"dot/thinking.png"}}},
      "colors":{"light":{"primary":"#40B2A0"},"dark":{"primary":"#40B2A0"}}}
     """
@@ -129,7 +134,7 @@ struct FleetPersonaTests {
     /// The package chosen in Settings the way the app does it: listed by the hub, downloaded, on screen.
     @MainActor private func chosen() async throws -> PersonaStore {
         let hub = FakeHub()
-        hub.on("GET", "/api/v1/personas", json: #"{"personas":[{"id":"nwverse","rev":"r1","bytes":10,"manifest":\#(Self.manifest)}]}"#)
+        hub.on("GET", "/api/v1/personas", json: #"{"personas":[{"id":"custom-mint","rev":"r1","bytes":10,"manifest":\#(Self.manifest)}]}"#)
         for (name, file) in [("avatar", "avatar/128.png"), ("idle", "dot/idle.png"), ("working", "dot/working.png"), ("thinking", "dot/thinking.png")] {
             let png = Self.disc(Self.colors[name]!)
             hub.on("GET", "/api/v1/personas/\(Self.packID)/\(file)") { _ in png }
@@ -137,8 +142,8 @@ struct FleetPersonaTests {
         let root = FileManager.default.temporaryDirectory.appending(path: "fleet-personas-\(UUID().uuidString)")
         let personas = PersonaStore(root: root, defaults: UserDefaults(suiteName: "fleet-persona-\(UUID().uuidString)")!)
         await personas.refresh(hub.client)
-        await personas.choose(try #require(personas.offered.first { $0.id == "nwverse" }), api: hub.client)
-        #expect(personas.current.id == "nwverse")
+        await personas.choose(try #require(personas.offered.first { $0.id == Self.packID }), api: hub.client)
+        #expect(personas.current.id == Self.packID)
         return personas
     }
 
@@ -173,7 +178,7 @@ struct FleetPersonaTests {
         #expect(FleetLook.save(look, faces: { FleetFaces(persona: personas.current, personas: personas) }, to: shared.store))
 
         // The extension's side: only what is in the shared container.
-        let read = FleetLook.load(shared.store)
+        let read = FleetState(look: FleetLook.load(shared.store)).drawnLook
         #expect(read == look)
         #expect(read.light == 0x40B2A0) // the package's primary, for the moments its faces cannot be read
         let faces = try #require(read.faces(shared.store))

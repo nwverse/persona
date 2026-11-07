@@ -23,10 +23,11 @@ nonisolated extension FleetLook {
 
     var faceDesign: PersonaFace.Design { PersonaFace.Design(rawValue: design) ?? .mochi }
 
-    /// Old hub pushes and cached activity content must not resurrect removed package faces.
+    /// Packages keep their own faces; old local drawings fall back to Mochi.
     var supported: FleetLook {
         if let package {
-            guard package.split(separator: "/").first.map(String.init) == PersonaSelection.packageID else { return .standard }
+            guard let id = package.split(separator: "/").first.map(String.init),
+                  PersonaSelection.resolve(id) == id, id != PersonaSelection.builtinID else { return .standard }
             return FleetLook(design: "mochi", light: light, dark: dark, package: package)
         }
         return design == "mochi" ? self : .standard
