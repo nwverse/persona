@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/url"
 	"strings"
@@ -412,4 +413,282 @@ func TestInboxTranslateRollsBackAFailedRow(t *testing.T) {
 	if tr == nil || tr.Of != en.Last || !h.st.saved(en.ID) || !changedTo(h, en.ID) || translated() != 1 {
 		t.Fatalf("the next pass: %+v (stored %v, %d asked)", tr, h.st.saved(en.ID), translated())
 	}
+}
+
+// changedAfter reports whether an inbox.changed announcement for id went out after the first n.
+func changedAfter(h *inboxHub, n int, id string) bool {
+	for _, c := range h.in.changes()[n:] {
+		for _, x := range c.Items {
+			if x.ID == id {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// announcedNothing reports whether every inbox.changed so far named no item.
+func announcedNothing(h *inboxHub) bool {
+	for _, c := range h.in.changes() {
+		if len(c.Items) != 0 {
+			return false
+		}
+	}
+	return true
+}
+
+// storedItem is what the store's row of id holds (the zero item without one).
+func storedItem(t *testing.T, st *inboxPutFailStore, id string) InboxItem {
+	t.Helper()
+	st.imu.Lock()
+	raw := st.rows[id]
+	st.imu.Unlock()
+	var it InboxItem
+	if raw != nil {
+		if err := json.Unmarshal(raw, &it); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return it
+}
+
+// mailItemsOf are the inbox's mail items.
+func mailItemsOf(h *inboxHub) []*InboxItem {
+	h.inbox.mu.Lock()
+	defer h.inbox.mu.Unlock()
+	var out []*InboxItem
+	for _, it := range h.inbox.items {
+		if it.Mail != nil {
+			out = append(out, it)
+		}
+	}
+	return out
+}
+
+// roundHub is newBulkFailHub with the example connector (a plugin's when extension) holding things.
+func roundHub(t *testing.T, extension bool, things ...connector.InboxThing) (*inboxHub, *inboxPutFailStore, *inboxConnector) {
+	t.Helper()
+	h, st := newBulkFailHub(t)
+	c := &inboxConnector{things: things}
+	h.addConnector(c, extension)
+	return h, st, c
+}
+
+// round hands the inbox one round of the sources and waits for the passes it leaves running (triage, translation).
+func (h *inboxHub) round(t *testing.T, kind string) {
+	t.Helper()
+	ctx := context.Background()
+	if err := h.InboxCollected(ctx, h.in.read(ctx, kind)); err != nil {
+		t.Fatal(err)
+	}
+	h.inbox.triaging.Lock()
+	h.inbox.triaging.Unlock()
+	h.passOver()
+}
+
+// What a round changed in items whose rows then fail is undone (#91): the item holds what its row does and nothing is
+// announced. The sources hand the same things in again, so the next round, with the store back, brings them in.
+func TestInboxRoundRollsBackFailedRows(t *testing.T) {
+	now := time.Now()
+	thread := thing("a", now).Thread
+	t.Run("a new item is forgotten", func(t *testing.T) {
+		h, st, _ := roundHub(t, false, thing("a", now))
+		st.failAll = true
+		h.round(t, roundPoll)
+		if it := itemOf(h, "example", thread); it != nil || !announcedNothing(h) {
+			t.Fatalf("the failed new item stuck: %+v", it)
+		}
+		st.failAll = false
+		h.round(t, roundPoll)
+		if it := itemOf(h, "example", thread); it == nil || !st.hasRow(it.ID) || !changedTo(h, it.ID) {
+			t.Fatalf("the next round did not bring it in: %+v", it)
+		}
+	})
+	t.Run("a plugin's new item a rule tiered is forgotten", func(t *testing.T) {
+		h, st, _ := roundHub(t, true, thing("a", now))
+		st.failAll = true
+		h.round(t, roundPoll)
+		if it := itemOf(h, "example", thread); it != nil || !announcedNothing(h) {
+			t.Fatalf("the failed new item stuck: %+v", it)
+		}
+		st.failAll = false
+		h.round(t, roundPoll)
+		if it := itemOf(h, "example", thread); it == nil || !st.hasRow(it.ID) {
+			t.Fatalf("the next round did not bring it in: %+v", it)
+		}
+	})
+	t.Run("a new move is undone", func(t *testing.T) {
+		h, st, c := roundHub(t, false, thing("a", now.Add(-time.Minute)))
+		h.round(t, roundPoll)
+		it := itemOf(h, "example", thread)
+		before, n := stateOf(h, it), len(h.in.changes())
+		c.things = []connector.InboxThing{thing("b", now)}
+		st.failAll = true
+		h.round(t, roundPoll)
+		if stateOf(h, it) != before || itemOf(h, "example", thread) != it || changedAfter(h, n, it.ID) {
+			t.Fatalf("the failed move stuck: last %q, count %d, chain %d", it.Last, it.Count, len(it.Chain))
+		}
+		st.failAll = false
+		h.round(t, roundPoll)
+		if it.Last != "b" || it.Count != 2 || storedItem(t, st, it.ID).Last != "b" {
+			t.Fatalf("the next round did not move it: last %q, count %d, stored %q", it.Last, it.Count, storedItem(t, st, it.ID).Last)
+		}
+	})
+	t.Run("only the failed rows are undone", func(t *testing.T) {
+		one, two := thing("a", now.Add(-time.Minute)), thing("a", now.Add(-time.Minute))
+		two.Thread = "example-org/example-repo#13"
+		h, st, c := roundHub(t, false, one, two)
+		h.round(t, roundPoll)
+		a, b := itemOf(h, "example", one.Thread), itemOf(h, "example", two.Thread)
+		before := stateOf(h, a)
+		one.Last, two.Last = "b", "b"
+		c.things = []connector.InboxThing{one, two}
+		st.fail = map[string]bool{a.ID: true}
+		h.round(t, roundPoll)
+		if stateOf(h, a) != before || b.Last != "b" || storedItem(t, st, b.ID).Last != "b" {
+			t.Fatalf("failed row: last %q; written row: last %q, stored %q", a.Last, b.Last, storedItem(t, st, b.ID).Last)
+		}
+	})
+	t.Run("a thing that is over leaves its item open", func(t *testing.T) {
+		h, st, c := roundHub(t, false, thing("a", now))
+		h.round(t, roundPoll)
+		it := itemOf(h, "example", thread)
+		before := stateOf(h, it)
+		over := thing("a", now)
+		over.Done = connector.DoneRead
+		c.things = []connector.InboxThing{over}
+		st.failAll = true
+		h.round(t, roundPoll)
+		if !it.open() || stateOf(h, it) != before {
+			t.Fatalf("the failed filing stuck: done by %q", it.DoneBy)
+		}
+		st.failAll = false
+		h.round(t, roundPoll)
+		if it.open() || st.doneAt(it.ID) == nil {
+			t.Fatalf("the next round did not file it: open %v", it.open())
+		}
+	})
+	t.Run("an item its connector settles stays open", func(t *testing.T) {
+		h, st := newBulkFailHub(t)
+		h.addConnector(&settlingConnector{}, false)
+		old := thing("a", now)
+		old.Thread, old.Tier = "old:1", TierFYI
+		h.inbox.mu.Lock()
+		h.inbox.applyConnector("example", "Example", []connector.InboxThing{old}, now)
+		h.inbox.mu.Unlock()
+		it := itemOf(h, "example", old.Thread)
+		before := stateOf(h, it)
+		st.failAll = true
+		h.round(t, roundPoll)
+		if !it.open() || stateOf(h, it) != before {
+			t.Fatalf("the failed settling stuck: done by %q, reason %q", it.DoneBy, it.Reason)
+		}
+		st.failAll = false
+		h.round(t, roundPoll)
+		if it.open() || it.Reason != "示例：按新规则合并" || st.doneAt(it.ID) == nil {
+			t.Fatalf("the next round did not settle it: open %v, reason %q", it.open(), it.Reason)
+		}
+	})
+	t.Run("an item moved and muted in one round is undone once", func(t *testing.T) {
+		tagged := func(last string, at time.Time) connector.InboxThing {
+			th := thing(last, at)
+			th.Tags = []connector.Tag{{Key: connector.TagSender, Value: "bob", Name: "bob"}}
+			return th
+		}
+		h, st, c := roundHub(t, false, tagged("a", now.Add(-time.Minute)))
+		h.round(t, roundPoll)
+		it := itemOf(h, "example", thread)
+		before := stateOf(h, it)
+		h.inbox.mu.Lock()
+		h.inbox.mutes = []InboxMute{{ID: "m1", Source: "example", Tag: connector.TagSender, Value: "bob", Name: "bob"}}
+		h.inbox.mu.Unlock()
+		c.things = []connector.InboxThing{tagged("b", now)}
+		st.failAll = true
+		h.round(t, roundPoll)
+		if !it.open() || stateOf(h, it) != before {
+			t.Fatalf("the failed move and filing stuck: last %q, done by %q", it.Last, it.DoneBy)
+		}
+		st.failAll = false
+		h.round(t, roundPoll)
+		if it.open() || it.Last != "b" || st.doneAt(it.ID) == nil {
+			t.Fatalf("the next round: open %v, last %q", it.open(), it.Last)
+		}
+	})
+
+	mail := func(uid uint32) assistantwire.InboxMailSummary {
+		return assistantwire.InboxMailSummary{Mailbox: "INBOX", UID: uid, Subject: "示例", From: MailAddress{Email: "x@example.com"},
+			Date: now.UTC().Format(time.RFC3339), Snippet: fmt.Sprintf("摘要 %d", uid)}
+	}
+	// mailHub is a hub whose mail account has had UID 3 read into an item, stored.
+	mailHub := func(t *testing.T) (*inboxHub, *inboxPutFailStore, *InboxItem) {
+		t.Helper()
+		h, st := newBulkFailHub(t)
+		h.in.mail = &fakeMail{
+			accounts: []assistantwire.InboxMailAccount{{ID: "a1", Email: "me@example.com", Messages: []assistantwire.InboxMailSummary{mail(3)}}},
+			bodies:   map[uint32]assistantwire.InboxMailMessage{3: {Text: "正文 3"}, 4: {Text: "正文 4"}},
+		}
+		h.round(t, roundFull)
+		items := mailItemsOf(h)
+		if len(items) != 1 || items[0].BodyOf != "3" || items[0].Preview != "正文 3" || !st.hasRow(items[0].ID) {
+			t.Fatalf("the first round: %+v", items)
+		}
+		return h, st, items[0]
+	}
+	newMail := func(h *inboxHub) {
+		h.in.mu.Lock()
+		h.in.mail.accounts[0].Messages = []assistantwire.InboxMailSummary{mail(3), mail(4)}
+		h.in.mu.Unlock()
+	}
+	t.Run("new mail and its text are forgotten", func(t *testing.T) {
+		h, st := newBulkFailHub(t)
+		h.in.mail = &fakeMail{
+			accounts: []assistantwire.InboxMailAccount{{ID: "a1", Email: "me@example.com", Messages: []assistantwire.InboxMailSummary{mail(3)}}},
+			bodies:   map[uint32]assistantwire.InboxMailMessage{3: {Text: "正文 3"}},
+		}
+		st.failAll = true
+		h.round(t, roundFull)
+		if items := mailItemsOf(h); len(items) != 0 || !announcedNothing(h) {
+			t.Fatalf("the failed mail item stuck: %+v", items)
+		}
+		st.failAll = false
+		h.round(t, roundFull)
+		if items := mailItemsOf(h); len(items) != 1 || items[0].Preview != "正文 3" || !st.hasRow(items[0].ID) {
+			t.Fatalf("the next round did not bring it in: %+v", items)
+		}
+	})
+	t.Run("new mail in an open item is undone with its text", func(t *testing.T) {
+		h, st, it := mailHub(t)
+		before := stateOf(h, it)
+		newMail(h)
+		st.failAll = true
+		h.round(t, roundFull)
+		if stateOf(h, it) != before || it.Last != "3" || it.Preview != "正文 3" {
+			t.Fatalf("the failed mail stuck: last %q, body of %q, preview %q", it.Last, it.BodyOf, it.Preview)
+		}
+		st.failAll = false
+		h.round(t, roundFull)
+		if it.Last != "4" || it.BodyOf != "4" || it.Preview != "正文 4" || storedItem(t, st, it.ID).Preview != "正文 4" {
+			t.Fatalf("the next round: last %q, body of %q, preview %q", it.Last, it.BodyOf, it.Preview)
+		}
+	})
+	t.Run("a move between two steps is the other's", func(t *testing.T) {
+		// The owner dismisses the item while the round reads the new mail's text (b.mu let go), and that row is
+		// written; the round's own row then fails. Undone, the item keeps the dismissal its row holds.
+		h, st, it := mailHub(t)
+		newMail(h)
+		var dismissed string
+		h.in.mu.Lock()
+		h.in.mail.fetched = func(uint32) {
+			if code, _ := inboxCall(t, h.routes(), "POST", "/api/v1/inbox/"+url.PathEscape(it.ID)+"/done", `{"done":true,"dismiss":true}`); code != 200 {
+				t.Errorf("dismiss: %d", code)
+			}
+			dismissed = stateOf(h, it)
+			st.failAll = true
+		}
+		h.in.mu.Unlock()
+		h.round(t, roundFull)
+		if it.open() || it.DoneBy != "dismissed" || st.doneAt(it.ID) == nil || stateOf(h, it) != dismissed {
+			t.Fatalf("the round's undo rewound the dismissal: open %v, done by %q", it.open(), it.DoneBy)
+		}
+	})
 }

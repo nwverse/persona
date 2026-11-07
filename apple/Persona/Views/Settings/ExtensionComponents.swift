@@ -9,6 +9,7 @@ struct ExtensionComponentRowLabel: View {
     var row: ExtensionRowComponent
     var model: (any ExtensionViewControlling)?
     var chevron: Bool
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         HStack(spacing: Theme.Space.m) {
@@ -18,8 +19,13 @@ struct ExtensionComponentRowLabel: View {
                 if let s = row.subtitle, !s.isEmpty { Text(s).font(Theme.Font.label).foregroundStyle(.secondary).lineLimit(2) }
             }
             Spacer(minLength: Theme.Space.s)
-            if let v = row.value, !v.isEmpty { Text(v).font(Theme.Font.body.monospacedDigit()).foregroundStyle(.secondary).lineLimit(1) }
-            if let b = row.badge { Chip(text: b.text, look: b.tone == nil || b.tone == "neutral" ? .neutral : .tint(ExtensionUIStyle.tone(b.tone))) }
+            if let v = row.value, !v.isEmpty { ExtensionChangingText(v).font(Theme.Font.body.monospacedDigit()).foregroundStyle(.secondary).lineLimit(1) }
+            if let b = row.badge {
+                // Drawn again with another tone, its colors change; with other words, they fade in (#37).
+                Chip(text: b.text, look: b.tone == nil || b.tone == "neutral" ? .neutral : .tint(ExtensionUIStyle.tone(b.tone)))
+                    .contentTransition(.opacity)
+                    .animation(reduceMotion ? nil : Theme.Motion.state, value: b)
+            }
             if let action = row.action, model?.selected(action.id) == true {
                 Image(systemName: Theme.Icon.success).font(Theme.Font.labelStrong).foregroundStyle(Theme.positive)
                     .accessibilityLabel("Selected [Extension Components 7ecf1c]")
@@ -320,6 +326,7 @@ enum ExtensionOutcome {
 struct ExtensionChartItem: View {
     var item: ExtensionChartComponent
     @Environment(\.pluginUICompact) private var compact
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     private var series: [ExtensionChartSeries] { Array(item.series.prefix(4)) }
     /// The x axis: the first series' labels (the others line up with them).
@@ -338,6 +345,8 @@ struct ExtensionChartItem: View {
                                                displays: s.points.map(\.display))
                           },
                           stacked: item.stacked == true, format: format, compact: compact)
+                // Drawn again with other values, the bars and lines move to them (#37).
+                .animation(reduceMotion ? nil : Theme.Motion.layout, value: item.series)
                 if let d = item.detail, !d.isEmpty, !compact {
                     Text(d).font(Theme.Font.label).foregroundStyle(.secondary).lineLimit(3)
                 }
@@ -390,7 +399,7 @@ struct ExtensionStatGrid: View {
     private func cell(_ s: ExtensionStat) -> some View {
         VStack(alignment: .leading, spacing: Theme.Space.xxs) {
             Text(s.label).font(Theme.Font.label).foregroundStyle(.secondary).lineLimit(1)
-            Text(s.value).font(Theme.Font.heading.monospacedDigit()).lineLimit(1).minimumScaleFactor(0.6)
+            ExtensionChangingText(s.value).font(Theme.Font.heading.monospacedDigit()).lineLimit(1).minimumScaleFactor(0.6)
             if let d = s.detail, !d.isEmpty {
                 Text(d).font(Theme.Font.label).foregroundStyle(ExtensionUIStyle.tone(s.tone)).lineLimit(1).minimumScaleFactor(0.8)
             }
