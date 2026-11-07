@@ -280,9 +280,9 @@ class ReservedDomainTests(unittest.TestCase):
 
 
 class OrdinaryWordTests(unittest.TestCase):
-    """A config value that is an ordinary word (a machine id named after a room) matched every variable, comment and
+    """A config value that is an ordinary word (a machine id named after a room) matches every variable, comment and
     environment variable of that name. A `!word` line in private-words.txt marks such a value as not private, and every
-    hit names where its value came from, so a false positive can be told from a leak without printing the value (#1065)."""
+    hit names where its value comes from, so a false positive can be told from a leak without printing the value (#1065)."""
 
     WORD = "attic"  # a made-up machine id
     CODE = ['attic := os.Getenv("PERSONA_ATTIC")', "// the attic machine runs the node", "let attic_id = attic"]
@@ -326,13 +326,15 @@ class OrdinaryWordTests(unittest.TestCase):
                 self.assertEqual(pc.problems(line, words), [])
 
     def test_a_waiver_only_takes_back_a_value_made_of_letters(self):
-        values = ["attic2", "attic-box", "attic.lan", "/srv/attic", "attic box"]
+        values = ["attic2", "attic-box", "attic.lan", "/srv/attic", "attic box", "Küche"]
         stderr = io.StringIO()
         with redirect_stderr(stderr):
             words = self.words({"machines": [{"id": v} for v in values]}, "".join("!" + v + "\n" for v in values))
         for value in values:
             with self.subTest(value=value):
                 self.assertIn(value, words)
+                # A line that is not a waiver keeps what it did before: it is searched as written.
+                self.assertIn("!" + value, words)
         self.assertIn("private-words.txt:1:", stderr.getvalue())
         self.assertNotIn("attic", stderr.getvalue())
 
@@ -355,6 +357,32 @@ class OrdinaryWordTests(unittest.TestCase):
                          "private value (5 chars) from config hub.machine, config machines.id, config machines.ssh")
         self.assertEqual(pc.private_kind("attic-team", sources), "private value (10 chars) from private-words.txt")
         self.assertEqual(pc.private_kind("other-value", sources), "private value (11 chars)")
+
+    def test_a_key_that_holds_a_value_is_not_printed(self):
+        bundle = "com.zorblax.persona"  # a made-up bundle id
+        config = self.machines(self.WORD)
+        config["app"] = {"bundle_id": bundle}
+        config["app_store"] = {"provisioning_profiles": {bundle + ".share": "Zorblax Share Profile"}}
+        config["aliases"] = {self.WORD: "zorblax-box", "build.simulator": "zorblax-sim"}
+        sources = self.sources(config)
+        self.assertEqual(sources["Zorblax Share Profile"], ["config app_store.provisioning_profiles.*"])
+        self.assertEqual(sources["zorblax-box"], ["config aliases.*"])
+        # The rules that look at a key (os, simulator, url, path) see the whole key, dots and all.
+        self.assertEqual(sources["zorblax-sim"], ["config aliases.*"])
+        for where in sum(sources.values(), []):
+            with self.subTest(where=where):
+                self.assertNotIn("zorblax", where)
+                self.assertNotIn(self.WORD, where.replace("config ", ""))
+
+    def test_the_waiver_hint_only_follows_a_hit_a_waiver_can_take_back(self):
+        config = self.machines(self.WORD, "Cellar")
+        config["lan_host"] = "attic.lan"
+        config["profile"] = "Zorb Share Prod"
+        sources = self.sources(config, "Cellar\n")
+        self.assertTrue(pc.waivable(self.WORD, sources))
+        for value in ["attic.lan", "Zorb Share Prod", "Cellar", "other"]:
+            with self.subTest(value=value):
+                self.assertFalse(pc.waivable(value, sources))
 
 
 class NpmLockTests(unittest.TestCase):
@@ -577,6 +605,7 @@ class PrivacyCheckIntegrationTests(unittest.TestCase):
         self.assertNotIn("commit message", output)
         self.assertIn("hosts.md:1: private IP from config lan_host", output)
         self.assertIn("private-words.txt:2:", result.stderr)
+        self.assertNotIn("!<word>", result.stderr)  # what is left (an address) no waiver can take back
         self.assertNotIn(PRIVATE_IP, output)
         (self.repo / "hosts.md").unlink()
         self.git("rm", "-q", "--cached", "hosts.md")

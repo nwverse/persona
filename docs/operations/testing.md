@@ -830,8 +830,16 @@ CI Scripts tests includes it; local `cd scripts/test && python3 -m unittest -v t
 `python3 scripts/privacy_check.py`: repository contents/paths must not contain this machine's private values from `~/.config/persona/config.json`:
 hosts, hub addresses, machine names, Apple IDs, emails; `~/.config/persona/private-words.txt` (one per line: internal projects/people/tools,
 maintained locally); backtick values in `CLAUDE.local.md`. Also any private IPv4 (except documentation ranges like 192.0.2.0/24) and real-domain emails
-(except `example.*`, public mailboxes, public `site/` contact). Reports type and origin only, never value: `private value (5 chars) from config machines.id, config machines.ssh`, `from private-words.txt`, `from CLAUDE.local.md`, `from the home directory`.
-**Ordinary-word config values** (#1065): a machine id like a room's name matches every variable, comment and environment variable of that name (`_` is a word boundary), blocking whole PRs on that machine. If such a value names nobody, add a `!<word>` line to `private-words.txt` (case-insensitive). It only takes back a config value made of letters: hosts, addresses, emails, paths, ids with digits or hyphens, words listed plainly in the same file and the home directory stay private; a `!` line that is not letters only is ignored with a warning naming its line, not its value.
+(except `example.*`, public mailboxes, public `site/` contact). Reports type and origin only, never value:
+`private value (5 chars) from config machines.id, config machines.ssh`, `from private-words.txt`, `from CLAUDE.local.md`, `from the home directory`;
+a key that is not a snake_case word or is itself a private value shows as `*` (`config app_store.provisioning_profiles.*`).
+**Ordinary-word config values** (#1065): a machine id like a room's name matches every variable, comment and environment variable of that name
+(`_` is a word boundary), blocking whole PRs on that machine. If such a value names nobody, add a `!<word>` line to `private-words.txt`
+(case-insensitive); the hint after the hits appears only when one of them can be taken back this way. The waiver goes by value, so it also covers
+an ssh alias or URL host spelled the same; it only takes back a config value made of ASCII letters. Anything with a dot, digit, hyphen, `@`, `/` or space
+(hosts with a domain, addresses, emails, paths, ids), a word listed plainly in either `private-words.txt`, and the home directory stay private.
+A `!` line that is not ASCII letters only is searched as written, with a warning naming its line, not its value. Every scan that reads these values
+honours the waiver: the hooks, `merge-pr.sh`, `release.sh` and `scripts/release/check_bundle_privacy.py`.
 **Names blocked on every machine** (#4967): specific vendor and internal-repository names never enter the repo, in any spelling (case, hyphens, underscores, spaces, camel case). Rules live in `BANNED_NAMES` in the script, their only location in the repo.
 CI enforces them without private config. Needed capabilities belong in extensions that supply their own names; the main repo uses generic wording ("relay", "extension-provided IM connector"). Test examples concatenate pieces to avoid matching themselves.
 A word listed only lowercase/uppercase/titlecase isn't matched across an internal lowercase→uppercase camel boundary (`fooBar`): ordinary-word identifiers (tokens/SF Symbols) can accidentally contain sensitive words, falsely blocking repo scans/web `prebuild` (#3819). To block camelcase too, list a boundary-bearing form (`FooBar`).
