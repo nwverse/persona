@@ -18,7 +18,7 @@ if [ "$mode" != smoke ]; then
 fi
 version="${CI_IMAGE_VERSION:-dev}"
 image="persona-hub:ci"
-fixture="$(mktemp -d "${TMPDIR:-/tmp}/persona-ci-image.XXXXXX")"
+fixture="$(mktemp -d "${TMPDIR:-/tmp}/persona-ci-image-XXXXXX")"
 export COMPOSE_PROJECT_NAME="persona-ci-$(basename "$fixture" | tr '[:upper:]' '[:lower:]')"
 cleanup() {
   local status=$?
