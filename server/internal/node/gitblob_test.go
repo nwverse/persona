@@ -3,8 +3,8 @@ package node
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
 	"fmt"
-	"math/rand/v2"
 	"os"
 	"path/filepath"
 	"strings"
@@ -80,9 +80,7 @@ func TestGitBlobSameVersionAtOnce(t *testing.T) {
 	os.MkdirAll(repo, 0o700)
 	runPullGit(t, base, "init", "--initial-branch=main", repo)
 	want := make([]byte, 4<<20) // big enough that writing it overlaps the other requests'
-	for i := range want {
-		want[i] = byte(rand.N(256))
-	}
+	rand.Read(want)
 	os.WriteFile(filepath.Join(repo, "deck.pdf"), want, 0o600)
 	runPullGit(t, repo, "add", ".")
 	runPullGit(t, repo, "commit", "-m", "deck")
@@ -91,6 +89,21 @@ func TestGitBlobSameVersionAtOnce(t *testing.T) {
 		t.Fatal(err)
 	}
 	n := &Node{home: base, state: newState()}
+	// fetch asks for the version and answers the revision a download of the copy it got is pinned to
+	fetch := func() (string, error) {
+		b, err := n.gitBlob(context.Background(), proto.GitBlobRequest{Cwd: repo, Path: "deck.pdf", Rev: "HEAD"})
+		if err != nil {
+			return "", err
+		}
+		head, err := n.readFileChunk(proto.FileChunkRequest{Path: b.Path})
+		if err != nil {
+			return "", err
+		}
+		if got, err := os.ReadFile(b.Path); err != nil || !bytes.Equal(got, want) || b.Size != int64(len(want)) {
+			return "", fmt.Errorf("read %d of %d bytes (%v)", len(got), len(want), err)
+		}
+		return head.Revision, nil
+	}
 	const at = 16
 	for round := range 3 {
 		os.RemoveAll(cache) // every request misses the cache
@@ -98,25 +111,13 @@ func TestGitBlobSameVersionAtOnce(t *testing.T) {
 			t.Fatal(err)
 		}
 		errs := make([]error, at)
-		revs := make([]string, at) // what a download of the copy each request got is pinned to
+		revs := make([]string, at)
 		var wg sync.WaitGroup
 		for i := range at {
 			wg.Add(1)
 			go func() {
 				defer wg.Done()
-				b, err := n.gitBlob(context.Background(), proto.GitBlobRequest{Cwd: repo, Path: "deck.pdf", Rev: "HEAD"})
-				if err == nil {
-					var head *proto.FileChunk
-					if head, err = n.readFileChunk(proto.FileChunkRequest{Path: b.Path}); err == nil {
-						revs[i] = head.Revision
-					}
-				}
-				if err == nil {
-					if got, rerr := os.ReadFile(b.Path); rerr != nil || !bytes.Equal(got, want) || b.Size != int64(len(want)) {
-						err = fmt.Errorf("read %d of %d bytes (%v)", len(got), len(want), rerr)
-					}
-				}
-				errs[i] = err
+				revs[i], errs[i] = fetch()
 			}()
 		}
 		wg.Wait()

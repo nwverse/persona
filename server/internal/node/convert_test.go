@@ -82,19 +82,10 @@ func TestConvertWithoutLibreOffice(t *testing.T) {
 	}
 }
 
-// convertEnv gives a test its own cache folder (cacheEnv) and fake LibreOffice, and answers the folder for its
-// documents (the node's home), the node and the runs file.
-func convertEnv(t *testing.T) (dir string, n *Node, calls string) {
-	t.Helper()
-	cacheEnv(t, true)
-	dir = t.TempDir()
-	return dir, &Node{home: dir}, fakeSoffice(t, dir)
-}
-
 func TestConvertAcrossFileSystemsReplacesTheCopyWhole(t *testing.T) {
-	dir, n, _ := convertEnv(t)
-	os.WriteFile(filepath.Join(dir, "a.doc"), []byte("old word"), 0o600)
-	first, err := n.convertFile(context.Background(), proto.FileConvertRequest{Path: "~/a.doc"})
+	cacheEnv(t, true)
+	n, req, _ := convertFixture(t)
+	first, err := n.convertFile(context.Background(), req)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -103,7 +94,7 @@ func TestConvertAcrossFileSystemsReplacesTheCopyWhole(t *testing.T) {
 	if err := os.Truncate(first.Path, 0); err != nil {
 		t.Fatal(err)
 	}
-	link := filepath.Join(dir, "link")
+	link := filepath.Join(n.home, "link")
 	if err := os.Link(first.Path, link); err != nil {
 		t.Skip("no hard links here:", err)
 	}
@@ -112,7 +103,7 @@ func TestConvertAcrossFileSystemsReplacesTheCopyWhole(t *testing.T) {
 	renameConverted = func(from, to string) error { // the temp folder on another file system than the cache
 		return &os.LinkError{Op: "rename", Old: from, New: to, Err: errors.New("invalid cross-device link")}
 	}
-	got, err := n.convertFile(context.Background(), proto.FileConvertRequest{Path: "~/a.doc"})
+	got, err := n.convertFile(context.Background(), req)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -128,20 +119,21 @@ func TestConvertAcrossFileSystemsReplacesTheCopyWhole(t *testing.T) {
 }
 
 func TestConvertHitKeepsTheCopyFromPruning(t *testing.T) {
-	dir, n, _ := convertEnv(t)
-	os.WriteFile(filepath.Join(dir, "a.doc"), []byte("old word"), 0o600)
-	os.WriteFile(filepath.Join(dir, "b.doc"), []byte("other word"), 0o600)
-	first, err := n.convertFile(context.Background(), proto.FileConvertRequest{Path: "~/a.doc"})
+	cacheEnv(t, true)
+	n, req, _ := convertFixture(t)
+	other := proto.FileConvertRequest{Path: filepath.Join(n.home, "b.doc")}
+	writeFile(t, other.Path, "other word")
+	first, err := n.convertFile(context.Background(), req)
 	if err != nil {
 		t.Fatal(err)
 	}
 	old := time.Now().Add(-convertKeep - time.Hour)
 	os.Chtimes(first.Path, old, old)
-	if again, err := n.convertFile(context.Background(), proto.FileConvertRequest{Path: "~/a.doc"}); err != nil || again.Path != first.Path {
+	if again, err := n.convertFile(context.Background(), req); err != nil || again.Path != first.Path {
 		t.Fatalf("hit = %+v, %v", again, err)
 	}
 	// the next conversion prunes by age while the client may still be reading the copy it was just given
-	if _, err := n.convertFile(context.Background(), proto.FileConvertRequest{Path: "~/b.doc"}); err != nil {
+	if _, err := n.convertFile(context.Background(), other); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := os.Stat(first.Path); err != nil {
@@ -150,9 +142,9 @@ func TestConvertHitKeepsTheCopyFromPruning(t *testing.T) {
 }
 
 func TestConvertSameFileAtOnceRunsLibreOfficeOnce(t *testing.T) {
-	dir, n, calls := convertEnv(t)
+	cacheEnv(t, true)
+	n, req, calls := convertFixture(t)
 	t.Setenv("FAKE_SOFFICE_DELAY", "0.5")
-	os.WriteFile(filepath.Join(dir, "a.doc"), []byte("old word"), 0o600)
 	const at = 6
 	got := make([]*proto.FileConverted, at)
 	errs := make([]error, at)
@@ -161,7 +153,7 @@ func TestConvertSameFileAtOnceRunsLibreOfficeOnce(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			got[i], errs[i] = n.convertFile(context.Background(), proto.FileConvertRequest{Path: "~/a.doc"})
+			got[i], errs[i] = n.convertFile(context.Background(), req)
 		}()
 	}
 	wg.Wait()

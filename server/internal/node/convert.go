@@ -125,15 +125,13 @@ func (n *Node) convertFile(ctx context.Context, p proto.FileConvertRequest) (*pr
 		return nil, fmt.Errorf("LibreOffice did not write a PDF")
 	}
 	if err := renameConverted(pdf, out); err != nil {
-		// the temp folder is on another file system: copy it in whole, so a cut-short copy never has the cache's name;
-		// streamed, so a big PDF is not held in memory
+		// the temp folder is on another file system: copy it in, never writing the cache's name in place
 		src, err := os.Open(pdf)
 		if err != nil {
 			return nil, err
 		}
-		err = writeAtomic(out, src)
-		src.Close()
-		if err != nil {
+		defer src.Close()
+		if err := writeAtomic(out, src); err != nil {
 			return nil, err
 		}
 	}
@@ -170,7 +168,7 @@ func usedCached(path string, info os.FileInfo) bool {
 	return !errors.Is(os.Chtimes(path, now, now), fs.ErrNotExist)
 }
 
-// pruneOlder removes the files in dir last written or used (usedCached) more than keep ago.
+// pruneOlder removes the files in dir whose modification time is more than keep ago.
 func pruneOlder(dir string, keep time.Duration) {
 	ents, err := os.ReadDir(dir)
 	if err != nil {

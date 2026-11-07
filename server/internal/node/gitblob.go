@@ -17,9 +17,9 @@ import (
 // maxBlobBytes: bigger versions are not written out for comparing.
 const maxBlobBytes = 200 << 20
 
-// blobWrites lets one request write a version into the cache; requests for it at the same time wait for that one and
-// share its copy. Each writing its own would rename a second copy over one already handed out, under a download pinned
-// to its revision.
+// blobWrites lets one request at a time look a version up in the cache and write it there on a miss; requests for it at
+// the same time share that one's copy. Each writing its own would rename a second copy over one already handed out,
+// under a download pinned to its revision.
 var blobWrites singleflight.Group
 
 // blobRev: HEAD, INDEX (the staged version), or a commit (full or short hash) optionally followed by ^ (its parent).
@@ -73,12 +73,9 @@ func (n *Node) gitBlob(ctx context.Context, p proto.GitBlobRequest) (*proto.GitB
 	}
 	// named by the blob's id (content-addressed: never stale) and the file's extension, which the viewers go by
 	out := filepath.Join(cache, sha+strings.ToLower(filepath.Ext(path)))
-	if st, err := os.Stat(out); err == nil && st.Size() == n64 && usedCached(out, st) {
-		return &proto.GitBlob{Path: out, Size: n64}, nil
-	}
 	_, err, _ = blobWrites.Do(out, func() (any, error) {
-		if st, err := os.Stat(out); err == nil && st.Size() == n64 {
-			return nil, nil // written by a request that finished after this one looked
+		if st, err := os.Stat(out); err == nil && st.Size() == n64 && usedCached(out, st) {
+			return nil, nil
 		}
 		pruneConverted(cache)
 		// the waiting requests share this run, so one of them giving up does not end it
