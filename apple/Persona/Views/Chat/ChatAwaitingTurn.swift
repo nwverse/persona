@@ -37,6 +37,24 @@ nonisolated enum ChatAwaitingTurn: Equatable {
         return .echoed(id: t.id)
     }
 
+    /// Whether the work the hub reports is for a message of yours the transcript does not have yet, not for the chat's
+    /// newest turn: the session went to work (`stateSince`) after one of them was written, within `window` of it. Drawn
+    /// on the newest turn's work line, that work would read as more of the turn before until the message comes in. A
+    /// message sent while the agent was already at work joins the running turn (Claude takes it in mid-turn) and leaves
+    /// that line alone.
+    /// - Parameters:
+    ///   - pending: messages sent from here that the transcript does not have yet, minus those Claude holds in its queue.
+    ///   - status: the session's status as the hub last pushed it.
+    ///   - stateSince: when the hub saw the session enter its current state.
+    static func workIsForPending(_ pending: [PendingMessage], status: SessionStatus, stateSince: Date?) -> Bool {
+        guard status.isActive, let since = stateSince else { return false }
+        return pending.contains { p in
+            guard p.state == .sending || p.state == .sent, let at = p.createdAt else { return false }
+            let gap = since.timeIntervalSince(at)
+            return gap >= 0 && gap < window
+        }
+    }
+
     /// When the wait that starts at the newest of these ends: nil for none still going.
     static func deadline(pending: [PendingMessage], last: ChatBlock?) -> Date? {
         let echoed: Date? = { if case .turn(let t) = last, t.steps.isEmpty, t.answer == nil { t.startedAt } else { nil } }()

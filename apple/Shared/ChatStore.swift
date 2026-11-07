@@ -436,6 +436,9 @@ final class ChatStore {
     /// Everything from the first item through this seq is here, without holes (lines without items count). Catch-ups
     /// ask for what comes after it; 0 = no baseline yet (nothing loaded from the end of the transcript).
     @ObservationIgnored private(set) var covered = 0
+    /// When the last batch of items came (a push, a page, a pull), empty ones included: a subscription that stays quiet
+    /// while its session moves on has stopped (`AgentSyncPacing.catchUpAt`). Nil before any.
+    @ObservationIgnored private(set) var arrivedAt: Date?
     /// Folds opened here (`unfold`), as far as each reached. A page with one of them again (the latest page can come
     /// twice as a chat opens) leaves its work open: folded again, its row had already fetched it and stayed on
     /// "Loading N steps…" (#6038). Starting over forgets them.
@@ -469,6 +472,7 @@ final class ChatStore {
     /// cache, several exchanges behind). Without a span (an older hub) batches are trusted, as before.
     @discardableResult
     func apply(_ new: [Item], span: ItemSpan, backlog: Bool = false, hasMore: Bool? = nil, moreAfter: Bool = false) -> Gap {
+        arrivedAt = .now
         if let h = span.history, let mine = history, h != mine {
             reset()
             history = h
@@ -749,6 +753,7 @@ final class ChatStore {
 
     /// Starts over from the latest page: what came in between was too much to fetch, and a hole would never fill.
     func replace(with latest: [Item], hasMore: Bool, span: ItemSpan = ItemSpan()) {
+        arrivedAt = .now
         // Pushes that came in while the page was on its way, past what it holds, stay (the next push finds the hole
         // between, if any). Not after another history: those seqs belong to the old file.
         let keep = span.history == nil || span.history == history ? items.filter { $0.seq > (span.to ?? .max) } : []

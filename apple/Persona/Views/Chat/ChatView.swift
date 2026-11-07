@@ -1548,8 +1548,19 @@ struct ChatView: View {
 
     private var liveTurnID: String? {
         guard case .turn(let t) = store.blocks.last else { return nil }
+        // The work is for a message of yours still on its way, not for this turn: that message's getting-ready line
+        // stands for it until its copy comes in (`startingTurn`).
+        if viewedAgent == nil,
+           ChatAwaitingTurn.workIsForPending(shownPending, status: status, stateSince: session?.stateSince) { return nil }
         // Your message is in and nothing answered it yet: running already, before the hub's working comes (#3853).
         return status.isActive || awaiting.turnID == t.id ? t.id : nil
+    }
+
+    /// Messages sent from here that the transcript does not have yet, minus those Claude holds in its queue (the queue
+    /// strip shows them).
+    private var shownPending: [PendingMessage] {
+        let queued = session?.queued ?? []
+        return (store.arriving + store.pending).filter { p in !queued.contains { PendingMessage.same($0, p.text) } }
     }
 
     /// The wait between a send and the hub's working (`ChatAwaitingTurn`); not for a subagent being viewed.
@@ -2163,8 +2174,7 @@ struct ChatView: View {
     private func chatScroll() -> some View {
         let store = store
         let lines = currentLines()
-        let queued = session?.queued ?? []
-        let pending = (store.arriving + store.pending).filter { p in !queued.contains { PendingMessage.same($0, p.text) } }
+        let pending = shownPending
         // Two statements: as one expression Swift 6.2 could not type-check it in time.
         let list = ScrollView {
             chatRows(store: store, lines: lines, pending: pending)

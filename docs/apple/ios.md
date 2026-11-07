@@ -65,7 +65,9 @@ Chat page:
 - Background sync (push + pull like IM; only foregrounded and connected): hub pushes which session changed; App pulls increments by cursor.
   Agents (`AgentSync`): changed `rev` in session list / `revs` triggers `after_seq` fetch, merged into memory if present,
   otherwise written to disk (`ChatCache.folder`, currently `chats-v3`) so opening is already current; scope active Agents + sessions used within 24 hours (at most 40, newest first, concurrency 3),
-  currently viewed chats rely on their subscriptions without duplicate fetches. Working Agents fetch at most once per minute (`AgentSync.workingGap`; each fetch decodes and rewrites the entire disk cache),
+  currently viewed chats rely on their subscriptions without duplicate fetches. When a subscription stops (the session's `updated_at` is newer
+  than the open chat's newest line and no items came for 4 seconds), the chat fetches after its `covered` and merges silently: at most every
+  10 seconds, once per `updated_at` (`AgentSyncPacing.catchUpAt`, the rule of the web's `web/src/lib/stale-page.ts`). Working Agents fetch at most once per minute (`AgentSync.workingGap`; each fetch decodes and rewrites the entire disk cache),
   immediately at turn end / Needs you (most likely to open); 19-minute real-hub replay: 45 calls/minute → 9 (2026-11-02 battery investigation). Lark (`LarkSync`): hub forwards gateway live events (`lark`), refreshing Inbox Lark chats and open chats
   (polling fallback only: list 90 seconds, chat 60); changed Inbox chats fetch the newest page into `lark-chat-<id>` cache; on hub connection catch up latest 20;
   unread chats open from cache if it reaches the first unread message.

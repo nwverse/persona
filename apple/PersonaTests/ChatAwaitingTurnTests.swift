@@ -93,4 +93,31 @@ struct ChatAwaitingTurnTests {
         #expect(ChatAwaitingTurn.of(pending: both, last: before.last, status: .idle, failedSince: nil, now: now) == .sending)
         #expect(ChatAwaitingTurn.deadline(pending: both, last: before.last) == now.addingTimeInterval(-5 + ChatAwaitingTurn.window))
     }
+
+    /// The hub's working is for a message still on its way when the session went to work after it was written (within
+    /// a minute); a message sent while the agent was already at work joins the running turn, whose work line stays.
+    @Test func workThatStartedAfterAPendingMessageIsThatMessages() {
+        // sent 3 s ago, at work for 1 s: the agent took it in
+        let working = now.addingTimeInterval(-1)
+        #expect(ChatAwaitingTurn.workIsForPending(sending(3), status: .working, stateSince: working))
+        #expect(ChatAwaitingTurn.workIsForPending(sending(3, .sending), status: .blocked, stateSince: working))
+        // at work since before it was sent: the turn running then goes on, the message joins it
+        #expect(!ChatAwaitingTurn.workIsForPending(sending(3), status: .working, stateSince: now.addingTimeInterval(-30)))
+        // not at work, or no time for either
+        for status in [SessionStatus.idle, .done, .unknown, .offline] {
+            #expect(!ChatAwaitingTurn.workIsForPending(sending(3), status: status, stateSince: working))
+        }
+        #expect(!ChatAwaitingTurn.workIsForPending(sending(3), status: .working, stateSince: nil))
+        var untimed = sending(3)
+        untimed[0].createdAt = nil
+        #expect(!ChatAwaitingTurn.workIsForPending(untimed, status: .working, stateSince: working))
+        // waiting for the network or failed: not on its way; none at all: nothing to yield to
+        #expect(!ChatAwaitingTurn.workIsForPending(sending(3, .waiting), status: .working, stateSince: working))
+        #expect(!ChatAwaitingTurn.workIsForPending(sending(3, .failed), status: .working, stateSince: working))
+        #expect(!ChatAwaitingTurn.workIsForPending([], status: .working, stateSince: working))
+        // work that began over a minute after it (a stuck bubble, the next turn started on the computer)
+        #expect(!ChatAwaitingTurn.workIsForPending(sending(70), status: .working, stateSince: working))
+        // a stuck bubble next to a fresh one: the fresh one decides
+        #expect(ChatAwaitingTurn.workIsForPending(sending(600) + sending(3), status: .working, stateSince: working))
+    }
 }
