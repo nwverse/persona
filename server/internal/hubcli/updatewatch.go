@@ -60,24 +60,35 @@ var (
 )
 
 // stopHub asks the hub (pid, this process's parent) to exit with SIGTERM, waits up to grace for it, checking every
-// poll, and sends SIGKILL only to a hub that is still there. It signals nothing once the hub has gone. On Linux the
-// process handle is a pidfd, so a signal cannot reach a process that took the pid in between.
+// poll, and sends SIGKILL only to a hub that is still there, then waits up to grace again so that a hub started next
+// does not find the old one still holding its port. It signals nothing once the hub has gone. The process handle is
+// taken before the parent check: on Linux it is a pidfd, and a hub that is still the parent after that means the
+// handle is the hub's, so no signal can reach a process that takes the pid later.
 func stopHub(pid int, grace, poll time.Duration) {
-	if !hubIsParent(pid) {
-		return
-	}
 	proc, err := os.FindProcess(pid)
 	if err != nil {
 		return
 	}
 	defer proc.Release()
-	if signalHub(proc, syscall.SIGTERM) == nil { // Windows cannot send it: the hub is killed at once
-		for deadline := time.Now().Add(grace); hubIsParent(pid) && time.Now().Before(deadline); {
+	if !hubIsParent(pid) {
+		return
+	}
+	gone := func() bool { // within grace
+		deadline := time.Now().Add(grace)
+		for hubIsParent(pid) {
+			if time.Now().After(deadline) {
+				return false
+			}
 			time.Sleep(poll)
 		}
+		return true
+	}
+	if signalHub(proc, syscall.SIGTERM) == nil && gone() { // Windows cannot send SIGTERM: the hub is killed at once
+		return
 	}
 	if hubIsParent(pid) {
 		_ = signalHub(proc, os.Kill)
+		gone()
 	}
 }
 

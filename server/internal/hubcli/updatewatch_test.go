@@ -121,16 +121,17 @@ func alive(exited <-chan struct{}) bool {
 	}
 }
 
-// A hub that ignores SIGTERM is killed once the grace period is over.
+// A hub that ignores SIGTERM is killed once the grace period is over, and is gone when stopHub returns: the hub
+// started next must not find the old one still holding its port.
 func TestStopHubKillsAHubThatStays(t *testing.T) {
 	sent := recordSignals(t)
 	cmd, exited := startProcess(t)
 	standInHub(t, cmd.Process.Pid, exited)
-	stopHub(cmd.Process.Pid, 200*time.Millisecond, 10*time.Millisecond)
+	stopHub(cmd.Process.Pid, 500*time.Millisecond, 10*time.Millisecond)
 	select {
 	case <-exited:
-	case <-time.After(5 * time.Second):
-		t.Fatal("the hub is still running")
+	default:
+		t.Fatal("stopHub returned while the killed hub was still there")
 	}
 	if got := sent(); !slices.Equal(got, []os.Signal{syscall.SIGTERM, os.Kill}) {
 		t.Fatalf("sent %v, want SIGTERM then SIGKILL", got)
