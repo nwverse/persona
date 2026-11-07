@@ -1,11 +1,15 @@
 package node
 
 import (
+	"encoding/base64"
 	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/nwverse/persona/server/internal/proto"
 )
 
 // cacheEnv points the user cache folder (or, with cache false, none at all) and the temp folder at fresh folders,
@@ -101,5 +105,44 @@ func TestPrivateCacheDirFallbackIsThisProcesss(t *testing.T) {
 	}
 	if again, err := privateCacheDir("things"); err != nil || again != dir {
 		t.Fatalf("second call %s (%v), want the same %s", again, err, dir)
+	}
+}
+
+func orcaTestImages() []proto.Image {
+	return []proto.Image{{Mime: "image/png", Data: "data:image/png;base64," + base64.StdEncoding.EncodeToString([]byte("png bytes"))}}
+}
+
+// Images for Orca go to the user's cache, not the shared temp folder, and the ones Orca has long read are removed.
+func TestOrcaImagesInTheUserCache(t *testing.T) {
+	cache, tmp := cacheEnv(t, true)
+	dir := filepath.Join(cache, "persona", "orca-images")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	old, fresh := filepath.Join(dir, "old.png"), filepath.Join(dir, "fresh.png")
+	for _, p := range []string{old, fresh} {
+		if err := os.WriteFile(p, []byte("x"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	past := time.Now().Add(-orcaImageKeep - time.Hour)
+	if err := os.Chtimes(old, past, past); err != nil {
+		t.Fatal(err)
+	}
+	paths, err := orcaImages(orcaTestImages())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(paths) != 1 || filepath.Dir(paths[0]) != dir || strings.HasPrefix(paths[0], tmp) {
+		t.Fatalf("paths %v, want in %s", paths, dir)
+	}
+	if b, err := os.ReadFile(paths[0]); err != nil || string(b) != "png bytes" {
+		t.Fatalf("read %q (%v)", b, err)
+	}
+	if _, err := os.Stat(old); !os.IsNotExist(err) {
+		t.Fatalf("an image older than a day is still there (%v)", err)
+	}
+	if _, err := os.Stat(fresh); err != nil {
+		t.Fatalf("a recent image was removed: %v", err)
 	}
 }
