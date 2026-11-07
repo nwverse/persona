@@ -61,7 +61,7 @@ import { interactionAsk } from "../../lib/inbox";
 import { answeredLookup, answeredSessions } from "./answered-lookup";
 import { Empty } from "./parts";
 import { PlanEditDialog } from "./PlanEdit";
-import { startBlocked, todoUltracode, ULTRACODE_FEATURE } from "../../lib/ultracode";
+import { machineStartBlocked, todoUltracode, ULTRACODE_FEATURE } from "../../lib/ultracode";
 import { UltraMark, UltracodeChip } from "../chat/Ultracode";
 import { byTime } from "../../lib/times";
 import { stateName } from "../../lib/state-labels";
@@ -104,6 +104,18 @@ function useTaskUltracode(todo: Todo | undefined): boolean {
   const plans = useFeed((s) => s.plans);
   const planned = todo?.plan_id ? plans[todo.plan_id]?.tasks.find((p) => p.todo_id === todo.id) : undefined;
   return useStore((s) => (todo ? todoUltracode(todo, answeredLookup(s.sessions, s.interactions, s.answered), planned) : false));
+}
+
+/** A task's title on its card and its folded line, with the Agent list row's ultracode mark right after it while on
+ *  (#12); without it, the title is drawn as before. */
+function TaskTitle({ title, ultra, mark, className }: { title: string; ultra: boolean; mark: number; className: string }) {
+  if (!ultra) return <span className={cx("min-w-0 flex-1 truncate", className)}>{title}</span>;
+  return (
+    <span className="flex min-w-0 flex-1 items-center gap-1.5">
+      <span className={cx("min-w-0 truncate", className)}>{title}</span>
+      <UltraMark size={mark} />
+    </span>
+  );
 }
 
 /** Two rows with the same fields, each the same value or object. */
@@ -283,23 +295,24 @@ function PlanTaskFailed({ task, conversation }: { task: PlanTask; conversation: 
   return <span className="text-red">{t("assistant-tasks.plan_task_failed", { title: task.title, error })}</span>;
 }
 
-/** Each task's ultracode on the open card (#12): `on`, the card's own choice, else the assistant's; `blocked`, why its
- *  computer can't start with it (a known Claude Code too old), "" when it can. The chip draws it off while blocked, and
- *  Start sends it off, but "Edit" opens with the choice, so a task moved there to a computer that can has it again.
- *  Undefined where the hub has no ultracode, and the card shows nothing; nothing is read for a plan no longer open. */
-function usePlanUltracode(plan: TaskPlan, choice: Record<number, boolean>): ({ on: boolean; blocked: string } | undefined)[] {
+/** Why each task's computer can't start with ultracode (#12; a known Claude Code too old), "" where it can; undefined
+ *  where the hub has no ultracode, and the card shows none. Nothing is read for a plan no longer open. */
+function usePlanUltracodeBlocked(plan: TaskPlan): string[] | undefined {
   const open = plan.state === "open";
   const offered = useStore((s) => open && hubHas(s.features, ULTRACODE_FEATURE));
-  const versions = useStoreRows((s) => (open ? plan.tasks.map((task) => ({ version: s.machines.find((m) => m.id === task.machine)?.claude_version })) : []));
-  return plan.tasks.map((task, i) => (offered ? { on: choice[i] ?? task.ultracode === true, blocked: startBlocked(versions[i]?.version) } : undefined));
+  const rows = useStoreRows((s) => (open ? plan.tasks.map((task) => ({ why: machineStartBlocked(s, task.machine) })) : []));
+  return offered ? rows.map((r) => r.why) : undefined;
 }
+
+/** A computer can't start with ultracode now (what Start sends checks it as it goes). */
+const ultracodeBlockedNow = (machine: string) => Boolean(machineStartBlocked(getState(), machine));
 
 export function PlanCard({ plan }: { plan: TaskPlan }) {
   const busy = useFeed((s) => s.busy[plan.id]);
   const [remember, setRemember] = useState(false);
   const [editing, setEditing] = useState(false);
   const [ultraChoice, setUltraChoice] = useState<Record<number, boolean>>({});
-  const ultra = usePlanUltracode(plan, ultraChoice);
+  const blocked = usePlanUltracodeBlocked(plan);
   if (plan.state !== "open") {
     const failed = plan.tasks.filter((t) => t.error);
     return (
@@ -315,10 +328,9 @@ export function PlanCard({ plan }: { plan: TaskPlan }) {
     );
   }
   const run = (f: () => Promise<void>) => f().catch((e) => toast(t("assistant-tasks.start_failed", { error: String(e instanceof Error ? e.message : e) }), "error"));
-  // each task's choice where the card offers it, the assistant's elsewhere ("Edit" opens with it); Start goes with it,
-  // off on a computer that can't
-  const ultracode = plan.tasks.map((task, i) => ultra[i]?.on ?? task.ultracode === true);
-  const starts = ultracode.map((on, i) => on && !ultra[i]?.blocked);
+  // each task's choice, the card's own else the assistant's: the chip draws it (off where the computer can't), "Edit"
+  // opens with it (so a task moved there to a computer that can has it again), and Start sends it, off where it can't
+  const ultracode = plan.tasks.map((task, i) => ultraChoice[i] ?? task.ultracode === true);
   return (
     <div className="flex flex-col gap-3 rounded-card bg-surface p-4 shadow-card">
       <div className="flex items-center gap-1.5 text-[12px] font-medium text-ink-2">
@@ -326,14 +338,14 @@ export function PlanCard({ plan }: { plan: TaskPlan }) {
         {plan.tasks.length > 1 ? t("assistant-tasks.plan_split", { count: plan.tasks.length }) : t("assistant-tasks.plan_single")}
       </div>
       {plan.tasks.map((t, i) => (
-        <PlanTaskRow key={i} n={i + 1} task={t} numbered={plan.tasks.length > 1} ultra={ultra[i]} busy={busy} onUltra={(on) => setUltraChoice((c) => ({ ...c, [i]: on }))} />
+        <PlanTaskRow key={i} n={i + 1} task={t} numbered={plan.tasks.length > 1} ultra={blocked && { on: ultracode[i], blocked: blocked[i] }} busy={busy} onUltra={(on) => setUltraChoice((c) => ({ ...c, [i]: on }))} />
       ))}
       <label className="flex cursor-pointer items-center gap-2 text-[12.5px] text-ink-2">
         <input type="checkbox" checked={remember} onChange={(e) => setRemember(e.target.checked)} className="accent-[var(--accent)]" />
         {t("assistant-tasks.plan_remember")}
       </label>
       <div className="flex gap-2">
-        <Button tone="accent" busy={busy} onClick={() => run(() => startPlan(plan, remember, planUltracodeToSend(plan, starts)))} className="flex-1">
+        <Button tone="accent" busy={busy} onClick={() => run(() => startPlan(plan, remember, planUltracodeToSend(plan, ultracode, ultracodeBlockedNow)))} className="flex-1">
           {plan.tasks.length > 1 ? t("assistant-tasks.plan_start_n", { count: plan.tasks.length }) : t("assistant-tasks.plan_start")}
         </Button>
         <Button disabled={busy} onClick={() => setEditing(true)}>
@@ -350,7 +362,7 @@ export function PlanCard({ plan }: { plan: TaskPlan }) {
           onClose={() => setEditing(false)}
           onStart={(edits) => {
             setEditing(false);
-            void run(() => startPlan(plan, remember, planEditsToSend(plan, edits)));
+            void run(() => startPlan(plan, remember, planEditsToSend(plan, edits, ultracodeBlockedNow)));
           }}
         />
       )}
@@ -454,15 +466,7 @@ export function TaskCard({ todoId, conversation }: { todoId: string; conversatio
     >
       <div className="flex items-center gap-2">
         <TaskMark status={status} />
-        {ultra ? (
-          // ultracode on (#12): the Agent list row's mark right after the title
-          <span className="flex min-w-0 flex-1 items-center gap-1.5">
-            <span className="min-w-0 truncate text-[14.5px] font-semibold">{todo.title}</span>
-            <UltraMark size={12} />
-          </span>
-        ) : (
-          <span className="min-w-0 flex-1 truncate text-[14.5px] font-semibold">{todo.title}</span>
-        )}
+        <TaskTitle title={todo.title} ultra={ultra} mark={12} className="text-[14.5px] font-semibold" />
         {status !== "done" && status !== "failed" && <span className="shrink-0 text-[12px] text-ink-3">{since(todo.created_at)}</span>}
       </div>
       <div className="truncate text-[12px] text-ink-2">{where}</div>
@@ -586,14 +590,7 @@ export function TaskLine({ todoId }: { todoId: string }) {
     <>
     <button type="button" onClick={() => openTask(todo.id)} onContextMenu={menu.onContextMenu} className="flex w-full items-center gap-2 rounded-control bg-field px-3 py-2 text-left text-[13px] hover:bg-hover">
       <TaskMark status={status} />
-      {ultra ? (
-        <span className="flex min-w-0 flex-1 items-center gap-1.5">
-          <span className="min-w-0 truncate font-medium">{todo.title}</span>
-          <UltraMark size={11} />
-        </span>
-      ) : (
-        <span className="min-w-0 flex-1 truncate font-medium">{todo.title}</span>
-      )}
+      <TaskTitle title={todo.title} ultra={ultra} mark={11} className="font-medium" />
       <span className={cx("shrink-0 text-[12px]", TONE[info.tone])}>{info.label}</span>
       <Icon name="chevronRight" size={13} className="text-ink-3" />
     </button>

@@ -45,7 +45,7 @@ import { Collapse, cx, EASE, Kbd, Menu, useMenu, useNow, type MenuItem } from ".
 import { StatusMark, StateTally } from "../ui/StatusMark";
 import { foldedCounts, hasFoldedCounts } from "../lib/folded-counts";
 import { runningWorkflows, workflowLine, workflowShortLine } from "../lib/workflows";
-import { ultracodeOn } from "../lib/ultracode";
+import { ultracodeMarkShown } from "../lib/ultracode";
 import { Rolling } from "../ui/Rolling";
 import { AppMark } from "../ui/AppMark";
 import { BrandMark } from "../ui/BrandMark";
@@ -2027,7 +2027,7 @@ export const SessionRow = memo(function SessionRow({ s: given, k, reg, hover, ac
   const line = draft ?? (showState && !s.assistant ? rowLine(s, ix, awaiting) : undefined);
   // ultracode on (#3428): the workflow mark in the AI colour right after the title; a row without it is drawn as before.
   // Not on an offline row: the node keeps the last value it saw after the process is gone, and a resume starts it off.
-  const ultra = showState && st !== "offline" && ultracodeOn(s);
+  const ultra = showState && ultracodeMarkShown(s);
   const link = (
     <a
       ref={(el) => {

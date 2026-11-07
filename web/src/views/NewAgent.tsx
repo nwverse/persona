@@ -516,7 +516,7 @@ export function NewAgent({ open, onClose, preset }: { open: boolean; onClose: ()
                   {pickedModel ? t("newagent.effort_unsupported", { model: modelName(pickedModel) }) : t("newagent.effort_unsupported_default")}
                 </p>
               )}
-              {ultracodeShown && <div className="mt-2"><UltracodeStartRow on={ultracode} onChange={setUltracode} blocked={ultracodeBlocked} /></div>}
+              {ultracodeShown && <div data-testid="new-agent-ultracode" className="mt-2"><UltracodeStartRow on={ultracode} onChange={setUltracode} blocked={ultracodeBlocked} /></div>}
             </Field>
           )}
 

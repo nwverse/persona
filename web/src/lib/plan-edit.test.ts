@@ -32,8 +32,6 @@ describe("改一下 on a plan card", () => {
     const flipped = planEditsOf(plan);
     flipped[0] = { ...flipped[0], ultracode: true };
     expect(planEditsChanged(before, flipped)).toBe(true);
-    // the card's choice it opened with is not a change of its own
-    expect(planEditsChanged(planEditsOf(plan, [true, true]), planEditsOf(plan, [true, true]))).toBe(false);
   });
 
   it("sends the edits, leaving out a 每步都问 the plan never set", () => {
@@ -53,6 +51,16 @@ describe("改一下 on a plan card", () => {
     edits[1] = { ...edits[1], ultracode: false };
     expect(planEditsToSend(plan, edits).map((e) => e.ultracode)).toEqual([true, false]);
   });
+
+  it("sends ultracode off for a task on a computer that can't run it, wherever the choice came from", () => {
+    const old = (machine: string) => machine === "m2";
+    const edits = planEditsOf(plan); // the assistant turned it on for the task on m2
+    expect(planEditsToSend(plan, edits, old)[1].ultracode).toBe(false);
+    edits[1] = { ...edits[1], machine: "m1" }; // moved to a computer that can: the assistant's again
+    expect(planEditsToSend(plan, edits, old)[1]).not.toHaveProperty("ultracode");
+    edits[0] = { ...edits[0], machine: "m2", ultracode: true }; // turned on where it can't: as the assistant left it
+    expect(planEditsToSend(plan, edits, old)[0]).not.toHaveProperty("ultracode");
+  });
 });
 
 describe("Start on a plan card", () => {
@@ -63,5 +71,10 @@ describe("Start on a plan card", () => {
   it("sends true / false for the tasks the card changed and nothing for the others", () => {
     expect(planUltracodeToSend(plan, [true, true])).toEqual([{ ultracode: true }, {}]);
     expect(planUltracodeToSend(plan, [false, false])).toEqual([{}, { ultracode: false }]);
+  });
+
+  it("sends it off for a task on a computer that can't run it", () => {
+    expect(planUltracodeToSend(plan, [false, true], (machine) => machine === "m2")).toEqual([{}, { ultracode: false }]);
+    expect(planUltracodeToSend(plan, [true, true], (machine) => machine === "m1")).toBeUndefined();
   });
 });

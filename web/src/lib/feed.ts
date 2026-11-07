@@ -379,21 +379,35 @@ export function planEditsChanged(before: PlanTaskEdit[], edits: PlanTaskEdit[]):
   return edits.some((e, i) => (Object.keys(e) as (keyof PlanTaskEdit)[]).some((k) => (e[k] ?? "") !== (before[i]?.[k] ?? "")));
 }
 
+/** Whether a computer can't start an agent with ultracode (lib/ultracode machineStartBlocked); a task chosen with it
+ *  there starts without. */
+export type UltracodeBlocked = (machine: string) => boolean;
+
+/** A task's ultracode as Start sends it (#12): the choice, off on a computer that can't; undefined when that is the
+ *  assistant's own (left out, the hub keeps it). */
+function ultracodeToSend(planned: PlanTask | undefined, on: boolean, machine: string, blocked: UltracodeBlocked): boolean | undefined {
+  const sent = on && !blocked(machine);
+  return sent === (planned?.ultracode === true) ? undefined : sent;
+}
+
 /** What "Start" sends from "Edit": the edited tasks, leaving out an "Ask every step" the plan never set (the agent's own
- *  default) and an ultracode the same as the assistant's (left out, the hub keeps it). */
-export function planEditsToSend(plan: TaskPlan, edits: PlanTaskEdit[]): Partial<PlanTask>[] {
+ *  default) and an ultracode the same as the assistant's. */
+export function planEditsToSend(plan: TaskPlan, edits: PlanTaskEdit[], blocked: UltracodeBlocked = () => false): Partial<PlanTask>[] {
   return edits.map((e, i) => {
-    const out: Partial<PlanTask> = { ...e };
+    const out: Partial<PlanTask> = { ...e, ultracode: ultracodeToSend(plan.tasks[i], e.ultracode, e.machine, blocked) };
     if (e.permission === "default" && !plan.tasks[i]?.permission) delete out.permission;
-    if (e.ultracode === (plan.tasks[i]?.ultracode === true)) delete out.ultracode;
+    if (out.ultracode === undefined) delete out.ultracode;
     return out;
   });
 }
 
-/** What the card's own "Start" sends (#12): `ultracode` for each task where the card's choice differs from the
+/** What the card's own "Start" sends (#12): `ultracode` for each task whose choice, as sent, differs from the
  *  assistant's and nothing for the rest; undefined when nothing differs, so it starts the plan as it is. */
-export function planUltracodeToSend(plan: TaskPlan, ultracode: readonly boolean[]): Partial<PlanTask>[] | undefined {
-  const edits = plan.tasks.map((t, i): Partial<PlanTask> => (ultracode[i] === undefined || ultracode[i] === (t.ultracode === true) ? {} : { ultracode: ultracode[i] }));
+export function planUltracodeToSend(plan: TaskPlan, ultracode: readonly boolean[], blocked: UltracodeBlocked = () => false): Partial<PlanTask>[] | undefined {
+  const edits = plan.tasks.map((t, i): Partial<PlanTask> => {
+    const sent = ultracodeToSend(t, ultracode[i], t.machine, blocked);
+    return sent === undefined ? {} : { ultracode: sent };
+  });
   return edits.some((e) => "ultracode" in e) ? edits : undefined;
 }
 

@@ -75,9 +75,9 @@ export function UltracodeSwitchRow({ session }: { session: Session }) {
 /** The same switch for an agent about to start: in "New agent", under "Thinking effort" (off each time the sheet opens,
  *  never remembered), and for each task in a plan's "Edit" (#12). `blocked`: why this computer can't start with it (its
  *  Claude Code is too old), grayed and said instead of the line. */
-export function UltracodeStartRow({ on, onChange, blocked, testId = "new-agent-ultracode" }: { on: boolean; onChange: (on: boolean) => void; blocked: string; testId?: string }) {
+export function UltracodeStartRow({ on, onChange, blocked }: { on: boolean; onChange: (on: boolean) => void; blocked: string }) {
   return (
-    <div data-testid={testId} className="rounded-control bg-surface px-3 py-2 shadow-hairline">
+    <div className="rounded-control bg-surface px-3 py-2 shadow-hairline">
       <SwitchHead on={on && !blocked} disabled={Boolean(blocked)} onChange={onChange} />
       <p data-ultracode-line className={cx("mt-1 pl-[21px] text-[11.5px] leading-snug break-words", blocked ? "text-orange" : "text-ink-3")}>{blocked || t("ultracode.subtitle")}</p>
       <UltracodeQuotaLine warn={!blocked} className="mt-1 pl-[21px]" />

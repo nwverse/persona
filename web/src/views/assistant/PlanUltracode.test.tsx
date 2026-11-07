@@ -38,6 +38,17 @@ const click = async (el: Element | undefined | null) => {
 const byText = (label: string, sel = "button") => [...document.querySelectorAll<HTMLElement>(sel)].filter((b) => b.textContent?.trim() === label);
 const chips = () => [...document.querySelectorAll<HTMLButtonElement>('[data-testid="plan-ultracode"]')];
 const sent = () => startPlan.mock.calls.at(-1)?.[2] as Partial<PlanTask>[] | undefined;
+const editSwitches = () => [...document.querySelectorAll<HTMLButtonElement>('[data-testid="plan-edit-ultracode"] [role="switch"]')];
+const startInDialog = () => [...document.querySelectorAll<HTMLElement>('[role="dialog"] button')].filter((b) => b.textContent?.trim() === "开始").at(-1);
+const pickMachine = async (id: string, task = 0) => {
+  const select = document.querySelector<HTMLSelectElement>(`#plan-p1-${task}-machine`);
+  expect(select, "machine").toBeTruthy();
+  await act(async () => {
+    Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, "value")!.set!.call(select, id);
+    select!.dispatchEvent(new Event("change", { bubbles: true }));
+  });
+  await flush();
+};
 
 const seed = (patch: Record<string, unknown>) => Object.assign(getState() as unknown as Record<string, unknown>, patch);
 const before = { ...getState() };
@@ -102,41 +113,27 @@ describe("ultracode on the plan card", () => {
     await render(<PlanCard plan={plan([task(), task({ title: "重构", ultracode: true })])} />);
     await click(chips()[0]); // on, from the card
     await click(byText("改一下")[0]);
-    const switches = [...document.querySelectorAll<HTMLButtonElement>('[data-testid="plan-edit-ultracode"] [role="switch"]')];
-    expect(switches.map((s) => s.getAttribute("aria-checked"))).toEqual(["true", "true"]);
-    await click(switches[1]); // off, in the dialog
-    const start = [...document.querySelectorAll<HTMLElement>('[role="dialog"] button')].filter((b) => b.textContent?.trim() === "开始").at(-1);
-    await click(start);
+    expect(editSwitches().map((s) => s.getAttribute("aria-checked"))).toEqual(["true", "true"]);
+    await click(editSwitches()[1]); // off, in the dialog
+    await click(startInDialog());
     expect(sent()?.map((e) => e.ultracode)).toEqual([true, false]);
   });
 
-  it("keeps the choice in 改一下 for a task moved off a computer that can't, and sends it off only where it stays", async () => {
-    const pickMachine = async (id: string) => {
-      const select = document.querySelector<HTMLSelectElement>("#plan-p1-0-machine");
-      expect(select, "machine").toBeTruthy();
-      await act(async () => {
-        Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, "value")!.set!.call(select, id);
-        select!.dispatchEvent(new Event("change", { bubbles: true }));
-      });
-      await flush();
-    };
-    const toggle = () => document.querySelector<HTMLButtonElement>('[data-testid="plan-edit-ultracode"] [role="switch"]');
-    const startInDialog = () => [...document.querySelectorAll<HTMLElement>('[role="dialog"] button')].filter((b) => b.textContent?.trim() === "开始").at(-1);
-
+  it("keeps the choice in 改一下 for a task moved off a computer that can't", async () => {
     await render(<PlanCard plan={plan([task({ machine: "m2", ultracode: true })])} />);
     await click(byText("改一下")[0]);
-    expect(toggle()?.getAttribute("aria-checked")).toBe("false"); // drawn off on the old computer
+    expect(editSwitches()[0].getAttribute("aria-checked")).toBe("false"); // drawn off on the old computer
     await pickMachine("m1");
-    expect(toggle()?.getAttribute("aria-checked")).toBe("true"); // the assistant's choice again
+    expect(editSwitches()[0].getAttribute("aria-checked")).toBe("true"); // the assistant's choice again
     await click(startInDialog());
     expect(sent()?.[0]).not.toHaveProperty("ultracode"); // left out: the hub keeps the assistant's
+  });
 
-    await act(async () => root.unmount());
-    root = createRoot(host);
+  it("starts without it from 改一下 where the task stays on a computer that can't", async () => {
     await render(<PlanCard plan={plan([task({ machine: "m2", ultracode: true })])} />);
     await click(byText("改一下")[0]);
     await click(startInDialog());
-    expect(sent()?.[0]?.ultracode).toBe(false); // still on the old computer: starts without
+    expect(sent()?.[0]?.ultracode).toBe(false);
   });
 
   it("does not count the card's own choice as a change to throw away in 改一下", async () => {
