@@ -341,7 +341,8 @@ func excelDate(v string) (float64, bool) {
 		if t, err := time.Parse(layout, v); err == nil {
 			epoch := time.Date(1899, 12, 30, 0, 0, 0, 0, time.UTC)
 			t = time.Date(t.Year(), t.Month(), t.Day(), t.Hour(), t.Minute(), t.Second(), 0, time.UTC) // as written: no zone
-			return t.Sub(epoch).Hours() / 24, true
+			// Subtract seconds to avoid saturating time.Duration for distant dates.
+			return float64(t.Unix()-epoch.Unix()) / 86400, true
 		}
 	}
 	return 0, false
