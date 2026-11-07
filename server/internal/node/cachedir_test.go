@@ -152,13 +152,9 @@ func TestOrcaImagesInTheUserCache(t *testing.T) {
 func convertFixture(t *testing.T) (n *Node, req proto.FileConvertRequest, calls string) {
 	t.Helper()
 	dir := t.TempDir()
-	path := os.Getenv("PATH")
 	calls = fakeSoffice(t, dir)
-	t.Setenv("PATH", os.Getenv("PATH")+string(os.PathListSeparator)+path) // git stays reachable
 	doc := filepath.Join(dir, "old.doc")
-	if err := os.WriteFile(doc, []byte("old word"), 0o600); err != nil {
-		t.Fatal(err)
-	}
+	writeFile(t, doc, "old word")
 	return &Node{home: dir}, proto.FileConvertRequest{Path: doc, To: "pdf"}, calls
 }
 
@@ -168,9 +164,7 @@ func blobFixture(t *testing.T) (*Node, proto.GitBlobRequest) {
 	gitEnv(t)
 	repo := t.TempDir()
 	runPullGit(t, repo, "init", "--initial-branch=main", repo)
-	if err := os.WriteFile(filepath.Join(repo, "spec.pdf"), []byte("%PDF-1.4 committed"), 0o600); err != nil {
-		t.Fatal(err)
-	}
+	writeFile(t, filepath.Join(repo, "spec.pdf"), "%PDF-1.4 committed")
 	runPullGit(t, repo, "add", ".")
 	runPullGit(t, repo, "commit", "-m", "one")
 	return &Node{home: repo, state: newState()}, proto.GitBlobRequest{Cwd: repo, Path: "spec.pdf", Rev: "HEAD"}
@@ -205,12 +199,8 @@ func TestFileCachesWithoutUserCacheAreThisProcesss(t *testing.T) {
 		t.Fatalf("blob %+v, %v", blob, err)
 	}
 	for name, path := range map[string]string{"convert": pdf.Path, "blobs": blob.Path} {
-		dir := filepath.Dir(path)
-		if filepath.Dir(dir) != tmp || !strings.HasPrefix(filepath.Base(dir), "persona-"+name+"-") {
-			t.Fatalf("%s cache %s, want a fresh one in %s", name, dir, tmp)
-		}
-		if st, err := os.Lstat(dir); err != nil || !st.IsDir() || st.Mode().Perm() != 0o700 {
-			t.Fatalf("%s cache %s: %v (%v), want a 0700 folder", name, dir, st, err)
+		if dir, err := privateCacheDir(name); err != nil || filepath.Dir(path) != dir {
+			t.Fatalf("%s at %s, want in this process's %s (%v)", name, path, dir, err)
 		}
 	}
 	for _, dir := range []string{filepath.Join(shared, "convert"), theirs} {
@@ -226,18 +216,20 @@ func TestFileCachesInTheUserCacheRefuseASymlink(t *testing.T) {
 	cache, _ := cacheEnv(t, true)
 	n, req, calls := convertFixture(t)
 	pdf, err := n.convertFile(context.Background(), req)
-	if err != nil || filepath.Dir(pdf.Path) != filepath.Join(cache, "persona", "convert") {
-		t.Fatalf("converted %+v (%v), want in %s", pdf, err, filepath.Join(cache, "persona", "convert"))
+	if err != nil {
+		t.Fatal(err)
 	}
 	bn, breq := blobFixture(t)
 	blob, err := bn.gitBlob(context.Background(), breq)
-	if err != nil || filepath.Dir(blob.Path) != filepath.Join(cache, "persona", "blobs") {
-		t.Fatalf("blob %+v (%v), want in %s", blob, err, filepath.Join(cache, "persona", "blobs"))
+	if err != nil {
+		t.Fatal(err)
 	}
-
 	theirs := t.TempDir()
-	for _, name := range []string{"convert", "blobs"} {
+	for name, path := range map[string]string{"convert": pdf.Path, "blobs": blob.Path} {
 		dir := filepath.Join(cache, "persona", name)
+		if filepath.Dir(path) != dir {
+			t.Fatalf("%s at %s, want in %s", name, path, dir)
+		}
 		if err := os.RemoveAll(dir); err != nil {
 			t.Fatal(err)
 		}

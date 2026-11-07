@@ -13,7 +13,7 @@ import (
 	"github.com/nwverse/persona/server/internal/rpc"
 )
 
-// fakeSoffice puts a LibreOffice on PATH that writes "<outdir>/<input name>.pdf" and counts its runs.
+// fakeSoffice puts a LibreOffice first on PATH that writes "<outdir>/<input name>.pdf" and counts its runs.
 func fakeSoffice(t *testing.T, dir string) string {
 	t.Helper()
 	bin := filepath.Join(dir, "bin")
@@ -30,7 +30,7 @@ name=$(basename "$last"); name="${name%.*}"
 printf '%%PDF-1.4 converted\n' > "$out/$name.pdf"
 `
 	os.WriteFile(filepath.Join(bin, "soffice"), []byte(script), 0o700)
-	t.Setenv("PATH", bin+":/bin:/usr/bin")
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
 	return calls
 }
 
