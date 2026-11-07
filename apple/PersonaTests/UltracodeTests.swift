@@ -51,6 +51,7 @@ struct UltracodeTests {
         #expect(!Ultracode.versionTooOld("unknown"))
         #expect(!Ultracode.versionTooOld("2.1"))
         #expect(!Ultracode.versionTooOld("2.1.x"))
+        #expect(!Ultracode.versionTooOld("2.1.+250"))
     }
 
     @Test func blockedOnlyWhenTheHubHasItAndTheVersionIsKnownOld() throws {

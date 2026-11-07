@@ -19,7 +19,7 @@ nonisolated enum Ultracode {
         let head = core.split(whereSeparator: { $0 == "-" || $0 == "+" }).first ?? ""
         let parts = head.split(separator: ".", omittingEmptySubsequences: false)
         guard parts.count == 3, !core.hasPrefix("-"), !core.hasPrefix("+") else { return false }
-        let nums = parts.compactMap { p in p.allSatisfy(\.isASCII) ? Int(p) : nil }
+        let nums = parts.compactMap { p in p.allSatisfy { ("0"..."9").contains($0) } ? Int(p) : nil }
         guard nums.count == 3 else { return false }
         for (n, m) in zip(nums, minVersion) where n != m { return n < m }
         return false
