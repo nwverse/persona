@@ -168,26 +168,40 @@ describe("the Persona conversation rows", () => {
     expect(reads("hub/recent")).toBe(0);
   });
 
-  it("open the conversation's menu from the ⋯ and on a right click, after pushes too", async () => {
+  it("open the menu on the conversation as it is now, from the ⋯ and on a right click", async () => {
     await renderSidebar();
-    push("mac", "agent", { title: "Build 1" });
-    push("hub", "pinned", { title: "Release notes v2" });
-    await flush();
+    const more = () => mainRow().parentElement!.querySelector<HTMLButtonElement>(`button[aria-label="${t("conversation-menu.actions")}"]`)!;
+    const close = async () => {
+      act(() => void window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" })));
+      await flush();
+      expect(menu()).toBeNull();
+    };
 
-    // the main row's ⋯: the main conversation's menu (no pin, rename or archive), and closed again on a second click
-    const more = mainRow().parentElement!.querySelector<HTMLButtonElement>(`button[aria-label="${t("conversation-menu.actions")}"]`)!;
-    act(() => more.click());
+    // the main row's ⋯: the main conversation's menu (no pin, rename or archive), with End while it is live
+    act(() => more().click());
     await flush();
     expect(menu()?.textContent).toContain(t("conversation-menu.copy_id"));
     expect(menu()?.textContent).not.toContain(t("conversation-menu.pin"));
-    act(() => more.click());
-    await flush();
-    expect(menu()).toBeNull();
+    expect(menu()?.textContent).toContain(t("conversation-menu.end"));
+    await close();
 
-    // a right click on the pinned row: that conversation's menu, as it is now (pinned)
+    // the main conversation and the pinned one go offline: their menus offer what they are now (no End), not what
+    // they were when the menu function was made
+    push("mac", "agent", { title: "Build 1" });
+    push("hub", "main", { status: "offline", state: "offline" });
+    push("hub", "pinned", { status: "offline", state: "offline" });
+    await flush();
+    act(() => more().click());
+    await flush();
+    expect(menu()?.textContent).toContain(t("conversation-menu.copy_id"));
+    expect(menu()?.textContent).not.toContain(t("conversation-menu.end"));
+    await close();
+
+    // a right click on the pinned row: that conversation's menu (pinned), as it is now
     act(() => row("pinned").dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 10, clientY: 10 })));
     await flush();
     expect(menu()?.textContent).toContain(t("conversation-menu.unpin"));
     expect(menu()?.textContent).toContain(t("conversation-menu.rename"));
+    expect(menu()?.textContent).not.toContain(t("conversation-menu.end"));
   });
 });
