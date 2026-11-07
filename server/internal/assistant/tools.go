@@ -234,6 +234,7 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 			Worktree struct {
 				Branch string `json:"branch"`
 			} `json:"worktree"`
+			Ultracode bool `json:"ultracode"`
 		}
 		_ = json.Unmarshal(args, &a)
 		am, ok := s.machineByName(ctx, a.Machine)
@@ -245,6 +246,9 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 		where := am.Name + " · " + a.Cwd
 		if branch != "" {
 			where += i18n.T(s.lang(ctx), "assistant-tools.new_worktree", i18n.Args{"branch": branch})
+		}
+		if a.Ultracode {
+			where += " · ultracode"
 		}
 		if ok, err := s.confirmOutbound(ctx, machine, self, name, where+"\n\n"+a.Prompt, args); err != nil {
 			return "", err
@@ -265,6 +269,9 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 			return "", err
 		}
 		params["prompt"] = s.withProjectContext(sctx, am.ID, a.Cwd, a.Prompt)
+		if a.Ultracode {
+			params["ultracode"] = true
+		}
 		if err := s.applyModel(sctx, "agent.new", params); err != nil {
 			return "", err
 		}
