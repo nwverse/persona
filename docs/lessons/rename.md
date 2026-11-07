@@ -59,3 +59,11 @@ The node keeps each conversation's working folder in the hub's database (`node_s
 
 - A stored path that is gone is looked for by its name in the current data directory, else the default; it is never created again where it was (`storedCwd`).
 - Before a cutover, scan the database for absolute paths into the directory being moved (`node_sessions`, settings, payloads) and decide for each column whether it is read again. Historical payloads can stay; a value the code acts on cannot.
+
+## Moving the data directory moves the assistant's conversation history (2026-11-07, #164)
+
+Claude Code names each folder's conversation directory after the folder's absolute path. The cutover moved `~/.<previous-name>` to `~/.persona`, so the assistant, now running in `~/.persona/assistant`, looked in an empty project directory; its earlier conversations were all still in the one for the old path, and the user saw every earlier conversation gone. The runbook had moved the root, the database and the config, but no harness state outside the root.
+
+- A rename that moves a directory agents run in must also move every harness's per-folder state that is keyed by that path: Claude Code's `projects/<key>` in each config directory, and the same for any other agent.
+- Copy without overwriting while nothing writes; a session that resumes before the copy keeps writing to the old directory.
+- A transcript also records the folder it ran in, and the server reads ownership from that: moving the project directory alone did not bring the conversations back into the assistant's list (#163).

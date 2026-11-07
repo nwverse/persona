@@ -92,6 +92,8 @@ func (h *Hub) routes() http.Handler {
 	api.HandleFunc("GET /api/v1/machines/{mid}/git/show", h.proxy("git.show", func(r *http.Request) any {
 		return map[string]any{"cwd": r.URL.Query().Get("cwd"), "hash": r.URL.Query().Get("hash")}
 	}))
+	// Every file a scope changed with its hunks, for the web's Review panel (gitreview.go, #151).
+	api.HandleFunc("GET /api/v1/machines/{mid}/git/review", h.withMachine(h.gitReview))
 	api.HandleFunc("GET /api/v1/machines/{mid}/git/log", h.proxy("git.log", func(r *http.Request) any {
 		q := r.URL.Query()
 		return map[string]any{"cwd": q.Get("cwd"), "skip": atoi(q.Get("skip")), "limit": atoi(q.Get("limit"))}

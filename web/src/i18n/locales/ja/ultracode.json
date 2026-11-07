@@ -18,5 +18,8 @@
   "quota_week": "週 {percent}",
   "quota_warn": "使用量が上限に近づいています。ultracode をオンにするとさらに早く消費します",
   "start_refused": "ultracode をオンにして開始できませんでした：{error}。再試行すると ultracode なしで開始します",
-  "send_waits": "このターンの後に ultracode の切り替えが済んでから送信します"
+  "send_waits": "このターンの後に ultracode の切り替えが済んでから送信します",
+  "plan_on": "ultracode オンで開始：すべてのタスクをマルチエージェントの workflow で進め、使用量を大きく消費します。クリックでオフにして開始",
+  "plan_off": "ultracode オフで開始。クリックでオンにして開始：すべてのタスクをマルチエージェントの workflow で進め、使用量を大きく消費します",
+  "plan_blocked": "ultracode オフで開始：{reason}"
 }

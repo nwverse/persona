@@ -72,6 +72,10 @@ type Chat struct {
 	OneLine      string    `json:"one_line,omitempty"` // the summary's first line, for lists
 	TagRev       int       `json:"tag_rev,omitempty"`  // the tagging rules it was last tagged under (compress.go tagRev)
 	Created      time.Time `json:"created"`
+
+	// Compressions that failed in a row, and when the next try is due (compress.go compressFailed).
+	CompressFailures int       `json:"compress_failures,omitempty"`
+	CompressRetryAt  time.Time `json:"compress_retry_at,omitzero"`
 }
 
 // Person is someone the owner talks to: lark-<userId> or mail-<address>.
