@@ -226,8 +226,8 @@ final class VNCTests: XCTestCase {
     /// One display of a Mac with two (#80), against the mock started with MOCK_SCREEN_DISPLAYS=2 (its Screen Sharing lists
     /// both, ExtendedDesktopSize) or MOCK_SCREEN_DISPLAYS=2:node (MacBook's status lists them, as a node reads them), and
     /// TEST_RUNNER_PERSONA_SCREEN_DISPLAYS=2: All Displays shows both side by side; Display 2 shows only the green one,
-    /// a tap in its middle clicks the middle of the second display's pixels and Center Pointer centers on it; the choice
-    /// is kept for the Mac across a relaunch.
+    /// a tap in its middle clicks the middle of the second display's pixels and Center Pointer centers on it; Display 1
+    /// brings the pointer onto it, where Trackpad Mode clicks; the choice is kept for the Mac across a relaunch.
     @MainActor func testOneDisplay() throws {
         guard ProcessInfo.processInfo.environment["PERSONA_SCREEN_DISPLAYS"] == "2" else {
             throw XCTSkip("needs the mock with two displays: MOCK_SCREEN_DISPLAYS=2 (TEST_RUNNER_PERSONA_SCREEN_DISPLAYS=2)")
@@ -254,6 +254,22 @@ final class VNCTests: XCTestCase {
         rest(2)
         try displayTwo(app, screen)
         shot(app, "vnc-displays-one")
+
+        // Display 1 in Trackpad Mode: choosing it brings the pointer over from display 2, and a tap clicks where it is.
+        choose(app, "显示器 1")
+        rest()
+        XCTAssertEqual((try mockState()["pointer"] as? [Int] ?? []).prefix(2), [240, 150], "the pointer onto display 1")
+        app.buttons["vnc-more"].tap()
+        app.buttons["触控板模式"].firstMatch.tap()
+        try mock(hub!, "/mock/screen-password?clear=1")
+        screen.tap()
+        rest()
+        let clicks = try mockState()["clicks"] as? [[String: Any]] ?? []
+        XCTAssertEqual(clicks.first { $0["down"] as? Bool == true }?["x"] as? Int, 240, "Trackpad Mode clicks on display 1: \(clicks)")
+        app.buttons["vnc-more"].tap()
+        app.buttons["鼠标模式"].firstMatch.tap()
+        choose(app, "显示器 2")
+        rest()
 
         // Kept for this Mac: back on Display 2 after a relaunch (the sign-in is kept too).
         app.terminate()

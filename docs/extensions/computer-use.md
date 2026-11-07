@@ -313,6 +313,10 @@ Where the layout comes from (`VNCDisplays`), most trusted first:
 Without a GUI session (logged out, a node started as a daemon) `osascript` sees no screens and the node sends none. Older nodes send no
 `displays` and older apps ignore it.
 
+Known gaps: the aspect check cannot catch an arrangement whose bounding box happens to have the framebuffer's shape while the server
+sends something else (four equal displays in a 2 × 2 grid, of which the server sends one); such a crop would be wrong. The menu numbers
+displays left to right, then top to bottom, by their top-left corners.
+
 ### App
 
 - **Control Computer on the machine page**:

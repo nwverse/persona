@@ -21,6 +21,7 @@ import SwiftUI
     /// The Mac's screen, in its pixels.
     private(set) var size: CGSize = .zero
     /// The server's screens on it (ExtendedDesktopSize, #80); empty from a server that sends none (macOS's, as far as is known).
+    /// Kept across reconnections until the next list, so a chosen display does not flash to all of them.
     private(set) var screens: [RFBClient.Screen] = []
     /// Where the pointer is, on the Mac's screen (the last one sent; the middle before any).
     private(set) var pointer: CGPoint = .zero
@@ -83,7 +84,6 @@ import SwiftUI
         }
         client = c
         phase = .connecting
-        screens = []
         pictured = false
         lastFrame = nil
         connection += 1

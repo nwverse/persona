@@ -28,12 +28,14 @@ final class VNCScreenUIView: UIView, UIGestureRecognizerDelegate {
     weak var session: RFBSession?
     var mode: VNCMode = .mouse
     var interactive = false { didSet { gestures.forEach { $0.isEnabled = interactive } } }
-    /// The part of the framebuffer shown, in pixels; nil: all of it. A new one starts unzoomed.
+    /// The part of the framebuffer shown, in pixels; nil: all of it. A new one starts unzoomed, with the pointer on it
+    /// (moved to its middle when it was elsewhere): Trackpad Mode clicks and drags where the pointer is.
     var region: CGRect? {
         didSet {
             guard region != oldValue else { return }
             shown = nil
             stopCoast()
+            if let s = session, s.phase == .live, !visible.contains(s.pointer) { s.move(to: CGPoint(x: visible.midX, y: visible.midY)) }
         }
     }
     private var gestures: [UIGestureRecognizer] = []
@@ -108,6 +110,9 @@ final class VNCScreenUIView: UIView, UIGestureRecognizerDelegate {
 
     func toView(_ q: CGPoint) -> CGPoint { viewport.toView(q) }
 
+    /// Where Trackpad Mode acts: the pointer, kept on the part shown.
+    private func pointer(_ s: RFBSession) -> CGPoint { viewport.clamped(s.pointer) }
+
     override func layoutSubviews() {
         super.layoutSubviews()
         place()
@@ -158,14 +163,14 @@ final class VNCScreenUIView: UIView, UIGestureRecognizerDelegate {
         guard let s = session else { return }
         switch mode {
         case .mouse: s.click(at: toScreen(g.location(in: self)))
-        case .trackpad: s.click(at: s.pointer)
+        case .trackpad: s.click(at: pointer(s))
         }
         lastTap = Date()
     }
 
     @objc private func rightTapped(_ g: UITapGestureRecognizer) {
         guard let s = session else { return }
-        s.click(at: mode == .mouse ? toScreen(g.location(in: self)) : s.pointer, button: 4)
+        s.click(at: mode == .mouse ? toScreen(g.location(in: self)) : pointer(s), button: 4)
     }
 
     @objc private func held(_ g: UILongPressGestureRecognizer) {
@@ -187,7 +192,7 @@ final class VNCScreenUIView: UIView, UIGestureRecognizerDelegate {
         case (.trackpad, .began):
             lastPan = .zero
             dragging = Date().timeIntervalSince(lastTap) < 0.35 // a tap, then a drag: dragging
-            if dragging { s.move(to: s.pointer, buttons: 1) }
+            if dragging { s.move(to: pointer(s), buttons: 1) }
         case (.trackpad, .changed):
             let t = g.translation(in: self)
             let port = viewport, speed = port.pixelsPerPoint * 1.4
@@ -214,7 +219,7 @@ final class VNCScreenUIView: UIView, UIGestureRecognizerDelegate {
             return
         }
         let zoom = rect.width / fitted.width
-        wheelAt = mode == .mouse ? toScreen(g.location(in: self)) : s.pointer
+        wheelAt = mode == .mouse ? toScreen(g.location(in: self)) : pointer(s)
         if g.state == .began { wheel.began() }
         let notches = wheel.moved(t.y, zoom: zoom)
         g.setTranslation(.zero, in: self)
