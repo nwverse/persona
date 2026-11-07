@@ -582,6 +582,7 @@ Provider responses carry only the description and `has_key`, never secrets. Defa
 {"allow":true,"always":false} / {"allow":false,"message":"…"}                // permission
 {"keys":["down","enter"],"text":""}                                         // screen: keys / text sent to the pane
 {"dismiss":true}                                                            // any: give up, hand back to the computer's TUI
+{"dismiss":true,"reason":"replied_in_chat"}                                  // the assistant's ask_user taken back because the user wrote in the chat (#9)
 {"cancel":true}                                                             // question with can_cancel:true: discard without an answer
 {"answers":{"…":"…"},"answered_by":"assistant"}                               // answered by the assistant (#1602): question only; App replies don't carry answered_by
 ```

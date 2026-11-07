@@ -275,12 +275,18 @@ func (s *Service) botDrives(ctx context.Context, machine, session string) bool {
 
 // feishuInteractionDone: a card is over (answered anywhere, withdrawn, expired): its card in Feishu says so.
 func (s *Service) feishuInteractionDone(ix proto.Interaction, how string) {
+	s.feishuInteractionEnded(ix, how, false)
+}
+
+// feishuInteractionEnded is feishuInteractionDone; inChat: the card was taken back because the user wrote in the
+// conversation, so their next words are no late answer to it.
+func (s *Service) feishuInteractionEnded(ix proto.Interaction, how string, inChat bool) {
 	b := &s.fbot
 	b.mu.Lock()
 	s.loadBotLocked(context.Background()) // a card posted before a restart is in the chat's state
 	c, ok := b.cards[ix.ID]
 	s.keepBotCardLocked(ix.ID, nil)
-	if ok && typedAnswerable(c) {
+	if ok && typedAnswerable(c) && !inChat {
 		b.noteEndedLocked(c)
 	}
 	b.mu.Unlock()
@@ -407,6 +413,8 @@ func endedText(l i18n.Lang, status, fallback string) string {
 // resolutionText says in l how an interaction was answered, for its closed card.
 func resolutionText(l i18n.Lang, ix proto.Interaction, r proto.Resolution) string {
 	switch {
+	case r.Dismiss && r.Reason == proto.DismissedInChat && r.AnsweredBy == "":
+		return i18n.T(l, "assistant-feishu_cards.replied_in_chat")
 	case r.Dismiss:
 		return i18n.T(l, "assistant-feishu_cards.dismissed")
 	case r.Approve != nil && *r.Approve:
