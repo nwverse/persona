@@ -45,16 +45,7 @@ const files = import.meta.glob<{ cases: SyncCase[] }>("../../../../../spec/fixtu
 
 /** Cases this page does not pass yet: the bug, and what every failure of the case must say. A known case that fails
  *  for another reason, or passes, fails the suite: the fixed bug comes off this list, and a new one is not hidden. */
-const CARD_STAYS_LIVE = { issue: "#1120", because: /card ix\d is answerable again|open cards \["ix\d"\], want \[\]|open cards \["ix1"\], want \["ix2"\]/ };
 const KNOWN: Record<string, { issue: string; because: RegExp }> = {
-  card_answer_then_resolved: CARD_STAYS_LIVE,
-  card_tap_then_reconnect_snapshot: CARD_STAYS_LIVE,
-  card_old_list_after_answer: CARD_STAYS_LIVE,
-  card_answer_fails_card_back: CARD_STAYS_LIVE,
-  card_prompt_changed_only_new_card: CARD_STAYS_LIVE,
-  "card_answered_on_other_device as b": CARD_STAYS_LIVE,
-  "both_devices_answer_once as a": CARD_STAYS_LIVE,
-  "both_devices_answer_once as b": CARD_STAYS_LIVE,
   catch_up_over_cap_asks_rest: { issue: "#1118", because: /after_seq":12\}|want \[.*Question 6/ },
   send_accepted_transcript_late: { issue: "#1119", because: /m1 shows 0 times|want \[.*Add a picnic on Saturday/ },
   send_unknown_then_transcript_has_it: { issue: "#1121", because: /m1 shows 2 times|failed \["Reserve two bikes."\], want \[\]/ },
