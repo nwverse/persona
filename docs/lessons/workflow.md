@@ -57,6 +57,11 @@ Pitfalls, odd behavior and the trade-offs made at the time (formerly in `CLAUDE.
 - Static web help text, form placeholders, mocks and example machine IDs in tests must also avoid personal config values (2026-11-03, #627): even a common machine-type word, if it matches the local config, makes the repo-wide privacy scan block the release. Use explicit example identifiers for IDs, example.com for domains, describe machine types in prose; do not change the sensitive-word list or add exemptions for the page.
 - Older versions of `gh pr checks` do not support `--fail-fast` (2026-11-02, #341): check `--help` first and use the supported `--watch` / `--interval`; exit code 1 from a bad argument is not a CI failure; look at the specific check's conclusion.
 
+## Source migration acceptance and dependency provenance
+
+- Cold full-view HTTP source tests must use the real manager lifecycle (#1161, #1184). An SDK fixture that waits until loading finishes before taking a snapshot can miss suspension canceling the request after every HTTP response. Test cold mount, resume and actions through the actual bridge, preserve loading/error/retry evidence, and require the intended contribution to finish; HTTP 200 alone is not acceptance.
+- Generate public npm lockfiles with an explicit public registry and isolated npm configuration, then inspect every `resolved` download origin (#1161). Public package names and a clean private-term scan do not prove that all dependency URLs are public: the terms dictionary may not include an inherited registry host. Check provenance separately, without publishing blocked host names or weakening privacy rules.
+
 ## Hosted CI path aggregation
 
 - Native workflow-level PR path filters leave individually required checks pending when no run is created. Keep one always-triggered
