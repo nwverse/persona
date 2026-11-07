@@ -13,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/acceptloop"
 	"github.com/nwverse/persona/server/internal/identity"
 	"github.com/nwverse/persona/server/internal/nodeclient"
 	"github.com/nwverse/persona/server/internal/nodeproto"
@@ -345,8 +346,8 @@ func (s *standby) tryListen() {
 		return
 	}
 	s.ln, s.lnFile = ln, fi
-	// Ends when closeLocked closes ln; a transient Accept error does not end it (accept.go).
-	go acceptLoop(context.Background(), ln, s.logf, func(c net.Conn) {
+	// Ends when closeLocked closes ln; a transient Accept error does not end it (acceptloop.Run).
+	go acceptloop.Run(context.Background(), ln, s.logf, func(c net.Conn) {
 		s.mu.Lock()
 		current := s.ln == ln
 		if current {

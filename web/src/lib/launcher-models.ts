@@ -1,6 +1,7 @@
 // "New agent"'s model picker (#794): the models a launcher's agent lists in its own /model menu
 // (GET /machines/{mid}/launchers/{name}/models, node/launcher_models.go), which launcher the picker asks, searching the
 // list, the thinking efforts a pick allows, and what a start sends. A pick is for one start only: nothing is saved.
+import { MANAGER_HEADER } from "./manager-choice";
 import { t } from "../i18n";
 import { api, ApiError, enc, pastHub } from "./api";
 import type { ModelBinding } from "./model-config";
@@ -78,13 +79,13 @@ export async function launcherModels(mid: string, launcher: string, opts: { refr
 
 /** "Model configuration"'s list for a launcher provider (`launcher.<name>`, GET /model-config/providers/{id}/models, #943): asked on a
  *  machine that has the launcher, which `machine` names. null: an older hub or a provider without a list (no picker). */
-export async function providerModels(provider: string, opts: { refresh?: boolean; machine?: string; signal?: AbortSignal } = {}): Promise<(LauncherModels & { machine?: string }) | null> {
+export async function providerModels(provider: string, opts: { manager?: string; refresh?: boolean; machine?: string; signal?: AbortSignal } = {}): Promise<(LauncherModels & { machine?: string }) | null> {
   // machine: the purpose's own (a task, Lark /agent run there), so the list is that machine's launcher.
   const query = new URLSearchParams();
   if (opts.refresh) query.set("refresh", "1");
   if (opts.machine) query.set("machine", opts.machine);
   try {
-    const r = await api<LauncherModels & { machine?: string }>(`/model-config/providers/${enc(provider)}/models${query.size ? `?${query}` : ""}`, { signal: opts.signal, timeout: pastHub(MODELS_HUB_MS) });
+    const r = await api<LauncherModels & { machine?: string }>(`/model-config/providers/${enc(provider)}/models${query.size ? `?${query}` : ""}`, { signal: opts.signal, timeout: pastHub(MODELS_HUB_MS), headers: opts.manager ? { [MANAGER_HEADER]: opts.manager } : undefined });
     return { ...r, models: r.models ?? [] };
   } catch (e) {
     if (e instanceof ApiError && e.status === 404) return null;

@@ -70,10 +70,12 @@ func dquote(s string) string {
 }
 
 // claudeResumeArgv is the resume_argv of a Claude Persona started: eval of its start command with --resume id, herdr
-// told it is Claude as at the start (resumeHerdrAgent). ok is false when the command cannot be said without an
-// apostrophe (a path with one in it): herdr would refuse it.
+// told it is Claude as at the start (resumeHerdrAgent), with the node's directory and without the assistant's
+// environment (agentenv.go). ok is false when the command cannot be said without an apostrophe (a path with one in
+// it): herdr would refuse it.
 func (n *Node) claudeResumeArgv(spec claudeLaunch, id string) (argv []string, ok bool) {
 	cmd := withHerdrAgent(resumeHerdrAgent("claude"), n.claudeCommandLine(spec, "--resume "+id, dquote))
+	cmd = n.agentCommand(cmd, dquote, herdrPaneShell())
 	if strings.Contains(cmd, "'") || !validID(id) {
 		return nil, false
 	}
@@ -88,6 +90,7 @@ func (n *Node) agentResumeArgv(spec agentLaunch, id string) (argv []string, ok b
 		return n.claudeResumeArgv(spec, id)
 	}
 	cmd := withHerdrAgent(resumeHerdrAgent(kind), n.launcherCommandQ(spec.Launcher, dquote)+" resume "+id)
+	cmd = n.agentCommand(cmd, dquote, herdrPaneShell())
 	if strings.Contains(cmd, "'") || !validID(id) {
 		return nil, false
 	}

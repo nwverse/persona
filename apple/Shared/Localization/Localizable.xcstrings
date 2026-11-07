@@ -21183,6 +21183,29 @@
       },
       "extractionState": "manual"
     },
+    "Can't show this image": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Can't show this image"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "この画像は表示できません"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "图片显示不了"
+          }
+        }
+      }
+    },
     "Can't start a new session in demo mode. Connect your own hub and try again.": {
       "localizations": {
         "en": {
@@ -23722,6 +23745,52 @@
             "value": "Claude background"
           }
         },
+    "Claude desktop app": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Claude desktop app"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Claude デスクトップアプリ"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Claude 桌面版"
+          }
+        }
+      },
+      "extractionState": "manual"
+    },
+    "Claude in a terminal": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Claude in a terminal"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ターミナルの Claude"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "终端里的 Claude"
+          }
+        }
+      },
+      "extractionState": "manual"
+    },
         "ja": {
           "stringUnit": {
             "state": "translated",
@@ -30368,6 +30437,29 @@
       },
       "extractionState": "manual"
     },
+    "Couldn't get a preview of this image. Use Open in Files in the ⋯ menu.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Couldn't get a preview of this image. Use Open in Files in the ⋯ menu."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "この画像のプレビューを取得できません。⋯ の「ファイルで開く」から開けます。"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "取不到这张图的预览，可以在 ⋯ 里「在文件页打开」"
+          }
+        }
+      }
+    },
     "Couldn't get credentials for the watch. Check your network and try again; if the hub is too old, update it first.": {
       "localizations": {
         "en": {
@@ -30459,6 +30551,29 @@
         }
       },
       "extractionState": "manual"
+    },
+    "Couldn't get this image. Tap Retry to try again.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Couldn't get this image. Tap Retry to try again."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "この画像を取得できませんでした。「再試行」でもう一度取得します。"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "没取到这张图，点重试再取一次"
+          }
+        }
+      }
     },
     "Couldn't import: %@": {
       "localizations": {
@@ -47716,6 +47831,52 @@
         }
       },
       "extractionState": "manual"
+    },
+    "Image didn't load": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Image didn't load"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "画像を読み込めませんでした"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "图片没载入"
+          }
+        }
+      }
+    },
+    "Image didn't load. Tap to retry": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Image didn't load. Tap to retry"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "画像を読み込めませんでした。タップして再試行"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "图片没载入，点按重试"
+          }
+        }
+      }
     },
     "Image expired": {
       "localizations": {
@@ -104544,6 +104705,29 @@
         }
       },
       "extractionState": "manual"
+    },
+    "This image's data can't be opened": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This image's data can't be opened"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "この画像のデータを開けません"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "这张图的数据打不开"
+          }
+        }
+      }
     },
     "This is a chat channel": {
       "localizations": {
