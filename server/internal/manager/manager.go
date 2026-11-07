@@ -639,6 +639,16 @@ func RunBuiltin(ctx context.Context, build update.Build, out io.Writer) error {
 			return err
 		}
 		if restart != nil {
+			// The file there may be a new one by now: only one that runs (as for a new binary, binaryWatch).
+			if watch != nil {
+				if err := checkBinary(ctx, watch.path); err != nil {
+					fmt.Fprintf(out, "assistant: %v: running it again here, on the code it has\n", err)
+					if fi, err := os.Stat(watch.path); err == nil {
+						watch.seen = fi
+					}
+					continue
+				}
+			}
 			if err := restart(env); err != nil {
 				fmt.Fprintf(out, "assistant: could not start again in place (%v): running it again here\n", err)
 			}

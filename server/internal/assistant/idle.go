@@ -12,20 +12,40 @@ import (
 // nothing back: what it keeps for the hub waits in its database and goes once it runs again.
 type Idle func(ctx context.Context) (idle bool, why string)
 
-// managerIdle is a running manager's Idle: no request of the hub's being answered (a tool call, an app's call), no
-// hub event waiting to be handled, and its service idle.
-func managerIdle(ctx context.Context, b *BusHub, s *Service) (bool, string) {
+// extServing is what idle needs of the extensions (extmgr.Manager): the requests relayed to them being served.
+type extServing interface{ Serving() int64 }
+
+// managerIdle is a running manager's Idle: no request being answered (the hub's: an app's call, an extension's; the
+// computers': an agent's tool call, a write the gate forwarded), no hub event waiting to be handled, no request or
+// stream of the extensions' going (a voice call), and its service idle. A computer's card or question waits on a
+// person, and is taken up again after a restart: it holds nothing back.
+func managerIdle(ctx context.Context, b *BusHub, s *Service, ext extServing) (bool, string) {
 	if n := b.answering.Load(); n > 0 {
-		return false, fmt.Sprintf("answering %d request(s) of the hub's (a tool call, an app's call)", n)
+		return false, fmt.Sprintf("answering %d request(s) of the hub's (an app's call, an extension's)", n)
+	}
+	if n := s.nodeAnswering.Load(); n > 0 {
+		return false, fmt.Sprintf("answering %d request(s) of the computers' (an agent's tool call)", n)
 	}
 	if n := b.pending.Load(); n > 0 {
 		return false, fmt.Sprintf("%d event(s) of the hub's not handled yet", n)
 	}
+	if ext != nil {
+		if n := ext.Serving(); n > 0 {
+			return false, fmt.Sprintf("%d request(s) or stream(s) of the extensions' going (a voice call, say)", n)
+		}
+	}
 	return s.idle(ctx)
 }
 
+// waitsOnPerson: a computer's request that waits on a person (a hook's card, an elicitation), however long: it is
+// taken up again after a restart, so idle does not wait for it.
+func waitsOnPerson(method string) bool {
+	return method == "interaction.create" || method == "computer.elicit"
+}
+
 // idle: none of its own conversations on a turn (when their machine does not answer it cannot tell, so not idle),
-// no scheduled task's message and no channel's answer going out.
+// no turn of an agent's being looked at (agents_work.go), no scheduled task's message and no channel's answer going
+// out.
 func (s *Service) idle(ctx context.Context) (bool, string) {
 	s.sched.mu.Lock()
 	sending := len(s.sched.sending)
@@ -38,6 +58,12 @@ func (s *Service) idle(ctx context.Context) (bool, string) {
 	s.chans.mu.Unlock()
 	if answering > 0 {
 		return false, "a channel's answer is going out"
+	}
+	s.work.mu.Lock()
+	triaging := len(s.work.triaging)
+	s.work.mu.Unlock()
+	if triaging > 0 {
+		return false, "an agent's finished turn is being looked at"
 	}
 	machine := s.settings(ctx).MachineID
 	if machine == "" {

@@ -472,6 +472,89 @@ func TestBuiltinStopsWhileWaitingForIdle(t *testing.T) {
 	}
 }
 
+// (b) A new binary whose `version -v` hangs does not run: killed after versionWait, not started on, not checked again.
+func TestBuiltinNewBinaryHangs(t *testing.T) {
+	bin, write, restarts := newBinaryEnv(t, nil)
+	defer func(w time.Duration) { versionWait = w }(versionWait)
+	versionWait = 100 * time.Millisecond
+	counter := bin + ".checks"
+	release := make(chan struct{})
+	out, _, err := runBuiltin(t, func(context.Context) (bool, string) { return true, "" }, func(int) {
+		write("#!/bin/sh\necho x >> '"+counter+"'\nsleep 30\n", 0o755)
+		waitFor(t, "the hanging binary checked", func() bool { b, _ := os.ReadFile(counter); return len(b) > 0 })
+		time.Sleep(400 * time.Millisecond) // past versionWait, and many more looks
+		close(release)
+	}, release)
+	b, _ := os.ReadFile(counter)
+	if err != nil || restarts.Load() != 0 || strings.Count(string(b), "x") != 1 || !strings.Contains(out, "does not run") {
+		t.Fatalf("err %v, restarts %d, checks %q\n%s", err, restarts.Load(), b, out)
+	}
+}
+
+// (a) An Idle that does not answer (its database stuck) counts as busy; idleMost still holds.
+func TestBuiltinIdleThatHangs(t *testing.T) {
+	_, write, restarts := newBinaryEnv(t, nil)
+	idleMost = 100 * time.Millisecond
+	stuck := make(chan struct{})
+	defer close(stuck)
+	out, _, err := runBuiltin(t, func(context.Context) (bool, string) { <-stuck; return true, "" },
+		func(int) { write(goodBinary+"# new\n", 0o755) }, nil)
+	if err != nil || restarts.Load() != 1 || !strings.Contains(out, "does not answer") || !strings.Contains(out, "anyway") {
+		t.Fatalf("err %v, restarts %d\n%s", err, restarts.Load(), out)
+	}
+}
+
+// (b) Checked again right before the exec: a file that stopped running while it waited for idle is not started on;
+// the manager runs again on its old code, and that file is not tried again. One put back while it waited (the file
+// it started with) is not started on either.
+func TestBuiltinCheckedAgainBeforeExec(t *testing.T) {
+	for _, c := range []struct {
+		name string
+		then func(bin string, write func(string, os.FileMode), start os.FileInfo)
+		want string
+	}{
+		{"stopped running", func(bin string, write func(string, os.FileMode), _ os.FileInfo) {
+			write("#!/bin/sh\nexit 3\n", 0o755)
+		}, "does not run any more"},
+		{"put back", func(bin string, _ func(string, os.FileMode), start os.FileInfo) {
+			// the file it started with, back where it was (a rollback renames the old one back)
+			if err := os.Rename(bin+".start", bin); err != nil {
+				t.Error(err)
+			}
+		}, "put back"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			bin, write, restarts := newBinaryEnv(t, nil)
+			start, _ := os.Stat(bin)
+			if err := os.Link(bin, bin+".start"); err != nil { // keep the start file to put it back
+				t.Fatal(err)
+			}
+			var gate atomic.Bool // busy until the file changed again
+			release := make(chan struct{})
+			out, runs, err := runBuiltin(t, func(context.Context) (bool, string) {
+				if gate.Load() {
+					return true, ""
+				}
+				return false, "busy"
+			}, func(run int) {
+				switch run {
+				case 1:
+					write(goodBinary+"# new\n", 0o755)
+					time.Sleep(60 * time.Millisecond) // checked, now waiting for idle
+					c.then(bin, write, start)
+					gate.Store(true)
+				case 2:
+					time.Sleep(100 * time.Millisecond) // not tried again
+					close(release)
+				}
+			}, release)
+			if err != nil || runs != 2 || restarts.Load() != 0 || !strings.Contains(out, c.want) {
+				t.Fatalf("err %v, runs %d, restarts %d\n%s", err, runs, restarts.Load(), out)
+			}
+		})
+	}
+}
+
 // The command lines the hub's setup runs are the ones install --builtin parses, through Main's dispatch.
 func TestBuiltinSetupCommandLines(t *testing.T) {
 	args := managerconf.BuiltinInstallArgs("http://127.0.0.1:1")

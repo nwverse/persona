@@ -10,6 +10,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/nwverse/persona/server/internal/i18n"
@@ -44,6 +45,8 @@ type Options struct {
 type Service struct {
 	// id is Options.ID: the manager this assistant is.
 	id string
+	// nodeAnswering: the computers' requests being answered now, but the ones that wait on a person (idle.go).
+	nodeAnswering atomic.Int64
 	// ext is the extensions' tools in this process (extensions.go SetExtensions); nil: none (tests).
 	ext ExtensionTools
 

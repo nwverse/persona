@@ -399,8 +399,13 @@ var checkBinary = func(ctx context.Context, path string) error {
 	defer cancel()
 	cmd := exec.CommandContext(ctx, path, "version", "-v")
 	cmd.WaitDelay = time.Second
+	killGroup(cmd) // a hung one goes with whatever it started
 	b, err := cmd.Output()
 	if err != nil {
+		var ee *exec.ExitError
+		if errors.As(err, &ee) && len(ee.Stderr) > 0 {
+			return fmt.Errorf("%s version -v: %w: %s", path, err, firstLine(string(ee.Stderr)))
+		}
 		return fmt.Errorf("%s version -v: %w", path, err)
 	}
 	if strings.TrimSpace(string(b)) == "" {
@@ -457,18 +462,43 @@ func (w *binaryWatch) next(ctx context.Context, idle func() assistant.Idle) bool
 	}
 }
 
-// waitIdle returns true once the manager is idle or idleMost passed (saying so), false when ctx ends first.
+// idleAnswer is one answer of the manager's Idle.
+type idleAnswer struct {
+	idle bool
+	why  string
+}
+
+// waitIdle returns true once the manager is idle or idleMost passed (saying so), false when ctx ends first. An Idle
+// that does not answer within idleCheck (its database stuck, say) counts as busy, and is not asked again until it
+// has answered: idleMost holds whatever it does.
 func (w *binaryWatch) waitIdle(ctx context.Context, idle func() assistant.Idle) bool {
 	deadline := time.Now().Add(idleMost)
 	said := ""
+	var asked chan idleAnswer // an Idle asked and not answered yet
 	for {
 		why := "it is not running yet"
 		if p := idle(); p != nil {
-			ok, busy := p(ctx)
-			if ok {
-				return true
+			if asked == nil {
+				asked = make(chan idleAnswer, 1)
+				go func(ch chan<- idleAnswer) {
+					pctx, cancel := context.WithTimeout(ctx, idleCheck)
+					defer cancel()
+					ok, busy := p(pctx)
+					ch <- idleAnswer{ok, busy}
+				}(asked)
 			}
-			why = busy
+			select {
+			case a := <-asked:
+				asked = nil
+				if a.idle {
+					return true
+				}
+				why = a.why
+			case <-time.After(idleCheck):
+				why = "its check of what is going on does not answer"
+			case <-ctx.Done():
+				return false
+			}
 		}
 		if ctx.Err() != nil {
 			return false
@@ -493,10 +523,23 @@ func (w *binaryWatch) waitIdle(ctx context.Context, idle func() assistant.Idle) 
 // more first; a file that does not run then, or an exec that fails, leaves it running the code it has (RunBuiltin
 // runs the manager again), and that file is not tried again. Tests (restart nil): as though it had started again.
 func (w *binaryWatch) restartOnNew(ctx context.Context, env []string) {
-	fi, _ := os.Stat(w.path)
+	fi, err := os.Stat(w.path)
+	switch {
+	case ctx.Err() != nil:
+		return
+	case err != nil:
+		fmt.Fprintf(w.out, "assistant: the new %s is gone (%v): going on with this one\n", w.path, err)
+		return
+	case sameFile(fi, w.seen):
+		// put back while it waited (the one it started with, after a rollback; or one it did not take)
+		fmt.Fprintf(w.out, "assistant: %s is a file it does not start on again (put back): going on with this one\n", w.path)
+		return
+	}
 	if err := checkBinary(ctx, w.path); err != nil {
-		fmt.Fprintf(w.out, "assistant: the new %s does not run any more (%v): going on with this one\n", w.path, err)
-		w.seen = fi
+		if ctx.Err() == nil {
+			fmt.Fprintf(w.out, "assistant: the new %s does not run any more (%v): going on with this one\n", w.path, err)
+			w.seen = fi
+		}
 		return
 	}
 	fmt.Fprintf(w.out, "assistant: starting again on the new %s\n", w.path)

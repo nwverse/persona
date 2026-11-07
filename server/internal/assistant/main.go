@@ -342,6 +342,10 @@ func run(ctx context.Context, build update.Build, o runOptions) error {
 	devs := devices.New(devices.Options{Store: database, ConfigFile: o.ConfigFile, TailcatKey: o.TailcatKey, ManagerID: o.ID,
 		Logf: log.New(stderr, "devices: ", log.LstdFlags).Printf,
 		Answer: func(ctx context.Context, machine, method string, params json.RawMessage) (any, bool, error) {
+			if !waitsOnPerson(method) { // a tool call, a write the gate forwarded: idle (idle.go) waits for it
+				svc.nodeAnswering.Add(1)
+				defer svc.nodeAnswering.Add(-1)
+			}
 			if err := svc.machineTrust(ctx, machine); err != nil { // not confirmed yet: nothing of the assistant's (machine_trust.go)
 				return nil, true, err
 			}
@@ -410,7 +414,7 @@ func run(ctx context.Context, build update.Build, o runOptions) error {
 		Trust: devs, ID: o.ID})
 	svc.SetExtensions(ext) // the connectors', Cua's and ego's tools, in this process (fleet_tools.go)
 	if o.Ready != nil {
-		o.Ready(func(ctx context.Context) (bool, string) { return managerIdle(ctx, bh, svc) })
+		o.Ready(func(ctx context.Context) (bool, string) { return managerIdle(ctx, bh, svc, ext) })
 	}
 	logf("connecting to %s as %s", hub, o.ID)
 	done := make(chan struct{})

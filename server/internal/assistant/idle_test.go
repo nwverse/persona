@@ -3,6 +3,7 @@ package assistant
 import (
 	"context"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/nwverse/persona/server/internal/proto"
@@ -15,6 +16,7 @@ func TestManagerIdle(t *testing.T) {
 	f := newFakeHub().withMachine()
 	s := newTestService(t, f)
 	b := &BusHub{}
+	ext := &fakeServing{}
 	ctx := context.Background()
 	sessions := func(list ...proto.Session) {
 		f.mu.Lock()
@@ -23,7 +25,7 @@ func TestManagerIdle(t *testing.T) {
 	}
 	busy := func(want string) {
 		t.Helper()
-		ok, why := managerIdle(ctx, b, s)
+		ok, why := managerIdle(ctx, b, s, ext)
 		if want == "" && !ok {
 			t.Fatalf("not idle: %s", why)
 		}
@@ -51,6 +53,12 @@ func TestManagerIdle(t *testing.T) {
 	b.answering.Add(1)
 	busy("request(s) of the hub's")
 	b.answering.Add(-1)
+	s.nodeAnswering.Add(1)
+	busy("request(s) of the computers'")
+	s.nodeAnswering.Add(-1)
+	ext.n.Store(1)
+	busy("stream(s) of the extensions'")
+	ext.n.Store(0)
 	b.pending.Add(2)
 	busy("2 event(s)")
 	b.pending.Add(-2)
@@ -70,10 +78,25 @@ func TestManagerIdle(t *testing.T) {
 	s.chans.mu.Lock()
 	delete(s.chans.answering, "r1")
 	s.chans.mu.Unlock()
+	s.work.mu.Lock()
+	s.work.init()
+	s.work.triaging[[2]string{"server", "x1"}] = true
+	s.work.mu.Unlock()
+	busy("finished turn is being looked at")
+	s.work.mu.Lock()
+	delete(s.work.triaging, [2]string{"server", "x1"})
+	s.work.mu.Unlock()
 	busy("")
+	if managerIdle(ctx, b, s, nil); !waitsOnPerson("interaction.create") || !waitsOnPerson("computer.elicit") || waitsOnPerson("mcp.call") {
+		t.Fatal("waitsOnPerson")
+	}
 
 	// No machine for its conversations: none of them can be on a turn.
 	if ok, why := newTestService(t, newFakeHub()).idle(ctx); !ok {
 		t.Fatalf("no machine: %s", why)
 	}
 }
+
+type fakeServing struct{ n atomic.Int64 }
+
+func (f *fakeServing) Serving() int64 { return f.n.Load() }
