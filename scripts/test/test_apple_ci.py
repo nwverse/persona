@@ -1,10 +1,14 @@
 """Keep minimum-Xcode platform preparation ahead of destination validation."""
 
 from pathlib import Path
+import sys
 import unittest
 
 
-SCRIPT = Path(__file__).resolve().parents[2] / "scripts/ci/apple.sh"
+ROOT = Path(__file__).resolve().parents[2]
+SCRIPT = ROOT / "scripts/ci/apple.sh"
+sys.path.insert(0, str(ROOT / "scripts/ci"))
+import apple_runtime
 
 
 class AppleCIPreparationTests(unittest.TestCase):
@@ -17,9 +21,37 @@ class AppleCIPreparationTests(unittest.TestCase):
 
     def test_runtime_remains_pinned_to_minimum_compiler(self):
         script = SCRIPT.read_text()
-        self.assertIn("xcodebuild -downloadPlatform iOS -buildVersion 26.0", script)
-        self.assertIn('--profile stock --runtime 26.0', script)
+        self.assertIn("xcodebuild -downloadPlatform iOS -architectureVariant universal", script)
+        self.assertNotIn("-buildVersion 26.0", script)
+        self.assertIn('--profile stock --runtime "$4"', script)
+        self.assertIn('"$OUTPUT/simulator.log" "$IOS_RUNTIME"', script)
         self.assertIn("FAIL select Xcode 26.0.x explicitly", script)
+
+
+class AppleRuntimeTests(unittest.TestCase):
+    def runtime(self, version, available=True, name=None, platform="iOS"):
+        return {"version": version, "isAvailable": available,
+                "name": name or platform + " " + version,
+                "identifier": "com.apple.CoreSimulator.SimRuntime." + platform + "-" + version.replace(".", "-")}
+
+    def test_exact_and_patch_versions_are_compatible(self):
+        for version in ("26.0", "26.0.1"):
+            runtime = self.runtime(version)
+            self.assertEqual(apple_runtime.select([runtime]), runtime["identifier"])
+
+    def test_newer_minors_unavailable_beta_and_other_platforms_are_rejected(self):
+        for runtime in (self.runtime("26.1"), self.runtime("26.5"),
+                        self.runtime("26.0", available=False),
+                        self.runtime("26.0", name="iOS 26.0 beta"),
+                        self.runtime("26.0", platform="watchOS")):
+            with self.subTest(runtime=runtime):
+                self.assertIsNone(apple_runtime.select([runtime]))
+        self.assertIsNone(apple_runtime.select([]))
+
+    def test_highest_compatible_patch_wins_without_selecting_newer_minor(self):
+        expected = self.runtime("26.0.10")
+        self.assertEqual(apple_runtime.select([self.runtime("26.0"), self.runtime("26.0.2"),
+                                               self.runtime("26.5"), expected]), expected["identifier"])
 
 
 if __name__ == "__main__":

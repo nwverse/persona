@@ -106,17 +106,16 @@ if [ "$LANE" = all ] || [ "$LANE" = ios ]; then
   # Current macos-26 images include Xcode 26.0.1 but not the iOS 26.0 runtime.
   # Xcode validates platform availability for generic device destinations too,
   # so prepare the matching platform before resolving/building the device graph.
-  # Do not assume an SDK is an installed runtime, or quietly use iOS 26.5.
+  # The pinned Xcode downloads its compatible patch runtime (26.0.1), not
+  # necessarily the SDK's exact marketing version. Validate 26.0.x explicitly;
+  # never substitute a newer minor platform or compiler to make the gate pass.
   ci_run 'List simulator runtimes' 120 bash -c 'xcrun simctl list runtimes -j > "$1"' -- "$OUTPUT/runtimes-before.json"
-  if ! python3 -I - "$OUTPUT/runtimes-before.json" <<'PY'
-import json, sys
-with open(sys.argv[1]) as source:
-    runtimes = json.load(source)["runtimes"]
-sys.exit(0 if any(r.get("isAvailable") and r.get("version") == "26.0" and ".iOS-" in r["identifier"] for r in runtimes) else 1)
-PY
-  then
-    ci_run 'Download matching iOS 26.0 simulator runtime' 1200 xcodebuild -downloadPlatform iOS -buildVersion 26.0
+  if ! IOS_RUNTIME=$(python3 "$CI_ROOT/scripts/ci/apple_runtime.py" "$OUTPUT/runtimes-before.json"); then
+    ci_run 'Download matching iOS 26.0 simulator runtime' 1200 xcodebuild -downloadPlatform iOS -architectureVariant universal
+    ci_run 'List downloaded simulator runtimes' 120 bash -c 'xcrun simctl list runtimes -j > "$1"' -- "$OUTPUT/runtimes-after.json"
+    IOS_RUNTIME=$(python3 "$CI_ROOT/scripts/ci/apple_runtime.py" "$OUTPUT/runtimes-after.json")
   fi
+  printf 'apple-ci: selected compatible runtime %s\n' "$IOS_RUNTIME"
   resolve Persona
   # Generic device builds compile the actual watch/widget/notification/share
   # dependency graph; do not delete the watch target to accommodate the runner.
@@ -125,11 +124,11 @@ PY
     -disableAutomaticPackageResolution "${UNSIGNED[@]}" build
 
   # sim-boot is the sole creation/boot entry, with a fresh stock simulator (not
-  # paired to a real hub), pinned to the compiler's runtime.
+  # paired to a real hub), pinned to the validated compiler-compatible runtime.
   SIM_STARTED=1
   ci_run 'Create and boot stock iOS 26.0 test simulator' 1000 bash -c \
-    'SIM_BOOT_TIMEOUT=900 "$1" --profile stock --runtime 26.0 --device-type "iPhone 17 Pro" "$2" > "$3"' \
-    -- "$SOURCE/scripts/app/sim-boot.sh" "$SIM_NAME" "$OUTPUT/simulator.log"
+    'SIM_BOOT_TIMEOUT=900 "$1" --profile stock --runtime "$4" --device-type "iPhone 17 Pro" "$2" > "$3"' \
+    -- "$SOURCE/scripts/app/sim-boot.sh" "$SIM_NAME" "$OUTPUT/simulator.log" "$IOS_RUNTIME"
   # Accept only the helper's single UDID, never a partial/error log.
   SIM=$(python3 -I - "$OUTPUT/simulator.log" <<'PY'
 import re, sys
