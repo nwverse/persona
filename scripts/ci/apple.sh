@@ -103,14 +103,9 @@ if [ "$LANE" = all ] || [ "$LANE" = ios ]; then
   for sdk in iphoneos iphonesimulator watchos watchsimulator; do
     ci_run "Require $sdk SDK" 60 xcrun --sdk "$sdk" --show-sdk-version
   done
-  resolve Persona
-  # Generic device builds compile the actual watch/widget/notification/share
-  # dependency graph; do not delete the watch target to accommodate the runner.
-  ci_run 'Unsigned iOS and embedded watch/extensions build' 1800 "${XCODE[@]}" -scheme Persona \
-    -destination 'generic/platform=iOS' -derivedDataPath "$OUTPUT/ios-device" \
-    -disableAutomaticPackageResolution "${UNSIGNED[@]}" build
-
   # Current macos-26 images include Xcode 26.0.1 but not the iOS 26.0 runtime.
+  # Xcode validates platform availability for generic device destinations too,
+  # so prepare the matching platform before resolving/building the device graph.
   # Do not assume an SDK is an installed runtime, or quietly use iOS 26.5.
   ci_run 'List simulator runtimes' 120 bash -c 'xcrun simctl list runtimes -j > "$1"' -- "$OUTPUT/runtimes-before.json"
   if ! python3 -I - "$OUTPUT/runtimes-before.json" <<'PY'
@@ -122,6 +117,13 @@ PY
   then
     ci_run 'Download matching iOS 26.0 simulator runtime' 1200 xcodebuild -downloadPlatform iOS -buildVersion 26.0
   fi
+  resolve Persona
+  # Generic device builds compile the actual watch/widget/notification/share
+  # dependency graph; do not delete the watch target to accommodate the runner.
+  ci_run 'Unsigned iOS and embedded watch/extensions build' 1800 "${XCODE[@]}" -scheme Persona \
+    -destination 'generic/platform=iOS' -derivedDataPath "$OUTPUT/ios-device" \
+    -disableAutomaticPackageResolution "${UNSIGNED[@]}" build
+
   # sim-boot is the sole creation/boot entry, with a fresh stock simulator (not
   # paired to a real hub), pinned to the compiler's runtime.
   SIM_STARTED=1

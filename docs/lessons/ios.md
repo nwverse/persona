@@ -48,6 +48,8 @@ SwiftUI 的 `.frame(maxWidth: .infinity)` 默认把内容居中；父层 `VStack
 
 A valid JSON catalog can still hide entries under another entry's `localizations` object (#1124). Check that every source key is a direct child of `strings`, not merely present in the file. Moving misplaced entries must preserve their existing en, zh-Hans and ja translations; run the repository source-key completeness check afterward.
 
+On hosted images, successful SDK lookup does not prove Xcode can resolve a generic device destination (#1124). Prepare the matching iOS platform/runtime before the first device build, not only before simulator tests; retain the minimum compiler and explicit runtime pin. The failed device build reported that iOS 26.0 was not installed even though the SDK checks passed.
+
 Changing the catalog's development language also changes the identity the Swift compiler extracts. Preserve each colliding English translation in its own contextual key and keep explicit English values; do not merge different Chinese or Japanese meanings. Reorder interpolation expressions together with translated argument numbers, and audit reordered expressions for side effects. Named App Intent parameters follow their names, not their old position.
 
 Keep `LocalizedStringResource` and `LocalizedStringKey` arguments as localization values: wrapping a literal in `String(localized:)` is correct for a `String`, but breaks a helper requiring either localization type. Read each helper's signature rather than guessing from its name. Migrate nested literals from the inside out. Without a Swift compiler, reject unresolved raw literals and ambiguous argument types instead of silently guessing.
