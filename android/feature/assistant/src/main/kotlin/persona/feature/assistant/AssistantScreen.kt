@@ -666,9 +666,9 @@ fun AssistantScreen(
         scope.launch { assistantAttempt { repository.refresh() } }
     }
     // A task's model is set on Settings › Models (iOS ModelConfigurationLink); back from it returns here.
-    val openModelConfiguration: (String) -> Unit = { purpose -> navigator.navigate(ModelPurposeRoute(purpose)) }
+    val openModelConfiguration: (String, String) -> Unit = { purpose, owner -> navigator.navigate(ModelPurposeRoute(purpose, owner)) }
     if (settingsOpen && pageManagement != null) {
-        AssistantSettingsScreen(pageManagement, machines, onBack = { settingsOpen = false }, inPlace = true, onMoved = {
+        AssistantSettingsScreen(pageManagement, machines, initialManager = managerChoice.shown, onBack = { settingsOpen = false }, inPlace = true, onMoved = {
             // The conversations and the upload target now belong to the other machine.
             assistantAttempt { repository.refresh() }
             assistantAttempt { assistantMachine = pageManagement.notes().machineId }
@@ -681,7 +681,7 @@ fun AssistantScreen(
         // Shown in place of the conversation: back on its first page closes it here (its own pages come first).
         BackHandler { proactiveOpen = false }
         AssistantProactiveScreen(onBack = { proactiveOpen = false }, onOpenConversation = openFromSchedule,
-            onModelConfiguration = openModelConfiguration, management = pageManagement, machines = machines)
+            onModelConfiguration = { purpose -> openModelConfiguration(purpose, managerChoice.shown) }, management = pageManagement, machines = machines)
         return@PersonaTheme
     }
     BoxWithConstraints(Modifier.fillMaxSize()) {
