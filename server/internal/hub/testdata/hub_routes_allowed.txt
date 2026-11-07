@@ -58,6 +58,8 @@ GET /api/v1/machines/{mid}/omp-settings
 GET /api/v1/machines/{mid}/panes
 GET /api/v1/machines/{mid}/ports/{port}
 GET /api/v1/machines/{mid}/ports/{port}/connect
+GET /api/v1/machines/{mid}/preview/connect
+GET /api/v1/machines/{mid}/preview/servers
 GET /api/v1/machines/{mid}/stat
 GET /api/v1/managers
 GET /api/v1/mutes
@@ -127,6 +129,7 @@ POST /api/v1/machines/{mid}/panes/close
 POST /api/v1/machines/{mid}/panes/git
 POST /api/v1/machines/{mid}/panes/split
 POST /api/v1/machines/{mid}/ports/{port}/open
+POST /api/v1/machines/{mid}/preview/start
 POST /api/v1/machines/{mid}/spaces/{wid}/rename
 POST /api/v1/machines/{mid}/tabs/close
 POST /api/v1/machines/{mid}/tabs/rename

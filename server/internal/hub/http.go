@@ -243,6 +243,7 @@ func (h *Hub) routes() http.Handler {
 	api.HandleFunc("GET /api/v1/ws", h.serveWS)
 	h.tokenRoutes(api)
 	h.portRoutes(api)
+	h.previewRoutes(api)
 	h.pairRoutes(api)
 	h.managerRoutes(api) // the roster (managers.go)
 	h.linkRoutes(api)
