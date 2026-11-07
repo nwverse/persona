@@ -147,8 +147,11 @@ func (n *Node) start(ctx context.Context, cwd, launcher, prompt, resume, workspa
 	// Persona's hooks: a plugin, or in --settings for a claude that loads none (hooksplugin.go).
 	settings, hooks := n.claudeStartSettings(ctx, launcher, "claude", cwd)
 	spec := claudeLaunch{Launcher: launcher, Settings: settings, Hooks: hooks, Model: execution.Model, Plugins: n.claudeLoadsPlugins(ctx)}
-	// herdr told it is Claude (hostherdr.go): a launcher that wraps another binary is otherwise not seen as one.
-	cmd := withHerdrAgent(typedHerdrAgent(launch, "claude", paneShells(ctx)...), n.claudeCommandLine(spec, args+modeFlags(mode, effort), shellQuote))
+	// herdr told it is Claude (hostherdr.go): a launcher that wraps another binary is otherwise not seen as one. The
+	// node's directory in front, the assistant's environment left out (agentenv.go).
+	shells := paneShells(ctx)
+	cmd := withHerdrAgent(typedHerdrAgent(launch, "claude", shells...), n.claudeCommandLine(spec, args+modeFlags(mode, effort), shellQuote))
+	cmd = n.agentCommand(cmd, shellQuote, shells...)
 	st := sessionState{Pane: pane, Launcher: launcher, Cwd: cwd, StartedAt: time.Now().UTC(), Model: execution.Model, ModelFingerprint: execution.Fingerprint}
 	if prev, ok := n.state.get(id); ok && resume != "" {
 		if !prev.StartedAt.IsZero() { // a branch (fork.go) has none: it starts now
@@ -638,6 +641,13 @@ func (n *Node) send(ctx context.Context, id, text string, images []proto.Image, 
 	}
 	if r := n.agentsListRefusal(id); r != nil { // claudebg.go
 		return r
+	}
+	if _, live := n.agent(id); !live {
+		// A claude outside Persona's panes has it open (the desktop app, another terminal): its peer inbox, or a
+		// refusal saying why not; never a second claude on the same transcript (claudebg.go).
+		if handled, err := n.sendOutside(ctx, id, text, images); handled {
+			return err
+		}
 	}
 	n.dropSuggestion(id)
 	if exitCommand(text) && len(images) == 0 && !n.isAssistantSession(id) && !n.runtimeAssistant(id) {

@@ -7,13 +7,13 @@ import { skills as loadSkills, type Skill } from "../../lib/hub-update";
 import { Loading } from "../../ui/atoms";
 import { Group, Pill } from "./SettingsParts";
 
-export function SkillsGroup() {
+export function SkillsGroup({ manager }: { manager?: string } = {}) {
   const [list, setList] = useState<Skill[] | null>(null);
   const [machine, setMachine] = useState<string>();
   const [error, setError] = useState("");
 
   useEffect(() => {
-    loadSkills()
+    loadSkills(manager)
       .then((r) => (setList(r.skills ?? []), setMachine(r.machine || r.machine_id)))
       .catch((e) => (setError(errorText(e)), setList([])));
   }, []);

@@ -16,6 +16,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/prompts"
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
@@ -1071,6 +1072,13 @@ func peerItem(mk func(int, string, string) proto.Item, text, name, body string) 
 	} else if !ok {
 		from = FromSession
 	}
+	// The user's own message from the phone, through the session's peer inbox (node/claudepeer.go): its words, without
+	// what Persona told the model about where they came from.
+	if from == PersonaPeer {
+		if words, ok := prompts.PeerMessageBody(tagged); ok {
+			tagged = strings.TrimSpace(words)
+		}
+	}
 	if tagged == "" {
 		return proto.Item{}, false
 	}
@@ -1078,6 +1086,10 @@ func peerItem(mk func(int, string, string) proto.Item, text, name, body string) 
 	it.Text, it.From = clip(tagged), from
 	return it, true
 }
+
+// PersonaPeer is the sender name node signs the messages it sends through a claude's peer inbox with (the user's
+// own words from the phone, node/claudepeer.go peerSender).
+const PersonaPeer = "Persona"
 
 // CrossSession returns the sender and body of a cross-session message, ok false for anything else.
 func CrossSession(s string) (from, body string, ok bool) {

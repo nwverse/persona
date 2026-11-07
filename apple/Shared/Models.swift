@@ -752,6 +752,9 @@ nonisolated struct Session: Codable, Identifiable, Hashable, Sendable {
         case "identity_conflict": String(localized: "Identity conflict")
         case "codex_history": String(localized: "Codex history")
         case "claude_bg": String(localized: "Claude background")
+        // Claude outside Persona's terminals (docs/integrations/claude-integration.md "Claude outside Persona's terminals")
+        case "claude_desktop": String(localized: "Claude desktop app")
+        case "claude_cli": String(localized: "Claude in a terminal")
         case "runtime": agentLabel // an agent runtime's session (docs/integrations/runtimes.md): its own name, "DSH"
         case .some(let kind) where !kind.isEmpty: kind
         default: nil

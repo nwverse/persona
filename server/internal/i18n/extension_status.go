@@ -14,7 +14,8 @@ func ExtensionStatusText(l Lang, text string) string { return extensionStatusTex
 var extensionStatusTemplates = makeCatalogTemplates(func(key string) bool {
 	return strings.HasPrefix(key, "extension-status.") && key != "extension-status.separator" ||
 		strings.HasPrefix(key, "extension-version.") || key == "hub-extensions.missing" ||
-		key == "extension-market_git.git_missing" || key == "extension-sandbox.probe_tmp"
+		key == "hub-extensions.socket_path_too_long" || key == "extension-market_git.git_missing" ||
+		key == "extension-sandbox.probe_tmp"
 })
 
 func extensionStatusText(l Lang, text string, depth int) string {
