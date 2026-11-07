@@ -220,6 +220,51 @@ nonisolated enum NodeHealth {
         default: nil
         }
     }
+
+    /// Why a computer is not connected, read from the error the hub keeps (the same kinds and patterns as the web's
+    /// `classifyConnection`); nil when the error says nothing these know. Reconnect's toast and the offline card say it
+    /// in plain words.
+    enum ConnectionFailure: Sendable, Equatable {
+        case auth, version, timeout, unreachable
+    }
+
+    static func connectionFailure(_ m: Machine) -> ConnectionFailure? {
+        let text = m.error ?? ""
+        func has(_ pattern: String) -> Bool { text.range(of: pattern, options: [.regularExpression, .caseInsensitive]) != nil }
+        // Order matters: "connection timed out" is a timeout, not "connection …".
+        if has(#"permission denied|publickey|authentication|unauthori[sz]ed|invalid[ _]token|forbidden|host key verification|access denied|\b40[13]\b|配对|认证"#) { // i18n-ignore: matches hub and ssh error text
+            return .auth
+        }
+        if m.nodeMismatch == true || has(#"version mismatch|protocol version|unknown method|incompatible|不是同一版|版本"#) { // i18n-ignore: matches hub and ssh error text
+            return .version
+        }
+        if has(#"timed out|timeout|deadline exceeded|no pong"#) { return .timeout }
+        if has(#"refused|no route|unreachable|could not resolve|name or service|no such host|network is|connection (reset|closed|lost)|broken pipe|\beof\b|node exited|waiting for|lookup |dial "#) {
+            return .unreachable
+        }
+        return nil
+    }
+
+    /// An offline computer's card line: what failed, then what to do ("Connection timed out: …"); nil when its error is
+    /// one of none of these kinds, empty, or it is being deployed (its deploy row says what is going on).
+    static func offlineReason(_ m: Machine) -> String? {
+        guard !m.online, m.deploying != true, !(m.error ?? "").isEmpty, let f = connectionFailure(m) else { return nil }
+        let link = m.kind == "link" || m.kind == "service"
+        let (title, next): (String, String) = switch f {
+        case .auth: (String(localized: "Authentication failed"),
+                     link ? String(localized: "Pair Persona Link again on this computer, then reconnect")
+                         : String(localized: "Check that this computer's SSH key and account are still valid, then reconnect"))
+        case .version: (String(localized: "Version mismatch"),
+                        canDeploy(m) ? String(localized: "Redeploy to update the node to the same version as the hub")
+                            : String(localized: "Upgrade the node on this computer so it matches the hub"))
+        case .timeout: (String(localized: "Connection timed out"),
+                        String(localized: "The network is unstable or the computer is asleep. Wait for it to wake up or switch networks, then reconnect"))
+        case .unreachable: (String(localized: "Can't reach this computer"),
+                            link ? String(localized: "Make sure it's on and Persona Link is running, then reconnect")
+                                : String(localized: "Make sure it's on, the network is up and the node is running, then reconnect"))
+        }
+        return String(localized: "\(title): \(next)")
+    }
 }
 
 /// The section's state: checks once when shown (and on Check Again); Repair writes and comes back with the new report.

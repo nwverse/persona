@@ -323,9 +323,16 @@ struct MachineCard: View {
                 // Sized before the stretching part above: second in line, the values (which may shrink to fit) came
                 // out smaller than in a card of their own.
                 .layoutPriority(1)
-            } else if let line = AddComputerText.machineLine(machine) {
-                // A known error_code in words (docs/assistant/onboarding.md 5.3); the hub's own words are on its page (Details).
-                Text(line).font(Theme.Font.label).foregroundStyle(Color.secondary).lineLimit(2)
+            } else if let lines = AddComputerText.machineLines(machine) {
+                // A known error_code in words (docs/assistant/onboarding.md 5.3), or the hub's error read in plain words with
+                // the raw one under it; the whole of it is on its page (Details).
+                VStack(alignment: .leading, spacing: Theme.Space.xxs) {
+                    // Three lines for why and what to do (English and Japanese need them for the step); a raw error keeps two.
+                    Text(lines.line).font(Theme.Font.label).foregroundStyle(Color.secondary).lineLimit(lines.detail == nil ? 2 : 3)
+                    if let detail = lines.detail {
+                        Text(detail).font(Theme.Font.caption).foregroundStyle(.tertiary).lineLimit(1)
+                    }
+                }
             }
             if machine.isPending, model.canConfirmComputer(machine.group) {
                 PendingRow(machine: machine)
