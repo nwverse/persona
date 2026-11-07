@@ -884,7 +884,12 @@ func (s *Service) publishList(machine string) []proto.Session {
 // decorated returns a machine's sessions as the apps get them: the unified states, the pending interaction counts,
 // what the assistant says of its conversations, the work and todos.
 func (s *Service) decoratedUnarchived(machine string) []proto.Session {
-	list := slices.Clone(s.nodeSessions(machine))
+	return s.decorateInventory(machine, slices.Clone(s.nodeSessions(machine)), true)
+}
+
+// decorateInventory owns list. A subset gets the same live fields as the full
+// inventory, but must not forget state marks belonging to rows it did not read.
+func (s *Service) decorateInventory(machine string, list []proto.Session, complete bool) []proto.Session {
 	m, _ := s.fleetMachine(machine)
 	s.fleet.mu.Lock()
 	counts := map[string]int{}
@@ -952,7 +957,7 @@ func (s *Service) decoratedUnarchived(machine string) []proto.Session {
 		// The todos' alone, stripped before push to client (#762).
 		list[i].SpawnFrom, list[i].Chat, list[i].Topic, list[i].Dispatched = "", "", "", nil
 	}
-	s.markStates(machine, list, time.Now())
+	s.fillStateMarks(machine, list, time.Now(), complete)
 	return list
 }
 
@@ -1166,6 +1171,10 @@ type stateMark struct {
 // markStates fills in StateSince: the time an agent's state last changed, kept until it changes again. It drops the
 // marks and hook flags of the machine's sessions no longer listed.
 func (s *Service) markStates(machine string, list []proto.Session, now time.Time) {
+	s.fillStateMarks(machine, list, now, true)
+}
+
+func (s *Service) fillStateMarks(machine string, list []proto.Session, now time.Time, complete bool) {
 	s.fleet.mu.Lock()
 	defer s.fleet.mu.Unlock()
 	if s.fleet.stateSince == nil {
@@ -1179,6 +1188,9 @@ func (s *Service) markStates(machine string, list []proto.Session, now time.Time
 			s.fleet.stateSince[k] = mk
 		}
 		list[i].StateSince = mk.at
+	}
+	if !complete {
+		return
 	}
 	// The list is the node's whole list, kept across a disconnect (devices.Machine.setSessions): a session no longer
 	// in it has ended. Forget its mark and its hook flag. A hook flag for a session never listed yet (its hook came
