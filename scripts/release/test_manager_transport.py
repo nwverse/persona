@@ -3,6 +3,8 @@ import datetime as dt
 import ast
 import io
 import json
+import hashlib
+import shlex
 from pathlib import Path
 import tempfile
 import unittest
@@ -15,6 +17,35 @@ snapshot_impl = promoter.snapshot
 
 
 class TransportTests(unittest.TestCase):
+    def test_cloudflare_fixed_proxy_preserves_strict_ssh_identity(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            key, hosts, executable = root / 'key', root / 'known_hosts', root / 'cloudflared client'
+            for path in (key, hosts): path.write_text('fixture')
+            executable.write_bytes(b'#!/bin/sh\nexit 0\n'); executable.chmod(0o700)
+            cfg = dict(kind='cloudflare-ssh', host='ssh.example.invalid', port=22, user='fixture',
+                       identity_file=str(key), known_hosts_file=str(hosts), cloudflared_path=str(executable),
+                       cloudflared_sha256=hashlib.sha256(executable.read_bytes()).hexdigest())
+            command = promoter.transport_argv(cfg)
+            proxy = next(arg for arg in command if arg.startswith('ProxyCommand='))
+            self.assertEqual(shlex.split(proxy.split('=', 1)[1]),
+                             [str(executable), 'access', 'ssh', '--hostname', 'ssh.example.invalid'])
+            for flag in ('StrictHostKeyChecking=yes', 'BatchMode=yes', 'IdentitiesOnly=yes',
+                         'GlobalKnownHostsFile=/dev/null', 'UserKnownHostsFile=' + str(hosts)):
+                self.assertIn(flag, command)
+            self.assertEqual(command[command.index('-F') + 1], '/dev/null')
+            self.assertEqual(command[command.index('-i') + 1], str(key))
+            for changes in ({'proxy_command': 'anything'}, {'host': 'host%h'}, {'host': 'a;id'},
+                            {'port': 2222}, {'cloudflared_sha256': '0' * 64},
+                            {'cloudflared_path': str(root / 'missing')},
+                            {'cloudflared_path': 'cloudflared'}, {'cloudflared_path': '/tmp/%h'}):
+                with self.subTest(changes=changes), self.assertRaises((ValueError, FileNotFoundError)):
+                    promoter.transport_argv(dict(cfg, **changes))
+            link = root / 'link'; link.symlink_to(executable)
+            with self.assertRaises(ValueError): promoter.transport_argv(dict(cfg, cloudflared_path=str(link)))
+            executable.chmod(0o600)
+            with self.assertRaises(ValueError): promoter.transport_argv(cfg)
+
     def test_missing_transport_cannot_infer_identity(self):
         for cfg in ({}, {'kind': 'link'}, {'kind': 'ssh', 'host': 'example.invalid'}):
             with self.subTest(cfg=cfg), self.assertRaises(ValueError):

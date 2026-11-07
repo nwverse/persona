@@ -300,8 +300,19 @@ The private publisher configuration adds a `target` object with these required v
 
 SSH uses only those selected identity and known-host files, strict host-key checking and
 batch mode. No default key, hostname inference, reverse route or trust-on-first-use is used.
-Missing transport configuration fails without guessing. A direct configured SSH route is
-currently supported; other transports and platforms are rejected. The operator must
+Missing transport configuration fails without guessing. Direct SSH (`kind: "ssh"`) and
+managed Cloudflare SSH (`kind: "cloudflare-ssh"`) are supported. Cloudflare targets use
+the same explicit SSH fields with origin port 22, plus `cloudflared_path` (canonical,
+executable absolute path on the Hub) and `cloudflared_sha256` (the installed binary's
+verified SHA256). The publisher generates only the fixed proxy command
+`cloudflared access ssh --hostname <host>`; arbitrary proxy commands, SSH aliases and
+implicit jumps are rejected. The selected managed route and any required noninteractive
+Cloudflare Access authorization must already work for the publisher identity. An account
+API token or a tunnel management certificate does not establish client authorization.
+Install the architecture-matching official client through the existing configuration lane
+and record its hash before selecting it; the publisher does not download clients or create
+tunnels, DNS records, services, Access policies or SSH authorizations.
+Other transports and platforms are rejected. The operator must
 provision the intended endpoint, trusted host key and identity reference through their normal
 configuration process before checking connectivity. The publisher never provisions them.
 

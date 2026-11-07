@@ -41,7 +41,10 @@ def canonical_json(value):
 def transport_argv(config):
     """No inferred host, credentials, reverse connection or trust-on-first-use."""
     expected = {'kind', 'host', 'port', 'user', 'identity_file', 'known_hosts_file'}
-    if set(config) != expected or config['kind'] != 'ssh':
+    kind = config.get('kind')
+    if kind == 'cloudflare-ssh':
+        expected |= {'cloudflared_path', 'cloudflared_sha256'}
+    if set(config) != expected or kind not in ('ssh', 'cloudflare-ssh'):
         raise ValueError('An explicit supported SSH transport is required')
     if (not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_.:-]*', config['host']) or
             not re.fullmatch(r'[A-Za-z0-9_][A-Za-z0-9_.-]*', config['user'])):
@@ -52,10 +55,28 @@ def transport_argv(config):
         path = Path(config[key])
         if not path.is_absolute() or path.resolve(strict=True) != path or not path.is_file():
             raise ValueError(f'Explicit transport prerequisite missing: {key}')
-    return ['ssh', '-T', '-F', '/dev/null', '-o', 'BatchMode=yes', '-o', 'StrictHostKeyChecking=yes',
+    command = ['ssh', '-T', '-F', '/dev/null', '-o', 'BatchMode=yes', '-o', 'StrictHostKeyChecking=yes',
             '-o', 'IdentitiesOnly=yes', '-o', 'ConnectTimeout=15', '-o', 'GlobalKnownHostsFile=/dev/null',
-            '-o', f'UserKnownHostsFile={config["known_hosts_file"]}', '-i', config['identity_file'],
-            '-p', str(config['port']), '-l', config['user'], config['host']]
+            '-o', f'UserKnownHostsFile={config["known_hosts_file"]}', '-i', config['identity_file']]
+    if kind == 'cloudflare-ssh':
+        if (config['port'] != 22 or len(config['host']) > 253 or
+                not re.fullmatch(r'[A-Za-z0-9](?:[A-Za-z0-9.-]*[A-Za-z0-9])?', config['host'])):
+            raise ValueError('Cloudflare SSH requires an explicit hostname and origin SSH port 22')
+        executable = Path(config['cloudflared_path'])
+        # OpenSSH expands percent tokens before invoking its fixed proxy command.
+        if (any(ord(c) < 32 or c == '%' for c in str(executable)) or
+                not executable.is_absolute() or executable.resolve(strict=True) != executable or
+                not executable.is_file() or not os.access(executable, os.X_OK)):
+            raise ValueError('Cloudflare SSH requires a canonical executable cloudflared_path on the Hub')
+        digest = config['cloudflared_sha256']
+        if not re.fullmatch(r'[0-9a-f]{64}', digest):
+            raise ValueError('Cloudflare SSH requires an explicit cloudflared SHA256')
+        with executable.open('rb') as stream:
+            if hashlib.file_digest(stream, 'sha256').hexdigest() != digest:
+                raise ValueError('Cloudflare SSH executable differs from its pinned SHA256')
+        proxy = shlex.join([str(executable), 'access', 'ssh', '--hostname', config['host']])
+        command.extend(['-o', 'ProxyCommand=' + proxy])
+    return [*command, '-p', str(config['port']), '-l', config['user'], config['host']]
 
 
 def remote(argv, command, data=None, timeout=30):

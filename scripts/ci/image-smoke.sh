@@ -10,20 +10,23 @@ for attempt in $(seq 1 60); do
   sleep 2
 done
 [ -n "$ok" ] || { printf 'TIMEOUT hub health endpoint\n' >&2; exit 1; }
-docker compose exec -T hub personad hub pair | grep -q 'persona://pair?'
-docker compose exec -T hub personad hub tailcat-key | grep -q '^nodekey:'
-curl --max-time 10 -fsS "$smoke_url/" | grep -qi '<html'
+# Drain producer output under pipefail: an early grep exit can make Docker exec
+# return 255 even when the expected pairing link was present.
+printf 'Checking pairing and tailcat key\n'
+docker compose exec -T hub personad hub pair | grep 'persona://pair?' >/dev/null
+docker compose exec -T hub personad hub tailcat-key | grep '^nodekey:' >/dev/null
+curl --max-time 10 -fsS "$smoke_url/" | grep -i '<html' >/dev/null
 curl --max-time 10 -fsSk "https://127.0.0.1:${CI_IMAGE_TLS_PORT:?}/api/v1/health" >/dev/null
 docker compose exec -T --user 0 hub test -s /home/persona/.persona/docker/db-password
 docker compose exec -T --user 0 hub grep -q '"first_setup": "code"' /home/persona/.persona/hub.json
-docker compose exec -T hub wget -qO- http://127.0.0.1:18660/admin | grep -q 'Persona'
-docker compose exec -T hub wget -qO- http://127.0.0.1:18660/api/v1/admin/state | grep -q '"password_set":false'
-if curl --max-time 10 -fsS "$smoke_url/admin" | grep -q 'Persona'; then
+docker compose exec -T hub wget -qO- http://127.0.0.1:18660/admin | grep 'Persona' >/dev/null
+docker compose exec -T hub wget -qO- http://127.0.0.1:18660/api/v1/admin/state | grep '"password_set":false' >/dev/null
+if curl --max-time 10 -fsS "$smoke_url/admin" | grep 'Persona' >/dev/null; then
   printf 'FAIL admin UI exposed through mapped port\n' >&2
   exit 1
 fi
 [ "$(curl --max-time 10 -s -o /dev/null -w '%{http_code}' "$smoke_url/api/v1/admin/state")" = "$(curl --max-time 10 -s -o /dev/null -w '%{http_code}' "$smoke_url/api/v1/machines")" ]
-if docker info --format '{{json .SecurityOptions}}' | grep -q 'name=rootless'; then
+if docker info --format '{{json .SecurityOptions}}' | grep 'name=rootless' >/dev/null; then
   mapped_uid="$(docker run --rm --entrypoint awk persona-hub:ci -v uid="$(id -u)" '$1 <= uid && uid < $1 + $3 { print $2 + uid - $1 }' /proc/self/uid_map)"
   [ -n "$mapped_uid" ] && [ "$(stat -c %u data)" = "$mapped_uid" ]
 else
