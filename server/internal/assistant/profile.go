@@ -339,7 +339,21 @@ func (s *Service) view(ctx context.Context, withArchived bool, space ...string) 
 		DoneNeedsDelivery: v.DoneNeedsDelivery != nil && *v.DoneNeedsDelivery}
 	if d, ok := s.device(ctx, v.MachineID); ok {
 		out.Cwd = s.spaceCwd(d, sp)
-		list, _ := s.sessions(ctx, d.ID)
+		var list []proto.Session
+		if s.fleetOn() {
+			// Select the headless conversations before decorating or serializing
+			// the inventory: coding sessions can outnumber them by thousands.
+			if m, found := s.fleetMachine(d.ID); found {
+				for _, c := range s.nodeSessions(m.ID) {
+					if m.isAssistant(c) {
+						list = append(list, c)
+					}
+				}
+				list = s.decorateInventory(m.ID, list, false)
+			}
+		} else {
+			list, _ = s.sessions(ctx, d.ID)
+		}
 		for _, c := range list {
 			if c.Assistant && spaceOf(c) == sp && (withArchived || !c.Archived) {
 				out.Conversations = append(out.Conversations, c)

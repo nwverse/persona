@@ -39,6 +39,8 @@ type remoteFixture struct {
 	// models answers model/list; threadModel / threadEffort are the threads' configured model and effort (codex_effort.go).
 	models                    any
 	threadModel, threadEffort string
+	// archive plays thread/archive and thread/unarchive on the home's files (archive_test.go), before any reject.
+	archive func(method, thread string)
 }
 
 func (f *remoteFixture) serve(w http.ResponseWriter, r *http.Request) {
@@ -63,7 +65,7 @@ func (f *remoteFixture) serve(w http.ResponseWriter, r *http.Request) {
 		f.got = append(f.got, m)
 		ids := append([]string(nil), f.threads...)
 		drop, reject, code, ephemeral, hangup := f.drop, f.reject, f.rejectCode, f.ephemeral, f.hangup
-		models, model, effort := f.models, f.threadModel, f.threadEffort
+		models, model, effort, archive := f.models, f.threadModel, f.threadEffort, f.archive
 		f.mu.Unlock()
 		if code == 0 {
 			code = -32600
@@ -82,6 +84,13 @@ func (f *remoteFixture) serve(w http.ResponseWriter, r *http.Request) {
 		}
 		if m.Method == hangup {
 			return
+		}
+		if archive != nil && (m.Method == "thread/archive" || m.Method == "thread/unarchive") {
+			var p struct {
+				ThreadID string `json:"threadId"`
+			}
+			_ = json.Unmarshal(m.Params, &p)
+			archive(m.Method, p.ThreadID)
 		}
 		if m.Method == reject {
 			f.push(map[string]any{"id": m.ID, "error": map[string]any{"code": code, "message": "rejected"}})

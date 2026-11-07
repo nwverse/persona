@@ -74,6 +74,7 @@ func (svc *Service) archiveAndCloseAgentSession(ctx context.Context, mid, sid st
 		if err := svc.noteAgentArchiveClosed(ctx, row, time.Now().UTC()); err != nil {
 			svc.logf("agent archive %s/%s: note close: %v", row.MachineID, row.SessionID, err)
 		}
+		svc.nativeArchiveWanted(row, true) // its terminal is gone: the tool's archive goes through now (agent_archive_native.go)
 	}
 	return res, nil
 }
@@ -161,5 +162,9 @@ func (svc *Service) archiveAndCloseHTTP(w http.ResponseWriter, r *http.Request, 
 	if res.Detail != "" {
 		closeBody["detail"] = res.Detail
 	}
-	apierr.WriteJSON(w, map[string]any{"ok": true, "archived": true, "close": closeBody})
+	if m, ok := svc.fleetMachine(mid); ok {
+		mid = m.ID
+	}
+	apierr.WriteJSON(w, map[string]any{"ok": true, "archived": true, "close": closeBody,
+		"native": svc.nativeArchiveAwaited(r.Context(), mid, r.PathValue("sid"))})
 }
