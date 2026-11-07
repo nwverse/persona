@@ -43,6 +43,9 @@ const settingsFresh = 5 * time.Second
 type Settings struct {
 	MachineID string `json:"machine_id"`
 	Launcher  string `json:"launcher"`
+	// DefaultPermissionMode applies only to new non-guest conversations without an explicit mode.
+	// Empty keeps the runtime's existing default; it never changes an existing conversation.
+	DefaultPermissionMode string `json:"default_permission_mode,omitempty"`
 	// Timezone is the phone's (IANA name): routines and the snapshot read times in it, and the hub its own.
 	Timezone string `json:"timezone,omitempty"`
 	// Notes, once edited in the app, replace manager.json's assistant.notes.
@@ -313,6 +316,7 @@ func stateDirOn(home, dataDir, name string) string {
 
 type assistantView struct {
 	Settings
+	Manager        string          `json:"manager"`
 	Cwd            string          `json:"cwd"`
 	Conversations  []proto.Session `json:"conversations"`
 	NotesEffective string          `json:"notes_effective"`  // what the assistant is told about the user
@@ -334,7 +338,7 @@ func (s *Service) view(ctx context.Context, withArchived bool, space ...string) 
 	}
 	v := s.settings(ctx)
 	v.Launcher = s.launcherNow(ctx)
-	out := assistantView{Settings: v, Conversations: []proto.Session{}, NotesEffective: s.notes(ctx), MainTasksQuiet: quietOn(v.MainTasksQuiet),
+	out := assistantView{Settings: v, Manager: s.managerIdentity(), Conversations: []proto.Session{}, NotesEffective: s.notes(ctx), MainTasksQuiet: quietOn(v.MainTasksQuiet),
 		StartRequestedTasks: quietOn(v.StartRequestedTasks), RecordingDays: s.recordingDays(ctx),
 		DoneNeedsDelivery: v.DoneNeedsDelivery != nil && *v.DoneNeedsDelivery}
 	if d, ok := s.device(ctx, v.MachineID); ok {
@@ -414,100 +418,6 @@ func (s *Service) profileRoutes() {
 		}
 		apierr.WriteJSON(w, map[string]any{"ok": true})
 	})
-}
-
-// putSettings is PUT /api/v1/assistant: what the body sets changes ("-" as main clears it); a launcher is checked
-// on the assistant's machine and goes into Model configuration › Main chat too.
-func (s *Service) putSettings(w http.ResponseWriter, r *http.Request) {
-	if !fullRole(r) {
-		apierr.Write(w, http.StatusForbidden, errors.New("read-only role cannot change settings"))
-		return
-	}
-	ctx := r.Context()
-	var in Settings
-	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
-		apierr.Write(w, http.StatusBadRequest, err)
-		return
-	}
-	machine := s.settings(ctx).MachineID
-	if in.MachineID != "" {
-		if _, ok := s.device(ctx, in.MachineID); !ok {
-			apierr.Write(w, http.StatusBadRequest, errors.New("unknown machine"))
-			return
-		}
-		machine = in.MachineID
-	}
-	if s.isWorkMachine(machine) {
-		apierr.Write(w, http.StatusBadRequest, i18n.Err("assistant-start.work_machine"))
-		return
-	}
-	if in.Launcher != "" {
-		if err := s.checkLauncher(ctx, machine, in.Launcher); err != nil {
-			apierr.Write(w, http.StatusBadRequest, err)
-			return
-		}
-	}
-	if d := in.RecordingDays; d != nil && (*d < minRecordingDays || *d > maxRecordingDays) {
-		apierr.Write(w, http.StatusBadRequest, errors.New("recording_days must be 1–365"))
-		return
-	}
-	if in.Timezone != "" {
-		if _, err := time.LoadLocation(in.Timezone); err != nil {
-			apierr.Write(w, http.StatusBadRequest, err)
-			return
-		}
-	}
-	if in.Launcher != "" {
-		rec, err := s.modelRecord(ctx, "assistant")
-		if err == nil {
-			rec.Binding = mergeModel(rec.Binding, ModelBinding{Provider: "launcher." + in.Launcher})
-			err = s.saveModel(ctx, "assistant", rec)
-		}
-		if err != nil {
-			apierr.Write(w, http.StatusInternalServerError, err)
-			return
-		}
-	}
-	launcher := s.launcherNow(ctx)
-	if _, err := s.updateSettings(ctx, func(v *Settings) error {
-		*v = s.effective(ctx, *v) // saved as they are in effect, as the hub saved them
-		v.MachineID, v.Launcher = machine, launcher
-		if in.Launcher != "" {
-			v.Launcher = in.Launcher
-		}
-		if in.Main == "-" {
-			v.Main = ""
-		} else if in.Main != "" {
-			v.Main = in.Main
-		}
-		if in.Timezone != "" {
-			v.Timezone = in.Timezone
-		}
-		if in.Notes != nil {
-			v.Notes = in.Notes
-		}
-		if in.OwnerAliases != nil {
-			v.OwnerAliases = ownerAliases(in.OwnerAliases)
-		}
-		if in.MainTasksQuiet != nil {
-			v.MainTasksQuiet = in.MainTasksQuiet
-		}
-		if in.StartRequestedTasks != nil {
-			v.StartRequestedTasks = in.StartRequestedTasks
-		}
-		if in.RecordingDays != nil {
-			v.RecordingDays = in.RecordingDays
-		}
-		if in.DoneNeedsDelivery != nil {
-			v.DoneNeedsDelivery = in.DoneNeedsDelivery
-		}
-		return nil
-	}); err != nil {
-		apierr.Write(w, http.StatusInternalServerError, err)
-		return
-	}
-	s.settingsChanged(ctx)
-	apierr.WriteJSON(w, s.view(ctx, false))
 }
 
 // checkLauncher: the assistant runs Claude Code (claude -p), Codex (codex app-server) or an agent runtime that says it

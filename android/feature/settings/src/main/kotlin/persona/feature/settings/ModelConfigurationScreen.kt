@@ -23,12 +23,25 @@ import kotlinx.coroutines.launch
  * catalog; a row opens that use's page.
  */
 @Composable
-internal fun ModelConfigurationPage(models: ModelConfiguration?, onBack: () -> Unit, onPurpose: (String) -> Unit, providers: ProviderSetup? = null) {
+internal fun ModelConfigurationPage(models: ModelConfiguration?, onBack: () -> Unit, onPurpose: (String, String) -> Unit, providers: ProviderSetup? = null) {
+    val roster = LocalManagerRoster.current
+    var owner by androidx.compose.runtime.saveable.rememberSaveable(LocalManagerGroup.current) {
+        mutableStateOf(roster?.defaultManagerId ?: persona.core.contracts.api.ManagerRoster.ASSISTANT_MANAGER)
+    }
+    key(models, owner) {
+        ModelConfigurationDetails(models, onBack, { onPurpose(it, owner) }, providers, owner,
+            switcher = { JManagerSwitcher(roster, owner, { owner = it }) })
+    }
+}
+
+@Composable
+private fun ModelConfigurationDetails(models: ModelConfiguration?, onBack: () -> Unit, onPurpose: (String) -> Unit,
+    providers: ProviderSetup?, owner: String, switcher: @Composable () -> Unit) {
     if (models == null) {
         JListPage(title = stringResource(R.string.settings_src_model_title), onBack = onBack) { item { JNotice(stringResource(R.string.settings_src_model_demo)) } }
         return
     }
-    val model = remember(models) { ModelCatalogModel(models) }
+    val model = remember(models, owner) { ModelCatalogModel(models.forManager(owner)) }
     val state by model.state.collectAsState()
     val scope = rememberCoroutineScope()
     var query by remember { mutableStateOf("") }
@@ -49,6 +62,7 @@ internal fun ModelConfigurationPage(models: ModelConfiguration?, onBack: () -> U
             if (providers != null) JIconButton(PhIcons.Plus, stringResource(R.string.settings_src_provider_new), { adding = "manual" })
             JIconButton(PhIcons.ArrowClockwise, stringResource(R.string.settings_src_refresh), { scope.launch { model.load() } }, enabled = !state.loading)
         }) {
+        item("manager") { ModelConfigurationOwner(owner); switcher() }
         item("search") {
             Column(Modifier.padding(top = Tokens.Space.s), verticalArrangement = Arrangement.spacedBy(Tokens.Space.s)) {
                 JSearchField(query, { query = it }, stringResource(R.string.settings_src_model_search))
@@ -74,7 +88,7 @@ internal fun ModelConfigurationPage(models: ModelConfiguration?, onBack: () -> U
             itemsIndexed(purposes, key = { _, it -> "purpose-${it.id}" }) { index, purpose ->
                 JGroupItem(GroupPosition.of(index, purposes.size)) {
                     JRow(purpose.displayName, subtitle = purposeSubtitle(res, purpose, requireNotNull(catalog)), subtitleLines = 3,
-                        selected = detail == ModelPurposeRoute(purpose.id), onClick = { onPurpose(purpose.id) })
+                        selected = detail == ModelPurposeRoute(purpose.id, owner), onClick = { onPurpose(purpose.id) })
                 }
             }
         }
@@ -83,12 +97,19 @@ internal fun ModelConfigurationPage(models: ModelConfiguration?, onBack: () -> U
 
 /** One AI use: what is in effect, and its own provider, model and effort (blank: inherit). */
 @Composable
-fun ModelPurposePage(models: ModelConfiguration?, purposeId: String, onBack: () -> Unit, providers: ProviderSetup? = null) {
+fun ModelPurposePage(models: ModelConfiguration?, purposeId: String, onBack: () -> Unit, providers: ProviderSetup? = null, manager: String? = null) {
+    val owner = manager?.takeIf(String::isNotBlank) ?: LocalManagerRoster.current?.defaultManagerId
+        ?: persona.core.contracts.api.ManagerRoster.ASSISTANT_MANAGER
+    key(models, purposeId, owner) { ModelPurposeDetails(models, purposeId, onBack, providers, owner) }
+}
+
+@Composable
+private fun ModelPurposeDetails(models: ModelConfiguration?, purposeId: String, onBack: () -> Unit, providers: ProviderSetup?, owner: String) {
     if (models == null) {
         JListPage(title = stringResource(R.string.settings_src_model_title), onBack = onBack) { item { JNotice(stringResource(R.string.settings_src_model_demo)) } }
         return
     }
-    val model = remember(models, purposeId) { ModelPurposeModel(models, purposeId) }
+    val model = remember(models, purposeId, owner) { ModelPurposeModel(models.forManager(owner), purposeId) }
     val state by model.state.collectAsState()
     val scope = rememberCoroutineScope()
     val feedback = LocalAppFeedback.current
@@ -112,6 +133,7 @@ fun ModelPurposePage(models: ModelConfiguration?, purposeId: String, onBack: () 
             JButton(stringResource(R.string.settings_src_save), { save(false) }, Modifier.fillMaxWidth(), loading = state.busy, enabled = !state.busy && !state.conflict)
         }
     })) {
+        item("manager") { ModelConfigurationOwner(owner) }
         if (purpose == null && state.busy) item("loading") { JLoading() }
         if (purpose != null) {
             effective(res, purpose, state)
@@ -230,5 +252,13 @@ private fun androidx.compose.foundation.lazy.LazyListScope.form(
         JGroupItem(GroupPosition.Single, Modifier.padding(top = Tokens.Space.m)) {
             JRow(stringResource(R.string.settings_src_model_restore), leadingIcon = PhIcons.ArrowUUpLeft, enabled = editable && !state.conflict, chevron = false, onClick = onRestore)
         }
+    }
+}
+
+@Composable
+private fun ModelConfigurationOwner(owner: String) {
+    val name = LocalManagerRoster.current?.manager(owner)?.shownName ?: owner
+    JGroupItem(GroupPosition.Single) {
+        JRow(stringResource(R.string.settings_model_assistant), value = name, chevron = false)
     }
 }

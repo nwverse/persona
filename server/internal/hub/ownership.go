@@ -44,9 +44,9 @@ import (
 
 const (
 	// ManagerHeader names the manager a request is for (an id from GET /api/v1/managers).
-	ManagerHeader = "X-Persona-Manager"
+	ManagerHeader = assistantwire.ManagerHeader
 	// ManagerQuery is the same as a query parameter (a WebSocket, a link opened in a browser).
-	ManagerQuery = "manager"
+	ManagerQuery = assistantwire.ManagerQuery
 )
 
 // errUnknownManager: the request names a manager the roster does not have.
@@ -60,10 +60,7 @@ const codeOtherManager = "other_manager"
 
 // namedManager is the manager r names itself, "" when it names none.
 func namedManager(r *http.Request) string {
-	if id := strings.TrimSpace(r.Header.Get(ManagerHeader)); id != "" {
-		return id
-	}
-	return strings.TrimSpace(r.URL.Query().Get(ManagerQuery))
+	return assistantwire.NamedManager(r)
 }
 
 // impliedManager is the manager r is for, "" for none: an extension's token acts as its manager (the one that knew
