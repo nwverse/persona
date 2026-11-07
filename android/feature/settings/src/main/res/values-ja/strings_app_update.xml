@@ -1,0 +1,4 @@
+<resources>
+    <string name="settings_update_auto_notice">Persona は起動時に更新を確認します。インストールには必ず確認が必要です。</string>
+    <string name="settings_update_later">後で</string>
+</resources>

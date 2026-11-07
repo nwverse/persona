@@ -90,25 +90,16 @@ private fun SettingsContent(
         if (desktops.isNotEmpty() && page == "settings" && paired && services.deviceSettings != null && deviceState.preferences == null) deviceController.loadPreferences()
     }
     var confirmDisconnect by remember { mutableStateOf(false) }
-    var update by remember { mutableStateOf<AppUpdate?>(null) }
-    var updateMessage by remember { mutableStateOf<Int?>(null) }
-    var busy by remember { mutableStateOf(false) }
-    var installing by remember { mutableStateOf(false) }
-    fun checkUpdate() {
-        if (busy) return
-        scope.launch {
-            busy = true
-            try {
-                val latest = services.updates.check()
-                val installed = context.packageManager.getPackageInfo(context.packageName, 0).longVersionCode
-                update = latest?.takeIf { it.versionCode > installed }
-                updateMessage = if (update == null) R.string.settings_update_none else null
-            } catch (error: CancellationException) { throw error }
-            catch (_: Exception) { updateMessage = R.string.settings_update_check_failed }
-            finally { busy = false }
-        }
+    val updateController = rememberAppUpdateState(services)
+    val updateStatus by updateController.state.collectAsState()
+    val update = updateStatus.latest
+    val updateMessage = updateStatus.message
+    val busy = updateStatus.checking
+    val installing = updateStatus.installing
+    fun checkUpdate() { scope.launch { updateController.check(manual = true) } }
+    LifecycleEventEffect(Lifecycle.Event.ON_RESUME) {
+        if (!services.demo) scope.launch { updateController.check() }
     }
-    LifecycleEventEffect(Lifecycle.Event.ON_RESUME) { if (!services.demo) checkUpdate() }
     val extensionService = services.extensions.takeUnless { services.demo }
     val extensionsAvailable by remember(extensionService) { extensionService?.available ?: kotlinx.coroutines.flow.flowOf(false) }.collectAsState(false)
     var extensionSummary by remember { mutableStateOf<String?>(null) }
@@ -458,20 +449,7 @@ private fun SettingsContent(
                         update?.let { latest ->
                             Text(stringResource(R.string.settings_update_new_version, latest.versionName), style = PersonaTheme.type.headline, color = PersonaTheme.palette.ink)
                             if (latest.releaseNotes.isNotBlank()) Text(latest.releaseNotes, style = PersonaTheme.type.callout, color = PersonaTheme.palette.ink2)
-                            JButton(stringResource(if (installing) R.string.settings_update_downloading else R.string.settings_update_install), enabled = !installing, onClick = {
-                                if (!context.packageManager.canRequestPackageInstalls()) {
-                                    PhoneReadiness.open(context, listOf(SettingsTarget(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES, packageUri = true)))
-                                    updateMessage = R.string.settings_update_allow_unknown
-                                } else scope.launch {
-                                    installing = true
-                                    try {
-                                        AppInstaller.install(context, services.updates, latest)
-                                        updateMessage = R.string.settings_update_verified
-                                    } catch (error: CancellationException) { throw error }
-                                    catch (_: Exception) { updateMessage = R.string.settings_update_failed }
-                                    finally { installing = false }
-                                }
-                            })
+                            AppUpdateInstallButton(updateController)
                         }
                         updateMessage?.let { SettingsCaption(stringResource(it)) }
                     }

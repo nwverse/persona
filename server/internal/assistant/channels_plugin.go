@@ -450,7 +450,11 @@ func (s *Service) askInChannel(ctx context.Context, id string, ix proto.Interact
 
 // channelInteractionDone: a card is over (answered anywhere, withdrawn, expired). What was sent as text cannot be
 // taken back: it only stops waiting, and a reply is then an ordinary message.
-func (s *Service) channelInteractionDone(ix proto.Interaction) {
+func (s *Service) channelInteractionDone(ix proto.Interaction) { s.channelInteractionEnded(ix, false) }
+
+// channelInteractionEnded is channelInteractionDone; inChat: the card was taken back because the user wrote in the
+// conversation, so their next words are no late answer to it.
+func (s *Service) channelInteractionEnded(ix proto.Interaction, inChat bool) {
 	c := &s.chans
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -462,7 +466,9 @@ func (s *Service) channelInteractionDone(ix proto.Interaction) {
 		if a.ID != ix.ID {
 			return false
 		}
-		c.noteEndedLocked(a)
+		if !inChat {
+			c.noteEndedLocked(a)
+		}
 		return true
 	})
 	if len(c.st.Asks) != n {

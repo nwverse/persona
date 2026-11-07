@@ -73,7 +73,32 @@ class AppInstallerTest {
         assertEquals(context.packageName, session.appPackageName)
         assertEquals(PackageInstaller.SessionParams.USER_ACTION_REQUIRED, org.robolectric.util.ReflectionHelpers.getField<Int>(CapturingPackageInstaller.submitted!!, "requireUserAction"))
         assertEquals(1, downloads)
-        assertNoTemporaryApk()
+        assertTrue(context.cacheDir.listFiles()!!.any { it.name.startsWith("persona-update-") })
+    }
+
+    @Test fun pendingSessionAndCancelledInstallReuseOneVerifiedDownload() = runBlocking {
+        AppInstaller.install(context, updates, update)
+        val installer = context.packageManager.packageInstaller
+        // Robolectric does not seal SessionInfo when its session commits; model Android's pending state explicitly.
+        org.robolectric.util.ReflectionHelpers.setField(installer.mySessions.single(), "sealed", true)
+        assertThrows(IllegalStateException::class.java) { runBlocking { AppInstaller.install(context, updates, update) } }
+        assertEquals(1, downloads)
+        installer.abandonSession(installer.mySessions.single().sessionId)
+        AppInstaller.install(context, updates, update)
+        assertEquals(1, downloads)
+        assertEquals(1, installer.mySessions.size)
+    }
+
+    @Test fun uncommittedSessionFromInterruptedPreparationIsAbandonedBeforeRetry() = runBlocking {
+        val installer = context.packageManager.packageInstaller
+        val staleId = installer.createSession(PackageInstaller.SessionParams(PackageInstaller.SessionParams.MODE_FULL_INSTALL).apply {
+            setAppPackageName(context.packageName)
+        })
+        AppInstaller.install(context, updates, update)
+        assertNull(installer.getSessionInfo(staleId))
+        assertEquals(1, downloads)
+        assertEquals(1, installer.mySessions.size)
+        assertNotEquals(staleId, installer.mySessions.single().sessionId)
     }
 
     @Test fun equalAndOlderVersionsAreRejectedBeforeDownload() {
@@ -123,6 +148,24 @@ class AppInstallerTest {
         assertEquals(confirmation.action, shadowOf(activity).nextStartedActivity.action)
         assertFalse(context.getSharedPreferences("settings-update", Context.MODE_PRIVATE).contains("result"))
         assertTrue(activity.isFinishing)
+    }
+
+    @Test fun missingConfirmationAbandonsOnlyTheReferencedSessionSoRetryIsPossible() {
+        val installer = context.packageManager.packageInstaller
+        fun pending() = installer.createSession(PackageInstaller.SessionParams(PackageInstaller.SessionParams.MODE_FULL_INSTALL).apply {
+            setAppPackageName(context.packageName)
+        })
+        val failed = pending()
+        val unrelated = pending()
+        val callback = Intent(context, InstallResultActivity::class.java)
+            .putExtra(PackageInstaller.EXTRA_STATUS, PackageInstaller.STATUS_PENDING_USER_ACTION)
+            .putExtra(PackageInstaller.EXTRA_SESSION_ID, failed)
+        val activity = Robolectric.buildActivity(InstallResultActivity::class.java, callback).create().get()
+        assertNull(installer.getSessionInfo(failed))
+        assertNotNull(installer.getSessionInfo(unrelated))
+        assertTrue(activity.isFinishing)
+        assertNull(shadowOf(activity).nextStartedActivity)
+        assertFalse(context.getSharedPreferences("settings-update", Context.MODE_PRIVATE).contains("result"))
     }
 
     @Test fun userCancellationIsRecordedAsCancellation() {

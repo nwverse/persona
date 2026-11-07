@@ -418,11 +418,22 @@ func (s *Service) adoptStartedSession(ctx context.Context, m Device, launcher, c
 
 // ---- ask_user ----
 
+// askUserWait is how long an ask_user card waits for the user. It is longer than the Lark nudge's default wait
+// (assistantwire.NudgeAfterDefault), so an owner who is away is nudged while the question still waits (#9); the
+// turn that asked is held for as long, which is why the user speaking in the conversation withdraws the question
+// (withdrawAskUser).
+const askUserWait = 2 * time.Hour
+
 // question is an ask_user waiting for the user: the card the hub shows, and where the answer goes.
 type question struct {
 	ix     proto.Interaction
 	answer chan proto.Resolution
+	// userSpoke is set (under questions.mu) when the question was withdrawn because the user wrote in the conversation.
+	userSpoke bool
 }
+
+// errUserSpoke is what ask returns for a question withdrawn because the user wrote in the conversation.
+var errUserSpoke = errors.New("the user wrote in the conversation")
 
 // questions are the questions out to the user, by interaction id: they go to the hub in the snapshot.
 type questions struct {
@@ -444,7 +455,7 @@ func (s *Service) toolAskUser(ctx context.Context, machine, sessionID string, ar
 	}
 	ix := proto.Interaction{
 		ID: "ix_" + randomHex(6), MachineID: machine, SessionID: sessionID, SessionTitle: "Persona", Kind: proto.IxQuestion, CanCancel: true,
-		ToolName: "ask_user", ToolInput: args, CreatedAt: time.Now().UTC(), ExpiresAt: time.Now().Add(30 * time.Minute).UTC(),
+		ToolName: "ask_user", ToolInput: args, CreatedAt: time.Now().UTC(), ExpiresAt: time.Now().Add(askUserWait).UTC(),
 	}
 	if c, ok := s.session(ctx, machine, sessionID); ok {
 		ix.Cwd = c.Cwd
@@ -460,6 +471,9 @@ func (s *Service) toolAskUser(ctx context.Context, machine, sessionID string, ar
 		return "", i18n.Err("hub-hub.duplicate_question")
 	}
 	r, err := s.ask(ctx, ix)
+	if errors.Is(err, errUserSpoke) {
+		return prompts.RenderQuestionUserSpoke(), nil
+	}
 	if err != nil {
 		return "", err
 	}
@@ -498,9 +512,46 @@ func (s *Service) ask(ctx context.Context, ix proto.Interaction) (proto.Resoluti
 	}()
 	select {
 	case r := <-q.answer:
+		s.questions.mu.Lock()
+		spoke := q.userSpoke
+		s.questions.mu.Unlock()
+		if spoke && r.Dismiss && r.Reason == proto.DismissedInChat { // not an answer that got in first
+			return r, errUserSpoke
+		}
 		return r, nil
 	case <-ctx.Done():
 		return proto.Resolution{}, ctx.Err()
+	}
+}
+
+// withdrawAskUser takes back the ask_user questions the conversation is waiting on, because the user wrote in it: the
+// turn that asked is blocked on the answer, so what they write would wait behind it (Claude queues a message sent
+// during a turn until the turn ends). The tool returns at once and says the new message follows. The card is closed
+// as dismissed, with the reason "replied in the chat" (proto.DismissedInChat). Other cards, and Agents' questions, are
+// not touched.
+func (s *Service) withdrawAskUser(session string) {
+	if session == "" {
+		return
+	}
+	s.questions.mu.Lock()
+	var mine []*question
+	for _, q := range s.questions.m {
+		if q.ix.SessionID == session && q.ix.ToolName == "ask_user" && !q.userSpoke {
+			q.userSpoke = true
+			mine = append(mine, q)
+		}
+	}
+	s.questions.mu.Unlock()
+	r := proto.Resolution{Dismiss: true, Reason: proto.DismissedInChat}
+	for _, q := range mine {
+		// The card is on the phone through the interaction queue, which hands the dismissal back to the question; before
+		// it got there (or with no queue) the question is handed the dismissal directly.
+		if err := s.resolve(q.ix.ID, r); err != nil {
+			select {
+			case q.answer <- r:
+			default:
+			}
+		}
 	}
 }
 
