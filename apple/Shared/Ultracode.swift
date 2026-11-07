@@ -14,7 +14,7 @@ nonisolated enum Ultracode {
 
     /// A known Claude Code version older than `minVersion` (the node's own rule): an unknown one may be tried.
     static func versionTooOld(_ version: String?) -> Bool {
-        let v = (version ?? "").trimmingCharacters(in: .whitespaces)
+        let v = (version ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         let core = v.hasPrefix("v") ? v.dropFirst() : Substring(v)
         let head = core.split(whereSeparator: { $0 == "-" || $0 == "+" }).first ?? ""
         let parts = head.split(separator: ".", omittingEmptySubsequences: false)
@@ -28,7 +28,7 @@ nonisolated enum Ultracode {
     /// Why an agent can't start with it on a computer whose Claude Code is `claudeVersion`, nil when it can or when the
     /// hub has no ultracode (then nothing about it is shown or sent).
     static func startBlocked(claudeVersion: String?, hubHasIt: Bool) -> String? {
-        guard hubHasIt, versionTooOld(claudeVersion), let version = claudeVersion?.trimmingCharacters(in: .whitespaces) else { return nil }
+        guard hubHasIt, versionTooOld(claudeVersion), let version = claudeVersion?.trimmingCharacters(in: .whitespacesAndNewlines) else { return nil }
         let min = minVersion.map(String.init).joined(separator: ".")
         return String(localized: "Claude Code on this computer is \(version); ultracode needs \(min) or later")
     }

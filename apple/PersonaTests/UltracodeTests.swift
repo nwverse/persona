@@ -52,6 +52,10 @@ struct UltracodeTests {
         #expect(!Ultracode.versionTooOld("2.1"))
         #expect(!Ultracode.versionTooOld("2.1.x"))
         #expect(!Ultracode.versionTooOld("2.1.+250"))
+        // As a computer may report it, a line end included.
+        #expect(Ultracode.versionTooOld("2.1.250\n"))
+        #expect(Ultracode.versionTooOld(" v2.1.250\r\n"))
+        #expect(!Ultracode.versionTooOld("2.1.284\n"))
     }
 
     @Test func blockedOnlyWhenTheHubHasItAndTheVersionIsKnownOld() throws {
@@ -60,6 +64,8 @@ struct UltracodeTests {
         #expect(Ultracode.startBlocked(claudeVersion: "2.1.250", hubHasIt: false) == nil)
         #expect(Ultracode.startBlocked(claudeVersion: "2.1.284", hubHasIt: true) == nil)
         #expect(Ultracode.startBlocked(claudeVersion: nil, hubHasIt: true) == nil)
+        let trimmed = try #require(Ultracode.startBlocked(claudeVersion: "2.1.250\n", hubHasIt: true))
+        #expect(trimmed.contains("2.1.250") && !trimmed.contains("\n"))
     }
 
     // MARK: What Start sends
@@ -171,6 +177,17 @@ struct UltracodeTests {
         #expect(Ultracode.todoShown(todo(), lookup: lookup, planned: task("a", ultracode: true)))
         #expect(!Ultracode.todoShown(todo(), lookup: lookup, planned: task("a")))
         #expect(!Ultracode.todoShown(todo(), lookup: lookup))
+    }
+
+    @Test func storeMarksATodoFromItsPlanBeforeItsAgentStarts() {
+        let item = todo()
+        let store = TasksStore(todoStore: TodoStore(cachedTodos: [item], cacheWriter: nil, hubListChanged: {}),
+                               viewStore: AssistantViewsStore())
+        #expect(!store.ultracode(item))
+        store.received(plan([task("a", ultracode: false, todo: "todo_0"), task("b", ultracode: true, todo: "todo_1")]))
+        #expect(store.ultracode(item))
+        store.received(plan([task("a", ultracode: true, todo: "todo_0"), task("b", ultracode: false, todo: "todo_1")]))
+        #expect(!store.ultracode(item))
     }
 
     @Test func noMarkOnADoneOrFailedTodo() throws {

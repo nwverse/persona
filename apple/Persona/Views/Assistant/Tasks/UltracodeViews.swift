@@ -74,15 +74,15 @@ struct UltracodeStartRow: View {
 
     var body: some View {
         Toggle(isOn: Binding(get: { on && blocked == nil }, set: { on = $0 })) {
-            VStack(alignment: .leading, spacing: Theme.Space.xxs) {
-                Label {
+            // The mark beside the name and the line under it: a Label here stacks the mark above the name on iPhone.
+            HStack(alignment: .firstTextBaseline, spacing: Theme.Space.s) {
+                Image(systemName: Theme.Icon.workflow).foregroundStyle(Theme.ai)
+                VStack(alignment: .leading, spacing: Theme.Space.xxs) {
                     Text(verbatim: Ultracode.name).lineLimit(1)
-                } icon: {
-                    Image(systemName: Theme.Icon.workflow).foregroundStyle(Theme.ai)
+                    Text(blocked ?? String(localized: "Runs every task as a multi-agent workflow · uses a lot of quota · this session only"))
+                        .font(Theme.Font.caption)
+                        .foregroundStyle(blocked == nil ? Color.secondary : Theme.cautionText)
                 }
-                Text(blocked ?? String(localized: "Runs every task as a multi-agent workflow · uses a lot of quota · this session only"))
-                    .font(Theme.Font.caption)
-                    .foregroundStyle(blocked == nil ? Color.secondary : Theme.cautionText)
             }
         }
         .disabled(blocked != nil)
