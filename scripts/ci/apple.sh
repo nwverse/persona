@@ -104,18 +104,35 @@ if [ "$LANE" = all ] || [ "$LANE" = ios ]; then
     ci_run "Require $sdk SDK" 60 xcrun --sdk "$sdk" --show-sdk-version
   done
   resolve Persona
-  # Current macos-26 images include Xcode 26.0.1 but not the iOS 26.0 runtime.
-  # Do not assume an SDK is an installed runtime, or quietly use iOS 26.5.
-  ci_run 'List simulator runtimes' 120 bash -c 'xcrun simctl list runtimes -j > "$1"' -- "$OUTPUT/runtimes-before.json"
-  if ! python3 -I - "$OUTPUT/runtimes-before.json" <<'PY'
+  # The iOS 26.0 SDK (23A339) maps to runtime 26.0.1 (23A8464).
+  # SDK versions and downloadable runtime versions are different identifiers.
+  [ "$(xcrun --sdk iphoneos --show-sdk-build-version)" = 23A339 ] || {
+    printf 'apple-ci: FAIL unexpected iOS SDK build for the pinned runtime\n' >&2; exit 1;
+  }
+  select_runtime() {
+    python3 -I - "$1" <<'PYTHON'
 import json, sys
 with open(sys.argv[1]) as source:
     runtimes = json.load(source)["runtimes"]
-sys.exit(0 if any(r.get("isAvailable") and r.get("version") == "26.0" and ".iOS-" in r["identifier"] for r in runtimes) else 1)
-PY
-  then
-    ci_run 'Download matching iOS 26.0 simulator runtime' 1200 xcodebuild -downloadPlatform iOS -buildVersion 26.0
+hits = [r["identifier"] for r in runtimes if r.get("isAvailable")
+        and r.get("version") == "26.0.1" and r.get("buildversion") == "23A8464"
+        and ".iOS-" in r["identifier"]]
+if len(hits) != 1:
+    sys.exit(1)
+print(hits[0])
+PYTHON
+  }
+  ci_run 'List simulator runtimes' 120 bash -c 'xcrun simctl list runtimes -j > "$1"' -- "$OUTPUT/runtimes-before.json"
+  if ! IOS_RUNTIME=$(select_runtime "$OUTPUT/runtimes-before.json"); then
+    # Let the selected Xcode resolve its default platform; do not pass an SDK
+    # version as -buildVersion or silently run on a newer installed runtime.
+    ci_run 'Download selected Xcode iOS simulator platform' 1200 xcodebuild -downloadPlatform iOS
+    ci_run 'List downloaded simulator runtimes' 120 bash -c 'xcrun simctl list runtimes -j > "$1"' -- "$OUTPUT/runtimes-after.json"
+    IOS_RUNTIME=$(select_runtime "$OUTPUT/runtimes-after.json") || {
+      printf 'apple-ci: FAIL expected available iOS 26.0.1 runtime build 23A8464 after download\n' >&2; exit 1;
+    }
   fi
+  printf 'apple-ci: selected runtime %s (26.0.1, 23A8464)\n' "$IOS_RUNTIME"
   # Generic device builds compile the actual watch/widget/notification/share
   # dependency graph; do not delete the watch target to accommodate the runner.
   ci_run 'Unsigned iOS and embedded watch/extensions build' 1800 "${XCODE[@]}" -scheme Persona \
@@ -125,9 +142,9 @@ PY
   # sim-boot is the sole creation/boot entry, with a fresh stock simulator (not
   # paired to a real hub), pinned to the compiler's runtime.
   SIM_STARTED=1
-  ci_run 'Create and boot stock iOS 26.0 test simulator' 1000 bash -c \
-    'SIM_BOOT_TIMEOUT=900 "$1" --profile stock --runtime 26.0 --device-type "iPhone 17 Pro" "$2" > "$3"' \
-    -- "$SOURCE/scripts/app/sim-boot.sh" "$SIM_NAME" "$OUTPUT/simulator.log"
+  ci_run 'Create and boot stock iOS 26.0.1 test simulator' 1000 bash -c \
+    'SIM_BOOT_TIMEOUT=900 "$1" --profile stock --runtime "$4" --device-type "iPhone 17 Pro" "$2" > "$3"' \
+    -- "$SOURCE/scripts/app/sim-boot.sh" "$SIM_NAME" "$OUTPUT/simulator.log" "$IOS_RUNTIME"
   # Accept only the helper's single UDID, never a partial/error log.
   SIM=$(python3 -I - "$OUTPUT/simulator.log" <<'PY'
 import re, sys
