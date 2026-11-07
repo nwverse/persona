@@ -18,7 +18,8 @@ The table below is for Orca; where the herdr engine differs is in the table in t
 | Send messages (multi-line as one), keys, interrupt | ✅ | Bracketed paste works under ConPTY |
 | Answer dialogs (AskUserQuestion, permissions) | ✅ | Answered by reading the screen, same as Orca on macOS |
 | Close a session | ✅ | |
-| Create a session from the phone, resume a session that isn't running | ❌ | The Orca engine doesn't support this on any platform yet ([plan-orca-support.md](../plans/plan-orca-support.md), "Phase 2"); not a Windows problem |
+| Create a session from the phone, resume a Claude session that isn't running | ✅ | Since #5548 Orca opens a terminal in the session's worktree and runs `claude --resume` there, as herdr does; other agents' sessions are refused with why (`orca_resume`) |
+| Claude in the desktop app or in a terminal Persona does not drive | ✅ | Listed as running with its own state, transcript streamed; messages go through the session's peer inbox (a named pipe). Questions and permission prompts there stay on the computer. See "Claude outside Persona's terminals" below |
 | Machine monitoring (CPU, memory, swap, network, disk, system info) | ✅ | Win32 calls, no processes spawned; the metrics follow the Windows column of [machines.md](../server/machines.md) ("Collection metrics") (#1943) |
 | Port forwarding | ❌ | Depends on `ps` / `lsof` / `/proc`; silently unavailable on Windows (#1179) |
 | Codex discovery (processes, homes, `--listen` endpoints, which rollouts a process holds open) | ✅ | Win32 calls, no processes spawned: Toolhelp32 and the PEB for `codex.exe`, each one's handle table for its open rollouts ("Codex" below). Compatible Codex forks are still not discovered |
@@ -146,6 +147,7 @@ herdr has a native Windows build since 0.9.5 (ConPTY panes, [official notes](htt
 | Live terminal (`terminal session observe`) | ❌ | herdr has no direct terminal attach on Windows; falls back to reading the screen |
 | Codex in a herdr tab: list, send, answer cards | ✅ (tests) | The terminal route as elsewhere ([codex.md](../integrations/codex.md)); not run against a real herdr on Windows |
 | Resume an exited Codex thread from the phone | ✅ (tests) | `codex resume <id>` in a new tab through `personad codex-start`, which runs the `codex.exe` behind npm's `codex.cmd` ("Codex" below); not run against a real herdr on Windows |
+| Claude in the desktop app or in a terminal Persona does not drive | ✅ | As in the Orca table above |
 
 - **socket**: herdr's API on Windows is a named pipe, named `\\.\pipe\` plus the socket path (`\\.\pipe\C:\Users\<you>\AppData\Roaming\herdr\herdr.sock`);
   the config directory is `%APPDATA%\herdr` (or `herdr` under `$XDG_CONFIG_HOME` if that's set). `socket_windows.go` in `internal/herdr` dials by this rule, matching herdr's own
@@ -201,6 +203,16 @@ What the node needs to know about Codex on macOS / Linux comes from `ps`, `lsof`
 - **app-server on `--listen unix://`**: Codex on Windows serves its control socket as an AF_UNIX file too. Windows has no mode bits, so the socket and its directory must be this user's, with an access list that lets nobody else in
   (SYSTEM and Administrators aside); a `unix://C:\…` endpoint is a path, not a URL with a host. Codex's background daemon (`codex app-server daemon start`) does not start from npm's launcher on Windows, so a plain `codex` there runs in its own process.
 
+## Claude outside Persona's terminals
+
+The desktop app's Code page and a `claude` in an ordinary terminal (Windows Terminal, PowerShell) run where neither herdr nor Orca has a pane. The node finds them by their `sessions/<pid>.json` and lists them live; a message from the phone goes through the session's peer inbox, never by starting a second `claude --resume` on the same transcript. Design and the protocol: [claude-integration.md](../integrations/claude-integration.md), "Claude outside Persona's terminals".
+
+- **The inbox is a named pipe**, `\\.\pipe\LOCAL\cc-msg-<32 hex>`, dialed with `tailscale/go-winio`. On Windows it requires an auth line first: the token is in the key file next to `sessions/<pid>.json` (`<pid>.<sha256 of the pipe path, lower-cased>.key`), readable only by the user, as Persona's node is. Without it the session lists read-only, saying why.
+- **The desktop app's entrypoint** is `claude-desktop`, or in some builds `claude-desktop-3p`: both are the desktop app (also in the "open elsewhere" refusal's words).
+- **A terminal Persona drives is told apart by the claude process's environment**: a pane variable (`HERDR_PANE_ID`, `ORCA_PANE_KEY`…) read from its PEB means the engine lists it, so it is not listed twice.
+- **Pid reuse**: Claude Code writes `procStart` as the process's creation time (a FILETIME); the node compares it with the running process's (`procinfo.StartMark`), so a reused pid is not taken for the claude.
+- **Held messages**: the desktop app often runs sessions in bypass permissions mode, which holds a message from another sender until the person at the computer approves it in the session; the phone says the message is waiting there. `"crossSessionInbound": "accept"` in that Claude Code's settings delivers without asking.
+
 ## shell
 
 When the node runs shell scripts on Windows, such as launcher probing and `claude --version`, it uses Git for Windows' bash (`loginShellProgram`: `CLAUDE_CODE_GIT_BASH_PATH`,
@@ -220,6 +232,13 @@ If Git Bash can't be found, these commands don't start (the machine info has no 
 - Not verified: sending from the phone into a real App chat end to end (it would write into a conversation of the user's; see [codex.md](../integrations/codex.md), "Windows", for how to check it);
   opening an unloaded thread with `codex://` (it brings the App to the front); Codex in a real herdr on Windows (no herdr here); a CLI on a `--listen unix://` app-server
   (Codex's daemon does not start from npm's launcher on Windows: "this Windows launcher prevents background processes from outliving it").
+
+## Verification record: Claude outside Persona's terminals (2026-11-07, real Windows 11 machine)
+
+- Claude Code 2.1.308 (the desktop app's own) and 2.1.291 (the CLI on PATH). Read only: every running session's `sessions/<pid>.json` had `messagingSocketPath` (a pipe that exists), `peerProtocol: 1`, `peerFeatures` `notify_idle` / `artifact_yield`, and a key file whose name is the sha256 of the lower-cased pipe path; `procStart` equalled each process's creation time.
+- End to end on a throwaway `claude` 2.1.291 (its own `CLAUDE_CONFIG_DIR`, an empty directory, a pseudo console; started for the test and closed after): the node's send was taken in 0.15–0.3 s and answered in the transcript ("reply with OK" → "OK"); a second message while it worked was queued and answered next; the transcript reader showed the message from "Persona" with only the user's words. With `--dangerously-skip-permissions` the message was held for approval in the terminal, as the code says.
+- Tests: the peer path against a fake inbox on a named pipe (`claudepeer_test.go`), listing, refusals and the echo; Windows start marks (`internal/procinfo`).
+- Not verified: sending into a session of the desktop app (only its files were read: no message was sent to a session in use); the phone and web UI against a real hub; macOS and Linux inboxes against a real claude (the code dials a unix socket; the tests run against a fake one on Linux).
 
 ## Verification record: tray (2026-11-07, real Windows 11 25H2 machine, build 26200)
 

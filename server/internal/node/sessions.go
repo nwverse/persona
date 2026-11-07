@@ -929,7 +929,7 @@ func (n *Node) sessionList(ctx context.Context, refreshAgents bool) []proto.Sess
 			seen[s.SessionID] = true
 		}
 	}
-	for _, s := range n.claudeBgSessions(n.liveClaudes(), seen) { // Claude's background sessions (claudebg.go)
+	for _, s := range n.claudeSessions(n.liveClaudes(), seen) { // claudes outside Persona's panes (claudebg.go)
 		out = append(out, s)
 		seen[s.SessionID] = true
 	}

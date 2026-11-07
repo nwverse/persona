@@ -1,0 +1,1031 @@
+{
+  "version": 1,
+  "cases": [
+    {
+      "name": "lost_push_fills_gap",
+      "description": "A push that continues past what the device has reveals the lost one; the device fills the gap from covered.",
+      "source": {
+        "rule": "from_seq > covered: a batch was lost; fill with after_seq=covered",
+        "docs": "docs/protocol/protocol.md \"Continuity of items\"",
+        "code": {
+          "web": "web/src/views/chat/useTranscript.ts",
+          "ios": "AppModel.settle",
+          "android": "ContinuitySync"
+        }
+      },
+      "chat": {
+        "machine_id": "m1",
+        "session_id": "s1",
+        "assistant": true
+      },
+      "devices": [
+        "a"
+      ],
+      "start": {
+        "hub": {
+          "history": "h1",
+          "lines": [
+            {
+              "id": "l1#0",
+              "seq": 1,
+              "ts": "2026-01-02T03:04:05Z",
+              "role": "user",
+              "kind": "text",
+              "text": "Plan a weekend trip."
+            },
+            {
+              "id": "l2#0",
+              "seq": 2,
+              "ts": "2026-01-02T03:04:05Z",
+              "role": "assistant",
+              "kind": "text",
+              "text": "Saturday hike, Sunday museum."
+            }
+          ],
+          "to_seq": 3,
+          "interactions": [],
+          "session": {
+            "state": "idle"
+          },
+          "event_stream": "ev1",
+          "event_seq": 10
+        }
+      },
+      "steps": [
+        {
+          "hub": {
+            "append": [
+              {
+                "id": "l4#0",
+                "seq": 4,
+                "ts": "2026-01-02T03:04:05Z",
+                "role": "user",
+                "kind": "text",
+                "text": "What should we eat?"
+              },
+              {
+                "id": "l5#0",
+                "seq": 5,
+                "ts": "2026-01-02T03:04:05Z",
+                "role": "assistant",
+                "kind": "tool_use",
+                "tool_use_id": "call5",
+                "tool_name": "Bash",
+                "tool_input": {
+                  "command": "ls"
+                }
+              }
+            ],
+            "to_seq": 5
+          }
+        },
+        {
+          "hub": {
+            "append": [
+              {
+                "id": "l6#0",
+                "seq": 6,
+                "ts": "2026-01-02T03:04:05Z",
+                "role": "assistant",
+                "kind": "text",
+                "text": "Pasta on Saturday, curry on Sunday."
+              }
+            ],
+            "to_seq": 7
+          }
+        },
+        {
+          "frames": {
+            "a": [
+              {
+                "type": "items",
+                "machine_id": "m1",
+                "session_id": "s1",
+                "history": "h1",
+                "items": [
+                  {
+                    "id": "l6#0",
+                    "seq": 6,
+                    "ts": "2026-01-02T03:04:05Z",
+                    "role": "assistant",
+                    "kind": "text",
+                    "text": "Pasta on Saturday, curry on Sunday."
+                  }
+                ],
+                "to_seq": 7,
+                "from_seq": 5
+              }
+            ]
+          }
+        },
+        {
+          "wait": 2000,
+          "expect": {
+            "a": {
+              "requests": [
+                {
+                  "get": "/items",
+                  "after_seq": 3
+                }
+              ],
+              "messages": [
+                {
+                  "from": "user",
+                  "text": "Plan a weekend trip.",
+                  "state": "shown"
+                },
+                {
+                  "from": "agent",
+                  "text": "Saturday hike, Sunday museum."
+                },
+                {
+                  "from": "user",
+                  "text": "What should we eat?",
+                  "state": "shown"
+                },
+                {
+                  "from": "agent",
+                  "text": "Pasta on Saturday, curry on Sunday."
+                }
+              ]
+            }
+          }
+        }
+      ],
+      "end": {
+        "a": {
+          "messages": [
+            {
+              "from": "user",
+              "text": "Plan a weekend trip.",
+              "state": "shown"
+            },
+            {
+              "from": "agent",
+              "text": "Saturday hike, Sunday museum."
+            },
+            {
+              "from": "user",
+              "text": "What should we eat?",
+              "state": "shown"
+            },
+            {
+              "from": "agent",
+              "text": "Pasta on Saturday, curry on Sunday."
+            }
+          ],
+          "cards": {}
+        }
+      }
+    },
+    {
+      "name": "drop_then_resubscribe_since",
+      "description": "After a drop, the device subscribes again from what it covered and the replay brings what it missed.",
+      "source": {
+        "rule": "A reconnect subscription carries since_seq=covered",
+        "docs": "docs/protocol/protocol.md \"Continuity of items\""
+      },
+      "chat": {
+        "machine_id": "m1",
+        "session_id": "s1",
+        "assistant": true
+      },
+      "devices": [
+        "a"
+      ],
+      "start": {
+        "hub": {
+          "history": "h1",
+          "lines": [
+            {
+              "id": "l1#0",
+              "seq": 1,
+              "ts": "2026-01-02T03:04:05Z",
+              "role": "user",
+              "kind": "text",
+              "text": "Plan a weekend trip."
+            },
+            {
+              "id": "l2#0",
+              "seq": 2,
+              "ts": "2026-01-02T03:04:05Z",
+              "role": "assistant",
+              "kind": "text",
+              "text": "Saturday hike, Sunday museum."
+            }
+          ],
+          "to_seq": 3,
+          "interactions": [],
+          "session": {
+            "state": "idle"
+          },
+          "event_stream": "ev1",
+          "event_seq": 10
+        }
+      },
+      "steps": [
+        {
+          "socket": {
+            "device": "a",
+            "drop": true
+          }
+        },
+        {
+          "hub": {
+            "append": [
+              {
+                "id": "l4#0",
+                "seq": 4,
+                "ts": "2026-01-02T03:04:05Z",
+                "role": "user",
+                "kind": "text",
+                "text": "What should we eat?"
+              },
+              {
+                "id": "l5#0",
+                "seq": 5,
+                "ts": "2026-01-02T03:04:05Z",
+                "role": "assistant",
+                "kind": "tool_use",
+                "tool_use_id": "call5",
+                "tool_name": "Bash",
+                "tool_input": {
+                  "command": "ls"
+                }
+              },
+              {
+                "id": "l6#0",
+                "seq": 6,
+                "ts": "2026-01-02T03:04:05Z",
+                "role": "assistant",
+                "kind": "text",
+                "text": "Pasta on Saturday, curry on Sunday."
+              }
+            ],
+            "to_seq": 7
+          }
+        },
+        {
+          "socket": {
+            "device": "a",
+            "open": {
+              "resumed": true
+            }
+          },
+          "expect": {
+            "a": {
+              "requests": [
+                {
+                  "ws": "subscribe",
+                  "since_seq": 3
+                }
+              ]
+            }
+          }
+        },
+        {
+          "frames": {
+            "a": [
+              {
+                "type": "items",
+                "machine_id": "m1",
+                "session_id": "s1",
+                "history": "h1",
+                "items": [
+                  {
+                    "id": "l4#0",
+                    "seq": 4,
+                    "ts": "2026-01-02T03:04:05Z",
+                    "role": "user",
+                    "kind": "text",
+                    "text": "What should we eat?"
+                  },
+                  {
+                    "id": "l5#0",
+                    "seq": 5,
+                    "ts": "2026-01-02T03:04:05Z",
+                    "role": "assistant",
+                    "kind": "tool_use",
+                    "tool_use_id": "call5",
+                    "tool_name": "Bash",
+                    "tool_input": {
+                      "command": "ls"
+                    }
+                  },
+                  {
+                    "id": "l6#0",
+                    "seq": 6,
+                    "ts": "2026-01-02T03:04:05Z",
+                    "role": "assistant",
+                    "kind": "text",
+                    "text": "Pasta on Saturday, curry on Sunday."
+                  }
+                ],
+                "to_seq": 7,
+                "from_seq": 3,
+                "backlog": true
+              }
+            ]
+          },
+          "expect": {
+            "a": {
+              "messages": [
+                {
+                  "from": "user",
+                  "text": "Plan a weekend trip.",
+                  "state": "shown"
+                },
+                {
+                  "from": "agent",
+                  "text": "Saturday hike, Sunday museum."
+                },
+                {
+                  "from": "user",
+                  "text": "What should we eat?",
+                  "state": "shown"
+                },
+                {
+                  "from": "agent",
+                  "text": "Pasta on Saturday, curry on Sunday."
+                }
+              ]
+            }
+          }
+        }
+      ],
+      "end": {
+        "a": {
+          "messages": [
+            {
+              "from": "user",
+              "text": "Plan a weekend trip.",
+              "state": "shown"
+            },
+            {
+              "from": "agent",
+              "text": "Saturday hike, Sunday museum."
+            },
+            {
+              "from": "user",
+              "text": "What should we eat?",
+              "state": "shown"
+            },
+            {
+              "from": "agent",
+              "text": "Pasta on Saturday, curry on Sunday."
+            }
+          ],
+          "cards": {}
+        }
+      }
+    },
+    {
+      "name": "duplicate_items_once",
+      "description": "The same items push delivered twice shows its lines once.",
+      "source": {
+        "rule": "Items merge by id; a repeated id keeps the first",
+        "code": {
+          "ios": "ChatStore.merge",
+          "android": "ContinuityReducer"
+        }
+      },
+      "chat": {
+        "machine_id": "m1",
+        "session_id": "s1",
+        "assistant": true
+      },
+      "devices": [
+        "a"
+      ],
+      "start": {
+        "hub": {
+          "history": "h1",
+          "lines": [
+            {
+              "id": "l1#0",
+              "seq": 1,
+              "ts": "2026-01-02T03:04:05Z",
+              "role": "user",
+              "kind": "text",
+              "text": "Plan a weekend trip."
+            },
+            {
+              "id": "l2#0",
+              "seq": 2,
+              "ts": "2026-01-02T03:04:05Z",
+              "role": "assistant",
+              "kind": "text",
+              "text": "Saturday hike, Sunday museum."
+            }
+          ],
+          "to_seq": 3,
+          "interactions": [],
+          "session": {
+            "state": "idle"
+          },
+          "event_stream": "ev1",
+          "event_seq": 10
+        }
+      },
+      "steps": [
+        {
+          "hub": {
+            "append": [
+              {
+                "id": "l4#0",
+                "seq": 4,
+                "ts": "2026-01-02T03:04:05Z",
+                "role": "user",
+                "kind": "text",
+                "text": "What should we eat?"
+              },
+              {
+                "id": "l5#0",
+                "seq": 5,
+                "ts": "2026-01-02T03:04:05Z",
+                "role": "assistant",
+                "kind": "tool_use",
+                "tool_use_id": "call5",
+                "tool_name": "Bash",
+                "tool_input": {
+                  "command": "ls"
+                }
+              },
+              {
+                "id": "l6#0",
+                "seq": 6,
+                "ts": "2026-01-02T03:04:05Z",
+                "role": "assistant",
+                "kind": "text",
+                "text": "Pasta on Saturday, curry on Sunday."
+              }
+            ],
+            "to_seq": 7
+          }
+        },
+        {
+          "frames": {
+            "a": [
+              {
+                "type": "items",
+                "machine_id": "m1",
+                "session_id": "s1",
+                "history": "h1",
+                "items": [
+                  {
+                    "id": "l4#0",
+                    "seq": 4,
+                    "ts": "2026-01-02T03:04:05Z",
+                    "role": "user",
+                    "kind": "text",
+                    "text": "What should we eat?"
+                  },
+                  {
+                    "id": "l5#0",
+                    "seq": 5,
+                    "ts": "2026-01-02T03:04:05Z",
+                    "role": "assistant",
+                    "kind": "tool_use",
+                    "tool_use_id": "call5",
+                    "tool_name": "Bash",
+                    "tool_input": {
+                      "command": "ls"
+                    }
+                  },
+                  {
+                    "id": "l6#0",
+                    "seq": 6,
+                    "ts": "2026-01-02T03:04:05Z",
+                    "role": "assistant",
+                    "kind": "text",
+                    "text": "Pasta on Saturday, curry on Sunday."
+                  }
+                ],
+                "to_seq": 7,
+                "from_seq": 3
+              },
+              {
+                "type": "items",
+                "machine_id": "m1",
+                "session_id": "s1",
+                "history": "h1",
+                "items": [
+                  {
+                    "id": "l4#0",
+                    "seq": 4,
+                    "ts": "2026-01-02T03:04:05Z",
+                    "role": "user",
+                    "kind": "text",
+                    "text": "What should we eat?"
+                  },
+                  {
+                    "id": "l5#0",
+                    "seq": 5,
+                    "ts": "2026-01-02T03:04:05Z",
+                    "role": "assistant",
+                    "kind": "tool_use",
+                    "tool_use_id": "call5",
+                    "tool_name": "Bash",
+                    "tool_input": {
+                      "command": "ls"
+                    }
+                  },
+                  {
+                    "id": "l6#0",
+                    "seq": 6,
+                    "ts": "2026-01-02T03:04:05Z",
+                    "role": "assistant",
+                    "kind": "text",
+                    "text": "Pasta on Saturday, curry on Sunday."
+                  }
+                ],
+                "to_seq": 7,
+                "from_seq": 3
+              }
+            ]
+          },
+          "expect": {
+            "a": {
+              "messages": [
+                {
+                  "from": "user",
+                  "text": "Plan a weekend trip.",
+                  "state": "shown"
+                },
+                {
+                  "from": "agent",
+                  "text": "Saturday hike, Sunday museum."
+                },
+                {
+                  "from": "user",
+                  "text": "What should we eat?",
+                  "state": "shown"
+                },
+                {
+                  "from": "agent",
+                  "text": "Pasta on Saturday, curry on Sunday."
+                }
+              ]
+            }
+          }
+        }
+      ],
+      "end": {
+        "a": {
+          "messages": [
+            {
+              "from": "user",
+              "text": "Plan a weekend trip.",
+              "state": "shown"
+            },
+            {
+              "from": "agent",
+              "text": "Saturday hike, Sunday museum."
+            },
+            {
+              "from": "user",
+              "text": "What should we eat?",
+              "state": "shown"
+            },
+            {
+              "from": "agent",
+              "text": "Pasta on Saturday, curry on Sunday."
+            }
+          ],
+          "cards": {}
+        }
+      }
+    },
+    {
+      "name": "revs_without_items_pulls",
+      "description": "When the session list moves on but no items come, the open chat pulls what it is missing.",
+      "source": {
+        "rule": "The page's own fallback: updated_at newer than the latest item and no items for 4 seconds: fetch after_seq=covered",
+        "docs": "docs/protocol/protocol.md \"Continuity of items\" (the page's own fallback)",
+        "issues": [
+          "#759"
+        ],
+        "code": {
+          "web": "web/src/lib/stale-page.ts",
+          "ios": "AgentSync.checkStall"
+        }
+      },
+      "chat": {
+        "machine_id": "m1",
+        "session_id": "s1",
+        "assistant": true
+      },
+      "devices": [
+        "a"
+      ],
+      "start": {
+        "hub": {
+          "history": "h1",
+          "lines": [
+            {
+              "id": "l1#0",
+              "seq": 1,
+              "ts": "2026-01-02T03:04:05Z",
+              "role": "user",
+              "kind": "text",
+              "text": "Plan a weekend trip."
+            },
+            {
+              "id": "l2#0",
+              "seq": 2,
+              "ts": "2026-01-02T03:04:05Z",
+              "role": "assistant",
+              "kind": "text",
+              "text": "Saturday hike, Sunday museum."
+            }
+          ],
+          "to_seq": 3,
+          "interactions": [],
+          "session": {
+            "state": "idle"
+          },
+          "event_stream": "ev1",
+          "event_seq": 10
+        }
+      },
+      "steps": [
+        {
+          "hub": {
+            "append": [
+              {
+                "id": "l4#0",
+                "seq": 4,
+                "ts": "2026-01-02T03:06:00Z",
+                "role": "user",
+                "kind": "text",
+                "text": "What should we eat?"
+              },
+              {
+                "id": "l5#0",
+                "seq": 5,
+                "ts": "2026-01-02T03:06:00Z",
+                "role": "assistant",
+                "kind": "tool_use",
+                "tool_use_id": "call5",
+                "tool_name": "Bash",
+                "tool_input": {
+                  "command": "ls"
+                }
+              },
+              {
+                "id": "l6#0",
+                "seq": 6,
+                "ts": "2026-01-02T03:06:00Z",
+                "role": "assistant",
+                "kind": "text",
+                "text": "Pasta on Saturday, curry on Sunday."
+              }
+            ],
+            "to_seq": 7,
+            "session": {
+              "state": "unread"
+            }
+          }
+        },
+        {
+          "frames": {
+            "a": [
+              {
+                "type": "sessions_delta",
+                "machine_id": "m1",
+                "upsert": [
+                  {
+                    "machine_id": "m1",
+                    "session_id": "s1",
+                    "title": "Weekend trip",
+                    "cwd": "/home/user/project",
+                    "status": "done",
+                    "assistant": true,
+                    "state": "unread",
+                    "updated_at": "2026-01-02T03:06:00Z",
+                    "rev": 180
+                  }
+                ],
+                "remove": []
+              }
+            ]
+          }
+        },
+        {
+          "wait": 6000,
+          "expect": {
+            "a": {
+              "requests": [
+                {
+                  "get": "/items",
+                  "after_seq": 3
+                }
+              ],
+              "messages": [
+                {
+                  "from": "user",
+                  "text": "Plan a weekend trip.",
+                  "state": "shown"
+                },
+                {
+                  "from": "agent",
+                  "text": "Saturday hike, Sunday museum."
+                },
+                {
+                  "from": "user",
+                  "text": "What should we eat?",
+                  "state": "shown"
+                },
+                {
+                  "from": "agent",
+                  "text": "Pasta on Saturday, curry on Sunday."
+                }
+              ]
+            }
+          }
+        }
+      ],
+      "end": {
+        "a": {
+          "messages": [
+            {
+              "from": "user",
+              "text": "Plan a weekend trip.",
+              "state": "shown"
+            },
+            {
+              "from": "agent",
+              "text": "Saturday hike, Sunday museum."
+            },
+            {
+              "from": "user",
+              "text": "What should we eat?",
+              "state": "shown"
+            },
+            {
+              "from": "agent",
+              "text": "Pasta on Saturday, curry on Sunday."
+            }
+          ],
+          "cards": {}
+        }
+      }
+    },
+    {
+      "name": "stream_then_item_one_reply",
+      "description": "Streamed text, then the reply's line, then the end of the stream: the reply shows once and nothing streams.",
+      "source": {
+        "rule": "delta: anything not yet drawn is dropped when the message lands in the transcript",
+        "docs": "docs/protocol/protocol.md WebSocket (delta)",
+        "code": {
+          "ios": "DeltaPacer, clearLive",
+          "android": "ChatRealtimeState.delta",
+          "web": "useTranscript live"
+        }
+      },
+      "chat": {
+        "machine_id": "m1",
+        "session_id": "s1",
+        "assistant": true
+      },
+      "devices": [
+        "a"
+      ],
+      "start": {
+        "hub": {
+          "history": "h1",
+          "lines": [
+            {
+              "id": "l1#0",
+              "seq": 1,
+              "ts": "2026-01-02T03:04:05Z",
+              "role": "user",
+              "kind": "text",
+              "text": "Plan a weekend trip."
+            },
+            {
+              "id": "l2#0",
+              "seq": 2,
+              "ts": "2026-01-02T03:04:05Z",
+              "role": "assistant",
+              "kind": "text",
+              "text": "Saturday hike, Sunday museum."
+            }
+          ],
+          "to_seq": 3,
+          "interactions": [],
+          "session": {
+            "state": "idle"
+          },
+          "event_stream": "ev1",
+          "event_seq": 10
+        }
+      },
+      "steps": [
+        {
+          "hub": {
+            "append": [
+              {
+                "id": "l4#0",
+                "seq": 4,
+                "ts": "2026-01-02T03:04:05Z",
+                "role": "user",
+                "kind": "text",
+                "text": "Any museum tips?"
+              }
+            ],
+            "to_seq": 4,
+            "session": {
+              "state": "working"
+            }
+          }
+        },
+        {
+          "frames": {
+            "a": [
+              {
+                "type": "items",
+                "machine_id": "m1",
+                "session_id": "s1",
+                "history": "h1",
+                "items": [
+                  {
+                    "id": "l4#0",
+                    "seq": 4,
+                    "ts": "2026-01-02T03:04:05Z",
+                    "role": "user",
+                    "kind": "text",
+                    "text": "Any museum tips?"
+                  }
+                ],
+                "to_seq": 4,
+                "from_seq": 3
+              },
+              {
+                "type": "sessions_delta",
+                "machine_id": "m1",
+                "upsert": [
+                  {
+                    "machine_id": "m1",
+                    "session_id": "s1",
+                    "title": "Weekend trip",
+                    "cwd": "/home/user/project",
+                    "status": "working",
+                    "assistant": true,
+                    "state": "working",
+                    "updated_at": "2026-01-02T03:04:05Z",
+                    "rev": 100
+                  }
+                ],
+                "remove": []
+              }
+            ]
+          }
+        },
+        {
+          "frames": {
+            "a": [
+              {
+                "type": "delta",
+                "machine_id": "m1",
+                "session_id": "s1",
+                "text": "Go early"
+              },
+              {
+                "type": "delta",
+                "machine_id": "m1",
+                "session_id": "s1",
+                "text": "Go early, the queue"
+              }
+            ]
+          }
+        },
+        {
+          "wait": 300,
+          "expect": {
+            "a": {
+              "live": "Go early, the queue"
+            }
+          }
+        },
+        {
+          "hub": {
+            "append": [
+              {
+                "id": "l5#0",
+                "seq": 5,
+                "ts": "2026-01-02T03:04:05Z",
+                "role": "assistant",
+                "kind": "text",
+                "text": "Go early, the queue is short before ten."
+              }
+            ],
+            "to_seq": 6,
+            "session": {
+              "state": "idle"
+            }
+          }
+        },
+        {
+          "frames": {
+            "a": [
+              {
+                "type": "items",
+                "machine_id": "m1",
+                "session_id": "s1",
+                "history": "h1",
+                "items": [
+                  {
+                    "id": "l5#0",
+                    "seq": 5,
+                    "ts": "2026-01-02T03:04:05Z",
+                    "role": "assistant",
+                    "kind": "text",
+                    "text": "Go early, the queue is short before ten."
+                  }
+                ],
+                "to_seq": 6,
+                "from_seq": 4
+              },
+              {
+                "type": "delta",
+                "machine_id": "m1",
+                "session_id": "s1",
+                "text": ""
+              },
+              {
+                "type": "sessions_delta",
+                "machine_id": "m1",
+                "upsert": [
+                  {
+                    "machine_id": "m1",
+                    "session_id": "s1",
+                    "title": "Weekend trip",
+                    "cwd": "/home/user/project",
+                    "status": "idle",
+                    "assistant": true,
+                    "state": "idle",
+                    "updated_at": "2026-01-02T03:04:05Z",
+                    "rev": 100
+                  }
+                ],
+                "remove": []
+              }
+            ]
+          },
+          "expect": {
+            "a": {
+              "live": null,
+              "messages": [
+                {
+                  "from": "user",
+                  "text": "Plan a weekend trip.",
+                  "state": "shown"
+                },
+                {
+                  "from": "agent",
+                  "text": "Saturday hike, Sunday museum."
+                },
+                {
+                  "from": "user",
+                  "text": "Any museum tips?",
+                  "state": "shown"
+                },
+                {
+                  "from": "agent",
+                  "text": "Go early, the queue is short before ten."
+                }
+              ]
+            }
+          }
+        }
+      ],
+      "end": {
+        "a": {
+          "messages": [
+            {
+              "from": "user",
+              "text": "Plan a weekend trip.",
+              "state": "shown"
+            },
+            {
+              "from": "agent",
+              "text": "Saturday hike, Sunday museum."
+            },
+            {
+              "from": "user",
+              "text": "Any museum tips?",
+              "state": "shown"
+            },
+            {
+              "from": "agent",
+              "text": "Go early, the queue is short before ten."
+            }
+          ],
+          "cards": {},
+          "live": null
+        }
+      }
+    }
+  ]
+}
