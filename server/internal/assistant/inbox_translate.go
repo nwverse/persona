@@ -5,6 +5,7 @@ import (
 	"crypto/sha1"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"sort"
@@ -190,6 +191,20 @@ func (s *Service) translateMailFresh(ctx context.Context, ref assistantwire.Inbo
 	return t, nil
 }
 
+// writeTranslateError preserves expected service failures; other translation failures remain upstream errors.
+func writeTranslateError(w http.ResponseWriter, err error) {
+	var failure interface {
+		error
+		Code() string
+		HTTPStatus() int
+	}
+	if errors.As(err, &failure) {
+		apierr.WriteCode(w, failure.HTTPStatus(), failure.Code(), failure)
+		return
+	}
+	apierr.Write(w, http.StatusBadGateway, err)
+}
+
 // translateRoutes are the translation's routes (InboxRoutes).
 func (s *Service) translateRoutes() {
 	s.handle("POST /api/v1/translate", func(w http.ResponseWriter, r *http.Request) {
@@ -203,7 +218,7 @@ func (s *Service) translateRoutes() {
 		}
 		out, err := s.translateTexts(r.Context(), in.Texts, in.Target)
 		if err != nil {
-			apierr.Write(w, http.StatusBadGateway, err)
+			writeTranslateError(w, err)
 			return
 		}
 		apierr.WriteJSON(w, map[string]any{"texts": out})
@@ -224,7 +239,7 @@ func (s *Service) translateRoutes() {
 		}
 		t, err := s.translateMail(r.Context(), assistantwire.InboxMailRef{AccountID: in.AccountID, UID: in.UID, Mailbox: in.Mailbox}, in.Target)
 		if err != nil {
-			apierr.Write(w, http.StatusBadGateway, err)
+			writeTranslateError(w, err)
 			return
 		}
 		apierr.WriteJSON(w, t)

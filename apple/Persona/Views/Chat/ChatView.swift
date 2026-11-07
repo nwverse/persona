@@ -496,33 +496,35 @@ struct ChatView: View {
     }
 
     /// What of the header has no place in the toolbar: the goal, the ports it listens on and the running subagents, a row over
-    /// the chat only while there are any.
-    @ViewBuilder private var macChrome: some View {
+    /// the chat only while there are any. One view holding the row and the activity sheet, as tall as the row (none
+    /// without it): beside a page-filling holder for the sheet, the overlay's stack centered the row on the page.
+    private var macChrome: some View {
         let ports = session?.ports ?? []
         let all = subagents
-        if !ports.isEmpty || (pane == .chat && !all.isEmpty) || session?.goal != nil || hasWorkflows {
-            VStack(spacing: Theme.Space.s) {
-                if let goal = session?.goal { GoalBar(goal: goal) }
-                workflowBar
-                if !ports.isEmpty { SessionPortChips(machine: key.machineRef, ports: ports) }
-                if pane == .chat, !all.isEmpty {
-                    AgentStrip(agents: all.filter { $0.running || $0.id == viewing?.id }, all: all, viewing: viewing?.id) { a in view(a) }
+        return VStack(spacing: Theme.Space.flush) {
+            if !ports.isEmpty || (pane == .chat && !all.isEmpty) || session?.goal != nil || hasWorkflows {
+                VStack(spacing: Theme.Space.s) {
+                    if let goal = session?.goal { GoalBar(goal: goal) }
+                    workflowBar
+                    if !ports.isEmpty { SessionPortChips(machine: key.machineRef, ports: ports) }
+                    if pane == .chat, !all.isEmpty {
+                        AgentStrip(agents: all.filter { $0.running || $0.id == viewing?.id }, all: all, viewing: viewing?.id) { a in view(a) }
+                    }
                 }
+                .padding(.horizontal, Theme.Space.l)
+                .padding(.vertical, Theme.Space.s)
+                .frame(maxWidth: .infinity)
+                .background(Theme.pageBackground)
+                .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { macChromeHeight = $0 }
+                .onDisappear { macChromeHeight = 0 }
             }
-            .padding(.horizontal, Theme.Space.l)
-            .padding(.vertical, Theme.Space.s)
-            .frame(maxWidth: .infinity)
-            .background(Theme.pageBackground)
-            .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { macChromeHeight = $0 }
-            .onDisappear { macChromeHeight = 0 }
         }
-        Color.clear.hidden()
-            .sheet(isPresented: $showActivity) {
-                ActivitySheet(loop: session?.loop, background: session?.background ?? [], stopLoop: { model.stopLoop(key) }) { t in
-                    showActivity = false
-                    if let out = t.outputFile { file = FileRef(group: key.group, machineID: key.machineID, path: out, cwd: session?.cwd) }
-                }
+        .sheet(isPresented: $showActivity) {
+            ActivitySheet(loop: session?.loop, background: session?.background ?? [], stopLoop: { model.stopLoop(key) }) { t in
+                showActivity = false
+                if let out = t.outputFile { file = FileRef(group: key.group, machineID: key.machineID, path: out, cwd: session?.cwd) }
             }
+        }
     }
     #endif
 
@@ -1647,7 +1649,14 @@ struct ChatView: View {
 
     /// The custom header's full height (Agents; the assistant's floating bar): the other panes sit below it, the chat
     /// list scrolls under it.
-    private var headerRoom: CGFloat { style == .dev ? (sideBars ? sideHeaderHeight : chrome.height) : AssistantTopBar.height }
+    private var headerRoom: CGFloat {
+        #if os(macOS)
+        // The Mac has no header over the chat (`chrome` stays empty): the row over it is `macChrome`.
+        style == .dev ? macChromeHeight : AssistantTopBar.height
+        #else
+        style == .dev ? (sideBars ? sideHeaderHeight : chrome.height) : AssistantTopBar.height
+        #endif
+    }
 
     /// Git only for repositories, files only when we know the directory; the assistant has neither.
     private var panes: [SessionPane] {

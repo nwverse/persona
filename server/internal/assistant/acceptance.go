@@ -2,6 +2,8 @@ package assistant
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"regexp"
 	"slices"
 	"sort"
@@ -42,10 +44,32 @@ type acceptAsk struct {
 	AskedAt    time.Time `json:"asked_at"`
 	RemindedAt time.Time `json:"reminded_at,omitzero"`
 	AcceptedAt time.Time `json:"accepted_at,omitzero"`
-	// NoCard: no card was due when the ask was made (the bot is off or not paired, or task reports are off), so MessageID
-	// stays empty by design; the owner is asked by the briefing, the board and the web app instead. An empty MessageID
-	// without it is a card that did not go out and may be posted again.
+	// NoCard: no card is due (the bot is off or not paired, or task reports are off, when the ask was made or when its
+	// card was tried again), or its card could not be posted within acceptPostWindow, so MessageID stays empty for good;
+	// the owner is asked by the briefing, the board and the web app instead. An empty MessageID without it (and with
+	// AskedAt) is a card that did not go out yet: retryAcceptance posts it.
 	NoCard bool `json:"no_card,omitempty"`
+}
+
+// acceptPostWindow is how long after an ask its card that did not go out (the bot's status could not be read, the send
+// failed or timed out) is tried again, once a tick of acceptLoop. Every try goes under the round's own key
+// (acceptCardKey), and Feishu drops a repeated key only for about an hour: a try later than that could post a second
+// card, so past the window the ask stays card-less (NoCard) instead. The window, not a count of tries, is what keeps
+// that true when ticks come late (a restart in between); with ticks every 10 minutes it is at most six sends (the
+// first and five retries).
+const acceptPostWindow = 45 * time.Minute
+
+// acceptCardKey is the key (feishu.post's uuid) the card of task id's round asked at goes out under: the same for every
+// try of that round, so a try that did land though its answer was lost (a timeout) is not posted again by the next.
+func acceptCardKey(id string, asked time.Time) string {
+	sum := sha256.Sum256([]byte("accept\x00" + id + "\x00" + strconv.FormatInt(asked.UnixNano(), 10)))
+	return "pv:" + hex.EncodeToString(sum[:16])
+}
+
+// acceptCardDue says a's card is still to be posted: asked (not a claim in flight), not passed, no card and none
+// meant to be.
+func acceptCardDue(a *acceptAsk) bool {
+	return a != nil && !a.AskedAt.IsZero() && a.AcceptedAt.IsZero() && a.MessageID == "" && !a.NoCard
 }
 
 type acceptBook struct {
@@ -72,6 +96,15 @@ func (s *Service) loadAcceptLocked(ctx context.Context) bool {
 			asks = map[string]*acceptAsk{}
 		}
 	}
+	// What is read was written before this process asked anything. An entry with no time is a claim whose card was
+	// going out when another save wrote the book: nothing will finish it, and left in place it would keep its task from
+	// ever being asked again (a claim is never stale). A null entry is nothing.
+	for id, a := range asks {
+		if a == nil || a.AskedAt.IsZero() {
+			s.logf("acceptance: load: task %s: dropped a claim left in flight", id)
+			delete(asks, id)
+		}
+	}
 	b.asks, b.loaded = asks, true
 	return true
 }
@@ -92,7 +125,8 @@ var urlRe = regexp.MustCompile(`https?://[^\s<>()\[\]"'，。；、）]+`)
 
 // askAcceptance keeps task t's "Please verify" ask once (reply: what its agent said last, on machine/session) and posts its
 // card when the bot can. The ask is a fact of the hub, not of the card: with no card due it is kept all the same (NoCard),
-// and the briefing, the board and the snapshot list it.
+// and the briefing, the board and the snapshot list it. A card that did not go out (the bot's status unreadable, the send
+// failed) is kept as an ask without one yet, listed the same, and retryAcceptance posts it.
 func (s *Service) askAcceptance(t Todo, machine, session, reply string) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
@@ -113,34 +147,28 @@ func (s *Service) askAcceptance(t Todo, machine, session, reply string) {
 	}
 	b.asks[t.ID] = &acceptAsk{Earlier: earlier} // claimed: a second turn ending meanwhile does not ask twice
 	b.mu.Unlock()
-	release := func() {
-		b.mu.Lock()
-		delete(b.asks, t.ID)
-		b.mu.Unlock()
-	}
 	// No card is due when the bot is off or not paired, or its task reports are off. A status that cannot be read (the
-	// manager away) is not that: the card is for later, and nothing is kept for it here.
-	st, err := s.feishuStatus(ctx)
-	if err != nil {
-		s.logf("task %s: acceptance: %v", t.ID, err)
-		release()
-		return
-	}
-	post := st.Ready && st.Features.Reports
+	// manager away) is not that: the card is for later, and the ask waits for it without one (not NoCard).
+	st, stErr := s.feishuStatus(ctx)
 	a := s.acceptLines(ctx, t, machine, session, reply)
 	a.MachineID, a.SessionID, a.AskedAt, a.Earlier = machine, session, time.Now().UTC(), earlier
-	if post {
-		mid, err := s.botPost(ctx, "", s.acceptCard(ctx, t, a, false), a.Changed)
+	switch {
+	case stErr != nil:
+		s.logf("task %s: acceptance: %v (its card is tried again later)", t.ID, stErr)
+	case st.Ready && st.Features.Reports:
+		mid, err := s.botPostKeyed(ctx, "", s.acceptCard(ctx, t, a, false), a.Changed, acceptCardKey(t.ID, a.AskedAt))
 		if err != nil {
-			s.logf("task %s: acceptance: %v", t.ID, err)
-			release()
-			return
+			s.logf("task %s: acceptance: %v (its card is tried again later)", t.ID, err)
+			break
 		}
 		a.MessageID, a.Messages = mid, []string{mid}
-	} else {
+	default:
 		a.NoCard = true
 	}
 	b.mu.Lock()
+	if c := b.asks[t.ID]; c != nil && c.AskedAt.IsZero() {
+		a.Earlier = c.Earlier // the claim's: it also has a card of the round before that a retry posted meanwhile
+	}
 	b.asks[t.ID] = &a
 	s.saveAcceptLocked(ctx)
 	b.mu.Unlock()
@@ -388,7 +416,8 @@ func (s *Service) accepted(ctx context.Context, id, card string) bool {
 	return true
 }
 
-// acceptLoop posts again, each morning, the cards not accepted by then (once a day each).
+// acceptLoop posts the cards that did not go out when their ask was made (retryAcceptance), and again, each morning, the
+// cards not accepted by then (once a day each).
 func (s *Service) acceptLoop(ctx context.Context) {
 	tick := time.NewTicker(10 * time.Minute)
 	defer tick.Stop()
@@ -397,7 +426,101 @@ func (s *Service) acceptLoop(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-tick.C:
-			s.remindAcceptance(time.Now())
+			now := time.Now()
+			s.retryAcceptance(now)
+			s.remindAcceptance(now)
+		}
+	}
+}
+
+// retryAcceptance posts the card of each ask still waiting for one (acceptCardDue), under the round's key, so a try that
+// landed unseen is not posted twice. The round guards are a reminder's: an ask whose todo is gone or ended without the
+// hub's auto-judge, or that is from before its latest reopen, is dropped, never posted. With the bot off or its reports
+// off no card is due, and past acceptPostWindow none is tried: either way the ask stays card-less (NoCard), still
+// listed. A status that cannot be read, or a send that fails, waits for the next tick.
+func (s *Service) retryAcceptance(now time.Time) {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	b := &s.accept
+	b.mu.Lock()
+	if !s.loadAcceptLocked(ctx) {
+		b.mu.Unlock()
+		return
+	}
+	var due []string
+	seen := map[string]time.Time{} // each due ask's AskedAt: the round the sweep judges
+	for id, a := range b.asks {
+		if acceptCardDue(a) {
+			due = append(due, id)
+			seen[id] = a.AskedAt
+		}
+	}
+	b.mu.Unlock()
+	if len(due) == 0 {
+		return // nothing waits: the bot's status is not even asked for
+	}
+	slices.Sort(due)
+	st, stErr := s.feishuStatus(ctx)
+	for _, id := range due {
+		t, ok := s.todoNow(id)
+		if f := s.acceptSweepHook; f != nil {
+			f(id)
+		}
+		b.mu.Lock()
+		a := b.asks[id]
+		if !acceptCardDue(a) || !a.AskedAt.Equal(seen[id]) {
+			// Gone, passed, or a new round asked while the book was unlocked (the todo read is from before it).
+			b.mu.Unlock()
+			continue
+		}
+		if !ok || acceptAskEnded(t) || acceptAskStale(a, t) {
+			// The todo is gone, it ended without the hub's auto-judge, or the ask is from before its latest reopen: it
+			// can never be passed, so its card is not posted and the ask is dropped (as remindAcceptance does).
+			delete(b.asks, id)
+			s.saveAcceptLocked(ctx)
+			b.mu.Unlock()
+			s.boardChanged()
+			continue
+		}
+		late := now.Sub(a.AskedAt) > acceptPostWindow
+		if late || stErr == nil && !(st.Ready && st.Features.Reports) {
+			if late {
+				s.logf("task %s: acceptance: its card did not go out within %v: kept without one", id, acceptPostWindow)
+			}
+			a.NoCard = true
+			s.saveAcceptLocked(ctx)
+			b.mu.Unlock()
+			continue
+		}
+		if stErr != nil {
+			b.mu.Unlock()
+			continue
+		}
+		cp := *a
+		b.mu.Unlock()
+		mid, err := s.botPostKeyed(ctx, "", s.acceptCard(ctx, t, cp, false), cp.Changed, acceptCardKey(id, cp.AskedAt))
+		if err != nil {
+			s.logf("task %s: acceptance: %v (tried again on the next tick)", id, err)
+			continue
+		}
+		b.mu.Lock()
+		var done *acceptAsk
+		if a := b.asks[id]; a != nil && a.AskedAt.Equal(cp.AskedAt) {
+			a.MessageID, a.Messages = mid, append(a.Messages, mid)
+			if !a.AcceptedAt.IsZero() {
+				c := *a // passed while the card went out: it says so too
+				done = &c
+			}
+		} else if a != nil {
+			// Another round asks now (the todo reopened and deployed again meanwhile): this card is an earlier round's.
+			a.Earlier = lastOf(append(slices.Clone(a.Earlier), mid), acceptEarlierMost)
+		}
+		s.saveAcceptLocked(ctx)
+		b.mu.Unlock()
+		if done != nil {
+			if err := s.botUpdateCard(ctx, mid, s.acceptCard(ctx, t, *done, false)); err != nil {
+				s.logf("task %s: acceptance card: %v", id, err)
+			}
 		}
 	}
 }

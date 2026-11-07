@@ -46,7 +46,7 @@ final class WatchModel {
     /// The Milk Frog's files on this watch.
     let pet = WatchPetPack()
     private static let personaKey = "persona"
-    private var petWanted: Bool { persona == PersonaSelection.packageID }
+    private var petWanted: Bool { WatchPet.supports(persona) }
 
     /// The frog's state, once it has something to go on; nil without the Milk Frog or before its files are here.
     var petStatus: WatchPetStatus? {

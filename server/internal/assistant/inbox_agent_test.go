@@ -6,11 +6,13 @@ import (
 	"errors"
 	"os"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/nwverse/persona/server/internal/ai"
 	"github.com/nwverse/persona/server/internal/apierr"
+	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/prompts"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/rpc"
@@ -514,5 +516,47 @@ func TestInboxAgentPromptNamesTheKnowledgeDir(t *testing.T) {
 	}
 	if strings.Contains(text, "~/.persona/data") || !strings.Contains(text, "## 知识库里的背景（"+dir+"）") {
 		t.Fatalf("the heading should name %s: %q", dir, text)
+	}
+}
+
+// A pass asked for while one runs is run after it, not dropped: every caller is an event, and nothing else would come
+// back for what it queued (a new message for an event's conversation waited for the next event). Still one pass at a
+// time, and the calls made meanwhile are one more pass, not one each.
+func TestInboxPassAskedDuringOneRunsAfterIt(t *testing.T) {
+	h := agentHub(t)
+	h.setConfig(func(c *assistantwire.InboxConfig) { c.Agent.Enabled = true })
+	ctx := context.Background()
+	var passes, running, overlap atomic.Int32
+	started, release := make(chan struct{}), make(chan struct{})
+	h.inbox.passHook = func() {
+		if running.Add(1) > 1 {
+			overlap.Add(1)
+		}
+		defer running.Add(-1)
+		if passes.Add(1) == 1 {
+			close(started)
+			<-release // the first pass is held open
+		}
+	}
+	h.handInbox(ctx)
+	<-started
+	h.handInbox(ctx) // while it runs: not dropped
+	h.handInbox(ctx)
+	close(release)
+	deadline := time.Now().Add(3 * time.Second)
+	for passes.Load() < 2 && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
+	time.Sleep(50 * time.Millisecond) // a third pass would have started by now
+	if n := passes.Load(); n != 2 || overlap.Load() != 0 {
+		t.Fatalf("%d passes (%d overlapping), want 2 one after the other", n, overlap.Load())
+	}
+	// Idle again: a call runs a pass of its own.
+	h.handInbox(ctx)
+	for passes.Load() < 3 && time.Now().Before(deadline.Add(3*time.Second)) {
+		time.Sleep(5 * time.Millisecond)
+	}
+	if n := passes.Load(); n != 3 {
+		t.Fatalf("a call after the passes ended ran %d", n-2)
 	}
 }

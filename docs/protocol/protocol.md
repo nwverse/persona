@@ -334,7 +334,8 @@ Approval IDs contain machine / instance / connection generation / thread / the o
 ## Claude Code ultracode (#3427)
 
 ultracode is independent of reasoning effort and adds no level to `EffortLevels`. It applies only to the current Claude process, defaults to off, and does not remember the last choice or change launcher settings or the user's default effort.
-This API is for ordinary Claude Code Agent sessions; Persona's headless assistant chats, including the main chat, do not support it. Client controls are tracked in web #3428, Android #3429 and Apple #3430; choices for dispatch and to-dos are in #3431.
+This API is for ordinary Claude Code Agent sessions; Persona's headless assistant chats, including the main chat, do not support it. Client controls are tracked in web #3428, Android #3429 and Apple #3430.
+The assistant's `agent_start` and `task_plan` take `ultracode` per Agent and pass `true` on to `session.start` (#12), with the same refusals as below; a refused start does not count against the launcher's health. The plan card and to-do controls are still to come in #12.
 
 Optional Session fields:
 
@@ -2446,6 +2447,7 @@ Tasks dispatched from an assistant chat ([unified-entry.md](../assistant/unified
 {"id":"plan_…","conversation":"<assistant chat id>","state":"open|started|dismissed","created_at":"...","updated_at":"...",
  "tasks":[{"title":"Fix the login crash","prompt":"The first message to the Agent","machine":"<machine id>","cwd":"/abs/path",
            "launcher":"","model":"","permission":"acceptEdits","readonly":false,"why":"one-line reason",
+           "ultracode":true,            // optional (#12): the Claude Code Agent starts with ultracode on; on start, true / false sets it and leaving it out keeps the assistant's choice
            "done_when":["PR merged into master"],"expect_minutes":30,   // optional (#3124): acceptance criteria, expected minutes; clients only display them and don't send them back on start
            "reuse_todo":"todo_…",       // optional (#5279): the to-do the task runs on instead of a new one (task_plan's per-task `todo_id`); the apps neither send it back nor change it
            "todo_id":"todo_…",          // only present after start
@@ -2569,7 +2571,7 @@ When `kind` is `qr`, likewise no fields and the same polling: `url` is the conte
 | POST | `/api/v1/mail/messages/{aid}/{uid}/flags` | `{"mailbox","seen"?,"flagged"?}` |
 | POST | `/api/v1/mail/send` | `{"account_id","to":[],"cc":[],"bcc":[],"subject","text","html"?,"in_reply_to"?,"references"?}`; `references` is a space-separated Message-ID string, but a string array is also accepted (old iOS sends this; the hub joins it with spaces) |
 
-The mail details page first reads the body and attachment list, then submits `{"mailbox":"INBOX","seen":true}` via `/flags`. The details GET uses `BODY.PEEK`, preserving old clients' behavior rather than marking messages read automatically. Attachments include a stable `id`, filename, MIME type and decoded size; IDs bind the MIME order, file metadata and decoded content, so attachments with the same name can be distinguished. Downloads also use read-only `BODY.PEEK`, with no dependency on extensions such as BINARY; the server streams decoded content into a temporary file, then returns byte ranges of the decoded content via HTTP Range. Unknown accounts, attachments or changed content return 404.
+The mail details page first reads the body and attachment list, then submits `{"mailbox":"INBOX","seen":true}` via `/flags`. The details GET uses `BODY.PEEK`, preserving old clients' behavior rather than marking messages read automatically. Attachments include a stable `id`, filename, MIME type and decoded size; IDs bind the MIME order, file metadata and decoded content, so attachments with the same name can be distinguished. Downloads also use read-only `BODY.PEEK`, with no dependency on extensions such as BINARY; the server streams decoded content into a temporary file, then returns byte ranges of the decoded content via HTTP Range. Unknown attachments or changed content return 404; an account the manager doesn't have is 404 `mail_account_unknown`, with an `error` that names the account in the request's language (`/test` still answers `{"ok":false,"error"}`).
 
 ```jsonc
 // MailAccount
@@ -2610,7 +2612,7 @@ The hub collects Lark, mail and connector data in the background and hands it to
 | PUT | `/api/v1/inbox/{id}/parent` | `{kind, id}` sets this entry's parent (`kind` is `inbox` / `todo` / `session`); `null` or `{}` removes it → this `InboxItem`; missing entry or parent 404, invalid parent 400, would create a cycle 409 ([inbox.md](../assistant/inbox.md)) |
 | GET | `/api/v1/inbox/tree/{kind}/{id...}` | a node's trail: `{node, item?, ancestors:[{kind, id, item?}], children:[InboxItem]}`, children ordered by start time; missing entry 404, invalid `kind` / `id` 400 |
 | POST | `/api/v1/translate` | `{texts:[string]≤30, target}` → `{texts}`, preserving order; missing model outputs are empty strings. target is BCP 47 (zh-Hans, en, ja…, `docs/apple/ios.md` ("Translation")). Like the Inbox, this belongs to the assistant (forwarded through the hub), using the "Translation" use in model configuration |
-| POST | `/api/v1/translate/mail` | `{account_id, uid, mailbox, target}` → `{subject, text, clipped?, model_fingerprint?}`: the assistant asks the hub to read this mail (HTML-only mail becomes text preserving paragraphs and links), then translates it itself; returns the Inbox's existing translation if it used the same model; body at most 12000 characters |
+| POST | `/api/v1/translate/mail` | `{account_id, uid, mailbox, target}` → `{subject, text, clipped?, model_fingerprint?}`: the assistant asks the hub to read this mail (HTML-only mail becomes text preserving paragraphs and links), then translates it itself; returns the Inbox's existing translation if it used the same model; body at most 12000 characters. An account the manager doesn't have is 404 `mail_account_unknown`, as on the mail routes; other failures to read or translate the mail are 502 |
 
 Mail replies may carry `expected_uid` and/or `expected_version` from the details response. The version binds the account, mailbox, UID in the thread, message identifier and sender. A changed target returns HTTP 409, `code=mail_reply_target_changed`, `delivered=none`, `retryable=false`; nothing was sent this time. The App keeps the draft, loads the latest mail, and after the user confirms the new recipients makes a new request with a new `client_id`. When the network result is unknown, it checks the receipt using the original request, target and `client_id`. Omitting the validation fields preserves old behavior, so existing iOS needs no changes; persistent receipt rules are unchanged.
 
