@@ -331,3 +331,24 @@ git tag v1.2.0 && git push origin v1.2.0   # -> ghcr.io/<owner>/<repo>:1.2.0 and
 - The image's personad is on the `docker` channel: no skills (like all binaries), no self-update; a new image prompts you to pull it (`docs/operations/hub-update.md`).
 - When the repository is private, the package is private too; NAS installs need `docker login ghcr.io` (`docs/operations/docker.md` ("Image")).
 
+## Android publisher repository migration and status retries
+
+`scripts/release/android_release_worker.py` uses a private configuration file. Its `repository`, `git_url`, `branch` and
+dedicated `checkout` must all identify the intended source repository. Checkpoints and build receipts carry the repository identity;
+an old checkpoint without that identity is rejected rather than silently attributed to a different repository.
+
+When moving to rewritten history, pause the existing publisher, retain its evidence and use a separate `state_directory` for the new
+repository. Keep the existing package, signing certificate and signing entry. Never post an old commit's status to the new repository
+or treat an old verified APK as a build of the new source. Compare migrated file content when commit IDs have changed.
+
+Versions are `version_base + first-parent commit count`; `version_base` defaults to 100000. Before enabling the new lane, choose a
+fixed nonnegative base so its first version exceeds the currently published APK. Keep that base stable thereafter. The worker rejects
+history rewrites and version regressions within the lane; the atomic Hub publisher also rejects stale versions across lanes.
+
+After publishing and completing the configured full online verifier, the worker durably records `verified.json`, including the source,
+repository, package, version, signed APK hash and certificate. Only then does it post the GitHub success status and advance `published.json`.
+If that status write fails, the next cycle for the same source revalidates the local artifact and retries only the status/checkpoint;
+it does not build, sign, publish or download again. The receipt proves the completed verification, not current availability after an
+unrelated deployment. A newer source follows the normal full pipeline. Preserve failure logs and report publication, verification,
+status reporting and handset installation separately. Legacy releases without a verified receipt are not automatically imported.
+

@@ -39,13 +39,15 @@ The web client's build writes `third-party-licenses.txt` next to its `index.html
 `/third-party-licenses.txt`). It lists every npm package `web/package-lock.json` installs for the client, which is every
 package the build can include (xterm, pdf.js, noVNC, KaTeX, Mermaid and its dependencies, SheetJS and the rest), with its
 version, the license it is used under, its source and the license text it is published with. `web/third-party-licenses.ts`
-writes it; `web/third-party-licenses.test.ts`, part of `npm test` and so of CI's web tests, fails when a new dependency is
-under a license not accepted yet, offers a choice of licenses not made yet, or comes without a license file.
+writes it, and the build fails (as does `web/third-party-licenses.test.ts` in CI's web tests) when a dependency is under a
+license not accepted yet, offers a choice of licenses not made yet, no longer offers the license chosen, or comes without
+a license file.
 
 - Choices among offered licenses: DOMPurify (MPL-2.0 or Apache-2.0) is used under Apache-2.0, elkjs (EPL-2.0 or
   GPL-3.0-or-later) under EPL-2.0, JSZip (MIT or GPL-3.0-or-later) under MIT.
-- Source of the copyleft code, bundled from the npm releases without changes to it: noVNC 1.7.0 (MPL-2.0) at
-  https://github.com/novnc/noVNC (tag v1.7.0), elkjs 0.12.1 (EPL-2.0) at https://github.com/kieler/elkjs.
+- Source of the copyleft code, bundled from the npm releases without changes to it: noVNC (MPL-2.0) at
+  https://github.com/novnc/noVNC, elkjs (EPL-2.0) at https://github.com/kieler/elkjs, at the versions
+  `third-party-licenses.txt` names.
 - khroma's package.json names no license; its LICENSE file grants MIT. isarray, rehype-katex and remark-math (MIT) are
   published without a license file; their entries point at their source.
 - Authors' email addresses are left out of the license texts: the published hub binary embeds the web client, and the
