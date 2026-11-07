@@ -5,6 +5,9 @@ import SwiftUI
 /// (`SubagentCard`): set by the chat, each running or not as its own lines tell it (`Subagent.running(in:)`).
 extension EnvironmentValues {
     @Entry var subagentsByCall: [String: Subagent] = [:]
+    /// The chat the cards are in: a subagent's own conversation is `<session>@<agent>` on its machine, which its open
+    /// card follows (`SubagentRecentSteps`). Nil where there is no chat around the card.
+    @Entry var subagentParent: SessionKey? = nil
 }
 
 /// How a subagent is doing, as its card says it (#5602, the web's `AgentStatus`): by its call's result, a background
@@ -32,6 +35,57 @@ nonisolated enum SubagentCardStatus: Equatable, Sendable {
     /// What a background subagent reported: its last notice's detail (nil before it is over).
     static func report(_ call: String, tasks: TaskIndex) -> String? {
         tasks.notes[call]?.last(where: { $0.status != "event" })?.detail.flatMap { $0.isEmpty ? nil : $0 }
+    }
+}
+
+/// What an open card shows of a subagent's own conversation: its latest few tool calls, oldest first, each with its
+/// result once it is in (the web's `RecentSteps`).
+nonisolated enum SubagentRecent {
+    static let count = 3
+
+    static func calls(_ items: [Item], last n: Int = count) -> [ToolCall] {
+        var results: [String: Item] = [:]
+        for it in items where it.kind == .toolResult { if let id = it.toolUseID { results[id] = it } }
+        return items.filter { $0.kind == .toolUse }.suffix(n).map { ToolCall(use: $0, result: $0.toolUseID.flatMap { results[$0] }) }
+    }
+
+    /// The most calls a fold may hold for the card to open it (`foldToOpen`).
+    static let foldLimit = 40
+
+    /// The fold to open for the latest calls: the hub folds the work it replays (`fold_work`), and a subagent's run is
+    /// one stretch of work, so only calls made since the card subscribed are out. Its newest fold when fewer than
+    /// `count` calls follow it; not a long one (it is fetched whole for three rows: its next steps come in as they happen).
+    static func foldToOpen(_ items: [Item]) -> Item? {
+        guard let i = items.lastIndex(where: { $0.kind == .fold }), let tools = items[i].fold?.tools,
+              (1...foldLimit).contains(tools),
+              items[(i + 1)...].filter({ $0.kind == .toolUse }).count < count else { return nil }
+        return items[i]
+    }
+}
+
+/// A subagent's latest steps in its open card (#5602): it follows the subagent's own conversation while shown (the hub
+/// pushes what it writes), instead of what the card knew when it opened.
+struct SubagentRecentSteps: View {
+    @Environment(AppModel.self) private var model
+    var key: SessionKey
+    @State private var owner = UUID()
+
+    var body: some View {
+        let store = model.chat(key)
+        let calls = SubagentRecent.calls(store.items)
+        let fold = SubagentRecent.foldToOpen(store.items)
+        VStack(alignment: .leading, spacing: Theme.Space.xs) {
+            if calls.isEmpty {
+                if !store.loadedOnce { ProgressView().controlSize(.mini) }
+            } else {
+                ForEach(calls) { ToolCallRow(call: $0, autoExpand: false) }
+            }
+        }
+        .animation(Theme.Motion.state, value: calls.map(\.id))
+        .task(id: fold?.id) { if let fold { try? await model.unfold(key, fold) } }
+        .onAppear { model.subscribe(key, by: owner) }
+        .onDisappear { model.unsubscribe(key, by: owner) }
+        .accessibilityIdentifier("chat.subagent-steps")
     }
 }
 
@@ -66,8 +120,16 @@ struct SubagentCard: View {
     @Environment(\.openSubagent) private var openSubagent
     @Environment(\.openTools) private var openTools
     @Environment(\.chatPin) private var pin
+    @Environment(\.subagentParent) private var parent
     var call: ToolCall
-    @State private var openHere = false
+    @State private var openHere = Self.debugOpen
+
+    /// Screenshots: `-showSubagentDetails YES` opens every subagent card (its latest steps) without a tap.
+    #if DEBUG
+    static let debugOpen = UserDefaults.standard.bool(forKey: "showSubagentDetails")
+    #else
+    static let debugOpen = false
+    #endif
 
     /// An Agent / Task call: drawn as its subagent's card.
     nonisolated static func isAgent(_ call: ToolCall) -> Bool { call.name == "Agent" || call.name == "Task" }
@@ -165,6 +227,7 @@ struct SubagentCard: View {
             } else if let result = call.result {
                 ResultBlock(text: result.cutText, isError: result.isError ?? false, cut: result.fullSize.map { (result.id, $0) })
             }
+            if let agent, let parent { SubagentRecentSteps(key: ChatView.shownKey(parent, viewing: agent)) }
             if let open = openSubagent, let id = call.use.toolUseID {
                 Button { open(id) } label: {
                     Label("View Subagent", systemImage: Theme.Icon.open).font(Theme.Font.labelStrong).lineLimit(1)
