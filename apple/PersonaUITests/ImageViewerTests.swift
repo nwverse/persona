@@ -220,7 +220,7 @@ final class ImageViewerTests: XCTestCase {
         addTeardownBlock { _ = try? Data(contentsOf: letThrough) }
         for scheme in ["light", "dark"] {
             mock("images")
-            let app = open(["-openImagesFresh", "YES", "-ui.scheme", scheme])
+            let app = open(Self.fresh + ["-ui.scheme", scheme])
             dismissAlerts()
             // `-openViewedImage 2` opens on the second picture: page 1.
             let failed = app.descendants(matching: .any)["viewer-not-loaded-1"].firstMatch
@@ -252,7 +252,7 @@ final class ImageViewerTests: XCTestCase {
         addTeardownBlock { _ = try? Data(contentsOf: letThrough) }
         for scheme in ["light", "dark"] {
             mock("images")
-            let app = openChat(["-openImagesFresh", "YES", "-ui.scheme", scheme])
+            let app = openChat(Self.fresh + ["-ui.scheme", scheme])
             dismissAlerts()
             let tiles = (0..<5).map { app.buttons["viewed-image-\($0)"] }
             XCTAssertTrue(tiles[0].waitForExistence(timeout: 30), "no viewed images:\n\(app.debugDescription)")
@@ -287,7 +287,7 @@ final class ImageViewerTests: XCTestCase {
         addTeardownBlock { _ = try? Data(contentsOf: letThrough) }
         for scheme in ["light", "dark"] {
             mock("images")
-            let app = openChat(["-openImagesFresh", "YES", "-ui.scheme", scheme])
+            let app = openChat(Self.fresh + ["-ui.scheme", scheme])
             dismissAlerts()
             // The photo is near the top of the conversation. (A row off screen can be in the tree with no place to tap:
             // `isHittable` fails on it rather than saying no, so ask for its middle on screen.)
@@ -304,6 +304,10 @@ final class ImageViewerTests: XCTestCase {
             app.terminate()
         }
     }
+
+    /// No picture kept on disk from an earlier run, so a failing mock fails it, and no chat kept from a mock whose items
+    /// have other ids (`MOCK_CHAT_IMAGES` shifts them): a kept chat opened the viewer on refs that are not pictures.
+    private static let fresh = ["-openImagesFresh", "YES", "-openChatsFresh", "YES"]
 
     /// What a tile that did not load says to VoiceOver (zh-Hans).
     private static let notLoaded = "图片没载入，点按重试"
