@@ -2,6 +2,7 @@
 package node
 
 import (
+	"bytes"
 	"cmp"
 	"context"
 	"encoding/json"
@@ -1501,13 +1502,29 @@ func loginShell(ctx context.Context, script string) *exec.Cmd {
 
 func marshalJSON(v any) ([]byte, error) { return json.MarshalIndent(v, "", "  ") }
 
-// writeFileAtomic replaces path whole: a reader sees the old file or the new one.
-func writeFileAtomic(path string, b []byte) error {
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, b, 0o600); err != nil {
+// writeFileAtomic replaces path whole with b (writeAtomic).
+func writeFileAtomic(path string, b []byte) error { return writeAtomic(path, bytes.NewReader(b)) }
+
+// writeAtomic replaces path whole with what r reads: a reader sees the old file or the new one. The new one is written
+// to a temp file of its own in the same folder (0600), so two writers of one path do not share it and the rename never
+// crosses file systems.
+func writeAtomic(path string, r io.Reader) error {
+	f, err := os.CreateTemp(filepath.Dir(path), "."+filepath.Base(path)+".*.tmp")
+	if err != nil {
 		return err
 	}
-	return os.Rename(tmp, path)
+	tmp := f.Name()
+	_, err = io.Copy(f, r)
+	if cerr := f.Close(); err == nil {
+		err = cerr
+	}
+	if err == nil {
+		err = os.Rename(tmp, path)
+	}
+	if err != nil {
+		os.Remove(tmp)
+	}
+	return err
 }
 
 func shellQuote(s string) string {

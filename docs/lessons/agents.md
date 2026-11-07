@@ -549,3 +549,25 @@ A purpose-level model override does not change the managed launcher's default. L
 - Claude Code has no archive for local sessions: its archive/unarchive is for cloud and Remote Control sessions (the sessions API). The Claude desktop app's Code sessions keep
   their own `isArchived` in the app's private session records (`claude-code-sessions/…/local_<id>.json` plus an `archived-sessions.idx`), keyed by the app's own session id: an undocumented
   store the running app writes, so Persona doesn't write it. Never move or delete `~/.claude/projects/*.jsonl` as an "archive": it breaks `--resume` and can't be told apart from a deletion.
+
+## An Agent's environment is its engine's, not the node's (2026-11-08, #744)
+
+- A pane runs with the environment its engine was started with. Orca had been started from the assistant's Bash tool,
+  so every Agent in it had `PERSONA_ASSISTANT=1`, `CLAUDE_CODE_AUTO_COMPACT_WINDOW=200000`, `ENABLE_TOOL_SEARCH=false`
+  and the parent Claude's own markers (`CLAUDECODE`, `CLAUDE_CODE_ENTRYPOINT`, `CLAUDE_EFFORT`, …). As a result:
+  - every Agent compacted at 200K;
+  - every Agent loaded all tool schemas up front;
+  - `personad launch` took them for the assistant and kept the inherited window;
+  - their MCP servers listed the assistant's tools.
+
+  Restarting the engine from launchd cleared it.
+- The same machine still had an older, independent data directory next to `~/.persona`. Only the node's service
+  definition set `PERSONA_HOME`, so `personad mcp` and `hook` in the Agents resolved the older directory and dialed a
+  socket no node listened on.
+- Anything the node starts in a pane must say itself which node it belongs to, and must not count on the pane being clean:
+  - the node writes its directory into `mcp.json`, the hook commands and the typed start commands;
+  - the typed commands `unset` the assistant-only variables (`node/agentenv.go`).
+
+  A new variable the node gives only the assistant goes into `assistantOnlyEnv`.
+- To see what an Agent really got, read its process environment (`ps -E -ww -o command= -p <pid>` on a Mac). Print the
+  names only. Its Bash tool's `env` also shows what its own Claude added for its children.

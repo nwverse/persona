@@ -48,6 +48,7 @@ func TestHerdrAgentReachesClaudeInRealShells(t *testing.T) {
 			if err != nil {
 				t.Skipf("%s is not installed", sh.name)
 			}
+			withPaneShell(t, bin) // herdr's resume is typed into this shell too (fish has no unset: agentenv.go)
 			home := t.TempDir()
 			path := filepath.Join(home, "bin")
 			ran := filepath.Join(home, "ran")

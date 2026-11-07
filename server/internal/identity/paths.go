@@ -54,8 +54,10 @@ func PrepareHome(home string) (string, error) {
 	if root == currentPath || root == legacyPath {
 		a, aerr := os.Stat(currentPath)
 		b, berr := os.Stat(legacyPath)
-		if aerr == nil && berr == nil && !os.SameFile(a, b) {
-			return "", fmt.Errorf("independent state directories exist; select an explicit shared root without moving either directory")
+		// An explicit PERSONA_HOME has picked one of two independent stores: it is used, and the other is left as
+		// it is (it is never aliased over, below). Without one, neither is guessed.
+		if aerr == nil && berr == nil && !os.SameFile(a, b) && explicitRoot(home) == "" {
+			return "", fmt.Errorf("independent state directories exist; set PERSONA_HOME to the one to use, without moving either directory")
 		}
 	}
 	if st, err := os.Lstat(root); err == nil && st.Mode()&os.ModeSymlink != 0 {
