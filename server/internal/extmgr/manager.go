@@ -99,6 +99,9 @@ type Options struct {
 type Manager struct {
 	// errReports: the error reports' pipeline (error_reports.go).
 	errReports errorReports
+	// serving: the requests the hub relayed to the extensions being served now, a WebSocket (a voice call, an
+	// extension's live view) for as long as it is open (Serving).
+	serving atomic.Int64
 
 	opts    Options
 	cfg     *Config

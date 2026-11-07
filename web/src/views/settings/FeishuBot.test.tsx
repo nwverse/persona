@@ -77,6 +77,31 @@ describe("Feishu bot dialog", () => {
     expect(input("App ID").value).toBe("cli_typed");
   });
 
+  it("sends only the switch flipped, not the whole set this page last saw (#74)", async () => {
+    await open(saved());
+    // Enable, then main, cards, all cards, pushes: the fifth is "Push to Lark".
+    await act(async () => switches()[4].click());
+    expect(calls.update).toHaveLength(1);
+    expect(calls.update[0].body).toEqual({ features: { pushes: true } });
+    // The board was turned on elsewhere meanwhile; the hub's answer carries it, and the next switch leaves it alone.
+    await act(async () => calls.update[0].resolve(saved({ features: { ...saved().features, pushes: true, board: true } })));
+    await act(async () => switches()[5].click());
+    expect(calls.update[1].body).toEqual({ features: { sync: true } });
+  });
+
+  it("names both of the card switches when turning questions and approvals off", async () => {
+    await open(saved());
+    await act(async () => switches()[2].click());
+    expect(calls.update[0].body).toEqual({ features: { cards: false, all_cards: false } });
+  });
+
+  it("sends every switch to a hub from before 0.1.12, which replaces the whole set", async () => {
+    const { reports: _reports, board: _board, ...old } = saved().features;
+    await open(saved({ features: old }));
+    await act(async () => switches()[4].click());
+    expect(calls.update[0].body).toEqual({ features: { ...old, pushes: true } });
+  });
+
   it("keeps a typed App ID when the bot is switched off", async () => {
     await open(saved());
     type("App ID", "cli_typed");

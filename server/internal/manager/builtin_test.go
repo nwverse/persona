@@ -22,7 +22,14 @@ import (
 // builtinHub answers the join like the hub: per code, the manager it is for, or a refusal.
 func builtinHub(t *testing.T) *httptest.Server {
 	t.Helper()
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := httptest.NewServer(builtinJoins())
+	t.Cleanup(srv.Close)
+	return srv
+}
+
+// builtinJoins is builtinHub's handler.
+func builtinJoins() http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost || r.URL.Path != bus.JoinPath {
 			http.NotFound(w, r)
 			return
@@ -53,9 +60,7 @@ func builtinHub(t *testing.T) *httptest.Server {
 			w.WriteHeader(http.StatusUnauthorized)
 			_, _ = w.Write([]byte(`{"code":"bad_install_code"}`))
 		}
-	}))
-	t.Cleanup(srv.Close)
-	return srv
+	})
 }
 
 // The built-in manager's code binds it: the hub's address, the token and the hub's id in its manager.json, its other
