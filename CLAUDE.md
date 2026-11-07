@@ -37,6 +37,8 @@ This is a public open-source repository; everyone and every Agent maintains it t
   comments. Edit history is public: changing the text later does not remove it, so don't write it in the first place.
 - **No internal names**: internal company services, internal repositories, internal tools and intranet access setups never appear.
   Capabilities that need them are extensions kept in a private extension repository; this repository has only generic extension points and names.
+- **Issue scope**: do not open issues here for changes to a private extension repository. If this repository also needs changes,
+  describe only the work needed here in its issue, not the work in the private repository.
 - **No private information**: no intranet domains / IPs / URLs, host names, real people's names or messages, personal accounts, mail
   addresses, tokens, keys or project IDs. Examples use placeholders (`<hub address>`, `me@example.com`). `scripts/privacy_check.py` checks
   (`git config core.hooksPath scripts/hooks` runs it on commit and push; `docs/operations/testing.md`, "Privacy scan").

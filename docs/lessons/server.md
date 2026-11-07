@@ -11,6 +11,10 @@ and a local session revision protect that boundary without changing the node pro
 
 Pitfalls, odd behavior, and the trade-offs made at the time (formerly "Lessons" in `CLAUDE.md`; index in `docs/lessons/README.md`). Add new lessons to the relevant section, or create one if none fits.
 
+## A fixed name in the temp folder is shared on Linux (2026-11-07, #66)
+
+`os.TempDir()` is the per-user `$TMPDIR` on macOS but the shared `/tmp` on Linux, so a fixed name there (`persona-herdr-server.log`, `persona-orca-images`) looks private on a Mac and is not on a Linux node. Another local user can create the name first: a symlink makes the next `O_CREATE|O_TRUNC` open empty and write into a file of the node's user, and a world-writable folder receives every file written into it, since `MkdirAll` succeeds on an existing folder whatever its owner or mode. Keep such files under `privateCacheDir` (`internal/node/cachedir.go`: the user's cache folder, checked to be a private folder of this user; a per-process `os.MkdirTemp` folder when there is none).
+
 ## An expiry written by one clock and checked by another (2026-11-07, #6543, #6553)
 
 Revocation ended pairing codes with `expires_at = now()` (Postgres's clock) while the hub judged them by its own `time.Now()`: with Postgres in a VM whose clock runs ahead (a macOS hub with Docker Desktop or colima), a revoked code kept working for the difference. When a time is written on one side and compared on the other, make it past by both (`LEAST(expires_at, now(), $hub_now)`, `endedNow`). A time the hub hands out has the same problem even when every check is in SQL: a voided manager install code still showed a future expiry in the roster (#6553). Tests that compare a database-written time with `time.Now()` fail on such a machine, while Linux CI, with Postgres on the same kernel clock, never shows it.

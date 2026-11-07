@@ -335,6 +335,13 @@ func (e *env) removeService(ctx context.Context, c *assistant.ManagerConfig) err
 }
 
 func cmdStatus(ctx context.Context, e *env, args []string) error {
+	if isBuiltin(args) {
+		if len(args) != 1 {
+			return errUsage
+		}
+		e.builtinStatus(ctx, true)
+		return nil
+	}
 	var dirs []string
 	if len(args) > 0 {
 		d, _, err := dirFlag(e, "status", args)
@@ -344,6 +351,9 @@ func cmdStatus(ctx context.Context, e *env, args []string) error {
 		dirs = []string{d}
 	} else {
 		dirs = localManagers()
+	}
+	if len(args) == 0 {
+		defer e.builtinStatus(ctx, false) // the built-in manager's own service too, when it has one or a binding
 	}
 	if len(dirs) == 0 {
 		fmt.Fprintf(e.stdout, "%s 下没有管理者\n", managersRoot())

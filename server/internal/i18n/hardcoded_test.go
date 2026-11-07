@@ -53,6 +53,7 @@ var hardcodedSkip = map[string]string{
 	"internal/hub/doctor.go":             "personad hub doctor's terminal output",
 	"internal/hub/setup.go":              "personad hub setup's terminal output",
 	"internal/hub/setup_service.go":      "personad hub setup's terminal output",
+	"internal/hub/setup_manager.go":      "personad hub setup's terminal output",
 	"internal/hub/transcript_text.go":    "node's original text, matched to rewrite it",
 	"internal/extmgr/extension_build.go": "personad extension build's terminal output",
 }
