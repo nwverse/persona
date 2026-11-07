@@ -110,6 +110,35 @@ describe("ultracode on the plan card", () => {
     expect(sent()?.map((e) => e.ultracode)).toEqual([true, false]);
   });
 
+  it("keeps the choice in 改一下 for a task moved off a computer that can't, and sends it off only where it stays", async () => {
+    const pickMachine = async (id: string) => {
+      const select = document.querySelector<HTMLSelectElement>("#plan-p1-0-machine");
+      expect(select, "machine").toBeTruthy();
+      await act(async () => {
+        Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, "value")!.set!.call(select, id);
+        select!.dispatchEvent(new Event("change", { bubbles: true }));
+      });
+      await flush();
+    };
+    const toggle = () => document.querySelector<HTMLButtonElement>('[data-testid="plan-edit-ultracode"] [role="switch"]');
+    const startInDialog = () => [...document.querySelectorAll<HTMLElement>('[role="dialog"] button')].filter((b) => b.textContent?.trim() === "开始").at(-1);
+
+    await render(<PlanCard plan={plan([task({ machine: "m2", ultracode: true })])} />);
+    await click(byText("改一下")[0]);
+    expect(toggle()?.getAttribute("aria-checked")).toBe("false"); // drawn off on the old computer
+    await pickMachine("m1");
+    expect(toggle()?.getAttribute("aria-checked")).toBe("true"); // the assistant's choice again
+    await click(startInDialog());
+    expect(sent()?.[0]).not.toHaveProperty("ultracode"); // left out: the hub keeps the assistant's
+
+    await act(async () => root.unmount());
+    root = createRoot(host);
+    await render(<PlanCard plan={plan([task({ machine: "m2", ultracode: true })])} />);
+    await click(byText("改一下")[0]);
+    await click(startInDialog());
+    expect(sent()?.[0]?.ultracode).toBe(false); // still on the old computer: starts without
+  });
+
   it("does not count the card's own choice as a change to throw away in 改一下", async () => {
     const ask = vi.spyOn(window, "confirm").mockReturnValue(false);
     await render(<PlanCard plan={plan([task()])} />);

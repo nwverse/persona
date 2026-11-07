@@ -27,7 +27,8 @@ export function modelPlaceholder(planned?: string): string {
   return m ? t("assistant-tasks.plan_edit_model_placeholder_kept", { model: m }) : t("assistant-tasks.plan_edit_model_placeholder");
 }
 
-/** `ultracode`: each task's choice as the card draws it, where "Edit" starts from. */
+/** `ultracode`: each task's choice on the card, where "Edit" starts from: kept while its computer can't (the switch is
+ *  drawn off and Start sends it off), so moving the task to one that can turns it back to what was chosen. */
 export function PlanEditDialog({ plan, ultracode, onClose, onStart }: { plan: TaskPlan; ultracode?: readonly boolean[]; onClose: () => void; onStart: (edits: PlanTaskEdit[]) => void }) {
   const machines = useStore((s) => s.machines);
   const ultracodeOffered = useStore((s) => hubHas(s.features, ULTRACODE_FEATURE));

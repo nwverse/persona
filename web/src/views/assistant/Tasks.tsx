@@ -283,17 +283,15 @@ function PlanTaskFailed({ task, conversation }: { task: PlanTask; conversation: 
   return <span className="text-red">{t("assistant-tasks.plan_task_failed", { title: task.title, error })}</span>;
 }
 
-/** Each task's ultracode as the open card draws it and Start sends it (#12): the card's own choice, else the assistant's;
- *  off on a computer whose Claude Code is known to be too old (`blocked` says why). Undefined where the hub has no
- *  ultracode, and the card shows nothing. */
+/** Each task's ultracode on the open card (#12): `on`, the card's own choice, else the assistant's; `blocked`, why its
+ *  computer can't start with it (a known Claude Code too old), "" when it can. The chip draws it off while blocked, and
+ *  Start sends it off, but "Edit" opens with the choice, so a task moved there to a computer that can has it again.
+ *  Undefined where the hub has no ultracode, and the card shows nothing; nothing is read for a plan no longer open. */
 function usePlanUltracode(plan: TaskPlan, choice: Record<number, boolean>): ({ on: boolean; blocked: string } | undefined)[] {
-  const offered = useStore((s) => hubHas(s.features, ULTRACODE_FEATURE));
-  const versions = useStoreRows((s) => plan.tasks.map((task) => ({ version: s.machines.find((m) => m.id === task.machine)?.claude_version })));
-  return plan.tasks.map((task, i) => {
-    if (!offered) return undefined;
-    const blocked = startBlocked(versions[i]?.version);
-    return { on: !blocked && (choice[i] ?? task.ultracode === true), blocked };
-  });
+  const open = plan.state === "open";
+  const offered = useStore((s) => open && hubHas(s.features, ULTRACODE_FEATURE));
+  const versions = useStoreRows((s) => (open ? plan.tasks.map((task) => ({ version: s.machines.find((m) => m.id === task.machine)?.claude_version })) : []));
+  return plan.tasks.map((task, i) => (offered ? { on: choice[i] ?? task.ultracode === true, blocked: startBlocked(versions[i]?.version) } : undefined));
 }
 
 export function PlanCard({ plan }: { plan: TaskPlan }) {
@@ -317,8 +315,10 @@ export function PlanCard({ plan }: { plan: TaskPlan }) {
     );
   }
   const run = (f: () => Promise<void>) => f().catch((e) => toast(t("assistant-tasks.start_failed", { error: String(e instanceof Error ? e.message : e) }), "error"));
-  // what Start goes with: the drawn choice where the card offers it, the assistant's elsewhere
+  // each task's choice where the card offers it, the assistant's elsewhere ("Edit" opens with it); Start goes with it,
+  // off on a computer that can't
   const ultracode = plan.tasks.map((task, i) => ultra[i]?.on ?? task.ultracode === true);
+  const starts = ultracode.map((on, i) => on && !ultra[i]?.blocked);
   return (
     <div className="flex flex-col gap-3 rounded-card bg-surface p-4 shadow-card">
       <div className="flex items-center gap-1.5 text-[12px] font-medium text-ink-2">
@@ -333,7 +333,7 @@ export function PlanCard({ plan }: { plan: TaskPlan }) {
         {t("assistant-tasks.plan_remember")}
       </label>
       <div className="flex gap-2">
-        <Button tone="accent" busy={busy} onClick={() => run(() => startPlan(plan, remember, planUltracodeToSend(plan, ultracode)))} className="flex-1">
+        <Button tone="accent" busy={busy} onClick={() => run(() => startPlan(plan, remember, planUltracodeToSend(plan, starts)))} className="flex-1">
           {plan.tasks.length > 1 ? t("assistant-tasks.plan_start_n", { count: plan.tasks.length }) : t("assistant-tasks.plan_start")}
         </Button>
         <Button disabled={busy} onClick={() => setEditing(true)}>
@@ -384,8 +384,8 @@ function PlanTaskRow({ n, task, numbered, ultra, busy, onUltra }: { n: number; t
         </span>
         {ultra && <UltracodeChip on={ultra.on} blocked={ultra.blocked} disabled={busy} onChange={onUltra} />}
       </div>
-      {/* the assistant asked for it where it can't run: say it starts without */}
-      {ultra?.blocked && task.ultracode && <div className="text-[12px] text-orange">{t("ultracode.plan_blocked", { reason: ultra.blocked })}</div>}
+      {/* it is asked for where it can't run: say it starts without */}
+      {ultra?.blocked && ultra.on && <div className="text-[12px] text-orange">{t("ultracode.plan_blocked", { reason: ultra.blocked })}</div>}
       {task.why && <div className="text-[12px] text-ink-2">{task.why}</div>}
     </div>
   );
