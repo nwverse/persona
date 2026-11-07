@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -61,13 +62,8 @@ func claudePaste(text string) (kept string, attached []string) {
 
 // appPhotos is the photos the apps show for a message: the lines of its <attached_images> block that start with "/" or
 // "~" (iOS UserBubble.imagePaths, Android imagePaths, web parseUserText).
-func appPhotos(text string) []string {
-	m := regexp.MustCompile(`(?s)<attached_images>(.*?)</attached_images>`).FindStringSubmatch(text)
-	if m == nil {
-		return nil
-	}
-	var photos []string
-	for _, l := range strings.Split(m[1], "\n") {
+func appPhotos(text string) (photos []string) {
+	for _, l := range strings.Split(attachedNote.FindString(text), "\n") {
 		if l = strings.TrimSpace(l); strings.HasPrefix(l, "/") || strings.HasPrefix(l, "~") {
 			photos = append(photos, l)
 		}
@@ -87,15 +83,16 @@ func sendToClaude(t *testing.T, text string, images []map[string]any) string {
 		if c.Method != "agent.prompt" {
 			return
 		}
+		pasted := str(c.Params["text"])
 		mu.Lock()
-		typed = str(c.Params["text"])
+		typed = pasted
 		mu.Unlock()
-		kept, attached := claudePaste(str(c.Params["text"]))
+		kept, attached := claudePaste(pasted)
 		var content []any
 		chips := ""
 		for i := range attached {
 			content = append(content, map[string]any{"type": "image", "source": map[string]any{"type": "base64", "media_type": "image/png", "data": "iVBORw0KGgo="}})
-			chips += "[Image #" + string(rune('1'+i)) + "]"
+			chips += "[Image #" + strconv.Itoa(i+1) + "]"
 		}
 		content = append(content, map[string]any{"type": "text", "text": chips + kept})
 		line, _ := json.Marshal(map[string]any{"type": "user", "timestamp": time.Now().UTC().Format(time.RFC3339Nano), "cwd": cwd,

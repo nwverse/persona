@@ -819,44 +819,27 @@ const imagePathLine = "path: "
 
 // keepImagePaths gives each path in the <attached_images> block that ends text (the node's own, or one a client wrote
 // after uploading the photos itself, as Android's composer does) a second line, "path: <path>". Claude Code's paste
-// turns a line that is only an image path, to a readable image file, into an `[Image #n]` and drops the line: the
-// model gets the picture, not where the file is. A line that starts with a word stays text; with the block's tags it
-// makes a message with words more lines than Claude shows in its box, so the box shows the pictures' chips and a
-// `[Pasted text #n]` placeholder (longPaste). The apps take only the block's lines that start with "/" or "~" as
-// photos, so the second line is no second thumbnail. A block
-// with lines that are not paths (prose that happens to end in the tag), or whose paths already have their line, is
-// left as it is.
+// turns a line that is only a path to a readable image into an `[Image #n]` and drops it; a line that starts with a
+// word stays text, so the agent keeps the path. The apps take only lines starting with "/" or "~" as photos. A block
+// with any other line (prose that ends in the tag, or path: lines already added) is left as it is. With words before
+// it, the block makes Claude fold the paste into a `[Pasted text #n]` placeholder (longPaste).
 func keepImagePaths(text string) string {
+	const open = "<attached_images>"
 	rest, ok := strings.CutSuffix(strings.TrimRight(text, " \t\r\n"), "</attached_images>")
-	if !ok {
+	i := strings.LastIndex(rest, open)
+	if !ok || i < 0 || strings.TrimSpace(rest[i+len(open):]) == "" {
 		return text
-	}
-	i := strings.LastIndex(rest, "<attached_images>")
-	if i < 0 {
-		return text
-	}
-	var lines []string
-	for _, l := range strings.Split(rest[i+len("<attached_images>"):], "\n") {
-		if l = strings.TrimSpace(l); l != "" {
-			lines = append(lines, l)
-		}
 	}
 	var b strings.Builder
-	b.WriteString(rest[:i] + "<attached_images>\n")
-	added := false
-	for j, l := range lines {
-		b.WriteString(l + "\n")
-		if strings.HasPrefix(l, imagePathLine) || j+1 < len(lines) && lines[j+1] == imagePathLine+l {
+	b.WriteString(rest[:i+len(open)] + "\n")
+	for _, l := range strings.Split(rest[i+len(open):], "\n") {
+		if l = strings.TrimSpace(l); l == "" {
 			continue
 		}
 		if !filepath.IsAbs(l) && !strings.HasPrefix(l, "~") {
 			return text
 		}
-		b.WriteString(imagePathLine + l + "\n")
-		added = true
-	}
-	if !added {
-		return text
+		b.WriteString(l + "\n" + imagePathLine + l + "\n")
 	}
 	return b.String() + "</attached_images>"
 }
