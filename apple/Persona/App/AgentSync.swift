@@ -117,10 +117,15 @@ final class AgentSync {
 
     /// A chat on screen whose session is newer than its newest line while nothing came over its subscription for a
     /// while: the stream has stopped (a node whose transcript watch ended, a lost push). Asks for what came after the
-    /// chat's `covered` and merges it (`AgentSyncPacing.catchUpAt`); looks again when its quiet or pacing ends.
+    /// chat's `covered` and merges it (`AgentSyncPacing.catchUpAt`); looks again when its quiet or pacing ends. Not while
+    /// its group's socket is down (in the background, offline): no push is due then, and the subscription asks for what
+    /// it missed (`since_seq`) when the socket is back, whose next list looks again. Not before the chat has its first
+    /// backlog, or a latest page that started it over (`resets`: a replaced transcript clears `loadedOnce`, and only the
+    /// next backlog sets it again).
     private func checkStall(_ key: SessionKey) {
         let model = AppModel.shared
-        guard model.isSubscribed(key), let store = model.existingChat(key), store.loadedOnce, !catchingUp.contains(key)
+        guard model.isSubscribed(key), model.isLive(key.group), let store = model.existingChat(key),
+              store.loadedOnce || store.resets > 0, !catchingUp.contains(key)
         else { return }
         let updatedAt = model.latest(key)?.updatedAt // `session(_:)` keeps an older one on purpose
         let newest = store.items.last(where: { $0.ts != nil })?.ts
@@ -134,8 +139,9 @@ final class AgentSync {
         ChatTrace.shared.note(key, "catch up: no items after covered=\(store.covered)")
         Task {
             do {
-                try await Self.pullInto(store, key, api)
-                caughtUpFor[key] = updatedAt // not asked again for this write: it may have added no line
+                // Not asked again for this write once one page held all of it: the write may have added no line. After
+                // more pages (`fill`, `reload`, which keep their failures to themselves) the next look asks once more.
+                if try await Self.pullInto(store, key, api) == .none { caughtUpFor[key] = updatedAt }
             } catch {
                 ChatTrace.shared.note(key, "catch up failed: \(error.localizedDescription)")
             }
@@ -205,14 +211,17 @@ final class AgentSync {
     }
 
     /// A store in memory: what came after its `covered` goes into it (filling a hole, or starting over, when the batch
-    /// says so).
-    private static func pullInto(_ store: ChatStore, _ key: SessionKey, _ api: APIClient) async throws {
+    /// says so). Returns what the first batch left to do.
+    @discardableResult
+    private static func pullInto(_ store: ChatStore, _ key: SessionKey, _ api: APIClient) async throws -> ChatStore.Gap {
         let r = try await api.items(key, afterSeq: store.covered)
-        switch store.apply(r.items, span: r.span, moreAfter: r.moreAfter == true) {
+        let gap = store.apply(r.items, span: r.span, moreAfter: r.moreAfter == true)
+        switch gap {
         case .none: break
         case .fill: await AppModel.shared.fill(key)
         case .reload: await AppModel.shared.reload(key)
         }
+        return gap
     }
 
     /// No store in memory: update the disk cache the chat will open from (decoding and writing off the main thread).
