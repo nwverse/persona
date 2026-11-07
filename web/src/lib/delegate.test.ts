@@ -70,6 +70,7 @@ describe("改答的表单", () => {
     expect(reanswerChanged({ "改哪些？": "A, B" }, { "改哪些？": "B, A" }, multi)).toBe(false);
     expect(reanswerChanged({ "改哪些？": "A, B" }, { "改哪些？": "A, C" }, multi)).toBe(true);
     expect(reanswerChanged({ "库？": "A, B" }, { "库？": "B, A" }, [q("库？", ["A, B", "B, A"])])).toBe(true);
+    expect(reanswerChanged({ "改哪些？": "先 A, 再 B" }, { "改哪些？": "再 B, 先 A" }, multi)).toBe(true); // own words: as written
   });
 });
 

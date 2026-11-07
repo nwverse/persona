@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import { t } from "../../i18n";
 import { errorText } from "../../lib/api";
-import { changedAnswers, formAnswers, initialPicks, latestAnswers, loadDelegated, reanswer, reanswerChanged, type DelegatedAnswer } from "../../lib/delegate";
+import { changedAnswers, formAnswers, initialPicks, latestAnswers, loadDelegated, reanswer, reanswerChanged, sameAnswer, type DelegatedAnswer } from "../../lib/delegate";
 import { ago, sessionCan } from "../../lib/format";
 import { composing } from "../../lib/send-history";
 import { dropDelegated, getSession, noteReanswer, useStore } from "../../lib/store";
@@ -97,7 +97,7 @@ function DelegatedBody({ d, manager }: { d: DelegatedAnswer; manager?: string })
         {qs.map((q) => {
           const answer = now[q.question] ?? "";
           const before = (d.answers[q.question] ?? "").trim();
-          const changed = Boolean(before) && answer.trim() !== before;
+          const changed = Boolean(before) && !sameAnswer(q, answer, before);
           return (
             <div key={q.question} className="min-w-0 text-[13px] leading-snug">
               <span className="block text-[12px] text-ink-3">{q.question}</span>

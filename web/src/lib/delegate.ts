@@ -97,12 +97,13 @@ export function formAnswers(questions: Question[], picked: Record<number, string
   return out;
 }
 
-/** Whether two answers to `q` say the same: a multi-select's picks in any order. */
-function sameAnswer(q: Question | undefined, a: string, b: string): boolean {
-  if (a === b) return true;
+/** Whether two answers to `q` say the same: the same words, or a multi-select's same options picked in any order (an
+ *  answer in words of its own is compared as written). */
+export function sameAnswer(q: Question | undefined, a: string, b: string): boolean {
+  if (a.trim() === b.trim()) return true;
   if (!q?.multi_select) return false;
-  const picks = (s: string) => s.split(PICKS_SEP).map((p) => p.trim()).filter(Boolean).sort().join("\n");
-  return picks(a) === picks(b);
+  const x = labelsOf(q, a), y = labelsOf(q, b);
+  return Boolean(x?.length && y?.length) && [...x!].sort().join("\n") === [...y!].sort().join("\n");
 }
 
 /** The answers in `after` that say something other than `before`: only those go to the agent (an unchanged one would

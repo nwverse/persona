@@ -195,6 +195,15 @@ describe("助手代答的问题", () => {
     expect(request).toHaveBeenCalledWith("/interactions/ix1/reanswer", { method: "POST", json: { answers: { [Q]: "lib/pq" } }, headers: { "X-Persona-Manager": "manager-2" } });
   });
 
+  it("别处只换了多选的顺序：不算改了，不显示助手原来答的", () => {
+    const multi = { ...question, questions: [{ question: Q, header: "", multi_select: true, options: [{ label: "pgx" }, { label: "lib/pq" }] }] };
+    render({ ...answered, ix: multi, answers: { [Q]: "pgx, lib/pq" } });
+    act(() => noteReanswer("ix1", { [Q]: "lib/pq, pgx" }));
+    expect(host.textContent).not.toContain("助手原来答的");
+    act(() => noteReanswer("ix1", { [Q]: "lib/pq" }));
+    expect(host.textContent).toContain("助手原来答的：pgx, lib/pq");
+  });
+
   it("收起后不再留着", async () => {
     getState().delegated = { ix1: answered };
     render();
