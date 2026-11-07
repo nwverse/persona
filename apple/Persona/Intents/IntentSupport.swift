@@ -229,6 +229,15 @@ nonisolated enum IntentPicker {
         }
     }
 
+    /// How many agents 「Persona 状态」 says are working, as the island counts them (#180): the Agents tab's at work by
+    /// the hub's `state` (not herdr's raw status). Persona's own conversations, quiet tasks' agents and muted ones are
+    /// left out, by the same rule as the waiting cards (`TabBadges.place`).
+    static func working(_ sessions: [Session], mutes: [String: Pins]) -> Int {
+        sessions.filter { s in
+            s.state == .working && TabBadges.place(s.key, session: s, quiet: s.quiet, mutes: mutes[s.group]) == .agents
+        }.count
+    }
+
     /// What Siri reads out as waiting and the first of it: 「Persona 状态」 says how many and reads `first`;
     /// 「批准第一个待处理」 settles that same `first` (#5257).
     static func waiting(_ interactions: [Interaction], sessions: [Session], mutes: [String: Pins])

@@ -40,7 +40,7 @@
     <string name="notify_body_elicitation">MCP form: %1$s</string>
     <string name="notify_title_done">Finished</string>
     <string name="notify_title_alert">Alert</string>
-    <string name="notify_stopped_title">You stopped the background connection</string>
+    <string name="notify_stopped_title">Background connection paused</string>
     <string name="notify_stopped_text">Tap Resume to get notifications again</string>
     <string name="notify_resume">Resume</string>
     <string name="notify_public_title">New message from Persona</string>

@@ -330,6 +330,16 @@ private fun SettingsContent(
             item { JGroupItem(GroupPosition.of(capsuleRows + 1, notifyRows)) { JRow(selected = detailKey == SettingsPageRoute(SettingsPage.Readiness), title = stringResource(R.string.settings_row_background), leadingIcon = PhIcons.BatteryCharging, subtitle = stringResource(R.string.settings_row_background_subtitle), onClick = { open(SettingsPage.Readiness) }) } }
             if (desktopRow) item { DesktopPresenceRow(desktops, deviceState.preferences?.muteWhileDesktop == true,
                 selected = detailKey == SettingsPageRoute(SettingsPage.Desktops), GroupPosition.of(capsuleRows + 2, notifyRows), onClick = { open(SettingsPage.Desktops) }) }
+            // Inbox chats open natively (left / right bubbles, reply composer) unless switched to the extension's page.
+            val appStyleStore = LocalAppStyleStore.current
+            if (appStyleStore != null) {
+                item { JSectionHeader(stringResource(R.string.settings_update_v7_native_section)) }
+                item { JGroupItem(GroupPosition.Single) {
+                    val nativeInboxChats by appStyleStore.nativeInboxChats.collectAsState()
+                    JSwitchRow(stringResource(R.string.settings_update_v7_native_title), nativeInboxChats, appStyleStore::setNativeInboxChats,
+                        subtitle = stringResource(R.string.settings_update_v7_native_subtitle))
+                } }
+            }
             item { JSectionHeader("AI") }
             // iOS's order: "Model providers", "Model configuration", "Assistant" (a page of the Persona tab, so only with a navigation host), then the uses.
             val assistantRow = onNavigate != null

@@ -84,7 +84,8 @@
         "upload_dir",
         "task_push",
         "sessions_list",
-        "sessions_lookup"
+        "sessions_lookup",
+        "machine_rename"
       ],
       "fp": "",
       "hub_id": "00000000-0000-4000-8000-000000000001",
@@ -181,7 +182,8 @@
           "upload_dir",
           "task_push",
           "sessions_list",
-          "sessions_lookup"
+          "sessions_lookup",
+          "machine_rename"
         ],
         "/type": "hello"
       }
@@ -269,7 +271,8 @@
         "upload_dir",
         "task_push",
         "sessions_list",
-        "sessions_lookup"
+        "sessions_lookup",
+        "machine_rename"
       ],
       "fp": "",
       "hub_id": "00000000-0000-4000-8000-000000000001",
@@ -356,7 +359,8 @@
           "upload_dir",
           "task_push",
           "sessions_list",
-          "sessions_lookup"
+          "sessions_lookup",
+          "machine_rename"
         ],
         "/ok": true,
         "/version": "fixture-version"

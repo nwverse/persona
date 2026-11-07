@@ -313,6 +313,13 @@ iOS / Mac machine detail (#3018, `apple/Persona/Views/Machines/NodeHealthSection
 - Mock-hub screenshots: `MOCK_DOCTOR=healthy|stale|broken|mixed|old|error|slow`, `MOCK_DOCTOR_OLD=<machine id,…>` (`scripts/mock/mock_hub.py`).
 - Tests: `node/doctor_rpc_test.go` (temporary directories; no writes without fix, fix only generated files and never user settings.json, check names match web grouping), `hub/node_doctor_test.go` (permissions), `web/src/lib/node-health.test.ts` (grouping, summary, fixing, old node, connection classification), `apple/PersonaTests/NodeHealthTests.swift` (same grouping table, decoding, old node / hub, model check/fix).
 
+## Renaming a computer
+
+A computer's name is its hub.json `name`; its id never changes. It can be renamed from the admin page, the web app's machine details (and, once PR 2 lands, the iOS / Mac / Android ones), the computer's
+Persona Link (`persona-link name`, the Windows tray) — see [protocol.md](../protocol/protocol.md) "Renaming a computer" and [link.md](../operations/link.md) "The computer's name". The hub writes hub.json and takes it at once:
+`hub/machine_rename.go` updates the entries it hands the manager and the name it shows (`Machine.name()`, never `cfg.Name`: the entry is read without a lock and stays as it was made); the manager keeps the machine
+when only the name changed (`sameConfig` ignores it) and tells the link (`endpoints`'s `machine_name`, part of `linkSays`); a member's rename reaches the center through its record (`derivedName`).
+
 ## API
 
 See `docs/protocol/protocol.md`: `GET /api/v1/metrics` (Machines), `GET /api/v1/machines/{id}/metrics?range=1h|6h|24h` (detail), `GET /api/v1/machines/{id}/usage?range=1h|24h|7d` (token usage),

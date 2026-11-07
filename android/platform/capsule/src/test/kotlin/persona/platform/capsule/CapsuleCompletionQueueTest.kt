@@ -76,19 +76,69 @@ class CapsuleCompletionQueueTest {
         assertNull(queue.current.value)
     }
 
-    @Test fun hidingClearsTheQueueAndConsumesHiddenEventsWithoutRestoringOldContent() = runTest {
+    @Test fun hidingClearsTheQueueAndOnlyTheProvidersUnshownPendingEventCanRestore() = runTest {
         val queue = CapsuleCompletionQueue(this)
         queue.setVisible(true)
         queue.offer(one)
         queue.offer(two)
         runCurrent()
+        queue.noticeShown(one.id)
         queue.setVisible(false)
         queue.offer(three)
+        queue.setVisible(true)
+        assertNull(queue.current.value)
+        queue.offer(one)
+        assertNull(queue.current.value)
+        queue.offer(three)
+        assertEquals(three, queue.current.value)
+        runCurrent()
+        advanceTimeBy(4_000)
+        runCurrent()
+        assertNull(queue.current.value)
+    }
+
+    @Test fun aNoticeHiddenBeforeItsFirstDrawCanRestoreFromPersistentPending() = runTest {
+        val queue = CapsuleCompletionQueue(this)
+        queue.setVisible(true)
+        queue.offer(one)
+        queue.setVisible(false)
+        queue.setVisible(true)
+        queue.offer(one)
+        assertEquals(one, queue.current.value)
+        queue.close()
+    }
+
+    @Test fun readDeletedOrMutedTargetsDisappearWithoutOldTimersCuttingTheNextNotice() = runTest {
+        val queue = CapsuleCompletionQueue(this)
         queue.setVisible(true)
         queue.offer(one)
         queue.offer(two)
         queue.offer(three)
-        advanceTimeBy(12_000)
+        runCurrent()
+        advanceTimeBy(1_000)
+        queue.retainTargets(setOf(two.targetId))
+        assertEquals(two, queue.current.value)
+        runCurrent()
+        advanceTimeBy(3_000)
+        runCurrent()
+        assertEquals(two, queue.current.value)
+        advanceTimeBy(1_000)
+        runCurrent()
+        assertNull(queue.current.value)
+    }
+
+    @Test fun completionAndMessageKindsShareFifoDedupAndTheFourSecondTimer() = runTest {
+        val queue = CapsuleCompletionQueue(this)
+        val message = two.copy(kind = CapsuleNoticeKind.NewMessage)
+        queue.setVisible(true)
+        queue.offer(one)
+        queue.offer(message)
+        runCurrent()
+        advanceTimeBy(4_000)
+        runCurrent()
+        assertEquals(message, queue.current.value)
+        queue.offer(message)
+        advanceTimeBy(4_000)
         runCurrent()
         assertNull(queue.current.value)
     }
