@@ -5,6 +5,9 @@ on:
   workflow_dispatch:
   pull_request:
     paths:
+      - LICENSE
+      - README.md
+      - README.zh-CN.md
       - Dockerfile
       - .dockerignore
       - deploy/docker/**
