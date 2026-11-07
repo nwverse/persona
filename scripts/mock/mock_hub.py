@@ -9463,8 +9463,10 @@ def looked(name, inp, result, ts_min, *pictures):
 
 
 # MOCK_IMAGES_FAIL=1: lazy images (…/items/{id}/image) answer 503 until GET /mock/images?ok=1 (#182: a picture that
-# did not load says so, and Retry brings it). With MOCK_TURN_IMAGES the viewed pictures are lazy.
-IMAGES_FAIL = {"on": os.environ.get("MOCK_IMAGES_FAIL") == "1"}
+# did not load says so, and Retry brings it). With MOCK_TURN_IMAGES the viewed pictures are lazy. GET /mock/images?asked=1
+# only reads: how many lazy images were asked for (#559: a tile's retry asks the hub again), and whether sent photos
+# come lazy (MOCK_IMAGES_FAIL=1 with MOCK_CHAT_IMAGES).
+IMAGES_FAIL = {"on": os.environ.get("MOCK_IMAGES_FAIL") == "1", "asked": 0}
 
 
 def lazy_images(items):
@@ -12857,10 +12859,13 @@ class H(BaseHTTPRequestHandler):
                    **span(items, None, int(b) - 1 if b else last)}
             served(sid, "page", out)
             return self.send_json(out)
-        if p == "/mock/images":  # MOCK_IMAGES_FAIL: ?ok=1 lets lazy images through, anything else fails them again
-            IMAGES_FAIL["on"] = parse_qs(urlparse(self.path).query).get("ok", [""])[0] != "1"
-            return self.send_json({"ok": True, "failing": IMAGES_FAIL["on"]})
+        if p == "/mock/images":  # MOCK_IMAGES_FAIL: ?ok=1 lets lazy images through, ?asked=1 reads, anything else fails them again
+            q = parse_qs(urlparse(self.path).query)
+            if q.get("asked") != ["1"]: IMAGES_FAIL["on"] = q.get("ok", [""])[0] != "1"
+            return self.send_json({"ok": True, "failing": IMAGES_FAIL["on"], "asked": IMAGES_FAIL["asked"],
+                                   "sent_photos_lazy": os.environ.get("MOCK_IMAGES_FAIL") == "1" and bool(os.environ.get("MOCK_CHAT_IMAGES"))})
         if p.startswith("/api/v1/sessions/") and "/items/" in p and p.endswith("/image"):  # a lazy image, a fold's
+            IMAGES_FAIL["asked"] += 1
             if IMAGES_FAIL["on"]: return self.send_json({"error": "unavailable"}, 503)
             sid, iid = unquote(p.split("/")[5]), unquote(p.split("/")[7])
             img = next((x.get("image") for x in find_items(sid) if x["id"] == iid and x.get("image")), None)

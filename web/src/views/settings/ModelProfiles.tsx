@@ -6,19 +6,19 @@ import { t } from "../../i18n";
 import { Button, Dialog } from "../../ui/atoms";
 import { Group, Pill, Row } from "./SettingsParts";
 
-export function ModelProfiles({ onChanged }: { onChanged: () => void }) {
+export function ModelProfiles({ manager, onChanged }: { manager?: string; onChanged: () => void }) {
   const [data, setData] = useState<Profiles | null>(null);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const [selected, setSelected] = useState<string | null>(null);
   const load = async () => {
-    try { setData(await modelProfiles()); setError(""); }
+    try { setData(await modelProfiles(manager)); setError(""); }
     catch (e) { if (!(e instanceof ApiError && e.status === 404)) setError(errorText(e)); }
   };
   useEffect(() => { void load(); return onHubEvent("model_profile", () => { void load(); onChanged(); }); }, []);
   const apply = async (id?: string) => {
     setBusy(true); setError("");
-    try { setData(await (id ? switchModelProfile(id) : rollbackModelProfile())); setSelected(null); onChanged(); }
+    try { setData(await (id ? switchModelProfile(id, manager) : rollbackModelProfile(manager))); setSelected(null); onChanged(); }
     catch (e) { setError(errorText(e)); }
     finally { setBusy(false); }
   };
