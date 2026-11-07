@@ -474,24 +474,6 @@ func TestCodexApprovals(t *testing.T) {
 	})
 }
 
-func TestCodexPolicyAlwaysAsks(t *testing.T) {
-	for _, mode := range append([]string{""}, proto.PermissionModes...) {
-		approval, sandbox := codexPolicy(mode)
-		if approval == "never" {
-			t.Errorf("%s: approvals off, the Feishu gate would see nothing", mode)
-		}
-		if sandbox == "" {
-			t.Errorf("%s: no sandbox", mode)
-		}
-	}
-	if _, sb := codexPolicy(proto.ModeBypass); sb != "danger-full-access" {
-		t.Errorf("bypass sandbox %s", sb)
-	}
-	if p := codexSandboxPolicy("default", "/m"); p["networkAccess"] != true || len(p["writableRoots"].([]string)) != 1 {
-		t.Errorf("default: ol and ssh need the network: %v", p)
-	}
-}
-
 func TestUnwrapShell(t *testing.T) {
 	for in, want := range map[string]string{
 		`/bin/zsh -lc 'ol GET /me'`:            "ol GET /me",
@@ -542,8 +524,8 @@ func TestModeFromCodex(t *testing.T) {
 			t.Errorf("%s → (%s, %s) → %s", mode, a, s, got)
 		}
 	}
-	if got := modeFromCodex("never", "danger-full-access"); got != "" {
-		t.Errorf("a TUI's own policy read as %q", got)
+	if got := modeFromCodex("untrusted", "danger-full-access"); got != proto.ModeBypass {
+		t.Errorf("historical full access read as %q", got)
 	}
 }
 

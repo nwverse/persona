@@ -38,8 +38,8 @@ import (
 //   - stop: turn/interrupt (the process stays);
 //   - approvals come to the node as requests (commands, file changes, MCP tool calls, permissions, request_user_input):
 //     the Feishu gate first (larkCheck), Persona's own MCP tools pass, the rest by the conversation's mode, asking
-//     the phone like Claude's PermissionRequest hook does. The approval policy is always one that asks (codexPolicy),
-//     so the gate sees every command that is not on Codex's read-only list, bypassPermissions included.
+//     the phone like Claude's PermissionRequest hook does. Full access uses the native never policy;
+//     connector proxies and gated CLI wrappers still enforce their independent business confirmations.
 
 // codexToolTimeout: ask_user waits for the phone (up to nodeclient.HookTimeout); Codex's default MCP tool timeout is 60 s.
 const codexToolTimeout = 86400
@@ -380,10 +380,8 @@ func (c *codexConn) start(ctx context.Context, id, cwd string, resume bool) erro
 	return nil
 }
 
-// codexPolicy maps the app's permission mode to Codex's approval policy and sandbox. Every mode asks (untrusted:
-// anything not on Codex's read-only list; on-request: what needs to leave the sandbox), so commands reach the node,
-// which runs the Feishu gate and then answers by the mode (codexDecide): bypassPermissions is "ask, and the node
-// says yes", not Codex's never.
+// codexPolicy maps the explicitly selected permission mode to the native thread and turn settings.
+// Full access disables command approvals; connector confirmations remain in their proxies and CLI wrappers.
 func codexPolicy(mode string) (approval, sandbox string) {
 	switch mode {
 	case "auto":
@@ -391,7 +389,7 @@ func codexPolicy(mode string) (approval, sandbox string) {
 	case "plan":
 		return "untrusted", "read-only"
 	case proto.ModeBypass:
-		return "untrusted", "danger-full-access"
+		return "never", "danger-full-access"
 	}
 	return "untrusted", "workspace-write"
 }
