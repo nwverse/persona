@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"net/http"
 	"path"
-	"regexp"
 	"slices"
 	"sort"
 	"strings"
@@ -16,6 +15,7 @@ import (
 
 	"github.com/nwverse/persona/server/internal/apierr"
 	"github.com/nwverse/persona/server/internal/i18n"
+	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/prompts"
 	"github.com/nwverse/persona/server/internal/proto"
 )
@@ -175,7 +175,7 @@ func (s *Service) archiveRoutes() {
 	}
 }
 
-var sessionIDRe = regexp.MustCompile(`^[A-Za-z0-9._-]{1,128}$`)
+var sessionIDRe = lazyre.New(`^[A-Za-z0-9._-]{1,128}$`)
 
 func validSessionID(id string) bool { return sessionIDRe.MatchString(id) }
 

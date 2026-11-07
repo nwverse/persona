@@ -9,13 +9,13 @@ import (
 	"hash/crc32"
 	"io"
 	"os"
-	"regexp"
 	"slices"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/prompts"
 	"github.com/nwverse/persona/server/internal/proto"
 )
@@ -264,14 +264,14 @@ func withoutBotmuxSentinel(text string) string {
 
 // pastedRe matches the wrapper Claude Code puts around long pasted input (also what herdr's bracketed paste from
 // the phone, e.g. a WeChat voice-input transcript, turns into): <pasted_content id="ae9b">…</pasted_content id="ae9b">.
-var pastedRe = regexp.MustCompile(`<[\\/]*pasted_content(?:\s+id="[^"]*")?\s*>`) // also <\pasted…> / <\/pasted…> from nested pastes
+var pastedRe = lazyre.New(`<[\\/]*pasted_content(?:\s+id="[^"]*")?\s*>`) // also <\pasted…> / <\/pasted…> from nested pastes
 
 // ContextRe matches the live snapshot Persona starts each message to its assistant with (node/assistant_context.go):
 // context for the model, not something the user wrote. It is <persona-context>; history and older nodes have
 // <persona-context> (#3182).
-var ContextRe = regexp.MustCompile(`(?s)<` + compat.ContextPattern() + `>.*?</` + compat.ContextPattern() + `>\s*`)
+var ContextRe = lazyre.New(`(?s)<` + compat.ContextPattern() + `>.*?</` + compat.ContextPattern() + `>\s*`)
 
-var tagRe = regexp.MustCompile(`(?s)<(command-name|command-message|command-args|local-command-stdout|local-command-stderr|task-notification|system-reminder)>(.*?)</(command-name|command-message|command-args|local-command-stdout|local-command-stderr|task-notification|system-reminder)>`)
+var tagRe = lazyre.New(`(?s)<(command-name|command-message|command-args|local-command-stdout|local-command-stderr|task-notification|system-reminder)>(.*?)</(command-name|command-message|command-args|local-command-stdout|local-command-stderr|task-notification|system-reminder)>`)
 
 // APIRetrying ends an API error notice Claude Code is still retrying: the turn goes on.
 const APIRetrying = "（正在重试）"
@@ -708,16 +708,16 @@ func parseLine(seq int, line []byte, meta *Meta) []proto.Item {
 // …\nRun ID: wf_…"; a Monitor "Monitor started (task bqke1prjm, expires in 30m unless …)".
 var (
 	// agentId needs its colon: newer results first warn about "the agentId below", whose next word is not the id.
-	bgIDRe     = regexp.MustCompile(`(?:running in background with ID:?|agentId:|in background\. Task ID:?|Monitor started \(task:?)\s*([A-Za-z0-9_-]+)`)
-	wfRunRe    = regexp.MustCompile(`(?m)^Run ID:\s*(wf_[A-Za-z0-9_-]+)`)
-	wfSumRe    = regexp.MustCompile(`(?m)^Summary:\s*(.+)$`)
-	wfScriptRe = regexp.MustCompile(`(?m)^Script file:\s*(\S+\.js)\s*$`)
-	wfDirRe    = regexp.MustCompile(`(?m)^Transcript dir:\s*\S*/(wf_[A-Za-z0-9_-]+)\s*$`)
-	wfNameRe   = regexp.MustCompile("\\bname:\\s*['\"`]([^'\"`\\n]+)['\"`]")
-	expiresRe  = regexp.MustCompile(`expires in (\d+)(ms|s|m|h)\b`)
-	wakeInRe   = regexp.MustCompile(`Next wakeup scheduled for [^(]*\(in (\d+)s\)`)
-	bgMovedRe  = regexp.MustCompile(`moved to the background \(ID: ([A-Za-z0-9_-]+)\)`) // a foreground command that timed out
-	bgOutputRe = regexp.MustCompile(`Output is being written to:\s*(\S+?)\.?(?:\s|$)`)
+	bgIDRe     = lazyre.New(`(?:running in background with ID:?|agentId:|in background\. Task ID:?|Monitor started \(task:?)\s*([A-Za-z0-9_-]+)`)
+	wfRunRe    = lazyre.New(`(?m)^Run ID:\s*(wf_[A-Za-z0-9_-]+)`)
+	wfSumRe    = lazyre.New(`(?m)^Summary:\s*(.+)$`)
+	wfScriptRe = lazyre.New(`(?m)^Script file:\s*(\S+\.js)\s*$`)
+	wfDirRe    = lazyre.New(`(?m)^Transcript dir:\s*\S*/(wf_[A-Za-z0-9_-]+)\s*$`)
+	wfNameRe   = lazyre.New("\\bname:\\s*['\"`]([^'\"`\\n]+)['\"`]")
+	expiresRe  = lazyre.New(`expires in (\d+)(ms|s|m|h)\b`)
+	wakeInRe   = lazyre.New(`Next wakeup scheduled for [^(]*\(in (\d+)s\)`)
+	bgMovedRe  = lazyre.New(`moved to the background \(ID: ([A-Za-z0-9_-]+)\)`) // a foreground command that timed out
+	bgOutputRe = lazyre.New(`Output is being written to:\s*(\S+?)\.?(?:\s|$)`)
 )
 
 func (m *Meta) trackBackground(toolUseID, name string, raw json.RawMessage, ts time.Time) {
@@ -1004,13 +1004,13 @@ func (m *Meta) applyQueue(op, content string) {
 // A message another Claude session sent this one ("Another Claude session sent a message:" + the tagged body + an
 // English note on how to treat it).
 // caveatRe drops Claude Code's note that the lines around it came from a local command (context for the model).
-var caveatRe = regexp.MustCompile(`(?s)<local-command-caveat>.*?</local-command-caveat>`)
+var caveatRe = lazyre.New(`(?s)<local-command-caveat>.*?</local-command-caveat>`)
 
-var teammateRe = regexp.MustCompile(`(?s)<teammate-message([^>]*)>\s*(.*?)\s*</teammate-message>`)
-var teammateIDRe = regexp.MustCompile(`teammate_id="([^"]*)"`)
+var teammateRe = lazyre.New(`(?s)<teammate-message([^>]*)>\s*(.*?)\s*</teammate-message>`)
+var teammateIDRe = lazyre.New(`teammate_id="([^"]*)"`)
 
-var crossRe = regexp.MustCompile(`(?s)<cross-session-message([^>]*)>\s*(.*?)\s*</cross-session-message>`)
-var crossNameRe = regexp.MustCompile(`from-name="([^"]*)"`)
+var crossRe = lazyre.New(`(?s)<cross-session-message([^>]*)>\s*(.*?)\s*</cross-session-message>`)
+var crossNameRe = lazyre.New(`from-name="([^"]*)"`)
 
 // peerMessage is another Claude session's message that came while this one was idle: Claude Code (2.1.299 on) writes
 // it as a hidden (isMeta) user line with the sender in its origin, and it starts a turn, so it reads as the message it
@@ -1233,7 +1233,7 @@ func (m *Meta) endLocalTurn() {
 }
 
 // ansiRe matches terminal escape sequences (colors, bold) that local command output keeps.
-var ansiRe = regexp.MustCompile(`\x1b\[[0-9;?]*[ -/]*[@-~]`)
+var ansiRe = lazyre.New(`\x1b\[[0-9;?]*[ -/]*[@-~]`)
 
 // apiErrorText is what an api_error line says went wrong: error.formatted / error.message, or older lines' content.
 func apiErrorText(e entry) string {

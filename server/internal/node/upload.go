@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"regexp"
 	"strings"
 	"sync"
 	"syscall"
@@ -16,6 +15,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/nwverse/persona/server/internal/identity"
+	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/rpc"
 )
@@ -338,7 +338,7 @@ func cleanName(name string) string {
 	return name
 }
 
-var plainExt = regexp.MustCompile(`^\.[\p{L}\p{N}]{1,12}$`)
+var plainExt = lazyre.New(`^\.[\p{L}\p{N}]{1,12}$`)
 
 // compound extensions stay whole: report.tar.gz -> report-<time>.tar.gz.
 var compoundExts = []string{".tar.gz", ".tar.bz2", ".tar.xz", ".tar.zst"}

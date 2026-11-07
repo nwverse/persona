@@ -6,12 +6,12 @@ import (
 	"fmt"
 	"log"
 	"os"
-	"regexp"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/nwverse/persona/server/internal/host"
+	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/rpc"
 	"github.com/nwverse/persona/server/internal/screen"
@@ -106,7 +106,7 @@ func ultracodeWaitNote(err error) string {
 	return ultracodeScreenWaitNote
 }
 
-var ultracodeVersion = regexp.MustCompile(`^v?\d+\.\d+\.\d+(?:[-+].*)?$`)
+var ultracodeVersion = lazyre.New(`^v?\d+\.\d+\.\d+(?:[-+].*)?$`)
 
 func ultracodeVersionNote(version string) string {
 	version = strings.TrimSpace(version)

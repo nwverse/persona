@@ -6,12 +6,13 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"regexp"
 	"runtime"
 	"slices"
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/nwverse/persona/server/internal/lazyre"
 )
 
 type codexProcess struct {
@@ -20,7 +21,7 @@ type codexProcess struct {
 	pane           string
 }
 
-var codexHomePS = regexp.MustCompile(`(?:^|\s)CODEX_HOME=(.*?)(?:\s+[A-Za-z_][A-Za-z_0-9]*=|$)`)
+var codexHomePS = lazyre.New(`(?:^|\s)CODEX_HOME=(.*?)(?:\s+[A-Za-z_][A-Za-z_0-9]*=|$)`)
 
 func codexProcessArgs(pid int, args []string, env string) (codexProcess, bool) {
 	at := -1

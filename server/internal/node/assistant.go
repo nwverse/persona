@@ -13,7 +13,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"regexp"
 	"slices"
 	"strings"
 	"sync"
@@ -23,6 +22,7 @@ import (
 	"github.com/nwverse/persona/server/internal/identity"
 	"github.com/nwverse/persona/server/internal/osproc"
 
+	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/prompts"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/rpc"
@@ -235,8 +235,8 @@ func (p *assistantProc) startRefusal(err error) error {
 // zshNotFound and bashNotFound find the command a shell could not find: zsh's "zsh:1: command not found: x", bash's
 // "bash: x: command not found" (also "bash: line 1: x: command not found").
 var (
-	zshNotFound  = regexp.MustCompile(`command not found: (\S+)`)
-	bashNotFound = regexp.MustCompile(`([^\s:]+): command not found`)
+	zshNotFound  = lazyre.New(`command not found: (\S+)`)
+	bashNotFound = lazyre.New(`([^\s:]+): command not found`)
 )
 
 // missingFrom is what the start of launcher was missing by the lines it printed: proto.CodeClaudeMissing,
@@ -943,7 +943,7 @@ func watchAssistantStderr(logger *log.Logger, p *assistantProc, stderr io.ReadCl
 }
 
 // ansiRe: terminal color and style sequences (an interactive zsh's prompt plugins print them on stderr).
-var ansiRe = regexp.MustCompile(`\x1b\[[0-9;?]*[ -/]*[@-~]`)
+var ansiRe = lazyre.New(`\x1b\[[0-9;?]*[ -/]*[@-~]`)
 
 // readAssistant turns the stream-json output into live deltas and turn-finished signals.
 // The structured messages themselves come from the transcript, like every other session.

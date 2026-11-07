@@ -2,9 +2,9 @@ package prompts
 
 import (
 	"fmt"
-	"regexp"
 	"strings"
 
+	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
@@ -15,11 +15,11 @@ import (
 // known too; its tests render every template and parse the result, which keeps the two in step.
 
 var (
-	noticeHeadRe   = regexp.MustCompile(`^🔔 任务「(.+)」(做完了|在等用户|被模型服务出错打断了|没开起来)(?:（(.+)）)?$`)
-	followupHeadRe = regexp.MustCompile(`^⏰ (.+)（(你之前安排的跟进|定时任务(?:，每 [^）]+)?)）$`)
-	wakeHeadRe     = regexp.MustCompile(`^⏰（Persona 叫醒你，第 \d+ 次）你上一轮停下时说在等「(.*?)」`)
-	superviseRe    = regexp.MustCompile(`^📋 督办：你派出去的任务有 (\d+) 个要你处理$`)
-	leadContextRe  = regexp.MustCompile(`^(?s)\s*<persona-context\b[^>]*>.*?</persona-context>`)
+	noticeHeadRe   = lazyre.New(`^🔔 任务「(.+)」(做完了|在等用户|被模型服务出错打断了|没开起来)(?:（(.+)）)?$`)
+	followupHeadRe = lazyre.New(`^⏰ (.+)（(你之前安排的跟进|定时任务(?:，每 [^）]+)?)）$`)
+	wakeHeadRe     = lazyre.New(`^⏰（Persona 叫醒你，第 \d+ 次）你上一轮停下时说在等「(.*?)」`)
+	superviseRe    = lazyre.New(`^📋 督办：你派出去的任务有 (\d+) 个要你处理$`)
+	leadContextRe  = lazyre.New(`^(?s)\s*<persona-context\b[^>]*>.*?</persona-context>`)
 )
 
 // noticeMarker is in every task notice (assistant/task_notice): a first line alone could be the user's.

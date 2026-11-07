@@ -12,7 +12,6 @@ import (
 	"maps"
 	"os"
 	"path/filepath"
-	"regexp"
 	"slices"
 	"sort"
 	"strconv"
@@ -25,6 +24,7 @@ import (
 	"github.com/nwverse/persona/sdk/go/wire"
 	"github.com/nwverse/persona/server/internal/host"
 	"github.com/nwverse/persona/server/internal/identity"
+	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/nodeclient"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/transcript"
@@ -1818,7 +1818,7 @@ func (n *Node) bindPane(pane, id string) {
 	n.state.setPane(id, pane)
 }
 
-var nonAlnum = regexp.MustCompile(`[^A-Za-z0-9]`)
+var nonAlnum = lazyre.New(`[^A-Za-z0-9]`)
 
 // maxAssistantOffline is how many of the assistant directory's quiet transcripts the list keeps, apart from the 80
 // newest of every other directory.
@@ -2450,9 +2450,9 @@ func matchLauncher(list []proto.Launcher, baseURL, model string) string {
 	return ""
 }
 
-var nameRe = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_-]*$`)
+var nameRe = lazyre.New(`^[A-Za-z_][A-Za-z0-9_-]*$`)
 
-var assignRe = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*=`)
+var assignRe = lazyre.New(`^[A-Za-z_][A-Za-z0-9_]*=`)
 
 // parseAliasLaunchers reads launcherScript's alias records and keeps the aliases that start claude: after the
 // variables set in front of it (`A=1 B=2 claude …`), through env / command / exec / noglob, by path or not, with

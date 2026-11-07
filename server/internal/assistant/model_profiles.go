@@ -6,7 +6,6 @@ import (
 	"errors"
 	"maps"
 	"net/http"
-	"regexp"
 	"slices"
 	"strings"
 	"time"
@@ -15,6 +14,7 @@ import (
 	"github.com/nwverse/persona/server/internal/apierr"
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/i18n"
+	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
@@ -41,8 +41,8 @@ const (
 )
 
 var (
-	modelProfileID = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]{0,31}$`)
-	modelTierName  = regexp.MustCompile(`^[a-z][a-z0-9_-]{0,23}$`)
+	modelProfileID = lazyre.New(`^[a-z0-9][a-z0-9_-]{0,31}$`)
+	modelTierName  = lazyre.New(`^[a-z][a-z0-9_-]{0,23}$`)
 )
 
 // modelProfileFields are the model fields of a managed launcher a profile can set, by their JSON names.

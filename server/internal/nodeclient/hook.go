@@ -6,11 +6,11 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"regexp"
 	"strconv"
 	"time"
 
 	"github.com/nwverse/persona/server/internal/host"
+	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/procinfo"
 )
 
@@ -150,7 +150,7 @@ func ClaudeDir(home string) string {
 }
 
 // sessionIDRe is what a Claude Code session id looks like (a UUID).
-var sessionIDRe = regexp.MustCompile(`^[0-9a-fA-F-]{8,64}$`)
+var sessionIDRe = lazyre.New(`^[0-9a-fA-F-]{8,64}$`)
 
 // ValidSessionID says whether id looks like a Claude Code session id (the node's validID too).
 func ValidSessionID(id string) bool { return sessionIDRe.MatchString(id) }

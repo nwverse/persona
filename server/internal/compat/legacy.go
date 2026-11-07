@@ -4,9 +4,9 @@ package compat
 
 import (
 	"net/http"
-	"regexp"
 	"strings"
 
+	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/nodeproto"
 	"github.com/nwverse/persona/server/internal/proto"
 )
@@ -135,8 +135,8 @@ func HeaderConflict(h http.Header, name string) bool {
 func ContextPattern() string { return `(?:jarvis|persona)-context` }
 func ContextNames() []string { return []string{"jarvis-context", "persona-context"} }
 
-var legacyContextTags = regexp.MustCompile(`(</?)jarvis-(context|file)([[:space:]/>])`)
-var currentContextTags = regexp.MustCompile(`(</?)persona-(context|file)([[:space:]/>])`)
+var legacyContextTags = lazyre.New(`(</?)jarvis-(context|file)([[:space:]/>])`)
+var currentContextTags = lazyre.New(`(</?)persona-(context|file)([[:space:]/>])`)
 
 func NormalizeContextTags(s string) string {
 	return legacyContextTags.ReplaceAllString(s, `${1}persona-${2}${3}`)

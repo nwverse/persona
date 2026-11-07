@@ -5,24 +5,27 @@ import (
 	"encoding/json"
 	"strconv"
 	"strings"
+	"sync"
 )
 
 // ExtensionStatusText renders only hub-owned extension status and validation text. Registry and host caches keep
 // their canonical source text; extension-authored messages, manifest labels, logs and CLI output never call this.
 func ExtensionStatusText(l Lang, text string) string { return extensionStatusText(l, text, 0) }
 
-var extensionStatusTemplates = makeCatalogTemplates(func(key string) bool {
-	return strings.HasPrefix(key, "extension-status.") && key != "extension-status.separator" ||
-		strings.HasPrefix(key, "extension-version.") || key == "hub-extensions.missing" ||
-		key == "hub-extensions.socket_path_too_long" || key == "extension-market_git.git_missing" ||
-		key == "extension-sandbox.probe_tmp"
+var extensionStatusTemplates = sync.OnceValue(func() []deploymentTemplate {
+	return makeCatalogTemplates(func(key string) bool {
+		return strings.HasPrefix(key, "extension-status.") && key != "extension-status.separator" ||
+			strings.HasPrefix(key, "extension-version.") || key == "hub-extensions.missing" ||
+			key == "hub-extensions.socket_path_too_long" || key == "extension-market_git.git_missing" ||
+			key == "extension-sandbox.probe_tmp"
+	})
 })
 
 func extensionStatusText(l Lang, text string, depth int) string {
 	if text == "" || depth >= 16 {
 		return text
 	}
-	for _, form := range extensionStatusTemplates {
+	for _, form := range extensionStatusTemplates() {
 		match := form.pattern.FindStringSubmatch(text)
 		if match == nil {
 			continue
@@ -70,7 +73,7 @@ func knownExtensionStatus(text string, depth int) bool {
 	if depth >= 16 {
 		return false
 	}
-	for _, form := range extensionStatusTemplates {
+	for _, form := range extensionStatusTemplates() {
 		match := form.pattern.FindStringSubmatch(text)
 		if match == nil {
 			continue

@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"regexp"
 	"slices"
 	"strings"
 	"sync"
@@ -13,6 +12,7 @@ import (
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/db"
 	"github.com/nwverse/persona/server/internal/identity"
+	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/transcript"
 )
@@ -1136,7 +1136,7 @@ func turnError(sess proto.Session) (text, kind string) {
 }
 
 // rateLimited: a turn error that says the requests came too fast or used up a limit.
-var rateLimited = regexp.MustCompile(`(?i)\b429\b|rate[ _-]?limit|too many requests|usage limit`)
+var rateLimited = lazyre.New(`(?i)\b429\b|rate[ _-]?limit|too many requests|usage limit`)
 
 // turnErrorCode is what a turn's model API error says is wrong, for a card that says what to fix (Session.TurnErrorCode,
 // docs/assistant/onboarding.md 5.2); "" when it does not say.

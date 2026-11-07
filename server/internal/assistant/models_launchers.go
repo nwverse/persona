@@ -7,7 +7,6 @@ import (
 	"github.com/nwverse/persona/server/internal/compat"
 	"net/http"
 	"net/url"
-	"regexp"
 	"slices"
 	"sort"
 	"strconv"
@@ -21,6 +20,7 @@ import (
 	"github.com/nwverse/persona/server/internal/apierr"
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/i18n"
+	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/prompts"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/textfmt"
@@ -141,7 +141,7 @@ func launcherView(l storedLauncher) LauncherView {
 		CompactWindow: l.CompactWindow, MaxContext: l.MaxContext, Effort: l.Effort, Origin: l.Source}
 }
 
-var managedLauncherName = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_-]*$`)
+var managedLauncherName = lazyre.New(`^[A-Za-z_][A-Za-z0-9_-]*$`)
 
 // reservedLauncherNames are taken by claude itself and the /api/v1/launchers/<word> routes.
 var reservedLauncherNames = []string{"claude", "presets", "test", "discover", "import", "health"}
@@ -648,9 +648,9 @@ func checkEnv(raw string) error {
 	return nil
 }
 
-var exportPrefix = regexp.MustCompile(`^export\s+`)
+var exportPrefix = lazyre.New(`^export\s+`)
 
-var envName = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
+var envName = lazyre.New(`^[A-Za-z_][A-Za-z0-9_]*$`)
 
 func (in launcherInput) checkProvider() error {
 	if in.Models != nil {

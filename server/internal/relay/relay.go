@@ -24,12 +24,12 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
-	"regexp"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/nwverse/persona/server/internal/apns"
+	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/pushcrypto"
 	"github.com/nwverse/persona/server/internal/relayproto"
 )
@@ -132,8 +132,8 @@ func (s *Server) open(tok string) (grant, error) {
 	return g, nil
 }
 
-var hexToken = regexp.MustCompile(`^[0-9a-fA-F]{32,400}$`)
-var hexCollapse = regexp.MustCompile(`^[0-9a-f]{1,64}$`)
+var hexToken = lazyre.New(`^[0-9a-fA-F]{32,400}$`)
+var hexCollapse = lazyre.New(`^[0-9a-f]{1,64}$`)
 
 // Handler is the relay's HTTP API under /relay/v1.
 func (s *Server) Handler() http.Handler {

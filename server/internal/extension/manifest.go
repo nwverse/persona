@@ -9,7 +9,6 @@ import (
 	"io"
 	"net/url"
 	"path"
-	"regexp"
 	"slices"
 	"sort"
 	"strings"
@@ -19,6 +18,7 @@ import (
 	"github.com/nwverse/persona/server/internal/channel"
 
 	"github.com/nwverse/persona/server/internal/i18n"
+	"github.com/nwverse/persona/server/internal/lazyre"
 )
 
 // ManifestMost is the largest persona-plugin.json read.
@@ -28,10 +28,10 @@ const ManifestMost = 256 << 10
 const SecretsMost = 32
 
 var (
-	idPattern     = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]{0,31}$`)
-	secretPattern = regexp.MustCompile(`^[a-z][a-z0-9_]{0,31}$`)
-	envPattern    = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
-	platformKey   = regexp.MustCompile(`^[a-z0-9]+-[a-z0-9]+$`)
+	idPattern     = lazyre.New(`^[a-z0-9][a-z0-9_-]{0,31}$`)
+	secretPattern = lazyre.New(`^[a-z][a-z0-9_]{0,31}$`)
+	envPattern    = lazyre.New(`^[A-Za-z_][A-Za-z0-9_]*$`)
+	platformKey   = lazyre.New(`^[a-z0-9]+-[a-z0-9]+$`)
 )
 
 // ValidID says whether id is a plugin id: a-z0-9_-, at most 32, not starting with - or _ (those are the hub's).
@@ -837,7 +837,7 @@ const SurfaceShortcuts = "shortcuts"
 func (m *Manifest) Surfaces() []string {
 	var out []string
 	for _, sl := range UISlots {
-		if sl.Shown != "" && slices.ContainsFunc(m.UIs(), func(u UIItem) bool { return u.Placement == sl.Name }) {
+		if sl.Shown && slices.ContainsFunc(m.UIs(), func(u UIItem) bool { return u.Placement == sl.Name }) {
 			out = append(out, sl.Name)
 		}
 	}
