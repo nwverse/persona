@@ -11,7 +11,8 @@ struct SSHTunnelRouteTests {
     let tunnel = URL(string: "http://127.0.0.1:52001")!
 
     @Test func routedRequestsGoThroughTheTunnel() {
-        defer { HubTransport.clearAll() }
+        // Only this suite's hub: other suites route their own hubs meanwhile (suites interleave).
+        defer { HubTransport.route(hub, via: nil) }
         let api = APIClient(config: ServerConfig(url: hub, token: "t"))
         #expect(api.url("/api/v1/machines").absoluteString == "https://hub.example.com/persona/api/v1/machines")
         HubTransport.route(hub, via: tunnel)
@@ -35,7 +36,7 @@ struct SSHTunnelRouteTests {
         // A hub with two ways through: the one taking over routes first, the one it replaces closes afterwards
         // (AppModel.only), and must not take the new route with it.
         let other = URL(string: "http://127.0.0.1:52002")!
-        defer { HubTransport.clearAll() }
+        defer { HubTransport.route(hub, via: nil) }
         HubTransport.route(hub, via: tunnel)
         HubTransport.route(hub, via: other)
         HubTransport.unroute(hub, from: tunnel)

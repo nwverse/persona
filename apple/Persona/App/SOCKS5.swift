@@ -119,7 +119,8 @@ nonisolated struct SOCKS5Handshake: Sendable {
             case Self.noLogin:
                 return send(connectRequest, then: 4, .reply)
             case Self.usernamePassword:
-                guard let loginRequest else { throw SOCKS5Error.malformed }
+                // Not offered, yet some proxies (mihomo) answer it to every client once they ask for a login.
+                guard let loginRequest else { throw SOCKS5Error.noAcceptableMethod(loginOffered: false) }
                 return send(loginRequest, then: 2, .login)
             case Self.noAcceptable:
                 throw SOCKS5Error.noAcceptableMethod(loginOffered: loginRequest != nil)

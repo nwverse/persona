@@ -211,6 +211,15 @@ nonisolated struct LocalProxyRoute: Codable, Hashable, Sendable {
         return (h.contains(":") ? "[\(h)]" : h) + ":\(port)"
     }
 
+    /// The proxy is on this device (localhost, 127.x.x.x, ::1). Anywhere else, what goes through it (the hub's plain
+    /// HTTP, this device's credential, the proxy's password) crosses the network unencrypted.
+    var isOnThisDevice: Bool {
+        let h = host.trimmingCharacters(in: .whitespaces).trimmingCharacters(in: CharacterSet(charactersIn: "[]")).lowercased()
+        if h == "localhost" || h == "::1" { return true }
+        let parts = h.split(separator: ".", omittingEmptySubsequences: false)
+        return parts.count == 4 && parts.allSatisfy { UInt8($0) != nil } && parts[0] == "127"
+    }
+
     /// The username to sign in with, nil when the proxy asks for none.
     var login: (username: String, password: String)? {
         let u = username.trimmingCharacters(in: .whitespaces)

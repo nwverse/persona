@@ -1100,6 +1100,29 @@
       },
       "extractionState": "manual"
     },
+    "%@ is another hub, not the one this device is paired with. Check the hub's address.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%1$@ is another hub, not the one this device is paired with. Check the hub's address."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%1$@は別のハブで、このデバイスがペアリングしたハブではありません。ハブのアドレスを確認してください。"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%1$@ 是另一台 hub，不是这台设备配对的那台。检查 hub 的地址。"
+          }
+        }
+      }
+    },
     "%@ Models are the same as what /model shows in the terminal.": {
       "localizations": {
         "en": {
@@ -10004,25 +10027,25 @@
       },
       "extractionState": "manual"
     },
-    "A SOCKS5 proxy that another app on this device provides, such as a VPN-like client that serves 127.0.0.1 instead of taking the system VPN slot. Persona's traffic to the hub passes through that app, so use one you trust.": {
+    "A SOCKS5 proxy that another app on this device provides, such as a VPN-like client that serves 127.0.0.1 instead of taking the system VPN slot. Persona's traffic to the hub, this device's credential included, goes through it unencrypted, even for an https hub: you're trusting whatever app holds that port.": {
       "extractionState": "manual",
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "A SOCKS5 proxy that another app on this device provides, such as a VPN-like client that serves 127.0.0.1 instead of taking the system VPN slot. Persona's traffic to the hub passes through that app, so use one you trust."
+            "value": "A SOCKS5 proxy that another app on this device provides, such as a VPN-like client that serves 127.0.0.1 instead of taking the system VPN slot. Persona's traffic to the hub, this device's credential included, goes through it unencrypted, even for an https hub: you're trusting whatever app holds that port."
           }
         },
         "ja": {
           "stringUnit": {
             "state": "translated",
-            "value": "このデバイス上の別のアプリが提供するSOCKS5プロキシです。たとえば、システムのVPN枠を使わずに127.0.0.1でプロキシを提供するVPN型のクライアントなどです。Personaからハブへの通信はそのアプリを通るため、信頼できるものだけを使ってください。"
+            "value": "このデバイス上の別のアプリが提供するSOCKS5プロキシです。たとえば、システムのVPN枠を使わずに127.0.0.1でプロキシを提供するVPN型のクライアントなどです。ハブがhttpsでも、Personaからハブへの通信（このデバイスの認証情報を含む）は暗号化されずにここを通ります。信頼しているのは、そのときこのポートを使っているアプリです。"
           }
         },
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "这台设备上另一个 App 提供的 SOCKS5 代理，比如在 127.0.0.1 上提供代理、不占用系统 VPN 的客户端。Persona 连 hub 的流量会经过这个 App，请只用你信任的。"
+            "value": "这台设备上另一个 App 提供的 SOCKS5 代理，比如在 127.0.0.1 上提供代理、不占用系统 VPN 的客户端。Persona 连 hub 的流量（包括这台设备的凭据）会以明文经过它，即使 hub 用的是 https：你信任的是当时占用这个端口的 App。"
           }
         }
       }
@@ -43418,6 +43441,29 @@
       },
       "extractionState": "manual"
     },
+    "Got no answer from %@ through the proxy: the proxy may not reach that address, or the hub isn't listening there.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Got no answer from %1$@ through the proxy: the proxy may not reach that address, or the hub isn't listening there."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "プロキシ経由で%1$@から応答がありません。プロキシがこのアドレスに届かないか、ハブがそこで待ち受けていない可能性があります。"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "经代理没有拿到 %1$@ 的应答：代理可能连不到这个地址，或者 hub 没在那里监听。"
+          }
+        }
+      }
+    },
     "Hosts or domains, separated by commas; .example.com covers its subdomains. Only these skip this proxy: the list on this computer is for its own proxy.": {
       "extractionState": "manual",
       "localizations": {
@@ -76670,6 +76716,29 @@
         }
       }
     },
+    "The hub at %@ treats connections through the proxy as coming from the internet and refuses plain HTTP from there. Enter the hub's address inside its LAN or VPN.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The hub at %1$@ treats connections through the proxy as coming from the internet and refuses plain HTTP from there. Enter the hub's address inside its LAN or VPN."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%1$@のハブはプロキシ経由の接続をインターネットからのものとみなし、平文のHTTPを拒否します。LANまたはVPN内でのハブのアドレスを入力してください。"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%1$@ 上的 hub 把经代理来的连接当作来自公网，拒绝这类明文 HTTP。请填 hub 在局域网或 VPN 内的地址。"
+          }
+        }
+      }
+    },
     "The hub's address must be 1 to 255 bytes long": {
       "extractionState": "manual",
       "localizations": {
@@ -77059,6 +77128,29 @@
         }
       },
       "extractionState": "manual"
+    },
+    "This proxy isn't on this device: Persona's traffic to the hub, this device's credential and the proxy's password would cross the network unencrypted.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This proxy isn't on this device: Persona's traffic to the hub, this device's credential and the proxy's password would cross the network unencrypted."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "このプロキシはこのデバイス上にありません。Personaからハブへの通信、このデバイスの認証情報、プロキシのパスワードが暗号化されずにネットワークを流れます。"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "这个代理不在本机上：Persona 连 hub 的流量、这台设备的凭据和代理密码都会以明文经过网络。"
+          }
+        }
+      }
     },
     "Timed out · showing the last sync (%@)": {
       "localizations": {

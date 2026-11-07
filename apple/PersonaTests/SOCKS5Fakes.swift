@@ -124,7 +124,8 @@ final class Once: @unchecked Sendable {
 }
 
 /// A SOCKS5 proxy on the loopback (RFC 1928, with RFC 1929 when `login` is set): CONNECTs really go where they ask,
-/// unless `refuse` says the reply code to answer with. What each handshake asked for is kept.
+/// unless `refuse` says the reply code to answer with. `eager`: it says yes before it tries the address and closes
+/// the connection when that fails, as ssh -D, mihomo and Xray do. What each handshake asked for is kept.
 final class FakeSOCKS5: @unchecked Sendable {
     struct Asked: Equatable {
         var host: String
@@ -134,14 +135,16 @@ final class FakeSOCKS5: @unchecked Sendable {
 
     let login: (username: String, password: String)?
     let refuse: UInt8?
+    let eager: Bool
     private let lock = NSLock()
     private var asked: [Asked] = []
     private let upstream = DispatchQueue(label: "fake-socks5-upstream")
     private var server: LoopbackServer!
 
-    init(login: (username: String, password: String)? = nil, refuse: UInt8? = nil) throws {
+    init(login: (username: String, password: String)? = nil, refuse: UInt8? = nil, eager: Bool = false) throws {
         self.login = login
         self.refuse = refuse
+        self.eager = eager
         server = try LoopbackServer { [weak self] c in
             Task { await self?.serve(c) }
         }
@@ -191,36 +194,62 @@ final class FakeSOCKS5: @unchecked Sendable {
             await Wire.write(c, [5, refuse, 0, 1, 0, 0, 0, 0, 0, 0])
             return c.cancel()
         }
-        guard let target = await Wire.dial(host, port, queue: upstream) else {
-            await Wire.write(c, [5, 5, 0, 1, 0, 0, 0, 0, 0, 0])
-            return c.cancel()
-        }
         // A name in the bound address, as some proxies answer: the client reads it to its end.
         let name: [UInt8] = Array("proxy.test".utf8)
         var reply: [UInt8] = [5, 0, 0, 3, UInt8(name.count)]
         reply += name
         reply += [0x04, 0x38]
-        await Wire.write(c, reply)
+        if eager { await Wire.write(c, reply) }
+        guard let target = await Wire.dial(host, port, queue: upstream) else {
+            if !eager { await Wire.write(c, [5, 5, 0, 1, 0, 0, 0, 0, 0, 0]) }
+            return c.cancel()
+        }
+        if !eager { await Wire.write(c, reply) }
         Wire.pump(c, target)
         Wire.pump(target, c)
     }
 }
 
-/// A hub on the loopback that answers `GET …/api/v1/health` with `{"ok":true}` (or, `notAHub`, a web page) and
-/// closes each connection after its answer.
+/// A hub on the loopback that answers `GET …/api/v1/health` as `answer` says, and closes each connection after its
+/// answer. The hub's health leaves `version` out for a source it counts as the internet (server/internal/hub/hello.go).
 final class FakeHealthHub: @unchecked Sendable {
+    enum Answer {
+        /// A hub that takes this source as its LAN.
+        case hub(id: String)
+        /// A hub that counts this source as the internet: no `version`.
+        case internet(id: String)
+        /// A web page.
+        case notAHub
+        /// A redirect to this same server's health elsewhere, which would pass when followed.
+        case redirect
+    }
+
     private var server: LoopbackServer!
 
-    init(notAHub: Bool = false) throws {
-        server = try LoopbackServer { c in
+    init(_ answer: Answer = .hub(id: "hub-test")) throws {
+        server = try LoopbackServer { [weak self] c in
+            let port = self?.port ?? 0
             Task {
                 var request = Data()
                 while !request.contains(Data("\r\n\r\n".utf8)), let more = await Wire.readSome(c) { request.append(more) }
                 let line = String(decoding: request.prefix(while: { $0 != 13 }), as: UTF8.self)
                 let health = line.hasPrefix("GET ") && line.contains("/api/v1/health ")
-                let body = notAHub || !health ? "<html>not here</html>" : #"{"ok":true}"#
-                let status = health && !notAHub ? "200 OK" : "404 Not Found"
-                let head = "HTTP/1.1 \(status)\r\nContent-Type: application/json\r\nContent-Length: \(body.utf8.count)\r\nConnection: close\r\n\r\n"
+                let moved = line.hasPrefix("GET /moved/")
+                var status = "404 Not Found", body = "<html>not here</html>", extra = ""
+                switch answer {
+                case .hub(let id) where health:
+                    (status, body) = ("200 OK", #"{"ok":true,"hub_id":"\#(id)","version":"test"}"#)
+                case .internet(let id) where health:
+                    (status, body) = ("200 OK", #"{"ok":true,"hub_id":"\#(id)"}"#)
+                case .redirect where moved:
+                    (status, body) = ("200 OK", #"{"ok":true,"hub_id":"hub-test","version":"test"}"#)
+                case .redirect where health:
+                    status = "301 Moved Permanently"
+                    extra = "Location: http://127.0.0.1:\(port)/moved/api/v1/health\r\n"
+                default:
+                    break
+                }
+                let head = "HTTP/1.1 \(status)\r\nContent-Type: application/json\r\n\(extra)Content-Length: \(body.utf8.count)\r\nConnection: close\r\n\r\n"
                 await Wire.write(c, Array((head + body).utf8))
                 c.send(content: nil, contentContext: .finalMessage, isComplete: true, completion: .contentProcessed { _ in c.cancel() })
             }
@@ -245,15 +274,16 @@ final class EchoServer: @unchecked Sendable {
     func stop() { server.stop() }
 }
 
-/// Takes connections and answers with `reply` (or never, when nil).
+/// Takes connections and answers with `reply` (or never, when nil), `after` the first bytes came.
 final class ScriptedServer: @unchecked Sendable {
     private var server: LoopbackServer!
 
-    init(reply: [UInt8]?) throws {
+    init(reply: [UInt8]?, after delay: Duration = .zero) throws {
         server = try LoopbackServer { c in
             guard let reply else { return }
             Task {
                 _ = await Wire.readSome(c)
+                try? await Task.sleep(for: delay)
                 await Wire.write(c, reply)
             }
         }

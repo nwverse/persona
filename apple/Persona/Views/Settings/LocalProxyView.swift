@@ -8,7 +8,7 @@ struct HubLocalProxyPage: View {
 
     var body: some View {
         if let hub = model.registry.hubs.first(where: { $0.id == hubID }) {
-            LocalProxyForm(hub: hub.config.url, saved: hub.localProxy, onSave: { model.setLocalProxy($0, hub: hubID) }) {
+            LocalProxyForm(hub: hub.config.url, hubID: hub.hubID, saved: hub.localProxy, onSave: { model.setLocalProxy($0, hub: hubID) }) {
                 if hub.localProxy?.isUsable == true { status(hub) }
             }
             .detailTitle(String(localized: "Local Proxy"))
@@ -43,6 +43,8 @@ struct LocalProxyForm<Status: View>: View {
     @Environment(\.dismiss) private var dismiss
     /// The paired address: what the hub's address defaults to.
     var hub: URL
+    /// The hub's own id once it said it: Test Connection makes sure it is this hub that answers.
+    var hubID: String?
     /// What is kept now (nil: none yet).
     var saved: LocalProxyRoute?
     /// The route to keep (tested); nil: remove it.
@@ -68,10 +70,19 @@ struct LocalProxyForm<Status: View>: View {
             Section {
                 field(String(localized: "Host"), $host, prompt: LocalProxyRoute.defaultHost, id: "proxy.host")
                 field(String(localized: "Port"), $port, prompt: String(localized: "Required"), digits: true, id: "proxy.port")
+                if draft?.isOnThisDevice == false {
+                    Label {
+                        Text("This proxy isn't on this device: Persona's traffic to the hub, this device's credential and the proxy's password would cross the network unencrypted.")
+                            .font(Theme.Font.secondary).fixedSize(horizontal: false, vertical: true)
+                    } icon: {
+                        Image(systemName: Theme.Icon.error).foregroundStyle(Theme.caution)
+                    }
+                    .accessibilityIdentifier("proxy.remote")
+                }
             } header: {
                 SettingsHeading(String(localized: "SOCKS5 Proxy"))
             } footer: {
-                Text("A SOCKS5 proxy that another app on this device provides, such as a VPN-like client that serves 127.0.0.1 instead of taking the system VPN slot. Persona's traffic to the hub passes through that app, so use one you trust.")
+                Text("A SOCKS5 proxy that another app on this device provides, such as a VPN-like client that serves 127.0.0.1 instead of taking the system VPN slot. Persona's traffic to the hub, this device's credential included, goes through it unencrypted, even for an https hub: you're trusting whatever app holds that port.")
             }
             Section {
                 field(String(localized: "Username"), $username, prompt: String(localized: "Optional"), id: "proxy.username")
@@ -267,7 +278,7 @@ struct LocalProxyForm<Status: View>: View {
         problem = nil
         defer { checking = false }
         do {
-            try await LocalProxies.shared.verify(route, hub: hub)
+            try await LocalProxies.shared.verify(route, hub: hub, hubID: hubID)
             onSave(route)
             Haptics.success()
             model.toast = Toast(String(localized: "Local proxy saved"), style: .success)

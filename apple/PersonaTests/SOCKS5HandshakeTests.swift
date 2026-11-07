@@ -83,8 +83,9 @@ struct SOCKS5HandshakeTests {
         // Not SOCKS5 at all: an HTTP proxy's "HTTP/1.1 400", a SOCKS4 one.
         #expect(throws: SOCKS5Error.notSOCKS5(0x48)) { try after(nil, [self.utf8("HT")]) }
         #expect(throws: SOCKS5Error.notSOCKS5(4)) { try after(nil, [[4, 0]]) }
-        // A login method nobody offered, an address type that does not exist, bytes after the end.
-        #expect(throws: SOCKS5Error.malformed) { try after(nil, [[5, 2]]) }
+        // A login picked when none was offered (mihomo answers so to everyone once it asks for one): asks for it.
+        #expect(throws: SOCKS5Error.noAcceptableMethod(loginOffered: false)) { try after(nil, [[5, 2]]) }
+        // An address type that does not exist, bytes after the end.
         #expect(throws: SOCKS5Error.malformed) { try after(nil, [[5, 0], [5, 0, 0, 9]]) }
         #expect(throws: SOCKS5Error.malformed) { try after(nil, [[5, 0], [5, 0, 0, 1], [0, 0, 0, 0, 0, 0], [0]]) }
         #expect(SOCKS5Error.reply(5) == "connection refused, 5")
