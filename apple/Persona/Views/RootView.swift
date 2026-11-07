@@ -6,6 +6,15 @@ struct RootView: View {
     @Environment(AppModel.self) private var model
     /// The system's text size, before Small / Standard / Large moves it.
     @Environment(\.dynamicTypeSize) private var systemTypeSize
+    /// How far down the toasts outside the shell's window start: below the navigation bar's buttons, as the shell's do,
+    /// not on them (the owner asked, #138: a toast covered Back). The Mac's stay at the top of the window.
+    private var toastClearance: CGFloat {
+        #if os(iOS)
+        ShellNavigationClearance.needed(at: model.textSize.applied(to: systemTypeSize))
+        #else
+        0
+        #endif
+    }
     @Environment(\.horizontalSizeClass) private var widthClass
     #if DEBUG
     /// `-swapTreeAt <seconds>`: the width class goes compact for a moment that long after launch, as iOS may set it for
@@ -92,7 +101,7 @@ struct RootView: View {
         .markdownInlineImageProvider(MathInlineImages()).markdownImageProvider(WebMarkdownImages()) // inline formulas in every Markdown (MathMarkdown)
         // The shell shows the toasts in a window of its own, over its sheets too (`ToastWindow`). Before the shell is on
         // screen there is no such window: a pairing link that failed on the welcome page said nothing (#4273).
-        .overlay(alignment: .top) { if !shellShown || model.extensionOpen != nil { ToastOverlay() } }
+        .overlay(alignment: .top) { if !shellShown || model.extensionOpen != nil { ToastOverlay().padding(.top, toastClearance) } }
         #if os(iOS) || os(visionOS)
         // Settings › Appearance › Light & Dark on this scene's window (and any other open one) as it first shows.
         .onAppear { model.colorScheme.apply() }

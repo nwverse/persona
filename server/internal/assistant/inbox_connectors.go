@@ -55,11 +55,13 @@ func (s *Service) settleConnector(ctx context.Context, id string) []*InboxItem {
 	var changed []*InboxItem
 	b.mu.Lock()
 	defer b.mu.Unlock()
+	defer b.settleRound()
 	for _, it := range b.items {
 		if it.Source != id || it.Connector == nil || !it.open() {
 			continue
 		}
 		if why, ok := res.Over[it.Connector.Thread]; ok {
+			b.roundWrite(it)
 			b.file(it, now, "read")
 			it.Reason = why
 			changed = append(changed, it)
@@ -89,6 +91,7 @@ func (b *inboxBook) applyConnector(id, name string, things []connector.InboxThin
 		if open != nil {
 			if open.Last != t.Last {
 				prev := seenOf(open)
+				b.roundWrite(open)
 				open.Count++
 				fillConnectorItem(open, t)
 				b.noteReceived(open, prev, nil)
@@ -100,11 +103,13 @@ func (b *inboxBook) applyConnector(id, name string, things []connector.InboxThin
 				changed = append(changed, open)
 			} else if t.Tier != "" && (open.Tier != string(t.Tier) || open.Reason != t.Why) {
 				// The rules decide this one now (an item tiered before, or under other options).
+				b.roundWrite(open)
 				setRuleTier(open, t)
 				b.noteTriaged(open)
 				changed = append(changed, open)
 			}
 			if t.Read && !open.Read {
+				b.roundWrite(open)
 				open.Read = true
 				if open.Tier != "" && open.Tier != TierAction { // untriaged ones are settled by triage
 					b.file(open, now, "read")
@@ -129,6 +134,7 @@ func (b *inboxBook) applyConnector(id, name string, things []connector.InboxThin
 		}
 		b.offerParent(it, thingParent(t))
 		b.add(id, it)
+		b.roundNew(it)
 		index.note(it)
 		changed = append(changed, it)
 	}
@@ -140,10 +146,11 @@ func (b *inboxBook) applyConnector(id, name string, things []connector.InboxThin
 // A "replied" that is the reply Persona just sent for a confirmed suggestion is not the user's: the event stays open,
 // waiting for the other side (false: nothing changed).
 func (b *inboxBook) settleThing(open *InboxItem, t connector.InboxThing, now time.Time) bool {
+	if t.Done == connector.DoneReplied && ownSend(open, t.Last) {
+		return false
+	}
+	b.roundWrite(open)
 	if t.Done == connector.DoneReplied {
-		if ownSend(open, t.Last) {
-			return false
-		}
 		b.noteSelfReplied(open, now)
 		open.done(now, t.Done)
 		b.closeHandling(open, "self_replied", now) // told on the AI twin's next pass (deliverPending)

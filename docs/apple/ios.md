@@ -65,7 +65,9 @@ Chat page:
 - Background sync (push + pull like IM; only foregrounded and connected): hub pushes which session changed; App pulls increments by cursor.
   Agents (`AgentSync`): changed `rev` in session list / `revs` triggers `after_seq` fetch, merged into memory if present,
   otherwise written to disk (`ChatCache.folder`, currently `chats-v3`) so opening is already current; scope active Agents + sessions used within 24 hours (at most 40, newest first, concurrency 3),
-  currently viewed chats rely on their subscriptions without duplicate fetches. Working Agents fetch at most once per minute (`AgentSync.workingGap`; each fetch decodes and rewrites the entire disk cache),
+  currently viewed chats rely on their subscriptions without duplicate fetches. When a subscription stops (the session's `updated_at` is newer
+  than the open chat's newest line and no items came for 4 seconds), the chat fetches after its `covered` and merges silently: at most every
+  10 seconds, once per `updated_at` (`AgentSyncPacing.catchUpAt`, the rule of the web's `web/src/lib/stale-page.ts`). Working Agents fetch at most once per minute (`AgentSync.workingGap`; each fetch decodes and rewrites the entire disk cache),
   immediately at turn end / Needs you (most likely to open); 19-minute real-hub replay: 45 calls/minute → 9 (2026-11-02 battery investigation). Lark (`LarkSync`): hub forwards gateway live events (`lark`), refreshing Inbox Lark chats and open chats
   (polling fallback only: list 90 seconds, chat 60); changed Inbox chats fetch the newest page into `lark-chat-<id>` cache; on hub connection catch up latest 20;
   unread chats open from cache if it reaches the first unread message.
@@ -768,6 +770,11 @@ iOS, Mac, visionOS, watch and extensions support Simplified Chinese, English and
   Reduce Motion (`accessibilityReduceMotion`) stops dot (and loading/preparing placeholders), working dot static outer ring.
   No wobbling icons/spinning gears/pulsing avatars/spinning to-dos. Counts `.numericText`; no `.shadow` outside `.surface` (glass/Clay/Island already shadow,
   doubling otherwise); neighboring glass keys/top Back/⋯ use `GlassEffectContainer`.
+  - An extension's View drawn again (#37, as on the web and Android; `Views/Settings/ExtensionMotion.swift`): under the same key, a `metric`, `stat_grid`
+    or row value whose numbers alone changed rolls (`.numericText`, counting down when the number fell); any other change of a value or a badge's words fades in,
+    and a badge's tone changes color (`Theme.Motion.state`). Blocks whose key is new fade in, gone ones fade out, and chart bars and lines move to the new values
+    (`Theme.Motion.layout`). Nothing moves on the first draw or with Reduce Motion; at rest every value is exactly the extension's text. Mock: `MOCK_EXTENSIONS=1`,
+    `-openExtension showcase -openExtensionPage motion`; `GET /mock/motion/next` draws its other step (`ExtensionMotionUITests`).
 - Voice orb (`DesignSystem/VoiceOrb.swift`, #3506, voice design #3489): centered call-bar ball; pages pass only phase (`VoiceOrb.Phase`: not started/connecting/listening/hearing you/speaking/listening with Agent working/paused/muted/ended) and volume 0…1, no style decisions.
   - Motion: listening slow breath (`Theme.Motion.voiceBreath`, 1.6 s one-way), speaking audio beat (`voiceBeat`, 0.42 s one-way), matches Android `Voice.kt` (`VoiceOrbTests` reads/checks); hearing scales by volume, connecting/Agent working arcs (`voiceSpin` / `voiceLap`). `TimelineView` clock ≤30fps (`voiceFrame`, like Needs you dots/avatar glow), static phases paused; Reduce Motion or Low Power one static frame per phase (like avatar dot), Reduce Motion switches phase without scaling. One of few continuous animations, only during calls.
   - Rendering: Liquid Glass/solid styles highlight sphere, pale avatar accent (`Theme.persona`) listening, accent speaking; BeautifulUI flat disc + five volume bars like dictation, filled accent speaking, white bars (near-black on pale/yellow accent). Connecting arc accent, working arc amber `Theme.busy`; paused/muted/ended gray, `pause` / `voiceMute` icons on nonhighlight gray with white contrast ≥3:1 (`VoiceOrbTests` light/dark).

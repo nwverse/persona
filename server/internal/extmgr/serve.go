@@ -154,6 +154,8 @@ func (h *Manager) registerRoutes(api *http.ServeMux) {
 // ServeHTTP serves one request the hub relayed: who asked is in the hub's headers (principalFrom); the extensions'
 // parts of the API (extension_api.go) come before the rest, as at the hub.
 func (h *Manager) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	h.serving.Add(1)
+	defer h.serving.Add(-1)
 	if !h.ready(r.Context()) {
 		writeErrCode(w, http.StatusServiceUnavailable, assistantwire.CodeAssistantOffline, errAssistantOffline)
 		return
@@ -173,6 +175,10 @@ func (h *Manager) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	h.extensionAPIs(h.apiMux, h.apiMux).ServeHTTP(w, r)
 }
+
+// Serving is how many requests the hub relayed to the extensions are being served now; a WebSocket (a voice call, an
+// extension's live view) counts for as long as it is open.
+func (h *Manager) Serving() int64 { return h.serving.Load() }
 
 // localeWriter lets apierr translate errors after the hub has relayed the request to this process.
 type localeWriter struct {
