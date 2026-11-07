@@ -66,8 +66,9 @@ func launchHerdrServer(ctx context.Context, bin, sock string) (<-chan error, err
 }
 
 // openHerdrLog opens the server's log for one start, emptied. It does not follow a symlink, does not wait on a FIFO
-// (O_NONBLOCK changes nothing for a regular file) and refuses anything but a regular file of this user, so a name
-// someone else put there can neither redirect the output nor make the open hang.
+// and refuses anything but a regular file of this user, so a name someone else put there can neither redirect the
+// output nor make the open hang. O_NONBLOCK is only for the open: it is cleared before the file becomes the server's
+// stdout and stderr, which would otherwise inherit it.
 func openHerdrLog(path string) (*os.File, error) {
 	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0o600)
 	if err != nil {
@@ -76,6 +77,10 @@ func openHerdrLog(path string) (*os.File, error) {
 	if st, err := f.Stat(); err != nil || !st.Mode().IsRegular() || !osproc.OwnedByMe(st) {
 		f.Close()
 		return nil, fmt.Errorf("herdr server log: %s is not a regular file of this user", path)
+	}
+	if err := syscall.SetNonblock(int(f.Fd()), false); err != nil {
+		f.Close()
+		return nil, fmt.Errorf("herdr server log: %w", err)
 	}
 	if err := f.Truncate(0); err != nil {
 		f.Close()

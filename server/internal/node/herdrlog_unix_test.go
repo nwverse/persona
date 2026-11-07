@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"syscall"
 	"testing"
+
+	"golang.org/x/sys/unix"
 )
 
 // A symlink at the log's name is not followed: the file it points to stays as it was.
@@ -57,5 +59,22 @@ func TestHerdrLogEmptiesTheLastOne(t *testing.T) {
 	f.Close()
 	if b, _ := os.ReadFile(log); string(b) != "new" {
 		t.Fatalf("log holds %q, want %q", b, "new")
+	}
+}
+
+// The O_NONBLOCK that keeps the open from hanging on a FIFO is gone from the file the server gets as its stdout and
+// stderr: they share its flags.
+func TestHerdrLogIsBlockingForTheServer(t *testing.T) {
+	f, err := openHerdrLog(filepath.Join(t.TempDir(), "persona-herdr-server.log"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	flags, err := unix.FcntlInt(f.Fd(), unix.F_GETFL, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if flags&unix.O_NONBLOCK != 0 {
+		t.Fatal("the log handed to the server is still O_NONBLOCK")
 	}
 }
