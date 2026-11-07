@@ -1,5 +1,6 @@
 """Pinned-baseline deployment contracts; every process uses synthetic homes and stub services."""
 import gzip
+import hashlib
 import importlib.util
 import json
 import os
@@ -9,22 +10,49 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 
 from test_persona_install import PersonaInstallTests
 from test_persona_script_identity import identity, executable, environment
 
 ROOT = Path(__file__).resolve().parents[2]
-BASELINE = "39a706a338"
+BASELINE_DIR = Path(__file__).parent / "fixtures" / "deployment"
+# Original Git blob IDs and SHA-256 digests pin the transparent historical inputs.
+BASELINE_FIXTURES = {
+    "scripts/deploy/install.sh": (
+        "install.sh.fixture", "2cb5313ca523baae86a7cc3edace37831afce285",
+        "17662c97d0de9ca9b8b065d1555ee6e890fa457ba436125ed0d805f5a0e0be5e"),
+    "scripts/persona_config.py": (
+        "persona_config.py.fixture", "13539dc74cb2785642f67c9e46bf5fb9ed9d0493",
+        "0b6390096988a44d87e66f146198669cda9299dc0966a25b873e8cd2cb6495ab"),
+}
 FORMER = "jar" + "vis"
 PREFIX = FORMER.upper() + "_"
 
 
 def baseline(path):
-    return subprocess.run(["git", "-C", str(ROOT), "show", BASELINE + ":" + path],
-                          check=True, capture_output=True, text=True, timeout=20).stdout
+    name, blob, digest = BASELINE_FIXTURES[path]
+    content = (BASELINE_DIR / name).read_bytes()
+    header = b"blob " + str(len(content)).encode("ascii") + b"\0"
+    if hashlib.sha1(header + content).hexdigest() != blob or hashlib.sha256(content).hexdigest() != digest:
+        raise ValueError("historical deployment fixture digest mismatch: " + name)
+    return content.decode("utf-8")
 
 
 class DeploymentRollingCompatibilityTests(unittest.TestCase):
+    def test_baselines_do_not_require_git_history(self):
+        with patch.object(subprocess, "run", side_effect=AssertionError("Git history must not be needed")):
+            for source in BASELINE_FIXTURES:
+                self.assertTrue(baseline(source))
+
+    def test_modified_baseline_is_rejected(self):
+        with tempfile.TemporaryDirectory() as directory:
+            name = BASELINE_FIXTURES["scripts/deploy/install.sh"][0]
+            (Path(directory) / name).write_text("changed historical input\n")
+            with patch(__name__ + ".BASELINE_DIR", Path(directory)):
+                with self.assertRaisesRegex(ValueError, "fixture digest mismatch"):
+                    baseline("scripts/deploy/install.sh")
+
     def test_baseline_and_current_installers_can_alternate_without_new_state(self):
         runner = PersonaInstallTests()
         for order in (("old", "new", "old"), ("new", "old", "new")):

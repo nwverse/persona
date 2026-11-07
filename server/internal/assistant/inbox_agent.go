@@ -127,34 +127,60 @@ func (a *InboxAgent) startDue(now time.Time) bool {
 // handInbox is one pass of the AI twin's work (docs/assistant/inbox.md"AI twin"): settle conversations that finished, hung or
 // were lost, escalate every newly triaged Needs you item to the manager (one processing conversation per event), deliver
 // what waits for the events' conversations (new messages, the user's answers), start conversations for the queued
-// ones. One pass at a time, in the background.
+// ones. One pass at a time, in the background. A pass asked for while one runs is not dropped: the goroutine running
+// passes runs another after it (every caller is an event, and nothing else would come back for what it queued).
 func (s *Service) handInbox(ctx context.Context) {
-	cfg := s.inboxConfig(ctx).Agent
 	b := &s.inbox
-	if !cfg.Enabled || !b.handing.TryLock() {
+	if !s.inboxConfig(ctx).Agent.Enabled {
 		return
+	}
+	b.handAgain.Store(true)
+	if !b.handing.TryLock() {
+		return // the running passes' goroutine finds the mark
 	}
 	ctx = context.WithoutCancel(ctx) // like triageInbox: the pass outlives the caller
 	go func() {
-		defer b.handing.Unlock()
-		now := time.Now()
-		s.sweepInboxAgents(ctx, cfg, now)
-		escalated := b.escalate(now.Add(-agentMaxAge(cfg)), now)
-		if tasks := s.activeTasks(ctx); len(tasks) > 0 { // which of the user's tasks a new one is about
-			for _, w := range escalated {
-				b.mu.Lock()
-				fresh := w.it.Agent != nil && w.it.Agent.SessionID == "" && w.it.Agent.TodoID == ""
-				b.mu.Unlock()
-				if fresh {
-					s.linkTaskFor(ctx, w.it, tasks, w)
-				}
+		for {
+			for b.handAgain.Swap(false) {
+				s.handPass(ctx)
+			}
+			b.handing.Unlock()
+			// A call that came after the last check found the lock still held: its mark is set, and it is run here
+			// unless a call since took the lock (and runs it).
+			if !b.handAgain.Load() || !b.handing.TryLock() {
+				return
 			}
 		}
-		// A failed row gives the event back its old state: the next pass escalates it again.
-		s.saveWrites(ctx, escalated, "its escalation")
-		s.deliverPending(ctx)
-		s.startInboxAgents(ctx, cfg)
 	}()
+}
+
+// handPass is one pass of handInbox, with b.handing held.
+func (s *Service) handPass(ctx context.Context) {
+	cfg := s.inboxConfig(ctx).Agent
+	b := &s.inbox
+	if !cfg.Enabled {
+		return
+	}
+	if f := b.passHook; f != nil {
+		f()
+	}
+	now := time.Now()
+	s.sweepInboxAgents(ctx, cfg, now)
+	escalated := b.escalate(now.Add(-agentMaxAge(cfg)), now)
+	if tasks := s.activeTasks(ctx); len(tasks) > 0 { // which of the user's tasks a new one is about
+		for _, w := range escalated {
+			b.mu.Lock()
+			fresh := w.it.Agent != nil && w.it.Agent.SessionID == "" && w.it.Agent.TodoID == ""
+			b.mu.Unlock()
+			if fresh {
+				s.linkTaskFor(ctx, w.it, tasks, w)
+			}
+		}
+	}
+	// A failed row gives the event back its old state: the next pass escalates it again.
+	s.saveWrites(ctx, escalated, "its escalation")
+	s.deliverPending(ctx)
+	s.startInboxAgents(ctx, cfg)
 }
 
 // startInboxAgents starts a processing conversation for the queued events that have none (newest first, while fewer
