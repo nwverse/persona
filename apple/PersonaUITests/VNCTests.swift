@@ -208,20 +208,19 @@ final class VNCTests: XCTestCase {
         rest()
     }
 
-    /// The top bar's round buttons keep one shape: More (⋯) as tall as Close and Help, and at least as wide as it is
-    /// tall, not a flat sliver around its dots.
+    /// The top bar's round buttons share one shape: Help and More (⋯) as tall and as wide as Close.
     @MainActor func testTopBarButtonsKeepTheirShape() throws {
         let (app, _) = try signedInMachinePage()
         let close = app.buttons["screen-close"].firstMatch, help = app.buttons["vnc-help"].firstMatch, more = app.buttons["vnc-more"].firstMatch
         XCTAssertTrue(more.waitForExistence(timeout: 10), "\(app.debugDescription)")
+        XCTAssertTrue(close.exists && help.exists, "\(app.debugDescription)")
         rest()
         shot(app, "vnc-top-bar")
-        let c = close.frame, h = help.frame, m = more.frame
-        print("VNC-TOP-BAR close=\(c) help=\(h) more=\(m)")
-        XCTAssertEqual(h.height, c.height, accuracy: 1, "Help as tall as Close: \(h) vs \(c)")
-        XCTAssertEqual(m.height, c.height, accuracy: 1, "More as tall as Close: \(m) vs \(c)")
-        XCTAssertGreaterThanOrEqual(m.width, m.height - 1, "More not squashed: \(m)")
-        XCTAssertGreaterThanOrEqual(h.width, h.height - 1, "Help not squashed: \(h)")
+        let c = close.frame
+        for (name, b) in [("Help", help.frame), ("More", more.frame)] {
+            XCTAssertEqual(b.height, c.height, accuracy: 1, "\(name) as tall as Close: \(b) vs \(c)")
+            XCTAssertEqual(b.width, c.width, accuracy: 1, "\(name) as wide as Close: \(b) vs \(c)")
+        }
     }
 
     /// The frame rate and latency the page measures (MOCK_SCREEN_ANIMATE=1: a box moving at ~30 frames a second, its

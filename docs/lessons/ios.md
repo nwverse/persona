@@ -1256,5 +1256,5 @@ DEBUG 的代码可能在 `Persona.debug.dylib` 中，40 KiB 的 `Persona` 只是
 
 ## An icon-only themed button takes its glyph's size (2026-11-07, #58)
 
-- `.themedButton()` (glass, bordered and soft alike) sizes a button by its label. With a bare `Image`, each button is as big as its glyph: `ellipsis` is only a few points tall, so the VNC page's More came out as a 37 × 19 pt sliver beside a 48 × 38 pt Close, and Help (`questionmark.circle`) was smaller too.
+- On iOS, `.themedButton()` (glass, bordered and soft alike) sizes a button by its label. With a bare `Image`, each button is as big as its glyph: `ellipsis` is only a few points tall, so at the default text size the VNC page's More came out as a 37 × 19 pt sliver beside a 48 × 38 pt Close, and Help (`questionmark.circle`) was smaller too.
 - Give every icon-only button in a row the same square label: `Theme.Size.icon` through `scaledFrame` (`VNCPage.barIcon`). Comparing the buttons' frames in a UI test catches it (`VNCTests.testTopBarButtonsKeepTheirShape`); a glance at one button does not.

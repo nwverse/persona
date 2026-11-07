@@ -144,8 +144,8 @@ struct VNCPage: View {
         .padding(.vertical, Theme.Space.s)
     }
 
-    /// A top-bar button's glyph in a square of its own: the button is sized by its label, so a short glyph (⋯) left to
-    /// itself makes a flat sliver beside Close.
+    /// A top-bar button's glyph in one square for every button: a themed button is sized by its label, and glyphs differ
+    /// in height (⋯ is a few points tall).
     private func barIcon(_ name: String) -> some View {
         Image(systemName: name).font(Theme.Font.labelStrong).scaledFrame(width: Theme.Size.icon, height: Theme.Size.icon)
     }
