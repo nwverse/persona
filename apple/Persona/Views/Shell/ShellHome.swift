@@ -8,6 +8,8 @@ import SwiftUI
 struct ShellHome: View {
     @Environment(AppModel.self) private var model
     @Environment(\.dynamicTypeSize) private var typeSize
+    /// iPhone Duo's bars down the side: the top bar is the side rail, and the page's top is free.
+    @Environment(\.shellRailEdge) private var railEdge
     var pending: PendingStart?
     var error: String?
     @Binding var launcher: String?
@@ -48,7 +50,7 @@ struct ShellHome: View {
         }
         .scrollDismissesKeyboard(.interactively)
         .dismissesKeyboardOnTap()
-        .contentMargins(.top, AssistantTopBar.height, for: .scrollContent)
+        .contentMargins(.top, AssistantTopBar.room(railEdge), for: .scrollContent)
         // Room to scroll the last things to ask clear of the fade.
         .contentMargins(.bottom, pending == nil ? Self.fade : ChatView.newestGap, for: .scrollContent)
         .onPreferenceChange(WelcomeFold.self) { room.fold = $0 }
@@ -72,7 +74,7 @@ struct ShellHome: View {
                     ReadinessHomeCard(route: $route)
                         .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { room.card = $0 }
                         .onDisappear { room.card = 0 }
-                    ShellNeedsYou(maxHeight: room.needs(withError: shownError != nil), openInbox: openInbox).shellScaled()
+                    ShellNeedsYou(maxHeight: room.needs(withError: shownError != nil, top: AssistantTopBar.room(railEdge)), openInbox: openInbox).shellScaled()
                 }
                 StarterComposer(disabled: pending != nil, shell: StarterComposer.ShellModes(launcher: $launcher, mode: $mode, effort: $effort),
                                 gate: model.readinessGate(route: $route), send: send)
@@ -134,11 +136,12 @@ private struct NeedsRoom {
         composerSize = typeSize
     }
 
-    func needs(withError: Bool) -> CGFloat {
+    /// `top`: what the page leaves free at its top for the bar (`AssistantTopBar.room`).
+    func needs(withError: Bool, top: CGFloat = AssistantTopBar.height) -> CGFloat {
         guard page > 0, fold > 0, composer > 0 else { return .infinity }
         // Under it: the composer, the stack's spacing and bottom padding (ShellHome), the error and its spacing.
         let below = composer + Theme.Space.m + Theme.Space.s + (withError ? error + Theme.Space.m : 0) + (card > 0 ? card + Theme.Space.m : 0)
-        return page - AssistantTopBar.height - fold - ShellHome.fade - below
+        return page - top - fold - ShellHome.fade - below
     }
 }
 
