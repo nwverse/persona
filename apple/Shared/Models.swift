@@ -1408,10 +1408,34 @@ nonisolated struct Fold: Codable, Hashable, Sendable {
     /// The images the run's calls looked at (docs/protocol/protocol.md「这一轮看过的图片」): its turn shows them before the answer
     /// while the run stays folded.
     var images: [FoldImage]? = nil
+    /// The task lists the run's calls left (docs/protocol/protocol.md「折叠的工作」 `fold.tasks`), in order: the chat's plan
+    /// while its TodoWrite is folded away (`ChatPlan.latest`, #5602).
+    var tasks: [FoldTasks]? = nil
 
     enum CodingKeys: String, CodingKey {
-        case items, tools, thoughts, until, images
+        case items, tools, thoughts, until, images, tasks
         case throughSeq = "through_seq", throughID = "through_id"
+    }
+}
+
+/// A task list a folded run's call left (`Fold.tasks`): a TodoWrite's whole list (`replace` "todo") or a task tool's.
+nonisolated struct FoldTasks: Codable, Hashable, Sendable {
+    nonisolated struct Entry: Codable, Hashable, Sendable {
+        var id: String
+        var subject: String?
+        var description: String?
+        /// pending, in_progress, completed, unknown or deleted.
+        var status: String?
+    }
+
+    var replace: String?
+    var entries: [Entry]
+    /// The call's item.
+    var sourceItemID: String
+
+    enum CodingKeys: String, CodingKey {
+        case replace, entries
+        case sourceItemID = "source_item_id"
     }
 }
 

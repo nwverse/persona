@@ -1166,11 +1166,12 @@ nonisolated enum ChatCache {
     /// v8: folds carry the images their work looked at (`Fold.images`); v7's folds had none, and their turns no strip.
     /// v9: user lines Persona typed in for the model carry `injected` (docs/protocol/protocol.md「Persona 注入的消息」, #2358).
     /// v10: a background workflow's end notice is kind `workflow` (#3731) and the hub gives it in the App's language
-    /// (#5511); v9's copies would keep its Chinese text for English and Japanese users.
+    /// (#5511); v9's copies would keep its Chinese text for English and Japanese users. v11: folds carry the task
+    /// lists their calls left (`Fold.tasks`), the chat's plan while its TodoWrite is folded (#5602).
     /// Bump it whenever the item structure or the text the hub gives an item changes.
-    static let folder = "chats-v10"
+    static let folder = "chats-v11"
     /// The folder before, removed on the first launch with this one.
-    private static let previous = "chats-v9"
+    private static let previous = "chats-v10"
 
     /// Once per launch, before the first copy is read or written (a static let runs once, on whichever thread asks first).
     private static let dropOlder: Void = {

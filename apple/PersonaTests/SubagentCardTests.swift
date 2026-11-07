@@ -62,4 +62,33 @@ struct SubagentCardTests {
         #expect(done.hasPrefix(String(localized: "Done [Subagent Card]")) && done.contains(TaskNoteText.took(80)))
         #expect(!SubagentCardText.line(.failed, agent: nil, took: nil).contains("·")) // nothing more to say
     }
+
+    /// The running work line names the subagents it waits on: running, launched in the foreground, its call unanswered.
+    @Test func theWorkLineSaysWhichSubagentsItWaitsOn() {
+        let calls = [item(1, .toolUse, tool: "Agent", id: "a"), item(2, .toolUse, tool: "Agent", id: "b"),
+                     item(3, .toolResult, role: "user", text: "done", id: "b"), item(4, .toolUse, tool: "Agent", id: "c")]
+        var a = Subagent(id: "x1", sessionID: "s@x1", toolUseID: "a", running: true)
+        a.lastTool = .init(id: "t1", name: "Bash", summary: "跑订单单测")
+        a.updatedAt = Date(timeIntervalSince1970: 20)
+        var c = Subagent(id: "x3", sessionID: "s@x3", toolUseID: "c", running: true)
+        c.lastTool = .init(id: "t3", name: "Read", summary: nil)
+        c.updatedAt = Date(timeIntervalSince1970: 30)
+        let b = Subagent(id: "x2", sessionID: "s@x2", toolUseID: "b", running: true) // answered: not waited on
+        var bg = Subagent(id: "x4", sessionID: "s@x4", toolUseID: "d", running: true)
+        bg.background = true
+        let w = AgentsWorking.of([a, b, c, bg], tasks: TaskIndex.build(calls))
+        #expect(w == AgentsWorking(count: 2, doing: ["Read", "跑订单单测"])) // newest call first
+        #expect(AgentsWorking.of([b, bg], tasks: TaskIndex.build(calls)) == nil)
+        let full = SubagentGridText.working(count: 2, doing: w!.doing, short: false)
+        #expect(full.hasPrefix(String(localized: "\(2) subagents working [Work Line]") + " — Read…"))
+        #expect(full.hasSuffix(String(localized: "\(1) more [Work Line]")))
+        #expect(SubagentGridText.working(count: 2, doing: w!.doing, short: true) == String(localized: "\(2) subagents working [Work Line]"))
+    }
+
+    @Test func aGridSaysHowManyRunThenHowManyRanInHowManySteps() {
+        #expect(SubagentGridText.head(count: 3, running: 2, steps: 9) == String(localized: "Running \(2) agents [Subagent Grid]"))
+        #expect(SubagentGridText.head(count: 3, running: 0, steps: 9)
+                == String(localized: "Ran \(3) agents [Subagent Grid]") + " · " + String(localized: "\(9) steps in all [Subagent Grid]"))
+        #expect(SubagentGridText.head(count: 3, running: 0, steps: 0) == String(localized: "Ran \(3) agents [Subagent Grid]"))
+    }
 }

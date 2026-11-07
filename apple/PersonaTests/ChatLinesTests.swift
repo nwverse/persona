@@ -23,6 +23,7 @@ struct ChatLinesTests {
             case .workStep: "step"
             case .workEnd: "end"
             case .agentOut: "agent"
+            case .agents(_, let calls, _, _): "agents\(calls.count)"
             case .toolRun: "run"
             case .apiError: "error"
             default: "other"
@@ -89,6 +90,22 @@ struct ChatLinesTests {
         lines.openWork = []
         #expect(kinds(lines.build(blocks(items + [item(5, .toolResult, role: "user", text: "42 passed", id: "a")]), live: nil))
                 == ["user", "work"])
+    }
+
+    /// Subagents launched one after another share one line, their cards in a grid (#5602); one alone stays a step.
+    /// Folded, the running ones of a grid stay out together.
+    @Test(arguments: [false, true]) func subagentsLaunchedTogetherShareAGrid(chips: Bool) {
+        let items = [item(1, .text, role: "user", text: "并行拆给子 Agent"), item(2, .toolUse, tool: "Agent", id: "a"),
+                     item(3, .toolUse, tool: "Agent", id: "b"), item(4, .toolUse, tool: "Task", id: "c"),
+                     item(5, .toolUse, tool: "Bash", id: "d"), item(6, .toolUse, tool: "Agent", id: "e")]
+        var lines = ChatLines(openWork: [], chipRuns: chips)
+        lines.showsFolded = { c, _ in c.use.toolUseID != "b" && c.name != "Bash" }
+        let closed = lines.build(blocks(items), live: nil)
+        #expect(kinds(closed) == ["user", "work", "agents2", "agent"])
+        lines.openWork = [closed[1].id]
+        let open = lines.build(blocks(items), live: nil)
+        #expect(kinds(open) == ["user", "work", "agents3", "step", "step", "end"])
+        #expect(open[2].id == closed[2].id)
     }
 
     @Test func beautifulUIFoldsToolCallsInARowIntoOneRun() {
