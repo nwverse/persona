@@ -58,23 +58,6 @@ func (s *Store) dedupeVerdictsLocked() map[string]dedupeVerdict {
 	return out
 }
 
-// putDedupeVerdict records one pair's verdict, reading the file again so a dedupe run and an unmerge do not
-// overwrite each other's. A split stands: only another split replaces it (false: v was not recorded).
-func (s *Store) putDedupeVerdict(key string, v dedupeVerdict) (bool, error) {
-	s.dedupeMu.Lock()
-	defer s.dedupeMu.Unlock()
-	all := s.dedupeVerdictsLocked()
-	if all[key].Split && !v.Split {
-		return false, nil
-	}
-	all[key] = v
-	raw, err := json.MarshalIndent(all, "", "  ")
-	if err != nil {
-		return false, err
-	}
-	return true, writeFile(s.dedupePath(), append(raw, '\n'))
-}
-
 func pairKey(a, b string) string {
 	if a > b {
 		a, b = b, a
@@ -195,21 +178,16 @@ func (e *Engine) DedupeProjects(ctx context.Context, max int) int {
 			e.logf("dedupe %s: %v", key, err)
 			continue
 		}
-		recorded, err := e.Store.putDedupeVerdict(key, dedupeVerdict{Same: same, Reason: reason, At: time.Now().UTC()})
-		if err != nil {
-			e.logf("dedupe %s: %v", key, err)
-		} else if !recorded { // unmerged while the model was asked
-			continue
-		}
-		if !same {
-			continue
-		}
 		keep, drop := c.a, c.b
 		if !keepA {
 			keep, drop = c.b, c.a
 		}
-		if err := e.MergeProjects(keep.Slug, drop.Slug, "去重 · "+reason); err != nil {
-			e.logf("dedupe merge %s → %s: %v", drop.Slug, keep.Slug, err)
+		didMerge, err := e.commitDedupe(key, dedupeVerdict{Same: same, Reason: reason, At: time.Now().UTC()}, keep.Slug, drop.Slug)
+		if err != nil {
+			e.logf("dedupe %s: %v", key, err)
+			continue
+		}
+		if !didMerge {
 			continue
 		}
 		e.logf("dedupe: merged %s into %s (%s)", drop.Slug, keep.Slug, reason)

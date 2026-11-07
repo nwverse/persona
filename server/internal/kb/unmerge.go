@@ -87,7 +87,7 @@ func (e *Engine) unmergeProject(drop *Project) error {
 	// The split goes first: if a write below fails, the merge stays and can be unmerged again, and dedupe does
 	// not ask about the pair meanwhile.
 	if found {
-		if _, err := e.Store.putDedupeVerdict(pairKey(keep.Slug, drop.Slug), dedupeVerdict{Split: true, Reason: "拆开了", At: now}); err != nil {
+		if err := e.Store.putDedupeVerdict(pairKey(keep.Slug, drop.Slug), dedupeVerdict{Split: true, Reason: "拆开了", At: now}); err != nil {
 			return err
 		}
 	}

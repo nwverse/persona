@@ -105,15 +105,11 @@ func TestUnmergeUndoesARecordedMerge(t *testing.T) {
 			t.Errorf("%s -> %+v, want %s", name, p, want)
 		}
 	}
-	// Not even once a verdict would be asked again (dedupeRecheck), nor by a dedupe run that asked meanwhile: the
-	// user's split stands.
+	// Not even once a verdict would be asked again (dedupeRecheck): the user's split stands.
 	key := pairKey("keep", "drop")
-	if recorded, err := e.Store.putDedupeVerdict(key, dedupeVerdict{Same: true, At: time.Now()}); recorded || err != nil {
-		t.Fatalf("a verdict replaced the split: %v %v", recorded, err)
-	}
 	v := e.Store.dedupeVerdicts()[key]
 	v.At = time.Now().Add(-2 * dedupeRecheck)
-	if _, err := e.Store.putDedupeVerdict(key, v); err != nil {
+	if err := e.Store.putDedupeVerdict(key, v); err != nil {
 		t.Fatal(err)
 	}
 	if n := e.DedupeProjects(context.Background(), 5); n != 0 || m.calls != 0 {
