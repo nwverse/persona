@@ -1,10 +1,15 @@
+//go:build unix
+
 package supervise
 
 import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"os"
+	"os/exec"
 	"os/signal"
 	"path/filepath"
 	"strconv"
@@ -33,6 +38,12 @@ func child(dir, role string) {
 	}
 	fmt.Fprintf(f, "%d %s\n", os.Getpid(), os.Getenv("PERSONA_ASSISTANT_DEPLOY"))
 	f.Close()
+	if _, err := os.Stat(filepath.Join(dir, role+".spawn")); err == nil { // leave something behind: a process of its own
+		gc := exec.Command("sleep", "30")
+		if gc.Start() == nil {
+			_ = os.WriteFile(filepath.Join(dir, role+".grandchild"), []byte(strconv.Itoa(gc.Process.Pid)), 0o600)
+		}
+	}
 	term := make(chan os.Signal, 1)
 	signal.Notify(term, syscall.SIGTERM)
 	for {
@@ -82,10 +93,11 @@ type fixture struct {
 
 func newFixture(t *testing.T, hubJSON string) *fixture {
 	t.Helper()
-	old := []time.Duration{backoffFirst, backoffMost, steadyAfter, stopWait, bindRetry, modeRecheck}
+	old := []time.Duration{backoffFirst, backoffMost, steadyAfter, stopWait, bindRetry, modeRecheck, bindRetryMost}
 	t.Cleanup(func() {
-		backoffFirst, backoffMost, steadyAfter, stopWait, bindRetry, modeRecheck = old[0], old[1], old[2], old[3], old[4], old[5]
+		backoffFirst, backoffMost, steadyAfter, stopWait, bindRetry, modeRecheck, bindRetryMost = old[0], old[1], old[2], old[3], old[4], old[5], old[6]
 	})
+	bindRetryMost = time.Second
 	backoffFirst, backoffMost, steadyAfter, stopWait, bindRetry, modeRecheck =
 		10*time.Millisecond, 40*time.Millisecond, time.Hour, 2*time.Second, 20*time.Millisecond, 20*time.Millisecond
 	t.Setenv("PERSONA_LISTEN", "")
@@ -313,5 +325,138 @@ func TestLoopback(t *testing.T) {
 		if got := loopback(listen); got != want {
 			t.Errorf("%q: %s, want %s", listen, got, want)
 		}
+	}
+}
+
+// The hub starts again with another mode in hub.json (manager-mode, then an admin's restart of the hub): the
+// supervisor stops everything and says why, so that the container starts again and decides anew.
+func TestModeChangeStopsTheSupervisor(t *testing.T) {
+	f := newFixture(t, `{"assistant":{"mode":"service"}}`)
+	done := make(chan error, 1)
+	go func() { done <- f.e.hubContainer(context.Background()) }()
+	waitFor(t, "both", func() bool { return len(f.starts("hub")) == 1 && len(f.starts("assistant")) == 1 })
+	if err := os.WriteFile(filepath.Join(f.e.home, "hub.json"), []byte(`{"assistant":{"mode":"child"}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	f.stop(t, "hub", 0)
+	select {
+	case err := <-done:
+		if !errors.Is(err, errChanged) || len(f.starts("hub")) != 1 || !strings.Contains(f.out.String(), "starts again with it") {
+			t.Fatalf("err %v, hub starts %d\n%s", err, len(f.starts("hub")), f.out.String())
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("the supervisor did not stop")
+	}
+	pid, _ := strconv.Atoi(f.starts("assistant")[0][0])
+	if syscall.Kill(pid, 0) == nil {
+		t.Fatal("the manager still runs")
+	}
+}
+
+// A binding that keeps failing waits longer each time.
+func TestBindRetryGrows(t *testing.T) {
+	f := newFixture(t, `{"assistant":{"mode":"service"}}`)
+	f.bindErrs = []error{errors.New("e1"), errors.New("e2"), errors.New("e3")}
+	stop := running(t, f.e.hubContainer)
+	waitFor(t, "the manager", func() bool { return len(f.starts("assistant")) == 1 })
+	_ = stop()
+	log := f.out.String()
+	for _, want := range []string{"e1; trying again in 20ms", "e2; trying again in 40ms", "e3; trying again in 80ms"} {
+		if !strings.Contains(log, want) {
+			t.Fatalf("no %q in:\n%s", want, log)
+		}
+	}
+}
+
+// A program that ran steadily for steadyAfter starts again after the first pause, not a grown one.
+func TestBackoffResetsAfterASteadyRun(t *testing.T) {
+	f := newFixture(t, `{"assistant":{"mode":"service"}}`)
+	steadyAfter = 150 * time.Millisecond
+	stop := running(t, f.e.hubContainer)
+	waitFor(t, "the manager", func() bool { return len(f.starts("assistant")) == 1 })
+	f.stop(t, "assistant", 1) // quick: 10ms, then 20ms
+	waitFor(t, "the manager again", func() bool { return len(f.starts("assistant")) == 2 })
+	time.Sleep(250 * time.Millisecond) // steady now
+	f.stop(t, "assistant", 1)
+	waitFor(t, "the manager a third time", func() bool { return len(f.starts("assistant")) == 3 })
+	_ = stop()
+	if log := f.out.String(); strings.Count(log, "starting it again in 10ms") != 2 || strings.Contains(log, "again in 20ms") {
+		t.Fatalf("log:\n%s", log)
+	}
+}
+
+// What a program leaves behind when it stops (a process of its own) is killed with its process group.
+func TestLeftoversKilled(t *testing.T) {
+	f := newFixture(t, `{"assistant":{"mode":"service"}}`)
+	if err := os.WriteFile(filepath.Join(f.dir, "assistant.spawn"), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	stop := running(t, f.e.hubContainer)
+	defer func() { _ = stop() }()
+	var gc int
+	waitFor(t, "the manager's own process", func() bool {
+		b, err := os.ReadFile(filepath.Join(f.dir, "assistant.grandchild"))
+		gc, _ = strconv.Atoi(string(b))
+		return err == nil && gc > 0
+	})
+	f.stop(t, "assistant", 1)
+	waitFor(t, "what it left behind gone", func() bool {
+		var ws syscall.WaitStatus
+		_, _ = syscall.Wait4(gc, &ws, syscall.WNOHANG, nil) // not our child: just in case
+		return syscall.Kill(gc, 0) != nil
+	})
+}
+
+// bindBuiltin: waits for the hub's health first; a code it made and did not trade is voided, one traded is not.
+func TestBindBuiltinGlue(t *testing.T) {
+	defer func(m func(context.Context) (string, error), v func(context.Context, string) error,
+		b func(context.Context, string, string, func(context.Context) (string, error)) (bool, error)) {
+		mintCode, voidCode, bindBuiltin = m, v, b
+	}(mintCode, voidCode, bindBuiltin)
+	var healthy bool
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/v1/health" || !healthy {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			return
+		}
+		_, _ = w.Write([]byte(`{"ok":true}`))
+	}))
+	defer srv.Close()
+	var voided []string
+	mintCode = func(context.Context) (string, error) { return "mi_c1", nil }
+	voidCode = func(_ context.Context, c string) error { voided = append(voided, c); return nil }
+	e := &env{home: t.TempDir(), out: &syncBuffer{}}
+	old := healthWait
+	defer func() { healthWait = old }()
+	healthWait = 50 * time.Millisecond
+	bindBuiltin = func(ctx context.Context, _, _ string, code func(context.Context) (string, error)) (bool, error) {
+		t.Fatal("bound before the hub answered")
+		return false, nil
+	}
+	if err := e.bindBuiltin(context.Background(), srv.URL); err == nil || !strings.Contains(err.Error(), "did not answer") {
+		t.Fatalf("hub not healthy: %v", err)
+	}
+	healthy = true
+	bindBuiltin = func(ctx context.Context, _, hubURL string, code func(context.Context) (string, error)) (bool, error) {
+		if _, err := code(ctx); err != nil || hubURL != srv.URL {
+			t.Errorf("code %v, hub %s", err, hubURL)
+		}
+		return false, errors.New("the hub did not trade it")
+	}
+	if err := e.bindBuiltin(context.Background(), srv.URL); err == nil || len(voided) != 1 || voided[0] != "mi_c1" {
+		t.Fatalf("not traded: %v, voided %v", err, voided)
+	}
+	bindBuiltin = func(ctx context.Context, _, _ string, code func(context.Context) (string, error)) (bool, error) {
+		_, _ = code(ctx)
+		return true, nil
+	}
+	if err := e.bindBuiltin(context.Background(), srv.URL); err != nil || len(voided) != 1 {
+		t.Fatalf("traded: %v, voided %v", err, voided)
+	}
+	bindBuiltin = func(context.Context, string, string, func(context.Context) (string, error)) (bool, error) {
+		return false, nil // the binding works: no code made
+	}
+	if err := e.bindBuiltin(context.Background(), srv.URL); err != nil || len(voided) != 1 {
+		t.Fatalf("kept: %v, voided %v", err, voided)
 	}
 }

@@ -121,6 +121,12 @@ class DockerEntrypointTests(unittest.TestCase):
         self.assertEqual(files, [])
         self.assertNotIn("PERSONA_PUBLIC_URL", logs)
         self.assertNotIn("PERSONA_ADMIN_ACCESS", logs)
+        # The flag anywhere, in either spelling.
+        for args in (("supervise", "--hub", "http://hub:18660", "--manager-only"), ("supervise", "--manager-only=true")):
+            with self.subTest(args=args):
+                ran, logs, files = self.run_command(*args)
+                self.assertEqual((ran, files), (list(args), []))
+                self.assertNotIn("PERSONA_ADMIN_ACCESS", logs)
 
     def test_desktop_api_guidance_is_independent_of_admin_access(self):
         for access in ("", "lan", "loopback", "cidrs", "any"):

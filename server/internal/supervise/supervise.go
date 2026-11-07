@@ -49,12 +49,16 @@ var (
 	backoffFirst = time.Second
 	backoffMost  = 30 * time.Second
 	steadyAfter  = time.Minute
-	// stopWait is how long the programs get to stop after a signal, before they are killed.
-	stopWait = 20 * time.Second
-	// healthWait bounds one wait for the hub to answer before a binding is tried; bindRetry is the pause after a
-	// binding that failed.
-	healthWait = 2 * time.Minute
-	bindRetry  = 10 * time.Second
+	// stopWait is how long the programs get to stop after a signal, before they are killed: under Docker's own stop
+	// timeout (10 s unless compose's stop_grace_period says otherwise), so that the supervisor is the one that kills.
+	stopWait = 8 * time.Second
+	// healthWait bounds one wait for the hub to answer before a binding is tried; bindRetry is the first pause after
+	// a binding that failed, doubling up to bindRetryMost while it keeps failing (each try opens the hub's database).
+	healthWait    = 2 * time.Minute
+	bindRetry     = 10 * time.Second
+	bindRetryMost = 5 * time.Minute
+	// voidWait bounds voiding a code that was not traded.
+	voidWait = 10 * time.Second
 	// modeRecheck is how often --manager-only reads hub.json again while the built-in manager is not a service.
 	modeRecheck = 30 * time.Second
 )
@@ -94,6 +98,11 @@ func Run(ctx context.Context, args []string, out io.Writer) error {
 	e.bind = e.bindBuiltin
 	if *only {
 		return e.managerOnly(ctx, strings.TrimRight(*hubURL, "/"))
+	}
+	hubSet := false
+	fs.Visit(func(f *flag.Flag) { hubSet = hubSet || f.Name == "hub" })
+	if hubSet {
+		e.logf("--hub goes with --manager-only only: ignored")
 	}
 	return e.hubContainer(ctx)
 }
@@ -158,10 +167,22 @@ func (e *env) hubContainer(ctx context.Context) error {
 		e.logf("assistant.mode is not service: the hub starts the built-in manager itself, as before")
 		return e.execHub(e.self, e.environ)
 	}
-	progs := []*program{{name: "hub", args: []string{"hub", "run"}}}
-	if identity.Getenv(SeparateEnv) == "separate" {
+	// The hub reads hub.json when it starts: one that starts again with another mode (manager-mode, then an admin's
+	// restart of the hub) needs the supervisor to decide again too. It stops then, and the container starts it again.
+	progs := []*program{{name: "hub", args: []string{"hub", "run"}, after: func() error {
+		now, err := e.readHubFile()
+		if err != nil || now.serviceMode() != f.serviceMode() || loopback(now.Listen) != loopback(f.Listen) {
+			return errChanged
+		}
+		return nil
+	}}}
+	switch v := identity.Getenv(SeparateEnv); v {
+	case "separate":
 		e.logf("%s=separate: the built-in manager runs in a container of its own; here, the hub alone", SeparateEnv)
-	} else {
+	default:
+		if v != "" {
+			e.logf("%s=%s is not separate: ignored, the built-in manager runs here", SeparateEnv, v)
+		}
 		hubURL := loopback(f.Listen)
 		progs = append(progs, &program{name: "manager", args: []string{"assistant"},
 			env:    []string{"PERSONA_ASSISTANT_DEPLOY=" + assistant.DeployService},
@@ -203,61 +224,91 @@ type program struct {
 	name string
 	args []string
 	env  []string
-	// before runs before each start; an error is said, and it is tried again after bindRetry.
+	// before runs before each start; an error is said, and it is tried again after bindRetry (growing).
 	before func(ctx context.Context) error
+	// after runs each time it stopped: an error stops the supervisor (errChanged: the container is to start again).
+	after func() error
 }
 
-// supervise runs progs, each started again when it stops, until ctx ends; then they are stopped (SIGTERM, then
-// SIGKILL after stopWait) and it returns.
+// errChanged: hub.json says another mode (or listen address) than the supervisor started with.
+var errChanged = errors.New("hub.json's assistant.mode or listen address changed: stopping so that the container " +
+	"starts again with it")
+
+// supervise runs progs, each started again when it stops, until ctx ends or one's after says to stop; then they are
+// stopped (SIGTERM, then SIGKILL after stopWait) and it returns (with that error).
 func (e *env) supervise(ctx context.Context, progs []*program) error {
+	ctx, cancel := context.WithCancelCause(ctx)
+	defer cancel(nil)
 	var wg sync.WaitGroup
 	for _, p := range progs {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			e.keep(ctx, p)
+			if err := e.keep(ctx, p, len(progs) > 1); err != nil {
+				e.logf("%v", err)
+				cancel(err)
+			}
 		}()
 	}
 	wg.Wait()
+	if err := context.Cause(ctx); err != nil && !errors.Is(err, context.Canceled) {
+		return err
+	}
 	return nil
 }
 
-// keep runs p until ctx ends, again each time it stops.
-func (e *env) keep(ctx context.Context, p *program) {
-	pause := backoffFirst
+// keep runs p until ctx ends, again each time it stops; an error when p.after says to stop.
+func (e *env) keep(ctx context.Context, p *program, others bool) error {
+	pause, bindPause := backoffFirst, bindRetry
 	for ctx.Err() == nil {
 		if p.before != nil {
 			if err := p.before(ctx); err != nil {
 				if ctx.Err() != nil {
-					return
+					return nil
 				}
-				e.logf("%s: %v; trying again in %s", p.name, err, bindRetry)
-				sleep(ctx, bindRetry)
+				e.logf("%s: %v; trying again in %s", p.name, err, bindPause)
+				sleep(ctx, bindPause)
+				bindPause = min(bindPause*2, bindRetryMost)
 				continue
 			}
+			bindPause = bindRetry
 		}
 		started := time.Now()
 		err := e.run(ctx, p)
 		if ctx.Err() != nil {
-			return
+			return nil
+		}
+		if p.after != nil {
+			if err := p.after(); err != nil {
+				return err
+			}
 		}
 		if time.Since(started) >= steadyAfter {
 			pause = backoffFirst
 		}
-		e.logf("%s stopped (%v): starting it again in %s; the other runs on", p.name, exitText(err), pause)
+		rest := ""
+		if others {
+			rest = "; the other runs on"
+		}
+		e.logf("%s stopped (%v): starting it again in %s%s", p.name, exitText(err), pause, rest)
 		sleep(ctx, pause)
 		pause = min(pause*2, backoffMost)
 	}
+	return nil
 }
 
 // run starts p and waits for it; once ctx ends it is asked to stop (SIGTERM), and killed after stopWait.
+// Each runs in a process group of its own: what it leaves behind when it stops (its extensions, say) is killed with
+// the group, as a container that stopped took all of it before.
 func (e *env) run(ctx context.Context, p *program) error {
 	cmd := exec.Command(e.self, p.args...)
 	cmd.Env = append(append([]string{}, e.environ...), p.env...)
 	cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
+	ownGroup(cmd)
 	if err := cmd.Start(); err != nil {
 		return err
 	}
+	defer killGroup(cmd)
 	done := make(chan error, 1)
 	go func() { done <- cmd.Wait() }()
 	select {
@@ -303,13 +354,15 @@ func (e *env) bindBuiltin(ctx context.Context, hubURL string) error {
 		return err
 	}
 	var minted string
-	traded, err := manager.BindBuiltin(ctx, e.home, hubURL, func(ctx context.Context) (string, error) {
-		code, err := hub.MintBuiltinCode(ctx)
+	traded, err := bindBuiltin(ctx, e.home, hubURL, func(ctx context.Context) (string, error) {
+		code, err := mintCode(ctx)
 		minted = code
 		return code, err
 	})
 	if minted != "" && !traded {
-		_ = hub.VoidBuiltinCode(context.WithoutCancel(ctx), minted)
+		vctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), voidWait)
+		_ = voidCode(vctx, minted)
+		cancel()
 	}
 	if err != nil {
 		return fmt.Errorf("binding the built-in manager to the hub at %s: %w", hubURL, err)
@@ -319,6 +372,13 @@ func (e *env) bindBuiltin(ctx context.Context, hubURL string) error {
 	}
 	return nil
 }
+
+// What bindBuiltin binds with (tests: stand-ins): the hub's code from its database, the manager's binding.
+var (
+	mintCode    = hub.MintBuiltinCode
+	voidCode    = hub.VoidBuiltinCode
+	bindBuiltin = manager.BindBuiltin
+)
 
 // waitHealthy waits up to most for GET hubURL/api/v1/health to answer 200.
 func waitHealthy(ctx context.Context, hubURL string, most time.Duration) error {

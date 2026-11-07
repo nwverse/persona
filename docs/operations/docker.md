@@ -38,11 +38,14 @@ The hub container runs two programs side by side: the hub (`personad hub run`) a
 
 - **Mode check.** It reads `assistant.mode` in `hub.json` when the container starts. A new install's `hub.json` (written on first start) says `service`. Without it (a `hub.json` from before, or `child`), or with `assistant.external`, the supervisor becomes the hub itself (exec), and the hub starts the built-in manager as its child, exactly as before.
 - **Binding.** Before it starts the built-in manager, it binds it unless its binding works. The binding is a one-time code made in the hub's database (as `persona-hub manager-code` does), traded over loopback once the hub answers its health check. A failed binding is logged and tried again every 10 seconds; the hub runs meanwhile.
-- **Restarts.** A program that stops is started again, and the other is left running. The pause before the restart starts at 1 second and doubles, up to 30 seconds, while the program keeps stopping within a minute of its start. A hub that exits on purpose (the admin page's restart) comes back the same way.
-- **Stopping.** On `docker stop` both get SIGTERM and are killed after 20 seconds if still running. Docker itself kills the container after its stop timeout (10 seconds unless compose's `stop_grace_period` says otherwise).
-- **Logs.** `docker compose logs hub` has both programs' lines. The built-in manager's start with `assistant:`, the supervisor's with `supervise:`.
+- **Restarts.** A program that stops is started again, and the other is left running. The pause before the restart starts at 1 second and doubles, up to 30 seconds, while the program keeps stopping within a minute of its start. A hub that exits on purpose (the admin page's restart) comes back the same way. Each program runs in a process group of its own, and whatever it leaves behind when it stops (its extensions' programs) is killed with it.
+- **Binding failures.** A binding that fails is tried again after 10 seconds, the wait doubling up to 5 minutes while it keeps failing.
+- **Stopping.** On `docker stop` both get SIGTERM and are killed after 8 seconds if still running, inside Docker's own stop timeout (10 seconds unless compose's `stop_grace_period` says otherwise).
+- **Logs.** `docker compose logs hub` has both programs' lines, interleaved as they come. The supervisor's lines start with `supervise:`.
 
-**Older installs keep the hub's child** until you switch. Switch with `docker compose exec hub personad hub manager-mode service`, then `docker compose restart hub`. The supervisor reads the mode only when the container starts, so restart the container (not just the hub) after changing it. To go back, use `manager-mode child` and restart.
+**Older installs keep the hub's child** until you switch. Switch with `docker compose exec hub personad hub manager-mode service`, then `docker compose restart hub`. To go back, use `manager-mode child` and restart. The supervisor decides when the container starts. If the hub starts again on its own (the admin page's restart) after the mode or its `listen` address changed in `hub.json`, the supervisor stops everything and says why, so that Docker starts the container again and the new mode takes effect.
+
+**Going back to an image from before this one** on an install in service mode (every install made with this image) leaves nothing to run the built-in manager: that image's hub doesn't start it, and it has no supervisor. First `docker compose exec hub personad hub manager-mode child`, then change the image.
 
 ### The built-in manager in a container of its own
 
@@ -51,7 +54,7 @@ The hub container runs two programs side by side: the hub (`personad hub run`) a
 1. Uncomment it.
 2. Set `PERSONA_BUILTIN_MANAGER: separate` on the hub service, so that the hub's container runs the hub alone.
 
-It shares the hub's data folder and database. It waits while `hub.json` doesn't say `service`, and binds itself to the hub over the compose network (a private address, which the hub counts as local). Like the side-by-side setup, it restarts the manager when it stops. Two built-in managers never run on one data folder: the second one stops with exit status 2 (a lock in `data/managers/assistant/`), and its supervisor tries it again later.
+It shares the hub's data folder (mounted at both of the hub container's paths) and database. It waits while `hub.json` doesn't say `service`, and binds itself to the hub over the compose network (a private address, which the hub counts as local). Like the side-by-side setup, it restarts the manager when it stops. Two built-in managers never run on one data folder: the second one stops with exit status 2 (a lock in `data/managers/assistant/`), and its supervisor tries it again later.
 
 ## Image
 

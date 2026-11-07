@@ -56,7 +56,10 @@ seed_config() {
 # Not the hub: an app-made manager (manager …), or the built-in manager in a container of its own (supervise
 # --manager-only): no hub.json written and none of the hub's reminders.
 not_hub=
-case "${1:-} ${2:-}" in "manager "* | "supervise --manager-only") not_hub=1 ;; esac
+case "${1:-}" in
+manager) not_hub=1 ;;
+supervise) for a in "$@"; do case "$a" in --manager-only | --manager-only=true | -manager-only) not_hub=1 ;; esac; done ;;
+esac
 if [ "$(id -u)" = 0 ]; then
   mkdir -p "$DATA"
   # PUID / PGID unset (.env without them): whoever owns the data folder, as the NAS's file manager made it. A folder

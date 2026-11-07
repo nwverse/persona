@@ -13,3 +13,7 @@ func execHub(self string, env []string) error {
 	cmd.Env, cmd.Stdin, cmd.Stdout, cmd.Stderr = env, os.Stdin, os.Stdout, os.Stderr
 	return cmd.Run()
 }
+
+// ownGroup and killGroup: no process groups here.
+func ownGroup(*exec.Cmd)  {}
+func killGroup(*exec.Cmd) {}

@@ -64,9 +64,12 @@ services:
   #     PERSONA_IMAGE: ${PERSONA_IMAGE-${JARVIS_IMAGE:-}}
   #     PERSONA_NODE_PACKAGES: ${PERSONA_NODE_PACKAGES:-}
   #   volumes:
-  #     # The hub's data folder: the built-in manager keeps its files in it, as beside the hub.
+  #     # The hub's data folder, at both paths the hub's container has it: the built-in manager keeps its files in
+  #     # it as beside the hub, and the paths it writes down are the same ones there.
   #     - ./data:/home/persona/.persona
+  #     - ./data:/home/jarvis/.jarvis
   #     # - ~/.ssh:/home/persona/.ssh:ro
+  #     # - ~/.ssh:/home/jarvis/.ssh:ro
 
   postgres:
     image: ${PERSONA_POSTGRES_IMAGE-${JARVIS_POSTGRES_IMAGE:-postgres:18-alpine}}
