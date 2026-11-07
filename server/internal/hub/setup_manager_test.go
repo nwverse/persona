@@ -201,6 +201,20 @@ func TestSetupManagerServiceChecksAndUndoes(t *testing.T) {
 		}
 		return e, out, cmds, file
 	}
+	t.Run("an older layout: only jarvisd", func(t *testing.T) {
+		e, out, cmds, file := newEnv(t)
+		bin := filepath.Join(e.root, "bin")
+		if err := os.Rename(filepath.Join(bin, "personad"), filepath.Join(bin, "jarvisd")); err != nil {
+			t.Fatal(err)
+		}
+		cmds.replies[filepath.Join(bin, "jarvisd")+" manager install --builtin --check"] = fakeReply{err: true, out: "flag provided but not defined: -builtin\n"}
+		if err := e.setup(context.Background()); !errors.Is(err, ErrSetupStopped) || !strings.Contains(out.String(), "什么都没改") {
+			t.Fatalf("%v\n%s", err, out)
+		}
+		if b, _ := os.ReadFile(filepath.Join(e.root, "hub.json")); string(b) != file || cmds.called("systemctl --user restart") {
+			t.Fatalf("changed: %s %v", b, cmds.calls)
+		}
+	})
 	t.Run("an older personad", func(t *testing.T) {
 		e, out, cmds, file := newEnv(t)
 		cmds.replies[filepath.Join(e.root, "bin", "personad")+" manager install --builtin --check"] = fakeReply{err: true, out: "flag provided but not defined: -builtin\n"}
@@ -282,7 +296,7 @@ func TestSetupBuiltinManagerProblems(t *testing.T) {
 		if err := e.setup(context.Background()); !errors.Is(err, ErrSetupStopped) {
 			t.Fatalf("%v\n%s", err, out)
 		}
-		if s := setupSteps(t, out.String())["manager"]; s.OK || !strings.Contains(s.Detail, "HTTP 409") {
+		if s := setupSteps(t, out.String())["manager"]; s.OK || !strings.Contains(s.Detail, "HTTP 409") || !strings.Contains(s.Next, "manager-mode child") {
 			t.Fatalf("manager step %+v", s)
 		}
 	})
@@ -303,20 +317,24 @@ func TestSetupBuiltinManagerProblems(t *testing.T) {
 			t.Fatalf("manager step %+v\n%s", s, out)
 		}
 	})
-	t.Run("--no-service on a service-mode hub", func(t *testing.T) {
-		e, out, cmds := newEnv(t, true)
-		e.o.noService = true
-		if err := e.setup(context.Background()); err != nil {
-			t.Fatalf("%v\n%s", err, out)
-		}
-		if mode, _ := assistantMode(t, e.root); mode != AssistantModeService || cmds.called(filepath.Join(e.root, "bin", "personad")+" manager") {
-			t.Fatalf("mode %q, calls %v", mode, cmds.calls)
-		}
-		if s := setupSteps(t, out.String())["manager"]; s.OK || !strings.Contains(s.Next, "manager join --builtin") ||
-			!strings.Contains(s.Next, "manager-mode child") || strings.Contains(s.Next, "<码> 绑定") {
-			t.Fatalf("manager step %+v", s)
-		}
-	})
+	for _, online := range []bool{false, true} {
+		t.Run("--no-service on a service-mode hub, online "+strconv.FormatBool(online), func(t *testing.T) {
+			e, out, cmds := newEnv(t, online)
+			e.o.noService = true
+			if err := e.setup(context.Background()); err != nil {
+				t.Fatalf("%v\n%s", err, out)
+			}
+			if mode, _ := assistantMode(t, e.root); mode != AssistantModeService || cmds.called(filepath.Join(e.root, "bin", "personad")+" manager") {
+				t.Fatalf("mode %q, calls %v", mode, cmds.calls)
+			}
+			s := setupSteps(t, out.String())["manager"]
+			// running (started by hand, say): fine; not running: nothing runs it, both ways out are said
+			if online && (!s.OK || s.Next != "") || !online && (s.OK || !strings.Contains(s.Next, "manager join --builtin") ||
+				!strings.Contains(s.Next, "manager-mode child") || strings.Contains(s.Next, "<码> 绑定")) {
+				t.Fatalf("manager step %+v", s)
+			}
+		})
+	}
 }
 
 func TestSetupFlagsConflict(t *testing.T) {

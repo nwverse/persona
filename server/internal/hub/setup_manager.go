@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/server/internal/assistantwire"
+	"github.com/nwverse/persona/server/internal/compat"
 	"github.com/nwverse/persona/server/internal/db"
 	"github.com/nwverse/persona/server/internal/managerconf"
 )
@@ -107,7 +108,11 @@ func (e *setupEnv) toManagerService(ctx context.Context) (changed bool, err erro
 			}
 		}
 	}
+	// The binary the service step will run: personad, or an older layout's jarvisd it links personad to.
 	bin := filepath.Join(e.root, "bin", "personad")
+	if _, err := os.Stat(bin); err != nil {
+		bin = filepath.Join(e.root, "bin", compat.DaemonBinary)
+	}
 	if _, statErr := os.Stat(bin); statErr == nil && mode != AssistantModeService {
 		if out, err := e.run(ctx, []string{"PERSONA_HOME=" + e.root}, bin, managerconf.BuiltinCheckArgs()...); err != nil {
 			why := lastLine(string(out))
@@ -215,6 +220,9 @@ func (e *setupEnv) builtinManager(ctx context.Context, cfg *setupConfig) error {
 		e.report("manager", false, "hub.json 的 assistant.mode 是 "+a.Mode+"：hub 不认识，内置管理者没有运行",
 			"把 "+e.hubJSON()+" 里的 assistant.mode 改成 service（或者删掉，让 hub 自己拉起它），再重跑")
 		return nil
+	case !e.canManagerService(ctx) && e.builtinOnline(ctx, cfg.Config):
+		e.report("manager", true, "内置管理者是自己的服务（assistant.mode service），在运行；这次没动它（"+e.noManagerServiceWhy(ctx)+"）", "")
+		return nil
 	case !e.canManagerService(ctx):
 		// Nothing runs the built-in manager here unless the user does: a problem, with both ways out.
 		e.report("manager", false, "内置管理者是自己的服务（assistant.mode service），这次没装它（"+e.noManagerServiceWhy(ctx)+"），现在没有东西运行它",
@@ -226,6 +234,9 @@ func (e *setupEnv) builtinManager(ctx context.Context, cfg *setupConfig) error {
 	retry := "按这句处理后重跑 personad hub setup"
 	if e.switched {
 		retry += " --manager-service"
+	} else {
+		// (a switch an earlier run made is not known here: the way back is said every time)
+		retry += "；在那之前要用内置管理者：personad hub manager-mode child，再重启 hub 的服务，让 hub 自己拉起它"
 	}
 	code, err := e.builtinCode(ctx, cfg.Config)
 	if err != nil {

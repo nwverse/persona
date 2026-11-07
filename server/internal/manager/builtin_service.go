@@ -211,7 +211,7 @@ func (e *env) builtinBinding(ctx context.Context, home string, j builtinJoin) (b
 		return b, false, ConfigError{fmt.Errorf("%s: %w", managerconf.DefaultFile(home), err)}
 	case j.hub == "":
 		return b, false, ConfigError{errors.New("the built-in manager is not bound to a hub: persona-hub manager-code on " +
-			"the hub's machine prints a code, then persona-manager join --builtin <hub address> <code> --install")}
+			"the hub's machine prints a code, then PERSONA_MANAGER_CODE=<the code> persona-manager join --builtin <hub address> --install")}
 	case j.code == "":
 		return b, false, ConfigError{fmt.Errorf("the built-in manager is not bound to a hub, and %s has no code: "+
 			"persona-hub manager-code on the hub's machine prints one", managerconf.BuiltinCodeEnv)}
