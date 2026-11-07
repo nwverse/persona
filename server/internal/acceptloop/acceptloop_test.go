@@ -131,6 +131,7 @@ func TestRunEndsWhenARealListenerCloses(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() { _ = ln.Close() }) // a failed check below must not leave Run blocked in Accept
 	served := make(chan struct{}, 1)
 	var logs atomic.Int64
 	done := goRun(context.Background(), ln, func(string, ...any) { logs.Add(1) }, func(c net.Conn) {
