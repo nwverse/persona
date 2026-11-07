@@ -229,7 +229,7 @@ struct ExtensionItemRow: View {
     private func metric(_ m: ExtensionMetricComponent) -> some View {
         VStack(alignment: .leading, spacing: Theme.Space.xxs) {
             Text(m.label).font(Theme.Font.label).foregroundStyle(.secondary).lineLimit(1)
-            Text(m.value).font(Theme.Font.title.monospacedDigit()).foregroundStyle(ExtensionUIStyle.ink(m.tone)).lineLimit(1)
+            ExtensionChangingText(m.value).font(Theme.Font.title.monospacedDigit()).foregroundStyle(ExtensionUIStyle.ink(m.tone)).lineLimit(1)
                 .minimumScaleFactor(0.6)
             if let d = m.detail, !d.isEmpty { Text(d).font(Theme.Font.label).foregroundStyle(.secondary) }
         }
@@ -270,6 +270,7 @@ struct ExtensionViewStack: View {
     }
 
     @Environment(\.assistantHTMLRendering) private var htmlContext
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     var view: ExtensionView
     var model: (any ExtensionViewControlling)?
     /// The first section's heading when it has none of its own.
@@ -302,10 +303,13 @@ struct ExtensionViewStack: View {
                     if !items.isEmpty || (s.more != nil && model != nil) {
                         let body = VStack(alignment: .leading, spacing: Theme.Space.m) {
                             ForEach(items) { entry in
-                                if case .divider = entry.component { Divider() } else {
-                                    ExtensionItemRow(item: entry.component, model: model, link: $link)
-                                        .frame(maxWidth: .infinity, alignment: .leading)
+                                Group {
+                                    if case .divider = entry.component { Divider() } else {
+                                        ExtensionItemRow(item: entry.component, model: model, link: $link)
+                                            .frame(maxWidth: .infinity, alignment: .leading)
+                                    }
                                 }
+                                .transition(.opacity)
                             }
                             if let more = s.more, let model { ExtensionMoreRow(more: more, model: model, link: $link) }
                         }
@@ -315,8 +319,12 @@ struct ExtensionViewStack: View {
                         Text(f).font(Theme.Font.label).foregroundStyle(.secondary).padding(.horizontal, Theme.Space.xs)
                     }
                 }
+                .transition(.opacity)
             }
         }
+        // Drawn again with blocks that came or went, they fade in and out and the rest moves (#37); a model's redraw
+        // comes animated already (`ExtensionMotion.redraw`), this covers a View changed by its caller (a card).
+        .animation(reduceMotion ? nil : Theme.Motion.layout, value: ExtensionMotion.blocks(view))
     }
 }
 

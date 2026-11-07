@@ -585,7 +585,7 @@ extension APIClient {
 
     private func show(_ v: ExtensionView?, keeping typed: [String: String] = [:], searched: Bool = false) {
         guard let v else { return }
-        view = v
+        ExtensionMotion.redraw(from: view, to: v) { view = v }
         fileLines = fileLines.filter { key, lines in v.sections.flatMap(\.items).contains { item in
             guard item.key == key else { return false }
             switch item { case .code(let code): return code.path == lines.path; case .diff(let diff): return diff.path == lines.path; default: return false }
