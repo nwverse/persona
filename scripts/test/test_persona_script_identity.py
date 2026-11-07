@@ -13,6 +13,7 @@ from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = ROOT / 'scripts/persona_identity.py'
+GIT = shutil.which('git')
 spec = importlib.util.spec_from_file_location('runtime_identity_under_test', SCRIPT)
 identity = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(identity)
@@ -439,6 +440,62 @@ sys.exit(2)
         result = subprocess.run(['bash', str(self.repo / 'scripts/deploy/deploy.sh'), 'web'], env=env, capture_output=True, text=True, timeout=30)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertEqual((self.state / 'web/index.html').read_text(), 'Persona fixture web')
+
+    def git(self, cwd, *args):
+        result = subprocess.run([GIT, '-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.com', *args], cwd=cwd,
+                                env=self.env, capture_output=True, text=True, timeout=30)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        return result.stdout.strip()
+
+    def clone_of(self, default, origin_head):
+        """Make the fixture checkout a clone of a fresh bare remote whose default branch is `default`, run with the real
+        git. origin_head: the branch the clone's refs/remotes/origin/HEAD names (one the remote may no longer have, as
+        in a clone made before the remote's default changed), None for none (a remote added by hand)."""
+        self.env['GIT_CONFIG_NOSYSTEM'] = '1'
+        remote = self.base / 'origin.git'
+        shutil.rmtree(remote, ignore_errors=True)
+        shutil.rmtree(self.repo / '.git', ignore_errors=True)
+        self.git(self.base, 'init', '-q', '--bare', '--initial-branch=' + default, str(remote))
+        self.git(self.repo, 'init', '-q', '--initial-branch=' + default)
+        self.git(self.repo, 'add', '-A')
+        self.git(self.repo, 'commit', '-q', '-m', 'fixture')
+        self.git(self.repo, 'remote', 'add', 'origin', str(remote))
+        self.git(self.repo, 'push', '-q', 'origin', default)
+        if origin_head:
+            self.git(self.repo, 'update-ref', 'refs/remotes/origin/' + origin_head, 'HEAD')
+            self.git(self.repo, 'symbolic-ref', 'refs/remotes/origin/HEAD', 'refs/remotes/origin/' + origin_head)
+        executable(self.commands / 'git', '#!/bin/sh\nexec ' + shlex.quote(GIT) + ' "$@"\n')
+
+    def advance_remote(self, branch):
+        """Someone else's commit lands on the remote's branch; the checkout does not have it."""
+        later = self.git(self.repo, 'commit-tree', 'HEAD^{tree}', '-p', 'HEAD', '-m', 'later')
+        self.git(self.repo, 'push', '-q', 'origin', later + ':refs/heads/' + branch)
+
+    def test_an_up_to_date_clone_of_a_main_repository_deploys(self):
+        # The remote has main and no master (#1064).
+        self.clone_of('main', 'main')
+        self.run_script('scripts/deploy/deploy.sh', 'web')
+        self.assertEqual((self.state / 'web/index.html').read_text(), 'Persona fixture web')
+
+    def test_a_checkout_behind_the_remote_default_branch_deploys_nothing(self):
+        for default, origin_head in (('main', 'main'), ('main', None), ('main', 'master'), ('master', 'master')):
+            with self.subTest(default=default, origin_head=origin_head):
+                self.clone_of(default, origin_head)
+                self.advance_remote(default)
+                result = subprocess.run(['bash', str(self.repo / 'scripts/deploy/deploy.sh'), 'web'], env=self.env,
+                                        capture_output=True, text=True, timeout=30)
+                self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+                self.assertIn('missing commits on origin/' + default, result.stderr)
+                self.assertFalse((self.state / 'web/index.html').exists())
+
+    def test_a_remote_that_does_not_name_its_default_branch_falls_back_to_origin_head(self):
+        self.clone_of('main', 'main')
+        self.advance_remote('main')
+        executable(self.commands / 'git', '#!/bin/sh\n[ "$1" = ls-remote ] && exit 0\nexec ' + shlex.quote(GIT) + ' "$@"\n')
+        result = subprocess.run(['bash', str(self.repo / 'scripts/deploy/deploy.sh'), 'web'], env=self.env,
+                                capture_output=True, text=True, timeout=30)
+        self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+        self.assertIn('missing commits on origin/main', result.stderr)
 
     def test_android_apk_publish_uses_the_remote_profile_and_config_entrypoint(self):
         # This integration fixture tests identity resolution and binary transport;
