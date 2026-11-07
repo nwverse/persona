@@ -297,6 +297,12 @@ func runBuiltin(t *testing.T, idle assistant.Idle, during func(run int), done <-
 		case <-ctx.Done():
 		}
 	}()
+	// A test that goes wrong ends here rather than at go test's timeout.
+	guard := time.AfterFunc(20*time.Second, func() {
+		t.Errorf("RunBuiltin did not end")
+		cancel()
+	})
+	defer guard.Stop()
 	var runs atomic.Int64
 	runAssistant = func(run context.Context, _ update.Build, _ io.Reader, h assistant.MainHooks) error {
 		if run.Err() != nil { // after a restart that "worked": this process would be another one by now
@@ -505,19 +511,18 @@ func TestBuiltinIdleThatHangs(t *testing.T) {
 }
 
 // (b) Checked again right before the exec: a file that stopped running while it waited for idle is not started on;
-// the manager runs again on its old code, and that file is not tried again. One put back while it waited (the file
-// it started with) is not started on either.
+// the manager runs again on its old code, and that file is not tried again. One put back while it waited (the very
+// file it started with, renamed back) is not started on either.
 func TestBuiltinCheckedAgainBeforeExec(t *testing.T) {
 	for _, c := range []struct {
 		name string
-		then func(bin string, write func(string, os.FileMode), start os.FileInfo)
+		then func(bin string, write func(string, os.FileMode))
 		want string
 	}{
-		{"stopped running", func(bin string, write func(string, os.FileMode), _ os.FileInfo) {
+		{"stopped running", func(bin string, write func(string, os.FileMode)) {
 			write("#!/bin/sh\nexit 3\n", 0o755)
 		}, "does not run any more"},
-		{"put back", func(bin string, _ func(string, os.FileMode), start os.FileInfo) {
-			// the file it started with, back where it was (a rollback renames the old one back)
+		{"put back", func(bin string, _ func(string, os.FileMode)) {
 			if err := os.Rename(bin+".start", bin); err != nil {
 				t.Error(err)
 			}
@@ -525,24 +530,21 @@ func TestBuiltinCheckedAgainBeforeExec(t *testing.T) {
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			bin, write, restarts := newBinaryEnv(t, nil)
-			start, _ := os.Stat(bin)
 			if err := os.Link(bin, bin+".start"); err != nil { // keep the start file to put it back
 				t.Fatal(err)
 			}
-			var gate atomic.Bool // busy until the file changed again
+			var asked atomic.Bool
 			release := make(chan struct{})
+			// Idle is asked only once the new file passed its check: the file changes then, before the answer.
 			out, runs, err := runBuiltin(t, func(context.Context) (bool, string) {
-				if gate.Load() {
-					return true, ""
+				if asked.CompareAndSwap(false, true) {
+					c.then(bin, write)
 				}
-				return false, "busy"
+				return true, ""
 			}, func(run int) {
 				switch run {
 				case 1:
 					write(goodBinary+"# new\n", 0o755)
-					time.Sleep(60 * time.Millisecond) // checked, now waiting for idle
-					c.then(bin, write, start)
-					gate.Store(true)
 				case 2:
 					time.Sleep(100 * time.Millisecond) // not tried again
 					close(release)
@@ -552,6 +554,53 @@ func TestBuiltinCheckedAgainBeforeExec(t *testing.T) {
 				t.Fatalf("err %v, runs %d, restarts %d\n%s", err, runs, restarts.Load(), out)
 			}
 		})
+	}
+}
+
+// (a) An answer of Idle that came too late is not gone by: it is asked anew (and is busy now).
+func TestBuiltinLateIdleAnswerDropped(t *testing.T) {
+	_, write, restarts := newBinaryEnv(t, nil)
+	idleCheck = 20 * time.Millisecond
+	var calls atomic.Int64
+	release := make(chan struct{})
+	time.AfterFunc(400*time.Millisecond, func() { close(release) })
+	out, _, err := runBuiltin(t, func(context.Context) (bool, string) {
+		if calls.Add(1) == 1 {
+			time.Sleep(60 * time.Millisecond) // past idleCheck: an old "idle" by the time it comes
+			return true, ""
+		}
+		return false, "busy now"
+	}, func(int) { write(goodBinary+"# new\n", 0o755) }, release)
+	if err != nil || restarts.Load() != 0 || calls.Load() < 2 || !strings.Contains(out, "does not answer") || !strings.Contains(out, "busy now") {
+		t.Fatalf("err %v, restarts %d, calls %d\n%s", err, restarts.Load(), calls.Load(), out)
+	}
+}
+
+// After a refused token, it starts again in place only on a file that runs: one that does not (replaced meanwhile)
+// leaves it running again on the code it has.
+func TestBuiltinRevokedStartsAgainOnlyOnAFileThatRuns(t *testing.T) {
+	_, write, restarts := newBinaryEnv(t, nil)
+	binaryCheck = time.Hour // the watch out of the way: the revoke's path is the one under test
+	defer func(p, r time.Duration, f func(context.Context, *assistant.ManagerConfig) error) {
+		revokedPoll, revokedRetry, probeToken = p, r, f
+	}(revokedPoll, revokedRetry, probeToken)
+	revokedPoll, revokedRetry = 5*time.Millisecond, 10*time.Millisecond
+	probeToken = func(context.Context, *assistant.ManagerConfig) error { return nil } // taken again
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	var runs atomic.Int64
+	runAssistant = func(run context.Context, _ update.Build, _ io.Reader, _ assistant.MainHooks) error {
+		if runs.Add(1) == 1 {
+			write("#!/bin/sh\nexit 1\n", 0o755)
+			return bus.ErrRevoked
+		}
+		cancel()
+		return nil
+	}
+	var out syncBuffer
+	if err := RunBuiltin(ctx, update.Build{}, &out); err != nil || runs.Load() != 2 || restarts.Load() != 0 ||
+		!strings.Contains(out.String(), "running it again here, on the code it has") {
+		t.Fatalf("err %v, runs %d, restarts %d\n%s", err, runs.Load(), restarts.Load(), out.String())
 	}
 }
 

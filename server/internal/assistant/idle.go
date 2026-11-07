@@ -31,7 +31,7 @@ func managerIdle(ctx context.Context, b *BusHub, s *Service, ext extServing) (bo
 	}
 	if ext != nil {
 		if n := ext.Serving(); n > 0 {
-			return false, fmt.Sprintf("%d request(s) or stream(s) of the extensions' going (a voice call, say)", n)
+			return false, fmt.Sprintf("%d request(s) or stream(s) of the extensions' open (a voice call, a live view)", n)
 		}
 	}
 	return s.idle(ctx)

@@ -470,14 +470,24 @@ type idleAnswer struct {
 
 // waitIdle returns true once the manager is idle or idleMost passed (saying so), false when ctx ends first. An Idle
 // that does not answer within idleCheck (its database stuck, say) counts as busy, and is not asked again until it
-// has answered: idleMost holds whatever it does.
+// has answered; that late answer is dropped (it is old by then), and it is asked anew. idleMost holds whatever it
+// does.
 func (w *binaryWatch) waitIdle(ctx context.Context, idle func() assistant.Idle) bool {
 	deadline := time.Now().Add(idleMost)
 	said := ""
 	var asked chan idleAnswer // an Idle asked and not answered yet
+	late := false             // asked has not answered in time
+	const noAnswer = "its check of what is going on does not answer"
 	for {
 		why := "it is not running yet"
 		if p := idle(); p != nil {
+			if late {
+				select {
+				case <-asked: // answered at last: too old to go by
+					asked, late = nil, false
+				default:
+				}
+			}
 			if asked == nil {
 				asked = make(chan idleAnswer, 1)
 				go func(ch chan<- idleAnswer) {
@@ -487,17 +497,20 @@ func (w *binaryWatch) waitIdle(ctx context.Context, idle func() assistant.Idle) 
 					ch <- idleAnswer{ok, busy}
 				}(asked)
 			}
-			select {
-			case a := <-asked:
-				asked = nil
-				if a.idle {
-					return true
+			why = noAnswer
+			if !late {
+				select {
+				case a := <-asked:
+					asked = nil
+					if a.idle {
+						return true
+					}
+					why = a.why
+				case <-time.After(idleCheck):
+					late = true
+				case <-ctx.Done():
+					return false
 				}
-				why = a.why
-			case <-time.After(idleCheck):
-				why = "its check of what is going on does not answer"
-			case <-ctx.Done():
-				return false
 			}
 		}
 		if ctx.Err() != nil {
@@ -531,7 +544,7 @@ func (w *binaryWatch) restartOnNew(ctx context.Context, env []string) {
 		fmt.Fprintf(w.out, "assistant: the new %s is gone (%v): going on with this one\n", w.path, err)
 		return
 	case sameFile(fi, w.seen):
-		// put back while it waited (the one it started with, after a rollback; or one it did not take)
+		// put back while it waited (the very file it started with, renamed back; or one it did not take)
 		fmt.Fprintf(w.out, "assistant: %s is a file it does not start on again (put back): going on with this one\n", w.path)
 		return
 	}
