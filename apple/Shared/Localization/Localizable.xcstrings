@@ -14513,6 +14513,29 @@
       },
       "extractionState": "manual"
     },
+    "Answered somewhere the password can't be typed": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Answered somewhere the password can't be typed"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "パスワードを入力できない場所から回答されました"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "回答来自无法填写密码的地方"
+          }
+        }
+      },
+      "extractionState": "manual"
+    },
     "Answered “%@”": {
       "localizations": {
         "en": {
@@ -31887,6 +31910,29 @@
       },
       "extractionState": "manual"
     },
+    "Couldn't run on %@; nothing was executed": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Couldn't run on %@; nothing was executed"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ で実行できず、何も実行されていません"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "没能在 %@ 上运行，什么都没执行"
+          }
+        }
+      },
+      "extractionState": "manual"
+    },
     "Couldn't run the herdr command": {
       "localizations": {
         "en": {
@@ -31905,6 +31951,29 @@
           "stringUnit": {
             "state": "translated",
             "value": "没能运行 herdr 命令"
+          }
+        }
+      },
+      "extractionState": "manual"
+    },
+    "Couldn't run; nothing was executed": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Couldn't run; nothing was executed"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "実行できず、何も実行されていません"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "没能运行，什么都没执行"
           }
         }
       },
@@ -33520,6 +33589,52 @@
         }
       }
     },
+    "Decline": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Decline"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "拒否"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "拒绝"
+          }
+        }
+      },
+      "extractionState": "manual"
+    },
+    "Declined": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Declined"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "拒否済み"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "已拒绝"
+          }
+        }
+      },
+      "extractionState": "manual"
+    },
     "Delete “%@”": {
       "extractionState": "manual",
       "localizations": {
@@ -33565,6 +33680,29 @@
           }
         }
       }
+    },
+    "Did not run": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Did not run"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "未実行"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "未运行"
+          }
+        }
+      },
+      "extractionState": "manual"
     },
     "Did not start · %@": {
       "extractionState": "manual",
@@ -40379,6 +40517,29 @@
       },
       "extractionState": "manual"
     },
+    "Expired": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Expired"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "期限切れ"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "已过期"
+          }
+        }
+      },
+      "extractionState": "manual"
+    },
     "Expires in %@": {
       "localizations": {
         "en": {
@@ -43508,6 +43669,29 @@
         }
       }
     },
+    "Not filled in before the card expired": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Not filled in before the card expired"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "期限切れまでに入力されませんでした"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "卡片过期前没有人填写"
+          }
+        }
+      },
+      "extractionState": "manual"
+    },
     "Not updated": {
       "localizations": {
         "en": {
@@ -43664,6 +43848,29 @@
           "stringUnit": {
             "state": "translated",
             "value": "离线，还没同步过"
+          }
+        }
+      },
+      "extractionState": "manual"
+    },
+    "Only the end of the output was kept": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Only the end of the output was kept"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "出力の末尾だけを残しています"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "只保留了输出的最后一部分"
           }
         }
       },
@@ -44012,6 +44219,29 @@
         }
       }
     },
+    "Refused": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Refused"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ブロック済み"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "已拦截"
+          }
+        }
+      },
+      "extractionState": "manual"
+    },
     "Remove from List": {
       "localizations": {
         "en": {
@@ -44288,6 +44518,52 @@
         }
       }
     },
+    "Run With Password": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Run With Password"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "パスワードで実行"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "用密码运行"
+          }
+        }
+      },
+      "extractionState": "manual"
+    },
+    "Run With Your Password": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Run With Your Password"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "パスワードを入力して実行"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "用你的密码运行"
+          }
+        }
+      },
+      "extractionState": "manual"
+    },
     "Run failed · %@": {
       "extractionState": "manual",
       "localizations": {
@@ -44379,6 +44655,29 @@
           }
         }
       }
+    },
+    "Run on %@ With Your Password": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Run on %@ With Your Password"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ でパスワードを使って実行"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "在 %@ 上用你的密码运行"
+          }
+        }
+      },
+      "extractionState": "manual"
     },
     "Running %@ [Workflow Card]": {
       "extractionState": "manual",
@@ -76209,6 +76508,29 @@
         }
       }
     },
+    "The output contained the password, so all of it was withheld": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The output contained the password, so all of it was withheld"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "出力にパスワードが含まれていたため、すべて伏せました"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "输出含密码，已整段隐去"
+          }
+        }
+      },
+      "extractionState": "manual"
+    },
     "The plain claude command on each computer: “Claude Code default” in Model Configuration.": {
       "localizations": {
         "en": {
@@ -76296,6 +76618,29 @@
           "stringUnit": {
             "state": "translated",
             "value": "只是在 Persona 里不显示，电脑上的文件没有改。点进去可以恢复。"
+          }
+        }
+      },
+      "extractionState": "manual"
+    },
+    "Timed out": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Timed out"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "タイムアウト"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "超时"
           }
         }
       },
@@ -76438,6 +76783,29 @@
           }
         }
       }
+    },
+    "Used once, never saved. The assistant never sees it.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Used once, never saved. The assistant never sees it."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "1回だけ使い、保存しません。アシスタントにも見えません。"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "只用这一次，不会保存，助手也看不到。"
+          }
+        }
+      },
+      "extractionState": "manual"
     },
     "Version mismatch": {
       "localizations": {
