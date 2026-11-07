@@ -2,5 +2,7 @@
   "invalid_id": "id: lowercase letters, digits, . _ -, starting with a letter or digit, at most 63 characters",
   "ssh_unsupported": "SSH computers can no longer be added. Install the node service on that computer and choose “Computer connects” or “Hub connects”. SSH computers already in hub.json keep working",
   "exists": "There’s already a computer with this id",
-  "invalid_name": "The name can be at most 40 characters, on one line"
+  "invalid_name": "The name can be at most 40 characters, on one line",
+  "keeps_machines": "This manager keeps computers in its own list. Move them to another manager before removing it",
+  "default_machine": "This is the hub’s own default computer, which comes back at every start. To remove it, set \"machines\": [] in hub.json and restart the hub"
 }

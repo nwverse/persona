@@ -334,18 +334,47 @@ struct AgentsGroupingMenu: View {
                 Text(shown.title)
                 Image(systemName: Theme.Icon.choices).font(Theme.Font.label)
             }
-            .font(Theme.Font.secondaryMedium)
-            .lineLimit(1)
-            .foregroundStyle(Color.primary)
-            .padding(.horizontal, Theme.Space.m)
-            .padding(.vertical, Theme.Space.s)
-            .background(Capsule().fill(Theme.Fill.chip))
-            .contentShape(Capsule())
+            .agentsPill()
         }
         .labelOnlyMenu()
         // Keep the Menu's activation independent of surrounding List content.
         .buttonStyle(.plain)
         .accessibilityIdentifier("agents.grouping")
         .accessibilityLabel(String(localized: "Grouping: \(shown.title)"))
+    }
+}
+
+/// The personal agents page, one tap away beside the grouping (#140): on a phone the shell has no other way there (the
+/// old layout, iPad and Mac have the toolbar's button).
+struct AgentsPersonalPill: View {
+    var open: () -> Void
+
+    var body: some View {
+        Button {
+            Haptics.tap()
+            open()
+        } label: {
+            HStack(spacing: Theme.Space.xs) {
+                Image(systemName: Theme.Icon.personalAgents)
+                Text("Personal Agents")
+                Image(systemName: Theme.Icon.forward).font(Theme.Font.label)
+            }
+            .agentsPill()
+        }
+        .buttonStyle(.plain)
+        .accessibilityIdentifier("agents.personal")
+    }
+}
+
+private extension View {
+    /// The look of the pills under the quick filters: the grouping and Personal Agents.
+    func agentsPill() -> some View {
+        font(Theme.Font.secondaryMedium)
+            .lineLimit(1)
+            .foregroundStyle(Color.primary)
+            .padding(.horizontal, Theme.Space.m)
+            .padding(.vertical, Theme.Space.s)
+            .background(Capsule().fill(Theme.Fill.chip))
+            .contentShape(Capsule())
     }
 }

@@ -130,7 +130,7 @@ Every chat, person, project, document, meeting and event has three fields, gener
    (#2546: previously, several projects accumulated hundreds of aliases after a week and crossed into each other). Manual aliases from `kb_update` have no limit; `remove_aliases` deletes them. If several unmerged projects match a name,
    exact names outrank aliases; ties use most recently updated, not directory order.
    Aliases collected before these rules are pruned when the knowledge base opens (`PruneProjectAliases`): another unmerged project's name or slug, the project's own name, repeats, generic ones,
-   and everything past the first 12 go; names of projects merged into it stay and do not count. An alias two unmerged projects share stays on both (whose it is cannot be told),
+   and everything past the first 12 go; names of projects merged into it (directly or through another merged project) stay and do not count. An alias two unmerged projects share stays on both (whose it is cannot be told),
    and projects whose aliases are locked (set by hand) are not touched.
    Rewrite at most 3 dirty project summaries per round (old summary + latest 40 timeline entries + summaries of up to 8 related chats). Person / chat / project associations are written into each
    `meta.json` bidirectionally. Long-term projects (`long`) never revert to short-term.
@@ -227,9 +227,12 @@ The same work often has different names in different groups. Previously the mode
 - **Manual**: send `merge_into: <other project>` through `kb_update` / `PUT /api/v1/kb/projects/<id>` (other fields do not apply simultaneously).
 - **Unmerge** (`kb/unmerge.go`): send `unmerge: true` for the merged project (slug or name) through `kb_update` / `PUT /api/v1/kb/projects/<id>` (other fields do not apply simultaneously;
   not part of the extension protocol). The merge records on the merged project what it gave the survivor (`merge`: aliases, people, chats, items, code directories, keywords, Moments posts,
-  the chats / people / items it moved from the merged project, and the survivor's pinned facts before a manual merge). Unmerging takes exactly that back, points the moved chats, people and items
+  its own Moments posts the merged project's newer ones pushed past the cap, the chats / people / items it moved from the merged project, and the survivor's pinned facts and locks before a manual merge).
+  Unmerging takes exactly that back, points the moved chats, people and items
   at the merged project again, restores its status, removes its lines from the survivor's timeline (its own timeline keeps them), marks both dirty for profile rewriting,
-  and records the pair as `split` so dedupe never merges it again. Pinned facts edited since the merge stay. A chain comes apart from its last merge back.
+  and records the pair as `split` so dedupe never merges it again (a verdict a running dedupe pass reaches afterwards does not replace it). Pinned facts and locks changed since the merge stay. A chain comes apart from its last merge back.
+  When several projects went into the same survivor, what a project merged there later (and still merged) brought too stays on the survivor (and keeps naming it), and goes on that project's record, so unmerging it later takes it off.
+  Moments posts pushed past the cap come back as far as the room allows, the newest first; those that still do not fit wait on the records of the projects still merged there.
   Merges made before the record (no `merge`) cannot tell which shared people, chats and items the survivor already had, and dedupe pairs projects by exactly those:
   they stay on the survivor as well (take them off with `remove_people` / `remove_chats`), the merged project's chats, people and items name it again besides the survivor,
   and only the merged project's name and aliases leave the survivor.

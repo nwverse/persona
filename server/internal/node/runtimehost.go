@@ -142,15 +142,7 @@ func (rh *RuntimeHost) listenOnce(ctx context.Context) (net.Listener, error) {
 		<-ctx.Done()
 		ln.Close()
 	}()
-	go func() {
-		for {
-			c, err := ln.Accept()
-			if err != nil {
-				return
-			}
-			go rh.serve(ctx, c)
-		}
-	}()
+	go acceptLoop(ctx, ln, rh.logger.Printf, func(c net.Conn) { go rh.serve(ctx, c) })
 	return ln, nil
 }
 
