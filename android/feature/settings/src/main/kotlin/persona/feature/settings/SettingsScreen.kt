@@ -68,6 +68,7 @@ private fun SettingsContent(
     onNavigate: ((androidx.navigation3.runtime.NavKey) -> Unit)?,
 ) {
     var page by rememberSaveable(initialPage) { mutableStateOf(initialPage) }
+    var purposeManager by rememberSaveable(initialPage) { mutableStateOf<String?>(null) }
     var purpose by rememberSaveable(initialPage) { mutableStateOf<String?>(null) }
     var extension by rememberSaveable(initialPage) { mutableStateOf<String?>(null) }
     var extensionManager by rememberSaveable(initialPage) { mutableStateOf<String?>(null) }
@@ -190,9 +191,9 @@ private fun SettingsContent(
         "claude" -> ClaudeSettingsPage(services.sessions, services.machines.takeUnless { services.demo }, back)
         "codex" -> ClaudeSettingsPage(services.sessions, services.machines.takeUnless { services.demo }, back, AgentSettingsKind.Codex)
         "models" -> purpose?.let { id -> ModelPurposePage(services.models.takeUnless { services.demo }, id, onBack = { purpose = null },
-                providers = services.providers.takeUnless { services.demo }) }
+                providers = services.providers.takeUnless { services.demo }, manager = purposeManager) }
             ?: ModelConfigurationPage(services.models.takeUnless { services.demo }, back,
-                onPurpose = { id -> onNavigate?.invoke(persona.core.navigation.ModelPurposeRoute(id)) ?: run { purpose = id } },
+                onPurpose = { id, owner -> onNavigate?.invoke(persona.core.navigation.ModelPurposeRoute(id, owner)) ?: run { purposeManager = owner; purpose = id } },
                 providers = services.providers.takeUnless { services.demo })
         "plugins" -> extension?.let { id -> ExtensionPage(services.extensions.takeUnless { services.demo }, id, onBack = { extension = null },
                 manager = extensionManager,
