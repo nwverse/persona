@@ -1117,7 +1117,7 @@ struct Base64Image: View {
     /// Said on the placeholder when the picture did not come. One fetched from the hub (`ref`) loads again on a tap;
     /// bytes already here that do not decode would only fail again.
     private var notLoaded: some View {
-        ImageNotLoaded(retry: payload.ref == nil ? nil : { attempt += 1 })
+        ImageNotLoaded(canRetry: payload.ref != nil) { attempt += 1 }
     }
 
     /// In a chat the page shows the viewer (`viewImages`); elsewhere this view does.

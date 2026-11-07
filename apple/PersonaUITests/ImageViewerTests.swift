@@ -221,12 +221,7 @@ final class ImageViewerTests: XCTestCase {
         for scheme in ["light", "dark"] {
             mock("images")
             let app = open(["-openImagesFresh", "YES", "-ui.scheme", scheme])
-            // SpringBoard's notification question, and 「你已更改“Persona”的图标」 (the icon follows the appearance).
-            let springboard = XCUIApplication(bundleIdentifier: "com.apple.springboard")
-            for _ in 0..<2 {
-                let ok = springboard.alerts.buttons.matching(NSPredicate(format: "label IN %@", ["Allow", "允许", "OK", "好"])).firstMatch
-                if ok.waitForExistence(timeout: 2) { ok.tap() }
-            }
+            dismissAlerts()
             // `-openViewedImage 2` opens on the second picture: page 1.
             let failed = app.descendants(matching: .any)["viewer-not-loaded-1"].firstMatch
             XCTAssertTrue(failed.waitForExistence(timeout: 20), "no word that the picture did not load:\n\(app.debugDescription)")
@@ -247,6 +242,103 @@ final class ImageViewerTests: XCTestCase {
             XCTAssertTrue(close.waitForNonExistence(timeout: 5), "Close did not close the viewer")
             app.terminate()
         }
+    }
+
+    /// A viewed image that did not load, on a wide and a narrow tile (#559), light and dark: the tile says so, and a tap
+    /// asks the hub again (the mock counts what it is asked) and brings the picture without opening the viewer; once
+    /// it is there, a tap opens the viewer as before.
+    @MainActor func testATileThatDidNotLoadRetriesWithoutOpeningTheViewer() throws {
+        let letThrough = URL(string: hub + "/mock/images?ok=1")!
+        addTeardownBlock { _ = try? Data(contentsOf: letThrough) }
+        for scheme in ["light", "dark"] {
+            mock("images")
+            let app = openChat(["-openImagesFresh", "YES", "-ui.scheme", scheme])
+            dismissAlerts()
+            let tiles = (0..<5).map { app.buttons["viewed-image-\($0)"] }
+            XCTAssertTrue(tiles[0].waitForExistence(timeout: 30), "no viewed images:\n\(app.debugDescription)")
+            var failed: [XCUIElement] = []
+            XCTAssertTrue(waitUntil(20) {
+                failed = tiles.filter { $0.exists && $0.label == Self.notLoaded }
+                return failed.count >= 2
+            }, "the tiles did not say their pictures did not load:\n\(app.debugDescription)")
+            let narrow = try XCTUnwrap(failed.min { $0.frame.width < $1.frame.width })
+            let wide = try XCTUnwrap(failed.max { $0.frame.width < $1.frame.width })
+            XCTAssertLessThan(narrow.frame.width, wide.frame.width, "no narrow tile among \(failed.map(\.frame))")
+            shot(app, "\(scheme)-tiles-not-loaded")
+            mock("images?ok=1")
+            RunLoop.current.run(until: Date().addingTimeInterval(1))
+            XCTAssertEqual(narrow.label, Self.notLoaded, "a tile loaded again without a tap")
+            for tile in [narrow, wide] { try retries(tile, in: app) }
+            shot(app, "\(scheme)-tiles-retried")
+            wide.tap()
+            XCTAssertTrue(app.buttons["viewer-close"].waitForExistence(timeout: 10), "a tile with its picture did not open the viewer")
+            app.terminate()
+        }
+    }
+
+    /// A sent photo that did not load (#559), light and dark: the same as a viewed image's tile. Needs the photos lazy:
+    /// `MOCK_CHAT_IMAGES=many MOCK_IMAGES_FAIL=1` (with `MOCK_TURN_IMAGES=many`); skipped otherwise. Run it alone there:
+    /// that mock has a second strip of viewed images, which the tile test can't tell apart.
+    @MainActor func testASentPhotoThatDidNotLoadRetriesWithoutOpeningTheViewer() throws {
+        guard mockImages()["sent_photos_lazy"] as? Bool == true else {
+            throw XCTSkip("needs MOCK_CHAT_IMAGES=many MOCK_IMAGES_FAIL=1 (sent photos lazy)")
+        }
+        let letThrough = URL(string: hub + "/mock/images?ok=1")!
+        addTeardownBlock { _ = try? Data(contentsOf: letThrough) }
+        for scheme in ["light", "dark"] {
+            mock("images")
+            let app = openChat(["-openImagesFresh", "YES", "-ui.scheme", scheme])
+            dismissAlerts()
+            // The photo is near the top of the conversation. (A row off screen can be in the tree with no place to tap:
+            // `isHittable` fails on it rather than saying no, so ask for its middle on screen.)
+            let photo = app.buttons["sent-photo-0"].firstMatch
+            let screen = app.windows.firstMatch.frame.insetBy(dx: 0, dy: 120)
+            let shown = { photo.exists && screen.contains(CGPoint(x: photo.frame.midX, y: photo.frame.midY)) }
+            for _ in 0..<20 where !shown() { app.swipeDown(velocity: .fast) }
+            XCTAssertTrue(shown(), "no sent photo on screen:\n\(app.debugDescription)")
+            XCTAssertTrue(waitUntil(20) { photo.label == Self.notLoaded }, "the photo did not say it did not load: \(photo.label)")
+            shot(app, "\(scheme)-sent-not-loaded")
+            mock("images?ok=1")
+            try retries(photo, in: app)
+            shot(app, "\(scheme)-sent-retried")
+            app.terminate()
+        }
+    }
+
+    /// What a tile that did not load says to VoiceOver (zh-Hans).
+    private static let notLoaded = "图片没载入，点按重试"
+
+    /// A tap on a tile that did not load asks the hub again and shows its picture, without opening the viewer.
+    @MainActor private func retries(_ tile: XCUIElement, in app: XCUIApplication) throws {
+        let before = try XCTUnwrap(mockImages()["asked"] as? Int)
+        tile.tap()
+        XCTAssertTrue(waitUntil(10) { tile.label != Self.notLoaded }, "the tap did not bring the picture back")
+        XCTAssertGreaterThan(try XCTUnwrap(mockImages()["asked"] as? Int), before, "the tap did not ask the hub again")
+        XCTAssertFalse(app.buttons["viewer-close"].exists, "a tap on a tile that did not load opened the viewer")
+    }
+
+    /// The blog conversation, without opening the viewer.
+    @MainActor private func openChat(_ extra: [String]) -> XCUIApplication {
+        let app = XCUIApplication()
+        let pair = "persona://pair?url=" + hub.addingPercentEncoding(withAllowedCharacters: .alphanumerics)! + "&token=mock"
+        app.launchArguments = ["-pairURL", pair, "-tab", "dev", "-openSession", blog] + extra
+        app.launchPinned()
+        return app
+    }
+
+    /// SpringBoard's notification question, and 「你已更改“Persona”的图标」 (the icon follows the appearance).
+    private func dismissAlerts() {
+        let springboard = XCUIApplication(bundleIdentifier: "com.apple.springboard")
+        for _ in 0..<2 {
+            let ok = springboard.alerts.buttons.matching(NSPredicate(format: "label IN %@", ["Allow", "允许", "OK", "好"])).firstMatch
+            if ok.waitForExistence(timeout: 2) { ok.tap() }
+        }
+    }
+
+    /// What the mock says of its lazy images (`/mock/images?asked=1`, which changes nothing).
+    private func mockImages() -> [String: Any] {
+        guard let d = try? Data(contentsOf: URL(string: hub + "/mock/images?asked=1")!) else { return [:] }
+        return (try? JSONSerialization.jsonObject(with: d)) as? [String: Any] ?? [:]
     }
 
     /// Tells the mock hub something (`/mock/<what>`).

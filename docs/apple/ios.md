@@ -84,7 +84,8 @@ Chat page:
   Sent photos (`SentPhotos`, the sending bubble, both `ChatThumbnail`) and the images viewed this turn (`ViewedImageThumb`) use the
   same placeholder (`ImageNotLoaded`: narrow ones fall back to "Retry" or the symbol; bytes already here that don't decode say
   "Can't show this image", without a retry); a file's thumbnail known only by path keeps its symbol (`FileThumbnails` keeps
-  that failure for the session, #559).
+  that failure for the session, #559). Their thumbnails sit inside the tile's button that opens the viewer, so they record a
+  failure in `ImageRetries` and that button asks the hub again instead of opening the viewer, and VoiceOver reads it as the retry.
 - Links (`Views/Link/LinkSheet.swift`): chat http(s) opens an in-App bottom card like Telegram: full screen immediately, at 60% pulled down the chat remains usable, further down closes;
   behind a 60% card chat still scrolls and accepts input (`presentationBackgroundInteraction`). Lark docs / Knowledge use native `FeishuDocReader`,
   other websites `WebViewPool`: preload first 3 links in each appearing reply, at most 6 resident WKWebViews (LRU), sharing default disk website data (cache, login),

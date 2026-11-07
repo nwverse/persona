@@ -86,23 +86,58 @@ nonisolated enum ChatImageLoader {
     }
 }
 
-/// A square thumbnail filling its frame (the caller sizes and clips it).
+/// Pictures in a chat whose last load gave none, and how often each was asked again, by `ImagePayload.identity` (#559).
+/// A thumbnail inside a button that opens the viewer (a sent photo, a viewed image) can't carry a Retry of its own: a
+/// button in another's label leaves which one a tap reaches to chance, and VoiceOver hears only the outer one. So the
+/// thumbnail records its failure here, and the tile's own button asks again instead of opening the viewer, and says so.
+@MainActor @Observable final class ImageRetries {
+    static let shared = ImageRetries()
+    private var failures: Set<String> = []
+    private var attempts: [String: Int] = [:]
+
+    func didFail(_ p: ImagePayload) -> Bool { failures.contains(p.identity) }
+
+    /// A tap on its tile asks it again: one fetched from the hub whose last load failed. Bytes already here that do not
+    /// decode would only fail again; the viewer says why.
+    func canRetry(_ p: ImagePayload?) -> Bool {
+        guard let p, p.ref != nil else { return false }
+        return failures.contains(p.identity)
+    }
+
+    /// Asks it again when it can (`canRetry`); false leaves the tap to open the viewer.
+    @discardableResult func retry(_ p: ImagePayload?) -> Bool {
+        guard canRetry(p), let p else { return false }
+        failures.remove(p.identity)
+        attempts[p.identity, default: 0] += 1
+        return true
+    }
+
+    /// How many times it was asked again: keys the thumbnail's load, so a retry runs it once more.
+    func attempt(_ p: ImagePayload) -> Int { attempts[p.identity] ?? 0 }
+
+    /// Only a change is written: every tile on screen reads `failures`, and a write redraws them all.
+    func loaded(_ p: ImagePayload, ok: Bool) {
+        guard failures.contains(p.identity) == ok else { return }
+        if ok { failures.remove(p.identity) } else { failures.insert(p.identity) }
+    }
+}
+
+/// A square thumbnail filling its frame (the caller sizes and clips it). One that did not load says so; its caller's
+/// button asks again (`ImageRetries`).
 struct ChatThumbnail: View {
     var payload: ImagePayload
     var side: CGFloat = 360
     @State private var image: UIImage?
-    /// The last load gave no picture: the square says so instead of staying blank.
-    @State private var failed = false
-    /// Bumped by a tap on the retry: loads again (the loader keeps no failures).
-    @State private var attempt = 0
+    private let retries = ImageRetries.shared
 
     var body: some View {
+        let attempt = retries.attempt(payload)
         Group {
             if let img = image ?? ChatImageLoader.cached(payload, side: side) {
                 Image(uiImage: img).resizable().scaledToFill()
-            } else if failed {
-                ImageNotLoaded(retry: payload.ref == nil ? nil : { attempt += 1 })
-            } else if attempt > 0 { // a retry running: the tap shows it was taken
+            } else if retries.didFail(payload) {
+                ImageNotLoaded(canRetry: payload.ref != nil)
+            } else if attempt > 0 { // asked again: the tap shows it was taken
                 ProgressView().controlSize(.small).frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
                 Color.clear
@@ -110,51 +145,52 @@ struct ChatThumbnail: View {
         }
         .task(id: "\(payload.identity)#\(attempt)") {
             guard image == nil else { return }
-            if failed { failed = false }
             let loaded = await ChatImageLoader.image(payload, side: side)
             image = loaded
-            if loaded == nil, !Task.isCancelled { failed = true }
+            if !Task.isCancelled { retries.loaded(payload, ok: loaded != nil) }
         }
     }
 }
 
 /// Said on an image's placeholder when its picture did not come (`Base64Image`, `ChatThumbnail`, `ViewedImageThumb`).
-/// `retry` loads it again on a tap (one fetched from the hub); nil when that would only fail again (bytes already here
-/// that do not decode).
+/// `canRetry`: loading it again can bring it (one fetched from the hub), not bytes already here that do not decode.
+/// `retry` makes it a button; a thumbnail inside a tile's button leaves it out, the tile retries (`ImageRetries`).
 struct ImageNotLoaded: View {
-    var retry: (() -> Void)?
+    var canRetry: Bool
+    var retry: (() -> Void)? = nil
 
     var body: some View {
-        if let retry {
-            Button(action: retry) {
-                // A narrow placeholder (a portrait screenshot, a small photo): the sentence, else Retry, else the
-                // symbol alone.
+        if canRetry, let retry {
+            Button(action: retry) { words.contentShape(.rect) }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Image didn't load. Tap to retry")
+        } else {
+            words
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel(canRetry ? Text("Image didn't load. Tap to retry") : Text("Can't show this image"))
+        }
+    }
+
+    /// A narrow placeholder (a portrait screenshot, a small photo): the sentence, else Retry, else the symbol alone.
+    private var words: some View {
+        Group {
+            if canRetry {
                 ViewThatFits(in: .horizontal) {
                     Label("Image didn't load. Tap to retry", systemImage: Theme.Icon.retry)
                     Label("Retry [Components b8784c]", systemImage: Theme.Icon.retry)
                     Image(systemName: Theme.Icon.retry)
                 }
-                .font(Theme.Font.label)
-                .foregroundStyle(.secondary)
-                .lineLimit(1)
-                .padding(.horizontal, Theme.Space.s)
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .contentShape(.rect)
+            } else {
+                ViewThatFits(in: .horizontal) {
+                    Label("Can't show this image", systemImage: Theme.Icon.error)
+                    Image(systemName: Theme.Icon.error)
+                }
             }
-            .buttonStyle(.plain)
-            .accessibilityLabel("Image didn't load. Tap to retry")
-        } else {
-            ViewThatFits(in: .horizontal) {
-                Label("Can't show this image", systemImage: Theme.Icon.error)
-                Image(systemName: Theme.Icon.error)
-            }
-            .font(Theme.Font.label)
-            .foregroundStyle(.secondary)
-            .lineLimit(1)
-            .padding(.horizontal, Theme.Space.s)
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .accessibilityElement(children: .ignore)
-            .accessibilityLabel("Can't show this image")
         }
+        .font(Theme.Font.label)
+        .foregroundStyle(.secondary)
+        .lineLimit(1)
+        .padding(.horizontal, Theme.Space.s)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 }
