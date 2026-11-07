@@ -343,7 +343,7 @@ func TestInboxKeepsWhatWasReadForTheManager(t *testing.T) {
 	if r := h.inbox.kickedRound(); r != roundPoll {
 		t.Fatalf("the kick asks for round %d", r)
 	}
-	if err := h.collectInbox(context.Background(), roundPoll); err != nil || h.inbox.owed.Load() || h.inbox.held != nil {
+	if err := h.collectInbox(context.Background(), roundPoll); err != nil || h.inbox.owed.Load() || h.inbox.held.Load() != nil {
 		t.Fatalf("the round when it is back: %v", err)
 	}
 	r := fm.lastRound(t)
