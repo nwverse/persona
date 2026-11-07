@@ -230,6 +230,7 @@ The same work often has different names in different groups. Previously the mode
   the chats / people / items it moved from the merged project, and the survivor's pinned facts before a manual merge). Unmerging takes exactly that back, points the moved chats, people and items
   at the merged project again, restores its status, removes its lines from the survivor's timeline (its own timeline keeps them), marks both dirty for profile rewriting,
   and records the pair as `split` so dedupe never merges it again. Pinned facts edited since the merge stay. A chain comes apart from its last merge back.
+  When several projects went into the same survivor, what another one still merged there brought too stays on the survivor (and keeps naming it), and goes on that project's record, so unmerging it later takes it off.
   Merges made before the record (no `merge`) cannot tell which shared people, chats and items the survivor already had, and dedupe pairs projects by exactly those:
   they stay on the survivor as well (take them off with `remove_people` / `remove_chats`), the merged project's chats, people and items name it again besides the survivor,
   and only the merged project's name and aliases leave the survivor.

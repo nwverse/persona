@@ -180,6 +180,56 @@ func TestUnmergeRestoresPinnedFacts(t *testing.T) {
 	}
 }
 
+// Two projects merged into one, sharing a person, a chat and a timeline line the kept one did not have: unmerging
+// one leaves them on the kept project, because the other merge still brought them.
+func TestUnmergeKeepsWhatAnotherMergeBrought(t *testing.T) {
+	e := testEngine(t, nil)
+	at := time.Now().Add(-time.Hour)
+	_ = e.Store.PutProject(&Project{Slug: "b", Name: "项目b", Status: "active", People: []string{"p0"}})
+	for _, slug := range []string{"a", "c"} {
+		_ = e.Store.PutProject(&Project{Slug: slug, Name: "项目" + slug, Status: "active", People: []string{"p"}, Chats: []string{"g"}})
+		_ = e.Store.AppendLog(slug, at, "共享群", "同一条进展")
+	}
+	_ = e.Store.PutPerson(&Person{ID: "p", Projects: []string{"a", "c"}})
+	_ = e.Store.PutChat(&Chat{ID: "g", Kind: "group", Projects: []string{"a", "c"}})
+	for _, slug := range []string{"a", "c"} {
+		if err := e.MergeProjects("b", slug, "测试"); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	if _, err := e.Unmerge("a"); err != nil {
+		t.Fatal(err)
+	}
+	b, _ := e.Store.Project("b")
+	if strings.Join(b.People, ",") != "p0,p" || strings.Join(b.Chats, ",") != "g" {
+		t.Errorf("b = %+v", b)
+	}
+	for ref, want := range map[string]string{"people/p": "a,b", "chats/g": "a,b"} {
+		kind, id, _ := strings.Cut(ref, "/")
+		if got := projectsOf(t, e, kind, id); got != want {
+			t.Errorf("%s names %s, want %s", ref, got, want)
+		}
+	}
+	if log := strings.Join(e.Store.Log("b", 50), "\n"); !strings.Contains(log, "同一条进展") {
+		t.Errorf("b's timeline:\n%s", log)
+	}
+
+	if _, err := e.Unmerge("c"); err != nil {
+		t.Fatal(err)
+	}
+	b, _ = e.Store.Project("b")
+	if strings.Join(b.People, ",") != "p0" || len(b.Chats) != 0 {
+		t.Errorf("after both: b = %+v", b)
+	}
+	for ref, want := range map[string]string{"people/p": "a,c", "chats/g": "a,c"} {
+		kind, id, _ := strings.Cut(ref, "/")
+		if got := projectsOf(t, e, kind, id); got != want {
+			t.Errorf("after both: %s names %s, want %s", ref, got, want)
+		}
+	}
+}
+
 // Only a merged project can be unmerged, and a chain comes apart from its last merge back.
 func TestUnmergeRefuses(t *testing.T) {
 	e := testEngine(t, nil)
