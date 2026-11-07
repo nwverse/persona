@@ -101,7 +101,7 @@ Pitfalls, odd behavior and the trade-offs made at the time (formerly in `CLAUDE.
   Before merging, move that worktree off the branch (`git checkout --detach`), or merge from a worktree that does not have the PR's branch checked out; anything uncommitted in it is lost along with it.
 - `gh pr merge --delete-branch` can also exit with a failure after GitHub has already merged, when switching back to master locally fails because master is checked out in another worktree (2026-11-03, #277). Check the PR's `merged` / `merge_commit_sha` first; do not mistake a local cleanup error for a failed merge and retry; run the merge from the main working tree, or handle local branch cleanup separately.
 
-## Merging a long-lived integration branch into master
+## Merging a long-lived integration branch into `main`
 
 - One big merge (#606, the integration branch was over a hundred commits behind master) was split into PRs by module: resolve the conflicts and `git add` in the merge worktree, export a patch per path with
   `git diff --cached --binary MERGE_HEAD -- <path>`, then open a new worktree on the **latest** `origin/main` and `git apply -3 --index`. `main` keeps moving during the merge,

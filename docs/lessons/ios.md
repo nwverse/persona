@@ -546,7 +546,7 @@ Use an invalidation revision as the task key and handle the flag after completio
   - 单机详情直接从页面请求指标，不能因为概览的 fan-out 已在后台就认定单机详情也在后台（2026-11-06，#5730）；分别核对实际调用者。Xcode 27.1 的 `Thread.isMainThread` 带 `noasync`，测试后台准备时在同步 `nonisolated` 探针里读取，再从 detached task 调用，不在异步闭包直接读取。
 ### Minimum compatible compiler
 
-- **Minimum compiler remains Xcode 26.0 (Swift 6.2)** (2026-11-02): this and many development machines still use 26.0; master must compile there for iOS, Mac, watch and extensions. Release machine uses Xcode 27.1 / Swift 6.4.0, which proves nothing about 26.0.
+- **Minimum compiler remains Xcode 26.0 (Swift 6.2)** (2026-11-02): this and many development machines still use 26.0; `main` must compile there for iOS, Mac, watch and extensions. Release machine uses Xcode 27.1 / Swift 6.4.0, which proves nothing about 26.0.
   Three failures: #216 `isDynamicIslandLimitedInWidth` (iOS 27 SDK, fixed #217), `toolbarVerticalEdge` (iOS 27.1 SDK), #164 `ShowsSnippetView` / `view:` (fixed #430).
 - Guard new-SDK symbols with `#if compiler(>=6.4)` (27.1 is 6.4.0;26.4–26.6 has Swift 6.3 but still iOS 26 SDK, so 6.3 guards fail there, #453), with old behavior under `#else`, not empty functionality. `#available` / `@available` checks only govern runtime and cannot resolve missing compile-time symbols.
 - `#if compiler(>=6.4)` identifies only the iOS 27 SDK. **It cannot guard symbols introduced in 26.x minor SDK releases such as 26.1–26.4**: doing so disables the feature in every Xcode 26 build (CarPlay voice UI `CPVoiceControlState.actionButtons` comes from the 26.4 SDK; this guard once left Xcode 26 builds without buttons in the car).
@@ -781,7 +781,7 @@ app chooses transcoding by size (`VideoPrep`, docs/protocol/protocol.md "Sending
 - **Lark drafts / outbox persist between simulator UI tests**:
   - Uncancelled previous replies become drafts and reopen the quote bar. Its summary matches original message text, so `label BEGINSWITH` finds it first and long-press fails.
   - Previous #fail messages remain below newly sent ones, shifting the "just above composer" expectation by 141 pt.
-  - Tests clean up by cancelling replies; before investigating failures, `simctl uninstall` for clean data then compare master.
+  - Tests clean up by cancelling replies; before investigating failures, `simctl uninstall` for clean data then compare with `main`.
 - Background `gh pr checks` waiting scripts prematurely report completion with empty output on this machine: put the waiter in a separate file, write its own log and use perl `select` rather than `sleep`.
 
 ## Register Persona MCP tools in `ToolPresentation` (2026-11-03, #677)
@@ -1170,13 +1170,13 @@ but UIKit still had a page with only Agents Back and empty content.
   no longer has. `git diff origin/main --stat` should then show only `+` lines for your keys. Git's own text merge of two branches that added the
   same key leaves a duplicate JSON key, which `check` rejects: keep one copy.
 
-### Two PRs that add the same catalog key both pass, then break master (#5811)
+### Two PRs that add the same catalog key both pass, then break `main` (#5811)
 - #5743 and #5757 each added `"Run"` to `Localizable.xcstrings`. Each passed `apple_l10n.py check` against its own base, and git merged them
   without a conflict, because the two entries sat at different places in the file. Master then had a duplicate JSON key: `check` failed,
   and Xcode rejects such a catalog.
-- After every master merge into a branch, run `python3 scripts/i18n/apple_l10n.py check`, even when git reported no conflict in the catalog.
-  PR runs (scripts-tests.yml) each see their own base, so only a run on master itself catches two PRs that merged close together:
-  run `check` on master right after your PR merges, too.
+- After every merge of `main` into a branch, run `python3 scripts/i18n/apple_l10n.py check`, even when git reported no conflict in the catalog.
+  PR runs (scripts-tests.yml) each see their own base, so only a run on `main` itself catches two PRs that merged close together:
+  run `check` on `main` right after your PR merges, too.
 
 ### An interpolated String looks up a `%@` key the catalog doesn't have (#5544)
 - `String(localized: "Exit code \(code)")` with `code` a `String` (or a regex match's `Substring`) asks for `"Exit code %@"`. The catalog had
@@ -1206,12 +1206,12 @@ but UIKit still had a page with only Agents Back and empty content.
 - **Symptom**: after a `SWIFT_EMIT_LOC_STRINGS=YES` build, `apple_l10n.py sync` added this change's 82 keys, but also keys from other code that never
   made it into the catalog (a `"/"`), and rewrote 58 existing entries (merged comments, states): the diff was mostly other people's.
 - **Approach**: use sync only to see which keys are new. For the commit, put the catalog back and insert only your own entries with a script
-  (English key, explicit en / zh-Hans / ja), each before the first key that sorts after it, without re-sorting the file (master's is
+  (English key, explicit en / zh-Hans / ja), each before the first key that sorts after it, without re-sorting the file (`main`'s is
   nearly but not strictly sorted: `dict(sorted(...))` moves other people's entries), and write it back with
-  `json.dumps(d, ensure_ascii=False, indent=2) + "\n"` (the format `apple_english_keys.py` wrote; check that master's file round-trips
+  `json.dumps(d, ensure_ascii=False, indent=2) + "\n"` (the format `apple_english_keys.py` wrote; check that `main`'s file round-trips
   unchanged first, and that `git diff` shows only `+` lines). Then `apple_l10n.py check`. A conflict in the catalog resolves the same way:
-  take master's file, insert your entries.
-- **Rebased across the English-key migration (#5430)**: a branch written with Chinese keys does not need its keys hand-translated. Run master's
+  take `main`'s file, insert your entries.
+- **Rebased across the English-key migration (#5430)**: a branch written with Chinese keys does not need its keys hand-translated. Run `main`'s
   `scripts/i18n/apple_english_keys.py <scratch worktree>` on a scratch worktree of the branch's old tip (it still has the Chinese-source catalog),
   import it to get `migrate()`'s mapping, then take the migrated new files, the mapped entries, and the same key changes in the files you only
   touched. Keys it suffixes (`Mute [Voice Bar 7db2e1]`) collide with an existing English key that means something else in Chinese: keep the suffix.
