@@ -22,6 +22,11 @@ func (h *Manager) kbOff() bool {
 	return hl != nil && hl.KB != nil && hl.KB.Off
 }
 
+func (h *Manager) kbReadOnly() bool {
+	hl := h.hello.Load()
+	return hl != nil && hl.KB != nil && !hl.KB.Off && hl.KB.ReadOnly
+}
+
 // kbAsk is a call to the knowledge base (assistantwire.MethodKB*).
 func (h *Manager) kbAsk(ctx context.Context, method string, params, out any) error {
 	err := h.callAssistant(ctx, method, params, out)
@@ -45,7 +50,7 @@ func kbOffline(err error) bool {
 
 // kbKick tells the knowledge base a source has something new (it goes round soon).
 func (h *Manager) kbKick() {
-	if !h.kbOff() {
+	if !h.kbOff() && !h.kbReadOnly() {
 		h.notifyAssistant(assistantwire.EventKBKick, map[string]any{})
 	}
 }

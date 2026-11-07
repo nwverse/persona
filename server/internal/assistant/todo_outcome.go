@@ -280,6 +280,9 @@ func (s *Service) outcomeDecisions(ctx context.Context, t Todo, key string, by o
 // outcomeLog appends "Outcome: …" (in Chinese) to the timeline of each project an agent of t worked in (kb.ProjectsForWork), once a
 // project: «to-do · <title>», not bounded like an agent's turns (kb_bus.go).
 func (s *Service) outcomeLog(ctx context.Context, t Todo, agents []outcomeAgent, o taskOutcome) {
+	if !s.kbWritable(ctx) {
+		return
+	}
 	e, err := s.kbGet(ctx)
 	if errors.Is(err, errKBNotOpen) {
 		select { // it opens once the hub's hello came and the archive's zone is read: one more try

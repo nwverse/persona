@@ -32,6 +32,9 @@ const (
 // kbConnectors archives what moved in every connector the hub lists (signed in, "Send to knowledge base" on) that is due: its
 // manifest's Poll, else kbConnectorPoll, since it was last asked.
 func (s *Service) kbConnectors(ctx context.Context, e *kb.Engine) {
+	if !s.kbWritable(ctx) {
+		return
+	}
 	var list assistantwire.Archives
 	if err := s.appCall(ctx, AppConnectors, assistantwire.ConnectorsArchives, map[string]any{}, &list); err != nil {
 		s.logf("kb: the connectors to archive: %v", err)
@@ -69,6 +72,9 @@ func (s *Service) kbConnectors(ctx context.Context, e *kb.Engine) {
 
 // kbCollectItems records every connector's items (documents, meetings and events) and tags new ones.
 func (s *Service) kbCollectItems(ctx context.Context, e *kb.Engine) {
+	if !s.kbWritable(ctx) {
+		return
+	}
 	var list assistantwire.Archives
 	if err := s.appCall(ctx, AppConnectors, assistantwire.ConnectorsArchives, map[string]any{}, &list); err != nil {
 		s.logf("kb: the connectors' items: %v", err)
@@ -94,6 +100,9 @@ type busArchive struct {
 }
 
 func (b busArchive) Changes(ctx context.Context, cursor string, limit int) ([]connector.ChatBatch, string, bool, error) {
+	if b.s.kbReadOnly(ctx) {
+		return nil, cursor, false, kb.ErrReadOnly
+	}
 	var out assistantwire.ChangesResult
 	err := b.s.appCall(ctx, AppConnectors, assistantwire.ConnectorsChanges, map[string]any{"id": b.id, "cursor": cursor, "limit": limit}, &out)
 	if err != nil {
@@ -106,6 +115,9 @@ func (b busArchive) Changes(ctx context.Context, cursor string, limit int) ([]co
 type busArchiveMedia struct{ busArchive }
 
 func (b busArchiveMedia) ArchiveMedia(ctx context.Context, ref string) (connector.Media, error) {
+	if b.s.kbReadOnly(ctx) {
+		return connector.Media{}, kb.ErrReadOnly
+	}
 	var out struct {
 		Media connector.Media `json:"media"`
 	}
@@ -120,6 +132,9 @@ type busItems struct {
 }
 
 func (b busItems) Items(ctx context.Context) ([]kbwire.Item, error) {
+	if b.s.kbReadOnly(ctx) {
+		return nil, kb.ErrReadOnly
+	}
 	var out assistantwire.KBItems
 	err := b.s.appCall(ctx, AppConnectors, assistantwire.ConnectorsItems, map[string]any{"id": b.id}, &out)
 	return out.Items, err
@@ -127,6 +142,9 @@ func (b busItems) Items(ctx context.Context) ([]kbwire.Item, error) {
 
 // DocTitle is "" when the connector cannot tell (or fails): a title is a nicety.
 func (b busItems) DocTitle(ctx context.Context, url string) string {
+	if b.s.kbReadOnly(ctx) {
+		return ""
+	}
 	var out struct {
 		Title string `json:"title"`
 	}
@@ -181,6 +199,9 @@ type connectorCursor struct {
 // A batch filed under another name (ChatBatch.Source) goes there only when it is one of sources (the connector's
 // manifest's ArchiveSources, minus any another connector has as its id): else it is dropped and logged.
 func archiveConnector(ctx context.Context, e *kb.Engine, id string, a connector.Archive, sources ...string) (int, error) {
+	if e.Store.ReadOnly() {
+		return 0, kb.ErrReadOnly
+	}
 	media, _ := a.(connector.ArchiveMedia)
 	src := kbConnectorSource{id: id, media: media}
 	file := filepath.Join(e.Store.Dir, "cursors", id+".json")

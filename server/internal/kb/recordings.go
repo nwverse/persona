@@ -210,6 +210,9 @@ func (u *RecordingUpload) clean() error {
 // PutRecording stores an upload (the whole state of recording id): RecordingStale when a newer revision is there,
 // RecordingExpired when it started before the retention, ErrRecordingDeleted after a delete.
 func (e *Engine) PutRecording(rawID string, u RecordingUpload, now time.Time) (string, error) {
+	if e.Store.ReadOnly() {
+		return "", ErrReadOnly
+	}
 	id, ok := RecordingID(rawID)
 	if !ok {
 		return "", badRecording("id must be a UUID")
@@ -299,6 +302,9 @@ func (s *Store) renderTranscript(r *Recording, segs []RecordingSegment) string {
 
 // DeleteRecording removes recording id (files and index) and leaves a tombstone; false when there was none.
 func (e *Engine) DeleteRecording(rawID string, now time.Time) (bool, error) {
+	if e.Store.ReadOnly() {
+		return false, ErrReadOnly
+	}
 	id, ok := RecordingID(rawID)
 	if !ok {
 		return false, badRecording("id must be a UUID")
@@ -353,6 +359,9 @@ func (e *Engine) RecordingStates() (kept []RecordingState, deleted []string) {
 // PruneRecordings removes the recordings that started before the retention (files and index), and the tombstones
 // older than it; how many recordings went.
 func (e *Engine) PruneRecordings(now time.Time) int {
+	if e.Store.ReadOnly() {
+		return 0
+	}
 	cut := now.UTC().AddDate(0, 0, -recordingDays(e.RecordingDays()))
 	st := e.Store
 	st.recMu.Lock()

@@ -249,6 +249,9 @@ func (s *Service) kbOwner(ctx context.Context) (assistantwire.KBOwner, error) {
 		out.Handles = mergeOwnerHandles(out.Handles, handles)
 	}
 	o.mu.Unlock()
+	if s.kbReadOnly(ctx) {
+		return out, nil
+	}
 	var live assistantwire.KBOwnerSources
 	if err := s.appCall(ctx, AppConnectors, assistantwire.ConnectorsOwner, map[string]any{}, &live); err != nil {
 		return out, err

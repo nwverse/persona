@@ -113,6 +113,9 @@ func (s *Service) toolKB(ctx context.Context, name string, args json.RawMessage)
 		}
 		return b.String(), nil
 	case "kb_update":
+		if e.Store.ReadOnly() {
+			return "", kb.ErrReadOnly
+		}
 		var a struct {
 			Kind string `json:"kind"`
 			ID   string `json:"id"`

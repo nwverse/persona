@@ -27,6 +27,9 @@ var errKBNone = i18n.Err("assistant-kb_posts.none")
 // kbPostsEngine is the knowledge base, for a connector's posts (kb_unavailable while it is not open: the program
 // reads the same again next round).
 func (s *Service) kbPostsEngine(ctx context.Context) (*kb.Engine, error) {
+	if s.kbReadOnly(ctx) {
+		return nil, kbError(kb.ErrReadOnly)
+	}
 	e, err := s.kbGet(ctx)
 	if errors.Is(err, errKBOff) {
 		return nil, errKBNone

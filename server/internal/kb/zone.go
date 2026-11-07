@@ -37,6 +37,9 @@ func (s *Store) zoneLocked() *time.Location {
 // Rezone makes `to` the archive's zone and moves every chat's days and every project's timeline written in another
 // zone into it. Returns how many chats and timelines it moved.
 func (s *Store) Rezone(to *time.Location) (int, error) {
+	if s.readOnly {
+		return 0, ErrReadOnly
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.zone = to
@@ -80,6 +83,9 @@ func loadZone(name string) (*time.Location, error) {
 // settleChatLocked moves a chat's day files into the archive's zone if they are in another one (or finishes a move
 // that was cut short). New chats get the marker with their first day file.
 func (s *Store) settleChatLocked(id string) (bool, error) {
+	if s.readOnly {
+		return false, nil
+	}
 	dir := s.path(KindChat, id, "messages")
 	tmp, old := dir+".rezone", dir+".old"
 	// A move cut short: before the swap, the old days are still the chat's; after it, only the leftovers go.
@@ -204,6 +210,9 @@ func logHeader(zone *time.Location) string {
 
 // settleLogLocked moves a project's timeline into the archive's zone if its header names another one.
 func (s *Store) settleLogLocked(slug string) (bool, error) {
+	if s.readOnly {
+		return false, nil
+	}
 	p := s.path(KindProject, slug, "log.md")
 	raw, err := os.ReadFile(p)
 	if os.IsNotExist(err) {
@@ -241,6 +250,9 @@ func (s *Store) settleLogLocked(slug string) (bool, error) {
 
 // writeLogLocked replaces a project's timeline with lines (each "- 2006-01-02 15:04 · …", in the archive's zone).
 func (s *Store) writeLogLocked(slug string, lines []string) error {
+	if s.readOnly {
+		return ErrReadOnly
+	}
 	body := ""
 	if len(lines) > 0 {
 		body = strings.Join(lines, "\n") + "\n"

@@ -18,6 +18,9 @@ type Forgotten struct {
 // over). A project that had them is marked dirty, so its summary is written again from what is left. Nothing else
 // is touched. Callers stop the source first: a chat ingested meanwhile would come back.
 func (e *Engine) ForgetSource(source string) (Forgotten, error) {
+	if e.Store.ReadOnly() {
+		return Forgotten{}, ErrReadOnly
+	}
 	e.Store.applyMu.Lock()
 	defer e.Store.applyMu.Unlock()
 	var out Forgotten

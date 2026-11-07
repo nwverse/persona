@@ -70,6 +70,9 @@ func (t *Tagging) fieldLocked(field string) bool {
 // putEntity rereads protected fields while holding the metadata lock. A stale pipeline object cannot
 // restore locked links or overwrite a hand edit made while a model or connector was running.
 func (s *Store) putEntity(kind, id string, v any, t *Tagging, manual bool) error {
+	if s.readOnly {
+		return ErrReadOnly
+	}
 	s.metaMu.Lock()
 	path := s.entityPath(kind, id)
 	current := map[string]json.RawMessage{}
@@ -141,6 +144,9 @@ func (s *Store) putEntity(kind, id string, v any, t *Tagging, manual bool) error
 }
 
 func (s *Store) putSummary(kind, id, text string, manual bool) error {
+	if s.readOnly {
+		return ErrReadOnly
+	}
 	s.metaMu.Lock()
 	var t Tagging
 	exists, err := readJSON(s.entityPath(kind, id), &t)

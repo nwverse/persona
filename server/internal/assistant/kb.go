@@ -130,7 +130,7 @@ func (s *Service) kbGet(ctx context.Context) (*kb.Engine, error) {
 }
 
 func sameKBSettings(a, b assistantwire.KBSettings) bool {
-	return a.Off == b.Off && a.TextDays == b.TextDays && a.AttachmentDays == b.AttachmentDays && slices.Equal(a.ExtraDirs, b.ExtraDirs)
+	return a.ReadOnly == b.ReadOnly && a.Off == b.Off && a.TextDays == b.TextDays && a.AttachmentDays == b.AttachmentDays && slices.Equal(a.ExtraDirs, b.ExtraDirs)
 }
 
 // kbOpen opens the knowledge base with set: the data directory's lock, the store put into the user's zone, the
@@ -157,6 +157,15 @@ func (s *Service) kbOpen(ctx context.Context, set assistantwire.KBSettings) (*kb
 
 func (s *Service) kbOpenLocked(ctx context.Context, set assistantwire.KBSettings) (*kb.Engine, error) {
 	k := &s.kb
+	if set.ReadOnly {
+		st, err := kb.OpenReadOnly(k.dir)
+		if err != nil {
+			return nil, err
+		}
+		e := &kb.Engine{Store: st, TextDays: set.TextDays, AttachmentDays: set.AttachmentDays, RecordingDaysFunc: s.recordingDaysNow, ExtraDirs: kbReadDirs(set.ExtraDirs)}
+		k.cur.Store(&kbOpened{eng: e, set: set})
+		return e, nil
+	}
 	loc, ok := s.kbZone(ctx)
 	if !ok {
 		return nil, errors.New("the user's time zone could not be read")
@@ -190,11 +199,7 @@ func (s *Service) kbOpenLocked(ctx context.Context, set assistantwire.KBSettings
 	e := &kb.Engine{Store: k.store, Model: s.kbModel("inbox.triage"), ModelFor: func(id string) kb.Model { return s.kbModel(id) },
 		Owner: s.owner(ctx), Logf: s.logf, TextDays: set.TextDays, AttachmentDays: set.AttachmentDays, HandleKey: k.key, Index: s.kbIndexEntity, Unindex: s.kbUnindex, RecordingDaysFunc: s.recordingDaysNow, Changed: s.kbChanged, MineObserved: s.kbObserveOwner}
 	e.ObserveChanges()
-	for _, d := range set.ExtraDirs {
-		if d = expandHome(strings.TrimSpace(d)); filepath.IsAbs(d) {
-			e.ExtraDirs = append(e.ExtraDirs, d)
-		}
-	}
+	e.ExtraDirs = kbReadDirs(set.ExtraDirs)
 	if !k.passed {
 		k.passed = true
 		// Projects from before keywords existed get them at their next rewrite: the active ones are rewritten now (a
@@ -229,6 +234,9 @@ func (s *Service) kbClose() {
 // kbError is what the hub gets for a call the knowledge base cannot take now: kb_unavailable while it is not open
 // (the hub answers 503, try again).
 func kbError(err error) error {
+	if errors.Is(err, kb.ErrReadOnly) {
+		return &rpc.Error{Code: assistantwire.CodeKBReadOnly, Message: err.Error()}
+	}
 	if errors.Is(err, errKBOff) {
 		return &rpc.Error{Code: assistantwire.CodeKBDisabled, Message: err.Error()}
 	}
@@ -376,6 +384,9 @@ type kbRounds struct{ items, prune, links time.Time }
 
 // kbRound is one go of the loop.
 func (s *Service) kbRound(ctx context.Context, e *kb.Engine, r *kbRounds) {
+	if e.Store.ReadOnly() || !s.kbWritable(ctx) {
+		return
+	}
 	loc, ok := s.kbZone(ctx)
 	if !ok {
 		s.logf("kb: the user's time zone could not be read: archiving waits for the next round")

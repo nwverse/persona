@@ -26,6 +26,7 @@ type ownConfig struct {
 	} `json:"assistant"`
 	Agents *assistantwire.AgentsConfig `json:"agents"`
 	KB     *struct {
+		ReadOnly       bool           `json:"read_only"`
 		Enabled        *bool          `json:"enabled"`
 		TextDays       int            `json:"text_days"`
 		AttachmentDays int            `json:"attachment_days"`
@@ -91,7 +92,7 @@ func (c ownConfig) over(h Hello) Hello {
 		h.Agents = *c.Agents
 	}
 	if k := c.KB; k != nil {
-		h.KB = &assistantwire.KBSettings{Off: k.Enabled != nil && !*k.Enabled, TextDays: k.TextDays,
+		h.KB = &assistantwire.KBSettings{Off: k.Enabled != nil && !*k.Enabled, ReadOnly: k.ReadOnly, TextDays: k.TextDays,
 			AttachmentDays: k.AttachmentDays, ExtraDirs: k.ExtraDirs}
 		h.Models.KBAI = k.AI
 	}

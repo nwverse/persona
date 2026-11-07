@@ -260,6 +260,9 @@ func (e *Engine) before(kind, id string, fields []string) (map[string]json.RawMe
 // extension holds, records the extension's provenance on the locked fields it wrote, hands back w.Unlock, and
 // returns the replaced values. Nothing is written when it refuses.
 func (e *Engine) ApplyExtension(kind, id string, u Update, w ExtensionWrite) (ExtensionResult, error) {
+	if e.Store.ReadOnly() {
+		return ExtensionResult{}, ErrReadOnly
+	}
 	if w.Extension == "" {
 		return ExtensionResult{}, errors.New("an extension write needs the extension")
 	}

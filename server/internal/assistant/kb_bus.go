@@ -143,6 +143,9 @@ func kbContext(e *kb.Engine, c *kb.Chat) *prompts.KBContext {
 // kbForget removes a source's chats and people from the knowledge base, with their index rows, their places in
 // projects and the cursor (DELETE /api/v1/connectors/{id}/data and …/archive, DELETE /api/v1/imessage/data).
 func (s *Service) kbForget(ctx context.Context, source string) (assistantwire.KBForgotten, error) {
+	if s.kbReadOnly(ctx) {
+		return assistantwire.KBForgotten{}, kb.ErrReadOnly
+	}
 	e, err := s.kbGet(ctx)
 	if errors.Is(err, errKBOff) {
 		return assistantwire.KBForgotten{}, nil
@@ -172,7 +175,7 @@ func (s *Service) kbForget(ctx context.Context, source string) (assistantwire.KB
 // line with what it came to, at most one per agent and 30 minutes (a busy agent finishes many short turns). One that
 // comes before the knowledge base opened waits for it (the latest of each agent).
 func (s *Service) kbAgentTurn(ctx context.Context, t assistantwire.KBAgentTurn) {
-	if strings.TrimSpace(t.Line) == "" {
+	if !s.kbWritable(ctx) || strings.TrimSpace(t.Line) == "" {
 		return
 	}
 	e, err := s.kbGet(ctx)
@@ -195,6 +198,9 @@ func (s *Service) kbTakeWaiting(e *kb.Engine) {
 	list := s.kb.waiting
 	s.kb.waiting = nil
 	s.kb.mu.Unlock()
+	if e.Store.ReadOnly() {
+		return
+	}
 	for _, t := range list {
 		s.kbFileTurn(e, t)
 	}
@@ -212,6 +218,9 @@ func queueTurn(list []assistantwire.KBAgentTurn, t assistantwire.KBAgentTurn, mo
 }
 
 func (s *Service) kbFileTurn(e *kb.Engine, t assistantwire.KBAgentTurn) {
+	if e.Store.ReadOnly() {
+		return
+	}
 	projects := e.ProjectsForDir(t.MachineID, t.Cwd)
 	if len(projects) == 0 {
 		return

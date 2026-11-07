@@ -194,6 +194,9 @@ func tagUpdate(u Update, t *Tagging) {
 // Apply changes one entity as the user (the app, the assistant); for projects it creates the project when it does
 // not exist (id = name or slug). Locked fields it touches become the user's: an extension's provenance on them goes.
 func (e *Engine) Apply(kind, id string, u Update) (string, error) {
+	if e.Store.ReadOnly() {
+		return "", ErrReadOnly
+	}
 	e.Store.applyMu.Lock()
 	defer e.Store.applyMu.Unlock()
 	out, err := e.apply(kind, id, u)

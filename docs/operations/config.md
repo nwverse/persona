@@ -342,9 +342,14 @@ A manager's own sections of the configuration are in its `manager.json`, not in 
   ```
 - `inbox.rules`: personal rules for Inbox AI triage (natural language, e.g. "anything from this person needs me", "this alert group is only noise"), appended to the triage prompt and preferred over default judgments (`docs/assistant/inbox.md`).
   When a connector item carries its own rules (`rules`, e.g. an extension's `triage_rules` setting), those are used instead of this setting.
-- `kb`: knowledge base (`docs/assistant/knowledge.md`): `enabled` (on by default), `text_days` (text retention days, 365), `attachment_days` (attachments, 30),
+- `kb`: knowledge base (`docs/assistant/knowledge.md`): `enabled` (on by default), `read_only` (off by default), `text_days` (text retention days, 365), `attachment_days` (attachments, 30),
   `ai` (model for compression and tagging, same fields as `ai`; defaults to `inbox.triage_ai`, then `ai`), `extra_dirs` (note directories you maintain on the manager's machine, the hub machine for the built-in manager,
   e.g. a git repo of facts / lessons: `kb_search` also searches Markdown in these directories (read-only, skips dot directories such as `.git`), and the assistant's CLAUDE.md mentions them; `~/` is that machine's home).
+  With `enabled: true, read_only: true`, the manager serves existing local archives without collection, model calls,
+  retention, opening-time maintenance or knowledge writes (including edits, extension updates and recording uploads/deletions).
+  A missing archive returns empty lists without creating files. Recording sync writes return `403 kb_read_only`, never a deletion acknowledgement.
+  Archives containing symbolic links, non-regular files, unreadable files or malformed entity metadata are unavailable rather than reported as empty.
+  `enabled: false` still disables reads. Restart the manager to enter read-only mode so no earlier automatic round remains in flight.
   The knowledge base belongs to the manager, which reads the whole section here (`ai` included: it is the default of its `kb.*` model purposes);
   an assistant run elsewhere (`assistant.external`) reads the `manager.json` on its own machine, and its `extra_dirs` are paths there (`docs/assistant/knowledge.md` ("Who owns what")).
 - `agents.triage`: triage after a round stops ([agent-work.md](../assistant/agent-work.md) ("Switches")). Switches are under **Settings › Session Triage** in the App (stored in the manager's settings, all off by default),

@@ -61,6 +61,9 @@ func (s *Store) MomentPost(id string) (*MomentPost, bool) {
 // PutMomentPost writes a post's metadata, and its Markdown when comments are given (nil keeps the comments the
 // file already has: a feed pass only refreshes counts).
 func (s *Store) PutMomentPost(p *MomentPost, comments []MomentComment) error {
+	if s.readOnly {
+		return ErrReadOnly
+	}
 	dir := s.momentsDir()
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return err
@@ -97,6 +100,9 @@ func (s *Store) MomentPosts() []*MomentPost {
 
 // WriteMomentIndex rewrites moments/index.jsonl: one line per post, newest first (for rg and quick lists).
 func (s *Store) WriteMomentIndex() (int, error) {
+	if s.readOnly {
+		return 0, ErrReadOnly
+	}
 	ps := s.MomentPosts()
 	sort.Slice(ps, func(i, j int) bool { return ps[i].At.After(ps[j].At) })
 	var b strings.Builder
@@ -112,6 +118,9 @@ func (s *Store) WriteMomentIndex() (int, error) {
 
 // PruneMoments deletes posts written before cutoff (text retention).
 func (s *Store) PruneMoments(cutoff time.Time) int {
+	if s.readOnly {
+		return 0
+	}
 	n := 0
 	for _, p := range s.MomentPosts() {
 		if p.At.Before(cutoff) {

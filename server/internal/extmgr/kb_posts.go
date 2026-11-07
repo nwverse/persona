@@ -7,6 +7,7 @@ import (
 
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/connector"
+	"github.com/nwverse/persona/server/internal/kb"
 )
 
 // A connector's program writes a feed's public posts into the knowledge base's post archive and reads which posts'
@@ -30,6 +31,9 @@ var kbPostsWait = 30 * time.Second
 
 // call passes one of the program's calls on, when this connector may write to the knowledge base now.
 func (k kbPosts) call(ctx context.Context, method string, p assistantwire.KBPosts, out any) error {
+	if k.h.kbReadOnly() {
+		return kb.ErrReadOnly
+	}
 	if k.h.kbOff() {
 		return errKBOff
 	}

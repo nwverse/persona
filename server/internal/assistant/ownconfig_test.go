@@ -16,7 +16,7 @@ import (
 func TestOwnConfigOverTheHello(t *testing.T) {
 	file := filepath.Join(t.TempDir(), "manager.json")
 	mine := `{"id":"x","token":"bus","assistant":{"owner":" Example ","machine":"laptop","launcher":"codex"},
-		"agents":{"triage":{"max_retries":2}},"kb":{"enabled":false,"text_days":30,"ai":{"model":"k"}},
+		"agents":{"triage":{"max_retries":2}},"kb":{"enabled":false,"read_only":true,"text_days":30,"ai":{"model":"k"}},
 		"ai":{"base_url":"https://gateway.example.com","model":"m"},
 		"inbox":{"triage_ai":{"model":"t"},"agent":{"machine":"gone"}},"hook_timeout_minutes":0}`
 	if err := os.WriteFile(file, []byte(mine), 0o600); err != nil {
@@ -33,7 +33,7 @@ func TestOwnConfigOverTheHello(t *testing.T) {
 	if h.Owner != "Example" || h.OwnerNotes != "the hub's notes" || h.Assistant.MachineID != "laptop" || h.Assistant.Launcher != "codex" {
 		t.Fatalf("assistant %+v %q %q", h.Assistant, h.Owner, h.OwnerNotes)
 	}
-	if h.Agents.Triage.MaxRetries != 2 || h.KB == nil || !h.KB.Off || h.KB.TextDays != 30 || h.Models.KBAI == nil || h.Models.KBAI.Model != "k" {
+	if h.Agents.Triage.MaxRetries != 2 || h.KB == nil || !h.KB.Off || !h.KB.ReadOnly || h.KB.TextDays != 30 || h.Models.KBAI == nil || h.Models.KBAI.Model != "k" {
 		t.Fatalf("agents/kb %+v %+v %+v", h.Agents, h.KB, h.Models.KBAI)
 	}
 	// Of inbox each of the hello's keys is replaced only when manager.json has it: its judge model stays the hello's.

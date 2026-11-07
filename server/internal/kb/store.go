@@ -139,6 +139,7 @@ type Item struct {
 
 // Store reads and writes the data dir. Writes of one entity are serialized; files are replaced atomically.
 type Store struct {
+	readOnly  bool
 	Dir       string
 	mu        sync.Mutex
 	metaMu    sync.Mutex
@@ -345,6 +346,9 @@ func (s *Store) PutSummary(kind, id, text string) error {
 
 // AppendLog adds a line to a project's timeline (its time in the archive's zone).
 func (s *Store) AppendLog(slug string, at time.Time, source, line string) (err error) {
+	if s.readOnly {
+		return ErrReadOnly
+	}
 	s.mu.Lock()
 	defer func() {
 		s.mu.Unlock()
@@ -412,6 +416,9 @@ func (l Line) Format(zone *time.Location) string {
 
 // AppendMessages writes lines to their day files (messages/YYYY-MM-DD.md, in the archive's zone).
 func (s *Store) AppendMessages(c *Chat, lines []Line) error {
+	if s.readOnly {
+		return ErrReadOnly
+	}
 	s.mu.Lock()
 	written := false
 	defer func() {
@@ -454,7 +461,7 @@ func (s *Store) Since(chatID string, t time.Time, max int) string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	_, _ = s.settleChatLocked(chatID)
-	zone := s.zoneLocked()
+	zone := s.chatReadZoneLocked(chatID)
 	from := t.In(zone).Format("2006-01-02")
 	var b strings.Builder
 	for _, d := range s.Days(chatID) {
@@ -500,6 +507,9 @@ func (s *Store) Since(chatID string, t time.Time, max int) string {
 
 // Prune deletes message days older than textDays and attachment days older than attachmentDays.
 func (s *Store) Prune(now time.Time, textDays, attachmentDays int) (removed int) {
+	if s.readOnly {
+		return 0
+	}
 	zone := s.Zone()
 	textCut := now.AddDate(0, 0, -textDays).In(zone).Format("2006-01-02")
 	attCut := now.AddDate(0, 0, -attachmentDays).In(zone).Format("2006-01-02")
@@ -549,6 +559,9 @@ func addUnique(list []string, v ...string) []string {
 
 // PrependMessages writes lines older than what a chat's day files hold: each day file gets them before its own lines.
 func (s *Store) PrependMessages(c *Chat, lines []Line) error {
+	if s.readOnly {
+		return ErrReadOnly
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if _, err := s.settleChatLocked(c.ID); err != nil {
@@ -599,7 +612,7 @@ func (s *Store) FirstAt(chatID string) time.Time {
 	raw, _ := os.ReadFile(s.path(KindChat, chatID, "messages", days[0]+".md"))
 	for _, l := range strings.Split(string(raw), "\n") {
 		if strings.HasPrefix(l, "- ") && len(l) >= 7 {
-			if t, err := time.ParseInLocation("2006-01-02 15:04", days[0]+" "+l[2:7], s.zoneLocked()); err == nil {
+			if t, err := time.ParseInLocation("2006-01-02 15:04", days[0]+" "+l[2:7], s.chatReadZoneLocked(chatID)); err == nil {
 				return t
 			}
 		}

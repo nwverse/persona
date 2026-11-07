@@ -85,6 +85,7 @@ const (
 // KBSettings is the knowledge base's settings the manager goes by: its manager.json's kb section, laid over the hub's
 // hello (an older hub still sends its hub.json's). Its ai is the models' (HubModels.KBAI).
 type KBSettings struct {
+	ReadOnly       bool     `json:"read_only,omitempty"`       // serve local archives without collection, models or writes
 	Off            bool     `json:"off,omitempty"`             // kb.enabled false: no knowledge base at all
 	TextDays       int      `json:"text_days,omitempty"`       // 0: 365
 	AttachmentDays int      `json:"attachment_days,omitempty"` // 0: 30
@@ -94,6 +95,9 @@ type KBSettings struct {
 // CodeKBUnavailable: the knowledge base is not open yet (the user's time zone not known yet, another assistant process
 // has the data directory); the hub answers it like assistant_offline (503, try again).
 const CodeKBUnavailable = "kb_unavailable"
+
+// CodeKBReadOnly refuses edits and ingestion while local archive reads remain available.
+const CodeKBReadOnly = "kb_read_only"
 
 // CodeKBDisabled means the manager has disabled knowledge; retrying cannot enable it.
 const CodeKBDisabled = "kb_disabled"

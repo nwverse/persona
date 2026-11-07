@@ -88,6 +88,9 @@ func (s *Service) kbRPCRequest(ctx context.Context, method string, raw json.RawM
 	case assistantwire.MethodKBSearch:
 		params = &search
 	case assistantwire.MethodKBUpdate:
+		if s.kbReadOnly(ctx) {
+			return nil, true, kbError(kb.ErrReadOnly)
+		}
 		params = &update
 	case assistantwire.MethodKBRecent:
 		params = &recent

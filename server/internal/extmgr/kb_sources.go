@@ -30,6 +30,9 @@ func (h *Manager) kbSourcesCall(ctx context.Context, p assistantwire.AppCall) (j
 	if p.AppID != assistantwire.AppConnectors {
 		return nil, false, nil
 	}
+	if h.kbReadOnly() {
+		return nil, true, kb.ErrReadOnly
+	}
 	if h.kbOff() { // manager.json kb.enabled false: nothing goes to a knowledge base
 		if p.Method == assistantwire.ConnectorsArchives {
 			raw, err := json.Marshal(assistantwire.Archives{Archives: []assistantwire.ArchiveSource{}, Items: []string{}})
