@@ -8940,6 +8940,20 @@ def mock_size(v):
 
 
 GIT_PULL_STATE = {"behind": 28, "mode": "success", "pulls": 0}
+# MOCK_PERSONAL_AGENTS=1 (#138): a few personal agent conversations, and Remove from list (POST …/hide, …/unhide,
+# GET /agents/hidden) kept in memory as the extension manager keeps it; GET /mock/personal-agents?reset=1 brings every one
+# back. Off: none, as on a hub without the Lark extension.
+PERSONAL_AGENTS = os.environ.get("MOCK_PERSONAL_AGENTS")
+PERSONAL_HIDDEN = {}  # session id -> when (ms)
+def personal_rows():
+    now = int(time.time() * 1000)
+    rows = [("muse", "周报助手", 0.1, 2), ("grok_bot", "旅行规划", 1.5, 0), ("cue", "读书笔记", 5, 1), ("muse", "代码评审", 30, 0),
+            ("grok_bot", "健身记录", 80, 0), ("cue", "菜谱整理", 200, 0)]
+    return [{"id": "lark-bridge:%s:%d" % (prov, i), "source": "lark-bridge", "sessionKey": "%s:%d" % (prov, i), "provider": prov,
+             "title": title, "canSend": True, "unreadCount": unread, "rankTimeMs": now - int(hours * 3600 * 1000), "hasAvatar": False}
+            for i, (prov, title, hours, unread) in enumerate(rows)]
+def personal_listed(hidden):
+    return [r for r in personal_rows() if (r["id"] in PERSONAL_HIDDEN) == hidden] if PERSONAL_AGENTS else []
 # MOCK_GIT_WRITE=1 (#6121): the Git panel's writes on a made-up repository that changes as they are made. GET
 # /mock/git-write?fail=<code>[&files=a,b] makes the next write refuse with that code (git_conflict lists the files);
 # ?reset=1 starts over. The branch's pull request: ?pr=none|review|ready|auto sets it, ?pr_fail=no_gh|not_signed_in makes
@@ -12470,7 +12484,11 @@ class H(BaseHTTPRequestHandler):
         # The Lark extension's personal agents (hub agents.go): none here, as on a hub without the Lark extension; the web's sidebar hid
         # the section only after these answered, and showed "Failed to load personal agents" on the 404 instead.
         if p == "/api/v1/agents": return self.send_json({"sources": []})
-        if p == "/api/v1/agents/sessions": return self.send_json({"sessions": [], "items": []})
+        if p == "/api/v1/agents/sessions": return self.send_json({"sessions": personal_listed(False), "items": []})
+        if p == "/api/v1/agents/hidden": return self.send_json({"sessions": personal_listed(True)})
+        if p == "/mock/personal-agents":
+            if q.get("reset"): PERSONAL_HIDDEN.clear()
+            return self.send_json({"hidden": sorted(PERSONAL_HIDDEN)})
         if p == "/api/v1/agents/prefs": return self.send_json({"pins": [], "view": {}, "sections": [], "assign": {}})
         if p == "/api/v1/personas": return self.send_json({"personas": personas() + ext_look_personas()})
         if looks_route(self, "GET", p, b""): return
@@ -12886,6 +12904,15 @@ class H(BaseHTTPRequestHandler):
             return self.upload()
         self.last_body = self.body()
         p = urlparse(self.path).path
+        if PERSONAL_AGENTS and p.startswith("/api/v1/agents/sessions/") and p.rsplit("/", 1)[-1] in ("hide", "unhide"):
+            sid, op = unquote(p[len("/api/v1/agents/sessions/"):].rsplit("/", 1)[0]), p.rsplit("/", 1)[-1]
+            if sid not in [r["id"] for r in personal_rows()]: return self.send_json({"error": "no such session"}, 404)
+            if op == "hide": PERSONAL_HIDDEN[sid] = int(time.time() * 1000)
+            else: PERSONAL_HIDDEN.pop(sid, None)
+            for c in list(CLIENTS.values()):
+                try: c["send"]({"type": "agents"})
+                except Exception: pass
+            return self.send_json({"ok": True, "hidden": op == "hide"})
         if p.startswith("/api/v1/assistant/conversations/" + ASK1 + "/always/") and self.command == "DELETE":
             key = p.rsplit("/", 1)[-1]
             ALWAYS_GRANTS[:] = [g for g in ALWAYS_GRANTS if g["key_hash"] != key]

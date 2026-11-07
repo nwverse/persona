@@ -2809,7 +2809,7 @@ The conversation belongs to its source (the Lark gateway through its extension),
 | `POST /api/v1/agents/sessions/{id}/unhide` | `{"ok":true,"hidden":false}` | full |
 | `GET /api/v1/agents/hidden` | `{"sessions":[Session]}`: the removed ones the sources still list and that got nothing new since | full |
 
-Each write broadcasts `{"type":"agents"}` (the list) and `{"type":"agents.prefs"}`. Extension tokens can't use these routes. The web offers **Remove from list** in a personal Agent row's ⋯ and right-click menu (with Undo in the toast), and a folded **Removed (N)** section with **Restore** at the end of `/a`.
+Each write broadcasts `{"type":"agents"}` (the list) and `{"type":"agents.prefs"}`. Extension tokens can't use these routes. The web offers **Remove from list** in a personal Agent row's ⋯ and right-click menu (with Undo in the toast), and a folded **Removed (N)** section with **Restore** at the end of `/a`. iOS / Mac offer it in the row's long-press menu on the personal agents page (no swipe actions there), with the same Undo and a folded **Removed (N)** at the end of that page (#138); `hidden` in `GET /agents/prefs` is decoded but not used to filter, the list already comes filtered.
 - Pinned sessions always appear in "Pinned" at the top, followed by custom sections, then groups from `view.group`.
 - After a successful PUT, broadcasts `{"type":"agents.prefs"}`, and other clients GET again. When an old hub lacks this endpoint (404), clients store preferences only locally.
 
