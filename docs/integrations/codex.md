@@ -204,7 +204,7 @@ Code: `node/codex_resume.go`, `node/retire.go` (`resumeOther`, `resumeCodex`); #
 Archiving a Codex session in Persona (`POST /api/v1/sessions/{mid}/{sid}/archive`, `docs/protocol/protocol.md` "Agent session archives") also archives it in Codex,
 with Codex's own reversible archive; restoring it in Persona restores it in Codex. Codex's archive moves the rollout to `<CODEX_HOME>/archived_sessions/` and back
 (and marks it in its state database), so the Codex App and `codex resume`'s picker list it as archived; nothing is deleted, and Persona moves no file itself.
-Code: `node/archive.go` (`session.archive` / `session.unarchive`), `assistant/agent_archive_native.go` (when the manager asks, retries). #6587.
+Code: `node/archive.go` (`session.archive` / `session.unarchive`), `assistant/agent_archive_native.go` (when the manager asks, retries). #88.
 
 - **Protocol** (confirmed in `codex app-server generate-json-schema` of codex-cli 0.163.0 and `codex-rs/app-server/src/request_processors/thread_processor.rs` on main):
   `thread/archive {threadId}` → `{}` and `thread/unarchive {threadId}` → `{thread}`, notifying `thread/archived` / `thread/unarchived` to the app-server's clients.
