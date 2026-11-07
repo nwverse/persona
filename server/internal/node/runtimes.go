@@ -19,6 +19,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -117,6 +118,10 @@ type runtimeConn struct {
 	transcripts map[string]string
 	// daemon is its id in daemons.json when the node dialed it (daemons.go), "" for a runtime on the socket.
 	daemon string
+	// pid is the process at the other end of the runtime socket; 0 when not known (a daemon's link, the Orca bridge,
+	// a system that does not tell). A runtime running the assistant vouches for its descendants' MCP servers
+	// (mcpAssistantOf).
+	pid int
 }
 
 // isDaemon: the node dialed it (a daemon in daemons.json), it did not connect to the socket.
@@ -479,6 +484,25 @@ func (b *runtimeRegistry) resetWatches() {
 		h.watched = map[string]bool{}
 		h.mu.Unlock()
 	}
+}
+
+// assistantIn: one of pids is the process of a connected runtime that runs assistant conversations (caps.assistant in
+// its hello).
+func (b *runtimeRegistry) assistantIn(pids []int) bool {
+	if b == nil {
+		return false
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	for _, h := range b.conns {
+		h.mu.Lock()
+		ok := h.ready && h.hello.Caps.Assistant && h.pid > 0 && slices.Contains(pids, h.pid)
+		h.mu.Unlock()
+		if ok {
+			return true
+		}
+	}
+	return false
 }
 
 func (b *runtimeRegistry) add(peer *rpc.Peer) *runtimeConn {
