@@ -19,9 +19,13 @@ final class ExtensionMotionUITests: XCTestCase {
             dismissSystemAlerts(wait: 4)
             XCTAssertTrue(text(app, "2/8").waitForExistence(timeout: 20), app.debugDescription)
             XCTAssertTrue(text(app, "Running").exists && text(app, "Review").exists)
+            // The icon note can come seconds after the notification question, and while an alert is up the app is not
+            // in front, so the page holds its redraw back until the alert is gone.
+            dismissSystemAlerts(wait: 2)
             shot(app, "before-" + scheme)
 
             try mock(hub, "next")
+            dismissSystemAlerts()
             XCTAssertTrue(text(app, "6/8").waitForExistence(timeout: 10), app.debugDescription)
             for t in ["$36.20", "8.4M", "4 min", "5/5", "Passed", "Deploy"] {
                 XCTAssertTrue(text(app, t).waitForExistence(timeout: 5), "\(t) missing\n\(app.debugDescription)")
@@ -47,12 +51,16 @@ final class ExtensionMotionUITests: XCTestCase {
     @MainActor private func dismissSystemAlerts(wait: TimeInterval = 1) {
         let springboard = XCUIApplication(bundleIdentifier: "com.apple.springboard")
         var deadline = Date.now.addingTimeInterval(wait)
+        // Only an alert it could answer buys more time (one it cannot, left up, would keep it here for ever).
         while Date.now < deadline {
             let alert = springboard.alerts.firstMatch
-            if alert.waitForExistence(timeout: 0.5) {
-                for label in ["允许", "Allow", "好", "OK"] where alert.buttons[label].exists { alert.buttons[label].tap(); break }
-                deadline = Date.now.addingTimeInterval(1.5) // another may follow
+            guard alert.waitForExistence(timeout: 0.5) else { continue }
+            guard let label = ["允许", "Allow", "好", "OK"].first(where: { alert.buttons[$0].exists }) else {
+                XCTFail("a system alert nobody answers:\n\(springboard.debugDescription)")
+                return
             }
+            alert.buttons[label].tap()
+            deadline = Date.now.addingTimeInterval(1.5) // another may follow
         }
     }
 
