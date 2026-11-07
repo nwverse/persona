@@ -27,6 +27,10 @@ const (
 // converting lets one LibreOffice run at a time: it is heavy, and two runs on one profile refuse each other.
 var converting sync.Mutex
 
+// renameConverted moves LibreOffice's PDF into the cache: os.Rename, which tests make fail as it does across file
+// systems.
+var renameConverted = os.Rename
+
 // sofficePath finds LibreOffice: on PATH (soffice, libreoffice), else the app bundle on a Mac.
 func sofficePath() string {
 	for _, name := range []string{"soffice", "libreoffice"} {
@@ -66,8 +70,18 @@ func (n *Node) convertFile(ctx context.Context, p proto.FileConvertRequest) (*pr
 	}
 	sum := sha256.Sum256([]byte(path + "\x00" + fileRevision(st)))
 	out := filepath.Join(dir, hex.EncodeToString(sum[:12])+".pdf")
-	if st, err := os.Stat(out); err == nil && st.Size() > 0 {
-		return &proto.FileConverted{Path: out, Size: st.Size(), Mime: "application/pdf"}, nil
+	// a copy handed out is touched, so pruning by age keeps the ones in use
+	cached := func() *proto.FileConverted {
+		info, err := os.Stat(out)
+		if err != nil || info.Size() == 0 {
+			return nil
+		}
+		now := time.Now()
+		os.Chtimes(out, now, now)
+		return &proto.FileConverted{Path: out, Size: info.Size(), Mime: "application/pdf"}
+	}
+	if c := cached(); c != nil {
+		return c, nil
 	}
 	soffice := sofficePath()
 	if soffice == "" {
@@ -75,6 +89,9 @@ func (n *Node) convertFile(ctx context.Context, p proto.FileConvertRequest) (*pr
 	}
 	converting.Lock()
 	defer converting.Unlock()
+	if c := cached(); c != nil { // converted while this request waited for the lock
+		return c, nil
+	}
 	pruneConverted(dir)
 	work, err := os.MkdirTemp("", "persona-soffice-")
 	if err != nil {
@@ -104,8 +121,13 @@ func (n *Node) convertFile(ctx context.Context, p proto.FileConvertRequest) (*pr
 	if err != nil || got.Size() == 0 {
 		return nil, fmt.Errorf("LibreOffice did not write a PDF")
 	}
-	if err := os.Rename(pdf, out); err != nil {
-		if err := copyFile(pdf, out); err != nil {
+	if err := renameConverted(pdf, out); err != nil {
+		// the temp folder is on another file system: copy it in whole, so a cut-short copy never has the cache's name
+		b, err := os.ReadFile(pdf)
+		if err != nil {
+			return nil, err
+		}
+		if err := writeFileAtomic(out, b); err != nil {
 			return nil, err
 		}
 	}

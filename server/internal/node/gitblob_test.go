@@ -3,15 +3,20 @@ package node
 import (
 	"bytes"
 	"context"
+	"fmt"
+	"math/rand/v2"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
-func TestGitBlobWritesEachVersionForComparing(t *testing.T) {
+// gitBlobEnv gives a test its own home, cache folder and git identity, and answers the home.
+func gitBlobEnv(t *testing.T) string {
+	t.Helper()
 	base := t.TempDir()
 	t.Setenv("HOME", base)
 	t.Setenv("XDG_CACHE_HOME", filepath.Join(base, "cache"))
@@ -21,6 +26,11 @@ func TestGitBlobWritesEachVersionForComparing(t *testing.T) {
 	t.Setenv("GIT_AUTHOR_EMAIL", "dev@example.com")
 	t.Setenv("GIT_COMMITTER_NAME", "Sample Dev")
 	t.Setenv("GIT_COMMITTER_EMAIL", "dev@example.com")
+	return base
+}
+
+func TestGitBlobWritesEachVersionForComparing(t *testing.T) {
+	base := gitBlobEnv(t)
 	repo := filepath.Join(base, "repo")
 	os.MkdirAll(filepath.Join(repo, "docs"), 0o700)
 	runPullGit(t, base, "init", "--initial-branch=main", repo)
@@ -66,6 +76,56 @@ func TestGitBlobWritesEachVersionForComparing(t *testing.T) {
 	} {
 		if _, err := n.gitBlob(context.Background(), bad); err == nil {
 			t.Fatalf("accepted %+v", bad)
+		}
+	}
+}
+
+func TestGitBlobSameVersionAtOnce(t *testing.T) {
+	base := gitBlobEnv(t)
+	repo := filepath.Join(base, "repo")
+	os.MkdirAll(repo, 0o700)
+	runPullGit(t, base, "init", "--initial-branch=main", repo)
+	want := make([]byte, 4<<20) // big enough that writing it overlaps the other requests'
+	for i := range want {
+		want[i] = byte(rand.N(256))
+	}
+	os.WriteFile(filepath.Join(repo, "deck.pdf"), want, 0o600)
+	runPullGit(t, repo, "add", ".")
+	runPullGit(t, repo, "commit", "-m", "deck")
+	cache, err := privateCacheDir("blobs")
+	if err != nil {
+		t.Fatal(err)
+	}
+	n := &Node{home: base, state: newState()}
+	const at = 16
+	for round := range 3 {
+		os.RemoveAll(cache) // every request misses the cache
+		if _, err := privateCacheDir("blobs"); err != nil {
+			t.Fatal(err)
+		}
+		errs := make([]error, at)
+		var wg sync.WaitGroup
+		for i := range at {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				b, err := n.gitBlob(context.Background(), proto.GitBlobRequest{Cwd: repo, Path: "deck.pdf", Rev: "HEAD"})
+				if err == nil {
+					if got, rerr := os.ReadFile(b.Path); rerr != nil || !bytes.Equal(got, want) || b.Size != int64(len(want)) {
+						err = fmt.Errorf("read %d of %d bytes (%v)", len(got), len(want), rerr)
+					}
+				}
+				errs[i] = err
+			}()
+		}
+		wg.Wait()
+		for i, err := range errs {
+			if err != nil {
+				t.Fatalf("round %d, request %d: %v", round, i, err)
+			}
+		}
+		if ents, _ := os.ReadDir(cache); len(ents) != 1 {
+			t.Fatalf("round %d: cache holds %v", round, ents)
 		}
 	}
 }

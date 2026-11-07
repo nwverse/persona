@@ -75,12 +75,11 @@ func (n *Node) gitBlob(ctx context.Context, p proto.GitBlobRequest) (*proto.GitB
 	if err != nil {
 		return nil, err
 	}
-	tmp := out + ".tmp"
-	if err := os.WriteFile(tmp, []byte(data), 0o600); err != nil {
-		return nil, err
-	}
-	if err := os.Rename(tmp, out); err != nil {
-		return nil, err
+	if err := writeFileAtomic(out, []byte(data)); err != nil {
+		// another request for the same blob put it in place first, and Windows does not replace a file being read
+		if st, serr := os.Stat(out); serr != nil || st.Size() != int64(len(data)) {
+			return nil, err
+		}
 	}
 	return &proto.GitBlob{Path: out, Size: int64(len(data))}, nil
 }
