@@ -582,6 +582,8 @@ targets:
       - path: PersonaTests/IntentsTests.swift
       - path: PersonaTests/KnowledgeTests.swift
       - path: PersonaTests/MachineMetricsTests.swift
+      - path: PersonaTests/MachineConcernTests.swift
+      - path: PersonaTests/AddComputerModelTests.swift
       - path: PersonaTests/NotificationActionsTests.swift
       - path: PersonaTests/NotifyPrefsTests.swift
       - path: PersonaTests/NativeStateMigrationTests.swift

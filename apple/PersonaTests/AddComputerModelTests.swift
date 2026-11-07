@@ -216,7 +216,7 @@ struct AddComputerModelTests {
         #expect(list[0].trust == "pending" && list[0].isPending && list[0].errorCode == "never_connected" && list[0].neverConnected)
         #expect(list[1].trust == nil && !list[1].isPending && list[1].errorCode == nil)
         // An unknown code shows the hub's error.
-        #expect(list[2].errorCode == "new_code" && AddComputerText.machineProblem(list[2].errorCode) == nil && AddComputerText.machineLine(list[2]) == "原话")
+        #expect(list[2].errorCode == "new_code" && AddComputerText.machineProblem(list[2].errorCode) == nil && AddComputerText.machineLines(list[2])?.line == "原话")
         for code in ["node_service_down", "link_offline", "never_connected", "node_outdated"] {
             #expect(AddComputerText.machineProblem(code)?.isEmpty == false, "\(code)")
         }
