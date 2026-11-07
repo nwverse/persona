@@ -46,6 +46,10 @@ or the manager restarts and retries). A previous interrupted send (hub stopped o
 - Manager items are in the database: manager or hub restarts reload `inbox_items`. Hub restarts launch the manager again, with a full round on connection.
 - Connected manager but stored items / mutes unreadable (database unresponsive): Inbox APIs return `503 inbox_unavailable`, submitted rounds are rejected (hub retains them for retry),
   and nothing is written, avoiding overwriting database state with incomplete memory. Retry reading on next use.
+- Readable store, but an item's row cannot be written during a collection round: what the round changed in that item (new items, new messages or mail, a mail's text, items filed as
+  over, read elsewhere, settled, muted or superseded) is undone to what the row holds, and nothing is announced for it (`inbox_rollback.go`, #91), unless something else moved the item
+  meanwhile (that move's own save writes the row). It comes back with the next round, because the sources hand in the same things again: connectors answer `inbox.collect` from their
+  memory, mail rounds read each account's newest page, settling connectors are asked every round. Triage, admission and translation undo their failed rows the same way.
 - Immediately after restart, before a round lists sources, the manager still knows plugin-provided connectors (`extensions` in `inbox.config`). Their items still have no fallback and must wait for the model;
   unknown sources behave likewise, never defaulting to unimportant.
 

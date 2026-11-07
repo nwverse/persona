@@ -2638,7 +2638,7 @@ The knowledge base belongs to a manager (the assistant). The hub forwards these 
 | --- | --- | --- |
 | GET | `/api/v1/kb/{kind}?tag=` | `{items,tags}`; can filter by tag |
 | GET | `/api/v1/kb/{kind}/{id}` | `{detail,agents?}`; for a project, can also return related online Agents |
-| PUT | `/api/v1/kb/{kind}/{id}` | body is a `kb.Update`; can update name, tags, importance, summary and project properties; returns `{id}`; fields in [knowledge.md](../assistant/knowledge.md) |
+| PUT | `/api/v1/kb/{kind}/{id}` | body is a `kb.Update` (projects also take `unmerge: true`); can update name, tags, importance, summary and project properties; returns `{id}`; fields in [knowledge.md](../assistant/knowledge.md) |
 | GET | `/api/v1/kb-search?q=&messages=0` | `{hits}`; includes messages by default, `messages=0` excludes them |
 | GET | `/api/v1/kb/chats/{id}/context` | What the knowledge base knows about a chat: `{chat_id, chat_name, kind, summary, projects:[{name, summary}]}` (top three projects); read-only, used by the extension's `/agent`; 404 if the chat does not exist ([knowledge.md](../assistant/knowledge.md)) |
 | GET | `/api/v1/kb/chats/{id}/days/{day}` | All messages of a chat on one day: `{day, messages, prev, next}` (`prev` / `next` are the nearest earlier / later days with messages); 404 if none |

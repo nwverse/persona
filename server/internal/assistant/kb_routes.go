@@ -155,21 +155,12 @@ func (s *Service) kbRoutes() {
 		if e == nil {
 			return
 		}
-		var u struct {
-			kb.Update
-			Unmerge bool `json:"unmerge"` // projects: undo a merge (kb.Engine.Unmerge); not in kbwire.Update, so not open to extensions
-		}
+		var u kb.UserUpdate
 		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&u); err != nil {
 			apierr.Write(w, http.StatusBadRequest, err)
 			return
 		}
-		var id string
-		var err error
-		if u.Unmerge && r.PathValue("kind") == kb.KindProject {
-			id, err = e.Unmerge(r.PathValue("id"))
-		} else {
-			id, err = e.Apply(r.PathValue("kind"), r.PathValue("id"), u.Update)
-		}
+		id, err := e.ApplyUser(r.PathValue("kind"), r.PathValue("id"), u)
 		if errors.Is(err, kb.ErrNotFound) {
 			apierr.Write(w, http.StatusNotFound, err)
 			return
