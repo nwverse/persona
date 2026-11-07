@@ -6,6 +6,10 @@ import (
 	"time"
 )
 
+// runtimeConnsPerListener is how many connections one runtimeListener keeps open
+// at once; every runtimeListener of a Proxy also shares its runtimeSlots.
+const runtimeConnsPerListener = 16
+
 // runtimeListener bounds sockets BEFORE http.Server starts a goroutine or reads
 // headers. A guest must not fill the manager with idle sockets before RPC/egress
 // request limits can inspect them. Legacy listeners retain their existing behavior.
@@ -38,7 +42,7 @@ func (l *runtimeListener) Accept() (net.Conn, error) {
 				closed = true
 			default:
 			}
-			if !closed && len(l.connections) < 16 {
+			if !closed && len(l.connections) < runtimeConnsPerListener {
 				wrapped := &runtimeConn{Conn: c, owner: l}
 				l.connections[wrapped] = struct{}{}
 				l.mu.Unlock()

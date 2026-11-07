@@ -2,10 +2,13 @@ package egress
 
 import (
 	"bufio"
+	"errors"
 	"io"
 	"net"
 	"os"
 	"path/filepath"
+	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -70,5 +73,100 @@ func TestProxyRelayUnix(t *testing.T) {
 	if c, err := net.Dial("unix", sock); err == nil {
 		c.Close()
 		t.Fatal("a connection after Unregister")
+	}
+}
+
+// An extension's runtime holds at most runtimeConnsPerListener relayed connections open: the ones over that are closed
+// without reaching the target, a connection that ends frees its place, and Unregister closes the rest.
+func TestProxyRelayUnixBoundsConnections(t *testing.T) {
+	dir := shortTempDir(t)
+	target, sock := filepath.Join(dir, "node.sock"), filepath.Join(dir, "ext.sock")
+	ln, err := net.Listen("unix", target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	var reached atomic.Int32
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			reached.Add(1)
+			go func() { // echo until the relay hangs up
+				defer c.Close()
+				_, _ = io.Copy(c, c)
+			}()
+		}
+	}()
+	p := &Proxy{}
+	defer p.Close()
+	if err := p.RelayUnix("notes", sock, target); err != nil {
+		t.Fatal(err)
+	}
+	// relayed says whether c reaches the target (an echo) or was closed by the relay.
+	relayed := func(c net.Conn) bool {
+		t.Helper()
+		_ = c.SetDeadline(time.Now().Add(5 * time.Second))
+		b := make([]byte, 1)
+		_, err := c.Write([]byte{'x'})
+		if err == nil {
+			_, err = io.ReadFull(c, b)
+		}
+		_ = c.SetDeadline(time.Time{})
+		switch {
+		case err == nil && b[0] == 'x':
+			return true
+		case errors.Is(err, io.EOF), errors.Is(err, io.ErrUnexpectedEOF), errors.Is(err, syscall.ECONNRESET),
+			errors.Is(err, syscall.EPIPE):
+			return false
+		}
+		t.Fatalf("neither relayed nor closed: %q %v", b, err)
+		return false
+	}
+	const over = 4
+	var open []net.Conn
+	closed := 0
+	for range runtimeConnsPerListener + over {
+		c, err := net.Dial("unix", sock)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer c.Close()
+		if relayed(c) {
+			open = append(open, c)
+		} else {
+			closed++
+		}
+	}
+	if len(open) != runtimeConnsPerListener || closed != over || reached.Load() != runtimeConnsPerListener {
+		t.Fatalf("relayed %d, closed %d, reached the target %d; want %d, %d, %d",
+			len(open), closed, reached.Load(), runtimeConnsPerListener, over, runtimeConnsPerListener)
+	}
+	// One ends: the next connection gets its place (once the relay has seen it end).
+	_ = open[0].Close()
+	open = open[1:]
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		c, err := net.Dial("unix", sock)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer c.Close()
+		if relayed(c) {
+			open = append(open, c)
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("a connection that ended kept its place")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	p.Unregister("notes")
+	for _, c := range open {
+		if relayed(c) {
+			t.Fatal("a relayed connection outlived Unregister")
+		}
 	}
 }
