@@ -296,7 +296,7 @@ The existing path of building from the default branch and deploying directly (`d
   - `TestNoDowngrade` guards this: if the manifest's build number is not larger than its own, it is not installed; equal is not installed either.
 - It also gets `commit` (`-X main.commit`, with `-dirty` appended when server/ has uncommitted changes): a later public release only installs itself if it contains this commit ("no regression").
 - The main session's deploy script lives outside the repo and must add the same four `-X` flags to its `go build` (the report gives the line to add).
-- **Deploy only from a working tree that contains the default branch**: `deploy.sh` first fetches the remote's default branch (the one `git ls-remote --symref origin HEAD` names, else the clone's `origin/HEAD`, else `master`); if the current HEAD does not contain it, nothing is deployed and it exits 2 (same if it cannot be fetched);
+- **Deploy only from a working tree that contains the default branch**: `deploy.sh` first fetches the remote's default branch (how it finds the branch: the comment above the check); if the current HEAD does not contain it, nothing is deployed and it exits 2 (same if it cannot be fetched);
   deploying a branch that is behind would swap changes someone else just deployed (hub and web) back to old ones. For a deliberate rollback, use `PERSONA_DEPLOY_ANY_COMMIT=1`. See `docs/lessons/server.md` ("Deploying from a stale branch").
 - The hub machine also needs `personad-wechat` (the WeChat bot program, `docs/extensions/wechat.md`): `deploy.sh` builds the same version for the hub and puts it next to personad; nodes do not need it.
   Telegram is not here: it is an extension (#1704), installed and upgraded on the hub from the extension market.

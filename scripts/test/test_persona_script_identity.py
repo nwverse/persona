@@ -457,19 +457,26 @@ sys.exit(2)
         shutil.rmtree(self.repo / '.git', ignore_errors=True)
         self.git(self.base, 'init', '-q', '--bare', '--initial-branch=' + default, str(remote))
         self.git(self.repo, 'init', '-q', '--initial-branch=' + default)
-        self.git(self.repo, 'add', '-A')
-        self.git(self.repo, 'commit', '-q', '-m', 'fixture')
+        self.git(self.repo, 'commit', '-q', '--allow-empty', '-m', 'fixture')  # the guard compares commits, not files
         self.git(self.repo, 'remote', 'add', 'origin', str(remote))
         self.git(self.repo, 'push', '-q', 'origin', default)
         if origin_head:
             self.git(self.repo, 'update-ref', 'refs/remotes/origin/' + origin_head, 'HEAD')
             self.git(self.repo, 'symbolic-ref', 'refs/remotes/origin/HEAD', 'refs/remotes/origin/' + origin_head)
-        executable(self.commands / 'git', '#!/bin/sh\nexec ' + shlex.quote(GIT) + ' "$@"\n')
+        (self.commands / 'git').unlink(missing_ok=True)  # setUp's fake git
 
     def advance_remote(self, branch):
         """Someone else's commit lands on the remote's branch; the checkout does not have it."""
         later = self.git(self.repo, 'commit-tree', 'HEAD^{tree}', '-p', 'HEAD', '-m', 'later')
         self.git(self.repo, 'push', '-q', 'origin', later + ':refs/heads/' + branch)
+
+    def assert_refused(self, message):
+        """deploy.sh web exits 2 with `message` on stderr and deploys nothing."""
+        result = subprocess.run(['bash', str(self.repo / 'scripts/deploy/deploy.sh'), 'web'], env=self.env,
+                                capture_output=True, text=True, timeout=DEPLOY_TIMEOUT)
+        self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+        self.assertIn(message, result.stderr)
+        self.assertFalse((self.state / 'web/index.html').exists())
 
     def test_an_up_to_date_clone_of_a_main_repository_deploys(self):
         # The remote has main and no master (#1064).
@@ -482,11 +489,7 @@ sys.exit(2)
             with self.subTest(default=default, origin_head=origin_head):
                 self.clone_of(default, origin_head)
                 self.advance_remote(default)
-                result = subprocess.run(['bash', str(self.repo / 'scripts/deploy/deploy.sh'), 'web'], env=self.env,
-                                        capture_output=True, text=True, timeout=30)
-                self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
-                self.assertIn('missing commits on origin/' + default, result.stderr)
-                self.assertFalse((self.state / 'web/index.html').exists())
+                self.assert_refused('missing commits on origin/' + default)
 
     def test_a_remote_that_names_no_valid_default_branch_falls_back_to_origin_head(self):
         # ls-remote names nothing, or a name git does not allow for a branch (':' would make the fetch a refspec).
@@ -496,11 +499,7 @@ sys.exit(2)
                 self.advance_remote('main')
                 executable(self.commands / 'git', '#!/bin/sh\n[ "$1" = ls-remote ] && { printf ' + shlex.quote(listed) +
                            '; exit 0; }\nexec ' + shlex.quote(GIT) + ' "$@"\n')
-                result = subprocess.run(['bash', str(self.repo / 'scripts/deploy/deploy.sh'), 'web'], env=self.env,
-                                        capture_output=True, text=True, timeout=30)
-                self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
-                self.assertIn('missing commits on origin/main', result.stderr)
-                self.assertFalse((self.state / 'web/index.html').exists())
+                self.assert_refused('missing commits on origin/main')
 
     def test_an_unreachable_remote_deploys_nothing_unless_any_commit_is_set(self):
         # ls-remote and fetch both fail (set -e, pipefail): the message names the clone's origin/HEAD, else master.
@@ -508,15 +507,10 @@ sys.exit(2)
             with self.subTest(origin_head=origin_head):
                 self.clone_of('main', origin_head)
                 self.git(self.repo, 'remote', 'set-url', 'origin', str(self.base / 'missing.git'))
-                result = subprocess.run(['bash', str(self.repo / 'scripts/deploy/deploy.sh'), 'web'], env=self.env,
-                                        capture_output=True, text=True, timeout=30)
-                self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
-                self.assertIn('could not fetch origin/' + branch + ' to ', result.stderr)
-                self.assertFalse((self.state / 'web/index.html').exists())
+                self.assert_refused('could not fetch origin/' + branch + ' to ')
         # PERSONA_DEPLOY_ANY_COMMIT=1 skips the check, so it needs no remote.
-        result = subprocess.run(['bash', str(self.repo / 'scripts/deploy/deploy.sh'), 'web'],
-                                env=dict(self.env, PERSONA_DEPLOY_ANY_COMMIT='1'), capture_output=True, text=True, timeout=30)
-        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.env['PERSONA_DEPLOY_ANY_COMMIT'] = '1'
+        self.run_script('scripts/deploy/deploy.sh', 'web')
         self.assertEqual((self.state / 'web/index.html').read_text(), 'Persona fixture web')
 
     def test_a_default_branch_named_like_an_option_is_fetched_as_a_branch(self):
