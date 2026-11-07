@@ -58,6 +58,12 @@ class SessionSourceTest {
         assertTrue(live.copy(capabilities = live.capabilities!!.copy(interrupt = true)).canInterrupt)
         assertEquals("Codex 实时 · j-3f2a", (live.sourceSubtitle).zhAny())
         assertEquals("Claude 后台 · 仅查看：此来源尚未允许发送", (live.copy(sourceKind = "claude_bg", agentName = null, capabilities = SessionCapabilities(read = true)).sourceSubtitle).zhAny())
+        // Claude outside Persona's terminals: named for where it runs; sends when the node says it can.
+        val desktop = live.copy(sourceKind = "claude_desktop", agentName = null, capabilities = SessionCapabilities(read = true, send = true))
+        assertEquals("Claude 桌面版", desktop.sourceSubtitle.zhAny())
+        assertTrue(desktop.canSend)
+        assertFalse(desktop.canInterrupt || desktop.canTerminal)
+        assertEquals("终端里的 Claude · 仅查看：此来源尚未允许发送", (desktop.copy(sourceKind = "claude_cli", capabilities = SessionCapabilities(read = true)).sourceSubtitle).zhAny())
         // Codex is not Claude: no modes, no /model or /clear even when it can send.
         assertFalse(live.canChangeModes || live.canTypeClaudeCommands)
     }

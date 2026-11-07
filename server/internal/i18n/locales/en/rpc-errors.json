@@ -15,5 +15,10 @@
   "not_our_worktree": "This folder isn’t a worktree Persona made.",
   "worktree_in_use": "An agent still runs in this worktree. Close it first.",
   "worktree_dirty": "The worktree has uncommitted changes.",
-  "worktree_unmerged": "The branch has commits that aren’t on the main branch."
+  "worktree_unmerged": "The branch has commits that aren’t on the main branch.",
+  "peer_unsupported": "This Claude session doesn’t offer a channel Persona can use for messages (an older Claude Code, or cross-session messages are turned off there). Continue it on the computer.",
+  "peer_unreachable": "Couldn’t reach this Claude session’s message channel (it may have just restarted or quit). Try again shortly, or continue it on the computer.",
+  "peer_too_long": "The message is too long for the message channel. Split it into shorter messages.",
+  "peer_unconfirmed": "The message was handed to this Claude session, but it hasn’t taken it yet: it may be waiting for approval on the computer, or it was dropped as a repeat. Check on the computer before sending it again.",
+  "peer_command": "The message channel only delivers plain messages and doesn’t run slash commands. Type the command on the computer."
 }

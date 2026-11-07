@@ -2,6 +2,10 @@
 
 Pitfalls, odd behavior and the decisions made at the time (formerly "Lessons" in `CLAUDE.md`; index in `docs/lessons/README.md`). Add new lessons to the relevant section, or create one if none fits.
 
+## Retained chat visibility (#739)
+
+A shell can keep a chat mounted after switching tabs: `onDisappear` alone does not release its transcript subscription or visible/read owner. Use paired `onTabVisibility` edges on iPhone as well as Mac, keep the store and scroll state, and resume with `since_seq` on return. This pauses client display traffic, not the Agent's work on the hub. Test hidden initial mounts, duplicate visibility notifications, shared subscription owners and returning after missed items. Linux source checks cannot establish SwiftUI frame times; compile, profile both directions and inspect light/dark simulator screenshots on a Mac before publishing the Apple build.
+
 ## Retired drawings and downloadable avatars (#1)
 
 - Retiring local renderers must not turn the hub package catalog into an ID allowlist. Apply manifest validation and catalog/manifest ID equality to both cached and live lists, reserve retired drawing IDs, and keep an unavailable package's selected ID while rendering Mochi. The next valid listing restores the package without another selection. Live Activity normalization must keep custom package faces too; Milk Frog's watch pet remains specific to its own package.
