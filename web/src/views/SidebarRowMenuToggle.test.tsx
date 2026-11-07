@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 // A sidebar row's ⋯ toggles the row's menu: a second press closes it. A browser sends a pointerdown before the click,
-// and the menu closes on a pointerdown outside its panel and its anchor, so a ⋯ outside the anchor closed the menu on
-// the pointerdown and the click opened it again. jsdom's click() sends no pointerdown: `press` sends both, in order.
+// and the menu closes on a pointerdown outside its panel and its anchor, so the ⋯ has to lie inside the anchor.
+// jsdom's click() sends no pointerdown: `press` sends both, in order.
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -93,8 +93,9 @@ async function renderSidebar() {
   await flush();
 }
 
+const personaRow = () => host.querySelector(`a[title="${t("sidebar.persona_main")}"]`) ?? undefined;
 const rows: [string, () => Element | undefined][] = [
-  ["the Persona main row", () => host.querySelector(`a[title="${t("sidebar.persona_main")}"]`) ?? undefined],
+  ["the Persona main row", personaRow],
   ["a pinned conversation", () => link("Release notes")],
   ["an agent", () => link("Build docs")],
   ["a herdr tab with several panes", () => link("Lead pane")],
@@ -120,8 +121,7 @@ describe("a sidebar row's ⋯", () => {
 
   it("moves the menu to another row's ⋯, and a press elsewhere still closes it", async () => {
     await renderSidebar();
-    const mainRow = () => host.querySelector(`a[title="${t("sidebar.persona_main")}"]`)!;
-    await press(more(mainRow())!);
+    await press(more(personaRow())!);
     expect(menus()).toHaveLength(1);
     expect(menus()[0].textContent).toContain(t("conversation-menu.end"));
 
