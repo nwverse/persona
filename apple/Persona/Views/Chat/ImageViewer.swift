@@ -37,6 +37,10 @@ struct ImageViewer: View {
     @Environment(\.dismiss) private var dismiss
     @State private var openedFile: FileRef?
     @State private var decoded: [Int: UIImage] = [:]
+    /// Pages whose last load gave no picture: they say so with 重试 instead of spinning on.
+    @State private var failed: Set<Int> = []
+    /// Bumped by a page's 重试: its load runs again.
+    @State private var attempts: [Int: Int] = [:]
     @State private var chrome = true
     /// How far a pull-down has gone, 0…1: the backdrop and the bars fade with it.
     @State private var pull: CGFloat = 0
@@ -140,6 +144,8 @@ struct ImageViewer: View {
         Group {
             if let img = decoded[i] {
                 ZoomableImage(image: img, onTap: toggleChrome)
+            } else if failed.contains(i) {
+                notLoaded(i)
             } else {
                 ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity)
             }
@@ -157,6 +163,19 @@ struct ImageViewer: View {
         #if DEBUG // `-openEditor YES`: straight into the editor (screenshots)
         if i == index, attach != nil, UserDefaults.standard.bool(forKey: "openEditor") { editing = decoded[i] }
         #endif
+    }
+
+    /// A page whose picture did not come: said so, with 重试 when loading again can bring it. One fetched from the hub
+    /// or the web can; bytes already here that do not decode, or a file's thumbnail (`FileThumbnails` keeps its
+    /// failures for the session), would only fail again.
+    private func notLoaded(_ i: Int) -> some View {
+        let item = images[i]
+        let again = item.payload.map { $0.ref != nil } ?? (item.url != nil)
+        let retry: (title: String, run: () -> Void)? = again ? (title: "重试", run: { attempts[i, default: 0] += 1 }) : nil
+        let message = again ? "没取到这张图，点重试再取一次"
+            : item.payload == nil && item.file != nil ? "取不到这张图的预览，可以在 ⋯ 里「在文件页打开」" : "这张图的数据打不开"
+        return EmptyStateView(symbol: Theme.Icon.error, title: "图片没载入", message: message, action: retry)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
     private func toggleChrome() {
@@ -320,6 +339,7 @@ struct ImageViewer: View {
 
     private func decode(_ i: Int) async {
         guard decoded[i] == nil, images.indices.contains(i) else { return }
+        failed.remove(i)
         #if DEBUG // `-showViewerDecodeDelay`: legacy stress; `-showViewerDecodeDuringPan`: an event-driven gate.
         let delay = UserDefaults.standard.double(forKey: "showViewerDecodeDelay")
         if delay > 0 { try? await Task.sleep(for: .seconds(delay)) }
@@ -332,6 +352,7 @@ struct ImageViewer: View {
         ImagePagingProbe.shared.decoded(i, image: image)
         #endif
         decoded[i] = image
+        if image == nil, !Task.isCancelled { failed.insert(i) }
     }
 
     private func save() async {
