@@ -32,8 +32,7 @@ nonisolated enum ExtensionMotion {
         var text: [String] = []
         var numbers: [Double] = []
         var at = s.startIndex
-        // ASCII digits only: `\d` would take other scripts' digits, which `Double` does not read.
-        for m in s.matches(of: #/[0-9]{1,3}(?:,[0-9]{3})+(?:\.[0-9]+)?|[0-9]+(?:\.[0-9]+)?/#) {
+        for m in s.matches(of: number) {
             text.append(String(s[at..<m.range.lowerBound]))
             numbers.append(Double(m.output.filter { $0 != "," }) ?? 0)
             at = m.range.upperBound
@@ -41,6 +40,10 @@ nonisolated enum ExtensionMotion {
         text.append(String(s[at...]))
         return (text, numbers)
     }
+
+    /// A number in a value: 1,234.5, 12 or 0.75. ASCII digits only: `\d` would take other scripts' digits, which
+    /// `Double` does not read. Built once: a literal in the function is parsed again on every call.
+    nonisolated(unsafe) private static let number = #/[0-9]{1,3}(?:,[0-9]{3})+(?:\.[0-9]+)?|[0-9]+(?:\.[0-9]+)?/#
 
     static func transition(_ change: Change) -> ContentTransition {
         if case .roll(let down) = change { .numericText(countsDown: down) } else { .opacity }
