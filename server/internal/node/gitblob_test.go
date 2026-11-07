@@ -14,19 +14,13 @@ import (
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
-// gitBlobEnv gives a test its own home, cache folder and git identity, and answers the home.
+// gitBlobEnv gives a test its own cache folder (cacheEnv) and git identity (gitEnv), and answers a folder for its
+// repository.
 func gitBlobEnv(t *testing.T) string {
 	t.Helper()
-	base := t.TempDir()
-	t.Setenv("HOME", base)
-	t.Setenv("XDG_CACHE_HOME", filepath.Join(base, "cache"))
-	t.Setenv("GIT_CONFIG_GLOBAL", os.DevNull)
-	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
-	t.Setenv("GIT_AUTHOR_NAME", "Sample Dev")
-	t.Setenv("GIT_AUTHOR_EMAIL", "dev@example.com")
-	t.Setenv("GIT_COMMITTER_NAME", "Sample Dev")
-	t.Setenv("GIT_COMMITTER_EMAIL", "dev@example.com")
-	return base
+	cacheEnv(t, true)
+	gitEnv(t)
+	return t.TempDir()
 }
 
 func TestGitBlobWritesEachVersionForComparing(t *testing.T) {

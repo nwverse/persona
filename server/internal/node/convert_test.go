@@ -82,12 +82,12 @@ func TestConvertWithoutLibreOffice(t *testing.T) {
 	}
 }
 
-// convertEnv gives a test its own cache folder and fake LibreOffice, and answers the node and the runs file.
+// convertEnv gives a test its own cache folder (cacheEnv) and fake LibreOffice, and answers the folder for its
+// documents (the node's home), the node and the runs file.
 func convertEnv(t *testing.T) (dir string, n *Node, calls string) {
 	t.Helper()
+	cacheEnv(t, true)
 	dir = t.TempDir()
-	t.Setenv("XDG_CACHE_HOME", filepath.Join(dir, "cache"))
-	t.Setenv("HOME", dir) // os.UserCacheDir on a Mac
 	return dir, &Node{home: dir}, fakeSoffice(t, dir)
 }
 
