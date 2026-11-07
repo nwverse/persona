@@ -32,6 +32,8 @@ import SwiftUI
         if isRichBatch {
             if let path = d.string(forKey: "macSnapshot"), let plan = MacDemoSnapshotBatch.plan(at: path) {
                 Task { await MacDemoSnapshotBatch.run(plan) }
+            } else if let path = d.string(forKey: "macSnapshot"), let plan = MacExtensionSnapshotBatch.plan(at: path) {
+                Task { await MacExtensionSnapshotBatch.run(plan) }
             } else {
                 Task { await MacRichSnapshotBatch.shared.run() }
             }

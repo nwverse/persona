@@ -515,7 +515,13 @@ struct ExtensionPageView: View {
     }
 
     private func updateVisibility() {
-        page.setVisible(pageVisible && tabActive && phase == .active)
+        var foreground = phase == .active
+        #if DEBUG && os(macOS)
+        // A validated loopback capture uses the normal stream while its window stays non-activating.
+        // This exception exists only for the DEBUG batch; production still requires an active scene.
+        foreground = foreground || MacExtensionSnapshotBatch.isCapturing
+        #endif
+        page.setVisible(pageVisible && tabActive && foreground)
     }
 
     private var form: some View {
