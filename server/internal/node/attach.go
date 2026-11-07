@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/nwverse/persona/server/internal/identity"
+	"github.com/nwverse/persona/server/internal/link"
 	"io"
 	"net"
 	"os"
@@ -98,7 +99,20 @@ func Attach(ctx context.Context, newNode func() (*Node, error), extra <-chan net
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return err
 	}
-	// Only one resident node: a second one would steal relays from the first. A socket nobody answers on is stale.
+	// Only one resident node: a second one would steal relays from the first. The run lock next to the socket, held
+	// until Attach returns, decides it: two nodes starting together could both find nobody answering on the socket,
+	// and the second would remove the first one's fresh socket. It also keeps a second start from dialing the live
+	// node, whose next connection would replace the hub's. The process ending gives the lock back, however it ends.
+	release, err := link.LockFile(path+".run", false)
+	if errors.Is(err, link.ErrLocked) {
+		return fmt.Errorf("a resident node is already running (%s.run is locked)", path)
+	}
+	if err != nil {
+		return fmt.Errorf("resident node lock: %w", err)
+	}
+	defer release()
+	// A resident node from a build without the lock is found by answering. A socket nobody answers on, with the lock
+	// free, is stale.
 	if c, err := net.DialTimeout("unix", path, time.Second); err == nil {
 		c.Close()
 		return fmt.Errorf("a resident node is already listening on %s", path)
