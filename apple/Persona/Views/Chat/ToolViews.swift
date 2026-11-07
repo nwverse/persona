@@ -1119,15 +1119,21 @@ struct Base64Image: View {
     @ViewBuilder private var notLoaded: some View {
         if payload.ref != nil {
             Button { attempt += 1 } label: {
-                Label("图片没载入，点按重试", systemImage: Theme.Icon.retry)
-                    .font(Theme.Font.label)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-                    .padding(.horizontal, Theme.Space.s)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .contentShape(.rect)
+                // A portrait screenshot's placeholder is narrow: the sentence, else 重试, else the symbol alone.
+                ViewThatFits(in: .horizontal) {
+                    Label("图片没载入，点按重试", systemImage: Theme.Icon.retry)
+                    Label("重试", systemImage: Theme.Icon.retry)
+                    Image(systemName: Theme.Icon.retry)
+                }
+                .font(Theme.Font.label)
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .padding(.horizontal, Theme.Space.s)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .contentShape(.rect)
             }
             .buttonStyle(.plain)
+            .accessibilityLabel("图片没载入，点按重试")
         } else {
             Label("图片显示不了", systemImage: Theme.Icon.error)
                 .font(Theme.Font.label)

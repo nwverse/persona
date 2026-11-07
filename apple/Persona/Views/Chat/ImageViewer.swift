@@ -171,11 +171,18 @@ struct ImageViewer: View {
     private func notLoaded(_ i: Int) -> some View {
         let item = images[i]
         let again = item.payload.map { $0.ref != nil } ?? (item.url != nil)
-        let retry: (title: String, run: () -> Void)? = again ? (title: "重试", run: { attempts[i, default: 0] += 1 }) : nil
-        let message = again ? "没取到这张图，点重试再取一次"
-            : item.payload == nil && item.file != nil ? "取不到这张图的预览，可以在 ⋯ 里「在文件页打开」" : "这张图的数据打不开"
-        return EmptyStateView(symbol: Theme.Icon.error, title: "图片没载入", message: message, action: retry)
+        let retry: (title: String, run: () -> Void)? = again
+            ? (title: String(localized: "重试"), run: { attempts[i, default: 0] += 1 }) : nil
+        let message = again ? String(localized: "没取到这张图，点重试再取一次")
+            : item.payload == nil && item.file != nil ? String(localized: "取不到这张图的预览，可以在 ⋯ 里「在文件页打开」")
+            : String(localized: "这张图的数据打不开")
+        return EmptyStateView(symbol: Theme.Icon.error, title: String(localized: "图片没载入"), message: message, action: retry)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
+            // No zoomable picture here to take the taps and the pull-down: a tap brings the bars (and 关闭) back,
+            // and they show when the page comes up (on the black backdrop the page's text would not read).
+            .contentShape(.rect)
+            .onTapGesture(perform: toggleChrome)
+            .onAppear { chrome = true }
     }
 
     private func toggleChrome() {
