@@ -147,10 +147,12 @@ def word_list():
                     line = line.strip()
                     if not line or line.startswith("#"):
                         continue
-                    if line.startswith("!") and WAIVABLE.fullmatch(line[1:].strip()):
-                        waived.add(line[1:].strip().lower())
-                        continue
-                    if line.startswith("!"):  # the line number only: the value may be private
+                    if line.startswith("!"):
+                        word = line[1:].strip()
+                        if WAIVABLE.fullmatch(word):
+                            waived.add(word.lower())
+                            continue
+                        # The line number only: the value may be private.
                         print("privacy_check: %s:%d: a `!` line only takes back a config value made of ASCII letters; "
                               "searched as written instead" % (name, n), file=sys.stderr)
                     out.setdefault(line, set()).add("private-words.txt")
@@ -216,15 +218,18 @@ def reserved(value):
 
 def term_sources():
     """Words to look for, longest first, each with where it comes from ("config machines.id", "private-words.txt",
-    "CLAUDE.local.md", "the home directory"), and those of them allowed in PUBLIC_DIRS."""
+    "CLAUDE.local.md", "the home directory"); those of them allowed in PUBLIC_DIRS; and those a `!word` line could
+    take back (config values of ASCII letters that no file lists plainly)."""
     config, public = config_values()
     listed, waived = word_list()
-    private = {v.lower() for v in config} | {v.lower() for v in listed}
-    found = {}
-    for v, paths in config.items():
-        if v.lower() not in waived:
-            found.setdefault(v, set()).update(
-                "config " + ".".join(k if KEY_NAME.fullmatch(k) and k not in private else "*" for k in p) for p in paths)
+    plain = {v.lower() for v in listed}
+    private = {v.lower() for v in config} | plain
+
+    def label(path):
+        return "config " + ".".join(k if KEY_NAME.fullmatch(k) and k not in private else "*" for k in path)
+
+    found = {v: {label(p) for p in paths} for v, paths in config.items() if v.lower() not in waived}
+    waivable = {v for v in found if WAIVABLE.fullmatch(v) and v.lower() not in plain}
     for v, files in listed.items():
         found.setdefault(v, set()).update(files)
     found = {v: where for v, where in found.items()
@@ -233,12 +238,12 @@ def term_sources():
     if len(user) >= 3:
         for v in ("/Users/" + user, "/home/" + user):
             found.setdefault(v, set()).add("the home directory")
-    return {v: sorted(found[v]) for v in sorted(found, key=len, reverse=True)}, public
+    return {v: sorted(found[v]) for v in sorted(found, key=len, reverse=True)}, public, waivable
 
 
 def terms():
     """Words to look for, longest first, and those of them allowed in PUBLIC_DIRS."""
-    found, public = term_sources()
+    found, public, _ = term_sources()
     return list(found), public
 
 
@@ -328,13 +333,6 @@ def private_kind(value, sources=None):
     kind = "private IP" if IPV4.fullmatch(value) else "email" if "@" in value else "private value (%d chars)" % len(value)
     where = (sources or {}).get(value)
     return kind + " from " + ", ".join(where) if where else kind
-
-
-def waivable(value, sources):
-    """Whether a `!word` line would take this hit back: a config value of ASCII letters that no file lists plainly."""
-    where = sources.get(value, ())
-    return bool(WAIVABLE.fullmatch(value)) and any(s.startswith("config ") for s in where) \
-        and "private-words.txt" not in where
 
 
 NPM_LOCK_FILES = {"package-lock.json", "npm-shrinkwrap.json"}
@@ -471,7 +469,7 @@ def main():
     staged = "--staged" in sys.argv
     message = sys.argv[sys.argv.index("--message") + 1] if "--message" in sys.argv else None
     span = commit_range(sys.argv[sys.argv.index("--range") + 1]) if "--range" in sys.argv else None
-    sources, public_words = term_sources()
+    sources, public_words, waivable = term_sources()
     words = list(sources)
     modules = module_paths()
     if staged:
@@ -540,7 +538,7 @@ def main():
         print("%s:%s: %s" % (f, where, kind))
     if bad:
         print("privacy_check: %d hit(s). Use placeholders (<hub 地址>, me@example.com); see CLAUDE.md." % len(bad), file=sys.stderr)
-        if any(waivable(w, sources) for w in hit):
+        if hit & waivable:
             print("privacy_check: a config value that is an ordinary word and names nobody (a machine id like a room's "
                   "name) can be marked not private with a !<word> line in private-words.txt "
                   "(docs/operations/testing.md, \"Privacy scan\").", file=sys.stderr)

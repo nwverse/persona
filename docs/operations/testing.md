@@ -838,8 +838,8 @@ a key that is not a snake_case word or is itself a private value shows as `*` (`
 (case-insensitive); the hint after the hits appears only when one of them can be taken back this way. The waiver goes by value, so it also covers
 an ssh alias or URL host spelled the same; it only takes back a config value made of ASCII letters. Anything with a dot, digit, hyphen, `@`, `/` or space
 (hosts with a domain, addresses, emails, paths, ids), a word listed plainly in either `private-words.txt`, and the home directory stay private.
-A `!` line that is not ASCII letters only is searched as written, with a warning naming its line, not its value. Every scan that reads these values
-honours the waiver: the hooks, `merge-pr.sh`, `release.sh` and `scripts/release/check_bundle_privacy.py`.
+A `!` line that is not ASCII letters only is searched as written, with a warning naming its line, not its value. The waiver lives where the values are
+read, so every scan that takes them from `privacy_check.py` honours it (the hooks, `merge-pr.sh`, `release.sh`, `scripts/release/check_bundle_privacy.py`).
 **Names blocked on every machine** (#4967): specific vendor and internal-repository names never enter the repo, in any spelling (case, hyphens, underscores, spaces, camel case). Rules live in `BANNED_NAMES` in the script, their only location in the repo.
 CI enforces them without private config. Needed capabilities belong in extensions that supply their own names; the main repo uses generic wording ("relay", "extension-provided IM connector"). Test examples concatenate pieces to avoid matching themselves.
 A word listed only lowercase/uppercase/titlecase isn't matched across an internal lowercase→uppercase camel boundary (`fooBar`): ordinary-word identifiers (tokens/SF Symbols) can accidentally contain sensitive words, falsely blocking repo scans/web `prebuild` (#3819). To block camelcase too, list a boundary-bearing form (`FooBar`).

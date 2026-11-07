@@ -287,8 +287,8 @@ class OrdinaryWordTests(unittest.TestCase):
     WORD = "attic"  # a made-up machine id
     CODE = ['attic := os.Getenv("PERSONA_ATTIC")', "// the attic machine runs the node", "let attic_id = attic"]
 
-    def read(self, read, config, words):
-        """`read()` (pc.terms or pc.term_sources) with only this config and private-words.txt on the machine."""
+    def scan(self, config, words):
+        """pc.term_sources() with only this config and private-words.txt on the machine."""
         with tempfile.TemporaryDirectory(prefix="privacy-check-test-") as temp:
             home = Path(temp)
             directory = home / ".config/persona"
@@ -299,13 +299,13 @@ class OrdinaryWordTests(unittest.TestCase):
             env["XDG_CONFIG_HOME"] = str(home / ".config")
             with patch.object(pc, "HOME", str(home)), patch.object(pc, "ROOT", str(home)), \
                     patch.dict(os.environ, env, clear=True):
-                return read()[0]
-
-    def words(self, config, words=""):
-        return self.read(pc.terms, config, words)
+                return pc.term_sources()
 
     def sources(self, config, words=""):
-        return self.read(pc.term_sources, config, words)
+        return self.scan(config, words)[0]
+
+    def words(self, config, words=""):
+        return list(self.sources(config, words))
 
     def machines(self, *ids):
         return {"hub": {"machine": ids[0]}, "machines": [{"id": i, "ssh": i} for i in ids]}
@@ -347,11 +347,10 @@ class OrdinaryWordTests(unittest.TestCase):
         config["lan_host"] = "attic.lan"
         config["publish"] = {"site_url": "https://attic.lan/privacy"}
         sources = self.sources(config, "attic-team\n")
-        words = list(sources)
         self.assertEqual(sources[self.WORD], ["config hub.machine", "config machines.id", "config machines.ssh"])
         self.assertEqual(sources["attic.lan"], ["config lan_host", "config publish.site_url"])
         self.assertEqual(sources["attic-team"], ["private-words.txt"])
-        home = [w for w in words if w.startswith("/Users/")]
+        home = [w for w in sources if w.startswith("/Users/")]
         self.assertEqual([sources[w] for w in home], [["the home directory"]])
         self.assertEqual(pc.private_kind(self.WORD, sources),
                          "private value (5 chars) from config hub.machine, config machines.id, config machines.ssh")
@@ -378,11 +377,7 @@ class OrdinaryWordTests(unittest.TestCase):
         config = self.machines(self.WORD, "Cellar")
         config["lan_host"] = "attic.lan"
         config["profile"] = "Zorb Share Prod"
-        sources = self.sources(config, "Cellar\n")
-        self.assertTrue(pc.waivable(self.WORD, sources))
-        for value in ["attic.lan", "Zorb Share Prod", "Cellar", "other"]:
-            with self.subTest(value=value):
-                self.assertFalse(pc.waivable(value, sources))
+        self.assertEqual(self.scan(config, "Cellar\n")[2], {self.WORD})
 
 
 class NpmLockTests(unittest.TestCase):
@@ -803,7 +798,7 @@ class GitBatchTests(unittest.TestCase):
 
     def test_main_fails_closed_if_batch_read_fails(self):
         with patch.object(pc, "git_file_data", side_effect=ValueError("broken batch")), \
-                patch.object(pc, "term_sources", return_value=({}, set())), patch.object(pc, "module_paths", return_value=None), \
+                patch.object(pc, "term_sources", return_value=({}, set(), set())), patch.object(pc, "module_paths", return_value=None), \
                 patch.object(pc, "git", return_value=b"one.txt\0"), patch.object(sys, "argv", ["privacy_check", "--staged"]):
             with self.assertRaisesRegex(SystemExit, "scan did not complete"):
                 pc.main()
