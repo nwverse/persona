@@ -42,6 +42,17 @@ import (
 // hub's machine (DeployService, hub.json assistant.mode service) has it in its manager.json (managerconf.Binding). It keeps its state in the hub's Postgres,
 // found as the hub finds it: hub.json's database_url, PERSONA_DATABASE_URL over it.
 func Main(ctx context.Context, build update.Build, stdin io.Reader) error {
+	return MainWith(ctx, build, stdin, MainHooks{})
+}
+
+// MainHooks are what a caller of MainWith gets of the running manager besides.
+type MainHooks struct {
+	// Ready is given the manager's Idle once it is made (before it connects to the hub).
+	Ready func(Idle)
+}
+
+// MainWith is Main with h.
+func MainWith(ctx context.Context, build update.Build, stdin io.Reader, h MainHooks) error {
 	errs := newErrorTee(build) // its log's error lines become error reports (docs/extensions/extensions.md "Error reports")
 	logger := log.New(errs, "assistant: ", log.LstdFlags)
 	cfg, err := readHubConfig()
@@ -114,7 +125,7 @@ func Main(ctx context.Context, build update.Build, stdin io.Reader) error {
 	// itself again): nothing of it runs next to the one that has the token (manager.RunBuiltin waits for a new one).
 	o.Fingerprint, o.StopWhenRevoked, o.TokenFirst = fingerprint, deploy == DeployService, deploy == DeployService
 	o.RotateSecretKey = true
-	o.Logf, o.ExtConfig = logger.Printf, ext
+	o.Logf, o.ExtConfig, o.Ready = logger.Printf, ext, h.Ready
 	// Its own database, its data moved there once (owndb.go); the hub's while that cannot be yet.
 	if o.DatabaseURL, o.OnHubDatabase, err = builtinDatabase(ctx, home, cfg.DatabaseURL, provisionOwn, logger.Printf); err != nil {
 		return err
@@ -240,6 +251,8 @@ type runOptions struct {
 	// of its own (a version from before this mode), or bound another service.
 	TokenFirst bool
 	Logf       func(format string, args ...any)
+	// Ready is given the manager's Idle once its service is made (MainHooks.Ready); nil: nobody asks.
+	Ready func(Idle)
 	// Errors is the process's log writer that reports its error lines (newErrorTee); nil: run makes one.
 	Errors *errorTee
 }
@@ -396,6 +409,9 @@ func run(ctx context.Context, build update.Build, o runOptions) error {
 		KB: &KBOptions{Dir: o.KBDir, KeyDir: o.HandlesDir}, SecretKey: o.SecretKey,
 		Trust: devs, ID: o.ID})
 	svc.SetExtensions(ext) // the connectors', Cua's and ego's tools, in this process (fleet_tools.go)
+	if o.Ready != nil {
+		o.Ready(func(ctx context.Context) (bool, string) { return managerIdle(ctx, bh, svc) })
+	}
 	logf("connecting to %s as %s", hub, o.ID)
 	done := make(chan struct{})
 	go func() {

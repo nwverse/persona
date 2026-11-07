@@ -574,8 +574,8 @@ func (e *env) runManager(ctx context.Context, build update.Build, dir string) er
 // refuses its token (bound again, or a hub that starts the built-in manager itself again: assistant.mode child, a
 // version from before the split) nothing of it runs until manager.json has another token or the hub takes this one
 // again (awaitRestart), so it never runs next to the one that has the token; then it starts again in place. It also
-// starts again in place when the file it runs from is replaced (watchBinary): nothing else restarts its service after
-// an update.
+// starts again in place on a new file where it runs from, one that runs, once it is idle (binaryWatch): nothing else
+// restarts its service after an update.
 func RunBuiltin(ctx context.Context, build update.Build, out io.Writer) error {
 	env := os.Environ()
 	home := dataDir()
@@ -590,28 +590,39 @@ func RunBuiltin(ctx context.Context, build update.Build, out io.Writer) error {
 		}
 		return err
 	}
-	exe, start, watch := runningBinary()
+	watch := newBinaryWatch(out)
 	for {
 		before, err := managerconf.ReadBinding(home)
 		if err != nil { // not bound, or a manager.json that does not read: restarting cannot fix it (exit 2)
 			return ConfigError{err}
 		}
-		// A new binary (an update): it stops and starts again on that one, as the hub's child would with the hub.
+		// A new binary (an update): once it runs and nothing is going on, it stops and starts again on that one, as
+		// the hub's child would with the hub (watchBinary).
 		run, stop := context.WithCancel(ctx)
-		var replaced atomic.Bool
-		if watch {
-			go watchBinary(run, exe, start, func() { replaced.Store(true); stop() })
-		}
-		err = runAssistant(run, build, nil)
-		stop()
-		if replaced.Load() && ctx.Err() == nil {
-			fmt.Fprintf(out, "assistant: %s was replaced (an update): starting again on the new one\n", exe)
-			if restart != nil {
-				if err := restart(env); err != nil { // its service starts it again
-					return fmt.Errorf("could not start again on the new %s: %w", exe, err)
+		var idle atomic.Pointer[assistant.Idle]
+		var renew atomic.Bool
+		watched := make(chan struct{})
+		if watch != nil {
+			go func() {
+				defer close(watched)
+				if watch.next(run, func() assistant.Idle {
+					if p := idle.Load(); p != nil {
+						return *p
+					}
+					return nil
+				}) {
+					renew.Store(true)
+					stop()
 				}
-			}
-			exe, start, watch = runningBinary()
+			}()
+		} else {
+			close(watched)
+		}
+		err = runAssistant(run, build, nil, assistant.MainHooks{Ready: func(p assistant.Idle) { idle.Store(&p) }})
+		stop()
+		<-watched
+		if renew.Load() && ctx.Err() == nil {
+			watch.restartOnNew(ctx, env) // returns when it did not: the manager runs again on this code
 			continue
 		}
 		if errors.Is(err, managerconf.ErrNotBound) {
@@ -636,7 +647,7 @@ func RunBuiltin(ctx context.Context, build update.Build, out io.Writer) error {
 }
 
 // runAssistant is the built-in manager itself (tests: a stand-in).
-var runAssistant = assistant.Main
+var runAssistant = assistant.MainWith
 
 // builtinLock is the file in the built-in manager's directory its own service holds a lock on while it runs.
 const builtinLock = ".service.lock"

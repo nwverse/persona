@@ -8,6 +8,7 @@ import (
 	"html"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -351,9 +352,17 @@ func (e *env) builtinStatus(ctx context.Context, always bool) {
 
 // --- a new binary ---------------------------------------------------------------------------------------------------
 
-// binaryCheck is how often the built-in manager's service looks at the file it runs from: an update puts a new one
-// there (the hub's self-update swaps it with the hub's), and nothing else restarts this service.
-var binaryCheck = time.Minute
+// The built-in manager's service starts again in place on a new binary (RunBuiltin): an update puts one where it runs
+// from (the hub's self-update swaps it with the hub's), and nothing else restarts this service. It does so only with
+// a binary that runs (checkBinary) and once nothing is going on (assistant.Idle), waiting idleMost at most. A new file
+// that does not run, or that it cannot start on, is not tried again: it goes on with the code it runs until another
+// file is there.
+var (
+	binaryCheck = time.Minute      // how often it looks at the file
+	idleCheck   = 10 * time.Second // how often it asks whether it is idle, once a new binary passed its check
+	idleMost    = 30 * time.Minute // then it starts again anyway, and says so
+	versionWait = 30 * time.Second // how long the new binary's `version -v` may take
+)
 
 // runningBinary is the file this process runs from and what it was when looked at; ok false when it cannot tell.
 var runningBinary = func() (path string, fi os.FileInfo, ok bool) {
@@ -371,29 +380,133 @@ var runningBinary = func() (path string, fi os.FileInfo, ok bool) {
 	return exe, fi, true
 }
 
-// binaryReplaced: the file at path is not the one start was any more (another file put there, or this one written
-// over). One that is not there right now is not taken for replaced yet.
-func binaryReplaced(path string, start os.FileInfo) bool {
-	fi, err := os.Stat(path)
-	if err != nil {
-		return false
-	}
-	return !os.SameFile(fi, start) || !fi.ModTime().Equal(start.ModTime()) || fi.Size() != start.Size()
+// sameFile: a and b are the same file, as it was (written over in place, it is not).
+func sameFile(a, b os.FileInfo) bool {
+	return a != nil && b != nil && os.SameFile(a, b) && a.ModTime().Equal(b.ModTime()) && a.Size() == b.Size()
 }
 
-// watchBinary calls replaced (once) when the file at path is replaced, until ctx is done.
-func watchBinary(ctx context.Context, path string, start os.FileInfo, replaced func()) {
+// checkBinary: the file at path runs: an executable regular file whose `version -v` answers (exit 0, something
+// said) within versionWait.
+var checkBinary = func(ctx context.Context, path string) error {
+	fi, err := os.Stat(path)
+	if err != nil {
+		return err
+	}
+	if !fi.Mode().IsRegular() || fi.Mode().Perm()&0o111 == 0 {
+		return fmt.Errorf("%s is not an executable file", path)
+	}
+	ctx, cancel := context.WithTimeout(ctx, versionWait)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, path, "version", "-v")
+	cmd.WaitDelay = time.Second
+	b, err := cmd.Output()
+	if err != nil {
+		return fmt.Errorf("%s version -v: %w", path, err)
+	}
+	if strings.TrimSpace(string(b)) == "" {
+		return fmt.Errorf("%s version -v said nothing", path)
+	}
+	return nil
+}
+
+// binaryWatch follows the file the built-in manager's service runs from.
+type binaryWatch struct {
+	path string
+	// seen is the file there last looked at that needs no restart: the one at start, or one that did not run or that
+	// it could not start on (not tried again).
+	seen os.FileInfo
+	out  io.Writer
+}
+
+// newBinaryWatch follows the file this process runs from; nil when it cannot tell which.
+func newBinaryWatch(out io.Writer) *binaryWatch {
+	path, fi, ok := runningBinary()
+	if !ok {
+		return nil
+	}
+	return &binaryWatch{path: path, seen: fi, out: out}
+}
+
+// next returns once another file is there that runs and the manager is idle (idle gives its Idle, nil while it has
+// none yet), or idleMost passed: true then. False when ctx ends first.
+func (w *binaryWatch) next(ctx context.Context, idle func() assistant.Idle) bool {
 	t := time.NewTicker(binaryCheck)
 	defer t.Stop()
 	for {
 		select {
 		case <-ctx.Done():
-			return
+			return false
 		case <-t.C:
-			if binaryReplaced(path, start) {
-				replaced()
-				return
-			}
 		}
+		fi, err := os.Stat(w.path)
+		if err != nil || sameFile(fi, w.seen) {
+			continue
+		}
+		if err := checkBinary(ctx, w.path); err != nil {
+			if ctx.Err() != nil {
+				return false
+			}
+			fmt.Fprintf(w.out, "assistant: %s was replaced, but the new one does not run (%v): going on with this one until "+
+				"it is replaced again\n", w.path, err)
+			w.seen = fi
+			continue
+		}
+		fmt.Fprintf(w.out, "assistant: %s was replaced (an update): starting again on the new one once nothing is going on "+
+			"(at most %s from now)\n", w.path, idleMost)
+		return w.waitIdle(ctx, idle)
+	}
+}
+
+// waitIdle returns true once the manager is idle or idleMost passed (saying so), false when ctx ends first.
+func (w *binaryWatch) waitIdle(ctx context.Context, idle func() assistant.Idle) bool {
+	deadline := time.Now().Add(idleMost)
+	said := ""
+	for {
+		why := "it is not running yet"
+		if p := idle(); p != nil {
+			ok, busy := p(ctx)
+			if ok {
+				return true
+			}
+			why = busy
+		}
+		if ctx.Err() != nil {
+			return false
+		}
+		if !time.Now().Before(deadline) {
+			fmt.Fprintf(w.out, "assistant: still not idle after %s (%s): starting again on the new binary anyway\n", idleMost, why)
+			return true
+		}
+		if why != said {
+			fmt.Fprintf(w.out, "assistant: waiting to start again on the new binary: %s\n", why)
+			said = why
+		}
+		select {
+		case <-ctx.Done():
+			return false
+		case <-time.After(idleCheck):
+		}
+	}
+}
+
+// restartOnNew starts this process again in place on the new file (the manager stopped). It checks the file once
+// more first; a file that does not run then, or an exec that fails, leaves it running the code it has (RunBuiltin
+// runs the manager again), and that file is not tried again. Tests (restart nil): as though it had started again.
+func (w *binaryWatch) restartOnNew(ctx context.Context, env []string) {
+	fi, _ := os.Stat(w.path)
+	if err := checkBinary(ctx, w.path); err != nil {
+		fmt.Fprintf(w.out, "assistant: the new %s does not run any more (%v): going on with this one\n", w.path, err)
+		w.seen = fi
+		return
+	}
+	fmt.Fprintf(w.out, "assistant: starting again on the new %s\n", w.path)
+	if restart == nil {
+		w.seen = fi
+		return
+	}
+	if err := restart(env); err != nil {
+		fmt.Fprintf(w.out, "assistant: could not start again on the new %s (%v): going on with this one until it is "+
+			"replaced again\n", w.path, err)
+		w.seen = fi
 	}
 }

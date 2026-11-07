@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -11,6 +12,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -225,87 +227,249 @@ func TestJoinBuiltinInstall(t *testing.T) {
 	}
 }
 
-// The built-in manager's service starts again in place when the file it runs from is replaced (an update), and says
-// so; when that cannot be done in place, it stops so that its service starts it again.
-func TestBuiltinRestartsOnANewBinary(t *testing.T) {
-	defer func(c time.Duration, r func([]string) error, b func() (string, os.FileInfo, bool), a func(context.Context, update.Build, io.Reader) error) {
-		binaryCheck, restart, runningBinary, runAssistant = c, r, b, a
-	}(binaryCheck, restart, runningBinary, runAssistant)
-	binaryCheck = 10 * time.Millisecond
-	// bound, and running from a file of its own
-	prepare := func(t *testing.T) (replace func()) {
-		home := isolate(t)
-		if err := managerconf.WriteBinding(filepath.Join(home, ".persona"), managerconf.Binding{Hub: "http://127.0.0.1:1", Token: "t"}); err != nil {
-			t.Fatal(err)
+// newBinaryEnv runs RunBuiltin's watch fast in a test: bound, running from a file of its own (bin) that answers
+// `version -v`, the manager a stand-in (main), restart counted (exec fails with execErr, else as though it started
+// again). It returns bin; write puts a new file there as an update does (renamed over it).
+func newBinaryEnv(t *testing.T, execErr error) (bin string, write func(script string, mode os.FileMode), restarts *atomic.Int64) {
+	t.Helper()
+	home := isolate(t)
+	if err := managerconf.WriteBinding(filepath.Join(home, ".persona"), managerconf.Binding{Hub: "http://127.0.0.1:1", Token: "t"}); err != nil {
+		t.Fatal(err)
+	}
+	type saved struct {
+		check, idle, most time.Duration
+		restart           func([]string) error
+		running           func() (string, os.FileInfo, bool)
+		main              func(context.Context, update.Build, io.Reader, assistant.MainHooks) error
+	}
+	old := saved{binaryCheck, idleCheck, idleMost, restart, runningBinary, runAssistant}
+	t.Cleanup(func() {
+		binaryCheck, idleCheck, idleMost, restart, runningBinary, runAssistant = old.check, old.idle, old.most, old.restart, old.running, old.main
+	})
+	binaryCheck, idleCheck = 5*time.Millisecond, 5*time.Millisecond
+	bin = filepath.Join(home, "personad")
+	n := 0
+	write = func(script string, mode os.FileMode) {
+		n++
+		tmp := fmt.Sprintf("%s.new%d", bin, n)
+		if err := os.WriteFile(tmp, []byte(script), mode); err != nil {
+			t.Error(err)
 		}
-		bin := filepath.Join(home, "personad")
-		if err := os.WriteFile(bin, []byte("old"), 0o755); err != nil {
-			t.Fatal(err)
-		}
-		runningBinary = func() (string, os.FileInfo, bool) {
-			fi, err := os.Stat(bin)
-			return bin, fi, err == nil
-		}
-		return func() { // as update.Swap does: a new file renamed over it
-			if err := os.WriteFile(bin+".new", []byte("new build"), 0o755); err != nil {
-				t.Error(err)
-			}
-			if err := os.Rename(bin+".new", bin); err != nil {
-				t.Error(err)
-			}
+		if err := os.Rename(tmp, bin); err != nil {
+			t.Error(err)
 		}
 	}
+	write(goodBinary, 0o755)
+	runningBinary = func() (string, os.FileInfo, bool) {
+		fi, err := os.Stat(bin)
+		return bin, fi, err == nil
+	}
+	restarts = &atomic.Int64{}
+	restart = func([]string) error {
+		restarts.Add(1)
+		if execErr != nil {
+			return execErr
+		}
+		cancelAfterRestart() // as though this process were another now: the test's RunBuiltin ends
+		return nil
+	}
+	return bin, write, restarts
+}
 
-	t.Run("in place", func(t *testing.T) {
-		replace := prepare(t)
-		restart = nil // tests: run again in this process
-		ctx, cancel := context.WithCancel(context.Background())
-		defer cancel()
-		runs := 0
-		runAssistant = func(run context.Context, _ update.Build, _ io.Reader) error {
-			runs++
-			if runs == 1 {
-				replace()
-				select {
-				case <-run.Done():
-					return run.Err()
-				case <-time.After(5 * time.Second):
-					return errors.New("not stopped for the new binary")
-				}
-			}
+// cancelAfterRestart ends the RunBuiltin of a test whose restart "worked" (set by runBuiltin).
+var cancelAfterRestart = func() {}
+
+const goodBinary = "#!/bin/sh\necho personad test\n"
+
+// runBuiltin runs RunBuiltin until done is closed (or a restart worked), with main standing in for the manager:
+// it is given the idle the manager would give, and runs until its context ends. It returns the output, how many
+// times the manager ran, and RunBuiltin's error.
+func runBuiltin(t *testing.T, idle assistant.Idle, during func(run int), done <-chan struct{}) (string, int, error) {
+	t.Helper()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	cancelAfterRestart = cancel
+	t.Cleanup(func() { cancelAfterRestart = func() {} })
+	go func() {
+		select {
+		case <-done:
 			cancel()
+		case <-ctx.Done():
+		}
+	}()
+	var runs atomic.Int64
+	runAssistant = func(run context.Context, _ update.Build, _ io.Reader, h assistant.MainHooks) error {
+		if run.Err() != nil { // after a restart that "worked": this process would be another one by now
 			return nil
 		}
-		var out strings.Builder
-		if err := RunBuiltin(ctx, update.Build{}, &out); err != nil || runs != 2 || !strings.Contains(out.String(), "was replaced") {
-			t.Fatalf("err %v, runs %d\n%s", err, runs, out.String())
+		n := int(runs.Add(1))
+		if h.Ready != nil {
+			h.Ready(idle)
 		}
-	})
-	t.Run("not in place", func(t *testing.T) {
-		replace := prepare(t)
-		restart = func([]string) error { return errors.New("no exec") }
-		runAssistant = func(run context.Context, _ update.Build, _ io.Reader) error {
-			replace()
-			<-run.Done()
-			return run.Err()
+		if during != nil {
+			go during(n)
 		}
-		if err := RunBuiltin(context.Background(), update.Build{}, &strings.Builder{}); err == nil || !strings.Contains(err.Error(), "no exec") {
-			t.Fatalf("err %v", err)
+		<-run.Done()
+		return nil
+	}
+	var out syncBuffer
+	err := RunBuiltin(ctx, update.Build{}, &out)
+	return out.String(), int(runs.Load()), err
+}
+
+// syncBuffer is a strings.Builder for writers on several goroutines.
+type syncBuffer struct {
+	mu sync.Mutex
+	b  strings.Builder
+}
+
+func (s *syncBuffer) Write(p []byte) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.b.Write(p)
+}
+
+func (s *syncBuffer) String() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.b.String()
+}
+
+// waitFor polls cond for up to 5 seconds.
+func waitFor(t *testing.T, what string, cond func() bool) {
+	t.Helper()
+	for deadline := time.Now().Add(5 * time.Second); time.Now().Before(deadline); time.Sleep(5 * time.Millisecond) {
+		if cond() {
+			return
 		}
-	})
-	t.Run("the same file", func(t *testing.T) {
-		prepare(t)
-		ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
-		defer cancel()
-		runAssistant = func(run context.Context, _ update.Build, _ io.Reader) error {
-			<-run.Done()
-			return nil
+	}
+	t.Fatalf("timed out waiting for %s", what)
+}
+
+// (a) A new binary that runs: the manager starts again on it only once it is idle, saying what it waits for.
+func TestBuiltinNewBinaryWaitsForIdle(t *testing.T) {
+	_, write, restarts := newBinaryEnv(t, nil)
+	var busy atomic.Bool
+	busy.Store(true)
+	idle := func(context.Context) (bool, string) {
+		if busy.Load() {
+			return false, "its conversation c1 is on a turn"
 		}
-		var out strings.Builder
-		if err := RunBuiltin(ctx, update.Build{}, &out); err != nil || strings.Contains(out.String(), "replaced") {
-			t.Fatalf("err %v\n%s", err, out.String())
+		return true, ""
+	}
+	out, _, err := runBuiltin(t, idle, func(run int) {
+		write(goodBinary+"# new\n", 0o755)
+		time.Sleep(150 * time.Millisecond)
+		if restarts.Load() != 0 {
+			t.Error("started again while busy")
 		}
-	})
+		busy.Store(false)
+	}, nil)
+	if err != nil || restarts.Load() != 1 || !strings.Contains(out, "waiting to start again on the new binary: its conversation c1 is on a turn") ||
+		!strings.Contains(out, "starting again on the new") {
+		t.Fatalf("err %v, restarts %d\n%s", err, restarts.Load(), out)
+	}
+}
+
+// (a) Busy for longer than idleMost: it starts again anyway, and says so.
+func TestBuiltinNewBinaryIdleBound(t *testing.T) {
+	_, write, restarts := newBinaryEnv(t, nil)
+	idleMost = 50 * time.Millisecond
+	out, _, err := runBuiltin(t, func(context.Context) (bool, string) { return false, "answering 1 request(s) of the hub's" },
+		func(int) { write(goodBinary+"# new\n", 0o755) }, nil)
+	if err != nil || restarts.Load() != 1 || !strings.Contains(out, "still not idle after 50ms (answering 1 request(s) of the hub's): starting again on the new binary anyway") {
+		t.Fatalf("err %v, restarts %d\n%s", err, restarts.Load(), out)
+	}
+}
+
+// (b), (c) A new file that does not run (not executable, or `version -v` failing) is checked once and not started
+// on: the manager goes on with its code until another file is there; one that runs then is.
+func TestBuiltinNewBinaryMustRun(t *testing.T) {
+	bin, write, restarts := newBinaryEnv(t, nil)
+	counter := bin + ".checks"
+	failing := "#!/bin/sh\necho x >> '" + counter + "'\nexit 1\n"
+	checks := func() int {
+		b, _ := os.ReadFile(counter)
+		return strings.Count(string(b), "x")
+	}
+	done, started := make(chan struct{}), make(chan struct{})
+	var out string
+	var err error
+	go func() {
+		defer close(done)
+		out, _, err = runBuiltin(t, func(context.Context) (bool, string) { return true, "" }, func(run int) {
+			if run == 1 {
+				close(started)
+			}
+		}, nil)
+	}()
+	<-started // watching the file there at start
+	write(goodBinary+"# not executable\n", 0o644)
+	time.Sleep(100 * time.Millisecond)
+	write(failing, 0o755)
+	waitFor(t, "the failing binary checked", func() bool { return checks() >= 1 })
+	time.Sleep(150 * time.Millisecond) // many more looks: still checked once
+	if n := checks(); n != 1 || restarts.Load() != 0 {
+		t.Fatalf("checked %d times, restarts %d", n, restarts.Load())
+	}
+	write(goodBinary+"# good\n", 0o755)
+	<-done
+	if err != nil || restarts.Load() != 1 || strings.Count(out, "does not run") != 2 || !strings.Contains(out, "is not an executable file") {
+		t.Fatalf("err %v, restarts %d\n%s", err, restarts.Load(), out)
+	}
+}
+
+// (b), (c) An exec that fails leaves the manager running the code it has (it runs again in this process), and that
+// file is not tried again; another one is.
+func TestBuiltinExecFails(t *testing.T) {
+	_, write, restarts := newBinaryEnv(t, errors.New("no exec here"))
+	release := make(chan struct{})
+	out, runs, err := runBuiltin(t, func(context.Context) (bool, string) { return true, "" }, func(run int) {
+		switch run {
+		case 1:
+			write(goodBinary+"# new\n", 0o755)
+		case 2: // the old code runs again: the same file is not tried again
+			time.Sleep(150 * time.Millisecond)
+			if restarts.Load() != 1 {
+				t.Errorf("restarts %d", restarts.Load())
+			}
+			write(goodBinary+"# newer\n", 0o755)
+		case 3:
+			close(release)
+		}
+	}, release)
+	if err != nil || runs != 3 || restarts.Load() != 2 || strings.Count(out, "could not start again on the new") != 2 ||
+		!strings.Contains(out, "going on with this one until it is replaced again") {
+		t.Fatalf("err %v, runs %d, restarts %d\n%s", err, runs, restarts.Load(), out)
+	}
+}
+
+// (c) The file there at start is never started on, whatever it is (one that does not answer is not checked again
+// and again); nor is one written over the same bytes the way it was.
+func TestBuiltinBinaryAtStartNotTried(t *testing.T) {
+	bin, write, restarts := newBinaryEnv(t, nil)
+	counter := bin + ".checks"
+	write("#!/bin/sh\necho x >> '"+counter+"'\nexit 1\n", 0o755)
+	release := make(chan struct{})
+	time.AfterFunc(200*time.Millisecond, func() { close(release) })
+	out, runs, err := runBuiltin(t, func(context.Context) (bool, string) { return true, "" }, nil, release)
+	if b, _ := os.ReadFile(counter); err != nil || runs != 1 || restarts.Load() != 0 || len(b) != 0 || strings.Contains(out, "replaced") {
+		t.Fatalf("err %v, runs %d, restarts %d, checks %q\n%s", err, runs, restarts.Load(), b, out)
+	}
+}
+
+// Stopped while it waits for idle: no restart.
+func TestBuiltinStopsWhileWaitingForIdle(t *testing.T) {
+	_, write, restarts := newBinaryEnv(t, nil)
+	release := make(chan struct{})
+	out, _, err := runBuiltin(t, func(context.Context) (bool, string) { return false, "busy" }, func(int) {
+		write(goodBinary+"# new\n", 0o755)
+		time.Sleep(100 * time.Millisecond)
+		close(release)
+	}, release)
+	if err != nil || restarts.Load() != 0 || !strings.Contains(out, "waiting to start again") {
+		t.Fatalf("err %v, restarts %d\n%s", err, restarts.Load(), out)
+	}
 }
 
 // The command lines the hub's setup runs are the ones install --builtin parses, through Main's dispatch.
