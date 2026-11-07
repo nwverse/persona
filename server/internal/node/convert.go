@@ -62,7 +62,7 @@ func (n *Node) convertFile(ctx context.Context, p proto.FileConvertRequest) (*pr
 	// converted copies are kept, named by the file and its version, so opening it again is instant
 	dir, err := privateCacheDir("convert")
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("conversion cache: %w", err)
 	}
 	sum := sha256.Sum256([]byte(path + "\x00" + fileRevision(st)))
 	out := filepath.Join(dir, hex.EncodeToString(sum[:12])+".pdf")
@@ -76,7 +76,7 @@ func (n *Node) convertFile(ctx context.Context, p proto.FileConvertRequest) (*pr
 	converting.Lock()
 	defer converting.Unlock()
 	pruneConverted(dir)
-	work, err := os.MkdirTemp("", "persona-convert-")
+	work, err := os.MkdirTemp("", "persona-soffice-")
 	if err != nil {
 		return nil, err
 	}

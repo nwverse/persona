@@ -165,12 +165,7 @@ func convertFixture(t *testing.T) (n *Node, req proto.FileConvertRequest, calls 
 // blobFixture is a repository with one committed PDF, and the request for its version at HEAD.
 func blobFixture(t *testing.T) (*Node, proto.GitBlobRequest) {
 	t.Helper()
-	t.Setenv("GIT_CONFIG_GLOBAL", os.DevNull)
-	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
-	t.Setenv("GIT_AUTHOR_NAME", "Sample Dev")
-	t.Setenv("GIT_AUTHOR_EMAIL", "dev@example.com")
-	t.Setenv("GIT_COMMITTER_NAME", "Sample Dev")
-	t.Setenv("GIT_COMMITTER_EMAIL", "dev@example.com")
+	gitEnv(t)
 	repo := t.TempDir()
 	runPullGit(t, repo, "init", "--initial-branch=main", repo)
 	if err := os.WriteFile(filepath.Join(repo, "spec.pdf"), []byte("%PDF-1.4 committed"), 0o600); err != nil {

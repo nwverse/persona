@@ -62,7 +62,7 @@ func (n *Node) gitBlob(ctx context.Context, p proto.GitBlobRequest) (*proto.GitB
 	}
 	cache, err := privateCacheDir("blobs")
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("version cache: %w", err)
 	}
 	// named by the blob's id (content-addressed: never stale) and the file's extension, which the viewers go by
 	out := filepath.Join(cache, sha+strings.ToLower(filepath.Ext(path)))
