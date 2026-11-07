@@ -120,21 +120,14 @@ func Attach(ctx context.Context, newNode func() (*Node, error), extra <-chan net
 	relayed := make(chan net.Conn)
 	go func() {
 		defer close(relayed)
-		for {
-			c, err := ln.Accept()
-			if err != nil {
-				if ctx.Err() != nil || errors.Is(err, net.ErrClosed) {
-					return
-				}
-				continue
-			}
+		logf := func(f string, a ...any) { fmt.Fprintf(os.Stderr, "node: "+f+"\n", a...) }
+		acceptLoop(ctx, ln, logf, func(c net.Conn) {
 			select {
 			case relayed <- c:
-			case <-ctx.Done():
+			case <-ctx.Done(): // ctx closes ln too, which ends the loop
 				c.Close()
-				return
 			}
-		}
+		})
 	}()
 
 	keeper := newAssistantKeeper()
