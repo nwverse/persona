@@ -245,6 +245,10 @@ struct ViewedImageThumb: View {
     @Environment(\.displayScale) private var displayScale
     @Environment(\.dynamicTypeSize) private var typeSize
     @State private var picture: UIImage?
+    /// The last load gave no picture. Only one with a payload says so (`ImageNotLoaded`); a file's keeps its symbol.
+    @State private var failed = false
+    /// Bumped by a tap on the retry: loads again (the loader keeps no failures).
+    @State private var attempt = 0
 
     /// The long edge to decode to, in points: the picture fitted in it still fills the widest or the narrowest tile.
     private var side: CGFloat { height * Theme.sizeScale(typeSize) * 1.6 }
@@ -256,6 +260,12 @@ struct ViewedImageThumb: View {
             Theme.Fill.well
             if let picture = picture ?? cached {
                 Image(uiImage: picture).resizable().scaledToFill()
+            } else if failed, let p = image.payload {
+                // Only a payload's failure is said: a file's thumbnail that did not come keeps its symbol
+                // (`FileThumbnails` keeps that failure for the session, a retry would not ask again).
+                ImageNotLoaded(retry: p.ref == nil ? nil : { attempt += 1 })
+            } else if attempt > 0 { // a retry running: the tap shows it was taken
+                ProgressView().controlSize(.small).frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
                 Image(systemName: symbol).font(Theme.Font.secondary).foregroundStyle(.tertiary)
             }
@@ -264,7 +274,8 @@ struct ViewedImageThumb: View {
         .clipShape(shape)
         .overlay(shape.stroke(Theme.cardStroke, lineWidth: Theme.Size.hairline))
         .overlay(alignment: .bottomLeading) {
-            if badge, image.source == .screenshot || image.source == .browser {
+            // Not over the not-loaded placeholder on a small tile.
+            if badge, !showsNotLoaded, image.source == .screenshot || image.source == .browser {
                 Image(systemName: symbol)
                     .font(Theme.Font.labelStrong)
                     .foregroundStyle(.white)
@@ -275,8 +286,16 @@ struct ViewedImageThumb: View {
             }
         }
         .animation(Theme.Motion.state, value: picture != nil)
-        .task(id: image.id) { picture = await load() }
+        .task(id: "\(image.id)#\(attempt)") {
+            if failed { failed = false }
+            let loaded = await load()
+            picture = loaded
+            if loaded == nil, !Task.isCancelled { failed = true }
+        }
     }
+
+    /// The tile shows `ImageNotLoaded`: no picture, and its payload's load failed.
+    private var showsNotLoaded: Bool { failed && image.payload != nil && picture == nil && cached == nil }
 
     private var symbol: String {
         switch image.source {

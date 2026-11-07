@@ -1116,31 +1116,8 @@ struct Base64Image: View {
 
     /// Said on the placeholder when the picture did not come. One fetched from the hub (`ref`) loads again on a tap;
     /// bytes already here that do not decode would only fail again.
-    @ViewBuilder private var notLoaded: some View {
-        if payload.ref != nil {
-            Button { attempt += 1 } label: {
-                // A portrait screenshot's placeholder is narrow: the sentence, else Retry, else the symbol alone.
-                ViewThatFits(in: .horizontal) {
-                    Label("Image didn't load. Tap to retry", systemImage: Theme.Icon.retry)
-                    Label("Retry [Components b8784c]", systemImage: Theme.Icon.retry)
-                    Image(systemName: Theme.Icon.retry)
-                }
-                .font(Theme.Font.label)
-                .foregroundStyle(.secondary)
-                .lineLimit(1)
-                .padding(.horizontal, Theme.Space.s)
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .contentShape(.rect)
-            }
-            .buttonStyle(.plain)
-            .accessibilityLabel("Image didn't load. Tap to retry")
-        } else {
-            Label("Can't show this image", systemImage: Theme.Icon.error)
-                .font(Theme.Font.label)
-                .foregroundStyle(.secondary)
-                .lineLimit(1)
-                .padding(.horizontal, Theme.Space.s)
-        }
+    private var notLoaded: some View {
+        ImageNotLoaded(retry: payload.ref == nil ? nil : { attempt += 1 })
     }
 
     /// In a chat the page shows the viewer (`viewImages`); elsewhere this view does.

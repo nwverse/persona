@@ -91,17 +91,70 @@ struct ChatThumbnail: View {
     var payload: ImagePayload
     var side: CGFloat = 360
     @State private var image: UIImage?
+    /// The last load gave no picture: the square says so instead of staying blank.
+    @State private var failed = false
+    /// Bumped by a tap on the retry: loads again (the loader keeps no failures).
+    @State private var attempt = 0
 
     var body: some View {
         Group {
             if let img = image ?? ChatImageLoader.cached(payload, side: side) {
                 Image(uiImage: img).resizable().scaledToFill()
+            } else if failed {
+                ImageNotLoaded(retry: payload.ref == nil ? nil : { attempt += 1 })
+            } else if attempt > 0 { // a retry running: the tap shows it was taken
+                ProgressView().controlSize(.small).frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
                 Color.clear
             }
         }
-        .task(id: payload.identity) {
-            if image == nil { image = await ChatImageLoader.image(payload, side: side) }
+        .task(id: "\(payload.identity)#\(attempt)") {
+            guard image == nil else { return }
+            if failed { failed = false }
+            let loaded = await ChatImageLoader.image(payload, side: side)
+            image = loaded
+            if loaded == nil, !Task.isCancelled { failed = true }
+        }
+    }
+}
+
+/// Said on an image's placeholder when its picture did not come (`Base64Image`, `ChatThumbnail`, `ViewedImageThumb`).
+/// `retry` loads it again on a tap (one fetched from the hub); nil when that would only fail again (bytes already here
+/// that do not decode).
+struct ImageNotLoaded: View {
+    var retry: (() -> Void)?
+
+    var body: some View {
+        if let retry {
+            Button(action: retry) {
+                // A narrow placeholder (a portrait screenshot, a small photo): the sentence, else Retry, else the
+                // symbol alone.
+                ViewThatFits(in: .horizontal) {
+                    Label("Image didn't load. Tap to retry", systemImage: Theme.Icon.retry)
+                    Label("Retry [Components b8784c]", systemImage: Theme.Icon.retry)
+                    Image(systemName: Theme.Icon.retry)
+                }
+                .font(Theme.Font.label)
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .padding(.horizontal, Theme.Space.s)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .contentShape(.rect)
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Image didn't load. Tap to retry")
+        } else {
+            ViewThatFits(in: .horizontal) {
+                Label("Can't show this image", systemImage: Theme.Icon.error)
+                Image(systemName: Theme.Icon.error)
+            }
+            .font(Theme.Font.label)
+            .foregroundStyle(.secondary)
+            .lineLimit(1)
+            .padding(.horizontal, Theme.Space.s)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel("Can't show this image")
         }
     }
 }
