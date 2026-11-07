@@ -59,10 +59,6 @@ Pitfalls, odd behavior and the trade-offs made at the time (formerly in `CLAUDE.
 
 ## Hosted CI path aggregation
 
-- Enabling Actions does not bypass native PR path filters (#1124): the first license-only PR triggered CI and the issue-link check,
-  but not image smoke. Include the root license and both README paths when those changes must exercise image smoke, and keep PR
-  publishing disabled. Confirm a real `pull_request` run; manual dispatch also publishes and is not a smoke-only substitute.
-
 - Native workflow-level PR path filters leave individually required checks pending when no run is created. Keep one always-triggered
   orchestrator, put filters in a tested selector, call platform workflows through `workflow_call`, and require only its final aggregate.
   The aggregate must verify that every selected workflow succeeded; accepting all `skipped` results can hide an upstream guard failure.
