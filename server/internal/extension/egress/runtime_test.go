@@ -129,7 +129,7 @@ func TestRuntimeIdleSocketsAreBoundedAndRevoked(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer p.Close()
-	dir := t.TempDir()
+	dir := shortTempDir(t)
 	p.Register("a", Rule{})
 	p.Register("b", Rule{})
 	for _, id := range []string{"a", "b"} {
@@ -211,7 +211,7 @@ func TestRuntimeListenerRejectsRawProxyRequests(t *testing.T) {
 	p := &Proxy{}
 	p.Register("a", Rule{Hosts: []string{"api.example.com"}})
 	defer p.Close()
-	socket := filepath.Join(t.TempDir(), "proxy.sock")
+	socket := filepath.Join(shortTempDir(t), "proxy.sock")
 	if err := p.ListenRuntimeUnix("a", socket); err != nil {
 		t.Fatal(err)
 	}
@@ -247,7 +247,7 @@ func TestRuntimeRejectedRequestDoesNotWaitForBody(t *testing.T) {
 	p := &Proxy{}
 	p.Register("a", Rule{})
 	defer p.Close()
-	socket := filepath.Join(t.TempDir(), "proxy.sock")
+	socket := filepath.Join(shortTempDir(t), "proxy.sock")
 	if err := p.ListenRuntimeUnix("a", socket); err != nil {
 		t.Fatal(err)
 	}

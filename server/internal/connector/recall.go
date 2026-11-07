@@ -13,6 +13,7 @@ type SentMessage struct {
 	Action string          // the tool that wrote it (Sent.Action)
 	Ref    string          // its id on the other side (Sent.MessageRef), never empty
 	Target json.RawMessage // where it went, as the ledger row has it (GitHub's {"ref": "owner/name#12"})
+	At     time.Time       // when the ledger row was written, after the send: what a connector with a limit of its own counts from
 }
 
 // What Recall wraps (errors.Is) to say why it did not take the message back; an error that wraps none of them is the
@@ -30,8 +31,9 @@ var (
 )
 
 // Recaller is an Actions that can also take back a message one of its writes made (docs/extensions/connectors.md "Sent as the
-// user"). Like RefActions it is not a capability: nothing is declared and Check does not look for it, the hub finds it
-// with RecallerOf. A connector without it has nothing to recall.
+// user"). Like RefActions it is not a capability of a built-in connector: nothing is declared and Check does not look
+// for it, the hub finds it with RecallerOf. A program's connector (a proxy, which implements every interface) is one
+// only when its manifest declares CapRecall. A connector without it has nothing to recall.
 type Recaller interface {
 	Actions
 	// CanRecall says whether the message that the write action made, age ago, can still be taken back. It goes by the
@@ -47,8 +49,12 @@ type Recaller interface {
 	Recall(ctx context.Context, m SentMessage) error
 }
 
-// RecallerOf is c as a Recaller, when it is one: the one way the hub finds it.
+// RecallerOf is c as a Recaller, when it is one: the one way the hub finds it. A proxy (a program's connector, which
+// implements every interface and has only what it declares) is one only when it declares CapRecall.
 func RecallerOf(c Connector) (Recaller, bool) {
 	r, ok := c.(Recaller)
+	if ok && c.Manifest().Proxy && !c.Manifest().Has(CapRecall) {
+		return nil, false
+	}
 	return r, ok
 }

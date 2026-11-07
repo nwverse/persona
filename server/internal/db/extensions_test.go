@@ -66,6 +66,53 @@ func TestExtensionRows(t *testing.T) {
 	}
 }
 
+// installed_at is when the row was first written and no later write of the row moves it, whatever the record says (a
+// recall goes by it: what the ledger wrote before an install was not that extension's): upgrades, configuration and
+// switches write the row again, one at a time or in a plan, and a restart reads it back.
+func TestExtensionRowKeepsInstalledAt(t *testing.T) {
+	d, ctx := open(t), context.Background()
+	first := time.Date(2026, 11, 4, 1, 2, 3, 0, time.UTC)
+	r := extension.Record{ID: "example-notes", Source: extension.SourceInstalled, Origin: "dir:/tmp/notes", Version: "1.2.0",
+		Manifest: json.RawMessage(`{"id": "example-notes"}`), GrantedDigest: "d1", Enabled: true, InstalledAt: first, UpdatedAt: first}
+	if err := d.PutExtension(ctx, r); err != nil {
+		t.Fatal(err)
+	}
+	read := func() extension.Record {
+		t.Helper()
+		rows, err := d.Extensions(ctx)
+		if err != nil || len(rows) != 1 {
+			t.Fatal(rows, err)
+		}
+		return rows[0]
+	}
+	later := first.Add(48 * time.Hour)
+	r.Version, r.PreviousVersion, r.Enabled, r.InstalledAt, r.UpdatedAt = "1.3.0", "1.2.0", false, later, later
+	if err := d.PutExtension(ctx, r); err != nil {
+		t.Fatal(err)
+	}
+	if got := read(); !got.InstalledAt.Equal(first) || got.Version != "1.3.0" || !got.UpdatedAt.Equal(later) {
+		t.Fatalf("after another write: installed %v (first %v), version %s, updated %v", got.InstalledAt, first, got.Version, got.UpdatedAt)
+	}
+	r.Version, r.InstalledAt = "1.4.0", later.Add(time.Hour)
+	if err := d.PutExtensionPlan(ctx, []extension.Record{r}); err != nil {
+		t.Fatal(err)
+	}
+	if got := read(); !got.InstalledAt.Equal(first) || got.Version != "1.4.0" {
+		t.Fatalf("after a plan: installed %v (first %v), version %s", got.InstalledAt, first, got.Version)
+	}
+	// Deleting the row and writing it again is a new install.
+	if err := d.DeleteExtension(ctx, "example-notes"); err != nil {
+		t.Fatal(err)
+	}
+	r.InstalledAt = later.Add(2 * time.Hour)
+	if err := d.PutExtension(ctx, r); err != nil {
+		t.Fatal(err)
+	}
+	if got := read(); !got.InstalledAt.Equal(r.InstalledAt) {
+		t.Fatalf("installed again: %v, want %v", got.InstalledAt, r.InstalledAt)
+	}
+}
+
 // A market's row round-trips, its index and token with it.
 func TestExtensionMarketRows(t *testing.T) {
 	d, ctx := open(t), context.Background()

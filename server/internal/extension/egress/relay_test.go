@@ -13,12 +13,7 @@ import (
 // RelayUnix (#5413): every connection on the extension's socket is joined to the target, dialed then; the target
 // closing ends the extension's end too; Unregister takes no more connections.
 func TestProxyRelayUnix(t *testing.T) {
-	// sun_path holds 104 bytes on macOS: a short directory.
-	dir, err := os.MkdirTemp("/tmp", "relay")
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { os.RemoveAll(dir) })
+	dir := shortTempDir(t)
 	target, sock := filepath.Join(dir, "node.sock"), filepath.Join(dir, "ext.sock")
 	p := &Proxy{}
 	if err := p.RelayUnix("notes", sock, target); err != nil {

@@ -35,6 +35,8 @@ nonisolated enum ChatImageLoader {
             return full.preparingThumbnail(of: ZoomMath.fittedSize(image: full.size, in: CGSize(width: side, height: side))) ?? full
         }.value
         if let img { images.setObject(img, forKey: k, cost: Int(img.size.width * img.size.height * img.scale * img.scale * 4)) }
+        // Downloaded bytes that are not a picture (a proxy's page, a cut body) must not stay on disk: a retry fetches again.
+        else if p.data.isEmpty, let ref = p.ref { await fetches.forget(ref) }
         return img
     }
 
@@ -57,8 +59,17 @@ nonisolated enum ChatImageLoader {
             return d
         }()
 
+        private func file(_ ref: String) -> URL {
+            dir.appending(path: String(ref.map { $0.isLetter || $0.isNumber || $0 == "-" ? $0 : "_" }))
+        }
+
+        /// Drops the kept bytes of an image that did not decode.
+        func forget(_ ref: String) {
+            try? FileManager.default.removeItem(at: file(ref))
+        }
+
         func data(_ ref: String) async -> Data? {
-            let file = dir.appending(path: String(ref.map { $0.isLetter || $0.isNumber || $0 == "-" ? $0 : "_" }))
+            let file = file(ref)
             if let d = try? Data(contentsOf: file) { return d }
             if let t = running[ref] { return await t.value }
             let t = Task<Data?, Never> {

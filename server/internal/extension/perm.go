@@ -333,6 +333,16 @@ func ExplainWith(l i18n.Lang, m *Manifest, config json.RawMessage) []PermissionL
 	if sends := m.SendsAsUser(); len(sends) > 0 {
 		out = append(out, sendsAsUserLine(l, permissionText(l, "sends_as_user_title"), sends))
 	}
+	// What it can take back is shown, not agreed to: only here, never in the digest, in AddedIn or in MorePermissions, as a
+	// recall happens only once the user asked for it on their own device.
+	if recalls := m.Recalls(); len(recalls) > 0 {
+		var names []string
+		for _, c := range recalls {
+			names = append(names, c.Name)
+		}
+		out = append(out, PermissionLine{Key: "recalls_sent", Title: permissionText(l, "recalls_sent_title"),
+			Detail: permissionText(l, "recalls_sent_detail", i18n.Args{"names": strings.Join(names, permissionText(l, "list_separator"))})})
+	}
 	if topics := m.Topics(); len(topics) > 0 {
 		var what []string
 		for _, t := range topics {

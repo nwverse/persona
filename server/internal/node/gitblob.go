@@ -60,19 +60,15 @@ func (n *Node) gitBlob(ctx context.Context, p proto.GitBlobRequest) (*proto.GitB
 	if n64 > maxBlobBytes {
 		return nil, fmt.Errorf("version is too big to compare (%d bytes)", n64)
 	}
-	// named by the blob's id (content-addressed: never stale) and the file's extension, which the viewers go by
-	base, err := os.UserCacheDir()
+	cache, err := privateCacheDir("blobs")
 	if err != nil {
-		base = os.TempDir()
+		return nil, fmt.Errorf("version cache: %w", err)
 	}
-	cache := filepath.Join(base, "persona", "blobs")
+	// named by the blob's id (content-addressed: never stale) and the file's extension, which the viewers go by
 	out := filepath.Join(cache, sha+strings.ToLower(filepath.Ext(path)))
 	if st, err := os.Stat(out); err == nil && st.Size() == n64 {
 		os.Chtimes(out, time.Now(), time.Now())
 		return &proto.GitBlob{Path: out, Size: n64}, nil
-	}
-	if err := os.MkdirAll(cache, 0o700); err != nil {
-		return nil, err
 	}
 	pruneConverted(cache)
 	data, err := gitTimed(ctx, root, time.Minute, "cat-file", "blob", sha)
