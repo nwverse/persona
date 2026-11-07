@@ -33,9 +33,9 @@ if [ -n "$ADMIN_ACCESS" ] && ! admin_access_valid "$ADMIN_ACCESS" "$ADMIN_CIDRS"
   exit 2
 fi
 set -- ${ARGS[@]+"${ARGS[@]}"}
-# Only from a checkout that has everything already on the default branch (#1314): a hub or web deploy from an older
-# branch puts back what other people deployed since (2026-11-04: one from before #1283 undid its web change 13 minutes
-# later). PERSONA_DEPLOY_ANY_COMMIT=1 deploys anyway, e.g. to roll back on purpose.
+# Only from a checkout that has everything already on the default branch: a hub or web deploy from an older branch
+# puts back what other people deployed since (docs/lessons/server.md "Deploying from a stale branch").
+# PERSONA_DEPLOY_ANY_COMMIT=1 deploys anyway, e.g. to roll back on purpose.
 # The default branch is the one the remote names now; else the clone's origin/HEAD, which is set at clone time and
 # can name a branch the remote no longer has; else master. The remote's answer counts only if it is a valid branch
 # name, and the branch is fetched as refs/heads/<name>: a bare name starting with "-" would be a git fetch option.
@@ -62,8 +62,7 @@ _env=$(python3 scripts/persona_config.py env) || exit $?
 eval "$_env"; unset _env
 cd server
 # Straight from the default branch, for when a change cannot wait for a release: the build number is the build time
-# (UTC), so an older release never replaces it and the next release does (docs/operations/hub-update.md "Deploying
-# directly").
+# (UTC), so an older release never replaces it and the next release does (docs/operations/hub-update.md "Direct deploys").
 BUILD="$(date -u +%Y%m%d%H%M)"
 VERSION="$(git describe --always --dirty 2>/dev/null || echo dev)-$BUILD"
 TARGETS=("$@")
