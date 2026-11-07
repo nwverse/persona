@@ -31,12 +31,11 @@ import (
 // inbox state of its own: while the assistant can't take a round (there is none yet, or it refused or failed the
 // hand-over) the sources are still read on schedule and what they had is kept for it (merged, bounded, in memory:
 // heldThingsMost, heldMailMost), so what leaves a source's window meanwhile (mail's newest 40, iMessage's newest 30) is
-// not lost; a full round with what was kept goes as soon as it takes one again.
+// not lost; what was kept goes with the first round it takes again, and a full round still owed at the next wake-up.
 
 const (
 	inboxPoll     = 2 * time.Minute // fallback when no Feishu event arrives
 	inboxMailPoll = 3 * time.Minute // IMAP is slow; Gmail goes through a proxy
-	inboxDebounce = 3 * time.Second // a burst of Feishu events collects once
 	// inboxRoundWait bounds handing a round over (the manager reads the new mail's text before it answers).
 	inboxRoundWait = 5 * time.Minute
 	// inboxMailParallel is how many mail accounts a full round reads at once: a slow server (up to the mail
@@ -44,6 +43,9 @@ const (
 	// Feishu chat rounds wait on) takes about the slowest account's time instead of their sum.
 	inboxMailParallel = 4
 )
+
+// inboxDebounce is how long a kick waits so that a burst of Feishu events collects once (tests shorten it).
+var inboxDebounce = 3 * time.Second
 
 // InboxConfig tunes the inbox (manager.json "inbox").
 type InboxConfig struct {
@@ -69,7 +71,8 @@ type inboxSources struct {
 	once    sync.Once
 	kick    chan struct{}
 	wide    atomic.Bool   // a kick asked for more than the Feishu chats (kickInbox)
-	owed    atomic.Bool   // the manager missed a round (it was not connected): the next one is a full one
+	owed    atomic.Bool   // the manager missed a round (not taken): a full one is owed, run once it takes rounds again
+	away    atomic.Bool   // the last round was not taken (refused, failed or nobody to take it): owed waits meanwhile
 	running chan struct{} // one collection at a time (held while the manager applies it; lock, unlock)
 	told    atomic.Bool   // "the manager is not connected" was logged (until a round goes through again)
 	// held is what was read and not handed over (the manager was away, or did not take it), merged, under running:
@@ -182,9 +185,10 @@ func (h *Manager) inboxLoop(ctx context.Context) {
 		if h.isMember() { // the center keeps the group's inbox; this one's stays as it was (mesh_group.go)
 			continue
 		}
-		// A round the manager missed is made up with a full one once it is back, not while it is away (mail keeps
-		// its own pace then).
-		if time.Since(lastMail) >= inboxMailPoll || h.inbox.owed.Load() && h.assistantUp() {
+		// A round the manager missed is made up with a full one once it takes rounds again, not while it refuses them
+		// or the hand-over fails (its store does not answer…): a kick or a poll reads what it reads and mail keeps its
+		// own pace then.
+		if time.Since(lastMail) >= inboxMailPoll || h.inbox.owed.Load() && !h.inbox.away.Load() {
 			lastMail = time.Now()
 			round = roundFull
 		}
@@ -207,7 +211,7 @@ func (h *Manager) inboxManagerConnected() {
 
 // collectInbox reads the sources of one round and hands them, with what was kept from before, to the manager
 // (inbox.collected), which applies them before it answers. Not connected, or not taken, what was read is kept for the
-// next round (and that is a full one).
+// next round, and a full round is owed once one is taken again (inboxLoop).
 func (h *Manager) collectInbox(ctx context.Context, round inboxRound) error {
 	h.inbox.init()
 	if err := h.inbox.lock(ctx); err != nil {
@@ -221,6 +225,7 @@ func (h *Manager) collectInbox(ctx context.Context, round inboxRound) error {
 	if !h.assistantUp() {
 		h.inbox.held = &r
 		h.inbox.owed.Store(true)
+		h.inbox.away.Store(true)
 		if !h.inbox.told.Swap(true) {
 			h.logf("inbox: the manager is not connected: what the sources have is kept for it")
 		}
@@ -232,10 +237,12 @@ func (h *Manager) collectInbox(ctx context.Context, round inboxRound) error {
 	if err := h.callAssistant(cctx, assistantwire.MethodInboxCollected, r, nil); err != nil {
 		h.inbox.held = &r
 		h.inbox.owed.Store(true) // read again, whole, when it is back
+		h.inbox.away.Store(true)
 		h.logf("inbox: hand the round to the manager: %v", err)
 		return err
 	}
 	h.inbox.held = nil
+	h.inbox.away.Store(false)
 	h.inbox.told.Store(false)
 	if r.Round == assistantwire.RoundFull { // what was kept went with it
 		h.inbox.owed.Store(false)

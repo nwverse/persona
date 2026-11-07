@@ -207,13 +207,15 @@ func sourceIn(r assistantwire.InboxRound, id string) (assistantwire.InboxSource,
 	return assistantwire.InboxSource{}, false
 }
 
-// inboxMail is the hub's mail on made-up data: one account, its latest messages, their full texts, what it sent.
+// inboxMail is the hub's mail on made-up data: one account, its latest messages, their full texts, what it sent, and
+// how often its messages were listed.
 type inboxMail struct {
 	Mail
-	mu   sync.Mutex
-	msgs []mail.MailSummary
-	full map[uint32]*mail.MailMessage
-	sent []mail.SendRequest
+	mu    sync.Mutex
+	msgs  []mail.MailSummary
+	full  map[uint32]*mail.MailMessage
+	sent  []mail.SendRequest
+	lists atomic.Int32
 }
 
 func (*inboxMail) Tools() []proto.Tool   { return nil } // registering the mail connector lists them
@@ -222,6 +224,7 @@ func (*inboxMail) ListAccounts() ([]mail.MailAccount, error) {
 	return []mail.MailAccount{{ID: "acc1", Email: "me@example.com"}}, nil
 }
 func (m *inboxMail) ListMessages(context.Context, mail.ListOptions) (*mail.ListResult, error) {
+	m.lists.Add(1)
 	return &mail.ListResult{Messages: m.msgs}, nil
 }
 func (m *inboxMail) GetMessage(_ context.Context, _ string, uid uint32, _ string) (*mail.MailMessage, error) {
@@ -361,6 +364,102 @@ func TestInboxKeepsWhatWasReadForTheManager(t *testing.T) {
 	if src, _ := sourceIn(r, "example"); len(src.Things) != 1 || r.Mail != nil || r.Seq != seq+1 {
 		t.Fatalf("the next round: %+v", r)
 	}
+}
+
+// While the assistant refuses rounds (its store does not answer), the round it missed is not made up on every wake-up:
+// a Feishu event still reads only the chats, and mail keeps its own pace. Once it takes a round again, the next
+// wake-up is the full round it is owed.
+func TestInboxMakesUpAMissedRoundOnceOneIsTaken(t *testing.T) {
+	debounce := inboxDebounce
+	inboxDebounce = 20 * time.Millisecond
+	t.Cleanup(func() { inboxDebounce = debounce })
+	h := newTestManager(t)
+	m := &inboxMail{msgs: []mail.MailSummary{{UID: 1, Mailbox: "INBOX", Subject: "示例", Date: time.Now().UTC().Format(time.RFC3339)}}}
+	h.mail = m
+	h.connectors = connector.NewRegistry(nil)
+	h.registerConnectors()
+	if err := h.addConnector(&inboxConnector{things: []connector.InboxThing{thing("a", time.Now())}}); err != nil {
+		t.Fatal(err)
+	}
+	type handed struct {
+		round string
+		taken bool
+	}
+	var mu sync.Mutex
+	var rounds []handed
+	var refuse atomic.Bool
+	refuse.Store(true)
+	h.opts.Assistant = func(_ context.Context, method string, params json.RawMessage) (json.RawMessage, error) {
+		if method != assistantwire.MethodInboxCollected {
+			return nil, errAssistantOffline
+		}
+		var r assistantwire.InboxRound
+		if err := json.Unmarshal(params, &r); err != nil {
+			return nil, err
+		}
+		refused := refuse.Load()
+		mu.Lock()
+		rounds = append(rounds, handed{round: r.Round, taken: !refused})
+		mu.Unlock()
+		if refused {
+			return nil, &rpc.Error{Code: assistantwire.CodeInboxUnavailable, Message: "the store did not answer"}
+		}
+		return json.RawMessage(`{}`), nil
+	}
+	handedOver := func(n int) handed {
+		t.Helper()
+		var got handed
+		eventually(t, 5*time.Second, fmt.Sprintf("round %d", n), func() bool {
+			mu.Lock()
+			defer mu.Unlock()
+			if len(rounds) < n {
+				return false
+			}
+			got = rounds[n-1]
+			return true
+		})
+		return got
+	}
+	// The kicks so far (a connector added) are not this test's.
+	h.inbox.init()
+	select {
+	case <-h.inbox.kick:
+	default:
+	}
+	h.inbox.wide.Store(false)
+
+	// The store goes away: a round of the usual sources is refused, and a full one is owed.
+	if err := h.collectInbox(context.Background(), roundPoll); err == nil || !h.inbox.owed.Load() || m.lists.Load() != 0 {
+		t.Fatalf("a refused round: %v", err)
+	}
+	ctx, stop := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		h.inboxLoop(ctx)
+	}()
+	t.Cleanup(func() {
+		stop()
+		<-done
+	})
+
+	// A Feishu event while it still refuses rounds: the chats, and no mail.
+	h.kickLarkChats()
+	if r := handedOver(2); r.taken || r.round == assistantwire.RoundFull || m.lists.Load() != 0 {
+		t.Fatalf("a Feishu event while the assistant refuses rounds: %+v, mail read %d time(s)", r, m.lists.Load())
+	}
+	// It takes the next round (what was kept goes with it)…
+	refuse.Store(false)
+	h.kickLarkChats()
+	if r := handedOver(3); !r.taken || r.round == assistantwire.RoundFull || m.lists.Load() != 0 {
+		t.Fatalf("the first round taken: %+v, mail read %d time(s)", r, m.lists.Load())
+	}
+	// …and the next wake-up is the full round it was owed.
+	h.kickLarkChats()
+	if r := handedOver(4); !r.taken || r.round != assistantwire.RoundFull || m.lists.Load() != 1 {
+		t.Fatalf("the round made up: %+v, mail read %d time(s)", r, m.lists.Load())
+	}
+	eventually(t, 5*time.Second, "the full round clearing the debt", func() bool { return !h.inbox.owed.Load() })
 }
 
 // What is kept is bounded, and a source read as switched off keeps nothing.
