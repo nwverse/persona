@@ -1319,6 +1319,10 @@ const (
 // AnsweredByAssistant marks a resolution the assistant gave for the user (Resolution.AnsweredBy).
 const AnsweredByAssistant = "assistant"
 
+// DismissedInChat is the Reason of a Dismiss for an assistant question taken back because the user wrote in the
+// conversation instead of answering it (#9): channels say "replied in the chat" on its card, not "dismissed".
+const DismissedInChat = "replied_in_chat"
+
 // QuestionOptionDefer dismisses a triage question without sending an agent reply.
 // Other question runtimes do not interpret this triage-only action.
 const QuestionOptionDefer = "defer"
@@ -1450,6 +1454,7 @@ type Resolution struct {
 	// assistant answered on their behalf (docs/assistant/assistant.md). Absent when the app answered.
 	AnsweredBy string `json:"answered_by,omitempty"`
 	// Reason is why the assistant answered so (AnsweredByAssistant): the Y of "Answered by the assistant: X, because Y".
+	// With Dismiss and no AnsweredBy it is why the card was dismissed (DismissedInChat).
 	Reason string `json:"reason,omitempty"`
 	// Remembered marks an allow the manager gave from an "Always allow in this session" it had kept (or that a card
 	// answered meanwhile covers), not from an answer to this card: the node's sent-as-user ledger records such a write
