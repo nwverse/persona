@@ -59,6 +59,13 @@ func (b *busHost) Notify(event string, params any) error {
 // not have: that machine's own ways). The hub's store must hold bus identities (newBusHub's, or memIdents).
 func startTestManager(t *testing.T, h *Hub, srv *httptest.Server, nodes map[string]func(context.Context) (net.Conn, error)) *testManager {
 	t.Helper()
+	return startTestManagerWith(t, h, srv, nodes, "")
+}
+
+// startTestManagerWith is startTestManager with configFile as the manager's manager.json ("": none).
+func startTestManagerWith(t *testing.T, h *Hub, srv *httptest.Server, nodes map[string]func(context.Context) (net.Conn, error),
+	configFile string) *testManager {
+	t.Helper()
 	if h.busStore() == nil {
 		h.bus.idents = &memIdents{}
 	}
@@ -79,7 +86,7 @@ func startTestManager(t *testing.T, h *Hub, srv *httptest.Server, nodes map[stri
 		store = s
 	}
 	var svc atomic.Pointer[assistant.Service] // the manager's own business with what comes from the nodes (as main.go wires it)
-	d := devices.New(devices.Options{Hub: host, Logf: logf, Store: store,
+	d := devices.New(devices.Options{Hub: host, Logf: logf, Store: store, ConfigFile: configFile,
 		Answer: func(ctx context.Context, machine, method string, params json.RawMessage) (any, bool, error) {
 			s := svc.Load()
 			if s == nil {

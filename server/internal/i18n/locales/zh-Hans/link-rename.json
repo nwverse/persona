@@ -1,0 +1,11 @@
+{
+  "invalid_name": "名字最多 40 个字，不能换行",
+  "pending": "先在 App 里确认这台电脑是你的，再改名",
+  "not_running": "这台电脑上的 Persona Link 没在运行，没法去问 hub",
+  "passive": "被动模式下是 hub 来连这台电脑：请在 hub 上改名（管理界面或 App）",
+  "offline": "现在没连着 hub，连上以后再试",
+  "unsupported": "这台 hub 还不能给电脑改名：升级 hub，或者在 hub 上改",
+  "timeout": "hub 没有及时回答，再试一次",
+  "refused": "hub 没接受这个名字：{detail}",
+  "failed": "没能改名"
+}

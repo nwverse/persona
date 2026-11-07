@@ -27,6 +27,9 @@ type Host interface {
 	SetMode(mode string) error
 	AddAddress(raw string) error
 	RemoveAddress(url string) error
+	// Rename asks the hub, through the running persona-link, to call this computer name ("": its id again), and says
+	// what it calls it now; a *link.RenameError says why not.
+	Rename(name string) (string, error)
 }
 
 // What a Host's errors can be beyond their text: the tray says these in the user's language (ErrorText).

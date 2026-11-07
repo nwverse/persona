@@ -142,6 +142,8 @@ class OkHttpHubConnection(
     @Volatile private var foreground = true
     @Volatile private var socket: WebSocket? = null
     @Volatile private var mailbox: Channel<Signal>? = null
+    /** Completed by [onWake] to cut a retry backoff short: the user is looking at hub content right now. */
+    @Volatile private var retryWait: CompletableDeferred<Unit>? = null
     @Volatile private var closed = false
     @Volatile private var revoked = false
     private var runner: Job? = null
@@ -337,7 +339,10 @@ class OkHttpHubConnection(
     }
 
     /** Validate the live connection when the Android service is woken after sleeping. */
-    fun onWake() { mailbox?.trySend(Signal.Wake) }
+    fun onWake() {
+        val box = mailbox
+        if (box != null) box.trySend(Signal.Wake) else retryWait?.complete(Unit)
+    }
 
     override fun send(message: JsonObject): Boolean = socket?.send(message.toString()) ?: false
 
@@ -351,11 +356,14 @@ class OkHttpHubConnection(
     ): Response {
         val selected = awaitRoute()
         if (expectedRoute != null && selected !== expectedRoute) throw HubFailure(HubError.NoNetwork)
+        val owner = synchronized(lock) {
+            activeRoute().takeIf { it === selected } ?: throw HubFailure(HubError.NoNetwork)
+            routeOwner?.takeIf { it.first === selected }?.second ?: throw HubFailure(HubError.NoNetwork)
+        }
         require(path.startsWith("/api/") && !path.contains('#')) { "Expected an API path" }
         val base = selected.endpoint.baseUrl()
         val url = base.hubUrl(path).withRequestManager()
         require(base.hubPath(url)?.startsWith("/api/") == true) { "Expected an API path" }
-        val owner = ownerOf(selected)
         val request = Request.Builder().url(url).apply {
             headers.forEach { (name, value) -> header(name, value) }
         }.header("Authorization", "Bearer ${owner.token}").method(method, compatibleRequestBody(path, body)).build()
@@ -415,6 +423,7 @@ class OkHttpHubConnection(
                     failure = HubFailure(HubError.LocalNetworkPermission, retryable = false, cause = failure)
                 }
                 clearRoute()
+                if (failure.kind == HubError.Timeout) http.evictConnections()
                 // A hub of the group refusing its credential is dropped; the next round tries the others at once.
                 if (recordFailure(failure)) { backoff = 1L; continue }
                 if (!failure.retryable || revoked) return
@@ -425,16 +434,22 @@ class OkHttpHubConnection(
                 }
                 val retryMillis = failure.retryAfterSeconds?.let { it.coerceAtMost(86400) * 1000 }
                     ?: (backoff * 1000 * Random.nextDouble(0.8, 1.0)).toLong()
-                waitToRetry(retryMillis)
-                backoff = (backoff * 2).coerceAtMost(20)
+                backoff = if (waitToRetry(retryMillis)) 1L else (backoff * 2).coerceAtMost(20)
             }
         }
     }
 
     /** Waits [millis] before the next attempt, saying when it is (the connection details' "Retrying in N s"). */
-    private suspend fun waitToRetry(millis: Long) {
+    private suspend fun waitToRetry(millis: Long): Boolean {
         updateDiagnostics { it.copy(nextRetryAt = Instant.now().plusMillis(millis).toString()) }
-        try { delay(millis) } finally { updateDiagnostics { it.copy(nextRetryAt = null) } }
+        val wait = CompletableDeferred<Unit>()
+        retryWait = wait
+        try { withTimeoutOrNull(millis) { wait.await() } }
+        finally {
+            if (retryWait === wait) retryWait = null
+            updateDiagnostics { it.copy(nextRetryAt = null) }
+        }
+        return wait.isCompleted
     }
 
     private suspend fun runSocket(selected: HubRoute, ready: () -> Unit): Unit = coroutineScope {

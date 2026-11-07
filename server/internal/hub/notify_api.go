@@ -243,8 +243,8 @@ func (m *Machine) scriptNotify(params json.RawMessage) (any, error) {
 	if err := in.validate(); err != nil {
 		return nil, err
 	}
-	in.Body = fitBody(in, m.cfg.Name)
-	return m.hub.deliverNotify(in, m.cfg.Name, "", m.hub.machineOwner(m.cfg.ID))
+	in.Body = fitBody(in, m.name())
+	return m.hub.deliverNotify(in, m.name(), "", m.hub.machineOwner(m.cfg.ID))
 }
 
 // fitBody is in's body cut (ending in …) so that its push fits notifyPayloadMost. The node cuts a script's texts by

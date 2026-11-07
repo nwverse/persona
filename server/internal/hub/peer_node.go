@@ -86,7 +86,7 @@ func (h *Hub) serveNodeOpen(w http.ResponseWriter, r *http.Request, from, mid st
 		writeErr(w, http.StatusForbidden, i18n.Err("hub-peer_node.center_only"))
 		return
 	}
-	if h.cfgEntry(mid) == nil {
+	if h.knownEntry(mid) == nil {
 		writeErr(w, http.StatusNotFound, i18n.Err("hub-peer_node.no_machine", i18n.Args{"id": strconv.Quote(mid)}))
 		return
 	}

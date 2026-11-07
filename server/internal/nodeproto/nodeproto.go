@@ -51,6 +51,9 @@ const (
 	// another manager's health space (health-<id>, docs/assistant/managers.md "Directories on a computer"). A node without it
 	// would use the built-in manager's.
 	HealthSpaces = "health_spaces"
+	// Preview: preview.servers / preview.start / preview.open, dev server previews in a headless browser on the
+	// computer (docs/web/preview.md).
+	Preview = "preview"
 )
 
 // Error codes in the manager's answers to a resident node's replayed notifications (a notify with spool_id,
@@ -75,4 +78,4 @@ const (
 )
 
 // Announced is what a node built from this code announces.
-var Announced = []string{PersonaContracts, Sessions, ModelConfiguration, NodeUpdate, Engines, MachineUID, HerdrServer, PluginNodeCall, Ultracode, HealthSpaces}
+var Announced = []string{PersonaContracts, Sessions, ModelConfiguration, NodeUpdate, Engines, MachineUID, HerdrServer, PluginNodeCall, Ultracode, HealthSpaces, Preview}

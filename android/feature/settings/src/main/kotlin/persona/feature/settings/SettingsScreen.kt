@@ -80,6 +80,8 @@ private fun SettingsContent(
     var providerStep by rememberSaveable(initialPage) { mutableStateOf<String?>(null) }
     val desktops = services.desktops?.collectAsState()?.value.orEmpty()
     val context = LocalContext.current
+    // Read here: the settings list below is a LazyColumn builder, where composition locals cannot be read.
+    val appStyleStore = LocalAppStyleStore.current
     val scope = rememberCoroutineScope()
     val connection by services.connection.state.collectAsState()
     val machines by services.sessions.machines.collectAsState()
@@ -331,6 +333,15 @@ private fun SettingsContent(
             item { JGroupItem(GroupPosition.of(capsuleRows + 1, notifyRows)) { JRow(selected = detailKey == SettingsPageRoute(SettingsPage.Readiness), title = stringResource(R.string.settings_row_background), leadingIcon = PhIcons.BatteryCharging, subtitle = stringResource(R.string.settings_row_background_subtitle), onClick = { open(SettingsPage.Readiness) }) } }
             if (desktopRow) item { DesktopPresenceRow(desktops, deviceState.preferences?.muteWhileDesktop == true,
                 selected = detailKey == SettingsPageRoute(SettingsPage.Desktops), GroupPosition.of(capsuleRows + 2, notifyRows), onClick = { open(SettingsPage.Desktops) }) }
+            // Inbox chats open natively (left / right bubbles, reply composer) unless switched to the extension's page.
+            if (appStyleStore != null) {
+                item { JSectionHeader(stringResource(R.string.settings_update_v7_native_section)) }
+                item { JGroupItem(GroupPosition.Single) {
+                    val nativeInboxChats by appStyleStore.nativeInboxChats.collectAsState()
+                    JSwitchRow(stringResource(R.string.settings_update_v7_native_title), nativeInboxChats, appStyleStore::setNativeInboxChats,
+                        subtitle = stringResource(R.string.settings_update_v7_native_subtitle))
+                } }
+            }
             item { JSectionHeader("AI") }
             // iOS's order: "Model providers", "Model configuration", "Assistant" (a page of the Persona tab, so only with a navigation host), then the uses.
             val assistantRow = onNavigate != null

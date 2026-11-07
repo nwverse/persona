@@ -73,7 +73,7 @@ func PingTimesMS(every, timeout int64) (time.Duration, time.Duration, bool) {
 
 // Message is one JSON message on the link.
 type Message struct {
-	Type string `json:"type"` // hello | endpoints | node | open | open_failed
+	Type string `json:"type"` // hello | endpoints | node | open | open_failed | rename | renamed
 	// hello (persona-link → hub, the first message): which machine, which build, and the hub URL it went to.
 	Machine string `json:"machine,omitempty"`
 	Version string `json:"version,omitempty"`
@@ -90,11 +90,18 @@ type Message struct {
 	// endpoints: this computer waits for the user to confirm it (a signed-in device added it, docs/assistant/onboarding.md
 	// 4.2). Every endpoints message says how it is now, so a confirmed one (and an older hub) leaves it out.
 	Pending bool `json:"pending,omitempty"`
+	// endpoints: what the hub calls this computer (its hub.json name; hubs that rename computers, docs/operations/link.md
+	// "The computer's name"). rename (persona-link → hub) asks the hub to call it this instead (empty: its id again);
+	// renamed (hub → persona-link) answers the rename of the same ID with the name it has now, or Error and Code.
+	MachineName string `json:"machine_name,omitempty"`
+	// renamed: why the hub did not take the name, as a code (RenameCode*).
+	Code string `json:"code,omitempty"`
 	// node (hub → persona-link): whether the hub got through to the resident node.
 	Online bool `json:"online,omitempty"`
-	// open (hub → persona-link) asks for stream ID; open_failed answers that it could not be opened.
+	// open (hub → persona-link) asks for stream ID; open_failed answers that it could not be opened. rename / renamed:
+	// which rename.
 	ID string `json:"id,omitempty"`
-	// open_failed, node: why not.
+	// open_failed, node, renamed: why not.
 	Error string `json:"error,omitempty"`
 }
 
@@ -115,6 +122,9 @@ type Config struct {
 	Machine string `json:"machine"` // this computer in the hub's hub.json
 	// HubName is what the hub calls itself, as it last said (endpoints); empty until a hub that says it.
 	HubName string `json:"hub_name,omitempty"`
+	// MachineName is what the hub calls this computer, as it last said (endpoints, renamed); empty until a hub that
+	// says it.
+	MachineName string `json:"machine_name,omitempty"`
 	// FP pins the hub: SHA-256 of its TLS SubjectPublicKeyInfo, base64url (the hub's certificate is self-signed).
 	// With FP set every candidate is checked against it and nothing else.
 	FP string `json:"fp"`

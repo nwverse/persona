@@ -121,5 +121,12 @@
   "error_no_service": "The background service isn't installed: click Install background service first.",
   "error_install_in_terminal": "Can't install from here: run persona-link install in a terminal.",
   "error_pair_unreachable": "Can't reach the hub ({hosts}). Check that it's running, that the address is right and that this computer is online, then try again.\n(Details: {detail})",
-  "error_pair_rejected": "The hub doesn't accept this pairing link (it expired, was already used or was revoked). Get a new one from Add computer and paste it here.\n(Details: {detail})"
+  "error_pair_rejected": "The hub doesn't accept this pairing link (it expired, was already used or was revoked). Get a new one from Add computer and paste it here.\n(Details: {detail})",
+  "action_rename": "Rename this computer…",
+  "rename_label": "Name on the hub",
+  "rename_hint": "Shown in the app, on the web and on the admin page. The computer's id stays the same.",
+  "rename_save": "Save",
+  "rename_saving": "Saving…",
+  "rename_cancel": "Cancel",
+  "renamed_ok": "This computer is now “{name}” on the hub"
 }

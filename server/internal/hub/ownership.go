@@ -175,9 +175,9 @@ func (h *Hub) machineOwner(mid string) string {
 	return h.entryOwner(mid)
 }
 
-// entryOwner is the manager that carries machine mid: the one hub.json's machine was moved to (moveMachine), else
-// the carrier. Only hub.json's machines move, so any other machine is the carrier's, and so is one whose entry was
-// removed while its move is still kept (forgetMachineOwner drops it).
+// entryOwner is the manager that carries machine mid: for one its manager keeps out of hub.json, that one
+// (machines_kept.go); for hub.json's, the one it was moved to (moveMachine), else the carrier. Any other machine is the
+// carrier's, and so is one whose entry was removed while its move is still kept (forgetMachineOwner drops it).
 func (h *Hub) entryOwner(mid string) string {
 	d := &h.devices
 	d.mu.Lock()
@@ -187,6 +187,9 @@ func (h *Hub) entryOwner(mid string) string {
 		entries = h.cfg.Machines
 	}
 	if !slices.ContainsFunc(entries, func(mc MachineConfig) bool { return mc.ID == mid }) {
+		if k := d.kept[mid]; k != "" { // its manager keeps it out of hub.json (machines_kept.go)
+			return k
+		}
 		return devicesOwner
 	}
 	required := false
@@ -737,7 +740,7 @@ func (h *Hub) loadMachineOwners(ctx context.Context) error {
 // the other's machine, and one move was lost on the next start. Owners the hub could not read when it started are
 // read first, so a move does not write over them.
 func (h *Hub) moveMachine(ctx context.Context, mid, to string) (from string, err error) {
-	if h.cfgEntry(mid) == nil {
+	if h.knownEntry(mid) == nil {
 		return "", errNotMovable
 	}
 	h.moving.managers.RLock() // not while its manager is being removed (removingManager)
@@ -751,7 +754,8 @@ func (h *Hub) moveMachine(ctx context.Context, mid, to string) (from string, err
 // moveMachineMoving is moveMachine with d.moving held.
 func (h *Hub) moveMachineMoving(ctx context.Context, mid, to string) (from string, err error) {
 	d := &h.devices
-	if mc := h.cfgEntry(mid); mc != nil && mc.OwnerRequired && to == devicesOwner {
+	// hub.json's entry, or a kept one's as its manager last reported it (owner_required is kept: machines_kept.go).
+	if mc := h.knownEntry(mid); mc != nil && mc.OwnerRequired && to == devicesOwner {
 		return h.entryOwner(mid), errors.New("a dedicated local machine requires an explicit non-carrier manager")
 	}
 	if err := h.readOwnersMoving(ctx); err != nil {
@@ -763,6 +767,15 @@ func (h *Hub) moveMachineMoving(ctx context.Context, mid, to string) (from strin
 	}
 	from = h.entryOwner(mid)
 	if from == to {
+		return from, nil
+	}
+	if h.keptBy(mid) != "" && h.cfgEntry(mid) == nil { // its manager keeps it (machines_kept.go)
+		if err := h.moveKept(ctx, mid, from, to); err != nil {
+			return from, err
+		}
+		h.handMachineEntry(mid, from, to)
+		h.machineHandedOver(mid, to)
+		h.logf("managers: [%s] moved from %s to %s", mid, from, to)
 		return from, nil
 	}
 	d.mu.Lock()
@@ -783,10 +796,22 @@ func (h *Hub) moveMachineMoving(ctx context.Context, mid, to string) (from strin
 	}
 	d.mu.Lock()
 	d.assign = next
+	delete(d.putTried, mid) // to is put it afresh (settleOwnList)
 	d.mu.Unlock()
 	h.handMachineEntry(mid, from, to) // shown as last reported until to reports it (machine_entries.go)
 	h.machineHandedOver(mid, to)
 	h.logf("managers: [%s] moved from %s to %s", mid, from, to)
+	// A manager that keeps its own list does not go by the hand-over: from lets it go here, and to is put it from
+	// hub.json once it reports (settleOwnList, after this move).
+	if h.keepsList(from) {
+		var out devicewire.MachineRemoved
+		if err := h.keeperCall(ctx, from, devicewire.MethodMachinesRemove, devicewire.MachineRef{MachineID: mid}, &out); err != nil {
+			h.logf("managers: [%s] moved away from %s, which could not take it out of its own list: %v", mid, from, err)
+		}
+	}
+	if h.keepsList(to) {
+		go h.settleOwnList(to)
+	}
 	return from, nil
 }
 
@@ -803,7 +828,7 @@ func (h *Hub) readOwnersMoving(ctx context.Context) error {
 	if err := h.loadMachineOwners(ctx); err != nil {
 		return fmt.Errorf("%w: %v", errOwnersUnknown, err)
 	}
-	for _, mc := range h.cfgEntries() {
+	for _, mc := range h.knownEntries() {
 		if m := h.localMachine(mc.ID); m != nil && m.ownerOrCarrier() != h.entryOwner(mc.ID) {
 			h.machineHandedOver(mc.ID, h.entryOwner(mc.ID))
 		}
@@ -841,15 +866,45 @@ func (h *Hub) releaseMachines(ctx context.Context, id string) {
 		return
 	}
 	d.mu.Lock()
-	var mine []string
+	var mine, keptMine []string
 	for mid, o := range d.assign {
 		if o == id {
 			mine = append(mine, mid)
 		}
 	}
+	for mid, o := range d.kept {
+		if o == id {
+			keptMine = append(keptMine, mid)
+		}
+	}
 	d.mu.Unlock()
+	// The machines it kept in its own list went with it: their entries (their secrets) were in its manager.json only.
+	for _, mid := range keptMine {
+		if err := h.setKept(ctx, mid, ""); err != nil {
+			h.logf("managers: [%s] kept by %s, which was removed: %v", mid, id, err)
+			continue
+		}
+		d.mu.Lock()
+		reserved := d.assign[mid] != ""
+		d.mu.Unlock()
+		if reserved { // a dedicated machine's reservation goes with it (machines_owned_local.go)
+			if err := h.assignOwner(ctx, mid, devicesOwner); err != nil {
+				h.logf("managers: [%s] kept by %s, which was removed: its owner record: %v", mid, id, err)
+			}
+		}
+		h.forgetMachineEntry(mid)
+		h.machineGone(mid)
+		h.logf("managers: [%s] kept by %s in its own list: gone with it", mid, id)
+	}
 	for _, mid := range mine {
-		if mc := h.cfgEntry(mid); mc != nil && mc.OwnerRequired {
+		if k := h.keptBy(mid); k != "" && k != id && h.cfgEntry(mid) == nil {
+			// Kept by another manager now: a stale reservation of id's, dropped, never a move (machines_kept.go).
+			if err := h.assignOwner(ctx, mid, devicesOwner); err != nil {
+				h.logf("managers: [%s] kept by %s: %s's old reservation: %v", mid, k, id, err)
+			}
+			continue
+		}
+		if mc := h.knownEntry(mid); mc != nil && mc.OwnerRequired {
 			if err := h.releaseDedicatedMachineMoving(ctx, mid); err != nil {
 				h.logf("managers: [%s] release dedicated owner: %v", mid, err)
 			}

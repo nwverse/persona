@@ -13,7 +13,7 @@ import (
 	"github.com/nwverse/persona/server/internal/rpc"
 )
 
-// fakeSoffice puts a LibreOffice on PATH that writes "<outdir>/<input name>.pdf" and counts its runs.
+// fakeSoffice puts a LibreOffice first on PATH that writes "<outdir>/<input name>.pdf" and counts its runs.
 func fakeSoffice(t *testing.T, dir string) string {
 	t.Helper()
 	bin := filepath.Join(dir, "bin")
@@ -30,7 +30,7 @@ name=$(basename "$last"); name="${name%.*}"
 printf '%%PDF-1.4 converted\n' > "$out/$name.pdf"
 `
 	os.WriteFile(filepath.Join(bin, "soffice"), []byte(script), 0o700)
-	t.Setenv("PATH", bin+":/bin:/usr/bin")
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
 	return calls
 }
 
@@ -68,6 +68,7 @@ func TestConvertWithoutLibreOffice(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("PATH", filepath.Join(dir, "nothing"))
 	t.Setenv("XDG_CACHE_HOME", filepath.Join(dir, "cache"))
+	t.Setenv("HOME", dir) // os.UserCacheDir on a Mac
 	n := &Node{home: dir}
 	os.WriteFile(filepath.Join(dir, "a.ppt"), []byte("x"), 0o600)
 	_, err := n.convertFile(context.Background(), proto.FileConvertRequest{Path: "~/a.ppt"})
