@@ -620,6 +620,57 @@ class RangeAndPushTests(unittest.TestCase):
         self.assertIn("pre-push: refused", result.stderr)
         self.assertNotIn("secretbox", result.stdout + result.stderr)
 
+    def test_pre_push_scans_first_push_against_origin_head(self):
+        self.git("update-ref", "refs/remotes/origin/main", "HEAD")
+        self.git("symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main")
+        remote = self.root / "remote.git"
+        self.run_command("git", "init", "-q", "--bare", str(remote))
+        clean = self.push_to(remote)
+        self.assertEqual(clean.returncode, 0, clean.stdout + clean.stderr)
+        self.git("checkout", "-q", "-b", "private-topic")
+        self.commit("new.md", "runs on secretbox\n")
+        # A stale legacy ref must not override the tracked default branch.
+        self.git("update-ref", "refs/remotes/origin/master", "HEAD")
+        result = self.run_command("git", "push", "-q", str(remote), "private-topic")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("pre-push: refused", result.stderr)
+        self.assertNotIn("secretbox", result.stdout + result.stderr)
+        self.assertNotEqual(self.run_command("git", "--git-dir", str(remote), "rev-parse", "--verify",
+                                            "refs/heads/private-topic").returncode, 0)
+
+    def test_pre_push_scans_main_without_origin_head(self):
+        self.git("update-ref", "refs/remotes/origin/main", "HEAD")
+        self.git("update-ref", "-d", "refs/remotes/origin/master")
+        remote = self.root / "remote.git"
+        self.run_command("git", "init", "-q", "--bare", str(remote))
+        self.commit("new.md", "runs on secretbox\n")
+        result = self.push_to(remote)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("pre-push: refused", result.stderr)
+
+    def test_pre_push_falls_back_to_existing_remote_ref(self):
+        self.git("update-ref", "-d", "refs/remotes/origin/master")
+        remote = self.root / "remote.git"
+        self.run_command("git", "init", "-q", "--bare", str(remote))
+        self.git("push", "--no-verify", "-q", str(remote), "topic")
+        self.commit("clean.md", "nothing private here\n")
+        result = self.push_to(remote)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.commit("new.md", "runs on secretbox\n")
+        result = self.push_to(remote)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("pre-push: refused", result.stderr)
+        deleted = self.run_command("git", "push", "-q", str(remote), ":topic")
+        self.assertEqual(deleted.returncode, 0, deleted.stdout + deleted.stderr)
+
+    def test_pre_push_refuses_new_branch_without_a_scan_base(self):
+        self.git("update-ref", "-d", "refs/remotes/origin/master")
+        remote = self.root / "remote.git"
+        self.run_command("git", "init", "-q", "--bare", str(remote))
+        result = self.push_to(remote)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("cannot find a scan base", result.stderr)
+
 
 class GitBatchTests(unittest.TestCase):
     """Index/commit reads retain exact git-show bytes without one process per file."""
