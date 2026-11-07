@@ -79,6 +79,8 @@ private fun SettingsContent(
     var providerStep by rememberSaveable(initialPage) { mutableStateOf<String?>(null) }
     val desktops = services.desktops?.collectAsState()?.value.orEmpty()
     val context = LocalContext.current
+    // Read here: the settings list below is a LazyColumn builder, where composition locals cannot be read.
+    val appStyleStore = LocalAppStyleStore.current
     val scope = rememberCoroutineScope()
     val connection by services.connection.state.collectAsState()
     val machines by services.sessions.machines.collectAsState()
@@ -331,7 +333,6 @@ private fun SettingsContent(
             if (desktopRow) item { DesktopPresenceRow(desktops, deviceState.preferences?.muteWhileDesktop == true,
                 selected = detailKey == SettingsPageRoute(SettingsPage.Desktops), GroupPosition.of(capsuleRows + 2, notifyRows), onClick = { open(SettingsPage.Desktops) }) }
             // Inbox chats open natively (left / right bubbles, reply composer) unless switched to the extension's page.
-            val appStyleStore = LocalAppStyleStore.current
             if (appStyleStore != null) {
                 item { JSectionHeader(stringResource(R.string.settings_update_v7_native_section)) }
                 item { JGroupItem(GroupPosition.Single) {
