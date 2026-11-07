@@ -159,11 +159,13 @@ POST {bus.JoinPath}
 POST {peerPairPath}
 PUT /api/v1/admin/assistant
 PUT /api/v1/admin/hub
+PUT /api/v1/admin/machines/{id}
 PUT /api/v1/admin/network/access
 PUT /api/v1/admin/network/public
 PUT /api/v1/devices/{id}/prefs
 PUT /api/v1/hub/update/settings
 PUT /api/v1/looks/current
+PUT /api/v1/machines/{id}/name
 PUT /api/v1/machines/{mid}/agy-settings
 PUT /api/v1/machines/{mid}/claude-settings
 PUT /api/v1/machines/{mid}/codex-settings

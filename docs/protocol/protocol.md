@@ -1118,6 +1118,21 @@ When the hub can't read pending computers (database unreachable), every computer
 Once confirmed, hello's machine list includes it, and the assistant then pushes keys to it. Issuing a code, redeeming, confirming, rejecting and timeout deletion are all written to the `machine_audit` table (who, when, what was done, no credentials).
 How a device adds a pending computer: see "Computer pairing codes" under "Temporary pairing" above.
 
+### Renaming a computer (feature `machine_rename`)
+
+`PUT /api/v1/machines/{id}/name` `{"name"}` → `{"ok": true, "name"}`: a signed-in full device (as for `confirm`) gives the computer another name; `""` is its id again. The admin page does the same with
+`PUT /api/v1/admin/machines/{id}` `{"name"}`, and the computer's own Persona Link with `rename` on its link ([link.md](../operations/link.md) "The computer's name"). Only the name changes: the id, and everything kept by it
+(pins, mutes, trust, credentials), stays.
+
+- The hub writes `name` into the hub.json entry and takes it at once: no restart (the admin page's restart list doesn't count it), no reconnect (the manager keeps the machine and its connection when only the name
+  changed). Every client gets a `machines` event with the new name; the computer's Persona Link gets `endpoints` with `machine_name`; the hub's own texts (notifications, errors, the assistant's `devices.list`) use it.
+- Names are one line, at most 40 characters: 400 `invalid_name` otherwise; 404 `not_found` for an id hub.json doesn't have (a linked hub's computer is renamed on its own hub, and the center follows its record);
+  403 `forbidden` for a device that isn't a full one. `error` is localized by `Accept-Language`.
+- The manager's `devices.rename` `{machine_id, name}` → `{name}` carries a Persona Link's request: only for a machine of its own, refused with code `pending` while the user hasn't confirmed the computer.
+- Each rename is written to `machine_audit` (action `rename`, detail `{from, to, via}`; `via`: `admin` / `device` / `link` / `system`).
+- A computer that pairs while its name is still its id is named once after its system (`system_name` in the pairing request, `POST /api/v1/auth/tokens`, via `system`).
+- Clients show a rename entry only when hello's `features` has `machine_rename`.
+
 ## WebSocket `/api/v1/ws`
 
 Envelope `{"type":"…", ...}`.
@@ -1131,7 +1146,7 @@ Server → client:
 | `hello` | `server_version`, `client_id`, `features`, `hub_id`, `hub_name`, `endpoints`, `tls_port`, `fp`, `mesh`, `channel`, `build`, `protocol`, `min_app_build` (the last four same as `/api/v1/health`), `event_stream`, `event_seq`, `resumed` (see "Event resume" below), `locale` (the user's language, feature `locale`); the first message on every WS, not yet including the negotiated heartbeat. `mesh`: `{"hubs":[{hub_id,name,online,self,center,endpoints,tls_port,fp}]}`, every hub in the linked-hub group (including itself, `self: true`; paired but currently unreachable ones `online: false`; `center: true` is the group's primary hub, which clients prefer among those in the same group); without linking, only itself. When connected to a member, hello comes from the primary (`hub_id` is the primary's) ([mesh.md](../server/mesh.md)) |
 | `endpoints` | `endpoints` (the full candidate list, only sent to connections that declared the capability of the same name) |
 | `client_hello_ack` | `heartbeat: {interval, pong_timeout}` (the seconds actually used after this negotiation) |
-| `machines` | `machines` |
+| `machines` | `machines` (also after a rename: the whole list, with the new `name`) |
 | `workspace_board` | `revision`: a board change was saved; the client re-reads the full state; doesn't indicate an Agent state change |
 | `workspace_board_settings` | `enabled`: the board switch changed (`PUT /api/v1/workspace-board/settings`); clients show or hide the entry accordingly |
 | `todos` | —: pushed whenever to-dos or links change; clients re-fetch `GET /api/v1/todos` |

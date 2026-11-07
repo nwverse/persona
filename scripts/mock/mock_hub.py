@@ -29,7 +29,8 @@ def features():
     # Match proto.Features, retaining the existing terminal fixture switches.
     return ["error_codes", "client_hello", "heartbeat", "app_ping", "client_msg_id", "send_refusals",
             "screen_dialog", "resumable_interactions", "secret_prompts", "request_id", "file_upload",
-            "tls", "endpoints", "connectors", "lark_attachments", "file_stream", "file_thumb", "git_blob", "task_push"] + (["git_write"] if os.environ.get("MOCK_GIT_WRITE") else []) + (["terminal_stream"] if TERMINAL_STREAM else []) + (
+            "tls", "endpoints", "connectors", "lark_attachments", "file_stream", "file_thumb", "git_blob", "task_push",
+            "machine_rename"] + (["git_write"] if os.environ.get("MOCK_GIT_WRITE") else []) + (["terminal_stream"] if TERMINAL_STREAM else []) + (
                 ["terminal_control", "terminal_scroll", "terminal_click", "terminal_mouse"] if TERMINAL_CONTROL else []) + (
                 ["terminal_panes"] if os.environ.get("MOCK_TERMINAL_PANES") else []) + (["herdr_client"] + ([] if os.environ.get("MOCK_TERMINAL_FULL_NOFOCUS") else ["herdr_focus"]) if TERMINAL_FULL else []) + (
                 ["assistant_compact", "assistant_main_new"] if os.environ.get("MOCK_MAIN_ACTIONS") == "1" else []) + (
@@ -2169,6 +2170,28 @@ def other_manager(h):
 
 # Each other manager's own 说明 (设置 › 助手 with its X-Persona-Manager): a whole assistant has its own.
 MANAGER_NOTES = {"m-3fa21c": "这是「工作」管理者：只管工作电脑上的事和工作邮箱。"}
+
+
+def machine_rename_route(h, method, p, raw):
+    """PUT /api/v1/machines/{id}/name {name} (docs/server/machines.md "Renaming a computer"): the hub's name for the
+    computer, "" its id again; every client gets the machines again. 400 invalid_name as the hub."""
+    parts = p.split("/")
+    if method != "PUT" or len(parts) != 6 or parts[5] != "name" or not p.startswith("/api/v1/machines/"):
+        return False
+    try:
+        body = json.loads(raw or b"{}")
+    except ValueError:
+        body = {}
+    m = next((x for x in MACHINES if x["id"] == parts[4]), None)
+    if not m: return h.send_json({"error": "There's no such computer", "code": "not_found"}, 404) or True
+    name = str(body.get("name") or "").strip()
+    if len(name) > 40 or any(c in name for c in "\n\r\t"):
+        return h.send_json({"error": "The name can be at most 40 characters, on one line", "code": "invalid_name"}, 400) or True
+    m["name"] = name or m["id"]
+    for send, _ in list(LIVE):
+        try: send({"type": "machines", "machines": out_machines()})
+        except Exception: pass
+    return h.send_json({"ok": True, "name": m["name"]}) or True
 
 
 def manager_moves_route(h, method, p, raw):
@@ -12902,6 +12925,7 @@ class H(BaseHTTPRequestHandler):
         if file_ops_route(self, p, self.last_body): return
         if looks_route(self, self.command, p, self.last_body): return
         if recordings_route(self, self.command, p): return
+        if machine_rename_route(self, self.command, p, self.last_body): return
         if manager_moves_route(self, self.command, p, self.last_body): return
         if managers_route(self, self.command, p): return
         if providers_route(self, self.command, p, parse_qs(urlparse(self.path).query), self.last_body): return

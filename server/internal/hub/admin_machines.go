@@ -192,6 +192,24 @@ func (h *Hub) adminMachineRoutes(mux *http.ServeMux) {
 		}
 		writeJSON(w, map[string]any{"machine": added, "restart": h.pendingRestart(h.requestLang(r))})
 	})
+	mux.HandleFunc("PUT /api/v1/admin/machines/{id}", func(w http.ResponseWriter, r *http.Request) {
+		var in struct {
+			Name *string `json:"name"`
+		}
+		if !readAdminJSON(w, r, &in) {
+			return
+		}
+		if in.Name == nil { // the name is the one thing to change here
+			writeErrCode(w, http.StatusBadRequest, "bad_request", errors.New("name: the computer's new name (\"\": its id)"))
+			return
+		}
+		name, err := h.renameMachine(r.Context(), r.PathValue("id"), *in.Name, "admin", "admin")
+		if err != nil {
+			writeAddMachineErr(w, err)
+			return
+		}
+		writeJSON(w, map[string]any{"ok": true, "name": name})
+	})
 	mux.HandleFunc("DELETE /api/v1/admin/machines/{id}", func(w http.ResponseWriter, r *http.Request) {
 		id := r.PathValue("id")
 		found, err := removeMachineEntry(h.cfg.dir, id)

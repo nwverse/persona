@@ -130,7 +130,7 @@ func machineExtrasEqual(a, b map[string]extwire.MachineExtras) bool {
 
 // features are the hub's features with those of the extensions serving part of the API.
 func (h *Hub) features() []string {
-	out := append(slices.Clone(proto.Features), featureSessionsList, featureSessionsLookup)
+	out := append(slices.Clone(proto.Features), featureSessionsList, featureSessionsLookup, featureMachineRename)
 	if h.agentSessionArchivesSupported() {
 		out = append(out, featureAgentSessionArchives)
 	}

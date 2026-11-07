@@ -74,7 +74,7 @@ func (h *Hub) pendingRestart(l i18n.Lang) restartView {
 		switch {
 		case !ok:
 			v.Reasons = append(v.Reasons, i18n.T(l, "hub-admin_hub.restart_add_computer", i18n.Args{"id": m.ID}))
-		case !reflect.DeepEqual(was, m):
+		case !reflect.DeepEqual(was.withoutName(), m.withoutName()): // a name is taken at once (machine_rename.go)
 			v.Reasons = append(v.Reasons, i18n.T(l, "hub-admin_hub.restart_computer_settings", i18n.Args{"id": m.ID}))
 		}
 	}

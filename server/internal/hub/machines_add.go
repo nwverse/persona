@@ -116,9 +116,12 @@ func (h *Hub) addMachineMoving(mc *MachineConfig, by string) error {
 	return nil
 }
 
+// maxMachineName is how long a computer's name may be, in characters (link.MaxMachineName says the same).
+const maxMachineName = 40
+
 // checkMachineName refuses a computer's name that is too long or has line breaks or tabs.
 func checkMachineName(name string) error {
-	if len([]rune(name)) > 40 || strings.ContainsAny(name, "\n\r\t") {
+	if len([]rune(name)) > maxMachineName || strings.ContainsAny(name, "\n\r\t") {
 		return refuseAdd(http.StatusBadRequest, "invalid_name", i18n.Err("hub-admin_machines.invalid_name"))
 	}
 	return nil
