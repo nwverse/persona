@@ -9,11 +9,18 @@ import (
 	"strings"
 	"time"
 
+	"golang.org/x/sync/singleflight"
+
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
 // maxBlobBytes: bigger versions are not written out for comparing.
 const maxBlobBytes = 200 << 20
+
+// blobWrites lets one request write a version into the cache; requests for it at the same time wait for that one and
+// share its copy. Each writing its own would rename a second copy over one already handed out, under a download pinned
+// to its revision.
+var blobWrites singleflight.Group
 
 // blobRev: HEAD, INDEX (the staged version), or a commit (full or short hash) optionally followed by ^ (its parent).
 var blobRev = regexp.MustCompile(`^(HEAD|INDEX|[0-9a-f]{4,64}\^?)$`)
@@ -69,16 +76,20 @@ func (n *Node) gitBlob(ctx context.Context, p proto.GitBlobRequest) (*proto.GitB
 	if st, err := os.Stat(out); err == nil && st.Size() == n64 && usedCached(out, st) {
 		return &proto.GitBlob{Path: out, Size: n64}, nil
 	}
-	pruneConverted(cache)
-	data, err := gitTimed(ctx, root, time.Minute, "cat-file", "blob", sha)
+	_, err, _ = blobWrites.Do(out, func() (any, error) {
+		if st, err := os.Stat(out); err == nil && st.Size() == n64 {
+			return nil, nil // written by a request that finished after this one looked
+		}
+		pruneConverted(cache)
+		// the waiting requests share this run, so one of them giving up does not end it
+		data, err := gitTimed(context.WithoutCancel(ctx), root, time.Minute, "cat-file", "blob", sha)
+		if err != nil {
+			return nil, err
+		}
+		return nil, writeAtomic(out, strings.NewReader(data))
+	})
 	if err != nil {
 		return nil, err
 	}
-	if err := writeFileAtomic(out, []byte(data)); err != nil {
-		// another request for the same blob put it in place first, and Windows does not replace a file being read
-		if st, serr := os.Stat(out); serr != nil || st.Size() != int64(len(data)) {
-			return nil, err
-		}
-	}
-	return &proto.GitBlob{Path: out, Size: int64(len(data))}, nil
+	return &proto.GitBlob{Path: out, Size: n64}, nil
 }

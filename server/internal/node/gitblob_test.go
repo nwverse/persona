@@ -104,12 +104,19 @@ func TestGitBlobSameVersionAtOnce(t *testing.T) {
 			t.Fatal(err)
 		}
 		errs := make([]error, at)
+		revs := make([]string, at) // what a download of the copy each request got is pinned to
 		var wg sync.WaitGroup
 		for i := range at {
 			wg.Add(1)
 			go func() {
 				defer wg.Done()
 				b, err := n.gitBlob(context.Background(), proto.GitBlobRequest{Cwd: repo, Path: "deck.pdf", Rev: "HEAD"})
+				if err == nil {
+					var head *proto.FileChunk
+					if head, err = n.readFileChunk(proto.FileChunkRequest{Path: b.Path}); err == nil {
+						revs[i] = head.Revision
+					}
+				}
 				if err == nil {
 					if got, rerr := os.ReadFile(b.Path); rerr != nil || !bytes.Equal(got, want) || b.Size != int64(len(want)) {
 						err = fmt.Errorf("read %d of %d bytes (%v)", len(got), len(want), rerr)
@@ -124,8 +131,15 @@ func TestGitBlobSameVersionAtOnce(t *testing.T) {
 				t.Fatalf("round %d, request %d: %v", round, i, err)
 			}
 		}
-		if ents, _ := os.ReadDir(cache); len(ents) != 1 {
+		ents, _ := os.ReadDir(cache)
+		if len(ents) != 1 {
 			t.Fatalf("round %d: cache holds %v", round, ents)
+		}
+		info, _ := ents[0].Info()
+		for i, rev := range revs {
+			if rev != fileRevision(info) {
+				t.Fatalf("round %d: the copy request %d got was replaced after it was handed out", round, i)
+			}
 		}
 	}
 }
