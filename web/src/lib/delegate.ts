@@ -112,14 +112,19 @@ export function reanswerChanged(before: Record<string, string>, after: Record<st
   return Object.keys(changedAnswers(before, after)).length > 0;
 }
 
-/** A question the assistant answered for the user: what it answered and why, when, and what the user changed it to. */
+/** A question the assistant answered for the user: what it answered and why, and when. */
 export interface DelegatedAnswer {
   ix: Interaction;
   answers: Record<string, string>;
   reason: string;
   /** When it was answered (ms). */
   at: number;
-  reanswered?: { answers: Record<string, string>; at: number };
+}
+
+/** What the user changed a delegated answer to (interaction_reanswered, or this page's own POST …/reanswer). */
+export interface Reanswer {
+  answers: Record<string, string>;
+  at: number;
 }
 
 /** A question's answers as sent on the wire: only the text ones. */
@@ -128,9 +133,9 @@ export function answersIn(v: unknown): Record<string, string> {
   return Object.fromEntries(Object.entries(v as Record<string, unknown>).filter((e): e is [string, string] => typeof e[1] === "string"));
 }
 
-/** What the user's answers are now: the assistant's, with any changed since. */
-export function latestAnswers(d: Pick<DelegatedAnswer, "answers" | "reanswered">): Record<string, string> {
-  return { ...d.answers, ...d.reanswered?.answers };
+/** What the answers are now: the assistant's, with what the user changed since. */
+export function latestAnswers(d: Pick<DelegatedAnswer, "answers">, re?: Reanswer): Record<string, string> {
+  return { ...d.answers, ...re?.answers };
 }
 
 /** A row of GET /interactions/history. */
