@@ -46,9 +46,12 @@ const usage = `usage:
                            unless hub.json says assistant.external (token: stdin or PERSONA_ASSISTANT_TOKEN)
   persona-manager assistant drop-shared-tables [--yes]
                            drop the built-in manager's old tables from the hub's database, once its data moved
-  persona-manager join --builtin <hub address> <code>
+  persona-manager join --builtin <hub address> [<code>] [--install]
                            bind the built-in manager's own service to the hub (persona-hub manager-code prints a code;
-                           then persona-manager assistant with PERSONA_ASSISTANT_DEPLOY=service runs it)
+                           left out, it is read from PERSONA_MANAGER_CODE, which other users of the machine cannot
+                           read); --install: then install that service (persona-hub setup does both on a new hub)
+  persona-manager install|uninstall|status --builtin
+                           the built-in manager's own service: install (and start) it, remove it, show it
   persona-manager join|run|install|uninstall|status …
                            a manager made in the app: trade its install code, run it, install it as a service
                            (docs/assistant/managers.md; persona-manager status -h for the details)
