@@ -50,6 +50,11 @@ struct ExtensionParts: Identifiable {
     struct Item: Identifiable {
         var id: String
         var component: ExtensionComponent
+
+        /// A component's identity in its View: its key, else its place (`index` in section `section`).
+        nonisolated static func id(_ c: ExtensionComponent, section: Int, index: Int) -> String {
+            c.key.map { "k:" + $0 } ?? "\(section).\(index)"
+        }
     }
 
     var id: String
@@ -66,7 +71,7 @@ struct ExtensionParts: Identifiable {
                 if case .divider = c { parts.append([]); continue }
                 if case .unknown = c { continue }
                 if case .html = c, !includeHTML { continue } // Extensions never receive the assistant sandbox context.
-                parts[parts.count - 1].append(Item(id: c.key.map { "k:" + $0 } ?? "\(i).\(j)", component: c))
+                parts[parts.count - 1].append(Item(id: Item.id(c, section: i, index: j), component: c))
             }
             parts = parts.filter { !$0.isEmpty }
             if parts.isEmpty { parts = [[]] }
@@ -266,7 +271,10 @@ struct ExtensionViewStack: View {
     struct SectionEntry: Identifiable {
         var index: Int
         var section: ExtensionSection
-        var id: String { section.key.map { "k:" + $0 } ?? "\(index)" }
+        var id: String { Self.id(section, index: index) }
+
+        /// A section's identity in its View: its key, else its place.
+        nonisolated static func id(_ s: ExtensionSection, index: Int) -> String { s.key.map { "k:" + $0 } ?? "\(index)" }
     }
 
     @Environment(\.assistantHTMLRendering) private var htmlContext
@@ -298,7 +306,7 @@ struct ExtensionViewStack: View {
                     let items = s.items.enumerated().compactMap { j, item -> ExtensionParts.Item? in
                         if case .unknown = item { return nil }
                         if case .html = item, htmlContext == nil { return nil }
-                        return ExtensionParts.Item(id: item.key.map { "k:" + $0 } ?? "\(i).\(j)", component: item)
+                        return ExtensionParts.Item(id: ExtensionParts.Item.id(item, section: i, index: j), component: item)
                     }
                     if !items.isEmpty || (s.more != nil && model != nil) {
                         let body = VStack(alignment: .leading, spacing: Theme.Space.m) {

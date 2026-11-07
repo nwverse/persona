@@ -68,12 +68,13 @@ nonisolated enum ExtensionMotion {
         withAnimation(layout(from: old, to: new, reduced: Theme.Motion.reduced), apply)
     }
 
-    /// What a View's blocks are, by key (by place without one): when this changes on a redraw, blocks came or went.
+    /// What a View's blocks are, with the identities the renderers draw them under (by key, by place without one): when
+    /// this changes on a redraw, blocks came or went.
     static func blocks(_ view: ExtensionView) -> [String] {
         var out: [String] = []
         for (i, s) in view.sections.enumerated() {
-            out.append(s.key.map { "s:" + $0 } ?? "s\(i)")
-            for (j, c) in s.items.enumerated() { out.append(c.key.map { "k:" + $0 } ?? "\(i).\(j)") }
+            out.append("s" + ExtensionViewStack.SectionEntry.id(s, index: i))
+            for (j, c) in s.items.enumerated() { out.append(ExtensionParts.Item.id(c, section: i, index: j)) }
         }
         return out
     }
