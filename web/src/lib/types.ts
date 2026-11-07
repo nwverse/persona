@@ -144,6 +144,15 @@ export interface TriageSwitches {
   reply_reminder_minutes?: number;
 }
 
+/** A port an agent's processes listen on that answers HTTP (docs/operations/ports.md): its dev server. */
+export interface Port {
+  port: number;
+  addr?: string;
+  pid?: number;
+  process?: string;
+  title?: string;
+}
+
 export interface Session {
   /** The engine host it lives in (herdr, herdr-core, orca, paseo…), and the other hosts it is live in at once (#2576). */
   host?: string;
@@ -218,6 +227,8 @@ export interface Session {
   workspace_id?: string;
   /** Which host the space belongs to ("herdr", "orca", a runtime id…): space ids are unique only within one. */
   space_kind?: string;
+  /** The ports its processes serve pages on (docs/operations/ports.md): the dev servers a preview offers (docs/web/preview.md). */
+  ports?: Port[];
   updated_at?: string;
   seen_at?: string;
   last_text?: string;

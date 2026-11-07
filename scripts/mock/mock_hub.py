@@ -35,7 +35,8 @@ def features():
                 ["assistant_compact", "assistant_main_new"] if os.environ.get("MOCK_MAIN_ACTIONS") == "1" else []) + (
                 ["messaging"] if os.environ.get("MOCK_MESSAGING") == "1" else []) + (
                 ["conversation_origin"] if os.environ.get("MOCK_AUTO_CONVERSATIONS") == "1" else []) + (
-                ["sessions_list", "sessions_lookup"] if os.environ.get("MOCK_SESSIONS_LIST") == "1" else [])
+                ["sessions_list", "sessions_lookup"] if os.environ.get("MOCK_SESSIONS_LIST") == "1" else []) + (
+                ["preview"] if os.environ.get("MOCK_PREVIEW") else [])
 
 
 def identity():
@@ -759,7 +760,7 @@ def wf_review_runs(step):
             "tool_use_id": "toolu_wf_docs", "agents_started": 4, "agents_done": 2, "agents_running": 0, "agents_failed": 1,
             "started_at": ago(minutes=50), "ended_at": ago(minutes=40), "error": "Error: Workflow aborted",
             "agents": [wf_review_agent("d1", "scan:ios", "Scan", "done", 50, 46, tool=("Grep", "找 docs/ios.md 里的旧说法")),
-                       wf_review_agent("d2", "scan:web", "Scan", "done", 49.5, 45, tool=("Grep", "找 docs/web.md 里的旧说法")),
+                       wf_review_agent("d2", "scan:web", "Scan", "done", 49.5, 45, tool=("Grep", "找 docs/web/web.md 里的旧说法")),
                        wf_review_agent("d3", "scan:android", "Scan", "failed", 49, 44, tool=("Read", "读 docs/android.md")),
                        wf_review_agent("d4", "fix:ios", "Fix", "stopped", 44, 40, tool=("Edit", "改 docs/ios.md"))]}
     return [parity, docs]
@@ -2682,7 +2683,7 @@ if os.environ.get("MOCK_WORKFLOW") == "1":
                      + [it("assistant", "text", 50, text="文档扫描放到后台了。")]
                      + [it("user", "text", 15, text="各端的功能对齐审计一遍，每条发现再核对一次")]
                      + tool("Grep", {"pattern": "struct .*View", "path": "apple/Persona/Views"}, "ChatView.swift:12\nInboxView.swift:8", 15)
-                     + tool("Read", {"file_path": "/Users/me/code/persona/docs/web.md"}, "1\t# Web", 15)
+                     + tool("Read", {"file_path": "/Users/me/code/persona/docs/web/web.md"}, "1\t# Web", 15)
                      + wf_call("toolu_wf_parity", "parity-audit", 14)
                      + [it("assistant", "text", 14, text="审计交给 workflow 在后台跑了，跑完我再汇总。")])
     for _w in wf_review_runs(0) + wf_review_runs(4)[:1]:
@@ -11946,6 +11947,13 @@ def voice_socket(h):
         h.close_connection = True
 
 
+preview_route = None
+if os.environ.get("MOCK_PREVIEW"):  # dev server previews (docs/web/preview.md): scripts/mock/mock_preview.py
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    import mock_preview
+    preview_route = mock_preview.install(sys.modules[__name__])
+
+
 if VOICE_MODE:  # iOS's protocol 2 beside the script above (docs/assistant/voice.md 6.8): scripts/mock/voice_mock.py
     sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
     import voice_mock
@@ -12074,6 +12082,7 @@ class H(BaseHTTPRequestHandler):
         u = urlparse(self.path); p = u.path; q = parse_qs(u.query)
         HITS["GET " + p] = HITS.get("GET " + p, 0) + 1
         if self.token_refused(): return
+        if preview_route and preview_route(self, "GET", p, q): return
         if p == "/api/v1/assistant/conversations/" + ASK1 + "/always":
             return self.send_json({"grants": ALWAYS_GRANTS})
         if recordings_route(self, "GET", p): return
@@ -12886,6 +12895,7 @@ class H(BaseHTTPRequestHandler):
             return self.upload()
         self.last_body = self.body()
         p = urlparse(self.path).path
+        if preview_route and preview_route(self, self.command, p, parse_qs(urlparse(self.path).query)): return
         if p.startswith("/api/v1/assistant/conversations/" + ASK1 + "/always/") and self.command == "DELETE":
             key = p.rsplit("/", 1)[-1]
             ALWAYS_GRANTS[:] = [g for g in ALWAYS_GRANTS if g["key_hash"] != key]

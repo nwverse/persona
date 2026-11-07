@@ -78,5 +78,6 @@
   "composer_source": "来源",
   "unsent": "这条没发出去（{error}），字还在输入框里",
   "call_not_loaded": "这一步不在已载入的记录里，往上翻一翻再试",
-  "refresh_failed": "刷新失败"
+  "refresh_failed": "刷新失败",
+  "preview": "预览"
 }

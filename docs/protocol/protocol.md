@@ -2853,11 +2853,22 @@ At most one quote block starts a message (the quoted words; for a task card, the
 >
 > Why not use a constant?
 
+> Element comment 3             ← an element picked in a dev server preview (docs/web/preview.md): number, page, selector, optional Component (with its source) or Source, Text, Truncated, the element's HTML, comment
+> Page: http://localhost:5173/settings
+> Element: main > form > button.save
+> Component: SaveButton (src/settings/SaveButton.tsx:14)
+> Text: Save changes
+> ```html
+> <button class="save">Save changes</button>
+> ```
+>
+> Make it the primary color
+
 The user's typed text
 ```
 
 Limits: comments up to 4000 characters, attached code up to 60 lines (extra lines are counted in `Truncated` but not included); the fence has one more backtick than the longest run in the code. Numbers follow the order of comments above the input, starting at 1.
-On reading back, web only recognizes blocks after the first block whose first line is `Comment N` / `Code comment N` (`splitQuotes`), so ordinary `> ` quotes are unaffected; editing a sent message puts comments back above the input.
+On reading back, web only recognizes blocks after the first block whose first line is `Comment N` / `Code comment N` / `Element comment N` (`splitQuotes`), so ordinary `> ` quotes are unaffected; editing a sent message puts comments back above the input.
 
 ## Messages injected by Persona
 

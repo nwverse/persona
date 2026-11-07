@@ -47,11 +47,29 @@ export interface CodeSpot {
   omitted: number;
 }
 
+/** Where an element comment points: the page, the element, and the preview to open again. */
+export interface ElementSpot {
+  url: string;
+  selector: string;
+  /** The component that drew it and where its code is, when the dev build said. */
+  component?: string;
+  source?: string;
+  /** Its visible text, cut short. */
+  text?: string;
+  omitted: number;
+  mid?: string;
+  sid?: string;
+  cwd?: string;
+  port?: number;
+}
+
 export interface QuoteComment {
   /** The reader's note (at most MAX_COMMENT_CHARS). */
   body: string;
   anchor?: TextAnchor;
   spot?: CodeSpot;
+  /** An element picked in a dev server preview (lib/preview.ts, #150); its HTML is the quote's text. */
+  element?: ElementSpot;
 }
 
 /** Rows `a`..`b` (either order) of a parsed diff as a code comment's lines: the first and last line numbers (the new file's,
@@ -138,9 +156,9 @@ export function textQuote(words: string, anchor: TextAnchor | undefined, from?: 
 }
 
 // i18n-ignore: the block below is written into the message for the agent and read back by parseCommentBlock
-const HEAD = /^(Code comment|Comment) (\d+)$/;
+const HEAD = /^(Code comment|Element comment|Comment) (\d+)$/;
 
-/** The first line of a comment block (`Comment 2`, `Code comment 1`). */
+/** The first line of a comment block (`Comment 2`, `Code comment 1`, `Element comment 3`). */
 export function isCommentHead(line: string): boolean {
   return HEAD.test(line.trim());
 }
@@ -156,7 +174,17 @@ export function commentBlock(q: DraftQuote, n: number): string {
   if (!c) return q.text;
   const note = clampComment(c.body).trim();
   const out: string[] = [];
-  if (c.spot) {
+  if (c.element) {
+    const e = c.element;
+    out.push(`Element comment ${n}`, `Page: ${e.url}`, `Element: ${e.selector}`);
+    if (e.component) out.push(`Component: ${e.component}${e.source ? ` (${e.source})` : ""}`);
+    else if (e.source) out.push(`Source: ${e.source}`);
+    if (e.text) out.push(`Text: ${e.text.replace(/\s+/g, " ")}`);
+    const shown = q.text.split("\n").length;
+    if (e.omitted > 0) out.push(`Truncated: the first ${shown} of ${shown + e.omitted} lines`);
+    const fence = fenceFor(q.text);
+    out.push(fence + "html", q.text, fence);
+  } else if (c.spot) {
     const s = c.spot;
     out.push(`Code comment ${n}`, `File: ${s.file}:${rangeLabel(s.from, s.to)}`);
     if (s.old) out.push("Side: old");
@@ -185,6 +213,7 @@ export function parseCommentBlock(block: string): DraftQuote | null {
     const body = lines.slice(i).join("\n").trim();
     return { text: words.join("\n").trim(), comment: { body } };
   }
+  if (head[1] === "Element comment") return parseElementBlock(lines.slice(1));
   const spot: Partial<CodeSpot> = { omitted: 0 };
   for (; i < lines.length && !/^`{3,}/.test(lines[i]); i++) {
     const m = /^(File|Side|Diff|Truncated): ?(.*)$/.exec(lines[i]);
@@ -210,6 +239,36 @@ export function parseCommentBlock(block: string): DraftQuote | null {
   }
   if (spot.file === undefined) return null;
   return { text: code.join("\n"), comment: { body: lines.slice(i).join("\n").trim(), spot: spot as CodeSpot } };
+}
+
+/** The rest of an `Element comment N` block (after its head). */
+function parseElementBlock(lines: string[]): DraftQuote | null {
+  const el: Partial<ElementSpot> = { omitted: 0 };
+  let i = 0;
+  for (; i < lines.length && !/^`{3,}/.test(lines[i]); i++) {
+    const m = /^(Page|Element|Component|Source|Text|Truncated): ?(.*)$/.exec(lines[i]);
+    if (!m) continue;
+    if (m[1] === "Page") el.url = m[2];
+    else if (m[1] === "Element") el.selector = m[2];
+    else if (m[1] === "Component") {
+      const c = /^(.*?)(?: \((.*)\))?$/.exec(m[2])!;
+      el.component = c[1];
+      if (c[2]) el.source = c[2];
+    } else if (m[1] === "Source") el.source = m[2];
+    else if (m[1] === "Text") el.text = m[2];
+    else {
+      const t = /^the first (\d+) of (\d+) lines$/.exec(m[2]);
+      if (t) el.omitted = Number(t[2]) - Number(t[1]);
+    }
+  }
+  const open = /^(`{3,})(.*)$/.exec(lines[i] ?? "");
+  const code: string[] = [];
+  if (open) {
+    for (i++; i < lines.length && lines[i] !== open[1]; i++) code.push(lines[i]);
+    i++;
+  }
+  if (el.url === undefined || el.selector === undefined) return null;
+  return { text: code.join("\n"), comment: { body: lines.slice(i).join("\n").trim(), element: el as ElementSpot } };
 }
 
 /** Opens the file or the diff a code comment is about at its lines; false when it does not know where (a bubble read back). */

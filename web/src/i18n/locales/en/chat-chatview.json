@@ -78,5 +78,6 @@
   "composer_source": "Source",
   "unsent": "This message wasn't sent ({error}). It's still in the box.",
   "call_not_loaded": "That step is not in the loaded history; scroll up and try again",
-  "refresh_failed": "Couldn’t refresh"
+  "refresh_failed": "Couldn’t refresh",
+  "preview": "Preview"
 }
