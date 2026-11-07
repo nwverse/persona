@@ -6,12 +6,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log"
 	"os"
 	"time"
 
-	"github.com/nwverse/persona/server/internal/assistantwire"
-	"github.com/nwverse/persona/server/internal/db"
 	"github.com/nwverse/persona/server/internal/identity"
 )
 
@@ -101,16 +98,7 @@ func ManagerCode(ctx context.Context, out io.Writer) error {
 		return errors.New("the built-in manager is not a service of its own here (assistant.mode service, not " +
 			"assistant.external): first persona-hub manager-mode service, then persona-hub switch (or restart its service)")
 	}
-	if cfg.DatabaseURL == "" {
-		return errors.New("hub.json has no database_url")
-	}
-	database, err := db.Open(ctx, cfg.DatabaseURL, db.HubSet)
-	if err != nil {
-		return err
-	}
-	defer database.Close()
-	h := &Hub{cfg: cfg, store: database, logger: log.New(io.Discard, "", 0)}
-	code, until, err := h.newInstallCode(ctx, assistantwire.AssistantID, "助手") // i18n-ignore: its identity's name, as assistant-token gives it
+	code, until, err := builtinCode(ctx, cfg)
 	if err != nil {
 		return err
 	}

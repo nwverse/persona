@@ -113,8 +113,15 @@ func TestNewInstallDefaultsAreNotDefaults(t *testing.T) {
 	}
 }
 
-// fakeHub answers what setup asks the running hub: health, endpoints, a pair code and a setup code.
+// fakeHub answers what setup asks the running hub: health, endpoints, a pair code and a setup code, and the roster
+// with the built-in manager online as a service of its own.
 func fakeHub(t *testing.T, token *string, passwordSet bool) (port int) {
+	t.Helper()
+	return fakeHubWith(t, token, passwordSet, func() bool { return true })
+}
+
+// fakeHubWith is fakeHub with builtinOnline saying whether the built-in manager's service is on the bus.
+func fakeHubWith(t *testing.T, token *string, passwordSet bool, builtinOnline func() bool) (port int) {
 	t.Helper()
 	mux := http.NewServeMux()
 	auth := func(r *http.Request) bool { return r.Header.Get("Authorization") == "Bearer "+*token }
@@ -132,6 +139,13 @@ func fakeHub(t *testing.T, token *string, passwordSet bool) (port int) {
 			return
 		}
 		writeJSON(w, map[string]any{"token": "jp_test", "url": "http://hub.example.com:1", "expires_at": time.Now().Add(10 * time.Minute)})
+	})
+	mux.HandleFunc("GET /api/v1/managers", func(w http.ResponseWriter, r *http.Request) {
+		if !auth(r) {
+			w.WriteHeader(401)
+			return
+		}
+		writeJSON(w, map[string]any{"managers": []managerInfo{{ID: "assistant", Builtin: true, Online: builtinOnline(), Deploy: "service"}}})
 	})
 	mux.HandleFunc("POST /api/v1/admin/setup-code", func(w http.ResponseWriter, r *http.Request) {
 		if passwordSet {
@@ -220,6 +234,7 @@ func testSetupEnv(t *testing.T, home string, o setupOptions, cmds *fakeCommands,
 		getenv:      func(string) string { return "" },
 		sleep:       func(time.Duration) {},
 		isContainer: func() bool { return false },
+		builtinCode: func(context.Context, *Config) (string, error) { return "mi_setup", nil },
 		healthWait:  time.Second, dbWait: time.Second,
 		dbContainer: setupDBContainer, dbVolume: setupDBVolume, dbPort: setupDBPort,
 	}
@@ -276,8 +291,21 @@ func TestSetupNewInstall(t *testing.T) {
 		!strings.Contains(run, "-p 127.0.0.1:18661:5432") || !strings.HasSuffix(run, "postgres:18-alpine") || strings.Contains(run, "POSTGRES_PASSWORD=") {
 		t.Fatalf("docker run: %q", run)
 	}
-	if len(cmds.envs) != 1 || !strings.HasPrefix(cmds.envs[0], "POSTGRES_PASSWORD=") {
+	if len(cmds.envs) != 3 || !strings.HasPrefix(cmds.envs[0], "POSTGRES_PASSWORD=") {
 		t.Fatalf("password env: %v", cmds.envs)
+	}
+	// The built-in manager: its own service, bound by the manager's program with the code in its environment only.
+	if cfg.Assistant.Mode != AssistantModeService {
+		t.Fatalf("assistant.mode %q:\n%s", cfg.Assistant.Mode, b)
+	}
+	install := filepath.Join(e.root, "bin", "personad") + " manager install --builtin --join http://127.0.0.1:" + strconv.Itoa(port)
+	if !cmds.called(install) || strings.Join(cmds.envs[1:], " ") != "PERSONA_HOME="+e.root+" PERSONA_MANAGER_CODE=mi_setup" {
+		t.Fatalf("manager install: %v %v", cmds.calls, cmds.envs)
+	}
+	for _, c := range cmds.calls {
+		if strings.Contains(c, "mi_setup") {
+			t.Fatalf("the code on a command line: %q", c)
+		}
 	}
 	// hub-systemd.sh's units; the TLS address is bound, so FreeBind.
 	unitDir := filepath.Join(home, ".config", "systemd", "user")
@@ -307,7 +335,7 @@ func TestSetupNewInstall(t *testing.T) {
 			t.Fatalf("linger not offered: %q", l)
 		}
 	}
-	if strings.Join(steps, ",") != "config,database,service,health,doctor" {
+	if strings.Join(steps, ",") != "config,database,service,health,manager,doctor" {
 		t.Fatalf("steps %v", steps)
 	}
 	var done map[string]any

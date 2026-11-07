@@ -256,7 +256,7 @@ func (e *setupEnv) systemdService(ctx context.Context, cfg *Config, bin string) 
 		steps = append(steps, []string{"restart", "personad"})
 	case e.restartHub:
 		steps = append(steps, []string{"restart", "personad"})
-		what = "常驻服务已经装好；hub.json 补了本机，重启了 hub"
+		what = "常驻服务已经装好；" + strings.Join(e.restartWhy, "、") + "，重启了 hub"
 	case binChanged:
 		// The units are as they were, but the binary is new (an upgrade): the hub running is the old one. The port
 		// stays with personad.socket, so the restart is not noticed (docs/operations/hub-restart.md).
@@ -425,6 +425,15 @@ func (e *setupEnv) agentPlist(label string) string {
 	return filepath.Join(e.home, "Library", "LaunchAgents", label+".plist")
 }
 
+// restartReason says why setup restarts a running hub: a new binary, what config changed, or both.
+func (e *setupEnv) restartReason(binChanged bool) string {
+	why := e.restartWhy
+	if binChanged {
+		why = append([]string{"hub 换了新版本"}, why...)
+	}
+	return strings.Join(why, "、")
+}
+
 // kickstart restarts a loaded launchd agent (hub-systemd.sh's way on a Mac).
 func (e *setupEnv) kickstart(ctx context.Context, target string) error {
 	if out, err := e.run(ctx, nil, "launchctl", "kickstart", "-k", target); err != nil {
@@ -446,7 +455,7 @@ func (e *setupEnv) launchdService(ctx context.Context, cfg *Config, bin string) 
 			if err := e.kickstart(ctx, domain+"/"+label); err != nil {
 				return err
 			}
-			detail += "；hub 换了新版本或 hub.json 补了本机，重启了它"
+			detail += "；" + e.restartReason(binChanged) + "，重启了它"
 		}
 		noteBinary(bin, sum)
 		e.report("service", true, detail, "")
@@ -462,7 +471,7 @@ func (e *setupEnv) launchdService(ctx context.Context, cfg *Config, bin string) 
 			if err := e.kickstart(ctx, domain+"/"+hubLaunchdLabel); err != nil {
 				return err
 			}
-			detail = "常驻服务已经装好；hub 换了新版本或 hub.json 补了本机，重启了它（launchd " + hubLaunchdLabel + "）"
+			detail = "常驻服务已经装好；" + e.restartReason(binChanged) + "，重启了它（launchd " + hubLaunchdLabel + "）"
 		}
 		noteBinary(bin, sum)
 		e.report("service", true, detail, "")

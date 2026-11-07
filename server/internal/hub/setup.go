@@ -30,8 +30,9 @@ import (
 // `personad hub setup` (docs/assistant/onboarding.md 4.1, 5.5): one command that leaves a working hub on this machine. It writes
 // hub.json (a whole new file only when there is none yet), makes sure there is a database (the same Postgres container
 // scripts/deploy/db.sh makes, or the one hub.json names), installs the service that keeps the hub running (the same
-// systemd units as scripts/deploy/hub-systemd.sh; a launchd agent on a Mac), waits for the hub, checks it, and prints
-// what to do next: a QR code for the phone and the admin URL with the first-run setup code in its fragment.
+// systemd units as scripts/deploy/hub-systemd.sh; a launchd agent on a Mac), waits for the hub, has the built-in manager
+// bound and installed as a service of its own (setup_manager.go), checks it, and prints what to do next: a QR code for
+// the phone and the admin URL with the first-run setup code in its fragment.
 //
 // Every step prints one line; a step that fails says what to do and stops. Running it again is safe: values already
 // in hub.json are never changed, and a service that is already right is left running.
@@ -48,6 +49,8 @@ type setupOptions struct {
 	outside   bool
 	noService bool
 	json      bool
+	// managerService: an existing hub's built-in manager becomes a service of its own (a new install's is anyway).
+	managerService bool
 }
 
 // The database `personad hub setup` creates: scripts/deploy/db.sh's container, so deploy.sh keeps working with it.
@@ -58,7 +61,8 @@ const (
 	hubLaunchdLabel  = "com.persona.hub" // like com.persona.node (persona-link's nodesvc.go)
 )
 
-// SetupCommand is `personad hub setup [--yes] [--listen :18660] [--tls :18662] [--outside] [--no-service] [--json]`.
+// SetupCommand is `personad hub setup [--yes] [--listen :18660] [--tls :18662] [--outside] [--no-service]
+// [--manager-service] [--json]`.
 func SetupCommand(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 	flags := flag.NewFlagSet("hub setup", flag.ContinueOnError)
 	flags.SetOutput(stderr)
@@ -67,13 +71,17 @@ func SetupCommand(ctx context.Context, args []string, stdout, stderr io.Writer) 
 	flags.StringVar(&o.listen, "listen", ":18660", "新装时 hub 的明文端口")
 	flags.StringVar(&o.tls, "tls", ":18662", "新装时 hub 的 TLS 端口（不写地址时只绑局域网 IPv4）")
 	flags.BoolVar(&o.outside, "outside", false, "出门也要用：TLS 端口绑所有地址，自检也查公网")
-	flags.BoolVar(&o.noService, "no-service", false, "不装常驻服务（自己运行 personad hub run）")
+	flags.BoolVar(&o.noService, "no-service", false, "不装常驻服务（自己运行 personad hub run）；hub 自己拉起内置管理者")
+	flags.BoolVar(&o.managerService, "manager-service", false, "已有的 hub：把内置管理者改成自己的常驻服务（新装的本来就是）")
 	flags.BoolVar(&o.json, "json", false, "一行一个 JSON：每步 {step, ok, detail, next}，最后 {done, …}")
 	if err := flags.Parse(args); err != nil {
 		return err
 	}
 	if flags.NArg() != 0 {
 		return fmt.Errorf("hub setup 不接受位置参数")
+	}
+	if o.noService && o.managerService {
+		return fmt.Errorf("--manager-service 要装内置管理者的常驻服务，不能和 --no-service 一起用")
 	}
 	flags.Visit(func(f *flag.Flag) {
 		o.listenSet = o.listenSet || f.Name == "listen"
@@ -113,11 +121,15 @@ type setupEnv struct {
 	sleep    func(time.Duration)
 
 	isContainer func() bool
-	// restartHub: config changed what a running hub reads only at start, so service restarts it.
+	// restartHub: config changed what a running hub reads only at start, so service restarts it; restartWhy says what.
 	restartHub bool
+	restartWhy []string
+	// builtinCode makes a one-time code that binds the built-in manager's own service (ManagerCode's).
+	builtinCode func(ctx context.Context, cfg *Config) (string, error)
 
-	healthWait time.Duration
-	dbWait     time.Duration
+	healthWait  time.Duration
+	dbWait      time.Duration
+	managerWait time.Duration // for the built-in manager's service to come online
 	// The database setup creates; another name only for tests and trial runs (_PERSONA_SETUP_DB_CONTAINER…).
 	dbContainer, dbVolume string
 	dbPort                int
@@ -150,9 +162,14 @@ func newSetupEnv(out io.Writer, o setupOptions) (*setupEnv, error) {
 		getenv:      identity.Getenv,
 		sleep:       time.Sleep,
 		isContainer: inContainer,
+		builtinCode: func(ctx context.Context, cfg *Config) (string, error) {
+			code, _, err := builtinCode(ctx, cfg)
+			return code, err
+		},
 
 		healthWait:  90 * time.Second,
 		dbWait:      30 * time.Second,
+		managerWait: 90 * time.Second,
 		dbContainer: setupDBContainer, dbVolume: setupDBVolume, dbPort: setupDBPort,
 	}
 	if o.json {
@@ -171,7 +188,7 @@ func newSetupEnv(out io.Writer, o setupOptions) (*setupEnv, error) {
 // --- output ---------------------------------------------------------------------------------------------------
 
 var setupStepNames = map[string]string{
-	"config": "配置", "database": "数据库", "service": "常驻", "health": "启动", "doctor": "自检",
+	"config": "配置", "database": "数据库", "service": "常驻", "health": "启动", "manager": "管理者", "doctor": "自检",
 }
 
 func (e *setupEnv) report(step string, ok bool, detail, next string) {
@@ -213,6 +230,9 @@ func (e *setupEnv) setup(ctx context.Context) error {
 		return err
 	}
 	if err := e.health(ctx, cfg); err != nil {
+		return err
+	}
+	if err := e.builtinManager(ctx, cfg); err != nil {
 		return err
 	}
 	problems := e.doctor(ctx, e.root, e.o.outside)
@@ -279,8 +299,11 @@ func (e *setupEnv) config() (*setupConfig, error) {
 	}
 	_, hasToken := raw.get("token")
 	fresh := !hasToken
-	e.restartHub = false
+	e.restartHub, e.restartWhy = false, nil
 	var notes []string
+	if e.o.managerService && !e.canManagerService() {
+		return nil, e.fail("config", "这里装不了内置管理者的常驻服务（"+e.noManagerServiceWhy()+"）", "去掉 --manager-service 重跑")
+	}
 	if fresh {
 		in := e.installInputs(&notes)
 		gen, err := marshalNoEscape(newInstallConfig(in))
@@ -291,10 +314,26 @@ func (e *setupEnv) config() (*setupConfig, error) {
 		if err != nil {
 			return nil, err
 		}
-		if err := editHubJSON(e.root, func(o *jsonObject) error { return fillMissing(o, genObj) }); err != nil {
+		if err := editHubJSON(e.root, func(o *jsonObject) error {
+			if err := fillMissing(o, genObj); err != nil {
+				return err
+			}
+			return freshManagerMode(o, e.canManagerService())
+		}); err != nil {
 			return nil, e.fail("config", "写不了 "+e.hubJSON()+"："+err.Error(), "检查这个目录的权限")
 		}
 	} else {
+		if e.o.managerService {
+			changed, err := e.toManagerService()
+			if err != nil {
+				return nil, err
+			}
+			if changed {
+				e.restartHub = true // a running hub reads assistant.mode only when it starts
+				e.restartWhy = append(e.restartWhy, "内置管理者改成了自己的常驻服务")
+				notes = append(notes, "assistant.mode 改成 service：hub 不再拉起内置管理者，它是自己的常驻服务")
+			}
+		}
 		if note := e.keptListenNote(raw); note != "" {
 			notes = append(notes, note)
 		}
@@ -314,6 +353,7 @@ func (e *setupEnv) config() (*setupConfig, error) {
 				return nil, e.fail("config", "写不了 "+e.hubJSON()+"："+err.Error(), "检查这个目录的权限")
 			}
 			e.restartHub = true // a running hub reads machines only when it starts
+			e.restartWhy = append(e.restartWhy, "hub.json 补了本机")
 			notes = append(notes, "补上本机作为电脑（kind: local）")
 		}
 	}

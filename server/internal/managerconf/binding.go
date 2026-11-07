@@ -64,3 +64,15 @@ func WriteBinding(home string, b Binding) error {
 		return nil
 	})
 }
+
+// The built-in manager's own service, as `persona-manager install --builtin` installs it and `persona-hub setup`
+// names it: the systemd user unit BuiltinService+".service" on Linux, the launchd agent BuiltinLabel on a Mac.
+const (
+	BuiltinService = "persona-manager-assistant"
+	BuiltinLabel   = "com.persona.manager.assistant"
+)
+
+// BuiltinCodeEnv is where `persona-manager install --builtin --join` reads the one-time code from (`persona-hub
+// setup` puts it there): not the command line, which any user of the machine can read while it runs, and the hub
+// trades the built-in manager's code from its own machine without any other credential.
+const BuiltinCodeEnv = "PERSONA_MANAGER_CODE"
