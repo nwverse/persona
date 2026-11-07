@@ -601,6 +601,9 @@ nonisolated struct Session: Codable, Identifiable, Hashable, Sendable {
     /// The levels `effort` may be set to when they are not Claude Code's (`SessionModes.effortOptions`): a Codex thread
     /// the hub drives through its app-server, where only the effort changes (node/codex_effort.go). Nil elsewhere.
     var efforts: [String]? = nil
+    /// Claude Code's ultracode as the node last saw it (`ultracode`, docs/protocol/protocol.md "Claude Code ultracode");
+    /// nil while unknown, which is not off. Its mark is `Ultracode.markShown`.
+    var ultracode: Bool? = nil
     /// What the model saw in the agent's latest reply, and the model's window (#3289, node: `context_tokens` /
     /// `context_window`, #2430); nil while the node cannot tell (no reply yet, a window it does not know, an older node).
     var contextTokens: Int? = nil
@@ -808,7 +811,7 @@ nonisolated struct Session: Codable, Identifiable, Hashable, Sendable {
 
     enum CodingKeys: String, CodingKey {
         case listWaiting = "waiting", listBackgroundCount = "background_count", listRunningSubagents = "running_subagents", listRunningWorkflows = "running_workflows"
-        case title, cwd, status, launcher, model, agent, effort, efforts, capabilities, attached
+        case title, cwd, status, launcher, model, agent, effort, efforts, ultracode, capabilities, attached
         case canFork = "can_fork"
         case sourceKind = "source_kind", sourceThreadID = "source_thread_id", sourceInstanceID = "source_instance_id",
              parentThreadID = "parent_thread_id", readOnlyReason = "read_only_reason"
@@ -861,6 +864,7 @@ nonisolated struct Session: Codable, Identifiable, Hashable, Sendable {
         permissionMode = try c.decodeIfPresent(String.self, forKey: .permissionMode)
         effort = try c.decodeIfPresent(String.self, forKey: .effort)
         efforts = try c.decodeIfPresent([String].self, forKey: .efforts)
+        ultracode = (try? c.decodeIfPresent(Bool.self, forKey: .ultracode)).flatMap { $0 }
         contextTokens = try? c.decodeIfPresent(Int.self, forKey: .contextTokens) // an odd one never drops the session
         contextWindow = try? c.decodeIfPresent(Int.self, forKey: .contextWindow)
         let legacy = try decoder.container(keyedBy: HubNaming.Field.self)

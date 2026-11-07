@@ -132,6 +132,8 @@ struct PlanCard: View {
     var plan: TaskPlan
     @State private var remember = false
     @State private var editing = false
+    /// Each task's ultracode as set on the card (#12), by index; the assistant's where it is not.
+    @State private var ultraChoice: [Int: Bool] = [:]
     private var store: TasksStore { .shared }
 
     var body: some View {
@@ -147,10 +149,15 @@ struct PlanCard: View {
             Label(plan.tasks.count > 1 ? String(localized: "Split into \(plan.tasks.count) tasks, started like this") : String(localized: "Start like this"), systemImage: Theme.Icon.taskPlan)
                 .font(Theme.Font.captionStrong)
                 .foregroundStyle(.secondary)
+            let offered = Ultracode.offered
+            let ultracode = Ultracode.choices(plan, card: ultraChoice)
             ForEach(Array(plan.tasks.enumerated()), id: \.offset) { n, task in
                 if n > 0 { Divider() }
-                PlanTaskRow(number: n + 1, task: task, numbered: plan.tasks.count > 1)
+                PlanTaskRow(number: n + 1, task: task, numbered: plan.tasks.count > 1,
+                            ultra: offered ? .init(on: ultracode[n], blocked: Ultracode.blocked(machine: task.machine)) : nil,
+                            onUltra: { ultraChoice[n] = $0 })
             }
+            .disabled(store.busyPlans.contains(plan.id))
             Button {
                 withAnimation(Theme.Motion.state) { remember.toggle() }
             } label: {
@@ -163,7 +170,9 @@ struct PlanCard: View {
             .buttonStyle(.plain)
             HStack(spacing: Theme.Space.s) {
                 Button {
-                    Task { await store.start(plan, remember: remember) }
+                    let blocked = Ultracode.blockedMachines(plan.tasks)
+                    let edits = Ultracode.cardEdits(plan, choices: Ultracode.choices(plan, card: ultraChoice), blocked: { blocked.contains($0) })
+                    Task { await store.start(plan, edits: edits, remember: remember) }
                 } label: {
                     Text(plan.tasks.count > 1 ? String(localized: "Start \(plan.tasks.count) Tasks") : String(localized: "Started")).lineLimit(1)
                         .frame(maxWidth: .infinity)
@@ -180,9 +189,11 @@ struct PlanCard: View {
         }
         .card(padding: Theme.Space.l)
         .sheet(isPresented: $editing) {
-            PlanEditSheet(plan: plan) { edits in
+            PlanEditSheet(plan: plan, ultracode: Ultracode.choices(plan, card: ultraChoice)) { edits in
                 editing = false
-                Task { await store.start(plan, edits: edits, remember: remember) }
+                let blocked = Ultracode.blockedMachines(edits)
+                let sent = Ultracode.editsToSend(plan, edits: edits, blocked: { blocked.contains($0) })
+                Task { await store.start(plan, edits: sent, remember: remember) }
             }
         }
     }
@@ -208,9 +219,14 @@ struct PlanCard: View {
 
 /// One task of an open plan: its title, where it would run (each a chip), and why there.
 struct PlanTaskRow: View {
+    struct Ultra { var on: Bool; var blocked: String? }
+
     var number: Int
     var task: PlanTask
     var numbered: Bool
+    /// The task's ultracode on the card (#12): nil where the hub has none, and the row is drawn as before.
+    var ultra: Ultra? = nil
+    var onUltra: (Bool) -> Void = { _ in }
 
     var body: some View {
         VStack(alignment: .leading, spacing: Theme.Space.s) {
@@ -234,6 +250,15 @@ struct PlanTaskRow: View {
                 } else if let p = task.permission, !p.isEmpty {
                     Chip(text: Self.permissionLabel(p))
                 }
+                if let ultra {
+                    UltracodeChip(on: ultra.on, blocked: ultra.blocked, change: onUltra)
+                }
+            }
+            // Asked for on a computer that can't: it starts without.
+            if let ultra, ultra.on, let reason = ultra.blocked {
+                Text("Starts without ultracode: \(reason)")
+                    .font(Theme.Font.caption)
+                    .foregroundStyle(Theme.cautionText)
             }
             if let why = task.why, !why.isEmpty {
                 Text(why).font(Theme.Font.caption).foregroundStyle(.secondary)
@@ -254,8 +279,12 @@ struct PlanTaskRow: View {
 /// Edit: the plan's fields the user can change before it starts.
 struct PlanEditSheet: View {
     var plan: TaskPlan
+    /// Each task's ultracode as the card shows it (#12): where Edit starts.
+    var ultracode: [Bool] = []
     var start: ([PlanTask]) -> Void
     @State private var tasks: [PlanTask] = []
+    /// What the sheet opened with: anything else is unsaved.
+    @State private var opened: [PlanTask] = []
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
@@ -280,6 +309,10 @@ struct PlanEditSheet: View {
                         Picker("Permissions", selection: Binding(get: { tasks[i].permission ?? "default" }, set: { tasks[i].permission = $0 })) {
                             ForEach(["default", "acceptEdits", "plan", "bypassPermissions"], id: \.self) { Text(PlanTaskRow.permissionLabel($0)).tag($0) }
                         }
+                        if Ultracode.offered {
+                            UltracodeStartRow(on: Binding(get: { tasks[i].ultracode == true }, set: { tasks[i].ultracode = $0 }),
+                                              blocked: Ultracode.blocked(machine: tasks[i].machine))
+                        }
                     }
                     Section("Message for the Agent") {
                         TextField(String(localized: "First Message"), text: $tasks[i].prompt, axis: .vertical).lineLimit(3...8)
@@ -288,7 +321,7 @@ struct PlanEditSheet: View {
             }
             .navigationTitle("Edit [Task Views 928324]")
             .navigationBarTitleDisplayMode(.inline)
-            .sheetCancel(unsaved: !tasks.isEmpty && tasks != plan.tasks) { dismiss() }
+            .sheetCancel(unsaved: !tasks.isEmpty && tasks != opened) { dismiss() }
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) { Button("Started") { start(tasks) }.bold() }
             }
@@ -296,7 +329,11 @@ struct PlanEditSheet: View {
         #if os(macOS)
         .macSheet()
         #endif
-        .onAppear { if tasks.isEmpty { tasks = plan.tasks } }
+        .onAppear {
+            guard tasks.isEmpty else { return }
+            tasks = Ultracode.editsOf(plan, choices: ultracode)
+            opened = tasks
+        }
     }
 }
 
@@ -322,6 +359,7 @@ struct TaskCard: View {
                     HStack(spacing: Theme.Space.s) {
                         TaskMark(state: state).scaledFrame(width: Theme.Size.markM)
                         Text(todo.title).font(Theme.Font.bodyStrong).lineLimit(1)
+                        if store.ultracode(todo) { UltracodeMark() }
                         Spacer(minLength: Theme.Space.s)
                         if let t = TaskClock.since(todo.createdAt), state != .done, state != .failed {
                             Text(t).font(Theme.Font.caption).foregroundStyle(.tertiary).lineLimit(1).fixedSize()
@@ -469,6 +507,7 @@ struct TaskLine: View {
                 HStack(spacing: Theme.Space.s) {
                     TaskMark(state: state).scaledFrame(width: Theme.Size.markM)
                     Text(todo.title).font(Theme.Font.secondaryMedium).lineLimit(1)
+                    if store.ultracode(todo) { UltracodeMark(font: Theme.Font.label) }
                     Spacer(minLength: Theme.Space.s)
                     Text(state.label).font(Theme.Font.caption).foregroundStyle(state.labelColor).lineLimit(1).fixedSize()
                     Image(systemName: Theme.Icon.disclosure).font(Theme.Font.labelStrong).foregroundStyle(.tertiary)

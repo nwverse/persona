@@ -19270,6 +19270,29 @@
       },
       "extractionState": "manual"
     },
+    "Claude Code on this computer is %@; ultracode needs %@ or later": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "这台电脑的 Claude Code 是 %1$@，要 %2$@ 或更新才能开 ultracode"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Claude Code on this computer is %1$@; ultracode needs %2$@ or later"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "このコンピュータの Claude Code は %1$@ です。ultracode には %2$@ 以降が必要です"
+          }
+        }
+      },
+      "extractionState": "manual"
+    },
     "Couldn't load decisions: %@": {
       "extractionState": "manual",
       "localizations": {
@@ -44356,6 +44379,29 @@
           }
         }
       }
+    },
+    "Runs every task as a multi-agent workflow · uses a lot of quota · this session only": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "每个任务都编排多 Agent workflow · 很费额度 · 只对本会话"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Runs every task as a multi-agent workflow · uses a lot of quota · this session only"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "すべてのタスクをマルチエージェントの workflow で進めます · 使用量を大きく消費 · このセッションのみ"
+          }
+        }
+      },
+      "extractionState": "manual"
     },
     "Said in the Lark topic": {
       "extractionState": "manual",
@@ -76048,6 +76094,75 @@
           }
         }
       }
+    },
+    "Starts with ultracode: every task runs as a multi-agent workflow, which uses a lot of quota": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "开着 ultracode 开始：每个任务都编排多 Agent workflow，很费额度"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Starts with ultracode: every task runs as a multi-agent workflow, which uses a lot of quota"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ultracode オンで開始：すべてのタスクをマルチエージェントの workflow で進め、使用量を大きく消費します"
+          }
+        }
+      },
+      "extractionState": "manual"
+    },
+    "Starts without ultracode. With it, every task runs as a multi-agent workflow, which uses a lot of quota": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "不开 ultracode 开始。开着的话，每个任务都编排多 Agent workflow，很费额度"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Starts without ultracode. With it, every task runs as a multi-agent workflow, which uses a lot of quota"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ultracode オフで開始。オンにすると、すべてのタスクをマルチエージェントの workflow で進め、使用量を大きく消費します"
+          }
+        }
+      },
+      "extractionState": "manual"
+    },
+    "Starts without ultracode: %@": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "不开 ultracode 开始：%1$@"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Starts without ultracode: %1$@"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ultracode オフで開始：%1$@"
+          }
+        }
+      },
+      "extractionState": "manual"
     },
     "Synced": {
       "localizations": {
@@ -121465,6 +121580,52 @@
           }
         }
       }
+    },
+    "ultracode is on: every task runs as a multi-agent workflow, which uses a lot of quota": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ultracode 开着：每个任务都编排多 Agent workflow，很费额度"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ultracode is on: every task runs as a multi-agent workflow, which uses a lot of quota"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ultracode がオン：すべてのタスクをマルチエージェントの workflow で進め、使用量を大きく消費します"
+          }
+        }
+      },
+      "extractionState": "manual"
+    },
+    "ultracode on": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ultracode 开"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ultracode on"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ultracode オン"
+          }
+        }
+      },
+      "extractionState": "manual"
     },
     "unknown reason": {
       "localizations": {

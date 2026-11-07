@@ -259,6 +259,7 @@ struct TodoRow: View {
                         .foregroundStyle(todo.isDone ? Color.secondary : Color.primary)
                         .strikethrough(todo.isDone)
                         .lineLimit(2)
+                    if Ultracode.todoShown(todo, lookup: lookup) { UltracodeMark() }
                     Spacer(minLength: Theme.Space.xs)
                     if let d = todo.updatedAt ?? todo.createdAt {
                         Text(Fmt.relative(d))

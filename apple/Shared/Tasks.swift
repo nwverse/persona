@@ -13,6 +13,9 @@ nonisolated struct PlanTask: Codable, Hashable, Sendable {
     var launcher: String?
     var model: String?
     var permission: String?
+    /// Claude Code's ultracode for this task (#12): the assistant's choice; on start, true / false replaces it and left
+    /// out keeps it (Ultracode.swift).
+    var ultracode: Bool?
     var readonly: Bool?
     var why: String?
     /// Set once started: the todo the task is, and why its agent did not start.
@@ -20,7 +23,7 @@ nonisolated struct PlanTask: Codable, Hashable, Sendable {
     var error: String?
 
     enum CodingKeys: String, CodingKey {
-        case title, prompt, machine, cwd, launcher, model, permission, readonly, why, error
+        case title, prompt, machine, cwd, launcher, model, permission, ultracode, readonly, why, error
         case todoID = "todo_id"
     }
 
