@@ -506,6 +506,12 @@ func kindOf(c MachineConfig) string {
 	return c.Kind
 }
 
+// withoutName is the entry but for its name, which the running hub takes as it is (machine_rename.go).
+func (c MachineConfig) withoutName() MachineConfig {
+	c.Name = ""
+	return c
+}
+
 // forMesh is a hub.json entry as a member tells the center about it: no ssh host, tailcat address or binary path.
 func (c MachineConfig) forMesh() MachineConfig {
 	c.SSHHost, c.TailcatAddr, c.RemoteBin, c.Address, c.Proxy = "", "", "", "", ""
@@ -768,6 +774,13 @@ func (h *Hub) applyDeviceStatesFrom(owner string, st devicewire.States) {
 		// online is the node connected now, as it was when the hub connected it (self-update waits for it, the node
 		// updates go to it); the manager's warm start is warmUntil, as the hub's own was (the apps see both as online).
 		m.snap, m.info, m.online, m.err = &snap, s.Info, s.Connected, s.Machine.Error
+		// What it is called: hub.json's entry says for one of this hub's own in hub.json (the manager follows it a moment
+		// later), the manager for one it keeps (machines_kept.go) and for a member's (the member renamed it).
+		if mc := h.cfgEntry(id); mc != nil && !s.Derived {
+			m.setName(cmp.Or(mc.Name, id))
+		} else {
+			m.setName(snap.Name)
+		}
 		if s.Machine.LastSeen.After(m.lastSeen) {
 			m.lastSeen = s.Machine.LastSeen
 		}

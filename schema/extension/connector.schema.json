@@ -12,6 +12,7 @@
     "connector.actions.list": {"from": "hub", "params": "ConnectorParams", "result": "ConnectorTools"},
     "connector.actions.describe": {"from": "hub", "params": "ConnectorCallParams", "result": "ConnectorDescribeResult"},
     "connector.actions.do": {"from": "hub", "params": "ConnectorDoParams", "result": "ConnectorCallResult"},
+    "connector.recall": {"from": "hub", "params": "ConnectorRecallParams", "result": "ConnectorRecallResult"},
     "connector.thread.page": {"from": "hub", "params": "ConnectorThreadParams", "result": "ConnectorThreadPage"},
     "connector.thread.media": {"from": "hub", "params": "ConnectorMediaParams", "result": "ConnectorMedia"},
     "connector.inbox.collect": {"from": "hub", "params": "ConnectorParams", "result": "ConnectorCollectResult"},
@@ -47,15 +48,15 @@
   },
   "$defs": {
     "ConnectorErrorCode": {
-      "description": "error.code a program answers or gets besides the base ErrorCode: rate_limited (tools.call / actions.do, and the hub's answer to too many sent.record; data {retry_after} in seconds, fractional allowed), and why credentials.gh_token has no token.",
+      "description": "error.code a program answers or gets besides the base ErrorCode: rate_limited (tools.call / actions.do, and the hub's answer to too many sent.record; data {retry_after} in seconds, fractional allowed), why credentials.gh_token has no token, and what recall answers: not_recallable (nothing was sent: the program cannot take that message back) and recall_unknown (the request may have taken effect). not_signed_in, offline and rate_limited also say that recall could not act now.",
       "type": "string",
-      "enum": ["rate_limited", "no_machine", "offline", "node_too_old", "no_gh", "not_signed_in"]
+      "enum": ["rate_limited", "no_machine", "offline", "node_too_old", "no_gh", "not_signed_in", "not_recallable", "recall_unknown"]
     },
     "ConnectorCapability": {
-      "description": "What a connector declares (ConnectorItem.capabilities): the hub calls only the methods of declared ones. fallback has no method: every inbox thing promises extra.rule_tier. An extension's connector with one this hub does not know loses only that capability.",
+      "description": "What a connector declares (ConnectorItem.capabilities): the hub calls only the methods of declared ones. fallback has no method: every inbox thing promises extra.rule_tier. recall is the program's word that it can take back what it sent: the hub then calls connector.recall (only after the user agreed), and the install preview says so. An extension's connector with one this hub does not know loses only that capability.",
       "type": "string",
       "enum": ["status", "tools", "actions", "events", "inbox", "settle", "archive", "chats", "items", "login",
-               "options", "threads", "snapshot", "group", "meta", "fallback", "machines"]
+               "options", "threads", "snapshot", "group", "meta", "fallback", "machines", "recall"]
     },
     "ConnectorState": {
       "description": "ConnectorStatus.state. disabled is the hub's own (the user switched it off); a program never answers it.",
@@ -218,6 +219,26 @@
         "request_id": {"type": "string", "minLength": 1}
       },
       "required": ["contribution", "name", "request_id"]
+    },
+    "ConnectorRecallParams": {
+      "description": "recall: take back a message the connector's program sent in the user's name, which the sent-as-user ledger has a row of (docs/extensions/connectors.md \"Sent as the user\"). Only for a connector that declares the capability recall, and only once the user agreed on their own device; the program never starts one. The fields are the row's, as the hub kept them: nothing of what the message said. A repeat after success is a success too. Answer with ConnectorRecallResult (recalled true) only when the service confirms the message is no longer there, one that was already gone included; otherwise an error: not_recallable (it cannot, and nothing was sent), not_signed_in, offline or rate_limited (it cannot act now), recall_unknown (it may have gone through), any other error is the service refusing, with one sentence for people (no secret, no text of the message).",
+      "type": "object",
+      "properties": {
+        "contribution": {"type": "string"},
+        "action": {"type": "string", "description": "What wrote it: the tool's name (actions.do), sent.record, or, for a write the node's gate forwarded, \"METHOD /path\"."},
+        "message_ref": {"type": "string", "minLength": 1, "description": "The sent message's id on the other side, as the program gave it (actions.do or sent.record) or as the service's answer did (a write through the node's gate)."},
+        "target": {"type": "object", "description": "Where it went, as the ledger kept it (short values): the program's own for a send it recorded; for a write through the node's gate also method, path and command (the gate's name), and the ids its path names."},
+        "at": {"type": "string", "format": "date-time", "description": "When the ledger wrote the row, right after the send."}
+      },
+      "required": ["contribution", "action", "message_ref"]
+    },
+    "ConnectorRecallResult": {
+      "description": "recall's answer: recalled true is the program's word that the service confirmed the message is no longer there. Anything else (no recalled, false) is not taken for a yes: the hub then knows nothing, writes nothing and lets the user ask again.",
+      "type": "object",
+      "properties": {
+        "recalled": {"type": "boolean"}
+      },
+      "required": ["recalled"]
     },
 
     "ConnectorThreadParams": {

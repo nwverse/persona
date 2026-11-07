@@ -35,6 +35,12 @@
     <string name="settings_capsule_allowed">Allowed</string>
     <string name="settings_capsule_not_allowed">Not allowed</string>
     <string name="settings_capsule_needs_permission">The capsule shows once the overlay permission is on.</string>
+    <string name="settings_capsule_keeper">Stay on screen</string>
+    <string name="settings_capsule_keeper_subtitle">Accessibility · keeps the capsule after lock and cleanup</string>
+    <string name="settings_capsule_keeper_on">On</string>
+    <string name="settings_capsule_keeper_off">Off</string>
+    <string name="settings_capsule_keeper_notice">Some phones close Persona when locked, and the capsule only returns after you open the app. Turn on “Persona floating capsule” under Accessibility to keep it on screen.</string>
+    <string name="settings_capsule_keeper_turn_on">Turn on</string>
     <string name="settings_capsule_allow">Allow</string>
     <string name="settings_demo_identity_ok">Sample: identity check passed</string>
     <string name="settings_demo_computer">Sample computer</string>

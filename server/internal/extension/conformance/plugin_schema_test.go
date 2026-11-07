@@ -39,6 +39,8 @@ var goTypes = map[string]any{
 	"ConnectorCallResult":          serve.CallResult{},
 	"ConnectorDescribeResult":      serve.DescribeResult{},
 	"ConnectorDoParams":            serve.DoParams{},
+	"ConnectorRecallParams":        serve.RecallParams{},
+	"ConnectorRecallResult":        serve.RecallResult{},
 	"ConnectorThreadParams":        serve.ThreadParams{},
 	"ConnectorThreadPage":          connector.ThreadPage{},
 	"ConnectorMediaParams":         serve.MediaParams{},
@@ -119,7 +121,7 @@ var goTypes = map[string]any{
 // events.
 var serverCalls = []string{
 	serve.MManifest, serve.MStatus, serve.MLoginStep, serve.MLogout, serve.MChanges, serve.MCollect, serve.MReply,
-	serve.MTools, serve.MCall, serve.MActions, serve.MDescribe, serve.MDo, serve.MThread, serve.MMedia, serve.MItems,
+	serve.MTools, serve.MCall, serve.MActions, serve.MDescribe, serve.MDo, serve.MRecall, serve.MThread, serve.MMedia, serve.MItems,
 	serve.MDocTitle, serve.MArchiveMedia, serve.MSnapshot, serve.MGroupTool, serve.MGroupAppend, serve.MGroupFallback,
 	serve.MOptionsGet, serve.MOptionsSet, serve.MSettle, serve.MMachineOnline, serve.MAuthGet, serve.MAuthSet,
 	serve.MSecretsLoad, serve.MSecretsSave, serve.MSecretsDelete, serve.MPostsPut, serve.MPostsComments,
@@ -168,6 +170,19 @@ func TestPluginSchemasListTheServersCalls(t *testing.T) {
 	}
 	if c := wire.Calls[serve.InPlugin(serve.EChanged)]; !c.Event || c.From != "program" {
 		t.Errorf("connector.changed: %+v, want an event from the program", c)
+	}
+}
+
+// The capabilities the schema lists (what an extension's author declares) are the ones the hub knows, and recall is
+// spelled as the hub reads it.
+func TestConnectorSchemaCapabilitiesAreTheHubs(t *testing.T) {
+	for _, c := range wire.ConnectorCapabilities {
+		if !connector.Known(connector.Capability(c)) {
+			t.Errorf("the schema lists the capability %q, this hub does not know it", c)
+		}
+	}
+	if wire.ConnectorCapabilityRecall != string(connector.CapRecall) || !slices.Contains(wire.ConnectorCapabilities, string(connector.CapRecall)) {
+		t.Errorf("recall: the schema says %q, the hub %q", wire.ConnectorCapabilityRecall, connector.CapRecall)
 	}
 }
 

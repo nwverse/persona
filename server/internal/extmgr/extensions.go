@@ -123,6 +123,14 @@ type hubExtension struct {
 	status  string       // when proc is nil
 	err     string
 
+	// gateCommands are the commands of its assistant gates (the gate files' command), read when it starts, for an enabled
+	// extension without a problem whether or not it runs a program (the ones assistantGates reads): which writes the
+	// node's gate proxy reports (lark.sent) are its own (sent_recall_gate.go).
+	gateCommands []string
+	// recallNotBefore is when this install of an installed extension began (zero for any other: a built-in or a dev one is
+	// not replaced by another under its id): a ledger row from before it was not the extension's (sent_recall_gate.go).
+	recallNotBefore time.Time
+
 	// agentSources are its agent_sources registered with the agents service (extension_agents.go).
 	agentSources []string
 	// stats count its calls, runs and log (extension_metrics.go); nil in tests that make one by hand.
@@ -586,6 +594,12 @@ func (ps *extensions) apply(ctx context.Context, id string) {
 	if c, ok := p.Legacy.(ExtensionConfig); ok {
 		hp.kind = c.Kind
 	}
+	if p.Record.Enabled && p.Problem == "" { // the extensions whose gates the assistant is given (assistantGates), running or not
+		hp.gateCommands = gateCommandsOf(p)
+	}
+	if p.Record.Source == extension.SourceInstalled {
+		hp.recallNotBefore = p.Record.InstalledAt
+	}
 	switch missing := ps.reg.Missing(ctx, p); {
 	case !p.Record.Enabled:
 		hp.status = extensionDisabled
@@ -1019,6 +1033,7 @@ func (ps *extensions) specOf(ctx context.Context, p *extension.Extension, hp *hu
 		}
 		cfg := proc.Config{ID: c.ID, Name: c.Name, Manifest: ps.knownOnly(id, connectorManifest(c)), Secrets: secrets, KB: kbase,
 			Logf: ps.logf, Link: link}
+		cfg.RecallNotBefore = hp.recallNotBefore // the program is not asked about a send before this install, whoever asks
 		if p.Record.Granted.GhLogin && ps.h != nil {
 			cfg.GhToken = ps.h.ghTokenFor
 		}

@@ -1,6 +1,6 @@
 // Claude Code's ultracode switch in the chat and in "New agent" (#3428, docs/web/web.md "ultracode"): the row under the
-// thinking effort, the workflow mark beside the thinking chip and on agent rows, and the line above the composer after a
-// resume turned it off. The rules and the request are lib/ultracode.ts.
+// thinking effort, the workflow mark beside the thinking chip, on agent rows and on to-dos, the plan card's chip (#12) and
+// the line above the composer after a resume turned it off. The rules and the request are lib/ultracode.ts.
 import { useState } from "react";
 import { t } from "../../i18n";
 import { useStore } from "../../lib/store";
@@ -72,15 +72,40 @@ export function UltracodeSwitchRow({ session }: { session: Session }) {
   );
 }
 
-/** The same switch in "New agent", under "Thinking effort": off each time the sheet opens, never remembered. `blocked`:
- *  why this computer can't start with it (its Claude Code is too old), grayed and said instead of the line. */
+/** The same switch for an agent about to start: in "New agent", under "Thinking effort" (off each time the sheet opens,
+ *  never remembered), and for each task in a plan's "Edit" (#12). `blocked`: why this computer can't start with it (its
+ *  Claude Code is too old), grayed and said instead of the line. */
 export function UltracodeStartRow({ on, onChange, blocked }: { on: boolean; onChange: (on: boolean) => void; blocked: string }) {
   return (
-    <div data-testid="new-agent-ultracode" className="rounded-control bg-surface px-3 py-2 shadow-hairline">
+    <div className="rounded-control bg-surface px-3 py-2 shadow-hairline">
       <SwitchHead on={on && !blocked} disabled={Boolean(blocked)} onChange={onChange} />
       <p data-ultracode-line className={cx("mt-1 pl-[21px] text-[11.5px] leading-snug break-words", blocked ? "text-orange" : "text-ink-3")}>{blocked || t("ultracode.subtitle")}</p>
       <UltracodeQuotaLine warn={!blocked} className="mt-1 pl-[21px]" />
     </div>
+  );
+}
+
+/** A plan task's ultracode on its card (#12), beside its computer, folder, model and permission chips: a toggle in the
+ *  AI colour while on, quiet while off. `blocked`: why its computer can't start with it, grayed and said on hover. */
+export function UltracodeChip({ on, onChange, blocked, disabled }: { on: boolean; onChange: (on: boolean) => void; blocked: string; disabled?: boolean }) {
+  const shown = on && !blocked;
+  return (
+    <button
+      type="button"
+      data-testid="plan-ultracode"
+      aria-pressed={shown}
+      disabled={disabled || Boolean(blocked)}
+      title={blocked || (shown ? t("ultracode.plan_on") : t("ultracode.plan_off"))}
+      onClick={() => onChange(!shown)}
+      className={cx(
+        "inline-flex h-6 items-center gap-1 rounded-full px-2 text-[12px] whitespace-nowrap transition-colors disabled:cursor-not-allowed",
+        shown ? "bg-ai-tint font-medium text-ai" : "bg-field text-ink-3 enabled:hover:text-ink-2",
+        Boolean(blocked) && "opacity-60",
+      )}
+    >
+      <Icon name="layers" size={12} stroke={2.2} className="shrink-0" />
+      {ULTRACODE}
+    </button>
   );
 }
 

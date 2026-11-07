@@ -290,6 +290,16 @@ class HubHttpClient(
         }
     }
 
+    /**
+     * Drops the pooled connections. After the WebSocket went silent (a relay or NAT dropping the flow without a reset)
+     * the idle HTTP connections on that path are just as dead, and the next health probe would wait out the read
+     * timeout on one of them before reconnecting (#2124: 102s instead of 45s). Off the caller's thread, as in [close].
+     */
+    fun evictConnections() {
+        if (closed.get()) return
+        runCatching { client.dispatcher.executorService.execute { client.connectionPool.evictAll() } }
+    }
+
     private val closed = AtomicBoolean()
 
     override fun close() {

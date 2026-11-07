@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_capsule_undo_complete">完了を取り消す</string>
+    <string name="app_capsule_complete">この件を完了</string>
+    <string name="app_capsule_attachment">添付ファイル：%1$s</string>
+    <string name="app_capsule_image_full_chat">画像・チャット全体で表示</string>
+    <string name="app_capsule_audio_full_chat">音声・チャット全体で再生</string>
+    <string name="app_capsule_video_full_chat">動画・チャット全体で表示</string>
+    <string name="app_capsule_sticker">スタンプ</string>
+    <string name="app_capsule_forwarded_history">チャット履歴：%1$s</string>
+    <string name="app_capsule_reply_pending_check">返信はまだ完了していません。チャット全体で結果を確認してください</string>
+    <string name="app_capsule_changed_return_list">チャットが変わりました。一覧に戻ってください</string>
+    <string name="app_capsule_item_changed_return_list">項目が変わりました。一覧に戻ってください</string>
+    <string name="app_capsule_message_notice_gone">この新着メッセージの通知は無効になりました</string>
+    <string name="app_capsule_choose_chat">チャットを選択してください</string>
+    <string name="app_capsule_body_unsynced">チャットの内容はまだ同期されていません。しばらくしてから再試行してください</string>
+    <string name="app_capsule_prior_reply_check">前の返信結果はまだ未確認です。チャット全体を開いてください</string>
+    <string name="app_capsule_send_unconfirmed_draft">送信結果は未確認です。下書きは保存されています。チャット全体で確認してください</string>
+    <string name="app_capsule_connect_first">先にハブに接続してください</string>
+    <string name="app_capsule_read_partial_failed">一部の既読の同期に失敗しました。未読の通知は保持されています。再試行してください</string>
+    <string name="app_capsule_read_partial_skipped">未読み込み、または新着のあるメッセージがあります。開いて確認してください。未読の通知は保持されています</string>
+    <string name="app_capsule_item_updated_check">項目が更新されました。もう一度確認してから対応してください</string>
+    <string name="app_capsule_action_unavailable">この操作はまだ利用できません</string>
+    <string name="app_capsule_read_sync_failed">既読状態を同期できませんでした</string>
+    <string name="app_capsule_read_retry">既読の同期に失敗しました。再試行してください</string>
+    <string name="app_capsule_messages_unsynced">メッセージはまだ完全に同期されていません。再接続してから再試行してください</string>
+    <string name="app_capsule_new_message_stay">このチャットに新着メッセージがあります。このまま表示します</string>
+    <string name="app_capsule_you">あなた</string>
+    <string name="app_capsule_original_chat">元のチャット</string>
+</resources>
