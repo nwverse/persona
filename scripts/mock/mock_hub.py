@@ -15918,6 +15918,10 @@ def ultracode_route(handler, p, body):
         if parse_qs(urlparse(handler.path).query).get("reset"):
             ultracode_reset()
             for m in MACHINES: push_machine(m["id"])
+            if MOCK_TASKS:  # an open page draws the plan open again without a reload
+                for send, _ in list(LIVE):
+                    try: send(from_default({"type": "task_plan", "plan": TASK_PLANS["plan_mock_3"]}))
+                    except Exception: pass
         handler.send_json({"requests": ULTRACODE_LOG, "started": [b for b in STARTED if "ultracode" in b], "plan_starts": ULTRACODE_PLAN_STARTS,
                            "sends": ULTRACODE_SENDS})
         return True
