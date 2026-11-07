@@ -26,9 +26,8 @@ final class ChatCatchUpTests: XCTestCase {
         app.launchArguments = ["-pairURL", pair, "-showScrollState", "YES", "-dev.openChat", "", "-openChatsFresh", "YES",
                                "-tab", "dev", "-openSession", working]
         app.launchPinned()
-        // The notification question is SpringBoard's and can cover the chat (as in ChannelSettingsTests).
-        let springboard = XCUIApplication(bundleIdentifier: "com.apple.springboard")
-        for label in ["允许", "Allow"] where springboard.buttons[label].waitForExistence(timeout: 3) { springboard.buttons[label].tap() }
+        // The notification question is SpringBoard's and can cover the chat.
+        LiveActivityShots.allowNotifications()
         let probe = app.staticTexts.matching(identifier: "chat.scrollState").firstMatch
         XCTAssertTrue(probe.waitForExistence(timeout: 20), "the chat did not open")
         sleep(3) // the backlog is in and the subscription is quiet
