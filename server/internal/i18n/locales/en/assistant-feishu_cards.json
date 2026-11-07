@@ -1,6 +1,7 @@
 {
   "handled": "Handled",
   "dismissed": "Dismissed",
+  "replied_in_chat": "Replied in the chat",
   "approved_run": "Approved, running on its own",
   "approved_edits": "Approved, auto-accepting edits",
   "approved": "Approved",

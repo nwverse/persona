@@ -26,6 +26,10 @@ class ReleaseWorkerTest(unittest.TestCase):
             second = git("rev-parse", "HEAD")
             self.assertEqual(code, worker.version_code(root, first))
             self.assertEqual(code + 1, worker.version_code(root, second))
+            self.assertEqual(200002, worker.version_code(root, second, 200000))
+            for invalid in (-1, True, "200000", 2100000000):
+                with self.assertRaises(ValueError):
+                    worker.version_code(root, second, invalid)
             worker.check_history(root, first, second)
             with self.assertRaises(subprocess.CalledProcessError):
                 worker.check_history(root, second, first)
@@ -33,10 +37,11 @@ class ReleaseWorkerTest(unittest.TestCase):
     def test_failure_retains_successful_state_and_reports_failure(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            previous = {"source_sha": "a" * 40, "version_code": 100001}
+            previous = {"repository": "example/app", "source_sha": "a" * 40, "version_code": 100001}
             worker.atomic_json(root / "published.json", previous)
-            config = {"state_directory": tmp}
+            config = {"state_directory": tmp, "repository": "example/app"}
             with patch.object(worker, "prepare", return_value=(root, "b" * 40)), \
+                    patch.object(worker, "version_code", return_value=100002), \
                     patch.object(worker, "check_history"), patch.object(worker, "status") as status, \
                     patch.object(worker, "build", side_effect=RuntimeError("test build failure")), \
                     patch.object(worker, "signing") as signing:
@@ -64,11 +69,76 @@ class ReleaseWorkerTest(unittest.TestCase):
     def test_already_published_does_not_build_or_publish_again(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            worker.atomic_json(root / "published.json", {"source_sha": "a" * 40})
+            worker.atomic_json(root / "published.json", {"repository": "example/app", "source_sha": "a" * 40})
             with patch.object(worker, "prepare", return_value=(root, "a" * 40)), \
                     patch.object(worker, "build") as build:
-                worker.cycle({"state_directory": tmp})
+                worker.cycle({"state_directory": tmp, "repository": "example/app"})
                 build.assert_not_called()
+
+    def test_foreign_or_unscoped_checkpoint_never_writes_status(self):
+        for repository in (None, "example/previous"):
+            with self.subTest(repository=repository), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                worker.atomic_json(root / "published.json", dict(repository=repository, source_sha="a" * 40))
+                with patch.object(worker, "prepare", return_value=(root, "a" * 40)), \
+                        patch.object(worker, "status") as status:
+                    with self.assertRaisesRegex(ValueError, "checkpoint repository mismatch"):
+                        worker.cycle(dict(state_directory=tmp, repository="example/app"))
+                    status.assert_not_called()
+
+    def test_status_retry_preserves_verified_artifact_without_republishing(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            sha = "b" * 40
+            directory = root / "runs" / sha
+            directory.mkdir(parents=True)
+            config = dict(state_directory=tmp, repository="example/app",
+                          application_id="com.example.app", certificate_sha256="c" * 64)
+            previous = dict(repository=config["repository"], source_sha="a" * 40, version_code=100001)
+            worker.atomic_json(root / "published.json", previous)
+            request = dict(repository=config["repository"], source_sha=sha,
+                           package=config["application_id"], version_code=100002)
+            (directory / "signed.apk").write_bytes(b"verified fixture")
+            worker.atomic_json(directory / "signature.json", dict(
+                signed_sha256=worker.digest(directory / "signed.apk"), certificate_sha256="c" * 64))
+            with patch.object(worker, "prepare", return_value=(root, sha)), \
+                    patch.object(worker, "check_history"), \
+                    patch.object(worker, "version_code", return_value=100002), \
+                    patch.object(worker, "build", return_value=request) as build, \
+                    patch.object(worker, "signing") as signing, \
+                    patch.object(worker, "publish") as publish, \
+                    patch.object(worker, "status", side_effect=[None, RuntimeError("status denied")]) as status:
+                with self.assertRaisesRegex(RuntimeError, "status denied"):
+                    worker.cycle(config)
+                self.assertEqual(json.loads((root / "published.json").read_text()), previous)
+                self.assertTrue((directory / "verified.json").exists())
+                self.assertEqual([c.args[2] for c in status.call_args_list], ["pending", "success"])
+                status.side_effect = None
+                status.reset_mock()
+                worker.cycle(config)
+                self.assertEqual(json.loads((root / "published.json").read_text()), request)
+                self.assertEqual([c.args[2] for c in status.call_args_list], ["success"])
+                build.assert_called_once()
+                signing.assert_called_once()
+                publish.assert_called_once()
+            (directory / "signed.apk").write_bytes(b"tampered")
+            with patch.object(worker, "status") as status:
+                with self.assertRaisesRegex(ValueError, "identity changed"):
+                    worker.finish_verified(config, directory, sha, 100002, root / "published.json")
+                status.assert_not_called()
+
+    def test_new_source_cannot_decrease_version(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            worker.atomic_json(root / "published.json", dict(
+                repository="example/app", source_sha="a" * 40, version_code=200001))
+            with patch.object(worker, "prepare", return_value=(root, "b" * 40)), \
+                    patch.object(worker, "check_history"), \
+                    patch.object(worker, "version_code", return_value=100001), \
+                    patch.object(worker, "status") as status:
+                with self.assertRaisesRegex(ValueError, "must exceed"):
+                    worker.cycle(dict(state_directory=tmp, repository="example/app"))
+                status.assert_not_called()
 
 
 if __name__ == "__main__":

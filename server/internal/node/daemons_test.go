@@ -39,7 +39,9 @@ type fakeDaemon struct {
 	events   []string
 	helloRes map[string]any
 	helloErr error
-	answer   func(method string, params json.RawMessage) (any, error)
+	// helloConn is the connection (1 for the first) whose hello helloRes and helloErr are.
+	helloConn int
+	answer    func(method string, params json.RawMessage) (any, error)
 }
 
 func startFakeDaemon(t *testing.T, token string, hello map[string]any) *fakeDaemon {
@@ -90,6 +92,7 @@ func (f *fakeDaemon) serve(w http.ResponseWriter, r *http.Request) {
 	}
 	f.mu.Lock()
 	f.conns++
+	conn := f.conns
 	f.peer, f.ws = p, c
 	f.mu.Unlock()
 	go func() {
@@ -98,7 +101,9 @@ func (f *fakeDaemon) serve(w http.ResponseWriter, r *http.Request) {
 		var res map[string]any
 		err := p.Call(hctx, "runtime.hello", f.hello, &res)
 		f.mu.Lock()
-		f.helloRes, f.helloErr = res, err
+		if conn >= f.helloConn { // an older connection's late hello does not stand for this one's
+			f.helloRes, f.helloErr, f.helloConn = res, err, conn
+		}
 		f.mu.Unlock()
 	}()
 	_ = p.Serve(ctx, stream)
@@ -132,7 +137,13 @@ func (f *fakeDaemon) current() *rpc.Peer {
 // push sends an event as the daemon, once it has said hello.
 func (f *fakeDaemon) push(t *testing.T, event string, params any) {
 	t.Helper()
-	waitFor(t, "the daemon's hello", func() bool { res, _, _ := f.hellod(); return res != nil })
+	// After the hello of the connection it pushes on: a push the node gets before that connection's hello is not taken,
+	// and the hello of the connection before a reconnect does not count.
+	waitFor(t, "the daemon's hello", func() bool {
+		f.mu.Lock()
+		defer f.mu.Unlock()
+		return f.helloRes != nil && f.helloConn == f.conns
+	})
 	if err := f.current().Notify(event, params); err != nil {
 		t.Fatal(err)
 	}

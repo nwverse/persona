@@ -455,6 +455,7 @@ If the header grows, elements below it (App.tsx connection-status pill) cannot a
 
 - The published hub binary embeds `web/dist`, and the release privacy scan refuses any real email address in it. Package license files routinely name their authors with addresses, so `third-party-licenses.ts` drops the addresses (names and years stay) and its test checks none is left. A generator that copies license texts verbatim passes every web check and fails only at release.
 - Count what the client ships from `package-lock.json` (entries not marked `dev`, `optional` or `devOptional`), not from `node_modules`: a local install also holds dev tools and platform-specific optional binaries the browser never loads.
+- `scripts/release/publish.sh` and the Docker image run `npm run build`, never `npm test`. A rule a release must keep goes in the build: the plugin fails on whatever `uncovered()` returns, and the test asserts the same function returns nothing, so the rule is written once.
 
 ## Resizing a column without re-rendering the shell (2026-11-07, #6466)
 

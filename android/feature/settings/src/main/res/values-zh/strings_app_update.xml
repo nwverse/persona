@@ -1,0 +1,4 @@
+<resources>
+    <string name="settings_update_auto_notice">Persona 会在打开时检查更新，安装始终需要你确认。</string>
+    <string name="settings_update_later">稍后</string>
+</resources>

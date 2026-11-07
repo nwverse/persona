@@ -32,6 +32,8 @@ data class SettingsServices(
     val sessions: SessionsRepository,
     val updates: AppUpdates,
     val diagnostics: SettingsDiagnostics? = null,
+    val appUpdateState: AppUpdateState? = null,
+    val appUpdateStore: AppUpdateStore? = null,
     val demo: Boolean = false,
     val deviceSettings: DeviceSettings? = null,
     val hubAddress: String? = null,
