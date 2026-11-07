@@ -3461,21 +3461,29 @@ def mock_delegate(q):
                                         "resolution": {"answers": answers, "answered_by": "assistant", "reason": reason}})
             event = {"type": "interaction_resolved", "id": ix["id"], "answered_by": "assistant", "reason": reason,
                      "answers": answers}
+            # its agent goes on with the answer, as the hub's next sessions push says
+            answered_in = next((s for s in SESSIONS if s["machine_id"] == ix["machine_id"] and s["session_id"] == ix["session_id"]), None)
+            if answered_in and not any(x["session_id"] == ix["session_id"] for x in mock_interactions()):
+                answered_in.update(status="working", state="working", pending_interactions=0, updated_at=ago())
     for out, _ in list(LIVE):
         try: out(event)
         except Exception: pass
+    if not handover:
+        push_machine(ix["machine_id"])
     push_fleet()
     return {"ok": True}, 200
 
 
 def mock_reanswer(request_id, body):
     """POST /api/v1/interactions/{id}/reanswer as the hub takes it (assistant/fleet_delegate.go): only for a question
-    the assistant answered, and only the answers that say something go."""
+    the assistant answered, and only the answers to its questions that say something go."""
     with REQUEST_LOCK:
-        if not any(r["interaction"]["id"] == request_id for r in DELEGATE_HISTORY):
+        rec = next((r for r in DELEGATE_HISTORY if r["interaction"]["id"] == request_id), None)
+        if rec is None:
             return {"error": "this question was not answered by the assistant"}, 409
+        asked = {q["question"] for q in rec["interaction"].get("questions") or []}
         answers = body.get("answers") if isinstance(body.get("answers"), dict) else {}
-        said = {k: v.strip() for k, v in answers.items() if isinstance(v, str) and v.strip()}
+        said = {k: v.strip() for k, v in answers.items() if k in asked and isinstance(v, str) and v.strip()}
         if not said:
             return {"error": "no answers"}, 400
         REANSWERED.append({"id": request_id, "answers": said})

@@ -176,10 +176,23 @@ describe("助手代答的问题", () => {
     expect(host.querySelector("[data-delegated-answer]")?.textContent).toContain("lib/pq");
   });
 
-  it("不能审批的会话不能改答", () => {
-    session({ source_kind: "runtime", capabilities: { approve: false } } as Partial<Session>);
+  it("新答案是作为消息发给 Agent 的：不能发消息的会话不能改答，只是不能审批的可以", () => {
+    session({ source_kind: "runtime", capabilities: { approve: true, send: false } } as Partial<Session>);
     render();
     expect(button("改答")!.disabled).toBe(true);
+    expect(button("改答")!.title).toBe(t("agents-agentsview.cannot_send"));
+    session({ source_kind: "runtime", capabilities: { approve: false, send: true } } as Partial<Session>);
+    render({ ...answered });
+    expect(button("改答")!.disabled).toBe(false);
+  });
+
+  it("别的管家的会话：改答发给那个管家", async () => {
+    render({ ...answered, ix: { ...question, manager: "manager-2" } });
+    await click(button("改答"));
+    request.mockResolvedValue({ ok: true });
+    await click(choice("lib/pq"));
+    await click(button("发送新答案"));
+    expect(request).toHaveBeenCalledWith("/interactions/ix1/reanswer", { method: "POST", json: { answers: { [Q]: "lib/pq" } }, headers: { "X-Persona-Manager": "manager-2" } });
   });
 
   it("收起后不再留着", async () => {
@@ -203,7 +216,7 @@ describe("会话里看助手代答过的问题", () => {
     request.mockImplementation(async (path: string) => (path.startsWith("/interactions/history") ? history : { ok: true }));
     await render();
     await flush();
-    expect(request).toHaveBeenCalledWith("/interactions/history?machine_id=m&session_id=s&limit=100", {});
+    expect(request).toHaveBeenCalledWith("/interactions/history?machine_id=m&session_id=s&limit=500", {});
     expect(host.textContent).toContain("助手代答过的问题");
     expect(host.querySelectorAll("[data-delegated-row]")).toHaveLength(1);
     expect(host.textContent).toContain("理由：仓库里都用 pgx");
@@ -222,6 +235,13 @@ describe("会话里看助手代答过的问题", () => {
     request.mockResolvedValue(history);
     await click(button("重试"));
     expect(host.querySelectorAll("[data-delegated-row]")).toHaveLength(1);
+  });
+
+  it("别的管家的会话：问那个管家", async () => {
+    request.mockResolvedValue(history);
+    await act(async () => root.render(<DelegatedHistory session={sessionRow({ manager: "manager-2" })} />));
+    await flush();
+    expect(request).toHaveBeenCalledWith("/interactions/history?machine_id=m&session_id=s&limit=500", { headers: { "X-Persona-Manager": "manager-2" } });
   });
 
   it("没有代答过的：整段不显示", async () => {

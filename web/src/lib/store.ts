@@ -889,14 +889,31 @@ export function dropAnswered(id: string, only?: AnsweredCard) {
   set({ answered });
 }
 
-/** interaction_resolved with answered_by "assistant": the card it answered (the page had it pending) stays in its chat
- *  with what the assistant answered and why; a card the page never saw is the session history's to show. */
+/** interaction_resolved with answered_by "assistant": the card it answered (the page had it pending, or just answered
+ *  it too and lost) stays in its chat with what the assistant answered and why; a card the page never saw is the
+ *  session history's to show. */
 function answeredForUser(msg: Record<string, unknown>) {
   const id = msg.id as string;
-  const ix = state.interactions.find((i) => i.id === id);
-  if (!ix || ix.kind !== "question") return;
-  const card: DelegatedAnswer = { ix, answers: answersIn(msg.answers), reason: typeof msg.reason === "string" ? msg.reason : "", at: Date.now() };
-  set({ delegated: { ...state.delegated, [id]: card } });
+  const ix = state.interactions.find((i) => i.id === id) ?? state.answered[id]?.ix;
+  if (ix) keepDelegated(ix, msg);
+}
+
+// Delegated answers kept in their chats at most, the oldest put away first: a tab left open for days on many agents.
+const DELEGATED_KEPT = 50;
+
+/** A question the assistant answered for the user (`r`: its answers and reason, from interaction_resolved or from the
+ *  hub's reply to this page's own answer that came second): it leaves the pending cards and stays in its chat. This
+ *  page's own answer lost, so its "Answered" card goes. */
+export function keepDelegated(ix: Interaction, r: Record<string, unknown>) {
+  if (ix.kind !== "question") return;
+  changeInteraction(ix.id, null);
+  const answered = { ...state.answered };
+  delete answered[ix.id];
+  const card: DelegatedAnswer = state.delegated[ix.id] ?? { ix, answers: answersIn(r.answers), reason: typeof r.reason === "string" ? r.reason : "", at: Date.now() };
+  const delegated = { ...state.delegated, [ix.id]: card };
+  const ids = Object.keys(delegated);
+  for (const old of ids.slice(0, Math.max(0, ids.length - DELEGATED_KEPT))) delete delegated[old];
+  set({ delegated, answered });
 }
 
 /** The user changed a delegated answer (interaction_reanswered, or this page's own POST …/reanswer once it went). The

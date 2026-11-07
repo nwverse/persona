@@ -65,6 +65,12 @@ describe("改答的表单", () => {
     expect(reanswerChanged({ "库？": "pgx" }, { "库？": " pgx " })).toBe(false);
     expect(reanswerChanged({ "库？": "pgx" }, { "库？": "sqlc" })).toBe(true);
   });
+  it("多选只换了顺序不算改了；单选的选项里有逗号照原文比", () => {
+    const multi = [q("改哪些？", ["A", "B", "C"], true)];
+    expect(reanswerChanged({ "改哪些？": "A, B" }, { "改哪些？": "B, A" }, multi)).toBe(false);
+    expect(reanswerChanged({ "改哪些？": "A, B" }, { "改哪些？": "A, C" }, multi)).toBe(true);
+    expect(reanswerChanged({ "库？": "A, B" }, { "库？": "B, A" }, [q("库？", ["A, B", "B, A"])])).toBe(true);
+  });
 });
 
 describe("delegatedHistory", () => {

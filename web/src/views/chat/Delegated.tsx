@@ -86,7 +86,8 @@ export function DelegatedHistory({ session }: { session: Session }) {
 function DelegatedBody({ d, manager }: { d: DelegatedAnswer; manager?: string }) {
   const id = d.ix.id;
   const re = useStore((s) => s.reanswered[id]);
-  const canChange = useStore(() => sessionCan(getSession(d.ix.machine_id, d.ix.session_id), "approve"));
+  // the new answer reaches the agent as a message (POST …/reanswer), so it takes what sending does, not answering a card
+  const canChange = useStore(() => sessionCan(getSession(d.ix.machine_id, d.ix.session_id), "send"));
   const [changing, setChanging] = useState(false);
   const now = latestAnswers(d, re);
   const qs = d.ix.questions ?? [];
@@ -119,7 +120,7 @@ function DelegatedBody({ d, manager }: { d: DelegatedAnswer; manager?: string })
           ) : (
             <span />
           )}
-          <Button tone="secondary" icon="pencil" disabled={!canChange} title={canChange ? undefined : t("chat-interactions.approve_not_allowed")} onClick={() => setChanging(true)}>
+          <Button tone="secondary" icon="pencil" disabled={!canChange} title={canChange ? undefined : t("agents-agentsview.cannot_send")} onClick={() => setChanging(true)}>
             {t("chat-delegate.change")}
           </Button>
         </div>
@@ -136,7 +137,7 @@ function ReanswerForm({ id, questions, before, manager, onClose }: { id: string;
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const after = formAnswers(questions, picked, custom);
-  const ready = reanswerChanged(before, after) && !busy;
+  const ready = reanswerChanged(before, after, questions) && !busy;
 
   const toggle = (i: number, q: Question, label: string) => {
     setCustom((c) => ({ ...c, [i]: "" }));
@@ -147,7 +148,7 @@ function ReanswerForm({ id, questions, before, manager, onClose }: { id: string;
   };
 
   const send = async () => {
-    const changed = changedAnswers(before, after);
+    const changed = changedAnswers(before, after, questions);
     setBusy(true);
     setError("");
     const r = await reanswer(id, changed, manager);

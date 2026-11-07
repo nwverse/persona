@@ -97,19 +97,27 @@ export function formAnswers(questions: Question[], picked: Record<number, string
   return out;
 }
 
+/** Whether two answers to `q` say the same: a multi-select's picks in any order. */
+function sameAnswer(q: Question | undefined, a: string, b: string): boolean {
+  if (a === b) return true;
+  if (!q?.multi_select) return false;
+  const picks = (s: string) => s.split(PICKS_SEP).map((p) => p.trim()).filter(Boolean).sort().join("\n");
+  return picks(a) === picks(b);
+}
+
 /** The answers in `after` that say something other than `before`: only those go to the agent (an unchanged one would
  *  only repeat what it already went on with). */
-export function changedAnswers(before: Record<string, string>, after: Record<string, string>): Record<string, string> {
+export function changedAnswers(before: Record<string, string>, after: Record<string, string>, questions: Question[] = []): Record<string, string> {
   const out: Record<string, string> = {};
   for (const [q, a] of Object.entries(after)) {
     const now = a.trim();
-    if (now && now !== (before[q] ?? "").trim()) out[q] = now;
+    if (now && !sameAnswer(questions.find((x) => x.question === q), now, (before[q] ?? "").trim())) out[q] = now;
   }
   return out;
 }
 
-export function reanswerChanged(before: Record<string, string>, after: Record<string, string>): boolean {
-  return Object.keys(changedAnswers(before, after)).length > 0;
+export function reanswerChanged(before: Record<string, string>, after: Record<string, string>, questions: Question[] = []): boolean {
+  return Object.keys(changedAnswers(before, after, questions)).length > 0;
 }
 
 /** A question the assistant answered for the user: what it answered and why, and when. */
@@ -159,10 +167,13 @@ export function delegatedHistory(records: InteractionRecord[]): DelegatedAnswer[
     .sort((a, b) => b.at - a.at);
 }
 
+// The hub's most: its limit counts every card of the session, permissions too, before only the assistant's answers are kept.
+const HISTORY_LIMIT = 500;
+
 /** The questions the assistant answered in one agent's session (`manager`: the session's, when not the default). */
 export async function loadDelegated(mid: string, sid: string, manager?: string): Promise<DelegatedAnswer[]> {
   const headers = itemHeaders(manager);
-  const r = await api<{ interactions?: InteractionRecord[] }>(`/interactions/history?machine_id=${enc(mid)}&session_id=${enc(sid)}&limit=100`, headers ? { headers } : {});
+  const r = await api<{ interactions?: InteractionRecord[] }>(`/interactions/history?machine_id=${enc(mid)}&session_id=${enc(sid)}&limit=${HISTORY_LIMIT}`, headers ? { headers } : {});
   return delegatedHistory(r.interactions ?? []);
 }
 

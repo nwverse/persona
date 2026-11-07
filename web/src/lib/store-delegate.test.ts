@@ -1,6 +1,9 @@
 // The socket's side of the assistant answering questions first: a card it is still looking at is replaced by id, a
 // question it answered stays with what it answered and why, and a changed answer follows it.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+const op = vi.hoisted(() => vi.fn());
+vi.mock("./ops", async (orig) => ({ ...(await orig<typeof import("./ops")>()), apiOp: (...args: unknown[]) => op(...args) }));
+import { answerCard } from "./card-answer";
 import { connect, dropDelegated, flushPushes, getState, noteReanswer, reset } from "./store";
 import type { Interaction } from "./types";
 
@@ -104,5 +107,53 @@ describe("questions the assistant answers first", () => {
     reset();
     expect(getState().delegated).toEqual({});
     expect(getState().reanswered).toEqual({});
+  });
+});
+
+describe("the user and the assistant answer the same question at once", () => {
+  const theirs = { "Which driver?": "pgx" };
+  const assistantWon = { ok: true, already: true, status: "resolved", resolution: { answers: theirs, answered_by: "assistant", reason: "The repo uses pgx" } };
+  const resolvedByAssistant = { type: "interaction_resolved", id: "ix1", answered_by: "assistant", reason: "The repo uses pgx", answers: theirs };
+  function looking() {
+    const s = online();
+    s.push({ type: "sessions", machine_id: "m1", sessions: [{ machine_id: "m1", session_id: "s1" }] });
+    s.push({ type: "interaction", interaction: { ...question, delegating: true } });
+    return s;
+  }
+  const mine = () => answerCard(getState().interactions[0], { answers: { "Which driver?": "lib/pq" } });
+  const onlyTheAssistants = () => {
+    expect(getState().interactions).toEqual([]);
+    expect(getState().answered).toEqual({});
+    expect(Object.keys(getState().delegated)).toEqual(["ix1"]);
+    expect(getState().delegated.ix1).toMatchObject({ answers: theirs, reason: "The repo uses pgx" });
+  };
+
+  it("the assistant's answer comes before the hub's reply: one card, the assistant's", async () => {
+    const s = looking();
+    let reply!: (v: unknown) => void;
+    op.mockReturnValue(new Promise((r) => (reply = r)));
+    const sent = mine();
+    s.push(resolvedByAssistant);
+    reply(assistantWon);
+    expect(await sent).toEqual({ ok: true, already: true });
+    onlyTheAssistants();
+  });
+
+  it("the hub's reply comes first: the assistant's answer, which can be changed, not this page's", async () => {
+    const s = looking();
+    op.mockResolvedValue(assistantWon);
+    expect(await mine()).toEqual({ ok: true, already: true });
+    onlyTheAssistants();
+    s.push(resolvedByAssistant);
+    onlyTheAssistants();
+  });
+
+  it("a card this page shows answered becomes the assistant's when the push says the assistant answered it", async () => {
+    const s = looking();
+    op.mockResolvedValue({ ok: true, already: true, status: "resolved", resolution: { answers: theirs } });
+    await mine();
+    expect(getState().answered.ix1).toBeDefined();
+    s.push(resolvedByAssistant);
+    onlyTheAssistants();
   });
 });
