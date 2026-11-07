@@ -21,9 +21,10 @@ import (
 // or one of its descendants (its Bash tool), gets the assistant's tools. Any other caller (an agent, a program run by
 // hand) is refused; so is a system where the other end of a socket cannot be known.
 //
-// The MCP server's requests (mcp.tools, mcp.call) are decided the same way (mcpAssistant): its PERSONA_ASSISTANT is
+// The MCP server's requests (mcp.tools, mcp.call) are decided the same way (mcpAssistantOf): its PERSONA_ASSISTANT is
 // repeated by every process started with the assistant's environment, an agent in an engine started from the
-// assistant's Bash tool among them.
+// assistant's Bash tool among them. Such an agent still counts as the assistant while its engine stays a descendant of
+// the assistant's process (a server the Bash tool did not detach), as any program run there does.
 
 // ancestorsMost bounds the walk up the process tree.
 const ancestorsMost = 64
@@ -105,46 +106,38 @@ func (n *Node) assistantRoots() map[int]string {
 }
 
 // mcpSession is the session and the assistant's word an MCP server's request (mcp.tools, mcp.call) goes to the hub
-// with. The server's word that it is the assistant's is taken only when the node says so too (mcpAssistant); a
-// request it refuses goes as an agent's, with the session it names. A request that does not say so is not made one.
+// with. The server's word that it is the assistant's is taken only when the node says so too (mcpAssistantOf, for the
+// process at the other end of c); a request it refuses goes as an agent's, with the session it names. A request that
+// does not say so is not made one.
 func (n *Node) mcpSession(c net.Conn, req sockRequest) (string, bool) {
 	if !req.Assistant {
 		return req.SessionID, false
 	}
-	if id, ok := n.mcpAssistant(c, req.SessionID); ok {
+	pid, err := peerPID(c)
+	if id, ok := n.mcpAssistantOf(pid, err, parentPID, req.SessionID); ok {
 		return id, true
 	}
-	n.logf("%s: the caller says it is the assistant, but its process is not one Persona runs for the assistant: answered as an agent's", req.Kind)
+	n.logf("%s: the caller (pid %d) says it is the assistant, but its process is not one Persona runs for the assistant: answered as an agent's", req.Kind, pid)
 	return req.SessionID, false
 }
 
-// mcpAssistant is the session of the assistant conversation whose MCP server is at the other end of c (session: the
-// one the request names), or false.
-func (n *Node) mcpAssistant(c net.Conn, session string) (string, bool) {
-	pid, err := peerPID(c)
-	return n.mcpAssistantOf(pid, err, parentPID, session)
-}
-
-// mcpAssistantOf is mcpAssistant for the process pid (err: why it is not known; parent gives a process's):
+// mcpAssistantOf is the session of the assistant conversation whose MCP server is the process pid (err: why it is not
+// known; parent gives a process's; session: the one the request names), or false:
 //   - pid or an ancestor is a process this node runs for the assistant: that conversation's session, whatever the
 //     request names;
 //   - pid or an ancestor is a connected runtime that runs assistant conversations (caps.assistant): they run in the
-//     runtime's processes, not the node's (assistant_runtime.go), and the runtime names their sessions, so the request's;
+//     runtime's processes, not the node's (assistant_runtime.go), and the runtime names their sessions, so the
+//     request's, when it can be one of that runtime's assistant conversations (runtimeMayName);
 //   - the system does not tell who is at the other end of a socket (errNoPeer): the request's session, if it is one
-//     this node runs for the assistant or an assistant conversation of a runtime.
+//     this node runs for the assistant, or an assistant conversation of a connected runtime that runs them.
 //
 // Any other caller is not the assistant.
 func (n *Node) mcpAssistantOf(pid int, err error, parent func(int) (int, error), session string) (string, bool) {
 	if errors.Is(err, errNoPeer) {
-		if session == "" {
-			return "", false
+		if n.assistantSession(session) {
+			return session, true
 		}
-		for _, id := range n.assistantRoots() {
-			if id == session {
-				return session, true
-			}
-		}
-		if n.runtimeAssistant(session) {
+		if h, _, _ := n.runtimes.belongs(session); n.runtimeAssistantChat(h, session) {
 			return session, true
 		}
 		return "", false
@@ -156,10 +149,39 @@ func (n *Node) mcpAssistantOf(pid int, err error, parent func(int) (int, error),
 	if id, ok := n.assistantIn(line); ok {
 		return id, true
 	}
-	if n.runtimes.assistantIn(line) {
+	if h := n.runtimes.assistantIn(line); h != nil && n.runtimeMayName(h, session) {
 		return session, true
 	}
 	return "", false
+}
+
+// assistantSession: session is the one a process this node runs for the assistant goes to the hub with.
+func (n *Node) assistantSession(session string) bool {
+	for _, id := range n.assistantRoots() {
+		if id == session {
+			return true
+		}
+	}
+	return false
+}
+
+// runtimeMayName: session, named by a process of runtime h (one that runs assistant conversations), can be one of
+// them: not one this node runs itself, and, once a runtime lists it, h's assistant conversation (runtimeAssistantChat).
+// One no runtime lists yet passes if it is shaped like a runtime's: a runtime's chat lists the tools as it starts,
+// before the runtime lists it (integrations/antigravity).
+func (n *Node) runtimeMayName(h *runtimeConn, session string) bool {
+	if n.assistantSession(session) {
+		return false
+	}
+	if _, _, known := n.runtimes.belongs(session); known {
+		return n.runtimeAssistantChat(h, session)
+	}
+	return runtimeSessionID(session)
+}
+
+// runtimeAssistantChat: session is an assistant conversation that runtime h, one that runs them (caps.assistant), has.
+func (n *Node) runtimeAssistantChat(h *runtimeConn, session string) bool {
+	return h != nil && h.assistant() && n.runtimes.owns(h, session) && n.runtimeAssistant(session)
 }
 
 type assistantPrepareState struct {

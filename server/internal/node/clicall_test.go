@@ -410,8 +410,30 @@ func TestMCPAssistantFromARuntime(t *testing.T) {
 	check(mcpTools(true, "session-a"), false)
 	check(mcpCall(true, "session-a"), false)
 	dialRuntime(t, n, assistantRuntimeHello())
-	check(mcpTools(true, "session-a"), true)
+	check(mcpTools(true, "session-a"), true) // no runtime lists it yet: a chat lists the tools as it starts
 	check(mcpCall(true, "session-a"), true)
+
+	// Only a session that can be one of this runtime's assistant chats.
+	conn := func(rt string) *runtimeConn {
+		n.runtimes.mu.Lock()
+		defer n.runtimes.mu.Unlock()
+		return n.runtimes.byRuntime(rt)
+	}
+	n.runtimes.claim(conn("plain"), "session-p")
+	n.runtimes.claim(conn("dsh"), "session-w") // the runtime's, an agent's chat
+	n.runtimes.claim(conn("dsh"), "session-r")
+	n.state.put("session-r", sessionState{Cwd: identity.AssistantDir(n.home)})
+	n.mu.Lock()
+	n.akeys = map[string]*assistantProc{"proc-k": {cmd: &exec.Cmd{Process: &os.Process{Pid: 1 << 22}}, cx: &codexConn{key: "proc-k"}}}
+	n.mu.Unlock()
+	for _, c := range []struct {
+		session string
+		ok      bool
+	}{{"session-r", true}, {"", false}, {"0d000000-0000-4000-8000-00000000000a", false}, {"session-p", false}, {"session-w", false}, {"proc-k", false}} {
+		if got := ask(mcpTools(true, c.session)); got["assistant"] != c.ok || got["session_id"] != c.session {
+			t.Errorf("%q: relayed %v, want assistant %v", c.session, got, c.ok)
+		}
+	}
 }
 
 // A connection into the runtime socket from the node's own process or an ancestor of it is a relay (the manager's
@@ -430,21 +452,37 @@ func TestMCPAssistantNotFromARelay(t *testing.T) {
 }
 
 // Where the system does not tell who is at the other end of the socket (Windows), the request must name a session
-// the node runs for the assistant, or an assistant conversation of a runtime.
+// the node runs for the assistant, or an assistant conversation of a connected runtime that runs them.
 func TestMCPAssistantWithoutPeer(t *testing.T) {
 	n, _ := testNode(t)
 	n.procs["s1"] = &assistantProc{id: "s1", cmd: &exec.Cmd{Process: &os.Process{Pid: 100}}}
 	n.akeys = map[string]*assistantProc{"proc-k": {cmd: &exec.Cmd{Process: &os.Process{Pid: 200}}, cx: &codexConn{key: "proc-k"}}}
 	n.state.put("session-r", sessionState{Cwd: identity.AssistantDir(n.home)})
 	n.state.put("session-w", sessionState{Cwd: filepath.Join(n.home, "work")})
-	for _, c := range []struct {
-		session string
-		ok      bool
-	}{{"s1", true}, {"proc-k", true}, {"session-r", true}, {"session-w", false}, {"other", false}, {"", false}} {
-		if got, ok := n.mcpAssistantOf(0, errNoPeer, nil, c.session); ok != c.ok || ok && got != c.session {
-			t.Errorf("%q: %q %v, want %v", c.session, got, ok, c.ok)
+	check := func(cases map[string]bool) {
+		t.Helper()
+		for session, want := range cases {
+			if got, ok := n.mcpAssistantOf(0, errNoPeer, nil, session); ok != want || ok && got != session {
+				t.Errorf("%q: %q %v, want %v", session, got, ok, want)
+			}
 		}
 	}
+	// session-r is an assistant conversation by its directory, but no connected runtime has it.
+	check(map[string]bool{"s1": true, "proc-k": true, "session-r": false, "session-w": false, "other": false, "": false})
+
+	n.runtimes = newRuntimeRegistry()
+	connect := func(rt string, assistant bool) *runtimeConn {
+		h := n.runtimes.add(nil)
+		h.mu.Lock()
+		h.ready, h.hello.Runtime, h.hello.Caps.Assistant = true, rt, assistant
+		h.mu.Unlock()
+		return h
+	}
+	n.state.put("session-p", sessionState{Cwd: identity.AssistantDir(n.home)})
+	n.runtimes.claim(connect("plain", false), "session-p") // a runtime that runs no assistant
+	n.runtimes.claim(connect("dsh", true), "session-r")
+	n.runtimes.claim(connect("dsh2", true), "session-w") // not an assistant conversation
+	check(map[string]bool{"session-r": true, "session-p": false, "session-w": false})
 	// Any other reason the peer is not known (not a unix socket) is no assistant's.
 	if got, ok := n.mcpAssistantOf(0, errors.New("not a unix socket"), nil, "s1"); ok {
 		t.Errorf("a peer not known for another reason: %q", got)

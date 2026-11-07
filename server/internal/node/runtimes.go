@@ -486,11 +486,11 @@ func (b *runtimeRegistry) resetWatches() {
 	}
 }
 
-// assistantIn: one of pids is the process of a connected runtime that runs assistant conversations (caps.assistant in
-// its hello).
-func (b *runtimeRegistry) assistantIn(pids []int) bool {
+// assistantIn is the connected runtime that runs assistant conversations (caps.assistant in its hello) whose process
+// is one of pids, nil when none is.
+func (b *runtimeRegistry) assistantIn(pids []int) *runtimeConn {
 	if b == nil {
-		return false
+		return nil
 	}
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -499,10 +499,10 @@ func (b *runtimeRegistry) assistantIn(pids []int) bool {
 		ok := h.ready && h.hello.Caps.Assistant && h.pid > 0 && slices.Contains(pids, h.pid)
 		h.mu.Unlock()
 		if ok {
-			return true
+			return h
 		}
 	}
-	return false
+	return nil
 }
 
 func (b *runtimeRegistry) add(peer *rpc.Peer) *runtimeConn {
