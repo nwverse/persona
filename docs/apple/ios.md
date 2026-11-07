@@ -15,6 +15,7 @@ Mac's previous / next Agent follows pinned order then recent activity in this mo
 ## iPhone Agents 分组入口与长列表（#5766）
 
 - 快速筛选下方增加独立 List 单元中的分组菜单，始终显示当前分组名称，不与搜索输入框共用单元。菜单与原 ⋯ 菜单共用 `dev.grouping`，重启后保留选择。已有分组和默认值不变，平铺视图仍叫「最近使用」。
+- In the new shell a **Personal Agents ›** pill sits right of the grouping menu (`AgentsPersonalPill`, #140) and opens the personal agents page: on a phone the shell has no toolbar, so this is the only way there. When the two don't fit on one line (large text) they stack. The old layout, iPad and Mac keep the toolbar button and show no pill. UI test `PersonalAgentsEntryTests`.
 - 分组折叠继续使用 `dev.folded`，搜索时展开匹配内容。
 - 长列表首次显示前 20 项并提供「显示全部 N 个」；不超过 25 项时全部显示。适用于最近使用、状态、待办、机器的活跃行，以及项目和工作树的活跃项；快速筛选或搜索时不截断。Mac 不截断，保留 ↑ / ↓ 导航行为。
 - 「显示全部」的展开状态与分组折叠分开，不跨重启保存。项目内一个多 Agent tab 仍作为一项，不拆散 tab。
