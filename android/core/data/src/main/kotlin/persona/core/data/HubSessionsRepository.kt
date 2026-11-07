@@ -379,7 +379,9 @@ class HubSessionsRepository(
         // A burst past one extra page rebaselines page one rather than growing the window without bound.
         if (top.keys.size + joined.size > 2 * WINDOW_SIZE) throw SessionListExpired()
         loadedPages[0] = top.copy(keys = top.keys + joined.map { it.key })
-        return joined.sortedWith(compareByDescending<Session> { it.updated }.thenBy { it.machineId }.thenBy { it.sessionId })
+        // Each time parsed once (`updated` parses its text on every read).
+        return joined.map { it to it.updated }.sortedWith(compareByDescending<Pair<Session, java.time.Instant?>> { it.second }
+            .thenBy { it.first.machineId }.thenBy { it.first.sessionId }).map { it.first }
     }
 
     /** Called under [lock]; never combines page tokens/checkpoints from different hub epochs. */

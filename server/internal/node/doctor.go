@@ -14,6 +14,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"slices"
 	"strings"
@@ -153,10 +154,14 @@ var generatedGroups = []string{"claude-settings.json", "claude-hooks", "assistan
 
 const agentPluginGroup = "agent-plugin"
 
-// hookSettings is the settings with Persona's hooks for a claude whose program is bin: the agents' (assistant false)
-// or the assistant's, which add the Feishu gate on Bash (larkgate.go).
-func hookSettings(bin string, assistant bool) map[string]any {
+// hookSettings is the settings with Persona's hooks for a claude whose program is bin, of the node whose directory is
+// dir: the agents' (assistant false) or the assistant's, which add the Feishu gate on Bash (larkgate.go). The hook
+// names dir itself (rootAssign): Claude Code runs it with the claude's environment, which is its pane's (agentenv.go).
+func hookSettings(bin, dir string, assistant bool) map[string]any {
 	cmd := shellQuote(bin) + " hook"
+	if dir != "" {
+		cmd = rootAssign(dir, shellQuote) + cmd
+	}
 	blocking := func(matcher string) map[string]any {
 		return map[string]any{"matcher": matcher, "hooks": []any{map[string]any{"type": "command", "command": cmd, "timeout": 86400}}}
 	}
@@ -176,13 +181,13 @@ func hookSettings(bin string, assistant bool) map[string]any {
 	}}
 }
 
-// generatedFiles is every file writeGeneratedConfig writes under the node's directory (but the skills plugin),
+// generatedFiles is every file writeGeneratedConfig writes under the node's directory dir (but the skills plugin),
 // computed without writing. Each set of hooks is there twice: as a plugin for a claude that loads plugins, in a
-// settings file for one that does not (hooksplugin.go).
-func generatedFiles(bin string) ([]generatedFile, error) {
+// settings file for one that does not (hooksplugin.go). The hooks and the MCP server are told dir, as PERSONA_HOME.
+func generatedFiles(bin, dir string) ([]generatedFile, error) {
 	var out []generatedFile
 	for _, kind := range []string{"claude", "assistant"} {
-		settings := hookSettings(bin, kind == "assistant")
+		settings := hookSettings(bin, dir, kind == "assistant")
 		b, err := marshalJSON(settings)
 		if err != nil {
 			return nil, err
@@ -196,7 +201,11 @@ func generatedFiles(bin string) ([]generatedFile, error) {
 			out = append(out, generatedFile{Group: kind + "-hooks", Rel: filepath.Join(kind+"-hooks", rel), Content: files[rel]})
 		}
 	}
-	mcp, err := marshalJSON(map[string]any{"mcpServers": compat.AddMCPAliases(map[string]any{"persona": map[string]any{"command": bin, "args": []string{"mcp"}}})})
+	server := map[string]any{"command": bin, "args": []string{"mcp"}}
+	if dir != "" {
+		server["env"] = map[string]string{"PERSONA_HOME": dir}
+	}
+	mcp, err := marshalJSON(map[string]any{"mcpServers": compat.AddMCPAliases(map[string]any{"persona": server})})
 	if err != nil {
 		return nil, err
 	}
@@ -206,7 +215,7 @@ func generatedFiles(bin string) ([]generatedFile, error) {
 // writeGeneratedConfig writes the hooks, MCP config and skills plugin that sessions Persona starts load into dir,
 // for a claude whose hook program is bin: what the node does at each start, and what `node doctor --fix` does.
 func writeGeneratedConfig(dir, bin string) error {
-	files, err := generatedFiles(bin)
+	files, err := generatedFiles(bin, dir)
 	if err != nil {
 		return err
 	}
@@ -367,7 +376,7 @@ func checkRuntimeSocket(ctx context.Context, path string) DoctorCheck {
 // checkGenerated compares each generated file with what this binary would write: current, stale (differs, or part
 // of a plugin is missing) or missing.
 func checkGenerated(opts DoctorOptions) []DoctorCheck {
-	files, err := generatedFiles(opts.Bin)
+	files, err := generatedFiles(opts.Bin, opts.Dir)
 	if err != nil {
 		return []DoctorCheck{{Name: "generated-files", Status: DoctorFail, Detail: err.Error(), Items: []string{}}}
 	}
@@ -459,35 +468,40 @@ func configCommands(b []byte) []string {
 	return out
 }
 
-// shellFirstWord is the first word of a command line written with shellQuote: bare, or single-quoted with each
-// embedded quote closed, backslash-escaped and reopened.
+// shellFirstWord is the program a command line written with shellQuote runs: its first word past the VAR=value ones
+// in front (rootAssign). A word is bare, or single-quoted with each embedded quote closed, backslash-escaped and
+// reopened.
 func shellFirstWord(cmd string) string {
-	cmd = strings.TrimSpace(cmd)
-	if !strings.HasPrefix(cmd, "'") {
-		if i := strings.IndexAny(cmd, " \t"); i >= 0 {
-			return cmd[:i]
-		}
-		return cmd
-	}
-	var w strings.Builder
-	for i := 0; i < len(cmd); {
-		switch {
-		case cmd[i] == '\'':
-			j := strings.IndexByte(cmd[i+1:], '\'')
-			if j < 0 {
-				return w.String()
+	for rest := strings.TrimSpace(cmd); rest != ""; {
+		var w strings.Builder
+		i := 0
+		for i < len(rest) && rest[i] != ' ' && rest[i] != '\t' {
+			switch {
+			case rest[i] == '\'':
+				j := strings.IndexByte(rest[i+1:], '\'')
+				if j < 0 {
+					return "" // not a command line shellQuote writes
+				}
+				w.WriteString(rest[i+1 : i+1+j])
+				i += j + 2
+			case rest[i] == '\\' && i+1 < len(rest):
+				w.WriteByte(rest[i+1])
+				i += 2
+			default:
+				w.WriteByte(rest[i])
+				i++
 			}
-			w.WriteString(cmd[i+1 : i+1+j])
-			i += j + 2
-		case strings.HasPrefix(cmd[i:], `\'`):
-			w.WriteByte('\'')
-			i += 2
-		default:
+		}
+		if !assignmentRe.MatchString(rest[:i]) {
 			return w.String()
 		}
+		rest = strings.TrimLeft(rest[i:], " \t")
 	}
-	return w.String()
+	return ""
 }
+
+// assignmentRe is a shell word that sets a variable for the command after it.
+var assignmentRe = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*=`)
 
 // checkCommandPaths: the program each generated file runs exists and can be run. A file moved or removed under a
 // running node (a redeploy to another path) leaves hooks that fail on every call.
