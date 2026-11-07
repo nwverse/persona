@@ -6,12 +6,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log"
 	"os"
 	"time"
 
-	"github.com/nwverse/persona/server/internal/assistantwire"
-	"github.com/nwverse/persona/server/internal/db"
 	"github.com/nwverse/persona/server/internal/identity"
 )
 
@@ -101,24 +98,18 @@ func ManagerCode(ctx context.Context, out io.Writer) error {
 		return errors.New("the built-in manager is not a service of its own here (assistant.mode service, not " +
 			"assistant.external): first persona-hub manager-mode service, then persona-hub switch (or restart its service)")
 	}
-	if cfg.DatabaseURL == "" {
-		return errors.New("hub.json has no database_url")
-	}
-	database, err := db.Open(ctx, cfg.DatabaseURL, db.HubSet)
-	if err != nil {
-		return err
-	}
-	defer database.Close()
-	h := &Hub{cfg: cfg, store: database, logger: log.New(io.Discard, "", 0)}
-	code, until, err := h.newInstallCode(ctx, assistantwire.AssistantID, "助手") // i18n-ignore: its identity's name, as assistant-token gives it
+	code, until, err := builtinCode(ctx, cfg)
 	if err != nil {
 		return err
 	}
 	return writeManagerCode(out, code, until, cfg.Listen)
 }
 
+// writeManagerCode prints the code and how to bind with it: in the environment, where other users of the machine
+// cannot read it (a command line they can, while it runs).
 func writeManagerCode(out io.Writer, code string, until time.Time, listen string) error {
-	_, err := fmt.Fprintf(out, "%s\n\nGood until %s, once. On this machine (where the built-in manager's service runs):\n"+
-		"  persona-manager join --builtin %s %s\n", code, until.UTC().Format("2006-01-02 15:04 MST"), hubLocalURL(listen), code)
+	_, err := fmt.Fprintf(out, "%s\n\nGood until %s, once. On this machine (where the built-in manager's service runs), with "+
+		"the code in the environment, where other users of the machine cannot read it:\n"+
+		"  PERSONA_MANAGER_CODE=<the code> persona-manager join --builtin %s --install\n", code, until.UTC().Format("2006-01-02 15:04 MST"), hubLocalURL(listen))
 	return err
 }

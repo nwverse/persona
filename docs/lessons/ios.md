@@ -309,6 +309,9 @@ Use an invalidation revision as the task key and handle the flag after completio
   Use `scaledWidthCap(_:)` outside the background (`WidthCap` proposes the cap to its child and reports the child's size).
   `DockPillLayoutTests` render with `ImageRenderer` into transparent side slots and check background pixels stay out, across text sizes.
 
+- A `List`'s rows come and go with the transaction that changed them (2026-11-07, #37): `.animation(_:value:)` on a `ForEach` or section inside the
+  list animates what the rows draw, but the list still inserts and deletes rows at once (a recording showed a keyed row replaced in one frame).
+  Commit the change with `withAnimation` where the data changes (`ExtensionMotion.redraw`), or put the modifier on the `List` / `Form` itself; a `VStack` honors the inner one.
 - Unequal brand marks (2026-11-03, #1003): identical `Image(…).resizable().scaledToFit()` square frames still look different.
   Assets cause it: Lark's 88×88 SVG bird occupies only 70% × 56% and is right-shifted, while Telegram / Microsoft fill the canvas. `scaledToFit` aligns canvases, not drawings.
   Crop whitespace through viewBox, render through `BrandMark`, then optically shrink full-square marks. Measure opaque bounds after `rsvg-convert`, and screenshot @3x frame / centers, not by eye.

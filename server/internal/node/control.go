@@ -710,6 +710,7 @@ func (n *Node) send(ctx context.Context, id, text string, images []proto.Image, 
 	}
 	var watch *promptWatch
 	if kind == "claude" {
+		text = keepImagePaths(text)
 		watch = n.watchPrompt(id, text) // where the transcript ends before the typing: what comes after may be this (sendsafe.go)
 	}
 	typedAt := time.Now()
@@ -811,6 +812,36 @@ func (n *Node) saveImages(images []proto.Image) ([]string, error) {
 		paths = append(paths, p)
 	}
 	return paths, nil
+}
+
+// imagePathLine starts the line that repeats a photo's path in an <attached_images> block as text (keepImagePaths).
+const imagePathLine = "path: "
+
+// keepImagePaths gives each path in the <attached_images> block that ends text (the node's own, or one a client wrote
+// after uploading the photos itself, as Android's composer does) a second line, "path: <path>". Claude Code's paste
+// turns a line that is only a path to a readable image into an `[Image #n]` and drops it; a line that starts with a
+// word stays text, so the agent keeps the path. The apps take only lines starting with "/" or "~" as photos. A block
+// with any other line (prose that ends in the tag, or path: lines already added) is left as it is. With words before
+// it, the block makes Claude fold the paste into a `[Pasted text #n]` placeholder (longPaste).
+func keepImagePaths(text string) string {
+	const open = "<attached_images>"
+	rest, ok := strings.CutSuffix(strings.TrimRight(text, " \t\r\n"), "</attached_images>")
+	i := strings.LastIndex(rest, open)
+	if !ok || i < 0 || strings.TrimSpace(rest[i+len(open):]) == "" {
+		return text
+	}
+	var b strings.Builder
+	b.WriteString(rest[:i+len(open)] + "\n")
+	for _, l := range strings.Split(rest[i+len(open):], "\n") {
+		if l = strings.TrimSpace(l); l == "" {
+			continue
+		}
+		if !filepath.IsAbs(l) && !strings.HasPrefix(l, "~") {
+			return text
+		}
+		b.WriteString(l + "\n" + imagePathLine + l + "\n")
+	}
+	return b.String() + "</attached_images>"
 }
 
 func (n *Node) keys(ctx context.Context, id string, keys []string, text string) error {
