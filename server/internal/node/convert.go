@@ -44,15 +44,6 @@ func sofficePath() string {
 	return ""
 }
 
-// convertDir keeps converted copies, named by the file and its version, so opening it again is instant.
-func convertDir() string {
-	base, err := os.UserCacheDir()
-	if err != nil {
-		base = os.TempDir()
-	}
-	return filepath.Join(base, "persona", "convert")
-}
-
 // convertFile turns a document a browser cannot show (doc, ppt, rtf, odt, pages, key, or a docx / pptx the web's
 // renderer could not draw) into a PDF with LibreOffice, when the machine has it (docs/protocol/protocol.md "File preview"). The
 // PDF lands in the node's cache and is read back like any file (file/download).
@@ -68,8 +59,12 @@ func (n *Node) convertFile(ctx context.Context, p proto.FileConvertRequest) (*pr
 	if st.Size() > convertMax {
 		return nil, fmt.Errorf("file is too big to convert (%d bytes)", st.Size())
 	}
+	// converted copies are kept, named by the file and its version, so opening it again is instant
+	dir, err := privateCacheDir("convert")
+	if err != nil {
+		return nil, err
+	}
 	sum := sha256.Sum256([]byte(path + "\x00" + fileRevision(st)))
-	dir := convertDir()
 	out := filepath.Join(dir, hex.EncodeToString(sum[:12])+".pdf")
 	if st, err := os.Stat(out); err == nil && st.Size() > 0 {
 		return &proto.FileConverted{Path: out, Size: st.Size(), Mime: "application/pdf"}, nil
@@ -80,9 +75,6 @@ func (n *Node) convertFile(ctx context.Context, p proto.FileConvertRequest) (*pr
 	}
 	converting.Lock()
 	defer converting.Unlock()
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return nil, err
-	}
 	pruneConverted(dir)
 	work, err := os.MkdirTemp("", "persona-convert-")
 	if err != nil {

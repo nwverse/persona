@@ -68,6 +68,7 @@ func TestConvertWithoutLibreOffice(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("PATH", filepath.Join(dir, "nothing"))
 	t.Setenv("XDG_CACHE_HOME", filepath.Join(dir, "cache"))
+	t.Setenv("HOME", dir) // os.UserCacheDir on a Mac
 	n := &Node{home: dir}
 	os.WriteFile(filepath.Join(dir, "a.ppt"), []byte("x"), 0o600)
 	_, err := n.convertFile(context.Background(), proto.FileConvertRequest{Path: "~/a.ppt"})
