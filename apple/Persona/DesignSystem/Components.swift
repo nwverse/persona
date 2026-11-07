@@ -346,6 +346,9 @@ struct EmptyStateView: View {
     var title: String
     var message: String
     var action: (title: String, run: () -> Void)?
+    /// The mark's color when it means something (`Theme.caution` for a warning); the accent otherwise. BeautifulUI
+    /// keeps its own quiet mark.
+    var tint: Color? = nil
 
     var body: some View {
         if AppStyle.current.usesBeautifulUI {
@@ -361,7 +364,7 @@ struct EmptyStateView: View {
         VStack(spacing: Theme.Space.l) {
             Image(systemName: symbol)
                 .font(Theme.Font.display).imageScale(.large)
-                .foregroundStyle(Theme.accent.gradient)
+                .foregroundStyle((tint ?? Theme.accent).gradient)
                 .symbolEffect(.bounce, value: title)
             Text(title).font(Theme.Font.title)
             Text(message)

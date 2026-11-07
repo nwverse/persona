@@ -182,7 +182,8 @@ struct ImageViewer: View {
         let message = again ? String(localized: "Couldn't get this image. Tap Retry to try again.")
             : item.payload == nil && item.file != nil ? String(localized: "Couldn't get a preview of this image. Use Open in Files in the ⋯ menu.")
             : String(localized: "This image's data can't be opened")
-        return EmptyStateView(symbol: Theme.Icon.error, title: String(localized: "Image didn't load"), message: message, action: retry)
+        return EmptyStateView(symbol: Theme.Icon.error, title: String(localized: "Image didn't load"), message: message, action: retry,
+                              tint: Theme.caution)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .accessibilityIdentifier("viewer-not-loaded-\(i)")
     }
