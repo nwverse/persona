@@ -145,12 +145,8 @@ func TestNodeSessionScopeRejectsExternalCodexDiscovery(t *testing.T) {
 		Servers: []proto.CodexServer{{ID: "original", Home: filepath.Join(n.home, ".codex"), Endpoint: "stdio://"}}})
 	n.discoverCodex()
 	cfg := n.codexInventory()
-	// The inventory keeps homes with symlinks resolved; t.TempDir() is under one on macOS (/var → /private/var).
-	codex, err := filepath.EvalSymlinks(n.sessionScope.codex)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !reflect.DeepEqual(cfg.Homes, []string{codex}) || len(cfg.Servers) != 0 || cfg.Discovery == nil || *cfg.Discovery {
+	// The inventory keeps homes with symlinks resolved (canonicalCodexHome).
+	if !reflect.DeepEqual(cfg.Homes, []string{resolved(t, n.sessionScope.codex)}) || len(cfg.Servers) != 0 || cfg.Discovery == nil || *cfg.Discovery {
 		t.Fatalf("inventory: %+v", cfg)
 	}
 	writeRollout(t, n.home, remoteRaw, "/original/assistant", time.Now(), time.Now())
