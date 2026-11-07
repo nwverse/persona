@@ -15169,10 +15169,15 @@ _plugins_route_without_extensions = plugins_route
 
 
 def plugins_route(handler, p, body):
+    if PLUGINS_MODE and p == "/api/v1/extensions/showcase/-/ui/motion":
+        handler.send_json({"view": _motion_view(_MOTION_STEP[0])})
+        return True
     if PLUGINS_MODE and p.startswith("/api/v1/extensions/showcase/-/ui/"):
         return mock_showcase(handler, p.rsplit("/", 1)[-1], body)
     if p == "/mock/invalidate" and PLUGINS_MODE:
         return mock_invalidate(handler)
+    if p in ("/mock/motion/next", "/mock/motion/reset") and PLUGINS_MODE:
+        return mock_motion(handler, reset=p.endswith("/reset"))
     if EXTENSIONS_API and (p == "/api/v1/extensions" or p.startswith("/api/v1/extensions/")):
         if body:
             try:
@@ -15203,6 +15208,45 @@ def mock_showcase(handler, ui, body):
         handler.send_json({"toast": "快照测试不执行写操作"})
     else:
         handler.send_json({"view": view})
+    return True
+
+
+# showcase › motion (#37): a page the extension draws again with other values. `GET /mock/motion/next` moves it to the
+# other step (`/mock/motion/reset`: back to the first) and says so (`ui.invalidate`): numbers roll, a badge changes tone
+# and words, a row goes and another comes, the chart's bars move. Open it with
+# `-openExtension showcase -openExtensionPage motion` (`ExtensionMotionUITests`).
+_MOTION_STEP = [0]
+
+
+def _motion_view(step):
+    later = step % 2 == 1
+    tasks = [{"type": "row", "key": "build", "title": "Build", "icon": "gauge", "value": "5/5" if later else "3/5",
+              "badge": {"text": "Passed", "tone": "positive"} if later else {"text": "Running", "tone": "caution"}}]
+    if later:
+        tasks.append({"type": "row", "key": "deploy", "title": "Deploy", "icon": "clock", "value": "1 min",
+                      "badge": {"text": "Queued"}})
+    else:
+        tasks.append({"type": "row", "key": "review", "title": "Review", "icon": "doc", "value": "2 left",
+                      "badge": {"text": "Needs you", "tone": "danger"}})
+    return {"title": "Motion", "sections": [
+        {"key": "today", "title": "Today", "items": [
+            {"type": "stat_grid", "key": "stats", "stats": [
+                {"label": "Done", "value": "6/8" if later else "2/8"},
+                {"label": "Cost", "value": "$36.20" if later else "$1.20", "detail": "+12%", "tone": "caution"},
+                {"label": "Tokens", "value": "8.4M" if later else "1.2M"}]},
+            {"type": "metric", "key": "eta", "label": "Time left", "value": "4 min" if later else "12 min"},
+            {"type": "chart", "key": "chart", "kind": "bar", "title": "Runs", "series": [{"name": "Runs", "points": [
+                {"label": d, "value": v} for d, v in zip(["Mon", "Tue", "Wed", "Thu", "Fri"],
+                                                         [4, 9, 6, 12, 8] if later else [2, 5, 3, 4, 7])]}]}]},
+        {"key": "tasks", "title": "Tasks", "items": tasks}]}
+
+
+def mock_motion(handler, reset=False):
+    _MOTION_STEP[0] = 0 if reset else _MOTION_STEP[0] + 1
+    for send, _ in list(LIVE):
+        try: send({"type": "extension_ui", "extension": "showcase", "id": "motion", "invalidate": True})
+        except Exception: pass
+    handler.send_json({"step": _MOTION_STEP[0]})
     return True
 
 

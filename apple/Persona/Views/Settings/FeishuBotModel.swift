@@ -39,6 +39,9 @@ nonisolated struct FeishuBotStatus: Codable, Hashable, Sendable {
         /// Whether the hub sent `board` at all: a hub from before doesn't know the switch, so the page hides it and the
         /// edit doesn't carry it.
         var hubKnowsBoard: Bool = false
+        /// Whether the hub sent `reports`. It came with the hub (0.1.12) that merges the switches it is sent over its own;
+        /// a hub from before replaces the whole object, so an edit has to carry every switch to it.
+        var hubMergesFeatures: Bool = false
 
         enum CodingKeys: String, CodingKey {
             case main, cards, pushes, sync, agents, reports, board
@@ -59,7 +62,9 @@ nonisolated struct FeishuBotStatus: Codable, Hashable, Sendable {
             pushes = try c.decode(Bool.self, forKey: .pushes)
             sync = try c.decode(Bool.self, forKey: .sync)
             agents = try c.decode(Bool.self, forKey: .agents)
-            reports = try c.decodeIfPresent(Bool.self, forKey: .reports) ?? true
+            let reports = try c.decodeIfPresent(Bool.self, forKey: .reports)
+            self.reports = reports ?? true
+            hubMergesFeatures = reports != nil
             let board = try c.decodeIfPresent(Bool.self, forKey: .board)
             self.board = board ?? false
             hubKnowsBoard = board != nil
@@ -75,6 +80,28 @@ nonisolated struct FeishuBotStatus: Codable, Hashable, Sendable {
             try c.encode(agents, forKey: .agents)
             try c.encode(reports, forKey: .reports)
             if hubKnowsBoard { try c.encode(board, forKey: .board) } // the hub merges what it is sent over what it has
+        }
+
+        /// The wire name of a switch.
+        static func wireName(_ key: WritableKeyPath<Features, Bool>) -> String {
+            if key == \.main { return "main" }
+            if key == \.cards { return "cards" }
+            if key == \.allCards { return "all_cards" }
+            if key == \.pushes { return "pushes" }
+            if key == \.sync { return "sync" }
+            if key == \.agents { return "agents" }
+            if key == \.reports { return "reports" }
+            return "board"
+        }
+
+        /// What turning one switch sends to a hub that merges per switch: that switch alone, so a switch changed elsewhere
+        /// since this page loaded keeps its value. The two that go together name both: "all cards" brings "cards" along, and
+        /// turning "cards" off takes "all cards" with it (the hub does not tie them).
+        static func change(_ key: WritableKeyPath<Features, Bool>, _ on: Bool) -> [String: Bool] {
+            var change = [wireName(key): on]
+            if key == \.cards && !on { change["all_cards"] = false }
+            if key == \.allCards && on { change["cards"] = true }
+            return change
         }
     }
 
@@ -110,8 +137,22 @@ nonisolated struct FeishuBotUpdate: Encodable, Sendable {
     var appID: String?
     var appSecret: String?
     var domain: String?
-    var features: FeishuBotStatus.Features?
+    var features: FeaturesEdit?
     var nudgeAfter: Int?
+
+    /// The switches in an edit: the ones that changed, or (for a hub from before it merged them) all of them.
+    nonisolated enum FeaturesEdit: Encodable, Sendable {
+        case only([String: Bool])
+        case whole(FeishuBotStatus.Features)
+
+        func encode(to encoder: Encoder) throws {
+            var c = encoder.singleValueContainer()
+            switch self {
+            case .only(let keys): try c.encode(keys)
+            case .whole(let all): try c.encode(all)
+            }
+        }
+    }
 
     enum CodingKeys: String, CodingKey {
         case enabled, domain, features
@@ -245,12 +286,21 @@ extension APIClient {
         await run(on ? String(localized: "Couldn't turn on") : String(localized: "Couldn't turn off")) { try await $0.updateFeishuBot(.init(enabled: on)) }
     }
 
+    /// One switch. The hub merges the switches it is sent over its own, so only the changed one goes (this page may
+    /// have been open while another device changed a different one). A hub from before that replaces the whole object
+    /// gets every switch, as it always did.
     func set(_ key: WritableKeyPath<FeishuBotStatus.Features, Bool>, _ on: Bool) async {
-        var f = features
-        f[keyPath: key] = on
-        if key == \.cards && !on { f.allCards = false }
-        if key == \.allCards && on { f.cards = true }
-        await run(String(localized: "Couldn't save")) { try await $0.updateFeishuBot(.init(features: f)) }
+        let edit: FeishuBotUpdate.FeaturesEdit
+        if features.hubMergesFeatures {
+            edit = .only(FeishuBotStatus.Features.change(key, on))
+        } else {
+            var f = features
+            f[keyPath: key] = on
+            if key == \.cards && !on { f.allCards = false }
+            if key == \.allCards && on { f.cards = true }
+            edit = .whole(f)
+        }
+        await run(String(localized: "Couldn't save")) { try await $0.updateFeishuBot(.init(features: edit)) }
     }
 
     func setNudgeAfter(_ minutes: Int) async {

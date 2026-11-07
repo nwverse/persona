@@ -9,7 +9,7 @@ import { t } from "../../i18n";
 import { ago } from "../../lib/format";
 import {
   botStateText, botStatus, botSummary, botTone, credentialsChanged, credentialsOf, credentialsUpdate, DEFAULT_FEATURES, DEFAULT_NUDGE_AFTER, livePairing, nudgeChoices, nudgeLabel, pairBot, pairingLeft,
-  testBot, unpairBot, updateBot, withFeature, type BotCredentials, type BotFeatures, type FeishuBotStatus,
+  featureEdit, testBot, unpairBot, updateBot, type BotCredentials, type BotFeatures, type FeishuBotStatus,
 } from "../../lib/feishu-bot";
 import { Button, copyText, cx, Dialog, IconButton, Spinner, toast } from "../../ui/atoms";
 import { Icon, type IconName } from "../../ui/icons";
@@ -256,7 +256,7 @@ function FeishuBotDialog({ bot, onClose }: { bot: ReturnType<typeof useBot>; onC
                     <div className="text-[13px] text-ink">{f.title}</div>
                     <div className="mt-0.5 text-[11.5px] leading-snug text-ink-3">{f.detail}</div>
                   </div>
-                  <Switch on={features[f.key] ?? false} disabled={saving || off} label={f.title} onChange={(on) => void run(t("settings-feishubot.save_failed"), () => updateBot({ features: withFeature(features, f.key, on) }))} />
+                  <Switch on={features[f.key] ?? false} disabled={saving || off} label={f.title} onChange={(on) => void run(t("settings-feishubot.save_failed"), () => updateBot({ features: featureEdit(features, f.key, on) }))} />
                 </div>
               );
             })}

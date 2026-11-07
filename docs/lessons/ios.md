@@ -309,6 +309,9 @@ Use an invalidation revision as the task key and handle the flag after completio
   Use `scaledWidthCap(_:)` outside the background (`WidthCap` proposes the cap to its child and reports the child's size).
   `DockPillLayoutTests` render with `ImageRenderer` into transparent side slots and check background pixels stay out, across text sizes.
 
+- A `List`'s rows come and go with the transaction that changed them (2026-11-07, #37): `.animation(_:value:)` on a `ForEach` or section inside the
+  list animates what the rows draw, but the list still inserts and deletes rows at once (a recording showed a keyed row replaced in one frame).
+  Commit the change with `withAnimation` where the data changes (`ExtensionMotion.redraw`), or put the modifier on the `List` / `Form` itself; a `VStack` honors the inner one.
 - Unequal brand marks (2026-11-03, #1003): identical `Image(…).resizable().scaledToFit()` square frames still look different.
   Assets cause it: Lark's 88×88 SVG bird occupies only 70% × 56% and is right-shifted, while Telegram / Microsoft fill the canvas. `scaledToFit` aligns canvases, not drawings.
   Crop whitespace through viewBox, render through `BrandMark`, then optically shrink full-square marks. Measure opaque bounds after `rsvg-convert`, and screenshot @3x frame / centers, not by eye.
@@ -1257,3 +1260,8 @@ DEBUG 的代码可能在 `Persona.debug.dylib` 中，40 KiB 的 `Persona` 只是
 - **Every expander inside a chat row needs the pin, nested ones too**: the phase blocks inside the run's card first toggled with a plain `withAnimation`; in the upside-down list a phase opening 12 rows (or 「n more」 opening 43) pushed its head and everything above it up, under the top bar. Route each one through `toggleInPlace(pin, key, …)` with `.chatPinned(key)` on what was tapped (or the head above it, for 「n more」 / Show Fewer), as the card's own head does; outside the list (`chatPin` nil: the chat's header) it animates as before, so check Reduce Motion there yourself (`toggleInPlace` falls back to `withAnimation` unconditionally).
 - **Don't middle-truncate a line that ends in numbers**: the Agents row's 「后台 workflow「parity-audit」 · Verify 2/2 · 169/185+」 cut in the middle read 「…9/185+」, a wrong count. Cut only the name (`WorkflowLine`: name and details as two texts, the details laid out first).
 - **The mock's times are fixed when it starts**: `mock_hub.py`'s `ago()` counts from its start, so an ended run (`ended_at` 40 minutes "ago") leaves the chat's header once the mock has run for 20 minutes, and `testCrowdedWorkflowsLeaveRoomForTheChat` failed on "the stopped one's error is missing". Start the mock afresh for each run of the workflow UI tests; `-collect-test-diagnostics never` also saved about ten minutes per `xcodebuild test` after the tests had passed.
+
+## An icon-only themed button takes its glyph's size (2026-11-07, #58)
+
+- On iOS, `.themedButton()` (glass, bordered and soft alike) sizes a button by its label. With a bare `Image`, each button is as big as its glyph: `ellipsis` is only a few points tall, so at the default text size the VNC page's More came out as a 37 × 19 pt sliver beside a 48 × 38 pt Close, and Help (`questionmark.circle`) was smaller too.
+- Give every icon-only button in a row the same square label: `Theme.Size.icon` through `scaledFrame` (`VNCPage.barIcon`). Comparing the buttons' frames in a UI test catches it (`VNCTests.testTopBarButtonsKeepTheirShape`); a glance at one button does not.

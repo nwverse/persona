@@ -50,6 +50,11 @@ struct ExtensionParts: Identifiable {
     struct Item: Identifiable {
         var id: String
         var component: ExtensionComponent
+
+        /// A component's identity in its View: its key, else its place (`index` in section `section`).
+        nonisolated static func id(_ c: ExtensionComponent, section: Int, index: Int) -> String {
+            c.key.map { "k:" + $0 } ?? "\(section).\(index)"
+        }
     }
 
     var id: String
@@ -66,7 +71,7 @@ struct ExtensionParts: Identifiable {
                 if case .divider = c { parts.append([]); continue }
                 if case .unknown = c { continue }
                 if case .html = c, !includeHTML { continue } // Extensions never receive the assistant sandbox context.
-                parts[parts.count - 1].append(Item(id: c.key.map { "k:" + $0 } ?? "\(i).\(j)", component: c))
+                parts[parts.count - 1].append(Item(id: Item.id(c, section: i, index: j), component: c))
             }
             parts = parts.filter { !$0.isEmpty }
             if parts.isEmpty { parts = [[]] }
@@ -229,7 +234,7 @@ struct ExtensionItemRow: View {
     private func metric(_ m: ExtensionMetricComponent) -> some View {
         VStack(alignment: .leading, spacing: Theme.Space.xxs) {
             Text(m.label).font(Theme.Font.label).foregroundStyle(.secondary).lineLimit(1)
-            Text(m.value).font(Theme.Font.title.monospacedDigit()).foregroundStyle(ExtensionUIStyle.ink(m.tone)).lineLimit(1)
+            ExtensionChangingText(m.value).font(Theme.Font.title.monospacedDigit()).foregroundStyle(ExtensionUIStyle.ink(m.tone)).lineLimit(1)
                 .minimumScaleFactor(0.6)
             if let d = m.detail, !d.isEmpty { Text(d).font(Theme.Font.label).foregroundStyle(.secondary) }
         }
@@ -266,10 +271,14 @@ struct ExtensionViewStack: View {
     struct SectionEntry: Identifiable {
         var index: Int
         var section: ExtensionSection
-        var id: String { section.key.map { "k:" + $0 } ?? "\(index)" }
+        var id: String { Self.id(section, index: index) }
+
+        /// A section's identity in its View: its key, else its place.
+        nonisolated static func id(_ s: ExtensionSection, index: Int) -> String { s.key.map { "k:" + $0 } ?? "\(index)" }
     }
 
     @Environment(\.assistantHTMLRendering) private var htmlContext
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     var view: ExtensionView
     var model: (any ExtensionViewControlling)?
     /// The first section's heading when it has none of its own.
@@ -297,15 +306,18 @@ struct ExtensionViewStack: View {
                     let items = s.items.enumerated().compactMap { j, item -> ExtensionParts.Item? in
                         if case .unknown = item { return nil }
                         if case .html = item, htmlContext == nil { return nil }
-                        return ExtensionParts.Item(id: item.key.map { "k:" + $0 } ?? "\(i).\(j)", component: item)
+                        return ExtensionParts.Item(id: ExtensionParts.Item.id(item, section: i, index: j), component: item)
                     }
                     if !items.isEmpty || (s.more != nil && model != nil) {
                         let body = VStack(alignment: .leading, spacing: Theme.Space.m) {
                             ForEach(items) { entry in
-                                if case .divider = entry.component { Divider() } else {
-                                    ExtensionItemRow(item: entry.component, model: model, link: $link)
-                                        .frame(maxWidth: .infinity, alignment: .leading)
+                                Group {
+                                    if case .divider = entry.component { Divider() } else {
+                                        ExtensionItemRow(item: entry.component, model: model, link: $link)
+                                            .frame(maxWidth: .infinity, alignment: .leading)
+                                    }
                                 }
+                                .transition(.opacity)
                             }
                             if let more = s.more, let model { ExtensionMoreRow(more: more, model: model, link: $link) }
                         }
@@ -315,8 +327,12 @@ struct ExtensionViewStack: View {
                         Text(f).font(Theme.Font.label).foregroundStyle(.secondary).padding(.horizontal, Theme.Space.xs)
                     }
                 }
+                .transition(.opacity)
             }
         }
+        // Drawn again with blocks that came or went, they fade in and out and the rest moves (#37); a model's redraw
+        // comes animated already (`ExtensionMotion.redraw`), this covers a View changed by its caller (a card).
+        .animation(reduceMotion ? nil : Theme.Motion.layout, value: ExtensionMotion.blocks(view))
     }
 }
 
