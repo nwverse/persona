@@ -58,4 +58,4 @@ data class LauncherRoute(val machineId: String, val name: String) : NavKey
 @Serializable @SerialName("persona.core.navigation.ModelProviderRoute") data class ModelProviderRoute(val name: String) : NavKey
 
 /** One connector of Settings › Connectors (its sign-in, switches and inbox settings), by the hub's connector id; an extension's page opens it. */
-@Serializable @SerialName("persona.core.navigation.ConnectorRoute") data class ConnectorRoute(val connectorId: String) : NavKey
+@Serializable @SerialName("persona.core.navigation.ConnectorRoute") data class ConnectorRoute(val connectorId: String, val manager: String? = null) : NavKey
