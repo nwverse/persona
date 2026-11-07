@@ -941,6 +941,8 @@ if os.environ.get("MOCK_TREE"):
                 TREE_MUTED.append("%s/%s" % (mid, sid))
 # "Show botmux sessions too" per machine (PUT /api/v1/machines/{mid}/botmux); unset is on, as on a real hub.
 BOTMUX_ON: dict = {}
+# Settings › Claude Code › Live replies per machine (PUT /api/v1/machines/{mid}/claude-live-replies, #1309); unset is on.
+LIVE_REPLIES_ON: dict = {}
 
 # MOCK_BOTMUX=1: a botmux session (docs/integrations/engines.md "botmux") that needs you, with botmux's reason and its Feishu topic
 # (attention_reason, external_url), a working one with only the topic, and one botmux stopped on an error
@@ -10538,6 +10540,102 @@ service:
 }
 
 
+# MOCK_AGENT_LIVE=1 (#1309): an agent's reply streams the way a Claude session Persona started sends it (its
+# MessageDisplay hook, docs/integrations/claude-integration.md "Live replies"): `delta` grows a batch of whole lines at a
+# time, the words before a tool call stay live while the tool runs (the transcript writes them with its result), then the
+# items land and the live text is cleared, and the words after the tool are a message of their own. Off by default.
+# GET /mock/agent_live?step=… drives the PR #42 review agent one step at a time (for screenshots and checks):
+#   prompt      a new message of the user's; the agent is working
+#   lines&n=K   the first message's first K lines live (all of them: the last without its newline, as the final batch)
+#   land        its text, the call and the call's result land; the live text is cleared
+#   late        the first message's whole text again, as a delta that comes after its item (the page must not show it twice)
+#   second&n=K  the message after the tool, its first K lines live
+#   done        that message lands, the live text is cleared, the agent is idle
+#   reset       the agent as it was before the first step: what the steps added goes (open pages keep it until reloaded)
+# What the steps add is stamped as a transcript would be: a message when its first line showed, the tool call when the
+# message's last line came, the call's result when it lands; so durations and the run bar's clock agree.
+AGENT_LIVE = os.environ.get("MOCK_AGENT_LIVE") == "1"
+AGENT_LIVE_BASE = {}  # the agent's items and list row before the first step (reset puts them back)
+AGENT_LIVE_AT = {}  # when the current message's first and last lines showed (the stamps above)
+AGENT_LIVE_FIRST = ["两条命名建议都改好了：", "", "- `fetchForecast` 改名为 `loadForecast`，和其他加载方法一致",
+                    "- `tmp` 改成 `hourlyEntries`，读起来清楚多了", "", "接下来跑一遍单元测试，确认没有改坏。"]
+AGENT_LIVE_SECOND = ["测试全部通过：42 个用例，用时 3.1 秒。", "", "改动已经推到 PR #42 的分支上，可以再看一眼。"]
+
+
+def agent_live_text(lines, n):
+    """The first n lines as the hook's batches build them: whole lines, the last one only with the final batch."""
+    n = max(0, min(n, len(lines)))
+    return "".join(l + "\n" for l in lines[:n]) if n < len(lines) else "\n".join(lines)
+
+
+def agent_live(step, n):
+    sid, mid = REVIEW, "macbook"
+    row = next(x for x in SESSIONS if x["session_id"] == sid)
+    if not AGENT_LIVE_BASE:
+        AGENT_LIVE_BASE.update(items=list(ITEMS[sid]), row=dict(row))
+
+    def send_all(msg):
+        for out, subs in list(LIVE):
+            if sid in subs:
+                try: out(msg)
+                except Exception: pass
+
+    def stamp():
+        return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+
+    def add(new, at=()):
+        before = ITEMS[sid][-1]["seq"]
+        for i, x in enumerate(new):
+            x["seq"], x["ts"] = before + 1 + i, (at[i] if i < len(at) and at[i] else stamp())
+        ITEMS[sid] = ITEMS[sid] + new
+        send_all({"type": "items", "machine_id": mid, "session_id": sid, "items": new, **span(new, before)})
+
+    def state(st, last=None):
+        now = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+        row.update(state=st, status=STATUS_OF_STATE[st], updated_at=now, state_since=now, rev=(row.get("rev") or 0) + 1)
+        if last: row["last_text"] = last
+        push_machine(mid)
+
+    def delta(text):
+        send_all({"type": "delta", "machine_id": mid, "session_id": sid, "text": text})
+
+    if step == "prompt":
+        add([it("user", "text", 0, text="把命名的两条建议改掉，再跑一遍测试")])
+        state("working")
+    elif step == "lines":
+        AGENT_LIVE_AT.setdefault("first", stamp())
+        if n >= len(AGENT_LIVE_FIRST):
+            AGENT_LIVE_AT.setdefault("final", stamp())
+        delta(agent_live_text(AGENT_LIVE_FIRST, n))
+    elif step == "land":
+        add([it("assistant", "text", 0, text="\n".join(AGENT_LIVE_FIRST))]
+            + tool("Bash", {"command": "swift test", "description": "跑单元测试"}, "Executed 42 tests, with 0 failures (0 unexpected) in 3.1 seconds", 0),
+            (AGENT_LIVE_AT.get("first"), AGENT_LIVE_AT.get("final")))
+        AGENT_LIVE_AT.clear()
+        delta("")
+    elif step == "late":
+        delta("\n".join(AGENT_LIVE_FIRST))
+    elif step == "second":
+        AGENT_LIVE_AT.setdefault("first", stamp())
+        delta(agent_live_text(AGENT_LIVE_SECOND, n))
+    elif step == "done":
+        add([it("assistant", "text", 0, text="\n".join(AGENT_LIVE_SECOND))], (AGENT_LIVE_AT.get("first"),))
+        AGENT_LIVE_AT.clear()
+        delta("")
+        state("idle", AGENT_LIVE_SECOND[-1])
+    elif step == "reset":
+        AGENT_LIVE_AT.clear()
+        delta("")
+        ITEMS[sid] = list(AGENT_LIVE_BASE["items"])
+        rev = (row.get("rev") or 0) + 1
+        row.clear()
+        row.update(AGENT_LIVE_BASE["row"], rev=rev)
+        push_machine(mid)
+    else:
+        return {"error": "step is prompt, lines, land, late, second, done or reset"}
+    return {"ok": True, "step": step}
+
+
 def say(text, user=None, stream=False, steps=10, ms=300, late=0, drop=False):
     """A reply (after `user`'s message, if given) in every conversation an app has open (/mock/say). `stream`: the
     message first, then the reply arrives as growing `delta` text over about 3 s, like the Persona assistant's. `drop`: the
@@ -12549,6 +12647,8 @@ class H(BaseHTTPRequestHandler):
         if p == "/mock/mark": return self.send_json({"ok": True})  # a test's marker in the request log (explore)
         if p == "/mock/photo": return self.send_json(set_photo(q.get("on", ["1"])[0] == "1"))  # PhotoSaveTests' own fixture
         if p == "/mock/lark_send_delay": return self.send_json(set_lark_send_delay(q.get("s", [""])[0]))  # LarkSendTests
+        if p == "/mock/agent_live" and AGENT_LIVE:  # an agent's reply streaming as Claude shows it (MOCK_AGENT_LIVE above)
+            return self.send_json(agent_live(q.get("step", [""])[0], int(q.get("n", ["0"])[0])))
         if p == "/mock/say":  # ChatFollowTests: a reply arrives in every open conversation (?text=…, ?user=… a message before it)
             # &steps=50&ms=80: the hub's own pace (a delta every 80 ms, node/assistant.go).
             # &history=mock-1.r1: the transcript's history token from now on, on pushes and pages alike (a branch was abandoned,
@@ -12614,6 +12714,8 @@ class H(BaseHTTPRequestHandler):
             return self.send_json({"text": FAKE_SCREEN["clipboard"]})  # the Mac's clipboard through its node (#1343)
         if p.startswith("/api/v1/machines/") and p.endswith("/botmux"):  # "Show botmux sessions too" (#2575): on by default
             return self.send_json({"on": BOTMUX_ON.get(p.split("/")[4], True)})
+        if p.startswith("/api/v1/machines/") and p.endswith("/claude-live-replies"):  # live replies (#1309): on by default
+            return self.send_json({"on": LIVE_REPLIES_ON.get(p.split("/")[4], True)})
         if p.startswith("/api/v1/machines/") and p.endswith("/computer"):  # the plugin cua (MOCK_COMPUTER)
             machine = next((m for m in MACHINES if m["id"] == p.split("/")[4]), None)
             if machine is None or "computer" not in machine:
@@ -13783,6 +13885,11 @@ class H(BaseHTTPRequestHandler):
             body = json.loads(self.last_body or b"{}")
             if not isinstance(body.get("on"), bool): return self.send_json({"error": "需要 on"}, 400)
             BOTMUX_ON[p.split("/")[4]] = body["on"]
+            return self.send_json({"on": body["on"]})
+        if self.command == "PUT" and p.startswith("/api/v1/machines/") and p.endswith("/claude-live-replies"):
+            body = json.loads(self.last_body or b"{}")
+            if not isinstance(body.get("on"), bool): return self.send_json({"error": "on is required"}, 400)
+            LIVE_REPLIES_ON[p.split("/")[4]] = body["on"]
             return self.send_json({"on": body["on"]})
         if self.command == "PUT" and p.startswith("/api/v1/machines/") and p.endswith("/engine"):
             mid = p.split("/")[4]

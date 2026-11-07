@@ -441,7 +441,7 @@ Adding a migration:
 | `secret.key` | The hub's own 32-byte key (peer tokens, connector credentials). The built-in manager's key, which seals its secrets (mail, model providers, extensions), is in `managers/assistant/` with its `tailcat-hub.json` and `handles.key`: a copy of the hub's on an upgraded install until it rotates to its own after the move ([managers.md](../assistant/managers.md) ("The built-in manager's own files", "Its own secret.key")) |
 | `apns.json`, `apns_key.p8` | Push config / key. Present → direct APNs; absent → per-phone registered relay (`docs/operations/push-relay.md`); no relay → no push |
 
-Each computer ~/.persona also contains node-generated hooks (`claude-hooks/` / `assistant-hooks/` plugins, `claude-settings.json` / `assistant-settings.json` for older Claude), `mcp.json`, `node.sock`, uploads/.
+Each computer ~/.persona also contains node-generated hooks (`claude-hooks/` / `assistant-hooks/` plugins, the Agents' `claude-live-replies/` plugin, `claude-settings.json` / `assistant-settings.json` for older Claude), `mcp.json`, `node.sock`, uploads/.
 
 Pairing: hub `~/.persona/bin/personad hub pair` calls running hub via loopback HTTP, prints temporary link, QR, expiry, TLS public-key fingerprint if enabled. Listen must accept IPv4 loopback. Token valid 10 minutes, single device-token redemption, at most 2-minute post-redemption grace; protocol policies. `--legacy` prints main token / old QR offline, not for public networks. New QR parameters: [Protocol](../protocol/protocol.md#临时配对).
 

@@ -146,7 +146,8 @@ func (n *Node) start(ctx context.Context, cwd, launcher, prompt, resume, workspa
 	}
 	// Persona's hooks: a plugin, or in --settings for a claude that loads none (hooksplugin.go).
 	settings, hooks := n.claudeStartSettings(ctx, launcher, "claude", cwd)
-	spec := claudeLaunch{Launcher: launcher, Settings: settings, Hooks: hooks, Model: execution.Model, Plugins: n.claudeLoadsPlugins(ctx)}
+	spec := claudeLaunch{Launcher: launcher, Settings: settings, Hooks: hooks, Display: n.liveRepliesPlugin(hooks), Model: execution.Model,
+		Plugins: n.claudeLoadsPlugins(ctx)}
 	// herdr told it is Claude (hostherdr.go): a launcher that wraps another binary is otherwise not seen as one. The
 	// node's directory in front, the assistant's environment left out (agentenv.go).
 	shells := paneShells(ctx)
@@ -1074,6 +1075,7 @@ func (n *Node) watchFor(parent context.Context, id string, since int) error {
 			n.pushItems(id, fresh, span)
 		}
 	}
+	n.liveRecheck(id) // a reply Claude is showing now, after what the transcript has (livereply.go)
 	mu.Unlock()
 	go n.watchLoop(ctx, id, f, w)
 	go n.watchLive(ctx, id) // claudestatus.go
@@ -1102,6 +1104,7 @@ func (n *Node) pushItems(id string, items []proto.Item, span transcript.Span) {
 	n.mu.Unlock()
 	items = n.echoed(id, f, items)
 	_ = n.peer.Notify("session.items", withSpan(map[string]any{"session_id": id, "items": nonNil(items)}, span, true))
+	n.liveRecheck(id) // the words these items brought replace their live copy, right after them (livereply.go)
 }
 
 // pushLock serializes reading a session's new lines with pushing them, so its batches reach the hub in order.
@@ -1131,6 +1134,7 @@ func (n *Node) unwatch(id string) {
 	if pw != nil {
 		pw.cancel()
 	}
+	n.liveUnwatched(id)
 }
 
 // refresh parses new transcript lines and pushes them to the hub when the session is watched — also when the new

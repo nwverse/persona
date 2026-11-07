@@ -205,7 +205,7 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
   const delegated = useStore((s) => Object.values(s.delegated).filter((d) => d.ix.machine_id === mid && d.ix.session_id === sid));
   // the list as pushed: its updated_at is what tells the page it fell behind (useTranscript)
   const viewed = readOnly ? (listed?.find((a) => a.session_id === sid) ?? null) : null;
-  const tr = useTranscript(mid, sid, { starting: Boolean(launching) && !readOnly, updatedAt: (readOnly ? viewed : session)?.updated_at, cache: mainCache });
+  const tr = useTranscript(mid, sid, { starting: Boolean(launching) && !readOnly, updatedAt: (readOnly ? viewed : session)?.updated_at, cache: mainCache, assistant });
   // a Persona conversation's send the hub refused: a card above the composer, not a toast (docs/assistant/onboarding.md 4.4)
   const [sendFailure, setSendFailure] = useState<{ chat: string; failure: CodedFailure; fromBox?: boolean } | null>(null);
   // the composer's own send, for the failure card's "Send again": the words are back in the box, so the box is what goes
@@ -338,6 +338,14 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
   // ── scrolling (lib/disclosure.ts "following the end"): the end stays in view until the reader scrolls away from it;
   // older pages landing above keep the view still ──
   const scroller = useRef<HTMLDivElement>(null);
+  // the element itself, for the effects that listen on it: once the session arrives the page's frame can change (a
+  // terminal to switch to) and React then draws the chat in another element, so listeners left on the first one stop
+  // following the end (an agent's page opened by its address did not keep its live text in view, #1309)
+  const [scrollEl, setScrollEl] = useState<HTMLDivElement | null>(null);
+  const scrollRef = useCallback((el: HTMLDivElement | null) => {
+    scroller.current = el;
+    if (el) setScrollEl(el);
+  }, []);
   const atEnd = useRef(true);
   // the jump's smooth scroll running: its first frames, a few px off the end, do not start following again
   const jumping = useRef(0);
@@ -422,7 +430,7 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
       sc.removeEventListener("click", onClick, true);
       for (const ev of ["wheel", "touchstart", "keydown", "pointerdown"]) sc.removeEventListener(ev, readerMoves);
     };
-  }, [follow]);
+  }, [follow, scrollEl]);
 
   // content that grows by itself (images loading, a live group's steps) keeps the end in view; a held row stays put.
   // A ResizeObserver runs after layout and before paint, so the offset moves in the same frame as the height. The view
@@ -452,7 +460,7 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
     ro.observe(el);
     ro.observe(view);
     return () => ro.disconnect();
-  }, []);
+  }, [scrollEl]);
 
   // the reader leaving the end: the wheel or a trackpad going up, a finger pulling the list down, PageUp / ↑ / Home,
   // the scroll bar dragged up (onScroll)
@@ -491,7 +499,7 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
       window.removeEventListener("pointerup", up);
       window.removeEventListener("keydown", key);
     };
-  }, [follow]);
+  }, [follow, scrollEl]);
 
   const onScroll = () => {
     const el = scroller.current;
@@ -963,7 +971,7 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
       <ViewLayer bare={!switchable} on={view === "chat"} from="start">
       <div className="relative min-h-0 flex-1">
         {(tr.notLive || (mainCache && tr.items.length > 0 && (tr.error || refreshError))) && <NotLivePill error={mainCache ? tr.error || refreshError : undefined} onReload={() => { tr.reload(); onRefresh?.(); }} lower={Boolean(picked && !search.open)} />}
-        <div ref={scroller} onScroll={onScroll} data-chat-scroll className="relative h-full overflow-y-auto [overflow-anchor:none]">
+        <div ref={scrollRef} onScroll={onScroll} data-chat-scroll className="relative h-full overflow-y-auto [overflow-anchor:none]">
           <ChatActionsContext.Provider value={actions}>
           <div className="mx-auto flex w-full max-w-[880px] flex-col gap-7 px-5 pt-6 pb-10 sm:px-8">
             {session?.start_error && <div role="alert" className="rounded-control bg-inset px-3 py-2 text-[13px] text-red">{t("chat-chatview.start_failed", { error: session.start_error })}</div>}
