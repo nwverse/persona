@@ -2,6 +2,10 @@
 
 Pitfalls, odd behavior and the decisions made at the time (formerly "Lessons" in `CLAUDE.md`; index in `docs/lessons/README.md`). Add new lessons to the relevant section, or create one if none fits.
 
+## Retired drawings and downloadable avatars (#1)
+
+- Retiring local renderers must not turn the hub package catalog into an ID allowlist. Apply manifest validation and catalog/manifest ID equality to both cached and live lists, reserve retired drawing IDs, and keep an unavailable package's selected ID while rendering Mochi. The next valid listing restores the package without another selection. Live Activity normalization must keep custom package faces too; Milk Frog's watch pet remains specific to its own package.
+
 ## Release-mode demo coverage (#6227)
 
 - A mock can support a feature while the bundled demo still hides it: omitted collections become empty defaults, and DEBUG screenshot helpers never run in TestFlight. Include the same synthetic todo samples in the bundle, verify every linked Agent has bundled content, and exercise knowledge search through the normal demo route. Keep the response compatible with both grouped results and flat hits; leave real network and phone-data actions refused.
