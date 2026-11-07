@@ -165,7 +165,7 @@ nonisolated struct AppearanceChoice: Equatable, Sendable {
         if let c = color.flatMap(ThemeColor.init(rawValue:)) {
             return AppearanceChoice(style: s, color: wasClaude && c == .style ? .coral : c)
         }
-        let personaChosen = PersonaSelection.resolve(persona) == PersonaSelection.packageID
+        let personaChosen = PersonaSelection.resolve(persona) != PersonaSelection.builtinID
         return AppearanceChoice(style: s, color: personaChosen ? .persona : wasClaude ? .coral : .style)
     }
 

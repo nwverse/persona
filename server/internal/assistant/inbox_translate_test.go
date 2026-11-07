@@ -3,6 +3,7 @@ package assistant
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -14,6 +15,8 @@ import (
 
 	"github.com/nwverse/persona/server/internal/ai"
 	"github.com/nwverse/persona/server/internal/assistantwire"
+	"github.com/nwverse/persona/server/internal/i18n"
+	"github.com/nwverse/persona/server/internal/mail"
 )
 
 func TestForeignScript(t *testing.T) {
@@ -286,4 +289,42 @@ func mustFingerprint(t *testing.T, h *inboxHub) string {
 		t.Fatalf("fingerprint %q: %v", fp, err)
 	}
 	return fp
+}
+
+// failingMailHub is the test hub, except that reading a mail fails with err.
+type failingMailHub struct {
+	Hub
+	err error
+}
+
+func (h *failingMailHub) AppCall(ctx context.Context, p AppCall) (json.RawMessage, error) {
+	if p.AppID == AppInbox && p.Method == assistantwire.InboxMailBody {
+		return nil, h.err
+	}
+	return h.Hub.AppCall(ctx, p)
+}
+
+// An unknown account keeps its code and status, wrapped or not, and is named in the request's language without
+// asking the model; any other failure to read the mail stays 502 internal.
+func TestTranslateMailUnknownAccount(t *testing.T) {
+	h, _, _, translated := translateHub(t)
+	bridge := &failingMailHub{Hub: h.Service.hub}
+	h.Service.hub = bridge
+	const req = `{"account_id":"none","uid":1,"target":"zh-Hans"}`
+	unknown := &mail.UnknownAccountError{Account: "none"}
+	for _, err := range []error{unknown, fmt.Errorf("read mail: %w", unknown)} {
+		bridge.err = err
+		status, body := serveJSON(t, h.Service, "POST", "/api/v1/translate/mail", "ja", req)
+		if status != http.StatusNotFound || body["code"] != "mail_account_unknown" || body["error"] != unknown.Text(i18n.Ja) || body["detail"] != nil {
+			t.Fatalf("%v: %d %v; want 404 mail_account_unknown in Japanese", err, status, body)
+		}
+	}
+	if translated() != 0 {
+		t.Fatalf("unknown account called the translation model %d times", translated())
+	}
+	bridge.err = errors.New("mail backend unavailable")
+	status, body := serveJSON(t, h.Service, "POST", "/api/v1/translate/mail", "en", req)
+	if status != http.StatusBadGateway || body["code"] != "internal" || body["error"] != i18n.T(i18n.En, "rpc-errors.failed") || body["detail"] != bridge.err.Error() {
+		t.Fatalf("other failure: %d %v", status, body)
+	}
 }

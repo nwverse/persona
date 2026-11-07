@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/http/httptest"
 	"slices"
 	"strings"
 	"sync"
@@ -611,6 +612,34 @@ func TestInboxMailReply(t *testing.T) {
 	}
 	if mailReply(i18n.Default, "a1", &mail.MailMessage{MailSummary: mail.MailSummary{Subject: "RE: x"}}, "y").Subject != "RE: x" {
 		t.Fatal("kept an existing Re:")
+	}
+}
+
+// The in-process AppInbox call preserves an expected mail-service failure for the assistant's HTTP response.
+func TestInboxMailBodyPreservesUnknownAccount(t *testing.T) {
+	h := newTestManager(t)
+	h.mail = &mail.Service{} // No accounts: the lookup fails before any connection is attempted.
+	_, handled, err := h.AppCall(context.Background(), assistantwire.AppCall{
+		AppID: assistantwire.AppInbox, Method: assistantwire.InboxMailBody,
+		Params: json.RawMessage(`{"account_id":"none","uid":1,"mailbox":"INBOX","readable":true}`),
+	})
+	var unknown *mail.UnknownAccountError
+	if !handled || !errors.As(err, &unknown) || unknown.Account != "none" {
+		t.Fatalf("mail body: handled=%v, error=%T %v; want UnknownAccountError naming none", handled, err, err)
+	}
+}
+
+// The mail routes, as the hub relays them here, keep an unknown account's code and name it in the request's language
+// (the manager's locale writer reaches apierr through the mail handler's own response recorder).
+func TestMailRouteUnknownAccountLocalized(t *testing.T) {
+	h := newTestManager(t)
+	h.mail = &mail.Service{} // No accounts: the lookup fails before any connection is attempted.
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/mail/messages/none/1", nil)
+	req.Header.Set("Accept-Language", string(i18n.Ja))
+	code, body := callReq(t, h.routes(), req, h.cfg.Token)
+	want := (&mail.UnknownAccountError{Account: "none"}).Text(i18n.Ja)
+	if code != http.StatusNotFound || body["code"] != "mail_account_unknown" || body["error"] != want {
+		t.Fatalf("%d %v; want 404 mail_account_unknown %q", code, body, want)
 	}
 }
 
