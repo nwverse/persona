@@ -488,14 +488,48 @@ sys.exit(2)
                 self.assertIn('missing commits on origin/' + default, result.stderr)
                 self.assertFalse((self.state / 'web/index.html').exists())
 
-    def test_a_remote_that_does_not_name_its_default_branch_falls_back_to_origin_head(self):
+    def test_a_remote_that_names_no_valid_default_branch_falls_back_to_origin_head(self):
+        # ls-remote names nothing, or a name git does not allow for a branch (':' would make the fetch a refspec).
+        for listed in ('', 'ref: refs/heads/x:refs/heads/y\\tHEAD\\n'):
+            with self.subTest(listed=listed):
+                self.clone_of('main', 'main')
+                self.advance_remote('main')
+                executable(self.commands / 'git', '#!/bin/sh\n[ "$1" = ls-remote ] && { printf ' + shlex.quote(listed) +
+                           '; exit 0; }\nexec ' + shlex.quote(GIT) + ' "$@"\n')
+                result = subprocess.run(['bash', str(self.repo / 'scripts/deploy/deploy.sh'), 'web'], env=self.env,
+                                        capture_output=True, text=True, timeout=30)
+                self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+                self.assertIn('missing commits on origin/main', result.stderr)
+                self.assertFalse((self.state / 'web/index.html').exists())
+
+    def test_an_unreachable_remote_deploys_nothing_unless_any_commit_is_set(self):
+        # ls-remote and fetch both fail (set -e, pipefail): the message names the clone's origin/HEAD, else master.
+        for origin_head, branch in (('main', 'main'), (None, 'master')):
+            with self.subTest(origin_head=origin_head):
+                self.clone_of('main', origin_head)
+                self.git(self.repo, 'remote', 'set-url', 'origin', str(self.base / 'missing.git'))
+                result = subprocess.run(['bash', str(self.repo / 'scripts/deploy/deploy.sh'), 'web'], env=self.env,
+                                        capture_output=True, text=True, timeout=30)
+                self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+                self.assertIn('could not fetch origin/' + branch + ' to ', result.stderr)
+                self.assertFalse((self.state / 'web/index.html').exists())
+        # PERSONA_DEPLOY_ANY_COMMIT=1 skips the check, so it needs no remote.
+        result = subprocess.run(['bash', str(self.repo / 'scripts/deploy/deploy.sh'), 'web'],
+                                env=dict(self.env, PERSONA_DEPLOY_ANY_COMMIT='1'), capture_output=True, text=True, timeout=30)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual((self.state / 'web/index.html').read_text(), 'Persona fixture web')
+
+    def test_a_default_branch_named_like_an_option_is_fetched_as_a_branch(self):
+        # Passed bare, this name would be git fetch's --upload-pack and run the command on this machine.
         self.clone_of('main', 'main')
-        self.advance_remote('main')
-        executable(self.commands / 'git', '#!/bin/sh\n[ "$1" = ls-remote ] && exit 0\nexec ' + shlex.quote(GIT) + ' "$@"\n')
-        result = subprocess.run(['bash', str(self.repo / 'scripts/deploy/deploy.sh'), 'web'], env=self.env,
-                                capture_output=True, text=True, timeout=30)
-        self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
-        self.assertIn('missing commits on origin/main', result.stderr)
+        executable(self.commands / 'fixture-upload-pack', '#!/bin/sh\ntouch "$HOME/upload-pack.fixture"\nexit 1\n')
+        branch = 'refs/heads/--upload-pack=fixture-upload-pack'
+        remote = '--git-dir=' + str(self.base / 'origin.git')
+        self.git(self.base, remote, 'update-ref', branch, 'main')
+        self.git(self.base, remote, 'symbolic-ref', 'HEAD', branch)
+        self.run_script('scripts/deploy/deploy.sh', 'web')
+        self.assertFalse((self.local / 'upload-pack.fixture').exists())
+        self.assertEqual((self.state / 'web/index.html').read_text(), 'Persona fixture web')
 
     def test_android_apk_publish_uses_the_remote_profile_and_config_entrypoint(self):
         # This integration fixture tests identity resolution and binary transport;

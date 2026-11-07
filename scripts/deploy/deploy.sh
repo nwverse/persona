@@ -37,16 +37,17 @@ set -- ${ARGS[@]+"${ARGS[@]}"}
 # branch puts back what other people deployed since (2026-11-04: one from before #1283 undid its web change 13 minutes
 # later). PERSONA_DEPLOY_ANY_COMMIT=1 deploys anyway, e.g. to roll back on purpose.
 # The default branch is the one the remote names now; else the clone's origin/HEAD, which is set at clone time and
-# can name a branch the remote no longer has; else master.
+# can name a branch the remote no longer has; else master. The remote's answer counts only if it is a valid branch
+# name, and the branch is fetched as refs/heads/<name>: a bare name starting with "-" would be a git fetch option.
 if [ -z "${PERSONA_DEPLOY_ANY_COMMIT:-}" ]; then
   DEFAULT_BRANCH=$(git ls-remote --symref origin HEAD 2>/dev/null |
-    awk '$1 == "ref:" && $3 == "HEAD" { sub("^refs/heads/", "", $2); print $2; exit }') || true
-  if [ -z "$DEFAULT_BRANCH" ]; then
+    awk '$1 == "ref:" && $3 == "HEAD" && sub("^refs/heads/", "", $2) { print $2; exit }') || true
+  if [ -z "$DEFAULT_BRANCH" ] || ! git check-ref-format "refs/heads/$DEFAULT_BRANCH"; then
     DEFAULT_BRANCH=$(git symbolic-ref --quiet refs/remotes/origin/HEAD 2>/dev/null) || true
     DEFAULT_BRANCH=${DEFAULT_BRANCH#refs/remotes/origin/}
   fi
   DEFAULT_BRANCH=${DEFAULT_BRANCH:-master}
-  if ! git fetch -q origin "$DEFAULT_BRANCH" 2>/dev/null; then
+  if ! git fetch -q origin "refs/heads/$DEFAULT_BRANCH" 2>/dev/null; then
     echo "deploy: could not fetch origin/$DEFAULT_BRANCH to check this checkout is up to date; PERSONA_DEPLOY_ANY_COMMIT=1 deploys anyway" >&2
     exit 2
   fi
