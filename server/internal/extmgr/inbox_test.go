@@ -338,7 +338,8 @@ func TestInboxKeepsWhatWasReadForTheManager(t *testing.T) {
 	}
 	// (The inbox's routes are the assistant's, relayed by the hub: their 503 while it is away is the hub's test.)
 	fm, _ := connectFakeManager(t, h)
-	// Connected: a full round is owed (the loop runs it after the debounce; here by hand), and it clears the debt.
+	// Connected: the kick's round (the loop runs it after the debounce; here by hand) takes what was kept, read in full
+	// rounds, so it goes as a full one and clears the debt.
 	eventually(t, 5*time.Second, "the kick", func() bool { return len(h.inbox.kick) == 1 })
 	if r := h.inbox.kickedRound(); r != roundPoll {
 		t.Fatalf("the kick asks for round %d", r)
@@ -381,44 +382,23 @@ func TestInboxMakesUpAMissedRoundOnceOneIsTaken(t *testing.T) {
 	if err := h.addConnector(&inboxConnector{things: []connector.InboxThing{thing("a", time.Now())}}); err != nil {
 		t.Fatal(err)
 	}
-	type handed struct {
-		round string
-		taken bool
-	}
-	var mu sync.Mutex
-	var rounds []handed
-	var refuse atomic.Bool
-	refuse.Store(true)
-	h.opts.Assistant = func(_ context.Context, method string, params json.RawMessage) (json.RawMessage, error) {
-		if method != assistantwire.MethodInboxCollected {
-			return nil, errAssistantOffline
-		}
-		var r assistantwire.InboxRound
-		if err := json.Unmarshal(params, &r); err != nil {
-			return nil, err
-		}
-		refused := refuse.Load()
-		mu.Lock()
-		rounds = append(rounds, handed{round: r.Round, taken: !refused})
-		mu.Unlock()
-		if refused {
+	// The store does not answer the first two rounds handed over; it takes the ones after.
+	a := withAssistant(h)
+	var calls atomic.Int32
+	a.on(assistantwire.MethodInboxCollected, func(json.RawMessage) (any, error) {
+		if calls.Add(1) <= 2 {
 			return nil, &rpc.Error{Code: assistantwire.CodeInboxUnavailable, Message: "the store did not answer"}
 		}
-		return json.RawMessage(`{}`), nil
-	}
-	handedOver := func(n int) handed {
+		return map[string]any{}, nil
+	})
+	handedOver := func(n int) assistantwire.InboxRound {
 		t.Helper()
-		var got handed
+		var r assistantwire.InboxRound
 		eventually(t, 5*time.Second, fmt.Sprintf("round %d", n), func() bool {
-			mu.Lock()
-			defer mu.Unlock()
-			if len(rounds) < n {
-				return false
-			}
-			got = rounds[n-1]
-			return true
+			got := a.got(assistantwire.MethodInboxCollected)
+			return len(got) >= n && json.Unmarshal(got[n-1], &r) == nil
 		})
-		return got
+		return r
 	}
 	// The kicks so far (a connector added) are not this test's.
 	h.inbox.init()
@@ -445,19 +425,19 @@ func TestInboxMakesUpAMissedRoundOnceOneIsTaken(t *testing.T) {
 
 	// A Feishu event while it still refuses rounds: the chats, and no mail.
 	h.kickLarkChats()
-	if r := handedOver(2); r.taken || r.round == assistantwire.RoundFull || m.lists.Load() != 0 {
-		t.Fatalf("a Feishu event while the assistant refuses rounds: %+v, mail read %d time(s)", r, m.lists.Load())
+	if r := handedOver(2); r.Round == assistantwire.RoundFull || m.lists.Load() != 0 {
+		t.Fatalf("a Feishu event while the assistant refuses rounds: %s round, mail read %d time(s)", r.Round, m.lists.Load())
 	}
-	// It takes the next round (what was kept goes with it)…
-	refuse.Store(false)
+	// It takes the next round, and what was kept goes with it…
 	h.kickLarkChats()
-	if r := handedOver(3); !r.taken || r.round == assistantwire.RoundFull || m.lists.Load() != 0 {
+	r := handedOver(3)
+	if src, ok := sourceIn(r, "example"); r.Round == assistantwire.RoundFull || m.lists.Load() != 0 || !ok || len(src.Things) != 1 {
 		t.Fatalf("the first round taken: %+v, mail read %d time(s)", r, m.lists.Load())
 	}
 	// …and the next wake-up is the full round it was owed.
 	h.kickLarkChats()
-	if r := handedOver(4); !r.taken || r.round != assistantwire.RoundFull || m.lists.Load() != 1 {
-		t.Fatalf("the round made up: %+v, mail read %d time(s)", r, m.lists.Load())
+	if r := handedOver(4); r.Round != assistantwire.RoundFull || m.lists.Load() != 1 {
+		t.Fatalf("the round made up: %s round, mail read %d time(s)", r.Round, m.lists.Load())
 	}
 	eventually(t, 5*time.Second, "the full round clearing the debt", func() bool { return !h.inbox.owed.Load() })
 }
