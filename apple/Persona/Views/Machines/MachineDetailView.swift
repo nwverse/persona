@@ -405,28 +405,26 @@ struct MachineDetailView: View {
     }
 
     /// What Reconnect says when the machine is still offline: why and what to do, in plain words, read from the error the
-    /// hub keeps (the same kinds and wording as the web's `classifyConnection`, #3633). The raw error stays on the card.
+    /// hub keeps (`NodeHealth.connectionFailure`, the same kinds as the web's `classifyConnection`). The raw error
+    /// stays on the card.
     static func stillOffline(_ m: Machine?) -> String {
         let text = m?.error ?? ""
         let link = m?.kind == "link" || m?.kind == "service"
-        func has(_ pattern: String) -> Bool { text.range(of: pattern, options: [.regularExpression, .caseInsensitive]) != nil }
-        // Order matters: "connection timed out" is a timeout, not "connection …".
-        if has(#"permission denied|publickey|authentication|unauthori[sz]ed|invalid[ _]token|forbidden|host key verification|access denied|\b40[13]\b|配对|认证"#) { // i18n-ignore: matches hub and ssh error text
+        switch m.flatMap(NodeHealth.connectionFailure) {
+        case .auth:
             return link ? String(localized: "Not connected yet: authentication failed. Pair Persona Link again on this computer, then reconnect")
                 : String(localized: "Not connected yet: authentication failed. Check that this computer's SSH key and account are still valid, then reconnect")
-        }
-        if m?.nodeMismatch == true || has(#"version mismatch|protocol version|unknown method|incompatible|不是同一版|版本"#) { // i18n-ignore: matches hub and ssh error text
+        case .version:
             return m.map(NodeHealth.canDeploy) == true ? String(localized: "Not connected yet: version mismatch. Redeploy to update the node to the same version as the hub")
                 : String(localized: "Not connected yet: version mismatch. Upgrade the node on this computer so it matches the hub")
-        }
-        if has(#"timed out|timeout|deadline exceeded|no pong"#) {
+        case .timeout:
             return String(localized: "Not connected yet: the connection timed out. The network is unstable or the computer is asleep. Wait for it to wake up or switch networks, then reconnect")
-        }
-        if has(#"refused|no route|unreachable|could not resolve|name or service|no such host|network is|connection (reset|closed|lost)|broken pipe|\beof\b|node exited|waiting for|lookup |dial "#) {
+        case .unreachable:
             return link ? String(localized: "Not connected yet. Make sure this computer is on and Persona Link is running, then reconnect")
                 : String(localized: "Not connected yet. Make sure this computer is on, the network is up and the node is running, then reconnect")
+        case nil:
+            return text.isEmpty ? String(localized: "Not connected yet. Try again in a moment") : String(localized: "Not connected yet. See the card above for the reason")
         }
-        return text.isEmpty ? String(localized: "Not connected yet. Try again in a moment") : String(localized: "Not connected yet. See the card above for the reason")
     }
 
     // MARK: Charts

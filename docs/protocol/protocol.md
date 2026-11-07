@@ -334,7 +334,8 @@ Approval IDs contain machine / instance / connection generation / thread / the o
 ## Claude Code ultracode (#3427)
 
 ultracode is independent of reasoning effort and adds no level to `EffortLevels`. It applies only to the current Claude process, defaults to off, and does not remember the last choice or change launcher settings or the user's default effort.
-This API is for ordinary Claude Code Agent sessions; Persona's headless assistant chats, including the main chat, do not support it. Client controls are tracked in web #3428, Android #3429 and Apple #3430; choices for dispatch and to-dos are in #3431.
+This API is for ordinary Claude Code Agent sessions; Persona's headless assistant chats, including the main chat, do not support it. Client controls are tracked in web #3428, Android #3429 and Apple #3430.
+The assistant's `agent_start` and `task_plan` take `ultracode` per Agent and pass `true` on to `session.start` (#12), with the same refusals as below; a refused start does not count against the launcher's health. The plan card and to-do controls are still to come in #12.
 
 Optional Session fields:
 
@@ -2446,6 +2447,7 @@ Tasks dispatched from an assistant chat ([unified-entry.md](../assistant/unified
 {"id":"plan_…","conversation":"<assistant chat id>","state":"open|started|dismissed","created_at":"...","updated_at":"...",
  "tasks":[{"title":"Fix the login crash","prompt":"The first message to the Agent","machine":"<machine id>","cwd":"/abs/path",
            "launcher":"","model":"","permission":"acceptEdits","readonly":false,"why":"one-line reason",
+           "ultracode":true,            // optional (#12): the Claude Code Agent starts with ultracode on; on start, true / false sets it and leaving it out keeps the assistant's choice
            "done_when":["PR merged into master"],"expect_minutes":30,   // optional (#3124): acceptance criteria, expected minutes; clients only display them and don't send them back on start
            "reuse_todo":"todo_…",       // optional (#5279): the to-do the task runs on instead of a new one (task_plan's per-task `todo_id`); the apps neither send it back nor change it
            "todo_id":"todo_…",          // only present after start

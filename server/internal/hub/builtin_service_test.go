@@ -234,3 +234,28 @@ func TestManagerCodeNeedsServiceMode(t *testing.T) {
 		t.Fatalf("child mode: %v", err)
 	}
 }
+
+// The CLI runs without a user's profile: its expiry names UTC and never depends on the host's zone.
+func TestManagerCodeOutputUsesExplicitUTC(t *testing.T) {
+	until := time.Date(2026, time.November, 8, 0, 5, 0, 0, time.FixedZone("input", 8*60*60))
+	var out bytes.Buffer
+	if err := writeManagerCode(&out, "example-code", until, ":18660"); err != nil {
+		t.Fatal(err)
+	}
+	want := "example-code\n\nGood until 2026-11-07 16:05 UTC, once. On this machine (where the built-in manager's service runs):\n" +
+		"  persona-manager join --builtin http://127.0.0.1:18660 example-code\n"
+	if got := out.String(); got != want {
+		t.Fatalf("manager-code output = %q; want %q", got, want)
+	}
+}
+
+func TestManagerCodeOutputReturnsWriteFailure(t *testing.T) {
+	want := errors.New("output unavailable")
+	if err := writeManagerCode(failedManagerCodeWriter{want}, "example-code", time.Time{}, ":18660"); !errors.Is(err, want) {
+		t.Fatalf("write error = %v; want %v", err, want)
+	}
+}
+
+type failedManagerCodeWriter struct{ err error }
+
+func (w failedManagerCodeWriter) Write([]byte) (int, error) { return 0, w.err }

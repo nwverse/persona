@@ -1,5 +1,5 @@
 [Unit]
-Description=Validate and publish master Hub releases
+Description=Validate and publish canonical Hub releases
 After=network-online.target
 
 [Service]

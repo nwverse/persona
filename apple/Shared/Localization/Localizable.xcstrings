@@ -16290,6 +16290,28 @@
       },
       "extractionState": "manual"
     },
+    "Authentication failed": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Authentication failed"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "認証に失敗しました"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "认证没通过"
+          }
+        }
+      }
+    },
     "Auto": {
       "comment": "Codex reasoning summary\nHow a compaction started\nPermission mode: the agent judges the risk itself\nThinking effort level",
       "localizations": {
@@ -18974,6 +18996,28 @@
       },
       "extractionState": "manual"
     },
+    "Can't reach this computer": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Can't reach this computer"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "このコンピューターに接続できません"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "连不上这台电脑"
+          }
+        }
+      }
+    },
     "Change reminder “%@”": {
       "extractionState": "manual",
       "localizations": {
@@ -18993,6 +19037,28 @@
           "stringUnit": {
             "state": "translated",
             "value": "修改提醒事项「%1$@」"
+          }
+        }
+      }
+    },
+    "Check that this computer's SSH key and account are still valid, then reconnect": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Check that this computer's SSH key and account are still valid, then reconnect"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "このコンピューターの SSH キーとアカウントが有効か確認してから、再接続してください"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "检查这台电脑的 SSH 密钥和账号是否还有效，然后重新连接"
           }
         }
       }
@@ -42961,6 +43027,50 @@
         }
       }
     },
+    "Make sure it's on and Persona Link is running, then reconnect": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Make sure it's on and Persona Link is running, then reconnect"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "電源が入っていて Persona Link が動作していることを確認してから、再接続してください"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "确认它开着，Persona Link 在运行，然后重新连接"
+          }
+        }
+      }
+    },
+    "Make sure it's on, the network is up and the node is running, then reconnect": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Make sure it's on, the network is up and the node is running, then reconnect"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "電源が入っていて、ネットワークがつながり、ノードが動作していることを確認してから、再接続してください"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "确认它开着、网络通、node 在运行，然后重新连接"
+          }
+        }
+      }
+    },
     "Manual": {
       "extractionState": "manual",
       "localizations": {
@@ -43375,6 +43485,28 @@
         }
       }
     },
+    "Pair Persona Link again on this computer, then reconnect": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Pair Persona Link again on this computer, then reconnect"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "このコンピューターで Persona Link をペアリングし直してから、再接続してください"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "在这台电脑上重新配对 Persona Link，然后重新连接"
+          }
+        }
+      }
+    },
     "Phase not started [Workflow Phase]": {
       "extractionState": "manual",
       "localizations": {
@@ -43624,6 +43756,28 @@
           "stringUnit": {
             "state": "translated",
             "value": "Agent 做完时记的"
+          }
+        }
+      }
+    },
+    "Redeploy to update the node to the same version as the hub": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Redeploy to update the node to the same version as the hub"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "再デプロイして、ノードをハブと同じバージョンに更新してください"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "重新部署，把 node 更新到和 hub 同一版"
           }
         }
       }
@@ -75619,6 +75773,28 @@
         }
       }
     },
+    "The network is unstable or the computer is asleep. Wait for it to wake up or switch networks, then reconnect": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The network is unstable or the computer is asleep. Wait for it to wake up or switch networks, then reconnect"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ネットワークが不安定か、コンピューターがスリープ中です。復帰を待つかネットワークを変えてから、再接続してください"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "网络不稳或电脑在休眠。等它醒来或换个网络，然后重新连接"
+          }
+        }
+      }
+    },
     "The plain claude command on each computer: “Claude Code default” in Model Configuration.": {
       "localizations": {
         "en": {
@@ -75845,6 +76021,50 @@
           "stringUnit": {
             "state": "translated",
             "value": "完成未看"
+          }
+        }
+      }
+    },
+    "Version mismatch": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Version mismatch"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "バージョンが一致しません"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "版本不一致"
+          }
+        }
+      }
+    },
+    "Upgrade the node on this computer so it matches the hub": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Upgrade the node on this computer so it matches the hub"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "このコンピューターでノードをアップグレードして、ハブと同じバージョンにしてください"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "在这台电脑上本地升级 node，和 hub 保持同一版"
           }
         }
       }

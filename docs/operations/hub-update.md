@@ -1,13 +1,13 @@
 # hub versions, update checks and automatic updates
 
 User, 2026-11-02: "Can the phone manage the hub's version? Does the hub check for updates, can it update itself? …When the App opens, offer a one-tap hub update, or have the hub update itself."
-Issue #284 introduced automatic installation of manually published public releases. Private Hub installations can also publish validated master builds automatically, as described below. Both paths use the same updater and rollback mechanism.
+Issue #284 introduced automatic installation of manually published public releases. Private Hub installations can also publish validated canonical-branch builds automatically, as described below. Both paths use the same updater and rollback mechanism.
 Implemented in 4 steps; after each step, the corresponding "Plan" is rewritten as the current state, keeping the trade-offs.
 
 ## Automatic private Hub releases
 
 `scripts/release/hub_release.py --config <private-config.json>` can run from a
-systemd user timer on a dedicated Linux build machine. It fetches `master` into an
+systemd user timer on a dedicated Linux build machine. It fetches the configured `source_branch` (default `main`) into an
 exclusive checkout (never a developer checkout), runs server vet/tests and race checks, script suites, web
 checks and the binary privacy scan, then publishes the tested commit. It reports
 `hub-release/worker` commit statuses. These are independent CI results, not GitHub
@@ -15,7 +15,22 @@ Actions run results. This provides an execution path when hosted runner labels
 have no available capacity or the operator cannot administer those runners.
 
 The private config supplies `repository`, `checkout`, `state_dir`, `update_url`
-and `publish_command` (an argv array). Templates are in `deploy/hub/`;
+and `publish_command` (an argv array), with optional `source_branch` (default
+`main`). The dedicated checkout must use the selected repository as `origin`.
+The worker verifies that origin identifies the configured status repository before
+fetching or reporting statuses. State records bind the repository, source branch, update URL and commit: another source cannot
+reuse a successful validation or an interrupted publication cache. The existing
+build floor is retained when the source changes.
+Use `--validate-only` to run the complete gates and retain a validated artifact
+without publication. Its `hub-release/validation` status and `validated` record
+are distinct from a confirmed `hub-release/worker` publication result. It never
+invokes the publisher or changes the remote manifest. Normal retries can reuse
+that artifact only for the same repository, branch, update URL, commit and package policy.
+Use `--commit <full-sha>` to validate or reconcile one fixed candidate even when
+main advances; both source checks must still prove it belongs to the configured
+branch. Without this option, the worker follows the current branch head.
+
+Templates are in `deploy/hub/`;
 `hub-release.env` supplies `PERSONA_HUB_RELEASE_CHECKOUT`, the build-tool `PATH`,
 and `PERSONA_CONFIG`. Use a private launcher when credentials need to be loaded
 from a vault at runtime rather than stored in the environment file.
@@ -25,6 +40,14 @@ supplies `remote_root` and `credentials_command`, which returns SSH credentials
 as JSON (`host`, `port`, `username`, `password`, or a fields array keyed by id).
 SSH host keys must already be trusted. Credentials are never written to release
 artifacts. The publisher needs Python and Paramiko; the remote needs Python.
+The optional `release_namespace` defaults to `hub` and selects a feed below
+`<remote_root>/releases/`. Named feeds must start with `hub-` and use lowercase
+letters, numbers and hyphens. Set the build's update URL to that same feed. A new
+feed preserves the old manifest; it does not establish source ancestry or switch
+an installation to the new feed. A history transition requires a separately
+verified bootstrap. Standard publication and updater ancestry checks remain
+unchanged within each feed. All feeds share one publication lock because the
+installed Hub and managed node pointer are shared.
 The build environment needs Node 24, Go matching `server/go.mod`, and a Python
 3.11 environment with Pillow 12.0.0 and PyYAML 6.0.3 for the committed image and project checks. Keep these
 in the release user's tool directories. For an isolated Docker Compose CLI plugin,
@@ -243,7 +266,7 @@ The binary gets three more `-X` variables (`cmd/personad`):
 
 ## 5. Public publishing (manual, publish.sh; user, 2026-11-02)
 
-Public releases use `publish.sh` manually on the publisher's dev machine, and the site's Worker is under the publisher's Cloudflare account. Private master releases use the serialized worker described in "Automatic private Hub releases".
+Public releases use `publish.sh` manually on the publisher's dev machine, and the site's Worker is under the publisher's Cloudflare account. Private canonical-branch releases use the serialized worker described in "Automatic private Hub releases".
 - The push relay (`docs/operations/push-relay.md`, `/relay/*`) is in the same Worker as the downloads, so every time `publish.sh` redeploys the site it deploys the relay too
   (a Worker deploy is an atomic switch, never half old and half new; relay code changes also go live with this release).
 - Tests must still pass before publishing, plus `publish.sh`'s own checks (if any fails, nothing is published):

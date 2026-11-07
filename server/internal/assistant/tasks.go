@@ -42,7 +42,10 @@ type PlanTask struct {
 	Effort     string `json:"effort,omitempty"`
 	Tier       string `json:"tier,omitempty"`
 	Permission string `json:"permission,omitempty"`
-	Readonly   bool   `json:"readonly,omitempty"`
+	// Ultracode: the agent starts with Claude Code's ultracode on (#12). A pointer so that an edit from the card can
+	// turn it off, and one from a client that does not know it keeps the assistant's choice.
+	Ultracode *bool `json:"ultracode,omitempty"`
+	Readonly  bool  `json:"readonly,omitempty"`
 	// UserRequested: the user asked for this very task in the turn that planned it (#2559); with
 	// assistant.start_requested_tasks on it starts without the card's "Start".
 	UserRequested bool   `json:"user_requested,omitempty"`
@@ -625,6 +628,9 @@ func applyPlanEdit(t *PlanTask, e PlanTask) {
 	if s := strings.TrimSpace(e.Permission); s != "" {
 		t.Permission = s
 	}
+	if e.Ultracode != nil {
+		t.Ultracode = e.Ultracode
+	}
 }
 
 // taskStartTimeout bounds one start of a task's agent: a busy machine's shell can take minutes to run claude
@@ -952,6 +958,9 @@ func (s *Service) startTaskAgent(ctx context.Context, t *PlanTask) (mid, sid str
 	}
 	if t.Permission != "" {
 		params["permission_mode"] = t.Permission
+	}
+	if t.Ultracode != nil && *t.Ultracode {
+		params["ultracode"] = true
 	}
 	var res struct {
 		Session proto.Session `json:"session"`

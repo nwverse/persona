@@ -4,7 +4,7 @@ from pathlib import Path
 import sys
 import tempfile
 import unittest
-from unittest.mock import Mock, patch
+from unittest.mock import MagicMock, Mock, patch
 
 # These setup tests never establish SSH; deployment installs the real dependency.
 with patch.dict(sys.modules, {'paramiko': Mock()}):
@@ -57,8 +57,8 @@ class PublisherSetupTests(unittest.TestCase):
     def test_rolled_back_build_is_rejected_before_publication(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            staged = root / 'staged'
-            staged.mkdir()
+            staged = root / 'releases/hub/.upload-test'
+            staged.mkdir(parents=True)
             (root / 'hub.json').write_text('{}')
             (staged / 'latest.json').write_text(json.dumps({'build': 42}))
             state = {'auto': True, 'can_update': True,
@@ -70,6 +70,73 @@ class PublisherSetupTests(unittest.TestCase):
             api.assert_called_once_with(root, 'hub/update')
             self.assertTrue((staged / 'latest.json').exists())
             self.assertFalse((root / 'releases/hub/latest.json').exists())
+
+
+
+    def test_unsafe_remote_directory_is_rejected_before_any_put_or_promotion(self):
+        for linked in ['releases', 'releases/hub', 'releases/hub-main']:
+            with self.subTest(linked=linked), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                runtime = root / 'runtime'
+                feed = runtime / 'releases/hub-main'
+                feed.mkdir(parents=True)
+                (runtime / 'releases/hub').mkdir()
+                path = runtime / linked
+                moved = path.with_name(path.name + '-real')
+                path.rename(moved)
+                path.symlink_to(moved, target_is_directory=True)
+                config = root / 'config.json'
+                config.write_text(json.dumps({'credentials_command': ['credentials'],
+                                             'remote_root': str(runtime),
+                                             'release_namespace': 'hub-main'}))
+                (root / 'latest.json').write_text(json.dumps({
+                    'build': 1, 'files': {'linux-amd64': {'name': 'artifact.gz'}}}))
+                sftp = Mock()
+                sftp.lstat.side_effect = lambda path: Path(path).lstat()
+                sftp.normalize.side_effect = lambda path: str(Path(path).resolve(strict=True))
+                client = MagicMock()
+                client.open_sftp.return_value.__enter__.return_value = sftp
+                credentials = json.dumps({'host': 'example.invalid', 'username': 'fixture',
+                                          'password': 'test-secret'}).encode()
+                with patch('sys.argv', ['publisher', '--config', str(config), '--artifact-dir', directory]), \
+                        patch.object(publisher.subprocess, 'check_output', return_value=credentials), \
+                        patch.object(publisher.paramiko, 'SSHClient', return_value=client):
+                    with self.assertRaisesRegex(ValueError, 'non-symlink'):
+                        publisher.main()
+                sftp.put.assert_not_called()
+                client.exec_command.assert_not_called()
+
+    def test_remote_upload_rechecks_paths_before_every_put(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            runtime = root / 'runtime'
+            runtime.mkdir()
+            config = root / 'config.json'
+            config.write_text(json.dumps({'credentials_command': ['credentials'],
+                                         'remote_root': str(runtime)}))
+            (root / 'latest.json').write_text(json.dumps({
+                'build': 1, 'files': {'linux-amd64': {'name': 'artifact.gz'}}}))
+            sftp = Mock()
+            sftp.lstat.side_effect = lambda path: Path(path).lstat()
+            sftp.normalize.side_effect = lambda path: str(Path(path).resolve(strict=True))
+            sftp.mkdir.side_effect = lambda path, mode: Path(path).mkdir(mode=mode)
+            def replace_staged(local, remote):
+                staged = Path(remote).parent
+                moved = staged.with_name('.upload-moved')
+                staged.rename(moved)
+                staged.symlink_to(moved, target_is_directory=True)
+            sftp.put.side_effect = replace_staged
+            client = MagicMock()
+            client.open_sftp.return_value.__enter__.return_value = sftp
+            credentials = json.dumps({'host': 'example.invalid', 'username': 'fixture',
+                                      'password': 'test-secret'}).encode()
+            with patch('sys.argv', ['publisher', '--config', str(config), '--artifact-dir', directory]), \
+                    patch.object(publisher.subprocess, 'check_output', return_value=credentials), \
+                    patch.object(publisher.paramiko, 'SSHClient', return_value=client):
+                with self.assertRaisesRegex(ValueError, 'non-symlink'):
+                    publisher.main()
+            self.assertEqual(sftp.put.call_count, 1)
+            client.exec_command.assert_not_called()
 
 
 if __name__ == '__main__':

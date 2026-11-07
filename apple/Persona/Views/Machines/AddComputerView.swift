@@ -120,10 +120,13 @@ enum AddComputerText {
     }
 
     /// What the machine's line says under its name: the known code in words, else the hub's own `error`.
-    static func machineLine(_ m: Machine) -> String? {
-        if let p = machineProblem(m.errorCode) { return p }
-        if m.isPending { return m.online ? String(localized: "A computer wants to join. Confirm whether it's yours.") : nil }
-        return m.error.flatMap { $0.isEmpty ? nil : $0 }
+    /// The card's lines for a computer that is not online: a known error code in words, a pending one's request, the hub's
+    /// error read in plain words (why, then what to do) with the raw error under it, else the raw error itself.
+    static func machineLines(_ m: Machine) -> (line: String, detail: String?)? {
+        if let p = machineProblem(m.errorCode) { return (p, nil) }
+        if m.isPending { return m.online ? (String(localized: "A computer wants to join. Confirm whether it's yours."), nil) : nil }
+        if let reason = NodeHealth.offlineReason(m) { return (reason, m.error) }
+        return m.error.flatMap { $0.isEmpty ? nil : ($0, nil) }
     }
 
     /// The system the joining computer says it runs, for 「…（macOS）」.

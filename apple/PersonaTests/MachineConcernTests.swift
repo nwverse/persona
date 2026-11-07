@@ -53,4 +53,32 @@ import Testing
         #expect(MachineDetailView.stillOffline(off(nil)) == "还没连上，稍后再试一次")
         #expect(MachineDetailView.stillOffline(nil) == "还没连上，稍后再试一次")
     }
+
+    /// An offline card leads with why and what to do, the raw error under it; what it cannot read stays as it was.
+    @Test func offlineCardSaysWhyAndWhatToDo() {
+        func off(_ error: String?, kind: String = "ssh", code: String? = nil, deploying: Bool? = nil, mismatch: Bool? = nil) -> Machine {
+            var m = Machine(id: "a", name: "a", kind: kind, online: false, nodeMismatch: mismatch)
+            m.error = error
+            m.errorCode = code
+            m.deploying = deploying
+            return m
+        }
+        let raw = "ssh: connect to host x port 22: Operation timed out"
+        let timeout = AddComputerText.machineLines(off(raw))
+        #expect(timeout?.line == "连接超时：网络不稳或电脑在休眠。等它醒来或换个网络，然后重新连接")
+        #expect(timeout?.detail == raw)
+        #expect(AddComputerText.machineLines(off("Permission denied", kind: "link"))?.line == "认证没通过：在这台电脑上重新配对 Persona Link，然后重新连接")
+        #expect(AddComputerText.machineLines(off("connection refused"))?.line.hasPrefix("连不上这台电脑：") == true)
+        #expect(AddComputerText.machineLines(off("version mismatch", kind: "local"))?.line.contains("本地升级") == true)
+        // A known error code keeps its own words; a deploying one, an unknown error and an online one are as before.
+        let coded = AddComputerText.machineLines(off(raw, code: "link_offline"))
+        #expect(coded?.line == AddComputerText.machineProblem("link_offline") && coded?.detail == nil)
+        #expect(AddComputerText.machineLines(off(raw, deploying: true))?.line == raw)
+        #expect(AddComputerText.machineLines(off("something odd"))?.line == "something odd")
+        #expect(AddComputerText.machineLines(off("something odd"))?.detail == nil)
+        #expect(NodeHealth.offlineReason(off(nil, mismatch: true)) == nil) // its deploy row says it
+        var online = off(raw)
+        online.online = true
+        #expect(NodeHealth.offlineReason(online) == nil)
+    }
 }
