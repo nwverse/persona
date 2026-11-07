@@ -1,3 +1,4 @@
+import { MANAGER_HEADER } from "./manager-choice";
 import { api, enc } from "./api";
 import type { ModelBinding } from "./model-config";
 
@@ -17,6 +18,6 @@ export interface ModelProfiles {
   profiles: ModelProfile[];
   rollback?: { to?: string; changes: string[] };
 }
-export const modelProfiles = () => api<ModelProfiles>("/model-profiles");
-export const switchModelProfile = (id: string) => api<ModelProfiles>(`/model-profiles/${enc(id)}/apply`, { method: "POST" });
-export const rollbackModelProfile = () => api<ModelProfiles>("/model-profiles/rollback", { method: "POST" });
+export const modelProfiles = (manager?: string) => api<ModelProfiles>("/model-profiles", { headers: manager ? { [MANAGER_HEADER]: manager } : undefined });
+export const switchModelProfile = (id: string, manager?: string) => api<ModelProfiles>(`/model-profiles/${enc(id)}/apply`, { method: "POST", headers: manager ? { [MANAGER_HEADER]: manager } : undefined });
+export const rollbackModelProfile = (manager?: string) => api<ModelProfiles>("/model-profiles/rollback", { method: "POST", headers: manager ? { [MANAGER_HEADER]: manager } : undefined });

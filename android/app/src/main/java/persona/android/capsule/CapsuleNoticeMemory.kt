@@ -34,16 +34,30 @@ internal class CapsuleNoticeMemory(context: Context? = null, identity: String = 
             }?.apply()
         }
 
+    /**
+     * In-memory cheap keys of what was last hashed: a machine's whole list arrives with every push, and hashing each
+     * session's last message (and writing every fingerprint) per push kept the resident process busy.
+     */
+    private val seen = HashMap<String, String>()
+
     fun observe(event: SessionsEvent): List<Session> {
-        val known = !machines.add(event.machineId)
+        val newMachine = machines.add(event.machineId)
+        val known = !newMachine
+        val written = mutableMapOf<String, String>()
         val changed = event.sessions.filter { current ->
-            val fingerprint = hash("${current.updatedAt.orEmpty()}|${current.lastText.orEmpty()}")
-            val previous = fingerprints.put(capsuleId(current.key), fingerprint)
-            known && previous != fingerprint && !current.lastText.isNullOrBlank()
+            val id = capsuleId(current.key)
+            val text = current.lastText.orEmpty()
+            val cheap = "${current.updatedAt.orEmpty()}|${text.length}|${text.hashCode()}"
+            if (seen[id] == cheap && fingerprints.containsKey(id)) return@filter false
+            seen[id] = cheap
+            val fingerprint = hash("${current.updatedAt.orEmpty()}|$text")
+            val previous = fingerprints.put(id, fingerprint)
+            if (previous != fingerprint) written[id] = fingerprint
+            known && previous != fingerprint && text.isNotBlank()
         }
-        preferences?.edit()?.apply {
-            putStringSet("machines", machines.toSet())
-            event.sessions.forEach { putString("version:${capsuleId(it.key)}", fingerprints.getValue(capsuleId(it.key))) }
+        if (newMachine || written.isNotEmpty()) preferences?.edit()?.apply {
+            if (newMachine) putStringSet("machines", machines.toSet())
+            written.forEach { (id, fingerprint) -> putString("version:$id", fingerprint) }
         }?.apply()
         return changed
     }
@@ -58,7 +72,12 @@ internal class CapsuleNoticeMemory(context: Context? = null, identity: String = 
                     .remove("pending.id").remove("pending.target").remove("pending.kind").remove("pending.machine").apply()
             }
         }
-        private fun hash(value: String) = MessageDigest.getInstance("SHA-256").digest(value.toByteArray())
-            .joinToString("") { "%02x".format(it) }
+        private val Hex = "0123456789abcdef".toCharArray()
+        private fun hash(value: String): String {
+            val bytes = MessageDigest.getInstance("SHA-256").digest(value.toByteArray())
+            val out = CharArray(bytes.size * 2)
+            bytes.forEachIndexed { i, b -> out[2 * i] = Hex[(b.toInt() shr 4) and 0xF]; out[2 * i + 1] = Hex[b.toInt() and 0xF] }
+            return String(out)
+        }
     }
 }
