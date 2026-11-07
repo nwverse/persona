@@ -15870,11 +15870,14 @@ MOCK_HELP.append("MOCK_READINESS=zero|offline|pending|no_claude|not_logged_in|ba
 # one (applied after MOCK_ULTRACODE_SECONDS, default 4), {"ultracode_dismiss_lost": true} takes the notice away, turning
 # on a session with a note answers 409 ultracode_unsupported with the note; other /modes requests go on as before. A
 # message to a session with a change queued is held back (409 ultracode_pending, the node on master) and goes once it is
-# through. GET /mock/ultracode: the requests, the starts that asked for it and the messages (held or not); ?reset=1 puts
-# the states back. Off: nothing changes.
+# through. With MOCK_TASKS=1 the open plan has three tasks (#12): one the assistant left off, one it turned on, and one on
+# Mac Studio it turned on where it can't run; Start's `tasks` edits are logged and their `ultracode` kept on the plan.
+# GET /mock/ultracode: the requests, the starts that asked for it, the plan starts and the messages (held or not);
+# ?reset=1 puts the states back. Off: nothing changes.
 ULTRACODE_MODE = os.environ.get("MOCK_ULTRACODE", "")
 ULTRACODE_LOG = []
 ULTRACODE_SENDS = []
+ULTRACODE_PLAN_STARTS = []
 ULTRACODE_NOTE = "请升级到 Claude Code 2.1.284 或更新版本，旧版不支持独立的 ultracode 开关"
 ULTRACODE_FIELDS = ("ultracode", "ultracode_note", "ultracode_pending", "ultracode_lost_at")
 ULTRACODE_CODEX_EFFORTS = ["low", "medium", "high", "xhigh", "ultra"]
@@ -15890,6 +15893,15 @@ def ultracode_reset():
         if x["session_id"] == ORDERS: x.update(effort="ultra", efforts=ULTRACODE_CODEX_EFFORTS)
     del ULTRACODE_LOG[:]
     del ULTRACODE_SENDS[:]
+    del ULTRACODE_PLAN_STARTS[:]
+    if MOCK_TASKS:
+        base = dict(TASK_PLANS["plan_mock_3"]["tasks"][0])
+        TASK_PLANS["plan_mock_3"].update(state="open", tasks=[
+            dict(base, ultracode=False),
+            dict(base, title="重构网络层的重试和缓存", prompt="重构网络层的重试和缓存，补齐测试。", model="", ultracode=True,
+                 why="改动跨十几个文件，要从多个角度检查。"),
+            dict(base, title="博客图片改成懒加载", prompt="博客的图片改成懒加载。", machine="studio", cwd="/Users/me/code/blog", model="",
+                 ultracode=True, why="博客在 Mac Studio 上。")])
 
 
 def ultracode_apply(s, on):
@@ -15906,8 +15918,17 @@ def ultracode_route(handler, p, body):
         if parse_qs(urlparse(handler.path).query).get("reset"):
             ultracode_reset()
             for m in MACHINES: push_machine(m["id"])
-        handler.send_json({"requests": ULTRACODE_LOG, "started": [b for b in STARTED if "ultracode" in b], "sends": ULTRACODE_SENDS})
+        handler.send_json({"requests": ULTRACODE_LOG, "started": [b for b in STARTED if "ultracode" in b], "plan_starts": ULTRACODE_PLAN_STARTS,
+                           "sends": ULTRACODE_SENDS})
         return True
+    m = re.fullmatch(r"/api/v1/task-plans/([^/]+)/start", p)
+    if m and handler.command == "POST" and m.group(1) in TASK_PLANS:
+        edits = json.loads(body or b"{}").get("tasks")
+        ULTRACODE_PLAN_STARTS.append({"plan": m.group(1), "tasks": edits})
+        if TASK_PLANS[m.group(1)]["state"] == "open":
+            for task, e in zip(TASK_PLANS[m.group(1)]["tasks"], edits or []):
+                if "ultracode" in e: task["ultracode"] = e["ultracode"]
+        return False  # the tasks mock starts it
     m = re.fullmatch(r"/api/v1/sessions/([^/]+)/([^/]+)/messages", p)
     if m and handler.command == "POST":
         s = next((x for x in SESSIONS if x["machine_id"] == m.group(1) and x["session_id"] == m.group(2)), None)

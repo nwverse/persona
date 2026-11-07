@@ -335,7 +335,7 @@ Approval IDs contain machine / instance / connection generation / thread / the o
 
 ultracode is independent of reasoning effort and adds no level to `EffortLevels`. It applies only to the current Claude process, defaults to off, and does not remember the last choice or change launcher settings or the user's default effort.
 This API is for ordinary Claude Code Agent sessions; Persona's headless assistant chats, including the main chat, do not support it. Client controls are tracked in web #3428, Android #3429 and Apple #3430.
-The assistant's `agent_start` and `task_plan` take `ultracode` per Agent and pass `true` on to `session.start` (#12), with the same refusals as below; a refused start does not count against the launcher's health. The plan card and to-do controls are still to come in #12.
+The assistant's `agent_start` and `task_plan` take `ultracode` per Agent and pass `true` on to `session.start` (#12), with the same refusals as below; a refused start does not count against the launcher's health. The web shows and changes it on plan cards and to-dos ([web.md](../web/web.md), "Claude Code ultracode"); Android and iOS / Mac are still to come in #12.
 
 Optional Session fields:
 

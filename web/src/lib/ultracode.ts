@@ -8,6 +8,8 @@ import { api, ApiError, errorText, sessionPath } from "./api";
 import { stateOf } from "./format";
 import { hasModes } from "./session-actions";
 import { flushPushes, getSession, hubHas, upsertSession } from "./store";
+import type { PlanTask } from "./feed";
+import type { SessionLookup, Todo } from "./todos";
 import type { Session } from "./types";
 import { isWarn, liveAccounts, windowMinutes, type UsageAccount } from "./usage-windows";
 
@@ -30,6 +32,19 @@ export function ultracodeOffered(s: Session | undefined, features: string[]): bo
 /** The workflow mark on a row and on the thinking chip: the node saw it on (unknown is not on). */
 export function ultracodeOn(s: Pick<Session, "ultracode" | "assistant" | "agent">): boolean {
   return s.ultracode === true && !s.assistant && isClaude(s);
+}
+
+/** The workflow mark on a to-do (#12): one of its agents runs with ultracode on, as its Agent list row shows it (not
+ *  offline: the node keeps the last value it saw after the process is gone); before any agent started, the plan task it
+ *  starts from asks for it. Never on a to-do that is done or did not start. */
+export function todoUltracode(todo: Todo, lookup: SessionLookup | undefined, planned?: Pick<PlanTask, "ultracode">): boolean {
+  if (todo.done_at || todo.start_error) return false;
+  const active = (todo.agents ?? []).filter((a) => !a.released_at);
+  if (active.length === 0) return planned?.ultracode === true;
+  return active.some((a) => {
+    const s = lookup?.(a.machine_id, a.session_id);
+    return s !== undefined && stateOf(s) !== "offline" && ultracodeOn(s);
+  });
 }
 
 /** Whether "New agent" offers it: the hub has it and the agent that starts is Claude Code. */

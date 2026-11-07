@@ -1,9 +1,11 @@
-// "Edit" on an open plan card (iOS PlanEditSheet): change each task's title, machine, directory, model, permission and
-// first message before it starts; "Start" starts the plan with them.
+// "Edit" on an open plan card (iOS PlanEditSheet): change each task's title, machine, directory, model, permission,
+// ultracode (#12) and first message before it starts; "Start" starts the plan with them.
 import { useState } from "react";
 import { PLAN_PERMISSIONS, planEditsChanged, planEditsOf, type PlanTaskEdit, type TaskPlan } from "../../lib/feed";
-import { useStore } from "../../lib/store";
+import { hubHas, useStore } from "../../lib/store";
+import { startBlocked, ULTRACODE_FEATURE } from "../../lib/ultracode";
 import { Button, Dialog } from "../../ui/atoms";
+import { UltracodeStartRow } from "../chat/Ultracode";
 import { t } from "../../i18n";
 
 const FIELD = "w-full rounded-control border border-line bg-canvas px-3 py-1.5 text-[13.5px] text-ink outline-none focus:border-accent";
@@ -25,14 +27,21 @@ export function modelPlaceholder(planned?: string): string {
   return m ? t("assistant-tasks.plan_edit_model_placeholder_kept", { model: m }) : t("assistant-tasks.plan_edit_model_placeholder");
 }
 
-export function PlanEditDialog({ plan, onClose, onStart }: { plan: TaskPlan; onClose: () => void; onStart: (edits: PlanTaskEdit[]) => void }) {
+/** `ultracode`: each task's choice as the card draws it, where "Edit" starts from. */
+export function PlanEditDialog({ plan, ultracode, onClose, onStart }: { plan: TaskPlan; ultracode?: readonly boolean[]; onClose: () => void; onStart: (edits: PlanTaskEdit[]) => void }) {
   const machines = useStore((s) => s.machines);
-  const [tasks, setTasks] = useState<PlanTaskEdit[]>(() => planEditsOf(plan));
+  const ultracodeOffered = useStore((s) => hubHas(s.features, ULTRACODE_FEATURE));
+  const [before] = useState<PlanTaskEdit[]>(() => planEditsOf(plan, ultracode));
+  const [tasks, setTasks] = useState<PlanTaskEdit[]>(before);
   const set = (i: number, patch: Partial<PlanTaskEdit>) => setTasks((list) => list.map((x, j) => (j === i ? { ...x, ...patch } : x)));
   const close = () => {
-    if (planEditsChanged(plan, tasks) && !confirm(t("assistant-tasks.plan_edit_discard"))) return;
+    if (planEditsChanged(before, tasks) && !confirm(t("assistant-tasks.plan_edit_discard"))) return;
     onClose();
   };
+  // why the chosen computer can't start with ultracode (its Claude Code is too old), "" when it can
+  const blockedOn = (machine: string) => (ultracodeOffered ? startBlocked(machines.find((m) => m.id === machine)?.claude_version) : "");
+  // a task whose computer can't start with it starts without, as its grayed switch says
+  const start = () => onStart(tasks.map((x) => (x.ultracode && blockedOn(x.machine) ? { ...x, ultracode: false } : x)));
   const ready = tasks.every((x) => x.title.trim() && x.cwd.trim() && x.prompt.trim());
   return (
     <Dialog
@@ -43,7 +52,7 @@ export function PlanEditDialog({ plan, onClose, onStart }: { plan: TaskPlan; onC
       footer={
         <>
           <Button onClick={close}>{t("common.cancel")}</Button>
-          <Button tone="accent" disabled={!ready} onClick={() => onStart(tasks)}>
+          <Button tone="accent" disabled={!ready} onClick={start}>
             {t("assistant-tasks.plan_start")}
           </Button>
         </>
@@ -91,6 +100,7 @@ export function PlanEditDialog({ plan, onClose, onStart }: { plan: TaskPlan; onC
                 <label htmlFor={`${id}-model`} className={LABEL}>{t("assistant-tasks.plan_edit_model")}</label>
                 <input id={`${id}-model`} value={task.model ?? ""} spellCheck={false} autoCapitalize="off" autoCorrect="off" placeholder={modelPlaceholder(plan.tasks[i]?.model)} onChange={(e) => set(i, { model: e.target.value })} className={FIELD} />
               </div>
+              {ultracodeOffered && <UltracodeStartRow testId="plan-edit-ultracode" on={task.ultracode} blocked={blockedOn(task.machine)} onChange={(on) => set(i, { ultracode: on })} />}
               <div>
                 <label htmlFor={`${id}-prompt`} className={LABEL}>{t("assistant-tasks.plan_edit_prompt")}</label>
                 <textarea id={`${id}-prompt`} rows={4} value={task.prompt} onChange={(e) => set(i, { prompt: e.target.value })} className={`${FIELD} resize-y leading-relaxed`} />

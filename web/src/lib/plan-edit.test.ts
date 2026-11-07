@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { planEditsChanged, planEditsOf, planEditsToSend, type TaskPlan } from "./feed";
+import { planEditsChanged, planEditsOf, planEditsToSend, planUltracodeToSend, type TaskPlan } from "./feed";
 
 const plan: TaskPlan = {
   id: "p1",
@@ -7,23 +7,33 @@ const plan: TaskPlan = {
   state: "open",
   tasks: [
     { title: "补测试", prompt: "给登录补测试", machine: "m1", cwd: "/work/app" },
-    { title: "改文档", prompt: "更新文档", machine: "m2", cwd: "/work/docs", model: "opus", permission: "acceptEdits" },
+    { title: "改文档", prompt: "更新文档", machine: "m2", cwd: "/work/docs", model: "opus", permission: "acceptEdits", ultracode: true },
   ],
 };
 
 describe("改一下 on a plan card", () => {
-  it("starts from every task's fields, an unset permission as 每步都问", () => {
+  it("starts from every task's fields, an unset permission as 每步都问 and ultracode as the assistant chose", () => {
     expect(planEditsOf(plan)).toEqual([
-      { title: "补测试", machine: "m1", cwd: "/work/app", model: "", permission: "default", prompt: "给登录补测试" },
-      { title: "改文档", machine: "m2", cwd: "/work/docs", model: "opus", permission: "acceptEdits", prompt: "更新文档" },
+      { title: "补测试", machine: "m1", cwd: "/work/app", model: "", permission: "default", prompt: "给登录补测试", ultracode: false },
+      { title: "改文档", machine: "m2", cwd: "/work/docs", model: "opus", permission: "acceptEdits", prompt: "更新文档", ultracode: true },
     ]);
   });
 
-  it("knows when something changed", () => {
+  it("starts from the card's own ultracode choice where it has one", () => {
+    expect(planEditsOf(plan, [true, false]).map((e) => e.ultracode)).toEqual([true, false]);
+  });
+
+  it("knows when something changed since it opened", () => {
+    const before = planEditsOf(plan);
     const edits = planEditsOf(plan);
-    expect(planEditsChanged(plan, edits)).toBe(false);
+    expect(planEditsChanged(before, edits)).toBe(false);
     edits[1] = { ...edits[1], cwd: "/work/site" };
-    expect(planEditsChanged(plan, edits)).toBe(true);
+    expect(planEditsChanged(before, edits)).toBe(true);
+    const flipped = planEditsOf(plan);
+    flipped[0] = { ...flipped[0], ultracode: true };
+    expect(planEditsChanged(before, flipped)).toBe(true);
+    // the card's choice it opened with is not a change of its own
+    expect(planEditsChanged(planEditsOf(plan, [true, true]), planEditsOf(plan, [true, true]))).toBe(false);
   });
 
   it("sends the edits, leaving out a 每步都问 the plan never set", () => {
@@ -34,5 +44,24 @@ describe("改一下 on a plan card", () => {
     expect(sent[1].permission).toBe("acceptEdits");
     edits[0] = { ...edits[0], permission: "plan" };
     expect(planEditsToSend(plan, edits)[0].permission).toBe("plan");
+  });
+
+  it("sends ultracode only where it differs from the assistant's, so the hub keeps the rest", () => {
+    const edits = planEditsOf(plan);
+    expect(planEditsToSend(plan, edits).map((e) => "ultracode" in e)).toEqual([false, false]);
+    edits[0] = { ...edits[0], ultracode: true };
+    edits[1] = { ...edits[1], ultracode: false };
+    expect(planEditsToSend(plan, edits).map((e) => e.ultracode)).toEqual([true, false]);
+  });
+});
+
+describe("Start on a plan card", () => {
+  it("starts the plan as it is while the card changed no ultracode", () => {
+    expect(planUltracodeToSend(plan, [false, true])).toBeUndefined();
+  });
+
+  it("sends true / false for the tasks the card changed and nothing for the others", () => {
+    expect(planUltracodeToSend(plan, [true, true])).toEqual([{ ultracode: true }, {}]);
+    expect(planUltracodeToSend(plan, [false, false])).toEqual([{}, { ultracode: false }]);
   });
 });

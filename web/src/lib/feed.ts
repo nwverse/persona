@@ -24,6 +24,8 @@ export interface PlanTask {
   launcher?: string;
   model?: string;
   permission?: string;
+  /** The agent starts with Claude Code's ultracode on (#12). On start, `true` / `false` overrides it; left out, the hub keeps the assistant's choice. */
+  ultracode?: boolean;
   readonly?: boolean;
   why?: string;
   todo_id?: string;
@@ -353,29 +355,46 @@ onHubEvent("task_plan", (m) => {
 
 // ── actions ──
 
-/** The fields of a plan's task "Edit" lets the user change before it starts (iOS PlanEditSheet). */
-export type PlanTaskEdit = Pick<PlanTask, "title" | "machine" | "cwd" | "model" | "permission" | "prompt">;
+/** The fields of a plan's task "Edit" lets the user change before it starts (iOS PlanEditSheet), ultracode included (#12). */
+export type PlanTaskEdit = Pick<PlanTask, "title" | "machine" | "cwd" | "model" | "permission" | "prompt"> & { ultracode: boolean };
 
 export const PLAN_PERMISSIONS = ["default", "acceptEdits", "plan", "bypassPermissions"] as const;
 
-/** A plan's tasks as "Edit" starts them: every editable field filled in (an unset permission is "Ask every step"). */
-export function planEditsOf(plan: TaskPlan): PlanTaskEdit[] {
-  return plan.tasks.map((t) => ({ title: t.title, machine: t.machine, cwd: t.cwd, model: t.model ?? "", permission: t.permission || "default", prompt: t.prompt }));
+/** A plan's tasks as "Edit" starts them: every editable field filled in (an unset permission is "Ask every step").
+ *  `ultracode`: the card's own choice per task, where it has one; else the assistant's. */
+export function planEditsOf(plan: TaskPlan, ultracode?: readonly boolean[]): PlanTaskEdit[] {
+  return plan.tasks.map((t, i) => ({
+    title: t.title,
+    machine: t.machine,
+    cwd: t.cwd,
+    model: t.model ?? "",
+    permission: t.permission || "default",
+    prompt: t.prompt,
+    ultracode: ultracode?.[i] ?? t.ultracode === true,
+  }));
 }
 
-/** Whether "Edit" changed anything (closing it then asks before throwing the changes away). */
-export function planEditsChanged(plan: TaskPlan, edits: PlanTaskEdit[]): boolean {
-  const before = planEditsOf(plan);
+/** Whether "Edit" changed anything since it opened with `before` (closing it then asks before throwing the changes away). */
+export function planEditsChanged(before: PlanTaskEdit[], edits: PlanTaskEdit[]): boolean {
   return edits.some((e, i) => (Object.keys(e) as (keyof PlanTaskEdit)[]).some((k) => (e[k] ?? "") !== (before[i]?.[k] ?? "")));
 }
 
-/** What "Start" sends from "Edit": the edited tasks, leaving out an "Ask every step" the plan never set (the agent's own default). */
+/** What "Start" sends from "Edit": the edited tasks, leaving out an "Ask every step" the plan never set (the agent's own
+ *  default) and an ultracode the same as the assistant's (left out, the hub keeps it). */
 export function planEditsToSend(plan: TaskPlan, edits: PlanTaskEdit[]): Partial<PlanTask>[] {
   return edits.map((e, i) => {
     const out: Partial<PlanTask> = { ...e };
     if (e.permission === "default" && !plan.tasks[i]?.permission) delete out.permission;
+    if (e.ultracode === (plan.tasks[i]?.ultracode === true)) delete out.ultracode;
     return out;
   });
+}
+
+/** What the card's own "Start" sends (#12): `ultracode` for each task where the card's choice differs from the
+ *  assistant's and nothing for the rest; undefined when nothing differs, so it starts the plan as it is. */
+export function planUltracodeToSend(plan: TaskPlan, ultracode: readonly boolean[]): Partial<PlanTask>[] | undefined {
+  const edits = plan.tasks.map((t, i): Partial<PlanTask> => (ultracode[i] === undefined || ultracode[i] === (t.ultracode === true) ? {} : { ultracode: ultracode[i] }));
+  return edits.some((e) => "ultracode" in e) ? edits : undefined;
 }
 
 export async function startPlan(plan: TaskPlan, remember: boolean, edits?: Partial<PlanTask>[]) {
