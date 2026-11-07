@@ -46,8 +46,6 @@ SwiftUI 的 `.frame(maxWidth: .infinity)` 默认把内容居中；父层 `VStack
 
 ## Compiler-free English catalog keys (#5090)
 
-A valid JSON catalog can still hide entries under another entry's `localizations` object (#1124). Check that every source key is a direct child of `strings`, not merely present in the file. Moving misplaced entries must preserve their existing en, zh-Hans and ja translations; run the repository source-key completeness check afterward.
-
 On hosted images, successful SDK lookup does not prove Xcode can resolve a generic device destination (#1124). Prepare the matching iOS platform/runtime before the first device build, not only before simulator tests; retain the minimum compiler and explicit runtime pin. The failed device build reported that iOS 26.0 was not installed even though the SDK checks passed. The pinned Xcode downloads a compatible patch runtime (26.0.1); forcing `-buildVersion 26.0` returned "not available for download". Let that Xcode select its platform, then require an available stable 26.0.x runtime and pass its exact identifier to the simulator helper. Reject newer minor versions and beta runtimes.
 
 Changing the catalog's development language also changes the identity the Swift compiler extracts. Preserve each colliding English translation in its own contextual key and keep explicit English values; do not merge different Chinese or Japanese meanings. Reorder interpolation expressions together with translated argument numbers, and audit reordered expressions for side effects. Named App Intent parameters follow their names, not their old position.
@@ -55,6 +53,8 @@ Changing the catalog's development language also changes the identity the Swift 
 Keep `LocalizedStringResource` and `LocalizedStringKey` arguments as localization values: wrapping a literal in `String(localized:)` is correct for a `String`, but breaks a helper requiring either localization type. Read each helper's signature rather than guessing from its name. Migrate nested literals from the inside out. Without a Swift compiler, reject unresolved raw literals and ambiguous argument types instead of silently guessing.
 
 Source percent signs are literal text, while catalog `%%` is an escaped percent. Parsing `% left` as a printf specifier (`% le`) falsely rejects a valid key. Source-key checks must not run printf normalization twice. Compiler-free checks complement, but do not replace, Apple builds, Swift tests and three-language screenshots.
+
+A catalog can be valid JSON and still fail every Apple consumer (#1123): inserting a complete string entry inside another entry's `localizations` makes the new key look like a locale with no `stringUnit`. The required en / zh-Hans / ja entries may remain valid, so checking only those languages misses it. Reject nested string entries in every locale object, keep new entries as siblings under `strings`, and verify that moving them preserves all translations.
 
 
 ## Asynchronous HTML sandbox loading and teardown (#2025)
