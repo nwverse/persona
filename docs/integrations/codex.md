@@ -199,6 +199,32 @@ Code: `node/codex_resume.go`, `node/retire.go` (`resumeOther`, `resumeCodex`); #
 - The history row of such a thread is sendable (`capabilities.send`), so the apps show the input box; no client change is needed to resume by sending.
 - **Tests**: `node/codex_resume_test.go` (history row sendable / view only while held, resume on a message and on a start, Codex App thread refused), `node/retire_test.go`.
 
+## Archive
+
+Archiving a Codex session in Persona (`POST /api/v1/sessions/{mid}/{sid}/archive`, `docs/protocol/protocol.md` "Agent session archives") also archives it in Codex,
+with Codex's own reversible archive; restoring it in Persona restores it in Codex. Codex's archive moves the rollout to `<CODEX_HOME>/archived_sessions/` and back
+(and marks it in its state database), so the Codex App and `codex resume`'s picker list it as archived; nothing is deleted, and Persona moves no file itself.
+Code: `node/archive.go` (`session.archive` / `session.unarchive`), `assistant/agent_archive_native.go` (when the manager asks, retries). #88.
+
+- **Protocol** (confirmed in `codex app-server generate-json-schema` of codex-cli 0.163.0 and `codex-rs/app-server/src/request_processors/thread_processor.rs` on main):
+  `thread/archive {threadId}` → `{}` and `thread/unarchive {threadId}` → `{thread}`, notifying `thread/archived` / `thread/unarchived` to the app-server's clients.
+  Archiving a thread loaded in that app-server shuts it down there first (like the Codex App's own Archive), together with the sub-Agent threads it spawned; an archived thread can't be resumed
+  (`thread/resume` and `codex resume` answer "session … is archived. Run `codex unarchive …`").
+- **Which way**: through an app-server the node is connected to for the thread's `CODEX_HOME` (the one running it, else any of that home: the Codex App, the shared daemon),
+  so its clients see the change at once. With none, `codex archive <thread>` / `codex unarchive <thread>` (the CLI's subcommands, which run the same method on an app-server of their own),
+  in the user's interactive shell with `CODEX_HOME` set to the thread's home; with the session's own launcher when it is an alias of codex a resume would use, else plain `codex` (never a managed launcher).
+- **Not while it is open in a terminal**: never while a herdr pane still runs it (either way: archiving through the shared daemon would take the thread from under its TUI), and from the command line
+  never while any Codex process has the rollout open (`codexHeldNow`, or the processes could not all be read): refused as `native_archive_live`, and the manager tries again later,
+  so a herdr Codex is archived in Codex once its TUI exits (closing it, as a finished task's agent is closed, lets it through). A Codex App thread is archived through the App's app-server as the App's own Archive would. Codex refuses too: its cross-process writer lock
+  (`thread-writer-locks/`) makes `codex archive` fail while another process writes the thread (checked with a throwaway `CODEX_HOME`). Never while it works (`native_archive_busy`).
+- **Idempotent on Persona's side only**: Codex answers `-32600 "no rollout found for thread id …"` to archiving an archived thread (and "no archived rollout" to restoring a restored one),
+  and the command exits 1. So the node first reads where the rollout is, and answers done without a call when it already is as asked; after a call it reads it again, and the files decide:
+  moved is done even when the answer was an error (an answer lost), not moved is refused (`native_archive_failed`).
+- **After archiving**: the thread leaves the node's list (the rule below for threads archived in the Codex App). The manager keeps the archived row from its snapshot, so it stays archived and restorable in Persona.
+- **Older Codex** without the `archive` subcommand (clap's "unrecognized subcommand"): `unsupported`, Persona's archive alone.
+- **Tests**: `node/archive_test.go` (app-server route with a fake app-server moving files, answers checked on disk, a running turn, the command route with live / unknown holders,
+  an older Codex, Claude unsupported, runtimes with and without `caps.archive`, the shell wrapper with a real bash), `assistant/agent_archive_native_test.go`.
+
 ## Questions and approvals (structured cards)
 
 Since 2026-11-02, Codex / internal Codex-fork questions and approvals in Agents use the same question and permission cards as Claude, rather than generic "The terminal is asking you" interactions.
@@ -254,6 +280,7 @@ herdr reports blocked when Codex has an unanswered async question, so `agent pro
 ## Not supported yet
 
 - Resuming from the phone covers a thread nothing has open in the default home ("Resuming from the phone"). Offline / archived history on external app-server instances is read-only; never silently start another app-server to continue it. Codex App threads continue only through the App.
+- Threads archived only in Codex (the Codex App's Archive) are not listed in Persona's archive; only Persona's own archives are mirrored to Codex ("Archive").
 - Starting Codex from the phone requires the first message. Shell functions running Codex, aliases doing other work, and the internal fork cannot be used to start sessions; permission mode and thinking effort cannot be selected at creation.
 - Permission mode cannot be changed on the phone. Only app-server sessions can change thinking effort ("Thinking effort"); terminal-route Codex and the internal fork cannot.
 - Sessions started by launchers with arguments such as `-c` are not on the shared daemon and use only the terminal route (screen reading, typing).

@@ -13,6 +13,8 @@ import { Segmented } from "../assistant/parts";
 import { Icon } from "../../ui/icons";
 import { ModelPicker, type ModelList } from "../../ui/ModelPicker";
 import { Group, Pill, Row } from "./SettingsParts";
+import { MANAGER_HEADER } from "../../lib/manager-choice";
+import { ConfigurationManager } from "./ConfigurationManager";
 import { ModelProfiles } from "./ModelProfiles";
 
 function larkAgentStatus(binding: ModelBinding): string {
@@ -22,12 +24,16 @@ function larkAgentStatus(binding: ModelBinding): string {
 }
 
 export function ModelConfiguration({ open, onOpen, onProviders }: { open: string | null; onOpen: (id: string | null) => void; onProviders: () => void }) {
+  return <ConfigurationManager>{(manager) => <ModelConfigurationForManager manager={manager} open={open} onOpen={onOpen} onProviders={onProviders} />}</ConfigurationManager>;
+}
+
+function ModelConfigurationForManager({ manager, open, onOpen, onProviders }: { manager: string; open: string | null; onOpen: (id: string | null) => void; onProviders: () => void }) {
   const [data, setData] = useState<ModelConfigurationBody | null>(null);
   const [error, setError] = useState("");
   const [query, setQuery] = useState("");
   const load = async () => {
     try {
-      setData(await modelConfiguration());
+      setData(await modelConfiguration(manager));
       setError("");
     } catch (e) {
       setError(e instanceof ApiError && e.status === 404 ? t("settings-modelconfiguration.unsupported") : errorText(e));
@@ -39,7 +45,7 @@ export function ModelConfiguration({ open, onOpen, onProviders }: { open: string
 
   return (
     <>
-      <ModelProfiles onChanged={() => void load()} />
+      <ModelProfiles manager={manager} onChanged={() => void load()} />
       <div className="mb-4 flex items-center gap-2">
         <label className="flex h-9 min-w-0 flex-1 items-center gap-2 rounded-control bg-surface px-3 shadow-btn focus-within:shadow-[inset_0_0_0_1px_var(--accent)]">
           <Icon name="search" size={13} stroke={2} className="text-ink-3" />
@@ -63,14 +69,16 @@ export function ModelConfiguration({ open, onOpen, onProviders }: { open: string
         </Group>
       ))}
       <Button tone="quiet" onClick={onProviders}>{t("settings-modelconfiguration.manage_providers")}</Button>
-      <PurposeEditor key={open} id={open} sourceName={sourceName} onClose={() => onOpen(null)} onSaved={() => void load()} />
+      <PurposeEditor manager={manager} key={open} id={open} sourceName={sourceName} onClose={() => onOpen(null)} onSaved={() => void load()} />
     </>
   );
 }
 
 const inputClass = "h-9 w-full rounded-control bg-field px-3 text-[13px] text-ink shadow-inset-field outline-none placeholder:text-ink-3 focus:shadow-[inset_0_0_0_1px_var(--accent)] disabled:opacity-60";
 
-function PurposeEditor({ id, sourceName, onClose, onSaved }: { id: string | null; sourceName: (id?: string) => string | undefined; onClose: () => void; onSaved: () => void }) {
+function PurposeEditor({ manager, id, sourceName, onClose, onSaved }: { manager: string; id: string | null; sourceName: (id?: string) => string | undefined; onClose: () => void; onSaved: () => void }) {
+  const alive = useRef(true);
+  useEffect(() => { alive.current = true; return () => { alive.current = false; }; }, []);
   const [data, setData] = useState<ModelPurposeBody | null>(null);
   const [draft, setDraft] = useState<ModelDraft>({ provider: "", model: "", effort: "", runtime: "" });
   const [error, setError] = useState("");
@@ -90,7 +98,7 @@ function PurposeEditor({ id, sourceName, onClose, onSaved }: { id: string | null
   const load = async () => {
     if (!id) return;
     try {
-      const r = await modelPurpose(id);
+      const r = await modelPurpose(id, manager);
       setData(r);
       setDraft(draftFor(r.purpose));
       setError("");
@@ -103,7 +111,7 @@ function PurposeEditor({ id, sourceName, onClose, onSaved }: { id: string | null
   useEffect(() => {
     if (!id?.startsWith("plugin.")) return;
     const controller = new AbortController();
-    api<{ models: { id: string; name?: string }[] }>(`${extRoot()}/${enc(id.slice("plugin.".length))}/models`, { signal: controller.signal })
+    api<{ models: { id: string; name?: string }[] }>(`${extRoot()}/${enc(id.slice("plugin.".length))}/models`, { signal: controller.signal, headers: { [MANAGER_HEADER]: manager } })
       .then((r) => setModels(r.models ?? []))
       .catch((e) => { if (!controller.signal.aborted) setModelsError(errorText(e)); });
     return () => controller.abort();
@@ -124,7 +132,7 @@ function PurposeEditor({ id, sourceName, onClose, onSaved }: { id: string | null
     const controller = new AbortController();
     // Another provider's list never stays up while this one's loads (a pick would be the other provider's id).
     setLauncherList((l) => ({ status: "loading", provider: listProvider, list: refresh && l.provider === listProvider ? l.list : undefined }));
-    providerModels(listProvider, { refresh, machine: p?.machine_id, signal: controller.signal })
+    providerModels(listProvider, { manager, refresh, machine: p?.machine_id, signal: controller.signal })
       .then((list) => setLauncherList({ status: "ready", list, machine: list?.machine, provider: listProvider }))
       .catch((e) => { if (!controller.signal.aborted) setLauncherList({ status: "error", error: errorText(e), provider: listProvider }); });
     return () => controller.abort();
@@ -147,7 +155,8 @@ function PurposeEditor({ id, sourceName, onClose, onSaved }: { id: string | null
     setBusy(true);
     setError("");
     try {
-      const r = await saveModelPurpose(p, restore ? { provider: "", model: "", effort: "", runtime: draft.runtime } : draft);
+      const r = await saveModelPurpose(p, restore ? { provider: "", model: "", effort: "", runtime: draft.runtime } : draft, manager);
+      if (!alive.current) return;
       setData(r);
       setDraft(draftFor(r.purpose));
       toast(restore ? t("settings-modelconfiguration.restored") : t("settings-modelconfiguration.saved"), "ok");

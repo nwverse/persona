@@ -156,6 +156,12 @@ func TestRPCFailureLocalePreservesOutcomeAndDiagnostics(t *testing.T) {
 		{"partial delivery", &rpc.Error{Code: "internal", Message: "original diagnostic", Data: json.RawMessage(`{"delivered":"yes","retryable":false}`)}, "rpc-errors.failed"},
 		{"busy", &rpc.Error{Code: "attach_busy", Message: "original diagnostic"}, "rpc-errors.attach_busy"},
 		{"old node", &rpc.Error{Code: "node_outdated", Message: "original diagnostic"}, "rpc-errors.node_outdated"},
+		// a Claude session outside Persona's terminals: refused before anything reached it, or handed over unconfirmed
+		{"peer refused", &rpc.Error{Code: "peer_unsupported", Message: "node's own words", Data: json.RawMessage(`{"delivered":"none","pid":42}`)}, "rpc-errors.peer_unsupported"},
+		{"peer gone", &rpc.Error{Code: "peer_unreachable", Message: "node's own words", Data: json.RawMessage(`{"delivered":"none"}`)}, "rpc-errors.peer_unreachable"},
+		{"peer long", &rpc.Error{Code: "peer_too_long", Message: "node's own words", Data: json.RawMessage(`{"delivered":"none"}`)}, "rpc-errors.peer_too_long"},
+		{"peer command", &rpc.Error{Code: "peer_command", Message: "node's own words", Data: json.RawMessage(`{"delivered":"none"}`)}, "rpc-errors.peer_command"},
+		{"peer unconfirmed", &rpc.Error{Code: "peer_unconfirmed", Message: "node's own words", Data: json.RawMessage(`{"delivered":"unknown"}`)}, "rpc-errors.peer_unconfirmed"},
 	}
 	for _, tc := range cases {
 		legacy := httptest.NewRecorder()

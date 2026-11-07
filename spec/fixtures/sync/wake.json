@@ -1,0 +1,441 @@
+{
+  "version": 1,
+  "cases": [
+    {
+      "name": "wake_reply_latest_is_answer",
+      "description": "After a background task wakes the agent, its newest words are the turn's answer even when they are shorter than an earlier reply, while streaming and after the line lands.",
+      "source": {
+        "rule": "After a wake, the latest run's words are the answer (chosen 2026-11-06)",
+        "issues": [
+          "#636",
+          "#638"
+        ],
+        "code": {
+          "web": "web/src/lib/turns.ts collectWakeRuns",
+          "ios": "Turn.pickAnswerAcrossWakes",
+          "android": "RawTurn.finish"
+        }
+      },
+      "chat": {
+        "machine_id": "m1",
+        "session_id": "s1",
+        "assistant": true
+      },
+      "devices": [
+        "a"
+      ],
+      "start": {
+        "hub": {
+          "history": "h1",
+          "lines": [
+            {
+              "id": "l1#0",
+              "seq": 1,
+              "ts": "2026-01-02T03:04:05Z",
+              "role": "user",
+              "kind": "text",
+              "text": "Plan a weekend trip."
+            },
+            {
+              "id": "l2#0",
+              "seq": 2,
+              "ts": "2026-01-02T03:04:05Z",
+              "role": "assistant",
+              "kind": "text",
+              "text": "Saturday hike, Sunday museum."
+            }
+          ],
+          "to_seq": 3,
+          "interactions": [],
+          "session": {
+            "state": "idle"
+          },
+          "event_stream": "ev1",
+          "event_seq": 10
+        }
+      },
+      "steps": [
+        {
+          "hub": {
+            "append": [
+              {
+                "id": "l4#0",
+                "seq": 4,
+                "ts": "2026-01-02T03:04:05Z",
+                "role": "user",
+                "kind": "text",
+                "text": "Will it rain this weekend?"
+              },
+              {
+                "id": "l5#0",
+                "seq": 5,
+                "ts": "2026-01-02T03:04:05Z",
+                "role": "assistant",
+                "kind": "tool_use",
+                "tool_use_id": "call5",
+                "tool_name": "Bash",
+                "tool_input": {
+                  "command": "ls"
+                }
+              },
+              {
+                "id": "l6#0",
+                "seq": 6,
+                "ts": "2026-01-02T03:04:05Z",
+                "role": "assistant",
+                "kind": "text",
+                "text": "The forecast check is running in the background; I will look at Saturday's and Sunday's hourly rain chances and the wind at the trailhead, and tell you whether to swap the days."
+              }
+            ],
+            "to_seq": 7,
+            "session": {
+              "state": "idle"
+            }
+          }
+        },
+        {
+          "frames": {
+            "a": [
+              {
+                "type": "items",
+                "machine_id": "m1",
+                "session_id": "s1",
+                "history": "h1",
+                "items": [
+                  {
+                    "id": "l4#0",
+                    "seq": 4,
+                    "ts": "2026-01-02T03:04:05Z",
+                    "role": "user",
+                    "kind": "text",
+                    "text": "Will it rain this weekend?"
+                  },
+                  {
+                    "id": "l5#0",
+                    "seq": 5,
+                    "ts": "2026-01-02T03:04:05Z",
+                    "role": "assistant",
+                    "kind": "tool_use",
+                    "tool_use_id": "call5",
+                    "tool_name": "Bash",
+                    "tool_input": {
+                      "command": "ls"
+                    }
+                  },
+                  {
+                    "id": "l6#0",
+                    "seq": 6,
+                    "ts": "2026-01-02T03:04:05Z",
+                    "role": "assistant",
+                    "kind": "text",
+                    "text": "The forecast check is running in the background; I will look at Saturday's and Sunday's hourly rain chances and the wind at the trailhead, and tell you whether to swap the days."
+                  }
+                ],
+                "to_seq": 7,
+                "from_seq": 3
+              },
+              {
+                "type": "sessions_delta",
+                "machine_id": "m1",
+                "upsert": [
+                  {
+                    "machine_id": "m1",
+                    "session_id": "s1",
+                    "title": "Weekend trip",
+                    "cwd": "/home/user/project",
+                    "status": "idle",
+                    "assistant": true,
+                    "state": "idle",
+                    "updated_at": "2026-01-02T03:04:05Z",
+                    "rev": 100
+                  }
+                ],
+                "remove": []
+              }
+            ]
+          },
+          "expect": {
+            "a": {
+              "messages": [
+                {
+                  "from": "user",
+                  "text": "Plan a weekend trip.",
+                  "state": "shown"
+                },
+                {
+                  "from": "agent",
+                  "text": "Saturday hike, Sunday museum."
+                },
+                {
+                  "from": "user",
+                  "text": "Will it rain this weekend?",
+                  "state": "shown"
+                },
+                {
+                  "from": "agent",
+                  "text": "The forecast check is running in the background; I will look at Saturday's and Sunday's hourly rain chances and the wind at the trailhead, and tell you whether to swap the days."
+                }
+              ]
+            }
+          }
+        },
+        {
+          "wait": 600000
+        },
+        {
+          "hub": {
+            "append": [
+              {
+                "id": "l8#0",
+                "seq": 8,
+                "ts": "2026-01-02T03:04:05Z",
+                "role": "system",
+                "kind": "notice",
+                "text": "Forecast check",
+                "wake": true,
+                "task": {
+                  "kind": "shell",
+                  "status": "completed",
+                  "title": "Forecast check"
+                }
+              },
+              {
+                "id": "l9#0",
+                "seq": 9,
+                "ts": "2026-01-02T03:04:05Z",
+                "role": "assistant",
+                "kind": "tool_use",
+                "tool_use_id": "call9",
+                "tool_name": "Bash",
+                "tool_input": {
+                  "command": "ls"
+                }
+              }
+            ],
+            "to_seq": 9,
+            "session": {
+              "state": "working"
+            }
+          }
+        },
+        {
+          "frames": {
+            "a": [
+              {
+                "type": "items",
+                "machine_id": "m1",
+                "session_id": "s1",
+                "history": "h1",
+                "items": [
+                  {
+                    "id": "l8#0",
+                    "seq": 8,
+                    "ts": "2026-01-02T03:04:05Z",
+                    "role": "system",
+                    "kind": "notice",
+                    "text": "Forecast check",
+                    "wake": true,
+                    "task": {
+                      "kind": "shell",
+                      "status": "completed",
+                      "title": "Forecast check"
+                    }
+                  },
+                  {
+                    "id": "l9#0",
+                    "seq": 9,
+                    "ts": "2026-01-02T03:04:05Z",
+                    "role": "assistant",
+                    "kind": "tool_use",
+                    "tool_use_id": "call9",
+                    "tool_name": "Bash",
+                    "tool_input": {
+                      "command": "ls"
+                    }
+                  }
+                ],
+                "to_seq": 9,
+                "from_seq": 7
+              },
+              {
+                "type": "sessions_delta",
+                "machine_id": "m1",
+                "upsert": [
+                  {
+                    "machine_id": "m1",
+                    "session_id": "s1",
+                    "title": "Weekend trip",
+                    "cwd": "/home/user/project",
+                    "status": "working",
+                    "assistant": true,
+                    "state": "working",
+                    "updated_at": "2026-01-02T03:04:05Z",
+                    "rev": 100
+                  }
+                ],
+                "remove": []
+              }
+            ]
+          }
+        },
+        {
+          "frames": {
+            "a": [
+              {
+                "type": "delta",
+                "machine_id": "m1",
+                "session_id": "s1",
+                "text": "No rain"
+              }
+            ]
+          }
+        },
+        {
+          "wait": 300,
+          "expect": {
+            "a": {
+              "live": "No rain",
+              "messages": [
+                {
+                  "from": "user",
+                  "text": "Plan a weekend trip.",
+                  "state": "shown"
+                },
+                {
+                  "from": "agent",
+                  "text": "Saturday hike, Sunday museum."
+                },
+                {
+                  "from": "user",
+                  "text": "Will it rain this weekend?",
+                  "state": "shown"
+                },
+                {
+                  "from": "agent",
+                  "text": "The forecast check is running in the background; I will look at Saturday's and Sunday's hourly rain chances and the wind at the trailhead, and tell you whether to swap the days."
+                }
+              ]
+            }
+          }
+        },
+        {
+          "hub": {
+            "append": [
+              {
+                "id": "l10#0",
+                "seq": 10,
+                "ts": "2026-01-02T03:04:05Z",
+                "role": "assistant",
+                "kind": "text",
+                "text": "No rain; keep the plan."
+              }
+            ],
+            "to_seq": 11,
+            "session": {
+              "state": "idle"
+            }
+          }
+        },
+        {
+          "frames": {
+            "a": [
+              {
+                "type": "items",
+                "machine_id": "m1",
+                "session_id": "s1",
+                "history": "h1",
+                "items": [
+                  {
+                    "id": "l10#0",
+                    "seq": 10,
+                    "ts": "2026-01-02T03:04:05Z",
+                    "role": "assistant",
+                    "kind": "text",
+                    "text": "No rain; keep the plan."
+                  }
+                ],
+                "to_seq": 11,
+                "from_seq": 9
+              },
+              {
+                "type": "delta",
+                "machine_id": "m1",
+                "session_id": "s1",
+                "text": ""
+              },
+              {
+                "type": "sessions_delta",
+                "machine_id": "m1",
+                "upsert": [
+                  {
+                    "machine_id": "m1",
+                    "session_id": "s1",
+                    "title": "Weekend trip",
+                    "cwd": "/home/user/project",
+                    "status": "idle",
+                    "assistant": true,
+                    "state": "idle",
+                    "updated_at": "2026-01-02T03:04:05Z",
+                    "rev": 100
+                  }
+                ],
+                "remove": []
+              }
+            ]
+          },
+          "expect": {
+            "a": {
+              "live": null,
+              "messages": [
+                {
+                  "from": "user",
+                  "text": "Plan a weekend trip.",
+                  "state": "shown"
+                },
+                {
+                  "from": "agent",
+                  "text": "Saturday hike, Sunday museum."
+                },
+                {
+                  "from": "user",
+                  "text": "Will it rain this weekend?",
+                  "state": "shown"
+                },
+                {
+                  "from": "agent",
+                  "text": "No rain; keep the plan."
+                }
+              ]
+            }
+          }
+        }
+      ],
+      "end": {
+        "a": {
+          "messages": [
+            {
+              "from": "user",
+              "text": "Plan a weekend trip.",
+              "state": "shown"
+            },
+            {
+              "from": "agent",
+              "text": "Saturday hike, Sunday museum."
+            },
+            {
+              "from": "user",
+              "text": "Will it rain this weekend?",
+              "state": "shown"
+            },
+            {
+              "from": "agent",
+              "text": "No rain; keep the plan."
+            }
+          ],
+          "cards": {},
+          "live": null
+        }
+      }
+    }
+  ]
+}

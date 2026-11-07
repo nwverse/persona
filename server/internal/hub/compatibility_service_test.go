@@ -23,6 +23,7 @@ func TestCompatibleHubBinaryPreservesOneInstallation(t *testing.T) {
 				}
 				want = old
 			}
+			want = realPath(t, want)
 			got, err := e.hubBinary()
 			if err != nil {
 				t.Fatal(err)

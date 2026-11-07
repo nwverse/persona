@@ -174,6 +174,56 @@ func TestIndependentHomes(t *testing.T) {
 	}
 }
 
+// Both default directories exist as independent stores (an older installation's beside the current one, #744): a node
+// whose service names one with PERSONA_HOME starts on it, the other is left as it is, and without PERSONA_HOME
+// neither is picked.
+func TestExplicitRootBesideAnIndependentStore(t *testing.T) {
+	cleanRootEnv(t)
+	home := t.TempDir()
+	current, legacy := filepath.Join(home, ".persona"), filepath.Join(home, compat.StateDir)
+	for _, dir := range []string{current, legacy} {
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, "store"), []byte(dir), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	untouched := func() {
+		t.Helper()
+		entries, err := os.ReadDir(home)
+		if err != nil || len(entries) != 2 {
+			t.Fatal("home changed", entries, err)
+		}
+		for _, dir := range []string{current, legacy} {
+			st, err := os.Lstat(dir)
+			if err != nil || !st.IsDir() {
+				t.Fatal(dir, "is no longer a directory", err)
+			}
+			if b, err := os.ReadFile(filepath.Join(dir, "store")); err != nil || string(b) != dir {
+				t.Fatal(dir, "store changed", err)
+			}
+		}
+	}
+	if _, err := PrepareHome(home); err == nil {
+		t.Fatal("independent stores without PERSONA_HOME: one was picked")
+	}
+	untouched()
+	for _, tc := range []struct{ value, want string }{
+		{current, current}, {"~/.persona", current}, {".persona", current}, {legacy, legacy},
+	} {
+		t.Setenv("PERSONA_HOME", tc.value)
+		got, err := PrepareHome(home)
+		if err != nil || got != tc.want {
+			t.Fatalf("PERSONA_HOME=%s: %s %v", tc.value, got, err)
+		}
+		if DataDir(home) != tc.want || SocketDir(home) != tc.want {
+			t.Fatalf("PERSONA_HOME=%s: data %s socket %s", tc.value, DataDir(home), SocketDir(home))
+		}
+		untouched()
+	}
+}
+
 func TestConcurrentFirstRun(t *testing.T) {
 	cleanRootEnv(t)
 	home := t.TempDir()
