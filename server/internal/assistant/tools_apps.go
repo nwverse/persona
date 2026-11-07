@@ -120,9 +120,17 @@ func (s *Service) toolKB(ctx context.Context, name string, args json.RawMessage)
 			Kind string `json:"kind"`
 			ID   string `json:"id"`
 			kb.Update
+			Unmerge bool `json:"unmerge"` // projects: undo a merge (kb.Engine.Unmerge); not in kbwire.Update, so not open to extensions
 		}
 		if err := json.Unmarshal(args, &a); err != nil {
 			return "", err
+		}
+		if a.Unmerge && a.Kind == kb.KindProject {
+			id, err := e.Unmerge(a.ID)
+			if err != nil {
+				return "", err
+			}
+			return "Unmerged projects/" + id + ".", nil
 		}
 		id, err := e.Apply(a.Kind, a.ID, a.Update)
 		if err != nil {

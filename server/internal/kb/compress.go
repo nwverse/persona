@@ -441,6 +441,68 @@ func addProjectAliases(p *Project, aliases []string, taken map[string]bool) {
 	}
 }
 
+// PruneProjectAliases takes off each live project the aliases the rules above would not let it collect, for the
+// knowledge bases that collected them before the rules (#34: 90-145 aliases on each active project after a week):
+// another live project's name or slug (a name beats an alias in FindProject, so the alias never finds this project
+// and only tells the models the two are one), its own name, a repeat, one too generic, and those past the first
+// maxProjectAliases. The names of projects merged into it stay and do not count: their mentions should find it. An
+// alias two live projects share stays on both (whose it is cannot be told), and so do aliases set by hand (locked).
+// Returns how many aliases went.
+func (e *Engine) PruneProjectAliases() int {
+	projects := e.Store.Projects()
+	owners := map[string][]string{}          // a live project's normalized name or slug → the projects going by it
+	mergedIn := map[string]map[string]bool{} // slug → normalized names of the projects merged into it
+	for _, p := range projects {
+		if p.Live() {
+			for _, n := range []string{normName(p.Name), normName(p.Slug)} {
+				if n != "" && !slices.Contains(owners[n], p.Slug) {
+					owners[n] = append(owners[n], p.Slug)
+				}
+			}
+		} else if p.MergedInto != "" {
+			if mergedIn[p.MergedInto] == nil {
+				mergedIn[p.MergedInto] = map[string]bool{}
+			}
+			mergedIn[p.MergedInto][normName(p.Name)] = true
+		}
+	}
+	removed := 0
+	for _, p := range projects {
+		if !p.Live() || len(p.Aliases) == 0 || p.fieldLocked("aliases") {
+			continue
+		}
+		own, seen, counted := normName(p.Name), map[string]bool{}, 0
+		var kept []string
+		for _, a := range p.Aliases {
+			n := normName(a)
+			other := slices.ContainsFunc(owners[n], func(s string) bool { return s != p.Slug })
+			if n == "" || n == own || seen[n] || other {
+				continue
+			}
+			seen[n] = true
+			if !mergedIn[p.Slug][n] {
+				if tooGenericAlias(n) || counted >= maxProjectAliases {
+					continue
+				}
+				counted++
+			}
+			kept = append(kept, a)
+		}
+		if len(kept) == len(p.Aliases) {
+			continue
+		}
+		n := len(p.Aliases) - len(kept)
+		p.Aliases = kept
+		// Not PutProject: tidying its aliases is not news, so Updated (recency in lists and in FindProject) stays.
+		if err := e.Store.putEntity(KindProject, p.Slug, p, &p.Tagging, false); err != nil {
+			e.logf("prune aliases of %s: %v", p.Slug, err)
+			continue
+		}
+		removed += n
+	}
+	return removed
+}
+
 // knownProjects are the projects the models may name: not done or ignored.
 func (e *Engine) knownProjects() []prompts.KnownProject {
 	var out []prompts.KnownProject

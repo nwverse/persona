@@ -1258,6 +1258,11 @@ DEBUG 的代码可能在 `Persona.debug.dylib` 中，40 KiB 的 `Persona` 只是
 - **Don't middle-truncate a line that ends in numbers**: the Agents row's 「后台 workflow「parity-audit」 · Verify 2/2 · 169/185+」 cut in the middle read 「…9/185+」, a wrong count. Cut only the name (`WorkflowLine`: name and details as two texts, the details laid out first).
 - **The mock's times are fixed when it starts**: `mock_hub.py`'s `ago()` counts from its start, so an ended run (`ended_at` 40 minutes "ago") leaves the chat's header once the mock has run for 20 minutes, and `testCrowdedWorkflowsLeaveRoomForTheChat` failed on "the stopped one's error is missing". Start the mock afresh for each run of the workflow UI tests; `-collect-test-diagnostics never` also saved about ten minutes per `xcodebuild test` after the tests had passed.
 
+## An icon-only themed button takes its glyph's size (2026-11-07, #58)
+
+- On iOS, `.themedButton()` (glass, bordered and soft alike) sizes a button by its label. With a bare `Image`, each button is as big as its glyph: `ellipsis` is only a few points tall, so at the default text size the VNC page's More came out as a 37 × 19 pt sliver beside a 48 × 38 pt Close, and Help (`questionmark.circle`) was smaller too.
+- Give every icon-only button in a row the same square label: `Theme.Size.icon` through `scaledFrame` (`VNCPage.barIcon`). Comparing the buttons' frames in a UI test catches it (`VNCTests.testTopBarButtonsKeepTheirShape`); a glance at one button does not.
+
 ## An open chat cannot trust its subscription alone (2026-11-07, #72)
 
 - **What went wrong**: `AgentSync` left every subscribed session to its subscription. When the hub stopped pushing a session's `items` (a node whose transcript watch had ended), the open chat never showed the new message or reply, and the session's working status lit up the previous turn's work line, so the new turn's work read as more tools of the message before it. Reopening the chat showed everything in the right turns.
