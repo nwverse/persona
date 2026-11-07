@@ -171,7 +171,7 @@ function AssistantSettingsForManager({ manager, bare }: { manager: string; bare?
         <a href={BASE + settingsHref("model-config", "agent.new", false, manager)} className="flex items-center justify-between px-4 py-3 text-[13px] text-ink hover:bg-hover">
           <span>{t("settings-assistantsettings.task_models")}</span><Icon name="chevronRight" size={12} className="text-ink-3" />
         </a>
-        <a href={BASE + settingsHref("model-config", "assistant.launcher", false, manager)} className="flex items-center justify-between px-4 py-3 text-[13px] text-ink hover:bg-hover">
+        <a href={BASE + settingsHref("model-config", "assistant", false, manager)} className="flex items-center justify-between px-4 py-3 text-[13px] text-ink hover:bg-hover">
           <span>{t("settings-assistantsettings.main_chat_model")}</span><Icon name="chevronRight" size={12} className="text-ink-3" />
         </a>
       </Group>
