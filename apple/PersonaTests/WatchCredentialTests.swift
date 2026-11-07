@@ -43,7 +43,26 @@ import Testing
     @Test func theMessageReadsBothWays() throws {
         let old = try JSONDecoder().decode(WatchConfigs.self, from: Data(#"{"configs":{},"names":{}}"#.utf8))
         #expect(old.missing == nil)
+        #expect(old.deviceIDs == nil)
         let all = WatchConfigs(configs: [:], names: ["": "hub"], missing: [""])
         #expect(try JSONDecoder().decode(WatchConfigs.self, from: JSONEncoder().encode(all)) == all)
+    }
+
+    @Test func complicationExportContainsOnlyTheWatchsOwnGroupsAndIds() throws {
+        let (configs, _) = Self.registry.watchCredentials()
+        let all = WatchConfigs(configs: configs, names: ["": "Example", "g2": "Unavailable"],
+                               deviceIDs: ["": "watch-device", "g2": "must-not-export"])
+        let exported = ExtensionSurfaceSync.export(all.configs, names: all.names, devices: all.deviceIDs ?? [:])
+        #expect(Set(exported.keys) == [""])
+        #expect(exported[""]?.token == "watch-a")
+        #expect(exported[""]?.deviceID == "watch-device")
+        let phoneTokens = Set(Self.registry.hubs.map(\.config.token))
+        #expect(exported.values.allSatisfy { !phoneTokens.contains($0.token) })
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = ExtensionSurfaceStore(root: root)
+        try store.replaceCredentials(exported)
+        try store.replaceCredentials(ExtensionSurfaceSync.export([:], names: all.names, devices: all.deviceIDs ?? [:]))
+        #expect(store.read().groups.isEmpty)
     }
 }

@@ -54,7 +54,10 @@ extension AppModel {
             for g in registry.groups {
                 guard let primary = registry.primary(g), primary.watch?.url != primary.config.url,
                       let t = try? await APIClient(config: primary.config).createToken(name: "Apple Watch", kind: "watch") else { continue }
-                updateHub(primary.id) { $0.watch = ServerConfig(url: primary.config.url, token: t.token) }
+                updateHub(primary.id) {
+                    $0.watch = ServerConfig(url: primary.config.url, token: t.token)
+                    $0.watchDeviceID = t.id
+                }
             }
         }
         #endif

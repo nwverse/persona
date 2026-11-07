@@ -2,6 +2,12 @@
 
 Pitfalls, odd behavior and the decisions made at the time (formerly "Lessons" in `CLAUDE.md`; index in `docs/lessons/README.md`). Add new lessons to the relevant section, or create one if none fits.
 
+## System extension credentials and compiler-free acceptance (#1147)
+
+A widget's App Group snapshot must not reuse Fleet's appearance store: it contains credentials, needs first-unlock protection and must clear removed groups. Serialize cross-process atomic writes and fence late render replies by pairing generation plus invalidation revision. Namespace caches and entity/deep-link identities by hub group; identical contribution ids on different hubs are not interchangeable. Export watch-only configs into a separate wrist App Group, never fall back to phone credentials, and preserve empty WidgetCenter reports as full replacement.
+
+`IntentParameterDependency` exposes an `IntentProjection`: its dynamic-member subscript returns `Value.UnwrappedType`. For an optional entity parameter, use `intent?.action.id`, not `intent?.action?.id`. The SDK interface can establish this type signature without building; it does not establish that the full target compiles. Runtime manifests cannot generate new App Intent parameters. Keep optional static fields and a validated JSON escape hatch, with the Swift 6.4 snippet boundary intact. New complication identities and watch App Group signing need explicit account setup and paired-device acceptance. While builds are paused, report source/static checks separately from unexecuted Swift tests, metadata, screenshots and device/APNs acceptance.
+
 ## Retained chat visibility (#739)
 
 A shell can keep a chat mounted after switching tabs: `onDisappear` alone does not release its transcript subscription or visible/read owner. Use paired `onTabVisibility` edges on iPhone as well as Mac, keep the store and scroll state, and resume with `since_seq` on return. This pauses client display traffic, not the Agent's work on the hub. Test hidden initial mounts, duplicate visibility notifications, shared subscription owners and returning after missed items. Linux source checks cannot establish SwiftUI frame times; compile, profile both directions and inspect light/dark simulator screenshots on a Mac before publishing the Apple build.
@@ -904,6 +910,13 @@ Formulas / diagrams (`MarkdownRenderer`, `docs/apple/ios.md` ("Formulas and diag
   - Preencoded values use `percentEncodedFragment` / `percentEncodedQuery`; raw values use `fragment` / `queryItems`, never both.
   - Leave only RFC 3986 unreserved `A–Z a–z 0–9 - . _ ~`; encode + (URLSearchParams reads raw + as space).
   - Test real-shaped `jd_…` tokens, decoding exactly as the page does and comparing.
+
+## Extension system-surface identities and test boundaries (2026-11-08, #1147)
+
+- Use a canonical encoding for AppEntity identities shared by the app, WidgetKit and Shortcuts. JSON is reversible, but its default encoder does not promise key order; set `sortedKeys` so another process/restart reconstructs exactly the same identifier.
+- Public hub health can omit `features` even with Authorization. Absence is unknown, not an old hub: read authenticated `hello` before querying a system catalog. An explicit unsupported capability must not issue that catalog request.
+- A DEBUG snapshot or unit host must not read/write the developer's real system-surface App Group credentials. Mac snapshots use their private temporary directory; unit hosts disable the default store and inject an explicit test store instead.
+- WidgetKit does not guarantee a callback when the last widget is removed. Reconcile the complete configuration list on foreground entry, timeline generation and widget background wakes; retain the previous report on enumeration failure, and clear it with an explicit empty replacement when enumeration succeeds.
 
 ## All background Intent parameters are optional (2026-11-04, #1144)
 

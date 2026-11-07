@@ -367,6 +367,7 @@ final class AppModel {
     /// Saves the registry, unless it could not be read: writing then would replace the real one (or delete it, empty).
     func saveRegistry(_ r: HubRegistry) {
         HubStore.save(r, known: !registryUnreadable)
+        syncExtensionSurfaces()
     }
 
     /// The keychain could not be read at launch: try again (the app came to the front, the phone was unlocked), and
@@ -417,6 +418,7 @@ final class AppModel {
         if link(hubGroup) == nil, let first = links.first { hubGroup = first.group }
         applyPersonaPalette()
         relabelMachines()
+        syncExtensionSurfaces()
     }
 
 
@@ -516,6 +518,7 @@ final class AppModel {
             r.hubs[i].deviceID = nil
             r.hubs[i].tradedPairing = nil
             r.hubs[i].watch = nil
+            r.hubs[i].watchDeviceID = nil
             if let ssh { r.hubs[i].ssh = ssh }
             group = r.hubs[i].group
             tunnels.adopt(SSHTunnels.pairingID, as: r.hubs[i].id)
@@ -1592,6 +1595,9 @@ final class AppModel {
             if isHub { ExtensionSlots.shared.received(plugin: plugin, id: id, badge: badge) }
         case .extensionInvalidate(let ext, let id):
             ExtensionUIRegistry.shared.invalidate(extension: ext, ui: id, group: group)
+            #if os(iOS)
+            ExtensionWidgetReconciliation.invalidate(group: group, owner: ext, contribution: id)
+            #endif
         case .items(let key, let items, let backlog, let hasMore, let span, let moreAfter):
             if backlog { connection.caughtUp(Self.catchUpPart(key)) }
             let store = chat(key)

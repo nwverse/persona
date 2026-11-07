@@ -382,7 +382,10 @@ extension AppModel {
     func watchConfigs() -> WatchConfigs {
         let (configs, missing) = registry.watchCredentials()
         return WatchConfigs(configs: configs, names: Dictionary(uniqueKeysWithValues: registry.groups.map { ($0, groupName($0)) }),
-                            missing: missing)
+                            missing: missing,
+                            deviceIDs: Dictionary(uniqueKeysWithValues: configs.keys.compactMap { group in
+                                registry.primary(group)?.watchDeviceID.map { (group, $0) }
+                            }))
     }
 
     func pushWatchConfigs() {
