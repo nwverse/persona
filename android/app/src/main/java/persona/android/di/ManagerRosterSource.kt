@@ -22,12 +22,15 @@ import javax.inject.Singleton
 /**
  * The selected hub's roster of managers for the whole app (docs/assistant/managers.md step 4): read when the hub comes online
  * and on its `managers` pushes, given to the pages as `LocalManagerRoster`. It also keeps the assistant page's
- * [AssistantManagerChoice] on this hub: another hub starts on its default, and a manager that went away (deleted, the
- * default moved) falls back to the default.
+ * [AssistantManagerChoice] on this hub: each hub restores its own choice across launches, and a manager that went away
+ * falls back to the default after a successful roster read.
  */
 @Singleton
 class ManagerRosterSource @Inject constructor(application: Application, private val managers: HubManagers, stacks: GroupStacks) {
     private val app = application as PersonaApp
+    private val selection = AssistantSelectionPreferences(
+        application.getSharedPreferences(AssistantSelectionPreferences.FILE, Application.MODE_PRIVATE),
+    )
     private val mutable = MutableStateFlow<ManagerRoster?>(null)
     val roster: StateFlow<ManagerRoster?> = mutable.asStateFlow()
     /** The group whose hub the roster is (null: the primary): its computers are the ones Move to… may give. */
@@ -40,12 +43,15 @@ class ManagerRosterSource @Inject constructor(application: Application, private 
     fun start() {
         if (!started.compareAndSet(false, true)) return
         app.scope.launch {
+            AssistantManagerChoice.current.collect { selection.remember(it) }
+        }
+        app.scope.launch {
             var lastHub: String? = null
             app.hub.collectLatest { hub ->
                 mutable.value = null
                 val hubId = hub?.connection?.http?.hubId
                 // Under this hub before anything lists: what its lists note before the roster lands is found by its requests.
-                AssistantManagerChoice.atHub(hubId)
+                selection.atHub(hubId)
                 // What another hub's lists showed is not this one's (the first one's are kept: they may be read already).
                 if (hubId != lastHub) { if (lastHub != null) AssistantManagerChoice.forgetItems(); lastHub = hubId }
                 if (hub == null) return@collectLatest
@@ -62,8 +68,7 @@ class ManagerRosterSource @Inject constructor(application: Application, private 
     }
 
     private fun keepChoice(hubId: String?, roster: ManagerRoster) {
-        val chosen = AssistantManagerChoice.current.value.manager?.takeIf { id -> roster.isMulti && roster.installed.any { it.id == id } }
-        AssistantManagerChoice.choose(hubId, chosen, roster.defaultManagerId)
+        selection.reconcile(hubId, roster)
     }
 
 }

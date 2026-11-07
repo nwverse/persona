@@ -65,7 +65,12 @@ var rolloutCaches = struct {
 
 var rolloutIDRe = regexp.MustCompile(`([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})\.jsonl$`)
 
-func (n *Node) codexHome() string { return filepath.Join(n.home, ".codex") }
+func (n *Node) codexHome() string {
+	if n.sessionScope != nil {
+		return n.sessionScope.codex
+	}
+	return filepath.Join(n.home, ".codex")
+}
 
 func (n *Node) codexPath(id string) string {
 	if s, ok := n.codexSource(id); ok {

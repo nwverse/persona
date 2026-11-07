@@ -1,0 +1,57 @@
+package persona.android.di
+
+import kotlinx.coroutines.runBlocking
+import org.junit.Assert.*
+import org.junit.Test
+import persona.core.contracts.SessionKey
+import persona.core.contracts.api.*
+
+class AssistantManagementGroupScopeTest {
+    private class Management(
+        private val calls: MutableList<String>,
+        private val manager: String = "unbound",
+    ) : AssistantManagement {
+        override fun forManager(manager: String?) = Management(calls, manager ?: "default")
+        override suspend fun warm() { calls += "$manager warm" }
+        override suspend fun config() = AssistantConfig(machineId = "pro").also { calls += "$manager config" }
+        override suspend fun updateConfig(update: AssistantConfigUpdate) =
+            AssistantConfig(machineId = requireNotNull(update.machineId)).also { calls += "$manager update ${update.machineId}" }
+        override suspend fun endConversation(session: SessionKey) { calls += "$manager close ${session.machineId}/${session.sessionId}" }
+        override suspend fun runTask(id: String) = SessionKey("pro", id).also { calls += "$manager run $id" }
+        override suspend fun tasks() = emptyList<ScheduledTask>()
+        override suspend fun saveTask(task: ScheduledTask) = task
+        override suspend fun deleteTask(id: String) = error("unused")
+        override suspend fun freshTask(id: String) = error("unused")
+        override suspend fun runs() = emptyList<Run>()
+        override suspend fun notes() = AssistantNotes()
+        override suspend fun setNotes(text: String) = error("unused")
+        override suspend fun memory() = emptyList<MemoryFile>()
+        override suspend fun saveMemory(name: String, content: String) = error("unused")
+        override suspend fun deleteMemory(name: String) = error("unused")
+    }
+
+    @Test fun bindingManagerPreservesGroupInputAndOutputTranslationAndLeavesOriginalUnbound() = runBlocking {
+        val calls = mutableListOf<String>()
+        val grouped = Management(calls).inGroup(GroupNames("g0a1b2c3d"))
+        val work = grouped.forManager("work")
+        assertEquals("pro~g0a1b2c3d", work.config().machineId)
+        assertEquals("pro~g0a1b2c3d", work.updateConfig(AssistantConfigUpdate(machineId = "pro~g0a1b2c3d")).machineId)
+        work.endConversation(SessionKey("pro~g0a1b2c3d", "main"))
+        assertEquals(SessionKey("pro~g0a1b2c3d", "task"), work.runTask("task"))
+        grouped.warm()
+        assertEquals(listOf("work config", "work update pro", "work close pro/main", "work run task", "unbound warm"), calls)
+    }
+
+    @Test fun rebindingDefaultPreservesGroupAndPrimaryGroupRemainsIdentity() = runBlocking {
+        val calls = mutableListOf<String>()
+        val source = Management(calls)
+        assertSame(source, source.inGroup(GroupNames(null)))
+        val grouped = source.inGroup(GroupNames("g0a1b2c3d"))
+        val work = grouped.forManager("work")
+        val default = work.forManager(null)
+        assertEquals("pro~g0a1b2c3d", default.config().machineId)
+        work.warm()
+        default.warm()
+        assertEquals(listOf("default config", "work warm", "default warm"), calls)
+    }
+}

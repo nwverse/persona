@@ -185,10 +185,6 @@ func (h *Hub) entryOwner(mid string) string {
 	d := &h.devices
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	o := d.assign[mid]
-	if o == "" {
-		return devicesOwner
-	}
 	entries := d.entries // as cfgEntries reads them
 	if !d.started && h.cfg != nil {
 		entries = h.cfg.Machines
@@ -196,7 +192,23 @@ func (h *Hub) entryOwner(mid string) string {
 	if !slices.ContainsFunc(entries, func(mc MachineConfig) bool { return mc.ID == mid }) {
 		return devicesOwner
 	}
-	return o
+	required := false
+	for _, mc := range entries {
+		if mc.ID == mid {
+			required = mc.OwnerRequired
+			break
+		}
+	}
+	if required && d.assignFailed {
+		return unknownMachineOwner
+	}
+	if o := d.assign[mid]; o != "" {
+		return o
+	}
+	if required {
+		return unknownMachineOwner
+	}
+	return devicesOwner
 }
 
 // sessionOwner is the manager session sid on machine mid belongs to: its machine's (a manager's own conversation runs
@@ -622,6 +634,9 @@ func (c *busConn) managerID() string {
 // machineOwnersKey keeps which of hub.json's machines another manager than the carrier carries: {machine: manager}.
 const machineOwnersKey = "managers.machines"
 
+// Not a valid roster ID: failed ownership reads must never select a manager.
+const unknownMachineOwner = "!ownership-unavailable"
+
 var (
 	errNotMovable  = errors.New("only a computer of this hub's own list can move to another manager")
 	errMoveOffline = errors.New("the manager is not connected")
@@ -680,12 +695,16 @@ func (h *Hub) removingManager(remove func() error) error {
 }
 
 // loadMachineOwners reads machineOwnersKey (a hub that starts, before any manager connects). An error leaves assign
-// unread: the machines go to the carrier meanwhile, and the next move reads it again before it writes (moveMachine).
+// unread: dedicated local machines are withheld until a successful retry; legacy
+// machines keep their existing assignments and carrier fallback.
 func (h *Hub) loadMachineOwners(ctx context.Context) error {
 	var m map[string]string
 	if s := h.managerStore(); s != nil {
 		if _, err := s.Setting(ctx, machineOwnersKey, &m); err != nil {
 			h.logf("managers: which manager carries which machine: %v", err)
+			h.devices.mu.Lock()
+			h.devices.assignRead, h.devices.assignFailed = false, true
+			h.devices.mu.Unlock()
 			return err
 		}
 	}
@@ -707,7 +726,7 @@ func (h *Hub) loadMachineOwners(ctx context.Context) error {
 	}
 	d := &h.devices
 	d.mu.Lock()
-	d.assign, d.assignRead = kept, true
+	d.assign, d.assignRead, d.assignFailed = kept, true, false
 	d.mu.Unlock()
 	return nil
 }
@@ -735,6 +754,9 @@ func (h *Hub) moveMachine(ctx context.Context, mid, to string) (from string, err
 // moveMachineMoving is moveMachine with d.moving held.
 func (h *Hub) moveMachineMoving(ctx context.Context, mid, to string) (from string, err error) {
 	d := &h.devices
+	if mc := h.cfgEntry(mid); mc != nil && mc.OwnerRequired && to == devicesOwner {
+		return h.entryOwner(mid), errors.New("a dedicated local machine requires an explicit non-carrier manager")
+	}
 	if err := h.readOwnersMoving(ctx); err != nil {
 		return h.machineOwner(mid), err
 	}
@@ -830,6 +852,12 @@ func (h *Hub) releaseMachines(ctx context.Context, id string) {
 	}
 	d.mu.Unlock()
 	for _, mid := range mine {
+		if mc := h.cfgEntry(mid); mc != nil && mc.OwnerRequired {
+			if err := h.releaseDedicatedMachineMoving(ctx, mid); err != nil {
+				h.logf("managers: [%s] release dedicated owner: %v", mid, err)
+			}
+			continue
+		}
 		if _, err := h.moveMachineMoving(ctx, mid, devicesOwner); err != nil {
 			h.logf("managers: [%s] back to %s: %v", mid, devicesOwner, err)
 		}

@@ -30,7 +30,12 @@ import (
 
 const traexAgent = "traex"
 
-func (n *Node) traexHome() string { return filepath.Join(n.home, ".trae", "cli") }
+func (n *Node) traexHome() string {
+	if n.sessionScope != nil {
+		return filepath.Join(n.dir, "traex")
+	}
+	return filepath.Join(n.home, ".trae", "cli")
+}
 
 func (n *Node) traexPath(id string) string  { return rolloutPath(n.traexHome(), id) }
 func (n *Node) traexTitle(id string) string { return threadTitle(n.traexHome(), id) }

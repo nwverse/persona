@@ -79,7 +79,7 @@ func (n *Node) usageFiles(cutoff time.Time) []string {
 	}
 	out := paths[:0]
 	for _, p := range paths {
-		if st, err := os.Stat(p); err == nil && st.ModTime().After(cutoff) {
+		if st, err := os.Stat(p); err == nil && st.ModTime().After(cutoff) && n.scopedTranscriptAllows(p) {
 			out = append(out, p)
 		}
 	}

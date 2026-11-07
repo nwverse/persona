@@ -191,7 +191,7 @@ internal fun Session.conversationStatus(): Status = when (agentState) {
  * the default's queue or another manager's; if it cannot be found the call fails and the words stay in the composer.
  */
 internal suspend fun managerMainTarget(manager: String, snapshot: AssistantSnapshot, resolve: suspend (String) -> SessionKey): SessionKey =
-    snapshot.mainSession?.takeIf { snapshot.manager == manager } ?: resolve(manager)
+    snapshot.mainSession?.takeIf { snapshot.managerId == manager } ?: resolve(manager)
 
 /** Null targets always enter the durable main queue before any network request. */
 internal suspend fun sendAssistantMessage(

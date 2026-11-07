@@ -160,15 +160,24 @@ func (c *codexConn) turn() string {
 // thread exists) with a timeout long enough for ask_user, nothing else; sandbox and approvals go with each thread
 // and turn.
 func codexArgs(bin, key string, windows ...int) []string {
+	return codexArgsForHome(bin, key, "", windows...)
+}
+
+func codexArgsForHome(bin, key, home string, windows ...int) []string {
 	window := fmt.Sprint(assistantCompactWindow)
 	if len(windows) > 0 {
 		window = fmt.Sprint(windows[0])
 	}
 	q := func(s string) string { b, _ := json.Marshal(s); return string(b) } // a JSON string is a TOML basic string
+	mcpEnv := "{PERSONA_ASSISTANT=" + q("1") + ",PERSONA_SESSION_ID=" + q(key)
+	if home != "" {
+		mcpEnv += ",PERSONA_HOME=" + q(home)
+	}
+	mcpEnv += "}"
 	return compat.CodexMCPAliases([]string{
 		"-c", "mcp_servers.persona.command=" + q(bin),
 		"-c", `mcp_servers.persona.args=["mcp"]`,
-		"-c", fmt.Sprintf("mcp_servers.persona.env={PERSONA_ASSISTANT=%s,PERSONA_SESSION_ID=%s}", q("1"), q(key)),
+		"-c", "mcp_servers.persona.env=" + mcpEnv,
 		"-c", fmt.Sprintf("mcp_servers.persona.tool_timeout_sec=%d", codexToolTimeout),
 		"-c", "mcp_servers.persona.startup_timeout_sec=30",
 		// Commands get the process's environment like Claude's Bash does: the default excludes (*KEY*, *TOKEN*…)
@@ -209,7 +218,7 @@ func (n *Node) spawnCodex(id, cwd, launcher string, resume, spare bool, options 
 		return nil, err
 	}
 	compaction := n.assistantCompactionPolicy(launcher, cwd, "", execution)
-	cmd := exec.Command(shell, append([]string{"-ic", codexShell(n.launcherCommand(launcher)), "persona"}, codexArgs(n.bin, key, compaction.window)...)...)
+	cmd := exec.Command(shell, append([]string{"-ic", codexShell(n.launcherCommand(launcher)), "persona"}, codexArgsForHome(n.bin, key, n.dir, compaction.window)...)...)
 	cmd.Dir = root
 	cmd.Env = identity.Environment(os.Environ(), "PERSONA_ASSISTANT=1")
 	gateEnv, releaseGates, nameGates := n.assistantLarkEnvNamed(cwd, id) // its addresses at the gate proxy go with the process

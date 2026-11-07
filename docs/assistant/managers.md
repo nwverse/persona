@@ -72,6 +72,36 @@ Each manager's configuration is its own `manager.json` (`docs/operations/config.
 
 A manager made in the app installs and runs on its own: its own id, directory and database; it connects to the hub, shows in the roster and is online. Its assistant page, conversations and the other assistant endpoints reach it through `X-Persona-Manager: <id>` (or `?manager=<id>`, see "Ownership" above). It may report everything the hub already keeps per manager: computers (`devices.*`), pending cards (`fleet.interaction(s)`, `fleet.interaction_resolved`) and messages for the apps (`ws.broadcast`); it may also call `device.call` and `app.call`. Its snapshot, tools, extensions' report and Live Activity are kept as its own too (below, "What the hub keeps of each manager"); every bus method and event is open to every manager. **It acts only on the computers moved to it**: until one is, it can run nothing on any computer (no Agent, no conversation of its own; `devices.list` lists no computer). Moving a computer or a source to it is in "Moving a machine or a source" below.
 
+### Registering a dedicated local computer
+
+An authenticated administrator can create a local computer for an installed manager in one request to `POST /api/v1/admin/machines`:
+
+```json
+{
+  "kind": "local",
+  "id": "work-local",
+  "name": "Work computer",
+  "manager": "m-abcdef",
+  "config": {
+    "codex_discovery": false,
+    "codex_homes": ["/srv/persona/work/codex"],
+    "claude_config_dirs": ["/srv/persona/work/claude"],
+    "claude_global_hooks": false,
+    "botmux": false,
+    "herdr_autostart": false,
+    "usage_windows": false
+  }
+}
+```
+
+`manager` must identify a registered, installed manager other than `assistant`; an offline installed manager may be prepared before connecting. `config` contains the computer's configuration fields; the outer `id`, `name`, `kind` and `icon` determine its identity. These two fields are accepted only for local computers. Ordinary device pairing remains limited to link computers and retains its trust checks.
+
+The hub saves the complete owner map before writing or publishing the new entry. Failed owner persistence publishes nothing; failed configuration persistence attempts to restore the previous owner map. If that rollback also fails, the safe reservation remains and ordinary registration with the same ID is rejected; retry dedicated registration or choose another ID. The entry carries `owner_required: true`, so a missing owner record or a failed ownership read withholds it from every manager, including after a restart. Dedicated computers are withheld while an ownership read has failed; a successful ownership retry restores their assignments. Existing computers keep their cached assignments and normal carrier fallback during such a failure. A dedicated local computer cannot be moved to `assistant`; it can be moved to another explicit manager. Existing computers without the marker retain their normal carrier fallback. Removing its manager leaves the dedicated computer unassigned until it is explicitly assigned to another manager.
+
+Prepare and verify the manager's isolated runtime and node build before registering the local computer: publication immediately allows that manager to start its local node. Creating an ordinary local entry first and assigning it afterwards is unsafe because the carrier can start it between those steps. This registration does not move or reconfigure an existing computer.
+
+If validation fails, stop only the dedicated manager and retain its database and profiles. Do not restart it on a build without session isolation while its local entry is still dispatched. Before rolling the hub back to a build without `owner_required`, remove the dedicated entry through the admin endpoint and apply its required restart in the release lane; verify it is absent from every manager's configuration. Older hubs do not enforce the new marker. Removing the entry from disk alone does not withdraw the live configuration.
+
 ### Directory and manager.json
 
 - The default directory is `managers/<id>` in this computer's data directory (`~/.persona/managers/<id>`); `--dir` picks another. The directory is 0700 and its `manager.json` 0600:

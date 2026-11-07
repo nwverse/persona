@@ -228,6 +228,7 @@ internal fun AssistantManagement.inGroup(names: GroupNames): AssistantManagement
     if (names.plain) return this
     val source = this
     return object : AssistantManagement {
+        override fun forManager(manager: String?) = source.forManager(manager).inGroup(names)
         override suspend fun warm() = source.warm()
         // The hub's plain machine ids, as the merged lists name them.
         override suspend fun readiness(probe: Boolean) = source.readiness(probe).let { r ->
@@ -280,7 +281,7 @@ internal fun AssistantConversations.inGroup(names: GroupNames, scope: CoroutineS
     val source = this
     return object : AssistantConversations {
         override val assistant = source.assistant.mapIn(scope) { snapshot ->
-            AssistantSnapshot(snapshot.mainSession?.let(names::key), snapshot.conversations.map(names::session), snapshot.manager)
+            AssistantSnapshot(snapshot.mainSession?.let(names::key), snapshot.conversations.map(names::session), snapshot.manager, snapshot.managerId)
         }
         override val pinned = source.pinned.mapIn(scope) { keys -> keys.mapTo(LinkedHashSet(), names::key) }
         override suspend fun refresh() = source.refresh()

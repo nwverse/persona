@@ -104,6 +104,16 @@ func mcpHasRequired(p string, requires []string) bool {
 	return ok
 }
 
+// assistantMCPEnv pins Persona's socket root for MCP clients that sanitize the
+// parent environment. The process key still resolves to this node's conversation.
+func assistantMCPEnv(id, home string) map[string]string {
+	env := map[string]string{"PERSONA_ASSISTANT": "1", "PERSONA_SESSION_ID": id}
+	if home != "" {
+		env["PERSONA_HOME"] = home
+	}
+	return env
+}
+
 // assistantMCPServers are the mcpServers entries of the servers in cfg whose command is on this machine, by id, and
 // what they allow and deny as tool rules (mcp__<id>__<tool>). The persona server's own name is never taken.
 func assistantMCPServers(cfg []proto.AssistantMCPServer) (servers map[string]any, allow, deny []string) {

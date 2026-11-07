@@ -432,6 +432,41 @@ A manager's own sections of the configuration are in its `manager.json`, not in 
 
 <a id="ddnspublicddns"></a>
 
+## A dedicated assistant node on an existing computer
+
+Register a separate `kind: local` machine with its manager through the atomic admin endpoint described in
+`docs/assistant/managers.md` ("Registering a dedicated local computer"). Keep the existing computer's ownership and
+runtime unchanged. Do not create a carrier-owned local entry and move it afterwards.
+
+A second node opts into session discovery isolation with four absolute paths:
+
+```sh
+PERSONA_HOME=/absolute/manager-state
+PERSONA_NODE_SESSION_DIR=/absolute/manager-state/assistant-m-abcdef
+CLAUDE_CONFIG_DIR=/absolute/manager-state/claude
+CODEX_HOME=/absolute/manager-state/codex
+```
+
+Set these on the dedicated manager service so its local stdio node and agent subprocesses inherit them. The assistant,
+Claude and Codex directories must be distinct, non-overlapping descendants of the independent state root. Missing paths,
+relative paths and symlink escapes are rejected. With this scope, the node discovers only the private profiles and
+sessions whose actual working directory is inside the assistant directory; process, remote and terminal-host discovery
+cannot add other profiles. Global hook configuration does not install or remove hooks. Built-in Persona MCP servers
+explicitly carry the node's state root, including when the agent runtime filters inherited environment variables.
+
+`manager.json` has no `assistant.dir` setting. The manager derives its assistant directory from the node's reported
+`data_dir` and `identity.AssistantDirName(managerID)`. Verify that reported `cwd` and each new session's actual `cwd`
+resolve to `PERSONA_NODE_SESSION_DIR`; do not rely on an ignored JSON field. An internal symlink to
+`<state root>/.persona/assistant-m-abcdef` can retain assistant-directory recognition by older nodes on the same
+computer. Both the link and target must stay inside the independent root. Verify the existing node does not list the
+new session after the first turn, including aliases under another agent profile.
+
+This scope isolates discovery and Persona state, not operating-system permissions. Prepare only the required provider
+configuration and credentials in the private profiles; do not copy existing histories or unrelated credentials. Before
+activation, verify the installed binary's version, checksum and `personad manager capabilities --json`, the four service
+environment values, durable ownership and the actual derived directory. After activation, verify a reply and a harmless
+Persona tool call through the dedicated node, then switch between both assistants and inspect both histories.
+
 ## DDNS (public.ddns)
 
 Use a fixed domain to find the hub after reconnecting changes its IPv6 prefix (`docs/operations/network.md`). Omit `public.ddns` to leave it disabled.

@@ -124,7 +124,7 @@ func TestManagerInstallScriptDownloadsPersonad(t *testing.T) {
 	}
 	var gz bytes.Buffer
 	zw := gzip.NewWriter(&gz)
-	_, _ = zw.Write([]byte("#!/bin/sh\necho \"personad $*\" >> \"$HOME/calls\"\n"))
+	_, _ = zw.Write([]byte(compatibleManagerBinary + "echo \"personad $*\" >> \"$HOME/calls\"\n"))
 	_ = zw.Close()
 	sum := sha256.Sum256(gz.Bytes())
 	dl := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -184,7 +184,7 @@ func TestManagerInstallScriptPutsTheNodeBackOnPersonad(t *testing.T) {
 		home := t.TempDir()
 		bin := filepath.Join(home, ".persona", "bin")
 		_ = os.MkdirAll(bin, 0o755)
-		_ = os.WriteFile(filepath.Join(bin, "personad"), []byte("#!/bin/sh\necho \"personad $*\" >> \"$HOME/calls\"\n"), 0o755)
+		_ = os.WriteFile(filepath.Join(bin, "personad"), []byte(compatibleManagerBinary+"echo \"personad $*\" >> \"$HOME/calls\"\n"), 0o755)
 		if tc.link != "" {
 			_ = os.MkdirAll(filepath.Dir(filepath.Join(home, tc.link)), 0o755)
 			_ = os.WriteFile(filepath.Join(home, tc.link), []byte(fakeLink), 0o755)

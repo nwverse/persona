@@ -119,13 +119,17 @@ private class RoutedAssistantManagement(
     private val data: ScopedHubData,
     private val connection: OkHttpHubConnection,
     private val isCurrent: () -> Boolean,
+    private val pinnedManager: String? = null,
 ) : AssistantManagement {
+    override fun forManager(manager: String?): AssistantManagement =
+        RoutedAssistantManagement(data, connection, isCurrent, manager.orEmpty())
+
     private fun api(): AssistantManagement {
         if (!isCurrent()) throw CancellationException("Pairing changed")
         val route = connection.route.value ?: throw HubFailure(HubError.NoNetwork)
         return HttpAssistantManagement(route.endpoint.url, connection.token, connection.http.client) {
             isCurrent() && connection.route.value === route
-        }
+        }.let { api -> if (pinnedManager == null) api else api.forManager(pinnedManager) }
     }
     override suspend fun warm() = api().warm()
     override suspend fun readiness(probe: Boolean) = api().readiness(probe)

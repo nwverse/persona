@@ -11,6 +11,9 @@ import kotlinx.serialization.json.put
 
 /** Pairing-scoped assistant actions; the composition root supplies the active transport. */
 interface AssistantManagement {
+    /** Actions bound to one assistant, even if the page's selection changes; null names the default assistant. */
+    fun forManager(manager: String?): AssistantManagement = this
+
     suspend fun warm()
     /**
      * What the main conversation still needs (GET /api/v1/assistant/readiness, hub feature `assistant_readiness`);

@@ -8,11 +8,14 @@ import persona.core.contracts.SessionKey
 import persona.core.contracts.api.*
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.json.*
+import java.util.logging.Level
+import java.util.logging.Logger
 
 class RealAssistantRepository(
     private val connection: InboxAssistantConnection,
@@ -26,30 +29,59 @@ class RealAssistantRepository(
     private val currentPins = MutableStateFlow<Set<SessionKey>>(emptySet())
     override val pinned = currentPins.asStateFlow()
     private val lock = Mutex()
+    private val creationLock = Mutex()
     private var restoredScope: String? = null
-    /** The manager the page shows (docs/assistant/managers.md step 4): each keeps its own conversations, cached apart. */
-    private fun manager(): String? = AssistantManagerChoice.current.value.manager
-    private fun cacheKey(transport: InboxAssistantTransport, manager: String? = manager()) =
-        "${transport.scope}:assistant" + (manager?.let { "@$it" } ?: "")
-    private suspend fun restore(transport: InboxAssistantTransport) {
-        val key = cacheKey(transport)
-        if (restoredScope == key) return
-        current.value = AssistantSnapshot()
-        currentPins.value = preferences?.preferences?.value?.pins?.sessions?.mapNotNull(::sessionPath)?.toSet().orEmpty()
-        quietly { snapshots.restore<JsonObject>(key)?.let { apply(it) } }
-        restoredScope = key
+    private val cached = mutableMapOf<String, AssistantSnapshot>()
+    private var refreshVersion = 0L
+
+    private data class Request(
+        val transport: InboxAssistantTransport,
+        val choice: AssistantManagerChoice.Choice,
+    ) {
+        val manager get() = choice.manager
+        val owner get() = choice.shown
+        // Preserve the builtin assistant's existing disk snapshot; all other owners have explicit identities.
+        val key get() = "${transport.scope}:assistant" + if (owner == ManagerRoster.ASSISTANT_MANAGER) "" else "@$owner"
     }
-    private fun apply(data: JsonObject, manager: String? = manager()) {
+
+    private fun request(): Request = Request(
+        requireNotNull(connection.current.value) { CoreText.of(Key.PairHubFirst).shown },
+        AssistantManagerChoice.current.value,
+    )
+
+    private fun selected(request: Request): Boolean = connection.current.value === request.transport &&
+        AssistantManagerChoice.current.value == request.choice
+
+    private fun decode(data: JsonObject, request: Request): AssistantSnapshot {
         val machine = data.string("machine_id")
         val main = data.string("main")
         val conversations = data.array("conversations").map { JsonCodec.decodeFromJsonElement<Session>(it) }
-        // Their own requests (feed, stop…) go to this manager whichever the page shows later (HubHttpClient: one
-        // conversation's routes carry no pick of the page). Only a picked manager is noted: the default's need none (the
-        // hub finds a conversation's manager itself), and a default noted before the roster read would be a placeholder.
         (conversations.map { it.sessionId } + main).filter { it.isNotEmpty() }
-            .forEach { AssistantManagerChoice.noteItem(listOf("assistant", "conversations", it), manager) }
-        current.value = AssistantSnapshot(
-            if (machine.isNotEmpty() && main.isNotEmpty()) SessionKey(machine, main) else null, conversations, manager)
+            .forEach { noteConversation(it, request) }
+        return AssistantSnapshot(
+            if (machine.isNotEmpty() && main.isNotEmpty()) SessionKey(machine, main) else null,
+            conversations, request.manager, request.owner,
+        )
+    }
+
+    private fun noteConversation(id: String, request: Request) {
+        AssistantManagerChoice.noteItem(listOf("assistant", "conversations", id), request.choice.shown, request.choice.hubId)
+    }
+
+    private suspend fun restore(request: Request) {
+        if (!selected(request) || restoredScope == request.key) return
+        // The selected page changes before disk or network work, so old conversations cannot stay actionable.
+        restoredScope = request.key
+        current.value = cached[request.key]?.copy(manager = request.manager) ?: AssistantSnapshot(manager = request.manager, managerId = request.owner)
+        currentPins.value = preferences?.preferences?.value?.pins?.sessions?.mapNotNull(::sessionPath)?.toSet().orEmpty()
+        if (request.key !in cached) {
+            val data = snapshots.restore<JsonObject>(request.key)
+            if (data != null && selected(request)) {
+                val snapshot = decode(data, request)
+                cached[request.key] = snapshot
+                current.value = snapshot
+            }
+        }
     }
 
     init {
@@ -59,91 +91,130 @@ class RealAssistantRepository(
             }
         }
         scope.launch {
-            connection.current.collectLatest { transport ->
-                if (transport == null) lock.withLock {
+            var refreshJob: Job? = null
+            combine(connection.current, AssistantManagerChoice.current) { transport, choice ->
+                transport?.let { Request(it, choice) }
+            }.collect { request ->
+                refreshJob?.cancel()
+                if (request == null) lock.withLock {
                     restoredScope = null
                     current.value = AssistantSnapshot()
                     currentPins.value = emptySet()
-                }
-                if (transport != null) {
-                    try { refresh() } catch (e: CancellationException) { throw e } catch (_: Exception) { }
+                } else {
+                    lock.withLock { restore(request) }
+                    refreshJob = launch {
+                        // Refresh errors leave the selected manager's cached page available offline.
+                        try {
+                            refresh(request)
+                        } catch (e: CancellationException) {
+                            throw e
+                        } catch (e: Exception) {
+                            Logger.getLogger(RealAssistantRepository::class.java.name).log(
+                                Level.WARNING, "Assistant refresh failed; retaining cached conversations", e,
+                            )
+                        }
+                    }
                 }
             }
         }
         scope.launch {
             sessions.sessions.collect { updates ->
-                // Another manager's conversations are its page's, not this one's.
-                val choice = AssistantManagerChoice.current.value
-                if (connection.current.value != null) current.update { snapshot ->
-                    val byKey = updates.associateBy { it.key }
-                    snapshot.copy(conversations = (snapshot.conversations.map { byKey[it.key] ?: it } +
-                        updates.filter { it.assistant == true && choice.owns(it.manager) }).distinctBy { it.key })
+                lock.withLock {
+                    val transport = connection.current.value ?: return@withLock
+                    val choice = AssistantManagerChoice.current.value
+                    val request = Request(transport, choice)
+                    if (restoredScope != request.key || current.value.managerId != request.owner) return@withLock
+                    val owned = updates.filter { choice.owns(it.manager) }
+                    val byKey = owned.associateBy { it.key }
+                    current.update { snapshot ->
+                        snapshot.copy(conversations = (snapshot.conversations.map { byKey[it.key] ?: it } +
+                            owned.filter { it.assistant == true }).distinctBy { it.key })
+                    }
+                    cached[request.key] = current.value
                 }
-            }
-        }
-        // Another manager on the page: its own conversations (its cache at once, then the hub's).
-        scope.launch {
-            AssistantManagerChoice.current.map { it.manager }.distinctUntilChanged().drop(1).collect {
-                if (connection.current.value != null) try { refresh() } catch (e: CancellationException) { throw e } catch (_: Exception) { }
             }
         }
     }
 
-    override suspend fun refresh() = lock.withLock {
-        val transport = requireNotNull(connection.current.value) { CoreText.of(Key.PairHubFirst).shown }
-        restore(transport)
-        val manager = manager()
-        val data = transport.assistantOf(manager)
+    override suspend fun refresh() = refresh(request())
+
+    private suspend fun refresh(request: Request) {
+        val version = lock.withLock {
+            if (!selected(request)) return
+            restore(request)
+            ++refreshVersion
+        }
+        // Network calls never hold the page/cache mutex: a slow manager cannot block switching away.
+        val data = request.transport.assistantOf(request.owner)
         val pins = if (preferences != null) preferences.preferences.value.pins.sessions.mapNotNull(::sessionPath).toSet()
-            else transport.pins().array("sessions").mapNotNull { (it as? JsonPrimitive)?.contentOrNull?.let(::sessionPath) }.toSet()
-        if (connection.current.value !== transport || manager() != manager) return@withLock
-        apply(data, manager)
-        snapshots.save(cacheKey(transport, manager), data)
-        currentPins.value = pins
+            else request.transport.pins().array("sessions").mapNotNull { (it as? JsonPrimitive)?.contentOrNull?.let(::sessionPath) }.toSet()
+        lock.withLock {
+            if (!selected(request) || version != refreshVersion) return
+            val snapshot = decode(data, request)
+            cached[request.key] = snapshot
+            current.value = snapshot
+            currentPins.value = pins
+            snapshots.save(request.key, data)
+        }
     }
 
     override suspend fun startConversation(): SessionKey = start(null)
 
     override suspend fun startConversation(launcher: String): SessionKey = start(launcher)
 
-    override suspend fun mainConversationOf(manager: String): SessionKey = lock.withLock {
-        val transport = requireNotNull(connection.current.value) { CoreText.of(Key.PairHubFirst).shown }
-        // Asked of that manager alone (`?manager=`), whatever the page shows meanwhile: never another one's.
-        val config = transport.assistantOf(manager)
-        val machine = config.string("machine_id")
-        val main = config.string("main")
-        if (machine.isNotEmpty() && main.isNotEmpty()) return@withLock SessionKey(machine, main)
-        val session = JsonCodec.decodeFromJsonElement<Session>(transport.createConversationOf(manager, true).getValue("session"))
-        check(connection.current.value === transport) { CoreText.of(Key.ConnectionSwitched).shown }
-        // Still on its page: the new main conversation shows at once.
-        if (manager() == manager) current.update {
-            it.copy(mainSession = session.key, conversations = (listOf(session) + it.conversations).distinctBy { c -> c.key })
+    override suspend fun mainConversationOf(manager: String): SessionKey {
+        val captured = request()
+        val request = captured.copy(choice = captured.choice.copy(
+            manager = manager.takeUnless { it == captured.choice.defaultId },
+        ))
+        return creationLock.withLock {
+            val config = request.transport.assistantOf(manager)
+            check(connection.current.value === request.transport) { CoreText.of(Key.ConnectionSwitched).shown }
+            val machine = config.string("machine_id")
+            val main = config.string("main")
+            if (machine.isNotEmpty() && main.isNotEmpty()) {
+                noteConversation(main, request)
+                return@withLock SessionKey(machine, main)
+            }
+            create(request, true, null, config)
         }
-        session.key
     }
 
-    private suspend fun start(launcher: String?): SessionKey = lock.withLock {
-        val transport = requireNotNull(connection.current.value) { CoreText.of(Key.PairHubFirst).shown }
-        // The manager the page shows as this starts: both requests go to it even if the page moves on meanwhile.
-        val manager = manager()
-        // Refresh the main pointer before deciding whether this is the first conversation.
-        val config = transport.assistantOf(manager)
-        val isMain = config.string("main").isEmpty()
-        val result = transport.createConversationOf(manager, isMain, launcher)
-        val session = JsonCodec.decodeFromJsonElement<Session>(result.getValue("session"))
-        check(connection.current.value === transport) { CoreText.of(Key.ConnectionSwitched).shown }
-        if (manager() != manager) return@withLock session.key
-        current.update {
-            it.copy(mainSession = if (isMain) session.key else it.mainSession,
-                conversations = (listOf(session) + it.conversations).distinctBy { conversation -> conversation.key })
+    private suspend fun start(launcher: String?): SessionKey {
+        // Capture identity before waiting behind another creation.
+        val request = request()
+        return creationLock.withLock {
+            val config = request.transport.assistantOf(request.owner)
+            check(connection.current.value === request.transport) { CoreText.of(Key.ConnectionSwitched).shown }
+            create(request, config.string("main").isEmpty(), launcher, config)
         }
-        snapshots.save(cacheKey(transport, manager), buildJsonObject {
-            put("machine_id", current.value.mainSession?.machineId ?: session.machineId)
-            put("main", current.value.mainSession?.sessionId.orEmpty())
-            put("conversations", JsonArray(current.value.conversations.map { JsonCodec.encodeToJsonElement(it) }))
-        })
-        session.key
     }
+
+    private suspend fun create(request: Request, isMain: Boolean, launcher: String?, config: JsonObject): SessionKey {
+        val result = request.transport.createConversationOf(request.owner, isMain, launcher)
+        val session = JsonCodec.decodeFromJsonElement<Session>(result.getValue("session"))
+        check(connection.current.value === request.transport) { CoreText.of(Key.ConnectionSwitched).shown }
+        noteConversation(session.sessionId, request)
+        lock.withLock {
+            val previous = cached[request.key]?.copy(manager = request.manager) ?: decode(config, request)
+            val snapshot = previous.copy(
+                mainSession = if (isMain) session.key else previous.mainSession,
+                conversations = (listOf(session) + previous.conversations).distinctBy { it.key },
+            )
+            cached[request.key] = snapshot
+            if (selected(request)) {
+                ++refreshVersion
+                current.value = snapshot
+            }
+            snapshots.save(request.key, buildJsonObject {
+                put("machine_id", snapshot.mainSession?.machineId ?: session.machineId)
+                put("main", snapshot.mainSession?.sessionId.orEmpty())
+                put("conversations", JsonArray(snapshot.conversations.map { JsonCodec.encodeToJsonElement(it) }))
+            })
+        }
+        return session.key
+    }
+
 }
 
 internal fun JsonObject.string(key: String): String = (this[key] as? JsonPrimitive)?.contentOrNull.orEmpty()

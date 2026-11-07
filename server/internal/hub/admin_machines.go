@@ -118,13 +118,16 @@ func (h *Hub) adminMachineRoutes(mux *http.ServeMux) {
 	})
 	mux.HandleFunc("POST /api/v1/admin/machines", func(w http.ResponseWriter, r *http.Request) {
 		var in struct {
-			Kind     string `json:"kind"`
-			ID       string `json:"id"`
-			Name     string `json:"name"`
-			Icon     string `json:"icon"`
-			PairLink string `json:"pair_link"` // service: the connector's persona://connector link
-			Address  string `json:"address"`   // service: host:port, when not the link's
-			Proxy    string `json:"proxy"`     // service: socks5://host:port
+			// Local machines execute on this registered manager, never on the carrier first.
+			Manager  string         `json:"manager"`
+			Config   *MachineConfig `json:"config"`
+			Kind     string         `json:"kind"`
+			ID       string         `json:"id"`
+			Name     string         `json:"name"`
+			Icon     string         `json:"icon"`
+			PairLink string         `json:"pair_link"` // service: the connector's persona://connector link
+			Address  string         `json:"address"`   // service: host:port, when not the link's
+			Proxy    string         `json:"proxy"`     // service: socks5://host:port
 		}
 		if !readAdminJSON(w, r, &in) {
 			return
@@ -135,6 +138,12 @@ func (h *Hub) adminMachineRoutes(mux *http.ServeMux) {
 			return
 		}
 		switch mc.Kind {
+		case "local":
+			if in.Config != nil {
+				local := *in.Config
+				local.ID, local.Name, local.Kind, local.Icon = mc.ID, mc.Name, mc.Kind, mc.Icon
+				mc = local
+			}
 		case "ssh", "tailcat":
 			writeErrCode(w, http.StatusBadRequest, "ssh_unsupported", i18n.Err("hub-admin_machines.ssh_unsupported"))
 			return
@@ -160,10 +169,18 @@ func (h *Hub) adminMachineRoutes(mux *http.ServeMux) {
 			}
 			mc.Address, mc.Proxy = addr, proxyURL
 		default:
-			writeErrCode(w, http.StatusBadRequest, "invalid_kind", errors.New("kind: link or service"))
+			writeErrCode(w, http.StatusBadRequest, "invalid_kind", errors.New("kind: local, link or service"))
 			return
 		}
-		if err := h.addMachine(&mc, "admin"); err != nil {
+		var addErr error
+		if mc.Kind == "local" {
+			addErr = h.addOwnedLocalMachine(r.Context(), &mc, strings.TrimSpace(in.Manager))
+		} else if in.Manager != "" || in.Config != nil {
+			addErr = refuseAdd(http.StatusBadRequest, "invalid_config", errors.New("manager and config are only supported for local machines"))
+		} else {
+			addErr = h.addMachine(&mc, "admin")
+		}
+		if err := addErr; err != nil {
 			writeAddMachineErr(w, err)
 			return
 		}

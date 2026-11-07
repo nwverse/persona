@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/identity"
 	"github.com/nwverse/persona/server/internal/pgdocker"
 )
@@ -380,9 +381,18 @@ find_personad() {
 	return 1
 }
 
+supports_manager_config() {
+	capabilities=$("$1" manager capabilities --json 2>/dev/null) || return 1
+	printf '%s\n' "$capabilities" | grep -Fq '"` + assistantwire.CapabilityConfigOwn + `"'
+}
+
 BIN="$(find_personad || true)"
+if [ -n "$BIN" ] && ! supports_manager_config "$BIN"; then
+	echo "persona manager: $BIN lacks config.own; downloading a compatible release before joining" >&2
+	BIN=
+fi
 if [ -z "$BIN" ]; then
-	[ -n "$DL" ] || fail "this computer has no personad, and the hub does not know where to download it: install personad first (docs/operations/release.md), then run this again"
+	[ -n "$DL" ] || fail "no compatible personad (requires config.own), and the hub does not know where to download it: update personad first (docs/operations/release.md), then run this again"
 	case "$(uname -s)" in Linux) os=linux ;; Darwin) os=darwin ;; *) fail "no build for $(uname -s)" ;; esac
 	case "$(uname -m)" in x86_64 | amd64) arch=amd64 ;; arm64 | aarch64) arch=arm64 ;; *) fail "no build for $(uname -m)" ;; esac
 	if command -v curl >/dev/null 2>&1; then fetch() { curl -fsSL "$1" -o "$2"; }
@@ -403,9 +413,11 @@ if [ -z "$BIN" ]; then
 	fetch "$DL/$archive" "$tmp/$archive" || fail "could not download $DL/$archive"
 	want="$(awk -v n="$archive" '$2 == n || $2 == "*" n { print $1 }' "$tmp/SHA256SUMS")"
 	[ -n "$want" ] && [ "$(sum "$tmp/$archive")" = "$want" ] || fail "checksum mismatch for $archive: not installed. A release may have come out since the hub last checked: get the install command from the app again"
+	gzip -dc "$tmp/$archive" > "$tmp/personad" && chmod 755 "$tmp/personad" || fail "could not unpack $archive"
+	supports_manager_config "$tmp/personad" || fail "the published personad lacks config.own: publish or install an updated release, then run this again; the install code and existing binary are unchanged"
 	dest="${PERSONA_HOME:-$HOME/.persona}/bin"
 	mkdir -p "$dest"
-	gzip -dc "$tmp/$archive" > "$tmp/personad" && chmod 755 "$tmp/personad" && mv "$tmp/personad" "$dest/personad" || fail "could not unpack $archive"
+	mv "$tmp/personad" "$dest/personad" || fail "could not install $archive"
 	BIN="$dest/personad"
 	echo "personad installed at $BIN"
 fi

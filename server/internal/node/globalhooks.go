@@ -76,6 +76,9 @@ func isGlobalHookCommand(cmd string) bool {
 // applyGlobalHooks makes the machine's default claude config directory match the hub's word: on installs the entries,
 // off removes the ones Persona put there (and does nothing, not even a write, when there are none).
 func (n *Node) applyGlobalHooks(on bool) {
+	if n.sessionScope != nil {
+		return
+	}
 	dir := n.defaultClaudeDir()
 	if _, err := os.Stat(dir); err != nil {
 		return // no claude here

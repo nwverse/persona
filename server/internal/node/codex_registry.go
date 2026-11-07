@@ -61,6 +61,10 @@ func codexSourceID(home, raw, legacy string) string {
 }
 
 func (n *Node) configureCodex(c proto.CodexConfig) {
+	if n.sessionScope != nil {
+		discovery := false
+		c = proto.CodexConfig{Homes: []string{n.sessionScope.codex}, LegacyHome: n.sessionScope.codex, Discovery: &discovery}
+	}
 	r := n.codices
 	if r == nil {
 		return
@@ -153,7 +157,10 @@ func (n *Node) registerCodex(home, thread, path string) string {
 		return ""
 	}
 	home = canonicalCodexHome(home, n.home)
-	if home == "" {
+	if n.sessionScope != nil && !sameScopePath(home, n.sessionScope.codex) {
+		return ""
+	}
+	if home == "" || !n.scopedTranscript(path) && path != "" {
 		return ""
 	}
 	r.mu.Lock()
@@ -196,6 +203,9 @@ func (n *Node) externalCodex(id string) bool {
 }
 
 func (n *Node) discoverCodex() {
+	if n.sessionScope != nil {
+		return
+	}
 	r := n.codices
 	if r == nil {
 		return
@@ -410,6 +420,9 @@ func (n *Node) codexSessions(seen map[string]bool) []proto.Session {
 		if src.path != "" {
 			if st, err := os.Stat(src.path); err == nil {
 				m = n.meta(src.path, st)
+				if !n.sessionScopeAllows(m.cwd) {
+					continue
+				}
 				if identity.IsAssistantDir(m.cwd) {
 					continue
 				}

@@ -57,13 +57,21 @@ func newClaudeDirs() *claudeDirs {
 }
 
 // defaultClaudeDir is where a claude started without CLAUDE_CONFIG_DIR keeps its files.
-func (n *Node) defaultClaudeDir() string { return claudeDirOf(n.home) }
+func (n *Node) defaultClaudeDir() string {
+	if n.sessionScope != nil {
+		return n.sessionScope.claude
+	}
+	return claudeDirOf(n.home)
+}
 
 // claudeDirOf is the node's own default Claude Code directory for home: $CLAUDE_CONFIG_DIR, else ~/.claude.
 func claudeDirOf(home string) string { return nodeclient.ClaudeDir(home) }
 
 // claudeConfigDirs lists every config directory in use, the default first, each once (by real path), existing only.
 func (n *Node) claudeConfigDirs() []string {
+	if n.sessionScope != nil {
+		return []string{n.sessionScope.claude}
+	}
 	d := n.cdirs
 	n.refreshClaudeDirs()
 	cands := []string{n.defaultClaudeDir()}
@@ -115,8 +123,15 @@ func (n *Node) projectDirs() []string {
 func (n *Node) globProjects(pattern ...string) []string {
 	var out []string
 	for _, p := range n.projectDirs() {
+		if n.sessionScope != nil && !sessionScopeWithin(n.sessionScope.claude, p) {
+			continue
+		}
 		m, _ := filepath.Glob(filepath.Join(append([]string{p}, pattern...)...))
-		out = append(out, m...)
+		for _, path := range m {
+			if n.scopedTranscript(path) {
+				out = append(out, path)
+			}
+		}
 	}
 	return out
 }
@@ -268,6 +283,9 @@ func (n *Node) setKnownClaudeDirs(dirs []string) {
 
 // refreshClaudeDirs rescans running claudes when the last scan is old; new directories are reported to the hub.
 func (n *Node) refreshClaudeDirs() {
+	if n.sessionScope != nil {
+		return
+	}
 	d := n.cdirs
 	if d == nil {
 		return

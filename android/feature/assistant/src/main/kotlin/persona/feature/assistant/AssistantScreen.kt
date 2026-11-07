@@ -62,6 +62,15 @@ import kotlinx.coroutines.flow.first
 import java.time.LocalTime
 import java.util.UUID
 
+/** One assistant's in-flight operation and retry target survive switching away and back. */
+private class AssistantSendState {
+    val sending = mutableStateOf(false)
+    val clientId = mutableStateOf<String?>(null)
+    val text = mutableStateOf<String?>(null)
+    val launcher = mutableStateOf<String?>(null)
+    val started = mutableStateOf<StarterStart?>(null)
+}
+
 /** Supply the shared chat content when available, or use the shell's ChatRoute entry. */
 @Composable
 fun AssistantScreen(
@@ -102,55 +111,74 @@ fun AssistantScreen(
     startConversationWith: (suspend (String) -> SessionKey)? =
         (repository as? persona.core.contracts.api.AssistantConversations)?.let { conversations -> { launcher -> conversations.startConversation(launcher) } },
 ) = PersonaTheme {
-    val snapshot by repository.assistant.collectAsStateWithLifecycle()
+    val receivedSnapshot by repository.assistant.collectAsStateWithLifecycle()
     val conversationsOf = repository as? persona.core.contracts.api.AssistantConversations
     // Several managers (docs/assistant/managers.md step 4): the page shows one, the default to begin with.
-    val managerRoster = LocalManagerRoster.current
+    val reportedRoster = LocalManagerRoster.current
+    val managerRoster = if (hubOnline) reportedRoster else reportedRoster?.copy(
+        managers = reportedRoster.managers.map { it.copy(online = false) },
+    )
     val managerChoice by persona.core.contracts.api.AssistantManagerChoice.current.collectAsStateWithLifecycle()
+    // A late repository emission is never shown under another assistant's selected chip.
+    val snapshot = receivedSnapshot.takeIf { it.managerId == managerChoice.shown }
+        ?: persona.core.contracts.api.AssistantSnapshot(manager = managerChoice.manager, managerId = managerChoice.shown)
+    val pageManagement = remember(management, managerChoice.hubId, managerChoice.shown) {
+        management?.forManager(managerChoice.shown)
+    }
     val managers = assistantManagers(managerRoster, managerChoice, androidx.compose.ui.platform.LocalResources.current)
     val outbox by (mainConversationSender?.outbox ?: messageSender.outbox).collectAsStateWithLifecycle()
-    val mainMessages = outbox.filter { it.mainTarget || it.session == PendingMainConversation }
+    val mainMessages = if (managerChoice.manager == null) outbox.filter { (it.mainTarget || it.session == PendingMainConversation) && (it.session == PendingMainConversation || it.session == snapshot.mainSession) } else emptyList()
     val scope = rememberCoroutineScope()
     var drawerOpen by rememberSaveable { mutableStateOf(false) }
     var sidebarVisible by rememberSaveable { mutableStateOf(true) }
     val snackbar = remember { SnackbarHostState() }
     val feedback = persona.core.designsystem.LocalAppFeedback.current
-    var query by rememberSaveable { mutableStateOf("") }
-    val transientComposer = rememberChatComposerState()
-    val draftEditor = remember(draftRepository, draftScope) {
-        if (draftRepository != null && draftScope != null) ChatDraftEditor(draftRepository, draftScope, DraftKey.Assistant()) else null
+    var query by rememberSaveable(managerChoice.hubId, managerChoice.shown) { mutableStateOf("") }
+    val transientComposer = key(managerChoice.hubId, managerChoice.shown) { rememberChatComposerState() }
+    // Keep an in-flight editor alive when its assistant is hidden, so its successful send can clear only that draft.
+    val draftEditors = remember(draftRepository, draftScope) { mutableMapOf<Pair<String?, String>, ChatDraftEditor>() }
+    val draftEditor = if (draftRepository != null && draftScope != null) {
+        draftEditors.getOrPut(managerChoice.hubId to managerChoice.shown) {
+            ChatDraftEditor(draftRepository, draftScope, DraftKey.Assistant(managerChoice.shown.takeUnless { it == persona.core.contracts.api.ManagerRoster.ASSISTANT_MANAGER }?.let { "main@$it" } ?: "main"))
+        }
+    } else null
+    DisposableEffect(draftEditors) { onDispose { draftEditors.values.forEach { it.close() } } }
+    val savedComposer by key(draftEditor) {
+        (draftEditor?.composer ?: remember { MutableStateFlow<ChatComposerState?>(null) }).collectAsStateWithLifecycle()
     }
-    DisposableEffect(draftEditor) { onDispose { draftEditor?.close() } }
-    val savedComposer by (draftEditor?.composer ?: remember { MutableStateFlow<ChatComposerState?>(null) }).collectAsStateWithLifecycle()
-    val draftError by (draftEditor?.error ?: remember { MutableStateFlow<Int?>(null) }).collectAsStateWithLifecycle()
+    val draftError by key(draftEditor) {
+        (draftEditor?.error ?: remember { MutableStateFlow<Int?>(null) }).collectAsStateWithLifecycle()
+    }
     val composer = savedComposer ?: transientComposer
     val draftReady = draftEditor == null || savedComposer != null
     LaunchedEffect(draftEditor, savedComposer) {
         savedComposer?.let { state -> snapshotFlow { state.draft }.collect { draftEditor?.changed(it) } }
     }
-    var sending by remember { mutableStateOf(false) }
-    var activeMachine by rememberSaveable { mutableStateOf<String?>(null) }
-    var activeSession by rememberSaveable { mutableStateOf<String?>(null) }
-    var viewingMainQueue by rememberSaveable { mutableStateOf(false) }
-    var pendingClientId by rememberSaveable { mutableStateOf<String?>(null) }
-    var pendingText by rememberSaveable { mutableStateOf<String?>(null) }
-    var openedMain by rememberSaveable { mutableStateOf(false) }
-    var proactiveOpen by rememberSaveable { mutableStateOf(false) }
-    var settingsOpen by rememberSaveable { mutableStateOf(false) }
+    val sends = remember(draftRepository, draftScope) { mutableMapOf<Pair<String?, String>, AssistantSendState>() }
+    val sendState = sends.getOrPut(managerChoice.hubId to managerChoice.shown) { AssistantSendState() }
+    var sending by sendState.sending
+    var activeMachine by rememberSaveable(managerChoice.hubId, managerChoice.shown) { mutableStateOf<String?>(null) }
+    var activeSession by rememberSaveable(managerChoice.hubId, managerChoice.shown) { mutableStateOf<String?>(null) }
+    var viewingMainQueue by rememberSaveable(managerChoice.hubId, managerChoice.shown) { mutableStateOf(false) }
+    var pendingClientId by sendState.clientId
+    var pendingText by sendState.text
+    var openedMain by rememberSaveable(managerChoice.hubId, managerChoice.shown) { mutableStateOf(false) }
+    var proactiveOpen by rememberSaveable(managerChoice.hubId, managerChoice.shown) { mutableStateOf(false) }
+    var settingsOpen by rememberSaveable(managerChoice.hubId, managerChoice.shown) { mutableStateOf(false) }
     val context = androidx.compose.ui.platform.LocalContext.current
     var ending by remember { mutableStateOf<Session?>(null) }
     var endingBusy by remember { mutableStateOf(false) }
-    var ended by remember(management) { mutableStateOf(emptySet<SessionKey>()) }
-    var archived by remember(management) { mutableStateOf(emptySet<SessionKey>()) }
-    var assistantMachine by remember(management) { mutableStateOf("") }
+    var ended by remember(pageManagement) { mutableStateOf(emptySet<SessionKey>()) }
+    var archived by remember(pageManagement) { mutableStateOf(emptySet<SessionKey>()) }
+    var assistantMachine by remember(pageManagement) { mutableStateOf("") }
     // The launcher the next new conversation starts with, for it alone (iOS StarterComposer); null: the default.
     // Both belong to this hub: another one has other launchers and conversations.
-    var starterLauncher by rememberSaveable(management) { mutableStateOf<String?>(null) }
+    var starterLauncher by sendState.launcher
     // The conversation that launcher started for a message that then failed to send: its retry goes there.
-    var starterStarted by rememberSaveable(management, stateSaver = StarterStartSaver) { mutableStateOf<StarterStart?>(null) }
-    var launchers by remember(management, assistantMachine) { mutableStateOf<List<persona.core.contracts.api.AgentLauncher>?>(null) }
-    var launchersFailed by remember(management, assistantMachine) { mutableStateOf(false) }
-    var defaultLauncher by remember(management) { mutableStateOf<String?>(null) }
+    var starterStarted by sendState.started
+    var launchers by remember(pageManagement, assistantMachine) { mutableStateOf<List<persona.core.contracts.api.AgentLauncher>?>(null) }
+    var launchersFailed by remember(pageManagement, assistantMachine) { mutableStateOf(false) }
+    var defaultLauncher by remember(pageManagement) { mutableStateOf<String?>(null) }
     val hasChat = chatContent != null || assistantChatContent != null
     var menu by remember { mutableStateOf(false) }
     var info by rememberSaveable { mutableStateOf<AssistantInfo?>(null) }
@@ -184,19 +212,19 @@ fun AssistantScreen(
     }
     val active = activeSession?.let { SessionKey(activeMachine.orEmpty(), it) }
     // "Compact context" and "New main chat" (#1727): the main conversation's menu, on hubs that offer them.
-    val mainActions = if (management != null && !demo) MainActions.of(LocalHubFeatures.current) else MainActions(false, false)
+    val mainActions = if (pageManagement != null && !demo) MainActions.of(LocalHubFeatures.current) else MainActions(false, false)
     // What the main conversation still needs (docs/assistant/onboarding.md 4.4), on hubs that work it out: asked when the tab
     // shows, when a computer comes or goes and after the hub refused to start it.
-    val readinessOn = management != null && !demo && AssistantReadinessFeature in LocalHubFeatures.current
-    val mainReadiness = remember(management) { MainReadiness { probe -> requireNotNull(management).readiness(probe) } }
+    val readinessOn = pageManagement != null && !demo && AssistantReadinessFeature in LocalHubFeatures.current
+    val mainReadiness = remember(pageManagement) { MainReadiness { probe -> requireNotNull(pageManagement).readiness(probe) } }
     var readinessHelp by remember { mutableStateOf<ReadinessHelp?>(null) }
     val machinesSeen = machines.joinToString(",") { "${it.id}:${it.online}" }
-    LaunchedEffect(readinessOn, machinesSeen) { if (readinessOn) mainReadiness.refresh() }
+    LaunchedEffect(mainReadiness, readinessOn, machinesSeen) { if (readinessOn) mainReadiness.refresh() }
     androidx.lifecycle.compose.LifecycleEventEffect(androidx.lifecycle.Lifecycle.Event.ON_RESUME) {
         if (readinessOn) scope.launch { mainReadiness.refresh() }
     }
     val refusedMain = mainMessages.filter { it.setupRefusal() != null }.map { it.clientMessageId }
-    LaunchedEffect(readinessOn, refusedMain) { if (readinessOn && refusedMain.isNotEmpty()) mainReadiness.refresh() }
+    LaunchedEffect(mainReadiness, readinessOn, refusedMain) { if (readinessOn && refusedMain.isNotEmpty()) mainReadiness.refresh() }
     val readiness = mainReadiness.readiness.takeIf { readinessOn }
     val blocking = mainReadiness.blocking.takeIf { readinessOn }
     fun runReadinessAction(action: ReadinessActionId, launcher: String? = blocking?.launcher ?: readiness?.launcher) {
@@ -259,14 +287,13 @@ fun AssistantScreen(
     // Another manager: its own conversations, so none of this one's stays open.
     fun chooseManager(id: String) {
         if (id == managerChoice.shown) return
-        clearConversation()
         persona.core.contracts.api.AssistantManagerChoice.pick(id)
     }
     fun refusal(error: Exception): String =
         if (error is AssistantRefused) error.message.orEmpty() else persona.core.designsystem.operationFeedback(error).text.resolve(resources)
     fun compactMain() {
         val key = active ?: return
-        val api = management ?: return
+        val api = pageManagement ?: return
         if (compacting) return
         compacting = true
         compaction = compaction.asked(shownCompaction)
@@ -281,7 +308,7 @@ fun AssistantScreen(
         }
     }
     fun newMain() {
-        val api = management ?: return
+        val api = pageManagement ?: return
         val previous = snapshot.mainSession ?: return
         if (newMainBusy) return
         newMainBusy = true
@@ -313,7 +340,7 @@ fun AssistantScreen(
     // Hidden at once; after the hub's list is refreshed (it leaves archived ones out) the hub's word is the one kept,
     // so a later message that brings the conversation back shows it again.
     fun archive(session: Session) {
-        val target = management ?: return
+        val target = pageManagement ?: return
         archived = archived + session.key
         scope.launch {
             try {
@@ -363,8 +390,9 @@ fun AssistantScreen(
         // A launcher picked on the new-conversation page: a conversation of its own on it, then the message to it.
         val launcher = starterLauncher.takeIf { active == null }
         val startWith = startConversationWith
-        // The manager this is written for (null: the default's main queue): it goes there even if the page moves on.
+        // Capture the concrete owner before any lookup; a later default change cannot retarget this message.
         val forManager = managerChoice.manager
+        val submittedManager = managerChoice.shown
         val shownSnapshot = snapshot
         sending = true
         val submitted = text.trim()
@@ -373,30 +401,32 @@ fun AssistantScreen(
             pendingClientId = UUID.randomUUID().toString()
             pendingText = submitted
         }
+        val operationId = requireNotNull(pendingClientId)
+        val submittedChoice = managerChoice
         scope.launch {
             try {
                 // Started once: a retry after the message failed sends to the same new conversation, while the
                 // launcher is still the one that started it.
                 val target = if (launcher != null && startWith != null)
                     starterTarget(launcher, starterStarted, startWith).also { starterStarted = it }.session
-                    // Another manager's main conversation: this phone's main queue is the default manager's.
-                    else active ?: forManager?.let { id ->
-                        managerMainTarget(id, shownSnapshot) { m -> conversationsOf?.mainConversationOf(m) ?: error("managers unavailable") }
-                    }
-                sendAssistantMessage(mainConversationSender, messageSender, target, submitted, requireNotNull(pendingClientId))
-                // Clear only after the outbox commit; retries keep their original operation id.
+                    // Resolve this owner explicitly; legacy repositories retain the default main queue.
+                    else active ?: if (conversationsOf != null) {
+                        managerMainTarget(submittedManager, shownSnapshot, conversationsOf::mainConversationOf)
+                    } else forManager?.let { error("managers unavailable") }
+                sendAssistantMessage(mainConversationSender, messageSender, target, submitted, operationId)
+                // Clear the submitted assistant's editor after commit, even while another assistant is shown.
                 composer.clearIfUnchanged(sentDraft)
                 draftEditor?.changed(composer.draft)
                 pendingClientId = null
                 pendingText = null
+                if (persona.core.contracts.api.AssistantManagerChoice.current.value != submittedChoice) return@launch
                 if (launcher != null && target != null) {
                     starterLauncher = null
                     starterStarted = null
                     assistantAttempt { repository.refresh() }
                     openConversation(target)
-                } else if (forManager != null && target != null) {
-                    // Its main conversation, if the page still shows that manager.
-                    if (persona.core.contracts.api.AssistantManagerChoice.current.value.manager == forManager) openConversation(target)
+                } else if (target != null) {
+                    openConversation(target)
                 } else if (active == null) viewingMainQueue = true
             } catch (cancelled: CancellationException) {
                 throw cancelled
@@ -409,8 +439,8 @@ fun AssistantScreen(
             }
         }
     }
-    LaunchedEffect(mainMessages, viewingMainQueue) {
-        if (viewingMainQueue || (!openedMain && mainMessages.isNotEmpty() && requestedSession == null)) {
+    LaunchedEffect(mainMessages, viewingMainQueue, managerChoice) {
+        if (managerChoice.manager == null && (viewingMainQueue || (!openedMain && mainMessages.isNotEmpty() && requestedSession == null))) {
             openedMain = true
             viewingMainQueue = true
             mainMessages.firstOrNull { it.session != PendingMainConversation }?.session?.let { target ->
@@ -426,18 +456,18 @@ fun AssistantScreen(
         catch (cancelled: CancellationException) { throw cancelled }
         catch (_: Exception) { /* Cached conversations remain available while offline. */ }
     }
-    LaunchedEffect(management) {
-        if (management != null) {
-            assistantAttempt { management.warm() }
-            assistantAttempt { assistantMachine = management.notes().machineId }
+    LaunchedEffect(pageManagement) {
+        if (pageManagement != null) {
+            assistantAttempt { pageManagement.warm() }
+            assistantAttempt { assistantMachine = pageManagement.notes().machineId }
             // Routines and the assistant's "today" follow the phone's time zone unless the user picked one.
-            assistantAttempt { followPhoneZone(management.settingsApi(), StoredTimezoneChoice(context)) }
+            assistantAttempt { followPhoneZone(pageManagement.settingsApi(), StoredTimezoneChoice(context)) }
         }
     }
     // The chip's default and list: read when the page shows and again on each open (the default may have changed in
     // Settings; a list that could not be read is tried again), as the web reads them each time its menu opens.
     suspend fun loadStarterLaunchers() {
-        val api = management ?: return
+        val api = pageManagement ?: return
         if (startConversationWith == null || demo || assistantMachine.isBlank()) return
         val machine = assistantMachine
         assistantAttempt { api.config().launcher }.onSuccess { defaultLauncher = it.takeIf(String::isNotBlank) }
@@ -447,14 +477,13 @@ fun AssistantScreen(
             .onSuccess { if (machine == assistantMachine) launchers = it }
             .onFailure { if (machine == assistantMachine) launchersFailed = true }
     }
-    LaunchedEffect(management, assistantMachine, startConversationWith) { loadStarterLaunchers() }
+    LaunchedEffect(pageManagement, assistantMachine, startConversationWith) { loadStarterLaunchers() }
     LaunchedEffect(requestedSession) {
         requestedSession?.let { openedMain = true; proactiveOpen = false; settingsOpen = false; openConversation(it) }
     }
-    LaunchedEffect(snapshot.mainSession, snapshot.conversations) {
+    LaunchedEffect(snapshot.mainSession, snapshot.conversations, managerChoice) {
         if (!demo && !openedMain && requestedSession == null && mainMessages.isEmpty()) {
-            val initial = snapshot.mainSession ?: snapshot.conversations
-                .sortedWith(compareByDescending<Session> { it.updated }.thenBy { it.key.path }).firstOrNull()?.key
+            val initial = snapshot.mainSession
             initial?.let(::openConversation)
         }
     }
@@ -480,7 +509,7 @@ fun AssistantScreen(
     }
     val sidebar: @Composable () -> Unit = {
         AssistantDrawer(query, { query = it }, groups, active, snapshot.mainSession != null,
-            onEnd = if (management != null) ({ ending = it }) else null,
+            onEnd = if (pageManagement != null) ({ ending = it }) else null,
             onMain = {
                 openedMain = true
                 snapshot.mainSession?.let(::openConversation) ?: run { newConversation(); viewingMainQueue = true }
@@ -489,8 +518,8 @@ fun AssistantScreen(
             onOpen = { openConversation(it); scope.launch { drawerOpen = false } },
             onInfo = {
                 if (it == AssistantInfo.Knowledge && onKnowledge != null) onKnowledge()
-                else if (management != null && it == AssistantInfo.Launcher) settingsOpen = true
-                else if (management != null && it == AssistantInfo.Schedule) proactiveOpen = true
+                else if (pageManagement != null && it == AssistantInfo.Launcher) settingsOpen = true
+                else if (pageManagement != null && it == AssistantInfo.Schedule) proactiveOpen = true
                 else info = it
                 scope.launch { drawerOpen = false }
             },
@@ -503,7 +532,7 @@ fun AssistantScreen(
                 togglePins(snapshot.conversations.map { it.key }.distinct().filter { it in pinnedConversations && it != snapshot.mainSession })
             }) else null,
             onCopy = { copyId(it.key) },
-            onArchive = if (management != null && !demo) ::archive else null,
+            onArchive = if (pageManagement != null && !demo) ::archive else null,
             showAllRecent = showAllRecent,
             onShowAllRecent = { showAllRecent = true },
             autoOpen = autoOpen, onAutoOpen = { autoOpen = it },
@@ -531,7 +560,7 @@ fun AssistantScreen(
                                 JIconButton(PhIcons.NotePencil, stringResource(R.string.assistant_new_conversation), ::startNewConversation,
                                     enabled = !sending && managers.offline == null)
                                 JIconButton(PhIcons.UserCircle, stringResource(R.string.assistant_profile), {
-                                    if (management != null) settingsOpen = true else info = AssistantInfo.Settings
+                                    if (pageManagement != null) settingsOpen = true else info = AssistantInfo.Settings
                                 })
                             },
                         )
@@ -572,7 +601,7 @@ fun AssistantScreen(
                             blockedLabel = blocking?.takeIf { active == null }?.let { stringResource(blockedSendLabel(it)) },
                             onBlocked = { blocking?.primaryAction()?.let { runReadinessAction(it) } },
                             // A new conversation's launcher, for it alone (iOS StarterComposer, web StarterLauncherChip).
-                            accessory = if (active == null && management != null && startConversationWith != null && !demo) ({
+                            accessory = if (active == null && pageManagement != null && startConversationWith != null && !demo) ({
                                 StarterLauncherChip(starterLauncher, defaultLauncher, launchers, launchersFailed, enabled = !sending,
                                     onOpen = { scope.launch { loadStarterLaunchers() } }) { picked ->
                                     // Another launcher (or the default) does not reuse what the last one started.
@@ -638,21 +667,21 @@ fun AssistantScreen(
     }
     // A task's model is set on Settings › Models (iOS ModelConfigurationLink); back from it returns here.
     val openModelConfiguration: (String) -> Unit = { purpose -> navigator.navigate(ModelPurposeRoute(purpose)) }
-    if (settingsOpen && management != null) {
-        AssistantSettingsScreen(management, machines, onBack = { settingsOpen = false }, inPlace = true, onMoved = {
+    if (settingsOpen && pageManagement != null) {
+        AssistantSettingsScreen(pageManagement, machines, onBack = { settingsOpen = false }, inPlace = true, onMoved = {
             // The conversations and the upload target now belong to the other machine.
             assistantAttempt { repository.refresh() }
-            assistantAttempt { assistantMachine = management.notes().machineId }
+            assistantAttempt { assistantMachine = pageManagement.notes().machineId }
             // The old main conversation is an ordinary one on the old machine now: back here, start the new one.
             newConversation()
         }, onOpenConversation = openFromSchedule, onModelConfiguration = openModelConfiguration)
         return@PersonaTheme
     }
-    if (proactiveOpen && management != null) {
+    if (proactiveOpen && pageManagement != null) {
         // Shown in place of the conversation: back on its first page closes it here (its own pages come first).
         BackHandler { proactiveOpen = false }
         AssistantProactiveScreen(onBack = { proactiveOpen = false }, onOpenConversation = openFromSchedule,
-            onModelConfiguration = openModelConfiguration, management = management, machines = machines)
+            onModelConfiguration = openModelConfiguration, management = pageManagement, machines = machines)
         return@PersonaTheme
     }
     BoxWithConstraints(Modifier.fillMaxSize()) {
@@ -678,7 +707,7 @@ fun AssistantScreen(
             listOf(AssistantInfo.Settings, AssistantInfo.Knowledge).forEach { topic ->
                 add(JAction(resources.getString(topic.title), onClick = {
                     if (topic == AssistantInfo.Knowledge && onKnowledge != null) onKnowledge()
-                    else if (topic == AssistantInfo.Settings && management != null) settingsOpen = true
+                    else if (topic == AssistantInfo.Settings && pageManagement != null) settingsOpen = true
                     else info = topic
                 }))
             }
@@ -709,7 +738,7 @@ fun AssistantScreen(
                 endingBusy = true
                 scope.launch {
                     try {
-                        requireNotNull(management).endConversation(session.key)
+                        requireNotNull(pageManagement).endConversation(session.key)
                         ended = ended + session.key
                         ending = null
                         if (active == session.key) newConversation()

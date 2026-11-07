@@ -58,10 +58,11 @@ type Node struct {
 	// doctorAt replaces the places node.doctor looks at (tests; doctor_rpc.go).
 	doctorAt func() DoctorOptions
 
-	home string
-	dir  string // ~/.persona
-	bin  string // absolute path of this executable
-	uid  string // the computer's own id (machineuid.go); empty when it could not be read or made
+	home         string
+	sessionScope *nodeSessionScope
+	dir          string // ~/.persona
+	bin          string // absolute path of this executable
+	uid          string // the computer's own id (machineuid.go); empty when it could not be read or made
 	// Program is what bin is (nodeproto.ProgramPersonad / ProgramPersonaNode), for node.info; "" says nothing.
 	Program string
 	// managed: launchers kept by the hub (managed.go)
@@ -234,6 +235,10 @@ func New(version string) (*Node, error) {
 	if err != nil {
 		return nil, err
 	}
+	scope, err := readNodeSessionScope(home, dir)
+	if err != nil {
+		return nil, err
+	}
 	n := &Node{
 		Version:  version,
 		bootAt:   time.Now().UTC(), // sessions started before this were the previous herdr server's (interrupted.go)
@@ -259,6 +264,7 @@ func New(version string) (*Node, error) {
 		codices:  newCodexRegistry(),
 		runtimes: newRuntimeRegistry(),
 	}
+	n.sessionScope = scope
 	if n.uid, err = LoadMachineUID(dir); err != nil {
 		n.logger.Printf("machine uid: %v", err) // the hubs then treat this computer as theirs alone
 	}
@@ -677,6 +683,9 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 		}
 		if c.ClaudeStartDir != nil {
 			d := strings.TrimSpace(*c.ClaudeStartDir)
+			if n.sessionScope != nil {
+				d = n.sessionScope.claude
+			}
 			n.claudeStartDir.Store(&d)
 		}
 		if c.HerdrAutostart != nil {

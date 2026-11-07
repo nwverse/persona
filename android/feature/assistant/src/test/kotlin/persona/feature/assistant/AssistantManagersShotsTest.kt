@@ -8,6 +8,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.width
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
@@ -72,11 +73,16 @@ class AssistantManagersShotsTest {
     }
 
     private class Hub : AssistantRepository, MessageSender {
-        override val assistant = MutableStateFlow(AssistantSnapshot(SessionKey("hub", "main"),
-            listOf(Session(machineId = "hub", sessionId = "main", title = "主对话", assistant = true))))
+        override val assistant = MutableStateFlow(AssistantSnapshot())
+        fun show(manager: String?) {
+            val main = SessionKey("hub", "main-${manager ?: "assistant"}")
+            assistant.value = AssistantSnapshot(main,
+                listOf(Session(machineId = main.machineId, sessionId = main.sessionId,
+                    title = "主对话", assistant = true, manager = manager)), manager)
+        }
         override val outbox = MutableStateFlow(emptyList<OutboxMessage>())
         val sent = mutableListOf<SessionKey>()
-        override suspend fun refresh() = Unit
+        override suspend fun refresh() = show(AssistantManagerChoice.current.value.manager)
         override suspend fun send(session: SessionKey, text: String, clientMessageId: String, clearDraft: String?) { sent += session }
     }
 
@@ -89,6 +95,9 @@ class AssistantManagersShotsTest {
         var shown by mutableStateOf(roster)
         AssistantManagerChoice.choose("hub", "m-8b04d2", "assistant")
         rule.setContent {
+            LaunchedEffect(hub) {
+                AssistantManagerChoice.current.collect { hub.show(it.manager) }
+            }
             PersonaTheme(darkTheme = dark, reduceMotion = true, style = style) {
                 // The page draws its own theme from the system's night mode: dark shots set it.
                 val base = androidx.compose.ui.platform.LocalConfiguration.current

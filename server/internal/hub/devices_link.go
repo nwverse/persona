@@ -80,7 +80,8 @@ type devicesState struct {
 	// assign: hub.json's machines handed to another manager than the carrier (ownership.go), machine → manager.
 	assign map[string]string
 	// assignRead: assign is what machineOwnersKey holds (read, or nothing to read); a move writes only over a read one.
-	assignRead bool
+	assignRead   bool
+	assignFailed bool // ownership read failed: dedicated local machines must not fall back to the carrier
 	// moving keeps moves one at a time: each writes the whole of assign, from the one before it (moveMachine).
 	moving  sync.Mutex
 	due     bool
@@ -502,8 +503,10 @@ func (h *Hub) startDevices(ctx context.Context) {
 		d.up = make(chan struct{})
 	}
 	d.mu.Unlock()
-	_ = h.loadMachineOwners(ctx) // which of them another manager carries (ownership.go); unread: the next move reads it
-	h.loadMachineEntries(ctx)    // what each manager last reported of them (machine_entries.go)
+	if err := h.loadMachineOwners(ctx); err != nil {
+		h.logf("devices: ownership unavailable; dedicated local machines stay unassigned: %v", err)
+	}
+	h.loadMachineEntries(ctx) // what each manager last reported of them (machine_entries.go)
 	var saved devicesWarm
 	if h.store != nil {
 		if ok, err := h.store.TakeSetting(ctx, devicesWarmKey, &saved); err != nil || !ok || time.Since(saved.SavedAt) > devicesWarmStale {

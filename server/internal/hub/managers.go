@@ -572,6 +572,9 @@ func (h *Hub) managerRoutes(api *http.ServeMux) {
 		// installed has no identity (false): calling it off is still a 200. Once the moves to or from it under way
 		// are done; the ones after find it gone (ownership.go).
 		err := h.removingManager(func() error {
+			if err := h.releaseManagerDedicatedMachines(r.Context(), id); err != nil {
+				return err
+			}
 			if _, err := h.revokeBusToken(r.Context(), id); err != nil {
 				return err
 			}

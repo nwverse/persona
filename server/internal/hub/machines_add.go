@@ -59,6 +59,21 @@ func writeAddMachineErr(w http.ResponseWriter, err error) {
 // which connects it now (no restart). by is who added it, for the log. An entry with its id already there is 409
 // exists.
 func (h *Hub) addMachine(mc *MachineConfig, by string) error {
+	h.devices.moving.Lock()
+	defer h.devices.moving.Unlock()
+	if h.cfgEntry(mc.ID) == nil {
+		h.devices.mu.Lock()
+		owner := h.devices.assign[mc.ID]
+		h.devices.mu.Unlock()
+		if owner != "" {
+			return refuseAdd(http.StatusConflict, "ownership_reserved", errors.New("machine ID has a pending manager ownership reservation; retry dedicated local creation or choose another ID"))
+		}
+	}
+	return h.addMachineMoving(mc, by)
+}
+
+// addMachineMoving publishes an entry with the ownership mutation lock held.
+func (h *Hub) addMachineMoving(mc *MachineConfig, by string) error {
 	if mc.Name == "" {
 		mc.Name = mc.ID
 	}

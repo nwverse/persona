@@ -49,6 +49,7 @@ const Usage = `usage:
   personad manager install [--dir 目录]     建好它自己的 Postgres（Docker），装成常驻服务（Linux：systemd 用户服务；Mac：launchd）
   personad manager uninstall [--dir 目录] [--purge]
                        停掉并去掉常驻服务；它的数据库容器停掉、数据卷留着（--purge：连容器和数据卷一起删掉）
+  personad manager capabilities [--json]   只读列出这个程序支持的管理者能力
   personad manager status [--dir 目录]      这台电脑上的管理者和它们的服务
 `
 
@@ -65,6 +66,8 @@ func Main(ctx context.Context, build update.Build, args []string, stdout io.Writ
 	}
 	e := newEnv(stdout)
 	switch args[0] {
+	case "capabilities":
+		return cmdCapabilities(stdout, args[1:])
 	case "join":
 		return cmdJoin(ctx, e, args[1:])
 	case "run":

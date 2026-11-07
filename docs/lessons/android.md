@@ -1,5 +1,14 @@
 # Lessons: Android
 
+## Assistant selection owns the whole request and draft lifecycle (#6567)
+
+A selected chip does not prove that its main conversation opened. Capture the hub and manager before suspending,
+reject stale snapshots, and key readiness and chat observation by the target assistant. Keep manager-scoped draft
+editors alive until pending submissions finish; changing a collected Flow alone can retain the previous editor's State
+for a frame and write its text into another assistant. Successful sends clear the captured draft while navigation remains
+conditional on the current selection. Exercise real draft storage with delayed reads and sends, alongside history and
+stream fixtures. Fixture screenshots do not establish live transport routing; verify the deployed pair separately.
+
 ## Task bindings are independent of the Agents window (#6524)
 
 A bounded, filtered session list cannot establish that a task has no agent. Keep navigation from the durable todo binding even when its session is outside the window; request exact metadata only for watched task agents and never add those rows to the paged list. Refresh that metadata on list invalidations and reconnect. Serialize todo reads so an older unbound or completed snapshot cannot overwrite a later linked or reopened snapshot in memory or on disk. A metadata failure falls back to the binding and never starts another agent.

@@ -548,6 +548,14 @@ func (n *Node) startingSession(id string) bool {
 // (resumed under another profile: the new writes go to the new copy, the old one stays): the newest is the one.
 // A path a hook reported is Claude's own word; one found here is looked for again after half a minute.
 func (n *Node) transcriptPath(id string) string {
+	p := n.findTranscriptPath(id)
+	if !n.scopedTranscriptAllows(p) {
+		return ""
+	}
+	return p
+}
+
+func (n *Node) findTranscriptPath(id string) string {
 	// A runtime's session whose conversation is a Claude transcript (runtimetranscript.go): that one's file.
 	if t := n.runtimes.transcriptOf(id); t != "" {
 		id = t
@@ -938,6 +946,9 @@ func (n *Node) sessionList(ctx context.Context, refreshAgents bool) []proto.Sess
 	resolveCodexHierarchy(out)
 	var keptSessions []proto.Session
 	for _, s := range out {
+		if !n.sessionScopeAllows(s.Cwd) {
+			continue
+		}
 		if s.Cwd != "" && n.cwdBlocked(s.Cwd) && !n.isAssistantSession(s.SessionID) && !n.keptSessions()[s.SessionID] {
 			continue
 		}
@@ -961,9 +972,9 @@ var offlineCache struct {
 func (n *Node) offline(live map[string]bool) []proto.Session {
 	offlineCache.Lock()
 	defer offlineCache.Unlock()
-	if time.Since(offlineCache.at) > 20*time.Second || offlineCache.home != n.home {
+	if time.Since(offlineCache.at) > 20*time.Second || offlineCache.home != n.offlineCacheKey() {
 		offlineCache.list = n.scanOffline()
-		offlineCache.at, offlineCache.home = time.Now(), n.home
+		offlineCache.at, offlineCache.home = time.Now(), n.offlineCacheKey()
 	}
 	var out []proto.Session
 	for _, s := range offlineCache.list {
@@ -1056,6 +1067,9 @@ func (n *Node) scanOffline() []proto.Session {
 		}
 		listed[id] = true
 		m := n.meta(c.path, c.st)
+		if !n.sessionScopeAllows(m.cwd) {
+			continue
+		}
 		if m.cwd != "" && n.cwdBlocked(m.cwd) {
 			continue
 		}
@@ -1200,6 +1214,9 @@ type layout struct {
 // the agents it gave last. A host that is not running (host.ErrNotRunning: herdr-core without its socket) answered: it
 // has no agents.
 func (n *Node) refreshHosts(ctx context.Context, only ...host.Host) error {
+	if n.sessionScope != nil {
+		return nil
+	}
 	n.mu.Lock()
 	epoch := n.engEpoch // a refresh that outlives an engine switch must not bring the old engine's agents back
 	n.mu.Unlock()

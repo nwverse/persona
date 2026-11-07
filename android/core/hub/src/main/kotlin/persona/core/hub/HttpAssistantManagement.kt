@@ -13,12 +13,17 @@ import okhttp3.RequestBody.Companion.toRequestBody
 import java.util.concurrent.TimeUnit
 
 /** Construct per pairing using the shared routed, pinned client; reject stale responses after unpairing. */
-class HttpAssistantManagement(
+class HttpAssistantManagement private constructor(
     baseUrl: String,
     private val token: String,
     client: OkHttpClient,
-    private val isCurrent: () -> Boolean = { true },
+    private val isCurrent: () -> Boolean,
+    private val pinnedManager: String?,
 ) : AssistantManagement {
+    constructor(
+        baseUrl: String, token: String, client: OkHttpClient, isCurrent: () -> Boolean = { true },
+    ) : this(baseUrl, token, client, isCurrent, null)
+
     private val base = baseUrl.toHttpUrl()
     private val http = client.newBuilder().followRedirects(false).followSslRedirects(false)
         .retryOnConnectionFailure(false).build()
@@ -26,6 +31,9 @@ class HttpAssistantManagement(
     private val runHttp = http.newBuilder().readTimeout(130, TimeUnit.SECONDS).build()
     /** Compacting may start the conversation's process first, and "New main chat" reads what the old one left: the hub allows a minute. */
     private val compactHttp = http.newBuilder().readTimeout(70, TimeUnit.SECONDS).build()
+
+    override fun forManager(manager: String?): AssistantManagement =
+        HttpAssistantManagement(base.toString(), token, http, isCurrent, manager.orEmpty())
 
     private fun checkScope() { if (!isCurrent()) throw CancellationException("Pairing changed") }
 
@@ -37,7 +45,8 @@ class HttpAssistantManagement(
         val url = base.newBuilder().apply {
             segments.forEach(::addPathSegment)
             query.forEach { (name, value) -> addQueryParameter(name, value) }
-        }.build()
+            pinnedManager?.let { setQueryParameter(ManagerQuery, it) }
+        }.build().withRequestManager()
         val payload = body?.toString()?.toRequestBody("application/json".toMediaType())
         val request = Request.Builder().url(url).header("Authorization", "Bearer $token")
             .method(method, payload).build()

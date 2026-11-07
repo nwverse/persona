@@ -30,8 +30,11 @@ import (
 )
 
 type MachineConfig struct {
-	ID   string `json:"id"`
-	Name string `json:"name"`
+	// OwnerRequired prevents a dedicated local entry from falling back to the
+	// carrier when its separately persisted ownership is missing or unavailable.
+	OwnerRequired bool   `json:"owner_required,omitempty"`
+	ID            string `json:"id"`
+	Name          string `json:"name"`
 	// Trust limits access to personal data: empty/personal preserves existing access; work isolates this machine.
 	Trust string `json:"trust,omitempty"`
 	// Kind: local | service (the hub dials the computer's connector, service.go) | link (the computer's persona-link

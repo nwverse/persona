@@ -693,7 +693,7 @@ func (n *Node) claudeAssistantMCPAndTools(id, cwd string) (mcpJSON string, toolF
 	}
 	// Per-process MCP config: the assistant-only tools (ask_user, agents_*, lark_*…) and the conversation they act for.
 	servers := map[string]any{"persona": map[string]any{
-		"command": n.bin, "args": []string{"mcp"}, "env": map[string]string{"PERSONA_ASSISTANT": "1", "PERSONA_SESSION_ID": id},
+		"command": n.bin, "args": []string{"mcp"}, "env": assistantMCPEnv(id, n.dir),
 	}}
 	// The extensions' MCP servers whose command is on this machine (assistant_mcp.go).
 	extra, allow, deny := assistantMCPServers(n.assistantLark(context.Background()).MCPServers)
