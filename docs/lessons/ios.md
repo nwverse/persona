@@ -1163,14 +1163,14 @@ but UIKit still had a page with only Agents Back and empty content.
 ### `Localizable.xcstrings` rebase conflicts require key-based merging
 - Both sides adding entries can line-merge into invalid JSON (`The data couldn't be read because it isn't in the correct format`), breaking all targets.
 - Extract `git show ORIG_HEAD:<catalog> > ours`, `git show origin/main:<catalog> > theirs`; run `python3 scripts/i18n/apple_l10n.py merge ours theirs apple/Shared/Localization/Localizable.xcstrings` (merge keys, prefer complete `en` / ja on duplicates), then `check`.
-- **`merge` brings back keys `main` deleted, and rewrites the whole file** (2026-11-06, #5451): it keeps every key of both sides, so an entry `main`
-  removed (6 of them in one merge, for example "No Claude running") comes back as if the branch had added it. Its output also changes the
-  format and order (+78k / −77k lines against `main` for 40 new keys). Use its merged entries, but write `main`'s file back in `main`'s key order and format
+- **`merge` brings back keys deleted on `main`, and rewrites the whole file** (2026-11-06, #5451): it keeps every key of both sides, so an entry removed
+  on `main` (6 of them in one merge, for example "No Claude running") comes back as if the branch had added it. Its output also changes the
+  format and order (+78k / −77k lines against `main` for 40 new keys). Use its merged entries, but write the file back in `main`'s key order and format
   (`json.dumps(d, ensure_ascii=False, indent=2) + "\n"`), add only the keys the branch added, and drop keys that were in the merge base but `main`
   no longer has. `git diff origin/main --stat` should then show only `+` lines for your keys. Git's own text merge of two branches that added the
   same key leaves a duplicate JSON key, which `check` rejects: keep one copy.
 
-### Two PRs that add the same catalog key both pass, then break `main` (#5811)
+### Two PRs that add the same catalog key both pass, then break master (#5811)
 - #5743 and #5757 each added `"Run"` to `Localizable.xcstrings`. Each passed `apple_l10n.py check` against its own base, and git merged them
   without a conflict, because the two entries sat at different places in the file. Master then had a duplicate JSON key: `check` failed,
   and Xcode rejects such a catalog.
@@ -1211,8 +1211,8 @@ but UIKit still had a page with only Agents Back and empty content.
   `json.dumps(d, ensure_ascii=False, indent=2) + "\n"` (the format `apple_english_keys.py` wrote; check that `main`'s file round-trips
   unchanged first, and that `git diff` shows only `+` lines). Then `apple_l10n.py check`. A conflict in the catalog resolves the same way:
   take `main`'s file, insert your entries.
-- **Rebased across the English-key migration (#5430)**: a branch written with Chinese keys does not need its keys hand-translated. Run `main`'s
-  `scripts/i18n/apple_english_keys.py <scratch worktree>` on a scratch worktree of the branch's old tip (it still has the Chinese-source catalog),
+- **Rebased across the English-key migration (#5430)**: a branch written with Chinese keys does not need its keys hand-translated. Run
+  `scripts/i18n/apple_english_keys.py <scratch worktree>` as it is on `main` against a scratch worktree of the branch's old tip (it still has the Chinese-source catalog),
   import it to get `migrate()`'s mapping, then take the migrated new files, the mapped entries, and the same key changes in the files you only
   touched. Keys it suffixes (`Mute [Voice Bar 7db2e1]`) collide with an existing English key that means something else in Chinese: keep the suffix.
   `apple_comments.py check` also fails on Chinese UI words in comments: write the English label (`Never Mind`), keep 「…」 for doc headings or text matched word for word.

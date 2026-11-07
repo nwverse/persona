@@ -851,7 +851,7 @@ backtick paths/commands/config keys in `CLAUDE.local.md` (only ID/host/email/IP-
 example machine ids `server` / `laptop`. `release.sh` scans before packaging;
 precommit hooks: `git config core.hooksPath scripts/hooks` (`pre-commit` staged content, `commit-msg` commit message, `pre-push` changed files/messages against `origin/master`).
 **Block again before merge** (#3696): `scripts/hooks/merge-pr.sh <PR number>` fetches the PR's base and head, runs `privacy_check.py --range origin/<base>..<head> --message <title/body>`,
-then only passes to `gh pr merge --squash --delete-branch --match-head-commit <head>` (exact scanned head merges). `--range <base>..<head>` checks changed head-file contents and commit messages, not worktree, in seconds.
+then only passes to `gh pr merge --squash --match-head-commit <head>` (exact scanned head merges) and deletes a same-repository branch through the API. `--range <base>..<head>` checks changed head-file contents and commit messages, not worktree, in seconds.
 Why not CI: private values come from local configs unavailable to CI, which only checks generic private-IP/email/npm rules; merge machine must possess values to block them.
 2026-11-05–06 six scheduled releases failed initial repo scan because machine-name docs had already been merged directly with `gh pr merge`.
 
