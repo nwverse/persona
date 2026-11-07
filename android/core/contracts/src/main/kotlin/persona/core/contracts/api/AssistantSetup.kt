@@ -26,6 +26,9 @@ data class AssistantConfig(
      * tells you instead); null from a hub without the setting.
      */
     @SerialName("main_tasks_quiet") val mainTasksQuiet: Boolean? = null,
+    /** Stable owner returned by hubs supporting per-assistant settings. */
+    val manager: String? = null,
+    @SerialName("default_permission_mode") val defaultPermissionMode: String? = null,
 )
 
 /**
@@ -41,6 +44,7 @@ data class AssistantConfigUpdate(
     /** "-" clears the main conversation: it stays on the machine it ran on and cannot continue elsewhere. */
     val main: String? = null,
     @SerialName("main_tasks_quiet") val mainTasksQuiet: Boolean? = null,
+    @SerialName("default_permission_mode") val defaultPermissionMode: String? = null,
 ) {
     companion object {
         const val CLEAR_MAIN = "-"

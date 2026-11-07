@@ -3,6 +3,8 @@
   "source_codex_history": "Codex 履歴",
   "source_identity_conflict": "ID の競合",
   "source_claude_background": "Claude バックグラウンド",
+  "source_claude_desktop": "Claude デスクトップアプリ",
+  "source_claude_terminal": "ターミナルの Claude",
   "read_only": "{source} · 閲覧のみ：{reason}",
   "read_only_default_reason": "このソースからはまだ送信できません",
   "untitled_session": "無題のセッション",

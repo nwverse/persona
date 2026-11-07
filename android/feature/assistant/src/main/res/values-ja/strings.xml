@@ -128,4 +128,13 @@
     <string name="assistant_refused_retry">再試行</string>
     <string name="assistant_manager_offline">%1$s · %2$s</string>
     <string name="assistant_manager_offline_empty">%1$sはオフラインです。履歴は見られますが、今はメッセージを送れません。</string>
+    <string name="assistant_settings_target">アシスタント</string>
+    <string name="assistant_settings_permission">新しい会話の権限</string>
+    <string name="assistant_settings_permission_hint">権限を明示的に選択していない新しい会話に適用します。既存の会話の権限は変わりません。</string>
+    <string name="assistant_settings_permission_default">デフォルト</string>
+    <string name="assistant_settings_permission_edits">編集を許可</string>
+    <string name="assistant_settings_permission_plan">計画のみ</string>
+    <string name="assistant_settings_permission_auto">自動</string>
+    <string name="assistant_settings_permission_full">フルアクセス</string>
+    <string name="assistant_settings_permission_failed">デフォルトの権限を保存できませんでした</string>
 </resources>
