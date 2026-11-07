@@ -185,52 +185,56 @@ func TestUnmergeRestoresPinnedFacts(t *testing.T) {
 	}
 }
 
-// Two projects merged into one, sharing a person, a chat and a timeline line the kept one did not have: unmerging
-// one leaves them on the kept project, because the other merge still brought them.
+// Two projects merged into one, sharing a person, a chat and a timeline line the kept one did not have, unmerged in
+// either order: unmerging one leaves them on the kept project, because the other merge still brought them.
 func TestUnmergeKeepsWhatAnotherMergeBrought(t *testing.T) {
-	e := testEngine(t, nil)
-	at := time.Now().Add(-time.Hour)
-	_ = e.Store.PutProject(&Project{Slug: "b", Name: "项目b", Status: "active", People: []string{"p0"}})
-	for _, slug := range []string{"a", "c"} {
-		_ = e.Store.PutProject(&Project{Slug: slug, Name: "项目" + slug, Status: "active", People: []string{"p"}, Chats: []string{"g"}})
-		_ = e.Store.AppendLog(slug, at, "共享群", "同一条进展")
-	}
-	_ = e.Store.PutPerson(&Person{ID: "p", Projects: []string{"a", "c"}})
-	_ = e.Store.PutChat(&Chat{ID: "g", Kind: "group", Projects: []string{"a", "c"}})
-	for _, slug := range []string{"a", "c"} {
-		if err := e.MergeProjects("b", slug, "测试"); err != nil {
+	for _, order := range [][]string{{"a", "c"}, {"c", "a"}} {
+		e := testEngine(t, nil)
+		at := time.Now().Add(-time.Hour)
+		_ = e.Store.PutProject(&Project{Slug: "b", Name: "项目b", Status: "active", People: []string{"p0"}})
+		for _, slug := range []string{"a", "c"} {
+			_ = e.Store.PutProject(&Project{Slug: slug, Name: "项目" + slug, Status: "active", People: []string{"p"}, Chats: []string{"g"}})
+			_ = e.Store.AppendLog(slug, at, "共享群", "同一条进展")
+		}
+		_ = e.Store.PutPerson(&Person{ID: "p", Projects: []string{"a", "c"}})
+		_ = e.Store.PutChat(&Chat{ID: "g", Kind: "group", Projects: []string{"a", "c"}})
+		for _, slug := range []string{"a", "c"} {
+			if err := e.MergeProjects("b", slug, "测试"); err != nil {
+				t.Fatal(err)
+			}
+		}
+
+		first := order[0]
+		if _, err := e.Unmerge(first); err != nil {
 			t.Fatal(err)
 		}
-	}
-
-	if _, err := e.Unmerge("a"); err != nil {
-		t.Fatal(err)
-	}
-	b, _ := e.Store.Project("b")
-	if strings.Join(b.People, ",") != "p0,p" || strings.Join(b.Chats, ",") != "g" {
-		t.Errorf("b = %+v", b)
-	}
-	for ref, want := range map[string]string{"people/p": "a,b", "chats/g": "a,b"} {
-		kind, id, _ := strings.Cut(ref, "/")
-		if got := projectsOf(t, e, kind, id); got != want {
-			t.Errorf("%s names %s, want %s", ref, got, want)
+		b, _ := e.Store.Project("b")
+		if strings.Join(b.People, ",") != "p0,p" || strings.Join(b.Chats, ",") != "g" {
+			t.Errorf("%s unmerged: b = %+v", first, b)
 		}
-	}
-	if log := strings.Join(e.Store.Log("b", 50), "\n"); !strings.Contains(log, "同一条进展") {
-		t.Errorf("b's timeline:\n%s", log)
-	}
+		want := strings.Join(slices.Sorted(slices.Values([]string{first, "b"})), ",")
+		for _, ref := range []string{"people/p", "chats/g"} {
+			kind, id, _ := strings.Cut(ref, "/")
+			if got := projectsOf(t, e, kind, id); got != want {
+				t.Errorf("%s unmerged: %s names %s, want %s", first, ref, got, want)
+			}
+		}
+		if log := strings.Join(e.Store.Log("b", 50), "\n"); !strings.Contains(log, "同一条进展") {
+			t.Errorf("%s unmerged: b's timeline:\n%s", first, log)
+		}
 
-	if _, err := e.Unmerge("c"); err != nil {
-		t.Fatal(err)
-	}
-	b, _ = e.Store.Project("b")
-	if strings.Join(b.People, ",") != "p0" || len(b.Chats) != 0 {
-		t.Errorf("after both: b = %+v", b)
-	}
-	for ref, want := range map[string]string{"people/p": "a,c", "chats/g": "a,c"} {
-		kind, id, _ := strings.Cut(ref, "/")
-		if got := projectsOf(t, e, kind, id); got != want {
-			t.Errorf("after both: %s names %s, want %s", ref, got, want)
+		if _, err := e.Unmerge(order[1]); err != nil {
+			t.Fatal(err)
+		}
+		b, _ = e.Store.Project("b")
+		if strings.Join(b.People, ",") != "p0" || len(b.Chats) != 0 {
+			t.Errorf("after both (%v): b = %+v", order, b)
+		}
+		for _, ref := range []string{"people/p", "chats/g"} {
+			kind, id, _ := strings.Cut(ref, "/")
+			if got := projectsOf(t, e, kind, id); got != "a,c" {
+				t.Errorf("after both (%v): %s names %s, want a,c", order, ref, got)
+			}
 		}
 	}
 }
@@ -299,5 +303,136 @@ func TestUnmergeRefuses(t *testing.T) {
 		if p, _ := e.Store.Project(slug); !p.Live() {
 			t.Errorf("%s = %+v", slug, p)
 		}
+	}
+}
+
+// posts are n Moments posts named prefix00…, the first at newest and each one a minute older.
+func posts(prefix string, n int, newest time.Time) []ProjectMoment {
+	var out []ProjectMoment
+	for i := range n {
+		out = append(out, ProjectMoment{ID: fmt.Sprintf("%s%02d", prefix, i), At: newest.Add(-time.Duration(i) * time.Minute)})
+	}
+	return out
+}
+
+// newest are the ids of the newest maxProjectMoments posts among lists.
+func newest(lists ...[]ProjectMoment) []string {
+	var ids []string
+	for _, m := range mergeMoments(nil, slices.Concat(lists...)) {
+		ids = append(ids, m.ID)
+	}
+	return ids
+}
+
+// Two projects merged into one and unmerged in either order: while one is still merged the kept project has the
+// newest posts of its own and that one's, and at the end exactly its own, when the second merge pushed the first
+// one's posts past the cap, when both brought the same newer posts, and when each pushed some of its own out.
+func TestUnmergeSiblingsRestoreMoments(t *testing.T) {
+	now := time.Now()
+	for _, tc := range []struct {
+		name    string
+		b, a, c []ProjectMoment
+	}{
+		{"pushed out a sibling's", posts("b", 45, now.Add(-time.Hour)), posts("a", 5, now.Add(-48*time.Hour)), posts("c", 5, now)},
+		{"shared posts", posts("b", maxProjectMoments, now.Add(-48*time.Hour)), posts("s", 10, now), posts("s", 10, now)},
+		{"both pushed", posts("b", maxProjectMoments, now.Add(-48*time.Hour)), posts("a", 5, now.Add(-time.Hour)), posts("c", 5, now)},
+	} {
+		for _, order := range [][]string{{"a", "c"}, {"c", "a"}} {
+			e := testEngine(t, nil)
+			brought := map[string][]ProjectMoment{"a": tc.a, "c": tc.c}
+			_ = e.Store.PutProject(&Project{Slug: "b", Name: "项目b", Status: "active", Moments: tc.b})
+			for _, slug := range []string{"a", "c"} {
+				_ = e.Store.PutProject(&Project{Slug: slug, Name: "项目" + slug, Status: "active", Moments: brought[slug]})
+			}
+			for _, slug := range []string{"a", "c"} {
+				if err := e.MergeProjects("b", slug, "测试"); err != nil {
+					t.Fatal(err)
+				}
+			}
+			for i, slug := range order {
+				if _, err := e.Unmerge(slug); err != nil {
+					t.Fatal(err)
+				}
+				want := newest(tc.b)
+				if i == 0 {
+					want = newest(tc.b, brought[order[1]])
+				}
+				b, _ := e.Store.Project("b")
+				var got []string
+				for _, m := range b.Moments {
+					got = append(got, m.ID)
+				}
+				if !slices.Equal(got, want) {
+					t.Errorf("%s, unmerged %v: b's posts = %v\nwant %v", tc.name, order[:i+1], got, want)
+				}
+			}
+		}
+	}
+}
+
+// What the unmerged project's merge brought leaves the kept project when no later merge that still holds has it
+// too: a merge from before had it already (here the user took it off in between), and a project made live again
+// holds nothing.
+func TestUnmergeHandsOverOnlyToLaterMerges(t *testing.T) {
+	noLock := false
+	for _, tc := range []string{"earlier", "revived"} {
+		e := testEngine(t, nil)
+		_ = e.Store.PutProject(&Project{Slug: "b", Name: "项目b", Status: "active"})
+		for _, slug := range []string{"a", "c"} {
+			_ = e.Store.PutProject(&Project{Slug: slug, Name: "项目" + slug, Status: "active", People: []string{"p"}})
+		}
+		_ = e.Store.PutPerson(&Person{ID: "p", Projects: []string{"a", "c"}})
+		steps := []func() error{
+			func() error { return e.MergeProjects("b", "c", "测试") },
+			func() error {
+				_, err := e.Apply(KindProject, "b", Update{RemovePeople: []string{"p"}, Lock: &noLock})
+				return err
+			},
+			func() error { return e.MergeProjects("b", "a", "测试") },
+		}
+		if tc == "revived" {
+			steps = []func() error{
+				func() error { return e.MergeProjects("b", "a", "测试") },
+				func() error { return e.MergeProjects("b", "c", "测试") },
+				func() error {
+					_, err := e.Apply(KindProject, "c", Update{Status: "active"})
+					return err
+				},
+			}
+		}
+		for _, step := range steps {
+			if err := step(); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if _, err := e.Unmerge("a"); err != nil {
+			t.Fatal(err)
+		}
+		if b, _ := e.Store.Project("b"); slices.Contains(b.People, "p") {
+			t.Errorf("%s: b's people = %v", tc, b.People)
+		}
+		if got := projectsOf(t, e, KindPerson, "p"); strings.Contains(got, "b") {
+			t.Errorf("%s: p names %s", tc, got)
+		}
+	}
+}
+
+// A timeline line appended to the kept project after a manual merge leaves its locks as the merge set them, so
+// unmerging still gives it its own back.
+func TestUnmergeRestoresLocksAfterALogLine(t *testing.T) {
+	e := testEngine(t, nil)
+	_ = e.Store.PutProject(&Project{Slug: "keep", Name: "示例 甲", Status: "active", Tagging: Tagging{LockedFields: []string{"summary"}}})
+	_ = e.Store.PutProject(&Project{Slug: "drop", Name: "示例 乙", Status: "active", Tagging: Tagging{LockedFields: []string{"goal"}}})
+	if _, err := e.Apply(KindProject, "drop", Update{MergeInto: "keep"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.Apply(KindProject, "keep", Update{Log: "新进展"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.Unmerge("drop"); err != nil {
+		t.Fatal(err)
+	}
+	if keep, _ := e.Store.Project("keep"); !slices.Equal(keep.LockedFields, []string{"summary"}) {
+		t.Fatalf("keep's locked fields = %v", keep.LockedFields)
 	}
 }

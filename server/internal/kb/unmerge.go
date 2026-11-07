@@ -91,18 +91,22 @@ func (e *Engine) unmergeProject(drop *Project) error {
 			return err
 		}
 	}
-	// held: what drop's merge brought keep that another project still merged into keep has too (handOver).
+	// held: what drop's merge brought keep that a project merged into keep after it has too (handOver).
 	var held ProjectMerge
-	var siblings, moved []string // moved: the references drop's merge moved that name drop alone again
+	// siblings: the other projects still merged into keep; records: those with a merge record, written once keep's
+	// lists are worked out; moved: the references drop's merge moved that name drop alone again.
+	var siblings, moved []string
+	var records []*Project
 	if found {
 		for _, p := range e.Store.Projects() {
-			if p.MergedInto != keep.Slug || p.Slug == drop.Slug {
+			if p.Live() || p.MergedInto != keep.Slug || p.Slug == drop.Slug {
 				continue
 			}
 			siblings = append(siblings, p.Slug)
-			if rec != nil {
-				if err := e.handOver(rec, p, &held); err != nil {
-					return err
+			if rec != nil && p.Merge != nil {
+				records = append(records, p)
+				if !p.Merge.At.Before(rec.At) {
+					handOver(rec, p, &held)
 				}
 			}
 		}
@@ -116,13 +120,27 @@ func (e *Engine) unmergeProject(drop *Project) error {
 			keep.Keywords = removeStrings(keep.Keywords, removeStrings(rec.Keywords, held.Keywords))
 			gone := removeStrings(rec.Moments, held.Moments)
 			keep.Moments = slices.DeleteFunc(slices.Clone(keep.Moments), func(m ProjectMoment) bool { return slices.Contains(gone, m.ID) })
-			keep.Moments = mergeMoments(keep.Moments, rec.Evicted)
+			// The posts merges pushed past the cap, drop's and those of the merges that still hold, come back as
+			// far as the room allows; the rest wait on those merges' records for an unmerge to make room.
+			pool := slices.Clone(rec.Evicted)
+			for _, s := range records {
+				pool = append(pool, s.Merge.Evicted...)
+			}
+			keep.Moments = mergeMoments(keep.Moments, pool)
+			rest := slices.DeleteFunc(pool, func(m ProjectMoment) bool {
+				return slices.ContainsFunc(keep.Moments, func(k ProjectMoment) bool { return k.ID == m.ID })
+			})
+			for _, s := range records {
+				s.Merge.Evicted = mergeMoments(nil, slices.DeleteFunc(slices.Clone(rest), func(m ProjectMoment) bool {
+					return slices.Contains(s.Merge.Moments, m.ID)
+				}))
+			}
 			// Pinned facts and locks changed since the merge are the user's newer word and stay.
 			if rec.Pinned != nil && keep.Pinned == joinPinned(*rec.Pinned, drop.Pinned) {
 				keep.Pinned = *rec.Pinned
 			}
 			if l := rec.Locks; l != nil {
-				if now := joinLocks(*l, drop); slices.Equal(keep.LockedFields, now.Fields) && keep.Locked == now.Locked {
+				if joined := joinLocks(*l, drop); sameFields(keep.LockedFields, joined.Fields) && keep.Locked == joined.Locked {
 					keep.LockedFields, keep.Locked = l.Fields, l.Locked
 				}
 			}
@@ -133,10 +151,14 @@ func (e *Engine) unmergeProject(drop *Project) error {
 			}
 			keep.Aliases = slices.DeleteFunc(slices.Clone(keep.Aliases), func(a string) bool { return names[normName(a)] })
 		}
+		for _, s := range records {
+			if err := e.Store.putEntity(KindProject, s.Slug, s, &s.Tagging, true); err != nil {
+				return err
+			}
+		}
 		if err := e.unmergeLogs(keep.Slug, drop.Slug, siblings); err != nil {
 			return err
 		}
-		_ = e.Store.AppendLog(keep.Slug, now, "Persona", fmt.Sprintf("拆开了项目「%s」", drop.Name))
 		keep.Dirty, keep.Updated = true, now
 		if err := e.Store.putEntity(KindProject, keep.Slug, keep, &keep.Tagging, true); err != nil {
 			return err
@@ -155,7 +177,7 @@ func (e *Engine) unmergeProject(drop *Project) error {
 		return err
 	}
 	drop.Status = "active"
-	if rec != nil && rec.Status != "" {
+	if rec != nil && rec.Status != "" && rec.Status != "merged" {
 		drop.Status = rec.Status
 	}
 	drop.MergedInto, drop.Merge, drop.Dirty, drop.Updated = "", nil, true, now
@@ -163,38 +185,41 @@ func (e *Engine) unmergeProject(drop *Project) error {
 		return err
 	}
 	e.index(KindProject, drop.Slug, drop.Name, drop.Tagging, drop.OneLine, drop.Updated)
+	if found { // last, so a retry after a failed write does not note the unmerge twice
+		_ = e.Store.AppendLog(keep.Slug, now, "Persona", fmt.Sprintf("拆开了项目「%s」", drop.Name))
+	}
 	return nil
 }
 
-// handOver handles sib, another project merged into keep, when drop's merge (rec) is undone: what rec brought keep
-// that sib has too stays on keep, since sib's merge still holds, and the chats, people and items among it that rec
-// moved go on naming keep. Both go into held, and onto sib's record as if sib's merge had brought them, which it
-// would have without drop's, so unmerging sib later takes them off keep.
-func (e *Engine) handOver(rec *ProjectMerge, sib *Project, held *ProjectMerge) error {
+// handOver handles sib, a project merged into keep after drop, when drop's merge (rec) is undone: what rec brought
+// keep that sib has too stays on keep, since sib's merge still holds, and the chats, people and items among it that rec
+// moved go on naming keep. Both go into held, and onto sib's record as if sib's merge had brought them, which it would
+// have without drop's, so unmerging sib later takes them off keep. drop's posts leave the posts sib's merge pushed
+// past the cap. A merge before drop's is not asked: keep had what it brought when drop's came, so what rec lists
+// is what the user took off keep in between. The caller writes sib.
+func handOver(rec *ProjectMerge, sib *Project, held *ProjectMerge) {
 	has := ProjectMerge{People: sib.People, Chats: sib.Chats, Items: sib.Items, Dirs: sib.Dirs, Keywords: sib.Keywords,
 		Moved: projectRefs(sib)} // Moved: sib's references, to match rec.Moved against
 	for _, m := range sib.Moments {
 		has.Moments = append(has.Moments, m.ID)
 	}
-	onSib := sib.Merge
-	if onSib == nil { // a merge from before the record: nothing to note on it
-		onSib = &ProjectMerge{}
-	}
-	from, in, into, to := rec.joined(), has.joined(), held.joined(), onSib.joined()
+	from, in, into, to := rec.joined(), has.joined(), held.joined(), sib.Merge.joined()
 	for i := range from {
 		both := slices.DeleteFunc(slices.Clone(*from[i]), func(v string) bool { return !slices.Contains(*in[i], v) })
 		*into[i] = addUnique(*into[i], both...)
 		*to[i] = addUnique(*to[i], both...)
 	}
-	if sib.Merge == nil {
-		return nil
-	}
-	return e.Store.putEntity(KindProject, sib.Slug, sib, &sib.Tagging, true)
+	sib.Merge.Evicted = slices.DeleteFunc(sib.Merge.Evicted, func(m ProjectMoment) bool { return slices.Contains(rec.Moments, m.ID) })
 }
 
 // joined are the lists of a merge record that name what the merge joined into the kept project, in a fixed order.
 func (m *ProjectMerge) joined() []*[]string {
 	return []*[]string{&m.People, &m.Chats, &m.Items, &m.Dirs, &m.Keywords, &m.Moments, &m.Moved}
+}
+
+// sameFields: a and b name the same fields in any order (an update sorts a project's locked fields).
+func sameFields(a, b []string) bool {
+	return slices.Equal(slices.Sorted(slices.Values(a)), slices.Sorted(slices.Values(b)))
 }
 
 // unmergeLogs takes drop's lines out of keep's timeline, where mergeLogs put them. A line both had before the merge
