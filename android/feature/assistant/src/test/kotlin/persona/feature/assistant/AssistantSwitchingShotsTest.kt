@@ -47,6 +47,7 @@ class AssistantSwitchingShotsTest {
         override fun selectTab(tab: AppTab) = Unit
     }
     private var dark by mutableStateOf(false)
+    private var style by mutableStateOf(AppStyle.Default)
     private var hubOnline by mutableStateOf(true)
     private var roster by mutableStateOf(ManagerRoster(listOf(
         HubManager("assistant", "助手", online = true, isDefault = true, builtin = true),
@@ -92,7 +93,7 @@ class AssistantSwitchingShotsTest {
     private fun mount(hub: Hub, embeddedChat: Boolean = true) {
         AssistantManagerChoice.choose("hub", null, "assistant")
         rule.setContent {
-            PersonaTheme(darkTheme = dark, reduceMotion = true) {
+            PersonaTheme(darkTheme = dark, reduceMotion = true, style = style) {
                 val configuration = Configuration(LocalConfiguration.current).apply {
                     uiMode = (uiMode and Configuration.UI_MODE_NIGHT_MASK.inv()) or
                         if (dark) Configuration.UI_MODE_NIGHT_YES else Configuration.UI_MODE_NIGHT_NO
@@ -140,12 +141,12 @@ class AssistantSwitchingShotsTest {
     @Test fun topChipsRestoreIndependentHistoriesAndRunningStreamsInLightAndDark() {
         val hub = Hub()
         mount(hub)
-        for (night in listOf(false, true)) {
-            rule.runOnIdle { dark = night; hub.show(null) }
+        for (appStyle in AppStyle.entries) for (night in listOf(false, true)) {
+            rule.runOnIdle { style = appStyle; dark = night; hub.show(null) }
             pick("助手")
             history("助手").assertIsDisplayed()
             history("工作").assertDoesNotExist()
-            val mode = if (night) "dark" else "light"
+            val mode = (if (appStyle == AppStyle.Default) "" else "${appStyle.key}-") + if (night) "dark" else "light"
             capture("$mode-a-main-history")
             pick("工作")
             history("工作").assertIsDisplayed()
@@ -333,8 +334,11 @@ class AssistantSwitchingShotsTest {
         rule.onNodeWithContentDescription("发送").assertIsNotEnabled()
         rule.onAllNodes(hasSetTextAction()).assertCountEquals(0)
         assertTrue(hub.sent.isEmpty())
-        capture("light-offline-work-composer-disabled")
-        rule.runOnIdle { dark = true }
-        capture("dark-offline-work-composer-disabled")
+        for (appStyle in AppStyle.entries) for (night in listOf(false, true)) {
+            rule.runOnIdle { style = appStyle; dark = night }
+            rule.onNodeWithContentDescription("发送").assertIsNotEnabled()
+            val mode = (if (appStyle == AppStyle.Default) "" else "${appStyle.key}-") + if (night) "dark" else "light"
+            capture("$mode-offline-work-composer-disabled")
+        }
     }
 }
