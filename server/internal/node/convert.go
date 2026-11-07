@@ -27,8 +27,8 @@ const (
 // converting lets one LibreOffice run at a time: it is heavy, and two runs on one profile refuse each other.
 var converting sync.Mutex
 
-// renameConverted moves LibreOffice's PDF into the cache: os.Rename, which tests make fail as it does across file
-// systems.
+// renameConverted is os.Rename, for moving LibreOffice's PDF into the cache; tests make it fail as it does when the
+// temp folder is on another file system.
 var renameConverted = os.Rename
 
 // sofficePath finds LibreOffice: on PATH (soffice, libreoffice), else the app bundle on a Mac.
