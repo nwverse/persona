@@ -319,3 +319,26 @@ An AtomicFile can retain only its recovery `.bak` after an interrupted write. Tr
 ## Counts must share the list's membership (#6521)
 
 A real offline Codex history row produced a machine count of one but an empty Running list. Legacy, paged and count endpoints agreed on that row; Android hid it locally and then replaced the local count with the server's broader total. Never treat a paged total as a client-filtered total unless the protocol expresses all membership predicates. Use the complete-membership policy while #6108 is pending. Test the actual repository and ViewModel together, including paged-socket invalidations during the complete HTTP fallback: otherwise archive/restore can leave a stale list even after initial counts are corrected.
+
+## In-app update transport and install trust (#2198)
+
+A successful version check does not prove the APK download works: the ordinary connection allows LAN HTTP while the download used to demand HTTPS, failing before the APK request was sent. Confirm the paired protocol and whether the server received the request, and reproduce with the production download adapter; changing an unused settings adapter fixes nothing.
+
+When the APK download reuses the constrained paired connection, HTTP metadata and SHA-256 only check integrity; trust in the source rests on the installed app's signing identity and the system's final verification. Before creating the install session check the same package, the declared version matching the APK, a higher version and a non-empty, exactly matching current signer set. Robolectric's archive metadata stand-ins cannot prove cryptographic verification: test a wrong signature, a tampered APK and a real system upgrade on a device or emulator.
+
+`setRequireUserAction` is an API 31 method; an install entry supporting API 30 needs a version check. On API 30 an ordinary `REQUEST_INSTALL_PACKAGES` install already asks the user; never add a silent-install permission for compatibility.
+
+## The floating capsule resident, reading and fast (#2124)
+
+- `PhoneToolsRuntime.setForeground(false)` controls phone tools, not the WebSocket; check the real PID, foreground service and socket heartbeats before concluding the app is offline in the background.
+- An attached capsule window is not the visible overlay Android 15 requires to start a foreground service from the background: after the first real draw check `windowVisibility`, attachment, `isShown` and the keyguard before publishing the start eligibility.
+- Reads from the capsule reuse the app's read path, which is foreground-gated in places: prove the reply is stably visible in the viewport, the snapshot verified and the captured version current, and have the callback say whether the receipt was confirmed.
+- The Feishu extension decodes a read's `position` as a string (the web sends it so); a JSON number fails to decode and every read comes back 400 "position is required". Messages at or before Feishu's `read_position` count as read, or loaded windows keep conversations unread after a restart.
+- Feishu unread counts come from the hub's inbox record or from Feishu, before or after the read; deciding "changed since read" by the count brought read conversations back. Compare the newest message instead.
+- With a real Feishu inbox, prefetching 24 conversation windows at once ran the app out of a 192 MB heap within seconds, and idle windows were never released. Prefetch a few and keep only a handful idle.
+- An enabled accessibility service (the capsule keeper, or another app's) makes the process resident and makes Compose diff the semantics tree on every recomposition. That exposed per-event work: the sessions snapshot written on every push, list sorting with regexes compiled per comparison, and the Agents page rebuilt on the main thread per event. Profile with `am profile start --sampling` on a debuggable build (simpleperf may be blocked on emulators) and watch idle CPU through `/proc/<pid>/stat`.
+- A keeper `CapsuleHost(close = …)` callback named like the host's own `close()` called the latter inside the host: the capsule window went away without turning the setting off. Avoid callback names that shadow members.
+
+## Wait for screenrecord to exit before pulling the file (2026-11-05, #2835)
+
+After sending SIGINT to `screenrecord`, wait for the recording process on the device to exit before `adb pull`. Pulling while it still writes the index can give an MP4 whose `mdat` length is a placeholder and which lacks the final `moov`; `file` still says MP4, so check the top-level atoms, `moov/mvhd` and duration before archiving. If pulled too early, pull the finished file again after the process exits.

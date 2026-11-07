@@ -142,7 +142,8 @@ class HubPairingClient private constructor(
     }
 
     suspend fun download(token: String, update: AppUpdate, destination: OutputStream) = withContext(Dispatchers.IO) {
-        val base = updateOrigin()
+        val route = probe()
+        val base = route.endpoint.baseUrl()
         // Same origin and path prefix as the hub (hubResolve), never another host.
         val target = requireNotNull(base.hubResolve(update.downloadUrl)) { "Invalid APK origin" }
         val path = requireNotNull(base.hubPath(target)) { "Invalid APK origin" }
@@ -150,7 +151,7 @@ class HubPairingClient private constructor(
             ?: throw HubFailure(HubError.Protocol)
         val digest = MessageDigest.getInstance("SHA-256")
         val response = if (connection != null) connection.request(
-            path + (target.encodedQuery?.let { "?$it" } ?: ""), buffered = false,
+            path + (target.encodedQuery?.let { "?$it" } ?: ""), buffered = false, expectedRoute = route,
         ) else http.client.newCall(authorized(target, token).build()).awaitResponse(buffered = false)
         response.use { response ->
             if (!response.isSuccessful) throw HubFailure.from(response)
@@ -166,15 +167,8 @@ class HubPairingClient private constructor(
             }
         }
         val actual = digest.digest().joinToString("") { "%02x".format(it) }
-        check(actual.equals(checksum, ignoreCase = true)) { "APK checksum mismatch" }
-    }
-
-    private suspend fun updateOrigin(): HttpUrl {
-        if (connection != null) return connection.activeRoute().endpoint.baseUrl().also {
-            if (!it.isHttps) throw HubFailure(HubError.TlsRequired, retryable = false)
-        }
-        val tlsEndpoints = endpoints.filter { it.url.startsWith("https://") }
-        return selector.select(orderEndpoints(tlsEndpoints)).endpoint.baseUrl()
+        if (!actual.equals(checksum, ignoreCase = true)) throw HubFailure(HubError.Protocol,
+            message = "APK checksum mismatch", code = "apk_checksum_mismatch", retryable = false)
     }
 
     suspend fun json(path: String, token: String, body: JsonObject? = null, headers: Map<String, String> = emptyMap()): JsonObject {

@@ -1,6 +1,7 @@
 package devices
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"maps"
@@ -326,6 +327,7 @@ func (d *Devices) fleetRegroup() {
 	}
 	used := map[*Machine]bool{}
 	var derivedList []*Machine
+	renamed := false
 	for _, g := range pendingDerived {
 		var m *Machine
 		for _, p := range g.paths {
@@ -350,6 +352,8 @@ func (d *Devices) fleetRegroup() {
 			m = newMachine(d, cfg)
 			m.raw = ps[0].rec.Cfg
 			m.derived = true
+		} else if m.setName(derivedName(ps[0])) {
+			renamed = true // the member renamed it: the same machine, connected as it is
 		}
 		used[m] = true
 		if f.ids[g.key] != m.cfg.ID {
@@ -431,6 +435,9 @@ func (d *Devices) fleetRegroup() {
 		d.logf("[%s] a member's computer: reached through %s", m.cfg.ID, d.hubNameOf(d.pathsOf(m)[0].hub))
 	}
 	if !changed {
+		if renamed {
+			d.changed()
+		}
 		return
 	}
 	for _, m := range wake {
@@ -464,6 +471,16 @@ func derivedHas(d map[string]*Machine, id string) bool {
 		}
 	}
 	return false
+}
+
+// derivedName is what the member calls the computer of p: its hub.json name, else its id there (as a new derived
+// machine is named).
+func derivedName(p *nodePath) string {
+	var cfg struct {
+		Name string `json:"name"`
+	}
+	_ = json.Unmarshal(p.rec.Cfg, &cfg)
+	return cmp.Or(cfg.Name, p.mid)
 }
 
 // derivedID is the id a member's computer gets: its id in that member's hub.json, unless the center (or another
@@ -542,7 +559,7 @@ func (d *Devices) parkReason(m *Machine) string {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if to := f.absorbed[m]; to != nil {
-		return "和「" + to.cfg.Name + "」是同一台电脑"
+		return "和「" + to.name() + "」是同一台电脑"
 	}
 	if m.derived {
 		if _, ok := f.paths[m]; !ok {

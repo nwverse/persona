@@ -2,6 +2,7 @@ package devices
 
 import (
 	"bufio"
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -13,6 +14,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/nwverse/persona/server/internal/apierr"
@@ -58,11 +60,14 @@ type MachineConfig struct {
 // connection to its resident node, a stream on the Persona Link it keeps to the hub (kind link, link.go), a
 // connector's stream (kind service), or a stream through a member hub (a derived machine).
 type Machine struct {
-	cfg  MachineConfig
-	raw  json.RawMessage // the entry as the hub gave it (for a derived machine, the member's)
-	d    *Devices
-	ctx  context.Context
-	stop context.CancelFunc
+	cfg MachineConfig
+	// named is what the computer is called now: cfg.Name until the hub renames it, which changes nothing else of the
+	// running machine (startMachines); read through name().
+	named atomic.Pointer[string]
+	raw   json.RawMessage // the entry as the hub gave it (for a derived machine, the member's)
+	d     *Devices
+	ctx   context.Context
+	stop  context.CancelFunc
 
 	spooled spoolSeen // spool_ids of what a resident node replayed (spooldedupe.go)
 
@@ -146,6 +151,7 @@ func newMachine(d *Devices, cfg MachineConfig) *Machine {
 	m := &Machine{cfg: cfg, d: d, watched: map[string]bool{}, lastSeq: map[string]int{}, kick: make(chan struct{}, 1),
 		timings: defaultTailcatTimings, deployRetry: 2 * time.Second, reconnectGrace: reconnectGrace,
 		linkUp: make(chan struct{}, 1), first: make(chan struct{})}
+	m.setName(cfg.Name)
 	if dial := d.opts.DialNode; dial != nil {
 		m.dialNode = dial(cfg.ID)
 	}
@@ -158,10 +164,30 @@ func newMachine(d *Devices, cfg MachineConfig) *Machine {
 	return m
 }
 
+// sameConfig: a and b are the same entry but perhaps for the name, which a running machine takes as it is (rename).
 func sameConfig(a, b MachineConfig) bool {
+	a.Name, b.Name = "", ""
 	x, _ := json.Marshal(a)
 	y, _ := json.Marshal(b)
 	return string(x) == string(y)
+}
+
+// name is what the computer is called now: as its entry last named it (renamed or not), else its id.
+func (m *Machine) name() string {
+	if n := m.named.Load(); n != nil {
+		return *n
+	}
+	return cmp.Or(m.cfg.Name, m.cfg.ID)
+}
+
+// setName renames the computer ("": its id); true when that changed its name.
+func (m *Machine) setName(name string) bool {
+	name = cmp.Or(name, m.cfg.ID)
+	if old := m.named.Load(); old != nil && *old == name {
+		return false
+	}
+	m.named.Store(&name)
+	return true
 }
 
 // snapshot is the machine as the apps get it, but for what the hub adds (computer, browser).
@@ -219,7 +245,7 @@ func (m *Machine) snapshot() proto.Machine {
 		link = m.link.info()
 	}
 	return proto.Machine{
-		ID: m.cfg.ID, Name: m.cfg.Name, Kind: m.cfg.Kind, Icon: icon, SSHHost: m.cfg.SSHHost, Online: m.online || warm, Error: m.err,
+		ID: m.cfg.ID, Name: m.name(), Kind: m.cfg.Kind, Icon: icon, SSHHost: m.cfg.SSHHost, Online: m.online || warm, Error: m.err,
 		Hostname: m.info.Hostname, OS: m.info.OS, Arch: m.info.Arch, Home: m.info.Home,
 		HerdrVersion: m.info.HerdrVersion, ClaudeVersion: m.info.ClaudeVersion, LastSeen: m.lastSeen,
 		NodeVersion: m.info.Version, NodeMismatch: m.online && nodeMismatch(version, m.info),
@@ -426,11 +452,11 @@ func (m *Machine) call(ctx context.Context, method string, params any, out any) 
 		m.mu.Unlock()
 	}
 	if p == nil {
-		return fmt.Errorf("%s: %w", m.cfg.Name, errOffline)
+		return fmt.Errorf("%s: %w", m.name(), errOffline)
 	}
 	select {
 	case <-p.Done(): // closed, a new connection on its way: nothing was sent
-		return fmt.Errorf("%s: %w", m.cfg.Name, errOffline)
+		return fmt.Errorf("%s: %w", m.name(), errOffline)
 	default:
 	}
 	return p.Call(ctx, method, params, out)

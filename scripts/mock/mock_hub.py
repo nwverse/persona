@@ -21,6 +21,7 @@ HUB_ID = os.environ.get("MOCK_HUB_ID") or str(uuid.uuid4())
 TLS = {"port": 0, "fp": "", "server": None}
 ENDPOINTS = []
 CLIENTS = {}
+WS_OBSERVATIONS = []  # Non-secret connection history for background/resident acceptance.
 FAULT_LOCK = threading.Lock()
 LOST_RECEIPT = False
 
@@ -29,7 +30,8 @@ def features():
     # Match proto.Features, retaining the existing terminal fixture switches.
     return ["error_codes", "client_hello", "heartbeat", "app_ping", "client_msg_id", "send_refusals",
             "screen_dialog", "resumable_interactions", "secret_prompts", "request_id", "file_upload",
-            "tls", "endpoints", "connectors", "lark_attachments", "file_stream", "file_thumb", "git_blob", "task_push"] + (["git_write"] if os.environ.get("MOCK_GIT_WRITE") else []) + (["terminal_stream"] if TERMINAL_STREAM else []) + (
+            "tls", "endpoints", "connectors", "lark_attachments", "file_stream", "file_thumb", "git_blob", "task_push",
+            "machine_rename"] + (["git_write"] if os.environ.get("MOCK_GIT_WRITE") else []) + (["terminal_stream"] if TERMINAL_STREAM else []) + (
                 ["terminal_control", "terminal_scroll", "terminal_click", "terminal_mouse"] if TERMINAL_CONTROL else []) + (
                 ["terminal_panes"] if os.environ.get("MOCK_TERMINAL_PANES") else []) + (["herdr_client"] + ([] if os.environ.get("MOCK_TERMINAL_FULL_NOFOCUS") else ["herdr_focus"]) if TERMINAL_FULL else []) + (
                 ["assistant_compact", "assistant_main_new"] if os.environ.get("MOCK_MAIN_ACTIONS") == "1" else []) + (
@@ -1243,9 +1245,9 @@ PINS = {"spaces": ["macbook/weather"], "sessions": []}  # GET / PUT /api/v1/pins
 def mark_seen(sid):
     SEEN.append(sid)
     changed = None
-    for s in SESSIONS:
+    for s in SESSIONS + ASSISTANT:
         if s["session_id"] == sid and s["state"] == "unread":
-            s.update(state="idle", status="idle", seen_at=ago())
+            s.update(state="idle", status="idle", seen_at=datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"))
             changed = s["machine_id"]
     # The hub pushes the machine's list when a session's state changes: that is how the app knows a seen sent over the
     # socket landed (SeenOutbox, #1588). Without it the app sends every one again over HTTP 5 s later (#2061).
@@ -2169,6 +2171,28 @@ def other_manager(h):
 
 # Each other manager's own 说明 (设置 › 助手 with its X-Persona-Manager): a whole assistant has its own.
 MANAGER_NOTES = {"m-3fa21c": "这是「工作」管理者：只管工作电脑上的事和工作邮箱。"}
+
+
+def machine_rename_route(h, method, p, raw):
+    """PUT /api/v1/machines/{id}/name {name} (docs/server/machines.md "Renaming a computer"): the hub's name for the
+    computer, "" its id again; every client gets the machines again. 400 invalid_name as the hub."""
+    parts = p.split("/")
+    if method != "PUT" or len(parts) != 6 or parts[5] != "name" or not p.startswith("/api/v1/machines/"):
+        return False
+    try:
+        body = json.loads(raw or b"{}")
+    except ValueError:
+        body = {}
+    m = next((x for x in MACHINES if x["id"] == parts[4]), None)
+    if not m: return h.send_json({"error": "There's no such computer", "code": "not_found"}, 404) or True
+    name = str(body.get("name") or "").strip()
+    if len(name) > 40 or any(c in name for c in "\n\r\t"):
+        return h.send_json({"error": "The name can be at most 40 characters, on one line", "code": "invalid_name"}, 400) or True
+    m["name"] = name or m["id"]
+    for send, _ in list(LIVE):
+        try: send({"type": "machines", "machines": out_machines()})
+        except Exception: pass
+    return h.send_json({"ok": True, "name": m["name"]}) or True
 
 
 def manager_moves_route(h, method, p, raw):
@@ -9727,18 +9751,37 @@ def png(w, h, rgb):
 # connecting (0: back).
 FAKE_SCREEN = {"account": "me", "password": "mock-pass", "port": 0, "signins": [], "typed": "",  # typed: keys after signing in
                "pointer": None, "clicks": [], "clipboard": "", "conns": [], "frames": 0, "slow": 0.0, "down": False}
-FAKE_W, FAKE_H = 480, 300
+# MOCK_SCREEN_DISPLAYS=2 (#80): the mock Mac has two 480×300 displays side by side, one picture 960×300 wide, each
+# numbered in its window (display 2 green). Its Screen Sharing sends their rectangles (ExtendedDesktopSize) when asked;
+# with "2:node" it sends none, as macOS's does, and MacBook's computer status carries them as the node reads them
+# (`displays`, points at a 2× scale).
+_displays = os.environ.get("MOCK_SCREEN_DISPLAYS", "1").split(":")
+FAKE_DISPLAYS = max(1, int(_displays[0] or "1"))
+FAKE_EXTENDED = FAKE_DISPLAYS > 1 and "node" not in _displays[1:]
+FAKE_W, FAKE_H = 480 * FAKE_DISPLAYS, 300
+FAKE_NODE_DISPLAYS = [{"id": i + 1, "x": 240 * i, "y": 0, "width": 240, "height": 150, **({"main": True} if i == 0 else {})}
+                      for i in range(FAKE_DISPLAYS)] if FAKE_DISPLAYS > 1 and not FAKE_EXTENDED else []
+# The displays' numbers, 3×5 cells each, drawn 12 pixels a cell.
+FAKE_DIGITS = {1: [".#.", "##.", ".#.", ".#.", "###"], 2: ["###", "..#", "###", "#..", "###"],
+               3: ["###", "..#", "###", "..#", "###"], 4: ["#.#", "#.#", "###", "..#", "..#"]}
 
 
 def fake_frame(t=0):
-    """The mock Mac's desktop as rows of (r, g, b): a gradient, a window, and a box that moves with t (animated)."""
+    """The mock Mac's desktop as rows of (r, g, b): a gradient, a window, and a box that moves with t (animated). With
+    several displays, each its own gradient and window with its number; the box stays on the first."""
     px = []
     bx, by = 80 + (t * 7) % 300, 120 + (t * 3) % 120
     for y in range(FAKE_H):
         for x in range(FAKE_W):
+            d, lx = divmod(x, 480)
             if bx <= x < bx + 40 and by <= y < by + 40: px.append((255, 159, 10))
-            elif 60 <= x < 420 and 50 <= y < 250: px.append((236, 236, 238) if y < 74 else (250, 250, 252))
-            else: px.append((40 + y // 6, 90 + y // 8, 160))
+            elif 60 <= lx < 420 and 50 <= y < 250:
+                digit = FAKE_DIGITS.get(d + 1) if FAKE_DISPLAYS > 1 else None
+                cx, cy = (lx - 222) // 12, (y - 120) // 12
+                if digit and 222 <= lx and 120 <= y and cx < 3 and cy < 5 and digit[cy][cx] == "#": px.append((60, 60, 67))
+                else: px.append((236, 236, 238) if y < 74 else (250, 250, 252))
+            elif d == 0: px.append((40 + y // 6, 90 + y // 8, 160))
+            else: px.append((40 + y // 8, 150 + y // 6 % 60, 90))
     return px
 
 
@@ -9827,8 +9870,11 @@ def fake_screen_sharing():
             encodings, z, t, sent = [], zlib.compressobj(6), 0, False
             frame = fake_frame()
 
-            def update(rects):
+            def update(rects, extended=False):
                 body = b""
+                if extended:  # ExtendedDesktopSize: reason 0, status 0, the framebuffer's size, then each display
+                    body += struct.pack(">HHHHi", 0, 0, FAKE_W, FAKE_H, -308) + struct.pack(">B3x", FAKE_DISPLAYS)
+                    body += b"".join(struct.pack(">IHHHHI", i + 1, 480 * i, 0, 480, FAKE_H, 0) for i in range(FAKE_DISPLAYS))
                 for (x, y, w, h) in rects:
                     if 16 in encodings:
                         body += struct.pack(">HHHHi", x, y, w, h, 16) + zrle_rect(frame, FAKE_W, x, y, w, h, z)
@@ -9836,7 +9882,7 @@ def fake_screen_sharing():
                         body += struct.pack(">HHHHi", x, y, w, h, 0) + b"".join(
                             bytes([*frame[(y + j) * FAKE_W + x + i][::-1], 0]) for j in range(h) for i in range(w))
                 with lock:
-                    c.sendall(struct.pack(">BxH", 0, len(rects)) + body)
+                    c.sendall(struct.pack(">BxH", 0, len(rects) + (1 if extended else 0)) + body)
                 FAKE_SCREEN["frames"] += 1
 
             while True:  # SetPixelFormat 20, SetEncodings 4 + 4n, FramebufferUpdateRequest 10, key 8, pointer 6, cut 8 + n
@@ -9849,7 +9895,7 @@ def fake_screen_sharing():
                     exact(c, 9)
                     if not sent:
                         sent = True
-                        update([(0, 0, FAKE_W, FAKE_H)])
+                        update([(0, 0, FAKE_W, FAKE_H)], extended=FAKE_EXTENDED and -308 in encodings)
                     elif os.environ.get("MOCK_SCREEN_ANIMATE") == "1":  # a box moving at ~30 frames a second
                         time.sleep(1 / 30)
                         old = (80 + (t * 7) % 300, 120 + (t * 3) % 120)
@@ -10075,6 +10121,52 @@ def set_session_state(query):
                    rev=(session.get("rev") or 0) + 1)
     push_machine(mid)
     return {"session": stamp_row(decorated_session(session))}, 200
+
+
+def incoming_message(query):
+    """A new reply in any real fixture conversation, even when no chat is subscribed."""
+    if set(query) != {"mid", "sid", "text"} or any(len(values) != 1 or not values[0].strip() for values in query.values()):
+        return {"error": "Provide exactly one mid, sid and text"}, 400
+    mid, sid, text = (query[key][0] for key in ("mid", "sid", "text"))
+    session = next((s for s in SESSIONS + ASSISTANT if s["machine_id"] == mid and s["session_id"] == sid), None)
+    if session is None:
+        return {"error": "Session not found"}, 404
+    CHURN_ITEMS.setdefault(sid, list(ITEMS.get(sid, [])))
+    now = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+    item = it("assistant", "text", 0, text=text)
+    item["ts"] = now
+    previous = ITEMS.get(sid, [])
+    before = previous[-1]["seq"] if previous else 0
+    ITEMS[sid] = previous + [item]
+    session.update(state="unread", status="done", updated_at=now, state_since=now,
+                   last_text=text, rev=max((session.get("rev") or 0) + 1, item["seq"]))
+    push_machine(mid)
+    for send, subscribed in list(LIVE):
+        if sid in subscribed:
+            try: send({"type": "items", "machine_id": mid, "session_id": sid, "items": [item], **span([item], before)})
+            except OSError: pass
+    return {"session": decorated_session(session), "item": item}, 200
+
+
+def quiet_capsule():
+    """Remove fixture activity before proving an inactive capsule wakes for an incoming reply."""
+    pending = mock_interactions()
+    with REQUEST_LOCK:
+        INTERACTIONS.clear()
+        MOCK_INTERACTIONS.clear()
+    now = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+    for session in SESSIONS + ASSISTANT:
+        session.update(state="idle", status="idle", seen_at=now)
+    inbox_bulk({"done": True, "items": [{"id": item["id"]} for item in INBOX]})
+    for send, _ in list(LIVE):
+        try:
+            for interaction in pending:
+                send({"type": "interaction_resolved", "id": interaction["id"]})
+            send({"type": "inbox"})
+        except OSError: pass
+    for mid in {s["machine_id"] for s in SESSIONS + ASSISTANT}:
+        push_machine(mid)
+    return {"ok": True}
 
 
 def bump(what, session=None):
@@ -10323,7 +10415,10 @@ def computer_of(machine_id, enabled):
     """How Cua Driver is on that Mac, said for every Mac while the plugin is on (MacBook: MOCK_COMPUTER's state; Mac
     Studio: not installed), with whether it is turned on for it."""
     state = MOCK_COMPUTER if machine_id == "macbook" else "missing"
-    return {"enabled": enabled, **COMPUTER_STATES.get(state, COMPUTER_STATES["ready"])}
+    c = {"enabled": enabled, **COMPUTER_STATES.get(state, COMPUTER_STATES["ready"])}
+    if machine_id == "macbook" and c.get("screen_sharing") and FAKE_NODE_DISPLAYS:
+        c["displays"] = FAKE_NODE_DISPLAYS  # MOCK_SCREEN_DISPLAYS=2:node
+    return c
 
 
 if MOCK_COMPUTER:
@@ -12390,6 +12485,16 @@ class H(BaseHTTPRequestHandler):
         if p == "/mock/session_state":
             body, status = set_session_state(q)
             return self.send_json(body, status)
+        if p == "/mock/incoming":
+            body, status = incoming_message(q)
+            return self.send_json(body, status)
+        if p == "/mock/capsule_quiet":
+            if q: return self.send_json({"error": "No parameters accepted"}, 400)
+            return self.send_json(quiet_capsule())
+        if p == "/mock/ws_clients":
+            with FAULT_LOCK:
+                observations = copy.deepcopy(WS_OBSERVATIONS)
+            return self.send_json({"clients": observations})
         if p == "/mock/seen": return self.send_json({"seen": SEEN})
         if p == "/mock/reconnects": return self.send_json({"reconnects": RECONNECTS})
         if p == "/mock/started": return self.send_json({"started": STARTED})
@@ -12951,6 +13056,7 @@ class H(BaseHTTPRequestHandler):
         if file_ops_route(self, p, self.last_body): return
         if looks_route(self, self.command, p, self.last_body): return
         if recordings_route(self, self.command, p): return
+        if machine_rename_route(self, self.command, p, self.last_body): return
         if manager_moves_route(self, self.command, p, self.last_body): return
         if managers_route(self, self.command, p): return
         if providers_route(self, self.command, p, parse_qs(urlparse(self.path).query), self.last_body): return
@@ -14251,6 +14357,12 @@ class H(BaseHTTPRequestHandler):
         asked = parse_qs(urlparse(self.path).query).get("features", [""])[0].split(",")
         paged = "sessions_list" in asked and os.environ.get("MOCK_SESSIONS_LIST") == "1"
         delta = "sessions_delta" in asked and not os.environ.get("MOCK_WHOLE_LISTS")
+        observation = {"id": uuid.uuid4().hex[:8], "connected": True, "connected_at": time.monotonic(),
+                       "disconnected_at": None, "session_frames": 0, "item_frames": 0,
+                       "client_pings": 0, "server_pings": 0, "client_pongs": 0, "heartbeat": None,
+                       "requested_sessions_delta": delta}
+        with FAULT_LOCK:
+            WS_OBSERVATIONS.append(observation)
         restart_backlog()  # MOCK_RESTART: a connection during the restart waits in the socket's backlog
         have = {}  # machine -> {session id: its JSON}: what this app has
         key = self.headers.get("Sec-WebSocket-Key", "")
@@ -14273,13 +14385,17 @@ class H(BaseHTTPRequestHandler):
                 n = len(data)
                 hdr = bytes([0x81]) + (bytes([n]) if n < 126 else bytes([126]) + struct.pack(">H", n) if n < 65536 else bytes([127]) + struct.pack(">Q", n))
                 self.wfile.write(hdr + data); self.wfile.flush()
+                if obj.get("type") in ("sessions", "sessions_delta"):
+                    observation["session_frames"] += 1
+                elif obj.get("type") == "items":
+                    observation["item_frames"] += 1
             if MOCK_MESSAGING and obj.get("type") == "lark":  # what the Lark extension's messaging.changed becomes
                 send(lark_messaging.event_of(obj))
 
         SOCKETS.add(self.connection)
         subscribed = set()
         LIVE.append((send, subscribed))
-        send({"type": "hello", "server_version": "mock", "client_id": uuid.uuid4().hex[:8], "channel": "release",
+        send({"type": "hello", "server_version": "mock", "client_id": observation["id"], "channel": "release",
               "build": 202611021500, "protocol": 1, "min_app_build": 0,
               **identity(), "endpoints": list(ENDPOINTS), **mesh_hello(),
               "features": features() + (["sessions_delta"] if delta else []), **restart_hello(self.path)})
@@ -14339,6 +14455,7 @@ class H(BaseHTTPRequestHandler):
                         with lock:
                             self.wfile.write(bytes([0x89, len(ping)]) + ping)
                             self.wfile.flush()
+                            observation["server_pings"] += 1
                         hb_state["next"] = hb_state["sent"] + heartbeat["interval"]
             except OSError:
                 pass
@@ -14375,6 +14492,7 @@ class H(BaseHTTPRequestHandler):
                     with hb_condition:
                         if payload == hb_state["pending"]:
                             hb_state["pending"] = None
+                            observation["client_pongs"] += 1
                             hb_condition.notify()
                     continue
                 if op != 1: continue
@@ -14392,6 +14510,7 @@ class H(BaseHTTPRequestHandler):
                             heartbeat.update(interval=max(10, min(900, requested.get("interval", heartbeat["interval"]))),
                                              pong_timeout=max(5, min(60, requested.get("pong_timeout", heartbeat["pong_timeout"]))))
                             hb_state["next"] = time.monotonic() + heartbeat["interval"]
+                            observation["heartbeat"] = dict(heartbeat)
                             hb_condition.notify()
                     with FAULT_LOCK:
                         client["features"] = set(declared)
@@ -14399,6 +14518,7 @@ class H(BaseHTTPRequestHandler):
                     continue
                 if msg.get("type") == "ping":
                     if isinstance(msg.get("id"), str):
+                        observation["client_pings"] += 1
                         if NET["delay"] > 0: time.sleep(NET["delay"])
                         send({"type": "pong", "id": msg["id"]})
                     continue
@@ -14551,6 +14671,7 @@ class H(BaseHTTPRequestHandler):
             hb_state["closed"] = True
             hb_condition.notify()
         with FAULT_LOCK:
+            observation.update(connected=False, disconnected_at=time.monotonic())
             CLIENTS.pop(self.connection, None)
             PHONES.pop(self.connection, None)
             FS_WATCHES.pop(self.connection, None)
@@ -15919,11 +16040,14 @@ MOCK_HELP.append("MOCK_READINESS=zero|offline|pending|no_claude|not_logged_in|ba
 # one (applied after MOCK_ULTRACODE_SECONDS, default 4), {"ultracode_dismiss_lost": true} takes the notice away, turning
 # on a session with a note answers 409 ultracode_unsupported with the note; other /modes requests go on as before. A
 # message to a session with a change queued is held back (409 ultracode_pending, the node on master) and goes once it is
-# through. GET /mock/ultracode: the requests, the starts that asked for it and the messages (held or not); ?reset=1 puts
-# the states back. Off: nothing changes.
+# through. With MOCK_TASKS=1 the open plan has three tasks (#12): one the assistant left off, one it turned on, and one on
+# Mac Studio it turned on where it can't run; Start's `tasks` edits are logged and their `ultracode` kept on the plan.
+# GET /mock/ultracode: the requests, the starts that asked for it, the plan starts and the messages (held or not);
+# ?reset=1 puts the states back. Off: nothing changes.
 ULTRACODE_MODE = os.environ.get("MOCK_ULTRACODE", "")
 ULTRACODE_LOG = []
 ULTRACODE_SENDS = []
+ULTRACODE_PLAN_STARTS = []
 ULTRACODE_NOTE = "请升级到 Claude Code 2.1.284 或更新版本，旧版不支持独立的 ultracode 开关"
 ULTRACODE_FIELDS = ("ultracode", "ultracode_note", "ultracode_pending", "ultracode_lost_at")
 ULTRACODE_CODEX_EFFORTS = ["low", "medium", "high", "xhigh", "ultra"]
@@ -15939,6 +16063,15 @@ def ultracode_reset():
         if x["session_id"] == ORDERS: x.update(effort="ultra", efforts=ULTRACODE_CODEX_EFFORTS)
     del ULTRACODE_LOG[:]
     del ULTRACODE_SENDS[:]
+    del ULTRACODE_PLAN_STARTS[:]
+    if MOCK_TASKS:
+        base = dict(TASK_PLANS["plan_mock_3"]["tasks"][0])
+        TASK_PLANS["plan_mock_3"].update(state="open", tasks=[
+            dict(base, ultracode=False),
+            dict(base, title="重构网络层的重试和缓存", prompt="重构网络层的重试和缓存，补齐测试。", model="", ultracode=True,
+                 why="改动跨十几个文件，要从多个角度检查。"),
+            dict(base, title="博客图片改成懒加载", prompt="博客的图片改成懒加载。", machine="studio", cwd="/Users/me/code/blog", model="",
+                 ultracode=True, why="博客在 Mac Studio 上。")])
 
 
 def ultracode_apply(s, on):
@@ -15955,8 +16088,21 @@ def ultracode_route(handler, p, body):
         if parse_qs(urlparse(handler.path).query).get("reset"):
             ultracode_reset()
             for m in MACHINES: push_machine(m["id"])
-        handler.send_json({"requests": ULTRACODE_LOG, "started": [b for b in STARTED if "ultracode" in b], "sends": ULTRACODE_SENDS})
+            if MOCK_TASKS:  # an open page draws the plan open again without a reload
+                for send, _ in list(LIVE):
+                    try: send(from_default({"type": "task_plan", "plan": TASK_PLANS["plan_mock_3"]}))
+                    except Exception: pass
+        handler.send_json({"requests": ULTRACODE_LOG, "started": [b for b in STARTED if "ultracode" in b], "plan_starts": ULTRACODE_PLAN_STARTS,
+                           "sends": ULTRACODE_SENDS})
         return True
+    m = re.fullmatch(r"/api/v1/task-plans/([^/]+)/start", p)
+    if m and handler.command == "POST" and m.group(1) in TASK_PLANS:
+        edits = json.loads(body or b"{}").get("tasks")
+        ULTRACODE_PLAN_STARTS.append({"plan": m.group(1), "tasks": edits})
+        if TASK_PLANS[m.group(1)]["state"] == "open":
+            for task, e in zip(TASK_PLANS[m.group(1)]["tasks"], edits or []):
+                if "ultracode" in e: task["ultracode"] = e["ultracode"]
+        return False  # the tasks mock starts it
     m = re.fullmatch(r"/api/v1/sessions/([^/]+)/([^/]+)/messages", p)
     if m and handler.command == "POST":
         s = next((x for x in SESSIONS if x["machine_id"] == m.group(1) and x["session_id"] == m.group(2)), None)

@@ -85,9 +85,12 @@ internal fun Interaction.cardSummary(res: Resources): String = summary?.takeIf {
     else -> res.getString(R.string.agents_card_open_session)
 }
 
+// Compiled once: the preview runs for every line of every row as the list draws.
+private val MarkdownHeading = Regex("^#{1,6}\\s+")
+
 /** Plain text for a short preview: drop Markdown heading, emphasis and code markers and blank lines. */
 internal fun markdownPreview(text: String): String = text.lineSequence()
-    .map { it.trim().replace(Regex("^#{1,6}\\s+"), "").replace("**", "").replace("`", "") }
+    .map { it.trim().replace(MarkdownHeading, "").replace("**", "").replace("`", "") }
     .filter { it.isNotBlank() }
     .joinToString("\n")
 
