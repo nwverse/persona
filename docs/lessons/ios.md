@@ -1162,12 +1162,12 @@ but UIKit still had a page with only Agents Back and empty content.
 
 ### `Localizable.xcstrings` rebase conflicts require key-based merging
 - Both sides adding entries can line-merge into invalid JSON (`The data couldn't be read because it isn't in the correct format`), breaking all targets.
-- Extract `git show ORIG_HEAD:<catalog> > ours`, `git show origin/master:<catalog> > theirs`; run `python3 scripts/i18n/apple_l10n.py merge ours theirs apple/Shared/Localization/Localizable.xcstrings` (merge keys, prefer complete `en` / ja on duplicates), then `check`.
-- **`merge` brings back keys master deleted, and rewrites the whole file** (2026-11-06, #5451): it keeps every key of both sides, so an entry master
+- Extract `git show ORIG_HEAD:<catalog> > ours`, `git show origin/main:<catalog> > theirs`; run `python3 scripts/i18n/apple_l10n.py merge ours theirs apple/Shared/Localization/Localizable.xcstrings` (merge keys, prefer complete `en` / ja on duplicates), then `check`.
+- **`merge` brings back keys `main` deleted, and rewrites the whole file** (2026-11-06, #5451): it keeps every key of both sides, so an entry `main`
   removed (6 of them in one merge, for example "No Claude running") comes back as if the branch had added it. Its output also changes the
-  format and order (+78k / −77k lines against master for 40 new keys). Use its merged entries, but write master's file back in master's key order and format
-  (`json.dumps(d, ensure_ascii=False, indent=2) + "\n"`), add only the keys the branch added, and drop keys that were in the merge base but master
-  no longer has. `git diff origin/master --stat` should then show only `+` lines for your keys. Git's own text merge of two branches that added the
+  format and order (+78k / −77k lines against `main` for 40 new keys). Use its merged entries, but write `main`'s file back in `main`'s key order and format
+  (`json.dumps(d, ensure_ascii=False, indent=2) + "\n"`), add only the keys the branch added, and drop keys that were in the merge base but `main`
+  no longer has. `git diff origin/main --stat` should then show only `+` lines for your keys. Git's own text merge of two branches that added the
   same key leaves a duplicate JSON key, which `check` rejects: keep one copy.
 
 ### Two PRs that add the same catalog key both pass, then break master (#5811)
