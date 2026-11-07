@@ -63,8 +63,8 @@ type InboxConfig struct {
 // InboxAgentConfig is manager.json's inbox.agent, handed to the manager as it is.
 type InboxAgentConfig = assistantwire.InboxAgentConfig
 
-// inboxSources is the extension manager's part of the inbox: the wake-ups, one collection at a time, and what the
-// manager reported.
+// inboxSources is this code's part of the inbox: the wake-ups, one collection at a time, and what the manager
+// reported.
 type inboxSources struct {
 	once    sync.Once
 	kick    chan struct{}
@@ -192,9 +192,9 @@ func (h *Manager) inboxLoop(ctx context.Context) {
 	}
 }
 
-// inboxManagerConnected: Run has started everything, the assistant in this process with it: a full round goes to it
-// now (the first after the manager started, or the one it missed), and GitHub's muted repositories kept in its options
-// move to its mutes.
+// inboxManagerConnected: Run has started this code (the assistant runs beside it in this process, started on its own):
+// a full round goes to the assistant now, the first since the process started, and GitHub's muted repositories kept in
+// its options move to its mutes.
 func (h *Manager) inboxManagerConnected() {
 	h.inbox.init()
 	h.inbox.owed.Store(true)
@@ -732,7 +732,7 @@ func (h *Manager) connectorOf(id string) connector.Connector {
 }
 
 // inboxConfigView is what the inbox goes by of this code's: the triage rules and the AI twin's (settings over
-// hub.json), manager.json's inbox.agent, the default Feishu account (the Feishu extension's, inboxLarkAccount), the
+// manager.json), manager.json's inbox.agent, the default Feishu account (the Feishu extension's, inboxLarkAccount), the
 // plugins' connectors, and the languages the devices want mail translated into.
 func (h *Manager) inboxConfigView(ctx context.Context) assistantwire.InboxConfig {
 	out := assistantwire.InboxConfig{Rules: h.inboxRules(ctx), AgentRules: h.inboxAgentRules(ctx)}
@@ -776,8 +776,8 @@ func (h *Manager) inboxMailBody(ctx context.Context, ref assistantwire.InboxMail
 // inboxSendWait bounds one reply's send.
 const inboxSendWait = 2 * time.Minute
 
-// errReplyInDoubt: a send under this id was cut off before (a link on the way dropped during it, or it ran out of
-// time): it may have gone out, so it is not sent again.
+// errReplyInDoubt: a send under this id was cut off before (the process stopped or a link on the way dropped during
+// it, or it ran out of time): it may have gone out, so it is not sent again.
 var errReplyInDoubt = &rpc.Error{Code: assistantwire.CodeAssistantInDoubt, Message: "这条回复上次发送时中断了，可能已经发出去了：先看看再决定要不要重发"}
 
 // sendInboxOnce sends one of the manager's replies at most once per send id, with the guard the apps' messages have

@@ -157,7 +157,7 @@ const (
 	// AppInteractions is the hub's interaction queue (InteractionsGet, InteractionsAnswer).
 	AppInteractions = "interactions"
 
-	// AppInbox is the inbox's sources (inbox.go), answered in-process by the manager's own extension manager
+	// AppInbox is the inbox's sources (inbox.go), answered in the manager's process by the extension manager
 	// (internal/extmgr), not the hub; AppSettings is Persona's own settings (persona_settings).
 	AppInbox    = "inbox"
 	AppSettings = "settings"

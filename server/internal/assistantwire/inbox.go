@@ -9,11 +9,10 @@ import (
 
 // The inbox (docs/assistant/inbox.md) is the manager's: the items and their state (admission, triage, events, mutes, done,
 // the AI twin, translations) and the /api/v1/inbox… routes, which the hub relays like Routes. The sources are the
-// manager's own extension manager's (internal/extmgr, in the same process): it reads them when a round is due (its
-// poll, a connector's changed, InboxCollect) and hands what it read over (MethodInboxCollected); what the inbox does
-// with a source (its config, a mail body, a reply, a connector's group tools…) it asks the extension manager for on
-// AppInbox. Both ways are calls inside the manager process; none of them reaches the hub. These are the shapes, in
-// their own file so the other moves merge apart.
+// extension manager's (internal/extmgr, in the manager's process): it reads them when a round is due (its poll, a
+// connector's changed, InboxCollect) and hands what it read over (MethodInboxCollected); what the inbox does with a
+// source (its config, a mail body, a reply, a connector's group tools…) it asks the extension manager for on AppInbox.
+// Neither way goes through the hub. These are the shapes, in their own file so the other moves merge apart.
 
 // InboxRoutes are the inbox's routes (net/http patterns), the translation's with them (it is the manager's too): the hub
 // relays the apps' requests on them to the manager as http.request, like Routes. The assistant registers exactly Routes
@@ -42,7 +41,7 @@ var InboxRoutes = []string{
 	"POST /api/v1/translate/mail",
 }
 
-// What the extension manager asks of the manager about the inbox, and tells it, in-process (BusHub.Answer).
+// What the extension manager asks of the manager about the inbox, and what the manager tells it (EventInboxChanged).
 const (
 	// MethodInboxCollected: InboxRound → {}: what one collection read of the sources. The manager makes items of it
 	// (and triages, relates, files…) before it answers what it does at once; the rest goes on in its background. A
@@ -57,11 +56,11 @@ const (
 	// sets them as its muted_repos); with set, they become the source's repository mutes first (add: added to them).
 	MethodInboxRepoMutes = "inbox.repo_mutes"
 
-	// EventInboxChanged (the manager tells its extension manager in-process, one way): InboxChanged.
+	// EventInboxChanged (the manager tells the extension manager, one way): InboxChanged.
 	EventInboxChanged = "inbox.changed"
 )
 
-// The manager asks its extension manager about the inbox's sources (AppInbox), in-process (BusHub.AppCall).
+// The manager asks the extension manager about the inbox's sources (AppInbox).
 const (
 	// InboxCollect: {round} → {}: collect now (a pull to refresh): the extension manager reads the sources and hands
 	// them over (MethodInboxCollected) before it answers.
@@ -223,8 +222,8 @@ type InboxMailMessage struct {
 	Text    string        `json:"text"`
 }
 
-// InboxConfig is what the inbox goes by of the extension manager's (manager.json's inbox section, its settings and
-// the devices'): asked for when it is needed, kept a few seconds.
+// InboxConfig is what the inbox goes by of the extension manager's (manager.json's inbox section, its settings, the
+// devices' mail languages it gets from the hub): asked for when it is needed, kept a few seconds.
 type InboxConfig struct {
 	// Rules are the user's own triage rules (setting inbox.rules, else manager.json's inbox.rules); AgentRules guide the
 	// judge linking a Needs you item to one of the user's tasks (inbox.agent_rules); what the AI twin takes on is set
@@ -270,8 +269,8 @@ type InboxRepoMutes struct {
 }
 
 // InboxChanged is EventInboxChanged's params: the items that changed and were stored (the extension manager tells the
-// extensions, inbox.changed, and, through the hub's broadcast, the apps, {"type":"inbox"}); none: only what the apps
-// see moved (the triage status).
+// extensions, inbox.changed, and the apps through the hub, {"type":"inbox"}); none: only what the apps see moved (the
+// triage status).
 type InboxChanged struct {
 	Items []InboxChangedItem `json:"items"`
 }
