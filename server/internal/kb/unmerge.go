@@ -1,19 +1,38 @@
 package kb
 
 import (
+	"errors"
 	"fmt"
 	"math"
 	"slices"
-	"strings"
 	"time"
 )
 
-// Undoing a project merge (#34): dedupe merged projects that were not the same work, and the chats, people and
-// items of the one merged away then named the wrong project.
+// UserUpdate is an Update from the user's own paths (the assistant's kb_update, HTTP PUT). Unmerge is not part of
+// kbwire.Update, so the extension protocol (kb.update) has no way to send it.
+type UserUpdate struct {
+	Update
+	// Unmerge (projects): undo the merge that folded this project into another (Unmerge); nothing else applies.
+	Unmerge bool `json:"unmerge,omitempty"`
+}
+
+// ApplyUser is Apply, or Unmerge when u asks for it.
+func (e *Engine) ApplyUser(kind, id string, u UserUpdate) (string, error) {
+	if !u.Unmerge {
+		return e.Apply(kind, id, u.Update)
+	}
+	if kind != KindProject {
+		return "", errors.New("unmerge applies to projects")
+	}
+	return e.Unmerge(id)
+}
 
 // Unmerge undoes, as the user, the merge that folded the project id names (its slug, or its name) into another
 // (unmergeProject). Returns its slug.
 func (e *Engine) Unmerge(id string) (string, error) {
+	if e.Store.ReadOnly() {
+		return "", ErrReadOnly
+	}
 	e.Store.applyMu.Lock()
 	defer e.Store.applyMu.Unlock()
 	p := e.mergedProject(id)
@@ -46,8 +65,9 @@ func (e *Engine) mergedProject(id string) *Project {
 // with its status from before, and its chats, people and items name it again.
 //
 // A recorded merge (drop.Merge) is undone exactly: the aliases, people, chats, items, code directories, keywords and
-// Moments posts it gave the kept project leave it, and the chats, people and items it moved from drop name drop
-// alone again. A merge made before the record leaves no way to tell which of drop's people, chats and items the kept
+// Moments posts it gave the kept project leave it, the posts of its own it pushed past the cap come back, the pinned
+// facts and locks a manual merge joined go back to the kept project's own, and the chats, people and items it moved
+// from drop name drop alone again. A merge made before the record leaves no way to tell which of drop's people, chats and items the kept
 // project had already, and it usually had many (dedupe pairs projects by the people and chats they share): they stay
 // on the kept project too (remove_people / remove_chats take them off), and only drop's name and aliases leave it,
 // since a live project's alias must not be another live project's name or alias.
@@ -64,9 +84,16 @@ func (e *Engine) unmergeProject(drop *Project) error {
 		return fmt.Errorf("%s went into %s, which was merged into %s since: unmerge %s first", drop.Slug, keep.Slug, keep.MergedInto, keep.Slug)
 	}
 	rec, now := drop.Merge, time.Now().UTC()
+	// The split goes first: if a write below fails, the merge stays and can be unmerged again, and dedupe does
+	// not ask about the pair meanwhile.
+	if found {
+		if _, err := e.Store.putDedupeVerdict(pairKey(keep.Slug, drop.Slug), dedupeVerdict{Split: true, Reason: "拆开了", At: now}); err != nil {
+			return err
+		}
+	}
 	// held: what drop's merge brought keep that another project still merged into keep has too (handOver).
 	var held ProjectMerge
-	var siblings []string
+	var siblings, moved []string // moved: the references drop's merge moved that name drop alone again
 	if found {
 		for _, p := range e.Store.Projects() {
 			if p.MergedInto != keep.Slug || p.Slug == drop.Slug {
@@ -80,6 +107,7 @@ func (e *Engine) unmergeProject(drop *Project) error {
 			}
 		}
 		if rec != nil {
+			moved = removeStrings(rec.Moved, held.Moved)
 			keep.Aliases = removeStrings(keep.Aliases, rec.Aliases)
 			keep.People = removeStrings(keep.People, removeStrings(rec.People, held.People))
 			keep.Chats = removeStrings(keep.Chats, removeStrings(rec.Chats, held.Chats))
@@ -88,9 +116,15 @@ func (e *Engine) unmergeProject(drop *Project) error {
 			keep.Keywords = removeStrings(keep.Keywords, removeStrings(rec.Keywords, held.Keywords))
 			gone := removeStrings(rec.Moments, held.Moments)
 			keep.Moments = slices.DeleteFunc(slices.Clone(keep.Moments), func(m ProjectMoment) bool { return slices.Contains(gone, m.ID) })
-			// Pinned facts edited since the merge are the user's newer word and stay.
+			keep.Moments = mergeMoments(keep.Moments, rec.Evicted)
+			// Pinned facts and locks changed since the merge are the user's newer word and stay.
 			if rec.Pinned != nil && keep.Pinned == joinPinned(*rec.Pinned, drop.Pinned) {
 				keep.Pinned = *rec.Pinned
+			}
+			if l := rec.Locks; l != nil {
+				if now := joinLocks(*l, drop); slices.Equal(keep.LockedFields, now.Fields) && keep.Locked == now.Locked {
+					keep.LockedFields, keep.Locked = l.Fields, l.Locked
+				}
 			}
 		} else {
 			names := map[string]bool{normName(drop.Name): true}
@@ -110,55 +144,18 @@ func (e *Engine) unmergeProject(drop *Project) error {
 		e.index(KindProject, keep.Slug, keep.Name, keep.Tagging, keep.OneLine, keep.Updated)
 	}
 	// drop's chats, people and items name it again; the ones the merge moved stop naming the kept project.
-	moved := map[string]bool{}
-	if rec != nil && found {
-		for _, ref := range removeStrings(rec.Moved, held.Moved) {
-			moved[ref] = true
-		}
-	}
-	relink := func(ref string, list []string) ([]string, bool) {
+	err := e.relinkRefs(drop, true, func(ref string, list []string) ([]string, bool) {
 		out := addUnique(slices.Clone(list), drop.Slug)
-		if moved[ref] {
+		if slices.Contains(moved, ref) {
 			out = removeStrings(out, []string{keep.Slug})
 		}
 		return out, !slices.Equal(out, list)
-	}
-	for _, id := range drop.Chats {
-		if c, ok := e.Store.Chat(id); ok {
-			if l, ch := relink(KindChat+"/"+id, c.Projects); ch {
-				c.Projects = l
-				if err := e.Store.putEntity(KindChat, c.ID, c, &c.Tagging, true); err != nil {
-					return err
-				}
-			}
-		}
-	}
-	for _, id := range drop.People {
-		if p, ok := e.Store.Person(id); ok {
-			if l, ch := relink(KindPerson+"/"+id, p.Projects); ch {
-				p.Projects = l
-				if err := e.Store.putEntity(KindPerson, p.ID, p, &p.Tagging, true); err != nil {
-					return err
-				}
-			}
-		}
-	}
-	for _, ref := range drop.Items {
-		kind, id, ok := strings.Cut(ref, "/")
-		if !ok {
-			continue
-		}
-		if it, ok := e.Store.Item(kind, id); ok {
-			if l, ch := relink(ref, it.Projects); ch {
-				it.Projects = l
-				if err := e.Store.putEntity(it.Kind, it.ID, it, &it.Tagging, true); err != nil {
-					return err
-				}
-			}
-		}
+	})
+	if err != nil {
+		return err
 	}
 	drop.Status = "active"
-	if rec != nil && rec.Status != "" && rec.Status != "merged" {
+	if rec != nil && rec.Status != "" {
 		drop.Status = rec.Status
 	}
 	drop.MergedInto, drop.Merge, drop.Dirty, drop.Updated = "", nil, true, now
@@ -166,11 +163,6 @@ func (e *Engine) unmergeProject(drop *Project) error {
 		return err
 	}
 	e.index(KindProject, drop.Slug, drop.Name, drop.Tagging, drop.OneLine, drop.Updated)
-	if found {
-		if err := e.Store.putDedupeVerdict(pairKey(keep.Slug, drop.Slug), dedupeVerdict{Split: true, Reason: "拆开了", At: now}); err != nil {
-			return err
-		}
-	}
 	return nil
 }
 
@@ -179,28 +171,20 @@ func (e *Engine) unmergeProject(drop *Project) error {
 // moved go on naming keep. Both go into held, and onto sib's record as if sib's merge had brought them, which it
 // would have without drop's, so unmerging sib later takes them off keep.
 func (e *Engine) handOver(rec *ProjectMerge, sib *Project, held *ProjectMerge) error {
-	has := ProjectMerge{People: sib.People, Chats: sib.Chats, Items: sib.Items, Dirs: sib.Dirs, Keywords: sib.Keywords}
+	has := ProjectMerge{People: sib.People, Chats: sib.Chats, Items: sib.Items, Dirs: sib.Dirs, Keywords: sib.Keywords,
+		Moved: projectRefs(sib)} // Moved: sib's references, to match rec.Moved against
 	for _, m := range sib.Moments {
 		has.Moments = append(has.Moments, m.ID)
 	}
-	for _, id := range sib.Chats { // Moved: sib's references, to match rec.Moved against
-		has.Moved = append(has.Moved, KindChat+"/"+id)
+	onSib := sib.Merge
+	if onSib == nil { // a merge from before the record: nothing to note on it
+		onSib = &ProjectMerge{}
 	}
-	for _, id := range sib.People {
-		has.Moved = append(has.Moved, KindPerson+"/"+id)
-	}
-	has.Moved = append(has.Moved, sib.Items...)
-	var onSib []*[]string
-	if sib.Merge != nil {
-		onSib = sib.Merge.joined()
-	}
-	from, in, into := rec.joined(), has.joined(), held.joined()
+	from, in, into, to := rec.joined(), has.joined(), held.joined(), onSib.joined()
 	for i := range from {
 		both := slices.DeleteFunc(slices.Clone(*from[i]), func(v string) bool { return !slices.Contains(*in[i], v) })
 		*into[i] = addUnique(*into[i], both...)
-		if onSib != nil {
-			*onSib[i] = addUnique(*onSib[i], both...)
-		}
+		*to[i] = addUnique(*to[i], both...)
 	}
 	if sib.Merge == nil {
 		return nil

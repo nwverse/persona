@@ -59,17 +59,20 @@ func (s *Store) dedupeVerdictsLocked() map[string]dedupeVerdict {
 }
 
 // putDedupeVerdict records one pair's verdict, reading the file again so a dedupe run and an unmerge do not
-// overwrite each other's.
-func (s *Store) putDedupeVerdict(key string, v dedupeVerdict) error {
+// overwrite each other's. A split stands: only another split replaces it (false: v was not recorded).
+func (s *Store) putDedupeVerdict(key string, v dedupeVerdict) (bool, error) {
 	s.dedupeMu.Lock()
 	defer s.dedupeMu.Unlock()
 	all := s.dedupeVerdictsLocked()
+	if all[key].Split && !v.Split {
+		return false, nil
+	}
 	all[key] = v
 	raw, err := json.MarshalIndent(all, "", "  ")
 	if err != nil {
-		return err
+		return false, err
 	}
-	return writeFile(s.dedupePath(), append(raw, '\n'))
+	return true, writeFile(s.dedupePath(), append(raw, '\n'))
 }
 
 func pairKey(a, b string) string {
@@ -192,11 +195,11 @@ func (e *Engine) DedupeProjects(ctx context.Context, max int) int {
 			e.logf("dedupe %s: %v", key, err)
 			continue
 		}
-		if v, ok := e.Store.dedupeVerdicts()[key]; ok && v.Split { // unmerged while the model was asked
-			continue
-		}
-		if err := e.Store.putDedupeVerdict(key, dedupeVerdict{Same: same, Reason: reason, At: time.Now().UTC()}); err != nil {
+		recorded, err := e.Store.putDedupeVerdict(key, dedupeVerdict{Same: same, Reason: reason, At: time.Now().UTC()})
+		if err != nil {
 			e.logf("dedupe %s: %v", key, err)
+		} else if !recorded { // unmerged while the model was asked
+			continue
 		}
 		if !same {
 			continue
@@ -315,7 +318,7 @@ func (e *Engine) mergeProjects(keepSlug, dropSlug, why string, manual bool) erro
 	// at their ends here.
 	rec := &ProjectMerge{At: time.Now().UTC(), Status: drop.Status}
 	nAliases, nPeople, nChats, nItems, nDirs, nKeywords := len(keep.Aliases), len(keep.People), len(keep.Chats), len(keep.Items), len(keep.Dirs), len(keep.Keywords)
-	hadMoments := map[string]bool{}
+	hadMoments, keptMoments := map[string]bool{}, keep.Moments
 	for _, m := range keep.Moments {
 		hadMoments[m.ID] = true
 	}
@@ -335,9 +338,16 @@ func (e *Engine) mergeProjects(keepSlug, dropSlug, why string, manual bool) erro
 	rec.Aliases = slices.Clone(keep.Aliases[nAliases:])
 	rec.People, rec.Chats, rec.Items = slices.Clone(keep.People[nPeople:]), slices.Clone(keep.Chats[nChats:]), slices.Clone(keep.Items[nItems:])
 	rec.Dirs, rec.Keywords = slices.Clone(keep.Dirs[nDirs:]), slices.Clone(keep.Keywords[nKeywords:])
+	nowMoments := map[string]bool{}
 	for _, m := range keep.Moments {
+		nowMoments[m.ID] = true
 		if !hadMoments[m.ID] {
 			rec.Moments = append(rec.Moments, m.ID)
+		}
+	}
+	for _, m := range keptMoments {
+		if !nowMoments[m.ID] {
+			rec.Evicted = append(rec.Evicted, m)
 		}
 	}
 	if drop.Kind == "long" {
@@ -374,8 +384,11 @@ func (e *Engine) mergeProjects(keepSlug, dropSlug, why string, manual bool) erro
 			was := keep.Pinned
 			rec.Pinned, keep.Pinned = &was, joined
 		}
-		keep.LockedFields = addUnique(keep.LockedFields, drop.LockedFields...)
-		keep.Locked = keep.Locked || drop.Locked
+		was := MergeLocks{Fields: slices.Clone(keep.LockedFields), Locked: keep.Locked}
+		if locks := joinLocks(was, drop); !slices.Equal(locks.Fields, was.Fields) || locks.Locked != was.Locked {
+			rec.Locks = &was
+			keep.LockedFields, keep.Locked = locks.Fields, locks.Locked
+		}
 		if e.Store.Summary(KindProject, keep.Slug) == "" {
 			mergedSummary = e.Store.Summary(KindProject, drop.Slug)
 		}
@@ -409,39 +422,8 @@ func (e *Engine) mergeProjects(keepSlug, dropSlug, why string, manual bool) erro
 		}
 		return out, changed
 	}
-	for _, id := range drop.Chats {
-		if c, ok := e.Store.Chat(id); ok {
-			if l, ch := swap(KindChat+"/"+id, c.Projects); ch {
-				c.Projects = l
-				if err := e.Store.putEntity(KindChat, c.ID, c, &c.Tagging, manual); err != nil {
-					return err
-				}
-			}
-		}
-	}
-	for _, id := range drop.People {
-		if p, ok := e.Store.Person(id); ok {
-			if l, ch := swap(KindPerson+"/"+id, p.Projects); ch {
-				p.Projects = l
-				if err := e.Store.putEntity(KindPerson, p.ID, p, &p.Tagging, manual); err != nil {
-					return err
-				}
-			}
-		}
-	}
-	for _, ref := range drop.Items {
-		kind, id, ok := strings.Cut(ref, "/")
-		if !ok {
-			continue
-		}
-		if it, ok := e.Store.Item(kind, id); ok {
-			if l, ch := swap(ref, it.Projects); ch {
-				it.Projects = l
-				if err := e.Store.putEntity(it.Kind, it.ID, it, &it.Tagging, manual); err != nil {
-					return err
-				}
-			}
-		}
+	if err := e.relinkRefs(drop, manual, swap); err != nil {
+		return err
 	}
 	drop.Status, drop.MergedInto, drop.Merge, drop.Dirty = "merged", keep.Slug, rec, false
 	drop.Updated = time.Now().UTC()
@@ -450,6 +432,60 @@ func (e *Engine) mergeProjects(keepSlug, dropSlug, why string, manual bool) erro
 	}
 	e.index(KindProject, keep.Slug, keep.Name, keep.Tagging, keep.OneLine, keep.Updated)
 	return nil
+}
+
+// projectRefs are p's chats, people and items as "<kind>/<id>".
+func projectRefs(p *Project) []string {
+	var refs []string
+	for _, id := range p.Chats {
+		refs = append(refs, KindChat+"/"+id)
+	}
+	for _, id := range p.People {
+		refs = append(refs, KindPerson+"/"+id)
+	}
+	return append(refs, p.Items...)
+}
+
+// relinkRefs gives each of p's chats, people and items the projects f makes of its own, and writes the ones f changes.
+func (e *Engine) relinkRefs(p *Project, manual bool, f func(ref string, projects []string) ([]string, bool)) error {
+	for _, ref := range projectRefs(p) {
+		kind, id, _ := strings.Cut(ref, "/")
+		var v any
+		var t *Tagging
+		var list *[]string
+		switch kind {
+		case KindChat:
+			c, ok := e.Store.Chat(id)
+			if !ok {
+				continue
+			}
+			v, t, list = c, &c.Tagging, &c.Projects
+		case KindPerson:
+			per, ok := e.Store.Person(id)
+			if !ok {
+				continue
+			}
+			v, t, list = per, &per.Tagging, &per.Projects
+		default:
+			it, ok := e.Store.Item(kind, id)
+			if !ok {
+				continue
+			}
+			kind, id, v, t, list = it.Kind, it.ID, it, &it.Tagging, &it.Projects
+		}
+		if l, changed := f(ref, *list); changed {
+			*list = l
+			if err := e.Store.putEntity(kind, id, v, t, manual); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// joinLocks is keep's locks with drop's added (a manual merge keeps both).
+func joinLocks(keep MergeLocks, drop *Project) MergeLocks {
+	return MergeLocks{Fields: addUnique(slices.Clone(keep.Fields), drop.LockedFields...), Locked: keep.Locked || drop.Locked}
 }
 
 // joinPinned is keep's pinned facts with drop's added (a manual merge keeps both).

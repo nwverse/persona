@@ -3,13 +3,14 @@ package kb
 import (
 	"context"
 	"errors"
+	"fmt"
 	"slices"
 	"strings"
 	"testing"
 	"time"
 )
 
-// Unmerge tests (#34): dedupe merged two projects that were not the same work. All names are placeholders.
+// Unmerge tests. All names are placeholders.
 
 // mergeFixture is two projects that shared a person and a chat before dedupe merged them: keep (甲) with p1, p2, c1,
 // docs/d1; drop (乙, paused) with p2, p3, c1, c2, docs/d2.
@@ -104,11 +105,15 @@ func TestUnmergeUndoesARecordedMerge(t *testing.T) {
 			t.Errorf("%s -> %+v, want %s", name, p, want)
 		}
 	}
-	// Not even once a verdict would be asked again (dedupeRecheck): the user's split stands.
+	// Not even once a verdict would be asked again (dedupeRecheck), nor by a dedupe run that asked meanwhile: the
+	// user's split stands.
 	key := pairKey("keep", "drop")
+	if recorded, err := e.Store.putDedupeVerdict(key, dedupeVerdict{Same: true, At: time.Now()}); recorded || err != nil {
+		t.Fatalf("a verdict replaced the split: %v %v", recorded, err)
+	}
 	v := e.Store.dedupeVerdicts()[key]
 	v.At = time.Now().Add(-2 * dedupeRecheck)
-	if err := e.Store.putDedupeVerdict(key, v); err != nil {
+	if _, err := e.Store.putDedupeVerdict(key, v); err != nil {
 		t.Fatal(err)
 	}
 	if n := e.DedupeProjects(context.Background(), 5); n != 0 || m.calls != 0 {
@@ -149,13 +154,14 @@ func TestUnmergeOlderMergeIsConservative(t *testing.T) {
 	}
 }
 
-// A manual merge joined the pinned facts; unmerging gives the kept project its own back, unless it was edited since.
+// A manual merge joined the pinned facts and the locks; unmerging gives the kept project its own back, unless they were
+// edited since.
 func TestUnmergeRestoresPinnedFacts(t *testing.T) {
 	for _, edited := range []bool{false, true} {
 		e := testEngine(t, nil)
 		keepFact, dropFact := "甲已确认", "乙已确认"
 		_ = e.Store.PutProject(&Project{Slug: "keep", Name: "示例 甲", Status: "active", Tagging: Tagging{Pinned: keepFact}})
-		_ = e.Store.PutProject(&Project{Slug: "drop", Name: "示例 乙", Status: "active", Tagging: Tagging{Pinned: dropFact}})
+		_ = e.Store.PutProject(&Project{Slug: "drop", Name: "示例 乙", Status: "active", Tagging: Tagging{Pinned: dropFact, Locked: true, LockedFields: []string{"goal"}}})
 		if _, err := e.Apply(KindProject, "drop", Update{MergeInto: "keep"}); err != nil {
 			t.Fatal(err)
 		}
@@ -176,6 +182,9 @@ func TestUnmergeRestoresPinnedFacts(t *testing.T) {
 		}
 		if keep.Pinned != want || drop.Pinned != dropFact {
 			t.Errorf("edited=%v: keep pinned %q, drop pinned %q", edited, keep.Pinned, drop.Pinned)
+		}
+		if !edited && (keep.Locked || len(keep.LockedFields) != 0) {
+			t.Errorf("keep kept drop's locks: locked %v, fields %v", keep.Locked, keep.LockedFields)
 		}
 	}
 }
@@ -227,6 +236,39 @@ func TestUnmergeKeepsWhatAnotherMergeBrought(t *testing.T) {
 		if got := projectsOf(t, e, kind, id); got != want {
 			t.Errorf("after both: %s names %s, want %s", ref, got, want)
 		}
+	}
+}
+
+// The kept project's own Moments posts that the merged project's newer ones pushed past the cap come back.
+func TestUnmergeRestoresEvictedMoments(t *testing.T) {
+	e := testEngine(t, nil)
+	old, recent := time.Now().Add(-48*time.Hour), time.Now()
+	var mine, theirs []ProjectMoment
+	for i := range maxProjectMoments {
+		mine = append(mine, ProjectMoment{ID: fmt.Sprintf("k%02d", i), At: old.Add(-time.Duration(i) * time.Minute)})
+	}
+	for i := range 10 {
+		theirs = append(theirs, ProjectMoment{ID: fmt.Sprintf("d%02d", i), At: recent.Add(-time.Duration(i) * time.Minute)})
+	}
+	_ = e.Store.PutProject(&Project{Slug: "keep", Name: "示例 甲", Status: "active", Moments: mine})
+	_ = e.Store.PutProject(&Project{Slug: "drop", Name: "示例 乙", Status: "active", Moments: theirs})
+	if err := e.MergeProjects("keep", "drop", "测试"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.Unmerge("drop"); err != nil {
+		t.Fatal(err)
+	}
+	keep, _ := e.Store.Project("keep")
+	var ids []string
+	for _, m := range keep.Moments {
+		ids = append(ids, m.ID)
+	}
+	var want []string
+	for _, m := range mine {
+		want = append(want, m.ID)
+	}
+	if !slices.Equal(ids, want) {
+		t.Fatalf("keep's posts = %v", ids)
 	}
 }
 
