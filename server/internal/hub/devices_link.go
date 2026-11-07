@@ -774,8 +774,8 @@ func (h *Hub) applyDeviceStatesFrom(owner string, st devicewire.States) {
 		// online is the node connected now, as it was when the hub connected it (self-update waits for it, the node
 		// updates go to it); the manager's warm start is warmUntil, as the hub's own was (the apps see both as online).
 		m.snap, m.info, m.online, m.err = &snap, s.Info, s.Connected, s.Machine.Error
-		// What it is called: hub.json's entry says for one of this hub's own (the manager follows it a moment later), the
-		// manager for a member's (the member renamed it).
+		// What it is called: hub.json's entry says for one of this hub's own in hub.json (the manager follows it a moment
+		// later), the manager for one it keeps (machines_kept.go) and for a member's (the member renamed it).
 		if mc := h.cfgEntry(id); mc != nil && !s.Derived {
 			m.setName(cmp.Or(mc.Name, id))
 		} else {

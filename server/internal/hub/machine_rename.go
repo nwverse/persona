@@ -24,7 +24,7 @@ import (
 // featureMachineRename: this hub renames computers (the routes above, and a link's rename).
 const featureMachineRename = "machine_rename"
 
-// errNoMachine: hub.json has no entry of that id (a member's computer is renamed on its own hub).
+// errNoMachine: neither hub.json nor a manager's own list has that id (a member's computer is renamed on its own hub).
 var errNoMachine = refuseAdd(http.StatusNotFound, "not_found", i18n.Err("hub-machine_trust.no_machine"))
 
 // renameMachine gives computer id the name (trimmed; "" is its id again), in hub.json and in the running hub, and
@@ -40,7 +40,18 @@ func (h *Hub) renameMachine(ctx context.Context, id, name, by, via string) (stri
 	shown := cmp.Or(name, id)
 	h.machineAdd.Lock() // as an add: the entry is read and written whole
 	defer h.machineAdd.Unlock()
-	var was string
+	was := ""
+	if mc := h.knownEntry(id); mc != nil {
+		was = cmp.Or(mc.Name, id)
+	}
+	// One its manager keeps in its own list (machines_kept.go): renamed there, which keeps its connection as well.
+	if kept, err := h.editKeptMachine(ctx, id, map[string]any{"name": shown}); kept {
+		if err != nil {
+			status, code := keeperErr(err)
+			return "", refuseAdd(status, code, err)
+		}
+		return h.renamed(ctx, id, was, shown, by, via), nil
+	}
 	found := false
 	err := editHubJSON(h.cfg.dir, func(o *jsonObject) error {
 		list, err := machineEntries(o)
@@ -65,14 +76,20 @@ func (h *Hub) renameMachine(ctx context.Context, id, name, by, via string) (stri
 	if err != nil {
 		return "", err
 	}
+	return h.renamed(ctx, id, was, shown, by, via), nil
+}
+
+// renamed takes computer id's new name (from was, as its entry has it now) into the running hub and the audit; shown
+// is the name.
+func (h *Hub) renamed(ctx context.Context, id, was, shown, by, via string) string {
 	if was == shown {
-		return shown, nil
+		return shown
 	}
 	detail, _ := json.Marshal(map[string]string{"from": was, "to": shown, "via": via})
 	h.machineAudit(ctx, id, "rename", by, detail)
 	h.logf("[%s] renamed by %s (%s)", id, by, via)
 	h.renameMachineLive(id, shown)
-	return shown, nil
+	return shown
 }
 
 // renameMachineLive takes a computer's new name into the running hub: the entry it hands the manager (which keeps the
@@ -101,7 +118,7 @@ func (h *Hub) nameAfterSystem(ctx context.Context, id, system string) {
 	if r := []rune(system); len(r) > maxMachineName {
 		system = string(r[:maxMachineName])
 	}
-	mc := h.cfgEntry(id)
+	mc := h.knownEntry(id)
 	if system == "" || mc == nil || cmp.Or(mc.Name, id) != id {
 		return
 	}

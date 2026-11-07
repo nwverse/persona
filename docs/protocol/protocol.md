@@ -1133,7 +1133,8 @@ How a device adds a pending computer: see "Computer pairing codes" under "Tempor
 `PUT /api/v1/admin/machines/{id}` `{"name"}`, and the computer's own Persona Link with `rename` on its link ([link.md](../operations/link.md) "The computer's name"). Only the name changes: the id, and everything kept by it
 (pins, mutes, trust, credentials), stays.
 
-- The hub writes `name` into the hub.json entry and takes it at once: no restart (the admin page's restart list doesn't count it), no reconnect (the manager keeps the machine and its connection when only the name
+- The hub writes `name` into the hub.json entry (or, for a computer its manager keeps in its own list, into that list through
+  `devices.machines.put`) and takes it at once: no restart (the admin page's restart list doesn't count it), no reconnect (the manager keeps the machine and its connection when only the name
   changed). Every client gets a `machines` event with the new name; the computer's Persona Link gets `endpoints` with `machine_name`; the hub's own texts (notifications, errors, the assistant's `devices.list`) use it.
 - Names are one line, at most 40 characters: 400 `invalid_name` otherwise; 404 `not_found` for an id hub.json doesn't have (a linked hub's computer is renamed on its own hub, and the center follows its record);
   403 `forbidden` for a device that isn't a full one. `error` is localized by `Accept-Language`.
