@@ -22,7 +22,7 @@ vi.mock("../lib/drafts", async (load) => {
   };
 });
 import { t } from "../i18n";
-import { getState, refresh, reset, upsertSession } from "../lib/store";
+import { connect, flushPushes, getState, refresh, reset, upsertSession } from "../lib/store";
 import type { Session } from "../lib/types";
 import { Sidebar } from "./Sidebar";
 
@@ -35,9 +35,11 @@ const main = conversation("main", "Persona");
 const pinned = conversation("pinned", "Release notes");
 const recent = conversation("recent", "Trip plan");
 const agent: Session = { machine_id: "mac", session_id: "agent", title: "Build", cwd: "/code", status: "working", state: "working" };
+// an agent on the assistant's own machine: its pushes carry that machine's whole list, the conversations too
+const hubAgent: Session = { machine_id: "hub", session_id: "hub-agent", title: "Deploy", cwd: "/srv", status: "working", state: "working" };
 const answers: Record<string, unknown> = {
   "/api/v1/assistant": { machine_id: "hub", online: true, main: "main", conversations: [main, pinned, recent] },
-  "/api/v1/sessions": { sessions: [main, pinned, recent, agent] },
+  "/api/v1/sessions": { sessions: [main, pinned, recent, agent, hubAgent] },
   "/api/v1/machines": { machines: [{ id: "hub", name: "Hub", online: true }, { id: "mac", name: "MacBook", online: true }] },
 };
 
@@ -54,10 +56,39 @@ const push = (mid: string, sid: string, change: Partial<Session>) => {
   act(() => upsertSession({ ...getState().sessions[mid].find((s) => s.session_id === sid)!, ...change }));
 };
 
+// the hub's socket: its messages go through the store as the hub's pushes do
+class FakeSocket {
+  static OPEN = 1;
+  static last: FakeSocket | null = null;
+  readyState = 0;
+  onopen: (() => void) | null = null;
+  onmessage: ((ev: { data: string }) => void) | null = null;
+  onclose: ((ev: { code: number }) => void) | null = null;
+  constructor() {
+    FakeSocket.last = this;
+  }
+  send() {}
+  close() {
+    this.readyState = 3;
+  }
+}
+const online = () => {
+  act(() => connect());
+  const sock = FakeSocket.last!;
+  sock.readyState = 1;
+  act(() => sock.onopen?.());
+  hubPush({ type: "hello", server_version: "v1", event_stream: "s1", event_seq: 1, resumed: true, features: ["sessions_delta"] });
+};
+const hubPush = (msg: Record<string, unknown>) => {
+  act(() => FakeSocket.last!.onmessage?.({ data: JSON.stringify(msg) }));
+  act(() => flushPushes());
+};
+
 beforeEach(() => {
   localStorage.clear();
   localStorage.setItem("assistant.pinned", '["pinned"]');
   draftReads.clear();
+  vi.stubGlobal("WebSocket", FakeSocket);
   vi.stubGlobal("fetch", vi.fn((url: string) => Promise.resolve(new Response(JSON.stringify(answers[new URL(url, "http://x").pathname] ?? {}), { headers: { "Content-Type": "application/json" } }))));
   history.replaceState(null, "", "/overview");
   host = document.createElement("div");
@@ -112,6 +143,29 @@ describe("the Persona conversation rows", () => {
     expect(mainRow().querySelector('[data-state="working"]')).not.toBeNull();
     expect(reads("hub/main")).toBeGreaterThan(0);
     expect(reads("hub/pinned")).toBe(0);
+  });
+
+  it("keep their render across pushes for an agent on the assistant's own machine", async () => {
+    await renderSidebar();
+    online();
+    await flush();
+    draftReads.clear();
+    for (let i = 1; i <= 3; i++) {
+      hubPush({ type: "sessions_delta", machine_id: "hub", upsert: [{ ...hubAgent, title: `Deploy ${i}` }], remove: [] });
+      await flush();
+    }
+    expect(host.textContent).toContain("Deploy 3");
+    expect(reads("hub/hub-agent")).toBeGreaterThanOrEqual(3);
+    expect(reads("hub/main")).toBe(0);
+    expect(reads("hub/pinned")).toBe(0);
+    expect(reads("hub/recent")).toBe(0);
+
+    // a push that does change a conversation still reaches its row
+    hubPush({ type: "sessions_delta", machine_id: "hub", upsert: [{ ...pinned, title: "Release notes v2" }], remove: [] });
+    await flush();
+    expect(row("pinned").textContent).toContain("Release notes v2");
+    expect(reads("hub/main")).toBe(0);
+    expect(reads("hub/recent")).toBe(0);
   });
 
   it("open the conversation's menu from the ⋯ and on a right click, after pushes too", async () => {

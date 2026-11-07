@@ -795,8 +795,12 @@ function syncAssistant(mid: string, list: Session[]): Partial<State> {
   const convs = a.conversations.map((c) => {
     const s = list.find((x) => x.session_id === c.session_id);
     if (!s) return c;
+    // a push carries its machine's whole list: a conversation it leaves as it was keeps its object (the sidebar's
+    // memoized rows compare by identity)
+    const next = { ...c, ...s };
+    if (shallowEqual(next, c)) return c;
     changed = true;
-    return { ...c, ...s };
+    return next;
   });
   return changed ? { assistant: { ...a, conversations: convs } } : {};
 }
