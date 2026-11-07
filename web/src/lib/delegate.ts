@@ -51,7 +51,7 @@ export function delegateLines(d: Delegate | undefined): DelegateLine[] {
 
 // The hub writes a recommendation for several questions as their answers joined by a full-width semicolon
 // (assistant/delegate.go answerLine), and a multi-select answer as its labels joined by ", ", as the apps send it.
-const QUESTIONS_SEP = "；";
+const QUESTIONS_SEP = "；"; // i18n-ignore: the hub's wire format
 const PICKS_SEP = ", ";
 
 /** The option labels `answer` picks on `q`: the label itself, or for a multi-select every one of its ", "-joined labels;

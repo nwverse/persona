@@ -12,6 +12,7 @@
   "answered_title": "助手代答",
   "reason": "理由：{reason}",
   "reanswered": "你改答了",
+  "was": "助手原来答的：{answer}",
   "change": "改答",
   "change_hint": "Agent 已经按助手的答案往下做了，新答案会作为一条消息发给它。",
   "send": "发送新答案",

@@ -12,6 +12,7 @@
   "answered_title": "Answered by the assistant",
   "reason": "Why: {reason}",
   "reanswered": "You changed it",
+  "was": "The assistant answered: {answer}",
   "change": "Change answer",
   "change_hint": "The agent already went on with the assistant's answer. Your new answer goes to it as a message.",
   "send": "Send new answer",
