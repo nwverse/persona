@@ -66,8 +66,7 @@ func (n *Node) gitBlob(ctx context.Context, p proto.GitBlobRequest) (*proto.GitB
 	}
 	// named by the blob's id (content-addressed: never stale) and the file's extension, which the viewers go by
 	out := filepath.Join(cache, sha+strings.ToLower(filepath.Ext(path)))
-	if st, err := os.Stat(out); err == nil && st.Size() == n64 {
-		os.Chtimes(out, time.Now(), time.Now())
+	if st, err := os.Stat(out); err == nil && st.Size() == n64 && usedCached(out, st) {
 		return &proto.GitBlob{Path: out, Size: n64}, nil
 	}
 	pruneConverted(cache)

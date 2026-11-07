@@ -250,3 +250,37 @@ func TestFileCachesInTheUserCacheRefuseASymlink(t *testing.T) {
 		t.Fatalf("LibreOffice ran %q, want once", b)
 	}
 }
+
+// Opening a cached copy again leaves the revision a download in progress is pinned to alone (usedCached).
+func TestFileCacheHitsKeepADownloadGoing(t *testing.T) {
+	cacheEnv(t, true)
+	n, req, _ := convertFixture(t)
+	bn, breq := blobFixture(t)
+	open := func() map[string]string {
+		t.Helper()
+		pdf, err := n.convertFile(context.Background(), req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		blob, err := bn.gitBlob(context.Background(), breq)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return map[string]string{"convert": pdf.Path, "blobs": blob.Path}
+	}
+	paths := open()
+	revs := map[string]string{}
+	for name, path := range paths {
+		head, err := n.readFileChunk(proto.FileChunkRequest{Path: path})
+		if err != nil {
+			t.Fatal(err)
+		}
+		revs[name] = head.Revision
+	}
+	open() // another client opens both while the first one reads them
+	for name, path := range paths {
+		if _, err := n.readFileChunk(proto.FileChunkRequest{Path: path, Length: 4, Revision: revs[name]}); err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+	}
+}

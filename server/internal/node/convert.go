@@ -4,8 +4,10 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -20,8 +22,12 @@ import (
 
 const (
 	convertTimeout = 90 * time.Second
-	convertKeep    = 7 * 24 * time.Hour // converted copies older than this are removed on the next conversion
+	convertKeep    = 7 * 24 * time.Hour // converted copies not used for this long are removed on the next conversion
 	convertMax     = 200 << 20          // bigger documents are not handed to LibreOffice
+
+	// cacheTouchAfter: a hit refreshes a cached copy's modification time once it is this old, so pruning by age spares
+	// the copies in use. Not on every hit: the time is part of the revision a download in progress is pinned to.
+	cacheTouchAfter = time.Hour
 )
 
 // converting lets one LibreOffice run at a time: it is heavy, and two runs on one profile refuse each other.
@@ -70,14 +76,11 @@ func (n *Node) convertFile(ctx context.Context, p proto.FileConvertRequest) (*pr
 	}
 	sum := sha256.Sum256([]byte(path + "\x00" + fileRevision(st)))
 	out := filepath.Join(dir, hex.EncodeToString(sum[:12])+".pdf")
-	// a copy handed out is touched, so pruning by age keeps the ones in use
 	cached := func() *proto.FileConverted {
 		info, err := os.Stat(out)
-		if err != nil || info.Size() == 0 {
+		if err != nil || info.Size() == 0 || !usedCached(out, info) {
 			return nil
 		}
-		now := time.Now()
-		os.Chtimes(out, now, now)
 		return &proto.FileConverted{Path: out, Size: info.Size(), Mime: "application/pdf"}
 	}
 	if c := cached(); c != nil {
@@ -157,7 +160,17 @@ func copyFile(from, to string) error {
 // pruneConverted removes copies older than convertKeep.
 func pruneConverted(dir string) { pruneOlder(dir, convertKeep) }
 
-// pruneOlder removes the files in dir last written more than keep ago.
+// usedCached marks a cached copy as used (cacheTouchAfter) and answers whether it is still there: another request's
+// prune may have removed an old one since info was read. A copy whose time cannot be set is still handed out.
+func usedCached(path string, info os.FileInfo) bool {
+	if time.Since(info.ModTime()) < cacheTouchAfter {
+		return true
+	}
+	now := time.Now()
+	return !errors.Is(os.Chtimes(path, now, now), fs.ErrNotExist)
+}
+
+// pruneOlder removes the files in dir last written or used (usedCached) more than keep ago.
 func pruneOlder(dir string, keep time.Duration) {
 	ents, err := os.ReadDir(dir)
 	if err != nil {
