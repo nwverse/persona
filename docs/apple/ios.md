@@ -596,6 +596,13 @@ off by default, not remembered, and not automatically reenabled after recovery. 
 `ultracode_note` explains why it cannot be enabled, and `ultracode_lost_at` supports the recovery notice and reenable action. Apple toggles, notices, buttons and the `ChatCache` directory-version bump are implemented by #3430;
 this records only the API, not that iOS / Mac / watch already have those controls. The main chat does not offer ultracode.
 
+Plan cards and to-dos carry the assistant's per-task ultracode (#12, the same rules as the web's `web/src/lib/ultracode.ts`), only when the hub announces the `ultracode` feature.
+Each task on an open plan card has an **ultracode** chip after its permission chip (AI color while on, quiet while off); a tap changes it before Start, and Edit has a switch per task that opens with the card's choices.
+Start sends `ultracode` only on tasks whose choice differs from the assistant's, so a plain Start still sends no `tasks`. On a computer whose known Claude Code is older than 2.1.284 the chip is grayed,
+a task that was on gets an orange "Starts without ultracode: …" line, and it starts with it off. Task cards, folded task lines and to-do rows show the workflow mark after the title while one of the task's Agents
+runs with ultracode (seen on, Claude Code, not offline; the web's Agent-row rule), or, before any Agent exists, when the plan task asks for it; done and failed-to-start to-dos show none.
+Rules: `apple/Shared/Ultracode.swift` (`UltracodeTests`); views: `apple/Persona/Views/Assistant/Tasks/UltracodeViews.swift`. List rows (`summary=1`) omit `ultracode`, so `preservingDetails` keeps the value already known.
+
 ## Session triage (Settings › Session triage, #3078)
 
 Below Assistant, the same four toggles as web and Android (`GET / PUT /api/v1/agents/triage`, stored on the hub, consistent across clients, all off by default; meanings and whose tokens are spent in `docs/assistant/agent-work.md` ("Switches")):
