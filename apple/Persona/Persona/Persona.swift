@@ -119,7 +119,7 @@ nonisolated struct PersonaManifest: Codable, Sendable, Hashable {
     /// What the hub checks too (server/internal/hub/persona.go), so a package it would leave out is refused here.
     var problem: String? {
         if format != Self.format { return "format \(format)" }
-        if Persona.builtins.contains(where: { $0.id == id }) || id.range(of: "^[a-z0-9][a-z0-9-]{0,31}$", options: .regularExpression) == nil { return "id \(id)" }
+        if id == Persona.builtinID || PersonaSelection.resolve(id) != id || id.range(of: "^[a-z0-9][a-z0-9-]{0,31}$", options: .regularExpression) == nil { return "id \(id)" }
         if name.trimmingCharacters(in: .whitespaces).isEmpty { return "no name" }
         if avatar.sizes.isEmpty { return "no avatar" }
         if dot.states[PersonaState.idle.rawValue] == nil { return "no idle dot" }

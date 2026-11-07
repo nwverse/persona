@@ -28,6 +28,9 @@ nonisolated struct WatchPetStatus: Equatable, Sendable {
 /// The pure decision behind the frog. It never reads as calm without knowing: a hub out of reach is not "nothing going
 /// on". What a reachable hub says still counts when another one is out of reach.
 nonisolated enum WatchPet {
+    /// Only Milk Frog supplies the pet assets; other avatar packages remain ordinary watch choices.
+    static func supports(_ persona: String?) -> Bool { persona == PersonaSelection.packageID }
+
     /// The clip played when the frog is tapped; it starts and ends on the idle pose.
     static let tapClip = "tap"
     static let manifestPath = "/api/v1/personas/\(PersonaSelection.packageID)/pet/pet.json"
