@@ -110,13 +110,13 @@ if [ "$LANE" = all ] || [ "$LANE" = ios ]; then
     printf 'apple-ci: FAIL unexpected iOS SDK build for the pinned runtime\n' >&2; exit 1;
   }
   select_runtime() {
-    python3 -I - "$1" <<'PYTHON'
+    python3 -I - "$1" "${2:-iOS}" "${3:-26.0.1}" "${4:-23A8464}" <<'PYTHON'
 import json, sys
 with open(sys.argv[1]) as source:
     runtimes = json.load(source)["runtimes"]
 hits = [r["identifier"] for r in runtimes if r.get("isAvailable")
-        and r.get("version") == "26.0.1" and r.get("buildversion") == "23A8464"
-        and ".iOS-" in r["identifier"]]
+        and r.get("version") == sys.argv[3] and r.get("buildversion") == sys.argv[4]
+        and ("." + sys.argv[2] + "-") in r["identifier"]]
 if len(hits) != 1:
     sys.exit(1)
 print(hits[0])
@@ -133,6 +133,20 @@ PYTHON
     }
   fi
   printf 'apple-ci: selected runtime %s (26.0.1, 23A8464)\n' "$IOS_RUNTIME"
+  # The embedded Watch target also needs the selected Xcode's watchOS
+  # platform. Apple's catalog maps SDK 23R351 to runtime 26.0 (23R353).
+  [ "$(xcrun --sdk watchos --show-sdk-build-version)" = 23R351 ] || {
+    printf 'apple-ci: FAIL unexpected watchOS SDK build for the pinned runtime\n' >&2; exit 1;
+  }
+  ci_run 'List watchOS simulator runtimes' 120 bash -c 'xcrun simctl list runtimes -j > "$1"' -- "$OUTPUT/watch-runtimes-before.json"
+  if ! WATCH_RUNTIME=$(select_runtime "$OUTPUT/watch-runtimes-before.json" watchOS 26.0 23R353); then
+    ci_run 'Download selected Xcode watchOS simulator platform' 1200 xcodebuild -downloadPlatform watchOS
+    ci_run 'List downloaded watchOS runtimes' 120 bash -c 'xcrun simctl list runtimes -j > "$1"' -- "$OUTPUT/watch-runtimes-after.json"
+    WATCH_RUNTIME=$(select_runtime "$OUTPUT/watch-runtimes-after.json" watchOS 26.0 23R353) || {
+      printf 'apple-ci: FAIL expected available watchOS 26.0 runtime build 23R353 after download\n' >&2; exit 1;
+    }
+  fi
+  printf 'apple-ci: selected Watch runtime %s (26.0, 23R353)\n' "$WATCH_RUNTIME"
   # Generic device builds compile the actual watch/widget/notification/share
   # dependency graph; do not delete the watch target to accommodate the runner.
   ci_run 'Unsigned iOS and embedded watch/extensions build' 1800 "${XCODE[@]}" -scheme Persona \
