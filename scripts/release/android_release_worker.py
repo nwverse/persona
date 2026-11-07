@@ -36,12 +36,14 @@ def digest(path):
         return hashlib.file_digest(stream, "sha256").hexdigest()
 
 
-def version_code(checkout, sha):
+def version_code(checkout, sha, base=VERSION_BASE):
     # First-parent history orders master merges independently of wall clocks,
     # queue timing and retries. A rewritten history is rejected before building.
     count = int(run(["git", "rev-list", "--first-parent", "--count", sha], checkout, True))
-    version = VERSION_BASE + count
-    if not VERSION_BASE < version <= 2100000000:
+    if type(base) is not int or base < 0:
+        raise ValueError("version_base must be a nonnegative integer")
+    version = base + count
+    if not base < version <= 2100000000:
         raise ValueError("Android version range exhausted")
     return version
 
@@ -79,13 +81,15 @@ def build(config, checkout, sha, directory):
     run(["git", "checkout", "--detach", "--force", sha], checkout)
     # The dedicated clone never contains user work. Do not remove its build caches.
     env = dict(os.environ, **config.get("build_environment", {}))
-    code = version_code(checkout, sha)
+    code = version_code(checkout, sha, config.get("version_base", VERSION_BASE))
     name = f"0.1.{code}-{sha[:12]}"
     unsigned = directory / "unsigned.apk"
     receipt = directory / "build.json"
     if receipt.exists() and unsigned.exists():
         built = json.loads(receipt.read_text())
-        if built.get("source_sha") == sha and built.get("unsigned_sha256") == digest(unsigned):
+        if (built.get("repository") == config["repository"] and built.get("source_sha") == sha
+                and built.get("version_code") == code and built.get("package") == config["application_id"]
+                and built.get("unsigned_sha256") == digest(unsigned)):
             return built
     tests = ["python3", "-m", "unittest", "discover", "-s", "scripts/release", "-p", "test_*android*.py"]
     run(tests, checkout, env=env)
@@ -99,7 +103,7 @@ def build(config, checkout, sha, directory):
          ":feature:agents:testDebugUnitTest", ":platform:notify:testDebugUnitTest",
          ":app:assembleRelease"], checkout / "android", env=env)
     shutil.copyfile(checkout / "android/app/build/outputs/apk/release/app-release-unsigned.apk", unsigned)
-    result = dict(source_sha=sha, unsigned_sha256=digest(unsigned),
+    result = dict(repository=config["repository"], source_sha=sha, unsigned_sha256=digest(unsigned),
                   package=config["application_id"], version_code=code, version_name=name)
     atomic_json(receipt, result)
     return result
@@ -153,6 +157,22 @@ def publish(config, checkout, request, directory):
     run(config["verify_command"] + [str(directory / "signature.json")], checkout, env=env)
 
 
+def finish_verified(config, directory, sha, code, complete):
+    """Retry only the status/checkpoint after the full publication verifier succeeded."""
+    verified = json.loads((directory / "verified.json").read_text())
+    request = verified["request"]
+    if request.get("repository") != config["repository"] or request.get("source_sha") != sha:
+        raise ValueError("verified receipt belongs to a different repository or commit")
+    if (request.get("package") != config["application_id"]
+            or request.get("version_code") != code
+            or verified.get("certificate_sha256") != config["certificate_sha256"]
+            or verified.get("signed_sha256") != digest(directory / "signed.apk")):
+        raise ValueError("verified artifact identity changed")
+    status(config, sha, "success", "Tests, signed Release APK and authenticated TLS Hub download verified")
+    atomic_json(complete, request)
+    print("Published " + sha)
+
+
 def cycle(config):
     state = Path(config["state_directory"]).expanduser().resolve()
     state.mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -165,12 +185,20 @@ def cycle(config):
         checkout, sha = prepare(config)
         complete = state / "published.json"
         previous = json.loads(complete.read_text()) if complete.exists() else {}
+        if previous and previous.get("repository") != config["repository"]:
+            raise ValueError("checkpoint repository mismatch; migrate to a separate state directory")
         if previous.get("source_sha") == sha:
             print("Already published " + sha)
             return
         check_history(checkout, previous.get("source_sha"), sha)
         directory = state / "runs" / sha
         directory.mkdir(parents=True, exist_ok=True)
+        code = version_code(checkout, sha, config.get("version_base", VERSION_BASE))
+        if previous and code <= previous["version_code"]:
+            raise ValueError("new source version must exceed the published version")
+        if (directory / "verified.json").exists():
+            finish_verified(config, directory, sha, code, complete)
+            return
         status(config, sha, "pending", "Android tests, release build, signing and Hub publication")
         try:
             with (directory / "release.log").open("a", buffering=1) as log:
@@ -183,17 +211,20 @@ def cycle(config):
                     request = build(config, checkout, sha, directory)
                     signing(config, request, directory)
                     publish(config, checkout, request, directory)
+                    signature = json.loads((directory / "signature.json").read_text())
+                    atomic_json(directory / "verified.json", dict(
+                        request=request, signed_sha256=signature["signed_sha256"],
+                        certificate_sha256=signature["certificate_sha256"]))
                     print("ANDROID_RELEASE_SUCCESS " + sha, flush=True)
                 finally:
                     sys.stdout.flush(); sys.stderr.flush()
                     os.dup2(stdout, 1); os.dup2(stderr, 2)
                     os.close(stdout); os.close(stderr)
-            status(config, sha, "success", "Tests, signed Release APK and authenticated TLS Hub download verified")
-            atomic_json(complete, request)
-            print("Published " + sha)
+            finish_verified(config, directory, sha, code, complete)
         except Exception as error:
             atomic_json(directory / "failure.json", {"source_sha": sha, "error": str(error)})
-            status(config, sha, "failure", "Android release failed; previous Hub APK retained; inspect worker log")
+            if not (directory / "verified.json").exists():
+                status(config, sha, "failure", "Android release failed; inspect worker log and Hub metadata")
             raise
 
 
