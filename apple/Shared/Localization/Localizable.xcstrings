@@ -80365,6 +80365,98 @@
       },
       "extractionState": "manual"
     },
+    "Rename": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Rename"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "名前を変更"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "改名"
+          }
+        }
+      },
+      "extractionState": "manual"
+    },
+    "Rename Computer": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Rename Computer"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "コンピュータの名前を変更"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "给电脑改名"
+          }
+        }
+      },
+      "extractionState": "manual"
+    },
+    "Renamed to %@": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Renamed to “%1$@”"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "「%1$@」に変更しました"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "已改名为「%1$@」"
+          }
+        }
+      },
+      "extractionState": "manual"
+    },
+    "Shown in every app and on this computer's Persona Link. Leave it empty to use the id; the id stays the same.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Shown in every app and on this computer's Persona Link. Leave it empty to use the id; the id stays the same."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "すべてのアプリとこのコンピュータの Persona Link に表示されます。空欄なら ID を使います。ID は変わりません。"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "所有 App 和这台电脑的 Persona Link 都会显示这个名字；留空就用 id，id 不变。"
+          }
+        }
+      },
+      "extractionState": "manual"
+    },
     "Rename… [Assistant Sidebar ec4cd0]": {
       "localizations": {
         "en": {
