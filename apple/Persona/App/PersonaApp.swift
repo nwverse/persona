@@ -118,8 +118,9 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
             }
         }
         PopFrames.startIfAsked()
-        // `-openChatsFresh YES`: no chat kept on disk from an earlier run (LiveUpdateTests: churned steps piled up).
-        if d.bool(forKey: "openChatsFresh") { ChatCache.removeAll() }
+        // `-openChatsFresh YES`: no chat kept on disk from an earlier run (LiveUpdateTests: churned steps piled up), and
+        // every report folded again (ReportFoldUITests).
+        if d.bool(forKey: "openChatsFresh") { ChatCache.removeAll(); OpenReports.shared.closeAll() }
         // `-openAgentsFresh YES`: the Agents list's saved look forgotten (AgentsListTests).
         if d.bool(forKey: "openAgentsFresh") {
             for k in ["dev.machineFilter", HubFilter.key, "dev.grouping", "dev.sort", "dev.compact", "dev.folded"] { d.removeObject(forKey: k) }
