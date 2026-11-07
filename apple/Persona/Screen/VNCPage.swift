@@ -121,9 +121,7 @@ struct VNCPage: View {
 
     private var topBar: some View {
         HStack(spacing: Theme.Space.s) {
-            Button { close() } label: {
-                Image(systemName: Theme.Icon.close).font(Theme.Font.labelStrong).scaledFrame(width: Theme.Size.icon, height: Theme.Size.icon)
-            }
+            Button { close() } label: { barIcon(Theme.Icon.close) }
             .themedButton()
             .accessibilityLabel("Close Screen")
             .accessibilityIdentifier("screen-close")
@@ -136,7 +134,7 @@ struct VNCPage: View {
             .accessibilityElement(children: .combine)
             .accessibilityIdentifier("screen-phase")
             Spacer(minLength: Theme.Space.s)
-            Button { help = true } label: { Image(systemName: Theme.Icon.help).font(Theme.Font.labelStrong) }
+            Button { help = true } label: { barIcon(Theme.Icon.help) }
                 .themedButton()
                 .accessibilityLabel("Help")
                 .accessibilityIdentifier("vnc-help")
@@ -144,6 +142,12 @@ struct VNCPage: View {
         }
         .padding(.horizontal, Theme.Space.page)
         .padding(.vertical, Theme.Space.s)
+    }
+
+    /// A top-bar button's glyph in one square for every button: a themed button is sized by its label, and glyphs differ
+    /// in height (⋯ is a few points tall).
+    private func barIcon(_ name: String) -> some View {
+        Image(systemName: name).font(Theme.Font.labelStrong).scaledFrame(width: Theme.Size.icon, height: Theme.Size.icon)
     }
 
     private var moreMenu: some View {
@@ -168,7 +172,7 @@ struct VNCPage: View {
             if let s = session { Text(String(format: "%.0f 帧/秒", s.fps) + (s.latency.map { String(format: " · %.0f 毫秒", $0) } ?? "")) } // i18n-ignore
             #endif
         } label: {
-            Image(systemName: Theme.Icon.more).font(Theme.Font.labelStrong)
+            barIcon(Theme.Icon.more)
         }
         .themedButton()
         .accessibilityLabel("More")

@@ -106,6 +106,7 @@ type Project struct {
 	// finds its Moments posts. Moments are the posts the model judged to be about it (LinkMoments).
 	Keywords []string        `json:"keywords,omitempty"`
 	Moments  []ProjectMoment `json:"moments,omitempty"`
+	Merge    *ProjectMerge   `json:"merge,omitempty"` // merged projects: what the merge gave MergedInto, for unmerge
 	Dirty    bool            `json:"dirty,omitempty"` // has news its summary does not reflect yet
 	OneLine  string          `json:"one_line,omitempty"`
 	Created  time.Time       `json:"created"`
@@ -118,6 +119,25 @@ type ProjectMoment struct {
 	ID   string    `json:"id"`
 	Note string    `json:"note,omitempty"`
 	At   time.Time `json:"at"`
+}
+
+// ProjectMerge is a merge as the project merged away records it (MergeProjects), so unmergeProject can undo it: its
+// own status before, and what the merge added to the project kept. Merges made before it was recorded have none.
+type ProjectMerge struct {
+	At       time.Time `json:"at"`
+	Status   string    `json:"status,omitempty"`
+	Aliases  []string  `json:"aliases,omitempty"`
+	People   []string  `json:"people,omitempty"`
+	Chats    []string  `json:"chats,omitempty"`
+	Items    []string  `json:"items,omitempty"`
+	Dirs     []string  `json:"dirs,omitempty"`
+	Keywords []string  `json:"keywords,omitempty"`
+	Moments  []string  `json:"moments,omitempty"` // post ids
+	// Moved: the chats, people and items ("<kind>/<id>") that named this project and not the kept one; the merge made
+	// them name the kept one instead.
+	Moved []string `json:"moved,omitempty"`
+	// Pinned: the kept project's pinned facts before a manual merge added this one's; unset when it did not change them.
+	Pinned *string `json:"pinned,omitempty"`
 }
 
 // Live: a project lists and is named (not merged into another).
@@ -145,6 +165,7 @@ type Store struct {
 	metaMu    sync.Mutex
 	applyMu   sync.Mutex
 	recMu     sync.Mutex // a recording's read-compare-write (recordings.go)
+	dedupeMu  sync.Mutex // projects/.dedupe.json's read-modify-write (dedupe.go)
 	observeMu sync.RWMutex
 	changed   func(Change)
 	zone      *time.Location // the user's zone, the archive's days and times are written in (zone.go); nil: time.Local
