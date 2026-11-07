@@ -45,6 +45,7 @@
   "attach": "ライブ接続",
   "terminal": "ターミナル",
   "files": "ファイル",
+  "review_changes": "変更をレビュー",
   "interrupt": "中断",
   "session_info": "セッション情報",
   "rename": "名前を変更…",
