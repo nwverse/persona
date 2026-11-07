@@ -208,6 +208,22 @@ final class VNCTests: XCTestCase {
         rest()
     }
 
+    /// The top bar's round buttons keep one shape: More (⋯) as tall as Close and Help, and at least as wide as it is
+    /// tall, not a flat sliver around its dots.
+    @MainActor func testTopBarButtonsKeepTheirShape() throws {
+        let (app, _) = try signedInMachinePage()
+        let close = app.buttons["screen-close"].firstMatch, help = app.buttons["vnc-help"].firstMatch, more = app.buttons["vnc-more"].firstMatch
+        XCTAssertTrue(more.waitForExistence(timeout: 10), "\(app.debugDescription)")
+        rest()
+        shot(app, "vnc-top-bar")
+        let c = close.frame, h = help.frame, m = more.frame
+        print("VNC-TOP-BAR close=\(c) help=\(h) more=\(m)")
+        XCTAssertEqual(h.height, c.height, accuracy: 1, "Help as tall as Close: \(h) vs \(c)")
+        XCTAssertEqual(m.height, c.height, accuracy: 1, "More as tall as Close: \(m) vs \(c)")
+        XCTAssertGreaterThanOrEqual(m.width, m.height - 1, "More not squashed: \(m)")
+        XCTAssertGreaterThanOrEqual(h.width, h.height - 1, "Help not squashed: \(h)")
+    }
+
     /// The frame rate and latency the page measures (MOCK_SCREEN_ANIMATE=1: a box moving at ~30 frames a second, its
     /// frames stamped when sent): printed, for the record.
     @MainActor func testMeasure() throws {
