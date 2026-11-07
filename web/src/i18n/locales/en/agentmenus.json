@@ -25,5 +25,10 @@
   "space_header": "Space {name}",
   "mark_all_seen_body_one": "Mark {count} unread session as seen? It changes on your phone and other browsers too.",
   "mark_all_seen_body_other": "Mark {count} unread sessions as seen? They change on your phone and other browsers too.",
-  "open_space": "Open space page"
+  "open_space": "Open space page",
+  "archive": "Archive",
+  "archive_close": "Archive and close…",
+  "archive_busy": "Busy now: archive it once it's done",
+  "archive_close_busy": "Busy now: it can't be closed while it works, waits, loops or runs a server",
+  "archived_agents": "Archived agents"
 }
