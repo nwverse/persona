@@ -71,6 +71,7 @@ private fun SettingsContent(
     var purpose by rememberSaveable(initialPage) { mutableStateOf<String?>(null) }
     var extension by rememberSaveable(initialPage) { mutableStateOf<String?>(null) }
     var extensionManager by rememberSaveable(initialPage) { mutableStateOf<String?>(null) }
+    var connectorManager by rememberSaveable(initialPage) { mutableStateOf<String?>(null) }
     var channel by rememberSaveable(initialPage) { mutableStateOf<String?>(null) }
     var manager by rememberSaveable(initialPage) { mutableStateOf<String?>(null) }
     // Model providers's own steps when they open in place: one provider, adding one, importing from ~/.zshrc.
@@ -280,7 +281,7 @@ private fun SettingsContent(
         else -> if (page == "connector/imessage") {
             MessagesConnectorPage(connectorsService, onBack = back)
         } else if (page.startsWith("connector/")) {
-            HubConnectorPage(connectorsService, connectorId = page.removePrefix("connector/"), onBack = back)
+            HubConnectorPage(connectorsService, connectorId = page.removePrefix("connector/"), onBack = back, manager = connectorManager)
         } else JListPage(title = stringResource(R.string.settings_title)) {
             if (services.demo) {
                 item { JNotice(stringResource(R.string.settings_demo_notice), title = stringResource(R.string.settings_demo_mode)) }
@@ -398,11 +399,16 @@ private fun SettingsContent(
                 item {
                     JGroupItem(connectorPosition(row)) {
                         JRow(
-                            title = c.name,
+                            title = connectorTitle(c, hubConnectors, LocalManagerRoster.current),
                             leadingIcon = PhIcons.PlugsConnected,
                             subtitle = listOfNotNull(c.account, c.via).joinToString(" · ").ifEmpty { ConnectorText.state(c) },
                             value = ConnectorText.summary(c),
-                            onClick = { page = "connector/${c.id}" },
+                            onClick = {
+                                onNavigate?.invoke(persona.core.navigation.ConnectorRoute(c.id, c.manager)) ?: run {
+                                    connectorManager = c.manager
+                                    page = "connector/${c.id}"
+                                }
+                            },
                         )
                     }
                 }

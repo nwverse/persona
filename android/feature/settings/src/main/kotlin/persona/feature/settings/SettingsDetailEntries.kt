@@ -41,10 +41,10 @@ fun EntryProviderScope<NavKey>.settingsDetailEntries(navigator: Navigator, servi
             onPage = { page -> navigator.navigate(ExtensionUiRoute(page.extension.ifBlank { route.extensionId }, page.id, page.title.ifBlank { page.id }, manager = route.manager)) },
             onChannel = { navigator.navigate(ChannelRoute(it)) }, machines = services.sessions.machines,
             onUpgrade = { market, id -> navigator.navigate(ExtensionCatalogRoute(market, id)) },
-            connectors = services.connectors.takeUnless { demo }, onConnector = { navigator.navigate(ConnectorRoute(it)) })
+            connectors = services.connectors.takeUnless { demo }, onConnector = { navigator.navigate(ConnectorRoute(it, route.manager)) })
     }
     entry<ConnectorRoute> { route ->
-        HubConnectorPage(services.connectors.takeUnless { demo }, route.connectorId, onBack = navigator::back)
+        HubConnectorPage(services.connectors.takeUnless { demo }, route.connectorId, onBack = navigator::back, manager = route.manager)
     }
     entry<ExtensionUiRoute> { route ->
         ExtensionUiPage(services.extensions.takeUnless { demo }, route.extensionId, route.uiId, route.title, onBack = navigator::back,

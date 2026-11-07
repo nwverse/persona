@@ -7,6 +7,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import persona.core.contracts.api.BindPrompt
 import persona.core.contracts.api.ConnectorsManagement
+import persona.core.contracts.api.ManagerRoster
 import persona.core.contracts.api.HubConnector
 import persona.core.contracts.api.LarkStatus
 import persona.core.contracts.api.MailAccount
@@ -168,3 +169,13 @@ internal sealed interface ConnectorRow {
 internal fun connectorRows(hubConnectors: List<HubConnector>, lark: Boolean): List<ConnectorRow> =
     listOfNotNull(ConnectorRow.Phone, ConnectorRow.Mail, ConnectorRow.Lark.takeIf { lark }) +
         hubConnectors.filter { it.id != "mail" && it.id != "lark" }.map(ConnectorRow::Hub)
+
+/** A merged list can contain the same provider under independent managers; name the owner when they collide. */
+internal fun connectorTitle(connector: HubConnector, connectors: List<HubConnector>, roster: ManagerRoster?): String {
+    val owner = roster.ownerOrDefault(connector.manager)
+    val ambiguous = connectors.any { it.name == connector.name && roster.ownerOrDefault(it.manager) != owner }
+    if (!ambiguous) return connector.name
+    val name = roster?.manager(owner)?.name?.takeIf { it.isNotBlank() } ?: owner
+    val label = if (roster?.managers?.count { it.name == name }?.let { it > 1 } == true) "$name ($owner)" else name
+    return "${connector.name} · $label"
+}

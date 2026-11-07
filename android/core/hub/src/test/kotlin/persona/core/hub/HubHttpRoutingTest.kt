@@ -277,6 +277,33 @@ class HubHttpRoutingTest {
         }
     }
 
+    @Test fun connectorRequestsCarryTheClickedManagerToTheWire() = runBlocking {
+        val certificate = HeldCertificate.Builder().commonName("example.com").build()
+        val requests = Channel<RecordedRequest>(Channel.UNLIMITED)
+        server(certificate, requests).use { hub ->
+            connection(certificate, listOf(endpoint(hub))) {}.use { connection ->
+                connection.updateNetwork(HubNetwork("lan"))
+                withTimeout(5000) { connection.route.first { it != null } }
+                val api = HttpConnectorsManagement(connection)
+                for (owner in listOf("work", "assistant", "")) {
+                    withContext(RequestManager(owner)) {
+                        api.connectors(all = true)
+                        api.connectorLogin("github", "", emptyMap())
+                        api.connectorLogout("github")
+                        api.setConnectorEnabled("github", false)
+                    }
+                    val paths = listOf("/api/v1/connectors?all=1", "/api/v1/connectors/github/login",
+                        "/api/v1/connectors/github/logout", "/api/v1/connectors/github/settings")
+                    for (path in paths) {
+                        val request = withTimeout(5000) { requests.receive() }
+                        val suffix = if (owner.isEmpty()) "" else (if ('?' in path) "&" else "?") + "manager=$owner"
+                        assertEquals(path + suffix, request.path)
+                    }
+                }
+            }
+        }
+    }
+
     private fun connection(certificate: HeldCertificate, endpoints: List<Endpoint>, onReady: suspend () -> Unit) =
         OkHttpHubConnection(HubConnectionConfig("test-hub", fingerprint(certificate), "test-token", endpoints, "test"),
             HubNetwork("offline", available = false), onReady = { onReady() })
@@ -299,6 +326,8 @@ class HubHttpRoutingTest {
                         request.path == "/api/v1/app/android/apk" -> "apk"
                         request.path == "/api/v1/app/android/latest" ->
                             """{"version_code":1,"version_name":"test","download_url":"${update.downloadUrl}","sha256":"${update.sha256}"}"""
+                        request.path!!.substringBefore('?').endsWith("/connectors/github/settings") ->
+                            """{"id":"github","name":"GitHub","enabled":false}"""
                         request.path!!.substringBefore('?').endsWith("/image") -> "media"
                         else -> "{}"
                     })
