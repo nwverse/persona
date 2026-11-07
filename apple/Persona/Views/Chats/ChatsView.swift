@@ -810,7 +810,7 @@ private struct AgentsList: View {
         let _ = rowActions.update(rename: { renamingSession = $0 }, close: { closingSession = $0 }, linkTodo: { linkingSession = $0 },
                                   delete: { deletingSession = $0 })
 
-        let list = List {
+        let content = List {
             // On a phone the filter bar is the list's first row: it scrolls with the list, so the search field can
             // fold away and come back on a pull (a bar pinned in the safe area stayed put under a folded search field,
             // leaving a blurred gap, TestFlight 35). Beside the split (regular width) it stays above the list.
@@ -1017,6 +1017,9 @@ private struct AgentsList: View {
                 .listRowSeparator(capsules ? .hidden : .automatic)
             }
         }
+        // Bound the list content separately from its presentation modifiers so
+        // the compiler does not solve the rows and the entire chain together.
+        let presentation = content
         .modifier(AgentsListStyle(capsules: capsules, room: ownsTop && shell != nil && !compactTop, ownsTop: ownsTop))
         #if os(iOS) || os(visionOS)
         // Between the two layouts, slid with the field (`AgentsHeader.compact`); the page's color behind it.
@@ -1067,6 +1070,8 @@ private struct AgentsList: View {
         // `-openQuietSpaces YES` (with `-tab dev`): every quiet space opened, for screenshots (`-dev.folded` folds spaces).
         .task(id: quiet.map(\.id)) { if UserDefaults.standard.bool(forKey: "openQuietSpaces") { expandedQuiet.formUnion(quiet.map(\.id)) } }
         #endif
+        // Keep the state and lifecycle modifiers in a separate expression too.
+        let list = presentation
         .renameSpaceAlert($renamingSpace)
         .renameSessionAlert($renamingSession)
         .confirmClose($closingSession)
