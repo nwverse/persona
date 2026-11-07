@@ -23,6 +23,14 @@ nonisolated enum HubTransport {
         routes[key(hub)] = local
     }
 
+    /// Requests to `hub` go straight to it again, unless another tunnel routes them by now: a hub can have more than
+    /// one way through, and closing one must not take the route of the one that replaced it.
+    static func unroute(_ hub: URL, from local: URL) {
+        lock.lock()
+        defer { lock.unlock() }
+        if routes[key(hub)] == local { routes[key(hub)] = nil }
+    }
+
     /// The tunnel requests to `hub` go through, nil when they go straight to it.
     static func via(_ hub: URL) -> URL? {
         lock.lock()

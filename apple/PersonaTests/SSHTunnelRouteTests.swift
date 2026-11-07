@@ -31,6 +31,19 @@ struct SSHTunnelRouteTests {
         #expect(api.url("/api/v1/machines").host() == "hub.example.com")
     }
 
+    @Test func closingOneTunnelLeavesTheRouteAnotherOneSet() {
+        // A hub with two ways through: the one taking over routes first, the one it replaces closes afterwards
+        // (AppModel.only), and must not take the new route with it.
+        let other = URL(string: "http://127.0.0.1:52002")!
+        defer { HubTransport.clearAll() }
+        HubTransport.route(hub, via: tunnel)
+        HubTransport.route(hub, via: other)
+        HubTransport.unroute(hub, from: tunnel)
+        #expect(HubTransport.via(hub) == other)
+        HubTransport.unroute(hub, from: other)
+        #expect(HubTransport.via(hub) == nil)
+    }
+
     @Test func pairingsSavedBeforeKeepDecoding() throws {
         // A registry written before the tunnel: no ssh, the same hub.
         let old = #"{"hubs":[{"id":"h1","config":{"url":"http://hub-b.example.com:18660","token":"t"},"group":"","addedAt":0}],"groupNames":{}}"#
