@@ -197,6 +197,9 @@ func TestRunInterruptedActivationAlwaysRollsBack(t *testing.T) {
 	if e := replaceImage(c.Exe, p.Binary); e != nil {
 		t.Fatal(e)
 	}
+	if e := writeJSON(activePath(p), p); e != nil {
+		t.Fatal(e)
+	}
 	if e := writeJSON(filepath.Join(txDir(p), "receipt.json"), receipt(p, "applied", nil)); e != nil {
 		t.Fatal(e)
 	}
@@ -334,6 +337,9 @@ func TestRollbackWillNotOverwriteExternalImage(t *testing.T) {
 	c, p := fixture(t)
 	prepare(t, p)
 	if e := copyExclusive(p.Binary, filepath.Join(txDir(p), "previous")); e != nil {
+		t.Fatal(e)
+	}
+	if e := writeJSON(activePath(p), p); e != nil {
 		t.Fatal(e)
 	}
 	if e := writeJSON(filepath.Join(txDir(p), "receipt.json"), receipt(p, "applied", nil)); e != nil {

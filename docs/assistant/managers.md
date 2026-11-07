@@ -258,12 +258,22 @@ that exact ID to a `publish_command` argv array invoking
 only for an authorized activation window. There is no inferred default manager or new timer.
 Use `--validate-only` to build and validate without publication.
 
+This manager operation is a pinned, one-shot bootstrap. The existing release service and
+timer must stay gated outside its separately scheduled window, including after completion;
+selecting manager scope does not enable periodic manager upgrades. The old baseline hash
+and bootstrap window are not a continuing health probe. Repeating an obsolete operation
+must fail its current preconditions, rather than return a historical deployment success.
+Further activation requires a newly reviewed baseline and authorization window.
+
 The worker retains the original `state_dir/lock`, source-branch ancestry checks and full
 release validation. `--publish-managers` produces `manager-manifest.json` containing the
 same-source Linux and Darwin personad artifacts; it does not publish node packages or
 change a node pointer. Each manager has its own `state_dir/manager/<id>/last.json`.
 The target configuration's bytes enter the cache identity: a Hub-only success cannot skip
 an unfinished manager, and changing an explicit target causes a new publication check.
+Validated builds may be reused, but a historical manager success never skips the current
+publisher invocation. Validation-only statuses use `manager-release/validation`, separate
+from activation's `manager-release/worker` status.
 A checked package is not installed. Only a confirmed receipt bound to this run, manager
 and source makes that manager operation successful. Consumers must require that success
 before resuming application publication.
@@ -315,17 +325,26 @@ rewrites the original plist or its environment, calls install/join, or changes t
 configuration, database bindings, node, Hub or other manager. The guardian journals before
 replacing the independent executable and restarts only that original validated service.
 A crash during activation resumes recovery rather than retrying the candidate.
+An unfinished active transaction prevents another run from taking ownership. A recovering
+guardian may restore an image only while the active marker still belongs to its exact run
+and target; a missing or foreign marker cannot authorize rollback of a later transaction.
 
 The new manager reports readiness only after its stores opened and its authenticated Hub
 handshake completed. The guardian checks that readiness against the original service's
 actual PID, image, native checksum and unchanged configuration. It then waits for the
 publisher to verify the live manager version, scoped assistant's original main/machine and
 unchanged node inventory through existing Hub GET routes. `confirm` acknowledges these
-checks; only then is the receipt `confirmed`. A health rejection, missing acknowledgement,
+checks; only then is the receipt `confirmed`. Roster, machine or main-session resync may
+lag the authenticated handshake: the publisher allows at most sixty seconds from the
+`start` command's return for these temporary absences to settle. Explicit ownership or
+identity conflicts fail immediately.
+A health rejection, missing acknowledgement,
 startup timeout or interrupted activation restores the verified previous executable and
 restarts the same service. An unrelated replacement or changed service identity is never
 overwritten. Receipts distinguish `checked`, `applied`, `confirmed` and `rollback`; failures
 must not release dependent publication steps.
+A rollback receipt proves that the previous executable was restored and the original
+service's restart command succeeded; reconnect and service health still require verification.
 
 This path does not change default permissions. After the manager version is confirmed,
 permission settings and inheritance require their own explicitly scoped product acceptance.

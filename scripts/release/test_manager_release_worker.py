@@ -147,11 +147,14 @@ class ManagerWorkerTests(unittest.TestCase):
         self.assertTrue(any(c[0] == 'manager-publisher' for c in self.calls))
         self.assertEqual(json.loads((state / 'last.json').read_text()), previous)
 
-    def test_same_success_skips_but_changed_target_republishes_validated_artifact(self):
+    def test_same_success_reconfirms_and_changed_target_reuses_validated_artifact(self):
         first = self.invoke()
         self.calls.clear()
-        self.assertEqual(self.invoke()['run_id'], first['run_id'])
-        self.assertFalse(any(c[0] == 'manager-publisher' for c in self.calls))
+        second = self.invoke()
+        self.assertNotEqual(second['run_id'], first['run_id'])
+        self.assertEqual(second['build'], first['build'])
+        self.assertFalse(any('scripts/release/build_hub_release.py' in c for c in self.calls))
+        self.assertTrue(any(c[0] == 'manager-publisher' for c in self.calls))
         self.config['manager_targets']['m-work']['activation'] = 'enabled'
         self.calls.clear()
         second = self.invoke()
@@ -264,6 +267,32 @@ class ManagerWorkerTests(unittest.TestCase):
     def test_validate_only_calls_no_publisher(self):
         self.assertEqual(self.invoke(['--validate-only'])['result'], 'validated')
         self.assertFalse(any(c[0].endswith('publisher') for c in self.calls))
+        statuses = [c for c in self.calls if c[0] == 'gh']
+        self.assertTrue(statuses)
+        self.assertTrue(all('context=manager-release/validation' in c for c in statuses))
+        self.assertFalse(any('context=manager-release/worker' in c for c in statuses))
+
+    def test_missing_historical_receipt_still_requires_fresh_confirmation(self):
+        first = self.invoke()
+        (Path(first['evidence']) / 'manager-receipt.json').unlink()
+        self.calls.clear()
+        with self.assertRaises(FileNotFoundError):
+            self.invoke(phase=None)
+        result = json.loads((self.root / 'state/manager/m-work/last.json').read_text())
+        self.assertNotEqual(result['run_id'], first['run_id'])
+        self.assertEqual(result['build'], first['build'])
+        self.assertEqual(result['result'], 'failure')
+        self.assertTrue(any(c[0] == 'manager-publisher' for c in self.calls))
+        self.assertFalse(any('state=success' in c for c in self.calls if c[0] == 'gh'))
+
+    def test_historical_success_cannot_mask_current_offline_publisher(self):
+        first = self.invoke()
+        self.calls.clear()
+        with self.assertRaises(subprocess.CalledProcessError):
+            self.invoke(fail=lambda c: c[0] == 'manager-publisher')
+        result = json.loads((self.root / 'state/manager/m-work/last.json').read_text())
+        self.assertNotEqual(result['run_id'], first['run_id'])
+        self.assertEqual(result['result'], 'failure')
 
     def test_checked_receipt_is_not_activation_success(self):
         with self.assertRaises(SystemExit) as stopped:

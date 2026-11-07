@@ -46,6 +46,9 @@ func (c *Controller) Acknowledge(ctx context.Context, p Plan, action string) err
 	if r.Phase != "applied" {
 		return errors.New("activation is not awaiting publisher verification")
 	}
+	if e := requireActive(p); e != nil {
+		return e
+	}
 	if action == "confirm" {
 		if r.Ready == nil {
 			return errors.New("new manager has not become ready")

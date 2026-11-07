@@ -11,6 +11,8 @@ from unittest.mock import patch
 import manager_target as target_module
 import promote_manager_release as promoter
 
+snapshot_impl = promoter.snapshot
+
 
 class TransportTests(unittest.TestCase):
     def test_missing_transport_cannot_infer_identity(self):
@@ -95,9 +97,21 @@ class ScopedHealthTests(unittest.TestCase):
 
     def test_missing_main_or_offline_machine_refused(self):
         self.answers['sessions?machine_id=box']['sessions'] = []
-        with self.assertRaises(ValueError): self.snapshot()
+        with self.assertRaises(promoter.SnapshotPending): self.snapshot()
         self.answers['machines']['machines'][0]['online'] = False
-        with self.assertRaises(ValueError): self.snapshot()
+        with self.assertRaises(promoter.SnapshotPending): self.snapshot()
+
+    def test_reconnect_absence_is_transient_but_conflicting_identity_is_not(self):
+        profile = self.answers['assistant?manager=m-fixture']
+        for field in ('main', 'machine_id'):
+            value = profile.pop(field)
+            with self.subTest(field=field), self.assertRaises(promoter.SnapshotPending):
+                self.snapshot()
+            profile[field] = value
+        profile['main'] = 'foreign-main'
+        with self.assertRaises(ValueError) as refused:
+            self.snapshot()
+        self.assertNotIsInstance(refused.exception, promoter.SnapshotPending)
 
 
 
@@ -204,6 +218,60 @@ class PublisherTransactionTests(unittest.TestCase):
             ({'version': 'old'}, self.identity, 'c' * 64)]
         with self.assertRaisesRegex(RuntimeError, 'live version'):
             promoter.promote(self.payload)
+        self.assertIn('rollback', self.commands)
+        self.assertNotIn('confirm', self.commands)
+
+    def test_ready_transient_reconnect_retries_then_confirms(self):
+        healthy = ({'version': self.manifest['version']}, self.identity, 'c' * 64)
+        promoter.snapshot.side_effect = [healthy] * 3 + [
+            promoter.SnapshotPending('Target machines must be known and online'),
+            promoter.SnapshotPending('Original main has not resynced'), healthy]
+        self.statuses = iter([{'phase': 'applied', 'ready': {'pid': 42}}] * 3 + [{'phase': 'confirmed'}])
+        self.assertEqual(promoter.promote(self.payload)['phase'], 'confirmed')
+        self.assertEqual(promoter.snapshot.call_count, 6)
+        self.assertNotIn('rollback', self.commands)
+        self.assertEqual(self.commands.count('confirm'), 1)
+
+    def test_ready_transient_reconnect_is_bounded_and_rolls_back(self):
+        healthy = ({'version': self.manifest['version']}, self.identity, 'c' * 64)
+        promoter.snapshot.side_effect = [healthy] * 3 + [promoter.SnapshotPending('still offline')]
+        promoter.time.monotonic.side_effect = [0, 0, 1, 61]
+        with self.assertRaisesRegex(TimeoutError, '60 seconds'):
+            promoter.promote(self.payload)
+        self.assertIn('rollback', self.commands)
+        self.assertNotIn('confirm', self.commands)
+
+    def test_ready_actual_snapshot_waits_for_offline_main_and_session_resync(self):
+        # Exercise actual classification of Hub responses, not just a mocked
+        # transient exception, across the authenticated reconnect boundary.
+        snapshots = [0]
+
+        def api(root, path):
+            if path == 'managers':
+                snapshots[0] += 1
+                return {'managers': [dict(id='m-fixture', online=snapshots[0] != 4,
+                                         deploy='service', version=self.manifest['version'])]}
+            if path == 'assistant?manager=m-fixture':
+                return dict(main='' if snapshots[0] == 5 else 'main', machine_id='box')
+            if path == 'machines':
+                return {'machines': [dict(id='box', manager='m-fixture', online=True, machine_uid='uid')]}
+            if path == 'sessions?machine_id=box':
+                rows = [] if snapshots[0] == 6 else [dict(session_id='main', machine_id='box', state='idle')]
+                return {'sessions': rows}
+            raise AssertionError(path)
+
+        self.statuses = iter([{'phase': 'applied', 'ready': {'pid': 42}}] * 4 + [{'phase': 'confirmed'}])
+        with patch.object(promoter, 'snapshot', wraps=snapshot_impl), patch.object(promoter, 'api', side_effect=api):
+            self.assertEqual(promoter.promote(self.payload)['phase'], 'confirmed')
+        self.assertEqual(snapshots[0], 7)
+        self.assertNotIn('rollback', self.commands)
+
+    def test_ready_explicit_identity_conflict_rolls_back_without_retry(self):
+        healthy = ({'version': self.manifest['version']}, self.identity, 'c' * 64)
+        promoter.snapshot.side_effect = [healthy] * 3 + [ValueError('identity conflicts')]
+        with self.assertRaisesRegex(ValueError, 'identity conflicts'):
+            promoter.promote(self.payload)
+        self.assertEqual(promoter.snapshot.call_count, 4)
         self.assertIn('rollback', self.commands)
         self.assertNotIn('confirm', self.commands)
 

@@ -46,6 +46,9 @@ func readReceipt(p Plan) (Receipt, error) {
 		return r, e
 	}
 	e = json.Unmarshal(b, &r)
+	if e == nil && (r.Schema != 1 || r.RunID != p.RunID || r.ManagerID != p.ManagerID) {
+		e = errors.New("receipt transaction identity mismatch")
+	}
 	return r, e
 }
 func writeJSON(path string, v any) error {
@@ -113,6 +116,9 @@ func (c *Controller) Start(ctx context.Context, p Plan) error {
 	}
 	defer unlock()
 	if e = p.authorize(c.Now()); e != nil {
+		return e
+	}
+	if e = rejectPendingActivation(p); e != nil {
 		return e
 	}
 	dir := txDir(p)
@@ -190,6 +196,9 @@ func (c *Controller) Run(ctx context.Context, p Plan) (Receipt, error) {
 		return r, e
 	}
 	if saved.Phase == "applied" || (saved.Phase == "checked" && pending) {
+		if !pending {
+			return r, errors.New("interrupted activation no longer owns the active transaction")
+		}
 		return c.rollback(ctx, p, errors.New("interrupted activation recovered; candidate will not be retried"))
 	}
 	if saved.Phase != "checked" {
@@ -278,6 +287,9 @@ func replaceImage(from, to string) error {
 }
 func (c *Controller) rollback(ctx context.Context, p Plan, cause error) (Receipt, error) {
 	r := receipt(p, "rollback", cause)
+	if e := requireActive(p); e != nil {
+		return r, e
+	}
 	for _, path := range []string{p.Dir, p.Binary, p.PlistPath, filepath.Join(p.Dir, "manager.json")} {
 		if e := canonical(path); e != nil {
 			return r, e
@@ -348,9 +360,9 @@ func activePending(p Plan) (bool, error) {
 		return false, e
 	}
 	if a.RunID != p.RunID {
-		return false, nil
+		return false, errors.New("another transaction owns the active manager update")
 	}
-	if a.ManagerID != p.ManagerID || a.Dir != p.Dir || a.Binary != p.Binary || a.ConfigSHA256 != p.ConfigSHA256 || a.BinarySHA256 != p.BinarySHA256 || a.PreviousSHA256 != p.PreviousSHA256 {
+	if !sameTarget(a, p) || a.Source != p.Source || a.Version != p.Version || a.Size != p.Size || a.BinarySHA256 != p.BinarySHA256 || a.PreviousSHA256 != p.PreviousSHA256 {
 		return false, errors.New("active transaction identity mismatch")
 	}
 	return true, nil

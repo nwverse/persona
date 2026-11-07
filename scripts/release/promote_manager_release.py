@@ -11,11 +11,27 @@ import stat
 import subprocess
 import time
 from urllib.parse import urlencode
+from urllib.error import HTTPError, URLError
 
 from hub_release_paths import release_directory, validate_release_paths
 from manager_artifacts import manager_manifest
 from node_artifacts import verify_binary
 from promote_hub_release import api, nodes
+
+
+class SnapshotPending(ValueError):
+    """Authenticated reconnection has not yet completed roster/session resync."""
+
+
+def snapshot_api(root, path):
+    try:
+        return api(root, path)
+    except HTTPError as error:
+        if error.code not in (502, 503, 504):
+            raise
+        raise SnapshotPending('Manager reconnect is temporarily unavailable') from error
+    except (URLError, TimeoutError) as error:
+        raise SnapshotPending('Manager reconnect request is temporarily unavailable') from error
 
 
 def canonical_json(value):
@@ -58,21 +74,28 @@ def inspect_target(argv, target, target_source):
 
 def snapshot(root, target, require_idle=True):
     mid = target['manager_id']
-    roster = api(root, 'managers')['managers']
+    roster = snapshot_api(root, 'managers')['managers']
     manager = next((m for m in roster if m.get('id') == mid), None)
-    if not manager or not manager.get('online') or manager.get('deploy') != 'service':
+    if manager and manager.get('deploy') != 'service':
         raise ValueError('Exact independent manager must be online as a service')
-    profile = api(root, 'assistant?' + urlencode({'manager': mid}))
-    if (profile.get('manager', mid) != mid or profile.get('main') != target['main'] or
-            profile.get('machine_id') != target['machine_id']):
-        raise ValueError('Scoped assistant identity is missing or ambiguous')
-    machines = api(root, 'machines')['machines']
+    if not manager or not manager.get('online'):
+        raise SnapshotPending('Exact independent manager is reconnecting')
+    profile = snapshot_api(root, 'assistant?' + urlencode({'manager': mid}))
+    if (profile.get('manager', mid) != mid or
+            (profile.get('main') and profile['main'] != target['main']) or
+            (profile.get('machine_id') and profile['machine_id'] != target['machine_id'])):
+        raise ValueError('Scoped assistant identity conflicts with the original target')
+    if not profile.get('main') or not profile.get('machine_id'):
+        raise SnapshotPending('Scoped assistant identity has not resynced')
+    machines = snapshot_api(root, 'machines')['machines']
+    if any(m['id'] == target['machine_id'] and m.get('manager') != mid for m in machines):
+        raise ValueError('Original machine ownership conflicts with the manager')
     owned = [m for m in machines if m.get('manager') == mid]
     if not owned or any(not m.get('online') for m in owned):
-        raise ValueError('Target machines must be known and online')
+        raise SnapshotPending('Target machines must be known and online')
     rows = []
     for machine in owned:
-        response = api(root, 'sessions?' + urlencode({'machine_id': machine['id']}))
+        response = snapshot_api(root, 'sessions?' + urlencode({'machine_id': machine['id']}))
         for row in response['sessions']:
             if row.get('manager', mid) != mid or row.get('machine_id') != machine['id']:
                 raise ValueError('Session ownership is ambiguous')
@@ -84,7 +107,7 @@ def snapshot(root, target, require_idle=True):
                 raise ValueError('Target session is compacting')
             rows.append(row)
     if not any(r.get('session_id') == profile['main'] for r in rows):
-        raise ValueError('Original main is not represented in the idle snapshot')
+        raise SnapshotPending('Original main is not represented in the snapshot yet')
     identity = {'manager': mid, 'main': profile['main'], 'machine_id': profile['machine_id'],
                 'machines': sorted((m['id'], m.get('machine_uid')) for m in owned)}
     return manager, identity, hashlib.sha256(canonical_json(rows)).hexdigest()
@@ -180,13 +203,20 @@ def promote(payload):
         remote(argv, ['python3', '-c', refresh])
         remote(argv, [*command, 'start', '--plan', staged_target['plan']], timeout=45)
         deadline = time.monotonic() + 240
+        reconnect_deadline = time.monotonic() + 60
         while time.monotonic() < deadline:
             status = remote(argv, [*command, 'status', '--plan', staged_target['plan']])
             if status.get('phase') == 'rollback':
                 raise RuntimeError('Manager update rolled back: ' + status.get('error', ''))
             if status.get('phase') == 'applied' and status.get('ready'):
                 try:
-                    manager, identity, _ = snapshot(root, target, require_idle=False)
+                    try:
+                        manager, identity, _ = snapshot(root, target, require_idle=False)
+                    except SnapshotPending as pending:
+                        if time.monotonic() >= reconnect_deadline:
+                            raise TimeoutError('Manager reconnect/resync did not complete within 60 seconds') from pending
+                        time.sleep(2)
+                        continue
                     if manager.get('version') != manifest['version'] or identity != before_identity:
                         raise RuntimeError('Manager live version or preserved identity differs')
                     if nodes(root) != before_nodes:

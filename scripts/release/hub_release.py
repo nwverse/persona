@@ -138,7 +138,8 @@ def main():
             run(['git', 'merge-base', '--is-ancestor', sha, tracking_ref], checkout)
 
         def status(value, description):
-            context = ('manager-release/worker' if publish_managers else
+            context = ('manager-release/validation' if publish_managers and args.validate_only else
+                       'manager-release/worker' if publish_managers else
                        'hub-release/validation' if args.validate_only else 'hub-release/worker')
             run(['gh', 'api', f'repos/{cfg["repository"]}/statuses/{sha}',
                  '-f', f'state={value}', '-f', f'context={context}',
@@ -171,7 +172,10 @@ def main():
             success_ready = (previous.get('result') == 'success' and
                              (not (publish_nodes or publish_managers) or
                               ready(previous.get('evidence', ''), previous.get('build'))))
-            if success_ready or time.time() < previous.get('retry_after', 0):
+            # A manager artifact cache is not a live activation receipt. Every
+            # invocation must obtain a fresh run-bound publisher confirmation.
+            if ((success_ready and not publish_managers) or
+                    (previous.get('result') != 'success' and time.time() < previous.get('retry_after', 0))):
                 print(f'{sha}: {previous["result"]}; no new attempt needed')
                 if publish_managers and not success_ready and not args.validate_only:
                     raise SystemExit(3)
