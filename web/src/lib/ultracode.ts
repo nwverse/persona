@@ -39,9 +39,11 @@ export function ultracodeOn(s: Pick<Session, "ultracode" | "assistant" | "agent"
  *  starts from asks for it. Never on a to-do that is done or did not start. */
 export function todoUltracode(todo: Todo, lookup: SessionLookup | undefined, planned?: Pick<PlanTask, "ultracode">): boolean {
   if (todo.done_at || todo.start_error) return false;
-  const active = (todo.agents ?? []).filter((a) => !a.released_at);
-  if (active.length === 0) return planned?.ultracode === true;
-  return active.some((a) => {
+  const agents = todo.agents ?? [];
+  // the plan's choice only until an agent starts: one moved to another to-do or taken out leaves nothing running here
+  if (agents.length === 0) return planned?.ultracode === true;
+  return agents.some((a) => {
+    if (a.released_at) return false;
     const s = lookup?.(a.machine_id, a.session_id);
     return s !== undefined && stateOf(s) !== "offline" && ultracodeOn(s);
   });

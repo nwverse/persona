@@ -40,6 +40,11 @@ describe("the ultracode mark on a to-do", () => {
     expect(todoUltracode(todo(), makeSessionLookup([session({ ultracode: false })]), { ultracode: true })).toBe(false);
   });
 
+  it("does not go back to the plan's choice once its agents were moved to another to-do or taken out", () => {
+    const emptied = todo({ agents: [{ machine_id: "m1", session_id: "s1", linked_at: "x", released_at: "y" }], plan_id: "p1" });
+    expect(todoUltracode(emptied, makeSessionLookup([session({ ultracode: true })]), { ultracode: true })).toBe(false);
+  });
+
   it("never shows on a to-do that is done or did not start", () => {
     expect(todoUltracode(todo({ done_at: "2026-11-08T01:00:00Z" }), makeSessionLookup([session({ ultracode: true })]))).toBe(false);
     expect(todoUltracode(todo({ agents: [], start_error: "ultracode_unsupported" }), makeSessionLookup([]), { ultracode: true })).toBe(false);
