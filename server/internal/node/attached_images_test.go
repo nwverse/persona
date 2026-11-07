@@ -1,6 +1,7 @@
 package node
 
 import (
+	"context"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -169,5 +170,28 @@ func TestKeepImagePathsLeavesOtherTextAlone(t *testing.T) {
 		if got := keepImagePaths(c.in); got != c.want {
 			t.Errorf("%s: keepImagePaths(%q) = %q, want %q", c.name, c.in, got, c.want)
 		}
+	}
+}
+
+// A message with words and a picture, its path: lines added, is more lines than Claude Code (2.1.316) shows in its
+// box: the box shows the picture's chip and a `[Pasted text #n …]` placeholder. Left there after the grace, it is the
+// message still waiting and gets one Enter; the same placeholder after a short message without pictures is someone
+// else's paste and gets none.
+func TestEnsureSubmittedKnowsAPictureMessageBehindItsPlaceholder(t *testing.T) {
+	withSubmitGrace(t, 100*time.Millisecond)
+	placeholder := strings.Replace(screenFixture(t, "claude-2.1.312-typed-162.ansi"), "fix the flaky test", "[Image #1][Pasted text #2 +3 lines]", 1)
+	empty := screenFixture(t, "claude-2.1.312-empty-162.ansi")
+	text := keepImagePaths("fix the flaky test\n\n<attached_images>\n/tmp/a.jpg\n</attached_images>")
+
+	stuck := &fakePane{screens: []string{placeholder, empty}}
+	(&Node{hosts: herdrHosts(stuck.serve(t))}).ensureSubmitted(context.Background(), "w1:p1", text, time.Now(), nil)
+	if len(stuck.keys) != 1 || stuck.keys[0][0] != "enter" {
+		t.Fatalf("a picture message behind its placeholder: keys %v", stuck.keys)
+	}
+
+	other := &fakePane{screens: []string{placeholder}}
+	(&Node{hosts: herdrHosts(other.serve(t))}).ensureSubmitted(context.Background(), "w1:p1", "fix the flaky test", time.Now(), nil)
+	if len(other.keys) != 0 {
+		t.Fatalf("pressed enter on someone else's paste: %v", other.keys)
 	}
 }

@@ -819,9 +819,11 @@ const imagePathLine = "path: "
 
 // keepImagePaths gives each path in the <attached_images> block that ends text (the node's own, or one a client wrote
 // after uploading the photos itself, as Android's composer does) a second line, "path: <path>". Claude Code's paste
-// turns a line that is only an image path, to a file that exists, into an `[Image #n]` and drops the line, so the
-// model saw the picture but never learned where the file is; a line that starts with a word stays text. The apps take
-// only the block's lines that start with "/" or "~" as photos, so the second line is no second thumbnail. A block
+// turns a line that is only an image path, to a readable image file, into an `[Image #n]` and drops the line: the
+// model gets the picture, not where the file is. A line that starts with a word stays text; with the block's tags it
+// makes a message with words more lines than Claude shows in its box, so the box shows the pictures' chips and a
+// `[Pasted text #n]` placeholder (longPaste). The apps take only the block's lines that start with "/" or "~" as
+// photos, so the second line is no second thumbnail. A block
 // with lines that are not paths (prose that happens to end in the tag), or whose paths already have their line, is
 // left as it is.
 func keepImagePaths(text string) string {
