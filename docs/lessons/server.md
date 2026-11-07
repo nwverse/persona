@@ -360,9 +360,15 @@ home volume (docs/operations/link.md "Without systemd").
   though a new link is up (`setLink` wakes the loop, `choosePath` still skips the path). With a container that stayed up 75 s or more before
   each restart, ten runs came back in min 2.2 / p50 2.4 / p90 2.5 / max 2.8 s (time from `docker restart` to the hub listing it online on a
   new link). A real flapping link (a laptop on a bad network) gets the same delays.
-- **No systemd, no remote node updates**: `can_deploy` is false ("The resident node is not managed by launchd/systemd…", `nodeupdate.New` looks
-  for `INVOCATION_ID` and `systemd-run`): the hub's Redeploy and its automatic node update after a hub update skip such a node. Upgrade it by
-  hand: put the hub's own node build (`~/.persona/bin/nodes/…-linux-amd64`, the same version) into the volume and kill the node process.
+- **No systemd: remote node updates need the supervisor to say so** (2026-11-08). `nodeupdate.New` recognized only systemd (`INVOCATION_ID`
+  plus `systemd-run`) and launchd (`XPC_SERVICE_NAME`), so the box showed `can_deploy` false ("The resident node is not managed by
+  launchd/systemd…") and Redeploy skipped it. What an update needs from a supervisor is only a restart when the node exits: the switch execs
+  the new program in place (same pid; the script's `wait -n` sees nothing), and the restart matters only after a crash or the watchdog's
+  rollback. The script now runs `personad node --attach --supervised` (docs/operations/link.md "Without systemd"); the watchdog then runs
+  detached in a session of its own, as on a Mac, so the script must restart only the pid it started. Don't fake `INVOCATION_ID` instead: the
+  node would then call `systemd-run`, which the box doesn't have. A personad from before the flag ignores whatever follows `--attach`, so the
+  script can pass it before the box runs a build that knows it; until then, upgrade by hand: put the hub's own node build (`~/.persona/bin/nodes/…-linux-amd64`,
+  the same version) into the volume and kill the node process.
 - **Some downloads only work over IPv6 from that network, and a default bridge has none**: the Claude Code installer's download host timed out
   over IPv4 from the NAS and its containers, while the npm registry worked (`npm install -g @anthropic-ai/claude-code` with
   `npm config set prefix ~/.local`). herdr's manifest (`herdr.dev/latest.json`) timed out repeatedly; the binary itself came from GitHub

@@ -107,7 +107,11 @@ func runNode(ctx context.Context, args []string, b Build) error {
 	if len(args) > 0 {
 		switch args[0] {
 		case "--attach":
-			return runResident(ctx, b)
+			supervised, err := residentArgs(args[1:])
+			if err != nil {
+				exitNodeUsage(err)
+			}
+			return runResident(ctx, b, supervised)
 		case "tailcat":
 			return runNodeTailcat(ctx, args[1:])
 		case "doctor":
