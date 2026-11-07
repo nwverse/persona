@@ -3,7 +3,8 @@ markdown, apple/ and deploy/docker/.
 
 Each test builds a throwaway repository with check-fast.sh and stubs for the repository-wide checks it always picks
 for a scripts/ change (the privacy scan, the extension schema test, the PR workflow test), commits a base, makes a
-change on top and runs check-fast.sh --base against the base.
+change on top and runs check-fast.sh --base against the base. The default-base tests run it without --base, against
+refs/remotes/origin/* refs they write themselves.
 """
 import os
 from pathlib import Path
@@ -50,10 +51,7 @@ class CheckFastScriptsTests(unittest.TestCase):
 
     def break_suite(self, name):
         """Make scripts/test/<name> fail and commit it into the base, so only the change made afterwards selects it."""
-        self.write(f"scripts/test/{name}", FAILING)
-        self.git("add", f"scripts/test/{name}")
-        self.git("-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "-q", "-m", "break")
-        self.git("tag", "-f", "base")
+        self.commit_on_top(f"scripts/test/{name}", FAILING, "base")
 
     def check_fast(self, *args, path=None, env=None, base="base"):
         # TMPDIR inside the throwaway repo: a failed run keeps its log directory, and the cleanup removes it.
@@ -65,11 +63,11 @@ class CheckFastScriptsTests(unittest.TestCase):
         return run.returncode, run.stdout + run.stderr
 
     def commit_on_top(self, path, text, tag):
-        """Commit one more file on top of the base, so a base ref left at the first commit selects it too."""
+        """Commit one more file on top of HEAD and point tag at the new commit."""
         self.write(path, text)
         self.git("add", path)
         self.git("-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "-q", "-m", tag)
-        self.git("tag", tag)
+        self.git("tag", "-f", tag)
 
     def test_without_base_it_diffs_against_origin_head(self):
         # The default branch's tip carries a failing test; a stale origin/master left at the first commit would
@@ -83,6 +81,30 @@ class CheckFastScriptsTests(unittest.TestCase):
         self.assertEqual(0, code, out)
         self.assertIn("merge-base with refs/remotes/origin/main", out)
         self.assertIn("PASS     scripts/tools/test_new.py", out)
+        self.assertNotIn("test_mid.py", out)
+
+    def test_without_base_origin_head_wins_over_origin_main(self):
+        # A default branch that is neither main nor master; origin/main left at the first commit would select the
+        # failing test on top of it.
+        self.commit_on_top("scripts/tools/test_mid.py", FAILING, "mid")
+        self.git("update-ref", "refs/remotes/origin/trunk", "mid")
+        self.git("symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/trunk")
+        self.git("update-ref", "refs/remotes/origin/main", "base")
+        self.write("scripts/tools/test_new.py", PASSING)
+        code, out = self.check_fast(base=None)
+        self.assertEqual(0, code, out)
+        self.assertIn("merge-base with refs/remotes/origin/trunk", out)
+        self.assertNotIn("test_mid.py", out)
+
+    def test_without_base_a_plain_origin_head_still_counts(self):
+        # origin/HEAD written as a plain ref to a commit, not as a symbolic ref.
+        self.commit_on_top("scripts/tools/test_mid.py", FAILING, "mid")
+        self.git("update-ref", "refs/remotes/origin/HEAD", "mid")
+        self.git("update-ref", "refs/remotes/origin/main", "base")
+        self.write("scripts/tools/test_new.py", PASSING)
+        code, out = self.check_fast(base=None)
+        self.assertEqual(0, code, out)
+        self.assertIn("merge-base with refs/remotes/origin/HEAD", out)
         self.assertNotIn("test_mid.py", out)
 
     def test_without_base_a_dangling_origin_head_falls_back_to_origin_main(self):
@@ -119,6 +141,16 @@ class CheckFastScriptsTests(unittest.TestCase):
         self.assertEqual(0, code, out)
         self.assertIn("merge-base with base", out)
         self.assertIn("PASS     scripts/tools/test_mid.py", out)
+
+    def test_an_empty_base_is_refused_not_read_as_no_base(self):
+        self.git("update-ref", "refs/remotes/origin/main", "base")
+        self.write("scripts/tools/test_new.py", PASSING)
+        for args in (("--base", ""), ("--base=",)):
+            with self.subTest(args=args):
+                code, out = self.check_fast(*args)
+                self.assertEqual(2, code, out)
+                self.assertIn("--base needs a git ref", out)
+                self.assertNotIn("test_new.py", out)
 
     def test_a_changed_test_is_run_and_its_failure_fails(self):
         self.write("scripts/tools/test_new.py", FAILING)

@@ -68,10 +68,13 @@ BASE_REF=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --all) ALL=1 ;;
+    # An empty value is refused: BASE_REF="" means "no --base" below.
     --base)
-      [ $# -ge 2 ] || { echo "check-fast: --base needs a git ref" >&2; exit 2; }
+      [ $# -ge 2 ] && [ -n "$2" ] || { echo "check-fast: --base needs a git ref" >&2; exit 2; }
       BASE_REF=$2; shift ;;
-    --base=*) BASE_REF=${1#*=} ;;
+    --base=*)
+      BASE_REF=${1#*=}
+      [ -n "$BASE_REF" ] || { echo "check-fast: --base needs a git ref" >&2; exit 2; } ;;
     -h|--help) usage; exit 0 ;;
     *) echo "check-fast: unknown argument: $1 (see --help)" >&2; exit 2 ;;
   esac
@@ -352,11 +355,12 @@ if [ "$ALL" -eq 1 ]; then
   done
 else
   # Without --base: the clone's default branch, from local refs only so the script works offline. origin/HEAD is
-  # set at clone time and can name a branch that is gone since, so it counts only if it resolves to a commit. Full
-  # ref names: a local branch called origin/main would otherwise shadow the remote-tracking one.
+  # set at clone time and can name a branch that is gone since, so it counts only if it resolves to a commit. Its
+  # symbolic target names the base in the output; an origin/HEAD that is a plain ref is used as it is. Full ref
+  # names: a local branch called origin/main would otherwise shadow the remote-tracking one.
   if [ -z "$BASE_REF" ]; then
-    _head=$(git symbolic-ref --quiet refs/remotes/origin/HEAD 2>/dev/null) || _head=""
-    for _ref in ${_head:+"$_head"} refs/remotes/origin/main refs/remotes/origin/master; do
+    _head=$(git symbolic-ref --quiet refs/remotes/origin/HEAD 2>/dev/null) || _head=refs/remotes/origin/HEAD
+    for _ref in "$_head" refs/remotes/origin/main refs/remotes/origin/master; do
       if git rev-parse --verify --quiet "${_ref}^{commit}" >/dev/null 2>&1; then
         BASE_REF=$_ref
         break
@@ -367,8 +371,7 @@ else
       echo "  (git fetch origin, then git remote set-head origin --auto; or pass --base <ref>)" >&2
       exit 2
     fi
-  fi
-  if ! git rev-parse --verify "${BASE_REF}^{commit}" >/dev/null 2>&1; then
+  elif ! git rev-parse --verify "${BASE_REF}^{commit}" >/dev/null 2>&1; then
     echo "check-fast: base ref '$BASE_REF' not found locally (fetch it, or pass --base <ref>)" >&2
     exit 2
   fi
