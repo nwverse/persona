@@ -9424,6 +9424,10 @@ def looked(name, inp, result, ts_min, *pictures):
     return items + [shot(ts_min, items[0]["tool_use_id"], *p) for p in pictures]
 
 
+# MOCK_IMAGES_FAIL=1: lazy images (…/items/{id}/image) answer 503 until GET /mock/images?ok=1 (#4207: a picture that
+# did not load says so, and Retry brings it). With MOCK_TURN_IMAGES the viewed pictures are lazy.
+IMAGES_FAIL = {"on": os.environ.get("MOCK_IMAGES_FAIL") == "1"}
+
 if os.environ.get("MOCK_TURN_IMAGES"):
     sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
     import mock_office
@@ -12716,7 +12720,11 @@ class H(BaseHTTPRequestHandler):
                    **span(items, None, int(b) - 1 if b else last)}
             served(sid, "page", out)
             return self.send_json(out)
+        if p == "/mock/images":  # MOCK_IMAGES_FAIL: ?ok=1 lets lazy images through, anything else fails them again
+            IMAGES_FAIL["on"] = parse_qs(urlparse(self.path).query).get("ok", [""])[0] != "1"
+            return self.send_json({"ok": True, "failing": IMAGES_FAIL["on"]})
         if p.startswith("/api/v1/sessions/") and "/items/" in p and p.endswith("/image"):  # a lazy image, a fold's
+            if IMAGES_FAIL["on"]: return self.send_json({"error": "unavailable"}, 503)
             sid, iid = unquote(p.split("/")[5]), unquote(p.split("/")[7])
             img = next((x.get("image") for x in find_items(sid) if x["id"] == iid and x.get("image")), None)
             if not img: return self.send_json({"error": "not found"}, 404)

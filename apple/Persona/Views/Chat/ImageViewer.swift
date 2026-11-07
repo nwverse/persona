@@ -35,12 +35,12 @@ struct ImageViewer: View {
     /// Where an edited image goes (the chat's composer); nil hides Markup.
     var attach: ((UIImage) -> Void)? = nil
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.colorScheme) private var colorScheme
     @State private var openedFile: FileRef?
     @State private var decoded: [Int: UIImage] = [:]
-    /// Pages whose last load gave no picture: they say so with 重试 instead of spinning on.
+    /// Pages whose last load gave no picture: they say so, with Retry, instead of spinning on (#4207). Not loaded again
+    /// until Retry.
     @State private var failed: Set<Int> = []
-    /// Bumped by a page's 重试: its load runs again.
-    @State private var attempts: [Int: Int] = [:]
     @State private var chrome = true
     /// How far a pull-down has gone, 0…1: the backdrop and the bars fade with it.
     @State private var pull: CGFloat = 0
@@ -77,20 +77,23 @@ struct ImageViewer: View {
 
     private var current: ViewerImage? { images.indices.contains(index) ? images[index] : nil }
     private var currentImage: UIImage? { decoded[index] }
+    /// The bars and the page's own backdrop: on a page that did not load they stay, whatever a tap did, so its words
+    /// read and Close is there (a failed page has no picture to pull down).
+    private var showsChrome: Bool { chrome || failed.contains(index) }
     /// The bars: shown, and not while the picture is being pulled away.
-    private var barsOpacity: Double { chrome ? Double(max(0, 1 - pull * 3)) : 0 }
+    private var barsOpacity: Double { showsChrome ? Double(max(0, 1 - pull * 3)) : 0 }
 
     var body: some View {
         ZStack {
-            (chrome ? Theme.Viewer.canvas : Theme.Viewer.immersive)
+            (showsChrome ? Theme.Viewer.canvas : Theme.Viewer.immersive)
                 .opacity(Double(1 - pull))
                 .ignoresSafeArea()
-                .animation(Theme.Motion.state, value: chrome)
+                .animation(Theme.Motion.state, value: showsChrome)
             pager
             chromeBars
                 .opacity(barsOpacity)
-                .allowsHitTesting(chrome && pull == 0)
-                .animation(Theme.Motion.state, value: chrome)
+                .allowsHitTesting(showsChrome && pull == 0)
+                .animation(Theme.Motion.state, value: showsChrome)
         }
         .sheet(item: $openedFile) { ref in FileViewer(ref: ref) }
         .fullScreenCover(item: Binding(get: { editing.map(EditTarget.init) }, set: { if $0 == nil { editing = nil } })) { t in
@@ -104,8 +107,8 @@ struct ImageViewer: View {
         // The viewer's own pull-down closes it (the system's zoom-transition drag would fight the zoomed picture's pan).
         .interactiveDismissDisabled()
         #if os(iOS) || os(visionOS)
-        .statusBarHidden(!chrome)
-        .persistentSystemOverlays(chrome ? .automatic : .hidden)
+        .statusBarHidden(!showsChrome)
+        .persistentSystemOverlays(showsChrome ? .automatic : .hidden)
         #endif
         #if DEBUG
         // Screenshots: `-showViewerChromeHidden YES` opens with the bars hidden, `-showViewerInfo YES` with Info open.
@@ -127,7 +130,10 @@ struct ImageViewer: View {
                        onPullEnd: { close in
                            if close { dismiss() } else { withAnimation(Theme.Motion.state) { pull = 0 } }
                        },
-                       onNeed: { i in Task { await load(i) } })
+                       onNeed: { i in Task { await load(i) } },
+                       failed: failed,
+                       // On the black backdrop (a neighbour seen mid-swipe while the bars are hidden) its words go light.
+                       failure: { i in AnyView(notLoaded(i).environment(\.colorScheme, showsChrome ? colorScheme : .dark)) })
             .ignoresSafeArea()
             // The one it opens on and the ones either side, before a swipe brings them on.
             .task(id: index) {
@@ -156,7 +162,7 @@ struct ImageViewer: View {
 
     /// Decodes picture `i` once (a page asking again while it loads waits for nothing).
     private func load(_ i: Int) async {
-        guard images.indices.contains(i), decoded[i] == nil, !loading.ids.contains(i) else { return }
+        guard images.indices.contains(i), decoded[i] == nil, !failed.contains(i), !loading.ids.contains(i) else { return }
         loading.ids.insert(i)
         defer { loading.ids.remove(i) }
         await decode(i)
@@ -165,24 +171,26 @@ struct ImageViewer: View {
         #endif
     }
 
-    /// A page whose picture did not come: said so, with 重试 when loading again can bring it. One fetched from the hub
+    /// A page whose picture did not come: said so, with Retry when loading again can bring it. One fetched from the hub
     /// or the web can; bytes already here that do not decode, or a file's thumbnail (`FileThumbnails` keeps its
-    /// failures for the session), would only fail again.
+    /// failures for the session), would only fail again. The bars stay while it is the page shown (`showsChrome`).
     private func notLoaded(_ i: Int) -> some View {
         let item = images[i]
         let again = item.payload.map { $0.ref != nil } ?? (item.url != nil)
         let retry: (title: String, run: () -> Void)? = again
-            ? (title: String(localized: "重试"), run: { attempts[i, default: 0] += 1 }) : nil
-        let message = again ? String(localized: "没取到这张图，点重试再取一次")
-            : item.payload == nil && item.file != nil ? String(localized: "取不到这张图的预览，可以在 ⋯ 里「在文件页打开」")
-            : String(localized: "这张图的数据打不开")
-        return EmptyStateView(symbol: Theme.Icon.error, title: String(localized: "图片没载入"), message: message, action: retry)
+            ? (title: String(localized: "Retry [Components b8784c]"), run: { self.retry(i) }) : nil
+        let message = again ? String(localized: "Couldn't get this image. Tap Retry to try again.")
+            : item.payload == nil && item.file != nil ? String(localized: "Couldn't get a preview of this image. Use Open in Files in the ⋯ menu.")
+            : String(localized: "This image's data can't be opened")
+        return EmptyStateView(symbol: Theme.Icon.error, title: String(localized: "Image didn't load"), message: message, action: retry)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
-            // No zoomable picture here to take the taps and the pull-down: a tap brings the bars (and 关闭) back,
-            // and they show when the page comes up (on the black backdrop the page's text would not read).
-            .contentShape(.rect)
-            .onTapGesture(perform: toggleChrome)
-            .onAppear { chrome = true }
+            .accessibilityIdentifier("viewer-not-loaded-\(i)")
+    }
+
+    /// Retry on a page that did not load: its load runs again.
+    private func retry(_ i: Int) {
+        failed.remove(i)
+        Task { await load(i) }
     }
 
     private func toggleChrome() {
@@ -346,7 +354,6 @@ struct ImageViewer: View {
 
     private func decode(_ i: Int) async {
         guard decoded[i] == nil, images.indices.contains(i) else { return }
-        failed.remove(i)
         #if DEBUG // `-showViewerDecodeDelay`: legacy stress; `-showViewerDecodeDuringPan`: an event-driven gate.
         let delay = UserDefaults.standard.double(forKey: "showViewerDecodeDelay")
         if delay > 0 { try? await Task.sleep(for: .seconds(delay)) }

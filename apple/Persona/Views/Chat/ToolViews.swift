@@ -1054,7 +1054,7 @@ struct Base64Image: View {
     @State private var showViewer = false
     /// The last load gave no picture (no hub, a failed download, bytes that do not decode).
     @State private var failed = false
-    /// Bumped by 点按重试: loads again (the loader keeps no failures).
+    /// Bumped by a tap on the retry: loads again (the loader keeps no failures).
     @State private var attempt = 0
     init(payload: ImagePayload, gallery: [ImagePayload] = [], index: Int = 0, title: String? = nil) {
         self.payload = payload
@@ -1119,10 +1119,10 @@ struct Base64Image: View {
     @ViewBuilder private var notLoaded: some View {
         if payload.ref != nil {
             Button { attempt += 1 } label: {
-                // A portrait screenshot's placeholder is narrow: the sentence, else 重试, else the symbol alone.
+                // A portrait screenshot's placeholder is narrow: the sentence, else Retry, else the symbol alone.
                 ViewThatFits(in: .horizontal) {
-                    Label("图片没载入，点按重试", systemImage: Theme.Icon.retry)
-                    Label("重试", systemImage: Theme.Icon.retry)
+                    Label("Image didn't load. Tap to retry", systemImage: Theme.Icon.retry)
+                    Label("Retry [Components b8784c]", systemImage: Theme.Icon.retry)
                     Image(systemName: Theme.Icon.retry)
                 }
                 .font(Theme.Font.label)
@@ -1133,9 +1133,9 @@ struct Base64Image: View {
                 .contentShape(.rect)
             }
             .buttonStyle(.plain)
-            .accessibilityLabel("图片没载入，点按重试")
+            .accessibilityLabel("Image didn't load. Tap to retry")
         } else {
-            Label("图片显示不了", systemImage: Theme.Icon.error)
+            Label("Can't show this image", systemImage: Theme.Icon.error)
                 .font(Theme.Font.label)
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
