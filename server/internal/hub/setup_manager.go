@@ -108,8 +108,7 @@ func (e *setupEnv) toManagerService(ctx context.Context) (changed bool, err erro
 			}
 		}
 	}
-	// The binary the service step will run: personad, or in an older layout the binary under its former name
-	// (compat.DaemonBinary) that the service step links personad to.
+	// The binary the service step will run: personad, or an older layout's compat.DaemonBinary it links personad to.
 	bin := filepath.Join(e.root, "bin", "personad")
 	if _, err := os.Stat(bin); err != nil {
 		bin = filepath.Join(e.root, "bin", compat.DaemonBinary)

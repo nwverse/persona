@@ -205,11 +205,11 @@ func TestSetupManagerServiceChecksAndUndoes(t *testing.T) {
 	}
 	t.Run("an older layout: only the binary under its former name", func(t *testing.T) {
 		e, out, cmds, file := newEnv(t)
-		bin := filepath.Join(e.root, "bin")
-		if err := os.Rename(filepath.Join(bin, "personad"), filepath.Join(bin, compat.DaemonBinary)); err != nil {
+		old := filepath.Join(e.root, "bin", compat.DaemonBinary)
+		if err := os.Rename(filepath.Join(e.root, "bin", "personad"), old); err != nil {
 			t.Fatal(err)
 		}
-		cmds.replies[filepath.Join(bin, compat.DaemonBinary)+" manager install --builtin --check"] = fakeReply{err: true, out: "flag provided but not defined: -builtin\n"}
+		cmds.replies[old+" manager install --builtin --check"] = fakeReply{err: true, out: "flag provided but not defined: -builtin\n"}
 		if err := e.setup(context.Background()); !errors.Is(err, ErrSetupStopped) || !strings.Contains(out.String(), "什么都没改") {
 			t.Fatalf("%v\n%s", err, out)
 		}
