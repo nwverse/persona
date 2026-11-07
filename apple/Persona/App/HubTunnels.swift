@@ -1,12 +1,13 @@
 import Foundation
 
 /// A way through to a paired hub when its own addresses do not answer: its SSH tunnel
-/// (docs/operations/network.md「经 SSH 隧道连 hub」) or, in builds that have the in-app tunnel core for a hub whose extension
-/// contributes one, its in-app tunnel (「经 App 内隧道连 hub」). A hub may have both; each is tried in turn, the SSH
-/// one first.
+/// (docs/operations/network.md「经 SSH 隧道连 hub」), its local SOCKS5 proxy ("Connecting to hub through a local SOCKS5
+/// proxy") or, in builds that have the in-app tunnel core for a hub whose extension contributes one, its in-app tunnel
+/// (「经 App 内隧道连 hub」). A hub may have several; each is tried in turn, in that order.
 struct HubTunnel: Hashable {
     enum Kind: Hashable {
         case ssh
+        case localProxy
         case inApp
     }
 
@@ -17,6 +18,7 @@ struct HubTunnel: Hashable {
     var always: Bool {
         switch kind {
         case .ssh: hub.ssh?.always == true
+        case .localProxy: hub.localProxy?.always == true
         case .inApp: hub.inAppTunnel?.always == true
         }
     }
@@ -25,6 +27,7 @@ struct HubTunnel: Hashable {
     var recent: Bool {
         switch kind {
         case .ssh: SSHTunnels.shared.recent.contains(hub.id)
+        case .localProxy: LocalProxies.shared.recent.contains(hub.id)
         case .inApp: InAppTunnels.shared.recent.contains(hub.id)
         }
     }
@@ -35,6 +38,9 @@ struct HubTunnel: Hashable {
         case .ssh:
             guard let route = hub.ssh else { return false }
             return (try? await SSHTunnels.shared.open(hub.id, route: route, hub: hub.config.url)) != nil
+        case .localProxy:
+            guard let route = hub.localProxy else { return false }
+            return (try? await LocalProxies.shared.open(hub.id, route: route, hub: hub.config.url)) != nil
         case .inApp:
             guard let route = hub.inAppTunnel else { return false }
             return (try? await InAppTunnels.shared.open(hub.id, route: route, hub: hub.config.url)) != nil
@@ -44,6 +50,7 @@ struct HubTunnel: Hashable {
     func close() {
         switch kind {
         case .ssh: SSHTunnels.shared.close(hub.id)
+        case .localProxy: LocalProxies.shared.close(hub.id)
         case .inApp: InAppTunnels.shared.close(hub.id)
         }
     }
@@ -51,6 +58,7 @@ struct HubTunnel: Hashable {
     func watchDirect(answers: @escaping @MainActor () async -> Bool, moveBack: @escaping @MainActor () -> Void) {
         switch kind {
         case .ssh: SSHTunnels.shared.watchDirect(hub.id, answers: answers, moveBack: moveBack)
+        case .localProxy: LocalProxies.shared.watchDirect(hub.id, answers: answers, moveBack: moveBack)
         case .inApp: InAppTunnels.shared.watchDirect(hub.id, answers: answers, moveBack: moveBack)
         }
     }
@@ -59,11 +67,12 @@ struct HubTunnel: Hashable {
 extension AppModel {
     // MARK: Tunnels to the hub (docs/operations/network.md「经 SSH 隧道连 hub」「经 App 内隧道连 hub」)
 
-    /// The group's tunnels ready to use, each paired hub's SSH one before its in-app one.
+    /// The group's tunnels ready to use, each paired hub's SSH one, then its local proxy, then its in-app one.
     func hubTunnels(_ group: String) -> [HubTunnel] {
         registry.members(group).flatMap { h -> [HubTunnel] in
             var out: [HubTunnel] = []
             if h.ssh?.isUsable == true { out.append(HubTunnel(hub: h, kind: .ssh)) }
+            if h.localProxy?.isUsable == true { out.append(HubTunnel(hub: h, kind: .localProxy)) }
             if InAppTunnel.available, h.inAppTunnel?.isUsable == true { out.append(HubTunnel(hub: h, kind: .inApp)) }
             return out
         }
@@ -127,12 +136,14 @@ extension AppModel {
     /// Every tunnel of every hub closes (the app went to the background, or there is no hub left).
     func closeAllTunnels() {
         SSHTunnels.shared.closeAll()
+        LocalProxies.shared.closeAll()
         InAppTunnels.shared.closeAll()
     }
 
     /// One paired hub's tunnels close (it is removed, or its group is).
     func closeTunnels(_ id: String) {
         SSHTunnels.shared.close(id)
+        LocalProxies.shared.close(id)
         InAppTunnels.shared.close(id)
     }
 }

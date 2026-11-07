@@ -324,6 +324,34 @@ Link flags: `-lpersonatunnel -lresolv -framework Security -framework CoreFoundat
 | `char *PersonaTunnelOfferLink(char *text)` | User-provided external text; returns `accepted` if the core used it to complete a sign-in step, otherwise `ignored` |
 | `void PersonaTunnelFree(char *p)` | Free strings returned above |
 
+## Connecting to hub through a local SOCKS5 proxy
+
+When the hub sits on a private network this device reaches only through another app that serves a local SOCKS5 proxy (for example a VPN-like client listening on `127.0.0.1:<port>` instead of taking the system VPN slot), the iOS and macOS apps can go through that proxy (#5786). Only Persona's hub traffic uses it.
+
+```text
+App ──HTTP / WebSocket──▶ 127.0.0.1:<port> (inside app process)
+     ══SOCKS5 (one CONNECT per connection)══▶ local proxy (another app) ──TCP──▶ hub (hub address, default the paired address)
+```
+
+- **Settings**: **Settings › hub › Local Proxy**, per paired hub: proxy host (default `127.0.0.1`) and port, optional username and password (RFC 1929), the hub's address as the proxy's network sees it, and **Always Use the Proxy**. The hub's address defaults to the paired address's host, with its port for an `http` address (80 when it names none) and the hub's HTTP port 18660 for an `https` one.
+- **In-process forward** (`apple/Persona/App/LocalProxies.swift`, SOCKS5 client in `apple/Persona/App/SOCKS5.swift`): the app listens on a loopback port (the same one next time when it is free); each connection made there dials the proxy, does one SOCKS5 CONNECT to the hub's address, then copies bytes both ways. Nothing is read from the connection before the proxy has connected, and bytes the hub sends right after the proxy's reply stay on the connection. The forward carries plain HTTP, like the SSH and in-app tunnels, and `HubTransport` sends REST, WebSocket and port-forward traffic to it. A host name goes to the proxy unresolved (address type domain), so the proxy's network resolves it.
+- **Routing** matches the other tunnels (`HubWay` in `apple/Persona/App/HubTunnels.swift`): direct first, the proxy only if every direct address fails, retry direct every 2 minutes while proxied; **Always Use the Proxy** prefers it and goes direct when it can't connect. Each time the way is picked, the proxy is asked for the hub once, so a proxy whose app quit is not taken. A hub with several ways tries the SSH tunnel, then the local proxy, then the in-app tunnel.
+- **Test Connection and Save** connects through the proxy to the hub's address, then sends `GET /api/v1/health` through a forward of its own, and saves only when the hub answers `{"ok": true}`.
+- **Credentials** are kept with the pairing in the keychain (`PairedHub.localProxy`), like the SSH tunnel's settings.
+- **iOS backgrounding**: forwards close with the socket and the way is picked again on return. The watch connects directly.
+- **Not supported**: HTTP CONNECT proxies, SOCKS4, UDP.
+- **Security**: the proxy app carries the plain HTTP between Persona and the hub, the device credential in it included, so use a proxy app you trust (as with a VPN app). The hub classifies the source address the proxy's network gives it as usual ([source classification](#来源判断与反向代理)).
+
+| Symptom (Settings › hub › Local Proxy, connection details) | Check |
+| --- | --- |
+| Can't reach the proxy at … (Connection refused) | The proxy app is running and its SOCKS5 port is the one set |
+| … didn't answer as a SOCKS5 proxy | The port is the proxy's SOCKS5 port, not its HTTP proxy port |
+| The proxy asks for a username and password / didn't accept the username or password | Username and password on this page |
+| The proxy couldn't connect to … (connection refused, 5) | The hub's address and port as the proxy's network sees them, and that the hub listens there |
+| Reached … through the proxy, but it doesn't look like a hub | The address is not the hub's HTTP port (an HTTPS port, another service) |
+
+DEBUG builds: `-seedLocalProxy <base64 of the LocalProxyRoute JSON>` sets the first hub's proxy, and `-tab settings -openLocalProxy YES` opens its page (screenshots).
+
 <a id="网络排查"></a>
 
 ## Network troubleshooting
