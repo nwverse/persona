@@ -549,7 +549,6 @@ func (s *Service) InboxCollected(ctx context.Context, r assistantwire.InboxRound
 	b.mu.Lock()
 	readsChanged := b.recordReads(r)
 	batch := b.batch
-	b.batch = nil
 	batch.registered = r.Names
 	for id, it := range b.items {
 		if it.DoneAt != nil && time.Since(*it.DoneAt) > inboxForget {
@@ -557,15 +556,19 @@ func (s *Service) InboxCollected(ctx context.Context, r assistantwire.InboxRound
 		}
 	}
 	now := time.Now()
-	muted := b.applyMutes(now)
-	changed = append(changed, itemsOf(muted)...)
+	// The round's last step files and tiers what it changed: those writes are taken up again (roundWrite), and the
+	// mutes' filings join them. A row that fails is undone to what it holds, and the sources bring it again (#91).
+	for _, it := range changed {
+		b.roundWrite(it)
+	}
+	changed = append(changed, b.roundMuted(b.applyMutes(now))...)
 	changed, todo := b.sortBatch(batch, changed, now)
 	b.applyRuledPolicies(changed)
-	for _, w := range muted { // what the round did to them after the filing is part of it
-		b.settle(w)
-	}
+	b.settleRound()
+	ws := b.roundSaved(changed)
+	b.batch = nil
 	b.mu.Unlock()
-	s.saveInboxUndo(ctx, changed, s.undoWrites(muted, "its filing by a mute"))
+	s.saveInboxUndo(ctx, changed, s.undoWrites(ws, "what the round changed"))
 	if readsChanged && len(changed) == 0 {
 		s.inboxChanged(ctx, nil) // nothing came in, but which sources could be read did (saveInbox tells otherwise)
 	}
@@ -849,6 +852,8 @@ func (s *Service) readMailBody(ctx context.Context, a assistantwire.InboxMailAcc
 	text := strings.TrimSpace(m.Text)
 	b.mu.Lock()
 	defer b.mu.Unlock()
+	defer b.settleRound()
+	b.roundWrite(it)
 	it.BodyOf = last
 	if text == "" {
 		return true
@@ -885,6 +890,7 @@ func mailThread(subject string, from ...string) string {
 func (b *inboxBook) applyMail(a assistantwire.InboxMailAccount, msgs []assistantwire.InboxMailSummary, now time.Time) []*InboxItem {
 	b.mu.Lock()
 	defer b.mu.Unlock()
+	defer b.settleRound()
 	var changed []*InboxItem
 	index := b.threads(func(it *InboxItem) (string, bool) {
 		if it.Mail == nil || it.Mail.AccountID != a.ID {
@@ -943,6 +949,7 @@ func (b *inboxBook) applyMail(a assistantwire.InboxMailAccount, msgs []assistant
 		if len(unseen) == 0 {
 			// Read in another client: done unless it needs the user.
 			if open != nil && !open.Read {
+				b.roundWrite(open)
 				open.Read = true
 				if open.Tier != TierAction && open.Tier != "" {
 					b.file(open, now, "read")
@@ -959,12 +966,14 @@ func (b *inboxBook) applyMail(a assistantwire.InboxMailAccount, msgs []assistant
 		var prev inboxSeen
 		if it != nil {
 			prev = seenOf(it)
+			b.roundWrite(it)
 		}
 		if it == nil {
 			it = &InboxItem{ID: fmt.Sprintf("mail:%s:%s:%d", a.ID, t, unseen[0].UID), Source: "mail", Kind: KindMail,
 				Account: a.ID, Mail: &InboxMail{AccountID: a.ID, Mailbox: newest.Mailbox, Thread: t}}
 			it.StartedAt, _ = time.Parse(time.RFC3339, unseen[0].Date)
 			b.add("mail", it)
+			b.roundNew(it)
 			index.note(it)
 		}
 		it.AccountName = a.Email
@@ -1041,6 +1050,7 @@ func (b *inboxBook) supersedeSubjectless(index *threadIndex, msgs []assistantwir
 				slices.ContainsFunc(it.Mail.UIDs, func(uid uint32) bool { return !stay[uid] }) {
 				continue
 			}
+			b.roundWrite(it)
 			it.done(now, "superseded")
 			filed = append(filed, it)
 		}
@@ -1063,8 +1073,10 @@ func (b *inboxBook) supersedeSubjectless(index *threadIndex, msgs []assistantwir
 	}
 	switch {
 	case moved > 0 && remain == 0:
+		b.roundWrite(open)
 		open.done(now, "superseded")
 	case onPage > 0 && seen == onPage && !open.Read:
+		b.roundWrite(open)
 		open.Read = true
 		if open.Tier != "" {
 			open.done(now, "read")
@@ -1139,6 +1151,7 @@ func (s *Service) collectSource(ctx context.Context, src assistantwire.InboxSour
 	b.mu.Lock()
 	changed = append(changed, b.applyConnector(src.ID, src.Name, things, time.Now())...)
 	changed = append(changed, b.applyMigrated(src.ID, own, time.Now())...)
+	b.settleRound()
 	b.mu.Unlock()
 	if src.Settles {
 		changed = append(changed, s.settleConnector(ctx, src.ID)...)
