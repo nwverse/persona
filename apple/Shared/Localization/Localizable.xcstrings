@@ -43301,6 +43301,29 @@
       },
       "extractionState": "manual"
     },
+    "Not updated lately [Watch Pet]": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Not updated lately"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "しばらく更新されていません"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "好一阵没更新了"
+          }
+        }
+      }
+    },
     "Noted by an agent while it worked": {
       "extractionState": "manual",
       "localizations": {

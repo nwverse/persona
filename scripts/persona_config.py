@@ -91,6 +91,7 @@ def provisioning_profiles(cfg: dict) -> dict[str, str]:
     profiles = {
         bid: "Persona App Store",
         bid + ".watchkitapp": "Persona Watch App Store",
+        bid + ".watchkitapp.widgets": "Persona Watch Widgets App Store",
         bid + ".liveactivity": "Persona Live Activity App Store",
         bid + ".notify": "Persona Notify App Store",
         bid + ".share": "Persona Share App Store",

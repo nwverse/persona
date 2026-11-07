@@ -13,6 +13,8 @@ struct PersonaWatchApp: App {
                 .tint(Theme.accent)
         }
         .onChange(of: phase) { _, p in if p == .active { Task { await model.refresh() } } }
+        // The watch face's frog stays current while the app is not open (docs/apple/persona.md).
+        .backgroundTask(.appRefresh(WatchModel.petRefresh)) { await model.backgroundRefresh() }
     }
 }
 
@@ -45,6 +47,10 @@ final class WatchModel {
     var persona = UserDefaults.standard.string(forKey: WatchModel.personaKey)
     /// The Milk Frog's files on this watch.
     let pet = WatchPetPack()
+    /// The Milk Frog on the watch face.
+    @ObservationIgnored private let complication = WatchPetComplication()
+    static let petRefresh = "pet"
+    private static let petRefreshEvery: TimeInterval = 30 * 60
     private static let personaKey = "persona"
     private var petWanted: Bool { WatchPet.supports(persona) }
 
@@ -126,6 +132,7 @@ final class WatchModel {
             self.apply(sessions: s.sessions, interactions: s.interactions, machines: s.machines,
                        at: WatchGroupRefresh.dataDate(ofSummaryAt: s.at))
             if let inbox = s.inbox { self.applyInbox(inbox) }
+            self.publishPet()
         }
         WatchRecordingTransfer.shared.start()
         WatchSync.shared.activate()
@@ -210,6 +217,24 @@ final class WatchModel {
         if let xx = try? await first.inbox(connectors: true) { applyInbox(xx) }
         error = failure.flatMap { allFailed ? $0.watchShown : nil }
         await fetchPet()
+        publishPet()
+    }
+
+    /// The watch face's frog follows what this refresh learned; a face from before the frog was chosen goes away.
+    private func publishPet() {
+        complication.publish(petWanted ? petStatus : nil, at: lastUpdate, pack: pet)
+        if petWanted { schedulePetRefresh() }
+    }
+
+    /// Wakes the app in the background now and then, so the face does not go stale while the app is closed. watchOS
+    /// decides when; past an hour without one the face says it does not know (WatchPetSnapshot.staleAfter).
+    private func schedulePetRefresh() {
+        WKApplication.shared().scheduleBackgroundRefresh(withPreferredDate: .now.addingTimeInterval(Self.petRefreshEvery),
+                                                         userInfo: Self.petRefresh as NSString) { _ in }
+    }
+
+    func backgroundRefresh() async {
+        await refresh()
     }
 
     /// The first group's hub, like the inbox's: every hub has the same built-in package.
@@ -310,7 +335,7 @@ struct WatchRootView: View {
     #if DEBUG
     @State private var openedInteraction: Interaction?
     @State private var openedSession: Session?
-    @State private var openedPet = false
+    @State private var openedPetPage: String?
     /// `-openWatchItem running`: the list without Needs You, so the running sessions are on screen (screenshots).
     private static let runningFirst = UserDefaults.standard.string(forKey: "openWatchItem") == "running"
     /// `-openWatchItem inbox`: Needs You without the agents' requests, so the inbox rows are on screen (screenshots).
@@ -443,12 +468,17 @@ struct WatchRootView: View {
                     for _ in 0..<20 where model.inbox.isEmpty { try? await Task.sleep(for: .milliseconds(500)) }
                     openedItem = model.inbox.first
                 }
-                // `-openWatchItem pet`: the Milk Frog's page (screenshots).
-                .navigationDestination(isPresented: $openedPet) { WatchPetView() }
+                // `-openWatchItem pet|complication`: the Milk Frog's page, or the watch face's frog in every family
+                // (screenshots). One destination: two isPresented ones on this stack left both closed.
+                .navigationDestination(item: $openedPetPage) { page in
+                    if page == "complication" { PetComplicationPreview() } else { WatchPetView() }
+                }
                 .task {
-                    guard UserDefaults.standard.string(forKey: "openWatchItem") == "pet" else { return }
-                    for _ in 0..<120 where model.petStatus == nil { try? await Task.sleep(for: .milliseconds(500)) }
-                    openedPet = model.petStatus != nil
+                    guard let want = UserDefaults.standard.string(forKey: "openWatchItem"), want == "pet" || want == "complication" else { return }
+                    for _ in 0..<120 where model.petStatus == nil || (want == "complication" && WatchPetSnapshot.read() == nil) {
+                        try? await Task.sleep(for: .milliseconds(500))
+                    }
+                    openedPetPage = want
                 }
                 // `-openWatchItem question|plan|permission|screen|session`: open the first request of that kind, or the
                 // first running session (screenshots); `session:<session id>` that one. `running` and `inbox` are handled

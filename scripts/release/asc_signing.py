@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """Prepares App Store signing through the App Store Connect API (idempotent).
 
-- registers the iPhone, Apple Watch, Live Activity and notification service extension bundle ids,
-- enables PUSH_NOTIFICATIONS, USERNOTIFICATIONS_TIMESENSITIVE and HEALTHKIT on the iPhone App ID, APP_GROUPS on it and
-  the Live Activity's,
+- registers the iPhone, Apple Watch, watch face, Live Activity and notification service extension bundle ids,
+- enables PUSH_NOTIFICATIONS, USERNOTIFICATIONS_TIMESENSITIVE and HEALTHKIT on the iPhone App ID, APP_GROUPS on it, the
+  Live Activity's, the watch's and the watch face's,
 - creates (or rebuilds) the "Persona App Store" / "Persona Watch App Store" / "Persona Live Activity App Store" /
   "Persona Notify App Store" profiles
   with the team's distribution certificate and installs them where Xcode looks.
@@ -35,6 +35,7 @@ import persona_config  # noqa: E402
 
 APP = BUNDLE_ID
 WATCH = APP + ".watchkitapp"
+WATCH_WIDGETS = WATCH + ".widgets"  # the watch face's Milk Frog (docs/apple/persona.md)
 LIVE = APP + ".liveactivity"  # the widget extension drawing the lock screen / Dynamic Island activity
 NOTIFY = APP + ".notify"  # the notification service extension opening relayed pushes (docs/operations/push-relay.md)
 SHARE = APP + ".share"  # the share extension sending to Persona's main conversation (#4586)
@@ -42,12 +43,14 @@ SHARE = APP + ".share"  # the share extension sending to Persona's main conversa
 PROFILES = persona_config.provisioning_profiles(CONFIG)
 TARGETS = {
     APP: ("Persona", PROFILES[APP], ["PUSH_NOTIFICATIONS", "USERNOTIFICATIONS_TIMESENSITIVE", "HEALTHKIT", "APP_GROUPS"]),
-    WATCH: ("Persona Watch", PROFILES[WATCH], []),
+    WATCH: ("Persona Watch", PROFILES[WATCH], ["APP_GROUPS"]),
+    WATCH_WIDGETS: ("Persona Watch Widgets", PROFILES[WATCH_WIDGETS], ["APP_GROUPS"]),
     LIVE: ("Persona Live Activity", PROFILES[LIVE], ["APP_GROUPS"]),
     NOTIFY: ("Persona Notify", PROFILES[NOTIFY], []),
     SHARE: ("Persona Share", PROFILES[SHARE], []),
 }
-# The App Group the app shares the Live Activity's persona with the widget extension through (docs/apple/live-activity.md).
+# The App Group the app shares the Live Activity's persona with the widget extension through (docs/apple/live-activity.md),
+# and the watch app the Milk Frog with the watch face (docs/apple/persona.md).
 GROUP = persona_config.app_group(CONFIG)
 PROFILE_DIR = os.path.expanduser("~/Library/MobileDevice/Provisioning Profiles")
 

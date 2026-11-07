@@ -27,6 +27,8 @@
 	</dict>
 	<key>NSMicrophoneUsageDescription</key>
 	<string>Persona records audio you start on Apple Watch, for example a meeting or a spoken note, then transfers it to your iPhone for on-device transcription; only the text is saved to the knowledge base on your hub.</string>
+	<key>PersonaAppGroup</key>
+	<string>$(PERSONA_APP_GROUP)</string>
 	<key>UIBackgroundModes</key>
 	<array>
 		<string>audio</string>

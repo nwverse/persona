@@ -122,6 +122,7 @@ class SigningProfileConfigTests(unittest.TestCase):
             'uploadSymbols': True, 'manageAppVersionAndBuildNumber': False,
             'provisioningProfiles': {
                 self.bid: 'Persona App Store', self.bid + '.watchkitapp': 'Persona Watch App Store',
+                self.bid + '.watchkitapp.widgets': 'Persona Watch Widgets App Store',
                 self.bid + '.liveactivity': 'Persona Live Activity App Store',
                 self.bid + '.notify': 'Persona Notify App Store', self.bid + '.share': 'Persona Share App Store',
             },

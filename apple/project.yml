@@ -412,6 +412,39 @@ targets:
         APPLICATION_EXTENSION_API_ONLY: YES
         # Code shared with the app that must not call into it (the intents run in the app process).
         SWIFT_ACTIVE_COMPILATION_CONDITIONS: "$(inherited) WIDGET_EXTENSION"
+  # The Milk Frog on the watch face (docs/apple/persona.md「The Milk Frog on the watch」): reads what the watch app wrote
+  # into the App Group; no network, credentials or strings of its own.
+  PersonaWatchWidgets:
+    type: app-extension
+    platform: watchOS
+    sources:
+      - path: PersonaWatchWidgets
+      - path: Shared/WatchPetSnapshot.swift
+    entitlements:
+      path: PersonaWatchWidgets/PersonaWatchWidgets.entitlements
+      properties:
+        com.apple.security.application-groups: ["$(PERSONA_APP_GROUP)"]
+    info:
+      path: PersonaWatchWidgets/Info.plist
+      properties:
+        CFBundleName: PersonaWatchWidgets
+        CFBundleDisplayName: Persona
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        CFBundleDevelopmentRegion: en
+        PersonaAppGroup: $(PERSONA_APP_GROUP)
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.widgetkit-extension
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: $(PERSONA_BUNDLE_ID).watchkitapp.widgets
+        PRODUCT_MODULE_NAME: PersonaWatchWidgets
+        PRODUCT_NAME: PersonaWatchWidgets
+        TARGETED_DEVICE_FAMILY: "4"
+        CODE_SIGN_STYLE: Automatic
+        GENERATE_INFOPLIST_FILE: NO
+        SKIP_INSTALL: YES
+        APPLICATION_EXTENSION_API_ONLY: YES
   # Opens pushes that came through the relay (docs/operations/push-relay.md): decrypts the sealed payload before it is shown.
   PersonaNotify:
     type: app-extension
@@ -531,6 +564,16 @@ targets:
     sources:
       - path: PersonaWatch
       - path: Shared
+      # What the watch face draws, for the debug preview of it (-openWatchItem complication).
+      - path: PersonaWatchWidgets/PetComplicationView.swift
+    dependencies:
+      # The Milk Frog on the watch face (docs/apple/persona.md).
+      - target: PersonaWatchWidgets
+    entitlements:
+      path: PersonaWatch/PersonaWatch.entitlements
+      properties:
+        # Shared with the watch face's extension: the frog's state and faces (WatchPetSnapshot).
+        com.apple.security.application-groups: ["$(PERSONA_APP_GROUP)"]
     info:
       path: PersonaWatch/Info.plist
       properties:
@@ -541,6 +584,7 @@ targets:
         CFBundleDevelopmentRegion: en
         WKApplication: true
         WKCompanionAppBundleIdentifier: $(PERSONA_BUNDLE_ID)
+        PersonaAppGroup: $(PERSONA_APP_GROUP)
         UIBackgroundModes: [audio]
         NSMicrophoneUsageDescription: "Persona records audio you start on Apple Watch, for example a meeting or a spoken note, then transfers it to your iPhone for on-device transcription; only the text is saved to the knowledge base on your hub."
         NSAppTransportSecurity:

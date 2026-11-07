@@ -43,7 +43,7 @@ class SigningProfileTests(unittest.TestCase):
                 patch.object(signing, 'ensure_capability'), patch.object(signing, 'profile') as profile, \
                 patch.object(sys, 'argv', ['asc_signing.py', '--check']), contextlib.redirect_stdout(io.StringIO()):
             signing.main()
-        self.assertEqual(profile.call_count, 5)
+        self.assertEqual(profile.call_count, 6)
         for call in profile.call_args_list:
             self.assertEqual(call.args[1], config.provisioning_profiles(cfg)[call.args[0]])
             self.assertIs(call.kwargs['check_only'], True)
