@@ -467,13 +467,24 @@ def commit_range(spec):
     return base, head
 
 
-def git_config(pattern):
-    """The value Git uses for the keys pattern matches (names in lowercase): the last one set ("" when none is)."""
-    result = subprocess.run(["git", "-C", ROOT, "config", "--get-regexp", pattern], capture_output=True, text=True)
+def git_config(key):
+    """The value Git uses for key ("" when unset)."""
+    result = subprocess.run(["git", "-C", ROOT, "config", "--get", key], capture_output=True, text=True)
     if result.returncode == 1:
         return ""
     result.check_returncode()
-    return result.stdout.splitlines()[-1].partition(" ")[2]
+    return result.stdout.strip()
+
+
+def comment_string():
+    """The string git starts comment lines with, read from its config by git itself (core.commentChar or
+    core.commentString, the one set last; `auto` gives `#`)."""
+    commented = subprocess.run(["git", "-C", ROOT, "stripspace", "--comment-lines"], input="x\n", capture_output=True,
+                               text=True, check=True).stdout
+    comment = commented.rpartition(" x\n")[0]
+    if not comment:  # an empty prefix would skip every line
+        sys.exit("privacy_check: cannot tell git's comment string")
+    return comment
 
 
 CUT_LINE = " ------------------------ >8 ------------------------"
@@ -482,21 +493,17 @@ CUT_LINE = " ------------------------ >8 ------------------------"
 def commit_msg_lines(path):
     """(line number, line) of the file `git commit` hands its commit-msg hook, for the lines the commit records.
 
-    Git cleans the file up after the hook. When it opened an editor (for the hook it sets GIT_EDITOR=: when it did
-    not), the default cleanup drops the comment lines, its hints and status that name the branch and local paths, and
-    everything from the scissors line down (the diff of `commit -v`). A message from -m or -F keeps its lines that
-    start with the comment character (Markdown headings) unless commit.cleanup is strip. The comment string is
-    core.commentChar or core.commentString, whichever is set last; `auto` counts as `#`. Lines end at \n only, as in
-    git: a \r stays in its line, so a CRLF scissors line ends nothing. A --cleanup or -v given to `git commit` is not
-    visible here (an edited message is taken to end at a scissors line; git ends it there only with -v, commit.verbose
-    or cleanup scissors): pre-push's --range scan reads every line of what was recorded.
+    Git cleans the file up after the hook. When it opened an editor (otherwise it sets GIT_EDITOR=: for the hook), the
+    default cleanup drops the comment lines (hints, branch, local paths) and everything from the scissors line down
+    (the `commit -v` diff); a message from -m or -F keeps its lines that start with the comment string (Markdown
+    headings) unless commit.cleanup is strip. Lines end at \n only, as in git. Not visible here: --cleanup and -v given
+    to `git commit` (git ends a message at the scissors line only with -v, commit.verbose or cleanup scissors) and the
+    character `auto` picks; pre-push's --range scan reads every line of what was recorded.
     """
     edited = os.environ.get("GIT_EDITOR") != ":"
-    cleanup = git_config(r"^commit\.cleanup$") or "default"
+    cleanup = git_config("commit.cleanup") or "default"
     strip = cleanup == "strip" or (cleanup == "default" and edited)
-    comment = git_config(r"^core\.comment(char|string)$")
-    if comment.lower() in ("", "auto"):
-        comment = "#"
+    comment = comment_string()
     text = open(path, encoding="utf-8", errors="replace", newline="").read()  # as --range decodes recorded messages
     for n, line in enumerate(text.split("\n"), 1):
         if edited and line == comment + CUT_LINE:
@@ -505,11 +512,16 @@ def commit_msg_lines(path):
             yield n, line
 
 
+def option(name):
+    """The argument after name on the command line (None without name)."""
+    return sys.argv[sys.argv.index(name) + 1] if name in sys.argv else None
+
+
 def main():
     staged = "--staged" in sys.argv
-    message = sys.argv[sys.argv.index("--message") + 1] if "--message" in sys.argv else None
-    commit_msg = sys.argv[sys.argv.index("--commit-msg") + 1] if "--commit-msg" in sys.argv else None
-    span = commit_range(sys.argv[sys.argv.index("--range") + 1]) if "--range" in sys.argv else None
+    message = option("--message")
+    commit_msg = option("--commit-msg")
+    span = commit_range(option("--range")) if "--range" in sys.argv else None
     sources, public_words, waivable = term_sources()
     words = list(sources)
     modules = module_paths()
