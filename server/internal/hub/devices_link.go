@@ -291,6 +291,11 @@ func (h *Hub) devicesConfigFor(id string) devicewire.Config {
 		out.Mesh = h.devicesMesh()
 	}
 	out.MachinesOwn = h.ownsList(id) // its own list is the list; the hub edits it (machines_kept.go)
+	if out.MachinesOwn && h.listHeld(id) {
+		// It holds its list as its own: the hand-over carries none. What hub.json stages for it is put to it
+		// (settleOwnList); the first hand-over, before it said so, still carries them for it to take over.
+		out.Machines = nil
+	}
 	if !out.MachinesOwn && h.keepsAny(id) {
 		// A manager that keeps machines in its own list, on a build that no longer does: its manager.json is not
 		// written over with a list without them (a phase-2 build writes every hand-over that has one).
@@ -861,8 +866,12 @@ func (h *Hub) applyDeviceStatesFrom(owner string, st devicewire.States) {
 	if d.ownListHeld == nil {
 		d.ownListHeld, d.lastNamed = map[string]bool{}, map[string]map[string]bool{}
 	}
+	heldBefore := d.ownListHeld[owner]
 	d.ownListHeld[owner], d.lastNamed[owner] = st.OwnList, named
 	d.mu.Unlock()
+	if heldBefore != st.OwnList {
+		h.devicesConfigChanged() // its hand-over carries machines, or no longer does
+	}
 	if st.OwnList && h.ownsList(owner) {
 		go h.settleOwnList(owner) // hub.json's machines it keeps now move out (machines_kept.go)
 	}
@@ -923,6 +932,10 @@ func (h *Hub) devicesConnected(owner string) {
 	d := &h.devices
 	d.mu.Lock()
 	delete(d.reportedForgot, owner) // a manager in the roster again: what it reports is kept
+	// A new connection holds its own list only once its report says so: until then its hand-over carries what
+	// hub.json stages for it, and edits are staged there (machines_kept.go).
+	delete(d.ownListHeld, owner)
+	delete(d.lastNamed, owner)
 	if d.fresh == nil {
 		d.fresh = map[string]bool{}
 	}
