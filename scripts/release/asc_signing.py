@@ -21,6 +21,8 @@ The App Group itself (group.<bundle id>, or config.json app.app_group) can't be 
 API, only on the developer website (docs/operations/release.md "App Group"): each profile is checked for it, and a missing one
 prints those steps.
 """
+from __future__ import annotations
+
 import base64
 import os
 import plistlib
