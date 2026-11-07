@@ -488,6 +488,12 @@ The owner can change each one (`personad extension sandbox <id> on|off|default`,
 `PUT /api/v1/extensions/{id}/-/sandbox` `{"enabled": true|false|null}`, where `null` returns to the default). The phone can't change it (turning off the sandbox widens trust, so like installing extensions it is done only on the hub machine and in the admin UI).
 A change restarts the extension and is recorded as `sandbox` in the audit log. The choice is stored in the hub setting `extension_sandbox`; it is deleted on uninstall, and a reinstall starts from the default.
 
+**Socket paths**: an installed extension's sockets live under its manager's directory (`<id>.sock` in `extensions/`, and in a sandbox the ones in its run directory), and a Unix socket path holds at most 103 bytes on macOS and 107 on Linux.
+An external manager's directory (`managers/<id>` in the data directory) leaves the least room. The manager checks each path before the program starts, so a bind does not fail with only `invalid argument`:
+a socket the manager binds itself (the proxy socket, the agent runtime's socket) that is too long stops the extension with an error naming the path, its length and the limit;
+an HTTP socket, which the program binds, gets the same line in the extension's log and the program still starts, since its protocol side works without it.
+The way out is a shorter data directory (`PERSONA_HOME`) or manager directory (`personad manager join --dir`).
+
 **Linux**: `bwrap` (bubblewrap) + `systemd-run --user --scope` (`server/internal/extension/sandbox`):
 
 - New user, PID, network, IPC and UTS namespaces; system directories (`/usr`, `/bin`, `/lib*`, `/etc`, `/opt`) are read-only, the sandbox's own root is read-only too, `/tmp` is a private empty directory, and **the home directory is invisible** (its path can't be written to either);

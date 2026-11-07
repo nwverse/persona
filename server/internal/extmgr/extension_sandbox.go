@@ -382,19 +382,31 @@ func (ps *extensions) confine(ctx context.Context, p *extension.Extension, hp *h
 		return nil
 	}
 	run := filepath.Join(ps.root, "run", id)
+	// An agent runtime (permissions.agent_runtimes) reaches this machine's node through a socket of its own that leads
+	// to the node's runtime.sock and nowhere else (#5413): the node's is in the home directory, which the sandbox hides.
+	runtimeSock, proxySock := "", ""
+	if g.AgentRuntimes {
+		runtimeSock = filepath.Join(run, "runtime.sock")
+	}
+	if runtime.GOOS != "darwin" { // Linux's way out of the sandbox; macOS's is loopback TCP
+		proxySock = filepath.Join(run, "proxy.sock")
+	}
+	// The manager binds these as the program starts, which cannot go on without them.
+	for _, sock := range []string{runtimeSock, proxySock} {
+		if err := checkSocketPath(sock); err != nil {
+			return err
+		}
+	}
 	if err := os.MkdirAll(run, 0o700); err != nil {
 		return err
 	}
 	if s.HTTP {
 		sock := filepath.Join(run, "http.sock")
+		ps.warnSocketPath(id, sock)
 		hp.socket, s.Socket = sock, sock
 		s.Env = setEnv(s.Env, "PERSONA_PLUGIN_SOCKET", sock)
 	}
-	// An agent runtime (permissions.agent_runtimes) reaches this machine's node through a socket of its own that leads
-	// to the node's runtime.sock and nowhere else (#5413): the node's is in the home directory, which the sandbox hides.
-	runtimeSock := ""
-	if g.AgentRuntimes {
-		runtimeSock = filepath.Join(run, "runtime.sock")
+	if runtimeSock != "" {
 		s.Env = identity.Environment(s.Env, "PERSONA_RUNTIME_SOCKET="+runtimeSock)
 	}
 	hubURL := "http://" + egress.HubHost
@@ -432,7 +444,7 @@ func (ps *extensions) confine(ctx context.Context, p *extension.Extension, hp *h
 			name, a, env := sandbox.Darwin(plan)
 			return name, a, env, nil
 		}
-		plan.ProxySocket, plan.Self = filepath.Join(run, "proxy.sock"), selfExecutable()
+		plan.ProxySocket, plan.Self = proxySock, selfExecutable()
 		if err := px.ListenUnix(id, plan.ProxySocket); err != nil {
 			return "", nil, nil, err
 		}

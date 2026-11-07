@@ -17,6 +17,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/nwverse/persona/server/internal/channel"
@@ -252,6 +253,27 @@ func (ps *extensions) legacySocket(c ExtensionConfig) string {
 		return expandHome(c.Socket)
 	}
 	return filepath.Join(ps.root, c.ID+".sock")
+}
+
+// maxSocketPath is the longest path a Unix socket can have here: sockaddr_un's sun_path less its NUL (macOS 103
+// bytes, Linux 107).
+const maxSocketPath = len(syscall.RawSockaddrUnix{}.Path) - 1
+
+// checkSocketPath fails, saying what to do, when path is too long for a Unix socket here; binding it would fail with
+// only "invalid argument". An external manager's directory (managers/<id> in the data directory) leaves the least room.
+func checkSocketPath(path string) error {
+	if len(path) <= maxSocketPath {
+		return nil
+	}
+	return i18n.Err("hub-extensions.socket_path_too_long", i18n.Args{"path": path, "length": len(path), "max": maxSocketPath})
+}
+
+// warnSocketPath says in extension id's log when its HTTP socket at path is too long to bind. It still starts: the
+// program binds that socket itself, and one that speaks the protocol keeps that side working without it.
+func (ps *extensions) warnSocketPath(id, path string) {
+	if err := checkSocketPath(path); err != nil {
+		ps.logf("extension %s: %v", id, err)
+	}
 }
 
 // legacyManifest is a hub.json entry as a manifest: a program serving HTTP (no protocol) contributing its kind, run
@@ -838,6 +860,7 @@ func (ps *extensions) specOf(ctx context.Context, p *extension.Extension, hp *hu
 		}
 		if rt.HTTP {
 			hp.socket = filepath.Join(ps.root, id+".sock")
+			ps.warnSocketPath(id, hp.socket)
 			s.HTTP, s.Socket = true, hp.socket
 			s.Env = append(s.Env, "PERSONA_PLUGIN_SOCKET="+hp.socket)
 		}
