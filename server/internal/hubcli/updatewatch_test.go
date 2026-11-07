@@ -32,15 +32,14 @@ func TestRestartHubWithoutAServiceManager(t *testing.T) {
 	if err := hub.Start(); err != nil {
 		t.Fatal(err)
 	}
-	done := make(chan error, 1)
 	exited := make(chan struct{})
-	go func() { err := hub.Wait(); close(exited); done <- err }()
+	go func() { _ = hub.Wait(); close(exited) }()
 	standInHub(t, hub.Process.Pid, exited)
 	if err := restartHub(update.Pending{PID: hub.Process.Pid, Target: target, Args: []string{"/old/path/personad", "hub", "run"}}); err != nil {
 		t.Fatal(err)
 	}
 	select {
-	case <-done:
+	case <-exited:
 	case <-time.After(15 * time.Second):
 		hub.Process.Signal(syscall.SIGKILL)
 		t.Fatal("the hub that would not come up was not stopped")

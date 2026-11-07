@@ -78,11 +78,11 @@ func openHerdrLog(path string) (*os.File, error) {
 		f.Close()
 		return nil, fmt.Errorf("herdr server log: %s is not a regular file of this user", path)
 	}
-	if err := syscall.SetNonblock(int(f.Fd()), false); err != nil {
-		f.Close()
-		return nil, fmt.Errorf("herdr server log: %w", err)
+	err = syscall.SetNonblock(int(f.Fd()), false)
+	if err == nil {
+		err = f.Truncate(0)
 	}
-	if err := f.Truncate(0); err != nil {
+	if err != nil {
 		f.Close()
 		return nil, fmt.Errorf("herdr server log: %w", err)
 	}
