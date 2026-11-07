@@ -211,7 +211,7 @@ final class ImageViewerTests: XCTestCase {
     private static let probePort = Int(ProcessInfo.processInfo.environment["PERSONA_VIEWER_CLI_PORT"] ?? "18932") ?? 18932
     private static let probeToken = UUID().uuidString
 
-    /// A picture that did not load (#4207), light and dark: the page says so with Retry instead of spinning; a tap on it
+    /// A picture that did not load (#182), light and dark: the page says so with Retry instead of spinning; a tap on it
     /// leaves the bars (Close) and the page's own backdrop (it used to go black, the words black on black and Close
     /// gone); Retry brings the picture; Close closes. The mock fails lazy pictures until `/mock/images?ok=1`.
     @MainActor func testAPictureThatDidNotLoadSaysSoWithRetry() throws {

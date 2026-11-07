@@ -19,7 +19,7 @@ struct ImagePagerView: UIViewRepresentable {
     var onPullEnd: (Bool) -> Void
     /// A page came on (or next to) the screen without its picture: load it.
     var onNeed: (Int) -> Void
-    /// Pages whose picture did not load (#4207): they draw `failure` instead of a spinner.
+    /// Pages whose picture did not load (#182): they draw `failure` instead of a spinner.
     var failed: Set<Int> = []
     var failure: (Int) -> AnyView = { _ in AnyView(EmptyView()) }
 
@@ -232,7 +232,7 @@ final class PagerScrollView: UIScrollView, UIScrollViewDelegate {
 }
 
 /// One page: a spinner until its picture is there, then the zooming picture; what the viewer says instead when the
-/// picture did not load (#4207). That is SwiftUI inside the page, so a swipe starting on it still turns the page and it
+/// picture did not load (#182). That is SwiftUI inside the page, so a swipe starting on it still turns the page and it
 /// moves with the page.
 final class PagerPage: UIView {
     var handlers = ZoomScrollView.Handlers()

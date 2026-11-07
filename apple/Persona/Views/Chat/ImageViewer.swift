@@ -38,7 +38,7 @@ struct ImageViewer: View {
     @Environment(\.colorScheme) private var colorScheme
     @State private var openedFile: FileRef?
     @State private var decoded: [Int: UIImage] = [:]
-    /// Pages whose last load gave no picture: they say so, with Retry, instead of spinning on (#4207). Not loaded again
+    /// Pages whose last load gave no picture: they say so, with Retry, instead of spinning on (#182). Not loaded again
     /// until Retry.
     @State private var failed: Set<Int> = []
     @State private var chrome = true

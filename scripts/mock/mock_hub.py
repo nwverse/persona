@@ -9424,7 +9424,7 @@ def looked(name, inp, result, ts_min, *pictures):
     return items + [shot(ts_min, items[0]["tool_use_id"], *p) for p in pictures]
 
 
-# MOCK_IMAGES_FAIL=1: lazy images (…/items/{id}/image) answer 503 until GET /mock/images?ok=1 (#4207: a picture that
+# MOCK_IMAGES_FAIL=1: lazy images (…/items/{id}/image) answer 503 until GET /mock/images?ok=1 (#182: a picture that
 # did not load says so, and Retry brings it). With MOCK_TURN_IMAGES the viewed pictures are lazy.
 IMAGES_FAIL = {"on": os.environ.get("MOCK_IMAGES_FAIL") == "1"}
 

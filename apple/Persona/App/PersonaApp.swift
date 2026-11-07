@@ -120,7 +120,7 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
         PopFrames.startIfAsked()
         // `-openChatsFresh YES`: no chat kept on disk from an earlier run (LiveUpdateTests: churned steps piled up).
         if d.bool(forKey: "openChatsFresh") { ChatCache.removeAll() }
-        // `-openImagesFresh YES`: no chat picture kept on disk from an earlier run, so a hub that fails it fails it (#4207).
+        // `-openImagesFresh YES`: no chat picture kept on disk from an earlier run, so a hub that fails it fails it (#182).
         if d.bool(forKey: "openImagesFresh") { try? FileManager.default.removeItem(at: URL.cachesDirectory.appending(path: "chat-images")) }
         // `-openAgentsFresh YES`: the Agents list's saved look forgotten (AgentsListTests).
         if d.bool(forKey: "openAgentsFresh") {
