@@ -39,8 +39,14 @@ const pathAccessCheck = "path-access"
 // preflightStall: a read that has not returned after this long is blocked.
 const preflightStall = 3 * time.Second
 
-// preflightMaxStalls caps a whole run, reads that each return but slowly (a sleeping network disk) included, at this
-// many stalls; what was not read by then is counted, not blamed.
+// preflightStart is how long the child may take to say its first line (its exec, its runtime coming up): starting is
+// not a read. One stall, so a whole run is still preflightMaxStalls stalls. Tests give it longer (TestMain): under the
+// whole server suite's load the test binary can take longer than that to come up (#1110).
+var preflightStart = preflightStall
+
+// preflightMaxStalls caps a whole run at this many stalls: the child's start (preflightStart) is the first, then the
+// reads, ones that each return but slowly (a sleeping network disk) included; what was not read by then is counted,
+// not blamed.
 const preflightMaxStalls = 5
 
 // preflightLinger is what stopping the child may add after that: SweepGroup's second and the two seconds runPreflight
@@ -200,7 +206,8 @@ type preflightOutcome struct {
 }
 
 // runPreflight reads items in a child process (env.child) and kills its whole process group as soon as one read has
-// taken env.stall (or all of them preflightMaxStalls stalls, or ctx ends).
+// taken env.stall (or the child has said nothing env.start after it was started, or the run has taken env.start and
+// preflightMaxStalls-1 more stalls, or ctx ends).
 func runPreflight(ctx context.Context, items []preflightItem, env preflightEnv) preflightOutcome {
 	if len(items) == 0 {
 		return preflightOutcome{}
@@ -228,9 +235,9 @@ func runPreflight(ctx context.Context, items []preflightItem, env preflightEnv) 
 		_ = cmd.Wait() // a read that fails is in the output; the exit status says nothing more
 		close(done)
 	}()
-	idle := time.NewTimer(stall)
+	idle := time.NewTimer(env.start) // until its first line: starting is not a read
 	defer idle.Stop()
-	all := time.NewTimer(preflightMaxStalls * stall)
+	all := time.NewTimer(env.start + (preflightMaxStalls-1)*stall)
 	defer all.Stop()
 	finished, hung := false, false
 wait:
@@ -425,7 +432,9 @@ func protectedFolderOf(path, home string) string {
 type preflightEnv struct {
 	goos, home string
 	via, exe   string // launchedVia, os.Executable
-	stall      time.Duration
+	// stall: a read taking this long is blocked; start: how long the child has to say its first line (its exec, its
+	// runtime coming up).
+	stall, start time.Duration
 	// child is the program and first arguments that run preflightChild (the items follow); childEnv adds to its
 	// environment.
 	child, childEnv []string
@@ -442,7 +451,8 @@ func thisPreflightEnv(home string) preflightEnv {
 	if p, err := filepath.EvalSymlinks(exe); err == nil {
 		exe = p
 	}
-	env := preflightEnv{goos: runtime.GOOS, home: home, via: launchedVia(os.Getenv), exe: exe, stall: preflightStall}
+	env := preflightEnv{goos: runtime.GOOS, home: home, via: launchedVia(os.Getenv), exe: exe, stall: preflightStall,
+		start: preflightStart}
 	env.child, env.childEnv = preflightChildCmd(exe)
 	return env
 }
