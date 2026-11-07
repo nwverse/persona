@@ -74,6 +74,10 @@ func (ps *extensions) confineSource(ctx context.Context, p *extension.Extension,
 	}
 	id := p.Record.ID
 	run := filepath.Join(ps.root, "run", id)
+	sock := filepath.Join(run, "proxy.sock")
+	if err := checkSocketPath(sock); err != nil {
+		return err
+	}
 	if err := os.MkdirAll(run, 0o700); err != nil {
 		return err
 	}
@@ -108,7 +112,6 @@ func (ps *extensions) confineSource(ctx context.Context, p *extension.Extension,
 		}
 		g := p.Record.Granted
 		px.Register(id, egress.Rule{Hosts: g.Network, Hub: len(g.Hub) > 0, Targets: ps.settingsTargets(id)})
-		sock := filepath.Join(run, "proxy.sock")
 		if err := px.ListenRuntimeUnix(id, sock); err != nil {
 			px.Unregister(id)
 			return "", nil, nil, nil, dispose, err

@@ -108,7 +108,8 @@ func TestHerdrStartWithAModelThroughAScriptLauncher(t *testing.T) {
 	}
 	waitCalls(t, f, "pane.send_input", 1)
 	typed := strings.Join(f.trace("pane.send_input"), "\n")
-	if !strings.Contains(typed, `"text":"HERDR_AGENT=claude scriptcc --session-id `+startID) || !strings.Contains(typed, "--model m-1") {
+	if !strings.Contains(typed, `"text":`+jsonPrefix(inAgentEnv(n.dir, "HERDR_AGENT=claude scriptcc --session-id "+startID, shellQuote))) ||
+		!strings.Contains(typed, "--model m-1") {
 		t.Fatalf("typed %s", typed)
 	}
 }

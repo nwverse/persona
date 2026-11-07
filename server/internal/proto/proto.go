@@ -859,6 +859,10 @@ type Session struct {
 	// ArchiveChangedAt is the manager's last explicit archive/restore visibility change.
 	// The hub uses it only to order its legacy delete tombstones against that report.
 	ArchiveChangedAt time.Time `json:"archive_changed_at,omitzero"`
+	// NativeArchive is whether the tool that owns an archived (or just restored) agent session has it the same way
+	// in its own archive (Codex's archived threads): only on GET /api/v1/sessions/archived rows, nil when the manager
+	// never asked the tool.
+	NativeArchive *NativeArchive `json:"native_archive,omitempty"`
 	// Origin is who opened an assistant conversation and OriginRef what of (docs/protocol/protocol.md"Assistant conversation origins"):
 	// user, channel, inbox, task, spawned, lark_agent, extension; "" is the user's. Set by the manager's fleet from
 	// the assistant's snapshot (internal/assistant/fleet.go).
@@ -1813,4 +1817,16 @@ type GateTool struct {
 type LarkCLI struct {
 	Bin     string `json:"bin,omitempty"`
 	Profile string `json:"profile,omitempty"`
+}
+
+// NativeArchive is a session's state in its own tool's archive, as its manager last asked for it
+// (docs/protocol/protocol.md "session.archive").
+type NativeArchive struct {
+	// Archived is what the tool was asked for: archived (true) or restored.
+	Archived bool `json:"archived"`
+	// State: done (the tool has it so), pending (not yet: the machine offline, the agent working, an error; tried
+	// again), unsupported (the tool has no archive Persona can drive: the archive is Persona's alone).
+	State string `json:"state"`
+	// Error is why the last try did not finish, while pending.
+	Error string `json:"error,omitempty"`
 }
