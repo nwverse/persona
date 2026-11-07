@@ -29,7 +29,8 @@ internal fun ModelConfigurationPage(models: ModelConfiguration?, onBack: () -> U
         mutableStateOf(roster?.defaultManagerId ?: persona.core.contracts.api.ManagerRoster.ASSISTANT_MANAGER)
     }
     key(models, owner) {
-        ModelConfigurationDetails(models, onBack, { onPurpose(it, owner) }, providers, owner,
+        ModelConfigurationDetails(models, onBack, { onPurpose(it, owner) },
+            remember(providers, owner) { providers?.forManager(owner) }, owner,
             switcher = { JManagerSwitcher(roster, owner, { owner = it }) })
     }
 }
@@ -50,7 +51,7 @@ private fun ModelConfigurationDetails(models: ModelConfiguration?, onBack: () ->
     LaunchedEffect(model) { model.load() }
     if (adding != null && providers != null) {
         NewProviderPage(providers, onBack = { adding = null }, onSaved = { adding = null; scope.launch { model.load() } },
-            preferPreset = adding == "preset")
+            preferPreset = adding == "preset", manager = owner)
         return
     }
     val catalog = state.catalog
@@ -100,7 +101,9 @@ private fun ModelConfigurationDetails(models: ModelConfiguration?, onBack: () ->
 fun ModelPurposePage(models: ModelConfiguration?, purposeId: String, onBack: () -> Unit, providers: ProviderSetup? = null, manager: String? = null) {
     val owner = manager?.takeIf(String::isNotBlank) ?: LocalManagerRoster.current?.defaultManagerId
         ?: persona.core.contracts.api.ManagerRoster.ASSISTANT_MANAGER
-    key(models, purposeId, owner) { ModelPurposeDetails(models, purposeId, onBack, providers, owner) }
+    key(models, purposeId, owner) {
+        ModelPurposeDetails(models, purposeId, onBack, remember(providers, owner) { providers?.forManager(owner) }, owner)
+    }
 }
 
 @Composable
@@ -121,7 +124,7 @@ private fun ModelPurposeDetails(models: ModelConfiguration?, purposeId: String, 
     LaunchedEffect(model, state.listProvider) { model.loadModels() }
     if (adding && providers != null) {
         // A provider added from here is picked for this use (the edit is kept; saving is still the user's).
-        NewProviderPage(providers, onBack = { adding = false }, onSaved = { id -> adding = false; scope.launch { model.providerAdded(id) } })
+        NewProviderPage(providers, onBack = { adding = false }, onSaved = { id -> adding = false; scope.launch { model.providerAdded(id) } }, manager = owner)
         return
     }
     fun save(restore: Boolean) {
@@ -256,7 +259,7 @@ private fun androidx.compose.foundation.lazy.LazyListScope.form(
 }
 
 @Composable
-private fun ModelConfigurationOwner(owner: String) {
+internal fun ModelConfigurationOwner(owner: String) {
     val name = LocalManagerRoster.current?.manager(owner)?.shownName ?: owner
     JGroupItem(GroupPosition.Single) {
         JRow(stringResource(R.string.settings_model_assistant), value = name, chevron = false)

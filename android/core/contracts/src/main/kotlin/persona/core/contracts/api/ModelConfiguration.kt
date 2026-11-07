@@ -26,6 +26,7 @@ interface ModelConfiguration {
         val source = this
         val owner = RequestManager(manager)
         return object : ModelConfiguration {
+            override fun forManager(manager: String) = source.forManager(manager)
             override suspend fun catalog() = kotlinx.coroutines.withContext(owner) { source.catalog() }
             override suspend fun purpose(id: String) = kotlinx.coroutines.withContext(owner) { source.purpose(id) }
             override suspend fun save(purpose: ModelPurpose, draft: ModelConfigurationDraft) =

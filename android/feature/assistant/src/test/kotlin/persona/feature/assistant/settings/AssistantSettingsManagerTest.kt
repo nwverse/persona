@@ -74,7 +74,7 @@ class AssistantSettingsManagerTest {
         rule.waitForIdle()
         rule.onNodeWithText("Daily review").performScrollTo().performClick()
         rule.waitForIdle()
-        rule.onNodeWithText("This task’s model").performScrollTo().performClick()
+        rule.onNodeWithText("Task model").performScrollTo().performClick()
         rule.waitForIdle()
         assertEquals("task.daily" to "work", opened)
     }

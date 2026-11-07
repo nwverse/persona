@@ -36,7 +36,7 @@ class ModelConfigurationScopeTest {
             }
         }
         val first = source.forManager("assistant")
-        val second = source.forManager("work")
+        val second = first.forManager("work")
         val pending = async { first.catalog() }
         entered.await()
         second.catalog(); second.purpose("agent.new")

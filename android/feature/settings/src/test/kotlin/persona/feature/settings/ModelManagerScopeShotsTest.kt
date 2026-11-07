@@ -32,6 +32,63 @@ import java.io.File
 class ModelManagerScopeShotsTest {
     @get:Rule val rule = createComposeRule()
 
+    @Test fun bothProviderEntryPointsKeepTheVisibleModelOwner() {
+        var style by mutableStateOf(AppStyle.Glass)
+        var dark by mutableStateOf(false)
+        var route by mutableStateOf<ModelPurposeRoute?>(null)
+        val owners = mutableListOf<String?>()
+        val providers = object : ProviderSetup {
+            override suspend fun presets(): List<ProviderPreset> {
+                owners += currentCoroutineContext()[RequestManager]?.id
+                return emptyList()
+            }
+            override suspend fun add(provider: NewProvider) {}
+        }
+        val purpose = ModelPurpose("agent.new", "Agents")
+        val api = object : ModelConfiguration {
+            override suspend fun catalog() = ModelCatalog(listOf(purpose))
+            override suspend fun purpose(id: String) = ModelPurposeDetail(purpose)
+            override suspend fun save(purpose: ModelPurpose, draft: ModelConfigurationDraft) = ModelPurposeSave.Conflict
+            override suspend fun providerModels(provider: String, refresh: Boolean, machine: String?): ProviderModels? = null
+        }
+        val roster = ManagerRoster(listOf(HubManager("assistant", "Personal", online = true, isDefault = true),
+            HubManager("work", "Work", online = true)), "assistant")
+        rule.setContent {
+            CompositionLocalProvider(LocalManagerRoster provides roster) {
+                PersonaTheme(darkTheme = dark, reduceMotion = true, style = style) {
+                    val detail = route
+                    if (detail == null) ModelConfigurationPage(api, onBack = {},
+                        onPurpose = { id, owner -> route = ModelPurposeRoute(id, owner) }, providers = providers)
+                    else ModelPurposePage(api, detail.purposeId, onBack = { route = null }, providers = providers, manager = detail.manager)
+                }
+            }
+        }
+        rule.waitForIdle()
+        rule.onAllNodesWithText("Work").onLast().performClick()
+        rule.onNodeWithContentDescription("New model provider").performClick()
+        rule.waitForIdle()
+        assertEquals(listOf("work"), owners)
+        rule.onNodeWithText("Work").assertExists()
+        rule.onNodeWithContentDescription("Back").performClick()
+        rule.waitForIdle()
+        rule.onNodeWithText("Agents").performClick()
+        rule.waitForIdle()
+        rule.onNodeWithText("Model provider").performClick()
+        rule.onNodeWithText("New model provider…").performClick()
+        rule.waitForIdle()
+        assertEquals(listOf("work", "work"), owners)
+        rule.onNodeWithText("Work").assertExists()
+        val out = File("build/model-manager-shots").also { it.mkdirs() }
+        for (look in AppStyle.entries) for (night in listOf(false, true)) {
+            style = look; dark = night
+            Snapshot.sendApplyNotifications(); rule.waitForIdle()
+            val bitmap = rule.onRoot().captureToImage().asAndroidBitmap()
+            File(out, "provider-${look.name.lowercase()}-${if (night) "dark" else "light"}.png").outputStream().use {
+                bitmap.compress(Bitmap.CompressFormat.PNG, 100, it)
+            }
+        }
+    }
+
     @Test fun selectedOwnerTravelsFromCatalogToSaveInEveryStyle() {
         var style by mutableStateOf(AppStyle.Glass)
         var dark by mutableStateOf(false)

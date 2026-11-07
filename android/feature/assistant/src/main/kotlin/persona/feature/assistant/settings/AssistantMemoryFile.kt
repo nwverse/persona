@@ -102,4 +102,3 @@ internal fun MemoryFilePart(
         dismiss = stringResource(R.string.assistant_settings_cancel) to { deleting = false },
     )
 }
-
