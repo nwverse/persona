@@ -160,13 +160,26 @@ func TestPreviewRefusals(t *testing.T) {
 	if got, _ := upgrade(t, previewURL(srv, 0, "")); got != http.StatusBadRequest {
 		t.Errorf("port 0: %d", got)
 	}
-	why = &rpc.Error{Code: "port_gone", Message: "nothing is listening on port"}
-	if got, body := upgrade(t, previewURL(srv, port, "")); got != http.StatusNotFound || body["code"] != "port_gone" {
-		t.Errorf("nothing listening: %d %v", got, body)
-	}
-	why = &rpc.Error{Code: "no_browser", Message: "no Chrome, Chromium, Edge or Brave on this computer"}
-	if got, body := upgrade(t, previewURL(srv, port, "")); got != http.StatusConflict || body["code"] != "no_browser" {
-		t.Errorf("no browser: %d %v", got, body)
+	// what the node says when it cannot open one comes after the upgrade, as a message (a browser cannot read why a
+	// WebSocket was refused)
+	for code, msg := range map[string]string{"port_gone": "nothing is listening on port", "no_browser": "no Chrome, Chromium, Edge or Brave on this computer"} {
+		why = &rpc.Error{Code: code, Message: msg}
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		c, _, err := websocket.Dial(ctx, previewURL(srv, port, ""), &websocket.DialOptions{HTTPHeader: http.Header{"Authorization": {"Bearer test-token"}}})
+		if err != nil {
+			t.Fatalf("%s: %v", code, err)
+		}
+		_, b, err := c.Read(ctx)
+		var got map[string]any
+		_ = json.Unmarshal(b, &got)
+		if err != nil || got["t"] != "error" || got["code"] != code || got["error"] != msg {
+			t.Errorf("%s: %s %v", code, b, err)
+		}
+		if _, _, err := c.Read(ctx); websocket.CloseStatus(err) != websocket.StatusNormalClosure {
+			t.Errorf("%s: not closed after the error: %v", code, err)
+		}
+		cancel()
+		c.CloseNow()
 	}
 	why = nil
 	m.info = proto.NodeInfo{Version: "old", Protocol: 1, Capabilities: []string{nodeproto.Sessions}}

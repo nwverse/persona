@@ -1,6 +1,6 @@
 package node
 
-// The dev servers a preview can show (docs/preview.md "Servers"): the entries of the project's .claude/launch.json, in
+// The dev servers a preview can show (docs/web/preview.md "Servers"): the entries of the project's .claude/launch.json, in
 // the shape Claude Desktop reads (configurations[]: name, runtimeExecutable, runtimeArgs, port, optional url, cwd and
 // env), each with whether something listens on its port now. preview.start runs one of them in a new terminal tab.
 
@@ -45,7 +45,7 @@ type previewServer struct {
 	Cwd       string `json:"cwd,omitempty"`
 	Listening bool   `json:"listening"`
 	Title     string `json:"title,omitempty"`
-	// Problem says why the entry cannot be used (a code, docs/preview.md); the others are empty then.
+	// Problem says why the entry cannot be used (a code, docs/web/preview.md); the others are empty then.
 	Problem string `json:"problem,omitempty"`
 }
 
@@ -56,7 +56,7 @@ type previewServers struct {
 	Servers []previewServer `json:"servers"`
 	// Error is why File could not be used (its JSON, its size).
 	Error string `json:"error,omitempty"`
-	// Browser is the browser previews open in, "" when this computer has none (docs/preview.md "The browser").
+	// Browser is the browser previews open in, "" when this computer has none (docs/web/preview.md "The browser").
 	Browser string `json:"browser,omitempty"`
 }
 

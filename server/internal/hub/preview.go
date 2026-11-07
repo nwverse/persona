@@ -21,7 +21,7 @@ import (
 	"github.com/nwverse/persona/server/internal/rpc"
 )
 
-// Dev server previews (docs/preview.md): the node shows a port of its computer in a headless browser and streams it;
+// Dev server previews (docs/web/preview.md): the node shows a port of its computer in a headless browser and streams it;
 // the hub relays. GET …/preview/servers and POST …/preview/start go to the node as they are; …/preview/connect is a
 // WebSocket whose messages are the frames of a stream to the node (preview.Frame), the hub re-framing them without
 // reading them. The ports that may be shown are the ones port forwarding lets the user connect to (portAllowed):
@@ -105,8 +105,9 @@ func (h *Hub) previewStart(w http.ResponseWriter, r *http.Request, m *Machine) {
 }
 
 // previewConnect is GET …/preview/connect?port=&path=&w=&h=&dpr=&mobile=: a WebSocket to a preview of the port.
-// Refused before the upgrade: 403 (a device that cannot, a port not allowed), 404 (nothing listening), 409 with a
-// code (no browser on that computer, an old node), 503 (offline).
+// Refused before the upgrade: 403 (a device that cannot, a port not allowed), 409 node_outdated, 503 (offline), 429.
+// After it, when the node cannot open the preview: an error message {t: "error", code, error} and the close (codes
+// port_gone, no_browser, browser_failed, offline, failed).
 func (h *Hub) previewConnect(w http.ResponseWriter, r *http.Request, m *Machine) {
 	q := r.URL.Query()
 	port, err := strconv.Atoi(q.Get("port"))
@@ -135,9 +136,17 @@ func (h *Hub) previewConnect(w http.ResponseWriter, r *http.Request, m *Machine)
 		return
 	}
 	num := func(k string) float64 { f, _ := strconv.ParseFloat(q.Get(k), 64); return f }
+	// Upgraded before the node is asked: a browser cannot read why a WebSocket was refused, and opening can fail
+	// for reasons the panel has to say (no browser on that computer, the server stopped). Those come as an error
+	// message, then the close.
+	c, err := websocket.Accept(w, r, &websocket.AcceptOptions{InsecureSkipVerify: true})
+	if err != nil {
+		return
+	}
+	defer c.CloseNow()
 	id := "v" + strconv.FormatInt(streamSeq.Add(1), 10)
 	if err := mux.Open(id); err != nil {
-		writeErr(w, http.StatusServiceUnavailable, err)
+		previewRefuse(r.Context(), c, "offline", err)
 		return
 	}
 	octx, cancel := context.WithTimeout(r.Context(), previewOpenWait)
@@ -150,17 +159,14 @@ func (h *Hub) previewConnect(w http.ResponseWriter, r *http.Request, m *Machine)
 	cancel()
 	if err != nil {
 		mux.Abort(id, err)
+		code := "failed"
 		var re *rpc.Error
-		if errors.As(err, &re) && re.Code == "port_gone" {
-			writeErrCode(w, http.StatusNotFound, re.Code, err)
-			return
+		if errors.As(err, &re) && re.Code != "" {
+			code = re.Code
+		} else if errors.Is(err, errOffline) {
+			code = "offline"
 		}
-		callErr(w, err)
-		return
-	}
-	c, err := websocket.Accept(w, r, &websocket.AcceptOptions{InsecureSkipVerify: true})
-	if err != nil {
-		mux.Abort(id, err)
+		previewRefuse(r.Context(), c, code, err)
 		return
 	}
 	c.SetReadLimit(previewReadLimit)
@@ -204,4 +210,13 @@ func (h *Hub) previewConnect(w http.ResponseWriter, r *http.Request, m *Machine)
 	}()
 	<-ctx.Done()
 	_ = c.Close(websocket.StatusNormalClosure, "")
+}
+
+// previewRefuse tells the web why its preview did not open, and closes.
+func previewRefuse(ctx context.Context, c *websocket.Conn, code string, err error) {
+	b, _ := json.Marshal(map[string]any{"t": "error", "code": code, "error": err.Error()})
+	wctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	_ = c.Write(wctx, websocket.MessageText, b)
+	_ = c.Close(websocket.StatusNormalClosure, code)
 }

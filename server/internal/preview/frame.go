@@ -1,4 +1,4 @@
-// Package preview holds what the hub and the node share about a dev server preview (docs/preview.md): the frames a
+// Package preview holds what the hub and the node share about a dev server preview (docs/web/preview.md): the frames a
 // preview stream carries. The stream itself is a streams.Mux byte stream like a forwarded port's; on it, each
 // WebSocket message between the web and the node is one frame, so the hub only re-frames and reads nothing.
 package preview

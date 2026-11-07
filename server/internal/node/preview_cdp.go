@@ -1,6 +1,6 @@
 package node
 
-// A Chrome DevTools Protocol connection over --remote-debugging-pipe (docs/preview.md "The browser"): messages are
+// A Chrome DevTools Protocol connection over --remote-debugging-pipe (docs/web/preview.md "The browser"): messages are
 // JSON, each ended by a NUL byte, commands written to the browser's fd 3 and answers and events read from its fd 4.
 // There is no debugging port, so no other program on the computer can drive the preview's browser.
 

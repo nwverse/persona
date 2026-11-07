@@ -1,6 +1,6 @@
 package node
 
-// The browser a preview runs in (docs/preview.md "The browser"): Chrome, Chromium, Edge or Brave on this computer,
+// The browser a preview runs in (docs/web/preview.md "The browser"): Chrome, Chromium, Edge or Brave on this computer,
 // headless, with a profile of its own. One browser per node, started for the first preview and ended a while after
 // the last one closes; each preview is a tab of it.
 

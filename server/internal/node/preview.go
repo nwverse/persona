@@ -1,6 +1,6 @@
 package node
 
-// A dev server preview (docs/preview.md): preview.open makes a tab of the headless browser (preview_browser.go) show
+// A dev server preview (docs/web/preview.md): preview.open makes a tab of the headless browser (preview_browser.go) show
 // http://localhost:<port><path> and ties it to a stream (streams.Mux, like a forwarded port's) on which each message
 // between the web and the node is one preview.Frame. The node sends pictures of the page (Page.startScreencast) and
 // what it is showing; the web sends what the user does in it. The page's top frame stays on this computer's loopback
@@ -74,7 +74,7 @@ const (
 	previewShotMsg  byte = 's' // id (4), PNG
 )
 
-// previewIn is a message from the web (docs/preview.md "Messages").
+// previewIn is a message from the web (docs/web/preview.md "Messages").
 type previewIn struct {
 	T string `json:"t"`
 	// mouse: down | up | move; key: down | up

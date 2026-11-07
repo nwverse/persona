@@ -1,4 +1,4 @@
-// Called on the element picked in a preview (docs/preview.md "Picking an element"), as `this`: what the comment the
+// Called on the element picked in a preview (docs/web/preview.md "Picking an element"), as `this`: what the comment the
 // agent gets says about it. Returns plain data only.
 function () {
   const el = this && this.nodeType === 1 ? this : this && this.parentElement;

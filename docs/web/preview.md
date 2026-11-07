@@ -44,7 +44,7 @@ web panel  ──WebSocket──▶  hub …/preview/connect  ──stream (stre
 
 ## A preview (`preview.go`)
 
-`GET /api/v1/machines/{mid}/preview/connect?port=&path=&w=&h=&dpr=&mobile=1` (a WebSocket, full devices only) → the hub checks the port the way port forwarding does (an Agent's, or opened with `POST …/ports/{port}/open`: the panel opens the server the user picked), opens a stream and asks the node `preview.open {id, port, path, w, h, dpr, mobile}`. The node checks that something listens there, takes the browser (starting it), opens a tab, sets it up and answers; only then does the hub upgrade. On the stream each WebSocket message is one frame (`server/internal/preview`: 4-byte big-endian length, `t` text or `b` binary, the bytes); the hub re-frames without reading.
+`GET /api/v1/machines/{mid}/preview/connect?port=&path=&w=&h=&dpr=&mobile=1` (a WebSocket, full devices only) → the hub checks the port the way port forwarding does (an Agent's, or opened with `POST …/ports/{port}/open`: the panel opens the server the user picked), opens a stream and asks the node `preview.open {id, port, path, w, h, dpr, mobile}`. Refusals the hub can tell by itself (a device that cannot, a port not allowed, an old node, offline) are HTTP errors before the upgrade; the panel checks the same things over REST first (`…/preview/servers`, `…/ports/{port}/open`), since a browser cannot read why a WebSocket was refused. Then the hub upgrades and asks the node, which checks that something listens there, takes the browser (starting it), opens a tab and sets it up. When it cannot, the web gets `{t: "error", code, error}` (`port_gone`, `no_browser`, `browser_failed`, `offline`, `failed`) and the close. On the stream each WebSocket message is one frame (`server/internal/preview`: 4-byte big-endian length, `t` text or `b` binary, the bytes); the hub re-frames without reading.
 
 ### Messages
 
@@ -55,6 +55,7 @@ From the node:
 | binary `f` | A picture: `seq` (uint32), CSS width and height (uint16 each), then a JPEG. At most 2 are in flight: the browser makes the next one when the web acknowledges one, so a slow link gets fewer pictures, not a backlog; nothing is sent while the page does not change |
 | binary `s` | A screenshot: `id` (uint32), then a PNG |
 | `ready` | `{browser, w, h}` |
+| `error` | `{code, error}` from the hub: the preview could not open (above); the close follows |
 | `page` | `{url, title, loading, back, forward}`, whenever one of them changes |
 | `external` | `{url}`: the page (or the address typed) went somewhere that is not this computer; it was not followed, the web offers to open it in a new tab |
 | `failed` | `{url, error}`: the address could not be loaded (`net::ERR_CONNECTION_REFUSED`: the server stopped) |
