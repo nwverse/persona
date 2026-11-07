@@ -116,6 +116,10 @@ Pitfalls, odd behavior, and the trade-offs made at the time (formerly in `CLAUDE
   Do not infer off from assistant rows or tail windows. In-process, use the newest evidence timestamp; discard old evidence across `startup` / `resume`. Session `StartedAt` survives resume, so is not a process boundary.
   `SessionStart` `clear` / `compact`, hook retries, and sidechains must not turn off the main session's switch again. The typing lock must distinguish sending paths already holding it from asynchronous startup, avoiding startup waiting for a message while the message waits for startup.
   The result wording, settings schema, and attachment keys above were checked only in static code of the installed `2.1.318` CLI; unit tests use synthetic fixtures, not real-session end-to-end acceptance.
+- Claude Code eats the image paths it is sent (#32, Claude Code 2.1.316–2.1.318): its paste handler cuts each line at a space before a path; a line of only paths loses each image path
+  (`.png` / `.jpg` / `.jpeg` / `.gif` / `.webp`, to a file that exists) to an `[Image #n]`, and blank lines go. With bare paths in `<attached_images>` the transcript recorded `[Image #n]text\n<attached_images>\n</attached_images>`:
+  the model saw the picture but had no file to copy or resize. A line starting with a word (`path: <path>`) stays text, so the node adds one per path for Claude (`keepImagePaths`).
+  The apps take only block lines starting with `/` or `~` as photos; reading `path:` lines as photos would show each picture twice next to the transcript's image item.
 - An image message once remained unsent in Claude's input box (2026-10-31, Claude Code 2.1.206: `[Image #1]` and text in the box, Agent `done`, Enter on the computer sent it).
   Forty-two later attempts in a separate herdr session (small PNG, 1.8 MB JPEG, saturated CPU) didn't reproduce it; cause unknown. On 11-01 a phone photo did it again. node fallback (`ensureSubmitted`): 2 seconds after sending,
   read the input box once; if it's still the just-sent text (strip `[Image #n]` / `[Pasted text #n]`, compare the first few words), press Enter once more. If empty or different, press nothing.

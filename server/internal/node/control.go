@@ -710,6 +710,7 @@ func (n *Node) send(ctx context.Context, id, text string, images []proto.Image, 
 	}
 	var watch *promptWatch
 	if kind == "claude" {
+		text = keepImagePaths(text)
 		watch = n.watchPrompt(id, text) // where the transcript ends before the typing: what comes after may be this (sendsafe.go)
 	}
 	typedAt := time.Now()
@@ -811,6 +812,51 @@ func (n *Node) saveImages(images []proto.Image) ([]string, error) {
 		paths = append(paths, p)
 	}
 	return paths, nil
+}
+
+// imagePathLine starts the line that repeats a photo's path in an <attached_images> block as text (keepImagePaths).
+const imagePathLine = "path: "
+
+// keepImagePaths gives each path in the <attached_images> block that ends text (the node's own, or one a client wrote
+// after uploading the photos itself, as Android's composer does) a second line, "path: <path>". Claude Code's paste
+// turns a line that is only an image path, to a file that exists, into an `[Image #n]` and drops the line, so the
+// model saw the picture but never learned where the file is; a line that starts with a word stays text. The apps take
+// only the block's lines that start with "/" or "~" as photos, so the second line is no second thumbnail. A block
+// with lines that are not paths (prose that happens to end in the tag), or whose paths already have their line, is
+// left as it is.
+func keepImagePaths(text string) string {
+	rest, ok := strings.CutSuffix(strings.TrimRight(text, " \t\r\n"), "</attached_images>")
+	if !ok {
+		return text
+	}
+	i := strings.LastIndex(rest, "<attached_images>")
+	if i < 0 {
+		return text
+	}
+	var lines []string
+	for _, l := range strings.Split(rest[i+len("<attached_images>"):], "\n") {
+		if l = strings.TrimSpace(l); l != "" {
+			lines = append(lines, l)
+		}
+	}
+	var b strings.Builder
+	b.WriteString(rest[:i] + "<attached_images>\n")
+	added := false
+	for j, l := range lines {
+		b.WriteString(l + "\n")
+		if strings.HasPrefix(l, imagePathLine) || j+1 < len(lines) && lines[j+1] == imagePathLine+l {
+			continue
+		}
+		if !filepath.IsAbs(l) && !strings.HasPrefix(l, "~") {
+			return text
+		}
+		b.WriteString(imagePathLine + l + "\n")
+		added = true
+	}
+	if !added {
+		return text
+	}
+	return b.String() + "</attached_images>"
 }
 
 func (n *Node) keys(ctx context.Context, id string, keys []string, text string) error {

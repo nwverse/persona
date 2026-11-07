@@ -255,7 +255,10 @@ Here **numbers move the cursor but do not select**; Enter is required. Number-on
 ## Sending messages, interrupting, and keys
 
 - Send: `agent prompt <pane> <text>` (atomic paste + Enter, respecting bracketed paste). While Claude works, input enters its queue.
-- Images: save under `~/.persona/uploads/<date>/`, append `<attached_images>` tags with one path per line. Claude opens them with Read; tags distinguish them from user text. App shows square thumbnails above text.
+- Images: save under `~/.persona/uploads/<date>/`, append `<attached_images>` tags with one path per line; tags distinguish them from user text. App shows square thumbnails above text.
+  Claude Code's paste turns a line that is only an image path, to a file that exists, into an `[Image #n]` (the model sees the picture) and drops the line,
+  so before Claude the node gives each path in the block that ends the message a second line `path: <path>`, which stays text: the agent knows where the file is (`keepImagePaths`).
+  Blocks a client wrote (Android's composer uploads photos first) get it too. Apps take only lines starting with `/` or `~` as photos.
 - Interrupt: `pane send-keys <pane> esc`.
 - Any TUI dialog: phone Terminal / screen interaction → `pane send-keys` (`up`/`down`/`enter`/`esc`/`tab`/`shift+tab`/`ctrl+c`/numbers), pane send-text.
 
