@@ -54,6 +54,12 @@ struct NewChatView: View {
     @State private var purposeGroup: String?
     @State private var starting = false
     @State private var error: String?
+    /// The picked folder's repository, as its computer says (#6115); nil: not in one, or it cannot say.
+    @State private var repo: WorktreeStatus?
+    /// Start the agent in a new worktree of `repo`; off each time the sheet opens.
+    @State private var inWorktree = false
+    /// The worktree's branch as typed; "": the one the computer picks.
+    @State private var worktreeBranch = ""
     @FocusState private var promptFocused: Bool
 
     /// `machineID` is what is remembered: the machine id, "group|id" for another group of hubs (`MachineRef.path`).
@@ -184,6 +190,10 @@ struct NewChatView: View {
                         }
                     }
                 } header: { Text("Folder [Task Views 52daa7]") }
+                if let repo, !repo.path.isEmpty {
+                    NewAgentWorktreeSection(repo: repo, on: $inWorktree, branch: $worktreeBranch,
+                                            suggested: AgentWorktree.branch(nameHint: worktreeNameHint), home: machine?.home)
+                }
                 }
 
                 Section {
@@ -305,6 +315,7 @@ struct NewChatView: View {
             }
             .task(id: machineID) { await loadMachine() }
             .task(id: "\(machineID)|\(runLauncher)|\(machine?.online == true)|\(defaultsFor)") { await loadModels() }
+            .task(id: "\(machineID)|\(cwd)|\(machine?.online == true)") { await loadRepo() }
             .onChange(of: effortOptions.map(\.id)) { _, ids in
                 if !effort.isEmpty, !ids.contains(effort) { effort = "" } // the picked model does not take it
             }
@@ -536,6 +547,23 @@ struct NewChatView: View {
         }
     }
 
+    /// What names the worktree's branch: the todo's name, else the first message, else the folder.
+    private var worktreeNameHint: String {
+        AgentWorktree.nameHint(prompt: nameHint ?? prompt, cwd: cwd)
+    }
+
+    /// Asks the computer whether the folder is in a Git repository, a moment after it stops changing.
+    private func loadRepo() async {
+        repo = nil
+        let dir = cwd
+        guard preset == nil, !dir.isEmpty, machine?.online == true, let api = model.api(ref.group) else { return }
+        try? await Task.sleep(for: .milliseconds(400))
+        guard !Task.isCancelled else { return }
+        let st = await api.worktreeStatus(machine: ref.id, cwd: dir)
+        guard !Task.isCancelled, dir == cwd else { return }
+        repo = st
+    }
+
     private func start() async {
         guard let api = model.api(ref.group) else {
             error = String(localized: "Can't reach this computer's hub. Try again later.")
@@ -544,6 +572,17 @@ struct NewChatView: View {
         starting = true
         error = nil
         defer { starting = false }
+        // In a worktree of its own (#6115): made first; a failure says why, and nothing starts.
+        var dir = cwd
+        if inWorktree, preset == nil, repo?.path.isEmpty == false {
+            do {
+                dir = try await api.addAgentWorktree(machine: ref.id, cwd: cwd, nameHint: worktreeNameHint, branch: worktreeBranch).path
+            } catch {
+                self.error = String(localized: "Couldn't create the worktree: \(error.shown ?? error.localizedDescription) [Agent Worktree]")
+                Haptics.error()
+                return
+            }
+        }
         do {
             let p = prompt.trimmingCharacters(in: .whitespacesAndNewlines)
             let name = tabName.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -552,7 +591,7 @@ struct NewChatView: View {
             if codex {
                 // Codex picks its thread's id once it has the first message: it goes with the start, which answers
                 // with that thread (one session, already working on it).
-                let s = try await api.start(.init(machineID: ref.id, cwd: cwd, launcher: launcher, prompt: contextBlock == nil ? prompt : outgoing,
+                let s = try await api.start(.init(machineID: ref.id, cwd: dir, launcher: launcher, prompt: contextBlock == nil ? prompt : outgoing,
                                                   workspaceID: preset?.workspaceID, model: modelChoice?.sent, tabName: name.isEmpty ? nil : name,
                                                   nameHint: nameHint ?? (p.isEmpty ? nil : p), todoID: todoID))
                 UserDefaults.standard.set(launcher, forKey: "launcher.\(machineID)")
@@ -564,7 +603,7 @@ struct NewChatView: View {
             }
             // The hub answers at once and starts claude in the background; the first message goes out as an ordinary
             // message (on screen right away, typed in once claude is ready).
-            let s = try await api.start(.init(machineID: ref.id, cwd: cwd, launcher: launcher, prompt: nil,
+            let s = try await api.start(.init(machineID: ref.id, cwd: dir, launcher: launcher, prompt: nil,
                                               workspaceID: preset?.workspaceID, permissionMode: mode.isEmpty ? nil : mode,
                                               effort: effort.isEmpty ? nil : effort, model: modelChoice?.sent, tabName: name.isEmpty ? nil : name,
                                               async: true, nameHint: nameHint ?? (p.isEmpty ? nil : p), todoID: todoID))
