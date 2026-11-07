@@ -23745,6 +23745,52 @@
             "value": "Claude background"
           }
         },
+    "Claude desktop app": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Claude desktop app"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Claude デスクトップアプリ"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Claude 桌面版"
+          }
+        }
+      },
+      "extractionState": "manual"
+    },
+    "Claude in a terminal": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Claude in a terminal"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ターミナルの Claude"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "终端里的 Claude"
+          }
+        }
+      },
+      "extractionState": "manual"
+    },
         "ja": {
           "stringUnit": {
             "state": "translated",
