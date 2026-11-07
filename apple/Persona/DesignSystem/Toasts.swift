@@ -23,8 +23,9 @@ struct ToastCapsule: View {
                     action.run()
                     dismiss()
                 } label: {
+                    // As large as the words beside it (the owner asked, #138: Undo was too small to read and hit).
                     Text(action.title)
-                        .font(Theme.Font.labelStrong)
+                        .font(Theme.Font.secondaryStrong)
                         .foregroundStyle(Theme.accent)
                         .lineLimit(1)
                         .fixedSize()

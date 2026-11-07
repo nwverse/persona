@@ -51,6 +51,8 @@ import { answeredLookup } from "./assistant/answered-lookup";
 import { Empty } from "./assistant/parts";
 import { ReviewBadge, ReviewChecklist } from "./assistant/Supervision";
 import { TodoStageBar } from "./TodoStageBar";
+import { todoUltracode } from "../lib/ultracode";
+import { UltraMark } from "./chat/Ultracode";
 import { boundThread, threadLine, threadName, todoThreadsOn, unbindTodoThread } from "../lib/todo-thread";
 
 export function TodosView({
@@ -518,6 +520,8 @@ export type TodoRowView = {
   urgentLead: string;
   /** What the agent asks (its card) or does / last said. */
   urgentText: string;
+  /** One of its agents runs with ultracode on (#12): the Agent list row's mark after its title. */
+  ultracode: boolean;
 };
 
 const DOT_STATE: Record<TodoStatus, AgentState> = {
@@ -536,7 +540,7 @@ export function todoRowView(todo: Todo, lookup: SessionLookup, interactions: Int
   const status = todoStatus(todo, lookup);
   const urgent = mostUrgentAgent(todo, lookup);
   const activeCount = (todo.agents ?? []).filter((a) => !a.released_at).length;
-  const view: TodoRowView = { status, dotState: DOT_STATE[status], age: ago(todo.updated_at || todo.created_at), activeCount, urgentLine: false, urgentLead: "", urgentText: "" };
+  const view: TodoRowView = { status, dotState: DOT_STATE[status], age: ago(todo.updated_at || todo.created_at), activeCount, urgentLine: false, urgentLead: "", urgentText: "", ultracode: todoUltracode(todo, lookup) };
   if (todo.done_at || !urgent?.session) return view;
   const urgentNow = taskNow(urgent.session, stateOf(urgent.session) === "working");
   const urgentIx = interactions.find((i) => i.machine_id === urgent.agent.machine_id && i.session_id === urgent.agent.session_id);
@@ -613,9 +617,16 @@ const TodoListItem = memo(function TodoListItem({
       {/* Body */}
       <div className="min-w-0 flex-1">
         <div className="flex items-baseline justify-between gap-2">
-          <span className={cx("truncate text-[13.5px] font-semibold text-ink", todo.done_at && "line-through text-ink-3 font-normal")}>
-            {todo.title}
-          </span>
+          {view.ultracode ? (
+            <span className="flex min-w-0 items-center gap-1">
+              <span className="truncate text-[13.5px] font-semibold text-ink">{todo.title}</span>
+              <UltraMark size={11} />
+            </span>
+          ) : (
+            <span className={cx("truncate text-[13.5px] font-semibold text-ink", todo.done_at && "line-through text-ink-3 font-normal")}>
+              {todo.title}
+            </span>
+          )}
           <span className="flex shrink-0 items-center gap-1.5 text-[11px] text-ink-3">
             {thread && (
               <span data-testid="todo-thread-mark" role="img" aria-label={t("todos.thread_mark")} title={threadLine(thread)} className="inline-flex">

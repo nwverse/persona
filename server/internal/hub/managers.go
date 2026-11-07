@@ -19,6 +19,7 @@ import (
 	"github.com/nwverse/persona/server/internal/bus"
 	"github.com/nwverse/persona/server/internal/db"
 	"github.com/nwverse/persona/server/internal/extwire"
+	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/rpc"
 )
 
@@ -500,6 +501,8 @@ func (h *Hub) managerRoutes(api *http.ServeMux) {
 			writeErrCode(w, http.StatusNotFound, "no_manager", err)
 		case errors.Is(err, errOwnersUnknown):
 			writeErrCode(w, http.StatusServiceUnavailable, "owners_unknown", err)
+		case errors.Is(err, errKeeperAway): // the manager that keeps it, or the one it goes to, is away (machines_kept.go)
+			writeErrCode(w, http.StatusServiceUnavailable, "assistant_offline", err)
 		case err != nil:
 			writeErr(w, http.StatusInternalServerError, err)
 		default:
@@ -571,7 +574,16 @@ func (h *Hub) managerRoutes(api *http.ServeMux) {
 		// commits while this runs leaves no manager behind, and one connected meanwhile is hung up. A manager never
 		// installed has no identity (false): calling it off is still a 200. Once the moves to or from it under way
 		// are done; the ones after find it gone (ownership.go).
+		drop := r.URL.Query().Get("drop_machines") == "1"
 		err := h.removingManager(func() error {
+			// What it keeps in its own list is in its manager.json only (machines_kept.go): moved away first, or
+			// dropped on purpose. Checked with the moves held off, from a record that was read.
+			if keeps, known := h.keepsAnyKnown(r.Context(), id); !drop && (keeps || !known) {
+				if !known {
+					return errOwnersUnknown
+				}
+				return errKeepsMachines
+			}
 			if err := h.releaseManagerDedicatedMachines(r.Context(), id); err != nil {
 				return err
 			}
@@ -582,7 +594,14 @@ func (h *Hub) managerRoutes(api *http.ServeMux) {
 			h.forgetManagerState(id)           // what it reported, its cards too (manager_state.go)
 			return nil
 		})
-		if err != nil {
+		switch {
+		case errors.Is(err, errKeepsMachines):
+			writeErrCode(w, http.StatusConflict, "keeps_machines", i18n.Err("hub-admin_machines.keeps_machines"))
+			return
+		case errors.Is(err, errOwnersUnknown):
+			writeErrCode(w, http.StatusServiceUnavailable, "owners_unknown", err)
+			return
+		case err != nil:
 			writeErr(w, http.StatusInternalServerError, err)
 			return
 		}

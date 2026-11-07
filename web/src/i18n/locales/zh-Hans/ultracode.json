@@ -18,5 +18,8 @@
   "quota_week": "每周 {percent}",
   "quota_warn": "额度快用完了，开着 ultracode 会用得更快",
   "start_refused": "没能带 ultracode 开始：{error}。重试会不带 ultracode",
-  "send_waits": "等 ultracode 的切换在这一轮结束后生效，再发这条"
+  "send_waits": "等 ultracode 的切换在这一轮结束后生效，再发这条",
+  "plan_on": "开着 ultracode 开始：每个任务都编排多 Agent workflow，很费额度。点一下改成不开",
+  "plan_off": "不开 ultracode。点一下改成开着开始：每个任务都编排多 Agent workflow，很费额度",
+  "plan_blocked": "不开 ultracode 开始：{reason}"
 }

@@ -184,6 +184,9 @@ type Node struct {
 	// ports: the agents' listening ports (ports.go); streams: the forwarded connections to them (streams.Mux).
 	ports   portState
 	streams *streams.Mux
+	// preview: the headless browser of dev server previews (preview_browser.go), made on first use.
+	preview     *previewHost
+	previewOnce sync.Once
 
 	// hostAgents: each host's agents in its last answer (refreshHosts), kept for a host that does not answer.
 	hostAgents map[string][]host.Agent
@@ -1203,6 +1206,12 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 		return n.portDial(ctx, params)
 	case "port.probe":
 		return n.portProbeRPC(ctx, params)
+	case "preview.servers": // a session folder's dev servers, from its .claude/launch.json (preview_launch.go)
+		return n.previewServersRPC(ctx, params)
+	case "preview.start": // run one of them in a new terminal tab, after the user confirmed its command
+		return n.previewStartRPC(ctx, params)
+	case "preview.open": // a headless browser tab on a port of this computer, on a stream (preview.go)
+		return n.previewOpenRPC(ctx, params)
 	// The built-in programs cua and ego by their old names, for a hub from before builtin_programs (builtin.go).
 	case "computer.status", "computer.call", "computer.install", "computer.grant", "computer.cancel", "computer.clipboard",
 		"computer.cursor", "computer.nolock", "computer.lock",
