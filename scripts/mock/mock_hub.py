@@ -9428,6 +9428,15 @@ def looked(name, inp, result, ts_min, *pictures):
 # did not load says so, and Retry brings it). With MOCK_TURN_IMAGES the viewed pictures are lazy.
 IMAGES_FAIL = {"on": os.environ.get("MOCK_IMAGES_FAIL") == "1"}
 
+
+def lazy_images(items):
+    """With MOCK_IMAGES_FAIL=1 pages leave the pictures' bytes out, as the hub does for `lazy_images`: the app fetches
+    each by its ref, so a tool's picture fails too."""
+    if os.environ.get("MOCK_IMAGES_FAIL") != "1":
+        return items
+    return [dict(x, image=dict(x["image"], data="", lazy=True, size=len(x["image"]["data"]) * 3 // 4))
+            if (x.get("image") or {}).get("data") else x for x in items]
+
 if os.environ.get("MOCK_TURN_IMAGES"):
     sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
     import mock_office
@@ -12704,11 +12713,11 @@ class H(BaseHTTPRequestHandler):
             if "after_seq" in q:
                 a = int(q["after_seq"][0] or 0)
                 LOG.write("  items after_seq=%d\n" % a); LOG.flush()
-                return self.send_json({"items": [x for x in items if x["seq"] > a], "more_after": False, **span(items, a, max(a, last))})
+                return self.send_json({"items": lazy_images([x for x in items if x["seq"] > a]), "more_after": False, **span(items, a, max(a, last))})
             if "through_seq" in q:  # opening a fold
                 frm, thru = int(q.get("from_seq", ["0"])[0]), int(q["through_seq"][0])
                 inside = [x for x in items if frm <= x["seq"] <= thru]
-                out = {"items": inside[:1000], "more": len(inside) > 1000}
+                out = {"items": lazy_images(inside[:1000]), "more": len(inside) > 1000}
                 served(sid, "range", out)
                 return self.send_json(out)
             b = q.get("before_seq", [""])[0]
@@ -12716,7 +12725,7 @@ class H(BaseHTTPRequestHandler):
             more = False
             if PAGING["on"]:
                 items, more = last_turns(items, int(q.get("turns", ["2"])[0] or 2))
-            out = {"items": fold_work(items) if q.get("fold_work") == ["1"] else items, "has_more": more,
+            out = {"items": lazy_images(fold_work(items) if q.get("fold_work") == ["1"] else items), "has_more": more,
                    **span(items, None, int(b) - 1 if b else last)}
             served(sid, "page", out)
             return self.send_json(out)
@@ -14491,12 +14500,12 @@ class H(BaseHTTPRequestHandler):
                         threading.Thread(target=stream, daemon=True).start()
                     if since:
                         newer = [x for x in items if x["seq"] > since]
-                        send({"type": "items", "machine_id": mid, "session_id": sid, "items": newer, "backlog": True,
+                        send({"type": "items", "machine_id": mid, "session_id": sid, "items": lazy_images(newer), "backlog": True,
                               **span(items, since, max(since, items[-1]["seq"] if items else 0))})
                     else:
                         page, more = last_turns(items, 2) if PAGING["on"] else (items, False)
                         out = {"type": "items", "machine_id": mid, "session_id": sid, "backlog": True, "has_more": more, **span(items),
-                               "items": fold_work(page) if msg.get("fold_work") else page}
+                               "items": lazy_images(fold_work(page) if msg.get("fold_work") else page)}
                         served(sid, "backlog", out)
                         send(out)
         except Exception as e:
