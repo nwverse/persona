@@ -44,7 +44,8 @@ export interface FeishuBotUpdate {
   app_id?: string;
   app_secret?: string;
   domain?: string;
-  features?: BotFeatures;
+  /** The switches to change: the hub merges them over its own (a hub before 0.1.12 replaces them all, see `featureEdit`). */
+  features?: Partial<BotFeatures>;
   nudge_after?: number;
 }
 
@@ -106,6 +107,20 @@ export function withFeature(f: BotFeatures, key: keyof BotFeatures, on: boolean)
   if (key === "cards" && !on) next.all_cards = false;
   if (key === "all_cards" && on) next.cards = true;
   return next;
+}
+
+/**
+ * What turning one switch sends: that switch alone, so one changed elsewhere since this page loaded keeps its value (the
+ * hub merges the switches it is sent over its own). The pair that goes together names both ("all cards" brings "cards"
+ * along, "cards" off takes "all cards" with it): the hub does not tie them. A hub from before 0.1.12 replaces the whole
+ * object it is sent, and says so by leaving `reports` out of its status: it gets every switch, as it always did.
+ */
+export function featureEdit(f: BotFeatures, key: keyof BotFeatures, on: boolean): Partial<BotFeatures> {
+  if (f.reports === undefined) return withFeature(f, key, on);
+  const edit: Partial<BotFeatures> = { [key]: on };
+  if (key === "cards" && !on) edit.all_cards = false;
+  if (key === "all_cards" && on) edit.cards = true;
+  return edit;
 }
 
 /** What the status line says. */
