@@ -28,16 +28,18 @@ var (
 
 // inboxBatch is what one collection starts of plugin connectors: the new items by id and the source each came from,
 // the sources it read (with their names), whose held-back counts it recomputes, and the connectors the hub had then
-// (nil: not said, every source kept).
+// (nil: not said, every source kept). It also holds the round's writes of the items it changes, by id (roundWrite).
 type inboxBatch struct {
 	items      map[string]*InboxItem
 	from       map[string]string
 	read       map[string]string
 	registered map[string]string
+	writes     map[string]*inboxWrite
 }
 
 func newInboxBatch() *inboxBatch {
-	return &inboxBatch{items: map[string]*InboxItem{}, from: map[string]string{}, read: map[string]string{}}
+	return &inboxBatch{items: map[string]*InboxItem{}, from: map[string]string{}, read: map[string]string{},
+		writes: map[string]*inboxWrite{}}
 }
 
 // sortBatch files a round's new plugin items, under b.mu: muted ones (done at once) and ones with nothing to triage (a
@@ -51,6 +53,7 @@ func (b *inboxBook) sortBatch(batch *inboxBatch, changed []*InboxItem, now time.
 	}
 	for _, it := range batch.items {
 		if m := mutedBy(b.mutes, it); m != nil {
+			b.roundWrite(it)
 			b.file(it, now, "read")
 			it.Reason = b.mutedReason(m.Name)
 		} else if it.TriagedAt != it.Last && it.Context != "" {

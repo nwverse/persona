@@ -442,16 +442,19 @@ func addProjectAliases(p *Project, aliases []string, taken map[string]bool) {
 }
 
 // PruneProjectAliases takes off each live project the aliases the rules above would not let it collect, for the
-// knowledge bases that collected them before the rules (#34: 90-145 aliases on each active project after a week):
-// another live project's name or slug (a name beats an alias in FindProject, so the alias never finds this project
-// and only tells the models the two are one), its own name, a repeat, one too generic, and those past the first
-// maxProjectAliases. The names of projects merged into it stay and do not count: their mentions should find it. An
-// alias two live projects share stays on both (whose it is cannot be told), and so do aliases set by hand (locked).
-// Returns how many aliases went.
+// knowledge bases that collected them before the rules: another live project's name or slug (a name beats an alias
+// in FindProject, so the alias never finds this project and only tells the models the two are one), its own name, a
+// repeat, one too generic, and those past the first maxProjectAliases. The names of projects merged into it, directly
+// or through another merged project, stay and do not count: their mentions should find it. An alias two live projects
+// share stays on both (whose it is cannot be told), and so do aliases set by hand (locked). Returns how many went.
 func (e *Engine) PruneProjectAliases() int {
 	projects := e.Store.Projects()
-	owners := map[string][]string{}          // a live project's normalized name or slug → the projects going by it
-	mergedIn := map[string]map[string]bool{} // slug → normalized names of the projects merged into it
+	bySlug := map[string]*Project{}
+	for _, p := range projects {
+		bySlug[p.Slug] = p
+	}
+	owners := map[string][]string{}  // a live project's normalized name or slug → the projects going by it
+	mergedIn := map[[2]string]bool{} // {live slug, normalized name of a project merged into it}
 	for _, p := range projects {
 		if p.Live() {
 			for _, n := range []string{normName(p.Name), normName(p.Slug)} {
@@ -459,11 +462,17 @@ func (e *Engine) PruneProjectAliases() int {
 					owners[n] = append(owners[n], p.Slug)
 				}
 			}
-		} else if p.MergedInto != "" {
-			if mergedIn[p.MergedInto] == nil {
-				mergedIn[p.MergedInto] = map[string]bool{}
+			continue
+		}
+		into := bySlug[p.MergedInto]
+		for range len(projects) { // a chain ends at a live project; the bound only guards a cycle
+			if into == nil || into.Live() {
+				break
 			}
-			mergedIn[p.MergedInto][normName(p.Name)] = true
+			into = bySlug[into.MergedInto]
+		}
+		if into != nil && into.Live() {
+			mergedIn[[2]string{into.Slug, normName(p.Name)}] = true
 		}
 	}
 	removed := 0
@@ -480,7 +489,7 @@ func (e *Engine) PruneProjectAliases() int {
 				continue
 			}
 			seen[n] = true
-			if !mergedIn[p.Slug][n] {
+			if !mergedIn[[2]string{p.Slug, n}] {
 				if tooGenericAlias(n) || counted >= maxProjectAliases {
 					continue
 				}
