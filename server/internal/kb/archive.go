@@ -67,6 +67,8 @@ type Engine struct {
 	failed int // attachment downloads that failed this run (logged once per chat)
 
 	find findCache // what Find read last time, kept while the files are unchanged (find.go)
+
+	projectRetries map[string]projectRetry // projects whose rewrite failed, by slug (RefreshProjects)
 }
 
 func (e *Engine) modelFor(id string) Model {
