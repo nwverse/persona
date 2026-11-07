@@ -182,3 +182,24 @@ func TestNativeArchiveFollowsAutomaticRestore(t *testing.T) {
 		t.Fatalf("node calls: %v", c)
 	}
 }
+
+// Archive and close: Codex refuses while the agent's terminal is open; once the close went through, it is asked again
+// at once (not after the retry's wait), and archives it.
+func TestNativeArchiveAfterArchiveAndClose(t *testing.T) {
+	ft, row := closeTestService(t, func(s *proto.Session) { s.Agent = "codex" })
+	nn := playNativeNode(ft, "mac")
+	nn.set(func(string) (any, error) {
+		if len(retiredOf(ft)) == 0 {
+			return nil, &rpc.Error{Message: "Codex still has this session open", Code: "native_archive_live"}
+		}
+		return map[string]any{"native": "done", "via": "cli"}, nil
+	})
+	res, err := ft.s.archiveAndCloseAgentSession(t.Context(), "mac", row.SessionID)
+	if err != nil || !res.Closed {
+		t.Fatalf("archive and close: %+v %v", res, err)
+	}
+	waitUntil(t, func() bool {
+		v := ft.s.nativeArchiveView("mac", row.SessionID)
+		return v != nil && v.Archived && v.State == nativeArchiveDone
+	})
+}

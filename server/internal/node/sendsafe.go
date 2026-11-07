@@ -518,7 +518,9 @@ func (t *typingLocks) ours(pane, box string) bool {
 	return strings.HasPrefix(strings.Join(strings.Fields(last.text), ""), b) || pastePlaceholder.MatchString(box)
 }
 
-var pastePlaceholder = regexp.MustCompile(`^\s*\[Pasted text #\d+`)
+// pastePlaceholder is Claude's placeholder for a long paste, after the `[Image #n]` chips of the pictures the same
+// paste attached.
+var pastePlaceholder = regexp.MustCompile(`^\s*(?:\[Image #\d+\]\s*)*\[Pasted text #\d+`)
 
 // How long a prompt may sit in Claude's input box before ensureSubmitted presses Enter for it.
 var submitGrace = 2 * time.Second
@@ -839,8 +841,13 @@ var (
 
 // longPaste: text Claude may show in its box as a `[Pasted text #n …]` placeholder (several lines, or long), so a
 // placeholder there after it was typed is likely it; for a short text the placeholder is someone else's paste.
+// Claude takes the pictures' bare path lines out of the paste and keeps their `path:` lines (keepImagePaths): words
+// with such a block are always more than the two line breaks Claude Code (2.1.316) shows in its box.
 func longPaste(text string) bool {
 	t := strings.TrimSpace(attachedNote.ReplaceAllString(text, ""))
+	if t != "" && strings.Contains(attachedNote.FindString(text), "\n"+imagePathLine) {
+		return true
+	}
 	return strings.Count(t, "\n") >= 2 || len([]rune(t)) >= 800
 }
 

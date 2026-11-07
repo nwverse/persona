@@ -67,6 +67,21 @@ type devicesState struct {
 	reportedDue    bool
 	reportedSaved  time.Time
 	reportedSave   sync.Mutex
+	// kept: the machines their manager keeps in its own list, out of hub.json (machines_kept.go), machine → manager;
+	// keptRead: that is what machinesKeptKey holds. putTried: the hub.json machines put to their manager's own list
+	// (settleOwnList), each once per manager.
+	kept     map[string]string
+	keptRead bool
+	putTried map[string]string
+	// ownListHeld: each manager's last report said it holds its own list in its manager.json (States.OwnList);
+	// lastNamed: the entries its last report named (accepted or not); settleDue: a settleOwnList waits for it;
+	// saidLost: the kept machines its list lacked, said once; warnedOld: the keepers whose build lost machines.own,
+	// said once.
+	ownListHeld map[string]bool
+	lastNamed   map[string]map[string]bool
+	settleDue   map[string]bool
+	saidLost    map[string]bool
+	warnedOld   map[string]bool
 	// up is closed while the manager is connected and has reported; warmUntil: until then calls wait for it (a hub
 	// just restarted, the machines shown as before).
 	up        chan struct{}
@@ -274,6 +289,13 @@ func (h *Hub) devicesConfigFor(id string) devicewire.Config {
 	}
 	if id == devicesOwner {
 		out.Mesh = h.devicesMesh()
+	}
+	out.MachinesOwn = h.ownsList(id) // its own list is the list; the hub edits it (machines_kept.go)
+	if !out.MachinesOwn && h.keepsAny(id) {
+		// A manager that keeps machines in its own list, on a build that no longer does: its manager.json is not
+		// written over with a list without them (a phase-2 build writes every hand-over that has one).
+		out.Machines = nil
+		h.warnKeeperOld(id)
 	}
 	out.PendingUnknown = h.trustUnknown()
 	for _, mid := range h.pendingMachineIDs() {
@@ -506,7 +528,8 @@ func (h *Hub) startDevices(ctx context.Context) {
 	if err := h.loadMachineOwners(ctx); err != nil {
 		h.logf("devices: ownership unavailable; dedicated local machines stay unassigned: %v", err)
 	}
-	h.loadMachineEntries(ctx) // what each manager last reported of them (machine_entries.go)
+	_ = h.loadMachinesKept(ctx) // and the machines their managers keep out of hub.json (machines_kept.go)
+	h.loadMachineEntries(ctx)   // what each manager last reported of them (machine_entries.go)
 	var saved devicesWarm
 	if h.store != nil {
 		if ok, err := h.store.TakeSetting(ctx, devicesWarmKey, &saved); err != nil || !ok || time.Since(saved.SavedAt) > devicesWarmStale {
@@ -515,8 +538,9 @@ func (h *Hub) startDevices(ctx context.Context) {
 	}
 	until := time.Now().Add(devicesWarmGrace)
 	n := 0
+	known := h.knownEntries()
 	h.fleet.mu.Lock()
-	for _, mc := range h.cfg.Machines {
+	for _, mc := range known {
 		if h.byID[mc.ID] != nil {
 			continue
 		}
@@ -584,7 +608,7 @@ func (h *Hub) saveDevicesWarm(ctx context.Context) {
 	saved := devicesWarm{Machines: map[string]devicesWarmMachine{}, Engines: map[string]string{},
 		EngineHosts: map[string]proto.EngineChoice{}, SavedAt: time.Now()}
 	for _, m := range h.machinesNow() {
-		if h.cfgEntry(m.cfg.ID) == nil {
+		if h.knownEntry(m.cfg.ID) == nil {
 			continue
 		}
 		m.mu.Lock()
@@ -725,9 +749,10 @@ func (h *Hub) applyDeviceStatesFrom(owner string, st devicewire.States) {
 			continue
 		}
 		m := prev[id]
-		// Only its manager reports a machine (ownership.go): hub.json's, its entry's, derived or not (another one is
-		// letting it go, or claims what is not its own); any other (a mesh member's), the carrier's only.
-		if h.cfgEntry(id) != nil && h.entryOwner(id) != owner || h.cfgEntry(id) == nil && owner != devicesOwner {
+		// Only its manager reports a machine (ownership.go): hub.json's or one a manager keeps, its owner's, derived or
+		// not (another one is letting it go, or claims what is not its own); any other (a mesh member's), the
+		// carrier's only.
+		if known := h.knownEntry(id) != nil; known && h.entryOwner(id) != owner || !known && owner != devicesOwner {
 			continue
 		}
 		if m == nil || !m.managed {
@@ -828,6 +853,19 @@ func (h *Hub) applyDeviceStatesFrom(owner string, st devicewire.States) {
 	delete(d.fresh, owner)
 	d.mu.Unlock()
 	h.takeMachineEntries(owner, st) // kept for when it is away (machine_entries.go)
+	named := map[string]bool{}
+	for _, e := range st.Entries {
+		named[e.ID] = true
+	}
+	d.mu.Lock()
+	if d.ownListHeld == nil {
+		d.ownListHeld, d.lastNamed = map[string]bool{}, map[string]map[string]bool{}
+	}
+	d.ownListHeld[owner], d.lastNamed[owner] = st.OwnList, named
+	d.mu.Unlock()
+	if st.OwnList && h.ownsList(owner) {
+		go h.settleOwnList(owner) // hub.json's machines it keeps now move out (machines_kept.go)
+	}
 	// The rejected computers the manager let go are not kept out any more (machine_trust.go).
 	h.fleetLeft(func(id string) bool { return byID[id] != nil || st.Absorbed[id] != "" })
 	if fresh {
@@ -1050,7 +1088,7 @@ func (h *Hub) machineConnected(ctx context.Context, m *Machine, at time.Time) de
 // the carrier always, the others connected now.
 func (h *Hub) updateNodes(ctx context.Context) {
 	owners := []string{devicesOwner}
-	for _, mc := range h.cfgEntries() {
+	for _, mc := range h.knownEntries() {
 		if o := h.machineOwner(mc.ID); !slices.Contains(owners, o) && h.busConnOf(o) != nil {
 			owners = append(owners, o)
 		}
@@ -1196,7 +1234,7 @@ func (h *Hub) keepConnectorCred(ctx context.Context, c devicewire.ConnectorCred)
 	if cs == nil {
 		return errors.New("no database")
 	}
-	if mc := h.cfgEntry(c.MachineID); mc == nil || mc.Kind != kindService {
+	if mc := h.knownEntry(c.MachineID); mc == nil || mc.Kind != kindService {
 		// Pairing for an entry being added: it is written to hub.json right after.
 		if mc != nil {
 			return fmt.Errorf("%s is not of kind service", c.MachineID)

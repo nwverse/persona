@@ -59,6 +59,8 @@ type agentNativeArchive struct {
 	Via       string    `json:"via,omitempty"`
 	At        time.Time `json:"at,omitzero"` // the last try
 	Tries     int       `json:"tries,omitempty"`
+	// wish numbers the asks in this process: one made while a call was out is made after it, even the same way.
+	wish uint64
 }
 
 type agentNativeBook struct {
@@ -68,6 +70,7 @@ type agentNativeBook struct {
 	// intents are archives / restores asked for before the records are read (they win over what was read).
 	intents map[string]agentNativeArchive
 	running map[string]chan struct{} // session key → closed when its worker ends
+	wishes  uint64
 }
 
 // nativeArchiveWanted asks the tool that owns s for archived (Persona's archive just changed): in the background, at
@@ -77,6 +80,8 @@ func (svc *Service) nativeArchiveWanted(s proto.Session, archived bool) {
 	rec := agentNativeArchive{MachineID: s.MachineID, SessionID: s.SessionID, Archived: archived, State: nativeArchivePending}
 	b := &svc.agentNative
 	b.mu.Lock()
+	b.wishes++
+	rec.wish = b.wishes
 	if b.loaded {
 		b.records = maps.Clone(b.records)
 		b.records[key] = rec
@@ -205,7 +210,7 @@ func (svc *Service) nativeArchiveOnce(ctx context.Context, key string) bool {
 	}
 	b.mu.Lock()
 	cur, ok := b.records[key]
-	if !ok || cur.Archived != rec.Archived || !cur.At.Equal(rec.At) || cur.State != rec.State {
+	if !ok || cur.wish != rec.wish || cur.Archived != rec.Archived || !cur.At.Equal(rec.At) || cur.State != rec.State {
 		b.mu.Unlock()
 		return ok // the user changed it meanwhile: the latest wish is made next
 	}
