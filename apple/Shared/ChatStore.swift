@@ -436,8 +436,9 @@ final class ChatStore {
     /// Everything from the first item through this seq is here, without holes (lines without items count). Catch-ups
     /// ask for what comes after it; 0 = no baseline yet (nothing loaded from the end of the transcript).
     @ObservationIgnored private(set) var covered = 0
-    /// When the last batch of items came (a push, a page, a pull), empty ones included: a subscription that stays quiet
-    /// while its session moves on has stopped (`AgentSyncPacing.catchUpAt`). Nil before any.
+    /// When the last batch of items came (a push, a page, a pull), empty ones included, or streamed words
+    /// (`heardStream`): a subscription that stays quiet while its session moves on has stopped
+    /// (`AgentSyncPacing.catchUpAt`). Nil before any.
     @ObservationIgnored private(set) var arrivedAt: Date?
     /// Folds opened here (`unfold`), as far as each reached. A page with one of them again (the latest page can come
     /// twice as a chat opens) leaves its work open: folded again, its row had already fetched it and stayed on
@@ -461,6 +462,12 @@ final class ChatStore {
     }
 
     var lastSeq: Int { items.last?.seq ?? 0 }
+
+    /// Streamed words came for the chat: its subscription is alive while a long reply is written, though no batch
+    /// comes until it ends.
+    func heardStream() { arrivedAt = .now }
+    /// The time of the newest line that has one (nil: none has); a folded run counts as its last step.
+    var newestLineAt: Date? { items.last(where: { $0.ts != nil }).flatMap { $0.fold?.until ?? $0.ts } }
 
     /// What a batch left to do: nothing, fetch what comes after `covered` (a hole, or a catch-up the hub capped), or
     /// start over from the latest page (the transcript was replaced under a continuing batch).

@@ -83,7 +83,7 @@ final class AgentSync {
         var later: Date?
         let now = Date.now
         for s in recent {
-            if model.isSubscribed(s.key) { checkStall(s.key) }
+            checkStall(s.key) // chats on screen only
             guard let rev = known[s.key] ?? s.rev, synced[s.id] != rev else { continue }
             if model.isSubscribed(s.key) {
                 synced[s.id] = rev // on screen: its subscription brings what is new
@@ -119,18 +119,16 @@ final class AgentSync {
     /// while: the stream has stopped (a node whose transcript watch ended, a lost push). Asks for what came after the
     /// chat's `covered` and merges it (`AgentSyncPacing.catchUpAt`); looks again when its quiet or pacing ends. Not while
     /// its group's socket is down (in the background, offline): no push is due then, and the subscription asks for what
-    /// it missed (`since_seq`) when the socket is back, whose next list looks again. Not before the chat has its first
-    /// backlog, or a latest page that started it over (`resets`: a replaced transcript clears `loadedOnce`, and only the
-    /// next backlog sets it again).
+    /// it missed (`since_seq`) when the socket is back, whose next list looks again.
     private func checkStall(_ key: SessionKey) {
         let model = AppModel.shared
         guard model.isSubscribed(key), model.isLive(key.group), let store = model.existingChat(key),
-              store.loadedOnce || store.resets > 0, !catchingUp.contains(key)
+              !catchingUp.contains(key)
         else { return }
         let updatedAt = model.latest(key)?.updatedAt // `session(_:)` keeps an older one on purpose
-        let newest = store.items.last(where: { $0.ts != nil })?.ts
-        guard let at = AgentSyncPacing.catchUpAt(updatedAt: updatedAt, newestLine: newest, lastArrival: store.arrivedAt,
-                                                lastPull: lastCatchUp[key], pulledFor: caughtUpFor[key])
+        guard let at = AgentSyncPacing.catchUpAt(updatedAt: updatedAt, newestLine: store.newestLineAt,
+                                                lastArrival: store.arrivedAt, lastPull: lastCatchUp[key],
+                                                pulledFor: caughtUpFor[key])
         else { return }
         guard at <= .now else { return lookAgain(key, at: at) }
         guard let api = model.api(key.group) else { return }

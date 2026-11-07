@@ -26,18 +26,19 @@ public enum AgentSyncPacing {
     public static let staleSlack: TimeInterval = 1
 
     /// When a chat on screen asks for what its subscription may have lost: nil when it is not behind (or already asked
-    /// about this `updatedAt`), else the moment its quiet and pacing allow, now or later.
+    /// about this `updatedAt`, or nothing came for it yet: its backlog is still on its way), else the moment its quiet
+    /// and pacing allow, now or later.
     /// - Parameters:
     ///   - updatedAt: the session's `updated_at` as the list has it now.
     ///   - newestLine: the time of the chat's newest line that has one (nil: none has).
-    ///   - lastArrival: when items last came for the chat (a push, a page, a pull).
+    ///   - lastArrival: when items last came for the chat (a push, a page, a pull, streamed words); nil: none yet.
     ///   - lastPull: when the chat last asked this way.
     ///   - pulledFor: the `updatedAt` it last asked about.
     public static func catchUpAt(updatedAt: Date?, newestLine: Date?, lastArrival: Date?, lastPull: Date?,
                                  pulledFor: Date?) -> Date? {
-        guard let updatedAt, updatedAt != pulledFor else { return nil }
+        guard let updatedAt, updatedAt != pulledFor, let lastArrival else { return nil }
         if let newestLine, updatedAt <= newestLine.addingTimeInterval(staleSlack) { return nil }
-        let quiet = lastArrival?.addingTimeInterval(staleQuiet) ?? .distantPast
+        let quiet = lastArrival.addingTimeInterval(staleQuiet)
         let paced = lastPull?.addingTimeInterval(stalePullEvery) ?? .distantPast
         return max(quiet, paced)
     }

@@ -1552,7 +1552,7 @@ struct ChatView: View {
         // stands for it until its copy comes in (`startingTurn`).
         if viewedAgent == nil,
            ChatAwaitingTurn.workIsForPending(shownPending, status: status, stateSince: session?.stateSince,
-                                             newestLine: store.items.last(where: { $0.ts != nil })?.ts) { return nil }
+                                             newestLine: store.newestLineAt) { return nil }
         // Your message is in and nothing answered it yet: running already, before the hub's working comes (#3853).
         return status.isActive || awaiting.turnID == t.id ? t.id : nil
     }

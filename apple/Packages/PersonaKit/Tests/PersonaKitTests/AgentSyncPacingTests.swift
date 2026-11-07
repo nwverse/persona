@@ -38,9 +38,8 @@ struct ChatCatchUpPacingTests {
         // items came a moment ago (an empty batch, a push): it waits for the quiet from then
         let pushed = written.addingTimeInterval(1)
         #expect(at(written, newest: line, arrival: pushed) == pushed.addingTimeInterval(AgentSyncPacing.staleQuiet))
-        // nothing in the chat has a time yet, or nothing ever came: behind all the same
+        // nothing in the chat has a time yet: behind all the same
         #expect(at(written, newest: nil, arrival: line) == quietEnds)
-        #expect(at(written, newest: line, arrival: nil) == .distantPast)
     }
 
     @Test func aCurrentChatDoesNotAsk() {
@@ -49,6 +48,8 @@ struct ChatCatchUpPacingTests {
         #expect(at(line.addingTimeInterval(-60), newest: line, arrival: line) == nil)
         // no word from the list
         #expect(at(nil, newest: line, arrival: line) == nil)
+        // nothing came for the chat yet (its backlog is on its way): not quiet, just early
+        #expect(at(written, newest: line, arrival: nil) == nil)
     }
 
     @Test func itAsksOncePerWriteAndNotTooOften() {
