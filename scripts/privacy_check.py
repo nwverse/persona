@@ -33,6 +33,8 @@ from urllib.parse import unquote, urlsplit
 ROOT = subprocess.run(["git", "-C", os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
                        "rev-parse", "--show-toplevel"], capture_output=True, text=True, check=True).stdout.strip()
 HOME = os.path.expanduser("~")
+# Environment variables that name a build config, current name first (config_values reads each one set).
+CONFIG_ENV = ("PERSONA_CONFIG", "JARVIS_CONFIG")
 # Values too generic to search for (a machine called "mac", an OS name).
 IGNORE = {"darwin", "linux", "local", "ssh", "true", "false", "server", "localhost"}
 # Files that may hold placeholders that look like the real thing.
@@ -88,7 +90,7 @@ def config_values():
     base = os.environ.get("XDG_CONFIG_HOME") or os.path.join(HOME, ".config")
     # Scan both profiles, even when only one is selected for deployment.
     paths = {os.path.join(base, brand, "config.json") for brand in ("persona", "jarvis")}
-    paths.update(os.path.expanduser(os.environ[key]) for key in ("PERSONA_CONFIG", "JARVIS_CONFIG") if os.environ.get(key))
+    paths.update(os.path.expanduser(os.environ[key]) for key in CONFIG_ENV if os.environ.get(key))
     defaults = example_values()
     for path in paths:
         try:

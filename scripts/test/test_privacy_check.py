@@ -295,7 +295,7 @@ class OrdinaryWordTests(unittest.TestCase):
             directory.mkdir(parents=True)
             (directory / "config.json").write_text(json.dumps(config))
             (directory / "private-words.txt").write_text(words)
-            env = {k: v for k, v in os.environ.items() if k not in ("PERSONA_CONFIG", "JARVIS_CONFIG")}
+            env = {k: v for k, v in os.environ.items() if k not in pc.CONFIG_ENV}
             env["XDG_CONFIG_HOME"] = str(home / ".config")
             with patch.object(pc, "HOME", str(home)), patch.object(pc, "ROOT", str(home)), \
                     patch.dict(os.environ, env, clear=True):

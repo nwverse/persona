@@ -185,6 +185,8 @@ private fun resourceOf(key: CoreText.Key): Int = when (key) {
     CoreText.Key.SourceCodexHistory -> R.string.designsystem_core_source_codex_history
     CoreText.Key.SourceIdentityConflict -> R.string.designsystem_core_source_identity_conflict
     CoreText.Key.SourceClaudeBackground -> R.string.designsystem_core_source_claude_background
+    CoreText.Key.SourceClaudeDesktop -> R.string.designsystem_core_source_claude_desktop
+    CoreText.Key.SourceClaudeTerminal -> R.string.designsystem_core_source_claude_terminal
     CoreText.Key.SourceNoSend -> R.string.designsystem_core_source_no_send
     CoreText.Key.ReadOnlyBecause -> R.string.designsystem_core_read_only_because
     CoreText.Key.SessionReadOnly -> R.string.designsystem_core_session_read_only
