@@ -51,6 +51,7 @@ function Card({ title, kicker, onDismiss, children, footer }: { title: string; k
             aria-label={t("chat-interactions.hand_back")}
             title={t("chat-interactions.hand_back")}
             onClick={onDismiss}
+            data-card-answer
             className="touch-hit flex size-6 shrink-0 items-center justify-center rounded-[6px] text-ink-3 transition-colors hover:bg-hover hover:text-ink"
           >
             <Icon name="x" size={14} stroke={2.2} />
@@ -58,7 +59,8 @@ function Card({ title, kicker, onDismiss, children, footer }: { title: string; k
         </div>
         <div className="mt-2">{children}</div>
       </div>
-      <div className="flex items-center justify-between gap-2 border-t border-line bg-inset px-3 py-2">{footer}</div>
+      {/* data-card-actions: what answers the card (with hand back above), for the sync scenarios (spec/fixtures/sync) */}
+      <div data-card-actions className="flex items-center justify-between gap-2 border-t border-line bg-inset px-3 py-2">{footer}</div>
     </div>
   );
 }
@@ -693,7 +695,7 @@ export function AnsweredCard({ card }: { card: Answered }) {
   // allowed, not only that something was
   const about = lines.length === 1 && !lines[0].label && card.resolution.dismiss !== true ? receiptAbout(card.ix) : "";
   return (
-    <div role="status" className="overflow-hidden rounded-card bg-surface px-3.5 py-2.5 shadow-card" style={{ animation: `fade-up 300ms ${EASE} both` }}>
+    <div role="status" data-answered={card.ix.id} className="overflow-hidden rounded-card bg-surface px-3.5 py-2.5 shadow-card" style={{ animation: `fade-up 300ms ${EASE} both` }}>
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0 flex-1">
           <div className="mb-1 flex items-center gap-1.5 text-[11px] font-medium text-green">
@@ -730,7 +732,8 @@ export function InteractionCard({ ix }: { ix: Interaction }) {
     : ix.kind === "plan" ? <PlanCard ix={ix} />
     : ix.kind === "permission" ? <PermissionCard ix={ix} />
     : ix.kind === "elicitation" ? <ElicitationCard ix={ix} /> : <ScreenCard ix={ix} />;
-  return canApprove ? card : <fieldset disabled>{card}</fieldset>;
+  // data-card: which card this is, for the sync scenarios (spec/fixtures/sync); `contents` keeps the layout as it was
+  return <div data-card={ix.id} className="contents">{canApprove ? card : <fieldset disabled>{card}</fieldset>}</div>;
 }
 
 /**
