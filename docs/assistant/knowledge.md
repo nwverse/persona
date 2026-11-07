@@ -231,7 +231,8 @@ The same work often has different names in different groups. Previously the mode
   Unmerging takes exactly that back, points the moved chats, people and items
   at the merged project again, restores its status, removes its lines from the survivor's timeline (its own timeline keeps them), marks both dirty for profile rewriting,
   and records the pair as `split` so dedupe never merges it again (a verdict a running dedupe pass reaches afterwards does not replace it). Pinned facts and locks changed since the merge stay. A chain comes apart from its last merge back.
-  When several projects went into the same survivor, what another one still merged there brought too stays on the survivor (and keeps naming it), and goes on that project's record, so unmerging it later takes it off.
+  When several projects went into the same survivor, what a project merged there later (and still merged) brought too stays on the survivor (and keeps naming it), and goes on that project's record, so unmerging it later takes it off.
+  Moments posts pushed past the cap come back as far as the room allows, the newest first; those that still do not fit wait on the records of the projects still merged there.
   Merges made before the record (no `merge`) cannot tell which shared people, chats and items the survivor already had, and dedupe pairs projects by exactly those:
   they stay on the survivor as well (take them off with `remove_people` / `remove_chats`), the merged project's chats, people and items name it again besides the survivor,
   and only the merged project's name and aliases leave the survivor.

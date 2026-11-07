@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"slices"
 	"strings"
 	"testing"
@@ -204,6 +205,15 @@ func TestUnmergeKeepsWhatAnotherMergeBrought(t *testing.T) {
 			}
 		}
 
+		names := func(stage, want string) {
+			t.Helper()
+			for _, ref := range [][2]string{{KindPerson, "p"}, {KindChat, "g"}} {
+				if got := projectsOf(t, e, ref[0], ref[1]); got != want {
+					t.Errorf("%s: %s/%s names %s, want %s", stage, ref[0], ref[1], got, want)
+				}
+			}
+		}
+
 		first := order[0]
 		if _, err := e.Unmerge(first); err != nil {
 			t.Fatal(err)
@@ -212,13 +222,7 @@ func TestUnmergeKeepsWhatAnotherMergeBrought(t *testing.T) {
 		if strings.Join(b.People, ",") != "p0,p" || strings.Join(b.Chats, ",") != "g" {
 			t.Errorf("%s unmerged: b = %+v", first, b)
 		}
-		want := strings.Join(slices.Sorted(slices.Values([]string{first, "b"})), ",")
-		for _, ref := range []string{"people/p", "chats/g"} {
-			kind, id, _ := strings.Cut(ref, "/")
-			if got := projectsOf(t, e, kind, id); got != want {
-				t.Errorf("%s unmerged: %s names %s, want %s", first, ref, got, want)
-			}
-		}
+		names(first+" unmerged", strings.Join(slices.Sorted(slices.Values([]string{first, "b"})), ","))
 		if log := strings.Join(e.Store.Log("b", 50), "\n"); !strings.Contains(log, "同一条进展") {
 			t.Errorf("%s unmerged: b's timeline:\n%s", first, log)
 		}
@@ -230,45 +234,24 @@ func TestUnmergeKeepsWhatAnotherMergeBrought(t *testing.T) {
 		if strings.Join(b.People, ",") != "p0" || len(b.Chats) != 0 {
 			t.Errorf("after both (%v): b = %+v", order, b)
 		}
-		for _, ref := range []string{"people/p", "chats/g"} {
-			kind, id, _ := strings.Cut(ref, "/")
-			if got := projectsOf(t, e, kind, id); got != "a,c" {
-				t.Errorf("after both (%v): %s names %s, want a,c", order, ref, got)
-			}
-		}
+		names(fmt.Sprintf("after both (%v)", order), "a,c")
 	}
 }
 
 // The kept project's own Moments posts that the merged project's newer ones pushed past the cap come back.
 func TestUnmergeRestoresEvictedMoments(t *testing.T) {
 	e := testEngine(t, nil)
-	old, recent := time.Now().Add(-48*time.Hour), time.Now()
-	var mine, theirs []ProjectMoment
-	for i := range maxProjectMoments {
-		mine = append(mine, ProjectMoment{ID: fmt.Sprintf("k%02d", i), At: old.Add(-time.Duration(i) * time.Minute)})
-	}
-	for i := range 10 {
-		theirs = append(theirs, ProjectMoment{ID: fmt.Sprintf("d%02d", i), At: recent.Add(-time.Duration(i) * time.Minute)})
-	}
+	mine := posts("k", maxProjectMoments, time.Now().Add(-48*time.Hour))
 	_ = e.Store.PutProject(&Project{Slug: "keep", Name: "示例 甲", Status: "active", Moments: mine})
-	_ = e.Store.PutProject(&Project{Slug: "drop", Name: "示例 乙", Status: "active", Moments: theirs})
+	_ = e.Store.PutProject(&Project{Slug: "drop", Name: "示例 乙", Status: "active", Moments: posts("d", 10, time.Now())})
 	if err := e.MergeProjects("keep", "drop", "测试"); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := e.Unmerge("drop"); err != nil {
 		t.Fatal(err)
 	}
-	keep, _ := e.Store.Project("keep")
-	var ids []string
-	for _, m := range keep.Moments {
-		ids = append(ids, m.ID)
-	}
-	var want []string
-	for _, m := range mine {
-		want = append(want, m.ID)
-	}
-	if !slices.Equal(ids, want) {
-		t.Fatalf("keep's posts = %v", ids)
+	if keep, _ := e.Store.Project("keep"); !slices.Equal(momentIDs(keep.Moments), momentIDs(mine)) {
+		t.Fatalf("keep's posts = %v", momentIDs(keep.Moments))
 	}
 }
 
@@ -317,34 +300,39 @@ func posts(prefix string, n int, newest time.Time) []ProjectMoment {
 
 // newest are the ids of the newest maxProjectMoments posts among lists.
 func newest(lists ...[]ProjectMoment) []string {
-	var ids []string
-	for _, m := range mergeMoments(nil, slices.Concat(lists...)) {
-		ids = append(ids, m.ID)
-	}
-	return ids
+	return momentIDs(mergeMoments(nil, slices.Concat(lists...)))
 }
 
-// Two projects merged into one and unmerged in either order: while one is still merged the kept project has the
-// newest posts of its own and that one's, and at the end exactly its own, when the second merge pushed the first
-// one's posts past the cap, when both brought the same newer posts, and when each pushed some of its own out.
+// Projects merged into one (in slug order) and unmerged one by one in different orders: after each unmerge the kept
+// project has the newest posts of its own and of those still merged, when a later merge pushed an earlier one's posts
+// past the cap, when two brought the same newer posts, when each pushed some of its own out, and when a post two
+// brought was pushed out by a third.
 func TestUnmergeSiblingsRestoreMoments(t *testing.T) {
 	now := time.Now()
+	shared := posts("s", 1, now.Add(-48*time.Hour).Add(-10*time.Minute-30*time.Second)) // between b10 and b11
 	for _, tc := range []struct {
 		name    string
-		b, a, c []ProjectMoment
+		b       []ProjectMoment
+		brought map[string][]ProjectMoment
+		orders  [][]string
 	}{
-		{"pushed out a sibling's", posts("b", 45, now.Add(-time.Hour)), posts("a", 5, now.Add(-48*time.Hour)), posts("c", 5, now)},
-		{"shared posts", posts("b", maxProjectMoments, now.Add(-48*time.Hour)), posts("s", 10, now), posts("s", 10, now)},
-		{"both pushed", posts("b", maxProjectMoments, now.Add(-48*time.Hour)), posts("a", 5, now.Add(-time.Hour)), posts("c", 5, now)},
+		{"pushed out a sibling's", posts("b", 45, now.Add(-time.Hour)),
+			map[string][]ProjectMoment{"a": posts("a", 5, now.Add(-48*time.Hour)), "c": posts("c", 5, now)}, [][]string{{"a", "c"}, {"c", "a"}}},
+		{"shared posts", posts("b", maxProjectMoments, now.Add(-48*time.Hour)),
+			map[string][]ProjectMoment{"a": posts("s", 10, now), "c": posts("s", 10, now)}, [][]string{{"a", "c"}, {"c", "a"}}},
+		{"both pushed", posts("b", maxProjectMoments, now.Add(-48*time.Hour)),
+			map[string][]ProjectMoment{"a": posts("a", 5, now.Add(-time.Hour)), "c": posts("c", 5, now)}, [][]string{{"a", "c"}, {"c", "a"}}},
+		{"shared post pushed by a third", posts("b", maxProjectMoments, now.Add(-48*time.Hour)),
+			map[string][]ProjectMoment{"a": shared, "c": shared, "d": posts("d", 45, now)}, [][]string{{"a", "d", "c"}, {"d", "a", "c"}, {"c", "a", "d"}}},
 	} {
-		for _, order := range [][]string{{"a", "c"}, {"c", "a"}} {
+		slugs := slices.Sorted(maps.Keys(tc.brought))
+		for _, order := range tc.orders {
 			e := testEngine(t, nil)
-			brought := map[string][]ProjectMoment{"a": tc.a, "c": tc.c}
 			_ = e.Store.PutProject(&Project{Slug: "b", Name: "项目b", Status: "active", Moments: tc.b})
-			for _, slug := range []string{"a", "c"} {
-				_ = e.Store.PutProject(&Project{Slug: slug, Name: "项目" + slug, Status: "active", Moments: brought[slug]})
+			for _, slug := range slugs {
+				_ = e.Store.PutProject(&Project{Slug: slug, Name: "项目" + slug, Status: "active", Moments: tc.brought[slug]})
 			}
-			for _, slug := range []string{"a", "c"} {
+			for _, slug := range slugs {
 				if err := e.MergeProjects("b", slug, "测试"); err != nil {
 					t.Fatal(err)
 				}
@@ -353,17 +341,12 @@ func TestUnmergeSiblingsRestoreMoments(t *testing.T) {
 				if _, err := e.Unmerge(slug); err != nil {
 					t.Fatal(err)
 				}
-				want := newest(tc.b)
-				if i == 0 {
-					want = newest(tc.b, brought[order[1]])
+				lists := [][]ProjectMoment{tc.b}
+				for _, still := range order[i+1:] {
+					lists = append(lists, tc.brought[still])
 				}
-				b, _ := e.Store.Project("b")
-				var got []string
-				for _, m := range b.Moments {
-					got = append(got, m.ID)
-				}
-				if !slices.Equal(got, want) {
-					t.Errorf("%s, unmerged %v: b's posts = %v\nwant %v", tc.name, order[:i+1], got, want)
+				if b, _ := e.Store.Project("b"); !slices.Equal(momentIDs(b.Moments), newest(lists...)) {
+					t.Errorf("%s, unmerged %v: b's posts = %v\nwant %v", tc.name, order[:i+1], momentIDs(b.Moments), newest(lists...))
 				}
 			}
 		}

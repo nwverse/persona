@@ -133,7 +133,9 @@ type ProjectMerge struct {
 	Dirs     []string  `json:"dirs,omitempty"`
 	Keywords []string  `json:"keywords,omitempty"`
 	Moments  []string  `json:"moments,omitempty"` // post ids
-	// Evicted: the kept project's own Moments posts the merge pushed past maxProjectMoments.
+	// Evicted: posts of the kept project's (its own, or another merged project's) past maxProjectMoments that come
+	// back as far as room allows when this merge is undone: those the merge pushed out, and those an unmerge of
+	// another project merged into it had no room for.
 	Evicted []ProjectMoment `json:"evicted,omitempty"`
 	// Moved: the chats, people and items ("<kind>/<id>") that named this project and not the kept one; the merge made
 	// them name the kept one instead.
