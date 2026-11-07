@@ -159,11 +159,13 @@ struct ViewedImagesRow: View, Equatable {
 
     private func tapped<Content: View>(_ im: ViewedImage, index: Int, @ViewBuilder label: () -> Content) -> some View {
         let caption = caption(im)
-        return Button { open(index) } label: { label() }
+        // A picture that did not load: the tap asks the hub again instead of opening a viewer with nothing in it (#559).
+        let again = ImageRetries.shared.canRetry(im.payload)
+        return Button { if !ImageRetries.shared.retry(im.payload) { open(index) } } label: { label() }
             .buttonStyle(.plain)
             .matchedTransitionSource(id: "viewed-" + im.id, in: pageZoom ?? fallbackZoom)
-            .accessibilityLabel(caption)
-            .accessibilityHint("View full size")
+            .accessibilityLabel(again ? Text("Image didn't load. Tap to retry") : Text(caption))
+            .accessibilityHint(again ? Text(verbatim: "") : Text("View full size"))
             .accessibilityIdentifier("viewed-image-\(index)")
             #if os(macOS)
             .help(caption)
@@ -245,6 +247,8 @@ struct ViewedImageThumb: View {
     @Environment(\.displayScale) private var displayScale
     @Environment(\.dynamicTypeSize) private var typeSize
     @State private var picture: UIImage?
+    /// Whose last load gave no picture, asked again by the row's tap (#559). Only a payload's: a file's keeps its symbol.
+    private let retries = ImageRetries.shared
 
     /// The long edge to decode to, in points: the picture fitted in it still fills the widest or the narrowest tile.
     private var side: CGFloat { height * Theme.sizeScale(typeSize) * 1.6 }
@@ -256,6 +260,12 @@ struct ViewedImageThumb: View {
             Theme.Fill.well
             if let picture = picture ?? cached {
                 Image(uiImage: picture).resizable().scaledToFill()
+            } else if let p = image.payload, retries.didFail(p) {
+                // Only a payload's failure is said: a file's thumbnail that did not come keeps its symbol
+                // (`FileThumbnails` keeps that failure for the session, a retry would not ask again).
+                ImageNotLoaded(canRetry: p.ref != nil)
+            } else if let p = image.payload, retries.attempt(p) > 0 { // asked again: the tap shows it was taken
+                ProgressView().controlSize(.small).frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
                 Image(systemName: symbol).font(Theme.Font.secondary).foregroundStyle(.tertiary)
             }
@@ -264,7 +274,8 @@ struct ViewedImageThumb: View {
         .clipShape(shape)
         .overlay(shape.stroke(Theme.cardStroke, lineWidth: Theme.Size.hairline))
         .overlay(alignment: .bottomLeading) {
-            if badge, image.source == .screenshot || image.source == .browser {
+            // Not over the not-loaded placeholder on a small tile.
+            if badge, !showsNotLoaded, image.source == .screenshot || image.source == .browser {
                 Image(systemName: symbol)
                     .font(Theme.Font.labelStrong)
                     .foregroundStyle(.white)
@@ -275,8 +286,15 @@ struct ViewedImageThumb: View {
             }
         }
         .animation(Theme.Motion.state, value: picture != nil)
-        .task(id: image.id) { picture = await load() }
+        .task(id: "\(image.id)#\(image.payload.map(retries.attempt) ?? 0)") {
+            let loaded = await load()
+            picture = loaded
+            if let p = image.payload, !Task.isCancelled { retries.loaded(p, ok: loaded != nil) }
+        }
     }
+
+    /// The tile shows `ImageNotLoaded`: no picture, and its payload's load failed.
+    private var showsNotLoaded: Bool { image.payload.map(retries.didFail) == true && picture == nil && cached == nil }
 
     private var symbol: String {
         switch image.source {

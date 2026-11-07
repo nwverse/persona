@@ -163,7 +163,7 @@ func TestRuntimeIdleSocketsAreBoundedAndRevoked(t *testing.T) {
 	l.mu.Lock()
 	count := len(l.connections)
 	l.mu.Unlock()
-	if count > 16 {
+	if count > runtimeConnsPerListener {
 		t.Fatal("unbounded pre-header sockets", count)
 	}
 	p.Unregister("a")

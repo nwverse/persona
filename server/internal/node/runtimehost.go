@@ -14,6 +14,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/acceptloop"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/rpc"
 	"github.com/nwverse/persona/server/internal/runtimepkg"
@@ -142,7 +143,7 @@ func (rh *RuntimeHost) listenOnce(ctx context.Context) (net.Listener, error) {
 		<-ctx.Done()
 		ln.Close()
 	}()
-	go acceptLoop(ctx, ln, rh.logger.Printf, func(c net.Conn) { go rh.serve(ctx, c) })
+	go acceptloop.Run(ctx, ln, rh.logger.Printf, func(c net.Conn) { go rh.serve(ctx, c) })
 	return ln, nil
 }
 

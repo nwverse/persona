@@ -40,6 +40,7 @@ object NewProviderPreview {
 internal fun NewProviderPage(
     providers: ProviderSetup, onBack: () -> Unit, onSaved: (String) -> Unit, preferPreset: Boolean = false,
     readiness: AssistantReadinessSource? = null,
+    manager: String? = null,
 ) {
     val model = remember(providers, readiness) {
         NewProviderModel(providers, readiness?.let { source -> suspend { if (source.available.first()) source.readiness(false) else null } })
@@ -96,6 +97,7 @@ internal fun NewProviderPage(
             }
         }
     }) {
+        manager?.let { owner -> item("manager") { ModelConfigurationOwner(owner) } }
         if (!state.loaded) item("loading") { JLoading() }
         when (state.step) {
             WizardStep.Pick -> if (state.loaded) pickStep(res, state, model::choose)

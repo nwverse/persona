@@ -1,4 +1,6 @@
+from contextlib import redirect_stderr
 import importlib.util
+import io
 import json
 import os
 from pathlib import Path
@@ -277,6 +279,107 @@ class ReservedDomainTests(unittest.TestCase):
         self.assertEqual(pc.problems("the hub is notexample.com", words), ["notexample.com"])
 
 
+class OrdinaryWordTests(unittest.TestCase):
+    """A config value that is an ordinary word (a machine id named after a room) matches every variable, comment and
+    environment variable of that name. A `!word` line in private-words.txt marks such a value as not private, and every
+    hit names where its value comes from, so a false positive can be told from a leak without printing the value (#1065)."""
+
+    WORD = "attic"  # a made-up machine id
+    CODE = ['attic := os.Getenv("PERSONA_ATTIC")', "// the attic machine runs the node", "let attic_id = attic"]
+
+    def scan(self, config, words):
+        """pc.term_sources() with only this config and private-words.txt on the machine."""
+        with tempfile.TemporaryDirectory(prefix="privacy-check-test-") as temp:
+            home = Path(temp)
+            directory = home / ".config/persona"
+            directory.mkdir(parents=True)
+            (directory / "config.json").write_text(json.dumps(config))
+            (directory / "private-words.txt").write_text(words)
+            env = {k: v for k, v in os.environ.items() if k not in ("PERSONA_CONFIG", "JARVIS_CONFIG")}
+            env["XDG_CONFIG_HOME"] = str(home / ".config")
+            with patch.object(pc, "HOME", str(home)), patch.object(pc, "ROOT", str(home)), \
+                    patch.dict(os.environ, env, clear=True):
+                return pc.term_sources()
+
+    def sources(self, config, words=""):
+        return self.scan(config, words)[0]
+
+    def words(self, config, words=""):
+        return list(self.sources(config, words))
+
+    def machines(self, *ids):
+        return {"hub": {"machine": ids[0]}, "machines": [{"id": i, "ssh": i} for i in ids]}
+
+    def test_a_config_word_is_found_without_a_waiver(self):
+        words = self.words(self.machines(self.WORD))
+        self.assertIn(self.WORD, words)
+        for line in self.CODE:
+            with self.subTest(line=line):
+                self.assertEqual(pc.problems(line, words), [self.WORD])
+
+    def test_a_waived_config_word_is_not_searched(self):
+        words = self.words(self.machines(self.WORD, "Cellar"), "# machine ids\n!attic\n !cellar \n")
+        self.assertNotIn(self.WORD, words)
+        self.assertNotIn("Cellar", words)
+        for line in self.CODE + ["the Cellar build"]:
+            with self.subTest(line=line):
+                self.assertEqual(pc.problems(line, words), [])
+
+    def test_a_waiver_only_takes_back_a_value_made_of_letters(self):
+        values = ["attic2", "attic-box", "attic.lan", "/srv/attic", "attic box", "Küche"]
+        stderr = io.StringIO()
+        with redirect_stderr(stderr):
+            words = self.words({"machines": [{"id": v} for v in values]}, "".join("!" + v + "\n" for v in values))
+        for value in values:
+            with self.subTest(value=value):
+                self.assertIn(value, words)
+                # A line that is not a waiver keeps what it did before: it is searched as written.
+                self.assertIn("!" + value, words)
+        self.assertIn("private-words.txt:1:", stderr.getvalue())
+        self.assertNotIn("attic", stderr.getvalue())
+
+    def test_a_waiver_does_not_take_back_a_listed_word(self):
+        words = self.words(self.machines(self.WORD), "attic\n!attic\n")
+        self.assertIn(self.WORD, words)
+
+    def test_every_hit_names_where_its_value_came_from(self):
+        config = self.machines(self.WORD)
+        config["lan_host"] = "attic.lan"
+        config["publish"] = {"site_url": "https://attic.lan/privacy"}
+        sources = self.sources(config, "attic-team\n")
+        self.assertEqual(sources[self.WORD], ["config hub.machine", "config machines.id", "config machines.ssh"])
+        self.assertEqual(sources["attic.lan"], ["config lan_host", "config publish.site_url"])
+        self.assertEqual(sources["attic-team"], ["private-words.txt"])
+        home = [w for w in sources if w.startswith("/Users/")]
+        self.assertEqual([sources[w] for w in home], [["the home directory"]])
+        self.assertEqual(pc.private_kind(self.WORD, sources),
+                         "private value (5 chars) from config hub.machine, config machines.id, config machines.ssh")
+        self.assertEqual(pc.private_kind("attic-team", sources), "private value (10 chars) from private-words.txt")
+        self.assertEqual(pc.private_kind("other-value", sources), "private value (11 chars)")
+
+    def test_a_key_that_holds_a_value_is_not_printed(self):
+        bundle = "com.zorblax.persona"  # a made-up bundle id
+        config = self.machines(self.WORD)
+        config["app"] = {"bundle_id": bundle}
+        config["app_store"] = {"provisioning_profiles": {bundle + ".share": "Zorblax Share Profile"}}
+        config["aliases"] = {self.WORD: "zorblax-box", "build.simulator": "zorblax-sim"}
+        sources = self.sources(config)
+        self.assertEqual(sources["Zorblax Share Profile"], ["config app_store.provisioning_profiles.*"])
+        self.assertEqual(sources["zorblax-box"], ["config aliases.*"])
+        # The rules that look at a key (os, simulator, url, path) see the whole key, dots and all.
+        self.assertEqual(sources["zorblax-sim"], ["config aliases.*"])
+        for where in sum(sources.values(), []):
+            with self.subTest(where=where):
+                self.assertNotIn("zorblax", where)
+                self.assertNotIn(self.WORD, where.replace("config ", ""))
+
+    def test_the_waiver_hint_only_follows_a_hit_a_waiver_can_take_back(self):
+        config = self.machines(self.WORD, "Cellar")
+        config["lan_host"] = "attic.lan"
+        config["profile"] = "Zorb Share Prod"
+        self.assertEqual(self.scan(config, "Cellar\n")[2], {self.WORD})
+
+
 class NpmLockTests(unittest.TestCase):
     def test_public_lockfiles(self):
         for version in [1, 2, 3]:
@@ -471,6 +574,39 @@ class PrivacyCheckIntegrationTests(unittest.TestCase):
         self.assertNotIn("notes.md", output)
         self.assertNotIn("notexample", output)
 
+    def test_a_config_word_hit_names_its_key_and_a_waiver_clears_it(self):
+        word = "attic"  # a made-up machine id that is an ordinary word (#1065)
+        config = self.home / ".config/persona/config.json"
+        config.parent.mkdir(parents=True)
+        config.write_text(json.dumps({"machines": [{"id": word, "ssh": word}], "lan_host": PRIVATE_IP}))
+        (self.repo / "node.go").write_text('attic := os.Getenv("PERSONA_ATTIC") // the attic machine\n')
+        (self.repo / "hosts.md").write_text("The other machine is " + PRIVATE_IP + ".\n")
+        self.git("add", "node.go", "hosts.md")
+        message = self.repo / ".git/test-message"
+        message.write_text("Read the attic id from the environment\n")
+        result = self.scan("--message", str(message))
+        self.assertNotEqual(result.returncode, 0)
+        output = result.stdout + result.stderr
+        self.assertIn("node.go:1: private value (5 chars) from config machines.id, config machines.ssh", output)
+        self.assertIn("commit message:1: private value (5 chars) from config machines.id", output)
+        self.assertIn("hosts.md:1: private IP from config lan_host", output)
+        self.assertIn("!<word>", result.stderr)
+        self.assertNotIn(word, output.lower())
+        self.assertNotIn(PRIVATE_IP, output)
+        (self.home / ".config/persona/private-words.txt").write_text("!" + word + "\n!" + PRIVATE_IP + "\n")
+        result = self.scan("--message", str(message))
+        output = result.stdout + result.stderr
+        self.assertNotIn("node.go", output)
+        self.assertNotIn("commit message", output)
+        self.assertIn("hosts.md:1: private IP from config lan_host", output)
+        self.assertIn("private-words.txt:2:", result.stderr)
+        self.assertNotIn("!<word>", result.stderr)  # what is left (an address) no waiver can take back
+        self.assertNotIn(PRIVATE_IP, output)
+        (self.repo / "hosts.md").unlink()
+        self.git("rm", "-q", "--cached", "hosts.md")
+        result = self.scan("--message", str(message))
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
     def test_staged_unsafe_worktree_safe(self):
         self.write_lock(UNAPPROVED_URL)
         self.git("add", "web/package-lock.json")
@@ -662,7 +798,7 @@ class GitBatchTests(unittest.TestCase):
 
     def test_main_fails_closed_if_batch_read_fails(self):
         with patch.object(pc, "git_file_data", side_effect=ValueError("broken batch")), \
-                patch.object(pc, "terms", return_value=([], [])), patch.object(pc, "module_paths", return_value=None), \
+                patch.object(pc, "term_sources", return_value=({}, set(), set())), patch.object(pc, "module_paths", return_value=None), \
                 patch.object(pc, "git", return_value=b"one.txt\0"), patch.object(sys, "argv", ["privacy_check", "--staged"]):
             with self.assertRaisesRegex(SystemExit, "scan did not complete"):
                 pc.main()

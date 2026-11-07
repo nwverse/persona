@@ -153,6 +153,8 @@ data class CoreText(val key: Key, val args: List<Any> = emptyList()) {
         SourceCodexHistory("Codex history"),
         SourceIdentityConflict("Identity conflict"),
         SourceClaudeBackground("Claude background"),
+        SourceClaudeDesktop("Claude desktop app"),
+        SourceClaudeTerminal("Claude in a terminal"),
         SourceNoSend("This source can’t send yet"),
         ReadOnlyBecause("View only: %1\$s"),
         SessionReadOnly("This session is view only"),

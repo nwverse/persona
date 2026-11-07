@@ -9,8 +9,9 @@ import SwiftUI
 // the window *and* its page is in front. Under the system TabView this is what happens already (the two change
 // together), and a hidden tab that the system briefly puts back in the window no longer restarts its work.
 //
-// Deliberately not used for a chat's message subscription, dictation or clocks: a reply that is being written and an
-// Agent's work go on whichever page is shown.
+// A visible chat's transcript subscription also uses this scope: switching pages must not render a hidden reply or
+// mark it read. The Agent still runs on the hub; returning resumes from the retained sequence. Dictation and clocks
+// deliberately continue whichever page is shown.
 
 extension EnvironmentValues {
     /// Whether this view's tab is the one picked (`TabActivityScope`). True outside any tab.
