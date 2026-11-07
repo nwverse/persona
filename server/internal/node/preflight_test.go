@@ -123,9 +123,9 @@ func TestPreflightKillsAHungRead(t *testing.T) {
 	}
 }
 
-// Starting the child is not a read (#1110): the test binary started under the whole server suite's load may say its
-// first line after more than a whole run of the tests' short stalls. The start has a budget of its own, and the
-// reads' stalls count from that line.
+// Starting the child is not a read (#1110): under the whole server suite's load the test binary can take longer than
+// one of the tests' short stalls to say its first line. The start has a budget of its own, and the reads' stalls and
+// the run's cap count past it: a child slower to start than a whole run of stalls still reads every path.
 func TestPreflightGivesTheChildTimeToStart(t *testing.T) {
 	home, claude, work := preflightHome(t)
 	env := testPreflightEnv(home)
@@ -136,8 +136,8 @@ func TestPreflightGivesTheChildTimeToStart(t *testing.T) {
 	if c.Status != DoctorOK || !strings.Contains(c.Detail, "7 个路径都能读") {
 		t.Errorf("%+v", c)
 	}
-	// A child that says nothing for its whole start is still stopped then, not waited for: nothing read, nothing
-	// blamed.
+	// A child that never says its first line is stopped rather than waited for (it would sleep a minute): nothing
+	// read, nothing blamed.
 	env.childEnv = append(slices.Clone(childEnv), "NODE_TEST_PREFLIGHT_SLOW=1m")
 	env.start = 200 * time.Millisecond
 	start := time.Now()
@@ -396,7 +396,7 @@ func TestAskNodePreflightSaysWhyNot(t *testing.T) {
 
 // The command line waits for the node longer than the node's longest run, so a slow run is not taken for no node.
 func TestPreflightAnswerWaitOutlastsTheRun(t *testing.T) {
-	if run := preflightMaxStalls*preflightStall + preflightLinger; preflightAnswerWait <= run {
+	if run := preflightStartDefault + (preflightMaxStalls-1)*preflightStall + preflightLinger; preflightAnswerWait <= run {
 		t.Errorf("waits %s for a run of up to %s", preflightAnswerWait, run)
 	}
 }

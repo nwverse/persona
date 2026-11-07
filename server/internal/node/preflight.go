@@ -2,6 +2,7 @@ package node
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -39,10 +40,13 @@ const pathAccessCheck = "path-access"
 // preflightStall: a read that has not returned after this long is blocked.
 const preflightStall = 3 * time.Second
 
-// preflightStart is how long the child may take to say its first line (its exec, its runtime coming up): starting is
-// not a read. One stall, so a whole run is still preflightMaxStalls stalls. Tests give it longer (TestMain): under the
-// whole server suite's load the test binary can take longer than that to come up (#1110).
-var preflightStart = preflightStall
+// preflightStartDefault is how long the child may take to say its first line (its exec, its runtime coming up):
+// starting is not a read. One stall, so a whole run is still preflightMaxStalls stalls.
+const preflightStartDefault = preflightStall
+
+// preflightStart is preflightStartDefault but in tests, whose stalls are short (TestMain): under the whole server
+// suite's load the test binary took longer than one of those to come up (#1110).
+var preflightStart = preflightStartDefault
 
 // preflightMaxStalls caps a whole run at this many stalls: the child's start (preflightStart) is the first, then the
 // reads, ones that each return but slowly (a sleeping network disk) included; what was not read by then is counted,
@@ -54,8 +58,9 @@ const preflightMaxStalls = 5
 const preflightLinger = 3 * time.Second
 
 // preflightAnswerWait is how long `node doctor` waits for the node's answer: longer than the node's longest run
-// (preflightMaxStalls stalls and preflightLinger), so a slow run is never taken for a node that does not answer.
-const preflightAnswerWait = preflightMaxStalls*preflightStall + preflightLinger + 5*time.Second
+// (its start, preflightMaxStalls-1 more stalls and preflightLinger), so a slow run is never taken for a node that
+// does not answer.
+const preflightAnswerWait = preflightStartDefault + (preflightMaxStalls-1)*preflightStall + preflightLinger + 5*time.Second
 
 // preflightMaxDirs caps the working directories read: the most recently used.
 const preflightMaxDirs = 20
@@ -206,8 +211,8 @@ type preflightOutcome struct {
 }
 
 // runPreflight reads items in a child process (env.child) and kills its whole process group as soon as one read has
-// taken env.stall (or the child has said nothing env.start after it was started, or the run has taken env.start and
-// preflightMaxStalls-1 more stalls, or ctx ends).
+// taken env.stall (or the child has said nothing env.start, one stall if unset, after it was started, or the run has
+// taken that start and preflightMaxStalls-1 more stalls, or ctx ends).
 func runPreflight(ctx context.Context, items []preflightItem, env preflightEnv) preflightOutcome {
 	if len(items) == 0 {
 		return preflightOutcome{}
@@ -215,7 +220,7 @@ func runPreflight(ctx context.Context, items []preflightItem, env preflightEnv) 
 	if len(env.child) == 0 {
 		return preflightOutcome{err: errors.New("no program to read with")}
 	}
-	stall := env.stall
+	stall, start := env.stall, cmp.Or(env.start, env.stall)
 	args := slices.Clone(env.child[1:])
 	for _, it := range items {
 		args = append(args, it.kind[:1]+":"+it.path)
@@ -235,9 +240,9 @@ func runPreflight(ctx context.Context, items []preflightItem, env preflightEnv) 
 		_ = cmd.Wait() // a read that fails is in the output; the exit status says nothing more
 		close(done)
 	}()
-	idle := time.NewTimer(env.start) // until its first line: starting is not a read
+	idle := time.NewTimer(start) // until its first line: starting is not a read
 	defer idle.Stop()
-	all := time.NewTimer(env.start + (preflightMaxStalls-1)*stall)
+	all := time.NewTimer(start + (preflightMaxStalls-1)*stall)
 	defer all.Stop()
 	finished, hung := false, false
 wait:
