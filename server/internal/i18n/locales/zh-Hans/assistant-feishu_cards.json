@@ -1,6 +1,7 @@
 {
   "handled": "已处理",
   "dismissed": "已忽略",
+  "replied_in_chat": "已在对话里回复",
   "approved_run": "已批准，自动执行",
   "approved_edits": "已批准，自动接受编辑",
   "approved": "已批准",
