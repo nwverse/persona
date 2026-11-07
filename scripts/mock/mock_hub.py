@@ -3366,6 +3366,114 @@ if os.environ.get("MOCK_SETTINGS_INPUT"):
         "fields": [{"key": "password", "label": "密码 / 授权码", "placeholder": "填写邮箱授权码", "secret": True}],
     })
 
+# MOCK_DELEGATE=1 (#544, docs/assistant/assistant.md "Assistant answers questions first"): questions the assistant takes
+# first. The tests question is one it is still looking at (delegating); GET /mock/delegate?handover=ix_tests hands it to
+# the user (sent again without delegating, with what it filled in). The PR review session asks one it already handed
+# over (delegate, recommending one of the options). The release session asks one it is looking at that GET
+# /mock/delegate?answer=ix_release_delegate answers as the assistant (interaction_resolved with answered_by, reason and
+# answers); its history holds one more it answered an hour ago, in the hub's shape ({interaction, status, resolution,
+# resolved_at}). POST …/reanswer takes a change of answer as the hub does: 409 for a question the assistant did not
+# answer, 400 without an answer, else interaction_reanswered to every app (GET /mock/reanswered lists them).
+DELEGATE_CONTEXT = {
+    "ix_tests": {"what": "网络层的测试用哪个框架", "why_now": "第一批测试要按它来写，之后再换就得重写",
+                 "recommend": "Swift Testing (Recommended)", "cost": "不选的话这批测试先停着",
+                 "reason": "现有的 UI 测试用的是 XCTest，换不换是你的约定", "deadline": later(hours=24)},
+}
+DELEGATE_ANSWERS = {
+    "ix_release_delegate": ({"发布说明里写不写已知问题？": "写，单列一段"}, "上一版的发布说明也单列了已知问题，照旧"),
+}
+DELEGATE_HISTORY = []
+REANSWERED = []
+if os.environ.get("MOCK_DELEGATE"):
+    INTERACTIONS[0]["delegating"] = True
+    for _s in SESSIONS:
+        if _s["session_id"] in (REVIEW, RELEASE):
+            _s.update(status="blocked", state="needs_you", pending_interactions=1)
+    INTERACTIONS.append(
+        {"id": "ix_review_delegate", "machine_id": "macbook", "session_id": REVIEW, "session_title": "检查 PR #42 的改动",
+         "cwd": "/Users/me/code/weather", "kind": "question", "created_at": ago(minutes=3), "expires_at": later(hours=24),
+         "tool_name": "AskUserQuestion", "tool_use_id": "toolu_d1",
+         "questions": [{"question": "两条命名建议要不要直接推到 PR 的分支上？", "header": "推送", "multi_select": False, "options": [
+             {"label": "先不推，留评论", "description": "让作者自己改"},
+             {"label": "直接推到 review/naming", "description": "改动只有两处，推完在 PR 里说一声"}]}],
+         "delegate": {"what": "要不要往别人的 PR 分支上推提交", "why_now": "评论已经写好，推不推决定下一步",
+                      "recommend": "先不推，留评论", "cost": "不答的话 PR 停在待改",
+                      "reason": "往别人的分支上推，作者会看到，要你来定", "deadline": later(hours=24)}})
+    INTERACTIONS.append(
+        {"id": "ix_release_delegate", "machine_id": "macbook", "session_id": RELEASE, "session_title": "整理发布说明",
+         "cwd": "/Users/me/code/weather", "kind": "question", "created_at": ago(minutes=1), "expires_at": later(hours=24),
+         "tool_name": "AskUserQuestion", "tool_use_id": "toolu_d2", "delegating": True,
+         "questions": [{"question": "发布说明里写不写已知问题？", "header": "已知问题", "multi_select": False, "options": [
+             {"label": "写，单列一段", "description": "放在最后，附上绕过的办法"},
+             {"label": "不写", "description": "只写新功能和修复"}]}]})
+    DELEGATE_HISTORY.append(
+        {"interaction": {"id": "ix_release_lang", "machine_id": "macbook", "session_id": RELEASE, "session_title": "整理发布说明",
+                         "kind": "question", "created_at": ago(minutes=62), "tool_name": "AskUserQuestion",
+                         "questions": [{"question": "发布说明先写哪种语言？", "header": "语言", "multi_select": False, "options": [
+                             {"label": "中文", "description": "再翻成英文"}, {"label": "英文", "description": "再翻成中文"}]}]},
+         "status": "resolved", "resolved_at": ago(minutes=61),
+         "resolution": {"answers": {"发布说明先写哪种语言？": "中文"}, "answered_by": "assistant",
+                        "reason": "这个仓库的提交和文档都是中文先写"}})
+
+
+def delegate_history(q):
+    """The questions the assistant answered (MOCK_DELEGATE) for GET …/interactions/history: of the machine and session
+    asked for, as the hub filters them."""
+    with REQUEST_LOCK:
+        rows = list(DELEGATE_HISTORY)
+    for key in ("machine_id", "session_id"):
+        want = q.get(key, [""])[0]
+        rows = [r for r in rows if not want or r["interaction"].get(key) == want]
+    return [r for r in rows if not reshaped() or kept(r["interaction"].get("machine_id"))]
+
+
+def mock_delegate(q):
+    """GET /mock/delegate?answer=<id>: the assistant answers a question it is looking at (MOCK_DELEGATE);
+    ?handover=<id>: it hands the question to the user instead."""
+    answer, handover = q.get("answer", [""])[0], q.get("handover", [""])[0]
+    with REQUEST_LOCK:
+        ix = next((x for x in mock_interactions() if x["id"] in (answer, handover) and x.get("delegating")), None)
+        if ix is None:
+            return {"error": "no question the assistant is looking at: " + (answer or handover)}, 404
+        if handover:
+            ix.pop("delegating", None)
+            ix["delegate"] = DELEGATE_CONTEXT.get(ix["id"], {})
+            event = {"type": "interaction", "interaction": ix}
+        else:
+            answers, reason = DELEGATE_ANSWERS.get(
+                ix["id"], ({x["question"]: x["options"][0]["label"] for x in ix["questions"]}, "按惯例选的"))
+            for lst in (MOCK_INTERACTIONS, INTERACTIONS):
+                lst[:] = [x for x in lst if x["id"] != ix["id"]]
+            DELEGATE_HISTORY.insert(0, {"interaction": {k: v for k, v in ix.items() if k != "delegating"},
+                                        "status": "resolved",
+                                        "resolved_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+                                        "resolution": {"answers": answers, "answered_by": "assistant", "reason": reason}})
+            event = {"type": "interaction_resolved", "id": ix["id"], "answered_by": "assistant", "reason": reason,
+                     "answers": answers}
+    for out, _ in list(LIVE):
+        try: out(event)
+        except Exception: pass
+    push_fleet()
+    return {"ok": True}, 200
+
+
+def mock_reanswer(request_id, body):
+    """POST /api/v1/interactions/{id}/reanswer as the hub takes it (assistant/fleet_delegate.go): only for a question
+    the assistant answered, and only the answers that say something go."""
+    with REQUEST_LOCK:
+        if not any(r["interaction"]["id"] == request_id for r in DELEGATE_HISTORY):
+            return {"error": "this question was not answered by the assistant"}, 409
+        answers = body.get("answers") if isinstance(body.get("answers"), dict) else {}
+        said = {k: v.strip() for k, v in answers.items() if isinstance(v, str) and v.strip()}
+        if not said:
+            return {"error": "no answers"}, 400
+        REANSWERED.append({"id": request_id, "answers": said})
+    for out, _ in list(LIVE):
+        try: out({"type": "interaction_reanswered", "id": request_id, "resolution": {"answers": said}})
+        except Exception: pass
+    return {"ok": True}, 200
+
+
 # MOCK_ELICITATION=1: two MCP elicitation requests on the PR review session (docs/protocol/protocol.md "MCP elicitation"), a
 # form in the schema subset the clients render and a link to open first; =unsupported makes the form one they don't.
 if os.environ.get("MOCK_ELICITATION"):
@@ -12385,7 +12493,10 @@ class H(BaseHTTPRequestHandler):
         if p == "/api/v1/interactions": return self.send_json({"interactions": out_by_machine(mock_interactions())})
         if p == "/api/v1/fleet":
             return self.send_json({"fleet": mock_fleet() if MOCK_FLEET else {"phase": "", "needsYou": 0, "working": 0, "unread": 0, "items": []}})
-        if p == "/api/v1/interactions/history": return self.send_json({"interactions": out_by_machine(INTERACTION_HISTORY)})
+        if p == "/api/v1/interactions/history":
+            return self.send_json({"interactions": out_by_machine(INTERACTION_HISTORY) + delegate_history(q)})
+        if p == "/mock/delegate": return self.send_json(*mock_delegate(q))
+        if p == "/mock/reanswered": return self.send_json({"reanswered": REANSWERED})
         if p == "/mock/resolved": return self.send_json({"resolved": RESOLVED})
         if p == "/mock/phone":
             with FAULT_LOCK:
@@ -14146,6 +14257,8 @@ class H(BaseHTTPRequestHandler):
             FEISHU_BOT.update(owner=None, agents=[], target="", pairing=None)
             return self.send_json({k: v for k, v in FEISHU_BOT.items() if v is not None})
         if p == "/api/v1/bots/feishu/test": return self.send_json({"ok": True})
+        if p.startswith("/api/v1/interactions/") and p.endswith("/reanswer") and p.count("/") == 5:
+            return self.send_json(*mock_reanswer(p.split("/")[4], json.loads(self.last_body or b"{}")))
         if p.startswith("/api/v1/interactions/") and p.endswith("/resolve"):  # notification buttons (UI test reads it back)
             RESOLVED.append({"id": p.split("/")[4], "resolution": json.loads(self.last_body or b"{}")})
             if os.environ.get("MOCK_CODEX") and p.split("/")[4] == "cxa_orders_curl" and \
