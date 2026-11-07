@@ -268,14 +268,6 @@ func checkSocketPath(path string) error {
 	return i18n.Err("hub-extensions.socket_path_too_long", i18n.Args{"path": path, "length": len(path), "max": maxSocketPath})
 }
 
-// warnSocketPath says in extension id's log when its HTTP socket at path is too long to bind. It still starts: the
-// program binds that socket itself, and one that speaks the protocol keeps that side working without it.
-func (ps *extensions) warnSocketPath(id, path string) {
-	if err := checkSocketPath(path); err != nil {
-		ps.logf("extension %s: %v", id, err)
-	}
-}
-
 // legacyManifest is a hub.json entry as a manifest: a program serving HTTP (no protocol) contributing its kind, run
 // from the start, with the hub's API (it has always had the hub's token).
 func legacyManifest(c ExtensionConfig) *extension.Manifest {
@@ -751,6 +743,15 @@ func (ps *extensions) spec(ctx context.Context, p *extension.Extension, hp *hubE
 	if err == nil {
 		err = ps.confine(ctx, p, hp, &s) // its sandbox and the egress proxy (extension_sandbox.go)
 	}
+	// The HTTP socket the manager hands out, where confine left it; the program binds it itself. One that serves only
+	// HTTP has nothing to run without it. One that speaks the protocol still starts and its log says why its HTTP side
+	// will not: a program that keeps serving the protocol without that socket keeps working (the Go SDK's Main exits).
+	if err == nil && s.HTTP && p.Record.Remote == nil && p.Legacy == nil {
+		if err = checkSocketPath(s.Socket); err != nil && s.RPC {
+			ps.logf("extension %s: %v", p.Record.ID, err)
+			err = nil
+		}
+	}
 	s.Env = withExtensionEnv(s.Env)
 	return s, err
 }
@@ -860,7 +861,6 @@ func (ps *extensions) specOf(ctx context.Context, p *extension.Extension, hp *hu
 		}
 		if rt.HTTP {
 			hp.socket = filepath.Join(ps.root, id+".sock")
-			ps.warnSocketPath(id, hp.socket)
 			s.HTTP, s.Socket = true, hp.socket
 			s.Env = append(s.Env, "PERSONA_PLUGIN_SOCKET="+hp.socket)
 		}

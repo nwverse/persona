@@ -402,7 +402,6 @@ func (ps *extensions) confine(ctx context.Context, p *extension.Extension, hp *h
 	}
 	if s.HTTP {
 		sock := filepath.Join(run, "http.sock")
-		ps.warnSocketPath(id, sock)
 		hp.socket, s.Socket = sock, sock
 		s.Env = setEnv(s.Env, "PERSONA_PLUGIN_SOCKET", sock)
 	}
