@@ -43,13 +43,14 @@ final class ChatCatchUpTests: XCTestCase {
         let reply = app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", answer)).firstMatch
         XCTAssertTrue(message.waitForExistence(timeout: 20), "the new message never came in without its push")
         XCTAssertTrue(reply.waitForExistence(timeout: 5), "the new reply never came in without its push")
-        let shot = XCTAttachment(screenshot: app.screenshot())
+        let screen = app.screenshot()
+        let shot = XCTAttachment(screenshot: screen)
         shot.name = "caught-up"
         shot.lifetime = .keepAlways
         add(shot)
         if let dir = ProcessInfo.processInfo.environment["PERSONA_SHOTS"] {
             let style = ProcessInfo.processInfo.environment["PERSONA_STYLE"] ?? "light"
-            try? app.screenshot().pngRepresentation.write(to: URL(fileURLWithPath: "\(dir)/catch-up-\(style).png"))
+            try? screen.pngRepresentation.write(to: URL(fileURLWithPath: "\(dir)/catch-up-\(style).png"))
         }
     }
 }

@@ -55,8 +55,7 @@ nonisolated enum ChatAwaitingTurn: Equatable {
         return pending.contains { p in
             guard onItsWay(p), let at = p.createdAt else { return false }
             if let newestLine, newestLine >= at { return false }
-            let gap = since.timeIntervalSince(at)
-            return gap >= 0 && gap < window
+            return since >= at && within(at, since)
         }
     }
 
