@@ -302,6 +302,7 @@ var Features = []string{
 	"file_convert",             // GET /api/v1/machines/{mid}/file/convert: LibreOffice → PDF on the machine
 	"git_blob",                 // GET /api/v1/machines/{mid}/git/blob: a file at a version, for comparing
 	"git_write",                // the Git panel's writes and the branch's pull request under /api/v1/machines/{mid}/git/ (#6121)
+	"git_review",               // GET /api/v1/machines/{mid}/git/review: every file a scope changed, with its hunks (#151)
 	"file_upload",              // POST /api/v1/machines/{mid}/files (docs/protocol/protocol.md "Sending files")
 	"machine_trust",            // machines' trust and error_code, POST /api/v1/machines/{id}/confirm|reject (docs/assistant/onboarding.md 5.3)
 	"machines_add",             // POST /api/v1/auth/pair-codes with add / machine from a signed-in device: it adds a computer and pairs it (docs/assistant/onboarding.md 5.3)

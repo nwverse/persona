@@ -188,6 +188,7 @@ machines.read        GET /api/v1/machines/{id}/usage
 -                    GET /api/v1/machines/{mid}/git/diff
 -                    GET /api/v1/machines/{mid}/git/log
 -                    GET /api/v1/machines/{mid}/git/pr
+-                    GET /api/v1/machines/{mid}/git/review
 -                    GET /api/v1/machines/{mid}/git/show
 -                    GET /api/v1/machines/{mid}/git/status
 -                    GET /api/v1/machines/{mid}/health/reports
