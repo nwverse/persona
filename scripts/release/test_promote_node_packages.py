@@ -19,7 +19,8 @@ class PromotionNodePackageTests(unittest.TestCase):
         self.temporary = tempfile.TemporaryDirectory()
         self.addCleanup(self.temporary.cleanup)
         base = Path(self.temporary.name)
-        self.root, self.staged = base / 'runtime', base / 'staged'
+        self.root = base / 'runtime'
+        self.staged = self.root / 'releases/hub/.upload-test'
         (self.root / 'bin').mkdir(parents=True)
         (self.root / 'hub.json').write_text(json.dumps({'auto_update_nodes': False}))
         self.node_manifest = release(self.staged)
@@ -33,7 +34,7 @@ class PromotionNodePackageTests(unittest.TestCase):
             node_artifacts.publish_nodes(self.root, old_staged, old, health(old))
         self.old_pointer = (self.root / 'bin/nodes').resolve()
         self.latest = self.root / 'releases/hub/latest.json'
-        self.latest.parent.mkdir(parents=True)
+        self.latest.parent.mkdir(parents=True, exist_ok=True)
         self.old_latest = json.dumps({'commit': old['commit'], 'build': old['build']}).encode()
         self.latest.write_bytes(self.old_latest)
         binary = self.root / 'bin/personad'
@@ -70,7 +71,7 @@ class PromotionNodePackageTests(unittest.TestCase):
         self.assertIn('--status', argv)
         return 'slot a serving version, pid 1234\n'
 
-    def execute(self, enabled=True):
+    def execute(self, enabled=True, namespace='hub'):
         actual_digest = promote.digest
         def digest(path):
             if str(path) == '/proc/1234/exe':
@@ -80,7 +81,8 @@ class PromotionNodePackageTests(unittest.TestCase):
                 patch.object(promote, 'digest', side_effect=digest), \
                 patch.object(promote.subprocess, 'check_output', side_effect=self.native), \
                 contextlib.redirect_stdout(io.StringIO()):
-            payload = {'root': str(self.root), 'staged': str(self.staged)}
+            payload = {'root': str(self.root), 'staged': str(self.staged),
+                       'release_namespace': namespace}
             if enabled is not None:
                 payload['publish_nodes'] = enabled
             promote.promote(payload)
@@ -89,6 +91,26 @@ class PromotionNodePackageTests(unittest.TestCase):
         self.assertEqual(self.latest.read_bytes(), self.old_latest)
         self.assertEqual((self.root / 'bin/nodes').resolve(), self.old_pointer)
         self.assertFalse(any(method == 'POST' for _, method in self.calls))
+
+    def test_named_feed_preserves_previous_feed_and_uses_shared_lock(self):
+        import os
+        original_latest = self.latest
+        named_latest = self.root / 'releases/hub-canonical/latest.json'
+        named_latest.parent.mkdir()
+        named_latest.write_bytes(self.old_latest)
+        named_staged = named_latest.parent / self.staged.name
+        self.staged.rename(named_staged)
+        self.staged = named_staged
+        common_lock = self.root / 'releases/hub/.publish.lock'
+        actual_flock = promote.fcntl.flock
+        def shared_lock(stream, operation):
+            self.assertEqual(os.fstat(stream.fileno()).st_ino, common_lock.stat().st_ino)
+            return actual_flock(stream, operation)
+        with patch.object(promote.fcntl, 'flock', side_effect=shared_lock):
+            self.execute(namespace='hub-canonical')
+        self.assertEqual(original_latest.read_bytes(), self.old_latest)
+        self.assertEqual(json.loads(named_latest.read_text())['commit'], self.hub_manifest['commit'])
+        self.assertFalse((named_latest.parent / '.publish.lock').exists())
 
     def test_prepare_failure_preserves_hub_latest_and_node_pointer(self):
         with patch.object(promote, 'prepare_nodes', side_effect=ValueError('Bad Darwin package')):
@@ -166,6 +188,43 @@ class PromotionNodePackageTests(unittest.TestCase):
         (self.root / 'bin/nodes').mkdir()
         with self.assertRaisesRegex(RuntimeError, 'Unmanaged'):
             self.execute()
+        self.assertEqual(self.calls, [])
+        self.assertEqual(self.latest.read_bytes(), self.old_latest)
+
+
+
+    def test_symlink_lock_is_rejected_without_truncating_its_target(self):
+        target = self.root / 'lock-target'
+        target.write_text('preserve')
+        (self.latest.parent / '.publish.lock').symlink_to(target)
+        with self.assertRaises(OSError):
+            self.execute()
+        self.assertEqual(target.read_text(), 'preserve')
+        self.assertEqual(self.calls, [])
+
+    def test_selected_feed_is_revalidated_after_acquiring_shared_lock(self):
+        actual_flock = promote.fcntl.flock
+        def replace_feed(stream, operation):
+            actual_flock(stream, operation)
+            moved = self.latest.parent.with_name('hub-moved')
+            self.latest.parent.rename(moved)
+            self.latest.parent.symlink_to(moved, target_is_directory=True)
+        with patch.object(promote.fcntl, 'flock', side_effect=replace_feed):
+            with self.assertRaisesRegex(ValueError, 'non-symlink'):
+                self.execute()
+        self.assertEqual(self.calls, [])
+        self.assertEqual(self.latest.read_bytes(), self.old_latest)
+
+    def test_replaced_lock_is_rejected_after_acquiring_it(self):
+        actual_flock = promote.fcntl.flock
+        lock_path = self.latest.parent / '.publish.lock'
+        def replace_lock(stream, operation):
+            actual_flock(stream, operation)
+            lock_path.unlink()
+            lock_path.write_text('replacement')
+        with patch.object(promote.fcntl, 'flock', side_effect=replace_lock):
+            with self.assertRaisesRegex(ValueError, 'lock changed'):
+                self.execute()
         self.assertEqual(self.calls, [])
         self.assertEqual(self.latest.read_bytes(), self.old_latest)
 

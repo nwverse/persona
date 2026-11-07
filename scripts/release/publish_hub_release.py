@@ -10,6 +10,7 @@ import socket
 import uuid
 
 from node_artifacts import node_manifest
+from hub_release_paths import prepare_remote_staging, release_directory, validate_remote_upload
 from urllib.parse import urlsplit
 
 import paramiko
@@ -41,7 +42,8 @@ def main():
     if cfg.get('publish_nodes', False) and packages is None:
         raise ValueError('Matching node packages are required by this publisher')
     remote_root = cfg['remote_root']
-    staged = f'{remote_root}/releases/hub/.upload-{manifest["build"]}-{uuid.uuid4().hex}'
+    release_root = release_directory(remote_root, cfg.get('release_namespace', 'hub'))
+    staged = str(release_root / f'.upload-{manifest["build"]}-{uuid.uuid4().hex}')
     client = paramiko.SSHClient()
     client.load_system_host_keys()
     sock = None
@@ -78,22 +80,19 @@ def main():
                     raise
                 time.sleep(3)
         with client.open_sftp() as sftp:
-            for directory in [f'{remote_root}/releases', f'{remote_root}/releases/hub', staged]:
-                try:
-                    sftp.stat(directory)
-                except FileNotFoundError:
-                    sftp.mkdir(directory, mode=0o700)
+            namespace = cfg.get('release_namespace', 'hub')
+            prepare_remote_staging(sftp, remote_root, namespace, staged)
             names = ['latest.json', manifest['files']['linux-amd64']['name']]
             if packages:
                 names += ['node-manifest.json'] + [a['name'] for a in packages['files'].values()]
             for name in dict.fromkeys(names):
-                if Path(name).name != name:
-                    raise ValueError('Invalid artifact name')
-                sftp.put(str(args.artifact_dir / name), f'{staged}/{name}')
+                destination = validate_remote_upload(sftp, remote_root, namespace, staged, name)
+                sftp.put(str(args.artifact_dir / name), destination)
         sources = {name: Path(__file__).with_name(name + '.py').read_text()
-                   for name in ['node_artifacts', 'promote_hub_release']}
+                   for name in ['hub_release_paths', 'node_artifacts', 'promote_hub_release']}
         payload = {'root': remote_root, 'staged': staged, 'timeout': cfg.get('timeout',1200),
-                   'publish_nodes': cfg.get('publish_nodes', False)}
+                   'publish_nodes': cfg.get('publish_nodes', False),
+                   'release_namespace': cfg.get('release_namespace', 'hub')}
         script = "import sys, types\n"
         for name, source in sources.items():
             script += f"module = types.ModuleType({name!r}); sys.modules[{name!r}] = module\n"

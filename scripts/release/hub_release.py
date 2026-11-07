@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
-"""Run a serialized, master-only Hub validation/build/publication cycle."""
+"""Run a serialized Hub validation/build/publication cycle from a configured source."""
 import argparse
 import datetime as dt
 import fcntl
 import json
 import os
+import re
 from pathlib import Path
 import subprocess
 import time
@@ -37,13 +38,39 @@ def cache_ready(attempt, publish_nodes):
     return node_manifest(attempt, json.loads(latest.read_text())) is not None
 
 
+
+
+def repository_identity(remote):
+    match = re.fullmatch(
+        r'(?:https://github\.com/|ssh://git@github\.com/|git@github\.com:)'
+        r'([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+?)(?:\.git)?/?', remote)
+    if not match:
+        raise ValueError('origin must be a canonical GitHub repository URL')
+    return match.group(1).casefold()
+
+def full_commit(value):
+    if not re.fullmatch(r'[0-9a-f]{40}', value):
+        raise argparse.ArgumentTypeError('commit must be a full lowercase Git SHA')
+    return value
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--config', type=Path, required=True)
     parser.add_argument('--retry', action='store_true')
+    parser.add_argument('--commit', type=full_commit,
+                        help='pin a full commit that must belong to the configured source branch')
+    parser.add_argument('--validate-only', action='store_true',
+                        help='run complete build gates without publishing')
     args = parser.parse_args()
     cfg = json.loads(args.config.read_text())
     checkout, state = Path(cfg['checkout']), Path(cfg['state_dir'])
+    branch = cfg.get('source_branch', 'main')
+    source_ref = f'refs/heads/{branch}'
+    tracking_ref = f'refs/remotes/origin/{branch}'
+    run(['git', 'check-ref-format', source_ref], checkout)
+    origin = output(['git', 'remote', 'get-url', 'origin'], checkout)
+    if repository_identity(origin) != cfg['repository'].casefold():
+        raise ValueError('Configured status repository does not match source origin')
     state.mkdir(parents=True, exist_ok=True)
     with (state / 'lock').open('w') as lock:
         try:
@@ -51,11 +78,16 @@ def main():
         except BlockingIOError:
             print('Another Hub release owns the publication window.')
             return
-        run(['git', 'fetch', 'origin', 'master'], checkout)
-        sha = output(['git', 'rev-parse', 'origin/master'], checkout)
+        run(['git', 'fetch', '--no-tags', 'origin', f'{source_ref}:{tracking_ref}'], checkout)
+        sha = args.commit or output(['git', 'rev-parse', tracking_ref], checkout)
+        if args.commit:
+            run(['git', 'merge-base', '--is-ancestor', sha, tracking_ref], checkout)
         record = state / 'last.json'
         previous = json.loads(record.read_text()) if record.exists() else {}
-        same = previous.get('sha') == sha
+        source_matches = (previous.get('repository') == cfg['repository'] and
+                          previous.get('source_branch') == branch and
+                          previous.get('update_url') == cfg['update_url'])
+        same = source_matches and previous.get('sha') == sha
         requirements_match = previous.get('publish_nodes', False) == cfg.get('publish_nodes', False)
         if same and not args.retry and requirements_match:
             success_ready = (previous.get('result') == 'success' and
@@ -79,16 +111,19 @@ def main():
             build = max(now, last + dt.timedelta(minutes=1)).strftime('%Y%m%d%H%M')
         attempt = state / f'{build}-{sha[:12]}'
         attempt.mkdir(exist_ok=True)
-        result = {'sha': sha, 'build': build, 'result': 'pending', 'evidence': str(attempt), 'publish_nodes': cfg.get('publish_nodes', False)}
+        result = {'repository': cfg['repository'], 'source_branch': branch,
+                  'update_url': cfg['update_url'],
+                  'sha': sha, 'build': build, 'result': 'pending', 'evidence': str(attempt),
+                  'publish_nodes': cfg.get('publish_nodes', False)}
         atomic_json(record, result)
 
         def status(value, description):
             run(['gh', 'api', f'repos/{cfg["repository"]}/statuses/{sha}',
-                 '-f', f'state={value}', '-f', 'context=hub-release/worker',
+                 '-f', f'state={value}', '-f', 'context=hub-release/validation' if args.validate_only else 'context=hub-release/worker',
                  '-f', f'description={description}'], checkout, stdout=subprocess.DEVNULL)
 
         try:
-            status('pending', 'Validating and publishing Hub-only release')
+            status('pending', 'Validating release' if args.validate_only else 'Validating and publishing Hub-only release')
             with (attempt / 'validation.log').open('a') as log:
                 if not cache_ready(attempt, cfg.get('publish_nodes', False)):
                     command = [sys.executable, 'scripts/release/build_hub_release.py', '--out', str(attempt),
@@ -97,8 +132,12 @@ def main():
                         command.append('--publish-nodes')
                     run(command, checkout, stdout=log, stderr=subprocess.STDOUT)
             # A force-push or branch replacement must never publish an orphan.
-            run(['git', 'fetch', 'origin', 'master'], checkout)
-            run(['git', 'merge-base', '--is-ancestor', sha, 'origin/master'], checkout)
+            run(['git', 'fetch', '--no-tags', 'origin', f'{source_ref}:{tracking_ref}'], checkout)
+            run(['git', 'merge-base', '--is-ancestor', sha, tracking_ref], checkout)
+            if args.validate_only:
+                result['result'] = 'validated'
+                status('success', 'Complete release validation passed; publication was not requested')
+                return
             with (attempt / 'publication.log').open('a') as log:
                 run([*cfg['publish_command'], '--artifact-dir', str(attempt)], checkout,
                     stdout=log, stderr=subprocess.STDOUT)

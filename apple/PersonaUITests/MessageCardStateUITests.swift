@@ -43,7 +43,7 @@ final class MessageCardStateUITests: XCTestCase {
 
         let reply = app.descendants(matching: .any)["messageCard.reply"].firstMatch
         XCTAssertTrue(reply.waitForExistence(timeout: 20), "no message card:\n\(app.debugDescription)")
-        let send = app.buttons["messageCard.send"] // the composer has a 发送 of its own
+        let send = app.buttons["messageCard.send"] // The composer has its own send button.
         let filedLine = app.descendants(matching: .any)["messageCard.filed"].firstMatch
         switch message {
         case "filed":

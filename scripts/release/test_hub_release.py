@@ -52,14 +52,15 @@ class WorkerRecoveryTests(unittest.TestCase):
             attempt.mkdir()
             (attempt / 'latest.json').write_text('{}')
             (attempt / 'validation.log').write_text('passed\n')
-            (state / 'last.json').write_text(json.dumps({'sha':sha,'build':build,'result':'pending'}))
+            (state / 'last.json').write_text(json.dumps({'sha':sha,'build':build,'result':'pending',
+                'repository':'example/project','source_branch':'main','update_url':'file:///example'}))
             cfg = root / 'config.json'
             cfg.write_text(json.dumps({'checkout':directory,'state_dir':str(state),
                                        'repository':'example/project','update_url':'file:///example',
                                        'publish_command':['publisher']}))
             calls = []
             def output(argv, cwd):
-                return sha if argv[1] == 'rev-parse' else ''
+                return sha if argv[1] == 'rev-parse' else ('https://github.com/example/project.git' if argv[1] == 'remote' else '')
             def run(argv, cwd, **kwargs):
                 calls.append(argv)
             with patch('sys.argv',['hub_release','--config',str(cfg)]), patch.object(hub_release,'output',output), patch.object(hub_release,'run',run):
@@ -87,7 +88,7 @@ class WorkerRecoveryTests(unittest.TestCase):
                 calls.append(argv)
                 if 'scripts/release/build_hub_release.py' in argv:
                     raise subprocess.CalledProcessError(1,argv)
-            with patch('sys.argv',['hub_release','--config',str(cfg)]), patch.object(hub_release,'output',lambda argv,cwd:'b'*40 if argv[1]=='rev-parse' else ''), patch.object(hub_release,'run',run):
+            with patch('sys.argv',['hub_release','--config',str(cfg)]), patch.object(hub_release,'output',lambda argv,cwd:'b'*40 if argv[1]=='rev-parse' else ('https://github.com/example/project.git' if argv[1]=='remote' else '')), patch.object(hub_release,'run',run):
                 with self.assertRaises(subprocess.CalledProcessError):
                     hub_release.main()
             self.assertFalse(any(c[0]=='publisher' for c in calls))
@@ -130,7 +131,7 @@ class NodeCacheTests(unittest.TestCase):
                 'publish_command': ['publisher'], 'publish_nodes': True}))
             calls = []
             with patch('sys.argv', ['worker', '--config', str(config)]), \
-                    patch.object(hub_release, 'output', lambda args, cwd: sha if args[1] == 'rev-parse' else ''), \
+                    patch.object(hub_release, 'output', lambda args, cwd: sha if args[1] == 'rev-parse' else ('https://github.com/example/project.git' if args[1] == 'remote' else '')), \
                     patch.object(hub_release, 'run', lambda args, cwd, **kwargs: calls.append(args)):
                 hub_release.main()
             builds = [args for args in calls if 'scripts/release/build_hub_release.py' in args]

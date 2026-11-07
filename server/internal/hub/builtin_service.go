@@ -8,6 +8,7 @@ import (
 	"io"
 	"log"
 	"os"
+	"time"
 
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/db"
@@ -113,7 +114,11 @@ func ManagerCode(ctx context.Context, out io.Writer) error {
 	if err != nil {
 		return err
 	}
-	_, err = fmt.Fprintf(out, "%s\n\nGood until %s, once. On this machine (where the built-in manager's service runs):\n"+
-		"  persona-manager join --builtin %s %s\n", code, until.Local().Format("15:04"), hubLocalURL(cfg.Listen), code)
+	return writeManagerCode(out, code, until, cfg.Listen)
+}
+
+func writeManagerCode(out io.Writer, code string, until time.Time, listen string) error {
+	_, err := fmt.Fprintf(out, "%s\n\nGood until %s, once. On this machine (where the built-in manager's service runs):\n"+
+		"  persona-manager join --builtin %s %s\n", code, until.UTC().Format("2006-01-02 15:04 MST"), hubLocalURL(listen), code)
 	return err
 }

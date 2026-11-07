@@ -1,5 +1,5 @@
 [Unit]
-Description=Check master for verified Hub releases
+Description=Check the canonical branch for verified Hub releases
 
 [Timer]
 OnBootSec=2min

@@ -8,11 +8,13 @@ import json
 import os
 import re
 import shutil
+import stat
 import subprocess
 from pathlib import Path
 import time
 import urllib.request
 
+from hub_release_paths import release_directory, validate_release_paths
 from node_artifacts import activate_nodes, managed_nodes, node_manifest, prepare_nodes, prune_nodes
 
 
@@ -57,10 +59,19 @@ def nodes(root):
 
 def promote(payload):
     root, staged = Path(payload['root']), Path(payload['staged'])
-    releases = root / 'releases/hub'
-    releases.mkdir(parents=True, exist_ok=True)
-    with (releases / '.publish.lock').open('w') as lock:
+    namespace = payload.get('release_namespace', 'hub')
+    releases = validate_release_paths(root, namespace, staged, create=True)
+    # Every feed shares the existing lock because the installed Hub and node pointer are global.
+    lock_path = release_directory(root) / '.publish.lock'
+    descriptor = os.open(lock_path, os.O_WRONLY | os.O_CREAT | os.O_NOFOLLOW | os.O_NONBLOCK, 0o600)
+    with os.fdopen(descriptor, 'w') as lock:
+        if not stat.S_ISREG(os.fstat(lock.fileno()).st_mode):
+            raise ValueError('Publication lock must be a regular file')
         fcntl.flock(lock, fcntl.LOCK_EX)
+        validate_release_paths(root, namespace, staged)
+        opened, current = os.fstat(lock.fileno()), lock_path.lstat()
+        if (opened.st_dev, opened.st_ino) != (current.st_dev, current.st_ino):
+            raise ValueError('Publication lock changed while acquiring it')
         cfg = json.loads((root / 'hub.json').read_text())
         if cfg.get('auto_update_nodes', False) is not False:
             raise RuntimeError('Hub-only policy must be disabled explicitly or by default')
