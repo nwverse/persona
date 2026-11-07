@@ -6,13 +6,19 @@ import (
 	"time"
 )
 
-// runtimeConnsPerListener is how many connections one runtimeListener keeps open
-// at once; every runtimeListener of a Proxy also shares its runtimeSlots.
-const runtimeConnsPerListener = 16
+// The bounds of a runtimeListener: the connections one keeps open at once, and the
+// ones every runtimeListener of a Proxy keeps open together (its runtimeSlots).
+const (
+	runtimeConnsPerListener = 16
+	runtimeSlotsPerProxy    = 128
+)
 
-// runtimeListener bounds sockets BEFORE http.Server starts a goroutine or reads
-// headers. A guest must not fill the manager with idle sockets before RPC/egress
-// request limits can inspect them. Legacy listeners retain their existing behavior.
+// runtimeListener bounds the sockets a guest holds open in the manager, at Accept:
+// before http.Server starts a goroutine or reads headers on a source runtime's proxy
+// socket, and before the relay dials the node for an agent runtime's runtime.sock. A
+// guest must not fill the manager with idle sockets before RPC/egress request limits
+// can inspect them. A connection over either bound is closed at once, and Close closes
+// every connection it handed out. The other listeners are not bounded.
 type runtimeListener struct {
 	net.Listener
 	slots       chan struct{}

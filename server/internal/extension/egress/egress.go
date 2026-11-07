@@ -111,7 +111,7 @@ type Proxy struct {
 	active        map[string]map[*ioLease]struct{}
 	runtimeActive map[string]int
 	runtimeTotal  int
-	runtimeSlots  chan struct{} // the connections every runtimeListener (ListenRuntimeUnix, RelayUnix) holds, together
+	runtimeSlots  chan struct{} // shared by every runtimeListener (runtimeSlotsPerProxy)
 }
 
 // Start listens on loopback (an unused port).
@@ -123,7 +123,7 @@ func (p *Proxy) Start() error {
 	p.mu.Lock()
 	p.ln = ln
 	p.mu.Unlock()
-	go p.serve(ln, "")
+	go p.serve(ln, "", false)
 	return nil
 }
 
@@ -226,7 +226,7 @@ func (p *Proxy) listenUnix(ext, path string, source bool) error {
 	}
 	p.unix[ext] = ln
 	p.mu.Unlock()
-	go p.serve(ln, ext)
+	go p.serve(ln, ext, source)
 	return nil
 }
 
@@ -253,8 +253,7 @@ func (p *Proxy) Unregister(ext string) {
 // RelayUnix serves ext on a unix socket at path (made anew; only this user may connect) whose every connection is
 // joined to the unix socket at target, dialed then (so a target made anew, a restarted node's, is still reached):
 // a sandboxed agent runtime's way to this machine's node (#5413), and to nothing else. Unregister closes it.
-// Each connection holds two descriptors and three goroutines here, so the socket is a runtimeListener: at most
-// runtimeConnsPerListener at once, the ones over that closed at once, and closing the socket closes them all.
+// Each connection holds two descriptors and three goroutines here, so the socket is bounded (runtimeListener).
 func (p *Proxy) RelayUnix(ext, path, target string) error {
 	p.mu.Lock()
 	if old := p.relay[ext]; old != nil {
@@ -279,11 +278,10 @@ func (p *Proxy) RelayUnix(ext, path, target string) error {
 	return nil
 }
 
-// boundLocked is ln bounded like every runtime socket (runtimeListener), out of the proxy's shared runtimeSlots.
-// p.mu held.
+// boundLocked is ln bounded (runtimeListener), out of the proxy's shared runtimeSlots. p.mu held.
 func (p *Proxy) boundLocked(ln net.Listener) *runtimeListener {
 	if p.runtimeSlots == nil {
-		p.runtimeSlots = make(chan struct{}, 128)
+		p.runtimeSlots = make(chan struct{}, runtimeSlotsPerProxy)
 	}
 	return &runtimeListener{Listener: ln, slots: p.runtimeSlots, done: make(chan struct{}),
 		connections: map[*runtimeConn]struct{}{}}
@@ -327,10 +325,12 @@ func (p *Proxy) Stats(ext string) Counts {
 	return Counts{}
 }
 
-func (p *Proxy) serve(ln net.Listener, ext string) {
+// serve serves ln's HTTP proxy for ext ("": the loopback listener, which asks for credentials). source: a source
+// runtime's socket, which takes only its fetch broker's requests.
+func (p *Proxy) serve(ln net.Listener, ext string, source bool) {
 	srv := &http.Server{Handler: p.handler(ext), ReadHeaderTimeout: 30 * time.Second,
 		ErrorLog: nil}
-	if _, source := ln.(*runtimeListener); source {
+	if source {
 		// The guest can open raw sockets to its broker. Enforce the bounded
 		// runtime route here, not just in the replaceable JavaScript environment.
 		handler := srv.Handler
