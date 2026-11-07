@@ -815,10 +815,13 @@ func (n *Node) sessionList(ctx context.Context, refreshAgents bool) []proto.Sess
 		if s.Status == proto.StatusBlocked { // only while it still waits (not once the phone drives it)
 			s.AttentionReason = a.Attention
 		}
+		// Resting is what its host says, before a lost first message marks the row blocked: the dialog that kept the
+		// message out is read and named, not only the generic sentence.
+		resting := restingClaude(a, s.Status)
 		if why := n.lostFirstPrompt(id, s.Status); why != "" { // its first message did not go in (firstprompt.go)
 			s.Status, s.AttentionReason = proto.StatusBlocked, why
 		}
-		if restingClaude(a, s.Status) && !onList[id] && !n.isDriving(id) {
+		if resting && !onList[id] && !n.isDriving(id) {
 			livePanes[a.PaneID] = true
 			if head := n.dialogOn(id, a.PaneID); head != "" { // a dialog holds its terminal (dialogstatus.go)
 				s.Status, s.AttentionReason = proto.StatusBlocked, head
