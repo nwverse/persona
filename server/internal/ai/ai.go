@@ -212,6 +212,9 @@ func (c *Client) messages(ctx context.Context, hc *http.Client, key string, r Re
 			b.WriteString(part.Text)
 		}
 	}
+	if out.StopReason == "refusal" { // declined, usually with no text at all: not a reply that lacks its JSON
+		return Reply{Model: out.Model, Usage: out.Usage}, true, ErrRefused
+	}
 	return Reply{Text: b.String(), Truncated: out.StopReason == "max_tokens", Model: out.Model, Usage: out.Usage}, true, nil
 }
 
@@ -330,6 +333,10 @@ func (c *Client) JSONMax(ctx context.Context, system, user string, maxTokens int
 
 // ErrTruncated: the reply stopped at max_tokens before the answer was complete, even with the room doubled.
 var ErrTruncated = errors.New("ai: reply cut off at max_tokens")
+
+// ErrRefused: the model declined the request (the Messages API's stop_reason "refusal", e.g. a safety classifier).
+// The same input is declined again, so sending it as is once more only spends a call.
+var ErrRefused = errors.New("ai: the model declined to answer")
 
 // FirstObject extracts the first balanced {...} from model output (tolerating fences and chatter).
 func FirstObject(s string) (string, error) {

@@ -97,15 +97,7 @@ func (n *Node) listenOnce(ctx context.Context) (net.Listener, error) {
 		<-ctx.Done()
 		ln.Close()
 	}()
-	go func() {
-		for {
-			c, err := ln.Accept()
-			if err != nil {
-				return
-			}
-			go n.serveSock(ctx, c)
-		}
-	}()
+	go acceptLoop(ctx, ln, n.logf, func(c net.Conn) { go n.serveSock(ctx, c) })
 	return ln, nil
 }
 

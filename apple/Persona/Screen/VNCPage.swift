@@ -17,6 +17,8 @@ struct VNCPage: View {
     #if os(iOS) || os(visionOS)
     @State private var screenView: VNCScreenUIView?
     @State private var modifiers = VNCModifiers()
+    /// The display shown alone (`VNCDisplay.id`, kept per Mac, #80); nil: all of them.
+    @State private var display: String?
     @State private var pipLog = false
     /// The app went to the background with the page up (not just Control Center or an alert over it).
     @State private var wentBackground = false
@@ -57,6 +59,9 @@ struct VNCPage: View {
         .onAppear {
             session = VNC.hold(ref)
             mode = VNCMode.of(ref)
+            #if os(iOS) || os(visionOS)
+            display = VNCDisplayChoice.of(ref)
+            #endif
         }
         .onDisappear {
             #if os(iOS)
@@ -158,6 +163,19 @@ struct VNCPage: View {
                 Label("Mouse Mode", systemImage: Theme.Icon.pointer).tag(VNCMode.mouse)
                 Label("Trackpad Mode", systemImage: Theme.Icon.trackpad).tag(VNCMode.trackpad)
             }
+            let displays = offeredDisplays
+            if displays.count > 1 {
+                Picker(selection: Binding(get: { shownDisplay?.id }, set: { display = $0; VNCDisplayChoice.set($0, for: ref) })) {
+                    Text("All Displays").tag(String?.none)
+                    ForEach(Array(displays.enumerated()), id: \.element.id) { i, d in
+                        Text("Display \(i + 1)").tag(Optional(d.id))
+                    }
+                } label: {
+                    Label("Displays", systemImage: Theme.Icon.displays)
+                }
+                .pickerStyle(.menu)
+                .accessibilityIdentifier("vnc-displays")
+            }
             #endif
             Button { centerPointer() } label: { Label("Center Pointer", systemImage: Theme.Icon.pointerCenter) }
             #if os(iOS) || os(visionOS)
@@ -236,7 +254,7 @@ struct VNCPage: View {
         switch s.phase {
         case .live:
             #if os(iOS) || os(visionOS)
-            VNCScreen(session: s, mode: mode, interactive: true) { v in DispatchQueue.main.async { screenView = v } }
+            VNCScreen(session: s, mode: mode, interactive: true, region: shownDisplay?.frame) { v in DispatchQueue.main.async { screenView = v } }
             #else
             VNCScreen(session: s, mode: mode, interactive: true)
             #endif
@@ -257,6 +275,20 @@ struct VNCPage: View {
             .padding(Theme.Space.xl)
         }
     }
+
+    #if os(iOS) || os(visionOS)
+    /// The Mac's displays to choose from: the server's screens, else the node's arrangement, else none (VNCDisplays).
+    private var offeredDisplays: [VNCDisplay] {
+        guard let s = session else { return [] }
+        return VNCDisplays.layout(server: s.screens, machine: model.screenDisplays(ref), framebuffer: s.size)
+    }
+
+    /// The chosen display while it is there; nil shows them all.
+    private var shownDisplay: VNCDisplay? {
+        guard let display else { return nil }
+        return offeredDisplays.first { $0.id == display }
+    }
+    #endif
 
     /// The Mac account's short name, from its home directory (/Users/<name>).
     static func account(_ home: String?) -> String {
@@ -418,6 +450,7 @@ struct VNCHelp: View {
                     #if !os(macOS)
                     row(Theme.Icon.pointer, String(localized: "Mouse mode (default)"), String(localized: "Tap to click there. Drag with one finger to drag. Drag with two fingers to scroll. Two-finger tap or touch and hold to right-click."))
                     row(Theme.Icon.search, String(localized: "Zoom"), String(localized: "Pinch to zoom in and out. When zoomed in, dragging with two fingers moves the view instead of scrolling."))
+                    row(Theme.Icon.displays, String(localized: "Displays"), String(localized: "When the Mac has more than one display, choose one in “…” › Displays to show only that display. Zooming, taps and the pointer then stay on it."))
                     #else
                     row(Theme.Icon.pointer, String(localized: "Mouse"), String(localized: "Click for the left mouse button; right-click (or Control-click) for the right button; press and hold the mouse button and move to drag."))
                     row(Theme.Icon.trackpad, String(localized: "Scroll"), String(localized: "Turn the mouse wheel, or swipe with two fingers on a Magic Mouse or trackpad to scroll the view."))

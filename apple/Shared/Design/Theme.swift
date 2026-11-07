@@ -501,7 +501,7 @@ nonisolated enum Theme {
         /// The system's Reduce Motion, outside a view (a view reads `\.accessibilityReduceMotion`): what would move or fade
         /// on its own is there, or gone, at once.
         @MainActor static var reduced: Bool {
-            #if os(iOS)
+            #if os(iOS) || os(visionOS)
             UIAccessibility.isReduceMotionEnabled
             #elseif os(macOS)
             NSWorkspace.shared.accessibilityDisplayShouldReduceMotion

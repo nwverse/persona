@@ -834,8 +834,12 @@ private struct AgentsList: View {
                     }
                     #endif
                     #if os(iOS)
-                    // A stable cell keeps the selected grouping discoverable without crowding the quick filters.
-                    AgentsGroupingMenu()
+                    // A stable cell keeps the selected grouping discoverable without crowding the quick filters. In the
+                    // shell, Personal Agents beside it (#140), under it when the two don't fit across.
+                    ViewThatFits(in: .horizontal) {
+                        HStack(spacing: Theme.Space.s) { groupingPills }
+                        VStack(alignment: .leading, spacing: Theme.Space.s) { groupingPills }
+                    }
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .padding(.horizontal, Theme.Space.page)
                         .padding(.bottom, Theme.Space.sm)
@@ -1228,6 +1232,13 @@ private struct AgentsList: View {
         spaceAt = (value as? SpaceRoute).map { [0: $0.id] } ?? [:]
         path = NavigationPath([value])
     }
+
+    #if os(iOS)
+    @ViewBuilder private var groupingPills: some View {
+        AgentsGroupingMenu()
+        if shell != nil { AgentsPersonalPill { openFromList(PersonalAgentsRoute()) } }
+    }
+    #endif
 
     #if os(iOS) || os(visionOS)
     /// `ReaderAnchor` on the list's own scroll view.

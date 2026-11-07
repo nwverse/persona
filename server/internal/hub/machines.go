@@ -125,7 +125,7 @@ func (h *Hub) recordEntries() []recMachine {
 	}
 	d.mu.Unlock()
 	var out []recMachine
-	for _, mc := range h.cfgEntries() {
+	for _, mc := range h.knownEntries() {
 		e := reach[h.entryOwner(mc.ID)][mc.ID]
 		out = append(out, recMachine{ID: mc.ID, Cfg: mc.forMesh(), Kind: kindOf(mc), Avail: e.Avail, RTTMS: e.RTTMS})
 	}

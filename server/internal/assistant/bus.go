@@ -78,6 +78,8 @@ type BusHub struct {
 
 	events  chan busEvent // the hub's events, taken in the order they came
 	pending atomic.Int64  // events received and not yet taken
+	// answering: the hub's requests being answered now (a tool call, an app's call): idle (idle.go) waits for them.
+	answering atomic.Int64
 
 	// deltas are the text a followed conversation writes (session.delta), the latest one per conversation: one waits
 	// in events for each at most, so they never crowd out the others (bus_events.go).
@@ -118,7 +120,7 @@ func NewBusHub(o BusOptions) *BusHub {
 		HelloParams: func() any {
 			return map[string]any{"id": id, "host": host, "os": runtime.GOOS, "arch": runtime.GOARCH,
 				"deploy": o.Deploy, "version": o.Version, "capabilities": []string{assistantwire.CapabilityConfigOwn, assistantwire.CapabilityAgentSessionArchives,
-					assistantwire.CapabilityMachinesOwn}}
+					assistantwire.CapabilityAgentSessionArchiveClose, assistantwire.CapabilityMachinesOwn}}
 		},
 		OnHello: b.onHello,
 		// A node's tool call that its caller stopped waiting for ends at the hub too (fleet_tools.go).
@@ -412,6 +414,8 @@ func busError(err error) error {
 // answer is request with the hub's coded errors given back their code: an answer the assistant could not give because
 // of the hub (a machine that is offline, a node link that dropped) reaches the app as the hub's own error would.
 func (b *BusHub) answer(ctx context.Context, method string, params json.RawMessage) (any, error) {
+	b.answering.Add(1)
+	defer b.answering.Add(-1)
 	out, err := b.request(ctx, method, params)
 	var ce *codedError
 	if errors.As(err, &ce) {
