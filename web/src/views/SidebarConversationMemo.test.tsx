@@ -49,7 +49,7 @@ let root: Root;
 const flush = async () => {
   for (let i = 0; i < 5; i++) await act(async () => { await Promise.resolve(); });
 };
-const reads = (sid: string) => draftReads.get(sid) ?? 0;
+const reads = (key: string) => draftReads.get(key) ?? 0;
 const mainRow = () => host.querySelector<HTMLAnchorElement>(`a[title="${t("sidebar.persona_main")}"]`)!;
 const row = (sid: string) => host.querySelector<HTMLAnchorElement>(`a[href="/persona/${sid}"]`)!;
 const menu = () => document.querySelector('[role="menu"]');
@@ -196,7 +196,6 @@ describe("the Persona conversation rows", () => {
 
     // the main conversation and the pinned one go offline: their menus offer what they are now (no End), not what
     // they were when the menu function was made
-    push("mac", "agent", { title: "Build 1" });
     push("hub", "main", { status: "offline", state: "offline" });
     push("hub", "pinned", { status: "offline", state: "offline" });
     await flush();

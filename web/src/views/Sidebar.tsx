@@ -391,7 +391,7 @@ export function Sidebar({ route, onSearch, onNewAgent, onNavigate }: { route: Ro
         {/* the main conversation is the column's first row, Persona with the app's mark, and only there (#2004, #5109); it
             stays at the top while the rest scrolls (#5581), its line and a fog under it once rows go beneath */}
         <div data-sidebar-sticky className="sticky top-0 z-30 flex flex-col gap-px bg-canvas pt-1">
-          <PersonaRow reg={reg} hover={hover} active={activeKey === "persona"} go={go} main={mainConversation} chord={bindings.persona} onMenu={mainConversation ? onConvMenu : undefined} />
+          <PersonaRow reg={reg} hover={hover} active={activeKey === "persona"} go={go} main={mainConversation} chord={bindings.persona} onMenu={onConvMenu} />
           <span aria-hidden data-persona-divider className="mx-2 my-1 h-px shrink-0 bg-line" />
           <span aria-hidden data-persona-fog className={cx("pointer-events-none absolute inset-x-0 top-full h-3 bg-gradient-to-b from-canvas to-transparent transition-opacity duration-150", scrolled ? "opacity-100" : "opacity-0")} />
         </div>
