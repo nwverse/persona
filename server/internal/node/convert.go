@@ -122,12 +122,15 @@ func (n *Node) convertFile(ctx context.Context, p proto.FileConvertRequest) (*pr
 		return nil, fmt.Errorf("LibreOffice did not write a PDF")
 	}
 	if err := renameConverted(pdf, out); err != nil {
-		// the temp folder is on another file system: copy it in whole, so a cut-short copy never has the cache's name
-		b, err := os.ReadFile(pdf)
+		// the temp folder is on another file system: copy it in whole, so a cut-short copy never has the cache's name;
+		// streamed, so a big PDF is not held in memory
+		src, err := os.Open(pdf)
 		if err != nil {
 			return nil, err
 		}
-		if err := writeFileAtomic(out, b); err != nil {
+		err = writeAtomic(out, src)
+		src.Close()
+		if err != nil {
 			return nil, err
 		}
 	}
