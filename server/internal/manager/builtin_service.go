@@ -490,12 +490,12 @@ func (w *binaryWatch) waitIdle(ctx context.Context, idle func() assistant.Idle) 
 			}
 			if asked == nil {
 				asked = make(chan idleAnswer, 1)
-				go func(ch chan<- idleAnswer) {
-					pctx, cancel := context.WithTimeout(ctx, idleCheck)
+				go func(ch chan<- idleAnswer, most time.Duration) {
+					pctx, cancel := context.WithTimeout(ctx, most)
 					defer cancel()
 					ok, busy := p(pctx)
 					ch <- idleAnswer{ok, busy}
-				}(asked)
+				}(asked, idleCheck) // read here: the check may outlive this wait
 			}
 			why = noAnswer
 			if !late {

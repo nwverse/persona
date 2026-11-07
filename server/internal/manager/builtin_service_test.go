@@ -588,6 +588,11 @@ func TestBuiltinRevokedStartsAgainOnlyOnAFileThatRuns(t *testing.T) {
 	probeToken = func(context.Context, *assistant.ManagerConfig) error { return nil } // taken again
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+	guard := time.AfterFunc(20*time.Second, func() {
+		t.Errorf("RunBuiltin did not end")
+		cancel()
+	})
+	defer guard.Stop()
 	var runs atomic.Int64
 	runAssistant = func(run context.Context, _ update.Build, _ io.Reader, _ assistant.MainHooks) error {
 		if runs.Add(1) == 1 {
