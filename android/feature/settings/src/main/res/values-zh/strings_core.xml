@@ -34,6 +34,12 @@
     <string name="settings_capsule_allowed">已允许</string>
     <string name="settings_capsule_not_allowed">尚未允许</string>
     <string name="settings_capsule_needs_permission">开启悬浮权限后胶囊才会显示。</string>
+    <string name="settings_capsule_keeper">保持常驻</string>
+    <string name="settings_capsule_keeper_subtitle">无障碍 · 锁屏、清理后台后胶囊不消失</string>
+    <string name="settings_capsule_keeper_on">已开启</string>
+    <string name="settings_capsule_keeper_off">未开启</string>
+    <string name="settings_capsule_keeper_notice">部分手机锁屏后会关闭 Persona，胶囊要打开 App 才回来。在「无障碍」里开启「Persona 悬浮胶囊」即可一直显示。</string>
+    <string name="settings_capsule_keeper_turn_on">去开启</string>
     <string name="settings_capsule_allow">去允许</string>
     <string name="settings_demo_identity_ok">示例：身份校验通过</string>
     <string name="settings_demo_computer">示例电脑</string>

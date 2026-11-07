@@ -21,6 +21,7 @@ HUB_ID = os.environ.get("MOCK_HUB_ID") or str(uuid.uuid4())
 TLS = {"port": 0, "fp": "", "server": None}
 ENDPOINTS = []
 CLIENTS = {}
+WS_OBSERVATIONS = []  # Non-secret connection history for background/resident acceptance.
 FAULT_LOCK = threading.Lock()
 LOST_RECEIPT = False
 
@@ -1243,9 +1244,9 @@ PINS = {"spaces": ["macbook/weather"], "sessions": []}  # GET / PUT /api/v1/pins
 def mark_seen(sid):
     SEEN.append(sid)
     changed = None
-    for s in SESSIONS:
+    for s in SESSIONS + ASSISTANT:
         if s["session_id"] == sid and s["state"] == "unread":
-            s.update(state="idle", status="idle", seen_at=ago())
+            s.update(state="idle", status="idle", seen_at=datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"))
             changed = s["machine_id"]
     # The hub pushes the machine's list when a session's state changes: that is how the app knows a seen sent over the
     # socket landed (SeenOutbox, #1588). Without it the app sends every one again over HTTP 5 s later (#2061).
@@ -10050,6 +10051,52 @@ def set_session_state(query):
     return {"session": stamp_row(decorated_session(session))}, 200
 
 
+def incoming_message(query):
+    """A new reply in any real fixture conversation, even when no chat is subscribed."""
+    if set(query) != {"mid", "sid", "text"} or any(len(values) != 1 or not values[0].strip() for values in query.values()):
+        return {"error": "Provide exactly one mid, sid and text"}, 400
+    mid, sid, text = (query[key][0] for key in ("mid", "sid", "text"))
+    session = next((s for s in SESSIONS + ASSISTANT if s["machine_id"] == mid and s["session_id"] == sid), None)
+    if session is None:
+        return {"error": "Session not found"}, 404
+    CHURN_ITEMS.setdefault(sid, list(ITEMS.get(sid, [])))
+    now = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+    item = it("assistant", "text", 0, text=text)
+    item["ts"] = now
+    previous = ITEMS.get(sid, [])
+    before = previous[-1]["seq"] if previous else 0
+    ITEMS[sid] = previous + [item]
+    session.update(state="unread", status="done", updated_at=now, state_since=now,
+                   last_text=text, rev=max((session.get("rev") or 0) + 1, item["seq"]))
+    push_machine(mid)
+    for send, subscribed in list(LIVE):
+        if sid in subscribed:
+            try: send({"type": "items", "machine_id": mid, "session_id": sid, "items": [item], **span([item], before)})
+            except OSError: pass
+    return {"session": decorated_session(session), "item": item}, 200
+
+
+def quiet_capsule():
+    """Remove fixture activity before proving an inactive capsule wakes for an incoming reply."""
+    pending = mock_interactions()
+    with REQUEST_LOCK:
+        INTERACTIONS.clear()
+        MOCK_INTERACTIONS.clear()
+    now = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+    for session in SESSIONS + ASSISTANT:
+        session.update(state="idle", status="idle", seen_at=now)
+    inbox_bulk({"done": True, "items": [{"id": item["id"]} for item in INBOX]})
+    for send, _ in list(LIVE):
+        try:
+            for interaction in pending:
+                send({"type": "interaction_resolved", "id": interaction["id"]})
+            send({"type": "inbox"})
+        except OSError: pass
+    for mid in {s["machine_id"] for s in SESSIONS + ASSISTANT}:
+        push_machine(mid)
+    return {"ok": True}
+
+
 def bump(what, session=None):
     now = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
     BUMPED["n"] += 1
@@ -12358,6 +12405,16 @@ class H(BaseHTTPRequestHandler):
         if p == "/mock/session_state":
             body, status = set_session_state(q)
             return self.send_json(body, status)
+        if p == "/mock/incoming":
+            body, status = incoming_message(q)
+            return self.send_json(body, status)
+        if p == "/mock/capsule_quiet":
+            if q: return self.send_json({"error": "No parameters accepted"}, 400)
+            return self.send_json(quiet_capsule())
+        if p == "/mock/ws_clients":
+            with FAULT_LOCK:
+                observations = copy.deepcopy(WS_OBSERVATIONS)
+            return self.send_json({"clients": observations})
         if p == "/mock/seen": return self.send_json({"seen": SEEN})
         if p == "/mock/reconnects": return self.send_json({"reconnects": RECONNECTS})
         if p == "/mock/started": return self.send_json({"started": STARTED})
@@ -14202,6 +14259,12 @@ class H(BaseHTTPRequestHandler):
         asked = parse_qs(urlparse(self.path).query).get("features", [""])[0].split(",")
         paged = "sessions_list" in asked and os.environ.get("MOCK_SESSIONS_LIST") == "1"
         delta = "sessions_delta" in asked and not os.environ.get("MOCK_WHOLE_LISTS")
+        observation = {"id": uuid.uuid4().hex[:8], "connected": True, "connected_at": time.monotonic(),
+                       "disconnected_at": None, "session_frames": 0, "item_frames": 0,
+                       "client_pings": 0, "server_pings": 0, "client_pongs": 0, "heartbeat": None,
+                       "requested_sessions_delta": delta}
+        with FAULT_LOCK:
+            WS_OBSERVATIONS.append(observation)
         restart_backlog()  # MOCK_RESTART: a connection during the restart waits in the socket's backlog
         have = {}  # machine -> {session id: its JSON}: what this app has
         key = self.headers.get("Sec-WebSocket-Key", "")
@@ -14224,13 +14287,17 @@ class H(BaseHTTPRequestHandler):
                 n = len(data)
                 hdr = bytes([0x81]) + (bytes([n]) if n < 126 else bytes([126]) + struct.pack(">H", n) if n < 65536 else bytes([127]) + struct.pack(">Q", n))
                 self.wfile.write(hdr + data); self.wfile.flush()
+                if obj.get("type") in ("sessions", "sessions_delta"):
+                    observation["session_frames"] += 1
+                elif obj.get("type") == "items":
+                    observation["item_frames"] += 1
             if MOCK_MESSAGING and obj.get("type") == "lark":  # what the Lark extension's messaging.changed becomes
                 send(lark_messaging.event_of(obj))
 
         SOCKETS.add(self.connection)
         subscribed = set()
         LIVE.append((send, subscribed))
-        send({"type": "hello", "server_version": "mock", "client_id": uuid.uuid4().hex[:8], "channel": "release",
+        send({"type": "hello", "server_version": "mock", "client_id": observation["id"], "channel": "release",
               "build": 202611021500, "protocol": 1, "min_app_build": 0,
               **identity(), "endpoints": list(ENDPOINTS), **mesh_hello(),
               "features": features() + (["sessions_delta"] if delta else []), **restart_hello(self.path)})
@@ -14290,6 +14357,7 @@ class H(BaseHTTPRequestHandler):
                         with lock:
                             self.wfile.write(bytes([0x89, len(ping)]) + ping)
                             self.wfile.flush()
+                            observation["server_pings"] += 1
                         hb_state["next"] = hb_state["sent"] + heartbeat["interval"]
             except OSError:
                 pass
@@ -14326,6 +14394,7 @@ class H(BaseHTTPRequestHandler):
                     with hb_condition:
                         if payload == hb_state["pending"]:
                             hb_state["pending"] = None
+                            observation["client_pongs"] += 1
                             hb_condition.notify()
                     continue
                 if op != 1: continue
@@ -14343,6 +14412,7 @@ class H(BaseHTTPRequestHandler):
                             heartbeat.update(interval=max(10, min(900, requested.get("interval", heartbeat["interval"]))),
                                              pong_timeout=max(5, min(60, requested.get("pong_timeout", heartbeat["pong_timeout"]))))
                             hb_state["next"] = time.monotonic() + heartbeat["interval"]
+                            observation["heartbeat"] = dict(heartbeat)
                             hb_condition.notify()
                     with FAULT_LOCK:
                         client["features"] = set(declared)
@@ -14350,6 +14420,7 @@ class H(BaseHTTPRequestHandler):
                     continue
                 if msg.get("type") == "ping":
                     if isinstance(msg.get("id"), str):
+                        observation["client_pings"] += 1
                         if NET["delay"] > 0: time.sleep(NET["delay"])
                         send({"type": "pong", "id": msg["id"]})
                     continue
@@ -14502,6 +14573,7 @@ class H(BaseHTTPRequestHandler):
             hb_state["closed"] = True
             hb_condition.notify()
         with FAULT_LOCK:
+            observation.update(connected=False, disconnected_at=time.monotonic())
             CLIENTS.pop(self.connection, None)
             PHONES.pop(self.connection, None)
             FS_WATCHES.pop(self.connection, None)
