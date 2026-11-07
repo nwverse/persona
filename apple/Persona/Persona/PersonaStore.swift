@@ -12,7 +12,7 @@ import AppKit
 /// the hub answers or without it.
 @MainActor @Observable
 final class PersonaStore {
-    /// Mochi first, then Milk Frog when the hub has listed it (kept across launches).
+    /// Mochi first, then valid packages the hub has listed (kept across launches).
     private(set) var offered: [Persona] = Persona.builtins
     /// The chosen one as it can be shown now: the built-in until its package is on the phone.
     private(set) var current: Persona = .builtin {
@@ -70,7 +70,7 @@ final class PersonaStore {
     }
 
     private static func supportedPackage(_ info: PersonaInfo) -> Bool {
-        info.id == PersonaSelection.packageID && info.manifest.id == info.id && info.manifest.problem == nil
+        info.manifest.id == info.id && info.manifest.problem == nil
     }
 
     private var indexURL: URL { root.appending(path: "index.json") }
@@ -135,10 +135,7 @@ final class PersonaStore {
     /// Picks a persona; a package is downloaded first (on failure, or with no hub to download from, the choice stays
     /// as it was and `error` says why).
     func choose(_ p: Persona, api: APIClient?) async {
-        guard PersonaSelection.supports(p.id) else {
-            await choose(.builtin, api: api)
-            return
-        }
+        guard offered.contains(p) else { return }
         if !isOnPhone(p) {
             guard let api else {
                 error = String(localized: "“\(p.name)” isn’t on this phone yet. Connect to the hub, then choose it.")

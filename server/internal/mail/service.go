@@ -194,7 +194,7 @@ func (s *Service) account(id string) (*MailAccount, error) {
 	defer s.mu.Unlock()
 	a, ok := s.accts[id]
 	if !ok {
-		return nil, fmt.Errorf("unknown account %q", id)
+		return nil, &UnknownAccountError{Account: id}
 	}
 	cp := *a
 	return &cp, nil
@@ -312,7 +312,7 @@ func (s *Service) DeleteAccount(id string) error {
 	s.mu.Lock()
 	if _, ok := s.accts[id]; !ok {
 		s.mu.Unlock()
-		return fmt.Errorf("unknown account %q", id)
+		return &UnknownAccountError{Account: id}
 	}
 	delete(s.accts, id)
 	delete(s.loginErr, id)

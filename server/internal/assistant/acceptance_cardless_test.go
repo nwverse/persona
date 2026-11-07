@@ -167,27 +167,38 @@ func TestAcceptanceWithABotKeepsItsCard(t *testing.T) {
 	}
 }
 
-// A bot status that cannot be read (the manager away) is a card for later, not a card never due: nothing is kept as card-less.
+// A bot status that cannot be read (the manager away) is a card for later, not a card never due: the ask is kept
+// waiting for its card, not card-less, and the next tick posts it once the status reads (acceptance_retry_test.go). A
+// card whose send failed is the same.
 func TestAcceptanceStatusErrorIsNotNoCard(t *testing.T) {
-	s, f, posts, id := cardlessService(t, botNotSetUp)
-	f.answerApp(AppFeishu, FeishuStatusGet, func(json.RawMessage) (any, error) { return nil, errors.New("manager away") })
-	s.feishuForgetStatus()
-	s.askAcceptance(onlyTodo(s), "box", "s1", deployedReply)
-	if a := askOf(s, id); a != nil {
-		t.Fatalf("kept as if no card were due: %+v", a)
+	waiting := func(t *testing.T, s *Service, id string, posts func() []string) {
+		t.Helper()
+		if a := askOf(s, id); a == nil || a.AskedAt.IsZero() || a.MessageID != "" || a.NoCard {
+			t.Fatalf("not kept waiting for its card: %+v", a)
+		}
+		if got := posts(); len(got) != 0 {
+			t.Fatalf("posted: %q", got)
+		}
 	}
-	if got := posts(); len(got) != 0 {
-		t.Fatalf("posted: %q", got)
-	}
-	// The card that failed to go out is not card-less either: nothing is kept for it here (a retry is #4518's).
-	f.answerApp(AppFeishu, FeishuStatusGet, func(json.RawMessage) (any, error) {
-		return FeishuStatus{Ready: true, Enabled: true, Owner: "ou_me", Features: FeishuFeatures{Reports: true}}, nil
+	t.Run("status unreadable", func(t *testing.T) {
+		s, f, posts, id := cardlessService(t, botNotSetUp)
+		f.answerApp(AppFeishu, FeishuStatusGet, func(json.RawMessage) (any, error) { return nil, errors.New("manager away") })
+		s.feishuForgetStatus()
+		s.askAcceptance(onlyTodo(s), "box", "s1", deployedReply)
+		waiting(t, s, id, posts)
+		f.answerApp(AppFeishu, FeishuStatusGet, func(json.RawMessage) (any, error) { return botReady, nil })
+		s.feishuForgetStatus()
+		s.retryAcceptance(time.Now())
+		if a := askOf(s, id); a == nil || a.MessageID == "" || countAcceptCards(posts()) != 1 {
+			t.Fatalf("the card for later did not go out: %+v, %d cards", a, countAcceptCards(posts()))
+		}
 	})
-	f.answerApp(AppFeishu, FeishuPost, func(json.RawMessage) (any, error) { return nil, errors.New("feishu: 503") })
-	s.askAcceptance(onlyTodo(s), "box", "s1", deployedReply)
-	if a := askOf(s, id); a != nil {
-		t.Fatalf("a failed post was kept as card-less: %+v", a)
-	}
+	t.Run("send failed", func(t *testing.T) {
+		s, f, _, id := cardlessService(t, botReady)
+		f.answerApp(AppFeishu, FeishuPost, func(json.RawMessage) (any, error) { return nil, errors.New("feishu: 503") })
+		s.askAcceptance(onlyTodo(s), "box", "s1", deployedReply)
+		waiting(t, s, id, func() []string { return nil })
+	})
 }
 
 // The morning reminder is a card: a card-less ask gets none and nothing fails.

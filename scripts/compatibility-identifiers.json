@@ -558,6 +558,56 @@
       "path_tokens": [],
       "external_refs": []
     },
+    "scripts/test/fixtures/deployment/install.sh.fixture": {
+      "reason": "Immutable historical deployment input for mixed-version compatibility tests.",
+      "tokens": [
+        ".jarvis",
+        "JARVIS_",
+        "JARVIS_ADMIN_ACCESS",
+        "JARVIS_ADMIN_CIDRS",
+        "JARVIS_DL",
+        "JARVIS_HERDR_INSTALL",
+        "JARVIS_HOME",
+        "JARVIS_LISTEN",
+        "JARVIS_MACHINE",
+        "JARVIS_PAIR",
+        "JARVIS_ROLE",
+        "JARVIS_SKIP_HERDR",
+        "JARVIS_WITH",
+        "jarvis-link",
+        "jarvis-link-",
+        "jarvisd",
+        "jarvisd-",
+        "jarvisd-wechat"
+      ],
+      "path_tokens": [],
+      "external_refs": []
+    },
+    "scripts/test/fixtures/deployment/persona_config.py.fixture": {
+      "reason": "Immutable historical deployment input for mixed-version compatibility tests.",
+      "tokens": [
+        "JARVIS_",
+        "JARVIS_APP_GROUP",
+        "JARVIS_BUNDLE_ID",
+        "JARVIS_CONFIG",
+        "JARVIS_HUB_MACHINE",
+        "JARVIS_HUB_SSH",
+        "JARVIS_HUB_URL",
+        "JARVIS_MACHINES",
+        "JARVIS_META_WEARABLES",
+        "JARVIS_PUBLISH_URL",
+        "JARVIS_PUSH_RELAY",
+        "JARVIS_SIM",
+        "JARVIS_TEAM_ID",
+        "JARVIS_WRANGLER",
+        "Jarvis",
+        "jarvis",
+        "jarvis_config.py",
+        "jarvisd"
+      ],
+      "path_tokens": [],
+      "external_refs": []
+    },
     "scripts/test/rolling_compat_fixtures.py": {
       "reason": "Baseline regression fixture or exact compatibility assertion for a persisted contract.",
       "tokens": [

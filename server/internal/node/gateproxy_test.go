@@ -18,6 +18,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -147,7 +148,10 @@ func send(t *testing.T, method, url, body string, header ...string) (int, string
 		t.Fatal(err)
 	}
 	defer res.Body.Close()
-	b, _ := io.ReadAll(res.Body)
+	b, err := io.ReadAll(res.Body)
+	if err != nil { // an answer cut short is not an empty or a shorter one
+		t.Errorf("%s %s: the answer broke off after %d bytes: %v", method, url, len(b), err)
+	}
 	return res.StatusCode, string(b)
 }
 
@@ -962,7 +966,10 @@ func rawSend(t *testing.T, url, body string) (*http.Response, []byte) {
 		t.Fatal(err)
 	}
 	defer res.Body.Close()
-	b, _ := io.ReadAll(res.Body)
+	b, err := io.ReadAll(res.Body)
+	if err != nil { // an answer cut short is not a shorter one
+		t.Errorf("%s: the answer broke off after %d bytes: %v", url, len(b), err)
+	}
 	return res, b
 }
 
@@ -1112,6 +1119,148 @@ func TestGateProxyWatchesTheAnswerWithoutChangingIt(t *testing.T) {
 	}
 	if r := reports["/conversations/big/messages"]; r.MessageRef != "" || r.Text != "hi" {
 		t.Errorf("the answer over the limit: told %+v", r)
+	}
+}
+
+// lateBody is a request's body that, once read to its end, holds any further read until the answer has begun to go
+// out: what a goroutine that is slow to get to the body does to the proxy's request on its way to the API.
+type lateBody struct {
+	io.ReadCloser
+	answered <-chan struct{}
+	ended    atomic.Bool
+}
+
+func (b *lateBody) Read(p []byte) (int, error) {
+	if b.ended.Load() {
+		select {
+		case <-b.answered:
+		case <-time.After(10 * time.Second):
+		}
+	}
+	n, err := b.ReadCloser.Read(p)
+	if err == io.EOF {
+		b.ended.Store(true)
+	}
+	return n, err
+}
+
+// answerSignal closes answered when the first of the answer has been flushed to the command, by when net/http has closed
+// the request's body.
+type answerSignal struct {
+	http.ResponseWriter
+	once     sync.Once
+	answered chan struct{}
+}
+
+func (a *answerSignal) Flush() {
+	a.ResponseWriter.(http.Flusher).Flush()
+	a.once.Do(func() { close(a.answered) })
+}
+
+// Once the proxy has begun to answer, net/http no longer lets a handler read the request's body (a read fails with
+// "http: invalid Read on closed Body"), so what the proxy sends on to the API must not read the server's body past the
+// end of the request: a transport that reads it after the API's answer has begun, as it does to see that the body had
+// no more than its length, closes the connection to the API with the answer half read, and the command gets half an
+// answer. The API here answers at once and then holds the rest until the connection is cut or a moment has gone by.
+// Each shape of request goes another way through the proxy: a JSON body read whole, one over what is read to match it
+// (by one byte, and by more), a body that is not JSON, and each of them sent without a length (chunked); the API must
+// get each body as it was sent.
+func TestGateProxyDoesNotCutAnAnswerWhenTheRequestBodyIsClosed(t *testing.T) {
+	const first, rest = `{"data":{"message_id":"om_late","note":"`, `all of it"}}`
+	var mu sync.Mutex
+	took := map[string]string{} // the body the API got, by path
+	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost { // not the gate's: a Persona node on this machine probes the ports tests listen on (ports.go)
+			return
+		}
+		b, _ := io.ReadAll(r.Body)
+		mu.Lock()
+		took[r.URL.Path] = string(b)
+		mu.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(first))
+		w.(http.Flusher).Flush()
+		select {
+		case <-r.Context().Done(): // the proxy let go of the connection
+		case <-time.After(300 * time.Millisecond):
+		}
+		_, _ = w.Write([]byte(rest))
+	}))
+	t.Cleanup(api.Close)
+	n, hub, _ := ledgerNode(t, api.URL, proto.LarkRule{Method: "POST", Path: "/conversations/**", Action: "allow"})
+	gp := n.gates()
+	base, release, err := gp.open("ex", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer release()
+	// The proxy behind a server of the test's own, to hold what the proxy's request reads of the body.
+	front := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		answered := make(chan struct{}) // one for each request
+		r.Body = &lateBody{ReadCloser: r.Body, answered: answered}
+		gp.ServeHTTP(&answerSignal{ResponseWriter: w, answered: answered}, r)
+	}))
+	t.Cleanup(front.Close)
+
+	// A JSON body of n bytes.
+	jsonOf := func(n int) string { return `{"text":"` + strings.Repeat("a", n-len(`{"text":""}`)) + `"}` }
+	const (
+		jsonType  = "application/json"
+		otherType = "application/octet-stream"
+	)
+	cases := []struct {
+		name, contentType, body string
+		chunked                 bool
+		text                    string // what the ledger line says the write said: none for a body not read whole
+	}{
+		{"json", jsonType, `{"text":"hi"}`, false, "hi"},
+		{"json one over the most", jsonType, jsonOf(gateBodyMax + 1), false, ""},
+		{"json over the most", jsonType, jsonOf(gateBodyMax + 100), false, ""},
+		{"json chunked", jsonType, `{"text":"hi"}`, true, "hi"},
+		{"json chunked over the most", jsonType, jsonOf(gateBodyMax + 100), true, ""},
+		{"not json", otherType, "0123456789", false, ""},
+		{"not json chunked", otherType, "0123456789", true, ""},
+		{"form", "application/x-www-form-urlencoded", "text=hi", false, ""},
+	}
+	pathOf := func(i int) string { return "/conversations/late" + strconv.Itoa(i) + "/messages" }
+	t.Run("requests", func(t *testing.T) {
+		for i, c := range cases {
+			t.Run(c.name, func(t *testing.T) {
+				t.Parallel()
+				req, err := http.NewRequest("POST", front.URL+base[strings.LastIndex(base, "/"):]+"/api/v1"+pathOf(i), strings.NewReader(c.body))
+				if err != nil {
+					t.Fatal(err)
+				}
+				req.Header.Set("Content-Type", c.contentType)
+				if c.chunked {
+					req.ContentLength = -1
+				}
+				res, err := http.DefaultClient.Do(req)
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer res.Body.Close()
+				got, err := io.ReadAll(res.Body)
+				if err != nil || res.StatusCode != http.StatusOK || string(got) != first+rest {
+					t.Errorf("the command got %d with %q (%v), want 200 with %q", res.StatusCode, got, err, first+rest)
+				}
+				mu.Lock()
+				body := took["/api/v1"+pathOf(i)]
+				mu.Unlock()
+				if body != c.body {
+					t.Errorf("the API got a body of %d bytes, want the %d bytes sent", len(body), len(c.body))
+				}
+			})
+		}
+	})
+	if t.Failed() {
+		return
+	}
+	reports := hub.reports(t, len(cases))
+	for i, c := range cases {
+		if r := reports[pathOf(i)]; r.MessageRef != "om_late" || r.Text != c.text {
+			t.Errorf("%s: told %+v, want message_ref om_late and text %q", c.name, r, c.text)
+		}
 	}
 }
 

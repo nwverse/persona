@@ -2,6 +2,10 @@
 
 Pitfalls, odd behavior and the decisions made at the time (formerly "Lessons" in `CLAUDE.md`; index in `docs/lessons/README.md`). Add new lessons to the relevant section, or create one if none fits.
 
+## Retired drawings and downloadable avatars (#1)
+
+- Retiring local renderers must not turn the hub package catalog into an ID allowlist. Apply manifest validation and catalog/manifest ID equality to both cached and live lists, reserve retired drawing IDs, and keep an unavailable package's selected ID while rendering Mochi. The next valid listing restores the package without another selection. Live Activity normalization must keep custom package faces too; Milk Frog's watch pet remains specific to its own package.
+
 ## Release-mode demo coverage (#6227)
 
 - A mock can support a feature while the bundled demo still hides it: omitted collections become empty defaults, and DEBUG screenshot helpers never run in TestFlight. Include the same synthetic todo samples in the bundle, verify every linked Agent has bundled content, and exercise knowledge search through the normal demo route. Keep the response compatible with both grouped results and flat hits; leave real network and phone-data actions refused.
@@ -1253,3 +1257,8 @@ DEBUG 的代码可能在 `Persona.debug.dylib` 中，40 KiB 的 `Persona` 只是
 - **Every expander inside a chat row needs the pin, nested ones too**: the phase blocks inside the run's card first toggled with a plain `withAnimation`; in the upside-down list a phase opening 12 rows (or 「n more」 opening 43) pushed its head and everything above it up, under the top bar. Route each one through `toggleInPlace(pin, key, …)` with `.chatPinned(key)` on what was tapped (or the head above it, for 「n more」 / Show Fewer), as the card's own head does; outside the list (`chatPin` nil: the chat's header) it animates as before, so check Reduce Motion there yourself (`toggleInPlace` falls back to `withAnimation` unconditionally).
 - **Don't middle-truncate a line that ends in numbers**: the Agents row's 「后台 workflow「parity-audit」 · Verify 2/2 · 169/185+」 cut in the middle read 「…9/185+」, a wrong count. Cut only the name (`WorkflowLine`: name and details as two texts, the details laid out first).
 - **The mock's times are fixed when it starts**: `mock_hub.py`'s `ago()` counts from its start, so an ended run (`ended_at` 40 minutes "ago") leaves the chat's header once the mock has run for 20 minutes, and `testCrowdedWorkflowsLeaveRoomForTheChat` failed on "the stopped one's error is missing". Start the mock afresh for each run of the workflow UI tests; `-collect-test-diagnostics never` also saved about ten minutes per `xcodebuild test` after the tests had passed.
+
+## An icon-only themed button takes its glyph's size (2026-11-07, #58)
+
+- On iOS, `.themedButton()` (glass, bordered and soft alike) sizes a button by its label. With a bare `Image`, each button is as big as its glyph: `ellipsis` is only a few points tall, so at the default text size the VNC page's More came out as a 37 × 19 pt sliver beside a 48 × 38 pt Close, and Help (`questionmark.circle`) was smaller too.
+- Give every icon-only button in a row the same square label: `Theme.Size.icon` through `scaledFrame` (`VNCPage.barIcon`). Comparing the buttons' frames in a UI test catches it (`VNCTests.testTopBarButtonsKeepTheirShape`); a glance at one button does not.
