@@ -10,6 +10,9 @@ import PersonaKit
 final class AgentSync {
     static let shared = AgentSync()
 
+    /// The app's model (the sync scenarios hand it theirs, PersonaTests/Sync).
+    var model: () -> AppModel = { AppModel.shared }
+
     /// Worth keeping current: every live agent, and any session used within this window.
     static let recentWindow: TimeInterval = 24 * 3600
     static let maxSessions = 40
@@ -69,7 +72,7 @@ final class AgentSync {
     }
 
     private func plan() {
-        let model = AppModel.shared
+        let model = self.model()
         // Each group's agents while its own socket is up (docs/protocol/multi-hub.md).
         let up = Set(model.groupIDs.filter { model.isLive($0) })
         guard !up.isEmpty else { return }
@@ -121,7 +124,7 @@ final class AgentSync {
     /// its group's socket is down (in the background, offline): no push is due then, and the subscription asks for what
     /// it missed (`since_seq`) when the socket is back, whose next list looks again.
     private func checkStall(_ key: SessionKey) {
-        let model = AppModel.shared
+        let model = self.model()
         guard model.isSubscribed(key), model.isLive(key.group), let store = model.existingChat(key),
               !catchingUp.contains(key)
         else { return }
@@ -139,7 +142,7 @@ final class AgentSync {
             do {
                 // Not asked again for this write once one page held all of it: the write may have added no line. After
                 // more pages (`fill`, `reload`, which keep their failures to themselves) the next look asks once more.
-                if try await Self.pullInto(store, key, api) == .none { caughtUpFor[key] = updatedAt }
+                if try await Self.pullInto(store, key, api, model: model) == .none { caughtUpFor[key] = updatedAt }
             } catch {
                 ChatTrace.shared.note(key, "catch up failed: \(error.localizedDescription)")
             }
@@ -193,12 +196,12 @@ final class AgentSync {
 
     /// Brings one session up to date; false when the hub could not be reached (it is tried again on the next change).
     private func pull(_ key: SessionKey) async -> Bool {
-        let model = AppModel.shared
+        let model = self.model()
         guard let api = model.api(key.group) else { return false }
 
         do {
             if let store = model.existingChat(key), !store.items.isEmpty {
-                try await Self.pullInto(store, key, api)
+                try await Self.pullInto(store, key, api, model: model)
                 return true
             }
             try await Self.pullToDisk(key, api)
@@ -211,13 +214,13 @@ final class AgentSync {
     /// A store in memory: what came after its `covered` goes into it (filling a hole, or starting over, when the batch
     /// says so). Returns what the first batch left to do.
     @discardableResult
-    private static func pullInto(_ store: ChatStore, _ key: SessionKey, _ api: APIClient) async throws -> ChatStore.Gap {
+    private static func pullInto(_ store: ChatStore, _ key: SessionKey, _ api: APIClient, model: AppModel) async throws -> ChatStore.Gap {
         let r = try await api.items(key, afterSeq: store.covered)
         let gap = store.apply(r.items, span: r.span, moreAfter: r.moreAfter == true)
         switch gap {
         case .none: break
-        case .fill: await AppModel.shared.fill(key)
-        case .reload: await AppModel.shared.reload(key)
+        case .fill: await model.fill(key)
+        case .reload: await model.reload(key)
         }
         return gap
     }
