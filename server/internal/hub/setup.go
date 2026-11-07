@@ -124,8 +124,16 @@ type setupEnv struct {
 	// restartHub: config changed what a running hub reads only at start, so service restarts it; restartWhy says what.
 	restartHub bool
 	restartWhy []string
-	// builtinCode makes a one-time code that binds the built-in manager's own service (ManagerCode's).
+	// hubRestart restarts the hub's service again (set by service when the hub runs as it): undoing a switch to the
+	// built-in manager's own service that could not be finished. switched: this run set assistant.mode service on a
+	// hub.json a hub had run with (--manager-service); prevMode is what it was ("" for none).
+	hubRestart func(ctx context.Context) error
+	switched   bool
+	prevMode   string
+	// builtinCode makes a one-time code that binds the built-in manager's own service (ManagerCode's); voidCode voids
+	// it when the manager's program did not trade it.
 	builtinCode func(ctx context.Context, cfg *Config) (string, error)
+	voidCode    func(ctx context.Context, cfg *Config, code string) error
 
 	healthWait  time.Duration
 	dbWait      time.Duration
@@ -166,6 +174,7 @@ func newSetupEnv(out io.Writer, o setupOptions) (*setupEnv, error) {
 			code, _, err := builtinCode(ctx, cfg)
 			return code, err
 		},
+		voidCode: voidBuiltinCode,
 
 		healthWait:  90 * time.Second,
 		dbWait:      30 * time.Second,
@@ -299,10 +308,11 @@ func (e *setupEnv) config() (*setupConfig, error) {
 	}
 	_, hasToken := raw.get("token")
 	fresh := !hasToken
-	e.restartHub, e.restartWhy = false, nil
+	e.restartHub, e.restartWhy, e.hubRestart, e.switched, e.prevMode = false, nil, nil, false, ""
 	var notes []string
-	if e.o.managerService && !e.canManagerService() {
-		return nil, e.fail("config", "这里装不了内置管理者的常驻服务（"+e.noManagerServiceWhy()+"）", "去掉 --manager-service 重跑")
+	services := e.canManagerService(context.Background())
+	if e.o.managerService && !services {
+		return nil, e.fail("config", "这里装不了内置管理者的常驻服务（"+e.noManagerServiceWhy(context.Background())+"）", "去掉 --manager-service 重跑")
 	}
 	if fresh {
 		in := e.installInputs(&notes)
@@ -318,13 +328,13 @@ func (e *setupEnv) config() (*setupConfig, error) {
 			if err := fillMissing(o, genObj); err != nil {
 				return err
 			}
-			return freshManagerMode(o, e.canManagerService())
+			return freshManagerMode(o, services, e.o.managerService)
 		}); err != nil {
 			return nil, e.fail("config", "写不了 "+e.hubJSON()+"："+err.Error(), "检查这个目录的权限")
 		}
 	} else {
 		if e.o.managerService {
-			changed, err := e.toManagerService()
+			changed, err := e.toManagerService(context.Background())
 			if err != nil {
 				return nil, err
 			}

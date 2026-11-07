@@ -47,8 +47,8 @@ func assistantMode(t *testing.T, root string) (mode string, external bool) {
 	return cfg.Assistant.Mode, cfg.Assistant.External
 }
 
-// A new install with --no-service, in a container, or where an earlier run wrote service mode but could not install
-// the services: the hub starts the built-in manager itself (child mode), and setup runs no manager program.
+// A new install with --no-service, in a container, or with a child mode written by hand: the hub starts the built-in
+// manager itself (child mode), and setup runs no manager program.
 func TestSetupChildModeWithoutServices(t *testing.T) {
 	for _, c := range []struct {
 		name      string
@@ -58,7 +58,6 @@ func TestSetupChildModeWithoutServices(t *testing.T) {
 		want      string
 	}{
 		{name: "--no-service", noService: true},
-		{name: "--no-service after a run that wrote service mode", file: `{"database_url":"postgres://x","assistant":{"mode":"service"}}`, noService: true},
 		{name: "in a container", container: true},
 		{name: "child written by hand stays", file: `{"database_url":"postgres://x","assistant":{"mode":"child"}}`, want: "child"},
 	} {
@@ -99,6 +98,39 @@ func TestSetupChildModeWithoutServices(t *testing.T) {
 	}
 }
 
+// Linux without a systemd user instance: the new hub.json stays in child mode, so the --no-service rerun the service
+// step asks for leaves a hub that starts the built-in manager itself.
+func TestSetupNoSystemdStaysChild(t *testing.T) {
+	home := setupTestHome(t)
+	var token string
+	port := fakeHub(t, &token, false)
+	cmds := &fakeCommands{replies: map[string]fakeReply{"systemctl --user show-environment": {err: true, out: "Failed to connect to bus"}}}
+	e, out := testSetupEnv(t, home, setupOptions{listen: ":" + strconv.Itoa(port), tls: ":18662", json: true}, cmds, "systemctl", "loginctl")
+	if err := os.WriteFile(filepath.Join(e.root, "hub.json"), []byte(`{"database_url":"postgres://x"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.setup(context.Background()); !errors.Is(err, ErrSetupStopped) || !strings.Contains(out.String(), "--no-service") {
+		t.Fatalf("%v\n%s", err, out)
+	}
+	if mode, _ := assistantMode(t, e.root); mode != "" {
+		t.Fatalf("assistant.mode %q without systemd", mode)
+	}
+	e.o.noService = true
+	e.pingDB = func(context.Context, string) error {
+		cfg, _ := readHubJSON(e.root)
+		raw, _ := cfg.get("token")
+		_ = json.Unmarshal(raw, &token)
+		return nil
+	}
+	out.Reset()
+	if err := e.setup(context.Background()); err != nil {
+		t.Fatalf("%v\n%s", err, out)
+	}
+	if s := setupSteps(t, out.String())["manager"]; !s.OK || !strings.Contains(s.Detail, "assistant.mode child") {
+		t.Fatalf("manager step %+v", s)
+	}
+}
+
 // An existing hub keeps its mode; --manager-service switches it, restarts the hub so it no longer starts the built-in
 // manager, and binds and installs the built-in manager's service. Once it is, again changes nothing.
 func TestSetupManagerServiceOnAnExistingHub(t *testing.T) {
@@ -135,7 +167,7 @@ func TestSetupManagerServiceOnAnExistingHub(t *testing.T) {
 	if mode, _ := assistantMode(t, e.root); mode != AssistantModeService {
 		t.Fatalf("assistant.mode %q", mode)
 	}
-	if !cmds.called("systemctl --user restart personad") || !cmds.called(install+" --join http://127.0.0.1:"+strconv.Itoa(port)) {
+	if !cmds.called(install+" --check") || !cmds.called("systemctl --user restart personad") || !cmds.called(install+" --join http://127.0.0.1:"+strconv.Itoa(port)) {
 		t.Fatalf("calls %v", cmds.calls)
 	}
 	steps := setupSteps(t, out.String())
@@ -149,15 +181,63 @@ func TestSetupManagerServiceOnAnExistingHub(t *testing.T) {
 	if err := e.setup(context.Background()); err != nil {
 		t.Fatalf("%v\n%s", err, out)
 	}
-	if cmds.called("systemctl --user restart") {
-		t.Fatalf("restarted again: %v", cmds.calls)
+	if cmds.called("systemctl --user restart") || cmds.called(install+" --check") {
+		t.Fatalf("restarted or checked again: %v", cmds.calls)
 	}
+}
+
+// --manager-service on an existing hub whose personad cannot install the built-in manager's service (an older one):
+// nothing changes. One whose install fails after the switch: the switch is undone, the hub restarted into child mode.
+func TestSetupManagerServiceChecksAndUndoes(t *testing.T) {
+	newEnv := func(t *testing.T) (*setupEnv, *bytes.Buffer, *fakeCommands, string) {
+		home := setupTestHome(t)
+		token := "existing-token"
+		port := fakeHub(t, &token, true)
+		cmds := &fakeCommands{replies: map[string]fakeReply{"loginctl show-user": {out: "yes\n"}, "systemctl --user is-active": {}}}
+		e, out := testSetupEnv(t, home, setupOptions{listen: ":18660", tls: ":18662", json: true, managerService: true}, cmds, "systemctl", "loginctl")
+		file := `{"token":"existing-token","listen":":` + strconv.Itoa(port) + `","database_url":"postgres://x","machines":[{"id":"r1","name":"r1","kind":"ssh"}]}`
+		if err := os.WriteFile(filepath.Join(e.root, "hub.json"), []byte(file), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return e, out, cmds, file
+	}
+	t.Run("an older personad", func(t *testing.T) {
+		e, out, cmds, file := newEnv(t)
+		cmds.replies[filepath.Join(e.root, "bin", "personad")+" manager install --builtin --check"] = fakeReply{err: true, out: "flag provided but not defined: -builtin\n"}
+		if err := e.setup(context.Background()); !errors.Is(err, ErrSetupStopped) || !strings.Contains(out.String(), "什么都没改") {
+			t.Fatalf("%v\n%s", err, out)
+		}
+		if b, _ := os.ReadFile(filepath.Join(e.root, "hub.json")); string(b) != file || cmds.called("systemctl --user restart") {
+			t.Fatalf("changed: %s %v", b, cmds.calls)
+		}
+	})
+	t.Run("install fails after the switch", func(t *testing.T) {
+		e, out, cmds, _ := newEnv(t)
+		bin := filepath.Join(e.root, "bin", "personad")
+		cmds.replies[bin+" manager install --builtin --join"] = fakeReply{err: true, out: "systemctl --user restart persona-manager-assistant.service failed: boom\n"}
+		var voided []string
+		e.voidCode = func(_ context.Context, _ *Config, code string) error { voided = append(voided, code); return nil }
+		if err := e.setup(context.Background()); !errors.Is(err, ErrSetupStopped) {
+			t.Fatalf("%v\n%s", err, out)
+		}
+		if mode, _ := assistantMode(t, e.root); mode != "" {
+			t.Fatalf("assistant.mode %q after the undo", mode)
+		}
+		// the hub started on the switched hub.json, then the undo: the service taken away, the hub restarted last
+		n := len(cmds.calls)
+		s := setupSteps(t, out.String())["manager"]
+		if n < 2 || cmds.calls[n-2] != bin+" manager uninstall --builtin" || cmds.calls[n-1] != "systemctl --user restart personad" ||
+			!cmds.called("systemctl --user start personad") || s.OK || !strings.Contains(s.Detail, "改回了 hub 自己拉起内置管理者") ||
+			!strings.Contains(s.Next, "--manager-service") || len(voided) != 1 || voided[0] != "mi_setup" {
+			t.Fatalf("voided %v, calls %v, step %+v", voided, cmds.calls, s)
+		}
+	})
 }
 
 // --manager-service on a hub whose built-in manager runs elsewhere (assistant.external) stops: it changes nothing.
 func TestSetupManagerServiceLeavesExternal(t *testing.T) {
 	home := setupTestHome(t)
-	e, out := testSetupEnv(t, home, setupOptions{listen: ":18660", tls: ":18662", managerService: true}, &fakeCommands{})
+	e, out := testSetupEnv(t, home, setupOptions{listen: ":18660", tls: ":18662", managerService: true}, &fakeCommands{}, "systemctl")
 	file := `{"token":"t","database_url":"postgres://x","assistant":{"external":true}}`
 	if err := os.WriteFile(filepath.Join(e.root, "hub.json"), []byte(file), 0o600); err != nil {
 		t.Fatal(err)
@@ -232,7 +312,8 @@ func TestSetupBuiltinManagerProblems(t *testing.T) {
 		if mode, _ := assistantMode(t, e.root); mode != AssistantModeService || cmds.called(filepath.Join(e.root, "bin", "personad")+" manager") {
 			t.Fatalf("mode %q, calls %v", mode, cmds.calls)
 		}
-		if s := setupSteps(t, out.String())["manager"]; !s.OK || !strings.Contains(s.Next, "manager join --builtin") {
+		if s := setupSteps(t, out.String())["manager"]; s.OK || !strings.Contains(s.Next, "manager join --builtin") ||
+			!strings.Contains(s.Next, "manager-mode child") || strings.Contains(s.Next, "<码> 绑定") {
 			t.Fatalf("manager step %+v", s)
 		}
 	})
@@ -248,26 +329,26 @@ func TestSetupFlagsConflict(t *testing.T) {
 
 func TestFreshManagerMode(t *testing.T) {
 	for _, c := range []struct {
-		in      string
-		service bool
-		want    string
+		in             string
+		service, force bool
+		want           string
 	}{
-		{`{}`, true, `{"assistant":{"mode":"service"}}`},
-		{`{}`, false, `{}`},
-		{`{"assistant":{"mode":"service","owner":"me"}}`, false, `{"assistant":{"owner":"me"}}`},
-		{`{"assistant":{"mode":"child"}}`, true, `{"assistant":{"mode":"child"}}`},
-		{`{"assistant":{"external":true}}`, true, `{"assistant":{"external":true}}`},
-		{`{"assistant":{"external":true,"mode":"service"}}`, false, `{"assistant":{"external":true,"mode":"service"}}`},
+		{`{}`, true, false, `{"assistant":{"mode":"service"}}`},
+		{`{}`, false, false, `{}`},
+		{`{"assistant":{"mode":"service","owner":"me"}}`, false, false, `{"assistant":{"mode":"service","owner":"me"}}`},
+		{`{"assistant":{"mode":"child"}}`, true, false, `{"assistant":{"mode":"child"}}`},
+		{`{"assistant":{"mode":"child"}}`, true, true, `{"assistant":{"mode":"service"}}`},
+		{`{"assistant":{"external":true}}`, true, true, `{"assistant":{"external":true}}`},
 	} {
 		o, err := parseJSONObject([]byte(c.in))
 		if err != nil {
 			t.Fatal(err)
 		}
-		if err := freshManagerMode(o, c.service); err != nil {
+		if err := freshManagerMode(o, c.service, c.force); err != nil {
 			t.Fatal(err)
 		}
 		if got := string(o.marshal()); got != c.want {
-			t.Errorf("%s service=%v: %s, want %s", c.in, c.service, got, c.want)
+			t.Errorf("%s service=%v force=%v: %s, want %s", c.in, c.service, c.force, got, c.want)
 		}
 	}
 }

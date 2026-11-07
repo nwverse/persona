@@ -307,3 +307,119 @@ func TestBuiltinRestartsOnANewBinary(t *testing.T) {
 		}
 	})
 }
+
+// The command lines the hub's setup runs are the ones install --builtin parses, through Main's dispatch.
+func TestBuiltinSetupCommandLines(t *testing.T) {
+	args := managerconf.BuiltinInstallArgs("http://127.0.0.1:1")
+	if args[0] != "manager" || args[1] != "install" || !isBuiltin(args[2:]) {
+		t.Fatalf("%v", args)
+	}
+	a, err := parseInstallBuiltin(args[2:], func(k string) string {
+		if k == managerconf.BuiltinCodeEnv {
+			return " mi_code\n"
+		}
+		return ""
+	}, io.Discard)
+	if err != nil || a.check || a.join.hub != "http://127.0.0.1:1" || a.join.code != "mi_code" || !a.codeTaken {
+		t.Fatalf("%+v %v", a, err)
+	}
+	check := managerconf.BuiltinCheckArgs()
+	if !isBuiltin(check[2:]) {
+		t.Fatalf("%v", check)
+	}
+	if a, err := parseInstallBuiltin(check[2:], func(string) string { return "mi_code" }, io.Discard); err != nil || !a.check || a.join.code != "" {
+		t.Fatalf("%+v %v", a, err)
+	}
+	if _, err := parseInstallBuiltin([]string{"--builtin", "--check", "--join", "http://x"}, os.Getenv, io.Discard); !errors.Is(err, errUsage) {
+		t.Fatalf("--check with --join: %v", err)
+	}
+}
+
+// --check says whether the service can be installed, changing nothing; the code is read once and not handed on.
+func TestInstallBuiltinCheck(t *testing.T) {
+	home := isolate(t)
+	f := &fakeServices{}
+	e, out := f.env(t, "linux")
+	if err := cmdInstallBuiltin(context.Background(), e, []string{"--builtin", "--check"}); err != nil || !strings.Contains(out.String(), "can be installed") {
+		t.Fatalf("%v\n%s", err, out)
+	}
+	if fileExists(filepath.Join(home, ".config", "systemd", "user", "persona-manager-assistant.service")) || f.called("systemctl --user restart") {
+		t.Fatalf("--check changed things: %v", f.calls)
+	}
+	e.goos = "windows"
+	if err := cmdInstallBuiltin(context.Background(), e, []string{"--builtin", "--check"}); err == nil {
+		t.Fatal("--check on windows")
+	}
+	// The code in the environment: gone once read, so systemctl and launchctl never get it.
+	t.Setenv(managerconf.BuiltinCodeEnv, "mi_unknown")
+	e.goos, e.getenv = "linux", os.Getenv
+	srv, _ := joinCounter(t)
+	if err := cmdInstallBuiltin(context.Background(), e, []string{"--builtin", "--join", srv.URL}); !errors.As(err, new(ConfigError)) {
+		t.Fatalf("unknown code: %v", err)
+	}
+	if v, ok := os.LookupEnv(managerconf.BuiltinCodeEnv); ok {
+		t.Fatalf("still in the environment: %q", v)
+	}
+}
+
+// join --builtin without a code takes it from the environment.
+func TestJoinBuiltinCodeFromEnvironment(t *testing.T) {
+	home := isolate(t)
+	srv, trades := joinCounter(t)
+	f := &fakeServices{}
+	e, out := f.env(t, "linux")
+	e.getenv = func(k string) string {
+		if k == managerconf.BuiltinCodeEnv {
+			return "mi_builtin"
+		}
+		return ""
+	}
+	if err := cmdJoin(context.Background(), e, []string{"--builtin", srv.URL}); err != nil || trades() != 1 {
+		t.Fatalf("%v, trades %d\n%s", err, trades(), out)
+	}
+	if b, err := managerconf.ReadBinding(filepath.Join(home, ".persona")); err != nil || b.Token != "jb_builtin" {
+		t.Fatalf("binding %+v %v", b, err)
+	}
+	if err := cmdJoin(context.Background(), e, []string{srv.URL}); !errors.Is(err, errUsage) {
+		t.Fatalf("a manager's join without a code: %v", err)
+	}
+}
+
+// install --builtin on a Mac: bootstrapped when not loaded (tried again when bootstrap fails right after the
+// bootout), left alone when loaded and unchanged.
+func TestInstallBuiltinLaunchd(t *testing.T) {
+	home := isolate(t)
+	data := filepath.Join(home, ".persona")
+	if err := managerconf.WriteBinding(data, managerconf.Binding{Hub: "http://127.0.0.1:1", Token: "t"}); err != nil {
+		t.Fatal(err)
+	}
+	defer func(w time.Duration) { bootstrapWait = w }(bootstrapWait)
+	bootstrapWait = time.Millisecond
+	f := &fakeServices{}
+	e, out := f.env(t, "darwin")
+	run := e.run
+	fails := 2
+	e.run = func(ctx context.Context, name string, args ...string) (string, error) {
+		if name == "launchctl" && args[0] == "bootstrap" && fails > 0 {
+			fails--
+			f.calls = append(f.calls, "launchctl bootstrap (refused)")
+			return "Bootstrap failed: 5: Input/output error", errors.New("exit status 5")
+		}
+		return run(ctx, name, args...)
+	}
+	if err := cmdInstallBuiltin(context.Background(), e, []string{"--builtin"}); err != nil {
+		t.Fatalf("%v\n%s", err, out)
+	}
+	plist := filepath.Join(home, "Library", "LaunchAgents", managerconf.BuiltinLabel+".plist")
+	if !fileExists(plist) || !f.called("launchctl bootstrap gui/501 "+plist) || fails != 0 || !strings.Contains(out.String(), "started") {
+		t.Fatalf("calls %v\n%s", f.calls, out)
+	}
+	f.calls, f.active = nil, true
+	out.Reset()
+	if err := cmdInstallBuiltin(context.Background(), e, []string{"--builtin"}); err != nil {
+		t.Fatal(err)
+	}
+	if f.called("launchctl bootstrap") || f.called("launchctl kickstart") || f.called("launchctl bootout") || !strings.Contains(out.String(), "left as it was") {
+		t.Fatalf("calls %v\n%s", f.calls, out)
+	}
+}

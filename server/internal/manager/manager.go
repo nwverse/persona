@@ -42,9 +42,10 @@ const Usage = `usage:
                        用 App 里「新建管理者」给的安装码换这个管理者的 token，写进目录里的 manager.json
                        （默认 ~/.persona/managers/<id>）；数据库是它自己的 Postgres：install 时在 Docker 里建
                        （容器 persona-mgr-<id>-pg），或者 --database-url 给一个
-  personad manager join --builtin <hub address> <code> [--fingerprint <fingerprint>] [--install]
+  personad manager join --builtin <hub address> [<code>] [--fingerprint <fingerprint>] [--install]
                        bind the built-in manager's own service to the hub with a code from personad hub manager-code
-                       (the binding goes into ~/.persona/managers/assistant/manager.json); --install: then install it
+                       (given, or in PERSONA_MANAGER_CODE, which other users of the machine cannot read; the binding
+                       goes into ~/.persona/managers/assistant/manager.json); --install: then install its service
   personad manager run [--dir 目录] [--join <hub 地址> <安装码>]
                        运行这个管理者（--join：目录里还没有 manager.json 时先换码，容器用）
   personad manager install [--dir 目录]     建好它自己的 Postgres（Docker），装成常驻服务（Linux：systemd 用户服务；Mac：launchd）
@@ -52,10 +53,10 @@ const Usage = `usage:
                        停掉并去掉常驻服务；它的数据库容器停掉、数据卷留着（--purge：连容器和数据卷一起删掉）
   personad manager capabilities [--json]   只读列出这个程序支持的管理者能力
   personad manager status [--dir 目录]      这台电脑上的管理者和它们的服务
-  personad manager install --builtin [--join <hub address>]
+  personad manager install --builtin [--join <hub address>] | --check
                        install the built-in manager's own service (Linux: systemd user unit persona-manager-assistant;
                        Mac: launchd); --join: bind it first with the code in PERSONA_MANAGER_CODE, unless its binding
-                       works (personad hub setup does this)
+                       works (personad hub setup does this); --check: only say whether it can be installed here
   personad manager uninstall --builtin    stop and remove that service; its binding and data stay
   personad manager status --builtin       the built-in manager's binding and service
 `
@@ -349,6 +350,10 @@ func cmdJoin(ctx context.Context, e *env, args []string) error {
 	pos, err := parseInterleaved(fs, args)
 	if err != nil {
 		return err
+	}
+	if *builtin && len(pos) == 1 { // the code in the environment: no other user of the machine sees it
+		pos = append(pos, strings.TrimSpace(e.getenv(managerconf.BuiltinCodeEnv)))
+		_ = os.Unsetenv(managerconf.BuiltinCodeEnv)
 	}
 	if len(pos) != 2 {
 		return errUsage

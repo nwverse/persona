@@ -105,8 +105,11 @@ func ManagerCode(ctx context.Context, out io.Writer) error {
 	return writeManagerCode(out, code, until, cfg.Listen)
 }
 
+// writeManagerCode prints the code and how to bind with it: in the environment, where other users of the machine
+// cannot read it (a command line they can, while it runs).
 func writeManagerCode(out io.Writer, code string, until time.Time, listen string) error {
-	_, err := fmt.Fprintf(out, "%s\n\nGood until %s, once. On this machine (where the built-in manager's service runs):\n"+
-		"  persona-manager join --builtin %s %s\n", code, until.UTC().Format("2006-01-02 15:04 MST"), hubLocalURL(listen), code)
+	_, err := fmt.Fprintf(out, "%s\n\nGood until %s, once. On this machine (where the built-in manager's service runs), with "+
+		"the code in the environment, where other users of the machine cannot read it:\n"+
+		"  PERSONA_MANAGER_CODE=<the code> persona-manager join --builtin %s --install\n", code, until.UTC().Format("2006-01-02 15:04 MST"), hubLocalURL(listen))
 	return err
 }

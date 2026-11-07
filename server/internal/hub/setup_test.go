@@ -235,6 +235,7 @@ func testSetupEnv(t *testing.T, home string, o setupOptions, cmds *fakeCommands,
 		sleep:       func(time.Duration) {},
 		isContainer: func() bool { return false },
 		builtinCode: func(context.Context, *Config) (string, error) { return "mi_setup", nil },
+		voidCode:    func(context.Context, *Config, string) error { return nil },
 		healthWait:  time.Second, dbWait: time.Second,
 		dbContainer: setupDBContainer, dbVolume: setupDBVolume, dbPort: setupDBPort,
 	}

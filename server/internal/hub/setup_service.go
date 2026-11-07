@@ -196,7 +196,7 @@ func (e *setupEnv) systemdService(ctx context.Context, cfg *Config, bin string) 
 	if unitErr != nil {
 		return unitErr
 	}
-	if _, err := e.lookPath("systemctl"); err != nil || e.systemctl(ctx, "show-environment") != nil {
+	if !e.userSystemd(ctx) {
 		return e.fail("service", "这台电脑没有 systemd 用户服务（systemctl --user 用不了）",
 			"加 --no-service 重跑，自己让 "+bin+" hub 一直运行（例如 tmux、nohup）")
 	}
@@ -256,7 +256,7 @@ func (e *setupEnv) systemdService(ctx context.Context, cfg *Config, bin string) 
 		steps = append(steps, []string{"restart", "personad"})
 	case e.restartHub:
 		steps = append(steps, []string{"restart", "personad"})
-		what = "常驻服务已经装好；" + strings.Join(e.restartWhy, "、") + "，重启了 hub"
+		what = "常驻服务已经装好；" + e.restartReason(binChanged) + "，重启了 hub"
 	case binChanged:
 		// The units are as they were, but the binary is new (an upgrade): the hub running is the old one. The port
 		// stays with personad.socket, so the restart is not noticed (docs/operations/hub-restart.md).
@@ -274,6 +274,7 @@ func (e *setupEnv) systemdService(ctx context.Context, cfg *Config, bin string) 
 		}
 	}
 	noteBinary(bin, sum)
+	e.hubRestart = func(ctx context.Context) error { return e.systemctl(ctx, "restart", "personad") }
 	detail, next := what, e.linger(ctx)
 	if next != "" {
 		detail += "；没打开 linger：你退出登录后 hub 会停"
@@ -434,6 +435,16 @@ func (e *setupEnv) restartReason(binChanged bool) string {
 	return strings.Join(why, "、")
 }
 
+// relaunch is a launchd agent's restart, for undoing a switch to the built-in manager's own service.
+func (e *setupEnv) relaunch(target string) func(context.Context) error {
+	return func(ctx context.Context) error {
+		if out, err := e.run(ctx, nil, "launchctl", "kickstart", "-k", target); err != nil {
+			return fmt.Errorf("%v: %s", err, setupFirstLine(string(out)))
+		}
+		return nil
+	}
+}
+
 // kickstart restarts a loaded launchd agent (hub-systemd.sh's way on a Mac).
 func (e *setupEnv) kickstart(ctx context.Context, target string) error {
 	if out, err := e.run(ctx, nil, "launchctl", "kickstart", "-k", target); err != nil {
@@ -457,6 +468,7 @@ func (e *setupEnv) launchdService(ctx context.Context, cfg *Config, bin string) 
 			}
 			detail += "；" + e.restartReason(binChanged) + "，重启了它"
 		}
+		e.hubRestart = e.relaunch(domain + "/" + label)
 		noteBinary(bin, sum)
 		e.report("service", true, detail, "")
 		return nil
@@ -465,6 +477,7 @@ func (e *setupEnv) launchdService(ctx context.Context, cfg *Config, bin string) 
 	want := hubPlist(e.home, e.root, bin)
 	before, beforeErr := os.ReadFile(file)
 	_, loadedErr := e.run(ctx, nil, "launchctl", "print", domain+"/"+hubLaunchdLabel)
+	e.hubRestart = e.relaunch(domain + "/" + hubLaunchdLabel)
 	if string(before) == want && loadedErr == nil {
 		detail := "常驻服务已经装好、在运行，没动它（launchd " + hubLaunchdLabel + "）"
 		if binChanged || e.restartHub {
@@ -480,6 +493,7 @@ func (e *setupEnv) launchdService(ctx context.Context, cfg *Config, bin string) 
 	if os.IsNotExist(beforeErr) && e.hubAnswers(ctx, cfg) {
 		// A hub with this token runs already, started some other way (a terminal, an agent setup cannot tell runs
 		// it): a second agent could not get the port and would restart forever. Leave it to the user.
+		e.hubRestart = nil // not restarted here: it runs with the hub.json it read when it started
 		e.report("service", true, "hub 已经在运行，但不是 launchd 服务起的，没装常驻服务",
 			"停掉正在运行的 hub 后重跑 personad hub setup，装成登录后自动运行的服务")
 		return nil

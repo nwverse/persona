@@ -72,7 +72,19 @@ const (
 	BuiltinLabel   = "com.persona.manager.assistant"
 )
 
-// BuiltinCodeEnv is where `persona-manager install --builtin --join` reads the one-time code from (`persona-hub
-// setup` puts it there): not the command line, which any user of the machine can read while it runs, and the hub
-// trades the built-in manager's code from its own machine without any other credential.
+// BuiltinCodeEnv is where `persona-manager install --builtin --join` (and `join --builtin` given no code) reads the
+// one-time code from (`persona-hub setup` puts it there): not the command line, which any user of the machine can read
+// while it runs, and the hub trades the built-in manager's code from its own machine without any other credential.
 const BuiltinCodeEnv = "PERSONA_MANAGER_CODE"
+
+// BuiltinInstallArgs is the command line `persona-hub setup` runs the manager's program with (personad's form): bind
+// the built-in manager at hub with the code in BuiltinCodeEnv unless its binding works, then install its service.
+func BuiltinInstallArgs(hub string) []string {
+	return []string{"manager", "install", "--builtin", "--join", hub}
+}
+
+// BuiltinCheckArgs is the command line that says, before anything is changed, whether the manager's program can
+// install the built-in manager's service here (exit 0): `persona-hub setup --manager-service` runs it first.
+func BuiltinCheckArgs() []string {
+	return []string{"manager", "install", "--builtin", "--check"}
+}

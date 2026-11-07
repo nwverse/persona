@@ -9,6 +9,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"os"
 	"path/filepath"
 	"strings"
 	"time"
@@ -24,29 +25,51 @@ import (
 // manager-code` does) and runs `<root>/bin/personad manager install --builtin --join <the hub on loopback>` with the
 // code in its environment: the manager's program keeps a binding that works or trades the code, and writes its
 // manager.json and its own unit (persona-manager-assistant.service, or the launchd agent com.persona.manager.assistant)
-// itself; the hub writes neither. Last, setup waits until the hub has it on the bus.
+// itself; the hub writes neither. Last, setup waits until the hub has it on the bus. A switch of an existing hub
+// (--manager-service) is checked with the manager's program first, and undone when it cannot be finished: the hub
+// starts its child again, so the built-in manager is never left with nothing to run it.
 
-// canManagerService: setup installs services here, and so the built-in manager's own service too.
-func (e *setupEnv) canManagerService() bool {
-	return !e.o.noService && (e.goos == "linux" || e.goos == "darwin") && !e.isInsideContainer()
+// canManagerService: setup installs services here, and so the built-in manager's own service too: a Mac, or Linux
+// with a systemd user instance (without one the service step stops and says to rerun with --no-service).
+func (e *setupEnv) canManagerService(ctx context.Context) bool {
+	if e.o.noService || e.isInsideContainer() {
+		return false
+	}
+	switch e.goos {
+	case "darwin":
+		return true
+	case "linux":
+		return e.userSystemd(ctx)
+	}
+	return false
+}
+
+// userSystemd: systemctl --user works here.
+func (e *setupEnv) userSystemd(ctx context.Context) bool {
+	if _, err := e.lookPath("systemctl"); err != nil {
+		return false
+	}
+	return e.systemctl(ctx, "show-environment") == nil
 }
 
 // noManagerServiceWhy says why canManagerService is false.
-func (e *setupEnv) noManagerServiceWhy() string {
+func (e *setupEnv) noManagerServiceWhy(ctx context.Context) string {
 	switch {
 	case e.o.noService:
 		return "--no-service"
 	case e.isInsideContainer():
 		return "在容器里"
+	case e.goos == "linux" && !e.userSystemd(ctx):
+		return "没有 systemd 用户服务"
 	}
 	return e.goos + " 上没有常驻服务"
 }
 
 // freshManagerMode is a new install's assistant.mode: service when setup installs the built-in manager's service
-// (service true), else the default (child). A mode already in the file stays, except service where nothing would run
-// the built-in manager (--no-service after a run that could not install the services: no hub has read this file yet).
-// assistant.external is left alone: the built-in manager runs elsewhere then.
-func freshManagerMode(o *jsonObject, service bool) error {
+// (service true), else the default (child). A mode already in the file stays, but for --manager-service (force),
+// which asks for service over a child written there. assistant.external is left alone: the built-in manager runs
+// elsewhere then.
+func freshManagerMode(o *jsonObject, service, force bool) error {
 	a, err := o.object("assistant")
 	if err != nil {
 		return err
@@ -62,22 +85,39 @@ func freshManagerMode(o *jsonObject, service bool) error {
 	if raw, ok := a.get("mode"); ok {
 		_ = json.Unmarshal(raw, &mode)
 	}
-	switch {
-	case service && mode == "":
-		if err := a.set("mode", AssistantModeService); err != nil {
-			return err
-		}
-	case !service && mode == AssistantModeService:
-		a.del("mode")
-	default:
+	if !service || mode == AssistantModeService || (mode != "" && !force) {
 		return nil
+	}
+	if err := a.set("mode", AssistantModeService); err != nil {
+		return err
 	}
 	o.setObject("assistant", a)
 	return nil
 }
 
 // toManagerService sets an existing hub's assistant.mode to service (--manager-service); changed false when it was.
-func (e *setupEnv) toManagerService() (changed bool, err error) {
+// Before it changes anything, the manager's program that will run the service says it can be installed here (an
+// older one does not know how: the hub would be left with no built-in manager).
+func (e *setupEnv) toManagerService(ctx context.Context) (changed bool, err error) {
+	var mode string
+	if raw, err := readHubJSON(e.root); err == nil {
+		if a, err := raw.object("assistant"); err == nil && a != nil {
+			if m, ok := a.get("mode"); ok {
+				_ = json.Unmarshal(m, &mode)
+			}
+		}
+	}
+	bin := filepath.Join(e.root, "bin", "personad")
+	if _, statErr := os.Stat(bin); statErr == nil && mode != AssistantModeService {
+		if out, err := e.run(ctx, []string{"PERSONA_HOME=" + e.root}, bin, managerconf.BuiltinCheckArgs()...); err != nil {
+			why := lastLine(string(out))
+			if why == "" {
+				why = err.Error()
+			}
+			return false, e.fail("config", "装不了内置管理者的常驻服务，什么都没改："+why,
+				"按这句处理；"+bin+" 太旧时先升级它（重跑安装命令加 --hub），再重跑 personad hub setup --manager-service")
+		}
+	}
 	err = editHubJSON(e.root, func(o *jsonObject) error {
 		a, err := o.object("assistant")
 		if err != nil {
@@ -97,7 +137,7 @@ func (e *setupEnv) toManagerService() (changed bool, err error) {
 		if mode == AssistantModeService {
 			return nil
 		}
-		changed = true
+		changed, e.prevMode = true, mode
 		if err := a.set("mode", AssistantModeService); err != nil {
 			return err
 		}
@@ -111,7 +151,39 @@ func (e *setupEnv) toManagerService() (changed bool, err error) {
 	case err != nil:
 		return false, e.fail("config", "写不了 "+e.hubJSON()+"："+err.Error(), "检查这个目录的权限")
 	}
+	e.switched = changed
 	return changed, nil
+}
+
+// undoSwitch puts assistant.mode back as it was before this run's --manager-service, takes away the built-in
+// manager's service as far as it got (its binding stays; the hub's child gets a token of its own), and restarts the
+// hub so that it starts its child again. It says what it did.
+func (e *setupEnv) undoSwitch(ctx context.Context, bin string) string {
+	err := editHubJSON(e.root, func(o *jsonObject) error {
+		a, err := o.object("assistant")
+		if err != nil || a == nil {
+			return err
+		}
+		if e.prevMode == "" {
+			a.del("mode")
+		} else if err := a.set("mode", e.prevMode); err != nil {
+			return err
+		}
+		o.setObject("assistant", a)
+		return nil
+	})
+	if err != nil {
+		return "assistant.mode 没改回去（" + err.Error() + "）：运行 personad hub manager-mode child，再重启 hub 的服务"
+	}
+	e.switched = false
+	_, _ = e.run(ctx, []string{"PERSONA_HOME=" + e.root}, bin, "manager", "uninstall", "--builtin")
+	if e.hubRestart == nil {
+		return "assistant.mode 改回去了，hub 照旧自己拉起内置管理者"
+	}
+	if err := e.hubRestart(ctx); err != nil {
+		return "assistant.mode 改回去了，但重启 hub 没成功（" + err.Error() + "）：重启 hub 的服务后它才自己拉起内置管理者"
+	}
+	return "改回了 hub 自己拉起内置管理者，重启了 hub"
 }
 
 var errManagerExternal = errors.New("assistant.external")
@@ -134,7 +206,7 @@ func (e *setupEnv) builtinManager(ctx context.Context, cfg *setupConfig) error {
 		return nil
 	case a.StartsBuiltin():
 		next := ""
-		if e.canManagerService() {
+		if e.canManagerService(ctx) {
 			next = "要把它改成自己的常驻服务（hub 重启、升级时它不跟着重启）：personad hub setup --manager-service"
 		}
 		e.report("manager", true, "hub 自己拉起内置管理者（assistant.mode child）", next)
@@ -143,26 +215,42 @@ func (e *setupEnv) builtinManager(ctx context.Context, cfg *setupConfig) error {
 		e.report("manager", false, "hub.json 的 assistant.mode 是 "+a.Mode+"：hub 不认识，内置管理者没有运行",
 			"把 "+e.hubJSON()+" 里的 assistant.mode 改成 service（或者删掉，让 hub 自己拉起它），再重跑")
 		return nil
-	case !e.canManagerService():
-		e.report("manager", true, "内置管理者是自己的服务（assistant.mode service），这次没装它（"+e.noManagerServiceWhy()+"）",
-			"自己让它一直运行：personad hub manager-code 拿一个码，personad manager join --builtin "+hubLocalURL(cfg.Listen)+
-				" <码> 绑定，再一直运行 PERSONA_ASSISTANT_DEPLOY=service "+bin+" assistant")
+	case !e.canManagerService(ctx):
+		// Nothing runs the built-in manager here unless the user does: a problem, with both ways out.
+		e.report("manager", false, "内置管理者是自己的服务（assistant.mode service），这次没装它（"+e.noManagerServiceWhy(ctx)+"），现在没有东西运行它",
+			"要么自己让它一直运行：personad hub manager-code 拿一个码，PERSONA_MANAGER_CODE=<码> personad manager join --builtin "+
+				hubLocalURL(cfg.Listen)+" 绑定，再一直运行 PERSONA_ASSISTANT_DEPLOY=service "+bin+" assistant；"+
+				"要么 personad hub manager-mode child 后重启 hub，让 hub 自己拉起它")
 		return nil
+	}
+	retry := "按这句处理后重跑 personad hub setup"
+	if e.switched {
+		retry += " --manager-service"
 	}
 	code, err := e.builtinCode(ctx, cfg.Config)
 	if err != nil {
-		return e.fail("manager", "没拿到绑定内置管理者的码："+err.Error(), "重跑 personad hub setup")
+		detail := "没拿到绑定内置管理者的码：" + err.Error()
+		if e.switched {
+			detail += "；" + e.undoSwitch(ctx, bin)
+		}
+		return e.fail("manager", detail, retry)
 	}
 	// The code goes in the environment, never on the command line: any user here can read that while it runs, and
-	// the hub trades this code from its own machine without another credential.
+	// the hub trades this code from its own machine without another credential. One the program did not trade (it
+	// kept a binding that works, or stopped first) is voided after.
 	out, err := e.run(ctx, []string{"PERSONA_HOME=" + e.root, managerconf.BuiltinCodeEnv + "=" + code},
-		bin, "manager", "install", "--builtin", "--join", hubLocalURL(cfg.Listen))
+		bin, managerconf.BuiltinInstallArgs(hubLocalURL(cfg.Listen))...)
+	_ = e.voidCode(ctx, cfg.Config, code)
 	if err != nil {
 		why := lastLine(string(out))
 		if why == "" {
 			why = err.Error()
 		}
-		return e.fail("manager", "内置管理者的常驻服务没装好："+why, "按这句处理后重跑 personad hub setup")
+		detail := "内置管理者的常驻服务没装好：" + why
+		if e.switched {
+			detail += "；" + e.undoSwitch(ctx, bin)
+		}
+		return e.fail("manager", detail, retry)
 	}
 	unit := managerconf.BuiltinService
 	if e.goos == "darwin" {
@@ -180,8 +268,12 @@ func (e *setupEnv) builtinManager(ctx context.Context, cfg *setupConfig) error {
 		}
 		e.sleep(time.Second)
 	}
-	// The hub runs and the phone can pair: say what is wrong and go on.
-	e.report("manager", false, fmt.Sprintf("内置管理者的常驻服务（%s）装好了，但 %d 秒内没连上 hub", unit, int(wait.Seconds())), e.managerLog())
+	// The hub runs and the phone can pair: say what is wrong and go on (its service keeps trying).
+	next := e.managerLog()
+	if e.switched {
+		next += "；要改回 hub 自己拉起它：personad hub manager-mode child，再重启 hub 的服务"
+	}
+	e.report("manager", false, fmt.Sprintf("内置管理者的常驻服务（%s）装好了，但 %d 秒内没连上 hub", unit, int(wait.Seconds())), next)
 	return nil
 }
 
@@ -226,6 +318,20 @@ func builtinCode(ctx context.Context, cfg *Config) (string, time.Time, error) {
 	defer database.Close()
 	h := &Hub{cfg: cfg, store: database, logger: log.New(io.Discard, "", 0)}
 	return h.newInstallCode(ctx, assistantwire.AssistantID, "助手") // i18n-ignore: its identity's name, as assistant-token gives it
+}
+
+// voidBuiltinCode voids the built-in manager's code when it is still good (not traded): ExpireManagerInstallCode.
+func voidBuiltinCode(ctx context.Context, cfg *Config, code string) error {
+	if cfg.DatabaseURL == "" || code == "" {
+		return nil
+	}
+	database, err := db.Open(ctx, cfg.DatabaseURL, db.HubSet)
+	if err != nil {
+		return err
+	}
+	defer database.Close()
+	_, err = database.ExpireManagerInstallCode(ctx, hashToken(code))
+	return err
 }
 
 // lastLine is the last line of s with text.

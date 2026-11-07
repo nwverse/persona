@@ -6,6 +6,7 @@ import (
 	"flag"
 	"fmt"
 	"html"
+	"io"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -73,6 +74,12 @@ func builtinPlist(bin, home, userHome string) string {
 `
 }
 
+// bootstrapTries and bootstrapWait: how often, and how far apart, launchctl bootstrap is tried after a bootout.
+var (
+	bootstrapTries = 5
+	bootstrapWait  = time.Second
+)
+
 // isBuiltin: the command's arguments ask for the built-in manager (--builtin).
 func isBuiltin(args []string) bool {
 	for _, a := range args {
@@ -91,47 +98,85 @@ type builtinJoin struct {
 	plaintext, always      bool
 }
 
-// cmdInstallBuiltin is `install --builtin [--join <hub address>] [--fingerprint F] [--allow-plaintext]`.
-func cmdInstallBuiltin(ctx context.Context, e *env, args []string) error {
+// installBuiltinArgs are install --builtin's arguments: `[--join <hub address>] [--fingerprint F] [--allow-plaintext]`,
+// or `--check` alone.
+type installBuiltinArgs struct {
+	join      builtinJoin
+	check     bool
+	codeTaken bool // the code came from managerconf.BuiltinCodeEnv
+}
+
+// parseInstallBuiltin parses `install --builtin …` (managerconf.BuiltinInstallArgs and BuiltinCheckArgs are what the
+// hub's setup runs). The code comes from managerconf.BuiltinCodeEnv, read with getenv.
+func parseInstallBuiltin(args []string, getenv func(string) string, out io.Writer) (installBuiltinArgs, error) {
+	var a installBuiltinArgs
 	fs := flag.NewFlagSet("manager install --builtin", flag.ContinueOnError)
-	fs.SetOutput(e.stdout)
+	fs.SetOutput(out)
 	fs.Bool("builtin", true, "the built-in manager")
 	join := fs.String("join", "", "the hub's address: bind it first with the code in "+managerconf.BuiltinCodeEnv+", unless its binding works")
 	fp := fs.String("fingerprint", "", "the hub's TLS fingerprint (an https address with the hub's own certificate)")
 	plain := fs.Bool("allow-plaintext", false, "allow a plaintext http hub address on the public internet")
+	check := fs.Bool("check", false, "only say whether its service can be installed here (exit 0), changing nothing")
 	pos, err := parseInterleaved(fs, args)
+	if err != nil {
+		return a, err
+	}
+	if len(pos) != 0 || (*check && (*join != "" || *fp != "" || *plain)) {
+		return a, errUsage
+	}
+	a.check = *check
+	a.join = builtinJoin{hub: *join, fingerprint: *fp, plaintext: *plain}
+	if a.join.hub != "" {
+		a.join.code = strings.TrimSpace(getenv(managerconf.BuiltinCodeEnv))
+		a.codeTaken = a.join.code != ""
+	}
+	return a, nil
+}
+
+// cmdInstallBuiltin is `install --builtin [--join <hub address>] [--fingerprint F] [--allow-plaintext]` or
+// `install --builtin --check`.
+func cmdInstallBuiltin(ctx context.Context, e *env, args []string) error {
+	a, err := parseInstallBuiltin(args, e.getenv, e.stdout)
 	if err != nil {
 		return err
 	}
-	if len(pos) != 0 {
-		return errUsage
+	if a.codeTaken {
+		_ = os.Unsetenv(managerconf.BuiltinCodeEnv) // not handed on to systemctl / launchctl
 	}
-	j := builtinJoin{hub: *join, fingerprint: *fp, plaintext: *plain}
-	if j.hub != "" {
-		j.code = strings.TrimSpace(e.getenv(managerconf.BuiltinCodeEnv))
+	if a.check {
+		if _, err := e.builtinPreflight(ctx); err != nil {
+			return err
+		}
+		fmt.Fprintln(e.stdout, "The built-in manager's service can be installed here.")
+		return nil
 	}
-	return e.installBuiltin(ctx, dataDir(), j)
+	return e.installBuiltin(ctx, dataDir(), a.join)
+}
+
+// builtinPreflight is what can stop installing the built-in manager's service, checked before a code is spent; it
+// returns the binary the service will run.
+func (e *env) builtinPreflight(ctx context.Context) (string, error) {
+	if e.goos != "linux" && e.goos != "darwin" {
+		return "", fmt.Errorf("no service for it on %s: run it yourself with PERSONA_ASSISTANT_DEPLOY=%s %s assistant",
+			e.goos, assistant.DeployService, e.self())
+	}
+	if err := e.checkCompatibleService(assistantwire.AssistantID); err != nil {
+		return "", err
+	}
+	if e.goos == "linux" {
+		if why := e.noSystemd(ctx); why != "" {
+			return "", fmt.Errorf("cannot install its service (%s): run it yourself with PERSONA_ASSISTANT_DEPLOY=%s %s assistant",
+				why, assistant.DeployService, e.self())
+		}
+	}
+	return e.binary()
 }
 
 // installBuiltin installs the built-in manager's service on the data directory home and starts it, binding it first
 // when j says how and its binding does not work (or j.always). What can stop the install is checked before a code is
 // spent; a service that runs on the binding before a new one is restarted.
 func (e *env) installBuiltin(ctx context.Context, home string, j builtinJoin) error {
-	id := assistantwire.AssistantID
-	if e.goos != "linux" && e.goos != "darwin" {
-		return fmt.Errorf("no service for it on %s: run it yourself with PERSONA_ASSISTANT_DEPLOY=%s %s assistant",
-			e.goos, assistant.DeployService, e.self())
-	}
-	if err := e.checkCompatibleService(id); err != nil {
-		return err
-	}
-	if e.goos == "linux" {
-		if why := e.noSystemd(ctx); why != "" {
-			return fmt.Errorf("cannot install its service (%s): run it yourself with PERSONA_ASSISTANT_DEPLOY=%s %s assistant",
-				why, assistant.DeployService, e.self())
-		}
-	}
-	bin, err := e.binary()
+	bin, err := e.builtinPreflight(ctx)
 	if err != nil {
 		return err
 	}
@@ -236,7 +281,18 @@ func (e *env) builtinService(ctx context.Context, home, bin string, bounce bool)
 		switch {
 		case changed || loadedErr != nil:
 			_, _ = e.run(ctx, "launchctl", "bootout", domain+"/"+label)
-			if out, err := e.run(ctx, "launchctl", "bootstrap", domain, path); err != nil {
+			// Right after bootout, bootstrap can fail for a moment (5: Input/output error, docs/lessons/server.md).
+			var out string
+			var err error
+			for try := 0; try < bootstrapTries; try++ {
+				if try > 0 {
+					time.Sleep(bootstrapWait)
+				}
+				if out, err = e.run(ctx, "launchctl", "bootstrap", domain, path); err == nil {
+					break
+				}
+			}
+			if err != nil {
 				return fmt.Errorf("launchctl bootstrap failed: %s", firstLine(out+" "+err.Error()))
 			}
 			what = "started"
