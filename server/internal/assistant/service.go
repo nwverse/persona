@@ -430,6 +430,7 @@ func (s *Service) snapshot(ctx context.Context) Snapshot {
 // of conversations.
 func (s *Service) UserSpoke(ctx context.Context, r SessionRef) {
 	s.releasePushes(ctx, r.SessionID) // the user speaks: its turns are pushed as ever (supervise.go)
+	s.withdrawAskUser(r.SessionID)    // a question it waits on is taken back: the user's words are not left behind its turn
 	s.unarchiveOnSend(r.MachineID, r.SessionID)
 	s.userSpoke(r.SessionID)
 	if s.reporterStopped(ctx, r.SessionID) { // talked to again: its tasks are told to it again (#3308)

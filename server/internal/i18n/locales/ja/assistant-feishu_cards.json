@@ -1,6 +1,7 @@
 {
   "handled": "対応済み",
   "dismissed": "無視しました",
+  "replied_in_chat": "チャットで返信しました",
   "approved_run": "承認済み・自動実行",
   "approved_edits": "承認済み・編集を自動承認",
   "approved": "承認済み",

@@ -147,6 +147,10 @@ func (n *Node) currentModes(id string, m quickMeta) (mode, effort string) {
 // modeFromCodex reads the app's mode back from what an assistant's Codex turn ran with (codexPolicy in reverse), so
 // it survives a node restart. acceptEdits runs like default and reads back as default.
 func modeFromCodex(approval, sandbox string) string {
+	// Older assistant turns used node-approved untrusted requests for full access.
+	if approval == "untrusted" && sandbox == "danger-full-access" {
+		return proto.ModeBypass
+	}
 	for _, mode := range []string{"default", "auto", "plan", proto.ModeBypass} {
 		if a, s := codexPolicy(mode); a == approval && s == sandbox {
 			return mode

@@ -712,8 +712,10 @@ func (s *Service) InteractionEnded(_ context.Context, p InteractionEnded) {
 	if p.Resolution != nil {
 		how = resolutionText(l, p.Interaction, *p.Resolution)
 	}
-	s.feishuInteractionDone(p.Interaction, how)
-	s.channelInteractionDone(p.Interaction)
+	// Taken back because the user wrote in the conversation: what they write next is not a late answer to it.
+	inChat := p.Resolution != nil && p.Resolution.Dismiss && p.Resolution.Reason == proto.DismissedInChat && p.Resolution.AnsweredBy == ""
+	s.feishuInteractionEnded(p.Interaction, how, inChat)
+	s.channelInteractionEnded(p.Interaction, inChat)
 	s.boardChanged()
 }
 
