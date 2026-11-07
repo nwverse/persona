@@ -17,7 +17,7 @@ import (
 	"github.com/nwverse/persona/server/internal/rpc"
 )
 
-// Renaming, moving and deleting a machine's files from the Files browser (docs/protocol/protocol.md "Changing files", #4858):
+// Renaming, moving and deleting a machine's files from the Files browser (docs/protocol/protocol.md "Changing files", #315):
 // only what the write guard allows (writeguard.go), never replacing anything unasked (renameExcl), and a delete is
 // a move to the system's trash that file.restore undoes. The node forgets nothing it would need for that: a trash_id
 // carries where the file went and where it came from, so a restarted node or hub still puts it back.

@@ -2,7 +2,7 @@ import Foundation
 import Testing
 @testable import Persona
 
-/// Renaming, moving and trashing in the file browser (docs/protocol/protocol.md "Changing files", #4858): what is sent, and
+/// Renaming, moving and trashing in the file browser (docs/protocol/protocol.md "Changing files", #315): what is sent, and
 /// what the user is told.
 @MainActor
 struct FolderEditsTests {

@@ -26,7 +26,7 @@ func editCall(t *testing.T, n *Node, method string, params map[string]any) (map[
 	return m, nil
 }
 
-func putFile(t *testing.T, path, data string) {
+func makeFile(t *testing.T, path, data string) {
 	t.Helper()
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		t.Fatal(err)
@@ -64,8 +64,8 @@ func notThere(t *testing.T, path string) {
 // a case-only change works on a disk that ignores case.
 func TestRenameFile(t *testing.T) {
 	n, home := writeNode(t)
-	putFile(t, filepath.Join(home, "proj", "a.txt"), "a")
-	putFile(t, filepath.Join(home, "proj", "b.txt"), "b")
+	makeFile(t, filepath.Join(home, "proj", "a.txt"), "a")
+	makeFile(t, filepath.Join(home, "proj", "b.txt"), "b")
 	out, err := editCall(t, n, "file.rename", map[string]any{"path": "~/proj/a.txt", "name": "c.txt"})
 	if err != nil || out["path"] != "~/proj/c.txt" {
 		t.Fatalf("rename: %v %v", out, err)
@@ -121,10 +121,10 @@ func TestRenameFile(t *testing.T) {
 func TestFileEditStaysInTheHome(t *testing.T) {
 	n, home := writeNode(t)
 	outside := t.TempDir()
-	putFile(t, filepath.Join(outside, "o.txt"), "o")
-	putFile(t, filepath.Join(home, ".persona", "hub.json"), "{}")
-	putFile(t, filepath.Join(home, "Library", "x.plist"), "x")
-	putFile(t, filepath.Join(home, "proj", "a.txt"), "a")
+	makeFile(t, filepath.Join(outside, "o.txt"), "o")
+	makeFile(t, filepath.Join(home, ".persona", "hub.json"), "{}")
+	makeFile(t, filepath.Join(home, "Library", "x.plist"), "x")
+	makeFile(t, filepath.Join(home, "proj", "a.txt"), "a")
 	if err := os.Symlink(outside, filepath.Join(home, "out")); err != nil {
 		t.Fatal(err)
 	}
@@ -168,9 +168,9 @@ func TestFileEditStaysInTheHome(t *testing.T) {
 func TestMoveFiles(t *testing.T) {
 	t.Setenv("XDG_DATA_HOME", "")
 	n, home := writeNode(t)
-	putFile(t, filepath.Join(home, "proj", "a.txt"), "new a")
-	putFile(t, filepath.Join(home, "proj", "b.txt"), "b")
-	putFile(t, filepath.Join(home, "dest", "a.txt"), "old a")
+	makeFile(t, filepath.Join(home, "proj", "a.txt"), "new a")
+	makeFile(t, filepath.Join(home, "proj", "b.txt"), "b")
+	makeFile(t, filepath.Join(home, "dest", "a.txt"), "old a")
 	paths := []string{"~/proj/b.txt", "~/proj/a.txt"}
 
 	_, err := editCall(t, n, "file.move", map[string]any{"paths": paths, "dir": "~/dest"})
@@ -191,7 +191,7 @@ func TestMoveFiles(t *testing.T) {
 		t.Fatal("keep did not keep both")
 	}
 
-	putFile(t, filepath.Join(home, "proj", "b.txt"), "newer b")
+	makeFile(t, filepath.Join(home, "proj", "b.txt"), "newer b")
 	if _, err := editCall(t, n, "file.move", map[string]any{"paths": []string{"~/proj/b.txt"}, "dir": "~/dest", "conflict": "replace"}); err != nil {
 		t.Fatal(err)
 	}
@@ -203,7 +203,7 @@ func TestMoveFiles(t *testing.T) {
 		t.Fatal("the replaced file is not in the trash")
 	}
 
-	putFile(t, filepath.Join(home, "dest", "sub", "x"), "x")
+	makeFile(t, filepath.Join(home, "dest", "sub", "x"), "x")
 	_, err = editCall(t, n, "file.move", map[string]any{"paths": []string{"~/dest"}, "dir": "~/dest/sub"})
 	if err == nil || !strings.Contains(err.Error(), "into itself") {
 		t.Fatalf("a folder moved into itself: %v", err)
@@ -224,8 +224,8 @@ func TestMoveFiles(t *testing.T) {
 func TestTrashAndRestore(t *testing.T) {
 	t.Setenv("XDG_DATA_HOME", "")
 	n, home := writeNode(t)
-	putFile(t, filepath.Join(home, "proj", "a.txt"), "first")
-	putFile(t, filepath.Join(home, "proj", "dir", "in.txt"), "in")
+	makeFile(t, filepath.Join(home, "proj", "a.txt"), "first")
+	makeFile(t, filepath.Join(home, "proj", "dir", "in.txt"), "in")
 	out, err := editCall(t, n, "file.trash", map[string]any{"paths": []string{"a.txt", "dir"}, "cwd": home + "/proj"})
 	if err != nil {
 		t.Fatal(err)
@@ -247,7 +247,7 @@ func TestTrashAndRestore(t *testing.T) {
 		}
 	}
 
-	putFile(t, filepath.Join(home, "proj", "a.txt"), "second")
+	makeFile(t, filepath.Join(home, "proj", "a.txt"), "second")
 	out2, err := editCall(t, n, "file.trash", map[string]any{"paths": []string{"~/proj/a.txt"}})
 	if err != nil {
 		t.Fatal(err)
@@ -287,8 +287,8 @@ func TestRestoreChecksTheGuard(t *testing.T) {
 	t.Setenv("XDG_DATA_HOME", "")
 	n, home := writeNode(t)
 	files, _, _ := n.trashDirs()
-	putFile(t, filepath.Join(files, "evil"), "e")
-	putFile(t, filepath.Join(home, ".persona", "keep"), "k")
+	makeFile(t, filepath.Join(files, "evil"), "e")
+	makeFile(t, filepath.Join(home, ".persona", "keep"), "k")
 	for _, id := range []trashID{
 		{Name: "evil", Real: filepath.Join(home, ".persona", "evil"), Shown: "x"},
 		{Name: "evil", Real: filepath.Join(t.TempDir(), "evil"), Shown: "x"},

@@ -1,6 +1,6 @@
 import XCTest
 
-/// Rename, move, select, move to the trash and Undo in a machine's home (#4858, docs/protocol/protocol.md "Changing files"),
+/// Rename, move, select, move to the trash and Undo in a machine's home (#315, docs/protocol/protocol.md "Changing files"),
 /// against scripts/mock/mock_hub.py started with MOCK_FILES=1 MOCK_FILE_OPS=1:
 ///   TEST_RUNNER_PERSONA_FILES_HUB=http://127.0.0.1:<port>
 /// TEST_RUNNER_PERSONA_SHOTS=<dir> also saves a screenshot of each step there. The mock's home has code/ and notes.txt.

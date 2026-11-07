@@ -1,6 +1,6 @@
 import SwiftUI
 
-// Renaming, moving and deleting in the file browser (docs/protocol/protocol.md "Changing files", #4858): the same writes the
+// Renaming, moving and deleting in the file browser (docs/protocol/protocol.md "Changing files", #315): the same writes the
 // machine allows for uploads (only folders in the home). A delete moves to the machine's trash, and the toast's Undo
 // puts it back; there is no permanent delete. A move to a taken name asks Replace / Keep Both first.
 

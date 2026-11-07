@@ -1637,7 +1637,7 @@ The foundation shared by the file page and the various previews (spreadsheets, O
 
 ### Changing files
 
-The app's file browser (the session's Files pane, the machine page's Files row) and the web's Files panel can upload into a folder, rename, move, and move to the trash with Undo (#4858; web #4883). There is no permanent delete.
+The app's file browser (the session's Files pane, the machine page's Files row) and the web's Files panel can upload into a folder, rename, move, and move to the trash with Undo (#315; web #4883). There is no permanent delete.
 
 - **Where writes are allowed** (`node/writeguard.go`): inside the home only. A path first passes the read guard (`pathguard.go`: links followed component by component; iCloud, key folders such as `.ssh`,
   private key names and the hub's keys are refused); the real path after following links must still be in the home (the home itself is fine); `~/.persona`, `~/.persona`, `~/Library` and the data folder `PERSONA_HOME` names (unless it is the home itself) are entirely unwritable, and so is a manager's folder anywhere (one holding a manager's `manager.json`, unless it is the home itself); nor may a client write a file named `manager.json*`.
