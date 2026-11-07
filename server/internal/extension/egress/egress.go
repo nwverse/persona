@@ -22,6 +22,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/nwverse/persona/server/internal/acceptloop"
 )
 
 // HubHost is the hub's own API as an extension behind the proxy reaches it (its loopback is not the hub's).
@@ -280,34 +282,32 @@ func (p *Proxy) RelayUnix(ext, path, target string) error {
 	return nil
 }
 
+// serveRelay serves ln until it is closed (RelayUnix replacing it, Unregister, Close).
 func (p *Proxy) serveRelay(ln net.Listener, ext, target string) {
-	for {
-		c, err := ln.Accept()
-		if err != nil {
-			return
-		}
-		go func() {
-			defer c.Close()
-			var d net.Dialer
-			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-			up, err := d.DialContext(ctx, "unix", target)
-			cancel()
-			if err != nil {
-				p.logf("egress: %s: %s: %v", ext, filepath.Base(target), err)
-				return
-			}
-			defer up.Close()
-			// Either end gone ends both: the protocol on it has no half-closed state.
-			done := make(chan struct{}, 2)
-			pipe := func(dst, src net.Conn) {
-				_, _ = io.Copy(dst, src)
-				done <- struct{}{}
-			}
-			go pipe(up, c)
-			go pipe(c, up)
-			<-done
-		}()
+	logf := func(format string, args ...any) { p.logf("egress: %s: %s", ext, fmt.Sprintf(format, args...)) }
+	acceptloop.Run(context.Background(), ln, logf, func(c net.Conn) { go p.relayConn(c, ext, target) })
+}
+
+func (p *Proxy) relayConn(c net.Conn, ext, target string) {
+	defer c.Close()
+	var d net.Dialer
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	up, err := d.DialContext(ctx, "unix", target)
+	cancel()
+	if err != nil {
+		p.logf("egress: %s: %s: %v", ext, filepath.Base(target), err)
+		return
 	}
+	defer up.Close()
+	// Either end gone ends both: the protocol on it has no half-closed state.
+	done := make(chan struct{}, 2)
+	pipe := func(dst, src net.Conn) {
+		_, _ = io.Copy(dst, src)
+		done <- struct{}{}
+	}
+	go pipe(up, c)
+	go pipe(c, up)
+	<-done
 }
 
 // Stats are ext's counts so far.

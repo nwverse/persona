@@ -211,6 +211,57 @@ final class ImageViewerTests: XCTestCase {
     private static let probePort = Int(ProcessInfo.processInfo.environment["PERSONA_VIEWER_CLI_PORT"] ?? "18932") ?? 18932
     private static let probeToken = UUID().uuidString
 
+    /// A picture that did not load (#182), light and dark: the page says so with Retry instead of spinning; a tap on it
+    /// leaves the bars (Close) and the page's own backdrop (it used to go black, the words black on black and Close
+    /// gone); Retry brings the picture; Close closes. The mock fails lazy pictures until `/mock/images?ok=1`.
+    @MainActor func testAPictureThatDidNotLoadSaysSoWithRetry() throws {
+        // The other tests' pictures load, however this one ends (a failed assertion skips `defer`).
+        let letThrough = URL(string: hub + "/mock/images?ok=1")!
+        addTeardownBlock { _ = try? Data(contentsOf: letThrough) }
+        for scheme in ["light", "dark"] {
+            mock("images")
+            let app = open(["-openImagesFresh", "YES", "-ui.scheme", scheme])
+            // SpringBoard's notification question, and 「你已更改“Persona”的图标」 (the icon follows the appearance).
+            let springboard = XCUIApplication(bundleIdentifier: "com.apple.springboard")
+            for _ in 0..<2 {
+                let ok = springboard.alerts.buttons.matching(NSPredicate(format: "label IN %@", ["Allow", "允许", "OK", "好"])).firstMatch
+                if ok.waitForExistence(timeout: 2) { ok.tap() }
+            }
+            // `-openViewedImage 2` opens on the second picture: page 1.
+            let failed = app.descendants(matching: .any)["viewer-not-loaded-1"].firstMatch
+            XCTAssertTrue(failed.waitForExistence(timeout: 20), "no word that the picture did not load:\n\(app.debugDescription)")
+            XCTAssertTrue(app.staticTexts["图片没载入"].exists)
+            shot(app, "\(scheme)-not-loaded")
+            let close = app.buttons["viewer-close"]
+            app.windows.firstMatch.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.3)).tap()
+            RunLoop.current.run(until: Date().addingTimeInterval(0.6))
+            XCTAssertTrue(close.isHittable, "a tap on the page that did not load hid Close")
+            XCTAssertTrue(failed.exists)
+            shot(app, "\(scheme)-not-loaded-tapped")
+            mock("images?ok=1")
+            app.buttons["重试"].firstMatch.tap()
+            XCTAssertTrue(app.descendants(matching: .any)["viewer-page-1"].waitForExistence(timeout: 20), "Retry did not bring the picture")
+            XCTAssertTrue(waitUntil { !failed.exists })
+            shot(app, "\(scheme)-retried")
+            close.tap()
+            XCTAssertTrue(close.waitForNonExistence(timeout: 5), "Close did not close the viewer")
+            app.terminate()
+        }
+    }
+
+    /// Tells the mock hub something (`/mock/<what>`).
+    private func mock(_ what: String) {
+        _ = try? Data(contentsOf: URL(string: hub + "/mock/" + what)!)
+    }
+
+    /// An attachment, and a file in PERSONA_SHOTS when set.
+    @MainActor private func shot(_ app: XCUIApplication, _ name: String) {
+        attachShot(app, name: name)
+        if let dir = ProcessInfo.processInfo.environment["PERSONA_SHOTS"] {
+            try? app.screenshot().pngRepresentation.write(to: URL(fileURLWithPath: "\(dir)/image-\(name).png"))
+        }
+    }
+
     @MainActor private func openProbe(_ extra: [String] = []) -> XCUIApplication {
         let scheme = extra.contains("-ui.scheme") ? [] : ["-ui.scheme", "light"]
         return open(["-showViewerPagingProbe", "YES", "-runtimeCLI", "\(Self.probePort)", "-runtimeCLIToken", Self.probeToken] + scheme + extra)
