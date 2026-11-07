@@ -272,6 +272,7 @@ func (svc *Service) listArchivedSessions(w http.ResponseWriter, r *http.Request)
 		for _, row := range list {
 			if row.Archived && !row.Assistant {
 				row.Manager = svc.id
+				row.NativeArchive = svc.nativeArchiveView(m.ID, row.SessionID)
 				out = append(out, row)
 			}
 		}
@@ -329,7 +330,7 @@ func (svc *Service) setAgentSessionArchive(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	svc.publishList(m.ID)
-	apierr.WriteJSON(w, map[string]any{"ok": true})
+	apierr.WriteJSON(w, map[string]any{"ok": true, "native": svc.nativeArchiveAwaited(ctx, m.ID, row.SessionID)}) // agent_archive_native.go
 }
 
 func (svc *Service) noteAgentArchive(ctx context.Context, s proto.Session, archived bool) error {
@@ -350,6 +351,7 @@ func (svc *Service) noteAgentArchive(ctx context.Context, s proto.Session, archi
 		return err
 	}
 	delete(b.pending, key)
+	svc.nativeArchiveWanted(s, archived) // the tool's own archive follows (agent_archive_native.go)
 	return nil
 }
 
