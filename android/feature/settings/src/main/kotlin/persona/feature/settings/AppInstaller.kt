@@ -29,44 +29,63 @@ internal fun verifySha256(input: InputStream, expected: String): Boolean {
 }
 
 internal object AppInstaller {
+    private val gate = kotlinx.coroutines.sync.Mutex()
+
     suspend fun install(context: Context, updates: AppUpdates, update: AppUpdate) = withContext(Dispatchers.IO) {
-        val checksum = requireNotNull(update.sha256) { "Missing SHA-256" }
-        require(checksum.matches(Regex("[a-fA-F0-9]{64}"))) { "Invalid SHA-256" }
-        requireNewerVersion(context, update)
-        check(context.packageManager.canRequestPackageInstalls()) { "Install permission required" }
-        val apk = File.createTempFile("persona-update-", ".apk", context.cacheDir)
+        check(gate.tryLock()) { "Another installation is being prepared" }
         try {
-            apk.outputStream().use { updates.download(update, it) }
-            check(apk.inputStream().use { verifySha256(it, checksum) }) { "SHA-256 mismatch" }
-            val archive = context.packageManager.getPackageArchiveInfo(apk.absolutePath, 0)
-            check(archive?.packageName == context.packageName && archive.longVersionCode == update.versionCode) { "Package identity mismatch" }
-            // Another installation may have completed while this APK was downloading.
+            val checksum = requireNotNull(update.sha256) { "Missing SHA-256" }
+            require(checksum.matches(Regex("[a-fA-F0-9]{64}"))) { "Invalid SHA-256" }
             requireNewerVersion(context, update)
+            check(context.packageManager.canRequestPackageInstalls()) { "Install permission required" }
             val installer = context.packageManager.packageInstaller
-            val params = PackageInstaller.SessionParams(PackageInstaller.SessionParams.MODE_FULL_INSTALL).apply {
-                setAppPackageName(context.packageName)
-                setSize(apk.length())
-                // API 30 always asks the user to confirm an update; from 31 the session must ask for it explicitly.
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                    setRequireUserAction(PackageInstaller.SessionParams.USER_ACTION_REQUIRED)
-                }
-            }
-            val sessionId = installer.createSession(params)
+            val sessions = installer.mySessions.filter { it.appPackageName == context.packageName }
+            // Unsealed sessions cannot be pending user confirmation. A previous process may have died while writing one.
+            sessions.filterNot { it.isSealed }.forEach { installer.abandonSession(it.sessionId) }
+            check(sessions.none { it.isSealed }) { "Installation already pending" }
+            val apk = File(context.cacheDir, "persona-update-${update.versionCode}-${checksum.lowercase()}.apk")
             try {
-                installer.openSession(sessionId).use { session ->
-                    session.openWrite("base.apk", 0, apk.length()).use { output ->
-                        apk.inputStream().use { it.copyTo(output) }
-                        session.fsync(output)
+                context.cacheDir.listFiles()?.filter { it.name.startsWith("persona-update-") && it != apk }?.forEach {
+                    check(it.delete() || !it.exists()) { "Could not clear old APK" }
+                }
+                if (!apk.exists() || !apk.inputStream().use { verifySha256(it, checksum) }) {
+                    try { apk.outputStream().use { updates.download(update, it) } }
+                    catch (error: Exception) { apk.delete(); throw error }
+                }
+                check(apk.inputStream().use { verifySha256(it, checksum) }) { "SHA-256 mismatch" }
+                val archive = context.packageManager.getPackageArchiveInfo(apk.absolutePath, 0)
+                check(archive?.packageName == context.packageName && archive.longVersionCode == update.versionCode) { "Package identity mismatch" }
+                // Another installation may have completed while this APK was downloading.
+                requireNewerVersion(context, update)
+                val params = PackageInstaller.SessionParams(PackageInstaller.SessionParams.MODE_FULL_INSTALL).apply {
+                    setAppPackageName(context.packageName)
+                    setSize(apk.length())
+                    // API 30 always asks the user to confirm an update; from 31 the session must ask for it explicitly.
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                        setRequireUserAction(PackageInstaller.SessionParams.USER_ACTION_REQUIRED)
                     }
-                    val result = Intent(context, InstallResultActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                    val pending = PendingIntent.getActivity(context, sessionId, result, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_MUTABLE)
-                    session.commit(pending.intentSender)
+                }
+                val sessionId = installer.createSession(params)
+                try {
+                    installer.openSession(sessionId).use { session ->
+                        session.openWrite("base.apk", 0, apk.length()).use { output ->
+                            apk.inputStream().use { it.copyTo(output) }
+                            session.fsync(output)
+                        }
+                        val result = Intent(context, InstallResultActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                            .putExtra(PackageInstaller.EXTRA_SESSION_ID, sessionId)
+                        val pending = PendingIntent.getActivity(context, sessionId, result, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_MUTABLE)
+                        session.commit(pending.intentSender)
+                    }
+                } catch (error: Exception) {
+                    installer.abandonSession(sessionId)
+                    throw error
                 }
             } catch (error: Exception) {
-                installer.abandonSession(sessionId)
+                check(apk.delete() || !apk.exists()) { "Could not clear failed APK" }
                 throw error
             }
-        } finally { apk.delete() }
+        } finally { gate.unlock() }
     }
 
     private fun requireNewerVersion(context: Context, update: AppUpdate) {
@@ -84,8 +103,11 @@ class InstallResultActivity : Activity() {
             @Suppress("DEPRECATION")
             val confirmation = intent.getParcelableExtra<Intent>(Intent.EXTRA_INTENT)
             if (confirmation != null) {
-                try { startActivity(confirmation) } catch (_: Exception) { show(getString(R.string.settings_install_confirm_failed)) }
-            } else show(getString(R.string.settings_install_no_confirm))
+                try { startActivity(confirmation) } catch (error: Exception) {
+                    android.util.Log.w("AppUpdate", "Unable to open installation confirmation", error)
+                    confirmationFailed(getString(R.string.settings_install_confirm_failed))
+                }
+            } else confirmationFailed(getString(R.string.settings_install_no_confirm))
         } else {
             val raw = intent.getStringExtra(PackageInstaller.EXTRA_STATUS_MESSAGE).orEmpty()
             val text = when {
@@ -98,6 +120,15 @@ class InstallResultActivity : Activity() {
             show(text)
         }
         finish()
+    }
+    private fun confirmationFailed(message: String) {
+        val id = intent.getIntExtra(PackageInstaller.EXTRA_SESSION_ID, -1)
+        val installer = packageManager.packageInstaller
+        if (installer.mySessions.any { it.sessionId == id }) {
+            try { installer.abandonSession(id) }
+            catch (error: Exception) { android.util.Log.w("AppUpdate", "Unable to abandon failed confirmation session", error) }
+        }
+        show(message)
     }
     private fun show(message: String) = Toast.makeText(this, message, Toast.LENGTH_LONG).show()
 }
