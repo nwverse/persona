@@ -30,7 +30,7 @@ fun CapsuleCompletionNotice(completion: CapsuleCompletion, onOpen: (CapsuleCompl
     val palette = PersonaTheme.palette
     val feedback = LocalAppFeedback.current
     val shape = RoundedCornerShape(CapsuleTokens.compactRadius)
-    val description = stringResource(R.string.capsule_done_description, completion.title)
+    val description = stringResource(if (completion.kind == CapsuleNoticeKind.Completed) R.string.capsule_done_description else R.string.capsule_message_description, completion.title)
     Row(Modifier.size(CapsuleTokens.completionWidth, CapsuleTokens.orb).clip(shape).background(palette.surfaceOpaque)
         .border(CapsuleTokens.border, palette.line, shape)
         .clickable {
@@ -44,6 +44,7 @@ fun CapsuleCompletionNotice(completion: CapsuleCompletion, onOpen: (CapsuleCompl
         PersonaFace(PersonaState.Idle, size = CapsuleTokens.face)
         Text(completion.title, Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis,
             style = PersonaTheme.type.label, color = palette.ink)
-        Text(stringResource(R.string.capsule_done_suffix), maxLines = 1, style = PersonaTheme.type.caption, color = palette.done.text)
+        Text(stringResource(if (completion.kind == CapsuleNoticeKind.Completed) R.string.capsule_done_suffix else R.string.capsule_message_suffix), maxLines = 1, style = PersonaTheme.type.caption,
+            color = if (completion.kind == CapsuleNoticeKind.Completed) palette.done.text else palette.needsYou.text)
     }
 }

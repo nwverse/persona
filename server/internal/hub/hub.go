@@ -302,7 +302,7 @@ func (h *Hub) sessionsChanged(m *Machine) {
 
 func (h *Hub) machineName(id string) string {
 	if m := h.localMachine(id); m != nil {
-		return m.cfg.Name
+		return m.name()
 	}
 	return id
 }

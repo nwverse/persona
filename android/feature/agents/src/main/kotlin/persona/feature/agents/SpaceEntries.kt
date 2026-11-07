@@ -120,7 +120,7 @@ private fun SpacePage(route: SpaceRoute, model: AgentsViewModel, navigator: Navi
             model.refresh()
         }
     }
-    val spaces = remember(page.sessions, page.preferences) { agentSpaces(page.sessions.map { it.listSession(page.preferences) }) }
+    val spaces = page.spaces
     val space = spaces.firstOrNull { it.id == route.spaceId }
     val workspace = space?.members?.first()?.session?.operationWorkspaceId
     fun openRow(row: AgentSession) {

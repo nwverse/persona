@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="settings_background_title">バックグラウンド診断</string>
+    <string name="settings_background_copy">バックグラウンド診断をコピー</string>
+    <string name="settings_background_copied">バックグラウンド診断をコピーしました</string>
+    <string name="settings_background_app_version">アプリのバージョン</string>
+    <string name="settings_background_android">Android バージョン</string>
+    <string name="settings_background_manufacturer">メーカー</string>
+    <string name="settings_background_model">モデル</string>
+    <string name="settings_background_battery">電池の最適化の除外</string>
+    <string name="settings_background_exempt">除外されています</string>
+    <string name="settings_background_not_exempt">除外されていません</string>
+    <string name="settings_background_restriction">システムのバックグラウンド制限</string>
+    <string name="settings_background_restricted">制限されています</string>
+    <string name="settings_background_not_restricted">このシステム設定による制限なし</string>
+    <string name="settings_background_history">最近のメインプロセス終了</string>
+    <string name="settings_background_history_count">システムの記録 %1$d 件</string>
+    <string name="settings_background_no_history">未取得：最近のシステム記録にメインプロセスの終了がありません</string>
+    <string name="settings_background_unavailable">未取得：読み取れませんでした</string>
+    <string name="settings_background_exit">終了記録 %1$d</string>
+    <string name="settings_background_note">端末のメインプロセスの記録のみで、チャットや接続情報は含みません。今回消えた原因を確定するものではありません。理由 10 では操作を特定できず、Android 14 より前ではアプリの更新も含まれる場合があります。PSS/RSS は標本値で、0 は未採取の場合があります。</string>
+    <string name="settings_background_reason_self">プロセス自身が終了</string>
+    <string name="settings_background_reason_signal">シグナルにより終了</string>
+    <string name="settings_background_reason_memory">システムがメモリ不足を報告</string>
+    <string name="settings_background_reason_crash">アプリのクラッシュ</string>
+    <string name="settings_background_reason_native">ネイティブコードのクラッシュ</string>
+    <string name="settings_background_reason_anr">アプリが応答しない（ANR）</string>
+    <string name="settings_background_reason_initialization">初期化に失敗</string>
+    <string name="settings_background_reason_permission">権限の変更</string>
+    <string name="settings_background_reason_resource">リソースの過剰使用</string>
+    <string name="settings_background_reason_requested">ユーザー操作またはタスクの削除。詳細は判別できません</string>
+    <string name="settings_background_reason_user_stopped">Android のユーザーが停止（複数ユーザーの端末）</string>
+    <string name="settings_background_reason_dependency">依存するプロセスが終了</string>
+    <string name="settings_background_reason_freezer">システムのプロセス凍結機構による終了</string>
+    <string name="settings_background_reason_package_state">アプリまたはコンポーネントの状態変更</string>
+    <string name="settings_background_reason_update">アプリの更新</string>
+    <string name="settings_background_reason_other">システムが報告したその他の理由</string>
+    <string name="settings_background_reason_unknown">不明または未対応のシステム理由</string>
+</resources>

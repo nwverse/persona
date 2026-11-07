@@ -186,10 +186,11 @@ struct IntentsTests {
     // MARK: Waiting cards (#5257)
 
     private func waitingAgent(_ id: String, group: String = "", assistant: Bool = false, quiet: Bool = false,
-                              space: String? = nil) -> Session {
-        var o: [String: Any] = ["machine_id": "server", "session_id": id, "title": id, "cwd": "/tmp/p", "status": "idle",
+                              space: String? = nil, status: String = "idle", state: String? = nil) -> Session {
+        var o: [String: Any] = ["machine_id": "server", "session_id": id, "title": id, "cwd": "/tmp/p", "status": status,
                                 "assistant": assistant, "quiet": quiet]
         if let space { o["space_name"] = space }
+        if let state { o["state"] = state }
         do {
             var s = try JSON.decoder.decode(Session.self, from: JSONSerialization.data(withJSONObject: o))
             s.group = group
@@ -302,6 +303,39 @@ struct IntentsTests {
         #expect(IntentPicker.pending(cards)?.id == "m")
         #expect(ApproveFirstIntent.target(cards, sessions: sessions, mutes: mutes)?.id == "p")
         #expect(PersonaStatusIntent.text(sessions: sessions, interactions: cards, mutes: mutes).contains("card p"))
+    }
+
+    /// Working is what the island counts (#180): the hub's state, and only the Agents tab's agents.
+    @Test func workingCountsOnlyTheAgentsTabsAgentsAtWork() {
+        let sessions = [
+            waitingAgent("plain", status: "working"),
+            waitingAgent("persona", assistant: true, status: "working"),
+            waitingAgent("task", quiet: true, status: "working"),
+            waitingAgent("muted", status: "working"),
+            waitingAgent("in-space", space: "loud-off", status: "working"),
+            waitingAgent("back-on", space: "loud-off", status: "working"),
+            waitingAgent("muted", group: "work", status: "working"),
+            // The hub's state wins over herdr's raw status, both ways.
+            waitingAgent("asking", status: "working", state: "needs_you"),
+            waitingAgent("derived", status: "idle", state: "working"),
+        ]
+        // plain, back-on (turned back on in a muted space), the other group's "muted" (mutes are each group's own), derived.
+        #expect(IntentPicker.working(sessions, mutes: waitingMutes) == 4)
+        #expect(IntentPicker.working([], mutes: waitingMutes) == 0)
+        // A hub that does not answer mutes still leaves Persona and quiet tasks out.
+        #expect(IntentPicker.working(sessions, mutes: [:]) == 6)
+    }
+
+    /// The issue's case: a muted agent's card, a card muted on the interaction itself, an ordinary card, and Persona
+    /// answering. Siri says 0 working, 1 waiting, and reads the ordinary card.
+    @Test func statusMatchesTheAppForTheIssuesCase() {
+        let sessions = [waitingAgent("plain"), waitingAgent("other"), waitingAgent("muted"),
+                        waitingAgent("persona", assistant: true, status: "working")]
+        let cards = [waitingCard("m", session: "muted", created: 1), waitingCard("h", session: "other", created: 2, hubMuted: true),
+                     waitingCard("p", session: "plain", created: 3)]
+        let text = PersonaStatusIntent.text(sessions: sessions, interactions: cards, mutes: waitingMutes)
+        #expect(text.hasPrefix(IntentText.status(working: 0, waiting: 1, first: nil)))
+        #expect(text.contains("card p"))
     }
 
     // MARK: Approve

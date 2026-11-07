@@ -27,6 +27,7 @@ import persona.feature.chat.ChatAppBindings
 import persona.feature.chat.ChatWiringSource
 import persona.platform.capsule.CapsuleState
 import persona.platform.capsule.CapsuleCompletion
+import persona.platform.capsule.CapsuleNoticeKind
 import kotlinx.serialization.json.JsonObject
 
 /** Regression cases from #2124: one surface, the original session, and an explicit destination. */
@@ -65,7 +66,8 @@ class CapsuleSessionsTest {
         assertEquals(listOf(capsuleId(done.key)), content.entries.map { it.id })
         assertTrue(fixture.observed.isEmpty())
         assertTrue(content.hasActivity)
-        assertEquals(2, content.badgeCount)
+        assertEquals(listOf(capsuleId(done.key)), content.unreadEntries.map { it.id })
+        assertEquals(1, content.badgeCount)
     }
 
     @Test fun withoutUnreadTheInitialEntranceIsMainAndWorkIsNotAnUnreadCount() = runTest {
@@ -80,7 +82,8 @@ class CapsuleSessionsTest {
         runCurrent()
         fixture.source.shown(true)
         runCurrent()
-        assertEquals(InboxSection, fixture.source.content.value.sectionId)
+        assertEquals(MainSection, fixture.source.content.value.sectionId)
+        assertFalse(fixture.source.content.value.listing)
     }
 
     @Test fun quietAndMutedWorkDoesNotMakeTheGlobalCapsuleActive() = runTest {
@@ -330,10 +333,14 @@ class CapsuleSessionsTest {
 
     @Test fun completionUsesRawEdgesEvenWhenTheRepositoryStateNeverPublishesWorking() = runTest {
         val task = agent("home", "task", "unread").copy(rev = 1)
-        val fixture = Fixture(backgroundScope, listOf(task))
+        val manual = agent("home", "manual", "idle")
+        val fixture = Fixture(backgroundScope, listOf(task, manual))
         fixture.bindings.value = fixture.binding()
         val notices = mutableListOf<CapsuleCompletion>()
         backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { fixture.source.completions.collect { notices += it } }
+        runCurrent()
+        fixture.source.shown(true)
+        fixture.source.select(capsuleId(manual.key))
         runCurrent()
         fixture.connection.events.emit(SessionsEvent(task.machineId, listOf(task)))
         fixture.connection.events.emit(SessionsEvent(task.machineId, listOf(task.copy(state = "working"))))
@@ -343,8 +350,15 @@ class CapsuleSessionsTest {
         runCurrent()
         assertEquals(listOf(completionId(task.copy(rev = 2))), notices.map { it.id })
         assertEquals(task.displayTitle, notices.single().title)
+        assertEquals(capsuleId(manual.key), fixture.source.content.value.selectedId)
         fixture.source.openCompletion(notices.single())
-        assertEquals(listOf(task.key to false), fixture.opened)
+        runCurrent()
+        assertEquals(UnreadSection, fixture.source.content.value.sectionId)
+        assertEquals(capsuleId(task.key), fixture.source.content.value.selectedId)
+        assertEquals(task.key, fixture.observed.last())
+        assertTrue(fixture.opened.isEmpty())
+        fixture.source.send(capsuleId(task.key), "Reply to the completed task")
+        assertEquals(listOf(task.key to "Reply to the completed task"), fixture.sent)
         val late = mutableListOf<CapsuleCompletion>()
         backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { fixture.source.completions.collect { late += it } }
         runCurrent()
@@ -445,12 +459,18 @@ class CapsuleSessionsTest {
         fixture.connection.events.emit(SessionsEvent(main.machineId, listOf(main)))
         fixture.connection.events.emit(SessionsEvent(main.machineId, listOf(main.copy(state = "unread", rev = 2))))
         runCurrent()
-        fixture.source.openCompletion(notices.single())
-        assertEquals(listOf(main.key to true), fixture.opened)
         assertEquals(before.sectionId, fixture.source.content.value.sectionId)
         assertEquals(before.selectedId, fixture.source.content.value.selectedId)
         fixture.source.send(before.selectedId, "Keep the manual draft target")
         assertEquals(listOf(selected.key to "Keep the manual draft target"), fixture.sent)
+        fixture.source.openCompletion(notices.single())
+        runCurrent()
+        assertEquals(MainSection, fixture.source.content.value.sectionId)
+        assertEquals(MainEntry, fixture.source.content.value.selectedId)
+        assertEquals(main.key, fixture.observed.last())
+        assertTrue(fixture.opened.isEmpty())
+        fixture.source.send(MainEntry, "Reply to the completed main")
+        assertEquals(listOf(selected.key to "Keep the manual draft target", main.key to "Reply to the completed main"), fixture.sent)
         fixture.assistant.value = AssistantSnapshot()
         runCurrent()
         assertTrue(runCatching { fixture.source.openCompletion(notices.single()) }.isFailure)
@@ -474,6 +494,189 @@ class CapsuleSessionsTest {
         } finally { owner.cancel() }
     }
 
+    @Test fun oneTapUsesTheCurrentAppConversationAndKeepsItAfterOtherRepliesArrive() = runTest {
+        val active = agent("home", "current", "idle")
+        val unread = agent("home", "newest", "unread")
+        val fixture = Fixture(backgroundScope, listOf(active, unread), current = active.key)
+        runCurrent()
+        fixture.source.shown(true)
+        runCurrent()
+        assertEquals(capsuleId(active.key), fixture.source.content.value.selectedId)
+        fixture.sessions.value += agent("home", "later", "unread")
+        fixture.source.shown(false)
+        fixture.source.shown(true)
+        runCurrent()
+        assertEquals(capsuleId(active.key), fixture.source.content.value.selectedId)
+        val fallback = Fixture(backgroundScope, listOf(unread))
+        runCurrent()
+        fallback.source.shown(true)
+        runCurrent()
+        assertEquals(capsuleId(unread.key), fallback.source.content.value.selectedId)
+        assertFalse(fallback.source.content.value.listing)
+    }
+
+    @Test fun tappingAfterCollapsingEitherListRestoresTheLastConversationAndItsSendTarget() = runTest {
+        val task = agent("home", "task", "unread")
+        val fixture = Fixture(backgroundScope, listOf(task))
+        runCurrent()
+        fixture.source.shown(true)
+        runCurrent()
+        for (section in listOf(UnreadSection, InboxSection)) {
+            fixture.source.selectSection(section)
+            runCurrent()
+            assertTrue(fixture.source.content.value.listing)
+            fixture.source.shown(false)
+            fixture.source.shown(true)
+            runCurrent()
+            assertFalse(fixture.source.content.value.listing)
+            assertEquals(capsuleId(task.key), fixture.source.content.value.selectedId)
+            assertTrue(fixture.source.content.value.canSend)
+            fixture.source.send(capsuleId(task.key), "Preserve the draft target after $section")
+        }
+        assertEquals(listOf(task.key, task.key), fixture.sent.map { it.first })
+    }
+
+    @Test fun onlyTheVerifiedReplyActuallyViewedInTheSelectedConversationIsAcknowledged() = runTest {
+        val first = agent("home", "first", "unread").copy(rev = 1)
+        val other = agent("home~g0a1b2c3d", "second", "unread").copy(rev = 2)
+        val fixture = Fixture(backgroundScope, listOf(first, other))
+        fixture.bindings.value = fixture.binding()
+        runCurrent()
+        fixture.source.viewed(capsuleId(first.key), "reply", "${capsuleId(first.key)}||1")
+        fixture.source.shown(true)
+        runCurrent()
+        fixture.source.select(capsuleId(other.key))
+        runCurrent()
+        fixture.messages.getValue(other.key).value = ChatSnapshot(loading = false, verified = false,
+            items = listOf(Item("reply", role = "assistant", kind = "text", text = "Verified answer")))
+        runCurrent()
+        fixture.source.viewed(capsuleId(other.key), "reply", "${capsuleId(other.key)}||2")
+        runCurrent()
+        assertTrue(fixture.read.isEmpty())
+        fixture.messages.getValue(other.key).value = fixture.messages.getValue(other.key).value.copy(verified = true)
+        runCurrent()
+        fixture.source.viewed(capsuleId(first.key), "reply", requireNotNull(fixture.source.content.value.readVersion))
+        fixture.source.viewed(capsuleId(other.key), "not-visible", requireNotNull(fixture.source.content.value.readVersion))
+        runCurrent()
+        assertTrue(fixture.read.isEmpty())
+        assertTrue(fixture.source.viewed(capsuleId(other.key), "reply", requireNotNull(fixture.source.content.value.readVersion)))
+        runCurrent()
+        assertEquals(listOf(other.key to "|2"), fixture.read)
+        assertEquals(1, fixture.source.content.value.badgeCount)
+        assertEquals(capsuleId(other.key), fixture.source.content.value.selectedId)
+        assertFalse(fixture.source.content.value.noticeTargetIds.orEmpty().contains(capsuleId(other.key)))
+        assertTrue(fixture.hubPreferences.value.seen[first.key.path] == null)
+        fixture.source.select(null)
+        runCurrent()
+        fixture.source.viewed(capsuleId(first.key), "reply", "${capsuleId(first.key)}||1")
+        runCurrent()
+        assertEquals(1, fixture.read.size)
+    }
+
+    @Test fun aNewerRevisionCannotBeAcknowledgedByAnOlderDisplayedReply() = runTest {
+        val task = agent("home", "task", "unread").copy(rev = 1)
+        val fixture = Fixture(backgroundScope, listOf(task))
+        fixture.bindings.value = fixture.binding()
+        runCurrent()
+        fixture.source.shown(true)
+        runCurrent()
+        fixture.messages.getValue(task.key).value = ChatSnapshot(loading = false,
+            items = listOf(Item("old", role = "assistant", kind = "text", text = "Old reply")))
+        runCurrent()
+        val oldVersion = requireNotNull(fixture.source.content.value.readVersion)
+        fixture.connection.events.emit(SessionsEvent("home", listOf(task.copy(rev = 2))))
+        fixture.sessions.value = listOf(task.copy(rev = 2))
+        runCurrent()
+        assertNull(fixture.source.content.value.readVersion)
+        assertFalse(fixture.source.viewed(capsuleId(task.key), "old", oldVersion))
+        assertTrue(fixture.read.isEmpty())
+        fixture.messages.getValue(task.key).value = ChatSnapshot(loading = false,
+            items = listOf(Item("new", role = "assistant", kind = "text", text = "New reply")))
+        runCurrent()
+        val newVersion = requireNotNull(fixture.source.content.value.readVersion)
+        assertNotEquals(oldVersion, newVersion)
+        assertTrue(fixture.source.viewed(capsuleId(task.key), "new", newVersion))
+        assertEquals(listOf(task.key to "|2"), fixture.read)
+    }
+
+    @Test fun theMainConversationsUnreadReplyCountsWithoutEnteringTheAgentsList() = runTest {
+        val main = agent("home", "main", "unread").copy(assistant = true, rev = 3)
+        val fixture = Fixture(backgroundScope, assistantState = AssistantSnapshot(main.key, listOf(main)))
+        runCurrent()
+        assertEquals(1, fixture.source.content.value.badgeCount)
+        assertEquals(0, fixture.source.content.value.sections.first().count)
+        fixture.hubPreferences.value = HubPreferencesSnapshot(seen = mapOf(main.key.path to "|3"))
+        runCurrent()
+        assertEquals(0, fixture.source.content.value.badgeCount)
+    }
+
+    @Test fun anIncomingUnreadReplyWithoutObservedWorkProducesANewMessageAndIgnoresRevisionOnlyChanges() = runTest {
+        val task = agent("home", "task", "idle").copy(lastText = "Before", updatedAt = "2026-11-05T08:00:00Z", rev = 1)
+        val fixture = Fixture(backgroundScope, listOf(task), fresh = listOf(task))
+        val notices = mutableListOf<CapsuleCompletion>()
+        backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { fixture.source.completions.collect { notices += it } }
+        runCurrent()
+        val reply = task.copy(state = "unread", lastText = "New answer", updatedAt = "2026-11-05T09:00:00Z", rev = 2)
+        fixture.connection.events.emit(SessionsEvent("home", listOf(reply)))
+        fixture.connection.events.emit(SessionsEvent("home", listOf(reply.copy(rev = 3))))
+        runCurrent()
+        assertEquals(listOf(CapsuleNoticeKind.NewMessage), notices.map { it.kind })
+        assertEquals(notices.single(), fixture.source.content.value.pendingCompletion)
+        fixture.source.noticeShown(notices.single().id)
+        runCurrent()
+        assertNull(fixture.source.content.value.pendingCompletion)
+    }
+
+    @Test fun anUnshownNoticeSurvivesSourceRecreationAndShownOrReadRepliesDoNotReplay() = runTest {
+        val task = agent("home", "task", "idle").copy(lastText = "Before", updatedAt = "2026-11-05T08:00:00Z", rev = 1)
+        val memory = CapsuleNoticeMemory()
+        val fixture = Fixture(backgroundScope, listOf(task), fresh = listOf(task), memory = memory)
+        runCurrent()
+        val reply = task.copy(state = "unread", lastText = "Arrived while locked", updatedAt = "2026-11-05T09:00:00Z", rev = 2)
+        fixture.connection.events.emit(SessionsEvent("home", listOf(reply)))
+        runCurrent()
+        val pending = requireNotNull(memory.pending)
+        val restored = Fixture(backgroundScope, listOf(reply), fresh = listOf(reply), memory = memory)
+        runCurrent()
+        assertEquals(pending.id, restored.source.content.value.pendingCompletion?.id)
+        restored.source.noticeShown(pending.id)
+        val shown = Fixture(backgroundScope, listOf(reply), fresh = listOf(reply), memory = memory)
+        runCurrent()
+        assertNull(shown.source.content.value.pendingCompletion)
+        assertNull(memory.pending)
+        shown.hubPreferences.value = HubPreferencesSnapshot(seen = mapOf(reply.key.path to "${reply.updatedAt}|${reply.rev}"))
+        runCurrent()
+        assertTrue(shown.source.content.value.noticeTargetIds.orEmpty().isEmpty())
+    }
+
+    @Test fun aReplyMissedWhileTheProcessWasGoneIsComparedBeforeTheFreshSeedIsStored() = runTest {
+        val before = agent("home", "task", "idle").copy(lastText = "Before", updatedAt = "2026-11-05T08:00:00Z", rev = 1)
+        val memory = CapsuleNoticeMemory()
+        Fixture(backgroundScope, listOf(before), fresh = listOf(before), memory = memory)
+        runCurrent()
+        val reply = before.copy(state = "unread", lastText = "Arrived without a running process", updatedAt = "2026-11-05T09:00:00Z", rev = 2)
+        val restored = Fixture(backgroundScope, listOf(reply), fresh = listOf(reply), memory = memory)
+        runCurrent()
+        assertEquals(CapsuleNoticeKind.NewMessage, restored.source.content.value.pendingCompletion?.kind)
+        assertEquals(capsuleId(reply.key), restored.source.content.value.pendingCompletion?.targetId)
+    }
+
+    @Test fun initialHistoryIsABaselineAndManualConversationConsumesRatherThanDefersNotices() = runTest {
+        val task = agent("home", "task", "unread").copy(lastText = "Historical answer", updatedAt = "2026-11-05T08:00:00Z", rev = 1)
+        val memory = CapsuleNoticeMemory()
+        val fixture = Fixture(backgroundScope, listOf(task), fresh = listOf(task), memory = memory)
+        runCurrent()
+        assertNull(fixture.source.content.value.pendingCompletion)
+        fixture.source.shown(true)
+        runCurrent()
+        fixture.connection.events.emit(SessionsEvent("home", listOf(task.copy(lastText = "During manual chat", updatedAt = "2026-11-05T09:00:00Z", rev = 2))))
+        runCurrent()
+        assertNull(memory.pending)
+        fixture.source.shown(false)
+        runCurrent()
+        assertNull(fixture.source.content.value.pendingCompletion)
+    }
+
     private fun personaAgent(session: Session) = persona.core.domain.sort.AgentSession(session)
     private fun inboxRecord(id: String, tier: String = "action", done: Boolean = false) = persona.feature.inbox.InboxRecord(
         persona.core.domain.inbox.InboxItem(id, title = "Item $id", preview = "Needs an answer", tier = tier,
@@ -486,6 +689,8 @@ class CapsuleSessionsTest {
         initial: List<Session> = emptyList(),
         assistantState: AssistantSnapshot = AssistantSnapshot(),
         fresh: List<Session> = emptyList(),
+        memory: CapsuleNoticeMemory = CapsuleNoticeMemory(),
+        current: SessionKey? = null,
     ) {
         val sessions = MutableStateFlow(initial)
         val assistant = MutableStateFlow(assistantState)
@@ -495,6 +700,7 @@ class CapsuleSessionsTest {
         val observed = mutableListOf<SessionKey>()
         val opened = mutableListOf<Pair<SessionKey?, Boolean>>()
         val openedInbox = mutableListOf<String?>()
+        val read = mutableListOf<Pair<SessionKey, String>>()
         val openedCards = mutableListOf<persona.core.navigation.RequestRef>()
         val inbox = MutableStateFlow(persona.feature.inbox.InboxSnapshot())
         val hubPreferences = MutableStateFlow(HubPreferencesSnapshot())
@@ -562,11 +768,15 @@ class CapsuleSessionsTest {
                 override suspend fun refresh() = Unit
                 override suspend fun togglePin(path: String, space: Boolean) = Unit
                 override suspend fun toggleMute(path: String, space: Boolean) = Unit
-                override suspend fun markSeen(session: SessionKey, version: String) = Unit
+                override suspend fun markSeen(session: SessionKey, version: String) {
+                    read += session to version
+                    hubPreferences.value = hubPreferences.value.copy(seen = hubPreferences.value.seen + (session.path to version))
+                }
             }),
         )
-        val source = CapsuleSessions(shell, wiring, scope, openInbox = { openedInbox += it },
-            openConversation = { key, assistant -> opened += key to assistant }, openCard = { openedCards += it })
+        val source = CapsuleSessions(shell, wiring, scope, openInbox = { openedInbox += it }, noticeMemory = memory,
+            currentConversation = { current }, openConversation = { key, assistant -> opened += key to assistant },
+            openCard = { openedCards += it })
         fun binding(key: HubScope = hubScope, connection: HubConnection = this.connection) = ChatAppBindings(
             key, scope, unused(), connection, unused(), unused(), unused(), unused(), mainSender,
         )

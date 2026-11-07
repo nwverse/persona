@@ -69,6 +69,7 @@ is a release or your own `go build`, the supervisor is the same program. Approac
 | --- | --- |
 | `persona-link status` | An extra line "Background service: scheduled task "Persona Link" · state · starts at logon"; the state is whatever schtasks prints in the system language (Running / 正在运行, the Chinese-locale "Running"…), shown but not parsed. Then a line for the tray: running or not, starts at sign-in or not (`tray` in `--json`) |
 | `persona-link uninstall [--purge]` | Ends and deletes the scheduled task (the node stops with it), deletes `persona-link-task.xml` and `persona-link-service.exe`; quits the tray and removes its sign-in entry, its link handlers and WebView2's cache. `--purge` is as on Linux and also deletes the supervisor's logs and lock |
+| `persona-link name [<new>\|--reset]` | As on Linux: shows or changes what the hub calls this computer ([link.md](link.md), "The computer's name") |
 | `persona-link tray [--open <link>]` | Runs the tray (what the sign-in entry runs). A second one shows the running tray's panel, or hands it the link |
 | `persona-link node install` / `node uninstall` | Not installed separately: the node is in the same scheduled task; use `install` (with node) / `install --no-node` |
 | `persona-link node status [--json]` | Whether the scheduled task includes the node, and the task's state |
@@ -91,6 +92,8 @@ It is part of persona-link (`internal/linktray`, `persona-link tray`), not a sep
 - **Panel and pairing window**: HTML pages (`internal/linktray/web`; every size and color comes from `tokens.css`) loaded from memory, with no server and nothing fetched. The panel is a flyout over acrylic next to the icon, on the taskbar's side;
   the pairing window (active and passive, as in the Mac App) is a normal window over Mica. Both follow the system's light or dark mode, accent color, transparency setting and the monitor's DPI (per-monitor v2).
   The backdrops need Windows 11 22H2 (build 22621); earlier builds get a solid background. Slow actions (install, restart, pair) run off the UI thread, and their result shows in the panel in the user's words.
+- **Rename this computer…**: in the panel (and the right-click menu) while connected to a hub that renames computers and once the computer is confirmed. It opens a name field in the panel; Save asks the running
+  persona-link to have the hub rename it, as `persona-link name` does ([link.md](link.md), "The computer's name"), and the panel says the hub's answer. The status line shows the name the hub gives the computer.
 - **Notifications**: once when the hub waits for your OK on this computer, and once when a link that was up has been down for a minute.
 - **Links**: `persona://` links, and the previous brand's ones that older hubs print, open the pairing window with the link filled in (`HKCU\Software\Classes\<scheme>`, running `tray --open "%1"`).
   A scheme that another program already handles is left alone (a desktop App's phone link must keep working), and uninstall removes only the handlers that are ours.
