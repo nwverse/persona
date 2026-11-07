@@ -8,10 +8,12 @@ import (
 )
 
 // The inbox (docs/assistant/inbox.md) is the manager's: the items and their state (admission, triage, events, mutes, done,
-// the AI twin, translations) and the /api/v1/inbox… routes, which the hub relays like Routes. The hub keeps the
-// sources: it reads them when a round is due (its poll, a connector's changed) and hands what it read over
-// (MethodInboxCollected); what the inbox does with a source (a mail body, a reply, a connector's group tools…) it asks
-// the hub for on AppInbox. These are the shapes, in their own file so the other moves merge apart.
+// the AI twin, translations) and the /api/v1/inbox… routes, which the hub relays like Routes. The sources are the
+// manager's own extension manager's (internal/extmgr, in the same process): it reads them when a round is due (its
+// poll, a connector's changed, InboxCollect) and hands what it read over (MethodInboxCollected); what the inbox does
+// with a source (its config, a mail body, a reply, a connector's group tools…) it asks the extension manager for on
+// AppInbox. Both ways are calls inside the manager process; none of them reaches the hub. These are the shapes, in
+// their own file so the other moves merge apart.
 
 // InboxRoutes are the inbox's routes (net/http patterns), the translation's with them (it is the manager's too): the hub
 // relays the apps' requests on them to the manager as http.request, like Routes. The assistant registers exactly Routes
@@ -40,12 +42,12 @@ var InboxRoutes = []string{
 	"POST /api/v1/translate/mail",
 }
 
-// What the hub asks of the manager about the inbox (Handler), and tells it.
+// What the extension manager asks of the manager about the inbox, and tells it, in-process (BusHub.Answer).
 const (
 	// MethodInboxCollected: InboxRound → {}: what one collection read of the sources. The manager makes items of it
 	// (and triages, relates, files…) before it answers what it does at once; the rest goes on in its background. A
 	// round older than one it applied is dropped; while it could not read what it keeps it refuses the round
-	// (CodeInboxUnavailable) and the hub hands it again.
+	// (CodeInboxUnavailable) and the extension manager hands it again.
 	MethodInboxCollected = "inbox.collected"
 	// MethodInboxItem: {id} → {item, ok}: one item as it is stored (JSON), for an extension's inbox_item slot.
 	MethodInboxItem = "inbox.item"
@@ -55,14 +57,14 @@ const (
 	// sets them as its muted_repos); with set, they become the source's repository mutes first (add: added to them).
 	MethodInboxRepoMutes = "inbox.repo_mutes"
 
-	// EventInboxChanged (the manager tells the hub, one way): InboxChanged.
+	// EventInboxChanged (the manager tells its extension manager in-process, one way): InboxChanged.
 	EventInboxChanged = "inbox.changed"
 )
 
-// The manager asks the hub about the inbox's sources (AppInbox).
+// The manager asks its extension manager about the inbox's sources (AppInbox), in-process (BusHub.AppCall).
 const (
-	// InboxCollect: {round} → {}: collect now (a pull to refresh): the hub reads the sources and hands them over
-	// (MethodInboxCollected) before it answers.
+	// InboxCollect: {round} → {}: collect now (a pull to refresh): the extension manager reads the sources and hands
+	// them over (MethodInboxCollected) before it answers.
 	InboxCollect = "inbox.collect"
 	// InboxKick: {} → {}: a round soon (the triage got through a round with more to sort).
 	InboxKick = "inbox.kick"
@@ -96,7 +98,8 @@ var TranslateLanguages = map[string]string{
 }
 
 // InboxSent is a reply's answer: Already, it had gone out before under the same send_id (a retry after the answer was
-// lost, the bus dropping or the manager restarting): nothing was sent again. The hub keeps the send ids a day.
+// lost, the bus dropping or the manager restarting): nothing was sent again. The extension manager keeps the send ids
+// (sent_messages) for good.
 type InboxSent struct {
 	Already bool `json:"already,omitempty"`
 }
@@ -119,19 +122,20 @@ const (
 )
 
 // InboxRound is what one collection read: the sources it read (one that could not be read is not there and keeps
-// what it had) and, on a full round, the mail. What the hub read while the manager could not take it comes with the
-// next round that goes, merged in (a thread, an event, a mail as last read; what left a source's window meanwhile
-// stays, within bounds).
+// what it had) and, on a full round, the mail. What the extension manager read while the manager could not take it
+// comes with the next round that goes, merged in (a thread, an event, a mail as last read; what left a source's window
+// meanwhile stays, within bounds).
 type InboxRound struct {
-	// Epoch names the hub's run and Seq orders its rounds in it: one older than a round applied is not applied.
+	// Epoch names the extension manager's run and Seq orders its rounds in it: one older than a round applied is not
+	// applied.
 	Epoch   string        `json:"epoch,omitempty"`
 	Seq     uint64        `json:"seq,omitempty"`
 	Round   string        `json:"round"`
 	Sources []InboxSource `json:"sources"`
 	// Mail is the mail accounts read (nil: mail was not read this round, or the accounts could not be listed).
 	Mail *InboxMailRead `json:"mail,omitempty"`
-	// Names are the connectors the hub has now, by id (a source that is gone keeps no held-back count; mutes are
-	// listed with these names).
+	// Names are the connectors the extension manager has now, by id (a source that is gone keeps no held-back count;
+	// mutes are listed with these names).
 	Names map[string]string `json:"names,omitempty"`
 }
 
@@ -219,8 +223,8 @@ type InboxMailMessage struct {
 	Text    string        `json:"text"`
 }
 
-// InboxConfig is what the inbox goes by of the hub's (manager.json's inbox section, its settings and the devices'):
-// asked for when it is needed, kept a few seconds.
+// InboxConfig is what the inbox goes by of the extension manager's (manager.json's inbox section, its settings and
+// the devices'): asked for when it is needed, kept a few seconds.
 type InboxConfig struct {
 	// Rules are the user's own triage rules (setting inbox.rules, else manager.json's inbox.rules); AgentRules guide the
 	// judge linking a Needs you item to one of the user's tasks (inbox.agent_rules); what the AI twin takes on is set
@@ -265,8 +269,9 @@ type InboxRepoMutes struct {
 	Repos []string `json:"repos,omitempty"`
 }
 
-// InboxChanged is EventInboxChanged's params: the items that changed and were stored (the hub tells the extensions,
-// inbox.changed, and the apps, {"type":"inbox"}); none: only what the apps see moved (the triage status).
+// InboxChanged is EventInboxChanged's params: the items that changed and were stored (the extension manager tells the
+// extensions, inbox.changed, and, through the hub's broadcast, the apps, {"type":"inbox"}); none: only what the apps
+// see moved (the triage status).
 type InboxChanged struct {
 	Items []InboxChangedItem `json:"items"`
 }

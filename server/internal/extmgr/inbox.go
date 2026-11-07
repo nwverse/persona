@@ -20,15 +20,18 @@ import (
 	"github.com/nwverse/persona/server/internal/rpc"
 )
 
-// The unified inbox (docs/assistant/inbox.md) is the manager's (internal/assistant's inbox*.go): the items and their state,
-// triage, events, mutes, the AI double, translations and the /api/v1/inbox… routes, which the hub relays. The hub keeps
-// the sources: it reads them when a round is due — its poll, a connector's changed, a pull to refresh the manager asks
-// for (inbox.collect) — and hands what it read to the manager (inbox.collected); it runs what the inbox asks of the
-// sources and of its other parts (app.call inbox.*: inboxAppCall), and tells the extensions and the apps when items
-// changed (inbox.changed). It keeps no inbox state of its own: while the manager is not connected the sources are
-// still read on schedule and what they had is kept for it (merged, bounded, in memory: heldThingsMost, heldMailMost),
-// so what leaves a source's window meanwhile (mail's newest 40, iMessage's newest 30) is not lost; the routes answer
-// 503 assistant_offline, and a full round with what was kept goes as soon as the manager is back.
+// The unified inbox (docs/assistant/inbox.md) is the assistant's (internal/assistant's inbox*.go; "the manager" in the
+// comments below): the items and their state, triage, events, mutes, the AI double, translations and the
+// /api/v1/inbox… routes, which the hub relays to the manager process. The sources are this code's, the extension
+// manager in that same process: it reads them when a round is due — its poll, a connector's changed, a pull to refresh
+// the assistant asks for (inbox.collect) — and hands what it read to the assistant in-process (inbox.collected through
+// callAssistant); it answers what the inbox asks of the sources and of its other parts (app.call inbox.*:
+// inboxAppCall, reached through the bus connection's localAppCall, never the hub), and tells the extensions and,
+// through the hub's broadcast, the apps when items changed (inbox.changed, taken here by AssistantSaid). It keeps no
+// inbox state of its own: while the assistant can't take a round (there is none yet, or it refused or failed the
+// hand-over) the sources are still read on schedule and what they had is kept for it (merged, bounded, in memory:
+// heldThingsMost, heldMailMost), so what leaves a source's window meanwhile (mail's newest 40, iMessage's newest 30) is
+// not lost; a full round with what was kept goes as soon as it takes one again.
 
 const (
 	inboxPoll     = 2 * time.Minute // fallback when no Feishu event arrives
@@ -60,7 +63,8 @@ type InboxConfig struct {
 // InboxAgentConfig is manager.json's inbox.agent, handed to the manager as it is.
 type InboxAgentConfig = assistantwire.InboxAgentConfig
 
-// inboxSources is the hub's part of the inbox: the wake-ups, one collection at a time, and what the manager reported.
+// inboxSources is the extension manager's part of the inbox: the wake-ups, one collection at a time, and what the
+// manager reported.
 type inboxSources struct {
 	once    sync.Once
 	kick    chan struct{}
@@ -188,8 +192,9 @@ func (h *Manager) inboxLoop(ctx context.Context) {
 	}
 }
 
-// inboxManagerConnected: the manager's handshake went through: a full round goes to it now (the first after the hub
-// started, or the one it missed), and GitHub's muted repositories kept in its options move to its mutes.
+// inboxManagerConnected: Run has started everything, the assistant in this process with it: a full round goes to it
+// now (the first after the manager started, or the one it missed), and GitHub's muted repositories kept in its options
+// move to its mutes.
 func (h *Manager) inboxManagerConnected() {
 	h.inbox.init()
 	h.inbox.owed.Store(true)
@@ -247,7 +252,7 @@ const (
 
 // mergeRounds is old with the newer round n over it: what n read replaces what old had of the same thing (a thread,
 // an event, a batch, a mail), what only old has stays (it left the source's window meanwhile) within heldThingsMost
-// and heldMailMost; a source n read as off, or one the hub no longer has, keeps nothing.
+// and heldMailMost; a source n read as off, or one this code no longer has, keeps nothing.
 func mergeRounds(old, n assistantwire.InboxRound) assistantwire.InboxRound {
 	out := n
 	if old.Round == assistantwire.RoundFull || n.Round == assistantwire.RoundFull {
@@ -486,7 +491,7 @@ var undeclaredKinds sync.Map
 
 // ---- the routes: the manager's ----
 
-// ---- what the manager tells the hub ----
+// ---- what the manager tells this code (in-process, not the hub) ----
 
 func init() { onAssistantEvent(assistantwire.EventInboxChanged, (*Manager).busInboxChanged) }
 
@@ -525,7 +530,7 @@ func (h *Manager) tellInboxChanged() {
 	}
 }
 
-// ---- what the hub asks the manager about the inbox ----
+// ---- what this code asks the manager about the inbox ----
 
 // inboxItemRaw is an item as the manager stores it (an extension's inbox_item slot); false when there is none, or
 // the manager can't say.
@@ -726,9 +731,9 @@ func (h *Manager) connectorOf(id string) connector.Connector {
 	return h.connectors.Get(id)
 }
 
-// inboxConfigView is what the inbox goes by of the hub's: the triage rules and the AI twin's (settings over hub.json),
-// manager.json's inbox.agent, the default Feishu account (the Feishu extension's, inboxLarkAccount), the plugins'
-// connectors, and the languages the devices want mail translated into.
+// inboxConfigView is what the inbox goes by of this code's: the triage rules and the AI twin's (settings over
+// hub.json), manager.json's inbox.agent, the default Feishu account (the Feishu extension's, inboxLarkAccount), the
+// plugins' connectors, and the languages the devices want mail translated into.
 func (h *Manager) inboxConfigView(ctx context.Context) assistantwire.InboxConfig {
 	out := assistantwire.InboxConfig{Rules: h.inboxRules(ctx), AgentRules: h.inboxAgentRules(ctx)}
 	extensionConnectors.Range(func(id, _ any) bool { // the plugins' connectors, before a round lists them
@@ -768,11 +773,11 @@ func (h *Manager) inboxMailBody(ctx context.Context, ref assistantwire.InboxMail
 		Subject: m.Subject, Text: text}, nil
 }
 
-// inboxSendWait bounds one reply's send at the hub.
+// inboxSendWait bounds one reply's send.
 const inboxSendWait = 2 * time.Minute
 
-// errReplyInDoubt: a send under this id was cut off before (the hub went away during it, or it ran out of time): it
-// may have gone out, so it is not sent again.
+// errReplyInDoubt: a send under this id was cut off before (a link on the way dropped during it, or it ran out of
+// time): it may have gone out, so it is not sent again.
 var errReplyInDoubt = &rpc.Error{Code: assistantwire.CodeAssistantInDoubt, Message: "这条回复上次发送时中断了，可能已经发出去了：先看看再决定要不要重发"}
 
 // sendInboxOnce sends one of the manager's replies at most once per send id, with the guard the apps' messages have
