@@ -50,6 +50,8 @@ On hosted images, successful SDK lookup does not prove Xcode can resolve a gener
 
 A SwiftUI body can compile on a newer toolchain but exceed the minimum compiler's type-checking budget (#1124). Split List construction, style modifiers and observation/lifecycle modifiers into opaque helper functions. Preserve row content and modifier order exactly; do not add type erasure or container views just to shorten the expression. Verify the minimum compiler on hosted CI, not only a newer local build.
 
+The minimum compiler can reject Boolean autoclosures that capture a main-actor probe dictionary containing `Any` (#1124). Read Bool/Double fields on that actor first, then combine the Sendable scalar values. Preserve the settling criteria and assertions; do not disable concurrency checks or skip the test target.
+
 Changing the catalog's development language also changes the identity the Swift compiler extracts. Preserve each colliding English translation in its own contextual key and keep explicit English values; do not merge different Chinese or Japanese meanings. Reorder interpolation expressions together with translated argument numbers, and audit reordered expressions for side effects. Named App Intent parameters follow their names, not their old position.
 
 Keep `LocalizedStringResource` and `LocalizedStringKey` arguments as localization values: wrapping a literal in `String(localized:)` is correct for a `String`, but breaks a helper requiring either localization type. Read each helper's signature rather than guessing from its name. Migrate nested literals from the inside out. Without a Swift compiler, reject unresolved raw literals and ambiguous argument types instead of silently guessing.
