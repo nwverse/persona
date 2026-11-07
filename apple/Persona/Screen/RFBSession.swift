@@ -20,6 +20,8 @@ import SwiftUI
     private(set) var phase: Phase = .connecting
     /// The Mac's screen, in its pixels.
     private(set) var size: CGSize = .zero
+    /// The server's screens on it (ExtendedDesktopSize, #80); empty from a server that sends none (macOS's, as far as is known).
+    private(set) var screens: [RFBClient.Screen] = []
     /// Where the pointer is, on the Mac's screen (the last one sent; the middle before any).
     private(set) var pointer: CGPoint = .zero
     private(set) var cursor: RFBClient.Cursor?
@@ -68,6 +70,7 @@ import SwiftUI
         c.onCutText = { [weak self] text in Task { @MainActor in self?.macClipboard = text } }
         c.onCursor = { [weak self] cursor in Task { @MainActor in self?.cursor = cursor } }
         c.onResize = { [weak self] w, h in Task { @MainActor in self?.resized(width: w, height: h) } }
+        c.onScreens = { [weak self] screens in Task { @MainActor in self?.screens = screens } }
         sink.attach(c) { [weak self] fps, latency in
             // Stamped here, when the frame was copied: a report still queued from before a suspension keeps its time.
             let at = Date.now
@@ -80,6 +83,7 @@ import SwiftUI
         }
         client = c
         phase = .connecting
+        screens = []
         pictured = false
         lastFrame = nil
         connection += 1

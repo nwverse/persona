@@ -10349,6 +10349,29 @@
       },
       "extractionState": "manual"
     },
+    "All Displays": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "All Displays"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "すべてのディスプレイ"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "全部显示器"
+          }
+        }
+      },
+      "extractionState": "manual"
+    },
     "Allow notifications for Persona in Settings.": {
       "extractionState": "manual",
       "localizations": {
@@ -36512,6 +36535,29 @@
       },
       "extractionState": "manual"
     },
+    "Display %lld": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Display %lld"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ディスプレイ%lld"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "显示器 %lld"
+          }
+        }
+      },
+      "extractionState": "manual"
+    },
     "Display name (optional)": {
       "localizations": {
         "en": {
@@ -36553,6 +36599,29 @@
           "stringUnit": {
             "state": "translated",
             "value": "表示名（空欄なら「%1$@」）"
+          }
+        }
+      },
+      "extractionState": "manual"
+    },
+    "Displays": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Displays"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ディスプレイ"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "显示器"
           }
         }
       },
@@ -76137,6 +76206,29 @@
           }
         }
       }
+    },
+    "When the Mac has more than one display, choose one in “…” › Displays to show only that display. Zooming, taps and the pointer then stay on it.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "When the Mac has more than one display, choose one in “…” › Displays to show only that display. Zooming, taps and the pointer then stay on it."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Macに複数のディスプレイがあるときは、「…」›「ディスプレイ」で1台を選ぶと、そのディスプレイだけを表示します。拡大、タップ、ポインタもそのディスプレイの中に限られます。"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Mac 有多块显示器时，在「…」›「显示器」里选一块，就只显示那一块。缩放、点按和指针也只在这块显示器上。"
+          }
+        }
+      },
+      "extractionState": "manual"
     },
     "Why, and what was ruled out…": {
       "extractionState": "manual",

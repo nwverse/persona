@@ -9700,18 +9700,37 @@ def png(w, h, rgb):
 # connecting (0: back).
 FAKE_SCREEN = {"account": "me", "password": "mock-pass", "port": 0, "signins": [], "typed": "",  # typed: keys after signing in
                "pointer": None, "clicks": [], "clipboard": "", "conns": [], "frames": 0, "slow": 0.0, "down": False}
-FAKE_W, FAKE_H = 480, 300
+# MOCK_SCREEN_DISPLAYS=2 (#80): the mock Mac has two 480×300 displays side by side, one picture 960×300 wide, each
+# numbered in its window (display 2 green). Its Screen Sharing sends their rectangles (ExtendedDesktopSize) when asked;
+# with "2:node" it sends none, as macOS's does, and MacBook's computer status carries them as the node reads them
+# (`displays`, points at a 2× scale).
+_displays = os.environ.get("MOCK_SCREEN_DISPLAYS", "1").split(":")
+FAKE_DISPLAYS = max(1, int(_displays[0] or "1"))
+FAKE_EXTENDED = FAKE_DISPLAYS > 1 and "node" not in _displays[1:]
+FAKE_W, FAKE_H = 480 * FAKE_DISPLAYS, 300
+FAKE_NODE_DISPLAYS = [{"id": i + 1, "x": 240 * i, "y": 0, "width": 240, "height": 150, **({"main": True} if i == 0 else {})}
+                      for i in range(FAKE_DISPLAYS)] if FAKE_DISPLAYS > 1 and not FAKE_EXTENDED else []
+# The displays' numbers, 3×5 cells each, drawn 12 pixels a cell.
+FAKE_DIGITS = {1: [".#.", "##.", ".#.", ".#.", "###"], 2: ["###", "..#", "###", "#..", "###"],
+               3: ["###", "..#", "###", "..#", "###"], 4: ["#.#", "#.#", "###", "..#", "..#"]}
 
 
 def fake_frame(t=0):
-    """The mock Mac's desktop as rows of (r, g, b): a gradient, a window, and a box that moves with t (animated)."""
+    """The mock Mac's desktop as rows of (r, g, b): a gradient, a window, and a box that moves with t (animated). With
+    several displays, each its own gradient and window with its number; the box stays on the first."""
     px = []
     bx, by = 80 + (t * 7) % 300, 120 + (t * 3) % 120
     for y in range(FAKE_H):
         for x in range(FAKE_W):
+            d, lx = divmod(x, 480)
             if bx <= x < bx + 40 and by <= y < by + 40: px.append((255, 159, 10))
-            elif 60 <= x < 420 and 50 <= y < 250: px.append((236, 236, 238) if y < 74 else (250, 250, 252))
-            else: px.append((40 + y // 6, 90 + y // 8, 160))
+            elif 60 <= lx < 420 and 50 <= y < 250:
+                digit = FAKE_DIGITS.get(d + 1) if FAKE_DISPLAYS > 1 else None
+                cx, cy = (lx - 222) // 12, (y - 120) // 12
+                if digit and 222 <= lx and 120 <= y and cx < 3 and cy < 5 and digit[cy][cx] == "#": px.append((60, 60, 67))
+                else: px.append((236, 236, 238) if y < 74 else (250, 250, 252))
+            elif d == 0: px.append((40 + y // 6, 90 + y // 8, 160))
+            else: px.append((40 + y // 8, 150 + y // 6 % 60, 90))
     return px
 
 
@@ -9800,8 +9819,11 @@ def fake_screen_sharing():
             encodings, z, t, sent = [], zlib.compressobj(6), 0, False
             frame = fake_frame()
 
-            def update(rects):
+            def update(rects, extended=False):
                 body = b""
+                if extended:  # ExtendedDesktopSize: reason 0, status 0, the framebuffer's size, then each display
+                    body += struct.pack(">HHHHi", 0, 0, FAKE_W, FAKE_H, -308) + struct.pack(">B3x", FAKE_DISPLAYS)
+                    body += b"".join(struct.pack(">IHHHHI", i + 1, 480 * i, 0, 480, FAKE_H, 0) for i in range(FAKE_DISPLAYS))
                 for (x, y, w, h) in rects:
                     if 16 in encodings:
                         body += struct.pack(">HHHHi", x, y, w, h, 16) + zrle_rect(frame, FAKE_W, x, y, w, h, z)
@@ -9809,7 +9831,7 @@ def fake_screen_sharing():
                         body += struct.pack(">HHHHi", x, y, w, h, 0) + b"".join(
                             bytes([*frame[(y + j) * FAKE_W + x + i][::-1], 0]) for j in range(h) for i in range(w))
                 with lock:
-                    c.sendall(struct.pack(">BxH", 0, len(rects)) + body)
+                    c.sendall(struct.pack(">BxH", 0, len(rects) + (1 if extended else 0)) + body)
                 FAKE_SCREEN["frames"] += 1
 
             while True:  # SetPixelFormat 20, SetEncodings 4 + 4n, FramebufferUpdateRequest 10, key 8, pointer 6, cut 8 + n
@@ -9822,7 +9844,7 @@ def fake_screen_sharing():
                     exact(c, 9)
                     if not sent:
                         sent = True
-                        update([(0, 0, FAKE_W, FAKE_H)])
+                        update([(0, 0, FAKE_W, FAKE_H)], extended=FAKE_EXTENDED and -308 in encodings)
                     elif os.environ.get("MOCK_SCREEN_ANIMATE") == "1":  # a box moving at ~30 frames a second
                         time.sleep(1 / 30)
                         old = (80 + (t * 7) % 300, 120 + (t * 3) % 120)
@@ -10296,7 +10318,10 @@ def computer_of(machine_id, enabled):
     """How Cua Driver is on that Mac, said for every Mac while the plugin is on (MacBook: MOCK_COMPUTER's state; Mac
     Studio: not installed), with whether it is turned on for it."""
     state = MOCK_COMPUTER if machine_id == "macbook" else "missing"
-    return {"enabled": enabled, **COMPUTER_STATES.get(state, COMPUTER_STATES["ready"])}
+    c = {"enabled": enabled, **COMPUTER_STATES.get(state, COMPUTER_STATES["ready"])}
+    if machine_id == "macbook" and c.get("screen_sharing") and FAKE_NODE_DISPLAYS:
+        c["displays"] = FAKE_NODE_DISPLAYS  # MOCK_SCREEN_DISPLAYS=2:node
+    return c
 
 
 if MOCK_COMPUTER:

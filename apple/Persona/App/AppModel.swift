@@ -741,6 +741,13 @@ final class AppModel {
     /// (docs/extensions/computer-use.md; ego's first-run setup is done over it, #1507).
     var screenMachines: [Machine] { machines.filter(Self.showsScreen) }
     func canShowScreen(_ ref: MachineRef) -> Bool { machine(ref).map(Self.showsScreen) ?? false }
+    /// The Mac's displays as its node last read them, from whichever extension shows its screen (#80).
+    func screenDisplays(_ ref: MachineRef) -> [MachineDisplay] {
+        guard let m = machine(ref) else { return [] }
+        if let c = m.computer, c.enabled, c.screenSharing, !c.displays.isEmpty { return c.displays }
+        if let b = m.browser, b.enabled, b.screenSharing { return b.displays }
+        return []
+    }
     nonisolated static func showsScreen(_ m: Machine) -> Bool {
         (m.computer.map { $0.enabled && $0.screenSharing } ?? false) || (m.browser.map { $0.enabled && $0.screenSharing } ?? false)
     }

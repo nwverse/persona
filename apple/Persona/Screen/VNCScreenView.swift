@@ -18,12 +18,24 @@ enum VNCMode: String, CaseIterable {
 ///   held down is the right button; pinching zooms.
 /// - Trackpad Mode: one finger moves the pointer by as much; a tap clicks where it is; a tap then a drag drags; two scroll.
 /// Two fingers scroll as VNCWheel says: a notch every few points, coasting after a flick.
+/// With `region` set (one of the Mac's displays, #80) only that part of the framebuffer is shown, zoomed and touched;
+/// what is sent still carries whole-framebuffer pixels.
 final class VNCScreenUIView: UIView, UIGestureRecognizerDelegate {
     let display = AVSampleBufferDisplayLayer()
+    /// Holds the picture and cuts it to the part shown.
+    private let clip = CALayer()
     private let pointerLayer = CALayer()
     weak var session: RFBSession?
     var mode: VNCMode = .mouse
     var interactive = false { didSet { gestures.forEach { $0.isEnabled = interactive } } }
+    /// The part of the framebuffer shown, in pixels; nil: all of it. A new one starts unzoomed.
+    var region: CGRect? {
+        didSet {
+            guard region != oldValue else { return }
+            shown = nil
+            stopCoast()
+        }
+    }
     private var gestures: [UIGestureRecognizer] = []
     /// Where the Mac's screen is drawn, in this view; nil: fitted (not zoomed).
     private var shown: CGRect?
@@ -40,7 +52,9 @@ final class VNCScreenUIView: UIView, UIGestureRecognizerDelegate {
         backgroundColor = .black
         clipsToBounds = true
         display.videoGravity = .resize
-        layer.addSublayer(display)
+        clip.masksToBounds = true
+        clip.addSublayer(display)
+        layer.addSublayer(clip)
         pointerLayer.contentsGravity = .resizeAspect
         layer.addSublayer(pointerLayer)
         let tap = UITapGestureRecognizer(target: self, action: #selector(tapped(_:)))
@@ -78,19 +92,21 @@ final class VNCScreenUIView: UIView, UIGestureRecognizerDelegate {
         return s.width > 0 ? s : CGSize(width: 16, height: 10)
     }
 
-    private var fitted: CGRect { AVMakeRect(aspectRatio: screenSize, insideRect: bounds) }
+    /// The part of the framebuffer shown: the region while it lies on the framebuffer, else all of it.
+    private var visible: CGRect {
+        let whole = CGRect(origin: .zero, size: screenSize)
+        guard let region, !region.isEmpty, whole.contains(region) else { return whole }
+        return region
+    }
+
+    private var fitted: CGRect { AVMakeRect(aspectRatio: visible.size, insideRect: bounds) }
     private var rect: CGRect { shown ?? fitted }
+    private var viewport: VNCViewport { VNCViewport(visible: visible, rect: rect) }
 
-    /// A point of this view on the Mac's screen.
-    func toScreen(_ p: CGPoint) -> CGPoint {
-        let r = rect
-        return CGPoint(x: (p.x - r.minX) / r.width * screenSize.width, y: (p.y - r.minY) / r.height * screenSize.height)
-    }
+    /// A point of this view on the Mac's screen, kept on the part shown.
+    func toScreen(_ p: CGPoint) -> CGPoint { viewport.clamped(viewport.toScreen(p)) }
 
-    func toView(_ q: CGPoint) -> CGPoint {
-        let r = rect
-        return CGPoint(x: r.minX + q.x / screenSize.width * r.width, y: r.minY + q.y / screenSize.height * r.height)
-    }
+    func toView(_ q: CGPoint) -> CGPoint { viewport.toView(q) }
 
     override func layoutSubviews() {
         super.layoutSubviews()
@@ -101,11 +117,13 @@ final class VNCScreenUIView: UIView, UIGestureRecognizerDelegate {
     func place() {
         CATransaction.begin()
         CATransaction.setDisableActions(true)
-        display.frame = rect
+        let port = viewport
+        clip.frame = port.rect
+        display.frame = port.framebufferFrame(screenSize)
         if let s = session {
             let at = toView(s.pointer)
             if let c = s.cursor, c.width > 0, let image = Self.image(c) {
-                let scale = rect.width / screenSize.width
+                let scale = 1 / port.pixelsPerPoint
                 pointerLayer.contents = image
                 pointerLayer.frame = CGRect(x: at.x - CGFloat(c.hotX) * scale, y: at.y - CGFloat(c.hotY) * scale,
                                             width: CGFloat(c.width) * scale, height: CGFloat(c.height) * scale)
@@ -114,7 +132,7 @@ final class VNCScreenUIView: UIView, UIGestureRecognizerDelegate {
                 pointerLayer.contents = Self.arrow
                 pointerLayer.frame = CGRect(x: at.x - side * 0.3, y: at.y - side * 0.15, width: side, height: side)
             }
-            pointerLayer.isHidden = s.phase != .live
+            pointerLayer.isHidden = s.phase != .live || !port.visible.contains(s.pointer)
             #if DEBUG
             accessibilityValue = String(format: "fps=%.0f;latency=%.0f;mode=%@", s.fps, s.latency ?? -1, mode.rawValue) // UI tests measure
             #endif
@@ -172,8 +190,8 @@ final class VNCScreenUIView: UIView, UIGestureRecognizerDelegate {
             if dragging { s.move(to: s.pointer, buttons: 1) }
         case (.trackpad, .changed):
             let t = g.translation(in: self)
-            let speed = screenSize.width / rect.width * 1.4
-            s.move(to: CGPoint(x: s.pointer.x + (t.x - lastPan.x) * speed, y: s.pointer.y + (t.y - lastPan.y) * speed),
+            let port = viewport, speed = port.pixelsPerPoint * 1.4
+            s.move(to: port.clamped(CGPoint(x: s.pointer.x + (t.x - lastPan.x) * speed, y: s.pointer.y + (t.y - lastPan.y) * speed)),
                    buttons: dragging ? 1 : 0)
             lastPan = t
         case (.trackpad, _):
@@ -264,7 +282,7 @@ final class VNCScreenUIView: UIView, UIGestureRecognizerDelegate {
     /// Center Pointer.
     func centerPointer() {
         guard let s = session else { return }
-        s.move(to: CGPoint(x: screenSize.width / 2, y: screenSize.height / 2))
+        s.move(to: CGPoint(x: visible.midX, y: visible.midY))
         place()
     }
 }
@@ -274,6 +292,8 @@ struct VNCScreen: UIViewRepresentable {
     let session: RFBSession
     var mode: VNCMode = .mouse
     var interactive = false
+    /// One of the Mac's displays to show alone (its frame on the framebuffer); nil: all of them.
+    var region: CGRect? = nil
     /// The view, for the page's Center Pointer.
     var onView: (VNCScreenUIView) -> Void = { _ in }
 
@@ -288,6 +308,7 @@ struct VNCScreen: UIViewRepresentable {
     func updateUIView(_ v: VNCScreenUIView, context: Context) {
         v.mode = mode
         v.interactive = interactive
+        v.region = region
         _ = (session.pointer, session.size, session.cursor?.width, session.phase, session.fps) // redrawn as they change
         v.place()
     }
