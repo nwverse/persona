@@ -467,13 +467,13 @@ def commit_range(spec):
     return base, head
 
 
-def git_config(key):
-    """The value Git uses for key ("" when unset)."""
-    result = subprocess.run(["git", "-C", ROOT, "config", "--get", key], capture_output=True, text=True)
+def git_config(pattern):
+    """The value Git uses for the keys pattern matches (names in lowercase): the last one set ("" when none is)."""
+    result = subprocess.run(["git", "-C", ROOT, "config", "--get-regexp", pattern], capture_output=True, text=True)
     if result.returncode == 1:
         return ""
     result.check_returncode()
-    return result.stdout.strip()
+    return result.stdout.splitlines()[-1].partition(" ")[2]
 
 
 CUT_LINE = " ------------------------ >8 ------------------------"
@@ -486,16 +486,19 @@ def commit_msg_lines(path):
     not), the default cleanup drops the comment lines, its hints and status that name the branch and local paths, and
     everything from the scissors line down (the diff of `commit -v`). A message from -m or -F keeps its lines that
     start with the comment character (Markdown headings) unless commit.cleanup is strip. The comment string is
-    core.commentChar; `auto` counts as `#`. A --cleanup given to `git commit` is not visible here: pre-push's --range
-    scan reads every line of what was recorded.
+    core.commentChar or core.commentString, whichever is set last; `auto` counts as `#`. Lines end at \n only, as in
+    git: a \r stays in its line, so a CRLF scissors line ends nothing. A --cleanup or -v given to `git commit` is not
+    visible here (an edited message is taken to end at a scissors line; git ends it there only with -v, commit.verbose
+    or cleanup scissors): pre-push's --range scan reads every line of what was recorded.
     """
     edited = os.environ.get("GIT_EDITOR") != ":"
-    cleanup = git_config("commit.cleanup") or "default"
+    cleanup = git_config(r"^commit\.cleanup$") or "default"
     strip = cleanup == "strip" or (cleanup == "default" and edited)
-    comment = git_config("core.commentChar")
+    comment = git_config(r"^core\.comment(char|string)$")
     if comment.lower() in ("", "auto"):
         comment = "#"
-    for n, line in enumerate(open(path).read().splitlines(), 1):
+    text = open(path, encoding="utf-8", errors="replace", newline="").read()  # as --range decodes recorded messages
+    for n, line in enumerate(text.split("\n"), 1):
         if edited and line == comment + CUT_LINE:
             break
         if not (strip and line.startswith(comment)):

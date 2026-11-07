@@ -780,18 +780,18 @@ class MessageTests(unittest.TestCase):
         self.editor.write_text('#!/bin/sh\n{ printf "%s\\n" "$TITLE"; cat "$1"; } > "$1.new" && mv "$1.new" "$1"\n')
         self.editor.chmod(0o755)
 
-    def commit(self, *args, title=None):
+    def commit(self, *args, title=None, editor=None):
         """git commit with the hooks; with an editor when a title is given."""
         env = dict(self.env)
         if title is not None:
-            env.update({"GIT_EDITOR": str(self.editor), "TITLE": title})
+            env.update({"GIT_EDITOR": str(editor or self.editor), "TITLE": title})
         return subprocess.run(["git", "commit", "-q", *args], cwd=self.repo, env=env, capture_output=True, text=True,
                               timeout=30)
 
-    def assert_refused(self, result, where):
+    def assert_refused(self, result, where=None):
         output = result.stdout + result.stderr  # git sends a hook's output to stderr
         self.assertNotEqual(result.returncode, 0, output)
-        self.assertIn("commit message:%d: private value" % where, output)
+        self.assertRegex(output, r"commit message:%s: private value" % (r"\d+" if where is None else where))
         self.assertNotIn("secretbox", output)
 
     def change(self):
@@ -833,6 +833,32 @@ class MessageTests(unittest.TestCase):
         result = self.commit("-m", "fix: a clean title", "-m", "# dropped on secretbox")
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertEqual(self.git("log", "-1", "--format=%B").stdout.strip(), "fix: a clean title")
+
+    def test_hook_follows_the_comment_setting_set_last(self):
+        # core.commentString is a synonym of core.commentChar; git uses the one set last, here ";".
+        self.change()
+        self.git("config", "core.commentChar", "%")
+        self.git("config", "core.commentString", ";")
+        self.assert_refused(self.commit("-v", title="## Tested on secretbox"), 1)
+        result = self.commit("-v", title="fix: a clean title")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_hook_checks_the_comments_an_editor_commit_keeps(self):
+        # With commit.cleanup=whitespace git records its comment block, which names the branch.
+        self.change()
+        self.git("config", "commit.cleanup", "whitespace")
+        self.assert_refused(self.commit(title="fix: a clean title"))
+
+    def test_hook_splits_lines_as_git_does(self):
+        # Git ends a line only at \n: what follows a \r stays in the recorded line, and with CRLF line ends the
+        # scissors line ends nothing, so `commit -v` records the diff below it with the removed value.
+        self.change()
+        self.assert_refused(self.commit(title="fix: a clean title\r# tested on secretbox"), 1)
+        crlf = self.root / "crlf-editor.sh"
+        crlf.write_text('#!/bin/sh\n{ printf "%s\\n" "$TITLE"; cat "$1"; } | awk \'{ printf "%s\\r\\n", $0 }\' > "$1.new"'
+                        ' && mv "$1.new" "$1"\n')
+        crlf.chmod(0o755)
+        self.assert_refused(self.commit("-v", title="fix: a clean title", editor=crlf))
 
 
 class GitBatchTests(unittest.TestCase):
