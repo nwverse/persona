@@ -4,7 +4,7 @@ import XCTest
 /// `/mock/say?drop=1` writes a message and its reply into the transcript and moves the session's `updated_at`, but never
 /// pushes the items, like a node whose transcript watch ended. The chat notices that the session is newer than its
 /// newest line and nothing came over its subscription, asks for what came after it (`AgentSyncPacing.catchUpAt`) and
-/// shows the message and the reply.
+/// shows the message with the reply under it.
 final class ChatCatchUpTests: XCTestCase {
     private var hub: String!
     private let working = "macbook/a1f3c2d4-0000-4000-8000-000000000001" // the weather widget session, at work
@@ -43,6 +43,8 @@ final class ChatCatchUpTests: XCTestCase {
         let reply = app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", answer)).firstMatch
         XCTAssertTrue(message.waitForExistence(timeout: 20), "the new message never came in without its push")
         XCTAssertTrue(reply.waitForExistence(timeout: 5), "the new reply never came in without its push")
+        // Its own exchange: the reply under the new message, not with the turn before it.
+        XCTAssertGreaterThan(reply.frame.minY, message.frame.maxY, "the reply is not under the new message")
         let screen = app.screenshot()
         let shot = XCTAttachment(screenshot: screen)
         shot.name = "caught-up"
