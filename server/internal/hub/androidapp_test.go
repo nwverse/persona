@@ -1,3 +1,4 @@
+// Temporary single-runner server-change CI acceptance; do not merge.
 package hub
 
 import (
