@@ -302,6 +302,11 @@ func (in launcherInput) check() error {
 	return nil
 }
 
+var (
+	errChatProtocolChange = i18n.Err("assistant-models_launchers.err_chat_protocol_change")
+	errChatTransport      = i18n.Err("assistant-models_launchers.err_chat_transport")
+)
+
 // saveLauncher stores in (over old on an update) and tells the nodes.
 func (s *Service) saveLauncher(ctx context.Context, in launcherInput, old *storedLauncher) (storedLauncher, error) {
 	s.models.mu.Lock()
@@ -320,6 +325,28 @@ func (s *Service) saveLauncher(ctx context.Context, in launcherInput, old *store
 			return storedLauncher{}, i18n.Err("assistant-models_launchers.err_not_managed")
 		}
 		old = &list[i]
+		if old.API == "chat" && in.API != "chat" {
+			return storedLauncher{}, errChatProtocolChange
+		}
+	}
+	if in.API == "chat" {
+		var proxy, noProxy string
+		hasHeaders := false
+		if old != nil {
+			proxy, noProxy, hasHeaders = old.Proxy, old.NoProxy, old.HeadersSealed != ""
+		}
+		if in.Proxy != nil {
+			proxy = *in.Proxy
+		}
+		if in.NoProxy != nil {
+			noProxy = *in.NoProxy
+		}
+		if in.Headers != nil {
+			hasHeaders = strings.TrimSpace(*in.Headers) != ""
+		}
+		if hasHeaders || strings.TrimSpace(proxy) != "" || strings.TrimSpace(noProxy) != "" {
+			return storedLauncher{}, errChatTransport
+		}
 	}
 	now := time.Now().UTC()
 	l := storedLauncher{Created: now, Updated: now}

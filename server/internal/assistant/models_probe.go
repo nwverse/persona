@@ -319,11 +319,23 @@ func (s *Service) providerTest(ctx context.Context, in probeInput) map[string]an
 		payload = map[string]any{"model": t.model, "input": []any{map[string]any{"role": "user", "content": "ping"}}, "stream": true, "store": false}
 	} else if t.api == "chat" {
 		path = "chat/completions"
-		payload = map[string]any{"model": t.model, "messages": []any{map[string]any{"role": "user", "content": "ping"}}, "stream": true}
+		payload = map[string]any{"model": t.model, "messages": []any{map[string]any{"role": "user", "content": "ping"}}, "stream": true, "max_tokens": 256}
 	}
 	body, _ := json.Marshal(payload)
 	started := time.Now()
 	res, err := t.do(ctx, http.MethodPost, t.endpoint(path), bytes.NewReader(body))
+	if err == nil && t.api == "chat" && res.StatusCode == http.StatusBadRequest {
+		raw, readErr := io.ReadAll(io.LimitReader(res.Body, 4096))
+		res.Body.Close()
+		if readErr == nil && chatProbeUseCompletionTokens(raw) {
+			delete(payload, "max_tokens")
+			payload["max_completion_tokens"] = 256
+			body, _ = json.Marshal(payload)
+			res, err = t.do(ctx, http.MethodPost, t.endpoint(path), bytes.NewReader(body))
+		} else {
+			res.Body = io.NopCloser(bytes.NewReader(raw))
+		}
+	}
 	if err != nil || res.StatusCode/100 != 2 {
 		msg, code := t.failure(ctx, res, err)
 		out["error"] = msg
@@ -352,6 +364,21 @@ func (s *Service) providerTest(ctx context.Context, in probeInput) map[string]an
 	}
 	out["ms"] = int(time.Since(started).Milliseconds())
 	return out
+}
+
+// chatProbeUseCompletionTokens mirrors the runtime's narrow retry rule for a rejected token field.
+func chatProbeUseCompletionTokens(raw []byte) bool {
+	var envelope struct {
+		Error struct {
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	if json.Unmarshal(raw, &envelope) != nil {
+		return false
+	}
+	message := strings.ToLower(envelope.Error.Message)
+	return strings.Contains(message, "max_tokens") && strings.Contains(message, "max_completion_tokens") &&
+		(strings.Contains(message, "unsupported") || strings.Contains(message, "not supported"))
 }
 
 // responsesProbeCompleted requires the same terminal event as the runtime, within the response budget.
