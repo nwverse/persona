@@ -597,12 +597,27 @@ func (h *Hub) listSessions(w http.ResponseWriter, r *http.Request) {
 		writeErrCode(w, http.StatusForbidden, codeOtherManager, errOtherManager)
 		return
 	}
-	out := []proto.Session{}
+	// Each machine's list as kept, then one copy of them all, stamped with their managers (decorated): with thousands
+	// of sessions, a copy of each list and the regrowing of out were most of what an answer allocated.
+	type kept struct {
+		list    []proto.Session
+		manager string
+	}
+	var lists []kept
+	n := 0
 	for _, m := range h.machinesNow() {
 		if mid != "" && m.cfg.ID != mid || em != "" && h.machineOwner(m.cfg.ID) != em {
 			continue
 		}
-		out = append(out, h.shown(m.cfg.ID, h.decorated(m))...)
+		list := h.shown(m.cfg.ID, m.keptSessions())
+		lists, n = append(lists, kept{list, h.machineOwner(m.cfg.ID)}), n+len(list)
+	}
+	out := make([]proto.Session, 0, n)
+	for _, k := range lists {
+		out = append(out, k.list...)
+		for i := len(out) - len(k.list); i < len(out); i++ {
+			out[i].Manager = k.manager
+		}
 	}
 	writeJSON(w, map[string]any{"sessions": out})
 }

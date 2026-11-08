@@ -494,6 +494,7 @@ struct TaskLine: View {
 struct FeedLine: View {
     var item: FeedItem
     var group: String = ""
+    @Environment(\.chatLayout) private var layout
     private var store: TasksStore { .shared }
 
     var body: some View {
@@ -512,10 +513,18 @@ struct FeedLine: View {
         case .answered: AnsweredLine(item: item, taskTitle: taskTitle)
         case .receipt: ReceiptCard(item: item)
         case .routed:
-            // Persona's own message to the task's agent is folded, never the user's bubble (#1542).
-            if item.sentByPersona { AgentSentLine(item: item, taskTitle: taskTitle) } else { routed }
+            // Persona's own message to the task's agent is never the user's bubble (#1542). The new conversation layout
+            // (#1666): "Persona → @task" folded in Persona's box, the user's own "Me → @task" in the user's box.
+            if item.sentByPersona {
+                if layout.on { RoutedExchange(item: item, taskTitle: taskTitle, layout: layout) } else { AgentSentLine(item: item, taskTitle: taskTitle) }
+            } else if layout.on {
+                UserRoutedExchange(item: item, taskTitle: taskTitle)
+            } else {
+                routed
+            }
         case .review: ReviewFeedLine(item: item, taskTitle: taskTitle)
-        case .report: ReportFeedLine(item: item, taskTitle: taskTitle)
+        case .report:
+            if layout.on { ReportExchange(item: item, taskTitle: taskTitle, layout: layout) } else { ReportFeedLine(item: item, taskTitle: taskTitle) }
         case .view:
             // Until the shared interactive renderer is connected, show the current card's plain-text fallback.
             if let id = item.ref,

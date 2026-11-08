@@ -119,9 +119,15 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
             }
         }
         PopFrames.startIfAsked()
-        // `-openChatsFresh YES`: no chat kept on disk from an earlier run (LiveUpdateTests: churned steps piled up), and
-        // every report folded again (ReportFoldUITests).
-        if d.bool(forKey: "openChatsFresh") { ChatCache.removeAll(); OpenReports.shared.closeAll() }
+        // `-openChatsFresh YES`: no chat kept on disk from an earlier run (LiveUpdateTests: churned steps piled up), every
+        // report folded again (ReportFoldUITests), and nowhere a chat was left (`chat.read.<session>`: Persona's
+        // conversations reopen there too since #1666).
+        if d.bool(forKey: "openChatsFresh") {
+            ChatCache.removeAll()
+            OpenReports.shared.closeAll()
+            let kept = d.persistentDomain(forName: Bundle.main.bundleIdentifier ?? "") ?? [:]
+            for k in kept.keys where k.hasPrefix("chat.read.") { d.removeObject(forKey: k) }
+        }
         // `-openImagesFresh YES`: no chat picture kept on disk from an earlier run, so a hub that fails it fails it (#182).
         if d.bool(forKey: "openImagesFresh") { try? FileManager.default.removeItem(at: URL.cachesDirectory.appending(path: "chat-images")) }
         // `-openAgentsFresh YES`: the Agents list's saved look forgotten (AgentsListTests).
