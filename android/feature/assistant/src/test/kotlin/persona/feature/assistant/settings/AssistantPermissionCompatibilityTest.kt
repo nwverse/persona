@@ -9,18 +9,24 @@ import org.junit.Test
 import persona.core.contracts.api.AssistantConfig
 import persona.core.contracts.api.AssistantConfigUpdate
 import persona.core.contracts.api.MemoryFile
+import persona.core.contracts.api.AssistantPermissionDefaults
 
 class AssistantPermissionCompatibilityTest {
     private class Api : AssistantSettingsApi {
         var stored = AssistantConfig(manager = "work", defaultPermissionMode = "default")
         var supported = emptySet<String>()
+            set(value) {
+                field = value
+                stored = stored.copy(permissionDefaults = value.firstOrNull()?.let {
+                    AssistantPermissionDefaults(1, it, AssistantPermissionDefaults.MODES)
+                })
+            }
         var writes = 0
         var reads = 0
         var read: suspend () -> AssistantConfig = { stored }
         var write: suspend (AssistantConfigUpdate) -> AssistantConfig = { update ->
             stored.copy(defaultPermissionMode = update.defaultPermissionMode).also { stored = it }
         }
-        override fun supportsDefaultPermission(manager: String) = manager in supported
         override suspend fun config(): AssistantConfig { reads++; return read() }
         override suspend fun updateConfig(update: AssistantConfigUpdate): AssistantConfig { writes++; return write(update) }
         override suspend fun memory() = emptyList<MemoryFile>()
@@ -48,6 +54,40 @@ class AssistantPermissionCompatibilityTest {
         val api = Api().apply { supported = setOf("personal") }
         val model = api.model(); model.load(); model.setDefaultPermission("plan")
         assertEquals(0, api.writes)
+    }
+
+    @Test fun unknownOrPartialContractDoesNotAuthorizeWrites() = runTest {
+        for (contract in listOf(
+            AssistantPermissionDefaults(2, "work", AssistantPermissionDefaults.MODES),
+            AssistantPermissionDefaults(1, "work", listOf("default")),
+            AssistantPermissionDefaults(1, "", AssistantPermissionDefaults.MODES),
+        )) {
+            val api = Api().apply { stored = stored.copy(permissionDefaults = contract) }
+            val model = api.model(); model.load(); model.setDefaultPermission("plan")
+            assertFalse(model.state.value.permissionSupported)
+            assertEquals(0, api.writes)
+        }
+    }
+
+    @Test fun unrelatedConfigResponseCannotKeepAStaleCapabilityEnabled() = runTest {
+        val api = Api().apply {
+            supported = setOf("work")
+            write = { stored.copy(timezone = it.timezone, permissionDefaults = null) }
+        }
+        val model = AssistantSettingsState(api, Zone().apply { followPhone = true })
+        model.load()
+        assertFalse(model.state.value.permissionSupported)
+        model.setDefaultPermission("plan")
+        assertEquals(1, api.writes) // Only the automatic timezone update.
+    }
+
+    @Test fun removedContractOnReadbackCannotReportSuccess() = runTest {
+        val api = Api().apply { supported = setOf("work") }
+        val model = api.model(); model.load()
+        api.read = { api.stored.copy(permissionDefaults = null) }
+        model.setDefaultPermission("plan")
+        assertTrue(model.state.value.notice?.error == true)
+        assertEquals("default", model.state.value.config?.defaultPermissionMode)
     }
 
     @Test fun ignoredFieldOnOldManagerCannotBecomeSuccessfulSave() = runTest {
