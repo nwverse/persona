@@ -15,7 +15,6 @@ import okio.ByteString.Companion.encodeUtf8
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertTrue
-import org.junit.Assert.fail
 import org.junit.Test
 
 /** docs/operations/ports.md "Forwarding": a connection to the phone's port is one WebSocket to the hub, bytes as they are. */
@@ -61,26 +60,35 @@ class PortForwarderTest {
         }
     }
 
+    // #3483: close returns only once the port is free. Closing a socket a thread is blocked accepting on only wakes that
+    // thread, so binding the number right after close used to find it still taken whenever the thread had not run yet.
+    @Test fun closeReturnsOnlyOnceItsPortIsFree(): Unit = runBlocking {
+        val unreachable = okhttp3.HttpUrl.Builder().scheme("http").host("127.0.0.1").port(1).build()
+        repeat(50) { round ->
+            val forwarder = PortForwarder(http) { unreachable to "t" }
+            val port = forwarder.localPort(PortForwarder.Key("mac", 0))
+            forwarder.close()
+            val free = runCatching {
+                java.net.ServerSocket().use {
+                    it.reuseAddress = true
+                    it.bind(java.net.InetSocketAddress(java.net.InetAddress.getByName("127.0.0.1"), port), 50)
+                }
+            }
+            assertTrue("round $round: port $port still taken right after close: ${free.exceptionOrNull()}", free.isSuccess)
+        }
+    }
+
     // #3483: a group's stack torn down (re-pair, unpair) frees its ports, so the next pairing's forwarder gets them back.
     @Test fun aClosedOpenerFreesItsPortForTheNext(): Unit = runBlocking {
+        val port = java.net.ServerSocket(0, 1, java.net.InetAddress.getByName("127.0.0.1")).use { it.localPort }
         fun opener() = HubPortOpener(OkHttpHubConnection(
             HubConnectionConfig("test-hub", null, "t", listOf(persona.core.contracts.Endpoint("http://127.0.0.1:1/", "lan")), "test"),
             HubNetwork("offline", available = false)))
-        // The free number comes from a probe that must be released before the first opener binds it, so another
-        // process or an outgoing connection's ephemeral port can take it in between; the opener then rightly falls
-        // back to another number. Only that precondition is retried with a new number. Once the first opener holds
-        // the number, the next one must get it back; a forwarder that never prefers the machine's number fails here.
-        repeat(5) {
-            val port = java.net.ServerSocket(0, 1, java.net.InetAddress.getByName("127.0.0.1")).use { it.localPort }
-            val first = opener()
-            val got = first.open("mac", port, "/", secure = false, listed = true)
-            (first as? AutoCloseable)?.close()
-            if (got != "http://localhost:$port/") return@repeat
-            val second = opener()
-            assertEquals("http://localhost:$port/", second.open("mac", port, "/", secure = false, listed = true))
-            (second as? AutoCloseable)?.close()
-            return@runBlocking
-        }
-        fail("The first opener never got the free machine port number in 5 tries")
+        val first = opener()
+        assertEquals("http://localhost:$port/", first.open("mac", port, "/", secure = false, listed = true))
+        (first as? AutoCloseable)?.close()
+        val second = opener()
+        assertEquals("http://localhost:$port/", second.open("mac", port, "/", secure = false, listed = true))
+        (second as? AutoCloseable)?.close()
     }
 }

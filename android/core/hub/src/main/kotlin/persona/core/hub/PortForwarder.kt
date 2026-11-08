@@ -76,6 +76,7 @@ class PortForwarder(
     /** One forwarded port: its two listeners and the connections through them. */
     private inner class Forward(val key: Key, preferred: Int) {
         private val listeners = mutableListOf<ServerSocket>()
+        private val acceptors = mutableListOf<Thread>()
         val localPort: Int
         val open: Boolean get() = listeners.isNotEmpty() && listeners.none { it.isClosed }
 
@@ -87,7 +88,9 @@ class PortForwarder(
             listeners += v4
             // localhost resolves to ::1 first; without it the WebView falls back to 127.0.0.1.
             runCatching { bind(LOOPBACK_V6, localPort) }.getOrNull()?.let(listeners::add)
-            listeners.forEach { server -> Thread({ accept(server) }, "port-${key.port}-accept").apply { isDaemon = true }.start() }
+            listeners.forEach { server ->
+                acceptors += Thread({ accept(server) }, "port-${key.port}-accept").apply { isDaemon = true; start() }
+            }
         }
 
         private fun bind(host: InetAddress, port: Int) = ServerSocket().apply {
@@ -102,7 +105,21 @@ class PortForwarder(
             }
         }
 
-        fun close() { listeners.forEach { runCatching { it.close() } }; listeners.clear() }
+        /**
+         * Closes the listeners and waits for their accept threads to end. Closing a socket a thread is blocked accepting
+         * on only wakes that thread; the port is released once it leaves accept, so returning earlier let the next
+         * pairing's forwarder find the number still taken and bind another one (#3483) whenever the CPU was busy.
+         */
+        fun close() {
+            listeners.forEach { runCatching { it.close() } }
+            listeners.clear()
+            val deadline = System.nanoTime() + CLOSE_WAIT_NANOS
+            acceptors.filter { it !== Thread.currentThread() }.forEach { thread ->
+                val left = (deadline - System.nanoTime()) / 1_000_000
+                if (left > 0) runCatching { thread.join(left) }
+            }
+            acceptors.clear()
+        }
     }
 
     /**
@@ -166,5 +183,7 @@ class PortForwarder(
         const val CHUNK = 64 * 1024
         /** Unsent bytes a connection may queue before it stops reading from the browser. */
         const val MAX_QUEUED = 512L * 1024
+        /** How long close waits for the accept threads to leave, so their ports are free again. */
+        const val CLOSE_WAIT_NANOS = 1_000_000_000L
     }
 }
