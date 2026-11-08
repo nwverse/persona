@@ -1020,7 +1020,10 @@ final class AppModel {
         guard sessionLists.lists[key.group]?.paged == true, let api = api(key.group), detailFetching.insert(key).inserted else { return }
         defer { detailFetching.remove(key) }
         do {
-            let full = try await api.sessionListDetail(key, title: latest(key)?.title ?? "")
+            // Not in the list: there is no detail to add. This runs on its own whenever a chat opens, so a session the
+            // list does not have (hidden from it, or gone) is not a chat error. A transcript that cannot be read is
+            // still reported, by the read of the transcript itself.
+            guard let full = try await api.sessionListDetail(key, title: latest(key)?.title ?? "") else { return }
             guard self.api(key.group)?.config.url == api.config.url else { return }
             let list = (sessionsByMachine[key.machineRef] ?? []).filter { $0.key != key } + [full]
             applySessions([key.machineRef: list])
