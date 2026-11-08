@@ -1,6 +1,7 @@
 package assistant
 
 import (
+	"context"
 	"errors"
 	"strings"
 	"testing"
@@ -42,7 +43,8 @@ func TestAgentSendTaskMakesATask(t *testing.T) {
 	}
 }
 
-// The same agent handed work again while it works for that task: no second todo, the new criteria replace the old.
+// The same agent handed more of its task: no second todo, the new criteria replace the old once the text went (a send
+// that fails changes nothing). Other work (another title) is refused, so it is not filed under that task.
 func TestAgentSendTaskAgainKeepsOneTask(t *testing.T) {
 	s, f := newQuietService(t)
 	secretary(f)
@@ -57,6 +59,15 @@ func TestAgentSendTaskAgainKeepsOneTask(t *testing.T) {
 	}
 	send("把周报数据拉一下", "表格链接贴回来")
 	id := onlyTodo(s).ID
+	f.failSend = errors.New("dialog_open")
+	if _, err := runJSON(t, s, "conv1", "agent_send", map[string]any{"machine": "box", "session_id": "sec00001", "text": "再加一列",
+		"task": map[string]any{"title": "拉周报数据", "done_when": []string{"别的标准"}}}); err == nil {
+		t.Fatal("the failed send succeeded")
+	}
+	if v := onlyTodo(s).Supervision; len(v.DoneWhen) != 1 || v.DoneWhen[0] != "表格链接贴回来" {
+		t.Fatalf("a failed send changed the criteria: %+v", v)
+	}
+	f.failSend = nil
 	if res := send("再加上上周对比", "表格链接贴回来", "有上周对比列"); !strings.Contains(res, "already works for your task "+id) {
 		t.Fatalf("again: %s", res)
 	}
@@ -69,6 +80,14 @@ func TestAgentSendTaskAgainKeepsOneTask(t *testing.T) {
 	}
 	if got := feedKinds(s, "conv1"); got != "task,routed,routed" {
 		t.Fatalf("feed: %s", got)
+	}
+	_, err := runJSON(t, s, "conv1", "agent_send", map[string]any{"machine": "box", "session_id": "sec00001", "text": "顺便订个会议室",
+		"task": map[string]any{"title": "订会议室"}})
+	if err == nil || !strings.Contains(err.Error(), id) || !strings.Contains(err.Error(), "nothing was sent") {
+		t.Fatalf("other work: %v", err)
+	}
+	if n := len(sentToAgent(f)); n != 2 || len(s.todosOf(t.Context(), "*")) != 1 {
+		t.Fatalf("other work: sent %d, %d todos", n, len(s.todosOf(t.Context(), "*")))
 	}
 }
 
@@ -107,18 +126,45 @@ func TestAgentSendTaskRefusesWhatIsNotItsOwn(t *testing.T) {
 	}
 }
 
-// A send that fails leaves no empty task: the todo made for it is closed.
-func TestAgentSendTaskFailedSendClosesTheTask(t *testing.T) {
+// A send that fails makes no task: the todo made for it is taken back (no closed task keeps the agent, whose agent
+// would be closed with it), and the conversation shows nothing. When the machine only did not answer in time (a resume
+// can go on after the wait), the text may still arrive: the task stays, with its card.
+func TestAgentSendTaskFailedSend(t *testing.T) {
 	s, f := newQuietService(t)
 	secretary(f)
+	args := map[string]any{"machine": "box", "session_id": "sec00001", "text": "把周报数据拉一下", "task": map[string]any{"title": "拉周报数据"}}
 	f.failSend = errors.New("dialog_open")
-	_, err := runJSON(t, s, "conv1", "agent_send", map[string]any{"machine": "box", "session_id": "sec00001", "text": "把周报数据拉一下",
-		"task": map[string]any{"title": "拉周报数据"}})
-	if err == nil || !strings.Contains(err.Error(), "dialog_open") {
+	if _, err := runJSON(t, s, "conv1", "agent_send", args); err == nil || !strings.Contains(err.Error(), "dialog_open") {
 		t.Fatalf("err %v", err)
 	}
-	if todo := onlyTodo(s); todo.ID == "" || todo.DoneAt == nil {
-		t.Fatalf("task left open: %+v", todo)
+	if n := len(s.todosOf(t.Context(), "*")); n != 0 {
+		t.Fatalf("%d todos", n)
+	}
+	if _, ok := s.openTodoOfAgent("box", "sec00001"); ok || feedKinds(s, "conv1") != "" {
+		t.Fatalf("left behind: feed %q", feedKinds(s, "conv1"))
+	}
+
+	f.setSessions("box", proto.Session{SessionID: "sec00001", MachineID: "box", Cwd: "/code/desk", Agent: "claude", Title: "秘书",
+		Status: proto.StatusOffline, UpdatedAt: time.Now()})
+	f.failSend = context.DeadlineExceeded
+	if _, err := runJSON(t, s, "conv1", "agent_send", args); err == nil || !strings.Contains(err.Error(), "may still arrive") {
+		t.Fatalf("unknown: %v", err)
+	}
+	if todo := onlyTodo(s); todo.DoneAt != nil || len(todo.Agents) != 1 || feedKinds(s, "conv1") != "task" {
+		t.Fatalf("unknown: %+v, feed %q", todo, feedKinds(s, "conv1"))
+	}
+}
+
+// /exit closes the agent: it hands it no work, so it makes no task.
+func TestAgentSendTaskExitIsNoWork(t *testing.T) {
+	s, f := newQuietService(t)
+	secretary(f)
+	if _, err := runJSON(t, s, "conv1", "agent_send", map[string]any{"machine": "box", "session_id": "sec00001", "text": "/exit",
+		"task": map[string]any{"title": "关掉"}}); err == nil {
+		t.Fatal("/exit made a task")
+	}
+	if len(sentToAgent(f)) != 0 || len(s.todosOf(t.Context(), "*")) != 0 {
+		t.Fatal("something went")
 	}
 }
 

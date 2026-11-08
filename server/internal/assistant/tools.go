@@ -202,7 +202,7 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 			return "", fmt.Errorf("text is empty")
 		}
 		if a.Task != nil { // refused before the user is asked to confirm a send that would not go
-			if err := s.sendTaskAllowed(ctx, self, am, c); err != nil {
+			if err := s.sendTaskAllowed(ctx, self, am, c, *a.Task, a.Text); err != nil {
 				return "", err
 			}
 		}
