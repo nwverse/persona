@@ -33,6 +33,13 @@ class ShowcasePlanTests(unittest.TestCase):
                                       {"name": "a", "title": "A", "bottom": False, "review": False}])
             self.assertEqual(set(hashes), {"a", "b"})
 
+    def test_each_native_page_has_an_acknowledged_close_in_both_appearances(self):
+        selected = [{"name": "button"}, {"name": "code-review-v5"}]
+        valid = ["showcase/button", "showcase/code-review-v5"] * 2
+        self.assertTrue(RUNNER.native_closes(valid, selected))
+        for value in (None, "closed", valid[:3], valid + [valid[0]], [None], [{}]):
+            self.assertFalse(RUNNER.native_closes(value, selected))
+
     def test_root_review_controls_are_required_by_the_capture_plan(self):
         scenes, _ = RUNNER.scenes(["code-review-v5", "code-review", "button"])
         self.assertEqual([scene["review"] for scene in scenes], [True, False, False])

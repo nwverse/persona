@@ -71,14 +71,44 @@ import Observation
         }
     }
 
-    func close() {
+    func close(requestID: String = UUID().uuidString) {
         if tree == nil, let snapshotRequest { connection.retireExtensionStreamOpen(snapshotRequest, manager: manager) }
         visible = false; generation += 1; ready = false; snapshotRequest = nil
         finishEvents(error: Raw.Failure.version)
-        if let tree { send(.close(.init(protocol: 1, requestId: UUID().uuidString, session: tree.session, epoch: tree.epoch))) }
+        if let tree { send(.close(.init(protocol: 1, requestId: requestID, session: tree.session, epoch: tree.epoch))) }
         tree = nil; receipts = [:]; effects = []
         if let observer { connection.removeExtensionStreamObserver(observer); self.observer = nil }
     }
+
+    #if DEBUG && os(macOS)
+    private enum CaptureCloseFailure: Error { case timeout, rejected }
+
+    func closeForCapture() async throws {
+        guard let tree else { close(); return }
+        let requestID = UUID().uuidString
+        let session = tree.session
+        let owner = manager
+        var acknowledged = false
+        var rejected = false
+        let handle = connection.observeExtensionStream { signal in
+            if case .disconnected = signal { rejected = true; return }
+            guard case .frame(let data) = signal, let raw = try? Raw.parse(data),
+                  raw["request_id"]?.string == requestID,
+                  (try? ExtensionStreamSchema.check(raw, definition: "UIStreamServerEnvelope")) != nil,
+                  raw["manager"]?.string == nil || raw["manager"]?.string == owner else { return }
+            if raw["kind"]?.string == "closed", raw["session"]?.string == session { acknowledged = true }
+            else if raw["kind"]?.string == "error" { rejected = true }
+        }
+        defer { connection.removeExtensionStreamObserver(handle) }
+        close(requestID: requestID)
+        let deadline = ContinuousClock.now.advanced(by: .seconds(5))
+        while !acknowledged, !rejected, ContinuousClock.now < deadline {
+            try await Task.sleep(for: .milliseconds(100))
+        }
+        if rejected { throw CaptureCloseFailure.rejected }
+        guard acknowledged else { throw CaptureCloseFailure.timeout }
+    }
+    #endif
 
     func refresh() { guard visible, supported == true else { return }; requestSnapshot() }
 
@@ -203,7 +233,7 @@ import Observation
                 tree = staged; ready = true; snapshotRequest = nil; snapshotRetries = 0; recoveryIssue = nil
                 onView?(native)
                 #if DEBUG && os(macOS)
-                MacExtensionSnapshotBatch.observeNativeCommit(owner: owner, contribution: contribution, version: staged.version)
+                MacExtensionSnapshotBatch.observeNativeCommit(owner: owner, contribution: contribution, version: staged.version, stream: self)
                 #endif
                 drainReceipts()
             case .delta:
@@ -212,7 +242,7 @@ import Observation
                 let native = try staged.nativeView
                 tree = staged; onView?(native)
                 #if DEBUG && os(macOS)
-                MacExtensionSnapshotBatch.observeNativeCommit(owner: owner, contribution: contribution, version: staged.version)
+                MacExtensionSnapshotBatch.observeNativeCommit(owner: owner, contribution: contribution, version: staged.version, stream: self)
                 #endif
                 drainReceipts()
             case .receipt(let frame):

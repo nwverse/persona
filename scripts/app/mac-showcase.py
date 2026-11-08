@@ -13,6 +13,7 @@ Long shared pages include a second capture after scrolling to the bottom.
 from __future__ import annotations
 
 import argparse
+from collections import Counter
 import hashlib
 import json
 import os
@@ -49,6 +50,11 @@ def scenes(names=None, snapshots=SNAPSHOTS):
 
 def native_revision(value):
     return isinstance(value, str) and re.fullmatch(r"stream:[1-9][0-9]*", value) is not None
+
+
+def native_closes(value, selected):
+    return (isinstance(value, list) and all(isinstance(page, str) for page in value)
+            and Counter(value) == Counter({"showcase/" + scene["name"]: 2 for scene in selected}))
 
 
 def capture_plan(hub, output, selected, requires_native=False):
@@ -151,6 +157,10 @@ def main():
                 captures = json.loads((output / "captures.json").read_text())
                 if args.hub_config and any(not native_revision(capture.get("nativeRevision")) for capture in captures):
                     raise RuntimeError("An installed-extension capture lacks a positive committed native revision")
+                if args.hub_config:
+                    closed = json.loads((output / "closed-pages.json").read_text())
+                    if not native_closes(closed, selected):
+                        raise RuntimeError("Every native page must have an acknowledged close in both appearances")
                 expected = {(scene["name"], appearance, position) for scene in selected
                             for appearance in ("light", "dark") for position in (["top", "bottom"] if scene["bottom"] else ["top"])}
                 actual = {(capture["sample"], capture["appearance"], capture["position"]) for capture in captures}

@@ -9,6 +9,8 @@ import SwiftUI
     private static var nativePage: String?
     private static var nativeVersion: Int64?
     private static var nativeFailure: String?
+    private static var nativeStream: ExtensionPageStream?
+    private static var closedPages: [String] = []
 
     static func observeNativeFailure(owner: String, contribution: String, code: String) {
         guard isCapturing, nativePage == owner + "/" + contribution else { return }
@@ -16,9 +18,10 @@ import SwiftUI
     }
 
     // Code-hosting AX containers may omit values; observe only the real validated publisher, never fixture data.
-    static func observeNativeCommit(owner: String, contribution: String, version: Int64) {
+    static func observeNativeCommit(owner: String, contribution: String, version: Int64, stream: ExtensionPageStream) {
         guard isCapturing, nativePage == owner + "/" + contribution, version > 0 else { return }
         nativeVersion = version
+        nativeStream = stream
     }
 
     struct Plan: Decodable {
@@ -76,6 +79,7 @@ import SwiftUI
             }
             guard plan.extensionShowcase.allSatisfy({ available.contains($0.name) }) else { throw Failure.notReady }
             isCapturing = true
+            closedPages = []
             defer { isCapturing = false }
             var captures: [Capture] = []
             for appearance in ["light", "dark"] {
@@ -108,6 +112,7 @@ import SwiftUI
             try await Task.sleep(for: .milliseconds(600))
             let encoder = JSONEncoder(); encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
             try encoder.encode(captures).write(to: output.appending(path: "captures.json"), options: .atomic)
+            try encoder.encode(closedPages).write(to: output.appending(path: "closed-pages.json"), options: .atomic)
             FileHandle.standardError.write(Data("RESULT Mac extension snapshots: \(captures.count) captures; no activation\n".utf8))
             NSApp.terminate(nil)
             exit(0)
@@ -119,6 +124,11 @@ import SwiftUI
     }
 
     private static func clearPage() async throws {
+        if let nativeStream {
+            try await nativeStream.closeForCapture()
+            if let nativePage { closedPages.append(nativePage) }
+        }
+        nativeStream = nil
         nativePage = nil
         nativeVersion = nil
         nativeFailure = nil
