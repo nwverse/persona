@@ -102,7 +102,7 @@ struct ChatBoxed: ViewModifier {
 }
 
 extension View {
-    /// In its box; `on` false leaves it as it is (the old layout).
+    /// In its box; `on` false preserves the baseline conversation presentation.
     func chatBoxed(_ fill: Color, on: Bool = true) -> some View { modifier(ChatBoxed(fill: fill, on: on)) }
 }
 
