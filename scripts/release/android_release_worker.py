@@ -32,8 +32,11 @@ def atomic_json(path, value):
 
 
 def digest(path):
+    hasher = hashlib.sha256()
     with path.open("rb") as stream:
-        return hashlib.file_digest(stream, "sha256").hexdigest()
+        for chunk in iter(lambda: stream.read(64 * 1024), b""):
+            hasher.update(chunk)
+    return hasher.hexdigest()
 
 
 def version_code(checkout, sha, base=VERSION_BASE):
