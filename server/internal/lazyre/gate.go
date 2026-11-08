@@ -15,8 +15,9 @@ import (
 // gateMost is how many literals a gate looks for at most; a pattern with more is matched without one.
 const gateMost = 256
 
-// NewGated is New for a pattern MatchString runs often on texts it seldom matches: MatchString first checks the text
-// holds one of the literals every match starts with (zero-width assertions aside). A pattern some match of which may
+// NewGated is New for a pattern run often on texts it seldom matches: MatchString, ReplaceAllString,
+// ReplaceAllLiteralString and ReplaceAllStringFunc first check the text holds one of the literals every match starts
+// with (zero-width assertions aside), and give the text back as it is when it holds none. A pattern some match of which may
 // start with anything (a class, a repeat, case folding) has no gate and matches as New's.
 func NewGated(src string) *Regexp {
 	r := &Regexp{src: src, gated: true}
