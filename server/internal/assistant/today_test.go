@@ -6,11 +6,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"reflect"
-	"sync/atomic"
 	"testing"
 	"time"
 
-	"github.com/nwverse/persona/server/internal/db"
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
@@ -147,21 +145,16 @@ func TestTodayCardOmitsEmptyPendingReview(t *testing.T) {
 	}
 }
 
-// planCountingStore counts the plan reads: the task_plans rows loaded for the plan cards a feed read returns.
-type planCountingStore struct {
-	*db.DB
-	planReads atomic.Int64
-}
-
-func (c *planCountingStore) TaskPlan(ctx context.Context, id string) (*db.TaskPlanRow, error) {
-	c.planReads.Add(1)
-	return c.DB.TaskPlan(ctx, id)
-}
-
 // POST .../today reads the conversation's feed twice (is today's card there; what finished since yesterday 18:00) and
 // looks only at the items: it loads none of the plans its plan cards name, and the card is the same as before.
 func TestTodayCardReadsNoPlans(t *testing.T) {
-	st := &planCountingStore{DB: todoTestDB(t)}
+	st := &countingPlans{DB: todoTestDB(t)}
+	// planReads are the plan reads that reached the database, one plan at a time or in one batch.
+	planReads := func() int64 { return st.one.Load() + st.batch.Load() }
+	resetReads := func() {
+		st.one.Store(0)
+		st.batch.Store(0)
+	}
 	e := newTodoEnv(t, st)
 	ctx := context.Background()
 	loc := e.s.location(ctx)
@@ -201,10 +194,10 @@ func TestTodayCardReadsNoPlans(t *testing.T) {
 		}
 		return res.Item, res.New
 	}
-	st.planReads.Store(0)
+	resetReads()
 	it, made := post()
-	t.Logf("plan reads with %d plan cards today and 1 overnight: %d on the first POST", todayPlans, st.planReads.Load())
-	if n := st.planReads.Load(); n != 0 {
+	t.Logf("plan reads with %d plan cards today and 1 overnight: %d on the first POST", todayPlans, planReads())
+	if n := planReads(); n != 0 {
 		t.Fatalf("the first POST read %d plans, want none", n)
 	}
 	if !made || it.Kind != feedToday || it.Ref != day.Format("2006-01-02") || !it.At.Equal(day) {
@@ -219,10 +212,10 @@ func TestTodayCardReadsNoPlans(t *testing.T) {
 		t.Fatalf("body = %+v, want %+v", body, want)
 	}
 
-	st.planReads.Store(0)
+	resetReads()
 	again, made := post()
-	t.Logf("plan reads on the second POST: %d", st.planReads.Load())
-	if n := st.planReads.Load(); n != 0 {
+	t.Logf("plan reads on the second POST: %d", planReads())
+	if n := planReads(); n != 0 {
 		t.Fatalf("the second POST read %d plans, want none", n)
 	}
 	if made || again.ID != it.ID || !bytes.Equal(again.Body, it.Body) {
