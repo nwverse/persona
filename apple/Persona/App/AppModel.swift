@@ -706,6 +706,12 @@ final class AppModel {
 
     // MARK: Derived
 
+    /// A session whose `delta` is an agent's message as it shows (a Claude session Persona started, a runtime's), not
+    /// the headless assistant's whole reply: a listed session that is not the assistant's, or a chat already given one.
+    func streamsAgentReplies(_ key: SessionKey) -> Bool {
+        existingChat(key)?.liveIsAgents == true || session(key).map { !$0.assistant } ?? false
+    }
+
     /// One session, for views about it: its `rev`, `updatedAt` and last line may be older than the list's
     /// (`SessionCell`). An action that sends what the session is now reads `latest(_:)`.
     func session(_ key: SessionKey) -> Session? {
@@ -1344,7 +1350,7 @@ final class AppModel {
             deltas.drop(key)
             // A delta that cleared it may have been lost with the old socket. A resumed hub sends the current one
             // right after the catch-up, so the answer goes on being written instead of blanking for a moment.
-            if plan.refetch { chat(key).liveText = "" }
+            if plan.refetch { chat(key).dropLive() }
             link.live.send(subscribeMessage(key))
         }
         guard plan.refetch else { return }
@@ -1659,7 +1665,8 @@ final class AppModel {
             ChatTrace.shared.note(key, ChatTrace.batch(items, span: span, backlog: backlog, gap: gap, resets: store.resets, covered: store.covered))
             settle(key, gap)
             // The streamed message landed in the transcript: stop drawing its live copy (and the newer one kept back).
-            if store.landed(items, pending: deltas.pendingText(key)) {
+            // An agent's is matched against the newest items by the store itself (`ChatStore.agentStreamed`).
+            if !store.liveIsAgents, store.landed(items, pending: deltas.pendingText(key)) {
                 deltas.drop(key)
                 ChatTrace.shared.note(key, "landed live=\(store.liveText.count)")
             }
@@ -1675,13 +1682,15 @@ final class AppModel {
             if text.isEmpty != chat(key).liveText.isEmpty {
                 ChatTrace.shared.note(key, text.isEmpty ? "delta clear live=\(chat(key).liveText.count)" : "delta start")
             }
+            // An agent's (a Claude session Persona started, a runtime's) is its message as it shows, matched against the
+            // transcript; the headless assistant's is its whole reply so far.
+            let agents = streamsAgentReplies(key)
             switch deltas.offer(key, text, now: .now) {
-            case .draw(let t) where t.isEmpty: chat(key).clearLive(newest: newest)
-            case .draw(let t): chat(key).liveText = t
+            case .draw(let t): chat(key).streamed(t, agents: agents, newest: newest)
             case .later(let wait):
                 DispatchQueue.main.asyncAfter(deadline: .now() + wait) { [weak self] in
                     guard let self, let t = self.deltas.due(key, now: .now) else { return }
-                    self.chat(key).liveText = t
+                    self.chat(key).streamed(t, agents: agents)
                 }
             case .kept: break
             }
