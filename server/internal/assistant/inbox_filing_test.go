@@ -1,6 +1,7 @@
 package assistant
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -57,6 +58,13 @@ func TestInboxFilingFailurePreservesHandling(t *testing.T) {
 			h, st := newBulkFailHub(t)
 			it := filingItem(h, "item")
 			before, told := stateOf(h, it), it.Agent.told
+			storedBefore, err := json.Marshal(it)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := st.inboxMemStore.PutInboxItem(context.Background(), it.ID, storedBefore, it.UpdatedAt, it.DoneAt); err != nil {
+				t.Fatal(err)
+			}
 			agent, handling, suggestion := it.Agent, it.Handling, it.Suggestion
 			st.failAll = true
 			if !filingRequest(h, bulk, it.ID) {
@@ -68,8 +76,11 @@ func TestInboxFilingFailurePreservesHandling(t *testing.T) {
 			if it.Agent != agent || it.Handling != handling || it.Suggestion != suggestion {
 				t.Fatal("failed filing replaced records held by an in-flight operation")
 			}
-			if st.hasRow(it.ID) || changedTo(h, it.ID) {
-				t.Fatal("failed filing was persisted or announced")
+			st.imu.Lock()
+			storedAfter := slices.Clone(st.rows[it.ID])
+			st.imu.Unlock()
+			if !bytes.Equal(storedBefore, storedAfter) || changedTo(h, it.ID) {
+				t.Fatal("failed filing changed the persisted row or was announced")
 			}
 			st.failAll = false
 			if filingRequest(h, bulk, it.ID) {
@@ -77,10 +88,54 @@ func TestInboxFilingFailurePreservesHandling(t *testing.T) {
 			}
 			st.imu.Lock()
 			var row InboxItem
-			err := json.Unmarshal(st.rows[it.ID], &row)
+			err = json.Unmarshal(st.rows[it.ID], &row)
 			st.imu.Unlock()
 			if err != nil || row.open() || row.Suggestion != nil || row.Agent.Wake || row.Agent.Draft != "" || row.Handling.State != HandlingDone {
 				t.Fatalf("successful retry did not persist the complete closure: %s, %v", stateOf(h, &row), err)
+			}
+		})
+	}
+}
+
+func TestInboxFilingRollbackPrecedesQueuedHandlingSave(t *testing.T) {
+	for _, bulk := range []bool{false, true} {
+		t.Run(fmt.Sprint("bulk=", bulk), func(t *testing.T) {
+			h, st := newBulkFailHub(t)
+			it := filingItem(h, "item")
+			st.failOnce = map[string]bool{it.ID: true}
+			queued, saved := make(chan struct{}), make(chan struct{})
+			st.failHook = func(string) {
+				go func() {
+					h.inbox.mu.Lock()
+					it.Title = "Concurrent title"
+					it.Agent.queueNote(inboxNote{Name: prompts.NoteNewMessages, Text: "Queued update"})
+					h.inbox.mu.Unlock()
+					close(queued)
+					h.saveInbox(context.Background(), []*InboxItem{it})
+					close(saved)
+				}()
+				select {
+				case <-queued:
+				case <-time.After(5 * time.Second):
+					t.Error("the concurrent update did not queue its save")
+				}
+			}
+			if !filingRequest(h, bulk, it.ID) {
+				t.Fatal("filing did not fail")
+			}
+			select {
+			case <-saved:
+			case <-time.After(5 * time.Second):
+				t.Fatal("the queued save did not finish")
+			}
+			st.imu.Lock()
+			var row InboxItem
+			err := json.Unmarshal(st.rows[it.ID], &row)
+			st.imu.Unlock()
+			if err != nil || !row.open() || row.Suggestion == nil || !row.Agent.Wake || row.Agent.Draft != "Keep this draft" ||
+				row.Handling.State != HandlingLooking || row.Title != "Concurrent title" || len(row.Agent.Pending) != 20 || row.Agent.Pending[19].Text != "Queued update" ||
+				stateOf(h, &row) != stateOf(h, it) {
+				t.Fatalf("the queued save kept a failed closure or lost concurrent handling: %s, %v", stateOf(h, &row), err)
 			}
 		})
 	}
@@ -127,15 +182,21 @@ func TestInboxFilingFailureKeepsConcurrentUpdates(t *testing.T) {
 // filingProbeStore observes the real per-row persistence boundary, including batch fallback and delivery saves.
 type filingProbeStore struct {
 	*inboxPutFailStore
-	before func(id string, data []byte)
+	before        func(id string, data []byte)
+	beforeContext func(context.Context)
 }
 
 func (s *filingProbeStore) PutInboxItem(ctx context.Context, id string, data []byte, updated time.Time, done *time.Time) error {
+	if s.beforeContext != nil {
+		s.beforeContext(ctx)
+	}
 	if s.before != nil {
 		s.before(id, data)
 	}
 	return s.inboxPutFailStore.PutInboxItem(ctx, id, data, updated, done)
 }
+
+type filingSecondSave struct{}
 
 func filingConversation(h *inboxHub, it *InboxItem, sid string) {
 	it.Agent.MachineID, it.Agent.SessionID = "server", sid
@@ -362,21 +423,26 @@ func TestInboxFilingConcurrentOutcomes(t *testing.T) {
 					t.Run(name, func(t *testing.T) {
 						h, st := newBulkFailHub(t)
 						it := filingItem(h, "item")
+						filingConversation(h, it, "filing-session")
+						it.Agent.Pending, it.Agent.told = nil, 0
 						before := stateOf(h, it)
 						second := make(chan error, 1)
-						calls := 0
-						probe := &filingProbeStore{inboxPutFailStore: st, before: func(string, []byte) {
-							calls++
-							st.failAll = secondFail
-							if calls != 1 {
+						var once sync.Once
+						probe := &filingProbeStore{inboxPutFailStore: st, beforeContext: func(ctx context.Context) {
+							if ctx.Value(filingSecondSave{}) != nil {
+								st.failAll = secondFail
 								return
 							}
-							st.failAll = firstFail
-							go func() {
-								_, err := h.setInboxDone(context.Background(), it.ID, !reopen, true)
-								second <- err
-							}()
-							waitForItem(t, h, it.ID, nil)
+							st.failAll = false // delivery acknowledgement saves are independent of the two request faults
+							once.Do(func() {
+								st.failAll = firstFail
+								go func() {
+									ctx := context.WithValue(context.Background(), filingSecondSave{}, true)
+									_, err := h.setInboxDone(ctx, it.ID, !reopen, true)
+									second <- err
+								}()
+								waitForItem(t, h, it.ID, nil)
+							})
 						}}
 						h.store = func() Store { return probe }
 						if failed := filingRequest(h, bulk, it.ID); failed != firstFail {
@@ -390,6 +456,7 @@ func TestInboxFilingConcurrentOutcomes(t *testing.T) {
 						case <-time.After(5 * time.Second):
 							t.Fatal("the second filing did not finish")
 						}
+						h.deliverNotes(context.Background(), it)
 						wantDone := !reopen
 						if secondFail {
 							wantDone = !firstFail
@@ -404,6 +471,22 @@ func TestInboxFilingConcurrentOutcomes(t *testing.T) {
 							}
 						} else if got := stateOf(h, it); got != before {
 							t.Fatalf("uncommitted filings changed handling or chain:\nbefore %s\nafter %s", before, got)
+						}
+						wantDeliveries := 0
+						if closed {
+							wantDeliveries = 1
+						}
+						if got := h.f.sentToAgents(); len(got) != wantDeliveries {
+							t.Fatalf("closure deliveries = %q, want %d", got, wantDeliveries)
+						}
+						if !firstFail || !secondFail {
+							st.imu.Lock()
+							var row InboxItem
+							err := json.Unmarshal(st.rows[it.ID], &row)
+							st.imu.Unlock()
+							if err != nil || stateOf(h, &row) != stateOf(h, it) {
+								t.Fatalf("stored and live outcomes differ: %s / %s, %v", stateOf(h, &row), stateOf(h, it), err)
+							}
 						}
 					})
 				}
@@ -467,5 +550,74 @@ func TestInboxFilingCommitsDuringEarlierDelivery(t *testing.T) {
 				t.Fatalf("earlier delivery lost the committed closure: %q / %s", got, stateOf(h, it))
 			}
 		})
+	}
+}
+
+func TestInboxUnrelatedSaveExcludesPendingFilings(t *testing.T) {
+	for _, count := range []int{1, 2} {
+		t.Run(fmt.Sprint(count), func(t *testing.T) {
+			h, st := newBulkFailHub(t)
+			it := filingItem(h, "item")
+			var writes []*inboxFiling
+			// Hold the requests just before their save turn, without relying on mutex waiter scheduling.
+			h.inbox.mu.Lock()
+			for range count {
+				w := h.inbox.beginFiling(it, time.Now(), "user")
+				h.inbox.file(it, w.now, w.why)
+				w.close = true
+				h.inbox.settleFiling(w)
+				writes = append(writes, w)
+			}
+			it.Title = "Unrelated saved title"
+			h.inbox.mu.Unlock()
+			h.saveInbox(context.Background(), []*InboxItem{it})
+			st.imu.Lock()
+			var row InboxItem
+			err := json.Unmarshal(st.rows[it.ID], &row)
+			st.imu.Unlock()
+			if err != nil || !row.open() || row.Title != "Unrelated saved title" || row.Suggestion == nil || !row.Agent.Wake ||
+				row.Agent.Draft != "Keep this draft" || len(row.Chain) != 1 || row.ChainSeq != 1 {
+				t.Fatalf("unrelated save made a pending filing durable: %s, %v", stateOf(h, &row), err)
+			}
+			st.failAll = true
+			for _, w := range writes {
+				if failed := h.saveInboxFilings(context.Background(), []*inboxFiling{w}); !failed[it.ID] {
+					t.Fatal("the pending filing did not fail")
+				}
+			}
+			if stateOf(h, &row) != stateOf(h, it) {
+				t.Fatalf("rollback lost the unrelated save: %s / %s", stateOf(h, &row), stateOf(h, it))
+			}
+		})
+	}
+}
+
+func TestInboxNewerFilingCommitSupersedesOlderPendingWrite(t *testing.T) {
+	h, st := newBulkFailHub(t)
+	it := filingItem(h, "item")
+	var writes []*inboxFiling
+	h.inbox.mu.Lock()
+	for _, why := range []string{"user", "dismissed"} {
+		w := h.inbox.beginFiling(it, time.Now(), why)
+		h.inbox.file(it, w.now, w.why)
+		w.close = true
+		h.inbox.settleFiling(w)
+		writes = append(writes, w)
+	}
+	h.inbox.mu.Unlock()
+	if failed := h.saveInboxFilings(context.Background(), writes[1:]); len(failed) != 0 {
+		t.Fatal("the newer filing failed")
+	}
+	st.failAll = true
+	if failed := h.saveInboxFilings(context.Background(), writes[:1]); !failed[it.ID] {
+		t.Fatal("the superseded filing did not report its failed row")
+	}
+	st.imu.Lock()
+	var row InboxItem
+	err := json.Unmarshal(st.rows[it.ID], &row)
+	st.imu.Unlock()
+	if err != nil || it.open() || it.DoneBy != "dismissed" || len(it.Chain) != 2 || it.Chain[1].ID != "c3" ||
+		stateOf(h, &row) != stateOf(h, it) {
+		t.Fatalf("the older failed row rewound the committed filing: %s / %s, %v", stateOf(h, &row), stateOf(h, it), err)
 	}
 }

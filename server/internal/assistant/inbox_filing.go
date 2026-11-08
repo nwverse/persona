@@ -26,6 +26,8 @@ type inboxFiling struct {
 	// A request can replace another request's optimistic marker while that row is still being written. If both
 	// fail, rollback must reach the state before either request, rather than restoring the first failed marker.
 	previousWrite *inboxFiling
+	settled       bool
+	prepared      bool
 	failed        bool
 	closed        bool
 }
@@ -63,6 +65,30 @@ func (b *inboxBook) holdsFiling(w *inboxFiling) bool {
 	return b.items[it.ID] == it && b.filing[it.ID] == w && it.DoneAt == w.applied.DoneAt && it.DoneBy == w.applied.DoneBy
 }
 
+// filingSnapshot removes optimistic changes belonging to other pending requests. An unrelated save (such as a
+// delivery acknowledgement) must not make a filing durable before that request reaches its own write. A filing
+// writes its own marker/chain, leaving later requests queued; a newer committed request supersedes older ones.
+func (b *inboxBook) filingSnapshot(it *InboxItem, target *inboxFiling) (*InboxItem, bool) {
+	latest := b.filing[it.ID]
+	if latest == nil || !b.holdsFiling(latest) {
+		return it, false
+	}
+	c := *it
+	for w := latest; w != nil; w = w.previousWrite {
+		if w == target {
+			for p := w.previousWrite; p != nil && (!p.settled || p.failed); p = p.previousWrite {
+				restoreFiling(&c, p, false)
+			}
+			return &c, true
+		}
+		if w.settled && !w.failed {
+			break
+		}
+		restoreFiling(&c, w, true)
+	}
+	return &c, false
+}
+
 // closureState excludes unrelated fields: a concurrent title or parent edit must not prevent a committed closure.
 func closureState(it *InboxItem) []byte {
 	agent := it.Agent
@@ -85,15 +111,17 @@ func closureState(it *InboxItem) []byte {
 // closeHandling, so their existing aliases remain intact on the live item. Under mu.
 func (b *inboxBook) prepareClosing(w *inboxFiling) *InboxItem {
 	it := w.it
-	if !w.close || !b.holdsFiling(w) {
-		return it
+	row, prepared := b.filingSnapshot(it, w)
+	w.prepared = prepared
+	if !w.close || !prepared {
+		return row
 	}
 	if w.previousWrite != nil && w.previousWrite.closed && !it.handled() {
 		w.closed = true
-		return it // its earlier committed closure is already queued; keep that note for delivery
+		return row // its earlier committed closure is already queued; keep that note for delivery
 	}
 	w.staged, w.agent, w.handling, w.suggestion = closureState(it), it.Agent, it.Handling, it.Suggestion
-	c := *it
+	c := *row
 	if it.Agent != nil {
 		a := *it.Agent
 		c.Agent, w.told = &a, a.told
@@ -106,10 +134,10 @@ func (b *inboxBook) prepareClosing(w *inboxFiling) *InboxItem {
 	return &c
 }
 
-// undoFiling restores only this filing's done/chain edits. Keep entries and edits that arrived while storage was
+// restoreFiling restores only this filing's done/chain edits. Keep entries and edits that arrived while storage was
 // out, including a newer chain sequence; reconstruct a capped chain from the previous entries and those kept now.
-func (b *inboxBook) undoFiling(w *inboxFiling, owned bool) {
-	it, prior := w.it, w
+func restoreFiling(it *InboxItem, w *inboxFiling, owned bool) {
+	prior := w
 	for prior.previousWrite != nil && prior.previousWrite.failed {
 		prior = prior.previousWrite
 	}
@@ -161,7 +189,14 @@ func (s *Service) saveInboxFilings(ctx context.Context, ws []*inboxFiling) map[s
 		return b.prepareClosing(byID[it.ID])
 	}, func(failed map[string]bool) {
 		for _, w := range ws {
-			w.failed = failed[w.it.ID]
+			pending := false
+			for p := b.filing[w.it.ID]; p != nil && (!p.settled || p.failed); p = p.previousWrite {
+				if p == w {
+					pending = true
+					break
+				}
+			}
+			w.settled, w.failed = true, failed[w.it.ID]
 			owned := b.holdsFiling(w)
 			if b.filing[w.it.ID] == w {
 				delete(b.filing, w.it.ID)
@@ -171,8 +206,15 @@ func (s *Service) saveInboxFilings(ctx context.Context, ws []*inboxFiling) map[s
 			}
 			if failed[w.it.ID] {
 				// A newer filing owns the done marker, but must not keep the failed request's chain entries.
-				b.undoFiling(w, owned)
-			} else if w.staged != nil && w.it.Agent == w.agent && w.it.Handling == w.handling && w.it.Suggestion == w.suggestion &&
+				if pending {
+					restoreFiling(w.it, w, owned)
+				}
+			} else if w.prepared {
+				for p := w.previousWrite; p != nil && (!p.settled || p.failed); p = p.previousWrite {
+					restoreFiling(w.it, p, false)
+				}
+			}
+			if !w.failed && w.prepared && w.staged != nil && w.it.Agent == w.agent && w.it.Handling == w.handling && w.it.Suggestion == w.suggestion &&
 				(w.agent == nil || w.agent.told == w.told) && bytes.Equal(closureState(w.it), w.staged) {
 				// A concurrent handling update owns its next save. Publish only the closure actually stored, on the
 				// same conversation; a replaced agent or a new suggestion must not be stopped by this older row.

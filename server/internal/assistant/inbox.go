@@ -649,6 +649,8 @@ func (s *Service) saveInboxPrepared(ctx context.Context, changed []*InboxItem, p
 		row := it
 		if prepare != nil {
 			row = prepare(it)
+		} else {
+			row, _ = b.filingSnapshot(it, nil)
 		}
 		raw, _ := json.Marshal(row)
 		rows = append(rows, db.InboxRow{ID: row.ID, Data: raw, UpdatedAt: row.UpdatedAt, DoneAt: row.DoneAt})
