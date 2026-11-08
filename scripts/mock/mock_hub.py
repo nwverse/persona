@@ -2088,7 +2088,7 @@ MANAGERS = {"list": _managers_seed(), "default": "assistant"}
 # with `manager`, and computers, sessions and cards carry their computer's, with one manager too (MOCK_MANAGERS=1: all
 # the hub's own). 工作 has the MacBook, an inbox item and the second extension; 家里 (offline) a mail and the third
 # extension, and with MOCK_MANAGER_NAS=1 the NAS. A hub from before the roster (MOCK_MANAGERS=0) stamps nothing.
-# A computer of an offline manager is offline with the hub's words for it (devices_link.go offlineLocal): so 家里 has
+# A computer of an offline manager is offline with the hub's words for it (devices_reports.go offlineLocal): so 家里 has
 # none by default, and the computers the other screenshots count stay as they were.
 MANAGED_MACHINES = {"macbook": "m-3fa21c", **({"nas": "m-8b04d2"} if os.environ.get("MOCK_MANAGER_NAS") == "1" else {})}
 # With the NAS 家里's, the agent it had: the hub keeps an offline manager's sessions, in state unknown (stamp_row).
@@ -6675,7 +6675,7 @@ LAUNCHERS = [
     # its codex is from its last list (stale).
     {"name": "codex", "source": "zshrc", "model": "默认", "machines": ["server", "studio"], "rc_files": ["~/.bashrc", "~/.zshrc"], "stale": ["studio"]},
     {"name": "cc_bash", "source": "zshrc", "base_url": "https://relay.example.net", "model": "example-pro", "machines": ["server"], "rc_files": ["~/.bashrc"]},
-    # Plain claude on every machine that has it (GET /api/v1/launchers, server/internal/assistant/models_launchers.go builtinClaude).
+    # Plain claude on every machine that has it (GET /api/v1/launchers, server/internal/assistant/models_launchers_list.go builtinClaude).
     {"name": "claude", "source": "builtin", "machines": ["server", "macbook", "studio"], "stale": ["studio"],
      "versions": {"server": "2.1.200", "macbook": "2.1.206", "studio": "2.1.190"}},
 ]
