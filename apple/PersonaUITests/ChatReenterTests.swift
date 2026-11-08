@@ -121,7 +121,7 @@ final class ChatReenterTests: XCTestCase {
         }
         if fromRow {
             let row = app.staticTexts.matching(NSPredicate(format: "label == %@", chat.title)).firstMatch
-            // Folded under its tab's line ("cache · 2 个 Agent") or a machine's "N more idle" line until opened.
+            // Folded under its tab's line (「cache · 2 个 Agent」) or a machine's "N more idle" line (「个空闲」) until opened.
             let fold = app.buttons.matching(NSPredicate(format: "label CONTAINS %@ OR label CONTAINS %@", "个空闲", "cache")).firstMatch
             let w = app.windows.firstMatch
             for _ in 0..<6 where !(row.exists && row.isHittable) {
