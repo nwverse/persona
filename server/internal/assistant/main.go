@@ -365,14 +365,7 @@ func run(ctx context.Context, build update.Build, o runOptions) error {
 		// A node's new connection gets the launchers added in Persona, with their keys (models_launchers.go).
 		// Not one waiting to be confirmed: it gets them when it is (trustChanged, machine_trust.go).
 		NodeCalls: func(ctx context.Context, machine string) []devicewire.NodeCall {
-			if svc.machinePending(ctx, machine) {
-				return nil
-			}
-			b, err := json.Marshal(map[string]any{"launchers": svc.managedForNodes(ctx)})
-			if err != nil {
-				return nil
-			}
-			return []devicewire.NodeCall{{MachineID: machine, Method: DeviceLaunchersManaged, Params: b}}
+			return svc.managedNodeCalls(ctx, machine)
 		},
 		DialRelay: func(ctx context.Context, query string) (*websocket.Conn, error) {
 			return bus.DialAt(ctx, hub, token, httpClient, devicewire.RelayPath, query)
