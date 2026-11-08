@@ -34,7 +34,7 @@ struct SavedPlacesView: View {
         .pageTitle(String(localized: "Saved Places"))
         .pageToolbar {
             ToolbarItem(placement: .primaryAction) {
-                Button { creating = APIClient.SavedPlace() } label: { Image(systemName: Theme.Icon.add) }
+                Button { creating = APIClient.SavedPlace() } label: { ThemedIcon(Theme.Icon.add) }
                     .accessibilityLabel("New Place")
                     .accessibilityIdentifier("saved-places-add")
             }
@@ -80,7 +80,7 @@ struct SavedPlaceRow: View {
 
     var body: some View {
         HStack(spacing: Theme.Space.m) {
-            Image(systemName: Theme.Icon.place)
+            ThemedIcon(Theme.Icon.place)
                 .font(Theme.Font.heading)
                 .foregroundStyle(.white)
                 .scaledFrame(width: Theme.Size.wellM, height: Theme.Size.wellM)
