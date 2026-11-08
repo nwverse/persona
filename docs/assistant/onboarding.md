@@ -178,8 +178,8 @@ P1: **computer initiates, phone allows**. Persona Link's first screen shows a QR
 #### No dependency on zsh
 
 - Do not mention "~/.zshrc" in onboarding. Move "Import from ~/.zshrc" to "Advanced" in **Settings › Model providers**; disable it with an explanation when there are no computers (today it spins forever).
-- Existing developer aliases / functions are still discovered and selectable (`node/sessions.go:1897`, `mergeLaunchers`); the onboarding wizard does not depend on them.
-- The default `claude` launcher currently always starts through `zsh -ic` (`node/assistant.go:636-638`), causing `command not found` for users whose PATH is in `.zprofile`. Prefer the absolute path found by `claudeExecutable()` (`node/managed.go:104`), then fall back to the shell. This overlaps with #2854 (bash launchers / bundled claude, claimed by someone else); coordinate in #2854 first rather than duplicating the work.
+- Existing developer aliases / functions are still discovered and selectable (`mergeLaunchers` in `node/launchers.go`); the onboarding wizard does not depend on them.
+- The default `claude` launcher currently always starts through `zsh -ic` (`assistantCLICommand` in `node/assistant_start.go`), causing `command not found` for users whose PATH is in `.zprofile`. Prefer the absolute path found by `claudeExecutable()` (`node/managed.go:104`), then fall back to the shell. This overlaps with #2854 (bash launchers / bundled claude, claimed by someone else); coordinate in #2854 first rather than duplicating the work.
 
 #### Detect first, then ask
 
@@ -242,7 +242,7 @@ Failures are cards, never toasts:
 
 - **Failure discovered after sending** (stale readiness): pin a card below that message (copy from 4.6 + button + "Details"); offer "Retry" on the message.
 - **Computer asleep / offline**: "Your MacBook is offline, possibly asleep. Open the lid to continue." Do not describe this as failure to connect to hub (Android currently does).
-- **Model errors**: Claude Code's synthesized replies such as "Not logged in" and "Invalid API key" no longer appear as ordinary bubbles. Show a "Model not connected: not logged in / incorrect key" card + "Fix it." Add `Not logged in` to `APIErrorMarkers` (`assistantwire/wire.go:383-384`); use the existing `user` for `turn_error_kind` (`proto/proto.go:822-823`; `auth` is a health-check category, not a turn kind). `CutOff` also drives `TurnError` in hub's session list and scheduled-task / to-do handling (comment at `wire.go:380-382`), so this PR needs scheduled-task and to-do tests, not just a main-chat card.
+- **Model errors**: Claude Code's synthesized replies such as "Not logged in" and "Invalid API key" no longer appear as ordinary bubbles. Show a "Model not connected: not logged in / incorrect key" card + "Fix it." Add `Not logged in` to `APIErrorMarkers` (`assistantwire/handler.go:123-124`); use the existing `user` for `turn_error_kind` (`proto/session.go:271-275`; `auth` is a health-check category, not a turn kind). `CutOff` also drives `TurnError` in hub's session list and scheduled-task / to-do handling (comment at `handler.go:118-122`), so this PR needs scheduled-task and to-do tests, not just a main-chat card.
 
 **Scheduled tasks**: new hubs enable a weekday 09:00 morning briefing by default (`assistant/schedule.go:212`); with zero computers, it will always fail. Change this to skip while readiness is not `full`, record "Skipped: computer or model setup is incomplete," and send no failure notification. Mention it in main chat before the first run after setup. Do not change the default itself; old hubs are unaffected.
 
