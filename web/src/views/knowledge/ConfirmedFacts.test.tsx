@@ -3,7 +3,7 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { initI18n } from "../../i18n";
-import { setToken } from "../../lib/api";
+import { getToken, handleUnauthorized, setToken } from "../../lib/api";
 import { KB_KINDS, type KBDetailResponse } from "../../lib/kb";
 import { setRosterDefault } from "../../lib/manager-choice";
 import { EntryDetail } from "./KBDetail";
@@ -14,6 +14,7 @@ let requests: Request[];
 let host: HTMLDivElement;
 let root: Root;
 const saved = vi.fn();
+const unauthorized = vi.fn();
 const detail = (kind = "people", id = "example", pinned?: string): KBDetailResponse => ({
   detail: { kind, id, path: "", meta: { name: "Example entry", pinned, tags: ["existing"], importance: "P1", locked_fields: ["name"] }, summary: "# Example entry\n\nInferred profile." },
 });
@@ -43,6 +44,8 @@ beforeEach(async () => {
   setToken("synthetic-owner-a");
   setRosterDefault("assistant");
   saved.mockClear();
+  unauthorized.mockClear();
+  handleUnauthorized(unauthorized);
   requests = [];
   vi.stubGlobal("fetch", vi.fn((url: string, init: RequestInit) => new Promise<Response>((resolve, reject) => requests.push({ url, init, resolve, reject }))));
   host = document.createElement("div");
@@ -52,6 +55,7 @@ beforeEach(async () => {
 afterEach(async () => {
   await act(async () => root.unmount());
   host.remove();
+  handleUnauthorized(() => {});
   vi.unstubAllGlobals();
 });
 
@@ -320,5 +324,64 @@ describe("confirmed facts in Knowledge detail", () => {
     await reply(earlier, detail("people", "example", "Outdated"));
     expect(host.textContent).toContain("Current");
     expect(host.textContent).not.toContain("Outdated");
+  });
+
+  it("uses normal sign-out for a current owner's detail 401", async () => {
+    handleUnauthorized(() => { unauthorized(); setToken(""); });
+    render();
+    await reply(requests[0], { error: "invalid token" }, 401);
+    expect(unauthorized).toHaveBeenCalledOnce();
+    expect(getToken()).toBe("");
+    expect(host.textContent).not.toContain("invalid token");
+    expect(text()).toBeNull();
+  });
+
+  it("uses normal sign-out for a current owner's facts PUT 401", async () => {
+    await load();
+    handleUnauthorized(() => { unauthorized(); setToken(""); });
+    click("Add"); input("Current draft"); submit();
+    await reply(writes()[0], { error: "invalid token" }, 401);
+    expect(unauthorized).toHaveBeenCalledOnce();
+    expect(getToken()).toBe("");
+    expect(text()).toBeNull();
+    expect(button("Retry saving")).toBeUndefined();
+    expect(writes()).toHaveLength(1);
+    expect(saved).not.toHaveBeenCalled();
+  });
+
+  it("signs out on a current readback 401 without repeating the successful mutation", async () => {
+    await load();
+    handleUnauthorized(() => { unauthorized(); setToken(""); });
+    click("Add"); input("Accepted correction"); submit();
+    await reply(writes()[0], { id: "example" });
+    await reply(requests.at(-1)!, { error: "invalid token" }, 401);
+    expect(unauthorized).toHaveBeenCalledOnce();
+    expect(getToken()).toBe("");
+    expect(writes()).toHaveLength(1);
+    expect(saved).not.toHaveBeenCalled();
+  });
+
+  it.each(["GET", "PUT"])("ignores an old generation's %s 401 even after the same token returns", async (method) => {
+    let old: Request;
+    if (method === "PUT") {
+      await load();
+      click("Add"); input("Old draft"); submit();
+      old = writes()[0];
+    } else {
+      render();
+      old = requests[0];
+    }
+    act(() => setToken("synthetic-owner-b"));
+    act(() => setToken("synthetic-owner-a"));
+    await reply(requests.at(-1)!, detail("people", "example", "Current generation"));
+    click("Edit"); input("Current generation draft");
+    const count = requests.length;
+    await reply(old, { error: "invalid token" }, 401);
+    expect(unauthorized).not.toHaveBeenCalled();
+    expect(getToken()).toBe("synthetic-owner-a");
+    expect(requests).toHaveLength(count);
+    expect(text().value).toBe("Current generation draft");
+    expect(text().disabled).toBe(false);
+    expect(host.textContent).not.toContain("invalid token");
   });
 });

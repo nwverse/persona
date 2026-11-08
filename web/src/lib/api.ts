@@ -10,12 +10,12 @@ import { clearFeedCache } from "./feed-cache";
 
 let ownerToken: string | undefined;
 let ownerGeneration = 0;
-const ownerListeners = new Set<() => void>();
-/** Observe credential replacement without putting tokens in component identity or drafts. */
-export function onCredentialOwnerChange(listener: () => void): () => void {
-  ownerListeners.add(listener);
+const credentialListeners = new Set<() => void>();
+/** React editors follow both this document's credential changes and other tabs' storage events. */
+export function subscribeCredentialOwner(listener: () => void): () => void {
+  credentialListeners.add(listener);
   window.addEventListener("storage", listener);
-  return () => { ownerListeners.delete(listener); window.removeEventListener("storage", listener); };
+  return () => { credentialListeners.delete(listener); window.removeEventListener("storage", listener); };
 }
 /** Opaque in-memory auth partition; never expose credentials in tree keys or persisted drafts. */
 export function credentialOwner(): string {
@@ -29,10 +29,10 @@ export function getToken(): string {
 }
 
 export function setToken(token: string, tokenId?: string) {
-  const previous = credentialOwner();
+  const before = credentialOwner();
   if (token !== getToken() || !token) clearFeedCache();
   storeCredentials(token, tokenId);
-  if (credentialOwner() !== previous) ownerListeners.forEach((listener) => listener());
+  if (credentialOwner() !== before) credentialListeners.forEach((listener) => listener());
 }
 
 export class ApiError extends Error {
@@ -86,8 +86,9 @@ export class HubTimeoutError extends Error {
   }
 }
 
-/** `timeout`: ms before a read gives up with HubTimeoutError (default READ_TIMEOUT_MS for GET, none otherwise; 0: none). */
-export async function api<T>(path: string, init: RequestInit & { json?: unknown; token?: string; timeout?: number } = {}): Promise<T> {
+/** `tokenOwner`: explicit credentials opt into 401 recovery only while both the token and credential generation are current.
+ *  `timeout`: ms before a read gives up with HubTimeoutError (default READ_TIMEOUT_MS for GET, none otherwise; 0: none). */
+export async function api<T>(path: string, init: RequestInit & { json?: unknown; token?: string; tokenOwner?: string; timeout?: number } = {}): Promise<T> {
   const { timeout, ...rest } = init;
   const limit = timeout ?? ((init.method ?? "GET").toUpperCase() === "GET" ? READ_TIMEOUT_MS : 0);
   if (!limit) return request<T>(path, rest);
@@ -112,7 +113,7 @@ export async function api<T>(path: string, init: RequestInit & { json?: unknown;
   }
 }
 
-async function request<T>(path: string, init: RequestInit & { json?: unknown; token?: string }): Promise<T> {
+async function request<T>(path: string, init: RequestInit & { json?: unknown; token?: string; tokenOwner?: string }): Promise<T> {
   const headers = new Headers(init.headers);
   headers.set("Authorization", `Bearer ${init.token ?? getToken()}`);
   // the hub writes its error and status text in the interface language (docs/protocol/i18n.md "Protocol")
@@ -149,7 +150,7 @@ async function request<T>(path: string, init: RequestInit & { json?: unknown; to
   }
   if (!res.ok) {
     requestCrumb(method, path, res.status);
-    if (res.status === 401 && init.token === undefined) onUnauthorized();
+    if (res.status === 401 && (init.token === undefined || (init.token === getToken() && init.tokenOwner === credentialOwner()))) onUnauthorized();
     const msg = typeof data.error === "string" && data.error ? data.error : `HTTP ${res.status}`;
     throw new ApiError(res.status, msg, data, isJson, res.headers?.get("X-Request-Id") ?? undefined);
   }

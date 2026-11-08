@@ -2,7 +2,7 @@
 // search found, the Agents on a project, the timeline, the profile, Moments, related entries by kind, code directories,
 // a chat's last 7 days and the folder (docs/apple/ios.md "Information architecture", knowledge base). "Tag" in the header.
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
-import { api, credentialOwner, enc, errorText, getToken, isAbort, onCredentialOwnerChange } from "../../lib/api";
+import { api, credentialOwner, enc, errorText, getToken, isAbort, subscribeCredentialOwner } from "../../lib/api";
 import { defaultManager, MANAGER_HEADER, useKnownDefault } from "../../lib/manager-choice";
 import { ConfirmedFacts } from "./ConfirmedFacts";
 import { ago, sessionPreview, sessionTitle, shortPath, stateOf, tabLabel } from "../../lib/format";
@@ -82,7 +82,7 @@ type EntryDetailProps = {
 };
 
 export function EntryDetail(props: EntryDetailProps) {
-  const owner = useSyncExternalStore(onCredentialOwnerChange, credentialOwner, credentialOwner);
+  const owner = useSyncExternalStore(subscribeCredentialOwner, credentialOwner, credentialOwner);
   const manager = useKnownDefault();
   if (!manager || !getToken()) return <Loading />;
   // Retained detail and editors belong to the requested route and owner, including the default manager.
@@ -111,7 +111,7 @@ function OwnedEntryDetail({ kind, id, query, reloadKey, onToggleSidebar, onBack,
     const valid = () => current() && version === request.current && !signal?.aborted;
     try {
       const r = await api<KBDetailResponse>(`/kb/${enc(kind)}/${enc(id)}${query ? `?q=${enc(query)}` : ""}`, {
-        signal, token, headers: { [MANAGER_HEADER]: manager },
+        signal, token, tokenOwner: owner, headers: { [MANAGER_HEADER]: manager },
       });
       if (!valid()) return false;
       // The server canonicalizes source IDs (including recording UUID case); the request owns this response.
@@ -125,7 +125,7 @@ function OwnedEntryDetail({ kind, id, query, reloadKey, onToggleSidebar, onBack,
       if (!isAbort(err)) setError(errorText(err));
       throw err;
     }
-  }, [kind, id, query, token, manager, current]);
+  }, [kind, id, query, token, owner, manager, current]);
 
   useEffect(() => {
     setError("");
@@ -297,7 +297,7 @@ function OwnedEntryDetail({ kind, id, query, reloadKey, onToggleSidebar, onBack,
                 kind={kind}
                 id={id}
                 value={typeof d.meta?.pinned === "string" ? d.meta.pinned : ""}
-                auth={{ token, headers: { [MANAGER_HEADER]: manager } }}
+                auth={{ token, tokenOwner: owner, headers: { [MANAGER_HEADER]: manager } }}
                 current={current}
                 refresh={load}
                 onSaved={onSaved}

@@ -9,7 +9,7 @@ type Props = {
   kind: string;
   id: string;
   value: string;
-  auth: { token: string; headers: Record<string, string> };
+  auth: { token: string; tokenOwner: string; headers: Record<string, string> };
   current: () => boolean;
   refresh: () => Promise<boolean>;
   onSaved: () => void;
