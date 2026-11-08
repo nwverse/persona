@@ -126,14 +126,16 @@ func (s *Service) mcpCall(ctx context.Context, machine, session, name string, ar
 // assistant conversation only when it is one, a guest only when it was given the tool; then the extensions decide
 // whether the mail connector offers it to that caller (extmgr MailAttachment).
 func (s *Service) mailAttachment(ctx context.Context, machine string, req proto.MailAttachmentRequest) (proto.MailAttachment, error) {
-	const name = "mail_save_attachment"
+	// Not named "name": the i18n key check resolves constants by name across the package, and a constant called
+	// name would turn every "prefix."+name text wrapper into one whole key.
+	const saveAttachmentTool = "mail_save_attachment"
 	if s.isWorkMachine(machine) {
 		return proto.MailAttachment{}, errors.New(i18n.T(s.lang(ctx), "assistant-privacy.tool_denied"))
 	}
 	if req.Assistant && !s.assistantCaller(ctx, machine, req.SessionID) {
 		return proto.MailAttachment{}, errors.New(i18n.T(s.lang(ctx), "assistant-privacy.assistant_denied"))
 	}
-	if res, refused := s.guestRefuses(ctx, machine, req.SessionID, name, req.Guest); refused {
+	if res, refused := s.guestRefuses(ctx, machine, req.SessionID, saveAttachmentTool, req.Guest); refused {
 		var why strings.Builder
 		for _, c := range res.Content {
 			why.WriteString(c.Text)
