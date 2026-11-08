@@ -368,6 +368,7 @@ final class AppModel {
     /// Saves the registry, unless it could not be read: writing then would replace the real one (or delete it, empty).
     func saveRegistry(_ r: HubRegistry) {
         HubStore.save(r, known: !registryUnreadable)
+        syncExtensionSurfaces()
     }
 
     /// The keychain could not be read at launch: try again (the app came to the front, the phone was unlocked), and
@@ -418,6 +419,7 @@ final class AppModel {
         if link(hubGroup) == nil, let first = links.first { hubGroup = first.group }
         applyPersonaPalette()
         relabelMachines()
+        syncExtensionSurfaces()
     }
 
 
@@ -520,6 +522,7 @@ final class AppModel {
             r.hubs[i].deviceID = nil
             r.hubs[i].tradedPairing = nil
             r.hubs[i].watch = nil
+            r.hubs[i].watchDeviceID = nil
             if let ssh { r.hubs[i].ssh = ssh }
             group = r.hubs[i].group
             tunnels.adopt(SSHTunnels.pairingID, as: r.hubs[i].id)
@@ -1020,7 +1023,10 @@ final class AppModel {
         guard sessionLists.lists[key.group]?.paged == true, let api = api(key.group), detailFetching.insert(key).inserted else { return }
         defer { detailFetching.remove(key) }
         do {
-            let full = try await api.sessionListDetail(key, title: latest(key)?.title ?? "")
+            // Not in the list: there is no detail to add. This runs on its own whenever a chat opens, so a session the
+            // list does not have (hidden from it, or gone) is not a chat error. A transcript that cannot be read is
+            // still reported, by the read of the transcript itself.
+            guard let full = try await api.sessionListDetail(key, title: latest(key)?.title ?? "") else { return }
             guard self.api(key.group)?.config.url == api.config.url else { return }
             let list = (sessionsByMachine[key.machineRef] ?? []).filter { $0.key != key } + [full]
             applySessions([key.machineRef: list])
@@ -1509,6 +1515,7 @@ final class AppModel {
         let isHub = group == hub?.group
         switch ev {
         case .hello(let hello):
+            let previousSurfaceCapabilities = extensionSurfaceCapabilities
             link(group)?.received(hello)
             if let page = sessionLists.lists[group], page.loaded, !page.query.legacy, page.paged != hello.features.contains("sessions_list"), let link = link(group) {
                 page.cancel()
@@ -1532,6 +1539,10 @@ final class AppModel {
             #endif
             for (key, handler) in terminalHandlers where key.group == group { handler(.reconnected) }
             learned(hello, group: group)
+            if extensionSurfaceCapabilities != previousSurfaceCapabilities {
+                syncExtensionSurfaces()
+                pushWatchConfigs()
+            }
             // Marks the last socket may have swallowed, or an HTTP request that failed, go again over this one.
             for key in seenOutbox.unanswered(group: group, at: Date()) { deliverSeen(key) }
         case .terminal(let key, let event):
@@ -1614,6 +1625,9 @@ final class AppModel {
             if isHub { ExtensionSlots.shared.received(plugin: plugin, id: id, badge: badge) }
         case .extensionInvalidate(let ext, let id):
             ExtensionUIRegistry.shared.invalidate(extension: ext, ui: id, group: group)
+            #if os(iOS)
+            ExtensionWidgetReconciliation.invalidate(group: group, owner: ext, contribution: id)
+            #endif
         case .items(let key, let items, let backlog, let hasMore, let span, let moreAfter):
             if backlog { connection.caughtUp(Self.catchUpPart(key)) }
             let store = chat(key)
