@@ -128,6 +128,8 @@ func TestExtensionScopedToken(t *testing.T) {
 	for _, c := range []struct{ method, path, scope string }{
 		{"GET", "/api/v1/extensions/third/x", "extensions.call:third"},
 		{"GET", "/api/v1/extensions", ""},
+		{"GET", "/api/v1/extensions/-/market-settings", ""},
+		{"PUT", "/api/v1/extensions/-/market-settings", ""},
 		{"GET", "/api/v1/plugins", ""},
 		{"GET", "/api/v1/extensions/other/-/", ""},
 		{"GET", "/api/v1/scopedx/y", ""},

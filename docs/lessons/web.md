@@ -1,8 +1,24 @@
 # Lessons: web UI and interactions
 
+## Notification preference writes need hub ordering (#1285)
+
+Ignoring an older PUT response cannot stop its request from committing last. Serialize notification and manager-push writes together, keep confirmed preferences separately from queued intents, and send only the changed fields. Remove a failed intent before rebuilding the optimistic view, so another field's save does not silently retry it. Reads started during a write need completion fencing too. Regress authoritative commits and reloads with a deferred transport; response-only checks can pass while the hub retains the wrong choice.
+
+A queue also survives in-place sign-out and re-pairing. Bind it to the credential generation when enqueuing, retire unsent intents and fence late responses, rollback and cache writes when that generation ends. Exercise the real REST client with synthetic token A/B fetches: an `api()` mock hides its deferred token lookup. A late old-session 401 must not invoke the new login's sign-out callback; current-session 401 handling must still work.
+
+Retiring a generation must also wake mounted consumers to read the next generation's preferences. Another tab's token replacement can leave Settings mounted; an effect that loads only on mount strands an aborted initial read or a hidden manager switch. Subscribe to the generation independently of the preference value, bind loading state to it, and test actual components with abort-aware fetches rather than manually loading the new login in the test.
+
+## Connector sends acknowledge one draft revision (#1286)
+
+- Keep an editable composer's text and quote together: clear them after success only if neither changed during the send or its refresh. Comparing final text alone misses edits away and back to the same words. A synchronous ref admits one send before React rerenders, and the manager, item, source and thread scope its local draft and pending state. Exercise delayed success, failure/retry, quote changes and ownership switches in both chat and GitHub comment modes.
+
 ## Mail send admission must precede React updates (#1251)
 
 A busy button protects only its click path after rerender. Mail shortcuts and form submission need the same synchronous ref guard inside the send function, acquired after validation and released on failure. Keep it held after success until the composer closes. Regress mixed events in one React batch with a deferred transport, then check failure/retry, successful close, recipient validation and IME controls.
+
+## Optional recipient fields participate in the whole draft lifecycle (#1290)
+
+Adding Bcc to the request alone leaves Bcc-only edits lost on dismissal and Bcc-only sends blocked by a To-only button gate. Use all three recipient fields for admission and validation, and include Bcc in draft initialization and dirty detection. Test an edit that changes only Bcc, then dismiss/unmount, reopen, fail, cancel and succeed; also run the existing owner and send-once suites with Bcc to retain their thread-header and manager-routing guarantees. Browser send stubs prove request construction and UI behavior, not provider delivery.
 
 ## A word turned into an icon at a row's end (2026-11-07, sidebar source marks)
 
@@ -229,6 +245,7 @@ Six parallel lanes (chat rendering, message actions, Agents list / Machines, Ter
 - When another page sends to a session, waiting for HTTP before navigation means the bubble appears only after pushed history returns. Navigate first and store the bubble by `mid/sid`. New assistant `POST /assistant/conversations`
   returns only once the chat starts (hub timeout 110 seconds), so that phase can only spin on the original page; after response, record the prompt as a "Delivered" bubble and navigate.
 - Dialog text cannot save only in `onClose` (#4563): while manually replying to email, a new message in the same thread makes `MailBody` load the latest email, rendering only "Loading." The dialog unmounts without `onClose`, losing text. Render outside loading state, fix the template on open (otherwise `dirty` compares with the new email template and is always true), and save on unmount using close rules. Key by item/thread, not changing latest uid. Mark handled on Send, restoring on failure, or an in-flight unmount saves already-sent text back as a draft.
+- Reply all needs its own retained mode within each manager/item (#1329); restoring a Reply draft would silently lose participants. Freeze recipients and thread metadata when opened, and let a late send close only that exact opening. Reopening also retires an older send's right to restore its failed draft, or it overwrites newer saved edits and resurrects canceled text. Wait for the matching receiving account address; scope cached account state by manager so a same-id account from the previous owner cannot identify self. Deduplicate bare addresses across To/Cc, excluding self; display names containing commas or semicolons cannot round-trip through the composer. With only Cc participants, promote the first to To; with only self, leave To empty for deliberate editing.
 - AI reply drafts need the same protection (#1253): retain edited text and accepted generations as they change, keyed by manager and item, including an intentionally empty reply. Incidental dismissal or navigation then needs no cleanup write that could resurrect a sent draft. Cancel discards, as with manual mail; send owns clearing and failure restoration. Invalidate generation requests on cleanup with a sequence: StrictMode reactivates a shared boolean, allowing an older response to overwrite manual edits.
 - Hub `/mail/send` `references` is a **string** (`mail.SendRequest`), while iOS `SendMail.references` is `[String]`; iOS manual replies with References get hub 400 (inferred from code, not tested). Web sends a string.
 - Visible-means-read needs a recheck trigger: IntersectionObserver callbacks occur only when intersection ratios cross thresholds. Messages arriving while backgrounded / behind a dialog get no callback upon return or close. Track current in-viewport positions,
@@ -476,3 +493,8 @@ A narrow shell can unmount its sidebar list and mount the same list in the Agent
 ## Manual mail drafts belong to their manager and item (#1252)
 
 - The merged Inbox can contain the same item id under two managers. Scope retained drafts and the live form's React key to both owner and item; resolve an omitted owner to the roster default so explicit and implicit default stamps share one draft. The mail body's open-reply key also needs the owner, or switching managers can leave the previous reply template open. Exercise late send failures after unmount while another owner's same-id draft is open, and verify recipients, account and reply headers as well as text through mocked sends.
+
+## Text page revisions and complete reads (#1297)
+
+- Check each known page revision before appending; retain known revisions across unversioned pages, but remove the aggregate revision when any accepted page lacks metadata. Legacy compatibility cannot prove a snapshot.
+- A complete-read helper must reject page failures, caps and retired owners instead of resolving the loaded prefix. Share the actual pending page result with concurrent readers, and scope callbacks to machine, path, working directory and reload so an old reader cannot borrow the new file. Keep an ordinary failed page retryable at its original offset; a known revision change requires a fresh read from the beginning. Explicit bounded previews need a separate completion flag, preserving a deliberate CSV/TSV cap without permitting partial exports. Go omits an empty text field: complete zero-byte text metadata is a valid empty file, while arbitrary missing content is not.

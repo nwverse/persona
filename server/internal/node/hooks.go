@@ -485,10 +485,7 @@ func (n *Node) rememberTranscript(in hookInput) {
 	if in.TranscriptPath == "" || !validID(in.SessionID) {
 		return
 	}
-	n.mu.Lock()
-	n.paths[in.SessionID] = in.TranscriptPath
-	delete(n.pathsAt, in.SessionID) // Claude said so: no need to look again
-	n.mu.Unlock()
+	n.setPath(in.SessionID, in.TranscriptPath)
 }
 
 // notifyHookEvent tells the hub what a hook saw. reportOnly marks an event from a global hook (globalhooks.go), so
@@ -531,7 +528,7 @@ func reportedEvent(in hookInput) bool {
 // takesReport says whether an event from a global report-only hook is for the hub and the counters. A session Persona
 // started or the assistant reports through its own hooks (hooksplugin.go), so it is not taken twice. A report-only
 // event never binds a pane (a claude that a tmux server started inherits the pane's variable without being in it, and
-// would take the pane from the claude that is; the node finds the session of a pane by itself, sessions.go).
+// would take the pane from the claude that is; the node finds the session of a pane by itself, panes_bind.go).
 func (n *Node) takesReport(in hookInput) bool {
 	if !validID(in.SessionID) || !reportedEvent(in) {
 		return false
