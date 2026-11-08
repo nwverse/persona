@@ -487,6 +487,7 @@ func (s *Service) SessionsChanged(ctx context.Context, d DeviceSessions) {
 	s.originsChanged(d.MachineID, d.Sessions) // conversations from before origins were noted (origins.go)
 	s.todosSessionsChanged(ctx, d)
 	s.nativeArchivesListed(d.MachineID) // agent_archive_native.go
+	s.followStarts(ctx, d)              // the app's starts, for launcher health (launcher_health_starts.go)
 }
 
 func randomHex(n int) string {

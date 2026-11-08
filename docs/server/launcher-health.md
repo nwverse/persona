@@ -13,8 +13,11 @@ Now a hub manager (`server/internal/assistant/launcher_health*.go`) periodically
   When a computer goes from offline to online, all its launchers are checked right away. Launchers on one computer run one after another (no burst of claude processes); computers run in parallel.
 - What is checked: launchers this computer can start (`machineLaunchers`: those from ~/.zshrc minus hidden ones, plus Persona-managed ones; `kind: api` launchers do not run on a computer and are not checked).
   Runtime launchers (DSH and others, whose `source` is not `zshrc` / `persona`) are not checked.
-- A failed Agent start is recorded too: when `agent_start` or a task plan starting an Agent (`startTaskAgent`) gets an error from `session.start`, it is recorded as a failure (source `start`),
+- A failed Agent start is recorded too: when `agent_start`, a task plan starting an Agent (`startTaskAgent`) or a repair Agent's start gets an error from `session.start`, it is recorded as a failure (source `start`),
   and a check runs right away to confirm (one network blip should not leave a launcher unavailable; if the check passes, it recovers).
+  The App's own starts count as well (#1642, `launcher_health_starts.go`): the hub tells the manager how a start it waited for went (`session.start_ended`: a failure, or a start the node ran before answering that worked),
+  and a "New Agent" answered at once (`async`) is followed in the machine's session list, from `starting` to started or to `start_error` (counted once while the node lists it; a failure older than the launcher's record, one counted before the manager restarted, is not counted again).
+  A start whose outcome the hub does not know (the computer offline, the call timed out) and a request the node refused before running anything are not recorded.
 - Stored in the settings key `launchers.health` (Postgres), one entry per computer × launcher: success / failure, error text (redacted, truncated), error category,
   check time, consecutive failure count, repair log, state. It survives hub restarts.
 
@@ -27,10 +30,13 @@ Now a hub manager (`server/internal/assistant/launcher_health*.go`) periodically
 | `cli_outdated` | `unknown option`, asks to upgrade / version too old / no longer supported | First the node upgrades itself (`claude update`); if that fails, a repair Agent |
 | `timeout` | `context deadline exceeded`, no answer within 90 seconds | Counts only after two in a row; handed to a repair Agent |
 | `other` | Everything else | Same: repaired only after two in a row |
+| `not_in_terminal` | A start's new terminal tab could not run the launcher or its claude (`launcher_missing` / `claude_missing` with `where: "terminal"`, #1642, `docs/integrations/launchers.md` "The terminal's shell is another environment") | None: `blocked` at once, the reason says to define the launcher where the terminal's shell reads it or add it as a model provider |
 
 ## States
 
 `ok` → on failure `failing` → while repairing `repairing` → back to `ok` when the retest after repair passes, `blocked` if the retest still fails. At any point, one passing check returns it to `ok` and clears the block.
+Except `not_in_terminal`: the check runs in the node's login shell, where the launcher works, so neither the check right after the failed start nor the periodic rounds run for it, and a check asked for by hand does not clear it.
+It clears when a start with that launcher on that computer works (any of the starts above: the user retrying from the App counts), or once it is older than 6 hours like any failure. It does not count against the main chat's readiness (`docs/assistant/onboarding.md`), which runs in the login shell.
 `failing` / `repairing` / `blocked` all count as **unavailable** (when the latest result is within 6 hours).
 
 - `agents_list`: gets an extra "unavailable launchers" section at the end, one line each: computer / launcher / state / category / error.

@@ -231,9 +231,14 @@ type Session struct {
 	// screen; gone once the agent works again or a message is sent.
 	Suggestion string `json:"suggestion,omitempty"`
 	// Starting: Persona is opening its tab and waiting for claude (node/starting.go); messages sent now go in once it is
-	// ready. StartError: the start failed (shown in the chat for a while).
-	Starting   bool   `json:"starting,omitempty"`
-	StartError string `json:"start_error,omitempty"`
+	// ready. StartError: the start failed (shown in the chat for a while). StartErrorCode is the start's coded refusal
+	// when it was one (claude_missing, launcher_missing…: the code a synchronous start is answered 409 with), with
+	// StartErrorArgs, the refusal's details (launcher, where, missing, pane_shell…, docs/protocol/protocol.md "Errors"):
+	// the hub writes StartError as the sentence for that code in the user's language, and a client offers its remedy.
+	Starting       bool              `json:"starting,omitempty"`
+	StartError     string            `json:"start_error,omitempty"`
+	StartErrorCode string            `json:"start_error_code,omitempty"`
+	StartErrorArgs map[string]string `json:"start_error_args,omitempty"`
 	// Todo is the active (uncompleted, unreleased) todo this session is linked to (assistant/todos.go).
 	Todo *TodoRef `json:"todo,omitempty"`
 	// Quiet: the agent works (or worked) for a quiet task, one the main conversation opened while the user wanted

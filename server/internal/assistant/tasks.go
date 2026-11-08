@@ -51,9 +51,13 @@ type PlanTask struct {
 	// opened that has no agent yet, such as the todo a Lark topic opened (feishu_thread_open.go). Checked when the
 	// plan is made and again when it starts; it is not what the apps send back with an edit.
 	ReuseTodo string `json:"reuse_todo,omitempty"`
-	// Set once started: the todo the task is, and why its agent did not start.
-	TodoID string `json:"todo_id,omitempty"`
-	Error  string `json:"error,omitempty"`
+	// Set once started: the todo the task is, and why its agent did not start. ErrorCode and ErrorArgs: the start's
+	// coded refusal when it was one (launcher_missing, claude_missing… with its details, as a session's
+	// start_error_code / start_error_args), for a card to offer its remedy (#1642).
+	TodoID    string            `json:"todo_id,omitempty"`
+	Error     string            `json:"error,omitempty"`
+	ErrorCode string            `json:"error_code,omitempty"`
+	ErrorArgs map[string]string `json:"error_args,omitempty"`
 }
 
 // TaskPlan is a plan the assistant handed the user.
@@ -290,7 +294,7 @@ func (s *Service) toolTaskPlan(ctx context.Context, sessionID string, args json.
 	reused := map[string]bool{}
 	for i := range a.Tasks {
 		t := &a.Tasks[i]
-		t.TodoID, t.Error = "", ""
+		t.TodoID, t.Error, t.ErrorCode, t.ErrorArgs = "", "", "", nil
 		t.Title, t.Prompt, t.Cwd = strings.TrimSpace(t.Title), strings.TrimSpace(t.Prompt), strings.TrimSpace(t.Cwd)
 		t.DoneWhen, t.ExpectMinutes = cleanDoneWhen(t.DoneWhen), max(0, min(t.ExpectMinutes, 24*60))
 		if t.Title == "" || t.Prompt == "" || t.Cwd == "" {
