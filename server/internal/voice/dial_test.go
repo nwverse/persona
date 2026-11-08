@@ -129,17 +129,19 @@ func TestModelsSkipAnAddressThatNeverAnswersTLS(t *testing.T) {
 	if len(out.Models) != 1 || out.Models[0].ID != "live-1" {
 		t.Errorf("models = %+v", out.Models)
 	}
-	if n := stalled.Load(); n != 1 {
-		t.Errorf("the stalled address took %d connections, want 1", n)
+	// At least: other programs on a developer's machine may probe a listening port too.
+	if n := stalled.Load(); n < 1 {
+		t.Errorf("the stalled address was not tried first")
 	}
 
-	// A new connection goes to the address that worked first, without waiting on the stalled one again.
+	// A new connection goes to the address that worked first: with the stalled one first again, the request would
+	// wait out a budget longer than its deadline.
 	directClient.CloseIdleConnections()
-	if err := getJSON(context.Background(), p, "/models", nil, &out); err != nil {
+	tlsAddrBudget = 10 * time.Second
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	if err := getJSON(ctx, p, "/models", nil, &out); err != nil {
 		t.Fatalf("second GET /models: %v", err)
-	}
-	if n := stalled.Load(); n != 1 {
-		t.Errorf("the stalled address took %d connections after one worked, want 1", n)
 	}
 }
 
