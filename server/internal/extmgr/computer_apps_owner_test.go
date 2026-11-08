@@ -46,6 +46,9 @@ func TestComputerAppRevocationPreservesDisabledApprovalPolicy(t *testing.T) {
 	h, st := extensionTestHub(t)
 	m, _ := computerMac(t, h, "example-machine")
 	ctx := context.Background()
+	if err := h.extensions.reg.SetEnabled(ctx, cuaExtensionID, true, "test"); err != nil {
+		t.Fatal(err)
+	}
 	if err := h.extensions.reg.SetConfig(ctx, cuaExtensionID, json.RawMessage(`{"machines":["example-machine"],"app_approval":false}`), "test"); err != nil {
 		t.Fatal(err)
 	}
@@ -56,8 +59,8 @@ func TestComputerAppRevocationPreservesDisabledApprovalPolicy(t *testing.T) {
 	if code != http.StatusOK || len(out["apps"].([]any)) != 0 || out["manager"] != "assistant" {
 		t.Fatalf("revoke: %d %v", code, out)
 	}
-	if h.cua().approval() {
-		t.Fatal("revocation enabled app approval")
+	if !h.cua().On || h.cua().approval() {
+		t.Fatal("revocation changed the enabled extension or its disabled app approval policy")
 	}
 	if asked, allowed := h.approveApps(ctx, m, asker{}, "computer_run", []string{"Example Editor"}, true, nil); asked || !allowed {
 		t.Fatalf("disabled policy must still allow without asking: asked=%v allowed=%v", asked, allowed)
