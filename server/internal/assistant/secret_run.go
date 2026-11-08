@@ -16,9 +16,10 @@ import (
 )
 
 // secret_run: commands that need a password only the user knows (a computer's sudo password). The card shows the
-// computer, the purpose and every command verbatim; the user types the password into it on the iPhone, and the target
-// computer's node runs exactly those commands with it on their stdin (proto.MethodSecretRun). The Agent gets exit codes
-// and redacted output, never the password (docs/assistant/assistant.md "Password card", #1137).
+// computer, the purpose and every command verbatim; the user types the password into it in the Persona app (iPhone,
+// Mac, Vision Pro, Android or the web; the watch can only decline), and the target computer's node runs exactly those
+// commands with it on their stdin (proto.MethodSecretRun). The Agent gets exit codes and redacted output, never the
+// password (docs/assistant/assistant.md "Password card", #1137).
 //
 // The password lives only in this call while it waits on the node: it is never logged, put in an error, kept for
 // another try (askOnPhone) or written to the history (redacted), and the byte slice handed to the node is zeroed.
