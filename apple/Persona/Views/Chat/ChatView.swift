@@ -781,7 +781,8 @@ struct ChatView: View {
                                        first: items.first?.id, live: frozen == nil ? liveTurnID : frozen?.live, open: openWork,
                                        runs: openRuns, frozen: frozen, feed: feed.map(\.id),
                                        streaming: drawsLive && (frozen.map { !$0.text.isEmpty } ?? liveShown),
-                                       quietAgents: quietSubagents, workflowCalls: workflowCalls)
+                                       quietAgents: quietSubagents, workflowCalls: workflowCalls,
+                                       day: style == .assistant ? Calendar.current.startOfDay(for: .now) : nil)
         if scratch.linesKey == key { return scratch.lines }
         var blocks = store.blocks
         if frozen != nil {
@@ -5645,6 +5646,9 @@ final class ChatScratch {
         var quietAgents: Set<String> = []
         /// The Workflow calls whose run the hub lists: their cards stay out of the fold and the chips (#3436).
         var workflowCalls: Set<String> = []
+        /// Today, in an assistant conversation: on a new day yesterday's task cards are lines and give back the hand-offs
+        /// they took in (`SentToAgents.takenIn`, #1668).
+        var day: Date?
     }
     /// What was sent from this chat lately: its transcript copy arriving brings you to the newest, others do not.
     var sentHere: [(id: UUID, text: String)] = []

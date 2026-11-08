@@ -92,6 +92,15 @@ Apply is not auto-resumed after a failure. Inspect the journal and roll back or 
 
 Server persistence has two migration sets and may use separate hub/manager databases. Run the transaction **once per affected database**, not just once on the hub machine. The tool emits SQL for the existing `public` schema, checks expected column types and complete registry membership, and skips absent role tables. An unexpected schema is a stop condition, not an excuse to point the script at a different database.
 
+**Which database holds which table.** `hub_settings` and `devices` are the hub's (`migrations/hub/`); `plugins`, `plugin_secrets`, `plugin_audit`, `settings` and `node_sessions` are the built-in manager's (`migrations/manager/`). Once the built-in manager has moved its data into a database of its own ([managers.md](../assistant/managers.md) ("The built-in manager's database")), those five live there: a second database on the hub's Postgres server named by `database_name` in `managers/assistant/manager.json` under the data directory (`<hub database>_manager` by default), or the server `database_url` there names. The hub's database keeps its copy of the five as they were at the move, for a build from before it, until `personad assistant drop-shared-tables --yes`; nothing reads that copy.
+
+So run the transaction against the hub's database **and** against the manager's own database. The SQL tells them apart by `manager_moved` (`direction='out'` in the hub's database after the move): there it leaves the manager tables as they are, migrates `hub_settings` and `devices`, and ends with `committed for the hub tables only` and a reminder to run it against the manager's database too. `supported ID fields and stored session folders verified` is printed only by a run that migrated the manager tables. Run against the frozen copy alone, an earlier version of this transaction succeeded and verified every field while the manager's data kept the previous IDs and folders (#1686). Check the stored folders where they are read:
+
+```sh
+psql -X --no-password --dbname='service=persona-cutover-manager' \
+  -c "SELECT count(*) FROM node_sessions WHERE cwd LIKE '%/.<previous-name>/%' OR cwd LIKE '%/.<previous-name>'"
+```
+
 The server lane compared original/new SQL DDL and Store queries and found no product-brand table/column/index/constraint rename to apply. `Session.started_by_persona` is a derived wire JSON field, not a database column; the stored node-session field is `node_sessions.started_at` (`migrations/manager/0418_node_sessions_started.sql`). `schema_migrations` stores version/name/part, not a source checksum. Do not invent an `ALTER started_by` or guess schema identifiers from a protocol rename. Fresh-database tests alone are still not upgrade acceptance: rehearse the real original migrations, the typed cutover transaction, and reads through the new Store in an isolated migrated database. The SQL's column/type checks do not replace that Store upgrade test.
 
 | Existing table / file | Exact supported data | Deliberately untouched |
@@ -105,7 +114,7 @@ The server lane compared original/new SQL DDL and Store queries and found no pro
 | `hub.json`, `manager.json`, build config | The typed fields listed in the filesystem section | Secret values, personal values, real registrations and arbitrary path strings |
 | User runtime directory | Roots, known credentials, avatar manifest IDs, extension ID directories | Knowledge-base messages, external application data, arbitrary JSON and shell files |
 
-A node resumes a stored session in the folder `node_sessions.cwd` records. Left under the previous root, the main conversation restarts in the old folder (through any alias left behind) and Claude Code writes its transcript under the old folder's key again (#1533). The transaction rewrites the folders below `<home>/.<previous-name>` for `--home` as given and for each repeatable `--session-home '<home>'`: list the home of every machine whose sessions are stored in that database, as the node there spells it (`$HOME`). Homes must be absolute POSIX paths; Windows folders are rewritten by hand.
+A node resumes a stored session in the folder `node_sessions.cwd` records. Left under the previous root, the main conversation restarts in the old folder (through any alias left behind) and Claude Code writes its transcript under the old folder's key again (#1533). The transaction rewrites the folders below `<home>/.<previous-name>` for `--home` as given and for each repeatable `--session-home '<home>'`: list the home of every machine whose sessions are stored in that database (the manager's own, once it moved its data), as the node there spells it (`$HOME`). Homes must be absolute POSIX paths; Windows folders are rewritten by hand.
 
 ```sh
 python3 -I scripts/migrate/persona-cutover.py \

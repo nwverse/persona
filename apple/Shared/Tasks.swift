@@ -171,10 +171,11 @@ nonisolated enum SentToAgents {
     static let handOff: TimeInterval = 60
 
     /// The hand-offs the task cards take in (not drawn on their own): Persona's messages within `handOff` after their own
-    /// task's card in the same conversation.
-    static func takenIn(_ feed: [FeedItem]) -> Set<String> {
+    /// task's card in the same conversation. Only a card drawn in full (from today, `FeedLine`) has the list: from another
+    /// day it is one line (`TaskLine`), and its hand-off stays a folded line under it (#1668).
+    static func takenIn(_ feed: [FeedItem], now: Date = .now, calendar: Calendar = .current) -> Set<String> {
         var cards: [String: [Date]] = [:]
-        for item in feed where item.kind == .task {
+        for item in feed where item.kind == .task && calendar.isDate(item.at, inSameDayAs: now) {
             if let ref = item.ref { cards[item.conversation + "/" + ref, default: []].append(item.at) }
         }
         guard !cards.isEmpty else { return [] }
@@ -187,8 +188,8 @@ nonisolated enum SentToAgents {
     }
 
     /// The feed without the hand-offs the cards take in: what the chat draws among its lines.
-    static func shown(_ feed: [FeedItem]) -> [FeedItem] {
-        let hidden = takenIn(feed)
+    static func shown(_ feed: [FeedItem], now: Date = .now, calendar: Calendar = .current) -> [FeedItem] {
+        let hidden = takenIn(feed, now: now, calendar: calendar)
         return hidden.isEmpty ? feed : feed.filter { !hidden.contains($0.id) }
     }
 

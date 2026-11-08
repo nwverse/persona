@@ -165,6 +165,7 @@ func (s *Service) startRepairAgent(ctx context.Context, broken Device, left []La
 		s.recordStartFailure(ctx, am.ID, launcher, err)
 		return err
 	}
+	s.recordStartSuccess(ctx, am.ID, launcher)
 	sid := res.Session.SessionID
 	// A quiet todo with no conversation: the hub pushes nothing about its agent, and nothing tells a conversation.
 	title := fmt.Sprintf("修复 %s 上的启动器", broken.Name)

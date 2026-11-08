@@ -6,7 +6,13 @@ import Testing
 /// card takes in the hand-off written right after it (same task, same conversation), never a later message or the
 /// user's; the folded line shows the first line with words.
 struct SentToAgentsTests {
-    private let t0 = Date(timeIntervalSince1970: 1_800_000_000)
+    private let t0 = Date(timeIntervalSince1970: 1_800_000_000) // 08:00 UTC
+    private var utc: Calendar {
+        var c = Calendar(identifier: .gregorian)
+        c.timeZone = TimeZone(identifier: "UTC")!
+        return c
+    }
+    private func takenIn(_ feed: [FeedItem], now: Date? = nil) -> Set<String> { SentToAgents.takenIn(feed, now: now ?? t0, calendar: utc) }
 
     private func item(_ id: String, _ kind: FeedItem.Kind, _ ref: String, after seconds: TimeInterval, conversation: String = "c1",
                       body: [String: JSONValue]? = nil) -> FeedItem {
@@ -47,17 +53,25 @@ struct SentToAgentsTests {
             persona("before", "t4", after: 4),
             item("card4", .task, "t4", after: 5),                  // written before its card: not a hand-off
         ]
-        #expect(SentToAgents.takenIn(feed) == ["handoff"])
-        #expect(SentToAgents.shown(feed).map(\.id) == ["card", "said", "rework", "other", "elsewhere", "card3", "before", "card4"])
+        #expect(takenIn(feed) == ["handoff"])
+        #expect(SentToAgents.shown(feed, now: t0, calendar: utc).map(\.id) == ["card", "said", "rework", "other", "elsewhere", "card3", "before", "card4"])
         #expect(SentToAgents.sent(feed, todo: "t1").map(\.id) == ["handoff", "rework"])
-        #expect(SentToAgents.shown([item("card", .task, "t1", after: 0)]).map(\.id) == ["card"])
+        #expect(SentToAgents.shown([item("card", .task, "t1", after: 0)], now: t0, calendar: utc).map(\.id) == ["card"])
     }
 
     @Test func aHandOffComesWithinAMinuteOfItsCard() {
         let feed = [item("card", .task, "t1", after: 0), persona("late", "t1", after: SentToAgents.handOff + 1)]
-        #expect(SentToAgents.takenIn(feed).isEmpty)
+        #expect(takenIn(feed).isEmpty)
         let again = [item("card", .task, "t1", after: 0), persona("edge", "t1", after: SentToAgents.handOff)]
-        #expect(SentToAgents.takenIn(again) == ["edge"])
+        #expect(takenIn(again) == ["edge"])
+    }
+
+    /// A card from another day is one line with no list (#1668): its hand-off stays a folded line under it.
+    @Test func aCardOfAnotherDayGivesItsHandOffBack() {
+        let feed = [item("card", .task, "t1", after: 0), persona("handoff", "t1", after: 0.008)]
+        #expect(takenIn(feed, now: t0.addingTimeInterval(15 * 3600)) == ["handoff"]) // 23:00 the same day
+        #expect(takenIn(feed, now: t0.addingTimeInterval(17 * 3600)).isEmpty)        // 01:00 the next day
+        #expect(SentToAgents.shown(feed, now: t0.addingTimeInterval(17 * 3600), calendar: utc).map(\.id) == ["card", "handoff"])
     }
 
     @Test func theFoldedLineShowsTheFirstLineWithWords() {

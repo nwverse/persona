@@ -254,12 +254,17 @@ func (s *Service) startPlanTask(planID, conversation string, i int, t PlanTask, 
 	// on it failed too, and the task stayed "starting" with no agent for ever (#4510). The bookkeeping gets its own time.
 	ctx, cancel = context.WithTimeout(context.WithoutCancel(ctx), taskFailTimeout)
 	defer cancel()
-	reason := clip(oneLine(err.Error()), 200)
+	limit := 200
+	if code, _ := codedStartRefusal(err); code != "" {
+		limit = proto.CodedStartErrorMax // the hub's sentence, whose remedy comes last (#1642): kept whole
+	}
+	reason := clip(oneLine(s.startFailureText(ctx, t.Machine, err)), limit)
 	if ferr := s.failTodo(ctx, t.TodoID, reason); ferr != nil {
 		s.logf("task %s: fail: %v", t.TodoID, ferr)
 	}
 	if p, lerr := s.loadPlan(ctx, planID); lerr == nil && i < len(p.Tasks) {
 		p.Tasks[i].Error = err.Error()
+		p.Tasks[i].ErrorCode, p.Tasks[i].ErrorArgs = codedStartRefusal(err)
 		_, _ = s.movePlan(ctx, p, planStarted)
 		s.event(ctx, map[string]any{"type": "task_plan", "plan": p})
 	}
@@ -365,7 +370,7 @@ func (s *Service) retryTask(ctx context.Context, todoID string) (json.RawMessage
 	if !ok { // another assistant sharing the store reopened it first
 		return view, nil
 	}
-	p.Tasks[i].Error = ""
+	p.Tasks[i].Error, p.Tasks[i].ErrorCode, p.Tasks[i].ErrorArgs = "", "", nil
 	if _, err := s.movePlan(ctx, p, planStarted); err != nil {
 		s.logf("plan %s: %v", p.ID, err)
 	}
@@ -531,11 +536,12 @@ func (s *Service) startTaskAgent(ctx context.Context, t *PlanTask) (mid, sid str
 	var res struct {
 		Session proto.Session `json:"session"`
 	}
+	picked, _ := params["launcher"].(string)
 	if err := s.call(ctx, m.ID, DeviceSessionStart, params, &res); err != nil {
-		picked, _ := params["launcher"].(string)
 		s.recordStartFailure(ctx, m.ID, s.startLauncher(ctx, picked), err)
 		return "", "", err
 	}
+	s.recordStartSuccess(ctx, m.ID, s.startLauncher(ctx, picked))
 	return m.ID, res.Session.SessionID, nil
 }
 

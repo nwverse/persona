@@ -50,6 +50,9 @@ const (
 	EventInteractionRaised   = "interaction.raised"
 	EventUpdated             = "manager.updated" // Hello again: hub.json's assistant section or the machines changed
 	EventResync              = "manager.resync"  // {}: report the whole snapshot again
+
+	// EventStartEnded (StartEnded): how an app's start the node ran before answering went (POST /api/v1/sessions).
+	EventStartEnded = "session.start_ended"
 )
 
 // Error codes that cross the bus where a Go error would lose its kind (rpc.Error.Code).
