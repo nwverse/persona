@@ -182,8 +182,9 @@ func (s *Service) storedLaunchers(ctx context.Context) []storedLauncher {
 
 var errManagedLaunchersRead = errors.New("managed provider configuration unavailable")
 
-// readStoredLaunchers is authoritative for mutations and publication. A missing setting is empty;
-// storage, JSON and credential failures leave the existing configuration untouched.
+// readStoredLaunchers preserves every raw sealed record for mutation decisions. A missing setting is empty;
+// storage and JSON failures abort the operation. Decryption belongs to consumers that need credentials,
+// so an explicitly replaced or removed corrupt credential remains repairable.
 func (s *Service) readStoredLaunchers(ctx context.Context) (list []storedLauncher, err error) {
 	defer func() {
 		if err != nil {
@@ -196,11 +197,6 @@ func (s *Service) readStoredLaunchers(ctx context.Context) (list []storedLaunche
 	}
 	if _, err := st.Setting(ctx, launchersManagedKey, &list); err != nil {
 		return nil, err
-	}
-	for _, l := range list {
-		if _, err := s.openStoredLauncher(l); err != nil {
-			return nil, err
-		}
 	}
 	return list, nil
 }
@@ -1369,15 +1365,17 @@ func (s *Service) saveLauncher(ctx context.Context, in launcherInput, old *store
 	return l, nil
 }
 
-// storeManagedLaunchers commits and publishes the same checked snapshot, under models.mu.
-// In particular, a post-commit read failure cannot clear the nodes' provider configuration.
+// storeManagedLaunchers commits the complete raw snapshot under models.mu and publishes it when its
+// node credentials can be opened. An unrelated corrupt credential defers publication without discarding
+// readable records or preventing repair. A post-commit read failure cannot clear the nodes' providers.
 func (s *Service) storeManagedLaunchers(ctx context.Context, list []storedLauncher) error {
-	nodes, err := s.nodeLaunchers(list)
-	if err != nil {
-		return err
-	}
+	nodes, publicationErr := s.nodeLaunchers(list)
 	if err := s.putSetting(ctx, launchersManagedKey, list); err != nil {
 		return err
+	}
+	if publicationErr != nil {
+		s.logf("launchers: saved providers; node publication deferred: %v", publicationErr)
+		return nil
 	}
 	s.pushNodeLaunchers(ctx, "", nodes)
 	return nil

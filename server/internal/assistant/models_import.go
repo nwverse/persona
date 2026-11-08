@@ -199,15 +199,16 @@ func (s *Service) importGroups(ctx context.Context, machine string) ([]importGro
 	return mergeZshrcAliases(machine, aliases, known), nil
 }
 
-// knownProviders uses credentials already validated by readStoredLaunchers.
+// knownProviders opens only the keys needed to match aliases against every stored provider.
+// A key failure cannot be treated as an absent provider; unrelated sealed headers and environment stay opaque.
 func (s *Service) knownProviders(stored []storedLauncher) ([]knownProvider, error) {
 	known := make([]knownProvider, 0, len(stored))
 	for _, l := range stored {
-		m, err := s.openStoredLauncher(l)
+		key, err := s.openKey(l.KeySealed)
 		if err != nil {
-			return nil, err
+			return nil, i18n.Err("assistant-models.err_key_decrypt")
 		}
-		known = append(known, knownProvider{name: l.Name, baseURL: l.BaseURL, key: m.APIKey})
+		known = append(known, knownProvider{name: l.Name, baseURL: l.BaseURL, key: key})
 	}
 	return known, nil
 }

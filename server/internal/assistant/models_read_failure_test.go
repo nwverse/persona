@@ -287,46 +287,26 @@ func TestProviderReadFailureMissingSettingAllowsFirstCreation(t *testing.T) {
 	}
 }
 
-func TestProviderReadFailureCorruptRecordsAreNotEmpty(t *testing.T) {
-	for _, corrupt := range []string{"json", "key", "headers", "environment"} {
-		t.Run(corrupt, func(t *testing.T) {
-			s, f, st := providerReadFixture(t)
-			list := storedProviders(t, st.memStore)
-			switch corrupt {
-			case "json":
-				st.mu.Lock()
-				st.vals[launchersManagedKey] = []byte(`[{"name":"partial"},`)
-				st.mu.Unlock()
-			default:
-				switch corrupt {
-				case "key":
-					list[0].KeySealed = "invalid-synthetic-ciphertext"
-				case "headers":
-					list[1].HeadersSealed = "invalid-synthetic-ciphertext"
-				case "environment":
-					list[1].EnvSealed = "invalid-synthetic-ciphertext"
-				}
-				if err := st.memStore.PutSetting(context.Background(), launchersManagedKey, list); err != nil {
-					t.Fatal(err)
-				}
-			}
-			before, writes := providerSettings(st.memStore)
-			pushes := providerPushes(f)
-			for _, call := range []struct{ method, path, body string }{
-				{"POST", "/api/v1/launchers", providerCreateBody}, {"PUT", "/api/v1/launchers/old_api", providerEditBody},
-				{"DELETE", "/api/v1/launchers/shell_example", ""},
-				{"GET", "/api/v1/launchers/import?machine=server", ""}, {"POST", "/api/v1/launchers/import", providerImportBody},
-			} {
-				if r := request(s, call.method, call.path, call.body); r.Code != http.StatusInternalServerError {
-					t.Errorf("%s corrupt %s: %d", call.method, corrupt, r.Code)
-				}
-			}
-			s.pushManaged(context.Background(), "")
-			after, afterWrites := providerSettings(st.memStore)
-			if writes != afterWrites || !reflect.DeepEqual(before, after) || !reflect.DeepEqual(pushes, providerPushes(f)) {
-				t.Error("corrupt read mutated or published configuration")
-			}
-		})
+func TestProviderReadFailureInvalidJSONIsNotEmpty(t *testing.T) {
+	s, f, st := providerReadFixture(t)
+	st.mu.Lock()
+	st.vals[launchersManagedKey] = []byte(`[{"name":"partial"},`)
+	st.mu.Unlock()
+	before, writes := providerSettings(st.memStore)
+	pushes := providerPushes(f)
+	for _, call := range []struct{ method, path, body string }{
+		{"POST", "/api/v1/launchers", providerCreateBody}, {"PUT", "/api/v1/launchers/old_api", providerEditBody},
+		{"DELETE", "/api/v1/launchers/shell_example", ""},
+		{"GET", "/api/v1/launchers/import?machine=server", ""}, {"POST", "/api/v1/launchers/import", providerImportBody},
+	} {
+		if r := request(s, call.method, call.path, call.body); r.Code != http.StatusInternalServerError {
+			t.Errorf("%s invalid JSON: %d", call.method, r.Code)
+		}
+	}
+	s.pushManaged(context.Background(), "")
+	after, afterWrites := providerSettings(st.memStore)
+	if writes != afterWrites || !reflect.DeepEqual(before, after) || !reflect.DeepEqual(pushes, providerPushes(f)) {
+		t.Error("invalid JSON mutated or published configuration")
 	}
 }
 
