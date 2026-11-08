@@ -49,7 +49,7 @@ func (*historyProgram) History(_ context.Context, q connectorwire.HistoryQuery) 
 			fmt.Fprintln(f, "archive.history")
 			f.Close()
 		}
-		time.Sleep(3 * time.Second)
+		time.Sleep(3 * time.Second) // sleep-ok: the fake program stands for a source that answers after the caller's timeout
 		return connectorwire.HistoryPage{}, nil
 	case q.Chat == "gone":
 		return connectorwire.HistoryPage{Unreadable: true}, nil
@@ -161,7 +161,7 @@ func TestProgramHistoryTimeoutNotRetried(t *testing.T) {
 		t.Fatalf("a read past the call timeout: %v, want the timeout", err)
 	}
 	// Long enough for a retry to have reached the program, short of the program's own answer.
-	time.Sleep(time.Second)
+	time.Sleep(time.Second) // sleep-ok: proving that no retry arrives needs a quiet period; nothing can be polled for
 	raw, err := os.ReadFile(count)
 	if err != nil {
 		t.Fatal(err)
