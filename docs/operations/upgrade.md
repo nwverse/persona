@@ -175,17 +175,18 @@ expect '"online":true,"deploy":"child"'
 - `install --builtin --check` must print `ready`. It changes nothing. It fails on a build from before the split (`flag provided but not defined: -builtin`), and on Linux without a systemd user instance (`cannot install its service`); then follow [No service manager](#no-service-manager).
 - `hub.json` is unchanged: the same `token`, no `assistant.mode`.
 
-**Way back:** the update's own rollback is automatic. By hand, put `bin/` back and restart the hub's service. Replace each file by a rename, never by writing into it: the running hub's binary can't be written over (`Text file busy`).
+**Way back:** the update's own rollback is automatic. By hand, put `bin/` back and restart the hub's service. Replace each file by a rename, never by writing into it: the running hub's binary can't be written over (`Text file busy`). Leave the links in `bin/` as they are: setup keeps the binary's former name there as a link to `personad`, and it has to keep naming the restored file.
 
 ```sh
 R="$BK/restore"; mkdir -p "$R" && tar xzf "$BK/data.tgz" -C "$R" "$(basename "$DATA")/bin"
 for f in "$R/$(basename "$DATA")/bin/"*; do
+  [ -L "$f" ] && continue
   [ -f "$f" ] || continue
   cp -p "$f" "$DATA/bin/.restore" && mv -f "$DATA/bin/.restore" "$DATA/bin/${f##*/}"
 done
 ```
 
-When the update left `.prev` copies, `cp -p "$PD.prev" "$PD.new" && mv -f "$PD.new" "$PD"` does the same for `personad`.
+When the update left `.prev` copies, `cp -p "$PD.prev" "$PD.new" && mv -f "$PD.new" "$PD"` does the same for `personad`. If `$PD` is itself a link (some installs under the former name), do it on the file the link names.
 
 ### Step 2: switch with setup
 
@@ -248,7 +249,7 @@ Instead of setup, with the same result:
    **Check:** the hub no longer starts its child, and the roster says offline until the next step:
 
    ```sh
-   sleep 30; [ -z "$(managers)" ] && echo "no built-in manager runs"
+   sleep 30; if [ -z "$(managers)" ]; then echo "no built-in manager runs"; else echo "a built-in manager still runs:"; managers; fi
    expect '"online":false'
    ```
 
