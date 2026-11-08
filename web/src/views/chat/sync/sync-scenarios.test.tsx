@@ -55,6 +55,8 @@ const KNOWN: Record<string, { issue: string; because: RegExp }> = {
   "card_answered_on_other_device as b": CARD_STAYS_LIVE,
   "both_devices_answer_once as a": CARD_STAYS_LIVE,
   "both_devices_answer_once as b": CARD_STAYS_LIVE,
+  // Only while the answer is on its way (step 1); after the resumed snapshot the card stays answered (#1541).
+  card_answered_then_resumed_snapshot: { issue: "#1120", because: /^step 1 \(user\): (card ix1 is answerable again|open cards \["ix1"\], want \[\])$/ },
   catch_up_over_cap_asks_rest: { issue: "#1118", because: /after_seq":12\}|want \[.*Question 6/ },
   send_accepted_transcript_late: { issue: "#1119", because: /m1 shows 0 times|want \[.*Add a picnic on Saturday/ },
   send_unknown_then_transcript_has_it: { issue: "#1121", because: /m1 shows 2 times|failed \["Reserve two bikes."\], want \[\]/ },
