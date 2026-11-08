@@ -33,6 +33,9 @@ struct NewChatView: View {
     @State private var configuredModel = ""
     @State private var mode = ""   // "" = whatever the launcher uses
     @State private var effort = ""
+    /// Claude Code's ultracode for this start (#1307): off each time the sheet opens and never saved, unlike the effort
+    /// (no choice carries over, the server's rule); only an explicit on is sent.
+    @State private var ultracode = false
     @State private var prompt = ""
     @State private var tabName = ""
     @State private var launchers: [Launcher] = []
@@ -81,6 +84,22 @@ struct NewChatView: View {
         guard let efforts = modelChoice?.efforts else { return SessionModes.startEffortLevels }
         return SessionModes.startEffortLevels.filter { efforts.contains($0.id) }
     }
+
+    /// What the launcher that will run starts: its model list's agent, else the launcher's; Claude Code by default.
+    private var startAgent: String {
+        if let a = models?.agent, !a.isEmpty { return a }
+        guard let l = launchers.first(where: { $0.name == runLauncher }) else { return "claude" }
+        if l.baseURL == "(traex)" { return "traex" }
+        return l.agent.flatMap { $0.isEmpty ? nil : $0 } ?? "claude"
+    }
+
+    /// The ultracode row (#1307): Claude Code whose effort can be set here, on a hub that has the switch.
+    private var ultracodeShown: Bool {
+        !codex && !effortOptions.isEmpty && Ultracode.startOffered(features: model.features(ref.group), agent: startAgent)
+    }
+
+    /// Why this computer can't start with it (its Claude Code is known to be too old); nil when it can.
+    private var ultracodeBlocked: String? { ultracodeShown ? Ultracode.startBlocked(claudeVersion: machine?.claudeVersion) : nil }
 
     private var promptHint: String { codex ? String(localized: "What should Codex do? (Required: Codex starts a session only after the first message)")
                                        : String(localized: "What should Claude do? (Optional)") }
@@ -226,6 +245,9 @@ struct NewChatView: View {
                                 ForEach(effortOptions) { o in Label(o.title, systemImage: o.symbol).tag(o.id) }
                             } label: { Label { Text("Thinking Effort") } icon: { ThemedIcon(Theme.Icon.effort).foregroundStyle(Theme.accent) } }
                         }
+                        if ultracodeShown {
+                            UltracodeStartRow(on: $ultracode, blocked: ultracodeBlocked, group: ref.group)
+                        }
                     } header: { Text("Permissions & Thinking") } footer: {
                         Text(SessionModes.mode(mode)?.detail
                              ?? (effortOptions.isEmpty ? String(localized: "This model's thinking effort can't be changed. You can change the permission mode anytime in the chat.")
@@ -304,6 +326,8 @@ struct NewChatView: View {
                 .padding(.bottom, Theme.Space.s)
             }
             .task(id: machineID) { await loadMachine() }
+            // The Claude quota under ultracode's row (#1307).
+            .task(id: ultracodeShown) { if ultracodeShown { await UsageWindowsStore.shared.loadIfOld(model) } }
             .task(id: "\(machineID)|\(runLauncher)|\(machine?.online == true)|\(defaultsFor)") { await loadModels() }
             .onChange(of: effortOptions.map(\.id)) { _, ids in
                 if !effort.isEmpty, !ids.contains(effort) { effort = "" } // the picked model does not take it
@@ -567,7 +591,8 @@ struct NewChatView: View {
             let s = try await api.start(.init(machineID: ref.id, cwd: cwd, launcher: launcher, prompt: nil,
                                               workspaceID: preset?.workspaceID, permissionMode: mode.isEmpty ? nil : mode,
                                               effort: effort.isEmpty ? nil : effort, model: modelChoice?.sent, tabName: name.isEmpty ? nil : name,
-                                              async: true, nameHint: nameHint ?? (p.isEmpty ? nil : p), todoID: todoID))
+                                              async: true, nameHint: nameHint ?? (p.isEmpty ? nil : p), todoID: todoID,
+                                              ultracode: sendsUltracode ? true : nil))
             if !unifiedModels {
                 UserDefaults.standard.set(launcher, forKey: "launcher.\(machineID)")
                 UserDefaults.standard.set(effort, forKey: "effort.\(machineID)")
@@ -579,10 +604,20 @@ struct NewChatView: View {
             if !outgoing.isEmpty { model.sendNow(s.key, text: outgoing) }
             onStarted(s)
         } catch {
-            self.error = error.shown
+            if sendsUltracode, Ultracode.refused(error) {
+                // The hub won't start it with ultracode here (an old node, a CLI or engine that can't take it): asking
+                // again would get the same answer, so the switch goes off and Start Chat starts it without.
+                ultracode = false
+                self.error = String(localized: "Couldn't start with ultracode: \(Ultracode.errorText(error)). Retry starts without it")
+            } else {
+                self.error = error.shown
+            }
             Haptics.error()
         }
     }
+
+    /// The start asks for ultracode: offered, not blocked, switched on.
+    private var sendsUltracode: Bool { ultracodeShown && ultracodeBlocked == nil && ultracode }
 }
 
 struct LauncherPicker: View {

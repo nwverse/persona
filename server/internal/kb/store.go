@@ -11,12 +11,12 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
-	"regexp"
 	"sort"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/prompts"
 )
 
@@ -214,7 +214,7 @@ func NewStore(dir string) (*Store, error) {
 	return s, nil
 }
 
-var unsafeID = regexp.MustCompile(`[^\p{L}\p{N}._@+-]+`)
+var unsafeID = lazyre.New(`[^\p{L}\p{N}._@+-]+`)
 
 // SafeID turns a source id into a directory name.
 func SafeID(s string) string {
