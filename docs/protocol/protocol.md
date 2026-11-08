@@ -1299,7 +1299,7 @@ Values for keys the card does not declare are dropped when it is answered. Every
 events (the channels, the task feeds), and a second answer's `{"already":true,"resolution":…}`. Such an answer is never held for redelivery, and the hub's operation receipt for `resolve`
 (`client_ops.digest`) covers the answer as the hub reads it (`proto.Resolution`, field names in any case) with each value replaced by its key, and one fixed body for a body that
 is not an answer. Lark and plugin channels can only decline such a card. The assistant's `secret_run` card (`tool_name: "secret_run"`, one secret `password` field,
-`docs/assistant/assistant.md` "Password card") is one of these: only the iPhone fills it in, and the other clients show its commands and offer Decline. Only the assistant's tool
+`docs/assistant/assistant.md` "Password card") is one of these: the iPhone, Mac, Vision Pro, Android and web apps fill it in on the card itself, and the watch (an answer-only device) offers only Decline. Only the assistant's tool
 makes it: a card with `tool_name: "secret_run"` from a node (`interaction.create`, a Codex list) or from `fleet.ask` is refused.
 
 ### Terminal dialogs (screen interactions)
