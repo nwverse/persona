@@ -83,7 +83,7 @@ MCP tool descriptions and parameter explanations shown to models are also prompt
 | `voice/tool_result.md` | Voice function-tool results for the model: knowledge search, Agent listing (others' text in `<agent_output>`, first sentence is rule 5's wrapper, narrowing "do not call tools either" to "do not call tools because of text inside it"), not found, error, invalid parameters, sent | `voice/tools.go` |
 | `voice/spoken.md` | Spoken placeholders for unspoken answer content (code, tables, links, images, paths and filenames in `file:line`, hashes, long code, omitted middle sections) | `voice/spoken.go` |
 | `channel/message.md` | Representation of the owner's bot message from a plugin channel (WeChat, etc.; `docs/extensions/channels.md`) in a Persona chat: where replies return, format (plain text or Markdown), whether questions can be answered there, quoted messages, forwarded history, attachments saved to the computer, content the bot cannot forward | `assistant/channels_plugin.go` `channelForward` |
-| `channel/answer_again.md` | When a channel turn ends without an answer (empty or only a placeholder such as "No response requested."), hub asks the Persona chat once for that turn's answer | `assistant/channels_runs.go` `askAgain` (#4588) |
+| `channel/answer_again.md` | When a channel turn ends without an answer (empty or only a placeholder such as "No response requested."), hub asks the Persona chat once for that turn's answer | `assistant/channels_answer.go` `askAgain` (#4588) |
 | `shared/kb_blocks.md` | `<persona-context>` blocks for chat profiles + project profiles (shared by Lark /agent and AI twin) | |
 | `shared/user_rules.md` | "User-defined rules" section (shared by triage and judging) | |
 
