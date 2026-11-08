@@ -60,6 +60,8 @@ type WorkCI struct {
 	Number     int       `json:"number"`
 	FallbackAt time.Time `json:"fallback_at"`
 	Polls      int       `json:"polls,omitempty"`
+	Observed   string    `json:"observed,omitempty"`
+	ObservedAt time.Time `json:"observed_at,omitzero"`
 	Message    string    `json:"message,omitempty"`
 }
 

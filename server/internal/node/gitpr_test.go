@@ -18,7 +18,7 @@ func fakePRGh(t *testing.T, auth string) (calls func() []string) {
 	dir := t.TempDir()
 	log := filepath.Join(dir, "calls")
 	view := `{"number":42,"url":"https://github.com/acme/web/pull/42","title":"Fix login","state":"OPEN","isDraft":false,
-"baseRefName":"main","headRefName":"fix/login","mergeable":"MERGEABLE","mergeStateStatus":"BLOCKED","reviewDecision":"CHANGES_REQUESTED",
+"baseRefName":"main","headRefName":"fix/login","headRefOid":"0123456789abcdef0123456789abcdef01234567","mergeable":"MERGEABLE","mergeStateStatus":"BLOCKED","reviewDecision":"CHANGES_REQUESTED",
 "autoMergeRequest":null,"statusCheckRollup":[
  {"name":"test","status":"COMPLETED","conclusion":"FAILURE","detailsUrl":"https://ci.example.com/1"},
  {"name":"lint","status":"COMPLETED","conclusion":"SUCCESS"},

@@ -3,6 +3,7 @@ package assistant
 import (
 	"context"
 	"crypto/sha256"
+	"errors"
 	"fmt"
 	"html"
 	"regexp"
@@ -15,6 +16,7 @@ import (
 	"github.com/nwverse/persona/server/internal/db"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/proto"
+	"github.com/nwverse/persona/server/internal/rpc"
 )
 
 var ciPRURL = regexp.MustCompile(`https://github\.com/([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)/pull/([1-9][0-9]*)\b`)
@@ -101,9 +103,10 @@ func (s *Service) startCIPoll(ctx context.Context, key [2]string, now time.Time)
 }
 
 type ciResult struct {
-	pending  bool
-	failures []string
-	count    int
+	pending     bool
+	failures    []string
+	count       int
+	fingerprint string
 }
 
 // ciChecks first asks the active, authorized connector. The current-branch
@@ -120,6 +123,7 @@ func (s *Service) ciChecks(ctx context.Context, e db.SessionWork, c proto.Sessio
 	checks, hasChecks := s.ext.(interface {
 		PRChecks(context.Context, string, int) (github.PRCheckSnapshot, time.Time, bool, error)
 	})
+	retryable := false
 	fromConnector := func(repo string) (ciResult, time.Time, bool) {
 		if !hasChecks || repo == "" {
 			return ciResult{}, time.Time{}, false
@@ -128,10 +132,17 @@ func (s *Service) ciChecks(ctx context.Context, e db.SessionWork, c proto.Sessio
 		if available && !reset.IsZero() {
 			return ciResult{}, reset, true
 		}
-		if !available || err != nil {
+		if err != nil {
+			text := strings.ToLower(err.Error())
+			if !strings.Contains(text, " 401 ") && !strings.Contains(text, " 403 ") && !strings.Contains(text, " 404 ") {
+				retryable = true
+			}
 			return ciResult{}, time.Time{}, false
 		}
-		return ciResult{result.Pending, result.Failures, result.Count}, time.Time{}, true
+		if !available {
+			return ciResult{}, time.Time{}, false
+		}
+		return ciResult{pending: result.Pending, failures: result.Failures, count: result.Count, fingerprint: result.Fingerprint}, time.Time{}, true
 	}
 	if result, reset, ok := fromConnector(ci.Repo); ok {
 		return result, reset, true
@@ -140,21 +151,35 @@ func (s *Service) ciChecks(ctx context.Context, e db.SessionWork, c proto.Sessio
 		PR *struct {
 			Number         int                            `json:"number"`
 			URL            string                         `json:"url"`
+			HeadOID        string                         `json:"head_oid"`
 			ChecksComplete bool                           `json:"checks_complete"`
 			Checks         []struct{ Name, State string } `json:"checks"`
 		} `json:"pr"`
 	}
 	if err := s.call(ctx, e.MachineID, "git.pr", map[string]any{"cwd": c.Cwd}, &result); err != nil {
-		if text := strings.ToLower(err.Error()); strings.Contains(text, "rate limit") || strings.Contains(text, "429") {
+		text := strings.ToLower(err.Error())
+		if strings.Contains(text, "rate limit") || strings.Contains(text, "429") {
 			return ciResult{}, time.Now().Add(time.Hour), true
+		}
+		var re *rpc.Error
+		unavailable := errors.As(err, &re) && (re.Code == proto.CodeNoGh || re.Code == proto.CodeNotSignedIn || re.Code == "method_not_found")
+		unavailable = unavailable || strings.Contains(text, "unknown method") || strings.Contains(text, "method_not_found") || strings.Contains(text, "unknown json field")
+		if retryable || !unavailable {
+			return ciResult{pending: true, count: 1}, time.Time{}, true
 		}
 		return ciResult{}, time.Time{}, false
 	}
 	if result.PR == nil || result.PR.Number != ci.Number {
+		if retryable {
+			return ciResult{pending: true, count: 1}, time.Time{}, true
+		}
 		return ciResult{}, time.Time{}, false
 	}
 	match := ciPRURL.FindStringSubmatch(result.PR.URL)
 	if len(match) != 3 || ci.Repo != "" && !strings.EqualFold(ci.Repo, match[1]) {
+		if retryable {
+			return ciResult{pending: true, count: 1}, time.Time{}, true
+		}
 		return ciResult{}, time.Time{}, false
 	}
 	if ci.Repo == "" {
@@ -162,11 +187,16 @@ func (s *Service) ciChecks(ctx context.Context, e db.SessionWork, c proto.Sessio
 			return result, reset, true
 		}
 	}
-	if !result.PR.ChecksComplete || len(result.PR.Checks) >= 100 {
+	if !result.PR.ChecksComplete || result.PR.HeadOID == "" || len(result.PR.Checks) >= 100 {
+		if retryable {
+			return ciResult{pending: true, count: 1}, time.Time{}, true
+		}
 		return ciResult{}, time.Time{}, false
 	}
 	out := ciResult{count: len(result.PR.Checks)}
+	var identities []string
 	for _, check := range result.PR.Checks {
+		identities = append(identities, fmt.Sprintf("%q:%q", check.Name, check.State))
 		if check.Name == "" {
 			out.pending = true
 			continue
@@ -180,6 +210,9 @@ func (s *Service) ciChecks(ctx context.Context, e db.SessionWork, c proto.Sessio
 		}
 	}
 	sort.Strings(out.failures)
+	sort.Strings(identities)
+	fingerprint := sha256.Sum256([]byte(result.PR.HeadOID + "\x00" + strings.Join(identities, "\x00")))
+	out.fingerprint = fmt.Sprintf("%x", fingerprint)
 	return out, time.Time{}, true
 }
 
@@ -213,6 +246,10 @@ func (s *Service) pollCI(ctx context.Context, e db.SessionWork, c proto.Session,
 		s.replaceCI(e, current)
 		return "", true
 	}
+	_, guest, err := s.guestOf(ctx, e.MachineID, e.SessionID)
+	if err != nil || guest || s.isWorkMachine(e.MachineID) {
+		available = false
+	}
 	if !available {
 		current.Work.CI = nil
 		at := ci.FallbackAt
@@ -232,7 +269,8 @@ func (s *Service) pollCI(ctx context.Context, e db.SessionWork, c proto.Session,
 		s.replaceCI(e, current)
 		return "", true
 	}
-	if !reset.IsZero() || result.pending || result.count == 0 {
+	if !reset.IsZero() || result.pending || result.count == 0 || result.fingerprint == "" {
+		ci.Observed, ci.ObservedAt = "", time.Time{}
 		ci.Polls++
 		current.Work.CI = &ci
 		if ci.Polls >= 240 || now.After(current.TurnAt.Add(24*time.Hour)) {
@@ -250,6 +288,18 @@ func (s *Service) pollCI(ctx context.Context, e db.SessionWork, c proto.Session,
 			}
 			current.WakeAt, current.Work.WakeAt = &at, &at
 		}
+		s.replaceCI(e, current)
+		return "", true
+	}
+	// GitHub can register workflows after a fast check has already finished.
+	// Require the same complete set on the same head after an observation period.
+	if ci.Observed != result.fingerprint || ci.ObservedAt.IsZero() || now.Before(ci.ObservedAt.Add(2*time.Minute)) {
+		if ci.Observed != result.fingerprint || ci.ObservedAt.IsZero() {
+			ci.Observed, ci.ObservedAt = result.fingerprint, now.UTC()
+		}
+		at := ci.ObservedAt.Add(2 * time.Minute).UTC()
+		current.Work.CI = &ci
+		current.WakeAt, current.Work.WakeAt = &at, &at
 		s.replaceCI(e, current)
 		return "", true
 	}
@@ -275,22 +325,28 @@ func ciCheckNames(names []string) string {
 	return strings.Join(out, ", ")
 }
 
+// sameCIWatch verifies both the turn and the specific scheduled watch.
+func sameCIWatch(a, b db.SessionWork) bool {
+	return a.TurnAt.Equal(b.TurnAt) && a.WakeAt != nil && b.WakeAt != nil && a.WakeAt.Equal(*b.WakeAt) &&
+		a.Work.CI != nil && b.Work.CI != nil && *a.Work.CI == *b.Work.CI
+}
+
 // replaceCI applies a poll only while its original watch is still current.
 // A user action or a new turn must win even if it arrived during the network call.
-func (s *Service) replaceCI(before, after db.SessionWork) {
+func (s *Service) replaceCI(before, after db.SessionWork) bool {
 	key := [2]string{before.MachineID, before.SessionID}
 	s.work.mu.Lock()
 	current := s.work.entries[key]
-	if current == nil || current.WakeAt == nil || before.WakeAt == nil || !current.WakeAt.Equal(*before.WakeAt) ||
-		!current.TurnAt.Equal(before.TurnAt) || current.Work.CI == nil || before.Work.CI == nil || *current.Work.CI != *before.Work.CI {
+	if current == nil || !sameCIWatch(before, *current) {
 		s.work.mu.Unlock()
-		return
+		return false
 	}
 	after.UpdatedAt = time.Now().UTC()
 	*current = after
 	s.work.mu.Unlock()
 	s.saveWork(after)
 	s.publishSoon()
+	return true
 }
 
 // prepareCI persists the exact wake before any send. A restart can retry it
@@ -301,7 +357,7 @@ func (s *Service) prepareCI(ctx context.Context, e db.SessionWork, text string) 
 	defer unlock()
 	s.work.mu.Lock()
 	current := s.work.entries[key]
-	if current == nil || current.WakeAt == nil || current.Work.CI == nil || !current.TurnAt.Equal(e.TurnAt) || current.Work.CI.Message != "" || e.Work.CI == nil || *current.Work.CI != *e.Work.CI {
+	if current == nil || !sameCIWatch(e, *current) || current.Work.CI.Message != "" {
 		s.work.mu.Unlock()
 		return false
 	}
@@ -323,7 +379,7 @@ func (s *Service) prepareCI(ctx context.Context, e db.SessionWork, text string) 
 	}
 	s.work.mu.Lock()
 	current = s.work.entries[key]
-	if current == nil || current.WakeAt == nil || current.Work.CI == nil || !current.TurnAt.Equal(saved.TurnAt) || current.Work.CI.Message != "" || e.Work.CI == nil || *current.Work.CI != *e.Work.CI {
+	if current == nil || !sameCIWatch(e, *current) || current.Work.CI.Message != "" {
 		s.work.mu.Unlock()
 		return false
 	}
@@ -342,6 +398,10 @@ func (s *Service) deliverCI(ctx context.Context, e db.SessionWork, now time.Time
 	if _, why := s.workGuard(s.newWorkView(ctx), e, false); why != "" || !s.triageSwitches(ctx).Wake {
 		return
 	}
+	_, guest, err := s.guestOf(ctx, e.MachineID, e.SessionID)
+	if err != nil || guest || s.isWorkMachine(e.MachineID) {
+		return
+	}
 	sum := sha256.Sum256([]byte(e.MachineID + "\x00" + e.SessionID + "\x00" + e.TurnAt.UTC().Format(time.RFC3339Nano)))
 	id := fmt.Sprintf("ci-%x", sum)
 	key := [2]string{e.MachineID, e.SessionID}
@@ -354,7 +414,7 @@ func (s *Service) deliverCI(ctx context.Context, e db.SessionWork, now time.Time
 	s.work.sent[key] = time.Now()
 	s.work.mu.Unlock()
 	sendCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
-	err := s.call(sendCtx, e.MachineID, DeviceSessionSendOnce, map[string]any{"session_id": e.SessionID, "text": e.Work.CI.Message, "client_msg_id": id}, nil)
+	err = s.call(sendCtx, e.MachineID, DeviceSessionSendOnce, map[string]any{"session_id": e.SessionID, "text": e.Work.CI.Message, "client_msg_id": id}, nil)
 	cancel()
 	s.work.mu.Lock()
 	current = s.work.entries[key]

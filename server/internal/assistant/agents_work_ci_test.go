@@ -3,6 +3,7 @@ package assistant
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -31,7 +32,7 @@ func TestCIWatchWaitsForEveryCheckAndSendsOnce(t *testing.T) {
 		if pending {
 			checks[1]["state"] = "pending"
 		}
-		return map[string]any{"pr": map[string]any{"number": 12, "url": "https://github.com/example/repo/pull/12", "checks_complete": true, "checks": checks}}, nil
+		return map[string]any{"pr": map[string]any{"number": 12, "url": "https://github.com/example/repo/pull/12", "head_oid": "0123456789abcdef0123456789abcdef01234567", "checks_complete": true, "checks": checks}}, nil
 	})
 	var sends []map[string]any
 	f.answerNode(DeviceSessionSendOnce, func(_ string, raw json.RawMessage) (any, error) {
@@ -46,10 +47,14 @@ func TestCIWatchWaitsForEveryCheckAndSendsOnce(t *testing.T) {
 	}
 	pending = false
 	s.workWake(ctx, s.newWorkView(ctx), [2]string{"box", "ci"}, turnEnd.Add(2*time.Minute))
+	if len(sends) != 0 {
+		t.Fatal("woke before the completed check set was stable")
+	}
+	s.workWake(ctx, s.newWorkView(ctx), [2]string{"box", "ci"}, turnEnd.Add(4*time.Minute))
 	if len(sends) != 1 || !strings.Contains(sends[0]["text"].(string), "lint") || sends[0]["client_msg_id"] == "" {
 		t.Fatalf("sends %v", sends)
 	}
-	s.workWake(ctx, s.newWorkView(ctx), [2]string{"box", "ci"}, turnEnd.Add(3*time.Minute))
+	s.workWake(ctx, s.newWorkView(ctx), [2]string{"box", "ci"}, turnEnd.Add(5*time.Minute))
 	if len(sends) != 1 {
 		t.Fatalf("duplicate sends %v", sends)
 	}
@@ -213,7 +218,7 @@ func TestCIEmptyChecksReturnToScheduledWake(t *testing.T) {
 	startCIWatch(c, &e, turnEnd, "", "")
 	s.putWork(ctx, e)
 	f.answerNode("git.pr", func(_ string, _ json.RawMessage) (any, error) {
-		return map[string]any{"pr": map[string]any{"number": 12, "url": "https://github.com/example/repo/pull/12", "checks_complete": true, "checks": []any{}}}, nil
+		return map[string]any{"pr": map[string]any{"number": 12, "url": "https://github.com/example/repo/pull/12", "head_oid": "0123456789abcdef0123456789abcdef01234567", "checks_complete": true, "checks": []any{}}}, nil
 	})
 	s.workWake(ctx, s.newWorkView(ctx), [2]string{"box", "ci"}, turnEnd.Add(time.Minute))
 	if entryOf(t, s, "ci").Work.CI == nil {
@@ -358,5 +363,297 @@ func TestCIWatchPullRequestReferences(t *testing.T) {
 				t.Fatalf("target %+v", e.Work.CI)
 			}
 		})
+	}
+}
+
+// ciSwapHub can move the session exactly while the manager is outside its lock.
+type ciSwapHub struct {
+	*fakeHub
+	onHello  func()
+	onDevice func(DeviceCall)
+}
+
+func (h *ciSwapHub) Hello(ctx context.Context) (Hello, error) {
+	if h.onHello != nil {
+		h.onHello()
+	}
+	return h.fakeHub.Hello(ctx)
+}
+func (h *ciSwapHub) DeviceCall(ctx context.Context, p DeviceCall) (json.RawMessage, error) {
+	if h.onDevice != nil {
+		h.onDevice(p)
+	}
+	return h.fakeHub.DeviceCall(ctx, p)
+}
+
+func TestCIWatchOldResultCannotWakeNewTurn(t *testing.T) {
+	ctx := context.Background()
+	s, f := workService(t)
+	c := stopped("ci", "PR #12 CI")
+	f.sessions["box"] = []proto.Session{c}
+	at := turnEnd.Add(3 * time.Minute)
+	e := db.SessionWork{MachineID: "box", SessionID: "ci", TurnAt: turnEnd, WakeAt: &at, Work: proto.WorkState{Phase: proto.WorkBlocked, On: proto.WaitExternal, Wait: "CI", WakeAt: &at, CI: &proto.WorkCI{Number: 12, Repo: "example/repo", Observed: "old", ObservedAt: turnEnd}}}
+	s.putWork(ctx, e)
+	armed, hellos, swapped := false, 0, false
+	h := &ciSwapHub{fakeHub: f}
+	h.onHello = func() {
+		if !armed || swapped {
+			return
+		}
+		hellos++
+		if hellos != 2 {
+			return
+		}
+		swapped = true
+		later := turnEnd.Add(time.Minute)
+		laterWake := later.Add(5 * time.Minute)
+		next := e
+		next.TurnAt = later
+		next.WakeAt = &laterWake
+		next.Work.WakeAt = &laterWake
+		next.Work.CI = &proto.WorkCI{Number: 13, Repo: "example/repo"}
+		s.work.mu.Lock()
+		s.work.entries[[2]string{"box", "ci"}] = &next
+		s.work.mu.Unlock()
+		c.UpdatedAt = later
+		f.mu.Lock()
+		f.sessions["box"] = []proto.Session{c}
+		f.mu.Unlock()
+	}
+	s.hub = h
+	s.ext = fakeCIExtensions{call: func(context.Context, string, int) (github.PRCheckSnapshot, time.Time, bool, error) {
+		armed = true
+		return github.PRCheckSnapshot{Count: 1, Fingerprint: "old", Failures: []string{"old failure"}}, time.Time{}, true, nil
+	}}
+	sends := 0
+	f.answerNode(DeviceSessionSendOnce, func(_ string, _ json.RawMessage) (any, error) { sends++; return map[string]any{}, nil })
+	s.workWake(ctx, s.newWorkView(ctx), [2]string{"box", "ci"}, at)
+	got := entryOf(t, s, "ci")
+	if !swapped || sends != 0 || got.Work.CI == nil || got.Work.CI.Number != 13 || got.Work.CI.Message != "" {
+		t.Fatalf("swapped %v sends %d state %+v", swapped, sends, got)
+	}
+}
+
+func TestCIWatchGuardCannotOverwriteNewTurn(t *testing.T) {
+	ctx := context.Background()
+	s, f := workService(t)
+	c := stopped("ci", "PR #12 CI")
+	f.sessions["box"] = []proto.Session{c}
+	at := turnEnd.Add(time.Minute)
+	e := db.SessionWork{MachineID: "box", SessionID: "ci", TurnAt: turnEnd, WakeAt: &at, Work: proto.WorkState{Phase: proto.WorkBlocked, On: proto.WaitExternal, Wait: "CI", WakeAt: &at, CI: &proto.WorkCI{Number: 12}}}
+	s.putWork(ctx, e)
+	f.devices = []Device{{ID: "box", Online: false, Reachable: false}}
+	swapped := false
+	h := &ciSwapHub{fakeHub: f}
+	h.onDevice = func(p DeviceCall) {
+		if swapped || p.Method != DeviceDevicesList {
+			return
+		}
+		swapped = true
+		later := turnEnd.Add(time.Minute)
+		wake := later.Add(time.Minute)
+		next := e
+		next.TurnAt = later
+		next.WakeAt = &wake
+		next.Work.WakeAt = &wake
+		next.Work.CI = &proto.WorkCI{Number: 13}
+		s.work.mu.Lock()
+		s.work.entries[[2]string{"box", "ci"}] = &next
+		s.work.mu.Unlock()
+	}
+	s.hub = h
+	s.workWake(ctx, s.newWorkView(ctx), [2]string{"box", "ci"}, at)
+	got := entryOf(t, s, "ci")
+	if !swapped || got.Work.CI == nil || got.Work.CI.Number != 13 || !got.TurnAt.Equal(turnEnd.Add(time.Minute)) {
+		t.Fatalf("new turn overwritten: %+v", got)
+	}
+}
+
+func TestCIWatchTrustChangesDuringRead(t *testing.T) {
+	for _, kind := range []string{"work", "guest"} {
+		t.Run(kind, func(t *testing.T) {
+			ctx := context.Background()
+			s, f := workService(t)
+			c := stopped("ci", "PR #12 CI")
+			f.sessions["box"] = []proto.Session{c}
+			at := turnEnd.Add(3 * time.Minute)
+			e := db.SessionWork{MachineID: "box", SessionID: "ci", TurnAt: turnEnd, WakeAt: &at, Work: proto.WorkState{Phase: proto.WorkBlocked, On: proto.WaitExternal, Wait: "CI", WakeAt: &at, CI: &proto.WorkCI{Number: 12, Repo: "example/repo", Observed: "hash", ObservedAt: turnEnd}}}
+			s.putWork(ctx, e)
+			s.ext = fakeCIExtensions{call: func(context.Context, string, int) (github.PRCheckSnapshot, time.Time, bool, error) {
+				if kind == "work" {
+					f.mu.Lock()
+					f.hello.Assistant.WorkMachines = []string{"box"}
+					f.mu.Unlock()
+				} else if err := s.guestSet(ctx, "box", "ci", []string{"other"}); err != nil {
+					t.Fatal(err)
+				}
+				return github.PRCheckSnapshot{Count: 1, Fingerprint: "hash", Failures: []string{"sensitive"}}, time.Time{}, true, nil
+			}}
+			sends := 0
+			f.answerNode(DeviceSessionSendOnce, func(_ string, _ json.RawMessage) (any, error) { sends++; return map[string]any{}, nil })
+			s.workWake(ctx, s.newWorkView(ctx), [2]string{"box", "ci"}, at)
+			got := entryOf(t, s, "ci")
+			if sends != 0 || got.Work.CI != nil {
+				t.Fatalf("trust change sent %d, state %+v", sends, got)
+			}
+		})
+	}
+}
+
+func TestCIOutboxRechecksTrustBeforeSend(t *testing.T) {
+	for _, kind := range []string{"work", "guest"} {
+		t.Run(kind, func(t *testing.T) {
+			ctx := context.Background()
+			s, f := workService(t)
+			c := stopped("ci", "PR #12 CI")
+			f.sessions["box"] = []proto.Session{c}
+			at := turnEnd.Add(time.Minute)
+			e := db.SessionWork{MachineID: "box", SessionID: "ci", TurnAt: turnEnd, WakeAt: &at, Work: proto.WorkState{Phase: proto.WorkBlocked, On: proto.WaitExternal, Wait: "CI", WakeAt: &at, CI: &proto.WorkCI{Number: 12, Message: "sensitive"}}}
+			s.putWork(ctx, e)
+			if kind == "work" {
+				f.hello.Assistant.WorkMachines = []string{"box"}
+			} else if err := s.guestSet(ctx, "box", "ci", []string{"other"}); err != nil {
+				t.Fatal(err)
+			}
+			sends := 0
+			f.answerNode(DeviceSessionSendOnce, func(_ string, _ json.RawMessage) (any, error) { sends++; return map[string]any{}, nil })
+			s.deliverCI(ctx, e, at)
+			if sends != 0 {
+				t.Fatal("sent connector data after trust changed")
+			}
+		})
+	}
+}
+
+func TestCIWatchWaitsForLateChecks(t *testing.T) {
+	ctx := context.Background()
+	s, f := workService(t)
+	c := stopped("ci", "PR #12 CI")
+	f.sessions["box"] = []proto.Session{c}
+	at := turnEnd.Add(10 * time.Minute)
+	e := db.SessionWork{MachineID: "box", SessionID: "ci", TurnAt: turnEnd, WakeAt: &at, Work: proto.WorkState{Phase: proto.WorkBlocked, On: proto.WaitExternal, Wait: "CI", WakeAt: &at}}
+	startCIWatch(c, &e, turnEnd, "", "")
+	s.putWork(ctx, e)
+	phase := 0
+	f.answerNode("git.pr", func(_ string, _ json.RawMessage) (any, error) {
+		checks := []map[string]any{{"name": "fast", "state": "pass"}}
+		if phase > 0 {
+			state := "pending"
+			if phase > 1 {
+				state = "fail"
+			}
+			checks = append(checks, map[string]any{"name": "late", "state": state})
+		}
+		return map[string]any{"pr": map[string]any{"number": 12, "url": "https://github.com/example/repo/pull/12", "head_oid": "0123456789abcdef0123456789abcdef01234567", "checks_complete": true, "checks": checks}}, nil
+	})
+	sends := 0
+	f.answerNode(DeviceSessionSendOnce, func(_ string, _ json.RawMessage) (any, error) { sends++; return map[string]any{}, nil })
+	s.workWake(ctx, s.newWorkView(ctx), [2]string{"box", "ci"}, turnEnd.Add(time.Minute))
+	phase = 1
+	s.workWake(ctx, s.newWorkView(ctx), [2]string{"box", "ci"}, turnEnd.Add(3*time.Minute))
+	if sends != 0 {
+		t.Fatal("woke before a late check finished")
+	}
+	phase = 2
+	s.workWake(ctx, s.newWorkView(ctx), [2]string{"box", "ci"}, turnEnd.Add(4*time.Minute))
+	if sends != 0 {
+		t.Fatal("woke before changed checks were stable")
+	}
+	s.workWake(ctx, s.newWorkView(ctx), [2]string{"box", "ci"}, turnEnd.Add(6*time.Minute))
+	if sends != 1 {
+		t.Fatalf("got %d sends", sends)
+	}
+}
+
+func TestCIWatchRetriesTransientConnectorFailure(t *testing.T) {
+	ctx := context.Background()
+	s, f := workService(t)
+	c := stopped("ci", "CI https://github.com/example/repo/pull/12")
+	f.sessions["box"] = []proto.Session{c}
+	at := turnEnd.Add(10 * time.Minute)
+	e := db.SessionWork{MachineID: "box", SessionID: "ci", TurnAt: turnEnd, WakeAt: &at, Work: proto.WorkState{Phase: proto.WorkBlocked, On: proto.WaitExternal, Wait: "CI", WakeAt: &at}}
+	startCIWatch(c, &e, turnEnd, "", "")
+	s.putWork(ctx, e)
+	calls := 0
+	s.ext = fakeCIExtensions{call: func(context.Context, string, int) (github.PRCheckSnapshot, time.Time, bool, error) {
+		calls++
+		if calls == 1 {
+			return github.PRCheckSnapshot{}, time.Time{}, true, errors.New("GitHub GET /checks: 503 temporarily unavailable")
+		}
+		return github.PRCheckSnapshot{Count: 1, Fingerprint: "ready"}, time.Time{}, true, nil
+	}}
+	f.answerNode("git.pr", func(_ string, _ json.RawMessage) (any, error) { return nil, errors.New("unknown method git.pr") })
+	sends := 0
+	f.answerNode(DeviceSessionSendOnce, func(_ string, _ json.RawMessage) (any, error) { sends++; return map[string]any{}, nil })
+	s.workWake(ctx, s.newWorkView(ctx), [2]string{"box", "ci"}, turnEnd.Add(time.Minute))
+	if entryOf(t, s, "ci").Work.CI == nil {
+		t.Fatal("transient error stopped watch")
+	}
+	s.workWake(ctx, s.newWorkView(ctx), [2]string{"box", "ci"}, turnEnd.Add(2*time.Minute))
+	s.workWake(ctx, s.newWorkView(ctx), [2]string{"box", "ci"}, turnEnd.Add(4*time.Minute))
+	if calls != 3 || sends != 1 {
+		t.Fatalf("calls %d sends %d", calls, sends)
+	}
+}
+
+func TestCIWatchDisabledGuardCannotOverwriteNewTurn(t *testing.T) {
+	ctx := context.Background()
+	s, f := workService(t)
+	c := stopped("ci", "PR #12 CI")
+	f.sessions["box"] = []proto.Session{c}
+	at := turnEnd.Add(time.Minute)
+	e := db.SessionWork{MachineID: "box", SessionID: "ci", TurnAt: turnEnd, WakeAt: &at, Work: proto.WorkState{Phase: proto.WorkBlocked, On: proto.WaitExternal, Wait: "CI", WakeAt: &at, CI: &proto.WorkCI{Number: 12}}}
+	s.putWork(ctx, e)
+	swapped := false
+	h := &ciSwapHub{fakeHub: f}
+	h.onDevice = func(p DeviceCall) {
+		if swapped || p.Method != DeviceSessionsList {
+			return
+		}
+		swapped = true
+		later := turnEnd.Add(time.Minute)
+		wake := later.Add(time.Minute)
+		next := e
+		next.TurnAt = later
+		next.WakeAt = &wake
+		next.Work.WakeAt = &wake
+		next.Work.CI = &proto.WorkCI{Number: 13}
+		s.work.mu.Lock()
+		s.work.entries[[2]string{"box", "ci"}] = &next
+		s.work.switches.Wake = false
+		s.work.mu.Unlock()
+	}
+	s.hub = h
+	s.workWake(ctx, s.newWorkView(ctx), [2]string{"box", "ci"}, at)
+	got := entryOf(t, s, "ci")
+	if !swapped || got.Work.CI == nil || got.Work.CI.Number != 13 || !got.TurnAt.Equal(turnEnd.Add(time.Minute)) {
+		t.Fatalf("new turn overwritten: %+v", got)
+	}
+}
+
+func TestCIWatchHeadChangeRestartsStabilityWindow(t *testing.T) {
+	ctx := context.Background()
+	s, f := workService(t)
+	c := stopped("ci", "PR #12 CI")
+	f.sessions["box"] = []proto.Session{c}
+	at := turnEnd.Add(10 * time.Minute)
+	e := db.SessionWork{MachineID: "box", SessionID: "ci", TurnAt: turnEnd, WakeAt: &at, Work: proto.WorkState{Phase: proto.WorkBlocked, On: proto.WaitExternal, Wait: "CI", WakeAt: &at}}
+	startCIWatch(c, &e, turnEnd, "", "")
+	s.putWork(ctx, e)
+	head := "0123456789abcdef0123456789abcdef01234567"
+	f.answerNode("git.pr", func(_ string, _ json.RawMessage) (any, error) {
+		return map[string]any{"pr": map[string]any{"number": 12, "url": "https://github.com/example/repo/pull/12", "head_oid": head, "checks_complete": true, "checks": []map[string]string{{"name": "test", "state": "pass"}}}}, nil
+	})
+	sends := 0
+	f.answerNode(DeviceSessionSendOnce, func(_ string, _ json.RawMessage) (any, error) { sends++; return map[string]any{}, nil })
+	s.workWake(ctx, s.newWorkView(ctx), [2]string{"box", "ci"}, turnEnd.Add(time.Minute))
+	head = "fedcba9876543210fedcba9876543210fedcba98"
+	s.workWake(ctx, s.newWorkView(ctx), [2]string{"box", "ci"}, turnEnd.Add(3*time.Minute))
+	if sends != 0 {
+		t.Fatal("head change did not reset stability window")
+	}
+	s.workWake(ctx, s.newWorkView(ctx), [2]string{"box", "ci"}, turnEnd.Add(5*time.Minute))
+	if sends != 1 {
+		t.Fatalf("sent %d wakes", sends)
 	}
 }

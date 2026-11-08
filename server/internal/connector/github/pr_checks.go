@@ -2,6 +2,7 @@ package github
 
 import (
 	"context"
+	"crypto/sha256"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -14,10 +15,11 @@ import (
 // PRCheckSnapshot is a PR head's check runs and commit statuses. An empty
 // snapshot is not evidence that CI has finished.
 type PRCheckSnapshot struct {
-	Head     string
-	Pending  bool
-	Failures []string
-	Count    int
+	Head        string
+	Fingerprint string
+	Pending     bool
+	Failures    []string
+	Count       int
 }
 
 // PRChecks reads every page without retrieving job logs. It refuses an incomplete
@@ -55,6 +57,7 @@ func (c *Connector) PRChecks(ctx context.Context, repo string, number int) (PRCh
 		return result, err
 	}
 	result.Head = head
+	var identities []string
 	ref := url.PathEscape(head)
 	// GitHub caps the check-runs endpoint at 1000 results. Refuse a larger
 	// set instead of silently omitting checks.
@@ -84,6 +87,7 @@ func (c *Connector) PRChecks(ctx context.Context, repo string, number int) (PRCh
 				return PRCheckSnapshot{}, fmt.Errorf("inconsistent check runs")
 			}
 			seenRuns[run.ID] = true
+			identities = append(identities, fmt.Sprintf("run:%d:%q:%q:%q", run.ID, run.Name, run.Status, run.Conclusion))
 			result.Count++
 			if run.Name == "" || run.Status != "completed" || run.Conclusion == "" {
 				result.Pending = true
@@ -130,6 +134,7 @@ func (c *Connector) PRChecks(ctx context.Context, repo string, number int) (PRCh
 				return PRCheckSnapshot{}, fmt.Errorf("inconsistent commit statuses")
 			}
 			seenStatuses[status.Context] = true
+			identities = append(identities, fmt.Sprintf("status:%q:%q", status.Context, status.State))
 			statusCount++
 			result.Count++
 			if status.Context == "" {
@@ -165,6 +170,9 @@ func (c *Connector) PRChecks(ctx context.Context, repo string, number int) (PRCh
 		return PRCheckSnapshot{}, fmt.Errorf("PR head changed")
 	}
 	sort.Strings(result.Failures)
+	sort.Strings(identities)
+	fingerprint := sha256.Sum256([]byte(head + "\x00" + strings.Join(identities, "\x00")))
+	result.Fingerprint = fmt.Sprintf("%x", fingerprint)
 	return result, nil
 }
 

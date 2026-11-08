@@ -155,31 +155,44 @@ func (s *Service) workWake(ctx context.Context, v *workView, k [2]string, now ti
 		current := e
 		current.Work.CI = nil
 		s.replaceCI(e, current)
-		var still bool
-		e, still = s.workEntry(k)
-		if !still || e.WakeAt == nil || e.Work.CI != nil || e.WakeAt.After(now) {
-			return
-		}
+		return // the next tick handles the ordinary fallback
 	}
 	// Read again right before acting: the pass's view may be a send or two old.
 	c, why := s.workGuard(s.newWorkView(ctx), e, false)
 	switch why {
 	case "":
 	case "offline":
+		before := e
 		at := now.Add(time.Minute).UTC() // try again when it is back
 		e.WakeAt, e.Work.WakeAt = &at, &at
-		s.putWork(ctx, e)
+		if before.Work.CI != nil {
+			s.replaceCI(before, e)
+		} else {
+			s.putWork(ctx, e)
+		}
 		return
 	default:
 		s.logf("work %s/%s: not woken: %s", k[0], short(k[1]), why)
+		before := e
 		e.WakeAt, e.Work.WakeAt = nil, nil
-		s.putWork(ctx, e)
+		if before.Work.CI != nil {
+			e.Work.CI = nil
+			s.replaceCI(before, e)
+		} else {
+			s.putWork(ctx, e)
+		}
 		return
 	}
 	sw := s.triageSwitches(ctx)
 	if continues(e.Work) && !sw.AutoContinue || !continues(e.Work) && !sw.Wake {
+		before := e
 		e.WakeAt, e.Work.WakeAt = nil, nil // turned off since it was set
-		s.putWork(ctx, e)
+		if before.Work.CI != nil {
+			e.Work.CI = nil
+			s.replaceCI(before, e)
+		} else {
+			s.putWork(ctx, e)
+		}
 		return
 	}
 	if e.Work.CI != nil && e.Work.CI.Message != "" {
@@ -198,14 +211,15 @@ func (s *Service) workWake(ctx context.Context, v *workView, k [2]string, now ti
 		s.deliverCI(ctx, e, now)
 		return
 	}
-	ciLine, handled := s.pollCI(ctx, e, c, now)
+	polled := e
+	ciLine, handled := s.pollCI(ctx, polled, c, now)
 	if handled {
 		return
 	}
 	if ciLine != "" {
 		var still bool
 		e, still = s.workEntry(k)
-		if !still || e.WakeAt == nil || e.Work.CI == nil {
+		if !still || !sameCIWatch(polled, e) {
 			return
 		}
 		if latest, why := s.workGuard(s.newWorkView(ctx), e, false); why != "" {
