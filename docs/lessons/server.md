@@ -644,6 +644,12 @@ home volume (docs/operations/link.md "Without systemd").
 - **Name limits differ by file system**: Linux takes 255 bytes per name, APFS 255 characters, so a 100-character Chinese name (300 bytes) lands on a Mac and is refused on Linux. A folder upload keeps the file's own name, so `beginInto` probes with `Lstat` and, on `ENAMETOOLONG`, shortens with `splitName` before any byte is sent (and refuses at begin if the shortened name is still too long for that file system). Before, begin accepted the name and the node only refused after the whole body (up to 2 GB) had been received. Windows is unchanged: Go does not surface `ENAMETOOLONG` there.
 - **Test with more than 255 characters**: a shorter multibyte name passes on a Mac and fails on Linux, so the test would mean different things locally and in CI.
 
+## Upload cancellation owns a terminal lifecycle (#1348)
+
+- Keep a busy upload in the registry: removing it during a chunk or finalization hides it from abort. Mark cancellation terminal under a per-upload lock, then let the active file owner close/remove the part after its I/O settles. Completion must never reinsert retired state, and disk I/O must stay outside the registry lock.
+- Stop idle timers when work starts and bind each new idle period to a generation. A callback already running when its timer is stopped must not cancel fresh activity. A short write is a failed upload, even when the writer returns no error.
+- Serialize cancellation with the final rename on that upload. Abort winning first prevents publication and removes any empty reservation; a successful rename commits the upload, so a later abort leaves it intact. Test chunk cancellation and end cancellation separately through real RPC with gated regular files. The hub returns after a canceled chunk and sends deferred abort; it does not normally send end afterward.
+
 ## ego cookies (2026-11-04, #1304)
 
 - **`task.cdp` permits only Target / Browser**: cookies use page `page.cdp("Network.setCookies" / "getAllCookies" / "deleteCookies")`; `Storage.getCookies` reports "task.cdp only supports Target. and Browser. commands".
