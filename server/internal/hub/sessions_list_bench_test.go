@@ -45,11 +45,11 @@ func BenchmarkAgents8000Legacy(b *testing.B) {
 	r := httptest.NewRequest("GET", "/api/v1/sessions", nil)
 	w := &discardResponse{}
 	h.listSessions(w, r)
-	b.ReportMetric(float64(w.n), "JSON-bytes")
 	b.ReportAllocs()
 	for b.Loop() {
 		h.listSessions(&discardResponse{}, r)
 	}
+	b.ReportMetric(float64(w.n), "JSON-bytes") // after the loop: b.Loop drops metrics reported before it
 }
 
 // TestAgents8000Measurement reports actual handler time, uncompressed JSON bytes,
