@@ -15,5 +15,6 @@
   "status_other": "网关返回 {status}",
   "said": "{head}：{said}",
   "models_unreadable": "网关的模型列表格式认不出来",
-  "models_pagination": "无法读完模型列表：分页无效或页数过多"
+  "models_pagination": "无法读完模型列表：分页无效或页数过多",
+  "response_unfinished": "Responses 请求未成功完成"
 }

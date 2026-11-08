@@ -1,6 +1,7 @@
 package assistant
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -133,6 +134,9 @@ func (t probeTarget) do(ctx context.Context, method, endpoint string, body io.Re
 	}
 	if body != nil {
 		req.Header.Set("content-type", "application/json")
+		if t.api == "responses" {
+			req.Header.Set("accept", "text/event-stream")
+		}
 	}
 	if t.key != "" {
 		req.Header.Set("x-api-key", t.key)
@@ -312,7 +316,7 @@ func (s *Service) providerTest(ctx context.Context, in probeInput) map[string]an
 		"messages": []any{map[string]any{"role": "user", "content": "ping"}}}
 	if t.api == "responses" {
 		path = "responses"
-		payload = map[string]any{"model": t.model, "input": "ping", "max_output_tokens": 16, "store": false}
+		payload = map[string]any{"model": t.model, "input": []any{map[string]any{"role": "user", "content": "ping"}}, "stream": true, "store": false}
 	}
 	body, _ := json.Marshal(payload)
 	started := time.Now()
@@ -324,14 +328,48 @@ func (s *Service) providerTest(ctx context.Context, in probeInput) map[string]an
 		if code != "" {
 			out["code"] = code
 		}
+	} else if t.api == "responses" {
+		out["ok"] = responsesProbeCompleted(res.Body)
+		if out["ok"] == false {
+			if ctx.Err() != nil {
+				out["error"], _ = t.failure(ctx, nil, ctx.Err())
+			} else {
+				out["error"] = pt(i18n.From(ctx), "response_unfinished")
+			}
+		}
 	} else {
-		_, _ = io.Copy(io.Discard, io.LimitReader(res.Body, 64<<10)) // lets the connection be reused
+		_, _ = io.Copy(io.Discard, io.LimitReader(res.Body, 64<<10))
 		out["ok"] = true
 	}
 	if res != nil {
 		res.Body.Close()
 	}
 	return out
+}
+
+// responsesProbeCompleted requires the same terminal event as the runtime, within the response budget.
+func responsesProbeCompleted(body io.Reader) bool {
+	sc := bufio.NewScanner(io.LimitReader(body, 8<<20))
+	sc.Buffer(make([]byte, 64<<10), 4<<20)
+	for sc.Scan() {
+		data, ok := strings.CutPrefix(sc.Text(), "data:")
+		if !ok {
+			continue
+		}
+		var event struct {
+			Type string `json:"type"`
+		}
+		if json.Unmarshal([]byte(strings.TrimSpace(data)), &event) != nil {
+			continue
+		}
+		switch event.Type {
+		case "response.completed":
+			return true
+		case "response.failed", "response.incomplete", "error":
+			return false
+		}
+	}
+	return false
 }
 
 // providerDiscover: GET <base>/v1/models, its models filled in from the catalog.
@@ -397,14 +435,12 @@ func (s *Service) providerDiscover(ctx context.Context, in probeInput) map[strin
 		var meta struct {
 			HasMore            bool            `json:"has_more"`
 			LastID             string          `json:"last_id"`
-			Next               string          `json:"next"`
+			Next               json.RawMessage `json:"next"`
 			NextCursor         string          `json:"next_cursor"`
 			NextPage           json.RawMessage `json:"next_page"`
 			NextPageToken      string          `json:"next_page_token"`
 			NextPageTokenCamel string          `json:"nextPageToken"`
-			Links              struct {
-				Next string `json:"next"`
-			} `json:"links"`
+			Links              json.RawMessage `json:"links"`
 		}
 		if len(bytes.TrimSpace(raw)) > 0 && bytes.TrimSpace(raw)[0] == '{' {
 			if err := json.Unmarshal(raw, &meta); err != nil {
@@ -422,6 +458,26 @@ func (s *Service) providerDiscover(ctx context.Context, in probeInput) map[strin
 				nextPage = n.String()
 			}
 		}
+		var next string
+		if len(meta.Next) > 0 && string(meta.Next) != "null" {
+			if json.Unmarshal(meta.Next, &next) != nil {
+				var n json.Number
+				if json.Unmarshal(meta.Next, &n) != nil {
+					return fail(pt(i18n.From(ctx), "models_pagination"))
+				}
+				if nextPage == "" {
+					nextPage = n.String()
+				}
+			}
+		}
+		if next == "" && len(meta.Links) > 0 {
+			var links struct {
+				Next string `json:"next"`
+			}
+			if json.Unmarshal(meta.Links, &links) == nil {
+				next = links.Next
+			}
+		}
 		switch {
 		case meta.NextCursor != "":
 			query.Set("cursor", meta.NextCursor)
@@ -431,11 +487,7 @@ func (s *Service) providerDiscover(ctx context.Context, in probeInput) map[strin
 			query.Set("pageToken", meta.NextPageTokenCamel)
 		case nextPage != "":
 			query.Set("page", nextPage)
-		case meta.Next != "" || meta.Links.Next != "":
-			next := meta.Next
-			if next == "" {
-				next = meta.Links.Next
-			}
+		case next != "":
 			base, _ := url.Parse(t.endpoint("models"))
 			ref, err := url.Parse(next)
 			if err != nil {

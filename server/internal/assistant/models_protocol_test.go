@@ -26,6 +26,12 @@ func TestProviderProtocolProbe(t *testing.T) {
 				if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
 					t.Error(err)
 				}
+				if strings.HasSuffix(r.URL.Path, "/responses") {
+					if r.Header.Get("Accept") != "text/event-stream" {
+						t.Errorf("accept: %s", r.Header.Get("Accept"))
+					}
+					_, _ = w.Write([]byte("data: {\"type\":\"response.completed\"}\n\n"))
+				}
 			}))
 			defer gw.Close()
 			s, mux := launcherTestService(t)
@@ -34,7 +40,7 @@ func TestProviderProtocolProbe(t *testing.T) {
 			if out["ok"] != true || gotPath != "/team/v1/"+api || payload["model"] != "m" {
 				t.Fatalf("out=%v path=%s body=%v", out, gotPath, payload)
 			}
-			if api == "responses" && (payload["input"] != "ping" || payload["max_output_tokens"] != float64(16)) {
+			if api == "responses" && (payload["stream"] != true || !strings.Contains(jsonText(payload["input"]), "ping")) {
 				t.Fatalf("body: %v", payload)
 			}
 			if api == "messages" && (payload["max_tokens"] != float64(1) || !strings.Contains(jsonText(payload["messages"]), "ping")) {
@@ -55,13 +61,33 @@ func TestProviderProtocolProbe(t *testing.T) {
 
 func TestProviderProtocolPreset(t *testing.T) {
 	var path string
-	gw := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { path = r.URL.Path }))
+	gw := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		path = r.URL.Path
+		_, _ = w.Write([]byte("data: {\"type\":\"response.completed\"}\n\n"))
+	}))
 	defer gw.Close()
 	s, hub, _ := modelService(t)
 	hub.presets = []LauncherPreset{{ID: "team/api", Kind: "api", API: "responses", BaseURL: gw.URL + "/prefix", Model: "example"}}
 	out := s.providerTest(i18n.With(context.Background(), i18n.En), probeInput{Preset: "team/api"})
 	if out["ok"] != true || path != "/prefix/v1/responses" || out["model"] != "example" {
 		t.Fatalf("%v path=%s", out, path)
+	}
+}
+
+func TestResponsesProbeRejectsUnfinishedStreams(t *testing.T) {
+	for _, body := range []string{
+		`data: {"type":"response.failed"}` + "\n\n",
+		`data: {"type":"response.incomplete"}` + "\n\n",
+		`{"error":"not a stream"}`,
+		`data: {"type":"response.created"}` + "\n\n",
+	} {
+		gw := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { _, _ = w.Write([]byte(body)) }))
+		s, _ := launcherTestService(t)
+		out := s.providerTest(i18n.With(context.Background(), i18n.En), probeInput{BaseURL: gw.URL, Model: "m", API: "responses"})
+		gw.Close()
+		if out["ok"] != false || out["error"] == nil {
+			t.Fatalf("body %s: %v", body, out)
+		}
 	}
 }
 
@@ -80,7 +106,7 @@ func TestProviderProbeFailureClasses(t *testing.T) {
 }
 
 func TestProviderDiscoveryPaginationAndWindows(t *testing.T) {
-	for _, kind := range []string{"after_id", "cursor", "page_token", "pageToken", "page", "link"} {
+	for _, kind := range []string{"after_id", "cursor", "page_token", "pageToken", "page", "next-number", "link", "links"} {
 		t.Run(kind, func(t *testing.T) {
 			calls := 0
 			gw := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -101,8 +127,13 @@ func TestProviderDiscoveryPaginationAndWindows(t *testing.T) {
 						page["nextPageToken"] = "a+b"
 					case "page":
 						page["next_page"] = 2
+					case "next-number":
+						page["next"] = 2
+						page["links"] = []any{}
 					case "link":
 						page["next"] = "?cursor=a%2Bb"
+					case "links":
+						page["links"] = map[string]string{"next": "?cursor=a%2Bb"}
 					}
 					_ = json.NewEncoder(w).Encode(page)
 					return
@@ -111,11 +142,11 @@ func TestProviderDiscoveryPaginationAndWindows(t *testing.T) {
 				if kind == "after_id" {
 					value = "own"
 				}
-				if kind == "link" {
+				if kind == "link" || kind == "links" {
 					key = "cursor"
 				}
-				if kind == "page" {
-					value = "2"
+				if kind == "page" || kind == "next-number" {
+					key, value = "page", "2"
 				}
 				if r.URL.Query().Get(key) != value {
 					t.Errorf("query: %s", r.URL.RawQuery)
