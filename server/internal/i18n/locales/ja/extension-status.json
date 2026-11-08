@@ -58,6 +58,7 @@
   "protocol_version": "プロトコルのバージョンは{current}ですが、ハブには{required}が必要です",
   "wrong_id": "プログラムのIDは「{current}」ですが、「{required}」ではありません",
   "wrong_version": "プログラムのバージョンは「{current}」ですが、「{required}」ではありません",
+  "attached_version": "単独で動いているプログラムはバージョン {current} ですが、このマネージャーが承認したのは {approved} です。ハブのマシン上（personad extension upgrade {id} <その remote: ソース>）でそのバージョンを承認するまで使われません",
   "socket_connect": "{path}に接続できません：{err}",
   "program_missing": "{name}のプログラムが見つかりません（{path}）",
   "sandbox_start": "{name}のサンドボックスを起動できません：{err}",

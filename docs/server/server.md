@@ -60,7 +60,14 @@ when joining them, never a display-name match.
 
 - Authenticated registered-client requests have `action=started` counts on receipt
   and `action=completed` counts on return, grouped by the ServeMux route template,
-  platform and response status. Sum **started only** for request volume; completed
+  platform, surface and response status. `source=app|widget|liveactivity` is inferred
+  from bounded client headers and User-Agent markers; `platform_basis` and
+  `source_basis` retain the evidence. Native Apple UAs use the enrolled device kind
+  or iPhone push binding when their OS is absent. Browser UAs count as `web` even
+  on phones; curl/Python/Go clients stay diagnostic rather than borrowing a phone
+  credential's platform. Raw UAs/headers never enter logs. `native-default` means
+  App is inferred from a native UA with no extension marker, not hardware/process proof.
+  Sum **started only** for request volume; completed
   counters supply duration and response-size measurements. Failed authentication is
   still covered by the separate rate-limited security log, not attributed to a device.
 - `body_bytes` and `max_body_bytes` count application response bytes before gzip,
@@ -77,6 +84,16 @@ when joining them, never a display-name match.
   with overflow counts retained without identities. An abrupt process loss can
   lose the still-buffered minute; telemetry cannot reconstruct earlier unlogged
   successful HTTP requests or Live Activity updates.
+
+`python3 scripts/diag/hub_traffic_report.py --since <UTC start> --until <UTC end>
+--identity-file <private identity JSON> --output <new private report JSON>` reads
+minute buckets and device-session history without changing production state or waiting.
+The identity file contains `{"identity":"<16-hex opaque credential hash>"}`, never a
+bearer/push token. Specify `--unit`/`--container` for an installation whose service or
+container name differs from discovery; sanitized exports can use `--journal-file`
+and `--connections-file`. Collect two minutes after the end so the last bucket has
+flushed. The output separates platforms/surfaces/types/routes/hours, start vs completion
+counts, and incomplete/unknown attribution; connection reasons remain observed reasons.
 
 Live Activity settings refresh only the affected device's projected content.
 Same-value retries and non-activity preferences do not force a fleet-wide resend.

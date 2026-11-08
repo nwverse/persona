@@ -320,7 +320,8 @@ func (s *Service) taskTurnEnded(ctx context.Context, machine, sid string) {
 	s.autoFinishTask(t, since, worked) // the work may be finished: then the todo is done (done.go)
 }
 
-// routeToTask sends text straight to the agent of task todoID that most needs it, and keeps it in the conversation.
+// routeToTask sends text straight to the agent of task todoID that most needs it, and keeps it in the conversation as
+// the user's (no from: a task card's Message, or a decision the owner made in Lark).
 func (s *Service) routeToTask(ctx context.Context, conversation, todoID, text string) (FeedItem, error) {
 	if err := s.ensureTodosLoaded(ctx); err != nil {
 		return FeedItem{}, err

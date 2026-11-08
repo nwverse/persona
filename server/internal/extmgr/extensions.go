@@ -90,6 +90,22 @@ type ExtensionView struct {
 	// (manifest.tools).
 	Auth  *ExtensionAuth      `json:"auth,omitempty"`
 	Tools []ExtensionToolView `json:"tools,omitempty"`
+	// Attached: an extension running on its own that the manager reaches on its sockets (a remote: install), and how it
+	// is connected.
+	Attached *ExtensionAttached `json:"attached,omitempty"`
+}
+
+// ExtensionAttached is how an attached extension is connected (docs/extensions/extensions.md "Attached extensions").
+type ExtensionAttached struct {
+	Online bool `json:"online"`
+	// Since is when it came online or went offline (none while it is switched off or nothing needs it), in the user's
+	// zone.
+	Since time.Time `json:"since,omitzero"`
+	// Error is why it is offline, also while its status is still starting.
+	Error string `json:"error,omitempty"`
+	// Version is the version the program says it is, when that is not the approved Version: it is not used until
+	// that version is approved.
+	Version string `json:"version,omitempty"`
 }
 
 // ExtensionToolView is one of an extension's command-line programs: Reused when it is the machine's own copy.
@@ -329,6 +345,25 @@ func (ps *extensions) view(ctx context.Context, p *extension.Extension) Extensio
 		}
 	}
 	v.Error = i18n.ExtensionStatusText(l, v.Error)
+	if p.Record.Remote != nil {
+		v.Attached = &ExtensionAttached{}
+		if hp != nil && hp.proc != nil && v.Status != host.StateStopped { // stopped: nothing needs it, so not connected
+			link := hp.proc.Link()
+			v.Attached.Online, v.Attached.Since = link.Online, link.Since
+			if !link.Since.IsZero() {
+				v.Attached.Since = link.Since.In(ps.h.userLocation()) // `extension list` prints it as it comes
+			}
+			if !link.Online {
+				v.Attached.Error = i18n.ExtensionStatusText(l, link.Why)
+			}
+			if link.Said != "" && link.Said != p.Record.Version {
+				v.Attached.Version = link.Said
+				if v.Status == host.StateError {
+					v.Error = i18n.T(l, "extension-status.attached_version", i18n.Args{"current": link.Said, "approved": p.Record.Version, "id": p.Record.ID})
+				}
+			}
+		}
+	}
 	if p.Record.Enabled && ps.h != nil && ps.h.hubJSONWaitsForTriageModel(ctx, p) { // runs, but its inbox waits
 		v.Status, v.NeedsSetup = extensionNeedsSetup, append(v.NeedsSetup, needsTriageModelSetup(ps.h.contextLang(ctx)))
 	}
@@ -852,6 +887,7 @@ func (ps *extensions) specOf(ctx context.Context, p *extension.Extension, hp *hu
 		s.RPCSocket, s.Socket = r.RPCSocket, r.HTTPSocket
 		s.RPC, s.HTTP = r.RPCSocket != "", r.HTTPSocket != ""
 		hp.socket = r.HTTPSocket
+		s.Attached = true
 	} else {
 		if rt.IsDeno() {
 			if err := ps.sourceSpec(ctx, p, &s); err != nil {

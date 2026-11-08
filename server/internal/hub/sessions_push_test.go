@@ -301,13 +301,25 @@ func TestSessionsMessage(t *testing.T) {
 		}
 	}
 
+	list = encodeSessions(busyList())
+	size := len(sessionsMessage("box", list))
+	if per := allocated(func() { sessionsMessage("box", list) }); per > size+size/4 {
+		t.Fatalf("a %d-byte list message allocates %d bytes", size, per)
+	}
+}
+
+// busyList is a busy machine's list (docs/server/server.md "What is pushed to the apps").
+func busyList() []proto.Session {
 	var many []proto.Session
-	for i := range 150 { // a busy machine's list (docs/server/server.md "What is pushed to the apps")
+	for i := range 150 {
 		many = append(many, proto.Session{SessionID: fmt.Sprintf("s%03d", i), LastText: strings.Repeat("x", 1<<10)})
 	}
-	list = encodeSessions(many)
-	size := len(sessionsMessage("box", list))
-	// Pushes are seconds apart, collections in between: whatever the encoder keeps pooled is gone by the next one.
+	return many
+}
+
+// allocated is how many bytes f allocates, averaged over runs. Pushes are seconds apart, collections in between:
+// whatever an encoder keeps pooled is gone by the next one.
+func allocated(f func()) int {
 	const runs = 20
 	var total uint64
 	for range runs {
@@ -315,13 +327,11 @@ func TestSessionsMessage(t *testing.T) {
 		runtime.GC()
 		var before, after runtime.MemStats
 		runtime.ReadMemStats(&before)
-		sessionsMessage("box", list)
+		f()
 		runtime.ReadMemStats(&after)
 		total += after.TotalAlloc - before.TotalAlloc
 	}
-	if per := int(total / runs); per > size+size/4 {
-		t.Fatalf("a %d-byte list message allocates %d bytes", size, per)
-	}
+	return int(total / runs)
 }
 
 // Each encoded session is what json.Marshal gives for it, read from one shared buffer: HTML and non-ASCII text
@@ -354,5 +364,13 @@ func TestEncodeSessionsMatchesMarshal(t *testing.T) {
 	}
 	if len(encodeSessions(nil)) != 0 {
 		t.Fatal("nil list encoded to sessions")
+	}
+
+	// One shared buffer and little else: each session is written straight into it (proto.Session.MarshalJSONTo), not
+	// copied and marshalled to a buffer of its own first. 1.44x the list's size measured, 4.8x before.
+	many := busyList()
+	size := len(sessionsMessage("box", encodeSessions(many)))
+	if per := allocated(func() { encodeSessions(many) }); per > size*148/100 {
+		t.Fatalf("encoding a %d-byte list allocates %d bytes", size, per)
 	}
 }

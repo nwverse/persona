@@ -780,7 +780,7 @@ struct ChatView: View {
         let key = ChatScratch.LinesKey(store: "\(shownKey.machineID)/\(shownKey.sessionID)", version: frozen == nil ? store.version : cut,
                                        first: items.first?.id, live: frozen == nil ? liveTurnID : frozen?.live, open: openWork,
                                        runs: openRuns, frozen: frozen, feed: feed.map(\.id),
-                                       streaming: style == .assistant && (frozen.map { !$0.text.isEmpty } ?? liveShown),
+                                       streaming: drawsLive && (frozen.map { !$0.text.isEmpty } ?? liveShown),
                                        quietAgents: quietSubagents, workflowCalls: workflowCalls)
         if scratch.linesKey == key { return scratch.lines }
         var blocks = store.blocks
@@ -791,7 +791,8 @@ struct ChatView: View {
         }
         var lines = lineBuilder.build(Self.debugTrim(blocks), live: key.live, streaming: key.streaming)
         if style == .assistant { // docs/assistant/unified-entry.md: the hub's items, quick results, a line for each day
-            lines = ChatLines.daySections(ChatLines.quickResults(ChatLines.mergeFeed(lines, feed)))
+            // The hand-offs the task cards take in are drawn there, not among the lines (#1542).
+            lines = ChatLines.daySections(ChatLines.quickResults(ChatLines.mergeFeed(lines, SentToAgents.shown(feed))))
         }
         scratch.lines = lines
         scratch.linesKey = key
@@ -1618,6 +1619,9 @@ struct ChatView: View {
 
     /// Streamed words are drawn after the lines (`ChatLiveText`'s rule: not once the message is in the rows).
     private var liveShown: Bool { ChatLiveText.shows(store) }
+    /// The chat draws live text: the assistant's in the main chat, and an agent's as Claude shows it in any chat of it
+    /// (docs/integrations/claude-integration.md "Live replies (MessageDisplay)"), the same way.
+    private var drawsLive: Bool { style == .assistant || store.liveIsAgents }
 
     /// A message of yours is the newest thing and the agent has not begun on it: no turn running yet, the session at
     /// work or starting up, or the message just sent and the hub not saying working yet (#3853).
@@ -2190,7 +2194,7 @@ struct ChatView: View {
             }
             // Streamed text, the typing line and unsent messages sit at the newest end too: while you read
             // history they wait with the rest, as they were drawn then (`Frozen`).
-            if style == .assistant { ChatLiveText(store: store, held: frozen?.text) }
+            if drawsLive { ChatLiveText(store: store, held: frozen?.text) }
             // Sent, and the agent not on it yet: the line the new-conversation page showed under the first message
             // (`FirstMessagePending`), where the turn's work line comes in. Without it the chat that took over showed
             // the message a line lower, then pushed it up when the turn began (#1911).
@@ -2233,7 +2237,7 @@ struct ChatView: View {
             }
             switch ChatLines.placeholder(lines: lines, hasTranscript: !rows.isEmpty,
                                          hasPending: !pending.isEmpty || !store.pending.isEmpty || !store.arriving.isEmpty,
-                                         hasLiveText: style == .assistant && !(frozen?.text ?? store.liveText).isEmpty,
+                                         hasLiveText: drawsLive && !(frozen?.text ?? store.liveText).isEmpty,
                                          loadedOnce: store.loadedOnce) {
             case .loading:
                 ChatSkeleton().flippedBack().accessibilityIdentifier("chat-loading-placeholder")
@@ -2388,7 +2392,7 @@ struct ChatView: View {
             } else if let last = store.items.last {
                 let failed = ChatLines.placeFailed(currentLines(), store.pending, writtenAt: store.writtenAt).before
                 frozen = Frozen(seq: last.seq, part: last.part, live: liveTurnID,
-                                text: style == .assistant && liveShown ? store.liveText : "",
+                                text: drawsLive && liveShown ? store.liveText : "",
                                 pending: Set(store.pending.map(ChatLines.frozenKey)), failedAt: ChatLines.failedLines(failed))
             }
         }
@@ -5523,10 +5527,12 @@ private struct ChatLiveText: View {
         if !text.isEmpty { StreamingText(text: text).id("live").flippedBack() }
     }
 
-    /// There is streamed text, and its message is not the last row yet.
+    /// There is streamed text, and its message is not the last row yet. An agent's is already what its newest items
+    /// lack (`ChatStore.agentStreamed`): its words may begin like the row before them.
     static func shows(_ store: ChatStore) -> Bool {
         let live = store.liveText
         guard !live.isEmpty else { return false }
+        if store.liveIsAgents { return true }
         if case .assistant(let item) = store.rows.last, let text = item.text { return !(text.hasPrefix(live) || live == text) }
         return true
     }

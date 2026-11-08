@@ -1291,6 +1291,19 @@ nonisolated struct APIClient: Sendable {
             body: SetBlockedClaudeDirs(blocked: blocked)))
     }
 
+    /// Settings › Claude Code › Live Replies (#1309, docs/integrations/claude-integration.md "Live replies (MessageDisplay)"):
+    /// whether the Claude sessions Persona starts on the machine send their replies as Claude writes them. On unless
+    /// turned off; an older hub has no such route (404).
+    struct LiveReplies: Codable, Sendable, Equatable { var on: Bool }
+    func claudeLiveReplies(machine: String) async throws -> Bool {
+        try await get("/api/v1/machines/\(machine)/claude-live-replies", as: LiveReplies.self).on
+    }
+    /// What the hub keeps after the change.
+    func setClaudeLiveReplies(machine: String, on: Bool) async throws -> Bool {
+        try JSON.decoder.decode(LiveReplies.self, from: try await request("PUT", "/api/v1/machines/\(machine)/claude-live-replies",
+            body: LiveReplies(on: on))).on
+    }
+
     func interactions() async throws -> [Interaction] {
         stamp(try await get("/api/v1/interactions", as: InteractionsResponse.self).interactions)
     }
