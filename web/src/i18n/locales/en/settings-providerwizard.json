@@ -26,7 +26,6 @@
   "key_keep": "API Key (leave empty to keep)",
   "key_set": "Set",
   "key_hint": "Stored encrypted on the hub and never returned by the API.",
-  "responses_note": "Test the Responses connection or fetch its models here.",
   "test_model": "Model to test with",
   "test": "Test connection",
   "discover": "Fetch models",

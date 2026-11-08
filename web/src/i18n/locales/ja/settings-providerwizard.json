@@ -26,7 +26,6 @@
   "key_keep": "API Key（変更しない場合は空欄）",
   "key_set": "設定済み",
   "key_hint": "ハブに暗号化して保存されます。APIから読み出すことはできません。",
-  "responses_note": "ここでResponses接続のテストやモデル一覧の取得ができます。",
   "test_model": "テストに使うモデル",
   "test": "接続テスト",
   "discover": "モデル一覧を取得",

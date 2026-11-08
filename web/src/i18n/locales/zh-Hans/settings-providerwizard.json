@@ -26,7 +26,6 @@
   "key_keep": "API Key（不改就留空）",
   "key_set": "已设置",
   "key_hint": "加密存在 hub，接口不会再返回。",
-  "responses_note": "可在这里测试 Responses 连接或获取模型列表。",
   "test_model": "测试用的模型",
   "test": "测试连接",
   "discover": "获取模型列表",
