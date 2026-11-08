@@ -28,5 +28,6 @@
   "image_failed": "查不了新镜像：{error}",
   "err_no_start": "新版本没能启动，旧版本照常在跑：{error}",
   "reason_no_takeover": "新版本没能接手：{error}",
-  "reason_not_confirmed": "新版本 3 分钟内没有确认"
+  "reason_not_confirmed": "新版本 3 分钟内没有确认",
+  "err_program_unreplaced": "版本 {version} 没有 {platform} 的 {program}，而 {service} 运行的就是它：装了会让 {program} 留在旧版本。等包含它的版本发布"
 }

@@ -2,15 +2,15 @@ package transcript
 
 import (
 	"encoding/json"
-	"regexp"
 	"strconv"
 	"strings"
 
+	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
-var foldCreatedTask = regexp.MustCompile(`Task #([A-Za-z0-9_-]+) created successfully`)
-var foldListedTask = regexp.MustCompile(`^#([A-Za-z0-9_-]+) \[(pending|in_progress|completed)\] (.+)$`)
+var foldCreatedTask = lazyre.New(`Task #([A-Za-z0-9_-]+) created successfully`)
+var foldListedTask = lazyre.New(`^#([A-Za-z0-9_-]+) \[(pending|in_progress|completed)\] (.+)$`)
 
 type taskFields map[string]json.RawMessage
 

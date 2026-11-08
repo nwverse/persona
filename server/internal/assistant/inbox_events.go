@@ -1,13 +1,13 @@
 package assistant
 
 import (
-	"regexp"
 	"slices"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/nwverse/persona/server/internal/i18n"
+	"github.com/nwverse/persona/server/internal/lazyre"
 )
 
 // Inbox events, phase 1 (docs/assistant/inbox.md "Events and the handling chain (phase 1)"): an item is an event. Besides what it always had it
@@ -304,7 +304,7 @@ func batchStart(it *InboxItem, prev inboxSeen, n int, fresh bool) string {
 
 // contextLine is a message line of a chat's context as the Feishu plugin writes it: "[01-02 15:04] <name>(@-mentioned me): ...",
 // with the full-width parentheses and colon matched below.
-var contextLine = regexp.MustCompile(`^\[[^\]]{1,20}\] ([^：]{1,60}?)(（@了我）)?：(.*)$`)
+var contextLine = lazyre.New(`^\[[^\]]{1,20}\] ([^：]{1,60}?)(（@了我）)?：(.*)$`)
 
 // contextMessages are the newest n message lines of a chat's context; nil when its lines don't read as messages.
 func contextMessages(context string, n int) []InboxChainMessage {

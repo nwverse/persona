@@ -7,13 +7,13 @@ import (
 	"github.com/nwverse/persona/server/internal/compat"
 	"io"
 	"net/http"
-	"regexp"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/nwverse/persona/server/internal/apierr"
 	"github.com/nwverse/persona/server/internal/identity"
+	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
@@ -194,8 +194,8 @@ func (s *Service) gatherOriginEvidence(ctx context.Context) originEvidence {
 // the Feishu plugin's /agent), as the node lists an untitled conversation: its first message.
 var (
 	inboxFirst   = "这是收件箱里的一件事"
-	relayFirst   = regexp.MustCompile(`^<` + compat.ContextPattern() + ` kind="context" title="来自对话「[^"]*」"[^>]*>\s*这条消息不是用户本人发的，是 Persona 的另一段对话（([A-Za-z0-9._-]+)）`)
-	larkAgentRe  = regexp.MustCompile(`^<` + compat.ContextPattern() + ` kind="instructions" title="给 Agent 的说明">[\s\S]*?/agent`)
+	relayFirst   = lazyre.New(`^<` + compat.ContextPattern() + ` kind="context" title="来自对话「[^"]*」"[^>]*>\s*这条消息不是用户本人发的，是 Persona 的另一段对话（([A-Za-z0-9._-]+)）`)
+	larkAgentRe  = lazyre.New(`^<` + compat.ContextPattern() + ` kind="instructions" title="给 Agent 的说明">[\s\S]*?/agent`)
 	taskFirstPfx = "⏰"
 )
 

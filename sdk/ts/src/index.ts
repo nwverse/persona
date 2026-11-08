@@ -1,4 +1,6 @@
 import { extensionEnv, hubEnv } from './compat.js';
+import { ExactJSON } from './exact-json.ts';
+export { ExactJSON, JSONIntegerError } from './exact-json.ts';
 // Persona extension SDK for TypeScript (docs/extensions/extensions.md "Writing an extension: SDK, templates and CLI"): an extension program's side of
 // the process protocol, for Bun. Build the program with `bun build --compile` into one executable per platform:
 // the package holds only that, and the hub needs no runtime.
@@ -38,6 +40,27 @@ export const unsupported = (why: string) => new ExtError(why, "unsupported");
 
 /** Answers the calls of one namespace: method is without the namespace ("status" for connector.status). */
 export type Handler = (method: string, params: any) => unknown | Promise<unknown>;
+
+/** Original request params, before Number rounding. Missing params and JSON null stay distinct.
+ * This view covers inbound namespace RPC requests only, not replies, events or serialization. */
+export interface ExactCall {
+  readonly rawParams: string | undefined;
+  readonly params: ExactJSON | undefined;
+}
+
+/** Events still use legacy params and have no call metadata. */
+export type ExactHandler = (method: string, params: any, call: ExactCall | undefined) => unknown | Promise<unknown>;
+const EXACT_PARAMS = Symbol.for("@persona/extension.exactParams");
+type OptInHandler = Handler & { [EXACT_PARAMS]?: true };
+
+/** Explicitly opt one namespace into original JSON request params. The second argument
+ * remains legacy JSON.parse data. Lexical int64 errors become public invalid_params errors. */
+export function withExactParams(handler: ExactHandler): Handler {
+  const wrapped = (method: string, params: any, call?: ExactCall) => handler(method, params, call);
+  Object.defineProperty(wrapped, EXACT_PARAMS, { value: true });
+  return wrapped;
+}
+
 
 /** One ui contribution: what it draws, and what its buttons do. */
 export interface Page {
@@ -223,7 +246,7 @@ export function connect(prog: Program, write: Write) {
   let accepting = true;
   let shuttingDown: Promise<unknown[]> | undefined;
 
-  async function request(method: string, params: any): Promise<unknown> {
+  async function request(method: string, params: any, rawFrame: string): Promise<unknown> {
     if (method === "initialize") {
       if (params?.protocol !== PROTOCOL) {
         throw new ExtError(`protocol ${params?.protocol}, not ${PROTOCOL}`, "wrong_protocol");
@@ -259,7 +282,13 @@ export function connect(prog: Program, write: Write) {
     const ns = method.slice(0, dot);
     const rest = method.slice(dot + 1);
     const h = prog.namespaces?.[ns];
-    if (h) return h(rest, params ?? {});
+    if (h) {
+      if ((h as OptInHandler)[EXACT_PARAMS] === true) {
+        const exact = ExactJSON.parse(rawFrame).field("params");
+        return (h as ExactHandler)(rest, params ?? {}, Object.freeze({ rawParams: exact?.raw, params: exact }));
+      }
+      return h(rest, params ?? {});
+    }
     if (ns === "ui" && prog.ui) return ui(rest, params ?? {});
     if (ns === "shortcut" && prog.shortcuts) {
       if (rest !== "run") throw unknownMethod(method);
@@ -345,7 +374,7 @@ export function connect(prog: Program, write: Write) {
     if (f.method) {
       const id = f.id;
       const done = Promise.resolve()
-        .then(() => request(f.method!, f.params))
+        .then(() => request(f.method!, f.params, text))
         .then(
           (result) => write(answer(id, { result: result ?? {} })),
           (err) => write(answer(id, { error: wireError(err) })),
