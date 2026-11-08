@@ -87,6 +87,8 @@ describe("设置 › 通知", () => {
     await act(async () => inputSwitch().click());
     await act(async () => setToken("test-token-b"));
     expect(toast).not.toHaveBeenCalled();
+    expect(inputSwitch()).toBeUndefined();
+    await answer(2, { input: true, done: "off" });
     await answer(1, { input: false, done: "long" });
     expect(toast).not.toHaveBeenCalled();
     expect(inputSwitch().getAttribute("aria-checked")).toBe("true");

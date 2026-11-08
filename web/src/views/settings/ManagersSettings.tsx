@@ -10,7 +10,7 @@ import {
   createManager, deleteBlocked, deleteManager, listManagers, makeDefault, managerError, NAME_MAX, renameManager, renewCode, statusLine,
   unsupported, validName, whereText, type BotConflict, type InstallCode, type Manager, type Tone,
 } from "../../lib/managers";
-import { loadNotifyPrefs, managerMuted, saveManagerPush, useNotifyPrefs } from "../../lib/notify";
+import { loadNotifyPrefs, managerMuted, saveManagerPush, useNotifyPrefs, useNotifyPrefsGeneration } from "../../lib/notify";
 import { onHubEvent, useStore } from "../../lib/store";
 import { Button, copyText, cx, Dialog, IconButton, Loading, toast } from "../../ui/atoms";
 import { Icon } from "../../ui/icons";
@@ -145,7 +145,8 @@ function ManagerRow({ m, now, onOpen }: { m: Manager; now: number; onOpen: () =>
 /** This device's pushes from one manager (NotifyPrefs.muted_managers); not shown by a hub from before them. */
 function PushSwitch({ id }: { id: string }) {
   const prefs = useNotifyPrefs();
-  useEffect(() => void loadNotifyPrefs().catch(() => {}), []);
+  const generation = useNotifyPrefsGeneration();
+  useEffect(() => void loadNotifyPrefs().catch(() => {}), [generation]);
   if (!prefs.muted_managers) return null;
   const on = !managerMuted(prefs, id, id);
   return (

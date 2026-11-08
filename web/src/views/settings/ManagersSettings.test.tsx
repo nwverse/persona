@@ -296,7 +296,7 @@ describe("设置 › 管理者", () => {
     await answer(0, ROSTER);
     await click(row("工作"));
     let finish!: (value: unknown) => void;
-    prefsAnswer = () => new Promise((resolve) => { finish = resolve; });
+    prefsAnswer = (json) => json ? new Promise((resolve) => { finish = resolve; }) : { input: true, done: "long", muted_managers: [] };
     await click(document.body.querySelector('[role="switch"][aria-label="推送通知"]')!);
     await act(async () => setToken("test-token-b"));
     expect(toast).not.toHaveBeenCalled();

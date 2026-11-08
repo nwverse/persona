@@ -309,6 +309,15 @@ export function useNotifyPrefs(): NotifyPrefs {
   return useSyncExternalStore(subscribe, notifyPrefs, () => DEFAULT_PREFS);
 }
 
+/** Mounted consumers must reread when pairing changes, even when both generations have identical default prefs. */
+export function notifyPrefsGeneration() {
+  return prefsSession.owner;
+}
+
+export function useNotifyPrefsGeneration() {
+  return useSyncExternalStore(subscribe, notifyPrefsGeneration, () => undefined);
+}
+
 // ── the browser's system notifications ───────────────────
 
 /** unsupported: this browser has no Notification API (an iPhone's Safari outside a home-screen app, an old browser). */

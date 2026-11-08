@@ -6,6 +6,8 @@ Ignoring an older PUT response cannot stop its request from committing last. Ser
 
 A queue also survives in-place sign-out and re-pairing. Bind it to the credential generation when enqueuing, retire unsent intents and fence late responses, rollback and cache writes when that generation ends. Exercise the real REST client with synthetic token A/B fetches: an `api()` mock hides its deferred token lookup. A late old-session 401 must not invoke the new login's sign-out callback; current-session 401 handling must still work.
 
+Retiring a generation must also wake mounted consumers to read the next generation's preferences. Another tab's token replacement can leave Settings mounted; an effect that loads only on mount strands an aborted initial read or a hidden manager switch. Subscribe to the generation independently of the preference value, bind loading state to it, and test actual components with abort-aware fetches rather than manually loading the new login in the test.
+
 ## Mail send admission must precede React updates (#1251)
 
 A busy button protects only its click path after rerender. Mail shortcuts and form submission need the same synchronous ref guard inside the send function, acquired after validation and released on failure. Keep it held after success until the composer closes. Regress mixed events in one React batch with a deferred transport, then check failure/retry, successful close, recipient validation and IME controls.
