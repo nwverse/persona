@@ -144,6 +144,56 @@ func TestLiveActivityStartBudget(t *testing.T) {
 	t.Log("two independent pools: 20 concurrent attempts, one claim; renewal retained budget; failed save rolled back")
 }
 
+func TestLiveActivityStartParentLockOrder(t *testing.T) {
+	d, ctx := open(t), context.Background()
+	if err := d.UpsertDevice(ctx, Device{DeviceID: "phone"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.SaveLiveActivity(ctx, LiveActivity{DeviceID: "phone", PushToStartToken: "start"}); err != nil {
+		t.Fatal(err)
+	}
+	// Retirement holds the parent first. A claimant must wait there, without
+	// holding the activity row that retirement will delete next.
+	parent, err := d.pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer parent.Rollback(ctx)
+	if _, err := parent.Exec(ctx, `SELECT 1 FROM devices WHERE device_id='phone' FOR UPDATE`); err != nil {
+		t.Fatal(err)
+	}
+	claimCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	result := make(chan error, 1)
+	go func() {
+		_, _, err := d.ClaimLiveActivityStart(claimCtx, "phone", "start", time.Now(), 10*time.Minute, 8*time.Hour)
+		result <- err
+	}()
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		var blocked bool
+		if err := d.pool.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM pg_stat_activity WHERE datname=current_database() AND query LIKE 'SELECT 1 FROM devices WHERE device_id=$1 FOR KEY SHARE%' AND wait_event_type='Lock')`).Scan(&blocked); err != nil {
+			t.Fatal(err)
+		}
+		if blocked {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("claim did not wait on parent lock")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if _, err := parent.Exec(ctx, `SELECT 1 FROM live_activities WHERE device_id='phone' FOR UPDATE NOWAIT`); err != nil {
+		t.Fatalf("claim locked activity before parent: %v", err)
+	}
+	if err := parent.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-result; err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestMigrateIsIdempotent(t *testing.T) {
 	d := open(t)
 	if err := d.migrate(context.Background()); err != nil {

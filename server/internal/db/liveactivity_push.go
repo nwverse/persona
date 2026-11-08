@@ -19,6 +19,16 @@ func (d *DB) ClaimLiveActivityStart(ctx context.Context, device, startToken stri
 		return due, false, err
 	}
 	defer tx.Rollback(ctx)
+	// Lock the parent before the activity: retirement/revocation locks devices
+	// before deleting activity rows. A reversed order can deadlock at the FK check.
+	var parent int
+	err = tx.QueryRow(ctx, `SELECT 1 FROM devices WHERE device_id=$1 FOR KEY SHARE`, device).Scan(&parent)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return due, false, nil
+	}
+	if err != nil {
+		return due, false, err
+	}
 	var updateToken, currentStart string
 	var started *time.Time
 	err = tx.QueryRow(ctx, `SELECT push_token, push_to_start_token, started_at FROM live_activities WHERE device_id = $1 FOR UPDATE`, device).Scan(&updateToken, &currentStart, &started)
