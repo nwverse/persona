@@ -35,7 +35,10 @@ final class NewConversationEntryTests: XCTestCase {
     @MainActor private func inDoubt(scheme: String) throws {
         let hub = try mockHub()
         let app = open(hub, ["-ui.oldLayout", "NO", "-ui.scheme", scheme])
-        defer { app.terminate() }
+        defer {
+            app.terminate()
+            fault(hub, on: false)
+        }
         let ask = "Hand-off in doubt \(scheme) \(UUID().uuidString.prefix(8))"
         func said(_ words: String) -> XCUIElement {
             app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", words)).firstMatch
@@ -132,13 +135,14 @@ final class NewConversationEntryTests: XCTestCase {
         return hub
     }
 
-    /// The app on the sample mail's Hand to AI sheet.
+    /// The app on the sample mail's Hand to AI sheet, past the system's icon alert (`-ui.scheme` can change the icon).
     @MainActor private func open(_ hub: String, _ more: [String]) -> XCUIApplication {
         let app = XCUIApplication()
         let pair = "persona://pair?url=" + hub.addingPercentEncoding(withAllowedCharacters: .alphanumerics)! + "&token=mock"
         app.launchArguments = ["-pairURL", pair, "-tab", "mail", "-inbox.kind", "", "-inbox.source", "",
                                "-openInboxItem", "mail:acc1:t1:501", "-showInboxAction", "handoff", "-openChatsFresh", "YES"] + more
         app.launchPinned()
+        acceptIconAlert()
         return app
     }
 
@@ -158,11 +162,15 @@ final class NewConversationEntryTests: XCTestCase {
         }
     }
 
-    /// The mock runs the next request and then answers 502, delivered unknown (`POST /mock/fault` lost_receipt).
+    /// The mock runs the next successful API write and then answers 502, delivered unknown (`POST /mock/fault` lost_receipt).
     private func loseTheNextAnswer(_ hub: String) {
+        fault(hub, on: true)
+    }
+
+    private func fault(_ hub: String, on: Bool) {
         var req = URLRequest(url: URL(string: hub + "/mock/fault")!)
         req.httpMethod = "POST"
-        req.httpBody = Data(#"{"fault":"lost_receipt","enabled":true}"#.utf8)
+        req.httpBody = Data(#"{"fault":"lost_receipt","enabled":\#(on)}"#.utf8)
         var status = 0
         let done = expectation(description: "fault")
         URLSession.shared.dataTask(with: req) { _, response, _ in
@@ -170,7 +178,7 @@ final class NewConversationEntryTests: XCTestCase {
             done.fulfill()
         }.resume()
         wait(for: [done], timeout: 10)
-        XCTAssertEqual(status, 200, "the mock did not take the lost_receipt fault")
+        XCTAssertEqual(status, 200, "the mock did not take the lost_receipt fault (enabled: \(on))")
     }
 
     /// Where the mock's hand-offs went (`/mock/sent_to`; the main chat's are the ones there with an inbox block).

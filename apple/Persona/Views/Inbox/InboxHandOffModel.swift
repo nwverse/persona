@@ -62,7 +62,7 @@ final class InboxHandOffModel {
     }
 
     /// A failed retry of a hand-off already in doubt: whatever it was answered, a try before it under the same client id
-    /// may have gone, and the same ask never hands it over under a new id.
+    /// may have gone, and the same ask sent again, with no other ask in between, keeps that id.
     nonisolated private struct InDoubt: Error {}
 
     init(itemID: String, deps: Deps) {
@@ -226,9 +226,10 @@ final class InboxHandOffModel {
         } catch let error where Self.saysNothing(error) {
             throw error
         } catch {
-            // After a try that may have gone, an answer under its id may be what the hub kept for the id, a relay cut off
-            // on the way or, after a receipt the hub dropped (`assistant_in_doubt`, which may never have reached the phone),
-            // a new run's answer. The phone can't tell which of these it got, so none is taken as final.
+            // After a try that may have gone, an answer under its id may be what the hub kept for the id, a relayed answer
+            // cut off on the way (a bare `internal`) or, after a receipt the hub dropped (`assistant_in_doubt`, which may
+            // never have reached the phone), a new run's answer. The phone can't tell which of these it got, so none is
+            // taken as final.
             let answer: Error = tried.inDoubt ? InDoubt() : error
             settle(tried, after: answer)
             throw answer
