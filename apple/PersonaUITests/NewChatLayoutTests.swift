@@ -57,9 +57,8 @@ final class NewChatLayoutTests: XCTestCase {
         XCTAssertFalse(has(app, "这是 Persona 的督办消息").exists)
         // No evidence list under the report: its second link is only in the list.
         XCTAssertFalse(has(app, "actions/runs/1001").exists, "the evidence list is still drawn")
-        // Folded to three lines: the report's last line shows only after Expand.
-        XCTAssertFalse(app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "缓存层按你说的没动")).firstMatch.exists,
-                       "the report is not folded")
+        // Folded to three lines: Expand under both long exchanges (a cut Text still reads in full to accessibility).
+        XCTAssertGreaterThanOrEqual(any.matching(identifier: "exchange.expand").count, 2, "the long exchanges are not folded")
         sleep(1)
         try shot(app, "folded")
 

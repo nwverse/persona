@@ -91,7 +91,7 @@ struct ExchangeText: View {
                     .fixedSize(horizontal: false, vertical: true)
                     .background(alignment: .top) {
                         // The whole text at the same width, unseen: taller than what is drawn means there is more.
-                        words.fixedSize(horizontal: false, vertical: true).hidden()
+                        words.fixedSize(horizontal: false, vertical: true).hidden().accessibilityHidden(true)
                             .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { full = $0 }
                     }
                     .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { drawn = $0 }
