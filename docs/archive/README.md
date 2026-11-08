@@ -9,6 +9,7 @@ Place necessary historical text under its module directory and list it below.
 
 | File | Contents |
 | --- | --- |
+| `apple/2026-11-09-ios-idle-energy.md` | Six synthetic before/after energy-workload windows, single-flight boundaries, lifecycle regressions and preserved Instruments/device acceptance gaps (#1634 / #1633) |
 | `android/2026-11-08-inbox-conversation-identity.md` | Grouped inbox chat-kind and sender identity loss, historical negative controls and native render checks (#1583) |
 | `android/2026-11-08-android-inbox-swipe.md` | Grouped inbox swipe regression, historical cause, synthetic pointer and reconciliation checks (#1491) |
 | `assistant/task-completion-6525.md` | Completion race reproductions, reconnect ordering, and historical evidence limits (#6525) |
