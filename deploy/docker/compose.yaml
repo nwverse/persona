@@ -50,7 +50,7 @@ services:
   # uncomment this service and PERSONA_BUILTIN_MANAGER above. hub.json must say "assistant": {"mode": "service"}: new
   # installs do, and docs/operations/docker.md says how to switch an older one.
   # manager:
-  #   image: ${PERSONA_IMAGE-${JARVIS_IMAGE:?set PERSONA_IMAGE in .env}}
+  #   image: ${PERSONA_IMAGE-${JARVIS_IMAGE:-}}
   #   restart: unless-stopped
   #   init: true
   #   command: ["supervise", "--manager-only", "--hub", "http://hub:18660"]
