@@ -568,6 +568,22 @@ type memStore struct {
 	failSetting error
 	// failPut: what writing settings fails with (nil: it writes); nothing is written then.
 	failPut error
+	// failKeys: what reading one key fails with, the other keys still reading (set through failKey).
+	failKeys map[string]error
+}
+
+// failKey makes reading key fail with err from now on; nil reads it again.
+func (m *memStore) failKey(key string, err error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.failKeys == nil {
+		m.failKeys = map[string]error{}
+	}
+	if err == nil {
+		delete(m.failKeys, key)
+	} else {
+		m.failKeys[key] = err
+	}
 }
 
 // noPlans is a store without the task_plans and assistant_feed tables.
@@ -603,6 +619,9 @@ func (m *memStore) Setting(_ context.Context, key string, out any) (bool, error)
 	defer m.mu.Unlock()
 	if m.failSetting != nil {
 		return false, m.failSetting
+	}
+	if err := m.failKeys[key]; err != nil {
+		return false, err
 	}
 	b, ok := m.vals[key]
 	if !ok {
