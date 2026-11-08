@@ -130,7 +130,8 @@ func (s *Service) setInboxBulk(ctx context.Context, action string, targets []inb
 		targets = nil
 		for _, it := range b.items {
 			view, _ := b.filingSnapshot(it, nil)
-			if filter.match(view) {
+			// A pending move can be open in either view. Include it so the pending guard reports a retry.
+			if filter.match(it) || filter.match(view) {
 				if it.arrivedAfter(asOf) {
 					res.Skipped = append(res.Skipped, inboxBulkSkip{it.ID, bulkSkipChanged})
 				} else {
