@@ -169,5 +169,6 @@
   "nudge_permission": "お返事をお待ちしています：{tool}の使用許可",
   "nudge_bare": "お返事をお待ちしています。",
   "board_nudged": "催促済み",
-  "board_verdict": "{title}：{verdict}"
+  "board_verdict": "{title}：{verdict}",
+  "moved_to_todos": "ToDo に移しました"
 }

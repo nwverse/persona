@@ -6858,6 +6858,41 @@
       },
       "extractionState" : "manual"
     },
+    "%lld instructions sent" : {
+      "localizations" : {
+        "en" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%1$lld instruction sent"
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%1$lld instructions sent"
+                }
+              }
+            }
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "指示を%1$lld件送信"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已发 %1$lld 条指令"
+          }
+        }
+      },
+      "extractionState" : "manual"
+    },
     "%lld items [Assistant Profile View 29b8db]" : {
       "comment" : "Memory count",
       "localizations" : {
@@ -18331,6 +18366,29 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "自动升级关着"
+          }
+        }
+      },
+      "extractionState" : "manual"
+    },
+    "Auto-update is paused while this extension is off. Turn it back on and your auto-update setting applies again." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Auto-update is paused while this extension is off. Turn it back on and your auto-update setting applies again."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "この拡張機能がオフの間、自動アップデートは一時停止します。オンに戻すと、元の自動アップデート設定に戻ります。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "扩展关闭期间暂停自动升级。重新打开扩展后，恢复你原来的自动升级设置。"
           }
         }
       },
@@ -92178,6 +92236,29 @@
       },
       "extractionState" : "manual"
     },
+    "Sent to “%@”" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Sent to “%1$@”"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "「%1$@」に送信"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "发给「%1$@」"
+          }
+        }
+      },
+      "extractionState" : "manual"
+    },
     "Sent, waiting for a reply" : {
       "localizations" : {
         "en" : {
@@ -98677,6 +98758,29 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "停在「%1$@」"
+          }
+        }
+      },
+      "extractionState" : "manual"
+    },
+    "Stopped “%@” and sent" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Stopped “%1$@” and sent"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "「%1$@」を止めて送信"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "打断「%1$@」后发送"
           }
         }
       },

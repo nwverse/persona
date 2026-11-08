@@ -101,7 +101,7 @@ extension AppModel {
         outboxWriter.run { [weak self] in // one write at a time, the latest last
             guard let self else { return }
             let list = self.chats.flatMap { key, store in store.pending.map { OutboxEntry(key: key, message: $0) } }
-            StateCache.save(Self.outboxName, list)
+            StateCache.save(Self.outboxName, list, in: self.stateFolder)
         }
     }
 
@@ -111,7 +111,7 @@ extension AppModel {
     /// (#1455). One whose copy is already in the chat's cache does not come back: copies are looked for only among
     /// the items that arrive from now on, and it showed twice until its wait ran out.
     func restoreOutbox() {
-        for e in StateCache.load(Self.outboxName, as: [OutboxEntry].self) ?? [] {
+        for e in StateCache.load(Self.outboxName, as: [OutboxEntry].self, in: stateFolder) ?? [] {
             var msg = e.message
             switch msg.state {
             case .failed: // a failed one stays failed, the user decides; not forever

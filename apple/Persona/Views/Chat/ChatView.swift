@@ -138,6 +138,8 @@ struct ChatView: View {
     /// The Persona conversation in the shell (docs/apple/ios.md「新外壳」).
     @Environment(\.shellChat) private var shellChat
     @Environment(\.shell) private var shell
+    /// iPhone Duo's bars down the side: the shell's bar over the Persona conversation is the side rail (`ShellSideRail`).
+    @Environment(\.shellRailEdge) private var railEdge
     /// The shell's composer (`ShellComposerBar`): the assistant's conversation and, in the shell, an agent's too, in every
     /// style (#1091); the old layout keeps `ComposerRow` / `PromptComposer` and the mode chips above them. On the Mac
     /// the card in every style but BeautifulUI's (its prompt bar is already one): the field, and under it Add, the model
@@ -789,7 +791,8 @@ struct ChatView: View {
         }
         var lines = lineBuilder.build(Self.debugTrim(blocks), live: key.live, streaming: key.streaming)
         if style == .assistant { // docs/assistant/unified-entry.md: the hub's items, quick results, a line for each day
-            lines = ChatLines.daySections(ChatLines.quickResults(ChatLines.mergeFeed(lines, feed)))
+            // The hand-offs the task cards take in are drawn there, not among the lines (#1542).
+            lines = ChatLines.daySections(ChatLines.quickResults(ChatLines.mergeFeed(lines, SentToAgents.shown(feed))))
         }
         scratch.lines = lines
         scratch.linesKey = key
@@ -1475,7 +1478,7 @@ struct ChatView: View {
                 try? await Task.sleep(for: .milliseconds(60))
                 if n == 1 { hideChrome() } // once the header has measured itself
                 guard let bottom = scratch.landingMaxY, scratch.listFrame.height > 0 else { continue }
-                let want = scratch.listFrame.minY + (style == .dev ? (sideBars ? sideHeaderHeight : chrome.settledHeight) : AssistantTopBar.height) + Self.inputTail
+                let want = scratch.listFrame.minY + (style == .dev ? (sideBars ? sideHeaderHeight : chrome.settledHeight) : AssistantTopBar.room(railEdge)) + Self.inputTail
                 let off = want - bottom // > 0: too high; the flipped list scrolls toward older to lower it
                 if abs(off) < 1 { break }
                 scrollList(to: chrome.offset + off)
@@ -1745,7 +1748,7 @@ struct ChatView: View {
         // The Mac has no header over the chat (`chrome` stays empty): the row over it is `macChrome`.
         style == .dev ? macChromeHeight : AssistantTopBar.height
         #else
-        style == .dev ? (sideBars ? sideHeaderHeight : chrome.height) : AssistantTopBar.height
+        style == .dev ? (sideBars ? sideHeaderHeight : chrome.height) : AssistantTopBar.room(railEdge)
         #endif
     }
 
@@ -1800,9 +1803,9 @@ struct ChatView: View {
             .frame(minHeight: .zero)
             ChatRegion(name: "ChatFooter.body") { footer }
                 // What the footer takes of the page: the pending cards grow into the rest while the keyboard is up.
-                .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { h in
-                    if abs(footerRoom.footer - h) >= 1 { footerRoom.footer = h }
-                }
+                // Exact, like the cards' own height inside it (`PendingCards.shown`): the cards take one from the other for
+                // what the footer holds besides them, which must not move with their own height (#1580).
+                .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { footerRoom.footer = $0 }
         }
         // The height the page offers, even when what is in it is taller: the pending cards size themselves by it. A
         // frame with both bounds takes the offered size whatever the content (not a design value: no token for it).
