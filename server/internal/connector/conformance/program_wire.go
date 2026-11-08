@@ -9,7 +9,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"regexp"
 	"slices"
 	"strings"
 
@@ -18,6 +17,7 @@ import (
 	"github.com/nwverse/persona/server/internal/connector/serve"
 	"github.com/nwverse/persona/server/internal/connectorwire"
 	"github.com/nwverse/persona/server/internal/extension"
+	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
@@ -33,7 +33,7 @@ func (is issues) err() error {
 	return errors.New(strings.Join(is, "; "))
 }
 
-var snakeKey = regexp.MustCompile(`^[a-z][a-z0-9_]*$`)
+var snakeKey = lazyre.New(`^[a-z][a-z0-9_]*$`)
 
 // opaqueKeys are keys whose value the protocol does not describe: a tool's JSON schema (its own keywords), the blocks
 // of a migrated connector's items, and a manifest's descriptions by kind.

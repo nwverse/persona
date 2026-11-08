@@ -13,11 +13,11 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"regexp"
 	"slices"
 	"strings"
 
 	"github.com/nwverse/persona/server/internal/identity"
+	"github.com/nwverse/persona/server/internal/lazyre"
 )
 
 // Dialects of the GPT-Live wire.
@@ -182,18 +182,21 @@ type Provider struct {
 	// Models offered; empty lists the service's own (live: GET <url>/models) or the dialect's default.
 	Models       []string `json:"models,omitempty"`
 	DefaultModel string   `json:"default_model,omitempty"`
-	// Tools (live dialect): declare Persona's function tools in session.start, for a deployment that accepts them
-	// there. The public GPT-Live API refuses session.tools: without them the model's client delegations go to the
-	// Persona main conversation, as with the codex dialect.
-	Tools bool `json:"tools,omitempty"`
+	// Tools (live dialect): declare Persona's function tools in session.start. Some services hand work over only
+	// through a declared function (docs/lessons/voice.md "Other behavior"); the public GPT-Live API refuses
+	// session.tools, and without them the model's client delegations go to the Persona main conversation, as with the
+	// codex dialect. Unset (the settings form's upstream, #1420) is auto: declared, and a service that refuses them as
+	// it starts the session gets the session again without them, which the plugin then remembers for that provider.
+	// true or false (hub.json) decides it, with no fallback.
+	Tools *bool `json:"tools,omitempty"`
 	// InputRate is the microphone's sample rate (16000 or 24000); 0 is the dialect's (live 16000, codex 24000).
 	InputRate int `json:"input_rate,omitempty"`
 }
 
 var (
-	providerIDPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]{0,31}$`)
-	modelPattern      = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$`)
-	voicePattern      = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$`)
+	providerIDPattern = lazyre.New(`^[a-z0-9][a-z0-9_-]{0,31}$`)
+	modelPattern      = lazyre.New(`^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$`)
+	voicePattern      = lazyre.New(`^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$`)
 )
 
 // LoadConfig reads the settings the hub hands the plugin (docs/assistant/voice.md "How the extension gets its settings"): the settings form in
@@ -278,7 +281,17 @@ func (p *Provider) name() string {
 	return p.ID
 }
 
-func (p *Provider) tools() bool { return p.Dialect == DialectLive && p.Tools }
+// toolsMode is whether the provider's sessions declare Persona's function tools, and whether that is auto (Tools
+// unset): only then does a session the service refuses them on start again without them (connect).
+func (p *Provider) toolsMode() (declare, auto bool) {
+	switch {
+	case p.Dialect != DialectLive:
+		return false, false
+	case p.Tools == nil:
+		return true, true
+	}
+	return *p.Tools, false
+}
 
 func (p *Provider) inputRate() int {
 	switch {

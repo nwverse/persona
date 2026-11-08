@@ -4,13 +4,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"regexp"
 	"slices"
 	"sort"
 	"strings"
 	"time"
 
 	"github.com/nwverse/persona/server/internal/ai"
+	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/prompts"
 )
 
@@ -54,14 +54,14 @@ type projectRetry struct {
 	at       time.Time
 }
 
-var importanceRe = regexp.MustCompile(`^P[0-3]$`)
+var importanceRe = lazyre.New(`^P[0-3]$`)
 
 type chatDigest struct {
-	Summary    string   `json:"summary"`
-	OneLine    string   `json:"one_line"`
-	Importance string   `json:"importance"`
-	Relevance  int      `json:"relevance"`
-	Tags       []string `json:"tags"`
+	Summary    string     `json:"summary"`
+	OneLine    string     `json:"one_line"`
+	Importance string     `json:"importance"`
+	Relevance  modelScore `json:"relevance"`
+	Tags       []string   `json:"tags"`
 	Projects   []struct {
 		Name    string   `json:"name"`
 		Kind    string   `json:"kind"`
@@ -96,28 +96,43 @@ func (e *Engine) DueForCompression(now time.Time) []*Chat {
 	return out
 }
 
+// settleCompression advances only when no live pending work changed while the
+// model judged its snapshot. The minute boundary and pending count move together
+// for both a successful summary and a refusal; unseen IDs must remain readable.
+func settleCompression(current, snapshot *Chat) bool {
+	if current.Pending != snapshot.Pending || current.LastAt.After(snapshot.LastAt) {
+		return false
+	}
+	current.Pending = 0
+	current.CoveredUntil = snapshot.LastAt.Add(time.Minute)
+	return true
+}
+
 // compressFailed records that compressing c (the copy the call started from) failed with err, and returns the error to
-// log. The model declines the same messages again, so a refused batch is settled without a summary: the chat goes on
-// from the messages after it. Any other failure puts the chat off (compressRetry). A paused connection or an ended run
-// changes nothing: the chat stays due.
+// log. A refused snapshot is settled without a summary only when no new live work arrived; otherwise that work stays
+// eligible for another judgment. Any other failure puts the chat off (compressRetry). A paused connection or an ended
+// run changes nothing: the chat stays due.
 func (e *Engine) compressFailed(ctx context.Context, c *Chat, err error) error {
 	if ai.IsPaused(err) || ctx.Err() != nil {
 		return err
 	}
 	e.Store.chatMu.Lock() // read and written whole: what archiving or a history import wrote meanwhile stays
 	defer e.Store.chatMu.Unlock()
+	if perr := e.Store.recoverIngest(c.ID); perr != nil {
+		return perr
+	}
 	current, ok := e.Store.Chat(c.ID) // archiving may have added messages while the model was called
 	if !ok {
 		return err
 	}
 	if errors.Is(err, ai.ErrRefused) {
-		current.CoveredUntil = c.LastAt.Add(time.Minute)
-		if !current.LastAt.After(c.LastAt) {
-			current.Pending = 0
-		}
+		settled := settleCompression(current, c)
 		current.CompressFailures, current.CompressRetryAt = 0, time.Time{}
 		if perr := e.Store.PutChat(current); perr != nil {
 			return perr
+		}
+		if !settled {
+			return fmt.Errorf("%w: left concurrent messages pending", err)
 		}
 		return fmt.Errorf("%w: skipped its messages up to %s", err, c.LastAt.UTC().Format(time.RFC3339))
 	}
@@ -136,6 +151,9 @@ func (e *Engine) compressFailed(ctx context.Context, c *Chat, err error) error {
 func (e *Engine) putCompressed(c *Chat, set func(cur *Chat)) (bool, error) {
 	e.Store.chatMu.Lock()
 	defer e.Store.chatMu.Unlock()
+	if err := e.Store.recoverIngest(c.ID); err != nil {
+		return false, err
+	}
 	cur, ok := e.Store.Chat(c.ID)
 	if !ok {
 		return false, nil
@@ -193,7 +211,7 @@ func (e *Engine) Compress(ctx context.Context, c *Chat) error {
 		}
 	}
 	c.OneLine = oneLine(d.OneLine)
-	applyTags(&c.Tagging, d.Importance, d.Relevance, d.Tags, now)
+	applyTags(&c.Tagging, d.Importance, int(d.Relevance), d.Tags, now)
 	if HasPeople(c) {
 		for _, p := range d.Projects {
 			slug := e.evolveProject(p.Name, p.Kind, p.Aliases, p.MyRole, c, p.Update, now)
@@ -208,12 +226,11 @@ func (e *Engine) Compress(ctx context.Context, c *Chat) error {
 		for _, slug := range c.Projects {
 			cur.Projects = addUnique(cur.Projects, slug)
 		}
-		// Messages archived while the model wrote are after what it covered: they stay pending.
-		if !cur.LastAt.After(started.LastAt) {
-			cur.Pending = 0
-		}
+		// New IDs can share a timestamp or minute with the snapshot. Keep the
+		// pending work and its old coverage boundary when live ingestion moved,
+		// so the next pass also reads those messages at minute precision.
+		settleCompression(cur, &started)
 		cur.CompressedAt = now
-		cur.CoveredUntil = started.LastAt.Add(time.Minute)
 		cur.CompressFailures, cur.CompressRetryAt = 0, time.Time{}
 	})
 	if err != nil || !written {
@@ -238,16 +255,16 @@ func (e *Engine) Compress(ctx context.Context, c *Chat) error {
 
 // automatedSender matches mail addresses of notifications and newsletters (only the inbox is read, so a reply of
 // the owner's rarely shows up: the sender is what tells).
-var automatedSender = regexp.MustCompile(`(?i)(^|[-_.@])(no[-_]?reply|do[-_]?not[-_]?reply|notifications?|notify|news(letter)?|marketing|mailer|mailer-daemon|postmaster|bounces?|info|support|service|billing|account|alerts?|updates?|hello|team|receipts?|orders?|invoices?|payments?|contact|sales|promo(tions)?|offers?|rewards?|digest|submissions?|feedback|welcome)([-_.@]|$)`)
+var automatedSender = lazyre.New(`(?i)(^|[-_.@])(no[-_]?reply|do[-_]?not[-_]?reply|notifications?|notify|news(letter)?|marketing|mailer|mailer-daemon|postmaster|bounces?|info|support|service|billing|account|alerts?|updates?|hello|team|receipts?|orders?|invoices?|payments?|contact|sales|promo(tions)?|offers?|rewards?|digest|submissions?|feedback|welcome)([-_.@]|$)`)
 
 // automatedLocal: a local part ending in one of those words ("applesupport", "teamnotify").
-var automatedLocal = regexp.MustCompile(`(?i)(support|service|notify|notifications?|alerts?|news|updates?|receipts?|billing)$`)
+var automatedLocal = lazyre.New(`(?i)(support|service|notify|notifications?|alerts?|news|updates?|receipts?|billing)$`)
 
 // bulkDomain: the subdomains bulk mail goes out from (email.apple.com, em-s.dropbox.com, txn.dropbox.com, mg.…).
-var bulkDomain = regexp.MustCompile(`(?i)^(e|em|em-[a-z]+|email|emails|emessaging|message|messages|mail|mailer|mailing|news|newsletter|txn|transactional|notify|notifications|mg|send|sendgrid|bounce|marketing)[.]`)
+var bulkDomain = lazyre.New(`(?i)^(e|em|em-[a-z]+|email|emails|emessaging|message|messages|mail|mailer|mailing|news|newsletter|txn|transactional|notify|notifications|mg|send|sendgrid|bounce|marketing)[.]`)
 
 // newsletterHost: platforms every sender on is a newsletter.
-var newsletterHost = regexp.MustCompile(`(?i)(^|[.])(substack\.com|beehiiv\.com|mailchimp(app)?\.com|convertkit\.com|buttondown\.email|ghost\.io|medium\.com)$`)
+var newsletterHost = lazyre.New(`(?i)(^|[.])(substack\.com|beehiiv\.com|mailchimp(app)?\.com|convertkit\.com|buttondown\.email|ghost\.io|medium\.com)$`)
 
 // automatedAddress reports whether a mail address looks like a system or bulk sender rather than a person.
 func automatedAddress(addr string) bool {
@@ -345,7 +362,7 @@ func applyTags(t *Tagging, importance string, relevance int, tags []string, now 
 
 // --- projects ---
 
-var slugRe = regexp.MustCompile(`[^\p{L}\p{N}]+`)
+var slugRe = lazyre.New(`[^\p{L}\p{N}]+`)
 
 // Slug is the directory name of a project name ("Persona 2.0 Launch" → "persona-2-0-launch"; letters of any script are kept).
 func Slug(name string) string {
@@ -380,7 +397,7 @@ func (e *Engine) FindProject(name string) *Project {
 }
 
 // trailingGroupRe is one bracket group at the end of a name: 「（…）」 or 「(...)」.
-var trailingGroupRe = regexp.MustCompile(`\s*[（(][^（()）]*[)）]\s*$`)
+var trailingGroupRe = lazyre.New(`\s*[（(][^（()）]*[)）]\s*$`)
 
 // displayBases are the shorter names a project name in the shown form may stand for, longest first: without the
 // one line after 「：」, then without one trailing bracket group at a time. 2026-11-06 a knowledge base got projects
@@ -675,15 +692,15 @@ func (e *Engine) evolveProject(name, kind string, aliases []string, myRole strin
 }
 
 type projectDigest struct {
-	Summary    string   `json:"summary"`
-	OneLine    string   `json:"one_line"`
-	Goal       string   `json:"goal"`
-	Kind       string   `json:"kind"`
-	Status     string   `json:"status"`
-	Importance string   `json:"importance"`
-	Relevance  int      `json:"relevance"`
-	Tags       []string `json:"tags"`
-	Keywords   []string `json:"keywords"`
+	Summary    string     `json:"summary"`
+	OneLine    string     `json:"one_line"`
+	Goal       string     `json:"goal"`
+	Kind       string     `json:"kind"`
+	Status     string     `json:"status"`
+	Importance string     `json:"importance"`
+	Relevance  modelScore `json:"relevance"`
+	Tags       []string   `json:"tags"`
+	Keywords   []string   `json:"keywords"`
 }
 
 // RefreshProjects rewrites the summaries of projects with news, at most max per run. A project whose rewrite failed

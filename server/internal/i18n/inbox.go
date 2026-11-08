@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"strconv"
 	"strings"
+	"sync"
 )
 
 // InboxText recognizes only hub-owned inbox labels and errors, including old stored or RPC-flattened text.
@@ -13,7 +14,7 @@ func InboxText(l Lang, text string) string {
 	if l == "" || text == "" {
 		return text
 	}
-	for _, form := range inboxTemplates {
+	for _, form := range inboxTemplates() {
 		match := form.pattern.FindStringSubmatch(text)
 		if match == nil {
 			continue
@@ -36,13 +37,15 @@ func InboxText(l Lang, text string) string {
 	return text
 }
 
-var inboxTemplates = makeCatalogTemplates(func(key string) bool {
-	for _, prefix := range []string{"inbox-errors.", "assistant-inbox_agent.", "assistant-inbox_triage.", "assistant-inbox_admit.", "assistant-inbox_chain."} {
-		if strings.HasPrefix(key, prefix) {
-			return true
+var inboxTemplates = sync.OnceValue(func() []deploymentTemplate {
+	return makeCatalogTemplates(func(key string) bool {
+		for _, prefix := range []string{"inbox-errors.", "assistant-inbox_agent.", "assistant-inbox_triage.", "assistant-inbox_admit.", "assistant-inbox_chain."} {
+			if strings.HasPrefix(key, prefix) {
+				return true
+			}
 		}
-	}
-	return key == "assistant-inbox.by_rules" || key == "assistant-inbox.muted"
+		return key == "assistant-inbox.by_rules" || key == "assistant-inbox.muted"
+	})
 })
 
 // InboxJSON translates copies at the public response boundary, including saved reply receipts. Only known

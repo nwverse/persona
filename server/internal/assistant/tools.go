@@ -29,7 +29,7 @@ import (
 // (docs/assistant/prompts.md).
 var toolNames = []string{"ask_user", "notify_user", "schedule_followup", "schedule_routine", "delete_routine", "list_followups",
 	"cancel_followup", "agents_list", "agent_read", "agent_send", "agent_interrupt", "agent_start", "agent_supervise", "agent_archive", "agent_unarchive", "interaction_answer", "inbox_suggest", "inbox_draft",
-	"kb_search", "kb_list", "kb_get", "kb_update", "kb_history_plan", "kb_history_status", "kb_history_stop", "kb_history_resume", "persona_settings",
+	"kb_search", "kb_list", "kb_get", "kb_update", "kb_history_plan", "kb_history_status", "kb_history_stop", "kb_history_resume", "persona_settings", "secret_run",
 	"model_profiles_list", "model_profile_get", "model_profile_switch", "model_profile_rollback",
 	"conversations_list", "conversation_read", "conversation_rename", "conversation_archive", "conversation_unarchive",
 	"conversation_new", "conversation_send", "task_plan", "task_review"}
@@ -107,13 +107,15 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 	case "model_profiles_list", "model_profile_get", "model_profile_switch", "model_profile_rollback":
 		return s.toolModelProfile(ctx, self, name, args)
 	case "task_review":
-		return s.toolTaskReview(ctx, self, args) // supervise.go
+		return s.toolTaskReview(ctx, self, args) // supervise_review.go
 	case "kb_search", "kb_list", "kb_get", "kb_update":
 		return s.toolKB(ctx, name, args)
 	case "kb_history_plan", "kb_history_status", "kb_history_stop", "kb_history_resume":
 		return s.toolKBHistory(ctx, name, args) // kb_history_tools.go
 	case "interaction_answer":
 		return s.toolInteractionAnswer(ctx, self, args)
+	case "secret_run":
+		return s.toolSecretRun(ctx, machine, self, args) // secret_run.go
 	case "inbox_draft":
 		return s.toolInboxDraft(ctx, self, args)
 	case "inbox_suggest":
@@ -342,7 +344,7 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 
 // agentStartTimeout bounds the wait for an agent_start answer: the node creates the session and launches the agent
 // first, and a machine waking from sleep or a launcher cold start can take minutes. Same bound as a quiet task's
-// own start (tasks.go's taskStartTimeout). A var so tests shorten it instead of sleeping past it.
+// own start (tasks_start.go's taskStartTimeout). A var so tests shorten it instead of sleeping past it.
 var agentStartTimeout = taskStartTimeout
 
 // agentStartAdoptWindow bounds how fresh a listed session's last sign of life must be to count as the one an
@@ -447,8 +449,8 @@ func (s *Service) adoptStartedSession(ctx context.Context, m Device, launcher, c
 // askUserWait is how long an ask_user card waits for the user. It is longer than the Lark nudge's default wait
 // (assistantwire.NudgeAfterDefault), so an owner who is away is nudged while the question still waits (#9); the
 // turn that asked is held for as long, which is why the user speaking in the conversation withdraws the question
-// (withdrawAskUser).
-const askUserWait = 2 * time.Hour
+// (withdrawAskUser). A question nobody answers in it becomes a to-do (ask_todo.go). A variable for the tests.
+var askUserWait = 2 * time.Hour
 
 // question is an ask_user waiting for the user: the card the hub shows, and where the answer goes.
 type question struct {
@@ -505,6 +507,13 @@ func (s *Service) toolAskUser(ctx context.Context, machine, sessionID string, ar
 	}
 	if r.Cancel {
 		return prompts.RenderQuestionCancelled(), nil
+	}
+	if s.askExpiredResolution(ix, r) { // nobody answered in time: it waits as a to-do (ask_todo.go)
+		t, err := s.askExpired(context.WithoutCancel(ctx), ix)
+		if err == nil {
+			return prompts.RenderQuestionMovedToTodo(prompts.QuestionMovedToTodo{TodoID: t.ID, Title: t.Title}), nil
+		}
+		s.logf("ask_user %s: expired, and no to-do could be made: %v", ix.ID, err)
 	}
 	if r.Dismiss || len(r.Answers) == 0 {
 		return "The user did not answer (dismissed or timed out). Don't go ahead with what you asked about; say what is waiting for them.", nil
@@ -593,7 +602,7 @@ func (s *Service) pendingQuestions() []proto.Interaction {
 	return out
 }
 
-// Action takes the user's answer to one of the questions out, or to a card about an agent's turn (agents_work.go)
+// Action takes the user's answer to one of the questions out, or to a card about an agent's turn (agents_work_act.go)
 // (op answer, the answer a proto.Resolution).
 func (s *Service) Action(ctx context.Context, a Action) (ActionResult, error) {
 	if a.Op != "answer" {

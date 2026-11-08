@@ -9,7 +9,6 @@ import (
 	"io"
 	"net/http"
 	"path/filepath"
-	"regexp"
 	"slices"
 	"strings"
 	"sync"
@@ -24,6 +23,7 @@ import (
 	"github.com/nwverse/persona/server/internal/db"
 	"github.com/nwverse/persona/server/internal/extwire"
 	"github.com/nwverse/persona/server/internal/i18n"
+	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/link"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/sessionlist"
@@ -41,13 +41,14 @@ func (h *Hub) routes() http.Handler {
 	// Confirm / reject / rename a computer (machine_trust.go, machine_rename.go).
 	h.machineTrustRoutes(api)
 	h.machineRenameRoutes(api)
-	h.deviceRoutesRelayed(api) // the manager's own: reconnect, engine, herdr, deploy, claude-dirs (devices_link.go)
+	h.deviceRoutesRelayed(api) // the manager's own: reconnect, engine, herdr, deploy, claude-dirs (devices_routes.go)
 	h.fileRoutes(api)
 	h.gitRoutes(api)
 	h.agentSettingsRoutes(api)
 	h.sessionRoutes(api)
 	h.paneRoutes(api)
 	h.nodeDoctorRoutes(api)
+	h.nodeUpdateRelayRoutes(api)
 	api.HandleFunc("GET /api/v1/interactions", func(w http.ResponseWriter, r *http.Request) {
 		ixs := visibleInteractions(h.pendingInteractions(), h.requestHasElicitation(r))
 		if em := extensionManager(r); em != "" { // an extension's token: its manager's cards only
@@ -60,14 +61,14 @@ func (h *Hub) routes() http.Handler {
 	h.deviceRoutes(api)
 	h.pushRoutes(api)
 	h.live.routes(api)
-	h.metricsRoutesRelayed(api) // the monitoring is the manager's (devices_link.go)
+	h.metricsRoutesRelayed(api) // the monitoring is the manager's (devices_routes.go)
 	h.lockTestRoutes(api)
 	h.assistantRoutes(api)
 	h.pinRoutes(api)
 	h.notifyRoutes(api)
 	h.personaRoutes(api)
 	h.lookRoutes(api)
-	// usage windows (#2432): the manager's (devices_link.go)
+	// usage windows (#2432): the manager's (devices_routes.go)
 	h.usageRoutesRelayed(api)
 	h.inboxRoutesRelayed(api)
 	// the extensions', connectors', bots', mail's, Cua's and ego's: the manager's (extensions_link.go)
@@ -288,7 +289,7 @@ func (h *Hub) auth(next http.Handler) http.Handler {
 		// API answers are live data: without this the phone's URLCache kept a copy of every page it pulled (megabytes,
 		// never read again). Images and media that may be cached set their own Cache-Control.
 		w.Header().Set("Cache-Control", "no-store")
-		next.ServeHTTP(w, r)
+		h.observeClientRequest(next, w, r, p)
 	})
 }
 
@@ -392,7 +393,7 @@ func atoi(s string) int {
 
 // agentTypeRe is what POST /api/v1/sessions takes as agent_type: claude, codex, traex, or a runtime's agent as the
 // launcher list says (a runtime's launcher starts through its runtime, whatever the type); the node checks the rest.
-var agentTypeRe = regexp.MustCompile(`^[a-z][a-z0-9_-]{0,31}$`)
+var agentTypeRe = lazyre.New(`^[a-z][a-z0-9_-]{0,31}$`)
 
 func (h *Hub) withMachine(fn func(http.ResponseWriter, *http.Request, *Machine)) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
@@ -1103,6 +1104,7 @@ func (h *Hub) serveWS(w http.ResponseWriter, r *http.Request) {
 			c.clean = s == websocket.StatusNormalClosure || s == websocket.StatusGoingAway
 			return
 		}
+		c.recordSocketTraffic("websocket_frame", "received", int64(len(data)), 0)
 		h.onClientMessage(ctx, c, data)
 	}
 }

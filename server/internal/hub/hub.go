@@ -47,6 +47,7 @@ type Hub struct {
 	build     update.Build // channel, build number, where updates come from (docs/operations/hub-update.md)
 	upd       *updater     // updating itself to the publisher's release (selfupdate.go)
 	logger    *log.Logger
+	traffic   trafficLog // privacy-safe minute counters, flushed to the journal
 	machines  []*Machine
 	byID      map[string]*Machine
 	push      *Pusher
@@ -106,7 +107,7 @@ type Hub struct {
 	assistant assistantState
 	owners    ownerCache    // the default manager, kept a moment (ownership.go)
 	others    managerStates // the other managers' (manager_state.go)
-	moving    moves         // who carries what changing (ownership.go)
+	moving    moves         // who carries what changing (ownership_moves.go)
 	// userLocale: the user's language, an i18n.Lang (locale.go)
 	userLocale atomic.Value
 	deleted    deletedBook // conversations taken out of the apps' lists (deleted_sessions.go)
@@ -176,6 +177,7 @@ type Store interface {
 }
 
 func Run(ctx context.Context, b update.Build) error {
+	claimInherited() // before anything can start a process: runHub starts the manager before it listens (listen.go)
 	logger := log.New(os.Stderr, "", log.LstdFlags)
 	// An update that keeps failing goes back before anything else can fail, the config included (selfupdate.go).
 	updating := newUpdater(&Hub{build: b, version: b.Version, logger: logger}).boot()
@@ -208,6 +210,7 @@ func runHub(ctx context.Context, b update.Build, cfg *Config, budget *shutdownBu
 		byID: map[string]*Machine{}, clients: map[*client]struct{}{}, calls: map[string]chan proto.ToolResult{},
 		slot: slot,
 	}
+	defer func() { h.flushTraffic(time.Now(), true) }()
 	h.extLost.started = time.Now() // managers' extensions may call before their managers are back (extensions_proof.go)
 	h.teeErrors()                  // the log's error lines become reports while an extension takes them (error_reports.go)
 	h.builtinLooks = builtinPersonaFS()
@@ -250,6 +253,7 @@ func runHub(ctx context.Context, b update.Build, cfg *Config, budget *shutdownBu
 	h.loadUserLang(ctx)
 	h.loadPhoneTools()
 	h.push = newPusher(cfg.dir, h.store, h.logf)
+	h.push.traffic = h.recordTraffic
 	h.push.desktopOnline = h.desktopOnline
 	h.push.desktopOpen = h.desktopOpen
 	h.push.hubID = h.hubID

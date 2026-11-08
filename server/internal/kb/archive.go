@@ -2,16 +2,18 @@ package kb
 
 import (
 	"context"
+	"crypto/rand"
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"path/filepath"
-	"regexp"
 	"slices"
 	"strings"
 	"sync/atomic"
 	"time"
 
 	"github.com/nwverse/persona/server/internal/kbwire"
+	"github.com/nwverse/persona/server/internal/lazyre"
 )
 
 // Defined in the contract package kbwire (docs/server/architecture.md "Contract packages"); the old names stay.
@@ -251,6 +253,9 @@ func (e *Engine) archiveChat(ctx context.Context, src Source, sc SourceChat) (in
 func (e *Engine) saveArchived(c *Chat, cursor string, n int, listed time.Time) error {
 	e.Store.chatMu.Lock()
 	defer e.Store.chatMu.Unlock()
+	if err := e.Store.recoverIngest(c.ID); err != nil {
+		return err
+	}
 	cur, ok := e.Store.Chat(c.ID)
 	if !ok {
 		cur = c
@@ -279,7 +284,7 @@ func (e *Engine) saveArchived(c *Chat, cursor string, n int, listed time.Time) e
 	return nil
 }
 
-var docLink = regexp.MustCompile(`https?://[\w.-]+\.(?:feishu\.cn|larksuite\.com|larkoffice\.com)/(?:docx|docs|wiki|sheets|base|mindnotes|slides)/[A-Za-z0-9]+`)
+var docLink = lazyre.New(`https?://[\w.-]+\.(?:feishu\.cn|larksuite\.com|larkoffice\.com)/(?:docx|docs|wiki|sheets|base|mindnotes|slides)/[A-Za-z0-9]+`)
 
 // DownloadFunc saves one media path of a message to dst (Source.Download, or a connector's attachments).
 type DownloadFunc func(ctx context.Context, media, dst string) error
@@ -343,14 +348,14 @@ func (e *Engine) buildLine(ctx context.Context, download DownloadFunc, c *Chat, 
 // attachmentPlaceholder stands for an attachment that is not saved (too old, not downloaded, or failed).
 const attachmentPlaceholder = "[附件]" // i18n-ignore: archive data
 
-// attach saves a message's i-th media under attachments/<day>/ and returns the link the line gets, or the
+// attach saves a message's i-th media under attachments/<day>/messages/ and returns the link the line gets, or the
 // placeholder when it is not saved.
 func (e *Engine) attach(ctx context.Context, download DownloadFunc, c *Chat, m SourceMessage, i int, media, day string, recent bool) string {
 	if !recent || download == nil {
 		return attachmentPlaceholder
 	}
-	name := fmt.Sprintf("%s-%d%s", SafeID(m.ID), i, extOf(media, m.Type))
-	dst := e.Store.path(KindChat, c.ID, "attachments", day, name)
+	name := attachmentName(m.ID, i, media, m.Type)
+	dst := e.Store.path(KindChat, c.ID, "attachments", day, "messages", name)
 	if err := download(ctx, media, dst); err != nil {
 		if !errors.Is(err, ErrDownloadAborted) { // an aborted write keeps nothing of the line anyway
 			e.failed.Add(1)
@@ -359,6 +364,19 @@ func (e *Engine) attach(ctx context.Context, download DownloadFunc, c *Chat, m S
 	}
 	rel, _ := filepath.Rel(e.Store.path(KindChat, c.ID), dst)
 	return fmt.Sprintf("%s(%s)", attachmentPlaceholder, rel)
+}
+
+// A filename must keep the raw identity, including punctuation, case and long
+// suffixes. Lowercase full hashes stay distinct on case-insensitive filesystems.
+// Missing IDs have no replay identity: give each delivery's attachment its own
+// name instead of overwriting the previous anonymous message's file. Existing
+// links and files keep their names; no legacy filename is reused or rewritten.
+func attachmentName(id string, i int, media, typ string) string {
+	key := fmt.Sprintf("%x", sha256.Sum256([]byte(id)))
+	if id == "" {
+		key = "anonymous-" + strings.ToLower(rand.Text())
+	}
+	return fmt.Sprintf("message-%s-%d%s", key, i, extOf(media, typ))
 }
 
 // isImage: a message whose media are pictures (a rich-text post's are its inline images).

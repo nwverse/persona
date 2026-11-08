@@ -81,6 +81,8 @@ and tells it to read their AGENTS.md / CLAUDE.md before reading or writing. Pers
     messages/YYYY-MM-DD.md  # Full text, one file per day, appended to (imported history merged in); deleted after 365 days
     attachments/YYYY-MM-DD/ # Images, files; deleted after 30 days (per source: kb.attachment_days_by_source)
     summary.md              # Compressed context (AI-maintained, rolling updates)
+    .receipts.json          # Live-ingestion source/chat message IDs and original times (bookkeeping, not searched)
+    .ingest.json            # Pending live-ingestion recovery intent, removed after completion
   people/<person id>/       # One directory per person: Lark lark-<userId>, mail mail-<address>
     meta.json               # Name, chats, linked projects, tags
     summary.md              # Who they are, relationship to me, recent conversations with me
@@ -120,6 +122,8 @@ Every chat, person, project, document, meeting and event has three fields, gener
 | `importance` | `P0` / `P1` / `P2` / `P3` | Importance: P0 critical (manager, core project, production incident), P1 important, P2 normal, P3 ignorable |
 | `relevance` | 0–100 | Relevance to me: directly addressed / my responsibility → high; merely seen in a group → low |
 | `tags` | String array | No preset list; AI generates 2–6 short terms, preferring existing tags (`kb_tags` returns existing tags and counts) |
+
+A value the model writes that doesn't fit is dropped on its own, not with the rest of its answer. An `importance` other than `P0`–`P3` is ignored. A `relevance` written as a numeric string (`"80"`) or a fraction counts as that number, rounded. Anything else, including a number outside 0–100, is ignored and the existing score stays (`server/internal/kb/score.go`, #1099). Before this, a quoted score failed the chat's whole summary, a project's rewrite, a recording's title and summary, or a batch of up to 40 tagged items.
 
 ## Pipeline (manager background, `server/internal/kb`, loop in `assistant/kb.go`)
 
@@ -181,6 +185,45 @@ Every chat, person, project, document, meeting and event has three fields, gener
    Messages outside text retention are never written: initial chat archives, initial email ingestion and imported history all stop at midnight on the earliest retained day (`kb.Engine.textCutoff`,
    using the same `text_days` as cleanup's `Engine.Prune`),
    otherwise another initially archived chat writes expired daily files again after cleanup (observed in production 2026-11-02: 47 returned 6 seconds after deletion).
+
+### Connector replay and recovery (#1343)
+
+Live connector batches go through `Engine.Ingest`. A nonempty `SourceMessage.ID` is a stable identity within the exact source and chat, recorded in that chat's
+`.receipts.json`. `Position` is a pagination token, not an identity. Repeated or reordered IDs add no line and change neither `messages` nor `pending`; distinct IDs
+with identical timestamp, sender and text remain distinct. The archive is append-only: the first durable version of an ID wins, so redelivering an edited source
+message does not update its old text or attachments. Sources that need to archive revisions must give those revisions distinct IDs.
+
+Ingestion installs `.ingest.json` before replacing any affected day file. It holds complete intended day contents (preserving all original bytes), receipts and chat
+metadata, including both counters. Each file is replaced through a temporary file, flushed and renamed. Recovery repeats those replacements and removes the intent
+only after all succeed. A writable `NewStore` finishes pending intents before returning; `Ingest`, history, compression and archive metadata updates also recover
+before reading counters. Until recovery succeeds, other writes to that chat refuse to overwrite the pending snapshots, timezone conversion waits, and cleanup
+keeps the files. A read-only open refuses an unfinished intent because it cannot repair it. Remove the filesystem obstruction and retry the operation or reopen
+the writable store; retain the intent for recovery. The directory has one owning writer, with concurrent callers serialized by the Store's locks. Operations needing
+both persistence locks acquire metadata before message files, matching project commit's frozen-input check when it reads the timeline.
+
+The connector checkpoint advances only after every batch on its page succeeds, using atomic replacement so a failed replacement preserves the previous cursor.
+A failed later batch, an interrupted ingestion, or failure between ingestion and checkpoint can therefore replay a page without adding any already receipted ID.
+This transaction covers archive text, identity and chat metadata; people/document indexing and change notifications remain derived, best-effort work. A replay
+refreshes the chat's database index from its durable metadata. Compression compares both the latest timestamp and pending count before clearing work or advancing
+its coverage boundary; distinct IDs arriving during a model call can share the same timestamp or minute. A refusal uses the same snapshot gate: it settles an
+unchanged batch without a summary, but leaves concurrent work pending and eligible without adding a refusal cooldown. Ingesting a new ID in a previously
+settled minute moves coverage back to that minute so later processing can read it. Other model failures retain their backoff; paused or cancelled calls do not
+settle pending work.
+
+New attachment filenames use a full SHA-256 digest of the raw message ID, plus the attachment index and bounded extension, under `attachments/<day>/messages/`.
+The separate subdirectory also protects old filenames that happen to resemble the new hashes.
+This avoids the older sanitized-name collisions from punctuation, case-insensitive filesystems and truncated long IDs. Distinct raw IDs cannot overwrite each
+other's saved attachment through those filename collisions. Missing IDs use a fresh random filename per attachment, preserving append behavior without inventing
+a durable source identity. Existing filenames and Markdown links stay untouched; a known receipted ID skips downloads on replay, including after restart. The
+first newly receipted delivery from a legacy unreceipted archive may create a new hashed file alongside its old file; it does not overwrite or relink that old file.
+Attachment retention still deletes the same day directories.
+
+Compatibility is explicit: messages without IDs keep the previous append behavior, and a retry may append them again; a `Position` or text hash cannot safely
+invent an identity. Existing Markdown has no IDs to reconstruct. The first newly receipted delivery can therefore repeat an older unreceipted line with matching
+text. Direct `AppendMessages` writes and imported history keep their existing behavior and do not reconstruct live receipts; history's formatted-text matching
+remains described below. No public message wire fields or Markdown line format change. Receipts expire with their original text day during pruning (original
+instants keep them correct across timezone changes). Pruning does not decrement `messages` or `pending`, matching existing behavior. Forgetting a source removes
+its entire chat directories, including receipts and any completed recovery state, so importing it again is allowed.
 
 ### History import
 

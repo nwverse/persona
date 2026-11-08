@@ -3,13 +3,13 @@ package assistant
 import (
 	"context"
 	"fmt"
-	"regexp"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/nwverse/persona/server/internal/ai"
 	"github.com/nwverse/persona/server/internal/assistantwire"
+	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/prompts"
 	"github.com/nwverse/persona/server/internal/proto"
 )
@@ -134,7 +134,7 @@ func tabSlug(s string) string {
 }
 
 // defaultTabName: a name nobody chose — the old fixed "persona", herdr's numbers, the agent-<n> fallback.
-var defaultTabName = regexp.MustCompile(`^(persona(-\d+)?|\d+|agent-\d+)?$`)
+var defaultTabName = lazyre.New(`^(persona(-\d+)?|\d+|agent-\d+)?$`)
 
 // TabRename is one tab of POST /api/v1/tabs/autoname: renamed, or (dry run) what it would be called.
 type TabRename struct {

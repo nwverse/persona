@@ -14,7 +14,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"regexp"
 	"runtime"
 	"slices"
 	"strings"
@@ -25,6 +24,7 @@ import (
 	"github.com/nwverse/persona/server/internal/extension/sandbox"
 	"github.com/nwverse/persona/server/internal/herdr"
 	"github.com/nwverse/persona/server/internal/identity"
+	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/nodeclient"
 )
 
@@ -181,9 +181,29 @@ func hookSettings(bin, dir string, assistant bool) map[string]any {
 	}}
 }
 
+// displayHooks is the MessageDisplay hook of the Agents Persona starts, the live replies plugin's (hooksplugin.go,
+// livereply.go, #1309), for the node whose directory is dir: Claude Code hands it each batch of whole lines of a reply
+// as it shows them. It shows the lines only once the hook is done, whatever "async" says (2.1.319), so the hook just
+// passes them to the node and prints nothing (nodeclient.Display, at most 150 ms after it started); the timeout
+// (seconds, the shortest whole one) bounds one that hangs, after which Claude shows the lines as they are. It is in
+// exec form ("command" the program, "args" its arguments): Claude Code starts it directly instead of through /bin/sh -c,
+// which costs every batch 6–8 ms more on a Mac (docs/integrations/claude-integration.md "What the terminal pays").
+// Every Claude Code with the event takes exec form (2.1.150 has exec form and not the event; 2.1.200 has both). With
+// no shell to put PERSONA_HOME in front (hookSettings), the hook is told dir as an argument (nodeclient.HomeFlag).
+// The headless assistant streams its replies itself and has none.
+func displayHooks(bin, dir string) []any {
+	args := []string{"hook"}
+	if dir != "" {
+		args = append(args, nodeclient.HomeFlag, dir)
+	}
+	return []any{map[string]any{"hooks": []any{map[string]any{"type": "command", "command": bin, "args": args, "async": true, "timeout": 1}}}}
+}
+
 // generatedFiles is every file writeGeneratedConfig writes under the node's directory dir (but the skills plugin),
 // computed without writing. Each set of hooks is there twice: as a plugin for a claude that loads plugins, in a
 // settings file for one that does not (hooksplugin.go). The hooks and the MCP server are told dir, as PERSONA_HOME.
+// The Agents' live replies plugin is part of their hooks (claude-hooks), written whatever the setting says: a start
+// loads it or not (liveRepliesPlugin).
 func generatedFiles(bin, dir string) ([]generatedFile, error) {
 	var out []generatedFile
 	for _, kind := range []string{"claude", "assistant"} {
@@ -199,6 +219,16 @@ func generatedFiles(bin, dir string) ([]generatedFile, error) {
 		}
 		for _, rel := range slices.Sorted(maps.Keys(files)) {
 			out = append(out, generatedFile{Group: kind + "-hooks", Rel: filepath.Join(kind+"-hooks", rel), Content: files[rel]})
+		}
+		if kind != "claude" {
+			continue
+		}
+		live, err := liveRepliesPluginFiles(bin, dir)
+		if err != nil {
+			return nil, err
+		}
+		for _, rel := range slices.Sorted(maps.Keys(live)) {
+			out = append(out, generatedFile{Group: kind + "-hooks", Rel: filepath.Join(liveRepliesDir, rel), Content: live[rel]})
 		}
 	}
 	server := map[string]any{"command": bin, "args": []string{"mcp"}}
@@ -435,12 +465,14 @@ func allPrefix(items []string, prefix string) bool {
 	return !slices.ContainsFunc(items, func(s string) bool { return !strings.HasPrefix(s, prefix) })
 }
 
-// configCommands are the programs a settings file or hooks plugin (top-level "hooks") runs, as first words.
+// configCommands are the programs a settings file or hooks plugin (top-level "hooks") runs: a shell-form hook's first
+// word, an exec-form one's (with "args") command as it is.
 func configCommands(b []byte) []string {
 	var f struct {
 		Hooks map[string][]struct {
 			Hooks []struct {
-				Command string `json:"command"`
+				Command string   `json:"command"`
+				Args    []string `json:"args"`
 			} `json:"hooks"`
 		} `json:"hooks"`
 		MCPServers map[string]struct {
@@ -454,7 +486,11 @@ func configCommands(b []byte) []string {
 	for _, matchers := range f.Hooks {
 		for _, m := range matchers {
 			for _, h := range m.Hooks {
-				if w := shellFirstWord(h.Command); w != "" {
+				w := h.Command
+				if h.Args == nil {
+					w = shellFirstWord(h.Command)
+				}
+				if w != "" {
 					out = append(out, w)
 				}
 			}
@@ -501,7 +537,7 @@ func shellFirstWord(cmd string) string {
 }
 
 // assignmentRe is a shell word that sets a variable for the command after it.
-var assignmentRe = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*=`)
+var assignmentRe = lazyre.New(`^[A-Za-z_][A-Za-z0-9_]*=`)
 
 // checkCommandPaths: the program each generated file runs exists and can be run. A file moved or removed under a
 // running node (a redeploy to another path) leaves hooks that fail on every call.
@@ -511,6 +547,7 @@ func checkCommandPaths(dir string) DoctorCheck {
 	for _, kind := range []string{"claude", "assistant"} {
 		files = append(files, filepath.Join(kind+"-hooks", "hooks", "hooks.json"))
 	}
+	files = append(files, filepath.Join(liveRepliesDir, "hooks", "hooks.json"))
 	seen := map[string]bool{}
 	var bad []string
 	read := 0

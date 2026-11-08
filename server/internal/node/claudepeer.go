@@ -13,12 +13,12 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"regexp"
 	"slices"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/prompts"
 	"github.com/nwverse/persona/server/internal/transcript"
 )
@@ -40,9 +40,9 @@ import (
 // The content is what the model reads, after Claude Code's own line "Another Claude session sent a message:" and its
 // warning that a peer is not the user. A Claude sender wraps the body in <cross-session-message from=… from-name=…>;
 // the session takes the sender's name and the body from that envelope into the transcript line's origin, and a
-// message without one is written with neither (transcript.go peerMessage then has nothing to show). So the node wraps
-// it too, named "Persona" (peerSender), with no from and no from-mode: it is not a Claude session and has no inbox or
-// permission mode of its own.
+// message without one is written with neither (transcript/peer.go peerMessage then has nothing to show). So the node
+// wraps it too, named "Persona" (peerSender), with no from and no from-mode: it is not a Claude session and has no
+// inbox or permission mode of its own.
 //
 // What the session does with it is its own business, and the sender is not told: it may take it (queued: run as a
 // turn when the session rests, absorbed at the next tool boundary while it works), hold it for the person at the
@@ -202,7 +202,7 @@ func peerEnvelope(text string) string {
 	return "<" + peerTag + ` from-name="` + peerSender + `">` + "\n" + peerCloseRe.ReplaceAllString(text, `<\$1`) + "\n</" + peerTag + ">"
 }
 
-var peerCloseRe = regexp.MustCompile(`(?i)<(/` + peerTag + `)`)
+var peerCloseRe = lazyre.New(`(?i)<(/` + peerTag + `)`)
 
 // marshalNoEscape is json.Marshal without HTML escaping (<, >, & as they are, as JavaScript writes them).
 func marshalNoEscape(v any) ([]byte, error) {
@@ -226,7 +226,7 @@ func peerMsgID() string {
 }
 
 // peerPipeRe is a Windows named pipe path as Claude Code takes one: \\.\pipe\<name> or \\.\pipe\LOCAL\<name>.
-var peerPipeRe = regexp.MustCompile(`(?i)^[\\/]{2}[.?][\\/]pipe[\\/](?:(LOCAL)[\\/])?([^\\/]+)$`)
+var peerPipeRe = lazyre.New(`(?i)^[\\/]{2}[.?][\\/]pipe[\\/](?:(LOCAL)[\\/])?([^\\/]+)$`)
 
 // peerKeyName is the key file's name for the inbox at socket, as Claude Code derives it: the sha256 (hex) of the
 // canonical path — for a pipe \\.\pipe\ and its name (with LOCAL\ when it has it) in lower case, for a socket the
@@ -282,7 +282,7 @@ func peerToken(p claudePeer) (string, error) {
 	return k.PeerToken, nil
 }
 
-var peerTokenRe = regexp.MustCompile(`^[0-9a-f]{32}$`)
+var peerTokenRe = lazyre.New(`^[0-9a-f]{32}$`)
 
 // peerReachable: the claude's inbox looks usable from here — a path this platform dials, the protocol the node
 // speaks, and (where the inbox requires it) a key file. It opens nothing: a session's capabilities say "send" only
