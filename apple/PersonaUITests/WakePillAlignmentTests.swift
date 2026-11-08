@@ -74,7 +74,9 @@ final class WakePillAlignmentTests: XCTestCase {
         reply.press(forDuration: 1.0)
         let copy = app.buttons["复制"]
         XCTAssertTrue(copy.waitForExistence(timeout: 3), "the long-press bar did not open")
-        // Empty space at the bottom of the drawer, under its last line.
+        // Empty space at the bottom of the drawer, under its last line; past the moment after the press the bar ignores
+        // taps in (`MessageMenu.dismiss`).
+        sleep(1)
         app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.92)).tap()
         XCTAssertTrue(copy.waitForNonExistence(timeout: 3), "the bar stayed after a tap on empty space")
         XCTAssertTrue(app.navigationBars["3 个后台任务完成"].exists, "the tap closed the drawer instead")
