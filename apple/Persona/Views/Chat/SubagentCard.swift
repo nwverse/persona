@@ -246,3 +246,105 @@ struct SubagentCard: View {
         .padding(.bottom, Theme.Space.m)
     }
 }
+
+/// Subagents launched one after another (in parallel), as one line of a work line (#5602, the web's `AgentGrid`): "Running
+/// 3 agents" while any runs, "Ran 3 agents · 12 steps" after; their cards in a grid, two side by side where there is room
+/// (an iPad, a Mac), in the order they were launched. `alone`: the running ones under their folded work line.
+struct SubagentGrid: View {
+    @Environment(\.taskIndex) private var tasks
+    @Environment(\.subagentsByCall) private var agents
+    var calls: [ToolCall]
+    var first: Bool
+    var alone: Bool
+
+    private var running: Int {
+        calls.filter { c in SubagentCardStatus.of(c, tasks: tasks, agent: c.use.toolUseID.flatMap { agents[$0] }) == .running }.count
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            header
+            LazyVGrid(columns: [GridItem(.adaptive(minimum: Theme.Size.subagentColumn), spacing: 0, alignment: .top)],
+                      alignment: .leading, spacing: 0) {
+                ForEach(calls, id: \.id) { SubagentCard(call: $0) }
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background {
+            if alone {
+                if !WorkCardSlice.timeline { WorkCardSlice(top: true, bottom: true) }
+            } else {
+                WorkCardSlice(top: first, bottom: false)
+            }
+        }
+        .overlay(alignment: .top) { if !alone && !first { WorkCardSlice.separator } }
+        .accessibilityIdentifier("chat.subagent-grid")
+    }
+
+    private var header: some View {
+        let n = running
+        return HStack(spacing: Theme.Space.m) {
+            ZStack {
+                if WorkCardSlice.timeline { Circle().fill(Theme.pageBackground).scaledFrame(width: Theme.Size.icon, height: Theme.Size.icon) }
+                Circle().fill((n > 0 ? Theme.busy : Color.secondary).opacity(0.14)).scaledFrame(width: Theme.Size.icon, height: Theme.Size.icon)
+                if n > 0 {
+                    ProgressView().controlSize(.mini).tint(Theme.busy)
+                } else {
+                    ThemedIcon(ToolPresentation.symbol("Agent"))
+                        .font(Theme.Font.labelStrong).dynamicTypeSize(...DynamicTypeSize.xLarge)
+                        .foregroundStyle(.secondary)
+                }
+            }
+            Text(SubagentGridText.head(count: calls.count, running: n, steps: calls.compactMap { $0.use.toolUseID.flatMap { agents[$0]?.steps } }.reduce(0, +)))
+                .font(Theme.Font.label)
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .contentTransition(.opacity)
+        }
+        .padding(.top, alone || WorkCardSlice.timeline ? Theme.Space.s : Theme.Space.m)
+        .padding(.horizontal, WorkCardSlice.inset)
+        .accessibilityElement(children: .combine)
+    }
+}
+
+/// What a grid of subagents says over its cards.
+enum SubagentGridText {
+    static func head(count: Int, running: Int, steps: Int) -> String {
+        if running > 0 { return String(localized: "Running \(running) agents [Subagent Grid]") }
+        let ran = String(localized: "Ran \(count) agents [Subagent Grid]")
+        return steps > 0 ? ran + " · " + String(localized: "\(steps) steps in all [Subagent Grid]") : ran
+    }
+
+    /// The running work line's words while the agent waits on subagents it launched in the foreground (#5602, the
+    /// web's running bar): "2 subagents working — Running the tests… · 1 more"; `short`, the count alone.
+    static func working(count: Int, doing: [String], short: Bool) -> String {
+        let head = String(localized: "\(count) subagents working [Work Line]")
+        guard !short, let now = doing.first else { return head + (short ? "" : "…") }
+        let more = doing.count > 1 ? " · " + String(localized: "\(doing.count - 1) more [Work Line]") : ""
+        return head + " — " + now + "…" + more
+    }
+}
+
+/// The subagents the agent waits on (#5602, the web's `agentsWorking`, Claude Desktop's "2 agents working — …"): running
+/// ones it launched in the foreground whose calls have no result yet, and what they do, newest call first.
+nonisolated struct AgentsWorking: Equatable, Sendable {
+    var count: Int
+    var doing: [String]
+
+    /// Nil when there are none.
+    static func of(_ subagents: [Subagent], tasks: TaskIndex) -> AgentsWorking? {
+        let waiting = subagents.filter { a in
+            guard a.running, a.background != true, let id = a.toolUseID else { return false }
+            return !tasks.answered.contains(id) && !tasks.started.contains(id)
+        }
+        guard !waiting.isEmpty else { return nil }
+        var doing: [String] = []
+        for a in waiting.sorted(by: { ($0.updatedAt ?? .distantPast) > ($1.updatedAt ?? .distantPast) }) {
+            guard let t = a.lastTool else { continue }
+            let summary = t.summary?.trimmingCharacters(in: .whitespaces)
+            guard let what = summary?.isEmpty == false ? summary : t.name, !what.isEmpty else { continue }
+            if !doing.contains(what) { doing.append(what) }
+        }
+        return AgentsWorking(count: waiting.count, doing: doing)
+    }
+}

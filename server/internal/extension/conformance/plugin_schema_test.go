@@ -426,6 +426,23 @@ func jsonFields(g reflect.Type, out map[string]goField) {
 func asString(v any) string { s, _ := v.(string); return s }
 func asSlice(v any) []any   { s, _ := v.([]any); return s }
 
+// The hub refuses an empty list for any of its points ("contributes.<point>: empty"): the manifest schema's list for
+// each of them holds at least one item, or an empty one passes the SDK's and a catalog's validation, then fails at
+// install.
+func TestManifestSchemaContributesListsAreNotEmpty(t *testing.T) {
+	props := loadSchemas(t).def(t, "Contributes")["properties"].(map[string]any)
+	for name := range extension.Points {
+		list, ok := props[name].(map[string]any)
+		if !ok {
+			t.Errorf("contributes.%s: the hub has the point, manifest.schema.json Contributes does not list it", name)
+			continue
+		}
+		if list["minItems"] != float64(1) {
+			t.Errorf("contributes.%s: minItems %v, want 1 (the hub refuses an empty list)", name, list["minItems"])
+		}
+	}
+}
+
 // The manifest schema's events.subscribe enum is the events the hub has (extension.EventTopics): an event added to one
 // and not the other makes a manifest that the server accepts fail the schema, or the reverse.
 func TestManifestSchemaListsEveryEventTopic(t *testing.T) {
@@ -444,5 +461,39 @@ func TestManifestSchemaListsEveryEventTopic(t *testing.T) {
 	sort.Strings(want)
 	if !slices.Equal(got, want) {
 		t.Fatalf("manifest.schema.json EventsItem.subscribe enum %v, extension.EventTopics %v", got, want)
+	}
+}
+
+// The manifest schema's contributes lists exactly the hub's built-in points (extension.Points), and each point's item
+// refuses unknown fields as the hub's strict decode does: an open item lets a typo pass the SDK's and a catalog's
+// validation, then fail at install.
+func TestManifestSchemaContributesAreTheHubsPoints(t *testing.T) {
+	s := loadSchemas(t)
+	props := s.def(t, "Contributes")["properties"].(map[string]any)
+	for name := range extension.Points {
+		if _, ok := props[name]; !ok {
+			t.Errorf("%s: the hub has the point, manifest.schema.json Contributes does not list it", name)
+		}
+	}
+	names := make([]string, 0, len(props))
+	for name := range props {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		if _, ok := extension.Points[name]; !ok {
+			t.Errorf("%s: manifest.schema.json Contributes lists it, the hub has no such point", name)
+			continue
+		}
+		items, _ := props[name].(map[string]any)["items"].(map[string]any)
+		ref := asString(items["$ref"])
+		if ref == "" {
+			t.Errorf("contributes.%s: items is not a $ref to a definition", name)
+			continue
+		}
+		def, item := s.ref(t, ref)
+		if item["additionalProperties"] != false {
+			t.Errorf("contributes.%s: %s does not refuse unknown fields (additionalProperties: false), the hub does", name, def)
+		}
 	}
 }
