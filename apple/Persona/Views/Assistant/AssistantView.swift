@@ -327,21 +327,12 @@ struct AssistantView: View {
         withAnimation(Theme.Motion.standard) { pending = PendingStart(text: text, imageCount: images.count) }
         do {
             let makesMain = space == nil && model.assistantMain == nil // the first one becomes the main conversation
-            var attempt = 0
-            var started: Session?
-            while started == nil {
-                do {
-                    started = try await api.startConversation(prompt: text, images: images, launcher: starterLauncher,
-                                                              permissionMode: starterMode.isEmpty ? nil : starterMode,
-                                                              effort: starterEffort.isEmpty ? nil : starterEffort,
-                                                              main: makesMain, space: space)
-                } catch where CodedFailure.passesBySelf(error) && attempt < 3 {
-                    // The assistant restarting: a few seconds, tried again without a word (docs/assistant/onboarding.md 4.6).
-                    attempt += 1
-                    try await Task.sleep(for: .seconds(2 * attempt))
-                }
+            let s = try await AssistantStart.run(receipts: model.hubFeatures.contains(AssistantStart.feature)) { op in
+                try await api.startConversation(prompt: text, images: images, launcher: starterLauncher,
+                                                permissionMode: starterMode.isEmpty ? nil : starterMode,
+                                                effort: starterEffort.isEmpty ? nil : starterEffort,
+                                                main: makesMain, space: space, opID: op)
             }
-            guard let s = started else { return }
             if makesMain { await model.refreshAssistant() }
             Haptics.success()
             model.began(s, text: text, images: images) // the message stays on screen until claude has written it
