@@ -34,43 +34,60 @@ export function draftTitle(it: InboxItem): string {
 }
 
 /** The drafted reply, editable; "Rewrite" asks again with an instruction; "Send" replies and files the item as done. */
-export function DraftDialog({ item, onClose }: { item: InboxItem; onClose: () => void }) {
+export function DraftDialog(props: { item: InboxItem; onClose: () => void }) {
+  return <DraftEditor key={itemKey(props.item)} {...props} />;
+}
+
+function DraftEditor({ item, onClose }: { item: InboxItem; onClose: () => void }) {
   const sessions = useStore((s) => s.sessions);
   const assistant = useStore((s) => s.assistant);
+  const key = itemKey(item);
   const agentText = agentDraft(item);
-  const [text, setText] = useState(() => unsentReplies.get(itemKey(item)) ?? agentText ?? "");
+  const [text, setText] = useState(() => unsentReplies.get(key) ?? agentText ?? "");
   const [instruction, setInstruction] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [dropped, setDropped] = useState<Set<string>>(new Set());
   const proposed = agentText ? item.agent?.changes ?? [] : [];
   const kept = proposed.filter((c) => !dropped.has(changeKey(c)));
-  const live = useRef(true);
+  const generation = useRef(0);
   const agent = item.agent;
 
+  // Save as text changes: navigation can unmount without onClose, and sendReply owns clearing/restoring on send.
+  const keepText = (value: string) => {
+    unsentReplies.set(key, value);
+    setText(value);
+  };
+
   const load = async (ask: string) => {
+    const request = ++generation.current;
     setLoading(true);
     try {
       const r = await api<{ text?: string }>(`${itemPath(item.id)}/draft`, { method: "POST", json: { instruction: ask }, headers: itemRequest(item) });
-      if (!live.current) return;
-      setText(r.text ?? "");
+      if (request !== generation.current) return;
+      keepText(r.text ?? "");
       setInstruction("");
       setError("");
     } catch (e) {
-      if (live.current) setError(errorText(e));
+      if (request === generation.current) setError(errorText(e));
     } finally {
-      if (live.current) setLoading(false);
+      if (request === generation.current) setLoading(false);
     }
   };
 
   useEffect(() => {
-    live.current = true;
-    if (!unsentReplies.has(itemKey(item)) && !agentText) void load("");
+    if (!unsentReplies.has(key) && !agentText) void load("");
     return () => {
-      live.current = false;
+      generation.current++;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [item.id]);
+  }, [key]);
+
+  const cancel = () => {
+    // Like manual mail, Cancel discards; incidental dismissal keeps the reply.
+    unsentReplies.delete(key);
+    onClose();
+  };
 
   const send = () => {
     void sendReply(item, text.trim(), kept);
@@ -86,7 +103,7 @@ export function DraftDialog({ item, onClose }: { item: InboxItem; onClose: () =>
       width={580}
       footer={
         <>
-          <Button tone="quiet" onClick={onClose}>{t("common.cancel")}</Button>
+          <Button tone="quiet" onClick={cancel}>{t("common.cancel")}</Button>
           <Button tone="accent" icon="send" disabled={!canSend} onClick={send}>{t("inbox-inboxdialogs.send")}</Button>
         </>
       }
@@ -138,7 +155,7 @@ export function DraftDialog({ item, onClose }: { item: InboxItem; onClose: () =>
       <div className="relative">
         <textarea
           value={text}
-          onChange={(e) => setText(e.target.value)}
+          onChange={(e) => keepText(e.target.value)}
           disabled={loading}
           rows={8}
           aria-label={t("inbox-inboxdialogs.reply_label")}
