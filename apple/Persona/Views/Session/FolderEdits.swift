@@ -218,11 +218,11 @@ private struct FolderPickerList: View {
                         open(full)
                     } label: {
                         HStack(spacing: Theme.Space.m) {
-                            Image(systemName: Theme.Icon.folderFilled).font(Theme.Font.body).foregroundStyle(Theme.accent)
+                            ThemedIcon(Theme.Icon.folderFilled).font(Theme.Font.body).foregroundStyle(Theme.accent)
                                 .scaledFrame(width: Theme.Size.icon)
                             Text(f.name).font(Theme.Font.secondary).foregroundStyle(blocked ? Color.secondary : Color.primary).lineLimit(1)
                             Spacer(minLength: Theme.Space.s)
-                            Image(systemName: Theme.Icon.disclosure).font(Theme.Font.labelStrong).foregroundStyle(.tertiary)
+                            ThemedIcon(Theme.Icon.disclosure).font(Theme.Font.labelStrong).foregroundStyle(.tertiary)
                         }
                         .contentShape(.rect)
                     }
@@ -231,7 +231,7 @@ private struct FolderPickerList: View {
                     .themedRow()
                 }
             } else if let error {
-                ContentUnavailableView("Can't Open This Folder", systemImage: Theme.Icon.folderUnavailable, description: Text(error))
+                ContentUnavailableView("Can't Open This Folder", systemImage: Theme.Icon.error, description: Text(error))
                     .listRowBackground(Color.clear)
             } else {
                 HStack { Spacer(); ProgressView(); Spacer() }.listRowBackground(Color.clear)

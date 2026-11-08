@@ -53,7 +53,7 @@ struct FilesPane: View {
                         Text("Too many files; showing the first 2,000").font(Theme.Font.label).foregroundStyle(.secondary)
                     }
                 } else if let error {
-                    ContentUnavailableView("Can't Open This Folder", systemImage: Theme.Icon.folderUnavailable, description: Text(error))
+                    ContentUnavailableView("Can't Open This Folder", systemImage: Theme.Icon.error, description: Text(error))
                         .listRowBackground(Color.clear)
                 } else {
                     HStack { Spacer(); ProgressView(); Spacer() }.listRowBackground(Color.clear)
@@ -184,7 +184,7 @@ struct FilesPane: View {
                     Haptics.tap()
                     stack.removeLast()
                 } label: {
-                    Image(systemName: Theme.Icon.back).font(Theme.Font.captionStrong).scaledFrame(width: Theme.Size.wellS, height: Theme.Size.wellS)
+                    ThemedIcon(Theme.Icon.back).font(Theme.Font.captionStrong).scaledFrame(width: Theme.Size.wellS, height: Theme.Size.wellS)
                 }
                 .themedButton()
                 .clipShape(.circle)
@@ -195,7 +195,7 @@ struct FilesPane: View {
                     HStack(spacing: Theme.Space.xs) {
                         crumb((cwd as NSString).lastPathComponent, level: 0)
                         ForEach(Array(stack.enumerated()), id: \.offset) { i, name in
-                            Image(systemName: "chevron.compact.right").font(Theme.Font.label).foregroundStyle(.tertiary)
+                            ThemedIcon("chevron.compact.right").font(Theme.Font.label).foregroundStyle(.tertiary)
                             crumb(name, level: i + 1)
                         }
                     }
@@ -220,7 +220,7 @@ struct FilesPane: View {
                 Button { pickingFiles = true } label: { Label("Choose from Files", systemImage: Theme.Icon.file) }
                 Button { pickingPhotos = true } label: { Label("Choose from Photos", systemImage: Theme.Icon.photos) }
             } label: {
-                Image(systemName: Theme.Icon.upload).font(Theme.Font.captionStrong).scaledFrame(width: Theme.Size.wellS, height: Theme.Size.wellS)
+                ThemedIcon(Theme.Icon.upload).font(Theme.Font.captionStrong).scaledFrame(width: Theme.Size.wellS, height: Theme.Size.wellS)
             }
             #if os(macOS)
             .menuStyle(.button)
@@ -240,7 +240,7 @@ struct FilesPane: View {
                 Toggle(isOn: $showHidden) { Label("Show Hidden Files", systemImage: Theme.Icon.view) }
                 Button { UIPasteboard.general.string = path } label: { Label("Copy Path", systemImage: Theme.Icon.copy) }
             } label: {
-                Image(systemName: Theme.Icon.more).font(Theme.Font.captionStrong).scaledFrame(width: Theme.Size.wellS, height: Theme.Size.wellS)
+                ThemedIcon(Theme.Icon.more).font(Theme.Font.captionStrong).scaledFrame(width: Theme.Size.wellS, height: Theme.Size.wellS)
             }
             #if os(macOS)
             // A Mac menu draws as a pop-up button with its own arrow: the ⋯ was squeezed to two dots inside the circle.
@@ -322,13 +322,13 @@ struct FilesPane: View {
         } label: {
             HStack(spacing: Theme.Space.m) {
                 if selecting {
-                    Image(systemName: selection.contains(e.name) ? Theme.Icon.successFilled : Theme.Icon.unchecked)
+                    ThemedIcon(selection.contains(e.name) ? Theme.Icon.successFilled : Theme.Icon.unchecked)
                         .font(Theme.Font.body)
                         .foregroundStyle(selection.contains(e.name) ? Theme.accent : Color.secondary)
                         .scaledFrame(width: Theme.Size.icon)
                 }
                 if e.dir {
-                    Image(systemName: Theme.Icon.folderFilled)
+                    ThemedIcon(Theme.Icon.folderFilled)
                         .font(Theme.Font.body)
                         .foregroundStyle(Theme.accent)
                         .scaledFrame(width: Theme.Size.icon)
@@ -339,7 +339,7 @@ struct FilesPane: View {
                 VStack(alignment: .leading, spacing: Theme.Space.xxs) {
                     HStack(spacing: Theme.Space.xs) {
                         Text(e.name).font(Theme.Font.secondary).foregroundStyle(e.name.hasPrefix(".") ? Color.secondary : Color.primary).lineLimit(1)
-                        if e.symlink == true { Image(systemName: "arrow.turn.up.right").font(Theme.Font.label).foregroundStyle(.tertiary) }
+                        if e.symlink == true { ThemedIcon("arrow.turn.up.right").font(Theme.Font.label).foregroundStyle(.tertiary) }
                     }
                     HStack(spacing: Theme.Space.sm) {
                         if !e.dir { Text(e.size.storageText) }
@@ -357,7 +357,7 @@ struct FilesPane: View {
                         GitBadge(letter: mark)
                     }
                 }
-                if e.dir && !selecting { Image(systemName: Theme.Icon.disclosure).font(Theme.Font.labelStrong).foregroundStyle(.tertiary) }
+                if e.dir && !selecting { ThemedIcon(Theme.Icon.disclosure).font(Theme.Font.labelStrong).foregroundStyle(.tertiary) }
             }
             .contentShape(.rect)
         }
