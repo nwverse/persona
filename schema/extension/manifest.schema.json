@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "manifest.schema.json",
   "title": "Extension manifest",
-  "description": "persona-extension.json (read as persona-plugin.json before the rename, #1844) at the root of an extension's package. The hub reads it strictly: a field it does not know anywhere fails the install. Rules a schema cannot say (a gate file inside the package, ids unique across extensions, version ranges) stay the hub's.",
+  "description": "persona-extension.json (read as persona-plugin.json before the rename, #1844) at the root of an extension's package. The hub reads it strictly: a field it does not know anywhere fails the install. Rules a schema cannot say (a gate file inside the package, ids unique across extensions, a name listed twice, what a version range admits) stay the hub's.",
   "$ref": "#/$defs/Manifest",
   "$defs": {
     "ID": {"type": "string", "pattern": "^[a-z0-9][a-z0-9_-]{0,31}$"},
@@ -18,17 +18,23 @@
       "pattern": "^((\\*\\.)?([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\\.)*[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?|config:[a-z_][a-z0-9_]{0,63}(:http)?)$"
     },
     "ActivationEvent": {"type": "string", "enum": ["on_startup", "on_call", "on_http"]},
+    "VersionRange": {
+      "description": ">=X.Y.Z, <X.Y.Z, or both with spaces between; empty is any version.",
+      "type": "string",
+      "pattern": "^(\\s*(>=|<)(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(-[0-9A-Za-z.-]+)?(\\s+(>=|<)(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(-[0-9A-Za-z.-]+)?)*\\s*)?$"
+    },
     "Manifest": {
       "type": "object",
       "additionalProperties": false,
       "properties": {
         "manifest_version": {"type": "integer", "const": 1},
         "id": {"$ref": "#/$defs/ID"},
-        "name": {"type": "string", "minLength": 1, "maxLength": 40},
+        "name": {"type": "string", "minLength": 1, "maxLength": 40, "pattern": "\\S"},
         "version": {"type": "string", "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(-[0-9A-Za-z.-]+)?$"},
         "description": {"type": "string"},
         "publisher": {"type": "string"},
-        "homepage": {"type": "string", "pattern": "^https://[^/?#]+"},
+        "homepage": {"type": "string",
+          "pattern": "^https://([A-Za-z0-9._~!$&'()*+,;=:%@-]*@)?[^\\x00-\\x20\\x7f/?#@\\\\^`{|}]+([/?#][^\\x00-\\x1f\\x7f]*)?$"},
         "tags": {
           "description": "What the market shows and searches (docs \"Extension market\"): at most 16, each 1 to 24 characters. Packages and indexes carry the manifest without them (hubs before tags refuse an unknown field); the index entry carries them instead.",
           "type": "array", "maxItems": 16, "items": {"type": "string", "minLength": 1, "maxLength": 24}
@@ -129,7 +135,7 @@
       "additionalProperties": false,
       "properties": {
         "id": {"$ref": "#/$defs/ID"},
-        "version": {"type": "string", "description": "A range of its versions: >=1.2.0, <2.0.0, or both with a space between."}
+        "version": {"$ref": "#/$defs/VersionRange", "description": "A range of its versions: >=1.2.0, <2.0.0, or both with a space between."}
       },
       "required": ["id"]
     },
@@ -159,7 +165,7 @@
       "properties": {
         "id": {"$ref": "#/$defs/ID"},
         "market": {"type": "string", "description": "The address of the market it comes from (github:owner/repo, https://…), as the hub registered it; empty: the pack's own market, else the first registered market that has it."},
-        "version": {"type": "string", "description": "A range of its versions, as in depends."}
+        "version": {"$ref": "#/$defs/VersionRange", "description": "A range of its versions, as in depends."}
       },
       "required": ["id"]
     },
@@ -168,7 +174,8 @@
       "type": "object",
       "additionalProperties": false,
       "properties": {
-        "persona": {"type": "string", "description": "A range of hub build numbers (\">=202611050000 <202701010000\")."},
+        "persona": {"type": "string", "description": "A range of hub build numbers (\">=202611050000 <202701010000\").",
+          "pattern": "^(\\s*(>=|<)\\+?0*[1-9][0-9]*(\\s+(>=|<)\\+?0*[1-9][0-9]*)*\\s*)?$"},
         "extension_protocol": {"type": "integer", "const": 1},
         "plugin_protocol": {"type": "integer", "const": 1}
       }
@@ -272,7 +279,7 @@
       "additionalProperties": false,
       "properties": {
         "name": {"type": "string", "pattern": "^[a-z][a-z0-9_]{0,31}$"},
-        "title": {"type": "string", "minLength": 1},
+        "title": {"type": "string", "minLength": 1, "pattern": "\\S"},
         "description": {"type": "string"},
         "required": {"type": "boolean"},
         "hint": {"description": "last4: once set, the settings show its last four characters.", "enum": ["last4"]}
