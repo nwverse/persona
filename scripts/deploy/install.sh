@@ -285,8 +285,8 @@ get_node_program() {
 
 # The hub's and the built-in manager's own programs (docs/server/server.md "Programs"), on the computer that runs the
 # hub: the same build as personad, installed with it, so that a service that runs one never runs an older one. A
-# release from before them has none: fine where there are none yet; refused where there are, before anything is
-# installed (they would stay older than personad). Other computers do not get them.
+# release without one leaves the file here as it was, unless a service runs it: then nothing is installed (the service
+# would go on starting the older one beside the new personad). Other computers do not get them.
 HUB_PROGRAMS="persona-hub persona-manager"
 in_release() { awk -v n="$1.gz" '$2 == n || $2 == "*" n { found = 1 } END { exit !found }' "$tmp/SHA256SUMS"; }
 # runs_hub: this computer runs the hub (--hub, a hub.json), or has the hub's programs from before.
@@ -297,13 +297,38 @@ runs_hub() {
 	done
 	return 1
 }
-# hub_programs: the ones this release has, as words; fails when it lacks one that is here.
+# service_runs <program>: prints the systemd unit or launchd property list here that starts $DEST/<program>, the way
+# the hub's setup and hub-systemd.sh write them (quoted or not, or under %h); fails when there is none. A drop-in that
+# takes a unit back to personad is not looked at: such a unit counts as running it.
+service_runs() {
+	units="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"
+	for f in "$units"/*.service "$units"/*.service.d/*.conf /etc/systemd/user/*.service /etc/systemd/system/*.service \
+		"$HOME"/Library/LaunchAgents/*.plist /Library/LaunchAgents/*.plist /Library/LaunchDaemons/*.plist; do
+		[ -f "$f" ] || continue
+		if awk -v a="$DEST/$1" -v b="%h${DEST#"$HOME"}/$1" '
+			function names(s, p,  i, c) {
+				i = index(s, p)
+				if (!i) return 0
+				c = substr(s, i + length(p), 1)
+				return c == "" || c == " " || c == "\t" || c == "\"" || c == "'\''" || c == "<"
+			}
+			/^[ \t]*ExecStart=/ || /<string>/ { if (names($0, a) || names($0, b)) { found = 1; exit } }
+			END { exit !found }' "$f"; then
+			echo "$f"
+			return 0
+		fi
+	done
+	return 1
+}
+# hub_programs: the ones this release has, as words; fails when it lacks one that a service here runs.
 hub_programs() {
 	for p in $HUB_PROGRAMS; do
 		if in_release "$p-$os-$arch"; then
 			printf '%s ' "$p"
+		elif [ -e "$DEST/$p" ] && by=$(service_runs "$p"); then
+			fail "this release has no $p for $os-$arch, and $by runs $DEST/$p: it would stay older than personad. Not installed; install a release that has it"
 		elif [ -e "$DEST/$p" ]; then
-			fail "this release has no $p for $os-$arch, which $DEST has: it would stay older than personad. Not installed; install a release that has it"
+			echo "this release has no $p for $os-$arch: $DEST/$p stays as it was (no service runs it)" >&2
 		fi
 	done
 }

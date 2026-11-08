@@ -107,7 +107,10 @@ type updater struct {
 	target        func() (string, error)
 	// self is the binary this hub runs as (runningBinary): persona-hub goes on as the persona-hub the update
 	// swapped, personad as personad (runAs).
-	self       func() (string, error)
+	self func() (string, error)
+	// services finds what runs a program beside personad: a release that would leave one a service runs as it was is
+	// not installed (unreplaced).
+	services   serviceFinder
 	notify     func(title, body string)
 	confirmIn  time.Duration
 	idleEvery  time.Duration
@@ -120,6 +123,7 @@ type updater struct {
 	progress    string
 	errText     string
 	release     *update.Published
+	blocked     error  // why release cannot be installed here (unreplaced), as of when it was read; nil when it can
 	newestImage string // a Docker hub: the newest release tag of its image
 	lastCheck   time.Time
 	busy        []busyItem
@@ -146,7 +150,7 @@ func newUpdater(h *Hub) *updater {
 			// The hub's arguments; `hub …` when it runs as persona-hub and path is personad (update.TargetArgs).
 			return syscall.Exec(path, append([]string{path}, update.TargetArgs(os.Args, path)...), append(os.Environ(), execListenEnv()...))
 		},
-		startWatch: startWatchdog, target: ServerBinary, self: runningBinary, confirmIn: updateConfirmIn, idleEvery: updateIdleEvery,
+		startWatch: startWatchdog, target: ServerBinary, self: runningBinary, services: systemServices(), confirmIn: updateConfirmIn, idleEvery: updateIdleEvery,
 		manualIdle: updateManualIdle, state: "idle", confirmed: true,
 		notify: func(title, body string) {
 			h.push.send(map[string]any{"aps": map[string]any{
@@ -526,18 +530,20 @@ func (u *updater) loop(ctx context.Context) {
 	}
 }
 
-// wantsAuto: on, newer, not a bad build, its code contains this one's (Build.Hold), not already running.
+// wantsAuto: on, newer, not a bad build, its code contains this one's (Build.Hold), it leaves no program a service
+// runs as it was (unreplaced), not already running.
 func (u *updater) wantsAuto() bool {
 	u.mu.Lock()
 	defer u.mu.Unlock()
 	r := u.release
 	return (u.loaded || u.h.store == nil) && u.settings.auto() && !u.running && r != nil && u.h.build.Newer(r.Manifest.Build) &&
-		!slices.Contains(u.settings.Bad, r.Manifest.Build) && u.h.build.Hold(r.Manifest) == ""
+		!slices.Contains(u.settings.Bad, r.Manifest.Build) && u.h.build.Hold(r.Manifest) == "" && u.blocked == nil
 }
 
 // noteHeld writes into the history, once per release, that a newer release was not installed by itself because its
 // code may not contain this hub's (Build.Hold): the app shows it as available, with the reason, and the user can
-// still install it.
+// still install it. Or because it would leave a program a service runs as it was (unreplaced): installing it by hand
+// is refused for the same reason.
 func (u *updater) noteHeld(ctx context.Context) {
 	if err := u.load(ctx); err != nil {
 		return
@@ -549,6 +555,9 @@ func (u *updater) noteHeld(ctx context.Context) {
 		return
 	}
 	why := u.h.build.Hold(r.Manifest)
+	if why == "" && u.blocked != nil {
+		why = i18n.Localize(u.blocked, u.h.userLang())
+	}
 	for _, h := range u.settings.History {
 		if h.Result == "held" && h.ToBuild == r.Manifest.Build {
 			why = ""
@@ -580,10 +589,14 @@ func (u *updater) check(ctx context.Context) (*update.Published, error) {
 	cctx, cancel := context.WithTimeout(ctx, updateRequestLimit)
 	defer cancel()
 	r, err := update.Check(cctx, u.client, u.h.build.UpdateURL)
+	var blocked error
+	if err == nil {
+		blocked = u.unreplaced(r.Manifest)
+	}
 	u.mu.Lock()
 	u.lastCheck = time.Now()
 	if err == nil {
-		u.release, u.releaseRead = r, u.lastCheck
+		u.release, u.releaseRead, u.blocked = r, u.lastCheck, blocked
 	}
 	u.mu.Unlock()
 	if err != nil {
@@ -626,9 +639,10 @@ func (u *updater) freshRelease(ctx context.Context) {
 		u.h.logf("update: reading the release for an install script: %v (keeping the one read before)", err)
 		return
 	}
+	blocked := u.unreplaced(r.Manifest)
 	u.mu.Lock()
 	u.lastCheck = time.Now()
-	u.release, u.releaseRead = r, u.lastCheck
+	u.release, u.releaseRead, u.blocked = r, u.lastCheck, blocked
 	available := u.state == "idle" && u.h.build.Newer(r.Manifest.Build)
 	u.mu.Unlock()
 	if available {
@@ -653,6 +667,9 @@ func (u *updater) begin(ctx context.Context, now bool) error {
 	u.mu.Unlock()
 	if r == nil || !u.h.build.Newer(r.Manifest.Build) {
 		return errNoUpdate
+	}
+	if err := u.unreplaced(r.Manifest); err != nil {
+		return err
 	}
 	u.mu.Lock()
 	u.now = now
@@ -715,6 +732,10 @@ func (u *updater) install(ctx context.Context, auto bool) {
 		fail(i18n.Err("hub-selfupdate.err_no_binary", i18n.Args{"platform": runtime.GOOS + "/" + runtime.GOARCH}))
 		return
 	}
+	if err := u.unreplaced(m); err != nil {
+		fail(err)
+		return
+	}
 	staged := filepath.Join(u.dir, fmt.Sprint(m.Build))
 	u.set("downloading", "hub", "")
 	bin, err := update.Download(ctx, u.client, u.h.build.UpdateURL, file, staged)
@@ -731,7 +752,9 @@ func (u *updater) install(ctx context.Context, auto bool) {
 		fail(err)
 		return
 	}
-	// The programs the hub runs beside it (personad-wechat): this platform's build of each, checked like personad.
+	// The programs the hub runs beside it (personad-wechat): this platform's build of each, checked like personad. One
+	// the release has no build of keeps its old file (persona-hub and persona-manager only when no service runs it:
+	// unreplaced).
 	programs := map[string]string{} // name -> the downloaded binary
 	for _, name := range update.ProgramNames {
 		f, ok := m.Programs[name][runtime.GOOS+"-"+runtime.GOARCH]
@@ -951,7 +974,8 @@ type latestView struct {
 	Notes    string     `json:"notes,omitempty"`
 	Newer    bool       `json:"newer"`
 	Bad      bool       `json:"bad"` // went back before: not installed automatically
-	// Held: why a newer release is not installed automatically even with auto-update on (Build.Hold), for people.
+	// Held: why a newer release is not installed automatically even with auto-update on (Build.Hold, unreplaced), for
+	// people.
 	Held string `json:"held,omitempty"`
 }
 
@@ -980,6 +1004,9 @@ func (u *updater) viewIn(l i18n.Lang) updateView {
 			Newer: u.h.build.Newer(r.Manifest.Build), Bad: slices.Contains(u.settings.Bad, r.Manifest.Build)}
 		if v.Latest.Newer && u.h.build.SelfUpdates() {
 			v.Latest.Held = u.h.build.Hold(r.Manifest)
+			if v.Latest.Held == "" && u.blocked != nil {
+				v.Latest.Held = i18n.Localize(u.blocked, l)
+			}
 		}
 	}
 	if u.h.build.Channel == update.Docker {

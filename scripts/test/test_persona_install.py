@@ -327,23 +327,56 @@ class PersonaInstallTests(unittest.TestCase):
             self.assertIn('hub setup\n', (home / 'personad-calls').read_text())
 
     def test_a_release_without_the_hubs_programs(self):
-        # Where there are none yet: personad alone, as before. Where there are: nothing is installed (they would stay
-        # older than personad), and hub setup does not run.
+        # Where there are none yet: personad alone, as before. Where there are and no service runs the one the release
+        # lacks: the rest is installed and that one stays as it was.
         with tempfile.TemporaryDirectory() as directory:
             home = Path(directory)
+            bin_dir = home / '.persona/bin'
             result = self.run_install(home)
             self.assertEqual(result.returncode, 0, result.stderr)
-            self.assertTrue((home / '.persona/bin/personad').exists())
+            self.assertTrue((bin_dir / 'personad').exists())
             for program in HUB_PROGRAMS:
-                self.assertFalse((home / '.persona/bin' / program).exists())
+                self.assertFalse((bin_dir / program).exists())
             self.assertEqual(self.run_install(home, programs=HUB_PROGRAMS).returncode, 0)
-            before = {name: (home / '.persona/bin' / name).read_bytes() for name in ('personad',) + HUB_PROGRAMS}
+            # the hub's unit runs personad; another unit names persona-hub only in passing
+            units = home / '.config/systemd/user'
+            units.mkdir(parents=True)
+            (units / 'personad.service').write_text(f'[Service]\nExecStart="{bin_dir}/personad" hub\n')
+            (units / 'notes.service').write_text(f'[Service]\nExecStart=/bin/true {bin_dir}/persona-hub.prev\n')
             calls = (home / 'personad-calls').read_text()
             result = self.run_install(home, programs=('persona-manager',), release='3')
-            self.assertEqual(result.returncode, 1)
-            self.assertIn('no persona-hub', result.stderr)
-            self.assertEqual({name: (home / '.persona/bin' / name).read_bytes() for name in before}, before)
-            self.assertEqual((home / 'personad-calls').read_text(), calls, 'hub setup ran')
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn(f'{bin_dir}/persona-hub stays as it was', result.stderr)
+            self.assertIn('# persona-hub release 1', (bin_dir / 'persona-hub').read_text())
+            self.assertIn('# persona-manager release 3', (bin_dir / 'persona-manager').read_text())
+            self.assertGreater((home / 'personad-calls').read_text().count('hub setup\n'), calls.count('hub setup\n'))
+
+    def test_a_release_without_a_program_a_service_runs(self):
+        # A service runs the program the release lacks: nothing is installed (it would stay older than personad), and
+        # hub setup does not run.
+        for name, path, content, missing in (
+                ('unit', '.config/systemd/user/personad.service', '[Service]\nExecStart="{bin}/persona-hub" run\n', 'persona-hub'),
+                ('unit under %h', '.config/systemd/user/personad.service', '[Service]\nExecStart=%h/.persona/bin/persona-hub run\n', 'persona-hub'),
+                ('drop-in', '.config/systemd/user/personad.service.d/90-persona-compat.conf',
+                 '[Service]\nExecStart=\nExecStart={bin}/persona-hub run\n', 'persona-hub'),
+                ('launchd agent', 'Library/LaunchAgents/com.persona.manager.assistant.plist',
+                 '<plist version="1.0"><dict>\n<key>ProgramArguments</key><array><string>{bin}/persona-manager</string>'
+                 '<string>assistant</string></array>\n</dict></plist>\n', 'persona-manager')):
+            with self.subTest(name), tempfile.TemporaryDirectory() as directory:
+                home = Path(directory)
+                bin_dir = home / '.persona/bin'
+                self.assertEqual(self.run_install(home, programs=HUB_PROGRAMS).returncode, 0)
+                (home / path).parent.mkdir(parents=True)
+                (home / path).write_text(content.format(bin=bin_dir))
+                before = {name: (bin_dir / name).read_bytes() for name in ('personad',) + HUB_PROGRAMS}
+                calls = (home / 'personad-calls').read_text()
+                kept = tuple(p for p in HUB_PROGRAMS if p != missing)
+                result = self.run_install(home, programs=kept, release='3')
+                self.assertEqual(result.returncode, 1, result.stderr)
+                self.assertIn(f'no {missing}', result.stderr)
+                self.assertIn(str(home / path), result.stderr)
+                self.assertEqual({name: (bin_dir / name).read_bytes() for name in before}, before)
+                self.assertEqual((home / 'personad-calls').read_text(), calls, 'hub setup ran')
 
     def test_other_computers_do_not_get_the_hubs_programs(self):
         # A device's node service, a computer that runs only an app-made manager, and one asked "not the hub": as before.

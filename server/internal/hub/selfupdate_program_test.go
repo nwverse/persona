@@ -14,7 +14,7 @@ import (
 )
 
 // splitRelease is a release whose manifest carries persona-hub and persona-manager besides personad (as publish.sh
-// makes it), each a script answering `version -v` as the release's build.
+// makes it), each a script answering `version -v` as the release's build. Its code contains gitA's.
 func splitRelease(t *testing.T, programs ...string) *fakePublisher {
 	t.Helper()
 	plat := runtime.GOOS + "-" + runtime.GOARCH
@@ -23,6 +23,8 @@ func splitRelease(t *testing.T, programs ...string) *fakePublisher {
 	outer, inner := sha256.Sum256(pgz), sha256.Sum256(prog)
 	extra := map[string][]byte{}
 	p := newPublisherWith(t, "v2-202611021700", 202611021700, func(m *update.Manifest) {
+		m.Commit = gitB
+		m.Ancestors, _ = update.EncodeAncestors([]string{gitB, gitA})
 		m.Programs = map[string]map[string]update.File{}
 		for _, name := range programs {
 			f := update.File{Name: name + "-" + plat + ".gz", Size: int64(len(pgz)), SHA256: hex.EncodeToString(outer[:]),
@@ -111,8 +113,9 @@ func TestUpdateHandsOverToPersonaHub(t *testing.T) {
 	}
 }
 
-// A release without persona-hub leaves a hub run as persona-hub on personad, which the update did replace, rather
-// than on the persona-hub it did not; a hub run as personad goes on as personad whatever the release carries.
+// A release without persona-hub leaves a hub run as persona-hub by hand (no service runs it: unreplaced) on personad,
+// which the update did replace, rather than on the persona-hub it did not; a hub run as personad goes on as personad
+// whatever the release carries.
 func TestUpdateStaysOnPersonadWithoutAPersonaHub(t *testing.T) {
 	for _, c := range []struct {
 		name, runs string
