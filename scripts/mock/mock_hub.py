@@ -1521,13 +1521,10 @@ def save_task(old, new):
     if t.get("push") == "asked": t.pop("session_id", None)
     if not t.get("push"): t.pop("push", None)
     # End time: left out it stays, null clears it, and a one-off never has one (the hub's until).
-    if "until" in new:
-        if new.get("until") and t.get("repeat") != "once":
-            t["until"] = new["until"]
-        else:
-            t.pop("until", None)
-    elif t.get("repeat") == "once":
+    if t.get("repeat") == "once" or ("until" in new and not new.get("until")):
         t.pop("until", None)
+    elif "until" in new:
+        t["until"] = new["until"]
     if t.get("repeat") == "daily":
         t["next_run"] = next_at(t.get("time", "09:00"), t.get("weekdays") or [])
     elif t.get("repeat") == "interval":

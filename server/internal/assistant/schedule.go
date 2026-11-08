@@ -474,12 +474,12 @@ func parseWhen(s string, now time.Time, loc *time.Location) (time.Time, error) {
 	return time.Time{}, fmt.Errorf("can't read time %q: use RFC 3339 (2026-10-27T09:50:00+08:00) or 30m / 2h / 1d", s)
 }
 
-// untilIn reads an optional end time. Absent leaves whatever is stored (has is false). JSON null clears it.
+// untilIn reads an optional end time from the raw JSON value. Nil (a missing key, or a json.RawMessage field the
+// object did not have) leaves whatever is stored (has is false). JSON null clears it.
 // A string is parseWhen (RFC 3339, a clock time in loc, or 30m / 2h / 1d) and comes back in UTC.
 // An empty string, or a number, object or array, is an error; an unparsable string is parseWhen's error.
-func untilIn(raw map[string]json.RawMessage, now time.Time, loc *time.Location) (at time.Time, has, clear bool, err error) {
-	v, ok := raw["until"]
-	if !ok {
+func untilIn(v json.RawMessage, now time.Time, loc *time.Location) (at time.Time, has, clear bool, err error) {
+	if len(v) == 0 {
 		return time.Time{}, false, false, nil
 	}
 	if bytes.Equal(bytes.TrimSpace(v), []byte("null")) {
@@ -556,17 +556,14 @@ func sameText(a, b string) bool {
 }
 
 func (s *Service) toolScheduleFollowup(ctx context.Context, machine, sessionID string, args json.RawMessage) (string, error) {
-	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(args, &raw); err != nil {
-		return "", err
-	}
 	var a struct {
-		At              string  `json:"at"`
-		Every           string  `json:"every"`
-		Prompt          string  `json:"prompt"`
-		Title           string  `json:"title"`
-		NewConversation bool    `json:"new_conversation"`
-		Push            *string `json:"push"` // left out: a new follow-up pushes every run, one rescheduled keeps its push
+		At              string          `json:"at"`
+		Every           string          `json:"every"`
+		Prompt          string          `json:"prompt"`
+		Title           string          `json:"title"`
+		NewConversation bool            `json:"new_conversation"`
+		Push            *string         `json:"push"` // left out: a new follow-up pushes every run, one rescheduled keeps its push
+		Until           json.RawMessage `json:"until"`
 	}
 	if err := json.Unmarshal(args, &a); err != nil {
 		return "", err
@@ -609,8 +606,7 @@ func (s *Service) toolScheduleFollowup(ctx context.Context, machine, sessionID s
 	}
 	// A one-off ignores until, even a bad one. An interval task takes it; scheduleOwn applies it when this run is
 	// rescheduling its own task (including a one-off this call turns into an interval).
-	end, hasUntil, clearUntil, untilErr := untilIn(raw, now, loc)
-	if out, ok, err := s.scheduleOwn(ctx, sessionID, a.Title, a.Prompt, prompt, a.At, at, every, push, end, hasUntil, clearUntil, untilErr); ok || err != nil {
+	if out, ok, err := s.scheduleOwn(ctx, sessionID, a.Title, a.Prompt, prompt, a.At, at, every, push, a.Until); ok || err != nil {
 		return out, err
 	}
 	space, _ := s.selfSpace(ctx, sessionID) // not listed: the assistant's own, as before the health space
@@ -618,12 +614,11 @@ func (s *Service) toolScheduleFollowup(ctx context.Context, machine, sessionID s
 		MachineID: machine, Space: space, CreatedBy: "assistant", CreatedAt: now.UTC()}
 	if every > 0 {
 		t.Repeat, t.EveryMinutes = repeatInterval, every
-		if untilErr != nil {
-			return "", untilErr
+		end, hasUntil, clearUntil, err := untilIn(a.Until, now, loc)
+		if err != nil {
+			return "", err
 		}
-		if hasUntil && !clearUntil { // null on a new task leaves it unset
-			t.Until = end
-		}
+		applyUntil(&t, end, hasUntil, clearUntil) // null on a new task leaves it unset
 		if err := checkUntil(&t, now); err != nil {
 			return "", err
 		}
@@ -661,7 +656,7 @@ func (s *Service) toolScheduleFollowup(ctx context.Context, machine, sessionID s
 // repeats stays as it is (a changed prompt is taken). A task deleted while its run was going stays deleted: the run is
 // told so, nothing is scheduled (#4792). ok is false when this conversation's latest run isn't one of the task's
 // (rawPrompt is what was asked, before stripScheduleHeader), or the title and prompt are another task's.
-func (s *Service) scheduleOwn(ctx context.Context, sessionID, title, rawPrompt, prompt, atArg string, at time.Time, every int, push *string, untilAt time.Time, hasUntil, clearUntil bool, untilErr error) (string, bool, error) {
+func (s *Service) scheduleOwn(ctx context.Context, sessionID, title, rawPrompt, prompt, atArg string, at time.Time, every int, push *string, untilRaw json.RawMessage) (string, bool, error) {
 	if sessionID == "" {
 		return "", false, nil
 	}
@@ -726,20 +721,20 @@ func (s *Service) scheduleOwn(ctx context.Context, sessionID, title, rawPrompt, 
 			out = fmt.Sprintf("Rescheduled %s「%s」 for %s (%s).", t.ID, t.label(), at.In(loc).Format("01-02 15:04 Mon"), until(at))
 		}
 	}
-	// until applies only once the task is repeating. A one-off ignores it, including a bad value. Absent keeps
-	// the stored end time; null clears it. A past end time on an enabled task fails before anything is saved.
-	if t.Repeat == repeatOnce {
-		t.Until = time.Time{}
-	} else {
+	// until applies only once the task is repeating. A one-off ignores it, including a bad value; checkUntil
+	// clears it. Absent keeps the stored end time; null clears it. A past end time on an enabled task fails
+	// before anything is saved.
+	if t.Repeat != repeatOnce {
+		end, hasUntil, clearUntil, untilErr := untilIn(untilRaw, time.Now(), loc)
 		if untilErr != nil {
 			sc.mu.Unlock()
 			return "", true, untilErr
 		}
-		applyUntil(t, untilAt, hasUntil, clearUntil)
-		if err := checkUntil(t, time.Now()); err != nil {
-			sc.mu.Unlock()
-			return "", true, err
-		}
+		applyUntil(t, end, hasUntil, clearUntil)
+	}
+	if err := checkUntil(t, time.Now()); err != nil {
+		sc.mu.Unlock()
+		return "", true, err
 	}
 	out += stopsAt(*t, loc)
 	err = s.saveLocked(sc, tasks)
@@ -866,18 +861,15 @@ func (s *Service) describeSchedule(ctx context.Context, space string) string {
 
 // toolScheduleRoutine adds a daily task from a conversation ("give me a morning briefing at 9 every day"), or changes one by id.
 func (s *Service) toolScheduleRoutine(ctx context.Context, self string, args json.RawMessage) (string, error) {
-	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(args, &raw); err != nil {
-		return "", err
-	}
 	var a struct {
-		ID       string  `json:"id"`
-		Title    string  `json:"title"`
-		Prompt   string  `json:"prompt"`
-		Time     string  `json:"time"`
-		Weekdays []int   `json:"weekdays"`
-		Enabled  *bool   `json:"enabled"`
-		Push     *string `json:"push"` // left out: a new routine pushes every run, an existing one keeps its push
+		ID       string          `json:"id"`
+		Title    string          `json:"title"`
+		Prompt   string          `json:"prompt"`
+		Time     string          `json:"time"`
+		Weekdays []int           `json:"weekdays"`
+		Enabled  *bool           `json:"enabled"`
+		Push     *string         `json:"push"` // left out: a new routine pushes every run, an existing one keeps its push
+		Until    json.RawMessage `json:"until"`
 	}
 	if err := json.Unmarshal(args, &a); err != nil {
 		return "", err
@@ -893,7 +885,7 @@ func (s *Service) toolScheduleRoutine(ctx context.Context, self string, args jso
 	}
 	loc := s.location(ctx)
 	now := time.Now()
-	end, hasUntil, clearUntil, err := untilIn(raw, now, loc)
+	end, hasUntil, clearUntil, err := untilIn(a.Until, now, loc)
 	if err != nil {
 		return "", err
 	}
@@ -1000,7 +992,6 @@ func checkTask(t *Task, now time.Time) error {
 		}
 		t.Time, t.Weekdays = "", nil
 	case repeatOnce:
-		t.Until = time.Time{} // a one-off never keeps an end time
 		if t.At.IsZero() {
 			return i18n.Err("assistant-schedule.pick_time")
 		}
@@ -2115,7 +2106,7 @@ func (s *Service) scheduleRoutes() {
 			return
 		}
 		now := time.Now()
-		end, hasUntil, clearUntil, err := untilIn(raw, now, s.location(r.Context()))
+		end, hasUntil, clearUntil, err := untilIn(raw["until"], now, s.location(r.Context()))
 		if err != nil {
 			apierr.Write(w, http.StatusBadRequest, err)
 			return
@@ -2156,6 +2147,15 @@ func (s *Service) scheduleRoutes() {
 			apierr.Write(w, http.StatusBadRequest, err)
 			return
 		}
+		// The end time does not depend on the task list. Read it before the lock, so a bad value never
+		// waits on the scheduler, and a settings read never holds that lock.
+		now := time.Now()
+		end, hasUntil, clearUntil, err := untilIn(raw["until"], now, s.location(r.Context()))
+		if err != nil {
+			apierr.Write(w, http.StatusBadRequest, err)
+			return
+		}
+		delete(raw, "until") // not a time.Time: "30m" and a local clock time would not unmarshal
 		sc, err := s.lockedSchedule(r.Context())
 		if err != nil {
 			apierr.Write(w, http.StatusServiceUnavailable, err)
@@ -2167,14 +2167,6 @@ func (s *Service) scheduleRoutes() {
 			apierr.Write(w, http.StatusNotFound, i18n.Err("assistant-schedule.gone"))
 			return
 		}
-		now := time.Now()
-		end, hasUntil, clearUntil, err := untilIn(raw, now, s.location(r.Context()))
-		if err != nil {
-			sc.mu.Unlock()
-			apierr.Write(w, http.StatusBadRequest, err)
-			return
-		}
-		delete(raw, "until") // not a time.Time: "30m" and a local clock time would not unmarshal
 		var in Task
 		encoded, _ := json.Marshal(raw)
 		if err := json.Unmarshal(encoded, &in); err != nil {

@@ -278,13 +278,14 @@ export function sameTask(a: Task, b: Task): boolean {
   if ((a.session_id ?? "") !== (b.session_id ?? "")) return false;
   if ((a.permission_mode ?? "") !== (b.permission_mode ?? "")) return false;
   if ((a.push ?? "") !== (b.push ?? "")) return false;
+  if (a.repeat !== "once" && !sameInstant(a.until, b.until)) return false;
   switch (a.repeat) {
     case "once":
       return parseTime(a.at)?.getTime() === parseTime(b.at)?.getTime();
     case "daily":
-      return a.time === b.time && normalizeDays(a.weekdays).join() === normalizeDays(b.weekdays).join() && sameInstant(a.until, b.until);
+      return a.time === b.time && normalizeDays(a.weekdays).join() === normalizeDays(b.weekdays).join();
     case "interval":
-      return a.every_minutes === b.every_minutes && sameInstant(a.until, b.until);
+      return a.every_minutes === b.every_minutes;
   }
 }
 

@@ -449,20 +449,26 @@ export function RunMark({ status }: { status: string }) {
   );
 }
 
+function LocalDateTime({ label, value, now, onChange }: { label: string; value?: string; now: Date; onChange: (iso: string | undefined) => void }) {
+  return (
+    <Field label={label}>
+      <input
+        type="datetime-local"
+        className={cx(inputClass, "tabular-nums")}
+        value={toLocalInput(parseTime(value))}
+        min={toLocalInput(now)}
+        onChange={(e) => onChange(fromLocalInput(e.target.value)?.toISOString())}
+      />
+    </Field>
+  );
+}
+
 function UntilWhen({ draft, now, onChange }: { draft: Task; now: Date; onChange: (until: string | undefined) => void }) {
   const value = toLocalInput(parseTime(draft.until));
   return (
     <div className="flex items-end gap-2">
       <div className="min-w-0 flex-1">
-        <Field label={t("assistant-taskeditor.until_label")}>
-          <input
-            type="datetime-local"
-            className={cx(inputClass, "tabular-nums")}
-            value={value}
-            min={toLocalInput(now)}
-            onChange={(e) => onChange(fromLocalInput(e.target.value)?.toISOString())}
-          />
-        </Field>
+        <LocalDateTime label={t("assistant-taskeditor.until_label")} value={draft.until} now={now} onChange={onChange} />
       </div>
       {value && (
         <Button tone="quiet" className="whitespace-nowrap" onClick={() => onChange(undefined)}>
@@ -474,18 +480,7 @@ function UntilWhen({ draft, now, onChange }: { draft: Task; now: Date; onChange:
 }
 
 function OnceWhen({ draft, now, onChange }: { draft: Task; now: Date; onChange: (at: string | undefined) => void }) {
-  const value = toLocalInput(parseTime(draft.at));
-  return (
-    <Field label={t("assistant-taskeditor.time")}>
-      <input
-        type="datetime-local"
-        className={cx(inputClass, "tabular-nums")}
-        value={value}
-        min={toLocalInput(now)}
-        onChange={(e) => onChange(fromLocalInput(e.target.value)?.toISOString())}
-      />
-    </Field>
-  );
+  return <LocalDateTime label={t("assistant-taskeditor.time")} value={draft.at} now={now} onChange={onChange} />;
 }
 
 function DailyWhen({ draft, onChange }: { draft: Task; onChange: (p: Partial<Task>) => void }) {
