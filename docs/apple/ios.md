@@ -1005,7 +1005,8 @@ Like Telegram: network trouble shows no banner; **the page title becomes "small 
 - Offline actions:
   - **Send messages**: when unreachable, make no request; the bubble has a clock and "Sends automatically when connected" (tap the clock for "Retry now / Cancel send"); requests failing offline / on timeout also become waiting,
     with no error alert. After reconnect and "Updating…" completion, send automatically in composition order (for unopened chats, first fetch one page of latest messages; delivered ones appear in the transcript and are removed automatically).
-    Resends use the same `client_msg_id`, preventing duplicates. Waiting messages persist (`Outbox.swift`) and survive App termination.
+    Resends use the same `client_msg_id`, preventing duplicates. Waiting messages persist (`Outbox.swift`) and survive App termination;
+    so do sent ones still waiting for their transcript copy (back as sent, not sent again), unless the chat's cache already has the copy (#1455).
   - **Op id**: messages carry `X-Persona-Op-Id` (the message id, equal to `client_msg_id`); each answer / approval tap gets one;
     the hub executes it once (`docs/protocol/protocol.md` ("Operation receipts")). A duplicate request returning `202 {"state":"pending"|"unknown"}` is not success: pending keeps retrying, unknown is treated as "May already have been delivered".
     Retrying a "May already have been delivered" message first checks `GET /api/v1/ops/{old id}`: `done` means sent, no resend; otherwise resend with a new id as before.
