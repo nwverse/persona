@@ -121,6 +121,14 @@ type SnapshotPlan struct {
 	Tasks  int       // how many tasks it has
 }
 
+// SnapshotAsked is an ask_user question that became a to-do (#1617): what was asked, the to-do, when it was asked (in the
+// user's zone).
+type SnapshotAsked struct {
+	TodoID   string
+	Question string
+	At       time.Time
+}
+
 // SnapshotRoutine is a daily scheduled task (morning brief, evening brief…): its rule, and how its last run went (LastAt zero: it never
 // ran). LastStatus is the run's status (ok / failed / skipped), LastWhy why it failed or was skipped, in short.
 type SnapshotRoutine struct {
@@ -211,6 +219,9 @@ type Snapshot struct {
 	Tasks         []SnapshotTask    // tasks opened from assistant conversations (task_plan), newest first
 	Plans         []SnapshotPlan    // plan cards in the main conversation waiting for "Start", newest first (at most five)
 	PlansTotal    int
+	// Asked: the assistant's ask_user questions nobody answered in time, now to-dos waiting for the user's call (#1617),
+	// oldest first.
+	Asked []SnapshotAsked
 	// Unaccepted: deployed tasks the user has not passed yet (their "Please verify" ask, with a Lark card or without) (#2768), and
 	// supervised tasks' conclusions the user has not answered (#1226), oldest first; the morning briefing brings them up again.
 	Unaccepted      []SnapshotAccept
@@ -366,6 +377,28 @@ type TaskNotice struct {
 }
 
 func RenderTaskNotice(n TaskNotice) string { return render("assistant/task_notice", n) }
+
+// AskTodoAnswer is the message to the conversation whose ask_user question became a to-do (#1617): the user's call on it
+// (Thread: said in the to-do's Lark topic), or that the to-do was closed without one (Dropped). The questions and choices
+// are escaped by the caller.
+type AskTodoAnswer struct {
+	When      string // when it was asked, MM-DD HH:MM in the user's zone
+	TodoID    string
+	Questions []string
+	Choices   []AskTodoChoice
+	Thread    bool
+	Dropped   bool
+	Several   bool // more than one question was asked
+}
+
+// AskTodoChoice is one call of the user's: the question as they wrote it ("" for a reply in the topic), the choice, why.
+type AskTodoChoice struct {
+	Question string
+	Choice   string
+	Reason   string
+}
+
+func RenderAskTodoAnswer(a AskTodoAnswer) string { return render("assistant/ask_answer", a) }
 
 // Supervise is a supervise message: the tasks the main conversation handed out that need it now (#3124), what waits on a
 // decision first.
