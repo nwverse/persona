@@ -12,13 +12,14 @@ struct MacSidebarMetricsTests {
     @Test func rowFollowsTheSystemSidebarIconSize() {
         let saved = UserDefaults.standard.object(forKey: Self.key)
         defer { UserDefaults.standard.set(saved, forKey: Self.key) }
-        for (mode, row) in [(1, 24.0), (2, 28.0), (3, 32.0)] {
+        let rows: [(mode: Int, row: CGFloat)] = [(1, 24), (2, 28), (3, 32)]
+        for (mode, row) in rows {
             UserDefaults.standard.set(mode, forKey: Self.key)
             #expect(Theme.Sidebar.row == row, "size mode \(mode)")
             #expect(Theme.Sidebar.glyph < Theme.Sidebar.row)
         }
         UserDefaults.standard.set(0, forKey: Self.key)
-        #expect(Theme.Sidebar.row == 28, "unset is medium")
+        #expect(Theme.Sidebar.row == CGFloat(28), "unset is medium")
     }
 
     /// One line of 13 pt body text (the Mac's, `Theme.Font.body`) and its padding fit the smallest row.
