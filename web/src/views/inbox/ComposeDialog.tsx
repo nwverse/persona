@@ -12,6 +12,8 @@ import { Button, Dialog, toast } from "../../ui/atoms";
 import { composing } from "../../lib/send-history";
 
 const kept = new Map<string, ComposeDraft>();
+// A later opening owns this key's edits and Cancel, even if an older send has not answered yet.
+const pendingRestores = new Map<string, object>();
 
 /** The mail left open under `key` ("new", or a reply's), else `fresh`. */
 function keptDraft(key: string, fresh: ComposeDraft): ComposeDraft {
@@ -44,6 +46,7 @@ function OwnedComposeDialog({ draftKey, initial, accounts, onClose, manager }: C
   Object.assign(now.current, { d, dirty });
   useEffect(() => {
     const at = now.current;
+    pendingRestores.delete(draftKey);
     at.mounted = true;
     return () => {
       at.mounted = false;
@@ -87,6 +90,8 @@ function OwnedComposeDialog({ draftKey, initial, accounts, onClose, manager }: C
     setSending(true);
     // On its way: not kept (a box opened for this key meanwhile starts fresh, nothing to send twice).
     const at = now.current;
+    const attempt = {};
+    pendingRestores.set(draftKey, attempt);
     at.done = true;
     kept.delete(draftKey);
     try {
@@ -97,9 +102,10 @@ function OwnedComposeDialog({ draftKey, initial, accounts, onClose, manager }: C
       sendLock.current = false;
       // still open: the mail stays in it to retry; gone: kept for the next "Reply"
       if (at.mounted) at.done = false;
-      else kept.set(draftKey, d);
+      else if (pendingRestores.get(draftKey) === attempt) kept.set(draftKey, d);
       setError(t("inbox-composedialog.send_failed", { error: errorText(e) }));
     } finally {
+      if (pendingRestores.get(draftKey) === attempt) pendingRestores.delete(draftKey);
       setSending(false);
     }
   };
