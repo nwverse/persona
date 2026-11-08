@@ -135,7 +135,7 @@ func (n *Node) scanOffline() []proto.Session {
 		if m.lastText == "" && m.lastTextAt.IsZero() && m.title == "" && !keep[id] && !forked[id] && c.st.Size() <= quickTail {
 			continue
 		}
-		n.setGuessedPath(id, c.path)
+		n.setPath(id, c.path)
 		s := proto.Session{
 			SessionID: id, Title: m.title, Cwd: m.cwd, Status: proto.StatusOffline, Model: m.model,
 			Agent: "claude", AgentSurface: m.surface,

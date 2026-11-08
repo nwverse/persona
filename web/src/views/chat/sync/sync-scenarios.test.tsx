@@ -58,6 +58,10 @@ const KNOWN: Record<string, { issue: string; because: RegExp }> = {
   catch_up_over_cap_asks_rest: { issue: "#1118", because: /after_seq":12\}|want \[.*Question 6/ },
   send_accepted_transcript_late: { issue: "#1119", because: /m1 shows 0 times|want \[.*Add a picnic on Saturday/ },
 };
+// a new conversation's first message (chat.new, user.start): the runner does not play it yet, so every such case is
+// this one known failure
+const NO_START = "the web runner does not play a new conversation's start yet";
+const START_KNOWN = { issue: "#1382", because: new RegExp(NO_START) };
 
 let host: HTMLDivElement;
 let root: Root;
@@ -158,6 +162,8 @@ function differences(got: ReturnType<typeof project> & { status?: string }, want
 }
 
 async function run(c: SyncCase, device: string): Promise<string[]> {
+  // the new-conversation page and its start are not driven here yet (#1382)
+  if (c.chat.new) return [NO_START];
   hub = new SyncHub(c, device);
   FakeSocket.hub = hub;
   vi.stubGlobal("fetch", hub.fetch);
@@ -269,7 +275,7 @@ for (const [path, file] of Object.entries(files)) {
     for (const c of file.cases) {
       for (const device of c.devices) {
         const name = c.devices.length > 1 ? `${c.name} as ${device}` : c.name;
-        const known = KNOWN[name];
+        const known = KNOWN[name] ?? (c.chat.new ? START_KNOWN : undefined);
         it(known ? `${name} (known: ${known.issue})` : name, async () => {
           const failures = await run(c, device);
           if (!known) return expect(failures, `${name}; requests this hub does not answer: ${hub.unknown.join(", ")}`).toEqual([]);

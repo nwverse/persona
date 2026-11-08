@@ -281,7 +281,7 @@ function sendToMain(mid: string, sid: string, text: string): Promise<boolean> {
 }
 
 /** owner's conversation sid: its requests go to owner, and the assistant page shows owner (none: the default). */
-function adoptConversation(owner: string | undefined, sid: string) {
+export function adoptConversation(owner: string | undefined, sid: string) {
   noteConversation(sid, otherManager(owner));
   chooseManager(owner || null);
 }
