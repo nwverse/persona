@@ -45,13 +45,24 @@ final class InboxHandOffModel {
     private(set) var error: String?
 
     @ObservationIgnored private var doneChosen = false
-    /// The main chat's hand-off being tried, by its ask: the same ask sent again after a failure that may have gone
-    /// (`mayHaveGone`) or that never reached the manager (no connection, `assistant_offline`) sends the first text again
-    /// under the same client id, whatever came in on the item since, and the hub and the manager send it once. After any
-    /// other answer, which the hub keeps under that id, the next try is a new hand-off.
-    @ObservationIgnored private var attempt: (ask: String, text: String, id: UUID)?
+    /// The main chat's hand-off being tried, by its ask: the same ask sent again sends the first text again under the same
+    /// client id, whatever came in on the item since, and the hub and the manager send it once. It stays while a try under
+    /// that id may have gone (`mayHaveGone`) and through a failure that says nothing about it (`saysNothing`); an answer
+    /// that it failed ends it, and the next try is a new hand-off.
+    @ObservationIgnored private var attempt: Attempt?
     @ObservationIgnored private let itemID: String
     @ObservationIgnored private let deps: Deps
+
+    private struct Attempt {
+        var ask: String
+        var text: String
+        var id: UUID
+        /// A try under `id` may have gone.
+        var inDoubt = false
+    }
+
+    /// An answer that leaves the hand-off in doubt only because a try before it under the same client id may have gone.
+    nonisolated private struct InDoubt: Error {}
 
     init(itemID: String, deps: Deps) {
         self.itemID = itemID
@@ -159,7 +170,8 @@ final class InboxHandOffModel {
     /// connection lost after the request went out, a bare 502 / 503 / 504 from in front of the hub), the hub's pending or
     /// unknown receipt, or an answer saying so (`assistant_in_doubt`, `delivered: unknown` or `yes`, the node lost
     /// without `delivered: none`). The sheet says to look first, and the same ask again is the same hand-off.
-    static func mayHaveGone(_ error: Error) -> Bool {
+    private static func mayHaveGone(_ error: Error) -> Bool {
+        if error is InDoubt { return true }
         if error.isCancellation { return false }
         if (error as? URLError)?.code == .networkConnectionLost || error.isTimeout || (error.isGap && !error.isOffline) { return true }
         let api = error as? APIError, code = api?.code, delivered = api?.fields["delivered"]
@@ -167,25 +179,49 @@ final class InboxHandOffModel {
             || code == OpReceipt.unknownCode || code == OpReceipt.pendingCode || (code == "node_unreachable" && delivered != "none")
     }
 
+    /// A failure that says nothing about an earlier try under the same client id: no connection to the hub, a cancelled
+    /// request or no hub at all, the manager offline (`assistant_offline`, whose receipt the hub drops).
+    private static func saysNothing(_ error: Error) -> Bool {
+        error.isCancellation || (error.isOffline && !mayHaveGone(error)) || (error as? APIError)?.code == "assistant_offline"
+    }
+
+    /// An answer under a client id a try may already have gone under that says nothing about that try: the hub keeps a
+    /// relay the phone or a proxy cut off as a bare 5xx (`internal`) and gives it back for that id, while the manager may
+    /// have sent the text. A refusal (4xx) or `delivered: none` says it failed.
+    private static func leavesOpen(_ error: Error) -> Bool {
+        guard let api = error as? APIError else { return true }
+        return api.status >= 500 && api.fields["delivered"] != "none"
+    }
+
     private func handOff(ask: String, text: String) async throws {
-        let id = attempt.flatMap { $0.ask == ask ? $0.id : nil } ?? UUID()
-        attempt = (ask, text, id)
+        var tried = attempt.flatMap { $0.ask == ask ? $0 : nil } ?? Attempt(ask: ask, text: text, id: UUID())
+        attempt = tried
         let to: SessionKey
         do {
-            to = try await deps.handOff(itemID, text, id)
+            to = try await deps.handOff(itemID, text, tried.id)
         } catch let e as APIError where e.status == 404 || e.status == 405 {
             attempt = nil
+            // After a try that may have gone, the hub may have lost the item's manager or the manager the item since: look
+            // first, and the next send is a new one.
+            if tried.inDoubt { throw InDoubt() }
             // An older hub or manager: the text goes to the main chat as a plain message, with nothing to write back to.
             try await deps.plainToMain(text)
             if markDone { deps.markDone() }
             return
-        } catch {
-            // The hub forgets a hand-off the manager never got (assistant_offline); one that never left has nothing to forget.
-            if !Self.mayHaveGone(error) && !error.isOffline && (error as? APIError)?.code != "assistant_offline" { attempt = nil }
+        } catch let error where Self.saysNothing(error) {
             throw error
+        } catch {
+            let answer: Error = tried.inDoubt && Self.leavesOpen(error) ? InDoubt() : error
+            if Self.mayHaveGone(answer) {
+                tried.inDoubt = true
+                attempt = tried
+            } else {
+                attempt = nil
+            }
+            throw answer
         }
         attempt = nil
-        deps.openMain(to, text, id)
+        deps.openMain(to, text, tried.id)
         if markDone { deps.markDone() }
     }
 }

@@ -560,8 +560,11 @@ which users saw as one action: clear this batch they do not need to handle now. 
   iOS and Mac (`InboxHandOffModel`) send it with one `client_id` per hand-off. Whenever the answer leaves open whether the text went (no answer or a timeout, the connection lost
   midway, `assistant_in_doubt`, `delivered: unknown` or `yes`, the node lost without `delivered: none`, a pending (`202 {"state":"pending"}`) or unknown receipt), the sheet says to
   check the chat before sending it again, and the same ask sent again is the same hand-off: its first text, not one rebuilt from the item (which may have changed since), under the same
-  id; so it is after no connection or `assistant_offline`. The hub answers what it kept for that id or runs it again, and the manager's `session.send_once` drops a repeat, so the
-  item never goes twice; to send it anyway after checking takes another ask or a reopened sheet. Any other answer is final for that id. Once it went, they open the main conversation
+  id. After such a try, a later 5xx answer under that id without `delivered: none` is taken the same way (the hub keeps a relay the phone or a proxy cut off as a bare `internal` and
+  gives it back for that id), and a 404 says to look first instead of falling back to the plain message. The id and first text are also kept through no connection, a cancelled
+  request and `assistant_offline`, which say nothing about an earlier try. The hub answers what it kept for that id or runs it again, and the manager's `session.send_once` drops a
+  repeat, so the item goes once (except a hand-off that started the main conversation and whose record the manager lost). A refusal (4xx) or `delivered: none` is final for that id;
+  to send it anyway after checking takes another ask or a reopened sheet. Once it went, they open the main conversation
   on the message as sent under that id (its transcript copy carries it and takes the bubble's place; no bubble when the copy is there already) and read the assistant settings again,
   since the hand-off may have started the main conversation. Like every other inbox request from iOS and Mac, it names no manager, so it goes to the default manager.
   Android still sends plain chat text without write-back (#1384); the web, iOS and Mac fall back to that when the hub or manager answers 404 / 405. On iOS and Mac the fallback goes

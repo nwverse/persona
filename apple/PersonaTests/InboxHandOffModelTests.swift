@@ -43,7 +43,7 @@ struct InboxHandOffModelTests {
             openMain: { calls.opened.append(($0, $1, $2)) },
             plainToMain: {
                 calls.asked.append($0)
-                if !calls.askGoes { throw APIError(status: 502, message: "Persona is offline") }
+                if !calls.askGoes { throw APIError(status: 503, message: "Persona is offline", fields: ["code": "assistant_offline"]) }
             },
             startNew: { calls.started.append($0) },
             sendToAgent: { calls.agents.append(($0, $1)) },
@@ -108,14 +108,15 @@ struct InboxHandOffModelTests {
                           APIError(status: 502, message: "node gone", fields: ["code": "node_unreachable"]),
                           APIError(status: 202, message: "unknown", fields: ["code": OpReceipt.unknownCode]),
                           APIError(status: 202, message: "pending", fields: ["code": OpReceipt.pendingCode]),
+                          APIError(status: 502, message: "Bad Gateway"),
                           APIError(status: 409, message: "busy", fields: ["code": "input_draft"])]
         var outcomes: [Bool] = []
-        for _ in 0..<11 { outcomes.append(await m.send(ask: "a")) }
-        #expect(outcomes == Array(repeating: false, count: 10) + [true])
+        for _ in 0..<12 { outcomes.append(await m.send(ask: "a")) }
+        #expect(outcomes == Array(repeating: false, count: 11) + [true])
         let ids = calls.handOffs.map(\.clientID)
-        #expect(ids.count == 11)
-        #expect(Set(ids[0...9]).count == 1) // anything that may have gone, or that the hub kept no answer for: the same hand-off asked again
-        #expect(ids[10] != ids[9])          // after an answer that was final: a new one
+        #expect(ids.count == 12)
+        #expect(Set(ids[0...10]).count == 1) // anything that may have gone, or that the hub kept no answer for: the same hand-off asked again
+        #expect(ids[11] != ids[10])          // after an answer saying it failed: a new one
         #expect(calls.opened.count == 1 && calls.opened.first?.clientID == ids.last)
 
         // A refusal that says nothing was typed is final too: the hub gives it back for that id.
@@ -131,7 +132,69 @@ struct InboxHandOffModelTests {
         _ = await m.send(ask: "a")
         _ = await m.send(ask: "a")
         let more = calls.handOffs.map(\.clientID).suffix(3)
-        #expect(Set(more).count == 3 && !more.contains(ids[10]))
+        #expect(Set(more).count == 3 && !more.contains(ids[11]))
+    }
+
+    /// Once a try may have gone, a later answer under its client id that doesn't say nothing went is in doubt too: the
+    /// hub keeps a relay the phone or a proxy cut off as a bare `internal` and gives it back for that id, while the
+    /// manager may have sent the text. The id stays and the sheet says to look first; an answer that says it failed is final.
+    @Test func anAnswerAfterATryInDoubtStaysInDoubt() async {
+        let calls = Calls(), m = model(calls)
+        let look = String(localized: "It may have reached the computer already. Check the chat before sending it again.")
+        calls.failures = [URLError(.networkConnectionLost),
+                          APIError(status: 502, message: "context canceled", fields: ["code": "internal"]),
+                          APIError(status: 502, message: "context canceled", fields: ["code": "internal"]),
+                          APIError(status: 409, message: "busy", fields: ["code": "input_draft", "delivered": "none"])]
+        for _ in 0..<3 {
+            let went = await m.send(ask: "a")
+            #expect(!went && m.error == look)
+        }
+        let refused = await m.send(ask: "a")
+        #expect(!refused && m.error == "busy")
+        _ = await m.send(ask: "a")
+        let ids = calls.handOffs.map(\.clientID)
+        #expect(ids.count == 5 && Set(ids[0...3]).count == 1 && ids[4] != ids[3])
+
+        // With no earlier try in doubt, the same answer is final and says what it says.
+        let c = Calls(), fresh = model(c)
+        c.failures = [APIError(status: 502, message: "context canceled", fields: ["code": "internal"])]
+        _ = await fresh.send(ask: "a")
+        #expect(fresh.error == "context canceled")
+        _ = await fresh.send(ask: "a")
+        #expect(c.handOffs.count == 2 && c.handOffs[0].clientID != c.handOffs[1].clientID)
+    }
+
+    /// A try that never left (no connection, no hub, the manager offline) says nothing about an earlier one under the
+    /// same client id, which may have gone: the id stays for the next try, and the sheet says what this one met.
+    @Test func aTryThatNeverLeftKeepsTheClientID() async {
+        let calls = Calls(), m = model(calls)
+        calls.failures = [APIError(status: 502, message: "no answer", fields: ["code": "timeout"]),
+                          URLError(.notConnectedToInternet), CancellationError(),
+                          APIError(status: 503, message: "offline", fields: ["code": "assistant_offline"])]
+        var errors: [String?] = []
+        for _ in 0..<4 {
+            _ = await m.send(ask: "a")
+            errors.append(m.error)
+        }
+        let went = await m.send(ask: "a")
+        #expect(went && errors == [String(localized: "It may have reached the computer already. Check the chat before sending it again."),
+                                   String(localized: "Can't reach the hub"), nil, "offline"])
+        #expect(calls.handOffs.count == 5 && Set(calls.handOffs.map(\.clientID)).count == 1 && calls.opened.count == 1)
+    }
+
+    /// A 404 after a try that may have gone is not taken for an older hub at once: the hub may have lost the item's
+    /// manager, or the manager the item, while the first try is in the chat. The sheet says to look first; the next send
+    /// is a new one and falls back to the plain message.
+    @Test func aMissingRouteAfterATryInDoubtLooksFirst() async {
+        let calls = Calls(), m = model(calls)
+        calls.failures = [URLError(.timedOut), APIError(status: 404, message: "no manager", fields: ["code": "no_manager"]),
+                          APIError(status: 404, message: "404 page not found")]
+        _ = await m.send(ask: "a")
+        let second = await m.send(ask: "a")
+        #expect(!second && calls.asked.isEmpty
+                && m.error == String(localized: "It may have reached the computer already. Check the chat before sending it again."))
+        let third = await m.send(ask: "a")
+        #expect(third && calls.asked.count == 1 && calls.handOffs.count == 3 && calls.handOffs[2].clientID != calls.handOffs[1].clientID)
     }
 
     /// A new message on the item between the first try and the retry (likely after a 120 s timeout) changes the text the
