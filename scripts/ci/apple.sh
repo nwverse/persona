@@ -25,6 +25,7 @@ xcrun swift --version
 xcodegen --version
 
 OUTPUT=$(mktemp -d "${RUNNER_TEMP:-${TMPDIR:-/tmp}}/persona-apple-ci.XXXXXX")
+DIAGNOSTICS="${CI_APPLE_DIAGNOSTICS:-$OUTPUT/diagnostics}"
 SOURCE="$OUTPUT/source"
 PROJECT="$SOURCE/apple/Persona.xcodeproj"
 SPM="${CI_SPM_CACHE:-$HOME/Library/Caches/persona-ci/spm}"
@@ -49,6 +50,12 @@ except (OSError, ValueError, subprocess.SubprocessError) as error:
     print(f"apple-ci: could not locate owned simulator for cleanup: {error}", file=sys.stderr)
 PY
     ) || true
+  fi
+  if [ "$code" -ne 0 ]; then
+    # Capture simulator state before cleanup; only allowlisted logs and xcresult
+    # bundles leave the disposable output, never synthetic/private config or keys.
+    ci_run 'Collect Apple failure diagnostics' 180 python3 "$CI_ROOT/scripts/ci/apple_diagnostics.py" \
+      "$OUTPUT" "$DIAGNOSTICS" || printf 'apple-ci: failure diagnostics could not be collected\n' >&2
   fi
   if [ -n "$SIM" ]; then
     ci_run 'Shut down owned simulator' 120 xcrun simctl shutdown "$SIM" || true
@@ -131,8 +138,8 @@ if [ "$LANE" = all ] || [ "$LANE" = ios ]; then
   # paired to a real hub), pinned to the validated compiler-compatible runtime.
   SIM_STARTED=1
   ci_run 'Create and boot stock iOS 26.0 test simulator' 1000 bash -c \
-    'SIM_BOOT_TIMEOUT=900 "$1" --profile stock --runtime "$4" --device-type "iPhone 17 Pro" "$2" > "$3"' \
-    -- "$SOURCE/scripts/app/sim-boot.sh" "$SIM_NAME" "$OUTPUT/simulator.log" "$IOS_RUNTIME"
+    'SIM_BOOT_TIMEOUT=900 "$1" --profile stock --runtime "$4" --device-type "iPhone 17 Pro" "$2" > "$3" 2> >(tee "$5" >&2)' \
+    -- "$SOURCE/scripts/app/sim-boot.sh" "$SIM_NAME" "$OUTPUT/simulator.log" "$IOS_RUNTIME" "$OUTPUT/simulator-boot.log"
   # Accept only the helper's single UDID, never a partial/error log.
   SIM=$(python3 -I - "$OUTPUT/simulator.log" <<'PY'
 import re, sys

@@ -2,6 +2,7 @@
 
 from pathlib import Path
 import plistlib
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -12,6 +13,7 @@ SCRIPT = ROOT / "scripts/ci/apple.sh"
 sys.path.insert(0, str(ROOT / "scripts/ci"))
 import apple_runtime
 import apple_entitlements
+import apple_diagnostics
 
 
 class AppleCIPreparationTests(unittest.TestCase):
@@ -100,6 +102,63 @@ class AppleOfflineEntitlementsTests(unittest.TestCase):
             apple_entitlements.prepare([first, second])
             for path in (first, second):
                 self.assertEqual(plistlib.loads(path.read_bytes()), {'com.apple.security.app-sandbox': True})
+
+
+class AppleFailureDiagnosticsTests(unittest.TestCase):
+    def test_only_diagnostics_leave_output_and_result_symlinks_are_not_followed(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            output, destination = root / 'output', root / 'artifacts'
+            output.mkdir()
+            for name in ('simulator.log', 'simulator-boot.log', 'runtimes-iOS-before.json'):
+                (output / name).write_text('diagnostic fixture')
+            (output / 'config.json').write_text('configuration must stay in output')
+            (output / 'private.key').write_text('key fixture must stay in output')
+            result = output / 'ios-unit.xcresult'
+            result.mkdir()
+            (result / 'summary.json').write_text('test results')
+            (result / 'external-key').symlink_to(output / 'private.key')
+            calls = []
+            def runner(command, **kwargs):
+                calls.append((command, kwargs))
+                return subprocess.CompletedProcess(command, 0, '{"devices":{}}', '')
+            apple_diagnostics.collect(output, destination, runner)
+            self.assertEqual(calls[0][0], ['xcrun', 'simctl', 'list', '--json'])
+            self.assertEqual(calls[0][1]['timeout'], 120)
+            self.assertEqual({path.name for path in destination.iterdir()}, {
+                'simulator.log', 'simulator-boot.log', 'runtimes-iOS-before.json',
+                'ios-unit.xcresult', 'simctl-list.json', 'simctl-list.stderr.txt', 'simctl-list.status.txt',
+            })
+            self.assertEqual((destination / 'ios-unit.xcresult/summary.json').read_text(), 'test results')
+            self.assertFalse((destination / 'ios-unit.xcresult/external-key').exists())
+
+    def test_unavailable_simctl_still_retains_existing_logs(self):
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory) / 'output'
+            output.mkdir()
+            (output / 'simulator-boot.log').write_text('boot failed')
+            destination = Path(directory) / 'artifacts'
+            def unavailable(*args, **kwargs):
+                raise OSError('simctl unavailable')
+            apple_diagnostics.collect(output, destination, unavailable)
+            self.assertEqual((destination / 'simulator-boot.log').read_text(), 'boot failed')
+            self.assertEqual((destination / 'simctl-list.status.txt').read_text(), 'unavailable\n')
+
+    def test_upload_is_failure_only_and_boot_limits_and_cleanup_remain_strict(self):
+        script = SCRIPT.read_text()
+        workflow = (ROOT / '.github/workflows/apple-test.yml').read_text()
+        helper = (ROOT / 'scripts/app/sim-boot.sh').read_text()
+        self.assertIn("ci_run 'Create and boot stock iOS 26.0 test simulator' 1000", script)
+        self.assertIn('SIM_BOOT_TIMEOUT=900', script)
+        self.assertIn('2> >(tee "$5" >&2)', script)
+        self.assertIn('if [ "$code" -ne 0 ]; then', script)
+        self.assertLess(script.index("ci_run 'Collect Apple failure diagnostics'"), script.index("ci_run 'Shut down owned simulator'"))
+        self.assertIn('exit "$code"', script)
+        self.assertIn('if: failure()\n        uses: actions/upload-artifact@v4', workflow)
+        self.assertIn('CI_APPLE_DIAGNOSTICS: ${{ runner.temp }}/persona-apple-diagnostics-${{ inputs.lane }}-${{ github.run_id }}-${{ github.run_attempt }}', workflow)
+        self.assertIn('path: ${{ runner.temp }}/persona-apple-diagnostics-${{ inputs.lane }}-${{ github.run_id }}-${{ github.run_attempt }}', workflow)
+        self.assertNotIn('for attempt in', helper)
+        self.assertNotIn('restarting once', helper)
 
 
 class AppleRuntimeTests(unittest.TestCase):

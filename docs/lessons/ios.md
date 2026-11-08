@@ -2,6 +2,10 @@
 
 Pitfalls, odd behavior and the decisions made at the time (formerly "Lessons" in `CLAUDE.md`; index in `docs/lessons/README.md`). Add new lessons to the relevant section, or create one if none fits.
 
+## Hosted simulator boot diagnostics (#1124)
+
+A successful minimum-Xcode app/Watch build does not prove the test simulator became ready. A stock iOS 26.0 boot failed its existing 900-second deadline before tests started; the shared helper had discarded `simctl bootstatus` output, and the workflow retained no diagnostic artifact. Keep boot command/phase errors on stderr (stdout remains the sole UDID), capture them separately, and collect `simctl list` before shutting down the owned simulator. Upload only those logs, runtime metadata and existing xcresult bundles after failure; never the source snapshot, configuration, keys or links outside result bundles. Keep the original boot/step timeouts and do not add automatic retries. A maintainer-approved manual rerun is distinct from a retry policy, but uses the original run's commit: diagnostic changes need a new-head run first.
+
 ## Retained chat visibility (#739)
 
 A shell can keep a chat mounted after switching tabs: `onDisappear` alone does not release its transcript subscription or visible/read owner. Use paired `onTabVisibility` edges on iPhone as well as Mac, keep the store and scroll state, and resume with `since_seq` on return. This pauses client display traffic, not the Agent's work on the hub. Test hidden initial mounts, duplicate visibility notifications, shared subscription owners and returning after missed items. Linux source checks cannot establish SwiftUI frame times; compile, profile both directions and inspect light/dark simulator screenshots on a Mac before publishing the Apple build.
