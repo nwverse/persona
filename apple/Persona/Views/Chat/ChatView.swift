@@ -791,7 +791,8 @@ struct ChatView: View {
         }
         var lines = lineBuilder.build(Self.debugTrim(blocks), live: key.live, streaming: key.streaming)
         if style == .assistant { // docs/assistant/unified-entry.md: the hub's items, quick results, a line for each day
-            lines = ChatLines.daySections(ChatLines.quickResults(ChatLines.mergeFeed(lines, feed)))
+            // The hand-offs the task cards take in are drawn there, not among the lines (#1542).
+            lines = ChatLines.daySections(ChatLines.quickResults(ChatLines.mergeFeed(lines, SentToAgents.shown(feed))))
         }
         scratch.lines = lines
         scratch.linesKey = key

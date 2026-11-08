@@ -1371,3 +1371,13 @@ DEBUG 的代码可能在 `Persona.debug.dylib` 中，40 KiB 的 `Persona` 只是
 - **Now**: with `sessions_lookup` in the hub's hello (`APIClient.sessionLookup`, set in `HubLink.api`), `sessionListDetail` asks once for the exact `machine_id` + `session_id` (`summary=0`, no `since` or `cursor`; the old paging is kept for hubs without the feature, never send `session_id` to those, since they ignore it and answer with an unrelated page). It returns nil when nothing matches, and the background read then does nothing. Other failures of the request go by the same `isQuiet` rule as before: a cancellation, a timeout and no network are not shown, the rest is.
 - **What this does not hide**: a session whose transcript cannot be read (for instance a main chat id that no computer has a transcript for) still shows an error. The hub's catch-up push on subscribe fails (its detail says the transcript was not found) and `AppModel` writes the hub's generic "request could not be completed" message into `chat.error`; showing an error there is right, and belongs to reading the transcript, not to this detail read. Read from the code, not seen on a device: before this change the two errors went into the same `chat.error` and the one written last showed.
 - **Rule**: a read the user did not ask for, run for every open, answers "not found" with nil and keeps the error line for failures of the request. Tests: `SessionListTests` (`aHubWithLookupIsAskedOnceForTheExactSession`, `aChatOnAnUnlistedSessionShowsNoError`, `theHubLinkOffersLookupOnlyWhenTheHelloDoes`).
+
+## Selectable text under a tappable header eats the header's taps (2026-11-08, #1542)
+
+- **What went wrong**: Persona's folded message line (`AgentSentLine`) opened to its text with `.textSelection(.enabled)` right
+  under the header. Once open, taps on the header's words did nothing: the selectable text took touches a little above its
+  own frame, so only the chevron (to the right of the text's column) folded it. The UI test caught it (`SentToAgentTests`
+  folding at 0.6 / 0.8 of the header failed, at 0.95 passed); without the modifier every spot folds.
+- **Now**: the open text is plain, with a Copy button under it. Don't put `.textSelection(.enabled)` directly under a header
+  that toggles on tap; if a selectable body is needed, give it its own gap or make the toggle a separate control. Test the
+  fold by tapping the header's words, not just its chevron.
