@@ -1,20 +1,6 @@
 import Foundation
 import CoreGraphics
 
-/// How dense the sidebars' rows are. `standard` is the platform's own sidebar (HIG); `compact` one step tighter.
-/// While the two are being compared (#1647), DEBUG builds read `ui.sidebarDensity` (`-ui.sidebarDensity compact`).
-nonisolated enum SidebarDensity: String, Sendable {
-    case standard, compact
-
-    static var current: SidebarDensity {
-        #if DEBUG
-        SidebarDensity(rawValue: UserDefaults.standard.string(forKey: "ui.sidebarDensity") ?? "") ?? .standard
-        #else
-        .standard
-        #endif
-    }
-}
-
 extension Theme {
     /// Every sidebar row's metrics (the Persona sidebar on iPhone and iPad, its list on the Mac, the Mac's sections
     /// column): a minimum height and padding, not the text's own height, so a row is as tall in every language.
@@ -41,7 +27,7 @@ extension Theme {
         }
 
         #if os(macOS)
-        /// The Mac's three sizes, small to large; compact takes the one below the system's.
+        /// The Mac's three sizes, small to large.
         private static let sizes: [Metrics] = [
             Metrics(row: 24, padding: 3, glyph: 14, column: 18, gap: 6, mark: 18, radius: 6),
             Metrics(row: 28, padding: 4, glyph: 16, column: 20, gap: 8, mark: 20, radius: 6),
@@ -54,14 +40,9 @@ extension Theme {
             return (1...3).contains(mode) ? mode - 1 : 1
         }
 
-        private static var metrics: Metrics {
-            sizes[SidebarDensity.current == .compact ? max(systemSize - 1, 0) : systemSize]
-        }
+        private static var metrics: Metrics { sizes[systemSize] }
         #else
-        private static let standard = Metrics(row: 44, padding: 4, glyph: 22, column: 24, gap: 16, mark: 32, radius: 10)
-        private static let compact = Metrics(row: 40, padding: 4, glyph: 20, column: 24, gap: 12, mark: 28, radius: 10)
-
-        private static var metrics: Metrics { SidebarDensity.current == .compact ? compact : standard }
+        private static let metrics = Metrics(row: 44, padding: 4, glyph: 22, column: 24, gap: 16, mark: 32, radius: 10)
         #endif
     }
 }
