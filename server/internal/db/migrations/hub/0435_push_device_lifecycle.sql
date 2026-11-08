@@ -30,10 +30,11 @@ DECLARE
     retired_target text;
     retired_topic text;
     retired_env text;
+    retired_time timestamptz;
 BEGIN
     PERFORM pg_advisory_xact_lock(x'706572736f6e61'::bigint);
-    SELECT reason, credential_id, push_key_hash, target_hash, topic, apns_env
-        INTO retired_reason, retired_owner, retired_key, retired_target, retired_topic, retired_env
+    SELECT reason, credential_id, push_key_hash, target_hash, topic, apns_env, retired_at
+        INTO retired_reason, retired_owner, retired_key, retired_target, retired_topic, retired_env, retired_time
         FROM push_device_retirements WHERE device_id = NEW.device_id;
     IF TG_TABLE_NAME = 'devices' THEN
         new_owner := COALESCE(NULLIF(NEW.credential_id, ''), NEW.credential);
@@ -60,7 +61,14 @@ BEGIN
         IF TG_TABLE_NAME = 'devices'
             AND current_setting('persona.push_enrollment', true) = NEW.device_id
             AND (
-                (retired_reason IN ('inactive', 'invalid_token') AND (retired_owner = '' OR retired_owner = new_owner))
+                (retired_reason = 'superseded' AND retired_owner <> '' AND retired_owner = new_owner
+                    AND NEW.registered_at > retired_time
+                    AND EXISTS (SELECT 1 FROM devices candidate
+                        WHERE COALESCE(NULLIF(candidate.credential_id, ''), candidate.credential) = new_owner
+                            AND candidate.topic <> '' AND candidate.topic = NEW.topic AND candidate.apns_env = NEW.apns_env
+                            AND ((candidate.push_key <> '' AND candidate.push_key = NEW.push_key)
+                                OR (candidate.apns_token <> '' AND candidate.apns_token = NEW.apns_token))))
+                OR (retired_reason IN ('inactive', 'invalid_token') AND (retired_owner = '' OR retired_owner = new_owner))
                 OR (retired_reason IN ('inactive', 'invalid_token', 'revoked') AND new_owner <> retired_owner
                     AND retired_topic <> '' AND retired_topic = NEW.topic AND retired_env = NEW.apns_env
                     AND ((retired_key <> '' AND retired_key = encode(sha256(convert_to(NEW.push_key, 'UTF8')), 'hex'))

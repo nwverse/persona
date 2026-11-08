@@ -51,6 +51,34 @@ func (s *acceptanceFailStore) ReconcilePushDevices(context.Context, time.Time, t
 	return nil, nil
 }
 
+func TestPushCanonicalReplacementPreservesPrefs(t *testing.T) {
+	p := newPusher(t.TempDir(), nil, t.Logf)
+	d := Device{DeviceID: "cached-id", CredentialID: "owner", PushKey: "key", APNSToken: "old", Topic: "app.example"}
+	if err := p.register(d); err != nil {
+		t.Fatal(err)
+	}
+	if err := p.setPrefs(d.DeviceID, NotifyPrefs{Input: false, Done: DoneOff}); err != nil {
+		t.Fatal(err)
+	}
+	d.DeviceID, d.APNSToken = "other-id", "new"
+	if err := p.register(d); err != nil {
+		t.Fatal(err)
+	}
+	if prefs := p.prefs(d.DeviceID); prefs.Input || prefs.Done != DoneOff {
+		t.Fatal("canonical replacement lost preferences")
+	}
+	d.DeviceID, d.APNSToken = "cached-id", "fresh"
+	if err := p.register(d); err != nil {
+		t.Fatal(err)
+	}
+	if prefs := p.prefs(d.DeviceID); prefs.Input || prefs.Done != DoneOff {
+		t.Fatal("cached-ID reenrollment lost preferences")
+	}
+	if len(p.list()) != 1 {
+		t.Fatal("cached-ID reenrollment duplicated targets")
+	}
+}
+
 func TestPushMaintenanceDoesNotExpireUnflushedAcceptance(t *testing.T) {
 	p := newPusher(t.TempDir(), nil, t.Logf)
 	d := Device{DeviceID: "phone", APNSToken: "token"}

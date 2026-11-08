@@ -88,6 +88,12 @@ func pushProof(value string) string {
 
 func retirePushDevice(ctx context.Context, tx pgx.Tx, old Device, canonical string, reason string) error {
 	if canonical != "" {
+		// A new ID with no settings inherits the proven installation's choices;
+		// never overwrite settings explicitly stored on the canonical registration.
+		if _, err := tx.Exec(ctx, `UPDATE devices target SET prefs=source.prefs FROM devices source
+			WHERE target.device_id=$2 AND source.device_id=$1 AND COALESCE(target.prefs,'{}'::jsonb)='{}'::jsonb AND COALESCE(source.prefs,'{}'::jsonb)<>'{}'::jsonb`, old.DeviceID, canonical); err != nil {
+			return err
+		}
 		// Preserve the longest existing start deadline when identity rolls over.
 		var budgetExists bool
 		if err := tx.QueryRow(ctx, `SELECT to_regclass('live_activity_start_budget') IS NOT NULL`).Scan(&budgetExists); err != nil {

@@ -78,7 +78,7 @@ func TestPushDeviceRetirementAndFence(t *testing.T) {
 	}
 	for _, registering := range []bool{false, true} {
 		old.Registering = registering
-		old.RegisteredAt = at.Add(time.Minute)
+		old.RegisteredAt = at.Add(-time.Hour) // a delayed enrollment captured before retirement
 		if err := d.UpsertDevice(ctx, old); !errors.Is(err, ErrPushRegistrationConflict) {
 			t.Fatalf("old identity revived (enrollment=%v): %v", registering, err)
 		}
@@ -109,7 +109,7 @@ func TestPushDeviceRetirementAndFence(t *testing.T) {
 	if got, err := other.Devices(ctx); err != nil || len(got) != 1 {
 		t.Fatalf("restart lost retirement: %d %v", len(got), err)
 	}
-	t.Log("before two same-installation targets; after one; fresh enrollment, late saves and a second pool cannot resurrect old identity")
+	t.Log("before two same-installation targets; after one; stale enrollment, late saves and a second pool cannot resurrect old identity")
 }
 
 func TestPushDeviceInactivityProtectsActiveRegistrations(t *testing.T) {

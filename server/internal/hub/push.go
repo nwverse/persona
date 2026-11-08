@@ -149,6 +149,14 @@ func (p *Pusher) register(d Device) error {
 	p.mu.Lock()
 	cur := p.devices[d.DeviceID]
 	d.Prefs = cur.Prefs // registration carries the token, not the settings
+	if len(d.Prefs) == 0 {
+		var latest time.Time
+		for _, prior := range p.devices {
+			if db.SamePushInstallation(prior, d) && len(prior.Prefs) > 0 && (latest.IsZero() || prior.RegisteredAt.After(latest)) {
+				d.Prefs, latest = prior.Prefs, prior.RegisteredAt
+			}
+		}
+	}
 	d.LastPushAt = cur.LastPushAt
 	if d.RelayGrant != "" && d.RelayGrant == p.replaced[d.DeviceID] && d.RelayURL == cur.RelayURL && d.APNSToken == cur.APNSToken {
 		d.RelayGrant = cur.RelayGrant // the app's cached grant, which the hub already renewed
