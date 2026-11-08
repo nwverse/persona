@@ -4,7 +4,7 @@ import Testing
 
 /// Hand to AI (docs/assistant/inbox.md "Item actions", #1194): Persona's main chat is the default and goes through the
 /// item's hand-off, Also Mark as Done follows the target until the user sets it, a retry of the same hand-off keeps its
-/// client id only while it may have gone, and an older hub gets the text as a plain message.
+/// client id and text only while it may have gone, and an older hub gets the text as a plain message.
 @MainActor
 struct InboxHandOffModelTests {
     private final class Calls {
@@ -17,6 +17,8 @@ struct InboxHandOffModelTests {
         /// What the hand-off throws first, in order; then it answers.
         var failures: [Error] = []
         var askGoes = true
+        /// The item's preview from the next load on, as when a new message came in.
+        var preview: String?
     }
 
     private static let main = SessionKey(machineID: "server", sessionID: "main-1")
@@ -27,7 +29,11 @@ struct InboxHandOffModelTests {
 
     private func model(_ calls: Calls, hub: APIClient? = nil) -> InboxHandOffModel {
         InboxHandOffModel(itemID: "lark:f1:11", deps: .init(
-            load: { _ in try JSON.decoder.decode(InboxItem.self, from: Data(Self.item.utf8)) },
+            load: { _ in
+                var it = try JSON.decoder.decode(InboxItem.self, from: Data(Self.item.utf8))
+                if let p = calls.preview { it.preview = p }
+                return it
+            },
             handOff: { id, text, clientID in
                 calls.handOffs.append((id, text, clientID))
                 if let hub { return try await hub.inboxHandoff(id, text: text, clientID: clientID).session }
@@ -96,23 +102,55 @@ struct InboxHandOffModelTests {
         calls.failures = [APIError(status: 502, message: "cut off", fields: ["code": "assistant_in_doubt"]),
                           URLError(.timedOut),
                           APIError(status: 503, message: "offline", fields: ["code": "assistant_offline"]),
+                          APIError(status: 502, message: "no answer", fields: ["code": "timeout"]),
+                          APIError(status: 502, message: "typing broke off", fields: ["code": "internal", "delivered": "unknown"]),
+                          APIError(status: 502, message: "typed, then failed", fields: ["code": "internal", "delivered": "yes"]),
+                          APIError(status: 502, message: "node gone", fields: ["code": "node_unreachable"]),
+                          APIError(status: 202, message: "unknown", fields: ["code": OpReceipt.unknownCode]),
+                          APIError(status: 202, message: "pending", fields: ["code": OpReceipt.pendingCode]),
                           APIError(status: 409, message: "busy", fields: ["code": "input_draft"])]
         var outcomes: [Bool] = []
-        for _ in 0..<5 { outcomes.append(await m.send(ask: "a")) }
-        #expect(outcomes == [false, false, false, false, true])
+        for _ in 0..<11 { outcomes.append(await m.send(ask: "a")) }
+        #expect(outcomes == Array(repeating: false, count: 10) + [true])
         let ids = calls.handOffs.map(\.clientID)
-        #expect(ids.count == 5)
-        #expect(Set(ids[0...3]).count == 1) // no answer, in doubt or offline: the same hand-off asked again
-        #expect(ids[4] != ids[3])           // after an answer that was final: a new one
+        #expect(ids.count == 11)
+        #expect(Set(ids[0...9]).count == 1) // anything that may have gone, or that the hub kept no answer for: the same hand-off asked again
+        #expect(ids[10] != ids[9])          // after an answer that was final: a new one
         #expect(calls.opened.count == 1 && calls.opened.first?.clientID == ids.last)
 
-        // Another text is another hand-off, and so is the same text again after one went.
+        // A refusal that says nothing was typed is final too: the hub gives it back for that id.
+        calls.failures = [APIError(status: 503, message: "node offline", fields: ["code": "node_unreachable", "delivered": "none"])]
+        _ = await m.send(ask: "a")
+        _ = await m.send(ask: "a")
+        let refused = calls.handOffs.map(\.clientID).suffix(2)
+        #expect(Set(refused).count == 2)
+
+        // Another ask is another hand-off, and so is the same ask again after one went.
         calls.failures = [APIError(status: 502, message: "cut off", fields: ["code": "assistant_in_doubt"])]
         _ = await m.send(ask: "b")
         _ = await m.send(ask: "a")
         _ = await m.send(ask: "a")
         let more = calls.handOffs.map(\.clientID).suffix(3)
-        #expect(Set(more).count == 3 && !more.contains(ids[4]))
+        #expect(Set(more).count == 3 && !more.contains(ids[10]))
+    }
+
+    /// A new message on the item between the first try and the retry (likely after a 120 s timeout) changes the text the
+    /// item builds: the retry still sends the first text under the first client id, which the hub and the manager know.
+    @Test func aRetrySendsTheFirstTextAfterTheItemChanged() async throws {
+        let calls = Calls(), m = model(calls)
+        calls.failures = [APIError(status: 502, message: "no answer", fields: ["code": "timeout"])]
+        _ = await m.send(ask: "a")
+        calls.preview = "又来了一条"
+        let went = await m.send(ask: "a")
+        #expect(went && calls.handOffs.count == 2)
+        let first = try #require(calls.handOffs.first), retry = try #require(calls.handOffs.last)
+        #expect(retry.clientID == first.clientID && retry.text == first.text)
+        #expect(calls.opened.first?.text == first.text && calls.opened.first?.clientID == first.clientID)
+
+        // Once it went, the next hand-off is new and carries the item as it is now.
+        _ = await m.send(ask: "a")
+        let next = try #require(calls.handOffs.last)
+        #expect(next.clientID != first.clientID && next.text.contains("又来了一条") && next.text != first.text)
     }
 
     @Test func aFailureSaysWhyAndKeepsTheSheet() async {
@@ -141,6 +179,8 @@ struct InboxHandOffModelTests {
         }
         let went = await m.send(ask: "a")
         #expect(!went && m.error == String(localized: "Can't reach the hub"))
+        // Whatever says to look first keeps the hand-off's client id, so the hub and the manager send it once.
+        #expect(calls.handOffs.count == 6 && Set(calls.handOffs.map(\.clientID)).count == 1)
     }
 
     @Test func anOlderHubGetsThePlainMessage() async {
