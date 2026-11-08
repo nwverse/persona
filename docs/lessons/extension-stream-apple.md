@@ -80,4 +80,6 @@ Exercise both direct contributions and state-selected pushed pages. A search fix
 
 Unit tests use canonical valid/invalid fixtures and exact fence traces. Actual UI tests assert committed stream revisions, not just a loaded page that might be HTTP fallback. Screenshots contain synthetic data only; GUI captures are limited to the App window without other windows/desktop content. Clearly label offscreen rendering as such.
 
+A tooling exit code is not an execution or UI verdict. An actual `idb-repl` run printed a Swift compilation error (missing the injected function's `Any` return) yet exited zero. Require an explicit executed-result marker and check diagnostics; then observe the resulting screen or XCTest state. An empty accessibility tree is not positive readiness, and successful HID dispatch alone does not prove the intended UI changed.
+
 Use an independent build identity and machine-wide `xcode-slot` for every Xcode invocation. Own simulators follow the global count limit and are shut down afterward. Record the actual toolchain and that Xcode 26.0 was not verified when unavailable. Raw XCTest logs/xcresults can contain paths, device identifiers and launch credentials: publish only sanitized summaries and inspected images in the PR. Keep verification media outside the final source tree, following `docs/README.md`.
