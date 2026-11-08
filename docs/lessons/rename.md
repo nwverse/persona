@@ -74,3 +74,11 @@ The runbook copied Claude Code's project directories to the new keys and kept th
 
 - Move per-folder state with its folder; when both keys exist, merge and refuse a file that differs, never pick one silently. `persona-cutover.py --claude-config-dir` does this.
 - Rewrite every stored path that is acted on in the same window (`node_sessions.cwd`): an alias hides a stale path instead of failing.
+
+## A migration verified against a copy nobody reads (2026-11-09, #1686)
+
+The cutover transaction ran against the hub's database. The built-in manager had moved its tables into a database of its own on its first start after the cutover, and the hub's database kept the old ones as they were, for a build from before the move. The transaction rewrote that copy and reported every field verified, while the manager's own database kept the previous session folders and its nodes kept resuming sessions there.
+
+- Before writing a table, find out which process reads it and from where: a table with the expected name and schema can be a frozen copy.
+- Verify in the place the service reads. A zero count in a copy proves nothing.
+- Data that moves is marked where it left (`manager_moved`); a tool that writes there checks the mark and says where the live data is.
