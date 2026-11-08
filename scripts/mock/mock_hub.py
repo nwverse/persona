@@ -8865,7 +8865,9 @@ def echo_sent(parts, body):
 
     def written():
         before = ITEMS.get(sid, [])[-1]["seq"] if ITEMS.get(sid) else 0
-        seq = before + 1
+        # one numbering with it(): a reply written after this line (/mock/say) must come after it, not before (#1144)
+        _seq[0] = max(_seq[0], before) + 1
+        seq = _seq[0]
         pics = [{"id": "%s#%d" % (uuid.uuid4(), 0), "seq": seq, "ts": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
                  "role": "user", "kind": "image", "image": {"mime": im.get("mime") or "image/jpeg", "data": im.get("data") or ""}}
                 for im in images]
@@ -8880,6 +8882,7 @@ def echo_sent(parts, body):
             if sid in subs:
                 try: out({"type": "items", "machine_id": mid, "session_id": sid, "items": line, **span(line, before)})
                 except Exception: pass
+        sync_moved(sid)
     threading.Timer(float(os.environ.get("MOCK_ECHO_SECONDS", "1.5")), written).start()
 
 
@@ -8986,6 +8989,71 @@ def span(items, frm=None, to=None):
 #   GET /mock/delay?s=3   the same, from now on (0 turns it off)
 #   GET /mock/down?s=8    the hub is gone for that long: open WebSockets drop, new connections are closed unanswered
 NET = {"delay": float(os.environ.get("MOCK_DELAY", "0")), "down_until": 0.0}
+
+# ---------- frames lost, doubled, late or out of order (#1073) ----------
+# POST /mock/wire {"rules": [{"type": "items", "action": "drop" | "dup" | "delay" | "hold", "ms": 1500, "count": 1,
+# "session": "<id>"}]} adds rules: each takes the next `count` frames of that type (for that session, when given) going
+# to any app and drops it, sends it twice, sends it `ms` later, or keeps it until POST /mock/wire/release
+# {"order": "held" | "reverse", "clear": true} sends what was kept (and, with clear, drops the rules no frame took yet).
+# GET /mock/wire: the rules left and what they did; /mock/reset clears both. Every socket's frames go through it, as
+# they go out: a delta app's session list is already its delta and recorded as sent, as the hub records it when it
+# queues the frame. A short outage is /mock/down.
+WIRE = {"rules": [], "held": [], "log": []}
+WIRE_LOCK = threading.Lock()
+WIRE_ACTIONS = ("drop", "dup", "delay", "hold")
+
+
+def wire_rule(obj):
+    """The rule that takes this frame (its count goes down), or None."""
+    typ = obj.get("type")
+    sid = obj.get("session_id") or (obj.get("interaction") or {}).get("session_id")
+    with WIRE_LOCK:
+        for r in WIRE["rules"]:
+            if r["type"] == typ and (not r.get("session") or r["session"] == sid):
+                r["count"] -= 1
+                if r["count"] <= 0:
+                    WIRE["rules"].remove(r)
+                WIRE["log"].append({"type": typ, "action": r["action"], "session": sid})
+                return r
+    return None
+
+
+def wire_set(body):
+    rules = body.get("rules") if isinstance(body, dict) else None
+    if not isinstance(rules, list) or not rules:
+        raise ValueError("rules: a list of {type, action, ms?, count?, session?}")
+    out = []
+    for r in rules:
+        if not isinstance(r, dict) or not isinstance(r.get("type"), str) or r.get("action") not in WIRE_ACTIONS:
+            raise ValueError("each rule needs a type and an action (%s)" % ", ".join(WIRE_ACTIONS))
+        out.append({"type": r["type"], "action": r["action"], "ms": int(r.get("ms") or 1000), "count": int(r.get("count") or 1),
+                    **({"session": r["session"]} if r.get("session") else {})})
+    with WIRE_LOCK:
+        WIRE["rules"].extend(out)
+        return {"rules": list(WIRE["rules"]), "held": len(WIRE["held"])}
+
+
+def wire_release(order, clear=False):
+    with WIRE_LOCK:
+        held, WIRE["held"] = WIRE["held"], []
+        if clear:
+            WIRE["rules"] = []
+    if order == "reverse":
+        held.reverse()
+    for deliver, obj in held:
+        try: deliver(obj)
+        except OSError: pass  # that socket went meanwhile: lost with it
+    return {"released": len(held)}
+
+
+def wire_state():
+    with WIRE_LOCK:
+        return {"rules": list(WIRE["rules"]), "held": [obj.get("type") for _, obj in WIRE["held"]], "log": list(WIRE["log"])}
+
+
+def wire_reset():
+    with WIRE_LOCK:
+        WIRE.update(rules=[], held=[], log=[])
 # /mock/paging?on=1: pages of history as the hub cuts them (node.go PageTurns): the latest page and the backlog of a
 # first subscribe hold the last 2 whole turns, an older page `turns` more; otherwise the whole history comes at once.
 # ChatFollowTests' cold start at a saved place far up needs it (#597). /mock/reset turns it off.
@@ -10278,6 +10346,71 @@ def truth():
             "titles": {keys[s["session_id"]]: s.get("title") or "" for s in agents}}
 
 
+# ---------- a chat as the shared sync cases see it (#1073, spec/fixtures/sync) ----------
+# POST /mock/sync/card {"session": "<id>"}: a permission card in that session (an assistant conversation too), sent as
+# the hub sends one; answering it tells every app it ended, as the hub does (interaction_resolved).
+# GET /mock/sync/truth?session=<id>: what the chat should show: each turn's user message and its answer (the agent's
+# last words in it), the session's pending cards and its state.
+SYNC_CARDS = {"n": 0}
+# MOCK_SYNC_REVS=1: a transcript that grows (a reply, an echoed send) moves its session's updated_at and rev and the list
+# says so, as the hub's does: what tells a page that missed the items push to catch up (#3139). Off, the list stays.
+MOCK_SYNC_REVS = os.environ.get("MOCK_SYNC_REVS") == "1"
+
+
+def sync_moved(sid):
+    if not MOCK_SYNC_REVS:
+        return
+    row = next((x for x in SESSIONS + ASSISTANT if x["session_id"] == sid), None)
+    if row is not None:
+        row.update(updated_at=datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"), rev=(row.get("rev") or 0) + 1)
+        push_machine(row["machine_id"])
+
+
+def sync_card(body):
+    sid = (body or {}).get("session")
+    s = next((x for x in SESSIONS + ASSISTANT if x["session_id"] == sid), None)
+    if s is None:
+        raise ValueError("no session %r" % sid)
+    SYNC_CARDS["n"] += 1
+    n = SYNC_CARDS["n"]
+    now = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+    ix = {"id": "ix_sync_%d" % n, "machine_id": s["machine_id"], "session_id": sid, "session_title": s.get("title") or "",
+          "cwd": s.get("cwd") or "", "kind": "permission", "created_at": now, "expires_at": later(hours=1), "tool_name": "Bash",
+          "tool_use_id": "call_sync_%d" % n, "tool_input": {"command": "ls step-%d" % n}, "summary": "List step %d" % n}
+    with REQUEST_LOCK:
+        INTERACTIONS.append(ix)
+    for out, _ in list(LIVE):
+        try: out({"type": "interaction", "interaction": ix})
+        except Exception: pass
+    return {"id": ix["id"]}
+
+
+def sync_resolved(request_id):
+    """A card from /mock/sync/card was answered: every app hears it ended."""
+    if not request_id.startswith("ix_sync_"):
+        return
+    for out, _ in list(LIVE):
+        try: out({"type": "interaction_resolved", "id": request_id})
+        except Exception: pass
+
+
+def sync_truth(sid):
+    messages, answer = [], None
+    for x in ITEMS.get(sid, []):
+        if x.get("role") == "user" and x.get("kind") == "text" and not x.get("injected") and not x.get("from"):
+            messages.append({"from": "user", "text": x.get("text") or "", "state": "shown"})
+            answer = None
+        elif x.get("role") == "assistant" and x.get("kind") == "text":
+            if answer is None:
+                messages.append({"from": "agent", "text": x.get("text") or ""})
+                answer = len(messages) - 1
+            else:
+                messages[answer] = {"from": "agent", "text": x.get("text") or ""}
+    s = next((x for x in SESSIONS + ASSISTANT if x["session_id"] == sid), None)
+    return {"messages": messages, "cards": sorted(ix["id"] for ix in mock_interactions() if ix.get("session_id") == sid),
+            "state": (s or {}).get("state")}
+
+
 def push_machine(mid):
     if not kept(mid): return
     ss = out_by_machine([s for s in all_sessions() if s["machine_id"] == mid])
@@ -10484,6 +10617,9 @@ def say(text, user=None, stream=False, steps=10, ms=300, late=0, drop=False):
                 items = ITEMS[sid]
             before = items[-1]["seq"]
             new = ([it("user", "text", 0, text=user)] if user else []) + [it("assistant", "text", 0, text=text)]
+            if MOCK_SYNC_REVS:  # written now, as the hub's lines are: the page compares their time with the list's
+                for x in new:
+                    x["ts"] = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
             ITEMS[sid] = items + new
             LOG.write("  SAY: %d items to %s after seq %d%s\n" % (len(new), sid, before, " (push dropped)" if drop else "")); LOG.flush()
             if drop:
@@ -10497,6 +10633,7 @@ def say(text, user=None, stream=False, steps=10, ms=300, late=0, drop=False):
                 send({"type": "items", "machine_id": mid, "session_id": sid, "items": new, **span(new, before)})
             except Exception:
                 pass
+            sync_moved(sid)
 
 
 if os.environ.get("MOCK_COMPUTER", "") not in ("", "off"):
@@ -12457,6 +12594,8 @@ class H(BaseHTTPRequestHandler):
             return self.send_json({"ok": True})
         if p == "/mock/lark_churned": return self.send_json(LARK_CHURN)
         if p == "/mock/truth": return self.send_json(truth())
+        if p == "/mock/wire": return self.send_json(wire_state())
+        if p == "/mock/sync/truth": return self.send_json(sync_truth(q.get("session", [""])[0]))
         if p == "/mock/bump": return self.send_json(bump(q.get("what", ["last"])[0], q.get("session", [None])[0]))
         if p == "/mock/mark": return self.send_json({"ok": True})  # a test's marker in the request log (explore)
         if p == "/mock/photo": return self.send_json(set_photo(q.get("on", ["1"])[0] == "1"))  # PhotoSaveTests' own fixture
@@ -12617,6 +12756,7 @@ class H(BaseHTTPRequestHandler):
             return self.send_json({"close": ARCHIVE_CLOSE["mode"], "archived": [x["session_id"] for x in ARCHIVED_AGENTS]})
         if p == "/mock/reset":  # MachinePagesTests: each test starts from the same machines
             BOTMUX_ON.clear()
+            wire_reset()
             SEND_FAIL["on"] = False  # a FailedSendPlacementTests run that died before turning it off
             COOKIES_FAILED[0] = False  # MOCK_COOKIES_FAIL: the next read fails again
             HERDR_STOPPED.clear(); HERDR_STOPPED.update(herdr_env()); HERDR_STARTS.clear()  # the herdr row (#1916)
@@ -13334,6 +13474,14 @@ class H(BaseHTTPRequestHandler):
                 reply["web_url"] = web + "#token=" + tok
                 reply["web_qr"] = _mock_qr(reply["web_url"])
             return self.send_json(reply)
+        if p in ("/mock/wire", "/mock/wire/release", "/mock/sync/card") and self.command == "POST":  # #1073
+            try:
+                body = json.loads(self.last_body or b"{}")
+                if p == "/mock/wire": return self.send_json(wire_set(body))
+                if p == "/mock/wire/release": return self.send_json(wire_release((body or {}).get("order"), bool((body or {}).get("clear"))))
+                return self.send_json(sync_card(body))
+            except ValueError as e:
+                return self.send_json({"error": str(e), "code": "invalid"}, 400)
         if p == "/mock/fault" and self.command == "POST":
             try:
                 body = json.loads(self.last_body or b"{}")
@@ -14361,6 +14509,7 @@ class H(BaseHTTPRequestHandler):
                 return self.send_json({"error": "终端上的对话框已经变了（可能在电脑上答过了），这次什么都没按：看看新的再答。",
                                        "code": "prompt_changed", "delivered": "none"}, 409)
             resolve_mock_interaction(p.split("/")[4], json.loads(self.last_body or b"{}"))
+            sync_resolved(p.split("/")[4])
             push_fleet()
             return self.send_json({"ok": True})
         if p.startswith("/api/v1/machines/") and p.endswith("/claude-dirs/blocked") and self.command == "PUT":
@@ -14569,6 +14718,24 @@ class H(BaseHTTPRequestHandler):
                 if delta and obj.get("type") == "sessions":
                     obj = sessions_for_delta_app(obj, have)
                     if obj is None: return
+            # /mock/wire (#1073), on the frame as it goes out (a delta app's list already its delta, recorded as sent)
+            r = wire_rule(obj) if obj.get("type") else None
+            if r is None:
+                return write(obj)
+            if r["action"] == "dup":
+                write(obj)
+                return write(obj)
+            if r["action"] == "delay":
+                def late():
+                    try: write(obj)
+                    except OSError: pass  # the socket went meanwhile: lost with it
+                threading.Timer(r["ms"] / 1000, late).start()
+            elif r["action"] == "hold":
+                with WIRE_LOCK:
+                    WIRE["held"].append((write, obj))
+
+        def write(obj):
+            with lock:
                 data = json.dumps(obj, ensure_ascii=False).encode()
                 n = len(data)
                 hdr = bytes([0x81]) + (bytes([n]) if n < 126 else bytes([126]) + struct.pack(">H", n) if n < 65536 else bytes([127]) + struct.pack(">Q", n))
