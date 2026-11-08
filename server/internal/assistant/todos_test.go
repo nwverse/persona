@@ -397,8 +397,8 @@ func (f *failingStore) ListTodos(ctx context.Context) ([]db.TodoRow, error) {
 	return f.DB.ListTodos(ctx)
 }
 
-// gatedTodoStore holds the first UpdateTodo after armed is set, once it has committed, until release is closed: a
-// second device's write can then commit while the first one has not reached memory yet.
+// gatedTodoStore holds the first UpdateTodo or EditTodo after armed is set, once it has committed, until release is
+// closed: a second device's write can then commit while the first one has not reached memory yet.
 type gatedTodoStore struct {
 	*db.DB
 	armed     atomic.Bool
@@ -412,11 +412,23 @@ func newGatedTodoStore(database *db.DB) *gatedTodoStore {
 
 func (g *gatedTodoStore) UpdateTodo(ctx context.Context, id string, title, notes *string, done *bool, at time.Time) (*db.TodoRow, error) {
 	row, err := g.DB.UpdateTodo(ctx, id, title, notes, done, at)
+	g.hold()
+	return row, err
+}
+
+// EditTodo is the PATCH route's write (editTodo), held like UpdateTodo.
+func (g *gatedTodoStore) EditTodo(ctx context.Context, id string, e db.TodoEdit, at time.Time) (*db.TodoRow, error) {
+	row, err := g.DB.EditTodo(ctx, id, e, at)
+	g.hold()
+	return row, err
+}
+
+// hold holds the first write after armed is set until release is closed.
+func (g *gatedTodoStore) hold() {
 	if g.armed.CompareAndSwap(true, false) {
 		close(g.committed)
 		<-g.release
 	}
-	return row, err
 }
 
 // raceTodoWrites runs first, held by g once its write committed, against second, which starts only then. Without
