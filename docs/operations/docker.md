@@ -65,7 +65,7 @@ The hub in the image is on the `docker` channel: it never replaces its own binar
 To be clear first: **the NAS is only the hub; the AI doesn't work on the NAS**. The image has no Claude Code, so the assistant and Agents all run on another computer of yours. After installing the hub you still need to add a computer (step 5 below); until then the App can pair and browse, but the main chat can't start.
 
 1. On the NAS, create a directory (e.g. `/volume1/docker/persona`) with a `data` subdirectory inside, both created with the NAS's file manager: if `data/` belongs to you, the hub's files belong to you (if Docker creates `data/` itself, it belongs to root, and then all files belong to 1000; see the table below). Put `deploy/docker/compose.yaml` and `deploy/docker/.env.example` in the directory, rename the latter to `.env`, and fill in two lines:
-   - `PERSONA_IMAGE`: the image, `ghcr.io/<owner>/persona:latest` (see "Image" above; for a private image, `docker login ghcr.io` first).
+   - `PERSONA_IMAGE`: the image, `ghcr.io/<owner>/persona:latest` (see "Image" above; for a private image, `docker login ghcr.io` first). An older `.env` that has only the image's former variable keeps working. With neither, `docker compose` stops with `service "hub" has neither an image nor a build context specified`.
    - `PERSONA_PUBLIC_URL`: how the phone reaches this NAS, usually `http://<NAS LAN address>:18660`.
 2. Run `docker compose up -d` in that directory.
 3. Pair the phone: `docker compose exec hub personad hub pair`, and scan the QR code in the terminal with the App.
