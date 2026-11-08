@@ -138,6 +138,8 @@ struct ChatView: View {
     /// The Persona conversation in the shell (docs/apple/ios.md「新外壳」).
     @Environment(\.shellChat) private var shellChat
     @Environment(\.shell) private var shell
+    /// iPhone Duo's bars down the side: the shell's bar over the Persona conversation is the side rail (`ShellSideRail`).
+    @Environment(\.shellRailEdge) private var railEdge
     /// The shell's composer (`ShellComposerBar`): the assistant's conversation and, in the shell, an agent's too, in every
     /// style (#1091); the old layout keeps `ComposerRow` / `PromptComposer` and the mode chips above them. On the Mac
     /// the card in every style but BeautifulUI's (its prompt bar is already one): the field, and under it Add, the model
@@ -789,7 +791,8 @@ struct ChatView: View {
         }
         var lines = lineBuilder.build(Self.debugTrim(blocks), live: key.live, streaming: key.streaming)
         if style == .assistant { // docs/assistant/unified-entry.md: the hub's items, quick results, a line for each day
-            lines = ChatLines.daySections(ChatLines.quickResults(ChatLines.mergeFeed(lines, feed)))
+            // The hand-offs the task cards take in are drawn there, not among the lines (#1542).
+            lines = ChatLines.daySections(ChatLines.quickResults(ChatLines.mergeFeed(lines, SentToAgents.shown(feed))))
         }
         scratch.lines = lines
         scratch.linesKey = key
@@ -1475,7 +1478,7 @@ struct ChatView: View {
                 try? await Task.sleep(for: .milliseconds(60))
                 if n == 1 { hideChrome() } // once the header has measured itself
                 guard let bottom = scratch.landingMaxY, scratch.listFrame.height > 0 else { continue }
-                let want = scratch.listFrame.minY + (style == .dev ? (sideBars ? sideHeaderHeight : chrome.settledHeight) : AssistantTopBar.height) + Self.inputTail
+                let want = scratch.listFrame.minY + (style == .dev ? (sideBars ? sideHeaderHeight : chrome.settledHeight) : AssistantTopBar.room(railEdge)) + Self.inputTail
                 let off = want - bottom // > 0: too high; the flipped list scrolls toward older to lower it
                 if abs(off) < 1 { break }
                 scrollList(to: chrome.offset + off)
@@ -1748,7 +1751,7 @@ struct ChatView: View {
         // The Mac has no header over the chat (`chrome` stays empty): the row over it is `macChrome`.
         style == .dev ? macChromeHeight : AssistantTopBar.height
         #else
-        style == .dev ? (sideBars ? sideHeaderHeight : chrome.height) : AssistantTopBar.height
+        style == .dev ? (sideBars ? sideHeaderHeight : chrome.height) : AssistantTopBar.room(railEdge)
         #endif
     }
 
@@ -1803,9 +1806,9 @@ struct ChatView: View {
             .frame(minHeight: .zero)
             ChatRegion(name: "ChatFooter.body") { footer }
                 // What the footer takes of the page: the pending cards grow into the rest while the keyboard is up.
-                .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { h in
-                    if abs(footerRoom.footer - h) >= 1 { footerRoom.footer = h }
-                }
+                // Exact, like the cards' own height inside it (`PendingCards.shown`): the cards take one from the other for
+                // what the footer holds besides them, which must not move with their own height (#1580).
+                .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { footerRoom.footer = $0 }
         }
         // The height the page offers, even when what is in it is taller: the pending cards size themselves by it. A
         // frame with both bounds takes the offered size whatever the content (not a design value: no token for it).
@@ -1813,10 +1816,10 @@ struct ChatView: View {
         .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { h in
             if abs(footerRoom.height - h) >= 1 { footerRoom.height = h }
         }
-        // As short as the list may get while the keyboard is up: the header over it (folded or not), its top margin and the
-        // hairline above it. The cards take the rest (#1912).
+        // As short as the list may get while the keyboard is up: the header over it (folded or not) and the hairline above
+        // it. The cards take the rest (#1912).
         .onChange(of: headerRoom, initial: true) { _, h in
-            footerRoom.listFloor = Self.newestMargin + Theme.Size.line + Theme.Space.s // and a gap over 「N 个待处理」
+            footerRoom.listFloor = Theme.Size.line + Theme.Space.s // and a gap over 「N 个待处理」
             footerRoom.fixedHeader = h
             footerRoom.chrome = style == .dev && !sideBars ? chrome : nil
         }
@@ -1923,7 +1926,8 @@ struct ChatView: View {
                 .padding(.horizontal, Theme.Space.m)
                 .padding(.vertical, Theme.Space.s)
         } else {
-            mainFooter.padding(.top, Theme.Space.s)
+            // No room of its own above: the newest message is one row gap over its first row (`newestGap`, #1108).
+            mainFooter
         }
     }
 
@@ -2173,8 +2177,10 @@ struct ChatView: View {
         return LazyVStack(alignment: .leading, spacing: Theme.Space.l) {
             // Newest first (the list is drawn upside down): the end sentinel, live text, unsent messages, lines (a failed
             // message among them, before the first line written after it).
+            // It takes no room: the rows' spacing alone is the gap to the footer, as between any two rows (#1108).
             Color.clear
                 .frame(height: Theme.Size.line)
+                .padding(.bottom, -Theme.Size.line)
                 .id(Self.bottomID)
             // A voice call's captions, the thread's last rows while it is bound here (docs/assistant/voice.md 6.2): they read the
             // call themselves; the page only asks whether one is bound.
@@ -2279,10 +2285,10 @@ struct ChatView: View {
         .onScrollTargetVisibilityChange(idType: String.self, threshold: 0.01) { ids in scratch.drawnLines = ids }
         .flippedBack() // the scroll view itself upside down; every row above is flipped back
         // Safe areas would land on the wrong ends of a flipped scroll view: ignore them and add the room ourselves.
-        // (Content top = the composer side on screen, content bottom = the navigation side.)
+        // (Content top = the composer side on screen, content bottom = the navigation side.) The newest end has no
+        // margin: the rows' spacing is its gap to the footer (`newestGap`).
         // The header floats over the list (Agents): the oldest end leaves its full height free, so nothing hides
         // under it; the list's own frame never changes as it folds, so folding never moves the messages.
-        .contentMargins(.top, Self.newestMargin, for: .scrollContent)
         .contentMargins(.bottom, headerRoom + 10, for: .scrollContent)
         .scrollIndicators(.hidden)
         // iOS 26's soft edge blur works out its region on the unflipped view and fogged the whole list.
@@ -2916,11 +2922,10 @@ struct ChatView: View {
     /// Back: out of files / Git to the chat first, then off the page.
     /// The widest the conversation gets: lines longer than this are hard to read.
     static let readableWidth: CGFloat = 760
-    /// The list's margin at its newest end (over the composer; the list is upside down, so its top margin).
-    static let newestMargin: CGFloat = 10
-    /// From the newest row's bottom to the composer: the margin, the end marker and the rows' spacing. The first message
-    /// of a new conversation is laid out with it before the chat takes over (`FirstMessagePending`, #1911).
-    static let newestGap: CGFloat = newestMargin + Theme.Size.line + Theme.Space.l
+    /// From the newest row's bottom to the footer's first row: the rows' spacing, as between any two rows (#1108); the
+    /// end marker takes no room and neither the list nor the footer adds a margin there. The first message of a new
+    /// conversation is laid out with it before the chat takes over (`FirstMessagePending`, #1911).
+    static let newestGap: CGFloat = Theme.Space.l
 
     /// An Agents chat whose actions are in the system's side column (no header of its own).
     private var sideBars: Bool { style == .dev && barsVertical }
