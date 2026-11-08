@@ -9,7 +9,7 @@ import { isMachineRef, resolveRef } from "../lib/files";
 import { openPanel } from "../lib/panel";
 import remarkMath from "remark-math";
 import { copyText, toast } from "./atoms";
-import { tableToTsv, writeTableClipboard } from "./tableCopy";
+import { tableHtml, tableToTsv, writeTableClipboard } from "./tableCopy";
 import { t } from "../i18n";
 import { Icon } from "./icons";
 import { MermaidBlock } from "./Mermaid";
@@ -424,7 +424,8 @@ function CodeBlock({ children }: { children: React.ReactNode }) {
 
 // The same hover button as a code block, on the table's corner. The wrap is only a positioning box: the table
 // keeps its width, scroll and margin (styles.css passes the prose edge rule through). The button is out of the
-// table, so a copy does not pick it up as a cell, and it stays put while a wide table scrolls.
+// table, so a copy does not pick it up as a cell, and it stays put while a wide table scrolls. It is the control's
+// own 24px, not the 44px touch pad: it sits on a cell, and that pad would take the tap meant for a corner link.
 function TableBlock({ children, ref: _ref, ...rest }: React.ComponentProps<"table">) {
   const tableRef = useRef<HTMLTableElement>(null);
   const buttonRef = useRef<HTMLButtonElement>(null);
@@ -465,12 +466,12 @@ function TableBlock({ children, ref: _ref, ...rest }: React.ComponentProps<"tabl
             toast(t("ui-atoms.copy_failed"), "error");
             return;
           }
-          const html = table.outerHTML;
+          const html = tableHtml(table);
           void writeTableClipboard(tsv, html).then((ok) => {
             toast(ok ? t("ui-atoms.copied") : t("ui-atoms.copy_failed"), ok ? "ok" : "error");
           });
         }}
-        className="absolute top-1.5 right-1.5 flex size-6 touch-hit items-center justify-center rounded-[6px] bg-surface text-ink-3 opacity-0 shadow-btn pointer-events-none transition-opacity duration-150 group-hover/table:pointer-events-auto group-hover/table:opacity-100 hover:text-ink focus-visible:pointer-events-auto focus-visible:opacity-100 [@media(hover:none)]:pointer-events-auto [@media(hover:none)]:opacity-100"
+        className="absolute top-1.5 right-1.5 flex size-6 items-center justify-center rounded-[6px] bg-surface text-ink-3 opacity-0 shadow-btn pointer-events-none transition-opacity duration-150 group-hover/table:pointer-events-auto group-hover/table:opacity-100 hover:text-ink focus-visible:pointer-events-auto focus-visible:opacity-100 [@media(hover:none)]:pointer-events-auto [@media(hover:none)]:opacity-100"
       >
         <Icon name="copy" size={13} />
       </button>
