@@ -27,10 +27,7 @@ struct SyncScenarioTests {
     /// Cases this harness cannot play yet, and cases that fail on a bug filed for them: the name and why. A case leaves
     /// the list when it passes (a known issue that no longer happens fails the test).
     nonisolated static let known: [String: String] = [
-        "both_devices_answer_once": "#1112: two devices need a transport each (the demo transport is the app's)",
-        "card_answered_on_other_device": "#1112: two devices need a transport each (the demo transport is the app's)",
         "relaunch_after_accept_before_transcript": "#1455: a sent message waiting for its transcript copy is not stored",
-        "sent_on_other_device_once": "#1112: two devices need a transport each (the demo transport is the app's)",
         "send_accepted_transcript_late": "#1112: a 35 s wait needs the app's timers on a test clock",
         "wake_reply_latest_is_answer": "#1112: a 10 min wait needs the app's timers on a test clock",
     ]
@@ -66,8 +63,8 @@ final class SyncRun {
     let hub: SyncHub
     let key: SessionKey
     var devices: [String: SyncDevice] = [:]
-    /// Which device's requests the demo transport is carrying (one at a time: the transport is the app's, not a device's).
-    var active = "a"
+    /// The device whose model `AgentSync` (one for the process) works for: the first one.
+    private var first = "a"
     var held: [HeldWrite] = []
     /// Op id (upper case) → what a retry with it gets at once.
     var receipts: [String: SyncReply] = [:]
@@ -91,7 +88,7 @@ final class SyncRun {
         SyncHub.stamps = [:]
         defer { Self.current = nil; stop() }
         let names = c["devices"]?.array?.compactMap(\.string) ?? ["a"]
-        guard names.count == 1 else { throw SyncUnplayable(description: "two devices: one AppModel per device needs a transport each") }
+        first = names.first ?? "a"
         ChatCache.remove(key)
         StateCache.remove("outbox")
         for n in names { try await start(n) }
@@ -123,10 +120,9 @@ final class SyncRun {
     private func start(_ name: String) async throws {
         let d = SyncDevice(name: name, key: key)
         devices[name] = d
-        active = name
         d.answersSubscribe = { [hub] in hub.backlogFrame }
         d.connect()
-        AgentSync.shared.model = { [weak d] in d?.model ?? AppModel.shared }
+        if name == first { AgentSync.shared.model = { [weak d] in d?.model ?? AppModel.shared } }
         let socket = try await nextSocket(d, after: 0)
         socket.send(hub.hello(resumed: false))
         greeted[name] = d.made
@@ -152,7 +148,7 @@ final class SyncRun {
         d.relaunch()
         d.model.restoreOutbox() // as a paired app's launch does (AppModel.init)
         d.connect()
-        AgentSync.shared.model = { [weak d] in d?.model ?? AppModel.shared }
+        if d.name == first { AgentSync.shared.model = { [weak d] in d?.model ?? AppModel.shared } }
         d.model.subscribe(key, by: d.owner)
         d.model.show(key, by: d.owner)
         await settle()
@@ -178,7 +174,6 @@ final class SyncRun {
         if let h = step["hub"] { hub.apply(h) }
         if let socket = step["socket"] {
             let d = try device(socket["device"])
-            active = d.name
             if socket["drop"]?.bool == true {
                 d.socket?.drop?()
             } else if let open = socket["open"] {
@@ -190,7 +185,6 @@ final class SyncRun {
         if let frames = step["frames"]?.object {
             for (n, list) in frames {
                 let d = try device(.string(n))
-                active = d.name
                 for f in list.array ?? [] {
                     if f["type"]?.string == "interaction_resolved", let id = f["id"]?.string { d.settledCards.insert(id) }
                     if f["type"]?.string == "interaction", let id = f["interaction"]?["id"]?.string, hub.raised.contains(id) {
@@ -203,7 +197,6 @@ final class SyncRun {
         }
         if let user = step["user"] {
             let d = try device(user["device"])
-            active = d.name
             if let send = user["send"] {
                 // Typed after what came before, not in the same second: the app orders a failed message among the
                 // later ones by the second it was written.
@@ -268,13 +261,21 @@ final class SyncRun {
 
     // MARK: Requests
 
-    nonisolated static func http(_ req: LocalRequest) async throws -> Data {
+    /// A request from a device's own transport (`SyncDevice.connect`).
+    nonisolated static func http(_ req: LocalRequest, from device: String) async throws -> Data {
         guard let run = await SyncRun.current else { throw URLError(.cancelled) }
-        return try await run.serve(req)
+        return try await run.serve(req, from: device)
     }
 
-    private func serve(_ req: LocalRequest) async throws -> Data {
-        guard let d = devices[active] else { throw URLError(.cancelled) }
+    /// A request that went to Demo Mode's hub instead of a device's transport: it is not told apart from the other
+    /// device's, so it is a failure, never served.
+    nonisolated static func stray(_ req: LocalRequest) async throws -> Data {
+        await MainActor.run { SyncRun.current?.failures.append("a request on no device's transport: \(req.method) \(req.path)") }
+        throw URLError(.cancelled)
+    }
+
+    private func serve(_ req: LocalRequest, from device: String) async throws -> Data {
+        guard let d = devices[device] else { throw URLError(.cancelled) }
         let write = d.note(req)
         if req.method == "GET" {
             if req.path.hasPrefix("/api/v1/ops/") {

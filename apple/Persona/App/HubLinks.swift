@@ -21,6 +21,11 @@ final class HubLink: Identifiable {
     @ObservationIgnored let pins: PinsStore
     /// Where requests go when the socket has not picked a hub yet: the group's first hub.
     @ObservationIgnored var fallback: ServerConfig
+    #if DEBUG
+    /// Unit tests: what answers this link's requests instead of the network or `APIClient.local`
+    /// (`AppModel.linkHooksForTests`).
+    @ObservationIgnored var transportForTests: APIClient.Transport?
+    #endif
 
     init(group: String, config: ServerConfig, pins: PinsStore) {
         self.group = group
@@ -38,6 +43,9 @@ final class HubLink: Identifiable {
         var c = APIClient(config: config, group: group)
         c.extensionsAPI = hello.features.isEmpty ? Self.remembersExtensions(group) : features.contains("extensions")
         c.personaNaming = live.personaContracts
+        #if DEBUG
+        c.transport = transportForTests
+        #endif
         return c
     }
 

@@ -138,6 +138,10 @@ final class AppModel {
     #if DEBUG
     /// Unit tests: the client every group's requests go to (`FakeHub.client`) instead of the paired hubs'.
     @ObservationIgnored var apiForTests: APIClient?
+    /// Unit tests: the socket and the requests of every link made from now on (`makeLink`) go to these, not to Demo
+    /// Mode's hub, which is one for the whole process: several models side by side, each a device of its own (the
+    /// shared sync scenarios with two devices, `SyncDevice`).
+    @ObservationIgnored var linkHooksForTests: (transport: APIClient.Transport, socket: () -> LocalSocket)?
     #endif
     /// Cards being answered, and whether the hub ended them meanwhile: a failed answer puts back only the ones it did not.
     @ObservationIgnored private var answering = AnsweringInteractions()
@@ -429,6 +433,12 @@ final class AppModel {
         link.live.onConnected = { [weak self] in self?.didConnect(group) }
         link.live.onChange = { [weak self] in self?.connection.update() }
         link.live.credential = { [weak self] config in DeviceCredentialTrade.current(config, traded: self?.tradedTokens ?? [:]) }
+        #if DEBUG
+        if let hooks = linkHooksForTests {
+            link.transportForTests = hooks.transport
+            link.live.makeLocalForTests = hooks.socket
+        }
+        #endif
         return link
     }
 
