@@ -294,6 +294,7 @@ def mock_workspaces():
 # ---------- node self-check (#2429, docs/server/machines.md "Self-check") ----------
 # GET /api/v1/machines/{mid}/doctor and POST …/doctor/fix: the report `personad node doctor` prints, as the hub relays it.
 #   MOCK_TOKENS=none (a hub without per-machine token usage: no card tokens, the usage route 404s) | empty (nothing ran)
+#               | lopsided (the server ran nearly everything, the others a thousandth as much)
 #   MOCK_DOCTOR=healthy (default) | stale (hooks and MCP files out of date, "Repair" puts them right) | broken (node.sock gone)
 #                | mixed (stale files, the user's own PermissionRequest hook, no runtime.sock) | old (the node has no such method)
 #                | error (the check fails) | slow (the check takes MOCK_DOCTOR_SECONDS, default 3)
@@ -468,7 +469,8 @@ def machine_metrics(mid, span, step):
 
 
 # Token usage by machine (docs/server/machines.md "Token usage", #4973). MOCK_TOKENS=none: a hub before it (the usage route
-# answers 404, the cards have no tokens); =empty: no machine ran anything. The studio's node is an older one (its usage
+# answers 404, the cards have no tokens); =empty: no machine ran anything; =lopsided: the server ran nearly all of it
+# (the Machines page's share bar with minimum-width parts). The studio's node is an older one (its usage
 # names no launcher), the NAS is offline (its monitoring stops 3 hours ago, and so does its usage).
 MOCK_TOKENS = os.environ.get("MOCK_TOKENS", "")
 USAGE_MIX = {  # machine: [(model, launcher, share)]
@@ -490,7 +492,8 @@ def usage_minute(mid, minute):
     h = int(hashlib.md5(f"u{mid}{minute}".encode()).hexdigest()[:6], 16) / 0xFFFFFF
     if h < 0.25 and work < 0.2:
         return []
-    w = work * (0.5 + h) * USAGE_SCALE[mid] * (1.6 if mid == "server" and minute > T0 - 25 * 60 else 1)
+    scale = USAGE_SCALE[mid] * (0.001 if MOCK_TOKENS == "lopsided" and mid != "server" else 1)
+    w = work * (0.5 + h) * scale * (1.6 if mid == "server" and minute > T0 - 25 * 60 else 1)
     out = []
     for model, launcher, share in USAGE_MIX[mid]:
         f = w * share
@@ -2051,7 +2054,7 @@ MANAGERS = {"list": _managers_seed(), "default": "assistant"}
 # with `manager`, and computers, sessions and cards carry their computer's, with one manager too (MOCK_MANAGERS=1: all
 # the hub's own). 工作 has the MacBook, an inbox item and the second extension; 家里 (offline) a mail and the third
 # extension, and with MOCK_MANAGER_NAS=1 the NAS. A hub from before the roster (MOCK_MANAGERS=0) stamps nothing.
-# A computer of an offline manager is offline with the hub's words for it (devices_link.go offlineLocal): so 家里 has
+# A computer of an offline manager is offline with the hub's words for it (devices_reports.go offlineLocal): so 家里 has
 # none by default, and the computers the other screenshots count stay as they were.
 MANAGED_MACHINES = {"macbook": "m-3fa21c", **({"nas": "m-8b04d2"} if os.environ.get("MOCK_MANAGER_NAS") == "1" else {})}
 # With the NAS 家里's, the agent it had: the hub keeps an offline manager's sessions, in state unknown (stamp_row).
