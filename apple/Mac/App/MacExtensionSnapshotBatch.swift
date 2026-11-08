@@ -6,6 +6,20 @@ import SwiftUI
 /// The fixture advertises shared snapshots as nav_page contributions (MOCK_EXTENSION_SHOWCASE=1).
 @MainActor enum MacExtensionSnapshotBatch {
     private(set) static var isCapturing = false
+    private static var nativePage: String?
+    private static var nativeVersion: Int64?
+    private static var nativeFailure: String?
+
+    static func observeNativeFailure(owner: String, contribution: String, code: String) {
+        guard isCapturing, nativePage == owner + "/" + contribution else { return }
+        nativeFailure = code
+    }
+
+    // Code-hosting AX containers may omit values; observe only the real validated publisher, never fixture data.
+    static func observeNativeCommit(owner: String, contribution: String, version: Int64) {
+        guard isCapturing, nativePage == owner + "/" + contribution, version > 0 else { return }
+        nativeVersion = version
+    }
 
     struct Plan: Decodable {
         var hub: URL
@@ -69,9 +83,10 @@ import SwiftUI
                 for scene in plan.extensionShowcase {
                     // Tear down the previous page before waiting for this page's HTTP-backed committed view.
                     try await clearPage()
-                    MacShellState.shared.pluginPage = "showcase/" + scene.name
+                    nativePage = "showcase/" + scene.name
+                    MacShellState.shared.pluginPage = nativePage
                     let window = try await readyWindow(title: scene.title, diagnostic: output.appending(path: "failed-\(scene.name)-\(appearance).png"), requiresNative: plan.requiresNative == true)
-                    let nativeRevision = window.contentView.flatMap { MacSnapshot.accessibilityEntries($0).first { $0.identifier == "extension-ui-ready" }?.value }
+                    let nativeRevision = nativeVersion.map { "stream:\($0)" }
                     let url = output.appending(path: "mac-showcase-\(scene.name)-\(appearance).png")
                     guard MacSnapshot.capture(to: url, window: window) else { throw Failure.capture }
                     captures.append(Capture(sample: scene.name, appearance: appearance, position: "top", file: url.lastPathComponent, nativeRevision: nativeRevision))
@@ -103,6 +118,9 @@ import SwiftUI
     }
 
     private static func clearPage() async throws {
+        nativePage = nil
+        nativeVersion = nil
+        nativeFailure = nil
         MacShellState.shared.pluginPage = nil
         let deadline = ContinuousClock.now.advanced(by: .seconds(10))
         while ContinuousClock.now < deadline {
@@ -138,7 +156,7 @@ import SwiftUI
                 let entries = MacSnapshot.accessibilityEntries(content)
                 lastWindow = window
                 lastEntries = entries
-                let native = entries.contains { $0.identifier == "extension-ui-ready" && $0.value?.range(of: "^stream:[1-9][0-9]*$", options: .regularExpression) != nil }
+                let native = nativeVersion.map { $0 > 0 } == true
                 if entries.contains(where: { $0.identifier == "extension-ui-ready" }),
                    !entries.contains(where: { $0.identifier == "extension-ui-waiting" }),
                    (!requiresNative || native),
@@ -157,7 +175,7 @@ import SwiftUI
         let waiting = lastEntries.contains { $0.identifier == "extension-ui-waiting" }
         let labels = lastEntries.compactMap(\.label).prefix(40)
         let lifecycle = lastEntries.filter { $0.identifier == "extension-ui-ready" || $0.identifier == "extension-ui-waiting" }.compactMap(\.value)
-        FileHandle.standardError.write(Data("snapshot readiness title=\(title) ready=\(ready) waiting=\(waiting) lifecycle=\(lifecycle) labels=\(Array(labels))\n".utf8))
+        FileHandle.standardError.write(Data("snapshot readiness title=\(title) ready=\(ready) waiting=\(waiting) nativeVersion=\(nativeVersion.map(String.init) ?? "none") nativeFailure=\(nativeFailure ?? "none") lifecycle=\(lifecycle) labels=\(Array(labels))\n".utf8))
         throw Failure.notReady
     }
 

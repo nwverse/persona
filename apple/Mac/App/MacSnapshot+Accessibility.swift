@@ -24,7 +24,7 @@ extension MacSnapshot {
                 ? (object.value(forKey: "accessibilityFrame") as? NSValue)?.rectValue : nil
             result.append(AccessibilityEntry(identifier: read(object, "accessibilityIdentifier") as? String,
                                              label: read(object, "accessibilityLabel") as? String,
-                                             value: read(object, "accessibilityValue") as? String, frame: frame))
+                                             value: (read(object, "accessibilityValue") as? String) ?? (read(object, "accessibilityValueDescription") as? String), frame: frame))
             for child in read(object, "accessibilityChildren") as? [NSObject] ?? [] { visit(child, depth: depth + 1) }
         }
         visit(root, depth: 0)

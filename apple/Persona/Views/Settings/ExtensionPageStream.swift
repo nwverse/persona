@@ -201,12 +201,20 @@ import Observation
                 let native = try staged.nativeView
                 hasMountedNative = true
                 tree = staged; ready = true; snapshotRequest = nil; snapshotRetries = 0; recoveryIssue = nil
-                onView?(native); drainReceipts()
+                onView?(native)
+                #if DEBUG && os(macOS)
+                MacExtensionSnapshotBatch.observeNativeCommit(owner: owner, contribution: contribution, version: staged.version)
+                #endif
+                drainReceipts()
             case .delta:
                 guard visible, ready, var staged = tree else { return }
                 try staged.apply(raw["delta"]!)
                 let native = try staged.nativeView
-                tree = staged; onView?(native); drainReceipts()
+                tree = staged; onView?(native)
+                #if DEBUG && os(macOS)
+                MacExtensionSnapshotBatch.observeNativeCommit(owner: owner, contribution: contribution, version: staged.version)
+                #endif
+                drainReceipts()
             case .receipt(let frame):
                 let receipt = frame.receipt
                 guard visible, let tree, receipt.session == tree.session, receipt.epoch == tree.epoch,
@@ -220,6 +228,9 @@ import Observation
                 drainReceipts()
             case .error(let frame):
                 guard correlated else { return }
+                #if DEBUG && os(macOS)
+                MacExtensionSnapshotBatch.observeNativeFailure(owner: owner, contribution: contribution, code: frame.error.code)
+                #endif
                 if let correlation, let event = requests.removeValue(forKey: correlation) {
                     events.removeValue(forKey: event)?.continuation.resume(throwing: Raw.Failure.version)
                 }
