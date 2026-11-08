@@ -822,7 +822,7 @@ interface InboxState {
 
 let state: InboxState = { items: [], triage: null, loaded: false, loading: false, error: "", sending: [], moving: [] };
 const listeners = new Set<() => void>();
-/** Replies that did not go out, by item (itemKey): the draft dialog opens with that text again. */
+/** Unsent reply edits and accepted generations, by item (itemKey); send clears them and a failure restores its text. */
 export const unsentReplies = new Map<string, string>();
 
 // Every request about an item names its manager where it is made (itemRequest): two managers may list the same id, so
