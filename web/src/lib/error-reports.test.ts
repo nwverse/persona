@@ -272,9 +272,9 @@ describe("a frozen page", () => {
     });
     expect(rep.previous_launch).toBeUndefined();
     expect(rep.exceptions?.[0].frames).toEqual([
-      { file: "/assets/index-abc.js", function: "render", in_app: true },
-      { file: "/assets/x.js", function: "render2", in_app: true },
-      { file: "/lib.js", in_app: false },
+      { file: "/assets/index-abc.js", module: "/assets/index-abc.js", function: "render", in_app: true },
+      { file: "/assets/x.js", module: "/assets/x.js", function: "render2", in_app: true },
+      { file: "/lib.js", module: "/lib.js", in_app: false },
     ]);
     expect(rep.breadcrumbs).toEqual([{ time: "2026-11-06T09:00:00.000Z", category: "navigation", message: "session", level: "info" }]);
     expect(JSON.stringify(rep)).not.toContain("token");
@@ -294,6 +294,47 @@ describe("a frozen page", () => {
     expect(r.captureFreeze(hit)).toBe(false);
     expect(r.pending()).toHaveLength(0);
     return runTimers().then(() => expect(sent).toHaveLength(0));
+  });
+
+  it("keeps a third-party /assets/ path out of the app, and an inline script's name", () => {
+    const { r } = setup();
+    r.setFeatures(["error_reports"]);
+    expect(r.captureFreeze({
+      durationMs: 5_000,
+      mechanism: "longtask",
+      startedAt: Date.parse("2026-11-06T09:00:05.000Z"),
+      frames: [
+        { file: "/assets/vendor.js", module: "/assets/vendor.js", function: "vendor", in_app: false },
+        { file: "https://hub.example/?token=s3cret", function: "onClick", in_app: false },
+      ],
+    })).toBe(true);
+    const [rep] = r.pending();
+    expect(rep.time).toBe("2026-11-06T09:00:05.000Z");
+    expect(rep.exceptions?.[0].frames).toEqual([
+      { file: "/assets/vendor.js", module: "/assets/vendor.js", function: "vendor", in_app: false },
+      { file: "/", module: "/", function: "onClick", in_app: true },
+    ]);
+    expect(JSON.stringify(rep)).not.toContain("s3cret");
+  });
+
+  it("tells the watch when a queued freeze is dropped, and not when it was sent", async () => {
+    const dropped = setup({}, [{ ok: true, enabled: false }]);
+    let drops = 0;
+    dropped.r.setFreezeDropListener(() => drops++);
+    dropped.r.setFeatures(["error_reports"]);
+    dropped.r.captureFreeze(hit);
+    await dropped.runTimers();
+    expect(drops).toBe(1);
+    expect(dropped.r.pending()).toHaveLength(0);
+
+    const sent = setup({}, [{ ok: true, enabled: true }]);
+    let sentDrops = 0;
+    sent.r.setFreezeDropListener(() => sentDrops++);
+    sent.r.setFeatures(["error_reports"]);
+    sent.r.captureFreeze(hit);
+    await sent.runTimers();
+    expect(sentDrops).toBe(0);
+    expect(sent.r.pending()).toHaveLength(0);
   });
 
   it("keeps the same freeze once within 5 seconds", () => {

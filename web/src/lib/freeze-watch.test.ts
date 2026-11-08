@@ -31,9 +31,6 @@ function fakeDocument(initial = "visible") {
       emit("visibilitychange");
     },
     /** The property updates before the event is delivered. */
-    hideQuiet() {
-      visibilityState = "hidden";
-    },
     freeze() {
       emit("freeze");
     },
@@ -46,7 +43,7 @@ function fakeDocument(initial = "visible") {
   };
 }
 
-function setup(over: { types?: readonly string[]; throwOn?: string; visibility?: string; enabled?: boolean; interactiveAt?: () => number | null; wall?: () => number } = {}) {
+function setup(over: { types?: readonly string[]; throwOn?: string; visibility?: string; enabled?: boolean; interactiveAt?: () => number | null; wall?: () => number; timeOrigin?: () => number } = {}) {
   const created: Fake[] = [];
   class Fake implements FreezeObserver {
     static supportedEntryTypes: readonly string[] = over.types ?? ["long-animation-frame", "longtask"];
@@ -84,6 +81,7 @@ function setup(over: { types?: readonly string[]; throwOn?: string; visibility?:
     origin: ORIGIN,
     now: () => clock,
     wall: over.wall,
+    timeOrigin: over.timeOrigin,
     interactiveAt: over.interactiveAt,
     document: doc,
     Observer: Fake as unknown as FreezeObserverCtor,
@@ -130,6 +128,9 @@ describe("classifyFreeze", () => {
     expect(classifyFreeze(long(2_000, 7_000, { scripts: [{ sourceURL: `${ORIGIN}/assets/a.js`, pauseDuration: 1_000 }] }), { ...base, interactiveAt: 1 })?.durationMs).toBe(6_000);
     expect(classifyFreeze(long(2_000, 21_000), { ...base, sleepMs: 20_000 })).toBeNull();
     expect(classifyFreeze(long(2_000, 26_000), { ...base, sleepMs: 20_000 })?.durationMs).toBe(6_000);
+    // the frame waited; the thread did not block
+    expect(classifyFreeze({ ...long(2_000, 8_000), blockingDuration: 20 }, base)).toBeNull();
+    expect(classifyFreeze({ ...long(2_000, 8_000), blockingDuration: 6_000 }, base)?.durationMs).toBe(6_000);
   });
 });
 
@@ -156,9 +157,9 @@ describe("startFreezeWatch", () => {
     expect(w.hits[0].mechanism).toBe("long-animation-frame");
     expect(w.hits[0].durationMs).toBe(6_000);
     expect(w.hits[0].frames).toEqual([
-      { file: "/assets/short.js", function: "small", in_app: true },
-      { file: "/lib.js", in_app: false },
-      { file: "/assets/hot.js", function: "onClick", in_app: true },
+      { file: "/assets/short.js", module: "/assets/short.js", function: "small", in_app: true },
+      { file: "/lib.js", module: "/lib.js", in_app: false },
+      { file: "/assets/hot.js", module: "/assets/hot.js", function: "onClick", in_app: true },
     ]);
     expect(JSON.stringify(w.hits[0])).not.toContain("token");
     expect(JSON.stringify(w.hits[0])).not.toContain("secret");
@@ -185,7 +186,7 @@ describe("startFreezeWatch", () => {
       }),
     ]);
     expect(only.hits[0].mechanism).toBe("longtask");
-    expect(only.hits[0].frames).toEqual([{ file: "/assets/frame.js", in_app: true }]);
+    expect(only.hits[0].frames).toEqual([{ file: "/assets/frame.js", module: "/assets/frame.js", in_app: true }]);
     expect(JSON.stringify(only.hits[0])).not.toContain("secret");
     expect(JSON.stringify(only.hits[0])).not.toContain("Ada");
     expect(JSON.stringify(only.hits[0])).not.toContain("not-for-longtask");
@@ -259,9 +260,10 @@ describe("startFreezeWatch", () => {
     expect(w.hits).toHaveLength(2);
     expect(w.active()).toHaveLength(1);
     w.setAccept(true);
+    // the same entry is not remembered as skipped: a later try, once the pipeline accepts, is the one report
     w.active()[0].emit([long(0, 6_000), long(30, 8_000)]);
     expect(w.hits).toHaveLength(3);
-    expect(w.hits[2].durationMs).toBe(8_000);
+    expect(w.hits[2].durationMs).toBe(6_000);
     expect(w.active()).toHaveLength(0);
     w.stop();
   });
@@ -351,16 +353,25 @@ describe("startFreezeWatch", () => {
     w.stop();
   });
 
-  it("reads a hidden tab from the visibility property before the event", () => {
-    const w = setup();
-    w.doc.hideQuiet();
-    w.active()[0].emit([long(0, 8_000)]);
-    expect(w.hits).toHaveLength(0);
-    expect(w.active()).toHaveLength(1);
-    w.at(10);
-    w.doc.show();
-    w.active()[0].emit([long(10, FREEZE_MS)]);
+  it("keeps a stall that ended as the tab was hidden, and stamps when it started", () => {
+    const w = setup({ timeOrigin: () => 1_700_000_000_000 });
+    w.at(6_000);
+    w.doc.hide();
+    w.active()[0].emit([long(0, 6_000)]);
     expect(w.hits).toHaveLength(1);
+    expect(w.hits[0].startedAt).toBe(1_700_000_000_000);
+    // the hidden stretch starts at 6000, so it does not cover [0, 6000)
+    w.stop();
+  });
+
+  it("watches again when a queued warning is dropped", () => {
+    const w = setup();
+    w.active()[0].emit([long(0, 6_000)]);
+    expect(w.active()).toHaveLength(0);
+    w.stop.rearm();
+    expect(w.active()).toHaveLength(1);
+    w.active()[0].emit([long(10, 6_000)]);
+    expect(w.hits).toHaveLength(2);
     w.stop();
   });
 });

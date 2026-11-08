@@ -29,6 +29,8 @@ export interface FreezeAttribution {
 export interface FreezeEntry {
   startTime: number;
   duration: number;
+  /** Long-animation-frame only: time the main thread was actually blocked. A throttled frame can have a large `duration` and a tiny one of these. */
+  blockingDuration?: number;
   scripts?: FreezeScript[];
   attribution?: FreezeAttribution[];
 }
@@ -37,6 +39,8 @@ export interface FreezeHit {
   durationMs: number;
   mechanism: FreezeMechanism;
   frames: ErrorFrame[];
+  /** Wall time the block started, so a buffered entry is not stamped when the callback runs. */
+  startedAt?: number;
 }
 
 /** A stretch of performance.now() while the page was hidden or frozen. `end` null: still in it. */
@@ -69,7 +73,17 @@ export function freezeFrames(entry: FreezeEntry, mechanism: FreezeMechanism, ori
       if (frame) frames.push(frame);
     }
   }
-  return frames.slice(-MAX_SCRIPTS);
+  return capFrames(frames);
+}
+
+/** At most MAX_SCRIPTS, longest last, but never drop every in-app script: the hub fingerprints by those. */
+function capFrames(frames: ErrorFrame[]): ErrorFrame[] {
+  if (frames.length <= MAX_SCRIPTS) return frames;
+  const keep = frames.slice(-MAX_SCRIPTS);
+  if (keep.some((frame) => frame.in_app)) return keep;
+  const inApp = [...frames].reverse().find((frame) => frame.in_app);
+  if (!inApp) return keep;
+  return [...keep.slice(1), inApp];
 }
 
 /** Time the entry's scripts spent paused. A number only; anything else is ignored. */
@@ -100,7 +114,11 @@ export function classifyFreeze(
   const started = opts.interactiveAt;
   if (started === 0 || (typeof started === "number" && started > 0 && entry.startTime < started)) return null;
   const sleep = typeof opts.sleepMs === "number" && Number.isFinite(opts.sleepMs) && opts.sleepMs > 0 ? opts.sleepMs : 0;
-  const blocked = entry.duration - pausedMs(entry) - sleep;
+  // A long animation frame's duration includes time the thread was waiting, not blocked. blockingDuration is the block.
+  const span = opts.mechanism === "long-animation-frame" && typeof entry.blockingDuration === "number" && Number.isFinite(entry.blockingDuration)
+    ? entry.blockingDuration
+    : entry.duration;
+  const blocked = span - pausedMs(entry) - sleep;
   if (!(blocked >= FREEZE_MS)) return null;
   if (freezeOverlaps(entry.startTime, entry.duration, opts.gaps)) return null;
   return { durationMs: blocked, mechanism: opts.mechanism, frames: freezeFrames(entry, opts.mechanism, opts.origin) };
@@ -109,6 +127,7 @@ export function classifyFreeze(
 interface RawEntry {
   startTime: number;
   duration: number;
+  blockingDuration?: number;
   scripts?: FreezeScript[];
   attribution?: FreezeAttribution[];
 }
@@ -117,6 +136,7 @@ function readEntry(raw: RawEntry): FreezeEntry {
   return {
     startTime: raw.startTime,
     duration: raw.duration,
+    blockingDuration: typeof raw.blockingDuration === "number" ? raw.blockingDuration : undefined,
     // Only the fields a report may carry. An invoker, a character offset, an element id or a name stays out.
     scripts: raw.scripts?.map((script) => ({
       sourceURL: typeof script.sourceURL === "string" ? script.sourceURL : undefined,
@@ -155,6 +175,8 @@ export interface FreezeWatchOptions {
   now?: () => number;
   /** Wall clock, for telling sleep from a freeze. Default `Date.now`. */
   wall?: () => number;
+  /** `performance.timeOrigin`: wall time at monotonic 0. Default the browser's. */
+  timeOrigin?: () => number;
   /** DOMContentLoaded time, or 0 when the document is not interactive yet. Omit: read the navigation timing. */
   interactiveAt?: () => number | null;
   document?: FreezeDocument;
@@ -187,6 +209,15 @@ function browserObserver(): FreezeObserverCtor | null {
 }
 
 /** `0` until DOMContentLoaded, then that event's time. Null when the page has no navigation timing (nothing to filter). */
+function browserTimeOrigin(now: () => number, wall: () => number): number {
+  try {
+    if (typeof performance !== "undefined" && typeof performance.timeOrigin === "number") return performance.timeOrigin;
+  } catch {
+    // no time origin
+  }
+  return wall() - now();
+}
+
 function browserInteractiveAt(): number | null {
   try {
     const timing = globalThis.performance?.getEntriesByType?.("navigation")[0] as { domContentLoadedEventEnd?: number } | undefined;
@@ -210,13 +241,20 @@ function browserDocument(): FreezeDocument | null {
  * Listening for hidden and frozen starts immediately, so a gap from before the feature was advertised is still known
  * when buffered entries arrive.
  */
-export function startFreezeWatch(opts: FreezeWatchOptions): () => void {
+export interface FreezeWatchStop {
+  (): void;
+  /** The queued warning was dropped. Watch again if the feature is on. */
+  rearm(): void;
+}
+
+export function startFreezeWatch(opts: FreezeWatchOptions): FreezeWatchStop {
   const found = opts.document ?? browserDocument();
-  if (!found) return () => {};
+  if (!found) return Object.assign(() => {}, { rearm() {} });
   const doc: FreezeDocument = found;
   const origin = opts.origin ?? pageOrigin();
   const now = opts.now ?? monoNow;
   const wallNow = opts.wall ?? (() => Date.now());
+  const timeOrigin = opts.timeOrigin ?? (() => browserTimeOrigin(now, wallNow));
   const interactiveAt = opts.interactiveAt ?? browserInteractiveAt;
   const Observer = opts.Observer === undefined ? browserObserver() : opts.Observer;
   // A sleep moves the wall clock and not the monotonic one. The extra is taken off the next entry's duration.
@@ -229,7 +267,6 @@ export function startFreezeWatch(opts: FreezeWatchOptions): () => void {
   // stretch is not a freeze. Visible: no gap until the page actually goes away.
   let openFrom: number | null = hidden ? 0 : null;
   const gaps: FreezeGap[] = [];
-  const skipped = new Set<string>();
   let reported = false;
   let observer: FreezeObserver | null = null;
 
@@ -278,6 +315,18 @@ export function startFreezeWatch(opts: FreezeWatchOptions): () => void {
 
   let unsubscribe: (() => void) | void = undefined;
 
+  /** One warning is queued. The observer stops, but a drop of that warning (the feature turned off) can rearm. */
+  function hold() {
+    reported = true;
+    disconnectObserver();
+  }
+
+  function rearm() {
+    if (!reported) return;
+    reported = false;
+    if (opts.enabled()) connect();
+  }
+
   function teardown() {
     reported = true;
     disconnectObserver();
@@ -295,27 +344,21 @@ export function startFreezeWatch(opts: FreezeWatchOptions): () => void {
     return extra >= 1_000 ? extra : 0;
   }
 
-  /** The visibility state can change before the event is delivered; the property is already the truth. */
-  function refreshHidden() {
-    const next = doc.visibilityState !== "visible";
-    if (next === hidden) return;
-    hidden = next;
-    sync();
-  }
-
   function onEntries(raws: RawEntry[], type: FreezeMechanism) {
     try {
       if (reported || !opts.enabled()) return;
-      refreshHidden();
       const sleepMs = takeSleep();
       const started = interactiveAt();
+      const originMs = timeOrigin();
       for (const raw of raws) {
         if (reported || !opts.enabled()) return;
+        // Shorter than the threshold cannot become one after pauses and sleep are taken off. Skip the copy.
+        if (!(typeof raw.duration === "number" && raw.duration >= FREEZE_MS)) continue;
         const entry = readEntry(raw);
-        const id = `${type}:${entry.startTime}:${entry.duration}`;
-        if (skipped.has(id)) continue;
-        const hit = classifyFreeze(entry, { mechanism: type, origin, foreground: !hidden && !frozen, gaps: allGaps(), interactiveAt: started, sleepMs });
+        // Hidden is a gap, not "hidden right now": a stall that ended as the tab was hidden still counts.
+        const hit = classifyFreeze(entry, { mechanism: type, origin, foreground: !frozen, gaps: allGaps(), interactiveAt: started, sleepMs });
         if (!hit) continue;
+        if (Number.isFinite(originMs) && Number.isFinite(entry.startTime)) hit.startedAt = originMs + entry.startTime;
         let accepted = false;
         try {
           accepted = opts.report(hit) === true;
@@ -323,10 +366,9 @@ export function startFreezeWatch(opts: FreezeWatchOptions): () => void {
           accepted = false;
         }
         if (accepted) {
-          teardown();
+          hold();
           return;
         }
-        skipped.add(id);
       }
     } catch {
       // watching must never become an error of its own
@@ -376,5 +418,5 @@ export function startFreezeWatch(opts: FreezeWatchOptions): () => void {
   } else {
     setEnabled(opts.enabled());
   }
-  return teardown;
+  return Object.assign(teardown, { rearm });
 }
