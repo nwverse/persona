@@ -112,7 +112,7 @@ Suspend stops UI-only timers/polling and bounds/cancels pending UI work, indepen
 reconnect reauthorize and send a fresh full snapshot rather than replaying a stale chain. Close is idempotent for
 already closed/unknown owned sessions, and releases effects, timers, callbacks and ephemeral state. Upgrade,
 disable, revocation or runtime restart disposes the generation; the client reopens. Lifecycle code now lives in
-`server/internal/extmgr/ui_page_sessions.go`, with thin connection forwarding in `server/internal/hub/ui_stream.go`.
+`server/internal/extmgr/ui_page_*.go`, with thin connection forwarding in `server/internal/hub/ui_stream.go`.
 
 `UIStreamSnapshot.keyed.json` → `UIStreamDelta.operations.json` → `UIStreamSnapshot.after-operations.json` is the
 shared native operation trace (root metadata clearing, zero ratio, insert, move, remove, empty section replacement).
