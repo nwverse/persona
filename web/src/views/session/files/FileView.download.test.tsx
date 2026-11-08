@@ -304,6 +304,20 @@ describe("FileView paging recovery", () => {
     expect(requested).toHaveLength(2);
   });
 
+  it("keeps CSV continuation recovery available in source mode", async () => {
+    const csv = (over: Partial<FileContent>) => text({ path: "/w/example.csv", name: "example.csv", mime: "text/csv", size: 40, ...over });
+    pages.push(async () => csv({ text: "name,value\n", next: 11, revision: "r1" }));
+    pages.push(async () => { throw new Error("synthetic CSV source failure"); });
+    await open("/w/example.csv");
+    await click(t("session-files-fileview.mode_source_file"));
+    expect(host.querySelector('[role="alert"]')?.textContent).toContain("synthetic CSV source failure");
+    pages.push(async () => csv({ text: "synthetic,42\n", next: 0, revision: "r1" }));
+    await click(t("session-files-fileview.retry"));
+    expect(requested[2]).toBe(requested[1]);
+    expect(host.textContent).toContain("synthetic,42");
+    expect(host.querySelector('[role="alert"]')).toBeNull();
+  });
+
   it("stops automatic line seeking after a page failure until retry", async () => {
     pages.push(async () => text({ text: "first line\n", next: 4, revision: "r1" }));
     pages.push(async () => { throw new Error("synthetic line failure"); });

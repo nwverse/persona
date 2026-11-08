@@ -453,7 +453,7 @@ export function FileView({
         <PanelHeader icon={kind === "directory" ? "folder" : kind === "image" ? "image" : "read"} title={name} subtitle={where} actions={actions} onClose={onClose} />
       )}
       <div className="flex min-h-0 flex-1 flex-col" key={path}>
-        {doc.pageError && !doc.changed && kind !== "sheet" && <div role="alert" className="flex shrink-0 flex-wrap items-center gap-2 border-b border-line px-3 py-2 text-xs text-ink-2">
+        {doc.pageError && !doc.changed && (kind !== "sheet" || mode === "source") && <div role="alert" className="flex shrink-0 flex-wrap items-center gap-2 border-b border-line px-3 py-2 text-xs text-ink-2">
           <span className="min-w-0 flex-1">{t("session-files-fileview.more_failed", { error: doc.pageError })}</span>
           <Button icon="retry" busy={doc.loadingMore} onClick={() => { if (wantAll) void all(cap).catch(() => {}); else void doc.more(); }}>{t("session-files-fileview.retry")}</Button>
         </div>}
