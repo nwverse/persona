@@ -290,7 +290,7 @@ struct SubagentGrid: View {
                 if n > 0 {
                     ProgressView().controlSize(.mini).tint(Theme.busy)
                 } else {
-                    Image(systemName: ToolPresentation.symbol("Agent"))
+                    ThemedIcon(ToolPresentation.symbol("Agent"))
                         .font(Theme.Font.labelStrong).dynamicTypeSize(...DynamicTypeSize.xLarge)
                         .foregroundStyle(.secondary)
                 }

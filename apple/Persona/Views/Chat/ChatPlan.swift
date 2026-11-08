@@ -124,7 +124,7 @@ struct PlanPill: View {
         } label: {
             HStack(spacing: Theme.Space.s) {
                 if plan.allDone {
-                    Image(systemName: Theme.Icon.done).font(Theme.Font.labelStrong).foregroundStyle(Theme.positive)
+                    ThemedIcon(Theme.Icon.done).font(Theme.Font.labelStrong).foregroundStyle(Theme.positive)
                 } else {
                     ZStack {
                         Circle().stroke(Theme.Fill.well, lineWidth: Theme.Size.rule)
