@@ -757,6 +757,7 @@ Chat images open full-screen; marked-up images become composer photos (port of o
   `awaitResponse()` now buffers the body on OkHttp's thread by default; only APK downloads use `buffered = false`, streaming on `Dispatchers.IO`.
 - Emulator screenshots (both light / dark required, `docs/operations/testing.md` ("UI checklist")):
   - Dedicated AVD, fixed port (`emulator -avd <name> -port 5600`), all adb commands `-s emulator-5600`; leave others alone.
+  - Delete the AVD you created when the lane is merged or abandoned (`avdmanager delete avd -n <name>`); each one keeps 2–4 GB of user data on disk.
   - Data from `scripts/mock/mock_hub.py`, deep-link pairing. Device shell truncates URL `&`; wrap the whole command in another quote layer:
     `adb shell "am start -a android.intent.action.VIEW -d 'persona://pair?url=...&token=mock' <package>"`, then tap Connect on confirmation.
   - Before every screenshot `am force-stop`, then cold start; otherwise each tab's stack retains the prior detail. Chat direct entry `persona://open?machine=&session=`.

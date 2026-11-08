@@ -855,14 +855,18 @@ func (s *Service) botCardAction(ctx context.Context, a *feishubot.CardAction, ac
 		return s.answerFromCard(ctx, a, action)
 	case "accept":
 		// The hub checked the owner pressed it; marking a task verified approves nothing.
-		ok := false
+		ok, err := false, error(nil)
+		ask, _ := s.askCopy(a.Str("id"))
 		if at := a.Str("asked_at"); at != "" { // a button of a briefing card: it accepts the round it was asked in (briefing.go)
-			ok = s.acceptedFromBrief(ctx, a.Str("id"), at)
+			ok, err = s.acceptTryFromBrief(ctx, a.Str("id"), at)
 		} else {
-			ok = s.accepted(ctx, a.Str("id"), a.Context.MessageID)
+			ok, err = s.acceptTry(ctx, a.Str("id"), a.Context.MessageID)
+		}
+		if err != nil { // a recommendation that did not reach the agent: not taken, the button works again
+			return toast("error", i18n.T(l, "assistant-reports.accept_not_sent", i18n.Args{"error": clip(oneLine(err.Error()), 120)}))
 		}
 		if ok {
-			return toast("success", i18n.T(l, "assistant-reports.accepted"))
+			return toast("success", acceptedNote(l, &ask)) // "verified", "got it", or the recommendation taken (conclusion.go)
 		}
 		return toast("info", i18n.T(l, "assistant-feishu_cards.already_handled"))
 	case "later_done": // the Handled button of a question that can wait, on a briefing card (later.go)
