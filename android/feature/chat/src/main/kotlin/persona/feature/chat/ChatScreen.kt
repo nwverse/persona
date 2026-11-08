@@ -388,6 +388,11 @@ private fun ChatPage(
         if (opened) (projection.lines.firstOrNull { it.id == id } as? ChatLine.Work)?.steps
             ?.filterIsInstance<persona.core.domain.lines.WorkItem.Folded>()?.forEach { expand(it.item.item) }
     }
+    // A running line open by default loads its hub folds as a tap would, those arriving while it is open too (#1614).
+    // Keyed on the lines only: a fold that loaded is gone from the next build, one in flight or failed is skipped.
+    LaunchedEffect(projection) {
+        liveFoldsToFetch(projection.lines, renderStyle.openLiveWork, folding, foldErrors.keys).forEach(::expand)
+    }
     /** Whether the message was taken (false: nothing went, the box or another send stands); [onFailed] if it then fails. */
     fun send(command: String? = null, onFailed: () -> Unit = {}): Boolean {
         if (readOnly || !canSend) return false

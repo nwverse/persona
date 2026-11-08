@@ -1,7 +1,9 @@
 package persona.feature.chat
 
+import persona.core.contracts.Item
 import persona.core.domain.lines.ChatLine
 import persona.core.domain.lines.LiveWorkId
+import persona.core.domain.lines.WorkItem
 
 /**
  * Which work lines are open (#1614). [open] holds the lines the user opened, as in every chat. Where running lines open
@@ -42,4 +44,25 @@ internal fun settleLiveFolds(folded: Set<String>, live: Set<String>): Set<String
     if (folded.isEmpty()) return folded
     val kept = folded intersect live
     return if (LiveWorkId in folded && LiveWorkId !in live) kept + live else kept
+}
+
+/**
+ * The hub folds to fetch on their own: those in running work lines that are open by default ([openLive], not folded by
+ * the user), so a chat opened mid-run lists every call of the turn as rows, not "Did 12 steps" folds, as a tap on the
+ * line does (#1614). Folds already loading ([folding]) or that failed ([failed]: a tap retries) are left alone.
+ */
+internal fun liveFoldsToFetch(lines: List<ChatLine>, openLive: Boolean, folding: Set<String>, failed: Set<String>): List<Item> {
+    if (!openLive) return emptyList()
+    return buildList {
+        fun visit(list: List<ChatLine>) {
+            for (line in list) when (line) {
+                is ChatLine.Work -> if (line.live && line.open) line.steps.forEach { step ->
+                    (step as? WorkItem.Folded)?.item?.item?.takeIf { it.id !in folding && it.id !in failed }?.let(::add)
+                }
+                is ChatLine.Wakes -> visit(line.drawer)
+                else -> {}
+            }
+        }
+        visit(lines)
+    }
 }

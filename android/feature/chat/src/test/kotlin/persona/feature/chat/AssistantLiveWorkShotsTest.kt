@@ -152,4 +152,27 @@ class AssistantLiveWorkShotsTest {
         val agents = ChatTimeline().lines(running, live = true, open = emptySet()).lines
         check(agents.none { it is ChatLine.Step })
     }
+    /**
+     * Opened mid-run, the hub sends the earlier calls as a fold: the line, open by default, asks for it on its own
+     * ([liveFoldsToFetch]), and once loaded every call of the turn is a row; folded by the user, it asks for nothing.
+     */
+    @Test fun aChatOpenedMidRunListsTheCallsTheHubFolded() {
+        val fold = Item("fold:t2", 2, role = "assistant", kind = "fold",
+            fold = persona.core.contracts.Fold(items = 6, tools = 3, throughSeq = 7, throughId = "r7"))
+        val items = listOf(running.first(), fold) + running.filter { it.seq >= 8 }
+        val timeline = ChatTimeline()
+        val before = timeline.lines(items, live = true, open = emptySet(), openLive = true).lines
+        check(before.filterIsInstance<ChatLine.Step>().any { it.step is persona.core.domain.lines.WorkItem.Folded })
+        val fetch = liveFoldsToFetch(before, openLive = true, folding = emptySet(), failed = emptySet())
+        check(fetch.map { it.id } == listOf(fold.id))
+        val id = before.filterIsInstance<ChatLine.Work>().single().id
+        val folded = timeline.lines(items, live = true, open = emptySet(), openLive = true, liveFolded = setOf(id)).lines
+        check(liveFoldsToFetch(folded, openLive = true, folding = emptySet(), failed = emptySet()).isEmpty())
+        timeline.unfold(fold, running.filter { it.seq in 2..7 })
+        val after = timeline.lines(items, live = true, open = emptySet(), openLive = true).lines
+        val steps = after.filterIsInstance<ChatLine.Step>()
+        check(steps.none { it.step is persona.core.domain.lines.WorkItem.Folded })
+        check(steps.count { it.step is persona.core.domain.lines.WorkItem.Tool } == 4)
+        check(liveFoldsToFetch(after, openLive = true, folding = emptySet(), failed = emptySet()).isEmpty())
+    }
 }
