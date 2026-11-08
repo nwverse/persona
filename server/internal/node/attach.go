@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/nwverse/persona/server/internal/acceptloop"
 	"github.com/nwverse/persona/server/internal/identity"
 	"github.com/nwverse/persona/server/internal/link"
 	"io"
@@ -135,7 +136,7 @@ func Attach(ctx context.Context, newNode func() (*Node, error), extra <-chan net
 	relayed := make(chan net.Conn)
 	go func() {
 		defer close(relayed)
-		acceptLoop(ctx, ln, logf, func(c net.Conn) {
+		acceptloop.Run(ctx, ln, logf, func(c net.Conn) {
 			select {
 			case relayed <- c:
 			case <-ctx.Done(): // ctx closes ln too, which ends the loop

@@ -17,6 +17,7 @@ class CapsuleCompletionQueue(
     val current = mutableCurrent.asStateFlow()
     private val pending = ArrayDeque<CapsuleCompletion>()
     private val seen = mutableSetOf<String>()
+    private val shown = mutableSetOf<String>()
     private var enabled = false
     private var manual = false
     private var closed = false
@@ -26,7 +27,10 @@ class CapsuleCompletionQueue(
     fun setVisible(value: Boolean) {
         if (closed) return
         enabled = value
-        if (!value) clear()
+        if (!value) {
+            (pending.toList() + listOfNotNull(mutableCurrent.value)).forEach { if (it.id !in shown) seen.remove(it.id) }
+            clear()
+        }
     }
 
     fun setManual(value: Boolean) {
@@ -36,9 +40,22 @@ class CapsuleCompletionQueue(
     }
 
     fun offer(completion: CapsuleCompletion) {
-        if (closed || !seen.add(completion.id) || !enabled || manual) return
+        if (closed || !enabled || !seen.add(completion.id) || manual) return
         pending.addLast(completion)
         if (mutableCurrent.value == null) advance()
+    }
+
+    fun retainTargets(ids: Set<String>) {
+        pending.removeAll { it.targetId !in ids }
+        if (mutableCurrent.value?.targetId?.let { it !in ids } == true) {
+            generation++
+            timer?.cancel()
+            advance()
+        }
+    }
+
+    fun noticeShown(id: String) {
+        if (mutableCurrent.value?.id == id) shown += id
     }
 
     /** A stale click cannot open the next completion's target. Clear the queue before handing off navigation. */

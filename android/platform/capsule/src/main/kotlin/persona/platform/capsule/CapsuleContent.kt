@@ -9,26 +9,44 @@ interface CapsuleContentSource {
     val content: StateFlow<CapsuleContent>
     val completions: Flow<CapsuleCompletion>
     fun openCompletion(completion: CapsuleCompletion)
+    fun noticeShown(id: String)
     fun shown(expanded: Boolean) {}
     fun selectSection(id: String)
     fun select(id: String?)
+    suspend fun viewed(id: String?, messageId: String, version: String): Boolean
     suspend fun send(id: String?, text: String)
     suspend fun perform(id: String?, actionId: String)
+    fun updateDraft(id: String?, text: String) {}
     fun open(id: String?)
 }
 
-data class CapsuleCompletion(val id: String, val targetId: String, val title: String)
+enum class CapsuleNoticeKind { Completed, NewMessage }
+data class CapsuleCompletion(val id: String, val targetId: String, val title: String,
+    val kind: CapsuleNoticeKind = CapsuleNoticeKind.Completed)
 
 enum class CapsuleState { NeedsYou, Working, Done, Idle }
 data class CapsuleSection(val id: String, val title: String, val count: Int = 0, val list: Boolean = true)
 data class CapsuleAction(val id: String, val label: String)
-data class CapsuleMessage(val id: String, val text: String, val fromUser: Boolean)
+data class CapsuleMessage(val id: String, val text: String, val fromUser: Boolean,
+    val unread: Boolean = false, val sender: String? = null)
+data class CapsuleReplyTarget(val id: String, val title: String)
 data class CapsuleEntry(
     val id: String,
     val title: String,
     val summary: String,
     val state: CapsuleState,
     val actions: List<CapsuleAction> = emptyList(),
+    val unread: Boolean = false,
+    val unreadCount: Int? = null,
+    val group: String? = null,
+    val detailOnly: Boolean = false,
+    /** A named group in the unread list (a machine and folder, or 飞书消息); null keeps the inbox's fixed groups. */
+    val groupTitle: String? = null,
+    /**
+     * What changes only when the conversation gets something new (the hub's item versions), for telling a read
+     * conversation from one that moved on. Null: the provider has none and the summary stands in.
+     */
+    val version: String? = null,
 )
 data class CapsuleContent(
     val entries: List<CapsuleEntry> = emptyList(),
@@ -43,6 +61,20 @@ data class CapsuleContent(
     val badgeCount: Int = 0,
     val hasActivity: Boolean = false,
     val headline: CapsuleEntry? = null,
+    val pendingCompletion: CapsuleCompletion? = null,
+    val noticeTargetIds: Set<String>? = null,
+    val readVersion: String? = null,
+    val unreadEntries: List<CapsuleEntry> = emptyList(),
+    val nextAvailable: Boolean = false,
+    val nextBusy: Boolean = false,
+    val nextError: String? = null,
+    val replyTargets: List<CapsuleReplyTarget> = emptyList(),
+    val replyTargetId: String? = null,
+    val recipient: String? = null,
+    val confirmSend: Boolean = false,
+    val context: String? = null,
+    val canLoadOlder: Boolean = false,
+    val draftText: String? = null,
 ) {
     val selected: CapsuleEntry? get() = entries.firstOrNull { it.id == selectedId }
     val section: CapsuleSection? get() = sections.firstOrNull { it.id == sectionId }
@@ -59,8 +91,10 @@ enum class CapsuleMode(val key: String, @StringRes val label: Int) {
 }
 
 object CapsuleVisibility {
-    fun visible(mode: CapsuleMode, foreground: Boolean, permitted: Boolean, active: Boolean, expanded: Boolean = false): Boolean =
-        permitted && !foreground && when (mode) { CapsuleMode.Off -> false; CapsuleMode.Active -> active || expanded; CapsuleMode.Always -> true }
+    fun visible(mode: CapsuleMode, foreground: Boolean, permitted: Boolean, active: Boolean, expanded: Boolean = false,
+        unread: Boolean = false): Boolean = permitted && !foreground && when (mode) {
+            CapsuleMode.Off -> false; CapsuleMode.Active -> active || expanded || unread; CapsuleMode.Always -> true
+        }
 }
 
 /** Coordinates are screen pixels; the vertical fraction survives rotation and window resizing. */

@@ -56,10 +56,20 @@ const val UnnamedRepo = "\uFFFF"
 
 private val Chunks = Regex("\\d+|\\D+")
 
+/**
+ * A name's chunks, split once: NaturalOrder is a sort comparator, and splitting both names on every comparison of
+ * hundreds of sessions was most of what froze the Agents list. Names are few, so the cache stays small.
+ */
+private val chunkCache = java.util.concurrent.ConcurrentHashMap<String, List<String>>()
+private fun chunks(name: String): List<String> = chunkCache[name] ?: Chunks.findAll(name.lowercase()).map { it.value }.toList().also {
+    if (chunkCache.size > 4_096) chunkCache.clear()
+    chunkCache[name] = it
+}
+
 /** Natural order, like iOS `localizedStandardCompare`: case-insensitive, digit runs by value (repo2 before repo10). */
 internal val NaturalOrder = Comparator<String> { a, b ->
-    val xs = Chunks.findAll(a.lowercase()).map { it.value }.toList()
-    val ys = Chunks.findAll(b.lowercase()).map { it.value }.toList()
+    val xs = chunks(a)
+    val ys = chunks(b)
     for (i in 0 until minOf(xs.size, ys.size)) {
         val x = xs[i]
         val y = ys[i]

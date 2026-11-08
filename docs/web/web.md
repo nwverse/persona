@@ -217,7 +217,7 @@ use it only on the intranet / VPN, and put an HTTPS reverse proxy in front befor
   An absent or unrecognized grouping preference keeps paging; an explicit To-do choice is preserved even though To-do is the legacy default.
   The grouping shortcut also switches a mounted paged list immediately. Pin updates are reactive; removing the last pin returns to paging if no grouping was saved.
   The fallback requests query-free `GET /sessions`, so pinned and grouped rows beyond the first page are included. It refreshes on session invalidation/reconnect events,
-  keeps the last complete result while loading, retries failed reads after five seconds, and releases its separate snapshot when unmounted. Other views keep their bounded transport.
+  keeps the last complete result while loading and retries failed reads after five seconds. Consumers share a credential-scoped snapshot, request and cooldown; a one-second grace after the last unmount permits sidebar/Agents-page handoff, then releases everything. Reset or credential changes invalidate immediately. Other views keep their bounded transport.
   Normal invalidations coalesce into one trailing read no sooner than three seconds after the previous request finishes; new hints do not postpone that deadline. Initial reads and reconnects bypass the throttle, and quiet failure retries retain their five-second delay.
   Local row edits remain visible during refresh; marking fallback-only rows as seen sends each requested identity even when the detail cache has never loaded it.
   Paged state chips keep the last successful counts during refresh, scope changes and transient failures; a successful zero count still takes effect.

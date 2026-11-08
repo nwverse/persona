@@ -113,7 +113,8 @@ type Service struct {
 
 	devs          Devices // the computers (devices.go); nil: no fleet
 	agentArchives agentArchiveBook
-	fleet         fleetBook // what comes from the nodes (fleet.go)
+	agentNative   agentNativeBook // the tools' own archives (agent_archive_native.go)
+	fleet         fleetBook       // what comes from the nodes (fleet.go)
 	// delegateHook stands in for Delegate in tests (fleet_delegate.go).
 	delegateHook func(context.Context, DelegateParams) (DelegateResult, error)
 	// fleetEnded, when set, sees every card's end the channels are told (tests).
@@ -480,6 +481,7 @@ func (s *Service) SessionsChanged(ctx context.Context, d DeviceSessions) {
 	s.drainRelays(d.MachineID, d.Sessions)
 	s.originsChanged(d.MachineID, d.Sessions) // conversations from before origins were noted (origins.go)
 	s.todosSessionsChanged(ctx, d)
+	s.nativeArchivesListed(d.MachineID) // agent_archive_native.go
 }
 
 func randomHex(n int) string {

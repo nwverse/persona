@@ -90,6 +90,9 @@ type runtimeHello struct {
 		// (#3974): its permission cards that offer always get the node's key for the tool. A runtime that keeps its own
 		// rule (opencode's save rule, Paseo's suggestions) does not say it, so its grant is never widened to the tool.
 		KeepAlways bool `json:"keep_always"`
+		// Archive: session.archive / session.unarchive go to it, for its own reversible archive (archive.go): a
+		// session the user archives in Persona is archived there too, and restored with it.
+		Archive bool `json:"archive"`
 	} `json:"caps"`
 }
 
@@ -1055,7 +1058,7 @@ func (n *Node) runtimeFor(ctx context.Context, method, id string) (*runtimeConn,
 		return h, nil
 	}
 	if known {
-		if claimMethods[method] || method == "session.rename" || method == "session.close" {
+		if claimMethods[method] || method == "session.rename" || method == "session.close" || method == "session.archive" || method == "session.unarchive" {
 			return nil, errRuntimeAway(label)
 		}
 		return nil, nil // unwatching and the like: nothing to refuse
@@ -1244,6 +1247,15 @@ func (n *Node) runtimeHandle(ctx context.Context, h *runtimeConn, method string,
 		}
 		_, err := call("session.close", map[string]any{"session_id": p.SessionID})
 		return okResult(err), err, true
+	case "session.archive", "session.unarchive":
+		// Its own archive (archive.go): one that has none keeps the archive Persona's alone.
+		if !caps.Archive || strings.Contains(p.SessionID, subagentSep) {
+			return archiveUnsupported(label + " has no archive the node can drive"), nil, true
+		}
+		if _, err := call(method, map[string]any{"session_id": p.SessionID}); err != nil {
+			return nil, err, true
+		}
+		return nativeArchiveResult{Native: nativeArchiveDone, Via: "runtime"}, nil, true
 	case "session.rename":
 		if p.Title == nil || strings.TrimSpace(*p.Title) == "" {
 			return okResult(nil), nil, true // a tab name: these sessions have no tab

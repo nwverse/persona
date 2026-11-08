@@ -583,7 +583,8 @@ function BoundedAgentsBlock({ reg, hover, activeKey, go, onNewAgent, add = true 
   const [closing, setClosing] = useState<Session | null>(null);
   const [archiveClosing, setArchiveClosing] = useState<Session | null>(null);
   const [linkTarget, setLinkTarget] = useState<Session>();
-  const onRowMenu = useCallback<RowMenuFn>((s, anchor, at) => setRowMenu({ s, anchor, at }), []);
+  // the ⋯ toggles the menu, as in the full list
+  const onRowMenu = useCallback<RowMenuFn>((s, anchor, at) => setRowMenu((m) => (!at && m?.anchor === anchor ? null : { s, anchor, at })), []);
   return <>
     <div className={SESSION_LIST_STYLE.heading}><span className={SESSION_LIST_STYLE.headingText}>{t("agentspage.title")}</span>{archives && <SectionAdd icon="archive" label={t("agentmenus.archived_agents")} to={{ name: "agent-archives" }} go={go} />}{add && <SectionAdd label={t("sidebar.new_agent")} onClick={onNewAgent} />}</div>
     <HubNoticeLine />
@@ -1765,9 +1766,13 @@ const rowKey = (s: Pick<Session, "machine_id" | "session_id">) => `s:${agentKey(
 /** Whether the open row (`activeKey`) is one of these agents': its group opens for it (useFolded). */
 const holdsRow = (sessions: readonly Session[], activeKey: string) => sessions.some((s) => rowKey(s) === activeKey);
 type GoFn = (to: Route) => (e: React.MouseEvent) => void;
-/** `at`: where a right click or the menu key opened it; without it (the ⋯) the row's menu toggles beside its button. */
+/** `at`: where a right click or the menu key opened it; without it (the ⋯) the row's menu toggles beside its button.
+ *  A row's ⋯ lies beside its link, not in it, and gives as `anchor` its parent, the box holding both: the menu
+ *  closes on a pointerdown outside its anchor, and a press on the ⋯ has to stay inside it for the click that
+ *  follows to toggle. */
 type RowMenuFn = (s: Session, anchor: HTMLElement, at?: MenuAt) => void;
-/** A machine's, a workspace's or a tab's menu (src/lib/node-actions.ts); `toggle`: from its ⋯, which closes it again. */
+/** A machine's, a workspace's or a tab's menu (src/lib/node-actions.ts); `toggle`: from its ⋯, which closes it again
+ *  (a row's ⋯ anchors it on the box holding the row and the ⋯, as in RowMenuFn). */
 type NodeMenuFn = (node: MenuNode, at: MenuAt, header?: string, toggle?: boolean) => void;
 
 // Persona's main conversation: the column's first and strongest entry (the app's mark, always in ink, #2004), with the
@@ -1781,16 +1786,8 @@ export const PersonaRow = memo(function PersonaRow({ reg, hover, active, go, mai
   const st = main ? stateOf(main) : undefined;
   const pending = main?.pending_interactions ?? 0;
   const onMenu = main && menuOf ? (anchor: HTMLElement, at?: MenuAt) => menuOf(main, anchor, at) : undefined;
-  const row = useRef<HTMLAnchorElement | null>(null);
-  const regRow = useMemo(() => reg("persona"), [reg]);
   // one ref for the row's life, so a re-render does not let go of it and register it again (useGlide's reg)
-  const ref = useCallback(
-    (el: HTMLAnchorElement | null) => {
-      row.current = el;
-      regRow(el);
-    },
-    [regRow],
-  );
+  const ref = useMemo(() => reg("persona"), [reg]);
   const aside = onMenu && !active ? "group-hover/row:invisible" : undefined;
   // words left unsent in the main conversation's box, once you are not in it (#5568)
   const draft = draftLine(useLeftDraft(main ? `${main.machine_id}/${main.session_id}` : null));
@@ -1832,7 +1829,7 @@ export const PersonaRow = memo(function PersonaRow({ reg, hover, active, go, mai
         aria-haspopup="menu"
         title={t("sidebar.more")}
         tabIndex={-1}
-        onClick={() => row.current && onMenu(row.current)}
+        onClick={(e) => onMenu(e.currentTarget.parentElement ?? e.currentTarget)}
         className={cx("absolute top-1/2 right-1 z-20 size-6 -translate-y-1/2 items-center justify-center rounded-[6px] text-ink-3 hover:text-ink group-hover/row:flex [@media(hover:none)]:right-0 [@media(hover:none)]:flex [@media(hover:none)]:size-11 [@media(hover:none)]:bg-transparent", active ? "flex hover:bg-hover" : "hidden bg-hover hover:bg-hover-2")}
       >
         <Icon name="more" size={14} />
@@ -1880,16 +1877,8 @@ type NavRowProps = { onMenu?: (at: MenuAt, el: HTMLElement, button: boolean) => 
 // The pages take nothing from the sessions, yet every sessions push re-renders the sidebar: memoized like SessionRow
 // (sameProps), a page row renders again only when its own props change (a badge, the highlight).
 const NavRow = memo(function NavRow({ k, reg, hover, active, to, go, icon, label, badge, badgeTone, hint, title, onMenu, menuLabel, dot }: NavRowProps) {
-  const row = useRef<HTMLAnchorElement | null>(null);
   // one ref for the row's life, so a re-render does not let go of it and register it again (useGlide's reg)
-  const regRow = useMemo(() => reg(k), [reg, k]);
-  const ref = useCallback(
-    (el: HTMLAnchorElement | null) => {
-      row.current = el;
-      regRow(el);
-    },
-    [regRow],
-  );
+  const ref = useMemo(() => reg(k), [reg, k]);
   const link = (
     <a
       ref={ref}
@@ -1927,7 +1916,10 @@ const NavRow = memo(function NavRow({ k, reg, hover, active, to, go, icon, label
         aria-haspopup="menu"
         title={t("sidebar.more")}
         tabIndex={-1}
-        onClick={() => row.current && onMenu({ anchor: row.current }, row.current, true)}
+        onClick={(e) => {
+          const box = e.currentTarget.parentElement ?? e.currentTarget;
+          onMenu({ anchor: box }, box, true);
+        }}
         className="absolute top-1/2 right-1 z-20 hidden size-6 -translate-y-1/2 items-center justify-center rounded-[6px] bg-hover text-ink-3 hover:bg-hover-2 hover:text-ink group-hover/row:flex [@media(hover:none)]:right-0 [@media(hover:none)]:flex [@media(hover:none)]:size-11 [@media(hover:none)]:bg-transparent"
       >
         <Icon name="more" size={14} />
@@ -2008,7 +2000,6 @@ export const SessionRow = memo(function SessionRow({ s: given, k, reg, hover, ac
   const sameAsMarks = source === "desktop" && s.source_kind === "runtime" && sessionCan(s, "send");
   const tail = [sameAsMarks ? "" : sourceSubtitle(s), hint ?? (tab ? tabLabel(s) : "")].filter(Boolean).join(" · ");
   const preview = sessionPreview(s);
-  const row = useRef<HTMLAnchorElement | null>(null);
   // Settings › Appearance › show details on agent rows (#2430): a second line under an agent's title — folder · model · context · age
   const details = useAgentDetails();
   const contextUsed = useContextAsUsed();
@@ -2040,10 +2031,7 @@ export const SessionRow = memo(function SessionRow({ s: given, k, reg, hover, ac
   const ultra = showState && ultracodeMarkShown(s);
   const link = (
     <a
-      ref={(el) => {
-        row.current = el;
-        regRow(el);
-      }}
+      ref={regRow}
       href={href(to)}
       onClick={(event) => { rememberSessionRow(given); go(to)(event); }}
       // right click (at the pointer), the menu key and Shift+F10 (beside the row): the row's menu, the same as its ⋯
@@ -2137,7 +2125,7 @@ export const SessionRow = memo(function SessionRow({ s: given, k, reg, hover, ac
         aria-haspopup="menu"
         title={t("sidebar.more")}
         tabIndex={-1}
-        onClick={() => row.current && onMenu(s, row.current)}
+        onClick={(e) => onMenu(s, e.currentTarget.parentElement ?? e.currentTarget)}
         className={cx("absolute top-1/2 right-1 z-20 size-6 -translate-y-1/2 items-center justify-center rounded-[6px] text-ink-3 hover:text-ink group-hover/row:flex [@media(hover:none)]:right-0 [@media(hover:none)]:flex [@media(hover:none)]:size-11 [@media(hover:none)]:bg-transparent", active ? "flex hover:bg-hover" : "hidden bg-hover hover:bg-hover-2")}
       >
         <Icon name="more" size={14} />

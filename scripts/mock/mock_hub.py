@@ -21,6 +21,7 @@ HUB_ID = os.environ.get("MOCK_HUB_ID") or str(uuid.uuid4())
 TLS = {"port": 0, "fp": "", "server": None}
 ENDPOINTS = []
 CLIENTS = {}
+WS_OBSERVATIONS = []  # Non-secret connection history for background/resident acceptance.
 FAULT_LOCK = threading.Lock()
 LOST_RECEIPT = False
 
@@ -29,7 +30,8 @@ def features():
     # Match proto.Features, retaining the existing terminal fixture switches.
     return ["error_codes", "client_hello", "heartbeat", "app_ping", "client_msg_id", "send_refusals",
             "screen_dialog", "resumable_interactions", "secret_prompts", "request_id", "file_upload",
-            "tls", "endpoints", "connectors", "lark_attachments", "file_stream", "file_thumb", "git_blob", "task_push"] + (["git_write"] if os.environ.get("MOCK_GIT_WRITE") else []) + (["terminal_stream"] if TERMINAL_STREAM else []) + (
+            "tls", "endpoints", "connectors", "lark_attachments", "file_stream", "file_thumb", "git_blob", "task_push",
+            "machine_rename"] + (["git_write"] if os.environ.get("MOCK_GIT_WRITE") else []) + (["terminal_stream"] if TERMINAL_STREAM else []) + (
                 ["terminal_control", "terminal_scroll", "terminal_click", "terminal_mouse"] if TERMINAL_CONTROL else []) + (
                 ["terminal_panes"] if os.environ.get("MOCK_TERMINAL_PANES") else []) + (["herdr_client"] + ([] if os.environ.get("MOCK_TERMINAL_FULL_NOFOCUS") else ["herdr_focus"]) if TERMINAL_FULL else []) + (
                 ["assistant_compact", "assistant_main_new"] if os.environ.get("MOCK_MAIN_ACTIONS") == "1" else []) + (
@@ -1035,6 +1037,8 @@ if os.environ.get("MOCK_WORK"):
 CODEX_LIVE = "c0de9a1f-1111-4000-8000-000000000001"
 CODEX_HISTORY = "c0de9a1f-2222-4000-8000-000000000002"
 DSH_SESSION = "session-3f2a9c4e-0000-4000-8000-000000000003"
+CLAUDE_DESKTOP = "c1a0de00-1111-4000-8000-000000000004"
+CLAUDE_TERMINAL = "c1a0de00-2222-4000-8000-000000000005"
 NO_SPACE = dict(space_kind=None, space_id=None, space_name=None, space_index=None, slot_id=None, slot_name=None,
                 slot_index=None, pane_id=None, tab_id=None, workspace_id=None, launcher=None)
 if os.environ.get("MOCK_SOURCES"):
@@ -1055,6 +1059,15 @@ if os.environ.get("MOCK_SOURCES"):
              source_kind="runtime", source_instance_id="dsh",
              capabilities={"read": True, "send": True, "interrupt": True, "approve": True, "terminal": False, "attach": False},
              **dict(NO_SPACE, space_kind="dsh")),
+        # Claude outside Persona's terminals (docs/integrations/claude-integration.md): one in the desktop app that takes
+        # messages through its peer inbox, one in another terminal whose inbox the node cannot use.
+        sess("server", CLAUDE_DESKTOP, "整理发布说明", "/home/me/code/release", "working", "working", "", 0, "", 0, 1,
+             "把这周合并的 PR 按模块分好了，正在写摘要。", agent="claude", source_kind="claude_desktop",
+             capabilities={"read": True, "send": True}, **NO_SPACE),
+        sess("server", CLAUDE_TERMINAL, "排查构建缓存", "/home/me/code/build", "idle", "idle", "", 0, "", 0, 12,
+             "缓存键里少了 Go 版本，已经补上。", agent="claude", source_kind="claude_cli",
+             read_only_reason="这个 Claude 没有开放会话之间的消息通道（版本较旧或功能关着）：手机上只能看，回复请在电脑上",
+             capabilities={"read": True}, **NO_SPACE),
     ]
 
 # MOCK_OVERVIEW_DENSE=1: the overview on a wide screen with many finished rows: agents run through a runtime (a source
@@ -1244,9 +1257,9 @@ PINS = {"spaces": ["macbook/weather"], "sessions": []}  # GET / PUT /api/v1/pins
 def mark_seen(sid):
     SEEN.append(sid)
     changed = None
-    for s in SESSIONS:
+    for s in SESSIONS + ASSISTANT:
         if s["session_id"] == sid and s["state"] == "unread":
-            s.update(state="idle", status="idle", seen_at=ago())
+            s.update(state="idle", status="idle", seen_at=datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"))
             changed = s["machine_id"]
     # The hub pushes the machine's list when a session's state changes: that is how the app knows a seen sent over the
     # socket landed (SeenOutbox, #1588). Without it the app sends every one again over HTTP 5 s later (#2061).
@@ -2170,6 +2183,28 @@ def other_manager(h):
 
 # Each other manager's own 说明 (设置 › 助手 with its X-Persona-Manager): a whole assistant has its own.
 MANAGER_NOTES = {"m-3fa21c": "这是「工作」管理者：只管工作电脑上的事和工作邮箱。"}
+
+
+def machine_rename_route(h, method, p, raw):
+    """PUT /api/v1/machines/{id}/name {name} (docs/server/machines.md "Renaming a computer"): the hub's name for the
+    computer, "" its id again; every client gets the machines again. 400 invalid_name as the hub."""
+    parts = p.split("/")
+    if method != "PUT" or len(parts) != 6 or parts[5] != "name" or not p.startswith("/api/v1/machines/"):
+        return False
+    try:
+        body = json.loads(raw or b"{}")
+    except ValueError:
+        body = {}
+    m = next((x for x in MACHINES if x["id"] == parts[4]), None)
+    if not m: return h.send_json({"error": "There's no such computer", "code": "not_found"}, 404) or True
+    name = str(body.get("name") or "").strip()
+    if len(name) > 40 or any(c in name for c in "\n\r\t"):
+        return h.send_json({"error": "The name can be at most 40 characters, on one line", "code": "invalid_name"}, 400) or True
+    m["name"] = name or m["id"]
+    for send, _ in list(LIVE):
+        try: send({"type": "machines", "machines": out_machines()})
+        except Exception: pass
+    return h.send_json({"ok": True, "name": m["name"]}) or True
 
 
 def manager_moves_route(h, method, p, raw):
@@ -9439,6 +9474,21 @@ def looked(name, inp, result, ts_min, *pictures):
     return items + [shot(ts_min, items[0]["tool_use_id"], *p) for p in pictures]
 
 
+# MOCK_IMAGES_FAIL=1: lazy images (…/items/{id}/image) answer 503 until GET /mock/images?ok=1 (#182: a picture that
+# did not load says so, and Retry brings it). With MOCK_TURN_IMAGES the viewed pictures are lazy. GET /mock/images?asked=1
+# only reads: how many lazy images were asked for (#559: a tile's retry asks the hub again), and whether sent photos
+# come lazy (MOCK_IMAGES_FAIL=1 with MOCK_CHAT_IMAGES).
+IMAGES_FAIL = {"on": os.environ.get("MOCK_IMAGES_FAIL") == "1", "asked": 0}
+
+
+def lazy_images(items):
+    """With MOCK_IMAGES_FAIL=1 pages leave the pictures' bytes out, as the hub does for `lazy_images`: the app fetches
+    each by its ref, so a tool's picture fails too."""
+    if os.environ.get("MOCK_IMAGES_FAIL") != "1":
+        return items
+    return [dict(x, image=dict(x["image"], data="", lazy=True, size=len(x["image"]["data"]) * 3 // 4))
+            if (x.get("image") or {}).get("data") else x for x in items]
+
 if os.environ.get("MOCK_TURN_IMAGES"):
     sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
     import mock_office
@@ -10085,6 +10135,52 @@ def set_session_state(query):
                    rev=(session.get("rev") or 0) + 1)
     push_machine(mid)
     return {"session": stamp_row(decorated_session(session))}, 200
+
+
+def incoming_message(query):
+    """A new reply in any real fixture conversation, even when no chat is subscribed."""
+    if set(query) != {"mid", "sid", "text"} or any(len(values) != 1 or not values[0].strip() for values in query.values()):
+        return {"error": "Provide exactly one mid, sid and text"}, 400
+    mid, sid, text = (query[key][0] for key in ("mid", "sid", "text"))
+    session = next((s for s in SESSIONS + ASSISTANT if s["machine_id"] == mid and s["session_id"] == sid), None)
+    if session is None:
+        return {"error": "Session not found"}, 404
+    CHURN_ITEMS.setdefault(sid, list(ITEMS.get(sid, [])))
+    now = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+    item = it("assistant", "text", 0, text=text)
+    item["ts"] = now
+    previous = ITEMS.get(sid, [])
+    before = previous[-1]["seq"] if previous else 0
+    ITEMS[sid] = previous + [item]
+    session.update(state="unread", status="done", updated_at=now, state_since=now,
+                   last_text=text, rev=max((session.get("rev") or 0) + 1, item["seq"]))
+    push_machine(mid)
+    for send, subscribed in list(LIVE):
+        if sid in subscribed:
+            try: send({"type": "items", "machine_id": mid, "session_id": sid, "items": [item], **span([item], before)})
+            except OSError: pass
+    return {"session": stamp_row(decorated_session(session)), "item": item}, 200
+
+
+def quiet_capsule():
+    """Remove fixture activity before proving an inactive capsule wakes for an incoming reply."""
+    pending = mock_interactions()
+    with REQUEST_LOCK:
+        INTERACTIONS.clear()
+        MOCK_INTERACTIONS.clear()
+    now = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+    for session in SESSIONS + ASSISTANT:
+        session.update(state="idle", status="idle", seen_at=now)
+    inbox_bulk({"done": True, "items": [{"id": item["id"]} for item in INBOX]})
+    for send, _ in list(LIVE):
+        try:
+            for interaction in pending:
+                send({"type": "interaction_resolved", "id": interaction["id"]})
+            send({"type": "inbox"})
+        except OSError: pass
+    for mid in {s["machine_id"] for s in SESSIONS + ASSISTANT}:
+        push_machine(mid)
+    return {"ok": True}
 
 
 def bump(what, session=None):
@@ -12411,6 +12507,16 @@ class H(BaseHTTPRequestHandler):
         if p == "/mock/session_state":
             body, status = set_session_state(q)
             return self.send_json(body, status)
+        if p == "/mock/incoming":
+            body, status = incoming_message(q)
+            return self.send_json(body, status)
+        if p == "/mock/capsule_quiet":
+            if q: return self.send_json({"error": "No parameters accepted"}, 400)
+            return self.send_json(quiet_capsule())
+        if p == "/mock/ws_clients":
+            with FAULT_LOCK:
+                observations = copy.deepcopy(WS_OBSERVATIONS)
+            return self.send_json({"clients": observations})
         if p == "/mock/seen": return self.send_json({"seen": SEEN})
         if p == "/mock/reconnects": return self.send_json({"reconnects": RECONNECTS})
         if p == "/mock/started": return self.send_json({"started": STARTED})
@@ -12757,11 +12863,11 @@ class H(BaseHTTPRequestHandler):
             if "after_seq" in q:
                 a = int(q["after_seq"][0] or 0)
                 LOG.write("  items after_seq=%d\n" % a); LOG.flush()
-                return self.send_json({"items": [x for x in items if x["seq"] > a], "more_after": False, **span(items, a, max(a, last))})
+                return self.send_json({"items": lazy_images([x for x in items if x["seq"] > a]), "more_after": False, **span(items, a, max(a, last))})
             if "through_seq" in q:  # opening a fold
                 frm, thru = int(q.get("from_seq", ["0"])[0]), int(q["through_seq"][0])
                 inside = [x for x in items if frm <= x["seq"] <= thru]
-                out = {"items": inside[:1000], "more": len(inside) > 1000}
+                out = {"items": lazy_images(inside[:1000]), "more": len(inside) > 1000}
                 served(sid, "range", out)
                 return self.send_json(out)
             b = q.get("before_seq", [""])[0]
@@ -12769,11 +12875,18 @@ class H(BaseHTTPRequestHandler):
             more = False
             if PAGING["on"]:
                 items, more = last_turns(items, int(q.get("turns", ["2"])[0] or 2))
-            out = {"items": fold_work(items) if q.get("fold_work") == ["1"] else items, "has_more": more,
+            out = {"items": lazy_images(fold_work(items) if q.get("fold_work") == ["1"] else items), "has_more": more,
                    **span(items, None, int(b) - 1 if b else last)}
             served(sid, "page", out)
             return self.send_json(out)
+        if p == "/mock/images":  # MOCK_IMAGES_FAIL: ?ok=1 lets lazy images through, ?asked=1 reads, anything else fails them again
+            q = parse_qs(urlparse(self.path).query)
+            if q.get("asked") != ["1"]: IMAGES_FAIL["on"] = q.get("ok", [""])[0] != "1"
+            return self.send_json({"ok": True, "failing": IMAGES_FAIL["on"], "asked": IMAGES_FAIL["asked"],
+                                   "sent_photos_lazy": os.environ.get("MOCK_IMAGES_FAIL") == "1" and bool(os.environ.get("MOCK_CHAT_IMAGES"))})
         if p.startswith("/api/v1/sessions/") and "/items/" in p and p.endswith("/image"):  # a lazy image, a fold's
+            IMAGES_FAIL["asked"] += 1
+            if IMAGES_FAIL["on"]: return self.send_json({"error": "unavailable"}, 503)
             sid, iid = unquote(p.split("/")[5]), unquote(p.split("/")[7])
             img = next((x.get("image") for x in find_items(sid) if x["id"] == iid and x.get("image")), None)
             if not img: return self.send_json({"error": "not found"}, 404)
@@ -12969,6 +13082,7 @@ class H(BaseHTTPRequestHandler):
         if file_ops_route(self, p, self.last_body): return
         if looks_route(self, self.command, p, self.last_body): return
         if recordings_route(self, self.command, p): return
+        if machine_rename_route(self, self.command, p, self.last_body): return
         if manager_moves_route(self, self.command, p, self.last_body): return
         if managers_route(self, self.command, p): return
         if providers_route(self, self.command, p, parse_qs(urlparse(self.path).query), self.last_body): return
@@ -14269,6 +14383,12 @@ class H(BaseHTTPRequestHandler):
         asked = parse_qs(urlparse(self.path).query).get("features", [""])[0].split(",")
         paged = "sessions_list" in asked and os.environ.get("MOCK_SESSIONS_LIST") == "1"
         delta = "sessions_delta" in asked and not os.environ.get("MOCK_WHOLE_LISTS")
+        observation = {"id": uuid.uuid4().hex[:8], "connected": True, "connected_at": time.monotonic(),
+                       "disconnected_at": None, "session_frames": 0, "item_frames": 0,
+                       "client_pings": 0, "server_pings": 0, "client_pongs": 0, "heartbeat": None,
+                       "requested_sessions_delta": delta}
+        with FAULT_LOCK:
+            WS_OBSERVATIONS.append(observation)
         restart_backlog()  # MOCK_RESTART: a connection during the restart waits in the socket's backlog
         have = {}  # machine -> {session id: its JSON}: what this app has
         key = self.headers.get("Sec-WebSocket-Key", "")
@@ -14291,13 +14411,17 @@ class H(BaseHTTPRequestHandler):
                 n = len(data)
                 hdr = bytes([0x81]) + (bytes([n]) if n < 126 else bytes([126]) + struct.pack(">H", n) if n < 65536 else bytes([127]) + struct.pack(">Q", n))
                 self.wfile.write(hdr + data); self.wfile.flush()
+                if obj.get("type") in ("sessions", "sessions_delta"):
+                    observation["session_frames"] += 1
+                elif obj.get("type") == "items":
+                    observation["item_frames"] += 1
             if MOCK_MESSAGING and obj.get("type") == "lark":  # what the Lark extension's messaging.changed becomes
                 send(lark_messaging.event_of(obj))
 
         SOCKETS.add(self.connection)
         subscribed = set()
         LIVE.append((send, subscribed))
-        send({"type": "hello", "server_version": "mock", "client_id": uuid.uuid4().hex[:8], "channel": "release",
+        send({"type": "hello", "server_version": "mock", "client_id": observation["id"], "channel": "release",
               "build": 202611021500, "protocol": 1, "min_app_build": 0,
               **identity(), "endpoints": list(ENDPOINTS), **mesh_hello(),
               "features": features() + (["sessions_delta"] if delta else []), **restart_hello(self.path)})
@@ -14357,6 +14481,7 @@ class H(BaseHTTPRequestHandler):
                         with lock:
                             self.wfile.write(bytes([0x89, len(ping)]) + ping)
                             self.wfile.flush()
+                            observation["server_pings"] += 1
                         hb_state["next"] = hb_state["sent"] + heartbeat["interval"]
             except OSError:
                 pass
@@ -14393,6 +14518,7 @@ class H(BaseHTTPRequestHandler):
                     with hb_condition:
                         if payload == hb_state["pending"]:
                             hb_state["pending"] = None
+                            observation["client_pongs"] += 1
                             hb_condition.notify()
                     continue
                 if op != 1: continue
@@ -14410,6 +14536,7 @@ class H(BaseHTTPRequestHandler):
                             heartbeat.update(interval=max(10, min(900, requested.get("interval", heartbeat["interval"]))),
                                              pong_timeout=max(5, min(60, requested.get("pong_timeout", heartbeat["pong_timeout"]))))
                             hb_state["next"] = time.monotonic() + heartbeat["interval"]
+                            observation["heartbeat"] = dict(heartbeat)
                             hb_condition.notify()
                     with FAULT_LOCK:
                         client["features"] = set(declared)
@@ -14417,6 +14544,7 @@ class H(BaseHTTPRequestHandler):
                     continue
                 if msg.get("type") == "ping":
                     if isinstance(msg.get("id"), str):
+                        observation["client_pings"] += 1
                         if NET["delay"] > 0: time.sleep(NET["delay"])
                         send({"type": "pong", "id": msg["id"]})
                     continue
@@ -14550,12 +14678,12 @@ class H(BaseHTTPRequestHandler):
                         threading.Thread(target=stream, daemon=True).start()
                     if since:
                         newer = [x for x in items if x["seq"] > since]
-                        send({"type": "items", "machine_id": mid, "session_id": sid, "items": newer, "backlog": True,
+                        send({"type": "items", "machine_id": mid, "session_id": sid, "items": lazy_images(newer), "backlog": True,
                               **span(items, since, max(since, items[-1]["seq"] if items else 0))})
                     else:
                         page, more = last_turns(items, 2) if PAGING["on"] else (items, False)
                         out = {"type": "items", "machine_id": mid, "session_id": sid, "backlog": True, "has_more": more, **span(items),
-                               "items": fold_work(page) if msg.get("fold_work") else page}
+                               "items": lazy_images(fold_work(page) if msg.get("fold_work") else page)}
                         served(sid, "backlog", out)
                         send(out)
         except Exception as e:
@@ -14569,6 +14697,7 @@ class H(BaseHTTPRequestHandler):
             hb_state["closed"] = True
             hb_condition.notify()
         with FAULT_LOCK:
+            observation.update(connected=False, disconnected_at=time.monotonic())
             CLIENTS.pop(self.connection, None)
             PHONES.pop(self.connection, None)
             FS_WATCHES.pop(self.connection, None)

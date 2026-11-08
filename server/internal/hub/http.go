@@ -44,8 +44,9 @@ func (h *Hub) routes() http.Handler {
 		}
 		writeJSON(w, map[string]any{"machines": localizedMachines(h.requestLang(r), list)})
 	})
-	// Confirm / reject a computer (machine_trust.go).
+	// Confirm / reject / rename a computer (machine_trust.go, machine_rename.go).
 	h.machineTrustRoutes(api)
+	h.machineRenameRoutes(api)
 	h.deviceRoutesRelayed(api) // the manager's own: reconnect, engine, herdr, deploy, claude-dirs (devices_link.go)
 	api.HandleFunc("GET /api/v1/machines/{mid}/dirs", h.proxy("dirs.list", func(r *http.Request) any {
 		return map[string]any{"path": r.URL.Query().Get("path")}

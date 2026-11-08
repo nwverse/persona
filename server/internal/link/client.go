@@ -64,6 +64,10 @@ const (
 	replaceWait = 30 * time.Second       // after another persona-link of this machine took over
 )
 
+// errPairedAgain: link.json holds another credential than the link's (paired again meanwhile): nothing of this link's
+// is written into it.
+var errPairedAgain = errors.New("paired again meanwhile")
+
 var (
 	errPin    = errors.New("TLS 公钥指纹和配对时的不一样，不是那台 hub")
 	errRedial = errors.New("手动重连")
@@ -82,6 +86,11 @@ type Status struct {
 	// connected: how many hubs its mesh has, itself included. Both missing with older hubs.
 	HubName  string `json:"hub_name,omitempty"`
 	MeshHubs int    `json:"mesh_hubs,omitempty"`
+	// MachineName: what the hub calls this computer, once a hub that says it has (link.json keeps it); missing with
+	// older hubs, which show Machine (its id) instead.
+	MachineName string `json:"machine_name,omitempty"`
+	// Rename: how the last rename asked of this persona-link went (RequestRename waits for it by its ID).
+	Rename *RenameResult `json:"rename,omitempty"`
 	// Pending, while connected: the hub waits for the user to confirm this computer ("It's mine" in the app);
 	// missing once confirmed, and with older hubs.
 	Pending bool `json:"pending,omitempty"`
@@ -392,7 +401,9 @@ func Pair(ctx context.Context, raw, machine, name, path string) (*Config, error)
 	if c.Machine == "" {
 		return nil, errors.New("要填这台电脑在 hub 里的机器 id（hub.json 里 kind 为 link 的那台）")
 	}
-	body, _ := json.Marshal(map[string]string{"name": name, "kind": "link", "machine": c.Machine})
+	// system_name: a hub that has no name of its own for this computer yet names it so (docs/operations/link.md "The
+	// computer's name").
+	body, _ := json.Marshal(map[string]string{"name": name, "kind": "link", "machine": c.Machine, "system_name": SystemName()})
 	client := hubClient(&c, nil)
 	defer client.CloseIdleConnections()
 	type redeemed struct {
@@ -625,7 +636,8 @@ func runActive(ctx context.Context, o Options, rep *reporter) {
 			continue
 		}
 		rep.set(func(s *Status) {
-			*s = Status{State: "connecting", Machine: c.Machine, HubName: c.HubName, Trust: trustOf(c), Endpoints: ranked(c.Endpoints)}
+			*s = Status{State: "connecting", Machine: c.Machine, HubName: c.HubName, MachineName: c.MachineName, Trust: trustOf(c),
+				Endpoints: ranked(c.Endpoints)}
 		})
 		l, err := dial(ctx, c)
 		var end error
@@ -662,7 +674,7 @@ func runActive(ctx context.Context, o Options, rep *reporter) {
 		retry := time.Now().Add(wait)
 		o.Logf("link: %v; next attempt in %s", end, wait.Round(time.Second))
 		rep.set(func(s *Status) {
-			*s = Status{State: state, Machine: c.Machine, HubName: c.HubName, Error: summary(end), Retry: &retry,
+			*s = Status{State: state, Machine: c.Machine, HubName: c.HubName, MachineName: c.MachineName, Error: summary(end), Retry: &retry,
 				Trust: trustOf(c), Endpoints: ranked(c.Endpoints)}
 		})
 		o.wait(ctx, wait)
@@ -774,6 +786,8 @@ type link struct {
 	local   netip.Addr   // this side's address of the link's TCP connection
 	streams *http.Client // checked the same way (pin or system CAs); streams go where the link went
 	token   string
+	// named: the hub said what it calls this computer (endpoints), so it renames computers (rename.go).
+	named atomic.Bool
 }
 
 func dial(ctx context.Context, c *Config) (*link, error) {
@@ -811,9 +825,10 @@ func (l *link) serve(ctx context.Context, c *Config, o Options, rep *reporter) e
 	}
 	since := time.Now()
 	rep.set(func(s *Status) {
-		*s = Status{State: "connected", Machine: c.Machine, HubName: c.HubName, Address: l.ep.URL, Kind: l.ep.Kind, Since: &since,
-			Node: "unknown", Trust: trustOf(c), Endpoints: ranked(c.Endpoints)}
+		*s = Status{State: "connected", Machine: c.Machine, HubName: c.HubName, MachineName: c.MachineName, Address: l.ep.URL,
+			Kind: l.ep.Kind, Since: &since, Node: "unknown", Trust: trustOf(c), Endpoints: ranked(c.Endpoints)}
 	})
+	go l.renames(ctx, o, rep)
 	o.Logf("link: connected to %s (%s)", l.ep.URL, l.ep.Kind)
 	drop := func(err error) {
 		cancel(err)
@@ -908,6 +923,8 @@ func (l *link) serve(ctx context.Context, c *Config, o Options, rep *reporter) e
 			default:
 			}
 			beat <- o.heartbeatOf(m)
+		case "renamed":
+			l.renamed(m, c, o, rep)
 		case "node":
 			rep.set(func(s *Status) {
 				s.Node, s.NodeError = "offline", m.Error
@@ -931,17 +948,23 @@ func (l *link) serve(ctx context.Context, c *Config, o Options, rep *reporter) e
 }
 
 // endpoints takes in what the hub says about where it is and who it is: link.json keeps the candidates (the ones added
-// here stay) and the hub's name; the mesh size is only shown while connected.
+// here stay), the hub's name and what it calls this computer; the mesh size is only shown while connected.
 func (l *link) endpoints(m Message, c *Config, o Options, rep *reporter) {
-	name := clipName(m.HubName)
-	if len(m.Endpoints) > 0 || (name != "" && name != c.HubName) {
+	name, machine := clipName(m.HubName), clipName(m.MachineName)
+	if machine != "" {
+		l.named.Store(true)
+	}
+	if len(m.Endpoints) > 0 || (name != "" && name != c.HubName) || (machine != "" && machine != c.MachineName) {
 		var eps []Endpoint
 		err := Update(o.Path, func(f *Config) error {
 			if f.Token != c.Token {
-				return errors.New("paired again meanwhile")
+				return errPairedAgain
 			}
 			if name != "" {
 				f.HubName = name
+			}
+			if machine != "" {
+				f.MachineName = machine
 			}
 			if len(m.Endpoints) > 0 {
 				var manual []Endpoint
@@ -968,10 +991,14 @@ func (l *link) endpoints(m Message, c *Config, o Options, rep *reporter) {
 		if name != "" {
 			c.HubName = name
 		}
+		if machine != "" {
+			c.MachineName = machine
+		}
 	}
 	rep.set(func(s *Status) {
 		s.Endpoints = ranked(c.Endpoints)
 		s.HubName = c.HubName
+		s.MachineName = c.MachineName
 		if m.MeshHubs > 0 {
 			s.MeshHubs = min(m.MeshHubs, 999)
 		}

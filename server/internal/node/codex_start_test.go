@@ -111,7 +111,7 @@ func TestCodexStartAnswersWithTheThread(t *testing.T) {
 	// On the screen (and in the shell's history) only codex-start and its file: not the message, not the launcher's
 	// words (an alias can carry a key).
 	cmd := (*cmds)[0]
-	if m := startFileRE.FindStringSubmatch(cmd); m == nil || cmd != shellQuote(n.bin)+" codex-start "+shellQuote(m[1]) {
+	if m := startFileRE.FindStringSubmatch(cmd); m == nil || cmd != inAgentEnv(n.dir, shellQuote(n.bin)+" codex-start "+shellQuote(m[1]), shellQuote) {
 		t.Errorf("command %q", cmd)
 	} else if _, err := os.Stat(filepath.Dir(m[1])); !os.IsNotExist(err) {
 		t.Error("the file's directory outlived the start")

@@ -20,9 +20,13 @@ private val emptyReplyComposers: StateFlow<ReplyComposers?> = MutableStateFlow(n
 
 private val disconnectedMail: StateFlow<MailTransport?> = MutableStateFlow(null)
 private val emptyPersonaOutbox: StateFlow<List<OutboxMessage>> = MutableStateFlow(emptyList())
+private val emptyConversationInbox: StateFlow<InboxConversations?> = MutableStateFlow(null)
+private val emptyMessageReads: StateFlow<Set<InboxMessageRead>> = MutableStateFlow(emptySet())
 
 /** Feature capabilities until the shared repository contract exposes inbox details. */
 interface InboxRepository : persona.core.contracts.api.InboxRepository {
+    val conversationInbox: StateFlow<InboxConversations?> get() = emptyConversationInbox
+    val messageReads: StateFlow<Set<InboxMessageRead>> get() = emptyMessageReads
     val supportsThreadOutbox: Boolean get() = false
     val replyComposers: StateFlow<ReplyComposers?> get() = emptyReplyComposers
     suspend fun readingStore(): LarkReadingStore? = null
@@ -62,7 +66,12 @@ interface InboxRepository : persona.core.contracts.api.InboxRepository {
     suspend fun refreshConversation(feedId: String)
     suspend fun loadNewer(feedId: String) = refreshConversation(feedId)
     suspend fun latestConversation(feedId: String) = refreshConversation(feedId)
-    suspend fun markVisible(feedId: String, messages: List<LarkMessage>) = Unit
+    suspend fun markVisible(feedId: String, messages: List<LarkMessage>): Boolean = false
+    /**
+     * 全部已读 / 下一条 on a conversation not loaded here: acknowledge its newest message from someone else, from one raw
+     * page (no window, no card parsing). False when there is no Feishu transport or nothing to acknowledge.
+     */
+    suspend fun markLatestRead(feedId: String): Boolean = false
     suspend fun setDone(itemId: String, done: Boolean)
     /**
      * Mark all as seen / Clear all and their Undo: [items] done (or back) in one request, each as listed, so one

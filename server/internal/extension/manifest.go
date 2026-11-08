@@ -775,6 +775,18 @@ func (m *Manifest) SendsAsUser() []ConnectorItem {
 	return out
 }
 
+// Recalls are the connectors that say they can take back what they sent (the capability recall): the hub then asks the
+// program to, once the user agreed on their own device. Not something to agree to: it adds nothing the program can start.
+func (m *Manifest) Recalls() []ConnectorItem {
+	var out []ConnectorItem
+	for _, c := range m.Connectors() {
+		if slices.Contains(c.Capabilities, "recall") {
+			out = append(out, c)
+		}
+	}
+	return out
+}
+
 // APIs are the manifest's contributions to api.
 func (m *Manifest) APIs() []APIItem {
 	var out []APIItem
