@@ -1,0 +1,11 @@
+{
+  "manifest_version": 1,
+  "id": "example-notes",
+  "name": "Example Notes",
+  "version": "1.0.0",
+  "engines": {"extension_protocol": 1},
+  "runtime": {"command": "bin/example-notes"},
+  "contributes": {
+    "connectors": [{"id": "examplenotes", "name": "Example Notes", "capabilities": ["status", "tools"], "confirm_always": [""]}]
+  }
+}

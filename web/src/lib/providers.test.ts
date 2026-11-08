@@ -130,8 +130,8 @@ describe("formFromView", () => {
 
 describe("probes", () => {
   it("by name when editing, the typed key and touched headers over it", () => {
-    expect(probeBody(ready({ api_key: "" }), "gw", "m1")).toEqual({ base_url: "https://gw.example.com", auth: "bearer", name: "gw", model: "m1" });
-    expect(probeBody(ready({ headers: "", headers_touched: true }), null)).toEqual({ base_url: "https://gw.example.com", auth: "bearer", api_key: "sk-test-1", headers: "" });
+    expect(probeBody(ready({ api_key: "" }), "gw", "m1")).toEqual({ base_url: "https://gw.example.com", auth: "bearer", api: "messages", name: "gw", model: "m1" });
+    expect(probeBody(ready({ api: "responses", headers: "", headers_touched: true }), null)).toEqual({ base_url: "https://gw.example.com", auth: "bearer", api: "responses", api_key: "sk-test-1", headers: "" });
   });
   it("words the test result", () => {
     expect(testText({ ok: true, ms: 412 })).toBe("连接成功（412 ms）");

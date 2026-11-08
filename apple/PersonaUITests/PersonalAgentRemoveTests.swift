@@ -39,7 +39,7 @@ final class PersonalAgentRemoveTests: XCTestCase {
         _ = try Data(contentsOf: URL(string: hub + "/mock/personal-agents?reset=1")!)
         app = XCUIApplication()
         let pair = "persona://pair?url=" + hub.addingPercentEncoding(withAllowedCharacters: .alphanumerics)! + "&token=mock"
-        app.launchArguments = ["-pairURL", pair, "-ui.oldLayout", "YES", "-tab", "dev", "-dev.openChat", ""]
+        app.launchArguments = ["-pairURL", pair, "-tab", "dev", "-dev.openChat", ""]
         app.launchPinned()
         let personal = app.buttons.matching(label("Personal Agents", "个人 Agent")).firstMatch
         XCTAssertTrue(personal.waitForExistence(timeout: 30), app.debugDescription)

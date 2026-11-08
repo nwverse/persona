@@ -11,9 +11,34 @@ enum UITestStyle {
 }
 
 extension XCUIApplication {
-    /// Launches in the run's style (`UITestStyle`), on the four tabs unless the test chose a layout (`launchPersona()`).
+    /// Launches in the run's style without overriding the app's navigation defaults.
     func launchPinned() {
         launchArguments += ["-ui.style", UITestStyle.name]
         launchPersona()
+    }
+
+    /// Demo launches start clean so a pairing left by an earlier test cannot override Demo Mode.
+    func launchPersona() {
+        if Self.wantsDemo(launchArguments) { launchArguments += ["-openWelcome", "YES"] }
+        launch()
+    }
+
+    /// SwiftUI can inherit the drawer container's identifier onto its footer buttons on compact screens.
+    @MainActor var drawerSettingsButton: XCUIElement {
+        let identified = buttons["sidebar-settings"].firstMatch
+        if identified.exists { return identified }
+        return buttons.matching(NSPredicate(format: "identifier == %@ AND label == %@", "assistant-sidebar", "设置")).firstMatch
+    }
+
+    @MainActor var drawerNewChatButton: XCUIElement {
+        let identified = buttons["sidebar-new"].firstMatch
+        if identified.exists { return identified }
+        return buttons.matching(NSPredicate(format: "identifier == %@ AND label == %@", "assistant-sidebar", "新对话")).firstMatch
+    }
+
+    /// Launched into Demo Mode and not paired by the test itself.
+    static func wantsDemo(_ args: [String]) -> Bool {
+        let demo = zip(args, args.dropFirst()).contains { $0 == "-demo.on" && $1 == "YES" }
+        return demo && !args.contains("-pairURL") && !args.contains("-openWelcome")
     }
 }

@@ -2,8 +2,8 @@ import XCTest
 
 /// Videos picked in Photos go as files (#981, docs/protocol/protocol.md「发送视频」), against scripts/mock/mock_hub.py with
 /// `MOCK_SENT_VIDEO=<a video>` (TEST_RUNNER_PERSONA_VIDEO_SEND_HUB=http://127.0.0.1:<port>) and a made-up video in the
-/// simulator's library (`xcrun simctl addmedia`). Each runs in the layout and style the environment picks
-/// (PERSONA_LAYOUT, PERSONA_UI_STYLE); PERSONA_SHOTS saves the screenshots there too.
+/// simulator's library (`xcrun simctl addmedia`). Each runs in the style the environment picks
+/// (PERSONA_UI_STYLE); PERSONA_SHOTS saves the screenshots there too.
 final class VideoSendTests: XCTestCase {
     private let widget = "a1f3c2d4-0000-4000-8000-000000000001"
 
@@ -125,7 +125,7 @@ final class VideoSendTests: XCTestCase {
     }
 
     @MainActor private func shot(_ app: XCUIApplication, _ name: String) {
-        let layout = ProcessInfo.processInfo.environment["PERSONA_LAYOUT"].flatMap { $0.isEmpty ? nil : $0 } ?? "tabs"
+        let layout = "shell"
         let full = "\(name)-\(UITestStyle.name)-\(layout)"
         let png = app.screenshot()
         let attachment = XCTAttachment(screenshot: png)

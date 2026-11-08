@@ -12,7 +12,7 @@ import XCTest
 ///   when the tab comes back (#740); while searching the filters scroll with the results (#1051, #2189); the field
 ///   is found again after a round trip (#314).
 ///
-/// In both layouts (`TEST_RUNNER_PERSONA_LAYOUT`) and styles (`TEST_RUNNER_PERSONA_UI_STYLE`).
+/// In both styles (`TEST_RUNNER_PERSONA_UI_STYLE`).
 final class AgentsTopMotionTests: XCTestCase {
     /// The most a block may move in one frame (60 Hz) outside a drag: a 0.25 s move of 88 pt peaks at ~16, a dropped
     /// frame on a busy machine doubles it; the spring back was 138.
@@ -41,7 +41,7 @@ final class AgentsTopMotionTests: XCTestCase {
     @MainActor private func walk(size: String? = nil) throws {
         app = XCUIApplication()
         app.launchArguments = ["-demo.on", "YES", "-app.tab", "chats", "-dev.openChat", "",
-                               "-showSearchTrace", "YES", "-searchTracePath", tracePath]
+                               "-showSearchTrace", "YES", "-searchTracePath", tracePath, "-probes", "YES"]
         if let size { app.launchArguments += ["-UIPreferredContentSizeCategoryName", size] }
         app.launchPinned()
         XCTAssertTrue(app.collectionViews.firstMatch.waitForExistence(timeout: 20), "the Agents list")
@@ -104,16 +104,10 @@ final class AgentsTopMotionTests: XCTestCase {
 
         // Another page and back: folded again (#740), and the field comes out on a pull again (#314).
         let away = mark()
-        if shell {
-            let finger = ShellFinger(app)
-            finger.tap(agents: false)
-            sleep(2)
-            finger.tap(agents: true)
-        } else {
-            app.tabBars.buttons.element(boundBy: 0).tap()
-            sleep(2)
-            app.tabBars.buttons["Agents"].tap()
-        }
+        let finger = ShellFinger(app)
+        finger.tap(agents: false)
+        sleep(2)
+        finger.tap(agents: true)
         sleep(2)
         let returned = check("coming back to the tab", since: away, pageMoves: true)
         XCTAssertEqual(returned.last?["filter"]?.y ?? 0, rest.y, accuracy: 1, "not folded again when the tab came back")
