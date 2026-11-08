@@ -353,7 +353,7 @@ func run(ctx context.Context, build update.Build, o runOptions) error {
 			if out, ok, err := svc.NodeAnswer(ctx, machine, method, params); ok {
 				return out, ok, err
 			}
-			return svc.NodeRequest(ctx, machine, method, params) // the interactions, the MCP tools (fleet.go)
+			return svc.NodeRequest(ctx, machine, method, params) // the interactions, the MCP tools (fleet_events.go)
 		},
 		Event:    func(machine, event string, params json.RawMessage) bool { return svc.NodeEvent(machine, event, params) },
 		Detached: func(machine string) { svc.NodeDetached(machine) },

@@ -100,11 +100,11 @@ Computers belong to the manager, and so does everything they send: the hub's exi
 | Manager responsibility | Code |
 | --- | --- |
 | Interactions: waiting for `interaction.create`, resumable cards (retain for 3 minutes after node disconnect for hook reclaim; recover from `interactions` after manager restart, without another push on reclaim), expiry, always allow for session, screen cards (read, keypress, recheck), Codex cards, plans answered in terminal, history table, assistant questions/cards, questions from hub-owned features (`fleet.ask`: sending mail, Cua apps, persona_settings) | `fleet_ix.go` |
-| Session lists: unified state, background tasks, model errors, seen (`session_seen`), state start time, to-do / quiet / work state / channel markers / assistant-chat titles | `fleet.go`, `fleet_work.go`, `fleet_text.go` |
+| Session lists: unified state, background tasks, model errors, seen (`session_seen`), state start time, to-do / quiet / work state / channel markers / assistant-chat titles | `fleet.go`, `fleet_sessions.go`, `fleet_seen.go`, `fleet_work.go`, `fleet_text.go` |
 | Push decisions: waiting and filtering for done notifications (seen, muted, answered through a channel, Inbox twin, notify_user already pushed, no duplicate push for one Stop), card notifications | `fleet_push.go` |
 | Live Activity content (FleetState) and Dynamic Island counts | `fleet_live.go` |
 | Node MCP tools (`mcp.tools` / `mcp.call` dispatch) and `assistant.lark` | `fleet_tools.go` |
-| `lark.sent`: a write the node's gate proxy forwarded, kept in the sent-as-user ledger | `fleet.go` (`NodeRequest`), `extmgr/sent_ledger.go` |
+| `lark.sent`: a write the node's gate proxy forwarded, kept in the sent-as-user ledger | `fleet_events.go` (`NodeRequest`), `extmgr/sent_ledger.go` |
 | Channel-followed chats (`session.follow`: node sends items and generating text to manager, delivered to channels with turn starts/ends in node order) | `fleet_follow.go`, `devices.Follow` |
 | Machine monitoring (samples, 24-hour history, downsampling, cleanup) and token usage | `devices/metrics.go` |
 
