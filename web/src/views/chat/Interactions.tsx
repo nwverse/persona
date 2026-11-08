@@ -13,7 +13,7 @@ import { sessionCan, sessionTitle } from "../../lib/format";
 import { interactionAsk } from "../../lib/inbox";
 import { plainMarkdown } from "../../lib/plain-markdown";
 import { mcpServerLabel, toolDisplayName } from "../../lib/turns";
-import { optionDisplay } from "../../lib/tool-detail";
+import { isSecretRun, optionDisplay, secretRunInput } from "../../lib/tool-detail";
 import { RecommendedTag } from "../../ui/RecommendedTag";
 import { dropAnswered, getSession, useStore, type AnsweredCard as Answered } from "../../lib/store";
 import { Button, Collapse, cx, EASE, Menu, toast, useMenu } from "../../ui/atoms";
@@ -37,8 +37,12 @@ export async function resolve(ix: Interaction, body: Record<string, unknown>) {
   return r.ok;
 }
 
-/** `looking`: a question the assistant is still deciding on (#544), marked as at work rather than waiting on the user. */
-function Card({ title, kicker, onDismiss, children, footer, looking = false }: { title: string; kicker: string; onDismiss: () => void; children: React.ReactNode; footer: React.ReactNode; looking?: boolean }) {
+/**
+ * A card waiting on you. No `onDismiss`: it has no "Hand back" (a card no computer's terminal can take back).
+ * `looking`: a question the assistant is still deciding on (#544), marked as at work rather than waiting on the user.
+ * `busy`: an answer to this card is on its way; hand back is off with the rest of its answers (#1120).
+ */
+function Card({ title, kicker, onDismiss, busy, children, footer, looking = false }: { title: string; kicker: string; onDismiss?: () => void; busy?: boolean; children: React.ReactNode; footer: React.ReactNode; looking?: boolean }) {
   return (
     <div className="overflow-hidden rounded-card bg-surface shadow-card" style={{ animation: `fade-up 350ms ${EASE} both` }}>
       <div className="px-3.5 pt-3 pb-2.5">
@@ -50,19 +54,24 @@ function Card({ title, kicker, onDismiss, children, footer, looking = false }: {
             </div>
             <div className="text-[13.5px] font-medium text-ink">{title}</div>
           </div>
-          <button
-            type="button"
-            aria-label={t("chat-interactions.hand_back")}
-            title={t("chat-interactions.hand_back")}
-            onClick={onDismiss}
-            className="touch-hit flex size-6 shrink-0 items-center justify-center rounded-[6px] text-ink-3 transition-colors hover:bg-hover hover:text-ink"
-          >
-            <Icon name="x" size={14} stroke={2.2} />
-          </button>
+          {onDismiss && (
+            <button
+              type="button"
+              aria-label={t("chat-interactions.hand_back")}
+              title={t("chat-interactions.hand_back")}
+              onClick={onDismiss}
+              disabled={busy}
+              data-card-answer
+              className="touch-hit flex size-6 shrink-0 items-center justify-center rounded-[6px] text-ink-3 transition-colors enabled:hover:bg-hover enabled:hover:text-ink disabled:opacity-40"
+            >
+              <Icon name="x" size={14} stroke={2.2} />
+            </button>
+          )}
         </div>
         <div className="mt-2">{children}</div>
       </div>
-      <div className="flex items-center justify-between gap-2 border-t border-line bg-inset px-3 py-2">{footer}</div>
+      {/* data-card-actions: what answers the card (with hand back above), for the sync scenarios (spec/fixtures/sync) */}
+      <div data-card-actions className="flex items-center justify-between gap-2 border-t border-line bg-inset px-3 py-2">{footer}</div>
     </div>
   );
 }
@@ -137,6 +146,7 @@ function QuestionCard({ ix }: { ix: Interaction }) {
       title={q.question}
       looking={looking}
       onDismiss={() => resolve(ix, { dismiss: true })}
+      busy={busy}
       footer={
         <>
           <span className="flex items-center gap-2">
@@ -237,6 +247,7 @@ function PlanCard({ ix }: { ix: Interaction }) {
       kicker={t("chat-interactions.plan_kicker")}
       title={t("chat-interactions.plan_title")}
       onDismiss={() => go({ dismiss: true })}
+      busy={busy}
       footer={
         rejecting ? (
           <>
@@ -248,7 +259,7 @@ function PlanCard({ ix }: { ix: Interaction }) {
               placeholder={t("chat-interactions.feedback_placeholder")}
               className="h-8 min-w-0 flex-1 rounded-control bg-surface px-2.5 text-[13px] text-ink shadow-btn outline-none placeholder:text-ink-3"
             />
-            <Button tone="quiet" onClick={() => setRejecting(false)}>
+            <Button tone="quiet" disabled={busy} onClick={() => setRejecting(false)}>
               {t("common.cancel")}
             </Button>
             <Button tone="primary" busy={busy} disabled={!feedback.trim()} onClick={() => go({ approve: false, feedback: feedback.trim() })}>
@@ -257,14 +268,14 @@ function PlanCard({ ix }: { ix: Interaction }) {
           </>
         ) : (
           <>
-            <Button tone="quiet" onClick={() => setRejecting(true)}>
+            <Button tone="quiet" disabled={busy} onClick={() => setRejecting(true)}>
               {t("chat-interactions.request_changes")}
             </Button>
             <span className="flex items-center">
               <Button tone="primary" busy={busy} className="rounded-r-none" onClick={() => go({ approve: true, mode: "acceptEdits" })}>
                 {t("chat-interactions.approve")}
               </Button>
-              <button type="button" aria-label={t("chat-interactions.approve_mode")} onClick={menu.open} className="touch-hit flex h-8 w-7 items-center justify-center rounded-r-control border-l border-white/15 bg-ink text-surface hover:opacity-90">
+              <button type="button" aria-label={t("chat-interactions.approve_mode")} disabled={busy} onClick={menu.open} className="touch-hit flex h-8 w-7 items-center justify-center rounded-r-control border-l border-white/15 bg-ink text-surface enabled:hover:opacity-90 disabled:opacity-40">
                 <Icon name="chevron" size={12} stroke={2.4} />
               </button>
               {menu.anchor && <Menu anchor={menu.anchor} onClose={menu.close} align="right" side="top" width={196} items={MODES.map((m) => ({ key: m.key, label: m.label, onSelect: () => go({ approve: true, mode: m.key }) }))} />}
@@ -292,15 +303,16 @@ function PermissionCard({ ix }: { ix: Interaction }) {
       kicker={t("chat-interactions.permission_kicker")}
       title={t("chat-interactions.permission_title", { tool: toolDisplayName(ix.tool_name) })}
       onDismiss={() => go({ dismiss: true })}
+      busy={busy}
       footer={
         <>
-          <Button tone="quiet" onClick={() => go(denyBody())}>
+          <Button tone="quiet" disabled={busy} onClick={() => go(denyBody())}>
             {t("chat-interactions.deny")}
           </Button>
           <span className="flex gap-1.5">
             {/* Claude's "Always allow"; another agent's card (Codex, an agent runtime) only when it says what always allows. */}
             {(!ix.agent || ix.agent === "claude" || ix.always_label) && (
-              <Button tone="secondary" onClick={() => go({ allow: true, always: true })}>
+              <Button tone="secondary" disabled={busy} onClick={() => go({ allow: true, always: true })}>
                 {t("chat-interactions.always_allow")}
               </Button>
             )}
@@ -378,6 +390,45 @@ function PermissionBody({ ix }: { ix: Interaction }) {
   );
 }
 
+/** The assistant's password card (#1137): what would run where, filled in only on the iPhone; here it is only declined. */
+function SecretRunCard({ ix }: { ix: Interaction }) {
+  const [busy, setBusy] = useState(false);
+  const { machine, purpose, commands } = secretRunInput(ix.tool_input);
+  const decline = async () => {
+    setBusy(true);
+    await resolve(ix, { allow: false });
+    setBusy(false);
+  };
+  return (
+    <Card
+      kicker={t("chat-interactions.secret_run_kicker")}
+      title={t("chat-interactions.secret_run_title", { machine })}
+      footer={
+        <>
+          <span data-secret-run-elsewhere className="flex min-w-0 items-center gap-1.5 text-[11.5px] text-ink-3">
+            <Icon name="phone" size={13} stroke={2} className="shrink-0" />
+            <span className="min-w-0">{t("chat-interactions.secret_run_on_iphone")}</span>
+          </span>
+          <Button tone="secondary" busy={busy} onClick={decline}>
+            {t("chat-interactions.secret_run_decline")}
+          </Button>
+        </>
+      }
+    >
+      <div className="flex flex-col gap-2">
+        {purpose && <p className="text-[13px] leading-relaxed whitespace-pre-wrap text-ink">{purpose}</p>}
+        <div>
+          <div className="mb-1 text-[11px] font-medium text-ink-3">{t("chat-interactions.secret_run_commands")}</div>
+          {/* one block per command: a long one that wraps never reads as two */}
+          <div className="flex flex-col gap-1.5">
+            {commands.map((c, i) => <pre key={i} data-secret-run-command className={CODE_BOX}>{c}</pre>)}
+          </div>
+        </div>
+      </div>
+    </Card>
+  );
+}
+
 function ScreenCard({ ix }: { ix: Interaction }) {
   const d = ix.dialog;
   const [text, setText] = useState("");
@@ -394,6 +445,7 @@ function ScreenCard({ ix }: { ix: Interaction }) {
       kicker={d?.header || t("chat-interactions.screen_kicker")}
       title={d?.question || t("chat-interactions.screen_title")}
       onDismiss={() => go({ dismiss: true }, "dismiss")}
+      busy={busy !== null}
       footer={
         d?.options?.length ? (
           <span className="text-[11.5px] text-ink-3">{t("chat-interactions.screen_hint")}</span>
@@ -407,7 +459,7 @@ function ScreenCard({ ix }: { ix: Interaction }) {
               autoComplete="off"
               className="h-8 min-w-0 flex-1 rounded-control bg-surface px-2.5 text-[13px] text-ink shadow-btn outline-none placeholder:text-ink-3"
             />
-            <Button tone="primary" busy={busy === "text"} onClick={() => go({ text, keys: ["enter"] }, "text")}>
+            <Button tone="primary" busy={busy === "text"} disabled={busy !== null} onClick={() => go({ text, keys: ["enter"] }, "text")}>
               {t("chat-interactions.send")}
             </Button>
           </>
@@ -428,7 +480,7 @@ function ScreenCard({ ix }: { ix: Interaction }) {
                   placeholder={o.label}
                   className="h-8 min-w-0 flex-1 rounded-control bg-surface px-2.5 text-[13px] text-ink shadow-btn outline-none placeholder:text-ink-3"
                 />
-                <Button tone="primary" busy={busy === o.key} disabled={!text.trim()} onClick={() => go({ option: o.key, text }, o.key)}>
+                <Button tone="primary" busy={busy === o.key} disabled={!text.trim() || busy !== null} onClick={() => go({ option: o.key, text }, o.key)}>
                   {t("chat-interactions.send")}
                 </Button>
               </div>
@@ -483,10 +535,11 @@ function MultiScreenCard({ ix }: { ix: Interaction }) {
       kicker={[d.header, t("chat-interactions.multi_select")].filter(Boolean).join(" · ")}
       title={d.question || t("chat-interactions.multi_title")}
       onDismiss={() => go({ dismiss: true }, "dismiss")}
+      busy={busy !== null}
       footer={
         <>
           {chat && (
-            <Button busy={busy === chat.key} onClick={() => go({ option: chat.key }, chat.key)}>
+            <Button busy={busy === chat.key} disabled={busy !== null} onClick={() => go({ option: chat.key }, chat.key)}>
               {t("chat-interactions.say_in_chat")}
             </Button>
           )}
@@ -580,6 +633,7 @@ function ElicitationCard({ ix }: { ix: Interaction }) {
       kicker={url ? t("chat-interactions.url_kicker") : t("chat-interactions.form_kicker")}
       title={url ? t("chat-interactions.url_title") : t("chat-interactions.form_title")}
       onDismiss={() => go({ dismiss: true }, "dismiss")}
+      busy={busy !== null}
       footer={
         <>
           <Button tone="quiet" busy={busy === "cancel"} disabled={busy !== null} onClick={() => act("cancel")}>
@@ -704,7 +758,7 @@ export function AnsweredCard({ card }: { card: Answered }) {
   // allowed, not only that something was
   const about = lines.length === 1 && !lines[0].label && card.resolution.dismiss !== true ? receiptAbout(card.ix) : "";
   return (
-    <div role="status" className="overflow-hidden rounded-card bg-surface px-3.5 py-2.5 shadow-card" style={{ animation: `fade-up 300ms ${EASE} both` }}>
+    <div role="status" data-answered={card.ix.id} className="overflow-hidden rounded-card bg-surface px-3.5 py-2.5 shadow-card" style={{ animation: `fade-up 300ms ${EASE} both` }}>
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0 flex-1">
           <div className="mb-1 flex items-center gap-1.5 text-[11px] font-medium text-green">
@@ -739,9 +793,11 @@ export function InteractionCard({ ix }: { ix: Interaction }) {
   const canApprove = useStore(() => sessionCan(getSession(ix.machine_id, ix.session_id), "approve"));
   const card = ix.kind === "question" ? <QuestionCard ix={ix} />
     : ix.kind === "plan" ? <PlanCard ix={ix} />
+    : isSecretRun(ix) ? <SecretRunCard ix={ix} />
     : ix.kind === "permission" ? <PermissionCard ix={ix} />
     : ix.kind === "elicitation" ? <ElicitationCard ix={ix} /> : <ScreenCard ix={ix} />;
-  return canApprove ? card : <fieldset disabled>{card}</fieldset>;
+  // data-card: which card this is, for the sync scenarios (spec/fixtures/sync); `contents` keeps the layout as it was
+  return <div data-card={ix.id} className="contents">{canApprove ? card : <fieldset disabled>{card}</fieldset>}</div>;
 }
 
 /**
