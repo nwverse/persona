@@ -114,7 +114,19 @@ import Testing
         model.cancelConfirmation()
         #expect(await cancelling.value.cancelled)
         #expect(socket.sent.filter { $0["request"]?["request"]?.string == "event" }.count == 1)
-        stream.refresh(); socket.reviewSnapshot(version: 4, present: false)
+        let approving = model.prepared(discard, displayed: stream.displayedRevision)
+        let approved = Task { await approving() }
+        for _ in 0..<10 where model.confirmation == nil { await Task.yield() }
+        model.approveConfirmation()
+        for _ in 0..<10 where socket.request?["interaction"]?["action"] != .string(discard.id) { await Task.yield() }
+        #expect(socket.request?["interaction"]?["event"] == .string("press"))
+        #expect(socket.request?["interaction"]?["value"]?.object?.isEmpty == true)
+        let discardEvent = try #require(socket.request?["interaction"]?["event_id"]?.string)
+        socket.receipt(discardEvent, version: 4)
+        socket.delta(version: 4, base: 3)
+        #expect(await approved.value.toast == "Once")
+        #expect(socket.sent.filter { $0["request"]?["request"]?.string == "event" }.count == 2)
+        stream.refresh(); socket.reviewSnapshot(version: 5, present: false)
         #expect(model.view?.review == nil && model.values[review.name] == nil)
         #expect(model.view?.wantsCodePage == false)
     }

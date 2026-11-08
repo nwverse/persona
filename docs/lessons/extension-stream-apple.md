@@ -86,6 +86,8 @@ A positive native commit is not proof that every root-level control is rendered.
 
 A notification prompt's body also contains “icon”/“图标标记”. Classifying icon prompts first selected their OK button for the notification prompt, so no button matched and four real UI cases stayed inactive. Recognize the known notification prompt before the icon message, still requiring the tested app's brand and SpringBoard owner. Keep each failed route's diagnostic image distinct; never acknowledge an extension's own confirmation automatically.
 
+Root review buttons use `submit`, but `review.discard` uses `press` (the canonical manager `EventAction` rule). Marking the whole review object as submit let cancellation appear healthy, yet confirmation was rejected before callback entry and never advanced its fence. Infer submit only for the review's button array, and test confirmed discard through the actual manager as well as a fake socket.
+
 ## Evidence boundaries
 
 Unit tests use canonical valid/invalid fixtures and exact fence traces. Actual UI tests assert committed stream revisions, not just a loaded page that might be HTTP fallback. Screenshots contain synthetic data only; GUI captures are limited to the App window without other windows/desktop content. Clearly label offscreen rendering as such.
