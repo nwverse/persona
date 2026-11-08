@@ -186,13 +186,17 @@ export const AUTO_CHECK = 8;
 
 /** Discovered models merged in: new ones added unchecked (all checked when nothing was there and the list is short),
  *  what was typed kept. */
-export function mergeDiscovered(models: FormModel[], found: ProviderModel[]): FormModel[] {
+export function mergeDiscovered(models: FormModel[], found: ProviderModel[], chat = false): FormModel[] {
   const out = [...models];
   const first = models.length === 0 && found.length <= AUTO_CHECK;
   for (const m of found) {
     const i = out.findIndex((x) => x.id === m.id);
-    if (i < 0) out.push(formModel(m, first));
-    else if (!out[i].context_window && m.context_window) out[i] = { ...out[i], context_window: String(m.context_window), efforts: out[i].efforts.length ? out[i].efforts : [...(m.efforts ?? [])] };
+    if (i < 0) {
+      const mismatch = chat && m.default_effort && m.efforts?.length && !m.efforts.includes(m.default_effort);
+      out.push(formModel(mismatch ? { ...m, efforts: [], default_effort: "" } : m, first));
+    } else if (!out[i].context_window && m.context_window) {
+      out[i] = { ...out[i], context_window: String(m.context_window), ...(!chat && !out[i].efforts.length ? { efforts: [...(m.efforts ?? [])] } : {}) };
+    }
   }
   return out;
 }
@@ -307,11 +311,7 @@ function modelsOf(f: ProviderForm): ProviderModel[] {
       const out: ProviderModel = { id: m.id.trim() };
       if (m.name.trim()) out.name = m.name.trim();
       if (int(m.context_window)) out.context_window = int(m.context_window);
-      if (m.efforts.length) {
-        out.efforts = [...m.efforts];
-        // Discovery can omit the default from its list. Preserve it while satisfying the hub's metadata invariant.
-        if (f.kind === "api" && f.api === "chat" && m.default_effort && !out.efforts.includes(m.default_effort)) out.efforts.push(m.default_effort);
-      }
+      if (m.efforts.length) out.efforts = [...m.efforts];
       if (m.default_effort) out.default_effort = m.default_effort;
       return out;
     });

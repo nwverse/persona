@@ -328,7 +328,7 @@ describe("ProviderWizard from presets", () => {
     expect(button("保存")!.disabled).toBe(false);
     await act(async () => button("保存")!.click());
     expect(calls.find((c) => c.method === "POST" && c.path.endsWith("/launchers"))?.body).toMatchObject({
-      api: "chat", models: [{ id: "example-chat", context_window: 16000, efforts: ["low", "high"], default_effort: "high" }],
+      api: "chat", models: [{ id: "example-chat", context_window: 16000 }],
     });
   });
 
@@ -388,14 +388,15 @@ describe("ProviderWizard from presets", () => {
     expect(calls.find((c) => c.method === "PUT" && c.path.endsWith("/launchers/chat"))?.body).not.toHaveProperty("models");
   });
 
-  it("keeps a discovered default effort when editing Chat models", async () => {
-    act(() => root.render(<ProviderWizard existing={{ name: "chat", kind: "api", api: "chat", base_url: "https://api.example.com", model: "example-chat", has_key: true, models: [{ id: "example-chat", context_window: 16000, efforts: ["low"], default_effort: "high" }] }} onClose={() => {}} onSaved={() => {}} />));
+  it("preserves existing Chat effort metadata when discovery updates context", async () => {
+    discovered = [{ id: "example-chat", context_window: 32000, efforts: ["low"], default_effort: "low" }];
+    act(() => root.render(<ProviderWizard existing={{ name: "chat", kind: "api", api: "chat", base_url: "https://api.example.com", model: "example-chat", has_key: true, models: [{ id: "example-chat", efforts: ["high"], default_effort: "high" }] }} onClose={() => {}} onSaved={() => {}} />));
     await flush();
+    await act(async () => button("获取模型列表")!.click());
     act(() => button("下一步")!.click());
-    type(document.body.querySelector<HTMLInputElement>('input[aria-label="example-chat 的上下文窗口"]')!, "32000");
     await act(async () => button("保存")!.click());
     expect(calls.find((c) => c.method === "PUT" && c.path.endsWith("/launchers/chat"))?.body).toMatchObject({
-      models: [{ id: "example-chat", context_window: 32000, efforts: ["low", "high"], default_effort: "high" }],
+      models: [{ id: "example-chat", context_window: 32000, efforts: ["high"], default_effort: "high" }],
     });
   });
 

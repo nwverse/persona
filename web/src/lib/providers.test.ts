@@ -87,7 +87,7 @@ describe("formProblems", () => {
     expect(formProblems(mismatch, true).models).toBe("");
     expect(formProblems({ ...mismatch, api: "messages" }, true).models).toMatch(/默认思考档位/);
     expect(formProblems({ ...mismatch, api: "responses" }, true).models).toMatch(/默认思考档位/);
-    expect(providerBody(mismatch, null).models).toEqual([{ id: "m1", efforts: ["low", "high"], default_effort: "high" }]);
+    expect(providerBody(mismatch, null).models).toEqual([{ id: "m1", efforts: ["low"], default_effort: "high" }]);
     expect(mismatch.models[0].efforts).toEqual(["low"]);
     // an unchecked duplicate does not count
     expect(formProblems(ready({ models: [formModel({ id: "m1" }), formModel({ id: "m1" }, false)] }), true).models).toBe("");
@@ -167,6 +167,20 @@ describe("probes", () => {
   it("tests with the default, else the first checked model", () => {
     expect(testModel(ready())).toBe("m1");
     expect(testModel(ready({ model: "", models: [formModel({ id: "a" }, false), formModel({ id: "b" })] }))).toBe("b");
+  });
+  it("keeps existing Chat effort metadata and drops only inconsistent new discovery metadata", () => {
+    const old = [formModel({ id: "a", efforts: ["high"], default_effort: "high" }), formModel({ id: "empty" })];
+    const found = [
+      { id: "a", context_window: 100, efforts: ["low"], default_effort: "low" },
+      { id: "empty", context_window: 200, efforts: ["low"], default_effort: "low" },
+      { id: "bad", context_window: 300, efforts: ["low"], default_effort: "high" },
+      { id: "good", context_window: 400, efforts: ["high"], default_effort: "high" },
+    ];
+    const merged = mergeDiscovered(old, found, true);
+    expect(merged[0]).toMatchObject({ context_window: "100", efforts: ["high"], default_effort: "high" });
+    expect(merged[1]).toMatchObject({ context_window: "200", efforts: [], default_effort: "" });
+    expect(merged[2]).toMatchObject({ context_window: "300", efforts: [], default_effort: "" });
+    expect(merged[3]).toMatchObject({ context_window: "400", efforts: ["high"], default_effort: "high" });
   });
   it("merges discovered models without losing what was typed", () => {
     const first = mergeDiscovered([], [{ id: "a", context_window: 200000 }, { id: "b" }]);

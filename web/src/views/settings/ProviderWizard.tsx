@@ -203,7 +203,7 @@ export function ProviderWizard({ existing, onClose, onSaved }: { existing: Provi
       const r = await api<{ models?: ProviderModel[]; error?: string }>("/launchers/discover", { method: "POST", json: probeBody(f, old?.name ?? null) });
       const list = r.models ?? [];
       setF((x) => {
-        const models = mergeDiscovered(x.models, list);
+        const models = mergeDiscovered(x.models, list, x.kind === "api" && x.api === "chat");
         return { ...x, models, model: x.model || models.find((m) => m.checked)?.id || "" };
       });
       setFound({ n: list.length, error: r.error });
