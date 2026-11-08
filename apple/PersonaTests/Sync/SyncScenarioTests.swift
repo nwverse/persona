@@ -27,7 +27,6 @@ struct SyncScenarioTests {
     /// Cases this harness cannot play yet, and cases that fail on a bug filed for them: the name and why. A case leaves
     /// the list when it passes (a known issue that no longer happens fails the test).
     nonisolated static let known: [String: String] = [
-        "relaunch_after_accept_before_transcript": "#1455: a sent message waiting for its transcript copy is not stored",
     ]
 
     @Test func everyFileHasCases() {
