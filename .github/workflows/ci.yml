@@ -111,6 +111,15 @@ jobs:
         env:
           CI_BASE_SHA: ${{ steps.auto_base.outputs.base }}
         run: python3 scripts/ci/paths.py --base "$CI_BASE_SHA"
+      - uses: actions/setup-python@v5
+        if: github.event_name == 'pull_request'
+        with:
+          python-version: '3.11'
+          cache: pip
+          cache-dependency-path: scripts/ci/requirements.txt
+      - name: Install automatic Python test dependencies
+        if: github.event_name == 'pull_request'
+        run: python3 -m pip install -r scripts/ci/requirements.txt
       - name: Automatic documentation and CI regression checks
         if: github.event_name == 'pull_request'
         run: |

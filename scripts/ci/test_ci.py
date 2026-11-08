@@ -103,6 +103,9 @@ class AutomaticWorkflowTests(unittest.TestCase):
                         'scripts/test/test_doc_paths.py', 'scripts/test/test_doc_go_paths.py',
                         "python3 -m unittest discover -s scripts/ci -p 'test_*.py'"):
             self.assertIn(command, gate)
+        dependencies = gate.index('run: python3 -m pip install -r scripts/ci/requirements.txt')
+        self.assertLess(dependencies, gate.index('python3 scripts/test/test_readme_languages.py'))
+        self.assertIn("python-version: '3.11'", gate)
         manual_gate = gate.split('- name: Verify selected manual platform results', 1)[1]
         self.assertIn("if: github.event_name == 'workflow_dispatch'", manual_gate)
         self.assertIn('run: python3 scripts/ci/required.py', manual_gate)
