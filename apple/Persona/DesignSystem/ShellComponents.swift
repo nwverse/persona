@@ -138,11 +138,10 @@ struct ShellSwitch<ChatMenu: View, WorkMenu: View>: View {
 
     /// The page's symbol on the rail, as its tab has in the old layout.
     private static func symbol(_ value: AppTab) -> String {
-        switch value {
-        case .chats: Theme.Icon.agents
-        case .feishu: Theme.Icon.feishuChats
-        default: Theme.Icon.ai
-        }
+        #if os(iOS) || os(visionOS)
+        if value == .feishu { return Theme.Icon.feishuChats } // a phone's tab only (no such tab on the Mac)
+        #endif
+        return value == .chats ? Theme.Icon.agents : Theme.Icon.ai
     }
 
     /// A segment of the side rail's switch: the page's symbol over its name, square, the pill (`PagerPill`) under the
