@@ -60,6 +60,8 @@ import { publishPlan } from "../../lib/plan-store";
 import { ChatContext, FreshWords, LiveClockContext, type ChatContextValue } from "./chat-context";
 import { backgroundLine, backgroundWaitLine, waitingOnWorkflow, workflowCalls, workflowCallsKey } from "../../lib/workflows";
 import { seekCall } from "./jump";
+import { navRailTicks } from "../../lib/nav-rail";
+import { NavRail } from "./NavRail";
 import { ChatLineView, closedRecap, closeRecap, OpenRecapLine } from "./Lines";
 import { useTranscript } from "./useTranscript";
 import { ArchiveCloseDialog, CloseAgentDialog, DeleteSessionDialog, ModeChips, RenameDialog, RenameSpaceDialog, SessionInfoDialog } from "./SessionDialogs";
@@ -681,6 +683,23 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
   const lastTasks = useRef<TaskIndex | undefined>(undefined);
   const tasks = useMemo(() => stableValue(lastTasks.current, buildTaskIndex(tr.items)), [tr.items]);
   lastTasks.current = tasks;
+  // the question rail (#1739): one tick per question of yours among the loaded lines — the model picks them, NavRail
+  // draws them in the side margin and this view jumps (only what is loaded counts; the rail never pages history in)
+  const railTicks = useMemo(() => navRailTicks(lines), [lines]);
+  const railJump = useCallback(
+    (lineId: string) => {
+      const sc = scroller.current;
+      const row = sc?.querySelector<HTMLElement>(`[data-line="${CSS.escape(lineId)}"]`)?.firstElementChild;
+      if (!sc || !(row instanceof HTMLElement)) return;
+      follow(false);
+      // the question lands a little under the top, its answer below it: the scroller only (scrollIntoView would also
+      // scroll an opening group's clipped box), and following stays off until the reader comes back to the end
+      clearTimeout(jumping.current);
+      jumping.current = window.setTimeout(() => (jumping.current = 0), 1200);
+      sc.scrollTo({ top: sc.scrollTop + row.getBoundingClientRect().top - sc.getBoundingClientRect().top - 12, behavior: scrollBehavior() });
+    },
+    [follow],
+  );
   // the subagents the agent is waiting on (#5602): running, launched in the foreground, their calls not answered yet
   const callsAnswered = useMemo(() => new Set(tr.items.filter((i) => i.kind === "tool_result" && i.tool_use_id).map((i) => i.tool_use_id!)), [tr.items]);
   const waitingOn = useMemo(() => (assistant ? null : agentsWorking(subagents, callsAnswered)), [assistant, subagents, callsAnswered]);
@@ -1061,6 +1080,8 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
           {!readOnly && <CommentMarks scroller={scroller} />}
           </ChatActionsContext.Provider>
         </div>
+        {/* the rail sits in the chat area's side margin; it renders nothing when the chat is narrow or short */}
+        <NavRail ticks={railTicks} scroller={scrollEl} onJump={railJump} reset={`${mid}/${sid}`} />
         {away && !jumpInDock && <JumpPill label={jumpLabel(newSince)} onClick={toEnd} />}
         {picked && !search.open && <ReturnPill onClick={backToOrigin} />}
       </div>
