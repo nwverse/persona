@@ -1,3 +1,4 @@
+<!-- Temporary single-runner documentation CI acceptance; do not merge. -->
 # Lessons: collaboration and process: multiple Agents changing the repo at once, commits, migration numbers, scripts
 
 Pitfalls, odd behavior and the trade-offs made at the time (formerly in `CLAUDE.md` ("Lessons"); index in `docs/lessons/README.md`). Put new lessons in the matching section; if none fits, start a new one.
