@@ -186,19 +186,38 @@ func (s *Service) importGroups(ctx context.Context, machine string) ([]importGro
 	if err != nil {
 		return nil, err
 	}
-	var known []knownProvider
-	for _, l := range s.storedLaunchers(ctx) {
-		if key, err := s.openKey(l.KeySealed); err == nil {
-			known = append(known, knownProvider{name: l.Name, baseURL: l.BaseURL, key: key})
-		}
+	s.models.mu.Lock()
+	stored, err := s.readStoredLaunchers(ctx)
+	s.models.mu.Unlock()
+	if err != nil {
+		return nil, err
+	}
+	known, err := s.knownProviders(stored)
+	if err != nil {
+		return nil, err
 	}
 	return mergeZshrcAliases(machine, aliases, known), nil
+}
+
+// knownProviders uses credentials already validated by readStoredLaunchers.
+func (s *Service) knownProviders(stored []storedLauncher) ([]knownProvider, error) {
+	known := make([]knownProvider, 0, len(stored))
+	for _, l := range stored {
+		m, err := s.openStoredLauncher(l)
+		if err != nil {
+			return nil, err
+		}
+		known = append(known, knownProvider{name: l.Name, baseURL: l.BaseURL, key: m.APIKey})
+	}
+	return known, nil
 }
 
 // importErr answers a failed launchers.zshrc: 404 for an unknown machine, 503 offline, 409 node_outdated.
 func importErr(w http.ResponseWriter, err error) {
 	var re *rpc.Error
 	switch {
+	case errors.Is(err, errManagedLaunchersRead):
+		apierr.Write(w, http.StatusInternalServerError, err)
 	case errors.Is(err, errNoSuchMachine):
 		apierr.Write(w, http.StatusNotFound, err)
 	case errors.Is(err, apierr.ErrOffline):
@@ -239,9 +258,16 @@ func (s *Service) sealImported(g importGroup, now time.Time) (storedLauncher, er
 func (s *Service) importLaunchers(ctx context.Context, groups []importGroup, names []string) (created, updated []string, err error) {
 	s.models.mu.Lock()
 	defer s.models.mu.Unlock()
-	list := s.storedLaunchers(ctx)
+	list, err := s.readStoredLaunchers(ctx)
+	if err != nil {
+		return nil, nil, err
+	}
+	known, err := s.knownProviders(list)
+	if err != nil {
+		return nil, nil, err
+	}
 	taken := map[string]bool{}
-	for _, v := range s.launcherViews(ctx) {
+	for _, v := range s.launcherViewsFrom(ctx, s.zshrcLaunchers(ctx, false), list) {
 		taken[v.Name] = true
 	}
 	now := time.Now().UTC()
@@ -251,6 +277,14 @@ func (s *Service) importLaunchers(ctx context.Context, groups []importGroup, nam
 			return nil, nil, i18n.Err("assistant-models_import.err_nothing_named", i18n.Args{"name": name})
 		}
 		g := groups[i]
+		// The preview may precede another mutation; match against today's checked snapshot.
+		g.Existing = ""
+		for _, k := range known {
+			if k.baseURL == g.BaseURL && k.key == g.key {
+				g.Existing = k.name
+				break
+			}
+		}
 		if g.Existing != "" {
 			j := slices.IndexFunc(list, func(l storedLauncher) bool { return l.Name == g.Existing })
 			if j >= 0 && mergeImportedModels(&list[j].Models, g.Models) {
@@ -270,10 +304,9 @@ func (s *Service) importLaunchers(ctx context.Context, groups []importGroup, nam
 		list = append(list, l)
 		created = append(created, l.Name)
 	}
-	if err := s.putSetting(ctx, launchersManagedKey, list); err != nil {
+	if err := s.storeManagedLaunchers(ctx, list); err != nil {
 		return nil, nil, err
 	}
-	s.pushManaged(ctx, "")
 	return created, updated, nil
 }
 
@@ -319,7 +352,11 @@ func (s *Service) launcherImportRoutes() {
 		}
 		created, updated, err := s.importLaunchers(ctx, groups, in.Providers)
 		if err != nil {
-			apierr.Write(w, http.StatusBadRequest, err)
+			status := http.StatusBadRequest
+			if errors.Is(err, errManagedLaunchersRead) {
+				status = http.StatusInternalServerError
+			}
+			apierr.Write(w, status, err)
 			return
 		}
 		apierr.WriteJSON(w, map[string]any{"created": nonNil(created), "updated": nonNil(updated)})
