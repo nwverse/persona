@@ -132,8 +132,12 @@ def main():
                     stop(fixture)
                 log = (directory / "app.log").read_text(errors="replace").replace(token, "<test credential>")
                 log = log.replace(urllib.parse.quote(token, safe=""), "<test credential>")
+                if output.exists():
+                    (output / "app.log").write_text(log)
                 if status != 0:
                     raise RuntimeError("Mac app failed: " + log[-3000:])
+                if not (output / "captures.json").is_file():
+                    raise RuntimeError("The app exited without a capture manifest: " + log[-3000:])
                 captures = json.loads((output / "captures.json").read_text())
                 expected = {(scene["name"], appearance, position) for scene in selected
                             for appearance in ("light", "dark") for position in (["top", "bottom"] if scene["bottom"] else ["top"])}

@@ -46,9 +46,18 @@ import SwiftUI
                   plan.extensionShowcase.allSatisfy({ $0.name.range(of: "^[a-z0-9_-]+$", options: .regularExpression) != nil })
             else { throw Failure.invalidPlan }
             try FileManager.default.createDirectory(at: output, withIntermediateDirectories: true)
-            await ExtensionSlots.shared.reload(for: plan.hub.absoluteString)
-            let available = Set(ExtensionSlots.shared.pages.filter { $0.owner == "showcase" }.map(\.id))
-            guard plan.extensionShowcase.allSatisfy({ available.contains($0.name) }) else { throw Failure.invalidPlan }
+            let deadline = ContinuousClock.now.advanced(by: .seconds(30))
+            var available: Set<String> = []
+            while ContinuousClock.now < deadline {
+                guard !NSApp.isActive else { throw Failure.focusChanged }
+                if ExtensionSlots.shared.available {
+                    await ExtensionSlots.shared.reload(for: plan.hub.absoluteString)
+                    available = Set(ExtensionSlots.shared.pages.filter { $0.owner == "showcase" }.map(\.id))
+                    if plan.extensionShowcase.allSatisfy({ available.contains($0.name) }) { break }
+                }
+                try await Task.sleep(for: .milliseconds(200))
+            }
+            guard plan.extensionShowcase.allSatisfy({ available.contains($0.name) }) else { throw Failure.notReady }
             isCapturing = true
             defer { isCapturing = false }
             var captures: [Capture] = []
