@@ -44,6 +44,9 @@ const (
 	errKindCLIOutdated = "cli_outdated"
 	errKindTimeout     = "timeout"
 	errKindOther       = "other"
+	// errKindUsageLimit: the subscription's usage limit is used up (LauncherHealth.ResetsAt, when known). Unusable until
+	// it resets, then checked again; never repaired: nothing on the machine is broken.
+	errKindUsageLimit = "usage_limit"
 	// errKindNotInTerminal: a start's new terminal tab could not run the launcher, or its claude (node/shellmiss.go,
 	// #1642): the terminal reads other startup files than the login shell the launchers are listed and checked in, so
 	// a check passing says nothing of it, and no repair the manager has reaches it. Blocked at once; a start with it
@@ -92,6 +95,9 @@ type LauncherHealth struct {
 	Repairs       int            `json:"repairs,omitempty"`
 	Repair        *LauncherFixed `json:"repair,omitempty"`
 	BlockedReason string         `json:"blocked_reason,omitempty"`
+	// ResetsAt: Kind is errKindUsageLimit and this is when the limit resets (read off the check's words when they name a
+	// time zone, or an agent's own record of the limit): the launcher counts as unusable until then, and no longer after.
+	ResetsAt *time.Time `json:"resets_at,omitempty"`
 }
 
 // LauncherFixed is the latest repair of a launcher.
