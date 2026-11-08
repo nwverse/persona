@@ -67,8 +67,14 @@ connector CLI calls first identify the assistant process and then check its sess
 The default assistant keeps `assistant-bin/` under the node's data directory; other assistant directories use `assistant-bins/<directory hash>/`, with that directory first on their process PATH.
 The node's `skills.list` accepts an optional `cwd`. Without it, the node uses the default assistant directory if it has been prepared; otherwise, if exactly one directory has been prepared, it uses that directory. With no prepared directories or several non-default ones, it still uses the default directory's empty connector list. No new configuration is required.
 
-Only the assistant gets these tools: node's inline-JSON MCP configuration includes `PERSONA_ASSISTANT=1`, `PERSONA_SESSION_ID=<chat id>`;
-`personad mcp` carries both to hub, which lists these tools only for assistant=true and forwards calls to the assistant (`assistant/tools.go`). Ordinary Agents in herdr can't see them.
+Only the assistant gets these tools: node's inline-JSON MCP configuration includes `PERSONA_ASSISTANT=1`, `PERSONA_SESSION_ID=<chat id>`, and `personad mcp` carries both to node.
+node does not take the flag on the server's word, because every process started with the assistant's environment repeats it. It forwards assistant=true only when
+the socket's peer process or one of its ancestors is an assistant process node runs (a chat, the warm spare, a Codex process before its thread exists), with that chat's session id,
+or a connected runtime that declared `caps.assistant`, with the session the request names when it can be one of that runtime's assistant chats ([runtimes.md](../integrations/runtimes.md) ("Assistant (optional)")).
+Where the system does not tell the peer process (Windows), the request must name a session node runs for the assistant, or an assistant chat of a connected runtime that declared `caps.assistant`;
+those ids cannot be guessed, but any process of the same user can read them from the assistant's command lines, so there the check stops only inherited environments. Any other request goes as an Agent's (`node/clicall.go` `mcpAssistantOf`).
+hub lists these tools only for assistant=true and forwards calls to the assistant (`assistant/tools.go`). Ordinary Agents in herdr can't see them, even with the assistant's environment;
+a program run under the assistant's own process (its Bash tool) counts as the assistant, as for `personad tool`, and so does an Agent in an engine whose server that shell started without detaching it.
 
 ## Boundary with hub (2026-11-04, #1446)
 
