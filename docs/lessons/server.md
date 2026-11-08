@@ -666,7 +666,8 @@ home volume (docs/operations/link.md "Without systemd").
 - **Resident node systemd units need the same PATH as hub**: local node formerly inherited hub unit `PATH=%h/.local/bin:…` as a child;
   separate `personad-node` used systemd's default PATH and missed herdr / claude in `~/.local/bin`. `node-launchd.sh` now writes the same PATH.
 - **Signal only the resident node's main process**: `systemctl --user kill -s HUP personad-node` defaults to the whole cgroup, sending SIGHUP to assistant claude and background commands too.
-  Use `--kill-whom=main` (`node-launchd.sh restart-idle`).
+  Use `--kill-who=main` (`node-launchd.sh restart-idle`): `--kill-whom=` is only systemd 252's new name, and systemd 241 / 245 reject it as an unknown option,
+  so the signal never goes out; deploy.sh ignores that failure, and the resident node stays on its old binary. Every version reads `--kill-who=`.
 - **During resident-node `exec`, `node --stdio` could take over the connection**: the socket file remains (`SetUnlinkOnClose(false)`) but refuses connections; old `Relay` interpreted this as no resident node,
   serving the connection itself and putting assistant chats back in hub's cgroup, killed on next restart. Now wait up to 8 s on refusal (`dialResident`).
 - **Shutdown "offline" broadcasts are false**: hub canceled ctx on SIGTERM, then disconnected machines broadcast offline `machines` and ended questions, so clients saw an offline cascade before disconnect.
