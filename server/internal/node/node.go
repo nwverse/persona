@@ -323,12 +323,7 @@ func (n *Node) Serve(ctx context.Context, r io.Reader, w io.Writer) error {
 		adopted = n.keeper.adopt(n)
 	}
 	n.startState(ctx, adopted)
-	ln, err := n.listenHookSocket(ctx)
-	if err != nil {
-		n.logger.Printf("hook socket: %v", err)
-	} else {
-		defer ln.Close()
-	}
+	// The runtimes before the hook socket: its MCP requests read n.runtimes, which attach sets (clicall.go mcpAssistantOf).
 	if rh := n.runtimeHost; rh != nil { // a resident node's: runtimes stay connected across hub connections
 		rh.attach(n)
 		defer rh.detach(n)
@@ -336,6 +331,12 @@ func (n *Node) Serve(ctx context.Context, r io.Reader, w io.Writer) error {
 		n.logger.Printf("runtime socket: %v", err)
 	} else {
 		defer rh.detach(n)
+	}
+	ln, err := n.listenHookSocket(ctx)
+	if err != nil {
+		n.logger.Printf("hook socket: %v", err)
+	} else {
+		defer ln.Close()
 	}
 	go n.startWhenConfigured(ctx) // polling and the engine's events, once the hub said which engine (engine.go)
 	go n.warmTranscripts(ctx)
