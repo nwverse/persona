@@ -11,7 +11,7 @@ This document has three parts:
 - **III. Migration order**, **IV. Decisions**.
 
 The process and history (why it was split this way, acceptance for each step) are in `docs/plans/plan-connectors.md`; Telegram is in `docs/archive/extensions/plan-telegram.md` (an extension since 2026-11-05, #1704; code in `nwverse/persona-extensions`, #2057).
-Planned Discord support (the user's own bot, extension, #2828) is in `docs/plans/plan-discord.md`.
+Planned Discord support (the user's own bot, extension, #917) is in `docs/plans/plan-discord.md`.
 
 ## I. Current structure (v1)
 

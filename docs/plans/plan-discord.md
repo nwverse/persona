@@ -1,6 +1,7 @@
 # Plan: Discord connector (the user's own bot)
 
-Status: design settled, work started (2026-11-05, #2828). Discord is a **connector** (a data source: knowledge base, Inbox, assistant tools), not a channel (an entry point for talking to Persona, `docs/extensions/channels.md`);
+Status: design settled (2026-11-05), D1 in progress. Tracking issue: #917 (#2828 before the 2026-11-08 repository rebuild); #1106, #1426, #1730 and #2057 below refer to the history before that rebuild.
+Discord is a **connector** (a data source: knowledge base, Inbox, assistant tools), not a channel (an entry point for talking to Persona, `docs/extensions/channels.md`);
 making the same bot a channel too is a separate issue. The first version is **read-only**. The framework is in `docs/extensions/connectors.md` (capability list, Inbox, knowledge base, gates) and `docs/protocol/connector-protocol.md` (protocol v2);
 extension manifest, permissions and sandbox are in `docs/extensions/extensions.md`. This doc only covers what is specific to Discord. The code lives in the public extension repository `nwverse/persona-extensions` (`extensions/discord/`), like Telegram (#2057).
 When done, the design is merged into `docs/extensions/connectors.md` and this file moves to `docs/archive/`.
@@ -23,6 +24,8 @@ So Persona's Discord = **server channels your own bot can see** + **messages you
 
 - `extensions/discord/` in the extension repository, written in Go, using `disgoorg/disgo` as the Discord client (supports API v10, user-installed apps, and message search; not 1.0 yet, so the version is pinned in `go.mod`).
 - A process extension on the hub (`runtime`) contributing one connector, called by the hub over the plugin protocol (`server/internal/connector/proc`), like Telegram.
+  A Go program is still how a new extension ships (the extension repository's development guide, "Add a program extension"). A TypeScript source profile for the isolated runtime
+  (`docs/archive/extensions/source-extension-migration-2026-11-07.md`) waits for controlled outbound WebSocket support (#1166), because the Gateway is a WebSocket; polling REST instead of the Gateway is not a substitute.
 - Uses only HTTPS (REST, CDN) and WSS (Gateway), so it **can run in the sandbox** (Telegram's MTProto is TCP and can't): `permissions.network` lists Discord's domains, and outbound traffic goes through the hub's egress proxy.
 - Doesn't run on a node: programs on a node can't call hub methods (`docs/extensions/extensions.md` ("Programs that run on a computer")), so they can't be connectors.
 
@@ -137,7 +140,7 @@ The parts of Discord's Developer Policy and Developer Terms that concern us:
 
 ## Steps
 
-One PR per step; PRs in the extension repository write `Refs nwverse/persona#2828`:
+One PR per step; PRs in the extension repository write `Refs nwverse/persona#917`:
 
 | Step | What |
 | --- | --- |
@@ -160,4 +163,4 @@ This repository: this plan (the first PR); one row in the table in `docs/extensi
 2. People in the knowledge base: archive chats only, don't create people from Discord senders (Developer Policy §16). The extension just doesn't send `sender_id` / `sender_handles`; no toggle is added to the knowledge base.
 3. Edits and deletions: not synced in the first version; rely on the existing "Delete stored knowledge base content"; syncing deletions is for later.
 4. The first version is read-only; sending as the bot is decided later.
-5. Where: the plan and tracking issue live in this repository (#2828), the code in `nwverse/persona-extensions`.
+5. Where: the plan and tracking issue live in this repository (#917), the code in `nwverse/persona-extensions`.
