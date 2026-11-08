@@ -82,7 +82,8 @@ The Gateway (from D3) asks for `GUILDS`, `GUILD_MESSAGES` and `MESSAGE_CONTENT` 
   A message that can't be decoded is left out (paging goes by what Discord answered, so it never ends a read early); a page with none that can is not read past.
 - **First time**: backfill `history_days` days (default 30) per channel, at most 500 messages per channel; `GET /channels/{id}/messages?before=` returns 100 per page.
   Threads are backfilled if active, or archived within that window: each channel's archived threads are listed when its last listing is older than 50 minutes (a thread archives after an hour of quiet at the earliest),
-  the first time over the window, then since an hour before its last listing. A listing goes a page per call and is kept per channel in the cursor (when it started, how far back it got); it moves back past a thread only once that thread was read,
+  the first time over the window, then since an hour before its last listing. A listing goes a page per call and is kept per channel in the cursor (when it started, how far back it got); it moves back past a thread once that thread was read
+  (a thread held back for failing, being refused or showing nothing is kept as owed in the cursor and read on its own, so it never stops its channel's listing),
   so a server joined later is listed over the window, a listing the hub could not keep is done again, a channel that can't be listed now holds up only itself, and a large forum costs a request per call rather than its whole list again each call.
   An archived thread that shows nothing (its messages deleted: the listing itself needs "Read Message History") gets its position anyway.
   Archived private threads are not read: Discord lists them only to moderators.
@@ -129,8 +130,8 @@ D3's "Send to Persona" messages wait in the data directory until a later cursor 
 | `discord_search` | Search messages in a server (`GET /guilds/{id}/messages/search`); while Discord is still indexing (returns 202), says so and points the assistant at the knowledge base, which has the archived messages (the extension does not ask for `kb.read` to search it itself) |
 
 Tool descriptions and parameter docs live in the extension's own `prompts/mcp/` (the rules in `docs/assistant/prompts.md`). Message content is treated as untrusted data (prompt injection); tool results carry no tokens and no user ids.
-Each message is one line that starts with its time; the place (a thread's name is anyone's words) and the sender's display name are quoted with "(the user)" outside the quotes, and a message's further lines are indented,
-so neither a name nor a message's text can pass for the user or for another message. The tools' notes (attachments, replies) are English; the archive's follow the user's language.
+Each message starts with a line of its time, place, sender and id; the place (a thread's name is anyone's words) and the sender's display name are quoted with "(the user)" outside the quotes, what it says follows on indented lines,
+and server, channel and thread names stay on one line everywhere, so neither a name nor a message's text can pass for the user or for another message. The tools' notes (attachments, replies) are English; the archive's follow the user's language.
 `discord_messages` reads any conversation the bot may read, archived threads and forum posts too (a search finds them; discovery lists only active ones).
 
 ## Conversation page
