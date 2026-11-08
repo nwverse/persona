@@ -41,6 +41,14 @@ const (
 	titleFallback = "探索"
 )
 
+// What one naming may spend: each model call, the whole naming (reading the first exchange too) and the reply's room.
+// Tests shorten the times.
+var (
+	titleCallTimeout = 15 * time.Second
+	titleBudget      = time.Minute
+	titleMaxTokens   = 200
+)
+
 // Who named a conversation.
 const (
 	titlePending = "pending" // started by the hub, named when its first turn ends
@@ -249,7 +257,7 @@ func (s *Service) titleAfterTurn(ctx context.Context, machine, id string) {
 	started := t.Started
 	b.mu.Unlock()
 
-	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), time.Minute)
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), titleBudget)
 	defer cancel()
 	first, reply := s.firstExchange(ctx, machine, id)
 	title := s.makeTitle(ctx, started, first, reply)
@@ -304,9 +312,9 @@ func (s *Service) makeTitle(ctx context.Context, started time.Time, first, reply
 		retry, max := "", titleTopicMax(locale)
 		system := prompts.RenderSessionTitle(prompts.SessionTitle{Language: answerLanguage(locale), TopicMax: max})
 		for range 2 {
-			cctx, cancel := context.WithTimeout(ctx, 15*time.Second)
+			cctx, cancel := context.WithTimeout(ctx, titleCallTimeout)
 			text, err := s.purposeModel("assistant.title").Complete(cctx, system,
-				prompts.RenderSessionTitleInput(prompts.SessionTitleInput{First: first, Reply: reply, Retry: retry}), 200)
+				prompts.RenderSessionTitleInput(prompts.SessionTitleInput{First: first, Reply: reply, Retry: retry}), titleMaxTokens)
 			cancel()
 			if err != nil {
 				if !ai.IsPaused(err) {
