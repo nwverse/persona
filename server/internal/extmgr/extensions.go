@@ -96,7 +96,8 @@ type ExtensionView struct {
 // ExtensionAttached is how an attached extension is connected (docs/extensions/extensions.md "Attached extensions").
 type ExtensionAttached struct {
 	Online bool `json:"online"`
-	// Since is when it came online or went offline (none while it is switched off or nothing needs it).
+	// Since is when it came online or went offline (none while it is switched off or nothing needs it), in the user's
+	// zone.
 	Since time.Time `json:"since,omitzero"`
 	// Error is why it is offline, also while its status is still starting.
 	Error string `json:"error,omitempty"`
@@ -347,6 +348,9 @@ func (ps *extensions) view(ctx context.Context, p *extension.Extension) Extensio
 		if hp != nil && hp.proc != nil && v.Status != host.StateStopped { // stopped: nothing needs it, so not connected
 			link := hp.proc.Link()
 			v.Attached.Online, v.Attached.Since = link.Online, link.Since
+			if !link.Since.IsZero() {
+				v.Attached.Since = link.Since.In(ps.h.userLocation()) // `extension list` prints it as it comes
+			}
 			if !link.Online {
 				v.Attached.Error = i18n.ExtensionStatusText(l, link.Why)
 			}

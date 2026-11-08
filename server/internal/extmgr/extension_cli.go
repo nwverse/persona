@@ -544,7 +544,7 @@ func attachedLine(a *ExtensionAttached, withError bool) string {
 		line = "；独立运行，在线"
 	}
 	if !a.Since.IsZero() {
-		line += "（自 " + a.Since.Local().Format("01-02 15:04:05") + "）"
+		line += "（自 " + a.Since.Format("01-02 15:04:05") + "）"
 	}
 	if withError && a.Error != "" {
 		line += "：" + a.Error

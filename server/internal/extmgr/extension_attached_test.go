@@ -78,6 +78,7 @@ func shortHostTimings(t *testing.T) {
 func TestAttachedExtensionView(t *testing.T) {
 	shortHostTimings(t)
 	h, _, _ := marketHub(t)
+	h.opts.Timezone = func() string { return "Asia/Tokyo" }
 	reg := h.extensions.reg
 	ctx := t.Context()
 	dir, err := os.MkdirTemp("/tmp", "att-") // a unix socket path stays short
@@ -110,6 +111,9 @@ func TestAttachedExtensionView(t *testing.T) {
 	v := waitStatus(host.StateRunning)
 	if a := v.Attached; a == nil || !a.Online || a.Since.IsZero() || a.Error != "" || a.Version != "" {
 		t.Fatalf("online: %+v", a)
+	}
+	if loc := v.Attached.Since.Location().String(); loc != "Asia/Tokyo" {
+		t.Fatalf("since in %s, not the user's zone", loc)
 	}
 	if hp := h.extensions.get("example-notes"); !hp.proc.Spec().Attached {
 		t.Fatal("the host is not told it is attached")
@@ -207,7 +211,7 @@ func TestAttachedNeverUpgradesItself(t *testing.T) {
 }
 
 func TestAttachedLine(t *testing.T) {
-	since := time.Date(2025, 1, 2, 10, 42, 0, 0, time.Local)
+	since := time.Date(2025, 1, 2, 10, 42, 0, 0, time.FixedZone("", 9*3600)) // printed in its own zone, not this machine's
 	for _, tt := range []struct {
 		a         *ExtensionAttached
 		withError bool
