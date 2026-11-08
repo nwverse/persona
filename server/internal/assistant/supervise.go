@@ -887,6 +887,12 @@ func (s *Service) toolTaskReview(ctx context.Context, self string, args json.Raw
 		Verdict string        `json:"verdict"`
 		Checks  []ReviewCheck `json:"checks"`
 		Note    string        `json:"note"`
+		// The conclusion card's (conclusion.go): accepted's outcome (done, or cannot be done), its one sentence of why and
+		// its one link; needs_user's recommended option.
+		Outcome   string `json:"outcome"`
+		Reason    string `json:"reason"`
+		Link      string `json:"link"`
+		Recommend string `json:"recommend"`
 	}
 	if err := json.Unmarshal(args, &a); err != nil {
 		return "", fmt.Errorf("arguments: %v", err)
@@ -896,6 +902,11 @@ func (s *Service) toolTaskReview(ctx context.Context, self string, args json.Raw
 	case reviewAccepted, reviewRework, reviewNeedsUser, reviewCancelled:
 	default:
 		return "", fmt.Errorf("verdict must be accepted, rework, needs_user or cancelled")
+	}
+	switch a.Outcome = strings.TrimSpace(a.Outcome); a.Outcome {
+	case "", outcomeDone, outcomeCannot:
+	default:
+		return "", fmt.Errorf("outcome must be done or cannot")
 	}
 	if a.Verdict == reviewRework && a.Note == "" && !slices.ContainsFunc(a.Checks, func(c ReviewCheck) bool { return !c.Met }) {
 		return "", fmt.Errorf("rework: say what is missing (a check that is not met, or note)")
@@ -968,33 +979,67 @@ func (s *Service) toolTaskReview(ctx context.Context, self string, args json.Raw
 	}
 	b.mu.Unlock()
 	_, _ = s.appendFeed(ctx, t.Origin, feedReview, t.ID, reviewFeedBody{Title: t.Title, Verdict: verdict, Round: v.Round, Note: note, Checks: checks})
+	if verdict != reviewNeedsUser && verdict != reviewAccepted {
+		s.dropDecision(ctx, t.ID) // the review moved on: a decision still waiting on the owner is over (conclusion.go)
+	}
+	conclusion := conclusionInput{Outcome: cmp.Or(a.Outcome, outcomeDone), Reason: a.Reason, Link: a.Link, Note: note, Checks: checks}
 	switch verdict {
 	case reviewAccepted, reviewCancelled:
 		reason := cmp.Or(clip(oneLine(note), 80), "验收通过")
 		if verdict == reviewCancelled {
 			reason = "取消：" + cmp.Or(clip(oneLine(note), 80), "不做了")
 		}
+		carded := false
 		if t.DoneAt == nil {
 			closed, err := s.reviewDoneTodo(ctx, t.ID, reason, verdict == reviewAccepted)
 			if err != nil {
 				return "", err
 			}
-			if closed {
+			switch {
+			case closed && ledger && verdict == reviewAccepted:
+				// The conclusion is the one push about it: its card, not a line in the task report (#1226).
+				s.dropTaskReport(t.ID)
+				if cur, ok := s.todoNow(t.ID); ok {
+					carded = s.askConclusion(ctx, cur, conclusion)
+				}
+			case closed:
 				s.taskClosedReport(t, reason) // the bot's task report says it is closed, as for the judge's (reports.go)
 			}
 		}
 		if verdict == reviewCancelled {
 			return fmt.Sprintf("Task %s is cancelled and closed; its agent is closed once it stays still. Tell the user only if they need to know.", t.ID), nil
 		}
+		if carded {
+			return fmt.Sprintf("Task %s is accepted and closed; its agent is closed once it stays still. Its conclusion card (the verdict, "+
+				"why in a sentence, the link) went to the user in Lark: don't push the result again. Hand out or schedule anything that "+
+				"follows (deploy, TestFlight, closing an issue).", t.ID), nil
+		}
 		return fmt.Sprintf("Task %s is accepted and closed; its agent is closed once it stays still. Tell the user the result in a line or two "+
 			"if they are waiting for it, and hand out or schedule anything that follows (deploy, TestFlight, closing an issue).", t.ID), nil
 	case reviewNeedsUser:
+		conclusion.Outcome, conclusion.Recommend = outcomeDecide, a.Recommend
+		if over && a.Reason == "" { // the note is the rework asked for, written to the agent: not the owner's question
+			conclusion.Reason, conclusion.Note = i18n.T(s.botLang(ctx), "assistant-reports.verdict_over", i18n.Args{"rounds": maxReworkRounds}), ""
+		}
+		if s.askConclusion(ctx, t, conclusion) {
+			said := "a card with what they are to decide went to them in Lark, and their answer goes to the task's agent"
+			if conclusion.Recommend != "" {
+				said = "a card with what they are to decide and your recommendation went to them in Lark; \"OK\" takes the " +
+					"recommendation, and their answer goes to the task's agent"
+			}
+			if over {
+				return fmt.Sprintf("Task %s was sent back %d times already: it now waits for the user (needs_user): %s. Don't ask them "+
+					"again; review it once the agent stops.", t.ID, maxReworkRounds, said), nil
+			}
+			return fmt.Sprintf("Task %s waits for the user: %s. Don't ask them again; review it once the agent stops.", t.ID, said), nil
+		}
 		if over {
 			return fmt.Sprintf("Task %s was sent back %d times already: it now waits for the user (needs_user). Tell the user what is "+
-				"still missing and ask how to go on (ask_user or in your answer); review it again once they decide.", t.ID, maxReworkRounds), nil
+				"still missing and ask how to go on (ask_user or in your answer); review it again once they decide (that also ends the decision "+
+				"the briefing lists for it).", t.ID, maxReworkRounds), nil
 		}
 		return fmt.Sprintf("Task %s waits for the user. Ask them (ask_user, or in your answer, pushed with notify_user if they are away); "+
-			"review it again once they decide.", t.ID), nil
+			"review it again once they decide (that also ends the decision the briefing lists for it).", t.ID), nil
 	}
 	text := prompts.RenderSuperviseRework(prompts.SuperviseRework{Round: v.Round, Max: maxReworkRounds, Checks: reworkChecks(checks), Note: note})
 	sent, err := s.sendToTask(ctx, t, text)

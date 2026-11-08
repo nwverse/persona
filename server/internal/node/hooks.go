@@ -189,6 +189,10 @@ func (n *Node) serveSock(ctx context.Context, c net.Conn) {
 	case "mcp.call":
 		var res proto.ToolResult
 		sid := n.mcpCaller(req.Name, req.SessionID, req.Pane, req.Assistant)
+		if req.Name == toolMailSaveAttachment { // writes on this machine (mailattachment.go)
+			resp = n.saveMailAttachment(ctx, req.Args, sid, req.Assistant, req.Guest || n.guestOf(sid) != nil)
+			break
+		}
 		if err := n.peer.Call(ctx, "mcp.call", map[string]any{"name": req.Name, "args": req.Args, "session_id": sid,
 			"assistant": req.Assistant, "guest": req.Guest || n.guestOf(sid) != nil}, &res); err != nil {
 			res = proto.TextResult("Persona hub error: "+err.Error(), true)
@@ -527,7 +531,7 @@ func reportedEvent(in hookInput) bool {
 // takesReport says whether an event from a global report-only hook is for the hub and the counters. A session Persona
 // started or the assistant reports through its own hooks (hooksplugin.go), so it is not taken twice. A report-only
 // event never binds a pane (a claude that a tmux server started inherits the pane's variable without being in it, and
-// would take the pane from the claude that is; the node finds the session of a pane by itself, sessions.go).
+// would take the pane from the claude that is; the node finds the session of a pane by itself, panes_bind.go).
 func (n *Node) takesReport(in hookInput) bool {
 	if !validID(in.SessionID) || !reportedEvent(in) {
 		return false
