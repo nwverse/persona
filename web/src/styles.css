@@ -192,6 +192,11 @@ body {
 /* The least a sidebar agent row's title keeps behind a tab's or an agent's name (Sidebar ROW_TITLE_MIN): about 4.5
    characters of its 13px text, at the page's text size. */
 :root { --row-title-min: calc(13px * 4.5 * var(--text-scale, 1)); }
+/* Sidebar rows (#1647): a minimum height and a fixed line, not the text's own height, so a row is as tall in every
+   language and script. 32px is the desktop sidebar row (macOS medium 28 + the web's larger 13px text); fingers get 44
+   (touch-hit / min-h-11). */
+:root { --sidebar-row: 32px; --sidebar-row-pad: 4px; }
+@utility sidebar-row { min-height: var(--sidebar-row); padding-block: var(--sidebar-row-pad); line-height: 18px; }
 /* The machine page's load chart (iOS MetricColor.load): its own hue, apart from CPU / memory / network. */
 :root { --chart-load: #e87ba4; }
 .dark { --chart-load: #d55181; }

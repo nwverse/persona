@@ -7438,6 +7438,45 @@ if os.environ.get("MOCK_SUBAGENT_PARALLEL") == "1":
     mock_subagent_parallel()
 
 
+# MOCK_REPORT_FOLD=1: subagents' reports read as one line until opened: a foreground subagent's result (a heading
+# first), a background one's notice, and that one's report again as another session's message (its handback, by its
+# type, as an older node shows it); a real peer's message stays whole.
+REPORTS = "a1f3c2d4-0000-4000-8000-0000000c1e07"
+
+
+def mock_report_fold():
+    report = ("## 结算回归：42 个用例全部通过\n\n- 下单、改地址、用优惠券三条主流程都过了。\n- 用时 1 分 48 秒，比上次快 20 秒。\n"
+              "- 没有新增的不稳定用例。")
+    bg = ("搜索和筛选的回归跑完了：120 个用例里 118 个通过，2 个失败都在价格筛选，原因是测试数据里两件下架商品没有价格。"
+          "已经在 fixtures 里补上价格，重跑后全部通过。\n\n改动：`e2e/fixtures/products.json`。")
+    _r = [it("user", "text", 12, text="把结算和搜索的回归拆给子 Agent 跑")]
+    _r += tool("Agent", {"description": "回归：结算流程", "subagent_type": "general-purpose", "prompt": "跑结算流程的回归用例，失败的列出来"},
+               report + "\nagentId: rfdone (use SendMessage with to: 'rfdone' to continue this agent)", 11)
+    _done = _r[-2]["tool_use_id"]
+    _r += tool("Agent", {"description": "回归：搜索和筛选", "subagent_type": "Explore", "prompt": "跑搜索和筛选的回归用例", "run_in_background": True},
+               "Async agent launched successfully.\nagentId: rfbg (This is an internal ID for your use)", 10.5)
+    _bg = _r[-2]["tool_use_id"]
+    _r.append(it("assistant", "text", 10, text="结算的回归跑完了，搜索和筛选的在后台跑。"))
+    _r.append(it("system", "notice", 4, text="Agent \"回归：搜索和筛选\" completed",
+                 task={"kind": "agent", "status": "completed", "title": "回归：搜索和筛选", "task_id": "rfbg", "tool_use_id": _bg, "detail": bg}))
+    _r.append(it("user", "text", 3.9, text=bg, **{"from": "Explore"}))
+    _r.append(it("user", "text", 3.5, text="发版分支已经切好了，可以开始回归。", **{"from": "release-bot"}))
+    _r.append(it("assistant", "text", 3, text="两块回归都过了：结算 42 个全过；搜索和筛选补了测试数据后全过。"))
+    ITEMS[REPORTS] = _r
+    sub = lambda i, desc, use, **kw: {"id": i, "session_id": REPORTS + "@" + i, "type": kw.pop("type", "general-purpose"), "description": desc,
+                                      "tool_use_id": use, "running": False, "started_at": ago(minutes=kw.pop("at", 11)), **kw}
+    ITEMS[REPORTS + "@rfdone"] = [it("user", "text", 11, text="跑结算流程的回归用例，失败的列出来"), it("assistant", "text", 10.8, text=report)]
+    ITEMS[REPORTS + "@rfbg"] = [it("user", "text", 10.5, text="跑搜索和筛选的回归用例"), it("assistant", "text", 4, text=bg)]
+    SESSIONS.append(sess("macbook", REPORTS, "回归报告", "/Users/me/code/shop-web", "done", "unread", "shop-web", 7, "reports", 1, 3,
+                         "两块回归都过了。", subagents=[
+                             sub("rfdone", "回归：结算流程", _done, steps=3, updated_at=ago(minutes=10.8)),
+                             sub("rfbg", "回归：搜索和筛选", _bg, at=10.5, type="Explore", background=True, steps=5, updated_at=ago(minutes=4))]))
+
+
+if os.environ.get("MOCK_REPORT_FOLD") == "1":
+    mock_report_fold()
+
+
 # MOCK_WORK_GROUPS=1: one finished conversation with every way a work group reads (#1963, web): a short run (five steps
 # or fewer, an empty thought and one with words, a command with and without a description), a long run with an edit
 # and its diff, one that only read and searched, a delivered report between two steps (it stays out of the fold), and
@@ -9200,9 +9239,10 @@ MOCK_TREE = {
     "notes.txt": "Remember to water the plants.\n",
 }
 MOCK_REPO = "code/weather"
-# MOCK_REVIEW=1 (#151): git/review answers for this checkout (mock_review.py), with the files its review shows on disk
-REVIEW = bool(os.environ.get("MOCK_REVIEW"))
-if REVIEW:
+# MOCK_REVIEW=1 (#151): git/review answers for this checkout (mock_review.py), with the files its review shows on disk.
+# Not `REVIEW`: that is the PR #42 review agent's session id, which later code (MOCK_AGENT_LIVE, MOCK_IMAGES…) still uses.
+GIT_REVIEW = bool(os.environ.get("MOCK_REVIEW"))
+if GIT_REVIEW:
     sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
     import mock_review
     for _k, _v in {"/Sources/App/Forecast.swift": mock_review.FORECAST_NEW, "/Sources/App/Units.swift": "import Foundation\n\nlet celsius = UnitTemperature.celsius\n",
@@ -9489,7 +9529,7 @@ def mock_files(p, q):
     parts = p.split("/")
     if not (p.startswith("/api/v1/machines/") and len(parts) >= 6): return None
     mid, what = parts[4], "/".join(parts[5:])
-    if what not in ("file", "fs", "fs/find", "git/status", "git/diff", "git/show", "git/log", "git/branches", "git/pr") and not (what == "git/review" and REVIEW): return None
+    if what not in ("file", "fs", "fs/find", "git/status", "git/diff", "git/show", "git/log", "git/branches", "git/pr") and not (what == "git/review" and GIT_REVIEW): return None
     if not machine_online(mid): return {"error": "%s: machine is offline" % mid}, 503
     arg = lambda k: (q.get(k) or [""])[0]
     if what == "fs/find":  # #2438: every file under cwd, shallow first (the node's walk / git ls-files)
@@ -12769,7 +12809,7 @@ class H(BaseHTTPRequestHandler):
             git = (q.get("git") or [""])[0] == "1"
             if git: FS_STATE["dirty"] += 1
             return self.send_json({"ok": True, "sent": fs_changed(mid, [path] if add else [], git), "path": path})
-        if p == "/mock/review" and REVIEW:
+        if p == "/mock/review" and GIT_REVIEW:
             return self.send_json(mock_review.control(q))
         if p == "/mock/git-write" and os.environ.get("MOCK_GIT_WRITE"):
             global GIT_W

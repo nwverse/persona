@@ -1,6 +1,6 @@
 // Settings › Claude Code › Live replies (#1309; docs/integrations/claude-integration.md "Live replies (MessageDisplay)"):
-// whether the Claude sessions Persona starts on a computer send their replies as Claude writes them. The web draws
-// them; the phone apps get them too but only draw them from a later version, so the copy promises the web only. It
+// whether the Claude sessions Persona starts on a computer send their replies as Claude writes them. The web and the
+// iPhone and Mac apps draw them (docs/apple/ios.md "An agent's live reply"), so the copy promises those. It
 // costs that computer's terminal something (a reply shows a few lines at a time instead of word by word), so it is a
 // switch per machine, on by default. GET / PUT /api/v1/machines/{mid}/claude-live-replies {"on"}; the hub keeps
 // it and tells the node at once. A change reaches the sessions started after it; a running one keeps what it started

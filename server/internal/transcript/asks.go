@@ -29,12 +29,12 @@ var (
 	askMarkdown = strings.NewReplacer("**", "", "__", "", "`", "", "~~", "")
 	askListMark = lazyre.New(`^\s*(?:[-*+>#]+|\d+[.)、])\s*`)
 	// Sentences that say nothing is asked ("没有需要你拍板的问题").
-	askNone = lazyre.New(`没有(?:需要你|要你|什么要你)|不需要你|无需你|nothing (?:for you|needs you)|no (?:questions|decisions?) for you`)
+	askNone = lazyre.NewGated(`没有(?:需要你|要你|什么要你)|不需要你|无需你|nothing (?:for you|needs you)|no (?:questions|decisions?) for you`)
 	// Inline code and links are no prose: "the `user?.name` crash", "…/pull/9?w=1" ask nothing (shield).
-	askInline = lazyre.New("`[^`\n]*`|https?://\\S+")
+	askInline = lazyre.NewGated("`[^`\n]*`|https?://\\S+")
 	// Sayings that hand a decision to the user, matched on a lower-cased sentence. Only whole sayings: 要我 alone is in
 	// "需要我们", 告诉我 in "日志告诉我们", 你想 in "如果你想看细节"; a sentence that ends in 吗 is a question anyway.
-	askPhrases = lazyre.New(`要不要|是否(?:需要|要|继续|同意|可以)|你(?:来定|定一下|决定一下|看要不要|看行不行|看怎么样|选一个|选一下)|` +
+	askPhrases = lazyre.NewGated(`要不要|是否(?:需要|要|继续|同意|可以)|你(?:来定|定一下|决定一下|看要不要|看行不行|看怎么样|选一个|选一下)|` +
 		`请(?:确认|选择|决定|告诉我|回复|指示)|告诉我(?:你|一下|要|用|选)|回我一下|你回我|跟我说一声|和我说一声|你(?:选定|定了|确认|同意)(?:后|以后|之后)|` +
 		`选定后|等你(?:决定|确认|回复|拍板)|选哪|哪个方案|哪种方案|` +
 		`\bshould i\b|\bshall i\b|\bdo you want\b|\bwould you like\b|\bwant me to\b|\blet me know\b|\bwhich (?:one|option|approach) (?:do|would|should)\b|` +
