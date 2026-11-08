@@ -230,4 +230,44 @@ struct AgentLiveReplyTests {
         #expect(model.chat(agent).liveIsAgents && model.chat(agent).liveText == "Line 1.\n")
         #expect(!model.chat(main).liveIsAgents && model.chat(main).liveText == "The answer so far")
     }
+
+    /// Leaving an agent's chat ends its subscription, and the `""` that ends the live text then goes to no one; the hub
+    /// sends the live text again only while a message is being written. Kept, the words before a tool came back under a
+    /// later message of the turn when the chat was opened again (only the latest message and the one before are matched).
+    @Test func leavingTheChatForgetsItsLiveText() async throws {
+        let model = AppModel()
+        model.applySessions([MachineRef(group: "", id: "box"): [try session("agent", assistant: false)]])
+        let key = SessionKey(machineID: "box", sessionID: "agent"), owner = UUID()
+        func backlog(_ items: [Item]) {
+            model.handle(.items(key, items, backlog: true, hasMore: false, span: ItemSpan(history: "h", from: nil, to: items.last?.seq ?? 0),
+                                moreAfter: false), group: "")
+        }
+        func settled() async {
+            for _ in 0..<400 where model.chat(key).isRebuilding { try? await Task.sleep(for: .milliseconds(5)) }
+        }
+        model.subscribe(key, by: owner)
+        let prompt = item(1, .text, role: "user", text: "Fix the build.")
+        backlog([prompt])
+        await settled()
+        model.handle(.delta(key, text: "Let me check the config."), group: "")
+        await settled()
+        #expect(model.chat(key).liveText == "Let me check the config.")
+        model.unsubscribe(key, by: owner)
+        #expect(model.chat(key).liveText.isEmpty, "gone with the subscription")
+        model.handle(.delta(key, text: "Let me check the config.\nThen the imports."), group: "") // crossed the unsubscribe
+        // The turn went on meanwhile; opening the chat again brings it in the subscription's backlog.
+        model.subscribe(key, by: owner)
+        backlog([prompt, item(2, .text, text: "Let me check the config."), item(3, .toolUse, tool: "t1"),
+                 item(4, .toolResult, role: "user", text: "ok", tool: "t1"), item(5, .text, text: "Now let me fix the import."),
+                 item(6, .toolUse, tool: "t2"), item(7, .toolResult, role: "user", text: "ok", tool: "t2"),
+                 item(8, .text, text: "Done: the build passes.")])
+        try? await Task.sleep(for: .milliseconds(300)) // past the pacer's timer
+        await settled()
+        #expect(model.chat(key).liveText.isEmpty, "no old words under the newest message")
+        // A message still being written: the hub sends it again after the backlog, and it draws.
+        model.handle(.delta(key, text: "One more check.\n"), group: "")
+        try? await Task.sleep(for: .milliseconds(300))
+        await settled()
+        #expect(model.chat(key).liveText == "One more check.\n")
+    }
 }

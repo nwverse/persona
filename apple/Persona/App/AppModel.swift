@@ -1062,6 +1062,7 @@ final class AppModel {
         subscribers[key, default: []].insert(owner)
         guard first else { return }
         let store = chat(key)
+        forgetAgentLive(key) // a delta that crossed the last unsubscribe
         Task { await refreshSessionDetail(key) }
         socket(key.group)?.send(subscribeMessage(key))
         if socket(key.group)?.state != .connected && !store.loadedOnce { Task { await loadInitial(key) } }
@@ -1071,7 +1072,20 @@ final class AppModel {
         guard var owners = subscribers[key], owners.remove(owner) != nil else { return }
         guard owners.isEmpty else { subscribers[key] = owners; return }
         subscribers[key] = nil
+        forgetAgentLive(key)
         socket(key.group)?.send(["type": "unsubscribe", "machine_id": key.machineID, "session_id": key.sessionID])
+    }
+
+    /// An agent's live text holds only while its chat is subscribed: the hub sends `delta` to subscribers alone, so the
+    /// `""` that ended it while nobody here was subscribed never comes, and on subscribing again the hub sends the live
+    /// text only while a message is still being written (`sendLiveText`; the node checks it again on its new watch). Kept,
+    /// the old words would be drawn again under a later message of the turn (only the latest message and a late copy
+    /// of the one before are matched). So it goes when the subscription ends and again when one starts, as the web's
+    /// chat starts each time it opens with none. The main chat's live text keeps its own rules.
+    private func forgetAgentLive(_ key: SessionKey) {
+        guard let store = existingChat(key), store.liveIsAgents else { return }
+        deltas.drop(key)
+        store.dropLive()
     }
 
     /// The socket of a group.

@@ -47,25 +47,25 @@
         }
       }
     },
-    "Replies reach this app and the web line by line, seconds sooner": {
+    "Replies arrive line by line, seconds sooner": {
       "extractionState": "manual",
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Replies reach this app and the web line by line, seconds sooner"
+            "value": "Replies arrive line by line, seconds sooner"
           }
         },
         "ja": {
           "stringUnit": {
             "state": "translated",
-            "value": "このアプリと Web に返信が行ごとに届き、文字を早く確認できます"
+            "value": "返信が行ごとに届き、数秒早く読めます"
           }
         },
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "App 和网页逐行收到回复，更早看到文字"
+            "value": "逐行收到回复，早几秒看到文字"
           }
         }
       }
@@ -116,13 +116,13 @@
         }
       }
     },
-    "When on, the Claude Code sessions Persona starts on this computer send their replies while Claude writes them, so this app and the web show the text sooner. The cost: in this computer's terminal, replies appear a few lines at a time instead of word by word. The hub keeps this switch, not ~/.claude/settings.json; with Apply to All Online Machines on above, the other online computers change too. A change applies to sessions started after it; a session that is already running changes once Claude restarts.": {
+    "When on, the Claude Code sessions Persona starts on this computer send their replies while Claude writes them, so this app and the web show the text sooner. The cost: in this computer's terminal, replies appear a few lines at a time instead of word by word. The hub keeps this switch, not ~/.claude/settings.json; with “Apply to All Online Machines” on above, the other online computers change too. A change applies to sessions started after it; a session that is already running changes once Claude restarts.": {
       "extractionState": "manual",
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "When on, the Claude Code sessions Persona starts on this computer send their replies while Claude writes them, so this app and the web show the text sooner. The cost: in this computer's terminal, replies appear a few lines at a time instead of word by word. The hub keeps this switch, not ~/.claude/settings.json; with Apply to All Online Machines on above, the other online computers change too. A change applies to sessions started after it; a session that is already running changes once Claude restarts."
+            "value": "When on, the Claude Code sessions Persona starts on this computer send their replies while Claude writes them, so this app and the web show the text sooner. The cost: in this computer's terminal, replies appear a few lines at a time instead of word by word. The hub keeps this switch, not ~/.claude/settings.json; with “Apply to All Online Machines” on above, the other online computers change too. A change applies to sessions started after it; a session that is already running changes once Claude restarts."
           }
         },
         "ja": {

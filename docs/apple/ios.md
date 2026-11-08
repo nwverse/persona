@@ -671,7 +671,11 @@ the web's (`web/src/lib/live-text.ts`, `docs/web/web.md`).
 - **Where it draws**: any chat of an agent (iPhone, iPad, the Mac app; not the watch) draws it under the newest items, the way the main chat
   draws the assistant's (`ChatLiveText`, `StreamingText` with its caret; the chat follows the end while it grows, `ChatStreamFollow`; while you
   read history it is held with the rest, `Frozen`). The running turn's words before it go into its work line meanwhile (`ChatLines`'
-  `streaming`), as in the main chat. The main chat's look and rules are unchanged.
+  `streaming`), as in the main chat, and the live work line stays above it. The main chat's look and rules are unchanged.
+  This differs from the web on purpose: the web keeps a live turn's words in the flow with its steps and its live work row under the
+  streaming words; here a turn shows only its latest words outside its folded work line, so the words before go into it once the new
+  message lands anyway. Folding them when the new message starts streaming, not when it lands, keeps the chat from jumping each time
+  the agent's next message comes (the main chat's reason, 2026-11-04); `ChatLinesTests.theRunningTurnsLatestWordsFoldWhileTheNextStream`.
 - **Which deltas**: `AppModel.streamsAgentReplies`: a listed session that is not a Persona conversation, or a chat already given an agent's delta.
   An unlisted session's delta is handled as before (the assistant's rules), and its chat in the Agents style draws nothing. Both go through the
   same pacer (`DeltaPacer`, at most 5 draws a second, an empty delta at once).
@@ -685,13 +689,18 @@ the web's (`web/src/lib/live-text.ts`, `docs/web/web.md`).
 - **No gap, no double**: a change that comes while the rows are being rebuilt waits for them and is published in the same pass
   (`agentLiveDue`), so the words leave the live copy as their row comes. `landed` / `clearLive` (the assistant's prefix rule and its 5 s hold) are
   not used for an agent's: the node sends `""` right after the items that replace it. A socket that starts over drops both (`dropLive`).
+- **Only while subscribed**: the hub sends `delta` to a chat's subscribers alone, so the `""` that ends the live text while you are away
+  from the chat goes to no one, and the hub sends it again on subscribing only while a message is being written. `AppModel.forgetAgentLive`
+  drops an agent's live text (and what the pacer kept) when the chat's subscription ends and again when one starts, as the web's chat
+  starts with none each time it opens; otherwise the words before a tool came back under a later message of the turn on returning.
 - **Setting**: Settings › Claude Code Settings › Live Replies, per computer (`LiveRepliesModel`, `LiveRepliesSection`, the web's `LiveReplies.tsx`):
   `GET` on showing the page and on picking another computer, `PUT` on toggle with the new value shown at once; a failure puts it back and says why
   under the switch; with Apply to All Online Machines on, the other online computers change too (each through its own group's hub). An older hub
   (404) shows no section. On by default; a change reaches the sessions started after it. The copy says what it costs: the computer's terminal
   shows a reply a few lines at a time.
 - **Tests**: `LiveTextTests` (the web's cases one by one), `AgentLiveReplyTests` (every order of the last delta, the items and the `""` with and
-  without a rebuild between: never a gap or a double; the words after a tool; an older page, an opened fold; `AppModel`'s routing),
+  without a rebuild between: never a gap or a double; the words after a tool; an older page, an opened fold; `AppModel`'s routing; leaving
+  the chat and coming back),
   `LiveRepliesTests` (FakeHub). Screenshots: `MOCK_AGENT_LIVE=1` and `GET /mock/agent_live?step=…` (`scripts/mock/mock_hub.py`), the PR #42 review
   agent `-openSession macbook/a1f3c2d4-0000-4000-8000-000000000006`, the setting with `-tab settings -openClaudeSettings YES`.
 

@@ -733,7 +733,8 @@ final class ChatStore {
         showAgentLive()
     }
 
-    /// The live text drops at once: the socket started over (the hub sends the current one again after its catch-up).
+    /// The live text drops at once: the socket started over, or (an agent's) the chat's subscription ended or started
+    /// again (`AppModel.forgetAgentLive`); the hub sends the current one again after its catch-up.
     func dropLive() {
         liveText = ""
         agentLive = ""
