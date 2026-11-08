@@ -12,6 +12,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -40,6 +41,9 @@ func child(dir, role string) {
 	f.Close()
 	if _, err := os.Stat(filepath.Join(dir, role+".spawn")); err == nil { // leave something behind: a process of its own
 		gc := exec.Command("sleep", "30")
+		if _, err := os.Stat(filepath.Join(dir, role+".spawn-group")); err == nil { // in a group of its own (an extension)
+			gc.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+		}
 		if gc.Start() == nil {
 			_ = os.WriteFile(filepath.Join(dir, role+".grandchild"), []byte(strconv.Itoa(gc.Process.Pid)), 0o600)
 		}
@@ -386,11 +390,27 @@ func TestBackoffResetsAfterASteadyRun(t *testing.T) {
 	}
 }
 
-// What a program leaves behind when it stops (a process of its own) is killed with its process group.
+// What a program leaves behind when it stops (a process of its own) is killed with its session: in its process group,
+// or (on Linux) in a group of its own, as an extension's program is.
 func TestLeftoversKilled(t *testing.T) {
+	t.Run("group", func(t *testing.T) { testLeftoversKilled(t, false) })
+	t.Run("own group", func(t *testing.T) {
+		if runtime.GOOS != "linux" {
+			t.Skip("sessionMembers lists a session's processes on Linux only")
+		}
+		testLeftoversKilled(t, true)
+	})
+}
+
+func testLeftoversKilled(t *testing.T, ownGroup bool) {
 	f := newFixture(t, `{"assistant":{"mode":"service"}}`)
 	if err := os.WriteFile(filepath.Join(f.dir, "assistant.spawn"), nil, 0o600); err != nil {
 		t.Fatal(err)
+	}
+	if ownGroup {
+		if err := os.WriteFile(filepath.Join(f.dir, "assistant.spawn-group"), nil, 0o600); err != nil {
+			t.Fatal(err)
+		}
 	}
 	stop := running(t, f.e.hubContainer)
 	defer func() { _ = stop() }()

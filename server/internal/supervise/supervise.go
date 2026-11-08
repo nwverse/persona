@@ -336,9 +336,9 @@ func (e *env) keep(ctx context.Context, p *program, others bool) error {
 }
 
 // run starts p and waits for it; once ctx ends it is asked to stop (SIGTERM), and killed after e.stop.
-// Each runs in a process group of its own: what is left in that group when it stops (what it started without a group
-// of its own) is killed with it. Its extensions' programs have groups of their own and stop when their stdin closes,
-// the same as when the hub restarts its own child.
+// Each runs in a session of its own: what is left in it when the program stopped is killed (killGroup), its
+// extensions' programs too, which have process groups of their own, so that a program started again after a crash
+// doesn't find the last one's still running.
 func (e *env) run(ctx context.Context, p *program) error {
 	cmd := exec.Command(e.self, p.args...)
 	cmd.Env = append(append([]string{}, e.environ...), p.env...)
