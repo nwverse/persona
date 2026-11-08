@@ -9,6 +9,32 @@ import (
 	"github.com/nwverse/persona/server/internal/db"
 )
 
+func (s *meshStore) DeleteDeviceIfCurrent(_ context.Context, expected db.Device) (bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	current, ok := s.devices[expected.DeviceID]
+	if !ok || current.APNSToken != expected.APNSToken || current.RelayURL != expected.RelayURL {
+		return false, nil
+	}
+	delete(s.devices, expected.DeviceID)
+	return true, nil
+}
+func (s *forgetStore) DeleteDeviceIfCurrent(ctx context.Context, expected db.Device) (bool, error) {
+	err := s.DeleteDevice(ctx, expected.DeviceID)
+	return err == nil, err
+}
+func (s *deviceRows) DeleteDeviceIfCurrent(_ context.Context, expected db.Device) (bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	current, ok := s.rows[expected.DeviceID]
+	if !ok || current.APNSToken != expected.APNSToken || current.RelayURL != expected.RelayURL {
+		return false, nil
+	}
+	delete(s.rows, expected.DeviceID)
+	s.deletes++
+	return true, nil
+}
+
 // Unrelated fixtures do not model retirement; the lifecycle and SQL tests do.
 func (s *meshStore) ReconcilePushDevices(context.Context, time.Time, time.Duration) ([]db.PushDeviceRetirement, error) {
 	return nil, nil

@@ -154,7 +154,7 @@ func TestPushDeviceInactivityProtectsActiveRegistrations(t *testing.T) {
 		}
 	}
 	// Only authenticated enrollment, not a background save, may recreate an idle row.
-	v := Device{DeviceID: "inactive", RegisteredAt: at.Add(time.Minute)}
+	v := Device{DeviceID: "inactive", CredentialID: "inactive", RegisteredAt: at.Add(time.Minute)}
 	if err := d.UpsertDevice(ctx, v); !errors.Is(err, ErrPushRegistrationConflict) {
 		t.Fatal("stale save recreated inactive row")
 	}
@@ -169,6 +169,12 @@ func TestPushDeviceRetirementRollsBackOnFailure(t *testing.T) {
 	at := time.Now().UTC()
 	old := Device{DeviceID: "old", CredentialID: "owner", PushKey: "key", Topic: "app.example", RegisteredAt: at.Add(-time.Hour)}
 	seedPushRegistration(t, d, old)
+	if err := d.SaveLiveActivity(ctx, LiveActivity{DeviceID: "old", PushToStartToken: "start"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, claimed, err := d.ClaimLiveActivityStart(ctx, "old", "start", at, 10*time.Minute, 8*time.Hour); err != nil || !claimed {
+		t.Fatalf("initial budget: %v %v", claimed, err)
+	}
 	if _, err := d.pool.Exec(ctx, `CREATE FUNCTION reject_test_retirement() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'injected retirement failure'; END; $$; CREATE TRIGGER reject_test_retirement BEFORE DELETE ON devices FOR EACH ROW EXECUTE FUNCTION reject_test_retirement()`); err != nil {
 		t.Fatal(err)
 	}
@@ -185,6 +191,9 @@ func TestPushDeviceRetirementRollsBackOnFailure(t *testing.T) {
 		t.Fatalf("failed transaction changed targets: %+v %v", rows, err)
 	}
 	var n int
+	if err := d.pool.QueryRow(ctx, `SELECT count(*) FROM live_activity_start_budget WHERE device_id='old' AND next_start_at=$1`, at.Add(10*time.Minute)).Scan(&n); err != nil || n != 1 {
+		t.Fatalf("budget transfer did not roll back: %d %v", n, err)
+	}
 	if err := d.pool.QueryRow(ctx, `SELECT count(*) FROM push_device_retirements`).Scan(&n); err != nil || n != 0 {
 		t.Fatalf("tombstone did not roll back: %d %v", n, err)
 	}

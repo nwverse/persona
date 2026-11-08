@@ -22,6 +22,11 @@ import (
 // other answers (400, 403, 410…) stand. As for the relay (#2150): one blip used to lose the push (#3989). The same
 // apns-collapse-id makes a push that did land twice show once. Callers run it in their own goroutine.
 func (p *Pusher) sendDirect(d Device, r apns.Request) (apns.Result, error) {
+	p.sendMu.RLock()
+	defer p.sendMu.RUnlock()
+	if !p.currentPushTarget(d) {
+		return apns.Result{}, fmt.Errorf("push registration changed before dispatch")
+	}
 	res, err := p.direct.Send(context.Background(), r)
 	tries := 1
 	for _, wait := range p.retryWaits {
@@ -61,6 +66,11 @@ type relayResult struct{ gone bool }
 // no longer takes (its secret was replaced) is renewed once with the device's token, which the hub already has. A
 // failure that may pass is tried again (postRelayRetrying): one dropped connection used to lose the push (#2150).
 func (p *Pusher) postRelay(d Device, req relayproto.PushRequest) (res relayResult, err error) {
+	p.sendMu.RLock()
+	defer p.sendMu.RUnlock()
+	if !p.currentPushTarget(d) {
+		return res, fmt.Errorf("push registration changed before dispatch")
+	}
 	defer func() {
 		if !res.gone {
 			p.pushed(d, err)

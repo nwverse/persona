@@ -2,7 +2,10 @@ package hub
 
 import (
 	"context"
+	"errors"
 	"time"
+
+	"github.com/nwverse/persona/server/internal/db"
 )
 
 const (
@@ -34,33 +37,52 @@ func (p *Pusher) reconcileDevices(parent context.Context) error {
 	if p.store == nil {
 		return nil
 	}
-	p.saveMu.Lock()
+	// Skip a busy pass rather than waiting for network retries or an enrollment.
+	// No transport can start between flushing acceptance and retiring inactivity.
+	if !p.saveMu.TryLock() {
+		return nil
+	}
 	defer p.saveMu.Unlock()
+	if !p.sendMu.TryLock() {
+		return nil
+	}
+	defer p.sendMu.Unlock()
+	ctx, cancel := context.WithTimeout(parent, p.storeTimeout)
+	defer cancel()
 	p.mu.Lock()
-	dirty := map[string]time.Time{}
+	dirty := map[string]Device{}
 	for id := range p.acceptedDirty {
-		dirty[id] = p.devices[id].LastPushAt
+		dirty[id] = p.devices[id]
 	}
 	p.mu.Unlock()
-	for id, at := range dirty {
-		if err := p.saveLocked(id); err != nil {
-			// A superseded row is not recreated. Reconciliation below removes it
-			// from this process as well; other errors leave the dirty bit for retry.
-			p.logf("push acceptance flush registration=%s: %v", trafficIdentity(id), err)
+	for id, device := range dirty {
+		if err := p.writeDeviceIn(ctx, device); err != nil {
+			if !errors.Is(err, db.ErrPushRegistrationConflict) {
+				// Recent acceptance not persisted: do not expire it from old data.
+				return err
+			}
+			p.mu.Lock()
+			delete(p.devices, id)
+			delete(p.acceptedDirty, id)
+			p.mu.Unlock()
 			continue
 		}
 		p.mu.Lock()
-		if p.devices[id].LastPushAt.Equal(at) {
+		if p.devices[id].LastPushAt.Equal(device.LastPushAt) {
 			delete(p.acceptedDirty, id)
 		}
 		p.mu.Unlock()
 	}
-	ctx, cancel := context.WithTimeout(parent, deviceStoreTimeout)
-	defer cancel()
 	retired, err := p.store.ReconcilePushDevices(ctx, p.now().UTC(), pushDeviceMaxIdle)
 	if err != nil {
 		return err
 	}
+	p.mu.Lock()
+	for _, r := range retired {
+		delete(p.devices, r.DeviceID)
+		delete(p.acceptedDirty, r.DeviceID)
+	}
+	p.mu.Unlock()
 	rows, err := p.store.Devices(ctx)
 	if err != nil {
 		return err

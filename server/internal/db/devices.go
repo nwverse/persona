@@ -48,6 +48,9 @@ func (d *DB) UpsertDevice(ctx context.Context, v Device) error {
 		if err := lockPushRegistrations(ctx, tx); err != nil {
 			return err
 		}
+		if _, err := tx.Exec(ctx, `SELECT set_config('persona.push_writer',$1,true)`, v.DeviceID); err != nil {
+			return err
+		}
 		if !v.Registering && !v.RegisteredAt.IsZero() {
 			var exists bool
 			if err := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM devices WHERE device_id=$1)`, v.DeviceID).Scan(&exists); err != nil {
@@ -58,6 +61,9 @@ func (d *DB) UpsertDevice(ctx context.Context, v Device) error {
 			}
 		}
 		if v.Registering {
+			if _, err := tx.Exec(ctx, `SELECT set_config('persona.push_enrollment',$1,true)`, v.DeviceID); err != nil {
+				return err
+			}
 			rows, err := devicesIn(ctx, tx)
 			if err != nil {
 				return err
@@ -133,6 +139,9 @@ func (d *DB) DeleteDevice(ctx context.Context, id string) error {
 			return err
 		}
 		if _, err := tx.Exec(ctx, `DELETE FROM live_activities WHERE device_id=$1`, id); err != nil {
+			return err
+		}
+		if _, err := tx.Exec(ctx, `SELECT set_config('persona.push_retire',$1,true)`, id); err != nil {
 			return err
 		}
 		_, err := tx.Exec(ctx, `DELETE FROM devices WHERE device_id=$1`, id)

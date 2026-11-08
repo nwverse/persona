@@ -160,6 +160,7 @@ type Store interface {
 	UpsertDevice(ctx context.Context, d db.Device) error
 	Devices(ctx context.Context) ([]db.Device, error)
 	DeleteDevice(ctx context.Context, id string) error
+	DeleteDeviceIfCurrent(ctx context.Context, expected db.Device) (bool, error)
 	ReconcilePushDevices(ctx context.Context, at time.Time, maxIdle time.Duration) ([]db.PushDeviceRetirement, error)
 	SetDevicePrefs(ctx context.Context, id, credential string, prefs json.RawMessage) error
 	LiveActivities(ctx context.Context) ([]db.LiveActivity, error)

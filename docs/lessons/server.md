@@ -35,7 +35,12 @@ of pre-migration delivery history needs observation grace, not immediate expiry.
 
 Publish a registration only after its ownership check and retirement commit. A
 process mutex cannot fence another blue-green slot: use a Postgres retirement
-ledger and serialized old-writer triggers. Remove activity state and transfer the
+ledger and serialized old-writer triggers. A late APNs gone response must compare
+against the persisted registration, not just one process's memory. Fence all
+retirement reasons; fresh authenticated re-pairing needs a live new owner plus
+scoped installation proof, never an old save. If acceptance fails to flush, skip
+inactivity; skip busy transports so completion cannot race the expiry snapshot.
+Remove activity state and transfer the
 longest persisted start deadline before deleting a duplicate. Lock the device
 parent before its activity/budget, matching budget claim and revocation order.
 Test two database pools, late legacy writes, failure rollback and physical-install

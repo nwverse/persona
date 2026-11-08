@@ -2,6 +2,8 @@ package db
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"time"
 
@@ -43,7 +45,7 @@ func upsertPushDevice(ctx context.Context, tx pgx.Tx, v Device) error {
 		AND ($15::timestamptz IS NULL OR devices.registered_at <= $15)`, v.DeviceID, v.Name, v.Kind, v.APNSToken, v.APNSEnv, v.Topic, v.PushKey, v.RelayURL, v.RelayGrant, v.Credential, v.CredentialID, v.Locale, v.RelayError, features, registered, delivered)
 	if err != nil {
 		var pgerr *pgconn.PgError
-		if errors.As(err, &pgerr) && pgerr.Code == "23514" && pgerr.Message == "push registration was superseded" {
+		if errors.As(err, &pgerr) && pgerr.Code == "23514" && (pgerr.Message == "push registration was superseded" || pgerr.Message == "push registration ownership changed") {
 			return ErrPushRegistrationConflict
 		}
 		return err
@@ -76,6 +78,14 @@ func devicesIn(ctx context.Context, tx pgx.Tx) ([]Device, error) {
 	return collectDevices(rows)
 }
 
+func pushProof(value string) string {
+	if value == "" {
+		return ""
+	}
+	hash := sha256.Sum256([]byte(value))
+	return hex.EncodeToString(hash[:])
+}
+
 func retirePushDevice(ctx context.Context, tx pgx.Tx, old Device, canonical string, reason string) error {
 	if canonical != "" {
 		// Preserve the longest existing start deadline when identity rolls over.
@@ -91,16 +101,19 @@ func retirePushDevice(ctx context.Context, tx pgx.Tx, old Device, canonical stri
 				return err
 			}
 		}
-		owner := old.CredentialID
-		if owner == "" {
-			owner = old.Credential
-		}
-		if _, err := tx.Exec(ctx, `INSERT INTO push_device_retirements(device_id,canonical_id,credential_id) VALUES($1,$2,$3)
-			ON CONFLICT(device_id) DO UPDATE SET canonical_id=EXCLUDED.canonical_id`, old.DeviceID, canonical, owner); err != nil {
-			return err
-		}
+	}
+	owner := old.CredentialID
+	if owner == "" {
+		owner = old.Credential
+	}
+	if _, err := tx.Exec(ctx, `INSERT INTO push_device_retirements(device_id,canonical_id,credential_id,reason,push_key_hash,target_hash,topic,apns_env) VALUES($1,$2,$3,$4,$5,$6,$7,$8)
+		ON CONFLICT(device_id) DO UPDATE SET canonical_id=EXCLUDED.canonical_id,reason=EXCLUDED.reason`, old.DeviceID, canonical, owner, reason, pushProof(old.PushKey), pushProof(old.APNSToken), old.Topic, old.APNSEnv); err != nil {
+		return err
 	}
 	if _, err := tx.Exec(ctx, `DELETE FROM live_activities WHERE device_id=$1`, old.DeviceID); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(ctx, `SELECT set_config('persona.push_retire',$1,true)`, old.DeviceID); err != nil {
 		return err
 	}
 	_, err := tx.Exec(ctx, `DELETE FROM devices WHERE device_id=$1`, old.DeviceID)

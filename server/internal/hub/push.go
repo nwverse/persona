@@ -53,7 +53,10 @@ type Pusher struct {
 	// notifications for agents then (the Mac's MacAttentionWatcher).
 	desktopOpen func(device string) bool
 
-	mu      sync.Mutex
+	mu sync.Mutex
+	// sendMu lets maintenance skip an active transport instead of retiring a
+	// target whose acceptance is still in flight. Reads remain concurrent.
+	sendMu  sync.RWMutex
 	devices map[string]Device
 	// replaced: per device, the grant the hub renewed away from (renewGrant). The app keeps reporting the one it
 	// cached; that one must not undo the renewal.
@@ -203,10 +206,14 @@ func (p *Pusher) saveLocked(id string) error {
 
 // writeDevice requires saveMu and never publishes a failed write.
 func (p *Pusher) writeDevice(d Device) error {
+	return p.writeDeviceIn(context.Background(), d)
+}
+
+func (p *Pusher) writeDeviceIn(parent context.Context, d Device) error {
 	if p.store == nil {
 		return nil
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), p.storeTimeout)
+	ctx, cancel := context.WithTimeout(parent, p.storeTimeout)
 	defer cancel()
 	if err := p.store.UpsertDevice(ctx, d); err != nil {
 		p.logf("save device: %v", err)
@@ -226,6 +233,11 @@ func (p *Pusher) reachable(d Device) bool {
 		return d.APNSToken != ""
 	}
 	return p.relayed(d)
+}
+
+func (p *Pusher) currentPushTarget(d Device) bool {
+	cur, ok := p.device(d.DeviceID)
+	return ok && cur.APNSToken == d.APNSToken && cur.RelayURL == d.RelayURL && cur.PushKey == d.PushKey && cur.Topic == d.Topic && cur.APNSEnv == d.APNSEnv
 }
 
 func (p *Pusher) device(id string) (Device, bool) {
@@ -289,15 +301,43 @@ func (p *Pusher) forgetIfCurrent(d Device) {
 	p.mu.Lock()
 	cur, ok := p.devices[d.DeviceID]
 	still := ok && cur.APNSToken == d.APNSToken && cur.RelayURL == d.RelayURL
-	if still {
-		delete(p.devices, d.DeviceID)
-	}
 	p.mu.Unlock()
 	if !still {
 		p.logf("device %s: its old token is gone; kept, it has registered a new one", d.Name)
 		return
 	}
-	p.deleteRow(d)
+	if p.store != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), p.storeTimeout)
+		deleted, err := p.store.DeleteDeviceIfCurrent(ctx, d)
+		if err != nil {
+			p.logf("forget device %s: %v", d.Name, err)
+		}
+		if err == nil && !deleted {
+			rows, readErr := p.store.Devices(ctx)
+			if readErr == nil {
+				p.mu.Lock()
+				delete(p.devices, d.DeviceID)
+				for _, row := range rows {
+					if row.DeviceID == d.DeviceID {
+						p.devices[d.DeviceID] = row
+					}
+				}
+				p.mu.Unlock()
+			} else {
+				p.logf("reload push registration after late gone: %v", readErr)
+			}
+			cancel()
+			p.logf("device %s: its old token is gone; kept, persisted registration changed", d.Name)
+			return
+		}
+		cancel()
+	}
+	p.mu.Lock()
+	delete(p.devices, d.DeviceID)
+	delete(p.failed, d.DeviceID)
+	delete(p.replaced, d.DeviceID)
+	delete(p.acceptedDirty, d.DeviceID)
+	p.mu.Unlock()
 }
 
 // prefs is a device's notification settings (defaults when it never set any).
