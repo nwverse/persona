@@ -88,6 +88,30 @@ func TestMachinesListFacts(t *testing.T) {
 	}
 }
 
+func TestMachinesListReconnectAndOSFallback(t *testing.T) {
+	f := newFakeHub()
+	f.devices = []Device{{ID: "box", Online: true, Reachable: true}}
+	d := &resourceDevs{fleetDevs: newFleetDevs(), machines: map[string]*proto.Machine{"box": {OS: "linux", System: &proto.System{}}}, samples: map[string]*proto.MetricSample{"box": {T: time.Now().Add(-10 * time.Second).Unix(), MemTotal: 100, MemUsed: 40}}}
+	node := d.add("box", "Box")
+	node.connected = time.Now().Add(-2 * time.Second)
+	s := newTestService(t, f)
+	s.devs = d
+	text, err := s.toolMachinesList(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out struct {
+		Machines []machineFacts `json:"machines"`
+	}
+	if err := json.Unmarshal([]byte(text), &out); err != nil {
+		t.Fatal(err)
+	}
+	m := out.Machines[0]
+	if m.OS.Value != "linux" || m.MemoryAvailableBytes.Value != nil || m.MemoryAvailableBytes.Reason != "sample_before_current_connection" || m.SampleAgeSeconds.Value == nil {
+		t.Fatalf("reconnected machine: %s", text)
+	}
+}
+
 func TestMachinesListAmbiguousAndMissing(t *testing.T) {
 	f := newFakeHub()
 	f.devices = []Device{{ID: "box", Online: true, Reachable: true}}

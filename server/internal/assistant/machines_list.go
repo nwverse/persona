@@ -95,6 +95,9 @@ func (s *Service) toolMachinesList(ctx context.Context) (string, error) {
 				if os == "" {
 					os = m.System.OS
 				}
+				if os == "" {
+					os = m.OS
+				}
 				if os != "" {
 					row.OS = known(os)
 				}
@@ -120,6 +123,9 @@ func (s *Service) toolMachinesList(ctx context.Context) (string, error) {
 				reason := "sample_stale"
 				if age <= 30 && d.Reachable {
 					reason = "metric_not_reported"
+					if connected := s.devs.ConnectedAt(d.ID); !connected.IsZero() && sample.T <= connected.Unix() {
+						reason = "sample_before_current_connection"
+					}
 				} else if age <= 30 {
 					reason = "connection_not_available"
 				}
