@@ -13,6 +13,7 @@
   "not_in_market": "这个市场里没有扩展 {id}",
   "token_and_token_from": "token 和 token_from 只能给一个",
   "official_name": "官方扩展",
+  "pin_rotated_pending": "官方签名公钥已更新，目录用新公钥验签通过前，暂不允许安装",
   "settings_load_failed": "无法加载市场镜像设置，请重试。",
   "settings_save_failed": "无法保存市场镜像设置，请重试。",
   "settings_invalid": "镜像 URL 无效。请使用不含凭据、查询或片段的 HTTPS 地址；目录须填写完整 JSON URL。"

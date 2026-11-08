@@ -176,6 +176,7 @@ type Store interface {
 }
 
 func Run(ctx context.Context, b update.Build) error {
+	claimInherited() // before anything can start a process: runHub starts the manager before it listens (listen.go)
 	logger := log.New(os.Stderr, "", log.LstdFlags)
 	// An update that keeps failing goes back before anything else can fail, the config included (selfupdate.go).
 	updating := newUpdater(&Hub{build: b, version: b.Version, logger: logger}).boot()
