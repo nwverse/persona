@@ -1267,6 +1267,20 @@ nonisolated struct APIClient: Sendable {
         try JSON.decoder.decode(ResolveResult.self, from: try await post("/api/v1/interactions/\(id)/resolve", body: r, opID: opID))
     }
 
+    /// One session's cards and how they ended (GET /api/v1/interactions/history), newest first; a row this app can't read
+    /// is left out.
+    func interactionHistory(machine: String, session: String, limit: Int = Delegated.historyLimit) async throws -> [InteractionRecord] {
+        struct Body: Decodable { var interactions: [Lossy<InteractionRecord>]? }
+        let rows = try await get("/api/v1/interactions/history",
+                                 query: ["machine_id": machine, "session_id": session, "limit": String(limit)], as: Body.self)
+        return (rows.interactions ?? []).compactMap(\.value).map { var r = $0; r.interaction.group = group; return r }
+    }
+
+    /// Change Answer (#544): the user's answers to a question the assistant answered go to the agent as a message.
+    func reanswer(_ id: String, answers: [String: String]) async throws {
+        _ = try await post("/api/v1/interactions/\(id)/reanswer", body: ["answers": answers])
+    }
+
     /// What the hub recorded for an op (`GET /api/v1/ops/{id}`): pending / done / failed / unknown; nil when it has no
     /// such op (an older hub, or one past its 30 days).
     func opState(_ id: UUID) async throws -> String? {

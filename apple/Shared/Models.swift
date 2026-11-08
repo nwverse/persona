@@ -1696,6 +1696,12 @@ nonisolated struct Interaction: Codable, Identifiable, Hashable, Sendable {
     /// What `muted` is stored as: optional, so a card without the key decodes (a synthesized `Bool` with a default
     /// still requires it, #4763) and encodes without it again.
     var mutedFlag: Bool?
+    /// The assistant is deciding whether it may answer this question for the user (docs/assistant/assistant.md "Assistant
+    /// answers questions first"): nothing was pushed yet, and an answer given here wins. The same card comes again
+    /// without it, by `id`.
+    var delegating: Bool?
+    /// What the assistant filled in when it left the question to the user.
+    var delegate: Delegate?
 
     var sessionKey: SessionKey { SessionKey(group: group, machineID: machineID, sessionID: sessionID) }
     var machineRef: MachineRef { MachineRef(group: group, id: machineID) }
@@ -1711,11 +1717,48 @@ nonisolated struct Interaction: Codable, Identifiable, Hashable, Sendable {
     var screenDialog: ScreenParser.Dialog? { dialog?.parsed ?? screen.flatMap(ScreenParser.dialog) }
 
     enum CodingKeys: String, CodingKey {
-        case id, kind, questions, plan, summary, screen, cwd, dialog, secret, fields, agent, reason
+        case id, kind, questions, plan, summary, screen, cwd, dialog, secret, fields, agent, reason, delegating, delegate
         case machineID = "machine_id", sessionID = "session_id", sessionTitle = "session_title", taskTitle = "task_title",
              createdAt = "created_at", expiresAt = "expires_at", toolName = "tool_name", toolUseID = "tool_use_id",
              toolInput = "tool_input", alwaysLabel = "always_label", alwaysKeys = "always_keys", agentLabelHint = "agent_label", hubGroup = "app_hub_group",
              mutedFlag = "muted"
+    }
+}
+
+/// The context the assistant filled in when it left a question to the user (`Interaction.delegate`, the hub's
+/// proto.Delegate). Every field may be missing; an odd one never drops the card.
+nonisolated struct Delegate: Codable, Hashable, Sendable {
+    var what: String?
+    var whyNow: String?
+    /// For a card with options, an option's exact label (several questions: their answers joined by 「；」).
+    var recommend: String?
+    var cost: String?
+    var reason: String?
+    var deadline: Date?
+
+    enum CodingKeys: String, CodingKey {
+        case what, recommend, cost, reason, deadline
+        case whyNow = "why_now"
+    }
+
+    init(what: String? = nil, whyNow: String? = nil, recommend: String? = nil, cost: String? = nil, reason: String? = nil,
+         deadline: Date? = nil) {
+        self.what = what
+        self.whyNow = whyNow
+        self.recommend = recommend
+        self.cost = cost
+        self.reason = reason
+        self.deadline = deadline
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try? decoder.container(keyedBy: CodingKeys.self)
+        what = (try? c?.decodeIfPresent(String.self, forKey: .what)).flatMap { $0 }
+        whyNow = (try? c?.decodeIfPresent(String.self, forKey: .whyNow)).flatMap { $0 }
+        recommend = (try? c?.decodeIfPresent(String.self, forKey: .recommend)).flatMap { $0 }
+        cost = (try? c?.decodeIfPresent(String.self, forKey: .cost)).flatMap { $0 }
+        reason = (try? c?.decodeIfPresent(String.self, forKey: .reason)).flatMap { $0 }
+        deadline = (try? c?.decodeIfPresent(Date.self, forKey: .deadline)).flatMap { $0 }
     }
 }
 
@@ -1746,10 +1789,15 @@ nonisolated struct Resolution: Codable, Sendable {
     /// A multi-select screen dialog: the options to have checked when it is sent (`text`: its free-text field).
     var options: [String]?
     var values: [String: String]?
+    /// "assistant" on a question the assistant answered for the user (the hub's history and its `already` reply); the
+    /// app never sends it.
+    var answeredBy: String?
+    /// Why the assistant answered so (with `answeredBy`).
+    var reason: String?
 
     enum CodingKeys: String, CodingKey {
-        case answers, approve, mode, feedback, allow, always, message, keys, text, dismiss, option, options, values
-        case preKeys = "pre_keys"
+        case answers, approve, mode, feedback, allow, always, message, keys, text, dismiss, option, options, values, reason
+        case preKeys = "pre_keys", answeredBy = "answered_by"
     }
 
     static let dismissed = Resolution(dismiss: true)
