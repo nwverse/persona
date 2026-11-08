@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"path"
-	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -16,6 +15,7 @@ import (
 	"github.com/nwverse/persona/server/internal/apierr"
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/bus"
+	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/prompts"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/rpc"
@@ -39,7 +39,7 @@ const (
 
 // slashCommandRe is a message that is only a slash command (/compact, /clear, /model x…): an instruction to the
 // tool, not the user's words.
-var slashCommandRe = regexp.MustCompile(`^/[A-Za-z][\w:-]*(\s[^\n]*)?$`)
+var slashCommandRe = lazyre.New(`^/[A-Za-z][\w:-]*(\s[^\n]*)?$`)
 
 // conversationsRequest answers assistant.conversations and assistant.messages; false for any other method.
 func (s *Service) conversationsRequest(ctx context.Context, method string, params json.RawMessage) (any, bool, error) {
