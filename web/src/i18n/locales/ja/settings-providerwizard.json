@@ -61,6 +61,7 @@
   "subagent_hint": "workflowなど複数Agentの実行に使います。",
   "force": "強制",
   "force_label": "サブエージェントにこのモデルを強制",
+  "chat_advanced_hint": "Chat Completionsでは、プロバイダー固有のヘッダーとプロキシ設定は使われません。",
   "headers": "リクエストヘッダー",
   "headers_set": "設定済み（非表示）。新しく入力するとすべて置き換わります",
   "headers_placeholder": "X-Name: value（1行に1つ）",

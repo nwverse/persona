@@ -62,6 +62,18 @@ describe("formProblems", () => {
     // editing one that has a key: left empty keeps it
     expect(formProblems(ready({ api_key: "" }), false, true).connect).toBe("");
   });
+  it("ignores unsupported chat draft values without weakening other protocols' validation", () => {
+    const draft = ready({ kind: "api", api: "chat", headers: "invalid", headers_touched: true, proxy: "invalid", no_proxy: "example.com" });
+    expect(formProblems(draft, true).advanced).toBe("");
+    expect(formProblems({ ...draft, api: "responses" }, true).advanced).not.toBe("");
+    for (const body of [providerBody(draft, null), providerBody(draft, { name: "gw", kind: "api", api: "chat", model: "m1" }), probeBody(draft, null)]) {
+      expect(body).not.toHaveProperty("headers");
+      expect(body).not.toHaveProperty("proxy");
+      expect(body).not.toHaveProperty("no_proxy");
+    }
+    const responses = providerBody({ ...draft, api: "responses" }, null);
+    expect(responses).toMatchObject({ headers: "invalid", proxy: "invalid", no_proxy: "example.com" });
+  });
   it("checks the models step", () => {
     expect(formProblems(ready({ model: "", models: [] }), true).models).toBe("至少勾选或添加一个模型");
     expect(formProblems(ready({ model: "" }), true).models).toBe("选一个默认模型");

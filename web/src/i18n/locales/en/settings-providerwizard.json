@@ -62,6 +62,7 @@
   "subagent_hint": "For multi-agent runs such as workflows.",
   "force": "Force",
   "force_label": "Force subagents to use this model",
+  "chat_advanced_hint": "Chat Completions does not use provider-specific headers or proxy settings.",
   "headers": "Request headers",
   "headers_set": "Set (hidden). Typing new ones replaces them all.",
   "headers_placeholder": "X-Name: value, one per line",

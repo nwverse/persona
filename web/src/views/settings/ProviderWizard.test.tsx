@@ -310,6 +310,38 @@ describe("ProviderWizard from presets", () => {
     expect(calls.find((c) => c.method === "POST" && c.path.endsWith("/launchers"))?.body).toMatchObject({ kind: "api", api: "chat", auth: "api_key", model: "example-chat" });
   });
 
+  it("hides unsupported chat options and excludes drafts from test and save", async () => {
+    await open();
+    act(() => button("自定义兼容网关")!.click());
+    act(() => button("直接 API")!.click());
+    const inputs = [...document.body.querySelectorAll<HTMLInputElement>("input")];
+    type(inputs.find((input) => input.placeholder.includes("my_gateway"))!, "custom");
+    type(inputs.find((input) => input.inputMode === "url")!, "https://api.example.com/v1");
+    type(keyInput(), "sk-test-123456");
+    act(() => button("下一步")!.click());
+    type(document.body.querySelector<HTMLInputElement>('input[aria-label="手动添加模型 ID"]')!, "example-chat");
+    act(() => button("添加")!.click());
+    act(() => button("高级")!.click());
+    const header = document.body.querySelector<HTMLTextAreaElement>('textarea[placeholder^="X-Name"]')!;
+    const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!;
+    act(() => { setter.call(header, "X-Example: value"); header.dispatchEvent(new Event("input", { bubbles: true })); });
+    type(document.body.querySelector<HTMLInputElement>('input[placeholder="http://127.0.0.1:7890"]')!, "http://proxy.example.com");
+    type(document.body.querySelector<HTMLInputElement>('input[placeholder="localhost,127.0.0.1"]')!, "example.com");
+    act(() => button("上一步")!.click());
+    act(() => button("Chat Completions")!.click());
+    await act(async () => button("测试连接")!.click());
+    expect(keyTests()[0]!.body).not.toHaveProperty("headers");
+    act(() => button("下一步")!.click());
+    expect(text()).toContain("Chat Completions 不使用供应商专属请求头和代理设置");
+    expect(document.body.querySelector('textarea[placeholder^="X-Name"]')).toBeNull();
+    expect(document.body.querySelector('input[placeholder="http://127.0.0.1:7890"]')).toBeNull();
+    expect(document.body.querySelector('input[placeholder="localhost,127.0.0.1"]')).toBeNull();
+    await act(async () => button("保存")!.click());
+    const body = calls.find((c) => c.method === "POST" && c.path.endsWith("/launchers"))?.body;
+    expect(body).toMatchObject({ api: "chat" });
+    for (const key of ["headers", "proxy", "no_proxy"]) expect(body).not.toHaveProperty(key);
+  });
+
   it("keeps the Chat Completions protocol when editing", async () => {
     act(() => root.render(<ProviderWizard existing={{ name: "chat", kind: "api", api: "chat", base_url: "https://api.example.com", model: "example-chat", has_key: true }} onClose={() => {}} onSaved={() => {}} />));
     await flush();

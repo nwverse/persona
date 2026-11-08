@@ -285,10 +285,11 @@ export function formProblems(f: ProviderForm, isNew: boolean, hadKey = false): F
   if (!models && !f.model.trim()) models = checked.length ? t("lib-providers.pick_default") : t("lib-providers.add_model");
   else if (!models && !ids.has(f.model.trim())) models = t("lib-providers.default_unchecked");
 
+  const chat = f.kind === "api" && f.api === "chat";
   const advanced =
-    (f.headers_touched && headersProblem(f.headers)) ||
+    (!chat && f.headers_touched && headersProblem(f.headers)) ||
     (f.env_touched && envProblem(f.env)) ||
-    proxyProblem(f.proxy) ||
+    (!chat && proxyProblem(f.proxy)) ||
     (!nonNegInt(f.timeout_ms) && t("lib-providers.timeout_int")) ||
     (!nonNegInt(f.compact_window) && t("lib-providers.compact_int")) ||
     (!nonNegInt(f.max_context) && t("lib-providers.max_context_int")) ||
@@ -337,6 +338,7 @@ function extraFields(f: ProviderForm): Record<string, unknown> {
  *  clears them), the key only when typed. */
 export function providerBody(f: ProviderForm, old: ProviderView | null): Record<string, unknown> {
   const api = f.kind === "api";
+  const chat = api && f.api === "chat";
   const openAI = api && (f.api === "responses" || f.api === "chat");
   const body: Record<string, unknown> = {
     name: f.name.trim(),
@@ -357,9 +359,10 @@ export function providerBody(f: ProviderForm, old: ProviderView | null): Record<
   const extra = extraFields(f);
   const before = old && extraFields(formFromView(old));
   for (const [k, v] of Object.entries(extra)) {
+    if (chat && (k === "proxy" || k === "no_proxy")) continue;
     if (before ? !sameJSON(before[k], v) : v !== "" && v !== 0 && v !== false && !(Array.isArray(v) && v.length === 0)) body[k] = v;
   }
-  if (f.headers_touched) body.headers = f.headers.trim();
+  if (!chat && f.headers_touched) body.headers = f.headers.trim();
   if (f.env_touched) body.env = f.env.replace(/\s+$/, ""); // the start kept: the hub's line numbers match the box
   return body;
 }
@@ -369,7 +372,7 @@ export function probeBody(f: ProviderForm, stored: string | null, model?: string
   const b: Record<string, unknown> = { base_url: f.base_url.trim(), auth: f.auth, api: f.api };
   if (stored) b.name = stored;
   if (f.api_key.trim()) b.api_key = f.api_key.trim();
-  if (f.headers_touched) b.headers = f.headers.trim();
+  if (!(f.kind === "api" && f.api === "chat") && f.headers_touched) b.headers = f.headers.trim();
   if (model !== undefined) b.model = model;
   return b;
 }
