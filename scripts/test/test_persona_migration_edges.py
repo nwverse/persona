@@ -123,6 +123,14 @@ class PersonaMigrationEdgesTests(unittest.TestCase):
     def assert_same_directory(self, first, second):
         self.assertTrue(os.path.samefile(first, second), f'different stores: {first} / {second}')
 
+    def assert_former_alias(self, home, initial):
+        """A former-name store is reached under both names; a current-name one gets no former-name alias (#1445)."""
+        former = home / ('.' + FORMER_NAME)
+        if initial == 'former':
+            self.assert_same_directory(home / '.persona', former)
+        else:
+            self.assertFalse(os.path.lexists(former), f'former-name alias made for a current-name store: {former}')
+
     def write_profile(self, name):
         file = self.home / f'{name}.json'
         file.write_text(json.dumps({'app': {'bundle_id': f'com.example.{name}'},
@@ -344,7 +352,7 @@ except OSError as error:
                     self.assertEqual((home / '.persona').is_symlink(), initial == 'former')
                     if seed is not None:
                         self.assertEqual((seed / 'existing.fixture').read_text(), 'existing-payload')
-                    self.assert_same_directory(home / '.persona', home / ('.' + FORMER_NAME))
+                    self.assert_former_alias(home, initial)
                     if initial != 'fresh':
                         self.assertEqual((home / '.persona/existing.fixture').read_text(), 'existing-payload')
 
@@ -367,7 +375,7 @@ except OSError as error:
                     self.assertEqual((home / '.persona/python-state.fixture').read_text(), 'python-payload')
                     if initial != 'fresh':
                         self.assertEqual((seed / 'existing.fixture').read_text(), 'existing-payload')
-                    self.assert_same_directory(home / '.persona', home / ('.' + FORMER_NAME))
+                    self.assert_former_alias(home, initial)
                     if initial != 'fresh':
                         self.assertEqual((home / '.persona/existing.fixture').read_text(), 'existing-payload')
 

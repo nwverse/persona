@@ -97,6 +97,7 @@ The clients draw the same states differently. A consumer maps what it draws onto
 | [sends.json](sends.json) | Sending, the receipt, the transcript copy, refusals and retries |
 | [cards.json](cards.json) | Answering cards; old snapshots and replays after an answer |
 | [reconnect.json](reconnect.json) | Disconnects, lost and duplicated pushes, gaps |
+| [relaunch.json](relaunch.json) | The app killed and started again from what it stored |
 | [restart.json](restart.json) | Hub restarts, resumable or not |
 | [devices.json](devices.json) | Two devices on the same chat |
 | [wake.json](wake.json) | Background tasks waking the agent |
@@ -115,6 +116,10 @@ The clients draw the same states differently. A consumer maps what it draws onto
 ```sh
 cd server && go test ./internal/proto/ -run SyncScenarios
 ```
+
+The clients replay the cases against their own state code:
+
+- iOS / Mac: `apple/PersonaTests/Sync/` (`SyncScenarioTests`, #1112) plays each case through the real `AppModel`, its frames over the demo config's socket and its requests over the demo config's transport, and projects the chat page onto the view after every step. Cases it cannot play yet, and cases failing on a filed bug, are listed in its `known` table with the issue; `TEST_RUNNER_SYNC_TRACE=1` prints every step's view.
 
 ## Adding a case
 
