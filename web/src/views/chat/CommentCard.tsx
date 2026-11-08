@@ -13,6 +13,7 @@ import { composing } from "../../lib/send-history";
 
 /** `staged`, `unstaged`, `commit 1a2b3c4d`, worded for the reader. */
 export function diffName(d: NonNullable<CodeSpot["diff"]>): string {
+  if (d.kind === "review") return d.scope === "uncommitted" ? t("chat-comments.review_uncommitted") : t(d.scope === "branch" ? "chat-comments.review_branch" : "chat-comments.review_since", { sha: d.base });
   return d.kind === "commit" ? t("chat-comments.commit", { sha: diffLabel(d).slice(7) }) : t(d.kind === "staged" ? "chat-comments.staged" : "chat-comments.unstaged");
 }
 

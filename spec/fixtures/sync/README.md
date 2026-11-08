@@ -89,7 +89,6 @@ The clients draw the same states differently. A consumer maps what it draws onto
 - `answered`: a summary ("Allowed", the picks) or nothing.
 - Gap fills: iOS / Mac fills at once, the web and Android wait 1.5 s (`docs/protocol/protocol.md` "Continuity of items"). A step's `requests` is checked once the device's own timers for that step ran.
 - A message the hub queued (`session.queued`) may show in the queue strip instead of as a bubble; both are `pending`.
-- The web puts a failed message's words back into the composer instead of keeping a failed bubble (#1122): its `failed` is compared apart from its place in the list.
 
 ## Files
 
