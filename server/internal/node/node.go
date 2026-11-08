@@ -91,7 +91,7 @@ type Node struct {
 	state   *stateFile
 	files   map[string]*transcript.File // session id -> parsed transcript
 	paths   map[string]string           // session id -> transcript path
-	pathsAt map[string]time.Time        // when a path not told by a hook was last chosen (transcriptPath)
+	pathsAt map[string]time.Time        // when a path was last reported or chosen (transcriptPath looks again after 30 s)
 	watches map[string]*watch
 	// waiting: watches of sessions with no transcript yet (watchFor), so session.unwatch finds them (#5389).
 	waiting map[string]*watch
