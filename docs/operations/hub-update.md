@@ -159,6 +159,24 @@ mirror tests and Hub confirmation do not establish remote reachability or
 consumer installation. The publisher's confirmed receipt reports the relative
 mirror directory and consumer manifest hash for this separate read-only check.
 
+An explicit single-node publisher transfer can recover a transient Link failure
+without starting another publication. Only identical chunks for the already
+selected transaction, offset and bytes are retried (at most four attempts), inside
+the original install deadline. Every relay call retains the manager owner, machine
+UID, executable and platform checks. Identity conflicts and invalid offsets fail;
+expired transactions never trigger a replacement `begin`. A commit is sent once:
+a lost or gateway-error reply is ambiguous, so only a fresh matching handshake,
+required capability and guardian confirmation establish success. Rejected commits
+still fail, and cleanup errors retain the original transfer failure.
+
+The SSH publisher sends keepalives and drains node-publisher stdout and stderr
+concurrently into the original worker log, including transfer offsets and remote
+tracebacks. The existing command timeout also bounds output collection. Missing
+SSH exit status or an interrupted connection cannot create a confirmed receipt;
+it does not reconnect and replay the remote publication. Keepalives reduce idle
+connection loss but do not prove a broken route has recovered. Preserve the failed
+run and let its sole runtime owner decide a subsequent explicit retry.
+
 A Hub-only edge switch may proceed while sessions on proven resident nodes or remote herdr/herdr-core hosts run:
 their processes belong to the terminal host and survive the transport reconnect.
 Local and unknown/direct assistant sessions still wait for idle. Fleet upgrades
@@ -370,6 +388,18 @@ The programs (`update.ProgramNames`): `personad-wechat` (the WeChat bot), and `p
 - When the manifest has `programs` for this hub's platform, they are downloaded and verified (same sha256, and `version -v` must be this version), then swapped in together with personad: placed next to personad,
   existing ones kept as `.prev`, and ones that did not exist before recorded as newly installed. If any one fails to download or verify, the whole update is skipped. A program whose swap fails midway is left as it was, and going back leaves it too.
 - Rollback (the new version does not start, the watchdog, an error during the swap) swaps them back together with personad and deletes the newly installed ones (`update.RestoreAll`, `programs` in `pending.json`).
+- **Which program the hub goes on as** (`run` in `pending.json`, `Pending.RunPath`): a hub run as `persona-hub` restarts, hands over and rolls back as the `persona-hub` the update swapped, so it stays on its own program; a hub run as `personad` stays on `personad` (no `run`).
+  `target` stays `personad`, the release's main download and what the watchdog runs as `personad.prev`. A build that predates `run` (an older edge or watchdog) reads only `target` and brings the hub back as `personad hub run`, which serves the same hub; a `pending.json` an older build wrote has no `run` and goes back to `target` as before.
+  A release without `persona-hub` for this platform leaves a hub run as `persona-hub` by hand on `personad` (which the update did replace), not on a `persona-hub` it did not.
+- **A release without `persona-hub` or `persona-manager` for this platform** (`hub.unreplaced`) leaves that file as it was. That is fine while nothing runs it, and the update goes ahead.
+  It is not installed while a service runs that program, because the service would go on starting the old build beside the new `personad` (`hub/selfupdate_services.go`). A service here is one of:
+  - A systemd unit whose `ExecStart` runs it: the last one in `[Service]`, drop-ins read after the unit, read as systemd and `hub-systemd.sh` read it. The user's units come from `~/.config/systemd/user`, `/etc/systemd/user`, `~/.local/share/systemd/user` and `/usr/lib/systemd/user`, the machine's from `/etc/systemd/system` and `/usr/lib/systemd/system`. A unit in an earlier directory shadows one by the same name in a later one, and drop-ins come from all of them. It counts when systemd says it is enabled (or static, generated…) or active; when `systemctl` cannot answer (no user manager to ask, say), every such unit counts.
+  - A launchd agent or daemon (`~/Library/LaunchAgents`, `/Library/LaunchAgents`, `/Library/LaunchDaemons`; XML, or binary through `plutil`) whose program is it: `Program`, else `ProgramArguments[0]`. One that says `Disabled` does not count.
+  - The systemd service the hub itself runs in, when it runs as `persona-hub` and that unit's own `ExecStart` is this `persona-hub` or `personad` (switched to `persona-hub` inside it). In any other service (a terminal multiplexer's, `systemd-run`'s) it was started by hand.
+  Not seen: units under `/run`, units under `/lib/systemd/{system,user}` where `/lib` is not merged into `/usr`, template instances (`name@instance.service`), a launchd job that says `Disabled` but was enabled in launchd's override database (`launchctl enable`, `launchctl load -w`), a program wrapped in another command (`sh -c '…/persona-hub run'`) or named without a path. Such a service does not hold the release back.
+  The services are looked at when the release is read and again just before the swap (a unit pointed at the program while the update waited for idle).
+  Settings › hub shows the reason (`latest.held`, as for a release behind this hub's code above), the history gets one `held` entry per release, and **Update Hub** is refused with the same reason (409).
+  `install.sh` also refuses such a release before anything changes, with a wider check of its own: a unit file or drop-in in those systemd directories that has the program's path in an `ExecStart` line (as is, under `%h`, or as systemd escapes it), or a property list that has it in a `<string>`. A unit a later drop-in took back to `personad`, a disabled one and a wrapper count there too, so it refuses some releases the hub would install.
 - The first update that carries programs: the watchdog running is the old personad, which does not know `programs`, so a rollback only swaps personad back; the new programs left behind do not match the old hub version, and the hub will not start them
   (status says "not the same version"), until the next update.
 
@@ -420,7 +450,8 @@ Download → Verify → Prepare → Wait for idle → Replace → Restart → Co
      - The entry process first starts the new version as standby; only after its version matches and self-check passes does it hold connections, release the old version, activate the new one and switch routing;
      - If the new version cannot start, the entry process returns `switch_failed`; the old version restores the files, deletes pending and records this attempt as failed (not as a bad version, since the new version never ran);
      - No watchdog is started: the entry process is the watchdog.
-   - **Without an entry process** (Windows, `PERSONA_HUB_EDGE=0`): start the watchdog first (below), then `syscall.Exec` the new binary with the same arguments and environment.
+   - **Without an entry process** (Windows, `PERSONA_HUB_EDGE=0`): start the watchdog first (below), then `syscall.Exec` the new binary with the same arguments and environment
+     (the program the hub runs as: `persona-hub` for a hub run as `persona-hub`, see "Programs swapped together with personad").
      Carry the socket passed by systemd along (`LISTEN_FDS`, `execListenEnv` in `listen.go`; this step used to be missing, so the new process failed because the port was occupied);
      restart under the same process id, without relying on the service manager.
    - The local node is a child process of the hub and exits with it; the new hub starts it with the new binary.
@@ -439,7 +470,7 @@ Download → Verify → Prepare → Wait for idle → Replace → Restart → Co
    - **Watchdog** (without an entry process; code from the old binary, `personad update-watch`, started separately before exec and detached from the process group):
      if it does not see the new build number and "confirmed" from the local `/api/v1/health` within 3 minutes, it rolls back itself:
      - Under systemd (with `INVOCATION_ID`) or launchd: restore `.prev`, kill the main process, and let the service manager start the old binary;
-     - Without a service manager: after restoring it, start the old hub in the background with the original arguments.
+     - Without a service manager: after restoring it, start the old hub in the background with the original arguments, as the program it ran as (`run` in `pending.json`, else `target`).
      - It signals the hub only while the hub is still its parent process (SIGTERM, then SIGKILL after 10 seconds if it is still there): once the hub has exited, its pid may belong to another process.
    - After rollback, record this build number in the **bad-version** list: automatic updates no longer try it and wait for a newer version. The user can still install it manually; the App says, "This version failed to start last time and was rolled back."
 9. **Update nodes along with it (only with `auto_update_nodes: true`)**:

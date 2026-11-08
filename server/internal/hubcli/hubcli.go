@@ -19,7 +19,8 @@ import (
 const Usage = `  personad hub [run]        run the hub (config ~/.persona/hub.json); behind its edge on Linux and macOS, which
                            holds the ports and switches to a new binary with no restart (docs/operations/hub-restart.md「蓝绿切换」)
   personad hub switch [--binary <path>] [--prev <path>] [--status]
-                           have the running edge start <path> (default: the hub's binary) and switch to it once it is up;
+                           have the running edge start <path> (default: the program the hub runs now, personad or
+                           persona-hub) and switch to it once it is up;
                            exit 0 switched, 1 it did not (the hub serves on), 3 no edge here (restart the service instead)
   personad hub setup [--yes] [--listen :18660] [--tls :18662] [--outside] [--no-service] [--json]
                                            set this machine up as the hub: hub.json, database, service, pairing (docs/assistant/onboarding.md)

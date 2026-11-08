@@ -5,11 +5,12 @@ package lark
 
 import (
 	"errors"
-	"regexp"
+
+	"github.com/nwverse/persona/server/internal/lazyre"
 )
 
 // sourceName is a lark.prefer value: "cli" or an extension's own source.
-var sourceName = regexp.MustCompile(`^[a-z][a-z0-9-]{0,31}$`)
+var sourceName = lazyre.New(`^[a-z][a-z0-9-]{0,31}$`)
 
 // Config is hub.json's lark.
 type Config struct {

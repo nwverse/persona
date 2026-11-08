@@ -9,6 +9,7 @@ import uuid
 from hub_release_paths import prepare_remote_staging, release_directory, validate_remote_upload
 from pinned_node_release import validated_artifact, validate_target, validate_candidate
 from publish_hub_release import connect_publisher
+from publisher_io import collect_output
 
 
 def main():
@@ -45,7 +46,7 @@ def main():
                        source=args.source, run_id=args.run_id, target_identity=args.config_sha256, candidate=cfg['candidate'],
                        apply=args.apply, timeout=cfg.get('timeout', 900))
         script = 'import sys, types, json\n'
-        for name in ['hub_release_paths', 'node_artifacts', 'manager_artifacts', 'pinned_node_release', 'promote_node_release']:
+        for name in ['hub_release_paths', 'node_artifacts', 'manager_artifacts', 'pinned_node_release', 'node_relay_retry', 'promote_node_release']:
             source = Path(__file__).with_name(name + '.py').read_text()
             script += f'module = types.ModuleType({name!r}); sys.modules[{name!r}] = module\n'
             script += f'exec({source!r}, module.__dict__)\n'
@@ -54,11 +55,7 @@ def main():
         stdin.write(script)
         stdin.flush()
         stdin.channel.shutdown_write()
-        output = stdout.read().decode()
-        error = stderr.read().decode()
-        code = stdout.channel.recv_exit_status()
-        if output:
-            print(output, end='', flush=True)
+        output, error, code = collect_output(stdout, stderr, cfg.get('timeout', 900) + 120)
         if code:
             raise RuntimeError(f'Node publisher exited {code}: {error}')
         lines = output.splitlines()

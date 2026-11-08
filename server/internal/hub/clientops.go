@@ -9,17 +9,17 @@ import (
 	"errors"
 	"io"
 	"net/http"
-	"regexp"
 	"strings"
 	"time"
 
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/db"
 	"github.com/nwverse/persona/server/internal/i18n"
+	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
-var clientOpUUID = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
+var clientOpUUID = lazyre.New(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
 
 // Body is encoded as bytes so JSONB cannot change whitespace or the original response bytes.
 type clientOpResult struct {
@@ -143,9 +143,9 @@ type clientOpForgetter interface {
 
 // clientOpRetry: an inbox reply or hand-off the manager never got (assistant_offline) or that was cut off on the way
 // to it (assistant_in_doubt) keeps no receipt: the same request asked again goes to the manager, whose send id has it
-// sent once (inbox.go sendInboxOnce, a hand-off's session.send_once), instead of the stored refusal coming back for good.
-// A notification choice and a conversation's start only release a definitely offline receipt; uncertain delivery
-// stays recorded.
+// sent once (extmgr inbox_reply.go sendInboxOnce, a hand-off's session.send_once), instead of the stored refusal
+// coming back for good. A notification choice and a conversation's start only release a definitely offline receipt;
+// uncertain delivery stays recorded.
 func clientOpRetry(kind string, body []byte) bool {
 	if kind != "inbox_reply" && kind != "inbox_handoff" && kind != "choose" && kind != "assistant_start" {
 		return false

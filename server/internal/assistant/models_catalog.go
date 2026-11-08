@@ -3,10 +3,10 @@ package assistant
 import (
 	_ "embed"
 	"encoding/json"
-	"regexp"
 	"strings"
 	"sync"
 
+	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
@@ -32,7 +32,7 @@ var modelCatalog = sync.OnceValue(func() map[string]proto.ProviderModel {
 	return out
 })
 
-var modelDateSuffix = regexp.MustCompile(`-\d{8}$`)
+var modelDateSuffix = lazyre.New(`-\d{8}$`)
 
 // catalogModel looks a model id up: as given, then without a vendor prefix ("anthropic/…"), the "[1m]" marker and a
 // date suffix ("-20250929"), case-insensitively.

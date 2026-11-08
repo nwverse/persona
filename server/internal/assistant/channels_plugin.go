@@ -8,13 +8,13 @@ import (
 	"github.com/nwverse/persona/server/internal/compat"
 	"maps"
 	"net/http"
-	"regexp"
 	"slices"
 	"strings"
 	"time"
 
 	"github.com/nwverse/persona/server/internal/channel"
 	"github.com/nwverse/persona/server/internal/i18n"
+	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/prompts"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/rpc"
@@ -757,8 +757,8 @@ func stripContext(s string) string {
 
 // contextBlockRe and contextOpenRe are a <persona-context> block.
 var (
-	contextBlockRe = regexp.MustCompile(`(?s)<` + compat.ContextPattern() + `\b[^>]*>.*?</` + compat.ContextPattern() + `>`)
-	contextOpenRe  = regexp.MustCompile(`<` + compat.ContextPattern() + `\b`)
+	contextBlockRe = lazyre.New(`(?s)<` + compat.ContextPattern() + `\b[^>]*>.*?</` + compat.ContextPattern() + `>`)
+	contextOpenRe  = lazyre.New(`<` + compat.ContextPattern() + `\b`)
 )
 
 func firstNonEmpty(s ...string) string {

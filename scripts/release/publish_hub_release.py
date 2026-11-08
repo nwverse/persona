@@ -15,6 +15,8 @@ from urllib.parse import urlsplit
 
 import paramiko
 
+from publisher_io import KEEPALIVE_SECONDS
+
 
 def credential_fields(credentials):
     if 'fields' not in credentials:
@@ -60,6 +62,7 @@ def connect_publisher(cfg):
                 client.connect(credentials['host'], port=int(credentials.get('port', 22)),
                                username=credentials['username'], password=credentials['password'],
                                look_for_keys=False, allow_agent=False, timeout=20, sock=sock)
+                client.get_transport().set_keepalive(KEEPALIVE_SECONDS)
                 break
             except OSError:
                 client.close()

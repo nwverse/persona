@@ -57,8 +57,10 @@ A new style that has its own icons sets `icons` in its `ComponentSpec`; nothing 
 | A system control that draws its own symbol (`Label(_:systemImage:)` in a menu, a swipe action, a tab) | `Theme.Icon.x` as written |
 | A brand, an iPhone app, a Linux distribution | `BrandMark`, `BrandTile`, `BrandBadge` with `Theme.Brand` (never `Image("…")`) |
 
-`ThemedIcon` takes its size and color from the caller like `Image(systemName:)`. Use `Image(systemName:)` directly only
-where the symbol must be an `Image`: sized by its frame with `.resizable()`, or inside `Text`. `TokenRatchetTests` counts
+`ThemedIcon` takes its size and color from the caller like `Image(systemName:)`. Where the symbol must be an `Image`
+inside `Text` or as a menu item's icon (the item takes only an `Image`), use `Theme.Icon.image(Theme.Icon.x)`: the
+style's symbol, with the weight of the surrounding font. Use `Image(systemName:)` directly only where it is sized by its
+frame with `.resizable()`. `TokenRatchetTests` counts
 those per file (`rawSymbol`), and the count only goes down.
 
 Size an icon with a font level (`Theme.Font`) when it sits in text, and with `Theme.Size` + `.scaledFrame(…)` when it

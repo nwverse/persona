@@ -215,9 +215,6 @@
   "Persona\/Views\/Settings\/StorageView.swift" : {
     "hstackSpacing" : 1
   },
-  "Persona\/Views\/Settings\/TriageSettingsView.swift" : {
-    "rawSymbol" : 1
-  },
   "PersonaWatch\/PersonaWatchApp.swift" : {
     "fixedFrame" : 4,
     "padding" : 3,

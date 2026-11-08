@@ -58,7 +58,8 @@ func TestAgentPlugin(t *testing.T) {
 			want = inAgentEnv(personaDir(home), "HERDR_AGENT=claude claude --session-id "+startID+" --mcp-config "+shellQuote(filepath.Join(personaDir(home), "mcp.json"))+
 				" --plugin-dir "+shellQuote(plugin)+
 				" --allowedTools "+shellQuote("Bash(sh "+filepath.Join(plugin, "skills", "persona-office", "scripts", "office.sh")+" *)")+
-				" --plugin-dir "+shellQuote(filepath.Join(personaDir(home), "claude-hooks")), shellQuote)
+				" --plugin-dir "+shellQuote(filepath.Join(personaDir(home), "claude-hooks"))+
+				" --plugin-dir "+shellQuote(filepath.Join(personaDir(home), liveRepliesDir)), shellQuote) // live replies: on by default
 		}
 		if typed := f.trace("pane.send_input"); !slices.Contains(typed, call("pane.send_input", map[string]any{"pane_id": "w1:p2", "keys": []string{"Enter"}, "text": want})) {
 			t.Errorf("claude %q: typed %v, want %s", tc.version, typed, want)

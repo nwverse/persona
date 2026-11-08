@@ -22,6 +22,8 @@ const (
 	// CodeReadOnly: the path is outside what the phone may change (409); CodeExists: the name is taken (409, name).
 	CodeReadOnly = "read_only"
 	CodeExists   = "exists"
+	// CodeNotFound: the file to rename, move, trash or put back is not there (404).
+	CodeNotFound = "not_found"
 	// CodeTooLarge: over MaxUploadBytes (413); CodeNodeOutdated: the machine's node predates the feature (409).
 	CodeTooLarge     = "too_large"
 	CodeNodeOutdated = "node_outdated"
