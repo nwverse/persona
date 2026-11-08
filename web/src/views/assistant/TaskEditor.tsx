@@ -216,6 +216,7 @@ export function TaskEditor({
               {draft.repeat === "once" && <OnceWhen draft={draft} now={now} onChange={(at) => set({ at })} />}
               {draft.repeat === "daily" && <DailyWhen draft={draft} onChange={set} />}
               {draft.repeat === "interval" && <IntervalWhen minutes={draft.every_minutes ?? 0} onChange={(m) => set({ every_minutes: m })} />}
+              {(draft.repeat === "daily" || draft.repeat === "interval") && <UntilWhen draft={draft} now={now} onChange={(until) => set({ until })} />}
             </div>
             <p className="mt-1.5 px-1 text-[11.5px] leading-relaxed text-ink-3">
               {draft.enabled && next && saved && !changed
@@ -228,6 +229,9 @@ export function TaskEditor({
                       ? t("assistant-taskeditor.interval_hint", { every: everyLabel(draft.every_minutes ?? 0) })
                       : t("assistant-taskeditor.interval_hint_blank")}
             </p>
+            {(draft.repeat === "daily" || draft.repeat === "interval") && (
+              <p className="mt-1.5 px-1 text-[11.5px] leading-relaxed text-ink-3">{t("assistant-taskeditor.until_hint")}</p>
+            )}
           </section>
 
           <section>
@@ -442,6 +446,30 @@ export function RunMark({ status }: { status: string }) {
     <span aria-label={t("assistant-taskeditor.status_failed")} role="img" className="flex size-[18px] shrink-0 items-center justify-center rounded-full bg-field text-red">
       <Icon name="x" size={11} stroke={3} />
     </span>
+  );
+}
+
+function UntilWhen({ draft, now, onChange }: { draft: Task; now: Date; onChange: (until: string | undefined) => void }) {
+  const value = toLocalInput(parseTime(draft.until));
+  return (
+    <div className="flex items-end gap-2">
+      <div className="min-w-0 flex-1">
+        <Field label={t("assistant-taskeditor.until_label")}>
+          <input
+            type="datetime-local"
+            className={cx(inputClass, "tabular-nums")}
+            value={value}
+            min={toLocalInput(now)}
+            onChange={(e) => onChange(fromLocalInput(e.target.value)?.toISOString())}
+          />
+        </Field>
+      </div>
+      {value && (
+        <Button tone="quiet" className="whitespace-nowrap" onClick={() => onChange(undefined)}>
+          {t("assistant-taskeditor.until_clear")}
+        </Button>
+      )}
+    </div>
   );
 }
 
