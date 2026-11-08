@@ -43,8 +43,9 @@ func (n *Node) startWait() time.Duration {
 // herdr reports the trust dialog as idle, so the screen is the source of truth. The wait for the input box starts
 // once claude runs in the pane: a slow shell before it is not claude being slow. A wait in a herdr pane that ends with
 // the input box on screen and herdr knowing no agent there (agent_not_found, or none named) says so: herdr does not
-// know that program as Claude (#3454).
-func (n *Node) waitReady(ctx context.Context, pane string) (*host.Agent, error) {
+// know that program as Claude (#3454). probe (nil: none) is a start's command: while claude has not come, the tab's
+// shell saying it cannot run it ends the wait at once with a coded refusal (shellmiss.go, #1642).
+func (n *Node) waitReady(ctx context.Context, pane string, probe *startProbe) (*host.Agent, error) {
 	startWait, readyWait := n.claudeWaits()
 	deadline := time.Now().Add(startWait)
 	running := false
@@ -60,6 +61,7 @@ func (n *Node) waitReady(ctx context.Context, pane string) (*host.Agent, error) 
 	unrecognised := false   // at the last look herdr knew no claude in the pane while its input box was on screen
 	sawClaude := false      // herdr has named claude in the pane
 	var goneSince time.Time // since when herdr has named no agent there after sawClaude, with only a shell in front
+	shellSaid := ""         // a not-found line the tab's shell printed after the command, of something else than it
 	for time.Now().Before(deadline) {
 		select {
 		case <-ctx.Done():
@@ -91,6 +93,17 @@ func (n *Node) waitReady(ctx context.Context, pane string) (*host.Agent, error) 
 		}
 		a, err := n.paneAgent(ctx, pane)
 		if err != nil || a.Agent != "claude" {
+			// The tab's shell could not run the command (a launcher its rc files do not define, a claude not on its
+			// PATH): it said so right after it and is back at its prompt, and claude will not come (#1642).
+			if probe != nil && !sawClaude && !running && mayHaveShellMiss(screen) {
+				if full, rerr := n.readPane(ctx, pane, "recent-unwrapped", 60); rerr == nil {
+					refused, other := probe.verdict(full, func() bool { return n.shellBackOrUnknown(ctx, pane) })
+					if refused != nil {
+						return nil, refused
+					}
+					shellSaid = other
+				}
+			}
 			if onHerdr && (err == nil || errors.Is(err, host.ErrNoAgent)) {
 				unrecognised = inputBoxVisible(screen)
 				// claude came up and exited (a launcher's bad config, a failed login): no input box will come, so the
@@ -128,6 +141,9 @@ func (n *Node) waitReady(ctx context.Context, pane string) (*host.Agent, error) 
 			wait = readyWait
 		}
 		return nil, n.unrecognisedClaude(ctx, pane, wait)
+	}
+	if !running && shellSaid != "" {
+		return nil, fmt.Errorf("claude did not start within %s: after the command the tab's shell printed %q", startWait, shellSaid)
 	}
 	if !running {
 		return nil, fmt.Errorf("claude did not start within %s: the tab's shell had not run it yet (is the machine busy?)", startWait)

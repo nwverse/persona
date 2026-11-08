@@ -258,6 +258,24 @@ other engines' panes (Orca) keep their original error.
   Both `enableArtifact: false` in `--settings` and environment `CLAUDE_CODE_DISABLE_ARTIFACT=1` worked in tests (interactive claude in tmux, three configs compared);
   Persona-managed launchers now carry both (`docs/integrations/launchers.md` ("How Persona-managed launchers run")).
 
+## "the tab's shell had not run it yet (is the machine busy?)" when the launcher isn't there at all (#1642)
+
+The same 3-minute error came from a start whose launcher the tab's shell simply did not have: herdr's panes ran inside a container whose `~/.bashrc` detected the container and returned early,
+so the launcher function defined further down existed in the node's `bash -ic` (where the list, "Test availability" and the health checks run) but not in the pane. The tab printed
+`bash: <launcher>: command not found` a second after the command; herdr never names an agent in such a pane, so nothing ended the wait, and the cause was buried under the echoed
+700-character command in the error's screen tail. Launcher health made it worse: the failed start was classed `other`, and the check that runs right after a failed start
+passed in the login shell and reset the launcher to `ok`, so the assistant kept picking it. App starts were not recorded at all.
+
+- Persona lists and checks launchers in one environment and runs them in another; nothing guarantees they match (a container, a different login shell than `loginShellProgram`, herdr's `default_shell`, a bash login tab reading `~/.bash_profile`).
+- While claude has not come, `waitReady` now reads the shell's own not-found line for the command it typed (`node/shellmiss.go`: bash, zsh, dash / sh, ksh, fish, Ubuntu's and Fedora's handlers, paths that are missing or can't be run)
+  and fails at once with a coded refusal. Anchor on the session id in the typed command: only lines after it are this start's (an adopted pane's scrollback is not), and a line about claude counts only after the command's last echo
+  with the shell back in front (a slow rc prints its own noise between the terminal's echo and the shell's). Accept only whole lines: Claude's output quoting a shell error (`⎿ zsh: command not found: x`) is not one.
+- A health check in the login shell cannot clear a failure only the terminal has: keep it as its own class (`not_in_terminal`), skip the follow-up check and the repairs, and clear it only on a start that works.
+- Keep a refusal's code through every hop (`control.go` used to wrap it into text with the screen tail; `startLog.finish` kept only `err.Error()`): the apps and the hub can only word what still has its code.
+- Match what the programs really print, not what they mean to: `personad launch` ends through `log.Fatal`, whose default flags put the date and time in front (a pattern anchored at the start of the line never matched it);
+  dash, ksh and busybox say `not found` of a missing path; fish follows an error inside a function with a backtrace that repeats the function's arguments, the session id with them.
+- Don't compare a node's timestamps with the manager's clock: a node whose clock ran behind made a first failed start look counted already. Keep what was counted instead (with the health records, across restarts).
+
 ## Don't default to bare claude when resuming externally created sessions (2026-11-05, #411)
 
 - On many computers, `claude` itself isn't logged in; launchers (functions in `~/.zshrc`, or Persona-added launchers) supply the gateway and key.
