@@ -10,6 +10,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import sleep_ratchet
@@ -306,10 +307,46 @@ class GitTests(unittest.TestCase):
         self.assertEqual(1, code, err)
         self.assertIn("baseline raises", err)
 
-    def test_ci_base_sha_that_does_not_exist_here_is_not_an_error(self):
+    def test_an_unresolvable_ci_base_sha_does_not_skip_the_raise_check(self):
+        # A baseline already raised on HEAD must not pass just because CI_BASE_SHA is missing from
+        # this clone. migration_freeze exits 2 in that case; so does this check.
+        self.write(SERVER, source(3))
+        self.write(sleep_ratchet.BASELINE_REL, sleep_ratchet.render({SERVER: 3}))
+        self.git("add", "-A")
+        self.git("commit", "-q", "-m", "raised")
+        parent = subprocess.check_output(
+            ["git", "-C", str(self.repo), "rev-parse", "HEAD~1"], text=True, timeout=30).strip()
+        os.environ["CI_BASE_SHA"] = parent
+        code, err = self._capture([])
+        self.assertEqual(1, code, err)
+        self.assertEqual(1, err.count("baseline raises"))
         os.environ["CI_BASE_SHA"] = "0123456789abcdef0123456789abcdef01234567"
-        code, out = self._capture([])
-        self.assertEqual(0, code, out)
+        code, err = self._capture([])
+        self.assertEqual(2, code, err)
+        self.assertIn("does not resolve", err)
+        self.assertNotIn("Traceback", err)
+
+    def test_a_raise_against_head_and_the_base_is_one_line(self):
+        self.git("commit", "--allow-empty", "-q", "-m", "move head")
+        self.write(sleep_ratchet.BASELINE_REL, sleep_ratchet.render({SERVER: 4}))
+        code, err = self._capture([])
+        self.assertEqual(1, code, err)
+        self.assertEqual(1, err.count("baseline raises"))
+        self.assertIn("HEAD and ", err)
+
+    def test_a_git_timeout_is_a_one_line_error(self):
+        real = subprocess.run
+
+        def timed_out(command, **kwargs):
+            if "merge-base" in command:
+                raise subprocess.TimeoutExpired(command, 60)
+            return real(command, **kwargs)
+
+        with patch("sleep_ratchet.subprocess.run", side_effect=timed_out):
+            code, err = self._capture([])
+        self.assertEqual(2, code, err)
+        self.assertIn("timed out", err)
+        self.assertNotIn("Traceback", err)
 
 
 class RepoTests(unittest.TestCase):

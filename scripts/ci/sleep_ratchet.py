@@ -294,7 +294,10 @@ def plan_update(old, actual):
 
 
 def _git(root, args):
-    return subprocess.run(["git", "-C", str(root), *args], capture_output=True, timeout=60)
+    try:
+        return subprocess.run(["git", "-C", str(root), *args], capture_output=True, timeout=60)
+    except subprocess.TimeoutExpired:
+        raise SleepError("sleep ratchet: git {0} timed out".format(" ".join(args[:6])))
 
 
 def _inside_git(root):
@@ -343,8 +346,9 @@ def ancestor_baselines(root, base=None, env=None):
     """(label, counts) for HEAD and for the base commit, when each already has the baseline.
 
     A checkout that is not a git repo, or a base commit that predates the baseline, contributes
-    nothing. An unresolvable CI_BASE_SHA (a temp repo, or a sha from another clone) is skipped;
-    the caller's own base ref is then not invented.
+    nothing. An explicit --base or CI_BASE_SHA that does not resolve is an error: skipping it
+    would let a baseline already raised on HEAD pass. A missing default branch is not an error;
+    there is no base to compare with.
     """
     if not _inside_git(root):
         return []
@@ -353,11 +357,15 @@ def ancestor_baselines(root, base=None, env=None):
     head_text = _blob(root, "HEAD:" + BASELINE_REL)
     if head_text is not None:
         found.append(("HEAD", parse_baseline(head_text, "HEAD:" + BASELINE_REL)))
-    ref = base or env.get("CI_BASE_SHA") or _default_ref(root)
+    explicit = base or env.get("CI_BASE_SHA")
+    ref = explicit or _default_ref(root)
     if not ref:
         return found
     commit = _merge_base(root, ref)
     if not commit:
+        if explicit:
+            raise SleepError(
+                "sleep ratchet: base {0} does not resolve; refusing to skip the never-raise check".format(explicit))
         return found
     head = _git(root, ["rev-parse", "--verify", "--quiet", "HEAD"])
     if head.returncode == 0 and head.stdout.decode().strip() == commit:
@@ -377,11 +385,32 @@ def _tracks_baseline(root, baseline_path):
         return False
 
 
+def _strict_previous(ancestors):
+    """One previous map: the lowest count any ancestor allows, absent when one of them lacks the path."""
+    if not ancestors:
+        return None, ""
+    paths = set()
+    for _, previous in ancestors:
+        paths.update(previous)
+    strict = {}
+    for path in paths:
+        counts = []
+        for _, previous in ancestors:
+            if path not in previous:
+                counts = None
+                break
+            counts.append(previous[path])
+        if counts:
+            strict[path] = min(counts)
+    label = " and ".join(name for name, _ in ancestors)
+    return strict, label
+
+
 def _ancestor_violations(root, candidate, base, env):
-    found = []
-    for label, previous in ancestor_baselines(root, base, env):
-        found.extend(raised_against(candidate, previous, label))
-    return found
+    previous, label = _strict_previous(ancestor_baselines(root, base, env))
+    if previous is None:
+        return []
+    return raised_against(candidate, previous, label)
 
 
 def check(root, baseline_path=None, base=None, env=None):
