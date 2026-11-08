@@ -2,19 +2,21 @@ package extension
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/nwverse/persona/sdk/go/wire"
 )
 
-// The SDK schema (wire.Validate on schema/extension/manifest.schema.json) and the hub's Parse agree on the top-level
-// strings an author writes by hand: name, secret titles, homepage and the version ranges ParseRange and
-// ParseVersionRange read. A value the schema and catalog CI pass but the hub refuses fails only at install.
+// The SDK schema (wire.Validate on schema/extension/manifest.schema.json) and the hub's Parse agree on the strings an
+// author writes by hand: the top-level name, secret titles, homepage and the version ranges ParseRange and
+// ParseVersionRange read, and a connector's cli. A value the schema and catalog CI pass but the hub refuses fails only
+// at install; one the hub reads but the schema refuses fails catalog CI for a manifest that installs.
 //
-// Known gaps, where the schema still passes what the hub refuses: names and titles of only non-ASCII spaces (RE2's \s
-// is ASCII), a homepage with a bad %-escape or a non-numeric port, a build number past int64, a duplicate secret name
-// or dependency, and a dependency on itself. The schema refuses an upper-case HTTPS:// homepage on purpose (the apps
-// open lowercase https:// links only), though the hub reads it.
+// Known gaps, where the schema still passes what the hub refuses: names and titles of only non-ASCII spaces or \v
+// (RE2's \s is [\t\n\f\r ]), a homepage with a bad %-escape or a non-numeric port, a build number past int64, a
+// duplicate secret name or dependency, and a dependency on itself. The schema refuses an upper-case HTTPS:// homepage
+// on purpose (the apps open lowercase https:// links only), though the hub reads it.
 func TestManifestSchemaAgreesOnMetadata(t *testing.T) {
 	versionRanges := struct{ ok, bad []string }{
 		ok: []string{"", ">=1.2.0", "<2.0.0", ">=1.2.0 <2.0.0", "  >=1.2.0\t<2.0.0  ", ">=1.0.0-rc.1", ">=0.0.0"},
@@ -47,6 +49,14 @@ func TestManifestSchemaAgreesOnMetadata(t *testing.T) {
 			delete(m, "contributes")
 			m["extension_pack"] = []any{map[string]any{"id": "example-other", "version": v}}
 		}, versionRanges.ok, versionRanges.bad},
+		// An empty cli means the connector has none: the hub reads it, so the schema must too.
+		{"contributes.connectors[].cli", func(m map[string]any, v string) {
+			m["engines"] = map[string]any{"extension_protocol": 1}
+			m["runtime"] = map[string]any{"command": "bin/example-agree"}
+			m["contributes"] = map[string]any{"connectors": []any{map[string]any{
+				"id": "exampleagree", "name": "Example", "capabilities": []any{"status"}, "cli": v}}}
+		}, []string{"", "notes", "example-notes2", "a" + strings.Repeat("b", 31)},
+			[]string{"Notes", "1notes", "-notes", "notes_cli", " notes", "a" + strings.Repeat("b", 32), "git", "personad"}},
 	}
 	for _, c := range cases {
 		check := func(v string, want bool) {

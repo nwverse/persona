@@ -560,7 +560,7 @@
         "kind_descriptions": {"type": "object", "additionalProperties": {"type": "string"}},
         "archive_sources": {"type": "array", "maxItems": 4, "items": {"type": "string", "pattern": "^[a-z][a-z0-9]*$"}},
         "meta_description": {"type": "string", "maxLength": 4000},
-        "cli": {"type": "string", "pattern": "^[a-z][a-z0-9-]{0,31}$", "not": {"enum": ["personad", "lark-cli", "sh", "bash", "git", "gh", "curl", "python3", "node", "claude", "codex"]}},
+        "cli": {"type": "string", "pattern": "^([a-z][a-z0-9-]{0,31})?$", "not": {"enum": ["personad", "lark-cli", "sh", "bash", "git", "gh", "curl", "python3", "node", "claude", "codex"]}},
         "sends_as_user": {"type": "boolean", "description": "The connector sends messages in the user's name by itself, not through the hub's write gate (a read tool that also replies, say). Its program may then record each one in the sent-as-user ledger with sent.record, and the install preview says so."}
       },
       "required": ["id", "name", "capabilities"]
