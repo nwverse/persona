@@ -580,8 +580,8 @@ class PrivacyCheckIntegrationTests(unittest.TestCase):
         self.lock = self.repo / "web/package-lock.json"
         self.lock.parent.mkdir()
 
-    def run_command(self, *args):
-        return subprocess.run(args, cwd=self.repo, env=self.env, capture_output=True, text=True, timeout=30)
+    def run_command(self, *args, env=None):
+        return subprocess.run(args, cwd=self.repo, env=env or self.env, capture_output=True, text=True, timeout=30)
 
     def git(self, *args):
         result = self.run_command("git", *args)
@@ -908,6 +908,93 @@ class RangeAndPushTests(unittest.TestCase):
         result = self.push_to(remote)
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("cannot find a scan base", result.stderr)
+
+
+class MessageTests(unittest.TestCase):
+    """--message reads text recorded as it is (merge-pr.sh: the PR's title and body); --commit-msg (the commit-msg hook)
+    reads the lines `git commit` records out of the file it hands the hook."""
+
+    run_command = PrivacyCheckIntegrationTests.run_command
+    git = PrivacyCheckIntegrationTests.git
+    scan = PrivacyCheckIntegrationTests.scan
+
+    def setUp(self):
+        PrivacyCheckIntegrationTests.setUp(self)
+        self.git("rm", "-qf", "scripts/hooks/pre-commit")  # only commit-msg: the staged content is clean
+        words = self.home / ".config/persona/private-words.txt"
+        words.parent.mkdir(parents=True)
+        words.write_text("secretbox\n")
+        (self.repo / "old.md").write_text("an old note about secretbox\n")
+        self.git("add", "old.md")
+        self.git("commit", "-q", "--no-verify", "-m", "base")
+        self.git("checkout", "-q", "-b", "secretbox-cleanup")  # the status comments name the branch
+        (self.repo / "secretbox-notes.txt").write_text("untracked\n")  # and untracked files
+        (self.repo / "old.md").write_text("an old note\n")  # takes the value out: `commit -v` shows it in its diff
+        self.git("add", "old.md")
+        # An editor that puts a title above what git wrote into the message file.
+        self.editor = self.root / "editor.sh"
+        self.editor.write_text('#!/bin/sh\n{ printf "%s\\n" "$TITLE"; cat "$1"; } > "$1.new" && mv "$1.new" "$1"\n')
+        self.editor.chmod(0o755)
+
+    def commit(self, *args, title=None, editor=None):
+        """git commit with the hook; with an editor when a title is given."""
+        env = dict(self.env)
+        if title is not None:
+            env.update({"GIT_EDITOR": str(editor or self.editor), "TITLE": title})
+        return self.run_command("git", "commit", "-q", *args, env=env)
+
+    def assert_refused(self, result, where=None):
+        output = result.stdout + result.stderr  # git sends a hook's output to stderr
+        self.assertNotEqual(result.returncode, 0, output)
+        self.assertRegex(output, r"commit message:%s: private value" % (r"\d+" if where is None else where))
+        self.assertNotIn("secretbox", output)
+
+    def assert_accepted(self, result, recorded=None):
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        if recorded is not None:
+            self.assertEqual(self.git("log", "-1", "--format=%B").stdout.strip(), recorded)
+
+    def test_message_checks_every_line_of_a_pr_body(self):
+        body = self.root / "pr.txt"
+        body.write_text("fix: a clean title\n\n## Summary on secretbox\n\n- clean\n")
+        self.assert_refused(self.scan("--message", str(body)), 3)
+
+    def test_hook_checks_the_hash_lines_that_m_records(self):
+        self.assert_refused(self.commit("-m", "fix: a clean title", "-m", "## Tested on secretbox"), 3)
+        body = self.root / "message.txt"
+        body.write_text("fix: a clean title\n\n# Tested on secretbox\n")
+        self.assert_refused(self.commit("-F", str(body)), 3)
+
+    def test_hook_skips_what_git_drops_after_the_editor(self):
+        self.assert_accepted(self.commit("-v", title="fix: a clean title"), "fix: a clean title")
+
+    def test_hook_checks_what_the_editor_keeps(self):
+        self.assert_refused(self.commit("-v", title="fix: tested on secretbox"), 1)
+
+    def test_hook_follows_the_comment_string(self):
+        # core.commentString is a synonym of core.commentChar; git uses the one set last, here ";".
+        self.git("config", "core.commentChar", "%")
+        self.git("config", "core.commentString", ";")
+        self.assert_refused(self.commit("-v", title="## Tested on secretbox"), 1)
+        self.assert_accepted(self.commit("-v", title="fix: a clean title"))
+
+    def test_hook_follows_commit_cleanup(self):
+        # whitespace: git records its comment block after the editor, which names the branch.
+        self.git("config", "commit.cleanup", "whitespace")
+        self.assert_refused(self.commit(title="fix: a clean title"))
+        # strip: git drops the comment lines of -m too.
+        self.git("config", "commit.cleanup", "strip")
+        self.assert_accepted(self.commit("-m", "fix: a clean title", "-m", "# dropped on secretbox"), "fix: a clean title")
+
+    def test_hook_splits_lines_as_git_does(self):
+        # Git ends a line only at \n: what follows a \r stays in the recorded line, and with CRLF line ends the
+        # scissors line ends nothing, so `commit -v` records the diff below it with the removed value.
+        self.assert_refused(self.commit(title="fix: a clean title\r# tested on secretbox"), 1)
+        crlf = self.root / "crlf-editor.sh"
+        crlf.write_text('#!/bin/sh\n{ printf "%s\\n" "$TITLE"; cat "$1"; } | awk \'{ printf "%s\\r\\n", $0 }\' > "$1.new"'
+                        ' && mv "$1.new" "$1"\n')
+        crlf.chmod(0o755)
+        self.assert_refused(self.commit("-v", title="fix: a clean title", editor=crlf))
 
 
 class GitBatchTests(unittest.TestCase):
