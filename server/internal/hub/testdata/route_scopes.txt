@@ -355,6 +355,10 @@ agents.control       POST /api/v1/interactions/{id}/resolve
 -                    POST /api/v1/machines/{mid}/deploy
 -                    POST /api/v1/machines/{mid}/doctor/fix
 -                    POST /api/v1/machines/{mid}/files
+-                    POST /api/v1/machines/{mid}/files/move
+-                    POST /api/v1/machines/{mid}/files/rename
+-                    POST /api/v1/machines/{mid}/files/restore
+-                    POST /api/v1/machines/{mid}/files/trash
 -                    POST /api/v1/machines/{mid}/git/commit
 -                    POST /api/v1/machines/{mid}/git/pr
 -                    POST /api/v1/machines/{mid}/git/pr/merge

@@ -347,7 +347,11 @@ Chat page:
     into the current folder under their own names, up to 2 GB; one after another, a row with progress and ✕ per file under the list. A taken name first asks Replace / Keep Both (Keep Both saves "name 2") before anything is sent;
     a folder that cannot be written (outside the home, `~/.persona`, `~/.persona`, `~/Library`), an outdated personad on the computer, and files over the cap each get a one-line reason. Leaving the page lets uploads finish; a pending name question counts as cancel.
     A file's long-press menu (also a VoiceOver action) has Save to Files: downloads to a temporary folder with progress, then the system's location picker; the temporary file is removed either way.
-    Rename, move and delete come in the second batch.
+  - **Rename, move, move to the trash** (#315, `Views/Session/FolderEdits.swift`): a file's or folder's long-press menu (and VoiceOver actions) adds Rename (an alert with the name, refused names said before asking),
+    Move (a sheet with the browser's folders from its top, opened on the current one; Move Here is off for the folder they are already in, and the folders being moved can't be opened), and Move to Trash (asks first).
+    ⋯ › Select turns the list into checkmarks with a bar under it: the count, Move, and the trash button; Done ends it. A trash toast has Undo (puts it back through `files/restore`); there is no permanent delete.
+    A move to a taken name asks Replace (the one there goes to the trash) / Keep Both. These show only when hello's `features` has `file_edit` (or the hub sends none).
+    On an iPad, files dragged in from another app (Files, Photos) upload into the folder shown, with an accent outline while they are over it.
   - **Auto-refresh** (#3089, web #2439, `App/FsLive.swift`, `Views/Session/FsLiveModifier.swift`, `docs/protocol/protocol.md` ("Automatic file refresh")):
     foreground Files/Git sends WebSocket `fs_watch` (current directory/Git marks, Git state; same cwd combined),
     `fs_changed` debounced 200 ms then reread in place without loading animation (retain older loaded commits if latest unchanged); unsubscribe off foreground (`.onTabVisibility`),
@@ -524,7 +528,9 @@ Apps built with older Xcode do not extend under the status bar and camera on Duo
   `.splitDetailPage(ownsBack: true)`: an outer `navigationBarBackButtonHidden(false)` overrides the page's `true`, bringing back the system button
   and stacking two Back buttons (2026-11-04, TestFlight).
   With the keyboard open, this header becomes fog only (title, same-space Agents and sub-Agents hide until the keyboard closes): inner landscape leaves only about 390pt above the keyboard,
-  and the header, mode buttons and input previously occupied it all, leaving no message visible (2026-11-04). The side column's system title still names the session.
+  and the header, mode buttons and input previously occupied it all, leaving no message visible (2026-11-04). The system draws its bar's title over the content, not in the side
+  column, so it is removed while the header shows its own (`toolbar(removing: .title)`; the session's name showed twice, one above the other, 2026-11-08, TestFlight)
+  and comes back while typing, when the header is only fog.
   Persona's top bar remains custom at the content top; its fog extends horizontally under the side status bar (`BarFog`; limiting it to content width leaves a vertical edge in dark mode).
 - **Short outer screen** (about 678pt): on Persona's new-chat page, Needs you rows above the input shrink to the remaining space (see "Empty chat" under "New shell" above).
 - **Simulator verification**: iPhone Duo has only the iOS 27.1 runtime (which supports only it). Folding / unfolding / half-folding can only be switched in Xcode Device Hub,
@@ -608,10 +614,53 @@ The new shell's Model · Effort menu still sends `/model <id>` as a message.
   - Selecting auto in Settings › Claude Code Settings removes `effortLevel` (`claudeconfig.go`).
 - While the picker is open, herdr reports the Agent blocked; after 1.5 seconds the hub would push it to the phone as a terminal dialog needing attention, so the node suppresses blocked while operating it.
 
-The ultracode server contract was added in #3427 ([protocol.md](../protocol/protocol.md) ("Claude Code ultracode")): a session toggle independent of effort,
-off by default, not remembered, and not automatically reenabled after recovery. Missing Session `ultracode` means unknown; `ultracode_pending` means it takes effect next turn;
-`ultracode_note` explains why it cannot be enabled, and `ultracode_lost_at` supports the recovery notice and reenable action. Apple toggles, notices, buttons and the `ChatCache` directory-version bump are implemented by #3430;
-this records only the API, not that iOS / Mac / watch already have those controls. The main chat does not offer ultracode.
+### Claude Code ultracode (#1307)
+
+The server contract is #3427 ([protocol.md](../protocol/protocol.md) ("Claude Code ultracode")): a session-only switch independent of the effort,
+off by default, never remembered and never turned back on by itself after a resume. The behavior follows the web's (#3428,
+[web.md](../web/web.md) "Claude Code ultracode"). Pure rules are `Shared/Ultracode.swift` (the watch compiles them for its rows' mark), requests
+and what this device asked are `AppModel.setUltracode` / `dismissUltracodeLost`, views `Views/Chat/UltracodeViews.swift`.
+
+- **Where**: the hub lists the `ultracode` feature (an older hub shows nothing), the agent is Claude Code (not TRAEX, Codex or a runtime's), its effort can
+  change now (it takes messages, no read-only source, not offline), and it is not a Persona conversation (the main chat included: the server refuses those).
+- **Session fields**: `ultracode` (omitted is unknown, drawn off; the info card says Unknown), `ultracode_note` (the node's reason), `ultracode_pending`
+  (applies next turn) and `ultracode_lost_at`. An odd value never drops the session. `ChatCache` stays at `chats-v10`: the hub only rewrites the text of
+  Claude Code's existing `/effort` output notice (same id, still a short notice), so a cached copy keeps the CLI's own confirmation until its turn
+  moves on, and the notices from `ultra_effort_*` attachments are new ids that merge in; dropping every cached chat for that was not worth it.
+- **Menus**: a section under the thinking effort in the shell composer's model menu (`SessionModesMenu`) and in the old layout's effort chip (`SessionModeBar`):
+  a `Toggle` whose subtitle is the line (what it does, "Applies next turn" while a change this device asked waits, "A change is queued for the next turn"
+  for another device's, or the node's reason), and the Claude quota with its 80% warning as the section's header (`Ultracode.menuWords`). A menu
+  draws a subtitle only from a second `Text` directly in the label (a `Label`'s two-`Text` title loses it, on the Mac too: the effort levels' details
+  are not drawn) and colors no words. An iOS menu cuts a subtitle after three lines but draws a header whole, line by line, so there the node's reason
+  goes first in the header and the subtitle keeps what the switch does or that a change waits; a Mac menu wraps a subtitle (`NSMenuItem.subtitle`) and
+  draws a header on one line (a line break becomes a space), so there the reason stays in the subtitle and the header's parts are joined with " — ".
+  The quota was a disabled item at first: drawn faint (about 2.3:1), it read as something not available. A menu that opens upward lists its items the
+  other way round, so on iOS and visionOS the section is declared before the effort (`UltracodeMenuSection.leadsEffort`) and reads under it, next to
+  the button without scrolling; a section's header stays on top of it either way. A Mac menu keeps the declared order.
+- **Where the switch stands**: what this device asked while the request is out, while the node says it is queued, and until the node's push answers
+  (`Ultracode.Ask.answered` is the session as its page drew it when the request returned; the pushes that came meanwhile land first, `landPendingSessions`).
+  Grayed only while its own request is out; the node's reason replaces the line but does not gray it. An ask is forgotten at the first update of the
+  lists after the session moved past it, or went (`dropSpentUltracodeAsks`, as the web's `useUltracodeAsk`): only hiding it let an old ask come back
+  when another device queued a change later, and the switch said "Applies next turn" for what this device had asked long before. A failure, a refusal (`409 node_outdated`,
+  `ultracode_unsupported`) too, puts it back and is said once in a toast (the menu has closed); nothing is kept, so asking again gets the node's answer
+  again. A refusal never becomes the main chat's readiness card. A queued change never holds a message back (#5510), so sending is unchanged.
+- **Marks**: `Theme.Icon.workflow` in `Theme.ai` after the effort on the composer's model button and the old layout's chip (read out as "…, ultracode on"),
+  beside an agent row's title (`SlotRow` in both styles, `CompactSlotRow`, the watch's list; not on an offline row, which the node still remembers on;
+  where a title can take two lines, `SlotRow`'s and the watch's, the mark is part of the text after its last word, `UltracodeMark.after`),
+  and on a Codex thread at its `ultra` effort (no extra words: its effort says Ultra). It comes and goes with `Theme.Motion.state`, at once with Reduce Motion
+  (`UltracodeMark.motion`); nothing repeats.
+- **After a resume**: one line over the composer, "ultracode off after resume", **Turn Back On** (`{"ultracode": true}`; "Applies next turn" while it waits)
+  and × (`{"ultracode_dismiss_lost": true}`, gone at once, back if the hub says no).
+- **Info card**: a row "ultracode: On / Off / Unknown" under Thinking Effort; none for an offline agent, whose process is gone (as its row has no mark).
+- **New Agent**: a switch under the thinking effort for Claude Code, off each time the sheet opens and never saved with the per-machine effort; only
+  `"ultracode": true` goes with `POST /api/v1/sessions`. Grayed with why when the computer's `claude_version` is a known version before 2.1.284 (an unknown
+  one may be tried). A start the hub refuses for it fails with "Couldn't start with ultracode: … Retry starts without it" and the switch goes off.
+- **Quota**: the Claude subscription's 5-hour and weekly use from `GET /api/v1/usage/windows` (`UsageWindowsStore`): a chat that offers the switch keeps
+  it no older than two minutes while it is in front (`keepFresh`, nothing extra while Machines or the Mac's bars poll), New Agent loads it when it shows
+  the switch; only with data: an account read on the computers before a gateway's, fresh before stale,
+  then the fullest. From 80% a warning, only for a switch that stands on or can simply be turned on.
+- **Tests**: `UltracodeTests` (FakeHub: decoding with older hubs, the requests, where it shows, graying, the ask, the quota) and `UltracodeUITests`
+  against the mock hub with `MOCK_ULTRACODE=1` (`TEST_RUNNER_PERSONA_ULTRACODE_HUB`, screenshots with `TEST_RUNNER_PERSONA_SHOTS`).
 
 ## Session triage (Settings › Session triage, #3078)
 
@@ -771,7 +820,8 @@ iOS, Mac, visionOS, watch and extensions support Simplified Chinese, English and
   - Exceptions: user-sized terminal grid, Dynamic Island grid, fixed-image share cards, small-circle numbers/badges.
   - Monospace only character comparison/copying: code/commands/paths/branches/hashes/IDs/versions/terminal/tool output. Chinese explanations/values system font
     (session info chooses by row: model/branch/directory/version monospace, others system + monospaced digits; memory editor/Knowledge recent messages system).
-  - `Theme.Icon` (`Shared/Design/Icons.swift`): one meaning per SF Symbol, pages `Theme.Icon.copy`, not `"doc.on.doc"`.
+  - `Theme.Icon` (`Shared/Design/Icons.swift`): one meaning per SF Symbol, pages `Theme.Icon.copy`, not `"doc.on.doc"`; drawn with
+    `ThemedIcon` / `IconTile` so each style's icon language applies (`IconSpec`; rules, exceptions and checks in `docs/apple/icons.md`).
     Symbols used in two files must register; errors triangles (`error` / `errorFilled`), octagon only critical machine alerts (`critical`); Copy `doc.on.doc`,
     Paste `doc.on.clipboard`, Interrupt `stop.fill`, model/launcher `cube` (`cpu` only processor), code files `curlybraces`, `</>` only Agents.
     `IconVocabularyTests` rejects direct registered names, shared unregistered symbols and retired error symbols.
