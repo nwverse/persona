@@ -41,7 +41,7 @@ final class AgentsTopMotionTests: XCTestCase {
     @MainActor private func walk(size: String? = nil) throws {
         app = XCUIApplication()
         app.launchArguments = ["-demo.on", "YES", "-app.tab", "chats", "-dev.openChat", "",
-                               "-showSearchTrace", "YES", "-searchTracePath", tracePath]
+                               "-showSearchTrace", "YES", "-searchTracePath", tracePath, "-probes", "YES"]
         if let size { app.launchArguments += ["-UIPreferredContentSizeCategoryName", size] }
         app.launchPinned()
         XCTAssertTrue(app.collectionViews.firstMatch.waitForExistence(timeout: 20), "the Agents list")

@@ -82,13 +82,16 @@ final class DemoModeTests: XCTestCase {
 
     @MainActor private func tab(_ name: String) {
         if name == "Persona" {
-            ShellFinger(app).switchTo(agents: false, "Assistant in the demo walkthrough")
+            if !app.assistantDrawn() {
+                ShellFinger(app).switchTo(agents: false, "Assistant in the demo walkthrough")
+            }
         } else {
             if app.navigationBars["收件箱"].exists { back() }
-            let drawer = app.buttons.matching(NSPredicate(format: "identifier IN %@", ["assistant-sidebar-button", "work-sidebar-button"]))
-                .allElementsBoundByIndex.first(where: \.isHittable)
-            XCTAssertNotNil(drawer, "no visible drawer button")
-            drawer?.tapCenter()
+            let id = app.assistantDrawn() ? "assistant-sidebar-button" : "work-sidebar-button"
+            let drawer = see(app.buttons[id].firstMatch, "the visible page's drawer button")
+            // Retained UIKit pages can confuse hit-testing queries after a push/pop; tap where the finger lands,
+            // then require the actual drawer route to appear.
+            drawer.tapCenter()
             let entry = name == "收件箱" ? app.buttons["sidebar-inbox"].firstMatch : app.drawerSettingsButton
             see(entry, "the drawer's \(name)").tapCenter()
         }
@@ -134,7 +137,7 @@ final class DemoModeTests: XCTestCase {
 
     @MainActor func testWalkThroughAndLeave() throws {
         app = XCUIApplication()
-        app.launchArguments = ["-openWelcome", "YES", "-dev.openChat", "", "-openAgentsFresh", "YES"]
+        app.launchArguments = ["-openWelcome", "YES", "-dev.openChat", "", "-openAgentsFresh", "YES", "-probes", "YES"]
         app.launchPinned()
 
         // The pairing page: the way in, on one line.
@@ -244,7 +247,7 @@ final class DemoModeTests: XCTestCase {
 
         // Persona: a conversation, the sidebar, Scheduled Tasks.
         tab("Persona")
-        see(text("今天有"), "the main conversation", timeout: 10)
+        see(text("发布说明我来整理"), "the main conversation", timeout: 10)
         noErrors("persona")
         shot("persona")
         see(app.buttons["历史对话"], "历史对话").tapCenter()
@@ -288,7 +291,7 @@ final class DemoModeTests: XCTestCase {
         see(leave, "退出体验模式").tap()
         see(app.buttons["welcome.demo"], "the pairing page after leaving")
         app.terminate()
-        app.launchArguments = ["-dev.openChat", ""]
+        app.launchArguments = ["-dev.openChat", "", "-probes", "YES"]
         app.launchPinned()
         see(app.buttons["welcome.demo"], "the pairing page after a relaunch", timeout: 15)
     }
@@ -296,12 +299,12 @@ final class DemoModeTests: XCTestCase {
     /// Demo Mode is remembered: a relaunch opens the demo again, not the pairing page.
     @MainActor func testStaysAcrossLaunches() throws {
         app = XCUIApplication()
-        app.launchArguments = ["-openWelcome", "YES", "-dev.openChat", ""]
+        app.launchArguments = ["-openWelcome", "YES", "-dev.openChat", "", "-probes", "YES"]
         app.launchPinned()
         see(app.buttons["welcome.demo"], "体验模式 on the pairing page", timeout: 15).tap()
         see(text(Self.firstAgent), "the demo's agents")
         app.terminate()
-        app.launchArguments = ["-dev.openChat", ""]
+        app.launchArguments = ["-dev.openChat", "", "-probes", "YES"]
         app.launchPinned()
         see(text(Self.firstAgent), "the demo after a relaunch", timeout: 15)
         tab("设置")

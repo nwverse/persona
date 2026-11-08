@@ -33,14 +33,16 @@ final class ComposerAccessibilityTests: XCTestCase {
     @MainActor private func expectComposer(_ what: String) {
         // ComposerRow's + reads Add (its symbol's own label); the shell's composer, an agent's too since #1091, says what it adds.
         let plus = app.buttons.matching(NSPredicate(format: "label == '添加' OR label == '添加照片或文件'")).firstMatch
-        let send = app.buttons["发送"].firstMatch, stop = app.buttons["中断"].firstMatch
-        let field = app.textViews.firstMatch.exists ? app.textViews.firstMatch : app.textFields.firstMatch
+        let send = app.buttons["shell-composer-send"].firstMatch
+        let stop = app.buttons["shell-composer-stop"].firstMatch
+        let mic = app.buttons["shell-composer-mic"].firstMatch
+        let field = app.descendants(matching: .any)["shell-composer-field"].firstMatch
         guard plus.waitForExistence(timeout: 15) else {
             attachScreen("no + (\(what))")
             return XCTFail("no + (\(what))\n\(composerTree())")
         }
         attachScreen(what)
-        XCTAssertTrue(send.exists || stop.exists, "neither 发送 nor 中断 (\(what))\n\(composerTree())")
+        XCTAssertTrue(send.exists || stop.exists || mic.exists, "no send, interrupt or dictation control (\(what))\n\(composerTree())")
         XCTAssertTrue(field.exists, "no input field (\(what))\n\(composerTree())")
         XCTAssertTrue(plus.isHittable, "+ is not hittable (\(what))")
 

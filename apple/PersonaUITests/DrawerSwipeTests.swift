@@ -21,7 +21,7 @@ final class DrawerSwipeTests: XCTestCase {
     @MainActor private func launch(_ open: String) -> XCUIApplication {
         let app = XCUIApplication()
         let pair = "persona://pair?url=" + hub.addingPercentEncoding(withAllowedCharacters: .alphanumerics)! + "&token=mock"
-        app.launchArguments = ["-pairURL", pair, "-tab", "assistant", "-openAssistant", open, "-showDrawerProbe", "YES"]
+        app.launchArguments = ["-pairURL", pair, "-tab", "assistant", "-openAssistant", open, "-showDrawerProbe", "YES", "-probes", "YES"]
         app.launchPinned()
         XCTAssertTrue(app.buttons["shell-assistant"].waitForExistence(timeout: 15), "the Persona tab did not open")
         return app

@@ -7,10 +7,11 @@ import XCTest
 /// right after the tap (docs/operations/testing.md).
 final class OpenChatTabBarTests: XCTestCase {
     @MainActor func testTheTabBarLeavesWithThePushAndComesBack() throws {
+        continueAfterFailure = false
         guard let hub = ProcessInfo.processInfo.environment["PERSONA_MOCK_HUB"] else { throw XCTSkip("needs scripts/mock/mock_hub.py (PERSONA_MOCK_HUB)") }
         let app = XCUIApplication()
         let pair = "persona://pair?url=" + hub.addingPercentEncoding(withAllowedCharacters: .alphanumerics)! + "&token=mock"
-        app.launchArguments = ["-pairURL", pair, "-dev.openChat", "", "-tab", "dev", "-openAgentsFresh", "YES"]
+        app.launchArguments = ["-pairURL", pair, "-app.tab", "chats", "-dev.openChat", "", "-tab", "dev", "-openAgentsFresh", "YES", "-probes", "YES"]
         app.launchPinned()
         // A fresh install asks for notifications over the list.
         let allow = XCUIApplication(bundleIdentifier: "com.apple.springboard").buttons
@@ -18,7 +19,10 @@ final class OpenChatTabBarTests: XCTestCase {
         if allow.waitForExistence(timeout: 8) { allow.tap() }
 
         let row = app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "给天气 App 加主屏幕小组件")).firstMatch
-        XCTAssertTrue(row.waitForExistence(timeout: 15), "the agent's row")
+        for _ in 0..<8 where !(row.exists && row.isHittable) {
+            app.collectionViews.firstMatch.swipeUp(velocity: .slow)
+        }
+        XCTAssertTrue(row.waitForExistence(timeout: 15) && row.isHittable, "the agent's row")
         let tabs = app.buttons["shell-agents"].firstMatch
         XCTAssertTrue(tabs.isHittable, "no Shell switch on the list")
         row.tap()

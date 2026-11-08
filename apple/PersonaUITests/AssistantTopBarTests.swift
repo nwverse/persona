@@ -1,4 +1,3 @@
-import UIKit
 import XCTest
 
 /// The Persona tab's top bar and its sidebar (docs/apple/ios.md「Persona 顶栏和侧边栏」): the avatar's menu (Knowledge, Details, the
@@ -21,9 +20,12 @@ final class AssistantTopBarTests: XCTestCase {
     @MainActor private func launch(_ open: String?, _ extra: [String] = []) -> XCUIApplication {
         let app = XCUIApplication()
         let pair = "persona://pair?url=" + hub.addingPercentEncoding(withAllowedCharacters: .alphanumerics)! + "&token=mock"
-        app.launchArguments = ["-pairURL", pair, "-tab", "assistant"]
+        app.launchArguments = ["-pairURL", pair, "-tab", "assistant", "-probes", "YES"]
             + (open.map { ["-openAssistant", $0] } ?? ["-newAssistant", "YES"]) + extra
         app.launchPinned()
+        let allow = XCUIApplication(bundleIdentifier: "com.apple.springboard").buttons
+            .matching(NSPredicate(format: "label IN %@", ["允许", "Allow"])).firstMatch
+        if allow.waitForExistence(timeout: 3) { allow.tap() }
         return app
     }
 
@@ -46,10 +48,34 @@ final class AssistantTopBarTests: XCTestCase {
         XCTAssertEqual(XCTWaiter.wait(for: [gone], timeout: 5), .completed, why)
     }
 
-    /// The Shell menu copies the requested payload; its floating bar has no name-pill confirmation.
+    /// Paste back into the owning app: the UI-test runner has a separate protected pasteboard.
     @MainActor private func copied(_ app: XCUIApplication, _ text: String) {
-        let value = UIPasteboard.general.string ?? ""
-        XCTAssertFalse(value.isEmpty, "the menu copied no text")
+        let field = app.descendants(matching: .any)["shell-composer-field"].firstMatch
+        XCTAssertTrue(field.waitForExistence(timeout: 10), "no composer for the paste check")
+        field.tapCenter()
+        let existing = field.value as? String ?? ""
+        if !existing.isEmpty, existing != field.placeholderValue {
+            field.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: existing.count + 2))
+        }
+        field.press(forDuration: 1)
+        let pasteMatches = app.descendants(matching: .any).matching(NSPredicate(format: "label IN %@", ["粘贴", "Paste"]))
+        XCTAssertTrue(pasteMatches.firstMatch.waitForExistence(timeout: 5), "the copied payload has no Paste action")
+        guard let paste = pasteMatches.allElementsBoundByIndex.first(where: { $0.isHittable && $0.frame.width > 0 && $0.frame.height > 0 }) else {
+            return XCTFail("no hittable Paste action:\n\(app.debugDescription)")
+        }
+        paste.tapCenter()
+        let value = field.value as? String ?? ""
+        if value.isEmpty || value == field.placeholderValue {
+            let attachment = XCTAttachment(screenshot: app.screenshot())
+            attachment.name = "copy-paste-failure"
+            attachment.lifetime = .keepAlways
+            add(attachment)
+            let tree = XCTAttachment(string: app.debugDescription)
+            tree.name = "copy-paste-tree"
+            tree.lifetime = .keepAlways
+            add(tree)
+        }
+        XCTAssertFalse(value.isEmpty || value == field.placeholderValue, "the menu copied no text")
         let session = String(main.split(separator: "/").last!)
         if text == "已拷贝会话 ID" {
             XCTAssertEqual(value, session, "the menu did not copy the session ID")
@@ -58,9 +84,18 @@ final class AssistantTopBarTests: XCTestCase {
         } else {
             XCTAssertTrue(value.hasPrefix("/") || value.hasPrefix("~/"), "the directory copy is not a path")
         }
+        field.press(forDuration: 1)
+        let selectAll = app.descendants(matching: .any).matching(NSPredicate(format: "label IN %@", ["全选", "Select All"])).firstMatch
+        if selectAll.waitForExistence(timeout: 2) {
+            selectAll.tapCenter()
+            field.typeText(XCUIKeyboardKey.delete.rawValue)
+        } else {
+            field.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: value.count + 2))
+        }
+        app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.2)).tap()
     }
 
-    /// The avatar's menu: every item is there, the copies say so (in the name pill), Details and Knowledge open their pages.
+    /// The selected Assistant menu exposes copies, Details and Knowledge; copies are verified by pasting their payload.
     @MainActor func testAvatarMenu() throws {
         let app = launch(main)
         XCTAssertTrue(app.staticTexts["今天有 3 件事需要你："].waitForExistence(timeout: 15)
@@ -168,9 +203,11 @@ final class AssistantTopBarTests: XCTestCase {
         swipe(from: 0.7, to: 0.05, y: 0.6)
         waitGone(sidebar(app), "a swipe to the left did not close the sidebar")
 
-        // A swipe to the left is not the sidebar (and changes nothing here); vertical scrolling still scrolls.
+        // A left swipe pages to Agents in the Shell, rather than opening the drawer.
         swipe(from: 0.8, to: 0.2)
         XCTAssertFalse(sidebar(app).exists, "a swipe to the left opened the sidebar")
+        XCTAssertTrue(app.waitAgentsDrawn(true), "a left swipe did not page to Agents: \(app.shellTrace)")
+        ShellFinger(app).switchTo(agents: false, "Assistant before reopening the drawer")
 
         swipe(from: 0.3, to: 0.95)
         XCTAssertTrue(sidebar(app).waitForExistence(timeout: 3))
