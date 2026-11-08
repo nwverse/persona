@@ -3830,6 +3830,8 @@ struct Composer: View, Equatable {
     @FocusState private var focused: Bool
     /// The 「+」 menu's Voice Chat where the page offers no call: why (docs/assistant/voice.md 1.3).
     @State private var voiceNote: VoiceUnavailableNote?
+    /// The model menu's "Other Model…" (#1644): a model ID typed by hand, through POST …/modes.
+    @State private var typingModel = false
 
     /// The voice call bound to this conversation, live or ended (docs/assistant/voice.md 6.2): the bar takes the box's place while
     /// it is on, and 「语音已结束 · 继续」 sits over the box after it ended by itself.
@@ -4109,7 +4111,7 @@ struct Composer: View, Equatable {
                     if !shellChat { quickCommands } // an agent's, as its composer offered them before the shell's
                 } modes: {
                     SessionModesMenu(key: key, session: model.session(key), picksModel: canPickModel, setsModes: setsModes,
-                                     setsEffortOnly: setsEffortOnly)
+                                     setsEffortOnly: setsEffortOnly, otherModel: canPickModel ? { typingModel = true } : nil)
                 }
             } else if AppStyle.current.usesBeautifulUI {
                 // The BeautifulUI style's prompt bar; every other style keeps the original input line.
@@ -4121,9 +4123,12 @@ struct Composer: View, Equatable {
                                    + (VoicePlatform.current == .phone ? [PromptItems.voice] : []),
                                mentions: mentions,
                                commands: promptCommands,
-                               models: canPickModel ? PromptItems.claudeModels : [],
+                               models: canPickModel ? PromptItems.claudeModels + [PromptItems.otherModel] : [],
                                modelID: PromptItems.claudeModelID(model.session(key)?.model),
-                               pickModel: { id in model.sendNow(key, text: "/model \(id)", images: []) }, // photos and quotes stay for the message
+                               pickModel: { id in
+                                   if id == PromptItems.otherModel.id { typingModel = true; return } // #1644: through …/modes
+                                   model.sendNow(key, text: "/model \(id)", images: []) // photos and quotes stay for the message
+                               },
                                onAttach: { source in
                                    // A PhotosPicker cannot present from inside the menu: these sheets hang off the composer.
                                    switch source.id {
@@ -4311,6 +4316,7 @@ struct Composer: View, Equatable {
             GlassesCaptureSheet { img in add(img) }
         }
         #endif
+        .sheet(isPresented: $typingModel) { SessionTypedModelSheet(key: key, session: model.session(key)) }
         .onChange(of: picks) { _, items in
             guard !items.isEmpty else { return }
             Task { await load(items) }

@@ -2,20 +2,22 @@
 // top, the agent's model list below. ↑↓ choose a model, ←→ an effort, Enter applies, Esc cancels, a click outside
 // closes. The models are what the launcher's agent lists in its own /model menu (lib/launcher-models.ts); applying
 // goes through the chip's `apply` (the model first, then the effort), each its own POST …/modes. Under the effort tabs,
-// Claude Code's ultracode switch (#3428) applies at once, its own request.
+// Claude Code's ultracode switch (#3428) applies at once, its own request. "Other model…" (#1644) takes a model ID typed by
+// hand (the same POST …/modes), and the IDs typed before can be forgotten.
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { t as tr } from "../../i18n";
 import { errorText } from "../../lib/api";
 import { keyboardFrame } from "../../lib/viewport";
-import { launcherModels, modelDetail, modelName, type AgentModel, type LauncherModels } from "../../lib/launcher-models";
+import { forgetCustomModel, launcherModels, modelDetail, modelName, withoutCustom, type AgentModel, type LauncherModels } from "../../lib/launcher-models";
 import { effortOptions, EFFORTS } from "../../lib/session-actions";
 import { effortTabs, isCurrentModel, modelBusy, pickerKey, pickerPatch, sessionLauncher } from "../../lib/model-switch";
 import { useStore } from "../../lib/store";
 import { ultracodeOffered } from "../../lib/ultracode";
 import type { Session } from "../../lib/types";
-import { Button, cx, EASE, Spinner } from "../../ui/atoms";
+import { Button, cx, EASE, IconButton, Spinner } from "../../ui/atoms";
 import { Icon } from "../../ui/icons";
+import { ModelIdField } from "../../ui/ModelIdField";
 import { NARROW_QUERY, placeMenu, useMedia, type MenuPlace } from "../../ui/overlay";
 import { UltracodeSwitchRow } from "./Ultracode";
 
@@ -87,9 +89,36 @@ export function ModelEffortPopover({
   // a launcher that fixes its own --model: a pick would not reach the agent
   const locked = Boolean(list?.locked);
   const switchable = models.length > 0 && !busyNote && !locked;
+  // "Other model…" (#1644): also with an empty list or none read; Claude Code takes any `/model <id>`
+  const typable = !loading && !busyNote && !locked;
   const current = session.model;
 
   const [pick, setPick] = useState(-1); // the model chosen; -1: keep the session's
+  const [typed, setTyped] = useState(""); // a model ID typed in "Other model…"; "": none
+  const [entering, setEntering] = useState(false);
+  const [forgetError, setForgetError] = useState("");
+  const choose = (i: number) => {
+    setTyped("");
+    setPick(i);
+  };
+  // Forget an ID typed before: off the list at once, back where it was when the hub says no.
+  const forget = (id: string) => {
+    if (!list) return;
+    const { list: without, restore } = withoutCustom(list, id);
+    const at = list.models.findIndex((m) => m.id === id);
+    setForgetError("");
+    setList(without);
+    cache.set(cacheKey, without);
+    setPick((p) => (p === at ? -1 : p > at ? p - 1 : p));
+    forgetCustomModel(mid, launcher, id).catch((e) => {
+      setList((now) => {
+        const back = now ? restore(now) : list;
+        cache.set(cacheKey, back);
+        return back;
+      });
+      setForgetError(tr("composer.forget_failed", { id, error: errorText(e) }));
+    });
+  };
   const [effort, setEffort] = useState(session.effort ?? "");
   const seeded = useRef(false);
   useEffect(() => {
@@ -99,11 +128,13 @@ export function ModelEffortPopover({
   }, [models, current]);
 
   const all = useMemo(() => effortOptions(session).map((e) => e.id), [session]);
-  const chosen: AgentModel | undefined = pick >= 0 ? models[pick] : undefined;
-  const tabs = useMemo(() => effortTabs(list, chosen ?? models.find((m) => isCurrentModel(m, current)), all), [list, chosen, models, current, all]);
+  const typedModel: AgentModel | undefined = typed ? { id: typed, name: typed, custom: true } : undefined;
+  const chosen: AgentModel | undefined = typedModel ?? (pick >= 0 ? models[pick] : undefined);
+  // a typed ID's efforts aren't known: every tab stays
+  const tabs = useMemo(() => (typedModel ? all : effortTabs(list, chosen ?? models.find((m) => isCurrentModel(m, current)), all)), [typedModel, list, chosen, models, current, all]);
   // the effort stays while the picked model takes it, else nothing is chosen (the session's own stays)
   const effortNow = tabs.includes(effort) ? effort : "";
-  const patch = pickerPatch({ model: switchable ? chosen : undefined, current, effort: effortNow, currentEffort: session.effort });
+  const patch = pickerPatch({ model: typedModel ? (typable ? typedModel : undefined) : switchable ? chosen : undefined, current, effort: effortNow, currentEffort: session.effort });
   const changed = Boolean(patch.model || patch.effort);
 
   const run = async () => {
@@ -132,13 +163,15 @@ export function ModelEffortPopover({
       const l = live.current;
       // Enter on the footer's own buttons is theirs ("Cancel" must cancel), and on the ultracode switch its own
       if ((e.key === "Enter" || e.key === " ") && (e.target as Element | null)?.closest?.("[data-popover-footer],[data-popover-switch]")) return;
+      // "Other model…"'s field takes its own keys (arrows move in the text, Esc puts the row back)
+      if ((e.target as Element | null)?.closest?.("[data-model-id-field]")) return;
       const r = pickerKey({ model: l.pick, effort: l.tabs.indexOf(l.effort) }, { models: l.models.length, efforts: l.tabs.length }, e);
       if (!r.handled) return;
       e.preventDefault();
       e.stopPropagation();
       if (r.action === "cancel") return onClose();
       if (r.action === "apply") return void l.run();
-      if (r.state.model !== l.pick && switchable) setPick(r.state.model);
+      if (r.state.model !== l.pick && switchable) choose(r.state.model);
       if (r.state.effort !== l.tabs.indexOf(l.effort) && r.state.effort >= 0) setEffort(l.tabs[r.state.effort]);
     };
     addEventListener("pointerdown", down);
@@ -164,7 +197,7 @@ export function ModelEffortPopover({
     const extra = ref.current.querySelector<HTMLElement>("[data-popover-switch]")?.offsetHeight ?? 0;
     if (extra) setPos({ ...rest, maxHeight: `min(80vh, ${520 + extra}px${maxHeight === undefined ? "" : `, ${maxHeight}px`})` });
     else setPos(maxHeight === undefined ? rest : { ...rest, maxHeight: `min(80vh, 520px, ${maxHeight}px)` });
-  }, [anchor, narrow, loading, models.length, error, busyNote, tabs.length, height, rowHeight]);
+  }, [anchor, narrow, loading, models.length, error, busyNote, tabs.length, height, rowHeight, entering, forgetError]);
 
   return createPortal(
     <div
@@ -200,7 +233,7 @@ export function ModelEffortPopover({
       </div>
       {ultracode && <UltracodeSwitchRow session={session} />}
 
-      {(loading || models.length > 0 || error) && <div className="mt-1 border-t border-line px-2 pt-1.5 pb-1 text-[10.5px] font-medium tracking-[0.06em] text-ink-3 uppercase">{tr("composer.models")}</div>}
+      {(loading || models.length > 0 || error || typable) && <div className="mt-1 border-t border-line px-2 pt-1.5 pb-1 text-[10.5px] font-medium tracking-[0.06em] text-ink-3 uppercase">{tr("composer.models")}</div>}
       {loading && (
         <div role="status" className="flex h-8 items-center gap-2 px-2 text-[12.5px] text-ink-3">
           <Spinner size={12} />
@@ -213,7 +246,7 @@ export function ModelEffortPopover({
           {models.map((m, i) => {
             const cur = isCurrentModel(m, current);
             const detail = m.description || modelDetail(m);
-            return (
+            const row = (
               <button
                 key={m.id}
                 ref={(el) => {
@@ -221,29 +254,71 @@ export function ModelEffortPopover({
                 }}
                 type="button"
                 role="option"
-                aria-selected={pick === i}
+                aria-selected={!typed && pick === i}
                 disabled={!switchable}
-                onClick={() => setPick(i)}
+                onClick={() => choose(i)}
                 onDoubleClick={() => void run()}
                 className={cx(
-                  "flex min-h-9 w-full items-center gap-2 rounded-[6px] px-2 py-1 text-left pointer-coarse:min-h-11 disabled:opacity-50",
-                  pick === i ? "bg-hover" : "enabled:hover:bg-hover",
+                  "flex min-h-9 w-full min-w-0 items-center gap-2 rounded-[6px] px-2 py-1 text-left pointer-coarse:min-h-11 disabled:opacity-50",
+                  !typed && pick === i ? "bg-hover" : "enabled:hover:bg-hover",
                 )}
               >
                 <span className="flex min-w-0 flex-1 flex-col">
                   <span className="flex items-center gap-1.5">
-                    <span className="min-w-0 truncate text-[12.5px] text-ink">{modelName(m)}</span>
+                    <span className={cx("min-w-0 truncate text-[12.5px] text-ink", m.custom && "font-mono")}>{modelName(m)}</span>
                     {cur && <span className="shrink-0 rounded-full bg-field px-1.5 text-[10.5px] leading-4.5 whitespace-nowrap text-ink-2">{tr("composer.current")}</span>}
                   </span>
                   {detail && <span className="truncate text-[11px] text-ink-3">{detail}</span>}
                 </span>
-                <Icon name="check" size={13} stroke={2.5} className={pick === i ? "shrink-0 text-ink" : "invisible shrink-0"} />
+                <Icon name="check" size={13} stroke={2.5} className={!typed && pick === i ? "shrink-0 text-ink" : "invisible shrink-0"} />
               </button>
             );
+            // an ID typed before: its Forget beside it (#1644)
+            return m.custom ? (
+              <div key={m.id} className="flex items-center gap-0.5">
+                {row}
+                <IconButton icon="x" label={tr("composer.forget", { id: m.id })} size={24} iconSize={12} onClick={() => forget(m.id)} />
+              </div>
+            ) : row;
           })}
         </div>
       )}
-      {switchable && <div className="px-2 pt-1 pb-0.5 text-[11px] break-words text-ink-3">{tr("composer.default_note")}</div>}
+      {/* outside the scrolling list, so the field and what it says stay in view */}
+      {typable && (entering ? (
+        <div className="px-1 pt-1 pb-0.5">
+          <ModelIdField
+            initial={typed}
+            note={tr("composer.typed_note")}
+            onUse={(id) => {
+              setEntering(false);
+              const listed = models.findIndex((m) => m.id === id);
+              if (listed >= 0 && switchable) choose(listed);
+              else {
+                setPick(-1);
+                setTyped(id);
+              }
+            }}
+            onCancel={() => setEntering(false)}
+          />
+        </div>
+      ) : (
+        <button
+          type="button"
+          aria-current={typed ? "true" : undefined}
+          data-testid="model-popover-other"
+          onClick={() => setEntering(true)}
+          className={cx("flex min-h-9 w-full items-center gap-2 rounded-[6px] px-2 py-1 text-left pointer-coarse:min-h-11", typed ? "bg-hover" : "hover:bg-hover")}
+        >
+          <Icon name="keyboard" size={13} className="shrink-0 text-ink-3" />
+          <span className="flex min-w-0 flex-1 flex-col">
+            <span className="truncate text-[12.5px] text-ink">{models.some((m) => !m.default && !m.custom) ? tr("composer.other_model") : tr("composer.enter_model")}</span>
+            {typed && <span className="truncate font-mono text-[11px] text-ink-3">{typed}</span>}
+          </span>
+          <Icon name="check" size={13} stroke={2.5} className={typed ? "shrink-0 text-ink" : "invisible shrink-0"} />
+        </button>
+      ))}
+      {forgetError && <div role="alert" className="px-2 py-1.5 text-[12px] break-words whitespace-pre-wrap text-red">{forgetError}</div>}
+      {(switchable || typable) && <div className="px-2 pt-1 pb-0.5 text-[11px] break-words text-ink-3">{tr("composer.default_note")}</div>}
       {(busyNote || locked) && (
         <div role="status" className="px-2 py-1.5 text-[11.5px] break-words text-ink-3">
           {busyNote || tr("composer.locked")}

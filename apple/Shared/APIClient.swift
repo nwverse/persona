@@ -509,6 +509,12 @@ nonisolated struct APIClient: Sendable {
         let path = "/api/v1/machines/\(machine)/launchers/\(launcher.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? launcher)/models"
         return try JSON.decoder.decode(LauncherModels.self, from: await request("GET", path, query: refresh ? ["refresh": "1"] : [:], timeout: 75))
     }
+    /// Forgets one model ID typed for this launcher on this computer (#1644, the list's Forget): the hub stops listing
+    /// it (`custom: true`). Forgetting one it doesn't remember is fine too.
+    func forgetCustomModel(machine: String, launcher: String, model: String) async throws {
+        let path = "/api/v1/machines/\(machine)/launchers/\(launcher.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? launcher)/models/custom"
+        _ = try await request("DELETE", path, query: ["model": model])
+    }
     /// Model Settings' list for a launcher provider (`launcher.<name>`, #943), asked on a machine that has the launcher (its
     /// `machine`); nil: an older hub, or a provider without a list (a plugin brings its own, an API has none).
     /// `machine`: the purpose's own (a task, Lark /agent run there), so the list is that machine's launcher.

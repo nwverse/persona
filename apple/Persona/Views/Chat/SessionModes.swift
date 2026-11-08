@@ -84,6 +84,13 @@ nonisolated enum SessionModes {
         }
     }
 
+    /// The launcher whose /model list and typed IDs a session's switch offers: the session's own, plain claude when it
+    /// started without one (the web's `sessionLauncher`).
+    static func launcher(_ s: Session?) -> String {
+        guard let l = s?.launcher, !l.isEmpty else { return "claude" }
+        return l
+    }
+
     /// What applying a model pick sends: the alias, unless the session already runs it.
     @MainActor static func modelPatch(_ picked: String, current: String?) -> String? {
         picked == PromptItems.claudeModelID(current) ? nil : picked
@@ -165,6 +172,8 @@ struct SessionModeBar: View {
     let key: SessionKey
     var session: Session?
     @State private var changing = false
+    /// "Other Model…": a model ID typed by hand (#1644).
+    @State private var typingModel = false
 
     var body: some View {
         #if DEBUG || PERF_SIGNPOST
@@ -210,6 +219,9 @@ struct SessionModeBar: View {
                         }
                         .pickerStyle(.inline)
                         .disabled(busy != nil)
+                        Button { typingModel = true } label: { Label("Other Model…", systemImage: Theme.Icon.keyboard) }
+                            .disabled(busy != nil)
+                            .accessibilityIdentifier("sessionModes.otherModel")
                         // A menu draws no section footers: the note is a row of its own (not tappable).
                         Text(busy ?? String(localized: "The model you pick also becomes the default for new sessions"))
                     }
@@ -226,6 +238,7 @@ struct SessionModeBar: View {
         }
         .disabled(changing)
         .animation(Theme.Motion.standard, value: changing)
+        .sheet(isPresented: $typingModel) { SessionTypedModelSheet(key: key, session: session) }
     }
 
     /// The effort chip read out, with ", ultracode on" while it carries the mark (#1307).
@@ -269,6 +282,8 @@ struct SessionModesMenu: View {
     var setsModes = true
     /// Only the effort can change, among the session's own levels (a Codex thread on its app-server, `Session.setsEffortOnly`).
     var setsEffortOnly = false
+    /// "Other Model…" where a model can be picked: the composer opens `SessionTypedModelSheet` (#1644).
+    var otherModel: (() -> Void)? = nil
 
     /// The button's title for this conversation; the effort carries the workflow mark while ultracode is on (#1307).
     static func title(_ session: Session?, setsModes: Bool) -> SessionModes.ComposerTitle? {
@@ -297,6 +312,15 @@ struct SessionModesMenu: View {
                     }
                 }
                 .pickerStyle(.inline)
+                if let otherModel {
+                    // Goes through POST …/modes (the node's checks), not a typed `/model` message.
+                    let busy = SessionModes.modelBusy(session)
+                    Button(action: otherModel) {
+                        Label { Text("Other Model…"); if let busy { Text(busy) } } icon: { ThemedIcon(Theme.Icon.keyboard) }
+                    }
+                    .disabled(busy != nil)
+                    .accessibilityIdentifier("sessionModes.otherModel")
+                }
             } else {
                 Text(SessionModes.modelName(session?.model) ?? String(localized: "Unknown model")) // what it runs; changed where it was started
             }
@@ -331,6 +355,22 @@ struct SessionModesMenu: View {
     private func change(mode: String? = nil, effort: String? = nil) {
         guard mode != session?.permissionMode || effort != session?.effort else { return }
         Task { await model.setModes(key, permissionMode: mode, effort: effort) }
+    }
+}
+
+/// "Other Model…" for a running Claude Code session (#1644): a model ID typed by hand, with the IDs typed before for its
+/// launcher on that computer, goes through POST …/modes (the node types `/model <id>` behind its own checks), never as a
+/// message.
+struct SessionTypedModelSheet: View {
+    @Environment(AppModel.self) private var model
+    let key: SessionKey
+    var session: Session?
+
+    var body: some View {
+        TypedModelSheet(machine: key.machineRef, launcher: SessionModes.launcher(session),
+                        note: String(localized: "The model you pick also becomes the default for new sessions")) { id in
+            Task { await model.setModes(key, model: id) }
+        }
     }
 }
 

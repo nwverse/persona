@@ -4,6 +4,20 @@ import UIKit
 @testable import Persona
 
 struct AssistantTopBarTests {
+    /// The chat chip's launcher submenus (#1644): the IDs typed before come marked, and "Other Model…" is offered for
+    /// Claude Code and Codex launchers only.
+    @MainActor @Test func theChipKnowsTypedModels() throws {
+        let options = try JSON.decoder.decode([AgentModelOption].self, from: Data(#"""
+            [{"id":"default","name":"Default","default":true},{"id":"opus","name":"Opus 5.5"},
+             {"id":"vendor/model-x","name":"vendor/model-x","custom":true}]
+            """#.utf8))
+        #expect(options.map { $0.custom == true } == [false, false, true])
+        #expect(AssistantTopBar.takesTypedModel(Launcher(name: "claude")))
+        #expect(AssistantTopBar.takesTypedModel(Launcher(name: "cx", agent: "codex")))
+        #expect(!AssistantTopBar.takesTypedModel(Launcher(name: "traex", baseURL: "(traex)")))
+        #expect(!AssistantTopBar.takesTypedModel(Launcher(name: "rt", agent: "dsh")))
+    }
+
     @Test func copyInfoHasWhatAnotherAgentNeeds() {
         let t = AssistantCopyText.info(title: "早报", isMain: false, sessionID: "abc-123", machine: "Server", machineID: "server",
                                        cwd: "/home/me/.persona/assistant", launcher: "claude", model: "Opus")

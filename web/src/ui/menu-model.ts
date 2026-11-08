@@ -9,6 +9,11 @@ export interface MenuRename {
   placeholder?: string;
   /** Enter on a changed, non-empty name. A rejection is shown inline and the input stays. */
   commit: (name: string) => void | Promise<unknown>;
+  /** Why what is typed can't be committed, "" when it can: said under the input as it is typed, and Enter waits for
+   *  a good one (a model ID, #1644). */
+  validate?: (text: string) => string;
+  /** Under the input while nothing is wrong (what it takes). */
+  hint?: string;
 }
 
 export interface MenuItem {

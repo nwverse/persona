@@ -94,7 +94,12 @@ struct PromptComposer: View {
             .background { Color.clear.surface(interactive: true, in: .rect(cornerRadius: Theme.Radius.panel, style: .continuous)) }
             .onAppear { bar.selectedModelID = modelID }
             .onChange(of: modelID) { _, id in bar.selectedModelID = id }
-            .onChange(of: bar.selectedModelID) { _, id in if id != modelID { pickModel(id) } }
+            .onChange(of: bar.selectedModelID) { _, id in
+                guard id != modelID else { return }
+                // "Other Model…" is an action, not a model (#1644): the menu goes back to the one that runs.
+                if id == PromptItems.otherModel.id { bar.selectedModelID = modelID }
+                pickModel(id)
+            }
             .onChange(of: bar.token?.kind == .mention) { _, open in if open { mentionRows = mentions() } }
             .onChange(of: dictation.isListening) { _, on in bar.isListening = on }
             .onDisappear { stopDictation() }
@@ -203,6 +208,9 @@ enum PromptItems {
         PromptModel(id: "sonnet", name: "Sonnet", tag: String(localized: "Balanced")),
         PromptModel(id: "haiku", name: "Haiku", tag: String(localized: "Fastest")),
     ]
+
+    /// The model menu's last row (#1644): opens the field for a model ID typed by hand (`SessionTypedModelSheet`).
+    static let otherModel = PromptModel(id: "persona.typed-model", name: String(localized: "Other Model…"), tag: String(localized: "Type a model ID"))
 
     /// The alias a session's model reads as ("claude-opus-…" → opus).
     static func claudeModelID(_ model: String?) -> String {

@@ -26,6 +26,8 @@ struct AssistantTopBar: View {
     @State private var modelOptions: [String: [AgentModelOption]] = [:]
     /// A copy's confirmation, in the name pill for a moment (a toast would sit right on the face).
     @State private var hint: String?
+    /// The launcher whose "Other Model…" is open (#1644): a model ID typed by hand for the next message.
+    @State private var typingFor: String?
     #if os(macOS)
     @Environment(\.macTitleRowLeading) private var titleRowLeading
     #endif
@@ -79,6 +81,15 @@ struct AssistantTopBar: View {
                 }
             }
             .onChange(of: key) { showInfo = false }
+            // "Other Model…" (#1644): an ID typed by hand for the next message; the IDs typed before can be forgotten
+            // there, so the submenus are read again when it closes.
+            .sheet(isPresented: Binding(get: { typingFor != nil && key != nil }, set: { if !$0 { typingFor = nil } }),
+                   onDismiss: { Task { await loadModelOptions() } }) {
+                if let l = typingFor {
+                    TypedModelSheet(machine: model.hubRef(machineID), launcher: l, initial: typedPick(l),
+                                    note: String(localized: "This chat uses it from the next message.")) { id in pick(l, model: id) }
+                }
+            }
             #if DEBUG
             .task { // `-showInfo YES`: Session Info open, for screenshots (the Agents chat reads the same flag)
                 if UserDefaults.standard.bool(forKey: "showInfo") { try? await Task.sleep(for: .seconds(2)); showInfo = true }
@@ -328,6 +339,26 @@ struct AssistantTopBar: View {
 
     private func modelID(_ m: AgentModelOption) -> String? { m.isDefault == true ? nil : m.id }
 
+    /// One model of a launcher's submenu, checked when it is the next message's.
+    private func modelButton(_ launcherName: String, _ m: AgentModelOption) -> some View {
+        let chosen = launcherName == launcher && pickedModel == modelID(m)
+        return Button { pick(launcherName, model: m.isDefault == true ? nil : m.id) } label: {
+            if chosen { Label(m.title, systemImage: Theme.Icon.done) } else { Text(m.title) }
+        }
+    }
+
+    /// The next message's model when it is one typed for `launcherName` that its list doesn't have: the field starts with it.
+    private func typedPick(_ launcherName: String) -> String {
+        guard launcherName == launcher, let p = pickedModel, !(modelOptions[launcherName] ?? []).contains(where: { $0.id == p }) else { return "" }
+        return p
+    }
+
+    /// The launcher's agent takes a model ID typed by hand (#1644): Claude Code or Codex.
+    static func takesTypedModel(_ l: Launcher) -> Bool {
+        guard l.baseURL != "(traex)" else { return false }
+        return LauncherModels.takesTypedModel(agent: l.agent.flatMap { $0.isEmpty ? nil : $0 } ?? "claude")
+    }
+
     private func pick(_ launcher: String, model picked: String?) {
         guard let key else { return }
         model.assistantLaunchers[key] = launcher
@@ -435,10 +466,23 @@ struct AssistantTopBar: View {
                                 Button { pick(l.name, model: nil) } label: {
                                     if l.name == launcher, pickedModel == nil { Label("Default Model", systemImage: Theme.Icon.done) } else { Text("Default Model") }
                                 }
-                                ForEach(modelOptions[l.name] ?? []) { m in
-                                    let chosen = l.name == launcher && pickedModel == modelID(m)
-                                    Button { pick(l.name, model: m.isDefault == true ? nil : m.id) } label: {
-                                        if chosen { Label(m.title, systemImage: Theme.Icon.done) } else { Text(m.title) }
+                                ForEach((modelOptions[l.name] ?? []).filter { $0.custom != true }) { m in
+                                    modelButton(l.name, m)
+                                }
+                                let typed = (modelOptions[l.name] ?? []).filter { $0.custom == true }
+                                if !typed.isEmpty {
+                                    Section("Typed Before") { ForEach(typed) { m in modelButton(l.name, m) } }
+                                }
+                                if Self.takesTypedModel(l) {
+                                    let picked = l.name == launcher ? pickedModel : nil
+                                    let other = picked.flatMap { p in (modelOptions[l.name] ?? []).contains { $0.id == p } ? nil : p }
+                                    Section {
+                                        Button { typingFor = l.name } label: {
+                                            // A typed pick that isn't listed (yet) is checked here, by its ID.
+                                            if let other { Label { Text("Other Model…"); Text(other) } icon: { ThemedIcon(Theme.Icon.done) } }
+                                            else { Label("Other Model…", systemImage: Theme.Icon.keyboard) }
+                                        }
+                                        .accessibilityIdentifier("assistant-model-other-\(l.name)")
                                     }
                                 }
                             } label: {
@@ -447,6 +491,9 @@ struct AssistantTopBar: View {
                                     Label { Text(title); Text("Just Once") } icon: { ThemedIcon(Theme.Icon.done) }
                                 } else if l.name == launcher { Label(title, systemImage: Theme.Icon.done) } else { Text(title) }
                             }
+                            // A nested menu keeps the items it was first built with: the list read after the bar
+                            // came up, an ID typed or forgotten since, or another pick builds it again.
+                            .id([launcher, pickedModel ?? ""] + (modelOptions[l.name] ?? []).map(\.id))
                         }
                     }
                 } label: { Label("Launcher: \(launcher)", systemImage: Theme.Icon.model) }

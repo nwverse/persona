@@ -736,33 +736,63 @@ function NoteRow({ item: it, refCb }: { item: MenuItem; refCb: (el: HTMLElement 
 function RenameRow({ item, busy, onCommit, onCancel, refCb }: { item: MenuItem; busy: boolean; onCommit: (name: string) => void; onCancel: () => void; refCb: (el: HTMLElement | null) => void }) {
   const rename = item.rename!;
   const [text, setText] = useState(rename.value);
+  const hintId = useId();
+  // what is wrong with it as typed (rename.validate), said under the input; Enter waits for a good one
+  const problem = text.trim() ? (rename.validate?.(text) ?? "") : "";
+  const below = problem || (rename.validate ? rename.hint : "");
+  const input = (
+    <input
+      autoFocus
+      value={text}
+      disabled={busy}
+      aria-label={item.label.replace(/…$/, "")}
+      aria-invalid={problem ? true : undefined}
+      aria-describedby={below ? hintId : undefined}
+      placeholder={rename.placeholder}
+      spellCheck={rename.validate ? false : undefined}
+      autoComplete={rename.validate ? "off" : undefined}
+      onChange={(e) => setText(e.target.value)}
+      onFocus={(e) => e.currentTarget.select()}
+      onKeyDown={(e) => {
+        if (composing(e.nativeEvent)) return;
+        if (e.key === "Enter") {
+          e.preventDefault();
+          e.stopPropagation();
+          if (problem) return;
+          const name = renameCommit(rename.value, text);
+          if (name === null) onCancel();
+          else onCommit(name);
+        } else if (e.key === "Escape") {
+          e.preventDefault();
+          e.stopPropagation();
+          onCancel();
+        } else e.stopPropagation();
+      }}
+      className={cx(
+        "h-7 min-w-0 flex-1 rounded-[6px] bg-inset px-2 text-[12.5px] text-ink shadow-hairline outline-none placeholder:text-ink-3 pointer-coarse:h-9",
+        rename.validate && "font-mono placeholder:font-sans",
+        problem && "shadow-[0_0_0_1px_var(--red)]",
+      )}
+    />
+  );
+  if (!rename.validate)
+    return (
+      <div ref={refCb} className="relative z-10 flex h-8 items-center gap-2 px-1 pointer-coarse:min-h-11">
+        {input}
+        {busy && <Spinner size={12} />}
+      </div>
+    );
   return (
-    <div ref={refCb} className="relative z-10 flex h-8 items-center gap-2 px-1 pointer-coarse:min-h-11">
-      <input
-        autoFocus
-        value={text}
-        disabled={busy}
-        aria-label={item.label.replace(/…$/, "")}
-        placeholder={rename.placeholder}
-        onChange={(e) => setText(e.target.value)}
-        onFocus={(e) => e.currentTarget.select()}
-        onKeyDown={(e) => {
-          if (composing(e.nativeEvent)) return;
-          if (e.key === "Enter") {
-            e.preventDefault();
-            e.stopPropagation();
-            const name = renameCommit(rename.value, text);
-            if (name === null) onCancel();
-            else onCommit(name);
-          } else if (e.key === "Escape") {
-            e.preventDefault();
-            e.stopPropagation();
-            onCancel();
-          } else e.stopPropagation();
-        }}
-        className="h-7 min-w-0 flex-1 rounded-[6px] bg-inset px-2 text-[12.5px] text-ink shadow-hairline outline-none placeholder:text-ink-3 pointer-coarse:h-9"
-      />
-      {busy && <Spinner size={12} />}
+    <div ref={refCb} className="relative z-10 flex flex-col gap-1 px-1 py-0.5">
+      <div className="flex h-8 items-center gap-2 pointer-coarse:min-h-11">
+        {input}
+        {busy && <Spinner size={12} />}
+      </div>
+      {below && (
+        <p id={hintId} role={problem ? "alert" : undefined} className={cx("px-0.5 pb-0.5 text-[11.5px] leading-snug break-words", problem ? "text-red" : "text-ink-3")}>
+          {below}
+        </p>
+      )}
     </div>
   );
 }

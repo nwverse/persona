@@ -49,4 +49,22 @@ struct ModelSwitchTests {
         let second = try #require(try JSONSerialization.jsonObject(with: b) as? [String: String])
         #expect(second == ["effort": "high"]) // an older caller's body is unchanged
     }
+
+    /// "Other Model…" (#1644): a typed ID goes through …/modes like a listed one, never as a `/model` message; the list
+    /// it comes with is the session's launcher's.
+    @Test func aTypedModelGoesThroughModes() async throws {
+        let hub = FakeHub()
+        hub.on("POST", "/api/v1/sessions/box/s1/modes", json: #"{"ok":true}"#)
+        try await hub.client.setModes(SessionKey(machineID: "box", sessionID: "s1"), model: "~vendor/model-latest[1m]")
+        let body = try #require(hub.sent("POST", "/api/v1/sessions/box/s1/modes").first?.body)
+        #expect(try JSONSerialization.jsonObject(with: body) as? [String: String] == ["model": "~vendor/model-latest[1m]"])
+        #expect(hub.sent("POST", "/api/v1/sessions/box/s1/messages").isEmpty)
+        #expect(SessionModes.launcher(try session()) == "claude")
+        #expect(SessionModes.launcher(try session(#","launcher":"cc_gateway""#)) == "cc_gateway")
+    }
+
+    @MainActor @Test func theComposerMenuOffersOtherModelAsAnAction() {
+        #expect(!PromptItems.claudeModels.contains { $0.id == PromptItems.otherModel.id })
+        #expect(PromptItems.claudeModelID(PromptItems.otherModel.id) == "default")
+    }
 }
