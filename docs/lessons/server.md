@@ -22,6 +22,12 @@ and a local session revision protect that boundary without changing the node pro
 
 Pitfalls, odd behavior, and the trade-offs made at the time (formerly "Lessons" in `CLAUDE.md`; index in `docs/lessons/README.md`). Add new lessons to the relevant section, or create one if none fits.
 
+## Approved official-market pins outlive built-in constants (#1157)
+
+Changing a compiled public key does not update a pin already saved in Postgres, and the registration marker can hide that difference. Migrate only explicitly recognized retired official pins, including every recognized repository or HTTPS alias; never infer trust from a downloaded catalog or replace an unknown owner choice. Save the legacy registration marker before migration so a removed market stays removed. A failed pin write must keep loading retryable.
+
+For embedded signatures, retain the complete envelope and verify the exact decoded payload bytes on restart. Postgres JSONB may normalize the outer envelope without changing those bytes; compare the decoded payload, not the envelope's formatting. A legacy detached payload or stale cached signed flag must not authorize installation. Cache quarantine can legitimately write the old record before pin migration: inject failure specifically on the new-pin write, rather than claiming a generic cache-write error proves migration retry. Keep every HTTP fixture local, including automatic refreshes of quarantined caches. Observe successful catalog delivery in rejection tests as well as `errors.Is(err, extension.ErrCatalogUnverified)`. `ErrCatalogUnavailable` must not lift a rotated cache's quarantine, and it must preserve the new key's catalog once that envelope has genuinely verified. Never infer these categories from localized message text.
+
 ## A fixed name in the temp folder is shared on Linux (2026-11-07, #66)
 
 `os.TempDir()` is the per-user `$TMPDIR` on macOS but the shared `/tmp` on Linux, so a fixed name there (`persona-herdr-server.log`, `persona-orca-images`) looks private on a Mac and is not on a Linux node. Another local user can create the name first: a symlink makes the next `O_CREATE|O_TRUNC` open empty and write into a file of the node's user, and a world-writable folder receives every file written into it, since `MkdirAll` succeeds on an existing folder whatever its owner or mode. Keep such files under `privateCacheDir` (`internal/node/cachedir.go`: the user's cache folder, checked to be a private folder of this user; a per-process `os.MkdirTemp` folder when there is none).
