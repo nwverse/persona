@@ -42,6 +42,15 @@ struct PendingArrivalTests {
         #expect(s.pending.isEmpty)
     }
 
+    // A hand-off retried after its copy reached the open conversation (the hub answers the retry from its receipt): the
+    // message is there already, no bubble beside it.
+    @Test func aSentMessageWhoseCopyArrivedIsNotShownAgain() {
+        let model = AppModel(), key = SessionKey(machineID: "box", sessionID: "sent-\(UUID().uuidString)"), id = UUID()
+        model.chat(key).merge([tagged(5, "看一下这封邮件", id)])
+        model.showSent(key, text: "看一下这封邮件", images: [], id: id)
+        #expect(model.chat(key).pending.isEmpty)
+    }
+
     // An older 「继续」 in a history page is not the 「继续」 just written: the unsent bubble used to vanish with it.
     @Test func anOlderMessageWithTheSameWordsIsNotIt() {
         let s = store()

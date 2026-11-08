@@ -59,7 +59,9 @@ final class NewConversationEntryTests: XCTestCase {
         XCTAssertTrue(row("Persona（主对话）").exists, "no main chat target:\n\(app.debugDescription)")
         sleep(1)
         shot("handoff-sheet-\(name)")
-        let field = app.textFields.firstMatch
+        let field = app.descendants(matching: .any).matching(NSPredicate(
+            format: "elementType IN %@ AND placeholderValue == %@",
+            [XCUIElement.ElementType.textField.rawValue, XCUIElement.ElementType.textView.rawValue], "总结一下，告诉我要做什么，给出建议的回复")).firstMatch
         XCTAssertTrue(field.waitForExistence(timeout: 5), "no instructions field:\n\(app.debugDescription)")
         field.tap()
         field.typeText(ask)

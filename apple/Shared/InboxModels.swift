@@ -497,9 +497,13 @@ extension APIClient {
     /// links the item to it, which may then write back to the item. Answers the item as it is now and the conversation.
     /// Older hubs and managers answer 404 / 405.
     func inboxHandoff(_ id: String, text: String, clientID: UUID) async throws -> InboxHandoffAnswer {
-        let r = try await post("/api/v1/inbox/" + id + "/handoff",
-                               body: InboxHandoffBody(text: HubNaming.outbound(text, canonical: personaNaming), clientID: clientID.uuidString.lowercased()),
-                               timeout: 110, as: InboxHandoffResponse.self)
+        let data = try await request("POST", "/api/v1/inbox/" + id + "/handoff",
+                                     body: InboxHandoffBody(text: HubNaming.outbound(text, canonical: personaNaming), clientID: clientID.uuidString.lowercased()),
+                                     timeout: 120)
+        // The receipt is keyed on client_id, not the operation header: a repeat the hub can't answer yet comes back as
+        // the bare receipt, which no answer looks like.
+        try Self.checkReceipt(data, status: nil)
+        let r = try JSON.decoder.decode(InboxHandoffResponse.self, from: data)
         return InboxHandoffAnswer(item: r.item, session: SessionKey(group: group, machineID: r.session.machineID, sessionID: r.session.sessionID))
     }
 

@@ -25,16 +25,20 @@ struct InboxHandOffModelTests {
      "count":1,"lark":{"feed_id":"f1","is_group":false}}
     """
 
-    private func model(_ calls: Calls) -> InboxHandOffModel {
+    private func model(_ calls: Calls, hub: APIClient? = nil) -> InboxHandOffModel {
         InboxHandOffModel(itemID: "lark:f1:11", deps: .init(
             load: { _ in try JSON.decoder.decode(InboxItem.self, from: Data(Self.item.utf8)) },
             handOff: { id, text, clientID in
                 calls.handOffs.append((id, text, clientID))
+                if let hub { return try await hub.inboxHandoff(id, text: text, clientID: clientID).session }
                 if !calls.failures.isEmpty { throw calls.failures.removeFirst() }
                 return Self.main
             },
             openMain: { calls.opened.append(($0, $1, $2)) },
-            askPersona: { calls.asked.append($0); return calls.askGoes },
+            plainToMain: {
+                calls.asked.append($0)
+                if !calls.askGoes { throw APIError(status: 502, message: "Persona is offline") }
+            },
             startNew: { calls.started.append($0) },
             sendToAgent: { calls.agents.append(($0, $1)) },
             markDone: { calls.done += 1 }))
@@ -131,8 +135,8 @@ struct InboxHandOffModelTests {
         checked.setMarkDone(true)
         c.failures = [APIError(status: 405, message: "Method Not Allowed")]
         c.askGoes = false
-        _ = await checked.send(ask: "a")
-        #expect(c.done == 0)
+        let wentAnyway = await checked.send(ask: "a")
+        #expect(!wentAnyway && c.done == 0 && checked.error == "Persona is offline")
         c.failures = [APIError(status: 405, message: "Method Not Allowed")]
         c.askGoes = true
         _ = await checked.send(ask: "a")
@@ -150,6 +154,27 @@ struct InboxHandOffModelTests {
         let sent = try #require(hub.sent("POST", path).first)
         let body = try JSON.decoder.decode([String: String].self, from: try #require(sent.body))
         #expect(body == ["text": "看看", "client_id": id.uuidString.lowercased()])
+    }
+
+    /// A retry while the hub still runs the first hand-off gets its receipt (202 pending), not an answer: the hand-off may
+    /// still go, so the next try keeps the client id.
+    @Test func aHandOffTheHubStillRunsKeepsItsClientID() async throws {
+        let hub = FakeHub(), path = "/api/v1/inbox/lark:f1:11/handoff"
+        let answers = Answers([#"{"state":"pending"}"#, #"{"session":{"machine_id":"server","session_id":"main-1"}}"#])
+        hub.on("POST", path) { _ in Data(answers.next().utf8) }
+        let m = model(Calls(), hub: hub.client)
+        let first = await m.send(ask: "a")
+        #expect(!first && m.error != nil)
+        let second = await m.send(ask: "a")
+        #expect(second)
+        let ids = try hub.sent("POST", path).map { try JSON.decoder.decode([String: String].self, from: try #require($0.body))["client_id"] }
+        #expect(ids.count == 2 && ids[0] != nil && ids[0] == ids[1])
+    }
+
+    private final class Answers {
+        private var left: [String]
+        init(_ answers: [String]) { left = answers }
+        func next() -> String { left.removeFirst() }
     }
 
     /// The hand-off went: an item in the answer this app can't read is left out, not taken for a failure.
