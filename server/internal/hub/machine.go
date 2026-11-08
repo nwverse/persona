@@ -294,9 +294,9 @@ func (m *Machine) keptSessions() []proto.Session {
 func (m *Machine) session(id string) (proto.Session, bool) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	for _, s := range m.sessions {
-		if s.SessionID == id {
-			return s, true
+	for i := range m.sessions { // by index: a range value copies every (large) session it passes
+		if m.sessions[i].SessionID == id {
+			return m.sessions[i], true
 		}
 	}
 	return proto.Session{}, false
@@ -375,8 +375,8 @@ func (m *Machine) settleEnded(id string) {
 
 // listsLocked reports whether the node's last list has session id; m.mu is held.
 func (m *Machine) listsLocked(id string) bool {
-	for _, s := range m.sessions {
-		if s.SessionID == id {
+	for i := range m.sessions {
+		if m.sessions[i].SessionID == id {
 			return true
 		}
 	}
