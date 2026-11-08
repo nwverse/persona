@@ -24,6 +24,35 @@ a same-value retry or a notification-only setting must not force all devices to
 refresh. A metrics-only foreground broadcast must use the newest fleet snapshot,
 not the last APNs-flushed snapshot while ordinary updates are coalescing.
 
+## Push retirement needs installation proof and a late-write fence (#1663)
+
+Registration IDs and credential IDs are different. Sharing a name or owner is not
+proof that two APNs targets belong to the same installation: also require topic,
+environment and a matching nonempty encryption public key or exact APNs token.
+Use a true enrollment timestamp, not the timestamp rewritten by prefs or grant
+maintenance. Protect active owners and coalesce APNs acceptance timestamps; lack
+of pre-migration delivery history needs observation grace, not immediate expiry.
+
+Publish a registration only after its ownership check and retirement commit.
+A BEFORE INSERT check must allow a prefs upsert that retains the old owner in its
+ON CONFLICT UPDATE; check the actual updated owner before rejecting it. Targeted
+lifecycle tests do not replace the full device/prefs contract suite.
+A process mutex cannot fence another blue-green slot: use a Postgres retirement
+ledger and serialized old-writer triggers. A late APNs gone response must compare
+against the persisted registration, not just one process's memory. Fence all
+retirement reasons; fresh authenticated re-pairing needs a live new owner plus
+scoped installation proof, never an old save. Historical metadata cannot prove
+which cached ID the current app uses: allow a fresh post-retirement, same-owner,
+proven enrollment to replace the canonical target atomically, carrying preferences
+and the longest start deadline. Delayed enrollment timestamps remain fenced.
+If acceptance fails to flush, skip
+inactivity; skip busy transports so completion cannot race the expiry snapshot.
+Remove activity state and transfer the
+longest persisted start deadline before deleting a duplicate. Lock the device
+parent before its activity/budget, matching budget claim and revocation order.
+Test two database pools, late legacy writes, failure rollback and physical-install
+boundaries; never treat acceptance as a delivered notification or battery result.
+
 ## Push-to-start budgets belong to delivery, not episodes (#1662)
 
 An episode counter allows an empty/active loop to start an activity every time and
@@ -135,7 +164,7 @@ Revocation ended pairing codes with `expires_at = now()` (Postgres's clock) whil
 
 ## Registration success requires persistence (#5827)
 
-- Return device and Live Activity save errors to HTTP callers so they can retry. Keep logging in shared persistence helpers because token renewal and background cleanup still need to continue with their in-memory state when storage is unavailable. Bound request writes by both the request context and the existing 5-second device-store timeout; test cancellation and the inherited deadline with a waiting store stub. Use typed `i18n.Err` values for localized HTTP summaries: wrapping translated text in a plain error lets the shared API error mapping replace it with a generic diagnostic message.
+- Return device and Live Activity save errors to HTTP callers so they can retry. Keep logging in shared persistence helpers; registration and grant renewal publish only committed candidates, while failed maintenance retains retry state. Bound request writes by both the request context and the existing 5-second device-store timeout; test cancellation and the inherited deadline with a waiting store stub. Use typed `i18n.Err` values for localized HTTP summaries: wrapping translated text in a plain error lets the shared API error mapping replace it with a generic diagnostic message.
 
 ## Rolling-upgrade identity contracts (#6223)
 
@@ -1133,3 +1162,9 @@ A connector that folds several notifications into one thread (GitHub CI failures
 
 - Go's `regexp` runs an unanchored alternation by trying every branch at every position of the text. `transcript.AskOf`'s seventy sayings took about 0.3 µs a byte on a reply that asks nothing, and it runs on every session of every list a manager publishes: a node's `sessions.changed` for 300 sessions spent 37 of its 41 ms there. A pattern run often on texts it seldom matches is `lazyre.NewGated`: it first looks for the literals every match starts with (worked out from the pattern) and skips the engine when there are none. It needs every branch to start with a literal; a leading class, repeat or `(?i)` leaves it ungated, which `TestAskPatternsGated` catches for the ask patterns.
 - A `MarshalJSON` that builds `struct{ T; Extra }{T(s), …}` copies the whole value, and the calling encoder then validates and copies the returned bytes again. For a large type encoded in bulk (a `proto.Session` is ~1.4 KB, a machine lists up to 150 on every push), embed the value by pointer and also implement `MarshalJSONTo` on the pointer, encoding with `json.DefaultOptionsV1()` so a caller's `SetEscapeHTML(false)` cannot change the bytes. Compare the bytes against the old encoding through a value, a pointer and a no-HTML encoder (`TestSessionWireBytesUnchanged`).
+
+## Hot paths: a list copied to stamp one field, an UnmarshalJSON on a list's element (2026-11-09, #1704)
+
+- The hub copied a machine's whole list (~200 KB for 150 sessions) on every push only to put the manager on each session. A list read without a copy has to be one that is never changed in place: `Machine.sessions` is replaced, and anything that changes it (`markUnknownLocked`, `sessions.revs`) copies it first. Put such a field on while encoding (`encodeStamped`), copying only a row that differs; a new writer that changes the kept list in place breaks every reader holding it.
+- A type with `UnmarshalJSON` decoded in bulk makes the decoder find, validate and copy each element's bytes before the method decodes them again. Implement `UnmarshalJSONFrom` (it takes precedence) and decode from the list's decoder in one pass. Keep what `UnmarshalJSON` did on a bad value: decode into the value, so restore it on error, and compare both on many raw inputs (`TestSessionDecodeMatchesTwoPass`), repeated and case-folded keys and invalid types included.
+- A benchmark of a lookup measures its fakes too: `BenchmarkReadinessMainLargeInventory` spent 11.8 MB a run in a fake `Session` that copied the whole inventory, which the real one does not. Fakes on a measured path find things the way production does.

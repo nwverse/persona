@@ -928,6 +928,13 @@ nonisolated struct APIClient: Sendable {
         try await post(sp(k) + "/queue", body: QueueEdit(keep: keep), as: QueueResponse.self).queue
     }
 
+    /// Gives the agent what waits in its queue now (#6088, Claude Code's own send-now: a command it runs moves to the
+    /// background, a reply it writes starts again with the messages). 409 `nothing_queued`, `send_now_unsupported`,
+    /// `send_now_in_doubt`; an older node `node_outdated`. The hub's words for them are in the reader's language.
+    func sendQueuedNow(_ k: SessionKey) async throws {
+        try await post(sp(k) + "/queue/send-now", timeout: 30)
+    }
+
     struct AssistantState: Codable, Sendable {
         var machineID: String
         var launcher: String

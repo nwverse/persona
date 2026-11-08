@@ -14884,13 +14884,19 @@ class H(BaseHTTPRequestHandler):
             s = next((x for x in SESSIONS if x["session_id"] == p.split("/")[5]), None)
             if not (s or {}).get("queued"):
                 return self.send_json({"code": "nothing_queued", "error": "Nothing is queued for the agent any more."}, 409)
+            refuse = os.environ.get("MOCK_SEND_NOW")  # refuses with that code, to see the app's words for it
+            if refuse:
+                return self.send_json({"error": "refused (%s)" % refuse, "code": refuse,
+                                       **({"delivered": "unknown"} if refuse == "send_now_in_doubt" else {})}, 409)
             s["queued"] = []
             push_machine(s["machine_id"])
             return self.send_json({"sent": True})
         if p.startswith("/api/v1/sessions/") and p.endswith("/queue"):  # node editQueue: pull every queued message back, re-queue `keep`
             body = json.loads(self.last_body or b"{}")
             QUEUE_EDITS.append(body)
-            s = next((x for x in all_sessions() if x["session_id"] == p.split("/")[5]), None)
+            # The stored session (all_sessions() hands out copies): the new order is what the next list says (#6088).
+            s = next((x for x in SESSIONS if x["session_id"] == p.split("/")[5]), None) \
+                or next((x for x in all_sessions() if x["session_id"] == p.split("/")[5]), None)
             pulled = list((s or {}).get("queued") or [])
             if not pulled: return self.send_json({"error": "nothing is queued"}, 502)
             s["queued"] = [pulled[k] for k in body.get("keep") or [] if 0 <= k < len(pulled)]

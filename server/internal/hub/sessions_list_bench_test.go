@@ -92,3 +92,38 @@ func TestAgents8000Measurement(t *testing.T) {
 			query, requests, firstRequest, elapsed/requests, bytes, (cpu(cpuAfter)-cpu(cpuBefore))/requests, (after.TotalAlloc-before.TotalAlloc)/requests, retained.HeapAlloc, rss)
 	}
 }
+
+// The whole list (GET /api/v1/sessions) is every machine's sessions as decorated gives them, read from the kept
+// lists with one copy of them all: the lists are not changed. 7.06x the answer's size measured, most of it the
+// encoding, 8.73x before.
+func TestLegacyListOneCopy(t *testing.T) {
+	h := newTestHub(t)
+	for _, mid := range []string{"ma", "mb"} {
+		m := newMachine(h, MachineConfig{ID: mid, Kind: "local"})
+		h.machines, h.byID[mid] = append(h.machines, m), m
+		m.sessions = busyList()
+		m.sessions[0].Manager = "someone-else"
+	}
+	want := httptest.NewRecorder()
+	var decorated []proto.Session
+	for _, m := range h.machines {
+		decorated = append(decorated, h.shown(m.cfg.ID, h.decorated(m))...)
+	}
+	writeJSON(want, map[string]any{"sessions": decorated})
+	r := httptest.NewRequest("GET", "/api/v1/sessions", nil)
+	got := httptest.NewRecorder()
+	h.listSessions(got, r)
+	if got.Body.String() != want.Body.String() {
+		t.Fatal("the whole list differs from the decorated lists")
+	}
+	if h.machines[0].sessions[0].Manager != "someone-else" || h.machines[1].sessions[1].Manager != "" {
+		t.Fatal("the answer changed a kept list")
+	}
+	size := got.Body.Len()
+	per := allocated(func() {
+		h.listSessions(httptest.NewRecorder(), r)
+	})
+	if per > size*727/100 {
+		t.Fatalf("a %d-byte whole list allocates %d bytes", size, per)
+	}
+}
