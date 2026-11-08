@@ -481,6 +481,8 @@ struct AssistantText: View, Equatable {
     nonisolated static func == (a: Self, b: Self) -> Bool { a.item == b.item && a.quiet == b.quiet }
     @Environment(\.openFile) private var openFile
     @Environment(\.rowMemoScope) private var memoScope
+    /// The new conversation layout (#1666, `ChatLayout`): Persona's answer in its pale gray box.
+    @Environment(\.chatLayout) private var layout
 
     var body: some View {
         #if DEBUG || PERF_SIGNPOST
@@ -494,6 +496,7 @@ struct AssistantText: View, Equatable {
                 .modifier(QuietMarkdown(on: quiet))
                 .markdownTheme(.persona)
                 .frame(maxWidth: .infinity, alignment: .leading)
+                .chatBoxed(Theme.ChatBox.persona, on: layout.on && !quiet)
                 #if os(macOS)
                 // Drag to select and ⌘C, as on the web (#2542); iOS keeps the long-press menu's Select.
                 .textSelection(.enabled)

@@ -74,9 +74,11 @@ type entry struct {
 	// Origin: where a user line came from; a subagent handing back its report carries the report here (Claude Code
 	// 2.1.318+), on a hidden line its task notification then only points at (handbackOf). Raw: a shape not known yet
 	// must not lose the line.
-	Origin        json.RawMessage `json:"origin"`
-	Cwd           string          `json:"cwd"`
-	ToolUseResult json.RawMessage `json:"toolUseResult"`
+	Origin json.RawMessage `json:"origin"`
+	Cwd    string          `json:"cwd"`
+	// toolUseResult, a tool's own copy of its output (often as long as the tool_result itself), is not read: items take
+	// a result from the message, and a field here would copy every one of them for nothing.
+
 	// system/api_error: {message, formatted}, and which retry this is. An assistant line Claude Code wrote itself for a
 	// request that failed (isApiErrorMessage) carries the error's kind here as a string (rate_limit,
 	// authentication_failed…), and a subscription's limit the account's quota (quotaLimits; claudeErrorKind).

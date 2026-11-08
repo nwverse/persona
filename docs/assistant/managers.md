@@ -526,11 +526,103 @@ list or old mtime never proves completion. An unloaded persisted main is covered
 only after the complete live sources have answered. Snapshot data includes no
 prompts, task commands, transcript content or credentials.
 
-Terminal agents, live Claude streams without a synchronous background-inventory
-barrier, and third-party runtimes without an authoritative inventory contract
-remain unsupported for idle attestation. Their display saying idle does not
-remove the blocker. An unreachable source, unresolved retained activity, missing
-capability, changing ownership, partial page or clock conflict also fails closed.
+An explicitly remote Codex terminal can use the configured app-server's authority.
+The supported command form is `codex resume --remote <configured-local-endpoint> <thread-id>`:
+the host must report that exact session, its foreground PID must match the owner's
+process inventory, and kernel argv must bind that PID to the same endpoint and
+thread. Argument boundaries come from `/proc/<pid>/cmdline` on Linux and
+`KERN_PROCARGS2` on macOS, never the formatted `ps` command or a title. The endpoint
+must already be a configured, connected local app-server; collection neither starts
+one nor resumes the terminal. A matching historical thread ID alone is insufficient.
+All loaded threads, ephemeral children, background terminals and pending activity
+are retained even when the host displays idle. Activity revisions and foreground
+bindings are read again before completion. Missing sessions, duplicate bindings,
+changed membership and old app-servers without background-terminal reads are refused.
+
+Other terminal forms, live Claude streams without a synchronous background-inventory
+barrier, and third-party runtimes without an authoritative inventory contract remain
+unsupported for idle attestation. This adapter does not certify existing embedded
+or unbound terminals, upgrade a runtime, or establish a new runtime capability.
+Herdr's display revision, foreground process list and session snapshot are not a
+complete background or child inventory. A future runtime producer must expose a
+read-only snapshot for the same live session/process, with an instance/generation,
+complete source membership, children, background work, pending interactions,
+compaction and revision/freshness evidence. Installing a host adapter after a
+session starts cannot manufacture missing lifetime coverage. Their display saying
+idle does not remove the blocker. An unreachable source, unresolved retained activity,
+missing capability, changing ownership, partial page or clock conflict also fails closed.
+
+#### Preparing terminal maintenance material
+
+`personad manager maintenance` is a separate, read-only preparation utility. It
+does not call session close, retire, start or resume, send slash commands or signals,
+change update scope, or produce idle evidence. Both native exit and restoration
+execution remain **unsupported**: knowing `/exit` and an exact history ID does not
+prove persistence, termination of attached background sessions, child completion,
+or safe recovery of tools and services. No force-close fallback exists.
+
+An operator can preserve an explicit private record before considering maintenance:
+
+```json
+{
+  "runtime": "claude",
+  "version": "<recorded native version>",
+  "session_id": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+  "pane": "<recorded pane>",
+  "pid": 12345,
+  "executable": "/absolute/canonical/path/to/claude",
+  "cwd": "/absolute/canonical/workspace",
+  "profile_home": "/absolute/canonical/profile",
+  "history": "/absolute/canonical/profile/projects/project/session.jsonl",
+  "environment": {
+    "HOME": "/absolute/home",
+    "CLAUDE_CONFIG_DIR": "/absolute/canonical/profile"
+  },
+  "resume_options": ["--model", "<recorded model>"],
+  "settings": ["/absolute/canonical/profile/settings.json"]
+}
+```
+
+For Codex, use `runtime: "codex"`, `CODEX_HOME` and its native rollout. All paths
+must already be canonical. Version, pane, cwd, profile, options and session-to-PID
+association are supplied observations, not verified runtime claims. Preparation
+checks the history's own ID, hashes the executable/history/selected settings, and
+brackets file reads with owner/process observations. The process key is only an
+OS observation, not a stable producer instance or proof of a session binding.
+It deliberately reads no process environments, arguments, credentials or task text
+from running terminals. Record only known non-secret settings paths, never tokens,
+credential files or message content. Output includes private paths and must stay
+local; do not attach the record to a public issue.
+
+```sh
+umask 077
+personad manager maintenance prepare --record record.json > prepared.json
+personad manager maintenance observe --prepared prepared.json --wait 10s
+personad manager maintenance recovery-recipe --prepared prepared.json
+```
+
+Input JSON must be owned by the current user, private (0600 or stricter), at most
+1 MiB and contain no unknown fields. At most 16 distinct selected settings files
+are accepted; file read budgets are 512 MiB for the executable, 128 MiB for history
+and 4 MiB per settings file. System-installed executables may belong to another
+user; private history and settings must belong to the current user. No default
+profile, guessed ID or empty-history
+fallback is accepted. Only the original ID and explicitly recorded options appear
+in the recipe, as an argument vector with no prompt or shell execution. Missing or
+conflicting history, a changed executable/settings file, history truncation or a
+changed original history prefix refuses the recipe. Same-ID history may append;
+each appended row is checked, including a final persistence flush after departure.
+
+Observation waits at most 30 seconds. Unreadable/partial process tables and changed
+PID observations return errors; timeout remains an error and never closes anything.
+`process_absent: true` is only an absence observation, not a graceful-exit receipt:
+crash, detach, PID reuse and surviving background work are not resolved by it.
+`graceful_exit_confirmed`, `background_complete`, `machine_idle`, `binding_verified`
+and `execution_supported` remain false in their respective outputs. A successful
+prepare or recipe command means only that its preservation checks passed. It is
+not authorization or technical readiness for exit, recovery or manager activation.
+The original complete inventory, main identity, transaction lock, guardian, health
+confirmation and rollback requirements remain necessary and unchanged.
 
 The native reader performs two complete runtime reads within 30 seconds, compares
 payload revisions, and rereads persisted identity after the final runtime read.

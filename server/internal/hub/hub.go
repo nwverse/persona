@@ -305,7 +305,7 @@ func (h *Hub) broadcastMachines() {
 
 // sessionsChanged sends the apps the machine's list as the hub has it (the manager's last, fleet_link.go).
 func (h *Hub) sessionsChanged(m *Machine) {
-	h.broadcastSessions(m, h.decorated(m))
+	h.broadcastSessions(m, m.keptSessions())
 }
 
 func (h *Hub) machineName(id string) string {

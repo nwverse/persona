@@ -11,7 +11,6 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/nwverse/persona/server/internal/host"
 	"github.com/nwverse/persona/server/internal/nodeclient"
 	"github.com/nwverse/persona/server/internal/nodeproto"
 	"github.com/nwverse/persona/server/internal/proto"
@@ -64,7 +63,7 @@ func (n *Node) collectUpdateInventory(ctx context.Context, target nodeclient.Upd
 	}
 	out.Sources["retained-state"] = retained
 	processes, structure := n.updateAssistantSet()
-	if err := n.updateSourceCoverage(ctx, processes, out.Sources); err != nil {
+	if err := n.updateSourceCoverage(ctx, processes); err != nil {
 		return out, err
 	}
 	for _, p := range processes {
@@ -87,6 +86,7 @@ func (n *Node) collectUpdateInventory(ctx context.Context, target nodeclient.Upd
 	}
 	r.mu.Unlock()
 	coveredEndpoints := map[string]bool{}
+	authorities := map[string]updateTerminalSource{}
 	for _, spec := range config.Servers {
 		c := remotes[spec.ID]
 		if c == nil || c.spec != spec {
@@ -96,6 +96,10 @@ func (n *Node) collectUpdateInventory(ctx context.Context, target nodeclient.Upd
 		if err != nil {
 			return out, err
 		}
+		if _, duplicate := authorities[spec.Endpoint]; duplicate {
+			return out, errors.New("app-server endpoint has conflicting source identities")
+		}
+		authorities[spec.Endpoint] = updateTerminalSource{endpoint: spec.Endpoint, activity: observation}
 		out.Sources["app-server:"+spec.ID] = observation.Revision
 		for _, row := range observation.Threads {
 			row.ID = codexSourceID(spec.Home, row.ID, config.LegacyHome)
@@ -106,12 +110,20 @@ func (n *Node) collectUpdateInventory(ctx context.Context, target nodeclient.Upd
 	if len(remotes) != len(config.Servers) {
 		return out, errors.New("app-server source set changed or is incomplete")
 	}
+	hostSources := map[string]string{}
+	terminalPIDs, err := n.observeUpdateHosts(ctx, before, authorities, hostSources)
+	if err != nil {
+		return out, err
+	}
+	for key, revision := range hostSources {
+		out.Sources[key] = revision
+	}
 	owned := map[int]bool{}
 	for _, p := range processes {
 		owned[p.cmd.Process.Pid] = true
 	}
 	for _, p := range before {
-		if !owned[p.PID] && (p.Endpoint == "" || p.Endpoint == "stdio://" || !coveredEndpoints[p.Endpoint]) {
+		if !owned[p.PID] && !terminalPIDs[p.PID] && (p.Endpoint == "" || p.Endpoint == "stdio://" || !coveredEndpoints[p.Endpoint]) {
 			return out, fmt.Errorf("unobserved live agent process %d", p.PID)
 		}
 	}
@@ -123,8 +135,23 @@ func (n *Node) collectUpdateInventory(ctx context.Context, target nodeclient.Upd
 		return out, errors.New("retained session authority changed during read")
 	}
 	finalSources := map[string]string{}
-	if err := n.updateSourceCoverage(ctx, processes, finalSources); err != nil {
+	if err := n.updateSourceCoverage(ctx, processes); err != nil {
 		return out, err
+	}
+	for _, spec := range config.Servers {
+		observation, err := remotes[spec.ID].observeUpdateThreads(ctx)
+		if err != nil {
+			return out, err
+		}
+		if observation.Revision != authorities[spec.Endpoint].activity.Revision {
+			return out, errors.New("app-server activity changed during complete read")
+		}
+	}
+	if _, err := n.observeUpdateHosts(ctx, before, authorities, finalSources); err != nil {
+		return out, err
+	}
+	if len(finalSources) != len(hostSources) {
+		return out, errors.New("host source membership is incomplete")
 	}
 	for key, revision := range finalSources {
 		if out.Sources[key] != revision {
@@ -220,9 +247,9 @@ func (n *Node) updateAssistantSet() ([]*assistantProc, string) {
 	return out, updateDigest(keys)
 }
 
-// Read full host snapshots directly: the display refresh mutates caches and can
-// fall back to an old agent list. Neither is an update evidence source.
-func (n *Node) updateSourceCoverage(ctx context.Context, processes []*assistantProc, sources map[string]string) error {
+// Check the source owners before and after collecting their activity. Fresh
+// host snapshots are read separately, after their runtime authorities answer.
+func (n *Node) updateSourceCoverage(ctx context.Context, processes []*assistantProc) error {
 	for _, p := range processes {
 		if p.cmd == nil || p.cmd.Process == nil || !p.alive() {
 			return errors.New("assistant process identity is incomplete")
@@ -273,26 +300,6 @@ func (n *Node) updateSourceCoverage(ctx context.Context, processes []*assistantP
 	}
 	if n.hosts == nil {
 		return errors.New("host configuration unavailable")
-	}
-	for _, h := range n.hosts.All() {
-		fresh, ok := h.(updateSnapshotSource)
-		if !ok {
-			return errors.New("configured host lacks a fresh update inventory contract")
-		}
-		snapshot, err := fresh.SnapshotForUpdate(ctx)
-		if errors.Is(err, host.ErrNotRunning) {
-			sources["host:"+h.Kind()] = "not-running"
-			continue
-		}
-		if err != nil || snapshot == nil {
-			return errors.New("complete host snapshot unavailable")
-		}
-		// Terminal agent protocols do not expose a complete background/child
-		// inventory. Retain the blocker even if a display says idle.
-		if len(snapshot.Agents) > 0 {
-			return errors.New("terminal agent lacks authoritative background inventory")
-		}
-		sources["host:"+h.Kind()] = updateDigest(snapshot)
 	}
 	return nil
 }

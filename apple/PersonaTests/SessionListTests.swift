@@ -304,10 +304,13 @@ import Testing
         var full = try row(0)
         full.permissionMode = "plan"
         full.effort = "high"
+        full.ultracode = true
         full.queued = ["next"]
         full.listWaiting = nil
         let merged = summary.preservingDetails(from: full)
         #expect(merged.permissionMode == "plan")
+        // A list row has no ultracode: the mark on the agent's to-do stays (#12).
+        #expect(merged.ultracode == true)
         #expect(merged.queued == ["next"])
         #expect(merged.state == .idle)
         #expect(merged.isWaiting)

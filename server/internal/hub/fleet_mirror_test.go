@@ -62,6 +62,10 @@ func (d *mirrorDevices) List() []devices.Summary {
 	return out
 }
 
+func (d *mirrorDevices) MachineResources(string) (*proto.Machine, *proto.MetricSample, *bool) {
+	return nil, nil, nil
+}
+
 func (d *mirrorDevices) Canonical(id string) string {
 	if m := d.h.localMachine(id); m != nil {
 		return m.cfg.ID

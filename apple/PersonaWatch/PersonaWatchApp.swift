@@ -623,7 +623,8 @@ struct WatchInteractionView: View {
                 case .permission:
                     Text(interaction.summary ?? "").font(.caption2.monospaced())
                     if interaction.requiresInput {
-                        Text("Fill this in on your iPhone to allow it").font(Theme.Font.caption)
+                        // The hub takes no values from the watch's answer-only credential (#1581).
+                        Text("Fill this in on your iPhone or computer to allow it").font(Theme.Font.caption)
                     } else {
                         Button { act(Resolution(allow: true)) } label: { Text("Allow [Notification Actions ce7ef2]").lineLimit(1) }
                             .buttonStyle(.borderedProminent).tint(Theme.accent)
