@@ -29,7 +29,6 @@ struct SyncScenarioTests {
     nonisolated static let known: [String: String] = [
         "both_devices_answer_once": "#1112: two devices need a transport each (the demo transport is the app's)",
         "card_answered_on_other_device": "#1112: two devices need a transport each (the demo transport is the app's)",
-        "relaunch_after_accept_before_transcript": "#1455: a sent message waiting for its transcript copy is not stored",
         "sent_on_other_device_once": "#1112: two devices need a transport each (the demo transport is the app's)",
         "send_accepted_transcript_late": "#1112: a 35 s wait needs the app's timers on a test clock",
         "wake_reply_latest_is_answer": "#1112: a 10 min wait needs the app's timers on a test clock",

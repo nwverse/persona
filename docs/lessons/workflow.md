@@ -186,3 +186,22 @@ unknown names rather than silently skip tests. An `auto` dispatch on unchanged
 `main` tests only the paths selected for an empty diff; use `lanes=all` for a full
 run. Manual issue-link enforcement takes an explicit PR number, reads metadata
 through the API, and runs its write-token job only from the default branch.
+
+## CI wall-clock budgets and test shards
+
+Queue time belongs in a PR budget; a green job shorter than 15 minutes does not
+prove push-to-aggregate latency below 15 minutes. Hosted macOS queue time can
+already exceed that budget, so keep its full test coverage manual when latency
+cannot be bounded. Do not reinterpret a timeout or deliberately unselected lane
+as a test pass.
+
+Partition package/module/suite discovery, not a hand-maintained test allowlist.
+Assert the union covers every input once and route new inputs to a fallback shard
+(or fail closed on an unsupported declaration). Keep real-browser packages on a
+separate runner and each Postgres/HOME/mock-port fixture independently owned.
+Go's dependency-only primary cache key is immutable: it can keep restoring old
+compiled inputs after source changes. Use exact-toolchain, shard, dependency and
+source keys with validated Go build-cache fallbacks; still force uncached test
+execution. Large cache uploads and repeated runner setup also count as latency.
+Measure real test events before replacing sleeps: `testing/synctest` sleeps use
+fake time and are not necessarily the slow tests.
