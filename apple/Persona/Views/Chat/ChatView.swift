@@ -262,6 +262,10 @@ struct ChatView: View {
         .toolbarVisibility(sideBars ? .visible : .hidden, for: .navigationBar)
         .navigationBarBackButtonHidden(sideBars)
         .pageToolbar { if sideBars { sideBarItems } }
+        // The system draws that bar's title over the content, not in the column: a second title right above the
+        // header's own. Removed while the header shows its title; while typing the header is only fog, and the
+        // system's title names the session.
+        .toolbar(removing: sideBars && !composerTyping ? .title : nil)
         #if os(macOS)
         // On the Mac an Agents chat's title, state and actions are in the title bar's row of its column (#2113), not
         // in a header of its own over the chat: `macTitleRow`, and `macChrome` for what has no place there.
@@ -2947,7 +2951,8 @@ struct ChatView: View {
     /// and when there are any the space's other agents, a /loop or background work and subagents. It stays put, but
     /// while the keyboard is up on the composer it is only the fog: iPhone Duo's inner display on its side has about
     /// 390pt over the keyboard, and the title, the tabs and the mode chips over the box left no row of the chat
-    /// (2026-11-04). The system's title in the side column still says which session it is.
+    /// (2026-11-04). The system's title over the content says which session it is then (it is removed while the
+    /// header shows its own).
     private var sideHeader: some View {
         VStack(spacing: Theme.Space.sm) {
             if !composerTyping { sideHeaderRows }
