@@ -136,7 +136,7 @@ struct ShellSwitch<ChatMenu: View, WorkMenu: View>: View {
         }
     }
 
-    /// The page's symbol on the rail, as its tab has in the old layout.
+    /// The page's symbol on the rail, matching its shared tab.
     private static func symbol(_ value: AppTab) -> String {
         #if os(iOS) || os(visionOS)
         if value == .feishu { return Theme.Icon.feishuChats } // a phone's tab only (no such tab on the Mac)
