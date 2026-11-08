@@ -87,6 +87,15 @@ func runtimeListID(mid, sid string) string {
 	return string(b)
 }
 
+// startErrorRow is how much of s's start_error a row keeps: a coded refusal's whole sentence (the manager's, in the user's
+// language, its remedy last: #1642), else a summary's.
+func startErrorRow(s proto.Session) int {
+	if s.StartErrorCode != "" {
+		return proto.CodedStartErrorMax
+	}
+	return 180
+}
+
 func rowText(s string, max int) string {
 	r := []rune(s)
 	if len(r) <= max {
@@ -120,7 +129,8 @@ func runtimeSummary(s proto.Session) runtimeRowSummary {
 		ParentSpaceID: s.ParentSpaceID, SlotID: s.SlotID, SlotName: s.SlotName, SlotIndex: s.SlotIndex, PaneIndex: s.PaneIndex,
 		WorkspaceID: s.WorkspaceID, TabID: s.TabID, PaneID: s.PaneID,
 		Assistant: s.Assistant, Archived: s.Archived, ArchiveChangedAt: s.ArchiveChangedAt, Space: s.Space,
-		Starting: s.Starting, StartError: rowText(s.StartError, 180), StartedByPersona: s.StartedByPersona,
+		Starting: s.Starting, StartError: rowText(s.StartError, startErrorRow(s)), StartedByPersona: s.StartedByPersona,
+		StartErrorCode: s.StartErrorCode, StartErrorArgs: s.StartErrorArgs,
 		ReadOnlyReason: rowText(s.ReadOnlyReason, 180), Origin: s.Origin, OriginRef: s.OriginRef,
 		TurnError: rowText(s.TurnError, 180), TurnErrorKind: s.TurnErrorKind, TurnErrorCode: s.TurnErrorCode,
 		PendingInteractions: s.PendingInteractions, Rev: s.Rev, Quiet: s.Quiet,

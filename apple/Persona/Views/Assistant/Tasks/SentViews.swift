@@ -45,7 +45,7 @@ struct AgentSentLine: View {
 
     private func header(first: String) -> some View {
         HStack(spacing: Theme.Space.s) {
-            Image(systemName: item.interrupted ? Theme.Icon.interrupt : Theme.Icon.routeToTask).font(Theme.Font.labelStrong)
+            ThemedIcon(item.interrupted ? Theme.Icon.interrupt : Theme.Icon.routeToTask).font(Theme.Font.labelStrong)
             HStack(spacing: Theme.Space.xs) {
                 if let id = item.ref, store.todos[id] != nil {
                     Button { store.detailTask = id } label: { Text(Self.title(taskTitle, interrupted: item.interrupted)).lineLimit(1) }
@@ -55,7 +55,7 @@ struct AgentSentLine: View {
                 }
                 if !first.isEmpty { Text("· \(first)").lineLimit(1) }
             }
-            Image(systemName: Theme.Icon.disclosure)
+            ThemedIcon(Theme.Icon.disclosure)
                 .font(Theme.Font.labelStrong)
                 .foregroundStyle(.tertiary)
                 .rotationEffect(.degrees(open ? 90 : 0))
@@ -145,9 +145,9 @@ struct TaskSentList: View {
                     withAnimation(Theme.Motion.state) { open.toggle() }
                 } label: {
                     HStack(spacing: Theme.Space.xs) {
-                        Image(systemName: Theme.Icon.routeToTask).font(Theme.Font.labelStrong)
+                        ThemedIcon(Theme.Icon.routeToTask).font(Theme.Font.labelStrong)
                         Text(String(localized: "\(sent.count) instructions sent")).lineLimit(1)
-                        Image(systemName: Theme.Icon.disclosure)
+                        ThemedIcon(Theme.Icon.disclosure)
                             .font(Theme.Font.labelStrong)
                             .foregroundStyle(.tertiary)
                             .rotationEffect(.degrees(open ? 90 : 0))
@@ -183,14 +183,14 @@ struct TaskSentList: View {
                         .monospacedDigit()
                         .fixedSize()
                     if item.interrupted {
-                        Image(systemName: Theme.Icon.interrupt).font(Theme.Font.label).foregroundStyle(.secondary)
+                        ThemedIcon(Theme.Icon.interrupt).font(Theme.Font.label).foregroundStyle(.secondary)
                     }
                     Text(SentToAgents.firstLine(text))
                         .font(Theme.Font.secondary)
                         .foregroundStyle(.primary)
                         .lineLimit(1)
                         .frame(maxWidth: .infinity, alignment: .leading)
-                    Image(systemName: Theme.Icon.disclosure)
+                    ThemedIcon(Theme.Icon.disclosure)
                         .font(Theme.Font.labelStrong)
                         .foregroundStyle(.tertiary)
                         .rotationEffect(.degrees(isOpen ? 90 : 0))

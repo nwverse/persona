@@ -364,10 +364,7 @@ export function ProviderWizard({ existing, onClose, onSaved }: { existing: Provi
               </Labelled>
             )}
             <SecretField label={isNew || !old?.has_key ? "API Key" : t("settings-providerwizard.key_keep")} value={f.api_key} onChange={set("api_key")} placeholder={old?.has_key ? t("settings-providerwizard.key_set") : "sk-…"} hint={t("settings-providerwizard.key_hint")} />
-            {responses ? (
-              <p className="text-[11.5px] text-ink-3">{t("settings-providerwizard.responses_note")}</p>
-            ) : (
-              <div className="flex flex-col gap-2 rounded-card bg-inset p-3 shadow-hairline">
+            <div className="flex flex-col gap-2 rounded-card bg-inset p-3 shadow-hairline">
                 <div className="flex flex-wrap items-center gap-2">
                   <input value={probeModel} onChange={(e) => setProbeModel(e.target.value)} placeholder={testModel(f) || t("settings-providerwizard.test_model")} aria-label={t("settings-providerwizard.test_model")} autoComplete="off" spellCheck={false}
                     className={cx(FIELD, "h-8 w-full min-w-0 px-2.5 font-mono text-[12.5px] sm:w-auto sm:flex-1")} />
@@ -391,7 +388,6 @@ export function ProviderWizard({ existing, onClose, onSaved }: { existing: Provi
                   </p>
                 )}
               </div>
-            )}
           </div>
         )}
 

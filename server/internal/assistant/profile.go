@@ -29,7 +29,10 @@ import (
 const settingsKey = "assistant"
 
 // assistantRel is this manager's assistant directory on a machine, relative to its home (node assistant.prepare):
-// .persona/assistant for the built-in manager, .persona/assistant-<id> for another (identity.AssistantDirName).
+// assistant for the built-in manager, assistant-<id> for another (identity.AssistantDirName), in the state directory. It
+// is spelled with the former state directory's name (compat.StateDir), which older nodes join to HOME as it is; a
+// current node resolves either spelling to the state directory it runs on (node/assistant_guest.go assistantDirOf,
+// #1681), so the spelling never decides where the directory is.
 func (s *Service) assistantRel() string {
 	return path.Join(compat.StateDir, identity.AssistantDirName(s.id))
 }

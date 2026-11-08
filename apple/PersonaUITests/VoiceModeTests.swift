@@ -31,7 +31,7 @@ final class VoiceModeTests: XCTestCase {
     private func launch(_ args: [String], large: Bool = false) throws -> XCUIApplication {
         let app = XCUIApplication()
         let pair = "persona://pair?url=" + (try hub).addingPercentEncoding(withAllowedCharacters: .alphanumerics)! + "&token=mock"
-        app.launchArguments = ["-pairURL", pair, "-ui.oldLayout", "NO", "-AppleLanguages", "(zh-Hans)",
+        app.launchArguments = ["-pairURL", pair, "-AppleLanguages", "(zh-Hans)",
                                "-UIPreferredContentSizeCategoryName", large ? "UICTContentSizeCategoryAccessibilityXL" : "UICTContentSizeCategoryL"] + args
         app.launchPinned()
         return app

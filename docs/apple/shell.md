@@ -80,7 +80,7 @@ All three use `.shellTopBarScaled()`, so the font stops growing at `Theme.Shell.
 
 - **One source**: `ShellState.page` (0 assistant, 1 Agents, 2 Messages once the user turns it on). Only two methods change it: `select` (switcher, drag settle) and `route` (anywhere that writes `AppModel.selectedTab`).
   Both finish **immediately**, without waiting for a redraw: the `didSet` of `AppModel.selectedTab` calls `tabRouter` directly (`attach` when the shell appears, `detach` when it disappears),
-  no more `onChange`. `.mail` pushes Inbox and returns to the assistant page; `.settings` opens the settings sheet and sets the tab back to the page in front. With **Old Layout** turned on, the shell stops taking routes and leaves them to the tab bar.
+  no more `onChange`. `.mail` pushes Inbox and returns to the assistant page; `.settings` opens the settings sheet and sets the tab back to the page in front. Compact iPhone navigation always belongs to the shell.
 - **The strip follows page**: `ShellPager.slide(to:)` remembers where it's going (`goal`), and the same target again does nothing; a slide that hasn't started is replaced by the new one, and one in progress turns around;
   when there's no displacement to animate it stops right away (so it never stays `moving` waiting for an animation that won't end). While dragging, the finger is in charge; whichever page the release settles on gets `select`ed.
 - **The switcher reads only page**: the selected state is page; a segment is a Menu (tap again for options) only when the strip is at rest on that page, and both segments are plain buttons during a slide.
@@ -104,7 +104,7 @@ Now only one top bar exists at a time: the front page's when at rest, the shell'
 The ovis lane found that the chat page's `appeared()` ran several times in a row at launch (a DEBUG switch hooked into it sent its message repeatedly). We counted across launch modes, `-openSession`, restoring the last chat,
 connected to a hub (`-pairURL`), and the connection notice opening / closing (`appeared` in `probe.chat` plus `ShellTrace`): the chat being opened appeared only once on both master
 and this branch, and navigation didn't bounce back and forth (one route, the strip moving into place without animation). The extra appearance was **another chat**: the shell built both pages, so launching into Agents
-also built the assistant page, and its chat "appeared" once behind the scenes: subscribing, `show`, marking as seen, everything hung on `onAppear` ran, though the user never saw it. The Old Layout's
+also built the assistant page, and its chat "appeared" once behind the scenes: subscribing, `show`, marking as seen, everything hung on `onAppear` ran, though the user never saw it. A system
 TabView only builds a tab when it's shown, so it doesn't have this problem.
 
 Now each page is built only when first selected or dragged in (`ShellState.assistantBuilt` / `agentsBuilt`), and the shell starts on the App's tab page right away
@@ -129,7 +129,7 @@ As long as room is made through the window's safe area, it can't be fixed cleanl
   Liquid Glass, or the raised capsule under the BeautifulUI style). The keyboard is at the bottom and these are at the top, so they're never covered.
 - **Said once**: while a page whose own title shows connection status is in front (an agent's conversation, a subagent's included; Inbox and Machines pushed in the shell, `ConnectionTitle`),
   it registers with `.titleSaysLink()` and the shell's pill stays away (`ShellNotices.pill`), so "Connecting…" is not said again under the title; back on a page whose title doesn't show it (Assistant, the Agents list) the pill shows as before.
-- Old Layout, iPad and iPhone Duo open: the toast floats in a toast window of the same kind (`ToastWindowHook` on `RootTabs`, no connection pill; nothing to tap but its button),
+- iPad and iPhone Duo at regular width: the toast floats in a toast window of the same kind (`ToastWindowHook` on `RootTabs`, no connection pill; nothing to tap but its button),
   over the image viewer, the share card and every other cover or sheet. Before #1492 it was `RootView`'s overlay, under all of them: Saved to Photos never showed there. Connection status is in the title.
 - Mac and Apple Vision Pro: the toast is `ToastOverlay` in `RootView` (the same `ToastCapsule`, tap to dismiss).
   Before the shell or the tabs are on screen (the welcome page, the engine step and the checklist after pairing), and while an extension's page takes the app's place, there is no `ToastWindow` either, so `ToastOverlay` is used there too: otherwise an error from opening a pairing link on the welcome page (hub out of reach, incomplete link) would never show (#4273).
@@ -172,7 +172,7 @@ on the test side, `shellPage` / `shellValue` / `shellRoom` / `shellTrace` in `Sh
 | `ShellSearchTests` | #174: search giving way, switching after cancel |
 | `ShellPagerTests` | #190 swiping left / right to flip pages, swiping right on the filter bar to flip back after 56b2ead |
 | `ShellAvatarTests` | #203: the avatar and drawer on both pages, switching between them with coordinate taps |
-| `ShellTests` | Switching, drawer, Old Layout toggle |
+| `ShellTests` | Default compact-width shell, switching, drawer |
 | `ShellLaunchTests` | Launching into a chat (`-openSession`, restoring the last one, connected to a hub, while the connection notice opens / closes) and launching on the assistant: only the front chat appears, exactly once |
 
 The switcher is always tapped with `ShellFinger` (`PersonaUITests/ShellPageProbe.swift`): at launch it reads the positions of both segments once from the assistant page's switcher, then always taps those two coordinates,

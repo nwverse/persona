@@ -89,8 +89,12 @@ final class SentAsYouTests: XCTestCase {
         let demo = app.buttons["welcome.demo"]
         XCTAssertTrue(demo.waitForExistence(timeout: 15), "no 体验模式 on the pairing page")
         demo.tap()
-        let settings = app.buttons["设置"].firstMatch
-        XCTAssertTrue(settings.waitForExistence(timeout: 15), "the demo did not open:\n\(app.debugDescription)")
+        let drawer = app.buttons.matching(NSPredicate(format: "identifier IN %@", ["assistant-sidebar-button", "work-sidebar-button"]))
+            .allElementsBoundByIndex.first(where: \.isHittable)
+        XCTAssertNotNil(drawer, "the demo did not open:\n\(app.debugDescription)")
+        drawer?.tapCenter()
+        let settings = app.drawerSettingsButton
+        XCTAssertTrue(settings.waitForExistence(timeout: 15), "the drawer has no Settings entry:\n\(app.debugDescription)")
         settings.tap()
         let leave = app.buttons["settings.leaveDemo"]
         XCTAssertTrue(leave.waitForExistence(timeout: 10), "Settings is not the demo's:\n\(app.debugDescription)")

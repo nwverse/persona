@@ -164,8 +164,6 @@ extension Theme {
         static let style = "paintpalette"
         /// Settings › Appearance › Theme Color.
         static let themeColor = "swatchpalette"
-        /// Settings › Appearance › Layout (the shell or the old tabs).
-        static let layout = "rectangle.topthird.inset.filled"
         /// Settings › Appearance › Light & Dark, and its Match System.
         static let colorScheme = "circle.lefthalf.filled"
         /// Settings › Appearance › Language: the interface language.
@@ -189,6 +187,11 @@ extension Theme {
         /// The text size setting.
         static let textSize = "textformat.size"
         static let upDown = "arrow.up.arrow.down"
+        /// A queued message one place earlier / later (#6088).
+        static let queueUp = "arrowshape.up"
+        static let queueDown = "arrowshape.down"
+        /// The queued messages given to the agent now, ahead of its next tool boundary (#6088).
+        static let sendNow = "forward.end.fill"
         static let select = "selection.pin.in.out"
         static let insert = "text.cursor"
         static let view = "eye"

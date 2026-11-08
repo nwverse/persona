@@ -77,7 +77,10 @@ func (h *Hub) startDevices(ctx context.Context) {
 	time.AfterFunc(devicesWarmGrace, h.devicesWarmEnded)
 }
 
-func markUnknownLocked(list []proto.Session) {
+// markUnknownLocked shows m's sessions that are not offline as unknown, in a copy of its list: the kept list is never
+// changed in place (Machine.sessions). m.mu is held.
+func (m *Machine) markUnknownLocked() {
+	list := slices.Clone(m.sessions)
 	for i := range list {
 		if list[i].Status != proto.StatusOffline {
 			list[i].Status = proto.StatusUnknown
@@ -86,6 +89,7 @@ func markUnknownLocked(list []proto.Session) {
 			}
 		}
 	}
+	m.sessions = list
 }
 
 // devicesUp: the manager that carries the machines is connected and has reported them.
@@ -201,7 +205,7 @@ func (h *Hub) applyDeviceStatesFrom(owner string, st devicewire.States) {
 			m.streams = streams.New(m.notify) // forwarded ports (ports.go)
 		}
 		if was && !m.online && !m.warmLocked(now) {
-			markUnknownLocked(m.sessions)
+			m.markUnknownLocked()
 			c.offline = true
 		}
 		m.mu.Unlock()
@@ -484,7 +488,7 @@ func (h *Hub) offlineLocal(m *Machine, why string) {
 		s.Online, s.Error, s.Transport, s.TailcatPath, s.Link = false, m.err, "", "", nil
 		m.snap = &s
 	}
-	markUnknownLocked(m.sessions)
+	m.markUnknownLocked()
 	m.mu.Unlock()
 	if mux != nil {
 		mux.CloseAll()

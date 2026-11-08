@@ -138,6 +138,20 @@ func CutOff(answer string) bool {
 	return false
 }
 
+// StartEnded is session.start_ended's params: how an app's start that the node ran before answering went (a resume, a
+// Codex, an older app; one answered at once is followed in the session lists), for launcher health
+// (docs/server/launcher-health.md). Launcher is the one the start ran ("" : claude); Error and Code, Data are the
+// node's answer when it failed (its rpc.Error's code and data, when it had them).
+type StartEnded struct {
+	MachineID string          `json:"machine_id"`
+	SessionID string          `json:"session_id,omitempty"`
+	Launcher  string          `json:"launcher,omitempty"`
+	OK        bool            `json:"ok"`
+	Error     string          `json:"error,omitempty"`
+	Code      string          `json:"code,omitempty"`
+	Data      json.RawMessage `json:"data,omitempty"`
+}
+
 // DeviceSessions is sessions.changed's params: the list as the node sent it, and when the node's connection to the hub
 // began (a new one: the node may have restarted and forgotten what it was told, e.g. the herdr todo marks).
 type DeviceSessions struct {

@@ -1,6 +1,7 @@
 package assistant
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"slices"
@@ -202,6 +203,9 @@ func (s *Service) decorateInventory(machine string, list []proto.Session, comple
 		}
 		list[i].SeenAt = seen[list[i].SessionID]
 		localizeSession(lang, &list[i]) // the node's Chinese activity line… (fleet_text.go)
+		if list[i].StartErrorCode != "" {
+			list[i].StartError = startErrorText(lang, cmp.Or(m.Name, machine), list[i])
+		}
 		list[i].State, list[i].BackgroundWorking = stateWithBackground(agentState(list[i], list[i].SeenAt), list[i])
 		list[i].BackgroundWaiting = backgroundWaiting(list[i])
 		list[i].TurnError, list[i].TurnErrorKind = turnError(list[i])

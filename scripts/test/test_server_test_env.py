@@ -18,6 +18,24 @@ SPEC.loader.exec_module(ISOLATION)
 
 
 class ServerTestEnvironmentTests(unittest.TestCase):
+    def test_parent_proxy_routes_are_removed_without_changing_the_parent_or_build_inputs(self):
+        proxies = {key: "http://proxy.example.invalid:8080" for key in (
+            "HTTP_PROXY", "http_proxy", "HTTPS_PROXY", "https_proxy", "ALL_PROXY", "all_proxy",
+            "NO_PROXY", "no_proxy")}
+        parent = dict(proxies, PATH="/usr/bin", GOPROXY="https://modules.example.invalid",
+                      PERSONA_HOME="/example/live", CODEX_HOME="/example/live/codex")
+        original = dict(parent)
+        child = ISOLATION.clean_environment(parent)
+        self.assertEqual(parent, original)
+        self.assertFalse(set(proxies) & set(child))
+        self.assertEqual(child["PATH"], "/usr/bin")
+        self.assertEqual(child["GOPROXY"], parent["GOPROXY"])
+        self.assertNotIn("PERSONA_HOME", child)
+        self.assertNotIn("CODEX_HOME", child)
+        # A fixture's explicit routing is set after launch and must remain usable.
+        child["HTTPS_PROXY"] = "http://fixture.example.invalid:8080"
+        self.assertEqual(child["HTTPS_PROXY"], "http://fixture.example.invalid:8080")
+
     def test_database_url_targets_only_the_dedicated_test_database(self):
         with tempfile.TemporaryDirectory() as directory:
             config = Path(directory) / "hub.json"
@@ -94,6 +112,7 @@ class ServerTestEnvironmentTests(unittest.TestCase):
                 "CLAUDE_CONFIG_DIR": str(profile / "claude"), "CODEX_HOME": str(profile / "codex"),
                 "XDG_CONFIG_HOME": str(profile / "xdg"), "ZDOTDIR": str(profile / "shell"),
                 "BASH_ENV": str(profile / "shellrc"), "ENV": str(profile / "envrc"), "GOTOOLCHAIN": "local",
+                "HTTPS_PROXY": "http://proxy.example.invalid:8080", "https_proxy": "http://proxy.example.invalid:8080",
             }
             caches = {key: str(root / key.lower()) for key in ("GOCACHE", "GOMODCACHE", "GOPATH")}
             homes = []
@@ -102,6 +121,8 @@ class ServerTestEnvironmentTests(unittest.TestCase):
                 child = kwargs["env"]
                 if command[:2] == ["go", "env"]:
                     self.assertFalse(any(key.startswith(("PERSONA_", "PG")) for key in child))
+                    self.assertEqual(child["HTTPS_PROXY"], environment["HTTPS_PROXY"])
+                    self.assertEqual(child["https_proxy"], environment["https_proxy"])
                     return subprocess.CompletedProcess(command, 0, json.dumps(caches))
                 homes.append(Path(child["HOME"]))
                 self.assertTrue(homes[-1].is_dir())
@@ -113,6 +134,8 @@ class ServerTestEnvironmentTests(unittest.TestCase):
                 self.assertEqual(child['JARVIS_TEST_DATABASE_URL'], child['PERSONA_TEST_DATABASE_URL'])
                 self.assertEqual(urlsplit(child["PERSONA_TEST_DATABASE_URL"]).path, "/persona_test")
                 self.assertFalse(any(key.startswith("PG") for key in child))
+                self.assertNotIn("HTTPS_PROXY", child)
+                self.assertNotIn("https_proxy", child)
                 self.assertFalse(any(str(profile) in value for value in child.values()))
                 self.assertEqual(child["GOTOOLCHAIN"], "local")
                 for key, value in caches.items():

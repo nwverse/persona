@@ -301,13 +301,57 @@ func TestSessionsMessage(t *testing.T) {
 		}
 	}
 
+	list = encodeSessions(busyList())
+	size := len(sessionsMessage("box", list))
+	if per := allocated(func() { sessionsMessage("box", list) }); per > size+size/4 {
+		t.Fatalf("a %d-byte list message allocates %d bytes", size, per)
+	}
+}
+
+// A change pushes the machine's kept list as decorated gives it, stamped with its manager, from the list itself: the
+// list is neither changed nor copied (Machine.sessions). With an older app, 2.44x the list message's size measured
+// (the encoded sessions and the message), 3.53x before.
+func TestSessionsChangedStampsWithoutCopy(t *testing.T) {
+	h := newTestHub(t)
+	m := newMachine(h, MachineConfig{ID: "box", Name: "Box", Kind: "local"})
+	h.machines, h.byID["box"] = append(h.machines, m), m
+	m.sessions = busyList()
+	m.sessions[1].Manager = "someone-else"
+	if h.machineOwner("box") == "" {
+		t.Fatal("the machine has no manager to stamp")
+	}
+	if got, want := encodeStamped(m.keptSessions(), h.machineOwner("box")), encodeSessions(h.decorated(m)); !sameSessions(got, want) {
+		t.Fatal("the stamped encoding differs from the decorated list's")
+	}
+	if m.sessions[0].Manager != "" || m.sessions[1].Manager != "someone-else" {
+		t.Fatal("stamping changed the kept list")
+	}
+
+	app := &client{out: make(chan []byte, 64), subs: map[[2]string]bool{}, role: roleFull}
+	h.clients[app] = struct{}{}
+	size := len(sessionsMessage("box", encodeSessions(h.decorated(m))))
+	per := allocated(func() {
+		h.sessionsSent = nil // the same list again goes to the older app again
+		h.sessionsChanged(m)
+		<-app.out
+	})
+	if per > size*251/100 {
+		t.Fatalf("pushing a %d-byte list allocates %d bytes", size, per)
+	}
+}
+
+// busyList is a busy machine's list (docs/server/server.md "What is pushed to the apps").
+func busyList() []proto.Session {
 	var many []proto.Session
-	for i := range 150 { // a busy machine's list (docs/server/server.md "What is pushed to the apps")
+	for i := range 150 {
 		many = append(many, proto.Session{SessionID: fmt.Sprintf("s%03d", i), LastText: strings.Repeat("x", 1<<10)})
 	}
-	list = encodeSessions(many)
-	size := len(sessionsMessage("box", list))
-	// Pushes are seconds apart, collections in between: whatever the encoder keeps pooled is gone by the next one.
+	return many
+}
+
+// allocated is how many bytes f allocates, averaged over runs. Pushes are seconds apart, collections in between:
+// whatever an encoder keeps pooled is gone by the next one.
+func allocated(f func()) int {
 	const runs = 20
 	var total uint64
 	for range runs {
@@ -315,13 +359,11 @@ func TestSessionsMessage(t *testing.T) {
 		runtime.GC()
 		var before, after runtime.MemStats
 		runtime.ReadMemStats(&before)
-		sessionsMessage("box", list)
+		f()
 		runtime.ReadMemStats(&after)
 		total += after.TotalAlloc - before.TotalAlloc
 	}
-	if per := int(total / runs); per > size+size/4 {
-		t.Fatalf("a %d-byte list message allocates %d bytes", size, per)
-	}
+	return int(total / runs)
 }
 
 // Each encoded session is what json.Marshal gives for it, read from one shared buffer: HTML and non-ASCII text
@@ -354,5 +396,13 @@ func TestEncodeSessionsMatchesMarshal(t *testing.T) {
 	}
 	if len(encodeSessions(nil)) != 0 {
 		t.Fatal("nil list encoded to sessions")
+	}
+
+	// One shared buffer and little else: each session is written straight into it (proto.Session.MarshalJSONTo), not
+	// copied and marshalled to a buffer of its own first. 1.44x the list's size measured, 4.8x before.
+	many := busyList()
+	size := len(sessionsMessage("box", encodeSessions(many)))
+	if per := allocated(func() { encodeSessions(many) }); per > size*148/100 {
+		t.Fatalf("encoding a %d-byte list allocates %d bytes", size, per)
 	}
 }

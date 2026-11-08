@@ -9,7 +9,7 @@ final class CodexSettingsTests: XCTestCase {
         }
         let app = XCUIApplication()
         let pair = "persona://pair?url=" + hub.addingPercentEncoding(withAllowedCharacters: .alphanumerics)! + "&token=mock"
-        app.launchArguments = ["-pairURL", pair, "-ui.oldLayout", "YES", "-tab", "settings", "-dev.openChat", ""]
+        app.launchArguments = ["-pairURL", pair, "-tab", "settings", "-dev.openChat", ""]
         app.launchPinned()
         let row = app.buttons["Codex 设置"]
         XCTAssertTrue(row.waitForExistence(timeout: 15), "no Codex 设置 row:\n\(app.debugDescription)")

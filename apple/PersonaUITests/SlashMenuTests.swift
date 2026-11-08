@@ -1,8 +1,8 @@
 import XCTest
 
 /// Typing "/" in an agent's composer opens the list of commands over it, as on the web (#2747): it filters as more is
-/// typed, and a tap on a row puts the row's text in the box without sending it. The default style's composers (the
-/// shell's with TEST_RUNNER_PERSONA_LAYOUT=shell, the old layout's otherwise). Against scripts/mock/mock_hub.py
+/// typed, and a tap on a row puts the row's text in the box without sending it. The default style's Shell composer.
+/// Against scripts/mock/mock_hub.py
 /// (PERSONA_MOCK_HUB).
 final class SlashMenuTests: XCTestCase {
     private var hub: String!
