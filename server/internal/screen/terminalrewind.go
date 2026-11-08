@@ -1,8 +1,9 @@
 package screen
 
 import (
-	"regexp"
 	"strings"
+
+	"github.com/nwverse/persona/server/internal/lazyre"
 )
 
 // A rewind done in Claude Code's terminal (/rewind or Esc Esc, then "Restore conversation") writes nothing to the
@@ -15,14 +16,14 @@ import (
 //   - Esc before the reply (#3036) puts the prompt back as well, but it has no answer (the caller's to check).
 
 // historyRuleRE is the rule over the box while ↑ walks the prompt history.
-var historyRuleRE = regexp.MustCompile(`^─{2,}\s+History\s+\d+/\d+\s+─`)
+var historyRuleRE = lazyre.New(`^─{2,}\s+History\s+\d+/\d+\s+─`)
 
 // promptRowRE starts a row of the conversation: a prompt (❯), the agent's words (⏺, ● as herdr draws it), a tool's
 // output (⎿), a finished turn (✻).
-var promptRowRE = regexp.MustCompile(`^(?:❯ |\s*[⏺●⎿✻])`)
+var promptRowRE = lazyre.New(`^(?:❯ |\s*[⏺●⎿✻])`)
 
 // agentRowRE is a row of the agent's words.
-var agentRowRE = regexp.MustCompile(`^\s*[⏺●]`)
+var agentRowRE = lazyre.New(`^\s*[⏺●]`)
 
 // TerminalRewound says whether a resting Claude's screen is what a rewind in its terminal to before prompt leaves:
 // ansi is the visible screen read with colors (only they tell a draft from Claude's grey suggestion: a plain read is

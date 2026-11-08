@@ -3984,7 +3984,16 @@ struct Composer: View, Equatable {
         composerNotes
             .readinessSheets($failureRoute)
             .modifier(MainReadinessRefresh(enabled: isMain))
+            // The Claude quota beside ultracode's switch (#1307): kept no older than two minutes while the chat offers the
+            // switch and is in front, so a menu opened after a long stay in the chat says where the quota is now.
+            .tabActiveTask(id: ultracodeOffered && phase == .active) {
+                guard ultracodeOffered, phase == .active else { return }
+                await UsageWindowsStore.shared.keepFresh(model)
+            }
     }
+
+    /// This chat offers Claude Code's ultracode switch (#1307).
+    private var ultracodeOffered: Bool { Ultracode.offered(model.session(key), features: model.features(key.group)) }
 
     /// Persona's main conversation: it carries the readiness card and the send gate (as the web, `useReadinessGate`).
     private var isMain: Bool { model.assistantMain == key && model.session(key)?.assistant == true }
@@ -4011,6 +4020,11 @@ struct Composer: View, Equatable {
                     model.sendNow(key, text: "继续") // i18n-ignore
                 }
                 .transition(.move(edge: .bottom).combined(with: .opacity))
+            }
+            // A resume turned ultracode off (#1307): one line to turn it back on, or dismiss.
+            if let s = model.session(key), Ultracode.lostShown(s, features: model.features(key.group)) {
+                UltracodeLostNote(key: key, session: s)
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
             }
             if isMain {
                 // The main conversation: what it still needs, or a refused send (docs/assistant/onboarding.md 4.4, 5.2).
@@ -4747,6 +4761,11 @@ struct SessionInfoSheet: View {
                         if let route = session?.codexRoute { routeRow(route, note: session?.codexRouteNote) }
                         row("lock.open", String(localized: "Permissions"), SessionModes.modeLabel(info.permissionMode))
                         row(Theme.Icon.effort, String(localized: "Thinking Effort"), SessionModes.effortLabel(info.effort))
+                        // Claude Code's ultracode (#1307): on, off, or unknown (no evidence yet, an older node).
+                        if let s = model.session(key) ?? session, Ultracode.infoShown(s, features: model.features(key.group)) {
+                            row(Theme.Icon.workflow, Ultracode.name, Ultracode.stateWord(s.ultracode))
+                                .accessibilityIdentifier("session-ultracode")
+                        }
                     }
                     Section("Usage") {
                         row(Theme.Icon.context, String(localized: "Context"), Self.tokens(info.contextTokens) + " tokens")

@@ -449,7 +449,9 @@ final class ChatStore {
         self.key = key
         // Paint the last exchanges from the disk cache right away; the server's backlog merges in after.
         if let cached = ChatCache.load(key), !cached.items.isEmpty {
-            items = cached.items
+            // Refs again: a cache written before they named a chat's group of hubs (#1555) sent its pictures to the
+            // current group's hub.
+            items = Self.withImageRefs(cached.items, key)
             ids = Set(cached.items.map(\.id))
             hasMore = cached.hasMore
             history = cached.history
@@ -746,11 +748,11 @@ final class ChatStore {
         guard items.contains(where: { $0.image?.lazy == true || $0.fold?.images?.isEmpty == false }) else { return items }
         return items.map { it in
             var it = it
-            if it.image?.lazy == true { it.image?.ref = "\(key.machineID)/\(key.sessionID)/\(it.id)" }
+            if it.image?.lazy == true { it.image?.ref = ImageRef.make(key, item: it.id) }
             if let images = it.fold?.images {
                 it.fold?.images = images.map { im in
                     var im = im
-                    if let id = im.itemID { im.ref = "\(key.machineID)/\(key.sessionID)/\(id)" }
+                    if let id = im.itemID { im.ref = ImageRef.make(key, item: id) }
                     return im
                 }
             }

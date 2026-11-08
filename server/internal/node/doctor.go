@@ -14,7 +14,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"regexp"
 	"runtime"
 	"slices"
 	"strings"
@@ -25,6 +24,7 @@ import (
 	"github.com/nwverse/persona/server/internal/extension/sandbox"
 	"github.com/nwverse/persona/server/internal/herdr"
 	"github.com/nwverse/persona/server/internal/identity"
+	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/nodeclient"
 )
 
@@ -501,7 +501,7 @@ func shellFirstWord(cmd string) string {
 }
 
 // assignmentRe is a shell word that sets a variable for the command after it.
-var assignmentRe = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*=`)
+var assignmentRe = lazyre.New(`^[A-Za-z_][A-Za-z0-9_]*=`)
 
 // checkCommandPaths: the program each generated file runs exists and can be run. A file moved or removed under a
 // running node (a redeploy to another path) leaves hooks that fail on every call.

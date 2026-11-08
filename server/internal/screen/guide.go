@@ -1,8 +1,9 @@
 package screen
 
 import (
-	"regexp"
 	"strings"
+
+	"github.com/nwverse/persona/server/internal/lazyre"
 )
 
 // A guide is one of Claude Code's own setup dialogs that comes up by itself, not from anything the agent or the user
@@ -12,13 +13,13 @@ import (
 // here; permissions, logins, trust, quota and paid options, and an agent's own questions are the user's to answer.
 var guides = []struct {
 	name  string
-	title *regexp.Regexp
+	title *lazyre.Regexp
 }{
-	{"teach-auto-mode", regexp.MustCompile(`^Teach auto mode about your environment\?$`)},
+	{"teach-auto-mode", lazyre.New(`^Teach auto mode about your environment\?$`)},
 }
 
 // guideFooterRE is a guide's key hint: Esc cancels it (`←/→ to change · Enter to continue · Esc to cancel`).
-var guideFooterRE = regexp.MustCompile(`(?i)\besc to cancel\b`)
+var guideFooterRE = lazyre.New(`(?i)\besc to cancel\b`)
 
 // GuideKeys decline a guide.
 var GuideKeys = []string{"esc"}

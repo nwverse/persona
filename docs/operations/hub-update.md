@@ -159,6 +159,24 @@ mirror tests and Hub confirmation do not establish remote reachability or
 consumer installation. The publisher's confirmed receipt reports the relative
 mirror directory and consumer manifest hash for this separate read-only check.
 
+An explicit single-node publisher transfer can recover a transient Link failure
+without starting another publication. Only identical chunks for the already
+selected transaction, offset and bytes are retried (at most four attempts), inside
+the original install deadline. Every relay call retains the manager owner, machine
+UID, executable and platform checks. Identity conflicts and invalid offsets fail;
+expired transactions never trigger a replacement `begin`. A commit is sent once:
+a lost or gateway-error reply is ambiguous, so only a fresh matching handshake,
+required capability and guardian confirmation establish success. Rejected commits
+still fail, and cleanup errors retain the original transfer failure.
+
+The SSH publisher sends keepalives and drains node-publisher stdout and stderr
+concurrently into the original worker log, including transfer offsets and remote
+tracebacks. The existing command timeout also bounds output collection. Missing
+SSH exit status or an interrupted connection cannot create a confirmed receipt;
+it does not reconnect and replay the remote publication. Keepalives reduce idle
+connection loss but do not prove a broken route has recovered. Preserve the failed
+run and let its sole runtime owner decide a subsequent explicit retry.
+
 A Hub-only edge switch may proceed while sessions on proven resident nodes or remote herdr/herdr-core hosts run:
 their processes belong to the terminal host and survive the transport reconnect.
 Local and unknown/direct assistant sessions still wait for idle. Fleet upgrades

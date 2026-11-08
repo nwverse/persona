@@ -19,12 +19,12 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"regexp"
 	"slices"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/nodeclient"
 	"github.com/nwverse/persona/server/internal/proto"
 )
@@ -288,7 +288,7 @@ var byKind = map[string]int{proto.ToolErrorDeclined: exitDeclined, proto.ToolErr
 
 // waitFor is how the hub and the connectors say how long a rate limit lasts, for those that do not say it in
 // retry_after (an older hub, a connector's status).
-var waitFor = regexp.MustCompile(`(?:还要 |限流中?，)(\d+) 秒`)
+var waitFor = lazyre.New(`(?:还要 |限流中?，)(\d+) 秒`)
 
 // classify is a failure's exit code and how long a rate limit lasts: by the kind the hub, the node or the connector
 // named (error_kind, retry_after), or, when none is named (an older hub or node), by what the error says.

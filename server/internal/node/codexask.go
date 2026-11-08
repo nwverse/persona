@@ -10,13 +10,13 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"regexp"
 	"sort"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/nwverse/persona/server/internal/host"
+	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/screen"
 	"github.com/nwverse/persona/server/internal/transcript"
@@ -362,7 +362,7 @@ func approvalCard(session string, a codexAgent, title string, d *screen.CodexApp
 	}
 }
 
-var startsWithRE = regexp.MustCompile("start with `(.+)`")
+var startsWithRE = lazyre.New("start with `(.+)`")
 
 // alwaysLabel says in the app's words what the approval's "don't ask again" option allows, "" when it has none.
 func alwaysLabel(d *screen.CodexApprovalDialog) string {
@@ -558,7 +558,7 @@ func (n *Node) codexType(ctx context.Context, pane, text string, shows func(draf
 }
 
 // pastedRE is how Codex shows a long paste in its box.
-var pastedRE = regexp.MustCompile(`^\[Pasted Content \d+ chars\]$`)
+var pastedRE = lazyre.New(`^\[Pasted Content \d+ chars\]$`)
 
 // codexReply answers an async question: the reply envelope Codex's own clients send, as a message.
 func (n *Node) codexReply(ctx context.Context, session string, card *codexCard, r proto.Resolution) error {
