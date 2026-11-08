@@ -686,19 +686,26 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
   // the question rail (#1739): one tick per question of yours among the loaded lines — the model picks them, NavRail
   // draws them in the side margin and this view jumps (only what is loaded counts; the rail never pages history in)
   const railTicks = useMemo(() => navRailTicks(lines), [lines]);
-  const railJump = useCallback(
-    (lineId: string) => {
+  /** Brings a row into view in the chat's own scroller (scrollIntoView would also scroll an opening group's clipped
+   *  box): following the end stops, and the jump's first frames do not pick it up again (`jumping`). */
+  const landRow = useCallback(
+    (row: HTMLElement, topOffset: number) => {
       const sc = scroller.current;
-      const row = sc?.querySelector<HTMLElement>(`[data-line="${CSS.escape(lineId)}"]`)?.firstElementChild;
-      if (!sc || !(row instanceof HTMLElement)) return;
+      if (!sc) return;
       follow(false);
-      // the question lands a little under the top, its answer below it: the scroller only (scrollIntoView would also
-      // scroll an opening group's clipped box), and following stays off until the reader comes back to the end
       clearTimeout(jumping.current);
       jumping.current = window.setTimeout(() => (jumping.current = 0), 1200);
-      sc.scrollTo({ top: sc.scrollTop + row.getBoundingClientRect().top - sc.getBoundingClientRect().top - 12, behavior: scrollBehavior() });
+      sc.scrollTo({ top: sc.scrollTop + row.getBoundingClientRect().top - sc.getBoundingClientRect().top + topOffset, behavior: scrollBehavior() });
     },
     [follow],
+  );
+  const railJump = useCallback(
+    (lineId: string) => {
+      // the question lands a little under the top, its answer below it
+      const row = scroller.current?.querySelector<HTMLElement>(`[data-line="${CSS.escape(lineId)}"]`)?.firstElementChild;
+      if (row instanceof HTMLElement) landRow(row, -12);
+    },
+    [landRow],
   );
   // the subagents the agent is waiting on (#5602): running, launched in the foreground, their calls not answered yet
   const callsAnswered = useMemo(() => new Set(tr.items.filter((i) => i.kind === "tool_result" && i.tool_use_id).map((i) => i.tool_use_id!)), [tr.items]);
@@ -732,14 +739,10 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
       }
       const sc = scroller.current;
       if (!row || !sc) return void toast(t("chat-chatview.call_not_loaded"));
-      const s = sc.getBoundingClientRect();
-      const r = row.getBoundingClientRect();
-      clearTimeout(jumping.current);
-      jumping.current = window.setTimeout(() => (jumping.current = 0), 1200);
-      sc.scrollTo({ top: sc.scrollTop + (r.top - s.top) - (sc.clientHeight - r.height) / 2, behavior: "smooth" });
+      landRow(row, -(sc.clientHeight - row.getBoundingClientRect().height) / 2);
       row.animate?.([{ backgroundColor: "var(--accent-tint)" }, { backgroundColor: "transparent" }], { duration: 1800, easing: "ease-out" });
     },
-    [mid, sid, follow, expandFold],
+    [mid, sid, follow, expandFold, landRow],
   );
   const jump = useCallback((call: string) => void jumpToCall(call), [jumpToCall]);
   // its workflow runs by the Workflow call that launched each (#3434): rebuilt only when a run starts or goes, not with

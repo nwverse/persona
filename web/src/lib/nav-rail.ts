@@ -84,7 +84,8 @@ export function navRailExcerpt(raw: string): string {
 }
 
 /** Whether the chat area leaves the rail room: the centered column (NAV_RAIL_COLUMN) with at least NAV_RAIL_MIN_GUTTER
- *  free on the side the rail sits in. Panels and narrow windows take the margin away and the rail goes with it. */
+ *  free on the side the rail sits in. `width` is the content width (clientWidth — a classic scrollbar is not margin).
+ *  Panels and narrow windows take the margin away and the rail goes with it. */
 export function hasNavRailRoom(width: number): boolean {
   return width > NAV_RAIL_COLUMN && (width - NAV_RAIL_COLUMN) / 2 >= NAV_RAIL_MIN_GUTTER;
 }
