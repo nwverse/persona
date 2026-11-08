@@ -516,6 +516,12 @@ export function installMock(scenario: string) {
         restart = { required: true, reasons: [...restart.reasons, `删除电脑「${id}」`] };
         return json({ ok: true, restart });
       }
+      if (m[2] === undefined && method === "PUT") {
+        const name = String(body.name ?? "").trim();
+        if (name.length > 40 || /[\n\r\t]/.test(name)) return fail(400, "invalid_name", "名字最多 40 个字，不能换行");
+        machine.name = name || id;
+        return json({ ok: true, name: machine.name });
+      }
       if (m[2] === "/reconnect") return json({ ok: true });
       if (m[2] === "/link-pair") return json({ pair_url: `persona://link?url=https%3A%2F%2Fhub.example.com%3A18662&machine=${id}&token=jp_mock`, expires_at: later(10), command: `persona-link pair 'persona://link?…&machine=${id}'` });
     }

@@ -56,6 +56,27 @@ class AssistantConfigTest {
         }
     }
 
+    @Test fun permissionDefaultsNameBothOwnersAndSendOnlyTheNewField() = runBlocking {
+        MockWebServer().use { server ->
+            val source = HttpAssistantManagement(server.url("/").toString(), "test-token", OkHttpClient())
+            for ((owner, mode) in listOf("assistant" to "plan", "work" to "bypassPermissions")) {
+                val api = source.forManager(owner)
+                server.enqueue(MockResponse().setBody("""{"manager":"$owner","default_permission_mode":"$mode","main":"kept"}"""))
+                val config = api.updateConfig(AssistantConfigUpdate(defaultPermissionMode = mode))
+                val write = server.takeRequest()
+                assertEquals(owner, write.getHeader(ManagerHeader))
+                assertEquals(owner, write.requestUrl?.queryParameter(ManagerQuery))
+                assertEquals("""{"default_permission_mode":"$mode"}""", write.body.readUtf8())
+                assertEquals(owner, config.manager)
+                assertEquals(mode, config.defaultPermissionMode)
+                assertEquals("kept", config.main)
+                server.enqueue(MockResponse().setBody("""{"manager":"$owner","default_permission_mode":"$mode"}"""))
+                assertEquals(mode, source.forManager(owner).config().defaultPermissionMode)
+                assertEquals(owner, server.takeRequest().getHeader(ManagerHeader))
+            }
+        }
+    }
+
     @Test fun listsTheLaunchersOfTheChosenMachine() = runBlocking {
         MockWebServer().use { server ->
             val api = HttpAssistantManagement(server.url("/").toString(), "test-token", OkHttpClient())

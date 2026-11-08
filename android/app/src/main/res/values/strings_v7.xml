@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_capsule_undo_complete">Undo completion</string>
+    <string name="app_capsule_complete">Complete item</string>
+    <string name="app_capsule_attachment">Attachment: %1$s</string>
+    <string name="app_capsule_image_full_chat">Image · View in the full chat</string>
+    <string name="app_capsule_audio_full_chat">Audio · Listen in the full chat</string>
+    <string name="app_capsule_video_full_chat">Video · View in the full chat</string>
+    <string name="app_capsule_sticker">Sticker</string>
+    <string name="app_capsule_forwarded_history">Chat history: %1$s</string>
+    <string name="app_capsule_reply_pending_check">The reply is not complete. Open the full chat to check the result</string>
+    <string name="app_capsule_changed_return_list">The chat changed. Return to the list</string>
+    <string name="app_capsule_item_changed_return_list">The item changed. Return to the list</string>
+    <string name="app_capsule_message_notice_gone">This new message notice is no longer valid</string>
+    <string name="app_capsule_choose_chat">Choose a chat</string>
+    <string name="app_capsule_body_unsynced">The chat content is not synced yet. Try again shortly</string>
+    <string name="app_capsule_prior_reply_check">The previous reply still needs checking. Open the full chat</string>
+    <string name="app_capsule_send_unconfirmed_draft">The send result is unconfirmed. Your draft is kept. Check the full chat</string>
+    <string name="app_capsule_connect_first">Connect to a hub first</string>
+    <string name="app_capsule_read_partial_failed">Some read updates failed. Unread alerts are kept. Try again</string>
+    <string name="app_capsule_read_partial_skipped">Some messages are not loaded or have new replies. Open them to read. Unread alerts are kept</string>
+    <string name="app_capsule_item_updated_check">The item has updates. Review it again before handling it</string>
+    <string name="app_capsule_action_unavailable">This action is not available yet</string>
+    <string name="app_capsule_read_sync_failed">Read status could not be synced</string>
+    <string name="app_capsule_read_retry">Read sync failed. Try again</string>
+    <string name="app_capsule_messages_unsynced">Messages are not fully synced. Reconnect and try again</string>
+    <string name="app_capsule_new_message_stay">This chat has a new message. Staying here</string>
+    <string name="app_capsule_you">You</string>
+    <string name="app_capsule_original_chat">Original chat</string>
+</resources>

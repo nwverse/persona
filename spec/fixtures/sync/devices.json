@@ -1,0 +1,627 @@
+{
+  "version": 1,
+  "cases": [
+    {
+      "name": "card_answered_on_other_device",
+      "description": "A card answered on another device is no longer answerable here once the hub says it ended.",
+      "source": {
+        "rule": "interaction_resolved goes to every client",
+        "docs": "docs/protocol/protocol.md WebSocket (interaction_resolved)"
+      },
+      "chat": {
+        "machine_id": "m1",
+        "session_id": "s1",
+        "assistant": true
+      },
+      "devices": [
+        "a",
+        "b"
+      ],
+      "start": {
+        "hub": {
+          "history": "h1",
+          "lines": [
+            {
+              "id": "l1#0",
+              "seq": 1,
+              "ts": "2026-01-02T03:04:05Z",
+              "role": "user",
+              "kind": "text",
+              "text": "Plan a weekend trip."
+            },
+            {
+              "id": "l2#0",
+              "seq": 2,
+              "ts": "2026-01-02T03:04:05Z",
+              "role": "assistant",
+              "kind": "text",
+              "text": "Saturday hike, Sunday museum."
+            }
+          ],
+          "to_seq": 3,
+          "interactions": [
+            {
+              "id": "ix1",
+              "machine_id": "m1",
+              "session_id": "s1",
+              "session_title": "Weekend trip",
+              "cwd": "/home/user/project",
+              "kind": "permission",
+              "created_at": "2026-01-02T03:04:05Z",
+              "expires_at": "2026-01-02T05:04:05Z",
+              "tool_name": "Bash",
+              "tool_use_id": "call_ix1",
+              "tool_input": {
+                "command": "ls"
+              },
+              "summary": "List the project folder"
+            }
+          ],
+          "session": {
+            "state": "needs_you"
+          },
+          "event_stream": "ev1",
+          "event_seq": 10
+        }
+      },
+      "steps": [
+        {
+          "user": {
+            "device": "b",
+            "answer": {
+              "id": "ix1",
+              "resolution": {
+                "allow": true
+              }
+            }
+          }
+        },
+        {
+          "reply": {
+            "device": "b",
+            "write": "ix1",
+            "status": 200,
+            "body": {
+              "ok": true
+            }
+          }
+        },
+        {
+          "hub": {
+            "end": {
+              "id": "ix1",
+              "status": "answered",
+              "by": "b"
+            },
+            "session": {
+              "state": "working"
+            }
+          }
+        },
+        {
+          "frames": {
+            "a": [
+              {
+                "type": "interaction_resolved",
+                "id": "ix1",
+                "event_seq": 11
+              },
+              {
+                "type": "sessions_delta",
+                "machine_id": "m1",
+                "upsert": [
+                  {
+                    "machine_id": "m1",
+                    "session_id": "s1",
+                    "title": "Weekend trip",
+                    "cwd": "/home/user/project",
+                    "status": "working",
+                    "assistant": true,
+                    "state": "working",
+                    "updated_at": "2026-01-02T03:04:05Z",
+                    "rev": 100
+                  }
+                ],
+                "remove": []
+              }
+            ],
+            "b": [
+              {
+                "type": "interaction_resolved",
+                "id": "ix1",
+                "event_seq": 11
+              },
+              {
+                "type": "sessions_delta",
+                "machine_id": "m1",
+                "upsert": [
+                  {
+                    "machine_id": "m1",
+                    "session_id": "s1",
+                    "title": "Weekend trip",
+                    "cwd": "/home/user/project",
+                    "status": "working",
+                    "assistant": true,
+                    "state": "working",
+                    "updated_at": "2026-01-02T03:04:05Z",
+                    "rev": 100
+                  }
+                ],
+                "remove": []
+              }
+            ]
+          },
+          "expect": {
+            "a": {
+              "cards": {}
+            },
+            "b": {
+              "cards": {
+                "ix1": "answered"
+              }
+            }
+          }
+        }
+      ],
+      "end": {
+        "a": {
+          "messages": [
+            {
+              "from": "user",
+              "text": "Plan a weekend trip.",
+              "state": "shown"
+            },
+            {
+              "from": "agent",
+              "text": "Saturday hike, Sunday museum."
+            }
+          ],
+          "cards": {},
+          "status": "working"
+        },
+        "b": {
+          "messages": [
+            {
+              "from": "user",
+              "text": "Plan a weekend trip.",
+              "state": "shown"
+            },
+            {
+              "from": "agent",
+              "text": "Saturday hike, Sunday museum."
+            }
+          ],
+          "cards": {},
+          "status": "working"
+        }
+      }
+    },
+    {
+      "name": "both_devices_answer_once",
+      "description": "Two devices answer the same card; the first one wins and the second is told it was answered already, and neither can answer it again.",
+      "source": {
+        "rule": "A repeat resolve gets 200 already with the kept answer",
+        "code": {
+          "manager": "server/internal/assistant/fleet_routes.go writeEnded"
+        }
+      },
+      "chat": {
+        "machine_id": "m1",
+        "session_id": "s1",
+        "assistant": true
+      },
+      "devices": [
+        "a",
+        "b"
+      ],
+      "start": {
+        "hub": {
+          "history": "h1",
+          "lines": [
+            {
+              "id": "l1#0",
+              "seq": 1,
+              "ts": "2026-01-02T03:04:05Z",
+              "role": "user",
+              "kind": "text",
+              "text": "Plan a weekend trip."
+            },
+            {
+              "id": "l2#0",
+              "seq": 2,
+              "ts": "2026-01-02T03:04:05Z",
+              "role": "assistant",
+              "kind": "text",
+              "text": "Saturday hike, Sunday museum."
+            }
+          ],
+          "to_seq": 3,
+          "interactions": [
+            {
+              "id": "ix1",
+              "machine_id": "m1",
+              "session_id": "s1",
+              "session_title": "Weekend trip",
+              "cwd": "/home/user/project",
+              "kind": "permission",
+              "created_at": "2026-01-02T03:04:05Z",
+              "expires_at": "2026-01-02T05:04:05Z",
+              "tool_name": "Bash",
+              "tool_use_id": "call_ix1",
+              "tool_input": {
+                "command": "ls"
+              },
+              "summary": "List the project folder"
+            }
+          ],
+          "session": {
+            "state": "needs_you"
+          },
+          "event_stream": "ev1",
+          "event_seq": 10
+        }
+      },
+      "steps": [
+        {
+          "user": {
+            "device": "a",
+            "answer": {
+              "id": "ix1",
+              "resolution": {
+                "allow": true
+              }
+            }
+          }
+        },
+        {
+          "user": {
+            "device": "b",
+            "answer": {
+              "id": "ix1",
+              "resolution": {
+                "allow": false,
+                "message": "Not now"
+              }
+            }
+          }
+        },
+        {
+          "reply": {
+            "device": "a",
+            "write": "ix1",
+            "status": 200,
+            "body": {
+              "ok": true
+            }
+          }
+        },
+        {
+          "hub": {
+            "end": {
+              "id": "ix1",
+              "status": "answered",
+              "by": "a"
+            },
+            "session": {
+              "state": "working"
+            }
+          }
+        },
+        {
+          "reply": {
+            "device": "b",
+            "write": "ix1",
+            "status": 200,
+            "done": false,
+            "body": {
+              "ok": true,
+              "already": true,
+              "status": "resolved",
+              "resolution": {
+                "allow": true
+              }
+            }
+          },
+          "expect": {
+            "b": {
+              "cards": {
+                "ix1": "answered"
+              }
+            }
+          }
+        },
+        {
+          "frames": {
+            "a": [
+              {
+                "type": "interaction_resolved",
+                "id": "ix1",
+                "event_seq": 11
+              },
+              {
+                "type": "sessions_delta",
+                "machine_id": "m1",
+                "upsert": [
+                  {
+                    "machine_id": "m1",
+                    "session_id": "s1",
+                    "title": "Weekend trip",
+                    "cwd": "/home/user/project",
+                    "status": "working",
+                    "assistant": true,
+                    "state": "working",
+                    "updated_at": "2026-01-02T03:04:05Z",
+                    "rev": 100
+                  }
+                ],
+                "remove": []
+              }
+            ],
+            "b": [
+              {
+                "type": "interaction_resolved",
+                "id": "ix1",
+                "event_seq": 11
+              },
+              {
+                "type": "sessions_delta",
+                "machine_id": "m1",
+                "upsert": [
+                  {
+                    "machine_id": "m1",
+                    "session_id": "s1",
+                    "title": "Weekend trip",
+                    "cwd": "/home/user/project",
+                    "status": "working",
+                    "assistant": true,
+                    "state": "working",
+                    "updated_at": "2026-01-02T03:04:05Z",
+                    "rev": 100
+                  }
+                ],
+                "remove": []
+              }
+            ]
+          }
+        }
+      ],
+      "end": {
+        "a": {
+          "messages": [
+            {
+              "from": "user",
+              "text": "Plan a weekend trip.",
+              "state": "shown"
+            },
+            {
+              "from": "agent",
+              "text": "Saturday hike, Sunday museum."
+            }
+          ],
+          "cards": {},
+          "status": "working"
+        },
+        "b": {
+          "messages": [
+            {
+              "from": "user",
+              "text": "Plan a weekend trip.",
+              "state": "shown"
+            },
+            {
+              "from": "agent",
+              "text": "Saturday hike, Sunday museum."
+            }
+          ],
+          "cards": {},
+          "status": "working"
+        }
+      }
+    },
+    {
+      "name": "sent_on_other_device_once",
+      "description": "A message sent from another device shows once here, as the transcript's line, and once on the sender.",
+      "source": {
+        "rule": "Never twice",
+        "code": {
+          "web": "web/src/lib/echo.ts",
+          "ios": "PendingMessage.arrived"
+        }
+      },
+      "chat": {
+        "machine_id": "m1",
+        "session_id": "s1",
+        "assistant": true
+      },
+      "devices": [
+        "a",
+        "b"
+      ],
+      "start": {
+        "hub": {
+          "history": "h1",
+          "lines": [
+            {
+              "id": "l1#0",
+              "seq": 1,
+              "ts": "2026-01-02T03:04:05Z",
+              "role": "user",
+              "kind": "text",
+              "text": "Plan a weekend trip."
+            },
+            {
+              "id": "l2#0",
+              "seq": 2,
+              "ts": "2026-01-02T03:04:05Z",
+              "role": "assistant",
+              "kind": "text",
+              "text": "Saturday hike, Sunday museum."
+            }
+          ],
+          "to_seq": 3,
+          "interactions": [],
+          "session": {
+            "state": "idle"
+          },
+          "event_stream": "ev1",
+          "event_seq": 10
+        }
+      },
+      "steps": [
+        {
+          "user": {
+            "device": "b",
+            "send": {
+              "id": "m1",
+              "text": "Add a bakery stop."
+            }
+          }
+        },
+        {
+          "reply": {
+            "device": "b",
+            "write": "m1",
+            "status": 200,
+            "body": {
+              "ok": true
+            }
+          }
+        },
+        {
+          "hub": {
+            "append": [
+              {
+                "id": "l4#0",
+                "seq": 4,
+                "ts": "2026-01-02T03:04:05Z",
+                "role": "user",
+                "kind": "text",
+                "text": "Add a bakery stop.",
+                "client_msg_id": "m1"
+              },
+              {
+                "id": "l5#0",
+                "seq": 5,
+                "ts": "2026-01-02T03:04:05Z",
+                "role": "assistant",
+                "kind": "text",
+                "text": "Bakery stop added before the hike."
+              }
+            ],
+            "to_seq": 6
+          }
+        },
+        {
+          "frames": {
+            "a": [
+              {
+                "type": "items",
+                "machine_id": "m1",
+                "session_id": "s1",
+                "history": "h1",
+                "items": [
+                  {
+                    "id": "l4#0",
+                    "seq": 4,
+                    "ts": "2026-01-02T03:04:05Z",
+                    "role": "user",
+                    "kind": "text",
+                    "text": "Add a bakery stop.",
+                    "client_msg_id": "m1"
+                  },
+                  {
+                    "id": "l5#0",
+                    "seq": 5,
+                    "ts": "2026-01-02T03:04:05Z",
+                    "role": "assistant",
+                    "kind": "text",
+                    "text": "Bakery stop added before the hike."
+                  }
+                ],
+                "to_seq": 6,
+                "from_seq": 3
+              }
+            ],
+            "b": [
+              {
+                "type": "items",
+                "machine_id": "m1",
+                "session_id": "s1",
+                "history": "h1",
+                "items": [
+                  {
+                    "id": "l4#0",
+                    "seq": 4,
+                    "ts": "2026-01-02T03:04:05Z",
+                    "role": "user",
+                    "kind": "text",
+                    "text": "Add a bakery stop.",
+                    "client_msg_id": "m1"
+                  },
+                  {
+                    "id": "l5#0",
+                    "seq": 5,
+                    "ts": "2026-01-02T03:04:05Z",
+                    "role": "assistant",
+                    "kind": "text",
+                    "text": "Bakery stop added before the hike."
+                  }
+                ],
+                "to_seq": 6,
+                "from_seq": 3
+              }
+            ]
+          }
+        }
+      ],
+      "end": {
+        "a": {
+          "messages": [
+            {
+              "from": "user",
+              "text": "Plan a weekend trip.",
+              "state": "shown"
+            },
+            {
+              "from": "agent",
+              "text": "Saturday hike, Sunday museum."
+            },
+            {
+              "from": "user",
+              "text": "Add a bakery stop.",
+              "state": "shown"
+            },
+            {
+              "from": "agent",
+              "text": "Bakery stop added before the hike."
+            }
+          ],
+          "cards": {}
+        },
+        "b": {
+          "messages": [
+            {
+              "from": "user",
+              "text": "Plan a weekend trip.",
+              "state": "shown"
+            },
+            {
+              "from": "agent",
+              "text": "Saturday hike, Sunday museum."
+            },
+            {
+              "from": "user",
+              "text": "Add a bakery stop.",
+              "state": "shown"
+            },
+            {
+              "from": "agent",
+              "text": "Bakery stop added before the hike."
+            }
+          ],
+          "cards": {}
+        }
+      }
+    }
+  ]
+}

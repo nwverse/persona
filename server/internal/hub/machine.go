@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"slices"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/nwverse/persona/server/internal/apierr"
@@ -29,6 +30,9 @@ var errOffline = apierr.ErrOffline
 type Machine struct {
 	cfg MachineConfig
 	hub *Hub
+	// named is what the computer is called now: cfg.Name until it is renamed (renameMachineLive, the manager's
+	// report), which changes nothing else of it; read through name().
+	named atomic.Pointer[string]
 
 	mu sync.Mutex
 	// peer is how calls reach the node: the manager over the bus (busNode) for a machine it reported, or a test's
@@ -113,7 +117,24 @@ func (m *Machine) ownerOrCarrier() string {
 }
 
 func newMachine(h *Hub, cfg MachineConfig) *Machine {
-	return &Machine{cfg: cfg, hub: h, watchers: map[string]int{}, lastSeq: map[string]int{}}
+	m := &Machine{cfg: cfg, hub: h, watchers: map[string]int{}, lastSeq: map[string]int{}}
+	m.setName(cfg.Name)
+	return m
+}
+
+// name is what the computer is called now: as renamed, else its entry's name, else its id.
+func (m *Machine) name() string {
+	if n := m.named.Load(); n != nil && *n != "" {
+		return *n
+	}
+	return cmp.Or(m.cfg.Name, m.cfg.ID)
+}
+
+// setName renames the computer; "" leaves the name as it is.
+func (m *Machine) setName(name string) {
+	if name != "" {
+		m.named.Store(&name)
+	}
 }
 
 func (m *Machine) snapshot() proto.Machine {
@@ -125,13 +146,14 @@ func (m *Machine) snapshot() proto.Machine {
 	var s proto.Machine
 	if m.snap != nil {
 		s = *m.snap
+		s.Name = m.name() // renamed since it was reported: as it is called now
 	} else {
 		// Not reported yet (the hub just started, or a test's machine): what the hub has.
 		icon := m.cfg.Icon
 		if icon == "" {
 			icon = "laptop"
 		}
-		s = proto.Machine{ID: m.cfg.ID, Name: m.cfg.Name, Kind: m.cfg.Kind, Icon: icon, SSHHost: m.cfg.SSHHost,
+		s = proto.Machine{ID: m.cfg.ID, Name: m.name(), Kind: m.cfg.Kind, Icon: icon, SSHHost: m.cfg.SSHHost,
 			Hostname: m.info.Hostname, OS: m.info.OS, Arch: m.info.Arch, Home: m.info.Home, HerdrVersion: m.info.HerdrVersion,
 			ClaudeVersion: m.info.ClaudeVersion, LastSeen: m.lastSeen, NodeVersion: m.info.Version, Engine: cmp.Or(m.engine, proto.EngineHerdr),
 			Tailcat: m.cfg.TailcatAddr != ""}
@@ -210,11 +232,11 @@ func (m *Machine) call(ctx context.Context, method string, params any, out any) 
 		}
 	}
 	if p == nil {
-		return fmt.Errorf("%s: %w", m.cfg.Name, errOffline)
+		return fmt.Errorf("%s: %w", m.name(), errOffline)
 	}
 	select {
 	case <-p.Done(): // closed, a new connection on its way: nothing was sent
-		return fmt.Errorf("%s: %w", m.cfg.Name, errOffline)
+		return fmt.Errorf("%s: %w", m.name(), errOffline)
 	default:
 	}
 	return p.Call(ctx, method, params, out)
@@ -246,7 +268,7 @@ func (m *Machine) notify(event string, params any) error {
 	p := m.peer
 	m.mu.Unlock()
 	if p == nil {
-		return fmt.Errorf("%s: %w", m.cfg.Name, errOffline)
+		return fmt.Errorf("%s: %w", m.name(), errOffline)
 	}
 	return p.Notify(event, params)
 }

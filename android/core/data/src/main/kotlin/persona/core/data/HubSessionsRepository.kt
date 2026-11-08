@@ -63,7 +63,21 @@ class HubSessionsRepository(
         snapshots.save("sessions", if (mode == Mode.Legacy) mutableSessions.value else mutableSessions.value.take(WINDOW_SIZE))
     }
 
+    /**
+     * Pushed events write the first-paint snapshot at once and then at most every [PERSIST_MILLIS], outside the lock:
+     * serializing every listed session (some titles megabytes long) on each event kept the phone busy while agents ran,
+     * once the capsule kept the process alive. Refreshes still commit before they return.
+     */
+    private val persistRequests = kotlinx.coroutines.channels.Channel<Unit>(kotlinx.coroutines.channels.Channel.CONFLATED)
+    private fun persistLater() { persistRequests.trySend(Unit) }
+
     init {
+        scope.launch {
+            for (request in persistRequests) {
+                runCatching { lock.withLock { persist() } }
+                delay(PERSIST_MILLIS)
+            }
+        }
         scope.launch(start = CoroutineStart.UNDISPATCHED) {
             connection.events.collect { event ->
                 if (event is SessionsListEvent) {
@@ -124,7 +138,7 @@ class HubSessionsRepository(
                         }
                         else -> return@withLock
                     }
-                    persist()
+                    persistLater()
                 }
             }
         }
@@ -365,7 +379,9 @@ class HubSessionsRepository(
         // A burst past one extra page rebaselines page one rather than growing the window without bound.
         if (top.keys.size + joined.size > 2 * WINDOW_SIZE) throw SessionListExpired()
         loadedPages[0] = top.copy(keys = top.keys + joined.map { it.key })
-        return joined.sortedWith(compareByDescending<Session> { it.updated }.thenBy { it.machineId }.thenBy { it.sessionId })
+        // Each time parsed once (`updated` parses its text on every read).
+        return joined.map { it to it.updated }.sortedWith(compareByDescending<Pair<Session, java.time.Instant?>> { it.second }
+            .thenBy { it.first.machineId }.thenBy { it.first.sessionId }).map { it.first }
     }
 
     /** Called under [lock]; never combines page tokens/checkpoints from different hub epochs. */
@@ -456,3 +472,6 @@ internal suspend inline fun quietly(block: () -> Unit) {
     catch (cancelled: CancellationException) { throw cancelled }
     catch (_: Exception) { /* A later refresh or reconnect reconciles state. */ }
 }
+
+/** How often pushed session events write the first-paint snapshot at most. */
+private const val PERSIST_MILLIS = 10_000L
