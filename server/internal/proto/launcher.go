@@ -179,6 +179,9 @@ type ProviderModel struct {
 	// Efforts: the thinking levels it takes (low, medium, high, xhigh, max); empty is unknown (all are offered).
 	Efforts       []string `json:"efforts,omitempty"`
 	DefaultEffort string   `json:"default_effort,omitempty"`
+	// InheritedFrom is the catalog id an unlisted newer generation took a missing context window or thinking
+	// level from. Empty for an exact catalog entry, and when the gateway already reported every one of those.
+	InheritedFrom string `json:"inherited_from,omitempty"`
 }
 
 // The assistant's runtimes for a Claude launcher (model_config.assistant's "runtime", the assistant.send / .start /

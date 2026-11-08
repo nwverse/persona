@@ -611,9 +611,10 @@ func mergeDiscoveredMetadata(first, next proto.ProviderModel) proto.ProviderMode
 	return first
 }
 
-// enrichDiscoveredModel prefers a catalog window while retaining other server metadata.
+// enrichDiscoveredModel prefers an exact catalog window and keeps the server's other metadata.
+// A window inherited from an earlier generation only fills a gap; a window the server reported wins.
 func enrichDiscoveredModel(m proto.ProviderModel) proto.ProviderModel {
-	if c, ok := catalogModel(m.ID); ok && c.ContextWindow > 0 {
+	if c, ok := catalogModel(m.ID); ok && c.InheritedFrom == "" && c.ContextWindow > 0 {
 		m.ContextWindow = c.ContextWindow
 	}
 	return enrichModel(m)
