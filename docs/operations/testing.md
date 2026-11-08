@@ -15,42 +15,90 @@ n=0 failed=""; for f in $(find scripts -name 'test_*.py' -not -path '*/node_modu
 
 ## Hosted CI
 
-`.github/workflows/ci.yml` runs on every PR, merge-queue group, and manual dispatch. It checks repository privacy and path safety, then
-uses `scripts/ci/paths.py` to call independent reusable platform workflows. Filters live in that one tested file, not duplicated native
-workflow filters: this makes dependencies and results visible to the final **CI required** job, which always reports and rejects failed,
-cancelled, missing or unexpectedly skipped selected required jobs. By maintainer decision, the independent Mac lane temporarily does not
-block merging: it still runs and reports its actual success/failure, without `continue-on-error`, but is not a dependency of **CI required**.
-The required Apple lane remains iOS, including embedded Watch builds, PersonaKit, offline unit/design tests and both separate HTML batches.
-Both Apple lanes depend only on path selection and run in parallel on separate hosted runners. Unselected platforms are deliberately
-skipped. Require **CI required** only; repository rulesets are not changed by this policy split.
-remove older individual conditional required checks when branch protection is available. A workflow change must have a real green hosted
-PR run before merging. Use `python3 scripts/ci/paths.py --base origin/main` to inspect local selection; dispatch runs all platforms.
+`.github/workflows/ci.yml` runs on every PR and manual dispatch. There is no merge-queue trigger while the repository has no merge queue.
+Automatic PR CI allocates **one runner, named CI required**. That job performs repository/commit privacy and path safety, documentation
+paths and README checks, CI-regression tests, then the complete Web and runtime/SDK checks when selected by `scripts/ci/paths.py`.
+It does not queue separate guards, script shards and an aggregate runner. Any executed step failure still fails the real check.
+Require **CI required** only; no repository rulesets are changed. A workflow change needs green hosted verification on the PR head.
+
+By maintainer decision, **server, Android, iOS/Watch, Mac and the full scripts suite are manual-only**. Sharding improved execution time,
+but the post-merge documentation and Web verification PRs still took 20m35s and 21m13s because repeated Linux allocations queued for
+minutes. The merged server/Android manual run was green but took 23m14s including queues. These failed latency samples remain evidence,
+not passing acceptance claims (#1474). Keeping heavy lanes manual reduces shared runner pressure and preserves their complete tests.
+On a PR, their selector outputs are explicitly false: a skipped platform is not claimed as tested. Fast documentation and CI-regression
+checks still run on every PR. Full script-suite, catalog, translation/token and workflow-lint checks remain in the manual scripts lane.
+Image build/smoke and issue-link enforcement remain manual; release `v*` tag publishing is retained.
+
+Manual CI still uses independent reusable platform workflows and the tested **CI required** aggregator, rejecting failed, cancelled,
+missing or unexpectedly skipped selected jobs. Selected iOS/Watch contributes to that aggregate; Mac reports its real independent result
+without `continue-on-error`. All manual lane overrides remain available; manual duration is not a passing automatic PR budget claim.
+
+Manual `lanes` accepts `auto` (the default), `all`, or comma-separated `server,web,android,apple,runtimes,scripts`. Unknown names fail.
+`auto` compares with the PR base when present, otherwise `origin/main`; `base` can override that comparison. A dispatch of unchanged `main`
+with `auto` is not a full-platform check. Inspect selection with `python3 scripts/ci/paths.py --base origin/main`.
+
+```sh
+gh workflow run ci.yml --ref <branch>                             # auto
+gh workflow run ci.yml --ref <branch> -f lanes=server,web
+gh workflow run ci.yml --ref main -f lanes=all                     # includes Apple
+gh workflow run apple-test.yml --ref main -f lane=ios              # iOS and embedded Watch
+gh workflow run apple-test.yml --ref main -f lane=macos
+gh workflow run pr-needs-issue.yml --ref main -f pr_number=<number> # metadata enforcement
+```
 
 All PR code runs with `contents: read`, without persisted checkout credentials, private config or new secrets. Forks use `pull_request`,
-never privileged execution. The issue-link metadata workflow alone uses `pull_request_target`: it never checks out PR code and only reads
-metadata through the API. Image publishing has `packages: write` only in the non-PR job. One concurrency group per PR cancels stale runs.
+never privileged execution. Issue-link enforcement remains manual and runs its metadata-only write-token job only from the default branch.
+Image publishing has `packages: write` only in its publishing job. Concurrency keys use a stable workflow-file prefix, the qualified
+repository/branch, and lane. PRs use `pr-fast`; manual CI uses the requested `lanes` string. Use a stable comma-separated lane order when
+dispatching the same bundle. New work in the same group cancels stale pending/running work; different lanes and same-named fork branches
+remain independent. Direct and reusable Apple/server/Android/scripts calls share their file-specific lane group, never the CI caller's
+key: reusing only the caller-derived `github.workflow` would let a called workflow cancel its caller.
+
+Manual server and Android matrices allow at most **two** simultaneous shards each; the full scripts matrix allows **one**. All shards
+still execute with `fail-fast: false`; the caps trade manual wall-clock latency for available PR runner slots. These code-level controls
+apply to newly scheduled workflow versions, not retroactive cancellation of existing queued runs. Peak hosted queue time is a capacity
+issue, not test execution time. Do not change repository settings/rulesets or procure paid/self-hosted capacity as part of these controls.
+
+Server keeps four independent shards (at most two concurrent runners): browser/node, hub/voice/assistant, all other packages, and
+formatting/vet/build/Windows/SDK checks.
+Every package from `go list ./...` belongs to exactly one test shard, including future packages. Browser tests remain isolated from other
+packages. Go module/build caches are keyed by exact Go version, shard, dependency sums and source inputs, with same-shard fallback keys;
+`-count=1` keeps test execution uncached. Test-event summaries report the slowest real tests, rather than inferring runtime from `Sleep`
+inside fake-clock tests. The full manual scripts suite splits complete sorted discovery across two independently isolated jobs, scheduled
+one at a time; each has its own synthetic HOME and mock ports. Automatic PR checks run the fast CI-regression and documentation subset, not the full suite.
+Platform paths retain shared client contracts read by Go compatibility tests, and manual `auto` selects those dependencies.
+
+Android keeps five independently isolated shards, at most two concurrent: lint/build, core tests, two disjoint sorted feature-test shards,
+and platform/app tests. Module declarations are dynamically partitioned; unknown
+module prefixes use a fallback shard, while unsupported declarations fail rather than skip coverage. Every module's complete test selector
+retains all variants. Gradle workers remain bounded; build and public Robolectric dependency caches do not contain private config. Per-shard
+Gradle profiles and test/lint reports are uploaded for diagnosis. Local entry points without shard options still run complete verification.
+
+The target is **15 minutes from push start through CI required completion, including all queue time**, not 15 minutes per job. Record UTC
+push-start, workflow creation, job start/end and aggregate completion separately. Hosted queues are outside this repository's control;
+job timeouts are failure bounds, not evidence that tests completed within the target. Keep any lane that cannot meet measured acceptance
+manual-only rather than removing assertions or turning timeouts into passes. Execution improvements are tracked in #1422; the repeated
+queue correction and fresh post-merge acceptance are tracked in #1474. A single allocation removes repeated queue boundaries, but the
+initial hosted queue is still outside repository control: report any over-budget sample and never promise an unmeasured queue SLA.
 
 | Platform / reusable workflow | Local entry | Checks | Hosted runner | Planning duration (warm / cold) |
 | --- | --- | --- | --- | --- |
 | Server / `.github/workflows/server-test.yml` | `scripts/ci/server.sh` | gofmt, vet, complete Go tests against disposable Postgres 18, build, Windows cross-build/vet, extension schema/examples/SDK bundle, Go SDK tests; hub route/architecture, prompts and hub i18n guards are Go tests | ubuntu-latest | 8–15 / 15–30 min |
 | Web / `.github/workflows/web-test.yml` | `scripts/ci/web.sh` | npm ci, scoped ESLint, TypeScript, complete Vitest, production build and privacy | ubuntu-latest | 2–4 / 4–7 min |
 | Android / `.github/workflows/android-test.yml` | `scripts/ci/android.sh` | i18n/token checker tests, translations/literals, token ratchet, all-module lint and unit-test variants, debug APK | ubuntu-latest | 8–15 / 15–30 min |
-| Apple / `.github/workflows/apple-test.yml` | `scripts/ci/apple.sh ios` and `scripts/ci/apple.sh macos` | independent parallel lanes: required PersonaKit/iOS/Watch/HTML checks and temporarily non-blocking Mac build/unit tests; synthetic configuration, no distribution signing; real Mac failures remain visible | separate macos-26 runners, Xcode 26.0.1 (Swift 6.2) | measure each lane; prior combined estimate 20–35 / 35–60 min |
+| Apple / `.github/workflows/apple-test.yml` | `scripts/ci/apple.sh ios` and `scripts/ci/apple.sh macos` | manual-only PersonaKit/iOS/Watch/HTML and Mac build/unit tests; synthetic configuration, no distribution signing; real results remain visible | macos-26 runners, Xcode 26.0.1 (Swift 6.2) | outside the PR budget; queue and execution measured separately |
 | Scripts/docs / `.github/workflows/scripts-tests.yml` | `scripts/ci/scripts.sh` | every Python script test, doc/code paths and index, layout/shell/Python compatibility, privacy-rule regression, catalog/translation/token checks, actionlint, issue-link logic, website worker | ubuntu-latest | 2–4 / 4–7 min |
 | Runtimes / `.github/workflows/runtimes-test.yml` | `scripts/ci/runtimes.sh` | TypeScript SDK typecheck/test/portability, Agent SDK build, every runtime integration's npm tests | ubuntu-latest | 2–4 / 4–7 min |
 | Container / `.github/workflows/hub-image.yml` | `scripts/ci/hub-image.sh` | amd64 build; isolated Compose Postgres, HTTP/TLS health, pairing, web, admin isolation, file ownership/0600; non-PR publish remains amd64+arm64 | ubuntu-latest | 8–15 / 15–30 min |
 
-These are estimates, not measured success claims; use job timestamps and each script's PASS/FAIL/TIMEOUT durations for an actual run.
-Private-repository billed-minute planning uses Linux 1× and macOS 10×, rounded per job. With caches, plain docs-only work costs roughly
-4–6 Linux minutes; server-only 20–36 including image smoke; web-only 14–25 including image smoke; Android-only 20–36 including server
-compatibility tests; Apple-only **212–371** including server compatibility tests and guards; a cross-platform CI change roughly
-**232–409** warm or **410–710** cold. Prompt/protocol documentation selects server checks because Go tests read those inputs.
-Cancellation reduces wasted old runs, not already-used minutes.
-Public-repository standard hosted runners do not consume private Actions minutes. Billing multipliers/plans may change; check the account
-before budgeting. Apple is selected only by Apple inputs (Apple files, shared schema/spec, simulator/localization/Apple CI infrastructure),
-never by a plain docs/web/server edit. Go/npm/Gradle/SPM download/build caches are used; Gradle PR caches are read-only and no credentials
-are stored. The initial SPM/runtime download makes a cold Apple run materially slower. DerivedData/SPM cache improvements and further parallelization
-are tracked in #1214; the job split does not introduce cache-based test substitution.
+These planning estimates predate sharding and are not measured success claims; use job timestamps and each script's PASS/FAIL/TIMEOUT
+durations for an actual run. Parallelism reduces wall-clock latency but can increase total runner minutes through repeated setup and
+compilation. Cancellation reduces wasted old runs, not already-used minutes. Public-repository standard hosted runners do not consume
+private Actions minutes; billing multipliers and plans may change. Measure actual queue and runner time before budgeting.
+Apple is never automatically selected on a PR. Manual `auto` selects it by Apple/shared schema/spec/simulator/localization inputs,
+not by a plain docs/web/server edit. Go/npm/Gradle/SPM download/build caches are used; PR Gradle caches are read-only and no credentials
+are stored. The initial SPM/runtime download makes a cold Apple run materially slower. Further Apple cache/parallelization work remains
+tracked in #1214; moving it off the PR path does not introduce cache-based test substitution.
 
 Local prerequisites: Go from `server/go.mod`, Node from `web/.nvmrc`, Python 3.9+ (CI uses 3.11), Docker/Compose for server/image,
 `pip install -r scripts/ci/requirements.txt` and `go install github.com/rhysd/actionlint/cmd/actionlint@v1.7.12` for scripts, Bun 1.4.2 for
@@ -78,8 +126,8 @@ The stock iOS unit-test simulator is granted Reminders access for the synthetic 
 runs the existing EventKit create/list/update/delete round-trip against its disposable store. This does not use a personal device or account.
 Platform-gated and explicitly opt-in tests still report their own skips; they are not evidence of device/live integration coverage.
 On Linux, `test_hub_restart_mac.py` skips its three Mac-only cases; `test_persona_cutover.py` has six optional database/container cases
-without dedicated cutover inputs. The complete Python suite remains discovered and runs; no failing suite is excluded. CI's
-Postgres does run ordinary database tests (unlike the old database-free workflow). Specialized offline cutover fixtures requiring extra
+without dedicated cutover inputs. The complete manual Python lane still discovers and runs every suite; no failing suite is excluded.
+Manual server CI's Postgres does run ordinary database tests (unlike the old database-free workflow). Specialized offline cutover fixtures requiring extra
 container/migration inputs are not supplied. Private-value scanning of commits and PR metadata remains in `scripts/hooks/merge-pr.sh` on
 the merge machine; CI runs the generic privacy rules without those values. No baseline is raised to make a gate green.
 
@@ -214,9 +262,12 @@ xcrun simctl launch --terminate-running-process $SIM <bundle id> \
 - Browser (docs/plans/plan-ego-browser.md): `MOCK_BROWSER=missing|setup|ready` enables `ego` and MacBook (not installed / installed without first setup / ready, analytics on; `MOCK_BROWSER_ANALYTICS=off` disables analytics); Mac Studio disabled/uninstalled. "Install ego lite" / "Open ego lite" advance every `MOCK_COMPUTER_STEP` seconds. With `MOCK_EXTENSIONS=1`, list includes "Browser (ego lite)" (`-tab settings -openExtension ego`).
 - Cards on no session (#4059): `MOCK_SCRIPT_ASK=1` adds a question card with an empty `session_id`, like `personad ask` run outside herdr;
   Agents' needs-you list and the inbox both list it, and tapping it opens the card in a sheet (`-tab mail -openInboxAsk ix_script_ask` opens it directly).
+- Password card (`secret_run`, #1137, `docs/assistant/assistant.md` "Password card"): `MOCK_SECRET_RUN=pending|ran|withheld|long` puts it in Persona's main conversation: `pending` waits for the password (two commands on the Mac Studio); `ran` is answered, every command exited 0; `withheld` the same with the first command's output withheld (it held the password); `long` the second command failed with a long output (the app reads the whole result).
+  UI suite `SecretRunUITests` (`TEST_RUNNER_PERSONA_SECRET_RUN_HUB=<mock URL>` with `MOCK_SECRET_RUN=pending`): the commands verbatim, Run only once a password is typed, the answer carrying exactly that password.
 - Questions the assistant sees first (web #544): `MOCK_DELEGATE=1` marks `ix_tests` and `ix_release_delegate` ("整理发布说明") `delegating`, gives `ix_review_delegate` ("检查 PR #42 的改动") `delegate` context recommending one of its choices, and adds one delegated answer to `GET /interactions/history` in the hub's row shape (`{interaction, status, resolution, resolved_at}`).
   `GET /mock/delegate?answer=<id>` answers a looking card as the assistant (`interaction_resolved` with `answered_by` / `reason` / `answers`, then into history), `?handover=<id>` hands it to you (sent again without `delegating`, with context).
   `POST /interactions/{id}/reanswer` answers like the hub (409 not answered by the assistant, 400 no answers) and broadcasts `interaction_reanswered`; `GET /mock/reanswered` shows what arrived. There is no reset: restart the mock between runs.
+  On iOS / Mac, `-showAgentInfo YES` on a session lists its delegated answers in Session Info, and `-openChangeAnswer YES` opens Change Answer on the first answered card.
 - Unified main-chat entry (docs/assistant/unified-entry.md): `MOCK_TASKS=1` supplies a started plan, three tasks working/waiting/done, one Agent-start failure (red card and receipt, #1077),
   answered questions, receipts, direct task messages and a final unstarted plan. `MOCK_TASKS_AT=<minutes>` cuts newer items so earlier portions sit at the bottom without scrolling.
   `MOCK_TASKS_NO_ASKS=1` suppresses task-Agent questions above input. `MOCK_TASKS_DOCK=2` keeps two working tasks (two dock capsules, then two manual Agents); `=pair` one task + one manual Agent waiting for you; `=many` adds four tasks (dock wider than screen, "All" fixed left); `=multi` keeps only "Fix widget landscape crash" with two Agents (task-title ⌄ switch, `TaskSheetHeaderTests` with `TEST_RUNNER_PERSONA_TASK_MULTI=1`); `=long` keeps two overlong titles (parallel capsules, no overlapping truncation; `simctl ui <udid> content_size extra-extra-extra-large`, #3010). Default: four unfinished tasks + two manual Agents (#1113). `-showTaskDetail <to-do id>` (e.g. `todo_task_widget`) opens details; `-showTaskBoard YES` opens board.
@@ -616,7 +667,7 @@ Long-scroll uses `XCTOSSignpostMetric`; simulator reports duration, not dropped 
 ### Live updates don't interrupt interaction (`LiveUpdateTests`)
 
 Constant hub updates must preserve ongoing actions: Agents ⋯ menu scrolled to machine stays open without jumping, long-press menu remains, mid-list rows stay,
-search text/keyboard remain, swiped Close stays; expanded work card and full-screen screenshot in working chat remain open.
+search text/keyboard remain, a row's ⋯ menu stays open (#1244: rows no longer swipe); expanded work card and full-screen screenshot in working chat remain open.
 Each case records body counts/main-thread time per push (`PERF` logs/attachments, before/after in `docs/archive/apple/live-updates.md`).
 
 - Mock: `PORT=18797 MOCK_AGENTS=1 MOCK_CHURN=1 python3 scripts/mock/mock_hub.py &`; `GET /mock/churn?n=12&ms=400` pushes n rounds (each machine's session list—working text changes,
@@ -872,6 +923,9 @@ backtick paths/commands/config keys in `CLAUDE.local.md` (only ID/host/email/IP-
 (`app_store.feedback_email`, `privacy_url`, already public for App Store/OAuth). Docs say hub machine/another Mac;
 example machine ids `server` / `laptop`. `release.sh` scans before packaging;
 precommit hooks: `git config core.hooksPath scripts/hooks` (`pre-commit` staged content, `commit-msg` commit message, `pre-push` changed files/messages against `origin/master`).
+**Message lines** (#1107): `--message <file>` checks every line, Markdown headings included (a PR's title and body become the squash commit's message as they are).
+`commit-msg` passes `--commit-msg`, which checks only what `git commit` records: when git opened an editor it skips the comment lines (hints, branch, paths) and everything from the scissors line down (the `commit -v` diff);
+a `-m` / `-F` message keeps its `#` lines, so they are checked. It follows git's comment string and `commit.cleanup` (`commit_msg_lines`), but cannot see `--cleanup` or `-v` on the command line; `pre-push` still reads every recorded line.
 **Block again before merge** (#3696): `scripts/hooks/merge-pr.sh <PR number>` fetches the PR's base and head, runs `privacy_check.py --range origin/<base>..<head> --message <title/body>`,
 then only passes to `gh pr merge --squash --match-head-commit <head>` (exact scanned head merges) and deletes a same-repository branch through the API. `--range <base>..<head>` checks changed head-file contents and commit messages, not worktree, in seconds.
 Why not CI: private values come from local configs unavailable to CI, which only checks generic private-IP/email/npm rules; merge machine must possess values to block them.

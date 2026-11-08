@@ -11,6 +11,10 @@
 # a terminal, else keeps the default (lan) and says so.
 set -euo pipefail
 cd "$(dirname "$0")/../.."
+# All callers, including remote build computers, serialize against the hub's lock.
+if [ "${PERSONA_OPERATION_DEPLOY_LOCKED:-}" != 1 ]; then
+  exec python3 scripts/operations/operation_lock.py deploy -- bash "$PWD/scripts/deploy/deploy.sh" "$@"
+fi
 # Normalize caller overrides before reading deployment options; never print their values.
 eval "$(python3 scripts/persona_identity.py --env)"
 # The question and its explanations live in install.sh (the public installer asks the same).
@@ -272,10 +276,11 @@ install_program() {
     local root
     root=$(state_root)
     mkdir -p "$root/bin"
-    cp "$bin" "$root/bin/$name.new" && mv "$root/bin/$name.new" "$root/bin/$name"
+    local target="$root/bin/$name"
+    cp "$bin" "$target.new" && { [ ! -L "$target" ] || rm -f "$target"; } && mv "$target.new" "$target" || return 1
     python3 ../scripts/persona_identity.py --alias-binaries "$root/bin"
   else
-    remote_state "$PERSONA_HUB_SSH" "mkdir -p \"\$PERSONA_HOME/bin\" && cat > \"\$PERSONA_HOME/bin/$name.new\" && chmod 755 \"\$PERSONA_HOME/bin/$name.new\" && mv \"\$PERSONA_HOME/bin/$name.new\" \"\$PERSONA_HOME/bin/$name\" && persona_alias_binaries \"\$PERSONA_HOME/bin\"" < "$bin"
+    remote_state "$PERSONA_HUB_SSH" "mkdir -p \"\$PERSONA_HOME/bin\" && cat > \"\$PERSONA_HOME/bin/$name.new\" && chmod 755 \"\$PERSONA_HOME/bin/$name.new\" && { [ ! -L \"\$PERSONA_HOME/bin/$name\" ] || rm -f \"\$PERSONA_HOME/bin/$name\"; } && mv \"\$PERSONA_HOME/bin/$name.new\" \"\$PERSONA_HOME/bin/$name\" && persona_alias_binaries \"\$PERSONA_HOME/bin\"" < "$bin"
   fi
 }
 

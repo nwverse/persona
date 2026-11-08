@@ -49,7 +49,7 @@ Facts that determine the design:
 
 - **Main chat requires an online computer with Claude Code installed and logged in.** Even a direct-API provider used for main chat runs claude on a computer against its gateway (`assistant/models.go:950-982`: `finishModel` accepts only `launcher.<name>`). The Docker image has neither claude nor a local computer (`Dockerfile:79-81`, `PERSONA_LOCAL_NODE=0`), so main chat cannot initially run for NAS / Docker users.
 - **No endpoint currently answers "Can main chat work now, and what is missing?"** `POST /api/v1/assistant/warm` returns `{ok:true}` whether it succeeds or fails (`assistant/profile.go:283-289`). Launcher health checks default to off (`assistant/launcher_health.go:136`), so they cannot assess readiness for new users.
-- **Most parts already exist**: one-time pairing codes and hub-rendered QR codes (`hub/pairing.go:97`, 10 minutes, single-use), "Connect new device" on web and iOS, `/admin`'s add-computer flow (takes effect live, `hub/devices_link.go:314`, `addMachineLive`), self-signed TLS, one-word launcher tests (`assistant/models_launchers.go:748`), connection tests before saving (`assistant/models_probe.go:358`), adding from presets (`presetFill`), changing purposes (`assistant/models.go:821`), and Android's readiness checklist (`ReadinessRecords.kt`). What is missing is connecting them, making them available to logged-in apps, and providing machine-readable error codes.
+- **Most parts already exist**: one-time pairing codes and hub-rendered QR codes (`hub/pairing.go:97`, 10 minutes, single-use), "Connect new device" on web and iOS, `/admin`'s add-computer flow (takes effect live, `hub/devices_handover.go:202`, `addMachineLive`), self-signed TLS, one-word launcher tests (`assistant/models_launchers_routes.go:242`), connection tests before saving (`assistant/models_probe.go:358`), adding from presets (`presetFill`), changing purposes (`assistant/models.go:821`), and Android's readiness checklist (`ReadinessRecords.kt`). What is missing is connecting them, making them available to logged-in apps, and providing machine-readable error codes.
 - **The iOS `"ccc"` fallback** (`AssistantView.swift:738,921`) appears only when reading `GET /api/v1/assistant` fails. It is not a normal blocker; fix it alongside the work.
 - **The official extension marketplace is inaccessible**: the research-time 403 was probably caused by the development machine's network. Fix graceful degradation when it cannot be read, rather than treating failure as the default.
 
@@ -155,7 +155,7 @@ The web login page (`Login.tsx:45-48`) prefers "Scan with a logged-in phone to s
 This round's goal: **"Add computer" in the app is enough**, without `/admin`, enabling TLS first, or manually adding it beforehand.
 
 1. A logged-in full device calls `POST /api/v1/auth/pair-codes` with `add` (section 5.3). Hub adds a `kind: link` entry using the same logic as `/admin` (extract a shared function; `addMachineLive` needs no restart), and returns the computer pairing link.
-2. The computer stays **pending** until the user taps "This is my computer" in the app. Why: Persona-managed API keys currently go to "every node" (`assistant/models_launchers.go:25-29`; `pushManaged` sends to every online machine, `:166-177`). When a Docker hub has no local computer, `defaultAssistantMachine` falls back to the first machine (`hub/assistant_profile.go:117-118`). Without confirmation, a forwarded or screenshotted link would leak keys and run main chat on someone else's computer. A pending computer:
+2. The computer stays **pending** until the user taps "This is my computer" in the app. Why: Persona-managed API keys currently go to "every node" (`assistant/models_launchers.go:14-18`; `pushManaged` sends to every online machine, `assistant/models_launchers_push.go:84-112`). When a Docker hub has no local computer, `defaultAssistantMachine` falls back to the first machine (`hub/assistant_profile.go:117-118`). Without confirmation, a forwarded or screenshotted link would leak keys and run main chat on someone else's computer. A pending computer:
    - receives no Persona-managed keys (`pushManaged` filters it);
    - is excluded from assistant-machine selection (`defaultAssistantMachine` skips it; assistant `effective()` rejects it too, `assistant/profile.go:139-142`);
    - is absent from computer pickers for new Agents, dispatch, and to-dos;
@@ -178,8 +178,8 @@ P1: **computer initiates, phone allows**. Persona Link's first screen shows a QR
 #### No dependency on zsh
 
 - Do not mention "~/.zshrc" in onboarding. Move "Import from ~/.zshrc" to "Advanced" in **Settings › Model providers**; disable it with an explanation when there are no computers (today it spins forever).
-- Existing developer aliases / functions are still discovered and selectable (`node/sessions.go:1897`, `mergeLaunchers`); the onboarding wizard does not depend on them.
-- The default `claude` launcher currently always starts through `zsh -ic` (`node/assistant.go:636-638`), causing `command not found` for users whose PATH is in `.zprofile`. Prefer the absolute path found by `claudeExecutable()` (`node/managed.go:104`), then fall back to the shell. This overlaps with #2854 (bash launchers / bundled claude, claimed by someone else); coordinate in #2854 first rather than duplicating the work.
+- Existing developer aliases / functions are still discovered and selectable (`mergeLaunchers` in `node/launchers.go`); the onboarding wizard does not depend on them.
+- The default `claude` launcher currently always starts through `zsh -ic` (`assistantCLICommand` in `node/assistant_start.go`), causing `command not found` for users whose PATH is in `.zprofile`. Prefer the absolute path found by `claudeExecutable()` (`node/managed.go:104`), then fall back to the shell. This overlaps with #2854 (bash launchers / bundled claude, claimed by someone else); coordinate in #2854 first rather than duplicating the work.
 
 #### Detect first, then ask
 
@@ -242,7 +242,7 @@ Failures are cards, never toasts:
 
 - **Failure discovered after sending** (stale readiness): pin a card below that message (copy from 4.6 + button + "Details"); offer "Retry" on the message.
 - **Computer asleep / offline**: "Your MacBook is offline, possibly asleep. Open the lid to continue." Do not describe this as failure to connect to hub (Android currently does).
-- **Model errors**: Claude Code's synthesized replies such as "Not logged in" and "Invalid API key" no longer appear as ordinary bubbles. Show a "Model not connected: not logged in / incorrect key" card + "Fix it." Add `Not logged in` to `APIErrorMarkers` (`assistantwire/wire.go:383-384`); use the existing `user` for `turn_error_kind` (`proto/session.go:271-275`; `auth` is a health-check category, not a turn kind). `CutOff` also drives `TurnError` in hub's session list and scheduled-task / to-do handling (comment at `wire.go:380-382`), so this PR needs scheduled-task and to-do tests, not just a main-chat card.
+- **Model errors**: Claude Code's synthesized replies such as "Not logged in" and "Invalid API key" no longer appear as ordinary bubbles. Show a "Model not connected: not logged in / incorrect key" card + "Fix it." Add `Not logged in` to `APIErrorMarkers` (`assistantwire/handler.go:123-124`); use the existing `user` for `turn_error_kind` (`proto/session.go:271-275`; `auth` is a health-check category, not a turn kind). `CutOff` also drives `TurnError` in hub's session list and scheduled-task / to-do handling (comment at `handler.go:118-122`), so this PR needs scheduled-task and to-do tests, not just a main-chat card.
 
 **Scheduled tasks**: new hubs enable a weekday 09:00 morning briefing by default (`assistant/schedule.go:212`); with zero computers, it will always fail. Change this to skip while readiness is not `full`, record "Skipped: computer or model setup is incomplete," and send no failure notification. Mention it in main chat before the first run after setup. Do not change the default itself; old hubs are unaffected.
 
@@ -428,7 +428,7 @@ Lives under the assistant service, which already knows machine, launcher, and mo
 | `steps[].code` | Supplied for `todo` / `problem`, using codes in 4.6. `computer`: `no_machine`, `node_unreachable`, `machine_pending`, `node_outdated`; `claude`: `claude_missing`, `launcher_missing`; `model`: `not_logged_in`, `auth_failed`, `model_route`, `rate_limited`, `model_unverified`; `first_message`: `never_tried`, or the failure code |
 | `steps[].action.id` / `alt_actions[].id` | `add_computer`, `confirm_computer`, `wake_computer`, `install_claude`, `login_claude`, `connect_model`, `edit_provider`, `test_assistant`, `enable_tls`, `open_admin` |
 | `suggestions[]` | `local: true` opens client-local help without sending to a model; `needs` lists system permissions requested only on tap (client explains beforehand) |
-| `probe` | Present only with `?probe=1`; the `{ok, model, answer, millis, error}` from `POST /api/v1/launchers/{name}/check` (`assistant/models_launchers.go:748`) |
+| `probe` | Present only with `?probe=1`; the `{ok, model, answer, millis, error}` from `POST /api/v1/launchers/{name}/check` (`assistant/models_launchers_routes.go:242`) |
 | `dismissed` | User tapped "Later" |
 
 Evaluation order and data sources (all existing, plus one new node RPC):
