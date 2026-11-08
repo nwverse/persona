@@ -200,7 +200,7 @@ struct ExtensionDetailView: View {
                         Text("When off, it stops running and the connectors and other things it provides turn off too; its settings and secrets stay.")
                     }
                 }
-                if let auto = d.plugin.autoUpgrade { upgrades(d.plugin, auto: auto) }
+                if d.plugin.autoUpgrade != nil { upgrades(d.plugin) }
                 pages(d)
                 connectorSections(d)
                 if !d.readOnly && !d.form.isEmpty { form(d) }
@@ -313,11 +313,14 @@ struct ExtensionDetailView: View {
 
     /// A market plugin's upgrades (docs/extensions/extensions.md「自动升级」): its own switch, its newer version (opening the market's
     /// upgrade when it waits for the user) or what happened last.
-    @ViewBuilder private func upgrades(_ p: HubExtension, auto: Bool) -> some View {
+    @ViewBuilder private func upgrades(_ p: HubExtension) -> some View {
+        // Switched off, the extension is not upgraded: its switch shows off and waits (the hub keeps it) until it is on.
+        let paused = p.autoUpgradePaused != nil
         Section {
-            Toggle(isOn: Binding(get: { auto }, set: { on in Task { await page.setAutoUpgrade(on) } })) {
+            Toggle(isOn: Binding(get: { ExtensionText.autoUpgradeShown(p) }, set: { on in Task { await page.setAutoUpgrade(on) } })) {
                 Text("Auto-Update").lineLimit(1)
             }
+            .disabled(paused)
             .accessibilityIdentifier("plugin-auto-upgrade")
             if let u = p.upgrade {
                 if let action = ExtensionText.upgradeAction(u) {
@@ -342,7 +345,11 @@ struct ExtensionDetailView: View {
         } header: {
             SettingsHeading(String(localized: "Update [Extension Market Views 94996c]"))
         } footer: {
-            Text("When the market has a new version, it installs while the extension is idle, and asks you first if it wants more permissions. If it doesn't start after installing, it goes back to the previous version.")
+            if paused {
+                Text("Auto-update is paused while this extension is off. Turn it back on and your auto-update setting applies again.")
+            } else {
+                Text("When the market has a new version, it installs while the extension is idle, and asks you first if it wants more permissions. If it doesn't start after installing, it goes back to the previous version.")
+            }
         }
     }
 

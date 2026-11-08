@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/server/internal/extension"
+	"github.com/nwverse/persona/server/internal/i18n"
 )
 
 // upgradeMarket is a site market serving one plugin's versions: the index lists the last one published.
@@ -274,6 +275,101 @@ func TestExtensionAutoUpgradeNewChannel(t *testing.T) {
 	}
 	if up := upgradeOf(t, mux, phone); up["state"] != upgradeNeedsConsent || !strings.Contains(fmt.Sprint(up["added_permissions"]), "Example Chat") {
 		t.Fatalf("%v", up)
+	}
+}
+
+// Switched off, an extension is not upgraded, nor is the user told of a version asking for more: its page says auto-upgrade
+// is paused and keeps its own switch, which disabling does not change. Switched on again, that switch applies as before.
+func TestExtensionAutoUpgradePausedWhileDisabled(t *testing.T) {
+	paused := i18n.T(i18n.Default, "hub-extension_autoupgrade.paused_disabled")
+	for _, tc := range []struct {
+		name string
+		own  bool // its own switch, set before it is switched off
+		more bool // the newer version asks for more permissions
+		// Once it is on again and the hub has looked: the version installed and the newer one's state ("" when
+		// none is left).
+		version, state string
+	}{
+		{name: "switch on: upgraded once on again", own: true, version: "1.1.0"},
+		{name: "switch off: stays off", own: false, version: "1.0.0", state: upgradeOff},
+		{name: "asks for more: the user is told once on again", own: true, more: true, version: "1.0.0", state: upgradeNeedsConsent},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h, mux, phone, mk, dir, mid := upgradeHub(t)
+			ctx := context.Background()
+			u := h.extensionUpgrades()
+			detail := func() map[string]any {
+				t.Helper()
+				code, d := call(t, mux, "GET", "/api/v1/plugins/example-ui/-/", phone, "")
+				if code != 200 {
+					t.Fatalf("detail: %d %v", code, d)
+				}
+				return d
+			}
+			stored := func() extensionUpgradeSettings {
+				var s extensionUpgradeSettings
+				if _, err := h.store.Setting(ctx, extensionUpgradesKey, &s); err != nil {
+					t.Fatal(err)
+				}
+				return s
+			}
+			switchOn := func(on bool) {
+				t.Helper()
+				if code, out := call(t, mux, "PUT", "/api/v1/plugins/example-ui/-/enabled", phone, fmt.Sprintf(`{"enabled": %t}`, on)); code != 200 {
+					t.Fatalf("enabled %t: %d %v", on, code, out)
+				}
+			}
+
+			if !tc.own {
+				call(t, mux, "PUT", "/api/v1/plugins/example-ui/-/auto-upgrade", phone, `{"auto": false}`)
+			}
+			switchOn(false)
+			waitLong(t, "example-ui switched off", func() bool { return detail()["status"] == extensionDisabled })
+			setUIVersion(t, dir, "1.1.0")
+			if tc.more {
+				editManifest(t, dir, func(m map[string]any) {
+					m["permissions"] = map[string]any{"launcher_keys": true, "network": []string{"api.example.com"}}
+				})
+			}
+			mk.publish(dir)
+			if _, err := h.marketRead(ctx, mid); err != nil {
+				t.Fatal(err)
+			}
+
+			// Off: not upgraded, nobody told, the page says why and keeps the switch.
+			u.upgrade(ctx)
+			u.upgrade(ctx)
+			if v := installedVersion(h); v != "1.0.0" {
+				t.Fatalf("upgraded while switched off: %s", v)
+			}
+			if up := upgradeOf(t, mux, phone); up["state"] != upgradeOff || up["detail"] != paused {
+				t.Fatalf("while off: %v", up)
+			}
+			d := detail()
+			if d["auto_upgrade"] != tc.own || d["auto_upgrade_paused"] != autoUpgradePausedDisabled || d["upgrade_note"] != nil {
+				t.Fatalf("while off: auto_upgrade %v, paused %v, note %v", d["auto_upgrade"], d["auto_upgrade_paused"], d["upgrade_note"])
+			}
+			if s := stored(); slices.Contains(s.Off, "example-ui") == tc.own || s.Notified["example-ui"] != "" {
+				t.Fatalf("switching it off changed the settings: %+v", s)
+			}
+
+			// On again: its own switch applies.
+			switchOn(true)
+			waitLong(t, "example-ui running", func() bool { return detail()["status"] == "running" })
+			waitLong(t, "the look once on again", func() bool {
+				u.upgrade(ctx)
+				d = detail()
+				up, _ := d["upgrade"].(map[string]any)
+				state, _ := up["state"].(string)
+				return d["version"] == tc.version && state == tc.state
+			})
+			if d["auto_upgrade"] != tc.own || d["auto_upgrade_paused"] != nil {
+				t.Fatalf("on again: auto_upgrade %v, paused %v", d["auto_upgrade"], d["auto_upgrade_paused"])
+			}
+			if told := stored().Notified["example-ui"] == "1.1.0"; told != tc.more {
+				t.Fatalf("told of the version asking for more: %v", told)
+			}
+		})
 	}
 }
 

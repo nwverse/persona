@@ -17666,6 +17666,29 @@
       },
       "extractionState" : "manual"
     },
+    "Auto-update is paused while this extension is off. Turn it back on and your auto-update setting applies again." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Auto-update is paused while this extension is off. Turn it back on and your auto-update setting applies again."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "この拡張機能がオフの間、自動アップデートは一時停止します。オンに戻すと、元の自動アップデート設定に戻ります。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "扩展关闭期间暂停自动升级。重新打开扩展后，恢复你原来的自动升级设置。"
+          }
+        }
+      },
+      "extractionState" : "manual"
+    },
     "Auto-update won't install this version: %@. If you're sure it's fine, update manually." : {
       "localizations" : {
         "en" : {

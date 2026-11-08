@@ -16,6 +16,7 @@
   "manage_markets": "Manage markets",
   "upgrade_title": "Upgrades",
   "upgrade_footer": "When the market has a new version, it's installed while the extension is idle. If it asks for more permissions, you're asked first. A version that fails to start rolls back to the previous one.",
+  "upgrade_paused_footer": "Auto-upgrade is paused while this extension is off. Turn the extension back on and your auto-upgrade setting applies again.",
   "auto_upgrade": "Auto-upgrade",
   "new_version": "New version {version}",
   "saved_restart": "Saved. The extension will restart.",

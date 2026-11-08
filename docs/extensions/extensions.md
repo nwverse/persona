@@ -915,19 +915,23 @@ For extensions installed from an extension marketplace (source `market:<marketpl
 
 - **Reading marketplaces**: once a minute the hub checks which marketplaces are due: last read 6 hours ago (plus a random 0–30 minutes per marketplace to spread them out); failed reads back off 15 minutes, 30 minutes… doubling, up to 6 hours.
   The log gets one line when a marketplace becomes unreadable and one when it recovers, not one every time. When the app opens the catalog (`catalog`), indexes older than 6 hours are still re-read in the background as before.
-- **When to upgrade**: the new version is higher than the installed one, usable on this hub (has a package for its platform, `engines` satisfied), both the master switch and this extension's own switch are on (both on by default),
+- **When to upgrade**: the new version is higher than the installed one, usable on this hub (has a package for its platform, `engines` satisfied), the extension is enabled, both the master switch and this extension's own switch are on (both on by default),
   **it asks for no more than the user approved** (`MorePermissions` is false; the permission summary equals `granted_digest`), and the extension is idle: no calls in flight, no open HTTP requests or WebSockets
   (a connector always holds its extension, which does not count as in use), and the assistant is not working (its next step might call this extension's tools). If busy, check again the next minute.
 - **How to upgrade**: the same path as a manual upgrade: download per the marketplace index, verify sha256, preview, then upgrade (in the audit log the actor is `自动升级` (auto-upgrade)); stop the old, start the new, and if the new version does not come up within 30 seconds, roll back to the old one (`watchUpgrade`, actor `hub` in the audit log).
   **A rolled-back version is recorded as skipped** and never auto-installed again (regardless of who upgraded it originally), until the marketplace has a higher version. A version that failed to install (download or verification failed) is retried the next time the marketplace yields a new index.
+- **Disabled extensions** (#1525): while an extension is turned off, the hub neither upgrades it nor tells the user of a version that asks for more; its newer version shows `state` `off` with a `detail` saying it is paused,
+  and `ExtensionView.auto_upgrade_paused` is `disabled`. A disabled extension has no process, so `watchUpgrade` could not tell whether the new version comes up, and a broken one would only show itself when the user turns the extension back on.
+  Disabling does not write to the switches: `auto_upgrade` keeps the extension's own setting (and `PUT …/auto-upgrade` still changes it), and once the extension is turned back on that setting applies again at the next check.
 - **More permissions**: no upgrade; the user is told once ("Example UI 1.2.0 needs one more permission: broader network access (api.example.com), go confirm"), and the upgrade happens only after the user confirms in the app
   (through the marketplace preview and upgrade, with the permission summary).
 - **Telling the user**: success, rollback, waiting for confirmation and install failure are all recorded on the extension (`ExtensionView.upgrade_note`); online apps receive `{"type": "extension_upgrade", "extension", "note"}`;
   the first three also send a quiet push (`thread-id` `extension_upgrade`, `interruption-level` `passive`, with `extension_upgrade: {extension, kind, version}`).
 - **Where it is stored**: the hub setting `plugin_upgrades` (master switch, extensions switched off, skipped versions, versions already announced, each extension's last result); no new table.
 
-`ExtensionView` has three extra fields for marketplace extensions: `auto_upgrade` (this extension's switch), `upgrade` (when there is a new version: `{id, name, market, from, to, state, added_permissions?, detail?}`,
-where `state` is `available` installs at the next check / `waiting_idle` waiting for idle / `needs_permission` waiting for you to confirm / `off` switch is off / `skipped` was rolled back / `failed` did not install / `incompatible` cannot be installed),
+`ExtensionView` has these extra fields for marketplace extensions: `auto_upgrade` (this extension's switch), `auto_upgrade_paused` (why that switch does not apply now; only `disabled`: the extension is turned off; omitted otherwise),
+`upgrade` (when there is a new version: `{id, name, market, from, to, state, added_permissions?, detail?}`,
+where `state` is `available` installs at the next check / `waiting_idle` waiting for idle / `needs_permission` waiting for you to confirm / `off` switch is off, or the extension is disabled / `skipped` was rolled back / `failed` did not install / `incompatible` cannot be installed),
 and `upgrade_note` (`{kind: upgraded | rolled_back | needs_permission | failed, from, to, detail?, at}`).
 
 **Endpoints** (full-access devices; only present when `features` includes `extension_auto_upgrade`):
@@ -2242,7 +2246,8 @@ Views, components, actions, responses, placements and context all use schema-gen
   retaining hub rejection reasons in the form (#1373: https, `github:owner/repo`, `git:<address>[#branch]`; git uses the hub machine's SSH credentials, no token).
   Logic in `ExtensionMarketModel.swift` (`ExtensionMarketModel`, `MarketExtensionModel`), pages in `ExtensionMarketViews.swift`.
 - Auto-upgrade (#1699, "Auto-upgrade"): details for marketplace-installed extensions (with `ExtensionView.auto_upgrade`) add an **Update** section below **Enabled**:
-  - **Auto-Update** switch (`PUT …/{id}/-/auto-upgrade`).
+  - **Auto-Update** switch (`PUT …/{id}/-/auto-upgrade`). With `auto_upgrade_paused` (the extension is turned off) it shows off and greyed out, and the footer says auto-update is paused until the extension is on again,
+    when the extension's own setting comes back (web, iOS / Mac / Vision and Android alike; mock hub `MOCK_PLUGIN_UPGRADE=disabled`).
   - With a new version, "New version 1.1.0" plus small status text: auto-update when idle / auto-update off / needs one more permission: … (orange) / last version failed to start, no further auto-update (orange) / failed to install / incompatible.
     Actionable rows end with **Review** or **Update**, opening the marketplace upgrade page with permissions and confirmation.
   - Without a new version, show the last result: "Auto-updated to 1.0.0 (was 0.9.0) · 3 hours ago", or "1.1.0 failed to start, reverted to 1.0.0".
