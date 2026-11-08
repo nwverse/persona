@@ -1035,6 +1035,9 @@ final class AppModel {
 
     func isSubscribed(_ key: SessionKey) -> Bool { subscribers[key] != nil }
 
+    /// Check this view's live owner, not an environment value captured before an asynchronous completion.
+    func isSubscribed(_ key: SessionKey, by owner: UUID) -> Bool { subscribers[key]?.contains(owner) == true }
+
     // MARK: Terminal streams
 
     /// What a group's hub listed in its hello (`terminal_stream`: the terminal tab can subscribe to live frames).

@@ -2,6 +2,10 @@
 
 Pitfalls, odd behavior and the decisions made at the time (formerly "Lessons" in `CLAUDE.md`; index in `docs/lessons/README.md`). Add new lessons to the relevant section, or create one if none fits.
 
+## Newest geometry after programmatic scrolling (#1211)
+
+A frozen transcript can reveal its withheld rows during Jump to Latest and move UIKit to the end without another SwiftUI scroll-geometry report. The real failure trace had offset -10 pt and adjusted top inset 10 pt (gap 0), while the follow state kept gap 1480 and `near=false`. A visible reply and following mode do not prove that the position state is current. Reconcile from the actual scroll container when the animation ends, keep the existing tolerance and reading intent, and skip a completion without this view's live subscription owner or without a measured container. Query the owner at completion: a captured visibility environment value can be stale, and another visible owner's subscription must not keep a hidden view eligible. Never fix the regression by forcing `near=true` or relaxing the UI assertion. For repeated UI failures, stop at the first failure and resolve the app container after testing: reinstall can change its data container, and a later successful launch overwrites the trace.
+
 ## Shell regression fixtures and simulated entitlements (#1117)
 
 - A machine's token summary and its navigation card can repeat the same text. Scope the tap to the actual card button, not an application-wide text query. Choose a known multi-agent demo fixture before testing sibling selection, and expand a folded chat title before looking for its tabs. The home needs-you list intentionally shows at most three rows: verify the overflow route when Inbox actions are not among them, rather than assuming every kind is visible. Tests expecting the Agents list must clear `dev.openChat` at launch: opening a new assistant conversation does not discard the Agent chat a previous test correctly restored.
