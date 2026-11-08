@@ -525,6 +525,13 @@ nonisolated struct APIClient: Sendable {
         try await get("/api/v1/machines/\(machine)/dirs", query: ["path": path])
     }
     func reconnect(machine: String) async throws { try await post("/api/v1/machines/\(machine)/reconnect") }
+    /// Renames the computer (hubs with feature `machine_rename`, docs/protocol/protocol.md "Renaming a computer"): "" is its id
+    /// again; returns the name the hub calls it now. Every client gets it from the next `machines` push.
+    func renameMachine(_ machine: String, to name: String) async throws -> String {
+        struct Body: Encodable { var name: String }
+        struct Renamed: Decodable { var name: String }
+        return try JSON.decoder.decode(Renamed.self, from: await request("PUT", "/api/v1/machines/\(machine)/name", body: Body(name: name))).name
+    }
     /// The hub installs its own personad build on the machine and reconnects; progress comes with the machine list.
     func deploy(machine: String) async throws { try await post("/api/v1/machines/\(machine)/deploy") }
 

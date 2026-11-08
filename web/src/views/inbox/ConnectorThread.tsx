@@ -10,7 +10,7 @@ import {
   reachMessage, replyInThread, reviewLabel, startsGroup, type ThreadChat, type ThreadMedia, type ThreadMessage, type ThreadPage,
 } from "../../lib/connectors";
 import { connectorReference, itemPath, itemRequest, shortTime, tightCJK, withToken, type InboxItem } from "../../lib/inbox";
-import { useItemManager, withManager } from "../../lib/manager-choice";
+import { defaultManager, useItemManager, withManager } from "../../lib/manager-choice";
 import { openLink } from "../../lib/links";
 import { t } from "../../i18n";
 import { Button, cx, Loading, Spinner, toast } from "../../ui/atoms";
@@ -99,9 +99,11 @@ export function ConnectorBody({ item }: { item: InboxItem }) {
 
   if (!page && failure === null) return <div className="p-5"><Loading label={t("inbox-connectorthread.loading", { name: item.account_name || id })} /></div>;
   if (!page || (!isChatThread(page.chat) && !isGitHubThread(page.chat))) return <ConnectorText item={item} problem={page ? undefined : failure || undefined} />;
+  // Drafts, quotes and pending-send state belong to this manager's item and thread.
+  const composerKey = JSON.stringify([manager || defaultManager(), item.id, id, thread]);
   return isGitHubThread(page.chat)
-    ? <GitHubThread id={id} item={item} page={page} older={older} onOlder={() => void loadOlder()} onSend={send} />
-    : <ChatThread id={id} page={page} older={older} onOlder={() => void loadOlder()} onReach={reach} onSend={send} />;
+    ? <GitHubThread key={composerKey} id={id} item={item} page={page} older={older} onOlder={() => void loadOlder()} onSend={send} />
+    : <ChatThread key={composerKey} id={id} page={page} older={older} onOlder={() => void loadOlder()} onReach={reach} onSend={send} />;
 }
 
 // ── what the hub collected (no thread page) ──────────────
@@ -160,20 +162,32 @@ function ThreadComposer({ placeholder, replyTo, onClearReply, onSend, note }: {
 }) {
   const [text, setText] = useState("");
   const [sending, setSending] = useState(false);
+  const sendPending = useRef(false);
+  const draftRevision = useRef(0);
   const ref = useRef<HTMLTextAreaElement>(null);
+  useLayoutEffect(() => {
+    draftRevision.current++;
+  }, [replyTo]);
   useEffect(() => {
     if (replyTo) ref.current?.focus();
   }, [replyTo]);
   const submit = async () => {
     const body = text.trim();
-    if (!body || sending) return;
+    if (!body || sendPending.current) return;
+    sendPending.current = true;
+    const submittedRevision = draftRevision.current;
     setSending(true);
-    const ok = await onSend(body, replyTo ?? undefined);
-    setSending(false);
-    if (ok) {
-      setText("");
-      onClearReply?.();
-      if (ref.current) ref.current.style.height = "auto";
+    try {
+      const ok = await onSend(body, replyTo ?? undefined);
+      // Typing or changing a quote starts a new draft, even if its words later match the sent message.
+      if (ok && draftRevision.current === submittedRevision) {
+        setText("");
+        onClearReply?.();
+        if (ref.current) ref.current.style.height = "auto";
+      }
+    } finally {
+      sendPending.current = false;
+      setSending(false);
     }
   };
   return (
@@ -197,6 +211,7 @@ function ThreadComposer({ placeholder, replyTo, onClearReply, onSend, note }: {
             aria-label={placeholder}
             placeholder={placeholder}
             onChange={(e) => {
+              draftRevision.current++;
               setText(e.target.value);
               e.target.style.height = "auto";
               e.target.style.height = `${Math.min(e.target.scrollHeight, 140)}px`;

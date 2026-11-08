@@ -451,6 +451,9 @@ final class AppModel {
         // docs/operations/network.md). Base64: a launch argument that looks like a dictionary is read as a property list.
         if let s = UserDefaults.standard.string(forKey: "seedSSHTunnel"), !r.hubs.isEmpty, let json = Data(base64Encoded: s),
            let route = try? JSONDecoder().decode(SSHRoute.self, from: json) { r.hubs[0].ssh = route }
+        // `-seedLocalProxy <base64 of the LocalProxyRoute JSON>`: the first hub's local proxy, the same way.
+        if let s = UserDefaults.standard.string(forKey: "seedLocalProxy"), !r.hubs.isEmpty, let json = Data(base64Encoded: s),
+           let route = try? JSONDecoder().decode(LocalProxyRoute.self, from: json) { r.hubs[0].localProxy = route }
         registry = HubGrouping.regroup(r)
         saveRegistry(registry)
         buildLinks()
@@ -2605,6 +2608,20 @@ final class AppModel {
         edit(machine: g.machineRef) { s in if s.spaceID == g.spaceID { s.spaceName = name } }
         pinsStore(g.group)?.renameSpace(oldKey, to: newKey)
         do { try await api.renameSpace(machine: g.machineID, workspaceID: g.spaceID, name: name) } catch { show(error) }
+        await refresh()
+    }
+
+    /// The hub renames computers (feature `machine_rename`): machine details offer it.
+    func canRenameMachine(_ group: String) -> Bool { features(group).contains("machine_rename") }
+
+    /// Renames a computer on its hub ("" is its id again); the hub's `machines` push brings the new name everywhere.
+    func renameMachine(_ ref: MachineRef, to name: String) async {
+        let name = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let api = api(ref.group), name != machine(ref)?.name else { return }
+        do {
+            let shown = try await api.renameMachine(ref.id, to: name)
+            toast = Toast(String(localized: "Renamed to \(shown)"), style: .success)
+        } catch { show(error) }
         await refresh()
     }
 
