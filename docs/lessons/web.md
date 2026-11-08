@@ -3,7 +3,7 @@
 ## Text page revisions and complete reads (#1297)
 
 - Check each known page revision before appending; retain known revisions across unversioned pages, but remove the aggregate revision when any accepted page lacks metadata. Legacy compatibility cannot prove a snapshot.
-- A complete-read helper must reject page failures, caps and retired owners instead of resolving the loaded prefix. Share the actual pending page result with concurrent readers, and scope callbacks to machine, path, working directory and reload so an old reader cannot borrow the new file. Keep an ordinary failed page retryable at its original offset; a known revision change requires a fresh read from the beginning.
+- A complete-read helper must reject page failures, caps and retired owners instead of resolving the loaded prefix. Share the actual pending page result with concurrent readers, and scope callbacks to machine, path, working directory and reload so an old reader cannot borrow the new file. Keep an ordinary failed page retryable at its original offset; a known revision change requires a fresh read from the beginning. Explicit bounded previews need a separate completion flag, preserving a deliberate CSV/TSV cap without permitting partial exports. Go omits an empty text field: complete zero-byte text metadata is a valid empty file, while arbitrary missing content is not.
 
 ## Mail send admission must precede React updates (#1251)
 

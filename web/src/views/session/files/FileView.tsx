@@ -122,6 +122,8 @@ export interface FileDoc {
   next: number;
   loadingMore: boolean;
   more: () => Promise<boolean>;
+  /** A bounded preview: a cap may return a prefix explicitly marked incomplete. Other failures reject. */
+  read: (cap: number) => Promise<{ text: string; complete: boolean }>;
   /** Returns complete text, or rejects on change, failure, retirement or a read cap. */
   all: (cap?: number) => Promise<string>;
   reload: () => void;
@@ -144,8 +146,12 @@ export function useFileDoc(mid: string, path: string, cwd?: string): FileDoc {
     api<FileContent>(fileURL(s.mid, s.path, s.cwd), { signal: ac.signal })
       .then((f) => {
         if (!s.active || gen !== s.gen) return;
+        // Go omits an empty Text field. Only complete zero-byte text metadata can stand in for that missing field.
+        const emptyText = f.text === undefined && f.size === 0 && !f.offset && !f.next && !f.truncated && !f.is_dir && !f.stream && f.data === undefined
+          && (f.mime?.startsWith("text/") || /^application\/(?:[\w.-]+\+)?json(?:;|$)/.test(f.mime ?? ""));
+        const file = emptyText ? { ...f, text: "" } : f;
         Object.assign(s, {
-          file: f, pages: typeof f.text === "string" ? [f.text] : [], next: f.next ?? 0,
+          file, pages: typeof file.text === "string" ? [file.text] : [], next: f.next ?? 0,
           revision: f.revision || "", complete: !f.next && !f.truncated,
         });
         bump();
@@ -198,23 +204,31 @@ export function useFileDoc(mid: string, path: string, cwd?: string): FileDoc {
     return s.pending;
   }, [s]);
 
-  const all = useCallback(async (cap = 64 << 20) => {
+  const read = useCallback(async (cap: number) => {
     const gen = s.gen;
     const check = () => {
       if (!s.active || gen !== s.gen) throw new DOMException("aborted", "AbortError");
       if (s.changed) throw new Error(t("session-files-fileview.file_changed_detail"));
     };
     check();
-    while (s.next > 0) {
-      if (s.next >= cap) throw new Error(t("session-files-fileview.read_incomplete"));
+    if (typeof s.file?.text !== "string") throw new Error(t("session-files-fileview.read_incomplete"));
+    while (s.next > 0 && s.next < cap) {
       const accepted = await (s.pending ?? more()); // share the admitted page, including its failure
       check();
       if (!accepted) throw new Error(s.pageError || t("session-files-fileview.read_incomplete"));
     }
     check();
-    if (!s.complete || typeof s.file?.text !== "string") throw new Error(t("session-files-fileview.read_incomplete"));
-    return s.pages.join("");
+    if (!s.complete && s.next <= 0) throw new Error(t("session-files-fileview.read_incomplete"));
+    return { text: s.pages.join(""), complete: s.complete };
   }, [more, s]);
+
+  const all = useCallback(async (cap = 64 << 20) => {
+    const gen = s.gen;
+    const result = await read(cap);
+    if (!s.active || gen !== s.gen) throw new DOMException("aborted", "AbortError");
+    if (!result.complete) throw new Error(t("session-files-fileview.read_incomplete"));
+    return result.text;
+  }, [read, s]);
 
   const reload = useCallback(() => {
     s.active = false; // retire even a response delivered before React commits the reload
@@ -222,7 +236,7 @@ export function useFileDoc(mid: string, path: string, cwd?: string): FileDoc {
     setReloads((n) => n + 1);
   }, [s]);
   const text = useMemo(() => s.pages.join(""), [s.pages]);
-  return { file: s.file, error: s.error, changed: s.changed, pageError: s.pageError, text, next: s.next, loadingMore: !!s.pending, more, all, reload };
+  return { file: s.file, error: s.error, changed: s.changed, pageError: s.pageError, text, next: s.next, loadingMore: !!s.pending, more, read, all, reload };
 }
 
 // ── the viewer ────────────────────────────────────────────
@@ -687,11 +701,11 @@ function MarkdownView({ doc, file, mid, onOpenPath }: { doc: FileDoc; file: File
 
 // ── tables ────────────────────────────────────────────────
 
-/** Reads a table file whole (a CSV's remaining pages, a workbook's bytes) and parses it off the main thread. */
+/** Reads a bounded CSV/TSV preview or a workbook's whole bytes and parses it off the main thread. */
 function SheetLoader({ mid, cwd, doc, file, onDownload }: { mid: string; cwd?: string; doc: FileDoc; file: FileContent; onDownload: () => void }) {
   const [state, setState] = useState<{ sheets?: Sheet[]; error?: string; note?: string }>({});
   const [attempt, retry] = useReducer((n: number) => n + 1, 0);
-  const { all } = doc;
+  const { read } = doc;
   useEffect(() => {
     const ac = new AbortController();
     setState({});
@@ -699,9 +713,9 @@ function SheetLoader({ mid, cwd, doc, file, onDownload }: { mid: string; cwd?: s
       let req: SheetRequest;
       let note = "";
       if (typeof file.text === "string") {
-        const text = await all(MAX_TABLE_TEXT);
+        const { text, complete } = await read(MAX_TABLE_TEXT);
         if (ac.signal.aborted) return;
-        if (text.length < file.size && file.size > MAX_TABLE_TEXT) note = t("session-files-fileview.sheet_partial", { size: bytes(text.length) });
+        if (!complete) note = t("session-files-fileview.sheet_partial", { size: bytes(text.length) });
         req = { name: file.name, text };
       } else {
         if (file.size > MAX_TABLE_BYTES) throw new Error(t("session-files-fileview.sheet_too_large", { size: bytes(file.size) }));
@@ -713,7 +727,7 @@ function SheetLoader({ mid, cwd, doc, file, onDownload }: { mid: string; cwd?: s
       if (!isAbort(e) && !ac.signal.aborted) setState({ error: errorText(e) });
     });
     return () => ac.abort();
-  }, [mid, cwd, file, all, attempt]);
+  }, [mid, cwd, file, read, attempt]);
   // a Numbers file SheetJS cannot read still has the preview Numbers wrote into it
   if (state.error && extOf(file.name) === "numbers") return <OfficeView mid={mid} cwd={cwd} file={file} onDownload={onDownload} />;
   if (state.error) return <Empty icon="info" title={t("session-files-fileview.sheet_open_failed")} detail={state.error}

@@ -13,6 +13,7 @@ vi.hoisted(() => {
 });
 import { t } from "../../../i18n";
 import type { FileContent } from "../../../lib/files";
+import { bytes } from "../../../lib/format";
 
 const pages: ((path: string) => Promise<unknown>)[] = [];
 const requested: string[] = [];
@@ -131,6 +132,15 @@ describe("FileView download", () => {
     await openAndDownload();
     expect(blobs).toHaveLength(1);
     expect(await readBlob(blobs[0])).toBe("all of it\n");
+    expect(clicked).toEqual([{ href: "blob:x", name: "big.log" }]);
+  });
+
+  it.each(["empty-r1", undefined])("downloads an empty text file when the node omits text (revision %s)", async (revision) => {
+    // Go's omitempty removes text and data from a successful zero-byte text response.
+    pages.push(async () => text({ size: 0, mime: "text/plain; charset=utf-8", offset: 0, revision }));
+    await openAndDownload();
+    expect(blobs).toHaveLength(1);
+    expect(blobs[0].size).toBe(0);
     expect(clicked).toEqual([{ href: "blob:x", name: "big.log" }]);
   });
 
@@ -256,6 +266,42 @@ describe("FileView paging recovery", () => {
     expect(host.textContent).toContain("synthetic");
     expect(host.textContent).toContain("42");
     expect(host.textContent).not.toContain(t("session-files-fileview.sheet_open_failed"));
+  });
+
+  it("keeps a capped CSV preview explicitly partial without requesting the rest", async () => {
+    const chunk = "a,b\n".repeat(1 << 19); // the node's 2 MiB pages
+    let parsed = 0;
+    vi.stubGlobal("Worker", class {
+      onmessage: ((event: MessageEvent) => void) | null = null;
+      terminate() {}
+      postMessage(req: { text: string }) {
+        parsed = req.text.length;
+        queueMicrotask(() => this.onmessage?.({ data: { sheets: [{ name: "Demo", rows: [["synthetic", "42"]], cols: 2, merges: [], widths: [], cut: false }] } } as MessageEvent));
+      }
+    });
+    for (let i = 0; i < 32; i++) {
+      const offset = i * chunk.length;
+      pages.push(async () => text({ path: "/w/example.csv", name: "example.csv", mime: "text/csv", size: 66 << 20, text: chunk, offset, next: offset + chunk.length, revision: "r1", truncated: true }));
+    }
+    await open("/w/example.csv");
+    expect(parsed).toBe(64 << 20);
+    expect(host.textContent).toContain("synthetic");
+    expect(host.textContent).toContain("42");
+    expect(host.textContent).toContain(t("session-files-fileview.sheet_partial", { size: bytes(64 << 20) }));
+    expect(host.textContent).not.toContain(t("session-files-fileview.sheet_open_failed"));
+    expect(requested).toHaveLength(32);
+    expect(requested[31]).toContain(`offset=${62 << 20}`);
+  });
+
+  it("rejects a changed CSV page before parsing even a bounded preview", async () => {
+    const csv = (over: Partial<FileContent>) => text({ path: "/w/example.csv", name: "example.csv", mime: "text/csv", size: 66 << 20, ...over });
+    pages.push(async () => csv({ text: "name,value\n", next: 11, revision: "r1" }));
+    pages.push(async () => csv({ text: "changed,42\n", next: 22, revision: "r2" }));
+    await open("/w/example.csv");
+    expect(host.textContent).toContain(t("session-files-fileview.file_changed"));
+    expect(host.textContent).not.toContain("changed,42");
+    expect(byLabel(t("session-files-fileview.download"))?.disabled).toBe(true);
+    expect(requested).toHaveLength(2);
   });
 
   it("stops automatic line seeking after a page failure until retry", async () => {

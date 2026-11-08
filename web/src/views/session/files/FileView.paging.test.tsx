@@ -38,6 +38,7 @@ async function resolve(index: number, file = page()) { await act(async () => req
 async function open(props = {}) { await act(async () => root.render(<Harness {...props} />)); }
 function more() { let pending: Promise<boolean>; act(() => { pending = doc.more(); }); return pending!; }
 function all(cap?: number) { let pending: ReturnType<typeof outcome<string>>; act(() => { pending = outcome(doc.all(cap)); }); return pending!; }
+function read(cap: number) { let pending: ReturnType<typeof outcome<{ text: string; complete: boolean }>>; act(() => { pending = outcome(doc.read(cap)); }); return pending!; }
 
 beforeEach(() => {
   requests.length = 0;
@@ -153,6 +154,47 @@ describe("useFileDoc revision paging", () => {
     expect(requests).toHaveLength(1);
   });
 
+  it("allows an explicitly incomplete bounded preview and can continue it to completion", async () => {
+    await open();
+    await resolve(0);
+    const preview = read(8);
+    await resolve(1, page({ text: "two\n", next: 8 }));
+    expect((await preview).value).toEqual({ text: "one\ntwo\n", complete: false });
+    expect((await all(8)).error).toBeInstanceOf(Error);
+    expect(requests).toHaveLength(2);
+    const rest = read(12);
+    await resolve(2, page({ text: "end\n", next: 0, truncated: false }));
+    expect((await rest).value).toEqual({ text: "one\ntwo\nend\n", complete: true });
+  });
+
+  it.each(["failure", "revision"])("rejects a bounded preview on %s rather than returning a prefix", async (reason) => {
+    await open();
+    await resolve(0);
+    const preview = read(8);
+    if (reason === "failure") await act(async () => requests[1].reject(new Error("synthetic bounded failure")));
+    else await resolve(1, page({ text: "changed\n", next: 8, revision: "r2" }));
+    expect((await preview).error).toBeInstanceOf(Error);
+    expect(doc.text).toBe("one\n");
+  });
+
+  it.each([
+    { size: 1 }, { size: 0, offset: 4 }, { size: 0, next: 4 }, { size: 0, truncated: true },
+    { size: 0, is_dir: true }, { size: 0, stream: true }, { size: 0, mime: "application/octet-stream" },
+  ])("does not infer complete text from arbitrary missing content: %j", async (over) => {
+    await open();
+    await resolve(0, page({ text: undefined, next: 0, truncated: false, ...over }));
+    expect((await all()).error).toBeInstanceOf(Error);
+    expect((await read(64)).error).toBeInstanceOf(Error);
+    expect(requests).toHaveLength(1);
+  });
+
+  it.each(["text/plain; charset=utf-8", "application/json"])("recognizes a complete zero-byte %s response with omitted text", async (mime) => {
+    await open();
+    await resolve(0, page({ text: undefined, size: 0, mime, offset: 0, next: 0, truncated: false }));
+    expect((await all()).value).toBe("");
+    expect((await read(64)).value).toEqual({ text: "", complete: true });
+  });
+
   it("does not accept a non-advancing page as end of file", async () => {
     await open();
     await resolve(0);
@@ -193,6 +235,18 @@ describe("useFileDoc read ownership", () => {
     await resolve(1, page({ text: "current\n" }));
     await resolve(0, page({ text: "stale\n" }));
     expect(doc.text).toBe("current\n");
+  });
+
+  it("rejects a retired bounded preview instead of returning its accepted prefix", async () => {
+    await open();
+    await resolve(0);
+    const pending = read(8);
+    await open({ path: "/work/other.txt" });
+    await resolve(2, page({ text: "current\n", next: 0, truncated: false }));
+    await resolve(1, page({ text: "stale\n", next: 8, revision: "stale" }));
+    expect((await pending).error).toMatchObject({ name: "AbortError" });
+    expect(doc.text).toBe("current\n");
+    expect(doc.changed).toBe(false);
   });
 
   it("keeps a late old-path failure out of the current document", async () => {
