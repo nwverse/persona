@@ -45,7 +45,7 @@ Hand the user a plan of one or more tasks for agents on their computers, instead
           },
           "model": {
             "type": "string",
-            "description": "model; empty: the launcher's default"
+            "description": "model id (an alias such as opus, or a gateway's own id; letters, digits and . _ - / : @ [ ] only, or a leading ~ as in ~vendor/model-latest); empty: the launcher's default"
           },
           "permission": {
             "type": "string",

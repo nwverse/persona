@@ -1,0 +1,210 @@
+package extension
+
+import (
+	"encoding/json"
+	"slices"
+
+	"github.com/nwverse/persona/sdk/go/wire"
+	"github.com/nwverse/persona/server/internal/channel"
+)
+
+// Items are the ids of the manifest's contributions to point (nil when it has none there).
+func (m *Manifest) Items(point string) []string {
+	var items []json.RawMessage
+	if json.Unmarshal(m.Contributes[point], &items) != nil {
+		return nil
+	}
+	item, ok := ItemOf(point)
+	if !ok {
+		return nil
+	}
+	var out []string
+	for _, raw := range items {
+		if id, err := item(raw); err == nil {
+			out = append(out, id)
+		}
+	}
+	return out
+}
+
+// Connectors are the manifest's contributions to connectors.
+func (m *Manifest) Connectors() []ConnectorItem {
+	var out []ConnectorItem
+	_ = json.Unmarshal(m.Contributes["connectors"], &out)
+	return out
+}
+
+// SendsAsUser are the connectors that say they send messages in the user's name on their own (ConnectorItem.SendsAsUser).
+func (m *Manifest) SendsAsUser() []ConnectorItem {
+	var out []ConnectorItem
+	for _, c := range m.Connectors() {
+		if c.SendsAsUser {
+			out = append(out, c)
+		}
+	}
+	return out
+}
+
+// Recalls are the connectors that say they can take back what they sent (the capability recall): the hub then asks the
+// program to, once the user agreed on their own device. Not something to agree to: it adds nothing the program can start.
+func (m *Manifest) Recalls() []ConnectorItem {
+	var out []ConnectorItem
+	for _, c := range m.Connectors() {
+		if slices.Contains(c.Capabilities, "recall") {
+			out = append(out, c)
+		}
+	}
+	return out
+}
+
+// APIs are the manifest's contributions to api.
+func (m *Manifest) APIs() []APIItem {
+	var out []APIItem
+	_ = json.Unmarshal(m.Contributes["api"], &out)
+	return out
+}
+
+// Messaging are the manifest's contributions to messaging: its messaging sources.
+func (m *Manifest) Messaging() []wire.MessagingItem {
+	var out []wire.MessagingItem
+	_ = json.Unmarshal(m.Contributes["messaging"], &out)
+	return out
+}
+
+// Assistants are the manifest's contributions to assistant.
+func (m *Manifest) Assistants() []AssistantItem {
+	var out []AssistantItem
+	_ = json.Unmarshal(m.Contributes["assistant"], &out)
+	return out
+}
+
+// MCPServers are the manifest's contributions to mcp_servers.
+func (m *Manifest) MCPServers() []MCPServerItem {
+	var out []MCPServerItem
+	_ = json.Unmarshal(m.Contributes["mcp_servers"], &out)
+	return out
+}
+
+// UIs are the manifest's contributions to ui.
+func (m *Manifest) UIs() []UIItem {
+	var out []UIItem
+	_ = json.Unmarshal(m.Contributes["ui"], &out)
+	return out
+}
+
+// Shortcuts are the manifest's contributions to shortcuts.
+func (m *Manifest) Shortcuts() []ShortcutItem {
+	var out []ShortcutItem
+	_ = json.Unmarshal(m.Contributes["shortcuts"], &out)
+	return out
+}
+
+// SurfaceShortcuts is the surface of an extension with shortcuts: its actions in Shortcuts and Siri.
+const SurfaceShortcuts = "shortcuts"
+
+// Surfaces are the slots outside its own settings the plugin draws in (UISlot.Shown), each once, in UISlots' order,
+// then shortcuts when it has some: the user is shown them before installing and agrees again when an upgrade adds one.
+func (m *Manifest) Surfaces() []string {
+	var out []string
+	for _, sl := range UISlots {
+		if sl.Shown && slices.ContainsFunc(m.UIs(), func(u UIItem) bool { return u.Placement == sl.Name }) {
+			out = append(out, sl.Name)
+		}
+	}
+	if len(m.Shortcuts()) > 0 {
+		out = append(out, SurfaceShortcuts)
+	}
+	return out
+}
+
+// Events are the manifest's contributions to events.
+func (m *Manifest) Events() []EventsItem {
+	var out []EventsItem
+	_ = json.Unmarshal(m.Contributes["events"], &out)
+	return out
+}
+
+// ErrorReports are the manifest's contributions to error_reports.
+func (m *Manifest) ErrorReports() []ErrorReportsItem {
+	var out []ErrorReportsItem
+	_ = json.Unmarshal(m.Contributes["error_reports"], &out)
+	return out
+}
+
+// AuthRelays are the manifest's contributions to auth_relay.
+func (m *Manifest) AuthRelays() []AuthRelayItem {
+	var out []AuthRelayItem
+	_ = json.Unmarshal(m.Contributes["auth_relay"], &out)
+	return out
+}
+
+// Topics are the events the plugin is told about, each once.
+func (m *Manifest) Topics() []string {
+	var out []string
+	for _, e := range m.Events() {
+		for _, t := range e.Subscribe {
+			if !slices.Contains(out, t) {
+				out = append(out, t)
+			}
+		}
+	}
+	slices.Sort(out)
+	return out
+}
+
+// Quotas are the manifest's contributions to quota.
+func (m *Manifest) Quotas() []QuotaItem {
+	var out []QuotaItem
+	_ = json.Unmarshal(m.Contributes["quota"], &out)
+	return out
+}
+
+// AgentSources are the manifest's contributions to agent_sources.
+func (m *Manifest) AgentSources() []AgentSourceItem {
+	var out []AgentSourceItem
+	_ = json.Unmarshal(m.Contributes["agent_sources"], &out)
+	return out
+}
+
+// Providers are the manifest's contributions to providers.
+func (m *Manifest) Providers() []ProviderItem {
+	var out []ProviderItem
+	_ = json.Unmarshal(m.Contributes["providers"], &out)
+	return out
+}
+
+// Channels are the plugin's contributions to channel.
+func (m *Manifest) Channels() []channel.Item {
+	var out []channel.Item
+	_ = json.Unmarshal(m.Contributes["channel"], &out)
+	return out
+}
+
+// Contributions are the ids by extension point, the points this hub has only.
+func (m *Manifest) Contributions() map[string][]string {
+	out := map[string][]string{}
+	for name := range m.Contributes {
+		if ids := m.Items(name); len(ids) > 0 {
+			out[name] = ids
+		}
+	}
+	return out
+}
+
+// Kind is the first extension point the plugin contributes to, by a fixed order: what GET /api/v1/plugins has always
+// said as "kind" (voice for a voice plugin).
+func (m *Manifest) Kind() string {
+	for _, name := range []string{"voice", "connectors", "channel", "api", "quota", "providers", "agent_sources", "assistant", "ui", "events"} {
+		if len(m.Items(name)) > 0 {
+			return name
+		}
+	}
+	keys := sortedKeys(m.Contributes)
+	if len(keys) > 0 {
+		return keys[0]
+	}
+	if len(m.ExtensionPack) > 0 {
+		return "extension_pack"
+	}
+	return ""
+}

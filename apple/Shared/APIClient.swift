@@ -928,6 +928,13 @@ nonisolated struct APIClient: Sendable {
         try await post(sp(k) + "/queue", body: QueueEdit(keep: keep), as: QueueResponse.self).queue
     }
 
+    /// Gives the agent what waits in its queue now (#6088, Claude Code's own send-now: a command it runs moves to the
+    /// background, a reply it writes starts again with the messages). 409 `nothing_queued`, `send_now_unsupported`,
+    /// `send_now_in_doubt`; an older node `node_outdated`. The hub's words for them are in the reader's language.
+    func sendQueuedNow(_ k: SessionKey) async throws {
+        try await post(sp(k) + "/queue/send-now", timeout: 30)
+    }
+
     struct AssistantState: Codable, Sendable {
         var machineID: String
         var launcher: String
@@ -1289,6 +1296,19 @@ nonisolated struct APIClient: Sendable {
     func setBlockedClaudeDirs(machine: String, blocked: [String]) async throws -> ClaudeDirsState {
         try JSON.decoder.decode(ClaudeDirsState.self, from: try await request("PUT", "/api/v1/machines/\(machine)/claude-dirs/blocked",
             body: SetBlockedClaudeDirs(blocked: blocked)))
+    }
+
+    /// Settings › Claude Code › Live Replies (#1309, docs/integrations/claude-integration.md "Live replies (MessageDisplay)"):
+    /// whether the Claude sessions Persona starts on the machine send their replies as Claude writes them. On unless
+    /// turned off; an older hub has no such route (404).
+    struct LiveReplies: Codable, Sendable, Equatable { var on: Bool }
+    func claudeLiveReplies(machine: String) async throws -> Bool {
+        try await get("/api/v1/machines/\(machine)/claude-live-replies", as: LiveReplies.self).on
+    }
+    /// What the hub keeps after the change.
+    func setClaudeLiveReplies(machine: String, on: Bool) async throws -> Bool {
+        try JSON.decoder.decode(LiveReplies.self, from: try await request("PUT", "/api/v1/machines/\(machine)/claude-live-replies",
+            body: LiveReplies(on: on))).on
     }
 
     func interactions() async throws -> [Interaction] {

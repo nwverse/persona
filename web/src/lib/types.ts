@@ -170,6 +170,9 @@ export interface Session {
   status: string;
   starting?: boolean;
   start_error?: string;
+  /** The failed start's coded refusal (launcher_missing, claude_missing…) and its details; start_error is the hub's sentence for it. */
+  start_error_code?: string;
+  start_error_args?: Record<string, string>;
   state?: AgentState;
   state_since?: string;
   agent?: string;

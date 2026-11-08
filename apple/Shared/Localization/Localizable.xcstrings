@@ -1,6 +1,144 @@
 {
   "sourceLanguage": "en",
   "strings": {
+    "Live Replies": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Live Replies"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "リアルタイム返信"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "实时回复"
+          }
+        }
+      }
+    },
+    "Stream Replies as Claude Writes": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Stream Replies as Claude Writes"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "書きながら返信を送る"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "边写边发回复"
+          }
+        }
+      }
+    },
+    "Replies arrive line by line, seconds sooner": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Replies arrive line by line, seconds sooner"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "返信が行ごとに届き、数秒早く読めます"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "逐行收到回复，早几秒看到文字"
+          }
+        }
+      }
+    },
+    "Replies show up once Claude saves them": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Replies show up once Claude saves them"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Claude が返信を保存してから表示されます"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Claude 存下回复后才显示"
+          }
+        }
+      }
+    },
+    "Couldn't read this computer's setting: %@": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Couldn't read this computer's setting: %1$@"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "このコンピューターの設定を読み込めません：%1$@"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "读不到这台电脑的设置：%1$@"
+          }
+        }
+      }
+    },
+    "When on, the Claude Code sessions Persona starts on this computer send their replies while Claude writes them, so this app and the web show the text sooner. The cost: in this computer's terminal, replies appear a few lines at a time instead of word by word. The hub keeps this switch, not ~/.claude/settings.json; with “Apply to All Online Machines” on above, the other online computers change too. A change applies to sessions started after it; a session that is already running changes once Claude restarts.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "When on, the Claude Code sessions Persona starts on this computer send their replies while Claude writes them, so this app and the web show the text sooner. The cost: in this computer's terminal, replies appear a few lines at a time instead of word by word. The hub keeps this switch, not ~/.claude/settings.json; with “Apply to All Online Machines” on above, the other online computers change too. A change applies to sessions started after it; a session that is already running changes once Claude restarts."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "オンにすると、Persona がこのコンピューターで起動した Claude Code セッションは Claude が書いている途中の返信を送るため、このアプリと Web で文字を早く確認できます。代わりに、このコンピューターのターミナルでは返信が一語ずつではなく数行ずつ表示されます。この設定はハブに保存され、~/.claude/settings.json は変更しません。上の「オンラインのすべてのマシンに適用」がオンのときは、ほかのオンラインのコンピューターも一緒に変わります。変更はその後に起動したセッションに適用され、実行中のセッションは Claude を再起動すると切り替わります。"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "开着时，Persona 在这台电脑上启动的 Claude Code 会话会边写边把回复发出来，App 和网页上更早看到文字；代价是这台电脑终端里的回复会按行显示（一次几行），而不是逐字出现。这个开关存在 hub 上，不改 ~/.claude/settings.json；打开上面的「同时改所有在线机器」时，其他在线的电脑也一起改。改动对之后启动的会话生效，已经开着的会话要等 Claude 重启后才变。"
+          }
+        }
+      }
+    },
     "%@ is still waiting for your answer": {
       "extractionState": "manual",
       "localizations": {
@@ -131348,6 +131486,210 @@
           }
         }
       }
+    },
+    "Collapse [Folded Report]": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Collapse"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "閉じる"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "收起"
+          }
+        }
+      }
+    },
+    "Expand [Folded Report]": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Expand"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "展開"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "展开"
+          }
+        }
+      }
+    },
+    "Shows the whole report [Folded Report]": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Shows the whole report"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "レポート全体を表示します"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "显示完整报告"
+          }
+        }
+      }
+    },
+    "Send Now [Queue Strip]": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Send Now"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "今すぐ送信"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "立即发送"
+          }
+        }
+      },
+      "extractionState": "manual"
+    },
+    "Send the queued messages now? [Queue Strip]": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Send the queued messages now?"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "送信待ちのメッセージを今すぐ送りますか？"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "现在就发送排队的消息？"
+          }
+        }
+      },
+      "extractionState": "manual"
+    },
+    "Sends the queued messages to the agent now. A command it is running keeps running in the background; a reply it is writing starts again with your message. [Queue Strip]": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sends the queued messages to the agent now. A command it is running keeps running in the background; a reply it is writing starts again with your message."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "送信待ちのメッセージを今すぐエージェントに送ります。実行中のコマンドはバックグラウンドで続き、書いている途中の返信はあなたのメッセージを含めてやり直します。"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "现在就把排队的消息发给 Agent。它正在跑的命令会转到后台继续跑；正在写的回复会带上你的消息重新开始。"
+          }
+        }
+      },
+      "extractionState": "manual"
+    },
+    "Sent to the agent now [Queue Strip]": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sent to the agent now"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "今すぐエージェントに送りました"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "已立即发给 Agent"
+          }
+        }
+      },
+      "extractionState": "manual"
+    },
+    "Move Up [Queue Strip]": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Move Up"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "上へ移動"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "上移"
+          }
+        }
+      },
+      "extractionState": "manual"
+    },
+    "Move Down [Queue Strip]": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Move Down"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "下へ移動"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "下移"
+          }
+        }
+      },
+      "extractionState": "manual"
     }
   },
   "version" : "1.0"

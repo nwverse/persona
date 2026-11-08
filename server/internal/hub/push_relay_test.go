@@ -176,6 +176,7 @@ func TestRelayDoneAndWake(t *testing.T) {
 
 func TestRelayLiveActivity(t *testing.T) {
 	h, f, _ := relayHub(t)
+	h.store = newFleetStartStore() // transport fixture still needs a committed start budget
 	h.live.update("phone", func(v *db.LiveActivity) { v.PushToStartToken = "abcdef0123456789abcdef0123456789" })
 	h.live.flush(FleetState{Phase: "working", Working: 1, Items: []FleetItem{{ID: "m/a", Title: "api", Kind: "working"}}}, false, false)
 	r := f.wait(t, 1)[0]
@@ -483,6 +484,7 @@ func TestRelayTriesAPushAgainAfterTheNetworkDroppedIt(t *testing.T) {
 func TestRelayTriesALiveActivityAgainWhenTheRelayIsBusy(t *testing.T) {
 	fr := &flakyRelay{fail: []int{http.StatusServiceUnavailable}}
 	h, f, _ := fr.hub(t)
+	h.store = newFleetStartStore() // push-to-start requires durable authorization, even in a transport test
 	h.live.update("phone", func(v *db.LiveActivity) { v.PushToStartToken = "abcdef0123456789abcdef0123456789" })
 	h.live.flush(FleetState{Phase: "working", Working: 1, Items: []FleetItem{{ID: "m/a", Title: "api", Kind: "working"}}}, false, false)
 	if r := f.wait(t, 1)[0]; r.PushType != "liveactivity" {

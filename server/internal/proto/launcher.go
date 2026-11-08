@@ -98,6 +98,10 @@ type AgentModel struct {
 	// Efforts: the thinking efforts it takes, weakest first; none: no effort setting.
 	Efforts       []string `json:"efforts,omitempty"`
 	DefaultEffort string   `json:"default_effort,omitempty"`
+	// Custom: an id the user typed that the agent's own list does not have, remembered on the hub for this machine
+	// and launcher after it ran (#1644, assistant/models_custom.go); listed after the agent's own, most recent first.
+	// Its efforts are not known, so none are given.
+	Custom bool `json:"custom,omitempty"`
 }
 
 type LauncherEnv struct {

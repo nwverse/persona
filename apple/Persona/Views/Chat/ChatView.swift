@@ -780,8 +780,9 @@ struct ChatView: View {
         let key = ChatScratch.LinesKey(store: "\(shownKey.machineID)/\(shownKey.sessionID)", version: frozen == nil ? store.version : cut,
                                        first: items.first?.id, live: frozen == nil ? liveTurnID : frozen?.live, open: openWork,
                                        runs: openRuns, frozen: frozen, feed: feed.map(\.id),
-                                       streaming: style == .assistant && (frozen.map { !$0.text.isEmpty } ?? liveShown),
-                                       quietAgents: quietSubagents, workflowCalls: workflowCalls)
+                                       streaming: drawsLive && (frozen.map { !$0.text.isEmpty } ?? liveShown),
+                                       quietAgents: quietSubagents, workflowCalls: workflowCalls,
+                                       day: style == .assistant ? Calendar.current.startOfDay(for: .now) : nil)
         if scratch.linesKey == key { return scratch.lines }
         var blocks = store.blocks
         if frozen != nil {
@@ -1619,6 +1620,9 @@ struct ChatView: View {
 
     /// Streamed words are drawn after the lines (`ChatLiveText`'s rule: not once the message is in the rows).
     private var liveShown: Bool { ChatLiveText.shows(store) }
+    /// The chat draws live text: the assistant's in the main chat, and an agent's as Claude shows it in any chat of it
+    /// (docs/integrations/claude-integration.md "Live replies (MessageDisplay)"), the same way.
+    private var drawsLive: Bool { style == .assistant || store.liveIsAgents }
 
     /// A message of yours is the newest thing and the agent has not begun on it: no turn running yet, the session at
     /// work or starting up, or the message just sent and the hub not saying working yet (#3853).
@@ -2087,7 +2091,7 @@ struct ChatView: View {
                     }
                 }
                 if let queued = session?.queued, !queued.isEmpty, style == .dev {
-                    QueueStrip(key: key, queued: queued)
+                    QueueStrip(key: key, queued: queued, steers: session?.steersQueue == true)
                 }
                 // The assistant takes modes on Codex too (the node maps them to Codex's sandbox / approvals); a Codex thread
                 // on its app-server takes its effort alone (setsEffortOnly).
@@ -2191,7 +2195,7 @@ struct ChatView: View {
             }
             // Streamed text, the typing line and unsent messages sit at the newest end too: while you read
             // history they wait with the rest, as they were drawn then (`Frozen`).
-            if style == .assistant { ChatLiveText(store: store, held: frozen?.text) }
+            if drawsLive { ChatLiveText(store: store, held: frozen?.text) }
             // Sent, and the agent not on it yet: the line the new-conversation page showed under the first message
             // (`FirstMessagePending`), where the turn's work line comes in. Without it the chat that took over showed
             // the message a line lower, then pushed it up when the turn began (#1911).
@@ -2234,7 +2238,7 @@ struct ChatView: View {
             }
             switch ChatLines.placeholder(lines: lines, hasTranscript: !rows.isEmpty,
                                          hasPending: !pending.isEmpty || !store.pending.isEmpty || !store.arriving.isEmpty,
-                                         hasLiveText: style == .assistant && !(frozen?.text ?? store.liveText).isEmpty,
+                                         hasLiveText: drawsLive && !(frozen?.text ?? store.liveText).isEmpty,
                                          loadedOnce: store.loadedOnce) {
             case .loading:
                 ChatSkeleton().flippedBack().accessibilityIdentifier("chat-loading-placeholder")
@@ -2389,7 +2393,7 @@ struct ChatView: View {
             } else if let last = store.items.last {
                 let failed = ChatLines.placeFailed(currentLines(), store.pending, writtenAt: store.writtenAt).before
                 frozen = Frozen(seq: last.seq, part: last.part, live: liveTurnID,
-                                text: style == .assistant && liveShown ? store.liveText : "",
+                                text: drawsLive && liveShown ? store.liveText : "",
                                 pending: Set(store.pending.map(ChatLines.frozenKey)), failedAt: ChatLines.failedLines(failed))
             }
         }
@@ -4602,15 +4606,33 @@ struct TerminalCover: View {
     private func close() { dismiss() }
 }
 
+/// A queued message moved one place (#6088): the `keep` of `/queue` that re-queues them in the new order.
+nonisolated enum QueueOrder {
+    /// The original indexes in their new order with the one at `index` moved `step` places (-1 up, 1 down); nil when
+    /// that is past either end.
+    static func moved(count: Int, index: Int, by step: Int) -> [Int]? {
+        let to = index + step
+        guard step != 0, (0..<count).contains(index), (0..<count).contains(to) else { return nil }
+        var order = Array(0..<count)
+        order.remove(at: index)
+        order.insert(index, at: to)
+        return order
+    }
+}
+
 /// Input typed while Claude works and not yet taken, shown above the composer instead of in the chat.
 /// Folded to its one-line summary by default; opened, it shows about three rows and scrolls past them.
 /// Editing pulls it back (like ↑ in the terminal); the other queued messages are re-queued in order.
+/// A Claude in a terminal (`Session.steersQueue`, #6088) also takes them now (Send Now, after a confirmation that says
+/// what happens to what it is doing), and each moves up or down.
 struct QueueStrip: View {
     @Environment(AppModel.self) private var model
     let key: SessionKey
     var queued: [String]
+    var steers = false
     @State private var busy = false
     @State private var expanded = false
+    @State private var confirmSend = false
     /// One row's height with its spacing, as drawn (it follows the text size and the rows' line counts).
     @State private var rowHeight: CGFloat = 0
     private static let visibleRows: CGFloat = 3
@@ -4628,13 +4650,27 @@ struct QueueStrip: View {
                 ThemedIcon("tray.and.arrow.down").accessibilityHidden(true)
                 Text("\(queued.count) queued · Claude will handle them in order").lineLimit(1)
                 Spacer(minLength: 0)
-                if busy { ProgressView().controlSize(.mini) }
+                if busy {
+                    ProgressView().controlSize(.mini)
+                } else if steers {
+                    Button { confirmSend = true } label: {
+                        Label("Send Now [Queue Strip]", systemImage: Theme.Icon.sendNow).lineLimit(1).fixedSize()
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(Theme.accent)
+                    .accessibilityIdentifier("queue-send-now")
+                }
             }
             .font(Theme.Font.labelStrong)
             .foregroundStyle(.secondary)
             .contentShape(.rect)
         }
         .tint(.secondary)
+        .confirmationDialog(String(localized: "Send the queued messages now? [Queue Strip]"), isPresented: $confirmSend, titleVisibility: .visible) {
+            Button("Send Now [Queue Strip]") { sendNow() }.accessibilityIdentifier("queue-send-now-confirm")
+        } message: {
+            Text("Sends the queued messages to the agent now. A command it is running keeps running in the background; a reply it is writing starts again with your message. [Queue Strip]")
+        }
         .padding(Theme.Space.m)
         .surface(in: .rect(cornerRadius: Theme.Radius.panel, style: .continuous))
         .transition(.move(edge: .bottom).combined(with: .opacity))
@@ -4646,6 +4682,14 @@ struct QueueStrip: View {
             ForEach(Array(queued.enumerated()), id: \.offset) { i, q in
                 Menu {
                     Button { act(i, delete: false) } label: { Label("Take Back to Edit", systemImage: Theme.Icon.edit) }
+                    if steers, queued.count > 1 {
+                        Button { move(i, by: -1) } label: { Label("Move Up [Queue Strip]", systemImage: Theme.Icon.queueUp) }
+                            .disabled(i == 0)
+                            .accessibilityIdentifier("queue-move-up")
+                        Button { move(i, by: 1) } label: { Label("Move Down [Queue Strip]", systemImage: Theme.Icon.queueDown) }
+                            .disabled(i == queued.count - 1)
+                            .accessibilityIdentifier("queue-move-down")
+                    }
                     Button { UIPasteboard.general.string = q } label: { Label("Copy [Readiness Views d37380]", systemImage: Theme.Icon.copy) }
                     Button(role: .destructive) { act(i, delete: true) } label: { Label("Delete", systemImage: Theme.Icon.delete) }
                 } label: {
@@ -4665,6 +4709,7 @@ struct QueueStrip: View {
                 }
                 .disabled(busy)
                 .accessibilityLabel(Text("Item \(i + 1): \(q)"))
+                .accessibilityIdentifier("queue-item")
                 .accessibilityHint(Text("Edit, copy or delete"))
             }
         }
@@ -4677,6 +4722,22 @@ struct QueueStrip: View {
         busy = true
         Task {
             await model.editQueued(key, index: i, delete: delete)
+            busy = false
+        }
+    }
+
+    private func move(_ i: Int, by step: Int) {
+        busy = true
+        Task {
+            await model.moveQueued(key, index: i, by: step)
+            busy = false
+        }
+    }
+
+    private func sendNow() {
+        busy = true
+        Task {
+            await model.sendQueuedNow(key)
             busy = false
         }
     }
@@ -5524,10 +5585,12 @@ private struct ChatLiveText: View {
         if !text.isEmpty { StreamingText(text: text).id("live").flippedBack() }
     }
 
-    /// There is streamed text, and its message is not the last row yet.
+    /// There is streamed text, and its message is not the last row yet. An agent's is already what its newest items
+    /// lack (`ChatStore.agentStreamed`): its words may begin like the row before them.
     static func shows(_ store: ChatStore) -> Bool {
         let live = store.liveText
         guard !live.isEmpty else { return false }
+        if store.liveIsAgents { return true }
         if case .assistant(let item) = store.rows.last, let text = item.text { return !(text.hasPrefix(live) || live == text) }
         return true
     }
@@ -5640,6 +5703,9 @@ final class ChatScratch {
         var quietAgents: Set<String> = []
         /// The Workflow calls whose run the hub lists: their cards stay out of the fold and the chips (#3436).
         var workflowCalls: Set<String> = []
+        /// Today, in an assistant conversation: on a new day yesterday's task cards are lines and give back the hand-offs
+        /// they took in (`SentToAgents.takenIn`, #1668).
+        var day: Date?
     }
     /// What was sent from this chat lately: its transcript copy arriving brings you to the newest, others do not.
     var sentHere: [(id: UUID, text: String)] = []

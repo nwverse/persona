@@ -258,11 +258,18 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 		if !ok {
 			return "", fmt.Errorf("unknown machine %q (machines: %s)", a.Machine, s.machineIDs(ctx))
 		}
+		// Refused before the user is asked: a model goes to the agent as --model (#1644).
+		if a.Model = strings.TrimSpace(a.Model); a.Model != "" && !proto.ValidModelID(a.Model) {
+			return "", fmt.Errorf("model %q is not a model id: %s; no agent was started", a.Model, proto.ModelIDRule)
+		}
 		a.Cwd = proto.ExpandHome(a.Cwd, am.Home)
 		branch := strings.TrimSpace(a.Worktree.Branch)
 		where := am.Name + " · " + a.Cwd
 		if branch != "" {
 			where += i18n.T(s.lang(ctx), "assistant-tools.new_worktree", i18n.Args{"branch": branch})
+		}
+		if a.Model != "" { // the user sees what it will run on before saying yes
+			where += i18n.T(s.lang(ctx), "assistant-tools.with_model", i18n.Args{"model": a.Model})
 		}
 		if a.Ultracode {
 			where += " · ultracode"
@@ -328,6 +335,7 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 			}
 			return "", err
 		}
+		s.recordStartSuccess(ctx, am.ID, launcher)
 		s.inboxAgentStarted(ctx, self, am.ID, res.Session.SessionID, a.Prompt) // an inbox event's conversation: its chain
 		if s.quietAgentTask(ctx, self, am, a.Cwd, a.Prompt, params["tab_name"], res.Session.SessionID) {
 			return fmt.Sprintf("Started on %s in %s: session %s, a task of this conversation (its card is in the conversation; "+

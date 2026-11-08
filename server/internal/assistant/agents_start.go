@@ -46,10 +46,10 @@ func (s *Service) AgentStartParams(ctx context.Context, p AgentStartParams) (map
 	}
 	if resume, _ := params["resume_session_id"].(string); resume == "" {
 		if err := s.applyStartTier(ctx, params); err != nil {
-			return nil, badRequest(err)
+			return nil, badRequest(err, s.appLang(ctx, p.Lang))
 		}
 		if err := s.applyModel(ctx, "agent.new", params); err != nil {
-			return nil, badRequest(err)
+			return nil, badRequest(err, s.appLang(ctx, p.Lang)) // a typed model that is no id among them
 		}
 	}
 	if name, _ := params["tab_name"].(string); strings.TrimSpace(name) == "" && p.NameFrom != "" {
