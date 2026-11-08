@@ -57,6 +57,8 @@ type pending struct {
 	claimed bool
 	// graceEnded: its grace period ran out (orphanLocked) and it is being ended: a hook back now hands over.
 	graceEnded bool
+	// expired: it ended because its time ran out, unanswered (await); finished() reads it.
+	expired bool
 	// announced: a screen card that rang (announce), carried through a detach (screenGone.announced), so the card
 	// read again once the node is back rings at the window's end only if its predecessor never did (#4979).
 	announced bool
@@ -743,6 +745,7 @@ func (s *Service) await(ctx context.Context, p *pending) (proto.Resolution, erro
 		return proto.Resolution{Dismiss: true}, nil // disconnected hook; a new one can resume
 	}
 	p.claimed, p.graceEnded = true, true
+	p.expired = status == "expired"
 	s.fleet.mu.Unlock()
 	s.recordEnd(id, status, nil)
 	s.finishInteraction(id)
@@ -1070,8 +1073,12 @@ func (s *Service) finished(p *pending) {
 	if done.AnsweredBy != "" {
 		done.Reason, done.Answers = p.answeredReason, p.answeredWith
 	}
+	var how *proto.Resolution
+	if p.expired && p.ix.ToolName == "ask_user" { // the assistant's question becomes a to-do (ask_todo.go): its card says so
+		how = &proto.Resolution{Dismiss: true, Reason: proto.DismissedExpired}
+	}
 	s.fleet.mu.Unlock()
-	s.channelsEnded(p.ix, nil)
+	s.channelsEnded(p.ix, how)
 	// the app marks a question the assistant answered, and why (docs/assistant/assistant.md)
 	s.hub.Tell(assistantwire.EventFleetResolved, done)
 	s.publishSessions(p.ix.MachineID)
@@ -1609,6 +1616,9 @@ func (s *Service) askOnPhone(list []proto.Interaction) {
 			}
 			if r.Dismiss && ctx.Err() != nil {
 				return // withdrawn: it knows
+			}
+			if r.Dismiss && r.Reason == "" && r.AnsweredBy == "" && len(r.Answers) == 0 && s.ownQuestionExpired(ix) {
+				r.Reason = proto.DismissedExpired // its card expired unanswered: the question becomes a to-do (ask_todo.go)
 			}
 			answer, _ := json.Marshal(r)
 			act := Action{ActionID: "act_" + randomHex(6), SessionID: ix.SessionID, Op: "answer", InteractionID: ix.ID,

@@ -9,6 +9,8 @@ struct AssistantTopBar: View {
     @Environment(AppModel.self) private var model
     /// In the shell (docs/apple/ios.md「新外壳」) the middle is the Assistant | Agents switch; its Assistant opens this bar's menu.
     @Environment(\.shell) private var shell
+    /// The system's bars down the side (iPhone Duo): the shell's bar is the side rail there.
+    @Environment(\.shellRailEdge) private var railEdge
     /// The conversation on screen; nil on the new-conversation page.
     var key: SessionKey?
     /// The sidebar is a column beside the conversation (a wide display): the button shows or hides it.
@@ -37,6 +39,15 @@ struct AssistantTopBar: View {
     #endif
     /// How far below the bar the fog fades out.
     static let fade: CGFloat = 30
+    /// What the page leaves free at its top for the bar: little while it is the side rail (iPhone Duo, `ShellSideRail`),
+    /// where the column beside the content holds it.
+    static func room(_ railEdge: HorizontalEdge?) -> CGFloat {
+        #if os(iOS) || os(visionOS)
+        return railEdge == nil ? height : Theme.Space.s
+        #else
+        return height
+        #endif
+    }
     /// How far below the status bar the round buttons start. The sidebar's header beside the bar in the split starts
     /// there too, with the same `circle` (AssistantSidebar `besideBar`), so the two rows line up.
     static let topInset = Theme.Space.xxs
@@ -141,7 +152,34 @@ struct AssistantTopBar: View {
 
     /// ChatGPT's top bar: the persona's face (the drawer; a mark while the inbox has something for the user), the
     /// switch, New Chat.
-    private var shellBar: some View {
+    @ViewBuilder private var shellBar: some View {
+        #if os(iOS) || os(visionOS)
+        if let railEdge { shellRail(railEdge) } else { shellRow }
+        #else
+        shellRow
+        #endif
+    }
+
+    #if os(iOS) || os(visionOS)
+    /// The shell's bar as the side rail (iPhone Duo): the face and New Chat, then the switch at the foot of the column.
+    private func shellRail(_ edge: HorizontalEdge) -> some View {
+        @Bindable var model = model
+        let link = model.connection.shown
+        return ShellSideRail(edge: edge) {
+            ShellPersonaButton(id: "assistant-sidebar-button", action: openSidebar)
+            ShellCircleButton(symbol: Theme.Icon.compose, label: String(localized: "New Chat [Quick Actions ea4b29]"), id: "assistant-new", action: newConversation)
+                .disabled(key == nil)
+                .opacity(key == nil ? 0.4 : 1)
+        } switcher: {
+            ShellSwitch(tab: $model.selectedTab, axis: .vertical) { menuItems(link) }
+        }
+        .shellTopBarScaled()
+        .connectionDetails($showLink)
+        .modifier(ShellBarAtRest(page: 0)) // ShellMovingBar stands in while the strip slides
+    }
+    #endif
+
+    private var shellRow: some View {
         @Bindable var model = model
         let link = model.connection.shown
         return HStack(alignment: .top) {

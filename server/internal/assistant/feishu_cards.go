@@ -411,6 +411,8 @@ func resolutionText(l i18n.Lang, ix proto.Interaction, r proto.Resolution) strin
 	switch {
 	case r.Dismiss && r.Reason == proto.DismissedInChat && r.AnsweredBy == "":
 		return i18n.T(l, "assistant-feishu_cards.replied_in_chat")
+	case r.Dismiss && r.Reason == proto.DismissedExpired && r.AnsweredBy == "":
+		return i18n.T(l, "assistant-feishu_cards.moved_to_todos")
 	case r.Dismiss:
 		return i18n.T(l, "assistant-feishu_cards.dismissed")
 	case r.Approve != nil && *r.Approve:

@@ -144,6 +144,13 @@ Pitfalls, odd behavior, and the tradeoffs made at the time (originally in `CLAUD
   English-language simulators label system-permission buttons "Allow"; UI tests must recognize both languages.
 - XCUITest typeText switches simulators to "hardware keyboard" mode, after which the software keyboard no longer appears (keyboard button says shown, but no keyboard is visible), failing all height-dependent tests.
   This machine has no Simulator.app, and `defaults write com.apple.iphonesimulator …ConnectHardwareKeyboard` cannot restore it. Create a new simulator with `scripts/app/sim-boot.sh "<new-name>"`.
+- So a test that taps a field and types at once never runs keyboard-dependent layout (`KeyboardState.isUp`, the pending cards' keyboard cap) (2026-11-09, #1580):
+  `SecretRunUITests` passed while tapping the password card's field froze the app as soon as the on-screen keyboard came up. Focus tests assert `app.keyboards.count > 0`
+  after the tap and that the cards' area then holds one frame (a busy app stays in the foreground), and run on a fresh stock simulator before any test that types
+  (`PasswordFieldFocusTests`). A tap followed by "App event loop idle notification not received" means the main thread is busy: `sample <pid>` the simulator's
+  app process to see where.
+- On the iOS 27.0 simulator `app.screenshot()` and `XCUIScreen.main.screenshot()` leave the keyboard's place blank (2026-11-09, #1580). Take keyboard screenshots with
+  `xcrun simctl io <udid> screenshot` while it is up.
 - XCUITest misses the key bar during keyboard animation (the bar is moving with it); wait for the keyboard, pause, then tap.
 - XCUITest `typeText` inserts text directly, bypassing the input method, so it cannot test pinyin marked text. Tap onscreen keys (`app.keys["y"].tap()`, space selects the first candidate).
   Third-party keyboards (2026-11-03, #909): outside the repository, build a tiny app with only a keyboard extension whose buttons use `textDocumentProxy` `setMarkedText` / `unmarkText` / `insertText` to enter fixed text.
@@ -708,4 +715,9 @@ Two more from the same harness:
 
 ## A model made in a unit test starts with what the simulator last saved (2026-11-09, #1638, #1637)
 
-`AppModel()` restores the last Dev snapshot (machines, agents, cards; `Library/Caches/state/dev.json`) and the outbox when the simulator's keychain holds a pairing, which any mock-hub UI test run leaves behind. A unit test that reads everything the model holds (the watch summary, all agents) then counts those too: it passes on a brand-new simulator and on hosted CI and fails on a used one. Such a test calls `forgetRestoredForTests()` after making the model. To check that a failure is this, move `dev.json` aside in the app's data container and run the test again.
+`AppModel()` restores the last Dev snapshot (machines, agents, cards; `Library/Caches/state/dev.json`) and the outbox when the simulator's keychain holds a pairing, which any mock-hub UI test run leaves behind. A unit test that reads everything the model holds (the watch summary, all agents) then counts those too: it passes on a brand-new simulator and on hosted CI and fails on a used one. In the sync scenarios, a snapshot of 145 sessions pushed the case's chat out of the 40 newest that `AgentSync` plans, so its stall check never ran. The model also writes its own snapshot and outbox back over the app's.
+
+- A test that only needs the model empty calls `forgetRestoredForTests()` after making it.
+- A test that saves and reads back (a relaunch, the outbox) makes its models with `AppModel(stateFolder:)` on a folder of its own, and again on the same folder for the relaunch (`SyncDevice`, `OutboxRestoreTests`). Nothing it writes reaches the app's files.
+
+To check that a failure is this, move `dev.json` aside in the app's data container and run the test again.
