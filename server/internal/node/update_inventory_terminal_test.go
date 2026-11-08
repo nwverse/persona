@@ -48,7 +48,7 @@ func TestUpdateTerminalAuthorityUsesRuntimeNotDisplay(t *testing.T) {
 	n, target, _, f, p := terminalUpdateFixture(t)
 	f.mu.Lock()
 	f.threads, f.ephemeral = []string{remoteRaw, remoteOther}, remoteOther
-	f.backgroundReply = map[string]any{"data": []any{map[string]any{"command": "synthetic"}}}
+	f.backgroundReply = map[string]any{"data": []any{map[string]any{"processId": "fixture-process", "command": "synthetic"}}}
 	f.mu.Unlock()
 	out, err := n.collectUpdateInventory(context.Background(), target, func(context.Context) ([]updateProcess, error) { return []updateProcess{p}, nil })
 	if err != nil || !out.Complete {
@@ -126,7 +126,7 @@ func TestUpdateTerminalAuthorityRechecksActivityAndBinding(t *testing.T) {
 				}
 				if name == "activity" && calls == 1 {
 					f.mu.Lock()
-					f.backgroundReply = map[string]any{"data": []any{map[string]any{"command": "synthetic"}}}
+					f.backgroundReply = map[string]any{"data": []any{map[string]any{"processId": "fixture-process", "command": "synthetic"}}}
 					f.mu.Unlock()
 				}
 				if calls == 2 {
