@@ -85,6 +85,11 @@ Adding Bcc to the request alone leaves Bcc-only edits lost on dismissal and Bcc-
 - A detail pane can retain its old response while its route changes. Key the editing boundary by requested kind/id, opaque credential generation and the actual default manager; capture that manager and token on reads and writes, and fence late results as well as submission. The server canonicalizes source IDs, including recording UUID case, so response ownership follows the captured request rather than raw ID equality. After a successful write, a failed authoritative read needs a read-only retry; returning to the save action can repeat an already accepted mutation. Admit saves synchronously before React renders busy state, and send only the confirmed-facts field so unrelated metadata and locks stay intact.
 - Captured credentials must still use normal sign-out on a current-owner 401. Explicit token requests opt in with their opaque credential generation, and recovery checks both that generation and the current token. This keeps retired requests and pairing/probe tokens isolated without making expired Knowledge credentials look like retryable save failures.
 
+### Persisted computer-app approvals survive live control being unavailable (#1489)
+
+- The approvals list and revoke use manager settings, so render them outside the online/enabled control gates. Display and encode the returned identifier verbatim: it may be a bundle ID, a `name:` identifier or `screen`.
+- Apply the successful DELETE's complete list, and invalidate earlier reads when admitting the write. Aborting a request alone cannot fence a transport that already has a response. Bind confirmation, retry and finalizers to the machine, actual manager and credential generation; pass captured credentials with their owner so current 401 recovery still works.
+
 ## Overview with no computers (2026-11-06, #3729)
 
 - No pending Agent does not mean an Agent can be started. Overview's idle summary and cards distinguish "No computers" from "Computers exist, no tasks"; the header must not keep suggesting New Agent. Use the total computer count, not treating offline computers as never connected.

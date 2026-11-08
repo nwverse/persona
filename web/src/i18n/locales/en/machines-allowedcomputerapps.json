@@ -1,0 +1,15 @@
+{
+  "title": "Allowed apps for the assistant",
+  "scope": "Persona remembers these computer-app approvals on the manager, even when this computer is offline or control is off. Agent tools with separate computer-use permissions are managed separately.",
+  "denied": "You do not have permission to manage remembered computer-app approvals.",
+  "unsupported": "This manager does not support remembered computer-app approvals for this computer.",
+  "invalid_response": "The manager returned an invalid approvals list. Try again.",
+  "empty": "No remembered app approvals.",
+  "revoke": "Revoke",
+  "revoked": "Approval revoked. Persona will ask again the next time it needs this app or screen.",
+  "approved_at": "Approved {at}",
+  "confirm_title": "Revoke remembered approval?",
+  "confirm_detail": "Persona will ask again the next time it needs this app or screen. This does not stop an operation already in progress.",
+  "refresh": "Refresh",
+  "retry": "Retry"
+}
