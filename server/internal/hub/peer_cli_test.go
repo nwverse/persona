@@ -147,7 +147,6 @@ func TestPeerArguments(t *testing.T) {
 	}{
 		{args: nil},
 		{args: []string{"bogus"}},
-		{args: []string{"--help"}},
 		{args: []string{"list"}, ok: true},
 		{args: []string{"list", "x"}},
 		{args: []string{"list", "--all"}},
@@ -188,5 +187,23 @@ func TestPeerArguments(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(home, ".persona", "hub.json")); !os.IsNotExist(err) {
 		t.Errorf("a usage mistake touched hub.json: %v", err)
+	}
+}
+
+// Help asked for anywhere in a peer command (-h, --help, or help as the command) prints the usage on out and is no
+// mistake (exit 0), before reading or creating hub.json; `personad hub pair -h` and `persona-hub hub -h` do the same.
+func TestPeerHelp(t *testing.T) {
+	home := peerCLIHome(t)
+	for _, args := range [][]string{{"-h"}, {"--help"}, {"help"}, {"list", "-h"}, {"add", "--help"}, {"center", "hub-abc123", "-h"}} {
+		var out strings.Builder
+		if err := PeerCommand(context.Background(), args, strings.NewReader(""), &out); err != nil {
+			t.Errorf("peer %q: %v, want the usage and no error", args, err)
+		}
+		if want := clitext.Named(peerUsage) + "\n"; out.String() != want {
+			t.Errorf("peer %q printed %q, want %q", args, out.String(), want)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(home, ".persona", "hub.json")); !os.IsNotExist(err) {
+		t.Errorf("peer help touched hub.json: %v", err)
 	}
 }

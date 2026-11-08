@@ -11,6 +11,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -47,8 +48,13 @@ func PairPeer(ctx context.Context) error {
 
 // PeerCommand is `personad hub peer add <code>|-`, `personad hub peer list`, `personad hub peer remove <hub_id>`,
 // `personad hub peer center [<hub_id>] [--confirm]` (set as center; this hub when no id is given). ctx is the command's
-// (Ctrl-C ends it); an argument mistake is a clitext.UsageError, found before hub.json is read.
+// (Ctrl-C ends it); an argument mistake is a clitext.UsageError, found before hub.json is read. Help asked for prints
+// the usage on out (exit 0).
 func PeerCommand(ctx context.Context, args []string, stdin io.Reader, out io.Writer) error {
+	if peerHelpAsked(args) {
+		fmt.Fprintln(out, clitext.Named(peerUsage))
+		return nil
+	}
 	if err := checkPeerArgs(args); err != nil {
 		return err
 	}
@@ -178,6 +184,15 @@ func readPeerCode(ctx context.Context, stdin io.Reader) (string, error) {
 
 // peerUsage is `hub peer`'s usage line.
 const peerUsage = "usage: personad hub peer add <code>|- | list | remove <hub_id> | center [<hub_id>] [--confirm]"
+
+// peerHelpAsked: help as the command, or -h / --help anywhere (no code or hub id starts with "-": codes are
+// persona://peer links, ids UUIDs).
+func peerHelpAsked(args []string) bool {
+	if len(args) > 0 && args[0] == "help" {
+		return true
+	}
+	return slices.ContainsFunc(args, clitext.IsHelpArg)
+}
 
 // checkPeerArgs refuses what PeerCommand would otherwise drop or misread: an extra word (`list x`), a second id
 // (`center a b`), a flag taken for an id or a code (`center --bogus`, `remove -x`).

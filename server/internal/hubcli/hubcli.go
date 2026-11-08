@@ -48,9 +48,17 @@ const Usage = `  personad hub [run]        run the hub (config ~/.persona/hub.js
 // (`personad hub run`), "" for persona-hub (`persona-hub run`), which sets it.
 var Word = "hub "
 
-// Help is the usage text an unknown command prints after saying so: the hub's commands as `personad hub …`;
-// persona-hub sets its own.
-var Help = "usage:\n" + Usage
+// Help is the usage text -h prints, and an unknown command after saying so, printed as it is: persona-hub sets its
+// own, written with its name (so what it says about personad stays personad). Empty: the hub's commands as
+// `personad hub …`, with the program's name in (helpText).
+var Help string
+
+func helpText() string {
+	if Help != "" {
+		return Help
+	}
+	return clitext.Named("usage:\n" + Usage)
+}
 
 // Hub runs `hub <args…>`: args[0] is the command (run when there is none). Setup that stopped exits 1 (the step that
 // stopped said why).
@@ -62,6 +70,10 @@ func Hub(ctx context.Context, build update.Build, args []string) error {
 	rest := []string{}
 	if len(args) > 1 {
 		rest = args[1:]
+	}
+	if clitext.IsHelpArg(sub) || sub == "help" { // asked for: the usage on stdout and exit 0, as `persona-hub hub -h`
+		fmt.Println(helpText())
+		return nil
 	}
 	switch sub {
 	case "run":
@@ -106,7 +118,7 @@ func Hub(ctx context.Context, build update.Build, args []string) error {
 		}
 		return hub.AssistantToken(ctx, os.Stdout)
 	}
-	return clitext.UsageError(fmt.Sprintf("unknown %scommand %q\n%s", Word, sub, clitext.Named(Help)))
+	return clitext.UsageError(fmt.Sprintf("unknown %scommand %q\n%s", Word, sub, helpText()))
 }
 
 // noArguments is the usage mistake of arguments after a command that takes none.
