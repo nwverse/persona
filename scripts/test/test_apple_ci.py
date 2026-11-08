@@ -87,6 +87,14 @@ class AppleCIPreparationTests(unittest.TestCase):
         })
         self.assertIn('-skip-testing:PersonaTests/AssistantHTMLSecurityTests/aRealInfiniteLoopCanBeDiscardedWithoutBlockingANewCard()', script)
 
+    def test_ios_runtime_cache_is_built_before_the_bounded_boot(self):
+        script = SCRIPT.read_text()
+        cache = script.index('xcrun simctl runtime dyld_shared_cache update "$IOS_RUNTIME"')
+        self.assertLess(script.index('IOS_RUNTIME="$runtime"'), cache)
+        self.assertLess(cache, script.index("Create and boot stock iOS 26.0 test simulator"))
+        # The boot deadline itself stays as it was.
+        self.assertIn('SIM_BOOT_TIMEOUT=900', script)
+
     def test_mac_lane_excludes_the_same_old_hub_lab_suite_as_ios(self):
         # The suite is compiled into PersonaMacTests too; selected without its lab hub it is reported as a skip,
         # which result inspection rightly refuses.
