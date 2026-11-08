@@ -35,6 +35,10 @@ const (
 	StateUnknown  = "unknown"
 )
 
+// CodedStartErrorMax is how many runes of a coded refusal's start_error a list row or a task keeps where a summary would
+// be clipped shorter: the hub's sentence for the code (StartErrorCode) is bounded, and its remedy comes last (#1642).
+const CodedStartErrorMax = 600
+
 type Session struct {
 	// Manager is the manager it belongs to (docs/assistant/managers.md, "Ownership"); the hub stamps it on what it sends the apps.
 	Manager          string               `json:"manager,omitempty"`

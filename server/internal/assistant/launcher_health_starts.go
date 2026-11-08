@@ -27,6 +27,13 @@ type startWatch struct {
 	seen     time.Time
 }
 
+// countedStart is a failed start already counted, as kept with the records: when, by this manager's clock.
+type countedStart struct {
+	Machine string    `json:"machine"`
+	Session string    `json:"session"`
+	At      time.Time `json:"at"`
+}
+
 // StartEnded: an app's start the node ran before answering went as r says (the hub's POST /api/v1/sessions).
 func (s *Service) StartEnded(ctx context.Context, r StartEnded) {
 	launcher := cmp.Or(r.Launcher, "claude")
@@ -38,13 +45,13 @@ func (s *Service) StartEnded(ctx context.Context, r StartEnded) {
 }
 
 // followStarts follows d's starts answered at once: one that was starting and is listed now without an error worked,
-// one listed with start_error failed (counted once while the node lists it). A failure older than the launcher's
-// record there (one the manager counted before it restarted, a start that worked since) is not counted again.
+// one listed with start_error failed, counted once while the node lists it. Which ones were counted is kept with the
+// records, so a restart does not count them again (a start that worked since would be marked broken anew); the
+// failure's updated_at is not compared with anything, being the node's clock.
 func (s *Service) followStarts(ctx context.Context, d DeviceSessions) {
 	type failure struct {
 		launcher string
 		err      error
-		at       time.Time
 	}
 	var worked []string
 	var failed []failure
@@ -53,7 +60,7 @@ func (s *Service) followStarts(ctx context.Context, d DeviceSessions) {
 	b := &s.health
 	b.mu.Lock()
 	if b.starting == nil {
-		b.starting, b.counted = map[[2]string]startWatch{}, map[[2]string]time.Time{}
+		b.starting = map[[2]string]startWatch{}
 	}
 	for _, sess := range d.Sessions {
 		listed[sess.SessionID] = sess
@@ -65,9 +72,15 @@ func (s *Service) followStarts(ctx context.Context, d DeviceSessions) {
 			}
 		case sess.StartError != "":
 			delete(b.starting, key)
+			if len(failed) == 0 {
+				s.healthLoadLocked(ctx) // what was counted before a restart
+			}
+			if b.counted == nil {
+				b.counted = map[[2]string]time.Time{}
+			}
 			if _, done := b.counted[key]; !done {
 				b.counted[key] = now
-				failed = append(failed, failure{cmp.Or(sess.Launcher, "claude"), sessionStartErr(sess), sess.UpdatedAt})
+				failed = append(failed, failure{cmp.Or(sess.Launcher, "claude"), sessionStartErr(sess)})
 			}
 		}
 	}
@@ -89,14 +102,14 @@ func (s *Service) followStarts(ctx context.Context, d DeviceSessions) {
 			delete(b.counted, key)
 		}
 	}
+	if len(failed) > 0 {
+		s.healthSaveLocked(ctx) // counted, even when the failure says nothing of the launcher (recordStartFailure)
+	}
 	b.mu.Unlock()
 	for _, l := range worked {
 		s.recordStartSuccess(ctx, d.MachineID, l)
 	}
 	for _, f := range failed {
-		if r, ok := s.launcherHealth(ctx, d.MachineID, f.launcher); ok && !f.at.IsZero() && !r.CheckedAt.Before(f.at) {
-			continue
-		}
 		s.recordStartFailure(ctx, d.MachineID, f.launcher, f.err)
 	}
 }

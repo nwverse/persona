@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/db"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/rpc"
 )
@@ -127,16 +128,13 @@ func TestLauncherHealthRecordsAppStarts(t *testing.T) {
 	if h := healthState(s, "l4", "work"); h.Kind != errKindNotInTerminal || h.Fails != 1 {
 		t.Fatalf("a failed async start: %+v", h)
 	}
-	// A failure from before the record (counted before a restart) is not counted again.
-	s.health.mu.Lock()
-	s.health.counted = nil
-	s.health.starting = nil
-	s.health.mu.Unlock()
-	old := failed
-	old.SessionID, old.UpdatedAt = "a0", time.Now().Add(-time.Hour)
-	s.followStarts(ctx, DeviceSessions{MachineID: "l4", Sessions: []proto.Session{old, failed}})
-	if h := healthState(s, "l4", "work"); h.Fails != 1 {
-		t.Fatalf("an old failure counted again: %+v", h)
+	// Another failure, listed with an updated_at an hour behind the manager's clock (the node's clock is behind):
+	// counted all the same, whatever the record's checked_at.
+	behind := failed
+	behind.SessionID, behind.UpdatedAt = "a0", time.Now().Add(-time.Hour)
+	s.followStarts(ctx, DeviceSessions{MachineID: "l4", Sessions: []proto.Session{behind, failed}})
+	if h := healthState(s, "l4", "work"); h.Fails != 2 {
+		t.Fatalf("a failure whose node clock is behind: %+v", h)
 	}
 	// Another start, which comes up: the terminal runs it now.
 	again := starting
@@ -146,6 +144,31 @@ func TestLauncherHealthRecordsAppStarts(t *testing.T) {
 	s.followStarts(ctx, DeviceSessions{MachineID: "l4", Sessions: []proto.Session{up}})
 	if h := healthState(s, "l4", "work"); h.State != healthOK {
 		t.Fatalf("a start that came up did not clear it: %+v", h)
+	}
+}
+
+// The failed app starts counted are kept with the records: after a restart, one the node still lists is not counted
+// again, so a start that worked since stays the latest word.
+func TestLauncherHealthCountsAnAppStartOnceAcrossARestart(t *testing.T) {
+	s, f := launcherHealthHubOn(t, newTestService)
+	delete(f.checks, "l4/work")
+	ctx := context.Background()
+	r := terminalRefusal(proto.CodeLauncherMissing, "work")
+	failed := proto.Session{SessionID: "a1", Launcher: "work", Status: proto.StatusOffline, StartError: r.Message,
+		StartErrorCode: r.Code, StartErrorArgs: map[string]string{"launcher": "work", "where": "terminal", "pane_shell": "bash"},
+		UpdatedAt: time.Now().Add(-time.Hour).UTC()}
+	s.followStarts(ctx, DeviceSessions{MachineID: "l4", Sessions: []proto.Session{failed}})
+	if h := healthState(s, "l4", "work"); h.Kind != errKindNotInTerminal || h.Fails != 1 {
+		t.Fatalf("a failed async start: %+v", h)
+	}
+	s.StartEnded(ctx, StartEnded{MachineID: "l4", Launcher: "work", OK: true}) // the user fixed the rc file
+	// A restart: what memory had is gone, the store keeps the rest.
+	s.health.mu.Lock()
+	s.health.loaded, s.health.recs, s.health.repairs, s.health.counted, s.health.starting = false, nil, nil, nil, nil
+	s.health.mu.Unlock()
+	s.followStarts(ctx, DeviceSessions{MachineID: "l4", Sessions: []proto.Session{failed}})
+	if h := healthState(s, "l4", "work"); h.State != healthOK {
+		t.Fatalf("counted again after a restart: %+v", h)
 	}
 }
 
@@ -159,7 +182,8 @@ func TestTaskStartKeepsTheTerminalRefusal(t *testing.T) {
 		t.Fatal(err)
 	}
 	waitFor(t, "the task to fail", func() bool { return onlyTodo(s).StartError != "" })
-	if why := onlyTodo(s).StartError; !strings.Contains(why, "终端标签页") || !strings.Contains(why, "「work」") {
+	if why := onlyTodo(s).StartError; !strings.Contains(why, "终端标签页") || !strings.Contains(why, "「work」") ||
+		!strings.HasSuffix(why, "添加为模型供应商。") {
 		t.Errorf("todo says %q", why)
 	}
 	var p *TaskPlan
@@ -181,15 +205,59 @@ func TestTaskStartKeepsTheTerminalRefusal(t *testing.T) {
 	}
 }
 
+// The English sentence is longer than a summary's clip: the todo keeps it whole, remedy and all.
+func TestTaskStartKeepsTheWholeEnglishRefusal(t *testing.T) {
+	s, f := newTaskService(t)
+	f.mu.Lock()
+	f.hello.Locale = "en"
+	f.mu.Unlock()
+	f.failStart = terminalRefusal(proto.CodeLauncherMissing, "work")
+	if _, err := s.toolTaskPlan(context.Background(), "conv1", planArgs(true)); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, "the task to fail", func() bool { return onlyTodo(s).StartError != "" })
+	if why := onlyTodo(s).StartError; len([]rune(why)) <= 200 || !strings.HasSuffix(why, "or add it to Persona as a model provider.") {
+		t.Errorf("todo says %q", why)
+	}
+}
+
+// A todo's agent that the terminal could not start (one the app started, answered at once) keeps the same sentence as
+// the session list, not the node's English: in memory and in the store.
+func TestTodoAgentKeepsTheWordedStartError(t *testing.T) {
+	todoStores(t, func(t *testing.T, e *todoEnv, database *db.DB) {
+		e.f.setSessions("macbook", proto.Session{SessionID: "s1", Launcher: "work", Starting: true, Cwd: "/code", Agent: "claude"})
+		todo := e.create("todo A")
+		e.must("PUT", "/api/v1/todos/"+todo.ID+"/agents/macbook/s1", "")
+		r := terminalRefusal(proto.CodeLauncherMissing, "work")
+		e.sessions("macbook", proto.Session{SessionID: "s1", Launcher: "work", Status: proto.StatusOffline, Cwd: "/code", Agent: "claude",
+			StartError: r.Message, StartErrorCode: r.Code, StartErrorArgs: map[string]string{"launcher": "work", "where": "terminal",
+				"pane_shell": "bash", "launcher_shell": "zsh", "rc_file": "~/.zshrc"}})
+		waitFor(t, "the agent's start error", func() bool {
+			a := agentOf(*e.get(todo.ID), "s1")
+			return a != nil && a.StartError != ""
+		})
+		if why := agentOf(*e.get(todo.ID), "s1").StartError; !strings.Contains(why, "终端标签页（bash）里没有「work」") {
+			t.Errorf("agent says %q", why)
+		}
+		if database == nil {
+			return
+		}
+		waitFor(t, "the stored start error", func() bool {
+			agents, err := database.ListAllTodoAgents(context.Background())
+			return err == nil && len(agents) == 1 && strings.Contains(agents[0].StartError, "终端标签页（bash）")
+		})
+	})
+}
+
 // A failed start's start_error in the apps' lists is the hub's sentence for its code, in the user's language and
 // naming the machine; one without a code stays the node's text.
 func TestStartErrorTextWordsTheCode(t *testing.T) {
 	sess := proto.Session{StartError: "the new tab's shell (bash) has no command work", StartErrorCode: proto.CodeLauncherMissing,
 		StartErrorArgs: map[string]string{"launcher": "work", "where": "terminal", "pane_shell": "bash", "launcher_shell": "zsh", "rc_file": "~/.zshrc"}}
-	if got := startErrorText("en", "Lab box", sess); !strings.Contains(got, "New terminal tabs on Lab box open bash") {
+	if got := startErrorText("en", "Lab box", sess); !strings.Contains(got, "new terminal tabs on Lab box (bash) has no command “work”") {
 		t.Errorf("en: %q", got)
 	}
-	if got := startErrorText("ja", "Lab box", sess); !strings.Contains(got, "Lab box の新しいターミナルタブは bash") {
+	if got := startErrorText("ja", "Lab box", sess); !strings.Contains(got, "Lab box の新しいターミナルタブ（bash）には「work」") {
 		t.Errorf("ja: %q", got)
 	}
 	sess.StartErrorCode = "something_else"

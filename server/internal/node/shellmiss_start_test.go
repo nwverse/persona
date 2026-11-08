@@ -21,6 +21,24 @@ func typedThenSays(f *fakeHerdr, pane string, said ...string) {
 	})
 }
 
+// withShellLaunchers has the node's login shell list names (launchers.go's cache, a minute fresh), not run a real one.
+func withShellLaunchers(t *testing.T, names ...string) {
+	t.Helper()
+	list := make([]proto.Launcher, 0, len(names))
+	for _, name := range names {
+		list = append(list, proto.Launcher{Name: name})
+	}
+	launcherCache.Lock()
+	oldAt, oldList := launcherCache.at, launcherCache.list
+	launcherCache.at, launcherCache.list = time.Now(), list
+	launcherCache.Unlock()
+	t.Cleanup(func() {
+		launcherCache.Lock()
+		launcherCache.at, launcherCache.list = oldAt, oldList
+		launcherCache.Unlock()
+	})
+}
+
 // newShellTab answers a start's herdr calls for a new tab w1:p2 in which herdr never sees an agent and the shell
 // stays in front.
 func newShellTab(f *fakeHerdr, shell string) {
@@ -38,6 +56,7 @@ func newShellTab(f *fakeHerdr, shell string) {
 // listed, and closes the tab it made. Nothing is named or reported to herdr.
 func TestHerdrStartWhoseLauncherTheTabLacksFailsAtOnce(t *testing.T) {
 	withPaneShell(t, "/bin/bash")
+	withShellLaunchers(t, "cc_gone", "cc_work")
 	n, f, home := herdrNode(t)
 	withStartWaits(n, time.Minute, time.Minute)
 	newShellTab(f, "bash")
@@ -69,9 +88,30 @@ func TestHerdrStartWhoseLauncherTheTabLacksFailsAtOnce(t *testing.T) {
 	}
 }
 
+// A launcher the login shell does not list either (removed from the rc file, a stale name from an old picker): the
+// start still ends at once, as plain launcher_missing, not as the terminal's.
+func TestHerdrStartOfAnUnlistedLauncherIsPlainMissing(t *testing.T) {
+	withPaneShell(t, "/bin/bash")
+	withShellLaunchers(t, "cc_work")
+	n, f, home := herdrNode(t)
+	withStartWaits(n, time.Minute, time.Minute)
+	newShellTab(f, "bash")
+	typedThenSays(f, "w1:p2", "bash: cc_gone: command not found")
+	began := time.Now()
+	_, err := request(t, n, "session.start", map[string]any{"cwd": home, "workspace_id": "w1", "launcher": "cc_gone", "prompt": "hi"})
+	var re *rpc.Error
+	if !errors.As(err, &re) || re.Code != proto.CodeLauncherMissing || strings.Contains(string(re.Data), `"where"`) {
+		t.Fatalf("start: %v", err)
+	}
+	if d := time.Since(began); d > 5*time.Second {
+		t.Errorf("waited %s", d)
+	}
+}
+
 // A launcher that runs but whose claude the tab's PATH lacks: claude_missing once the shell is back in front.
 func TestHerdrStartWhoseClaudeTheTabLacksFailsAtOnce(t *testing.T) {
 	withPaneShell(t, "/bin/zsh")
+	withShellLaunchers(t, "cc_gone", "cc_work")
 	n, f, home := herdrNode(t)
 	withStartWaits(n, time.Minute, time.Minute)
 	newShellTab(f, "zsh")
@@ -91,6 +131,7 @@ func TestHerdrStartWhoseClaudeTheTabLacksFailsAtOnce(t *testing.T) {
 // still come. A start that then times out says what the shell printed instead of guessing at a busy machine.
 func TestHerdrStartTimeoutNamesTheShellsLine(t *testing.T) {
 	withPaneShell(t, "/bin/bash")
+	withShellLaunchers(t, "cc_gone", "cc_work")
 	n, f, home := herdrNode(t)
 	withStartWaits(n, 1500*time.Millisecond, time.Minute)
 	newShellTab(f, "bash")
@@ -106,6 +147,7 @@ func TestHerdrStartTimeoutNamesTheShellsLine(t *testing.T) {
 // for the hub to word and the app to offer its remedy; a message waiting for it gets the same code.
 func TestAsyncStartKeepsTheRefusalsCode(t *testing.T) {
 	withPaneShell(t, "/bin/bash")
+	withShellLaunchers(t, "cc_gone", "cc_work")
 	n, f, home := herdrNode(t)
 	withStartWaits(n, time.Minute, time.Minute)
 	newShellTab(f, "bash")

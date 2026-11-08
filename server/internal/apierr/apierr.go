@@ -346,8 +346,12 @@ func Sentence(l i18n.Lang, code string, data map[string]any) string {
 	if arg("machine_name") == "" && i18n.Has(key+"_here") {
 		key += "_here" // "this computer"
 	}
+	pane := arg("pane_shell")
+	if pane == "" && arg("where") == "terminal" { // the node could not tell which shell the tab runs
+		pane = i18n.T(l, "apierr-apierr.terminal_default_shell")
+	}
 	return i18n.T(l, key, i18n.Args{"machine": arg("machine_name"), "launcher": arg("launcher"), "missing": arg("missing"),
-		"pane_shell": arg("pane_shell"), "launcher_shell": arg("launcher_shell"), "rc_file": arg("rc_file")})
+		"pane_shell": pane, "launcher_shell": arg("launcher_shell"), "rc_file": arg("rc_file")})
 }
 
 // Reason is the failure in an error body read back from another hub or service: the original text when the summary

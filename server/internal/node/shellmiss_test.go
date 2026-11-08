@@ -35,18 +35,22 @@ func TestParseShellMiss(t *testing.T) {
 		// dash and sh as dash
 		{"sh: 1: cc: not found", "cc", missNotFound, "sh"},
 		{"/bin/dash: 4: cc: not found", "cc", missNotFound, "dash"},
-		{"dash: 2: /opt/p/personad: not found", "/opt/p/personad", missNotFound, "dash"},
+		// a path dash says is "not found" is a file that is not there (a managed launcher's personad)
+		{"dash: 2: /opt/p/personad: not found", "/opt/p/personad", missNoSuchFile, "dash"},
 		// ksh, mksh, busybox
 		{"ksh: cc: not found", "cc", missNotFound, "ksh"},
 		{"/bin/ksh: cc: not found [No such file or directory]", "cc", missNotFound, "ksh"},
 		{"mksh: cc: not found", "cc", missNotFound, "mksh"},
+		{"ksh: /opt/p/personad: not found", "/opt/p/personad", missNoSuchFile, "ksh"},
+		{"sh: /opt/p/personad: not found", "/opt/p/personad", missNoSuchFile, "sh"},
 		// fish 3 and fish 2
 		{"fish: Unknown command: cc", "cc", missNotFound, "fish"},
 		{"fish: Unknown command 'cc'", "cc", missNotFound, "fish"},
 		// Ubuntu's handler, without and with a suggestion
 		{"cc: command not found", "cc", missNotFound, ""},
 		{"Command 'cc' not found, did you mean:", "cc", missNotFound, ""},
-		// personad launch of a Persona-managed launcher
+		// personad launch of a Persona-managed launcher, as log.Fatal prints it (date and time first) and without them
+		{"2026/11/09 02:13:19 personad launch: claude not found in PATH or the usual install locations", "claude", missNotFound, ""},
 		{"personad launch: claude not found in PATH or the usual install locations", "claude", missNotFound, ""},
 		// a path that is not there
 		{"bash: /opt/p/personad: No such file or directory", "/opt/p/personad", missNoSuchFile, "bash"},
@@ -77,6 +81,8 @@ func TestParseShellMiss(t *testing.T) {
 		"the file was not found",
 		"Permission denied (publickey).",
 		"Claude Code v2.1.318",
+		"2026/11/09 02:13:19 personad launch work: no persona node: dial unix /home/u/.persona/node.sock: connect: no such file",
+		"in function 'cc' with arguments '--session-id " + probeID + "'",
 	} {
 		if m, ok := parseShellMiss(line); ok {
 			t.Errorf("parseShellMiss(%q) = %+v, want none", line, m)
@@ -121,6 +127,10 @@ func TestStartProbeVerdict(t *testing.T) {
 		{"claude missing in the launcher", typed("% ", "cc") + "\ncc:2: command not found: claude\n% ", shellBack,
 			proto.CodeClaudeMissing, "claude", ""},
 		{"claude missing while the launcher goes on", typed("% ", "cc") + "\ncc:2: command not found: claude\n", shellAway, "", "", ""},
+		{"claude missing in a fish function, its backtrace repeating the arguments", typed("> ", "cc") +
+			"\nfish: Unknown command: claude\n/home/u/.config/fish/functions/cc.fish (line 2):\n    claude $argv\n    ^~~~~^\n" +
+			"in function 'cc' with arguments '--session-id " + probeID + " --mcp-config /home/u/.persona/mcp.json'\n> ",
+			shellBack, proto.CodeClaudeMissing, "claude", ""},
 		{"claude missing in rc noise before the shell's echo", typed("", "cc") + "\nbash: claude: command not found\n" +
 			typed("$ ", "cc") + "\n", shellBack, "", "", ""},
 		{"only the echo", typed("$ ", "cc"), shellBack, "", "", ""},
@@ -155,17 +165,24 @@ func TestStartProbeVerdict(t *testing.T) {
 	}
 }
 
-// A managed launcher's command is the node's personad: a path the tab cannot run is the launcher missing there; the
-// plain claude launcher missing is claude missing.
+// A managed launcher's command is the node's personad: a path the tab cannot run is the launcher missing there (dash,
+// ksh and busybox say "not found" of a path, which is the path wording too); its claude missing is claude missing, as
+// personad prints it (log.Fatal: date and time first); the plain claude launcher missing is claude missing.
 func TestStartProbeOfManagedAndPlainClaude(t *testing.T) {
 	managed := &startProbe{anchor: probeID, program: "/opt/p/personad", launcher: "work", paneShell: "zsh"}
-	refused, _ := managed.verdict(typed("% ", "/opt/p/personad launch work")+"\nzsh: no such file or directory: /opt/p/personad\n% ", shellBack)
-	var re *rpc.Error
-	if !errors.As(refused, &re) || re.Code != proto.CodeLauncherMissing || !strings.Contains(re.Message, "/opt/p/personad") {
-		t.Errorf("managed: %v", refused)
+	cmd := "/opt/p/personad launch work"
+	for _, line := range []string{"zsh: no such file or directory: /opt/p/personad", "dash: 1: /opt/p/personad: not found",
+		"sh: /opt/p/personad: not found"} {
+		refused, _ := managed.verdict(typed("% ", cmd)+"\n"+line+"\n% ", shellBack)
+		var re *rpc.Error
+		if !errors.As(refused, &re) || re.Code != proto.CodeLauncherMissing || !strings.Contains(re.Message, "cannot run /opt/p/personad") ||
+			!strings.Contains(string(re.Data), `"kind":"no_such_file"`) {
+			t.Errorf("managed, %q: %v %s", line, refused, refusalJSON(refused))
+		}
 	}
-	refused, _ = managed.verdict(typed("% ", "/opt/p/personad launch work")+
-		"\npersonad launch: claude not found in PATH or the usual install locations\n% ", shellBack)
+	refused, _ := managed.verdict(typed("% ", cmd)+
+		"\n2026/11/09 02:13:19 personad launch: claude not found in PATH or the usual install locations\n% ", shellBack)
+	var re *rpc.Error
 	if !errors.As(refused, &re) || re.Code != proto.CodeClaudeMissing {
 		t.Errorf("managed without claude: %v", refused)
 	}
@@ -173,6 +190,54 @@ func TestStartProbeOfManagedAndPlainClaude(t *testing.T) {
 	refused, _ = plain.verdict(typed("$ ", "claude")+"\nbash: claude: command not found\n$ ", shellAway)
 	if !errors.As(refused, &re) || re.Code != proto.CodeClaudeMissing {
 		t.Errorf("plain claude: %v", refused)
+	}
+}
+
+func refusalJSON(err error) string {
+	var re *rpc.Error
+	if errors.As(err, &re) {
+		return string(re.Data)
+	}
+	return ""
+}
+
+// A launcher the node does not list either (gone from the rc file, a stale name) is plain launcher_missing: no
+// "where", so it is not worded or kept as the terminal's. Listed or not is asked only of a name the shell lacks.
+func TestStartProbeOfUnlistedLauncher(t *testing.T) {
+	asked := 0
+	p := &startProbe{anchor: probeID, program: "cc", launcher: "cc", paneShell: "bash", listed: func() bool { asked++; return false }}
+	refused, _ := p.verdict(typed("$ ", "cc")+"\nbash: cc: command not found\n$ ", shellBack)
+	var re *rpc.Error
+	if !errors.As(refused, &re) || re.Code != proto.CodeLauncherMissing || strings.Contains(string(re.Data), `"where"`) ||
+		!strings.Contains(re.Message, "does not list that launcher") || asked != 1 {
+		t.Errorf("unlisted: %v %s (asked %d)", refused, refusalJSON(refused), asked)
+	}
+	refused, _ = p.verdict(typed("$ ", "cc")+"\ncc:2: command not found: claude\n$ ", shellBack)
+	if !errors.As(refused, &re) || re.Code != proto.CodeClaudeMissing || !strings.Contains(string(re.Data), `"where":"terminal"`) || asked != 1 {
+		t.Errorf("claude missing asked the list: %v (asked %d)", refused, asked)
+	}
+	p.listed = func() bool { return true }
+	refused, _ = p.verdict(typed("$ ", "cc")+"\nbash: cc: command not found\n$ ", shellBack)
+	if !errors.As(refused, &re) || !strings.Contains(string(re.Data), `"where":"terminal"`) {
+		t.Errorf("listed: %v", refused)
+	}
+}
+
+// A tab whose shell is not known (herdr on Windows names none) and a line naming none: no shell is made up; the hub
+// says "the default shell" in the user's language (apierr.Sentence).
+func TestStartProbeOfUnknownShell(t *testing.T) {
+	if p := (&Node{}).probeFor(t.Context(), probeID, "cc", []string{"", "/bin/zsh"}); p.paneShell != "zsh" {
+		t.Errorf("paneShell %q", p.paneShell)
+	}
+	if p := (&Node{}).probeFor(t.Context(), probeID, "cc", []string{""}); p.paneShell != "" {
+		t.Errorf("paneShell %q of no shell", p.paneShell)
+	}
+	p := &startProbe{anchor: probeID, program: "cc", launcher: "cc"}
+	refused, _ := p.verdict(typed("$ ", "cc")+"\ncc: command not found\n$ ", shellBack)
+	var re *rpc.Error
+	if !errors.As(refused, &re) || strings.Contains(string(re.Data), "pane_shell") || strings.Contains(re.Message, "()") ||
+		strings.Contains(re.Message, "its shell") || !strings.HasPrefix(re.Message, "the new tab's shell has no command cc") {
+		t.Errorf("unknown shell: %v %s", refused, refusalJSON(refused))
 	}
 }
 

@@ -72,7 +72,7 @@ func (l *startLog) finish(id string, err error) {
 		r.session.Starting = false
 		r.session.Status = proto.StatusOffline
 		r.session.StartError = err.Error()
-		r.session.UpdatedAt = r.ended.UTC() // when it failed: a start that worked since is newer (launcher health)
+		r.session.UpdatedAt = r.ended.UTC() // when it failed
 		// A coded refusal keeps its code and details, which the hub words in the user's language and the apps offer
 		// the remedy of (#1642); the rest is text.
 		var re *rpc.Error

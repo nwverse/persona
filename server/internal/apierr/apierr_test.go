@@ -88,13 +88,13 @@ func TestCallExplainsTerminalRefusals(t *testing.T) {
 		want   []string
 	}{
 		{"default", "", OnMachine(data(proto.CodeLauncherMissing, "not_found", "cc"), "mbp"), "connect_model",
-			[]string{"mbp 上新开的终端标签页用的是 bash", "「cc」", "zsh（~/.zshrc）"}},
+			[]string{"mbp 上新开的终端标签页（bash）里没有「cc」", "「cc」", "zsh（~/.zshrc）"}},
 		{"English, here", i18n.En, data(proto.CodeLauncherMissing, "not_found", "cc"), "connect_model",
-			[]string{"New terminal tabs on this computer open bash", "“cc”", "zsh (~/.zshrc)"}},
+			[]string{"new terminal tabs on this computer (bash) has no command “cc”", "“cc”", "zsh (~/.zshrc)"}},
 		{"Japanese", i18n.Ja, OnMachine(data(proto.CodeLauncherMissing, "not_found", "cc"), "mbp"), "connect_model",
-			[]string{"mbp の新しいターミナルタブは bash", "「cc」", "zsh（~/.zshrc）"}},
+			[]string{"mbp の新しいターミナルタブ（bash）には「cc」", "「cc」", "zsh（~/.zshrc）"}},
 		{"a path", i18n.En, OnMachine(data(proto.CodeLauncherMissing, "no_such_file", "/opt/p/personad"), "mbp"), "connect_model",
-			[]string{"New terminal tabs on mbp open bash, which can't run “/opt/p/personad”", "“cc”"}},
+			[]string{"new terminal tabs on mbp (bash) can't run “/opt/p/personad”", "“cc”"}},
 		{"claude", i18n.En, OnMachine(data(proto.CodeClaudeMissing, "not_found", "claude"), "mbp"), "install_claude",
 			[]string{"new terminal tabs on mbp (bash) can't find Claude Code (“claude”)", "“cc”"}},
 	} {
@@ -113,6 +113,16 @@ func TestCallExplainsTerminalRefusals(t *testing.T) {
 	}
 	if got := Sentence(i18n.En, "input_draft", nil); got != "" {
 		t.Errorf("a refusal the hub does not word: %q", got)
+	}
+	// A tab whose shell the node could not tell (herdr on Windows names none): the default shell, in the language.
+	for l, want := range map[i18n.Lang]string{i18n.En: "(the default shell)", i18n.ZhHans: "（默认的 shell）", i18n.Ja: "（既定のシェル）"} {
+		for _, code := range []string{proto.CodeLauncherMissing, proto.CodeClaudeMissing} {
+			got := Sentence(l, code, map[string]any{"launcher": "cc", "missing": "cc", "kind": "not_found", "where": "terminal",
+				"launcher_shell": "zsh", "rc_file": "~/.zshrc"})
+			if !strings.Contains(got, want) || strings.Contains(got, "{") {
+				t.Errorf("%s %s, no pane_shell: %q", l, code, got)
+			}
+		}
 	}
 }
 

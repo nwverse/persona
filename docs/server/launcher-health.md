@@ -16,7 +16,7 @@ Now a hub manager (`server/internal/assistant/launcher_health*.go`) periodically
 - A failed Agent start is recorded too: when `agent_start`, a task plan starting an Agent (`startTaskAgent`) or a repair Agent's start gets an error from `session.start`, it is recorded as a failure (source `start`),
   and a check runs right away to confirm (one network blip should not leave a launcher unavailable; if the check passes, it recovers).
   The App's own starts count as well (#1642, `launcher_health_starts.go`): the hub tells the manager how a start it waited for went (`session.start_ended`: a failure, or a start the node ran before answering that worked),
-  and a "New Agent" answered at once (`async`) is followed in the machine's session list, from `starting` to started or to `start_error` (counted once while the node lists it; a failure older than the launcher's record, one counted before the manager restarted, is not counted again).
+  and a "New Agent" answered at once (`async`) is followed in the machine's session list, from `starting` to started or to `start_error` (counted once while the node lists it: the starts counted are kept with the records, so one is not counted again after the manager restarts; the failure's `updated_at` is the node's clock and is not compared with the record's).
   A start whose outcome the hub does not know (the computer offline, the call timed out) and a request the node refused before running anything are not recorded.
 - Stored in the settings key `launchers.health` (Postgres), one entry per computer × launcher: success / failure, error text (redacted, truncated), error category,
   check time, consecutive failure count, repair log, state. It survives hub restarts.

@@ -164,7 +164,7 @@ func (n *Node) start(ctx context.Context, cwd, launcher, prompt, resume, workspa
 		return nil, fmt.Errorf("run launcher: %w", err)
 	}
 
-	a, err := n.waitReady(ctx, pane, n.probeFor(id, launcher, shells))
+	a, err := n.waitReady(ctx, pane, n.probeFor(ctx, id, launcher, shells))
 	if err != nil {
 		screen, _ := n.readPane(ctx, pane, "recent-unwrapped", 30)
 		// Close the tab: a claude that comes up after we gave up would sit there unbound, and a retry opens another.

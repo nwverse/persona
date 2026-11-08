@@ -60,7 +60,7 @@ func TestAppStartThatTheTerminalCannotRunCountsForLauncherHealth(t *testing.T) {
 	code, out := call(t, mux, "POST", "/api/v1/sessions", h.cfg.Token, `{"machine_id":"box","cwd":"/code","launcher":"work","prompt":"x"}`)
 	text, _ := out["error"].(string)
 	if code != 409 || out["code"] != proto.CodeLauncherMissing || out["action"] != "connect_model" || out["where"] != "terminal" ||
-		!strings.Contains(text, "示例电脑 上新开的终端标签页用的是 bash") || !strings.Contains(text, "zsh（~/.zshrc）") ||
+		!strings.Contains(text, "示例电脑 上新开的终端标签页（bash）里没有「work」") || !strings.Contains(text, "zsh（~/.zshrc）") ||
 		!strings.Contains(out["detail"].(string), "bash: work: command not found") {
 		t.Fatalf("start: %d %v", code, out)
 	}
@@ -85,4 +85,16 @@ func TestAppStartThatTheTerminalCannotRunCountsForLauncherHealth(t *testing.T) {
 		t.Fatalf("start again: %d %v", code, out)
 	}
 	eventually(t, 10*time.Second, "the start that worked clears it", func() bool { r := health(); return r != nil && r["state"] == "ok" })
+}
+
+// A row keeps a coded refusal's start_error whole (the manager's sentence, its remedy last); any other start_error is
+// clipped like the rest of a row's error lines.
+func TestRowKeepsACodedStartErrorWhole(t *testing.T) {
+	long := strings.Repeat("x", 300)
+	if got := runtimeSummary(proto.Session{StartError: long, StartErrorCode: proto.CodeLauncherMissing}).StartError; got != long {
+		t.Errorf("coded: %d runes kept", len([]rune(got)))
+	}
+	if got := runtimeSummary(proto.Session{StartError: long}).StartError; len([]rune(got)) != 180 {
+		t.Errorf("plain: %d runes kept", len([]rune(got)))
+	}
 }

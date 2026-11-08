@@ -119,6 +119,9 @@ type machineRepair struct {
 type healthStore struct {
 	Records []LauncherHealth `json:"records"`
 	Repairs []machineRepair  `json:"repairs,omitempty"`
+	// Counted are the app's failed starts already counted (launcher_health_starts.go), kept across a restart while the
+	// node may still list them.
+	Counted []countedStart `json:"counted_starts,omitempty"`
 }
 
 type healthBook struct {
@@ -129,7 +132,7 @@ type healthBook struct {
 	online   map[string]bool            // reachable at the last look
 	checking map[string]bool            // machines being checked now
 	// The app's starts answered at once (launcher_health_starts.go): those seen starting, by machine and session, and
-	// the failed ones already counted.
+	// the failed ones already counted, when (kept with the records: healthStore.Counted).
 	starting map[[2]string]startWatch
 	counted  map[[2]string]time.Time
 }
@@ -186,6 +189,14 @@ func (s *Service) healthLoadLocked(ctx context.Context) {
 		r := stored.Repairs[i]
 		b.repairs[r.Machine] = &r
 	}
+	for _, c := range stored.Counted {
+		if b.counted == nil {
+			b.counted = map[[2]string]time.Time{}
+		}
+		if key := [2]string{c.Machine, c.Session}; b.counted[key].IsZero() {
+			b.counted[key] = c.At
+		}
+	}
 	b.loaded = true
 }
 
@@ -207,6 +218,14 @@ func (s *Service) healthSaveLocked(ctx context.Context) {
 		out.Repairs = append(out.Repairs, *r)
 	}
 	sort.Slice(out.Repairs, func(i, j int) bool { return out.Repairs[i].Machine < out.Repairs[j].Machine })
+	for key, at := range b.counted {
+		if time.Since(at) <= startFollowFor {
+			out.Counted = append(out.Counted, countedStart{Machine: key[0], Session: key[1], At: at})
+		}
+	}
+	sort.Slice(out.Counted, func(i, j int) bool {
+		return out.Counted[i].Machine+"/"+out.Counted[i].Session < out.Counted[j].Machine+"/"+out.Counted[j].Session
+	})
 	// Bounded: b.mu is held, and every start waits for it; the records stay in memory either way (#5467).
 	wctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), historyTimeout)
 	defer cancel()

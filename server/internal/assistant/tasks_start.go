@@ -254,7 +254,11 @@ func (s *Service) startPlanTask(planID, conversation string, i int, t PlanTask, 
 	// on it failed too, and the task stayed "starting" with no agent for ever (#4510). The bookkeeping gets its own time.
 	ctx, cancel = context.WithTimeout(context.WithoutCancel(ctx), taskFailTimeout)
 	defer cancel()
-	reason := clip(oneLine(s.startFailureText(ctx, t.Machine, err)), 200)
+	limit := 200
+	if code, _ := codedStartRefusal(err); code != "" {
+		limit = proto.CodedStartErrorMax // the hub's sentence, whose remedy comes last (#1642): kept whole
+	}
+	reason := clip(oneLine(s.startFailureText(ctx, t.Machine, err)), limit)
 	if ferr := s.failTodo(ctx, t.TodoID, reason); ferr != nil {
 		s.logf("task %s: fail: %v", t.TodoID, ferr)
 	}
