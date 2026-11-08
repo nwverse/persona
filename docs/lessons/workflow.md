@@ -57,6 +57,10 @@ Pitfalls, odd behavior and the trade-offs made at the time (formerly in `CLAUDE.
 - Static web help text, form placeholders, mocks and example machine IDs in tests must also avoid personal config values (2026-11-03, #627): even a common machine-type word, if it matches the local config, makes the repo-wide privacy scan block the release. Use explicit example identifiers for IDs, example.com for domains, describe machine types in prose; do not change the sensitive-word list or add exemptions for the page.
 - Older versions of `gh pr checks` do not support `--fail-fast` (2026-11-02, #341): check `--help` first and use the supported `--watch` / `--interval`; exit code 1 from a bad argument is not a CI failure; look at the specific check's conclusion.
 
+## Portable JavaScript test output
+
+Node 24 removed `--experimental-default-type=module`; a portable SDK driver that works on Node 22 can therefore fail before running any assertions (#1163). Give freshly compiled temporary `.js` output its own `package.json` with `"type": "module"` instead of depending on an experimental CLI flag or on the caller's package scope. Run both the UI and transport suites on the supported Node versions, retain the temporary-directory cleanup, and fix the official SDK before resynchronizing downstream copies. Changes under `sdk/ts`, including its test scripts, also require regenerating the embedded `sdk/go/bundle/sdk.tar.gz` with `python3 scripts/gen/sdk_bundle.py`; the portable suites alone do not exercise that distribution check.
+
 ## Hosted CI path aggregation
 
 - Native workflow-level PR path filters leave individually required checks pending when no run is created. Keep one always-triggered
@@ -156,7 +160,9 @@ Capture short `docker compose exec` output before checking it with `grep -q`.
 An early-closing grep can make Docker's output forwarding fail with exit 255
 under pipefail even when the expected text was printed. Command substitution
 keeps the command's own failure fatal and consumes its complete output before
-applying the same content assertion.
+applying the same content assertion; so does a grep without `-q` that reads all
+of it (`holds` in `scripts/ci/image-smoke.sh`, where `hub pair` writes a QR code
+after the link and failed two runs in three).
 
 - In zsh, a glob that matches no files (`rm -rf /tmp/x-*`) makes the whole command fail (nomatch), and nothing after `&&` runs (2026-11-04: the end-to-end test never ran, yet the result was recorded as a failure).
   To clean temp directories use `find /tmp -maxdepth 1 -name 'x-*' -exec rm -rf {} +` or `setopt nullglob` first; before recording a check result, confirm the command actually ran.
