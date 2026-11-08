@@ -18,6 +18,9 @@ n=0 failed=""; for f in $(find scripts -name 'test_*.py' -not -path '*/node_modu
 `.github/workflows/ci.yml` runs on every PR and manual dispatch. There is no merge-queue trigger while the repository has no merge queue.
 Automatic PR CI allocates **one runner, named CI required**. That job performs repository/commit privacy and path safety, documentation
 paths and README checks, CI-regression tests, then the complete Web and runtime/SDK checks when selected by `scripts/ci/paths.py`.
+`scripts/ci/guards.sh` also runs `scripts/ci/migration_freeze.py`. An edit, deletion or rename of a `.sql` file already on the base under
+`server/internal/db/migrations/hub` or `server/internal/db/migrations/manager` fails that check. Comment-only and whitespace-only edits pass;
+add a new migration instead.
 It does not queue separate guards, script shards and an aggregate runner. Any executed step failure still fails the real check.
 Require **CI required** only; no repository rulesets are changed. A workflow change needs green hosted verification on the PR head.
 
@@ -163,6 +166,7 @@ Path mapping:
 | `sdk/ts/**` | `bun test` (skip with reason if bun absent) |
 | `sdk/go/**` | `go test ./...` in sdk/go module |
 | `server/internal/foo/**`, `server/cmd/bar/**` | Affected packages, e.g. `go test ./internal/foo/...`; unmappable server changes fall back to `go build ./...` |
+| `server/internal/db/migrations/**`, `scripts/ci/migration_freeze.py` | `python3 scripts/ci/migration_freeze.py`: a migration already on the base cannot be edited, deleted or renamed (comment-only and whitespace-only edits pass; a new file may be added). A rename out of the directory counts. `--all` runs it when the script is present |
 | `spec/fixtures/**`, `schema/extension/**`, `integrations/**`, `docs/<file>`, `scripts/test/server_test_env.py` | In addition to other checks in this table, `go test ./internal/<package>/...` for server packages reading these files (repository inputs covered by `server-test.yml` filters). At runtime, `git grep` finds packages referencing the path in `server/**/*_test.go` (strings or `filepath.Join` components; `//` comment lines excluded), so new readers need no script changes; other `spec/` files remain unmapped |
 | `android/**`, `scripts/app/*android*` (including both `test_android_*` self-tests) | `scripts/app/android_i18n_check.py` and Android checker unittests (i18n, token baseline; no Gradle build) |
 | `.github/**` | `scripts/test/pr_needs_issue_test.mjs` |

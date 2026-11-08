@@ -44978,24 +44978,24 @@
       },
       "extractionState" : "manual"
     },
-    "Fill this in on your iPhone to allow it" : {
+    "Fill this in on your iPhone or computer to allow it" : {
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Fill this in on your iPhone to allow it"
+            "value" : "Fill this in on your iPhone or computer to allow it"
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "iPhoneで入力してから許可してください"
+            "value" : "iPhoneかコンピュータで入力してから許可してください"
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "请在 iPhone 上填写后允许"
+            "value" : "请在 iPhone 或电脑上填写后允许"
           }
         }
       },
