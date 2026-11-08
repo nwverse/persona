@@ -121,12 +121,20 @@ class DockerEntrypointTests(unittest.TestCase):
         self.assertEqual(files, [])
         self.assertNotIn("PERSONA_PUBLIC_URL", logs)
         self.assertNotIn("PERSONA_ADMIN_ACCESS", logs)
-        # The flag anywhere, in either spelling.
-        for args in (("supervise", "--hub", "http://hub:18660", "--manager-only"), ("supervise", "--manager-only=true")):
+        # The flag anywhere, in every spelling Go's flags take as true.
+        for args in (("supervise", "--hub", "http://hub:18660", "--manager-only"), ("supervise", "--manager-only=true"),
+                     ("supervise", "-manager-only"), ("supervise", "-manager-only=TRUE"), ("supervise", "--manager-only=1"),
+                     ("supervise", "--manager-only=t"), ("supervise", "--manager-only=false", "--manager-only")):
             with self.subTest(args=args):
                 ran, logs, files = self.run_command(*args)
                 self.assertEqual((ran, files), (list(args), []))
                 self.assertNotIn("PERSONA_ADMIN_ACCESS", logs)
+        # False, or overridden by a later false: the hub's container (hub.json written, the hub's reminders).
+        for args in (("supervise", "--manager-only=false"), ("supervise", "--manager-only", "-manager-only=0")):
+            with self.subTest(args=args):
+                ran, logs, files = self.run_command(*args)
+                self.assertEqual((ran, files), (list(args), [".persona/hub.json"]))
+                self.assertIn("PERSONA_ADMIN_ACCESS is not set", logs)
 
     def test_desktop_api_guidance_is_independent_of_admin_access(self):
         for access in ("", "lan", "loopback", "cidrs", "any"):

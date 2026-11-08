@@ -49,16 +49,19 @@ var (
 	backoffFirst = time.Second
 	backoffMost  = 30 * time.Second
 	steadyAfter  = time.Minute
-	// stopWait is how long the programs get to stop after a signal, before they are killed: under Docker's own stop
-	// timeout (10 s unless compose's stop_grace_period says otherwise), so that the supervisor is the one that kills.
-	stopWait = 8 * time.Second
+	// stopWait is how long the programs get to stop after a signal, before they are killed: the hub's own shutdown
+	// budget and a second more, so that the hub is not cut short, yet under Docker's own stop timeout (10 s unless
+	// compose's stop_grace_period says otherwise), so that the supervisor is the one that kills. hub.json's
+	// shutdown_timeout_seconds makes it that and a second (hubFile.stopWait).
+	stopWait = hub.DefaultShutdownTimeout + time.Second
 	// healthWait bounds one wait for the hub to answer before a binding is tried; bindRetry is the first pause after
 	// a binding that failed, doubling up to bindRetryMost while it keeps failing (each try opens the hub's database).
 	healthWait    = 2 * time.Minute
 	bindRetry     = 10 * time.Second
 	bindRetryMost = 5 * time.Minute
-	// voidWait bounds voiding a code that was not traded.
-	voidWait = 10 * time.Second
+	// voidWait bounds voiding a code that was not traded: short, as a stop may wait for it (the code runs out by
+	// itself anyway).
+	voidWait = 3 * time.Second
 	// modeRecheck is how often --manager-only reads hub.json again while the built-in manager is not a service.
 	modeRecheck = 30 * time.Second
 )
@@ -73,6 +76,8 @@ type env struct {
 	// bind makes sure the built-in manager is bound to the hub at hubURL (bind, below).
 	bind    func(ctx context.Context, hubURL string) error
 	environ []string
+	// stop is how long the programs get to stop after a signal (stopWait unless hub.json says otherwise).
+	stop time.Duration
 }
 
 // Run is `personad supervise [--manager-only [--hub <url>]]`.
@@ -113,8 +118,9 @@ func (e *env) logf(format string, args ...any) {
 
 // hubFile is what the supervisor reads of hub.json (never writing it: the hub does).
 type hubFile struct {
-	Listen    string `json:"listen"`
-	Assistant struct {
+	Listen          string `json:"listen"`
+	ShutdownTimeout int    `json:"shutdown_timeout_seconds"`
+	Assistant       struct {
 		Mode     string `json:"mode"`
 		External bool   `json:"external"`
 	} `json:"assistant"`
@@ -143,6 +149,15 @@ func (f hubFile) serviceMode() bool {
 	return !f.Assistant.External && f.Assistant.Mode == hub.AssistantModeService
 }
 
+// stopWait is how long the programs get to stop after a signal with this hub.json: the hub's shutdown budget and a
+// second more.
+func (f hubFile) stopWait() time.Duration {
+	if f.ShutdownTimeout > 0 {
+		return time.Duration(f.ShutdownTimeout)*time.Second + time.Second
+	}
+	return stopWait
+}
+
 // loopback is the hub's address on this machine for its listen address (hub's hubLocalURL): loopback when it
 // listens on every address, else the address it listens on.
 func loopback(listen string) string {
@@ -167,11 +182,15 @@ func (e *env) hubContainer(ctx context.Context) error {
 		e.logf("assistant.mode is not service: the hub starts the built-in manager itself, as before")
 		return e.execHub(e.self, e.environ)
 	}
+	e.stop = f.stopWait()
 	// The hub reads hub.json when it starts: one that starts again with another mode (manager-mode, then an admin's
 	// restart of the hub) needs the supervisor to decide again too. It stops then, and the container starts it again.
 	progs := []*program{{name: "hub", args: []string{"hub", "run"}, after: func() error {
 		now, err := e.readHubFile()
-		if err != nil || now.serviceMode() != f.serviceMode() || loopback(now.Listen) != loopback(f.Listen) {
+		if err != nil {
+			return fmt.Errorf("%w: %w", errUnreadable, err)
+		}
+		if now.serviceMode() != f.serviceMode() || loopback(now.Listen) != loopback(f.Listen) {
 			return errChanged
 		}
 		return nil
@@ -191,14 +210,28 @@ func (e *env) hubContainer(ctx context.Context) error {
 	return e.supervise(ctx, progs)
 }
 
-// managerOnly is the built-in manager's own container: it waits for hub.json to say assistant.mode service (the hub
-// starts its own child otherwise), then runs the manager, bound to the hub at hubURL.
+// managerOnly is the built-in manager's own container: the manager, bound to the hub at hubURL, each time hub.json
+// says assistant.mode service (the hub starts its own child otherwise). hub.json is read again before each start:
+// a hub gone back to its child since hands the child a new token, which stops this one, and then it waits.
 func (e *env) managerOnly(ctx context.Context, hubURL string) error {
+	return e.supervise(ctx, []*program{{name: "manager", args: []string{"assistant"},
+		env: []string{"PERSONA_ASSISTANT_DEPLOY=" + assistant.DeployService},
+		before: func(ctx context.Context) error {
+			if !e.waitService(ctx) {
+				return ctx.Err()
+			}
+			return e.bind(ctx, hubURL)
+		}}})
+}
+
+// waitService waits until hub.json says the built-in manager is a service of its own, reading it again every
+// modeRecheck and saying once why it waits; false when ctx ended first.
+func (e *env) waitService(ctx context.Context) bool {
 	said := false
 	for {
 		f, err := e.readHubFile()
 		if err == nil && f.serviceMode() {
-			break
+			return true
 		}
 		if !said {
 			why := "assistant.mode is not service: the hub starts the built-in manager itself"
@@ -210,13 +243,10 @@ func (e *env) managerOnly(ctx context.Context, hubURL string) error {
 		}
 		select {
 		case <-ctx.Done():
-			return nil
+			return false
 		case <-time.After(modeRecheck):
 		}
 	}
-	return e.supervise(ctx, []*program{{name: "manager", args: []string{"assistant"},
-		env:    []string{"PERSONA_ASSISTANT_DEPLOY=" + assistant.DeployService},
-		before: func(ctx context.Context) error { return e.bind(ctx, hubURL) }}})
 }
 
 // program is one of the programs supervised.
@@ -230,12 +260,20 @@ type program struct {
 	after func() error
 }
 
-// errChanged: hub.json says another mode (or listen address) than the supervisor started with.
-var errChanged = errors.New("hub.json's assistant.mode or listen address changed: stopping so that the container " +
-	"starts again with it")
+var (
+	// ErrStopped: the supervisor stopped the programs for a reason it said in its log (errChanged, errUnreadable), so
+	// that the container starts again; personad exits 1 without saying it twice.
+	ErrStopped = errors.New("supervise: stopped")
+	// errChanged: hub.json says another mode (or listen address) than the supervisor started with.
+	errChanged = errors.New("hub.json's assistant.mode or listen address changed: stopping so that the container " +
+		"starts again with it")
+	// errUnreadable: hub.json can't be read once the hub stopped (the hub would not start on it either).
+	errUnreadable = errors.New("hub.json can't be read after the hub stopped: stopping so that the container starts " +
+		"again with it")
+)
 
 // supervise runs progs, each started again when it stops, until ctx ends or one's after says to stop; then they are
-// stopped (SIGTERM, then SIGKILL after stopWait) and it returns (with that error).
+// stopped (SIGTERM, then SIGKILL after e.stop) and it returns (ErrStopped with that error, said already).
 func (e *env) supervise(ctx context.Context, progs []*program) error {
 	ctx, cancel := context.WithCancelCause(ctx)
 	defer cancel(nil)
@@ -252,7 +290,7 @@ func (e *env) supervise(ctx context.Context, progs []*program) error {
 	}
 	wg.Wait()
 	if err := context.Cause(ctx); err != nil && !errors.Is(err, context.Canceled) {
-		return err
+		return fmt.Errorf("%w: %w", ErrStopped, err)
 	}
 	return nil
 }
@@ -297,9 +335,10 @@ func (e *env) keep(ctx context.Context, p *program, others bool) error {
 	return nil
 }
 
-// run starts p and waits for it; once ctx ends it is asked to stop (SIGTERM), and killed after stopWait.
-// Each runs in a process group of its own: what it leaves behind when it stops (its extensions, say) is killed with
-// the group, as a container that stopped took all of it before.
+// run starts p and waits for it; once ctx ends it is asked to stop (SIGTERM), and killed after e.stop.
+// Each runs in a process group of its own: what is left in that group when it stops (what it started without a group
+// of its own) is killed with it. Its extensions' programs have groups of their own and stop when their stdin closes,
+// the same as when the hub restarts its own child.
 func (e *env) run(ctx context.Context, p *program) error {
 	cmd := exec.Command(e.self, p.args...)
 	cmd.Env = append(append([]string{}, e.environ...), p.env...)
@@ -317,11 +356,15 @@ func (e *env) run(ctx context.Context, p *program) error {
 	case <-ctx.Done():
 	}
 	_ = cmd.Process.Signal(syscall.SIGTERM)
+	wait := e.stop
+	if wait <= 0 {
+		wait = stopWait
+	}
 	select {
 	case err := <-done:
 		return err
-	case <-time.After(stopWait):
-		e.logf("%s did not stop within %s: killing it", p.name, stopWait)
+	case <-time.After(wait):
+		e.logf("%s did not stop within %s: killing it", p.name, wait)
 		_ = cmd.Process.Kill()
 		return <-done
 	}

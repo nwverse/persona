@@ -129,7 +129,9 @@ func main() {
 		}
 		err = relay.Run(ctx, path)
 	case "supervise": // the hub image's: the hub and the built-in manager side by side (docs/operations/docker.md)
-		err = supervise.Run(ctx, os.Args[2:], os.Stderr)
+		if err = supervise.Run(ctx, os.Args[2:], os.Stderr); errors.Is(err, supervise.ErrStopped) {
+			os.Exit(1) // it said why in its log
+		}
 	case "voice":
 		err = voice.Run(ctx)
 	case "extension", "ext", "plugin": // plugin: its name before #1844

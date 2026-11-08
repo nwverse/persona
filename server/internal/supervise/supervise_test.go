@@ -341,7 +341,8 @@ func TestModeChangeStopsTheSupervisor(t *testing.T) {
 	f.stop(t, "hub", 0)
 	select {
 	case err := <-done:
-		if !errors.Is(err, errChanged) || len(f.starts("hub")) != 1 || !strings.Contains(f.out.String(), "starts again with it") {
+		if !errors.Is(err, errChanged) || !errors.Is(err, ErrStopped) || len(f.starts("hub")) != 1 ||
+			!strings.Contains(f.out.String(), "assistant.mode or listen address changed") {
 			t.Fatalf("err %v, hub starts %d\n%s", err, len(f.starts("hub")), f.out.String())
 		}
 	case <-time.After(10 * time.Second):
@@ -458,5 +459,74 @@ func TestBindBuiltinGlue(t *testing.T) {
 	}
 	if err := e.bindBuiltin(context.Background(), srv.URL); err != nil || len(voided) != 1 {
 		t.Fatalf("kept: %v, voided %v", err, voided)
+	}
+}
+
+// hub.json that can't be read once the hub stopped: the supervisor stops and says that, not that the mode changed.
+func TestUnreadableHubFileStopsTheSupervisor(t *testing.T) {
+	f := newFixture(t, `{"assistant":{"mode":"service"}}`)
+	done := make(chan error, 1)
+	go func() { done <- f.e.hubContainer(context.Background()) }()
+	waitFor(t, "both", func() bool { return len(f.starts("hub")) == 1 && len(f.starts("assistant")) == 1 })
+	if err := os.WriteFile(filepath.Join(f.e.home, "hub.json"), []byte(`{"assistant":`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	f.stop(t, "hub", 1)
+	select {
+	case err := <-done:
+		log := f.out.String()
+		if !errors.Is(err, errUnreadable) || !errors.Is(err, ErrStopped) || errors.Is(err, errChanged) ||
+			!strings.Contains(log, "hub.json can't be read after the hub stopped") || strings.Contains(log, "changed") {
+			t.Fatalf("err %v\n%s", err, log)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("the supervisor did not stop")
+	}
+}
+
+// --manager-only reads hub.json again before each start: a hub gone back to its own child (whose new token stopped
+// this manager) is waited for, not bound to again and again; back in service mode, the manager starts again.
+func TestManagerOnlyWaitsAgainAfterTheModeChanged(t *testing.T) {
+	f := newFixture(t, `{"assistant":{"mode":"service"}}`)
+	stop := running(t, func(ctx context.Context) error { return f.e.managerOnly(ctx, "http://hub:18660") })
+	defer func() { _ = stop() }()
+	waitFor(t, "the manager", func() bool { return len(f.starts("assistant")) == 1 })
+	if err := os.WriteFile(filepath.Join(f.e.home, "hub.json"), []byte(`{"assistant":{"mode":"child"}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	f.stop(t, "assistant", 2)
+	waitFor(t, "the wait said", func() bool { return strings.Contains(f.out.String(), "assistant.mode is not service") })
+	time.Sleep(100 * time.Millisecond)
+	f.mu.Lock()
+	binds := len(f.binds)
+	f.mu.Unlock()
+	if n := len(f.starts("assistant")); n != 1 || binds != 1 {
+		t.Fatalf("in child mode: starts %d, binds %d\n%s", n, binds, f.out.String())
+	}
+	if err := os.WriteFile(filepath.Join(f.e.home, "hub.json"), []byte(`{"assistant":{"mode":"service"}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, "the manager again", func() bool { return len(f.starts("assistant")) == 2 })
+}
+
+// The programs get the hub's shutdown budget and a second more to stop: hub.json's shutdown_timeout_seconds, or the
+// hub's default.
+func TestStopWaitFollowsTheHubsShutdownBudget(t *testing.T) {
+	if got, want := (hubFile{}).stopWait(), stopWait; got != want {
+		t.Fatalf("default: %s, want %s", got, want)
+	}
+	if got := (hubFile{ShutdownTimeout: 20}).stopWait(); got != 21*time.Second {
+		t.Fatalf("20 s budget: %s", got)
+	}
+	f := newFixture(t, `{"shutdown_timeout_seconds":1,"assistant":{"mode":"service"}}`)
+	stopWait = time.Hour // not this one
+	if err := os.WriteFile(filepath.Join(f.dir, "assistant.stubborn"), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	stop := running(t, f.e.hubContainer)
+	waitFor(t, "both", func() bool { return len(f.starts("hub")) == 1 && len(f.starts("assistant")) == 1 })
+	_ = stop()
+	if log := f.out.String(); !strings.Contains(log, "manager did not stop within 2s: killing it") {
+		t.Fatalf("log:\n%s", log)
 	}
 }

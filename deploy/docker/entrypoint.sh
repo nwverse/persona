@@ -54,11 +54,25 @@ seed_config() {
 }
 
 # Not the hub: an app-made manager (manager …), or the built-in manager in a container of its own (supervise
-# --manager-only): no hub.json written and none of the hub's reminders.
+# --manager-only): no hub.json written and none of the hub's reminders. --manager-only as Go's flags take it: one or
+# two dashes, a value that strconv.ParseBool reads as true, the last one counting, none after a bare --.
 not_hub=
 case "${1:-}" in
 manager) not_hub=1 ;;
-supervise) for a in "$@"; do case "$a" in --manager-only | --manager-only=true | -manager-only) not_hub=1 ;; esac; done ;;
+supervise)
+  for a in "$@"; do
+    case "$a" in
+    --) break ;;
+    --manager-only | -manager-only) not_hub=1 ;;
+    --manager-only=* | -manager-only=*)
+      case "${a#*=}" in
+      1 | t | T | true | TRUE | True) not_hub=1 ;;
+      *) not_hub= ;;
+      esac
+      ;;
+    esac
+  done
+  ;;
 esac
 if [ "$(id -u)" = 0 ]; then
   mkdir -p "$DATA"
