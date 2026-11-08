@@ -8,7 +8,7 @@ import { NARROW, useMedia } from "../lib/viewport";
 import { AGENT_FILTERS, agentFilter, applyFilter, arrangeSpaces, BOTMUX_HIDDEN_KEY, botmuxAndFilter, filterCounts, isBotmux, isSpaceMuted, matchingKeys, shownFilters, unreadOf, withoutBotmux, type AgentFilter, type FilterCounts } from "../lib/agent-filter";
 import { AGENT_SORT_KEY, AGENT_SORTS, agentSort, machineTreeByUpdate, projectsByUpdate, repoMachinesByUpdate, todoTreeByUpdate, type AgentSort } from "../lib/agent-sort";
 import { agentGrouping, AGENT_GROUPINGS, type AgentGrouping, awaitsReply, buildAgentGroups, buildSpaces, hostsOf, isQuiet, sessionHost, sessionSource, sourceName, splitAgentSessions, type AgentGroup, type AgentMutes, type Space } from "../lib/agent-groups";
-import { buildRepoMachineTree, type RepoMachine, type RepoTree, type RepoWorktree } from "../lib/agent-repos";
+import { buildRepoMachineTree, showsWorktreeLevel, type RepoMachine, type RepoTree, type RepoWorktree } from "../lib/agent-repos";
 import { keyedRefs } from "../lib/keyed-refs";
 import { buildMachineTree, paneRoute, resolveTab, tabRowKeys, type ChildStates, type HerdrMachine, type HerdrSpace, type HerdrTab } from "../lib/herdr-tree";
 import { addSection, arrangeSessions, assignSection, GROUP_LABEL, isDefaultView, providerLabel, refreshAgentSessions, removeSection, resetView, setView, SHOW_LABEL, SORT_LABEL, toggleProvider, togglePin, totalUnread, updateAgentPrefs, useAgentList, useAgentPrefs, viewOf, type AgentPrefs, type AgentSession, type GroupBy, type ShowMode, type SortBy } from "../lib/agents";
@@ -1283,13 +1283,13 @@ function RepoMachineSection({ m, flat, machines, reg, hover, activeKey, go, onRo
 
 /** One repository on one machine ("By repo"): its working trees under it, the main checkout marked and first. */
 function RepoSection({ tree, reg, hover, activeKey, go, onRowMenu }: { tree: RepoTree; reg: RegFn; hover: (k: string | null) => void; activeKey: string; go: GoFn; onRowMenu: RowMenuFn }) {
-  const [folded, toggle] = useFolded(tree.key, false, { holds: tree.worktrees.some((w) => holdsRow(w.sessions, activeKey)) });
+  const [folded, toggle] = useFolded(tree.key, false, { holds: tree.worktrees.some((w) => holdsRow(w.tree, activeKey)) });
   const row = (s: Session, hint: string) => {
     const key = `s:${s.machine_id}/${s.session_id}`;
     return <SessionRow key={key} s={s} k={key} reg={reg} hover={hover} active={activeKey === key} to={{ name: "session", mid: s.machine_id, sid: s.session_id }} go={go} hint={hint} onMenu={onRowMenu} />;
   };
-  // A repository with only its main checkout needs no working-tree level: its agents sit right under the repository.
-  const flat = tree.worktrees.length === 1 && tree.worktrees[0]!.main;
+  // A lone main checkout, or an Orca worktree whose folder names its project, needs no extra level.
+  const flat = !showsWorktreeLevel(tree);
   return (
     <Section
       title={<span className="flex min-w-0 items-center gap-1.5"><Icon name="folder" size={12} stroke={2} className="shrink-0 text-ink-3" /><span className="truncate">{tree.name}</span></span>}
@@ -1303,9 +1303,11 @@ function RepoSection({ tree, reg, hover, activeKey, go, onRowMenu }: { tree: Rep
 }
 
 /** One working tree's agents under its own folding row: the main checkout wears a home mark, and a tree with nothing
- * running says so. */
+ *  running says so. Orca child worktrees have their own remembered fold after the parent's agents, as in By machine. */
 function RepoWorktreeRows({ w, repo, row, activeKey }: { w: RepoWorktree; repo: string; row: (s: Session, hint: string) => React.ReactNode; activeKey: string }) {
   const [folded, toggle] = useFolded(w.key, w.sessions.length === 0, { holds: holdsRow(w.sessions, activeKey) });
+  const descendants = w.tree.slice(w.sessions.length);
+  const [childrenFolded, toggleChildren] = useFolded(`${w.key}/children`, true, { holds: holdsRow(descendants, activeKey) });
   const mutes = useStore((st) => st.mutes);
   const running = w.sessions.filter((s) => !isQuiet(s, mutes)).length;
   return (
@@ -1314,10 +1316,29 @@ function RepoWorktreeRows({ w, repo, row, activeKey }: { w: RepoWorktree; repo: 
         <Icon name="chevron" size={9} stroke={2.4} className="shrink-0 opacity-60 transition-transform" style={{ transform: folded ? "rotate(-90deg)" : "none" }} />
         {w.main && <Icon name="home" size={11} stroke={2} className="shrink-0 text-ink-3" />}
         <span className="min-w-0 truncate">{w.name}</span>
-        <span className="ml-auto shrink-0 text-[10.5px] text-ink-3 tabular-nums">{running > 0 ? t("sidebar.worktree_agents", { count: w.sessions.length }) : t("sidebar.idle")}</span>
+        <span className="ml-auto flex shrink-0 items-center gap-1.5">
+          {w.children.length > 0 && <ChildSummary counts={w.childStates} />}
+          <span className="shrink-0 text-[10.5px] text-ink-3 tabular-nums">{running > 0 ? t("sidebar.worktree_agents", { count: w.sessions.length }) : t("sidebar.idle")}</span>
+        </span>
       </button>
       <Collapse open={!folded}>
-        <div className="flex flex-col gap-px pl-2" inert={folded || undefined}>{w.sessions.map((s) => row(s, `${repo} › ${w.name}`))}</div>
+        <div inert={folded || undefined}>
+          <div className="flex flex-col gap-px pl-2">{w.sessions.map((s) => row(s, `${repo} › ${w.name}`))}</div>
+          {w.children.length > 0 && (
+            <div>
+              <button type="button" aria-expanded={!childrenFolded} onClick={toggleChildren} className="relative z-10 flex min-h-7 w-full min-w-0 items-center gap-1.5 pr-2 pl-2 text-left text-[11.5px] whitespace-nowrap text-ink-3 hover:text-ink [@media(pointer:coarse)]:min-h-11">
+                <Icon name="chevron" size={9} stroke={2.4} className="shrink-0 transition-transform duration-200" style={{ transform: childrenFolded ? "rotate(-90deg)" : "none" }} />
+                <span className="min-w-0 flex-1 truncate">{t("sidebar.child_count", { count: w.children.length })}</span>
+                {childrenFolded && <SessionTally sessions={descendants} folded />}
+              </button>
+              <Collapse open={!childrenFolded}>
+                <div className="ml-2 flex flex-col gap-px border-l border-line pl-3" inert={childrenFolded || undefined}>
+                  {w.children.map((c) => <RepoWorktreeRows key={c.key} w={c} repo={repo} row={row} activeKey={activeKey} />)}
+                </div>
+              </Collapse>
+            </div>
+          )}
+        </div>
       </Collapse>
     </div>
   );
