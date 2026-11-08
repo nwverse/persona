@@ -6,7 +6,8 @@ import type { Interaction, Item } from "../../../lib/types";
 export interface SyncCase {
   name: string;
   description: string;
-  chat: { machine_id: string; session_id: string; assistant?: boolean };
+  /** `new`: the chat a `user.start` starts from the new-conversation page (README "The story"). */
+  chat: { machine_id: string; session_id: string; assistant?: boolean; new?: boolean };
   devices: string[];
   start: { hub: HubState };
   steps: Step[];
