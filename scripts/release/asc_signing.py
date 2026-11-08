@@ -16,6 +16,8 @@ the "Apple Distribution" identity in the login keychain (see docs/operations/rel
   python3 scripts/release/asc_signing.py --check         # only report what is there, change nothing; fails when
                                                          # a release would (release.sh runs this first)
   python3 scripts/release/asc_signing.py --only <bundle id>  # just that target (the others' profiles stay untouched)
+  python3 scripts/release/asc_signing.py --developer-id  # only the Mac app's Developer ID profiles, for the disk image
+                                                         # outside the App Store (scripts/release/mac_dmg.sh); --check too
 
 The App Group itself (group.<bundle id>, or config.json app.app_group) can't be made or put on an App ID through the
 API, only on the developer website (docs/operations/release.md "App Group"): each profile is checked for it, and a missing one
@@ -85,10 +87,24 @@ def ensure_capability(bid: str, capability: str, check_only: bool):
         sys.exit(f"could not enable {capability}: {e}")
 
 
+CERTIFICATE_TYPES = {
+    "dist": ("DISTRIBUTION", "IOS_DISTRIBUTION"),
+    "dev": ("DEVELOPMENT", "IOS_DEVELOPMENT"),
+    "devid": ("DEVELOPER_ID_APPLICATION_G2", "DEVELOPER_ID_APPLICATION"),
+}
+# Only the Account Holder can create a Developer ID certificate: the API answers any other key with 403.
+NO_DEVELOPER_ID = """No Developer ID Application certificate in the team. Only the Account Holder can create one, on the Mac that
+will sign (its private key stays in that Mac's login keychain):
+  Xcode › Settings › Accounts › (the team) › Manage Certificates › + › Developer ID Application,
+  or developer.apple.com › Certificates › + › Developer ID Application (with a CSR from Keychain Access).
+Then run this again (docs/operations/release.md "Mac disk image")."""
+
+
 def certificate(kind: str) -> str:
-    wanted = ("DISTRIBUTION", "IOS_DISTRIBUTION") if kind == "dist" else ("DEVELOPMENT", "IOS_DEVELOPMENT")
-    certs = [c for c in get_all("/v1/certificates") if c["attributes"]["certificateType"] in wanted]
+    certs = [c for c in get_all("/v1/certificates") if c["attributes"]["certificateType"] in CERTIFICATE_TYPES[kind]]
     if not certs:
+        if kind == "devid":
+            sys.exit(NO_DEVELOPER_ID)
         sys.exit(f"No {'distribution' if kind == 'dist' else 'development'} certificate in the team: create one first "
                  "(see docs/operations/release.md).")
     return max(certs, key=lambda c: c["attributes"]["expirationDate"])["id"]
@@ -137,7 +153,8 @@ def profile(bid: str, name: str, cert: str, kind: str = "IOS_APP_STORE", check_o
         body["data"]["relationships"]["devices"] = {"data": [{"type": "devices", "id": d["id"]} for d in devices]}
     created = request("POST", "/v1/profiles", body)["data"]
     os.makedirs(PROFILE_DIR, exist_ok=True)
-    path = os.path.join(PROFILE_DIR, f"{created['attributes']['uuid']}.mobileprovision")
+    extension = "provisionprofile" if kind.startswith("MAC") else "mobileprovision"
+    path = os.path.join(PROFILE_DIR, f"{created['attributes']['uuid']}.{extension}")
     with open(path, "wb") as f:
         f.write(base64.b64decode(created["attributes"]["profileContent"]))
     print("  installed", path)
@@ -146,8 +163,27 @@ def profile(bid: str, name: str, cert: str, kind: str = "IOS_APP_STORE", check_o
         MISSING_GROUP.append(name)
 
 
+def developer_id(check_only: bool):
+    """The Mac app and its notification extension, signed with Developer ID (scripts/release/mac_dmg.sh)."""
+    cert = certificate("devid")
+    print("Developer ID certificate", cert)
+    for identifier, profile_name in persona_config.developer_id_profiles(CONFIG).items():
+        name, _, capabilities = TARGETS[identifier]
+        print(identifier)
+        bid = bundle_id(identifier, name, check_only)
+        for capability in capabilities:
+            ensure_capability(bid, capability, check_only)
+        profile(bid, profile_name, cert, "MAC_APP_DIRECT", check_only)
+
+
 def main():
     check_only = "--check" in sys.argv
+    if "--developer-id" in sys.argv:
+        developer_id(check_only)
+        if NOT_READY:
+            sys.exit(f"Developer ID signing is not ready: {'; '.join(NOT_READY)}. "
+                     "Run python3 scripts/release/asc_signing.py --developer-id")
+        return
     cert = certificate("dist")
     print("distribution certificate", cert)
     ids = {}

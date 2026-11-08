@@ -7,6 +7,7 @@ The config lives outside the repository so clean worktrees (releases) see it too
   python3 scripts/persona_config.py env              # shell exports: eval "$(python3 scripts/persona_config.py env)"
   python3 scripts/persona_config.py xcconfig         # writes apple/Config.xcconfig (bundle id, team) for XcodeGen / Xcode
   python3 scripts/persona_config.py export-options <out.plist> [upload|export]
+  python3 scripts/persona_config.py developer-id-export-options <out.plist>  # the Mac app outside the App Store
   python3 scripts/persona_config.py get <dotted.key>  # one value, e.g. hub.url
 """
 import json
@@ -180,6 +181,26 @@ def export_options(cfg: dict, out: str, destination: str = "upload"):
         plistlib.dump(options, f)
 
 
+def developer_id_profiles(cfg: dict) -> dict[str, str]:
+    """The Mac app's Developer ID profiles (the disk image outside the App Store), made by asc_signing.py --developer-id."""
+    bid = get(cfg, "app.bundle_id", "")
+    return {bid: "Persona Developer ID", bid + ".notify": "Persona Notify Developer ID"}
+
+
+def developer_id_export_options(cfg: dict, out: str):
+    options = {
+        "method": "developer-id",
+        "destination": "export",
+        "signingStyle": "manual",
+        "signingCertificate": "Developer ID Application",
+        "provisioningProfiles": developer_id_profiles(cfg),
+        "teamID": get(cfg, "app.team_id", ""),
+        "manageAppVersionAndBuildNumber": False,
+    }
+    with open(out, "wb") as f:
+        plistlib.dump(options, f)
+
+
 def main():
     args = sys.argv[1:]
     cfg = load()
@@ -192,6 +213,8 @@ def main():
         xcconfig(cfg)
     elif args[:1] == ["export-options"] and len(args) >= 2:
         export_options(cfg, args[1], args[2] if len(args) > 2 else "upload")
+    elif args[:1] == ["developer-id-export-options"] and len(args) == 2:
+        developer_id_export_options(cfg, args[1])
     elif args[:1] == ["get"] and len(args) == 2:
         v = get(cfg, args[1])
         if v is None:

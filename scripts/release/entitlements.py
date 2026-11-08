@@ -120,6 +120,9 @@ def sign(archive):
             sys.exit("entitlements: no target builds %s (%s)" % key)
         ents = wanted(settings, team_prefix(settings))
         cmd = ["codesign", "-f", "-s", "-"]
+        # As the target would sign it (notarization refuses Developer ID code without the hardened runtime).
+        if settings.get("ENABLE_HARDENED_RUNTIME") == "YES":
+            cmd += ["-o", "runtime"]
         with tempfile.NamedTemporaryFile(suffix=".entitlements") as tmp:
             if ents is not None:
                 tmp.write(plistlib.dumps(ents))
