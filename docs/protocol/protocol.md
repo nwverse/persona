@@ -1847,7 +1847,7 @@ Each machine's node drives one "engine", that is, a set of terminal hosts: `herd
 `herdr-core` (the runtime behind the Herdr desktop app, display name "Herdr App"), `orca` (the runtime of the Orca desktop app, display name "Orca", `docs/plans/plan-orca-support.md` ("Orca source")),
 and `herdr-both` (display name "herdr + Herdr App"): the node **registers both herdr and herdr-core as hosts at the same time**, and sessions from both are shown merged.
 This is for the case "use herdr locally, and have Herdr App connect remotely to the same machine". With a single choice the hosts are not used together: running them at once slows each other's refresh;
-side by side, refreshes run in parallel and events are isolated per host, so they don't slow each other down (implementation in `node/engine.go`, `refreshHosts` in `node/sessions.go`, `node/herdrevents.go`;
+side by side, refreshes run in parallel and events are isolated per host, so they don't slow each other down (implementation in `node/engine.go`, `refreshHosts` in `node/placement.go`, `node/herdrevents.go`;
 trade-offs in `docs/plans/plan-orca-support.md` ("herdr-core host")).
 
 - The user picks per machine in the App (at pairing, or Settings › Machines): `PUT /api/v1/machines/{mid}/engine`. The hub stores it in the Postgres settings, not in hub.json.
