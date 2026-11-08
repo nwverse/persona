@@ -1044,7 +1044,7 @@ Settings › Appearance › New Conversation Layout (`ui.newChatLayout`, on by d
 Off, the conversation is drawn exactly as before. The Agents chat, the Mac and Vision Pro never use it (`ChatLayoutSettings.layout(assistant:)` returns `ChatLayout.off` there).
 `ChatView` reads the choice once and hands rows `\.chatLayout` through the environment, so no row observes UserDefaults (`Persona/Views/Chat/ChatLayout.swift`).
 
-- **Who talks to whom**, from the hub's existing fields only: feed `routed` reads "Persona → @task" (`RoutedExchange`), feed `report` reads "task → @Persona" (`ReportExchange`),
+- **Who talks to whom**, from the hub's existing fields only: feed `routed` that Persona wrote (`from` `assistant`, #1542) reads "Persona → @task" (`RoutedExchange`; off, #1542's folded `AgentSentLine`), what the user sent a task (`routed` without `from`) "Me → @task" in the user's box (`UserRoutedExchange`), feed `report` reads "task → @Persona" (`ReportExchange`),
   and injected `system` / `supervise` (the supervision digest) and `followup` (scheduled runs, follow-ups, wake-ups) read "Supervision · Persona → @Persona" (`Injected.isPatrol`, `InjectedLine.patrol`): Persona writing to itself,
   on Persona's side, never where the user's messages are. Task notices, node-restart and Inbox lines keep their centered line. The addressee is in the accent; there is no group name, member list or avatar per speaker.
 - **Boxes**: every message sits in a box, the user's pale blue (`Theme.ChatBox.user`) and Persona's, its exchanges' and its notes' pale gray (`Theme.ChatBox.persona`), words in the primary color in both modes (`ChatLayoutTests` checks the contrast). The answer streams in the box it settles in.
@@ -1053,7 +1053,7 @@ Off, the conversation is drawn exactly as before. The Agents chat, the Mac and V
 - **Right-edge navigator** (`ChatEdgeScrub.swift`), like the ChatGPT desktop app's: a slide up or down that starts in the band along the list's right edge (`Theme.Size.edgeBand`, inside the list's side margin, below the top bar) shows one tick per message the user typed
   (not injected lines, other conversations' messages or /loop ticks), a light tap as it opens and a selection tick per message passed, with the picked message's first two lines beside it; letting go brings it to the middle of the list and lights it up.
   It is a UIKit recognizer: it fails at once for a touch outside the band and for a slide more sideways than up-and-down (the shell's pager and the drawer keep those, `DrawerPan`), and the list's scroll view pan waits for it to fail (`shouldBeRequiredToFailBy`); the system's back swipe is at the other edge.
-  With more messages than fit, the newest that fit are shown. `-showEdgeScrub N` holds it open on the Nth newest message for screenshots.
+  With more messages than fit, the newest that fit are shown. `-showEdgeScrub N` holds it open on the Nth newest message for screenshots; `-openAppearance chat` opens the settings page.
 - Tests: `ChatLayoutTests` (unit: default, launch-argument off, old look outside Persona's conversations, folding, patrol kinds, tick placement, links, contrast); `NewChatLayoutTests` (UI, mock `MOCK_EXCHANGES=1`, see `docs/operations/testing.md`): headers, folding, no evidence list, the old layout with `-ui.newChatLayout NO`, a slide along the edge; `ChatFollowTests.testPersonaReopensWhereItWasLeft`: the reading position after a restart.
 
 ## Connection status (slow / offline networks)

@@ -134,7 +134,12 @@ struct EdgeScrubOverlay: View {
                             .fixedSize(horizontal: false, vertical: true)
                             .padding(.horizontal, Theme.Space.m)
                             .padding(.vertical, Theme.Space.s)
-                            .surface(in: .rect(cornerRadius: Theme.Radius.card, style: .continuous))
+                            // Opaque: it sits over the messages, whose words must not show through it.
+                            .background(Theme.Shell.composer, in: .rect(cornerRadius: Theme.Radius.card, style: .continuous))
+                            .overlay {
+                                RoundedRectangle(cornerRadius: Theme.Radius.card, style: .continuous)
+                                    .strokeBorder(Theme.Shell.composerStroke, lineWidth: Theme.Size.hairline)
+                            }
                             .accessibilityIdentifier("chat.edgeScrub.preview")
                     }
                     .frame(width: Theme.Size.box240)

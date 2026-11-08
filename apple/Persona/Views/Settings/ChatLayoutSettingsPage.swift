@@ -25,6 +25,7 @@ struct ChatLayoutSettingsPage: View {
                         Text("Messages Between Persona and Tasks").lineLimit(1)
                     }
                     .pickerStyle(.inline)
+                    .labelsHidden() // the section's header names it
                     .accessibilityIdentifier("chat-layout-fold")
                     if settings.fold == .lines {
                         Stepper(value: $settings.lines, in: ChatLayoutSettings.lineRange) {

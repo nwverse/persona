@@ -391,6 +391,7 @@ struct SettingsView: View {
         else if d.bool(forKey: "openConnectorDevice") { p.append(SettingsPage.phoneData) }
         else if d.bool(forKey: "openTranslationSettings") { p.append(SettingsPage.translation) }
         else if d.bool(forKey: "openTriageSettings") { p.append(SettingsPage.triage) }
+        else if d.string(forKey: "openAppearance") == "chat" { p.append(SettingsPage.chatLayout) } // New Conversation Layout (#1666)
         else if let a = d.string(forKey: "openAppearance") { // persona (or YES, or icon: the icon is the Avatar's) | color | style | layout | scheme
             p.append(a == "color" ? SettingsPage.themeColor : a == "style" ? SettingsPage.style
                      : a == "layout" ? SettingsPage.layout

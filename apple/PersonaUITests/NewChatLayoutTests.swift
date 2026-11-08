@@ -105,6 +105,27 @@ final class NewChatLayoutTests: XCTestCase {
         app.terminate()
     }
 
+    /// Settings › Appearance › New Conversation Layout: the switch on, the fold choices under it; off, they go.
+    @MainActor func testSettingsPage() throws {
+        let app = XCUIApplication()
+        let pair = "persona://pair?url=" + hub.addingPercentEncoding(withAllowedCharacters: .alphanumerics)! + "&token=mock"
+        app.launchArguments = ["-pairURL", pair, "-tab", "settings", "-openAppearance", "chat"]
+        app.launchPinned()
+        let toggle = app.switches["chat-layout-toggle"].firstMatch
+        XCTAssertTrue(toggle.waitForExistence(timeout: 20), "the page did not open:\n\(app.debugDescription)")
+        XCTAssertEqual(toggle.value as? String, "1")
+        XCTAssertTrue(has(app, "显示 3 行").exists, "no fold choices")
+        sleep(1)
+        try shot(app, "settings")
+        // `.switches` is the cell; its knob takes the tap.
+        toggle.coordinate(withNormalizedOffset: CGVector(dx: 0.93, dy: 0.5)).tap()
+        let gone = XCTNSPredicateExpectation(predicate: NSPredicate(format: "exists == false"), object: has(app, "显示 3 行"))
+        XCTAssertEqual(XCTWaiter.wait(for: [gone], timeout: 5), .completed, "the fold choices stayed with the switch off")
+        toggle.coordinate(withNormalizedOffset: CGVector(dx: 0.93, dy: 0.5)).tap() // back on for the next tests
+        XCTAssertTrue(has(app, "显示 3 行").waitForExistence(timeout: 5))
+        app.terminate()
+    }
+
     /// `-showEdgeScrub 3`: the navigator held open on the third newest message, for its screenshot.
     @MainActor func testEdgeNavigatorShot() throws {
         let app = launch(["-showEdgeScrub", "3"])

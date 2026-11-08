@@ -31,6 +31,7 @@ struct RoutedExchange: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.trailing, Theme.Space.xxl)
         .chatPinned("routed-" + item.id)
+        .accessibilityElement(children: .contain)
         .accessibilityIdentifier("exchange.routed")
     }
 }
@@ -54,6 +55,7 @@ struct UserRoutedExchange: View {
         }
         .frame(maxWidth: .infinity, alignment: .trailing)
         .padding(.leading, Theme.Space.xxl)
+        .accessibilityElement(children: .contain)
         .accessibilityIdentifier("exchange.userRouted")
     }
 }
@@ -84,6 +86,7 @@ struct ReportExchange: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.trailing, Theme.Space.xxl)
         .chatPinned("report-" + item.id)
+        .accessibilityElement(children: .contain)
         .accessibilityIdentifier("exchange.report")
     }
 }
