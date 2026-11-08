@@ -13,6 +13,7 @@
   "not_in_market": "このマーケットに拡張機能 {id} はありません",
   "token_and_token_from": "token と token_from はどちらか一方だけ指定してください",
   "official_name": "公式拡張機能",
+  "pin_rotated_pending": "公式の署名公開鍵を更新しました。新しい公開鍵でカタログの署名を検証できるまで、インストールはできません",
   "settings_load_failed": "マーケットのミラー設定を読み込めませんでした。再試行してください。",
   "settings_save_failed": "マーケットのミラー設定を保存できませんでした。再試行してください。",
   "settings_invalid": "ミラー URL が無効です。認証情報、クエリ、フラグメントのない HTTPS URL と、完全な JSON カタログ URL を指定してください。"
