@@ -3,7 +3,7 @@
 import { chooseManager, noteConversation, otherManager, ownerHeaders } from "../../lib/manager-choice";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { api, errorText } from "../../lib/api";
-import { noteSent, sendToSession } from "../../lib/outbox";
+import { askPersonaOf, noteSent, sendToSession } from "../../lib/outbox";
 import { sessionTitle, stateOf } from "../../lib/format";
 import {
   agentDraft, connectorReference, conversationRoute, docChangeLine, HANDOFF_PRESETS, handOffMessage, isLark, itemKey, itemPath, itemRequest, sendReply, setDone, unsentReplies,
@@ -172,12 +172,13 @@ export function DraftDialog({ item, onClose }: { item: InboxItem; onClose: () =>
   );
 }
 
-/** Hands the item to Persona (a new conversation) or to a running agent, as a <persona-context> plus the ask. */
+/** Hands the item to Persona (its manager's main conversation by default, or a new one) or to a running agent, as a
+ *  <persona-context> plus the ask. */
 export function HandOffDialog({ item, onClose }: { item: InboxItem; onClose: () => void }) {
   const sessions = useStore((s) => s.sessions);
   const machines = useStore((s) => s.machines);
   const [ask, setAsk] = useState("");
-  const [target, setTarget] = useState<Session | null>(null);
+  const [target, setTarget] = useState<"main" | "new" | Session>("main");
   const [markDone, setMarkDone] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -197,7 +198,17 @@ export function HandOffDialog({ item, onClose }: { item: InboxItem; onClose: () 
     try {
       const full = await api<InboxItem>(itemPath(item.id), { headers: itemRequest(item) });
       const text = handOffMessage({ ...item, ...full }, ask);
-      if (target) {
+      if (target === "main") {
+        // the item's own manager's main conversation (docs/assistant/managers.md "Clients"), whatever the assistant page
+        // shows now: it opens with the message on its way, a failure shows there with "Retry"
+        const { sent } = await askPersonaOf(item.manager, text);
+        onClose();
+        void sent.then((ok) => {
+          if (ok && markDone) void setDone(item, true);
+        });
+        return;
+      }
+      if (target !== "new") {
         // the conversation opens at once with the message on its way; a failure shows there with "Retry"
         onClose();
         navigate({ name: "session", mid: target.machine_id, sid: target.session_id });
@@ -268,11 +279,12 @@ export function HandOffDialog({ item, onClose }: { item: InboxItem; onClose: () 
 
       <p className="mt-4 mb-1.5 text-[12px] font-medium text-ink-2">{t("inbox-inboxdialogs.target_label")}</p>
       <div role="radiogroup" aria-label={t("inbox-inboxdialogs.target_label")} className="max-h-[300px] divide-y divide-line overflow-y-auto rounded-card bg-surface shadow-card">
-        <Target on={target === null} onPick={() => setTarget(null)} title={t("inbox-inboxdialogs.target_persona")} sub={t("inbox-inboxdialogs.target_persona_sub")} icon={<span className="flex size-6 items-center justify-center rounded-[7px] bg-accent-tint text-accent-ink"><Icon name="spark" size={12} /></span>} />
+        <Target on={target === "main"} onPick={() => setTarget("main")} title={t("inbox-inboxdialogs.target_main")} sub={t("inbox-inboxdialogs.target_main_sub")} icon={<span className="flex size-6 items-center justify-center rounded-[7px] bg-accent-tint text-accent-ink"><Icon name="spark" size={12} /></span>} />
+        <Target on={target === "new"} onPick={() => setTarget("new")} title={t("inbox-inboxdialogs.target_persona")} sub={t("inbox-inboxdialogs.target_persona_sub")} icon={<span className="flex size-6 items-center justify-center rounded-[7px] bg-field text-ink-2"><Icon name="compose" size={12} /></span>} />
         {agents.map((s) => (
           <Target
             key={`${s.machine_id}/${s.session_id}`}
-            on={target?.machine_id === s.machine_id && target.session_id === s.session_id}
+            on={typeof target === "object" && target.machine_id === s.machine_id && target.session_id === s.session_id}
             onPick={() => setTarget(s)}
             title={sessionTitle(s)}
             sub={[machineWithHub(s.machine_id, machines), s.space_name].filter(Boolean).join(" › ")}
