@@ -102,6 +102,7 @@ type Node struct {
 	// suspended), to tell the two apart when a send finds it gone on a host that cannot resume it.
 	lastPanes map[string]string
 	launches  map[string]claudeLaunch    // herdr pane -> how Persona started its Claude, for herdr's restore (herdrresume.go)
+	resumes   resumeLocks                // one resume report at a time per herdr pane (herdrresume.go reportResume)
 	panes     map[string]string          // pane id -> session id (learned from hooks)
 	layouts   map[string]layout          // host kind -> space / slot names from its last snapshot
 	shellTabs *shellTabs                 // the sweep's memory; nil: the process's own (shelltabs.go)
@@ -129,6 +130,7 @@ type Node struct {
 	hostSig   map[string]*watcherSignals // change signals of the registered watcher hosts, by host kind (herdrevents.go)
 	cdirs     *claudeDirs                // Claude Code config directories in use (claudedirs.go)
 	hooks     *hookTurns                 // per-session turn counters from Persona's hooks (hookturn.go)
+	live      liveReplies                // the replies Claude is showing, from its MessageDisplay hook (livereply.go)
 	bgWait    bgWatch                    // whether background commands only wait (bgwait.go)
 	codices   *codexRegistry
 	usageWin  usageWindowsState // subscription rate-limit windows (usagewindows.go, #2432)
@@ -663,6 +665,9 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 			// AgentFilters: the extensions' filters of sessions left out (agentfilters.go); nil (an older hub, a call
 			// that says nothing of them) leaves them as they are.
 			AgentFilters *[]proto.AgentFilter `json:"agent_filters"`
+			// ClaudeLiveReplies: the Agents' starts load the live replies plugin (Settings › Claude Code, hooksplugin.go,
+			// #1309); nil (an older hub) leaves it as it is, on at first.
+			ClaudeLiveReplies *bool `json:"claude_live_replies"`
 		}
 		if err := json.Unmarshal(params, &c); err != nil {
 			return nil, err
@@ -709,6 +714,9 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 		}
 		if c.AgentFilters != nil {
 			n.setAgentFilters(*c.AgentFilters)
+		}
+		if c.ClaudeLiveReplies != nil {
+			n.setLiveReplies(*c.ClaudeLiveReplies)
 		}
 		return map[string]any{"claude_dirs": n.claudeConfigDirs()}, nil
 	case "usage.windows": // subscription rate-limit windows read from local files (usagewindows.go, #2432)

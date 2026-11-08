@@ -1787,6 +1787,211 @@
           "status": "idle"
         }
       }
+    },
+    {
+      "name": "start_refused_then_resent_new_op",
+      "description": "A first message the hub refused stays on the new-conversation page as failed, its words kept; sent again, it goes with a new op id (the old one's receipt holds the refusal) and starts one conversation.",
+      "source": {
+        "rule": "A failed send stays where it was sent with Retry and Delete, the composer empty (#1122 option A); a refused write's receipt answers its op id with the refusal",
+        "issue": "#1368",
+        "code": {
+          "ios": "apple/Persona/App/FailedStart.swift"
+        }
+      },
+      "chat": {
+        "machine_id": "m1",
+        "session_id": "s1",
+        "assistant": true,
+        "new": true
+      },
+      "devices": [
+        "a"
+      ],
+      "start": {
+        "hub": {
+          "history": "h1",
+          "lines": [],
+          "to_seq": 0,
+          "interactions": [],
+          "session": {},
+          "event_stream": "ev1",
+          "event_seq": 10
+        }
+      },
+      "steps": [
+        {
+          "user": {
+            "device": "a",
+            "start": {
+              "id": "c1",
+              "text": "Plan a weekend trip."
+            }
+          },
+          "expect": {
+            "a": {
+              "messages": [
+                {
+                  "from": "user",
+                  "text": "Plan a weekend trip.",
+                  "state": "pending"
+                }
+              ],
+              "requests": [
+                {
+                  "post": "conversations",
+                  "id": "c1"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "reply": {
+            "device": "a",
+            "write": "c1",
+            "status": 409,
+            "body": {
+              "error": "The assistant's launcher is not installed on its computer.",
+              "code": "launcher_missing"
+            }
+          },
+          "expect": {
+            "a": {
+              "messages": [
+                {
+                  "from": "user",
+                  "text": "Plan a weekend trip.",
+                  "state": "failed"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "user": {
+            "device": "a",
+            "retry": "c1"
+          },
+          "expect": {
+            "a": {
+              "messages": [
+                {
+                  "from": "user",
+                  "text": "Plan a weekend trip.",
+                  "state": "pending"
+                }
+              ],
+              "requests": [
+                {
+                  "post": "conversations",
+                  "new_op": true
+                }
+              ]
+            }
+          }
+        },
+        {
+          "reply": {
+            "device": "a",
+            "write": "c1",
+            "status": 200,
+            "body": {
+              "session": {
+                "machine_id": "m1",
+                "session_id": "s1",
+                "title": "Weekend trip",
+                "cwd": "/home/user/persona",
+                "status": "working",
+                "assistant": true,
+                "state": "working",
+                "updated_at": "2026-01-02T03:04:05Z",
+                "rev": 101
+              }
+            }
+          }
+        },
+        {
+          "hub": {
+            "append": [
+              {
+                "id": "l1#0",
+                "seq": 1,
+                "ts": "2026-01-02T03:04:05Z",
+                "role": "user",
+                "kind": "text",
+                "text": "Plan a weekend trip."
+              }
+            ],
+            "to_seq": 1
+          }
+        },
+        {
+          "frames": {
+            "a": [
+              {
+                "type": "items",
+                "machine_id": "m1",
+                "session_id": "s1",
+                "history": "h1",
+                "items": [
+                  {
+                    "id": "l1#0",
+                    "seq": 1,
+                    "ts": "2026-01-02T03:04:05Z",
+                    "role": "user",
+                    "kind": "text",
+                    "text": "Plan a weekend trip."
+                  }
+                ],
+                "to_seq": 1,
+                "from_seq": 0
+              },
+              {
+                "type": "sessions_delta",
+                "machine_id": "m1",
+                "upsert": [
+                  {
+                    "machine_id": "m1",
+                    "session_id": "s1",
+                    "title": "Weekend trip",
+                    "cwd": "/home/user/persona",
+                    "status": "working",
+                    "assistant": true,
+                    "state": "working",
+                    "updated_at": "2026-01-02T03:04:06Z",
+                    "rev": 102
+                  }
+                ],
+                "remove": []
+              }
+            ]
+          },
+          "expect": {
+            "a": {
+              "messages": [
+                {
+                  "from": "user",
+                  "text": "Plan a weekend trip.",
+                  "state": "shown"
+                }
+              ]
+            }
+          }
+        }
+      ],
+      "end": {
+        "a": {
+          "messages": [
+            {
+              "from": "user",
+              "text": "Plan a weekend trip.",
+              "state": "shown"
+            }
+          ],
+          "cards": {},
+          "status": "working"
+        }
+      }
     }
   ]
 }
