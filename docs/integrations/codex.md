@@ -155,7 +155,7 @@ The entry point is the same as Claude's (machine, directory, launcher); subseque
 
 - **Which launchers are Codex launchers**: `codex` on PATH adds a launcher named `codex`. Aliases in `~/.zshrc` that run a single `codex` command are listed after Claude launchers (can have preceding
   `export A=1;`, `VAR=… codex`, or wrappers such as `env` / `command`; arguments are retained, model taken from `-m` / `--model` / `-c model=…`).
-  They carry `agent: "codex"` in the launcher list and are marked "Codex" on the App's launchers page (`parseCodexAliases` in `sessions.go`). Unsupported: shell functions running Codex
+  They carry `agent: "codex"` in the launcher list and are marked "Codex" on the App's launchers page (`parseCodexAliases` in `launchers.go`). Unsupported: shell functions running Codex
   (rejected with an explanation, `codex_launcher`: functions run only in a shell, so the first message would have to pass through it), aliases doing additional work (`cd x && codex`, not listed), and the internal Codex fork.
 - **First message arrives unchanged**: Codex creates a thread only after receiving its first message, so a Codex start must include it (required in the App; otherwise `codex_needs_prompt`;
   older Apps using background startup get the same error and a prompt to update). Launcher words and message are written together to a private temporary file under the node directory (0600). The pane receives only
