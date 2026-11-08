@@ -24,6 +24,15 @@ struct MacSecondaryClickTests {
         let recorder = ActionRecorder()
         let recognizer = SecondaryClickRecognizer(target: recorder, action: #selector(ActionRecorder.record(_:)))
         view.addGestureRecognizer(recognizer)
+        // Clicks reach a recognizer in the key window of the active app, as a real click's window is: on macOS 26 a
+        // window that is neither never runs its recognizers (docs/lessons/macos.md, #501). Activation is cooperative,
+        // so let the run loop settle it, bounded.
+        NSApp.activate()
+        window.makeKeyAndOrderFront(nil)
+        let settle = Date().addingTimeInterval(2)
+        while !(NSApp.isActive && window.isKeyWindow), Date() < settle {
+            RunLoop.current.run(until: Date().addingTimeInterval(0.05))
+        }
         return (window, view, recognizer, recorder)
     }
 
@@ -44,7 +53,7 @@ struct MacSecondaryClickTests {
             // A complete click keeps AppKit's shared gesture tracking from capturing later windows' mouse events.
             defer { window.sendEvent(up) }
             window.sendEvent(down)
-            #expect(recognizer.state == .began)
+            #expect(recognizer.state == .began, "key window: \(window.isKeyWindow), app active: \(NSApp.isActive)")
             #expect(recognizer.location(in: nil) == NSPoint(x: 120, y: 90))
             #expect(recognizer.location(in: view) == NSPoint(x: 70, y: 50))
             #expect(recorder.states == [.began])
