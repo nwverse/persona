@@ -109,6 +109,9 @@ var extensionIDPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]{0,31}$`)
 
 // hubPlugin is one plugin as the hub runs it now.
 type hubExtension struct {
+	contributionsMu sync.Mutex
+	contributions   map[string][]extension.ExportedContribution
+
 	id     string
 	kind   string
 	socket string // its HTTP socket, when it serves HTTP
@@ -605,6 +608,9 @@ func (ps *extensions) apply(ctx context.Context, id string) {
 		return
 	}
 	hp := &hubExtension{id: id, kind: p.Manifest.Kind(), stats: ps.stats.of(id)}
+	if p.Manifest.Exports != nil {
+		hp.contributions = ps.reg.ContributionsToContext(ctx, id)
+	}
 	if c, ok := p.Legacy.(ExtensionConfig); ok {
 		hp.kind = c.Kind
 	}
@@ -937,7 +943,10 @@ func (ps *extensions) specOf(ctx context.Context, p *extension.Extension, hp *hu
 			}
 		}
 		if m.Exports != nil {
+			hp.contributionsMu.Lock()
 			params.ContributionsToMe = ps.reg.ContributionsToContext(ctx, id)
+			hp.contributions = params.ContributionsToMe
+			hp.contributionsMu.Unlock()
 		}
 		return params, nil
 	}
