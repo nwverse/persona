@@ -232,8 +232,9 @@ private fun SettingsHome(
         if (config == null && state.loading) item("loading") { JLoading(text = stringResource(R.string.assistant_settings_loading)) }
         state.notice?.let { notice -> item("notice") { JNotice(notice.text.resolve(resources), status = if (notice.error) Status.NeedsYou else Status.Unknown) } }
         if (config != null) {
-            if (config.manager == owner) item("default-permission") {
-                AssistantDefaultPermission(config.defaultPermissionMode ?: "default", ready, permission)
+            item("default-permission") {
+                AssistantDefaultPermission(config.defaultPermissionMode ?: "default", ready,
+                    state.permissionSupported && config.manager == owner, permission)
             }
             item("where") { JSectionHeader(stringResource(R.string.assistant_settings_where_header)) }
             rows("where", listOf(
