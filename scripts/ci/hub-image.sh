@@ -18,8 +18,9 @@ if [ "$mode" != smoke ]; then
 fi
 version="${CI_IMAGE_VERSION:-dev}"
 image="persona-hub:ci"
-fixture="$(mktemp -d "${TMPDIR:-/tmp}/persona-ci-image-XXXXXX")"
-export COMPOSE_PROJECT_NAME="persona-ci-$(basename "$fixture" | tr '[:upper:]' '[:lower:]')"
+fixture="$(mktemp -d "${TMPDIR:-/tmp}/persona-ci-image.XXXXXX")"
+# A compose project name takes only lowercase letters, digits, "-" and "_": the folder's "." (and any other) becomes "-".
+export COMPOSE_PROJECT_NAME="persona-ci-$(basename "$fixture" | tr '[:upper:]' '[:lower:]' | tr -c 'a-z0-9_\n-' '-')"
 cleanup() {
   local status=$?
   if [ -f "$fixture/.env" ]; then
