@@ -611,3 +611,87 @@ func TestRecordingObserversReadCommittedContent(t *testing.T) {
 		t.Fatalf("notifications = %d", calls)
 	}
 }
+
+// The journal encodes transcripts but exposes plaintext identity/schema keys.
+// Search must exclude the file itself, including a first upload with no accepted
+// metadata and a failed restoration that leaves the journal in place.
+func TestRecordingSearchSkipsPendingUndo(t *testing.T) {
+	for _, existing := range []bool{false, true} {
+		t.Run(fmt.Sprintf("existing=%t", existing), func(t *testing.T) {
+			e := goldenEngine(t, nil)
+			now := time.Date(2026, 11, 5, 12, 0, 0, 0, time.UTC)
+			if existing {
+				mustStoreRecording(t, e, recID, recUpload(1, now, true, "accepted orchard"), now)
+			}
+			e.Store.recordingWrite = func(path string, raw []byte) error {
+				if filepath.Base(path) == "transcript.md" {
+					// Block rollback at an actual filesystem replacement boundary.
+					segments := e.Store.path(KindRecording, recID, "segments.json")
+					if err := os.Remove(segments); err != nil {
+						return err
+					}
+					if err := os.Mkdir(segments, 0o700); err != nil {
+						return err
+					}
+					// Removing an empty directory would recover a first upload;
+					// keep it nonempty so both old and absent files stay blocked.
+					if err := writeFile(filepath.Join(segments, "blocked"), []byte("synthetic obstruction")); err != nil {
+						return err
+					}
+					return errors.New("synthetic pending recording recovery")
+				}
+				return archiveWrite(path, raw)
+			}
+			if _, err := e.PutRecording(recID, recUpload(2, now, true, "rejected zeppelin"), now); err == nil {
+				t.Fatal("expected upload and restoration failure")
+			}
+			journal := e.Store.path(KindRecording, recID, recordingJournal)
+			raw, err := os.ReadFile(journal)
+			if err != nil || !strings.Contains(string(raw), recID) || !strings.Contains(string(raw), `"files"`) {
+				t.Fatalf("pending journal fixture missing: %v", err)
+			}
+			for _, messages := range []bool{false, true} {
+				for _, query := range []string{recID, `"version"`, `"files"`, `"id"`} {
+					hits := e.Search(query, messages, 20)
+					for _, hit := range hits {
+						if filepath.Base(hit.Path) == recordingJournal {
+							t.Errorf("Search(%q,%t) exposed undo bookkeeping: %+v", query, messages, hit)
+						}
+					}
+					if !existing && query == recID && len(hits) != 0 {
+						t.Errorf("first rejected upload became searchable by UUID: %+v", hits)
+					}
+					if existing && query == recID && len(hits) == 0 {
+						t.Error("accepted legacy metadata stopped matching its UUID")
+					}
+				}
+			}
+			// Exact artifact exclusion keeps ordinary user-authored JSON and Markdown
+			// under a recording searchable through the legacy API.
+			for _, file := range []struct{ name, text string }{
+				{"notes.json", `{"files":"synthetic legacy json marker"}`},
+				{"notes.md", "synthetic legacy markdown marker"},
+			} {
+				if err := writeFile(e.Store.path(KindRecording, recID, file.name), []byte(file.text)); err != nil {
+					t.Fatal(err)
+				}
+				query := "synthetic legacy json marker"
+				if file.name == "notes.md" {
+					query = "synthetic legacy markdown marker"
+				}
+				hits := e.Search(query, true, 20)
+				if len(hits) != 1 || filepath.Base(hits[0].Path) != file.name {
+					t.Fatalf("legacy %s search changed: %+v", file.name, hits)
+				}
+			}
+			if _, err := NewStore(e.Store.Dir); err == nil {
+				t.Fatal("blocked recovery unexpectedly succeeded")
+			}
+			for _, hit := range e.Search(recID, true, 20) {
+				if filepath.Base(hit.Path) == recordingJournal {
+					t.Fatalf("failed reopen exposed journal: %+v", hit)
+				}
+			}
+		})
+	}
+}
