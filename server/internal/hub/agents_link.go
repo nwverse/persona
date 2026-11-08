@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -164,4 +165,19 @@ func (h *Hub) autoTabName(ctx context.Context, prompt string) string {
 		return ""
 	}
 	return res.Name
+}
+
+// modelUsed tells the manager of machine that model, picked in an app, ran there with launcher (models.used, #1644):
+// a start, a running session's switch or a message to an assistant conversation that went through with it. The
+// manager remembers an id the launcher's own /model list does not have and offers it there again. Best effort: a
+// manager that is away misses it, an older one ignores it.
+func (h *Hub) modelUsed(owner, machine, launcher, model string) {
+	model = strings.TrimSpace(model)
+	if launcher == "" || model == "" {
+		return
+	}
+	err := h.notifyBus(owner, assistantwire.EventModelUsed, assistantwire.ModelUsed{MachineID: machine, Launcher: launcher, Model: model})
+	if err != nil && !errors.Is(err, errBusOffline) {
+		h.logf("model used %s on %s: %v", launcher, machine, err)
+	}
 }

@@ -54,7 +54,7 @@ Give `ultracode: true` for a large task: one that spans many files or needs chec
     },
     "model": {
       "type": "string",
-      "description": "Explicit model override; omit to use the tier or purpose default."
+      "description": "Explicit model override: a model id the agent takes (an alias such as opus, or a gateway's own id; letters, digits and . _ - / : @ [ ] only). Omit to use the tier or purpose default."
     }
   }
 }

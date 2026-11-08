@@ -186,6 +186,8 @@ type modelsState struct {
 	cacheAt map[string]time.Time
 	have    map[string]map[string]bool // machine \x00 launcher → its models (ids and what aliases resolve to)
 
+	customMu sync.Mutex // one change of the remembered typed ids at a time (models_custom.go)
+
 	zshrcMu sync.Mutex
 	zshrc   map[string][]proto.Launcher // machine → its rc-file launchers (nil: not asked since the start)
 	// zshrcSync: how each machine's list came in the last time they were asked (设置 › 模型供应商's 各台电脑).
@@ -960,6 +962,12 @@ func (s *Service) modelConfigRoutes() {
 			apierr.Write(w, 400, err)
 			return
 		}
+		if p.Kind == "launcher" { // passed to an agent as --model: a model id (#1644)
+			if err := checkModelID(b.Model); err != nil {
+				apierr.Write(w, 400, err)
+				return
+			}
+		}
 		base, _, err := s.modelBaseline(ctx, p)
 		if err != nil {
 			apierr.Write(w, 500, err)
@@ -1016,8 +1024,10 @@ func (s *Service) applyModel(ctx context.Context, id string, params map[string]a
 	if name, _ := params["launcher"].(string); name != "" && launcherProvider(name) != b.Provider {
 		b = ModelBinding{Provider: launcherProvider(name), Runtime: b.Runtime}
 	}
-	if model, _ := params["model"].(string); model != "" {
-		b.Model = model
+	if model, _ := params["model"].(string); strings.TrimSpace(model) != "" {
+		b.Model = strings.TrimSpace(model)
+	} else {
+		delete(params, "model") // none picked ("" or blanks): the binding's
 	}
 	if effort, _ := params["effort"].(string); effort != "" {
 		b.Effort = effort
@@ -1033,8 +1043,10 @@ func (s *Service) applyPickedModel(ctx context.Context, params map[string]any) e
 		return nil
 	}
 	b := ModelBinding{Provider: launcherProvider(name)}
-	if m, _ := params["model"].(string); m != "" {
-		b.Model = m
+	if m, _ := params["model"].(string); strings.TrimSpace(m) != "" {
+		b.Model = strings.TrimSpace(m)
+	} else {
+		delete(params, "model") // the launcher's own default
 	}
 	if e, _ := params["effort"].(string); e != "" {
 		b.Effort = e
@@ -1049,6 +1061,8 @@ func (s *Service) applyPickedModel(ctx context.Context, params map[string]any) e
 }
 
 // finishModel puts a final binding into params: the launcher name, the model / effort set, the execution fingerprint.
+// A launcher's model goes to the agent as --model, so it has to be a model id (#1644): the call's own pick or the
+// configured one, a pick the user typed included.
 func (s *Service) finishModel(ctx context.Context, id string, params map[string]any, b ModelBinding) error {
 	name, ok := strings.CutPrefix(b.Provider, "launcher.")
 	if !ok {
@@ -1057,6 +1071,9 @@ func (s *Service) finishModel(ctx context.Context, id string, params map[string]
 			return nil
 		}
 		return i18n.Err("assistant-models.err_not_launcher")
+	}
+	if err := checkModelID(b.Model); err != nil {
+		return err
 	}
 	for _, provider := range s.storedLaunchers(ctx) {
 		// A direct API provider speaking Messages starts Claude on its gateway (node, contract #2455 §2); Responses

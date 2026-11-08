@@ -292,9 +292,14 @@ func (s *Service) toolTaskPlan(ctx context.Context, sessionID string, args json.
 		t := &a.Tasks[i]
 		t.TodoID, t.Error = "", ""
 		t.Title, t.Prompt, t.Cwd = strings.TrimSpace(t.Title), strings.TrimSpace(t.Prompt), strings.TrimSpace(t.Cwd)
+		t.Model = strings.TrimSpace(t.Model)
 		t.DoneWhen, t.ExpectMinutes = cleanDoneWhen(t.DoneWhen), max(0, min(t.ExpectMinutes, 24*60))
 		if t.Title == "" || t.Prompt == "" || t.Cwd == "" {
 			return "", fmt.Errorf("task %d: title, prompt and cwd are required", i+1)
+		}
+		if t.Model != "" && !proto.ValidModelID(t.Model) { // it goes to the agent as --model (#1644)
+			return "", fmt.Errorf("task %d: model %q is not a model id: start with a letter or digit, then only letters, digits and "+
+				". _ - / : @ [ ] (at most %d)", i+1, t.Model, proto.MaxModelIDLen)
 		}
 		if !s.placeTask(ctx, t) {
 			return "", fmt.Errorf("task %d: unknown machine %q (machines: %s)", i+1, t.Machine, s.machineIDs(ctx))
@@ -570,7 +575,10 @@ func (s *Service) taskRoutes() {
 }
 
 func planErr(w http.ResponseWriter, err error) {
+	var invalid planInvalid
 	switch {
+	case errors.As(err, &invalid):
+		apierr.Write(w, http.StatusBadRequest, invalid.error)
 	case errors.Is(err, errPlanNotFound):
 		apierr.Write(w, http.StatusNotFound, err)
 	case errors.Is(err, errPlanNotOpen):

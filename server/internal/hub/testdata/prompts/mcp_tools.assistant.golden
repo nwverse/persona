@@ -545,7 +545,7 @@
         },
         "model": {
           "type": "string",
-          "description": "Explicit model override; omit to use the tier or purpose default."
+          "description": "Explicit model override: a model id the agent takes (an alias such as opus, or a gateway's own id; letters, digits and . _ - / : @ [ ] only). Omit to use the tier or purpose default."
         }
       }
     }
@@ -1324,7 +1324,7 @@
               },
               "model": {
                 "type": "string",
-                "description": "model; empty: the launcher's default"
+                "description": "model id (an alias such as opus, or a gateway's own id; letters, digits and . _ - / : @ [ ] only); empty: the launcher's default"
               },
               "permission": {
                 "type": "string",

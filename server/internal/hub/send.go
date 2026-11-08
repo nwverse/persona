@@ -159,12 +159,17 @@ func (h *Hub) sendMessage(w http.ResponseWriter, r *http.Request, m *Machine) {
 		h.asstOf(h.sessionOwner(m.cfg.ID, sid)).UserSpoke(r.Context(), assistantwire.SessionRef{MachineID: m.cfg.ID, SessionID: sid})
 	}
 	s, known := m.session(sid)
+	picked := "" // a model picked in the chat's chip that the message runs on (#1644)
 	if h.isMainOn(m.cfg.ID, sid) || (known && (s.Assistant || m.isAssistant(s))) {
 		// One of the assistant's conversations: it says what the message runs on (and, the first one to a new main
 		// conversation started empty, what the old one left before it).
+		asked, _ := p["model"].(string)
 		if err := h.assistantSend(r.Context(), m, sid, p); err != nil {
 			writeAssistantErr(w, err)
 			return
+		}
+		if kept, _ := p["model"].(string); strings.TrimSpace(asked) != "" && kept == strings.TrimSpace(asked) {
+			picked = kept
 		}
 	} else if l, _ := p["launcher"].(string); l == "" && known && resumesWithoutLauncher(s) {
 		h.applyResumeLauncher(r.Context(), m, sid, p) // the manager's (agents_link.go)
@@ -192,8 +197,15 @@ func (h *Hub) sendMessage(w http.ResponseWriter, r *http.Request, m *Machine) {
 		callErr(w, &rpc.Error{Code: "codex_send_guard", Message: i18n.T(l, "hub-send.guard_need_id"), Data: json.RawMessage(`{"delivered":"none"}`)})
 		return
 	}
+	modelSent := func(status int) { // the picked model ran: the manager may remember it
+		if status == http.StatusOK && picked != "" {
+			launcher, _ := p["launcher"].(string)
+			h.modelUsed(h.sessionOwner(m.cfg.ID, sid), m.cfg.ID, launcher, picked)
+		}
+	}
 	if id == "" {
 		status, body := h.deliver(ctx, m, p)
+		modelSent(status)
 		if status == http.StatusOK && fresh {
 			h.fresh.done(m.cfg.ID, sid)
 		}
@@ -258,6 +270,7 @@ func (h *Hub) sendMessage(w http.ResponseWriter, r *http.Request, m *Machine) {
 		}
 	}
 	close(f.done)
+	modelSent(f.status)
 	if f.status == http.StatusOK && fresh {
 		h.fresh.done(m.cfg.ID, sid)
 	}

@@ -22,6 +22,9 @@ import (
 
 var errPlanNotOpen = errors.New("this plan was already started or dismissed")
 
+// planInvalid is a start the user's edits make impossible as they are (a model that is no model id): 400.
+type planInvalid struct{ error }
+
 // startPlan opens a todo for each task of the open plan id (edits, when given, replace the tasks' fields the user can
 // change) and starts their agents in the background; remember lets this kind start without asking next time.
 func (s *Service) startPlan(ctx context.Context, id string, edits []PlanTask, remember bool) (*TaskPlan, error) {
@@ -38,6 +41,9 @@ func (s *Service) startPlan(ctx context.Context, id string, edits []PlanTask, re
 	for i := range p.Tasks {
 		if i < len(edits) {
 			applyPlanEdit(&p.Tasks[i], edits[i])
+		}
+		if err := checkModelID(p.Tasks[i].Model); err != nil { // typed on the card (#1644): refused before anything starts
+			return nil, planInvalid{err}
 		}
 		if !s.placeTask(ctx, &p.Tasks[i]) {
 			return nil, i18n.Err("assistant-tasks.task_no_machine", i18n.Args{"task": p.Tasks[i].Title, "machine": strconv.Quote(p.Tasks[i].Machine)})

@@ -330,7 +330,7 @@ var errUnknownMachine = errors.New("unknown machine")
 
 // machineLauncherRoutes are "New Agent"'s pickers on one machine: its launchers with the agent each starts
 // (sessionLaunchers), and a launcher's /model list (node/launcher_models.go; the node keeps a list 10 minutes,
-// ?refresh=1 asks the CLI again).
+// ?refresh=1 asks the CLI again) with the ids the user typed for it before (models_custom.go).
 func (s *Service) machineLauncherRoutes() {
 	s.handle("GET /api/v1/machines/{mid}/launchers", func(w http.ResponseWriter, r *http.Request) {
 		ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
@@ -365,8 +365,9 @@ func (s *Service) machineLauncherRoutes() {
 			writeLauncherModelsErr(w, err)
 			return
 		}
-		apierr.WriteJSON(w, res)
+		apierr.WriteJSON(w, s.withCustomModels(ctx, mid, r.PathValue("name"), res)) // the ids typed here before (#1644)
 	})
+	s.customModelRoutes()
 	s.handle("GET /api/v1/launchers/presets", func(w http.ResponseWriter, r *http.Request) {
 		apierr.WriteJSON(w, map[string]any{"presets": s.launcherPresets(r.Context())})
 	})
@@ -444,7 +445,7 @@ func (s *Service) providerModels(w http.ResponseWriter, r *http.Request) {
 	apierr.WriteJSON(w, struct {
 		proto.LauncherModels
 		Machine string `json:"machine"`
-	}{res, machine})
+	}{s.withCustomModels(ctx, machine, name, res), machine})
 }
 
 // writeLauncherModelsErr answers a failed /model list: a node too old to list them is 404 like an older hub (the apps

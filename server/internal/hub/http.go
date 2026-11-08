@@ -721,6 +721,10 @@ func (h *Hub) startSession(w http.ResponseWriter, r *http.Request) {
 		callErr(w, err)
 		return
 	}
+	if model, _ := params["model"].(string); p.Model != "" && p.ResumeSessionID == "" && model == strings.TrimSpace(p.Model) {
+		launcher, _ := params["launcher"].(string) // the one it ran with: the manager filled it in
+		h.modelUsed(h.machineOwner(m.cfg.ID), m.cfg.ID, launcher, model)
+	}
 	res.Session.MachineID = m.cfg.ID
 	if shown, ok := h.awaitListed(ctx, m, res.Session.SessionID); ok {
 		res.Session.State = shown.State // as the manager works it out (fleet_link.go)

@@ -614,10 +614,22 @@ func (s *Service) SendParams(ctx context.Context, p SendParams) (map[string]any,
 // message stayed there (#1518). A launcher or model that is gone falls back to the assistant's. A picked one is checked
 // and fingerprinted like a configured one. The phone's messages, the node's own and the follow-ups the assistant
 // schedules for itself (runTask) all go through here.
+//
+// A model picked for this message may be one the launcher's list does not have (typed in the chip, #1644): it has to
+// be a model id, and it is kept. Only a model carried over from what the conversation ran is held to the list (and the
+// ids typed for that launcher before), so a model the gateway dropped does not fail every later turn.
 func (s *Service) sendModel(ctx context.Context, machine, sid string, p map[string]any) error {
 	cfg := s.settings(ctx)
 	p["is_main"] = cfg.Main != "" && cfg.Main == sid && cfg.MachineID == machine
 	followsSetting := cfg.Main != "" && cfg.Main == sid && cfg.MachineID == machine || s.isTaskConversation(ctx, machine, sid)
+	picked := false // a model picked with this message
+	if m, ok := p["model"].(string); ok && strings.TrimSpace(m) != "" {
+		m = strings.TrimSpace(m)
+		if err := checkModelID(m); err != nil {
+			return err
+		}
+		p["model"], picked = m, true
+	}
 	l, _ := p["launcher"].(string)
 	if l == "" && !followsSetting {
 		if c, known := s.session(ctx, machine, sid); known {
@@ -625,8 +637,9 @@ func (s *Service) sendModel(ctx context.Context, machine, sid string, p map[stri
 			if l != "" {
 				p["launcher"] = l
 			}
-			if _, picked := p["model"]; !picked && c.Model != "" {
-				p["model"] = c.Model // and the model it runs, so no pick keeps it
+			// And the model it runs, so no pick keeps it; one that is no model id (Claude's "<synthetic>") is not.
+			if _, asked := p["model"]; !asked && proto.ValidModelID(c.Model) {
+				p["model"] = c.Model
 			}
 		}
 	}
@@ -640,7 +653,7 @@ func (s *Service) sendModel(ctx context.Context, machine, sid string, p map[stri
 			s.logf("[%s] %s: its launcher is gone, using %s", machine, short(sid), l)
 			p["launcher"] = l
 			delete(p, "model")
-		case model != "" && !s.launcherHasModel(ctx, machine, l, model):
+		case model != "" && !picked && !s.launcherHasModel(ctx, machine, l, model):
 			s.logf("[%s] %s: model %s is not in %s's list any more, using its default", machine, short(sid), model, l)
 			delete(p, "model")
 		}
