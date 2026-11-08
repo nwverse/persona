@@ -43,6 +43,107 @@ func open(t testing.TB) *DB {
 	return d
 }
 
+func TestLiveActivityStartBudget(t *testing.T) {
+	d, ctx := open(t), context.Background()
+	at := time.Date(2026, 11, 9, 0, 0, 0, 0, time.UTC)
+	const cooldown, maxAge = 10 * time.Minute, 8 * time.Hour
+	if err := d.UpsertDevice(ctx, Device{DeviceID: "phone"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.SaveLiveActivity(ctx, LiveActivity{DeviceID: "phone", PushToStartToken: "start"}); err != nil {
+		t.Fatal(err)
+	}
+	// Independent pools represent the two blue-green processes, not an in-memory mutex.
+	other, err := Open(ctx, os.Getenv("PERSONA_TEST_DATABASE_URL"), AllSets)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer other.Close()
+	var wg sync.WaitGroup
+	results := make(chan bool, 20)
+	for i := range 20 {
+		pool := d
+		if i%2 == 1 {
+			pool = other
+		}
+		wg.Go(func() {
+			due, claimed, err := pool.ClaimLiveActivityStart(ctx, "phone", "start", at, cooldown, maxAge)
+			if err != nil {
+				t.Error(err)
+			}
+			if !due.Equal(at.Add(cooldown)) {
+				t.Errorf("claim due=%s", due)
+			}
+			results <- claimed
+		})
+	}
+	wg.Wait()
+	close(results)
+	claims := 0
+	for claimed := range results {
+		if claimed {
+			claims++
+		}
+	}
+	if claims != 1 {
+		t.Fatalf("two pools made %d claims, want 1", claims)
+	}
+	// Registration, a new episode, token rotation and client started_at are not the budget.
+	if err := d.UpsertDevice(ctx, Device{DeviceID: "phone", APNSToken: "renewed"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.SaveLiveActivity(ctx, LiveActivity{DeviceID: "phone", PushToStartToken: "rotated", StartedAt: at.Add(-24 * time.Hour)}); err != nil {
+		t.Fatal(err)
+	}
+	due, claimed, err := other.ClaimLiveActivityStart(ctx, "phone", "rotated", at.Add(cooldown-time.Microsecond), cooldown, maxAge)
+	if err != nil || claimed || !due.Equal(at.Add(cooldown)) {
+		t.Fatalf("renewal reset budget: due=%s claimed=%v err=%v", due, claimed, err)
+	}
+	// A committed fresh update token suppresses a stale process even at expiry.
+	if err := d.SaveLiveActivity(ctx, LiveActivity{DeviceID: "phone", PushToStartToken: "rotated", PushToken: "update", StartedAt: at}); err != nil {
+		t.Fatal(err)
+	}
+	due, claimed, err = other.ClaimLiveActivityStart(ctx, "phone", "rotated", at.Add(cooldown), cooldown, maxAge)
+	if err != nil || claimed || !due.IsZero() {
+		t.Fatalf("fresh token allowed start: %s %v %v", due, claimed, err)
+	}
+	if err := d.SaveLiveActivity(ctx, LiveActivity{DeviceID: "phone", PushToStartToken: "rotated"}); err != nil {
+		t.Fatal(err)
+	}
+	_, claimed, err = other.ClaimLiveActivityStart(ctx, "phone", "old-token", at.Add(cooldown), cooldown, maxAge)
+	if err != nil || claimed {
+		t.Fatalf("stale token allowed start: %v %v", claimed, err)
+	}
+	_, claimed, err = other.ClaimLiveActivityStart(ctx, "phone", "rotated", at.Add(cooldown), cooldown, maxAge)
+	if err != nil || !claimed {
+		t.Fatalf("expiry failed: %v %v", claimed, err)
+	}
+	// A budget write error must roll back, never grant dispatch permission.
+	if _, err := d.pool.Exec(ctx, `ALTER TABLE live_activity_start_budget ADD CONSTRAINT reject_test_claim CHECK (claimed_at < '2026-11-09 00:20:00+00')`); err != nil {
+		t.Fatal(err)
+	}
+	_, claimed, err = d.ClaimLiveActivityStart(ctx, "phone", "rotated", at.Add(2*cooldown), cooldown, maxAge)
+	if err == nil || claimed {
+		t.Fatalf("failed budget save allowed push: %v %v", claimed, err)
+	}
+	if _, err := d.pool.Exec(ctx, `ALTER TABLE live_activity_start_budget DROP CONSTRAINT reject_test_claim`); err != nil {
+		t.Fatal(err)
+	}
+	_, claimed, err = other.ClaimLiveActivityStart(ctx, "phone", "rotated", at.Add(2*cooldown), cooldown, maxAge)
+	if err != nil || !claimed {
+		t.Fatalf("failed claim did not roll back: %v %v", claimed, err)
+	}
+	// FK cleanup is confined to forgetting the device, not registering it again.
+	if err := d.DeleteDevice(ctx, "phone"); err != nil {
+		t.Fatal(err)
+	}
+	var n int
+	if err := d.pool.QueryRow(ctx, `SELECT count(*) FROM live_activity_start_budget`).Scan(&n); err != nil || n != 0 {
+		t.Fatalf("budget FK cleanup: n=%d err=%v", n, err)
+	}
+	t.Log("two independent pools: 20 concurrent attempts, one claim; renewal retained budget; failed save rolled back")
+}
+
 func TestMigrateIsIdempotent(t *testing.T) {
 	d := open(t)
 	if err := d.migrate(context.Background()); err != nil {
