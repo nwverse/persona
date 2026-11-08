@@ -31,7 +31,10 @@ export type Panel =
   /** An agent the main conversation's dock shows that no task stands for (#1113): its chat. */
   | { kind: "agent"; mid: string; sid: string }
   /** A chat's plan: its latest TodoWrite as a whole list, following the chat (#5602). */
-  | { kind: "plan"; mid: string; sid: string };
+  | { kind: "plan"; mid: string; sid: string }
+  /** The session's dev server in a headless browser on its computer (docs/web/preview.md); `port` / `path`: the one to
+   *  show (a localhost link of a reply), else the one shown last or the first running one. */
+  | { kind: "preview"; mid: string; sid: string; cwd: string; port?: number; path?: string };
 
 /** Files and Git state belongs to a directory even when that workspace has no Agent/session ID. */
 export function directoryPanelKey(panel: { mid: string; sid: string; cwd: string }): string {

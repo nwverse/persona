@@ -144,6 +144,15 @@ export interface TriageSwitches {
   reply_reminder_minutes?: number;
 }
 
+/** A port an agent's processes listen on that answers HTTP (docs/operations/ports.md): its dev server. */
+export interface Port {
+  port: number;
+  addr?: string;
+  pid?: number;
+  process?: string;
+  title?: string;
+}
+
 export interface Session {
   /** The engine host it lives in (herdr, herdr-core, orca, paseo…), and the other hosts it is live in at once (#2576). */
   host?: string;
@@ -267,8 +276,9 @@ export interface Session {
   /** An assistant conversation moved out of the list (docs/assistant/assistant.md "Managing its own conversations"), or
    *  an archived agent (docs/protocol/protocol.md "Agent session archives": only the Archived list has those). */
   archived?: boolean;
-  /** The HTTP ports its processes listen on (docs/operations/ports.md): closing it would stop those servers. */
-  ports?: { port: number; addr?: string }[];
+  /** The HTTP ports its processes listen on (docs/operations/ports.md): closing it would stop those servers, and they are
+   *  the dev servers a preview offers (docs/web/preview.md). */
+  ports?: Port[];
   /** Who opened an assistant conversation (docs/protocol/protocol.md "Assistant conversation origins"): user, channel, inbox, task, spawned,
    *  lark_agent, extension, or one this page doesn't know; none is the user's (older hubs never say). */
   origin?: string;

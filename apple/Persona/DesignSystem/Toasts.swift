@@ -13,7 +13,7 @@ struct ToastCapsule: View {
 
     var body: some View {
         let row = HStack(spacing: Theme.Space.m) {
-            Image(systemName: toast.style == .error ? Theme.Icon.errorFilled : toast.style == .success ? Theme.Icon.successFilled : Theme.Icon.infoFilled)
+            ThemedIcon(toast.style == .error ? Theme.Icon.errorFilled : toast.style == .success ? Theme.Icon.successFilled : Theme.Icon.infoFilled)
                 .foregroundStyle(toast.style == .error ? Theme.danger : toast.style == .success ? Theme.positive : Theme.accent)
             Text(toast.message)
                 .font(Theme.Font.secondaryMedium)

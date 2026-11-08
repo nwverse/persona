@@ -101,7 +101,10 @@ final class InboxHandOffModel {
                     try await api().send(main, text: text)
                     key = main
                 } else {
-                    let s = try await api().startConversation(prompt: text, main: true)
+                    let client = try api()
+                    let s = try await AssistantStart.run(receipts: model.hubFeatures.contains(AssistantStart.feature)) { op in
+                        try await client.startConversation(prompt: text, main: true, opID: op)
+                    }
                     model.began(s, text: text)
                     key = s.key
                     Task { await model.refreshAssistant() }
@@ -109,7 +112,10 @@ final class InboxHandOffModel {
                 model.openAssistantConversation(key)
             },
             startNew: { text in
-                let s = try await api().startConversation(prompt: text)
+                let client = try api()
+                let s = try await AssistantStart.run(receipts: model.hubFeatures.contains(AssistantStart.feature)) { op in
+                    try await client.startConversation(prompt: text, opID: op)
+                }
                 model.began(s, text: text)
                 model.assistantCurrent = s.key
                 model.selectedTab = .assistant

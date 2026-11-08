@@ -2,7 +2,7 @@ import SwiftUI
 
 /// System surfaces have a deliberately small, app-independent token vocabulary, also available on watchOS 10.
 nonisolated enum ExtensionSurfaceTokens {
-    static let actionIcon = "puzzlepiece.extension"
+    static let actionIcon = "puzzlepiece.extension" // icon: widgets compile this file without Theme; the same symbol as Theme.Icon.skills
     static let spacing: CGFloat = 8
     static let compactSpacing: CGFloat = 4
     static let chartHeight: CGFloat = 56

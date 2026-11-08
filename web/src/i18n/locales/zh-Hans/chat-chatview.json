@@ -76,6 +76,7 @@
   "composer_source": "来源",
   "call_not_loaded": "这一步不在已载入的记录里，往上翻一翻再试",
   "refresh_failed": "刷新失败",
+  "preview": "预览",
   "archived_notice": "这个 Agent 已归档。恢复后会回到 Agent 列表；发一条新消息也会让它回来。",
   "restore": "恢复"
 }
