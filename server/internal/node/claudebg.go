@@ -273,14 +273,46 @@ func unconfirmed() error {
 // asPeer: err is a refusal of the inbox's (*errPeer).
 func asPeer(err error, target **errPeer) bool { return errors.As(err, target) }
 
-// claudeInPane: the claude process runs in a terminal of one of Persona's engines (its environment names a pane), so
-// that engine lists it, not this.
+// claudeInPane: the claude process runs in a pane that one of the engines in use lists with a claude in it, so that
+// engine lists it, not this. A pane variable alone is not enough: an engine the machine does not enable (Orca's
+// terminals while the node uses herdr alone), or one whose process scan missed the claude (a nested pty, a launcher
+// that renamed it), lists nothing there, and a running claude must not fall through to the offline list.
 func (n *Node) claudeInPane(pid int) bool {
 	if paneEnvOfPID == nil {
 		return false
 	}
-	env := paneEnvOfPID(pid)
-	return slices.ContainsFunc(enginePaneEnvs, func(name string) bool { return env[name] != "" })
+	refs := enginePaneRefs(paneEnvOfPID(pid))
+	if len(refs) == 0 {
+		return false
+	}
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	for _, agents := range n.hostAgents {
+		for _, a := range agents {
+			if a.Agent == "claude" && slices.Contains(refs, a.PaneID) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// enginePaneRefs are the panes a process's engine pane variables (enginePaneEnvs) name, as the hosts write PaneIDs.
+func enginePaneRefs(env map[string]string) []string {
+	var out []string
+	add := func(kind, id string) {
+		if id != "" {
+			out = append(out, host.PaneRef{Kind: kind, ID: id}.String())
+		}
+	}
+	if p := env[herdrPaneEnv]; p != "" {
+		out = append(out, p) // herdr's pane ids are stored as they are
+	}
+	add(host.HerdrCore, env[herdrCorePaneEnv])
+	add(host.Orca, env[orcaPaneEnv])
+	add(host.Orca, env[orcaLegacyPaneEnv])
+	add(host.Botmux, env[botmuxPaneEnv])
+	return out
 }
 
 // enginePaneEnvs are the variables Persona's engines set in their panes' processes.
