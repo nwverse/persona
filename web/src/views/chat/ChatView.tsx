@@ -20,7 +20,7 @@ import { agentsWorking, buildTaskIndex, stableSubagents, STOP_LOOP_MESSAGE, suba
 import { stabilizeLines, stableValue } from "../../lib/stable-lines";
 import { planProgress } from "../../lib/work-groups";
 import { echoed, taggedSeen } from "../../lib/echo";
-import { outboxKey, settleOutbox } from "../../lib/outbox";
+import { keepFailed, noteWritten, outboxKey, placeFailed, retryOutbox, settleOutbox, type OutboxEntry } from "../../lib/outbox";
 import { apiOp } from "../../lib/ops";
 import { conversationKey, pickedLauncher, pickedModel } from "../../lib/assistant-chat";
 import { unlinkAgentFromTodo } from "../../lib/todos";
@@ -206,10 +206,9 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
   // the list as pushed: its updated_at is what tells the page it fell behind (useTranscript)
   const viewed = readOnly ? (listed?.find((a) => a.session_id === sid) ?? null) : null;
   const tr = useTranscript(mid, sid, { starting: Boolean(launching) && !readOnly, updatedAt: (readOnly ? viewed : session)?.updated_at, cache: mainCache });
-  // a Persona conversation's send the hub refused: a card above the composer, not a toast (docs/assistant/onboarding.md 4.4)
-  const [sendFailure, setSendFailure] = useState<{ chat: string; failure: CodedFailure; fromBox?: boolean } | null>(null);
-  // the composer's own send, for the failure card's "Send again": the words are back in the box, so the box is what goes
-  const resend = useRef<(() => void) | null>(null);
+  // a Persona conversation's send the hub refused: a card above the composer, not a toast (docs/assistant/onboarding.md 4.4),
+  // while its failed bubble (`entry`) is there
+  const [sendFailure, setSendFailure] = useState<{ chat: string; failure: CodedFailure; entry: string } | null>(null);
   // the main conversation's setup gate, for deliver (defined before the gate is)
   const blockedRef = useRef<ReadinessGate["blocked"]>(undefined);
   const [pending, setPending] = useState<Pending[]>(() => {
@@ -219,7 +218,7 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
     const id = launchMessageId(launch);
     return [{ id, at: Date.now(), msg: { id: `pending:${id}`, ...parseUserText(out.text), images: out.images.map((image, i) => ({ id: `pending:${id}#${i}`, seq: 0, role: "user", kind: "image", image })) } }];
   });
-  const [draftRefusal, setDraftRefusal] = useState<{ out: Outgoing; id: string; draft: string; clearable?: string } | null>(null);
+  const [draftRefusal, setDraftRefusal] = useState<{ id: string; draft: string; clearable?: string } | null>(null);
   // what other pages sent here ("Ask Persona", "Hand to AI"…): shown like this page's own sending bubbles (lib/outbox.ts)
   const outbox = useStore((s) => s.outbox[outboxKey(mid, sid)] ?? []);
   // a message Claude queued shows in the queue strip, not as a sending bubble too (ChatView.swift chatScroll)
@@ -519,8 +518,9 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
   };
 
   // ── sending ──
+  // true: it went, or it stays in the chat as a failed bubble (`failed`); false: it never went and nothing shows it
   const deliver = useCallback(
-    async (out: Outgoing, id: string, clearDraft?: string, fromBox = false, attempt = 0): Promise<boolean> => {
+    async (out: Outgoing, id: string, clearDraft?: string, attempt = 0): Promise<boolean> => {
       // the main conversation's setup gate holds every path that sends, not only the composer (4.4)
       if (blockedRef.current) {
         blockedRef.current.onClick?.();
@@ -532,8 +532,9 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
       }
       // a sending bubble shows picked contexts as quote cards, like the transcript will (not the raw tags)
       const p: Pending = { id, at: Date.now(), msg: { id: `pending:${id}`, ...parseUserText(out.text), images: out.images.map((image, i) => ({ id: `pending:${id}#${i}`, seq: 0, role: "user", kind: "image", image })) } };
-      // a new try: an earlier failure no longer applies; a box's unsent card stays until the box is sent again (#4270)
-      setSendFailure((f) => (fromBox || !f?.fromBox ? null : f));
+      // a new try: an earlier failure's card no longer applies (its bubble stays, with Retry)
+      setSendFailure(null);
+      noteWritten(id, p.at);
       setPending((ps) => [...ps.filter((x) => x.id !== id), p]);
       follow(true); // your own message: to the end, whatever you were reading
       try {
@@ -552,36 +553,32 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
           setPending((ps) => ps.map((x) => (x.id === id ? { ...x, waits: true } : x)));
           void ultracodeQueueDone(mid, sid).then((through) => {
             setPending((ps) => ps.filter((x) => x.id !== id));
-            // from the box, the words go back into it if this try does not get through either (the box emptied when it went)
-            if (through) void deliver(out, uuid(), clearDraft, fromBox, attempt + 1);
-            else failed(e, out, id, fromBox, true);
+            if (through) void deliver(out, uuid(), clearDraft, attempt + 1);
+            else failed(e, out, p);
           });
           return true;
         }
         setPending((ps) => ps.filter((x) => x.id !== id));
-        failed(e, out, id, fromBox, attempt > 0);
-        return false;
+        failed(e, out, p);
+        return true;
       }
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps -- `failed` reads only stable setters and these
     [mid, sid, session, assistant, follow],
   );
 
-  /** Says why a message did not go. `later`: it was held back for an ultracode change and tried again after the box had
-   *  emptied, so the words go back into the box first (the card's "Send again" sends the box). */
-  function failed(e: unknown, out: Outgoing, id: string, fromBox: boolean, later: boolean) {
-    if (later && fromBox && !(e instanceof ApiError && (e.code === "input_draft" || e.body.delivered === "unknown"))) sendDraft(draftKey, { type: "unsent", text: out.text });
+  /** Keeps a message that did not go as a failed bubble where it was sent, with why, "Retry" and "Delete", the box empty
+   *  (lib/outbox.ts keepFailed; as in the apps, #1122), and says what needs you: the computer's draft (a dialog that can
+   *  clear it), the main conversation's setup (a card above the composer), else a toast. */
+  function failed(e: unknown, out: Outgoing, p: Pending) {
+    keepFailed(mid, sid, { id: p.id, text: out.text, images: out.images, at: p.at, launcher: assistant ? pickedLauncher(conversationKey(mid, sid)) : undefined, model: assistant ? pickedModel(conversationKey(mid, sid)) : undefined }, e);
     if (e instanceof ApiError && e.code === "input_draft") {
-      setDraftRefusal({ out, id, draft: String(e.body.draft ?? ""), clearable: typeof e.body.clearable === "string" ? e.body.clearable : undefined });
+      setDraftRefusal({ id: p.id, draft: String(e.body.draft ?? ""), clearable: typeof e.body.clearable === "string" ? e.body.clearable : undefined });
     } else if (e instanceof ApiError && e.body.delivered === "unknown") {
       toast(t("chat-chatview.delivery_unknown"), "error");
     } else if (assistant && !(e instanceof ApiError && e.code === "dialog_open")) {
-      setSendFailure({ chat: `${mid}/${sid}`, failure: codedFailure(e), fromBox });
+      setSendFailure({ chat: `${mid}/${sid}`, failure: codedFailure(e), entry: p.id });
       void refreshReadiness({ force: true });
-    } else if (fromBox) {
-      // a card that stays until "Send again" or an edit of the box (#4270): a 5 s toast is gone by the time you are back
-      const why = e instanceof ApiError && e.code === "dialog_open" ? t("chat-chatview.dialog_open") : errorText(e);
-      setSendFailure({ chat: `${mid}/${sid}`, failure: { code: "", error: t("chat-chatview.unsent", { error: why }) }, fromBox });
     } else if (e instanceof ApiError && e.code === "dialog_open") {
       toast(t("chat-chatview.dialog_open"), "error");
     } else {
@@ -589,7 +586,7 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
     }
   }
 
-  const onSend = async (out: Outgoing, fromBox?: boolean): Promise<boolean> => {
+  const onSend = async (out: Outgoing): Promise<boolean> => {
     // Routed to a task ("Tell "xx""): straight to its agent, not to Persona (docs/assistant/unified-entry.md "Who it points at").
     if (assistant && out.images.length && getFeedState().routes[sid]) {
       toast(t("chat-chatview.route_no_images"), "error");
@@ -603,7 +600,7 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
         return false;
       }
     }
-    return deliver(out, uuid(), undefined, fromBox);
+    return deliver(out, uuid());
   };
   // The assistant's tasks (docs/assistant/unified-entry.md): the conversation's feed, and the main one's "Today" card.
   const feed = useFeed((s) => (assistant ? (s.feeds[sid] ?? NO_FEED) : NO_FEED));
@@ -656,8 +653,8 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
   // the main conversation's readiness: the card for what is missing, and the send button saying it (4.4)
   const gate = useReadinessGate(isMain && !readOnly);
   blockedRef.current = gate.blocked;
-  const failure = sendFailure?.chat === `${mid}/${sid}` ? sendFailure.failure : null;
-  const failedFromBox = Boolean(failure && sendFailure?.fromBox);
+  const failedEntry = sendFailure?.chat === `${mid}/${sid}` ? outbox.find((e) => e.id === sendFailure.entry && e.state === "failed") : undefined;
+  const failure = failedEntry ? sendFailure!.failure : null;
   // the hub's word on the last turn's model error, for its card (5.2 turn_error_code)
   const turnFix = assistant ? turnErrorFix(session?.turn_error_code) : null;
   // a line that comes out the same as last time keeps its object, so a push re-renders only the lines it changed
@@ -668,6 +665,12 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
     [tr.items, lastLive, readOnly, outgoing],
   );
   lastLines.current = lines;
+  // failed messages where they were sent: before the first message written after them (lib/outbox.ts placeFailed)
+  const placed = useMemo(() => (readOnly ? { before: new Map<string, OutboxEntry[]>(), rest: [] } : placeFailed(lines, outbox)), [readOnly, lines, outbox]);
+  const failedBefore = (id: string) => {
+    const list = placed.before.get(id);
+    return list ? [<OutboxBubbles key={`failed:${id}`} mid={mid} sid={sid} entries={list} />] : [];
+  };
   const lastTasks = useRef<TaskIndex | undefined>(undefined);
   const tasks = useMemo(() => stableValue(lastTasks.current, buildTaskIndex(tr.items)), [tr.items]);
   lastTasks.current = tasks;
@@ -992,7 +995,8 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
               <FreshWords.Provider value={fresh}>
               <CardConversation.Provider value={assistant ? sid : ""}>
               {assistant
-                ? displayLines(lines, feed).map((d) =>
+                ? displayLines(lines, feed).flatMap((d) => [
+                    ...failedBefore(d.kind === "chat" ? d.id : ""),
                     d.kind === "feed" ? (
                       <FeedLineView key={d.id} item={d.item} />
                     ) : d.kind === "quick" ? (
@@ -1012,8 +1016,8 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
                         assistant={assistant}
                       />
                     ),
-                  )
-                : lines.map((line, i) => open?.line === line.id ? (
+                  ])
+                : lines.flatMap((line, i) => [...failedBefore(line.id), open?.line === line.id ? (
                 <OpenRecapLine key={line.id} open={open} onClose={dismissRecap} />
               ) : (
                 <ChatLineView
@@ -1027,17 +1031,20 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
                   onRetry={canRetry && i === lines.length - 1 ? retry : undefined}
                   assistant={assistant}
                 />
-              ))}
+              )])}
               </CardConversation.Provider>
               </FreshWords.Provider>
             </ChatContext.Provider>
             </LiveClockContext.Provider>
-            {!readOnly && shownPending.map((p) => (
-              <div key={p.id} className="flex flex-col gap-3">
-                <UserBubble msg={p.msg} mid={mid} sid={sid} pending sendState="sending" />
-              </div>
-            ))}
-            {!readOnly && <OutboxBubbles mid={mid} sid={sid} entries={outbox} />}
+            {/* what is on its way, and failed messages with nothing sent after them, in the order they were written */}
+            {!readOnly &&
+              [...shownPending.map((p) => ({ at: p.at, el: (
+                <div key={p.id} className="flex flex-col gap-3">
+                  <UserBubble msg={p.msg} mid={mid} sid={sid} pending sendState="sending" />
+                </div>
+              ) })), ...placed.rest.map((e) => ({ at: e.at, el: <OutboxBubbles key={`outbox:${e.id}`} mid={mid} sid={sid} entries={[e]} /> }))]
+                .sort((a, b) => a.at - b.at)
+                .map((x) => x.el)}
             {!readOnly && (shownPending.length > 0 || outbox.some((e) => e.state === "sending") || (starting && outgoing > 0)) && (
               <div className="flex items-center gap-2.5">
                 <Loading label={starting ? t("chat-chatview.preparing") : shownPending.some((p) => p.waits) ? t("ultracode.send_waits") : t("chat-chatview.delivering")} />
@@ -1101,7 +1108,7 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
           onDismissKeyboard={() => composerBox.current?.querySelector("textarea")?.blur()}
         />
         {assistant && session && <CompactionStrip session={session} />}
-        {failure ? <FailureCard failure={failure} onClose={() => setSendFailure(null)} onHelp={gate.help} onConfirm={gate.confirm} onRetry={failedFromBox && sessionCan(session, "send") && !gate.blocked ? () => resend.current?.() : undefined} /> : <ReadinessCard gate={gate} />}
+        {failure ? <FailureCard failure={failure} onClose={() => setSendFailure(null)} onHelp={gate.help} onConfirm={gate.confirm} onRetry={failedEntry && sessionCan(session, "send") && !gate.blocked ? () => void retryOutbox(mid, sid, failedEntry.id) : undefined} /> : <ReadinessCard gate={gate} />}
         <ChatOnlyNote gate={gate} />
         {gate.dialog}
         {session && !assistant && <AttentionNote session={session} />}
@@ -1128,8 +1135,6 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
           working={state === "working"}
           needsYou={state === "needs_you"}
           onSend={onSend}
-          resendRef={resend}
-          onEdit={failedFromBox ? () => setSendFailure(null) : undefined}
           disabled={Boolean(offlineLine) || !sessionCan(session, "send")}
           // Persona's conversations too, the main one included (#1467): the node stops their turn like an agent's
           onStop={sessionCan(session, "interrupt") ? interrupt : undefined}
@@ -1185,7 +1190,7 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
                 onClick={() => {
                   const r = draftRefusal!;
                   setDraftRefusal(null);
-                  void deliver(r.out, uuid(), r.clearable); // another operation: the refused one keeps its answer
+                  void retryOutbox(mid, sid, r.id, r.clearable); // under a new id: the refused one keeps its answer
                 }}
               >
                 {t("chat-chatview.clear_and_send")}
