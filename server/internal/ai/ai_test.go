@@ -197,6 +197,19 @@ func TestJSONMaxDoesNotRetryAWholeReplyWithoutJSON(t *testing.T) {
 	}
 }
 
+// A refusal (stop_reason "refusal", no text) is ErrRefused, asked once: not a reply without JSON, nor one to retry.
+func TestJSONMaxSaysTheModelRefused(t *testing.T) {
+	c, seen := truncatingServer(t, map[string]any{"text": "", "stop": "refusal"})
+	var out struct{}
+	err := c.JSONMax(context.Background(), "sys", "user", 100, &out)
+	if !errors.Is(err, ErrRefused) {
+		t.Fatalf("err = %v, want ErrRefused", err)
+	}
+	if len(*seen) != 1 {
+		t.Errorf("requests = %v, want one", *seen)
+	}
+}
+
 func TestJSONMaxTakesAQuoteEscapedAsInJavaScript(t *testing.T) {
 	c, seen := truncatingServer(t, map[string]any{"text": `{"summary":"it\'s done"}`, "stop": "end_turn"})
 	var out struct{ Summary string }

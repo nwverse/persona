@@ -46,7 +46,7 @@ class AssistantManagementScopeTest {
                     request.await()
                     server.takeRequest().let { wire ->
                         assertEquals(manager, wire.requestUrl?.queryParameter(ManagerQuery))
-                        assertNull(wire.getHeader(ManagerHeader))
+                        assertEquals(manager, wire.getHeader(ManagerHeader))
                         assertEquals("Bearer test-token", wire.getHeader("Authorization"))
                     }
                 }

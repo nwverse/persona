@@ -128,4 +128,14 @@
     <string name="assistant_refused_retry">重试</string>
     <string name="assistant_manager_offline">%1$s · %2$s</string>
     <string name="assistant_manager_offline_empty">%1$s离线，能看历史，暂时不能发消息。</string>
+    <string name="assistant_settings_target">助手</string>
+    <string name="assistant_settings_permission">新会话默认权限</string>
+    <string name="assistant_settings_permission_hint">仅用于未明确选择权限的新会话，已有会话的权限保持不变。</string>
+    <string name="assistant_settings_permission_default">默认</string>
+    <string name="assistant_settings_permission_edits">允许编辑</string>
+    <string name="assistant_settings_permission_plan">仅规划</string>
+    <string name="assistant_settings_permission_auto">自动</string>
+    <string name="assistant_settings_permission_full">完全允许</string>
+    <string name="assistant_settings_permission_failed">未能保存默认权限</string>
+    <string name="assistant_settings_permission_unavailable">此助手尚未确认支持默认权限设置，暂不可修改。其他设置仍可使用。</string>
 </resources>

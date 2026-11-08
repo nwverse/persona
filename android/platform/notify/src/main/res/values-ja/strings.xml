@@ -40,7 +40,7 @@
     <string name="notify_body_elicitation">MCPフォーム：%1$s</string>
     <string name="notify_title_done">完了</string>
     <string name="notify_title_alert">アラート</string>
-    <string name="notify_stopped_title">バックグラウンド接続を停止しました</string>
+    <string name="notify_stopped_title">バックグラウンド接続は一時停止中です</string>
     <string name="notify_stopped_text">「再開」をタップすると通知を再び受け取れます</string>
     <string name="notify_resume">再開</string>
     <string name="notify_public_title">Personaから新しいメッセージ</string>

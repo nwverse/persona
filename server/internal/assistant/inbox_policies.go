@@ -359,6 +359,7 @@ func (s *Service) inboxPolicyRoutes() {
 func (b *inboxBook) applyRuledPolicies(items []*InboxItem) {
 	for _, it := range items {
 		if it.open() && it.Tier != "" && it.TriagedAt == it.Last && !it.handled() {
+			b.roundWrite(it)
 			b.applyPolicyTier(it)
 		}
 	}

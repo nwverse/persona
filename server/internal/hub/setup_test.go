@@ -31,6 +31,17 @@ func setupTestHome(t *testing.T) string {
 	return home
 }
 
+// realPath is p with symlinks resolved, as hubBinary returns the binary: macOS's default temp dir, where t.TempDir()
+// goes without GOTMPDIR, is under /var, a symlink to /private/var.
+func realPath(t *testing.T, p string) string {
+	t.Helper()
+	r, err := filepath.EvalSymlinks(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return r
+}
+
 // normalizeHost takes this machine's host name and a generated token out of a config, for goldens.
 func normalizeHost(s, token string) string {
 	host, _ := os.Hostname()
@@ -314,7 +325,7 @@ func TestSetupNewInstall(t *testing.T) {
 	if !strings.Contains(string(socket), "ListenStream="+strconv.Itoa(port)+"\nListenStream="+lan+":18662\n") || !strings.Contains(string(socket), "FreeBind=true") {
 		t.Fatalf("socket unit:\n%s", socket)
 	}
-	for _, c := range []string{"systemctl --user daemon-reload", "systemctl --user enable personad", "systemctl --user enable personad.socket", "systemctl --user start personad"} {
+	for _, c := range []string{"systemctl --user daemon-reload", "systemctl --user enable personad", "systemctl --user stop personad.socket personad", "systemctl --user enable personad.socket", "systemctl --user start personad.socket", "systemctl --user start personad"} {
 		if !cmds.called(c) {
 			t.Fatalf("no %q in %v", c, cmds.calls)
 		}
@@ -706,7 +717,7 @@ func TestSetupMacLaunchAgent(t *testing.T) {
 		t.Fatalf("%v\n%s", err, out)
 	}
 	plist, _ := os.ReadFile(filepath.Join(home, "Library", "LaunchAgents", "com.persona.hub.plist"))
-	bin := filepath.Join(e.root, "bin", "personad")
+	bin := realPath(t, filepath.Join(e.root, "bin", "personad"))
 	if !strings.Contains(string(plist), "<string>"+bin+"</string><string>hub</string>") || !strings.Contains(string(plist), "<key>PERSONA_HOME</key><string>"+e.root+"</string>") {
 		t.Fatalf("plist:\n%s", plist)
 	}

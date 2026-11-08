@@ -843,7 +843,7 @@ func (h *Hub) updateBusy() []busyItem {
 	var out []busyItem
 	for _, m := range h.machinesNow() {
 		if m.snapshot().Deploying {
-			out = append(out, busyItem{MachineID: m.cfg.ID, Machine: m.cfg.Name, Title: su(h.userLang(), "busy_redeploying")})
+			out = append(out, busyItem{MachineID: m.cfg.ID, Machine: m.name(), Title: su(h.userLang(), "busy_redeploying")})
 		}
 		m.mu.Lock()
 		resident := m.info.NodeUpdate // advertised only by a resident supervisor
@@ -858,7 +858,7 @@ func (h *Hub) updateBusy() []busyItem {
 			// On a turn, not working on in the background (#2228): a server an agent left running would hold the
 			// update back for as long as it runs, and the restart does not stop it.
 			if s.Status == proto.StatusWorking || s.State == proto.StateNeedsYou {
-				out = append(out, busyItem{MachineID: m.cfg.ID, Machine: m.cfg.Name, SessionID: s.SessionID, Title: agentTitle(s)})
+				out = append(out, busyItem{MachineID: m.cfg.ID, Machine: m.name(), SessionID: s.SessionID, Title: agentTitle(s)})
 			}
 		}
 	}

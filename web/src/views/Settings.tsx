@@ -155,14 +155,17 @@ export function Settings({ onToggleSidebar }: { onToggleSidebar: () => void }) {
   const hasChannels = useStore((s) => s.features.includes("channels"));
   const shown = (k: Tab) => (k !== "extensions" || hasExtensions || tab === "extensions") && (k !== "channels" || hasChannels || tab === "channels");
   const tabs = TABS.filter(shown).map((k) => ({ k, ...TAB_INFO[k] }));
+  const configurationOwner = useRef<string | null>(new URLSearchParams(location.search).get("manager"));
   const pick = (k: Tab, id: string | null = null) => {
+    configurationOwner.current = new URLSearchParams(location.search).get("manager") ?? configurationOwner.current;
     setAt({ tab: k, sub: id });
-    const to = settingsHref(k, id, phone);
+    const to = settingsHref(k, id, phone, k === "assistant" || k === "model-config" || k === "hub" ? configurationOwner.current : null);
     // from the phone's list the category goes on top of it, so Back returns to the list
     if (listed) history.pushState({ [FROM_LIST]: true }, "", BASE + to);
     else history.replaceState(openedFromList(history.state) ? history.state : null, "", BASE + to);
   };
   const toList = () => {
+    configurationOwner.current = new URLSearchParams(location.search).get("manager") ?? configurationOwner.current;
     if (openedFromList(history.state)) return history.back();
     history.replaceState(null, "", href({ name: "settings" }));
     setAt({ tab: null, sub: null });

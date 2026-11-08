@@ -253,7 +253,9 @@ func echoLines(items []proto.Item) []echoLine {
 	}
 	return slices.DeleteFunc(out, func(ln echoLine) bool {
 		for _, it := range ln.items {
-			if it.From != "" || it.Task != nil {
+			// Another session's message is not the user's send — except one signed peerSender: the node's own send
+			// through a claude's peer inbox (claudepeer.go), which the session writes as a peer's message.
+			if it.From != "" && it.From != peerSender || it.Task != nil {
 				return true
 			}
 		}

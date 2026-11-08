@@ -49,6 +49,7 @@ class HttpAssistantManagement private constructor(
         }.build().withRequestManager()
         val payload = body?.toString()?.toRequestBody("application/json".toMediaType())
         val request = Request.Builder().url(url).header("Authorization", "Bearer $token")
+            .apply { pinnedManager?.takeIf(String::isNotBlank)?.let { header(ManagerHeader, it) } }
             .method(method, payload).build()
         return client.newCall(request).awaitResponse().use { response ->
             checkScope()

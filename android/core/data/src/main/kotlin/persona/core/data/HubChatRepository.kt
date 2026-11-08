@@ -390,8 +390,9 @@ class HubChatRepository(
 
     private fun backgroundCandidates(): List<SessionKey> = sessions.sessions.value
         .filter { it.isLive || it.updated?.isAfter(now().minusSeconds(24 * 60 * 60)) == true }
-        .sortedWith(compareByDescending<Session> { it.isLive }.thenByDescending { it.updated }.thenBy { it.key.path })
-        .take(40).map { it.key }
+        .map { it to it.updated } // each time parsed once, not on every comparison
+        .sortedWith(compareByDescending<Pair<Session, java.time.Instant?>> { it.first.isLive }.thenByDescending { it.second }.thenBy { it.first.key.path })
+        .take(40).map { it.first.key }
 
     private fun requestSync(key: SessionKey) {
         val active = existing(key)?.let { synchronized(entries) { it.references > 0 } } == true

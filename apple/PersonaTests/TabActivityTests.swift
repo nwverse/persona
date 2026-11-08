@@ -38,6 +38,52 @@ struct TabActivityTests {
         #expect(calls.log == ["appear", "disappear"])
     }
 
+    @Test func retainedChatReleasesItsStreamAndResumesOncePerSwitch() {
+        let state = TabVisibilityState(), calls = Calls()
+        update(state, calls, mounted: true, active: false)
+        #expect(calls.log.isEmpty, "building a hidden chat must not subscribe")
+        for _ in 0..<20 {
+            update(state, calls, active: true)
+            update(state, calls, active: true)
+            update(state, calls, active: false)
+            update(state, calls, active: false)
+        }
+        #expect(calls.log == Array(repeating: ["appear", "disappear"], count: 20).flatMap { $0 })
+        update(state, calls, mounted: false)
+        #expect(calls.log.count == 40, "unmounting an already hidden chat must not release another owner")
+    }
+
+    @Test func chatVisibilityPreservesStoreAndOtherSubscriptionOwners() {
+        let model = AppModel()
+        // This group has no API or socket: never read a test runner's paired hub.
+        let key = SessionKey(group: "visibility-fixture", machineID: "box", sessionID: "visibility-fixture")
+        let owner = UUID(), other = UUID(), state = TabVisibilityState()
+        let store = model.chat(key)
+        let appear = {
+            model.subscribe(key, by: owner)
+            model.show(key, by: owner)
+        }
+        let disappear = {
+            model.unsubscribe(key, by: owner)
+            model.hide(by: owner)
+        }
+        state.update(mounted: true, active: false, appear: appear, disappear: disappear)
+        #expect(!model.isSubscribed(key) && model.visibleSession != key)
+        state.update(active: true, appear: appear, disappear: disappear)
+        #expect(model.isSubscribed(key) && model.visibleSession == key)
+        state.update(active: false, appear: appear, disappear: disappear)
+        #expect(!model.isSubscribed(key) && model.visibleSession != key)
+        state.update(active: true, appear: appear, disappear: disappear)
+        #expect(model.chat(key) === store, "returning must not reload or rebuild the chat store")
+        model.subscribe(key, by: other)
+        model.show(key, by: other)
+        state.update(active: false, appear: appear, disappear: disappear)
+        #expect(model.isSubscribed(key) && model.visibleSession == key, "another visible view still owns the stream")
+        model.unsubscribe(key, by: other)
+        model.hide(by: other)
+        #expect(!model.isSubscribed(key) && model.visibleSession != key)
+    }
+
     @Test func comingBackToTheFrontAppearsAgainWhicheverArrivesFirst() {
         let state = TabVisibilityState(), calls = Calls()
         update(state, calls, mounted: true, active: true)

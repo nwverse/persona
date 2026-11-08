@@ -38,6 +38,10 @@ const (
 // ignore it: each side keeps its own then.
 const PingHeader = "X-Persona-Ping"
 
+// MachineNameHeader is on a hub's info read (and its pairing request's machine_name says it too): what the hub calls
+// this computer, URL query-escaped; the connector keeps it to show (docs/operations/link.md "The computer's name").
+const MachineNameHeader = "X-Persona-Machine-Name"
+
 // PingHeaderValue is PingHeader's value for a heartbeat.
 func PingHeaderValue(every, timeout time.Duration) string {
 	return strconv.FormatInt(every.Milliseconds(), 10) + " " + strconv.FormatInt(timeout.Milliseconds(), 10)
@@ -68,6 +72,9 @@ type Passive struct {
 	HubID   string `json:"hub_id,omitempty"`
 	HubName string `json:"hub_name,omitempty"`
 	Machine string `json:"machine,omitempty"`
+	// MachineName is what that hub calls this computer, as it last said (pairing, its info reads); empty until a hub
+	// that says it.
+	MachineName string `json:"machine_name,omitempty"`
 	// TokenSHA256 is the hex SHA-256 of the credential that hub made up: the credential itself is not kept here.
 	TokenSHA256 string     `json:"token_sha256,omitempty"`
 	PairedAt    *time.Time `json:"paired_at,omitempty"`

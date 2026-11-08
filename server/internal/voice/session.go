@@ -620,10 +620,7 @@ func (c *conversation) dial(ctx context.Context, p *Provider, w wire, model stri
 	if key != "" {
 		header.Set("Authorization", "Bearer "+key)
 	}
-	opts := &websocket.DialOptions{HTTPHeader: header}
-	if p.SSH != "" {
-		opts.HTTPClient = p.httpClient()
-	}
+	opts := &websocket.DialOptions{HTTPHeader: header, HTTPClient: p.httpClient()}
 	up, res, err := websocket.Dial(ctx, u, opts)
 	if err != nil {
 		return nil, dialError(err, res)
