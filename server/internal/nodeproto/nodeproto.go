@@ -58,6 +58,9 @@ const (
 	// Preview: preview.servers / preview.start / preview.open, dev server previews in a headless browser on the
 	// computer (docs/web/preview.md).
 	Preview = "preview"
+	// SecretRun: secret.run, commands the user approved on the password card run with the password they typed on
+	// their stdin (docs/assistant/assistant.md "Password card"). A node on Windows announces it and refuses the run.
+	SecretRun = "secret_run"
 )
 
 // Error codes in the manager's answers to a resident node's replayed notifications (a notify with spool_id,
@@ -82,4 +85,4 @@ const (
 )
 
 // Announced is what a node built from this code announces.
-var Announced = []string{PersonaContracts, ManagerUpdateInventory, Sessions, ModelConfiguration, NodeUpdate, Engines, MachineUID, HerdrServer, PluginNodeCall, Ultracode, HealthSpaces, Preview}
+var Announced = []string{PersonaContracts, ManagerUpdateInventory, Sessions, ModelConfiguration, NodeUpdate, Engines, MachineUID, HerdrServer, PluginNodeCall, Ultracode, HealthSpaces, Preview, SecretRun}
