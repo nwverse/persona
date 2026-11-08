@@ -32,21 +32,42 @@ const clock = (iso: string) => {
 };
 
 export function ConnectorBody({ item }: { item: InboxItem }) {
+  // The whole page, including in-flight reads and history, belongs to this manager's item and thread.
+  const shown = useItemManager();
+  const manager = item.manager ?? shown;
+  const ownerKey = JSON.stringify([manager || defaultManager(), item.id, item.source, item.connector?.thread ?? ""]);
+  return <ConnectorThreadBody key={ownerKey} item={item} manager={manager} />;
+}
+
+function ConnectorThreadBody({ item, manager }: { item: InboxItem; manager?: string }) {
   const id = item.source;
   const thread = item.connector?.thread ?? "";
   const [page, setPage] = useState<ThreadPage | null>(null);
   const [failure, setFailure] = useState<string | null>(null);
   const [older, setOlder] = useState(false);
-  // the item's connector is its manager's (ItemManager): every read and reply names it
-  const shown = useItemManager();
-  const manager = item.manager ?? shown;
+  const owner = useRef<object | null>(null);
+  const newestRead = useRef(0);
+  const historyPending = useRef(false);
+  useLayoutEffect(() => {
+    owner.current = {};
+    return () => {
+      owner.current = null;
+      historyPending.current = false;
+    };
+  }, []);
 
   const load = useCallback(async () => {
+    const scope = owner.current;
+    if (!scope) return;
+    const request = ++newestRead.current;
+    const current = () => owner.current === scope && newestRead.current === request;
     try {
       const p = await loadThread(id, thread, undefined, manager);
+      if (!current()) return;
       setPage((have) => mergeNewest(have, p));
       setFailure(null);
     } catch (e) {
+      if (!current()) return;
       // Said over the text only when it is worth saying (a rate limit, the connector unavailable); a thread that
       // simply has no page of its own (a CI run) falls back quietly. "" is failed, null still loading.
       setFailure(e instanceof ApiError && (e.status === 429 || e.status === 409) ? errorText(e) : "");
@@ -56,45 +77,65 @@ export function ConnectorBody({ item }: { item: InboxItem }) {
   useEffect(() => void load(), [load, item.updated_at]);
 
   const loadOlder = async () => {
-    if (!page?.before || older) return;
+    const scope = owner.current;
+    if (!scope || !page?.before || historyPending.current) return;
+    historyPending.current = true;
     setOlder(true);
     try {
       const p = await loadThread(id, thread, page.before, manager);
+      if (owner.current !== scope) return;
       setPage((have) => (have ? mergeOlder(have, p) : p));
     } catch (e) {
-      toast(t("inbox-connectorthread.older_failed", { error: errorText(e) }), "error");
+      if (owner.current === scope) toast(t("inbox-connectorthread.older_failed", { error: errorText(e) }), "error");
     } finally {
-      setOlder(false);
+      if (owner.current === scope) {
+        historyPending.current = false;
+        setOlder(false);
+      }
     }
   };
 
   // A quote's message: the pages before it read until it is on screen (a few at most, as iOS); whether it is.
   const reach = async (msg: string) => {
-    if (!page) return false;
+    const scope = owner.current;
+    if (!scope || !page) return;
     if (page.messages.some((m) => m.id === msg)) return true;
+    if (historyPending.current) return;
+    historyPending.current = true;
     setOlder(true);
     try {
-      const r = await reachMessage(page, msg, (before) => loadThread(id, thread, before, manager));
-      setPage((have) => (have ? mergeOlder(have, r.page) : r.page));
+      const r = await reachMessage(page, msg, async (before) => {
+        if (owner.current !== scope) throw new Error("Thread view retired");
+        const p = await loadThread(id, thread, before, manager);
+        if (owner.current !== scope) throw new Error("Thread view retired");
+        // Merge only the fetched history, not the jump's older snapshot of the newest messages.
+        setPage((have) => (have ? mergeOlder(have, p) : p));
+        return p;
+      });
+      if (owner.current !== scope) return;
       return r.found;
     } catch (e) {
-      toast(t("inbox-connectorthread.older_failed", { error: errorText(e) }), "error");
-      return false;
+      if (owner.current === scope) toast(t("inbox-connectorthread.older_failed", { error: errorText(e) }), "error");
     } finally {
-      setOlder(false);
+      if (owner.current === scope) {
+        historyPending.current = false;
+        setOlder(false);
+      }
     }
   };
 
   const send = async (text: string, replyTo?: ThreadMessage) => {
-    if (!page?.chat.reply) return false;
+    const scope = owner.current;
+    if (!scope || !page?.chat.reply) return false;
     try {
       await replyInThread(id, { thread, action: page.chat.reply, text, reply_to: replyTo?.id }, manager);
-      await load();
-      return true;
     } catch (e) {
-      toast(t("inbox-connectorthread.send_failed", { error: errorText(e) }), "error");
+      if (owner.current === scope) toast(t("inbox-connectorthread.send_failed", { error: errorText(e) }), "error");
       return false;
     }
+    // Provider delivery succeeded: a failed refresh must not offer the same message for another send.
+    if (owner.current === scope) await load();
+    return true;
   };
 
   if (!page && failure === null) return <div className="p-5"><Loading label={t("inbox-connectorthread.loading", { name: item.account_name || id })} /></div>;
@@ -250,8 +291,8 @@ function ChatThread({ id, page, older, onOlder, onReach, onSend }: {
   page: ThreadPage;
   older: boolean;
   onOlder: () => void;
-  /** Reads back until a message is on the page; whether it is. */
-  onReach: (id: string) => Promise<boolean>;
+  /** Whether the message was reached; undefined when busy, retired or the read already reported its failure. */
+  onReach: (id: string) => Promise<boolean | undefined>;
   onSend: (text: string, replyTo?: ThreadMessage) => Promise<boolean>;
 }) {
   const scroller = useRef<HTMLDivElement>(null);
@@ -275,8 +316,9 @@ function ChatThread({ id, page, older, onOlder, onReach, onSend }: {
     return () => clearTimeout(off);
   }, [flash]);
   const jump = async (to: string) => {
-    if (await onReach(to)) setFlash({ id: to, n: Date.now() });
-    else toast(t("inbox-connectorthread.quote_not_found"));
+    const found = await onReach(to);
+    if (found) setFlash({ id: to, n: Date.now() });
+    else if (found === false) toast(t("inbox-connectorthread.quote_not_found"));
   };
   return (
     <div className="flex h-full min-h-0 flex-col">
