@@ -31,13 +31,14 @@ def features():
     return ["error_codes", "client_hello", "heartbeat", "app_ping", "client_msg_id", "send_refusals",
             "screen_dialog", "resumable_interactions", "secret_prompts", "request_id", "file_upload",
             "tls", "endpoints", "connectors", "lark_attachments", "file_stream", "file_thumb", "git_blob", "task_push",
-            "machine_rename"] + (["git_write"] if os.environ.get("MOCK_GIT_WRITE") else []) + (["terminal_stream"] if TERMINAL_STREAM else []) + (
+            "machine_rename"] + (["git_write"] if os.environ.get("MOCK_GIT_WRITE") else []) + (["git_review"] if os.environ.get("MOCK_REVIEW") else []) + (["terminal_stream"] if TERMINAL_STREAM else []) + (
                 ["terminal_control", "terminal_scroll", "terminal_click", "terminal_mouse"] if TERMINAL_CONTROL else []) + (
                 ["terminal_panes"] if os.environ.get("MOCK_TERMINAL_PANES") else []) + (["herdr_client"] + ([] if os.environ.get("MOCK_TERMINAL_FULL_NOFOCUS") else ["herdr_focus"]) if TERMINAL_FULL else []) + (
                 ["assistant_compact", "assistant_main_new"] if os.environ.get("MOCK_MAIN_ACTIONS") == "1" else []) + (
                 ["messaging"] if os.environ.get("MOCK_MESSAGING") == "1" else []) + (
                 ["conversation_origin"] if os.environ.get("MOCK_AUTO_CONVERSATIONS") == "1" else []) + (
-                ["sessions_list", "sessions_lookup"] if os.environ.get("MOCK_SESSIONS_LIST") == "1" else [])
+                ["sessions_list", "sessions_lookup"] if os.environ.get("MOCK_SESSIONS_LIST") == "1" else []) + (
+                ["preview"] if os.environ.get("MOCK_PREVIEW") else [])
 
 
 def identity():
@@ -764,7 +765,7 @@ def wf_review_runs(step):
             "tool_use_id": "toolu_wf_docs", "agents_started": 4, "agents_done": 2, "agents_running": 0, "agents_failed": 1,
             "started_at": ago(minutes=50), "ended_at": ago(minutes=40), "error": "Error: Workflow aborted",
             "agents": [wf_review_agent("d1", "scan:ios", "Scan", "done", 50, 46, tool=("Grep", "找 docs/ios.md 里的旧说法")),
-                       wf_review_agent("d2", "scan:web", "Scan", "done", 49.5, 45, tool=("Grep", "找 docs/web.md 里的旧说法")),
+                       wf_review_agent("d2", "scan:web", "Scan", "done", 49.5, 45, tool=("Grep", "找 docs/web/web.md 里的旧说法")),
                        wf_review_agent("d3", "scan:android", "Scan", "failed", 49, 44, tool=("Read", "读 docs/android.md")),
                        wf_review_agent("d4", "fix:ios", "Fix", "stopped", 44, 40, tool=("Edit", "改 docs/ios.md"))]}
     return [parity, docs]
@@ -1240,7 +1241,41 @@ def tab_panes_items():
     return {PANES_LEAD: [it("user", "text", 15, text="把 token 刷新挪到中间件里，开两个窗格分别审改动和补测试"),
                          it("assistant", "text", 0, text="开了两个窗格分头审改动、补测试，我在合中间件。")],
             PANES_REVIEW: [it("user", "text", 10, text="审一下登录重构的改动"), it("assistant", "text", 1, text="有两处会吞掉错误，要我直接改吗？")],
-            PANES_TESTS: [it("user", "text", 10, text="补刷新失败的测试"), it("assistant", "text", 3, text="补了 6 个用例，都过了。")]}
+            PANES_TESTS: [it("user", "text", 10, text="补刷新失败的测试"), it("assistant", "text", 3, text="补了 6 个用例，都过了。")],
+            PANES_PEER_B: bench_items()}
+
+
+def bench_items():
+    """Read and idle in a tab of three, about two screens (ChatReenterTests reads it to its top, leaves and comes back): a
+    short greeting and its answer, then a turn whose work line folds 12 tool calls, 5 thoughts and 3 replies, ending in
+    a long Markdown answer, so rows' real heights are far from the list's estimates. Items are numbered as they are made."""
+    head = [it("user", "text", 40, text="hi"),
+            it("assistant", "text", 40, text="你好。这个 worktree 在 `feat/cache-bench` 分支上，有三个文件还没提交：\n\n"
+               "- `scripts/bench/run_b.js`\n- `tests/fixtures/cacheBench.json`\n- `tests/cacheBench.test.js`\n\n"
+               "最近一次提交是「准备方案 B 的基准」，这三处应该就是接着那一步做的。要我继续，还是有别的事？"),
+            it("user", "text", 31, text="切回最新主分支，分析一下方案 B 为什么比 A 慢")]
+    work = []
+    for n in range(12):
+        if n % 3 == 0:
+            work.append(it("assistant", "thinking", 30, text=f"先看第 {n // 3 + 1} 组基准的数据，再对比两种方案的读路径。"))
+        if n in (4, 9):
+            work.append(it("assistant", "text", 30, text=f"第 {n // 4} 组数据看完了，接着看序列化的开销。"))
+        work += tool("Bash", {"command": f"node scripts/bench/run_b.js --round {n + 1}"}, f"round {n + 1}: p50 4.{n} ms, p99 9.{n} ms", 30)
+    work.append(it("assistant", "thinking", 29, text="两种方案的命中率一样，差别只在读的时候多了一次序列化。"))
+    answer = ("## 方案 B 慢在哪：每次读都多一次序列化，不是命中率的问题\n\n"
+              "已经确认。两种方案的命中率都在 **97%** 左右，B 的读路径在命中以后还会把值序列化一次再交出去，"
+              "这一步占了多出来的大部分时间。\n\n"
+              "### 发生了什么\n\n"
+              "- **慢了多少**：12 轮里 B 的 p50 平均比 A 高 0.5 ms，p99 高 1.1 ms，换算下来慢 12% 左右。\n"
+              "- **慢在哪**：`readThrough()` 命中以后调用了 `encode()`，A 直接返回缓存里的对象。\n"
+              "- **为什么这样写**：B 想让调用方拿到的值和缓存里的隔开，避免被改坏；A 是靠只读类型做到的。\n"
+              "- **别的开销**：写路径两边一样，过期清理 B 还略快一点，可以忽略。\n\n"
+              "### 建议\n\n"
+              "1. B 也换成只读类型，去掉命中后的 `encode()`，预计能追平 A。\n"
+              "2. 基准里加一组大对象的数据，序列化的差别在大对象上会更明显。\n"
+              "3. 两种方案的内存占用还没比，下一步补上。\n\n"
+              "要我先改第 1 条，还是先把大对象的基准补上？")
+    return head + work + [it("assistant", "text", 29, text=answer)]
 
 
 if os.environ.get("MOCK_TAB_PANES"):
@@ -2107,9 +2142,9 @@ def inbox_owner(item_id):
 
 
 def merged_by_manager(items):
-    """A merged list as the hub writes it (ownership.go mergeList): the default's answer first, then each other installed
-    manager's (by id; an offline one's kept answer too), every item stamped. Each answer has the built-ins and that
-    manager's own ones."""
+    """A merged list as the hub writes it (ownership_lists.go mergeList): the default's answer first, then each other
+    installed manager's (by id; an offline one's kept answer too), every item stamped. Each answer has the built-ins
+    and that manager's own ones."""
     dflt = MANAGERS["default"]
     installed = sorted(m["id"] for m in MANAGERS["list"] if not m.get("installing"))
     order = [dflt] + [m for m in installed if m != dflt]
@@ -2722,7 +2757,7 @@ if os.environ.get("MOCK_WORKFLOW") == "1":
                      + [it("assistant", "text", 50, text="文档扫描放到后台了。")]
                      + [it("user", "text", 15, text="各端的功能对齐审计一遍，每条发现再核对一次")]
                      + tool("Grep", {"pattern": "struct .*View", "path": "apple/Persona/Views"}, "ChatView.swift:12\nInboxView.swift:8", 15)
-                     + tool("Read", {"file_path": "/Users/me/code/persona/docs/web.md"}, "1\t# Web", 15)
+                     + tool("Read", {"file_path": "/Users/me/code/persona/docs/web/web.md"}, "1\t# Web", 15)
                      + wf_call("toolu_wf_parity", "parity-audit", 14)
                      + [it("assistant", "text", 14, text="审计交给 workflow 在后台跑了，跑完我再汇总。")])
     for _w in wf_review_runs(0) + wf_review_runs(4)[:1]:
@@ -9117,6 +9152,15 @@ MOCK_TREE = {
     "notes.txt": "Remember to water the plants.\n",
 }
 MOCK_REPO = "code/weather"
+# MOCK_REVIEW=1 (#151): git/review answers for this checkout (mock_review.py), with the files its review shows on disk
+REVIEW = bool(os.environ.get("MOCK_REVIEW"))
+if REVIEW:
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    import mock_review
+    for _k, _v in {"/Sources/App/Forecast.swift": mock_review.FORECAST_NEW, "/Sources/App/Units.swift": "import Foundation\n\nlet celsius = UnitTemperature.celsius\n",
+                   "/docs/hourly.md": mock_review.HOURLY_MD, "/Package.resolved": mock_review.RESOLVED,
+                   "/deploy/": None, "/deploy/id_ed25519": "made-up key\n", "/Resources/": None}.items():
+        MOCK_TREE[MOCK_REPO + _k] = _v
 # MOCK_FILES_LIVE=1 (#2439, the Files tree and its auto refresh): a deeper tree, folders Git ignores (the list marks them
 # `ignored`), a socket that remembers what each browser asked to watch (fs_watch, GET /mock/fs-watch) and a hook that
 # changes a folder and pushes fs_changed to the browsers watching it (GET /mock/fs-change?dir=…&add=…&git=1).
@@ -9397,7 +9441,7 @@ def mock_files(p, q):
     parts = p.split("/")
     if not (p.startswith("/api/v1/machines/") and len(parts) >= 6): return None
     mid, what = parts[4], "/".join(parts[5:])
-    if what not in ("file", "fs", "fs/find", "git/status", "git/diff", "git/show", "git/log", "git/branches", "git/pr"): return None
+    if what not in ("file", "fs", "fs/find", "git/status", "git/diff", "git/show", "git/log", "git/branches", "git/pr") and not (what == "git/review" and REVIEW): return None
     if not machine_online(mid): return {"error": "%s: machine is offline" % mid}, 503
     arg = lambda k: (q.get(k) or [""])[0]
     if what == "fs/find":  # #2438: every file under cwd, shallow first (the node's walk / git ls-files)
@@ -9432,10 +9476,10 @@ def mock_files(p, q):
     home, cwd = mock_abs(mid, arg("cwd"), "")
     root = home + "/" + MOCK_REPO
     if not (cwd == root or cwd.startswith(root + "/")):
+        if what == "git/review": return {"error": "not a Git repository", "code": "not_git"}, 409
         return ({"is_repo": False, "files": [], "commits": []}, 200) if what == "git/status" else ({"error": "not a git repository"}, 502)
-    if what == "git/status":
-        if os.environ.get("MOCK_GIT_WRITE"):
-            return git_write_status(root), 200
+    if what == "git/review":
+        return mock_review.answer(q, root, MOCK_TREE, MOCK_REPO, MOCK_COMMITS, EDIT_OLD, EDIT_NEW)
     if what == "git/branches":
         return (git_branches(), 200) if os.environ.get("MOCK_GIT_WRITE") else ({"error": "not found"}, 404)
     if what == "git/pr":
@@ -9444,6 +9488,9 @@ def mock_files(p, q):
         if GIT_W["pr_fail"]:
             return {"error": {"no_gh": "gh is not installed on this machine", "not_signed_in": "gh is not signed in on this machine: run gh auth login"}.get(GIT_W["pr_fail"], GIT_W["pr_fail"]), "code": GIT_W["pr_fail"]}, 409
         return {"branch": GIT_W["branch"], "pr": GIT_W["pr"] if GIT_W["pr"] and GIT_W["pr"]["head"] == GIT_W["branch"] else None}, 200
+    if what == "git/status":
+        if os.environ.get("MOCK_GIT_WRITE"):
+            return git_write_status(root), 200
         if os.environ.get("MOCK_GIT_PULL"):
             commits = MOCK_COMMITS[:30]
             if GIT_PULL_STATE["behind"] == 0:
@@ -12392,6 +12439,13 @@ def voice_socket(h):
         h.close_connection = True
 
 
+preview_route = None
+if os.environ.get("MOCK_PREVIEW"):  # dev server previews (docs/web/preview.md): scripts/mock/mock_preview.py
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    import mock_preview
+    preview_route = mock_preview.install(sys.modules[__name__])
+
+
 if VOICE_MODE:  # iOS's protocol 2 beside the script above (docs/assistant/voice.md 6.8): scripts/mock/voice_mock.py
     sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
     import voice_mock
@@ -12520,6 +12574,7 @@ class H(BaseHTTPRequestHandler):
         u = urlparse(self.path); p = u.path; q = parse_qs(u.query)
         HITS["GET " + p] = HITS.get("GET " + p, 0) + 1
         if self.token_refused(): return
+        if preview_route and preview_route(self, "GET", p, q): return
         if p == "/api/v1/assistant/conversations/" + ASK1 + "/always":
             return self.send_json({"grants": ALWAYS_GRANTS})
         if recordings_route(self, "GET", p): return
@@ -12541,6 +12596,8 @@ class H(BaseHTTPRequestHandler):
             git = (q.get("git") or [""])[0] == "1"
             if git: FS_STATE["dirty"] += 1
             return self.send_json({"ok": True, "sent": fs_changed(mid, [path] if add else [], git), "path": path})
+        if p == "/mock/review" and REVIEW:
+            return self.send_json(mock_review.control(q))
         if p == "/mock/git-write" and os.environ.get("MOCK_GIT_WRITE"):
             global GIT_W
             if q.get("reset"): GIT_W = git_write_fresh()
@@ -13368,6 +13425,7 @@ class H(BaseHTTPRequestHandler):
             return self.upload()
         self.last_body = self.body()
         p = urlparse(self.path).path
+        if preview_route and preview_route(self, self.command, p, parse_qs(urlparse(self.path).query)): return
         if PERSONAL_AGENTS and p.startswith("/api/v1/agents/sessions/") and p.rsplit("/", 1)[-1] in ("hide", "unhide"):
             sid, op = unquote(p[len("/api/v1/agents/sessions/"):].rsplit("/", 1)[0]), p.rsplit("/", 1)[-1]
             if sid not in [r["id"] for r in personal_rows()]: return self.send_json({"error": "no such session"}, 404)
