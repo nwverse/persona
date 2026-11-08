@@ -1,7 +1,7 @@
 // One conversation: an agent in herdr on one of your computers, or a Persona assistant conversation.
 import { useManagerOffline } from "../ManagerParts";
 import { alsoOpenText } from "../../lib/engines";
-import { lazy, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { lazy, memo, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { api, ApiError, errorText, sessionPath } from "../../lib/api";
 import { ago, attentionReason, backgroundWaiting, externalLink, failureReason, resumeCommand, sessionCan, sessionDeletable, sessionMenuActions, sourceSubtitle, sessionTitle, shortPath, stateOf, tabLabel, uuid } from "../../lib/format";
 import { navigate, type SessionView } from "../../lib/router";
@@ -60,6 +60,8 @@ import { publishPlan } from "../../lib/plan-store";
 import { ChatContext, FreshWords, LiveClockContext, type ChatContextValue } from "./chat-context";
 import { backgroundLine, backgroundWaitLine, waitingOnWorkflow, workflowCalls, workflowCallsKey } from "../../lib/workflows";
 import { seekCall } from "./jump";
+import { navRailTicks } from "../../lib/nav-rail";
+import { NavRail } from "./NavRail";
 import { ChatLineView, closedRecap, closeRecap, OpenRecapLine } from "./Lines";
 import { useTranscript } from "./useTranscript";
 import { ArchiveCloseDialog, CloseAgentDialog, DeleteSessionDialog, ModeChips, RenameDialog, RenameSpaceDialog, SessionInfoDialog } from "./SessionDialogs";
@@ -97,6 +99,7 @@ const loadTerminal = () => import("../session/TerminalPanel");
 const TerminalPanel = lazy(() => loadTerminal().then((m) => ({ default: m.TerminalPanel })));
 
 const NO_FEED: FeedItem[] = [];
+const NO_PANES: Session[] = [];
 // the assistant has no subagents: one array, so the chat context does not change with every render
 const NO_SUBAGENTS: Subagent[] = [];
 /** Going to a search hit: how long the rows that hold it get to open before the line it is on stands in, when to give
@@ -200,8 +203,8 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
   const subagents = stableSubagents(lastSubagents.current, listed);
   lastSubagents.current = subagents;
   const machineName = useStore((s) => machineWithHub(mid, s.machines));
-  const allSessions = useStore((s) => s.sessions[mid]);
-  const panes = useMemo(() => (session && !assistant && !readOnly ? tabSessions(allSessions ?? [], session) : []), [allSessions, session, assistant, readOnly]);
+  // only the tab's own rows (the same objects, the same array): a push for another agent on the machine leaves the chat be
+  const panes = useStore((s) => (session && !assistant && !readOnly ? tabSessions(s.sessions[mid] ?? [], session) : NO_PANES));
   const siblings = useStore((s) => (session?.space_id ? (s.sessions[mid] ?? []).filter((x) => x.space_id === session.space_id && stateOf(x) !== "offline") : []));
   const interactions = useStore((s) => s.interactions.filter((i) => i.machine_id === mid && i.session_id === sid));
   const answered = useStore((s) => Object.values(s.answered).filter((a) => a.ix.machine_id === mid && a.ix.session_id === sid));
@@ -610,6 +613,10 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
     }
     return deliver(out, uuid());
   };
+  // the composer is memoized: one function, running the latest onSend
+  const sendNow = useRef(onSend);
+  sendNow.current = onSend;
+  const send = useCallback((out: Outgoing) => sendNow.current(out), []);
   // The assistant's tasks (docs/assistant/unified-entry.md): the conversation's feed, and the main one's "Today" card.
   const feed = useFeed((s) => (assistant ? (s.feeds[sid] ?? NO_FEED) : NO_FEED));
   useEffect(() => {
@@ -628,7 +635,7 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
     return () => window.removeEventListener("persona:say", say);
   }, [assistant, mid, sid, deliver]);
 
-  const interrupt = async () => {
+  const interrupt = useCallback(async () => {
     if (!sessionCan(getSession(mid, sid), "interrupt")) return;
     try {
       await api(`${sessionPath(mid, sid)}/interrupt`, { method: "POST" });
@@ -636,7 +643,7 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
     } catch (e) {
       toast(t("chat-chatview.interrupt_failed", { error: errorText(e) }), "error");
     }
-  };
+  }, [mid, sid]);
 
   useEffect(() => {
     const key = (e: KeyboardEvent) => {
@@ -686,6 +693,30 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
   const lastTasks = useRef<TaskIndex | undefined>(undefined);
   const tasks = useMemo(() => stableValue(lastTasks.current, buildTaskIndex(tr.items)), [tr.items]);
   lastTasks.current = tasks;
+  // the question rail (#1739): one tick per question of yours among the loaded lines — the model picks them, NavRail
+  // draws them in the side margin and this view jumps (only what is loaded counts; the rail never pages history in)
+  const railTicks = useMemo(() => navRailTicks(lines), [lines]);
+  /** Brings a row into view in the chat's own scroller (scrollIntoView would also scroll an opening group's clipped
+   *  box): following the end stops, and the jump's first frames do not pick it up again (`jumping`). */
+  const landRow = useCallback(
+    (row: HTMLElement, topOffset: number) => {
+      const sc = scroller.current;
+      if (!sc) return;
+      follow(false);
+      clearTimeout(jumping.current);
+      jumping.current = window.setTimeout(() => (jumping.current = 0), 1200);
+      sc.scrollTo({ top: sc.scrollTop + row.getBoundingClientRect().top - sc.getBoundingClientRect().top + topOffset, behavior: scrollBehavior() });
+    },
+    [follow],
+  );
+  const railJump = useCallback(
+    (lineId: string) => {
+      // the question lands a little under the top, its answer below it
+      const row = scroller.current?.querySelector<HTMLElement>(`[data-line="${CSS.escape(lineId)}"]`)?.firstElementChild;
+      if (row instanceof HTMLElement) landRow(row, -12);
+    },
+    [landRow],
+  );
   // the subagents the agent is waiting on (#5602): running, launched in the foreground, their calls not answered yet
   const callsAnswered = useMemo(() => new Set(tr.items.filter((i) => i.kind === "tool_result" && i.tool_use_id).map((i) => i.tool_use_id!)), [tr.items]);
   const waitingOn = useMemo(() => (assistant ? null : agentsWorking(subagents, callsAnswered)), [assistant, subagents, callsAnswered]);
@@ -718,14 +749,10 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
       }
       const sc = scroller.current;
       if (!row || !sc) return void toast(t("chat-chatview.call_not_loaded"));
-      const s = sc.getBoundingClientRect();
-      const r = row.getBoundingClientRect();
-      clearTimeout(jumping.current);
-      jumping.current = window.setTimeout(() => (jumping.current = 0), 1200);
-      sc.scrollTo({ top: sc.scrollTop + (r.top - s.top) - (sc.clientHeight - r.height) / 2, behavior: "smooth" });
+      landRow(row, -(sc.clientHeight - row.getBoundingClientRect().height) / 2);
       row.animate?.([{ backgroundColor: "var(--accent-tint)" }, { backgroundColor: "transparent" }], { duration: 1800, easing: "ease-out" });
     },
-    [mid, sid, follow, expandFold],
+    [mid, sid, follow, expandFold, landRow],
   );
   const jump = useCallback((call: string) => void jumpToCall(call), [jumpToCall]);
   // its workflow runs by the Workflow call that launched each (#3434): rebuilt only when a run starts or goes, not with
@@ -945,6 +972,15 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
       <JumpPill label={jumpLabel(newSince)} onClick={toEnd} inline />
     </div>
   ) : planPill;
+  // the header and the composer are memoized (a transcript push changes neither): what they get stays the same object
+  // until it changes. The assistant's face reads only the last item's role and kind (lib/persona.ts personaState).
+  const stopLoop = useCallback(() => void deliver({ text: STOP_LOOP_MESSAGE, images: [] }, uuid()), [deliver]);
+  const lastItem = assistant ? tr.items[tr.items.length - 1] : undefined;
+  const lastRole = lastItem?.role;
+  const lastKind = lastItem?.kind;
+  const faceLast = useMemo(() => (lastRole && lastKind ? { role: lastRole, kind: lastKind } : undefined), [lastRole, lastKind]);
+  const commands = useMemo(() => (assistant ? [] : agentCommands(AGENT_COMMANDS, session)), [assistant, session]);
+  const footer = useMemo(() => (session ? <ComposerFooter session={session} assistant={assistant} /> : null), [session, assistant]);
 
   return (
     <div className="flex h-full min-w-0 flex-col">
@@ -958,9 +994,9 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
           siblings={siblings}
           onToggleSidebar={onToggleSidebar}
           onInterrupt={interrupt}
-          onStopLoop={() => void deliver({ text: STOP_LOOP_MESSAGE, images: [] }, uuid())}
+          onStopLoop={stopLoop}
           onJumpToCall={jump}
-          last={assistant ? tr.items[tr.items.length - 1] : undefined}
+          last={faceLast}
           onSearch={openSearch}
           topCenter={topCenter}
           view={switchable ? view : undefined}
@@ -1068,6 +1104,8 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
           {!readOnly && <CommentMarks scroller={scroller} />}
           </ChatActionsContext.Provider>
         </div>
+        {/* the rail sits in the chat area's side margin; it renders nothing when the chat is narrow or short */}
+        <NavRail ticks={railTicks} scroller={scrollEl} onJump={railJump} reset={`${mid}/${sid}`} />
         {away && !jumpInDock && <JumpPill label={jumpLabel(newSince)} onClick={toEnd} />}
         {picked && !search.open && <ReturnPill onClick={backToOrigin} />}
       </div>
@@ -1148,17 +1186,17 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
           uploadDest={session?.space === "health" ? "health" : undefined}
           working={state === "working"}
           needsYou={state === "needs_you"}
-          onSend={onSend}
+          onSend={send}
           disabled={Boolean(offlineLine) || !sessionCan(session, "send")}
           // Persona's conversations too, the main one included (#1467): the node stops their turn like an agent's
           onStop={sessionCan(session, "interrupt") ? interrupt : undefined}
-          commands={assistant ? [] : agentCommands(AGENT_COMMANDS, session)}
+          commands={commands}
           suggestion={session?.suggestion}
           mention={mention}
           autoFocus
           onFocusChange={setTyping}
           blocked={gate.blocked}
-          footer={session ? <ComposerFooter session={session} assistant={assistant} /> : null}
+          footer={footer}
         />
         </div>
       </div>
@@ -1334,7 +1372,8 @@ function AttentionNote({ session }: { session: Session }) {
   );
 }
 
-export function Header({
+// memo: a chat renders again for each transcript item, and the header shows none of them
+export const Header = memo(function Header({
   session,
   title,
   machineName,
@@ -1365,7 +1404,8 @@ export function Header({
   onStopLoop: () => void;
   /** Brings the step with this tool_use_id into view (a workflow's "Show where it started", #2719). */
   onJumpToCall?: (call: string) => void;
-  last?: Item;
+  /** The assistant's face: the last item's role and kind. */
+  last?: Pick<Item, "role" | "kind">;
   /** "Search in chat" (ChatSearch.tsx). */
   onSearch?: () => void;
   topCenter?: React.ReactNode;
@@ -1404,6 +1444,9 @@ export function Header({
   const state = session ? stateOf(session) : "unknown";
   // Awaiting Reply (#5096): seen, but it asked you something you have not answered
   const awaiting = session ? awaitsReply(session, mutes) : false;
+  // a Persona conversation's subtitle ends with its age: the memo keeps pushes from drawing the header again, so a minute
+  // tick does (docs/lessons/web.md, SessionRow)
+  useNow(60_000, Boolean(!chrome?.sub && !main && assistant && session?.updated_at));
   const place = chrome?.sub
     ? chrome.sub
     : main
@@ -1625,7 +1668,7 @@ export function Header({
       {assistantDialogs}
     </header>
   );
-}
+});
 
 /** The ⋯ row for the space's other agents on a phone, where the header has no "Same space" button: it opens the same menu
  *  the button does (`open`, at ⋯), red when one of them needs you. */

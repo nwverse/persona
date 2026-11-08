@@ -43,6 +43,9 @@ services:
       # Where node builds for the computers' other platforms come from (a release's dl/, a mirror, or off; empty: the
       # image's own, docs/operations/docker.md "Node builds").
       PERSONA_NODE_PACKAGES: ${PERSONA_NODE_PACKAGES:-}
+      # 0: the hub and the built-in manager run on personad rather than as persona-hub and persona-manager
+      # (docs/operations/docker.md "Programs").
+      PERSONA_SPLIT_PROGRAMS: ${PERSONA_SPLIT_PROGRAMS:-}
       # With the built-in manager in a container of its own (the manager service below): this one runs the hub alone.
       # PERSONA_BUILTIN_MANAGER: separate
     ports:
@@ -78,6 +81,7 @@ services:
   #     PERSONA_DATABASE_URL: postgres://${PERSONA_DB_USER:-jarvis}:${PERSONA_DB_PASSWORD-${JARVIS_DB_PASSWORD:-}}@postgres:5432/${PERSONA_DB_NAME:-jarvis}?sslmode=disable
   #     PERSONA_IMAGE: ${PERSONA_IMAGE-${JARVIS_IMAGE:-}}
   #     PERSONA_NODE_PACKAGES: ${PERSONA_NODE_PACKAGES:-}
+  #     PERSONA_SPLIT_PROGRAMS: ${PERSONA_SPLIT_PROGRAMS:-}
   #   volumes:
   #     # The hub's data folder, at both paths the hub's container has it: the built-in manager keeps its files in
   #     # it as beside the hub, and the paths it writes down are the same ones there.
