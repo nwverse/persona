@@ -222,7 +222,6 @@ private fun SettingsHome(
         summary = config?.let { stringResource(R.string.assistant_settings_summary, machineName) },
     ) {
         item("manager") {
-            AssistantSettingsOwner(owner)
             switcher()
         }
         if (state.loadFailed) item("load-failed") {

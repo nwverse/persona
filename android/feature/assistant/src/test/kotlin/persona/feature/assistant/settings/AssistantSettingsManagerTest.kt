@@ -18,7 +18,7 @@ import persona.core.designsystem.*
 class AssistantSettingsManagerTest {
     @get:Rule val rule = createComposeRule()
 
-    private class Hub(
+    internal class Hub(
         private val values: MutableMap<String, AssistantConfig>,
         private val owner: String = "assistant",
     ) : AssistantManagement {
@@ -77,4 +77,41 @@ class AssistantSettingsManagerTest {
         rule.waitForIdle()
         assertEquals("task.daily" to "work", opened)
     }
+    @Test fun supportedManagersCanSaveThroughProductionAdapterAndKeepSwitcher() {
+        val values = mutableMapOf(
+            "assistant" to AssistantConfig(manager = "assistant", defaultPermissionMode = "default", main = "personal-history",
+                permissionDefaults = AssistantPermissionDefaults(1, "assistant", AssistantPermissionDefaults.MODES)),
+            "work" to AssistantConfig(manager = "work", defaultPermissionMode = "plan", main = "work-history",
+                permissionDefaults = AssistantPermissionDefaults(1, "work", AssistantPermissionDefaults.MODES)),
+        )
+        val roster = ManagerRoster(listOf(HubManager("assistant", "Personal", online = true, isDefault = true),
+            HubManager("work", "Work", online = true)), "assistant")
+        rule.setContent {
+            CompositionLocalProvider(LocalManagerRoster provides roster) {
+                PersonaTheme(reduceMotion = true) {
+                    AssistantSettingsScreen(Hub(values), emptyList(), onBack = {})
+                }
+            }
+        }
+        rule.waitForIdle()
+        // Exactly one title and one chip per manager; there is no separate owner row.
+        rule.onAllNodesWithText("Personal").assertCountEquals(1)
+        rule.onAllNodesWithText("Work").assertCountEquals(1)
+        rule.onAllNodesWithText("New conversation permissions").onLast().assertIsEnabled().performClick()
+        rule.onNodeWithText("Allow edits").performClick()
+        rule.waitForIdle()
+        assertEquals("acceptEdits", values.getValue("assistant").defaultPermissionMode)
+        rule.onNodeWithText("Work").performClick()
+        rule.waitForIdle()
+        rule.onAllNodesWithText("New conversation permissions").onLast().assertIsEnabled().performClick()
+        rule.onNodeWithText("Full access").performClick()
+        rule.waitForIdle()
+        assertEquals("bypassPermissions", values.getValue("work").defaultPermissionMode)
+        rule.onNodeWithText("Personal").performClick()
+        rule.waitForIdle()
+        rule.onNodeWithText("Allow edits").assertExists()
+        assertEquals("personal-history", values.getValue("assistant").main)
+        assertEquals("work-history", values.getValue("work").main)
+    }
+
 }

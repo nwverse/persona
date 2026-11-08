@@ -6,9 +6,9 @@ import (
 	"errors"
 	"fmt"
 	"github.com/nwverse/persona/server/internal/compat"
+	"github.com/nwverse/persona/server/internal/lazyre"
 	"os"
 	"path/filepath"
-	"regexp"
 	"strings"
 )
 
@@ -22,7 +22,7 @@ import (
 // maxGuestTools is the hub's bound (assistant/guest.go).
 const maxGuestTools = 8
 
-var guestToolName = regexp.MustCompile(`^[a-z][a-z0-9_]{0,63}$`)
+var guestToolName = lazyre.New(`^[a-z][a-z0-9_]{0,63}$`)
 
 // checkGuestTools: one to maxGuestTools tool names, plain identifiers (they go into --allowedTools).
 func checkGuestTools(tools []string) error {

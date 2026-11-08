@@ -18,7 +18,7 @@ Code: `server/internal/assistant/models_launchers.go` (owned by the manager; hub
 
 ## Sync state (#2854)
 
-`GET /api/v1/launchers` (handled by the assistant process, `assistant/models_launchers.go`; the hub gives each computer's Claude version as `claude_version` in `devices.list`) waits at most 10 seconds per computer (`launcherSyncTimeout`), so one slow or disconnected computer doesn't hold up the page. The node's list script isn't interrupted when the hub gives up: it finishes into the cache, ready for the next time the page opens.
+`GET /api/v1/launchers` (handled by the assistant process, `assistant/models_launchers_routes.go`; the hub gives each computer's Claude version as `claude_version` in `devices.list`) waits at most 10 seconds per computer (`launcherSyncTimeout`), so one slow or disconnected computer doesn't hold up the page. The node's list script isn't interrupted when the hub gives up: it finishes into the cache, ready for the next time the page opens.
 The answer adds `sync`: one item per computer, with `state` `ok` / `offline` / `timeout` / `error` (`error` carries the reason), plus `shell`, `rc_file` and the last successful sync time `synced_at`
 (settings `launchers.zshrc.meta`). A computer that didn't answer still shows its last list, but the entries' `stale` names that computer; every client marks them “Not updated” and explains why in the per-computer group.
 An entry's `rc_files` are the files it came from (`source: "zshrc"` only; older nodes don't report it, so it is `~/.zshrc`).
@@ -293,6 +293,9 @@ When choosing a model for a new Agent (`GET /api/v1/machines/{mid}/launchers/{na
 but all preset models (`presetModels` in `assistant/models_presets.go`). Persona-managed entries use their stored preset; entries without one (manually added before extension presets existed) and ~/.zshrc entries
 match presets by gateway address (ignoring case and trailing `/`). Only `kind: launcher` presets and Claude Code launchers are eligible. Same-name entries already in `/model` are not duplicated;
 added entries use the preset name as `description`. One launcher per gateway can therefore select all its models, without a launcher per model; the picker follows updates to the extension's `dynamic_models`.
+A Persona-managed provider's own `models` (the field above) are listed the same way, after the `/model` entries and before the preset's,
+with the provider's display name as `description`: Claude Code's `/model` shows only its tier aliases, so a gateway's other models could not be
+picked otherwise. They also count for the send check (`launcherHasModel`), so a model picked from them is not dropped from a message.
 
 - iOS: `LauncherPresetModel` (`apple/Persona/Views/Settings/LauncherPresetModel.swift`, unit tests `LauncherPresetModelTests`), `LauncherPresetViews.swift`;
   DEBUG `-tab settings -openModelLaunchers YES -openLauncherEditor preset` opens From Extension directly (`-openLauncherEditor YES` opens the add page).

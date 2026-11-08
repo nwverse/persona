@@ -16,7 +16,6 @@ import (
 	"github.com/nwverse/persona/server/internal/identity"
 	"net/url"
 	"os"
-	"regexp"
 	"strconv"
 	"strings"
 	"testing"
@@ -24,6 +23,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/nwverse/persona/server/internal/lazyre"
 )
 
 // Env names the database the tests use; without it they skip what needs one.
@@ -32,11 +32,11 @@ const Env = "PERSONA_TEST_DATABASE_URL"
 // stale is how old a leftover database (a run that was killed) has to be before a later run drops it.
 const stale = 6 * time.Hour
 
-var ownName = regexp.MustCompile(`^persona_test_(\d{10})_[0-9a-f]{8}$`)
+var ownName = lazyre.New(`^persona_test_(\d{10})_[0-9a-f]{8}$`)
 
 // ownLeftover is a run's database or the second one the assistant made next to it (owndb.go, "<database>_manager"): a
 // test that starts the assistant with a state directory of its own gets one, and it outlives the run unless dropped.
-var ownLeftover = regexp.MustCompile(`^persona_test_(\d{10})_[0-9a-f]{8}(_manager)?$`)
+var ownLeftover = lazyre.New(`^persona_test_(\d{10})_[0-9a-f]{8}(_manager)?$`)
 
 // ownedBy says whether u is already a run's own database (set by a parent test binary).
 func ownedBy(u string) bool {

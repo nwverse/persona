@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"regexp"
 	"slices"
 	"sort"
 	"strings"
@@ -20,6 +19,7 @@ import (
 	"github.com/nwverse/persona/server/internal/db"
 	"github.com/nwverse/persona/server/internal/extwire"
 	"github.com/nwverse/persona/server/internal/i18n"
+	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/rpc"
 )
 
@@ -38,7 +38,7 @@ const installCodeTTL = 10 * time.Minute
 // installCodePrefix starts every install code, so it is never mistaken for a token of another kind.
 const installCodePrefix = "mi_"
 
-var installCodeShape = regexp.MustCompile(`^mi_[0-9a-f]{32}$`)
+var installCodeShape = lazyre.New(`^mi_[0-9a-f]{32}$`)
 
 // managerStore is what the roster needs of the store beyond busStore (internal/db/bus.go on Postgres).
 type managerStore interface {
@@ -573,7 +573,7 @@ func (h *Hub) managerRoutes(api *http.ServeMux) {
 		// Installed or not, its codes and then its identity go in one transaction (DeleteBusIdentity): a join that
 		// commits while this runs leaves no manager behind, and one connected meanwhile is hung up. A manager never
 		// installed has no identity (false): calling it off is still a 200. Once the moves to or from it under way
-		// are done; the ones after find it gone (ownership.go).
+		// are done; the ones after find it gone (ownership_moves.go).
 		drop := r.URL.Query().Get("drop_machines") == "1"
 		err := h.removingManager(func() error {
 			// What it keeps in its own list is in its manager.json only (machines_kept.go): moved away first, or
@@ -590,7 +590,7 @@ func (h *Hub) managerRoutes(api *http.ServeMux) {
 			if _, err := h.revokeBusToken(r.Context(), id); err != nil {
 				return err
 			}
-			h.releaseMachines(r.Context(), id) // its machines go back to the carrier, their sessions with them (ownership.go)
+			h.releaseMachines(r.Context(), id) // its machines go back to the carrier, their sessions with them (ownership_moves.go)
 			h.forgetManagerState(id)           // what it reported, its cards too (manager_state.go)
 			return nil
 		})

@@ -60,12 +60,12 @@ func (e *Engine) CollectItems(ctx context.Context, src ItemSource) error {
 
 type itemTags struct {
 	Items []struct {
-		ID         string   `json:"id"`
-		Importance string   `json:"importance"`
-		Relevance  int      `json:"relevance"`
-		Tags       []string `json:"tags"`
-		Project    string   `json:"project"`
-		Note       string   `json:"note"`
+		ID         string     `json:"id"`
+		Importance string     `json:"importance"`
+		Relevance  modelScore `json:"relevance"`
+		Tags       []string   `json:"tags"`
+		Project    string     `json:"project"`
+		Note       string     `json:"note"`
 	} `json:"items"`
 }
 
@@ -113,7 +113,7 @@ func (e *Engine) TagItems(ctx context.Context) error {
 			if it == nil {
 				continue
 			}
-			applyTags(&it.Tagging, t.Importance, t.Relevance, t.Tags, now)
+			applyTags(&it.Tagging, t.Importance, int(t.Relevance), t.Tags, now)
 			it.Note = oneLine(t.Note)
 			if p := e.FindProject(t.Project); p != nil {
 				it.Projects = addUnique(it.Projects, p.Slug)

@@ -27,6 +27,7 @@ import { composing } from "../../lib/send-history";
 import { useStore } from "../../lib/store";
 import { Button, copyText, cx, EASE, IconButton, Loading, Menu, Spinner, toast, useMenu } from "../../ui/atoms";
 import { ClaudeDirs } from "./ClaudeDirs";
+import { LiveReplies } from "./LiveReplies";
 import { Group, Switch } from "./SettingsParts";
 
 const MACHINE_KEY = "persona.agentSettings.machine";
@@ -190,6 +191,7 @@ export function AgentSettings({ agent }: { agent: AgentKind }) {
           ))
         )}
       </Group>
+      {agent === "claude" && <LiveReplies key={`live/${shown}`} mid={shown} name={name} others={applyAll ? online.map((m) => m.id).filter((id) => id !== shown) : []} />}
       {agent === "claude" && <ClaudeDirs key={shown} mid={shown} name={name(shown)} />}
     </>
   );

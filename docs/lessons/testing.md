@@ -118,6 +118,10 @@ Pitfalls, odd behavior, and the tradeoffs made at the time (originally in `CLAUD
   For pure SwiftUI symbol/text/geometry layouts, use public `ImageRenderer.render(rasterizationScale:renderer:)` to draw directly into the test's CGContext, explicitly preserving point-to-pixel scale. Retain nonempty, radius, bounds, and four-digit overflow assertions; calibrate with rectangles of known sizes/offsets. No production UI changes or loosened thresholds.
   Parameterized-case xcresult summaries count methods, not expanded arguments. Verify completeness from test-tree Arguments nodes, ensuring every digit range executed. If postprocessing counts are wrong, fix reading only; retain original script exit code separately from actual XCTest results.
 
+- `xcrun simctl privacy <udid> grant` can take about a minute on a just-booted stock simulator (2026-11-08, #1402). On the hosted
+  iOS lane it needed 54.5 s on a passing run and passed 60 s on a failing one, after `simctl bootstatus -b` had already returned.
+  Give the step room in `scripts/ci/apple.sh` (300 s) rather than retrying it, and read a grant timeout as slowness, not a refused permission.
+
 - Validate display names separately from persisted identity during compatible renaming (2026-11-04, #1189). After `persona-link` / `Persona Link` shipped, compressed-install regressions still asserted old display names, causing full release exit 1. Update only display contracts, while verifying real `persona-link` files, legacy download names, old/new executable commands, and actual installer calls; never blindly rename compatibility identities. Script tests must discover `scripts/test`, `release`, `deploy`, `mock`, and `app` separately; rename-only subsets miss old assertions elsewhere. Preserve original failed freeze/exit code; after merge, rerun with a new build number.
 
 - Do not use computer-use to click simulators for screenshots (Mac lock screen hides windows; unlocked it steals the user's mouse). Use DEBUG launch arguments (`docs/apple/ios.md`) to open pages directly, then capture.
@@ -140,6 +144,13 @@ Pitfalls, odd behavior, and the tradeoffs made at the time (originally in `CLAUD
   English-language simulators label system-permission buttons "Allow"; UI tests must recognize both languages.
 - XCUITest typeText switches simulators to "hardware keyboard" mode, after which the software keyboard no longer appears (keyboard button says shown, but no keyboard is visible), failing all height-dependent tests.
   This machine has no Simulator.app, and `defaults write com.apple.iphonesimulator …ConnectHardwareKeyboard` cannot restore it. Create a new simulator with `scripts/app/sim-boot.sh "<new-name>"`.
+- So a test that taps a field and types at once never runs keyboard-dependent layout (`KeyboardState.isUp`, the pending cards' keyboard cap) (2026-11-09, #1580):
+  `SecretRunUITests` passed while tapping the password card's field froze the app as soon as the on-screen keyboard came up. Focus tests assert `app.keyboards.count > 0`
+  after the tap and that the cards' area then holds one frame (a busy app stays in the foreground), and run on a fresh stock simulator before any test that types
+  (`PasswordFieldFocusTests`). A tap followed by "App event loop idle notification not received" means the main thread is busy: `sample <pid>` the simulator's
+  app process to see where.
+- On the iOS 27.0 simulator `app.screenshot()` and `XCUIScreen.main.screenshot()` leave the keyboard's place blank (2026-11-09, #1580). Take keyboard screenshots with
+  `xcrun simctl io <udid> screenshot` while it is up.
 - XCUITest misses the key bar during keyboard animation (the bar is moving with it); wait for the keyboard, pause, then tap.
 - XCUITest `typeText` inserts text directly, bypassing the input method, so it cannot test pinyin marked text. Tap onscreen keys (`app.keys["y"].tap()`, space selects the first candidate).
   Third-party keyboards (2026-11-03, #909): outside the repository, build a tiny app with only a keyboard extension whose buttons use `textDocumentProxy` `setMarkedText` / `unmarkText` / `insertText` to enter fixed text.
@@ -692,3 +703,27 @@ Walking files has pitfalls of its own. Reviews of `server/plugins/guard_test.go`
 - Shortcut 先由旧 App 在系统 UI 中创建，再检查持久化 action 的 `AppIntentDescriptor.AppIntentIdentifier`。不能搜索整个记录中的旧命名空间来认定旧类型：必须保留的 `BundleIdentifier` 也可能匹配。测试标题只能用于定位，不能替代 action 身份检查。
 - 带一次性配对码的 mock 不能在独立 suite 或深浅色轮次之间复用。每组配对 UI 测试启动自己的新 mock；保存原始失败，再记录修正隔离后的重跑结果。
 - Debug 的主程序可能只是加载 `.debug.dylib` 的壳；检查 Swift 类型时同时看实际动态库。模拟器的授权信息可以放在 Mach-O 的 `__entitlements` 中，`codesign` 输出为空不等于缺失；正式签名和 production APNs 仍需单独检查。
+
+## Scenarios through AppModel: make the model first, then hook up the test hub (2026-11-08, #1112)
+
+`AppModel()`'s init calls `DemoHub.install()`, which points `APIClient.local` and `LiveConnection.makeLocal` at Demo Mode's hub. A test that hooks up its own fake hub first and then makes the model sends every request to DemoHub (`DemoHub miss: …` in the log), and some assertions still pass, which hides it. Make the model, then hook up the test's hub, and again for the new model a `relaunch` makes (`SyncDevice.connect`).
+
+Two more from the same harness:
+
+- The scenarios' times are fixed (`2026-01-02T…`), and the app ties a sent bubble to its transcript line partly by time. Lines the hub writes during a case get the time they were written (`SyncHub.writtenNow`).
+- A failed message is placed before later ones by the whole second it was written (`ChatLines.placeFailed`). Two sends in a row in a test land in the same second, so the harness spaces sends more than a second apart, as typing does.
+
+## Simulator screenshots for an agent's live reply (2026-11-09, #1309)
+
+- `mock_hub.py` is one long module: `REVIEW` is the PR #42 review agent's session id near the top, and the `MOCK_REVIEW` block much later rebound it to a bool, so `/mock/agent_live` (MOCK_AGENT_LIVE) and the later fixtures that use the session id looked up `False` (the step answered with a 500 and a `StopIteration` in the mock's log). The flag is `GIT_REVIEW` now; give a mock flag a name of its own, and when a mock step fails, read the mock's log before the app's.
+- `xcrun simctl status_bar … --time` on Xcode 27.1 takes only an ISO date with fractional seconds: `"$(date +%H:%M)"` and `…T10:24:00+08:00` fail with "Invalid, non-ISO date/time string"; `"$(date -u +%Y-%m-%dT%H:%M:%S.000Z)"` works and shows the local time.
+- A notification permission dialog left by a launch without `-pairURL` stays over every later launch, also after the app is uninstalled. Restarting SpringBoard clears it without shutting the simulator down: `xcrun simctl spawn <udid> launchctl stop com.apple.SpringBoard`, wait a few seconds, then launch with `-pairURL` (or `personactl.py launch --hub`).
+
+## A model made in a unit test starts with what the simulator last saved (2026-11-09, #1638, #1637)
+
+`AppModel()` restores the last Dev snapshot (machines, agents, cards; `Library/Caches/state/dev.json`) and the outbox when the simulator's keychain holds a pairing, which any mock-hub UI test run leaves behind. A unit test that reads everything the model holds (the watch summary, all agents) then counts those too: it passes on a brand-new simulator and on hosted CI and fails on a used one. In the sync scenarios, a snapshot of 145 sessions pushed the case's chat out of the 40 newest that `AgentSync` plans, so its stall check never ran. The model also writes its own snapshot and outbox back over the app's.
+
+- A test that only needs the model empty calls `forgetRestoredForTests()` after making it.
+- A test that saves and reads back (a relaunch, the outbox) makes its models with `AppModel(stateFolder:)` on a folder of its own, and again on the same folder for the relaunch (`SyncDevice`, `OutboxRestoreTests`). Nothing it writes reaches the app's files.
+
+To check that a failure is this, move `dev.json` aside in the app's data container and run the test again.

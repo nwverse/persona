@@ -7,6 +7,7 @@ import (
 	"io/fs"
 	"path"
 	"strings"
+	"sync"
 )
 
 // MCPTool is one MCP tool as the model sees it: what it is for and its arguments (with their descriptions).
@@ -17,8 +18,8 @@ type MCPTool struct {
 }
 
 // mcp/<scene>/<tool>.md: the description (one paragraph), an empty line, then the input schema in a ```json block.
-// Not templates: read as they are.
-var mcpTools = loadMCP()
+// Not templates: read as they are, on first use (as tmpl).
+var mcpTools = sync.OnceValue(loadMCP)
 
 const schemaFence = "\n\n```json\n"
 
@@ -56,7 +57,7 @@ func loadMCP() map[string]MCPTool {
 
 // Tool is the MCP tool named name (mcp/<scene>/<name>.md); an unknown name is a bug and panics.
 func Tool(name string) MCPTool {
-	t, ok := mcpTools[name]
+	t, ok := mcpTools()[name]
 	if !ok {
 		panic("prompts: no MCP tool " + name)
 	}
@@ -65,8 +66,8 @@ func Tool(name string) MCPTool {
 
 // ToolNames lists every MCP tool defined here (for tests).
 func ToolNames() []string {
-	out := make([]string, 0, len(mcpTools))
-	for n := range mcpTools {
+	out := make([]string, 0, len(mcpTools()))
+	for n := range mcpTools() {
 		out = append(out, n)
 	}
 	return out
