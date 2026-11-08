@@ -53,3 +53,16 @@ func TestLineJSONMatchesUnmarshal(t *testing.T) {
 		t.Fatalf("only %d inputs compared", n)
 	}
 }
+
+// unmarshalLine reads a line once: one broken at its end has its start decoded already when it fails, where
+// json.Unmarshal checks the whole line first and leaves the value as it was. Every caller drops the value on an error.
+func TestLineJSONReadsOnce(t *testing.T) {
+	line := []byte(`{"type":"user","uuid":"u1","message":{"role":"us`)
+	var once, twice entry
+	if unmarshalLine(line, &once) == nil || json.Unmarshal(line, &twice) == nil {
+		t.Fatal("a broken line decoded")
+	}
+	if once.Type != "user" || twice.Type != "" {
+		t.Fatalf("type %q, %q: want the line read once, as it was decoded", once.Type, twice.Type)
+	}
+}
