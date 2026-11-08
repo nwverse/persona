@@ -4,6 +4,7 @@ package osproc
 
 import (
 	"os"
+	"runtime"
 	"strconv"
 	"syscall"
 )
@@ -33,13 +34,16 @@ func SealInherited() {
 // fdScanMost bounds the scan by number when no directory lists the open descriptors.
 const fdScanMost = 1 << 16
 
-// openFDs are this process's descriptors as /proc/self/fd (Linux) or /dev/fd (macOS, the BSDs) lists them; where
-// neither gives a listing listFDs trusts, every number below the descriptor limit, at least 1024 and at most
-// fdScanMost. Marking a closed or reused number does no harm.
+// openFDs are this process's descriptors as /proc/self/fd (Linux) or /dev/fd (macOS) lists them. On other systems,
+// whose /dev/fd may hold fixed device nodes instead (OpenBSD and NetBSD: 0 to 63), or where neither gives a listing
+// listFDs trusts, they are every number below the descriptor limit, at least 1024 and at most fdScanMost. Marking a
+// closed or reused number does no harm.
 func openFDs() []int {
-	for _, dir := range []string{"/proc/self/fd", "/dev/fd"} {
-		if fds, ok := listFDs(dir); ok {
-			return fds
+	if runtime.GOOS == "linux" || runtime.GOOS == "darwin" {
+		for _, dir := range []string{"/proc/self/fd", "/dev/fd"} {
+			if fds, ok := listFDs(dir); ok {
+				return fds
+			}
 		}
 	}
 	most := uint64(1024)
@@ -56,8 +60,8 @@ func openFDs() []int {
 }
 
 // listFDs reads dir as the list of this process's descriptors, trusted only when it shows the descriptor past stderr
-// used to read it: FreeBSD without fdescfs on /dev/fd lists 0, 1 and 2 there whatever is open. That descriptor is
-// closed by the time the list is returned.
+// used to read it, which a fixed listing does not (FreeBSD's /dev/fd without fdescfs: 0, 1 and 2 whatever is open).
+// That descriptor is closed by the time the list is returned.
 func listFDs(dir string) ([]int, bool) {
 	f, err := os.Open(dir)
 	if err != nil {

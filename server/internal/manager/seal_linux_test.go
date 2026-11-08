@@ -46,7 +46,7 @@ func TestManagerSealsInherited(t *testing.T) {
 	cmd := exec.Command(os.Args[0], "-test.run=^$")
 	cmd.Env = osproctest.HomeEnv(t, managerEntryEnv+"=1")
 	cmd.Stderr = os.Stderr
-	if err := osproctest.StartHolding(t, cmd).WaitSealed(3, 20*time.Second); err != nil {
+	if err := osproctest.StartHolding(t, cmd).WaitSealed(20 * time.Second); err != nil {
 		t.Fatal(err)
 	}
 }

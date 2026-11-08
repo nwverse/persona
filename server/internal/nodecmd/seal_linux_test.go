@@ -49,14 +49,14 @@ func TestNodeSealsInherited(t *testing.T) {
 	t.Run("control", func(t *testing.T) {
 		h := start(t, "hold")
 		time.Sleep(300 * time.Millisecond)
-		if sealed, err := h.CloseOnExec(3); err != nil || sealed || !h.Running() {
+		if sealed, err := h.CloseOnExec(); err != nil || sealed || !h.Running() {
 			t.Fatalf("a process that does not seal: sealed %v (%v), running %v; want it holding the socket inheritable",
 				sealed, err, h.Running())
 		}
 	})
 	for _, arg := range []string{"--stdio", "--attach"} {
 		t.Run(arg, func(t *testing.T) {
-			if err := start(t, arg).WaitSealed(3, 20*time.Second); err != nil {
+			if err := start(t, arg).WaitSealed(20 * time.Second); err != nil {
 				t.Fatalf("node %s: %v", arg, err)
 			}
 		})
