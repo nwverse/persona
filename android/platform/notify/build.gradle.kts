@@ -11,13 +11,6 @@ android {
     testOptions.unitTests.isIncludeAndroidResources = true
     testOptions.unitTests.all {
         it.systemProperty("persona.repo.root", rootProject.projectDir.parentFile.absolutePath)
-        // One JVM per test class (#1254). WorkManager's startup initializer runs its first database work on a
-        // background thread that outlives the test, and that work loads Robolectric's native runtime. When the next
-        // class uses a different sandbox (ForegroundRecoveryRegressionTest is SDK 34 / legacy graphics, the rest
-        // SDK 35), both sandboxes open the same runtime jar through the JVM-wide zip file system registry at once and
-        // one fails with FileSystemAlreadyExistsException. A fresh JVM per class keeps that leftover work and the
-        // registry from reaching the next class.
-        it.forkEvery = 1
     }
 }
 
