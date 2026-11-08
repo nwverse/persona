@@ -267,12 +267,13 @@ type inboxBook struct {
 	mu          sync.Mutex
 	items       map[string]*InboxItem
 	once        sync.Once
-	loadMu      sync.Mutex        // one load at a time
-	loaded      atomic.Bool       // what the database keeps was read: until then nothing is taken or written
-	running     sync.Mutex        // one collection applied at a time
-	saving      sync.Mutex        // snapshots and writes in the same order
-	mark        map[string]uint64 // bumped on each user parent/done mutation of an id, under mu: a rollback's identity check
-	epoch       string            // the hub's run and its last round applied (InboxRound.Epoch, Seq), under running
+	loadMu      sync.Mutex              // one load at a time
+	loaded      atomic.Bool             // what the database keeps was read: until then nothing is taken or written
+	running     sync.Mutex              // one collection applied at a time
+	saving      sync.Mutex              // snapshots and writes in the same order
+	mark        map[string]uint64       // bumped on each user parent/done mutation of an id, under mu: a rollback's identity check
+	filing      map[string]*inboxFiling // pending filing ownership, independent of an unrelated parent change
+	epoch       string                  // the hub's run and its last round applied (InboxRound.Epoch, Seq), under running
 	seq         uint64
 	triaging    sync.Mutex  // one triage pass at a time (inbox_triage.go)
 	handing     sync.Mutex  // one judge / agent pass at a time (inbox_agent.go)
@@ -582,6 +583,7 @@ func (s *Service) InboxCollected(ctx context.Context, r assistantwire.InboxRound
 // hub. A delivery holding or waiting for the lock finds the item gone and stops (deliverNotes).
 func (b *inboxBook) drop(id string) {
 	delete(b.items, id)
+	delete(b.filing, id)
 	b.replies.Delete(id)
 	b.telling.Delete(id)
 }
@@ -620,6 +622,12 @@ func (s *Service) saveInbox(ctx context.Context, changed []*InboxItem) map[strin
 // held, before the next save may start. Undone after b.saving, a save queued behind the failed one (the store back
 // by then) would write the change first and the undo would leave memory behind the row until a restart (#4924).
 func (s *Service) saveInboxUndo(ctx context.Context, changed []*InboxItem, undo func(failed map[string]bool)) map[string]bool {
+	return s.saveInboxPrepared(ctx, changed, nil, undo)
+}
+
+// saveInboxPrepared can stage a detached row and publish its committed effects under mu before saving is released.
+// prepare runs under mu; finish runs there after the store answers, including when every row succeeded.
+func (s *Service) saveInboxPrepared(ctx context.Context, changed []*InboxItem, prepare func(*InboxItem) *InboxItem, finish func(map[string]bool)) map[string]bool {
 	b := &s.inbox
 	if len(changed) == 0 {
 		return nil
@@ -638,8 +646,12 @@ func (s *Service) saveInboxUndo(ctx context.Context, changed []*InboxItem, undo 
 			continue // the item was forgotten or replaced while this save was waiting
 		}
 		it.arrived(now)
-		raw, _ := json.Marshal(it)
-		rows = append(rows, db.InboxRow{ID: it.ID, Data: raw, UpdatedAt: it.UpdatedAt, DoneAt: it.DoneAt})
+		row := it
+		if prepare != nil {
+			row = prepare(it)
+		}
+		raw, _ := json.Marshal(row)
+		rows = append(rows, db.InboxRow{ID: row.ID, Data: raw, UpdatedAt: row.UpdatedAt, DoneAt: row.DoneAt})
 		if i < 50 { // a first round's hundreds: the plugin reads the inbox if it wants them all
 			told = append(told, assistantwire.InboxChangedItem{ID: it.ID, Source: it.Source, Kind: it.Kind, Title: it.Title})
 		}
@@ -653,9 +665,9 @@ func (s *Service) saveInboxUndo(ctx context.Context, changed []*InboxItem, undo 
 	if st := s.inboxDB(); st != nil {
 		failed = s.putInboxRows(ctx, st, rows)
 	}
-	if len(failed) > 0 && undo != nil {
+	if finish != nil {
 		b.mu.Lock()
-		undo(failed)
+		finish(failed)
 		b.mu.Unlock()
 	}
 	b.saving.Unlock()
@@ -1412,37 +1424,34 @@ func (s *Service) setInboxDone(ctx context.Context, id string, done, dismiss boo
 		b.mu.Unlock()
 		return InboxItem{}, errNoInboxItem
 	}
-	// Keep the state we are changing so a failed write restores it: the request must not look done while the row
-	// (what a restart reads) still holds the other state.
-	prevDoneAt, prevDoneBy, prevChain, prevSeq := it.DoneAt, it.DoneBy, it.Chain, it.ChainSeq
-	tell := false
+	w := b.beginFiling(it, time.Now(), doneByOf(dismiss))
 	if done {
 		if it.open() {
-			b.file(it, time.Now(), doneByOf(dismiss))
-			tell = b.closeHandling(it, doneByOf(dismiss), time.Now()) // its conversation stops
+			b.file(it, w.now, w.why)
+			w.close = true
 		} else {
-			it.done(time.Now(), doneByOf(dismiss))
+			// Another filing may still be waiting on storage. Taking over its marker also takes over the closure;
+			// an item already durably filed keeps its handling as before.
+			if w.previousWrite != nil && w.previousWrite.close {
+				// This is another attempt while the earlier filing is uncommitted, with its own chain entry.
+				b.file(it, w.now, w.why)
+				w.close = true
+			} else {
+				it.done(w.now, w.why)
+			}
 		}
 	} else {
 		it.DoneAt, it.DoneBy = nil, ""
 	}
-	newDoneAt, newDoneBy := it.DoneAt, it.DoneBy
-	gen := b.touched(id)
-	out := it.listed()
+	b.settleFiling(w)
 	b.mu.Unlock()
-	failed := s.saveInboxUndo(ctx, []*InboxItem{it}, func(failed map[string]bool) {
-		// Restore only when the item is still ours, still holds the state this request wrote and no same-valued
-		// mutation (a concurrent reopen) landed: a concurrent file/reopen must not be rewound by our failed write.
-		if failed[id] && b.items[id] == it && b.mark[id] == gen && it.DoneAt == newDoneAt && it.DoneBy == newDoneBy {
-			it.DoneAt, it.DoneBy, it.Chain, it.ChainSeq = prevDoneAt, prevDoneBy, prevChain, prevSeq
-		}
-	})
+	failed := s.saveInboxFilings(ctx, []*inboxFiling{w})
 	if failed[id] {
 		return InboxItem{}, errInboxNotPersisted
 	}
-	if tell {
-		s.tellSoon(ctx, it)
-	}
+	b.mu.Lock()
+	out := it.listed()
+	b.mu.Unlock()
 	return out, nil
 }
 
