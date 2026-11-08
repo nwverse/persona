@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"flag"
+	"maps"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -16,6 +17,9 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/nwverse/persona/server/internal/assistantwire"
+	"github.com/nwverse/persona/server/internal/db"
 )
 
 var updateGolden = flag.Bool("update-hubjson-golden", false, "rewrite testdata/hubjson/*.golden.json")
@@ -237,18 +241,19 @@ func testSetupEnv(t *testing.T, home string, o setupOptions, cmds *fakeCommands,
 			}
 			return "", errors.New("not found")
 		},
-		ask:         func(string) (bool, bool) { return false, false },
-		lanIPv4:     func() string { return ip4(192, 168, 1, 20) },
-		portFree:    func(int) bool { return true },
-		exe:         func() (string, error) { return "/nonexistent", nil },
-		pingDB:      func(context.Context, string) error { return nil },
-		doctor:      func(context.Context, string, bool) []string { return nil },
-		getenv:      func(string) string { return "" },
-		sleep:       func(time.Duration) {},
-		isContainer: func() bool { return false },
-		builtinCode: func(context.Context, *Config) (string, error) { return "mi_setup", nil },
-		voidCode:    func(context.Context, *Config, string) error { return nil },
-		healthWait:  time.Second, dbWait: time.Second,
+		ask:          func(string) (bool, bool) { return false, false },
+		lanIPv4:      func() string { return ip4(192, 168, 1, 20) },
+		portFree:     func(int) bool { return true },
+		exe:          func() (string, error) { return "/nonexistent", nil },
+		pingDB:       func(context.Context, string) error { return nil },
+		doctor:       func(context.Context, string, bool) []string { return nil },
+		getenv:       func(string) string { return "" },
+		sleep:        func(time.Duration) {},
+		isContainer:  func() bool { return false },
+		builtinCode:  func(context.Context, *Config) (string, error) { return "mi_setup", nil },
+		voidCode:     func(context.Context, *Config, string) error { return nil },
+		keptMachines: func(context.Context, *Config) (map[string]string, error) { return nil, nil },
+		healthWait:   time.Second, dbWait: time.Second,
 		dbContainer: setupDBContainer, dbVolume: setupDBVolume, dbPort: setupDBPort,
 	}
 	return e, &out
@@ -419,19 +424,27 @@ func TestSetupKeepsAnExistingHubJSON(t *testing.T) {
 }
 
 // A hub installed before claude / herdr (#4083): rerunning setup once they are there adds this machine while hub.json
-// has "machines": [], and restarts the running hub so it sees it; never in a container, with PERSONA_LOCAL_NODE=0, or over
-// machines already there.
+// has "machines": [], and restarts the running hub so it sees it; never in a container, with PERSONA_LOCAL_NODE=0, over
+// machines already there, or while a manager keeps any machine (their entries left hub.json for its own list). When
+// who keeps what does not read, it adds nothing and says why. It reads that after the database step, which starts a
+// stopped database.
 func TestSetupAddsTheLocalMachineLater(t *testing.T) {
 	for _, c := range []struct {
 		name, prog, machines  string
 		localNode0, container bool
+		kept                  map[string]string
+		keptErr, dbStopped    bool
 		want                  string // the one machine's kind afterwards, "" for none
 	}{
 		{name: "empty list, claude", prog: "claude", machines: `,"machines":[]`, want: "local"},
 		{name: "empty list, herdr", prog: "herdr", machines: `,"machines":[]`, want: "local"},
 		{name: "PERSONA_LOCAL_NODE=0", prog: "claude", machines: `,"machines":[]`, localNode0: true},
 		{name: "in a container", prog: "claude", machines: `,"machines":[]`, container: true},
-		{name: "machines kept", prog: "claude", machines: `,"machines":[{"id":"remote1","name":"remote1","kind":"ssh"}]`, want: "ssh"},
+		{name: "machines listed", prog: "claude", machines: `,"machines":[{"id":"remote1","name":"remote1","kind":"ssh"}]`, want: "ssh"},
+		{name: "a manager keeps this machine", prog: "claude", machines: `,"machines":[]`, kept: map[string]string{"host1": "assistant"}},
+		{name: "a manager keeps another machine", prog: "claude", machines: `,"machines":[]`, kept: map[string]string{"remote1": "mgr-b"}},
+		{name: "who keeps what does not read", prog: "claude", machines: `,"machines":[]`, keptErr: true},
+		{name: "the database was stopped", prog: "claude", machines: `,"machines":[]`, dbStopped: true, want: "local"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			home := setupTestHome(t)
@@ -446,6 +459,26 @@ func TestSetupAddsTheLocalMachineLater(t *testing.T) {
 				return ""
 			}
 			e.isContainer = func() bool { return c.container }
+			if c.dbStopped {
+				cmds.replies["docker ps -a"] = fakeReply{out: setupDBContainer + "\n"}
+				e.pingDB = func(context.Context, string) error {
+					if !cmds.called("docker start " + setupDBContainer) {
+						return errors.New("connection refused")
+					}
+					return nil
+				}
+			}
+			reads := 0
+			e.keptMachines = func(_ context.Context, cfg *Config) (map[string]string, error) {
+				reads++
+				if cfg.DatabaseURL != "postgres://x" || (c.dbStopped && !cmds.called("docker start "+setupDBContainer)) {
+					t.Errorf("who keeps what read before the database step: %q, calls %v", cfg.DatabaseURL, cmds.calls)
+				}
+				if c.keptErr {
+					return nil, errors.New("connection refused")
+				}
+				return c.kept, nil
+			}
 			write := func(machines string) {
 				file := `{"token":"existing-token","listen":":` + strconv.Itoa(port) + `","public_url":"http://hub.example.com:1","database_url":"postgres://x"` + machines + `}`
 				if err := os.WriteFile(filepath.Join(e.root, "hub.json"), []byte(file), 0o600); err != nil {
@@ -456,6 +489,9 @@ func TestSetupAddsTheLocalMachineLater(t *testing.T) {
 			write(`,"machines":[{"id":"remote1","name":"remote1","kind":"ssh"}]`)
 			if err := e.setup(context.Background()); err != nil {
 				t.Fatalf("%v\n%s", err, out)
+			}
+			if reads != 0 {
+				t.Fatalf("who keeps what read %d times over a hub.json that lists machines", reads)
 			}
 			write(c.machines)
 			cmds.calls = nil
@@ -472,10 +508,51 @@ func TestSetupAddsTheLocalMachineLater(t *testing.T) {
 				t.Fatalf("machines %+v, want one %q", cfg.Machines, c.want)
 			}
 			added := c.want == "local"
-			if strings.Contains(out.String(), "补上本机") != added || cmds.called("systemctl --user restart personad") != added {
+			if strings.Contains(out.String(), "补上本机") != added || strings.Contains(out.String(), "hub.json 补了本机") != added ||
+				cmds.called("systemctl --user restart personad") != added {
 				t.Fatalf("added=%v: calls %v, output:\n%s", added, cmds.calls, out)
 			}
+			if wantReads := c.machines == `,"machines":[]` && !c.localNode0 && !c.container; (reads == 1) != wantReads || reads > 1 {
+				t.Fatalf("who keeps what read %d times, want it read: %v", reads, wantReads)
+			}
+			if said := strings.Contains(out.String(), "有问题｜配置：hub.json 里没有电脑，但读不了哪些电脑归管理者管（connection refused）"); said != c.keptErr {
+				t.Fatalf("read failure said=%v, want %v:\n%s", said, c.keptErr, out)
+			}
 		})
+	}
+}
+
+// Setup reads who keeps what as the hub does, from the hub's own settings and migrating nothing: a machine whose manager
+// is gone does not count, and none recorded reads as none.
+func TestSetupReadsTheKeptMachines(t *testing.T) {
+	url := os.Getenv("PERSONA_TEST_DATABASE_URL")
+	if url == "" {
+		t.Skip("PERSONA_TEST_DATABASE_URL not set (scripts/test/test-server.sh runs this on the hub machine)")
+	}
+	ctx := context.Background()
+	database, err := db.Open(ctx, url, db.HubSet)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(database.Close)
+	var before json.RawMessage
+	if _, err := database.Setting(ctx, machinesKeptKey, &before); err != nil {
+		t.Fatal(err)
+	}
+	put := func(v any) {
+		if err := database.PutSetting(ctx, machinesKeptKey, v); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Cleanup(func() { put(before) })
+	cfg := &Config{DatabaseURL: url}
+	put(nil)
+	if kept, err := keptMachines(ctx, cfg); err != nil || len(kept) != 0 {
+		t.Fatalf("none recorded: %v %v", kept, err)
+	}
+	put(map[string]string{"host1": assistantwire.AssistantID, "remote1": "gone-" + randomHex(6)})
+	if kept, err := keptMachines(ctx, cfg); err != nil || !maps.Equal(kept, map[string]string{"host1": assistantwire.AssistantID}) {
+		t.Fatalf("kept %v %v, want host1 by the built-in manager only", kept, err)
 	}
 }
 
