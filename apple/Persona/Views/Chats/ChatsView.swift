@@ -2687,7 +2687,7 @@ struct QuickFilterBar: View, Equatable {
             Button { if !on { choose(f) } } label: {
                 HStack(spacing: Theme.Space.sm) {
                     if let symbol = f.symbol, let tone {
-                        Image(systemName: symbol).font(Theme.Font.label).foregroundStyle(tone.dot)
+                        ThemedIcon(symbol).font(Theme.Font.label).foregroundStyle(tone.dot)
                     } else if let tone {
                         Circle().fill(tone.dot).scaledFrame(width: Theme.Size.dotS, height: Theme.Size.dotS)
                     }
@@ -2774,7 +2774,7 @@ struct SectionHeader: View {
 
     var body: some View {
         HStack(spacing: Theme.Space.sm) {
-            if let symbol { Image(systemName: symbol).foregroundStyle(tone.dot).accessibilityHidden(true) }
+            if let symbol { ThemedIcon(symbol).foregroundStyle(tone.dot).accessibilityHidden(true) }
             if compact {
                 // Color.primary: a section header dims hierarchical styles a level (docs/lessons/ios.md).
                 Text(title).font(CompactList.sectionTitle).foregroundStyle(Color.primary).textCase(nil).lineLimit(1)
@@ -2869,7 +2869,7 @@ struct StateCounts: View {
             let waiting = group.waitingInBackground
             if waiting > 0 {
                 HStack(spacing: Theme.Space.xs) {
-                    Image(systemName: Theme.Icon.backgroundWaiting).font(Theme.Font.caption).imageScale(.small)
+                    ThemedIcon(Theme.Icon.backgroundWaiting).font(Theme.Font.caption).imageScale(.small)
                         .foregroundStyle(StatusPalette.backgroundWaiting.dot)
                     Text("\(waiting)").font((compact ? CompactList.metaStrong : Theme.Font.labelHeavy).monospacedDigit())
                         .foregroundStyle(Color.secondary)

@@ -21,7 +21,7 @@ struct StatusDot: View {
         Group {
             if state == .working, waiting {
                 // As wide as the working ring around a dot.
-                Image(systemName: Theme.Icon.backgroundWaiting)
+                ThemedIcon(Theme.Icon.backgroundWaiting)
                     .resizable().scaledToFit()
                     .frame(width: size * 1.7, height: size * 1.7)
                     .foregroundStyle(StatusPalette.backgroundWaiting.dot)
@@ -104,7 +104,7 @@ struct AgentStateBadge: View {
         switch state {
         case .needsYou: badge(Theme.needsYou, Self.attention)
         case .working where waiting:
-            Image(systemName: Theme.Icon.backgroundWaiting)
+            ThemedIcon(Theme.Icon.backgroundWaiting)
                 .resizable().scaledToFit()
                 .frame(width: Theme.Size.badge, height: Theme.Size.badge)
                 .foregroundStyle(StatusPalette.backgroundWaiting.dot)
