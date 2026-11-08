@@ -546,6 +546,7 @@ extension APIClient {
             if case .field(let f) = item, !f.name.isEmpty { out[f.name] = values[f.name] ?? "" }
             if case .composer(let c) = item, !c.name.isEmpty { out[c.name] = values[c.name] ?? "" }
         }
+        if let review = view?.review, !review.name.isEmpty { out[review.name] = values[review.name] ?? "" }
         return out
     }
 
@@ -605,6 +606,7 @@ extension APIClient {
             default: break
             }
         }
+        if let review = v.review, !review.name.isEmpty { next[review.name] = typed[review.name] ?? "" }
         if let f = v.filter, !f.name.isEmpty { next[f.name] = f.value }
         if let t = v.tabs, !t.name.isEmpty { next[t.name] = t.value }
         values = next

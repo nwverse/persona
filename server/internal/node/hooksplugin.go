@@ -7,6 +7,8 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+
+	"github.com/nwverse/persona/server/internal/host"
 )
 
 // Persona's hooks (questions, permission requests and turn ends go to the phone; docs/integrations/claude-integration.md) reach
@@ -26,13 +28,90 @@ func (n *Node) hooksPlugin(kind string) string { return filepath.Join(n.dir, kin
 // hooksPluginFiles is the plugin with hooks (a settings file's "hooks") as files, by path under its directory; its
 // version is theirs (a hash), so it changes when they do.
 func hooksPluginFiles(hooks any) (map[string][]byte, error) {
+	return pluginFiles(hooksPluginName, "Persona's hooks for the sessions it starts: questions, permission requests and turn ends go to the phone", hooks)
+}
+
+// The live replies of the Agents Persona starts (livereply.go, #1309) come from Claude Code's MessageDisplay hook, in a
+// plugin of its own that a start loads only while the machine's setting is on (Settings › Claude Code, node.configure
+// claude_live_replies; on unless the user turned it off). Registering the hook costs the terminal something: Claude
+// then shows a reply a batch of lines at a time, each once the hook is done, instead of token by token. Claude reads
+// plugins when it starts, so the setting reaches a session at its next start (herdr's restore included: the resume
+// command is given again when it changes, setLiveReplies); one already running keeps what it started with.
+const (
+	liveRepliesPluginName = "persona-live-replies"
+	liveRepliesDir        = "claude-live-replies" // under the node's directory, beside claude-hooks
+)
+
+// liveRepliesPluginFiles is the live replies plugin for a claude whose hook program is bin, of the node whose directory
+// is dir.
+func liveRepliesPluginFiles(bin, dir string) (map[string][]byte, error) {
+	return pluginFiles(liveRepliesPluginName, "Persona's live replies: an Agent's reply goes to the phone as Claude shows it",
+		map[string]any{"MessageDisplay": displayHooks(bin, dir)})
+}
+
+// liveRepliesPlugin is the --plugin-dir of the live replies for an Agent's start whose hooks plugin is hooks ("" when
+// it has none: a claude that loads no plugins gets its hooks in --settings, and the event is newer than that): "" while
+// the setting is off or the plugin is not written.
+func (n *Node) liveRepliesPlugin(hooks string) string {
+	if hooks == "" || n.live.off.Load() {
+		return ""
+	}
+	dir := filepath.Join(n.dir, liveRepliesDir)
+	if _, err := os.Stat(filepath.Join(dir, "hooks", "hooks.json")); err != nil {
+		return ""
+	}
+	return dir
+}
+
+// setLiveReplies is node.configure claude_live_replies. The Claude sessions Persona started in herdr get their resume
+// command again with the live replies plugin added or dropped, so a restore follows the setting as a start does.
+func (n *Node) setLiveReplies(on bool) {
+	if n.live.off.Swap(!on) == !on {
+		return
+	}
+	if n.hosts == nil {
+		return
+	}
+	h, ok := n.hosts.Get(host.Herdr).(*herdrHost)
+	if !ok || h.c == nil {
+		return
+	}
+	type todo struct {
+		pane string
+		spec claudeLaunch
+	}
+	var work []todo
+	n.mu.Lock()
+	for pane, spec := range n.launches {
+		if spec.Agent != "" && spec.Agent != "claude" {
+			continue
+		}
+		if d := n.liveRepliesPlugin(spec.Hooks); d != spec.Display {
+			spec.Display = d
+			n.launches[pane] = spec
+			work = append(work, todo{pane, spec})
+		}
+	}
+	n.mu.Unlock()
+	if len(work) == 0 {
+		return
+	}
+	go func() {
+		for _, w := range work {
+			n.reportResume(context.Background(), h, w.pane, w.spec)
+		}
+	}()
+}
+
+// pluginFiles is a plugin named name with hooks as files, by path under its directory; its version is the hooks' hash,
+// so it changes when they do.
+func pluginFiles(name, description string, hooks any) (map[string][]byte, error) {
 	b, err := json.Marshal(hooks)
 	if err != nil {
 		return nil, err
 	}
 	sum := sha256.Sum256(b)
-	manifest := map[string]any{"name": hooksPluginName, "version": "1.0.0-" + hex.EncodeToString(sum[:6]),
-		"description": "Persona's hooks for the sessions it starts: questions, permission requests and turn ends go to the phone"}
+	manifest := map[string]any{"name": name, "version": "1.0.0-" + hex.EncodeToString(sum[:6]), "description": description}
 	mb, err := marshalJSON(manifest)
 	if err != nil {
 		return nil, err
