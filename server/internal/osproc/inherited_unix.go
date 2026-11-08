@@ -1,4 +1,4 @@
-//go:build !windows
+//go:build unix
 
 package osproc
 
@@ -34,30 +34,48 @@ func SealInherited() {
 const fdScanMost = 1 << 16
 
 // openFDs are this process's descriptors as /proc/self/fd (Linux) or /dev/fd (macOS, the BSDs) lists them; where
-// neither can be read, every number below the descriptor limit (at most fdScanMost). The listing's own descriptor is
-// among them, closed by the time it is returned: marking a closed or reused number does no harm.
+// neither gives a listing listFDs trusts, every number below the descriptor limit, at least 1024 and at most
+// fdScanMost. Marking a closed or reused number does no harm.
 func openFDs() []int {
 	for _, dir := range []string{"/proc/self/fd", "/dev/fd"} {
-		entries, err := os.ReadDir(dir)
-		if err != nil {
-			continue
+		if fds, ok := listFDs(dir); ok {
+			return fds
 		}
-		fds := make([]int, 0, len(entries))
-		for _, e := range entries {
-			if fd, err := strconv.Atoi(e.Name()); err == nil {
-				fds = append(fds, fd)
-			}
-		}
-		return fds
 	}
-	most := 1024
+	most := uint64(1024)
 	var lim syscall.Rlimit
-	if syscall.Getrlimit(syscall.RLIMIT_NOFILE, &lim) == nil && lim.Cur > uint64(most) {
-		most = int(min(lim.Cur, fdScanMost))
+	if syscall.Getrlimit(syscall.RLIMIT_NOFILE, &lim) == nil {
+		// Cur is signed on some systems; a negative value or RLIM_INFINITY clamps to fdScanMost.
+		most = max(most, min(uint64(lim.Cur), fdScanMost))
 	}
 	fds := make([]int, most)
 	for i := range fds {
 		fds[i] = i
 	}
 	return fds
+}
+
+// listFDs reads dir as the list of this process's descriptors, trusted only when it shows the descriptor past stderr
+// used to read it: FreeBSD without fdescfs on /dev/fd lists 0, 1 and 2 there whatever is open. That descriptor is
+// closed by the time the list is returned.
+func listFDs(dir string) ([]int, bool) {
+	f, err := os.Open(dir)
+	if err != nil {
+		return nil, false
+	}
+	defer f.Close()
+	own := int(f.Fd())
+	entries, err := f.ReadDir(-1)
+	if err != nil {
+		return nil, false
+	}
+	fds := make([]int, 0, len(entries))
+	seen := false
+	for _, e := range entries {
+		if fd, err := strconv.Atoi(e.Name()); err == nil {
+			fds = append(fds, fd)
+			seen = seen || fd == own
+		}
+	}
+	return fds, seen && own > 2
 }

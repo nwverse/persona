@@ -1,8 +1,9 @@
-//go:build !windows
+//go:build unix
 
 // Package osproctest shows a test what a process inherited from the one that started it: its descriptors past
 // stderr and socket activation's variables (osproc.SealInherited, the sockets systemd passes the hub). A test binary
-// that calls ReportIfAsked first thing in TestMain is its own reporter: Reporter runs it as one.
+// that calls ReportIfAsked first thing in TestMain is its own reporter: Reporter runs it as one. On Linux, StartHolding
+// runs a process holding an inheritable socket, and a test watches it seal the socket while it runs.
 package osproctest
 
 import (

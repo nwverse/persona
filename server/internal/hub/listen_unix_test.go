@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strconv"
 	"strings"
@@ -31,6 +32,7 @@ const listenHelperPrefix = "listen-helper: "
 type listenHelperResult struct {
 	Err    string            `json:"err"`    // what Run, Serve or the exec returned
 	Sealed bool              `json:"sealed"` // descriptor 3 is close-on-exec here afterwards
+	Edge   bool              `json:"edge"`   // "serve": the edge was on (edgeOff said nothing)
 	Child  osproctest.Report `json:"child"`
 }
 
@@ -55,6 +57,7 @@ func listenHelpers() {
 	case "run":
 		res.Err = errText(Run(context.Background(), update.Build{Version: "test"}))
 	case "serve":
+		res.Edge = edgeOff(update.Build{Version: "test"}) == ""
 		res.Err = errText(Serve(context.Background(), update.Build{Version: "test"}))
 	case "exec":
 		inheritedListeners()
@@ -78,9 +81,9 @@ func listenHelpers() {
 }
 
 // TestPassedSocketsReachNoChild: whatever a hub does first, the socket systemd passed it and socket activation's
-// variables reach no process it starts. Run (the hub without its edge: runHub started the manager before it listened,
-// and the manager took the port on to every node, extension and agent), Serve (with and without the edge) and a
-// failed exec of a new binary all leave the socket close-on-exec; the control shows the check sees a leak.
+// variables reach no process it starts. Run (the hub without its edge: runHub could start the manager before it
+// listened, and the manager then took the port on to every node, extension and agent), Serve (with and without the
+// edge) and a failed exec of a new binary all leave the socket close-on-exec; the control shows the check sees a leak.
 func TestPassedSocketsReachNoChild(t *testing.T) {
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -92,8 +95,13 @@ func TestPassedSocketsReachNoChild(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer f.Close()
-	// A hub.json it cannot read: Run and Serve stop there, and nothing before it starts a process.
-	home := t.TempDir()
+	// A hub.json it cannot read: Run and Serve stop there, and nothing before it starts a process. Under /tmp: the
+	// edge stays off where the path to its sockets is too long (edgeOff), as under macOS's temporary directory.
+	home, err := os.MkdirTemp("/tmp", "phub")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(home) })
 	if err := os.MkdirAll(filepath.Join(home, ".persona"), 0o700); err != nil {
 		t.Fatal(err)
 	}
@@ -114,14 +122,18 @@ func TestPassedSocketsReachNoChild(t *testing.T) {
 		name, mode string
 		env        []string
 		stops      string // what Err says
+		edge       bool   // "serve": the edge must be on
 	}{
-		{"control", "none", nil, ""},
-		{"run", "run", nil, "hub.json"},
-		{"serve with the edge", "serve", nil, "hub.json"},
-		{"serve without the edge", "serve", []string{"PERSONA_HUB_EDGE=0"}, "hub.json"},
-		{"failed exec", "exec", nil, "no such file"},
+		{"control", "none", nil, "", false},
+		{"run", "run", nil, "hub.json", false},
+		{"serve with the edge", "serve", nil, "hub.json", true},
+		{"serve without the edge", "serve", []string{"PERSONA_HUB_EDGE=0"}, "hub.json", false},
+		{"failed exec", "exec", nil, "no such file", false},
 	} {
 		t.Run(c.name, func(t *testing.T) {
+			if c.edge && runtime.GOOS != "linux" && runtime.GOOS != "darwin" {
+				t.Skip("the edge runs on Linux and macOS")
+			}
 			cmd := exec.Command(os.Args[0], "-test.run=^$")
 			cmd.Env = append(append(slices.Clone(base), listenHelperEnv+"="+c.mode), c.env...)
 			cmd.ExtraFiles = []*os.File{f} // descriptor 3, inheritable, as systemd passes it
@@ -145,6 +157,9 @@ func TestPassedSocketsReachNoChild(t *testing.T) {
 					t.Fatalf("the control's child got %+v; want the socket at 3 and LISTEN_*: the check would see no leak", res.Child)
 				}
 				return
+			}
+			if c.mode == "serve" && res.Edge != c.edge {
+				t.Fatalf("the edge on: %v; want %v", res.Edge, c.edge)
 			}
 			if !strings.Contains(res.Err, c.stops) {
 				t.Fatalf("returned %q; want it to stop at %q, before it starts anything", res.Err, c.stops)

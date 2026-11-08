@@ -1,4 +1,4 @@
-//go:build !windows
+//go:build unix
 
 package osproc
 
@@ -135,5 +135,37 @@ func TestSealInheritedKeepsOwnActivation(t *testing.T) {
 	buf := make([]byte, 1)
 	if _, err := r.Read(buf); err != nil || buf[0] != 'x' {
 		t.Fatalf("read back %q, %v", buf, err)
+	}
+}
+
+// TestListFDsNeedsItsOwnDescriptor: a directory that lists 0, 1 and 2 whatever is open, as /dev/fd does on FreeBSD
+// without fdescfs, is not taken for the list of open descriptors, so SealInherited scans by number instead.
+func TestListFDsNeedsItsOwnDescriptor(t *testing.T) {
+	dir := t.TempDir()
+	for _, name := range []string{"0", "1", "2"} {
+		if err := os.WriteFile(dir+"/"+name, nil, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if fds, ok := listFDs(dir); ok {
+		t.Fatalf("a static listing was trusted: %v", fds)
+	}
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Close()
+	defer w.Close()
+	for _, dir := range []string{"/proc/self/fd", "/dev/fd"} {
+		if _, err := os.Stat(dir); err != nil {
+			continue
+		}
+		fds, ok := listFDs(dir)
+		if ok && (!slices.Contains(fds, int(r.Fd())) || !slices.Contains(fds, int(w.Fd()))) {
+			t.Fatalf("%s: trusted a listing without the open pipe: %v", dir, fds)
+		}
+	}
+	if fds := openFDs(); !slices.Contains(fds, int(w.Fd())) {
+		t.Fatalf("openFDs misses the open pipe at %d: %v", w.Fd(), fds)
 	}
 }

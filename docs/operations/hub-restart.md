@@ -87,7 +87,7 @@ Why this one:
   Cost: during the ~1 s while the old process stops, connections wait and get no immediate response, which is far within the clients' grace periods.
 
 Every hub process takes the passed sockets first thing (`claimInherited` in `hub/listen.go`, at the top of `Serve`, `Run` and `RunSlot`), before anything can start another process: `LISTEN_*` are cleared and the sockets made close-on-exec, and so is anything else the process was handed past stderr (`osproc.SealInherited`).
-Until 2026-11-08 a hub without its edge took them only when it first listened, after `runHub` had started the built-in manager: the manager, and through it every node, extension and agent it started, held the hub's listening socket for as long as it lived (several pids on `ss -tlnp` for the hub's port).
+Until 2026-11-08 a hub without its edge took them only when it first listened, and `runHub` could start the built-in manager before that: the manager, and through it every node, extension and agent it started, then held the hub's listening socket for as long as it lived (several pids on `ss -tlnp` for the hub's port).
 The manager's and the node's run entries (`managercli.Assistant`, `manager run`, `node`, `node --attach`) seal what they were handed as well, so a socket an older hub still leaks stops there. Not in `main`: the sandbox's launcher and the source validator are the same binaries and hand descriptors on by exec on purpose.
 
 `hub-systemd.sh` writes both units: the first time (or when the address changes) it stops the service once to hand the port to the socket (only this once is there a ~1 s gap); after that it always just runs `restart personad`.
