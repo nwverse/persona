@@ -45,6 +45,7 @@ MCP tool descriptions and parameter explanations shown to models are also prompt
 | `inbox/judge.md`, `judge_input.md` | Since phase 1, only its `task_id` is used: which of the user's ongoing tasks this item concerns | `assistant/inbox_handle.go` `linkTask` |
 | `inbox/agent.md`, `agent_title.md`, `agent_ref.md` | Handling chat (AI twin) first message: bound event ID, source-specific explanation, summary / action chain / intervening messages when continuing, knowledge-base context | `assistant/inbox_agent.go` |
 | `inbox/handling/*.md` | Program messages to handling chats: new messages (`new_messages`), sent (`sent`), Agent started (`agent_started`), handed back (`handback`), rejected (`rejected`), user instruction (`instructed`), handled (`closed`) | `assistant/inbox_handle.go` |
+| `inbox/handoff.md`, `handoff_note.md` | Hand to AI with write-back: the `<persona-context>` naming the item before the user's words in the main chat, and the wrapper around a handling note told to a chat the item was handed to (`docs/assistant/inbox.md`, "Item actions") | `assistant/inbox_handoff.go` |
 | `kb/compress.md`, `compress_input.md` | Chat compression + tagging | `kb/compress.go` |
 | `kb/project.md`, `project_input.md` | Rewrite project profiles | Same as above |
 | `kb/items.md`, `items_input.md` | Tag documents / meetings / calendar events | `kb/items.go` |
