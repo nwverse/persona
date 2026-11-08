@@ -11,6 +11,15 @@
 # App Store" profiles (create them first with scripts/release/asc_signing.py): the App Manager API key can't cloud-sign.
 set -euo pipefail
 cd "$(dirname "$0")/../.."
+# The same lock covers manual releases and the unattended worker.
+if [ "${PERSONA_OPERATION_RELEASE_LOCKED:-}" != 1 ]; then
+  exec python3 scripts/operations/operation_lock.py release -- bash "$PWD/scripts/release/release.sh" "$@"
+fi
+# Keep every xcodebuild subprocess (including entitlement probes) inside a machine-wide slot.
+XCODE_RUNNER="${PERSONA_XCODE_RUNNER:-$HOME/.local/bin/xcode-slot}"
+if [ -x "$XCODE_RUNNER" ] && [ "${PERSONA_XCODE_SLOT_HELD:-}" != 1 ]; then
+  exec env PERSONA_XCODE_SLOT_HELD=1 "$XCODE_RUNNER" bash "$PWD/scripts/release/release.sh" "$@"
+fi
 _env=$(python3 scripts/persona_config.py env) || exit $?
 eval "$_env"; unset _env
 python3 scripts/persona_config.py xcconfig
