@@ -15,7 +15,7 @@ export interface ModelProvider {
   name: string;
   kind: "api" | "launcher" | "plugin";
   agent?: string;
-  api?: "messages" | "responses";
+  api?: "messages" | "responses" | "chat";
   model?: string;
   machines?: string[];
   hidden?: boolean;

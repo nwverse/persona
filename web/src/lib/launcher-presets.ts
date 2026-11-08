@@ -17,7 +17,7 @@ export interface LauncherPreset {
   name: string;
   description?: string;
   kind: "launcher" | "api";
-  api?: "messages" | "responses";
+  api?: "messages" | "responses" | "chat";
   base_url: string;
   model?: string;
   small_model?: string;
@@ -130,7 +130,7 @@ export function presetBody(p: LauncherPreset, name: string, key: string, model: 
 
 /** Whether the preset uses a protocol supported by the connection test. */
 export function presetTestable(p: LauncherPreset): boolean {
-  return !p.api || p.api === "messages" || p.api === "responses";
+  return !p.api || p.api === "messages" || p.api === "responses" || p.api === "chat";
 }
 
 /** POST /api/v1/launchers/test's body for a preset: the hub fills in its address and, without one here, its default model. */

@@ -111,9 +111,16 @@ describe("providerBody", () => {
     f.models[1] = { ...f.models[1], checked: false };
     expect(providerBody(f, stored).models).toEqual([{ id: "m1", context_window: 1000000, efforts: ["high", "max"], default_effort: "high" }]);
   });
-  it("direct API providers send no launcher-only fields", () => {
-    const b = providerBody(ready({ kind: "api", api: "responses", small_model: "s", args: "--x" }), null);
-    expect(b).toMatchObject({ kind: "api", api: "responses", small_model: "", args: [], auth: "api_key" });
+  it.each(["responses", "chat"] as const)("%s direct API providers send no launcher-only fields", (api) => {
+    const b = providerBody(ready({ kind: "api", api, small_model: "s", args: "--x" }), null);
+    expect(b).toMatchObject({ kind: "api", api, small_model: "", args: [], auth: "api_key" });
+  });
+  it("retains the protocol when editing and still requires a key for new chat providers", () => {
+    const old: ProviderView = { name: "chat", kind: "api", api: "chat", model: "m1", base_url: "https://gw.example.com", has_key: true };
+    const form = formFromView(old);
+    expect(providerBody(form, old)).toMatchObject({ kind: "api", api: "chat", auth: "api_key" });
+    expect(formProblems({ ...form, api_key: "" }, true).connect).toBe("要填 API Key");
+    expect(formProblems(form, false, true).connect).toBe("");
   });
 });
 

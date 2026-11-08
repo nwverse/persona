@@ -17,6 +17,8 @@
   "kind_launcher_hint": "Runs as Claude Code (main chat, Agents).",
   "direct_api": "Direct API",
   "api_protocol": "API protocol",
+  "protocol_chat": "Chat Completions",
+  "url_chat_hint": "Base URL of a Chat Completions-compatible API.",
   "base_url": "URL",
   "url_responses_hint": "Base URL of a Responses-compatible API.",
   "url_gateway_hint": "Base URL of an Anthropic Messages-compatible gateway, without /v1.",

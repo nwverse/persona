@@ -27,7 +27,7 @@ export interface ProviderView {
   display_name?: string;
   kind?: "launcher" | "api";
   agent?: "claude" | "codex" | "agy" | "omp" | string;
-  api?: "messages" | "responses";
+  api?: "messages" | "responses" | "chat";
   base_url?: string;
   model?: string;
   small_model?: string;
@@ -69,7 +69,7 @@ export interface FormModel {
 export interface ProviderForm {
   kind: "launcher" | "api";
   agent: "claude" | "codex" | "agy" | "omp";
-  api: "messages" | "responses";
+  api: "messages" | "responses" | "chat";
   name: string;
   base_url: string;
   auth: "bearer" | "api_key";
@@ -335,7 +335,7 @@ function extraFields(f: ProviderForm): Record<string, unknown> {
  *  clears them), the key only when typed. */
 export function providerBody(f: ProviderForm, old: ProviderView | null): Record<string, unknown> {
   const api = f.kind === "api";
-  const responses = api && f.api === "responses";
+  const openAI = api && (f.api === "responses" || f.api === "chat");
   const body: Record<string, unknown> = {
     name: f.name.trim(),
     kind: f.kind,
@@ -349,7 +349,7 @@ export function providerBody(f: ProviderForm, old: ProviderView | null): Record<
     custom_model_name: api ? "" : f.custom_model_name.trim(),
     custom_model_description: api ? "" : f.custom_model_description.trim(),
     args: api ? [] : f.args.split(/\s+/).filter(Boolean),
-    auth: responses ? "api_key" : f.auth,
+    auth: openAI ? "api_key" : f.auth,
   };
   if (f.api_key.trim()) body.api_key = f.api_key.trim();
   const extra = extraFields(f);
