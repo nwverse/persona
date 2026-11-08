@@ -17,6 +17,8 @@
   "kind_launcher_hint": "以 Claude Code 运行（主对话、Agents）。",
   "direct_api": "直接 API",
   "api_protocol": "API 协议",
+  "protocol_chat": "Chat Completions",
+  "url_chat_hint": "Chat Completions 兼容 API 的基础地址。",
   "base_url": "地址",
   "url_responses_hint": "Responses 兼容 API 的基础地址。",
   "url_gateway_hint": "Anthropic Messages 兼容网关的基础地址，不带 /v1。",

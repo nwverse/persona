@@ -160,7 +160,7 @@ export function ProviderWizard({ existing, onClose, onSaved }: { existing: Provi
 
   const set = <K extends keyof ProviderForm>(k: K) => (v: ProviderForm[K]) => setF((x) => ({ ...x, [k]: v }));
   const problems = formProblems(f, isNew, !!old?.has_key);
-  const responses = f.kind === "api" && f.api === "responses";
+  const openAI = f.kind === "api" && (f.api === "responses" || f.api === "chat");
   const presetFlow = isNew && choice !== CUSTOM;
   const presetReady = !!preset && (hubNames || !!pf.name.trim()) && !launcherNameProblem(pf.name) && !!pf.api_key.trim() && !keyTest?.running;
   const canSave = step === "key" ? presetReady : !problems.connect && !problems.models && !problems.advanced;
@@ -353,12 +353,12 @@ export function ProviderWizard({ existing, onClose, onSaved }: { existing: Provi
             )}
             {isNew && f.kind === "api" && (
               <Labelled label={t("settings-providerwizard.api_protocol")}>
-                <Segmented<ProviderForm["api"]> label={t("settings-providerwizard.api_protocol")} value={f.api} onChange={set("api")} options={[{ v: "messages", label: "Anthropic Messages" }, { v: "responses", label: "OpenAI Responses" }]} />
+                <Segmented<ProviderForm["api"]> wrap label={t("settings-providerwizard.api_protocol")} value={f.api} onChange={set("api")} options={[{ v: "messages", label: "Anthropic Messages" }, { v: "responses", label: "OpenAI Responses" }, { v: "chat", label: t("settings-providerwizard.protocol_chat") }]} />
               </Labelled>
             )}
             <TextField label={t("settings-providerwizard.base_url")} value={f.base_url} onChange={set("base_url")} mono inputMode="url" placeholder="https://…"
-              hint={responses ? t("settings-providerwizard.url_responses_hint") : t("settings-providerwizard.url_gateway_hint")} />
-            {!responses && (
+              hint={f.kind === "api" && f.api === "chat" ? t("settings-providerwizard.url_chat_hint") : openAI ? t("settings-providerwizard.url_responses_hint") : t("settings-providerwizard.url_gateway_hint")} />
+            {!openAI && (
               <Labelled label={t("settings-providerwizard.auth")} hint={f.auth === "bearer" ? t("settings-providerwizard.auth_bearer_hint") : t("settings-providerwizard.auth_key_hint")}>
                 <Segmented<ProviderForm["auth"]> label={t("settings-providerwizard.auth")} value={f.auth} onChange={set("auth")} options={[{ v: "bearer", label: "Bearer" }, { v: "api_key", label: "x-api-key" }]} />
               </Labelled>

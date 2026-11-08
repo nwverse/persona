@@ -17,6 +17,8 @@
   "kind_launcher_hint": "Claude Codeとして実行します（メインチャット、Agents）。",
   "direct_api": "API直接",
   "api_protocol": "APIプロトコル",
+  "protocol_chat": "Chat Completions",
+  "url_chat_hint": "Chat Completions互換APIのベースURLです。",
   "base_url": "URL",
   "url_responses_hint": "Responses互換APIのベースURLです。",
   "url_gateway_hint": "Anthropic Messages互換ゲートウェイのベースURLです（/v1は付けません）。",

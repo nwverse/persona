@@ -287,6 +287,38 @@ describe("ProviderWizard from presets", () => {
     expect(calls.find((c) => c.path.endsWith("/launchers/discover"))?.body).toMatchObject({ api: "responses" });
   });
 
+  it("tests, discovers and saves a Chat Completions provider", async () => {
+    await open();
+    act(() => button("自定义兼容网关")!.click());
+    act(() => button("直接 API")!.click());
+    act(() => button("Chat Completions")!.click());
+    expect(text()).toContain("Chat Completions 兼容 API 的基础地址");
+    expect(text()).not.toContain("鉴权方式");
+    const inputs = [...document.body.querySelectorAll<HTMLInputElement>("input")];
+    type(inputs.find((input) => input.placeholder.includes("my_gateway"))!, "custom");
+    type(inputs.find((input) => input.inputMode === "url")!, "https://api.example.com/v1");
+    type(keyInput(), "sk-test-123456");
+    type(document.body.querySelector<HTMLInputElement>('input[aria-label="测试用的模型"]')!, "example-chat");
+    await act(async () => button("测试连接")!.click());
+    await act(async () => button("获取模型列表")!.click());
+    expect(keyTests()[0]!.body).toMatchObject({ api: "chat", model: "example-chat", base_url: "https://api.example.com/v1" });
+    expect(calls.find((c) => c.path.endsWith("/launchers/discover"))?.body).toMatchObject({ api: "chat" });
+    act(() => button("下一步")!.click());
+    type(document.body.querySelector<HTMLInputElement>('input[aria-label="手动添加模型 ID"]')!, "example-chat");
+    act(() => button("添加")!.click());
+    await act(async () => button("保存")!.click());
+    expect(calls.find((c) => c.method === "POST" && c.path.endsWith("/launchers"))?.body).toMatchObject({ kind: "api", api: "chat", auth: "api_key", model: "example-chat" });
+  });
+
+  it("keeps the Chat Completions protocol when editing", async () => {
+    act(() => root.render(<ProviderWizard existing={{ name: "chat", kind: "api", api: "chat", base_url: "https://api.example.com", model: "example-chat", has_key: true }} onClose={() => {}} onSaved={() => {}} />));
+    await flush();
+    expect(text()).toContain("Chat Completions 兼容 API 的基础地址");
+    expect(text()).not.toContain("鉴权方式");
+    await act(async () => button("保存")!.click());
+    expect(calls.find((c) => c.method === "PUT" && c.path.endsWith("/launchers/chat"))?.body).toMatchObject({ api: "chat", auth: "api_key" });
+  });
+
   it("leaves a Claude Code that already answers in place unless told otherwise", async () => {
     Object.assign(getState(), { features: ["builtin_presets", "assistant_readiness"] });
     readiness = withSteps("full", [step("computer", "ok"), step("claude", "ok"), step("model", "ok"), step("first_message", "ok")]);
