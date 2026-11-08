@@ -22,9 +22,6 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
-import androidx.lifecycle.Lifecycle
-import androidx.lifecycle.LifecycleEventObserver
-import androidx.lifecycle.compose.LocalLifecycleOwner
 import persona.core.contracts.Interaction
 import persona.core.contracts.Machine
 import persona.core.contracts.Resolution
@@ -86,7 +83,7 @@ internal fun InteractionPanel(
     }
     DecisionDock(
         kind = when (request.kind) {
-            "permission" -> if (request.toolName == "Bash") DecisionKind.Command else DecisionKind.Tool
+            "permission" -> if (request.toolName == "Bash" || request.isSecretRun) DecisionKind.Command else DecisionKind.Tool
             "plan" -> DecisionKind.Plan
             "question" -> DecisionKind.Question
             "elicitation" -> DecisionKind.Form
@@ -141,22 +138,13 @@ internal fun InteractionForm(
         }
     }
     val secret = interaction.secret == true
-    // Secrets live only in this visible form, never in saved state or request drafts.
-    var password by remember(interaction.id) { mutableStateOf("") }
-    val lifecycle = LocalLifecycleOwner.current.lifecycle
-    DisposableEffect(lifecycle, interaction.id) {
-        val observer = LifecycleEventObserver { _, event ->
-            if (event == Lifecycle.Event.ON_STOP) password = ""
-        }
-        lifecycle.addObserver(observer)
-        onDispose { password = ""; lifecycle.removeObserver(observer) }
-    }
+    // Secrets (a terminal's password, a password card's) live only in this visible form, never in saved state or request drafts.
     var terminalHelp by remember { mutableStateOf(false) }
     val now by produceState(Instant.now(), interaction.expiresAt) {
         while (true) { value = Instant.now(); delay(1_000) }
     }
     val expired = RequestExpiry.expired(interaction.expiresAt, now)
-    LaunchedEffect(expired, uncertain) { if (expired || uncertain) password = "" }
+    var password by rememberTransientSecret(interaction.id, clearWhen = expired || uncertain)
     // A session whose source cannot approve (blockedReason) shows the request but answers nothing, not even "Handle on computer".
     val blocked = blockedReason != null
     val context = AnswerContext(state = if (expired || uncertain || readOnly || linkVisible || blocked) "unknown" else "pending", sending = busy,
@@ -185,7 +173,13 @@ internal fun InteractionForm(
     } ?: fallback?.options.orEmpty()
     val actions: @Composable () -> Unit = {
         when (interaction.kind) {
-            "permission" -> {
+            // A password card (#1137, #1581): its password, Decline and Run, nothing else.
+            "permission" -> if (interaction.isSecretRun) SecretRunActions(password, { password = it }, editable,
+                canDecline = enabled(AnswerAction.Deny),
+                canRun = AnswerBuilder.build(interaction, AnswerAction.Allow, AnswerDraft(password = password), context).allowed,
+                onDecline = { act(AnswerAction.Deny) }, onRun = { act(AnswerAction.Allow, AnswerDraft(password = password)) },
+                // Room between the dock's divider and the field's label.
+                modifier = Modifier.padding(top = Tokens.Space.s)) else {
                 // "Always" is Claude's, or another agent's when its TUI says what it would allow (as on iOS).
                 DecisionButtons(
                     primary = JAction(stringResource(R.string.chat_request_allow), enabled = enabled(AnswerAction.Allow)) { act(AnswerAction.Allow) },
@@ -264,7 +258,7 @@ internal fun InteractionForm(
             style = PersonaTheme.type.callout, color = PersonaTheme.palette.ink2)
         Spacer(Modifier.height(Tokens.Space.s))
         when (interaction.kind) {
-            "permission" -> {
+            "permission" -> if (interaction.isSecretRun) SecretRunSummary(interaction) else {
                 // Another agent's card says why it asks, in its own words.
                 interaction.reason?.takeIf { interaction.agentDisplayName != null && it.isNotBlank() }?.let {
                     ChatLinkText(it, style = PersonaTheme.type.callout.copy(color = PersonaTheme.palette.ink2))
@@ -342,7 +336,8 @@ internal fun InteractionForm(
             }
             else -> Text(stringResource(R.string.chat_request_unsupported))
         }
-        Row(horizontalArrangement = Arrangement.spacedBy(Tokens.Space.s)) {
+        // A password card is the assistant's own: no terminal to go to, nothing to hand back (#1137).
+        if (!interaction.isSecretRun) Row(horizontalArrangement = Arrangement.spacedBy(Tokens.Space.s)) {
             if (onTerminal != null || showTerminalHelp) JTextButton(if (onTerminal != null) RequestExpiry.terminalLabel.text() else stringResource(R.string.chat_request_terminal_help),
                 { password = ""; if (onTerminal != null) onTerminal() else terminalHelp = true })
             if (ApprovalPolicy.actions(AnswerEntry.Conversation, interaction.kind, false).any { it.id == ApprovalAction.Dismiss }) {

@@ -41,6 +41,9 @@ func TestAssistantPreparePerDirectory(t *testing.T) {
 			if custom {
 				n.dir = t.TempDir()
 			}
+			if err := os.MkdirAll(n.dir, 0o700); err != nil { // a node's state directory is there before anything is prepared in it
+				t.Fatal(err)
+			}
 			const firstDir, secondDir = ".persona/assistant", ".persona/managers/second/assistant"
 			first := prepareAssistantForTest(t, n, firstDir, []string{"example"}, map[string]string{"shared": "example"})
 			second := prepareAssistantForTest(t, n, secondDir, []string{"other"}, map[string]string{"shared": "other"})

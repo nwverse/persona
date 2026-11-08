@@ -16,6 +16,11 @@ import Observation
 
     func bind(_ model: AppModel) { self.model = model }
 
+    #if DEBUG
+    /// A list a unit test loaded itself, standing where the group's live list would be.
+    func setForTests(_ list: SessionListModel<Session>, group: String) { lists[group] = list }
+    #endif
+
     func list(_ link: HubLink, model: AppModel) -> SessionListModel<Session> {
         self.model = model
         if let list = lists[link.group] { return list }
@@ -216,6 +221,7 @@ extension Session {
         row.permissionMode = old.permissionMode
         row.effort = old.effort
         row.efforts = old.efforts
+        row.ultracode = old.ultracode
         row.launcher = old.launcher
         row.suggestion = old.suggestion
         row.codexRoute = old.codexRoute

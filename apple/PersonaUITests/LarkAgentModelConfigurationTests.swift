@@ -32,7 +32,8 @@ final class LarkAgentModelConfigurationTests: XCTestCase {
         let springboard = XCUIApplication(bundleIdentifier: "com.apple.springboard")
         let allow = springboard.buttons.matching(NSPredicate(format: "label IN %@", ["Allow", "允许"])).firstMatch
         if allow.waitForExistence(timeout: 3) { allow.tap() }
-        XCTAssertTrue(app.tabBars.firstMatch.waitForExistence(timeout: 10))
+        XCTAssertTrue(app.buttons["assistant-sidebar-button"].firstMatch.waitForExistence(timeout: 10)
+                      || app.buttons["settings-close"].waitForExistence(timeout: 10), "the initial pairing did not reach the app")
         app.terminate()
         app.launchArguments = common + entry
         app.launchPinned()

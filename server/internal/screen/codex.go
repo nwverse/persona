@@ -3,9 +3,10 @@ package screen
 import (
 	"crypto/sha256"
 	"encoding/hex"
-	"regexp"
 	"strconv"
 	"strings"
+
+	"github.com/nwverse/persona/server/internal/lazyre"
 )
 
 // Codex's TUI (codex-cli 0.153 / 0.163, a compatible CLI alike) read off its screen: which view has the keyboard, what its input
@@ -131,11 +132,11 @@ func (q *CodexQuestionDialog) Selected() *CodexOption {
 const CodexPlaceholder = "Ask Codex to do anything"
 
 var (
-	codexOptionRE   = regexp.MustCompile(`^(\s*)(›\s+)?(\d+)\.\s+(\S.*)$`)
-	codexShortcutRE = regexp.MustCompile(`\s+\((?:[a-z]|esc)\)$`)
-	codexQuestionRE = regexp.MustCompile(`^\s*Question (\d+)/(\d+)\b`)
-	codexColumnsRE  = regexp.MustCompile(`^(.*?\S)\s{2,}(\S.*)$`)
-	codexNumberedRE = regexp.MustCompile(`^›\s*\d+\.\s`)
+	codexOptionRE   = lazyre.New(`^(\s*)(›\s+)?(\d+)\.\s+(\S.*)$`)
+	codexShortcutRE = lazyre.New(`\s+\((?:[a-z]|esc)\)$`)
+	codexQuestionRE = lazyre.New(`^\s*Question (\d+)/(\d+)\b`)
+	codexColumnsRE  = lazyre.New(`^(.*?\S)\s{2,}(\S.*)$`)
+	codexNumberedRE = lazyre.New(`^›\s*\d+\.\s`)
 )
 
 // ReadCodex reads a Codex screen, best read with its colors: without them a draft the user typed cannot be told from

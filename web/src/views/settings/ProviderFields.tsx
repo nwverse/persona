@@ -1,7 +1,7 @@
 // The provider wizard's form pieces (#2455): a labelled input, a secret one (keys, headers: never offered to the
 // browser's password manager, shown only on request), and the "Advanced" disclosure.
 import { useId, useState } from "react";
-import { Collapse, cx } from "../../ui/atoms";
+import { Collapse, cx, SECRET_INPUT } from "../../ui/atoms";
 import { Icon } from "../../ui/icons";
 import { inputClass, textareaClass } from "../assistant/parts";
 import { t } from "../../i18n";
@@ -57,7 +57,7 @@ export function SecretField({ label, value, onChange, hint, placeholder, multili
   const noteId = useId();
   const [shown, setShown] = useState(false);
   // password managers: none of them should offer to save a gateway key as the hub's password
-  const quiet = { autoComplete: "off", spellCheck: false, "data-1p-ignore": true, "data-lpignore": "true", "data-bwignore": true } as const;
+  const quiet = { ...SECRET_INPUT, autoComplete: "off" } as const;
   const described = hint ? noteId : undefined;
   const toggle = (
     <button type="button" onClick={() => setShown((s) => !s)} aria-label={shown ? t("settings-providerfields.hide") : t("settings-providerfields.show")} aria-pressed={shown}

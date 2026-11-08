@@ -2,10 +2,9 @@ import SwiftUI
 
 /// The ChatGPT-style shell on an iPhone (docs/apple/ios.md「新外壳」): Assistant (the Persona assistant) and Agents (the Agents list)
 /// under one top switch, the drawer on the left (Inbox, Scheduled Tasks, Knowledge, Machines, the conversations, Settings), Settings as a sheet.
-/// `Old Layout` (AppModel.oldLayout) brings the four tabs back unchanged.
 ///
-/// The pages read this from the environment (`\.shell`): nil means they are in the old layout, on an iPad or on the
-/// Mac, and look exactly as before.
+/// The pages read this from the environment (`\.shell`): nil means a regular-width iPad / iPhone Duo,
+/// Mac or Vision Pro, which keep their platform navigation.
 ///
 /// Which page is in front has one answer, `page` (docs/apple/shell.md): the switch's segments, which page takes taps and is
 /// read by VoiceOver, `tabIsActive` and the drawer all read it, and the strip's position follows it. It changes only
@@ -137,9 +136,6 @@ import SwiftUI
         #if DEBUG
         ShellTrace.shared.note("route \(t)")
         #endif
-        // Old Layout was just turned on (Settings › Appearance › Layout sets the tab to Settings for the tabs): the tabs take it from here,
-        // the shell goes away with the next update.
-        guard !model.oldLayout else { return detach(from: model) }
         switch t {
         case .assistant: select(0)
         case .chats: select(1)

@@ -25,10 +25,12 @@ fun Interaction.requestSourceLabel(): CoreText? = listOfNotNull(
 val Interaction.offersAlways: Boolean get() = agentDisplayName == null || !alwaysLabel.isNullOrBlank()
 
 /**
- * A permission card that needs its fields filled in (a password) before it can be allowed. This app has no form for
- * them yet, so allow is not offered anywhere (as web's quick answers); deny still is (#4987).
+ * A permission card that needs its fields filled in (a password) before it can be allowed, so no quick answer
+ * (notification, ongoing status, list row, shortcut) offers allow; deny still is (#4987). Only a password card
+ * ([Interaction.isSecretRun], #1137) has a form here: its card's own Run (#1581). Other cards with fields are allowed
+ * on the web or the iPhone.
  */
-val Interaction.needsFieldValues: Boolean get() = kind == "permission" && fields.orEmpty().any { !it.optional }
+val Interaction.needsFieldValues: Boolean get() = kind == "permission" && (isSecretRun || fields.orEmpty().any { !it.optional })
 
 /** The button for it: Claude's "Always allow this session", another agent's "Always allow" (what it allows is shown beside it). */
 val Interaction.alwaysActionLabel: CoreText

@@ -25,7 +25,7 @@ import (
 
 const guestsKey = "assistant.guests"
 
-// guestDir is where guest conversations run, next to the assistant's directory.
+// guestDir is where guest conversations run, next to the assistant's directory, spelled as assistantRel is.
 var guestDir = compat.StateDir + "/guest"
 
 // maxGuestTools bounds guest.tools.

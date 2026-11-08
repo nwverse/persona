@@ -4,6 +4,7 @@ import io
 import json
 import os
 from pathlib import Path
+import re
 import shutil
 import subprocess
 import sys
@@ -143,6 +144,68 @@ class BannedNameTests(unittest.TestCase):
 
     def test_the_pattern_does_not_spell_itself(self):
         self.assertIsNone(pc.BANNED_NAMES.search(pc.BANNED_NAMES.pattern))
+
+    def test_mixed_case_is_found_and_reported_as_written(self):
+        name = "oPeN" + "-" + "LaRk"
+        self.assertEqual(pc.problems("uses " + name + " today", []), [name])
+        self.assertEqual(pc.problems("x" + name.swapcase() + "s", []), [name.swapcase()])
+
+    def test_lines_whose_lowercase_shifts_or_folds_still_match(self):
+        # U+0130 lowers to two characters, so the lowercased copy no longer lines up with the line; U+017F and U+0131
+        # are what IGNORECASE also takes for s and i; U+212A lowers to k. All must find what IGNORECASE finds.
+        name = "open" + "_" + "lark"
+        for text in ["\u0130 " + name, "\u0130\u0130 " + name.upper() + " \u0130", "a\u017fter" + "gate",
+                     "extens\u0131ons" + "internal", "open" + "lar\u212a", "\u4e2d\u6587 " + name]:
+            with self.subTest(text=text):
+                self.assertEqual(pc.problems(text, []), [m.group(0) for m in pc.BANNED_NAMES.finditer(text)])
+                self.assertEqual(len(pc.problems(text, [])), 1)
+
+    all_gaps = None  # one sweep over every code point, shared by the two tests below
+
+    @classmethod
+    def lowercase_path_gaps(cls, fold_only):
+        """Characters on which the lowercase path and IGNORECASE disagree about an ASCII letter, apart from fold_only.
+        The path is sound when every character that lowers to one character is taken by IGNORECASE for exactly the
+        ASCII letter it lowers to (or for none when it lowers to no ASCII letter)."""
+        if cls.all_gaps is None:
+            letter_any_case = re.compile("[a-z]", re.IGNORECASE)
+            letter = re.compile("[a-z]")  # case-sensitive: what BANNED_NAMES_LOWER sees on the lowercased line
+            cls.all_gaps = []
+            for code in range(sys.maxunicode + 1):
+                char = chr(code)
+                low = char.lower()
+                if len(low) != 1:
+                    continue
+                if bool(letter_any_case.fullmatch(char)) != bool(letter.fullmatch(low)) or (
+                        letter.fullmatch(low) and not re.fullmatch(low, char, re.IGNORECASE)):
+                    cls.all_gaps.append(char)
+        return [hex(ord(char)) for char in cls.all_gaps if char not in fold_only]
+
+    def test_case_fold_only_lists_every_character_lower_does_not_cover(self):
+        self.assertEqual(self.lowercase_path_gaps(pc.CASE_FOLD_ONLY), [])
+
+    def test_the_gap_check_fails_when_a_fold_only_character_is_left_out(self):
+        # Negative control: without the table, or with one entry missing, the check above must catch it.
+        self.assertEqual(self.lowercase_path_gaps(()), ["0x131", "0x17f"])
+        for char in pc.CASE_FOLD_ONLY:
+            with self.subTest(left_out=hex(ord(char))):
+                self.assertEqual(self.lowercase_path_gaps([c for c in pc.CASE_FOLD_ONLY if c != char]), [hex(ord(char))])
+
+
+class AddressHintTests(unittest.TestCase):
+    def test_addresses_are_still_found(self):
+        short_ip = "10." + "1.2.3"  # one digit in every part: the smallest shape the hint must accept
+        for ip in (PRIVATE_IP, short_ip):
+            self.assertEqual(pc.problems("host " + ip + ".", []), [ip])
+        email = "ops@" + "corp-mail.io"  # split so the repository scan of this file does not flag it
+        for address in (email, "x9@" + "9-x.io", "a.%@" + "-x.io"):  # every class the hint takes on either side of @
+            self.assertEqual(pc.problems("mail " + address + " now", []), [address])
+        self.assertEqual(pc.problems("mail " + email + " now", [], emails=False), [])
+
+    def test_lines_without_the_hint_have_no_addresses(self):
+        for line in ["@Override", "a @ b.io", "v1.2", "1. 2. 3. 4", "x@ example", "end."]:
+            with self.subTest(line=line):
+                self.assertEqual(pc.problems(line, []), [])
 
 
 class LoopbackTests(unittest.TestCase):
@@ -373,6 +436,108 @@ class OrdinaryWordTests(unittest.TestCase):
                 self.assertNotIn("zorblax", where)
                 self.assertNotIn(self.WORD, where.replace("config ", ""))
 
+    def profile(self, name):
+        return {"app_store": {"provisioning_profiles": {"com.example.persona.share": name}}}
+
+    def generic_profile_sources(self, config, words=""):
+        with patch.object(pc, "public_profile_labels", return_value=frozenset({"Persona Share App Store"})):
+            return self.sources(config, words)
+
+    def test_public_default_and_fixture_profile_labels_are_generic(self):
+        root = Path(pc.__file__).parent.parent
+        labels = pc.profile_labels((root / "scripts/persona_config.py").read_text(), "provisioning_profiles")
+        labels |= pc.profile_labels((root / "scripts/test/fixtures/deployment/persona_config.py.fixture").read_text(), "export_options")
+        self.assertIn("Persona Share App Store", labels)
+        self.assertGreater(len(labels), 5)  # The public historical fixture contributes its literal labels too.
+        with patch.object(pc, "public_profile_labels", return_value=frozenset(labels)):
+            for label in labels:
+                with self.subTest(label=label):
+                    self.assertNotIn(label, self.words(self.profile(label)))
+
+    def test_custom_profile_labels_and_near_matches_stay_private(self):
+        for label in ("Zorblax Share Profile", "Persona Share App Store Personal", " Persona Share App Store"):
+            with self.subTest(label=label):
+                self.assertIn(label, self.generic_profile_sources(self.profile(label)))
+
+    def test_explicit_private_word_still_protects_a_public_profile_label(self):
+        label = "Persona Share App Store"
+        sources = self.generic_profile_sources(self.profile(label), label + "\n")
+        self.assertEqual(sources[label], ["private-words.txt"])
+        self.assertEqual(pc.problems(label, list(sources)), [label])
+
+    def test_public_profile_label_under_another_config_key_stays_private(self):
+        label = "Persona Share App Store"
+        config = self.profile(label)
+        config["account_label"] = label
+        self.assertEqual(self.generic_profile_sources(config)[label], ["config account_label"])
+        config["api_key"] = label
+        self.assertIn("config api_key", self.generic_profile_sources(config)[label])
+
+    def test_nested_profile_values_do_not_get_the_public_label_classification(self):
+        label = "Persona Share App Store"
+        config = {"app_store": {"provisioning_profiles": {"com.example.persona": {"name": label}}}}
+        self.assertIn(label, self.generic_profile_sources(config))
+
+    def test_profile_definition_parser_only_reads_literal_values(self):
+        source = '''def provisioning_profiles(cfg):
+    profiles = {"literal": "Published App Store", "dynamic": dangerous(), "formatted": f"{secret} App Store"}
+    return profiles
+'''
+        self.assertEqual(pc.profile_labels(source, "provisioning_profiles"), {"Published App Store"})
+        self.assertEqual(pc.profile_labels(source, "unrelated"), set())
+
+    def test_profile_fixture_parser_never_evaluates_formatted_fields(self):
+        source = '''def export_options(cfg):
+    plist = f"<plist><dict><key>provisioningProfiles</key><dict><key>{dangerous()}</key><string>Published Fixture Profile</string><key>dynamic</key><string>{secret} App Store</string></dict></dict></plist>"
+'''
+        self.assertEqual(pc.profile_labels(source, "export_options"), {"Published Fixture Profile"})
+
+    def test_unpublished_worktree_or_commit_cannot_approve_its_own_profile_label(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            script = root / "scripts/persona_config.py"
+            script.parent.mkdir()
+            script.write_text('def provisioning_profiles(cfg):\n    profiles = {"app": "Published Profile"}\n')
+
+            def git(*args):
+                return subprocess.run(["git", "-C", str(root), "-c", "core.hooksPath=/dev/null",
+                                       "-c", "commit.gpgsign=false", "-c", "user.name=Fixture",
+                                       "-c", "user.email=me@example.com", *args],
+                                      capture_output=True, check=True)
+
+            git("init", "-q")
+            git("add", "scripts/persona_config.py")
+            git("commit", "-qm", "Public fixture")
+            git("update-ref", "refs/remotes/origin/main", "HEAD")
+            script.write_text('def provisioning_profiles(cfg):\n    profiles = {"app": "Unpublished Profile"}\n')
+            try:
+                with patch.object(pc, "__file__", str(root / "scripts/privacy_check.py")):
+                    pc.public_profile_labels.cache_clear()
+                    self.assertEqual(pc.public_profile_labels(), frozenset({"Published Profile"}))
+                    self.assertIn("Unpublished Profile", self.words(self.profile("Unpublished Profile")))
+                    git("add", "scripts/persona_config.py")
+                    git("commit", "-qm", "Unpublished fixture change")
+                    pc.public_profile_labels.cache_clear()
+                    self.assertEqual(pc.public_profile_labels(), frozenset({"Published Profile"}))
+            finally:
+                pc.public_profile_labels.cache_clear()
+
+    def test_malformed_profile_definitions_do_not_waive_names(self):
+        self.assertEqual(pc.profile_labels("invalid syntax !", "provisioning_profiles"), set())
+        source = 'def export_options(cfg):\n    plist = "<plist><dict>broken"'
+        self.assertEqual(pc.profile_labels(source, "export_options"), set())
+        source = 'def export_options(cfg):\n    plist = "not a plist"'
+        self.assertEqual(pc.profile_labels(source, "export_options"), set())
+
+    def test_standalone_checker_without_public_definitions_waives_nothing(self):
+        with tempfile.TemporaryDirectory() as temp:
+            try:
+                pc.public_profile_labels.cache_clear()
+                with patch.object(pc, "__file__", str(Path(temp) / "scripts/privacy_check.py")):
+                    self.assertEqual(pc.public_profile_labels(), frozenset())
+            finally:
+                pc.public_profile_labels.cache_clear()
+
     def test_the_waiver_hint_only_follows_a_hit_a_waiver_can_take_back(self):
         config = self.machines(self.WORD, "Cellar")
         config["lan_host"] = "attic.lan"
@@ -478,8 +643,8 @@ class PrivacyCheckIntegrationTests(unittest.TestCase):
         self.lock = self.repo / "web/package-lock.json"
         self.lock.parent.mkdir()
 
-    def run_command(self, *args):
-        return subprocess.run(args, cwd=self.repo, env=self.env, capture_output=True, text=True, timeout=30)
+    def run_command(self, *args, env=None):
+        return subprocess.run(args, cwd=self.repo, env=env or self.env, capture_output=True, text=True, timeout=30)
 
     def git(self, *args):
         result = self.run_command("git", *args)
@@ -738,6 +903,58 @@ class RangeAndPushTests(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("message:1: private value", result.stdout)
 
+    def test_range_reads_every_changed_file_and_message_of_several_commits(self):
+        (self.repo / "docs/sub dir").mkdir(parents=True)
+        self.commit("a.md", "one\nsecretbox two\n", message="first")
+        self.commit("docs/sub dir/b.md", "clean\n", message="second, tried on secretbox")
+        self.commit("fixed.md", "secretbox\n", message="third")
+        self.commit("fixed.md", "fixed\n", message="fourth")
+        self.commit("gone.md", "secretbox\n", message="fifth")
+        self.git("rm", "-q", "gone.md")
+        self.git("commit", "-q", "--no-verify", "-m", "sixth\n\nbody line on secretbox")
+        (self.repo / "bin.dat").write_bytes(b"\0secretbox\n")
+        self.commit("docs/sub dir/c.md", "x\n\nsecretbox at " + PRIVATE_IP + "\n", message="seventh")
+        self.git("add", "bin.dat")
+        self.git("commit", "-q", "--no-verify", "-m", "eighth")
+        self.commit("old.md", "an old note\nstill secretbox\n", message="ninth")
+        commits = {self.git("rev-parse", "HEAD~%d" % n).stdout.strip()[:9]: n for n in range(9)}
+        result = self.scan("--range", "origin/master..HEAD")
+        self.assertNotEqual(result.returncode, 0)
+        flagged = [(commits[c], line) for c, line in
+                   (re.match(r"commit (\w+) message:(\d+)", l).groups() for l in result.stdout.splitlines()
+                    if l.startswith("commit "))]
+        self.assertEqual(flagged, [(3, "3"), (7, "1")])  # the sixth and second commits, newest first
+        files = sorted(l for l in result.stdout.splitlines() if not l.startswith("commit "))
+        self.assertEqual(files, ["a.md:2: private value (9 chars) from private-words.txt",
+                                 "docs/sub dir/c.md:3: private IP",
+                                 "docs/sub dir/c.md:3: private value (9 chars) from private-words.txt",
+                                 "old.md:2: private value (9 chars) from private-words.txt"])
+        self.assertIn("6 hit(s)", result.stderr)
+
+    def test_range_reads_every_message_with_one_git_log(self):
+        self.commit("one.md", "1\n", message="first\n\nwith a body")
+        self.commit("two.md", "2\n", message="second")
+        base = self.git("rev-parse", "origin/master").stdout.strip()
+        head = self.git("rev-parse", "HEAD").stdout.strip()
+        with patch.object(pc, "ROOT", str(self.repo)):
+            with patch.object(pc.subprocess, "run", wraps=subprocess.run) as run:
+                messages = pc.commit_messages(base, head)
+            self.assertEqual(run.call_count, 1)
+            self.assertEqual(pc.commit_messages(head, head), [])
+        self.assertEqual(messages, [(head, "second\n"), (self.git("rev-parse", "HEAD~1").stdout.strip(), "first\n\nwith a body\n")])
+
+    def test_range_fails_closed_on_unexpected_git_log_output(self):
+        for output in (b"not-an-oid\0message\0", b"%s\0message" % (b"a" * 40), b"%s\0" % (b"a" * 40)):
+            with self.subTest(output=output), patch.object(pc, "git", return_value=output):
+                with self.assertRaises(ValueError):
+                    pc.commit_messages("base", "head")
+        with patch.object(pc, "commit_messages", side_effect=ValueError("broken log")), \
+                patch.object(pc, "term_sources", return_value=({}, set(), set())), \
+                patch.object(pc, "module_paths", return_value=None), patch.object(pc, "commit_range", return_value=("b", "h")), \
+                patch.object(pc, "git", return_value=b""), patch.object(sys, "argv", ["privacy_check", "--range", "b..h"]):
+            with self.assertRaisesRegex(SystemExit, "scan did not complete"):
+                pc.main()
+
     def test_range_wants_two_ends(self):
         self.assertNotEqual(self.scan("--range", "HEAD").returncode, 0)
 
@@ -755,6 +972,144 @@ class RangeAndPushTests(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("pre-push: refused", result.stderr)
         self.assertNotIn("secretbox", result.stdout + result.stderr)
+
+    def test_pre_push_scans_first_push_against_origin_head(self):
+        self.git("update-ref", "refs/remotes/origin/main", "HEAD")
+        self.git("symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main")
+        remote = self.root / "remote.git"
+        self.run_command("git", "init", "-q", "--bare", str(remote))
+        clean = self.push_to(remote)
+        self.assertEqual(clean.returncode, 0, clean.stdout + clean.stderr)
+        self.git("checkout", "-q", "-b", "private-topic")
+        self.commit("new.md", "runs on secretbox\n")
+        # A stale legacy ref must not override the tracked default branch.
+        self.git("update-ref", "refs/remotes/origin/master", "HEAD")
+        result = self.run_command("git", "push", "-q", str(remote), "private-topic")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("pre-push: refused", result.stderr)
+        self.assertNotIn("secretbox", result.stdout + result.stderr)
+        self.assertNotEqual(self.run_command("git", "--git-dir", str(remote), "rev-parse", "--verify",
+                                            "refs/heads/private-topic").returncode, 0)
+
+    def test_pre_push_scans_main_without_origin_head(self):
+        self.git("update-ref", "refs/remotes/origin/main", "HEAD")
+        self.git("update-ref", "-d", "refs/remotes/origin/master")
+        remote = self.root / "remote.git"
+        self.run_command("git", "init", "-q", "--bare", str(remote))
+        self.commit("new.md", "runs on secretbox\n")
+        result = self.push_to(remote)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("pre-push: refused", result.stderr)
+
+    def test_pre_push_falls_back_to_existing_remote_ref(self):
+        self.git("update-ref", "-d", "refs/remotes/origin/master")
+        remote = self.root / "remote.git"
+        self.run_command("git", "init", "-q", "--bare", str(remote))
+        self.git("push", "--no-verify", "-q", str(remote), "topic")
+        self.commit("clean.md", "nothing private here\n")
+        result = self.push_to(remote)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.commit("new.md", "runs on secretbox\n")
+        result = self.push_to(remote)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("pre-push: refused", result.stderr)
+        deleted = self.run_command("git", "push", "-q", str(remote), ":topic")
+        self.assertEqual(deleted.returncode, 0, deleted.stdout + deleted.stderr)
+
+    def test_pre_push_refuses_new_branch_without_a_scan_base(self):
+        self.git("update-ref", "-d", "refs/remotes/origin/master")
+        remote = self.root / "remote.git"
+        self.run_command("git", "init", "-q", "--bare", str(remote))
+        result = self.push_to(remote)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("cannot find a scan base", result.stderr)
+
+
+class MessageTests(unittest.TestCase):
+    """--message reads text recorded as it is (merge-pr.sh: the PR's title and body); --commit-msg (the commit-msg hook)
+    reads the lines `git commit` records out of the file it hands the hook."""
+
+    run_command = PrivacyCheckIntegrationTests.run_command
+    git = PrivacyCheckIntegrationTests.git
+    scan = PrivacyCheckIntegrationTests.scan
+
+    def setUp(self):
+        PrivacyCheckIntegrationTests.setUp(self)
+        self.git("rm", "-qf", "scripts/hooks/pre-commit")  # only commit-msg: the staged content is clean
+        words = self.home / ".config/persona/private-words.txt"
+        words.parent.mkdir(parents=True)
+        words.write_text("secretbox\n")
+        (self.repo / "old.md").write_text("an old note about secretbox\n")
+        self.git("add", "old.md")
+        self.git("commit", "-q", "--no-verify", "-m", "base")
+        self.git("checkout", "-q", "-b", "secretbox-cleanup")  # the status comments name the branch
+        (self.repo / "secretbox-notes.txt").write_text("untracked\n")  # and untracked files
+        (self.repo / "old.md").write_text("an old note\n")  # takes the value out: `commit -v` shows it in its diff
+        self.git("add", "old.md")
+        # An editor that puts a title above what git wrote into the message file.
+        self.editor = self.root / "editor.sh"
+        self.editor.write_text('#!/bin/sh\n{ printf "%s\\n" "$TITLE"; cat "$1"; } > "$1.new" && mv "$1.new" "$1"\n')
+        self.editor.chmod(0o755)
+
+    def commit(self, *args, title=None, editor=None):
+        """git commit with the hook; with an editor when a title is given."""
+        env = dict(self.env)
+        if title is not None:
+            env.update({"GIT_EDITOR": str(editor or self.editor), "TITLE": title})
+        return self.run_command("git", "commit", "-q", *args, env=env)
+
+    def assert_refused(self, result, where=None):
+        output = result.stdout + result.stderr  # git sends a hook's output to stderr
+        self.assertNotEqual(result.returncode, 0, output)
+        self.assertRegex(output, r"commit message:%s: private value" % (r"\d+" if where is None else where))
+        self.assertNotIn("secretbox", output)
+
+    def assert_accepted(self, result, recorded=None):
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        if recorded is not None:
+            self.assertEqual(self.git("log", "-1", "--format=%B").stdout.strip(), recorded)
+
+    def test_message_checks_every_line_of_a_pr_body(self):
+        body = self.root / "pr.txt"
+        body.write_text("fix: a clean title\n\n## Summary on secretbox\n\n- clean\n")
+        self.assert_refused(self.scan("--message", str(body)), 3)
+
+    def test_hook_checks_the_hash_lines_that_m_records(self):
+        self.assert_refused(self.commit("-m", "fix: a clean title", "-m", "## Tested on secretbox"), 3)
+        body = self.root / "message.txt"
+        body.write_text("fix: a clean title\n\n# Tested on secretbox\n")
+        self.assert_refused(self.commit("-F", str(body)), 3)
+
+    def test_hook_skips_what_git_drops_after_the_editor(self):
+        self.assert_accepted(self.commit("-v", title="fix: a clean title"), "fix: a clean title")
+
+    def test_hook_checks_what_the_editor_keeps(self):
+        self.assert_refused(self.commit("-v", title="fix: tested on secretbox"), 1)
+
+    def test_hook_follows_the_comment_string(self):
+        # core.commentString is a synonym of core.commentChar; git uses the one set last, here ";".
+        self.git("config", "core.commentChar", "%")
+        self.git("config", "core.commentString", ";")
+        self.assert_refused(self.commit("-v", title="## Tested on secretbox"), 1)
+        self.assert_accepted(self.commit("-v", title="fix: a clean title"))
+
+    def test_hook_follows_commit_cleanup(self):
+        # whitespace: git records its comment block after the editor, which names the branch.
+        self.git("config", "commit.cleanup", "whitespace")
+        self.assert_refused(self.commit(title="fix: a clean title"))
+        # strip: git drops the comment lines of -m too.
+        self.git("config", "commit.cleanup", "strip")
+        self.assert_accepted(self.commit("-m", "fix: a clean title", "-m", "# dropped on secretbox"), "fix: a clean title")
+
+    def test_hook_splits_lines_as_git_does(self):
+        # Git ends a line only at \n: what follows a \r stays in the recorded line, and with CRLF line ends the
+        # scissors line ends nothing, so `commit -v` records the diff below it with the removed value.
+        self.assert_refused(self.commit(title="fix: a clean title\r# tested on secretbox"), 1)
+        crlf = self.root / "crlf-editor.sh"
+        crlf.write_text('#!/bin/sh\n{ printf "%s\\n" "$TITLE"; cat "$1"; } | awk \'{ printf "%s\\r\\n", $0 }\' > "$1.new"'
+                        ' && mv "$1.new" "$1"\n')
+        crlf.chmod(0o755)
+        self.assert_refused(self.commit("-v", title="fix: a clean title", editor=crlf))
 
 
 class GitBatchTests(unittest.TestCase):

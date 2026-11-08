@@ -13,10 +13,10 @@ final class PerfAssistantTests: PerfTestCase {
         sleep(2)
     }
 
-    /// A page the drawer (shell) or the profile (old layout) opens: `-openShellPage` / `-openAssistantPage`.
+    /// A page opened from the drawer: `-openShellPage`.
     @MainActor private func openPage(_ page: String, _ extra: [String] = []) {
         launch(["-dev.openChat", "", "-app.tab", "assistant", "-tab", "assistant"]
-               + (shell ? ["-openShellPage", page] : ["-openAssistantPage", page]) + extra)
+               + ["-openShellPage", page] + extra)
         sleep(2)
     }
 
@@ -110,11 +110,11 @@ final class PerfAssistantTests: PerfTestCase {
 
     // MARK: Switches and sheets
 
-    /// The switch between Persona and Agents (the shell's segment, the old layout's tab bar), and back.
+    /// The Shell switch between Assistant and Agents, and back.
     @MainActor func testTabSwitchAssistantAgents() throws {
         openMain()
-        let agents = shell ? app.buttons["shell-agents"].firstMatch : app.tabBars.buttons["Agents"]
-        let persona = shell ? app.buttons["shell-assistant"].firstMatch : app.tabBars.buttons["Persona"]
+        let agents = app.buttons["shell-agents"].firstMatch
+        let persona = app.buttons["shell-assistant"].firstMatch
         see(agents, "the Agents switch")
         measureTransition(navigation: false) {
             agents.tap()

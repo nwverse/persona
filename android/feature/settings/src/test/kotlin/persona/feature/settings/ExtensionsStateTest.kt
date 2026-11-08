@@ -287,6 +287,24 @@ class ExtensionsStateTest {
         assertEquals(ExtensionText.state(res, ext), ExtensionText.listLine(res, ext.copy(upgrade = u.copy(state = "available"))))
     }
 
+    // Switched off, the extension is not upgraded: its switch shows off whatever its own setting, which the hub keeps for when
+    // it is on again; a hub from before auto_upgrade_paused shows the switch as it is.
+    @Test fun theAutoUpgradeSwitchShowsOffWhilePaused() {
+        val ext = HubExtension("example-ui", "Example UI", "ui", "running")
+        for ((own, paused, shown) in listOf(
+            Triple(true, null, true),
+            Triple(false, null, false),
+            Triple(true, "disabled", false),
+            Triple(false, "disabled", false),
+        )) {
+            assertEquals("own $own, paused $paused", shown, ExtensionText.autoUpgradeShown(ext.copy(autoUpgrade = own, autoUpgradePaused = paused)))
+        }
+        val decoded = Json { ignoreUnknownKeys = true }.decodeFromString<HubExtension>(
+            """{"id":"x","name":"X","kind":"ui","status":"disabled","enabled":false,"auto_upgrade":true,"auto_upgrade_paused":"disabled"}""")
+        assertEquals("disabled", decoded.autoUpgradePaused)
+        assertFalse(ExtensionText.autoUpgradeShown(decoded))
+    }
+
     @Test fun aMachineListIsASwitchPerMachineSavedAtOnce() = runBlocking {
         val api = FakeExtensions(cua)
         val model = ExtensionModel(api, "cua", res)

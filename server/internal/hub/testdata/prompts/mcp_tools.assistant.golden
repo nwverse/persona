@@ -40,7 +40,7 @@
   },
   {
     "name": "mail_read",
-    "description": "Read one message in full: headers, plain text, HTML and the attachment list. Does not mark the message as read.",
+    "description": "Read one message in full: headers, plain text, HTML and the attachment list (each with its id for mail_save_attachment). Does not mark the message as read.",
     "input_schema": {
       "type": "object",
       "properties": {
@@ -58,6 +58,39 @@
       "required": [
         "account_id",
         "uid"
+      ],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "mail_save_attachment",
+    "description": "Save one attachment of a message (a PDF, CSV, xlsx, zip…) as a file on this computer, the one you run on, and return its path. The id is the one mail_read lists after the attachment. Files go under the Persona data directory's attachments/mail folder, in the subfolder dir if given; an existing file is never overwritten (the new one gets a numbered name). At most 25 MB. Does not mark the message as read. Read, unzip or move the saved file with your own tools afterwards.",
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "account_id": {
+          "type": "string"
+        },
+        "uid": {
+          "type": "integer"
+        },
+        "mailbox": {
+          "type": "string",
+          "description": "Mailbox name, default INBOX"
+        },
+        "attachment_id": {
+          "type": "string",
+          "description": "The id mail_read lists after the attachment"
+        },
+        "dir": {
+          "type": "string",
+          "description": "Subfolder to save into, relative (e.g. bills/2026-10); no absolute paths, '..' or hidden folders"
+        }
+      },
+      "required": [
+        "account_id",
+        "uid",
+        "attachment_id"
       ],
       "additionalProperties": false
     }
@@ -136,7 +169,7 @@
   },
   {
     "name": "ask_user",
-    "description": "Ask the user one or more multiple-choice questions on their iPhone (a card in this conversation plus a push notification) and wait for the answers. Use it to confirm anything risky (sending messages / email for them, deleting, changing live systems) or to let them pick between options. AskUserQuestion does not work here; use this instead. The user can also type a free-form answer. Waits up to 2 hours; if the user writes in this conversation instead of picking an option, the question is withdrawn and the tool returns at once, with their message following.",
+    "description": "Ask the user one or more multiple-choice questions on their iPhone (a card in this conversation plus a push notification) and wait for the answers. Use it to confirm anything risky (sending messages / email for them, deleting, changing live systems) or to let them pick between options. AskUserQuestion does not work here; use this instead. The user can also type a free-form answer. Waits up to 2 hours; if the user writes in this conversation instead of picking an option, the question is withdrawn and the tool returns at once, with their message following. If nobody answers in time, the question becomes a to-do that waits for the user's call (in their to-do list and the next briefing), and their answer comes to this conversation later as a new message.",
     "input_schema": {
       "type": "object",
       "required": [
@@ -332,6 +365,14 @@
     }
   },
   {
+    "name": "machines_list",
+    "description": "List the user's computers and their observed connection state, system information, resource availability, working agents, failing launchers and node version status. Use this before choosing where to start work. Resource samples older than 30 seconds are not current. Null values have an accompanying reason; do not infer missing facts or rank computers from incomplete data.",
+    "input_schema": {
+      "type": "object",
+      "properties": {}
+    }
+  },
+  {
     "name": "agents_list",
     "description": "The Claude Code / Codex agents running on the user's computers (herdr), with their state: needs_you (waiting for an answer / approval), working, unread (finished, result not looked at), idle. Each line has machine, session id, project, title, last update and the last thing the agent said. Known Claude Code switch states appear as ultracode=on/off; an omitted state is unknown. ultracode=on means every substantive task runs a multi-agent dynamic workflow, independently of thinking effort. Let it finish and wait for workflow results without nudging it. Much faster and more accurate than ssh + herdr. At the end: the launchers that failed their last health check, by machine (agent_start and task_plan move off them).\n\nA line under an agent is something waiting for the user: a question lists its options and the interaction id to answer it with (interaction_answer), an approval is the user's to give in the app.",
     "input_schema": {
@@ -345,9 +386,10 @@
             "working",
             "unread",
             "idle",
+            "archived",
             "all"
           ],
-          "description": "default active = needs_you + working + unread"
+          "description": "default active = needs_you + working + unread; archived: only the archived sessions (agent_unarchive restores them); the others leave archived ones out, all lists them marked archived"
         },
         "machine": {
           "type": "string"
@@ -461,7 +503,7 @@
   },
   {
     "name": "agent_start",
-    "description": "Start a new Claude Code agent in the terminal engine (herdr or Orca) of one of the user's computers, in a project directory, with a first prompt. Use for real development work instead of doing it here. Returns the new session id. When the launcher failed its last health check on that machine, the agent starts on a machine where it works (a directory under the home moves to that home) and the answer says so.\n\nWhen the work needs a branch and checkout of its own (work in parallel with what is already open in that repository), give `worktree.branch`: Persona makes the worktree through the machine's engine first (herdr's or Orca's own, so it is listed there and in the app, under the workspace `cwd` is in) and starts the agent in it. Do not tell the agent to run `git worktree add` itself: a worktree made that way is invisible to Orca and to the app. An existing local branch is checked out; a new one starts at the HEAD of the workspace `cwd` is in. A branch already checked out elsewhere is refused.\n\nGive `ultracode: true` for a large task: one that spans many files or needs checking from several angles (design, tests, review). Claude Code then runs every substantial step as a multi-agent workflow: slower and costlier, so leave it off for small or quick work. Do not write the word \"ultracode\" into the prompt instead. Claude Code agents only (2.1.284 or later): any other agent, or an older Claude Code, refuses the start. Whether it is really on shows as `ultracode=on` in agents_list once Claude Code confirms it.",
+    "description": "Start a new Claude Code agent in the terminal engine (herdr or Orca) of one of the user's computers, in a project directory, with a first prompt. Use for real development work instead of doing it here. Check machines_list for current machine resources and availability before choosing a machine. Returns the new session id. When the launcher failed its last health check on that machine, the agent starts on a machine where it works (a directory under the home moves to that home) and the answer says so.\n\nWhen the work needs a branch and checkout of its own (work in parallel with what is already open in that repository), give `worktree.branch`: Persona makes the worktree through the machine's engine first (herdr's or Orca's own, so it is listed there and in the app, under the workspace `cwd` is in) and starts the agent in it. Do not tell the agent to run `git worktree add` itself: a worktree made that way is invisible to Orca and to the app. An existing local branch is checked out; a new one starts at the HEAD of the workspace `cwd` is in. A branch already checked out elsewhere is refused.\n\nGive `ultracode: true` for a large task: one that spans many files or needs checking from several angles (design, tests, review). Claude Code then runs every substantial step as a multi-agent workflow: slower and costlier, so leave it off for small or quick work. Do not write the word \"ultracode\" into the prompt instead. Claude Code agents only (2.1.284 or later): any other agent, or an older Claude Code, refuses the start. Whether it is really on shows as `ultracode=on` in agents_list once Claude Code confirms it.",
     "input_schema": {
       "type": "object",
       "required": [
@@ -511,7 +553,7 @@
         },
         "model": {
           "type": "string",
-          "description": "Explicit model override; omit to use the tier or purpose default."
+          "description": "Explicit model override: a model id the agent takes (an alias such as opus, or a gateway's own id; letters, digits and . _ - / : @ [ ] only, or a leading ~ as in ~vendor/model-latest). Omit to use the tier or purpose default."
         }
       }
     }
@@ -549,6 +591,52 @@
         "expect_minutes": {
           "type": "integer",
           "description": "how long it should take from now; longer without progress counts as stuck"
+        }
+      }
+    }
+  },
+  {
+    "name": "agent_archive",
+    "description": "Archive a coding agent's session (from agents_list) when the user asks to archive or tidy up agents: it leaves the Agents list for Archived in the app, nothing is deleted, and agent_unarchive brings it back (never remove a session any other way). Persona also asks the agent's own tool to archive it where that tool has an archive (Codex); the result says whether it did (native: done / pending / unsupported). Without close the agent itself is not closed: one open on its computer stays open. With close, its agent is also closed on its computer the way a finished task's agent is (its tab and process go, its transcript stays, and the next message to it resumes it): only when the user asks to close it too, and the user confirms on the phone first (declined: nothing changes). A busy agent is refused and nothing changes: working, waiting for an answer or background work, and for close also a /loop, queued messages or a server it runs. When the close does not happen the session stays archived and still open on the computer, and the result says why: tell the user exactly that, not that it was closed. Not for Persona conversations (conversation_archive).",
+    "input_schema": {
+      "type": "object",
+      "required": [
+        "machine",
+        "session_id"
+      ],
+      "properties": {
+        "machine": {
+          "type": "string",
+          "description": "the machine's id or name, as agents_list shows it"
+        },
+        "session_id": {
+          "type": "string",
+          "description": "the agent's session id, or its first 8 characters"
+        },
+        "close": {
+          "type": "boolean",
+          "description": "also close its agent on the computer (asks the user on the phone first); default false: archive only"
+        }
+      }
+    }
+  },
+  {
+    "name": "agent_unarchive",
+    "description": "Bring an archived coding agent's session back into the Agents list (find it with agents_list and state archived). Nothing is reopened on the computer: a message to it (agent_send) resumes it. Persona also asks the agent's own tool to restore it where that tool archived it too; the result says whether it did.",
+    "input_schema": {
+      "type": "object",
+      "required": [
+        "machine",
+        "session_id"
+      ],
+      "properties": {
+        "machine": {
+          "type": "string",
+          "description": "the machine's id or name, as agents_list shows it"
+        },
+        "session_id": {
+          "type": "string",
+          "description": "the agent's session id, or its first 8 characters"
         }
       }
     }
@@ -599,10 +687,13 @@
   },
   {
     "name": "inbox_suggest",
-    "description": "Hand in your suggestion for the inbox event this conversation handles (one at a time: a new one replaces the last), and the event's recap. It waits in the user's inbox; nothing goes out until they confirm, and then the program does exactly what it says (you never send it yourself). `kind`: `reply` — one message to send, `text` in the user's voice, ready to go out as it is (no blanks to fill in like 【…】: leave out what you could not find and say so in `note`; for a Feishu sheet / Base item `changes` proposes moving rows' status: ref, field and one of the values the item lists); `agent` — an Agent to start, `text` its instruction (`machine` and `cwd` optional); `conclusion` — you dealt with it, `text` the conclusion, `outcome` `fyi` (worth knowing) or `done` (nothing to do). `handback: true` for one the user has to judge: their confirmation comes back here as an instruction instead of being carried out. `note`: one or two sentences on what you found and where. `recap`: the event's background, progress and where it is stuck (up to 600 characters), every time. `related`: ids of inbox items in other chats or sources this one is about. With only `recap` (no `kind`) it just updates the recap. Call it at the end of each turn.",
+    "description": "Hand in your suggestion for the inbox event this conversation handles (one at a time: a new one replaces the last), and the event's recap. It waits in the user's inbox; nothing goes out until they confirm, and then the program does exactly what it says (you never send it yourself). `kind`: `reply` — one message to send, `text` in the user's voice, ready to go out as it is (no blanks to fill in like 【…】: leave out what you could not find and say so in `note`; for a Feishu sheet / Base item `changes` proposes moving rows' status: ref, field and one of the values the item lists); `agent` — an Agent to start, `text` its instruction (`machine` and `cwd` optional); `conclusion` — you dealt with it, `text` the conclusion, `outcome` `fyi` (worth knowing) or `done` (nothing to do). `handback: true` for one the user has to judge: their confirmation comes back here as an instruction instead of being carried out. `note`: one or two sentences on what you found and where. `recap`: the event's background, progress and where it is stuck (up to 600 characters), every time. `related`: ids of inbox items in other chats or sources this one is about. With only `recap` (no `kind`) it just updates the recap. Call it at the end of each turn. In a conversation the user handed an inbox item to (its context block names the item's id), pass that id as `item` and call it when you have something to write back to the item; it refuses an item not handed to this conversation or one the user already filed: answer in the chat then.",
     "input_schema": {
       "type": "object",
       "properties": {
+        "item": {
+          "type": "string"
+        },
         "kind": {
           "type": "string",
           "enum": [
@@ -949,6 +1040,51 @@
     }
   },
   {
+    "name": "secret_run",
+    "description": "Run commands on one of the user's computers that need a password only the user knows, typically its sudo password. Never ask for a password in the conversation, in ask_user or anywhere else: call this instead. The user gets a card in the Persona app (iPhone, Mac, Vision Pro, Android or the web) showing the computer, your purpose and every command verbatim, types the password there and taps Run; that computer's node then runs exactly those commands in order, each as the user with /bin/sh -c in the home directory and PATH=/usr/bin:/bin:/usr/sbin:/sbin (give other tools by their absolute path). Only a command that runs sudo with -S gets the password, as a line on its stdin; every other command gets an empty stdin. Write sudo as `sudo -S -k -p '' …`, one sudo per command and never after a pipe (sudo would read the pipe; run a pipeline as root with `sudo -S -k -p '' sh -c '…'`); a sudo without -S is refused. Where a sudoers rule says NOPASSWD, sudo does not read stdin and the command it runs gets the password instead, so do not give such a command anything that reads stdin. Commands are printable ASCII only (letters, digits, punctuation, spaces), so the card shows exactly what runs. The first command that fails stops the run. Never write a command that prints, stores or sends the password. You never see the password: the result is JSON with status (ran, failed, declined, expired or refused), the computer, a message and, for ran and failed, each command's exit_code, timed_out and output (stdout and stderr, clipped to its end); when a command's output held the password, none of it comes back (output_withheld: true). A command stopped at the timeout may still be running as root: check its state before asking again. declined, expired and refused mean nothing ran: tell the user, and ask again only if they want to. Windows computers cannot run it.",
+    "input_schema": {
+      "type": "object",
+      "required": [
+        "machine",
+        "purpose",
+        "commands"
+      ],
+      "properties": {
+        "machine": {
+          "type": "string",
+          "description": "the computer to run on: its id or name, as agent_start takes it"
+        },
+        "purpose": {
+          "type": "string",
+          "description": "one sentence the card shows: why the password is needed"
+        },
+        "commands": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1,
+          "maxItems": 5,
+          "description": "1 to 5 one-line shell commands of printable ASCII, at most 1000 characters each, run in order"
+        },
+        "delivery": {
+          "type": "string",
+          "enum": [
+            "stdin"
+          ],
+          "description": "how the password reaches the commands: stdin, the default and only way"
+        },
+        "timeout_seconds": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 1800,
+          "description": "for the whole run, default 300"
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  {
     "name": "model_profiles_list",
     "description": "List editable model profiles, current profile, changed fields, rollback and recent audit events. Profiles contain model settings only, never credentials.",
     "input_schema": {
@@ -1151,7 +1287,7 @@
   },
   {
     "name": "task_plan",
-    "description": "Hand the user a plan of one or more tasks for agents on their computers, instead of starting agents yourself. Use it for any work that takes an agent (code, research in a repo, anything longer than a few tool calls); one task per independent piece of work. Fill in every field from what you know (the knowledge base, agents_list: which machine works in which directory, the user's habits); the user sees each choice as a chip they can change, with your one-line reason. Read-only tasks, tasks the user asked for themselves (user_requested), and kinds the user told you to start without asking, start at once; the rest wait as a card for the user's 开始. Either way this returns at once: don't wait, carry on. Each started task is a todo (todo id) whose progress shows in your context snapshot; send to a task's agent with agent_send. Quick things you can do with a tool yourself (a reminder, an event) are not tasks. A task whose launcher failed its last health check on its machine moves to a machine where it works; its why says so. From the main conversation you supervise what you hand out: give each task done_when (results you can check) and expect_minutes; you get a 督办 message when one needs you, and you close it with task_review, not by repeating its agent's words. The answer lists work already going on that looks like the same task: check it before you let both go on. A todo this conversation opened that has no agent yet (one opened from a Lark topic: the message that handed it to you names its id) is the task's own: give that id as the task's todo_id and the agent works on it, instead of a new todo being made; any other todo_id is refused with why.",
+    "description": "Hand the user a plan of one or more tasks for agents on their computers, instead of starting agents yourself. Use it for any work that takes an agent (code, research in a repo, anything longer than a few tool calls); one task per independent piece of work. Check machines_list for current machine resources and availability before choosing a machine. Fill in every field from what you know (the knowledge base, agents_list: which machine works in which directory, the user's habits); the user sees each choice as a chip they can change, with your one-line reason. Read-only tasks, tasks the user asked for themselves (user_requested), and kinds the user told you to start without asking, start at once; the rest wait as a card for the user's 开始. Either way this returns at once: don't wait, carry on. Each started task is a todo (todo id) whose progress shows in your context snapshot; send to a task's agent with agent_send. Quick things you can do with a tool yourself (a reminder, an event) are not tasks. A task whose launcher failed its last health check on its machine moves to a machine where it works; its why says so. From the main conversation you supervise what you hand out: give each task done_when (results you can check) and expect_minutes; you get a 督办 message when one needs you, and you close it with task_review, not by repeating its agent's words. The answer lists work already going on that looks like the same task: check it before you let both go on. A todo this conversation opened that has no agent yet (one opened from a Lark topic: the message that handed it to you names its id) is the task's own: give that id as the task's todo_id and the agent works on it, instead of a new todo being made; any other todo_id is refused with why.",
     "input_schema": {
       "type": "object",
       "required": [
@@ -1196,7 +1332,7 @@
               },
               "model": {
                 "type": "string",
-                "description": "model; empty: the launcher's default"
+                "description": "model id (an alias such as opus, or a gateway's own id; letters, digits and . _ - / : @ [ ] only, or a leading ~ as in ~vendor/model-latest); empty: the launcher's default"
               },
               "permission": {
                 "type": "string",
@@ -1257,7 +1393,7 @@
   },
   {
     "name": "task_review",
-    "description": "Review a task you handed out from this conversation (its todo id), after you checked its work yourself: each done_when criterion with its evidence (a PR link and that it merged, CI, a screenshot, what the live system answers) or what is missing. accepted closes the task (its agent is closed once it stays still); rework sends what is missing back to the same agent (resumed if it was closed) — at most 2 rounds, a third goes to the user instead; needs_user marks it waiting for the user's decision (ask them yourself: ask_user, or notify_user if they are away); cancelled ends it (a duplicate, no longer wanted). From a conversation other than the main one, on a task it does not supervise, only accepted and cancelled apply: send what is missing to its agent with agent_send. Use it on every task a 督办 message says waits for review; don't accept on the agent's word alone.",
+    "description": "Review a task you handed out from this conversation (its todo id), after you checked its work yourself: each done_when criterion with its evidence (a PR link and that it merged, CI, a screenshot, what the live system answers) or what is missing. accepted closes the task (its agent is closed once it stays still); rework sends what is missing back to the same agent (resumed if it was closed) — at most 2 rounds, a third goes to the user instead; needs_user marks it waiting for the user's decision (its conclusion card asks them; without one, ask them yourself: ask_user, or notify_user if they are away, as the answer says); cancelled ends it (a duplicate, no longer wanted). From a conversation other than the main one, on a task it does not supervise, only accepted and cancelled apply: send what is missing to its agent with agent_send. Use it on every task a 督办 message says waits for review; don't accept on the agent's word alone. On a supervised task, accepted and needs_user send the user one conclusion card in Lark: the verdict (done, cannot be done, or needs your decision), reason (one sentence), link (one), and for needs_user your recommend, which the user takes by answering \"OK\"; so give outcome, reason and link with accepted, and reason and recommend with needs_user, and don't push the same result again.",
     "input_schema": {
       "type": "object",
       "required": [
@@ -1305,6 +1441,26 @@
         "note": {
           "type": "string",
           "description": "rework: what the agent is to do (Chinese, concrete); needs_user: what the user is to decide; cancelled: why; accepted: the result in a line"
+        },
+        "outcome": {
+          "type": "string",
+          "enum": [
+            "done",
+            "cannot"
+          ],
+          "description": "accepted: done (the work is done or the answer is yes), or cannot (the task found it cannot be done); default done"
+        },
+        "reason": {
+          "type": "string",
+          "description": "accepted and needs_user: the conclusion card's one sentence of why (what the user is to decide, for needs_user), in the user's language; default the note's first line"
+        },
+        "link": {
+          "type": "string",
+          "description": "accepted and needs_user: the one link to the evidence (the PR, the page, the document); default the task's PR, a link in the note or checks, or the agent's conversation"
+        },
+        "recommend": {
+          "type": "string",
+          "description": "needs_user: the option you recommend, in a line; the user's \"OK\" takes it and it goes to the task's agent"
         }
       }
     }

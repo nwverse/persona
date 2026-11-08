@@ -8,7 +8,7 @@ final class LarkEntryTests: XCTestCase {
         let app = XCUIApplication()
         let pair = "persona://pair?url=" + hub.addingPercentEncoding(withAllowedCharacters: .alphanumerics)! + "&token=mock"
         app.launchArguments = ["-pairURL", pair, "-tab", connector ? "settings" : "assistant", "-demo.on", "NO",
-                               "-ui.oldLayout", "NO", "-openConnectorFeishu", connector ? "YES" : "NO",
+                               "-openConnectorFeishu", connector ? "YES" : "NO",
                                "-integrations.lark.enabled", "NO"]
         app.launchPinned()
         return app

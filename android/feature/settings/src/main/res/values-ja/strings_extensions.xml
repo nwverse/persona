@@ -220,6 +220,8 @@
     <string name="settings_ext_preview_note">パッケージはダウンロード済みで、sha256を確認しました。拡張機能はハブのマシンで実行されます。サンドボックスが実際に有効かどうかはインストール後の詳細で確認してください。</string>
     <string name="settings_ext_preview_expires">このプレビューは%1$s（UTC）に期限切れになります。</string>
     <string name="settings_ext_preview_cancel">インストールしない</string>
+    <string name="settings_ext_preview_expired">このプレビューは期限切れのため確定できません。もう一度プレビューして、現在のパッケージと権限を確認してください。</string>
+    <string name="settings_ext_preview_again">再プレビュー</string>
     <string name="settings_ext_uninstall_title">%1$sをアンインストールしますか？</string>
     <string name="settings_ext_uninstall_text">停止して設定とシークレットを削除します。提供しているコネクタも一緒に削除されます。</string>
     <string name="settings_ext_dependents_title">依存する拡張機能も無効にしますか？</string>
@@ -274,6 +276,7 @@
     <!-- Auto-upgrade (docs/extensions/extensions.md "Auto-upgrade") -->
     <string name="settings_ext_upgrade_title">アップグレード</string>
     <string name="settings_ext_upgrade_footer">マーケットに新しいバージョンが出ると、拡張機能がアイドル状態のときに自動でインストールされます。必要な権限が増える場合は先に確認します。インストール後に起動できない場合は元のバージョンに戻ります。</string>
+    <string name="settings_ext_upgrade_paused_footer">この拡張機能がオフの間、自動アップグレードは一時停止します。拡張機能をオンに戻すと、元の自動アップグレード設定に戻ります。</string>
     <string name="settings_ext_auto_upgrade">自動アップグレード</string>
     <string name="settings_ext_new_version">新しいバージョン %1$s</string>
     <string name="settings_ext_auto_upgrade_on">自動アップグレードをオンにしました</string>

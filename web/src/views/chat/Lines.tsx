@@ -49,6 +49,7 @@ function LineBody({ line, mid, sid, streaming, expandFold, onRetry, fix, assista
           mid={mid}
           sid={sid}
           streaming={line.live ? streaming : undefined}
+          batchedWords={!assistant}
           expandFold={expandFold}
           beforeWords={line.wakes && <WakeChip turn={line.wakes} mid={mid} sid={sid} expandFold={expandFold} />}
         />

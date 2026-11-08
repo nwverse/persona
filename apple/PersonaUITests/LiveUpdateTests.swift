@@ -33,10 +33,11 @@ final class LiveUpdateTests: XCTestCase {
 
     /// `chat`: opened as the chat left open last time. A cold start restores it only when the tab saved with it is
     /// Agents (`app.tab`), so that is given too: otherwise the tab the last run ended on (another test's) decided it.
-    private func launch(chat: String = "") {
+    private func launch(chat: String = "", _ extra: [String] = []) {
         app = XCUIApplication()
         let pair = "persona://pair?url=" + hub.addingPercentEncoding(withAllowedCharacters: .alphanumerics)! + "&token=mock"
         app.launchArguments = ["-pairURL", pair, "-app.tab", "chats", "-dev.openChat", chat, "-tab", "dev", "-openAgentsFresh", "YES", "-openChatsFresh", "YES", "-perfCounts", "YES"]
+            + extra
         app.launchPinned()
     }
 
@@ -97,12 +98,10 @@ final class LiveUpdateTests: XCTestCase {
     // (the machine list, the sections it folds) and jumped, or scrolled itself, under the finger choosing a machine.
     func testListMenuHoldsStillThroughUpdates() {
         launch()
-        // The tab bar's ⋯, or in the shell the selected Agents of the top switch (docs/apple/ios.md「新外壳」).
-        let classic = app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "分组：")).firstMatch
-        // Both pages carry the switch (the other one out of sight): the one that can be tapped.
-        XCTAssertTrue(classic.waitForExistence(timeout: 15) || app.buttons["shell-agents"].firstMatch.exists, "the list's options")
+        // Both retained pages carry the switch: use the one that can be tapped.
+        XCTAssertTrue(app.buttons["shell-agents"].firstMatch.waitForExistence(timeout: 15), "the list's options")
         let shells = app.buttons.matching(identifier: "shell-agents").allElementsBoundByIndex
-        let menuButton = classic.exists ? classic : (shells.first(where: { $0.isHittable }) ?? shells[0])
+        let menuButton = shells.first(where: { $0.isHittable }) ?? app.buttons["shell-agents"].firstMatch
         sleep(2)
         menuButton.tap()
         let machines = app.buttons["全部机器"]
@@ -241,27 +240,39 @@ final class LiveUpdateTests: XCTestCase {
         report("Agents list, searching", from: before, to: counts())
     }
 
-    // A row swiped open (Close showing) stays open while its agent keeps working.
-    @MainActor func testSwipedRowStaysOpenThroughUpdates() {
-        launch()
-        let row = app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "给天气 App 加主屏幕小组件")).firstMatch
+    // A row's ⋯ menu (#1244: the rows do not swipe) stays open while its agent keeps working: the menu is built again
+    // only when what it offers changes (`AgentRowMenu`'s ==), not on every push. In the list itself: one machine's
+    // agents (the widget's), so the row is near the top.
+    @MainActor func testARowMenuStaysOpenThroughUpdates() {
+        launch(["-dev.machineFilter", "macbook"])
         XCTAssertTrue(app.buttons["agents.filter.all"].waitForExistence(timeout: 15))
         sleep(2)
-        // The row starts below the cards that need you (#836), or under the tab bar on a smaller iPhone, where a swipe
-        // switches tabs instead (#488).
-        app.bringAboveTabBar(row)
-        let agents = app.tabBars.buttons["Agents"]
-        row.swipeLeft()
-        if agents.exists {
-            XCTAssertTrue(agents.isSelected, "the swipe switched tabs instead of opening the row")
-        }
-        let close = app.buttons["关闭"]
-        XCTAssertTrue(close.waitForExistence(timeout: 5), "the row's swipe actions")
-        churn()
-        XCTAssertTrue(close.exists, "the swipe actions are still open")
+        menuStaysOpen()
     }
 
-    // The Agents badge (the switch's in the shell, the tab's in the old layout) is the hub's: a question coming adds
+    // The same for a search result's ⋯ (a search result is a button, not a link).
+    @MainActor func testASearchResultsMenuStaysOpenThroughUpdates() {
+        launch()
+        XCTAssertTrue(app.buttons["agents.filter.all"].waitForExistence(timeout: 15))
+        sleep(2)
+        let field = app.revealAgentsSearch()
+        field.tap()
+        field.typeText("天气")
+        menuStaysOpen()
+    }
+
+    @MainActor private func menuStaysOpen() {
+        let more = app.buttons.matching(NSPredicate(format: "identifier == 'agents.row.more' AND label CONTAINS %@", "给天气 App 加主屏幕小组件")).firstMatch
+        // The row starts below the cards that need you (#836), or under the tab bar on a smaller iPhone (#488).
+        app.bringAboveTabBar(more)
+        more.tap()
+        let close = app.buttons["关闭 Agent…"]
+        XCTAssertTrue(close.waitForExistence(timeout: 5), "the row's menu")
+        churn()
+        XCTAssertTrue(close.exists, "the menu is still open")
+    }
+
+    // The Agents badge in the shell is the hub's: a question coming adds
     // one within 2 s, its answer takes it off again (docs/apple/ios-state.md「第 3 步」: counted in the model, published
     // when the number changes).
     @MainActor func testTheAgentsBadgeIsTheHubs() {
@@ -305,7 +316,7 @@ final class LiveUpdateTests: XCTestCase {
     /// The Agents badge's number: the shell's (「N 个需要你」, the whole label: a space's header ends the same way) or the Agents tab's value; 0 when there is none.
     private func agentsBadge() -> Int {
         let shell = app.descendants(matching: .any).matching(NSPredicate(format: "label MATCHES %@", "[0-9]+ 个需要你")).firstMatch
-        let text = shell.exists ? shell.label : (app.tabBars.buttons["Agents"].firstMatch.value as? String ?? "")
+        let text = shell.exists ? shell.label : ""
         return Int(text.prefix(while: \.isNumber)) ?? 0
     }
 

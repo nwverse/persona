@@ -218,7 +218,7 @@ func (s *Service) startConversation(ctx context.Context, p startParams) (proto.S
 }
 
 // Start is assistant.start: a conversation one of the hub's features starts (the inbox's AI twin), or the channels'
-// (feishu.go, channels_plugin.go). It is named after its first turn like the app's, unless it is untitled.
+// (feishu_message.go, channels_plugin.go). It is named after its first turn like the app's, unless it is untitled.
 func (s *Service) Start(ctx context.Context, p StartParams) (proto.Session, error) {
 	sess, err := s.start(ctx, p)
 	if err != nil {
@@ -570,6 +570,11 @@ func badRequest(err error, l ...i18n.Lang) error {
 	return &rpc.Error{Code: CodeBadRequest, Message: msg}
 }
 
+// appLang is the language an app's request came in (a bus call's lang), else the user's.
+func (s *Service) appLang(ctx context.Context, lang string) i18n.Lang {
+	return i18n.Lang(lang).Or(s.lang(ctx))
+}
+
 // SendParams is assistant.send_params: a message for conversation p.SessionID on p.MachineID, with what it runs on
 // filled in (sendModel) and, the first one to a new main conversation started empty, what the old one left before
 // its text. A conversation the machine does not list (yet) that is not the main one keeps what it runs on.
@@ -595,7 +600,7 @@ func (s *Service) SendParams(ctx context.Context, p SendParams) (map[string]any,
 		}
 	}
 	if err := s.sendModel(ctx, p.MachineID, p.SessionID, params); err != nil {
-		return nil, badRequest(err)
+		return nil, badRequest(err, s.appLang(ctx, p.Lang)) // a typed model that is no id is the app's user's to read
 	}
 	if text, ok := params["text"].(string); ok {
 		text = s.withWorkspaces(ctx, text) // an @-mentioned workspace: where it is and what worked there (workspace_mention.go)
@@ -614,10 +619,22 @@ func (s *Service) SendParams(ctx context.Context, p SendParams) (map[string]any,
 // message stayed there (#1518). A launcher or model that is gone falls back to the assistant's. A picked one is checked
 // and fingerprinted like a configured one. The phone's messages, the node's own and the follow-ups the assistant
 // schedules for itself (runTask) all go through here.
+//
+// A model picked for this message may be one the launcher's list does not have (typed in the chip, #1644): it has to
+// be a model id, and it is kept. Only a model carried over from what the conversation ran is held to the list (and the
+// ids typed for that launcher before), so a model the gateway dropped does not fail every later turn.
 func (s *Service) sendModel(ctx context.Context, machine, sid string, p map[string]any) error {
 	cfg := s.settings(ctx)
 	p["is_main"] = cfg.Main != "" && cfg.Main == sid && cfg.MachineID == machine
 	followsSetting := cfg.Main != "" && cfg.Main == sid && cfg.MachineID == machine || s.isTaskConversation(ctx, machine, sid)
+	picked := false // a model picked with this message
+	if m, ok := p["model"].(string); ok && strings.TrimSpace(m) != "" {
+		m = strings.TrimSpace(m)
+		if err := checkModelID(m); err != nil {
+			return err
+		}
+		p["model"], picked = m, true
+	}
 	l, _ := p["launcher"].(string)
 	if l == "" && !followsSetting {
 		if c, known := s.session(ctx, machine, sid); known {
@@ -625,8 +642,9 @@ func (s *Service) sendModel(ctx context.Context, machine, sid string, p map[stri
 			if l != "" {
 				p["launcher"] = l
 			}
-			if _, picked := p["model"]; !picked && c.Model != "" {
-				p["model"] = c.Model // and the model it runs, so no pick keeps it
+			// And the model it runs, so no pick keeps it; one that is no model id (Claude's "<synthetic>") is not.
+			if _, asked := p["model"]; !asked && proto.ValidModelID(c.Model) {
+				p["model"] = c.Model
 			}
 		}
 	}
@@ -640,7 +658,7 @@ func (s *Service) sendModel(ctx context.Context, machine, sid string, p map[stri
 			s.logf("[%s] %s: its launcher is gone, using %s", machine, short(sid), l)
 			p["launcher"] = l
 			delete(p, "model")
-		case model != "" && !s.launcherHasModel(ctx, machine, l, model):
+		case model != "" && !picked && !s.launcherHasModel(ctx, machine, l, model):
 			s.logf("[%s] %s: model %s is not in %s's list any more, using its default", machine, short(sid), model, l)
 			delete(p, "model")
 		}

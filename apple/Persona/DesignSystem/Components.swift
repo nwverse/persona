@@ -76,7 +76,7 @@ struct SessionAvatar: View {
                 .fill(Theme.Fill.chip)
                 .frame(width: size, height: size)
                 .overlay {
-                    Image(systemName: symbol ?? machine?.symbol ?? Theme.Icon.terminal)
+                    ThemedIcon(symbol ?? machine?.symbol ?? Theme.Icon.terminal)
                         .font(.system(size: size * 0.42, weight: .medium))
                         .foregroundStyle(tint)
                 }
@@ -168,7 +168,7 @@ struct Chip: View {
                 .background(Capsule().fill(fill))
                 .fixedSize()
         } else if AppStyle.current.usesBeautifulUI {
-            BUIPill(text, tone: pillTone, icon: symbol.map { .symbol($0) }, truncates: shrinks)
+            BUIPill(text, tone: pillTone, icon: symbol.map { .symbol(Theme.Icon.styled($0)) }, truncates: shrinks)
         } else {
             plain
         }
@@ -188,7 +188,7 @@ struct Chip: View {
         Group {
             if let symbol {
                 HStack(spacing: Theme.Space.xs) {
-                    Image(systemName: symbol).font(Theme.Font.labelStrong)
+                    ThemedIcon(symbol).font(Theme.Font.labelStrong)
                     Text(text).lineLimit(1)
                 }
             } else {
@@ -236,7 +236,7 @@ struct LinkBadge: View {
 
     var body: some View {
         HStack(spacing: Theme.Space.xs) {
-            Image(systemName: symbol).font(Theme.Font.label)
+            ThemedIcon(symbol).font(Theme.Font.label)
             Text(text).font(Theme.Font.labelMedium).lineLimit(1)
             if let detail, !detail.isEmpty {
                 Text(detail).font(Theme.Font.label).foregroundStyle(.secondary).lineLimit(1)
@@ -266,7 +266,7 @@ struct FilterChip: View {
         } else {
             Button(action: tapped) {
                 HStack(spacing: Theme.Space.xs) {
-                    if let symbol { Image(systemName: symbol).font(Theme.Font.label) }
+                    if let symbol { ThemedIcon(symbol).font(Theme.Font.label) }
                     Text(title)
                     if let count { Text(count > 99 ? "99+" : "\(count)").monospacedDigit().opacity(0.7) }
                 }
@@ -373,7 +373,7 @@ struct EmptyStateView: View {
     var body: some View {
         if AppStyle.current.usesBeautifulUI {
             // BeautifulUI's empty state: the mark on a raised tile, the title, a line of help and one action.
-            BUIEmptyState(symbol: symbol, title: title, message: message, actionTitle: action?.title, action: action?.run)
+            BUIEmptyState(symbol: Theme.Icon.styled(symbol), title: title, message: message, actionTitle: action?.title, action: action?.run)
                 .frame(maxWidth: .infinity)
         } else {
             plain
@@ -382,7 +382,7 @@ struct EmptyStateView: View {
 
     private var plain: some View {
         VStack(spacing: Theme.Space.l) {
-            Image(systemName: symbol)
+            ThemedIcon(symbol)
                 .font(Theme.Font.display).imageScale(.large)
                 .foregroundStyle((tint ?? Theme.accent).gradient)
                 .symbolEffect(.bounce, value: title)
@@ -442,6 +442,9 @@ struct CloseAgentSheet: View {
     @State private var closing = false
     @State private var failure: String?
     @State private var height: CGFloat = 380
+    /// The worktree Persona made that it works in (#6115), and what to do with it once it is closed.
+    @State private var worktree: WorktreeStatus?
+    @State private var cleanup = AgentWorktree.Cleanup()
 
     private var name: String {
         let n = session.agentName ?? session.title
@@ -463,7 +466,7 @@ struct CloseAgentSheet: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            Image(systemName: Theme.Icon.close)
+            ThemedIcon(Theme.Icon.close)
                 .font(Theme.Font.title)
                 .foregroundStyle(Theme.danger)
                 .scaledFrame(width: Theme.Size.box56, height: Theme.Size.box56)
@@ -498,6 +501,13 @@ struct CloseAgentSheet: View {
             .padding(.horizontal, Theme.Space.xl)
             .padding(.top, Theme.Space.xl)
 
+            if let worktree {
+                WorktreeCleanupSection(status: worktree, cleanup: $cleanup, home: model.machine(session.machineRef)?.home)
+                    .padding(.horizontal, Theme.Space.xl)
+                    .padding(.top, Theme.Space.m)
+                    .disabled(closing)
+            }
+
             if let failure {
                 Text(failure)
                     .font(Theme.Font.secondary)
@@ -516,6 +526,8 @@ struct CloseAgentSheet: View {
                         if await model.close(session.key) {
                             onClosed(session.key)
                             dismiss()
+                            // Once it is gone: the node refuses a worktree an agent still works in.
+                            if let worktree { await model.cleanUpWorktree(session.machineRef, worktree, cleanup) }
                         } else {
                             failure = model.toast?.message ?? String(localized: "Couldn't stop. The agent and its tab were kept; try again.")
                             closing = false
@@ -531,7 +543,8 @@ struct CloseAgentSheet: View {
                 .themedButton(prominent: true)
                 .tint(Theme.danger)
                 .keyboardShortcut(.defaultAction)
-                .disabled(closing)
+                .disabled(closing || !AgentWorktree.ready(worktree, cleanup))
+                .accessibilityIdentifier("agent.close.confirm")
                 Button { dismiss() } label: {
                     Text("Cancel").lineLimit(1).font(Theme.Font.heading).scaledFrame(maxWidth: .infinity, minHeight: Theme.Size.wellS)
                 }
@@ -549,27 +562,34 @@ struct CloseAgentSheet: View {
         .presentationDetents([.height(height)])
         .presentationDragIndicator(.visible)
         .interactiveDismissDisabled(closing)
+        .task { worktree = await model.ourWorktree(session) }
+        .animation(Theme.Motion.layout, value: worktree)
     }
 
     private func fact(_ symbol: String, _ text: String) -> some View {
         Label {
             Text(text).font(Theme.Font.secondary).fixedSize(horizontal: false, vertical: true)
         } icon: {
-            Image(systemName: symbol).font(Theme.Font.secondary).foregroundStyle(.secondary).scaledFrame(width: Theme.Size.iconS)
+            ThemedIcon(symbol).font(Theme.Font.secondary).foregroundStyle(.secondary).scaledFrame(width: Theme.Size.iconS)
         }
     }
 }
 
 /// Asks before Delete Chat: says that it only leaves the lists (every app's), and that the record on the computer stays and
 /// brings it back once used again. Delete runs it; a failure shows as the toast and the conversation stays.
+/// When the agent worked in a worktree Persona made (#6115), its computer is asked first and the question is a sheet that
+/// also offers to keep or remove the worktree (`DeleteAgentSheet`).
 struct DeleteSessionConfirmation: ViewModifier {
     @Environment(AppModel.self) private var model
     @Binding var session: Session?
     var onDeleted: (SessionKey) -> Void = { _ in }
+    /// What is shown for `session`: the alert, or the sheet with its worktree; nil while its computer is asked.
+    @State private var alerting: Session?
+    @State private var withWorktree: DeleteAgentSheet.Request?
 
     func body(content: Content) -> some View {
-        content.alert("Delete This Chat?", isPresented: Binding(get: { session != nil }, set: { if !$0 { session = nil } }),
-                      presenting: session) { s in
+        content.alert("Delete This Chat?", isPresented: Binding(get: { alerting != nil }, set: { if !$0 { alerting = nil; session = nil } }),
+                      presenting: alerting) { s in
             Button("Delete", role: .destructive) {
                 Task { if await model.deleteSession(s.key) { onDeleted(s.key) } }
             }
@@ -578,6 +598,89 @@ struct DeleteSessionConfirmation: ViewModifier {
             Text(DeleteSessionText.message(title: s.displayTitle, machine: model.machine(s.machineRef)?.title,
                                            resume: s.canTerminal ? s.resumeCommand : nil))
         }
+        .sheet(item: $withWorktree, onDismiss: { session = nil }) { r in
+            DeleteAgentSheet(session: r.session, worktree: r.worktree, onDeleted: onDeleted)
+        }
+        .task(id: session?.key) {
+            guard let s = session else { return }
+            // A short wait at most: an unanswered computer leaves the plain question.
+            let wt = await model.ourWorktree(s, timeout: 4)
+            guard !Task.isCancelled, session?.key == s.key else { return }
+            if let wt { withWorktree = .init(session: s, worktree: wt) } else { alerting = s }
+        }
+    }
+}
+
+/// Delete Chat for an agent that worked in a worktree Persona made: the question, the worktree's keep / remove, Delete.
+struct DeleteAgentSheet: View {
+    struct Request: Identifiable {
+        var session: Session
+        var worktree: WorktreeStatus
+        var id: SessionKey { session.key }
+    }
+
+    @Environment(AppModel.self) private var model
+    @Environment(\.dismiss) private var dismiss
+    var session: Session
+    var worktree: WorktreeStatus
+    var onDeleted: (SessionKey) -> Void
+    @State private var cleanup = AgentWorktree.Cleanup()
+    @State private var deleting = false
+    @State private var height: CGFloat = 360
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: Theme.Space.m) {
+            Text("Delete This Chat?").font(Theme.Font.title)
+            Text(DeleteSessionText.message(title: session.displayTitle, machine: model.machine(session.machineRef)?.title,
+                                           resume: session.canTerminal ? session.resumeCommand : nil))
+                .font(Theme.Font.secondary)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            WorktreeCleanupSection(status: worktree, cleanup: $cleanup, home: model.machine(session.machineRef)?.home)
+                .disabled(deleting)
+            VStack(spacing: Theme.Space.m) {
+                Button(role: .destructive) {
+                    deleting = true
+                    Haptics.tap()
+                    Task {
+                        if await model.deleteSession(session.key) {
+                            onDeleted(session.key)
+                            dismiss()
+                            await model.cleanUpWorktree(session.machineRef, worktree, cleanup)
+                        } else {
+                            deleting = false
+                        }
+                    }
+                } label: {
+                    Group {
+                        if deleting { ProgressView().tint(Theme.onSolid) } else { Text("Delete").lineLimit(1) }
+                    }
+                    .font(Theme.Font.heading)
+                    .scaledFrame(maxWidth: .infinity, minHeight: Theme.Size.wellS)
+                }
+                .themedButton(prominent: true)
+                .tint(Theme.danger)
+                .keyboardShortcut(.defaultAction)
+                .disabled(deleting || !AgentWorktree.ready(worktree, cleanup))
+                .accessibilityIdentifier("chat.delete.confirm")
+                Button { dismiss() } label: {
+                    Text("Cancel").lineLimit(1).font(Theme.Font.heading).scaledFrame(maxWidth: .infinity, minHeight: Theme.Size.wellS)
+                }
+                .themedButton()
+                .keyboardShortcut(.cancelAction)
+                .disabled(deleting)
+            }
+            .controlSize(.large)
+            .padding(.top, Theme.Space.s)
+        }
+        .padding(.horizontal, Theme.Space.xl)
+        .padding(.top, Theme.Space.xxl)
+        .padding(.bottom, Theme.Space.m)
+        .fixedSize(horizontal: false, vertical: true)
+        .onGeometryChange(for: CGFloat.self, of: { $0.size.height }) { height = $0 }
+        .presentationDetents([.height(height)])
+        .presentationDragIndicator(.visible)
+        .interactiveDismissDisabled(deleting)
     }
 }
 
@@ -644,7 +747,7 @@ struct LoadableContent<Value, Content: View>: View {
             content(value)
         case .failed(let message):
             if AppStyle.current.usesBeautifulUI {
-                BUIEmptyState(symbol: Theme.Icon.error, title: message, actionTitle: retry == nil ? nil : String(localized: "Retry [Components b8784c]"), action: retry)
+                BUIEmptyState(symbol: Theme.Icon.styled(Theme.Icon.error), title: message, actionTitle: retry == nil ? nil : String(localized: "Retry [Components b8784c]"), action: retry)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
                 ContentUnavailableView {

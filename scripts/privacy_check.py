@@ -3,8 +3,10 @@
 
     python3 scripts/privacy_check.py            # tracked files (content and paths)
     python3 scripts/privacy_check.py --staged   # what `git commit` is about to record, plus its message file if given
-    python3 scripts/privacy_check.py --staged --message .git/COMMIT_EDITMSG
+    python3 scripts/privacy_check.py --staged --commit-msg .git/COMMIT_EDITMSG   # the commit-msg hook (commit_msg_lines)
     python3 scripts/privacy_check.py --range origin/master..HEAD   # what those commits change, and their messages
+    python3 scripts/privacy_check.py --range origin/<base>..<head> --message <file>   # plus text recorded as it is,
+                                                     # every line (merge-pr.sh: the PR's title and body, the squash message)
 
 What counts as private comes from this machine, never from the repo: the values of ~/.config/persona/config.json
 (hosts, hub address, machine names, Apple ids, emails), ~/.config/persona/private-words.txt (one word per line:
@@ -18,15 +20,18 @@ Not private: loopback addresses (127.0.0.0/8, ::1, also with a port or as a URL'
 CLAUDE.local.md holds one, hosts under the example domains (RFC 2606, RFC 6761: example and example.com/.net/.org,
 and the .test, .invalid and .localhost TLDs) held there as placeholders, the documentation and IETF protocol ranges
 (192.0.0.0/24), an `xcode` in /Applications,
-values config.example.json ships as defaults, a config value made only of ASCII letters that a `!word` line in
+values config.example.json ships as defaults, exact generic provisioning profile labels already published in origin/main's
+mapping/fixture (only under app_store.provisioning_profiles), a config value made only of ASCII letters that a `!word` line in
 private-words.txt takes back (an ordinary word, a machine id named after a room), the repo's own Go module path (it
 names the GitHub owner),
 CLAUDE.local.md spans that only name repo files, commands or config keys, a listed word of one case run where the text
 spells it only across a camel-case join ("fooBar", only_in_camel_joins), and in site/ the contact address and domain
 the App Store and the OAuth consent screen publish anyway.
 """
-import io, ipaddress, json, os, re, subprocess, sys
+import ast, io, ipaddress, json, os, plistlib, re, subprocess, sys
+from functools import lru_cache
 from urllib.parse import unquote, urlsplit
+from xml.parsers.expat import ExpatError
 
 ROOT = subprocess.run(["git", "-C", os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
                        "rev-parse", "--show-toplevel"], capture_output=True, text=True, check=True).stdout.strip()
@@ -81,6 +86,64 @@ def standard_app(key, value):
     return key == "xcode" and re.fullmatch(r"/Applications/[\w .-]+\.app/?", value) is not None
 
 
+def profile_labels(source, function_name):
+    """Read public literal profile labels, never execute a config helper or a historical fixture."""
+    try:
+        tree = ast.parse(source)
+    except SyntaxError:
+        return set()
+    labels = set()
+    for function in tree.body:
+        if not isinstance(function, ast.FunctionDef) or function.name != function_name:
+            continue
+        for node in ast.walk(function):
+            if not isinstance(node, ast.Assign):
+                continue
+            names = {target.id for target in node.targets if isinstance(target, ast.Name)}
+            if function_name == "provisioning_profiles" and "profiles" in names and isinstance(node.value, ast.Dict):
+                labels.update(value.value for value in node.value.values
+                              if isinstance(value, ast.Constant) and isinstance(value.value, str) and value.value.strip())
+            if function_name != "export_options" or "plist" not in names:
+                continue
+            value = node.value
+            marker = "__privacy_dynamic_field__"
+            if isinstance(value, ast.JoinedStr):
+                text = "".join(part.value if isinstance(part, ast.Constant) and isinstance(part.value, str)
+                               else marker for part in value.values)
+            elif isinstance(value, ast.Constant) and isinstance(value.value, str):
+                text = value.value
+            else:
+                continue
+            try:
+                options = plistlib.loads(text.encode())
+                profiles = options.get("provisioningProfiles", {}) if isinstance(options, dict) else {}
+            except (ValueError, plistlib.InvalidFileException, ExpatError):
+                continue
+            if isinstance(profiles, dict):
+                labels.update(name for name in profiles.values()
+                              if isinstance(name, str) and name.strip() and marker not in name)
+    return labels
+
+
+@lru_cache(maxsize=1)
+def public_profile_labels():
+    """Exact generic labels already published as defaults or deployment fixture data (#1245)."""
+    source_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    sources = (("scripts/persona_config.py", "provisioning_profiles"),
+               ("scripts/test/fixtures/deployment/persona_config.py.fixture", "export_options"))
+    labels = set()
+    for path, function in sources:
+        try:
+            source = subprocess.run(["git", "-C", source_root, "show", "origin/main:" + path],
+                                    capture_output=True, text=True, timeout=10)
+        except (OSError, subprocess.TimeoutExpired):
+            continue
+        if source.returncode == 0:
+            labels.update(profile_labels(source.stdout, function))
+        # No published definition means no waiver; adding a private label in this PR cannot approve itself.
+    return frozenset(labels)
+
+
 def config_values():
     """The config's values, each with the key paths it is held under, and the subset that is published on purpose
     (PUBLIC_KEYS)."""
@@ -100,6 +163,8 @@ def config_values():
             key = key_path[-1] if key_path else ""
             if key in ("os", "simulator") or o in defaults or standard_app(key, o):
                 continue
+            if len(key_path) == 3 and key_path[:2] == ("app_store", "provisioning_profiles") and o in public_profile_labels():
+                continue  # Only this config source is generic; another key or an explicit private word still wins.
             if key == "url" or key.endswith("_url"):
                 o = url_term(o)
                 if not o:
@@ -268,6 +333,10 @@ IPV4 = re.compile(r"(?<!\d)(?<!\d\.)(\d{1,3}(?:\.\d{1,3}){3})(?!\d|\.\d)")
 # as a cloud metadata address).
 DOC_NETS = [ipaddress.ip_network(n) for n in ("192.0.2.0/24", "198.51.100.0/24", "203.0.113.0/24", "192.0.0.0/24")]
 EMAIL = re.compile(r"[A-Za-z0-9._%+-]+@([A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,})")
+# What every IPV4 and EMAIL match holds. Both patterns try every start position (EMAIL backtracks at each word start);
+# problems() runs them only on a line that has the hint, which a quick scan finds.
+IPV4_HINT = re.compile(r"\d\.\d")
+EMAIL_HINT = re.compile(r"[A-Za-z0-9._%+-]@[A-Za-z0-9-]")
 # Placeholders (example domains, public mail providers, noreply) are fine; so are made-up TLDs (the fixture redactor
 # scrambles domains): only addresses at a real-looking domain of somebody's are flagged.
 OK_EMAIL_DOMAINS = re.compile(r"(^|\.)(example(\.(com|org|net))?|test|invalid|localhost|users\.noreply\.github\.com|anthropic\.com|"
@@ -286,6 +355,12 @@ PUBLIC_DIRS = ("site/",)
 # private configuration needed. This file is the only place they are spelled, as patterns.
 BANNED_NAMES = re.compile(r"aster[-_ ]?gate|open[-_ ]?lark|open[-_ ]?wechat|extensions[-_ ]?internal|corp[-_ ]?link",
                           re.IGNORECASE)
+# The same pattern without IGNORECASE, run on the lowercased line problems() already has: about twice as fast. It finds
+# the same spans when lowering kept every character in place (same length) and the line holds neither of the two
+# characters IGNORECASE also takes for a pattern letter but lower() leaves alone (dotless i, long s); otherwise
+# problems() falls back to BANNED_NAMES.
+BANNED_NAMES_LOWER = re.compile(BANNED_NAMES.pattern)
+CASE_FOLD_ONLY = ("\u0131", "\u017f")
 
 
 CAMEL_JOIN = re.compile(r"[a-z][A-Z]")
@@ -312,15 +387,18 @@ def problems(text, words, emails=True):
                 found.append(w)
         elif w.lower() in low and not only_in_camel_joins(text, w):
             found.append(w)
-    found += [m.group(0) for m in BANNED_NAMES.finditer(text)]
-    for m in IPV4.finditer(text):
+    if len(low) == len(text) and not any(c in text for c in CASE_FOLD_ONLY):
+        found += [text[m.start():m.end()] for m in BANNED_NAMES_LOWER.finditer(low)]
+    else:
+        found += [m.group(0) for m in BANNED_NAMES.finditer(text)]
+    for m in IPV4.finditer(text) if "." in text and IPV4_HINT.search(text) else ():
         try:
             ip = ipaddress.ip_address(m.group(1))
         except ValueError:
             continue
         if ip.is_private and not ip.is_loopback and not ip.is_unspecified and not any(ip in n for n in DOC_NETS):
             found.append(m.group(1))
-    for m in EMAIL.finditer(text) if emails else ():
+    for m in EMAIL.finditer(text) if emails and "@" in text and EMAIL_HINT.search(text) else ():
         domain = m.group(1).lower()
         if not OK_EMAIL_DOMAINS.search(domain) and domain.rsplit(".", 1)[-1] in REAL_TLDS:
             found.append(m.group(0))
@@ -457,6 +535,19 @@ def git_file_data(files, prefix):
     return data
 
 
+GIT_OID = re.compile(rb"[0-9a-f]{40}|[0-9a-f]{64}")
+
+
+def commit_messages(base, head):
+    """(commit, message) of every commit in base..head, newest first, from one `git log` instead of one per commit (a
+    long range spent most of its time starting git). Git ends %B at a NUL byte, so NULs only separate the fields; no
+    signature check output, which log.showSignature would mix into the messages."""
+    parts = git("log", "-z", "--no-show-signature", "--format=%H%x00%B", base + ".." + head).split(b"\0")
+    if len(parts) % 2 != 1 or parts[-1] or not all(GIT_OID.fullmatch(c) for c in parts[0:-1:2]):
+        raise ValueError("unexpected git log output")
+    return [(parts[i].decode(), parts[i + 1].decode("utf-8", "replace")) for i in range(0, len(parts) - 1, 2)]
+
+
 def commit_range(spec):
     """<base>..<head>: the fork point of the two (what a branch adds on top of base), and head."""
     base, sep, head = spec.partition("..")
@@ -467,10 +558,61 @@ def commit_range(spec):
     return base, head
 
 
+def git_config(key):
+    """The value Git uses for key ("" when unset)."""
+    result = subprocess.run(["git", "-C", ROOT, "config", "--get", key], capture_output=True, text=True)
+    if result.returncode == 1:
+        return ""
+    result.check_returncode()
+    return result.stdout.strip()
+
+
+def comment_string():
+    """The string git starts comment lines with, read from its config by git itself (core.commentChar or
+    core.commentString, the one set last; `auto` gives `#`)."""
+    commented = subprocess.run(["git", "-C", ROOT, "stripspace", "--comment-lines"], input="x\n", capture_output=True,
+                               text=True, check=True).stdout
+    comment = commented.rpartition(" x\n")[0]
+    if not comment:  # an empty prefix would skip every line
+        sys.exit("privacy_check: cannot tell git's comment string")
+    return comment
+
+
+CUT_LINE = " ------------------------ >8 ------------------------"
+
+
+def commit_msg_lines(path):
+    """(line number, line) of the file `git commit` hands its commit-msg hook, for the lines the commit records.
+
+    Git cleans the file up after the hook. When it opened an editor (otherwise it sets GIT_EDITOR=: for the hook), the
+    default cleanup drops the comment lines (hints, branch, local paths) and everything from the scissors line down
+    (the `commit -v` diff); a message from -m or -F keeps its lines that start with the comment string (Markdown
+    headings) unless commit.cleanup is strip. Lines end at \n only, as in git. Not visible here: --cleanup and -v given
+    to `git commit` (git ends a message at the scissors line only with -v, commit.verbose or cleanup scissors) and the
+    character `auto` picks; pre-push's --range scan reads every line of what was recorded.
+    """
+    edited = os.environ.get("GIT_EDITOR") != ":"
+    cleanup = git_config("commit.cleanup") or "default"
+    strip = cleanup == "strip" or (cleanup == "default" and edited)
+    comment = comment_string()
+    text = open(path, encoding="utf-8", errors="replace", newline="").read()  # as --range decodes recorded messages
+    for n, line in enumerate(text.split("\n"), 1):
+        if edited and line == comment + CUT_LINE:
+            break
+        if not (strip and line.startswith(comment)):
+            yield n, line
+
+
+def option(name):
+    """The argument after name on the command line (None without name)."""
+    return sys.argv[sys.argv.index(name) + 1] if name in sys.argv else None
+
+
 def main():
     staged = "--staged" in sys.argv
-    message = sys.argv[sys.argv.index("--message") + 1] if "--message" in sys.argv else None
-    span = commit_range(sys.argv[sys.argv.index("--range") + 1]) if "--range" in sys.argv else None
+    message = option("--message")
+    commit_msg = option("--commit-msg")
+    span = commit_range(option("--range")) if "--range" in sys.argv else None
     sources, public_words, waivable = term_sources()
     words = list(sources)
     modules = module_paths()
@@ -527,15 +669,22 @@ def main():
             for w in problems(line, allowed, emails=not public):
                 report(f, n, w)
     if span:
-        for c in filter(None, git("rev-list", span[0] + ".." + span[1]).decode().split()):
-            for n, line in enumerate(git("log", "-1", "--format=%B", c).decode("utf-8", "replace").splitlines(), 1):
+        try:
+            messages = commit_messages(*span)
+        except (ValueError, subprocess.CalledProcessError):
+            sys.exit("privacy_check: cannot read commit messages; scan did not complete")
+        for c, body in messages:
+            for n, line in enumerate(body.splitlines(), 1):
                 for w in problems(line, words):
                     report("commit " + c[:9] + " message", n, w)
+    lines = []
     if message and os.path.exists(message):
-        for n, line in enumerate(open(message).read().splitlines(), 1):
-            if not line.startswith("#"):
-                for w in problems(line, words):
-                    report("commit message", n, w)
+        lines.extend(enumerate(open(message).read().splitlines(), 1))
+    if commit_msg and os.path.exists(commit_msg):
+        lines.extend(commit_msg_lines(commit_msg))
+    for n, line in lines:
+        for w in problems(line, words):
+            report("commit message", n, w)
     for f, where, kind in bad:
         print("%s:%s: %s" % (f, where, kind))
     if bad:

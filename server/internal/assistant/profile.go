@@ -29,7 +29,10 @@ import (
 const settingsKey = "assistant"
 
 // assistantRel is this manager's assistant directory on a machine, relative to its home (node assistant.prepare):
-// .persona/assistant for the built-in manager, .persona/assistant-<id> for another (identity.AssistantDirName).
+// assistant for the built-in manager, assistant-<id> for another (identity.AssistantDirName), in the state directory. It
+// is spelled with the former state directory's name (compat.StateDir), which older nodes join to HOME as it is; a
+// current node resolves either spelling to the state directory it runs on (node/assistant_guest.go assistantDirOf,
+// #1681), so the spelling never decides where the directory is.
 func (s *Service) assistantRel() string {
 	return path.Join(compat.StateDir, identity.AssistantDirName(s.id))
 }
@@ -315,11 +318,12 @@ func stateDirOn(home, dataDir, name string) string {
 
 type assistantView struct {
 	Settings
-	Manager        string          `json:"manager"`
-	Cwd            string          `json:"cwd"`
-	Conversations  []proto.Session `json:"conversations"`
-	NotesEffective string          `json:"notes_effective"`  // what the assistant is told about the user
-	MainTasksQuiet bool            `json:"main_tasks_quiet"` // in effect (the setting's own is left out while unset)
+	Manager            string             `json:"manager"`
+	PermissionDefaults permissionDefaults `json:"permission_defaults"`
+	Cwd                string             `json:"cwd"`
+	Conversations      []proto.Session    `json:"conversations"`
+	NotesEffective     string             `json:"notes_effective"`  // what the assistant is told about the user
+	MainTasksQuiet     bool               `json:"main_tasks_quiet"` // in effect (the setting's own is left out while unset)
 	// StartRequestedTasks is in effect, like MainTasksQuiet.
 	StartRequestedTasks bool `json:"start_requested_tasks"`
 	// RecordingDays and DoneNeedsDelivery are in effect, like MainTasksQuiet.
@@ -337,7 +341,7 @@ func (s *Service) view(ctx context.Context, withArchived bool, space ...string) 
 	}
 	v := s.settings(ctx)
 	v.Launcher = s.launcherNow(ctx)
-	out := assistantView{Settings: v, Manager: s.managerIdentity(), Conversations: []proto.Session{}, NotesEffective: s.notes(ctx), MainTasksQuiet: quietOn(v.MainTasksQuiet),
+	out := assistantView{Settings: v, Manager: s.managerIdentity(), PermissionDefaults: s.permissionDefaults(), Conversations: []proto.Session{}, NotesEffective: s.notes(ctx), MainTasksQuiet: quietOn(v.MainTasksQuiet),
 		StartRequestedTasks: quietOn(v.StartRequestedTasks), RecordingDays: s.recordingDays(ctx),
 		DoneNeedsDelivery: v.DoneNeedsDelivery != nil && *v.DoneNeedsDelivery}
 	if d, ok := s.device(ctx, v.MachineID); ok {

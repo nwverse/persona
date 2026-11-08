@@ -315,6 +315,9 @@ struct SettingsView: View {
         }
         let tunneled = model.hub.flatMap { model.tunnel($0.group) }?.routed == true
         if let t = model.hub.flatMap({ model.inAppTunnelState($0.group) }), t.routed { return String(localized: "Connected to hub · via \(t.route.title)") }
+        if model.hub.flatMap({ model.localProxyState($0.group) })?.routed == true {
+            return String(localized: "Connected to hub · via \(String(localized: "Local Proxy"))")
+        }
         return tunneled ? String(localized: "Connected to hub · via SSH tunnel") : String(localized: "Connected to hub")
     }
 
@@ -338,10 +341,11 @@ struct SettingsView: View {
         else if d.bool(forKey: "openNotificationSettings") { p.append(SettingsPage.notifications) }
         else if d.string(forKey: "openAssistantPage") != nil { p.append(SettingsPage.assistant) }
         else if d.bool(forKey: "openDevices") { p.append(SettingsPage.devices) }
-        else if d.bool(forKey: "openHubs") || d.bool(forKey: "openSSHTunnel") {
+        else if d.bool(forKey: "openHubs") || d.bool(forKey: "openSSHTunnel") || d.bool(forKey: "openLocalProxy") {
             p.append(SettingsPage.hubs)
-            // `-openSSHTunnel YES`: the first hub's Settings › hub › SSH Tunnel (screenshots).
+            // `-openSSHTunnel YES` / `-openLocalProxy YES`: the first hub's Settings › hub › SSH Tunnel / Local Proxy (screenshots).
             if d.bool(forKey: "openSSHTunnel"), let first = model.registry.hubs.first { p.append(SettingsPage.sshTunnel(first.id)) }
+            if d.bool(forKey: "openLocalProxy"), let first = model.registry.hubs.first { p.append(SettingsPage.localProxy(first.id)) }
         }
         else if d.bool(forKey: "openHubUpdate") { p.append(SettingsPage.hub) }
         else if d.bool(forKey: "openManagers") || d.string(forKey: "openManagerPage") != nil || d.bool(forKey: "showManagerCode") {
@@ -387,9 +391,9 @@ struct SettingsView: View {
         else if d.bool(forKey: "openConnectorDevice") { p.append(SettingsPage.phoneData) }
         else if d.bool(forKey: "openTranslationSettings") { p.append(SettingsPage.translation) }
         else if d.bool(forKey: "openTriageSettings") { p.append(SettingsPage.triage) }
-        else if let a = d.string(forKey: "openAppearance") { // persona (or YES, or icon: the icon is the Avatar's) | color | style | layout | scheme
+        else if d.string(forKey: "openAppearance") == "chat" { p.append(SettingsPage.chatLayout) } // New Conversation Layout (#1666)
+        else if let a = d.string(forKey: "openAppearance") { // persona (or YES, or icon: the icon is the Avatar's) | color | style | scheme
             p.append(a == "color" ? SettingsPage.themeColor : a == "style" ? SettingsPage.style
-                     : a == "layout" ? SettingsPage.layout
                      : a == "scheme" ? SettingsPage.colorScheme : SettingsPage.persona)
         }
         else if d.bool(forKey: "openModelConfiguration") {
@@ -449,9 +453,11 @@ struct SettingsView: View {
 
 /// The pages of Settings that are not routes of their own elsewhere.
 enum SettingsPage: Hashable {
-    case persona, themeColor, style, layout, colorScheme, language, assistant, claude, codex, devices, phoneData, mail, feishu, feishuBot, notifications, storage, translation, modelConfiguration
+    case persona, themeColor, style, colorScheme, language, assistant, claude, codex, devices, phoneData, mail, feishu, feishuBot, notifications, storage, translation, modelConfiguration
     /// Settings › Session Triage (docs/assistant/agent-work.md「开关」).
     case triage
+    /// Settings › Appearance › New Conversation Layout (#1666, `ChatLayout`).
+    case chatLayout
     /// Settings › hub: the hubs paired, by group (docs/protocol/multi-hub.md).
     case hubs
     case hub, skills
@@ -472,6 +478,8 @@ enum SettingsPage: Hashable {
     /// Settings › hub › SSH Tunnel of one paired hub (its id; docs/operations/network.md「经 SSH 隧道连 hub」).
     case sshTunnel(String)
     case inAppTunnel(String)
+    /// Settings › hub › Local Proxy of one paired hub (docs/operations/network.md "Connecting to hub through a local SOCKS5 proxy").
+    case localProxy(String)
     /// Settings › Managers, and one manager by its id (docs/assistant/managers.md).
     case managers
     case manager(String)
@@ -503,11 +511,11 @@ private struct SettingsDestinations: ViewModifier {
         case .themeColor: ThemeColorSettingsPage()
         case .style: StyleSettingsPage()
         case .language: LanguageSettingsPage()
+        case .chatLayout: ChatLayoutSettingsPage()
         #if os(iOS) || os(visionOS)
-        case .layout: LayoutSettingsPage()
         case .colorScheme: ColorSchemeSettingsPage()
         #else
-        case .layout, .colorScheme: EmptyView()
+        case .colorScheme: EmptyView()
         #endif
         case .assistant: AssistantProfileView()
         case .claude: ClaudeSettingsView()
@@ -527,6 +535,7 @@ private struct SettingsDestinations: ViewModifier {
         case .hubs: HubsView()
         case .sshTunnel(let id): HubSSHTunnelPage(hubID: id)
         case .inAppTunnel(let id): HubInAppTunnelPage(hubID: id)
+        case .localProxy(let id): HubLocalProxyPage(hubID: id)
         case .managers: ManagersView()
         case .manager(let id): ManagerDetailView(id: id)
         case .sent: SentView()
@@ -681,7 +690,7 @@ private struct SourceIcon: View {
         if let icon = source.appIcon {
             BrandMark(icon, side: Theme.Size.wellS)
         } else {
-            Image(systemName: source.symbol)
+            ThemedIcon(source.symbol)
                 .font(Theme.Font.heading)
                 .foregroundStyle(.white)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -776,14 +785,14 @@ struct WelcomeView: View {
                 .padding(.top, Theme.Space.sm)
                 .padding(.horizontal, Theme.Space.xl)
             VStack(alignment: .leading, spacing: Theme.Space.l) {
-                feature("bubble.left.and.text.bubble.right", String(localized: "Get things done by chatting"), String(localized: "It reads files and runs commands on your computer, and asks you before it acts"))
+                feature(Theme.Icon.agentChat, String(localized: "Get things done by chatting"), String(localized: "It reads files and runs commands on your computer, and asks you before it acts"))
                 feature("bolt.horizontal", String(localized: "See what it's doing, live"), String(localized: "Thinking, tool calls, and the terminal, streamed"))
                 #if os(macOS)
                 feature(Theme.Icon.click, String(localized: "Decide in one window"), String(localized: "Answer questions, approve plans, and allow tools without switching to the terminal"))
                 feature(Theme.Icon.mailAccounts, String(localized: "Bring your mail and iPhone"), String(localized: "Gmail and other mail; calendar, contacts, and photos from Persona on your iPhone"))
                 #else
-                feature("hand.tap", String(localized: "Decide on your phone"), String(localized: "Answer questions, approve plans, and allow tools, even on your watch"))
-                feature("iphone.gen3", String(localized: "Bring your phone and mail"), String(localized: "Calendar, reminders, contacts, health, photos, Gmail"))
+                feature(Theme.Icon.tap, String(localized: "Decide on your phone"), String(localized: "Answer questions, approve plans, and allow tools, even on your watch"))
+                feature(Theme.Icon.thisDevice, String(localized: "Bring your phone and mail"), String(localized: "Calendar, reminders, contacts, health, photos, Gmail"))
                 #endif
             }
             .padding(.top, 40)
@@ -846,7 +855,7 @@ struct WelcomeView: View {
 
     private func feature(_ symbol: String, _ title: String, _ detail: String) -> some View {
         HStack(alignment: .top, spacing: Theme.Space.l) {
-            Image(systemName: symbol)
+            ThemedIcon(symbol)
                 .font(Theme.Font.title)
                 .foregroundStyle(Theme.accent)
                 .scaledFrame(width: Theme.Size.wellS)
@@ -1164,6 +1173,8 @@ struct ClaudeSettingsView: View {
     @State private var loading = false
     @State private var error: String?
     @State private var strings: [String: String] = [:]
+    /// Live Replies of the machine shown (Claude Code only; nil before it loads, and gone on a hub without it).
+    @State private var liveReplies: LiveRepliesModel?
 
     var body: some View {
         SettingsForm {
@@ -1186,6 +1197,9 @@ struct ClaudeSettingsView: View {
                 ForEach(settings) { s in row(s) }
             }
             #endif
+            if agent == .claude, let live = liveReplies, live.ref == ref, !live.unsupported {
+                LiveRepliesSection(model: live, others: applyAll ? model.machines.filter { $0.online && $0.ref != ref }.map(\.ref) : [])
+            }
             if agent == .claude, !machineID.isEmpty { ClaudeDirsSection(ref: ref) }
         }
         .themedPage()
@@ -1193,7 +1207,19 @@ struct ClaudeSettingsView: View {
         .onAppear { if machineID.isEmpty { machineID = model.hubRef(model.hubMachineID).path } } // first visit: the hub's machine
         .overlay { if loading && settings.isEmpty { ProgressView() } }
         .task(id: machineID) { await load() }
-        .refreshable { await load() }
+        .task(id: agent == .claude ? machineID : "") { await loadLiveReplies() }
+        .refreshable {
+            await load()
+            await liveReplies?.load()
+        }
+    }
+
+    /// The machine's Live Replies switch, read again whenever another machine is picked.
+    private func loadLiveReplies() async {
+        guard agent == .claude, !machineID.isEmpty else { return }
+        let live = LiveRepliesModel(ref: ref, deps: .live(model))
+        liveReplies = live
+        await live.load()
     }
 
     @ViewBuilder private func row(_ s: APIClient.ClaudeSetting) -> some View {
@@ -1296,7 +1322,7 @@ struct SettingsRow: View {
     var body: some View {
         if AppStyle.current.usesBeautifulUI {
             BUIListRow(title, value: value.flatMap { $0.isEmpty ? nil : $0 }) {
-                if let brand { SettingsBrandMark(asset: brand) } else { BUIIconTile(symbol, tint: tint) }
+                if let brand { SettingsBrandMark(asset: brand) } else { IconTile(symbol, tint: tint) }
             }
         } else if let value {
             LabeledContent {

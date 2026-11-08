@@ -11,7 +11,7 @@ final class LarkNativeEncryptionFlowTests: XCTestCase {
         let app = XCUIApplication()
         let pair = "persona://pair?url=" + hub.addingPercentEncoding(withAllowedCharacters: .alphanumerics)! + "&token=mock"
         app.launchArguments = ["-pairURL", pair, "-tab", inbox ? "mail" : "feishu", "-demo.on", "NO",
-            "-ui.oldLayout", "NO", "-integrations.lark.enabled", "YES",
+            "-integrations.lark.enabled", "YES",
             "-inbox.source", "", "-inbox.kind", "mention", "-openInboxFirst", "NO"]
         app.launchPinned()
         if !inbox {

@@ -24,7 +24,8 @@ import (
 const SpaceHealth = identity.SpaceHealth
 
 // healthRel is this manager's health space directory on a machine, relative to its home (node assistant.prepare):
-// .persona/health for the built-in manager, .persona/health-<id> for another (identity.HealthDirName).
+// health for the built-in manager, health-<id> for another (identity.HealthDirName), in the state directory, spelled as
+// assistantRel is.
 func (s *Service) healthRel() string { return path.Join(compat.StateDir, identity.HealthDirName(s.id)) }
 
 // healthCwd is this manager's health space directory on d, or "" while d has not reported its home.

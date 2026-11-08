@@ -50,6 +50,20 @@ struct ExtensionUpgradeTests {
         #expect(ExtensionText.upgradeNote(ExtensionUpgradeNote(kind: "rolled_back", from: "1.0.0", to: "1.1.0", at: at)) == "1.1.0 起不来，已回到 1.0.0")
     }
 
+    /// Switched off, the extension is not upgraded: its switch shows off (and greyed out) whatever its own setting, which
+    /// the hub keeps for when it is on again; a hub from before auto_upgrade_paused shows the switch as it is.
+    @Test(arguments: [
+        (#""auto_upgrade":true"#, nil, true),
+        (#""auto_upgrade":false"#, nil, false),
+        (#""auto_upgrade":true,"auto_upgrade_paused":"disabled""#, "disabled", false),
+        (#""auto_upgrade":false,"auto_upgrade_paused":"disabled""#, "disabled", false),
+    ] as [(String, String?, Bool)])
+    func theSwitchShowsOffWhilePaused(fields: String, paused: String?, shown: Bool) throws {
+        let p = try JSON.decoder.decode(HubExtension.self, from: Data(#"{"id":"x","name":"X","kind":"ui","status":"running",\#(fields)}"#.utf8))
+        #expect(p.autoUpgradePaused == paused)
+        #expect(ExtensionText.autoUpgradeShown(p) == shown)
+    }
+
     @Test func theExtensionsSwitchGoesToTheHub() async throws {
         let hub = FakeHub()
         hub.on("GET", "/api/v1/plugins/example-gateway/-/", json: Self.gateway)
