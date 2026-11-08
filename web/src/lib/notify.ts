@@ -5,6 +5,7 @@
 import { useSyncExternalStore } from "react";
 import { t } from "../i18n";
 import { api, enc } from "./api";
+import { isDelegating } from "./delegate";
 import { sessionTitle } from "./format";
 import { interactionAsk } from "./inbox";
 import { plainMarkdown } from "./plain-markdown";
@@ -385,10 +386,11 @@ export interface Waiting {
   reason?: string;
 }
 
-/** The session's card the notification is about: the oldest one pending for it (the one the overview lists first). */
+/** The session's card the notification is about: the oldest one pending for it (the one the overview lists first), not
+ *  one the assistant is still looking at (nothing is pushed for those). */
 export function waitingCard(interactions: readonly Interaction[], s: Pick<Session, "machine_id" | "session_id">): Interaction | undefined {
   return interactions
-    .filter((ix) => ix.machine_id === s.machine_id && ix.session_id === s.session_id)
+    .filter((ix) => ix.machine_id === s.machine_id && ix.session_id === s.session_id && !isDelegating(ix))
     .sort((a, b) => byTime(a.created_at, b.created_at) || a.id.localeCompare(b.id))[0];
 }
 
