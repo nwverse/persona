@@ -41,7 +41,7 @@ func (c *Client) chatCompletions(ctx context.Context, hc *http.Client, key strin
 			resp.Body.Close()
 			// Some models reject max_tokens and explicitly ask for the newer name. Retry only that
 			// rejected request; arbitrary 400s and already-started streams must never be replayed.
-			if attempt == 0 && r.MaxTokens > 0 && resp.StatusCode == http.StatusBadRequest && useCompletionTokens(raw) {
+			if attempt == 0 && r.MaxTokens > 0 && resp.StatusCode == http.StatusBadRequest && ChatRequiresCompletionTokens(raw) {
 				delete(body, "max_tokens")
 				body["max_completion_tokens"] = r.MaxTokens
 				continue
@@ -54,7 +54,8 @@ func (c *Client) chatCompletions(ctx context.Context, hc *http.Client, key strin
 	}
 }
 
-func useCompletionTokens(raw []byte) bool {
+// ChatRequiresCompletionTokens recognizes a rejected token field that explicitly requests its replacement.
+func ChatRequiresCompletionTokens(raw []byte) bool {
 	var envelope struct {
 		Error struct {
 			Message string `json:"message"`

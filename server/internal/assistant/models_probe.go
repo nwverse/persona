@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/ai"
 	"github.com/nwverse/persona/server/internal/apierr"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/proto"
@@ -327,7 +328,7 @@ func (s *Service) providerTest(ctx context.Context, in probeInput) map[string]an
 	if err == nil && t.api == "chat" && res.StatusCode == http.StatusBadRequest {
 		raw, readErr := io.ReadAll(io.LimitReader(res.Body, 4096))
 		res.Body.Close()
-		if readErr == nil && chatProbeUseCompletionTokens(raw) {
+		if readErr == nil && ai.ChatRequiresCompletionTokens(raw) {
 			delete(payload, "max_tokens")
 			payload["max_completion_tokens"] = 256
 			body, _ = json.Marshal(payload)
@@ -364,21 +365,6 @@ func (s *Service) providerTest(ctx context.Context, in probeInput) map[string]an
 	}
 	out["ms"] = int(time.Since(started).Milliseconds())
 	return out
-}
-
-// chatProbeUseCompletionTokens mirrors the runtime's narrow retry rule for a rejected token field.
-func chatProbeUseCompletionTokens(raw []byte) bool {
-	var envelope struct {
-		Error struct {
-			Message string `json:"message"`
-		} `json:"error"`
-	}
-	if json.Unmarshal(raw, &envelope) != nil {
-		return false
-	}
-	message := strings.ToLower(envelope.Error.Message)
-	return strings.Contains(message, "max_tokens") && strings.Contains(message, "max_completion_tokens") &&
-		(strings.Contains(message, "unsupported") || strings.Contains(message, "not supported"))
 }
 
 // responsesProbeCompleted requires the same terminal event as the runtime, within the response budget.
