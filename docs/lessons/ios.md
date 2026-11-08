@@ -2,6 +2,10 @@
 
 Pitfalls, odd behavior and the decisions made at the time (formerly "Lessons" in `CLAUDE.md`; index in `docs/lessons/README.md`). Add new lessons to the relevant section, or create one if none fits.
 
+## Hosted minimum-Xcode initialization and the stock simulator boot (#1218)
+
+Pin both `DEVELOPER_DIR` and the disposable hosted runner's system Xcode selection, then run that Xcode's first-launch initialization before downloading platforms or creating a simulator: an environment variable selects foreground tools but not the system selection background platform services use. Keep system-wide selection/initialization in the hosted workflow, not the locally runnable Apple script. This did not fix the stock iOS 26.0 boot either: with it, hosted runs booted in 103 s, timed out at the 900-second `simctl bootstatus` deadline (device `Booted`, 71 GiB free), then booted in 76 s; main without it timed out twice. The hang is intermittent and its cause is still unknown. It is not the dyld shared cache: the hosted image ships only newer iOS runtimes (26.2, 26.4.1, 26.5) and downloads 26.0.1 on every run, but an explicit `xcrun simctl runtime dyld_shared_cache update com.apple.CoreSimulator.SimRuntime.iOS-26-0` right after the download returned in 0.8 s with `dyld shared cache is usable` (the identifier form is accepted), so the cache already existed before the boot. Keep the 900-second boot deadline, the stock profile, the pinned 26.0.x runtime and no automatic retries unless the maintainer decides otherwise; treat a single green boot as no proof either way and record the boot time of each hosted run.
+
 ## System extension credentials and compiler-free acceptance (#1147)
 
 A widget's App Group snapshot must not reuse Fleet's appearance store: it contains credentials, needs first-unlock protection and must clear removed groups. Serialize cross-process atomic writes and fence late render replies by pairing generation plus invalidation revision. Namespace caches and entity/deep-link identities by hub group; identical contribution ids on different hubs are not interchangeable. Export watch-only configs into a separate wrist App Group, never fall back to phone credentials, and preserve empty WidgetCenter reports as full replacement.
@@ -1371,3 +1375,13 @@ DEBUG 的代码可能在 `Persona.debug.dylib` 中，40 KiB 的 `Persona` 只是
 - **Now**: with `sessions_lookup` in the hub's hello (`APIClient.sessionLookup`, set in `HubLink.api`), `sessionListDetail` asks once for the exact `machine_id` + `session_id` (`summary=0`, no `since` or `cursor`; the old paging is kept for hubs without the feature, never send `session_id` to those, since they ignore it and answer with an unrelated page). It returns nil when nothing matches, and the background read then does nothing. Other failures of the request go by the same `isQuiet` rule as before: a cancellation, a timeout and no network are not shown, the rest is.
 - **What this does not hide**: a session whose transcript cannot be read (for instance a main chat id that no computer has a transcript for) still shows an error. The hub's catch-up push on subscribe fails (its detail says the transcript was not found) and `AppModel` writes the hub's generic "request could not be completed" message into `chat.error`; showing an error there is right, and belongs to reading the transcript, not to this detail read. Read from the code, not seen on a device: before this change the two errors went into the same `chat.error` and the one written last showed.
 - **Rule**: a read the user did not ask for, run for every open, answers "not found" with nil and keeps the error line for failures of the request. Tests: `SessionListTests` (`aHubWithLookupIsAskedOnceForTheExactSession`, `aChatOnAnUnlistedSessionShowsNoError`, `theHubLinkOffersLookupOnlyWhenTheHelloDoes`).
+
+## Selectable text under a tappable header eats the header's taps (2026-11-08, #1542)
+
+- **What went wrong**: Persona's folded message line (`AgentSentLine`) opened to its text with `.textSelection(.enabled)` right
+  under the header. Once open, taps on the header's words did nothing: the selectable text took touches a little above its
+  own frame, so only the chevron (to the right of the text's column) folded it. The UI test caught it (`SentToAgentTests`
+  folding at 0.6 / 0.8 of the header failed, at 0.95 passed); without the modifier every spot folds.
+- **Now**: the open text is plain, with a Copy button under it. Don't put `.textSelection(.enabled)` directly under a header
+  that toggles on tap; if a selectable body is needed, give it its own gap or make the toggle a separate control. Test the
+  fold by tapping the header's words, not just its chevron.

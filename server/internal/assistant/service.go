@@ -97,6 +97,7 @@ type Service struct {
 	sched      schedule          // schedule.go
 	tasks      tasksState        // tasks.go
 	questions  questions         // tools.go (ask_user)
+	askTodos   askTodoBook       // ask_todo.go: the questions nobody answered, now to-dos
 	live       contextState      // context.go
 	todos      todoBook          // todos.go
 	work       workBook          // agents_work.go: the Agents business

@@ -1,7 +1,8 @@
 import SwiftUI
 
 // What Persona and a task's agent say to each other in the new conversation layout (#1666, `ChatLayout`): Persona's
-// message to the task (feed `routed`) reads "Persona → @task", the agent's report (feed `report`) "task → @Persona".
+// message to the task (feed `routed` with `from` "assistant", #1542) reads "Persona → @task", the agent's report (feed
+// `report`) "task → @Persona"; what the user sends a task (`routed` without `from`) "Me → @task".
 // Both on Persona's side, in its gray box, folded to the layout's lines with Expand under them. No evidence list under a
 // report: the links in its words open where they are. The hub's fields as they are; nothing new from it.
 
@@ -31,6 +32,29 @@ struct RoutedExchange: View {
         .padding(.trailing, Theme.Space.xxl)
         .chatPinned("routed-" + item.id)
         .accessibilityIdentifier("exchange.routed")
+    }
+}
+
+/// What the user said straight to a task (its card's Message; `routed` without `from`): the user's own words, on
+/// the user's side in the user's box, "Me → @task" over them. Never folded.
+struct UserRoutedExchange: View {
+    var item: FeedItem
+    var taskTitle: String
+
+    var body: some View {
+        VStack(alignment: .trailing, spacing: Theme.Space.xs) {
+            ExchangeHeader(from: String(localized: "Me"), to: taskTitle)
+            Text(ExchangeText.linked(item.text ?? ""))
+                .font(Theme.Font.body)
+                .lineHeight(.body)
+                .foregroundStyle(.primary)
+                .tint(Theme.accent)
+                .fixedSize(horizontal: false, vertical: true)
+                .chatBoxed(Theme.ChatBox.user)
+        }
+        .frame(maxWidth: .infinity, alignment: .trailing)
+        .padding(.leading, Theme.Space.xxl)
+        .accessibilityIdentifier("exchange.userRouted")
     }
 }
 

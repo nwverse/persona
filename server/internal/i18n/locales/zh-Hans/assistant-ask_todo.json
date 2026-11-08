@@ -1,0 +1,9 @@
+{
+  "notes_asked": "{when} 在「{conversation}」里问的，到点没人回，就放在这里等你拍板。",
+  "notes_question": "问题：{question}",
+  "notes_options": "选项：",
+  "notes_options_multi": "选项（可以多选）：",
+  "notes_option": "- {label}",
+  "notes_option_described": "- {label}：{description}",
+  "notes_how": "在这条待办里记下你的决定（或在它的话题里回复），决定会发回那段对话，待办随后关闭。不记决定直接关掉，那段对话会收到「这个问题不用答了」。"
+}
