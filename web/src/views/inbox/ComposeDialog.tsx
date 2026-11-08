@@ -6,7 +6,7 @@ import { useEffect, useRef, useState } from "react";
 import { errorText } from "../../lib/api";
 import type { MailAccount } from "../../lib/inbox";
 import { badAddresses, parseAddresses, sendMail, type ComposeDraft } from "../../lib/mail";
-import { useItemManager } from "../../lib/manager-choice";
+import { defaultManager, useItemManager } from "../../lib/manager-choice";
 import { t } from "../../i18n";
 import { Button, Dialog, toast } from "../../ui/atoms";
 import { composing } from "../../lib/send-history";
@@ -20,10 +20,18 @@ function keptDraft(key: string, fresh: ComposeDraft): ComposeDraft {
 
 const fieldClass = "h-8 min-w-0 flex-1 rounded-control bg-field px-2.5 text-[12.5px] text-ink shadow-inset-field outline-none placeholder:text-ink-3 focus:shadow-[inset_0_0_0_1px_var(--accent)]";
 
-export function ComposeDialog({ draftKey, initial, accounts, onClose }: { draftKey: string; initial: ComposeDraft; accounts: MailAccount[]; onClose: () => void }) {
-  const [d, setD] = useState(() => keptDraft(draftKey, initial));
-  // a reply to another manager's mail goes out through that manager (ItemManager; a new mail: the default's)
+type ComposeDialogProps = { draftKey: string; initial: ComposeDraft; accounts: MailAccount[]; onClose: () => void };
+
+export function ComposeDialog(props: ComposeDialogProps) {
+  // Both retained drafts and live form state belong to the owner, including an explicitly stamped default manager.
+  // Keep the item context unchanged for sends; resolve the default only for draft identity.
   const manager = useItemManager();
+  const key = JSON.stringify([manager || defaultManager(), props.draftKey]);
+  return <OwnedComposeDialog key={key} {...props} draftKey={key} manager={manager} />;
+}
+
+function OwnedComposeDialog({ draftKey, initial, accounts, onClose, manager }: ComposeDialogProps & { manager?: string }) {
+  const [d, setD] = useState(() => keptDraft(draftKey, initial));
   const [sending, setSending] = useState(false);
   const [error, setError] = useState("");
   const body = useRef<HTMLTextAreaElement>(null);
