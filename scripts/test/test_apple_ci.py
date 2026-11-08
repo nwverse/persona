@@ -89,7 +89,10 @@ class AppleCIPreparationTests(unittest.TestCase):
 
     def test_ios_runtime_cache_is_built_before_the_bounded_boot(self):
         script = SCRIPT.read_text()
-        cache = script.index('xcrun simctl runtime dyld_shared_cache update "$IOS_RUNTIME"')
+        cache = script.index('Build the iOS $IOS_RUNTIME dyld shared cache')
+        self.assertIn('dyld_shared_cache update "$1"', script)
+        self.assertNotIn('dyld_shared_cache update --force', script)
+        self.assertNotIn('--force', script.split('Build the iOS $IOS_RUNTIME dyld shared cache', 1)[1].split('\n\n', 1)[0])
         self.assertLess(script.index('IOS_RUNTIME="$runtime"'), cache)
         self.assertLess(cache, script.index("Create and boot stock iOS 26.0 test simulator"))
         # The boot deadline itself stays as it was.
