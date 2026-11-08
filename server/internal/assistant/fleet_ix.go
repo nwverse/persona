@@ -1004,21 +1004,43 @@ const redactedValue = "<redacted>"
 
 // redacted is the resolution as the history keeps it: secret fields say they were filled in, not what with.
 func redacted(ix proto.Interaction, r proto.Resolution) proto.Resolution {
-	if len(r.Values) == 0 {
-		return r
+	if (ix.Secret || ix.Dialog != nil) && r.Text != "" {
+		r.Text = redactedValue
 	}
-	secret := map[string]bool{}
-	for _, f := range ix.Fields {
-		secret[f.Key] = f.Secret
-	}
-	vals := make(map[string]string, len(r.Values))
-	for k, v := range r.Values {
-		if secret[k] {
-			v = redactedValue
+	if len(r.Values) > 0 {
+		secret := map[string]bool{}
+		for _, f := range ix.Fields {
+			secret[f.Key] = f.Secret
 		}
-		vals[k] = v
+		vals := make(map[string]string, len(r.Values))
+		for k, v := range r.Values {
+			if secret[k] || secretName.MatchString(k) {
+				v = redactedValue
+			}
+			vals[k] = v
+		}
+		r.Values = vals
 	}
-	r.Values = vals
+	if len(r.Content) > 0 {
+		var schema struct {
+			Properties map[string]struct {
+				Format    string `json:"format"`
+				WriteOnly bool   `json:"writeOnly"`
+			} `json:"properties"`
+		}
+		if ix.Elicitation != nil {
+			_ = json.Unmarshal(ix.Elicitation.RequestedSchema, &schema)
+		}
+		content := make(map[string]any, len(r.Content))
+		for k, v := range r.Content {
+			p := schema.Properties[k]
+			if p.Format == "password" || p.WriteOnly || secretName.MatchString(k) {
+				v = redactedValue
+			}
+			content[k] = v
+		}
+		r.Content = content
+	}
 	return r
 }
 

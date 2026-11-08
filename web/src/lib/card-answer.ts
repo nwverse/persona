@@ -3,6 +3,7 @@
 import { t } from "../i18n";
 import { ApiError, enc, errorText } from "./api";
 import { endedText, type Resolution, type ResolveResult } from "./answered";
+import { fields } from "./elicitation";
 import { sessionCan } from "./format";
 import { apiOp } from "./ops";
 import { endInteraction, getSession, keepDelegated } from "./store";
@@ -11,6 +12,24 @@ import type { Interaction } from "./types";
 
 /** Sent (`already`: it had been answered, here or elsewhere), or why not, as a sentence to show. */
 export type CardAnswer = { ok: true; already: boolean } | { ok: false; error: string };
+
+const secretPattern = /(?:pass|secret|token|credential|api[_-]?key|private|otp|pin)/i;
+
+function redacted(ix: Interaction, body: Resolution): Resolution {
+  let r = body;
+  if (ix.secret && r.text) r = { ...r, text: "<redacted>" };
+  if (r.values && typeof r.values === "object") {
+    const secret = new Set((ix.fields ?? []).filter((f) => f.secret).map((f) => f.key));
+    const values = Object.fromEntries(Object.entries(r.values).map(([k, v]) => [k, secret.has(k) || secretPattern.test(k) ? "<redacted>" : v]));
+    r = { ...r, values };
+  }
+  if (r.content && typeof r.content === "object") {
+    const secret = new Set(fields(ix.elicitation?.requested_schema).filter((f) => f.secret).map((f) => f.key));
+    const content = Object.fromEntries(Object.entries(r.content).map(([k, v]) => [k, secret.has(k) || secretPattern.test(k) ? "<redacted>" : v]));
+    r = { ...r, content };
+  }
+  return r;
+}
 
 export async function answerCard(ix: Interaction, body: Resolution): Promise<CardAnswer> {
   if (!sessionCan(getSession(ix.machine_id, ix.session_id), "approve")) return { ok: false, error: t("chat-interactions.approve_not_allowed") };
@@ -21,7 +40,7 @@ export async function answerCard(ix: Interaction, body: Resolution): Promise<Car
     const res = await apiOp<ResolveResult>(`/interactions/${enc(ix.id)}/resolve`, { method: "POST", json: body });
     // Answered already (here, its event missed; or elsewhere): the hub says with what, and the card shows that.
     const already = res?.already === true;
-    const r: Resolution = already ? (res.resolution ?? {}) : body;
+    const r: Resolution = already ? (res.resolution ?? {}) : redacted(ix, body);
     // The assistant answered this question first (#544): it shows as its answer, which the user may change.
     if (already && r.answered_by === "assistant" && ix.kind === "question") {
       keepDelegated(ix, r);

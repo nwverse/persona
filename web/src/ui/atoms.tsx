@@ -15,6 +15,8 @@ import { accelLabel, activation, edge, enabled, keyIntent, renameCommit, rowLabe
 import { NARROW_QUERY, placeMenu, placeSubmenu, SHEET_QUERY, useEscapeClose, useMedia, useModalFocus, type MenuPlace } from "./overlay";
 import { STATE_LABEL, stateName } from "../lib/state-labels";
 
+export const SECRET_INPUT = { spellCheck: false, "data-1p-ignore": true, "data-lpignore": "true", "data-bwignore": true } as const;
+
 export const EASE = "cubic-bezier(0.23, 1, 0.32, 1)";
 
 export function cx(...c: (string | false | null | undefined)[]) {
