@@ -488,6 +488,36 @@ Every client has the same page (web: `docs/web/web.md`, Android: `docs/android/a
 - The socket asks for feature `managers` in its URL's `?features=` (`LiveConnection.queryItems`; the Apple apps' `client_hello` only carries the locale), and each `{"type":"managers"}` push moves `AppModel.managersRevision`, which makes the open page reread the roster. A hub without the roster (404 without a code) gets a line saying to update the hub.
 - DEBUG launch arguments for screenshots: `-tab settings -openManagers YES`, `-openManagerPage <id>`, and `-showManagerCode YES` (makes a manager on the fake hub and opens its code sheet). The fake hub (`scripts/mock/mock_hub.py`) serves the roster; `MOCK_MANAGER_COMMANDS=1` adds the commands.
 
+## Automatic update idle evidence
+
+The private release publisher's manager idle collector (`scripts/release/manager_idle.py`)
+fails closed on ordinary display inventories. An authoritative producer must return
+`update_inventory: {schema: 1, complete: true, revision: "…", observed_at: "…"}`
+on both the explicitly scoped assistant conversation inventory (including archived
+conversations) and each owned machine's complete activity inventory. This is a new
+producer contract, not a claim that legacy HTTP responses already support it.
+Missing metadata or runtime fields cannot be supplied by a release configuration.
+
+The original main must be present in its scoped conversations; it need not occur
+in the ordinary machine display list. Rows are keyed by machine and session under
+the selected manager. Conflicting copies, missing revisions, ownership changes,
+partial pages, stale observations and changing complete reads are refused. Two
+complete reads must agree within a 30-second acquisition budget before evidence is
+hashed. Each underlying publisher HTTP request also has a bounded timeout.
+
+Idle checks require explicit live/starting, background, subagent, compaction and
+interaction evidence, independently of the display state. A history source or an
+`offline` state alone never establishes inactivity. Only explicitly non-live,
+terminal history with empty activity may be excluded. Old endpoints missing this
+contract remain unsupported for automatic activation; an explicit bootstrap window
+does not manufacture missing evidence. The publisher recollects immediately before
+activation, after transfer and local checks, then timestamps the plan. A local
+`checked` receipt remains distinct from complete idle evidence or confirmation.
+
+The versioned producer and native transaction transport must be implemented and
+negotiated before this contract can enable a legacy installation. Merely installing
+this collector does not enable an update or certify the current runtime as idle.
+
 ## Clients (step 4)
 
 What the hub gives the apps for several managers; each app's pages are in its own docs (web: `docs/web/web.md`, Android: `docs/android/android.md`, iOS and the Mac: `docs/apple/ios.md`). **With one manager (one installed: those still installing don't count) the apps show none of it**, and the screens are as they were.
