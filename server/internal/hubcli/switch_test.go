@@ -5,7 +5,6 @@ import (
 	"net"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 	"time"
 
@@ -92,15 +91,27 @@ func TestSwitchKeepsTheProgramTheHubRuns(t *testing.T) {
 	}
 }
 
-// With nothing serving there is no program to go on with: the switch is not asked for, and says to give one.
+// With nothing serving (a crash loop's back-off) there is no program to go on with: the switch names the server
+// binary, this one when it is not persona-hub, as it did before the hub could run as persona-hub.
 func TestSwitchWithNothingServing(t *testing.T) {
+	self, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	want, err := filepath.EvalSymlinks(self)
+	if err != nil {
+		t.Fatal(err)
+	}
 	asked := fakeEdge(t, "")
-	if err := runHubSwitch(nil); err == nil || !strings.Contains(err.Error(), "--binary") {
-		t.Fatalf("err %v", err)
+	if err := runHubSwitch(nil); err != nil {
+		t.Fatal(err)
 	}
 	select {
 	case got := <-asked:
-		t.Fatalf("switched to %s", got)
-	default:
+		if got != want {
+			t.Fatalf("switched to %s, want %s", got, want)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("no switch asked for")
 	}
 }

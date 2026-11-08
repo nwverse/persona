@@ -21,7 +21,7 @@ const exitNoEdge = 3
 // once it is up (docs/operations/hub-restart.md "Blue-green switch"). One line per phase, then one with the outcome.
 func runHubSwitch(args []string) error {
 	fs := flag.NewFlagSet("hub switch", flag.ContinueOnError)
-	binary := fs.String("binary", "", "the binary to switch to (default: the program the hub runs now)")
+	binary := fs.String("binary", "", "the binary to switch to (default: the program the hub runs now; with nothing serving, personad)")
 	prev := fs.String("prev", "", "the binary to go back to if the new one fails while taking over")
 	status := fs.Bool("status", false, "only say what serves now")
 	within := fs.Duration("timeout", 8*time.Minute, "give up waiting after this long (the edge finishes the switch by itself)")
@@ -70,10 +70,12 @@ func runHubSwitch(args []string) error {
 
 // slotProgram is the program the edge's active slot runs, what `hub switch` goes on with unless given another: a
 // switch never moves the hub from personad to persona-hub or back (docs/operations/hub-restart.md "Blue-green
-// switch"). A slot that went back to <program>.prev after a switch that failed runs that program.
+// switch"). A slot that went back to <program>.prev after a switch that failed runs that program. With nothing serving
+// (the edge backing off a slot that keeps failing) it is the server binary, as before the hub could run as
+// persona-hub: the way out of a crash loop names the build on disk.
 func slotProgram(slot string) (string, error) {
 	if slot == "" {
-		return "", errors.New("hub switch: nothing serves now, so the program to switch to is unknown: give it with --binary")
+		return hub.ServerBinary()
 	}
 	if p, ok := strings.CutSuffix(slot, ".prev"); ok {
 		if _, err := os.Stat(p); err == nil {

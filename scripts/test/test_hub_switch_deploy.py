@@ -273,6 +273,22 @@ class HubProgramKeptOnDeploy(unittest.TestCase):
             self.assertIn(f'# old {name}', (self.root / 'bin' / name).read_text(), name)
         self.assertFalse(any(c.startswith('systemctl --user restart') for c in self.calls()))
 
+    def test_a_program_that_cannot_be_put_back_is_named(self):
+        # A put-back that fails (here a leftover directory where its copy goes) is said, not reported as back in place;
+        # the others still go back.
+        self.switched_unit()
+        for name in ('personad', 'persona-hub', 'persona-manager'):
+            self.program(name, rc=1)
+            self.prev(name)
+        (self.root / 'bin/persona-manager.new').mkdir()
+        r = self.run_script()
+        self.assertEqual(r.returncode, 1)
+        self.assertNotIn('back in place', r.stderr)
+        self.assertIn(f'could not put the old build back for {self.root}/bin/persona-manager (', r.stderr)
+        self.assertIn('# new', (self.root / 'bin/persona-manager').read_text())
+        for name in ('personad', 'persona-hub'):
+            self.assertIn(f'# old {name}', (self.root / 'bin' / name).read_text(), name)
+
     def test_a_personad_unit_puts_only_personad_back(self):
         # As before: a hub run as personad runs nothing else of the deploy.
         self.program('personad')

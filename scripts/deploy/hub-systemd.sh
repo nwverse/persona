@@ -70,10 +70,11 @@ SPLIT_HUB="$ROOT/bin/persona-hub"
 # The programs a deploy replaces besides personad: a hub run as persona-hub goes back on all of them (switch_or_restart).
 SPLIT_PROGRAMS=(persona-hub persona-manager)
 # put_back <program>: its .prev back in place, through a symlink to the file it names (an install under the former name
-# keeps personad as a link to that file), so that every name of it runs the old build again.
+# keeps personad as a link to that file), so that every name of it runs the old build again. Non-zero when it could not
+# (callers test it, so set -e does not stop it on the way).
 put_back() {
   local file
-  file=$(python3 -c 'import os, sys; print(os.path.realpath(sys.argv[1]))' "$1")
+  file=$(python3 -c 'import os, sys; print(os.path.realpath(sys.argv[1]))' "$1") && [ -n "$file" ] || return 1
   cp -p "$1.prev" "$file.new" && mv "$file.new" "$file"
 }
 # use_split_hub: the service runs this root's persona-hub, so the deploy switches to it and the unit keeps it.
@@ -87,9 +88,10 @@ use_split_hub() {
 # Blue-green (docs/operations/hub-restart.md "Blue-green switch"): the running hub's edge starts the new binary next to the one serving
 # and switches once it is up, nothing restarts. It returns 0 once switched; 1 (no edge here, or one older than the new
 # binary's protocol: `hub switch` exits 3; or a binary that cannot run it) to have the caller restart the service;
-# it exits the script when the new binary did not come up (exit 1: the hub serves on the old one, back in place).
+# it exits the script when the new binary did not come up (exit 1: the hub serves on the old one, back in place, or
+# the message names each program whose old build could not be put back).
 switch_or_restart() {
-  local prev=() rc=0 name
+  local prev=() rc=0 name failed=()
   [ -x "$ROOT/bin/${BIN##*/}.prev" ] && prev=(--prev "$ROOT/bin/${BIN##*/}.prev")
   if [ "$BIN" = "$SPLIT_HUB" ] && [ ${#prev[@]} -eq 0 ]; then
     # Nothing to go back to: a failed switch would leave the old persona-hub serving beside the new personad and
@@ -105,15 +107,20 @@ switch_or_restart() {
     *) echo "hub: no edge to switch on (hub switch: exit $rc): restarting the service"; return 1 ;;
   esac
   if [ ${#prev[@]} -gt 0 ]; then
-    put_back "$BIN"
+    put_back "$BIN" || failed+=("$BIN")
     if [ "$BIN" = "$SPLIT_HUB" ]; then
       # The hub runs as persona-hub, which starts persona-manager beside it and goes by personad for updates:
       # the old build of each goes back with it (deploy.sh kept a .prev of each it replaced).
       for name in "${_PERSONA_HUB_BIN##*/}" "${SPLIT_PROGRAMS[@]}"; do
-        [ "$ROOT/bin/$name" = "$BIN" ] || [ ! -x "$ROOT/bin/$name.prev" ] || put_back "$ROOT/bin/$name"
+        [ "$ROOT/bin/$name" != "$BIN" ] && [ -x "$ROOT/bin/$name.prev" ] || continue
+        put_back "$ROOT/bin/$name" || failed+=("$ROOT/bin/$name")
       done
     fi
-    echo "hub: the new binary did not take over; the old one serves on and is back in place" >&2
+    if [ ${#failed[@]} -gt 0 ]; then
+      printf 'hub: the new binary did not take over; the old one serves on, but could not put the old build back for %s (still the new build: copy its .prev over it)\n' "${failed[*]}" >&2
+    else
+      echo "hub: the new binary did not take over; the old one serves on and is back in place" >&2
+    fi
   else
     echo "hub: the new binary did not take over; the old one serves on" >&2
   fi
