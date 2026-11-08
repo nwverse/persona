@@ -97,7 +97,7 @@ func (s *Service) probeTarget(ctx context.Context, in probeInput) (probeTarget, 
 	if in.API != "" {
 		t.api = in.API
 	}
-	if t.api != "" && t.api != "messages" && t.api != "responses" {
+	if t.api != "" && t.api != "messages" && t.api != "responses" && t.api != "chat" {
 		return t, i18n.Err("assistant-models_launchers.err_api")
 	}
 	// Both credential headers go anyway (cindy's buildProbeRequest), so Auth only tidies a pasted "Bearer …".
@@ -134,7 +134,7 @@ func (t probeTarget) do(ctx context.Context, method, endpoint string, body io.Re
 	}
 	if body != nil {
 		req.Header.Set("content-type", "application/json")
-		if t.api == "responses" {
+		if t.api == "responses" || t.api == "chat" {
 			req.Header.Set("accept", "text/event-stream")
 		}
 	}
@@ -317,6 +317,9 @@ func (s *Service) providerTest(ctx context.Context, in probeInput) map[string]an
 	if t.api == "responses" {
 		path = "responses"
 		payload = map[string]any{"model": t.model, "input": []any{map[string]any{"role": "user", "content": "ping"}}, "stream": true, "store": false}
+	} else if t.api == "chat" {
+		path = "chat/completions"
+		payload = map[string]any{"model": t.model, "messages": []any{map[string]any{"role": "user", "content": "ping"}}, "stream": true}
 	}
 	body, _ := json.Marshal(payload)
 	started := time.Now()
@@ -327,8 +330,12 @@ func (s *Service) providerTest(ctx context.Context, in probeInput) map[string]an
 		if code != "" {
 			out["code"] = code
 		}
-	} else if t.api == "responses" {
-		out["ok"] = responsesProbeCompleted(res.Body)
+	} else if t.api == "responses" || t.api == "chat" {
+		if t.api == "chat" {
+			out["ok"] = chatProbeCompleted(res.Body)
+		} else {
+			out["ok"] = responsesProbeCompleted(res.Body)
+		}
 		if out["ok"] == false {
 			if ctx.Err() != nil {
 				out["error"], _ = t.failure(ctx, nil, ctx.Err())
@@ -370,6 +377,46 @@ func responsesProbeCompleted(body io.Reader) bool {
 		}
 	}
 	return false
+}
+
+// chatProbeCompleted follows the first choice to a terminal event, including errors after its finish reason.
+func chatProbeCompleted(body io.Reader) bool {
+	sc := bufio.NewScanner(io.LimitReader(body, 8<<20))
+	sc.Buffer(make([]byte, 64<<10), 4<<20)
+	finished := false
+	for sc.Scan() {
+		data, ok := strings.CutPrefix(sc.Text(), "data:")
+		if !ok {
+			continue
+		}
+		data = strings.TrimSpace(data)
+		if data == "[DONE]" {
+			return true
+		}
+		var event struct {
+			Error   json.RawMessage `json:"error"`
+			Choices []struct {
+				Index        int    `json:"index"`
+				FinishReason string `json:"finish_reason"`
+				Delta        struct {
+					Refusal string `json:"refusal"`
+				} `json:"delta"`
+			} `json:"choices"`
+		}
+		if json.Unmarshal([]byte(data), &event) != nil || len(event.Error) > 0 && string(event.Error) != "null" {
+			return false
+		}
+		for _, choice := range event.Choices {
+			if choice.Index != 0 {
+				continue
+			}
+			if choice.FinishReason == "content_filter" || choice.Delta.Refusal != "" {
+				return false
+			}
+			finished = finished || choice.FinishReason != ""
+		}
+	}
+	return finished && sc.Err() == nil
 }
 
 // providerDiscover: GET <base>/v1/models, its models filled in from the catalog.

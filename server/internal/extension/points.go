@@ -453,8 +453,11 @@ var Points = map[string]Point{
 		if p.Kind != "" && p.Kind != "launcher" && p.Kind != "api" {
 			return p.ID, fmt.Errorf("provider %s: kind is launcher or api", p.ID)
 		}
-		if p.API != "" && p.API != "messages" && p.API != "responses" {
-			return p.ID, fmt.Errorf("provider %s: api is messages or responses", p.ID)
+		if p.API != "" && p.API != "messages" && p.API != "responses" && p.API != "chat" {
+			return p.ID, fmt.Errorf("provider %s: api is messages, responses or chat", p.ID)
+		}
+		if p.Kind != "api" && p.API == "chat" {
+			return p.ID, fmt.Errorf("provider %s: chat requires kind api", p.ID)
 		}
 		seen := map[string]bool{}
 		for _, m := range p.Models {
