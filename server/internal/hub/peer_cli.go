@@ -24,7 +24,7 @@ import (
 // PairPeer prints a code another hub pairs with this one by (`personad hub pair --peer`): the code alone on stdout, what
 // to do with it on stderr.
 func PairPeer() error {
-	cfg, err := LoadConfig()
+	cfg, err := runningHubConfig()
 	if err != nil {
 		return err
 	}
@@ -45,7 +45,7 @@ func PeerCommand(args []string, stdin io.Reader, out io.Writer) error {
 	if len(args) == 0 {
 		return errors.New("用法：personad hub peer add <互联码>|- ｜ list ｜ remove <hub_id> ｜ center [<hub_id>] [--confirm]")
 	}
-	cfg, err := LoadConfig()
+	cfg, err := runningHubConfig()
 	if err != nil {
 		return err
 	}
