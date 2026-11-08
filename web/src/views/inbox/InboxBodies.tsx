@@ -3,8 +3,8 @@
 import { useEffect, useRef, useState } from "react";
 import { api, enc, errorText } from "../../lib/api";
 import { bytes, clock } from "../../lib/format";
-import { docTypeName, isDone, momentText, withToken, type InboxItem, type MomentComment, type MomentPost } from "../../lib/inbox";
-import { itemHeaders, useItemManager, withManager } from "../../lib/manager-choice";
+import { docTypeName, isDone, itemKey, momentText, withToken, type InboxItem, type MomentComment, type MomentPost } from "../../lib/inbox";
+import { defaultManager, itemHeaders, useItemManager, withManager } from "../../lib/manager-choice";
 import { openLink } from "../../lib/links";
 import { addressText, markMailSeen, replyDraft, useMailAccounts, type ComposeDraft, type MailMessage } from "../../lib/mail";
 import { hubTranslation, isForeignCached, languageName, strippedHTML, translateMail, translatesMail, useTranslatePrefs, type MailTranslation } from "../../lib/translate";
@@ -77,7 +77,8 @@ export function MailBody({ item }: { item: InboxItem }) {
 
   // kept by the item (the thread): a new mail of it moves `uid` on and reads the body again under the dialog
   // another item opened in this body: that reply's dialog goes (and keeps what was typed for its own item)
-  const dialog = replying?.key === `reply:${item.id}` && <ComposeDialog key={replying.key} draftKey={replying.key} initial={replying.initial} accounts={accounts} onClose={() => setReplying(null)} />;
+  const replyKey = `reply:${itemKey({ id: item.id, manager: item.manager || defaultManager() })}`;
+  const dialog = replying?.key === replyKey && <ComposeDialog key={replying.key} draftKey={replying.key} initial={replying.initial} accounts={accounts} onClose={() => setReplying(null)} />;
   if (!msg) return <div className="p-5">{error ? <p className="text-[12.5px] text-red">{error}</p> : <Loading label={t("inbox-inboxbodies.reading_mail")} />}{dialog}</div>;
   const shown = showOriginal ? null : translation;
   const lang = languageName(prefs.target);
@@ -91,7 +92,7 @@ export function MailBody({ item }: { item: InboxItem }) {
           {!!msg.cc?.length && (<><dt className="text-ink-3">{t("inbox-inboxbodies.cc")}</dt><dd className="min-w-0 truncate text-ink-2">{msg.cc.map(addressText).join(t("inbox-inboxbodies.address_sep"))}</dd></>)}
           {msg.date && (<><dt className="text-ink-3">{t("inbox-inboxbodies.date")}</dt><dd className="text-ink-2">{clock(msg.date)}</dd></>)}
         </dl>
-        <Button tone="secondary" onClick={() => setReplying({ key: `reply:${item.id}`, initial: replyDraft(m.account_id, msg) })} title={t("inbox-inboxbodies.reply_title")}>
+        <Button tone="secondary" onClick={() => setReplying({ key: replyKey, initial: replyDraft(m.account_id, msg) })} title={t("inbox-inboxbodies.reply_title")}>
           <Glyph name="reply" size={14} stroke={2.1} />
           {t("inbox-inboxbodies.reply")}
         </Button>
