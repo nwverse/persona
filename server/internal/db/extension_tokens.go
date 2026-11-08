@@ -13,7 +13,8 @@ import (
 const (
 	// ExtensionTokenReplaced: a new start of its program was given a new one.
 	ExtensionTokenReplaced = "replaced"
-	// ExtensionTokenStopped: its run ended to start again as it is now (upgraded, reconfigured, its grant changed).
+	// ExtensionTokenStopped: its run ended while it stays installed and on: upgraded, reconfigured, its grant or
+	// secrets changed, a dependency or the manager's role changed, or it became incompatible.
 	ExtensionTokenStopped = "stopped"
 	// ExtensionTokenDisabled: it was switched off.
 	ExtensionTokenDisabled = "disabled"

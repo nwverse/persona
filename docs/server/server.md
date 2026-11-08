@@ -390,7 +390,7 @@ Legacy `phone_tools.json`, `devices.json`, `mail_accounts.json`, `sessions.json`
 The migrations are two sets, one per side (`server/internal/db/migrations/`):
 
 - `hub/`: the hub's own tables: devices and their tokens, pairing, phone tools, Live Activities, device sessions, client operations, lock tests, peers and the mesh, connector credentials, the admin page, bus identities and the managers' install codes, machine trust, what the managers handed it (`handed_over`).
-- `manager/`: a manager's: interactions, mail, the computers' sessions and metrics, session views and work, the inbox, the knowledge base, todos, task plans and the assistant's feed and views, extensions and their markets, secrets and metrics, the workspace board, the outbox it keeps while the hub is away (`manager_outbox`).
+- `manager/`: a manager's: interactions, mail, the computers' sessions and metrics, session views and work, the inbox, the knowledge base, todos, task plans and the assistant's feed and views, extensions and their markets, secrets and metrics, the record of the extensions' hub tokens (`extension_tokens`), the workspace board, the outbox it keeps while the hub is away (`manager_outbox`).
 
 `db.Open(ctx, url, sets)` applies the pending migrations of the sets it is given: the hub opens its database with `db.HubSet`, a manager with `db.ManagerSet` (tests that use both sides' tables: `db.AllSets`). While the default manager shares the hub's database, both sets run there, each when its side starts. Non-default managers have databases of their own (`docs/assistant/managers.md`) and get only the manager set.
 

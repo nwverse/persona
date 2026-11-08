@@ -2,11 +2,13 @@ package extmgr
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/nwverse/persona/server/internal/db"
@@ -278,5 +280,128 @@ func TestExtensionTokenRecordAcrossRestarts(t *testing.T) {
 	}
 	if why := reason(tok4); why != db.ExtensionTokenUninstalled {
 		t.Fatalf("a restart rewrote why an uninstalled extension's token stopped: %q", why)
+	}
+}
+
+// fakeTokenRecord keeps the order of the record's writes, and fails each one while fail is set.
+type fakeTokenRecord struct {
+	mu    sync.Mutex
+	fail  bool
+	calls [][3]string // what, the extension or hash, why
+}
+
+func (f *fakeTokenRecord) note(what, of, why string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.calls = append(f.calls, [3]string{what, of, why})
+	if f.fail {
+		return errors.New("example: the database does not answer")
+	}
+	return nil
+}
+
+func (f *fakeTokenRecord) IssueExtensionToken(_ context.Context, t db.ExtensionToken) error {
+	return f.note("issue", t.Extension+" "+t.Hash, "")
+}
+
+func (f *fakeTokenRecord) RevokeExtensionToken(_ context.Context, _, hash, reason string) error {
+	return f.note("revoke", hash, reason)
+}
+
+func (f *fakeTokenRecord) RevokeExtensionTokens(_ context.Context, _, reason string) (int64, error) {
+	return 0, f.note("revoke_all", "", reason)
+}
+
+// A record that fails costs nothing but its log line: the token is issued, opens what it was granted and is revoked
+// as without a record, and the log names what was not recorded, never the token.
+func TestExtensionTokenRecordFailing(t *testing.T) {
+	rec := &fakeTokenRecord{fail: true}
+	var mu sync.Mutex
+	var logs []string
+	logf := func(format string, args ...any) {
+		mu.Lock()
+		defer mu.Unlock()
+		logs = append(logs, fmt.Sprintf(format, args...))
+	}
+	h := newTestManager(t)
+	h.routes()
+	h.extTokens.keepRecord(rec, "example-manager", logf)
+	h.extTokens.revokeLastRun(context.Background())
+	tok := h.extTokens.issue("example-x", "Example X", []string{extension.ScopeKBRead})
+	if a := kbSearch(h, tok); !a.OK || a.Extension != "example-x" {
+		t.Fatalf("a token issued while the record fails: %+v", a)
+	}
+	h.extTokens.revoke("example-x", db.ExtensionTokenDisabled)
+	if a := kbSearch(h, tok); a.Extension != "" {
+		t.Fatalf("a token revoked while the record fails: %+v", a)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(rec.calls) != 3 || len(logs) != 3 {
+		t.Fatalf("writes %v, logs %q", rec.calls, logs)
+	}
+	for _, l := range logs {
+		if !strings.Contains(l, "does not answer") || strings.Contains(l, tok) || strings.Contains(l, strings.TrimPrefix(tok, extTokenPrefix)) {
+			t.Fatalf("log line %q", l)
+		}
+	}
+}
+
+// Issues and revocations from many goroutines reach the record in the order they changed the tokens: a revocation
+// comes after the issue of the token it revokes, and names the extension's live token, never one replaced before.
+func TestExtensionTokenRecordOrder(t *testing.T) {
+	rec := &fakeTokenRecord{}
+	h := newTestManager(t)
+	h.extTokens.keepRecord(rec, "example-manager", nil)
+	h.extTokens.revokeLastRun(context.Background())
+	var wg sync.WaitGroup
+	for g := range 8 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			id := fmt.Sprintf("example-%d", g%4) // two goroutines on each extension
+			for i := range 25 {
+				if i%3 == 2 {
+					h.extTokens.revoke(id, db.ExtensionTokenStopped)
+				} else {
+					h.extTokens.issue(id, "Example", []string{extension.ScopeKBRead})
+				}
+			}
+		}()
+	}
+	wg.Wait()
+	h.extTokens.flush()
+
+	rec.mu.Lock()
+	defer rec.mu.Unlock()
+	if len(rec.calls) == 0 || rec.calls[0][0] != "revoke_all" {
+		t.Fatalf("the last run's tokens are revoked first: %v", rec.calls[:min(len(rec.calls), 3)])
+	}
+	live := map[string]string{} // extension → its live token's hash, as the record has it
+	whose := map[string]string{}
+	for _, c := range rec.calls[1:] {
+		switch c[0] {
+		case "issue":
+			id, hash, _ := strings.Cut(c[1], " ")
+			live[id], whose[hash] = hash, id
+		case "revoke":
+			id, ok := whose[c[1]]
+			if !ok || live[id] != c[1] {
+				t.Fatalf("revocation of %s before its issue, or of a token already replaced (live %q)", c[1], live[id])
+			}
+			delete(live, id)
+		default:
+			t.Fatalf("unexpected write %v", c)
+		}
+	}
+	h.extTokens.mu.Lock()
+	defer h.extTokens.mu.Unlock()
+	if len(live) != len(h.extTokens.byExt) {
+		t.Fatalf("the record's live tokens %v, the manager's %v", live, h.extTokens.byExt)
+	}
+	for id, hash := range h.extTokens.byExt {
+		if live[id] != hash {
+			t.Fatalf("%s: the record's live token %q, the manager's %q", id, live[id], hash)
+		}
 	}
 }
