@@ -45,7 +45,7 @@ class AssistantSettingsManagerTest {
         override suspend fun deleteMemory(name: String) {}
     }
 
-    @Test fun switchingSettingsPinsDefaultsAndTaskModelNavigationToTheShownOwner() {
+    @Test fun unknownPermissionSupportKeepsTaskModelNavigationScoped() {
         val values = mutableMapOf(
             "assistant" to AssistantConfig(manager = "assistant", defaultPermissionMode = "plan", main = "personal-history"),
             "work" to AssistantConfig(manager = "work", defaultPermissionMode = "default", main = "work-history"),
@@ -64,10 +64,9 @@ class AssistantSettingsManagerTest {
         rule.waitForIdle()
         rule.onAllNodesWithText("Work").onLast().performClick()
         rule.waitForIdle()
-        rule.onNodeWithText("Default").performClick()
-        rule.onNodeWithText("Full access").performClick()
-        rule.waitForIdle()
-        assertEquals("bypassPermissions", values.getValue("work").defaultPermissionMode)
+        rule.onAllNodesWithText("New conversation permissions").onLast().assertIsNotEnabled()
+        rule.onNodeWithText("Unavailable until this assistant can confirm support for permission defaults. Other settings remain available.").assertExists()
+        assertEquals("default", values.getValue("work").defaultPermissionMode)
         assertEquals("plan", values.getValue("assistant").defaultPermissionMode)
         assertEquals("work-history", values.getValue("work").main)
         rule.onNodeWithText("Scheduled tasks, follow-ups and runs").performScrollTo().performClick()

@@ -4,6 +4,7 @@ package node
 // intended change with UPDATE_GOLDEN=1 go test ./internal/node -run Golden, and read the diff.
 
 import (
+	"encoding/json"
 	"github.com/nwverse/persona/server/internal/proto"
 	"io"
 	"log"
@@ -77,4 +78,22 @@ func TestGoldenLostTasksNotice(t *testing.T) {
 	if err != nil || got != string(want) {
 		t.Fatalf("got\n%s\nwant (%v)\n%s", got, err, want)
 	}
+}
+
+// The line the node writes into a Claude session's peer inbox for a message from the phone (claudepeer.go): Claude
+// Code's envelope around agents/peer_message, which says whose the words are.
+func TestGoldenPeerMessage(t *testing.T) {
+	b, err := peerMessage("0d000000-0000-4000-8000-00000000000a", "reply with OK")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var line struct {
+		Message struct {
+			Content string `json:"content"`
+		} `json:"message"`
+	}
+	if err := json.Unmarshal(b, &line); err != nil {
+		t.Fatal(err)
+	}
+	goldenNode(t, "peer_message", line.Message.Content)
 }

@@ -56,7 +56,7 @@ func activityText(l i18n.Lang, s string) string {
 	return out
 }
 
-// queuedFrom starts a queued message another session sent (transcript.go applyQueue).
+// queuedFrom starts a queued message another session sent (transcript/user_text.go applyQueue).
 const queuedFrom = "【来自 "
 
 // localizeSession rewrites s's node-written lines in l: its activity, a background command's stand-in description, the
@@ -70,6 +70,8 @@ func localizeSession(l i18n.Lang, s *proto.Session) {
 	localizeWorkflows(l, s)
 	localizeSubagents(l, s)
 	s.RuntimeFallback = runtimeFallbackText(l, s.RuntimeFallback)
+	s.ReadOnlyReason = claudeLiveText(l, s.ReadOnlyReason)
+	s.AttentionReason = claudeLiveText(l, s.AttentionReason)
 	copied := false
 	for i, b := range s.Background {
 		if b.Description == "超时转到后台的命令" {
@@ -164,6 +166,23 @@ func workLogLine(sess proto.Session) string {
 		return line
 	}
 	return sess.LastText
+}
+
+// claudeLiveTexts are what the node says about a Claude session outside Persona's terminals (proto/claudelive.go),
+// with their keys.
+var claudeLiveTexts = map[string]string{
+	proto.ReadOnlyClaudeBg:        "read_only_claude_bg",
+	proto.ReadOnlyClaudeNoInbox:   "read_only_claude_no_inbox",
+	proto.ReadOnlyClaudeInbox:     "read_only_claude_inbox",
+	proto.AttentionClaudeComputer: "attention_claude_computer",
+}
+
+// claudeLiveText is one of them in l; anything else stays as it is.
+func claudeLiveText(l i18n.Lang, s string) string {
+	if key, ok := claudeLiveTexts[s]; ok {
+		return tt(l, key)
+	}
+	return s
 }
 
 // runtimeFallbacks are the node's reasons for running an Agent SDK conversation on the CLI (proto.Fallback*) and their

@@ -153,20 +153,25 @@ func (e *Engine) Search(query string, messages bool, limit int) []Hit {
 	if match == nil {
 		return nil
 	}
+	ws := words(query)
+	// Files come through Find's cache (findCache.text): a file unchanged since an earlier search is one stat, not a
+	// read and a fold, and one without every word is skipped whole. Search stops at limit, so it leaves the pruning
+	// of files no longer there to Find, which sees them all; the cache is bounded either way (findCacheBytes).
+	gen := e.find.begin()
 	var hits []Hit
 	scan := func(p string) {
 		if len(hits) >= limit {
 			return
 		}
-		raw, err := os.ReadFile(p)
-		if err != nil {
+		t, _, ok := e.find.text(p, gen)
+		if !ok || !hasAll(t.lower, ws) {
 			return
 		}
 		rel, err := filepath.Rel(e.Store.Dir, p)
 		if err != nil || strings.HasPrefix(rel, "..") {
 			rel = p
 		}
-		for _, l := range strings.Split(string(raw), "\n") {
+		for _, l := range strings.Split(t.raw, "\n") {
 			if len(hits) >= limit {
 				return
 			}
