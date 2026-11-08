@@ -16,7 +16,7 @@
 | `rebuild.json` | 增量与全量重建等价、前插历史、后台突发和替换收敛 |
 | `layout.json` | 待处理交互在正文之外、输入框上方的位置契约 |
 
-63 个用例中，61 个通过 Swift 调用现有逻辑核对；`layout.json` 的 2 个用例通过 `mainFooter` 的源码顺序核对，未运行 SwiftUI 界面测试。`verification: "view_source_order"` 明示这一区别。没有仅凭推测填写的 `derived` 用例，也没有只能依赖 XCTest 断言、无法对照的内容用例。
+61 个用例中，59 个通过 Swift 调用现有逻辑核对；`layout.json` 的 2 个用例通过 `mainFooter` 的源码顺序核对，未运行 SwiftUI 界面测试。`verification: "view_source_order"` 明示这一区别。没有仅凭推测填写的 `derived` 用例，也没有只能依赖 XCTest 断言、无法对照的内容用例。
 
 ## 规则及来源
 
@@ -37,8 +37,8 @@
 | 工具缺结果时 `ToolCall.isRunning` 为真，但不会据此把完成轮的工作行改成进行中。 | `ToolCall.isRunning`、`chatLines(live:)` | `missing_tool_result_is_running` |
 | 工具失败只取结果的 `is_error`，不根据输出文字推断。 | `ToolCall.isError` | `failed_tool_counts_known_failure` |
 | 带 `tool_use_id` 的图片归工具卡，普通及被吸收的用户图片在消息上方显示。 | `buildRows`、`photos`、`chatLines`；`CLAUDE.md` 图片两条路 | `tool_images_belong_to_call`、`regular_user_images`、`absorbed_user_images` |
-| 每次唤醒之间只让最后一条助手回复参加比较，按 Swift 字符数取最长，等长取后者。 | `Turn.pickAnswerAcrossWakes` | `multiple_wakes_pick_middle_answer`、`equal_length_prefers_later_answer`、`only_last_reply_in_each_wake_is_candidate`、`answer_length_uses_grapheme_clusters` |
-| 选中回复之前的工作留在主列表，之后的助手内容只放抽屉，抽屉从第一次唤醒开始。 | `pickAnswerAcrossWakes`、`wakeLines` | `long_answer_before_wake`、`long_answer_after_wake` |
+| After background-task wakes the answer is the latest run's last reply, whatever its length (#638; it used to be the longest). These cases were updated from `ChatStoreTests.backgroundWakeEndsOnTheNewestWords` and `wakeAfterARecapStaysInItsExchange`, read against the Swift code rather than run. | `Turn.pickAnswerAcrossWakes` | `multiple_wakes_pick_latest_answer`、`only_last_reply_in_each_wake_is_candidate`、`short_reply_after_wake_is_the_answer`、`wake_after_recap_reopens_turn`、`photos_after_wake_stay_with_message` |
+| 选中回复之前的工作留在主列表，之后的助手内容只放抽屉，抽屉从第一次唤醒开始。 | `pickAnswerAcrossWakes`、`wakeLines` | `short_reply_after_wake_is_the_answer`、`long_answer_after_wake`、`live_tail_runs_behind_chip` |
 | 唤醒后的用户文本和图片仍留在主轮，`tail` 和 `afterWake` 排除这些用户输入。 | `pickAnswerAcrossWakes`、`ChatRow.isUserInput`；`ChatStoreTests.picturesSentAfterAWakeStayWithTheirMessage` | `photos_after_wake_stay_with_message` |
 | 回顾独立于轮，回顾后的唤醒能重新打开原轮且不移动回顾。 | `ChatBlock.build`；`ChatStoreTests.wakeAfterARecapStaysInItsExchange` | `recap_separates_turns`、`wake_after_recap_reopens_turn` |
 | 没有唤醒标记的后台通知只算工作过程，没有回复的唤醒轮也保留抽屉入口。 | `ChatBlock.build`、`pickAnswerAcrossWakes` | `notification_without_wake`、`wake_without_any_reply` |

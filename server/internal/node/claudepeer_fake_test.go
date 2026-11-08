@@ -1,0 +1,165 @@
+package node
+
+import (
+	"bufio"
+	"encoding/json"
+	"fmt"
+	"net"
+	"os"
+	"path/filepath"
+	"strconv"
+	"sync"
+	"testing"
+	"time"
+)
+
+// fakeInbox is a Claude Code peer inbox as 2.1.308 runs one (claudepeer.go): a socket or pipe whose connections are
+// one JSON object per line; the first line must be {"type":"auth","token":…} where the inbox requires auth; a user
+// line is taken (the transcript gets a queue-operation, as the session writes when it queues a message), held (taken
+// but not run, nothing written: a bypass session waiting for the person at the computer) or left alone. Nothing is
+// ever written back on the connection.
+type fakeInbox struct {
+	t          *testing.T
+	ln         net.Listener
+	path       string // messagingSocketPath
+	token      string
+	requireAut bool
+	transcript string // where a taken message is written
+	mode       string // "take" (default), "hold", "drop-auth" (close at once, like a bad auth line)
+
+	mu    sync.Mutex
+	lines []map[string]any // every line read, auth lines included
+}
+
+// newFakeInbox listens where a claude's messagingSocketPath would be (listenFakeInbox, per platform).
+func newFakeInbox(t *testing.T, transcript string) *fakeInbox {
+	t.Helper()
+	ln, path := listenFakeInbox(t)
+	f := &fakeInbox{t: t, ln: ln, path: path, token: "0123456789abcdef0123456789abcdef", requireAut: peerAuthRequired,
+		transcript: transcript, mode: "take"}
+	go f.serve()
+	t.Cleanup(func() { _ = ln.Close() })
+	return f
+}
+
+func (f *fakeInbox) serve() {
+	for {
+		c, err := f.ln.Accept()
+		if err != nil {
+			return
+		}
+		go f.conn(c)
+	}
+}
+
+func (f *fakeInbox) conn(c net.Conn) {
+	defer c.Close()
+	f.mu.Lock()
+	mode := f.mode
+	f.mu.Unlock()
+	if mode == "drop-auth" {
+		return
+	}
+	sc := bufio.NewScanner(c)
+	sc.Buffer(make([]byte, 64<<10), peerLineMax+64)
+	authed := false
+	first := true
+	for sc.Scan() {
+		var m map[string]any
+		if json.Unmarshal(sc.Bytes(), &m) != nil {
+			return
+		}
+		f.mu.Lock()
+		f.lines = append(f.lines, m)
+		f.mu.Unlock()
+		if m["type"] == "auth" {
+			if first {
+				authed = m["token"] == f.token
+				if !authed && f.requireAut {
+					return
+				}
+			}
+			first = false
+			continue
+		}
+		first = false
+		if f.requireAut && !authed {
+			return
+		}
+		if m["type"] != "user" || mode != "take" {
+			continue
+		}
+		content, _ := m["message"].(map[string]any)["content"].(string)
+		line, _ := json.Marshal(map[string]any{"type": "queue-operation", "operation": "enqueue",
+			"timestamp": time.Now().UTC().Format(time.RFC3339Nano), "content": "Another Claude session sent a message:\n" + content})
+		file, err := os.OpenFile(f.transcript, os.O_APPEND|os.O_WRONLY, 0o600)
+		if err == nil {
+			_, _ = file.Write(append(line, '\n'))
+			_ = file.Close()
+		}
+	}
+}
+
+// users are the user lines the inbox read.
+func (f *fakeInbox) users() []map[string]any {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	var out []map[string]any
+	for _, l := range f.lines {
+		if l["type"] == "user" {
+			out = append(out, l)
+		}
+	}
+	return out
+}
+
+// outsideClaude writes the sessions/<pid>.json of a claude outside Persona's panes (this test's own pid: alive),
+// with its inbox, and the key file next to it.
+func writeOutsideClaude(t *testing.T, home, id, entrypoint, status string, inbox *fakeInbox, extra map[string]any) {
+	t.Helper()
+	fields := map[string]any{"sessionId": id, "cwd": home, "kind": "interactive", "entrypoint": entrypoint, "status": status,
+		"version": "2.1.308"}
+	if inbox != nil {
+		fields["messagingSocketPath"], fields["peerProtocol"] = inbox.path, 1
+		fields["peerFeatures"] = []string{"notify_idle", "artifact_yield"}
+	}
+	for k, v := range extra {
+		fields[k] = v
+	}
+	writeClaudeProc(t, home, os.Getpid(), fields)
+	if inbox != nil {
+		writeInboxKey(t, home, os.Getpid(), inbox.path, inbox.token)
+	}
+}
+
+// writeInboxKey writes <pid>.<sha256>.key as Claude Code does.
+func writeInboxKey(t *testing.T, home string, pid int, socket, token string) {
+	t.Helper()
+	name := peerKeyName(pid, socket)
+	if name == "" {
+		t.Fatalf("no key name for %s", socket)
+	}
+	b, _ := json.Marshal(map[string]any{"peerToken": token, "procStartFt": "1", "pidDomain": "test:host"})
+	if err := os.WriteFile(filepath.Join(home, ".claude", "sessions", name), b, 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// noPaneEnv makes every claude read as running outside the engines' panes (no pane variable in its environment).
+func noPaneEnv(t *testing.T) {
+	old := paneEnvOfPID
+	paneEnvOfPID = func(int) map[string]string { return nil }
+	t.Cleanup(func() { paneEnvOfPID = old })
+}
+
+// shortPeerWait shortens how long a send waits for the session to take a message.
+func shortPeerWait(t *testing.T, d time.Duration) {
+	old := peerConfirmWait
+	peerConfirmWait = d
+	t.Cleanup(func() { peerConfirmWait = old })
+}
+
+// fakeSocketName is a short unique name for a test inbox (an AF_UNIX path must stay under ~104 bytes).
+func fakeSocketName() string {
+	return fmt.Sprintf("p%d-%s", os.Getpid(), strconv.FormatInt(time.Now().UnixNano()%1e9, 36))
+}

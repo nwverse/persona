@@ -29,6 +29,17 @@ describe("session capability contract", () => {
     expect(sourceSubtitle({ ...history, source_kind: "claude_bg", read_only_reason: "回复请在电脑上打开" })).toBe("Claude 后台 · 仅查看：回复请在电脑上打开");
   });
 
+  it("names Claude sessions outside Persona's terminals and lets them send only when the node says so", () => {
+    const desktop: Session = { ...legacy, agent: "claude", source_kind: "claude_desktop", capabilities: { read: true, send: true } };
+    expect(sourceSubtitle(desktop)).toBe("Claude 桌面版");
+    expect(sessionCan(desktop, "send")).toBe(true);
+    for (const op of ["interrupt", "approve", "terminal"] as const) expect(sessionCan(desktop, op)).toBe(false);
+    expect(sessionMenuActions(desktop)).toEqual([]);
+    const terminal: Session = { ...desktop, source_kind: "claude_cli", capabilities: { read: true }, read_only_reason: "回复请在电脑上" };
+    expect(sourceSubtitle(terminal)).toBe("终端里的 Claude · 仅查看：回复请在电脑上");
+    expect(sessionCan(terminal, "send")).toBe(false);
+  });
+
   it("offers attach but not terminal, close or interrupt until explicitly granted", () => {
     expect(sessionMenuActions(history)).toEqual([]);
     expect(sessionMenuActions(live)).toEqual(["attach"]);

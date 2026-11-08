@@ -1036,6 +1036,8 @@ if os.environ.get("MOCK_WORK"):
 CODEX_LIVE = "c0de9a1f-1111-4000-8000-000000000001"
 CODEX_HISTORY = "c0de9a1f-2222-4000-8000-000000000002"
 DSH_SESSION = "session-3f2a9c4e-0000-4000-8000-000000000003"
+CLAUDE_DESKTOP = "c1a0de00-1111-4000-8000-000000000004"
+CLAUDE_TERMINAL = "c1a0de00-2222-4000-8000-000000000005"
 NO_SPACE = dict(space_kind=None, space_id=None, space_name=None, space_index=None, slot_id=None, slot_name=None,
                 slot_index=None, pane_id=None, tab_id=None, workspace_id=None, launcher=None)
 if os.environ.get("MOCK_SOURCES"):
@@ -1056,6 +1058,15 @@ if os.environ.get("MOCK_SOURCES"):
              source_kind="runtime", source_instance_id="dsh",
              capabilities={"read": True, "send": True, "interrupt": True, "approve": True, "terminal": False, "attach": False},
              **dict(NO_SPACE, space_kind="dsh")),
+        # Claude outside Persona's terminals (docs/integrations/claude-integration.md): one in the desktop app that takes
+        # messages through its peer inbox, one in another terminal whose inbox the node cannot use.
+        sess("server", CLAUDE_DESKTOP, "整理发布说明", "/home/me/code/release", "working", "working", "", 0, "", 0, 1,
+             "把这周合并的 PR 按模块分好了，正在写摘要。", agent="claude", source_kind="claude_desktop",
+             capabilities={"read": True, "send": True}, **NO_SPACE),
+        sess("server", CLAUDE_TERMINAL, "排查构建缓存", "/home/me/code/build", "idle", "idle", "", 0, "", 0, 12,
+             "缓存键里少了 Go 版本，已经补上。", agent="claude", source_kind="claude_cli",
+             read_only_reason="这个 Claude 没有开放会话之间的消息通道（版本较旧或功能关着）：手机上只能看，回复请在电脑上",
+             capabilities={"read": True}, **NO_SPACE),
     ]
 
 # MOCK_OVERVIEW_DENSE=1: the overview on a wide screen with many finished rows: agents run through a runtime (a source
@@ -9474,6 +9485,21 @@ def looked(name, inp, result, ts_min, *pictures):
     return items + [shot(ts_min, items[0]["tool_use_id"], *p) for p in pictures]
 
 
+# MOCK_IMAGES_FAIL=1: lazy images (…/items/{id}/image) answer 503 until GET /mock/images?ok=1 (#182: a picture that
+# did not load says so, and Retry brings it). With MOCK_TURN_IMAGES the viewed pictures are lazy. GET /mock/images?asked=1
+# only reads: how many lazy images were asked for (#559: a tile's retry asks the hub again), and whether sent photos
+# come lazy (MOCK_IMAGES_FAIL=1 with MOCK_CHAT_IMAGES).
+IMAGES_FAIL = {"on": os.environ.get("MOCK_IMAGES_FAIL") == "1", "asked": 0}
+
+
+def lazy_images(items):
+    """With MOCK_IMAGES_FAIL=1 pages leave the pictures' bytes out, as the hub does for `lazy_images`: the app fetches
+    each by its ref, so a tool's picture fails too."""
+    if os.environ.get("MOCK_IMAGES_FAIL") != "1":
+        return items
+    return [dict(x, image=dict(x["image"], data="", lazy=True, size=len(x["image"]["data"]) * 3 // 4))
+            if (x.get("image") or {}).get("data") else x for x in items]
+
 if os.environ.get("MOCK_TURN_IMAGES"):
     sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
     import mock_office
@@ -10144,7 +10170,7 @@ def incoming_message(query):
         if sid in subscribed:
             try: send({"type": "items", "machine_id": mid, "session_id": sid, "items": [item], **span([item], before)})
             except OSError: pass
-    return {"session": decorated_session(session), "item": item}, 200
+    return {"session": stamp_row(decorated_session(session)), "item": item}, 200
 
 
 def quiet_capsule():
@@ -12842,11 +12868,11 @@ class H(BaseHTTPRequestHandler):
             if "after_seq" in q:
                 a = int(q["after_seq"][0] or 0)
                 LOG.write("  items after_seq=%d\n" % a); LOG.flush()
-                return self.send_json({"items": [x for x in items if x["seq"] > a], "more_after": False, **span(items, a, max(a, last))})
+                return self.send_json({"items": lazy_images([x for x in items if x["seq"] > a]), "more_after": False, **span(items, a, max(a, last))})
             if "through_seq" in q:  # opening a fold
                 frm, thru = int(q.get("from_seq", ["0"])[0]), int(q["through_seq"][0])
                 inside = [x for x in items if frm <= x["seq"] <= thru]
-                out = {"items": inside[:1000], "more": len(inside) > 1000}
+                out = {"items": lazy_images(inside[:1000]), "more": len(inside) > 1000}
                 served(sid, "range", out)
                 return self.send_json(out)
             b = q.get("before_seq", [""])[0]
@@ -12854,11 +12880,18 @@ class H(BaseHTTPRequestHandler):
             more = False
             if PAGING["on"]:
                 items, more = last_turns(items, int(q.get("turns", ["2"])[0] or 2))
-            out = {"items": fold_work(items) if q.get("fold_work") == ["1"] else items, "has_more": more,
+            out = {"items": lazy_images(fold_work(items) if q.get("fold_work") == ["1"] else items), "has_more": more,
                    **span(items, None, int(b) - 1 if b else last)}
             served(sid, "page", out)
             return self.send_json(out)
+        if p == "/mock/images":  # MOCK_IMAGES_FAIL: ?ok=1 lets lazy images through, ?asked=1 reads, anything else fails them again
+            q = parse_qs(urlparse(self.path).query)
+            if q.get("asked") != ["1"]: IMAGES_FAIL["on"] = q.get("ok", [""])[0] != "1"
+            return self.send_json({"ok": True, "failing": IMAGES_FAIL["on"], "asked": IMAGES_FAIL["asked"],
+                                   "sent_photos_lazy": os.environ.get("MOCK_IMAGES_FAIL") == "1" and bool(os.environ.get("MOCK_CHAT_IMAGES"))})
         if p.startswith("/api/v1/sessions/") and "/items/" in p and p.endswith("/image"):  # a lazy image, a fold's
+            IMAGES_FAIL["asked"] += 1
+            if IMAGES_FAIL["on"]: return self.send_json({"error": "unavailable"}, 503)
             sid, iid = unquote(p.split("/")[5]), unquote(p.split("/")[7])
             img = next((x.get("image") for x in find_items(sid) if x["id"] == iid and x.get("image")), None)
             if not img: return self.send_json({"error": "not found"}, 404)
@@ -14649,12 +14682,12 @@ class H(BaseHTTPRequestHandler):
                         threading.Thread(target=stream, daemon=True).start()
                     if since:
                         newer = [x for x in items if x["seq"] > since]
-                        send({"type": "items", "machine_id": mid, "session_id": sid, "items": newer, "backlog": True,
+                        send({"type": "items", "machine_id": mid, "session_id": sid, "items": lazy_images(newer), "backlog": True,
                               **span(items, since, max(since, items[-1]["seq"] if items else 0))})
                     else:
                         page, more = last_turns(items, 2) if PAGING["on"] else (items, False)
                         out = {"type": "items", "machine_id": mid, "session_id": sid, "backlog": True, "has_more": more, **span(items),
-                               "items": fold_work(page) if msg.get("fold_work") else page}
+                               "items": lazy_images(fold_work(page) if msg.get("fold_work") else page)}
                         served(sid, "backlog", out)
                         send(out)
         except Exception as e:

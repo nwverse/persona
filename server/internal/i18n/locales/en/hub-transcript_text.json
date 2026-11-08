@@ -98,5 +98,9 @@
   "fallback_write_bridge": "Couldn’t write the Agent SDK bridge: {cause}",
   "fallback_no_bridge_script": "The Agent SDK bridge package has no bridge.mjs",
   "fallback_no_node": "No Node.js 22 or later: {cause}",
-  "fallback_no_claude": "Can’t find claude: {cause}"
+  "fallback_no_claude": "Can’t find claude: {cause}",
+  "read_only_claude_bg": "A Claude Code background session: view only here; to reply, open it on the computer with claude agents",
+  "read_only_claude_no_inbox": "This Claude session has no message channel (an older version, or turned off): view only here; reply on the computer",
+  "read_only_claude_inbox": "Persona can’t use this Claude session’s message channel (unknown version or missing key): view only here; reply on the computer",
+  "attention_claude_computer": "It’s waiting on a question or a permission prompt that can only be answered on the computer"
 }

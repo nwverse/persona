@@ -64,9 +64,11 @@ Chat page:
     ready to send with a note; only available when opened from a chat. Pending input images can also be tapped to edit before sending.
   - Screenshots: `-openFirstImage YES` / `-openViewedImage N`, `-showViewerChromeHidden YES` hides bars, `-showViewerInfo YES` opens info.
 - Background sync (push + pull like IM; only foregrounded and connected): hub pushes which session changed; App pulls increments by cursor.
-  Agents (`AgentSync`): changed `rev` in session list / `revs` triggers `after_seq` fetch, merged into memory if present,
-  otherwise written to disk (`ChatCache.folder`, currently `chats-v3`) so opening is already current; scope active Agents + sessions used within 24 hours (at most 40, newest first, concurrency 3),
-  currently viewed chats rely on their subscriptions without duplicate fetches. When a subscription stops (the session's `updated_at` is newer
+  Agents (`AgentSync`): changed `rev` in session list / `revs` triggers `after_seq` prefetch into the disk cache only for chats not retained in memory,
+  so opening is already current; scope active Agents + sessions used within 24 hours (at most 40, newest first, concurrency 3).
+  Retained chats without a subscription owner keep their store and covered sequence unchanged until their next visible subscription replays `since_seq`.
+  Eligibility is rechecked when queued work starts; a visible catch-up cannot apply after the last owner leaves or the store is replaced.
+  Currently viewed chats rely on their subscriptions without duplicate fetches. When a subscription stops (the session's `updated_at` is newer
   than the open chat's newest line and no items came for 4 seconds), the chat fetches after its `covered` and merges silently: at most every
   10 seconds, once per `updated_at` (`AgentSyncPacing.catchUpAt`, the rule of the web's `web/src/lib/stale-page.ts`). Working Agents fetch at most once per minute (`AgentSync.workingGap`; each fetch decodes and rewrites the entire disk cache),
   immediately at turn end / Needs you (most likely to open); 19-minute real-hub replay: 45 calls/minute → 9 (2026-11-02 battery investigation). Lark (`LarkSync`): hub forwards gateway live events (`lark`), refreshing Inbox Lark chats and open chats
@@ -78,6 +80,14 @@ Chat page:
 - Lazy images: history pages and pushes omit image bytes (`lazy_images`, reducing pages from MB to hundreds of KB), dimensions only; visible rows fetch through
   `ImagePayload.ref` (`ChatImageLoader`: one download, NSCache + `Caches/chat-images`, immutable images valid forever),
   reserving dimensions before arrival to avoid jumps. Thumbnails and full viewer share it; locally sent images retain inline base64.
+  A failed load (hub unreachable, download failed) does not spin forever (#182): tool-result and file-page images (`Base64Image`) say
+  "Image didn't load. Tap to retry" on the placeholder, and the viewer's page says so with Retry, keeping its bars (and Close) and the
+  page's own backdrop while it is the page shown; downloaded bytes that are not an image are not kept on disk.
+  Sent photos (`SentPhotos`, the sending bubble, both `ChatThumbnail`) and the images viewed this turn (`ViewedImageThumb`) use the
+  same placeholder (`ImageNotLoaded`: narrow ones fall back to "Retry" or the symbol; bytes already here that don't decode say
+  "Can't show this image", without a retry); a file's thumbnail known only by path keeps its symbol (`FileThumbnails` keeps
+  that failure for the session, #559). Their thumbnails sit inside the tile's button that opens the viewer, so they record a
+  failure in `ImageRetries` and that button asks the hub again instead of opening the viewer, and VoiceOver reads it as the retry.
 - Links (`Views/Link/LinkSheet.swift`): chat http(s) opens an in-App bottom card like Telegram: full screen immediately, at 60% pulled down the chat remains usable, further down closes;
   behind a 60% card chat still scrolls and accepts input (`presentationBackgroundInteraction`). Lark docs / Knowledge use native `FeishuDocReader`,
   other websites `WebViewPool`: preload first 3 links in each appearing reply, at most 6 resident WKWebViews (LRU), sharing default disk website data (cache, login),
@@ -416,7 +426,7 @@ Shell tests: `ShellTests`, `ShellAvatarTests` (top-left avatar and Inbox badge),
 
 ## Foreground-only work (polling and reporting read state)
 
-Only two kinds of background work require "the view is in the window and its page is foregrounded" (`Views/TabActivity.swift`): **polling** and **reporting read state**.
+Foreground-only work requires "the view is in the window and its page is foregrounded" (`Views/TabActivity.swift`): **polling**, **reporting read state**, and a chat's **display subscription**.
 Previously the system `TabView` removed the old tab from the window on switching (`onDisappear`, cancellation of `.task`). The new shell's Assistant and Agents pages are a ZStack;
 the hidden page is merely transparent and noninteractive, **still mounted**, so `onDisappear` never fires: without a signal it would keep polling and mark messages read for the user.
 
@@ -424,7 +434,8 @@ the hidden page is merely transparent and noninteractive, **still mounted**, so 
 - `.tabActiveTask` / `.tabActiveTask(id:)` cancels when the page goes behind and restarts from scratch when foregrounded. `.onTabVisibility(appear:disappear:)` replaces paired
   `onAppear` / `onDisappear`, each called once; the system briefly remounting the old tab during a switch does not count as appearance.
 - Used for Lark chat's 60-second fallback polling and read reporting (catch up on foregrounding), and Machines-page (`MachinesView`) / machine-detail (`MachineDetailView`, including its computer-control and browser sections) polling.
-- **Not for** chat subscriptions, generating replies, Agent tasks, dictation or timers (work-row stopwatch, terminal 250ms tick, header auto-collapse). These continue regardless of the foreground page.
+- Shared `ChatView` transcript streams and visible/read ownership use paired visibility edges on iPhone as well as Mac. Hidden chats keep their store and scroll state but unsubscribe; returning resumes with the store's `since_seq`, without recreating the page or downloading all history.
+- **Not for** generating replies, Agent tasks, dictation or timers (work-row stopwatch, terminal 250ms tick, header auto-collapse). These continue regardless of the foreground page; releasing a display subscription does not interrupt work on the hub.
 - Under system `TabView`, timing matches window removal, so UI and behavior stay unchanged. New polling and read reporting must use these helpers, not direct `onDisappear` / `.task`.
 
 ## Persona top bar and sidebar (2026-10-30)

@@ -4,7 +4,12 @@
 // it runs (read-only here). Its model is Settings › Models › Main chat, not here (#1291).
 import { useEffect, useMemo, useRef, useState } from "react";
 import { t } from "../../i18n";
+import { BASE } from "../../lib/base";
+import { settingsHref } from "./nav";
 import { api, enc, errorText } from "../../lib/api";
+import { MANAGER_HEADER } from "../../lib/manager-choice";
+import { PERMISSION_MODES } from "../../lib/session-actions";
+import { ConfigurationManager } from "./ConfigurationManager";
 import { ago } from "../../lib/format";
 import { MEMORY_INDEX, memoryEntries, memoryTypeLabel, memoryTypeTone, parseMemory, type MemoryEntry, type MemoryFile } from "../../lib/memory";
 import { navigate } from "../../lib/router";
@@ -19,6 +24,8 @@ import { Tag, textareaClass } from "../assistant/parts";
 import { PersonaAvatar, usePersona } from "../assistant/Persona";
 
 interface AssistantState {
+  manager?: string;
+  default_permission_mode?: string;
   machine_id?: string;
   launcher?: string;
   cwd?: string;
@@ -33,6 +40,11 @@ interface AssistantState {
 }
 
 export function AssistantSettings({ bare }: { /** Without its header (the profile page has its own). */ bare?: boolean } = {}) {
+  return <ConfigurationManager>{(manager) => <AssistantSettingsForManager manager={manager} bare={bare} />}</ConfigurationManager>;
+}
+
+function AssistantSettingsForManager({ manager, bare }: { manager: string; bare?: boolean }) {
+  const scopedApi: typeof api = (path, init) => api(path, { ...init, headers: { ...Object.fromEntries(new Headers(init?.headers)), [MANAGER_HEADER]: manager } });
   const persona = usePersona();
   const machines = useStore((s) => s.machines);
   const [info, setInfo] = useState<AssistantState | null>(null);
@@ -43,12 +55,23 @@ export function AssistantSettings({ bare }: { /** Without its header (the profil
   const [open, setOpen] = useState<{ file: MemoryFile; index?: boolean } | null>(null);
   const [quietBusy, setQuietBusy] = useState(false);
   const [startBusy, setStartBusy] = useState(false);
+  const [permissionBusy, setPermissionBusy] = useState(false);
+  const setPermission = async (mode: string) => {
+    setPermissionBusy(true);
+    try {
+      const r = await scopedApi<AssistantState>("/assistant", { method: "PUT", json: { default_permission_mode: mode } });
+      if (r.manager !== manager || r.default_permission_mode !== mode) throw new Error(t("settings-assistantsettings.default_permissions_unconfirmed"));
+      setInfo((i) => i ? { ...i, default_permission_mode: r.default_permission_mode } : i);
+    } catch (e) {
+      toast(t("settings-assistantsettings.save_failed", { error: errorText(e) }), "error");
+    } finally { setPermissionBusy(false); }
+  };
 
   const setQuiet = async (on: boolean) => {
     setQuietBusy(true);
     setInfo((i) => (i ? { ...i, main_tasks_quiet: on } : i));
     try {
-      const r = await api<AssistantState>("/assistant", { method: "PUT", json: { main_tasks_quiet: on } });
+      const r = await scopedApi<AssistantState>("/assistant", { method: "PUT", json: { main_tasks_quiet: on } });
       setInfo((i) => (i ? { ...i, main_tasks_quiet: r.main_tasks_quiet ?? on } : i));
     } catch (e) {
       setInfo((i) => (i ? { ...i, main_tasks_quiet: !on } : i));
@@ -62,7 +85,7 @@ export function AssistantSettings({ bare }: { /** Without its header (the profil
     setStartBusy(true);
     setInfo((i) => (i ? { ...i, start_requested_tasks: on } : i));
     try {
-      const r = await api<AssistantState>("/assistant", { method: "PUT", json: { start_requested_tasks: on } });
+      const r = await scopedApi<AssistantState>("/assistant", { method: "PUT", json: { start_requested_tasks: on } });
       setInfo((i) => (i ? { ...i, start_requested_tasks: r.start_requested_tasks ?? on } : i));
     } catch (e) {
       setInfo((i) => (i ? { ...i, start_requested_tasks: !on } : i));
@@ -74,7 +97,7 @@ export function AssistantSettings({ bare }: { /** Without its header (the profil
 
   const loadMemory = async () => {
     try {
-      const r = await api<{ files: MemoryFile[]; dir?: string }>("/assistant/memory");
+      const r = await scopedApi<{ files: MemoryFile[]; dir?: string }>("/assistant/memory");
       setFiles(r.files ?? []);
       setMemoryError("");
     } catch (e) {
@@ -85,8 +108,8 @@ export function AssistantSettings({ bare }: { /** Without its header (the profil
 
   const load = () => {
     setError("");
-    api<AssistantState>("/assistant").then(setInfo, (e) => setError(errorText(e)));
-    api<{ tasks: Task[] }>("/assistant/tasks").then((r) => setTasks(r.tasks ?? []), () => setTasks([]));
+    scopedApi<AssistantState>("/assistant").then(setInfo, (e) => setError(errorText(e)));
+    scopedApi<{ tasks: Task[] }>("/assistant/tasks").then((r) => setTasks(r.tasks ?? []), () => setTasks([]));
     void loadMemory();
   };
   useEffect(load, []);
@@ -144,8 +167,28 @@ export function AssistantSettings({ bare }: { /** Without its header (the profil
         </Row>
       </Group>
 
+      <Group title={t("settings-nav.tab_model_config")}>
+        <a href={BASE + settingsHref("model-config", "agent.new", false, manager)} className="flex items-center justify-between px-4 py-3 text-[13px] text-ink hover:bg-hover">
+          <span>{t("settings-assistantsettings.task_models")}</span><Icon name="chevronRight" size={12} className="text-ink-3" />
+        </a>
+        <a href={BASE + settingsHref("model-config", "assistant", false, manager)} className="flex items-center justify-between px-4 py-3 text-[13px] text-ink hover:bg-hover">
+          <span>{t("settings-assistantsettings.main_chat_model")}</span><Icon name="chevronRight" size={12} className="text-ink-3" />
+        </a>
+      </Group>
+
+      <Group title={t("settings-assistantsettings.default_permissions")} footer={t("settings-assistantsettings.default_permissions_hint")}>
+        <Row label={t("settings-assistantsettings.default_permissions")}>
+          <select aria-label={t("settings-assistantsettings.default_permissions")} value={info?.default_permission_mode ?? ""} disabled={!info || info.manager !== manager || permissionBusy}
+            className="min-w-0 max-w-full rounded-control bg-field px-3 py-2 text-[13px] text-ink shadow-inset-field"
+            onChange={(e) => void setPermission(e.target.value)}>
+            <option value="" disabled>{t("settings-assistantsettings.default_permissions_unset")}</option>
+            {PERMISSION_MODES.map((mode) => <option key={mode.id} value={mode.id}>{mode.title}</option>)}
+          </select>
+        </Row>
+      </Group>
+
       <Group title={t("settings-assistantsettings.knows_title")} footer={t("settings-assistantsettings.knows_footer")}>
-        {info && <AboutMe info={info} onSaved={(notes) => setInfo((i) => (i ? { ...i, notes, notes_effective: notes.trim() } : i))} />}
+        {info && <AboutMe scopedApi={scopedApi} info={info} onSaved={(notes) => setInfo((i) => (i ? { ...i, notes, notes_effective: notes.trim() } : i))} />}
         <div className="flex items-center gap-2 px-4 pt-3 pb-1.5">
           <span className="flex-1 text-[13px] font-medium text-ink">{t("settings-assistantsettings.memory")}</span>
           {files && entries.length > 0 && <span className="text-[11.5px] text-ink-3 tabular-nums">{t("settings-assistantsettings.memory_count", { count: entries.length })}</span>}
@@ -171,7 +214,7 @@ export function AssistantSettings({ bare }: { /** Without its header (the profil
         )}
       </Group>
 
-      <SkillsGroup />
+      <SkillsGroup manager={manager} />
 
       <Group
         title={t("settings-assistantsettings.runs_on_title")}
@@ -188,6 +231,7 @@ export function AssistantSettings({ bare }: { /** Without its header (the profil
 
       {open && (
         <MemoryDialog
+          scopedApi={scopedApi}
           key={open.file.name}
           file={open.file}
           title={open.index ? t("settings-assistantsettings.index") : entries.find((e) => e.file.name === open.file.name)?.title ?? open.file.name}
@@ -202,7 +246,7 @@ export function AssistantSettings({ bare }: { /** Without its header (the profil
 
 /** "About me": what Persona is told about you. Until saved here it shows hub.json's text; saving (even empty) makes this the
  *  one. Saved with "Save", and when leaving the page with changes. */
-function AboutMe({ info, onSaved }: { info: AssistantState; onSaved: (notes: string) => void }) {
+function AboutMe({ scopedApi, info, onSaved }: { scopedApi: typeof api; info: AssistantState; onSaved: (notes: string) => void }) {
   const original = info.notes ?? info.notes_effective ?? "";
   const [text, setText] = useState(original);
   const [base, setBase] = useState(original);
@@ -214,7 +258,7 @@ function AboutMe({ info, onSaved }: { info: AssistantState; onSaved: (notes: str
   const save = async (value = text, quiet = false) => {
     setBusy(true);
     try {
-      await api("/assistant", { method: "PUT", json: { notes: value } });
+      await scopedApi("/assistant", { method: "PUT", json: { notes: value } });
       setBase(value);
       onSaved(value);
       void refreshAssistant().catch(() => {});
@@ -231,7 +275,7 @@ function AboutMe({ info, onSaved }: { info: AssistantState; onSaved: (notes: str
     () => () => {
       const { text: value, changed: c } = latest.current;
       if (c) {
-        api("/assistant", { method: "PUT", json: { notes: value } }).then(
+        scopedApi("/assistant", { method: "PUT", json: { notes: value } }).then(
           () => toast(t("settings-assistantsettings.about_saved"), "ok"),
           (e) => toast(t("settings-assistantsettings.about_save_failed", { error: errorText(e) }), "error"),
         );
@@ -284,7 +328,7 @@ function MemoryRow({ e, onOpen }: { e: MemoryEntry; onOpen: () => void }) {
 }
 
 /** One memory rendered; "Edit" opens the whole file (frontmatter included) as text, "Delete" asks first. The index is read-only. */
-function MemoryDialog({ file, title, readOnly, onClose, onChanged }: { file: MemoryFile; title: string; readOnly?: boolean; onClose: () => void; onChanged: () => void }) {
+function MemoryDialog({ scopedApi, file, title, readOnly, onClose, onChanged }: { scopedApi: typeof api; file: MemoryFile; title: string; readOnly?: boolean; onClose: () => void; onChanged: () => void }) {
   const [content, setContent] = useState(file.content);
   const [updated, setUpdated] = useState(file.updated_at);
   const [editing, setEditing] = useState<string | null>(null);
@@ -297,7 +341,7 @@ function MemoryDialog({ file, title, readOnly, onClose, onChanged }: { file: Mem
     if (editing === null) return;
     setBusy(true);
     try {
-      await api(`/assistant/memory/${enc(file.name)}`, { method: "PUT", json: { content: editing } });
+      await scopedApi(`/assistant/memory/${enc(file.name)}`, { method: "PUT", json: { content: editing } });
       setContent(editing);
       setUpdated(new Date().toISOString());
       setEditing(null);
@@ -313,7 +357,7 @@ function MemoryDialog({ file, title, readOnly, onClose, onChanged }: { file: Mem
   const remove = async () => {
     setBusy(true);
     try {
-      await api(`/assistant/memory/${enc(file.name)}`, { method: "DELETE" });
+      await scopedApi(`/assistant/memory/${enc(file.name)}`, { method: "DELETE" });
       toast(t("settings-assistantsettings.deleted", { title }), "ok");
       onChanged();
       onClose();

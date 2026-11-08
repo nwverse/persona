@@ -2,6 +2,21 @@
 
 Pitfalls, odd behavior and the decisions made at the time (formerly "Lessons" in `CLAUDE.md`; index in `docs/lessons/README.md`). Add new lessons to the relevant section, or create one if none fits.
 
+## Newest geometry after programmatic scrolling (#1211)
+
+A frozen transcript can reveal its withheld rows during Jump to Latest and move UIKit to the end without another SwiftUI scroll-geometry report. The real failure trace had offset -10 pt and adjusted top inset 10 pt (gap 0), while the follow state kept gap 1480 and `near=false`. A visible reply and following mode do not prove that the position state is current. Reconcile from the actual scroll container when the animation ends, keep the existing tolerance and reading intent, and skip a completion without this view's live subscription owner or without a measured container. Query the owner at completion: a captured visibility environment value can be stale, and another visible owner's subscription must not keep a hidden view eligible. Never fix the regression by forcing `near=true` or relaxing the UI assertion. For repeated UI failures, stop at the first failure and resolve the app container after testing: reinstall can change its data container, and a later successful launch overwrites the trace.
+
+## Shell regression fixtures and simulated entitlements (#1117)
+
+- A machine's token summary and its navigation card can repeat the same text. Scope the tap to the actual card button, not an application-wide text query. Choose a known multi-agent demo fixture before testing sibling selection, and expand a folded chat title before looking for its tabs. The home needs-you list intentionally shows at most three rows: verify the overflow route when Inbox actions are not among them, rather than assuming every kind is visible. Tests expecting the Agents list must clear `dev.openChat` at launch: opening a new assistant conversation does not discard the Agent chat a previous test correctly restored.
+- Simulator entitlement emulation lives in the Mach-O `__TEXT,__entitlements` section generated from `*-Simulated.xcent`. `codesign`'s host-signature output alone can report no groups even when the simulator's effective groups are present. An unsigned test build can omit the simulated section and make the pairing registry unreadable; build the test app with ad-hoc signing and check the generated section instead of blaming the tab lifecycle. Device exports still need the normal signature entitlement check.
+
+## Retained chat visibility (#739)
+
+A shell can keep a chat mounted after switching tabs: `onDisappear` alone does not release its transcript subscription or visible/read owner. Use paired `onTabVisibility` edges on iPhone as well as Mac, keep the store and scroll state, and resume with `since_seq` on return. This pauses client display traffic, not the Agent's work on the hub. Test hidden initial mounts, duplicate visibility notifications, shared subscription owners and returning after missed items. Linux source checks cannot establish SwiftUI frame times; compile, profile both directions and inspect light/dark simulator screenshots on a Mac before publishing the Apple build.
+
+Releasing the socket subscription is not enough if a background prefetch then applies HTTP items into the same hidden store (#1159). Keep disk prefetch for unseen recent chats, but defer retained stores to their next visible subscription. Recheck queued work and fence responses that outlive their last visible owner or store identity. Validate the actual HTTP journal and covered-sequence replay as well as zero delta deliveries: an empty replay after a hidden HTTP update does not prove that visibility owns transcript synchronization.
+
 ## Retired drawings and downloadable avatars (#1)
 
 - Retiring local renderers must not turn the hub package catalog into an ID allowlist. Apply manifest validation and catalog/manifest ID equality to both cached and live lists, reserve retired drawing IDs, and keep an unavailable package's selected ID while rendering Mochi. The next valid listing restores the package without another selection. Live Activity normalization must keep custom package faces too; Milk Frog's watch pet remains specific to its own package.

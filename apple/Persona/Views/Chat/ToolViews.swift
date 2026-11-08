@@ -1052,6 +1052,10 @@ struct Base64Image: View {
     var title: String? = nil
     @State private var image: UIImage?
     @State private var showViewer = false
+    /// The last load gave no picture (no hub, a failed download, bytes that do not decode).
+    @State private var failed = false
+    /// Bumped by a tap on the retry: loads again (the loader keeps no failures).
+    @State private var attempt = 0
     init(payload: ImagePayload, gallery: [ImagePayload] = [], index: Int = 0, title: String? = nil) {
         self.payload = payload
         self.gallery = gallery
@@ -1084,9 +1088,10 @@ struct Base64Image: View {
                 RoundedRectangle(cornerRadius: Theme.Radius.control).fill(Theme.Fill.well)
                     .aspectRatio(aspect, contentMode: .fit)
                     .scaledFrame(maxHeight: Theme.Size.box280)
-                    .overlay { ProgressView().controlSize(.small) }
+                    .overlay { if failed { notLoaded } else { ProgressView().controlSize(.small) } }
             } else {
                 RoundedRectangle(cornerRadius: Theme.Radius.control).fill(Theme.Fill.well).scaledFrame(height: Theme.Size.box120)
+                    .overlay { if failed { notLoaded } }
             }
         }
         .fullScreenCover(isPresented: $showViewer) {
@@ -1100,10 +1105,19 @@ struct Base64Image: View {
             }
             .navigationTransition(.zoom(sourceID: "image", in: zoom))
         }
-        .task(id: payload.identity) {
+        .task(id: "\(payload.identity)#\(attempt)") {
+            if failed { failed = false }
             // Thumbnails only need ~2x their on-screen size.
-            image = await ChatImageLoader.image(payload, side: 900)
+            let loaded = await ChatImageLoader.image(payload, side: 900)
+            image = loaded
+            if loaded == nil, !Task.isCancelled { failed = true }
         }
+    }
+
+    /// Said on the placeholder when the picture did not come. One fetched from the hub (`ref`) loads again on a tap;
+    /// bytes already here that do not decode would only fail again.
+    private var notLoaded: some View {
+        ImageNotLoaded(canRetry: payload.ref != nil) { attempt += 1 }
     }
 
     /// In a chat the page shows the viewer (`viewImages`); elsewhere this view does.
