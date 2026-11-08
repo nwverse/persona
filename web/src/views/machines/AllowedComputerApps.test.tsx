@@ -15,7 +15,7 @@ type Request = {
   method: string;
   headers: Headers;
   signal?: AbortSignal | null;
-  answer: (body: unknown, status?: number) => void;
+  answer: (body: unknown, status?: number, proof?: string | null) => void;
   reject: (error: Error) => void;
 };
 const apps: App[] = [
@@ -72,13 +72,15 @@ beforeEach(async () => {
             method: init?.method ?? "GET",
             headers: new Headers(init?.headers),
             signal: init?.signal,
-            answer: (body, status = 200) => {
-              // A current manager acknowledges the immutable owner checked by its real route (covered by the hub integration test).
+            answer: (body, status = 200, proof = new Headers(init?.headers).get(MANAGER_HEADER)) => {
+              // The real hub owns this acknowledgement; integration controls also exercise a legacy receiver.
               const data =
                 body && typeof body === "object" && "apps" in body
                   ? { manager: new Headers(init?.headers).get(MANAGER_HEADER), ...body }
                   : body;
-              resolve(new Response(JSON.stringify(data), { status, headers: { "Content-Type": "application/json" } }));
+              const headers = new Headers({ "Content-Type": "application/json" });
+              if (proof) headers.set("X-Persona-Computer-Apps-Owner", proof);
+              resolve(new Response(JSON.stringify(data), { status, headers }));
             },
             reject,
           });
@@ -136,7 +138,7 @@ it.each(apps)("confirms and encodes the exact returned identifier $bundle_id", a
   click("Revoke", dialog());
   const write = take("DELETE");
   expect(write.path).toBe(
-    `/api/v1/machines/example%20machine%2Fone/computer/apps/${encodeURIComponent(app.bundle_id)}?expected_manager=example-manager`,
+    `/api/v1/machines/example%20machine%2Fone/computer/apps/revoke/${encodeURIComponent(app.bundle_id)}?expected_manager=example-manager`,
   );
   expect(write.headers.get("Authorization")).toBe("Bearer synthetic-token-a");
   expect(write.headers.get(MANAGER_HEADER)).toBe("example-manager");
@@ -185,22 +187,42 @@ it.each([403, 404, 500, 0, 200])(
   },
 );
 
-it("does not restore a revoked row from a stale refresh, including transports ignoring abort", async () => {
+it("retires displayed approval authority during refresh, so its read cannot race a revoke", async () => {
   await load();
+  const oldRevoke = buttons("Revoke", list())[0]!;
   click("Refresh", list());
+  const read = take();
+  expect(oldRevoke.disabled).toBe(true);
+  act(() => oldRevoke.click());
+  expect(requests).toHaveLength(0);
+  read.answer({ apps });
+  await flush();
+  choose();
+  click("Revoke", dialog());
+  take("DELETE").answer({ apps: apps.slice(1) });
+  await flush();
+  expect(list().textContent).not.toContain("org.example.editor");
+});
+
+it.each(["machine", "manager", "credential"])("ignores a stale GET during the new %s owner's revoke", async (change) => {
+  render();
   const old = take();
+  act(() => {
+    if (change === "machine") render("example-next-machine");
+    else if (change === "manager") setRosterDefault("example-next-manager");
+    else setToken("synthetic-token-b");
+  });
+  expect(old.signal?.aborted).toBe(true);
+  take().answer({ apps: [apps[2]] });
+  await flush();
   choose();
   click("Revoke", dialog());
   const write = take("DELETE");
-  expect(old.signal?.aborted).toBe(true);
-  write.answer({ apps: apps.slice(1) });
-  await flush();
   old.answer({ apps });
   await flush();
   expect(list().textContent).not.toContain("org.example.editor");
-  expect(button("Refresh", list()).disabled).toBe(false);
-  click("Refresh", list());
-  take().answer({ apps: [] });
+  expect(button("Cancel", dialog()).disabled).toBe(true);
+  write.answer({ apps: [] });
   await flush();
   expect(list().textContent).toContain("No remembered");
 });
@@ -232,14 +254,12 @@ it("admits one confirmation/write synchronously and cancellation retires the old
 });
 
 it.each(["machine", "explicit-manager", "default-manager", "credential", "storage", "same-token"])(
-  "retires old reads, confirmations, writes and finalizers on %s change",
+  "retires old confirmations, writes and finalizers on %s change",
   async (change) => {
     const explicit = change === "explicit-manager";
     render("example-machine", explicit ? "example-owner-a" : undefined);
     take().answer({ apps });
     await flush();
-    click("Refresh", list());
-    const staleRead = take();
     choose();
     const oldConfirm = button("Revoke", dialog());
     click("Revoke", dialog());
@@ -272,7 +292,6 @@ it.each(["machine", "explicit-manager", "default-manager", "credential", "storag
     click("Revoke", dialog());
     const freshWrite = take("DELETE");
     staleWrite.answer({ error: "Retired synthetic failure" }, 500);
-    staleRead.answer({ apps });
     act(() => oldConfirm.click());
     await flush();
     expect(dialog().textContent).not.toContain("Retired");
@@ -402,17 +421,50 @@ it("uses the authoritative list even when it retains the requested app", async (
   expect(list().textContent).not.toContain("Saved approval removed");
 });
 
-it.each([undefined, "example-wrong-owner"])("fails closed without the expected owner acknowledgement: %s", async (manager) => {
+it("reads and revokes a legacy receiver's list when the hub acknowledges owner enforcement", async () => {
   render();
-  take().answer({ apps, manager });
+  take().answer({ apps, manager: undefined });
   await flush();
-  expect(list().querySelector("li")).toBeNull();
-  expect(list().querySelector('[role="alert"]')).not.toBeNull();
-  expect(buttons("Revoke", list())).toHaveLength(0);
+  choose();
+  click("Revoke", dialog());
+  take("DELETE").answer({ apps: [], manager: undefined });
+  await flush();
+  expect(list().textContent).toContain("Saved approval removed");
+});
+
+it("keeps legacy reads visible but disables mutation without a hub acknowledgement", async () => {
+  render();
+  take().answer({ apps, manager: undefined }, 200, null);
+  await flush();
+  expect(list().textContent).toContain("org.example.editor");
+  expect(list().textContent).toContain("update the hub");
+  expect(buttons("Revoke", list()).every((row) => row.disabled)).toBe(true);
   click("Retry", list());
   take().answer({ apps });
   await flush();
+  expect(buttons("Revoke", list())[0]!.disabled).toBe(false);
+});
+
+it.each(["failure", "missing-proof"])("retires previous mutation authority after a refresh %s", async (mode) => {
+  await load();
+  const oldRevoke = buttons("Revoke", list())[0]!;
+  click("Refresh", list());
+  const read = take();
+  if (mode === "failure") read.answer({ error: "Synthetic refresh failure" }, 500);
+  else read.answer({ apps }, 200, null);
+  await flush();
   expect(list().textContent).toContain("org.example.editor");
+  expect(buttons("Revoke", list()).every((row) => row.disabled)).toBe(true);
+  act(() => oldRevoke.click());
+  expect(requests).toHaveLength(0);
+});
+
+it("rejects a mismatched response owner before displaying its rows", async () => {
+  render();
+  take().answer({ apps, manager: "example-wrong-owner" });
+  await flush();
+  expect(list().querySelector("li")).toBeNull();
+  expect(list().querySelector('[role="alert"]')).not.toBeNull();
 });
 
 it("retains approvals when the authoritative route rejects a stale owner before deletion", async () => {

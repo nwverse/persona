@@ -12,5 +12,6 @@
   "confirm_detail": "If app approval is enabled, Persona will ask again the next time it needs this app or screen. Removing this record does not change that setting or stop an operation already in progress.",
   "refresh": "Refresh",
   "retry": "Retry",
-  "owner_changed": "This computer changed managers. Refresh the machine page before trying again."
+  "owner_changed": "This computer changed managers. Refresh the machine page before trying again.",
+  "revoke_unsupported": "This hub version cannot safely revoke saved approvals. You can view them; update the hub to revoke them."
 }

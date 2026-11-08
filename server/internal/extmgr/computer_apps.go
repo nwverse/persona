@@ -303,6 +303,16 @@ func (h *Manager) getComputerApps(w http.ResponseWriter, r *http.Request, m *Mac
 	writeJSON(w, map[string]any{"apps": apps, "manager": h.computerAppsManager()})
 }
 
+// revokeComputerApp is safe through an older hub: legacy managers do not match this alias, while this receiver
+// requires and enforces its immutable identity before delegating to the existing persisted mutation.
+func (h *Manager) revokeComputerApp(w http.ResponseWriter, r *http.Request, m *Machine) {
+	if r.URL.Query().Get("expected_manager") == "" {
+		writeErrCode(w, http.StatusPreconditionRequired, "expected_manager_required", i18n.Err("hub-computer_apps.owner_required"))
+		return
+	}
+	h.deleteComputerApp(w, r, m)
+}
+
 // deleteComputerApp: DELETE /api/v1/machines/{mid}/computer/apps/{bundle}, removing only the saved approval.
 func (h *Manager) deleteComputerApp(w http.ResponseWriter, r *http.Request, m *Machine) {
 	if !h.computerAppsOwner(w, r) {

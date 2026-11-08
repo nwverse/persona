@@ -66,3 +66,20 @@ func TestComputerAppRevocationPreservesDisabledApprovalPolicy(t *testing.T) {
 		t.Fatalf("disabled policy must still allow without asking: asked=%v allowed=%v", asked, allowed)
 	}
 }
+
+func TestGuardedComputerAppAliasRequiresItsOwner(t *testing.T) {
+	h, st := twoMacs(t)
+	h.opts.ManagerID = "example-manager"
+	for _, query := range []string{"", "?expected_manager=example-other"} {
+		r := httptest.NewRequest(http.MethodDelete, "/api/v1/machines/a/computer/apps/revoke/com.apple.calculator"+query, nil)
+		r.SetPathValue("bundle", "com.apple.calculator")
+		w := httptest.NewRecorder()
+		h.revokeComputerApp(w, r, &Machine{cfg: MachineConfig{ID: "a"}})
+		if w.Code != http.StatusConflict && w.Code != http.StatusPreconditionRequired {
+			t.Fatalf("missing or different owner accepted: %d %s", w.Code, w.Body)
+		}
+		if len(st.stored(t)["a"]) != 2 {
+			t.Fatal("guarded alias changed settings without its owner")
+		}
+	}
+}

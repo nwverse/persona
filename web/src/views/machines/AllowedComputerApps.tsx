@@ -7,6 +7,7 @@ import { formatDate, t } from "../../i18n";
 
 type ComputerApp = { bundle_id: string; name: string; at?: string };
 type Answer = { apps: ComputerApp[]; manager?: string };
+const OWNER_HEADER = "X-Persona-Computer-Apps-Owner";
 const text = (key: string) => t(`machines-allowedcomputerapps.${key}`);
 function failure(error: unknown) {
   if (error instanceof ApiError && error.code === "machine_owner_changed") return text("owner_changed");
@@ -15,9 +16,7 @@ function failure(error: unknown) {
   return errorText(error);
 }
 function appsFrom(answer: Answer, manager: string): ComputerApp[] {
-  // A legacy manager may ignore the precondition. Its list cannot authorize a mutation on this page.
-  if (!answer.manager) throw new Error(text("unsupported"));
-  if (answer.manager !== manager) throw new Error(text("owner_changed"));
+  if (answer.manager && answer.manager !== manager) throw new Error(text("owner_changed"));
   if (!Array.isArray(answer.apps) || answer.apps.some((app) => !app || typeof app.bundle_id !== "string" || typeof app.name !== "string")) {
     throw new Error(text("invalid_response"));
   }
@@ -41,6 +40,7 @@ function OwnedApps({ mid, manager, owner, followsDefault }: { mid: string; manag
   const [token] = useState(getToken);
   const [apps, setApps] = useState<ComputerApp[] | null>(null);
   const [loading, setLoading] = useState(true);
+  const [verified, setVerified] = useState(false);
   const [loadError, setLoadError] = useState("");
   const [choice, setChoice] = useState<ComputerApp | null>(null);
   const [busy, setBusy] = useState(false);
@@ -48,6 +48,7 @@ function OwnedApps({ mid, manager, owner, followsDefault }: { mid: string; manag
   const [notice, setNotice] = useState("");
   const life = useRef({
     active: true,
+    verified: false,
     revision: 0,
     reading: false,
     writing: false,
@@ -64,14 +65,35 @@ function OwnedApps({ mid, manager, owner, followsDefault }: { mid: string; manag
     const state = life.current;
     if (!current() || state.reading || state.writing) return;
     state.reading = true;
+    state.verified = false;
+    state.choice = null;
+    setVerified(false);
+    setChoice(null);
+    setWriteError("");
+    setNotice("");
     const revision = ++state.revision;
     const controller = new AbortController();
     state.read = controller;
     setLoading(true);
     setLoadError("");
     try {
-      const result = appsFrom(await api<Answer>(`${path}${precondition}`, { ...options, signal: controller.signal }), manager);
-      if (current() && revision === state.revision) setApps(result);
+      let proof: string | null = null;
+      const result = appsFrom(
+        await api<Answer>(`${path}${precondition}`, {
+          ...options,
+          signal: controller.signal,
+          onResponse: (headers) => {
+            proof = headers.get(OWNER_HEADER);
+          },
+        }),
+        manager,
+      );
+      if (current() && revision === state.revision) {
+        setApps(result);
+        state.verified = proof === manager;
+        setVerified(state.verified);
+        if (!state.verified) setLoadError(text("revoke_unsupported"));
+      }
     } catch (error) {
       if (current() && revision === state.revision) setLoadError(failure(error));
     } finally {
@@ -104,7 +126,7 @@ function OwnedApps({ mid, manager, owner, followsDefault }: { mid: string; manag
   };
   const revoke = async (app: ComputerApp | null) => {
     const state = life.current;
-    if (!current() || !app || state.choice !== app || state.writing) return;
+    if (!current() || !app || state.choice !== app || state.writing || !state.verified) return;
     state.writing = true; // synchronous admission, including two clicks in the same render
     state.revision++; // a read begun before this write cannot restore its old list
     state.read?.abort();
@@ -116,10 +138,24 @@ function OwnedApps({ mid, manager, owner, followsDefault }: { mid: string; manag
     const controller = new AbortController();
     state.write = controller;
     try {
+      let proof: string | null = null;
       const result = appsFrom(
-        await api<Answer>(`${path}/${enc(app.bundle_id)}${precondition}`, { ...options, method: "DELETE", signal: controller.signal }),
+        await api<Answer>(`${path}/revoke/${enc(app.bundle_id)}${precondition}`, {
+          ...options,
+          method: "DELETE",
+          signal: controller.signal,
+          onResponse: (headers) => {
+            proof = headers.get(OWNER_HEADER);
+          },
+        }),
         manager,
       );
+      if (current() && proof !== manager) {
+        state.verified = false;
+        setVerified(false);
+        setLoadError(text("revoke_unsupported"));
+        throw new Error(text("revoke_unsupported"));
+      }
       if (!current()) return;
       setApps(result);
       setLoadError("");
@@ -179,9 +215,9 @@ function OwnedApps({ mid, manager, owner, followsDefault }: { mid: string; manag
               </div>
               <Button
                 tone="secondary"
-                disabled={busy}
+                disabled={busy || !verified}
                 onClick={() => {
-                  if (!current() || life.current.writing || life.current.choice) return;
+                  if (!current() || life.current.writing || life.current.choice || !life.current.verified) return;
                   const confirmation = { ...app };
                   life.current.choice = confirmation;
                   setChoice(confirmation);
@@ -208,7 +244,7 @@ function OwnedApps({ mid, manager, owner, followsDefault }: { mid: string; manag
             <Button tone="quiet" disabled={busy} onClick={() => close(choice)}>
               {t("common.cancel")}
             </Button>
-            <Button tone="danger" busy={busy} onClick={() => void revoke(choice)}>
+            <Button tone="danger" busy={busy} disabled={!verified} onClick={() => void revoke(choice)}>
               {writeError ? text("retry") : text("revoke")}
             </Button>
           </>
