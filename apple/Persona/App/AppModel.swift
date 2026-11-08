@@ -875,7 +875,9 @@ final class AppModel {
                 assistantCurrent = main
                 try await api.send(main, text: text)
             } else {
-                let s = try await api.startConversation(prompt: text, main: true)
+                let s = try await AssistantStart.run(receipts: hubFeatures.contains(AssistantStart.feature)) { op in
+                    try await api.startConversation(prompt: text, main: true, opID: op)
+                }
                 began(s, text: text)
                 assistantCurrent = s.key
                 await refreshAssistant()
