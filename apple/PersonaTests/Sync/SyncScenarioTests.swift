@@ -26,7 +26,10 @@ struct SyncScenarioTests {
 
     /// Cases this harness cannot play yet, and cases that fail on a bug filed for them: the name and why. A case leaves
     /// the list when it passes (a known issue that no longer happens fails the test).
-    nonisolated static let known: [String: String] = [:]
+    nonisolated static let known: [String: String] = [
+        "start_answer_cut_then_receipt": "#1112: a new chat starts from the new-conversation page, which the harness does not drive",
+        "start_refused_then_resent_new_op": "#1112: a new chat starts from the new-conversation page, which the harness does not drive",
+    ]
 
     @Test func everyFileHasCases() {
         #expect(Self.cases.count >= 24, "spec/fixtures/sync: \(Self.dir.path)")
@@ -87,6 +90,9 @@ final class SyncRun {
         defer { Self.current = nil; stop() }
         let names = c["devices"]?.array?.compactMap(\.string) ?? ["a"]
         first = names.first ?? "a"
+        // A new chat's first message starts it from the new-conversation page (AssistantStart, #1349), not through
+        // AppModel's send, so there is no chat page to project until it has started.
+        if c["chat"]?["new"]?.bool == true { throw SyncUnplayable(description: "a new chat: its start is the new-conversation page's, not AppModel's") }
         ChatCache.remove(key)
         StateCache.remove("outbox")
         for n in names { try await start(n) }

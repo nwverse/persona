@@ -83,6 +83,7 @@ final class AppModel {
                 let run = index[key.session]?.workflows?.first { $0.toolUseID == key.call }
                 if cell.value != run { cell.value = run }
             }
+            dropSpentUltracodeAsks()
             // Only the spaces a view watches (`siblings(of:)`): working out every space's tabs sorted each one on every
             // push, with no chat open to show them (#343).
             if !spaceCells.isEmpty {
@@ -904,7 +905,9 @@ final class AppModel {
                 assistantCurrent = main
                 try await api.send(main, text: text)
             } else {
-                let s = try await api.startConversation(prompt: text, main: true)
+                let s = try await AssistantStart.run(receipts: hubFeatures.contains(AssistantStart.feature)) { op in
+                    try await api.startConversation(prompt: text, main: true, opID: op)
+                }
                 began(s, text: text)
                 assistantCurrent = s.key
                 await refreshAssistant()
@@ -1472,8 +1475,16 @@ final class AppModel {
     private func applyPendingSessions() {
         sessionsFlushScheduled = false
         let pending = pendingSessions
+        guard !pending.isEmpty else { return } // landed early (`landPendingSessions`)
         pendingSessions = [:]
         applySessions(pending)
+    }
+
+    /// Lands the session lists that came and wait for the rest of their burst now: a request that reads its session right
+    /// after it returns sees what the hub pushed meanwhile (`setUltracode`).
+    func landPendingSessions() {
+        guard !pendingSessions.isEmpty else { return }
+        applyPendingSessions()
     }
 
     /// Machines' new session lists, whether they came whole (`sessions`) or as a delta (`sessions_delta`): the pages
@@ -2156,6 +2167,73 @@ final class AppModel {
             Haptics.error()
             return false
         }
+    }
+
+    // MARK: Claude Code's ultracode switch (#1307, docs/apple/ios.md "Claude Code ultracode")
+
+    /// What this device asked of a session's ultracode switch (`Ultracode.Ask`), until the session moved past it.
+    private(set) var ultracodeAsks: [SessionKey: Ultracode.Ask] = [:]
+
+    /// The ask still in force for the session as its page draws it (`session(_:)`); nil once it moved past it.
+    func ultracodeAsk(_ key: SessionKey) -> Ultracode.Ask? {
+        guard let ask = ultracodeAsks[key], let s = session(key), !Ultracode.askSpent(s, ask: ask) else { return nil }
+        return ask
+    }
+
+    /// Forgets an ask once its session moved past it, or is gone, at each update of the lists (as the web's
+    /// `useUltracodeAsk`). `askSpent` does not stay true: a change queued later, from another device, would make an
+    /// answered ask look like this device's again, and the switch would say "Applies next turn" for what it once asked.
+    private func dropSpentUltracodeAsks() {
+        for (key, ask) in ultracodeAsks where !ask.sending {
+            if let s = session(key), !Ultracode.askSpent(s, ask: ask) { continue }
+            ultracodeAsks[key] = nil
+        }
+    }
+
+    /// POST …/modes {"ultracode": on}, on its own (never with the model or effort). The switch stands where it was put
+    /// until the node's push answers; a failure, a refusal too, puts it back and says why once. Returns whether the hub
+    /// took it (maybe queued for the turn: `ultracodePending`).
+    @discardableResult
+    func setUltracode(_ key: SessionKey, on: Bool) async -> Bool {
+        guard ultracodeAsks[key]?.sending != true, allowSend(key), let api = api(key.group) else { return false }
+        ultracodeAsks[key] = Ultracode.Ask(on: on, sending: true)
+        do {
+            try await api.setUltracode(key, on: on)
+            // A push that came while the request was out (the node's "queued", often) lands first: `answered` is the
+            // session as the page draws it now, or the ask would look spent and the queue read as another device's.
+            landPendingSessions()
+            ultracodeAsks[key] = Ultracode.Ask(on: on, sending: false, answered: session(key))
+            Haptics.success()
+            return true
+        } catch {
+            ultracodeAsks[key] = nil
+            if !error.isCancellation {
+                toast = Toast(String(localized: "Couldn't switch ultracode: \(Ultracode.errorText(error))"), style: .error)
+                Haptics.error()
+            }
+            return false
+        }
+    }
+
+    /// Takes the resume notice away (POST …/modes {"ultracode_dismiss_lost": true}): gone at once, back if the hub says no.
+    func dismissUltracodeLost(_ key: SessionKey) async {
+        guard let api = api(key.group), let before = latest(key)?.ultracodeLostAt else { return }
+        patchSession(key) { $0.ultracodeLostAt = nil }
+        do {
+            try await api.dismissUltracodeLost(key)
+        } catch {
+            if latest(key)?.ultracodeLostAt == nil { patchSession(key) { $0.ultracodeLostAt = before } }
+            guard !error.isCancellation else { return }
+            toast = Toast(String(localized: "Couldn't dismiss the notice: \(Ultracode.errorText(error))"), style: .error)
+            Haptics.error()
+        }
+    }
+
+    /// Changes one listed session in place, until the hub's next list says otherwise.
+    private func patchSession(_ key: SessionKey, _ change: (inout Session) -> Void) {
+        guard var list = sessionsByMachine[key.machineRef], let i = list.firstIndex(where: { $0.sessionID == key.sessionID }) else { return }
+        change(&list[i])
+        sessionsByMachine[key.machineRef] = list
     }
 
     func keys(_ key: SessionKey, _ keys: [String], text: String = "") async {

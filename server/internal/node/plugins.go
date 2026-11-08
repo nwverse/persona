@@ -24,7 +24,6 @@ import (
 	"net"
 	"os"
 	"path/filepath"
-	"regexp"
 	"slices"
 	"strings"
 	"sync"
@@ -32,6 +31,7 @@ import (
 
 	"github.com/nwverse/persona/server/internal/extension"
 	"github.com/nwverse/persona/server/internal/extension/host"
+	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/rpc"
 )
@@ -53,7 +53,7 @@ const (
 // hubPluginNames are the hub's own in its plugins directory: never a node's, whatever is in them (#1933).
 var hubPluginNames = []string{"installed", "data", "staging", "markets", "node-packages"}
 
-var digestPattern = regexp.MustCompile(`^[0-9a-f]{64}$`)
+var digestPattern = lazyre.New(`^[0-9a-f]{64}$`)
 
 // pluginHosts are this process's plugin programs, one set per node directory (tests run several nodes).
 var pluginHosts = struct {

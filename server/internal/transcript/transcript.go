@@ -4,12 +4,12 @@ package transcript
 import (
 	"encoding/json"
 	"fmt"
-	"regexp"
 	"slices"
 	"strings"
 	"time"
 
 	"github.com/nwverse/persona/server/internal/compat"
+	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
@@ -257,14 +257,14 @@ func withoutBotmuxSentinel(text string) string {
 
 // pastedRe matches the wrapper Claude Code puts around long pasted input (also what herdr's bracketed paste from
 // the phone, e.g. a WeChat voice-input transcript, turns into): <pasted_content id="ae9b">…</pasted_content id="ae9b">.
-var pastedRe = regexp.MustCompile(`<[\\/]*pasted_content(?:\s+id="[^"]*")?\s*>`) // also <\pasted…> / <\/pasted…> from nested pastes
+var pastedRe = lazyre.New(`<[\\/]*pasted_content(?:\s+id="[^"]*")?\s*>`) // also <\pasted…> / <\/pasted…> from nested pastes
 
 // ContextRe matches the live snapshot Persona starts each message to its assistant with (node/assistant_context.go):
 // context for the model, not something the user wrote. It is <persona-context>; history and older nodes have
 // <persona-context> (#3182).
-var ContextRe = regexp.MustCompile(`(?s)<` + compat.ContextPattern() + `>.*?</` + compat.ContextPattern() + `>\s*`)
+var ContextRe = lazyre.New(`(?s)<` + compat.ContextPattern() + `>.*?</` + compat.ContextPattern() + `>\s*`)
 
-var tagRe = regexp.MustCompile(`(?s)<(command-name|command-message|command-args|local-command-stdout|local-command-stderr|task-notification|system-reminder)>(.*?)</(command-name|command-message|command-args|local-command-stdout|local-command-stderr|task-notification|system-reminder)>`)
+var tagRe = lazyre.New(`(?s)<(command-name|command-message|command-args|local-command-stdout|local-command-stderr|task-notification|system-reminder)>(.*?)</(command-name|command-message|command-args|local-command-stdout|local-command-stderr|task-notification|system-reminder)>`)
 
 // APIRetrying ends an API error notice Claude Code is still retrying: the turn goes on.
 const APIRetrying = "（正在重试）"
@@ -705,7 +705,7 @@ func (m *Meta) said(t string, ts time.Time) {
 }
 
 // ansiRe matches terminal escape sequences (colors, bold) that local command output keeps.
-var ansiRe = regexp.MustCompile(`\x1b\[[0-9;?]*[ -/]*[@-~]`)
+var ansiRe = lazyre.New(`\x1b\[[0-9;?]*[ -/]*[@-~]`)
 
 // apiErrorText is what an api_error line says went wrong: error.formatted / error.message, or older lines' content.
 func apiErrorText(e entry) string {

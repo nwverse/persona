@@ -347,6 +347,8 @@ var Routes = []string{
 	"POST /api/v1/machines/{mid}/deploy",
 	"GET /api/v1/machines/{mid}/claude-dirs",
 	"PUT /api/v1/machines/{mid}/claude-dirs/blocked",
+	"GET /api/v1/machines/{mid}/claude-live-replies",
+	"PUT /api/v1/machines/{mid}/claude-live-replies",
 }
 
 // MetricsRoutes are the machines' monitoring's routes (internal/devices metrics.go), relayed the same way: every

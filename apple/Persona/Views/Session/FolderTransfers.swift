@@ -240,13 +240,15 @@ struct FolderTransfersBar: View {
     }
 }
 
-/// A picture or video from the photo library as a file of its own (its original format and name where it has one).
+/// A picture or video from the photo library as a file of its own (its original format and name where it has one), or
+/// any file dragged in from another app.
 nonisolated struct PickedLibraryFile: Transferable {
     let url: URL
 
     static var transferRepresentation: some TransferRepresentation {
         FileRepresentation(importedContentType: .movie) { try copy($0.file) }
         FileRepresentation(importedContentType: .image) { try copy($0.file) }
+        FileRepresentation(importedContentType: .data) { try copy($0.file) }
     }
 
     private static func copy(_ file: URL) throws -> PickedLibraryFile {
