@@ -2,8 +2,8 @@ import XCTest
 
 /// A card's password field takes the keyboard: a tap on it, before anything is typed, leaves the app in the foreground
 /// with the on-screen keyboard up (#1580). Covers the password card (secret_run) in Persona's conversation and the
-/// generic fields card (`PermissionInputForm`) in an agent's chat, in both layouts. The password card then shows its
-/// field and Run above the keyboard, without scrolling inside the card first (#1581).
+/// generic fields card (`PermissionInputForm`) in an agent's chat, using the supported compact Shell. The password
+/// card then shows its field and Run above the keyboard, without scrolling inside the card first (#1581).
 /// Needs the on-screen keyboard: a simulator a test has typed into with `typeText` shows none (docs/lessons/testing.md),
 /// so run this on a fresh stock simulator (`scripts/app/sim-boot.sh --profile stock`), before tests that type.
 ///   PORT=18938 MOCK_SECRET_RUN=pending MOCK_SETTINGS_INPUT=1 python3 scripts/mock/mock_hub.py &
@@ -23,19 +23,11 @@ final class PasswordFieldFocusTests: XCTestCase {
     }
 
     @MainActor func testPasswordCardFieldTakesTheKeyboard() {
-        focus(["-ui.oldLayout", "NO", "-app.tab", "assistant", "-tab", "assistant", "-openAssistant", main], run: "secret-run.run")
-    }
-
-    @MainActor func testPasswordCardFieldTakesTheKeyboardInTheOldLayout() {
-        focus(["-ui.oldLayout", "YES", "-app.tab", "assistant", "-tab", "assistant", "-openAssistant", main], run: "secret-run.run")
+        focus(["-app.tab", "assistant", "-tab", "assistant", "-openAssistant", main], run: "secret-run.run")
     }
 
     @MainActor func testFieldsCardFieldTakesTheKeyboard() {
-        focus(["-ui.oldLayout", "NO", "-tab", "dev", "-openSession", review])
-    }
-
-    @MainActor func testFieldsCardFieldTakesTheKeyboardInTheOldLayout() {
-        focus(["-ui.oldLayout", "YES", "-app.tab", "chats", "-tab", "dev", "-openSession", review])
+        focus(["-tab", "dev", "-openSession", review])
     }
 
     /// Opens the card's page, taps its password field and checks the app is still up with the keyboard showing and the

@@ -155,3 +155,21 @@ func TestEnrichModelGeneration(t *testing.T) {
 		t.Fatalf("unknown [1m]: %+v", m)
 	}
 }
+
+func TestEnrichDiscoveredModelWindows(t *testing.T) {
+	// An exact catalog window replaces a server-reported one.
+	exact := enrichDiscoveredModel(proto.ProviderModel{ID: "claude-opus-4-8", ContextWindow: 123, Name: "From server"})
+	if exact.ContextWindow != 1000000 || exact.Name != "From server" || exact.InheritedFrom != "" || exact.DefaultEffort != "medium" {
+		t.Fatalf("exact window: %+v", exact)
+	}
+	// A server-reported window wins over one inherited from the previous generation.
+	reported := enrichDiscoveredModel(proto.ProviderModel{ID: "claude-opus-5-6", ContextWindow: 123})
+	if reported.ContextWindow != 123 || reported.InheritedFrom != "claude-opus-5-5" || reported.DefaultEffort != "medium" || reported.Name != "" {
+		t.Fatalf("reported over inherited: %+v", reported)
+	}
+	// With no server window, the previous generation fills it.
+	gap := enrichDiscoveredModel(proto.ProviderModel{ID: "claude-opus-5-6"})
+	if gap.ContextWindow != 1000000 || gap.InheritedFrom != "claude-opus-5-5" {
+		t.Fatalf("inherited gap: %+v", gap)
+	}
+}

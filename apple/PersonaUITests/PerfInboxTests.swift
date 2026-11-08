@@ -108,7 +108,7 @@ final class PerfInboxTests: PerfTestCase {
 
     @MainActor private func openMessages() -> XCUIElement {
         launch(["-dev.openChat", "", "-tab", "feishu", "-larkTop", "NO"] + lark)
-        let entry = shell ? app.buttons["shell-feishu"].firstMatch : app.tabBars.buttons["消息"]
+        let entry = app.buttons["shell-feishu"].firstMatch
         if entry.waitForExistence(timeout: 20) { entry.tapCenter() }
         return see(app.buttons["feishu-chat-f3"], "the conversation list", timeout: 20)
     }

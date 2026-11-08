@@ -22,7 +22,7 @@ final class LookPickerTests: XCTestCase {
                 app.launchArguments = ["-pairURL", pair, "-tab", "settings", "-openAppearance", page, "-openPersona", "persona"]
                 app.launchPersona()
                 _ = app.collectionViews.firstMatch.waitForExistence(timeout: 10)
-                let bar = app.tabBars.firstMatch.frame.minY
+                let bar = app.windows.firstMatch.frame.maxY - 40
                 let e = app.buttons[id]
                 func clear() -> Bool { e.exists && e.isHittable && e.frame.maxY < bar }
                 for _ in 0..<12 where !clear() { app.collectionViews.firstMatch.swipeUp(velocity: .slow) }
@@ -48,7 +48,7 @@ final class LookPickerTests: XCTestCase {
     @MainActor @discardableResult private func reveal(_ app: XCUIApplication, _ e: XCUIElement) -> Bool {
         let list = app.collectionViews.firstMatch
         _ = list.waitForExistence(timeout: 10)
-        let bar = app.tabBars.firstMatch.frame.minY
+        let bar = app.windows.firstMatch.frame.maxY - 40
         func clear() -> Bool { e.exists && e.isHittable && e.frame.maxY < bar }
         if clear() { return true }
         for _ in 0..<3 { list.swipeDown(velocity: .fast) }
@@ -136,7 +136,7 @@ final class LookPickerTests: XCTestCase {
 
     /// The iPhone's shell keeps Settings in a sheet: a choice rebuilds the tree, the sheet included, and lands back on Theme Color.
     @MainActor func testShellSheetStaysOnAppearance() throws {
-        let app = launch("color", ["-ui.oldLayout", "NO", "-ui.style", "glass", "-ui.color", "style", "-openPersona", "persona"])
+        let app = launch("color", ["-ui.style", "glass", "-ui.color", "style", "-openPersona", "persona"])
         let bar = app.navigationBars["主题色"]
         XCTAssertTrue(bar.waitForExistence(timeout: 20), "the shell's 设置 is not on 主题色")
         XCTAssertFalse(app.tabBars.firstMatch.exists, "not the shell")

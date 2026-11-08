@@ -63903,29 +63903,6 @@
       },
       "extractionState" : "manual"
     },
-    "New Layout" : {
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "New Layout"
-          }
-        },
-        "ja" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "新レイアウト"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "新布局"
-          }
-        }
-      },
-      "extractionState" : "manual"
-    },
     "New Link" : {
       "localizations" : {
         "en" : {
@@ -72464,29 +72441,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "旧版"
-          }
-        }
-      },
-      "extractionState" : "manual"
-    },
-    "Old Layout" : {
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Old Layout"
-          }
-        },
-        "ja" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "旧レイアウト"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "旧布局"
           }
         }
       },
@@ -116235,29 +116189,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "先启用这个扩展"
-          }
-        }
-      },
-      "extractionState" : "manual"
-    },
-    "Turn on to go back to the four tabs at the bottom (Persona, Agents, Inbox, Settings). The new layout has “Assistant | Agents” at the top, with Inbox, scheduled tasks and Knowledge in the sidebar at the top left. This switch goes away after a few days." : {
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Turn on to go back to the four tabs at the bottom (Persona, Agents, Inbox, Settings). The new layout has “Assistant | Agents” at the top, with Inbox, scheduled tasks and Knowledge in the sidebar at the top left. This switch goes away after a few days."
-          }
-        },
-        "ja" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "オンにすると下部の4つのタブ（Persona、Agents、受信トレイ、設定）に戻ります。新レイアウトでは上部に「アシスタント | Agents」があり、受信トレイ、定期タスク、ナレッジは左上のサイドバーにあります。このスイッチは数日後になくなります。"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "打开后回到底部四个标签（Persona、Agents、收件箱、设置）。新布局是顶部「助手 | Agents」，收件箱、定时任务、知识库在左上角的侧边栏里。过渡几天后会去掉这个开关。"
           }
         }
       },

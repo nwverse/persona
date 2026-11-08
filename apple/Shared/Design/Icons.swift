@@ -164,8 +164,6 @@ extension Theme {
         static let style = "paintpalette"
         /// Settings › Appearance › Theme Color.
         static let themeColor = "swatchpalette"
-        /// Settings › Appearance › Layout (the shell or the old tabs).
-        static let layout = "rectangle.topthird.inset.filled"
         /// Settings › Appearance › Light & Dark, and its Match System.
         static let colorScheme = "circle.lefthalf.filled"
         /// Settings › Appearance › Language: the interface language.

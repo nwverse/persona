@@ -12,14 +12,14 @@ final class MachineChartPreparationTests: XCTestCase {
         hub = value
         let pair = "persona://pair?url=" + hub.addingPercentEncoding(withAllowedCharacters: .alphanumerics)! + "&token=mock"
         app = XCUIApplication()
-        app.launchArguments = ["-pairURL", pair, "-dev.openChat", "", "-ui.oldLayout", "NO"]
+        app.launchArguments = ["-pairURL", pair, "-dev.openChat", ""]
         app.launchPinned()
         acceptIconAlert()
         app.terminate()
         for scheme in ["light", "dark"] {
             app.launchArguments = ["-pairURL", pair, "-dev.openChat", "", "-tab", "settings", "-openMachines", "YES",
                                    "-openMachineDetail", "server", "-openMonitorRange", "24h",
-                                   "-ui.oldLayout", "NO", "-ui.scheme", scheme]
+                                   "-ui.scheme", scheme]
             app.launchPinned()
             acceptIconAlert()
             XCTAssertTrue(app.navigationBars["服务器"].waitForExistence(timeout: 30))
