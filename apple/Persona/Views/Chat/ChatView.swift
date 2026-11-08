@@ -129,6 +129,9 @@ struct ChatView: View {
     @State private var deleting: Session?
     /// The turn whose "Background Task Done" drawer is open.
     @State private var wakeDrawer: String?
+    /// The plan sheet (`PlanSheet`), and whether the newest plan's line is on screen (if not, its pill shows).
+    @State private var planOpen = Self.debugPlanSheet
+    @State private var planLineShown = false
     @Environment(\.dismiss) private var dismissChat
     /// Hosted by a page about something else (a task's sheet, `HostedChat`): its header is the page's only one.
     @Environment(\.hostedChat) private var host
@@ -226,6 +229,15 @@ struct ChatView: View {
         Dictionary(subagents.compactMap { a in a.toolUseID.map { ($0, a) } }, uniquingKeysWith: { a, _ in a })
     }
     private var sessionWorks: Bool { session?.state == .working || session?.state == .needsYou }
+    /// The chat's newest plan (`ChatPlan.latest`), worked out once per change of its items.
+    private var latestPlan: ChatPlan? {
+        if let memo = scratch.plan, memo.version == store.version, memo.key == shownKey { return memo.plan }
+        let plan = ChatPlan.latest(store.items)
+        scratch.plan = (shownKey, store.version, plan)
+        return plan
+    }
+    /// The subagents the running exchange waits on (its work line says so).
+    private var agentsWorking: AgentsWorking? { AgentsWorking.of(subagents, tasks: model.chat(key).tasks) }
     private var status: SessionStatus {
         if let a = viewedAgent { return a.running ? .working : .idle }
         return session?.status ?? .unknown
@@ -658,6 +670,7 @@ struct ChatView: View {
         // Deleted here or from the list beside it: the chat goes (AppModel.deletedSession).
         .onChange(of: model.deletedSession) { _, gone in if let gone { closedAgent(gone, order: []) } }
         .sheet(item: $file) { ref in FileViewer(ref: ref, key: key) }
+        .sheet(isPresented: $planOpen) { PlanSheet(plan: latestPlan) }
         #if DEBUG
         // Simulator automation: `-showComposerPhoto YES` puts a made-up picture in the composer, as if picked from
         // Photos (the UI tests of a sent picture showing in the chat).
@@ -1040,6 +1053,7 @@ struct ChatView: View {
                 if let a = session?.subagents?.first(where: { $0.toolUseID == toolUseID }) { view(a) }
             },
             openWorkflowAgent: { openWorkflowAgent($0) },
+            openPlan: { planOpen = true },
             openFold: openFold,
             jumpToCall: { jumpToCall($0) },
             openQuote: { jumpToQuoted($0) })
@@ -1204,7 +1218,7 @@ struct ChatView: View {
             // Close to the bubble below it, like the photos on a message being sent (the list's spacing is 14).
             SentPhotos(images: items.compactMap(\.image)).padding(.bottom, -8)
         case .work(let id, let items, let live, let start, let end):
-            WorkLine(items: items, live: live, start: start, end: end, open: isOpen(id),
+            WorkLine(items: items, live: live, start: start, end: end, open: isOpen(id), agents: live ? agentsWorking : nil,
                      openTerminal: live && style == .dev && session?.canTerminal == true ? { openTerminal() } : nil) {
                 toggleWork(id, fromHeader: true)
             }
@@ -1219,6 +1233,9 @@ struct ChatView: View {
                 if WorkflowCallCard.isWorkflow(call) { WorkflowCallCard(call: call) } else { SubagentCard(call: call) }
             }
             .background { if !WorkCardSlice.timeline { WorkCardSlice(top: true, bottom: true) } }
+        case .agents(let group, let calls, let first, let alone):
+            SubagentGrid(calls: calls, first: first, alone: alone)
+                .unfolding(alone ? Unfolding() : stepUnfolding(group))
         case .toolRun(let id, let calls, let open, let first):
             ToolRunRow(calls: calls, open: open, first: first) { toggleRun(id, calls: calls) }
                 .equatable()
@@ -1838,6 +1855,7 @@ struct ChatView: View {
         }
         .environment(\.chatLayout, layout)
         .environment(\.openSubagent, actions.openSubagent)
+        .environment(\.openPlan, actions.openPlan)
         .environment(\.subagentsByCall, subagentsByCall)
         .environment(\.workflowChat, key)
         .environment(\.chatActions, actions)
@@ -2157,6 +2175,10 @@ struct ChatView: View {
                 if let queued = session?.queued, !queued.isEmpty, style == .dev {
                     QueueStrip(key: key, queued: queued, steers: session?.steersQueue == true)
                 }
+                // The newest plan while its line is out of view (#5602): which step of how many; tap, the whole plan.
+                if viewing == nil, let plan = latestPlan, !planLineShown {
+                    PlanPill(plan: plan) { planOpen = true }
+                }
                 // The assistant takes modes on Codex too (the node maps them to Codex's sandbox / approvals); a Codex thread
                 // on its app-server takes its effort alone (setsEffortOnly).
                 // In the shell the modes are in the composer's model menu (ShellComposerBar, #1091).
@@ -2344,7 +2366,11 @@ struct ChatView: View {
         // Side margins as scroll content margins, not padding: jumping to a row aligns its leading edge with the
         // margin instead of the screen edge (padding shifted the page 16pt sideways after landing on a row).
         .contentMargins(.horizontal, 16, for: .scrollContent)
-        .onScrollTargetVisibilityChange(idType: String.self) { ids in scratch.visibleLines = ids }
+        .onScrollTargetVisibilityChange(idType: String.self) { ids in
+            scratch.visibleLines = ids
+            let shown = latestPlan.map { p in ids.contains { $0.hasSuffix("/" + p.callID) } } ?? false
+            if planLineShown != shown { planLineShown = shown }
+        }
         // Any part of a row on screen: `visibleLines` counts a row once half of it is, and a line taller than two
         // screens never is. None at all after a landing is a blank page (`mendBlankLanding`).
         .onScrollTargetVisibilityChange(idType: String.self, threshold: 0.01) { ids in scratch.drawnLines = ids }
@@ -2603,7 +2629,7 @@ struct ChatView: View {
                     } else {
                         if let s = session {
                             if !s.assistant { AgentMark(s, side: Theme.Size.markXS) } // its agent before its state (#6390)
-                            StatusDot(state: s.state, size: 7)
+                            StatusDot(state: s.state, size: 7, waiting: s.waitsInBackground)
                         }
                         Text(compactPlace).lineLimit(1).truncationMode(.middle)
                     }
@@ -2654,15 +2680,17 @@ struct ChatView: View {
     }
 
     /// The folded header's sign of a loop / background tasks: a gear with the count, or the loop arrows (still: only
-    /// Needs You and the work spinner move). The same symbols and tints as the open header's pill (`ActivityChips`).
+    /// Needs You and the work spinner move). The same symbols and tints as the open header's pill (`ActivityChips`):
+    /// a clock, lighter, when all of it only waits (#6045).
     private var activityMark: some View {
         let bg = session?.background?.count ?? 0
+        let waiting = bg > 0 && session?.waitsInBackground == true
         return HStack(spacing: Theme.Space.xxs) {
-            ThemedIcon(bg > 0 ? ActivityChips.backgroundSymbol : ActivityChips.loopSymbol)
+            ThemedIcon(waiting ? Theme.Icon.backgroundWaiting : bg > 0 ? ActivityChips.backgroundSymbol : ActivityChips.loopSymbol)
                 .font(Theme.Font.labelHeavy)
             if bg > 0 { Text("\(bg)").font(Theme.Font.labelHeavy.monospacedDigit()) }
         }
-        .foregroundStyle(bg > 0 ? Theme.busy : Theme.loop)
+        .foregroundStyle(waiting ? StatusPalette.backgroundWaiting.dot : bg > 0 ? Theme.busy : Theme.loop)
         .scaledFrame(width: Theme.Size.tapTarget, height: Theme.Size.wellM)
         .contentShape(.rect)
     }
@@ -2857,7 +2885,7 @@ struct ChatView: View {
             let machine = model.namedMachine(s.machineRef)?.title ?? s.machineID
             HStack(spacing: Theme.Space.xs) {
                 AgentMark(s, side: Theme.Size.markXS) // its agent before its state (#6390); this line is an agent's only
-                StatusDot(state: s.state, size: 7)
+                StatusDot(state: s.state, size: 7, waiting: s.waitsInBackground)
                 // Not ViewThatFits: that measured both lines again at every width of a window resize (#1337).
                 FirstFitting {
                     subtitleLine(s, words, [machine, place])
@@ -2877,7 +2905,7 @@ struct ChatView: View {
         }
         let tail = parts.map { " · " + $0 }.joined()
         return (Text(words).fontWeight(.semibold)
-            .foregroundStyle(s.state == .idle || s.state == .offline || s.state == .unknown ? Color.secondary : s.state.tone.text)
+            .foregroundStyle(s.state == .idle || s.state == .offline || s.state == .unknown ? Color.secondary : s.stateTone.text)
             + Text(tail).foregroundStyle(.secondary))
             .lineLimit(1) // FirstFitting picks by the ideal (one-line) width; the last one truncates
     }
@@ -2897,8 +2925,9 @@ struct ChatView: View {
 
     /// "Working 22 min" while a turn runs (minutes: the work line in the chat has the seconds), else the state's name.
     private func stateWords(_ s: Session, now: Date) -> String {
-        // Its turn ended and a workflow / background work keeps it going (#2935): 「工作中（后台）」, not the turn's time.
-        if s.isBackgroundWorking { return s.stateLabel }
+        // Its turn ended and a workflow / background work keeps it going (#2935): 「工作中（后台）」, not the turn's time;
+        // or all it runs only waits (#6045): 「后台等待中」.
+        if s.isBackgroundWorking || s.waitsInBackground { return s.stateLabel }
         guard s.state == .working, status.isActive, case .turn(let t)? = store.blocks.last, let start = t.startedAt else { return s.state.label }
         let m = Int(now.timeIntervalSince(start)) / 60
         if m < 1 { return s.state.label }
@@ -3081,7 +3110,7 @@ struct ChatView: View {
                 Spacer(minLength: 0)
             }
             if activity {
-                ActivityChips(loop: session?.loop, background: session?.background ?? []) { showActivity = true }
+                ActivityChips(loop: session?.loop, background: session?.background ?? [], waiting: session?.waitsInBackground == true) { showActivity = true }
             }
         }
     }
@@ -3487,6 +3516,15 @@ struct ChatView: View {
     private static var debugOpenAll: Bool {
         #if DEBUG
         UserDefaults.standard.bool(forKey: "openAllWork")
+        #else
+        false
+        #endif
+    }
+
+    /// `-showPlanSheet YES`: the chat opens with its plan sheet up (screenshots).
+    private static var debugPlanSheet: Bool {
+        #if DEBUG
+        UserDefaults.standard.bool(forKey: "showPlanSheet")
         #else
         false
         #endif
@@ -5085,6 +5123,9 @@ struct ChatLine: Identifiable {
         /// A running subagent's card under its folded work line (#5602, as the web): it stays in view while the line is
         /// shut, by the id it has as a step of the open line, so opening the line does not draw it again.
         case agentOut(group: String, call: ToolCall)
+        /// Subagents launched one after another, their cards in one grid (`SubagentGrid`); `alone`: the running ones
+        /// out of their folded work line.
+        case agents(group: String, calls: [ToolCall], first: Bool, alone: Bool)
         /// Two or more tool calls in a row of an open work line, as one line of chips.
         case toolRun(id: String, calls: [ToolCall], open: Bool, first: Bool)
         /// The foot of an open work card: Collapse, and the files the work changed (`ChatLines.changedFiles`).
@@ -5106,6 +5147,7 @@ struct ChatLine: Identifiable {
             case .work(let id, _, _, _, _): id
             case .workStep(let group, let item, _): group + "/" + item.id
             case .agentOut(let group, let call): group + "/" + WorkItem.step(.call(call)).id
+            case .agents(let group, let calls, _, _): group + "/agents-" + (calls.first?.id ?? "")
             case .workEnd(let group, _, _): group + "-end"
             case .toolRun(let id, _, _, _): id
             case .userImages(let id, _): id
@@ -5136,6 +5178,9 @@ struct ChatLine: Identifiable {
         Self(.workStep(group: group, item: item, first: first))
     }
     static func agentOut(group: String, call: ToolCall) -> Self { Self(.agentOut(group: group, call: call)) }
+    static func agents(group: String, calls: [ToolCall], first: Bool, alone: Bool) -> Self {
+        Self(.agents(group: group, calls: calls, first: first, alone: alone))
+    }
     static func workEnd(group: String, count: Int, files: [ChangedFile] = []) -> Self {
         Self(.workEnd(group: group, count: count, files: files))
     }
@@ -5248,6 +5293,7 @@ struct WorkStepView: View, Equatable {
         var loadFullText: (String) async throws -> String = { _ in "" }
         var openSubagent: (String) -> Void = { _ in }
         var openWorkflowAgent: (WorkflowAgent) -> Void = { _ in }
+        var openPlan: () -> Void = {}
         var openFold: (Item) async throws -> Void = { _ in }
         var jumpToCall: (String) -> Void = { _ in }
         var openQuote: (ContextRef) -> Bool = { _ in false }
@@ -5274,6 +5320,7 @@ struct WorkStepView: View, Equatable {
     }
     private(set) lazy var openSubagent: (String) -> Void = { [weak self] in self?.handlers.openSubagent($0) }
     private(set) lazy var openWorkflowAgent: (WorkflowAgent) -> Void = { [weak self] in self?.handlers.openWorkflowAgent($0) }
+    private(set) lazy var openPlan: () -> Void = { [weak self] in self?.handlers.openPlan() }
     private(set) lazy var openFold: (Item) async throws -> Void = { @MainActor [weak self] item in
         guard let open = self?.handlers.openFold else { return }
         try await open(item)
@@ -5490,7 +5537,7 @@ struct WorkLine: View, Equatable {
     /// The closures are the line's own (keyed by its id): a hub push re-evaluating the page leaves unchanged lines alone.
     nonisolated static func == (a: Self, b: Self) -> Bool {
         a.isEmpty == b.isEmpty && a.counts == b.counts && a.live == b.live && a.start == b.start && a.end == b.end
-            && a.open == b.open && (a.openTerminal == nil) == (b.openTerminal == nil)
+            && a.open == b.open && (a.openTerminal == nil) == (b.openTerminal == nil) && a.agents == b.agents
     }
 
     private let isEmpty: Bool
@@ -5499,10 +5546,12 @@ struct WorkLine: View, Equatable {
     let start: Date?
     let end: Date?
     let open: Bool
+    /// The subagents the running line waits on: what it says instead of its counts.
+    let agents: AgentsWorking?
     let openTerminal: (() -> Void)?
     let toggle: () -> Void
 
-    init(items: [WorkItem], live: Bool, start: Date?, end: Date?, open: Bool,
+    init(items: [WorkItem], live: Bool, start: Date?, end: Date?, open: Bool, agents: AgentsWorking? = nil,
          openTerminal: (() -> Void)?, toggle: @escaping () -> Void) {
         isEmpty = items.isEmpty
         counts = WorkSummary(items)
@@ -5510,6 +5559,7 @@ struct WorkLine: View, Equatable {
         self.start = start
         self.end = end
         self.open = open
+        self.agents = live ? agents : nil
         self.openTerminal = openTerminal
         self.toggle = toggle
     }
@@ -5599,7 +5649,7 @@ struct WorkLine: View, Equatable {
     }
 
     private func label(now: Date, short: Bool) -> String {
-        let parts = short ? counts.short : counts.full
+        let parts = agents.map { [SubagentGridText.working(count: $0.count, doing: $0.doing, short: short)] } ?? (short ? counts.short : counts.full)
         let took = Self.duration(from: start, to: now)
         guard AppStyle.current.usesBeautifulUI else {
             // Persona' own: "Tool 3 · Thinking 1 · 1 min 20 s", "Working 39s · Tool 2".
@@ -5805,6 +5855,8 @@ final class ChatScratch {
     var lastUserScroll = Date.distantPast
     /// The frozen chat's rows up to its last exchange (`ChatStore.rebuild`).
     var frozenSettled: ChatStore.SettledRows?
+    /// The chat's newest plan by the store's version (`ChatView.latestPlan`).
+    var plan: (key: SessionKey, version: Int, plan: ChatPlan?)?
     /// Rows on screen (for remembering where you left off), written by the list as it scrolls.
     var visibleLines: [String] = []
     /// Rows with any part on screen (`ChatView.mendBlankLanding`).

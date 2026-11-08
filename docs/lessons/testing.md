@@ -1,8 +1,12 @@
 # Lessons: testing and validation
 
+- On Linux, replacing a running executable requires a new file and rename; direct writes fail with `ETXTBSY`. Use a ready handshake and reap the fixture process to test the real overlap.
+
 - Run standalone release-worker tests on the oldest supported Python, including receipt verification and verified-artifact retries (#1077). Python 3.9 has no `hashlib.file_digest`; bounded reads into `hashlib.sha256` keep hashing portable without loading an APK into memory. Cover empty files and binary inputs spanning multiple chunks.
 
 Pitfalls, odd behavior, and the tradeoffs made at the time (originally in `CLAUDE.md`, "Lessons"; index in `docs/lessons/README.md`). Add new lessons to the relevant section, or start a section if none fits.
+
+- Fixed `time.Sleep` calls in `_test.go` files under `server/` and `sdk/go/` are ratcheted by `scripts/ci/sleep_ratchet.py` (baseline `scripts/ci/sleep_baseline.json`): a file's count may stay or fall, never rise, a new file starts at zero, and `// sleep-ok: <reason>` on the call's line is the only escape. Prefer `testing/synctest`, a polling helper or a channel.
 
 - Test authoring realm comparisons as a matrix, not just default-export shape (#1200). `structuredClone`, Response JSON, iterators, streams and WebCrypto can return host objects during initialization; compare Object/Array, containers, regexps, dates and binary families in both native ESM and the probe. Preserve cycles, transfers, real subclass negatives and native null-prototype records. State the supported `instanceof` contract separately from exact cross-realm prototype identity. EventTarget listener methods must be synchronous and return undefined: observe nonconforming ordinary promise/thenable rejections before returning OPTIONS, and keep secondary cleanup errors alongside the primary failure. If caller constructor/species machinery prevents handler installation, report the observation error and attempt owned-worker cleanup, but do not claim that the original rejection was handled or alter caller promises/global rejection policy. Ready must precede `module.evaluate()`, which can block synchronously forever; recorded SIGINT/SIGTERM exit priority survives a late or failed cleanup without inventing reaping evidence.
 
@@ -261,6 +265,10 @@ Pitfalls, odd behavior, and the tradeoffs made at the time (originally in `CLAUD
 
 - `deadcode -test ./...` only analyzes the selected platform and build tags. A default Linux run reports `sysmon.ptr`, the Windows tray notification helpers and `DevelopmentLimits.valid` as unreachable, but macOS, Windows and the `persona_dev_resources` build respectively call them.
 - Before deleting a reported function, use repository-wide `git grep` to check callers, tests, scripts, docs and string-based references, including files excluded from the current build. Keep candidates whose reachability is uncertain; a clean build on one platform cannot establish that they are unused everywhere.
+
+## Keep service proxy routing out of server fixtures (2026-11-08, #1175)
+
+- Server test children must not inherit service proxy routing (#1175). An ambient HTTPS proxy redirected a local Git clone and synthetic voice DNS fixtures, and remained visible outside an extension sandbox. A local rejecting proxy reproduced all four failures; isolating only the test child's upper/lowercase HTTP, HTTPS, ALL and NO proxy variables made the unchanged fixtures pass. `server_test_env.clean_environment` removes that routing at launch; explicit fixture proxy setup still works. Preserve the parent's route for toolchain resolution, dependency preparation and publishing, rather than changing production proxy settings or increasing test deadlines.
 
 ## When Go on the hub is older than the repository (2026-11-03, #984)
 

@@ -1,6 +1,7 @@
 package hub
 
 import (
+	"bytes"
 	"cmp"
 	"context"
 	"encoding/base64"
@@ -597,29 +598,70 @@ func (h *Hub) listSessions(w http.ResponseWriter, r *http.Request) {
 		writeErrCode(w, http.StatusForbidden, codeOtherManager, errOtherManager)
 		return
 	}
-	// Each machine's list as kept, then one copy of them all, stamped with their managers (decorated): with thousands
-	// of sessions, a copy of each list and the regrowing of out were most of what an answer allocated.
-	type kept struct {
-		list    []proto.Session
-		manager string
-	}
-	var lists []kept
-	n := 0
+	// Each machine's list as kept, written out a session at a time with its manager (decorated): with thousands of
+	// sessions, a copy of all the lists and the whole answer in one buffer were most of what an answer allocated.
+	var lists []stampedList
 	for _, m := range h.machinesNow() {
 		if mid != "" && m.cfg.ID != mid || em != "" && h.machineOwner(m.cfg.ID) != em {
 			continue
 		}
-		list := h.shown(m.cfg.ID, m.keptSessions())
-		lists, n = append(lists, kept{list, h.machineOwner(m.cfg.ID)}), n+len(list)
+		lists = append(lists, stampedList{h.shown(m.cfg.ID, m.keptSessions()), h.machineOwner(m.cfg.ID)})
 	}
-	out := make([]proto.Session, 0, n)
-	for _, k := range lists {
-		out = append(out, k.list...)
-		for i := len(out) - len(k.list); i < len(out); i++ {
-			out[i].Manager = k.manager
+	writeSessionLists(w, lists)
+}
+
+// stampedList is a machine's list as kept, and the manager its sessions go out with.
+type stampedList struct {
+	list    []proto.Session
+	manager string
+}
+
+// sessionsFlushAt is how much of the answer writeSessionLists holds before writing it out; its buffer has room for
+// one more session of up to 8 KB on top.
+const sessionsFlushAt = 32 << 10
+
+// writeSessionLists writes {"sessions":[...]} of every session of lists, each stamped with its list's manager: the
+// bytes writeJSON gives for the stamped lists put together, encoded a session at a time and written out every
+// sessionsFlushAt bytes, so neither a copy of the lists nor the whole answer is held. A session that fails to encode
+// is left out, as a push leaves it out (encodeRows). The lists are only read.
+func writeSessionLists(w http.ResponseWriter, lists []stampedList) {
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	var buf bytes.Buffer
+	buf.Grow(sessionsFlushAt + 8<<10)
+	buf.WriteString(`{"sessions":[`)
+	enc := json.NewEncoder(&buf) // escapes HTML, as writeJSON does
+	var scratch *proto.Session
+	n := 0
+	for _, l := range lists {
+		for i := range l.list {
+			s := &l.list[i]
+			if s.Manager != l.manager {
+				if scratch == nil {
+					scratch = new(proto.Session)
+				}
+				*scratch = *s
+				scratch.Manager, s = l.manager, scratch
+			}
+			mark := buf.Len()
+			if n > 0 {
+				buf.WriteByte(',')
+			}
+			if enc.Encode(s) != nil {
+				buf.Truncate(mark)
+				continue
+			}
+			buf.Truncate(buf.Len() - 1) // the '\n' Encode ends each value with
+			n++
+			if buf.Len() >= sessionsFlushAt {
+				if _, err := w.Write(buf.Bytes()); err != nil {
+					return // the client is gone
+				}
+				buf.Reset()
+			}
 		}
 	}
-	writeJSON(w, map[string]any{"sessions": out})
+	buf.WriteString("]}\n")
+	_, _ = w.Write(buf.Bytes())
 }
 
 func (h *Hub) startSession(w http.ResponseWriter, r *http.Request) {

@@ -465,6 +465,9 @@ nonisolated enum Theme {
         static let sidebarMax: CGFloat = 480
         /// The narrowest column of a card grid (Machines' cards): two side by side in an iPad's detail column.
         static let cardColumn: CGFloat = 330
+        /// The narrowest column of a chat's grid of subagent cards: two side by side from about 540 pt (iPad, Mac), as
+        /// the web's from 560 px; one on a phone.
+        static let subagentColumn: CGFloat = 260
         // CarPlay.
         /// The image of a CarPlay voice control state: Apple's guide asks for 150 pt (CarPlay sets its own size).
         static let carPlayVoiceImage: CGFloat = 150
