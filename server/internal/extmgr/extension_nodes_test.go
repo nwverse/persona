@@ -40,6 +40,43 @@ func TestExtensionIdentityRevisionSurvivesPostgresTimestampPrecision(t *testing.
 	}
 }
 
+func TestExtensionIdentityChecksConfiguredNodesBeforeCommit(t *testing.T) {
+	h, _ := extensionTestHub(t)
+	reg := h.extensions.reg
+	pv, err := reg.Preview(t.Context(), "dir:"+helperPackage(t), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := reg.Install(t.Context(), pv.ID, pv.Digest, "test"); err != nil {
+		t.Fatal(err)
+	}
+	legacy, calls := extensionNodeMachine(t, h, "legacy-node", "linux", "amd64", false, false)
+	_, _ = extensionNodeMachine(t, h, "modern-node", "linux", "amd64", false)
+	if err := reg.SetConfig(t.Context(), "example-helper", json.RawMessage(`{"computers":["legacy-node"]}`), "test"); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.checkRenameNodeCapabilities(t.Context(), reg.SnapshotExact("example-helper")); err == nil {
+		t.Fatal("legacy configured node did not block identity commit")
+	}
+	for _, call := range calls() {
+		if call.Method != "plugin.node.identity" {
+			t.Fatal("capability preflight mutated a legacy node")
+		}
+	}
+	legacy.mu.Lock()
+	legacy.online = false
+	legacy.mu.Unlock()
+	if err := h.checkRenameNodeCapabilities(t.Context(), reg.SnapshotExact("example-helper")); err == nil {
+		t.Fatal("offline configured node did not block identity commit")
+	}
+	if err := reg.SetConfig(t.Context(), "example-helper", json.RawMessage(`{"computers":["modern-node"]}`), "test"); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.checkRenameNodeCapabilities(t.Context(), reg.SnapshotExact("example-helper")); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestPluginIdentityCapabilityBeforeAnyDestructivePhase(t *testing.T) {
 	ctx := context.Background()
 	h, _ := extensionTestHub(t)
@@ -166,8 +203,11 @@ func extensionNodeMachine(t *testing.T, h *Manager, id, goos, goarch string, old
 		case "plugin.node.put.chunk", "plugin.node.put.commit", "plugin.node.renew", "plugin.node.stop":
 			return map[string]bool{"ok": true}, nil
 		case "plugin.node.start":
-			revision, _ := p["identity_revision"].(float64)
-			return proto.PluginNodeState{ID: p["id"].(string), Version: p["version"].(string), Revision: int64(revision), State: "running"}, nil
+			var start proto.PluginNodeStart
+			if err := json.Unmarshal(params, &start); err != nil {
+				return nil, err
+			}
+			return proto.PluginNodeState{ID: start.ID, Version: start.Version, Revision: start.Revision, State: "running"}, nil
 		case "plugin.node.sync":
 			return proto.PluginNodeStates{}, nil
 		case "plugin.node.call":

@@ -331,6 +331,32 @@ func (ps *extensions) nodeIdentityCurrent(id string, revision int64) bool {
 	return p != nil && (extensionNodeRevision(p) == revision || p.Record.StorageID == "" && revision == extensionIdentityTimestamp(p.Record.UpdatedAt))
 }
 
+// checkRenameNodeCapabilities runs before the source guard takes its market lock.
+// A configured legacy/offline node must not leave the old run active after the
+// public identity commits, or require a destructive old-wire sync to retire it.
+func (h *Manager) checkRenameNodeCapabilities(ctx context.Context, p *extension.Extension) error {
+	if p == nil {
+		return i18n.Err("extension-identity.invalid")
+	}
+	if !p.Record.Enabled || p.Manifest.NodeProgram() == nil {
+		return nil
+	}
+	for _, id := range h.extensions.nodeMachines(p) {
+		m := h.machineByID(id)
+		if m == nil || !m.isOnline() {
+			return i18n.Err("extension-identity.node_required")
+		}
+		probeCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+		var capability proto.PluginNodeIdentityReply
+		err := m.call(probeCtx, "plugin.node.identity", proto.PluginNodeIdentityRequest{}, &capability)
+		cancel()
+		if err != nil || !capability.Supported {
+			return i18n.Err("extension-identity.node_required")
+		}
+	}
+	return nil
+}
+
 func commitNodeIdentities(ctx context.Context, m *Machine, slots []proto.PluginNodeIdentity) error {
 	var supported proto.PluginNodeIdentityReply
 	if err := m.call(ctx, "plugin.node.identity", proto.PluginNodeIdentityRequest{}, &supported); err != nil {
@@ -627,6 +653,7 @@ func (h *Manager) serveNodeExtensionHTTP(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	id, mid := r.PathValue("id"), r.PathValue("mid")
+	requestedID := id
 	var p *extension.Extension
 	if h.extensions != nil {
 		p = h.extensions.reg.Get(id)
@@ -640,7 +667,8 @@ func (h *Manager) serveNodeExtensionHTTP(w http.ResponseWriter, r *http.Request)
 		writeErrCode(w, http.StatusConflict, extensionNodeOffline, i18n.Err("hub-extension_nodes.offline", i18n.Args{"name": m.cfg.Name}))
 		return
 	}
-	prefix := "/api/v1/extensions/" + id + "/-/machines/" + mid
+	id = p.Record.ID // Owner aliases route to the exact current node program.
+	prefix := "/api/v1/extensions/" + requestedID + "/-/machines/" + mid
 	dial := func(ctx context.Context, _, _ string) (net.Conn, error) { return dialNodeExtension(ctx, m, id) }
 	proxy := &httputil.ReverseProxy{
 		Rewrite: func(pr *httputil.ProxyRequest) {

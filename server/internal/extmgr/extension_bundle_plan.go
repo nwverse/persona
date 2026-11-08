@@ -252,6 +252,13 @@ func (h *Manager) guardExtensionPlan(ctx context.Context, previews []*extension.
 	if !slices.ContainsFunc(previews, func(pv *extension.Preview) bool { return pv.Market != "" }) {
 		return nil, nil
 	}
+	for _, pv := range previews {
+		if pv.RenameFrom != "" {
+			if err := h.checkRenameNodeCapabilities(ctx, h.extensions.reg.SnapshotExact(pv.RenameFrom)); err != nil {
+				return nil, err
+			}
+		}
+	}
 	ms := h.marketsState()
 	ms.mu.Lock()
 	fail := func(err error) (func(), error) { ms.mu.Unlock(); return nil, err }

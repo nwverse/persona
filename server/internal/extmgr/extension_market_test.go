@@ -71,7 +71,7 @@ func TestExtensionIdentityCommittedOwnerAliasAndRetiredToken(t *testing.T) {
 	if err := reg.SetSecret(context.Background(), "example-helper", "api_key", "fixture-secret", "test"); err != nil {
 		t.Fatal(err)
 	}
-	if err := reg.SetConfig(context.Background(), "example-helper", json.RawMessage(`{"computers":["offline-computer"]}`), "test"); err != nil {
+	if err := reg.SetConfig(context.Background(), "example-helper", json.RawMessage(`{"computers":["configured-node"]}`), "test"); err != nil {
 		t.Fatal(err)
 	}
 	u := h.extensionUpgrades()
@@ -95,6 +95,16 @@ func TestExtensionIdentityCommittedOwnerAliasAndRetiredToken(t *testing.T) {
 	code, rename := call(t, mux, "POST", "/api/v1/extensions/-/catalog/preview", phone, fmt.Sprintf(`{"market":%q,"extension":"renamed-helper"}`, mid))
 	if code != 200 || rename["rename_from"] != "example-helper" {
 		t.Fatalf("rename preview: %d %+v", code, rename)
+	}
+	// A configured node that cannot be reached must not let the identity commit.
+	code, blocked := call(t, mux, "POST", "/api/v1/extensions/-/install", phone, fmt.Sprintf(`{"preview_id":%q,"permissions_digest":%q}`, rename["preview_id"], rename["permissions_digest"]))
+	if code == 200 || reg.GetExact("example-helper") == nil || reg.GetExact("renamed-helper") != nil {
+		t.Fatalf("unready node allowed identity commit: %d %+v", code, blocked)
+	}
+	_, _ = extensionNodeMachine(t, h, "configured-node", "linux", "amd64", false)
+	code, rename = call(t, mux, "POST", "/api/v1/extensions/-/catalog/preview", phone, fmt.Sprintf(`{"market":%q,"extension":"renamed-helper"}`, mid))
+	if code != 200 {
+		t.Fatalf("ready rename preview: %d %+v", code, rename)
 	}
 	// The final manager guard must recheck the declaration, not trust a preview-time catalog pointer.
 	staged := reg.PreviewOf(rename["preview_id"].(string))
