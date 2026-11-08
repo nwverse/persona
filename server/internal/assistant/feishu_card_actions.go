@@ -3,6 +3,7 @@ package assistant
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"strconv"
 	"strings"
 	"time"
@@ -39,6 +40,9 @@ func (s *Service) botCardAction(ctx context.Context, a *feishubot.CardAction, ac
 			ok, err = s.acceptTryFromBrief(ctx, a.Str("id"), at)
 		} else {
 			ok, err = s.acceptTry(ctx, a.Str("id"), a.Context.MessageID)
+		}
+		if errors.Is(err, errAcceptStore) { // the asks could not be read or saved: not accepted, the button works again
+			return toast("error", i18n.T(l, "http-status.unavailable"))
 		}
 		if err != nil { // a recommendation that did not reach the agent: not taken, the button works again
 			return toast("error", i18n.T(l, "assistant-reports.accept_not_sent", i18n.Args{"error": clip(oneLine(err.Error()), 120)}))
