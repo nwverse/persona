@@ -5,7 +5,7 @@ import XCTest
 /// Persona's main conversation, through the inbox hand-off (#1194): the message the hub put in its transcript carries the
 /// hand-off's id and takes the bubble's place. Against scripts/mock/mock_hub.py with MOCK_ASSISTANT_TRANSCRIPT_SECONDS=8
 /// (PERSONA_MOCK_HUB): the mock answers the start or hand-off request at once and writes the line that much later, as the
-/// node does.
+/// node does. A hand-off whose answer got lost keeps the sheet and its client id (`testAHandOffThatMayHaveGoneSaysToLookFirst`).
 final class NewConversationEntryTests: XCTestCase {
     private static let mainConversation = "b2e4d6f8-0000-4000-8000-000000000001"
 
@@ -25,24 +25,60 @@ final class NewConversationEntryTests: XCTestCase {
         try handOff(layout: ["-ui.oldLayout", "YES"], name: "old", newChat: true)
     }
 
-    @MainActor private func handOff(layout: [String], name: String, newChat: Bool) throws {
-        guard let hub = ProcessInfo.processInfo.environment["PERSONA_MOCK_HUB"] else {
-            throw XCTSkip("needs scripts/mock/mock_hub.py (PERSONA_MOCK_HUB)")
+    /// The answer to a hand-off gets lost after the hub ran it (the mock's lost_receipt fault: 502, delivered unknown): the
+    /// sheet stays and says to look in the chat first. Sending again goes under the same client id, so the mock answers it
+    /// from the first and the chat gets the hand-off once; its answer lost too, the sheet adds how to send it anyway.
+    @MainActor func testAHandOffThatMayHaveGoneSaysToLookFirst() throws {
+        for scheme in ["light", "dark"] { try inDoubt(scheme: scheme) }
+    }
+
+    @MainActor private func inDoubt(scheme: String) throws {
+        let hub = try mockHub()
+        let app = open(hub, ["-ui.oldLayout", "NO", "-ui.scheme", scheme])
+        defer { app.terminate() }
+        let ask = "Hand-off in doubt \(scheme) \(UUID().uuidString.prefix(8))"
+        func said(_ words: String) -> XCUIElement {
+            app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", words)).firstMatch
         }
-        let app = XCUIApplication()
-        let pair = "persona://pair?url=" + hub.addingPercentEncoding(withAllowedCharacters: .alphanumerics)! + "&token=mock"
-        app.launchArguments = ["-pairURL", pair, "-tab", "mail", "-inbox.kind", "", "-inbox.source", "",
-                               "-openInboxItem", "mail:acc1:t1:501", "-showInboxAction", "handoff", "-openChatsFresh", "YES"] + layout
-        app.launchPinned()
-        func shot(_ name: String) {
-            let a = XCTAttachment(screenshot: app.screenshot())
-            a.name = "\(name) \(UITestStyle.name)"
-            a.lifetime = .keepAlways
-            add(a)
-            if let dir = ProcessInfo.processInfo.environment["PERSONA_SHOTS"] {
-                try? app.screenshot().pngRepresentation.write(to: URL(fileURLWithPath: dir).appending(path: name + "-\(UITestStyle.name).png"))
+        // The error is the form's last row, below the targets; the drag stays clear of the keyboard.
+        func shown(_ words: String) -> Bool {
+            let form = app.collectionViews.firstMatch
+            for _ in 0..<6 {
+                if said(words).waitForExistence(timeout: 1), said(words).isHittable { return true }
+                form.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.35))
+                    .press(forDuration: 0.05, thenDragTo: form.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.05)))
             }
+            return said(words).exists
         }
+        let send = app.buttons["发送"].firstMatch
+        XCTAssertTrue(send.waitForExistence(timeout: 20), "no 交给 AI sheet:\n\(app.debugDescription)")
+        let field = instructions(app)
+        XCTAssertTrue(field.waitForExistence(timeout: 5), "no instructions field:\n\(app.debugDescription)")
+        field.tap()
+        field.typeText(ask)
+
+        loseTheNextAnswer(hub)
+        send.tap()
+        XCTAssertTrue(shown("可能已经送到电脑上了"), "no look-first error:\n\(app.debugDescription)")
+        XCTAssertFalse(said("仍要发送的话").exists, "the first lost answer already says how to send it anyway")
+        shot(app, "handoff-in-doubt-\(scheme)")
+
+        loseTheNextAnswer(hub)
+        send.tap()
+        XCTAssertTrue(shown("仍要发送的话"), "the second lost answer does not say how to send it anyway:\n\(app.debugDescription)")
+        XCTAssertTrue(said("可能已经送到电脑上了").exists, "the second lost answer does not say to look first")
+        shot(app, "handoff-in-doubt-again-\(scheme)")
+        XCTAssertTrue(send.exists, "the sheet closed")
+
+        let handed = sentTo(hub).filter { ($0["text"] as? String)?.contains(ask) == true }
+        XCTAssertEqual(handed.count, 1, "the second send reached the chat again: \(handed)")
+        XCTAssertNotNil(handed.first?["client_msg_id"] as? String, "the hand-off went without a client id")
+    }
+
+    @MainActor private func handOff(layout: [String], name: String, newChat: Bool) throws {
+        let hub = try mockHub()
+        let app = open(hub, layout)
+        func shot(_ name: String) { self.shot(app, name) }
         // Every case hands off its own words: the main conversation keeps the earlier cases' hand-offs (in the mock and
         // in the app's chat cache), which would count as a second copy.
         let ask = "Hand-off check \(name) \(UUID().uuidString.prefix(8))"
@@ -59,9 +95,7 @@ final class NewConversationEntryTests: XCTestCase {
         XCTAssertTrue(row("Persona（主对话）").exists, "no main chat target:\n\(app.debugDescription)")
         sleep(1)
         shot("handoff-sheet-\(name)")
-        let field = app.descendants(matching: .any).matching(NSPredicate(
-            format: "elementType IN %@ AND placeholderValue == %@",
-            [XCUIElement.ElementType.textField.rawValue, XCUIElement.ElementType.textView.rawValue], "总结一下，告诉我要做什么，给出建议的回复")).firstMatch
+        let field = instructions(app)
         XCTAssertTrue(field.waitForExistence(timeout: 5), "no instructions field:\n\(app.debugDescription)")
         field.tap()
         field.typeText(ask)
@@ -89,6 +123,54 @@ final class NewConversationEntryTests: XCTestCase {
         XCTAssertTrue(bubble.exists, "the message went away")
         let hittable = asked().allElementsBoundByIndex.filter { $0.isHittable }
         XCTAssertEqual(hittable.count, 1, "the message shows \(hittable.count) times:\n\(app.debugDescription)")
+    }
+
+    private func mockHub() throws -> String {
+        guard let hub = ProcessInfo.processInfo.environment["PERSONA_MOCK_HUB"] else {
+            throw XCTSkip("needs scripts/mock/mock_hub.py (PERSONA_MOCK_HUB)")
+        }
+        return hub
+    }
+
+    /// The app on the sample mail's Hand to AI sheet.
+    @MainActor private func open(_ hub: String, _ more: [String]) -> XCUIApplication {
+        let app = XCUIApplication()
+        let pair = "persona://pair?url=" + hub.addingPercentEncoding(withAllowedCharacters: .alphanumerics)! + "&token=mock"
+        app.launchArguments = ["-pairURL", pair, "-tab", "mail", "-inbox.kind", "", "-inbox.source", "",
+                               "-openInboxItem", "mail:acc1:t1:501", "-showInboxAction", "handoff", "-openChatsFresh", "YES"] + more
+        app.launchPinned()
+        return app
+    }
+
+    @MainActor private func instructions(_ app: XCUIApplication) -> XCUIElement {
+        app.descendants(matching: .any).matching(NSPredicate(
+            format: "elementType IN %@ AND placeholderValue == %@",
+            [XCUIElement.ElementType.textField.rawValue, XCUIElement.ElementType.textView.rawValue], "总结一下，告诉我要做什么，给出建议的回复")).firstMatch
+    }
+
+    @MainActor private func shot(_ app: XCUIApplication, _ name: String) {
+        let a = XCTAttachment(screenshot: app.screenshot())
+        a.name = "\(name) \(UITestStyle.name)"
+        a.lifetime = .keepAlways
+        add(a)
+        if let dir = ProcessInfo.processInfo.environment["PERSONA_SHOTS"] {
+            try? app.screenshot().pngRepresentation.write(to: URL(fileURLWithPath: dir).appending(path: name + "-\(UITestStyle.name).png"))
+        }
+    }
+
+    /// The mock runs the next request and then answers 502, delivered unknown (`POST /mock/fault` lost_receipt).
+    private func loseTheNextAnswer(_ hub: String) {
+        var req = URLRequest(url: URL(string: hub + "/mock/fault")!)
+        req.httpMethod = "POST"
+        req.httpBody = Data(#"{"fault":"lost_receipt","enabled":true}"#.utf8)
+        var status = 0
+        let done = expectation(description: "fault")
+        URLSession.shared.dataTask(with: req) { _, response, _ in
+            status = (response as? HTTPURLResponse)?.statusCode ?? 0
+            done.fulfill()
+        }.resume()
+        wait(for: [done], timeout: 10)
+        XCTAssertEqual(status, 200, "the mock did not take the lost_receipt fault")
     }
 
     /// Where the mock's hand-offs went (`/mock/sent_to`; the main chat's are the ones there with an inbox block).

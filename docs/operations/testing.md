@@ -574,7 +574,8 @@ New Persona chat from elsewhere (`NewConversationEntryTests`, #527): Inbox Hand 
 late transcript shows it once. `PORT=18927 MOCK_ASSISTANT_TRANSCRIPT_SECONDS=8 python3 scripts/mock/mock_hub.py &`,
 `TEST_RUNNER_PERSONA_MOCK_HUB=http://127.0.0.1:18927 xcodebuild test … -only-testing:PersonaUITests/NewConversationEntryTests` (main chat and new chat, each in the shell and old layout).
 The main chat goes through the mock's `POST /api/v1/inbox/{id}/handoff` (#1194; what went is in `/mock/sent_to`, its transcript copy carries the `client_id`); `MOCK_HANDOFF=old` makes
-the mock a hub without that route (404).
+the mock a hub without that route (404). A hand-off whose answer got lost (`POST /mock/fault` lost_receipt) keeps the sheet and says to look in the chat first; sending again goes under
+the same `client_id` (one hand-off in `/mock/sent_to`) and adds how to send it anyway (`testAHandOffThatMayHaveGoneSaysToLookFirst`, light and dark shots in `PERSONA_SHOTS`).
 
 Weak/offline network (`ConnectionTests`, `docs/apple/ios.md` ("Connection state")): `PORT=18760 python3 scripts/mock/mock_hub.py &`,
 `TEST_RUNNER_PERSONA_MOCK_HUB=http://127.0.0.1:18760 xcodebuild test … -only-testing:PersonaUITests/ConnectionTests`: 16-second outage, title unchanged first 8-second grace (`docs/operations/hub-restart.md`), then Connecting,
