@@ -85,6 +85,58 @@ class DockerEntrypointTests(unittest.TestCase):
             self.assertNotIn("PERSONA_PUBLIC_URL", result.stderr)
             self.assertNotIn("PERSONA_ADMIN_ACCESS", result.stderr)
 
+    def run_command(self, *args):
+        """The entrypoint with args (no hub.json yet): what it ran personad with, its log, and the files it wrote."""
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            bin_dir = root / "bin"
+            bin_dir.mkdir()
+            home = root / "home"
+            home.mkdir()
+            write_stubs(bin_dir, {
+                "id": '#!/bin/sh\ncase "$1" in -u) echo 1000 ;; -un) echo persona ;; *) exit 1 ;; esac\n',
+                "getent": '#!/bin/sh\nexit 1\n',
+                "personad": '#!/bin/sh\nprintf "%s\\n" "$@"\n',
+            })
+            link_tools(bin_dir)
+            result = subprocess.run(["/bin/sh", str(ENTRYPOINT), *args], env={"PATH": str(bin_dir), "HOME": str(home)},
+                                    capture_output=True, text=True, timeout=5)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            files = sorted(str(p.relative_to(home)) for p in home.rglob("*") if p.is_file())
+            return result.stdout.splitlines(), result.stderr, files
+
+    def test_the_hub_runs_under_the_supervisor(self):
+        # The image's command: personad supervise, which runs the built-in manager beside the hub in service mode and
+        # becomes the hub itself otherwise (internal/supervise).
+        ran, logs, files = self.run_command("hub", "run")
+        self.assertEqual(ran, ["supervise"])
+        self.assertEqual(files, [".persona/hub.json"])
+        self.assertIn("PERSONA_ADMIN_ACCESS is not set", logs)
+        # Any other command goes to personad as it is.
+        self.assertEqual(self.run_command("hub", "pair")[0], ["hub", "pair"])
+
+    def test_manager_only_container_is_not_a_hub(self):
+        # The built-in manager in a container of its own (compose.yaml's commented example): no hub.json, no reminders.
+        ran, logs, files = self.run_command("supervise", "--manager-only", "--hub", "http://hub:18660")
+        self.assertEqual(ran, ["supervise", "--manager-only", "--hub", "http://hub:18660"])
+        self.assertEqual(files, [])
+        self.assertNotIn("PERSONA_PUBLIC_URL", logs)
+        self.assertNotIn("PERSONA_ADMIN_ACCESS", logs)
+        # The flag anywhere, in every spelling Go's flags take as true.
+        for args in (("supervise", "--hub", "http://hub:18660", "--manager-only"), ("supervise", "--manager-only=true"),
+                     ("supervise", "-manager-only"), ("supervise", "-manager-only=TRUE"), ("supervise", "--manager-only=1"),
+                     ("supervise", "--manager-only=t"), ("supervise", "--manager-only=false", "--manager-only")):
+            with self.subTest(args=args):
+                ran, logs, files = self.run_command(*args)
+                self.assertEqual((ran, files), (list(args), []))
+                self.assertNotIn("PERSONA_ADMIN_ACCESS", logs)
+        # False, or overridden by a later false: the hub's container (hub.json written, the hub's reminders).
+        for args in (("supervise", "--manager-only=false"), ("supervise", "--manager-only", "-manager-only=0")):
+            with self.subTest(args=args):
+                ran, logs, files = self.run_command(*args)
+                self.assertEqual((ran, files), (list(args), [".persona/hub.json"]))
+                self.assertIn("PERSONA_ADMIN_ACCESS is not set", logs)
+
     def test_desktop_api_guidance_is_independent_of_admin_access(self):
         for access in ("", "lan", "loopback", "cidrs", "any"):
             with self.subTest(access=access):
@@ -112,6 +164,7 @@ class DockerEntrypointTests(unittest.TestCase):
             "public": {"tls_listen": ":18662"},
             "admin": {"first_setup": "code"},
             "machines": [],
+            "assistant": {"mode": "service"},
         })
         # No token: the hub makes one when it first reads the file, as with db.sh's.
         self.assertNotIn("token", text)

@@ -194,7 +194,8 @@ so a chat's messages from before it began come in through this separate, read-on
 - **`Engine.WriteHistory`**: messages in any order go through the same line format as the live archive (the owner as `我`, an unknown sender as `?`), then
   `Store.MergeMessages` puts each into the day file it belongs to, in time order. A day file it touches is rewritten atomically, and every line it held stays byte for byte and in
   its order (headers, blank lines, hand edits, lines out of order or doubled); new lines go in front of the first existing message of a later minute. Day files carry no message
-  id, so a duplicate is the same minute, sender and text: the boundary with the live archive and a page read twice after a restart add nothing. A property test over thousands of
+  id, so a duplicate is the same minute, sender and text, where an attachment counts the same however it was written (a saved link, `[附件]` or the placeholders below):
+  the boundary with the live archive and a page read twice after a restart add nothing. A property test over thousands of
   random files and a fuzz target check that no existing line changes or goes missing.
 - **Archive only**: imported lines are searchable and counted in `messages`, and their senders are noted as people, but they add nothing to `pending` (no compression, tagging
   or project linking), never move the live archive's `cursor` or `last_at`, note no documents and reach neither the Inbox nor reminders. Messages past `text_days` are skipped.

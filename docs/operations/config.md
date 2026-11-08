@@ -444,7 +444,7 @@ A manager's own sections of the configuration are in its `manager.json`, not in 
   `dir` (working directory), `env` (extra environment variables), `disabled` (`true` disables while keeping the config), `config` (the extension's own settings), see `docs/extensions/extensions.md` ("Extensions in manager.json");
   extensions installed with `personad extension install` are registered in the database, not here. For personad's built-in voice extension (GPT-Live), use `"command": "personad", "args": ["voice"]`,
   with upstreams in `config.providers` (`docs/extensions/extensions.md` ("Built-in voice extension")). Restart the hub after changes.
-- `trusted_extension_markets` (optional): signing public keys of additional trusted extension markets (key id, or `ed25519:…` from `market.pub`); extensions installed from these markets default to no sandbox, just like the official market (`docs/extensions/extensions.md` ("Sandbox")).
+- `trusted_extension_markets` (legacy): retained for configuration decoding only. Nonofficial signing metadata and saved keys no longer grant a sandbox exemption; installed extensions keep the default sandbox unless the owner explicitly chooses otherwise (`docs/extensions/extensions.md` ("Sandbox")).
 
 <a id="ddnspublicddns"></a>
 

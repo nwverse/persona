@@ -44,7 +44,7 @@ Sources:
   **Always Allow in Session** for file tools in the main chat also only allows the directory of that file (`hooks.go` `fileRuleScope`), instead of opening the whole tool.
   **Not blocked**: Bash can build the path in any number of ways (`cd .. && cat he*`), so matching command text cannot catch all of them; blocking it fully needs Claude Code's sandbox or OS-level isolation. When the main chat runs on Codex, this rule does not exist yet either.
   The memory API with `?space=health` reads and writes exactly this memory.
-- **node**: node recognizes the Claude project directory that corresponds to the health directory (`isAssistantProject` in `server/internal/node/sessions.go`), and treats health chat transcripts as assistant chats, same as the assistant's.
+- **node**: node recognizes the Claude project directory that corresponds to the health directory (`isAssistantProject` in `server/internal/node/sessions_offline.go`), and treats health chat transcripts as assistant chats, same as the assistant's.
 - **Which space**: in the session list the hub sends, every health chat carries `space: "health"` (`proto.Session.Space`, filled from cwd in `server/internal/hub/hub.go` and `server/internal/hub/assistant_link.go`);
   the assistant's own chats do not have this field. To decide which space a chat belongs to, the assistant looks at `space` first and falls back to the directory (`spaceOf` in `server/internal/assistant/health.go`).
 
