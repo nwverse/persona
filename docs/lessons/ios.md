@@ -88,7 +88,7 @@ In shells that retain pages, `onDisappear` does not mean a card has scrolled off
 
 ## Use `EmptyView` for content-free platform stand-ins (#2001)
 
-visionOS lacks iOS drawer gestures; `DrawerPan.NoRowSwipe` only needs a content-free background. `Color.clear.frame(width: 0, height: 0)` adds unnecessary fixed dimensions; iOS token checks scan shared source and do not ignore visionOS branches. Return `EmptyView()` directly: no drawing, no layout space. Do not add zero-size tokens for the stand-in, raise the baseline or add exemptions.
+visionOS lacks iOS drawer gestures; `DrawerPan.NoRowSwipe` (a row mark, gone since #1244 took the swipes off Agents' rows) only needed a content-free background. `Color.clear.frame(width: 0, height: 0)` adds unnecessary fixed dimensions; iOS token checks scan shared source and do not ignore visionOS branches. Return `EmptyView()` directly: no drawing, no layout space. Do not add zero-size tokens for the stand-in, raise the baseline or add exemptions.
 
 ## Keyboard-dismiss button and model display in the composer (#2200)
 
@@ -517,8 +517,8 @@ Use an invalidation revision as the task key and handle the flag after completio
   four `ShellSwitchTests`). Hidden native header now leaves the tree (`ShellBarAtRest(page:)`: omitted while the bar rests on another page, returned transparent at slide start);
   lists still leak. Identify shown page using `probe.shell`, not control exists / isHittable.
 - Moving filters into `List`'s first row (56b 2ead, to collapse search) turns them into UICollectionViewCell. Gesture rules yielding to row drags
-  (`DrawerPan.onRow`, right-swipes pin / interrupt / mark seen) then swallow filter-bar swipes back to assistant. Explicitly mark rows lacking their own right-swipe
-  (`DrawerPan.NoRowSwipe`).
+  (`DrawerPan.onRow`, right-swipes pin / interrupt / mark seen) then swallow filter-bar swipes back to assistant; the fix was to mark rows lacking their own
+  right-swipe (`DrawerPan.NoRowSwipe`). Since #1244 Agents' rows have no swipe at all (a ⋯ holds their actions), and both are gone: a drag along any row pages.
 
 - Do not retain two sources and synchronize with `.onChange`. New shell initially duplicated current page in `AppModel.selectedTab` and bar position,
   sliding from `onChange(of: selectedTab)`. SwiftUI sometimes never reevaluated body (trace showed tab change with no body / onChange),
