@@ -68,7 +68,7 @@ import SwiftUI
                     // Tear down the previous page before waiting for this page's HTTP-backed committed view.
                     try await clearPage()
                     MacShellState.shared.pluginPage = "showcase/" + scene.name
-                    let window = try await readyWindow(title: scene.title)
+                    let window = try await readyWindow(title: scene.title, diagnostic: output.appending(path: "failed-\(scene.name)-\(appearance).png"))
                     let url = output.appending(path: "mac-showcase-\(scene.name)-\(appearance).png")
                     guard MacSnapshot.capture(to: url, window: window) else { throw Failure.capture }
                     captures.append(Capture(sample: scene.name, appearance: appearance, position: "top", file: url.lastPathComponent))
@@ -114,8 +114,10 @@ import SwiftUI
         throw Failure.notReady
     }
 
-    private static func readyWindow(title: String) async throws -> NSWindow {
+    private static func readyWindow(title: String, diagnostic: URL) async throws -> NSWindow {
         let deadline = ContinuousClock.now.advanced(by: .seconds(20))
+        var lastWindow: NSWindow?
+        var lastEntries: [MacSnapshot.AccessibilityEntry] = []
         while ContinuousClock.now < deadline {
             guard !NSApp.isActive, NSWorkspace.shared.frontmostApplication?.processIdentifier != getpid() else {
                 throw Failure.focusChanged
@@ -128,6 +130,8 @@ import SwiftUI
                 guard !window.isKeyWindow else { throw Failure.focusChanged }
                 content.layoutSubtreeIfNeeded(); content.displayIfNeeded()
                 let entries = MacSnapshot.accessibilityEntries(content)
+                lastWindow = window
+                lastEntries = entries
                 if entries.contains(where: { $0.identifier == "extension-ui-ready" }),
                    !entries.contains(where: { $0.identifier == "extension-ui-waiting" }),
                    entries.contains(where: { $0.label == title }) {
@@ -138,6 +142,13 @@ import SwiftUI
             }
             try await Task.sleep(for: .milliseconds(100))
         }
+        if let window = lastWindow, !NSApp.isActive, !window.isKeyWindow {
+            _ = MacSnapshot.capture(to: diagnostic, window: window)
+        }
+        let ready = lastEntries.contains { $0.identifier == "extension-ui-ready" }
+        let waiting = lastEntries.contains { $0.identifier == "extension-ui-waiting" }
+        let labels = lastEntries.compactMap(\.label).prefix(40)
+        FileHandle.standardError.write(Data("snapshot readiness title=\(title) ready=\(ready) waiting=\(waiting) labels=\(Array(labels))\n".utf8))
         throw Failure.notReady
     }
 
