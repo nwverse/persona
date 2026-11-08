@@ -1267,13 +1267,13 @@ extension Session {
     var spaceKey: String? { spaceID.map { "\(machineID)/\($0)" } }
 
     /// Tab label, or "#n" when the label is just herdr's default number.
-    var slotLabel: String? {
+    nonisolated var slotLabel: String? {
         guard let name = slotName, !name.isEmpty else { return slotIndex.map { "#\($0)" } }
         if let i = slotIndex, name == String(i) { return "#\(i)" }
         return name
     }
 
-    var displayTitle: String { title.isEmpty || title == "Claude Code" ? folderName : title }
+    nonisolated var displayTitle: String { title.isEmpty || title == "Claude Code" ? folderName : title }
     /// The line a list row shows under the title: why it waits for you when its host says so, what it concluded or
     /// waits for once the hub triaged its turn (`workLine`), else the last words; Awaiting Reply's question first unless
     /// it is muted (`replyLine`).
@@ -1328,7 +1328,7 @@ extension Session {
     }
 
     /// Idle or unclassified: folded away in busy spaces (an Awaiting Reply one stays out: `AgentListOrder.stays`).
-    var isQuiet: Bool { state == .idle || state == .unknown }
+    nonisolated var isQuiet: Bool { state == .idle || state == .unknown }
 }
 
 /// Unified agent state (docs/protocol/agent-states.md), computed by the hub from herdr status, pending interactions and
@@ -1677,7 +1677,9 @@ nonisolated struct Interaction: Codable, Identifiable, Hashable, Sendable {
     /// The terminal asks for a password: typed into a password field, not kept anywhere.
     var secret: Bool?
     var fields: [InteractionField]?
-    var requiresInput: Bool { !(fields ?? []).isEmpty }
+    /// Something to fill in before it can be allowed: every quick Allow (lists, menus, Siri, the watch) is off. The
+    /// password card counts even without its field, so no path allows it without a password.
+    var requiresInput: Bool { !(fields ?? []).isEmpty || isSecretRun }
     /// Who asks when it is not Claude Code: "codex" / "traex" (a card read off a Codex TUI, docs/integrations/codex.md「提问和审批」).
     var agent: String?
     /// Why the agent asks for this permission, in its words.

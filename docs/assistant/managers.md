@@ -447,7 +447,7 @@ Moving a machine also gives both managers a new answer to their hello (`manager.
 
 - **One its manager keeps** ("Each manager's computers") moves with its entry, secrets too: the hub gets it from the manager that keeps it (`devices.machines.get`), puts it in the new one's own list (`devices.machines.put`), or into `hub.json` for a manager that keeps none, and has the old one let it go (`devices.machines.remove`). With the one that keeps it away, it doesn't move (`503 assistant_offline`). A `hub.json` machine moved away from a manager that keeps its own list is taken out of that list (retried at its next report when that fails), and put in the new one's when it keeps one, before it leaves `hub.json`. A manager that keeps machines in its own list is removed only with `?drop_machines=1` ("Each manager's computers").
 
-- The hub keeps who carries it (setting `managers.machines`, `{machine: manager}`, absent: the carrier), and from then on sends what concerns the machine to the new manager (`moveMachine` in `ownership.go`, the one place).
+- The hub keeps who carries it (setting `managers.machines`, `{machine: manager}`, absent: the carrier), and from then on sends what concerns the machine to the new manager (`moveMachine` in `ownership_moves.go`; who owns it is still decided in one place, `ownership.go`).
 - Each connected manager is handed its machines again (`devices.config`, and the hello's `devices` section now goes to every manager with only its own machines): the old one lets it go, the new one connects it. Until the new one reports it, the machine shows offline.
 - **Its sessions go with it.** From the move on, every session on the machine is the new manager's: the user's messages, renames and read state, its cards' parameters, `device.call` there. That includes the old manager's own conversations there, its main conversation too: its snapshot listing them no longer counts, and it can no longer reach them. Its pending cards on the machine are withdrawn (`interaction_resolved`), and those naming one of its sessions without the machine; its cards naming nothing of the machine stay. A manager keeps its main conversation on a machine it keeps.
 - **Its directories stay, unread.** The old manager's assistant and health directories stay on the computer as they are (its CLAUDE.md, its memory, its conversations' transcripts): the new manager uses its own (below, "Directories on a computer"), never reads the old one's, and its conversations there are no assistant conversations of the new manager's. Delete them by hand if they should go.
@@ -487,6 +487,68 @@ Every client has the same page (web: `docs/web/web.md`, Android: `docs/android/a
 - New Manager asks for a name, then opens the install code sheet: the code with Copy, an m:ss countdown, and New Install Code once it runs out. When the hub sends `commands`, the sheet adds As a Service and With Docker, each with Copy. Without them it shows the code and a short note.
 - The socket asks for feature `managers` in its URL's `?features=` (`LiveConnection.queryItems`; the Apple apps' `client_hello` only carries the locale), and each `{"type":"managers"}` push moves `AppModel.managersRevision`, which makes the open page reread the roster. A hub without the roster (404 without a code) gets a line saying to update the hub.
 - DEBUG launch arguments for screenshots: `-tab settings -openManagers YES`, `-openManagerPage <id>`, and `-showManagerCode YES` (makes a manager on the fake hub and opens its code sheet). The fake hub (`scripts/mock/mock_hub.py`) serves the roster; `MOCK_MANAGER_COMMANDS=1` adds the commands.
+
+## Automatic update idle evidence
+
+A checked release candidate is not idle evidence. The original independent
+manager settings and the live Node own different parts of the proof. A newer
+full `personad` can read both without replacing or restarting that manager:
+
+```sh
+personad manager update inventory --plan /absolute/original-plan.json \
+  --main ORIGINAL_MAIN --machine ORIGINAL_MACHINE --machine-uid ORIGINAL_UID
+```
+
+This command uses the plan only to bind the original manager directory, UID and
+config hash. It opens that manager's existing Postgres with read-only startup
+parameters and executes one fixed SELECT of the persisted main, machine, row
+version and observation time. It does not use the database migration entry point,
+write settings, create receipts or activate an update. Connection diagnostics do
+not print the DSN. A missing main or mismatched explicit identity fails closed.
+
+The optional Node capability `manager_update_inventory_v1` announces the local
+0600 `node.sock` request kind `update.inventory`. The input is an explicit
+`{manager, main, machine_id, machine_uid, authority_revision}`. Its schema-1
+response binds that identity to the process instance, source revisions, complete
+activity rows and completion time. It is a local read-only interface; it does not
+add a Hub Link transaction-update adapter or raise the Node protocol floor.
+Legacy managers and Nodes remain compatible for ordinary use, but a legacy Node
+without this producer cannot furnish this proof.
+
+The producer reads full configured host snapshots, complete loaded Codex thread
+pages including ephemeral/child threads, fresh background terminal lists, and
+owned stdio app-servers. Starting keys, warm spares, resident processes and
+pending interactions cannot be omitted. Retained background/compaction and nested
+workflow child metadata remain blockers without explicit completion. It compares
+source membership, identity, configuration and the owner's process inventory
+again after reading. A cached display row, historical `offline` status, missing
+list or old mtime never proves completion. An unloaded persisted main is covered
+only after the complete live sources have answered. Snapshot data includes no
+prompts, task commands, transcript content or credentials.
+
+Terminal agents, live Claude streams without a synchronous background-inventory
+barrier, and third-party runtimes without an authoritative inventory contract
+remain unsupported for idle attestation. Their display saying idle does not
+remove the blocker. An unreachable source, unresolved retained activity, missing
+capability, changing ownership, partial page or clock conflict also fails closed.
+
+The native reader performs two complete runtime reads within 30 seconds, compares
+payload revisions, and rereads persisted identity after the final runtime read.
+Only a successful complete read returns `idle: true` and a SHA-256 digest. Its
+`completed_at` starts the evidence lifetime; it does not retimestamp a saved
+snapshot. Collect again immediately before the original transaction start after
+any transfer/check. The transaction's original lock, fresh plan, guardian,
+confirmation and rollback requirements remain in force. An explicit bootstrap
+window does not replace missing idle evidence.
+
+The native reader may be newer than the fixed formal manager candidate. The
+candidate retains its own source/hash checks and is not rebuilt merely to collect
+inventory. A Node-only executable lacking the manager CLI needs the same formal
+source's full `personad` reader, not a guessed executable or an installed manager
+replacement. Existing publisher HTTP collection (`manager_idle.py`) still refuses
+legacy display inventories without its complete scoped metadata; the local
+producer does not silently label those HTTP lists authoritative. Hub Link update
+transport is a separate capability and is not required for local collection.
 
 ## Clients (step 4)
 
