@@ -642,6 +642,7 @@ function ModelList({ f, setF }: { f: ProviderForm; setF: React.Dispatch<React.Se
     setAdding("");
   };
   const checked = f.models.filter((m) => m.checked).length;
+  const chat = f.kind === "api" && f.api === "chat";
   return (
     <div className="flex flex-col gap-2">
       <div className="flex items-baseline justify-between gap-2">
@@ -653,10 +654,11 @@ function ModelList({ f, setF }: { f: ProviderForm; setF: React.Dispatch<React.Se
       ) : (
         <ul aria-label={t("settings-providerwizard.models")} className="overflow-hidden rounded-card bg-surface shadow-btn">
           {f.models.map((m, i) => (
-            <ModelRow key={m.id + i} m={m} isDefault={m.checked && f.model === m.id} onChange={(p) => update(i, p)} onDefault={() => setF((x) => ({ ...x, model: m.id }))} />
+            <ModelRow key={m.id + i} m={m} showEffort={!chat} isDefault={m.checked && f.model === m.id} onChange={(p) => update(i, p)} onDefault={() => setF((x) => ({ ...x, model: m.id }))} />
           ))}
         </ul>
       )}
+      {chat && <p className="text-[11.5px] leading-relaxed text-ink-3">{t("settings-providerwizard.chat_effort_hint")}</p>}
       <div className="flex gap-2">
         <input value={adding} onChange={(e) => setAdding(e.target.value)} onKeyDown={(e) => e.key === "Enter" && !composing(e.nativeEvent) && (e.preventDefault(), add())} placeholder={t("settings-providerwizard.add_model_id")} aria-label={t("settings-providerwizard.add_model_id")} autoComplete="off" spellCheck={false} className={cx(INPUT, "font-mono")} />
         <Button tone="secondary" icon="plus" disabled={!adding.trim()} onClick={add}>
@@ -667,7 +669,7 @@ function ModelList({ f, setF }: { f: ProviderForm; setF: React.Dispatch<React.Se
   );
 }
 
-function ModelRow({ m, isDefault, onChange, onDefault }: { m: FormModel; isDefault: boolean; onChange: (p: Partial<FormModel>) => void; onDefault: () => void }) {
+function ModelRow({ m, showEffort, isDefault, onChange, onDefault }: { m: FormModel; showEffort: boolean; isDefault: boolean; onChange: (p: Partial<FormModel>) => void; onDefault: () => void }) {
   const toggleEffort = (e: string) => {
     const efforts = m.efforts.includes(e) ? m.efforts.filter((x) => x !== e) : EFFORT_LEVELS.filter((x) => x === e || m.efforts.includes(x));
     onChange({ efforts, default_effort: efforts.length && !efforts.includes(m.default_effort) ? "" : m.default_effort });
@@ -700,7 +702,7 @@ function ModelRow({ m, isDefault, onChange, onDefault }: { m: FormModel; isDefau
             <input value={m.context_window} onChange={(e) => onChange({ context_window: e.target.value })} inputMode="numeric" placeholder="200000" aria-label={t("settings-providerwizard.context_window", { id: m.id })}
               className={cx(SMALL, "w-[104px] font-mono tabular-nums")} />
           </label>
-          <div role="group" aria-label={t("settings-providerwizard.efforts_supported", { id: m.id })} className="flex flex-wrap gap-1">
+          {showEffort && <><div role="group" aria-label={t("settings-providerwizard.efforts_supported", { id: m.id })} className="flex flex-wrap gap-1">
             {EFFORT_LEVELS.map((e) => (
               <button key={e} type="button" aria-pressed={m.efforts.includes(e)} onClick={() => toggleEffort(e)}
                 className={cx("touch-hit h-6 whitespace-nowrap rounded-chip px-2 text-[11px] transition-colors duration-150", m.efforts.includes(e) ? "bg-accent-tint font-medium text-accent" : "bg-inset text-ink-3 shadow-hairline hover:text-ink-2")}>
@@ -718,7 +720,7 @@ function ModelRow({ m, isDefault, onChange, onDefault }: { m: FormModel; isDefau
                 </option>
               ))}
             </select>
-          </label>
+          </label></>}
         </div>
       )}
     </li>

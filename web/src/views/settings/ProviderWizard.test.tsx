@@ -353,6 +353,18 @@ describe("ProviderWizard from presets", () => {
     for (const key of ["headers", "proxy", "no_proxy", "env", "timeout_ms", "compact_window", "max_context", "effort"]) expect(body).not.toHaveProperty(key);
   });
 
+  it("keeps model metadata while hiding unused chat thinking controls", async () => {
+    act(() => root.render(<ProviderWizard existing={{ name: "chat", kind: "api", api: "chat", base_url: "https://api.example.com", model: "example-chat", has_key: true, models: [{ id: "example-chat", context_window: 16000, efforts: ["high"], default_effort: "high" }] }} onClose={() => {}} onSaved={() => {}} />));
+    await flush();
+    act(() => button("下一步")!.click());
+    expect(document.body.querySelector<HTMLInputElement>('input[aria-label="example-chat 的上下文窗口"]')?.value).toBe("16000");
+    expect(document.body.querySelector('[aria-label="example-chat 支持的思考档位"]')).toBeNull();
+    expect(document.body.querySelector('[aria-label="example-chat 的默认思考档位"]')).toBeNull();
+    expect(text()).toContain("Chat Completions 不使用模型的思考档位设置");
+    await act(async () => button("保存")!.click());
+    expect(calls.find((c) => c.method === "PUT" && c.path.endsWith("/launchers/chat"))?.body).not.toHaveProperty("models");
+  });
+
   it("keeps the Chat Completions protocol when editing", async () => {
     act(() => root.render(<ProviderWizard existing={{ name: "chat", kind: "api", api: "chat", base_url: "https://api.example.com", model: "example-chat", has_key: true }} onClose={() => {}} onSaved={() => {}} />));
     await flush();

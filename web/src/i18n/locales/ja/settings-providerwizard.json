@@ -61,6 +61,7 @@
   "subagent_hint": "workflowなど複数Agentの実行に使います。",
   "force": "強制",
   "force_label": "サブエージェントにこのモデルを強制",
+  "chat_effort_hint": "Chat Completionsでは、モデルごとの思考の強さの設定は使われません。",
   "chat_advanced_hint": "Chat Completionsでは、プロバイダー固有のヘッダー、環境変数、プロキシ、タイムアウト、コンテキスト、デフォルトの思考の強さの設定は使われません。",
   "headers": "リクエストヘッダー",
   "headers_set": "設定済み（非表示）。新しく入力するとすべて置き換わります",
