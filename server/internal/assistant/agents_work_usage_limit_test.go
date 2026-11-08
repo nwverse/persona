@@ -49,7 +49,7 @@ func TestUsageLimitTriage(t *testing.T) {
 	}{{true, "自己接着做"}, {false, "重置"}} {
 		w, by, skip := triageRules(limitTurn("s1", reset, tc.resumes), time.UTC, "")
 		if skip || by != "rule" || w == nil || w.Phase != proto.WorkBlocked || w.On != proto.WaitExternal || w.ResetsAt == nil ||
-			!w.ResetsAt.Equal(reset) || w.Wait != limitText || len(w.Questions) != 0 ||
+			!w.ResetsAt.Equal(reset) || w.Wait != "" || len(w.Questions) != 0 ||
 			!strings.Contains(w.Line, reset.UTC().Format("15:04")) || !strings.Contains(w.Line, tc.want) {
 			t.Errorf("resumes %v: %+v %s", tc.resumes, w, by)
 		}
@@ -140,7 +140,8 @@ func TestUsageLimitLeftAlone(t *testing.T) {
 	s, f := workService(t)
 	f.setSessions("box", limitTurn("s1", reset, true))
 	triage(t, s, "s1")
-	if e := entryOf(t, s, "s1"); e.WakeAt != nil || e.InteractionID != "" || e.Work.ResetsAt == nil || !strings.Contains(e.Work.Line, "自己接着做") {
+	if e := entryOf(t, s, "s1"); e.WakeAt != nil || e.InteractionID != "" || e.Work.ResetsAt == nil || !strings.Contains(e.Work.Line, "自己接着做") ||
+		!managerWaits(&e.Work) {
 		t.Fatalf("goes on by itself: %+v", e)
 	}
 	s.workTick(ctx, reset.Add(time.Hour))
@@ -152,7 +153,8 @@ func TestUsageLimitLeftAlone(t *testing.T) {
 	s.work.switches.AutoContinue = false
 	f.setSessions("box", limitTurn("s1", reset, false))
 	triage(t, s, "s1")
-	if e := entryOf(t, s, "s1"); e.WakeAt != nil || e.InteractionID != "" || !strings.Contains(e.Work.Line, "重置") {
+	// Nothing continues it: the lists keep it for the user (a named wait), not as one that ends by itself.
+	if e := entryOf(t, s, "s1"); e.WakeAt != nil || e.InteractionID != "" || !strings.Contains(e.Work.Line, "重置") || managerWaits(&e.Work) {
 		t.Fatalf("auto_continue off: %+v", e)
 	}
 
@@ -162,14 +164,14 @@ func TestUsageLimitLeftAlone(t *testing.T) {
 	if err := s.putTriageSwitches(ctx, TriageSwitches{Enabled: true, AutoContinue: true, Decide: true}); err != nil {
 		t.Fatal(err)
 	}
-	if entryOf(t, s, "s1").WakeAt == nil {
+	if e := entryOf(t, s, "s1"); e.WakeAt == nil || !managerWaits(&e.Work) {
 		t.Fatal("wake off dropped a usage limit's continue")
 	}
 	if err := s.putTriageSwitches(ctx, TriageSwitches{Enabled: true, Wake: true, Decide: true}); err != nil {
 		t.Fatal(err)
 	}
-	if entryOf(t, s, "s1").WakeAt != nil {
-		t.Fatal("auto_continue off kept the continue")
+	if e := entryOf(t, s, "s1"); e.WakeAt != nil || managerWaits(&e.Work) {
+		t.Fatal("auto_continue off kept the continue, or the lists still say it ends by itself")
 	}
 	s.workTick(ctx, reset.Add(time.Hour))
 	if got := f.sentToAgents(); len(got) != 0 {
@@ -237,7 +239,7 @@ func TestUsageLimitCapIsACard(t *testing.T) {
 // A usage limit's count is its own: an ordinary wait's never carries into it, nor the other way round.
 func TestUsageLimitCountIsItsOwn(t *testing.T) {
 	reset := time.Now()
-	limit := proto.WorkState{Phase: proto.WorkBlocked, On: proto.WaitExternal, Wait: limitText, ResetsAt: &reset}
+	limit := proto.WorkState{Phase: proto.WorkBlocked, On: proto.WaitExternal, ResetsAt: &reset}
 	wait := proto.WorkState{Phase: proto.WorkBlocked, On: proto.WaitExternal, Wait: "CI 跑完"}
 	refused := proto.Session{}
 	for _, tc := range []struct {
@@ -305,8 +307,9 @@ func TestUsageLimitContinueLooksRightBefore(t *testing.T) {
 	}
 }
 
-// No "Completed" (nor "Interrupted") push while a turn waits for its usage limit to reset; one whose reset is not known
-// is pushed as cut off, as is a sign-in that is gone, which reads as interrupted with its code.
+// No "Completed" (nor "Interrupted") push while a turn waits for its usage limit to reset and goes on then; one nothing
+// takes up (its reset not known, or no continue coming) is pushed as a usage limit, never as a model service failure;
+// a sign-in that is gone is pushed as cut off, and reads as interrupted with its code.
 func TestUsageLimitPush(t *testing.T) {
 	ft := newFleetTestNoStore(t)
 	fastDone(ft)
@@ -328,13 +331,19 @@ func TestUsageLimitPush(t *testing.T) {
 		t.Fatalf("pushed while it waits for the reset: %+v", got)
 	}
 
-	ft = newFleetTestNoStore(t)
-	fastDone(ft)
-	const unknown = "You've hit your session limit · resets 4:20pm"
-	run("s2", proto.Session{LastText: unknown})
-	got := ft.pushesOf(assistantwire.NotifyDone, 1, 2*time.Second)
-	if len(got) != 1 || !strings.HasPrefix(got[0].Title, "⚠️") || !strings.Contains(got[0].Body, interruptedSummary) {
-		t.Fatalf("a limit with no reset known: %+v", got)
+	limitPush := func(e string) string { return i18n.T(i18n.ZhHans, "push.usage_limit", i18n.Args{"error": e}) }
+	for name, done := range map[string]proto.Session{
+		"its reset not known": {LastText: "You've hit your session limit · resets 4:20pm"},
+		// The switches off and a CLI that does not go on by itself: nothing continues it, the user is told.
+		"nothing continues it": {LastText: limitText, TurnError: limitText, TurnErrorKind: proto.TurnErrorUsageLimit, TurnErrorResetsAt: &reset},
+	} {
+		ft = newFleetTestNoStore(t)
+		fastDone(ft)
+		run("s2", done)
+		got := ft.pushesOf(assistantwire.NotifyDone, 1, 2*time.Second)
+		if len(got) != 1 || !strings.HasPrefix(got[0].Title, "⚠️") || got[0].Body != limitPush(done.LastText) {
+			t.Fatalf("%s: %+v", name, got)
+		}
 	}
 
 	for _, text := range []string{"Login expired · Please run /login", "Please run /login · API Error: 403 forbidden"} {
@@ -355,23 +364,23 @@ func TestUsageLimitPush(t *testing.T) {
 	}
 }
 
-// A task gets no receipt while one of its agents waits for a usage limit to reset; once the wait is over with
-// nothing having gone on, it gets the interrupted one. The assistant sees the task waiting for the reset, not
-// interrupted.
+// A task gets no receipt while one of its agents waits for a usage limit to reset and goes on then; once the wait is
+// over with nothing having gone on, it gets the interrupted one, as it does at once when nothing would continue it.
+// The assistant sees the task waiting for the reset, not interrupted.
 func TestUsageLimitReceipt(t *testing.T) {
 	s, f := newTaskService(t)
 	startedTask(t, s, f)
 	ctx := context.Background()
-	stop := func(reset time.Time) {
+	stop := func(reset time.Time, resumes bool) {
 		f.setSessions("box", proto.Session{SessionID: "s1", MachineID: "box", Cwd: "/code/app", Agent: "claude", Status: proto.StatusWorking,
 			State: proto.StateWorking, UpdatedAt: time.Now()})
 		s.taskWorking(ctx, "box", "s1")
-		c := limitTurn("s1", reset, false)
+		c := limitTurn("s1", reset, resumes)
 		c.MachineID, c.Agent, c.UpdatedAt = "box", "claude", time.Now()
 		f.setSessions("box", c)
 		s.taskTurnEnded(ctx, "box", "s1")
 	}
-	stop(time.Now().Add(time.Hour))
+	stop(time.Now().Add(time.Hour), true)
 	if n := strings.Count(feedKinds(s, "conv1"), "receipt"); n != 0 {
 		t.Fatalf("%d receipts while it waits for the reset", n)
 	}
@@ -381,7 +390,7 @@ func TestUsageLimitReceipt(t *testing.T) {
 	}
 
 	// The wait ends in a moment and nothing went on: the receipt then says it was interrupted.
-	stop(time.Now().Add(-limitResumeGrace + time.Second))
+	stop(time.Now().Add(-limitResumeGrace+time.Second), true)
 	if n := strings.Count(feedKinds(s, "conv1"), "receipt"); n != 0 {
 		t.Fatalf("%d receipts before the wait was over", n)
 	}
@@ -389,6 +398,12 @@ func TestUsageLimitReceipt(t *testing.T) {
 	items, _, _ := s.feed(ctx, "conv1", time.Time{})
 	if !strings.Contains(string(items[len(items)-1].Body), `"state":"interrupted"`) {
 		t.Fatalf("receipt %s", items[len(items)-1].Body)
+	}
+
+	// Nothing would continue it (its CLI does not, and no continue is set): the receipt comes at once.
+	stop(time.Now().Add(time.Hour), false)
+	if n := strings.Count(feedKinds(s, "conv1"), "receipt"); n != 2 {
+		t.Fatalf("%d receipts for a limit nothing takes up", n)
 	}
 }
 

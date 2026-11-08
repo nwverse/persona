@@ -29,7 +29,7 @@ type WorkState struct {
 	WakeAt *time.Time `json:"wake_at,omitempty"`
 	// ResetsAt: the wait is for a subscription usage limit to reset (on external), at this time
 	// (Session.TurnErrorResetsAt). The agent goes on after it by itself when its CLI said so, else the hub continues it
-	// (WakeAt, under the auto_continue switch).
+	// (WakeAt, under the auto_continue switch); on user, the card after the continues the limit kept refusing.
 	ResetsAt *time.Time `json:"resets_at,omitempty"`
 	// Attempts the hub made for this wait so far, of at most Max.
 	Attempts int        `json:"attempts,omitempty"`

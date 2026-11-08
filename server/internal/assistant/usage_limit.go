@@ -55,11 +55,32 @@ func usageLimitReset(sess proto.Session) (time.Time, bool) {
 	return *sess.TurnErrorResetsAt, true
 }
 
-// usageLimitWaiting: sess stopped on a usage limit and waits it out — its reset is known and not long past. Its turn
-// is not over: no push says it finished or was interrupted, and its task gets no receipt meanwhile.
+// usageLimitWaiting: sess stopped on a usage limit and waits it out — its reset is known and not long past: its task
+// is not interrupted for the user to continue (a "Continue" before the reset is refused at once).
 func usageLimitWaiting(sess proto.Session, now time.Time) bool {
 	reset, ok := usageLimitReset(sess)
 	return ok && now.Before(reset.Add(limitResumeGrace))
+}
+
+// limitTakenUp: sess waits out its usage limit (usageLimitWaiting) and something goes on with it after the reset:
+// its CLI said it would (TurnErrorResumes), or the manager is to continue it or has asked the user (its work's wake or
+// card). Its turn is not told as finished or interrupted meanwhile (no push, no task receipt): it goes on. One nothing
+// takes up (the switches off, a CLI that does not resume) is told as it ends, as a usage limit the user goes on from.
+func limitTakenUp(sess proto.Session, now time.Time) bool {
+	if !usageLimitWaiting(sess, now) {
+		return false
+	}
+	w := sess.Work
+	return sess.TurnErrorResumes || w != nil && w.ResetsAt != nil && (w.WakeAt != nil || w.InteractionID != "")
+}
+
+// limitNotTakenUp marks w, a usage-limit wait, as one nothing continues (auto_continue off, or turned off since its
+// continue was set): what it waits for is named (its line), so the lists keep it for the user — an external wait with
+// nothing named is one that ends by itself (managerWaits, the apps' hubWaits).
+func limitNotTakenUp(w *proto.WorkState) {
+	if w.ResetsAt != nil && w.Wait == "" {
+		w.Wait = w.Line
+	}
 }
 
 // limitContinueAt is when the manager continues work a usage limit stopped, the limit resetting at reset: about a

@@ -163,6 +163,7 @@ func (s *Service) workWake(ctx context.Context, v *workView, k [2]string, now ti
 	sw := s.triageSwitches(ctx)
 	if continues(e.Work) && !sw.AutoContinue || !continues(e.Work) && !sw.Wake {
 		e.WakeAt, e.Work.WakeAt = nil, nil // turned off since it was set
+		limitNotTakenUp(&e.Work)
 		s.putWork(ctx, e)
 		return
 	}

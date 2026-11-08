@@ -108,13 +108,17 @@ func (s *Service) actOn(ctx context.Context, v *workView, machine string, c prot
 // (a reset read too early is refused again at once); then the user is asked. card: e's work is the user's now.
 func actOnLimit(c proto.Session, e *db.SessionWork, autoContinue bool, l i18n.Lang, now time.Time) (card bool) {
 	w := &e.Work
-	if c.TurnErrorResumes || !autoContinue {
+	if c.TurnErrorResumes {
+		return false
+	}
+	if !autoContinue {
+		limitNotTakenUp(w)
 		return false
 	}
 	if e.Retries >= maxLimitContinues {
-		*w = proto.WorkState{Phase: proto.WorkBlocked, On: proto.WaitUser, TurnAt: w.TurnAt, At: w.At, By: w.By, Wait: w.Wait, ResetsAt: w.ResetsAt,
+		*w = proto.WorkState{Phase: proto.WorkBlocked, On: proto.WaitUser, TurnAt: w.TurnAt, At: w.At, By: w.By, ResetsAt: w.ResetsAt,
 			Line: clip(oneLine(workT(l, "limit_again_line", i18n.Args{"n": e.Retries})), 60),
-			Questions: []proto.Question{{Question: workT(l, "limit_again_ask", i18n.Args{"n": e.Retries, "error": clip(w.Wait, 300)}),
+			Questions: []proto.Question{{Question: workT(l, "limit_again_ask", i18n.Args{"n": e.Retries, "error": clip(oneLine(c.TurnError), 300)}),
 				Header: workT(l, "header_limit"), Options: []proto.QuestionOption{{Label: answerLabel(l, answerRetry)}, {Label: answerLabel(l, answerSkip)}}}}}
 		return true
 	}

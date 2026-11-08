@@ -200,9 +200,10 @@ func (s *Service) taskTurnEnded(ctx context.Context, machine, sid string) {
 		if w := c.Work; w != nil && w.Phase == proto.WorkBlocked && w.On == proto.WaitTransient && w.WakeAt != nil {
 			return // "Continue" goes by itself (agents_work.go): the receipt waits for how that ends
 		}
-		if reset, ok := usageLimitReset(c); ok && usageLimitWaiting(c, time.Now()) {
-			// A usage limit stopped it until the reset (usage_limit.go): it goes on then, and the receipt waits for how
-			// that ends. Looked at again once the wait is over, so a turn nothing took up still gets its receipt.
+		if reset, ok := usageLimitReset(c); ok && limitTakenUp(c, time.Now()) {
+			// A usage limit stopped it until the reset, and its CLI or the manager goes on then (usage_limit.go): the
+			// receipt waits for how that ends. Looked at again once the wait is over, so a turn that did not go on after
+			// all (the continue cancelled) still gets its receipt.
 			s.taskTurnEndedAfter(ctx, machine, sid, reset.Add(limitResumeGrace))
 			return
 		}

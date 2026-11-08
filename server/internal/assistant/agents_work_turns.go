@@ -258,7 +258,9 @@ func limitWork(c proto.Session, now time.Time, loc *time.Location, l i18n.Lang) 
 			Questions: []proto.Question{{Question: workT(l, "limit_ask", i18n.Args{"error": clip(oneLine(e), 300)}), Header: workT(l, "header_limit"),
 				Options: []proto.QuestionOption{{Label: answerLabel(l, answerRetry)}, {Label: answerLabel(l, answerSkip)}}}}}
 	}
-	return &proto.WorkState{Phase: proto.WorkBlocked, On: proto.WaitExternal, ResetsAt: &reset, Wait: clip(oneLine(e), 200),
+	// No Wait: the error is the session's (TurnError), and an external wait without one is one that ends by itself, as
+	// the apps list it (their hubWaits): the CLI goes on, or the manager continues it (wake_at).
+	return &proto.WorkState{Phase: proto.WorkBlocked, On: proto.WaitExternal, ResetsAt: &reset,
 		Line: limitLine(l, reset, c.TurnErrorResumes, now, loc)}
 }
 
