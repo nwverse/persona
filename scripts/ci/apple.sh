@@ -130,8 +130,8 @@ if [ "$LANE" = all ] || [ "$LANE" = ios ]; then
   # sim-boot is the sole creation/boot entry, with a fresh stock simulator (not
   # paired to a real hub), pinned to the validated compiler-compatible runtime.
   SIM_STARTED=1
-  ci_run 'Create and boot stock iOS 26.0 test simulator' 1800 bash -c \
-    'SIM_BOOT_TIMEOUT=420 "$1" --profile stock --runtime "$4" --device-type "iPhone 17 Pro" "$2" > "$3"' \
+  ci_run 'Create and boot stock iOS 26.0 test simulator' 1000 bash -c \
+    'SIM_BOOT_TIMEOUT=900 "$1" --profile stock --runtime "$4" --device-type "iPhone 17 Pro" "$2" > "$3"' \
     -- "$SOURCE/scripts/app/sim-boot.sh" "$SIM_NAME" "$OUTPUT/simulator.log" "$IOS_RUNTIME"
   # Accept only the helper's single UDID, never a partial/error log.
   SIM=$(python3 -I - "$OUTPUT/simulator.log" <<'PY'
