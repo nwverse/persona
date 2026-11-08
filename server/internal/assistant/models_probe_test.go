@@ -395,7 +395,7 @@ func TestCatalogLookup(t *testing.T) {
 	if m := enrichModel(proto.ProviderModel{ID: "own[1m]"}); m.ContextWindow != 1000000 {
 		t.Fatalf("1m: %+v", m)
 	}
-	for id, m := range modelCatalog() {
+	for id, m := range modelCatalog().byID {
 		if m.ID == "" || m.Name == "" || m.ContextWindow < 0 {
 			t.Errorf("catalog %s: %+v", id, m)
 		}

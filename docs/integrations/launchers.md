@@ -274,8 +274,9 @@ Persona-managed providers add these fields following cindy's model (`proto.Manag
   name from `display_name` / `name`, and window from `context_length` / `context_window` / `max_context_length` / `max_input_tokens`. Deduplicate while preserving order.
 - Fill missing gateway information from a **built-in catalog**: `server/internal/assistant/models_catalog.json`, taken from cindy's `model-registry.json` (Apache-2.0, see `THIRD_PARTY_NOTICES.md`):
   Claude models and common gateway models such as GLM, Kimi, DeepSeek V4, Qwen3, MiniMax, Seed, and MiMo, with only id, name, context_window, efforts, default_effort.
-  Lookups are case-insensitive and strip vendor prefixes (`anthropic/…`), `[1m]`, and date suffixes. IDs absent from the catalog but ending in `[1m]` get a 1M window. Gateway-provided values take precedence.
-  To update the catalog, regenerate from the newer cindy version, taking only values explicitly stated in the registry, without guessing.
+  Lookups are case-insensitive and strip a vendor prefix (anything before the last `/`, such as `anthropic/…`), `[1m]`, and a trailing `-YYYYMMDD` date. An exact catalog entry wins, including its name.
+  An id the catalog does not list takes the context window, effort levels and default effort of the closest **earlier** generation of the same family. The discovered model then carries `inherited_from`, the catalog id those values came from, and only when one of them was actually used. The family is the leading name plus the same size or variant suffix: `qwen3.9-27b` can inherit from `qwen3.8-27b`, not from `qwen3.8-235b` or `qwen3.8-max`. Generation numbers compare numerically (`5.10` is newer than `5.9`); a later generation is never a source. A parameter size with no generation number (`7b`, `8x22b`) does not inherit. The name is not inherited. The catalog has no price or routing to inherit. Gateway-reported values take precedence over both an exact entry and an inherited one. An id that still has no window and ends in `[1m]` is 1M.
+  To update the catalog, regenerate from the newer cindy version, taking only values explicitly stated in the registry. The generation fallback reuses those stated values for a newer id; it does not add a row.
 
 ## Direct-API providers
 
