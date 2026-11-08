@@ -28,6 +28,14 @@ Adding Bcc to the request alone leaves Bcc-only edits lost on dismissal and Bcc-
 - Two marks that differ only in color fail color-blind users, and at 16 px two framed icons (terminal box vs window box) read as the same rounded square, next to the todo icon's box as well. Give each kind its own silhouette (a frameless prompt vs a framed window).
 - A row's title is `flex-1` (basis 0) and an end tag `shrink-0`: the tag keeps its whole width and the title takes what is left, so a selected row with a mark, a runtime tag and the ⋯ cut the title to about 5 characters. Give the title `basis-auto` when end words exist and let those words shrink first (`min-w-6 shrink-[20]`). Screenshot the selected row with the mouse moved away, and a sidebar tall enough that the usage card does not cover the list.
 
+## Listeners on an element React may replace (2026-11-07, #1309)
+
+- The chat's scroller is a different element once an agent's session arrives: the page's frame changes (a terminal to switch to), and React reuses the old `div` for something else (it became the composer dock). Effects that bound a `ResizeObserver` and wheel / touch listeners to `scroller.current` once (`[]` deps) kept watching the old one, so on an agent's page opened by its address the chat stopped following content that grows after layout (streamed Markdown): the live reply's last lines sat under the composer. Navigating from the sidebar never showed it, because the session was already there. Keep the element in state through a callback ref and list it in those effects' deps (`ChatView.tsx` `scrollEl`); `web/e2e/agent-live.mjs` checks a page opened by its address.
+
+## Live text and older pages (2026-11-07, #1309)
+
+- `useTranscript` once ended the live text whenever a batch of items had any of the agent's words, and older pages and opened folds go through the same `apply`. The main chat did not show it (its delta comes again 80 ms later); an agent's does not come again while a tool runs, so scrolling up or opening "Worked for …" blanked it for minutes. Only the newest items (pushes, the first page, a pull) may touch live text, and an agent's is recomputed against them from the last delta, not cleared.
+
 ## Native extension delta boundaries (#5956)
 
 - Keep the generated native wire tree canonical until display. `readView` is intentionally a lossy legacy display reader; reducing its output loses field presence, required empty collections and unsupported native nodes. Validate/stage complete operations before committing, and never turn an invalid `before` into append.
