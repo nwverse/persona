@@ -203,6 +203,7 @@ describe("manual mail draft ownership", () => {
     delivery = deferred();
     await click(t("inbox-composedialog.send"));
     expectSent(edited, "a");
+    expect(mockedApi.mock.calls.filter(([path]) => path === "/mail/send")).toHaveLength(2);
     await act(async () => delivery.resolve());
   });
 
