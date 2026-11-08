@@ -23760,29 +23760,6 @@
       },
       "extractionState": "manual"
     },
-    "Claude can read the data you turn on through phone_* tools; writes such as new events or reminders ask you on the phone first. Turning one on requests system permission; if you denied it before, you'll go to Settings. The hub can reach the phone only while Persona is in the foreground (or just moved to the background). iOS doesn't expose Messages, Notes, or third-party app data.": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Claude can read the data you turn on through phone_* tools; writes such as new events or reminders ask you on the phone first. Turning one on requests system permission; if you denied it before, you'll go to Settings. The hub can reach the phone only while Persona is in the foreground (or just moved to the background). iOS doesn't expose Messages, Notes, or third-party app data."
-          }
-        },
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "オンにしたデータは、Claudeがphone_*ツールで読み取れます。予定やリマインダーの作成などの書き込みは、先にiPhoneで確認します。オンにするとシステムの許可を求め、以前に拒否した場合は設定に移動します。ハブがiPhoneにアクセスできるのは、Personaがフォアグラウンドにある（またはバックグラウンドに移った直後の）ときだけです。iOSではメッセージ、メモ、他社製Appのデータは利用できません。"
-          }
-        },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "打开的数据，Claude 可以通过 phone_* 工具读取；新建日程、提醒等写操作会先在手机上问你。打开时会请求系统权限，以前拒绝过的会跳到系统设置。Persona 在前台（或刚切到后台）时，hub 才能调到手机。iOS 不开放短信、备忘录、第三方 App 的数据。"
-          }
-        }
-      },
-      "extractionState": "manual"
-    },
     "Claude desktop app": {
       "localizations": {
         "en": {
@@ -23824,6 +23801,29 @@
           "stringUnit": {
             "state": "translated",
             "value": "终端里的 Claude"
+          }
+        }
+      },
+      "extractionState": "manual"
+    },
+    "Claude can read the data you turn on through phone_* tools; writes such as new events or reminders ask you on the phone first. Turning one on requests system permission; if you denied it before, you'll go to Settings. The hub can reach the phone only while Persona is in the foreground (or just moved to the background). iOS doesn't expose Messages, Notes, or third-party app data.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Claude can read the data you turn on through phone_* tools; writes such as new events or reminders ask you on the phone first. Turning one on requests system permission; if you denied it before, you'll go to Settings. The hub can reach the phone only while Persona is in the foreground (or just moved to the background). iOS doesn't expose Messages, Notes, or third-party app data."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "オンにしたデータは、Claudeがphone_*ツールで読み取れます。予定やリマインダーの作成などの書き込みは、先にiPhoneで確認します。オンにするとシステムの許可を求め、以前に拒否した場合は設定に移動します。ハブがiPhoneにアクセスできるのは、Personaがフォアグラウンドにある（またはバックグラウンドに移った直後の）ときだけです。iOSではメッセージ、メモ、他社製Appのデータは利用できません。"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "打开的数据，Claude 可以通过 phone_* 工具读取；新建日程、提醒等写操作会先在手机上问你。打开时会请求系统权限，以前拒绝过的会跳到系统设置。Persona 在前台（或刚切到后台）时，hub 才能调到手机。iOS 不开放短信、备忘录、第三方 App 的数据。"
           }
         }
       },
