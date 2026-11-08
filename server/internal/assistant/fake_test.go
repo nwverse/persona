@@ -577,6 +577,9 @@ func (noPlans) CreateTaskPlan(context.Context, db.TaskPlanRow) error {
 func (noPlans) TaskPlan(context.Context, string) (*db.TaskPlanRow, error) {
 	return nil, errors.New("no task_plans here")
 }
+func (noPlans) TaskPlansByID(context.Context, []string) ([]db.TaskPlanRow, error) {
+	return nil, errors.New("no task_plans here")
+}
 func (noPlans) UpdateTaskPlan(context.Context, string, string, string, json.RawMessage, time.Time) (bool, error) {
 	return false, errors.New("no task_plans here")
 }

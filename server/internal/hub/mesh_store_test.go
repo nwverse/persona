@@ -509,6 +509,9 @@ func (s *meshStore) CreateTaskPlan(context.Context, db.TaskPlanRow) error { retu
 func (s *meshStore) TaskPlan(context.Context, string) (*db.TaskPlanRow, error) {
 	return nil, db.ErrTaskPlanNotFound
 }
+func (s *meshStore) TaskPlansByID(context.Context, []string) ([]db.TaskPlanRow, error) {
+	return nil, nil
+}
 func (s *meshStore) TaskPlans(context.Context, string) ([]db.TaskPlanRow, error) { return nil, nil }
 func (s *meshStore) UpdateTaskPlan(context.Context, string, string, string, json.RawMessage, time.Time) (bool, error) {
 	return false, nil

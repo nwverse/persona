@@ -258,15 +258,42 @@ func (s *Service) feed(ctx context.Context, conversation string, since time.Time
 	}
 	s.settleCards(ctx, items)
 	s.fileCards(ctx, items)
-	plans := map[string]*TaskPlan{}
+	return items, s.feedPlans(ctx, items), nil
+}
+
+// feedPlans are the plans items' plan cards name, by id. A plan that is gone is left out, and so is every plan when
+// reading them fails: the cards still show. The database reads them all in one query, not one per card.
+func (s *Service) feedPlans(ctx context.Context, items []FeedItem) map[string]*TaskPlan {
+	var ids []string
+	seen := map[string]bool{}
 	for _, it := range items {
-		if it.Kind == feedPlan && plans[it.Ref] == nil {
-			if p, err := s.loadPlan(ctx, it.Ref); err == nil {
-				plans[it.Ref] = p
-			}
+		if it.Kind == feedPlan && !seen[it.Ref] {
+			seen[it.Ref] = true
+			ids = append(ids, it.Ref)
 		}
 	}
-	return items, plans, nil
+	plans := make(map[string]*TaskPlan, len(ids))
+	st := s.store()
+	if st == nil {
+		for _, id := range ids {
+			if p, err := s.loadPlan(ctx, id); err == nil {
+				plans[id] = p
+			}
+		}
+		return plans
+	}
+	if len(ids) == 0 {
+		return plans
+	}
+	rows, err := st.TaskPlansByID(ctx, ids)
+	if err != nil {
+		s.logf("feed: read %d plans: %v", len(ids), err)
+		return plans
+	}
+	for _, row := range rows {
+		plans[row.ID] = planFromRow(row)
+	}
+	return plans
 }
 
 // ---- the assistant's task_plan tool ----
