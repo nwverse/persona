@@ -144,7 +144,11 @@ Unboxed (control group):
 
 - **No tools, no delegation** (service-specific). This service sends `delegation.created{target: "client"}` only when the model calls a function in `session.tools`.
   `session.tools` itself is an extension field (no negotiation needed, but its compatibility table lists `tools` on `session.start` as an extension), not standard GPT-Live. Conclusions in rows 1 and 2 about delegation were therefore tested only on this path.
-  Without `tools` in `personad`, the model follows the prompt and says "Okay, I'll delegate a check of your calendar for tomorrow", but sends nothing (end-to-end observation). For this kind of upstream, `tools: true` is mandatory.
+  Without `tools` in `personad`, the model follows the prompt and says "Okay, I'll delegate a check of your calendar for tomorrow", but sends nothing (end-to-end observation). For this kind of upstream, the tools must be declared:
+  since #1420 a live-dialect upstream declares them unless its `tools` is `false` (auto, with a one-time fallback when a service refuses them, `docs/extensions/extensions.md`, the `tools` row).
+- **The model claims a handoff and nothing arrives** (#1420, a real hub, 2026-11-08). The upstream came from the app's settings form, which had no `tools` switch, so its sessions declared none.
+  In three calls the model said it had handed the request to the main chat; the extension logged no delegation and the main chat got nothing. That is the bullet above, not a dropped message.
+  When it happens again, check whether the `session.start` declared `tools`, and whether the extension logged that the service refused them (the session then goes without them, and only a service that delegates on its own hands anything over).
 - Each model response starts with `session.delegation.created{target: "responses"}` (service-specific). `wire.go` correctly recognizes only `client`.
 - **An already `completed` response can still get a `response.incomplete`** (reason: superseded, 5 trials, service-specific), when the model has just finished and immediately starts a new response because of a tool result or `say`.
   This is not a user interruption, but at the time `personad` still sent `clear` to the App (twice within one end-to-end delegation). If App playback lagged upstream, it cut off the preceding sentence's ending.

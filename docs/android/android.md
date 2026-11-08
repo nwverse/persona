@@ -263,6 +263,12 @@ Android's take on plan section 4 ("session keys must tell groups apart"), decide
 
 The budgets don't cover the outbox, drafts or persistent preferences. Inline Lark images keep using the existing in-memory cache of encoded bytes, with no new on-disk copy of originals. Peak image decoding, SQLite physical usage, cold start and scrolling performance are all unmeasured and still need acceptance on a real device.
 
+## Inbox and assistant response memory
+
+Inbox/assistant JSON requests stream into the decoder on `Dispatchers.IO`, without first retaining a complete byte array and string. A process-wide permit covers request through decoding, so simultaneous repositories and pairing scopes cannot accumulate buffered responses while waiting to parse. Waiting callers are cancellable; decoding checks both coroutine cancellation and the current pairing before reading chunks and before returning a result.
+
+The decoder rejects responses exceeding 4 MiB of decompressed JSON, 100,000 structural delimiters outside strings, or 128 nesting levels with `response_too_large`. The structural budget also bounds compact JSON that expands into many small objects. These are safety limits, not truncation or pagination: over-limit results are not partially applied, and existing repository data remains. Large endpoints still need server pagination to return additional data. Existing media and APK streaming behavior, authentication, TLS and pairing data are unchanged. A device crash stack identifies an allocation failure, not necessarily the largest retained object; large-response/concurrency regression tests do not replace device validation of the reported crash.
+
 ## Error reports (#5533)
 
 The app's crashes and ANRs go to the hub's `error_reports` (format and rules: [protocol.md](../protocol/protocol.md) "Error reports"). The pure parts are in `:core:hub` (`persona.core.hub.errors`: report builder, disk queue, sender, exit-reason planner, ANR trace parser, breadcrumbs); `app/errors/ErrorReporting.kt` wires them into `PersonaApp`. There is no UI.
