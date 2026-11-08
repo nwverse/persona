@@ -58,7 +58,11 @@
         },
         "auth": {"$ref": "#/$defs/AuthSpec"}
       },
-      "required": ["manifest_version", "id", "name", "version"]
+      "required": ["manifest_version", "id", "name", "version"],
+      "anyOf": [
+        {"not": {"anyOf": [{"required": ["runtime"]}, {"required": ["node"]}]}},
+        {"required": ["engines"], "properties": {"engines": {"anyOf": [{"required": ["extension_protocol"]}, {"required": ["plugin_protocol"]}]}}}
+      ]
     },
     "ToolSpec": {
       "description": "One command-line program. Exactly one of archive and npm.",
@@ -177,15 +181,30 @@
         "source": {"$ref": "#/$defs/SourceRuntime"},
         "command": {"$ref": "#/$defs/Command"},
         "args": {"type": "array", "items": {"type": "string"}},
-        "env": {"type": "object", "additionalProperties": {"type": "string"}},
+        "env": {"type": "object", "additionalProperties": {"type": "string"}, "propertyNames": {"$ref": "#/$defs/EnvName"}},
         "rpc": {"type": "string", "enum": ["stdio", "none"]},
         "http": {"type": "boolean"},
         "resources": {"$ref": "#/$defs/Resources"}
       },
-      "allOf": [{"oneOf": [
-        {"required": ["command"], "not": {"required": ["source"]}, "properties": {"mode": {"enum": ["process"]}}},
-        {"required": ["mode", "source"], "properties": {"mode": {"const": "deno"}, "rpc": {"const": "stdio"}, "http": {"const": false}}, "not": {"anyOf": [{"required": ["command"]}, {"required": ["args"]}, {"required": ["env"]}]}}
-      ]}]
+      "allOf": [
+        {"oneOf": [
+          {"required": ["command"], "not": {"required": ["source"]}, "properties": {"mode": {"enum": ["process"]}}},
+          {"required": ["mode", "source"], "properties": {"mode": {"const": "deno"}, "rpc": {"const": "stdio"}, "http": {"const": false}}, "not": {"anyOf": [{"required": ["command"]}, {"required": ["args"]}, {"required": ["env"]}]}}
+        ]},
+        {"description": "command: a package path, or one per <os>-<arch>.", "properties": {"command": {"anyOf": [
+          {"$ref": "#/$defs/PackagePath"},
+          {"type": "object", "minProperties": 1, "propertyNames": {"pattern": "^[a-z0-9]+-[a-z0-9]+$"}, "additionalProperties": {"$ref": "#/$defs/PackagePath"}}
+        ]}}},
+        {"description": "rpc none needs http: the hub could not talk to it otherwise.", "anyOf": [{"properties": {"rpc": {"const": "stdio"}}}, {"required": ["http"], "properties": {"http": {"const": true}}}]}
+      ]
+    },
+    "PackagePath": {
+      "description": "A path inside the package: relative, / only, clean (no . or .. part, no // or trailing /).",
+      "type": "string", "minLength": 1, "not": {"pattern": "^/|\\\\|(^|/)\\.\\.?(/|$)|//|/$"}
+    },
+    "EnvName": {
+      "description": "An environment variable name; not the hub's (PERSONA_*) nor the dynamic loader's (LD_*, DYLD_*).",
+      "type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]*$", "not": {"pattern": "^(PERSONA_|LD_|DYLD_)"}
     },
     "SourceRuntime": {
       "type": "object", "additionalProperties": false,
@@ -221,7 +240,7 @@
       "properties": {
         "command": {"$ref": "#/$defs/Command"},
         "args": {"type": "array", "items": {"type": "string"}},
-        "env": {"type": "object", "additionalProperties": {"type": "string"}},
+        "env": {"type": "object", "additionalProperties": {"type": "string"}, "propertyNames": {"$ref": "#/$defs/EnvName"}},
         "machines": {"type": "string", "minLength": 1},
         "rpc": {"type": "string", "enum": ["stdio", "none"]},
         "http": {"type": "boolean"},
@@ -229,7 +248,14 @@
         "secrets": {"type": "array", "items": {"type": "string"}},
         "permissions": {"$ref": "#/$defs/NodePermissions"}
       },
-      "required": ["command", "machines"]
+      "required": ["command", "machines"],
+      "allOf": [
+        {"description": "command: one package path per darwin-<arch> / linux-<arch>, not the hub's own binary.", "properties": {"command": {
+          "type": "object", "minProperties": 1, "propertyNames": {"pattern": "^(darwin|linux)-[a-z0-9]+$"},
+          "additionalProperties": {"$ref": "#/$defs/PackagePath", "not": {"const": "personad"}}
+        }}},
+        {"description": "rpc none needs http: the hub could not talk to it otherwise.", "anyOf": [{"properties": {"rpc": {"const": "stdio"}}}, {"required": ["http"], "properties": {"http": {"const": true}}}]}
+      ]
     },
     "NodePermissions": {
       "description": "What the program on computers asks for there: hosts it reaches, files outside its data directory, macOS's privacy permissions.",
