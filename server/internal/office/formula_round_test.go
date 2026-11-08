@@ -82,6 +82,9 @@ func TestRoundCachedValues(t *testing.T) {
 			want, _ := strconv.ParseFloat(tc.want, 64)
 			// The writer stores 15 significant digits; subnormal results also have a float64 quantum.
 			tolerance := math.Max(math.Abs(want)*1e-14, math.SmallestNonzeroFloat64)
+			if math.Abs(want) == math.SmallestNonzeroFloat64 {
+				tolerance = 0 // preserving the smallest nonzero value must not accept zero
+			}
 			if c.Type != "" || err != nil || math.IsNaN(got) || math.IsInf(got, 0) ||
 				want == 0 && got != 0 || math.Abs(got-want) > tolerance {
 				t.Fatalf("cache type %q value %q, want finite %s", c.Type, c.Value, tc.want)
