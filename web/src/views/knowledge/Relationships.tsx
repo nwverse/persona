@@ -26,6 +26,12 @@ export function Relationships(props: Props) {
   const [confirmed, setConfirmed] = useState(false);
   const [dialogOpen, setDialogOpen] = useState(false);
   return <>
+    {intent && !dialogOpen && <Card>
+      <div role="status" className="space-y-3 p-4 text-sm leading-relaxed text-ink-2">
+        <p className="break-words">{t("knowledge-relationships.pending", { first: intent.ends[0].name, second: intent.ends[1].name })}</p>
+        <Button onClick={() => props.current() && setDialogOpen(true)}>{t("knowledge-relationships.review")}</Button>
+      </div>
+    </Card>}
     {linkGroups(props.detail.links).map((g) => {
       const open = openKinds.has(g.kind);
       return <section key={g.kind}>
@@ -56,12 +62,6 @@ export function Relationships(props: Props) {
       </section>;
     })}
     {confirmed && <p role="status" className="text-sm text-ink-2">{t("knowledge-relationships.success")}</p>}
-    {intent && !dialogOpen && <Card>
-      <div role="status" className="space-y-3 p-4 text-sm leading-relaxed text-ink-2">
-        <p className="break-words">{t("knowledge-relationships.pending", { first: intent.ends[0].name, second: intent.ends[1].name })}</p>
-        <Button onClick={() => props.current() && setDialogOpen(true)}>{t("knowledge-relationships.review")}</Button>
-      </div>
-    </Card>}
     {intent && <RemovalDialog {...props} intent={intent} open={dialogOpen} onClose={(keep) => { setDialogOpen(false); if (!keep) setIntent(null); }} onConfirmed={() => { setConfirmed(true); setIntent(null); setDialogOpen(false); props.onSaved(); }} />}
   </>;
 }

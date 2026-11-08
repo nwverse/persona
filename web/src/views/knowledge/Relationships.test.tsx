@@ -327,3 +327,16 @@ it.each(["chats", "people"].flatMap((kind) => ["project", "entity"].map((directi
   for (const r of reads().slice(-2)) await reply(r, { detail: r.url.includes(`/${kind}/`) ? fixture.afterEntity : fixture.afterProject });
   expect(saved).toHaveBeenCalledOnce();
 });
+
+it("places a retained correction before the remaining related lists", async () => {
+  render(project); await reply(reads().at(-1)!, response(project, { people: [person.id], chats: [chat.id] }, [person, chat]));
+  // Related chats come first; choose the person's action in the second group.
+  act(() => buttons("Remove relationship")[1].click()); click("Remove");
+  await reply(writes()[0], { error: "Synthetic reverse write failure" }, 400);
+  for (const r of reads().slice(-2)) await reply(r, { detail: r.url.includes("/people/") ? response(person, { projects: [project.id] }).detail : response(project, { people: [], chats: [chat.id], locked_fields: ["people"] }, [chat]).detail });
+  click("Close");
+  const pending = buttons("Review correction")[0].closest('[role="status"]')!;
+  const remaining = host.querySelector(`a[href="/kb/chats/${chat.id}"]`)!.closest("section")!;
+  expect(pending.compareDocumentPosition(remaining) & Node.DOCUMENT_POSITION_FOLLOWING).not.toBe(0);
+  expect(writes()).toHaveLength(1);
+});
