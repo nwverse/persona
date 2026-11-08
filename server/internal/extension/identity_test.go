@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -416,5 +417,53 @@ func TestIdentityReplacementGraphAndFingerprint(t *testing.T) {
 	e.Replaces = "other"
 	if before == entryFingerprint(&e) {
 		t.Fatal("declaration absent from signed snapshot")
+	}
+}
+
+func TestIdentityWholeCatalogPredecessorsAreRetired(t *testing.T) {
+	entry := func(id, old string) MarketEntry {
+		raw := with(t, func(m map[string]any) { m["id"] = id })
+		parsed, err := Parse(raw)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return MarketEntry{Manifest: raw, Parsed: parsed, Replaces: old, Packages: []MarketPackage{{URL: "pkg.tar.gz", SHA256: strings.Repeat("a", 64)}}}
+	}
+	cases := []struct {
+		name    string
+		entries []MarketEntry
+		valid   bool
+	}{
+		{"predecessor-current", []MarketEntry{entry("old", ""), entry("new", "old")}, false},
+		{"predecessor-current-reversed", []MarketEntry{entry("new", "old"), entry("old", "")}, false},
+		{"acyclic-chain", []MarketEntry{entry("middle", "old"), entry("new", "middle")}, false},
+		{"acyclic-chain-reversed", []MarketEntry{entry("new", "middle"), entry("middle", "old")}, false},
+		{"single-retired-predecessor", []MarketEntry{entry("new", "old"), entry("unrelated", "")}, true},
+		{"independent-renames", []MarketEntry{entry("new", "old"), entry("other", "retired")}, true},
+		{"ordinary-catalog", []MarketEntry{entry("old", ""), entry("new", "")}, true},
+	}
+	key, sign := testKey(t)
+	for _, test := range cases {
+		t.Run(test.name, func(t *testing.T) {
+			if err := ValidateReplacements(test.entries); (err == nil) != test.valid {
+				t.Fatalf("whole graph validity=%v: %v", test.valid, err)
+			}
+			raw, err := json.Marshal(MarketIndex{MarketVersion: 1, Name: "Example", Extensions: test.entries})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, _, err = ParseIndex(raw); (err == nil) != test.valid {
+				t.Fatalf("index validity=%v: %v", test.valid, err)
+			}
+			for _, signed := range []bool{false, true} {
+				catalog, pin := raw, ""
+				if signed {
+					catalog, pin = sign(raw), key
+				}
+				if _, err = ParseCatalog(catalog, pin); (err == nil) != test.valid {
+					t.Fatalf("signed=%v validity=%v: %v", signed, test.valid, err)
+				}
+			}
+		})
 	}
 }

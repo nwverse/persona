@@ -201,22 +201,16 @@ func ParseIndex(data []byte) (*MarketIndex, []string, error) {
 		return nil, nil, fmt.Errorf("索引里多于 %d 个扩展", IndexExtensionsMost)
 	}
 	// Identity declarations are never silently dropped or resolved first-entry-wins.
-	declarations := make([]MarketEntry, 0, len(ix.Extensions))
 	declaredTargets := map[string]bool{}
 	for _, e := range ix.Extensions {
 		if e.Replaces == "" {
 			continue
 		}
 		m, err := Parse(e.Manifest)
-		if err != nil || declaredTargets[m.ID] {
+		if err != nil || declaredTargets[m.ID] || !ValidID(e.Replaces) || e.Replaces == m.ID {
 			return nil, nil, ErrIdentity
 		}
 		declaredTargets[m.ID] = true
-		e.Parsed = m
-		declarations = append(declarations, e)
-	}
-	if err := ValidateReplacements(declarations); err != nil {
-		return nil, nil, err
 	}
 	var warnings []string
 	seen := map[string]bool{}

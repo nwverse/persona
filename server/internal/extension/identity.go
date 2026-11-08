@@ -73,11 +73,22 @@ func (pv *Preview) UpgradeID() string {
 // ValidateReplacements checks the whole declaration graph, including entries
 // whose predecessor is no longer in the catalog. No first-entry-wins identity claims.
 func ValidateReplacements(entries []MarketEntry) error {
+	current := map[string]bool{}
+	for _, e := range entries {
+		if e.Parsed != nil {
+			current[e.Parsed.ID] = true
+		}
+	}
 	successor := map[string]string{}
 	predecessor := map[string]string{}
 	for _, e := range entries {
 		if e.Replaces == "" {
 			continue
+		}
+		// A predecessor is retired from this catalog. This also excludes
+		// acyclic replacement chains whose middle name remains a current entry.
+		if current[e.Replaces] {
+			return ErrIdentity
 		}
 		if e.Parsed == nil || !ValidID(e.Replaces) || e.Replaces == e.Parsed.ID {
 			return ErrIdentity
