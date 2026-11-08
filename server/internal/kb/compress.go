@@ -57,11 +57,11 @@ type projectRetry struct {
 var importanceRe = regexp.MustCompile(`^P[0-3]$`)
 
 type chatDigest struct {
-	Summary    string   `json:"summary"`
-	OneLine    string   `json:"one_line"`
-	Importance string   `json:"importance"`
-	Relevance  int      `json:"relevance"`
-	Tags       []string `json:"tags"`
+	Summary    string     `json:"summary"`
+	OneLine    string     `json:"one_line"`
+	Importance string     `json:"importance"`
+	Relevance  modelScore `json:"relevance"`
+	Tags       []string   `json:"tags"`
 	Projects   []struct {
 		Name    string   `json:"name"`
 		Kind    string   `json:"kind"`
@@ -211,7 +211,7 @@ func (e *Engine) Compress(ctx context.Context, c *Chat) error {
 		}
 	}
 	c.OneLine = oneLine(d.OneLine)
-	applyTags(&c.Tagging, d.Importance, d.Relevance, d.Tags, now)
+	applyTags(&c.Tagging, d.Importance, int(d.Relevance), d.Tags, now)
 	if HasPeople(c) {
 		for _, p := range d.Projects {
 			slug := e.evolveProject(p.Name, p.Kind, p.Aliases, p.MyRole, c, p.Update, now)
@@ -692,15 +692,15 @@ func (e *Engine) evolveProject(name, kind string, aliases []string, myRole strin
 }
 
 type projectDigest struct {
-	Summary    string   `json:"summary"`
-	OneLine    string   `json:"one_line"`
-	Goal       string   `json:"goal"`
-	Kind       string   `json:"kind"`
-	Status     string   `json:"status"`
-	Importance string   `json:"importance"`
-	Relevance  int      `json:"relevance"`
-	Tags       []string `json:"tags"`
-	Keywords   []string `json:"keywords"`
+	Summary    string     `json:"summary"`
+	OneLine    string     `json:"one_line"`
+	Goal       string     `json:"goal"`
+	Kind       string     `json:"kind"`
+	Status     string     `json:"status"`
+	Importance string     `json:"importance"`
+	Relevance  modelScore `json:"relevance"`
+	Tags       []string   `json:"tags"`
+	Keywords   []string   `json:"keywords"`
 }
 
 // RefreshProjects rewrites the summaries of projects with news, at most max per run. A project whose rewrite failed

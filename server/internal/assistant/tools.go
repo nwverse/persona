@@ -589,7 +589,7 @@ func (s *Service) pendingQuestions() []proto.Interaction {
 	return out
 }
 
-// Action takes the user's answer to one of the questions out, or to a card about an agent's turn (agents_work.go)
+// Action takes the user's answer to one of the questions out, or to a card about an agent's turn (agents_work_act.go)
 // (op answer, the answer a proto.Resolution).
 func (s *Service) Action(ctx context.Context, a Action) (ActionResult, error) {
 	if a.Op != "answer" {

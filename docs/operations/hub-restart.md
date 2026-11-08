@@ -153,7 +153,7 @@ Previously clients received a string of "machine offline" and "interaction ended
   It is reused only if handed over within 10 minutes. After a crash there is no handover; the new process opens a new stream and clients do a full refresh, so they never get duplicate sequence numbers.
 - Approval cards that need filling in (elicitation) are sent only to clients that declared the capability; during the reconnect replay the client has not sent `client_hello` yet, so the replay skips them and the pending-interactions snapshot after connecting fills them in.
 
-### Machines and sessions (`devices/warm.go`; on the hub side `startDevices` in `hub/devices_link.go`)
+### Machines and sessions (`devices/warm.go`; on the hub side `startDevices` in `hub/devices_reports.go`)
 
 Since 2026-11-04 computers are connected by the manager ([machines.md](../server/machines.md) ("Who connects computers")): the manager is a child process of the hub and also receives SIGTERM when the hub stops.
 It first hands the `NodeInfo` and session lists of the machines online at this moment to its next process (its own settings `hub.warm_machines`, plus each machine's engines `engines`), then disconnects them (without reporting them offline).
