@@ -26,7 +26,8 @@ So Persona's Discord = **server channels your own bot can see** + **messages you
   A Go program is still how a new extension ships (the extension repository's development guide, "Add a program extension").
 - **REST is the source of truth; the Gateway is not part of D1.** Each archive call and each tool call reads what it needs from Discord's REST API (the bot's servers, their channels and active threads, cached for two minutes so a run's three calls share it) and compares each conversation's `last_message_id` with the cursor.
   Nothing is kept up from events, so nothing drifts: a missed event, a changed role or a restart cannot leave stale state behind. The cost is a few requests per server per pass and the hub's poll interval as latency (`poll_seconds: 300`), which the knowledge base does not mind.
-  What the program does keep in memory only saves requests or time, and losing it in a restart repeats work, never skips a message: conversations held back for now, archived threads found and not read yet, how far a look for archived threads got.
+  Everything that decides what is read is in the cursor the hub keeps; the only thing in memory is which conversations to leave alone for a while, and losing it repeats some requests, never skips a message.
+  (A first version kept archived-thread scans in memory across calls; the code review found four ways that could skip threads: a server joined later, a cursor the hub could not keep, a held channel, a failing server.)
   A Gateway connection in D1 would not even make the archive faster: `connector.changed` kicks the hub's knowledge-base loop, but the loop still only reads connectors whose poll interval has passed (`server/internal/assistant/kb_sources.go`).
 - The Gateway comes with D3, which needs it: interactions of a user-installed app arrive over the Gateway (or a public interactions URL, which most hubs don't have). From then on it is a doorbell and the interactions channel only:
   its failure delays things back to polling and adds a note to the status, it never takes the connector down. D2 may use it the same way to see mentions sooner.
@@ -78,17 +79,19 @@ The Gateway (from D3) asks for `GUILDS`, `GUILD_MESSAGES` and `MESSAGE_CONTENT` 
   From 2026-11-16 Discord leaves channels the bot cannot view out of `GET /guilds/{id}/channels`; before that, such a channel answers 403 and is left alone until its next message or six hours (refused requests count toward Discord's IP ban).
   A conversation that shows nothing though it has messages (no "Read Message History", or its newest messages deleted) keeps its position and is tried again on its next message or after six hours, so history is read once the permission is given and a deleted message never delays the next one.
 - **One conversation failing** (a 5xx, a 400, a route's rate limit, a message that can't be decoded) holds up only itself: the others are read, the status stays ok, and it is tried again on its next message or after 15 minutes. Only the network, a refused token or a global rate limit end a call.
-  A message that can't be decoded is left out; a page with none that can is not read past.
+  A message that can't be decoded is left out (paging goes by what Discord answered, so it never ends a read early); a page with none that can is not read past.
 - **First time**: backfill `history_days` days (default 30) per channel, at most 500 messages per channel; `GET /channels/{id}/messages?before=` returns 100 per page.
-  Threads are backfilled if active, or archived within that window: archived threads are looked for the first time and whenever the last complete look is older than 50 minutes (a thread archives after an hour of quiet at the earliest).
-  A look goes on across calls and is complete only when every server could be read; an archived thread that shows nothing (its messages deleted: the listing itself needs "Read Message History") gets its position anyway, so it never keeps a look from completing.
+  Threads are backfilled if active, or archived within that window: each channel's archived threads are listed when its last listing is older than 50 minutes (a thread archives after an hour of quiet at the earliest),
+  the first time over the window, then since an hour before its last listing. The listing time is kept per channel in the cursor, and written only once every thread it found has been read: a server joined later is listed over the window,
+  a listing the hub could not keep is done again, and a channel that can't be listed now holds up only itself. An archived thread that shows nothing (its messages deleted: the listing itself needs "Read Message History") gets its position anyway.
+  Archived private threads are not read: Discord lists them only to moderators.
 - **After that**: each pass reads the channels whose `last_message_id` moved past the cursor, `after=` the cursor (pages come newest first: the next anchor is a page's largest id; `after=0` must be sent as 1).
-  The cursor (`archive.changes`' `cursor`, stored by the hub) is "conversation → last message id, when the archived threads were last looked for completely". One that can't be read starts over, and a position older than the window reads the window again rather than everything since (the archive was off for months):
+  The cursor (`archive.changes`' `cursor`, stored by the hub) is "conversation → last message id, channel → when its archived threads were last listed". One that can't be read starts over, and a position older than the window reads on from the window's start rather than everything since (the archive was off for months):
   the knowledge base keeps a receipt per message id and drops replays (`Ingest` in `server/internal/kb/update.go`), so starting over costs requests, never duplicates. Channel ids are global, so another bot's positions stay valid. Entries of conversations gone for longer than the window are dropped.
 - **Message Content off**: Discord then sends messages with empty content over REST too. Each pass first reads the application's flags; while the intent is off, no cursor moves, so nothing is skipped: once it is back on, the next pass reads from where it stopped.
   Turning it off in the seconds between that check and a read is not caught: a per-page "content withheld" check would misread legitimately empty messages and make the status flap, which costs more than it saves.
 - **Budget**: a call reads at least one conversation, then stops after about 25 seconds, `limit` conversations or about 2 MB (source extensions carry 8 MB per frame) and answers `more`; the hub calls again (three calls per run). The conversations furthest behind come first, so none waits on busier ones.
-- **System messages**: a new thread is noted; joins, boosts and pins are left out (noise for the model). Attachments, stickers, polls and forwards are archived as short text notes from D1 on.
+- **System messages**: a new thread is noted; joins, boosts and pins are left out (noise for the model). Attachments, stickers, polls, forwards, link cards with their fields and bots' component messages are archived as text from D1 on.
 - **Messages**: sender display name, body (mentions written as `@name`, `#channel`, custom emoji as `:name:`), the quoted reply, embed titles and links; messages "I" sent are marked `mine`.
   Edits and deletions are not synced in the first version (item 3 of "Decided by the user").
 - **No people records** (item 2 of "Decided by the user"; Discord's developer policy forbids profiling users): messages carry only the sender's name, **no `sender_id` and no `sender_handles`**.
@@ -123,7 +126,9 @@ D3's "Send to Persona" messages wait in the data directory until a later cursor 
 | `discord_messages` | Messages in a channel / thread, paging back in time |
 | `discord_search` | Search messages in a server (`GET /guilds/{id}/messages/search`); while Discord is still indexing (returns 202), says so and points the assistant at the knowledge base, which has the archived messages (the extension does not ask for `kb.read` to search it itself) |
 
-Tool descriptions and parameter docs live in the extension's own `internal/prompts/mcp/` (the rules in `docs/assistant/prompts.md`). Message content is treated as untrusted data (prompt injection); tool results carry no tokens and no user ids.
+Tool descriptions and parameter docs live in the extension's own `prompts/mcp/` (the rules in `docs/assistant/prompts.md`). Message content is treated as untrusted data (prompt injection); tool results carry no tokens and no user ids.
+Each message is one line that starts with its time; the sender's display name is quoted with "(the user)" outside the quotes, and a message's further lines are indented, so neither a display name nor a message's text can pass for the user or for another message.
+`discord_messages` reads any conversation the bot may read, archived threads and forum posts too (a search finds them; discovery lists only active ones).
 
 ## Conversation page
 
