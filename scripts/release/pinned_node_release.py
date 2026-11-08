@@ -99,6 +99,12 @@ def run_pinned_node(args, cfg):
         run_id = uuid.uuid4().hex
         target_state = state / 'node' / args.node_id
         target_state.mkdir(parents=True, exist_ok=True)
+        last = target_state / ('last-check.json' if args.validate_only else 'last.json')
+        previous = json.loads(last.read_text()) if last.exists() else {}
+        if (not args.validate_only and not getattr(args, 'retry', False)
+                and previous.get('source') == args.commit and previous.get('target_identity') == identity
+                and previous.get('phase') in ('pending', 'failure', 'applied', 'confirmed')):
+            raise ValueError('Previous node transaction is retained; an explicit --retry is required')
         result = dict(run_id=run_id, source=args.commit, version=manifest['version'],
                       target_identity=identity, phase='pending')
         receipt = target_state / (run_id + '.json')
@@ -108,6 +114,12 @@ def run_pinned_node(args, cfg):
                    '--receipt', str(receipt)]
         if not args.validate_only:
             command.append('--apply')
+        def save_result():
+            temporary = target_state / 'last.tmp'
+            temporary.write_text(json.dumps(result, indent=2) + '\n')
+            temporary.replace(last)
+
+        save_result()
         try:
             with (target_state / (run_id + '.log')).open('w') as log:
                 subprocess.run(command, cwd=checkout, check=True, stdout=log, stderr=subprocess.STDOUT)
@@ -121,6 +133,4 @@ def run_pinned_node(args, cfg):
             result.update(phase='failure')
             raise
         finally:
-            temporary = target_state / 'last.tmp'
-            temporary.write_text(json.dumps(result, indent=2) + '\n')
-            temporary.replace(target_state / 'last.json')
+            save_result()

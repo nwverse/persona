@@ -204,7 +204,7 @@ class PinnedNodeTests(unittest.TestCase):
 
 class PinnedNodeWorkerTests(unittest.TestCase):
     setUp = PinnedNodeTests.setUp
-    def invoke_worker(self, apply=False, failure=None):
+    def invoke_worker(self, apply=False, failure=None, retry=False):
         import argparse
         config = self.root / 'publisher.json'
         config.write_text(json.dumps({'node_target': TARGET, 'candidate': self.candidate, 'remote_root': str(self.root)}))
@@ -212,7 +212,7 @@ class PinnedNodeWorkerTests(unittest.TestCase):
         cfg = dict(checkout=str(self.root), state_dir=str(self.state), repository='example/project',
                    node_targets={'work-node': {'publisher_config': str(config)}})
         args = argparse.Namespace(commit=self.manifest['commit'], node_id='work-node',
-                                  artifact_dir=self.staged, manager_id=None, validate_only=not apply)
+                                  artifact_dir=self.staged, manager_id=None, validate_only=not apply, retry=retry)
         calls = []
         def run(command, **kwargs):
             calls.append(command)
@@ -226,7 +226,7 @@ class PinnedNodeWorkerTests(unittest.TestCase):
         with patch.object(worker.subprocess, 'run', side_effect=run), \
                 patch.object(worker.subprocess, 'check_output', return_value='https://github.com/example/project.git'):
             worker.run_pinned_node(args, cfg)
-        return calls, json.loads((self.state / 'node/work-node/last.json').read_text())
+        return calls, json.loads((self.state / 'node/work-node' / ('last.json' if apply else 'last-check.json')).read_text())
 
     def test_worker_preserves_original_artifact_and_never_builds_or_checks_out_old_source(self):
         original = {path.name: path.read_bytes() for path in self.staged.iterdir()}
@@ -249,6 +249,18 @@ class PinnedNodeWorkerTests(unittest.TestCase):
         self.assertEqual(result['phase'], 'failure')
         self.assertEqual(result['source'], self.manifest['commit'])
         self.assertTrue(result['run_id'])
+
+    def test_failure_is_retained_and_check_cannot_authorize_an_automatic_retry(self):
+        import subprocess
+        with self.assertRaises(subprocess.CalledProcessError):
+            self.invoke_worker(True, subprocess.CalledProcessError(1, ['publisher']))
+        original = (self.state / 'node/work-node/last.json').read_bytes()
+        self.invoke_worker(False)
+        self.assertEqual((self.state / 'node/work-node/last.json').read_bytes(), original)
+        with self.assertRaisesRegex(ValueError, 'explicit --retry'):
+            self.invoke_worker(True)
+        self.assertEqual((self.state / 'node/work-node/last.json').read_bytes(), original)
+        self.assertEqual(self.invoke_worker(True, retry=True)[1]['phase'], 'confirmed')
 
     def test_configured_node_scope_defaults_to_check(self):
         import hub_release
