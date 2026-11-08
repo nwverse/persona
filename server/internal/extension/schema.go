@@ -14,6 +14,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/nwverse/persona/server/internal/i18n"
+	"github.com/nwverse/persona/server/internal/lazyre"
 )
 
 // ConfigMost is the largest configuration value kept.
@@ -73,7 +74,7 @@ var (
 	// machine: one of the hub's machines, by id: a form draws a list of them as a switch each (x-os narrows it).
 	formats      = []string{"uri", "email", "hostname", "machine"}
 	systems      = []string{"darwin", "linux", "windows"}
-	hostnameLike = regexp.MustCompile(`^([a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?\.)*[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?$`)
+	hostnameLike = lazyre.New(`^([a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?\.)*[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?$`)
 )
 
 // ParseSchema reads a configuration schema, refusing anything outside the subset; nil, nil when raw is empty.
@@ -164,7 +165,7 @@ func ordered(raw json.RawMessage) ([]string, []json.RawMessage, error) {
 	return names, values, nil
 }
 
-var fieldName = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_-]{0,63}$`)
+var fieldName = lazyre.New(`^[A-Za-z_][A-Za-z0-9_-]{0,63}$`)
 
 func parseField(name string, raw json.RawMessage, at string, depth int) (Field, error) {
 	f := Field{Name: name}

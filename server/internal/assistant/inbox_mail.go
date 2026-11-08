@@ -5,7 +5,6 @@ import (
 	"crypto/sha1"
 	"encoding/hex"
 	"fmt"
-	"regexp"
 	"slices"
 	"sort"
 	"strconv"
@@ -13,6 +12,7 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/server/internal/assistantwire"
+	"github.com/nwverse/persona/server/internal/lazyre"
 )
 
 // ---- mail ----
@@ -81,7 +81,7 @@ func (s *Service) readMailBody(ctx context.Context, a assistantwire.InboxMailAcc
 	return true
 }
 
-var replyPrefix = regexp.MustCompile(`(?i)^\s*((re|fw|fwd|aw|回复|答复|转发)\s*[:：]\s*|\[[^\]]{1,30}\]\s*)+`)
+var replyPrefix = lazyre.New(`(?i)^\s*((re|fw|fwd|aw|回复|答复|转发)\s*[:：]\s*|\[[^\]]{1,30}\]\s*)+`)
 
 // mailThread is what keeps replies in one item: the subject without Re: / Fwd: / [list] prefixes. A subject that is
 // empty once they are gone says nothing about which mails go together: those are grouped by who sent them too, so a

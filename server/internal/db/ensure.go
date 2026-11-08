@@ -5,18 +5,19 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
-	"regexp"
 	"strings"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
+
+	"github.com/nwverse/persona/server/internal/lazyre"
 )
 
 // A database a manager was given (`personad manager join --database-url`) is made when that server has none by
 // its name yet (docs/assistant/managers.md, "Database"); the container install makes comes with its own.
 
 // databaseName is what EnsureDatabase creates: plain lower-case identifiers only, so it needs no quoting rules.
-var databaseName = regexp.MustCompile(`^[a-z_][a-z0-9_]{0,62}$`)
+var databaseName = lazyre.New(`^[a-z_][a-z0-9_]{0,62}$`)
 
 // DatabaseName is the name of a URL's database ("" when it names none).
 func DatabaseName(raw string) string {

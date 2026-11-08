@@ -5,7 +5,6 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
-	"regexp"
 	"slices"
 	"sort"
 	"strconv"
@@ -16,6 +15,7 @@ import (
 	"github.com/nwverse/persona/server/internal/db"
 	"github.com/nwverse/persona/server/internal/feishubot"
 	"github.com/nwverse/persona/server/internal/i18n"
+	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/prompts"
 )
 
@@ -130,7 +130,7 @@ func (s *Service) saveAcceptLocked(ctx context.Context) {
 	}
 }
 
-var urlRe = regexp.MustCompile(`https?://[^\s<>()\[\]"'，。；、）]+`)
+var urlRe = lazyre.New(`https?://[^\s<>()\[\]"'，。；、）]+`)
 
 // askAcceptance keeps task t's "Please verify" ask once (reply: what its agent said last, on machine/session) and posts its
 // card when the bot can. The ask is a fact of the hub, not of the card: with no card due it is kept all the same (NoCard),
@@ -318,7 +318,7 @@ func (s *Service) acceptAskLocked(id string) *acceptAsk {
 // Chinese completion particles (as in "ok" plus a particle) or a stop. Question particles stay out, and
 // both full-width and ASCII question marks are neither particles nor stops, so questions still go to the agent, and
 // negations ("not passed", "can't pass", "no good") never match because the regex anchors on the approval word.
-var passWords = regexp.MustCompile(`(?i)^\s*(验收)?(通过|没问题|可以|好的?|ok|okay|lgtm|pass(ed)?|approved?|👍)(?:[了啦呀咯喽呗哒啊]{1,2})?\s*[。.!！]?\s*$`)
+var passWords = lazyre.New(`(?i)^\s*(验收)?(通过|没问题|可以|好的?|ok|okay|lgtm|pass(ed)?|approved?|👍)(?:[了啦呀咯喽呗哒啊]{1,2})?\s*[。.!！]?\s*$`)
 
 // acceptReply answers a reply to a "Please verify" card or a conclusion's (true: it was one): "Pass" marks it verified (a
 // decision: takes the option recommended), anything else is the user's change (a decision: their choice), written into the
