@@ -49,7 +49,7 @@ func TestUsageLimitTriage(t *testing.T) {
 	}{{true, "自己接着做"}, {false, "重置"}} {
 		w, by, skip := triageRules(limitTurn("s1", reset, tc.resumes), time.UTC, "")
 		if skip || by != "rule" || w == nil || w.Phase != proto.WorkBlocked || w.On != proto.WaitExternal || w.ResetsAt == nil ||
-			!w.ResetsAt.Equal(reset) || w.Wait != "" || len(w.Questions) != 0 ||
+			!w.ResetsAt.Equal(reset) || w.Wait != "" || len(w.Questions) != 0 || !managerWaits(w) ||
 			!strings.Contains(w.Line, reset.UTC().Format("15:04")) || !strings.Contains(w.Line, tc.want) {
 			t.Errorf("resumes %v: %+v %s", tc.resumes, w, by)
 		}
@@ -217,7 +217,7 @@ func TestUsageLimitCapIsACard(t *testing.T) {
 	}
 	cards := s.workCards()
 	if len(cards) != 1 || cards[0].Questions[0].Header != workT("", "header_limit") || cards[0].Questions[0].Options[0].Label != answerRetry ||
-		!strings.Contains(cards[0].Questions[0].Question, "3 次") {
+		!strings.Contains(cards[0].Questions[0].Question, "3 次") || !strings.Contains(cards[0].Questions[0].Question, limitText) {
 		t.Fatalf("cards %+v", cards)
 	}
 	// Another refused turn while the card is up (a background task's report woke it): still the user's.
