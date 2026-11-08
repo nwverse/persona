@@ -16,15 +16,22 @@ n=0 failed=""; for f in $(find scripts -name 'test_*.py' -not -path '*/node_modu
 ## Hosted CI
 
 `.github/workflows/ci.yml` runs on every PR and manual dispatch. There is no merge-queue trigger while the repository has no merge queue.
-It checks repository privacy and path safety, then uses `scripts/ci/paths.py` to call independent reusable platform workflows. Filters live
-in that tested selector, not duplicated native workflow filters: this makes dependencies and results visible to the final **CI required**
-job, which always reports and rejects failed, cancelled, missing or unexpectedly skipped selected required jobs. Require **CI required**
-only; repository rulesets are not changed. A workflow change must have a real green hosted run on the PR head before merging.
+Automatic PR CI allocates **one runner, named CI required**. That job performs repository/commit privacy and path safety, documentation
+paths and README checks, CI-regression tests, then the complete Web and runtime/SDK checks when selected by `scripts/ci/paths.py`.
+It does not queue separate guards, script shards and an aggregate runner. Any executed step failure still fails the real check.
+Require **CI required** only; no repository rulesets are changed. A workflow change needs green hosted verification on the PR head.
 
-By maintainer decision, **iOS/Watch and Mac are manual-only**: hosted macOS queue time alone can exceed the 15-minute PR budget. All their
-existing builds and tests remain in the reusable Apple workflow. On a manual CI run, selected iOS/Watch still contributes to **CI required**;
-Mac reports its real independent result without `continue-on-error`. On a PR, the selector explicitly leaves Apple unselected, so a skipped
-Apple job is not misreported as a test pass. Image build/smoke is also manual-only, with release `v*` tag publishing retained.
+By maintainer decision, **server, Android, iOS/Watch, Mac and the full scripts suite are manual-only**. Sharding improved execution time,
+but the post-merge documentation and Web verification PRs still took 20m35s and 21m13s because repeated Linux allocations queued for
+minutes. The merged server/Android manual run was green but took 23m14s including queues. These failed latency samples remain evidence,
+not passing acceptance claims (#1474). Keeping heavy lanes manual reduces shared runner pressure and preserves their complete tests.
+On a PR, their selector outputs are explicitly false: a skipped platform is not claimed as tested. Fast documentation and CI-regression
+checks still run on every PR. Full script-suite, catalog, translation/token and workflow-lint checks remain in the manual scripts lane.
+Image build/smoke and issue-link enforcement remain manual; release `v*` tag publishing is retained.
+
+Manual CI still uses independent reusable platform workflows and the tested **CI required** aggregator, rejecting failed, cancelled,
+missing or unexpectedly skipped selected jobs. Selected iOS/Watch contributes to that aggregate; Mac reports its real independent result
+without `continue-on-error`. All manual lane overrides remain available; manual duration is not a passing automatic PR budget claim.
 
 Manual `lanes` accepts `auto` (the default), `all`, or comma-separated `server,web,android,apple,runtimes,scripts`. Unknown names fail.
 `auto` compares with the PR base when present, otherwise `origin/main`; `base` can override that comparison. A dispatch of unchanged `main`
@@ -41,18 +48,28 @@ gh workflow run pr-needs-issue.yml --ref main -f pr_number=<number> # metadata e
 
 All PR code runs with `contents: read`, without persisted checkout credentials, private config or new secrets. Forks use `pull_request`,
 never privileged execution. Issue-link enforcement remains manual and runs its metadata-only write-token job only from the default branch.
-Image publishing has `packages: write` only in its publishing job. One concurrency group per PR cancels stale runs.
+Image publishing has `packages: write` only in its publishing job. Concurrency keys use a stable workflow-file prefix, the qualified
+repository/branch, and lane. PRs use `pr-fast`; manual CI uses the requested `lanes` string. Use a stable comma-separated lane order when
+dispatching the same bundle. New work in the same group cancels stale pending/running work; different lanes and same-named fork branches
+remain independent. Direct and reusable Apple/server/Android/scripts calls share their file-specific lane group, never the CI caller's
+key: reusing only the caller-derived `github.workflow` would let a called workflow cancel its caller.
 
-Server uses four independent runners: browser/node, hub/voice/assistant, all other packages, and formatting/vet/build/Windows/SDK checks.
+Manual server and Android matrices allow at most **two** simultaneous shards each; the full scripts matrix allows **one**. All shards
+still execute with `fail-fast: false`; the caps trade manual wall-clock latency for available PR runner slots. These code-level controls
+apply to newly scheduled workflow versions, not retroactive cancellation of existing queued runs. Peak hosted queue time is a capacity
+issue, not test execution time. Do not change repository settings/rulesets or procure paid/self-hosted capacity as part of these controls.
+
+Server keeps four independent shards (at most two concurrent runners): browser/node, hub/voice/assistant, all other packages, and
+formatting/vet/build/Windows/SDK checks.
 Every package from `go list ./...` belongs to exactly one test shard, including future packages. Browser tests remain isolated from other
 packages. Go module/build caches are keyed by exact Go version, shard, dependency sums and source inputs, with same-shard fallback keys;
 `-count=1` keeps test execution uncached. Test-event summaries report the slowest real tests, rather than inferring runtime from `Sleep`
-inside fake-clock tests. Scripts split complete sorted discovery across two independent runner jobs; each has its own synthetic HOME and
-mock ports. Source/documentation guards still read across modules, so scripts remain selected for every PR. Platform paths are narrower:
-unrelated Android/Mac screens no longer select server, but shared client contracts read by Go compatibility tests still do.
+inside fake-clock tests. The full manual scripts suite splits complete sorted discovery across two independently isolated jobs, scheduled
+one at a time; each has its own synthetic HOME and mock ports. Automatic PR checks run the fast CI-regression and documentation subset, not the full suite.
+Platform paths retain shared client contracts read by Go compatibility tests, and manual `auto` selects those dependencies.
 
-Android uses five independent runners: lint/build, core tests, two disjoint sorted feature-test shards, and platform/app tests. Module
-declarations are dynamically partitioned; unknown
+Android keeps five independently isolated shards, at most two concurrent: lint/build, core tests, two disjoint sorted feature-test shards,
+and platform/app tests. Module declarations are dynamically partitioned; unknown
 module prefixes use a fallback shard, while unsupported declarations fail rather than skip coverage. Every module's complete test selector
 retains all variants. Gradle workers remain bounded; build and public Robolectric dependency caches do not contain private config. Per-shard
 Gradle profiles and test/lint reports are uploaded for diagnosis. Local entry points without shard options still run complete verification.
@@ -60,7 +77,9 @@ Gradle profiles and test/lint reports are uploaded for diagnosis. Local entry po
 The target is **15 minutes from push start through CI required completion, including all queue time**, not 15 minutes per job. Record UTC
 push-start, workflow creation, job start/end and aggregate completion separately. Hosted queues are outside this repository's control;
 job timeouts are failure bounds, not evidence that tests completed within the target. Keep any lane that cannot meet measured acceptance
-manual-only rather than removing assertions or turning timeouts into passes. Before/after evidence is tracked in #1422.
+manual-only rather than removing assertions or turning timeouts into passes. Execution improvements are tracked in #1422; the repeated
+queue correction and fresh post-merge acceptance are tracked in #1474. A single allocation removes repeated queue boundaries, but the
+initial hosted queue is still outside repository control: report any over-budget sample and never promise an unmeasured queue SLA.
 
 | Platform / reusable workflow | Local entry | Checks | Hosted runner | Planning duration (warm / cold) |
 | --- | --- | --- | --- | --- |
@@ -107,8 +126,8 @@ The stock iOS unit-test simulator is granted Reminders access for the synthetic 
 runs the existing EventKit create/list/update/delete round-trip against its disposable store. This does not use a personal device or account.
 Platform-gated and explicitly opt-in tests still report their own skips; they are not evidence of device/live integration coverage.
 On Linux, `test_hub_restart_mac.py` skips its three Mac-only cases; `test_persona_cutover.py` has six optional database/container cases
-without dedicated cutover inputs. The complete Python suite remains discovered and runs; no failing suite is excluded. CI's
-Postgres does run ordinary database tests (unlike the old database-free workflow). Specialized offline cutover fixtures requiring extra
+without dedicated cutover inputs. The complete manual Python lane still discovers and runs every suite; no failing suite is excluded.
+Manual server CI's Postgres does run ordinary database tests (unlike the old database-free workflow). Specialized offline cutover fixtures requiring extra
 container/migration inputs are not supplied. Private-value scanning of commits and PR metadata remains in `scripts/hooks/merge-pr.sh` on
 the merge machine; CI runs the generic privacy rules without those values. No baseline is raised to make a gate green.
 
