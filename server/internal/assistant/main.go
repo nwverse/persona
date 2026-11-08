@@ -32,6 +32,7 @@ import (
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/identity"
 	"github.com/nwverse/persona/server/internal/managerconf"
+	"github.com/nwverse/persona/server/internal/managerupdate"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/update"
 )
@@ -427,6 +428,15 @@ func run(ctx context.Context, build update.Build, o runOptions) error {
 		defer close(extDone)
 		_ = ext.Run(ctx) // after ctx: stops the extensions' programs (they are the manager's children)
 	}()
+	if o.ID != "assistant" {
+		go func() {
+			if err := bh.Wait(ctx); err == nil {
+				if err := managerupdate.MarkReady(home, build); err != nil {
+					logf("manager update readiness: %v", err)
+				}
+			}
+		}()
+	}
 	err = bh.Run(ctx, svc)
 	stop() // a refused token ends Run before ctx: the computers and the extensions stop with it
 	<-done

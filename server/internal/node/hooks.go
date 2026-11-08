@@ -189,6 +189,10 @@ func (n *Node) serveSock(ctx context.Context, c net.Conn) {
 	case "mcp.call":
 		var res proto.ToolResult
 		sid := n.mcpCaller(req.Name, req.SessionID, req.Pane, req.Assistant)
+		if req.Name == toolMailSaveAttachment { // writes on this machine (mailattachment.go)
+			resp = n.saveMailAttachment(ctx, req.Args, sid, req.Assistant, req.Guest || n.guestOf(sid) != nil)
+			break
+		}
 		if err := n.peer.Call(ctx, "mcp.call", map[string]any{"name": req.Name, "args": req.Args, "session_id": sid,
 			"assistant": req.Assistant, "guest": req.Guest || n.guestOf(sid) != nil}, &res); err != nil {
 			res = proto.TextResult("Persona hub error: "+err.Error(), true)

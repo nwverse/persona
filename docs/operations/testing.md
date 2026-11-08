@@ -24,7 +24,7 @@ The required Apple lane remains iOS, including embedded Watch builds, PersonaKit
 Both Apple lanes depend only on path selection and run in parallel on separate hosted runners. Unselected platforms are deliberately
 skipped. Require **CI required** only; repository rulesets are not changed by this policy split.
 remove older individual conditional required checks when branch protection is available. A workflow change must have a real green hosted
-PR run before merging. Use `python3 scripts/ci/paths.py --base origin/master` to inspect local selection; dispatch runs all platforms.
+PR run before merging. Use `python3 scripts/ci/paths.py --base origin/main` to inspect local selection; dispatch runs all platforms.
 
 All PR code runs with `contents: read`, without persisted checkout credentials, private config or new secrets. Forks use `pull_request`,
 never privileged execution. The issue-link metadata workflow alone uses `pull_request_target`: it never checks out PR code and only reads
@@ -96,10 +96,12 @@ A test binary never touches the developer's real `~/.persona`: the packages that
 Runs only relevant second-scale checks based on git changes, with independent checks in parallel; useful before committing:
 
 ```sh
-./scripts/check-fast.sh                  # compare changes from git merge-base HEAD origin/master to worktree, select by path
-./scripts/check-fast.sh --base master    # choose a comparison baseline
+./scripts/check-fast.sh                  # compare changes from git merge-base HEAD <default branch> to worktree, select by path
+./scripts/check-fast.sh --base main      # choose a comparison baseline
 ./scripts/check-fast.sh --all            # all fast local checks except full iOS/macOS and server Postgres tests
 ```
+
+Without `--base`, the base is the clone's default branch, read from local refs only (it works offline): `origin/HEAD` if it points at a commit, else `origin/main`, else `origin/master`. With none of them it stops with exit 2 and says how to fix it (`git fetch origin` then `git remote set-head origin --auto`, or `--base <ref>`).
 
 `--all` also runs all `scripts/**/test_*.py` like CI’s Scripts tests job (the same `find`; it skips only tests already covered by dedicated checks: `test_external_service_refs.py`, `test_sdk_bundle.py`, `test_extension_schema.py`, and `scripts/app/test_android_*`, see `script_test_add`; update this skip list when renaming or removing dedicated checks). They run sequentially in one check, each suite from its own directory with its own `CHECK_FAST_TIMEOUT_OTHER`. One failure does not stop the rest; the final summary lists failed and timed-out files.
 
@@ -590,7 +592,7 @@ Long-scroll uses `XCTOSSignpostMetric`; simulator reports duration, not dropped 
 - Compact-list shots (`CompactListShots`, demo not mock): All (many spaces), Mac Studio (many unread/idle spaces), Unread, Needs you, Mac mini (all idle),
   by-state, card comparison; all three text sizes (`-ui.textSize small|standard|large`; `TEST_RUNNER_PERSONA_TEXT_SIZES=standard` one only).
   `TEST_RUNNER_PERSONA_SHOTS=<directory> TEST_RUNNER_PERSONA_STYLE=light … -only-testing:PersonaUITests/CompactListShots`, repeat dark.
-  Before/after: put same test file in `git worktree add --detach <directory> origin/master`, same data both sides.
+  Before/after: put same test file in `git worktree add --detach <directory> origin/main`, same data both sides.
 - Computer sections (#2108, `AgentsByMachineTests`): default three-computer mock (`TEST_RUNNER_PERSONA_MOCK_HUB`), repository/project modes section by computer, hub order,
   no computer name repeated in group headers, computer title collapses whole section, machine filter removes headers. Repository/worktree inference: `AgentRepoTreeTests`.
   `MOCK_WORKTREES=1`: weather widget Agent in `.worktrees/widget` (idle peer),
@@ -869,8 +871,8 @@ backtick paths/commands/config keys in `CLAUDE.local.md` (only ID/host/email/IP-
 (`app_store.feedback_email`, `privacy_url`, already public for App Store/OAuth). Docs say hub machine/another Mac;
 example machine ids `server` / `laptop`. `release.sh` scans before packaging;
 precommit hooks: `git config core.hooksPath scripts/hooks` (`pre-commit` staged content, `commit-msg` commit message, `pre-push` changed files/messages against `origin/master`).
-**Block again before merge** (#3696): `scripts/hooks/merge-pr.sh <PR number>` fetches head, runs `privacy_check.py --range origin/master..<head> --message <title/body>`,
-then only passes to `gh pr merge --squash --delete-branch --match-head-commit <head>` (exact scanned head merges). `--range <base>..<head>` checks changed head-file contents and commit messages, not worktree, in seconds.
+**Block again before merge** (#3696): `scripts/hooks/merge-pr.sh <PR number>` fetches the PR's base and head, runs `privacy_check.py --range origin/<base>..<head> --message <title/body>`,
+then only passes to `gh pr merge --squash --match-head-commit <head>` (exact scanned head merges) and deletes a same-repository branch through the API. `--range <base>..<head>` checks changed head-file contents and commit messages, not worktree, in seconds.
 Why not CI: private values come from local configs unavailable to CI, which only checks generic private-IP/email/npm rules; merge machine must possess values to block them.
 2026-11-05–06 six scheduled releases failed initial repo scan because machine-name docs had already been merged directly with `gh pr merge`.
 
