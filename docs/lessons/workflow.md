@@ -175,3 +175,14 @@ after the link and failed two runs in three).
 
 - In zsh, a glob that matches no files (`rm -rf /tmp/x-*`) makes the whole command fail (nomatch), and nothing after `&&` runs (2026-11-04: the end-to-end test never ran, yet the result was recorded as a failure).
   To clean temp directories use `find /tmp -maxdepth 1 -name 'x-*' -exec rm -rf {} +` or `setopt nullglob` first; before recording a check result, confirm the command actually ran.
+
+## Manual CI dispatch payloads
+
+A `workflow_dispatch` event has no pull-request number or comparison base. Resolve
+an explicit base first, otherwise use the PR/merge-group base when present and
+`origin/main` for a manual run. Keep full checkout history and resolve the base to
+a commit before the privacy range check. An explicit lane override must reject
+unknown names rather than silently skip tests. An `auto` dispatch on unchanged
+`main` tests only the paths selected for an empty diff; use `lanes=all` for a full
+run. Manual issue-link enforcement takes an explicit PR number, reads metadata
+through the API, and runs its write-token job only from the default branch.

@@ -199,6 +199,9 @@ func (e *Engine) WriteHistory(ctx context.Context, c *Chat, msgs []SourceMessage
 
 	e.Store.chatMu.Lock()
 	defer e.Store.chatMu.Unlock()
+	if err := e.Store.recoverIngest(id); err != nil {
+		return 0, err
+	}
 	cur, ok := e.Store.Chat(id)
 	if !ok {
 		if len(lines) == 0 {
