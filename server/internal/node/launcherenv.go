@@ -3,12 +3,12 @@ package node
 import (
 	"cmp"
 	"maps"
-	"regexp"
 	"slices"
 	"strconv"
 	"strings"
 	"unicode"
 
+	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
@@ -175,9 +175,9 @@ func envLine(line string) (k, v string, ok bool) {
 	return k, strings.TrimSpace(v), true
 }
 
-var envNameRe = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
+var envNameRe = lazyre.New(`^[A-Za-z_][A-Za-z0-9_]*$`)
 
-var exportRe = regexp.MustCompile(`^export\s+`)
+var exportRe = lazyre.New(`^export\s+`)
 
 // withoutEnv is environ (KEY=value entries) without the variables clear names.
 func withoutEnv(environ, clear []string) []string {

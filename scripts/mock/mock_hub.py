@@ -12101,7 +12101,8 @@ def file_ops_route(h, p, body):
             name = rel.rpartition("/")[2]
             final = file_ops_free(drel, name, req.get("conflict"))
             if final is None: return h.send_json({"error": "已经有了", "code": "exists", "name": name}, 409) or True
-            if req.get("conflict") == "replace": file_ops_take(drel + final)
+            if req.get("conflict") == "replace":  # the node moves the one there to the trash (#315), never deletes it
+                FILE_TRASH["t%d" % (len(FILE_TRASH) + 1)] = (req["dir"].rstrip("/") + "/" + final, file_ops_take(drel + final))
             for k, v in file_ops_take(rel).items(): MOCK_TREE[drel + final + k[len(rel):]] = v
             changed.update({(home + "/" + rel.rpartition("/")[0]).rstrip("/"), (home + "/" + drel).rstrip("/")})
             moved.append({"from": path, "to": req["dir"].rstrip("/") + "/" + final})

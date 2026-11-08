@@ -12,7 +12,6 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
-	"regexp"
 	"runtime"
 	"strings"
 	"sync"
@@ -20,6 +19,7 @@ import (
 
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/identity"
+	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/netproxy"
 	"github.com/nwverse/persona/server/internal/nodeproto"
 	"github.com/nwverse/persona/server/internal/proto"
@@ -111,7 +111,7 @@ func localNodeDirs() []string {
 }
 
 // safeVersion: a version that can name a directory of the release (dl/<version>/) and of the cache.
-var safeVersion = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]*$`)
+var safeVersion = lazyre.New(`^[A-Za-z0-9][A-Za-z0-9._-]*$`)
 
 func (d *Devices) packageKey(goos, arch, program string) packageKey {
 	cfg := d.config()
