@@ -18,8 +18,9 @@ import (
 )
 
 var ciPRURL = regexp.MustCompile(`https://github\.com/([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)/pull/([1-9][0-9]*)\b`)
-var ciPRNumber = regexp.MustCompile(`(?i)\b(?:pr|pull request)\s*#([1-9][0-9]*)\b`)
+var ciPRNumber = regexp.MustCompile(`(?i)\b(?:pr|pull request)\s*#?([1-9][0-9]*)\b`)
 var ciArtifactNumber = regexp.MustCompile(`^#?[1-9][0-9]*$`)
+var ciArtifactRepo = regexp.MustCompile(`^([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)#([1-9][0-9]*)$`)
 var ciWaitSignal = regexp.MustCompile(`(?i)\b(ci|checks?|pipeline|workflows?|builds?|tests?)\b|持续集成|构建|测试|检查|ビルド|テスト|チェック`) // i18n-ignore: match model output
 var ciOtherWait = regexp.MustCompile(`(?i)\b(review|reviews|approval|deployment|deploy)\b|审核|审查|评审|部署|上线|レビュー|承認|デプロイ`)     // i18n-ignore: match model output
 
@@ -40,6 +41,8 @@ func startCIWatch(c proto.Session, e *db.SessionWork, now time.Time, ask, reply 
 			ref := strings.TrimSpace(a.Ref)
 			if a.Kind == "pr" && ciArtifactNumber.MatchString(ref) {
 				ref = "PR #" + strings.TrimPrefix(ref, "#")
+			} else if match := ciArtifactRepo.FindStringSubmatch(ref); a.Kind == "pr" && len(match) == 3 {
+				ref = "https://github.com/" + match[1] + "/pull/" + match[2]
 			}
 			texts = append(texts, ref)
 		}

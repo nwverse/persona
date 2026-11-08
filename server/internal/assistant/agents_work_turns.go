@@ -86,14 +86,30 @@ func (s *Service) workSeen(machine, sid string, at time.Time) {
 	s.work.mu.Lock()
 	s.work.init()
 	e, ok := s.work.entries[k]
-	if !ok || e.Work.Phase == "" || !s.work.seen[k].Before(e.TurnAt) {
+	if !ok || e.Work.Phase == "" {
 		s.work.mu.Unlock()
 		return
 	}
-	s.work.seen[k] = at
+	first := s.work.seen[k].Before(e.TurnAt)
+	if first {
+		s.work.seen[k] = at
+	}
 	phase, on, turn := e.Work.Phase, e.Work.On, e.TurnAt
+	var cancelled *db.SessionWork
+	if !at.Before(turn) && e.Work.CI != nil && e.WakeAt != nil {
+		e.Work.CI, e.Work.WakeAt, e.WakeAt = nil, nil, nil
+		e.UpdatedAt = time.Now().UTC()
+		saved := *e
+		cancelled = &saved
+	}
 	s.work.mu.Unlock()
-	s.workEvent(machine, sid, "seen", map[string]any{"after": at.Sub(turn).Seconds(), "phase": phase, "on": on})
+	if cancelled != nil {
+		s.saveWork(*cancelled)
+		s.publishSoon()
+	}
+	if first {
+		s.workEvent(machine, sid, "seen", map[string]any{"after": at.Sub(turn).Seconds(), "phase": phase, "on": on})
+	}
 }
 
 // workTurnEnded: a session on machine stopped. Once it stays stopped a moment, its turn is triaged; agents waiting

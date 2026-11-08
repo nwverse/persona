@@ -305,3 +305,58 @@ func TestCILongOfflineWatchAndOutboxRestore(t *testing.T) {
 		})
 	}
 }
+
+func TestCIWatchCancelsWhenUserViewsTurn(t *testing.T) {
+	ctx := context.Background()
+	s, f := workService(t)
+	c := stopped("ci", "PR #12 CI")
+	f.sessions["box"] = []proto.Session{c}
+	at := turnEnd.Add(10 * time.Minute)
+	e := db.SessionWork{MachineID: "box", SessionID: "ci", TurnAt: turnEnd, WakeAt: &at, Work: proto.WorkState{Phase: proto.WorkBlocked, On: proto.WaitExternal, Wait: "CI", WakeAt: &at}}
+	startCIWatch(c, &e, turnEnd, "", "")
+	s.putWork(ctx, e)
+	s.workSeen("box", "ci", turnEnd.Add(-time.Minute))
+	if entryOf(t, s, "ci").Work.CI == nil {
+		t.Fatal("old view cancelled the new turn")
+	}
+	s.workSeen("box", "ci", turnEnd.Add(time.Minute))
+	got := entryOf(t, s, "ci")
+	if got.WakeAt != nil || got.Work.CI != nil {
+		t.Fatalf("view did not cancel watch: %+v", got)
+	}
+	s.workWake(ctx, s.newWorkView(ctx), [2]string{"box", "ci"}, at)
+	if len(f.sentToAgents()) != 0 {
+		t.Fatal("cancelled watch sent a message")
+	}
+}
+
+func TestCIWatchPullRequestReferences(t *testing.T) {
+	for _, tc := range []struct {
+		name, text, artifact, repo string
+		number                     int
+	}{
+		{"number without hash", "Waiting for CI on PR 12", "", "", 12},
+		{"repository artifact", "Waiting for CI", "example/repo#12", "example/repo", 12},
+		{"numeric artifact", "Waiting for CI", "12", "", 12},
+		{"ambiguous numbers", "CI on PR 12 and PR #13", "", "", 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c := stopped("ci", tc.text)
+			at := turnEnd.Add(10 * time.Minute)
+			e := db.SessionWork{MachineID: "box", SessionID: "ci", TurnAt: turnEnd, WakeAt: &at, Work: proto.WorkState{Phase: proto.WorkBlocked, On: proto.WaitExternal, Wait: "CI", WakeAt: &at}}
+			if tc.artifact != "" {
+				e.Work.Artifacts = []proto.WorkArtifact{{Kind: "pr", Ref: tc.artifact}}
+			}
+			startCIWatch(c, &e, turnEnd, "", "")
+			if tc.number == 0 {
+				if e.Work.CI != nil {
+					t.Fatalf("ambiguous target %+v", e.Work.CI)
+				}
+				return
+			}
+			if e.Work.CI == nil || e.Work.CI.Number != tc.number || e.Work.CI.Repo != tc.repo {
+				t.Fatalf("target %+v", e.Work.CI)
+			}
+		})
+	}
+}
