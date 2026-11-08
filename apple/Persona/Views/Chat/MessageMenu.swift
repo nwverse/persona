@@ -235,6 +235,22 @@ extension View {
     func messageActionBar(id: String, text: String, isUser: Bool, date: Date? = nil, pending: Bool = false) -> some View {
         modifier(MessageActionBarHost(id: id, text: text, isUser: isUser, date: date, pending: pending))
     }
+    /// Messages shown with the bar outside the chat's list (the background tasks' drawer): a tap or a drag there closes
+    /// it, as on the list, and it closes with the sheet (#1388: it stayed until one of its buttons was used).
+    func closesMessageBar() -> some View { modifier(ClosesMessageBar()) }
+}
+
+private struct ClosesMessageBar: ViewModifier {
+    @Environment(MessageMenu.self) private var menu: MessageMenu?
+
+    func body(content: Content) -> some View {
+        content
+            .simultaneousGesture(TapGesture().onEnded { menu?.dismiss() })
+            .onScrollPhaseChange { _, phase in
+                if phase == .tracking || phase == .interacting { menu?.dismiss() }
+            }
+            .onDisappear { menu?.close() }
+    }
 }
 
 private struct MessageLongPress: ViewModifier {
