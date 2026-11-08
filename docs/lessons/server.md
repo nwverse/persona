@@ -32,6 +32,19 @@ and a local session revision protect that boundary without changing the node pro
 
 Pitfalls, odd behavior, and the trade-offs made at the time (formerly "Lessons" in `CLAUDE.md`; index in `docs/lessons/README.md`). Add new lessons to the relevant section, or create one if none fits.
 
+## One silent address must not take the whole dial (2026-11-08, #1181)
+
+A name with several addresses, dialed one at a time with one long timeout, fails as soon as the first address drops SYNs: the attempt sits until the
+caller's budget runs out and the working addresses are never tried. curl and browsers move on, so the same URL "works everywhere else". On one host a
+news site's first IPv4 addresses often never answered while its IPv6 one always did, and most reads through the source runtime broker failed at the
+extension's own 15-second request budget. Race the already checked addresses (`dialRace`): interleave families, a short attempt delay, bounded
+attempts, losers closed. Do not reach for `net.Dialer.FallbackDelay` here: it resolves the name itself, which would dial addresses the egress checks
+never saw. Making room by canceling an old attempt must give its address another turn later, or the only address that answers slowly is lost. A real
+dialer's own timeout at the request's deadline can arrive before the context reports it, as an "i/o timeout" that is not `context.DeadlineExceeded`:
+decide by the deadline, not by the attempts' errors. Test the scheduling with a fake dialer in a `testing/synctest` bubble, whose clock makes the
+order and timing of attempts exact; it proves nothing about real sockets' error identities, so keep a real-socket test for those (a loopback listener
+with a full accept queue never answers a SYN on Linux).
+
 ## Approved official-market pins outlive built-in constants (#1157)
 
 Changing a compiled public key does not update a pin already saved in Postgres, and the registration marker can hide that difference. Migrate only explicitly recognized retired official pins, including every recognized repository or HTTPS alias; never infer trust from a downloaded catalog or replace an unknown owner choice. Save the legacy registration marker before migration so a removed market stays removed. A failed pin write must keep loading retryable.
@@ -424,6 +437,8 @@ home volume (docs/operations/link.md "Without systemd").
 
 ## Unified model configuration
 
+- A managed-provider read failure is not an empty list (#1365). Read the whole raw setting reliably before changing providers, deciding assignments or resolving deletion dependencies; preserve readable sealed records so users can explicitly replace or remove corrupt credentials. Keep the confirmed snapshot through nested model resolution under the configuration lock, and publish that same committed snapshot to nodes. Decrypt only where import matching or node publication needs credentials. Reconnects and profile/trust notifications must omit a replacement on read or credential errors, and a safe committed edit must log and defer unsafe publication; only a genuinely missing setting permits first creation. Regress with selective failures at individual reads while writes remain available, full sealed-record equality, zero writes or node pushes on rejection, and a healthy retry.
+
 - A "provider" isn't necessarily a runnable launcher: direct API configurations can't be sent to nodes or listed for new sessions; filter purpose selections by API / launcher / plugin capabilities. UI or `ANTHROPIC_MODEL` changes alone don't guarantee the model is used; shell launchers may clear environment variables. Verify argument forwarding and pass the model to the actual executor.
 - Model caches and process reuse must include an effective-config fingerprint: changing URL, credentials, or model under the same provider name must invalidate old translation results and warmed processes. Test both same-config hits and changed-config misses; a changed fake API endpoint isn't the same config.
 - Exact node model metadata and `node_sessions` must save atomically; use Postgres `settings` key `node_model.<machine>.<session>` with SQL CTE, no local JSON state. Single-purpose edits use database revision-conditional updates; PATCH read-modify-write isn't concurrency-safe by itself.
@@ -469,6 +484,17 @@ home volume (docs/operations/link.md "Without systemd").
 ## Knowledge base (docs/assistant/knowledge.md)
 
 - An asynchronous dedupe answer must recheck a user's split, record its verdict and merge under the same project-mutation lock as unmerge. The verdict-file mutex prevents lost JSON updates but cannot stop an already queued merge from reversing a completed split. A verdict write failure must stop the merge.
+- A checkpoint after append is a replay window (#1343): connector pages can repeat after a cursor failure, a later batch failure or a process interruption.
+  Preserve stable message IDs scoped by exact source and chat, including IDs such as `body` reused across threads. Formatted-text matching loses distinct messages;
+  in-memory sets and atomic cursors do not repair append/receipt/counter failures. Journal the intended file replacements before changing text, then recover them
+  before another writer reads counters or changes the same files. Test failure before and after every replacement with a fresh Store, and expire identities with
+  retained text and source deletion. Legacy text and missing IDs cannot supply identities they never recorded. Compression must compare pending counts too:
+  new IDs can share a timestamp or minute, so advancing coverage from time alone can skip concurrent messages. Success and refusal must share the snapshot gate,
+  and a new ID in an already settled minute must reopen it for processing. Acquire metadata before message files:
+  the existing project commit holds metadata while its frozen input reads the timeline under the message mutex, so the opposite order deadlocks ingestion.
+  Attachment filenames must hash the full raw ID, not sanitize or truncate it: punctuation, case and long suffixes can otherwise overwrite an earlier message's
+  attachment even when receipts correctly keep both IDs. Put new files in a separate day subdirectory so hash-shaped legacy names stay intact, keep legacy
+  links/files, and use separate anonymous filenames when no stable ID is supplied.
 - Enforce retention at write entry points, not only daily cleanup: initial archive reads "latest 100 messages", which in quiet sessions can reach years back;
   after cleanup, 47 expired day files reappeared 6 seconds later (production 2026-11-02). All day-file writes (`Archive`, `Ingest`, `WriteHistory`) share
   `Engine.textCutoff()` (midnight of the earliest retained day); cleanup uses `Engine.Prune`, with the same retention days. New write paths use it too. `TestArchiveKeepsToTheTextRetention` checks "cleanup immediately after writing should delete 0 days".
@@ -636,7 +662,8 @@ home volume (docs/operations/link.md "Without systemd").
 - **Resident node systemd units need the same PATH as hub**: local node formerly inherited hub unit `PATH=%h/.local/bin:…` as a child;
   separate `personad-node` used systemd's default PATH and missed herdr / claude in `~/.local/bin`. `node-launchd.sh` now writes the same PATH.
 - **Signal only the resident node's main process**: `systemctl --user kill -s HUP personad-node` defaults to the whole cgroup, sending SIGHUP to assistant claude and background commands too.
-  Use `--kill-whom=main` (`node-launchd.sh restart-idle`).
+  Use `--kill-who=main` (`node-launchd.sh restart-idle`): `--kill-whom=` is only systemd 252's new name, and systemd 241 / 245 reject it as an unknown option,
+  so the signal never goes out; deploy.sh ignores that failure, and the resident node stays on its old binary. Every version reads `--kill-who=`.
 - **During resident-node `exec`, `node --stdio` could take over the connection**: the socket file remains (`SetUnlinkOnClose(false)`) but refuses connections; old `Relay` interpreted this as no resident node,
   serving the connection itself and putting assistant chats back in hub's cgroup, killed on next restart. Now wait up to 8 s on refusal (`dialResident`).
 - **Shutdown "offline" broadcasts are false**: hub canceled ctx on SIGTERM, then disconnected machines broadcast offline `machines` and ended questions, so clients saw an offline cascade before disconnect.
