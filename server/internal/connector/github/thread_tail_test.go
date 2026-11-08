@@ -518,3 +518,111 @@ func TestThreadGrowingTailWithStaggeredCacheExpiry(t *testing.T) {
 		}
 	}
 }
+
+// An old partial tail can finish after a newer discovery or a newer full tail.
+// Neither response completion nor a delayed 304 may make that old body current.
+func TestThreadLateTailResponse(t *testing.T) {
+	for _, conditional := range []bool{false, true} {
+		for _, publishNewTail := range []bool{false, true} {
+			t.Run(fmt.Sprintf("conditional-%t/new-tail-%t", conditional, publishNewTail), func(t *testing.T) {
+				api := &tailAPI{count: 501, links304: true}
+				captured, release := make(chan struct{}), make(chan struct{})
+				var once sync.Once
+				finish := func() { once.Do(func() { close(release) }) }
+				var hold atomic.Bool
+				srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					if r.URL.Path == tailPaths[0] && r.URL.Query().Get("page") == "6" && hold.CompareAndSwap(true, false) {
+						old := httptest.NewRecorder()
+						api.serveHTTP(old, r)
+						wantCode := http.StatusOK
+						if conditional {
+							wantCode = http.StatusNotModified
+						}
+						if old.Code != wantCode {
+							t.Errorf("held HTTP status=%d want=%d", old.Code, wantCode)
+						}
+						close(captured)
+						<-release
+						for key, values := range old.Header() {
+							for _, value := range values {
+								w.Header().Add(key, value)
+							}
+						}
+						w.WriteHeader(old.Code)
+						_, _ = w.Write(old.Body.Bytes())
+						return
+					}
+					api.serveHTTP(w, r)
+				}))
+				defer srv.Close()
+				defer finish()
+				c := New(Config{}, "", nil)
+				c.api, c.token = srv.URL, "synthetic-token"
+				c.status = connector.Status{State: connector.StateOK, Account: "example-user"}
+				ctx := context.Background()
+				if conditional {
+					if _, err := cachedList[threadComment](c, ctx, tailPaths[0]); err != nil {
+						t.Fatal(err)
+					}
+					expireThreadCache(c)
+				}
+				hold.Store(true)
+				type result struct {
+					rows []threadComment
+					err  error
+				}
+				oldRead := make(chan result, 1)
+				go func() { rows, err := cachedList[threadComment](c, ctx, tailPaths[0]); oldRead <- result{rows, err} }()
+				select {
+				case <-captured:
+				case <-time.After(5 * time.Second):
+					t.Fatal("old tail was not captured")
+				}
+				api.mu.Lock()
+				api.count = 601
+				api.mu.Unlock()
+				firstPath := tailPaths[0] + "?page=1&per_page=100"
+				c.etags.mu.Lock()
+				c.etags.m[firstPath].at = time.Now().Add(-time.Hour)
+				c.etags.mu.Unlock()
+				if publishNewTail {
+					rows, err := cachedList[threadComment](c, ctx, tailPaths[0])
+					if err != nil || len(rows) != 500 || rows[0].ID != 102 || rows[499].ID != 601 {
+						t.Fatalf("newer window control rows=%d err=%v", len(rows), err)
+					}
+				} else {
+					var first []threadComment
+					if _, err := c.cachedPage(ctx, firstPath, &first, true); err != nil {
+						t.Fatal(err)
+					}
+				}
+				finish()
+				select {
+				case old := <-oldRead:
+					if old.err != nil || len(old.rows) != 500 || old.rows[499].ID != 501 {
+						t.Fatalf("old window control rows=%d err=%v", len(old.rows), old.err)
+					}
+				case <-time.After(5 * time.Second):
+					t.Fatal("old read did not finish")
+				}
+				// Exercise the actual caller after the late response has tried to publish.
+				page, err := c.Thread(ctx, "example-org/example-repo#7", "", 8)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if got, want := tailIDs(page.Messages), expectedTailIDs(600, 601); !reflect.DeepEqual(got, want) {
+					t.Errorf("late-response latest=%v want=%v", got, want)
+				}
+				rows, err := cachedList[threadComment](c, ctx, tailPaths[0])
+				if err != nil || len(rows) != 500 {
+					t.Fatalf("late-response retained rows=%d err=%v", len(rows), err)
+				}
+				for i, row := range rows {
+					if row.ID != int64(102+i) {
+						t.Fatalf("late-response retained row %d=%d want=%d", i, row.ID, 102+i)
+					}
+				}
+			})
+		}
+	}
+}

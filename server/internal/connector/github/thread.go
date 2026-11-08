@@ -35,9 +35,10 @@ const (
 
 // etagCache keeps GitHub's answers by path with their ETag, the least recently used going first.
 type etagCache struct {
-	mu   sync.Mutex
-	m    map[string]*etagEntry
-	logs map[int64]string // failed checks' log tails, by job id (a finished job's log does not change)
+	mu    sync.Mutex
+	m     map[string]*etagEntry
+	reads uint64           // request admission order, shared by discovery and tail pages
+	logs  map[int64]string // failed checks' log tails, by job id (a finished job's log does not change)
 	// avatars: a login's avatar URL, as the lists gave it, for Media.
 	avatars map[string]string
 }
@@ -46,8 +47,9 @@ type etagEntry struct {
 	etag string
 	link string // pagination belongs to the representation, including on fresh and 304 reads
 	body []byte
-	at   time.Time // read (or confirmed by a 304)
+	at   time.Time // response completion, for threadFresh
 	used time.Time
+	read uint64 // admission order of the request that validated this representation
 }
 
 // cachedGet reads path into out like Get, asking with If-None-Match for what it read before and not asking at all
@@ -60,15 +62,15 @@ func (c *Connector) cachedGet(ctx context.Context, path string, out any) error {
 // discover requires current pagination metadata on revalidation. An unchanged first-page
 // body can have a new last page; a 304 without Link cannot confirm the old page count.
 func (c *Connector) cachedPage(ctx context.Context, path string, out any, discover bool) (string, error) {
-	link, _, err := c.cachedPageSince(ctx, path, out, discover, time.Time{})
+	link, _, err := c.cachedPageSince(ctx, path, out, discover, 0)
 	return link, err
 }
 
-// A refreshed discovery establishes the earliest acceptable validation time for its
-// tail pages. Page 1 can expire while later pages are still within threadFresh.
-func (c *Connector) cachedPageSince(ctx context.Context, path string, out any, discover bool, freshSince time.Time) (string, time.Time, error) {
+// Discovery establishes the earliest acceptable request admission for its tail
+// pages. Completion times cannot order reads: an older partial tail can finish late.
+func (c *Connector) cachedPageSince(ctx context.Context, path string, out any, discover bool, freshSince uint64) (string, uint64, error) {
 	if err := ctx.Err(); err != nil {
-		return "", time.Time{}, err
+		return "", 0, err
 	}
 	e := &c.etags
 	e.mu.Lock()
@@ -79,55 +81,67 @@ func (c *Connector) cachedPageSince(ctx context.Context, path string, out any, d
 	var hdr http.Header
 	if old != nil {
 		old.used = time.Now()
-		if time.Since(old.at) < threadFresh && !old.at.Before(freshSince) {
-			body, link, at := old.body, old.link, old.at
+		if time.Since(old.at) < threadFresh && old.read >= freshSince {
+			body, link, read := old.body, old.link, old.read
 			e.mu.Unlock()
-			return link, at, decodeBody(path, body, out)
+			return link, read, decodeBody(path, body, out)
 		}
 		hdr = http.Header{"If-None-Match": {old.etag}}
 	}
+	e.reads++
+	read := e.reads
 	e.mu.Unlock()
 	var body []byte
 	code, h, err := c.request(ctx, http.MethodGet, path, hdr, nil, &body)
 	if err != nil {
-		return "", time.Time{}, err
+		return "", 0, err
 	}
 	if discover && code == http.StatusNotModified && h.Values("Link") == nil {
 		// One unconditional discovery read is bounded independently of thread size.
+		e.mu.Lock()
+		e.reads++
+		read = e.reads
+		e.mu.Unlock()
 		code, h, err = c.request(ctx, http.MethodGet, path, nil, nil, &body)
 		if err != nil {
-			return "", time.Time{}, err
+			return "", 0, err
 		}
 	}
 	link := strings.Join(h.Values("Link"), ", ")
+	tag := h.Get("ETag")
+	if code == http.StatusNotModified && old != nil {
+		// Published representations are immutable; a delayed 304 belongs to the body
+		// and metadata captured when its conditional request was admitted.
+		body = old.body
+		if h.Values("Link") == nil {
+			link = old.link
+		}
+		if tag == "" {
+			tag = old.etag
+		}
+	}
 	at := time.Now()
 	e.mu.Lock()
-	if code == http.StatusNotModified && old != nil {
-		old.at = at
-		if h.Values("Link") != nil {
-			old.link = link
-		}
-		if tag := h.Get("ETag"); tag != "" {
-			old.etag = tag
-		}
-		body, link = old.body, old.link
-	} else if tag := h.Get("ETag"); tag != "" {
-		e.m[path] = &etagEntry{etag: tag, link: link, body: body, at: at, used: at}
-		if len(e.m) > etagKeep {
-			oldest := ""
-			for k, v := range e.m {
-				if oldest == "" || v.used.Before(e.m[oldest].used) {
-					oldest = k
+	// Never let an older in-flight response overwrite a newer representation.
+	if current := e.m[path]; current == nil || current.read <= read {
+		if tag != "" {
+			e.m[path] = &etagEntry{etag: tag, link: link, body: body, at: at, used: at, read: read}
+			if len(e.m) > etagKeep {
+				oldest := ""
+				for k, v := range e.m {
+					if oldest == "" || v.used.Before(e.m[oldest].used) {
+						oldest = k
+					}
 				}
+				delete(e.m, oldest)
 			}
-			delete(e.m, oldest)
+		} else {
+			// A new response without an ETag must not leave an older tagged body fresh.
+			delete(e.m, path)
 		}
-	} else {
-		// A new response without an ETag must not leave an older tagged body fresh.
-		delete(e.m, path)
 	}
 	e.mu.Unlock()
-	return link, at, decodeBody(path, body, out)
+	return link, read, decodeBody(path, body, out)
 }
 
 // forget drops what is kept for repo's PR / issue number: a comment was just posted, the page reads it again.
@@ -210,7 +224,7 @@ func cachedList[T any](c *Connector, ctx context.Context, path string) ([]T, err
 		return u.String()
 	}
 	var first []T
-	link, discoveredAt, err := c.cachedPageSince(ctx, pagePath(1), &first, true, time.Time{})
+	link, discoveredAt, err := c.cachedPageSince(ctx, pagePath(1), &first, true, 0)
 	if err != nil {
 		return nil, err
 	}
