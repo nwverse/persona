@@ -1,10 +1,5 @@
 # Lessons: web UI and interactions
 
-## Text page revisions and complete reads (#1297)
-
-- Check each known page revision before appending; retain known revisions across unversioned pages, but remove the aggregate revision when any accepted page lacks metadata. Legacy compatibility cannot prove a snapshot.
-- A complete-read helper must reject page failures, caps and retired owners instead of resolving the loaded prefix. Share the actual pending page result with concurrent readers, and scope callbacks to machine, path, working directory and reload so an old reader cannot borrow the new file. Keep an ordinary failed page retryable at its original offset; a known revision change requires a fresh read from the beginning. Explicit bounded previews need a separate completion flag, preserving a deliberate CSV/TSV cap without permitting partial exports. Go omits an empty text field: complete zero-byte text metadata is a valid empty file, while arbitrary missing content is not.
-
 ## Connector sends acknowledge one draft revision (#1286)
 
 - Keep an editable composer's text and quote together: clear them after success only if neither changed during the send or its refresh. Comparing final text alone misses edits away and back to the same words. A synchronous ref admits one send before React rerenders, and the manager, item, source and thread scope its local draft and pending state. Exercise delayed success, failure/retry, quote changes and ownership switches in both chat and GitHub comment modes.
@@ -485,3 +480,8 @@ A narrow shell can unmount its sidebar list and mount the same list in the Agent
 ## Manual mail drafts belong to their manager and item (#1252)
 
 - The merged Inbox can contain the same item id under two managers. Scope retained drafts and the live form's React key to both owner and item; resolve an omitted owner to the roster default so explicit and implicit default stamps share one draft. The mail body's open-reply key also needs the owner, or switching managers can leave the previous reply template open. Exercise late send failures after unmount while another owner's same-id draft is open, and verify recipients, account and reply headers as well as text through mocked sends.
+
+## Text page revisions and complete reads (#1297)
+
+- Check each known page revision before appending; retain known revisions across unversioned pages, but remove the aggregate revision when any accepted page lacks metadata. Legacy compatibility cannot prove a snapshot.
+- A complete-read helper must reject page failures, caps and retired owners instead of resolving the loaded prefix. Share the actual pending page result with concurrent readers, and scope callbacks to machine, path, working directory and reload so an old reader cannot borrow the new file. Keep an ordinary failed page retryable at its original offset; a known revision change requires a fresh read from the beginning. Explicit bounded previews need a separate completion flag, preserving a deliberate CSV/TSV cap without permitting partial exports. Go omits an empty text field: complete zero-byte text metadata is a valid empty file, while arbitrary missing content is not.
