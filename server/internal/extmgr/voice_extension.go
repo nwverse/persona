@@ -15,14 +15,14 @@ import (
 )
 
 // The built-in voice extension, `personad voice` (docs/extensions/extensions.md "Built-in voice extension", docs/assistant/voice.md
-// "Configurable GPT-Live upstream"): a built-in extension with a settings form and a secret key, so its realtime
+// "Configurable upstream"): a built-in extension with a settings form and a secret key, so its realtime
 // service can be set from the apps. hub.json's first entry of it is taken over under its own id (its upstreams stay,
 // and come first); without one the extension is there, switched off, as "voice".
 
 // voiceExtensionID is its id when hub.json has no entry of it.
 const voiceExtensionID = "voice"
 
-// voiceSecretKey is the secret holding the settings' upstream's key, sent to it as Authorization: Bearer.
+// voiceSecretKey is the secret holding the settings' upstream key. The wire determines whether it is a Bearer or X-Api-Key credential.
 const voiceSecretKey = "key"
 
 // voiceConfig is the settings form: one upstream (models custom/<model>) and how the model talks. ssh, key_file,
@@ -30,12 +30,12 @@ const voiceSecretKey = "key"
 const voiceConfig = `{
   "type": "object",
   "properties": {
-    "url": {"type": "string", "title": "服务地址", "description": "GPT-Live 兼容的会话地址，wss://<主机>/v1/live；ws:// 只用于内网，Key 会明文传输。换了主机，设置的 Key 会被清掉", "pattern": "^wss?://[^/?#\\s]+"},
+    "url": {"type": "string", "title": "服务地址", "description": "GPT-Live 填 wss://<主机>/v1/live；Seeduplex 填 wss://openspeech.bytedance.com/api/v3/duplex/realtime/dialogue。ws:// 只用于内网，Key 会明文传输。换了主机，设置的 Key 会被清掉", "pattern": "^wss?://[^/?#\\s]+"},
     "name": {"type": "string", "title": "名字", "description": "有几个服务时显示在模型名后面", "default": "GPT-Live"},
-    "dialect": {"type": "string", "title": "协议", "oneOf": [{"const": "live", "title": "GPT-Live"}, {"const": "codex", "title": "Codex（gpt-live-1-codex）"}], "default": "live"},
-    "models": {"type": "array", "title": "模型", "description": "不填时读服务自己的模型列表", "items": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$"}, "uniqueItems": true},
+    "dialect": {"type": "string", "title": "协议", "oneOf": [{"const": "live", "title": "GPT-Live"}, {"const": "codex", "title": "Codex（gpt-live-1-codex）"}, {"const": "volc", "title": "火山引擎 Seeduplex"}], "default": "live"},
+    "models": {"type": "array", "title": "模型", "description": "GPT-Live 不填时读服务自己的模型列表；Seeduplex 固定为 1.2.6.1", "items": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$"}, "uniqueItems": true},
     "default_model": {"type": "string", "title": "默认模型", "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$"},
-    "input_rate": {"type": "integer", "title": "麦克风采样率", "description": "不填时 GPT-Live 用 16000，Codex 用 24000", "enum": [16000, 24000]},
+    "input_rate": {"type": "integer", "title": "麦克风采样率", "description": "GPT-Live 和 Seeduplex 默认 16000，Codex 默认 24000；Seeduplex 仅支持 16000", "enum": [16000, 24000]},
     "owner": {"type": "string", "title": "语音里怎么称呼你"},
     "notes": {"type": "string", "title": "给语音助手的补充说明"}
   }
@@ -49,13 +49,13 @@ func voiceManifest(h *Manager, id, name string) *extension.Manifest {
 	}
 	items, _ := json.Marshal([]extension.VoiceItem{{ID: id, Name: name}})
 	return &extension.Manifest{ManifestVersion: extension.ManifestVersion, ID: id, Name: name, Version: h.version,
-		Description:      "在 App 里和 Persona 实时语音对话，语音来自 GPT-Live 兼容的实时服务。填服务地址和 Key 后打开；manager.json 里写的上游照常可用。",
+		Description:      "在 App 里和 Persona 实时语音对话，支持 GPT-Live 兼容服务和火山引擎 Seeduplex。填服务地址和 Key 后打开；manager.json 里写的上游照常可用。",
 		Engines:          extension.Engines{ExtensionProtocol: extension.Protocol},
 		Runtime:          &extension.Runtime{Command: extension.Command{Path: "personad"}, Args: []string{"voice"}, RPC: "none", HTTP: true},
 		ActivationEvents: []string{extension.OnStartup}, Permissions: extension.Permissions{HubAPI: true},
 		Contributes:   map[string]json.RawMessage{"voice": items},
 		Configuration: json.RawMessage(voiceConfig),
-		Secrets:       []extension.SecretSpec{{Name: voiceSecretKey, Title: "API Key", Description: "作为 Authorization: Bearer 发给服务；只发给上面的服务地址，换了主机要重新填"}}}
+		Secrets:       []extension.SecretSpec{{Name: voiceSecretKey, Title: "API Key", Description: "GPT-Live 作为 Authorization: Bearer 发送；Seeduplex 需在火山引擎语音控制台开通全双工模型后，使用同项目 API Key 管理里的语音服务 API Key（X-Api-Key），不是普通 ARK API Key。只发给上面的服务地址，换了主机要重新填"}}}
 }
 
 // takesOverVoice says whether a hub.json entry runs `personad voice`: its first such entry becomes the built-in

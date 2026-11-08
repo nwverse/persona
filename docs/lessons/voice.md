@@ -1,5 +1,15 @@
 # Lessons: real-time voice (GPT-Live upstream, `personad voice`)
 
+## Volcengine Seeduplex boundary (2026-11-08)
+
+- Seeduplex is a separate realtime protocol, not a GPT-Live or ARK `/v1/realtime` endpoint. The adapter is `volcWire` (`server/internal/voice/volc.go`), using the public `wss://openspeech.bytedance.com/api/v3/duplex/realtime/dialogue` endpoint and `X-Api-Key`; do not also send the speech key as a Bearer credential.
+- Its documented `session.model` is `1.2.6.1`; microphone input is 16 kHz PCM16. Request `pcm_s16le` output at 24 kHz: the output type `pcm` means 32-bit PCM, not what Persona's app audio pipeline plays.
+- A voice is mandatory in `session.create`. The public voice list marks the four `*_jupiter_bigtts` voices for S2S full-duplex; the first is the adapter's default.
+- Function results use `conversation.item.create` with the original `call_id` and `role: tool`. The same internal id serves as Persona's delegation id. A typed utterance or announcement becomes a `role: user` context item, never a GPT-Live delegation or commentary.
+- Explicit app interruption and local energy-based barge-in both send `response.cancel`; existing GPT-Live wires retain their previous local-only behavior.
+- The official protocol and voice-list documents were read; a real Seeduplex account was **not** available and no live call was made. Only the fake-upstream tests in `volc_test.go` were verified. Actual microphone input, account entitlement, billing, tool behavior, interruption timing and reconnect behavior remain real-service acceptance work. Do not extrapolate the measured GPT-Live timings below to Seeduplex.
+- Official references: [Seeduplex realtime API](https://docs.volcengine.com/docs/doubao-voice/end-to-end-real-time-voice-full-duplex-version), [voice list](https://docs.volcengine.com/docs/6561/1257544), [speech API keys](https://console.volcengine.com/speech/new/setting/apikeys?projectName=default).
+
 Read before changing `server/internal/voice`, `server/internal/prompts/voice/`, or voice-mode timing constants (`docs/assistant/voice.md` 4.5 / 4.9).
 Current protocol: `docs/extensions/extensions.md`, "Voice" and "Built-in voice extension". Voice-mode design: `docs/assistant/voice.md` (#3496).
 

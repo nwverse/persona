@@ -1,8 +1,8 @@
-// Package voice is the built-in voice plugin (`personad voice`, docs/extensions/extensions.md "Built-in voice extension"): full-duplex voice
-// conversations in the app over a realtime service that speaks the GPT-Live wire. The hub starts it like any plugin
-// and relays /api/v1/plugins/<id>/… to the HTTP server it serves on PERSONA_PLUGIN_SOCKET.
+// Package voice is the built-in voice extension (`personad voice`, docs/extensions/extensions.md "Built-in voice extension"): full-duplex voice
+// conversations in the app over a configured realtime service. The hub starts it like any extension
+// and relays its requests to the HTTP server it serves on PERSONA_EXTENSION_SOCKET.
 //
-// One plugin can have several upstreams (providers): each is a /v1/live endpoint, its dialect, its credential. The
+// One extension can have several upstreams (providers): each is a session endpoint, its dialect, its credential. The
 // models of all of them make one list, and the model the app picks decides which upstream a conversation goes to.
 package voice
 
@@ -20,7 +20,7 @@ import (
 	"github.com/nwverse/persona/server/internal/identity"
 )
 
-// Dialects of the GPT-Live wire.
+// Dialects of the upstream realtime wire.
 const (
 	// DialectLive: the public GPT-Live API (session.start, session.input_audio.append, session.delegation.created +
 	// response.event{function_call}, session.commentary.append), also served by deployments that speak it for their
@@ -30,6 +30,8 @@ const (
 	// session.update, input_audio.append, delegation.created{item} and delegation.context.append. No function tools:
 	// the model hands work over as delegations.
 	DialectCodex = "codex"
+	// DialectVolc: Volcengine Seeduplex (volc.go), the speech console's X-Api-Key and its Realtime event protocol.
+	DialectVolc = "volc"
 	// DialectFake: no service at all, for development (fake.go; hub.json only, never the settings form): what the app
 	// types is handed over as it is, and what the model would be told comes back as its words.
 	DialectFake = "fake"
@@ -169,9 +171,9 @@ func Merge(s Sources) (Config, error) {
 type Provider struct {
 	ID      string `json:"id"`             // a-z0-9_-, the prefix of its model ids
 	Name    string `json:"name,omitempty"` // shown after the model's name when there are several providers
-	URL     string `json:"url"`            // the session socket: wss://<host>/v1/live
+	URL     string `json:"url"`            // the session socket; volcDefaultURL is the Seeduplex endpoint
 	Dialect string `json:"dialect,omitempty"`
-	// The credential, sent as Authorization: Bearer: Key itself, the first line of KeyFile, or what KeyCommand (sh -c)
+	// The credential, sent as Authorization: Bearer (live / codex) or X-Api-Key (volc): Key itself, the first line of KeyFile, or what KeyCommand (sh -c)
 	// prints. A command is run again for every conversation, so a credential renewed elsewhere is picked up.
 	Key        string `json:"key,omitempty"`
 	KeyFile    string `json:"key_file,omitempty"`
@@ -250,8 +252,8 @@ func (p *Provider) validate() error {
 	if p.Dialect == "" {
 		p.Dialect = DialectLive
 	}
-	if p.Dialect != DialectLive && p.Dialect != DialectCodex && p.Dialect != DialectFake {
-		return fmt.Errorf("config: provider %s: dialect %q (live, codex or fake)", p.ID, p.Dialect)
+	if p.Dialect != DialectLive && p.Dialect != DialectCodex && p.Dialect != DialectVolc && p.Dialect != DialectFake {
+		return fmt.Errorf("config: provider %s: dialect %q (live, codex, volc or fake)", p.ID, p.Dialect)
 	}
 	if p.Dialect == DialectFake {
 		if p.URL != "" || p.SSH != "" {
@@ -262,6 +264,9 @@ func (p *Provider) validate() error {
 	}
 	if p.InputRate != 0 && p.InputRate != 16000 && p.InputRate != 24000 {
 		return fmt.Errorf("config: provider %s: input_rate is 16000 or 24000", p.ID)
+	}
+	if p.Dialect == DialectVolc && p.InputRate != 0 && p.InputRate != 16000 {
+		return fmt.Errorf("config: provider %s: Seeduplex input_rate is 16000", p.ID)
 	}
 	for _, m := range append(slices.Clone(p.Models), p.DefaultModel) {
 		if m != "" && !modelPattern.MatchString(m) {
@@ -278,7 +283,9 @@ func (p *Provider) name() string {
 	return p.ID
 }
 
-func (p *Provider) tools() bool { return p.Dialect == DialectLive && p.Tools }
+func (p *Provider) tools() bool {
+	return p.Dialect == DialectLive && p.Tools || p.Dialect == DialectVolc
+}
 
 func (p *Provider) inputRate() int {
 	switch {
@@ -300,6 +307,8 @@ func (p *Provider) defaultModel() string {
 		return p.Models[0]
 	case p.Dialect == DialectCodex:
 		return "gpt-live-1-codex"
+	case p.Dialect == DialectVolc:
+		return volcModel
 	case p.Dialect == DialectFake:
 		return "fake"
 	}

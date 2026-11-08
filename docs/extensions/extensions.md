@@ -2736,8 +2736,8 @@ Closing the WebSocket ends this conversation.
 
 ## Built-in voice extension (`personad voice`)
 
-personad includes a kind = `voice` extension, using a real-time service speaking the **GPT-Live protocol** (code `server/internal/voice`, prompts
-`server/internal/prompts/voice/`, tool descriptions `prompts/mcp/voice/`). No separate Node or SDK installation.
+personad includes a kind = `voice` extension, using a supported real-time speech service (code `server/internal/voice`, prompts
+`server/internal/prompts/voice/`, tool descriptions `prompts/mcp/voice/`). No separate Node or SDK installation. The `live` and `codex` dialects speak GPT-Live; `volc` speaks Volcengine Seeduplex.
 
 Voice-mode design (turn-scoped delegation, binding the current chat, upstream setup in-app with keys encrypted on the hub, taking over manager.json entries) is in `docs/assistant/voice.md`; manager.json configuration below remains supported.
 
@@ -2755,7 +2755,8 @@ It is built-in: appears in **Settings › Extensions** without a manager.json en
       "config": {
         "providers": [
           {"id": "codex", "name": "GPT-Live", "dialect": "codex", "url": "wss://<gateway>/v1/live", "key_file": "~/.persona/voice-gateway.key"},
-          {"id": "rt", "name": "Real-time service", "url": "wss://<real-time service>/v1/live", "key_command": "<command printing credentials>", "ssh": "<machine that can reach it>"}
+          {"id": "rt", "name": "Real-time service", "url": "wss://<real-time service>/v1/live", "key_command": "<command printing credentials>", "ssh": "<machine that can reach it>"},
+          {"id": "volc", "name": "Seeduplex", "dialect": "volc", "url": "wss://openspeech.bytedance.com/api/v3/duplex/realtime/dialogue", "key_file": "<path to the speech service API key>"}
         ],
         "owner": "<what to call you>"
       }
@@ -2770,13 +2771,13 @@ connecting to the upstream of the selected model. `config.default` specifies the
 | Field | Notes |
 | --- | --- |
 | `id`, `name` | `a-z0-9_-`; model-id prefix and display name |
-| `url` | Session WebSocket: `wss://<host>/v1/live` |
-| `dialect` | `live` (default): public GPT-Live protocol; `codex`: the dialect Codex uses with `gpt-live-1-codex` (below); `fake`: development only, no service connection (no `url`), app-typed text goes unchanged to main chat, text for the model returns unchanged as its caption, enabling real-hub/real-Agent end-to-end runs without GPT-Live. `fake` allowed only in manager.json |
-| `key` / `key_file` / `key_command` | Credentials sent as `Authorization: Bearer`: inline value, file's first line, or first line printed by command (`sh -c`). Command runs for every conversation, immediately using credentials renewed elsewhere. Credentials only on the hub machine (manager.json 0600 or separate file) |
+| `url` | Session WebSocket: `wss://<host>/v1/live` for GPT-Live; the complete official Seeduplex endpoint for `volc` (shown above) |
+| `dialect` | `live` (default): public GPT-Live protocol; `codex`: the dialect Codex uses with `gpt-live-1-codex` (below); `volc`: Volcengine Seeduplex (below); `fake`: development only, no service connection (no `url`), app-typed text goes unchanged to main chat, text for the model returns unchanged as its caption, enabling real-hub/real-Agent end-to-end runs without GPT-Live. `fake` allowed only in manager.json |
+| `key` / `key_file` / `key_command` | Credentials sent as `Authorization: Bearer` for live / codex, or `X-Api-Key` for volc: inline value, file's first line, or first line printed by command (`sh -c`). Command runs for every conversation, immediately using credentials renewed elsewhere. Credentials only on the hub machine (manager.json 0600 or separate file) |
 | `ssh` | When the hub cannot reach the service, connect through this machine (`ssh -W host:port <machine>`, TLS still end-to-end); hub must have passwordless SSH access |
-| `models`, `default_model` | Listed models; if omitted, live dialect reads service `GET <url>/models`, codex dialect uses `gpt-live-1-codex` |
-| `tools` | Live dialect: declare Persona function tools in `session.start` (knowledge-base search, list Agents, send to Agent, hand to main chat). Public GPT-Live API rejects `session.tools`; enable only on self-hosted services supporting it. Some services delegate only when tools are declared (`docs/lessons/voice.md`), making it required. Full devices (`X-Persona-Role` `full` or absent) declare all four; calls from other extensions declare only `ask_persona` (hand to main chat, their only capability); protocol 2 calls bound to a chat declare knowledge-base search, list Agents and `delegate_task` (hand to bound chat, `docs/assistant/voice.md` 4.4) |
-| `input_rate` | Microphone sample rate 16000 / 24000; default live 16000, codex 24000 |
+| `models`, `default_model` | Listed models; if omitted, live dialect reads service `GET <url>/models`, codex uses `gpt-live-1-codex`, volc uses Seeduplex's documented `1.2.6.1` |
+| `tools` | Live dialect: declare Persona function tools in `session.start` (knowledge-base search, list Agents, send to Agent, hand to main chat). Public GPT-Live API rejects `session.tools`; enable only on self-hosted services supporting it. Volc always declares them in `session.create`; its function calls use `call_id` directly. Full devices (`X-Persona-Role` `full` or absent) declare all four; calls from other extensions declare only `ask_persona` (hand to main chat, their only capability); protocol 2 calls bound to a chat declare knowledge-base search, list Agents and `delegate_task` (hand to bound chat, `docs/assistant/voice.md` 4.4) |
+| `input_rate` | Microphone sample rate 16000 / 24000; default live 16000, codex 24000, volc 16000. Seeduplex accepts only 16000 |
 
 ### Configure upstreams in the app (#3500)
 
@@ -2785,13 +2786,13 @@ can set addresses, keys and switches; admin has a switch too:
 
 | Form field | Notes |
 | --- | --- |
-| `url` | Service address `wss://<host>/v1/live` (`^wss?://`); `ws://` only for LAN, sends the key in plaintext |
+| `url` | GPT-Live service address `wss://<host>/v1/live`, or the complete Seeduplex endpoint shown above (`^wss?://`); `ws://` only for LAN, sends the key in plaintext |
 | `name` | Name, default `GPT-Live`; shown after model names with multiple upstreams |
-| `dialect` | `live` (default) / `codex` |
-| `models`, `default_model` | As above; omitted live-dialect values read the service's model list |
-| `input_rate` | 16000 / 24000 |
+| `dialect` | `live` (default) / `codex` / `volc` |
+| `models`, `default_model` | As above; omitted live-dialect values read the service's model list, volc defaults to `1.2.6.1` |
+| `input_rate` | 16000 / 24000; volc only accepts 16000 |
 | `owner`, `notes` | What to call you, extra instructions for the voice assistant; supplied values override manager.json |
-| Secret `key` | API key sent as `Authorization: Bearer`; encrypted with `secret.key` in `plugin_secrets`, write-only, endpoint reports only "set" |
+| Secret `key` | API key sent as `Authorization: Bearer` for GPT-Live or `X-Api-Key` for volc; encrypted with `secret.key` in `plugin_secrets`, write-only, endpoint reports only "set" |
 
 `ssh`, `key_file`, `key_command`, `tools` and additional upstreams are manager.json-only (`key_command` executes on the hub machine, and the form subset has no object arrays).
 
@@ -2829,17 +2830,18 @@ can set addresses, keys and switches; admin has a switch too:
 - **Rollback to old personad**: old versions only recognize hub.json entries, ignoring the built-in voice database row; entries still work, and `plugin_secrets` keys/forms remain for another upgrade.
 - Voice is the only "taken over by same-id built-in" case; general support (and secret-address binding manifest field `bound_to`) comes later.
 
-### Two dialects
+### Three upstream dialects
 
-| | live (public GPT-Live) | codex (`gpt-live-1-codex`) |
-| --- | --- | --- |
-| Handshake | `Authorization: Bearer` | Also `OpenAI-Alpha: quicksilver=v2`, model in URL `?model=` |
-| First frame | `session.start{model, instructions, audio{format, output.voice}, delegation{type: client}, tools?}` | `session.update{instructions, audio.output.voice, delegation{type: client}}` |
-| Microphone / audio | `session.input_audio.append` / `session.output_audio.delta{delta}` | `input_audio.append` / `output_audio.delta{audio}` (24 kHz) |
-| Captions | `session.input_transcript.delta`, `session.output_transcript.delta` (append only, no completion marker) | `input_transcript.added`, `output_transcript.added`, full sentence in `turn.done` |
-| Delegated work | `session.delegation.created{target: client}`; with tools, `response.event{function_call}` | `delegation.created{item{type: delegation, target: client, content}}` |
-| Answer | Full turn response as `session.commentary.append{delegation_id}` (the delegation's only result, spoken by the model; 4000-character limit), with nothing returned at delegation time | `delegation.context.append{channel: speakable}`, split into 500-byte chunks |
-| Typed sentence | `session.commentary.append{delegation_id: null}` | `session.context.append{channel: speakable}` |
+| | live (public GPT-Live) | codex (`gpt-live-1-codex`) | volc (Volcengine Seeduplex) |
+| --- | --- | --- | --- |
+| Handshake | `Authorization: Bearer` | Also `OpenAI-Alpha: quicksilver=v2`, model in URL `?model=` | Speech service `X-Api-Key`, never additionally a Bearer credential |
+| First frame | `session.start{model, instructions, audio{format, output.voice}, delegation{type: client}, tools?}` | `session.update{instructions, audio.output.voice, delegation{type: client}}` | `session.create{model: 1.2.6.1, instructions, audio.input/output, tools}`; output voice is required |
+| Microphone / audio | `session.input_audio.append` / `session.output_audio.delta{delta}` | `input_audio.append` / `output_audio.delta{audio}` (24 kHz) | `input_audio_buffer.append` (16 kHz PCM16) / `response.output_audio.delta{delta}` (24 kHz `pcm_s16le`) |
+| Captions | `session.input_transcript.delta`, `session.output_transcript.delta` (append only, no completion marker) | `input_transcript.added`, `output_transcript.added`, full sentence in `turn.done` | `conversation.item.input_audio_transcription.delta/completed`, `response.output_text.delta`, `response.done` |
+| Delegated work | `session.delegation.created{target: client}`; with tools, `response.event{function_call}` | `delegation.created{item{type: delegation, target: client, content}}` | `response.function_call_arguments.done{items[{call_id, name, arguments}]}`; the same id is Persona's internal delegation id |
+| Answer | Full turn response as `session.commentary.append{delegation_id}` (the delegation's only result, spoken by the model; 4000-character limit), with nothing returned at delegation time | `delegation.context.append{channel: speakable}`, split into 500-byte chunks | `conversation.item.create{items[{call_id, role: tool, content}]}`; announcements are separate user-context items |
+| Typed sentence | `session.commentary.append{delegation_id: null}` | `session.context.append{channel: speakable}` | `conversation.item.create{items[{role: user, content}]}` |
+| Interruption | Local audio drop; no explicit cancel frame | Same | `response.cancel`, then discard the old audio on `response.canceled` |
 
 When the model delegates to the client (delegation, or `ask_persona` function call with `tools` enabled), the extension hands it to **Persona's main chat** (creating and marking one as main if absent),
 with message `client_msg_id` `voice-<16 random hex digits>`, task on the first line and a "Context · Voice chat" block after it. Return nothing at handoff (the model already said it handed it to main chat).
@@ -2864,7 +2866,7 @@ plus one shared `GET /api/v1/ws` (`subscribe` main chat, receive `turn_duration`
 `X-Persona-Lang` selects the language of these model/main-chat messages (Chinese, English, Japanese).
 
 If the upstream session drops mid-conversation (service restart, network loss), the app connection stays open and shows "Disconnected, reconnecting"; the extension opens a new session with the last 40 utterances in the prompt,
-at most 3 consecutive reconnects per conversation (reset after a session lasts 60 seconds). On app `interrupt`, the extension discards unsent audio for this response (GPT-Live has no interrupt frame; the model stops when it hears the interruption).
+at most 3 consecutive reconnects per conversation (reset after a session lasts 60 seconds). On app `interrupt`, the extension discards unsent audio for this response (GPT-Live has no interrupt frame; the model stops when it hears the interruption; Seeduplex additionally receives `response.cancel`).
 
 ### Deployment
 
@@ -2878,3 +2880,4 @@ App-configured upstreams need no hub restart: changing settings/keys restarts th
 - A real-time service speaking the public GPT-Live protocol (company-hosted): typed utterance, model speech/captions, delegation to main chat, function tools and connection through an `ssh` jump host all tested.
 - Codex dialect: implemented from Codex source (`codex-rs` realtime_websocket), unit-tested with a fake upstream; an OpenAI-compatible gateway's `/v1/live` needs a voice-capable Codex account,
   otherwise handshake returns `503 no eligible upstream account` (shown unchanged in the app by the extension).
+- Volcengine Seeduplex (#1229): the public protocol, authentication, fixed model and voice catalog were checked against the official documentation linked in `docs/lessons/voice.md`. Fake-upstream tests cover handshake, PCM16 input/output, captions, tools, main-chat delegation and cancellation. **No real Seeduplex session has been run**; `TestVolcRealtimeService` is opt-in and remains skipped until a speech-service API key is supplied for a billable acceptance run. Enabling the service and entering a complete configuration do not prove that the real service is connected.

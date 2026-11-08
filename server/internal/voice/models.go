@@ -91,7 +91,7 @@ type providerModels struct {
 
 // providerModels: the configured models, else the service's own list (live dialect), else the dialect's default.
 func (c *catalog) providerModels(ctx context.Context, p *Provider) (providerModels, error) {
-	if len(p.Models) > 0 || p.Dialect == DialectCodex || p.Dialect == DialectFake {
+	if len(p.Models) > 0 || p.Dialect == DialectCodex || p.Dialect == DialectVolc || p.Dialect == DialectFake {
 		ids := p.Models
 		if len(ids) == 0 {
 			ids = []string{p.defaultModel()}
@@ -219,6 +219,10 @@ func (c *catalog) voices(ctx context.Context, id string) (voiceList, error) {
 	switch p.Dialect {
 	case DialectCodex:
 		return builtin(codexVoices, "cove"), nil
+	case DialectVolc:
+		// Seeduplex requires a voice in session.create. These four public jupiter voices are listed for S2S
+		// full-duplex; a voice replicated by the user can be entered in the app. No paid voice-list request is made.
+		return builtin(volcVoices, volcDefaultVoice), nil
 	case DialectFake:
 		return voiceList{Voices: []VoiceChoice{}}, nil // it speaks no audio
 	}

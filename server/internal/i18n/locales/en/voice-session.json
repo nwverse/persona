@@ -1,0 +1,3 @@
+{
+  "volc_connect_failed": "Could not connect to Volcengine speech: {reason}. Enable Seeduplex in the speech console and use a speech service API key from the same project."
+}

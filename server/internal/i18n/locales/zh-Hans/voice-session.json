@@ -1,0 +1,3 @@
+{
+  "volc_connect_failed": "火山引擎语音会话没能建立：{reason}；确认已在语音控制台开通 Seeduplex，且使用同项目的语音服务 API Key"
+}

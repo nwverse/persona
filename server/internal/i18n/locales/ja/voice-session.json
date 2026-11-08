@@ -1,0 +1,3 @@
+{
+  "volc_connect_failed": "Volcengine の音声セッションを開始できませんでした：{reason}。音声コンソールで Seeduplex を有効にし、同じプロジェクトの音声サービス API キーを使用してください。"
+}

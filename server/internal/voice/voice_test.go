@@ -555,6 +555,7 @@ func TestConfigValidation(t *testing.T) {
 		{Providers: []Provider{{ID: "a", URL: "wss://x", Dialect: "other"}}},
 		{Providers: []Provider{{ID: "a", URL: "wss://x"}, {ID: "a", URL: "wss://y"}}},
 		{Providers: []Provider{{ID: "a", URL: "wss://x", InputRate: 8000}}},
+		{Providers: []Provider{{ID: "a", URL: "wss://x", Dialect: DialectVolc, InputRate: 24000}}},
 	} {
 		if err := bad.validate(); err == nil {
 			t.Errorf("%+v: no error", bad)

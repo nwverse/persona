@@ -132,6 +132,7 @@ func TestVoiceManifest(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, ok := range []string{`{}`, `{"url":"wss://live.example.com/v1/live","dialect":"codex","models":["gpt-live-1"],"input_rate":24000,"owner":"me"}`,
+		`{"url":"wss://openspeech.bytedance.com/api/v3/duplex/realtime/dialogue","dialect":"volc","models":["1.2.6.1"],"input_rate":16000}`,
 		`{"url":"ws://gateway.example.com:8080/v1/live"}`} {
 		if err := schema.Check(json.RawMessage(ok)); err != nil {
 			t.Errorf("%s: %v", ok, err)

@@ -9,7 +9,7 @@ import (
 	"unicode/utf8"
 )
 
-// A wire is one dialect of the GPT-Live protocol: the frames to send, and what the service's frames mean.
+// A wire is one upstream realtime dialect: the frames to send, and what the service's frames mean.
 type wire interface {
 	url(base, model string) (string, error)
 	header() http.Header
@@ -76,6 +76,8 @@ func newWire(dialect string) wire {
 	switch dialect {
 	case DialectCodex:
 		return codexWire{}
+	case DialectVolc:
+		return volcWire{}
 	case DialectFake:
 		return fakeWire{}
 	}

@@ -225,7 +225,11 @@ func (pl *Plugin) converse(ctx context.Context, app *websocket.Conn, role string
 		case errors.As(err, &ce):
 			c.failCode(ce.code, ce.msg, true)
 		default:
-			c.failCode(upstreamCode(err), "语音会话没能建立："+err.Error(), true)
+			if p := c.p; p != nil && p.Dialect == DialectVolc {
+				c.failCode(upstreamCode(err), i18n.T(c.language(), "voice-session.volc_connect_failed", i18n.Args{"reason": err.Error()}), true)
+			} else {
+				c.failCode(upstreamCode(err), "语音会话没能建立："+err.Error(), true)
+			}
 		}
 		return
 	}
@@ -314,6 +318,11 @@ func (c *conversation) begin() error {
 	}
 	c.mu.Lock()
 	c.p, c.w, c.model, c.modelID = p, newWire(p.Dialect), model, p.ID+"/"+model
+	if c.voice == "" {
+		if w, ok := c.w.(interface{ defaultVoice() string }); ok {
+			c.voice = w.defaultVoice()
+		}
+	}
 	c.gate.echoes = start.EchoCancellation != nil && !*start.EchoCancellation
 	if voicePattern.MatchString(start.Voice) && !gone { // a voice of the other upstream's may not exist here
 		c.voice = start.Voice
@@ -618,7 +627,11 @@ func (c *conversation) dial(ctx context.Context, p *Provider, w wire, model stri
 	}
 	header := w.header()
 	if key != "" {
-		header.Set("Authorization", "Bearer "+key)
+		if p.Dialect == DialectVolc {
+			header.Set("X-Api-Key", key)
+		} else {
+			header.Set("Authorization", "Bearer "+key)
+		}
 	}
 	opts := &websocket.DialOptions{HTTPHeader: header}
 	if p.SSH != "" {
@@ -1507,6 +1520,7 @@ func (c *conversation) readApp() {
 			c.closeAsst()
 			c.mu.Unlock()
 			c.sendApp(map[string]any{"type": "clear"})
+			c.cancelUpstream()
 		case "text":
 			text := strings.TrimSpace(msg.Text)
 			if text == "" {
@@ -1583,6 +1597,18 @@ func (c *conversation) cutIn(now time.Time, voiced bool, n int) {
 	c.pace.playEnd = now // the app drops what it had not played
 	c.closeAsst()
 	c.sendApp(map[string]any{"type": "clear"})
+	go c.cancelUpstream()
+}
+
+// cancelUpstream tells services with an explicit cancellation event to stop speaking. GPT-Live stops when it hears
+// the interruption, so its wire keeps the existing local-only behavior.
+func (c *conversation) cancelUpstream() {
+	c.mu.Lock()
+	w := c.w
+	c.mu.Unlock()
+	if w, ok := w.(interface{ interrupt() any }); ok {
+		c.sendUp(-1, w.interrupt())
+	}
 }
 
 // replyAfterCut: after the energy rule cut the model off (cutAt), audio coming now is its next reply, not the rest of the
