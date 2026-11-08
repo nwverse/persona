@@ -295,6 +295,9 @@ func (rh *RuntimeHost) request(ctx context.Context, h *runtimeConn, method strin
 		}
 		// As the assistant only for one of the assistant's conversations that this runtime runs.
 		assistant := p.Assistant && h.assistant() && rh.reg.owns(h, p.SessionID) && n.isAssistantSession(p.SessionID)
+		if p.Name == toolMailSaveAttachment { // writes on this machine (mailattachment.go)
+			return n.saveMailAttachment(ctx, p.Args, p.SessionID, assistant, n.guestOf(p.SessionID) != nil), nil
+		}
 		if g := n.gateTool(p.Name); assistant && g != nil {
 			return n.assistantGateTool(ctx, g, p.SessionID, p.Args), nil
 		}

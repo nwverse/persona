@@ -219,6 +219,9 @@ func (n *Node) cliCall(ctx context.Context, c net.Conn, req sockRequest) proto.T
 	if !n.mayCall(cwd, req.Name) {
 		return proto.ErrorResult(proto.ToolErrorUnavailable, req.Name+" is not available: the command line calls only the tools of the hub's connectors that are signed in", 0)
 	}
+	if req.Name == toolMailSaveAttachment { // writes on this machine (mailattachment.go)
+		return n.saveMailAttachment(ctx, req.Args, session, true, false)
+	}
 	if n.peer == nil {
 		return proto.ErrorResult(proto.ToolErrorUnavailable, "Persona hub error: not connected", 0)
 	}
