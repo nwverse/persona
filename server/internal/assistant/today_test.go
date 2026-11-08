@@ -1,8 +1,10 @@
 package assistant
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"reflect"
 	"testing"
 	"time"
@@ -140,5 +142,83 @@ func TestTodayCardOmitsEmptyPendingReview(t *testing.T) {
 	}
 	if _, ok := body["pending_review"]; ok {
 		t.Fatalf("empty pending_review must be omitted: %s", it.Body)
+	}
+}
+
+// POST .../today reads the conversation's feed twice (is today's card there; what finished since yesterday 18:00) and
+// looks only at the items: it loads none of the plans its plan cards name, and the card is the same as before.
+func TestTodayCardReadsNoPlans(t *testing.T) {
+	st := &countingPlans{DB: todoTestDB(t)}
+	// planReads are the plan reads that reached the database, one plan at a time or in one batch.
+	planReads := func() int64 { return st.one.Load() + st.batch.Load() }
+	resetReads := func() {
+		st.one.Store(0)
+		st.batch.Store(0)
+	}
+	e := newTodoEnv(t, st)
+	ctx := context.Background()
+	loc := e.s.location(ctx)
+	now := time.Now().In(loc)
+	day := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, loc)
+	// task_plans and assistant_feed are not truncated between tests, so the names are fresh.
+	conversation := "today_" + randomHex(6)
+	planCard := func(i int, at time.Time) {
+		t.Helper()
+		p := &TaskPlan{ID: "plan_" + randomHex(6), Conversation: conversation, State: planOpen, CreatedAt: at, UpdatedAt: at,
+			Tasks: []PlanTask{{Title: fmt.Sprintf("Task %d", i), Prompt: "Fix the crash and add a test", Machine: "box", Cwd: "/code/app"}}}
+		if err := e.s.savePlan(ctx, p); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := e.s.appendFeedAt(ctx, conversation, feedPlan, p.ID, map[string]any{"plan": p}, at); err != nil {
+			t.Fatal(err)
+		}
+	}
+	const todayPlans = 20
+	planCard(0, day.Add(-4*time.Hour)) // yesterday 20:00: only the second read has it
+	if _, err := e.s.appendFeedAt(ctx, conversation, feedReceipt, "todo_night",
+		receiptBody{Title: "Overnight fix", State: "done"}, day.Add(-2*time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	for i := 1; i <= todayPlans; i++ {
+		planCard(i, now)
+	}
+
+	post := func() (FeedItem, bool) {
+		t.Helper()
+		var res struct {
+			Item FeedItem `json:"item"`
+			New  bool     `json:"new"`
+		}
+		if err := json.Unmarshal(e.must("POST", "/api/v1/assistant/conversations/"+conversation+"/today", "").Body.Bytes(), &res); err != nil {
+			t.Fatal(err)
+		}
+		return res.Item, res.New
+	}
+	resetReads()
+	it, made := post()
+	t.Logf("plan reads with %d plan cards today and 1 overnight: %d on the first POST", todayPlans, planReads())
+	if n := planReads(); n != 0 {
+		t.Fatalf("the first POST read %d plans, want none", n)
+	}
+	if !made || it.Kind != feedToday || it.Ref != day.Format("2006-01-02") || !it.At.Equal(day) {
+		t.Fatalf("today = %+v new=%v", it, made)
+	}
+	var body todayBody
+	if err := json.Unmarshal(it.Body, &body); err != nil {
+		t.Fatal(err)
+	}
+	want := todayBody{Date: it.Ref, Done: []todayTask{{ID: "todo_night", Title: "Overnight fix"}}}
+	if !reflect.DeepEqual(body, want) {
+		t.Fatalf("body = %+v, want %+v", body, want)
+	}
+
+	resetReads()
+	again, made := post()
+	t.Logf("plan reads on the second POST: %d", planReads())
+	if n := planReads(); n != 0 {
+		t.Fatalf("the second POST read %d plans, want none", n)
+	}
+	if made || again.ID != it.ID || !bytes.Equal(again.Body, it.Body) {
+		t.Fatalf("second POST: %+v new=%v, want the first card %+v", again, made, it)
 	}
 }
