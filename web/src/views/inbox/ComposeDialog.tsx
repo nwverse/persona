@@ -25,6 +25,7 @@ export function ComposeDialog({ draftKey, initial, accounts, onClose }: { draftK
   // a reply to another manager's mail goes out through that manager (ItemManager; a new mail: the default's)
   const manager = useItemManager();
   const [sending, setSending] = useState(false);
+  const sendLock = useRef(false);
   const [error, setError] = useState("");
   const body = useRef<HTMLTextAreaElement>(null);
   const to = useRef<HTMLInputElement>(null);
@@ -69,9 +70,12 @@ export function ComposeDialog({ draftKey, initial, accounts, onClose }: { draftK
     onClose();
   };
   const send = async () => {
+    if (sendLock.current) return;
     const bad = [...badAddresses(d.to), ...badAddresses(d.cc)];
     if (!parseAddresses(d.to).length) return setError(t("inbox-composedialog.need_recipient"));
     if (bad.length) return setError(t("inbox-composedialog.bad_addresses", { addresses: bad.join(t("inbox-composedialog.list_sep")) }));
+    // All entry points share this lock before the busy button rerenders; only failure allows a retry.
+    sendLock.current = true;
     setSending(true);
     // On its way: not kept (a box opened for this key meanwhile starts fresh, nothing to send twice).
     const at = now.current;
@@ -82,6 +86,7 @@ export function ComposeDialog({ draftKey, initial, accounts, onClose }: { draftK
       toast(t("inbox-composedialog.sent"), "ok");
       onClose();
     } catch (e) {
+      sendLock.current = false;
       // still open: the mail stays in it to retry; gone: kept for the next "Reply"
       if (at.mounted) at.done = false;
       else kept.set(draftKey, d);
