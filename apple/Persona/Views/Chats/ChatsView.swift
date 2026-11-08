@@ -527,6 +527,8 @@ struct ChatsView: View {
 
 /// The Agents list itself: what follows the hub's pushes (`ChatsView` holds the navigation and the toolbar).
 private struct AgentsList: View {
+    /// iPhone Duo's bars down the side: the shell's bar is the side rail, and the list needs no room for it at its top.
+    @Environment(\.shellRailEdge) private var railEdge
     #if os(macOS)
     static let emptyMessage = String(localized: "Start an agent on any of your computers, then follow it live and take over here.")
     #else
@@ -1019,7 +1021,7 @@ private struct AgentsList: View {
 
     private func styledAgentList<Content: View>(_ list: Content, base: [Session], interactions: [Interaction]) -> some View {
         list
-        .modifier(AgentsListStyle(capsules: capsules, room: ownsTop && shell != nil && !compactTop, ownsTop: ownsTop))
+        .modifier(AgentsListStyle(capsules: capsules, room: ownsTop && shell != nil && railEdge == nil && !compactTop, ownsTop: ownsTop))
         #if os(iOS) || os(visionOS)
         // Between the two layouts, slid with the field (`AgentsHeader.compact`); the page's color behind it.
         .modifier(ListShift(progress: ownsTop && header.up ? 1 : 0, compact: ownsTop && header.compact,
@@ -3849,6 +3851,8 @@ private struct SearchCloseProbe: UIViewRepresentable {
 /// options (Group By, Display, Machines…).
 struct AgentsTopBar: View, Equatable {
     @Environment(AppModel.self) private var model
+    /// iPhone Duo's bars down the side: the bar is the side rail there (`ShellSideRail`).
+    @Environment(\.shellRailEdge) private var railEdge
     let shell: ShellState
     var menuActions: AgentsListMenu.Actions
     var newSession: () -> Void // sets the page's state: the same each time
@@ -3862,13 +3866,36 @@ struct AgentsTopBar: View, Equatable {
         let _ = PerfTrace.body("AgentsTopBar")
         #endif
         @Bindable var model = model
+        #if os(iOS) || os(visionOS)
+        if let railEdge {
+            ShellSideRail(edge: railEdge) {
+                ShellPersonaButton(id: "work-sidebar-button") { shell.drawer.open() }
+                ShellCircleButton(symbol: Theme.Icon.compose, label: String(localized: "New Session [Chats View 58e21b]"), id: "agents-new", action: newSession)
+            } switcher: {
+                ShellSwitch(tab: $model.selectedTab, axis: .vertical) { EmptyView() } workMenu: {
+                    AgentsListMenu(actions: menuActions, inline: true)
+                }
+            }
+            .shellTopBarScaled()
+            .accessibilityElement(children: .contain)
+            .accessibilityIdentifier("agents-top-bar")
+            .modifier(ShellBarAtRest(page: 1)) // ShellMovingBar stands in while the strip slides
+        } else {
+            row($model.selectedTab)
+        }
+        #else
+        row($model.selectedTab)
+        #endif
+    }
+
+    private func row(_ tab: Binding<AppTab>) -> some View {
         HStack(alignment: .top, spacing: Theme.Space.s) {
             ShellPersonaButton(id: "work-sidebar-button") { shell.drawer.open() }
             Spacer(minLength: 0)
             ShellCircleButton(symbol: Theme.Icon.compose, label: String(localized: "New Session [Chats View 58e21b]"), id: "agents-new", action: newSession)
         }
         .overlay(alignment: .top) {
-            ShellSwitch(tab: $model.selectedTab) { EmptyView() } workMenu: {
+            ShellSwitch(tab: tab) { EmptyView() } workMenu: {
                 AgentsListMenu(actions: menuActions, inline: true)
             }
         }

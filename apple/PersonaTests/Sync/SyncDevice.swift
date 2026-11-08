@@ -52,6 +52,9 @@ struct SyncView: Equatable, CustomStringConvertible {
 final class SyncDevice {
     let name: String
     let key: SessionKey
+    /// What it keeps on disk (the snapshot, the outbox): a folder of its own, so it starts from nothing whatever the
+    /// simulator's app saved (#1637), and a relaunch finds what it wrote.
+    let folder: URL
     private(set) var model: AppModel
     private(set) var socket: SyncSocket?
     /// Sockets the app made so far (a reconnect makes a new one).
@@ -76,16 +79,17 @@ final class SyncDevice {
     /// While the case sets the device up, a subscribe without `since_seq` gets the hub's backlog.
     var answersSubscribe: (() -> JSONValue)?
 
-    init(name: String, key: SessionKey) {
+    init(name: String, key: SessionKey, folder: URL) {
         self.name = name
         self.key = key
-        model = AppModel()
+        self.folder = folder
+        model = AppModel(stateFolder: folder)
     }
 
     /// A new model, as a relaunched app: what the old one stored stays, the old one's socket goes.
     func relaunch() {
         for link in model.links { link.live.disconnect() }
-        model = AppModel()
+        model = AppModel(stateFolder: folder)
     }
 
     /// Talks to the scenario's hub over a socket and a transport of its own (`AppModel.linkHooksForTests`), so several

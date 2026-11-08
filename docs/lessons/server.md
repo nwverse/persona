@@ -1,5 +1,25 @@
 # Lessons: hub / node and networking
 
+## Battery investigations need attributed transport counts (#1633)
+
+A slow/error request log is not an access log, and successful Live Activity updates
+were silent while start logs recorded only intent. Do not turn missing records into
+zero requests, acceptances into device deliveries, or a normal close handshake into
+a proven initiator. The systemd edge can retain an older binary while a new slot
+serves requests: establish the serving revision from health and the deployment
+receipt, not the edge's MainPID alone. APNs registration IDs differ from credential
+IDs; join the persisted credential binding, and keep same-name registrations
+ambiguous instead of pruning or merging them. Minute-level, route-template counters
+with opaque IDs avoid logging every request or exposing payloads; label application
+bytes separately from compressed wire bytes and logical pushes separately from retries.
+
+Foreground suppression must cover the push-to-start branch as well as updates,
+without consuming the start episode before the phone goes to the background.
+Preference refreshes should compare the affected device's projected activity state:
+a same-value retry or a notification-only setting must not force all devices to
+refresh. A metrics-only foreground broadcast must use the newest fleet snapshot,
+not the last APNs-flushed snapshot while ordinary updates are coalescing.
+
 ## A custom HTTPS dial must opt into HTTP/2 (#1620)
 
 A custom `http.Transport.DialContext` conservatively disables Go's automatic HTTP/2 negotiation. Keep the checked-address dial callback and explicitly enable `ForceAttemptHTTP2`; do not replace it with a default dialer or let an upstream proxy resolve the name again. Verify real local TLS HTTP/2 negotiation, HTTP/1.1 fallback and request cancellation. A successful transport test is not evidence that a particular upstream challenge disappeared: verify the installed source separately, without raising budgets or substituting host-downloaded content.
@@ -1097,3 +1117,8 @@ Go's `http.Client` follows a 301, 302 or 303 as a GET for any method but GET and
 ## A source read newest first must not let an older entry replace a newer one
 
 A connector that folds several notifications into one thread (GitHub CI failures per repository and branch) read them newest first and let each replace the thread's thing, so the oldest one read won. It went unseen while the in-memory `seen` set skipped notifications already read; after every restart the whole unread backlog was read again, a few per poll, and the open item's time walked back by hours while its count rose once per step (#1527). Keep the newest per key by comparing times, never by reading order, and have the consumer ignore a step older than what it holds: a restart, a retry or a second page can each hand it an earlier one. Test it with a backlog larger than one poll's budget, read after a restart.
+
+## Hot paths: an alternation of sayings and a MarshalJSON that copies the struct (2026-11-09)
+
+- Go's `regexp` runs an unanchored alternation by trying every branch at every position of the text. `transcript.AskOf`'s seventy sayings took about 0.3 µs a byte on a reply that asks nothing, and it runs on every session of every list a manager publishes: a node's `sessions.changed` for 300 sessions spent 37 of its 41 ms there. A pattern run often on texts it seldom matches is `lazyre.NewGated`: it first looks for the literals every match starts with (worked out from the pattern) and skips the engine when there are none. It needs every branch to start with a literal; a leading class, repeat or `(?i)` leaves it ungated, which `TestAskPatternsGated` catches for the ask patterns.
+- A `MarshalJSON` that builds `struct{ T; Extra }{T(s), …}` copies the whole value, and the calling encoder then validates and copies the returned bytes again. For a large type encoded in bulk (a `proto.Session` is ~1.4 KB, a machine lists up to 150 on every push), embed the value by pointer and also implement `MarshalJSONTo` on the pointer, encoding with `json.DefaultOptionsV1()` so a caller's `SetEscapeHTML(false)` cannot change the bytes. Compare the bytes against the old encoding through a value, a pointer and a no-HTML encoder (`TestSessionWireBytesUnchanged`).

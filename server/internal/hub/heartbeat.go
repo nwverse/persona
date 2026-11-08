@@ -79,11 +79,13 @@ func (c *client) writeWS(ctx context.Context, conn wsWriter, keepAlive func(hear
 			if err != nil {
 				return err
 			}
+			c.recordSocketTraffic("websocket_frame", "written", int64(len(b)), 0)
 		case <-ping.C:
 			if pongDeadline != nil {
 				continue // Only one protocol ping may be outstanding.
 			}
 			pingStarted = time.Now()
+			c.recordSocketTraffic("websocket_ping", "started", 0, 0)
 			pong.Reset(time.Duration(hb.PongTimeout) * time.Second)
 			pongDeadline = pong.C
 			go func() { result <- conn.Ping(ctx) }()
@@ -92,6 +94,7 @@ func (c *client) writeWS(ctx context.Context, conn wsWriter, keepAlive func(hear
 				return err
 			}
 			pong.Stop()
+			c.recordSocketTraffic("websocket_pong", "received", 0, time.Since(pingStarted))
 			pongDeadline = nil
 		case <-pongDeadline:
 			return errDeviceSessionPongTimeout
