@@ -81,6 +81,13 @@ Install the worker in `~/.local/lib/persona-autorelease/`, its private JSON conf
 `persona-autorelease.timer` from `scripts/operations/` in `~/.config/systemd/user/`.
 Enable linger for the user if the service must survive logout. The timer checks every ten minutes and coalesces intervening commits.
 
+CI admission belongs to the PR head: require the automatic `CI required` check and every relevant manually selected full lane before
+merging. For this scripts-only automation change, dispatch `ci.yml` with `lanes=scripts` and verify that its script shards actually ran.
+Full server, Android, scripts, iOS and Mac tests are manual; unselected lanes are not evidence that those platforms passed.
+The unattended worker consumes the newest already-merged `origin/main`, then applies path selection and local build/release verification.
+It neither waits for a full CI check on the main commit (none is automatically created) nor dispatches full platform CI on every timer tick.
+This keeps the release gate aligned with the PR-merge policy rather than waiting indefinitely for an obsolete main-branch check.
+
 Each target has its own last-success revision, path patterns, command argument vector, and timeout. Worker events are appended to
 `worker.log` in the private state directory; `log_output: true` additionally retains command output in mode-0600 per-step files
 under its `logs/` subdirectory. Do not enable shell tracing or print credentials from action commands. Recommended triggers:
