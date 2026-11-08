@@ -20,6 +20,7 @@ import (
 	"github.com/nwverse/persona/server/internal/apierr"
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/bus"
+	"github.com/nwverse/persona/server/internal/compat"
 	"github.com/nwverse/persona/server/internal/db"
 	"github.com/nwverse/persona/server/internal/extwire"
 	"github.com/nwverse/persona/server/internal/i18n"
@@ -328,7 +329,10 @@ func (s *statusWriter) Unwrap() http.ResponseWriter { return s.ResponseWriter }
 func logRequests(h *Hub, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
-		client := parseRequestClient(r.Header.Get("X-Persona-Client"))
+		client := requestClient{}
+		if !compat.HeaderConflict(r.Header, "X-Persona-Client") {
+			client = parseRequestClient(compat.Header(r.Header, "X-Persona-Client"))
+		}
 		r = r.WithContext(context.WithValue(r.Context(), requestClientKey{}, client))
 		id := requestID(r.Header.Get("X-Client-Request-Id"))
 		w.Header().Set("X-Request-Id", id)
@@ -784,6 +788,7 @@ type client struct {
 	conn           *websocket.Conn
 	out            chan []byte
 	mu             sync.Mutex
+	traffic        trafficAttribution // inferred once from the upgrade; hello may refine platform
 	subs           map[[2]string]bool
 	fsw            map[[3]string]fsWatchReq // {machine id, cwd, asked id} -> the folders this browser has open there (fswatch.go)
 	phone          bool
@@ -1005,6 +1010,7 @@ func (h *Hub) serveWS(w http.ResponseWriter, r *http.Request) {
 	c := &client{cancel: cancel, hub: h, conn: conn, out: make(chan []byte, 512), subs: map[[2]string]bool{}, since: time.Now(),
 		device: who.ID, role: who.Role, delta: wantsFeature(r, featureSessionsDelta), listMode: wantsFeature(r, featureSessionsList), have: map[string]map[string][]byte{},
 		urlFeatures: urlFeatures(r), acceptLang: i18n.FromRequest(r), meta: clientMeta{updates: make(chan heartbeatConfig, 512), done: ctx.Done()}}
+	c.traffic = h.requestTrafficAttribution(r, who)
 	c.uiConnection = randomHex(24)
 	c.uiRequests = make(chan struct{}, 8)
 	c.uiManagers = map[string]bool{}

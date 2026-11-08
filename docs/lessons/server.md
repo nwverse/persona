@@ -12,6 +12,10 @@ IDs; join the persisted credential binding, and keep same-name registrations
 ambiguous instead of pruning or merging them. Minute-level, route-template counters
 with opaque IDs avoid logging every request or exposing payloads; label application
 bytes separately from compressed wire bytes and logical pushes separately from retries.
+A missing client header does not identify a platform: infer only bounded UA/header
+markers plus enrollment evidence, keep the inference basis, and separate diagnostic
+clients sharing a phone credential. Native-default App labels are not proof that a
+widget extension did not use the same UA. Never log raw UAs to solve attribution.
 
 Foreground suppression must cover the push-to-start branch as well as updates,
 without consuming the start episode before the phone goes to the background.
