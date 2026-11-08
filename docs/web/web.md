@@ -1360,7 +1360,7 @@ Compared item by item with iOS as the reference and Android for comparison. #297
 | Lark summary cards: merged forwards (tap to see all), group / personal cards, meetings, events, polls, and so on | Yes | #3032 | Merged forwards are read in a dialog; polls only show options and can't be voted on; no purple color bar (polls use the accent) |
 | Lark read-on-view reporting | Yes | #433 | Also reported for the first screen (per the decision in `docs/assistant/inbox.md`; iOS code still has the old behavior); not reported for topic groups (same as iOS) |
 | Mail details, AI replies | Yes | #297 | |
-| Composing new mail, manual replies, marking read on open | Yes | #433 | Plain text, no attachments, drafts only in page memory (same as iOS) |
+| Composing new mail, manual replies, marking read on open | Yes | #433, #1329 | Reply all includes sender + original To/Cc, excludes the loaded receiving address, and deduplicates across fields; unavailable until that account address is known. Plain text, no attachments; Reply and Reply all retain separate drafts per manager/item in page memory |
 | Mail translation, Lark message translation | Yes | #433 | Language detection is heuristic (browsers have no NaturalLanguage) |
 | Cloud doc rows mentioning me, and changing their status | Yes | #297 | |
 | Table of contents and AI summary in the Lark doc reader | Yes | #2974 | The table of contents is in a dialog; the summary only reads what Lark has cached and does not trigger generation |
