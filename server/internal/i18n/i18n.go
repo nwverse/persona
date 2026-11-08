@@ -18,6 +18,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 
 	"golang.org/x/text/feature/plural"
 	"golang.org/x/text/language"
@@ -169,7 +170,9 @@ func (l Lang) Or(fallback Lang) Lang {
 	return fallback
 }
 
-var catalogs = load()
+// catalogs are read on first use: a short-lived process (a hook) that never needs a text does not pay for parsing
+// them (#1308: the largest part of every `personad hook`'s start).
+var catalogs = sync.OnceValue(load)
 
 func load() map[Lang]map[string]string {
 	out := map[Lang]map[string]string{}
@@ -204,7 +207,7 @@ func load() map[Lang]map[string]string {
 type Args map[string]any
 
 func lookup(l Lang, key string, args Args) (string, bool) {
-	cat := catalogs[l]
+	cat := catalogs()[l]
 	if n, ok := count(args); ok {
 		if s, ok := cat[key+"_"+pluralForm(l, n)]; ok {
 			return s, true
@@ -331,7 +334,7 @@ func argText(v any) string {
 
 // Has: key is in the catalogs (any plural form counts).
 func Has(key string) bool {
-	cat := catalogs[ZhHans]
+	cat := catalogs()[ZhHans]
 	_, a := cat[key]
 	_, b := cat[key+"_other"]
 	return a || b

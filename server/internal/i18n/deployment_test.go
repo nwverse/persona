@@ -7,7 +7,7 @@ import (
 
 func TestDeploymentText(t *testing.T) {
 	for _, l := range []Lang{ZhHans, En, Ja} {
-		for key, source := range catalogs[ZhHans] {
+		for key, source := range catalogs()[ZhHans] {
 			if !strings.HasPrefix(key, "devices-deploy.") && !strings.HasPrefix(key, "hub-machine.deploy_") {
 				continue
 			}

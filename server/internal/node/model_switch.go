@@ -4,10 +4,10 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"regexp"
 	"strings"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
@@ -26,7 +26,7 @@ import (
 
 // modelIDRe is what may follow `/model `: an id from the agent's own list (aliases such as opus, a full id, a
 // bracketed variant like opus[1m], a gateway's provider/model). One word, never a flag or another command.
-var modelIDRe = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:/@\[\]-]{0,127}$`)
+var modelIDRe = lazyre.New(`^[A-Za-z0-9][A-Za-z0-9._:/@\[\]-]{0,127}$`)
 
 // modelCommand is the line typed into Claude Code to switch the session to model. An empty model would open the
 // picker, a model with spaces or a leading dash would be more than one word, so none of them is built.

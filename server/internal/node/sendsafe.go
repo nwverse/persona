@@ -8,13 +8,13 @@ import (
 	"fmt"
 	"log"
 	"os"
-	"regexp"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/nwverse/persona/server/internal/herdr"
 	"github.com/nwverse/persona/server/internal/host"
+	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/rpc"
 	"github.com/nwverse/persona/server/internal/screen"
@@ -520,7 +520,7 @@ func (t *typingLocks) ours(pane, box string) bool {
 
 // pastePlaceholder is Claude's placeholder for a long paste, after the `[Image #n]` chips of the pictures the same
 // paste attached.
-var pastePlaceholder = regexp.MustCompile(`^\s*(?:\[Image #\d+\]\s*)*\[Pasted text #\d+`)
+var pastePlaceholder = lazyre.New(`^\s*(?:\[Image #\d+\]\s*)*\[Pasted text #\d+`)
 
 // How long a prompt may sit in Claude's input box before ensureSubmitted presses Enter for it.
 var submitGrace = 2 * time.Second
@@ -834,9 +834,9 @@ func (n *Node) declineGuide(ctx context.Context, pane string) error {
 }
 
 var (
-	boxChips     = regexp.MustCompile(`\[(Image|Pasted text) #\d+[^\]]*\]`)
-	imageChip    = regexp.MustCompile(`\[Image #\d+\]`)
-	attachedNote = regexp.MustCompile(`(?s)<attached_images>.*?</attached_images>`)
+	boxChips     = lazyre.New(`\[(Image|Pasted text) #\d+[^\]]*\]`)
+	imageChip    = lazyre.New(`\[Image #\d+\]`)
+	attachedNote = lazyre.New(`(?s)<attached_images>.*?</attached_images>`)
 )
 
 // longPaste: text Claude may show in its box as a `[Pasted text #n …]` placeholder (several lines, or long), so a

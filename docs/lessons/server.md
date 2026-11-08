@@ -308,6 +308,12 @@ Splitting a registry at its first colon reads `[::1]:5000` as `[`, selecting HTT
 - Go `UnixListener.Close()` deletes the socket file by default: during redeploy, old node exit deleted the new node's `~/.persona/node.sock`,
   silently disabling every hook / MCP (unreachable hooks allow the TUI). Fixed with `SetUnlinkOnClose(false)` and a rebuild self-check every 15 seconds.
   Suspect inactive hooks / MCP? Run `personad node doctor` first (actual socket response, generated files matching the binary, command paths still present; `docs/integrations/claude-integration.md` ("Self-check")).
+- Whoever takes `node.sock` by remove-then-listen must take only what it checked (2026-11-08, #1556). Standby asked whether anything
+  answered (up to 1.3 s), then removed whatever file was at the path and listened: a node serving by itself that did its own
+  remove-then-listen in between lost its fresh socket file, kept listening on an unreachable one, and standby owned the path for good.
+  Standby also listened again in the same round it saw its file gone, beating that node's listen. `TestStandbyNeverTakesALiveSocket`
+  failed 6 of 100 runs with every CPU busy (a timeout, or the node's `bind` failing) and 0 of 300 after the fix: compare the
+  `os.Lstat` identity before asking and before removing, and let a path go for a round when the file changed under you.
 - macOS `lsof -p a,b,c` exits 1 if any pid has exited or is a zombie, but still prints other processes' results to stdout (2026-11-03, #541):
   a pid merely not listening doesn't count (exit 0). Short Agent commands often disappear between `ps` and `lsof`; discarding results as errors froze the port list and logged every 4 seconds.
   `lsof` complaints go only to stderr; parse stdout even on exit 1, and log the same error once.
@@ -723,6 +729,8 @@ home volume (docs/operations/link.md "Without systemd").
 - **Go nil slices become `null` in JS** (2026-11-05, #1926): list/clear with no cookies to import marshaled a nil slice as `const set = null`,
   and first-line `set.length` threw, breaking lists on every Mac. Real testing covered only import, while unit tests replaced `runEgo`, so this was missed.
   Script lists now always become empty slices first, and scripts guard against null `getAllCookies` results and null cookie fields; tests execute actual generated scripts with node (`TestCookieScriptTakesNullsFromEgo`).
+  The same on the wire (#1573): `proto.Question.Options` has no `omitempty`, so a Codex free-text question arrives as `"options": null`. iOS and Android decode it as empty;
+  the web typed it as a required array and `q.options.map` took the whole page down. A client type for a Go slice field without `omitempty` is optional (`?: T[] | null`), so the compiler finds every use.
 - **Don't show raw ego JS errors to users**: replace with "Can't read ego sign-ins on this Mac; tap Retry…"; original errors only in node logs (property names, no cookie values).
 
 ## New runtime packages must enter the hub image (2026-11-04, #1777)
@@ -909,6 +917,14 @@ Uploads already had a `dest` parameter (`terminal`, `health`), but older nodes n
 The app saw a successful upload while the folder stayed empty, with no error anywhere. A node that knows `dest` but not `dir` answers `unknown upload destination`, which is easy to handle.
 Now the node echoes `dest` in its begin result; without the echo the hub aborts the upload and answers 409 `node_outdated`.
 Whenever an existing method gains a "write somewhere else" / "do it differently" parameter, work out what an old node does with it: if it would quietly do something else, have new nodes echo it and check the echo in the hub before going on.
+
+## Where a file may be written isn't what may be renamed or deleted (2026-11-06, #315)
+
+The write guard `writable()` answers "may a file go into this folder": the home itself says yes, and a path has its links followed first. Reused as is for rename / move / trash it would have let the phone
+move the whole home to the trash, and a link `~/out → /elsewhere` would be judged (and changed) as its target. `file.rename / move / trash` check the entry differently (`node/fileedit.go` `entry`): the folder it is in
+is resolved with links followed, the entry's own name is not (a link is renamed as the link), and the home itself is refused on its own.
+Also, `os.Rename` replaces whatever has the new name without a word: a rename or move that must not overwrite uses `renameat2(RENAME_NOREPLACE)` on Linux and `renamex_np(RENAME_EXCL)` on macOS (`renameExcl`), not Lstat-then-rename.
+And an Undo id must carry everything it needs (`trash_id` holds where the file went and came from): the hub and node get redeployed between the delete and the Undo.
 
 ## Docker: containers can't write `.env`; Postgres loopback doesn't verify passwords (2026-11-06, #4045)
 

@@ -310,6 +310,10 @@ Use an invalidation revision as the task key and handle the flag after completio
   Supply dark / light appearance (copy shell window `overrideUserInterfaceStyle`; later `ColorSchemeChoice` updates all scene windows), `app` text size
   (`textSize.applied(to:)`; a new window otherwise follows only system), `AppModel` and BeautifulUI theme. VoiceOver will not move to a non-touch window; announce through `AccessibilityNotification.Announcement`.
   XCUITest still finds it in the `app` tree. Place it below the shell header, not at the status bar where it covers segments (`ShellNavigationClearance.needed(at:)`).
+- The tabs (Old Layout, iPad) kept the toast in `RootView`'s overlay after the shell moved to `ToastWindow`, so every toast raised from a
+  `fullScreenCover` or sheet was drawn under it: Saved to Photos from the image viewer and the share card never showed (#1492). `PhotoSaveTests`
+  passed all along, because XCUITest finds a covered toast's words. A test that a toast is seen compares the pixels where it is with and without it
+  (`PhotoSaveTests.expectDrawn`). Now the tabs get a toast window too (`ToastWindowHook`); the overlay is left only where no such window exists.
 - Both new-shell pages remain mounted, the hidden one only opacity-hidden; UIKit glass buttons and lists stay in accessibility, with identical switcher ids.
   `exists` / `isHittable` / `firstMatch` cannot identify the drawn page; inspect pixels (`ShellSwitchTests.agentsDrawn`) and select the tappable switcher.
 - Pushing from active `.searchable` forces the navigation bar visible (double chat titles); closing search after pushing does not help.
@@ -1329,6 +1333,31 @@ DEBUG 的代码可能在 `Persona.debug.dylib` 中，40 KiB 的 `Persona` 只是
 
 - **What went wrong**: the open chat's catch-up ignored an `updated_at` within `staleSlack` (1 s) of its newest line's `ts`, as "the same write" (the file's mtime and the line's own clock compare loosely). An agent writes in bursts: a tool call, its result and the words after it within a second. When the last line's push was lost, `updated_at` stayed within the slack of the line before, which the chat held, and the chat never asked, until the agent wrote again. Found by the web's end-to-end sync run against the mock (two replies 0.3 s apart, the second push dropped: nothing in 20 s).
 - **Now**: `AgentSync` notes when each session's `rev` changes (the full list or the `revs` event; the first one heard is no change), and `AgentSyncPacing.catchUpAt` also asks when the rev moved after the chat's last items came, once it has been quiet for `staleQuiet` since both. The node reports revs on its next tick, mostly after the items they belong to, so a rev that moved for lines that did come costs one empty `after_seq` read once the chat goes quiet; that read is an arrival and ends the question. The time rule stays for sessions whose rev does not move. UI test: `ChatCatchUpTests.testALostLastLineOfABurstCatchesUp` (the mock with `MOCK_SYNC_REVS=1`, whose lines are written now; without it their times are old and `updated_at` alone tells). It writes both lines before looking at the screen: waiting for the first one on screen spaced them more than a second apart, and the old rule passed it too.
+
+## A switch with words under it inside a menu (2026-11-07, #1307)
+
+- **An iOS menu draws a subtitle only from a second `Text` directly in the item's label** (`Toggle { Text("ultracode"); Text(line) }`, `Button { Text; Text }`).
+  Inside a `Label { Text; Text } icon:` the second `Text` is dropped, which is why the effort levels' details in `SessionModes` never show.
+  A third `Image` in the same label still becomes the item's icon. The subtitle is cut after three lines (a Chinese sentence and a quota line
+  did not fit), and UI tests read it as part of the item's label.
+- **Words that are not an action go in the section's header, not a disabled item**: a `Button {}.disabled(true)` for the quota was drawn in the
+  disabled gray (about 2.3:1 on the menu's glass) and looked like an option not available now. `Section { … } header: { Text(…) }` is drawn in
+  the system's secondary style, line by line on iOS with no three-line cut (a `\n` starts a new line), and stays on top of its section in a menu
+  that lists its items the other way round. Nothing in a menu takes a color: a warning can only be as clear as the words around it.
+- **A menu that opens upward lists its items the other way round** (the shell composer's model menu, the old layout's chips: the items declared
+  first sit next to the button): a quota row declared after its switch landed above it, and a section declared after the effort went above the
+  effort, out of view until a scroll. Declare them in the reverse order on iOS (`UltracodeMenuSection.leadsEffort`; the Mac keeps the declared
+  order); `.menuOrder(.fixed)` would turn the whole existing menu over.
+- **The same menu on the Mac** (checked by opening it in a small AppKit program and dumping the `NSMenu`, `docs/lessons/macos.md`): the second
+  `Text` becomes `NSMenuItem.subtitle`, which wraps instead of being cut; a section's header is an `isSectionHeader` item drawn on one line (a `\n`
+  turns into a space and a long header widens the menu); a `Label`'s second `Text` is dropped there too.
+- **A mark after a title that can wrap is part of the text**: `HStack(alignment: .firstTextBaseline) { Text(title).lineLimit(2); Image }` put the
+  mark after the first line of a two-line title, between its halves (the watch's list showed it). `Text(title) + Text("\u{00A0}") + Text(Image(…))`
+  puts it after the last word (`UltracodeMark.after`). VoiceOver does not read an `accessibilityLabel` given to the image's own `Text`
+  inside the sum (the row read 「给天气 App 加主屏幕小组件 」): label the whole `Text`.
+- **A menu over the keyboard has room for only part of it**, and a UI test can't scroll it: a swipe on an item closed the menu. Type a short draft
+  and put the keyboard away before opening the composer's menu, then take the draft out again (`UltracodeUITests.modesButton` / `clearDraft`).
+- **A `try` in the message of `XCTAssertTrue` does not compile** (the message's autoclosure doesn't throw): evaluate first, or use `try?` there.
 
 ## The background detail read of a chat must not report a session the list lacks (#1526)
 

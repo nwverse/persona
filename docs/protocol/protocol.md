@@ -76,7 +76,7 @@ The authenticated WS `hello.features` always lists server capabilities. The curr
 - New in P0: `tls`, `endpoints`, `client_hello`, `heartbeat`, `app_ping`, `error_codes`, `client_ops`, `ws_notify`, `lock_test`, `android_update`.
 - Existing: `client_msg_id`, `send_refusals`, `screen_dialog`, `resumable_interactions`, `secret_prompts`, `request_id`, `terminal_stream`, `terminal_control`, `terminal_scroll`, `terminal_click`, `terminal_mouse`, `herdr_client` (the web client's full herdr interface: `herdr_open` etc., see "Full herdr interface" below), `herdr_focus` (focus sync for the full interface: `herdr_focus` etc., see "Focus sync" below), `file_upload`.
 - Present depending on hub.json: `assistant_views` (`assistant.persona_view` on: declarative actions carry `expected_version`, live cards, and the APIs registered by in-body cards are available), `assistant_html_bridge` (additionally `assistant.html_views` not turned off: `…/html-actions` is available; whether a client runs HTML still depends on its own security sign-off, and it does not run JS based on this flag). See the card APIs under "Assistant" below and [assistant-views.md](../assistant/assistant-views.md).
-- Also: `assistant_compact` (manually compacting an assistant chat, the session's `compaction`), `assistant_main_new` (new main chat), see the two APIs under "Assistant" below; `assistant_readiness` (main chat readiness, see "Main chat readiness" below); `elicitation` (MCP forms and links), `model_configuration` (models configured by purpose), `plugins` ([plugins](../extensions/extensions.md)), `plugin_ui_slots` (plugin UI slots, UI version 2, `plugin_ui` events, [extensions.md](../extensions/extensions.md) "UI slots"), `plugin_auto_upgrade` (the toggle and list for auto-upgrading market plugins, `plugin_upgrade` events, [extensions.md](../extensions/extensions.md) "Auto-upgrade"), `extension_operations` (install, upgrade, uninstall in steps with progress, see "Extension install, upgrade and uninstall progress" below), `extension_auth` (extension sign-in `/api/v1/extensions/{id}/-/auth…`, `extension_auth` events, the install step `tools`, [extensions.md](../extensions/extensions.md) "Sign-in (auth)"), `desktops` (desktop client registration, see `register_desktop` below), `locale` (honors `Accept-Language`, `client_hello.locale` and the device's `locale`; human-readable text follows the language, [i18n.md](i18n.md)), `terminal_panes` (`GET/POST /machines/{mid}/panes` and terminal stream ids of the form `pane:<pane id>`, [terminal.md](../integrations/terminal.md) section 19), `machine_trust` (a machine's `trust` / `error_code` and `POST /machines/{id}/confirm`, `…/reject`, see "Computer trust" below), `machines_add` (a signed-in device adds a computer and gets the computer's pairing code via `add` on `POST /api/v1/auth/pair-codes`, see "Computer pairing codes" under "Temporary pairing" below), `todo_threads` (a to-do's chat thread: `PUT` / `DELETE /api/v1/todos/{id}/thread` and `thread` on the to-dos `GET` returns, [todos.md](../assistant/todos.md) "Chat thread"; the web shows its Topic section only when it is there).
+- Also: `assistant_compact` (manually compacting an assistant chat, the session's `compaction`), `assistant_main_new` (new main chat), see the two APIs under "Assistant" below; `assistant_start_ops` (`POST /api/v1/assistant/conversations` takes an operation ID, see "Operation receipts"); `assistant_readiness` (main chat readiness, see "Main chat readiness" below); `elicitation` (MCP forms and links), `model_configuration` (models configured by purpose), `plugins` ([plugins](../extensions/extensions.md)), `plugin_ui_slots` (plugin UI slots, UI version 2, `plugin_ui` events, [extensions.md](../extensions/extensions.md) "UI slots"), `plugin_auto_upgrade` (the toggle and list for auto-upgrading market plugins, `plugin_upgrade` events, [extensions.md](../extensions/extensions.md) "Auto-upgrade"), `extension_operations` (install, upgrade, uninstall in steps with progress, see "Extension install, upgrade and uninstall progress" below), `extension_auth` (extension sign-in `/api/v1/extensions/{id}/-/auth…`, `extension_auth` events, the install step `tools`, [extensions.md](../extensions/extensions.md) "Sign-in (auth)"), `desktops` (desktop client registration, see `register_desktop` below), `locale` (honors `Accept-Language`, `client_hello.locale` and the device's `locale`; human-readable text follows the language, [i18n.md](i18n.md)), `terminal_panes` (`GET/POST /machines/{mid}/panes` and terminal stream ids of the form `pane:<pane id>`, [terminal.md](../integrations/terminal.md) section 19), `machine_trust` (a machine's `trust` / `error_code` and `POST /machines/{id}/confirm`, `…/reject`, see "Computer trust" below), `machines_add` (a signed-in device adds a computer and gets the computer's pairing code via `add` on `POST /api/v1/auth/pair-codes`, see "Computer pairing codes" under "Temporary pairing" below), `todo_threads` (a to-do's chat thread: `PUT` / `DELETE /api/v1/todos/{id}/thread` and `thread` on the to-dos `GET` returns, [todos.md](../assistant/todos.md) "Chat thread"; the web shows its Topic section only when it is there).
 
 A feature flag means the implementation supports it; `tls` does not mean the listener is on, so also check `tls_port` / `fp`. A new client talking to an old hub falls back to the old behavior based on the flags. `node_version` / `node_mismatch` in the machine list flag whether the hub offers to redeploy the node: it runs another build than the one its platform gets (the hub's, or, with no build of the hub's version for that platform, the newest release its manager drives: `docs/operations/node-update.md` ("Node packages")) (the personad on that computer was not deployed by this hub deployment, i.e. `deploy.sh` deployed only part of it, or it was installed on its own; the hub also logs a line when it connects), or its manager cannot drive it. Another build alone is an upgrade offer, not a fault: whether a node can be used is decided by the node handshake (`node_protocol`, `node_incompatible`; see "Node handshake"). New fields are all optional, and the App currently checks whether a field is present. When a future request would be "misunderstood by an old hub", check here first.
 
@@ -252,6 +252,7 @@ Once the server declares `client_ops`, clients may send `X-Persona-Op-Id: <UUID>
 | --- | --- |
 | `message` | `POST /api/v1/sessions/{mid}/{sid}/messages` |
 | `start` | `POST /api/v1/sessions` |
+| `assistant_start` | `POST /api/v1/assistant/conversations` (hub feature `assistant_start_ops`) |
 | `resolve` | `POST /api/v1/interactions/{id}/resolve` |
 | `choose` | `POST /api/v1/interactions/{id}/choose` (also accepts a body `client_id`; see "Answering a question from its notification") |
 | `interrupt` / `close` / `rename` / `modes` | `POST /api/v1/sessions/{mid}/{sid}/interrupt`, `/close`, `/rename`, `/modes` |
@@ -272,6 +273,8 @@ For ordinary operations, HTTP 400 / 409 are usually recorded as `failed`; other 
 Lark sends and Inbox replies also derive receipts from the body's `client_id`; see "Lark API" below. They reuse `client_ops` too, but an existing upstream error response is replayed as-is. Don't apply that response rule to all ordinary operations.
 
 When a new session is started with an operation ID, the hub keeps finishing an accepted start after the caller disconnects and stores the receipt. Replaying the same ID won't start it again; an existing HTTP result is returned as-is even if marked `unknown`, and leftover operations with no result still return `202 {"state":"unknown"}`. Android persists the ID and parameters before sending, and queries the ID if the response is lost. Neither a 404 nor an unknown result proves it didn't start, so it keeps the pending-confirmation record and doesn't POST again. Only a clearly failed receipt allows editing the form and starting a new operation. Clients without the header keep the old behavior.
+
+A new assistant conversation (`assistant_start`, #1349) works the same way: an accepted start finishes after the caller disconnects, a repeat with the same ID gets the first answer (also when it was `502 assistant_in_doubt`, recorded as `unknown`), and nothing is started twice. `503 assistant_offline` keeps no receipt (nothing reached the assistant), so the same ID can try again once it is back. iOS / Mac send one ID per first message and, on a hub with `assistant_start_ops`, try it again through a gap (no network, a timeout, the hub restarting, `202 pending`) for up to a minute; on an older hub they send no ID and don't retry gaps.
 
 ## Device connections and lock screen test
 
@@ -1676,19 +1679,30 @@ The foundation shared by the file page and the various previews (spreadsheets, O
 
 ### Changing files
 
-The app's file browser (the session's Files pane, the machine page's Files row) can upload into a folder (#4858); rename, move and delete come in the second batch.
+The app's file browser (the session's Files pane, the machine page's Files row) and the web's Files panel can upload into a folder, rename, move, and move to the trash with Undo (#315; web #4883). There is no permanent delete.
 
 - **Where writes are allowed** (`node/writeguard.go`): inside the home only. A path first passes the read guard (`pathguard.go`: links followed component by component; iCloud, key folders such as `.ssh`,
   private key names and the hub's keys are refused); the real path after following links must still be in the home (the home itself is fine); `~/.persona`, `~/.persona`, `~/Library` and the data folder `PERSONA_HOME` names (unless it is the home itself) are entirely unwritable, and so is a manager's folder anywhere (one holding a manager's `manager.json`, unless it is the home itself); nor may a client write a file named `manager.json*`.
   `../` and links pointing outside the home are judged by where they end up. A refused write is 409 `code: read_only`. Everything outside the home stays read-only.
 - **Upload into a folder**: `POST /api/v1/machines/{mid}/files?name=<file name>&dest=dir&dir=<folder>[&cwd=][&conflict=]`; `dir` may be `~/…`, absolute,
   or relative to `cwd` (the session's working directory). Chunks, cancel and timeouts as in "Send files" above; the cap is 2 GB (`proto.MaxDirUploadBytes`). A missing `dir` is 400; a folder that does not exist or is not a folder, or an unknown `conflict`, is 502 `code: internal` with the node's reason.
-  - The file **keeps its name** (`/`, `\`, control characters become `_`). If the file system cannot take it (`ENAMETOOLONG`; over 255 bytes on Linux or 255 characters on a Mac), the stem is cut to 180 bytes and the extension kept, as for a numbered copy; a name that is still too long after that is refused at begin. Mode 0644; the returned `path` is the folder as the app gave it + that (possibly shortened) name. The partial `.persona-upload-*` is written in that folder and renamed when complete.
+  - The file **keeps its name** (`/`, `\`, control characters become `_`). If the file system cannot take it (`ENAMETOOLONG`; over 255 bytes on Linux or 255 characters on a Mac), the stem is cut to 180 bytes and the extension kept, as for a numbered copy; a name that is still too long after that is refused at begin. Mode 0644; the returned `path` is the folder with `~` and `cwd` resolved (absolute, links not followed) + that (possibly shortened) name. (Rename / move / trash below answer in the form the request used.) The partial `.persona-upload-*` is written in that folder and renamed when complete.
   - Name taken: without `conflict`, begin already answers 409 `code: exists` (with `name`) and no byte is sent; the app asks "Replace / Keep Both" and sends again;
     `conflict=keep` saves as `name 2.ext`, `name 3.ext`… (like Finder); `conflict=replace` overwrites and keeps the old file's mode, and still answers `exists` when the name is a folder.
     A name taken while the upload runs is not overwritten: the end answers `exists` and the partial file is removed.
   - An old node that does not know `dest=dir` (answers `unknown upload destination`, or an even older one ignores `dest`): 409 `code: node_outdated`. The hub requires begin to echo `dest`
     and aborts without the echo, so the file never lands in a temp folder quietly. `upload_dir` in the hello `features` says the hub takes these parameters.
+- **Rename, move, trash, restore** (`node/fileedit.go`, `hub/fileedit.go`): `POST /api/v1/machines/{mid}/files/{rename,move,trash,restore}` with a JSON body; paths as in a listing (`~/…`, absolute, or relative to `cwd`).
+  The folder an entry is in has its links followed and is checked like an upload's; the entry's own name is not followed, so a link is renamed, moved or trashed as the link. The home itself, `~/.persona`, the former state folder and `~/Library`
+  (and anything in them) are 409 `read_only`, as is a name that would land there. Answers give paths in the form the request used. `file_edit` in the hello `features` says the hub has these routes.
+  - `rename {path, cwd, name}` → `{path}`: in the same folder. `name` can't be empty, `.`, `..`, or contain `/` (400). A taken name is 409 `exists` (`name`) and nothing changes; changing only the case is allowed.
+  - `move {paths[], cwd, dir, conflict?}` → `{moved: [{from, to}]}`: into folder `dir`. Without `conflict`, any taken name refuses the whole move with 409 `exists` before anything moves; `keep` names it `name 2.ext`…;
+    `replace` first moves the file that was there to the trash (never a folder, and never by a folder: `exists`). A folder can't go into itself (502 with the reason); one already in `dir` is left as it is. Moving to another disk is not supported (502).
+  - `trash {paths[], cwd}` → `{trashed: [{path, trash_id}]}`: to the system's trash (macOS `~/.Trash`; Linux `$XDG_DATA_HOME/Trash` or `~/.local/share/Trash`, with a `.trashinfo` written first, freedesktop spec), named `name 2.ext`… if the trash has one.
+    Other systems: 502. `trash_id` is opaque to clients. It carries where the file went and where it came from, so Undo works after the node or hub restarts.
+  - `restore {trash_ids[]}` → `{restored: [{path}]}` (Undo): puts each back where it was, checked again like any write. A name taken there meanwhile is 409 `exists`; gone from the trash is 404 `not_found`.
+  - Errors: 400 for a body that can't be the request (missing `path` / `dir` / `paths`, more than 1000 paths, an unknown `conflict`); 404 `not_found` for an entry that is not there; 409 `read_only` / `exists` / `node_outdated`
+    (a node from before these: `unknown method`); anything else the node refuses is 502 `internal` with its reason. One request is not atomic: a failure part-way leaves the earlier ones done (a move checks every name first, so `exists` never does).
 - Full paired-device credentials only: extension tokens are refused (`testdata/route_scopes.txt` says `-`).
 
 ### Sending videos
@@ -2892,7 +2906,7 @@ At most one quote block starts a message (the quoted words; for a task card, the
 
 > Code comment 2                ← code comment: number, location, optional Side / Diff / Truncated, fenced code, comment
 > File: src/app.ts:12-14        ← path relative to the session directory (original path if outside it); line numbers are from the new file, with `Side: old` when only deleted lines are selected
-> Diff: staged                  ← absent for comments on files; staged | unstaged | commit <first 8 chars>; code lines carry `+`, `-`, space, and the fence uses `diff`
+> Diff: staged                  ← absent for comments on files; staged | unstaged | commit <first 8 chars>; a session review's (#151): uncommitted | branch since <base> | since <base> (Git's short hash); code lines carry `+`, `-`, space, and the fence uses `diff`
 > Truncated: the first 60 of 80 lines
 > ```ts
 > const a = 1;
@@ -2900,11 +2914,22 @@ At most one quote block starts a message (the quoted words; for a task card, the
 >
 > Why not use a constant?
 
+> Element comment 3             ← an element picked in a dev server preview (docs/web/preview.md): number, page, selector, optional Component (with its source) or Source, Text, Truncated, the element's HTML, comment
+> Page: http://localhost:5173/settings
+> Element: main > form > button.save
+> Component: SaveButton (src/settings/SaveButton.tsx:14)
+> Text: Save changes
+> ```html
+> <button class="save">Save changes</button>
+> ```
+>
+> Make it the primary color
+
 The user's typed text
 ```
 
 Limits: comments up to 4000 characters, attached code up to 60 lines (extra lines are counted in `Truncated` but not included); the fence has one more backtick than the longest run in the code. Numbers follow the order of comments above the input, starting at 1.
-On reading back, web only recognizes blocks after the first block whose first line is `Comment N` / `Code comment N` (`splitQuotes`), so ordinary `> ` quotes are unaffected; editing a sent message puts comments back above the input.
+On reading back, web only recognizes blocks after the first block whose first line is `Comment N` / `Code comment N` / `Element comment N` (`splitQuotes`), so ordinary `> ` quotes are unaffected; editing a sent message puts comments back above the input.
 
 ## Messages injected by Persona
 
