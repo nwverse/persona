@@ -877,6 +877,7 @@ struct WakeDrawer<Content: View>: View {
                 }
                 .padding(Theme.Space.l)
             }
+            .closesMessageBar()
             .background(Theme.pageBackground)
             .navigationTitle(notices.count > 1 ? String(localized: "\(notices.count) background tasks done") : String(localized: "Background Task Done"))
             .navigationBarTitleDisplayMode(.inline)

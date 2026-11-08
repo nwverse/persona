@@ -80,6 +80,13 @@ struct PersonaShortcuts: AppShortcutsProvider {
             systemImageName: "checkmark.shield"
         )
         AppShortcut(
+            intent: RunExtensionActionIntent(),
+            phrases: ["Run an extension action in \(.applicationName)"],
+            shortTitle: "Run Extension Action",
+            // AppShortcuts metadata requires a literal; mirrored from ExtensionSurfaceTokens.actionIcon.
+            systemImageName: "puzzlepiece.extension"
+        )
+        AppShortcut(
             intent: AddTodoIntent(),
             phrases: [
                 "Create a to-do in \(.applicationName)",
