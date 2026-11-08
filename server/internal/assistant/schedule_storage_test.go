@@ -11,6 +11,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/nwverse/persona/server/internal/prompts"
 )
 
 // scheduleWriteStore rejects just one setting, without disrupting model settings or reads.
@@ -57,6 +59,7 @@ func scheduleStorageOn(t *testing.T, store Store) (*Service, *fakeHub, *schedule
 			RunMachineID: "server", RunSessionID: "kept", RunLauncher: "claude"},
 		{ID: "daily", Title: "Daily", Prompt: "Example", Repeat: repeatDaily, Time: "09:00", Enabled: true,
 			Weekdays: []int{1, 3}, Launcher: "claude", PermissionMode: "default", LastStatus: runOK, LastSessionID: "previous"},
+		{ID: "interval", Title: "Interval", Prompt: "Example", Repeat: repeatInterval, At: at, EveryMinutes: 30, Enabled: true},
 	}
 	if err := st.PutSetting(t.Context(), tasksKey, tasks); err != nil {
 		t.Fatal(err)
@@ -133,6 +136,7 @@ func TestScheduleToolWriteFailure(t *testing.T) {
 	for _, tc := range []struct{ name, session, args string }{
 		{"schedule_followup", "", `{"at":"30m","title":"New","prompt":"New task"}`},
 		{"schedule_followup", "previous", `{"at":"30m","title":"Daily","prompt":"Example"}`},
+		{"schedule_followup", "once-run", `{"at":"30m","title":"Once","prompt":"Example"}`},
 		{"schedule_routine", "", `{"title":"New","prompt":"Example","time":"10:00"}`},
 		{"schedule_routine", "", `{"id":"daily","title":"Edited","time":"10:00"}`},
 		{"cancel_followup", "", `{"id":"once"}`},
@@ -140,6 +144,12 @@ func TestScheduleToolWriteFailure(t *testing.T) {
 	} {
 		t.Run(tc.name+tc.args, func(t *testing.T) {
 			s, f, st := scheduleStorageFixture(t)
+			if tc.session == "once-run" {
+				s.sched.mu.Lock()
+				s.sched.tasks[s.sched.indexLocked("once")].Enabled = false
+				s.sched.mu.Unlock()
+				s.recordRun(ScheduleRun{RefID: "once", SessionID: tc.session, Status: runOK, At: time.Now().UTC()})
+			}
 			before, history := scheduleState(s)
 			events := f.eventTypes()
 			st.failWrites(tasksKey)
@@ -225,7 +235,7 @@ func TestScheduleDueAdmissionWriteFailure(t *testing.T) {
 }
 
 func TestScheduleManualAdmissionWriteFailure(t *testing.T) {
-	for _, path := range []string{"tasks/once/run", "followups/once/run", "tasks/daily/run", "routines/daily/run"} {
+	for _, path := range []string{"tasks/once/run", "followups/once/run", "tasks/daily/run", "routines/daily/run", "tasks/interval/run"} {
 		t.Run(path, func(t *testing.T) {
 			s, f, st := scheduleStorageFixture(t)
 			before, history := scheduleState(s)
@@ -400,10 +410,11 @@ func TestScheduleLateOutcomesPreserveOwnership(t *testing.T) {
 	i := s.sched.indexLocked("daily")
 	s.sched.tasks[i].LastRun = now
 	s.sched.tasks[i].RunSessionID = "current"
-	if err := s.saveLocked(&s.sched, s.sched.tasks); err != nil {
+	err := s.saveLocked(&s.sched, s.sched.tasks)
+	s.sched.mu.Unlock()
+	if err != nil {
 		t.Fatal(err)
 	}
-	s.sched.mu.Unlock()
 	st.failWrites(tasksKey)
 	r := ScheduleRun{RefID: "daily", SessionID: "old", Status: runFailed, of: now.Add(-time.Hour)}
 	r.ID = s.recordRun(r)
@@ -427,6 +438,28 @@ func TestScheduleLateOutcomesPreserveOwnership(t *testing.T) {
 	if len(runs) != 2 || runs[1].ID != r.ID || runs[1].Error != "Old run failed" {
 		t.Fatalf("deletion erased a real run's history: %+v", runs)
 	}
+}
+
+func TestScheduleDefaultUpgradeWriteFailure(t *testing.T) {
+	st := &scheduleWriteStore{Store: &memStore{}}
+	old := Task{ID: "morning", Title: "Morning", Repeat: repeatDaily, Time: "09:00", Prompt: prompts.FormerMorningRoutines()[0],
+		RunMachineID: "server", RunSessionID: "kept", LastSessionID: "previous", LastStatus: runOK}
+	if err := st.PutSetting(t.Context(), tasksKey, []Task{old}); err != nil {
+		t.Fatal(err)
+	}
+	st.failWrites(tasksKey)
+	s := newServiceOn(t, newFakeHub(), st)
+	if got, ok := taskByID(s, "morning"); !ok || !reflect.DeepEqual(got, old) {
+		t.Fatalf("failed default upgrade changed the task: %+v", got)
+	}
+	assertScheduleStored(t, s, st)
+	st.failWrites("")
+	restarted := newServiceOn(t, newFakeHub(), st)
+	got, ok := taskByID(restarted, "morning")
+	if !ok || got.Prompt != prompts.RenderMorningRoutine() || !got.Facts || got.RunSessionID != old.RunSessionID || got.LastStatus != old.LastStatus {
+		t.Fatalf("default upgrade did not recover or changed ownership: %+v", got)
+	}
+	assertScheduleStored(t, restarted, st)
 }
 
 func TestSchedulePostgresWriteFailure(t *testing.T) {
