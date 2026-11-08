@@ -64,12 +64,41 @@ type quickMeta struct {
 	// turnOpen: a Codex rollout whose tail is inside a turn: the last turn it starts has not finished, or one turn
 	// fills the whole tail (a finished turn's task_complete is within a few KB of the end; real turns write MBs)
 	turnOpen bool
-	// turnError / turnErrorKind: the latest turn failed on the model service, as a Codex rollout records it
-	// (transcript.Meta.TurnError, #2185); Session.TurnError / TurnErrorKind.
-	turnError, turnErrorKind string
+	// turnErr: the latest turn failed on the model service, as the agent's record says it (transcript.Meta.TurnError…:
+	// a Codex rollout's task_complete, #2185; Claude Code's own reply for a failed request, #1710).
+	turnErr turnFailure
 	// rewound: the lines session.rewind, or a rewind seen in the terminal, went back over (File.RewoundLines), which
 	// Claude writes nothing for; kept from read to read, the tail leaves them out (applyRewound).
 	rewound []string
+}
+
+// turnFailure is how the latest turn failed on the model service (Session.TurnError…): its text, its kind, a usage
+// limit's reset (zero: not known), whether the CLI goes on by itself after it and whether the turn did work first.
+type turnFailure struct {
+	text, kind         string
+	resetsAt           time.Time
+	resumes, afterWork bool
+}
+
+// set puts the failure into a session; none clears what the session says of one.
+func (f turnFailure) set(s *proto.Session) {
+	s.TurnError, s.TurnErrorKind, s.TurnErrorResumes, s.TurnErrorAfterWork = f.text, f.kind, f.resumes, f.afterWork
+	s.TurnErrorResetsAt = nil
+	if !f.resetsAt.IsZero() {
+		t := f.resetsAt.UTC()
+		s.TurnErrorResetsAt = &t
+	}
+}
+
+// reported is the failure an app-server said of a turn (text, kind) before the rollout read may have it: with what the
+// rollout adds (a usage limit's reset, the work) when its read already has the same failure. A read the file changed
+// since has none (Node.meta), so what it has is the latest turn's.
+func reported(text, kind string, rollout turnFailure) turnFailure {
+	f := turnFailure{text: text, kind: kind}
+	if rollout.text != "" && rollout.kind == kind {
+		f.resetsAt, f.afterWork = rollout.resetsAt, rollout.afterWork
+	}
+	return f
 }
 
 // quickTail: how much of a transcript's end readQuickMeta reads for its title and last words. One line can fill it:
@@ -98,8 +127,10 @@ func (n *Node) meta(path string, st os.FileInfo) quickMeta {
 		}
 		if m.size != st.Size() || !m.mtime.Equal(st.ModTime()) {
 			// Written since that read: a turn error it saw may be over (a "Continue" ran and ended well within the interval),
-			// and a stale one would have it continued again. None for a few seconds is the safe side (#2185).
-			m.turnError, m.turnErrorKind = "", ""
+			// and a stale one would have it continued again. None for a few seconds is the safe side (#2185). The CLI's word
+			// that it resumes by itself stays: it keeps anything from typing into the session, the safe side too, and the
+			// writes that make the read stale are its own continuation at the reset or the wakes of the wait (#1710).
+			m.turnErr = turnFailure{resumes: m.turnErr.resumes}
 		}
 		return m
 	}
@@ -181,6 +212,7 @@ func readQuickMetaSince(path string, st os.FileInfo, prev quickMeta) quickMeta {
 					tm.LastTool = nil // a long prompt: a new turn
 					if !tm.Codex {
 						tm.TurnOpen, tm.TurnClosed = true, false
+						tm.ClaudeTurnStarted(bytes.Contains(line, []byte(`<task-notification>`))) // the last turn's error is over
 					}
 					if ts := lineTime(line); !bytes.Contains(line, []byte(`"isMeta":true`)) && ts.After(tm.LastPromptAt) {
 						tm.LastPromptAt = ts
@@ -198,6 +230,7 @@ func readQuickMetaSince(path string, st os.FileInfo, prev quickMeta) quickMeta {
 		m.rewound = rest
 	}
 	rewound := tail.Settle(&tm)
+	tail.SettleTurnError(&tm)
 	m.title, m.cwd, m.model, m.lastText, m.first, m.activity, m.queue = tm.Title, tm.Cwd, tm.Model, tm.LastText, first, tm.LastActivity, tm.Queue
 	m.surface = tm.Surface
 	if m.surface == "" {
@@ -223,7 +256,8 @@ func readQuickMetaSince(path string, st os.FileInfo, prev quickMeta) quickMeta {
 	}
 	m.turnOpen = tm.Codex && (tm.TurnOpen || off > 0 && !tm.TurnClosed)
 	m.claudeTurn = !tm.Codex && tm.TurnOpen
-	m.turnError, m.turnErrorKind = tm.TurnError, tm.TurnErrorKind
+	m.turnErr = turnFailure{text: tm.TurnError, kind: tm.TurnErrorKind, resetsAt: tm.TurnErrorResetsAt,
+		resumes: tm.TurnErrorResumes, afterWork: tm.TurnErrorAfterWork}
 	m.mode, m.modeAt, m.effort, m.effortAt, m.sandbox = tm.PermissionMode, tm.ModeAt, tm.Effort, tm.EffortAt, tm.CodexSandbox
 	m.version, m.versionAt, m.ultracode, m.ultracodeAt = tm.Version, tm.VersionAt, tm.Ultracode, tm.UltracodeAt
 	m.contextTokens, m.contextWindow = tm.ContextTokens, tm.ContextWindow
