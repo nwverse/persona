@@ -424,6 +424,17 @@ home volume (docs/operations/link.md "Without systemd").
 - Git's "no upstream" used nonexistent SF Symbol `cloud.slash`; registration in the design system let `everyNameIsASymbol` catch it. The correct slashed-cloud symbol is `icloud.slash`. Don't exempt icon registration or validity checks.
 - Direct node RPC `handle` tests need even minimal fixtures to initialize `state: newState()`: dispatch reads session state before Git methods, so `home` alone panics first.
 
+### Stash positions change outside the node (#1480)
+
+A stash index is a reflog position, not an identity. Carry the full object ID from list to request and apply by
+that ID. Checking it before an unguarded `git stash drop` leaves the same deletion race: terminal Git does not
+share the node mutex. For files storage, own the common-directory stash reference lock while validating,
+applying a pop and rewriting the reflog/reference, with packed-reference coordination for final deletion.
+Refuse unsupported storage or reference hooks before applying content. Preserve foreign locks on refusal,
+keep conflicts retryable, preserve existing storage modes and honor repository sharing for new loose refs,
+and require refresh/reselection after stale identities. Test the real JSON dispatcher
+against disposable Git with an independent writer at the last read before removal.
+
 ## Cloudflare Tunnel push relay (2026-11-02)
 
 - `systemctl --user` reporting `active` means only cloudflared is running, not connected to the edge or loaded with remote ingress. Acceptance checks Tunnel connectivity,
