@@ -48,8 +48,7 @@ final class InboxHandOffModel {
     /// The main chat's hand-off being tried, by its ask: the same ask sent again sends the first text again under the same
     /// client id, whatever came in on the item since, and the hub and the manager send it once. It stays through a failure
     /// that says nothing about a try under that id (`saysNothing`) and, once a try may have gone (`mayHaveGone`), through
-    /// every answer that leaves that try open (`leavesOpen`), a missing route included. Another ask or a reopened sheet
-    /// is a new hand-off.
+    /// every answer short of success, a missing route included. Another ask or a reopened sheet is a new hand-off.
     @ObservationIgnored private var attempt: Attempt?
     @ObservationIgnored private let itemID: String
     @ObservationIgnored private let deps: Deps
@@ -60,12 +59,10 @@ final class InboxHandOffModel {
         var id: UUID
         /// A try under `id` may have gone.
         var inDoubt = false
-        /// A try under `id` was answered `assistant_in_doubt`, whose receipt the hub drops: every later answer comes from a
-        /// new run at the manager.
-        var rerun = false
     }
 
-    /// An answer that leaves the hand-off in doubt only because a try before it under the same client id may have gone.
+    /// A failed retry of a hand-off already in doubt: whatever it was answered, a try before it under the same client id
+    /// may have gone, and the same ask never sends it again.
     nonisolated private struct InDoubt: Error {}
 
     init(itemID: String, deps: Deps) {
@@ -176,7 +173,9 @@ final class InboxHandOffModel {
     static func words(for error: Error) -> String? {
         if error.isCancellation { return nil }
         if mayHaveGone(error) {
-            return String(localized: "It may have reached the computer already. Check the chat before sending it again.")
+            let look = String(localized: "It may have reached the computer already. Check the chat before sending it again.")
+            guard error is InDoubt else { return look }
+            return look + "\n" + String(localized: "To send it anyway, change the instructions or open Hand to AI again.")
         }
         if error.isOffline { return String(localized: "Can't reach the hub") }
         return error.shown
@@ -204,15 +203,6 @@ final class InboxHandOffModel {
         error.isCancellation || (error.isOffline && !mayHaveGone(error)) || (error as? APIError)?.code == "assistant_offline"
     }
 
-    /// After a try under the same client id may have gone, an answer that leaves that try open: any but what the hub kept
-    /// for that id saying nothing went (`delivered: none`). The hub keeps a relay the phone or a proxy cut off as a bare 5xx
-    /// (`internal`) and gives it back for that id while the manager may have sent the text, a refusal may be the hub's
-    /// (`op_id_reused`) or a fresh run's at the manager, and after `assistant_in_doubt` it kept nothing, so every answer
-    /// comes from a new run.
-    private static func leavesOpen(_ error: Error, after tried: Attempt) -> Bool {
-        tried.rerun || (error as? APIError)?.fields["delivered"] != "none"
-    }
-
     private func handOff(ask: String, text: String) async throws {
         let tried = attempt.flatMap { $0.ask == ask ? $0 : nil } ?? Attempt(ask: ask, text: text, id: UUID())
         attempt = tried
@@ -236,9 +226,10 @@ final class InboxHandOffModel {
         } catch let error where Self.saysNothing(error) {
             throw error
         } catch {
-            var tried = tried
-            tried.rerun = tried.rerun || (error as? APIError)?.code == "assistant_in_doubt"
-            let answer: Error = tried.inDoubt && Self.leavesOpen(error, after: tried) ? InDoubt() : error
+            // After a try that may have gone, no answer under its id says what became of that try: the hub gives back what
+            // it kept for the id, a relay cut off on the way or, after a receipt it dropped (`assistant_in_doubt`, which
+            // may never have reached the phone), a new run's answer.
+            let answer: Error = tried.inDoubt ? InDoubt() : error
             settle(tried, after: answer)
             throw answer
         }

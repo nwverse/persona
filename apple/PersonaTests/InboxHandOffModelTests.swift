@@ -25,6 +25,9 @@ struct InboxHandOffModelTests {
     }
 
     private static let main = SessionKey(machineID: "server", sessionID: "main-1")
+    private static let look = String(localized: "It may have reached the computer already. Check the chat before sending it again.")
+    /// A retry of a hand-off already in doubt, which the same ask never sends again.
+    private static let lookAgain = look + "\n" + String(localized: "To send it anyway, change the instructions or open Hand to AI again.")
     private static let item = """
     {"id":"lark:f1:11","source":"lark","kind":"dm","account":"feishu","account_name":"飞书","title":"Sample Contact","preview":"合入了吗",
      "count":1,"lark":{"feed_id":"f1","is_group":false}}
@@ -119,8 +122,9 @@ struct InboxHandOffModelTests {
         #expect(outcomes == Array(repeating: false, count: 11) + [true])
         let ids = calls.handOffs.map(\.clientID)
         #expect(ids.count == 12)
-        #expect(Set(ids[0...10]).count == 1) // anything that may have gone, or that the hub kept no answer for: the same hand-off asked again
-        #expect(ids[11] != ids[10])          // after an answer saying it failed: a new one
+        // Anything that may have gone, or that the hub kept no answer for, is the same hand-off asked again; once it may
+        // have gone, so is every answer after it, even one saying nothing went.
+        #expect(Set(ids).count == 1)
         #expect(calls.opened.count == 1 && calls.opened.first?.clientID == ids.last)
 
         // A refusal that says nothing was typed is final too: the hub gives it back for that id.
@@ -140,7 +144,7 @@ struct InboxHandOffModelTests {
     }
 
     /// Each answer that leaves open whether the hand-off went keeps its client id on its own, with no try before it in doubt,
-    /// and says to look first; an answer saying nothing went is final.
+    /// and says to look first; on a first try, an answer saying nothing went is final.
     @Test func eachAnswerThatMayHaveGoneKeepsTheClientID() async throws {
         let look = String(localized: "It may have reached the computer already. Check the chat before sending it again.")
         let answers: [Error] = [
@@ -164,39 +168,37 @@ struct InboxHandOffModelTests {
             #expect(second && calls.handOffs.count == 2 && calls.handOffs[0].clientID == calls.handOffs[1].clientID, "\(answer)")
         }
 
-        // After one in doubt, an answer saying nothing went is final: it says so, and the next try is new.
+        // On a first try, an answer saying nothing went is final: it says so, and the next try is new.
         let calls = Calls(), m = model(calls)
-        calls.failures = [APIError(status: 502, message: "no answer", fields: ["code": "timeout"]),
-                          APIError(status: 503, message: "node offline", fields: ["code": "node_unreachable", "delivered": "none"])]
-        _ = await m.send(ask: "a")
+        calls.failures = [APIError(status: 503, message: "node offline", fields: ["code": "node_unreachable", "delivered": "none"])]
         _ = await m.send(ask: "a")
         #expect(m.error == "node offline")
         _ = await m.send(ask: "a")
         let ids = calls.handOffs.map(\.clientID)
-        #expect(ids.count == 3 && ids[0] == ids[1] && ids[2] != ids[1])
+        #expect(ids.count == 2 && ids[0] != ids[1])
     }
 
-    /// Once a try may have gone, a later answer under its client id that doesn't say nothing went is in doubt too: the
-    /// hub keeps a relay the phone or a proxy cut off as a bare `internal` and gives it back for that id, while the
-    /// manager may have sent the text, and a refusal may be the hub's (`op_id_reused`) or a fresh run's at the manager.
-    /// The id stays and the sheet says to look first; only an answer saying nothing went (`delivered: none`) is final.
+    /// Once a try may have gone, every later answer under its client id short of success is in doubt too, even one saying
+    /// nothing went: the hub keeps a relay the phone or a proxy cut off as a bare `internal` and gives it back for that id,
+    /// a refusal may be the hub's (`op_id_reused`), and after a receipt the hub dropped (`assistant_in_doubt`, which the
+    /// phone may never have got) the answer is a new run's, which says nothing about the first try. The id stays, and the
+    /// sheet says to look first and how to send it anyway.
     @Test func anAnswerAfterATryInDoubtStaysInDoubt() async {
         let calls = Calls(), m = model(calls)
-        let look = String(localized: "It may have reached the computer already. Check the chat before sending it again.")
         calls.failures = [URLError(.networkConnectionLost),
                           APIError(status: 502, message: "context canceled", fields: ["code": "internal"]),
                           APIError(status: 409, message: "operation id reused", fields: ["code": "op_id_reused"]),
-                          APIError(status: 502, message: "context canceled", fields: ["code": "internal"]),
+                          APIError(status: 503, message: "node offline", fields: ["code": "node_unreachable", "delivered": "none"]),
                           APIError(status: 409, message: "busy", fields: ["code": "input_draft", "delivered": "none"])]
-        for _ in 0..<4 {
-            let went = await m.send(ask: "a")
-            #expect(!went && m.error == look)
+        var errors: [String?] = []
+        for _ in 0..<5 {
+            _ = await m.send(ask: "a")
+            errors.append(m.error)
         }
-        let refused = await m.send(ask: "a")
-        #expect(!refused && m.error == "busy")
-        _ = await m.send(ask: "a")
+        #expect(errors == [Self.look] + Array(repeating: Self.lookAgain, count: 4))
+        let went = await m.send(ask: "a")
         let ids = calls.handOffs.map(\.clientID)
-        #expect(ids.count == 6 && Set(ids[0...4]).count == 1 && ids[5] != ids[4])
+        #expect(went && ids.count == 6 && Set(ids).count == 1)
 
         // With no earlier try in doubt, the same answer is final and says what it says.
         let c = Calls(), fresh = model(c)
@@ -207,18 +209,23 @@ struct InboxHandOffModelTests {
         #expect(c.handOffs.count == 2 && c.handOffs[0].clientID != c.handOffs[1].clientID)
     }
 
-    /// After `assistant_in_doubt` the hub drops its receipt, so the next try under that client id runs again at the manager:
-    /// even its `delivered: none` (the computer offline by then) is about that run, not the first one, which stays in doubt.
+    /// After `assistant_in_doubt` the hub drops its receipt, so the next try under that client id runs again at the manager,
+    /// and the hub keeps that run's answer: a `delivered: none` (the computer offline by then) comes back for every try with
+    /// that id while the first one may be in the chat. The same ask stays in doubt; another ask is a new hand-off.
     @Test func anAnswerAfterTheHubKeptNothingStaysInDoubt() async {
         let calls = Calls(), m = model(calls)
-        let look = String(localized: "It may have reached the computer already. Check the chat before sending it again.")
+        let offline = APIError(status: 503, message: "node offline", fields: ["code": "node_unreachable", "delivered": "none"])
         calls.failures = [APIError(status: 502, message: "cut off", fields: ["code": "assistant_in_doubt", "delivered": "unknown"]),
-                          APIError(status: 503, message: "node offline", fields: ["code": "node_unreachable", "delivered": "none"])]
+                          offline, offline]
         _ = await m.send(ask: "a")
-        let second = await m.send(ask: "a")
-        #expect(!second && m.error == look)
-        let third = await m.send(ask: "a")
-        #expect(third && calls.handOffs.count == 3 && Set(calls.handOffs.map(\.clientID)).count == 1)
+        for _ in 0..<2 {
+            let went = await m.send(ask: "a")
+            #expect(!went && m.error == Self.lookAgain)
+        }
+        let ids = calls.handOffs.map(\.clientID)
+        #expect(ids.count == 3 && Set(ids).count == 1)
+        let other = await m.send(ask: "b")
+        #expect(other && calls.handOffs.last?.clientID != ids[0])
     }
 
     /// A try that never left (no connection, no hub, the manager offline) says nothing about an earlier one under the
@@ -236,8 +243,7 @@ struct InboxHandOffModelTests {
         }
         let went = await m.send(ask: "a")
         #expect(went && errors == [String(localized: "It may have reached the computer already. Check the chat before sending it again."),
-                                   String(localized: "Can't reach the hub"), nil, "offline",
-                                   String(localized: "It may have reached the computer already. Check the chat before sending it again.")])
+                                   String(localized: "Can't reach the hub"), nil, "offline", Self.lookAgain])
         #expect(calls.handOffs.count == 6 && Set(calls.handOffs.map(\.clientID)).count == 1 && calls.opened.count == 1)
     }
 
@@ -246,15 +252,14 @@ struct InboxHandOffModelTests {
     /// plain message as well; another ask is a new one.
     @Test func aMissingRouteAfterATryInDoubtLooksFirst() async {
         let calls = Calls(), m = model(calls)
-        let look = String(localized: "It may have reached the computer already. Check the chat before sending it again.")
         calls.failures = [URLError(.timedOut), APIError(status: 404, message: "no such item", fields: ["code": "not_found"]),
                           APIError(status: 404, message: "no such item", fields: ["code": "not_found"]),
                           APIError(status: 404, message: "404 page not found")]
         _ = await m.send(ask: "a")
         let second = await m.send(ask: "a")
-        #expect(!second && calls.asked.isEmpty && m.error == look)
+        #expect(!second && calls.asked.isEmpty && m.error == Self.lookAgain)
         let third = await m.send(ask: "a")
-        #expect(!third && calls.asked.isEmpty && m.error == look)
+        #expect(!third && calls.asked.isEmpty && m.error == Self.lookAgain)
         let ids = calls.handOffs.map(\.clientID)
         #expect(ids.count == 3 && Set(ids).count == 1)
         let other = await m.send(ask: "b")
@@ -271,7 +276,7 @@ struct InboxHandOffModelTests {
         let first = await m.send(ask: "a")
         #expect(!first && m.error == look && calls.asked.count == 1)
         let second = await m.send(ask: "a")
-        #expect(!second && m.error == look && calls.asked.count == 1)
+        #expect(!second && m.error == Self.lookAgain && calls.asked.count == 1)
         #expect(calls.handOffs.count == 2 && calls.handOffs[0].clientID == calls.handOffs[1].clientID)
     }
 
@@ -305,8 +310,8 @@ struct InboxHandOffModelTests {
 
     /// An answer that leaves open whether the hand-off went (the node's `delivered: unknown`, a timeout behind the hub or
     /// here, the hub's unknown receipt, the connection dropping after the request went out) says to look before sending
-    /// again; no connection at all says the hub is out of reach. Neither was said: those errors show nothing, and the
-    /// sheet just stopped spinning.
+    /// again, and a retry already in doubt how to send it anyway; no connection at all says the hub is out of reach. Neither
+    /// was said: those errors show nothing, and the sheet just stopped spinning.
     @Test func aFailureThatMayHaveGoneSaysToLookFirst() async {
         let calls = Calls(), m = model(calls)
         calls.failures = [APIError(status: 502, message: "no answer", fields: ["code": "timeout"]),
@@ -314,9 +319,9 @@ struct InboxHandOffModelTests {
                           APIError(status: 202, message: "unknown", fields: ["code": OpReceipt.unknownCode]),
                           URLError(.timedOut), URLError(.networkConnectionLost), URLError(.notConnectedToInternet)]
         let look = String(localized: "It may have reached the computer already. Check the chat before sending it again.")
-        for _ in 0..<5 {
+        for n in 0..<5 {
             let went = await m.send(ask: "a")
-            #expect(!went && m.error == look)
+            #expect(!went && m.error == (n == 0 ? look : Self.lookAgain))
         }
         let went = await m.send(ask: "a")
         #expect(!went && m.error == String(localized: "Can't reach the hub"))

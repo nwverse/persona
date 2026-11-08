@@ -112658,6 +112658,29 @@
       },
       "extractionState" : "manual"
     },
+    "To send it anyway, change the instructions or open Hand to AI again." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "To send it anyway, change the instructions or open Hand to AI again."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "それでも送る場合は、依頼内容を変えるか、「AIに任せる」を開き直してください。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "仍要发送的话，改一下「要它做什么」，或重新打开「交给 AI」"
+          }
+        }
+      },
+      "extractionState" : "manual"
+    },
     "To use it for the main conversation or agents, pick it in Model Settings." : {
       "localizations" : {
         "zh-Hans" : {
