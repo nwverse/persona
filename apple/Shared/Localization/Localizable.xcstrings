@@ -9958,6 +9958,29 @@
       },
       "extractionState": "manual"
     },
+    "A question waiting on you becomes a card in Needs You": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "A question waiting on you becomes a card in Needs You"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "あなたの判断待ちの質問を「要対応」のカードにします"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "等你拍板的问题变成「需要你」里的卡片"
+          }
+        }
+      }
+    },
     "A recording is in progress. Stop it before dictating.": {
       "localizations": {
         "en": {
@@ -12029,29 +12052,6 @@
       },
       "extractionState": "manual"
     },
-    "After a temporary model service error (503 and the like), sends “continue” automatically, up to 3 times": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "After a temporary model service error (503 and the like), sends “continue” automatically, up to 3 times"
-          }
-        },
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "モデルサービスの一時的なエラー（503など）の後、自動で「続けて」を送信します（最大3回）"
-          }
-        },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "模型服务临时出错（503 等）后自动发「继续」，最多 3 次"
-          }
-        }
-      },
-      "extractionState": "manual"
-    },
     "After disconnecting, you'll need to scan the code to pair again.": {
       "localizations": {
         "en": {
@@ -12645,29 +12645,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "各台电脑上的 Agent：看状态、读对话、发消息、开新的"
-          }
-        }
-      },
-      "extractionState": "manual"
-    },
-    "Agents waiting on a deploy, CI or another agent get woken up on time to check for themselves": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Agents waiting on a deploy, CI or another agent get woken up on time to check for themselves"
-          }
-        },
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "デプロイ、CI、別のエージェントを待っているエージェントを時間になったら起こし、自分で確認させます"
-          }
-        },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "在等部署、CI 或另一个 Agent 的，到点叫醒它自己去查"
           }
         }
       },
@@ -19111,6 +19088,29 @@
       },
       "extractionState": "manual"
     },
+    "CI": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "CI"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "CI"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "CI"
+          }
+        }
+      }
+    },
     "Can't reach the proxy (%@)": {
       "extractionState": "manual",
       "localizations": {
@@ -19407,6 +19407,29 @@
         }
       },
       "extractionState": "manual"
+    },
+    "Clean up old branches": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Clean up old branches"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "古いブランチを整理"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "清理旧分支"
+          }
+        }
+      }
     },
     "Connected to the hub through the local proxy": {
       "extractionState": "manual",
@@ -33796,6 +33819,29 @@
         }
       }
     },
+    "Delete these 12 merged branches?": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Delete these 12 merged branches?"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "マージ済みのブランチ 12 本を削除しますか？"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "删掉这 12 个已合并的分支吗？"
+          }
+        }
+      }
+    },
     "Delete “%@”": {
       "extractionState": "manual",
       "localizations": {
@@ -38214,6 +38260,29 @@
       },
       "extractionState": "manual"
     },
+    "Each agent's row says what it is waiting for": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Each agent's row says what it is waiting for"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "各エージェントの行に、何を待っているかを表示"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "列表里每个 Agent 的行写明它在等什么"
+          }
+        }
+      }
+    },
     "Each chat runs Claude in the background in this directory on %@, outside herdr. Choose the model in Settings › Models › Main Chat; change it for a single chat from that chat's menu.": {
       "localizations": {
         "en": {
@@ -38301,29 +38370,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "每次运行都发进这个任务自己的对话，能看到前几次的结果。对话太长或想重来时，点「下次开新对话」，原来的对话还在。"
-          }
-        }
-      },
-      "extractionState": "manual"
-    },
-    "Each time an agent stops a turn, the hub reads its last reply with the triage model (once per turn, using the model chosen in Model Configuration › Session Triage).": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Each time an agent stops a turn, the hub reads its last reply with the triage model (once per turn, using the model chosen in Model Configuration › Session Triage)."
-          }
-        },
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "エージェントが1ターン止まるたびに、ハブはトリアージ用モデルで最後の返信を読みます（1ターンに1回、「モデル設定 › セッションのトリアージ」で選んだモデルを使用）。"
-          }
-        },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Agent 每停下一轮，hub 用分诊模型读它最后的回复（每轮一次，用的是「模型配置 › 会话分诊」里选的模型）。"
           }
         }
       },
@@ -40298,6 +40344,29 @@
       },
       "extractionState": "manual"
     },
+    "Example": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Example"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "例"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "示例"
+          }
+        }
+      }
+    },
     "Excel spreadsheet": {
       "localizations": {
         "en": {
@@ -41181,6 +41250,29 @@
           "stringUnit": {
             "state": "translated",
             "value": "完成，有失败"
+          }
+        }
+      }
+    },
+    "Fix the sign-in test": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Fix the sign-in test"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "サインインのテストを直す"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "修登录测试"
           }
         }
       }
@@ -43784,6 +43876,52 @@
         }
       }
     },
+    "Need Session Triage on. Continuing and waking run the agent on its own model; pushing, deploying and messaging people always wait for you.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Need Session Triage on. Continuing and waking run the agent on its own model; pushing, deploying and messaging people always wait for you."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "セッションのトリアージがオンのときだけ動きます。続行と起床はエージェント自身のモデルでもう 1 ターン実行します。プッシュ・デプロイ・他の人へのメッセージは必ずあなたを待ちます。"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "需要先打开会话分诊。自动继续和到点叫醒会让 Agent 用自己的模型再跑一轮；推代码、部署、给别人发消息一律等你。"
+          }
+        }
+      }
+    },
+    "Model service busy (503)": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Model service busy (503)"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "モデルサービスが混雑（503）"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "模型服务繁忙（503）"
+          }
+        }
+      }
+    },
     "Needs You [State Names]": {
       "extractionState": "manual",
       "localizations": {
@@ -43895,6 +44033,29 @@
           "stringUnit": {
             "state": "translated",
             "value": "未运行"
+          }
+        }
+      }
+    },
+    "Not Yet": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Not Yet"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "まだ"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "先不"
           }
         }
       }
@@ -44059,6 +44220,29 @@
         }
       },
       "extractionState": "manual"
+    },
+    "One reminder after %lld min without your reply. Uses no model.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "One reminder after %lld min without your reply. Uses no model."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "見てから %lld 分返信がなければ一度通知します。モデルは使いません。"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "看过 %lld 分钟没回，提醒一次。不调用模型。"
+          }
+        }
+      }
     },
     "Only if the proxy asks for one. It's kept with this hub's pairing in the keychain.": {
       "extractionState": "manual",
@@ -44312,6 +44496,29 @@
         }
       }
     },
+    "Push the fix to beta?": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Push the fix to beta?"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "修正を beta にプッシュしますか？"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "把修复推到 beta 吗？"
+          }
+        }
+      }
+    },
     "Question [Todo Decisions]": {
       "extractionState": "manual",
       "localizations": {
@@ -44354,6 +44561,29 @@
           "stringUnit": {
             "state": "translated",
             "value": "经代理连上了 %1$@，但它不像 hub（/api/v1/health 没有正常应答）。检查 hub 的地址和端口。"
+          }
+        }
+      }
+    },
+    "Reads the agent's last reply with the triage model, once per turn.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Reads the agent's last reply with the triage model, once per turn."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ターンごとに一度、トリアージモデルでエージェントの最後の返信を読みます。"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "每轮用分诊模型读一次 Agent 最后的回复。"
           }
         }
       }
@@ -44514,6 +44744,52 @@
           "stringUnit": {
             "state": "translated",
             "value": "重新部署，把 node 更新到和 hub 同一版"
+          }
+        }
+      }
+    },
+    "Release 2.4": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Release 2.4"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "リリース 2.4"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "发布 2.4"
+          }
+        }
+      }
+    },
+    "Refactor the sync code": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Refactor the sync code"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "同期コードのリファクタリング"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "重构同步代码"
           }
         }
       }
@@ -51890,6 +52166,29 @@
           "stringUnit": {
             "state": "translated",
             "value": "已看"
+          }
+        }
+      }
+    },
+    "Sends “continue” after a temporary model error, up to 3 times": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sends “continue” after a temporary model error, up to 3 times"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "モデルの一時的なエラーの後に「続けて」を自動送信（最大 3 回）"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "模型临时出错后自动发「继续」，最多 3 次"
           }
         }
       }
@@ -76555,6 +76854,29 @@
         }
       }
     },
+    "Ship the web build": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ship the web build"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Web 版をリリース"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "发布网页版"
+          }
+        }
+      }
+    },
     "Show Fewer [Workflow Phase]": {
       "extractionState": "manual",
       "localizations": {
@@ -77353,6 +77675,75 @@
           "stringUnit": {
             "state": "translated",
             "value": "待唤醒"
+          }
+        }
+      }
+    },
+    "Wakes an agent waiting on a deploy, CI or another agent to check again": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Wakes an agent waiting on a deploy, CI or another agent to check again"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "デプロイ・CI・他のエージェント待ちのエージェントを時間になったら起こして確認させます"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "在等部署、CI 或另一个 Agent 的，到点叫醒它再查"
+          }
+        }
+      }
+    },
+    "Waiting for CI": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Waiting for CI"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "CI 待ち"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "在等 CI"
+          }
+        }
+      }
+    },
+    "Waiting for the deploy": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Waiting for the deploy"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "デプロイ待ち"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "在等部署"
           }
         }
       }
@@ -90683,29 +91074,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "收起任务的要求"
-          }
-        }
-      },
-      "extractionState": "manual"
-    },
-    "Shows what each session is waiting for in the list; finished ones no longer count as Unread": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Shows what each session is waiting for in the list; finished ones no longer count as Unread"
-          }
-        },
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "リストに各セッションの待ち状態を表示します。終わったものは未確認として扱いません"
-          }
-        },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "列表里显示在等什么；做完的不再算完成未看"
           }
         }
       },
@@ -116426,40 +116794,6 @@
       },
       "extractionState": "manual"
     },
-    "When an agent asks you something and you've seen it but haven't replied for %lld minutes, you get one reminder. It follows simple rules and uses no tokens.": {
-      "localizations": {
-        "en": {
-          "variations": {
-            "plural": {
-              "one": {
-                "stringUnit": {
-                  "state": "translated",
-                  "value": "When an agent asks you something and you've seen it but haven't replied for %lld minute, you get one reminder. It follows simple rules and uses no tokens."
-                }
-              },
-              "other": {
-                "stringUnit": {
-                  "state": "translated",
-                  "value": "When an agent asks you something and you've seen it but haven't replied for %lld minutes, you get one reminder. It follows simple rules and uses no tokens."
-                }
-              }
-            }
-          }
-        },
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Agent に質問され、既読のまま %lld 分返信しないと一度だけ通知します。ルールだけで判断し、トークンは使いません。"
-          }
-        },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Agent 问了你、你看过 %lld 分钟还没回，就提醒一次；只按规则判断，不花 token"
-          }
-        }
-      }
-    },
     "When an agent is waiting for you to do something on the computer, tap “I'm Done” in the bottom bar when you're finished and it carries on. Closing the screen also hands it back.": {
       "localizations": {
         "en": {
@@ -116478,29 +116812,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "Agent 等你在电脑上操作时，做完点底栏的「我完成了」，它就接着做。直接关掉画面也算交还。"
-          }
-        }
-      },
-      "extractionState": "manual"
-    },
-    "When an agent is waiting on your decision, its question and options go into Needs You": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "When an agent is waiting on your decision, its question and options go into Needs You"
-          }
-        },
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "エージェントがあなたの判断を待っているとき、質問と選択肢を「要対応」に入れます"
-          }
-        },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Agent 在等你拍板时，问题和选项放进「需要你」"
           }
         }
       },
@@ -117940,29 +118251,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "这些地方都能用"
-          }
-        }
-      },
-      "extractionState": "manual"
-    },
-    "Works only when session triage is on. Continuing and waking make the agent run another turn on its own model. For things like pushing code, deploying or messaging other people, the hub only asks you and never does them itself.": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Works only when session triage is on. Continuing and waking make the agent run another turn on its own model. For things like pushing code, deploying or messaging other people, the hub only asks you and never does them itself."
-          }
-        },
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "セッションのトリアージがオンのときのみ動作します。自動続行と時間指定の起こしでは、エージェントが自分のモデルでもう1ターン実行します。コードのプッシュ、デプロイ、他の人へのメッセージ送信などは、ハブがあなたに確認するだけで自分では行いません。"
-          }
-        },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "只在会话分诊打开时起作用。自动继续和到点叫醒会让 Agent 用它自己的模型再跑一轮。推代码、部署、给别人发消息这类事 hub 只会问你，不会自己做。"
           }
         }
       },

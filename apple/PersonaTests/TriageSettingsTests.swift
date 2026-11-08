@@ -102,4 +102,21 @@ import Testing
         await m.load()
         #expect(m.switches == nil && m.error == nil && !m.unsupported)
     }
+
+    /// Each switch's example (#1413) decodes, and the list's own row draws from it what the switch makes: what it
+    /// waits for, when the hub retries or wakes it, Awaiting Reply with its question.
+    @Test func theExamplesShowWhatEachSwitchDoes() throws {
+        let now = Date()
+        let triaged = try #require(TriageExample.triaged(now: now))
+        #expect(triaged.workLine(now: now) == "在等 CI" && !triaged.awaitsYourReply(muted: false))
+        let retrying = try #require(TriageExample.retrying(now: now))
+        #expect(retrying.work?.on == "transient" && retrying.workLine(now: now)?.hasPrefix("模型服务繁忙（503）") == true
+                && retrying.workLine(now: now)?.contains("重试") == true)
+        let waking = try #require(TriageExample.waking(now: now))
+        #expect(waking.work?.hubWaits == true && waking.workLine(now: now)?.hasPrefix("在等部署") == true)
+        let reply = try #require(TriageExample.awaitingReply(now: now))
+        #expect(reply.awaitsYourReply(muted: false) && reply.listPreview(muted: false) == "删掉这 12 个已合并的分支吗？")
+        let card = TriageExample.decision(now: now)
+        #expect(card.kind == .question && card.questions?.first?.options.map(\.label) == ["推送", "先不"])
+    }
 }
