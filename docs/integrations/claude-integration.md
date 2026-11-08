@@ -307,7 +307,7 @@ Assistant does not enter herdr: node directly launches `zsh -ic '<launcher> "$@"
 - Interrupt: no stdin interrupt in -p; terminate process, resume next message.
 - First user content in headless transcript is a block array; without ai-title, first sentence becomes title.
 
-## Background tasks (trackBackground in `transcript.go`, tested 2026-10-25)
+## Background tasks (trackBackground in `transcript/background.go`, tested 2026-10-25)
 
 - Start: Bash `run_in_background:true` result is `Command running in background with ID: <id>. Output is being written to: <path>.`; async Agent result `Async agent launched … agentId: <id>`; timed-out foreground commands become `…moved to the background (ID: <id>)`.
 - End: `<task-notification><task-id>…</task-id><status>completed|failed|killed</status><summary>…</summary></task-notification>`, in queue-operation enqueue (**not user input, never in queue list**), `queued_command` attachment (commandMode=task-notification, absorbed mid-turn), or idle user message. `TaskStop` / `KillShell` also end tasks.
