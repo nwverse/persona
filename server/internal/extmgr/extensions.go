@@ -75,11 +75,13 @@ type ExtensionView struct {
 	NeedsSetup  []string            `json:"needs_setup,omitempty"`
 	Warnings    []string            `json:"warnings,omitempty"`
 
-	// A plugin from a market (extension_autoupgrade.go): its own auto-upgrade switch, its newer version and what
+	// A plugin from a market (extension_autoupgrade.go): its own auto-upgrade switch, why that switch does not apply
+	// now ("disabled": the extension is switched off; the switch is kept for when it is on), its newer version and what
 	// happened last with an upgrade.
-	AutoUpgrade *bool                 `json:"auto_upgrade,omitempty"`
-	Upgrade     *ExtensionUpgrade     `json:"upgrade,omitempty"`
-	UpgradeNote *ExtensionUpgradeNote `json:"upgrade_note,omitempty"`
+	AutoUpgrade       *bool                 `json:"auto_upgrade,omitempty"`
+	AutoUpgradePaused string                `json:"auto_upgrade_paused,omitempty"`
+	Upgrade           *ExtensionUpgrade     `json:"upgrade,omitempty"`
+	UpgradeNote       *ExtensionUpgradeNote `json:"upgrade_note,omitempty"`
 	// Nodes: its program on each computer it is switched on for (extension_nodes.go), for a plugin with one.
 	Nodes []ExtensionNodeView `json:"nodes,omitempty"`
 	// Sandbox: an installed extension's sandbox and its connections through the egress proxy (extension_sandbox.go).

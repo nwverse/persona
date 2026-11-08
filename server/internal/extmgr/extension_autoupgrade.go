@@ -19,8 +19,9 @@ import (
 // Plugins upgrade themselves from their markets (docs/extensions/extensions.md "Automatic upgrades"): the hub reads the registered
 // markets every few hours and installs a newer version of a plugin it installed from one, when the version asks for
 // nothing more than the user granted and nothing is using the plugin. One that asks for more waits for the user; one
-// that does not come up is rolled back (watchUpgrade) and not tried again. Built-in, hub.json's and plugins installed
-// from elsewhere (a directory, a file, a URL, a remote socket) are never upgraded by the hub.
+// that does not come up is rolled back (watchUpgrade) and not tried again. One switched off waits until it is on again:
+// with no program running, watchUpgrade could not tell whether the new version comes up. Built-in, hub.json's and
+// plugins installed from elsewhere (a directory, a file, a URL, a remote socket) are never upgraded by the hub.
 
 const (
 	extensionUpgradesKey  = "plugin_upgrades"
@@ -40,11 +41,15 @@ const (
 	upgradeAvailable    = "available"        // it goes in at the next look
 	upgradeWaitingIdle  = "waiting_idle"     // the plugin (or the assistant) is busy
 	upgradeNeedsConsent = "needs_permission" // it asks for more: the user confirms it in the app
-	upgradeOff          = "off"              // auto-upgrade is off for it (or for all)
+	upgradeOff          = "off"              // auto-upgrade is off for it (or for all), or paused while it is switched off
 	upgradeSkipped      = "skipped"          // this version rolled back: not tried again
 	upgradeFailed       = "failed"           // installing it failed: tried again after the market's next read
 	upgradeIncompatible = "incompatible"     // no package for this hub, or a newer hub needed
 )
+
+// autoUpgradePausedDisabled is ExtensionView.AutoUpgradePaused for an extension switched off: its own switch is kept,
+// and applies again once the extension is on.
+const autoUpgradePausedDisabled = "disabled"
 
 // pluginUpgradeSettings are the switches and what the hub remembers (the hub's settings, key plugin_upgrades).
 type extensionUpgradeSettings struct {
@@ -339,6 +344,8 @@ func (u *extensionUpgrades) candidateIn(p *extension.Extension, l i18n.Lang) (up
 		up.State, up.Detail = upgradeIncompatible, i18n.Localize(engines, l)
 	case s.Skipped[id] == m.Version:
 		up.State, up.Detail = upgradeSkipped, i18n.T(l, "hub-extension_autoupgrade.skipped")
+	case !p.Record.Enabled: // before asking for consent: the user is not told of versions of one they switched off
+		up.State, up.Detail = upgradeOff, i18n.T(l, "hub-extension_autoupgrade.paused_disabled")
 	case up.RenameFrom != "" && ((s.Auto != nil && !*s.Auto) || slices.Contains(s.Off, id)):
 		up.State = upgradeOff
 	case up.RenameFrom != "":
@@ -569,7 +576,7 @@ func (u *extensionUpgrades) auto(id string) (global, own bool) {
 	return u.settings.Auto == nil || *u.settings.Auto, !slices.Contains(u.settings.Off, id)
 }
 
-// decorate adds to a market plugin's view its switch, its newer version and what happened last.
+// decorate adds to a market plugin's view its switch (and why it is paused), its newer version and what happened last.
 func (u *extensionUpgrades) decorate(ctx context.Context, v *ExtensionView, p *extension.Extension) {
 	if u == nil || p.Record.Source != extension.SourceInstalled || extension.FromMarket(p.Record.Origin) == "" {
 		return
@@ -577,6 +584,9 @@ func (u *extensionUpgrades) decorate(ctx context.Context, v *ExtensionView, p *e
 	u.load(ctx)
 	_, own := u.auto(p.Record.ID)
 	v.AutoUpgrade = &own
+	if !p.Record.Enabled {
+		v.AutoUpgradePaused = autoUpgradePausedDisabled
+	}
 	if up, _, _, ok := u.candidateIn(p, u.h.contextLang(ctx)); ok {
 		v.Upgrade = &up
 	}
