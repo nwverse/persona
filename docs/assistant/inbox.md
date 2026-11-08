@@ -560,15 +560,16 @@ which users saw as one action: clear this batch they do not need to handle now. 
   iOS and Mac (`InboxHandOffModel`) send it with one `client_id` per hand-off. Whenever the answer leaves open whether the text went (no answer or a timeout, the connection lost
   midway, a 5xx without a `code` from something in front of the hub or from the hub unable to keep its receipt, `assistant_in_doubt`, `delivered: unknown` or `yes`, the node lost
   without `delivered: none`, a pending (`202 {"state":"pending"}`) or unknown receipt), the sheet says to check the chat before sending it again, and the same ask sent again is the
-  same hand-off: its first text, not one rebuilt from the item (which may have changed since), under the same id. From then on every answer under that id short of success is taken the
-  same way, even one saying nothing went (`delivered: none`): the hub gives back what it kept for that id, which may be a relay the phone or a proxy cut off (a bare `internal`), its
-  own refusal (`op_id_reused`) or, after `assistant_in_doubt` (whose receipt it drops, and which may never have reached the phone), a new run's answer at the manager, none of them
-  about the first try; the sheet then adds that changing the instructions or reopening the sheet sends it anyway. A 404 / 405 then says to look first instead of falling back to the
-  plain message, and a plain message that may have gone is not sent again by the same ask. The id and first text are also kept through no connection, a cancelled request and
-  `assistant_offline`, which say nothing about an earlier try. On a first try, any other answer is final for that id, and a failed load of the item, which sent nothing, says the hub
-  can't be reached (a timeout or a bare 5xx) or what went wrong. The hub answers what it kept for that id or runs it again, and the manager's `session.send_once` drops a repeat, so the
-  same ask from one sheet hands the item over once (except a hand-off that started the main conversation and whose record the manager lost); another ask or a reopened sheet is a new
-  hand-off. Once it went, they open the main conversation on the message as sent under that id (its transcript copy carries it and takes the bubble's place; no bubble when the copy is
+  same hand-off: its first text, not one rebuilt from the item (which may have changed since), under the same id. From then on every other answer under that id short of success
+  (all but the three below that say nothing about an earlier try) is taken the same way, even one saying nothing went (`delivered: none`): the hub gives back what it kept for that id,
+  which may be a relay the phone or a proxy cut off (a bare `internal`), its own refusal (`op_id_reused`) or, after `assistant_in_doubt` (whose receipt it drops, and which may never
+  have reached the phone), a new run's answer at the manager. The phone can't tell which of these it got, so none is taken as final, and the sheet adds that changing the instructions
+  or reopening the sheet sends it anyway. A 404 / 405 then says to look first instead of falling back to the plain message, and a plain message that may have gone is not sent again
+  by the same ask. On any try, the id and first text are also kept through no connection, a cancelled request and `assistant_offline`, which say nothing about an earlier try and show
+  their own words. On a first try, any other answer is final for that id, and a failed load of the item, which sent nothing, says the hub can't be reached (a timeout or a bare 5xx) or
+  what went wrong. The hub answers what it kept for that id or runs it again, and the manager's `session.send_once` drops a repeat, so the same ask sent again from one sheet, with no
+  other ask in between, hands the item over once (except a hand-off that started the main conversation and whose record the manager lost); another ask or a reopened sheet is a new
+  hand-off, and so is the first ask again after another. Once it went, they open the main conversation on the message as sent under that id (its transcript copy carries it and takes the bubble's place; no bubble when the copy is
   there already) and read the assistant settings again, since the hand-off may have started the main conversation. Like every other inbox request from iOS and Mac, it names no manager,
   so it goes to the default manager.
   Android still sends plain chat text without write-back (#1384); the web, iOS and Mac fall back to that when the hub or manager answers 404 / 405. On iOS and Mac the fallback goes

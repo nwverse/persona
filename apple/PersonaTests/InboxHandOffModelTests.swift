@@ -26,7 +26,7 @@ struct InboxHandOffModelTests {
 
     private static let main = SessionKey(machineID: "server", sessionID: "main-1")
     private static let look = String(localized: "It may have reached the computer already. Check the chat before sending it again.")
-    /// A retry of a hand-off already in doubt, which the same ask never sends again.
+    /// A failed retry of a hand-off already in doubt, which the same ask never hands over under a new id.
     private static let lookAgain = look + "\n" + String(localized: "To send it anyway, change the instructions or open Hand to AI again.")
     private static let item = """
     {"id":"lark:f1:11","source":"lark","kind":"dm","account":"feishu","account_name":"飞书","title":"Sample Contact","preview":"合入了吗",
@@ -127,7 +127,7 @@ struct InboxHandOffModelTests {
         #expect(Set(ids).count == 1)
         #expect(calls.opened.count == 1 && calls.opened.first?.clientID == ids.last)
 
-        // A refusal that says nothing was typed is final too: the hub gives it back for that id.
+        // On a new hand-off, a refusal saying nothing went is final: the hub gives it back for that id.
         calls.failures = [APIError(status: 503, message: "node offline", fields: ["code": "node_unreachable", "delivered": "none"])]
         _ = await m.send(ask: "a")
         _ = await m.send(ask: "a")
