@@ -33,8 +33,11 @@ Use a true enrollment timestamp, not the timestamp rewritten by prefs or grant
 maintenance. Protect active owners and coalesce APNs acceptance timestamps; lack
 of pre-migration delivery history needs observation grace, not immediate expiry.
 
-Publish a registration only after its ownership check and retirement commit. A
-process mutex cannot fence another blue-green slot: use a Postgres retirement
+Publish a registration only after its ownership check and retirement commit.
+A BEFORE INSERT check must allow a prefs upsert that retains the old owner in its
+ON CONFLICT UPDATE; check the actual updated owner before rejecting it. Targeted
+lifecycle tests do not replace the full device/prefs contract suite.
+A process mutex cannot fence another blue-green slot: use a Postgres retirement
 ledger and serialized old-writer triggers. A late APNs gone response must compare
 against the persisted registration, not just one process's memory. Fence all
 retirement reasons; fresh authenticated re-pairing needs a live new owner plus

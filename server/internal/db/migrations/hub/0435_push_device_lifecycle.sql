@@ -46,8 +46,11 @@ BEGIN
                 OR NEW.push_key IS DISTINCT FROM OLD.push_key) THEN
             RAISE EXCEPTION 'push registration ownership changed' USING ERRCODE = '23514';
         END IF;
-        IF (current_owner <> '' AND current_owner <> new_owner)
-            OR EXISTS (SELECT 1 FROM device_tokens WHERE id = new_owner AND revoked_at IS NOT NULL) THEN
+        -- INSERT ... ON CONFLICT prefs writes may present another caller's
+        -- credential but retain the existing owner in the actual UPDATE row.
+        IF (TG_OP = 'UPDATE' AND current_owner <> '' AND current_owner <> new_owner)
+            OR ((TG_OP = 'UPDATE' OR current_owner IS NULL)
+                AND EXISTS (SELECT 1 FROM device_tokens WHERE id = new_owner AND revoked_at IS NOT NULL)) THEN
             RAISE EXCEPTION 'push registration ownership changed' USING ERRCODE = '23514';
         END IF;
     END IF;
