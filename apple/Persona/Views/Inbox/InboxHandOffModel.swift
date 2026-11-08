@@ -47,8 +47,8 @@ final class InboxHandOffModel {
     @ObservationIgnored private var doneChosen = false
     /// The main chat's hand-off being tried: the same text sent again after no answer, while the hub still runs it
     /// (its receipt says pending), after the hub said it may have gone (`assistant_in_doubt`) or after the manager never
-    /// got it (`assistant_offline`) goes with the same client id, which the manager sends once. Any other answer is
-    /// final for that id, so the next try takes a new one.
+    /// got it (`assistant_offline`) goes with the same client id, which the manager sends once. The hub keeps any other
+    /// answer under that id and gives it back for every retry, so the next try takes a new one.
     @ObservationIgnored private var attempt: (text: String, id: UUID)?
     @ObservationIgnored private let itemID: String
     @ObservationIgnored private let deps: Deps
@@ -134,9 +134,23 @@ final class InboxHandOffModel {
             if markDone { deps.markDone() }
             return true
         } catch {
-            if let shown = error.shown { self.error = shown }
+            self.error = Self.words(for: error)
             return false
         }
+    }
+
+    /// What the sheet says for a failed send. Timeouts and no network are quiet elsewhere, but here the sheet stays open
+    /// on them: a send that may have gone says to look first, since a new try may type it twice (a connection lost midway
+    /// counts as offline but may have carried the request); no network at all says so.
+    static func words(for error: Error) -> String? {
+        if error.isCancellation { return nil }
+        let api = error as? APIError, code = api?.code, delivered = api?.fields["delivered"]
+        if (error as? URLError)?.code == .networkConnectionLost || error.isTimeout || code == "timeout" || delivered == "unknown"
+            || code == OpReceipt.unknownCode || code == OpReceipt.pendingCode || (code == "node_unreachable" && delivered != "none") {
+            return String(localized: "It may have reached the computer already. Check the chat before sending it again.")
+        }
+        if error.isOffline { return String(localized: "Can't reach the hub") }
+        return error.shown
     }
 
     private func handOff(_ text: String) async throws {

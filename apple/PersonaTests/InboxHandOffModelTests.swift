@@ -124,6 +124,25 @@ struct InboxHandOffModelTests {
         #expect(m.error == nil)
     }
 
+    /// An answer that leaves open whether the hand-off went (the node's `delivered: unknown`, a timeout behind the hub or
+    /// here, the hub's unknown receipt, the connection dropping after the request went out) says to look before sending
+    /// again; no connection at all says the hub is out of reach. Neither was said: those errors show nothing, and the
+    /// sheet just stopped spinning.
+    @Test func aFailureThatMayHaveGoneSaysToLookFirst() async {
+        let calls = Calls(), m = model(calls)
+        calls.failures = [APIError(status: 502, message: "no answer", fields: ["code": "timeout"]),
+                          APIError(status: 502, message: "typing broke off", fields: ["code": "internal", "delivered": "unknown"]),
+                          APIError(status: 202, message: "unknown", fields: ["code": OpReceipt.unknownCode]),
+                          URLError(.timedOut), URLError(.networkConnectionLost), URLError(.notConnectedToInternet)]
+        let look = String(localized: "It may have reached the computer already. Check the chat before sending it again.")
+        for _ in 0..<5 {
+            let went = await m.send(ask: "a")
+            #expect(!went && m.error == look)
+        }
+        let went = await m.send(ask: "a")
+        #expect(!went && m.error == String(localized: "Can't reach the hub"))
+    }
+
     @Test func anOlderHubGetsThePlainMessage() async {
         let calls = Calls(), m = model(calls)
         calls.failures = [APIError(status: 404, message: "404 page not found")]
@@ -164,7 +183,7 @@ struct InboxHandOffModelTests {
         hub.on("POST", path) { _ in Data(answers.next().utf8) }
         let m = model(Calls(), hub: hub.client)
         let first = await m.send(ask: "a")
-        #expect(!first && m.error != nil)
+        #expect(!first && m.error == String(localized: "It may have reached the computer already. Check the chat before sending it again."))
         let second = await m.send(ask: "a")
         #expect(second)
         let ids = try hub.sent("POST", path).map { try JSON.decoder.decode([String: String].self, from: try #require($0.body))["client_id"] }
