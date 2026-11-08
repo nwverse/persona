@@ -359,7 +359,7 @@ func wireSamples(t *testing.T) map[string][]wireSample {
 		map[string]any{"/interaction/kind": "screen", "/interaction/secret": true, "/interaction/dialog": nil}, "server/internal/screen/secret.go: SecretPrompt", "apple/Shared/Models.swift: Interaction.secret")
 	ixs = append(ixs, secret)
 	add("interactions", "interactions_list", "待处理列表使用与事件相同的交互类型。", "interactions", httpJSON(map[string]any{"interactions": ixs}),
-		map[string]any{"/interactions/0/kind": "question", "/interactions/0/questions/1/multi_select": true, "/interactions/4/secret": true}, "server/internal/hub/elicitation.go: Hub.interactionRoutes", "apple/Shared/Models.swift: Interaction")
+		map[string]any{"/interactions/0/kind": "question", "/interactions/0/questions/1/multi_select": true, "/interactions/4/secret": true}, "server/internal/hub/http.go: Hub.routes", "apple/Shared/Models.swift: Interaction")
 	add("interactions", "interaction_resolved", "已处理事件仅用交互标识撤回卡片。", "event", ws(map[string]any{"type": "interaction_resolved", "id": "ix_question"}), map[string]any{"/type": "interaction_resolved", "/id": "ix_question"}, "server/internal/hub/hub.go: Hub.resolve", "apple/Shared/LiveConnection.swift: ServerEvent.decode")
 
 	working := sessions[0]

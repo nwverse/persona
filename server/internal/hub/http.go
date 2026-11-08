@@ -1,6 +1,7 @@
 package hub
 
 import (
+	"cmp"
 	"context"
 	"encoding/base64"
 	"encoding/json"
@@ -9,6 +10,7 @@ import (
 	"net/http"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -46,7 +48,13 @@ func (h *Hub) routes() http.Handler {
 	h.sessionRoutes(api)
 	h.paneRoutes(api)
 	h.nodeDoctorRoutes(api)
-	h.interactionRoutes(api)
+	api.HandleFunc("GET /api/v1/interactions", func(w http.ResponseWriter, r *http.Request) {
+		ixs := visibleInteractions(h.pendingInteractions(), h.requestHasElicitation(r))
+		if em := extensionManager(r); em != "" { // an extension's token: its manager's cards only
+			ixs = slices.DeleteFunc(ixs, func(ix proto.Interaction) bool { return cmp.Or(ix.Manager, assistantwire.AssistantID) != em })
+		}
+		writeJSON(w, map[string]any{"interactions": h.withMuted(ixs)})
+	})
 	api.HandleFunc("GET /api/v1/ops/{id}", h.getClientOp)
 	h.fleetRoutesRelayed(api) // resolve, history, seen: the manager's (fleet_link.go)
 	h.deviceRoutes(api)
