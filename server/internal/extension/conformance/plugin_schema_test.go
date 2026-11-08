@@ -426,6 +426,23 @@ func jsonFields(g reflect.Type, out map[string]goField) {
 func asString(v any) string { s, _ := v.(string); return s }
 func asSlice(v any) []any   { s, _ := v.([]any); return s }
 
+// The hub refuses an empty list for any of its points ("contributes.<point>: empty"): the manifest schema's list for
+// each of them holds at least one item, or an empty one passes the SDK's and a catalog's validation, then fails at
+// install.
+func TestManifestSchemaContributesListsAreNotEmpty(t *testing.T) {
+	props := loadSchemas(t).def(t, "Contributes")["properties"].(map[string]any)
+	for name := range extension.Points {
+		list, ok := props[name].(map[string]any)
+		if !ok {
+			t.Errorf("contributes.%s: the hub has the point, manifest.schema.json Contributes does not list it", name)
+			continue
+		}
+		if list["minItems"] != float64(1) {
+			t.Errorf("contributes.%s: minItems %v, want 1 (the hub refuses an empty list)", name, list["minItems"])
+		}
+	}
+}
+
 // The manifest schema's events.subscribe enum is the events the hub has (extension.EventTopics): an event added to one
 // and not the other makes a manifest that the server accepts fail the schema, or the reverse.
 func TestManifestSchemaListsEveryEventTopic(t *testing.T) {

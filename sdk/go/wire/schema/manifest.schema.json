@@ -276,30 +276,30 @@
       "minProperties": 1,
       "additionalProperties": true,
       "properties": {
-        "connectors": {"type": "array", "items": {"$ref": "#/$defs/ConnectorItem"}},
-        "voice": {"type": "array", "items": {"$ref": "#/$defs/NamedItem"}},
-        "computer": {"type": "array", "items": {"$ref": "#/$defs/NamedItem"}},
-        "browser": {"type": "array", "items": {"$ref": "#/$defs/NamedItem"}},
-        "quota": {"type": "array", "items": {"$ref": "#/$defs/QuotaItem"}},
-        "providers": {"type": "array", "items": {"$ref": "#/$defs/ProviderItem"}},
-        "api": {"type": "array", "items": {"$ref": "#/$defs/APIItem"}},
-        "assistant": {"type": "array", "items": {"$ref": "#/$defs/AssistantItem"}},
-        "mcp_servers": {"type": "array", "items": {"$ref": "#/$defs/MCPServerItem"}},
-        "ui": {"type": "array", "items": {"$ref": "#/$defs/UIItem"}},
-        "agent_sources": {"type": "array", "items": {"$ref": "#/$defs/AgentSourceItem"}},
-        "channel": {"type": "array", "items": {"$ref": "#/$defs/ChannelItem"}},
-        "events": {"type": "array", "items": {"$ref": "#/$defs/EventsItem"}},
-        "shortcuts": {"type": "array", "items": {"$ref": "#/$defs/ShortcutItem"}},
-        "skills": {"type": "array", "items": {"$ref": "#/$defs/SkillItem"}},
-        "prompts": {"type": "array", "items": {"$ref": "#/$defs/PromptItem"}},
-        "themes": {"type": "array", "items": {"$ref": "#/$defs/ThemeItem"}},
-        "looks": {"type": "array", "items": {"$ref": "#/$defs/LookItem"}},
-        "triage_templates": {"type": "array", "items": {"$ref": "#/$defs/TriageTemplateItem"}},
-        "agent_filters": {"type": "array", "items": {"$ref": "#/$defs/AgentFilterItem"}},
-        "tunnels": {"type": "array", "items": {"$ref": "#/$defs/TunnelItem"}},
-        "error_reports": {"type": "array", "items": {"$ref": "#/$defs/ErrorReportsItem"}},
-        "auth_relay": {"type": "array", "items": {"$ref": "#/$defs/AuthRelayItem"}},
-        "messaging": {"type": "array", "items": {"$ref": "messaging.schema.json#/$defs/MessagingItem"}}
+        "connectors": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/ConnectorItem"}},
+        "voice": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/NamedItem"}},
+        "computer": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/NamedItem"}},
+        "browser": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/NamedItem"}},
+        "quota": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/QuotaItem"}},
+        "providers": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/ProviderItem"}},
+        "api": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/APIItem"}},
+        "assistant": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/AssistantItem"}},
+        "mcp_servers": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/MCPServerItem"}},
+        "ui": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/UIItem"}},
+        "agent_sources": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/AgentSourceItem"}},
+        "channel": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/ChannelItem"}},
+        "events": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/EventsItem"}},
+        "shortcuts": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/ShortcutItem"}},
+        "skills": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/SkillItem"}},
+        "prompts": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/PromptItem"}},
+        "themes": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/ThemeItem"}},
+        "looks": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/LookItem"}},
+        "triage_templates": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/TriageTemplateItem"}},
+        "agent_filters": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/AgentFilterItem"}},
+        "tunnels": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/TunnelItem"}},
+        "error_reports": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/ErrorReportsItem"}},
+        "auth_relay": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/AuthRelayItem"}},
+        "messaging": {"type": "array", "minItems": 1, "items": {"$ref": "messaging.schema.json#/$defs/MessagingItem"}}
       }
     },
     "SkillItem": {
@@ -521,13 +521,13 @@
         "hosts": {"type": "array", "items": {"type": "string"}},
         "agent_tools": {"type": "array", "items": {"type": "string"}},
         "unlisted": {"type": "array", "items": {"type": "string"}},
-        "confirm_always": {"type": "array", "items": {"type": "string"}},
+        "confirm_always": {"type": "array", "items": {"type": "string", "minLength": 1}},
         "poll_seconds": {"type": "integer", "minimum": 0},
         "kinds": {"type": "array", "items": {"type": "string"}},
         "kind_descriptions": {"type": "object", "additionalProperties": {"type": "string"}},
         "archive_sources": {"type": "array", "maxItems": 4, "items": {"type": "string", "pattern": "^[a-z][a-z0-9]*$"}},
         "meta_description": {"type": "string", "maxLength": 4000},
-        "cli": {"type": "string"},
+        "cli": {"type": "string", "pattern": "^[a-z][a-z0-9-]{0,31}$", "not": {"enum": ["personad", "lark-cli", "sh", "bash", "git", "gh", "curl", "python3", "node", "claude", "codex"]}},
         "sends_as_user": {"type": "boolean", "description": "The connector sends messages in the user's name by itself, not through the hub's write gate (a read tool that also replies, say). Its program may then record each one in the sent-as-user ledger with sent.record, and the install preview says so."}
       },
       "required": ["id", "name", "capabilities"]
@@ -561,7 +561,7 @@
         "description": {"type": "string"},
         "kind": {"type": "string", "enum": ["launcher", "api"]},
         "api": {"type": "string", "enum": ["messages", "responses"]},
-        "base_url": {"type": "string", "pattern": "^https?://"},
+        "base_url": {"type": "string", "pattern": "^https?://([^/?#@\\s]*@)?[^/?#@\\s]+([/?#]|$)"},
         "model": {"type": "string"},
         "small_model": {"type": "string"},
         "models": {"type": "array", "items": {"$ref": "#/$defs/ProviderModel"}},
@@ -636,10 +636,14 @@
         "icon": {"$ref": "view.schema.json#/$defs/NavIcon", "description": "nav_page only."},
         "opens": {"type": "string", "description": "overview_card, capsule_card and widget only: a nav_page or extension_page of the same extension."},
         "connector": {"type": "string", "description": "inbox_item only: one of the extension's own connectors."},
-        "families": {"type": "array", "minItems": 1, "items": {"$ref": "view.schema.json#/$defs/WidgetFamily"}, "description": "widget only (and needed there): the sizes it can be drawn at."},
+        "families": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"$ref": "view.schema.json#/$defs/WidgetFamily"}, "description": "widget only (and needed there): the sizes it can be drawn at."},
         "refresh_minutes": {"type": "integer", "minimum": 15, "maximum": 1440, "description": "widget only: how often the widget is drawn again on its own (30 when not said)."}
       },
-      "required": ["id", "title", "placement"]
+      "required": ["id", "title", "placement"],
+      "anyOf": [
+        {"properties": {"placement": {"const": "widget"}}, "required": ["families"]},
+        {"properties": {"placement": {"not": {"const": "widget"}}}, "not": {"anyOf": [{"required": ["families"]}, {"required": ["refresh_minutes"]}]}}
+      ]
     },
     "AgentSourceItem": {
       "type": "object",
@@ -714,7 +718,11 @@
         "choices": {"type": "array", "minItems": 1, "maxItems": 50, "items": {"$ref": "view.schema.json#/$defs/Choice"}, "description": "choice only."},
         "required": {"type": "boolean"}
       },
-      "required": ["name", "title", "kind"]
+      "required": ["name", "title", "kind"],
+      "anyOf": [
+        {"properties": {"kind": {"const": "choice"}}, "required": ["choices"]},
+        {"properties": {"kind": {"not": {"const": "choice"}}}, "not": {"required": ["choices"]}}
+      ]
     },
     "ShortcutParamKind": {"type": "string", "enum": ["text", "number", "toggle", "choice"]}
   }
