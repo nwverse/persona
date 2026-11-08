@@ -50,11 +50,11 @@ func TestUsageLimitTriage(t *testing.T) {
 		w, by, skip := triageRules(limitTurn("s1", reset, tc.resumes), time.UTC, "")
 		if skip || by != "rule" || w == nil || w.Phase != proto.WorkBlocked || w.On != proto.WaitExternal || w.ResetsAt == nil ||
 			!w.ResetsAt.Equal(reset) || w.Wait != "" || len(w.Questions) != 0 || !managerWaits(w) ||
-			!strings.Contains(w.Line, reset.UTC().Format("15:04")) || !strings.Contains(w.Line, tc.want) {
+			!strings.Contains(w.Line, limitClock(reset, time.Now(), time.UTC)) || !strings.Contains(w.Line, tc.want) {
 			t.Errorf("resumes %v: %+v %s", tc.resumes, w, by)
 		}
 	}
-	if w, _, _ := triageRules(limitTurn("s1", reset, true), time.UTC, i18n.En); !strings.Contains(w.Line, "by itself at "+reset.UTC().Format("15:04")) {
+	if w, _, _ := triageRules(limitTurn("s1", reset, true), time.UTC, i18n.En); !strings.Contains(w.Line, "by itself at "+limitClock(reset, time.Now(), time.UTC)) {
 		t.Errorf("in English: %q", w.Line)
 	}
 
