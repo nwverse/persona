@@ -60,6 +60,9 @@ final class InboxHandOffModel {
         var id: UUID
         /// A try under `id` may have gone.
         var inDoubt = false
+        /// A try under `id` was answered `assistant_in_doubt`, whose receipt the hub drops: every later answer comes from a
+        /// new run at the manager.
+        var rerun = false
     }
 
     /// An answer that leaves the hand-off in doubt only because a try before it under the same client id may have gone.
@@ -132,13 +135,19 @@ final class InboxHandOffModel {
         sending = true
         error = nil
         defer { sending = false }
-        do {
-            let text: String
-            if target == .main, let pending = attempt, pending.ask == ask {
-                text = pending.text
-            } else {
+        let text: String
+        if target == .main, let pending = attempt, pending.ask == ask {
+            text = pending.text
+        } else {
+            do {
                 text = InboxHandOffSheet.message(try await deps.load(itemID), ask: ask)
+            } catch {
+                // Nothing went yet: it never says to look in the chat.
+                self.error = error.isOffline || Self.mayHaveGone(error) ? String(localized: "Can't reach the hub") : error.shown
+                return false
             }
+        }
+        do {
             switch target {
             case .main:
                 try await handOff(ask: ask, text: text)
@@ -168,10 +177,10 @@ final class InboxHandOffModel {
     }
 
     /// A failed send whose text may still have reached the conversation: no answer (a timeout here or behind the hub, the
-    /// connection lost after the request went out, a bare 5xx from something in front of the hub, whose own answers carry
-    /// a `code`), the hub's pending or unknown receipt, or an answer saying so (`assistant_in_doubt`, `delivered: unknown`
-    /// or `yes`, the node lost without `delivered: none`). The sheet says to look first, and the same ask again is the same
-    /// hand-off.
+    /// connection lost after the request went out, a 5xx without a `code` from something in front of the hub or from the
+    /// hub unable to keep its receipt), the hub's pending or unknown receipt, or an answer saying so (`assistant_in_doubt`,
+    /// `delivered: unknown` or `yes`, the node lost without `delivered: none`). The sheet says to look first, and the same
+    /// ask again is the same hand-off.
     private static func mayHaveGone(_ error: Error) -> Bool {
         if error is InDoubt { return true }
         if error.isCancellation { return false }
@@ -189,12 +198,13 @@ final class InboxHandOffModel {
         error.isCancellation || (error.isOffline && !mayHaveGone(error)) || (error as? APIError)?.code == "assistant_offline"
     }
 
-    /// After a try under the same client id may have gone, an answer that leaves that try open: any but one saying nothing
-    /// went (`delivered: none`). The hub keeps a relay the phone or a proxy cut off as a bare 5xx (`internal`) and gives it
-    /// back for that id while the manager may have sent the text, and a refusal may be the hub's (`op_id_reused`) or a
-    /// fresh run's at the manager, which say nothing about the first try either.
-    private static func leavesOpen(_ error: Error) -> Bool {
-        (error as? APIError)?.fields["delivered"] != "none"
+    /// After a try under the same client id may have gone, an answer that leaves that try open: any but what the hub kept
+    /// for that id saying nothing went (`delivered: none`). The hub keeps a relay the phone or a proxy cut off as a bare 5xx
+    /// (`internal`) and gives it back for that id while the manager may have sent the text, a refusal may be the hub's
+    /// (`op_id_reused`) or a fresh run's at the manager, and after `assistant_in_doubt` it kept nothing, so every answer
+    /// comes from a new run.
+    private static func leavesOpen(_ error: Error, after tried: Attempt) -> Bool {
+        tried.rerun || (error as? APIError)?.fields["delivered"] != "none"
     }
 
     private func handOff(ask: String, text: String) async throws {
@@ -220,7 +230,9 @@ final class InboxHandOffModel {
         } catch let error where Self.saysNothing(error) {
             throw error
         } catch {
-            let answer: Error = tried.inDoubt && Self.leavesOpen(error) ? InDoubt() : error
+            var tried = tried
+            tried.rerun = tried.rerun || (error as? APIError)?.code == "assistant_in_doubt"
+            let answer: Error = tried.inDoubt && Self.leavesOpen(error, after: tried) ? InDoubt() : error
             settle(tried, after: answer)
             throw answer
         }

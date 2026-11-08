@@ -20,6 +20,8 @@ struct InboxHandOffModelTests {
         var askFailures: [Error] = []
         /// The item's preview from the next load on, as when a new message came in.
         var preview: String?
+        /// What loading the item throws first, in order; then it loads.
+        var loadFailures: [Error] = []
     }
 
     private static let main = SessionKey(machineID: "server", sessionID: "main-1")
@@ -31,6 +33,7 @@ struct InboxHandOffModelTests {
     private func model(_ calls: Calls, hub: APIClient? = nil) -> InboxHandOffModel {
         InboxHandOffModel(itemID: "lark:f1:11", deps: .init(
             load: { _ in
+                if !calls.loadFailures.isEmpty { throw calls.loadFailures.removeFirst() }
                 var it = try JSON.decoder.decode(InboxItem.self, from: Data(Self.item.utf8))
                 if let p = calls.preview { it.preview = p }
                 return it
@@ -100,7 +103,7 @@ struct InboxHandOffModelTests {
 
     @Test func aRetryKeepsTheClientIDOnlyWhileTheHandOffMayHaveGone() async {
         let calls = Calls(), m = model(calls)
-        calls.failures = [APIError(status: 502, message: "cut off", fields: ["code": "assistant_in_doubt"]),
+        calls.failures = [APIError(status: 504, message: "Gateway Timeout"),
                           URLError(.timedOut),
                           APIError(status: 503, message: "offline", fields: ["code": "assistant_offline"]),
                           APIError(status: 502, message: "no answer", fields: ["code": "timeout"]),
@@ -143,6 +146,7 @@ struct InboxHandOffModelTests {
         let answers: [Error] = [
             APIError(status: 502, message: "no answer", fields: ["code": "timeout"]),
             APIError(status: 502, message: "cut off", fields: ["code": "assistant_in_doubt", "delivered": "unknown"]),
+            APIError(status: 502, message: "cut off", fields: ["code": "assistant_in_doubt"]),
             APIError(status: 502, message: "typing broke off", fields: ["code": "internal", "delivered": "unknown"]),
             APIError(status: 502, message: "typed, then failed", fields: ["code": "internal", "delivered": "yes"]),
             APIError(status: 502, message: "node gone", fields: ["code": "node_unreachable"]),
@@ -201,6 +205,20 @@ struct InboxHandOffModelTests {
         #expect(fresh.error == "context canceled")
         _ = await fresh.send(ask: "a")
         #expect(c.handOffs.count == 2 && c.handOffs[0].clientID != c.handOffs[1].clientID)
+    }
+
+    /// After `assistant_in_doubt` the hub drops its receipt, so the next try under that client id runs again at the manager:
+    /// even its `delivered: none` (the computer offline by then) is about that run, not the first one, which stays in doubt.
+    @Test func anAnswerAfterTheHubKeptNothingStaysInDoubt() async {
+        let calls = Calls(), m = model(calls)
+        let look = String(localized: "It may have reached the computer already. Check the chat before sending it again.")
+        calls.failures = [APIError(status: 502, message: "cut off", fields: ["code": "assistant_in_doubt", "delivered": "unknown"]),
+                          APIError(status: 503, message: "node offline", fields: ["code": "node_unreachable", "delivered": "none"])]
+        _ = await m.send(ask: "a")
+        let second = await m.send(ask: "a")
+        #expect(!second && m.error == look)
+        let third = await m.send(ask: "a")
+        #expect(third && calls.handOffs.count == 3 && Set(calls.handOffs.map(\.clientID)).count == 1)
     }
 
     /// A try that never left (no connection, no hub, the manager offline) says nothing about an earlier one under the
@@ -306,6 +324,22 @@ struct InboxHandOffModelTests {
         #expect(calls.handOffs.count == 6 && Set(calls.handOffs.map(\.clientID)).count == 1)
     }
 
+    /// Loading the item sent nothing: a timeout or a proxy's 5xx says the hub is out of reach, not to look in the chat.
+    @Test func aFailedLoadSaysTheHubIsOutOfReach() async {
+        let calls = Calls(), m = model(calls)
+        let hub = String(localized: "Can't reach the hub")
+        calls.loadFailures = [URLError(.timedOut), APIError(status: 502, message: "Bad Gateway"),
+                              APIError(status: 404, message: "no such item", fields: ["code": "not_found"])]
+        var errors: [String?] = []
+        for _ in 0..<3 {
+            _ = await m.send(ask: "a")
+            errors.append(m.error)
+        }
+        #expect(errors == [hub, hub, "no such item"] && calls.handOffs.isEmpty)
+        let went = await m.send(ask: "a")
+        #expect(went && calls.handOffs.count == 1)
+    }
+
     @Test func anOlderHubGetsThePlainMessage() async {
         let calls = Calls(), m = model(calls)
         calls.failures = [APIError(status: 404, message: "404 page not found")]
@@ -321,7 +355,7 @@ struct InboxHandOffModelTests {
         #expect(!wentAnyway && c.done == 0 && checked.error == "Persona is offline")
         c.failures = [APIError(status: 405, message: "Method Not Allowed")]
         _ = await checked.send(ask: "a")
-        #expect(c.done == 1 && c.asked.count == 2)
+        #expect(c.done == 1 && c.asked.count == 2 && c.handOffs[0].clientID != c.handOffs[1].clientID)
     }
 
     @Test func theHandOffPostsTheTextAndClientID() async throws {
