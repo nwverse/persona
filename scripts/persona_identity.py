@@ -87,9 +87,11 @@ def prepare_dir(home=None, environment=None):
         raise OSError("state symlink target is unavailable; restore it before upgrading")
     os.makedirs(root, mode=0o700, exist_ok=True)
     home = os.path.expanduser("~") if home is None else os.fspath(home)
-    defaults = (os.path.join(home, ".persona"), os.path.join(home, ".jarvis"))
-    if root in defaults:
-        alias = defaults[1] if root == defaults[0] else defaults[0]
+    # An installation still kept under the former name gets the current name as an alias; one under the current name
+    # gets no alias under the former name (#1445). An alias already there is left as it is.
+    current, former = os.path.join(home, ".persona"), os.path.join(home, ".jarvis")
+    if root == former:
+        alias = current
         if not os.path.lexists(alias):
             try:
                 os.symlink(os.path.basename(root), alias)
@@ -392,9 +394,12 @@ def command_aliases(directory):
     pairs += [(path.name, "jarvisd-" + path.name[len("personad-"):])
               for path in directory.glob("personad-*") if not path.name.endswith((".gz", ".prev", ".new"))]
     for current, legacy in pairs:
-        if not (directory / current).is_file():
+        current_path = directory / current
+        if current_path.is_symlink() or not current_path.is_file():
             continue
         alias = directory / legacy
+        if alias.is_symlink() and os.readlink(alias) == current:
+            continue
         if alias.is_dir():
             raise OSError("compatibility command is a directory: " + str(alias))
         temporary = directory / (legacy + ".compat-new")

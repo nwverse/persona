@@ -32,12 +32,18 @@ import (
 	"github.com/nwverse/persona/server/internal/identity"
 	"github.com/nwverse/persona/server/internal/link"
 	"github.com/nwverse/persona/server/internal/managerconf"
+	"github.com/nwverse/persona/server/internal/managerupdate"
 	"github.com/nwverse/persona/server/internal/netaddr"
+	"github.com/nwverse/persona/server/internal/osproc"
 	"github.com/nwverse/persona/server/internal/update"
 )
 
 // Usage is the help of `personad manager`.
 const Usage = `usage:
+  personad manager update check|start|status|run|confirm|rollback --plan PATH
+                       inspect or activate one explicit independent manager release plan
+  personad manager update inventory --plan PATH --main ID --machine ID --machine-uid UID
+                       read persisted main identity and two complete local node activity snapshots; writes nothing
   personad manager join <hub 地址> <安装码> [--dir 目录] [--database-url URL] [--fingerprint 指纹] [--install]
                        用 App 里「新建管理者」给的安装码换这个管理者的 token，写进目录里的 manager.json
                        （默认 ~/.persona/managers/<id>）；数据库是它自己的 Postgres：install 时在 Docker 里建
@@ -74,6 +80,8 @@ func Main(ctx context.Context, build update.Build, args []string, stdout io.Writ
 	}
 	e := newEnv(stdout)
 	switch args[0] {
+	case "update":
+		return managerupdate.Main(ctx, build, args[1:], stdout)
 	case "capabilities":
 		return cmdCapabilities(stdout, args[1:])
 	case "join":
@@ -535,6 +543,7 @@ func Run(ctx context.Context, build update.Build, dir string, out io.Writer) err
 }
 
 func (e *env) runManager(ctx context.Context, build update.Build, dir string) error {
+	osproc.SealInherited() // what a parent left inheritable reaches none of what the manager starts (osproc)
 	out := e.stdout
 	env := os.Environ() // as it started: RunManager points PERSONA_HOME at dir
 	c, err := assistant.ReadManagerConfig(dir)

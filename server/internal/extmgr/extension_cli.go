@@ -57,8 +57,6 @@ const extensionUsage = `usage: personad extension <command> (also: personad ext,
                                     stays its own
   market remove <id> | refresh <id>
   market token <id> [--clear]       set the market's token (read from stdin) and read it again; --clear removes it
-  market trust <id>                 accept a market's new signing key (or that it stopped signing) after checking
-                                    with its publisher; a signature that does not verify is never accepted
   search [words]                    the markets' extensions
   install market:<market>/<id>      install (or upgrade) one of a market's extensions
   auto-upgrade on|off [<id>]        market extensions upgrade themselves (all of them, or one)
@@ -126,6 +124,7 @@ func ExtensionCommand(ctx context.Context, args []string, stdin io.Reader, stdou
 			if len(p.NeedsSetup) > 0 {
 				line += "；还缺：" + strings.Join(p.NeedsSetup, "、")
 			}
+			line += attachedLine(p.Attached, p.Error == "")
 			fmt.Fprintln(stdout, strings.TrimRight(line, " "))
 		}
 		return nil
@@ -163,7 +162,10 @@ func ExtensionCommand(ctx context.Context, args []string, stdin io.Reader, stdou
 				return err
 			}
 			if pv.Upgrade {
-				upgrade = id
+				upgrade = pv.Manifest.ID
+				if pv.RenameFrom != "" {
+					upgrade = pv.RenameFrom
+				}
 			}
 		} else if err := c.do(ctx, "POST", "/api/v1/extensions/-/preview", map[string]string{"source": source, "upgrade": upgrade}, &pv); err != nil {
 			return err
@@ -276,16 +278,6 @@ func ExtensionCommand(ctx context.Context, args []string, stdin io.Reader, stdou
 				line += "（" + m.Error + "）"
 			}
 			fmt.Fprintln(stdout, line)
-			return nil
-		case "trust":
-			if err := need(2); err != nil {
-				return err
-			}
-			var m MarketView
-			if err := c.do(ctx, "POST", "/api/v1/extensions/-/markets/"+url.PathEscape(positional[1])+"/trust", nil, &m); err != nil {
-				return err
-			}
-			fmt.Fprintf(stdout, "%s：%s，%s\n", m.ID, m.Name, signatureLabel(m.Signature))
 			return nil
 		case "remove", "refresh":
 			if err := need(2); err != nil {
@@ -502,6 +494,9 @@ func ExtensionCommand(ctx context.Context, args []string, stdin io.Reader, stdou
 
 func printPreview(w io.Writer, pv *extension.Preview) {
 	m := pv.Manifest
+	if pv.RenameFrom != "" {
+		fmt.Fprintln(w, i18n.T(i18n.Default, "extension-identity.confirmation", i18n.Args{"from": pv.RenameFrom, "to": m.ID}))
+	}
 	if pv.Upgrade {
 		fmt.Fprintf(w, "升级 %s：%s → %s\n", m.ID, pv.From, m.Version)
 	} else {
@@ -536,6 +531,28 @@ func confirm(stdin io.Reader, stdout io.Writer) bool {
 	line, _ := bufio.NewReader(stdin).ReadString('\n')
 	line = strings.ToLower(strings.TrimSpace(line))
 	return line == "y" || line == "yes"
+}
+
+// attachedLine is what `extension list` adds for an attached extension: online or offline and since when, why it is
+// offline when the line does not say it yet, and the version the program says it is when that was not approved.
+func attachedLine(a *ExtensionAttached, withError bool) string {
+	if a == nil {
+		return ""
+	}
+	line := "；独立运行，离线"
+	if a.Online {
+		line = "；独立运行，在线"
+	}
+	if !a.Since.IsZero() {
+		line += "（自 " + a.Since.Format("01-02 15:04:05") + "）"
+	}
+	if withError && a.Error != "" {
+		line += "：" + a.Error
+	}
+	if a.Version != "" {
+		line += "；程序自报版本 " + a.Version
+	}
+	return line
 }
 
 // readSecret reads a secret from the terminal without echo, or the first line of a pipe.

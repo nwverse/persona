@@ -3,8 +3,8 @@ package transcript
 import (
 	"fmt"
 	"github.com/nwverse/persona/server/internal/compat"
+	"github.com/nwverse/persona/server/internal/lazyre"
 	"html"
-	"regexp"
 	"sort"
 	"strings"
 )
@@ -15,11 +15,11 @@ import (
 // user wrote and fold the blocks into one row (docs/extensions/lark-agent.md "How the app shows it").
 
 // contextBlockRe is one attributed block (the bare snapshot, ContextRe, is dropped before this).
-var contextBlockRe = regexp.MustCompile(`(?s)(<` + compat.ContextPattern() + `\b[^>]*>)(.*?)(</` + compat.ContextPattern() + `>)`)
+var contextBlockRe = lazyre.New(`(?s)(<` + compat.ContextPattern() + `\b[^>]*>)(.*?)(</` + compat.ContextPattern() + `>)`)
 
 // legacyLarkAgentRe is a Feishu /agent prompt as hub wrote it before the instructions moved into a block: an intro line,
 // then a request heading (what was asked), a context heading (blocks, plus a loose line or two), and a how-to heading (the rules).
-var legacyLarkAgentRe = regexp.MustCompile(`(?s)^([^\n]*(?:用 /agent 叫你|又(?:发|写)了一条 /agent 请求)[^\n]*)\n+## 请求\n+(.*?)\n+## 上下文\n+(.*)\n+## 怎么做\n+(.*?)\s*$`)
+var legacyLarkAgentRe = lazyre.New(`(?s)^([^\n]*(?:用 /agent 叫你|又(?:发|写)了一条 /agent 请求)[^\n]*)\n+## 请求\n+(.*?)\n+## 上下文\n+(.*)\n+## 怎么做\n+(.*?)\s*$`)
 
 // legacyLarkAgent rewrites an old Feishu /agent prompt into today's shape, so conversations started before the change
 // show the same way: the instructions and context in blocks, the request outside them.
@@ -109,14 +109,14 @@ func lightContexts(s string, limit int) (string, bool) {
 
 // injectedBlockRes are the blocks Persona and Claude Code put into a user message around what the user wrote: the
 // <persona-context> snapshot and attributed blocks, the <persona-view-errors> feedback, <system-reminder>s.
-var injectedBlockRes = []*regexp.Regexp{
-	regexp.MustCompile(`(?s)<` + compat.ContextPattern() + `\b[^>]*>.*?</` + compat.ContextPattern() + `>`),
-	regexp.MustCompile(`(?s)<persona-view-errors\b[^>]*>.*?</persona-view-errors>`),
-	regexp.MustCompile(`(?s)<system-reminder\b[^>]*>.*?</system-reminder>`),
+var injectedBlockRes = []*lazyre.Regexp{
+	lazyre.New(`(?s)<` + compat.ContextPattern() + `\b[^>]*>.*?</` + compat.ContextPattern() + `>`),
+	lazyre.New(`(?s)<persona-view-errors\b[^>]*>.*?</persona-view-errors>`),
+	lazyre.New(`(?s)<system-reminder\b[^>]*>.*?</system-reminder>`),
 }
 
 // injectedOpenRe is one of those blocks left open: a message clipped inside it (Meta.FirstUser is) ends there.
-var injectedOpenRe = regexp.MustCompile(`<(?:` + compat.ContextPattern() + `|persona-view-errors|system-reminder)\b`)
+var injectedOpenRe = lazyre.New(`<(?:` + compat.ContextPattern() + `|persona-view-errors|system-reminder)\b`)
 
 // StripInjected is what the user wrote in a message, for a line that shows it (a title, a notification): without the
 // injected blocks, a block cut off by a clip, and the paste wrappers (what was pasted stays). "" when nothing is left.
@@ -160,7 +160,7 @@ func cutPartialTag(s string) string {
 }
 
 // blockTitleRe is an attributed block's whole opening tag with its title.
-var blockTitleRe = regexp.MustCompile(`<` + compat.ContextPattern() + `\b[^>]*?\stitle="([^"]*)"[^>]*>`)
+var blockTitleRe = lazyre.New(`<` + compat.ContextPattern() + `\b[^>]*?\stitle="([^"]*)"[^>]*>`)
 
 // Title is a message (or a title someone made of one) as a title or a preview line: what the user wrote, else the
 // title of the first attributed block ("Continuing the old main chat" for a main conversation handed over), else "" (the caller

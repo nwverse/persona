@@ -5,6 +5,8 @@
   <img src="docs/assets/readme/banner-light.zh-CN.svg" alt="Persona：你的 SuperAgent，一个入口解决所有问题。" width="100%">
 </picture>
 
+[![Persona 视频介绍预览](docs/assets/promo-preview-zh.webp)](#视频介绍)
+
 [English](README.md) · 简体中文
 
 ### 一个 SuperAgent，搞定你的所有事。<br>懂你的上下文，指挥你的 Agent，走到哪儿跟到哪儿。
@@ -25,6 +27,12 @@
 </picture>
 
 <p align="center"><sub>体验模式录屏，数据是演示用的。</sub></p>
+
+## 视频介绍
+
+https://github.com/user-attachments/assets/1957768c-188a-4d9d-8c23-cd16eb72cdd4
+
+<sub>[高清视频与字幕](https://github.com/nwverse/persona/releases/tag/promo-v1)。</sub>
 
 ## 主要功能
 
