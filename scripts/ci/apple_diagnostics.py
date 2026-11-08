@@ -20,15 +20,19 @@ def collect(output, destination, runner=subprocess.run):
             shutil.copytree(bundle, destination / bundle.name, dirs_exist_ok=True,
                             ignore=lambda directory, names: [name for name in names
                                 if (Path(directory) / name).is_symlink()])
-    try:
-        result = runner(["xcrun", "simctl", "list", "--json"], capture_output=True,
-                        text=True, timeout=120)
-        (destination / "simctl-list.json").write_text(result.stdout)
-        (destination / "simctl-list.stderr.txt").write_text(result.stderr)
-        (destination / "simctl-list.status.txt").write_text(str(result.returncode) + "\n")
-    except (OSError, subprocess.SubprocessError) as error:
-        (destination / "simctl-list.stderr.txt").write_text(str(error) + "\n")
-        (destination / "simctl-list.status.txt").write_text("unavailable\n")
+    commands = [
+        ("simctl-list", ["xcrun", "simctl", "list", "--json"], 120, "json"),
+        ("disk-space", ["df", "-h", str(output)], 30, "txt"),
+    ]
+    for name, command, timeout, suffix in commands:
+        try:
+            result = runner(command, capture_output=True, text=True, timeout=timeout)
+            (destination / f"{name}.{suffix}").write_text(result.stdout)
+            (destination / f"{name}.stderr.txt").write_text(result.stderr)
+            (destination / f"{name}.status.txt").write_text(str(result.returncode) + "\n")
+        except (OSError, subprocess.SubprocessError) as error:
+            (destination / f"{name}.stderr.txt").write_text(str(error) + "\n")
+            (destination / f"{name}.status.txt").write_text("unavailable\n")
     print(f"apple-ci: failure diagnostics: {destination}")
 
 

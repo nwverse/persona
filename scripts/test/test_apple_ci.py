@@ -121,13 +121,19 @@ class AppleFailureDiagnosticsTests(unittest.TestCase):
             calls = []
             def runner(command, **kwargs):
                 calls.append((command, kwargs))
+                if command[0] == 'df':
+                    return subprocess.CompletedProcess(command, 0, 'disk space diagnostic', '')
                 return subprocess.CompletedProcess(command, 0, '{"devices":{}}', '')
             apple_diagnostics.collect(output, destination, runner)
             self.assertEqual(calls[0][0], ['xcrun', 'simctl', 'list', '--json'])
             self.assertEqual(calls[0][1]['timeout'], 120)
+            self.assertEqual(calls[1][0], ['df', '-h', str(output)])
+            self.assertEqual(calls[1][1]['timeout'], 30)
+            self.assertEqual((destination / 'disk-space.txt').read_text(), 'disk space diagnostic')
             self.assertEqual({path.name for path in destination.iterdir()}, {
                 'simulator.log', 'simulator-boot.log', 'runtimes-iOS-before.json',
                 'ios-unit.xcresult', 'simctl-list.json', 'simctl-list.stderr.txt', 'simctl-list.status.txt',
+                'disk-space.txt', 'disk-space.stderr.txt', 'disk-space.status.txt',
             })
             self.assertEqual((destination / 'ios-unit.xcresult/summary.json').read_text(), 'test results')
             self.assertFalse((destination / 'ios-unit.xcresult/external-key').exists())

@@ -60,8 +60,8 @@ The unsigned Mac app/notification-extension build keeps shipping entitlements. B
 `scripts/ci/apple_entitlements.py` removes only profile-authorized push, time-sensitive notification and shared Keychain permissions from
 the disposable source snapshot. The sandbox, other permissions and project hardened-runtime settings remain unchanged; the checked-in
 project and release entitlements are not edited. A valid ad-hoc signature carrying restricted permissions can still be rejected before `main`.
-On Apple failure, collect the simulator UDID log, boot command/status log, installed runtime metadata, `xcrun simctl list --json`, and any
-xcresult bundles before deleting the owned simulator. The workflow uploads the allowlisted diagnostics as
+On Apple failure, collect the simulator UDID log, boot command/status log, installed runtime metadata, `xcrun simctl list --json`, available
+disk space, and any xcresult bundles before deleting the owned simulator. The workflow uploads the allowlisted diagnostics as
 `apple-<lane>-diagnostics-<run id>-<attempt>` artifacts for seven days. Source/configuration files, keys and result-bundle symlink targets
 are excluded. Do not infer a simulator boot timeout's cause without its diagnostics, add automatic retries, or extend the boot deadline.
 A maintainer-approved `gh run rerun --failed` runs the original commit; it cannot acquire diagnostic code added by a later commit.
