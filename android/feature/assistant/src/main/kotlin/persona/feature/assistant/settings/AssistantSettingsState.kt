@@ -125,7 +125,6 @@ internal data class SkillsState(
 
 internal data class AssistantSettingsUiState(
     val config: AssistantConfig? = null,
-    val permissionSupported: Boolean = false,
     val loading: Boolean = false,
     val loadFailed: Boolean = false,
     val busy: Boolean = false,
@@ -134,7 +133,10 @@ internal data class AssistantSettingsUiState(
     val memory: MemoryState = MemoryState(),
     val skills: SkillsState = SkillsState(),
     val followPhone: Boolean = true
-)
+) {
+    val permissionSupported: Boolean get() = !loading && !loadFailed &&
+        config?.permissionDefaults?.supports(config.manager) == true
+}
 
 /** Mutations run one at a time; every outcome lands in [state] (the page shows it, nothing is thrown). */
 internal class AssistantSettingsState(
@@ -161,13 +163,12 @@ internal class AssistantSettingsState(
 
     suspend fun load() {
         val revision = ++configRevision
-        set { copy(loading = true, loadFailed = false, permissionSupported = false) }
+        set { copy(loading = true, loadFailed = false) }
         try {
             val config = api.config()
             currentCoroutineContext().ensureActive()
             if (revision != configRevision) return
-            val supported = config.permissionDefaults?.supports(config.manager) == true
-            set { copy(config = config, permissionSupported = supported) }
+            set { copy(config = config) }
             // Like iOS: opening the page brings the hub's zone along with the phone's.
             quietly {
                 val synced = followPhoneZone(api, timezone, config)
@@ -207,7 +208,7 @@ internal class AssistantSettingsState(
     suspend fun setDefaultPermission(mode: String) {
         val config = state.value.config ?: return
         val owner = config.manager?.takeIf(String::isNotBlank) ?: return
-        if (!state.value.permissionSupported || config.permissionDefaults?.supports(owner) != true ||
+        if (!state.value.permissionSupported ||
             (config.defaultPermissionMode ?: "default") == mode) return
         require(mode in persona.core.contracts.api.AssistantPermissionDefaults.MODES)
         val revision = configRevision

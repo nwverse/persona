@@ -69,6 +69,18 @@ class AssistantPermissionCompatibilityTest {
         }
     }
 
+    @Test fun unrelatedConfigResponseCannotKeepAStaleCapabilityEnabled() = runTest {
+        val api = Api().apply {
+            supported = setOf("work")
+            write = { stored.copy(timezone = it.timezone, permissionDefaults = null) }
+        }
+        val model = AssistantSettingsState(api, Zone().apply { followPhone = true })
+        model.load()
+        assertFalse(model.state.value.permissionSupported)
+        model.setDefaultPermission("plan")
+        assertEquals(1, api.writes) // Only the automatic timezone update.
+    }
+
     @Test fun removedContractOnReadbackCannotReportSuccess() = runTest {
         val api = Api().apply { supported = setOf("work") }
         val model = api.model(); model.load()
