@@ -2141,9 +2141,9 @@ def inbox_owner(item_id):
 
 
 def merged_by_manager(items):
-    """A merged list as the hub writes it (ownership.go mergeList): the default's answer first, then each other installed
-    manager's (by id; an offline one's kept answer too), every item stamped. Each answer has the built-ins and that
-    manager's own ones."""
+    """A merged list as the hub writes it (ownership_lists.go mergeList): the default's answer first, then each other
+    installed manager's (by id; an offline one's kept answer too), every item stamped. Each answer has the built-ins
+    and that manager's own ones."""
     dflt = MANAGERS["default"]
     installed = sorted(m["id"] for m in MANAGERS["list"] if not m.get("installing"))
     order = [dflt] + [m for m in installed if m != dflt]
