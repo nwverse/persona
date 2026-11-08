@@ -200,7 +200,7 @@ struct NewAgentWorktreeSection: View {
         Section {
             Toggle(isOn: $on.animation(Theme.Motion.standard)) {
                 Label { Text("In a New Worktree [Agent Worktree]") } icon: {
-                    Image(systemName: Theme.Icon.gitBranch).foregroundStyle(Theme.accent)
+                    ThemedIcon(Theme.Icon.gitBranch).foregroundStyle(Theme.accent)
                 }
             }
             .tint(Theme.accent)
@@ -256,7 +256,7 @@ struct WorktreeCleanupSection: View {
                         .truncationMode(.head)
                 }
             } icon: {
-                Image(systemName: Theme.Icon.gitBranch).font(Theme.Font.secondary).foregroundStyle(.secondary).scaledFrame(width: Theme.Size.iconS)
+                ThemedIcon(Theme.Icon.gitBranch).font(Theme.Font.secondary).foregroundStyle(.secondary).scaledFrame(width: Theme.Size.iconS)
             }
             Picker(String(localized: "Worktree [Agent Worktree]"), selection: Binding(get: { cleanup.remove }, set: { remove in
                 withAnimation(Theme.Motion.standard) { cleanup = .init(remove: remove, deleteBranch: cleanup.deleteBranch) }
