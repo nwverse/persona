@@ -7,6 +7,19 @@ import Testing
 struct AgentSyncPacingTests {
     let t0 = Date(timeIntervalSinceReferenceDate: 1000)
 
+    @Test func retainedHiddenChatsWaitForVisibility() {
+        #expect(!AgentSyncPacing.prefetchAllowed(hasRetainedStore: true, isSubscribed: false))
+    }
+
+    @Test func visibleSubscriptionOwnersDoNotGetDuplicatePrefetch() {
+        #expect(!AgentSyncPacing.prefetchAllowed(hasRetainedStore: true, isSubscribed: true))
+        #expect(!AgentSyncPacing.prefetchAllowed(hasRetainedStore: false, isSubscribed: true))
+    }
+
+    @Test func unseenRecentChatsStillWarmTheirDiskCache() {
+        #expect(AgentSyncPacing.prefetchAllowed(hasRetainedStore: false, isSubscribed: false))
+    }
+
     @Test func aWorkingAgentWaitsForItsTurn() {
         #expect(AgentSyncPacing.heldUntil(working: true, lastPull: nil, now: t0) == nil) // never pulled: now
         let held = AgentSyncPacing.heldUntil(working: true, lastPull: t0, now: t0.addingTimeInterval(10))

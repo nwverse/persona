@@ -110,6 +110,8 @@ type InboxItem struct {
 	Suggestion *InboxSuggestion  `json:"suggestion,omitempty"`
 	Chain      []InboxChainEntry `json:"chain,omitempty"`
 	Related    []InboxRelated    `json:"related,omitempty"`
+	// Handoffs are the latest conversations the event was handed to (inbox_handoff.go), oldest first.
+	Handoffs []InboxHandoff `json:"handoffs,omitempty"`
 
 	// Bookkeeping: persisted, not listed (GET /api/v1/inbox/{id} returns Context).
 	Last      string `json:"last,omitempty"`       // newest message position / mail uid in the item
@@ -208,6 +210,7 @@ func (it *InboxItem) listed() InboxItem {
 	c.Status = it.status()
 	c.Chain = listedChain(it)
 	c.Related = slices.Clone(it.Related)
+	c.Handoffs = listedHandoffs(it.Handoffs)
 	if it.Handling != nil {
 		h := *it.Handling
 		c.Handling = &h
@@ -216,7 +219,7 @@ func (it *InboxItem) listed() InboxItem {
 		g := *g
 		g.Changes, g.Cwd = slices.Clone(g.Changes), ""
 		c.Suggestion = &g
-		if c.Handling == nil { // an old draft: its conversation is done with this round
+		if c.Handling == nil && g.Conversation == nil && it.Agent != nil { // an old draft: its conversation is done with this round
 			c.Handling = &InboxHandling{Owner: HandlingOwner, State: HandlingDone, MachineID: it.Agent.MachineID, SessionID: it.Agent.SessionID}
 		}
 	}
@@ -280,6 +283,7 @@ type inboxBook struct {
 	passHook    func()      // tests: runs as each pass starts
 	translating sync.Mutex  // one translation pass at a time (inbox_translate.go)
 	replies     sync.Map    // item id -> *inboxReply: replies to one item, one at a time (inbox_triage.go)
+	handingOff  sync.Map    // item id -> *sync.Mutex: hand-offs of one item, one at a time (inbox_handoff.go)
 	telling     sync.Map    // item id -> *sync.Mutex: deliveries to one item's conversation, one at a time (deliverNotes)
 	mutes       []InboxMute
 	mutesMu     sync.Mutex // one read-change-save of the kept mutes at a time
@@ -584,6 +588,7 @@ func (b *inboxBook) drop(id string) {
 	delete(b.items, id)
 	b.replies.Delete(id)
 	b.telling.Delete(id)
+	b.handingOff.Delete(id)
 }
 
 // recordReads keeps which of a round's sources could not be read, under b.mu: a source read now (or off) is cleared,
@@ -1178,6 +1183,7 @@ func (s *Service) inboxRoutes() {
 	s.inboxParentRoutes()
 	s.inboxBulkRoutes()
 	s.inboxSuggestionRoutes()
+	s.inboxHandoffRoutes()
 	s.translateRoutes()
 	// Items of connectors (GitHub…) only go to apps that draw them (?sources=all): an older app would show a PR as
 	// a mail and send a reply as one. triage says how many new items wait for the model, and why (inbox_admit.go).

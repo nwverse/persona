@@ -7,6 +7,12 @@ import Foundation
 public enum AgentSyncPacing {
     public static let workingGap: TimeInterval = 60
 
+    /// Unseen recent chats can warm their disk cache. A retained store waits for its next visible subscription,
+    /// rather than publishing hidden transcript updates or advancing the sequence that subscription will replay.
+    public static func prefetchAllowed(hasRetainedStore: Bool, isSubscribed: Bool) -> Bool {
+        !hasRetainedStore && !isSubscribed
+    }
+
     /// When a chat with news is pulled: now (nil), or once `workingGap` has passed since its last pull while its
     /// agent is still working.
     public static func heldUntil(working: Bool, lastPull: Date?, now: Date) -> Date? {

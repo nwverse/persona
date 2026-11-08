@@ -102,8 +102,10 @@ class HubSlowSubscriberTest {
                     val times = mutableListOf<Long>()
                     for (round in 2..4) {
                         val start = System.currentTimeMillis()
+                        val previousHello = connection.lastHello
                         hub.socket!!.close(1001, "hub restarting")
                         eventually(10_000) { hub.opened.get() == round }
+                        eventually(10_000) { connection.lastHello !== previousHello }
                         connection.awaitOnline()
                         times += System.currentTimeMillis() - start
                         hub.socket!!.send("""{"type":"todos"}""")

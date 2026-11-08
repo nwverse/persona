@@ -64,9 +64,11 @@ Chat page:
     ready to send with a note; only available when opened from a chat. Pending input images can also be tapped to edit before sending.
   - Screenshots: `-openFirstImage YES` / `-openViewedImage N`, `-showViewerChromeHidden YES` hides bars, `-showViewerInfo YES` opens info.
 - Background sync (push + pull like IM; only foregrounded and connected): hub pushes which session changed; App pulls increments by cursor.
-  Agents (`AgentSync`): changed `rev` in session list / `revs` triggers `after_seq` fetch, merged into memory if present,
-  otherwise written to disk (`ChatCache.folder`, currently `chats-v3`) so opening is already current; scope active Agents + sessions used within 24 hours (at most 40, newest first, concurrency 3),
-  currently viewed chats rely on their subscriptions without duplicate fetches. When a subscription stops (the session's `rev` moved after the
+  Agents (`AgentSync`): changed `rev` in session list / `revs` triggers `after_seq` prefetch into the disk cache only for chats not retained in memory,
+  so opening is already current; scope active Agents + sessions used within 24 hours (at most 40, newest first, concurrency 3).
+  Retained chats without a subscription owner keep their store and covered sequence unchanged until their next visible subscription replays `since_seq`.
+  Eligibility is rechecked when queued work starts; a visible catch-up cannot apply after the last owner leaves or the store is replaced.
+  Currently viewed chats rely on their subscriptions without duplicate fetches. When a subscription stops (the session's `rev` moved after the
   chat's last items came, or its `updated_at` is newer than the open chat's newest line, and no items came for 4 seconds), the chat fetches
   after its `covered` and merges silently: at most every 10 seconds, once per `updated_at` (`AgentSyncPacing.catchUpAt`, the rule of the
   web's `web/src/lib/stale-page.ts`). The `rev` catches the last line of a burst whose push was lost, which `updated_at` cannot (#1179). Working Agents fetch at most once per minute (`AgentSync.workingGap`; each fetch decodes and rewrites the entire disk cache),
