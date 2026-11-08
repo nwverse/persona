@@ -24,6 +24,10 @@ and a local session revision protect that boundary without changing the node pro
 
 Pitfalls, odd behavior, and the trade-offs made at the time (formerly "Lessons" in `CLAUDE.md`; index in `docs/lessons/README.md`). Add new lessons to the relevant section, or create one if none fits.
 
+## A deploy that rewrites a unit decides which program the service runs (2026-11-08)
+
+`scripts/deploy/hub-systemd.sh` writes the hub's unit on every deploy, and for a unit that differs from its own text it adds a drop-in that overrides `ExecStart`. So once a unit can run another program (`persona-hub run` instead of `personad hub`), a script that writes the old `ExecStart` quietly switches the install back, and nothing in its output says so. Whatever writes a service file has to read which program the service runs now (the last `ExecStart` of the unit and its drop-ins, unquoted as systemd reads it, compared by real path) and keep it; only the owner's own step (`hub setup`) moves an install from one program to another. The same holds for the launchd branch, which looks the agent up by its program.
+
 ## A fixed name in the temp folder is shared on Linux (2026-11-07, #66)
 
 `os.TempDir()` is the per-user `$TMPDIR` on macOS but the shared `/tmp` on Linux, so a fixed name there (`persona-herdr-server.log`, `persona-orca-images`) looks private on a Mac and is not on a Linux node. Another local user can create the name first: a symlink makes the next `O_CREATE|O_TRUNC` open empty and write into a file of the node's user, and a world-writable folder receives every file written into it, since `MkdirAll` succeeds on an existing folder whatever its owner or mode. Keep such files under `privateCacheDir` (`internal/node/cachedir.go`: the user's cache folder, checked to be a private folder of this user; a per-process `os.MkdirTemp` folder when there is none).

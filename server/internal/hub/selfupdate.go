@@ -105,10 +105,13 @@ type updater struct {
 	edgeConfirmed func()
 	startWatch    func(prev, pendingPath string) error
 	target        func() (string, error)
-	notify        func(title, body string)
-	confirmIn     time.Duration
-	idleEvery     time.Duration
-	manualIdle    time.Duration
+	// self is the binary this hub runs as (runningBinary): persona-hub goes on as the persona-hub the update
+	// swapped, personad as personad (runAs).
+	self       func() (string, error)
+	notify     func(title, body string)
+	confirmIn  time.Duration
+	idleEvery  time.Duration
+	manualIdle time.Duration
 
 	mu          sync.Mutex
 	settings    updateSettings
@@ -143,7 +146,7 @@ func newUpdater(h *Hub) *updater {
 			// The hub's arguments; `hub …` when it runs as persona-hub and path is personad (update.TargetArgs).
 			return syscall.Exec(path, append([]string{path}, update.TargetArgs(os.Args, path)...), append(os.Environ(), execListenEnv()...))
 		},
-		startWatch: startWatchdog, target: ServerBinary, confirmIn: updateConfirmIn, idleEvery: updateIdleEvery,
+		startWatch: startWatchdog, target: ServerBinary, self: runningBinary, confirmIn: updateConfirmIn, idleEvery: updateIdleEvery,
 		manualIdle: updateManualIdle, state: "idle", confirmed: true,
 		notify: func(title, body string) {
 			h.push.send(map[string]any{"aps": map[string]any{
@@ -171,6 +174,10 @@ func (u *updater) slotExec(path string) error {
 	return u.h.slot.Switch(context.Background(), path, "", hubedge.KindRollback, 0)
 }
 
+// RunningBinary is the binary this process runs from, resolved through symlinks: what `hub switch` switches to
+// unless told otherwise (the hub as the program it is run as).
+func RunningBinary() (string, error) { return runningBinary() }
+
 func runningBinary() (string, error) {
 	p, err := os.Executable()
 	if err != nil {
@@ -180,10 +187,10 @@ func runningBinary() (string, error) {
 }
 
 // ServerBinary is the program that is the whole server: this one, unless it is persona-hub, which runs the hub
-// alone: then the personad beside it. What runs or replaces the server goes by it until the hub/manager split is done
-// (docs/server/server.md "Programs"): the built-in manager the hub starts (`personad assistant`), the update's target
-// (personad is the release's main download; persona-hub is swapped as a program), setup's service binary and the
-// edge's default switch.
+// alone: then the personad beside it (docs/server/server.md "Programs"). The update's target goes by it (personad is
+// the release's main download; persona-hub is swapped as a program and the hub goes on as it: runAs), and so does
+// setup's service binary. What the hub runs goes by the program it runs as: the edge's default switch is this binary,
+// the built-in manager it starts is persona-manager beside persona-hub (managerBinary).
 func ServerBinary() (string, error) {
 	p, err := runningBinary()
 	if err != nil {
@@ -192,17 +199,41 @@ func ServerBinary() (string, error) {
 	return serverBinaryOf(p)
 }
 
-// serverBinaryOf is ServerBinary for the running binary p.
+// serverBinaryOf is ServerBinary for the running binary p. The personad beside persona-hub is resolved through
+// symlinks, as the running binary is: an update replaces the file, never a link to it (an install under the former
+// name keeps personad as a link to that file).
 func serverBinaryOf(p string) (string, error) {
-	ext := filepath.Ext(p)
-	if strings.TrimSuffix(filepath.Base(p), ext) != "persona-hub" {
+	if !isProgram(p, "persona-hub") {
 		return p, nil
 	}
-	sibling := filepath.Join(filepath.Dir(p), "personad"+ext)
-	if _, err := os.Stat(sibling); err != nil {
+	sibling := filepath.Join(filepath.Dir(p), "personad"+filepath.Ext(p))
+	resolved, err := filepath.EvalSymlinks(sibling)
+	if err != nil {
 		return "", fmt.Errorf("persona-hub runs the hub alone and needs the personad beside it (%s): %w", sibling, err)
 	}
-	return sibling, nil
+	return resolved, nil
+}
+
+// isProgram says whether the binary at p is the program name (on Windows name.exe).
+func isProgram(p, name string) bool {
+	return strings.TrimSuffix(filepath.Base(p), filepath.Ext(p)) == name
+}
+
+// runAs is Pending.Run for an update that swapped programs beside personad: the persona-hub among them when the hub
+// runs as that persona-hub, so it goes on as the hub's own program; "" otherwise (it goes on as personad, the target).
+// A release without persona-hub leaves it on personad, the same build, rather than on a persona-hub the update did
+// not replace.
+func runAs(running func() (string, error), programs []update.Swapped) string {
+	self, err := running()
+	if err != nil || !isProgram(self, "persona-hub") {
+		return ""
+	}
+	for _, s := range programs {
+		if filepath.Clean(s.Target) == filepath.Clean(self) {
+			return s.Target
+		}
+	}
+	return ""
 }
 
 // startWatchdog runs `<old binary> update-watch <pending>` in its own session, its output in update/watch.log.
@@ -426,8 +457,8 @@ func (u *updater) rollback(p update.Pending, reason string) {
 		u.h.logf("update: restore %s: %v", p.Prev, err)
 		return
 	}
-	if err := u.exec(p.Target); err != nil {
-		u.h.logf("update: run %s: %v", p.Target, err)
+	if err := u.exec(p.RunPath()); err != nil {
+		u.h.logf("update: run %s: %v", p.RunPath(), err)
 	}
 }
 
@@ -770,6 +801,7 @@ func (u *updater) install(ctx context.Context, auto bool) {
 			}
 		}
 	}
+	p.Run = runAs(u.self, p.Programs)
 	if err := update.Save(update.PendingPath(u.dir), p); err != nil {
 		_ = update.RestoreAll(p)
 		fail(err)
@@ -781,7 +813,7 @@ func (u *updater) install(ctx context.Context, auto bool) {
 		// The edge is the watchdog too (it goes back when the new one does not confirm the update in time).
 		u.set("restarting", "", "")
 		u.h.logf("update: handing over to %s", m.Version)
-		if err := u.handover(ctx, target, m.Build); err != nil {
+		if err := u.handover(ctx, p.RunPath(), m.Build); err != nil {
 			_ = update.RestoreAll(p)
 			_ = os.Remove(update.PendingPath(u.dir))
 			fail(i18n.Err("hub-selfupdate.err_no_start", i18n.Args{"error": err.Error()}))
@@ -794,7 +826,7 @@ func (u *updater) install(ctx context.Context, auto bool) {
 	u.set("restarting", "", "")
 	u.h.logf("update: restarting into %s", m.Version)
 	time.Sleep(500 * time.Millisecond) // the apps get the restarting event before the socket goes
-	if err := u.exec(target); err != nil {
+	if err := u.exec(p.RunPath()); err != nil {
 		_ = update.RestoreAll(p)
 		_ = os.Remove(update.PendingPath(u.dir))
 		fail(err)

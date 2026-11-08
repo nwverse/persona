@@ -43,8 +43,8 @@ func runHubSwitch(args []string) error {
 		fmt.Printf("hub switch: the edge speaks protocol %d, this binary %d: restart the hub's service instead\n", st.Proto, hubedge.Proto)
 		os.Exit(exitNoEdge)
 	}
-	if *binary == "" { // this binary; personad beside it for persona-hub (the hub's service runs personad)
-		p, err := hub.ServerBinary()
+	if *binary == "" { // this binary: `persona-hub switch` to persona-hub, `personad hub switch` to personad
+		p, err := hub.RunningBinary()
 		if err != nil {
 			return err
 		}

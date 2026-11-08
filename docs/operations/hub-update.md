@@ -326,6 +326,9 @@ The programs (`update.ProgramNames`): `personad-wechat` (the WeChat bot), and `p
 - When the manifest has `programs` for this hub's platform, they are downloaded and verified (same sha256, and `version -v` must be this version), then swapped in together with personad: placed next to personad,
   existing ones kept as `.prev`, and ones that did not exist before recorded as newly installed. If any one fails to download or verify, the whole update is skipped.
 - Rollback (the new version does not start, the watchdog, an error during the swap) swaps them back together with personad and deletes the newly installed ones (`update.RestoreAll`, `programs` in `pending.json`).
+- **Which program the hub goes on as** (`run` in `pending.json`, `Pending.RunPath`): a hub run as `persona-hub` restarts, hands over and rolls back as the `persona-hub` the update swapped, so it stays on its own program; a hub run as `personad` stays on `personad` (no `run`).
+  `target` stays `personad`, the release's main download and what the watchdog runs as `personad.prev`. A build that predates `run` (an older edge or watchdog) reads only `target` and brings the hub back as `personad hub run`, which serves the same hub; a `pending.json` an older build wrote has no `run` and goes back to `target` as before.
+  A release without `persona-hub` for this platform leaves a hub run as `persona-hub` on `personad` (which the update did replace), not on a `persona-hub` it did not.
 - The first update that carries programs: the watchdog running is the old personad, which does not know `programs`, so a rollback only swaps personad back; the new programs left behind do not match the old hub version, and the hub will not start them
   (status says "not the same version"), until the next update.
 
@@ -376,7 +379,8 @@ Download → Verify → Prepare → Wait for idle → Replace → Restart → Co
      - The entry process first starts the new version as standby; only after its version matches and self-check passes does it hold connections, release the old version, activate the new one and switch routing;
      - If the new version cannot start, the entry process returns `switch_failed`; the old version restores the files, deletes pending and records this attempt as failed (not as a bad version, since the new version never ran);
      - No watchdog is started: the entry process is the watchdog.
-   - **Without an entry process** (Windows, `PERSONA_HUB_EDGE=0`): start the watchdog first (below), then `syscall.Exec` the new binary with the same arguments and environment.
+   - **Without an entry process** (Windows, `PERSONA_HUB_EDGE=0`): start the watchdog first (below), then `syscall.Exec` the new binary with the same arguments and environment
+     (the program the hub runs as: `persona-hub` for a hub run as `persona-hub`, see "Programs swapped together with personad").
      Carry the socket passed by systemd along (`LISTEN_FDS`, `execListenEnv` in `listen.go`; this step used to be missing, so the new process failed because the port was occupied);
      restart under the same process id, without relying on the service manager.
    - The local node is a child process of the hub and exits with it; the new hub starts it with the new binary.
@@ -395,7 +399,7 @@ Download → Verify → Prepare → Wait for idle → Replace → Restart → Co
    - **Watchdog** (without an entry process; code from the old binary, `personad update-watch`, started separately before exec and detached from the process group):
      if it does not see the new build number and "confirmed" from the local `/api/v1/health` within 3 minutes, it rolls back itself:
      - Under systemd (with `INVOCATION_ID`) or launchd: restore `.prev`, kill the main process, and let the service manager start the old binary;
-     - Without a service manager: after restoring it, start the old hub in the background with the original arguments.
+     - Without a service manager: after restoring it, start the old hub in the background with the original arguments, as the program it ran as (`run` in `pending.json`, else `target`).
      - It signals the hub only while the hub is still its parent process (SIGTERM, then SIGKILL after 10 seconds if it is still there): once the hub has exited, its pid may belong to another process.
    - After rollback, record this build number in the **bad-version** list: automatic updates no longer try it and wait for a newer version. The user can still install it manually; the App says, "This version failed to start last time and was rolled back."
 9. **Update nodes along with it (only with `auto_update_nodes: true`)**:

@@ -2,6 +2,10 @@
 # Install the existing hub unit using the same resolved root as the deployed binary (Linux: systemd user service;
 # Mac: restart the launchd agent that already runs it). personad hub setup (server/internal/hub/setup_service.go)
 # writes the same units: keep the two in step.
+#
+# The program the hub's service runs stays the one it runs (docs/server/server.md "Programs"): <root>/bin/persona-hub
+# (`persona-hub run`) once its owner switched to it, else personad (`personad hub`). This script never switches an
+# install from one to the other.
 set -euo pipefail
 if [ -z "${_PERSONA_HUB_UNIT:-}" ]; then
   _env=$(python3 "$(dirname "${BASH_SOURCE[0]}")/../persona_identity.py" --shell --service hub --prepare) || exit $?
@@ -10,12 +14,23 @@ fi
 ROOT="$_PERSONA_STATE_DIR"
 BIN="$_PERSONA_HUB_BIN"
 UNIT="$_PERSONA_HUB_UNIT"
+SPLIT_HUB="$ROOT/bin/persona-hub"
+# The programs a deploy replaces besides personad: a hub run as persona-hub goes back on all of them (switch_or_restart).
+SPLIT_PROGRAMS=(persona-hub persona-manager)
+# use_split_hub: the service runs this root's persona-hub, so the deploy switches to it and the unit keeps it.
+use_split_hub() {
+  if [ ! -x "$SPLIT_HUB" ]; then
+    echo "hub: the hub's service runs $SPLIT_HUB, which is not there: deploy it, or rerun personad hub setup" >&2
+    exit 1
+  fi
+  BIN="$SPLIT_HUB"
+}
 # Blue-green (docs/operations/hub-restart.md "Blue-green switch"): the running hub's edge starts the new binary next to the one serving
 # and switches once it is up, nothing restarts. It returns 0 once switched; 1 (no edge here, or one older than the new
 # binary's protocol: `hub switch` exits 3; or a binary that cannot run it) to have the caller restart the service;
 # it exits the script when the new binary did not come up (exit 1: the hub serves on the old one, back in place).
 switch_or_restart() {
-  local prev=() rc=0
+  local prev=() rc=0 name
   [ -x "$ROOT/bin/${BIN##*/}.prev" ] && prev=(--prev "$ROOT/bin/${BIN##*/}.prev")
   "$BIN" hub switch --timeout 8m ${prev[@]+"${prev[@]}"} || rc=$?
   case $rc in
@@ -25,6 +40,14 @@ switch_or_restart() {
   esac
   if [ ${#prev[@]} -gt 0 ]; then
     cp -p "$ROOT/bin/${BIN##*/}.prev" "$ROOT/bin/${BIN##*/}.new" && mv "$ROOT/bin/${BIN##*/}.new" "$BIN"
+    if [ "$BIN" = "$SPLIT_HUB" ]; then
+      # The hub runs as persona-hub, which starts persona-manager beside it and goes by personad for updates:
+      # the old build of each goes back with it (deploy.sh kept a .prev of each it replaced).
+      for name in "${_PERSONA_HUB_BIN##*/}" "${SPLIT_PROGRAMS[@]}"; do
+        [ "$ROOT/bin/$name" = "$BIN" ] || [ ! -x "$ROOT/bin/$name.prev" ] ||
+          { cp -p "$ROOT/bin/$name.prev" "$ROOT/bin/$name.new" && mv "$ROOT/bin/$name.new" "$ROOT/bin/$name"; }
+      done
+    fi
     echo "hub: the new binary did not take over; the old one serves on and is back in place" >&2
   else
     echo "hub: the new binary did not take over; the old one serves on" >&2
@@ -33,10 +56,12 @@ switch_or_restart() {
 }
 if [ "$(uname -s)" = Darwin ] && ! command -v systemctl >/dev/null 2>&1; then
   # A Mac hub runs under a launchd agent the user set up (no systemd): restart the one whose program is this root's
-  # personad with "hub" (through ~/.persona or ~/.persona, whichever path it names). Nothing is installed here.
-  label=$(python3 - <<'PY'
+  # personad with "hub", or its persona-hub (through ~/.persona or another path to it, whichever the agent names).
+  # Nothing is installed here.
+  found=$(python3 - <<'PY'
 import glob, os, plistlib
-want = os.path.realpath(os.path.join(os.environ['PERSONA_HOME'], 'bin/personad'))
+bin_dir = os.path.join(os.environ['PERSONA_HOME'], 'bin')
+personad, split = (os.path.realpath(os.path.join(bin_dir, name)) for name in ('personad', 'persona-hub'))
 for path in sorted(glob.glob(os.path.expanduser('~/Library/LaunchAgents/*.plist'))):
     try:
         with open(path, 'rb') as f:
@@ -44,15 +69,22 @@ for path in sorted(glob.glob(os.path.expanduser('~/Library/LaunchAgents/*.plist'
     except Exception:
         continue
     args = job.get('ProgramArguments') or ([job['Program']] if job.get('Program') else [])
-    if len(args) >= 2 and args[1] == 'hub' and os.path.realpath(os.path.expanduser(args[0])) == want:
-        print(job.get('Label', ''))
+    program = os.path.realpath(os.path.expanduser(args[0])) if args else ''
+    if program == personad and len(args) >= 2 and args[1] == 'hub':
+        print('personad\t' + job.get('Label', ''))
+        break
+    # persona-hub runs the hub with no arguments, "run", or personad's "hub [run]".
+    if program == split and args[1:] in ([], ['run'], ['hub'], ['hub', 'run']):
+        print('persona-hub\t' + job.get('Label', ''))
         break
 PY
 )
-  if [ -z "$label" ]; then
-    echo "hub: no launchd agent in ~/Library/LaunchAgents runs $ROOT/bin/personad hub; restart the hub yourself" >&2
+  label=${found#*$'\t'}
+  if [ -z "$found" ] || [ -z "$label" ]; then
+    echo "hub: no launchd agent in ~/Library/LaunchAgents runs $ROOT/bin/personad hub or $SPLIT_HUB; restart the hub yourself" >&2
     exit 1
   fi
+  [ "${found%%$'\t'*}" != persona-hub ] || use_split_hub
   switch_or_restart && exit 0
   launchctl kickstart -k "gui/$(id -u)/$label"
   echo "hub: restarted launchd agent $label"
@@ -66,12 +98,51 @@ SOCKET_FILE="$UNIT_DIR/$UNIT.socket"
 SERVICE_FILE="$UNIT_DIR/$UNIT.service"
 socket_before=$(cat "$SOCKET_FILE" 2>/dev/null || true)
 service_before=$(cat "$SERVICE_FILE" "$SERVICE_FILE.d/90-persona-compat.conf" 2>/dev/null || true)
-PERSONA_HUB_SOCKET="${PERSONA_HUB_SOCKET:-1}" python3 - <<'PY'
+# The program the unit runs now: its last ExecStart, the drop-ins' after the unit's (systemd's order).
+runs=$(SERVICE_FILE="$SERVICE_FILE" python3 - <<'PY'
+import glob, os
+service = os.environ['SERVICE_FILE']
+def program(value):
+    """The first word of an ExecStart value, unquoted as systemd reads it."""
+    value = value.lstrip('-@:+!')
+    if value.startswith('"'):
+        word, i = [], 1
+        while i < len(value) and value[i] != '"':
+            if value[i] == '\\' and i + 1 < len(value):
+                i += 1
+            word.append(value[i])
+            i += 1
+        word = ''.join(word)
+    else:
+        word = value.split()[0] if value.split() else ''
+    return word.replace('$$', '$').replace('%%', '%')
+start = ''
+for path in [service] + sorted(glob.glob(service + '.d/*.conf')):
+    try:
+        lines = open(path).read().splitlines()
+    except OSError:
+        continue
+    for line in lines:
+        line = line.strip()
+        if line.startswith('ExecStart='):
+            start = line[len('ExecStart='):]  # empty resets it
+word = program(start)
+print(os.path.realpath(word) if word else '')
+PY
+)
+if [ -n "$runs" ] && [ "$runs" = "$(python3 -c 'import os, sys; print(os.path.realpath(sys.argv[1]))' "$SPLIT_HUB")" ]; then
+  use_split_hub
+fi
+PERSONA_HUB_SOCKET="${PERSONA_HUB_SOCKET:-1}" _PERSONA_HUB_RUNS="$BIN" python3 - <<'PY'
 import json, os, re
 from pathlib import Path
 root = os.environ['PERSONA_HOME']
 unit_name = os.environ['_PERSONA_HUB_UNIT']
-binary = os.environ['_PERSONA_HUB_BIN']
+binary = os.environ['_PERSONA_HUB_RUNS']
+# personad runs the hub as `personad hub`, persona-hub (the hub's own program) as `persona-hub run`.
+split = os.path.basename(binary) == 'persona-hub'
+command = ' run' if split else ' hub'
+description = 'Persona hub (persona-hub)' if split else 'Persona hub (personad)'
 legacy_home = os.environ['_PERSONA_LEGACY_HOME_KEY']
 legacy_edge = os.environ['_PERSONA_LEGACY_EDGE_KEY']
 def quote(value):
@@ -100,13 +171,13 @@ if edge is None:
 # Keep an explicit enabling value in an upgrade drop-in so it overrides an older disabling value.
 unit_dir.mkdir(parents=True, exist_ok=True)
 unit = [
-    '[Unit]', 'Description=Persona hub (personad)', 'After=network-online.target',
+    '[Unit]', 'Description=' + description, 'After=network-online.target',
 ]
 if use_socket:
     unit += ['Wants=' + unit_name + '.socket', 'After=' + unit_name + '.socket']
 unit += [
     '', '[Service]',
-    'ExecStart=' + quote(binary).replace('$', '$$') + ' hub',
+    'ExecStart=' + quote(binary).replace('$', '$$') + command,
     'Restart=always', 'RestartSec=3', 'TimeoutStopSec=20',
     'Environment=' + quote('PERSONA_HOME=' + root),
     'Environment=' + quote(legacy_home + '=' + root),
@@ -121,7 +192,7 @@ if service.exists() and service.read_text() != '\n'.join(unit):
     dropin.parent.mkdir(parents=True, exist_ok=True)
     dropin.write_text('\n'.join([
         '[Service]', 'ExecStart=',
-        'ExecStart=' + quote(binary).replace('$', '$$') + ' hub',
+        'ExecStart=' + quote(binary).replace('$', '$$') + command,
         *['Environment=' + quote(key + '=' + root) for key in ('PERSONA_HOME', legacy_home)],
         *(['Environment=' + quote(key + '=' + edge) for key in ('PERSONA_HUB_EDGE', legacy_edge)] if edge else []), '',
     ]))
