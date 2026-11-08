@@ -196,6 +196,7 @@ Observable differences:
 handshakes, reports a full snapshot, then starts scheduled tasks. On disconnect it reconnects (1 second, doubling to 1 minute), reporting a full snapshot on every connection.
 
 - **Default (no user changes)**: `personad hub` generates a fresh assistant token with `createBusToken`, starts `personad assistant` as a child from its own binary, and writes the token to stdin (not argv, invisible to `ps`);
+  a hub run as `persona-hub` starts `persona-manager assistant` beside it instead, when that is the same build (`version -v`), else the `personad` beside it (`hub.managerBinary`, [../server/server.md](../server/server.md) ("Programs"));
   `PERSONA_ASSISTANT_HUB` is hub's local address. Child output joins hub stderr logs with `assistant:` prefix. On exit, hub restarts it with backoff from 1 second to 1 minute, resetting to 1 second after a run of at least 1 minute.
   On hub shutdown, SIGTERM first, kill after 10 seconds. If hub disappears (including crashes), stdin closes and the assistant exits too, leaving no unreachable orphan. No systemd, Docker image, or `deploy.sh` changes needed.
 - **Run elsewhere**: set `"assistant": {"external": true}` in hub.json to stop hub spawning it (`docs/operations/config.md`); on the machine where it will run, generate a token with `personad hub assistant-token`,

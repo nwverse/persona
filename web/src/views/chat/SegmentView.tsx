@@ -188,6 +188,7 @@ export const SegmentView = memo(function SegmentView({
   mid,
   sid,
   streaming,
+  batchedWords,
   expandFold,
   beforeWords,
 }: {
@@ -196,6 +197,10 @@ export const SegmentView = memo(function SegmentView({
   mid: string;
   sid: string;
   streaming?: string;
+  /** The live words are an agent's as Claude shows them (docs/integrations/claude-integration.md "Live replies"): a batch
+   *  of lines at a time, and still while a tool runs. The live work row stays under them; the headless assistant's
+   *  words stream as they are written and stand for it. */
+  batchedWords?: boolean;
   expandFold: (f: Item) => Promise<void>;
   /** Drawn between the work and the agent's last words (the wakes chip, #3783); above the work while it is live. */
   beforeWords?: ReactNode;
@@ -219,7 +224,8 @@ export const SegmentView = memo(function SegmentView({
   // a finished exchange's last words (the run of them at its end) come after those pictures
   let cut = nodes.length;
   for (let n = nodes[cut - 1]; !live && n?.kind === "step" && n.step.kind === "text"; n = nodes[cut - 1]) cut--;
-  const working = live && streaming === undefined && !nodes.some((n) => n.kind === "group" && n.live);
+  const working = live && (streaming === undefined || batchedWords) && !nodes.some((n) => n.kind === "group" && n.live);
+  const liveRow = working && <WorkGroup g={{ kind: "group", id: `work-live-${seg.id}`, children: [], live: true, startedAt: Date.parse(turnStart ?? "") || undefined }} p={p} />;
   const imageStrip = images.length > 0 && <TurnImages images={images} mid={mid} sid={sid} cwd={getSession(mid, sid)?.cwd} />;
   return (
     <section className="flex flex-col gap-3" data-segment>
@@ -227,12 +233,14 @@ export const SegmentView = memo(function SegmentView({
       {/* while the agent works, its live work stays at the bottom */}
       {live && <Fragment key="before-words">{beforeWords}</Fragment>}
       <WorkNodes nodes={nodes.slice(0, cut)} p={p} live={live} fade />
-      {/* working with no run of steps going (its words just came, or nothing yet): the live group still shows */}
-      {working && <WorkGroup g={{ kind: "group", id: `work-live-${seg.id}`, children: [], live: true, startedAt: Date.parse(turnStart ?? "") || undefined }} p={p} />}
+      {/* working with no run of steps going (its words just came, or nothing yet): the live group still shows, under an
+          agent's live words while they are there (batchedWords) */}
+      {streaming === undefined && liveRow}
       {imageStrip}
       {!live && <Fragment key="before-words">{beforeWords}</Fragment>}
       <WorkNodes nodes={nodes.slice(cut)} p={p} fade />
       {streaming !== undefined && <Answer streaming={streaming} mid={mid} sid={sid} />}
+      {streaming !== undefined && liveRow}
     </section>
   );
 });

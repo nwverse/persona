@@ -12,7 +12,7 @@ import SwiftUI
 nonisolated extension ExtensionView {
     /// It has something only the code page draws: tabs, a split, or one of UI version 4's components.
     var wantsCodePage: Bool {
-        if tabs != nil || layout == ExtensionLayout.split { return true }
+        if review != nil || tabs != nil || layout == ExtensionLayout.split { return true }
         return sections.contains { s in s.items.contains { $0.isCodeHosting } }
     }
 }
@@ -323,6 +323,11 @@ struct ExtensionCodePage: View {
                 .frame(width: g.size.width, height: g.size.height, alignment: .top)
             }
             .background(Theme.pageBackground.ignoresSafeArea())
+            .safeAreaInset(edge: .bottom, spacing: Theme.Space.flush) {
+                if let review = view.review {
+                    ExtensionReviewBar(review: review, model: model, link: $link)
+                }
+            }
         }
     }
 
