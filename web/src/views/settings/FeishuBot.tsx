@@ -26,6 +26,7 @@ const FEATURES: { key: keyof BotFeatures; icon: IconName; title: string; detail:
   { key: "sync", icon: "loop", title: t("settings-feishubot.feature_sync_title"), detail: t("settings-feishubot.feature_sync_detail") },
   { key: "reports", icon: "list", title: t("settings-feishubot.feature_reports_title"), detail: t("settings-feishubot.feature_reports_detail") },
   { key: "board", icon: "pin", title: t("settings-feishubot.feature_board_title"), detail: t("settings-feishubot.feature_board_detail") },
+  { key: "only_conclusions", icon: "check", title: t("settings-feishubot.feature_only_conclusions_title"), detail: t("settings-feishubot.feature_only_conclusions_detail") },
   { key: "agents", icon: "agent", title: t("settings-feishubot.feature_agents_title"), detail: t("settings-feishubot.feature_agents_detail") },
 ];
 
@@ -248,7 +249,8 @@ function FeishuBotDialog({ bot, onClose }: { bot: ReturnType<typeof useBot>; onC
 
           <Group title={t("settings-feishubot.features")} footer={t("settings-feishubot.features_footer")}>
             {FEATURES.map((f) => {
-              const off = f.key === "all_cards" && !features.cards;
+              // "All cards" needs "cards"; "only conclusions" needs task progress, without which the hub sends no conclusions either.
+              const off = (f.key === "all_cards" && !features.cards) || (f.key === "only_conclusions" && features.reports === false);
               return (
                 <div key={f.key} className={cx("flex items-start gap-3 px-4 py-2.5", off && "opacity-50")}>
                   <Icon name={f.icon} size={15} className="mt-0.5 shrink-0 text-accent" />

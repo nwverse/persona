@@ -302,6 +302,19 @@ describe("extensions", () => {
     expect(extensionStatus({ status: "whatever" }).label).toBe("状态未知");
   });
 
+  it("says whether an attached extension is online and since when", () => {
+    const at = new Date();
+    at.setHours(10, 42, 0, 0);
+    const since = at.toISOString();
+    expect([
+      extensionRunNote({ status: "running", attached: { online: true, since } }),
+      extensionRunNote({ status: "starting", attached: { online: false, since, error: "连不上" } }),
+      extensionRunNote({ status: "error", attached: { online: false, since, error: "连不上" } }),
+      extensionRunNote({ status: "stopped", attached: { online: false } }),
+      extensionRunNote({ status: "disabled", attached: { online: false } }),
+    ]).toEqual(["独立运行 · 10:42 起在线", "独立运行 · 正在重连，10:42 起离线：连不上", "独立运行 · 10:42 起离线", "独立运行，需要时再连接", ""]);
+  });
+
   it("checks a source before asking the hub", () => {
     expect(sourceProblem("")).toBe("");
     expect(sourceProblem("dir:/opt/extensions/notes")).toBe("");

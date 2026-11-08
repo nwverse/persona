@@ -140,7 +140,7 @@ are still dispatched to connectors by the hub (the manager asks through `app.cal
 ### Knowledge-base ingestion
 
 - `Archive`: one cursor per account; `Changes(cursor)` returns changed conversations. The hub stores the cursor in `cursors/<id>.json`; conversation ids are `<connector id>-<conversation id>`.
-- `Chats`: for sources like Lark with per-conversation cursors and attachments, provide `kb.Source` directly; archiving, compression and tagging stay unchanged.
+- `Chats`: for sources like Lark with per-conversation cursors and attachments, provide `kb.Source` directly; archiving, compression and tagging stay unchanged. Older history is imported separately (`docs/assistant/knowledge.md`, "History import").
 - `History` (capability `history`, requires `archive`): a conversation's older history, which `Changes` never reaches.
   `HistoryChats` lists the conversations that can be imported (kind dm / group / bot / official / system, muted, a
   rough message count; a conversation id is unique across the connector's archive sources, since a query names it by

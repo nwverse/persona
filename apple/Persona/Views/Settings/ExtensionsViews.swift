@@ -99,7 +99,7 @@ private struct ExtensionRowLabel: View {
                 Label {
                     Text(plugin.name).lineLimit(1)
                 } icon: {
-                    Image(systemName: Theme.Icon.plugins)
+                    ThemedIcon(Theme.Icon.plugins)
                 }
             }
         }
@@ -200,7 +200,7 @@ struct ExtensionDetailView: View {
                         Text("When off, it stops running and the connectors and other things it provides turn off too; its settings and secrets stay.")
                     }
                 }
-                if let auto = d.plugin.autoUpgrade { upgrades(d.plugin, auto: auto) }
+                if d.plugin.autoUpgrade != nil { upgrades(d.plugin) }
                 pages(d)
                 connectorSections(d)
                 if !d.readOnly && !d.form.isEmpty { form(d) }
@@ -313,11 +313,14 @@ struct ExtensionDetailView: View {
 
     /// A market plugin's upgrades (docs/extensions/extensions.md「自动升级」): its own switch, its newer version (opening the market's
     /// upgrade when it waits for the user) or what happened last.
-    @ViewBuilder private func upgrades(_ p: HubExtension, auto: Bool) -> some View {
+    @ViewBuilder private func upgrades(_ p: HubExtension) -> some View {
+        // Switched off, the extension is not upgraded: its switch shows off and waits (the hub keeps it) until it is on.
+        let paused = p.autoUpgradePaused != nil
         Section {
-            Toggle(isOn: Binding(get: { auto }, set: { on in Task { await page.setAutoUpgrade(on) } })) {
+            Toggle(isOn: Binding(get: { ExtensionText.autoUpgradeShown(p) }, set: { on in Task { await page.setAutoUpgrade(on) } })) {
                 Text("Auto-Update").lineLimit(1)
             }
+            .disabled(paused)
             .accessibilityIdentifier("plugin-auto-upgrade")
             if let u = p.upgrade {
                 if let action = ExtensionText.upgradeAction(u) {
@@ -342,7 +345,11 @@ struct ExtensionDetailView: View {
         } header: {
             SettingsHeading(String(localized: "Update [Extension Market Views 94996c]"))
         } footer: {
-            Text("When the market has a new version, it installs while the extension is idle, and asks you first if it wants more permissions. If it doesn't start after installing, it goes back to the previous version.")
+            if paused {
+                Text("Auto-update is paused while this extension is off. Turn it back on and your auto-update setting applies again.")
+            } else {
+                Text("When the market has a new version, it installs while the extension is idle, and asks you first if it wants more permissions. If it doesn't start after installing, it goes back to the previous version.")
+            }
         }
     }
 
@@ -354,7 +361,7 @@ struct ExtensionDetailView: View {
             Section {
                 ForEach(ui) { place in
                     NavigationLink(value: SettingsPage.pluginPage(plugin: d.plugin.id, ui: place.id, title: place.title)) {
-                        Label { Text(place.title).lineLimit(1) } icon: { Image(systemName: Theme.Icon.pluginPage) }
+                        Label { Text(place.title).lineLimit(1) } icon: { ThemedIcon(Theme.Icon.pluginPage) }
                     }
                     .accessibilityIdentifier("plugin-page-\(place.id)")
                 }
@@ -384,7 +391,7 @@ struct ExtensionDetailView: View {
                                 Text("Sign-in, status and more Inbox settings").font(Theme.Font.label).foregroundStyle(.secondary).lineLimit(1)
                             }
                         } icon: {
-                            Image(systemName: Theme.Icon.connectors)
+                            ThemedIcon(Theme.Icon.connectors)
                         }
                     }
                     .accessibilityIdentifier("extension-connector-open-\(c.id)")
@@ -439,7 +446,7 @@ struct ExtensionDetailView: View {
                             .foregroundStyle(s.set || s.required != true ? Color.secondary : Theme.caution)
                             .lineLimit(1)
                     } label: {
-                        Label { Text(s.title).lineLimit(1) } icon: { Image(systemName: Theme.Icon.credentials) }
+                        Label { Text(s.title).lineLimit(1) } icon: { ThemedIcon(Theme.Icon.credentials) }
                     }
                 }
                 .foregroundStyle(Color.primary)
@@ -543,7 +550,7 @@ struct ExtensionDetailView: View {
                 Link(destination: url) { Label("Website", systemImage: Theme.Icon.openExternal).lineLimit(1) }
             }
             ForEach(ExtensionAuthText.warnings(d.plugin.warnings, shown: auth), id: \.self) { w in
-                Label { Text(w).font(Theme.Font.label) } icon: { Image(systemName: Theme.Icon.error).foregroundStyle(Theme.caution) }
+                Label { Text(w).font(Theme.Font.label) } icon: { ThemedIcon(Theme.Icon.error).foregroundStyle(Theme.caution) }
             }
         } header: {
             SettingsHeading(String(localized: "About"))
@@ -804,7 +811,7 @@ private struct ExtensionListField: View {
                             next.remove(at: i)
                             store(next)
                         } label: {
-                            Image(systemName: Theme.Icon.clear).foregroundStyle(.secondary)
+                            ThemedIcon(Theme.Icon.clear).foregroundStyle(.secondary)
                         }
                         .buttonStyle(.plain)
                         .accessibilityLabel("Delete \(item)")
@@ -818,7 +825,7 @@ private struct ExtensionListField: View {
                         .textInputAutocapitalization(.never)
                         .autocorrectionDisabled()
                         .onSubmit(add)
-                    Button(action: add) { Image(systemName: Theme.Icon.add) }
+                    Button(action: add) { ThemedIcon(Theme.Icon.add) }
                         .buttonStyle(.plain)
                         .foregroundStyle(Theme.accent)
                         .disabled(adding.trimmingCharacters(in: .whitespaces).isEmpty)
