@@ -87,7 +87,10 @@ struct ChatView: View {
         /// and came back on release (the Mac, 2026-11-04: 80 pt into a drag the list was at the newest again, 380 pt
         /// away as it glided, then back).
         var text = ""
-        var pending: [UUID] = []
+        /// By `ChatLines.frozenKey`, which a resend keeps (its id changes).
+        var pending: Set<String> = []
+        /// Where the failed ones among them were drawn: the line each sat before (`ChatLines.placeFrozen`).
+        var failedAt: [String: String] = [:]
     }
     /// The user dragged the list at least once: only then does reaching the top load older pages (a lazy stack may
     /// lay out the top row while settling at the bottom, which used to chain-load history on entry).
@@ -1999,6 +2002,10 @@ struct ChatView: View {
                 if !pendingCards.isEmpty {
                     PendingCards(cards: pendingCards, room: footerRoom)
                 }
+                // The latest question the assistant answered here (#544), until put away; Session Info lists them all.
+                if let answered = model.delegated(for: key).last {
+                    DelegatedCard(answer: answered)
+                }
                 // The last card was answered: one low-key entry to the next conversation that needs you (#4348).
                 if let next = nextNeedsYouSession {
                     NextNeedsYouStrip(title: next.assistant ? (next.title.isEmpty ? model.persona.name : next.title) : next.displayTitle) {
@@ -2118,9 +2125,12 @@ struct ChatView: View {
                     .id("starting-turn")
             }
             // Sent from here, not in the transcript yet (ones Claude queued show in the queue strip instead). One that
-            // failed with messages sent after it sits before the first of them, among the lines below (#6023); not
-            // while history is read (`Frozen`): nothing moves under the reader then.
-            let placed = frozen.map { f in (before: [String: [PendingMessage]](), rest: pending.filter { f.pending.contains($0.id) }) }
+            // failed with messages sent after it sits before the first of them, among the lines below (#6023). While
+            // history is read (`Frozen`) each stays where it was drawn when the freeze began: nothing moves under the
+            // reader then (#1243).
+            let placed = frozen.map { f in
+                ChatLines.placeFrozen(lines, pending.filter { f.pending.contains(ChatLines.frozenKey($0)) }, at: f.failedAt)
+            }
                 ?? ChatLines.placeFailed(lines, pending, writtenAt: store.writtenAt)
             ForEach(placed.rest.reversed()) { msg in pendingBubble(msg) }
             // The first message of a conversation, not in the transcript yet: its day over it, as the new-conversation
@@ -2298,8 +2308,10 @@ struct ChatView: View {
             if !holds {
                 frozen = nil
             } else if let last = store.items.last {
+                let failed = ChatLines.placeFailed(currentLines(), store.pending, writtenAt: store.writtenAt).before
                 frozen = Frozen(seq: last.seq, part: last.part, live: liveTurnID,
-                                text: style == .assistant && liveShown ? store.liveText : "", pending: store.pending.map(\.id))
+                                text: style == .assistant && liveShown ? store.liveText : "",
+                                pending: Set(store.pending.map(ChatLines.frozenKey)), failedAt: ChatLines.failedLines(failed))
             }
         }
         .onChange(of: store.rows.last?.id) { _, _ in contentArrived(foldChrome: false) }
@@ -4629,6 +4641,7 @@ struct SessionInfoSheet: View {
     @State private var error: String?
     @State private var showTodo = false
     @State private var grants = AlwaysGrantsModel()
+    @State private var delegatedHistory = DelegatedHistoryModel()
 
     /// Only assistant conversations remember "always allow" (docs/assistant/assistant.md); Agents sessions keep theirs in Claude.
     private var isAssistant: Bool { assistant || (model.session(key) ?? session)?.assistant == true }
@@ -4642,6 +4655,8 @@ struct SessionInfoSheet: View {
                 if let link = session?.externalLink { Section { FeishuLink(url: link) } }
                 if isAssistant {
                     AlwaysGrantsSection(page: grants, conversation: key.sessionID, api: model.api(key.group))
+                } else {
+                    DelegatedHistorySection(page: delegatedHistory, key: key, manager: session?.manager, api: model.api(key.group))
                 }
                 if let info {
                     Section("Runtime") {
@@ -4716,6 +4731,10 @@ struct SessionInfoSheet: View {
         // Keyed on `isAssistant` too: on a cold open the session arrives after this sheet does.
         .task(id: isAssistant ? key : nil) {
             if isAssistant { await grants.load(conversation: key.sessionID, api: model.api(key.group)) }
+        }
+        // The questions the assistant answered for an agent (#544); its own conversations have none.
+        .task(id: isAssistant ? nil : key) {
+            if !isAssistant { await delegatedHistory.load(key, manager: session?.manager, api: model.api(key.group)) }
         }
     }
 
