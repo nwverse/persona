@@ -10,6 +10,8 @@ Pitfalls, odd behavior and the trade-offs made at the time (formerly in `CLAUDE.
 
 - Resuming a workflow-owned agent with `SendMessage` before the runtime registered it created a second writer in the same worktree (#5956). Use only workflow pipeline stages to resume workflow-owned work. If writers collide, stop both, preserve all files in a full backup, then designate one recovery writer before changing anything.
 
+- Synthetic Git tests must remove inherited repository-locator variables from each child process environment (#1161): `GIT_DIR`, `GIT_WORK_TREE`, `GIT_INDEX_FILE`, `GIT_COMMON_DIR`, `GIT_OBJECT_DIRECTORY` and `GIT_ALTERNATE_OBJECT_DIRECTORIES` can redirect a command even when it uses `git -C` with a temporary fixture. Use independent test Git metadata, not the reviewed worktree's refs or index. If a test accidentally writes to that worktree, verify its branch, HEAD, index and protected files after restoring only the test's changes; report the write rather than claiming an entirely read-only review. This occurred during the Sentry source review: a local test commit changed refs/index; those changes were restored and protected source/diff hashes remained unchanged. No push occurred. Never prune the shared repository to hide test objects.
+
 - Multiple agents working in this repo at once: each uses its own simulator (`SIM=<udid> scripts/app/sim.sh`); when someone else's unfinished files do not compile, build your own changes in a `git worktree`;
   commits stage only your own files / hunks.
 - mock hub ports collide too (2026-10-31: another lane's `mock_hub.py` held 18794, your own mock with `MOCK_DRAWER=1` could not start, the tests connected to someone else's mock
@@ -58,6 +60,11 @@ Pitfalls, odd behavior and the trade-offs made at the time (formerly in `CLAUDE.
 - Privacy scans in a separate worktree locate the root from the checkout the script belongs to (#336), regardless of the caller's current directory. The old version used the caller's `git rev-parse --show-toplevel`: calling `/tmp/<worktree>/scripts/privacy_check.py` from the main working tree scanned the main working tree and also read its `CLAUDE.local.md` (2026-11-02, #341). When the two give different results, first confirm the script version and the scan root; do not skip or loosen the rules.
 - Static web help text, form placeholders, mocks and example machine IDs in tests must also avoid personal config values (2026-11-03, #627): even a common machine-type word, if it matches the local config, makes the repo-wide privacy scan block the release. Use explicit example identifiers for IDs, example.com for domains, describe machine types in prose; do not change the sensitive-word list or add exemptions for the page.
 - Older versions of `gh pr checks` do not support `--fail-fast` (2026-11-02, #341): check `--help` first and use the supported `--watch` / `--interval`; exit code 1 from a bad argument is not a CI failure; look at the specific check's conclusion.
+
+## Source migration acceptance and dependency provenance
+
+- Cold full-view HTTP source tests must use the real manager lifecycle (#1161, #1184). An SDK fixture that waits until loading finishes before taking a snapshot can miss suspension canceling the request after every HTTP response. Test cold mount, resume and actions through the actual bridge, preserve loading/error/retry evidence, and require the intended contribution to finish; HTTP 200 alone is not acceptance.
+- Generate public npm lockfiles with an explicit public registry and isolated npm configuration, then inspect every `resolved` download origin (#1161). Public package names and a clean private-term scan do not prove that all dependency URLs are public: the terms dictionary may not include an inherited registry host. Check provenance separately, without publishing blocked host names or weakening privacy rules.
 
 ## Portable JavaScript test output
 
