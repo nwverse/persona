@@ -3140,6 +3140,10 @@ if MOCK_TASKS:
         for _i, _x in enumerate(ITEMS[ASK1]):
             _x["seq"] = _base + _i
         TASK_FEED[ASK1] += [
+            # Yesterday's hand-off with the blog migration's card (#1668): that card is a line now, so this stays a folded
+            # line under it (MOCK_TASKS_AT=1559 puts it at the bottom).
+            _feed("feed_s0", 60 * 26 - 0.61, "routed", "todo_task_blog",
+                  {"text": "把博客从 Hexo 迁到 Astro。\n\n要求：\n- 32 篇文章都要能构建\n- 旧链接全部 301 到新地址\n- Lighthouse 性能分 90 以上", "from": "assistant"}),
             _feed("feed_s1", 1.05, "task", "todo_task_memory"),
             _feed("feed_s2", 1.0499, "routed", "todo_task_memory", {"text": _handoff, "from": "assistant"}),
             _feed("feed_s3", 0.6, "routed", "todo_task_widget", {"text": _rework, "from": "assistant"}),
