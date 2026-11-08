@@ -175,12 +175,12 @@ expect '"online":true,"deploy":"child"'
 - `install --builtin --check` must print `ready`. It changes nothing. It fails on a build from before the split (`flag provided but not defined: -builtin`), and on Linux without a systemd user instance (`cannot install its service`); then follow [No service manager](#no-service-manager).
 - `hub.json` is unchanged: the same `token`, no `assistant.mode`.
 
-**Way back:** the update's own rollback is automatic. By hand, put `bin/` back and restart the hub's service. Replace each file by a rename, never by writing into it: the running hub's binary can't be written over (`Text file busy`). Leave the links in `bin/` as they are: setup keeps the binary's former name there as a link to `personad`, and it has to keep naming the restored file.
+**Way back:** the update's own rollback is automatic. By hand, put `bin/` back and restart the hub's service. Replace each file by a rename, never by writing into it: the running hub's binary can't be written over (`Text file busy`). Put the links in `bin/` back as they were: `bin/` keeps the binary under its former name too, one of the two names a link to the other (which one depends on how the install began), and an update by the install command can turn that around.
 
 ```sh
 R="$BK/restore"; mkdir -p "$R" && tar xzf "$BK/data.tgz" -C "$R" "$(basename "$DATA")/bin"
 for f in "$R/$(basename "$DATA")/bin/"*; do
-  [ -L "$f" ] && continue
+  if [ -L "$f" ]; then ln -sfn "$(readlink "$f")" "$DATA/bin/${f##*/}"; continue; fi
   [ -f "$f" ] || continue
   cp -p "$f" "$DATA/bin/.restore" && mv -f "$DATA/bin/.restore" "$DATA/bin/${f##*/}"
 done
