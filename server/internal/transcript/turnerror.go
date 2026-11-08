@@ -22,7 +22,17 @@ func (m *Meta) ClaudeTurnStarted(wake bool) {
 	resumes := m.TurnErrorResumes && wake
 	m.clearTurnError()
 	m.TurnErrorResumes, m.turnWorked = resumes, false
+	m.resumesSaid = m.resumesSaid || !wake
 }
+
+// TurnErrorResumesSaid: a line read said whether Claude Code goes on by itself after its limit (its notices, a
+// message typed, a reply, another error). False when none did: the lines read start after its notice (a tail of the
+// transcript), and what an earlier read found stands.
+func (m *Meta) TurnErrorResumesSaid() bool { return m.resumesSaid }
+
+// ReadingTail: the lines parsed from here on are the transcript's tail, after its head was read for the title (a
+// prompt there says nothing of a wait at the end): TurnErrorResumesSaid counts the tail's lines only.
+func (m *Meta) ReadingTail() { m.resumesSaid = false }
 
 func (m *Meta) clearTurnError() {
 	m.TurnError, m.TurnErrorKind, m.TurnErrorResetsAt = "", "", time.Time{}
@@ -36,7 +46,7 @@ func (m *Meta) claudeReply(e *entry, blocks []block, shown bool) {
 	if !e.IsAPIErrorMessage {
 		if shown && e.Message.Model != "<synthetic>" {
 			m.clearTurnError()
-			m.turnWorked = true
+			m.turnWorked, m.resumesSaid = true, true
 		}
 		return
 	}
@@ -57,7 +67,7 @@ func (m *Meta) claudeReply(e *entry, blocks []block, shown bool) {
 	}
 	kind, reset := claudeErrorKind(code, e)
 	if kind != proto.TurnErrorUsageLimit {
-		m.TurnErrorResumes = false // only a limit's wait ends in Claude Code's own continuation
+		m.TurnErrorResumes, m.resumesSaid = false, true // only a limit's wait ends in Claude Code's own continuation
 	}
 	m.TurnError, m.TurnErrorKind, m.TurnErrorResetsAt = text, kind, reset
 	m.TurnErrorAfterWork, m.turnErrorLine = m.turnWorked, e.UUID
@@ -112,9 +122,9 @@ func (m *Meta) claudeLimitNotice(text string) {
 	t := strings.ToLower(strings.TrimSpace(text))
 	switch {
 	case strings.HasPrefix(t, "automatic continue"), strings.Contains(t, "press enter to continue"):
-		m.TurnErrorResumes = false
+		m.TurnErrorResumes, m.resumesSaid = false, true
 	case strings.HasPrefix(t, "usage limit reset"), strings.HasPrefix(t, "usage limit available again"):
 	case strings.Contains(t, "continuing automatically"):
-		m.TurnErrorResumes = true
+		m.TurnErrorResumes, m.resumesSaid = true, true
 	}
 }

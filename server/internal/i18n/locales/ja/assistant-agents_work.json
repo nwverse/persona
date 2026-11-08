@@ -22,6 +22,7 @@
   "retries_ask": "モデルサービスのエラーが続いており、{n}回自動で再試行しました：{error}",
   "limit_resumes": "利用上限に達しました。{time}に自動で再開します",
   "limit_resets": "利用上限に達しました。{time}にリセットされます",
+  "limit_resumes_later": "利用上限に達しました。リセット後に自分で続けます",
   "limit_line": "利用上限に達しました：{error}",
   "limit_ask": "サブスクリプションの利用上限に達しました。リセット時刻はわかりません：{error}",
   "header_limit": "利用上限",

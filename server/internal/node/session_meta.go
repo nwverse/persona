@@ -181,6 +181,7 @@ func readQuickMetaSince(path string, st os.FileInfo, prev quickMeta) quickMeta {
 		nr, _ = f.ReadAt(head, 0)
 	}
 	first := tm.FirstUser
+	tm.ReadingTail()
 	off := max(st.Size()-quickTail, 0)
 	// The tail's lines in the transcript's tree: a turn the user went back over (a rewind in the terminal, then a recap
 	// beside it) is not where the agent's last words come from (transcript/branch.go).
@@ -257,6 +258,12 @@ func readQuickMetaSince(path string, st os.FileInfo, prev quickMeta) quickMeta {
 	m.claudeTurn = !tm.Codex && tm.TurnOpen
 	m.turnErr = turnFailure{text: tm.TurnError, kind: tm.TurnErrorKind, resetsAt: tm.TurnErrorResetsAt,
 		resumes: tm.TurnErrorResumes, afterWork: tm.TurnErrorAfterWork}
+	if tm.TurnErrorKind == proto.TurnErrorUsageLimit && !tm.TurnErrorResumesSaid() && prev.size > 0 && prev.size <= st.Size() {
+		// Claude Code's notice that it goes on by itself is written once, at the first refused turn; the wait's wakes
+		// write request lines of hundreds of KB each, and soon the tail starts after it. Nothing in the tail took it
+		// back (a message typed, a reply, its cancel notice), so what the last read found stands (#1710).
+		m.turnErr.resumes = prev.turnErr.resumes
+	}
 	m.mode, m.modeAt, m.effort, m.effortAt, m.sandbox = tm.PermissionMode, tm.ModeAt, tm.Effort, tm.EffortAt, tm.CodexSandbox
 	m.version, m.versionAt, m.ultracode, m.ultracodeAt = tm.Version, tm.VersionAt, tm.Ultracode, tm.UltracodeAt
 	m.contextTokens, m.contextWindow = tm.ContextTokens, tm.ContextWindow

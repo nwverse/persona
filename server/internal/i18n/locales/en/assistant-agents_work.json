@@ -22,6 +22,7 @@
   "retries_ask": "The model service keeps failing and was retried {n} times: {error}",
   "limit_resumes": "Usage limit reached; it goes on by itself at {time}",
   "limit_resets": "Usage limit reached; resets at {time}",
+  "limit_resumes_later": "Usage limit reached; it goes on by itself after the reset",
   "limit_line": "Usage limit reached: {error}",
   "limit_ask": "The subscription’s usage limit is used up, and it didn’t say when it resets: {error}",
   "header_limit": "Usage limit",

@@ -195,6 +195,8 @@ type Meta struct {
 	// (claudeLimitNotice). It outlasts the turns background tasks wake the session for while it waits (each fails
 	// again at once, with no new notice), not a message: typing cancels Claude Code's own continuation.
 	TurnErrorResumes bool
+	// resumesSaid: a line read said whether Claude Code goes on by itself (TurnErrorResumesSaid).
+	resumesSaid bool
 	// TurnErrorAfterWork: the failed turn did some work (a reply, a tool call, thinking) before the error ended it.
 	TurnErrorAfterWork bool
 	// turnWorked: the turn under way did some work so far (TurnErrorAfterWork when it fails); its end or the next

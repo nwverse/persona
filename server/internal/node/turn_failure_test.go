@@ -138,3 +138,32 @@ func TestReportedTurnFailure(t *testing.T) {
 		t.Fatalf("the rollout has not got it yet: %+v", s.TurnErrorResetsAt)
 	}
 }
+
+// Claude Code says once that it goes on by itself; the wait's wakes write request lines of hundreds of KB, and the
+// tail soon starts after the notice. What the last read found stands until a line in the tail takes it back (#1710).
+func TestQuickMetaKeepsTheResumeNoticeOutOfTheTail(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "s.jsonl")
+	lines := []string{claudeLimitPrompt, claudeLimitWork, claudeLimitLine, claudeLimitNotice, claudeLimitEnd}
+	m := readQuickMetaSince(path, writeLines(t, path, lines), quickMeta{})
+	if !m.turnErr.resumes {
+		t.Fatalf("the notice: %+v", m.turnErr)
+	}
+	blob := `{"type":"api-request-blob","content":"` + strings.Repeat("x", quickTail) + `"}`
+	wake := `{"type":"user","uuid":"w1","parentUuid":"d1","isSidechain":false,"timestamp":"2026-01-01T12:15:00Z","origin":{"kind":"task-notification"},` +
+		`"message":{"role":"user","content":"<task-notification>\n<task-id>b1</task-id>\n<tool-use-id>toolu_1</tool-use-id>\n<status>completed</status>\n` +
+		`<summary>Background command \"make check\" completed (exit code 0)</summary>\n</task-notification>"}}`
+	refused := strings.Replace(claudeLimitLine, `"uuid":"e1","parentUuid":"a1"`, `"uuid":"e2","parentUuid":"w1"`, 1)
+	lines = append(lines, blob, wake, refused)
+	if m = readQuickMetaSince(path, writeLines(t, path, lines), m); m.turnErr.kind != proto.TurnErrorUsageLimit || !m.turnErr.resumes {
+		t.Fatalf("the notice out of the tail: %+v", m.turnErr)
+	}
+	if fresh := readQuickMetaSince(path, writeLines(t, path, lines), quickMeta{}); fresh.turnErr.resumes {
+		t.Fatalf("no earlier read, yet resumes: %+v", fresh.turnErr) // nothing to go by: Persona may continue it
+	}
+	typed := `{"type":"user","uuid":"u2","parentUuid":"e2","isSidechain":false,"timestamp":"2026-01-01T12:16:00Z","message":{"role":"user","content":"go on"}}`
+	again := strings.Replace(claudeLimitLine, `"uuid":"e1","parentUuid":"a1"`, `"uuid":"e3","parentUuid":"u2"`, 1)
+	lines = append(lines, typed, again)
+	if m = readQuickMetaSince(path, writeLines(t, path, lines), m); m.turnErr.kind != proto.TurnErrorUsageLimit || m.turnErr.resumes {
+		t.Fatalf("a message typed cancels it: %+v", m.turnErr)
+	}
+}

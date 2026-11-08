@@ -7,14 +7,17 @@ import (
 
 func TestUsageLimitText(t *testing.T) {
 	for text, want := range map[string]bool{
-		"You've hit your session limit · resets 4:20pm (Asia/Shanghai)":          true,
-		"You've hit your weekly limit · resets Sep 28, 4pm (America/New_York)":   true,
-		"  You've hit your Opus limit · resets 9am (UTC)":                        true,
-		"You've hit your monthly spend limit.":                                   true,
-		"API Error: Request rejected (429) · quota reached":                      false,
-		"Fixed it. When you see \"You've hit your session limit\", wait for it.": false,
-		"You've hit your stride, nice work":                                      false,
-		"":                                                                       false,
+		"You've hit your session limit · resets 4:20pm (Asia/Shanghai)":            true,
+		"You've hit your weekly limit · resets Sep 28, 4pm (America/New_York)":     true,
+		"  You've hit your Opus limit · resets 9am (UTC)":                          true,
+		"You've hit your monthly spend limit.":                                     true,
+		"API Error: Request rejected (429) · quota reached":                        false,
+		"Fixed it. When you see \"You've hit your session limit\", wait for it.":   false,
+		"You've hit your stride, nice work":                                        false,
+		"You’ve hit your session limit · resets 4pm (UTC)":                         true,
+		"You've hit your target of 90% coverage; next I'll look at the rate limit": false,
+		"You've hit your goal. The limit is next":                                  false,
+		"": false,
 	} {
 		if got := UsageLimitText(text); got != want {
 			t.Errorf("UsageLimitText(%q) = %v, want %v", text, got, want)

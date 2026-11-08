@@ -1494,7 +1494,8 @@ func (s *Service) watchScheduledRun(run ScheduleRun, t Task, m Device) {
 	if run.Retried {
 		return
 	}
-	if reset, resumes, limited := s.runLimit(ctx, m.ID, run.SessionID, full); limited {
+	var limitTurn time.Time // the turn a usage limit stopped, when one did: the retry goes only while it is still the last
+	if reset, turn, resumes, limited := s.runLimit(ctx, m.ID, run.SessionID, full); limited {
 		// A subscription's usage limit (docs/assistant/agent-work.md "Usage limits"): a retry before it resets is
 		// refused at once. The conversation that goes on by itself then needs none; otherwise the retry waits for the
 		// reset, however long that is — the watcher's time is for the turn, not for this.
@@ -1506,6 +1507,7 @@ func (s *Service) watchScheduledRun(run ScheduleRun, t Task, m Device) {
 		wait := s.limitRetryWait(reset, time.Now())
 		s.logf("task %s run %s: the usage limit resets at %s: retried in %s", t.ID, run.ID, reset.UTC().Format(time.RFC3339), wait.Round(time.Second))
 		time.Sleep(wait)
+		limitTurn = turn
 	} else {
 		delay := runRetryDelay
 		if s.runRetry > 0 {
@@ -1522,6 +1524,14 @@ func (s *Service) watchScheduledRun(run ScheduleRun, t Task, m Device) {
 	// again regardless, with the old prompt, and silently (a retry that fails is not pushed).
 	rctx, rcancel := context.WithTimeout(context.Background(), 10*time.Second)
 	cur, ok := s.retryStillDue(rctx, t.ID, run)
+	if ok && !limitTurn.IsZero() {
+		// The wait for the reset is long: the conversation may have gone on meanwhile (the user said "go on" after the
+		// reset), and the work it did (a mail, a message) is not to be done twice.
+		if c, found := s.session(rctx, m.ID, run.SessionID); found && (c.Status == proto.StatusWorking || !sameTurn(c, limitTurn)) {
+			s.logf("task %s run %s: its conversation went on after the usage limit: not retried", t.ID, run.ID)
+			ok = false
+		}
+	}
 	rcancel()
 	if !ok {
 		return
@@ -1532,9 +1542,10 @@ func (s *Service) watchScheduledRun(run ScheduleRun, t Task, m Device) {
 }
 
 // runLimit: the run's conversation (sid on machine) stopped on a subscription's usage limit whose reset is known
-// (text: its turn's error), and whether its CLI said it goes on by itself then. As the lists have the conversation (the
-// node's record, else Claude Code's words when they name a time zone, decorateLimit), else as the node has it.
-func (s *Service) runLimit(ctx context.Context, machine, sid, text string) (reset time.Time, resumes, ok bool) {
+// (text: its turn's error), the end of that turn (the conversation's updated_at), and whether its CLI said it goes on
+// by itself then. As the lists have the conversation (the node's record, else Claude Code's words when they name a time
+// zone, decorateLimit), else as the node has it.
+func (s *Service) runLimit(ctx context.Context, machine, sid, text string) (reset, turn time.Time, resumes, ok bool) {
 	c, found := s.decoratedSession(machine, sid)
 	if !found {
 		c, _ = s.session(ctx, machine, sid)
@@ -1542,12 +1553,13 @@ func (s *Service) runLimit(ctx context.Context, machine, sid, text string) (rese
 	if strings.TrimSpace(c.TurnError) == "" {
 		c.TurnError = text // Claude Code's error is its last words: an older node's raw session has no turn error
 	}
+	turn = c.UpdatedAt
 	if c.UpdatedAt.IsZero() {
 		c.UpdatedAt = time.Now()
 	}
 	decorateLimit(&c)
 	reset, ok = usageLimitReset(c)
-	return reset, ok && c.TurnErrorResumes, ok
+	return reset, turn, ok && c.TurnErrorResumes, ok
 }
 
 // limitRetryWait is how long the retry of a run a usage limit stopped waits: until a minute or so after the reset

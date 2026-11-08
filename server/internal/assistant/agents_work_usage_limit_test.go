@@ -66,6 +66,12 @@ func TestUsageLimitTriage(t *testing.T) {
 		w.Questions[0].Options[0].Label != answerRetry || w.Questions[0].Options[1].Label != answerSkip {
 		t.Fatalf("no reset known: %+v", w)
 	}
+	// No reset known, but its CLI said it goes on by itself: no card (its Retry would type into it), no push.
+	unknown.TurnErrorResumes = true
+	if w, _, _ := triageRules(unknown, time.UTC, ""); w == nil || w.On != proto.WaitExternal || len(w.Questions) != 0 || w.ResetsAt != nil ||
+		w.Wait != "" || !managerWaits(w) || !limitTakenUp(unknown, time.Now()) {
+		t.Fatalf("no reset known, goes on by itself: %+v", w)
+	}
 
 	c := limitTurn("s1", reset, false)
 	c.TurnError = "API Error: 429 rate limit exceeded"
@@ -78,17 +84,18 @@ func TestUsageLimitTriage(t *testing.T) {
 		t.Fatalf("a gateway's 429: %q %+v", gateway.TurnErrorKind, w)
 	}
 
-	// The time of day within the next twenty hours or so, the month and day as well beyond.
+	// The time of day when the reset is today, the month and day as well when it is another day (tomorrow morning too).
 	at := time.Date(2026, 3, 4, 10, 0, 0, 0, time.UTC)
 	for _, tc := range []struct {
 		reset time.Time
 		want  string
-	}{{at.Add(3 * time.Hour), "13:00"}, {at.Add(-time.Minute), "09:59"}, {at.Add(3 * 24 * time.Hour), "03-07 10:00"}} {
+	}{{at.Add(3 * time.Hour), "13:00"}, {at.Add(-time.Minute), "09:59"}, {at.Add(3 * 24 * time.Hour), "03-07 10:00"},
+		{at.Add(20 * time.Hour), "03-05 06:00"}} {
 		if got := limitClock(tc.reset, at, time.UTC); got != tc.want {
 			t.Errorf("limitClock(%v) = %q, want %q", tc.reset, got, tc.want)
 		}
 	}
-	if got := limitClock(at.Add(3*time.Hour), at, time.FixedZone("UTC+8", 8*3600)); got != "21:00" {
+	if got := limitClock(at.Add(3*time.Hour), at, time.FixedZone("UTC+8", 8*3600)); got != "21:00" { // 18:00 → 21:00 there
 		t.Errorf("in the user's time zone: %q", got)
 	}
 }
@@ -242,6 +249,8 @@ func TestUsageLimitCountIsItsOwn(t *testing.T) {
 	reset := time.Now()
 	limit := proto.WorkState{Phase: proto.WorkBlocked, On: proto.WaitExternal, ResetsAt: &reset}
 	wait := proto.WorkState{Phase: proto.WorkBlocked, On: proto.WaitExternal, Wait: "CI 跑完"}
+	next := reset.Add(5 * time.Hour)
+	later := proto.WorkState{Phase: proto.WorkBlocked, On: proto.WaitExternal, ResetsAt: &next}
 	refused := proto.Session{}
 	for _, tc := range []struct {
 		name          string
@@ -251,6 +260,7 @@ func TestUsageLimitCountIsItsOwn(t *testing.T) {
 	}{
 		{"limit after limit", limit, limit, refused, 2, 0},
 		{"limit after a productive turn", limit, limit, proto.Session{TurnErrorAfterWork: true}, 0, 0},
+		{"limit with a later reset", limit, later, refused, 0, 0},
 		{"limit after a wait", wait, limit, refused, 0, 0},
 		{"wait after a limit", limit, wait, refused, 0, 0},
 		{"wait after a wait", wait, wait, refused, 2, 3},

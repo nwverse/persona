@@ -112,3 +112,26 @@ func TestLimitRetryWait(t *testing.T) {
 		}
 	}
 }
+
+// The wait for the reset is long: a conversation that went on meanwhile (the user said "go on" after the reset) is not
+// retried, so what the run does is not done twice.
+func TestUsageLimitScheduledRunThatWentOnIsNotRetried(t *testing.T) {
+	n := newFakeHub().withMachine()
+	h := newStorelessService(t, n)
+	h.runRetry = time.Hour
+	stopped := time.Now().Add(-time.Minute)
+	h.sched.limitWait = func(time.Time, time.Time) time.Duration {
+		n.mu.Lock()
+		for i := range n.sessions["server"] {
+			n.sessions["server"][i].UpdatedAt = time.Now() // a later turn ended meanwhile
+			n.sessions["server"][i].LastText = "发好了"
+		}
+		n.mu.Unlock()
+		return 50 * time.Millisecond
+	}
+	limitRun(t, n, h, func(c *proto.Session) { c.UpdatedAt = stopped })
+	time.Sleep(500 * time.Millisecond)
+	if n.sent() != 1 || retried(h) {
+		t.Fatalf("retried: %d sends", n.sent())
+	}
+}

@@ -173,15 +173,16 @@ func (s *Service) triageTurn(ctx context.Context, v *workView, machine string, c
 
 // carryCounts: the same wait goes on (the manager woke or continued it, it still waits), so e's counts are last's
 // (none: a zero last). A usage limit's count is its own: it carries from the turn before only when that one stopped
-// on a usage limit too (its card after the continues included) and this one did no work before the limit refused it
-// again; a turn that did work starts it again. An ordinary wait never takes a usage limit's count, nor the other way.
+// on a usage limit too (its card after the continues included), with no later reset (a later one is the next window),
+// and this one did no work before the limit refused it again; a turn that did work starts it again. An ordinary wait never takes a usage limit's count, nor the other way.
 func carryCounts(e *db.SessionWork, last db.SessionWork, c proto.Session) {
 	w := &e.Work
 	switch limit := w.ResetsAt != nil; {
 	case last.Work.Phase != proto.WorkBlocked || w.Phase != proto.WorkBlocked:
 	case limit != (last.Work.ResetsAt != nil):
 	case limit:
-		if !c.TurnErrorAfterWork {
+		// The same reset still (a later one is another window: the earlier was read right) and no work since.
+		if !c.TurnErrorAfterWork && !w.ResetsAt.After(*last.Work.ResetsAt) {
 			e.Retries = last.Retries
 		}
 	case last.Work.On == w.On:
@@ -253,6 +254,10 @@ func triageRules(c proto.Session, loc *time.Location, l i18n.Lang) (w *proto.Wor
 func limitWork(c proto.Session, now time.Time, loc *time.Location, l i18n.Lang) *proto.WorkState {
 	e := c.TurnError
 	reset, ok := usageLimitReset(c)
+	if !ok && c.TurnErrorResumes {
+		// Its CLI goes on by itself after the reset, whenever that is: nothing to ask, and nothing may be typed into it.
+		return &proto.WorkState{Phase: proto.WorkBlocked, On: proto.WaitExternal, Line: workT(l, "limit_resumes_later")}
+	}
 	if !ok {
 		return &proto.WorkState{Phase: proto.WorkBlocked, On: proto.WaitUser, Line: clip(oneLine(workT(l, "limit_line", i18n.Args{"error": e})), 60),
 			Questions: []proto.Question{{Question: workT(l, "limit_ask", i18n.Args{"error": clip(oneLine(e), 300)}), Header: workT(l, "header_limit"),
@@ -272,13 +277,14 @@ func limitLine(l i18n.Lang, reset time.Time, resumes bool, now time.Time, loc *t
 	return workT(l, "limit_resets", i18n.Args{"time": limitClock(reset, now, loc)})
 }
 
-// limitClock is when a usage limit resets, as a line says it in loc: the time of day when that is within the next
-// twenty hours or so (a five-hour limit), with the month and day beyond (a weekly one). The same in every language.
+// limitClock is when a usage limit resets, as a line says it in loc: the time of day when that is today, with the
+// month and day when it is another day (tomorrow morning, a weekly limit). The same in every language.
 func limitClock(reset, now time.Time, loc *time.Location) string {
-	if reset.Sub(now) < 20*time.Hour {
-		return reset.In(loc).Format("15:04")
+	r, n := reset.In(loc), now.In(loc)
+	if r.YearDay() == n.YearDay() && r.Year() == n.Year() {
+		return r.Format("15:04")
 	}
-	return reset.In(loc).Format("01-02 15:04")
+	return r.Format("01-02 15:04")
 }
 
 func runningInBackground(c proto.Session) int {

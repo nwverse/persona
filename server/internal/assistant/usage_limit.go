@@ -64,14 +64,28 @@ func usageLimitWaiting(sess proto.Session, now time.Time) bool {
 
 // limitTakenUp: sess waits out its usage limit (usageLimitWaiting) and something goes on with it after the reset:
 // its CLI said it would (TurnErrorResumes), or the manager is to continue it or has asked the user (its work's wake or
-// card). Its turn is not told as finished or interrupted meanwhile (no push, no task receipt): it goes on. One nothing
-// takes up (the switches off, a CLI that does not resume) is told as it ends, as a usage limit the user goes on from.
+// card); a CLI that said so goes on even when the reset is not known. Its turn is not told as finished or interrupted
+// meanwhile (no push, no task receipt): it goes on. One nothing takes up (the switches off, a CLI that does not
+// resume) is told as it ends, as a usage limit the user goes on from.
 func limitTakenUp(sess proto.Session, now time.Time) bool {
+	if sess.TurnError != "" && sess.TurnErrorKind == proto.TurnErrorUsageLimit && sess.TurnErrorResumes {
+		reset, ok := usageLimitReset(sess)
+		return !ok || now.Before(reset.Add(limitResumeGrace)) // its CLI goes on, whenever the reset is
+	}
 	if !usageLimitWaiting(sess, now) {
 		return false
 	}
 	w := sess.Work
-	return sess.TurnErrorResumes || w != nil && w.ResetsAt != nil && (w.WakeAt != nil || w.InteractionID != "")
+	return w != nil && w.ResetsAt != nil && (w.WakeAt != nil || w.InteractionID != "")
+}
+
+// limitLookAgain is when a usage-limit wait sess's CLI or the manager takes up is looked at again for its task's
+// receipt: once it is over (limitResumeGrace past the reset), or, with no reset known, a five-hour window later.
+func limitLookAgain(sess proto.Session, now time.Time) time.Time {
+	if reset, ok := usageLimitReset(sess); ok {
+		return reset.Add(limitResumeGrace)
+	}
+	return now.Add(5*time.Hour + limitResumeGrace)
 }
 
 // limitContinueAt is when the manager continues work a usage limit stopped, the limit resetting at reset: about a

@@ -22,6 +22,7 @@
   "retries_ask": "模型服务一直出错，已经自动重试了 {n} 次：{error}",
   "limit_resumes": "用量额度用完了，{time} 自己接着做",
   "limit_resets": "用量额度用完了，{time} 重置",
+  "limit_resumes_later": "用量额度用完了，重置后自己接着做",
   "limit_line": "用量额度用完了：{error}",
   "limit_ask": "订阅的用量额度用完了，没说什么时候重置：{error}",
   "header_limit": "用量额度",
