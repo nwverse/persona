@@ -4,7 +4,6 @@ import (
 	"regexp/syntax"
 	"slices"
 	"strings"
-	"unicode/utf8"
 )
 
 // A gated pattern (NewGated) answers MatchString by first looking for the literals every match starts with: a large
@@ -116,10 +115,11 @@ func prefixes(re *syntax.Regexp) ([]string, bool) {
 // gate is what a gated pattern looks for in a text before matching it: one of lits.
 type gate struct {
 	lits []string
-	// ascii and other are lits by their first rune, for a gate with many: one pass over the text, rather than one per
-	// literal.
-	ascii [utf8.RuneSelf][]string
-	other map[rune][]string
+	// first is lits by their first byte, and second, for each first byte, the set of bytes that follow it in those
+	// lits (a bit per byte; every byte for a one-byte literal): for a gate with many, one pass over the text's bytes,
+	// comparing a literal only where the text has its first two bytes.
+	first  *[256][]string
+	second *[256][4]uint64
 }
 
 // fewLits is how many literals a gate looks for one at a time (strings.Contains is fast for each).
@@ -133,12 +133,13 @@ func newGate(src string) *gate {
 	}
 	g := &gate{lits: lits}
 	if len(lits) > fewLits {
-		g.other = map[rune][]string{}
+		g.first, g.second = new([256][]string), new([256][4]uint64)
 		for _, l := range lits {
-			if c, _ := utf8.DecodeRuneInString(l); c < utf8.RuneSelf {
-				g.ascii[c] = append(g.ascii[c], l)
+			g.first[l[0]] = append(g.first[l[0]], l)
+			if len(l) == 1 {
+				g.second[l[0]] = [4]uint64{^uint64(0), ^uint64(0), ^uint64(0), ^uint64(0)}
 			} else {
-				g.other[c] = append(g.other[c], l)
+				g.second[l[0]][l[1]>>6] |= 1 << (l[1] & 63)
 			}
 		}
 	}
@@ -147,7 +148,7 @@ func newGate(src string) *gate {
 
 // open: s holds one of the gate's literals, so the pattern may match it.
 func (g *gate) open(s string) bool {
-	if g.other == nil {
+	if g.first == nil {
 		for _, l := range g.lits {
 			if strings.Contains(s, l) {
 				return true
@@ -155,12 +156,17 @@ func (g *gate) open(s string) bool {
 		}
 		return false
 	}
-	for i, c := range s {
-		var ls []string
-		if c < utf8.RuneSelf {
-			ls = g.ascii[c]
-		} else {
-			ls = g.other[c]
+	// A literal starts on a rune's first byte, which is never a continuation byte: looking at every byte finds every
+	// place one can start, in invalid UTF-8 too.
+	for i := 0; i < len(s); i++ {
+		ls := g.first[s[i]]
+		if ls == nil {
+			continue
+		}
+		if i+1 < len(s) {
+			if c := s[i+1]; g.second[s[i]][c>>6]&(1<<(c&63)) == 0 {
+				continue
+			}
 		}
 		for _, l := range ls {
 			if strings.HasPrefix(s[i:], l) {

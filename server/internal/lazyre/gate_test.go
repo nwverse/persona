@@ -10,7 +10,8 @@ import (
 // some match of which may start with anything have no gate.
 func TestGatedMatchesLikeRegexp(t *testing.T) {
 	texts := []string{"", "should I go", "you should i", "shoulder i", "x 你来定 y", "你来", "no decisions for you",
-		"no decision", "a `b?` c", "see https://e.x/?q", "ab", "xaab", "ABC", "cat", "bat", "x ```go\nf()\n``` y"}
+		"no decision", "a `b?` c", "see https://e.x/?q", "ab", "xaab", "ABC", "cat", "bat", "x ```go\nf()\n``` y",
+		"\xff你好", "你", "zzq", "xyq", "q"}
 	for _, c := range []struct {
 		src   string
 		gated bool
@@ -23,6 +24,7 @@ func TestGatedMatchesLikeRegexp(t *testing.T) {
 		{`(?i)abc`, false},
 		{`.at|ab`, false},
 		{"(?s)```.*?```", true},
+		{`q|bc|你好|de|fg|hi|jk|lm|no|pr`, true}, // more than fewLits: looked for by their first two bytes
 	} {
 		r, want := NewGated(c.src), regexp.MustCompile(c.src)
 		if r.Gated() != c.gated {
