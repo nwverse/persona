@@ -11,6 +11,7 @@ import (
 	"net"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
@@ -24,6 +25,7 @@ import (
 	"github.com/nwverse/persona/server/internal/nodeproto"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/rpc"
+	"github.com/nwverse/persona/server/internal/update"
 )
 
 var errOffline = apierr.ErrOffline
@@ -132,6 +134,8 @@ type Machine struct {
 	claudeDirsMu sync.Mutex
 	// nodeCmd replaces the node command (tests).
 	nodeCmd func(context.Context) *exec.Cmd
+	// localNote is why the last start of a local node passed a persona-node over (localNode), said once until it changes.
+	localNote string
 	// dialTailcat replaces dialing the node over tailcat, probeDirect checking that ssh works (tests).
 	dialTailcat func(context.Context) (net.Conn, error)
 	probeDirect func(context.Context) error
@@ -288,7 +292,7 @@ func (m *Machine) command(ctx context.Context) *exec.Cmd {
 	}
 	if m.cfg.Kind == "local" {
 		self, _ := os.Executable()
-		return exec.CommandContext(ctx, self, "node", "--stdio")
+		return exec.CommandContext(ctx, m.localNode(ctx, self, nil), "node", "--stdio")
 	}
 	bin := m.cfg.RemoteBin
 	if bin == "" {
@@ -303,6 +307,27 @@ func (m *Machine) command(ctx context.Context) *exec.Cmd {
 	// on a LAN it costs next to nothing.
 	return exec.CommandContext(ctx, "ssh", "-T", "-o", "BatchMode=yes", "-o", "ConnectTimeout=15", "-o", "Compression=yes",
 		"-o", "ServerAliveInterval=15", "-o", "ServerAliveCountMax=3", host, bin+" node --stdio")
+}
+
+// localNode is the program the node of the hub's computer runs as: persona-node beside self when it is self's build
+// (docs/server/server.md "Programs") and update.SplitEnv is not 0, else self (personad, or persona-manager: both run
+// the node). version is update.BuildOf when nil.
+func (m *Machine) localNode(ctx context.Context, self string, version func(context.Context, string) (string, error)) string {
+	if update.SplitOff() {
+		return self
+	}
+	p, note := update.SplitBeside(ctx, self, nodeproto.ProgramPersonaNode, version)
+	m.mu.Lock()
+	said := m.localNote
+	m.localNote = note
+	m.mu.Unlock()
+	if note != "" && note != said {
+		m.d.logf("[%s] %s: the node runs as %s", m.cfg.ID, note, filepath.Base(self))
+	}
+	if p == "" {
+		return self
+	}
+	return p
 }
 
 // nodePipe is one way to a node: what it says, where to write, and why it failed (ssh's last stderr line). It is an

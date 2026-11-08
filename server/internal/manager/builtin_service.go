@@ -17,13 +17,15 @@ import (
 	"github.com/nwverse/persona/server/internal/assistant"
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/managerconf"
+	"github.com/nwverse/persona/server/internal/update"
 )
 
 // The built-in manager's own service (docs/assistant/managers.md "The built-in manager as its own service"): on Linux
 // the systemd user unit persona-manager-assistant.service, on a Mac the launchd agent com.persona.manager.assistant
 // (managerconf.BuiltinService, BuiltinLabel). Each runs `<binary> assistant` with PERSONA_ASSISTANT_DEPLOY=service on
-// the data directory it shares with the hub. `install --builtin` binds it when it has to and installs the service
-// (`personad hub setup` runs it with --join), `uninstall --builtin` takes the service away and leaves the rest.
+// the data directory it shares with the hub, the binary persona-manager when builtinBinary finds it. `install
+// --builtin` binds it when it has to and installs the service (`personad hub setup` runs it with --join), `uninstall
+// --builtin` takes the service away and leaves the rest.
 
 // builtinUnit is the built-in manager's systemd user unit: bin's `assistant` on the data directory home. Exit status 2
 // is a configuration mistake (not bound, another one running): restarting cannot fix it.
@@ -181,6 +183,7 @@ func (e *env) installBuiltin(ctx context.Context, home string, j builtinJoin) er
 	if err != nil {
 		return err
 	}
+	bin = e.builtinBinary(ctx, bin)
 	b, traded, err := e.builtinBinding(ctx, home, j)
 	if err != nil {
 		return err
@@ -191,6 +194,71 @@ func (e *env) installBuiltin(ctx context.Context, home string, j builtinJoin) er
 		fmt.Fprintf(e.stdout, "Binding: kept, to the hub at %s.\n", b.Hub)
 	}
 	return e.builtinService(ctx, home, bin, traded)
+}
+
+// builtinBinary is what the built-in manager's service runs: persona-manager beside bin when it is bin's build
+// (docs/server/server.md "Programs"), else bin. A service under its former name, or update.SplitEnv 0, keeps bin.
+func (e *env) builtinBinary(ctx context.Context, bin string) string {
+	id := assistantwire.AssistantID
+	if strings.TrimSpace(e.getenv(update.SplitEnv)) == "0" ||
+		e.goos == "linux" && e.compatUnit(id) != unitName(id) || e.goos == "darwin" && e.compatLabel(id) != launchdLabel(id) {
+		return bin
+	}
+	pm, note := update.SplitBeside(ctx, bin, "persona-manager", e.version)
+	if pm == "" {
+		if note != "" {
+			fmt.Fprintf(e.stdout, "Program: %s (persona-manager not used: %s).\n", bin, note)
+		}
+		return bin
+	}
+	return pm
+}
+
+// serviceProgram is the program a unit's or an agent's text runs: its first ExecStart with a value, or the first
+// string of its ProgramArguments; "" when it has neither.
+func serviceProgram(text string) string {
+	if _, rest, ok := strings.Cut(text, "<key>ProgramArguments</key>"); ok {
+		if _, rest, ok = strings.Cut(rest, "<string>"); ok {
+			if arg, _, ok := strings.Cut(rest, "</string>"); ok {
+				return html.UnescapeString(arg)
+			}
+		}
+		return ""
+	}
+	for _, line := range strings.Split(text, "\n") {
+		key, value, ok := strings.Cut(strings.TrimSpace(line), "=")
+		value = strings.TrimSpace(value)
+		if !ok || strings.TrimSpace(key) != "ExecStart" || value == "" {
+			continue
+		}
+		if !strings.HasPrefix(value, `"`) {
+			prog, _, _ := strings.Cut(value, " ")
+			return prog
+		}
+		var b strings.Builder
+		for i := 1; i < len(value); i++ {
+			switch c := value[i]; {
+			case c == '"':
+				return strings.NewReplacer("%%", "%", "$$", "$").Replace(b.String())
+			case c == '\\' && i+1 < len(value):
+				i++
+				b.WriteByte(value[i])
+			default:
+				b.WriteByte(c)
+			}
+		}
+		return ""
+	}
+	return ""
+}
+
+// programSwitch says the service's file (what: "the unit", "the agent") runs bin now when the text it had (before)
+// ran another program; "" otherwise. The file's: a drop-in of the owner's may run another.
+func programSwitch(what, before, bin string) string {
+	if was := serviceProgram(before); was != "" && filepath.Clean(was) != filepath.Clean(bin) {
+		return fmt.Sprintf("; %s runs %s now, not %s", what, bin, was)
+	}
+	return ""
 }
 
 // builtinBinding is the built-in manager's binding: the one in its manager.json when there is no code to trade, or
@@ -254,7 +322,7 @@ func (e *env) builtinService(ctx context.Context, home, bin string, bounce bool)
 				return fmt.Errorf("systemctl --user %s failed: %s", strings.Join(step, " "), firstLine(out+" "+err.Error()))
 			}
 		}
-		fmt.Fprintf(e.stdout, "Service: systemd user unit %s, %s.\n  Log: journalctl --user -u %s -f\n", unit, what, unit)
+		fmt.Fprintf(e.stdout, "Service: systemd user unit %s, %s%s.\n  Log: journalctl --user -u %s -f\n", unit, what, programSwitch("the unit", string(before), bin), unit)
 		if e.user != "" && !fileExists("/var/lib/systemd/linger/"+e.user) {
 			fmt.Fprintf(e.stdout, "  Linger is off: it stops when you log out. sudo loginctl enable-linger %s keeps it running\n", e.user)
 		}
@@ -303,8 +371,8 @@ func (e *env) builtinService(ctx context.Context, home, bin string, bounce bool)
 			}
 			what = "restarted"
 		}
-		fmt.Fprintf(e.stdout, "Service: launchd agent %s, %s; it runs whenever you are logged in.\n  Log: %s\n", label, what,
-			filepath.Join(managerconf.DefaultDir(home), "manager.log"))
+		fmt.Fprintf(e.stdout, "Service: launchd agent %s, %s%s; it runs whenever you are logged in.\n  Log: %s\n", label, what,
+			programSwitch("the agent", string(before), bin), filepath.Join(managerconf.DefaultDir(home), "manager.log"))
 		return nil
 	}
 	return fmt.Errorf("no service for it on %s", e.goos)
