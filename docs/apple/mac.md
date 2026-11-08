@@ -215,6 +215,7 @@ open ../../build/DerivedDataMac/Build/Products/Debug/Persona.app   # or run Cont
 ```
 
 - Without `app.bundle_id` in config, the built App crashes at launch (no bundle id in Info.plist); for local use, append `PERSONA_BUNDLE_ID=<reverse domain>` to xcodebuild (`docs/lessons/macos.md`).
+- A Release build in a drag-to-install disk image (Developer ID, notarized): `scripts/release/mac_dmg.sh` (`docs/operations/release.md`, "Mac disk image").
 
 - Launch arguments are the same as iOS (`MacLaunchArguments`, DEBUG only): `-pairURL`, `-tab dev|mail|settings|assistant`, `-openSession <machine>/<session>`,
   `-openAssistant`, `-newAssistant`, `-showNewChat`, `-openChatsFresh`, `-openAgentsFresh`, `-showLark`, `-simulateTap`; demo mode `-demo.on YES`.

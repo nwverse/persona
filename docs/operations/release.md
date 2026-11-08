@@ -264,6 +264,44 @@ and uses the same TestFlight: the same Internal / Friends groups and public link
 - **Automatic release**: after releasing the iPhone build, if this commit includes changes used by the Mac App (`apple/Mac`, `apple/Shared`, `apple/Persona` except a few iOS-only
   files, `apple/Packages`, `project.yml`, `Package.resolved`), release Mac next with the same number. Report the Mac result separately; its failure doesn't affect the iPhone release.
 
+## Mac disk image
+
+`scripts/release/mac_dmg.sh` packages the Mac app for installing outside the App Store as `build-release/dmg/Persona-<marketing version>.dmg`.
+It publishes nothing; only the Developer ID run sends the app and the image to Apple's notary service.
+
+```sh
+./scripts/release/mac_dmg.sh [build number]                  # ad hoc signed, NOT notarized: for trying it on this Mac
+DEVELOPER_ID=1 ./scripts/release/mac_dmg.sh [build number]   # Developer ID signed, notarized and stapled: to hand out
+ARCHIVE=<.xcarchive> ./scripts/release/mac_dmg.sh            # package an archive the script made earlier, without building
+```
+
+- **Build**: a Release archive of `PersonaMac` (universal), built unsigned and then signed ad hoc by `entitlements.py sign` with each target's
+  entitlements and hardened runtime, kept in Xcode's Archives folder as `Persona Mac <build number>` for its dSYMs. The build number defaults to
+  `yyyymmddHHMM`. The app gets the TestFlight checks (`check_bundle_strings.py`, `check_bundle_privacy.py`).
+- **Window**: one icon-view window of 660 × 400 pt without toolbar, sidebar, status bar or path bar, 128 pt icons: `Persona.app` at (165, 180),
+  an `Applications` link at (495, 180), both on the arrow of the background. Finder takes the 660 × 400 as the whole window, title bar
+  included: the content area is a title bar shorter, which cuts off the plain bottom strip of the background, so the icon row sits above the
+  image's middle. `scripts/release/dmg_background.swift` draws the background from the app icon's palette at 1x and 2x, joined with
+  `tiffutil -cathidpicheck` into one TIFF (hidden `.background.tiff`). It has no words: one image can't follow the reader's language.
+  The sizes and positions are set once, at the top of `mac_dmg.sh`, which passes them to the drawing and to dmgbuild.
+  Volume name `Persona`; volume icon `.VolumeIcon.icns`, made by `iconutil` from the icon set's Mac sizes, with the custom-icon bit. UDZO (zlib 9), HFS+.
+- **dmgbuild** writes the window's `.DS_Store` itself. Scripting Finder instead needs an unlocked screen and an Automation grant for the terminal:
+  on a locked or remote release Mac the Apple event waits for a prompt nobody can answer. dmgbuild and its two libraries are pinned with hashes in
+  `scripts/release/dmgbuild-requirements.txt` (the last versions that run on macOS's Python 3.9) and installed into `build-release/dmgbuild`.
+  dmgbuild sets the volume icon with `SetFile` and ignores a failure, so the script mounts the result and checks the icon bit, the link, the background,
+  `.DS_Store` and the app's signature (`codesign --verify --deep --strict`). It does not use dmgbuild's `hide_extensions`: the Finder info it writes on
+  the app fails that check (`docs/lessons/macos.md`).
+- **Ad hoc image**: push (`com.apple.developer.aps-environment`), the keychain groups and time-sensitive notifications are granted only by a
+  provisioning profile, and macOS kills an ad hoc signed app that claims them at launch. The ad hoc image therefore signs the app with only its
+  `com.apple.security.*` entitlements: it runs on this Mac without remote push. Gatekeeper blocks it on other Macs; never hand it out.
+- **Developer ID** needs a "Developer ID Application" certificate of the team, with its private key in this Mac's login keychain.
+  Only the Account Holder can create one (the API answers anyone else with 403), in Xcode › Settings › Accounts › the team › Manage Certificates
+  › + › Developer ID Application, or on developer.apple.com › Certificates › +. A certificate made on another Mac comes over as a `.p12`
+  exported from Keychain Access there. The script then makes the profiles `Persona Developer ID` and `Persona Notify Developer ID` (`MAC_APP_DIRECT`) with `asc_signing.py --developer-id`,
+  exports with `persona_config.py developer-id-export-options` (push becomes `production`), checks the hardened runtime, the entitlements and the push
+  environment, notarizes the zipped app with `notarytool` (the App Store Connect API key) and staples it, builds the image, signs it, notarizes and staples
+  it, and finally checks `stapler validate`, `spctl -t open --context context:primary-signature` on the image and `spctl -t exec` on the app inside it.
+
 ## Publishing personad (`scripts/release/publish.sh`, 2026-10-31)
 
 Let others install the server without getting the source: prebuilt `personad` and the installer are hosted on the `site/` Worker (configured `publish.site_url`).
