@@ -27,6 +27,11 @@ class PathTests(unittest.TestCase):
         self.assertTrue(paths.select(["scripts/mock/inbox_events.json"])["web"])
         self.assertTrue(paths.select(["schema/extension/example.json"])["apple"])
 
+    def test_source_authoring_sdk_and_gate_paths_select_runtime_ci(self):
+        for filename in ["sdk/ts/scripts/check-source-bundle.mjs", "sdk/ts/scripts/source-authoring-worker.mjs",
+                         "sdk/ts/scripts/source-authoring-tests.mjs", "sdk/ts/README.md", "scripts/ci/runtimes.sh"]:
+            self.assertTrue(paths.select([filename])["runtimes"], filename)
+
     def test_infrastructure_and_dispatch_run_all(self):
         self.assertTrue(all(paths.select([".github/workflows/ci.yml"]).values()))
         self.assertTrue(all(paths.select([], True).values()))
