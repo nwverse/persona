@@ -15,15 +15,18 @@ type SourceChat struct {
 
 // SourceMessage is one message as a source returns it.
 type SourceMessage struct {
-	ID         string    `json:"id"`
-	Position   string    `json:"position,omitempty"`
-	SenderID   string    `json:"sender_id,omitempty"`
-	SenderName string    `json:"sender_name,omitempty"`
-	Mine       bool      `json:"mine,omitempty"`
-	Type       string    `json:"type,omitempty"` // TEXT, POST, IMAGE, FILE, CARD, SYSTEM…
-	Text       string    `json:"text,omitempty"`
-	At         time.Time `json:"at,omitempty"`
-	Media      []string  `json:"media,omitempty"` // source paths of images / files, for Download
+	ID         string `json:"id"`
+	Position   string `json:"position,omitempty"`
+	SenderID   string `json:"sender_id,omitempty"`
+	SenderName string `json:"sender_name,omitempty"`
+	Mine       bool   `json:"mine,omitempty"`
+	// Mentioned: the owner is mentioned in it. The connector decides (an @-mention of the owner, or a match of the
+	// owner's display names); history import reads around such messages.
+	Mentioned bool      `json:"mentioned,omitempty"`
+	Type      string    `json:"type,omitempty"` // TEXT, POST, IMAGE, FILE, CARD, SYSTEM…
+	Text      string    `json:"text,omitempty"`
+	At        time.Time `json:"at,omitempty"`
+	Media     []string  `json:"media,omitempty"` // source paths of images / files, for Download
 	// SenderHandles are hints of who the sender is (their address, number, login: handles.go), raw and in memory
 	// only: the person keeps them hashed.
 	SenderHandles []Handle `json:"sender_handles,omitempty"`
