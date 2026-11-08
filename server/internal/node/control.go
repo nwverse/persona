@@ -147,8 +147,11 @@ func (n *Node) start(ctx context.Context, cwd, launcher, prompt, resume, workspa
 	// Persona's hooks: a plugin, or in --settings for a claude that loads none (hooksplugin.go).
 	settings, hooks := n.claudeStartSettings(ctx, launcher, "claude", cwd)
 	spec := claudeLaunch{Launcher: launcher, Settings: settings, Hooks: hooks, Model: execution.Model, Plugins: n.claudeLoadsPlugins(ctx)}
-	// herdr told it is Claude (hostherdr.go): a launcher that wraps another binary is otherwise not seen as one.
-	cmd := withHerdrAgent(typedHerdrAgent(launch, "claude", paneShells(ctx)...), n.claudeCommandLine(spec, args+modeFlags(mode, effort), shellQuote))
+	// herdr told it is Claude (hostherdr.go): a launcher that wraps another binary is otherwise not seen as one. The
+	// node's directory in front, the assistant's environment left out (agentenv.go).
+	shells := paneShells(ctx)
+	cmd := withHerdrAgent(typedHerdrAgent(launch, "claude", shells...), n.claudeCommandLine(spec, args+modeFlags(mode, effort), shellQuote))
+	cmd = n.agentCommand(cmd, shellQuote, shells...)
 	st := sessionState{Pane: pane, Launcher: launcher, Cwd: cwd, StartedAt: time.Now().UTC(), Model: execution.Model, ModelFingerprint: execution.Fingerprint}
 	if prev, ok := n.state.get(id); ok && resume != "" {
 		if !prev.StartedAt.IsZero() { // a branch (fork.go) has none: it starts now
@@ -639,6 +642,13 @@ func (n *Node) send(ctx context.Context, id, text string, images []proto.Image, 
 	if r := n.agentsListRefusal(id); r != nil { // claudebg.go
 		return r
 	}
+	if _, live := n.agent(id); !live {
+		// A claude outside Persona's panes has it open (the desktop app, another terminal): its peer inbox, or a
+		// refusal saying why not; never a second claude on the same transcript (claudebg.go).
+		if handled, err := n.sendOutside(ctx, id, text, images); handled {
+			return err
+		}
+	}
 	n.dropSuggestion(id)
 	if exitCommand(text) && len(images) == 0 && !n.isAssistantSession(id) && !n.runtimeAssistant(id) {
 		return n.exitAgent(ctx, id)
@@ -710,6 +720,7 @@ func (n *Node) send(ctx context.Context, id, text string, images []proto.Image, 
 	}
 	var watch *promptWatch
 	if kind == "claude" {
+		text = keepImagePaths(text)
 		watch = n.watchPrompt(id, text) // where the transcript ends before the typing: what comes after may be this (sendsafe.go)
 	}
 	typedAt := time.Now()
@@ -811,6 +822,36 @@ func (n *Node) saveImages(images []proto.Image) ([]string, error) {
 		paths = append(paths, p)
 	}
 	return paths, nil
+}
+
+// imagePathLine starts the line that repeats a photo's path in an <attached_images> block as text (keepImagePaths).
+const imagePathLine = "path: "
+
+// keepImagePaths gives each path in the <attached_images> block that ends text (the node's own, or one a client wrote
+// after uploading the photos itself, as Android's composer does) a second line, "path: <path>". Claude Code's paste
+// turns a line that is only a path to a readable image into an `[Image #n]` and drops it; a line that starts with a
+// word stays text, so the agent keeps the path. The apps take only lines starting with "/" or "~" as photos. A block
+// with any other line (prose that ends in the tag, or path: lines already added) is left as it is. With words before
+// it, the block makes Claude fold the paste into a `[Pasted text #n]` placeholder (longPaste).
+func keepImagePaths(text string) string {
+	const open = "<attached_images>"
+	rest, ok := strings.CutSuffix(strings.TrimRight(text, " \t\r\n"), "</attached_images>")
+	i := strings.LastIndex(rest, open)
+	if !ok || i < 0 || strings.TrimSpace(rest[i+len(open):]) == "" {
+		return text
+	}
+	var b strings.Builder
+	b.WriteString(rest[:i+len(open)] + "\n")
+	for _, l := range strings.Split(rest[i+len(open):], "\n") {
+		if l = strings.TrimSpace(l); l == "" {
+			continue
+		}
+		if !filepath.IsAbs(l) && !strings.HasPrefix(l, "~") {
+			return text
+		}
+		b.WriteString(l + "\n" + imagePathLine + l + "\n")
+	}
+	return b.String() + "</attached_images>"
 }
 
 func (n *Node) keys(ctx context.Context, id string, keys []string, text string) error {

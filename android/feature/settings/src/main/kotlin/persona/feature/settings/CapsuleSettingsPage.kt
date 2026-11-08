@@ -23,6 +23,7 @@ internal object CapsuleSettingsText {
 internal fun CapsuleSettingsPage(settings: FloatingCapsuleSettings?, onBack: () -> Unit) {
     val mode = settings?.mode?.collectAsState()?.value ?: "off"
     val permitted = settings?.permissionGranted?.collectAsState()?.value == true
+    val kept = settings?.keeperEnabled?.collectAsState()?.value == true
     LifecycleEventEffect(Lifecycle.Event.ON_RESUME) { settings?.refreshPermission() }
     JListPage(title = stringResource(R.string.settings_capsule_title), onBack = onBack) {
         item { JNotice(stringResource(R.string.settings_capsule_notice)) }
@@ -34,12 +35,21 @@ internal fun CapsuleSettingsPage(settings: FloatingCapsuleSettings?, onBack: () 
             } }
         }
         item { JSectionHeader(stringResource(R.string.settings_capsule_permission_header)) }
-        item { JGroupItem(GroupPosition.Single) {
+        item { JGroupItem(GroupPosition.of(0, 2)) {
             JRow(stringResource(R.string.settings_capsule_overlay), leadingIcon = PhIcons.SquaresFour,
                 value = stringResource(if (permitted) R.string.settings_capsule_allowed else R.string.settings_capsule_not_allowed), onClick = { settings?.requestPermission() })
         } }
+        item { JGroupItem(GroupPosition.of(1, 2)) {
+            JRow(stringResource(R.string.settings_capsule_keeper), subtitle = stringResource(R.string.settings_capsule_keeper_subtitle),
+                leadingIcon = PhIcons.PushPin,
+                value = stringResource(if (kept) R.string.settings_capsule_keeper_on else R.string.settings_capsule_keeper_off),
+                onClick = { settings?.openKeeperSettings() })
+        } }
         if (mode != "off" && !permitted) item {
             JNotice(stringResource(R.string.settings_capsule_needs_permission), actionLabel = stringResource(R.string.settings_capsule_allow), onAction = { settings?.requestPermission() })
+        }
+        if (mode != "off" && permitted && !kept) item {
+            JNotice(stringResource(R.string.settings_capsule_keeper_notice), actionLabel = stringResource(R.string.settings_capsule_keeper_turn_on), onAction = { settings?.openKeeperSettings() })
         }
     }
 }

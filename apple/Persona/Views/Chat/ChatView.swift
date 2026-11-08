@@ -11,9 +11,6 @@ enum ChatStyle {
     case assistant
 }
 
-/// Whether a chat's page was in front when it was last told (`ChatView`); a class, so setting it draws nothing.
-private final class FrontFlag { var value = true }
-
 struct ChatView: View {
     @Environment(AppModel.self) private var model
     @Environment(\.scenePhase) private var scenePhase
@@ -154,9 +151,6 @@ struct ChatView: View {
     /// The page's height, read by the pending cards only (#926).
     @State private var footerRoom = FooterRoom()
     @Environment(\.openSpace) private var openSpace
-    /// Whether its page was in front when last told (`PageFrontWatcher`; the Mac keeps a section's page in the window
-    /// behind another). Not observed: it draws nothing.
-    @State private var shownInFront = FrontFlag()
     @State private var link: LinkTarget?
     /// Where a Model Not Connected card's Fix It goes (`ReadinessSheets`).
     @State private var readinessRoute: ReadinessRoute?
@@ -744,37 +738,24 @@ struct ChatView: View {
         .onChange(of: scenePhase) { _, phase in if phase == .background { rememberReadPosition() } }
         .onDisappear {
             ChatTrace.shared.note(shownKey, "close")
+        }
+        // Kept shell pages do not disappear. Only the visible chat owns its
+        // transcript stream; the Agent keeps working on the hub while hidden.
+        // Returning subscribes from the retained store's covered sequence.
+        .onTabVisibility(appear: {
+            model.subscribe(key, by: owner)
+            if viewing != nil { model.subscribe(shownKey, by: owner) }
+            model.show(key, by: owner)
+            model.markSeen(key)
+        }, disappear: {
             rememberReadPosition()
             if viewing != nil { model.unsubscribe(shownKey, by: owner) }
             model.unsubscribe(key, by: owner)
             model.hide(by: owner)
-        }
+        })
         .onChange(of: session?.state) { _, st in
             if st == .unread && model.visibleSession == key { model.markSeen(key) }
         }
-        #if os(macOS)
-        // Its section behind another one (the page stays in the window, `MacPageStack`): as when the page was left
-        // before it was kept. Not the chat on screen, so a reply that finishes meanwhile stays Unread and notifies;
-        // not subscribed, so its streaming does not draw a chat nobody sees (about 20 ms a push behind Knowledge). Back in
-        // front, as on entry: subscribed again from what it holds (`since_seq`). Not told as it appears: a page built
-        // behind (its first visit, in front a turn later) would unsubscribe what `appeared()` just subscribed.
-        .background {
-            PageFrontWatcher(initial: false) { [model, key, owner, shownKey, viewing] front in
-                guard front != shownInFront.value else { return }
-                shownInFront.value = front
-                if front {
-                    model.subscribe(key, by: owner)
-                    if viewing != nil { model.subscribe(shownKey, by: owner) }
-                    model.show(key, by: owner)
-                    model.markSeen(key)
-                } else {
-                    if viewing != nil { model.unsubscribe(shownKey, by: owner) }
-                    model.unsubscribe(key, by: owner)
-                    model.hide(by: owner)
-                }
-            }
-        }
-        #endif
     }
 
     /// The chat as a flat list of lines (see `ChatLine`): every message of a turn opens its own exchange — the
@@ -1548,8 +1529,20 @@ struct ChatView: View {
 
     private var liveTurnID: String? {
         guard case .turn(let t) = store.blocks.last else { return nil }
+        // The work is for a message of yours still on its way, not for this turn: that message's getting-ready line
+        // stands for it until its copy comes in (`startingTurn`).
+        if viewedAgent == nil,
+           ChatAwaitingTurn.workIsForPending(shownPending, status: status, stateSince: session?.stateSince,
+                                             newestLine: store.newestLineAt) { return nil }
         // Your message is in and nothing answered it yet: running already, before the hub's working comes (#3853).
         return status.isActive || awaiting.turnID == t.id ? t.id : nil
+    }
+
+    /// Messages sent from here that the transcript does not have yet, minus those Claude holds in its queue (the queue
+    /// strip shows them).
+    private var shownPending: [PendingMessage] {
+        let queued = session?.queued ?? []
+        return (store.arriving + store.pending).filter { p in !queued.contains { PendingMessage.same($0, p.text) } }
     }
 
     /// The wait between a send and the hub's working (`ChatAwaitingTurn`); not for a subagent being viewed.
@@ -2163,8 +2156,7 @@ struct ChatView: View {
     private func chatScroll() -> some View {
         let store = store
         let lines = currentLines()
-        let queued = session?.queued ?? []
-        let pending = (store.arriving + store.pending).filter { p in !queued.contains { PendingMessage.same($0, p.text) } }
+        let pending = shownPending
         // Two statements: as one expression Swift 6.2 could not type-check it in time.
         let list = ScrollView {
             chatRows(store: store, lines: lines, pending: pending)
@@ -3049,9 +3041,6 @@ struct ChatView: View {
                 }
                 settleAtEnd()
             }
-            model.subscribe(key, by: owner)
-            model.show(key, by: owner)
-            model.markSeen(key)
             if style == .dev { AppModel.rememberChat(key) }
             #if DEBUG
             if UserDefaults.standard.bool(forKey: "openTerminalPane") { openTerminal() }

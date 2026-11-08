@@ -19,6 +19,35 @@ import (
 // testLinkClient is a Persona Link connected to d through a relay: it says its hello, then reads until the link ends.
 type testLinkClient struct {
 	closed chan websocket.CloseError // the close frame the manager sent
+	msgs   chan link.Message         // what the manager said, as long as there is room
+	conn   *websocket.Conn
+}
+
+// send says msg to the manager.
+func (c *testLinkClient) send(t *testing.T, msg link.Message) {
+	t.Helper()
+	b, _ := json.Marshal(msg)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := c.conn.Write(ctx, websocket.MessageText, b); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// next is the next message of type typ the manager says within 5 s.
+func (c *testLinkClient) next(t *testing.T, typ string) link.Message {
+	t.Helper()
+	timeout := time.After(5 * time.Second)
+	for {
+		select {
+		case m := <-c.msgs:
+			if m.Type == typ {
+				return m
+			}
+		case <-timeout:
+			t.Fatalf("no %s from the manager", typ)
+		}
+	}
 }
 
 // dialTestLink connects a Persona Link of machine id to d and waits until d has it as the machine's link.
@@ -43,14 +72,22 @@ func dialTestLink(t *testing.T, d *Devices, id string) (*testLinkClient, *mgrLin
 	if err := conn.Write(ctx, websocket.MessageText, hello); err != nil {
 		t.Fatal(err)
 	}
-	c := &testLinkClient{closed: make(chan websocket.CloseError, 1)}
+	c := &testLinkClient{closed: make(chan websocket.CloseError, 1), msgs: make(chan link.Message, 64), conn: conn}
 	go func() {
 		for {
-			if _, _, err := conn.Read(ctx); err != nil {
+			_, data, err := conn.Read(ctx)
+			if err != nil {
 				var ce websocket.CloseError
 				errors.As(err, &ce)
 				c.closed <- ce
 				return
+			}
+			var m link.Message
+			if json.Unmarshal(data, &m) == nil {
+				select {
+				case c.msgs <- m:
+				default:
+				}
 			}
 		}
 	}()
@@ -100,7 +137,8 @@ func TestLinkEndsWhenItsEntryIsReplaced(t *testing.T) {
 	d.Configure(devicewire.Config{HubID: "hub-test", HubName: "test", Machines: []json.RawMessage{linkEntry("Laptop")}})
 	old := d.cfgMachine("lap")
 	c, l := dialTestLink(t, d, "lap")
-	d.Configure(devicewire.Config{HubID: "hub-test", HubName: "test", Machines: []json.RawMessage{linkEntry("My laptop")}})
+	work, _ := json.Marshal(MachineConfig{ID: "lap", Name: "Laptop", Kind: kindLink, Trust: "work"})
+	d.Configure(devicewire.Config{HubID: "hub-test", HubName: "test", Machines: []json.RawMessage{work}})
 	if d.cfgMachine("lap") == old {
 		t.Fatal("the changed entry kept its machine")
 	}

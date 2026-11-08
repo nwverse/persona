@@ -91,4 +91,11 @@
     <plurals name="app_share_attachments">
         <item quantity="other">添付ファイル%1$d件</item>
     </plurals>
+    <string name="app_capsule_keeper_label">Persona フローティングカプセル</string>
+    <string name="app_capsule_keeper_description">ロックやバックグラウンドの整理の後もフローティングカプセルを表示し続けます。Persona は画面の内容や入力した文字を読み取りません。</string>
+    <string name="app_capsule_turned_off">カプセルを閉じました。「設定 › フローティングカプセル」で再びオンにできます。</string>
+    <string name="app_capsule_lark_group">Feishu メッセージ</string>
+    <string name="app_capsule_keeper_channel">フローティングカプセル</string>
+    <string name="app_capsule_keeper_off_title">カプセルの常時表示がオフになりました</string>
+    <string name="app_capsule_keeper_off_text">更新後にシステムが「Persona フローティングカプセル」をオフにしました。タップして「ユーザー補助」で再びオンにすると、ロック後もカプセルが表示されます。</string>
 </resources>

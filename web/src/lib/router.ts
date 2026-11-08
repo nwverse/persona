@@ -42,6 +42,8 @@ export type Route =
   | { name: "agents"; id?: string }
   // the phone's "Agents" page (#1996): the sidebar's Agents block on a page of its own, next to the assistant
   | { name: "agent-list" }
+  // the agents archived from the Agents list (lib/agent-archives.ts), to find and restore
+  | { name: "agent-archives" }
   | { name: "todos"; id?: string }
   | { name: "extension"; extension: string; ui: string };
 
@@ -75,7 +77,7 @@ export function parse(path: string, search = ""): Route {
   if (p[0] === "machines") return p[1] ? { name: "machine", mid: p[1] } : { name: "machines" };
   if (p[0] === "terminal") return p[1] && p[2] ? { name: "terminal", mid: p[1], id: p[2] } : { name: "terminal" };
   if (p[0] === "a") return { name: "agents", id: p[1] };
-  if (p[0] === "agents") return { name: "agent-list" };
+  if (p[0] === "agents") return p[1] === "archived" ? { name: "agent-archives" } : { name: "agent-list" };
   if (p[0] === "settings") return { name: "settings" };
   // /plugin/<id>/<ui>: the same page under its name before #1845 (bookmarks)
   if ((p[0] === "extension" || p[0] === "plugin") && p[1] && p[2]) return { name: "extension", extension: p[1], ui: p[2] };
@@ -132,6 +134,8 @@ export function routePath(r: Route): string {
       return r.id ? `/a/${encodeURIComponent(r.id)}` : "/a";
     case "agent-list":
       return "/agents";
+    case "agent-archives":
+      return "/agents/archived";
     case "todos":
       return r.id ? `/todos?id=${encodeURIComponent(r.id)}` : "/todos";
     case "extension":

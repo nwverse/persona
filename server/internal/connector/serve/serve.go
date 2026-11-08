@@ -46,6 +46,7 @@ const (
 	MActions   = "actions.list"
 	MDescribe  = "actions.describe"
 	MDo        = "actions.do" // only once the hub's gate let it through
+	MRecall    = "recall"     // take a sent message back: only once the user agreed, and only for a connector that declares recall
 	MThread    = "thread.page"
 	MMedia     = "thread.media"
 	// The knowledge base's items (connector.Items) and an archived message's attachment (connector.ArchiveMedia).
@@ -218,6 +219,18 @@ type (
 		Args      json.RawMessage `json:"args,omitempty"`
 		RequestID string          `json:"request_id"`
 	}
+	// RecallParams is a message to take back (connector.Recaller): what the ledger row of the send says, none of what the
+	// message said. At is when the row was written, right after the send.
+	RecallParams struct {
+		Action     string         `json:"action"`
+		MessageRef string         `json:"message_ref"`
+		Target     map[string]any `json:"target,omitempty"`
+		At         time.Time      `json:"at,omitzero"`
+	}
+	// RecallResult: Recalled true is the program's word that the service confirmed the message is no longer there.
+	RecallResult struct {
+		Recalled bool `json:"recalled"`
+	}
 	SecretData struct {
 		Data []byte `json:"data,omitempty"` // nil: nothing stored
 	}
@@ -242,6 +255,10 @@ const (
 	CodeWrongProtocol  = "wrong_protocol"
 	// CodeRateLimited: tools.call / actions.do waits out a rate limit; data {retry_after} is how many seconds.
 	CodeRateLimited = "rate_limited"
+	// What recall answers besides those and CodeNotSignedIn / CodeOffline (it could not act now): nothing was sent
+	// because the program cannot take that message back, or the request may have taken effect.
+	CodeNotRecallable = "not_recallable"
+	CodeRecallUnknown = "recall_unknown"
 )
 
 // Build makes the connector once the hub has sent its configuration (hub.json's section for it); secrets is the
@@ -756,8 +773,45 @@ func (s *server) handle(ctx context.Context, method string, params json.RawMessa
 			done, err := connector.Write(ctx, a, p.Name, p.Args)
 			return CallResult{Text: done.Text, MessageRef: done.MessageRef}, err
 		})
+	case MRecall:
+		r, ok := connector.RecallerOf(c)
+		if !ok || !c.Manifest().Has(connector.CapRecall) {
+			return nil, noCapability(c, "recall")
+		}
+		var p RecallParams
+		if err := json.Unmarshal(params, &p); err != nil {
+			return nil, err
+		}
+		if p.MessageRef == "" {
+			return nil, errors.New("recall without a message_ref")
+		}
+		target := json.RawMessage(`{}`)
+		if len(p.Target) > 0 {
+			target, _ = json.Marshal(p.Target)
+		}
+		if err := r.Recall(ctx, connector.SentMessage{Action: p.Action, Ref: p.MessageRef, Target: target, At: p.At}); err != nil {
+			return nil, recallError(err)
+		}
+		return RecallResult{Recalled: true}, nil
 	}
 	return nil, &rpc.Error{Code: CodeUnknownMethod, Message: "unknown method " + method}
+}
+
+// recallError is a connector's failed Recall as the wire says it: the code of the connector.Err* it wraps (one it
+// could not act now is not_signed_in: the hub reads that like offline), none for the other side's refusal.
+func recallError(err error) error {
+	var re *rpc.Error
+	switch {
+	case errors.As(err, &re):
+		return re
+	case errors.Is(err, connector.ErrCannotRecall):
+		return &rpc.Error{Code: CodeNotRecallable, Message: err.Error()}
+	case errors.Is(err, connector.ErrRecallUnavailable):
+		return &rpc.Error{Code: CodeNotSignedIn, Message: err.Error()}
+	case errors.Is(err, connector.ErrRecallUnknown):
+		return &rpc.Error{Code: CodeRecallUnknown, Message: err.Error()}
+	}
+	return &rpc.Error{Message: err.Error()}
 }
 
 // contributionOf is the contribution a namespaced call names ("" when it names none).

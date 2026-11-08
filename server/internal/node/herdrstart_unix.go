@@ -31,8 +31,12 @@ func launchHerdrServer(ctx context.Context, bin, sock string) (<-chan error, err
 	if viaSystemd {
 		argv = append([]string{sd, "--user", "--quiet", "--collect", "--unit=" + herdrUnitOf(session)}, argv...)
 	}
-	log := filepath.Join(os.TempDir(), herdrUnitOf(session)+".log")
-	out, err := os.OpenFile(log, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
+	logDir, err := privateCacheDir("herdr")
+	if err != nil {
+		return nil, fmt.Errorf("herdr server log: %w", err)
+	}
+	log := filepath.Join(logDir, herdrUnitOf(session)+".log")
+	out, err := openHerdrLog(log)
 	if err != nil {
 		return nil, err
 	}
@@ -59,6 +63,30 @@ func launchHerdrServer(ctx context.Context, bin, sock string) (<-chan error, err
 		}
 	}()
 	return exited, nil
+}
+
+// openHerdrLog opens the server's log for one start, emptied. It does not follow a symlink, does not wait on a FIFO
+// and refuses anything but a regular file of this user, so a name someone else put there can neither redirect the
+// output nor make the open hang. O_NONBLOCK is only for the open: it is cleared before the file becomes the server's
+// stdout and stderr, which would otherwise inherit it.
+func openHerdrLog(path string) (*os.File, error) {
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0o600)
+	if err != nil {
+		return nil, fmt.Errorf("herdr server log: %w", err)
+	}
+	if st, err := f.Stat(); err != nil || !st.Mode().IsRegular() || !osproc.OwnedByMe(st) {
+		f.Close()
+		return nil, fmt.Errorf("herdr server log: %s is not a regular file of this user", path)
+	}
+	err = syscall.SetNonblock(int(f.Fd()), false)
+	if err == nil {
+		err = f.Truncate(0)
+	}
+	if err != nil {
+		f.Close()
+		return nil, fmt.Errorf("herdr server log: %w", err)
+	}
+	return f, nil
 }
 
 // herdrUnit is the transient systemd unit the default server runs as: one name, so a second start while it runs fails.

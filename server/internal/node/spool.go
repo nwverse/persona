@@ -13,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/acceptloop"
 	"github.com/nwverse/persona/server/internal/identity"
 	"github.com/nwverse/persona/server/internal/nodeclient"
 	"github.com/nwverse/persona/server/internal/nodeproto"
@@ -345,28 +346,23 @@ func (s *standby) tryListen() {
 		return
 	}
 	s.ln, s.lnFile = ln, fi
-	go func() {
-		for {
-			c, err := ln.Accept()
-			if err != nil {
-				return
-			}
-			s.mu.Lock()
-			current := s.ln == ln
-			if current {
-				s.conns.Add(1) // under mu: unwant's Wait sees every request taken before it closed ln
-			}
-			s.mu.Unlock()
-			if !current {
-				c.Close()
-				return
-			}
-			go func() {
-				defer s.conns.Done()
-				s.serve(c)
-			}()
+	// Ends when closeLocked closes ln; a transient Accept error does not end it (acceptloop.Run).
+	go acceptloop.Run(context.Background(), ln, s.logf, func(c net.Conn) {
+		s.mu.Lock()
+		current := s.ln == ln
+		if current {
+			s.conns.Add(1) // under mu: unwant's Wait sees every request taken before it closed ln
 		}
-	}()
+		s.mu.Unlock()
+		if !current {
+			c.Close() // ln was closed: the next Accept ends the loop
+			return
+		}
+		go func() {
+			defer s.conns.Done()
+			s.serve(c)
+		}()
+	})
 }
 
 // answers says whether a node serves path: it answers a ping (a listener that is closing, or a stopped process whose

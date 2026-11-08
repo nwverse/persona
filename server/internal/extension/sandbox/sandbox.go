@@ -21,6 +21,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/acceptloop"
 	"github.com/nwverse/persona/server/internal/i18n"
 )
 
@@ -481,7 +482,7 @@ func Run(args []string, stderr io.Writer) int {
 		return 1
 	}
 	defer ln.Close()
-	go carry(ln, sock)
+	go carry(ln, sock, stderr)
 	if dev != nil {
 		return runDevelopmentChild(append(dev, args...), SelfPath, stderr)
 	}
@@ -512,12 +513,11 @@ func Run(args []string, stderr io.Writer) int {
 	return 0
 }
 
-func carry(ln net.Listener, sock string) {
-	for {
-		c, err := ln.Accept()
-		if err != nil {
-			return
-		}
+// carry relays each connection on ln to the proxy's socket sock until ln is closed. A run of Accept failures is
+// logged to stderr, with the sandbox's own errors.
+func carry(ln net.Listener, sock string, stderr io.Writer) {
+	logf := func(format string, args ...any) { fmt.Fprintf(stderr, "sandbox: "+format+"\n", args...) }
+	acceptloop.Run(context.Background(), ln, logf, func(c net.Conn) {
 		go func() {
 			defer c.Close()
 			u, err := net.Dial("unix", sock)
@@ -528,5 +528,5 @@ func carry(ln net.Listener, sock string) {
 			go func() { _, _ = io.Copy(u, c); _ = u.(*net.UnixConn).CloseWrite() }()
 			_, _ = io.Copy(c, u)
 		}()
-	}
+	})
 }
