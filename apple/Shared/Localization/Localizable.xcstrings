@@ -1816,6 +1816,29 @@
       },
       "extractionState": "manual"
     },
+    "%@ is still waiting for your answer": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ is still waiting for your answer"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ があなたの返事を待っています"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ 还在等你回复"
+          }
+        }
+      }
+    },
     "%@ is waiting for you to handle the card above": {
       "localizations": {
         "en": {
@@ -19266,6 +19289,29 @@
           "stringUnit": {
             "state": "translated",
             "value": "检查网络。下次打开 Persona 会再试。"
+          }
+        }
+      }
+    },
+    "Checks for itself": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Checks for itself"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "自分で確認"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "自己去查"
           }
         }
       }
@@ -43625,6 +43671,52 @@
         }
       }
     },
+    "Keeps going": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Keeps going"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "続きを実行"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "接着跑"
+          }
+        }
+      }
+    },
+    "In 10 min": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "In 10 min"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "10 分後"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "10 分钟后"
+          }
+        }
+      }
+    },
     "Last updated %@ [Watch Pet]": {
       "extractionState": "manual",
       "localizations": {
@@ -43876,6 +43968,29 @@
         }
       }
     },
+    "Model 503": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Model 503"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "モデル 503"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "模型 503"
+          }
+        }
+      }
+    },
     "Need Session Triage on. Continuing and waking run the agent on its own model; pushing, deploying and messaging people always wait for you.": {
       "extractionState": "manual",
       "localizations": {
@@ -43895,29 +44010,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "需要先打开会话分诊。自动继续和到点叫醒会让 Agent 用自己的模型再跑一轮；推代码、部署、给别人发消息一律等你。"
-          }
-        }
-      }
-    },
-    "Model service busy (503)": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Model service busy (503)"
-          }
-        },
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "モデルサービスが混雑（503）"
-          }
-        },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "模型服务繁忙（503）"
           }
         }
       }
@@ -44175,6 +44267,29 @@
         }
       }
     },
+    "Off [Example]": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Off"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "オフ"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "关"
+          }
+        }
+      }
+    },
     "Offline · showing the last sync (%@)": {
       "localizations": {
         "en": {
@@ -44220,6 +44335,29 @@
         }
       },
       "extractionState": "manual"
+    },
+    "On [Example]": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "On"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "オン"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "开"
+          }
+        }
+      }
     },
     "One reminder after %lld min without your reply. Uses no model.": {
       "extractionState": "manual",
@@ -44767,29 +44905,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "发布 2.4"
-          }
-        }
-      }
-    },
-    "Refactor the sync code": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Refactor the sync code"
-          }
-        },
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "同期コードのリファクタリング"
-          }
-        },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "重构同步代码"
           }
         }
       }
@@ -52170,6 +52285,29 @@
         }
       }
     },
+    "Seen, no reply for %lld min": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Seen, no reply for %lld min"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "見てから %lld 分返信なし"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "看过 %lld 分钟没回"
+          }
+        }
+      }
+    },
     "Sends “continue” after a temporary model error, up to 3 times": {
       "extractionState": "manual",
       "localizations": {
@@ -52189,6 +52327,29 @@
           "stringUnit": {
             "state": "translated",
             "value": "模型临时出错后自动发「继续」，最多 3 次"
+          }
+        }
+      }
+    },
+    "Sends “continue” in 1 min": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sends “continue” in 1 min"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "1 分後に「続けて」を送信"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "1 分钟后发「继续」"
           }
         }
       }
@@ -76854,29 +77015,6 @@
         }
       }
     },
-    "Ship the web build": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Ship the web build"
-          }
-        },
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Web 版をリリース"
-          }
-        },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "发布网页版"
-          }
-        }
-      }
-    },
     "Show Fewer [Workflow Phase]": {
       "extractionState": "manual",
       "localizations": {
@@ -78020,6 +78158,29 @@
           "stringUnit": {
             "state": "translated",
             "value": "\n提醒时机：离开「%1$@」时"
+          }
+        }
+      }
+    },
+    "now [Push Sample]": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "now"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "今"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "现在"
           }
         }
       }

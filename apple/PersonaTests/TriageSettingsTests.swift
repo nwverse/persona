@@ -1,4 +1,5 @@
 import Foundation
+import SwiftUI
 import Testing
 @testable import Persona
 
@@ -103,20 +104,23 @@ import Testing
         #expect(m.switches == nil && m.error == nil && !m.unsupported)
     }
 
-    /// Each switch's example (#1413) decodes, and the list's own row draws from it what the switch makes: what it
-    /// waits for, when the hub retries or wakes it, Awaiting Reply with its question.
-    @Test func theExamplesShowWhatEachSwitchDoes() throws {
-        let now = Date()
-        let triaged = try #require(TriageExample.triaged(now: now))
-        #expect(triaged.workLine(now: now) == "在等 CI" && !triaged.awaitsYourReply(muted: false))
-        let retrying = try #require(TriageExample.retrying(now: now))
-        #expect(retrying.work?.on == "transient" && retrying.workLine(now: now)?.hasPrefix("模型服务繁忙（503）") == true
-                && retrying.workLine(now: now)?.contains("重试") == true)
-        let waking = try #require(TriageExample.waking(now: now))
-        #expect(waking.work?.hubWaits == true && waking.workLine(now: now)?.hasPrefix("在等部署") == true)
-        let reply = try #require(TriageExample.awaitingReply(now: now))
-        #expect(reply.awaitsYourReply(muted: false) && reply.listPreview(muted: false) == "删掉这 12 个已合并的分支吗？")
-        let card = TriageExample.decision(now: now)
+    /// Each switch's example (#1413): with the triage off a stopped agent is Unread; on, it says what it waits for;
+    /// its decision is a question card; the reminder is worded as the hub's push.
+    @Test func theExamplesShowWhatEachSwitchChanges() throws {
+        let off = try #require(TriageExample.unread("x", title: "修登录测试"))
+        #expect(off.state == .unread && off.workLine() == nil && off.stateLabel(muted: false) == "完成未看")
+        let on = try #require(TriageExample.triaged())
+        #expect(on.workLine() == "在等 CI")
+        let card = TriageExample.decision()
         #expect(card.kind == .question && card.questions?.first?.options.map(\.label) == ["推送", "先不"])
+        #expect(TriageExample.reminderTitle == "清理旧分支 还在等你回复")
+        #expect(TriageExample.continueSteps.count == 3 && TriageExample.wakeSteps.count == 3)
+    }
+
+    /// The example's type stays two steps under the reader's size, and never under the smallest.
+    @Test func examplesAreTwoTextSizesSmaller() {
+        #expect(ExampleFrame<EmptyView>.smaller(.large) == .small)
+        #expect(ExampleFrame<EmptyView>.smaller(.xSmall) == .xSmall)
+        #expect(ExampleFrame<EmptyView>.smaller(.accessibility1) == .xxLarge)
     }
 }

@@ -1,8 +1,8 @@
 import SwiftUI
 
 /// Settings › Session Triage (`TriageSettingsModel`): the triage and its model, then the three things it may do, then the
-/// reminder for a question seen and not answered (apart from the triage). Each switch shows under it what it makes of an
-/// agent in the list (`TriageExample`, #1413).
+/// reminder for a question seen and not answered (apart from the triage). Each switch shows under it what it changes, off
+/// against on or as steps in time (`TriageExampleView`, #1413).
 struct TriageSettingsView: View {
     @Environment(AppModel.self) private var app
     @State private var model: TriageSettingsModel?
@@ -22,7 +22,7 @@ struct TriageSettingsView: View {
             } else {
                 Section {
                     toggle(\.enabled, String(localized: "Session Triage"), String(localized: "Each agent's row says what it is waiting for"), Theme.Icon.triage, id: "triage-enabled") {
-                        sessionExample(TriageExample.triaged())
+                        TriageExampleView(kind: .triage, replyMinutes: replyMinutes)
                     }
                     ModelConfigurationLink(title: String(localized: "Triage Model"), purposeID: "agent.triage")
                 } footer: {
@@ -30,13 +30,13 @@ struct TriageSettingsView: View {
                 }
                 Section {
                     toggle(\.decide, String(localized: "Cards for Your Decisions"), String(localized: "A question waiting on you becomes a card in Needs You"), Theme.Icon.askFirst, id: "triage-decide") {
-                        TriageExampleBox { InteractionPreviewCard(interaction: TriageExample.decision(), inCell: true) {} }
+                        TriageExampleView(kind: .decide, replyMinutes: replyMinutes)
                     }
                     toggle(\.autoContinue, String(localized: "Continue After Errors"), String(localized: "Sends “continue” after a temporary model error, up to 3 times"), Theme.Icon.retry, id: "triage-continue") {
-                        sessionExample(TriageExample.retrying())
+                        TriageExampleView(kind: .autoContinue, replyMinutes: replyMinutes)
                     }
                     toggle(\.wake, String(localized: "Wake on Time"), String(localized: "Wakes an agent waiting on a deploy, CI or another agent to check again"), Theme.Icon.wakeUp, id: "triage-wake") {
-                        sessionExample(TriageExample.waking())
+                        TriageExampleView(kind: .wake, replyMinutes: replyMinutes)
                     }
                 } header: {
                     Text("After Triage")
@@ -45,7 +45,7 @@ struct TriageSettingsView: View {
                 }
                 Section {
                     toggle(\.replyReminder, String(localized: "Remind If Seen but Unanswered"), String(localized: "One reminder after \(replyMinutes) min without your reply. Uses no model."), Theme.Icon.replyReminder, id: "triage-reply-reminder") {
-                        sessionExample(TriageExample.awaitingReply())
+                        TriageExampleView(kind: .replyReminder, replyMinutes: replyMinutes)
                     }
                 }
             }
@@ -74,11 +74,6 @@ struct TriageSettingsView: View {
 
     /// The hub's wait before Remind When Seen, Unanswered fires (`reply_reminder_minutes`, 30 when it names none).
     private var replyMinutes: Int { model?.switches?.replyReminderAfter ?? TriageSwitches.defaultReplyReminderMinutes }
-
-    /// An Agents list row for a made-up agent (`TriageExample`).
-    @ViewBuilder private func sessionExample(_ session: Session?) -> some View {
-        if let session { TriageExampleBox { SlotRow(session: session) } }
-    }
 
     /// A switch with its example under it, in one row.
     private func toggle<Example: View>(_ key: WritableKeyPath<TriageSwitches, Bool>, _ title: String, _ hint: String, _ symbol: String,
