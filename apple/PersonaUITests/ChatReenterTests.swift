@@ -69,8 +69,14 @@ final class ChatReenterTests: XCTestCase {
         try reenterAtTop(tabbed, turns: 0, extra: ["-ui.textSize", "large"])
     }
 
+    /// A landing that leaves nothing drawn (`-showBlankLanding YES`: thrown off its place and taken for blank, as the
+    /// page of #1386 was) is built again and lands on the saved place once more (`ChatView.mendBlankLanding`).
+    @MainActor func testABlankLandingIsMended() throws {
+        try reenterAtTop(review, turns: 3, extra: ["-showBlankLanding", "YES"], blankLanding: true)
+    }
+
     @MainActor private func reenterAtTop(_ chat: Chat, turns: Int, slowBack: Bool = false, fromRow: Bool = false,
-                                         newHistory: Bool = false, extra: [String] = []) throws {
+                                         newHistory: Bool = false, extra: [String] = [], blankLanding: Bool = false) throws {
         // Each chat is in one mock mode only: the other's run skips it.
         let sid = String(chat.id.split(separator: "/")[1])
         let list = try String(decoding: Data(contentsOf: URL(string: hub + "/api/v1/sessions")!), as: UTF8.self)
@@ -136,7 +142,14 @@ final class ChatReenterTests: XCTestCase {
         let probe = "left: \(before)\nback: \(after)"
         XCTAssertTrue(onScreen(first), "opened again, the chat does not show its first message\n\(probe)")
         XCTAssertGreaterThan(messagesOnScreen(), 0, "opened again, the chat shows nothing\n\(probe)")
-        XCTAssertGreaterThan(app.probe("chat-rows", as: Rows.self, page: "agents")?.visible ?? 0, 0, "no line on screen\n\(probe)")
+        let shown = app.probe("chat-rows", as: Rows.self, page: "agents")
+        XCTAssertGreaterThan(shown?.visible ?? 0, 0, "no line on screen\n\(probe)")
+        XCTAssertGreaterThan(shown?.drawn ?? 0, 0, "no row drawn\n\(probe)")
+        if blankLanding {
+            XCTAssertGreaterThan(shown?.blank ?? 0, 0, "the landing was not taken for blank: nothing mended\n\(probe)")
+        } else {
+            XCTAssertEqual(shown?.blank ?? 0, 0, "a landing came out blank and was mended\n\(probe)")
+        }
     }
 
     // MARK: Helpers
@@ -156,6 +169,8 @@ final class ChatReenterTests: XCTestCase {
     private struct Rows: Decodable {
         var lines: Int
         var visible: Int
+        var drawn: Int?
+        var blank: Int?
         var top: String?
         var offset: Int?
         var content: Int?
