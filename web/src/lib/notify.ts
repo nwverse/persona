@@ -152,39 +152,34 @@ export function managerMuted(prefs: NotifyPrefs, manager: string | undefined, fa
 
 /** Turns one manager's pushes on or off for this device: optimistic, as saveNotifyPrefs; only the list is sent. */
 export async function saveManagerPush(manager: string, on: boolean): Promise<void> {
-  const before = prefs;
-  const mine = ++saveSeq;
-  const list = (prefs.muted_managers ?? []).filter((x) => x !== manager);
-  set({ ...prefs, muted_managers: on ? list : [...list, manager] });
-  const { id, kept } = deviceId();
-  if (!kept) return;
-  try {
-    const answer = normalize(await api<Partial<NotifyPrefs>>(`/devices/${enc(id)}/prefs`, { method: "PUT", json: { muted_managers: prefs.muted_managers } }));
-    if (mine === saveSeq) set(answer);
-  } catch (e) {
-    if (mine === saveSeq) set(before);
-    throw e;
-  }
+  return savePrefs((current) => {
+    const list = (current.muted_managers ?? []).filter((x) => x !== manager);
+    return { muted_managers: on ? list : [...list, manager] };
+  });
 }
 
 let prefs: NotifyPrefs = typeof localStorage === "undefined" ? DEFAULT_PREFS : readCached();
+let confirmedPrefs = prefs;
 const listeners = new Set<() => void>();
 
 // Another tab of the app changed them (its own save or load): this one follows at once, sounds and notifications too.
 if (typeof window !== "undefined") {
   window.addEventListener("storage", (e) => {
     if (e.key !== PREFS_KEY) return;
-    prefs = readCached();
-    listeners.forEach((l) => l());
+    confirmedPrefs = readCached();
+    prefsRevision++;
+    publishPrefs(false);
   });
 }
 
-function set(next: NotifyPrefs) {
+function set(next: NotifyPrefs, cache = true) {
   prefs = next;
-  try {
-    localStorage.setItem(PREFS_KEY, JSON.stringify(next));
-  } catch {
-    // storage unavailable: kept for this page only
+  if (cache) {
+    try {
+      localStorage.setItem(PREFS_KEY, JSON.stringify(next));
+    } catch {
+      // storage unavailable: kept for this page only
+    }
   }
   listeners.forEach((l) => l());
 }
@@ -193,34 +188,73 @@ export function notifyPrefs(): NotifyPrefs {
   return prefs;
 }
 
-// Each save takes a number; only the latest one's answer (or failure) is applied, so two quick changes whose answers
-// land out of order never show a state without the second.
-let saveSeq = 0;
+type PrefsPatch = Partial<Pick<NotifyPrefs, "input" | "done" | "quiet" | "muted_managers">>;
+type PrefsChange = (current: NotifyPrefs) => PrefsPatch;
+type PendingSave = { change: PrefsChange; path: string; resolve: () => void; reject: (error: unknown) => void };
+const pendingSaves: PendingSave[] = [];
+let saving = false;
+let prefsRevision = 0;
+let loadSeq = 0;
+
+function publishPrefs(cache = true) {
+  set(pendingSaves.reduce((current, save) => ({ ...current, ...save.change(current) }), confirmedPrefs), cache);
+}
+
+// One PUT at a time: response fencing alone cannot stop the hub committing older snapshots last. Reapply queued
+// intents over each confirmed answer; a rejected edit must not become another field's implicit retry.
+async function flushSaves() {
+  saving = true;
+  while (pendingSaves.length) {
+    const save = pendingSaves[0];
+    let failed = false;
+    let error: unknown;
+    try {
+      confirmedPrefs = normalize(await api<Partial<NotifyPrefs>>(save.path, { method: "PUT", json: save.change(confirmedPrefs) }));
+    } catch (e) {
+      failed = true;
+      error = e;
+    }
+    pendingSaves.shift();
+    prefsRevision++;
+    publishPrefs();
+    if (failed) save.reject(error);
+    else save.resolve();
+  }
+  saving = false;
+}
+
+function savePrefs(change: PrefsChange): Promise<void> {
+  const { id, kept } = deviceId();
+  prefsRevision++;
+  if (!kept) {
+    confirmedPrefs = { ...prefs, ...change(prefs) };
+    set(confirmedPrefs);
+    return Promise.resolve();
+  }
+  const result = new Promise<void>((resolve, reject) => pendingSaves.push({ change, path: `/devices/${enc(id)}/prefs`, resolve, reject }));
+  publishPrefs();
+  if (!saving) void flushSaves();
+  return result;
+}
 
 /** The hub's prefs for this browser; the cached copy until it answers (and if it can't). */
 export async function loadNotifyPrefs(): Promise<NotifyPrefs> {
   const { id, kept } = deviceId();
   if (!kept) return prefs;
-  const seq = saveSeq;
+  const seq = ++loadSeq;
+  const revision = prefsRevision;
   const p = normalize(await api<Partial<NotifyPrefs>>(`/devices/${enc(id)}/prefs`));
-  if (seq === saveSeq) set(p); // a save went out meanwhile: its answer is newer
+  if (seq === loadSeq && revision === prefsRevision && !pendingSaves.length) {
+    confirmedPrefs = p;
+    set(p);
+  }
   return prefs;
 }
 
 /** Optimistic: the control moves at once and goes back if the hub says no (the error is the caller's to show). */
 export async function saveNotifyPrefs(patch: Partial<Pick<NotifyPrefs, "input" | "done" | "quiet">>): Promise<void> {
-  const before = prefs;
-  const mine = ++saveSeq;
-  set({ ...prefs, ...patch });
-  const { id, kept } = deviceId();
-  if (!kept) return; // this page's own: nothing to keep them on the hub by
-  try {
-    const answer = normalize(await api<Partial<NotifyPrefs>>(`/devices/${enc(id)}/prefs`, { method: "PUT", json: { input: prefs.input, done: prefs.done, ...(prefs.quiet && { quiet: prefs.quiet }) } }));
-    if (mine === saveSeq) set(answer);
-  } catch (e) {
-    if (mine === saveSeq) set(before);
-    throw e;
-  }
+  const intent = { ...patch, ...(patch.quiet && { quiet: { ...patch.quiet } }) };
+  return savePrefs(() => intent);
 }
 
 function subscribe(l: () => void) {

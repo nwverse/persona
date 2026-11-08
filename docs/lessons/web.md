@@ -1,5 +1,9 @@
 # Lessons: web UI and interactions
 
+## Notification preference writes need hub ordering (#1285)
+
+Ignoring an older PUT response cannot stop its request from committing last. Serialize notification and manager-push writes together, keep confirmed preferences separately from queued intents, and send only the changed fields. Remove a failed intent before rebuilding the optimistic view, so another field's save does not silently retry it. Reads started during a write need completion fencing too. Regress authoritative commits and reloads with a deferred transport; response-only checks can pass while the hub retains the wrong choice.
+
 ## Mail send admission must precede React updates (#1251)
 
 A busy button protects only its click path after rerender. Mail shortcuts and form submission need the same synchronous ref guard inside the send function, acquired after validation and released on failure. Keep it held after success until the composer closes. Regress mixed events in one React batch with a deferred transport, then check failure/retry, successful close, recipient validation and IME controls.
