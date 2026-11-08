@@ -270,6 +270,7 @@ export function formProblems(f: ProviderForm, isNew: boolean, hadKey = false): F
     (requiresUrlAndKey && !f.api_key.trim() && (isNew || !hadKey) && t("lib-providers.key_required")) ||
     "";
 
+  const chat = f.kind === "api" && f.api === "chat";
   let models = "";
   const checked = f.models.filter((m) => m.checked);
   const ids = new Set<string>();
@@ -278,14 +279,13 @@ export function formProblems(f: ProviderForm, isNew: boolean, hadKey = false): F
     if (!id) models = t("lib-providers.model_no_id");
     else if (ids.has(id)) models = t("lib-providers.model_duplicate", { id });
     else if (!nonNegInt(m.context_window)) models = t("lib-providers.model_context_int", { id });
-    else if (m.default_effort && m.efforts.length > 0 && !m.efforts.includes(m.default_effort)) models = t("lib-providers.model_effort_unsupported", { id });
+    else if (!chat && m.default_effort && m.efforts.length > 0 && !m.efforts.includes(m.default_effort)) models = t("lib-providers.model_effort_unsupported", { id });
     if (models) break;
     ids.add(id);
   }
   if (!models && !f.model.trim()) models = checked.length ? t("lib-providers.pick_default") : t("lib-providers.add_model");
   else if (!models && !ids.has(f.model.trim())) models = t("lib-providers.default_unchecked");
 
-  const chat = f.kind === "api" && f.api === "chat";
   const advanced =
     (!chat && f.headers_touched && headersProblem(f.headers)) ||
     (!chat && f.env_touched && envProblem(f.env)) ||

@@ -24,6 +24,7 @@ let calls: { method: string; path: string; body?: Record<string, unknown> }[] = 
 let testOK = true;
 // set: what the hub's key test answers instead (a region block, #4526)
 let testAnswer: Record<string, unknown> | null = null;
+let discovered: Record<string, unknown>[] = [];
 let readiness: Readiness | null = null;
 // set: readiness answers only once it resolves (a node self-check can take seconds)
 let readinessGate: Promise<void> | null = null;
@@ -41,6 +42,7 @@ function hub(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
   calls.push({ method, path, body });
   if (path.endsWith("/assistant/readiness")) return (readinessGate ?? Promise.resolve()).then(() => (readiness ? json(readiness) : json({ error: "not found" }, 404)));
   if (path.endsWith("/launchers/presets")) return Promise.resolve(json({ presets }));
+  if (path.endsWith("/launchers/discover")) return Promise.resolve(json({ models: discovered }));
   if (path.endsWith("/launchers/test") && testAnswer) return Promise.resolve(json(testAnswer));
   if (path.endsWith("/launchers/test")) return Promise.resolve(json(testOK ? { ok: true, ms: 321, model: "glm-x" } : { ok: false, ms: 80, model: "glm-x", error: "Key 不对（401）" }));
   if (path.endsWith("/launchers") && method === "POST")
@@ -81,6 +83,7 @@ beforeEach(() => {
   calls = [];
   testOK = true;
   testAnswer = null;
+  discovered = [];
   readiness = null;
   readinessGate = null;
   resetReadiness();
@@ -310,6 +313,25 @@ describe("ProviderWizard from presets", () => {
     expect(calls.find((c) => c.method === "POST" && c.path.endsWith("/launchers"))?.body).toMatchObject({ kind: "api", api: "chat", auth: "api_key", model: "example-chat" });
   });
 
+  it("saves discovered Chat models with inconsistent effort metadata", async () => {
+    discovered = [{ id: "example-chat", context_window: 16000, efforts: ["low"], default_effort: "high" }];
+    await open();
+    act(() => button("自定义兼容网关")!.click());
+    act(() => button("直接 API")!.click());
+    act(() => button("Chat Completions")!.click());
+    const inputs = [...document.body.querySelectorAll<HTMLInputElement>("input")];
+    type(inputs.find((input) => input.placeholder.includes("my_gateway"))!, "custom");
+    type(inputs.find((input) => input.inputMode === "url")!, "https://api.example.com/v1");
+    type(keyInput(), "sk-test-123456");
+    await act(async () => button("获取模型列表")!.click());
+    act(() => button("下一步")!.click());
+    expect(button("保存")!.disabled).toBe(false);
+    await act(async () => button("保存")!.click());
+    expect(calls.find((c) => c.method === "POST" && c.path.endsWith("/launchers"))?.body).toMatchObject({
+      api: "chat", models: [{ id: "example-chat", context_window: 16000, efforts: ["low"], default_effort: "high" }],
+    });
+  });
+
   it("hides unsupported chat options and excludes drafts from test and save", async () => {
     await open();
     act(() => button("自定义兼容网关")!.click());
@@ -371,12 +393,21 @@ describe("ProviderWizard from presets", () => {
     act(() => root.render(<ProviderWizard existing={existing} onClose={() => {}} onSaved={() => {}} />));
     await flush();
     expect(text()).toContain("保存时清除这些设置");
+    expect(text()).toContain("请先清除已保存的设置并保存供应商，再测试连接或获取模型列表");
+    expect(button("测试连接")!.disabled).toBe(true);
+    expect(button("获取模型列表")!.disabled).toBe(true);
+    act(() => { button("测试连接")!.click(); button("获取模型列表")!.click(); });
+    expect(calls.some((c) => /\/launchers\/(test|discover)$/.test(c.path))).toBe(false);
     const checkbox = document.body.querySelector<HTMLInputElement>('input[type="checkbox"]')!;
     expect(checkbox.checked).toBe(false);
     expect(button("保存")!.disabled).toBe(true);
     expect(calls.some((c) => c.method === "PUT")).toBe(false);
     act(() => checkbox.click());
     expect(button("保存")!.disabled).toBe(false);
+    expect(button("测试连接")!.disabled).toBe(true);
+    expect(button("获取模型列表")!.disabled).toBe(true);
+    act(() => { button("测试连接")!.click(); button("获取模型列表")!.click(); });
+    expect(calls.some((c) => /\/launchers\/(test|discover)$/.test(c.path))).toBe(false);
     act(() => checkbox.click());
     expect(button("保存")!.disabled).toBe(true);
     act(() => checkbox.click());

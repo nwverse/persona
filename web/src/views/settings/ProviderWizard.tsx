@@ -183,6 +183,7 @@ export function ProviderWizard({ existing, onClose, onSaved }: { existing: Provi
   };
 
   const runTest = async () => {
+    if (hasLegacyChat) return;
     const model = probeModel.trim() || testModel(f);
     setTesting(true);
     setTest(null);
@@ -195,6 +196,7 @@ export function ProviderWizard({ existing, onClose, onSaved }: { existing: Provi
     }
   };
   const runDiscover = async () => {
+    if (hasLegacyChat) return;
     setDiscovering(true);
     setFound(null);
     try {
@@ -377,14 +379,14 @@ export function ProviderWizard({ existing, onClose, onSaved }: { existing: Provi
                 <div className="flex flex-wrap items-center gap-2">
                   <input value={probeModel} onChange={(e) => setProbeModel(e.target.value)} placeholder={testModel(f) || t("settings-providerwizard.test_model")} aria-label={t("settings-providerwizard.test_model")} autoComplete="off" spellCheck={false}
                     className={cx(FIELD, "h-8 w-full min-w-0 px-2.5 font-mono text-[12.5px] sm:w-auto sm:flex-1")} />
-                  <Button tone="secondary" icon="run" busy={testing} disabled={!!problems.connect} onClick={() => void runTest()}>
+                  <Button tone="secondary" icon="run" busy={testing} disabled={!!problems.connect || hasLegacyChat} onClick={() => void runTest()}>
                     {t("settings-providerwizard.test")}
                   </Button>
-                  <Button tone="secondary" icon="download" busy={discovering} disabled={!!problems.connect} onClick={() => void runDiscover()}>
+                  <Button tone="secondary" icon="download" busy={discovering} disabled={!!problems.connect || hasLegacyChat} onClick={() => void runDiscover()}>
                     {t("settings-providerwizard.discover")}
                   </Button>
                 </div>
-                <p className="text-[11px] text-ink-3">{t("settings-providerwizard.test_cost")}</p>
+                <p className="text-[11px] text-ink-3">{hasLegacyChat ? t("settings-providerwizard.chat_probe_legacy") : t("settings-providerwizard.test_cost")}</p>
                 {test && (
                   <p role="status" className={cx("flex items-start gap-1.5 text-[12px]", test.ok ? "text-green" : "text-red")}>
                     <Icon name={test.ok ? "check" : "warning"} size={12} stroke={2.4} className="mt-0.5 shrink-0" />
