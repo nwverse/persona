@@ -14,11 +14,15 @@ vi.mock("../lib/api", async (original) => ({
   ...(await original<typeof import("../lib/api")>()),
   api: (path: string) => {
     if (path === hub.path) return new Promise((resolve, reject) => hub.pending.push({ resolve, reject }));
-    return Promise.resolve(path === "/looks" ? { looks: [], current: {} } : {});
+    if (path === "/looks") return Promise.resolve({ looks: [], current: {} });
+    if (path === "/managers") return Promise.resolve({ managers: [{ id: "assistant", name: "Assistant", online: true }], default: "assistant" });
+    return Promise.resolve({});
   },
 }));
 
 import { ApiError } from "../lib/api";
+import { resetManagerChoice } from "../lib/manager-choice";
+import { resetRoster } from "../lib/managers";
 import { t } from "../i18n";
 import { Settings } from "./Settings";
 
@@ -28,6 +32,8 @@ let root: Root;
 let host: HTMLDivElement;
 beforeEach(() => {
   localStorage.clear();
+  resetManagerChoice();
+  resetRoster();
   hub.pending = [];
   host = document.createElement("div");
   document.body.append(host);
