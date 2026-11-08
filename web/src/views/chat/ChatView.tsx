@@ -568,21 +568,16 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
   );
 
   /** Keeps a message that did not go as a failed bubble where it was sent, with why, "Retry" and "Delete", the box empty
-   *  (lib/outbox.ts keepFailed; as in the apps, #1122), and says what needs you: the computer's draft (a dialog that can
-   *  clear it), the main conversation's setup (a card above the composer), else a toast. */
+   *  (lib/outbox.ts keepFailed; as in the apps, #1122). The bubble says why (lib/outbox.ts failureText), so no toast
+   *  repeats it; what needs you more gets more: the computer's draft (a dialog that can clear it), the main
+   *  conversation's setup (a card above the composer with what to do). */
   function failed(e: unknown, out: Outgoing, p: Pending) {
     keepFailed(mid, sid, { id: p.id, text: out.text, images: out.images, at: p.at, launcher: assistant ? pickedLauncher(conversationKey(mid, sid)) : undefined, model: assistant ? pickedModel(conversationKey(mid, sid)) : undefined }, e);
     if (e instanceof ApiError && e.code === "input_draft") {
       setDraftRefusal({ id: p.id, draft: String(e.body.draft ?? ""), clearable: typeof e.body.clearable === "string" ? e.body.clearable : undefined });
-    } else if (e instanceof ApiError && e.body.delivered === "unknown") {
-      toast(t("chat-chatview.delivery_unknown"), "error");
-    } else if (assistant && !(e instanceof ApiError && e.code === "dialog_open")) {
+    } else if (assistant && !(e instanceof ApiError && (e.code === "dialog_open" || e.body.delivered === "unknown"))) {
       setSendFailure({ chat: `${mid}/${sid}`, failure: codedFailure(e), entry: p.id });
       void refreshReadiness({ force: true });
-    } else if (e instanceof ApiError && e.code === "dialog_open") {
-      toast(t("chat-chatview.dialog_open"), "error");
-    } else {
-      toast(t("chat-chatview.send_failed", { error: errorText(e) }), "error");
     }
   }
 
