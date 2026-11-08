@@ -501,10 +501,10 @@ extension InteractionKind {
 
     var watchSymbol: String {
         switch self {
-        case .question: "questionmark.bubble"
-        case .plan: "list.bullet.clipboard"
-        case .permission: "hand.raised"
-        case .screen: "terminal"
+        case .question: Theme.Icon.question
+        case .plan: Theme.Icon.plan
+        case .permission: Theme.Icon.askFirst
+        case .screen: Theme.Icon.terminal
         }
     }
 }
