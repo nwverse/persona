@@ -234,6 +234,8 @@ struct ChatView: View {
         // sheets this page presents (a tool's detail) are inside it too.
         chatPage.environment(\.rowMemoScope, RowMemo.scope(shownKey))
             .environment(\.assistantCardConversation, style == .assistant ? shownKey : nil)
+            // A pressed message, lifted over the whole page with its bar (#603).
+            .overlay { MessageLiftLayer(menu: menu) }
     }
 
     @ViewBuilder private var chatPage: some View {
