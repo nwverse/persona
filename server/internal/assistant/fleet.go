@@ -415,6 +415,13 @@ func (s *Service) NodeRequest(ctx context.Context, machine, method string, param
 		}
 		out, err := s.ext.RecordNodeSent(ctx, machine, params)
 		return out, true, err
+	case proto.MethodMailAttachment: // mail_save_attachment's bytes for the node that saves them (fleet_tools.go)
+		var p proto.MailAttachmentRequest
+		if err := json.Unmarshal(params, &p); err != nil {
+			return nil, true, err
+		}
+		out, err := s.mailAttachment(ctx, machine, p)
+		return out, true, err
 	case "mcp.tools":
 		var p struct {
 			Assistant bool   `json:"assistant"`

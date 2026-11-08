@@ -34,6 +34,26 @@ const (
 	compressRetryMax = 6 * time.Hour
 )
 
+// retryWait is how long work waits after its failures-th failure in a row: compressRetry, doubled per further failure,
+// at most compressRetryMax. A project whose rewrite fails waits the same (RefreshProjects).
+func retryWait(failures int) time.Duration {
+	if n := failures - 1; n >= 0 && n < 16 {
+		return min(compressRetry<<n, compressRetryMax)
+	}
+	if failures <= 0 {
+		return compressRetry
+	}
+	return compressRetryMax
+}
+
+// projectRetry is a project whose rewrite failed: how many times in a row, and when it may be tried again. Kept in the
+// engine's memory, not in the project's file: PutProject would bump its Updated time and tell the clients about a
+// change that is not one, and after a restart one more try is cheap.
+type projectRetry struct {
+	failures int
+	at       time.Time
+}
+
 var importanceRe = regexp.MustCompile(`^P[0-3]$`)
 
 type chatDigest struct {
@@ -100,10 +120,7 @@ func (e *Engine) compressFailed(ctx context.Context, c *Chat, err error) error {
 		return fmt.Errorf("%w: skipped its messages up to %s", err, c.LastAt.UTC().Format(time.RFC3339))
 	}
 	current.CompressFailures++
-	wait := compressRetryMax
-	if n := current.CompressFailures - 1; n < 16 {
-		wait = min(compressRetry<<n, compressRetryMax)
-	}
+	wait := retryWait(current.CompressFailures)
 	current.CompressRetryAt = time.Now().Add(wait)
 	if perr := e.Store.PutChat(current); perr != nil {
 		return perr
@@ -638,15 +655,29 @@ type projectDigest struct {
 	Keywords   []string `json:"keywords"`
 }
 
-// RefreshProjects rewrites the summaries of projects with news, at most max per run.
+// RefreshProjects rewrites the summaries of projects with news, at most max per run. A project whose rewrite failed
+// waits like a chat whose compression failed (retryWait), so a model that keeps failing (2026-11-08: a model name the
+// endpoint did not serve, 404 every two minutes) does not cost a call and a log line every round. Only the knowledge
+// base loop calls it.
 func (e *Engine) RefreshProjects(ctx context.Context, max int) int {
 	if e.Model == nil {
 		return 0
 	}
+	now := time.Now()
 	var dirty []*Project
+	live := map[string]bool{}
 	for _, p := range e.Store.Projects() {
 		if p.Dirty && p.Status != "ignored" && p.Live() {
+			live[p.Slug] = true
+			if now.Before(e.projectRetries[p.Slug].at) {
+				continue
+			}
 			dirty = append(dirty, p)
+		}
+	}
+	for slug := range e.projectRetries { // done, merged or gone in the meantime
+		if !live[slug] {
+			delete(e.projectRetries, slug)
 		}
 	}
 	sort.Slice(dirty, func(i, j int) bool { return dirty[i].Relevance > dirty[j].Relevance })
@@ -656,12 +687,21 @@ func (e *Engine) RefreshProjects(ctx context.Context, max int) int {
 			break
 		}
 		if err := e.refreshProject(ctx, p); err != nil {
-			if ai.IsPaused(err) { // the model's connection is held: the rest wait with it (still dirty)
+			if ai.IsPaused(err) || ctx.Err() != nil { // the connection is held or the run ended: the rest wait (still dirty)
 				break
 			}
-			e.logf("project %s: %v", p.Slug, err)
+			if e.projectRetries == nil {
+				e.projectRetries = map[string]projectRetry{}
+			}
+			r := e.projectRetries[p.Slug]
+			r.failures++
+			wait := retryWait(r.failures)
+			r.at = time.Now().Add(wait)
+			e.projectRetries[p.Slug] = r
+			e.logf("project %s: %v (failed %d time(s) in a row, next try in %s)", p.Slug, err, r.failures, wait)
 			continue
 		}
+		delete(e.projectRetries, p.Slug)
 		n++
 	}
 	return n

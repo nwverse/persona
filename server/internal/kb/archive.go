@@ -72,6 +72,8 @@ type Engine struct {
 	failed atomic.Int32
 
 	find findCache // what Find read last time, kept while the files are unchanged (find.go)
+
+	projectRetries map[string]projectRetry // projects whose rewrite failed, by slug (RefreshProjects)
 }
 
 func (e *Engine) modelFor(id string) Model {
