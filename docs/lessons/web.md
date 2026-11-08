@@ -1,5 +1,9 @@
 # Lessons: web UI and interactions
 
+## Mail send admission must precede React updates (#1251)
+
+A busy button protects only its click path after rerender. Mail shortcuts and form submission need the same synchronous ref guard inside the send function, acquired after validation and released on failure. Keep it held after success until the composer closes. Regress mixed events in one React batch with a deferred transport, then check failure/retry, successful close, recipient validation and IME controls.
+
 ## A word turned into an icon at a row's end (2026-11-07, sidebar source marks)
 
 - Everything at a sidebar row's end steps aside while the row is hovered (`group-hover/row:invisible`, for the ⋯). An icon's own `title` therefore never shows to a mouse user: the pointer that would hover the icon has already hidden it. Put the icon's name into the row's own tooltip as well, and keep `role=img` + `aria-label` on the icon for screen readers.
@@ -225,6 +229,7 @@ Six parallel lanes (chat rendering, message actions, Agents list / Machines, Ter
 - When another page sends to a session, waiting for HTTP before navigation means the bubble appears only after pushed history returns. Navigate first and store the bubble by `mid/sid`. New assistant `POST /assistant/conversations`
   returns only once the chat starts (hub timeout 110 seconds), so that phase can only spin on the original page; after response, record the prompt as a "Delivered" bubble and navigate.
 - Dialog text cannot save only in `onClose` (#4563): while manually replying to email, a new message in the same thread makes `MailBody` load the latest email, rendering only "Loading." The dialog unmounts without `onClose`, losing text. Render outside loading state, fix the template on open (otherwise `dirty` compares with the new email template and is always true), and save on unmount using close rules. Key by item/thread, not changing latest uid. Mark handled on Send, restoring on failure, or an in-flight unmount saves already-sent text back as a draft.
+- AI reply drafts need the same protection (#1253): retain edited text and accepted generations as they change, keyed by manager and item, including an intentionally empty reply. Incidental dismissal or navigation then needs no cleanup write that could resurrect a sent draft. Cancel discards, as with manual mail; send owns clearing and failure restoration. Invalidate generation requests on cleanup with a sequence: StrictMode reactivates a shared boolean, allowing an older response to overwrite manual edits.
 - Hub `/mail/send` `references` is a **string** (`mail.SendRequest`), while iOS `SendMail.references` is `[String]`; iOS manual replies with References get hub 400 (inferred from code, not tested). Web sends a string.
 - Visible-means-read needs a recheck trigger: IntersectionObserver callbacks occur only when intersection ratios cross thresholds. Messages arriving while backgrounded / behind a dialog get no callback upon return or close. Track current in-viewport positions,
   then reapply gates on `visibilitychange` and `<body>` child changes (dialogs portal into body). Use dense thresholds (every 0.1) so taller-than-list messages can meet "occupies half the list height."
@@ -467,3 +472,7 @@ A narrow shell can unmount its sidebar list and mount the same list in the Agent
 - A drag that sets React state on every `pointermove` re-renders whatever owns that state. The sidebar sits in the app shell, so keeping its width in shell state would re-render the whole app on every move. Instead, a leaf component (`views/SidebarResize.tsx`) writes the width straight to a CSS variable on the column (`--sidebar-w`, read by `lg:w-[var(--sidebar-w,284px)]`) while dragging, and writes the store (`lib/layout.ts`) once when the drag ends. To catch a regression, count renders or DOM mutations in the shell over a 30-step drag; it should stay at zero.
 - On the first commit a child's `useLayoutEffect` runs before React attaches its parent's ref, so a child that reads `parentRef.current` there gets `null` and the column renders without its width. Pass the column's `id` (`useId`) and look it up with `document.getElementById` instead.
 - Modules mocked by `AppShellRenders.test` (for example `views/SidePanel`) expose only the exports the mock defines, so a new shell component that imports a constant from such a module fails with `No "X" export is defined on the mock`. Shared layout constants (`CHAT_MIN`, `PANEL_MIN`) belong in `lib/layout.ts`.
+
+## Manual mail drafts belong to their manager and item (#1252)
+
+- The merged Inbox can contain the same item id under two managers. Scope retained drafts and the live form's React key to both owner and item; resolve an omitted owner to the roster default so explicit and implicit default stamps share one draft. The mail body's open-reply key also needs the owner, or switching managers can leave the previous reply template open. Exercise late send failures after unmount while another owner's same-id draft is open, and verify recipients, account and reply headers as well as text through mocked sends.
