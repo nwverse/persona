@@ -407,6 +407,7 @@ Use an invalidation revision as the task key and handle the flag after completio
 - `List` `.simultaneousGesture(TapGesture())` (blank-area dismiss) treats long-press release as a tap unless held >~2 seconds:
   newly opened message actions close on release. Suppress closing during that press and 0.3 seconds after release (`MessageMenu.pressChanged`).
 - `List` `Section` headers are not cells; `.contextMenu` rarely responds there. Give header actions visible buttons / `Menu`.
+- A `.contextMenu(menuItems:preview:)` preview is drawn in the context menu's own host, which the app's environment objects do not reach (2026-11-08, #1490): a preview showing a view with `@Environment(AppModel.self)` crashed the app on the long press, in SwiftUI's environment assertion with no app frame on the stack. Hand the preview what it reads (`.environment(model)`, the scopes it uses).
 - Put MarkdownUI `.markdownTextStyle` inside `.markdownTheme`, called first, or theme text styles overwrite it.
 - Link endings have one rule (`Links`): stop at whitespace or any non-ASCII (Chinese / fullwidth punctuation), strip trailing `.,;:!?` and unmatched `)` / `]`.
   MarkdownUI cmark-gfm autolinks stop only at whitespace, swallowing Chinese paragraphs after URLs (2026-10-30). Run all MarkdownUI text through
