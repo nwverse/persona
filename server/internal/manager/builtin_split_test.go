@@ -186,6 +186,59 @@ func TestInstallBuiltinLaunchdStaysOnPersonad(t *testing.T) {
 	}
 }
 
+// On a Mac whose data directory has no bin/personad, install --builtin run as a persona-manager writes the agent to run
+// the personad of its build beside it, and says the Mac stays on personad. With a personad of another build there, or
+// none, the agent runs persona-manager: install says so and why, and not that it stays on personad.
+func TestInstallBuiltinLaunchdPersonadBesidePersonaManager(t *testing.T) {
+	e, _, data := splitManager(t, "darwin", "persona 1.0 abc")
+	if err := os.Remove(filepath.Join(data, "bin", "personad")); err != nil {
+		t.Fatal(err)
+	}
+	loose := t.TempDir()
+	personad, pm := filepath.Join(loose, "personad"), filepath.Join(loose, "persona-manager")
+	for _, p := range []string{personad, pm} {
+		if err := os.WriteFile(p, []byte("#!/bin/sh\n"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	e.exe = func() (string, error) { return pm, nil }
+	plist := filepath.Join(e.home, "Library", "LaunchAgents", managerconf.BuiltinLabel+".plist")
+	runs := func(out, bin string) {
+		t.Helper()
+		if b, _ := os.ReadFile(plist); string(b) != builtinPlist(bin, data, e.home) {
+			t.Fatalf("want the agent to run %s:\n%s\n%s", bin, b, out)
+		}
+	}
+
+	out := installOut(t, e)
+	runs(out, personad)
+	if !strings.Contains(out, "Program: "+personad+" ("+macPersonad+").\n") {
+		t.Fatal(out)
+	}
+
+	e.version = func(_ context.Context, path string) (string, error) {
+		if filepath.Base(path) == "personad" {
+			return "persona 0.9 old", nil
+		}
+		return "persona 1.0 abc", nil
+	}
+	out = installOut(t, e)
+	runs(out, pm)
+	if !strings.Contains(out, "Program: "+pm+" (") || !strings.Contains(out, personad+" is another build") ||
+		!strings.Contains(out, "so the agent runs persona-manager") || strings.Contains(out, macPersonad) {
+		t.Fatalf("another build:\n%s", out)
+	}
+
+	if err := os.Remove(personad); err != nil {
+		t.Fatal(err)
+	}
+	out = installOut(t, e)
+	runs(out, pm)
+	if !strings.Contains(out, "has no personad and none is beside it, so the agent runs persona-manager") || strings.Contains(out, macPersonad) {
+		t.Fatalf("none:\n%s", out)
+	}
+}
+
 func TestServiceProgram(t *testing.T) {
 	for text, want := range map[string]string{
 		builtinUnit(`/home/a "b"/100%/$x/personad`, "/h", false):                  `/home/a "b"/100%/$x/personad`,

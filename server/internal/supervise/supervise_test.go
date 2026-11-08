@@ -38,7 +38,11 @@ func TestMain(m *testing.M) {
 	os.Exit(m.Run())
 }
 
+// child is the fake hub or manager. It catches SIGTERM before it writes <role>.starts: the tests stop it as soon as
+// they see that file.
 func child(dir, role string) {
+	term := make(chan os.Signal, 1)
+	signal.Notify(term, syscall.SIGTERM)
 	f, err := os.OpenFile(filepath.Join(dir, role+".starts"), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
 	if err != nil {
 		os.Exit(9)
@@ -58,8 +62,6 @@ func child(dir, role string) {
 			_ = os.WriteFile(filepath.Join(dir, role+".grandchild"), []byte(strconv.Itoa(gc.Process.Pid)), 0o600)
 		}
 	}
-	term := make(chan os.Signal, 1)
-	signal.Notify(term, syscall.SIGTERM)
 	for {
 		select {
 		case <-term:

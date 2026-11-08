@@ -17,6 +17,7 @@ import (
 	"github.com/nwverse/persona/server/internal/assistant"
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/managerconf"
+	"github.com/nwverse/persona/server/internal/nodeproto"
 	"github.com/nwverse/persona/server/internal/update"
 )
 
@@ -203,9 +204,24 @@ func (e *env) installBuiltin(ctx context.Context, home string, j builtinJoin) er
 
 // builtinBinary is what the built-in manager's service runs: on Linux persona-manager beside bin when it is bin's
 // build (docs/server/server.md "Programs"), else bin. A unit under its former name, or update.SplitEnv 0 (splitOff),
-// keeps bin, and so does a Mac, for now (macPersonad).
+// keeps bin. A Mac stays on personad, for now (macPersonad): bin, or, when bin is persona-manager (the running program,
+// with no personad in the data directory), the personad of its build beside it; with none it runs persona-manager and
+// says why.
 func (e *env) builtinBinary(ctx context.Context, bin string) string {
 	if e.goos == "darwin" {
+		if filepath.Base(bin) == "persona-manager" {
+			p, why := update.SplitBeside(ctx, bin, nodeproto.ProgramPersonad, e.version)
+			if p == "" {
+				if why == "" {
+					why = "none is beside it"
+				}
+				dir := filepath.Join(dataDir(), "bin")
+				fmt.Fprintf(e.stdout, "Program: %s (%s has no personad and %s, so the agent runs persona-manager; on macOS it is meant to stay on personad for now: put a personad of this build in %s and install again).\n",
+					bin, dir, why, dir)
+				return bin
+			}
+			bin = p
+		}
 		if fileExists(update.ProgramBeside(bin, "persona-manager")) {
 			fmt.Fprintf(e.stdout, "Program: %s (%s).\n", bin, macPersonad)
 		}
