@@ -18,11 +18,13 @@ it("recovers an explicitly owned current-token 401 once", async () => {
   await expect(api("/assistant", { token: "example-current-token", tokenOwner: credentialOwner() })).rejects.toMatchObject({ status: 401 });
   expect(unauthorized).toHaveBeenCalledTimes(1);
 });
-it("does not sign out a replacement credential after a retired request returns 401", async () => {
+it.each([false, true])("does not sign out a replacement credential after a retired 401 (same token=%s)", async (sameToken) => {
   let finish!: (response: Response) => void;
   vi.stubGlobal("fetch", vi.fn(() => new Promise<Response>((resolve) => { finish = resolve; })));
   const pending = api("/assistant", { token: "example-current-token", tokenOwner: credentialOwner() });
-  setToken("example-replacement-token"); finish(denied());
+  if (sameToken) { setToken(""); setToken("example-current-token"); }
+  else setToken("example-replacement-token");
+  finish(denied());
   await expect(pending).rejects.toMatchObject({ status: 401 });
   expect(unauthorized).not.toHaveBeenCalled();
 });
