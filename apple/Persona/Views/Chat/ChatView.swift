@@ -235,6 +235,7 @@ struct ChatView: View {
         chatPage.environment(\.rowMemoScope, RowMemo.scope(shownKey))
             .environment(\.assistantCardConversation, style == .assistant ? shownKey : nil)
             // A pressed message, lifted over the whole page with its bar (#603).
+            .liftBlur(menu)
             .overlay { MessageLiftLayer(menu: menu) }
     }
 

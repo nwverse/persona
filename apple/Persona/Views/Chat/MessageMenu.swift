@@ -455,11 +455,10 @@ struct MessageActionBar: View {
         }
         .padding(.horizontal, Theme.Space.sm)
         .frame(height: Self.height)
-        .background(Color(white: 0.17), in: .rect(cornerRadius: Theme.Radius.card, style: .continuous))
-        // Its edge over the dimmed chat in dark mode.
+        .background(Theme.Lift.bar, in: .rect(cornerRadius: Theme.Radius.card, style: .continuous))
+        // Its edge over the dimmed chat.
         .overlay(RoundedRectangle(cornerRadius: Theme.Radius.card, style: .continuous).stroke(Theme.cardStroke, lineWidth: 0.5))
         .shadow(color: .black.opacity(0.25), radius: 10, y: 4)
-        .environment(\.colorScheme, .dark)
     }
 
     private func action(_ title: String, _ symbol: String, perform: @escaping () -> Void) -> some View {
@@ -476,7 +475,7 @@ struct MessageActionBar: View {
             ThemedIcon(symbol).font(Theme.Font.heading).dynamicTypeSize(...DynamicTypeSize.xxLarge).scaledFrame(height: Theme.Size.iconS)
             Text(title).font(Theme.Font.label).lineLimit(1).minimumScaleFactor(0.8) // Select Text on a narrow bar
         }
-        .foregroundStyle(.white)
+        .foregroundStyle(.primary)
         .frame(width: itemWidth, height: Self.height)
         .contentShape(.rect)
     }

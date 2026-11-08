@@ -3,7 +3,7 @@ import SwiftUI
 // MARK: - A pressed message, lifted over the dimmed chat (#603)
 
 // As Telegram does: a long press dims and blurs the chat, draws the pressed message again above it, and puts the bar of
-// actions right next to it. A message taller than the screen shows the part around the press, its ends faded, and scrolls
+// actions right next to it. Lightly: the chat's words still show through, faintly (`Theme.Lift`). A message taller than the screen shows the part around the press, its ends faded, and scrolls
 // inside; the bar always stays on screen, so a long answer never has to be scrolled to reach Copy.
 
 /// What a message's row offers in its bar (`messageActionBar`), for the pressable part inside it (`messageLongPress`).
@@ -80,6 +80,20 @@ nonisolated enum LiftLayout {
     }
 }
 
+extension View {
+    /// The chat page under `MessageLiftLayer`: blurred a little while a message is lifted over it. The radius goes to
+    /// zero rather than the modifier away, so the page keeps its identity (and its scroll position).
+    func liftBlur(_ menu: MessageMenu) -> some View { modifier(LiftBlur(menu: menu)) }
+}
+
+private struct LiftBlur: ViewModifier {
+    var menu: MessageMenu
+
+    func body(content: Content) -> some View {
+        content.blur(radius: menu.lift == nil ? 0 : Theme.Lift.blur, opaque: true)
+    }
+}
+
 /// The dimmed chat, the lifted message and its bar, over the whole chat page while a message is pressed.
 struct MessageLiftLayer: View {
     var menu: MessageMenu
@@ -148,11 +162,10 @@ private struct LiftedMessage: View {
         .accessibilityAction(.escape) { menu.close() }
     }
 
-    /// The chat behind, blurred and dimmed; a tap or a pull down puts the message back.
+    /// Dims the chat behind, which `liftBlur` blurs; a tap or a pull down puts the message back.
     private var backdrop: some View {
         Rectangle()
-            .fill(.ultraThinMaterial)
-            .overlay(Theme.Fill.scrim)
+            .fill(Theme.Lift.scrim)
             .contentShape(.rect)
             .onTapGesture { menu.close() }
             .gesture(DragGesture(minimumDistance: Theme.Space.l).onEnded { if $0.translation.height > Theme.Size.tapTarget { menu.close() } })
