@@ -11,10 +11,11 @@ import { codedFailure, helpTopic, passesBySelf, refreshReadiness, type CodedFail
 import { navigate } from "../lib/router";
 import { refreshAssistant, useStore } from "../lib/store";
 import { NEW_CONVERSATION, pickedLauncher, pickLauncher } from "../lib/assistant-chat";
-import { noteSent } from "../lib/outbox";
+import { noteSent, outboxMessage } from "../lib/outbox";
 import { Button, cx, EASE, IconButton, Loading } from "../ui/atoms";
 import { Icon } from "../ui/icons";
 import { ChatView } from "./chat/ChatView";
+import { UserBubble } from "./chat/SegmentView";
 import { Composer, type Outgoing } from "./chat/Composer";
 import { StarterLauncherChip } from "./assistant/AssistantChat";
 import { PersonaAvatar, usePersona } from "./assistant/Persona";
@@ -123,9 +124,19 @@ function Starter({ main, onToggleSidebar }: { main?: boolean; onToggleSidebar: (
   const gate = useReadinessGate();
   const [failure, setFailure] = useState<CodedFailure | null>(null);
   const offline = useShownOffline();
+  // the first message while its start is on its way: shown as the chat's sending bubble, not gone with the box (#1697)
+  const [sending, setSending] = useState<Outgoing | null>(null);
 
   const start = async (out: Outgoing): Promise<boolean> => {
     setFailure(null);
+    setSending(out);
+    const sent = await startOnce(out);
+    // started: the page moves to the conversation, where the message is; refused: its words go back in the box
+    if (!sent) setSending(null);
+    return sent;
+  };
+
+  const startOnce = async (out: Outgoing): Promise<boolean> => {
     const launcher = pickedLauncher(NEW_CONVERSATION);
     const body = { prompt: out.text, images: out.images.length ? out.images : undefined, launcher, main: main || undefined };
     // written for the manager shown now: its retries go there even if the switcher moves meanwhile
@@ -220,6 +231,12 @@ function Starter({ main, onToggleSidebar }: { main?: boolean; onToggleSidebar: (
             </div>
           )}
           {gate.dialog}
+          {sending && (
+            <div className="mb-2.5 flex flex-col items-end gap-1.5" data-start-pending>
+              <UserBubble msg={outboxMessage({ id: "starting", text: sending.text, images: sending.images, at: 0, state: "sending" })} mid={assistant?.machine_id ?? ""} sid="" pending sendState="sending" />
+              <Loading label={t("chat-chatview.preparing")} />
+            </div>
+          )}
           <Composer key={seed} blocked={offline ? undefined : gate.blocked} disabled={Boolean(offline)} draftKey="persona-new" placeholder={offline ? offline.composer : t("personaassistant.ask_placeholder", { name: persona.name })} machineId={assistant?.machine_id} mention={NEW_MENTION} onSend={start} autoFocus commands={[]} footer={assistant ? <StarterLauncherChip /> : undefined} />
           <div className="mt-4 grid grid-cols-1 gap-1.5 sm:grid-cols-2">
             {/* an offline manager takes nothing: no questions to fill in */}
