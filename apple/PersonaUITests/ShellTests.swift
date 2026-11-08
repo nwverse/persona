@@ -1,7 +1,7 @@
 import XCTest
 
 /// The ChatGPT-style shell on an iPhone (docs/apple/ios.md「新外壳」), in Demo Mode: no tab bar; Assistant | Agents; the drawer with
-/// Inbox / Settings; the empty chat lists what needs the user; the composer grows while typing; Old Layout brings the tabs back.
+/// Inbox / Settings; the empty chat lists what needs the user; the composer grows while typing.
 final class ShellTests: XCTestCase {
     private var app: XCUIApplication!
 
@@ -12,7 +12,7 @@ final class ShellTests: XCTestCase {
     /// `-newAssistant YES` (the empty chat) also picks the Persona tab: tests that open another page leave it out.
     @MainActor private func launch(_ extra: [String] = [], emptyChat: Bool = true) {
         app = XCUIApplication()
-        app.launchArguments = ["-demo.on", "YES", "-ui.oldLayout", "NO", "-probes", "YES", "-dev.openChat", ""] + (emptyChat ? ["-newAssistant", "YES"] : []) + extra
+        app.launchArguments = ["-demo.on", "YES", "-probes", "YES", "-dev.openChat", ""] + (emptyChat ? ["-newAssistant", "YES"] : []) + extra
         app.launchPinned()
     }
 
@@ -29,10 +29,6 @@ final class ShellTests: XCTestCase {
     }
 
     @MainActor private func button(_ id: String) -> XCUIElement { app.buttons[id].firstMatch }
-
-    @MainActor private var oldLayoutSwitch: XCUIElement {
-        app.switches.matching(NSPredicate(format: "identifier == 'old-layout' OR label == '旧布局'")).firstMatch
-    }
 
     @MainActor func testSwitchBetweenChatAndWork() {
         launch()
@@ -165,18 +161,4 @@ final class ShellTests: XCTestCase {
         see(button("shell-composer-send"), "the draft and its send button after the keyboard closed")
     }
 
-    @MainActor func testOldLayoutBringsTheTabsBack() {
-        launch(["-tab", "settings", "-openAppearance", "layout"], emptyChat: false)
-        let toggle = see(oldLayoutSwitch, "旧布局 in 设置 › 外观 › 布局", timeout: 15)
-        toggle.coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: 0.5)).tap()
-        see(app.tabBars.firstMatch, "the tab bar with 旧布局 on")
-        let back = see(oldLayoutSwitch, "旧布局, still on 布局")
-        back.coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: 0.5)).tap()
-        // Back in the shell, Settings is a sheet again, still on Layout (its own pages have a back button; × is on its root).
-        see(app.navigationBars["布局"], "the shell's 设置 sheet on 布局 with 旧布局 off")
-        XCTAssertFalse(app.tabBars.firstMatch.exists, "a tab bar after turning 旧布局 off")
-        app.navigationBars["布局"].buttons["BackButton"].tap()
-        see(button("settings-close"), "设置's ×").tap()
-        see(button("shell-assistant"), "助手 after closing 设置")
-    }
 }

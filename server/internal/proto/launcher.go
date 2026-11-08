@@ -98,6 +98,10 @@ type AgentModel struct {
 	// Efforts: the thinking efforts it takes, weakest first; none: no effort setting.
 	Efforts       []string `json:"efforts,omitempty"`
 	DefaultEffort string   `json:"default_effort,omitempty"`
+	// Custom: an id the user typed that the agent's own list does not have, remembered on the hub for this machine
+	// and launcher after it ran (#1644, assistant/models_custom.go); listed after the agent's own, most recent first.
+	// Its efforts are not known, so none are given.
+	Custom bool `json:"custom,omitempty"`
 }
 
 type LauncherEnv struct {
@@ -175,6 +179,9 @@ type ProviderModel struct {
 	// Efforts: the thinking levels it takes (low, medium, high, xhigh, max); empty is unknown (all are offered).
 	Efforts       []string `json:"efforts,omitempty"`
 	DefaultEffort string   `json:"default_effort,omitempty"`
+	// InheritedFrom is the catalog id an unlisted newer generation took a missing context window or thinking
+	// level from. Empty for an exact catalog entry, and when the gateway already reported every one of those.
+	InheritedFrom string `json:"inherited_from,omitempty"`
 }
 
 // The assistant's runtimes for a Claude launcher (model_config.assistant's "runtime", the assistant.send / .start /

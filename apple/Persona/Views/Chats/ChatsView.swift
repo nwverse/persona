@@ -325,7 +325,7 @@ struct ChatsView: View {
                 }
                 .onChange(of: model.openChat, initial: true) { _, key in
                     // Not before the list is on screen: a push into a stack whose root has not appeared yet built the
-                    // chat three times (the old layout's launch onto a chat, `-openSession` / a notification: items
+                    // chat three times (a TabView launch onto a chat, `-openSession` / a notification: items
                     // read three times, `-openUploadDemo` uploading twice, #2061). The list's appearing opens it.
                     if rootShown { takeOpenChat() }
                 }

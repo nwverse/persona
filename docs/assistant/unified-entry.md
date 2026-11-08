@@ -112,6 +112,8 @@ lines, and in the user's own color and alignment they read as something the user
   tapping one opens its whole text with Copy (the web's text is also selectable). Tapping these rows does not open the task.
 - **The hand-off sent with the card** (Persona's message to the same task in the same conversation at most 60 seconds after
   the card's `task` entry; `agent_send` with `task` writes the card and then the text) is drawn only on the card, not as a line.
+  Only a card drawn in full (from today) takes it in: a task card from another day is a one-line row with no list, so its
+  hand-off stays a folded line under it (#1668).
 - **Any other message of Persona's** (a rework, a later instruction, one whose task has no card in this chat) is one folded
   line on the left, styled like the answered and review lines: a send icon (a stop when Persona cut the turn short first),
   "Sent to ‘xx’" (tap to open the task) and the first line; tapping the line opens the whole text with Copy.

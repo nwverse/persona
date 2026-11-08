@@ -25,14 +25,24 @@ struct MacMenuShortcutTests {
         return NSApp.mainMenu.map(walk) ?? []
     }
 
+    /// Items macOS adds to every app's Edit menu (Start Dictation…, Emoji & Symbols): system-owned, their fn shortcuts
+    /// are not the app's, and AppKit can insert them more than once while SwiftUI rebuilds the menus.
+    private static let systemEditActions: Set<Selector> = [
+        NSSelectorFromString("startDictation:"), #selector(NSApplication.orderFrontCharacterPalette(_:)),
+    ]
+
     private func walk(_ menu: NSMenu) -> [(title: String, shortcut: Shortcut)] {
         menu.items.flatMap { item -> [(title: String, shortcut: Shortcut)] in
+            if let action = item.action, Self.systemEditActions.contains(action) { return [] }
             var out: [(title: String, shortcut: Shortcut)] = []
             if !item.keyEquivalent.isEmpty {
-                let mods = item.keyEquivalentModifierMask.intersection([.command, .shift, .option, .control])
+                var mods = item.keyEquivalentModifierMask.intersection([.command, .shift, .option, .control])
+                // An uppercase key equivalent implies Shift (NSMenuItem.keyEquivalent): Services' "M" is ⇧⌘M, not ⌘M.
+                if item.keyEquivalent != item.keyEquivalent.lowercased() { mods.insert(.shift) }
                 out.append((item.title, Shortcut(key: item.keyEquivalent.lowercased(), mods: mods.rawValue)))
             }
-            if let sub = item.submenu { out += walk(sub) }
+            // The Services submenu lists other apps' services with shortcuts set in System Settings, not the app's.
+            if let sub = item.submenu, sub !== NSApp.servicesMenu { out += walk(sub) }
             return out
         }
     }

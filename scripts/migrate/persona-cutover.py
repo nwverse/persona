@@ -779,11 +779,25 @@ SET LOCAL search_path = pg_temp, public;
 CREATE TEMP TABLE cutover_name (source text NOT NULL);
 INSERT INTO cutover_name VALUES (:'source_name');
 CREATE TEMP TABLE cutover_roots (previous text NOT NULL, current text NOT NULL);
-__SESSION_ROOTS__SELECT to_regclass('public.plugins') IS NOT NULL AS registry,
-       to_regclass('public.settings') IS NOT NULL AS settings,
+__SESSION_ROOTS__-- A hub's database whose built-in manager moved its data into its own database keeps the manager's tables as they
+-- were at the move (for a build from before it; manager_moved records 'out'). They are a frozen copy: rewriting it
+-- would verify nothing the manager reads, so they are left alone here and the transaction runs on that database too.
+CREATE FUNCTION pg_temp.cutover_manager_moved_out() RETURNS boolean LANGUAGE plpgsql AS $fn$
+DECLARE moved boolean := false;
+BEGIN
+ IF to_regclass('public.manager_moved') IS NOT NULL THEN
+   EXECUTE 'SELECT EXISTS (SELECT 1 FROM public.manager_moved WHERE direction = ''out'')' INTO moved;
+ END IF;
+ RETURN moved;
+END $fn$;
+CREATE TEMP TABLE cutover_manager_tables (table_name text NOT NULL);
+INSERT INTO cutover_manager_tables VALUES ('plugins'), ('plugin_secrets'), ('plugin_audit'), ('settings'), ('node_sessions');
+SELECT to_regclass('public.plugins') IS NOT NULL AND NOT pg_temp.cutover_manager_moved_out() AS registry,
+       to_regclass('public.settings') IS NOT NULL AND NOT pg_temp.cutover_manager_moved_out() AS settings,
        to_regclass('public.hub_settings') IS NOT NULL AS hub_settings,
        to_regclass('public.devices') IS NOT NULL AS devices,
-       to_regclass('public.node_sessions') IS NOT NULL AS node_sessions
+       to_regclass('public.node_sessions') IS NOT NULL AND NOT pg_temp.cutover_manager_moved_out() AS node_sessions,
+       pg_temp.cutover_manager_moved_out() AS manager_moved_out
 \gset cutover_
 CREATE TEMP TABLE cutover_columns (table_name text, column_name text, data_type text);
 INSERT INTO cutover_columns VALUES
@@ -796,6 +810,8 @@ INSERT INTO cutover_columns VALUES
  ('plugin_audit','plugin','text'), ('settings','key','text'), ('settings','value','jsonb'),
  ('hub_settings','key','text'), ('hub_settings','value','jsonb'), ('devices','prefs','jsonb'),
  ('node_sessions','cwd','text');
+DELETE FROM cutover_columns WHERE pg_temp.cutover_manager_moved_out()
+ AND table_name IN (SELECT table_name FROM cutover_manager_tables);
 DO $check$
 BEGIN
  IF NOT EXISTS (SELECT 1 FROM cutover_columns WHERE to_regclass('public.' || table_name) IS NOT NULL) THEN
@@ -909,8 +925,17 @@ END $check$;
 SELECT 'node_sessions.cwd under a previous root' AS verification, count(*) AS remaining FROM public.node_sessions s
  JOIN cutover_roots r ON s.cwd=r.previous OR left(s.cwd,length(r.previous)+1)=r.previous || '/';
 \endif
+\if :cutover_manager_moved_out
+SELECT 'manager tables left as the frozen copy they are here' AS verification, count(*) AS skipped
+ FROM cutover_manager_tables WHERE to_regclass('public.' || table_name) IS NOT NULL;
+\endif
 COMMIT;
+\if :cutover_manager_moved_out
+\echo database-cutover: committed for the hub tables only; the manager tables here are the copy left when the built-in manager moved its data into its own database, and were not changed
+\echo database-cutover: run this same transaction against the built-in manager database too (managers/assistant/manager.json database_name or database_url); services must remain stopped
+\else
 \echo database-cutover: committed; supported ID fields and stored session folders verified; services must remain stopped
+\endif
 """).replace("__SESSION_ROOTS__", roots)
 
 

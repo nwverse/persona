@@ -35,11 +35,14 @@ import (
 	"github.com/nwverse/persona/server/internal/managerupdate"
 	"github.com/nwverse/persona/server/internal/netaddr"
 	"github.com/nwverse/persona/server/internal/osproc"
+	"github.com/nwverse/persona/server/internal/terminalmaintenance"
 	"github.com/nwverse/persona/server/internal/update"
 )
 
 // Usage is the help of `personad manager`.
 const Usage = `usage:
+  personad manager maintenance prepare|observe|recovery-recipe --help
+                       preserve exact-session recovery material; no exit, restore or update execution
   personad manager update check|start|status|run|confirm|rollback --plan PATH
                        inspect or activate one explicit independent manager release plan
   personad manager update inventory --plan PATH --main ID --machine ID --machine-uid UID
@@ -80,6 +83,8 @@ func Main(ctx context.Context, build update.Build, args []string, stdout io.Writ
 	}
 	e := newEnv(stdout)
 	switch args[0] {
+	case "maintenance":
+		return terminalmaintenance.Main(ctx, args[1:], stdout)
 	case "update":
 		return managerupdate.Main(ctx, build, args[1:], stdout)
 	case "capabilities":

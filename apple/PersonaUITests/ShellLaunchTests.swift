@@ -24,7 +24,7 @@ final class ShellLaunchTests: XCTestCase {
         // Paired with scripts/mock/mock_hub.py, or Demo Mode.
         let source = hub.map { ["-pairURL", "persona://pair?url=" + $0.addingPercentEncoding(withAllowedCharacters: .alphanumerics)! + "&token=mock"] }
             ?? ["-demo.on", "YES"]
-        app.launchArguments = source + ["-ui.oldLayout", "NO", "-probes", "YES", "-dev.folded", ""] + args
+        app.launchArguments = source + ["-probes", "YES", "-dev.folded", ""] + args
         app.launchPinned()
         defer { app.terminate() }
         let start = Date()

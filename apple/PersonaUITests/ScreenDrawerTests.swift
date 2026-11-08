@@ -54,7 +54,7 @@ final class ScreenDrawerTests: XCTestCase {
     /// From a machine page pushed in the new shell's pages (#1604): the screen came up nowhere there (a cover from the
     /// root was swallowed while a page was presented); in a window of its own it comes up over it, and closes back to it.
     @MainActor func testVNCFromTheShellsMachinePage() throws {
-        let app = try launch(["-ui.oldLayout", "NO", "-newAssistant", "YES", "-openShellPage", "machines"])
+        let app = try launch(["-newAssistant", "YES", "-openShellPage", "machines"])
         let row = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "MacBook")).firstMatch
         XCTAssertTrue(row.waitForExistence(timeout: 30), "no MacBook on the machines page:\n\(app.debugDescription)")
         row.tap()
@@ -73,7 +73,7 @@ final class ScreenDrawerTests: XCTestCase {
 
     @MainActor func testTheMenusHaveTheScreen() throws {
         let app = try launch(["-app.tab", "assistant", "-tab", "assistant", "-openAssistant", calc])
-        let face = app.buttons["persona-avatar"].firstMatch
+        let face = app.buttons["shell-assistant"].firstMatch
         XCTAssertTrue(face.waitForExistence(timeout: 30))
         face.tap()
         let item = app.buttons["VNC · MacBook"].firstMatch

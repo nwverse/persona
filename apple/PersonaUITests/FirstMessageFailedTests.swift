@@ -43,7 +43,7 @@ final class FirstMessageFailedTests: XCTestCase {
         try mock("n=1&delay=0")
         app = XCUIApplication()
         let pair = "persona://pair?url=" + hub.addingPercentEncoding(withAllowedCharacters: .alphanumerics)! + "&token=mock"
-        app.launchArguments = ["-pairURL", pair, "-ui.oldLayout", "NO", "-app.tab", "assistant", "-tab", "assistant",
+        app.launchArguments = ["-pairURL", pair, "-app.tab", "assistant", "-tab", "assistant",
                                "-dev.openChat", "", "-newAssistant", "YES", "-showHomeState", "empty"]
         app.launchPinned()
         let field = app.textFields["shell-composer-field"].firstMatch

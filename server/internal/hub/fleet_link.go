@@ -153,7 +153,7 @@ func (h *Hub) takeFleetSessions(p assistantwire.FleetSessions) {
 	}
 	f.muted[m.cfg.ID] = p.Muted
 	f.mu.Unlock()
-	h.broadcastSessions(m, h.decorated(m))
+	h.broadcastSessions(m, m.keptSessions())
 }
 
 // takeFleetInteractions is takeFleetInteractionsFrom the assistant the hub starts.
@@ -250,6 +250,21 @@ func (h *Hub) stampSessions(m *Machine, list []proto.Session) {
 	for i := range list {
 		list[i].Manager = owner
 	}
+}
+
+// stamped is list with manager on each session, as stampSessions puts it: list itself when every session has it
+// already, else a copy. list is never changed.
+func stamped(list []proto.Session, manager string) []proto.Session {
+	for i := range list {
+		if list[i].Manager != manager {
+			out := slices.Clone(list)
+			for j := i; j < len(out); j++ {
+				out[j].Manager = manager
+			}
+			return out
+		}
+	}
+	return list
 }
 
 // decoratedSession is one of m's sessions as the apps get it.

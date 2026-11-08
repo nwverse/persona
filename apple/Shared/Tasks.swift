@@ -13,6 +13,9 @@ nonisolated struct PlanTask: Codable, Hashable, Sendable {
     var launcher: String?
     var model: String?
     var permission: String?
+    /// Claude Code's ultracode for this task (#12): the assistant's choice; on start, true / false replaces it and left
+    /// out keeps it (PlanUltracode.swift).
+    var ultracode: Bool?
     var readonly: Bool?
     var why: String?
     /// Set once started: the todo the task is, and why its agent did not start.
@@ -20,7 +23,7 @@ nonisolated struct PlanTask: Codable, Hashable, Sendable {
     var error: String?
 
     enum CodingKeys: String, CodingKey {
-        case title, prompt, machine, cwd, launcher, model, permission, readonly, why, error
+        case title, prompt, machine, cwd, launcher, model, permission, ultracode, readonly, why, error
         case todoID = "todo_id"
     }
 
@@ -171,10 +174,11 @@ nonisolated enum SentToAgents {
     static let handOff: TimeInterval = 60
 
     /// The hand-offs the task cards take in (not drawn on their own): Persona's messages within `handOff` after their own
-    /// task's card in the same conversation.
-    static func takenIn(_ feed: [FeedItem]) -> Set<String> {
+    /// task's card in the same conversation. Only a card drawn in full (from today, `FeedLine`) has the list: from another
+    /// day it is one line (`TaskLine`), and its hand-off stays a folded line under it (#1668).
+    static func takenIn(_ feed: [FeedItem], now: Date = .now, calendar: Calendar = .current) -> Set<String> {
         var cards: [String: [Date]] = [:]
-        for item in feed where item.kind == .task {
+        for item in feed where item.kind == .task && calendar.isDate(item.at, inSameDayAs: now) {
             if let ref = item.ref { cards[item.conversation + "/" + ref, default: []].append(item.at) }
         }
         guard !cards.isEmpty else { return [] }
@@ -187,8 +191,8 @@ nonisolated enum SentToAgents {
     }
 
     /// The feed without the hand-offs the cards take in: what the chat draws among its lines.
-    static func shown(_ feed: [FeedItem]) -> [FeedItem] {
-        let hidden = takenIn(feed)
+    static func shown(_ feed: [FeedItem], now: Date = .now, calendar: Calendar = .current) -> [FeedItem] {
+        let hidden = takenIn(feed, now: now, calendar: calendar)
         return hidden.isEmpty ? feed : feed.filter { !hidden.contains($0.id) }
     }
 

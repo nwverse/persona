@@ -22,6 +22,7 @@ type trafficLog struct {
 type trafficKey struct {
 	minute                                                 time.Time
 	identity, registration, platform, route, event, action string
+	source, platformBasis, sourceBasis                     string
 	status                                                 int
 }
 
@@ -42,7 +43,14 @@ func trafficIdentity(id string) string {
 }
 
 func trafficPlatform(platform string) string {
-	switch strings.ToLower(platform) {
+	if len(platform) > 128 {
+		return "unknown"
+	}
+	parts := strings.FieldsFunc(strings.ToLower(strings.TrimSpace(platform)), func(r rune) bool { return r == '-' || r == '_' || r == '.' })
+	if len(parts) == 0 {
+		return "unknown"
+	}
+	switch parts[0] {
 	case "ios", "iphone":
 		return "ios"
 	case "watchos", "watch":
@@ -53,6 +61,8 @@ func trafficPlatform(platform string) string {
 		return "android"
 	case "web":
 		return "web"
+	case "visionos":
+		return "visionos"
 	default:
 		return "unknown"
 	}
@@ -63,6 +73,15 @@ func (h *Hub) recordTraffic(key trafficKey, bytes int64, elapsed time.Duration) 
 		return
 	}
 	key.minute = key.minute.UTC().Truncate(time.Minute)
+	if key.source == "" {
+		key.source = "unknown"
+	}
+	if key.platformBasis == "" {
+		key.platformBasis = "unknown"
+	}
+	if key.sourceBasis == "" {
+		key.sourceBasis = "unknown"
+	}
 	h.traffic.mu.Lock()
 	defer h.traffic.mu.Unlock()
 	if h.traffic.stopped {
@@ -74,6 +93,7 @@ func (h *Hub) recordTraffic(key trafficKey, bytes int64, elapsed time.Duration) 
 	if _, exists := h.traffic.rows[key]; !exists && len(h.traffic.rows) >= trafficMaxBuckets {
 		// Keep accounting at a bounded cardinality even with many authenticated devices.
 		key.identity, key.registration, key.platform, key.route, key.event, key.action, key.status = "overflow", "overflow", "unknown", "overflow", "overflow", "overflow", 0
+		key.source, key.platformBasis, key.sourceBasis = "unknown", "unknown", "unknown"
 	}
 	row := h.traffic.rows[key]
 	row.count++
@@ -105,7 +125,7 @@ func (h *Hub) flushTraffic(now time.Time, stop bool) {
 	}
 	h.traffic.mu.Unlock()
 	for key, row := range rows {
-		h.logf("traffic minute=%s identity=%s registration=%s platform=%s route=%q event=%s action=%s status=%d count=%d body_bytes=%d max_body_bytes=%d elapsed_ms=%d", key.minute.Format(time.RFC3339), key.identity, key.registration, key.platform, key.route, key.event, key.action, key.status, row.count, row.bytes, row.maxBytes, row.elapsedMS)
+		h.logf("traffic minute=%s identity=%s registration=%s platform=%s source=%s platform_basis=%s source_basis=%s route=%q event=%s action=%s status=%d count=%d body_bytes=%d max_body_bytes=%d elapsed_ms=%d", key.minute.Format(time.RFC3339), key.identity, key.registration, key.platform, key.source, key.platformBasis, key.sourceBasis, key.route, key.event, key.action, key.status, row.count, row.bytes, row.maxBytes, row.elapsedMS)
 	}
 }
 
@@ -155,7 +175,8 @@ func (h *Hub) observeClientRequest(next http.Handler, w http.ResponseWriter, r *
 			pattern = matched
 		}
 	}
-	key := trafficKey{minute: start, identity: trafficIdentity(p.ID), registration: "none", platform: trafficPlatform(requestClientOf(r.Context()).Platform), route: pattern, event: "http", action: "started"}
+	a := h.requestTrafficAttribution(r, p)
+	key := trafficKey{minute: start, identity: trafficIdentity(p.ID), registration: "none", platform: a.platform, source: a.source, platformBasis: a.platformBasis, sourceBasis: a.sourceBasis, route: pattern, event: "http", action: "started"}
 	if r.URL.Path == "/api/v1/ws" {
 		key.event = "websocket"
 	}

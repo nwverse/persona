@@ -54,6 +54,9 @@ func TestDeviceCallsGoToTheDevicesFirst(t *testing.T) {
 	}
 }
 
+func (f *fakeDevices) MachineResources(string) (*proto.Machine, *proto.MetricSample, *bool) {
+	return nil, nil, nil
+}
 func (f *fakeDevices) List() []devices.Summary                      { return nil }
 func (f *fakeDevices) Canonical(id string) string                   { return id }
 func (f *fakeDevices) Sessions(string) ([]proto.Session, bool)      { return nil, false }
