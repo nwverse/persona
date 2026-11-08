@@ -19,6 +19,9 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
 import okhttp3.Response
+import okhttp3.internal.http2.Http2Stream
+import okhttp3.mockwebserver.internal.duplex.DuplexResponseBody
+import okio.buffer
 import okhttp3.WebSocket
 import okhttp3.WebSocketListener
 import okhttp3.mockwebserver.Dispatcher
@@ -416,6 +419,40 @@ class HubEndpointSettingsTest {
             Fixture(listOf(Endpoint(tls, "lan")), fingerprint(HeldCertificate.Builder().build())).use { fixture ->
                 val mismatch = fixture.settings.test(tls)
                 assertEquals(EndpointTestResult(tls, false, CoreText.of(CoreText.Key.EndpointCertificateMismatch), 42, "2026-11-02T00:00:00Z"), mismatch)
+            }
+        }
+    }
+
+    /**
+     * Over HTTP/2 a hub may send its stream's end in a frame of its own after the body. The test's fresh connection must
+     * wait for it: closed as soon as the body's Content-Length bytes were read, the stream was reset (CANCEL) and the
+     * test said "Connection failed" (#1519; MockWebServer flushes the body and ends the stream separately, which hosted
+     * runners sometimes caught in between). Here the end comes 300 ms after the body, every time.
+     */
+    @Test fun aTestWaitsForTheEndOfAnHttp2ResponseAfterItsBody() = runBlocking<Unit> {
+        val certificate = HeldCertificate.Builder().commonName("example.com").build()
+        val body = """{"ok":true,"hub_id":"test-hub"}"""
+        MockWebServer().use { server ->
+            server.useHttps(HandshakeCertificates.Builder().heldCertificate(certificate).build().sslSocketFactory(), false)
+            server.dispatcher = object : Dispatcher() {
+                override fun dispatch(request: RecordedRequest) = MockResponse().setHeader("Content-Length", body.length)
+                    .setBody(object : DuplexResponseBody {
+                        override fun onRequest(request: RecordedRequest, http2Stream: Http2Stream) {
+                            http2Stream.getSink().buffer().use { sink ->
+                                sink.writeUtf8(body).flush()
+                                Thread.sleep(300)
+                            }
+                        }
+                    })
+            }
+            server.start(InetAddress.getLoopbackAddress(), 0)
+            val tls = endpointKey(server.url("/").newBuilder().host(InetAddress.getLoopbackAddress().hostAddress!!).build().toString())
+            Fixture(listOf(Endpoint(tls, "lan")), fingerprint(certificate)).use { fixture ->
+                val result = fixture.settings.test(tls)
+                assertEquals(failureOf(fixture.settings, tls), CoreText.of(CoreText.Key.EndpointVerified), result.result)
+                assertTrue(result.passed)
+                // Over HTTP/2: MockWebServer keeps its pseudo-headers (`:scheme`) among the request's headers.
+                assertEquals("https", server.takeRequest().getHeader(":scheme"))
             }
         }
     }
