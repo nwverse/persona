@@ -911,7 +911,7 @@ A catalog mirror provides no repository-relative package files. For a git market
 ## Auto-upgrade
 
 For extensions installed from an extension marketplace (source `market:<marketplace id>/<extension id>`), the hub upgrades them itself when the marketplace has a new version (#1699). Built-in ones, ones in manager.json, and ones installed from elsewhere
-(`dir:`, `file:`, `https://…`, `remote:`) never take part. Code is in `server/internal/extmgr/extension_autoupgrade.go`.
+(`dir:`, `file:`, `https://…`, `remote:`) never take part, and neither does an attached extension whatever its origin ("Attached extensions"). Code is in `server/internal/extmgr/extension_autoupgrade.go`.
 
 - **Reading marketplaces**: once a minute the hub checks which marketplaces are due: last read 6 hours ago (plus a random 0–30 minutes per marketplace to spread them out); failed reads back off 15 minutes, 30 minutes… doubling, up to 6 hours.
   The log gets one line when a marketplace becomes unreadable and one when it recovers, not one every time. When the app opens the catalog (`catalog`), indexes older than 6 hours are still re-read in the background as before.
@@ -949,7 +949,7 @@ A process only runs when "something needs it":
 | `on_http` | When the first request forwarded to it arrives (waits for its `/health` to pass, up to 30 seconds) | After 10 minutes with no requests and no open connections (WebSockets count) |
 | Contributes a connector | Starts while the connector is on (the connector holds it) | When the connector is switched off in settings and nothing else needs it; `on_call` does not count for such extensions |
 
-- On exit it restarts with backoff: from 2 seconds, doubling, up to 5 minutes; running for a full minute counts as recovered.
+- On exit it restarts with backoff: from 2 seconds, doubling, up to 5 minutes; running for a full minute counts as recovered. An extension installed from `remote:` is reached, not started: see "Attached extensions" below.
 - An HTTP-only extension the hub started whose `/health` does not answer within 30 seconds becomes `error` (reason `not answering /health within 30s`) and restarts with the same backoff, instead of staying in `starting`.
 - Status: `stopped` (not running, nothing needs it, not an error), `starting`, `running`, `error` (with a reason), `disabled`, `needs_setup`, `incompatible`.
   Clients (app, web, admin UI) show both `running` and `stopped` as **On**: to the user an extension is only on or off; an idle extension starts by itself when used,
@@ -960,6 +960,26 @@ A process only runs when "something needs it":
 - A problem in one extension only affects its own contributions; hub startup never waits for extensions. stderr (plus stdout for ones that do not speak the protocol) goes line by line into the hub's log, prefixed `plugin <id>:`, each line truncated to 4 KB;
   it also goes into this extension's own log ("Runtime status" below), viewable per extension in the admin UI.
 - Installed extensions run in the sandbox by default, with memory / CPU limits (Linux); see "Sandbox" and "Egress" under "Permissions".
+
+## Attached extensions
+
+An extension installed from `remote:rpc=<socket>,http=<socket>` runs on its own; the manager only reaches it on its sockets and never starts, stops or replaces its program. Such an extension is **attached**.
+Activation still decides when the manager connects (an `on_startup` one is connected from the start, an `on_call` one at its first call). Code is in `server/internal/extension/host` (`Spec.Attached`, `Proc.Link`) and `server/internal/extmgr` (`ExtensionView.attached`).
+
+- **Online**: one that speaks the protocol is online while its socket connection is open and its `initialize` answer was accepted; pings (every 30 seconds, 3 missed in a row) and calls (3 timeouts in a row) take it offline as for any other extension.
+  An HTTP-only one is online while its last `GET /health` answered 200 (checked every 10 seconds).
+- **Offline**: the manager tries again every **10 seconds**, with no doubling. For **30 seconds** after it went offline (or after the manager began, until it first came online) its status stays `starting`, with no error, so a restart of the program does not show as a failure;
+  after that it is `error` with the reason, and it stays `error` until it is back (tries that fail alike change nothing). A call while it is `starting` waits for it, up to 30 seconds, as for any extension that is starting.
+- **Refused**: one that answers `initialize` as another protocol, id or version is `error` at once and tried again with the usual backoff (2 seconds doubling, up to 5 minutes): every `initialize` hands it its secrets and a new hub token, and nothing changes until the user acts.
+- **Version differs**: the manager never uses a version the user did not approve. When the program says another version than the installed one, the view's `attached.version` says which, and `error` says how to approve it on the hub machine:
+  `personad extension upgrade <id> <its remote: source>` (the source is under **Installed from** in the admin UI, `origin` in the details). Approving restarts the connection at once.
+- **Log and runs**: the manager logs a failure, and counts it as an exit in "Runtime status", only when what failed changes (a closed connection after it was online, then a missing socket, …), not at each try; it logs when it is back (`connected after <duration> offline`), and a run starts each time it comes online.
+- **Auto-upgrade**: never, whatever the origin ("Auto-upgrade" below): the manager has no program of it to replace.
+- **API**: the `ExtensionView` (list and details) of an attached extension has `attached`: `{online, since?, error?, version?}`. `since` is when it came online or went offline (none while it is switched off or nothing needs it); `error` is why it is offline, also while its status is still `starting`;
+  `version` is set only when the program says another version than `version`. Other extensions have no `attached`.
+- **Clients**: the web's Settings › Extensions and the admin UI keep the status as before (`starting` is a gray pulsing dot, `error` red) and add a line: "Runs on its own · online since 10:42", "… reconnecting, offline since 10:40: <why>", "… offline since 10:40", or "Runs on its own; connects when needed";
+  the details' version reads "1.0.0 approved, the program is 1.1.0" (the admin list shows a red **program 1.1.0** tag). `personad extension list` adds `独立运行，在线（自 …）` or `离线（自 …）` and the program's version. The iOS / Mac and Android apps show the status as they always have.
+- **Old and new**: older apps and managers ignore `attached`; the protocol is unchanged, so a program written for an older manager is attached as it is.
 
 ## Source runtime (#5956)
 
@@ -1037,6 +1057,7 @@ the host side (every call, every run, every log line) is the `Observer` in `exte
   5xx and connection failures count as errors (`http_5xx`), 4xx only records the code (`http_4xx`) and is not the extension's error, and WebSockets count only the number, not latency. Calls abandoned by the caller (`canceled`) are not errors either.
   Each extension records at most 64 methods separately; any more go under `other`.
 - **Runs**: each start, each stop because nothing needs it, and each error exit (restarted after backoff) is recorded once; exit reasons are counted by bucket (at most 16 kinds per bucket), and the last 20 exits keep their time.
+  An attached extension's run starts when it comes online, and an exit is recorded when it goes offline or what keeps it offline changes, not at each try ("Attached extensions").
 - **Logs**: each extension keeps its last 2000 lines (4 KB per line), with source `program` (its stderr, plus stdout for ones that do not speak the protocol) or `hub` (what the hub says about it: restarts, timeouts, rollbacks, i.e. the `plugin <id>: …` lines in the hub log).
   Before going in, anything that looks like a credential is scrubbed by rule (`Authorization` / `Cookie` headers, `Bearer …`, `token=` / `secret=` / `password=` / `api_key=` and the like, `?token=` / `key=` in URLs) along with the hub's own token, replaced with `***`;
   for what the rules cannot catch, the extension is responsible: no secrets, message bodies or numbers in logs (see "Process extension protocol"). The hub's system log (journal) stays the unmodified copy as before.

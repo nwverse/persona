@@ -124,6 +124,7 @@ func ExtensionCommand(ctx context.Context, args []string, stdin io.Reader, stdou
 			if len(p.NeedsSetup) > 0 {
 				line += "；还缺：" + strings.Join(p.NeedsSetup, "、")
 			}
+			line += attachedLine(p.Attached, p.Error == "")
 			fmt.Fprintln(stdout, strings.TrimRight(line, " "))
 		}
 		return nil
@@ -524,6 +525,28 @@ func confirm(stdin io.Reader, stdout io.Writer) bool {
 	line, _ := bufio.NewReader(stdin).ReadString('\n')
 	line = strings.ToLower(strings.TrimSpace(line))
 	return line == "y" || line == "yes"
+}
+
+// attachedLine is what `extension list` adds for an attached extension: online or offline and since when, why it is
+// offline when the line does not say it yet, and the version the program says it is when that was not approved.
+func attachedLine(a *ExtensionAttached, withError bool) string {
+	if a == nil {
+		return ""
+	}
+	line := "；独立运行，离线"
+	if a.Online {
+		line = "；独立运行，在线"
+	}
+	if !a.Since.IsZero() {
+		line += "（自 " + a.Since.Local().Format("01-02 15:04:05") + "）"
+	}
+	if withError && a.Error != "" {
+		line += "：" + a.Error
+	}
+	if a.Version != "" {
+		line += "；程序自报版本 " + a.Version
+	}
+	return line
 }
 
 // readSecret reads a secret from the terminal without echo, or the first line of a pipe.

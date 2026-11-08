@@ -294,14 +294,23 @@ func granted(p *extension.Extension) string {
 	return extension.Digest(p.Full)
 }
 
+// upgradesFrom is the market p upgrades itself from, "" for none: not installed from a market, or attached (it runs on
+// its own, so the manager has no program of it to replace).
+func upgradesFrom(p *extension.Extension) string {
+	if p.Record.Source != extension.SourceInstalled || p.Record.Remote != nil {
+		return ""
+	}
+	return extension.FromMarket(p.Record.Origin)
+}
+
 // candidate is p's newer version in its market, and where it stands (ok false: none, or p is not a market plugin).
 func (u *extensionUpgrades) candidate(p *extension.Extension) (up ExtensionUpgrade, rec extension.MarketRecord, e *extension.MarketEntry, ok bool) {
 	return u.candidateIn(p, u.h.userLang())
 }
 
 func (u *extensionUpgrades) candidateIn(p *extension.Extension, l i18n.Lang) (up ExtensionUpgrade, rec extension.MarketRecord, e *extension.MarketEntry, ok bool) {
-	mid := extension.FromMarket(p.Record.Origin)
-	if p.Record.Source != extension.SourceInstalled || mid == "" {
+	mid := upgradesFrom(p)
+	if mid == "" {
 		return up, rec, nil, false
 	}
 	rec, e, err := u.h.marketEntry(mid, p.Record.ID)
@@ -543,7 +552,7 @@ func (u *extensionUpgrades) auto(id string) (global, own bool) {
 
 // decorate adds to a market plugin's view its switch, its newer version and what happened last.
 func (u *extensionUpgrades) decorate(ctx context.Context, v *ExtensionView, p *extension.Extension) {
-	if u == nil || p.Record.Source != extension.SourceInstalled || extension.FromMarket(p.Record.Origin) == "" {
+	if u == nil || upgradesFrom(p) == "" {
 		return
 	}
 	u.load(ctx)
@@ -639,7 +648,7 @@ func (h *Manager) upgradeRoutes(api *http.ServeMux) {
 			writeErrCode(w, http.StatusNotFound, "not_found", errors.New("no such plugin"))
 			return
 		}
-		if p.Record.Source != extension.SourceInstalled || extension.FromMarket(p.Record.Origin) == "" {
+		if upgradesFrom(p) == "" {
 			writeErrCode(w, http.StatusBadRequest, "not_from_market", i18n.Err("hub-extension_autoupgrade.not_from_market"))
 			return
 		}
