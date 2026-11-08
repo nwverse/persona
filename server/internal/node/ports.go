@@ -13,7 +13,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"regexp"
 	"runtime"
 	"slices"
 	"strconv"
@@ -21,6 +20,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/rpc"
 )
@@ -275,7 +275,7 @@ func dialPort(ctx context.Context, port int, addr string) (net.Conn, error) {
 	return nil, err
 }
 
-var titleRe = regexp.MustCompile(`(?is)<title[^>]*>(.*?)</title>`)
+var titleRe = lazyre.New(`(?is)<title[^>]*>(.*?)</title>`)
 
 // probePort asks GET / of a listener as a browser on this machine would (Host localhost:port, which dev servers'
 // host checks accept) and reads the page's title.

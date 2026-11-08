@@ -27,6 +27,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/rpc"
 )
@@ -154,7 +155,7 @@ func parseCuaPermissions(out string) (accessibility, screenRecording string) {
 	return grant(p["accessibility"]), grant(p["screen_recording"])
 }
 
-var consoleLocked = regexp.MustCompile(`"IOConsoleLocked" = Yes`)
+var consoleLocked = lazyre.New(`"IOConsoleLocked" = Yes`)
 
 // parseConsole reads `ioreg -n Root -d1`: whose desktop is on screen (IOConsoleUsers) and whether it is locked.
 // active: uid's desktop is on the console and unlocked; locked; away: uid has no desktop on the console (logged out,

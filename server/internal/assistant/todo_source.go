@@ -6,7 +6,6 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"regexp"
 	"slices"
 	"strings"
 	"time"
@@ -16,6 +15,7 @@ import (
 	"github.com/nwverse/persona/server/internal/db"
 	"github.com/nwverse/persona/server/internal/feishubot"
 	"github.com/nwverse/persona/server/internal/i18n"
+	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/rpc"
 )
 
@@ -498,12 +498,12 @@ func (s *Service) sourceReportBody(ctx context.Context, id string) string {
 }
 
 var (
-	reportMDLink  = regexp.MustCompile(`!?\[[^\]]*\]\([^)]*\)`)
-	reportURL     = regexp.MustCompile(`(?i)\b[a-z][a-z0-9+.-]*://\S+|\bwww\.\S+`)
-	reportCode    = regexp.MustCompile("(?s)```.*?```|`[^`]*`")
-	reportTag     = regexp.MustCompile(`<[^<>]*>`)
-	reportPath    = regexp.MustCompile(`(?:[A-Za-z]:\\[^\s]*)|(?:[\w.~@%+=:,-]*(?:/[\w.~@%+=:,-]+)+/?)`)
-	reportMention = regexp.MustCompile(`@[^\s，。,;；:：、!！?？)）]+`) // i18n-ignore: full-width punctuation that ends a mention, not text for people
+	reportMDLink  = lazyre.New(`!?\[[^\]]*\]\([^)]*\)`)
+	reportURL     = lazyre.New(`(?i)\b[a-z][a-z0-9+.-]*://\S+|\bwww\.\S+`)
+	reportCode    = lazyre.New("(?s)```.*?```|`[^`]*`")
+	reportTag     = lazyre.New(`<[^<>]*>`)
+	reportPath    = lazyre.New(`(?:[A-Za-z]:\\[^\s]*)|(?:[\w.~@%+=:,-]*(?:/[\w.~@%+=:,-]+)+/?)`)
+	reportMention = lazyre.New(`@[^\s，。,;；:：、!！?？)）]+`) // i18n-ignore: full-width punctuation that ends a mention, not text for people
 )
 
 // cleanReport is a sentence of an outcome as it may be told to a chat that is not the owner's own: one line without
@@ -511,7 +511,7 @@ var (
 // (anything in <...>, an <at ...> among it) or an @-mention, clipped to sourceReportMax. "" when nothing is left, or only
 // punctuation.
 func cleanReport(s string) string {
-	for _, re := range []*regexp.Regexp{reportMDLink, reportCode, reportURL, reportTag, reportPath, reportMention} {
+	for _, re := range []*lazyre.Regexp{reportMDLink, reportCode, reportURL, reportTag, reportPath, reportMention} {
 		s = re.ReplaceAllString(s, " ")
 	}
 	s = strings.TrimSpace(strings.Join(strings.Fields(s), " "))

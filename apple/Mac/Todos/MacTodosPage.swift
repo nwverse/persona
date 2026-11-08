@@ -192,7 +192,7 @@ struct MacTodosPage: View {
                             .foregroundStyle(todo.isDone ? Color.secondary : Color.primary)
                             .strikethrough(todo.isDone)
                             .lineLimit(1)
-                        if Ultracode.todoShown(todo, lookup: lookup) { UltracodeMark() }
+                        if Ultracode.todoShown(todo, lookup: lookup) { UltracodeMark(font: Theme.Font.labelStrong) }
                         Spacer()
                         if let d = todo.updatedAt ?? todo.createdAt {
                             Text(Fmt.relative(d))

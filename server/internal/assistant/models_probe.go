@@ -246,7 +246,7 @@ func regionBlocked(raw []byte, anthropic bool) bool {
 func regionOpenVendors(l i18n.Lang) string {
 	var names []string
 	for _, pr := range builtinLauncherPresets(l) {
-		if i := slices.IndexFunc(builtinPresets, func(b builtinPreset) bool { return b.ID == pr.ID }); i >= 0 && builtinPresets[i].Region != "global" {
+		if i := slices.IndexFunc(builtinPresets(), func(b builtinPreset) bool { return b.ID == pr.ID }); i >= 0 && builtinPresets()[i].Region != "global" {
 			names = append(names, pr.DisplayName)
 		}
 	}

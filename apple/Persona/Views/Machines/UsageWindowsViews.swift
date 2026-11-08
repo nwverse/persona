@@ -7,6 +7,8 @@ final class UsageWindowsStore {
     static let shared = UsageWindowsStore()
 
     private(set) var accounts: [UsageAccount] = []
+    /// When the last load ended (any answer or none), for `loadIfOld`.
+    @ObservationIgnored private var loadedAt: Date?
 
     /// Every group's accounts (each hub merges its own machines' and gateways'), every group at once (#4705). A group
     /// that fails, or is not asked because its link is down, keeps its last answer; one before this route answers none.
@@ -24,9 +26,38 @@ final class UsageWindowsStore {
             }
         }
         if cancelled || Task.isCancelled { return }
+        loadedAt = .now
         // In the groups' order, as before; a group without an answer keeps what it had.
         let all = ids.flatMap { g in answers[g] ?? accounts.filter { !multi || $0.id.hasPrefix(g + "|") } }
         if all != accounts { accounts = all }
+    }
+
+    /// One load when the last is older than `maxAge` (or there was none): for a line that shows the numbers in passing
+    /// (ultracode's quota under its switch), not a page that keeps them current (`poll`).
+    func loadIfOld(_ model: AppModel, maxAge: TimeInterval = 120) async {
+        guard Self.isOld(loadedAt, maxAge: maxAge) else { return }
+        await load(model)
+    }
+
+    /// `loadIfOld` until cancelled, looking every poll interval: for a page that shows the numbers in passing and can
+    /// stay open a long time (a chat whose menus carry ultracode's quota), run only while it is in front. It loads
+    /// nothing more while Machines or the Mac's bars already poll.
+    func keepFresh(_ model: AppModel, maxAge: TimeInterval = 120) async {
+        while !Task.isCancelled {
+            await loadIfOld(model, maxAge: maxAge)
+            try? await Task.sleep(for: UsageWindows.pollInterval)
+        }
+    }
+
+    /// A last load at `loadedAt` is `maxAge` old or more (or there was none).
+    nonisolated static func isOld(_ loadedAt: Date?, maxAge: TimeInterval, now: Date = .now) -> Bool {
+        guard let loadedAt else { return true }
+        return now.timeIntervalSince(loadedAt) >= maxAge
+    }
+
+    /// One group's accounts: all of them with one group of hubs, else the ones `load` marked as that group's.
+    func accounts(group: String, multi: Bool) -> [UsageAccount] {
+        multi ? accounts.filter { $0.id.hasPrefix(group + "|") } : accounts
     }
 
     /// Asks again every minute until cancelled (the caller runs it only while it is on screen and the app in front).

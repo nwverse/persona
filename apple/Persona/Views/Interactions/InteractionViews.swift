@@ -14,9 +14,9 @@ extension InteractionKind {
 
     var symbol: String {
         switch self {
-        case .question: "questionmark.bubble.fill"
-        case .plan: "list.bullet.clipboard.fill"
-        case .permission: "hand.raised.fill"
+        case .question: Theme.Icon.questionFilled
+        case .plan: Theme.Icon.planFilled
+        case .permission: Theme.Icon.waitsForYou
         case .screen: Theme.Icon.terminalFilled
         }
     }
@@ -27,6 +27,7 @@ extension Interaction {
     /// Codex.
     var title: String {
         if toolName == "ask_user" { return String(localized: "Persona Has a Question") }
+        if isSecretRun { return secretRunTitle }
         if let name = agentName {
             switch kind {
             case .question: return String(localized: "\(name) Has a Question")
@@ -84,7 +85,7 @@ struct InteractionPreviewCard: View {
     var body: some View {
         VStack(alignment: .leading, spacing: Theme.Space.m) {
             HStack(spacing: Theme.Space.s) {
-                Image(systemName: interaction.kind.symbol)
+                ThemedIcon(interaction.kind.symbol)
                     .foregroundStyle(StatusPalette.needsYou.dot)
                     .scaledFrame(width: Theme.Size.icon) // one column: the titles line up card to card
                 VStack(alignment: .leading, spacing: Theme.Space.xxs) {
@@ -96,7 +97,7 @@ struct InteractionPreviewCard: View {
                 }
                 Spacer()
                 #if !os(macOS) // a phone's row says it opens; a Mac's list row does not (#2113)
-                Image(systemName: Theme.Icon.disclosure).font(Theme.Font.labelStrong).foregroundStyle(.tertiary)
+                ThemedIcon(Theme.Icon.disclosure).font(Theme.Font.labelStrong).foregroundStyle(.tertiary)
                 #endif
             }
             if !summary.isEmpty {
@@ -294,7 +295,7 @@ struct InteractionPanel: View {
     /// The title, ⋯ and fold; a tap anywhere on it folds the card.
     private var header: some View {
         HStack(spacing: Theme.Space.sm) {
-            Image(systemName: interaction.kind.symbol)
+            ThemedIcon(interaction.kind.symbol)
                 .font(Theme.Font.labelStrong)
                 .foregroundStyle(StatusPalette.needsYou.dot)
             Text(panelTitle).font(Theme.Font.labelStrong).foregroundStyle(StatusPalette.needsYou.text).lineLimit(1)
@@ -305,7 +306,7 @@ struct InteractionPanel: View {
             Spacer(minLength: 4)
             if interaction.kind == .plan && !collapsed {
                 Button { showFullPlan = true } label: {
-                    Image(systemName: Theme.Icon.enlarge)
+                    ThemedIcon(Theme.Icon.enlarge)
                         .font(Theme.Font.captionStrong)
                         .foregroundStyle(.secondary)
                         .scaledFrame(width: Theme.Size.wellXS, height: Theme.Size.wellXS)
@@ -319,7 +320,7 @@ struct InteractionPanel: View {
                     Label("Handle in Terminal on Computer", systemImage: Theme.Icon.machine)
                 }
             } label: {
-                Image(systemName: Theme.Icon.more)
+                ThemedIcon(Theme.Icon.more)
                     .font(Theme.Font.captionStrong)
                     .foregroundStyle(.secondary)
                     .scaledFrame(width: Theme.Size.wellXS, height: Theme.Size.wellXS)
@@ -329,7 +330,7 @@ struct InteractionPanel: View {
             #if os(macOS)
             .help("More")
             #endif
-            Image(systemName: Theme.Icon.expand)
+            ThemedIcon(Theme.Icon.expand)
                 .font(Theme.Font.captionStrong)
                 .foregroundStyle(.secondary)
                 .rotationEffect(.degrees(collapsed ? 180 : 0))
@@ -390,6 +391,7 @@ struct QuestionForm: View {
 
     @ViewBuilder private var plain: some View {
         VStack(alignment: .leading, spacing: Theme.Space.m) {
+            DelegateNotes(interaction: interaction)
             if questions.indices.contains(page) {
                 let q = questions[page]
                 if questions.count > 1 || q.header != nil || q.multiSelect {
@@ -429,12 +431,13 @@ struct QuestionForm: View {
     private func option(_ q: Question, _ opt: QuestionOption, number: Int) -> some View {
         let selected = picks[q.question, default: []].contains(opt.label)
         let (label, recommended) = Self.display(opt.label)
+        let assistantPick = assistantPicks(q).contains(opt.label)
         return Button { pick(q, opt) } label: {
             HStack(alignment: .top, spacing: Theme.Space.m) {
                 ZStack {
                     Circle().fill(selected ? Theme.accent : Theme.Fill.chip)
                     if selected {
-                        Image(systemName: Theme.Icon.done).font(Theme.Font.labelHeavy).dynamicTypeSize(...DynamicTypeSize.xxLarge).foregroundStyle(.white)
+                        ThemedIcon(Theme.Icon.done).font(Theme.Font.labelHeavy).dynamicTypeSize(...DynamicTypeSize.xxLarge).foregroundStyle(.white)
                     } else {
                         Text("\(number)").font(Theme.Font.labelStrong.monospacedDigit()).foregroundStyle(.secondary)
                     }
@@ -444,6 +447,7 @@ struct QuestionForm: View {
                     HStack(spacing: Theme.Space.sm) {
                         Text(label).font(Theme.Font.heading).foregroundStyle(.primary)
                         if recommended { RecommendedTag() }
+                        if assistantPick { AssistantPickTag() }
                     }
                     if let d = opt.description, !d.isEmpty {
                         Text(d).font(Theme.Font.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
@@ -459,14 +463,23 @@ struct QuestionForm: View {
         }
         .buttonStyle(.plain)
         .disabled(sending)
-        .accessibilityLabel(label + (recommended ? String(localized: ", recommended", comment: "Accessibility suffix: the recommended option") : "") + (selected ? String(localized: ", selected", comment: "Accessibility suffix: a selected option") : ""))
+        .accessibilityLabel(label + (recommended ? String(localized: ", recommended", comment: "Accessibility suffix: the recommended option") : "")
+                            + (assistantPick ? String(localized: ", the assistant's pick", comment: "Accessibility suffix: the option the assistant recommends") : "")
+                            + (selected ? String(localized: ", selected", comment: "Accessibility suffix: a selected option") : ""))
+    }
+
+    /// The options the assistant recommends on `q` (#544: its `delegate.recommend` in the options' own words).
+    private func assistantPicks(_ q: Question) -> [String] {
+        let picks = Delegated.recommendedLabels(questions, interaction.delegate?.recommend)
+        guard let i = questions.firstIndex(where: { $0.question == q.question }), picks.indices.contains(i) else { return [] }
+        return picks[i]
     }
 
     /// "Other": a quiet row; tapping it turns it into a field with its own send arrow.
     @ViewBuilder private func otherRow(_ q: Question) -> some View {
         let text = Binding(get: { other[q.question] ?? "" }, set: { other[q.question] = $0 })
         HStack(alignment: .center, spacing: Theme.Space.m) {
-            Image(systemName: Theme.Icon.edit)
+            ThemedIcon(Theme.Icon.edit)
                 .font(Theme.Font.labelStrong).dynamicTypeSize(...DynamicTypeSize.xxLarge)
                 .foregroundStyle(.secondary)
                 .scaledFrame(width: Theme.Size.icon, height: Theme.Size.icon)
@@ -480,7 +493,7 @@ struct QuestionForm: View {
                     }
                 if !needsFooter, !text.wrappedValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                     Button { submit() } label: {
-                        Image(systemName: Theme.Icon.submit).font(Theme.Font.title).foregroundStyle(Theme.accent)
+                        ThemedIcon(Theme.Icon.submit).font(Theme.Font.title).foregroundStyle(Theme.accent)
                     }
                     .buttonStyle(.plain)
                     .accessibilityLabel("Send answer")
@@ -651,14 +664,17 @@ struct PermissionForm: View {
     var interaction: Interaction
 
     var body: some View {
-        if interaction.requiresInput { PermissionInputForm(interaction: interaction) }
+        // One view per card: another card in this place starts with an empty password field (a field still being
+        // typed in keeps its UIKit text when only the binding is cleared).
+        if interaction.isSecretRun { SecretRunForm(interaction: interaction).id(interaction.id) }
+        else if interaction.requiresInput { PermissionInputForm(interaction: interaction) }
         else if AppStyle.current.usesBeautifulUI { BUIPermissionForm(interaction: interaction) } else { plain }
     }
 
     @ViewBuilder private var plain: some View {
         VStack(alignment: .leading, spacing: Theme.Space.m) {
             HStack(spacing: Theme.Space.s) {
-                Image(systemName: ToolPresentation.symbol(interaction.toolName ?? "")).foregroundStyle(Theme.accent)
+                ThemedIcon(ToolPresentation.symbol(interaction.toolName ?? "")).foregroundStyle(Theme.accent)
                 Text(interaction.toolName ?? String(localized: "Tool")).font(Theme.Font.secondaryStrong)
             }
             Text(interaction.summary ?? interaction.toolInput?.pretty ?? "")
@@ -718,7 +734,7 @@ struct AgentPermissionForm: View {
     @ViewBuilder private var plain: some View {
         VStack(alignment: .leading, spacing: Theme.Space.m) {
             HStack(spacing: Theme.Space.s) {
-                Image(systemName: ToolPresentation.symbol(interaction.toolName ?? "")).foregroundStyle(Theme.accent)
+                ThemedIcon(ToolPresentation.symbol(interaction.toolName ?? "")).foregroundStyle(Theme.accent)
                 Text(interaction.toolName ?? String(localized: "Tool")).font(Theme.Font.secondaryStrong)
             }
             if let reason = interaction.reason, !reason.isEmpty {
@@ -774,7 +790,7 @@ struct AgentPermissionForm: View {
                         whyFocused = false
                         Task { await model.resolve(interaction, Resolution(allow: false, message: why)) }
                     } label: {
-                        Image(systemName: Theme.Icon.send)
+                        ThemedIcon(Theme.Icon.send)
                             .font(Theme.Font.labelHeavy)
                             .foregroundStyle(.white)
                             .scaledFrame(width: Theme.Size.icon, height: Theme.Size.icon)
@@ -957,7 +973,7 @@ struct ScreenForm: View {
                 ZStack {
                     Circle().fill(on ? Theme.accent : Theme.Fill.chip)
                     if on {
-                        Image(systemName: Theme.Icon.done).font(Theme.Font.labelHeavy).dynamicTypeSize(...DynamicTypeSize.xxLarge).foregroundStyle(.white)
+                        ThemedIcon(Theme.Icon.done).font(Theme.Font.labelHeavy).dynamicTypeSize(...DynamicTypeSize.xxLarge).foregroundStyle(.white)
                     } else {
                         Text(opt.key).font(Theme.Font.labelStrong.monospacedDigit()).foregroundStyle(.secondary)
                     }
@@ -988,7 +1004,7 @@ struct ScreenForm: View {
     /// The free-text field of a multi-select question: sent with the ticks, checked when it holds something.
     private func freeTextRow(_ opt: ScreenParser.Dialog.Option) -> some View {
         HStack(alignment: .center, spacing: Theme.Space.m) {
-            Image(systemName: Theme.Icon.edit)
+            ThemedIcon(Theme.Icon.edit)
                 .font(Theme.Font.labelStrong).dynamicTypeSize(...DynamicTypeSize.xxLarge)
                 .foregroundStyle(.secondary)
                 .scaledFrame(width: Theme.Size.icon, height: Theme.Size.icon)
@@ -1027,7 +1043,7 @@ struct ScreenForm: View {
     /// "Type something.": a quiet row that turns into a field; sending picks the option, types, presses enter.
     private func typeRow(_ opt: ScreenParser.Dialog.Option) -> some View {
         HStack(alignment: .center, spacing: Theme.Space.m) {
-            Image(systemName: Theme.Icon.edit)
+            ThemedIcon(Theme.Icon.edit)
                 .font(Theme.Font.labelStrong).dynamicTypeSize(...DynamicTypeSize.xxLarge)
                 .foregroundStyle(.secondary)
                 .scaledFrame(width: Theme.Size.icon, height: Theme.Size.icon)
@@ -1044,7 +1060,7 @@ struct ScreenForm: View {
                         send(opt.key, answer(opt, text: t))
                     } label: {
                         if sending == opt.key { ProgressView().controlSize(.small) }
-                        else { Image(systemName: Theme.Icon.submit).font(Theme.Font.title).foregroundStyle(Theme.accent) }
+                        else { ThemedIcon(Theme.Icon.submit).font(Theme.Font.title).foregroundStyle(Theme.accent) }
                     }
                     .buttonStyle(.plain)
                     .disabled(sending != nil)
@@ -1086,7 +1102,7 @@ struct ScreenForm: View {
                 let t = text
                 text = ""
                 Task { await model.resolve(interaction, Resolution(keys: ["enter"], text: t)) }
-            } label: { Image(systemName: Theme.Icon.enter) }
+            } label: { ThemedIcon(Theme.Icon.enter) }
                 .themedButton(prominent: true)
                 .disabled(text.isEmpty)
                 .accessibilityIdentifier("terminal.send")
@@ -1120,7 +1136,7 @@ struct ScreenSteps: View {
                 ForEach(Array(steps.enumerated()), id: \.offset) { i, s in
                     HStack(spacing: Theme.Space.xs) {
                         Group {
-                            if s.done { Image(systemName: Theme.Icon.done).font(.system(size: 8, weight: .bold)) }
+                            if s.done { ThemedIcon(Theme.Icon.done).font(.system(size: 8, weight: .bold)) }
                             else { Text("\(i + 1)").font(.system(size: 9, weight: .bold).monospacedDigit()) } // type-scale: glyph (a step number in a 16 pt circle)
                         }
                         .foregroundStyle(s.done ? .white : .secondary)
@@ -1275,19 +1291,33 @@ struct BUIQuestionForm: View {
     private var questions: [Question] { interaction.questions ?? [] }
 
     var body: some View {
-        ApprovalCard(questions: questions.map(Self.card), skipLabel: nil, continueLabel: String(localized: "Next [Interaction Views f82c68]"), sendLabel: String(localized: "Submit"),
+        if interaction.isDelegating || interaction.delegate != nil {
+            VStack(alignment: .leading, spacing: Theme.Space.m) {
+                DelegateNotes(interaction: interaction)
+                card
+            }
+        } else {
+            card
+        }
+    }
+
+    private var card: some View {
+        let picks = Delegated.recommendedLabels(questions, interaction.delegate?.recommend)
+        return ApprovalCard(questions: zip(questions, picks).map { Self.card($0, picks: $1) }, skipLabel: nil, continueLabel: String(localized: "Next [Interaction Views f82c68]"), sendLabel: String(localized: "Submit"),
                      customPlaceholder: String(localized: "Other answer…"), sentMessage: String(localized: "Sent"), options: .panel()) { answers in
             Haptics.tap()
             Task { await model.resolve(interaction, Resolution(answers: Self.answers(answers, questions))) }
         }
     }
 
-    static func card(_ q: Question) -> ApprovalQuestion {
+    /// `picks`: the options the assistant recommends (#544).
+    static func card(_ q: Question, picks: [String] = []) -> ApprovalQuestion {
         ApprovalQuestion(
             id: q.question, q.question, kind: q.multiSelect ? .multiple : .single,
             choices: q.options.map { o in
                 let (label, recommended) = display(o.label)
-                return ApprovalQuestion.Choice(label, detail: o.description, tag: recommended ? String(localized: "Recommended") : nil)
+                let tag = recommended ? String(localized: "Recommended") : picks.contains(o.label) ? String(localized: "Assistant's pick") : nil
+                return ApprovalQuestion.Choice(label, detail: o.description, tag: tag)
             },
             eyebrow: eyebrow(q)
         )
@@ -1419,7 +1449,7 @@ struct BUIPermissionForm: View {
 
     private var command: some View {
         HStack(alignment: .top, spacing: Theme.Space.s) {
-            Image(systemName: ToolPresentation.symbol(interaction.toolName ?? "")).foregroundStyle(Theme.accent)
+            ThemedIcon(ToolPresentation.symbol(interaction.toolName ?? "")).foregroundStyle(Theme.accent)
             Text(interaction.summary ?? interaction.toolInput?.pretty ?? "")
                 .font(Theme.Font.code)
                 .textSelection(.enabled)
@@ -1560,7 +1590,7 @@ struct BUIScreenForm: View {
                 let t = text
                 text = ""
                 Task { await model.resolve(interaction, Resolution(keys: ["enter"], text: t)) }
-            } label: { Image(systemName: Theme.Icon.enter) }
+            } label: { ThemedIcon(Theme.Icon.enter) }
                 .themedButton(prominent: true)
                 .disabled(text.isEmpty)
                 .accessibilityIdentifier("terminal.send")

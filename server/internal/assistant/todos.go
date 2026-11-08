@@ -6,7 +6,6 @@ import (
 	"errors"
 	"github.com/nwverse/persona/server/internal/compat"
 	"net/http"
-	"regexp"
 	"sort"
 	"strings"
 	"sync"
@@ -14,6 +13,7 @@ import (
 
 	"github.com/nwverse/persona/server/internal/apierr"
 	"github.com/nwverse/persona/server/internal/db"
+	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
@@ -1585,8 +1585,8 @@ func (s *Service) TodoLink(ctx context.Context, p TodoLinkParams) (TodoLinkResul
 
 // contextLeadRe and contextCloseRe are where a prompt's context block starts and ends (contextOpenRe: channels_plugin.go).
 var (
-	contextLeadRe  = regexp.MustCompile(`^<` + compat.ContextPattern() + `\b`)
-	contextCloseRe = regexp.MustCompile(`</` + compat.ContextPattern() + `>`)
+	contextLeadRe  = lazyre.New(`^<` + compat.ContextPattern() + `\b`)
+	contextCloseRe = lazyre.New(`</` + compat.ContextPattern() + `>`)
 )
 
 // cleanPromptTitle is a title for an agent from the prompt it was started with: its first line past a

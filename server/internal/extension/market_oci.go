@@ -7,12 +7,12 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"github.com/nwverse/persona/server/internal/i18n"
+	"github.com/nwverse/persona/server/internal/lazyre"
 	"io"
 	"net"
 	"net/http"
 	"net/url"
 	"path"
-	"regexp"
 	"strings"
 )
 
@@ -23,9 +23,9 @@ const (
 )
 
 var (
-	ociDigest     = regexp.MustCompile(`^sha256:[a-f0-9]{64}$`)
-	ociRepository = regexp.MustCompile(`^[a-z0-9]+(?:[._-][a-z0-9]+)*(?:/[a-z0-9]+(?:[._-][a-z0-9]+)*)*$`)
-	ociTitle      = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,180}\.tar\.gz$`)
+	ociDigest     = lazyre.New(`^sha256:[a-f0-9]{64}$`)
+	ociRepository = lazyre.New(`^[a-z0-9]+(?:[._-][a-z0-9]+)*(?:/[a-z0-9]+(?:[._-][a-z0-9]+)*)*$`)
+	ociTitle      = lazyre.New(`^[A-Za-z0-9][A-Za-z0-9._-]{0,180}\.tar\.gz$`)
 )
 
 type ociReference struct{ registry, repository, digest string }
@@ -154,7 +154,7 @@ func (s *registrySession) request(ctx context.Context, raw, auth string, realm b
 	return res, nil
 }
 
-var bearerParameter = regexp.MustCompile(`([a-z]+)="([^"\r\n]*)"`)
+var bearerParameter = lazyre.New(`([a-z]+)="([^"\r\n]*)"`)
 
 func parseBearer(header string) (map[string]string, error) {
 	if !strings.HasPrefix(strings.ToLower(header), "bearer ") {
