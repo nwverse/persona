@@ -1289,12 +1289,14 @@ nonisolated struct PendingMessage: Identifiable, Hashable, Codable, Sendable {
     var refused: Bool?
 
     /// Comparable form: what the transcript keeps of it — the phone's image note, pasted wrappers and Claude's
-    /// "[Image #21]" placeholders removed, whitespace ignored.
+    /// "[Image #21]" placeholders removed, whitespace ignored, and a context or file block read under either
+    /// generation's tag name (a hub from before the rename keeps what `HubNaming.outbound` sent it).
     private static let normalized = TextMemo<String>(limit: 512)
 
     static func normalize(_ s: String) -> String {
         normalized(s) { s in
-            var t = s
+            var t = s.replacingOccurrences(of: #"(<\s*/?\s*)"# + HubNaming.productPattern + #"-(context|file)"#,
+                                           with: "$1persona-$2", options: .regularExpression)
             for pattern in [#"<attached_images>[\s\S]*?</attached_images>"#, #"<[\\/]*pasted_content[^>]*>"#, #"\[Image #\d+\]"#, #"\s+"#] {
                 t = t.replacingOccurrences(of: pattern, with: "", options: .regularExpression)
             }

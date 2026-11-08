@@ -865,9 +865,10 @@ final class AppModel {
     }
 
     /// Sends text to Persona' main conversation (starting it when there is none) and opens the Persona tab: how other
-    /// pages hand something to Persona with its context.
-    func askPersona(_ text: String) async {
-        guard let api else { return }
+    /// pages hand something to Persona with its context. Whether it went.
+    @discardableResult
+    func askPersona(_ text: String) async -> Bool {
+        guard let api else { return false }
         selectedTab = .assistant
         assistantReveal += 1
         do {
@@ -881,8 +882,10 @@ final class AppModel {
                 await refreshAssistant()
             }
             Haptics.success()
+            return true
         } catch {
             show(error)
+            return false
         }
     }
 

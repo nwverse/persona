@@ -538,10 +538,10 @@ which users saw as one action: clear this batch they do not need to handle now. 
   Topic groups collect only the latest page of topic roots (P-04 unfinished), so the last message from someone else is the latest topic, not necessarily the one with new replies.
 - **Hand to AI**: attach the item as `<persona-context kind="context" title="Lark · Group name">` (hub `context` + feedId / mail uid, letting tools read more and
   reply), plus the requested action (default "Summarize this, tell me what I need to do, and suggest a reply," with two other presets), sent as one message.
-  Targets: **Persona (main chat)**, the default (#1194, on the web and Android): the item's own manager's main conversation (another manager's item goes to that manager's,
-  found by asking it; with none yet, the message starts it), which then opens; **Persona (new chat)** starts a new conversation with the item's manager (iOS / Mac still offer only this,
-  switching to the Persona tab); an Agent (latest 8) receives it in its session (navigate there). Marked done by default once the message got there, except for the main chat (below).
-  **Write-back to the item** (#1194, web): the main-chat target calls `POST /api/v1/inbox/{id}/handoff` `{text, client_id}` on the item's manager (`assistant/inbox_handoff.go`),
+  Targets: **Persona (main chat)**, the default (#1194, every client): the item's own manager's main conversation (another manager's item goes to that manager's,
+  found by asking it; with none yet, the message starts it), which then opens; **Persona (new chat)** starts a new conversation with the item's manager (iOS / Mac switch to the
+  Persona tab); an Agent (latest 8) receives it in its session (navigate there). Marked done by default once the message got there, except for the main chat (below).
+  **Write-back to the item** (#1194, web, iOS and Mac): the main-chat target calls `POST /api/v1/inbox/{id}/handoff` `{text, client_id}` on the item's manager (`assistant/inbox_handoff.go`),
   which sends the text after a block naming the item (`prompts/inbox/handoff.md`) to its main conversation through `session.send_once` (the client id is the message id, so the same
   request again sends nothing more), or starts the main conversation with it, and answers `{item, session}`; a work machine is refused, and a failed send records nothing (`apierr.Call`'s status, as for a new conversation).
   The item keeps the hand-off (`handoffs`: `machine_id`, `session_id`, `at`, the latest 5) and its chain gets one `handling` entry per conversation ("Handed to Persona's main chat",
@@ -554,7 +554,10 @@ which users saw as one action: clear this batch they do not need to handle now. 
   "Also mark as done" is off by default for the main chat (it may still write back) and on for the other targets; switching targets follows that default until the user sets the box,
   whose choice then stays. Checked, the item is filed once the hand-off is answered, and a later `inbox_suggest` on it is refused as already filed.
   Not covered: later messages on the item are not forwarded to the main conversation (it reads the source with its tools when asked), and filing the item is not told there.
-  iOS, Mac and Android still send plain chat text without write-back; the web falls back to that when the hub or manager answers 404 / 405.
+  iOS and Mac (`InboxHandOffModel`) send it as the web does, one `client_id` per attempt (the same text again after no answer, `assistant_in_doubt` or `assistant_offline` reuses
+  it), open the main conversation on the message as sent under that id (its transcript copy carries it and takes the bubble's place) and read the assistant settings again, since the
+  hand-off may have started the main conversation. Like every other inbox request from iOS and Mac, it names no manager, so it goes to the default manager.
+  Android still sends plain chat text without write-back (#1384); the web, iOS and Mac fall back to that when the hub or manager answers 404 / 405.
 - **Done**: row swipe-left, top-right ✓ in details, or alongside Send / Hand to AI.
 
 ## Watch

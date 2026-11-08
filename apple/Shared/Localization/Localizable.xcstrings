@@ -73217,6 +73217,28 @@
         }
       }
     },
+    "Persona (Main Chat)": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Persona (Main Chat)"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Persona（メインチャット）"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Persona（主对话）"
+          }
+        }
+      }
+    },
     "Persona (New Chat)": {
       "localizations": {
         "en": {

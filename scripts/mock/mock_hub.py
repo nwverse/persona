@@ -5702,6 +5702,43 @@ def inbox_suggestion_bump(iid):
     return x, 200
 
 
+# Hand to AI's main-chat target (POST /api/v1/inbox/{id}/handoff, docs/assistant/inbox.md "Item actions", #1194): the text
+# goes after a block naming the item to the main conversation (started with it when there is none), once per client_id,
+# and lands in its transcript MOCK_ASSISTANT_TRANSCRIPT_SECONDS later (default 1) under that id, as the hub's
+# session.send_once does. The item keeps the hand-off and its chain gets one entry per conversation. What went is in
+# /mock/sent and /mock/sent_to. MOCK_HANDOFF=old: a hub from before the route (404).
+HANDOFFS = {}  # client_id -> the answer given
+
+
+def inbox_handoff(iid, body):
+    if os.environ.get("MOCK_HANDOFF") == "old": return {"error": "404 page not found"}, 404
+    x = next((x for x in INBOX if x["id"] == iid), None)
+    if x is None: return {"error": "收件箱里没有这一条", "code": "not_found"}, 404
+    text, cid = (body.get("text") or "").strip(), (body.get("client_id") or "").lower()
+    if not text: return {"error": "text is required"}, 400
+    if cid in HANDOFFS: return HANDOFFS[cid], 200
+    mid = ASSISTANT_CONFIG["machine_id"]
+    if not ASSISTANT_CONFIG["main"]:
+        sid = str(uuid.uuid4())
+        session = assistant_sess(sid, "", 0, "")
+        session.update(status="working", state="working", main=True)
+        ASSISTANT_CONFIG["main"] = sid
+        ASSISTANT.append(session)
+        push_machine(mid)
+    sid = ASSISTANT_CONFIG["main"]
+    head = '<persona-context kind="context" title="收件箱事件 · %s" url="">\n用户从收件箱把这件事交给你（事件 id：%s）。\n</persona-context>\n' % (
+        x["title"].replace('"', "'"), iid)
+    sent = {"text": head + text, "client_msg_id": cid}
+    echo_sent(["", "api", "v1", "sessions", mid, sid, "messages"], sent, float(os.environ.get("MOCK_ASSISTANT_TRANSCRIPT_SECONDS", "1")))
+    SENT.append(dict(sent, inbox=iid))
+    SENT_TO.append({"machine_id": mid, "session_id": sid, "client_msg_id": cid, "text": sent["text"]})
+    x.setdefault("handoffs", []).append({"machine_id": mid, "session_id": sid, "at": ago()})
+    if not any(e.get("kind") == "handling" and (e.get("link") or {}).get("session_id") == sid for e in x.get("chain") or []):
+        _chain_add(x, "handling", "交给了 Persona 主对话", link={"type": "session", "machine_id": mid, "session_id": sid})
+    HANDOFFS[cid] = {"item": x, "session": {"machine_id": mid, "session_id": sid}}
+    return HANDOFFS[cid], 200
+
+
 # MOCK_INBOX_LINE=1: a "Thread" (#2128): the design review grew out of the chat with the sample contact (continues), which hangs under a todo; the
 # the weekend hiking group item grew out of the design review. GET /api/v1/inbox/tree/{kind}/{id} answers from the items' parents.
 if os.environ.get("MOCK_INBOX_LINE") == "1":
@@ -8807,7 +8844,7 @@ def replay_next(n):
 # MOCK_ECHO_SENT=1: a message sent to a session lands in its transcript a moment later, as claude writes it: for
 # Persona's conversations (claude -p) its pictures first, as image blocks, then its text; elsewhere the text, then the
 # pictures (a pasted image Claude inlined). For the chat showing what was sent once the transcript has it.
-def echo_sent(parts, body):
+def echo_sent(parts, body, delay=None):
     if len(parts) < 7 or body.get("clear_draft"):
         return
     mid, sid = parts[4], parts[5]
@@ -8835,7 +8872,7 @@ def echo_sent(parts, body):
                 try: out({"type": "items", "machine_id": mid, "session_id": sid, "items": line, **span(line, before)})
                 except Exception: pass
         sync_moved(sid)
-    threading.Timer(float(os.environ.get("MOCK_ECHO_SECONDS", "1.5")), written).start()
+    threading.Timer(delay if delay is not None else float(os.environ.get("MOCK_ECHO_SECONDS", "1.5")), written).start()
 
 
 # MOCK_HUB_LINKS=<origin the web is served at>: the assistant's latest answer links an agent and a task as the hub's own
@@ -14137,6 +14174,8 @@ class H(BaseHTTPRequestHandler):
                             st["value"] = ch.get("value")
                             return self.send_json(x)
             return self.send_json({"error": "no such row"}, 400)
+        if p.startswith("/api/v1/inbox/") and p.endswith("/handoff") and self.command == "POST":  # Hand to AI, main chat
+            return self.send_json(*inbox_handoff(unquote(p[len("/api/v1/inbox/"):-len("/handoff")]), json.loads(self.last_body or b"{}")))
         if p.startswith("/api/v1/inbox/") and p.endswith("/suggestion") and self.command == "POST":  # "Confirm" / "Reject" / "Say something"
             return self.send_json(*inbox_suggestion(unquote(p[len("/api/v1/inbox/"):-len("/suggestion")]), json.loads(self.last_body or b"{}")))
         if p.startswith("/api/v1/inbox/") and p.endswith("/draft"):  # AI draft reply

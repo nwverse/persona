@@ -32,6 +32,16 @@ struct PendingArrivalTests {
         #expect(s.pending.isEmpty)
     }
 
+    // A hub from before the rename gets the context block under the old tag name (HubNaming.outbound) and keeps it so in
+    // the transcript: still the message. The bubble of a new chat started from Hand to AI stayed beside it for a minute.
+    @Test func aContextBlockUnderTheOldTagNameArrives() {
+        let s = store()
+        let text = ContextRef(kind: "context", title: "Email · Sample", url: "", text: "Hi, can we move it to Tuesday?").xml + "\n\nSummarize it"
+        s.pending = [PendingMessage(text: text, images: [])]
+        s.merge([user(5, HubNaming.outbound(text, canonical: false), at: Date())])
+        #expect(s.pending.isEmpty)
+    }
+
     // An older 「继续」 in a history page is not the 「继续」 just written: the unsent bubble used to vanish with it.
     @Test func anOlderMessageWithTheSameWordsIsNotIt() {
         let s = store()
