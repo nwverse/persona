@@ -1,6 +1,7 @@
 from pathlib import Path
 import json
 import os
+import re
 import shutil
 import subprocess
 import tempfile
@@ -267,7 +268,7 @@ class ComposeTests(unittest.TestCase):
 
     def test_compose_needs_only_the_image(self):
         text = COMPOSE.read_text()
-        self.assertIn("${PERSONA_IMAGE-${JARVIS_IMAGE:?", text)
+        self.assertIn("image: ${PERSONA_IMAGE-${JARVIS_IMAGE:-}}", text)
         for name in ("PERSONA_DB_PASSWORD", "PERSONA_PUBLIC_URL", "PUID", "PGID"):
             self.assertNotIn("${" + name + ":?", text)
             self.assertNotIn("${" + name + ":-1000}", text)
@@ -275,6 +276,24 @@ class ComposeTests(unittest.TestCase):
         self.assertIn("- ./data/docker:/run/persona", text)
         self.assertIn("PERSONA_DATABASE_URL: postgres://${PERSONA_DB_USER:-jarvis}:${PERSONA_DB_PASSWORD-${JARVIS_DB_PASSWORD:-}}@postgres:5432/", text)
         self.assertIn('$PERSONA_HOME/docker/db-password', WRAPPER.read_text())
+
+    def test_compose_has_no_required_check_inside_a_default(self):
+        # Compose before 5.0.2 evaluates `${A-${B:?…}}`'s default even when A is set: installs with only A would fail.
+        nested, depth, text, i = [], 0, COMPOSE.read_text(), 0
+        while i < len(text):
+            if text.startswith("$$", i):
+                i += 2
+                continue
+            if text.startswith("${", i):
+                if depth and re.match(r"\$\{\w+:?\?", text[i:]):
+                    nested.append(text[i:text.find("}", i) + 1])
+                depth += 1
+                i += 2
+                continue
+            if text[i] == "}" and depth:
+                depth -= 1
+            i += 1
+        self.assertEqual(nested, [])
 
     def test_tls_port_is_published_and_exposed(self):
         self.assertIn('- "${PERSONA_TLS_PORT-${JARVIS_TLS_PORT:-18662}}:18662"', COMPOSE.read_text())

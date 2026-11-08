@@ -218,6 +218,12 @@ var rpcFailureKeys = map[string]string{
 	"worktree_in_use":   "rpc-errors.worktree_in_use",
 	"worktree_dirty":    "rpc-errors.worktree_dirty",
 	"worktree_unmerged": "rpc-errors.worktree_unmerged",
+	// a Claude session outside Persona's terminals, through its peer inbox (node/claudepeer.go)
+	"peer_unsupported": "rpc-errors.peer_unsupported",
+	"peer_unreachable": "rpc-errors.peer_unreachable",
+	"peer_too_long":    "rpc-errors.peer_too_long",
+	"peer_unconfirmed": "rpc-errors.peer_unconfirmed",
+	"peer_command":     "rpc-errors.peer_command",
 }
 
 func localizeFailure(body map[string]any, status int, err error, l i18n.Lang) {

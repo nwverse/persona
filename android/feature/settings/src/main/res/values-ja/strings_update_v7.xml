@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="settings_update_v7_identity">hub の本人確認に失敗しました。ペアリングを確認してください。</string>
+    <string name="settings_update_v7_pair_expired">hub のペアリングが無効です。再度ペアリングしてから更新を確認してください。</string>
+    <string name="settings_update_v7_local_permission">システム設定でローカルネットワークへのアクセスを許可して再試行してください。</string>
+    <string name="settings_update_v7_address_policy">ダウンロード先が接続の安全要件を満たしていません。hub のアドレスを確認してください。</string>
+    <string name="settings_update_v7_invalid_info">hub から有効な更新情報を取得できませんでした。後で再試行してください。</string>
+    <string name="settings_update_v7_missing_apk">hub からインストールパッケージを取得できませんでした。後で再試行してください。</string>
+    <string name="settings_update_v7_check_network">hub に接続して更新を確認できません。ネットワークを確認して再試行してください。</string>
+    <string name="settings_update_v7_download_network">更新のダウンロードに失敗しました。hub へのネットワーク接続を確認して再試行してください。</string>
+    <string name="settings_update_v7_save_storage">インストールパッケージを保存できません。空き容量を確認して再試行してください。</string>
+    <string name="settings_update_v7_digest">パッケージの検証に失敗しました。再度ダウンロードしてください。</string>
+    <string name="settings_update_v7_digest_missing">更新情報に有効な SHA-256 チェックサムがありません。更新を再確認してください。</string>
+    <string name="settings_update_v7_permission">システム設定でアプリのインストールを許可して再試行してください。</string>
+    <string name="settings_update_v7_archive">インストールパッケージを読み取れません。再度ダウンロードしてください。</string>
+    <string name="settings_update_v7_package">別のアプリのパッケージです。インストールをキャンセルしました。</string>
+    <string name="settings_update_v7_metadata_version">パッケージのバージョンが更新情報と一致しません。更新を再確認してください。</string>
+    <string name="settings_update_v7_not_newer">インストール済みのアプリより新しいバージョンではありません。インストールをキャンセルしました。</string>
+    <string name="settings_update_v7_signer_missing">アプリの署名を読み取れません。インストールをキャンセルしました。</string>
+    <string name="settings_update_v7_signer">パッケージの署名がインストール済みのアプリと一致しません。インストールをキャンセルしました。</string>
+    <string name="settings_update_v7_launch">システムインストーラーを開けません。空き容量とインストール権限を確認して再試行してください。</string>
+    <string name="settings_update_v7_system_permission">システムがインストールを許可しませんでした。インストール権限を確認して再試行してください。</string>
+    <string name="settings_update_v7_read_launch">パッケージの読み取りかシステムインストーラーの起動に失敗しました。再度ダウンロードして再試行してください。</string>
+    <string name="settings_update_v7_system_downgrade">古いバージョンのためシステムがインストールを拒否しました。</string>
+    <string name="settings_update_v7_system_signature">署名がインストール済みのアプリと異なるため、システムがインストールを拒否しました。</string>
+    <string name="settings_update_v7_system_invalid">システムによるパッケージまたは署名の検証に失敗しました。再度ダウンロードしてください。</string>
+    <string name="settings_update_v7_system_storage">空き容量が不足しています。容量を確保して再試行してください。</string>
+    <string name="settings_update_v7_system_blocked">システムがインストールをブロックしました。インストール権限とセキュリティ設定を確認してください。</string>
+    <string name="settings_update_v7_system_incompatible">パッケージはこのデバイスと互換性がありません。</string>
+    <string name="settings_update_v7_system_conflict">インストール済みのアプリと競合しています。バージョンと署名を確認してください。</string>
+    <string name="settings_update_v7_system_failed">システムによるインストールが完了しませんでした。再試行してください。</string>
+    <string name="settings_update_v7_native_title">標準でネイティブチャットを開く</string>
+    <string name="settings_update_v7_native_subtitle">オンの場合はチャット、オフの場合は拡張機能のイベント詳細を表示します。次に項目を開くときに反映されます。</string>
+    <string name="settings_update_v7_native_section">受信トレイ</string>
+</resources>

@@ -51,6 +51,8 @@
         "file_convert",
         "git_blob",
         "git_write",
+        "git_review",
+        "preview",
         "file_upload",
         "machine_trust",
         "machines_add",
@@ -82,7 +84,8 @@
         "upload_dir",
         "task_push",
         "sessions_list",
-        "sessions_lookup"
+        "sessions_lookup",
+        "machine_rename"
       ],
       "fp": "",
       "hub_id": "00000000-0000-4000-8000-000000000001",
@@ -146,6 +149,8 @@
           "file_convert",
           "git_blob",
           "git_write",
+          "git_review",
+          "preview",
           "file_upload",
           "machine_trust",
           "machines_add",
@@ -177,7 +182,8 @@
           "upload_dir",
           "task_push",
           "sessions_list",
-          "sessions_lookup"
+          "sessions_lookup",
+          "machine_rename"
         ],
         "/type": "hello"
       }
@@ -232,6 +238,8 @@
         "file_convert",
         "git_blob",
         "git_write",
+        "git_review",
+        "preview",
         "file_upload",
         "machine_trust",
         "machines_add",
@@ -263,7 +271,8 @@
         "upload_dir",
         "task_push",
         "sessions_list",
-        "sessions_lookup"
+        "sessions_lookup",
+        "machine_rename"
       ],
       "fp": "",
       "hub_id": "00000000-0000-4000-8000-000000000001",
@@ -317,6 +326,8 @@
           "file_convert",
           "git_blob",
           "git_write",
+          "git_review",
+          "preview",
           "file_upload",
           "machine_trust",
           "machines_add",
@@ -348,7 +359,8 @@
           "upload_dir",
           "task_push",
           "sessions_list",
-          "sessions_lookup"
+          "sessions_lookup",
+          "machine_rename"
         ],
         "/ok": true,
         "/version": "fixture-version"

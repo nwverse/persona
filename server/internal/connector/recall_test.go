@@ -51,3 +51,35 @@ func TestRecallerIsNoCapability(t *testing.T) {
 		t.Fatalf("a write of a Recaller: %+v, ran %v", res, f.did)
 	}
 }
+
+// proxyRecaller is a Recaller that answers for a program: a proxy implements every interface and has only what it
+// declares.
+type proxyRecaller struct {
+	recallWriter
+	caps []Capability
+}
+
+func (p proxyRecaller) Manifest() Manifest { return Manifest{Capabilities: p.caps, Proxy: true} }
+
+// A program's connector implements every interface, so what its manifest declares decides whether the hub finds it as a
+// Recaller: without recall it is offered nothing, with it the hub finds it. The declaration registers like any other and
+// is not one of the capabilities GET /api/v1/connectors lists.
+func TestRecallerOfAProgramGoesByItsDeclaration(t *testing.T) {
+	f := &fake{id: "example", status: Status{State: StateOK}}
+	base := recallWriter{writer{f}}
+	undeclared := proxyRecaller{base, []Capability{CapStatus, CapActions}}
+	declared := proxyRecaller{base, []Capability{CapStatus, CapActions, CapRecall}}
+	if _, ok := RecallerOf(undeclared); ok {
+		t.Error("a program that does not declare recall is found as a Recaller")
+	}
+	if r, ok := RecallerOf(declared); !ok || !r.CanRecall("example_comment", time.Minute) {
+		t.Errorf("a program that declares recall: %v %v", r, ok)
+	}
+	reg := NewRegistry(nil)
+	if err := reg.Add(declared); err != nil {
+		t.Fatalf("a program declaring recall does not register: %v", err)
+	}
+	if got, without := Capabilities(declared), Capabilities(undeclared); !slices.Equal(got, without) {
+		t.Errorf("capabilities %v, without recall %v", got, without)
+	}
+}

@@ -285,6 +285,7 @@ func (svc *Service) listArchivedSessions(w http.ResponseWriter, r *http.Request)
 		for _, row := range list {
 			if row.Archived && !row.Assistant {
 				row.Manager = svc.id
+				row.NativeArchive = svc.nativeArchiveView(m.ID, row.SessionID)
 				out = append(out, row)
 			}
 		}
@@ -377,11 +378,12 @@ func (svc *Service) setAgentSessionArchive(w http.ResponseWriter, r *http.Reques
 		svc.archiveAndCloseHTTP(w, r, mid)
 		return
 	}
-	if _, err := svc.setAgentArchive(r.Context(), mid, r.PathValue("sid"), archived); err != nil {
+	row, err := svc.setAgentArchive(r.Context(), mid, r.PathValue("sid"), archived)
+	if err != nil {
 		svc.writeAgentArchiveError(w, err)
 		return
 	}
-	apierr.WriteJSON(w, map[string]any{"ok": true})
+	apierr.WriteJSON(w, map[string]any{"ok": true, "native": svc.nativeArchiveAwaited(r.Context(), row.MachineID, row.SessionID)}) // agent_archive_native.go
 }
 
 func (svc *Service) noteAgentArchive(ctx context.Context, s proto.Session, archived bool) error {
@@ -402,6 +404,7 @@ func (svc *Service) noteAgentArchive(ctx context.Context, s proto.Session, archi
 		return err
 	}
 	delete(b.pending, key)
+	svc.nativeArchiveWanted(s, archived) // the tool's own archive follows (agent_archive_native.go)
 	return nil
 }
 

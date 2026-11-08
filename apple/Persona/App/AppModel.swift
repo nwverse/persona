@@ -741,6 +741,13 @@ final class AppModel {
     /// (docs/extensions/computer-use.md; ego's first-run setup is done over it, #1507).
     var screenMachines: [Machine] { machines.filter(Self.showsScreen) }
     func canShowScreen(_ ref: MachineRef) -> Bool { machine(ref).map(Self.showsScreen) ?? false }
+    /// The Mac's displays as its node last read them, from whichever extension shows its screen (#80).
+    func screenDisplays(_ ref: MachineRef) -> [MachineDisplay] {
+        guard let m = machine(ref) else { return [] }
+        if let c = m.computer, c.enabled, c.screenSharing, !c.displays.isEmpty { return c.displays }
+        if let b = m.browser, b.enabled, b.screenSharing { return b.displays }
+        return []
+    }
     nonisolated static func showsScreen(_ m: Machine) -> Bool {
         (m.computer.map { $0.enabled && $0.screenSharing } ?? false) || (m.browser.map { $0.enabled && $0.screenSharing } ?? false)
     }
@@ -1028,6 +1035,9 @@ final class AppModel {
 
     func isSubscribed(_ key: SessionKey) -> Bool { subscribers[key] != nil }
 
+    /// Check this view's live owner, not an environment value captured before an asynchronous completion.
+    func isSubscribed(_ key: SessionKey, by owner: UUID) -> Bool { subscribers[key]?.contains(owner) == true }
+
     // MARK: Terminal streams
 
     /// What a group's hub listed in its hello (`terminal_stream`: the terminal tab can subscribe to live frames).
@@ -1200,25 +1210,28 @@ final class AppModel {
 
     /// Fetches what comes after the chat's `covered`, page by page, until it is whole; past 8 pages it starts over from
     /// the latest page instead.
-    func fill(_ key: SessionKey) async {
-        guard let api = api(key.group), !filling.contains(key) else { return }
+    func fill(_ key: SessionKey, shouldApply: (@MainActor () -> Bool)? = nil) async {
+        guard shouldApply?() ?? true, let api = api(key.group), !filling.contains(key) else { return }
         filling.insert(key)
         defer { filling.remove(key) }
         let store = chat(key)
         for _ in 0..<8 {
+            guard shouldApply?() ?? true else { return }
             guard let r = try? await api.items(key, afterSeq: store.covered) else { return }
+            guard shouldApply?() ?? true else { return }
             switch store.apply(r.items, span: r.span, moreAfter: r.moreAfter == true) {
             case .none: return
             case .fill: continue
-            case .reload: await reload(key); return
+            case .reload: await reload(key, shouldApply: shouldApply); return
             }
         }
-        await reload(key)
+        await reload(key, shouldApply: shouldApply)
     }
 
     /// Starts the chat over from the latest page (the hole was too big, or the transcript was replaced).
-    func reload(_ key: SessionKey) async {
-        guard let api = api(key.group), let page = try? await api.items(key, beforeSeq: nil) else { return }
+    func reload(_ key: SessionKey, shouldApply: (@MainActor () -> Bool)? = nil) async {
+        guard shouldApply?() ?? true, let api = api(key.group), let page = try? await api.items(key, beforeSeq: nil) else { return }
+        guard shouldApply?() ?? true else { return }
         chat(key).replace(with: page.items, hasMore: page.hasMore, span: page.span)
         ChatTrace.shared.note(key, "reload n=\(page.items.count) to=\(page.span.to.map(String.init) ?? "?") kept=\(chat(key).items.count - page.items.count)")
     }

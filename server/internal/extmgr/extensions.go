@@ -17,6 +17,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/nwverse/persona/server/internal/channel"
@@ -108,6 +109,9 @@ var extensionIDPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]{0,31}$`)
 
 // hubPlugin is one plugin as the hub runs it now.
 type hubExtension struct {
+	contributionsMu sync.Mutex
+	contributions   map[string][]extension.ExportedContribution
+
 	id     string
 	kind   string
 	socket string // its HTTP socket, when it serves HTTP
@@ -122,6 +126,14 @@ type hubExtension struct {
 	links   []*proc.Link // theirs, to proc
 	status  string       // when proc is nil
 	err     string
+
+	// gateCommands are the commands of its assistant gates (the gate files' command), read when it starts, for an enabled
+	// extension without a problem whether or not it runs a program (the ones assistantGates reads): which writes the
+	// node's gate proxy reports (lark.sent) are its own (sent_recall_gate.go).
+	gateCommands []string
+	// recallNotBefore is when this install of an installed extension began (zero for any other: a built-in or a dev one is
+	// not replaced by another under its id): a ledger row from before it was not the extension's (sent_recall_gate.go).
+	recallNotBefore time.Time
 
 	// agentSources are its agent_sources registered with the agents service (extension_agents.go).
 	agentSources []string
@@ -244,6 +256,19 @@ func (ps *extensions) legacySocket(c ExtensionConfig) string {
 		return expandHome(c.Socket)
 	}
 	return filepath.Join(ps.root, c.ID+".sock")
+}
+
+// maxSocketPath is the longest path a Unix socket can have here: sockaddr_un's sun_path less its NUL (macOS 103
+// bytes, Linux 107).
+const maxSocketPath = len(syscall.RawSockaddrUnix{}.Path) - 1
+
+// checkSocketPath fails, saying what to do, when path is too long for a Unix socket here; binding it would fail with
+// only "invalid argument". An external manager's directory (managers/<id> in the data directory) leaves the least room.
+func checkSocketPath(path string) error {
+	if len(path) <= maxSocketPath {
+		return nil
+	}
+	return i18n.Err("hub-extensions.socket_path_too_long", i18n.Args{"path": path, "length": len(path), "max": maxSocketPath})
 }
 
 // legacyManifest is a hub.json entry as a manifest: a program serving HTTP (no protocol) contributing its kind, run
@@ -583,8 +608,17 @@ func (ps *extensions) apply(ctx context.Context, id string) {
 		return
 	}
 	hp := &hubExtension{id: id, kind: p.Manifest.Kind(), stats: ps.stats.of(id)}
+	if p.Manifest.Exports != nil {
+		hp.contributions = ps.reg.ContributionsToContext(ctx, id)
+	}
 	if c, ok := p.Legacy.(ExtensionConfig); ok {
 		hp.kind = c.Kind
+	}
+	if p.Record.Enabled && p.Problem == "" { // the extensions whose gates the assistant is given (assistantGates), running or not
+		hp.gateCommands = gateCommandsOf(p)
+	}
+	if p.Record.Source == extension.SourceInstalled {
+		hp.recallNotBefore = p.Record.InstalledAt
 	}
 	switch missing := ps.reg.Missing(ctx, p); {
 	case !p.Record.Enabled:
@@ -714,6 +748,15 @@ func (ps *extensions) spec(ctx context.Context, p *extension.Extension, hp *hubE
 	s, err := ps.specOf(ctx, p, hp)
 	if err == nil {
 		err = ps.confine(ctx, p, hp, &s) // its sandbox and the egress proxy (extension_sandbox.go)
+	}
+	// The HTTP socket the manager hands out, where confine left it; the program binds it itself. One that serves only
+	// HTTP has nothing to run without it. One that speaks the protocol still starts and its log says why its HTTP side
+	// will not: a program that keeps serving the protocol without that socket keeps working (the Go SDK's Main exits).
+	if err == nil && s.HTTP && p.Record.Remote == nil && p.Legacy == nil {
+		if err = checkSocketPath(s.Socket); err != nil && s.RPC {
+			ps.logf("extension %s: %v", p.Record.ID, err)
+			err = nil
+		}
 	}
 	s.Env = withExtensionEnv(s.Env)
 	return s, err
@@ -900,7 +943,10 @@ func (ps *extensions) specOf(ctx context.Context, p *extension.Extension, hp *hu
 			}
 		}
 		if m.Exports != nil {
+			hp.contributionsMu.Lock()
 			params.ContributionsToMe = ps.reg.ContributionsToContext(ctx, id)
+			hp.contributions = params.ContributionsToMe
+			hp.contributionsMu.Unlock()
 		}
 		return params, nil
 	}
@@ -1019,6 +1065,7 @@ func (ps *extensions) specOf(ctx context.Context, p *extension.Extension, hp *hu
 		}
 		cfg := proc.Config{ID: c.ID, Name: c.Name, Manifest: ps.knownOnly(id, connectorManifest(c)), Secrets: secrets, KB: kbase,
 			Logf: ps.logf, Link: link}
+		cfg.RecallNotBefore = hp.recallNotBefore // the program is not asked about a send before this install, whoever asks
 		if p.Record.Granted.GhLogin && ps.h != nil {
 			cfg.GhToken = ps.h.ghTokenFor
 		}

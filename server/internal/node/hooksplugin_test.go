@@ -139,12 +139,12 @@ func TestHerdrStartManagedWithHooksPlugin(t *testing.T) {
 	}
 	waitCalls(t, f, "pane.send_input", 1)
 	dir := personaDir(home)
-	want := "HERDR_AGENT=claude /tmp/persona-test/personad launch work_gw --session-id " + startID +
-		" --settings " + shellQuote(filepath.Join(dir, "launcher-settings", "work_gw-env-settings.json")) +
-		" --mcp-config " + shellQuote(filepath.Join(dir, "mcp.json")) +
-		" --plugin-dir " + shellQuote(filepath.Join(dir, "agent-plugin")) +
-		" --allowedTools " + shellQuote("Bash(sh "+filepath.Join(dir, "agent-plugin", "skills", "persona-office", "scripts", "office.sh")+" *)") +
-		" --plugin-dir " + shellQuote(filepath.Join(dir, "claude-hooks"))
+	want := inAgentEnv(dir, "HERDR_AGENT=claude /tmp/persona-test/personad launch work_gw --session-id "+startID+
+		" --settings "+shellQuote(filepath.Join(dir, "launcher-settings", "work_gw-env-settings.json"))+
+		" --mcp-config "+shellQuote(filepath.Join(dir, "mcp.json"))+
+		" --plugin-dir "+shellQuote(filepath.Join(dir, "agent-plugin"))+
+		" --allowedTools "+shellQuote("Bash(sh "+filepath.Join(dir, "agent-plugin", "skills", "persona-office", "scripts", "office.sh")+" *)")+
+		" --plugin-dir "+shellQuote(filepath.Join(dir, "claude-hooks")), shellQuote)
 	if typed := f.trace("pane.send_input"); !slices.Contains(typed, call("pane.send_input", map[string]any{"pane_id": "w1:p2", "keys": []string{"Enter"}, "text": want})) {
 		t.Errorf("typed %v, want %s", typed, want)
 	}

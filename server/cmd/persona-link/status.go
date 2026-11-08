@@ -23,8 +23,10 @@ type report struct {
 	// Paired, Machine, HubID, HubName, Endpoints: active mode's pairing (also there in passive mode, for switching back).
 	Paired  bool   `json:"paired"`
 	Machine string `json:"machine,omitempty"`
-	HubID   string `json:"hub_id,omitempty"`
-	HubName string `json:"hub_name,omitempty"`
+	// MachineName: what the hub calls this computer, as it last said (older hubs say nothing: Machine, its id).
+	MachineName string `json:"machine_name,omitempty"`
+	HubID       string `json:"hub_id,omitempty"`
+	HubName     string `json:"hub_name,omitempty"`
 	// Endpoints: the candidates in link.json, in the order they are tried.
 	Endpoints []link.Endpoint `json:"endpoints,omitempty"`
 	// Trust: how the hub is checked, "pin" (its key, from the pairing) | "system" (behind an HTTPS reverse proxy:
@@ -48,6 +50,7 @@ type passiveReport struct {
 	HubID       string     `json:"hub_id,omitempty"`
 	HubName     string     `json:"hub_name,omitempty"`
 	Machine     string     `json:"machine,omitempty"`
+	MachineName string     `json:"machine_name,omitempty"`
 	PairedAt    *time.Time `json:"paired_at,omitempty"`
 	CodeExpires *time.Time `json:"code_expires,omitempty"` // a pairing code from pair --listen is waiting until then
 	FP          string     `json:"fp,omitempty"`           // the connector's pin (public: anyone reaching the port sees the key)
@@ -76,6 +79,7 @@ func gather(e *env) report {
 	r := report{Running: link.Running(cfg), Mode: link.ModeActive, Config: cfg, Log: e.logPath()}
 	if c, err := link.Load(cfg); err == nil {
 		r.Paired, r.Machine, r.HubID, r.HubName, r.Endpoints = true, c.Machine, c.Hub, c.HubName, link.Ranked(c.Endpoints)
+		r.MachineName = c.MachineName
 		r.Trust = "pin"
 		if c.SystemTrust() {
 			r.Trust = link.TrustSystem
@@ -88,7 +92,7 @@ func gather(e *env) report {
 		if p := c.Passive; p != nil || r.Mode == link.ModePassive {
 			pr := &passiveReport{Listen: p.ListenAddr(), Paired: p.Paired()}
 			if p != nil {
-				pr.HubID, pr.HubName, pr.Machine, pr.PairedAt = p.HubID, p.HubName, p.Machine, p.PairedAt
+				pr.HubID, pr.HubName, pr.Machine, pr.MachineName, pr.PairedAt = p.HubID, p.HubName, p.Machine, p.MachineName, p.PairedAt
 				if until := p.CodeUntil(e.now()); !until.IsZero() {
 					pr.CodeExpires = &until
 				}
@@ -206,7 +210,7 @@ func (r report) text(now time.Time, user string) string {
 				line("本机 node：hub 正在连")
 			}
 		}
-		line("这台电脑：hub 上的「%s」", r.Machine)
+		line("这台电脑：hub 上的%s", machineText(r.MachineName, r.Machine))
 		if r.Trust == link.TrustSystem {
 			line("校验：经反向代理 · 系统证书（按系统信任的 CA 和域名，没有钉住 hub 的公钥）")
 		}
@@ -291,7 +295,7 @@ func (r report) passiveText(line func(string, ...any), now time.Time, live bool)
 		}
 	}
 	if paired && p.Machine != "" {
-		line("这台电脑：hub 上的「%s」", p.Machine)
+		line("这台电脑：hub 上的%s", machineText(p.MachineName, p.Machine))
 	}
 	if p != nil && p.FP != "" {
 		line("连接器指纹：%s", p.FP)
@@ -362,6 +366,17 @@ func addressText(kind, address string) string {
 		host = u.Host + u.Path // a reverse proxy's path says which hub
 	}
 	return kindName(kind) + " " + host
+}
+
+// machineText names this computer as the hub calls it, with its id when that is another ("「Studio」（id studio-pc）").
+func machineText(name, id string) string {
+	switch {
+	case name == "" || name == id:
+		return "「" + id + "」"
+	case id == "":
+		return "「" + name + "」"
+	}
+	return "「" + name + "」（id " + id + "）"
 }
 
 // hubText names the hub: by the name it gave, with its mesh's size when known (mesh 0); else by id, and a hub that

@@ -37,6 +37,27 @@ const (
 	// the hub; MethodConnectorPaired ConnectorCred → {}: pairing made new ones, the hub seals and keeps them.
 	MethodConnectorCred   = "devices.connector_cred"
 	MethodConnectorPaired = "devices.connector_paired"
+	// MethodRename Rename → RenameReply: a computer's Persona Link asked for another name (persona-link name, the
+	// tray, the menu bar); the hub writes it to hub.json and hands the entries over again (EventConfig). Refused with
+	// an rpc.Error of a RenameCode*.
+	MethodRename = "devices.rename"
+)
+
+// Rename is devices.rename's params: Name "" is the computer's id again.
+type Rename struct {
+	MachineID string `json:"machine_id"`
+	Name      string `json:"name"`
+}
+
+// RenameReply is the name the hub calls the computer now.
+type RenameReply struct {
+	Name string `json:"name"`
+}
+
+// Why a rename was refused (devices.rename's rpc.Error codes; the link's renamed carries them as they are).
+const (
+	RenameCodeInvalidName = "invalid_name" // too long, or not one line
+	RenameCodePending     = "pending"      // the computer waits for the user to confirm it
 )
 
 // Hub → manager.

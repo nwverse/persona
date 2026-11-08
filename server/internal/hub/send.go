@@ -290,7 +290,7 @@ func (h *Hub) deliverOnce(ctx context.Context, m *Machine, p map[string]any) (in
 		status, body := callErrBytes(l, unknownDelivery(l, "hub-send.lost_during"))
 		return status, body, outcome
 	default:
-		status, body := callErrBytes(h.contextLang(ctx), apierr.OnMachine(err, m.cfg.Name)) // claude_missing on "<name>'s MacBook"
+		status, body := callErrBytes(h.contextLang(ctx), apierr.OnMachine(err, m.name())) // claude_missing on "<name>'s MacBook"
 		return status, body, outcome
 	}
 }

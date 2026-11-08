@@ -18,7 +18,7 @@ func TestSendRefusalSaysWhyInTheRequestLanguage(t *testing.T) {
 		return &rpc.Error{Code: proto.CodeClaudeMissing, Message: "zsh:1: command not found: claude",
 			Data: json.RawMessage(`{"delivered":"none","launcher":"claude"}`)}
 	})
-	h.byID["box"].cfg.Name = "Work Laptop"
+	h.byID["box"].setName("Work Laptop")
 	ctx := i18n.With(context.Background(), i18n.En)
 	status, body, _ := h.deliverOnce(ctx, h.byID["box"], map[string]any{"session": "s1", "text": "hi"})
 	var out map[string]any

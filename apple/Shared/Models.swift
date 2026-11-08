@@ -249,9 +249,11 @@ nonisolated struct MachineComputer: Codable, Hashable, Sendable {
     var backend: String? = nil
     /// The official ChatGPT desktop app is installed (LCU's runtime).
     var chatgpt = false
+    /// The Mac's displays as arranged in its System Settings, read with `screenSharing` (empty from an older node).
+    var displays: [MachineDisplay] = []
 
     enum CodingKeys: String, CodingKey {
-        case enabled, installed, version, daemon, accessibility, desktop, ready, note, job, backend, chatgpt
+        case enabled, installed, version, daemon, accessibility, desktop, ready, note, job, backend, chatgpt, displays
         case screenRecording = "screen_recording", screenSharing = "screen_sharing", noAutoLock = "no_auto_lock"
     }
 
@@ -288,6 +290,8 @@ nonisolated struct MachineComputer: Codable, Hashable, Sendable {
         noAutoLock = try c.decodeIfPresent(Bool.self, forKey: .noAutoLock) ?? false
         backend = try c.decodeIfPresent(String.self, forKey: .backend)
         chatgpt = try c.decodeIfPresent(Bool.self, forKey: .chatgpt) ?? false
+        // An unreadable list only costs the display choice, not the machine.
+        displays = (try? c.decodeIfPresent([MachineDisplay].self, forKey: .displays)) ?? []
     }
 
     /// The node has said how it is (a never-asked one has neither a verdict nor a note).
@@ -314,9 +318,11 @@ nonisolated struct MachineBrowser: Codable, Hashable, Sendable {
     var note: String? = nil
     var screenSharing = false
     var job: ComputerJob? = nil
+    /// As `MachineComputer.displays`.
+    var displays: [MachineDisplay] = []
 
     enum CodingKeys: String, CodingKey {
-        case enabled, installed, version, imported, analytics, ready, note, job
+        case enabled, installed, version, imported, analytics, ready, note, job, displays
         case setUp = "set_up", screenSharing = "screen_sharing"
     }
 
@@ -346,10 +352,43 @@ nonisolated struct MachineBrowser: Codable, Hashable, Sendable {
         note = try c.decodeIfPresent(String.self, forKey: .note)
         screenSharing = try c.decodeIfPresent(Bool.self, forKey: .screenSharing) ?? false
         job = try? c.decodeIfPresent(ComputerJob.self, forKey: .job)
+        displays = (try? c.decodeIfPresent([MachineDisplay].self, forKey: .displays)) ?? []
     }
 
     /// The node has said how it is.
     var checked: Bool { ready || installed || !(note ?? "").isEmpty }
+}
+
+/// One of a Mac's displays, as its node read it (docs/extensions/computer-use.md "Displays"): the frame in points in the
+/// global display space (origin at the top-left corner of the main display, y down); `id` is macOS's display number.
+nonisolated struct MachineDisplay: Codable, Hashable, Sendable {
+    var id: Int
+    var x: Double
+    var y: Double
+    var width: Double
+    var height: Double
+    var main: Bool = false
+
+    init(id: Int, x: Double, y: Double, width: Double, height: Double, main: Bool = false) {
+        self.id = id
+        self.x = x
+        self.y = y
+        self.width = width
+        self.height = height
+        self.main = main
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(Int.self, forKey: .id)
+        x = try c.decode(Double.self, forKey: .x)
+        y = try c.decode(Double.self, forKey: .y)
+        width = try c.decode(Double.self, forKey: .width)
+        height = try c.decode(Double.self, forKey: .height)
+        main = try c.decodeIfPresent(Bool.self, forKey: .main) ?? false
+    }
+
+    var frame: CGRect { CGRect(x: x, y: y, width: width, height: height) }
 }
 
 /// One install or grant the node runs for the machine page (docs/extensions/computer-use.md「一键安装」).
@@ -710,6 +749,9 @@ nonisolated struct Session: Codable, Identifiable, Hashable, Sendable {
         case "identity_conflict": String(localized: "Identity conflict")
         case "codex_history": String(localized: "Codex history")
         case "claude_bg": String(localized: "Claude background")
+        // Claude outside Persona's terminals (docs/integrations/claude-integration.md "Claude outside Persona's terminals")
+        case "claude_desktop": String(localized: "Claude desktop app")
+        case "claude_cli": String(localized: "Claude in a terminal")
         case "runtime": agentLabel // an agent runtime's session (docs/integrations/runtimes.md): its own name, "DSH"
         case .some(let kind) where !kind.isEmpty: kind
         default: nil

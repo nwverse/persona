@@ -188,6 +188,25 @@ func TestAManagerKeepsItsOwnList(t *testing.T) {
 	if !strings.Contains(string(list[1]), `"Laptop"`) {
 		t.Fatalf("the edit is not in the own list: %s", list)
 	}
+	// A rename of one it keeps goes to its list too, and the machine keeps its connection (machine_rename.go).
+	h.machineByID("box").mu.Lock()
+	connectedAt := h.machineByID("box").connectedAt
+	h.machineByID("box").mu.Unlock()
+	if got, err := h.renameMachine(ctx, "box", "Studio box", "admin", "admin"); err != nil || got != "Studio box" {
+		t.Fatalf("rename a kept machine: %q %v", got, err)
+	}
+	list, _, _, _ = managerconf.OwnMachines(file)
+	if !strings.Contains(string(list[0]), `"Studio box"`) || len(hubJSONMachines(t, h.cfg.dir)) != 0 {
+		t.Fatalf("the rename is not in the own list, or went to hub.json: %s", list)
+	}
+	eventually(t, 10*time.Second, "box shown renamed, still connected", func() bool {
+		m := h.machineByID("box")
+		s := m.snapshot()
+		m.mu.Lock()
+		same := m.connectedAt.Equal(connectedAt)
+		m.mu.Unlock()
+		return s.Name == "Studio box" && s.Online && same
+	})
 	// The removal too: it lets it go, and the hub shows it no more.
 	if kept, err := h.removeKeptMachine(ctx, "lap"); !kept || err != nil {
 		t.Fatalf("remove: %v %v", kept, err)

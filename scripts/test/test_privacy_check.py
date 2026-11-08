@@ -1,4 +1,6 @@
+from contextlib import redirect_stderr
 import importlib.util
+import io
 import json
 import os
 from pathlib import Path
@@ -277,6 +279,209 @@ class ReservedDomainTests(unittest.TestCase):
         self.assertEqual(pc.problems("the hub is notexample.com", words), ["notexample.com"])
 
 
+class OrdinaryWordTests(unittest.TestCase):
+    """A config value that is an ordinary word (a machine id named after a room) matches every variable, comment and
+    environment variable of that name. A `!word` line in private-words.txt marks such a value as not private, and every
+    hit names where its value comes from, so a false positive can be told from a leak without printing the value (#1065)."""
+
+    WORD = "attic"  # a made-up machine id
+    CODE = ['attic := os.Getenv("PERSONA_ATTIC")', "// the attic machine runs the node", "let attic_id = attic"]
+
+    def scan(self, config, words):
+        """pc.term_sources() with only this config and private-words.txt on the machine."""
+        with tempfile.TemporaryDirectory(prefix="privacy-check-test-") as temp:
+            home = Path(temp)
+            directory = home / ".config/persona"
+            directory.mkdir(parents=True)
+            (directory / "config.json").write_text(json.dumps(config))
+            (directory / "private-words.txt").write_text(words)
+            env = {k: v for k, v in os.environ.items() if k not in pc.CONFIG_ENV}
+            env["XDG_CONFIG_HOME"] = str(home / ".config")
+            with patch.object(pc, "HOME", str(home)), patch.object(pc, "ROOT", str(home)), \
+                    patch.dict(os.environ, env, clear=True):
+                return pc.term_sources()
+
+    def sources(self, config, words=""):
+        return self.scan(config, words)[0]
+
+    def words(self, config, words=""):
+        return list(self.sources(config, words))
+
+    def machines(self, *ids):
+        return {"hub": {"machine": ids[0]}, "machines": [{"id": i, "ssh": i} for i in ids]}
+
+    def test_a_config_word_is_found_without_a_waiver(self):
+        words = self.words(self.machines(self.WORD))
+        self.assertIn(self.WORD, words)
+        for line in self.CODE:
+            with self.subTest(line=line):
+                self.assertEqual(pc.problems(line, words), [self.WORD])
+
+    def test_a_waived_config_word_is_not_searched(self):
+        words = self.words(self.machines(self.WORD, "Cellar"), "# machine ids\n!attic\n !cellar \n")
+        self.assertNotIn(self.WORD, words)
+        self.assertNotIn("Cellar", words)
+        for line in self.CODE + ["the Cellar build"]:
+            with self.subTest(line=line):
+                self.assertEqual(pc.problems(line, words), [])
+
+    def test_a_waiver_only_takes_back_a_value_made_of_letters(self):
+        values = ["attic2", "attic-box", "attic.lan", "/srv/attic", "attic box", "Küche"]
+        stderr = io.StringIO()
+        with redirect_stderr(stderr):
+            words = self.words({"machines": [{"id": v} for v in values]}, "".join("!" + v + "\n" for v in values))
+        for value in values:
+            with self.subTest(value=value):
+                self.assertIn(value, words)
+                # A line that is not a waiver keeps what it did before: it is searched as written.
+                self.assertIn("!" + value, words)
+        self.assertIn("private-words.txt:1:", stderr.getvalue())
+        self.assertNotIn("attic", stderr.getvalue())
+
+    def test_a_waiver_does_not_take_back_a_listed_word(self):
+        words = self.words(self.machines(self.WORD), "attic\n!attic\n")
+        self.assertIn(self.WORD, words)
+
+    def test_every_hit_names_where_its_value_came_from(self):
+        config = self.machines(self.WORD)
+        config["lan_host"] = "attic.lan"
+        config["publish"] = {"site_url": "https://attic.lan/privacy"}
+        sources = self.sources(config, "attic-team\n")
+        self.assertEqual(sources[self.WORD], ["config hub.machine", "config machines.id", "config machines.ssh"])
+        self.assertEqual(sources["attic.lan"], ["config lan_host", "config publish.site_url"])
+        self.assertEqual(sources["attic-team"], ["private-words.txt"])
+        home = [w for w in sources if w.startswith("/Users/")]
+        self.assertEqual([sources[w] for w in home], [["the home directory"]])
+        self.assertEqual(pc.private_kind(self.WORD, sources),
+                         "private value (5 chars) from config hub.machine, config machines.id, config machines.ssh")
+        self.assertEqual(pc.private_kind("attic-team", sources), "private value (10 chars) from private-words.txt")
+        self.assertEqual(pc.private_kind("other-value", sources), "private value (11 chars)")
+
+    def test_a_key_that_holds_a_value_is_not_printed(self):
+        bundle = "com.zorblax.persona"  # a made-up bundle id
+        config = self.machines(self.WORD)
+        config["app"] = {"bundle_id": bundle}
+        config["app_store"] = {"provisioning_profiles": {bundle + ".share": "Zorblax Share Profile"}}
+        config["aliases"] = {self.WORD: "zorblax-box", "build.simulator": "zorblax-sim"}
+        sources = self.sources(config)
+        self.assertEqual(sources["Zorblax Share Profile"], ["config app_store.provisioning_profiles.*"])
+        self.assertEqual(sources["zorblax-box"], ["config aliases.*"])
+        # The rules that look at a key (os, simulator, url, path) see the whole key, dots and all.
+        self.assertEqual(sources["zorblax-sim"], ["config aliases.*"])
+        for where in sum(sources.values(), []):
+            with self.subTest(where=where):
+                self.assertNotIn("zorblax", where)
+                self.assertNotIn(self.WORD, where.replace("config ", ""))
+
+    def profile(self, name):
+        return {"app_store": {"provisioning_profiles": {"com.example.persona.share": name}}}
+
+    def generic_profile_sources(self, config, words=""):
+        with patch.object(pc, "public_profile_labels", return_value=frozenset({"Persona Share App Store"})):
+            return self.sources(config, words)
+
+    def test_public_default_and_fixture_profile_labels_are_generic(self):
+        root = Path(pc.__file__).parent.parent
+        labels = pc.profile_labels((root / "scripts/persona_config.py").read_text(), "provisioning_profiles")
+        labels |= pc.profile_labels((root / "scripts/test/fixtures/deployment/persona_config.py.fixture").read_text(), "export_options")
+        self.assertIn("Persona Share App Store", labels)
+        self.assertGreater(len(labels), 5)  # The public historical fixture contributes its literal labels too.
+        with patch.object(pc, "public_profile_labels", return_value=frozenset(labels)):
+            for label in labels:
+                with self.subTest(label=label):
+                    self.assertNotIn(label, self.words(self.profile(label)))
+
+    def test_custom_profile_labels_and_near_matches_stay_private(self):
+        for label in ("Zorblax Share Profile", "Persona Share App Store Personal", " Persona Share App Store"):
+            with self.subTest(label=label):
+                self.assertIn(label, self.generic_profile_sources(self.profile(label)))
+
+    def test_explicit_private_word_still_protects_a_public_profile_label(self):
+        label = "Persona Share App Store"
+        sources = self.generic_profile_sources(self.profile(label), label + "\n")
+        self.assertEqual(sources[label], ["private-words.txt"])
+        self.assertEqual(pc.problems(label, list(sources)), [label])
+
+    def test_public_profile_label_under_another_config_key_stays_private(self):
+        label = "Persona Share App Store"
+        config = self.profile(label)
+        config["account_label"] = label
+        self.assertEqual(self.generic_profile_sources(config)[label], ["config account_label"])
+        config["api_key"] = label
+        self.assertIn("config api_key", self.generic_profile_sources(config)[label])
+
+    def test_nested_profile_values_do_not_get_the_public_label_classification(self):
+        label = "Persona Share App Store"
+        config = {"app_store": {"provisioning_profiles": {"com.example.persona": {"name": label}}}}
+        self.assertIn(label, self.generic_profile_sources(config))
+
+    def test_profile_definition_parser_only_reads_literal_values(self):
+        source = '''def provisioning_profiles(cfg):
+    profiles = {"literal": "Published App Store", "dynamic": dangerous(), "formatted": f"{secret} App Store"}
+    return profiles
+'''
+        self.assertEqual(pc.profile_labels(source, "provisioning_profiles"), {"Published App Store"})
+        self.assertEqual(pc.profile_labels(source, "unrelated"), set())
+
+    def test_profile_fixture_parser_never_evaluates_formatted_fields(self):
+        source = '''def export_options(cfg):
+    plist = f"<plist><dict><key>provisioningProfiles</key><dict><key>{dangerous()}</key><string>Published Fixture Profile</string><key>dynamic</key><string>{secret} App Store</string></dict></dict></plist>"
+'''
+        self.assertEqual(pc.profile_labels(source, "export_options"), {"Published Fixture Profile"})
+
+    def test_unpublished_worktree_or_commit_cannot_approve_its_own_profile_label(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            script = root / "scripts/persona_config.py"
+            script.parent.mkdir()
+            script.write_text('def provisioning_profiles(cfg):\n    profiles = {"app": "Published Profile"}\n')
+
+            def git(*args):
+                return subprocess.run(["git", "-C", str(root), "-c", "core.hooksPath=/dev/null",
+                                       "-c", "commit.gpgsign=false", "-c", "user.name=Fixture",
+                                       "-c", "user.email=me@example.com", *args],
+                                      capture_output=True, check=True)
+
+            git("init", "-q")
+            git("add", "scripts/persona_config.py")
+            git("commit", "-qm", "Public fixture")
+            git("update-ref", "refs/remotes/origin/main", "HEAD")
+            script.write_text('def provisioning_profiles(cfg):\n    profiles = {"app": "Unpublished Profile"}\n')
+            try:
+                with patch.object(pc, "__file__", str(root / "scripts/privacy_check.py")):
+                    pc.public_profile_labels.cache_clear()
+                    self.assertEqual(pc.public_profile_labels(), frozenset({"Published Profile"}))
+                    self.assertIn("Unpublished Profile", self.words(self.profile("Unpublished Profile")))
+                    git("add", "scripts/persona_config.py")
+                    git("commit", "-qm", "Unpublished fixture change")
+                    pc.public_profile_labels.cache_clear()
+                    self.assertEqual(pc.public_profile_labels(), frozenset({"Published Profile"}))
+            finally:
+                pc.public_profile_labels.cache_clear()
+
+    def test_malformed_profile_definitions_do_not_waive_names(self):
+        self.assertEqual(pc.profile_labels("invalid syntax !", "provisioning_profiles"), set())
+        source = 'def export_options(cfg):\n    plist = "<plist><dict>broken"'
+        self.assertEqual(pc.profile_labels(source, "export_options"), set())
+        source = 'def export_options(cfg):\n    plist = "not a plist"'
+        self.assertEqual(pc.profile_labels(source, "export_options"), set())
+
+    def test_standalone_checker_without_public_definitions_waives_nothing(self):
+        with tempfile.TemporaryDirectory() as temp:
+            try:
+                pc.public_profile_labels.cache_clear()
+                with patch.object(pc, "__file__", str(Path(temp) / "scripts/privacy_check.py")):
+                    self.assertEqual(pc.public_profile_labels(), frozenset())
+            finally:
+                pc.public_profile_labels.cache_clear()
+
+    def test_the_waiver_hint_only_follows_a_hit_a_waiver_can_take_back(self):
+        config = self.machines(self.WORD, "Cellar")
+        config["lan_host"] = "attic.lan"
+        config["profile"] = "Zorb Share Prod"
+        self.assertEqual(self.scan(config, "Cellar\n")[2], {self.WORD})
+
+
 class NpmLockTests(unittest.TestCase):
     def test_public_lockfiles(self):
         for version in [1, 2, 3]:
@@ -471,6 +676,39 @@ class PrivacyCheckIntegrationTests(unittest.TestCase):
         self.assertNotIn("notes.md", output)
         self.assertNotIn("notexample", output)
 
+    def test_a_config_word_hit_names_its_key_and_a_waiver_clears_it(self):
+        word = "attic"  # a made-up machine id that is an ordinary word (#1065)
+        config = self.home / ".config/persona/config.json"
+        config.parent.mkdir(parents=True)
+        config.write_text(json.dumps({"machines": [{"id": word, "ssh": word}], "lan_host": PRIVATE_IP}))
+        (self.repo / "node.go").write_text('attic := os.Getenv("PERSONA_ATTIC") // the attic machine\n')
+        (self.repo / "hosts.md").write_text("The other machine is " + PRIVATE_IP + ".\n")
+        self.git("add", "node.go", "hosts.md")
+        message = self.repo / ".git/test-message"
+        message.write_text("Read the attic id from the environment\n")
+        result = self.scan("--message", str(message))
+        self.assertNotEqual(result.returncode, 0)
+        output = result.stdout + result.stderr
+        self.assertIn("node.go:1: private value (5 chars) from config machines.id, config machines.ssh", output)
+        self.assertIn("commit message:1: private value (5 chars) from config machines.id", output)
+        self.assertIn("hosts.md:1: private IP from config lan_host", output)
+        self.assertIn("!<word>", result.stderr)
+        self.assertNotIn(word, output.lower())
+        self.assertNotIn(PRIVATE_IP, output)
+        (self.home / ".config/persona/private-words.txt").write_text("!" + word + "\n!" + PRIVATE_IP + "\n")
+        result = self.scan("--message", str(message))
+        output = result.stdout + result.stderr
+        self.assertNotIn("node.go", output)
+        self.assertNotIn("commit message", output)
+        self.assertIn("hosts.md:1: private IP from config lan_host", output)
+        self.assertIn("private-words.txt:2:", result.stderr)
+        self.assertNotIn("!<word>", result.stderr)  # what is left (an address) no waiver can take back
+        self.assertNotIn(PRIVATE_IP, output)
+        (self.repo / "hosts.md").unlink()
+        self.git("rm", "-q", "--cached", "hosts.md")
+        result = self.scan("--message", str(message))
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
     def test_staged_unsafe_worktree_safe(self):
         self.write_lock(UNAPPROVED_URL)
         self.git("add", "web/package-lock.json")
@@ -662,7 +900,7 @@ class GitBatchTests(unittest.TestCase):
 
     def test_main_fails_closed_if_batch_read_fails(self):
         with patch.object(pc, "git_file_data", side_effect=ValueError("broken batch")), \
-                patch.object(pc, "terms", return_value=([], [])), patch.object(pc, "module_paths", return_value=None), \
+                patch.object(pc, "term_sources", return_value=({}, set(), set())), patch.object(pc, "module_paths", return_value=None), \
                 patch.object(pc, "git", return_value=b"one.txt\0"), patch.object(sys, "argv", ["privacy_check", "--staged"]):
             with self.assertRaisesRegex(SystemExit, "scan did not complete"):
                 pc.main()
