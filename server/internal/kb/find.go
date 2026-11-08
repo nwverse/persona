@@ -1,6 +1,8 @@
 package kb
 
 import (
+	"crypto/sha256"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -152,6 +154,7 @@ func (e *Engine) Find(query string, limit int) []Result {
 	if match == nil || limit <= 0 {
 		return nil
 	}
+	recording := e.Store.recordingSearchView()
 	ws := words(query)
 	// Files are looked at in parallel (the archive is ~25 MB); what each found is added in file order, so the lines
 	// kept for an entry are its profile's first, then the newest days'. The app searches as the user types, so a
@@ -183,7 +186,7 @@ func (e *Engine) Find(query string, limit int) []Result {
 					continue
 				}
 				fh := fileHits{key: kind + "/" + id}
-				c, st, ok := e.find.text(p, gen)
+				c, st, ok := e.searchText(p, gen, recording)
 				fh.stat = st
 				if ok && hasAll(c.lower, ws) {
 					for n, l := range strings.Split(c.raw, "\n") {
@@ -207,9 +210,15 @@ func (e *Engine) Find(query string, limit int) []Result {
 	}
 	known := e.find.entries(metas, func() map[string]Entry {
 		known := map[string]Entry{}
-		for _, k := range []string{KindProject, KindChat, KindPerson, KindDoc, KindMeeting, KindEvent, KindRecording} {
+		for _, k := range []string{KindProject, KindChat, KindPerson, KindDoc, KindMeeting, KindEvent} {
 			for _, en := range e.List(k, "") {
 				known[k+"/"+en.ID] = en
+			}
+		}
+		for id, files := range recording {
+			var r Recording
+			if raw := files["meta.json"]; raw != nil && json.Unmarshal(raw, &r) == nil {
+				known[KindRecording+"/"+id] = recordingEntry(&r)
 			}
 		}
 		return known
@@ -370,6 +379,10 @@ func (e *Engine) Matches(kind, id, query string, limit int) []Match {
 	if kind == KindRecording {
 		id, _ = RecordingID(id)
 	}
+	var recording map[string][]byte
+	if kind == KindRecording {
+		recording, _ = e.Store.recordingSnapshot(id)
+	}
 	match := matcher(query)
 	if match == nil {
 		return nil
@@ -377,7 +390,13 @@ func (e *Engine) Matches(kind, id, query string, limit int) []Match {
 	var out []Match
 	ws := words(query)
 	look := func(p string, msgs bool) {
-		raw, err := os.ReadFile(p)
+		var raw []byte
+		var err error
+		if kind == KindRecording && filepath.Base(p) != "summary.md" {
+			raw = recording[filepath.Base(p)]
+		} else {
+			raw, err = os.ReadFile(p)
+		}
 		if err != nil || !hasAll(fold(string(raw)), ws) {
 			return
 		}
@@ -490,9 +509,10 @@ const findSettle = 2 * time.Second
 
 // fileStat is what tells a file changed.
 type fileStat struct {
-	path string
-	mod  int64 // UnixNano
-	size int64
+	path    string
+	content [32]byte // accepted recording bytes can differ from physical files under a journal
+	mod     int64    // UnixNano
+	size    int64
 }
 
 func settling(st fileStat) bool { return time.Since(time.Unix(0, st.mod)) < findSettle }
@@ -567,6 +587,25 @@ func (c *findCache) begin() uint64 {
 	defer c.mu.Unlock()
 	c.gen++
 	return c.gen
+}
+
+// Recording text bypasses the disk cache: a journal may mask a newer physical
+// file without changing that file's stat. Other archive files keep their cache.
+func (e *Engine) searchText(p string, gen uint64, recording map[string]map[string][]byte) (*findText, fileStat, bool) {
+	rel, err := filepath.Rel(e.Store.Dir, p)
+	if err == nil {
+		parts := strings.Split(filepath.ToSlash(rel), "/")
+		if len(parts) == 3 && parts[0] == KindRecording && (parts[2] == "meta.json" || parts[2] == "transcript.md") {
+			raw := recording[parts[1]][parts[2]]
+			if raw == nil {
+				return nil, fileStat{}, false
+			}
+			st := fileStat{path: p, size: int64(len(raw)), content: sha256.Sum256(raw)}
+			text := string(raw)
+			return &findText{raw: text, lower: fold(text)}, st, true
+		}
+	}
+	return e.find.text(p, gen)
 }
 
 // text returns a file's text and its stat, from the cache while the file is unchanged.
