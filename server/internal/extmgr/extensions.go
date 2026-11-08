@@ -576,11 +576,12 @@ func (ps *extensions) apply(ctx context.Context, id string) {
 	old := ps.byID[id]
 	delete(ps.byID, id)
 	ps.mu.Unlock()
+	why := tokenStopReason(ps.reg.Get(id))
 	if ps.h != nil {
 		ps.h.pageDropExtension(id)
 		// Switched off, upgraded (maybe to fewer scopes), uninstalled or reconfigured: its token goes now, and a new
 		// one comes with its next start.
-		ps.h.extTokens.revoke(id)
+		ps.h.extTokens.revoke(id, why)
 	}
 	ps.forgetEgress(id) // the same for its proxy credential (extension_sandbox.go)
 	if old != nil {
@@ -597,7 +598,7 @@ func (ps *extensions) apply(ctx context.Context, id string) {
 	}
 	if ps.h != nil {
 		// Stop waits for the old start/initialize callbacks too: a token minted during shutdown must not survive.
-		ps.h.extTokens.revoke(id)
+		ps.h.extTokens.revoke(id, why)
 	}
 	p := ps.reg.Get(id)
 	if p == nil {
