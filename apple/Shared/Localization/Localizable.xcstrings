@@ -1,13 +1,37 @@
 {
-  "sourceLanguage" : "en",
-  "strings" : {
-    "" : {
-      "shouldTranslate" : false,
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : ""
+  "sourceLanguage": "en",
+  "strings": {
+    "Open Persona on iPhone to sync extension capabilities.": { "localizations": { "en": { "stringUnit": { "state": "translated", "value": "Open Persona on iPhone to sync extension capabilities." } }, "zh-Hans": { "stringUnit": { "state": "translated", "value": "在 iPhone 上打开 Persona 同步扩展能力。" } }, "ja": { "stringUnit": { "state": "translated", "value": "iPhone の Persona を開いて拡張機能の情報を同期してください。" } } } },
+    "Extension Widget": { "localizations": { "en": { "stringUnit": { "state": "translated", "value": "Extension Widget" } }, "zh-Hans": { "stringUnit": { "state": "translated", "value": "扩展小组件" } }, "ja": { "stringUnit": { "state": "translated", "value": "拡張ウィジェット" } } } },
+    "Widget": { "localizations": { "en": { "stringUnit": { "state": "translated", "value": "Widget" } }, "zh-Hans": { "stringUnit": { "state": "translated", "value": "小组件" } }, "ja": { "stringUnit": { "state": "translated", "value": "ウィジェット" } } } },
+    "Extension Action": { "localizations": { "en": { "stringUnit": { "state": "translated", "value": "Extension Action" } }, "zh-Hans": { "stringUnit": { "state": "translated", "value": "扩展操作" } }, "ja": { "stringUnit": { "state": "translated", "value": "拡張アクション" } } } },
+    "Run Extension Action": { "localizations": { "en": { "stringUnit": { "state": "translated", "value": "Run Extension Action" } }, "zh-Hans": { "stringUnit": { "state": "translated", "value": "运行扩展操作" } }, "ja": { "stringUnit": { "state": "translated", "value": "拡張アクションを実行" } } } },
+    "Action": { "localizations": { "en": { "stringUnit": { "state": "translated", "value": "Action" } }, "zh-Hans": { "stringUnit": { "state": "translated", "value": "操作" } }, "ja": { "stringUnit": { "state": "translated", "value": "アクション" } } } },
+    "Text": { "localizations": { "en": { "stringUnit": { "state": "translated", "value": "Text" } }, "zh-Hans": { "stringUnit": { "state": "translated", "value": "文本" } }, "ja": { "stringUnit": { "state": "translated", "value": "テキスト" } } } },
+    "Number": { "localizations": { "en": { "stringUnit": { "state": "translated", "value": "Number" } }, "zh-Hans": { "stringUnit": { "state": "translated", "value": "数值" } }, "ja": { "stringUnit": { "state": "translated", "value": "数値" } } } },
+    "Toggle": { "localizations": { "en": { "stringUnit": { "state": "translated", "value": "Toggle" } }, "zh-Hans": { "stringUnit": { "state": "translated", "value": "开关" } }, "ja": { "stringUnit": { "state": "translated", "value": "スイッチ" } } } },
+    "Choice": { "localizations": { "en": { "stringUnit": { "state": "translated", "value": "Choice" } }, "zh-Hans": { "stringUnit": { "state": "translated", "value": "选项" } }, "ja": { "stringUnit": { "state": "translated", "value": "選択肢" } } } },
+    "JSON Values": { "localizations": { "en": { "stringUnit": { "state": "translated", "value": "JSON Values" } }, "zh-Hans": { "stringUnit": { "state": "translated", "value": "JSON 参数值" } }, "ja": { "stringUnit": { "state": "translated", "value": "JSON パラメータ値" } } } },
+    "Run ${action}": { "localizations": { "en": { "stringUnit": { "state": "translated", "value": "Run ${action}" } }, "zh-Hans": { "stringUnit": { "state": "translated", "value": "运行 ${action}" } }, "ja": { "stringUnit": { "state": "translated", "value": "${action} を実行" } } } },
+    "Value": { "localizations": { "en": { "stringUnit": { "state": "translated", "value": "Value" } }, "zh-Hans": { "stringUnit": { "state": "translated", "value": "数值" } }, "ja": { "stringUnit": { "state": "translated", "value": "値" } } } },
+    "Done": { "localizations": { "en": { "stringUnit": { "state": "translated", "value": "Done" } }, "zh-Hans": { "stringUnit": { "state": "translated", "value": "完成" } }, "ja": { "stringUnit": { "state": "translated", "value": "完了" } } } },
+    "Show a read-only widget from a paired hub extension.": { "localizations": { "en": { "stringUnit": { "state": "translated", "value": "Show a read-only widget from a paired hub extension." } }, "zh-Hans": { "stringUnit": { "state": "translated", "value": "显示已配对 hub 上扩展提供的只读小组件。" } }, "ja": { "stringUnit": { "state": "translated", "value": "ペアリング済みハブの拡張から読み取り専用ウィジェットを表示します。" } } } },
+    "Choose an extension widget": { "localizations": { "en": { "stringUnit": { "state": "translated", "value": "Choose an extension widget" } }, "zh-Hans": { "stringUnit": { "state": "translated", "value": "选择扩展小组件" } }, "ja": { "stringUnit": { "state": "translated", "value": "拡張ウィジェットを選択" } } } },
+    "Cached content — open Persona to refresh": { "localizations": { "en": { "stringUnit": { "state": "translated", "value": "Cached content — open Persona to refresh" } }, "zh-Hans": { "stringUnit": { "state": "translated", "value": "缓存内容，请打开 Persona 刷新" } }, "ja": { "stringUnit": { "state": "translated", "value": "キャッシュ表示 — Persona を開いて更新" } } } },
+    "Open Persona to load this widget": { "localizations": { "en": { "stringUnit": { "state": "translated", "value": "Open Persona to load this widget" } }, "zh-Hans": { "stringUnit": { "state": "translated", "value": "打开 Persona 加载此小组件" } }, "ja": { "stringUnit": { "state": "translated", "value": "Persona を開いてウィジェットを読み込む" } } } },
+    "Run an action contributed by an extension on the selected hub.": { "localizations": { "en": { "stringUnit": { "state": "translated", "value": "Run an action contributed by an extension on the selected hub." } }, "zh-Hans": { "stringUnit": { "state": "translated", "value": "运行所选 hub 上扩展提供的操作。" } }, "ja": { "stringUnit": { "state": "translated", "value": "選択したハブの拡張が提供するアクションを実行します。" } } } },
+    "Extension action completed": { "localizations": { "en": { "stringUnit": { "state": "translated", "value": "Extension action completed" } }, "zh-Hans": { "stringUnit": { "state": "translated", "value": "扩展操作已完成" } }, "ja": { "stringUnit": { "state": "translated", "value": "拡張アクションが完了しました" } } } },
+    "Check the extension action's required values and JSON parameters.": { "localizations": { "en": { "stringUnit": { "state": "translated", "value": "Check the extension action's required values and JSON parameters." } }, "zh-Hans": { "stringUnit": { "state": "translated", "value": "请检查扩展操作的必填值和 JSON 参数。" } }, "ja": { "stringUnit": { "state": "translated", "value": "拡張アクションの必須値と JSON パラメータを確認してください。" } } } },
+    "This extension action is unavailable. Open Persona to sync the selected hub.": { "localizations": { "en": { "stringUnit": { "state": "translated", "value": "This extension action is unavailable. Open Persona to sync the selected hub." } }, "zh-Hans": { "stringUnit": { "state": "translated", "value": "此扩展操作不可用，请打开 Persona 同步所选 hub。" } }, "ja": { "stringUnit": { "state": "translated", "value": "この拡張アクションは利用できません。Persona を開いて選択したハブを同期してください。" } } } },
+    "This extension page is unavailable": { "localizations": { "en": { "stringUnit": { "state": "translated", "value": "This extension page is unavailable" } }, "zh-Hans": { "stringUnit": { "state": "translated", "value": "此扩展页面不可用" } }, "ja": { "stringUnit": { "state": "translated", "value": "この拡張ページは利用できません" } } } },
+    "Open Persona on iPhone to use extension controls": { "localizations": { "en": { "stringUnit": { "state": "translated", "value": "Open Persona on iPhone to use extension controls" } }, "zh-Hans": { "stringUnit": { "state": "translated", "value": "在 iPhone 上打开 Persona 使用扩展控件" } }, "ja": { "stringUnit": { "state": "translated", "value": "拡張の操作には iPhone の Persona を開いてください" } } } },
+    "": {
+      "shouldTranslate": false,
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": ""
           }
         },
         "ja" : {
