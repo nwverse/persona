@@ -91,8 +91,8 @@ func TestSwitchKeepsTheProgramTheHubRuns(t *testing.T) {
 	}
 }
 
-// With nothing serving (a crash loop's back-off) there is no program to go on with: the switch names the server
-// binary, this one when it is not persona-hub, as it did before the hub could run as persona-hub.
+// With nothing serving there is no program to go on with: the switch names the server binary, this one when it is not
+// persona-hub. A real edge only takes such a switch once a slot is up again; while it backs off it refuses any.
 func TestSwitchWithNothingServing(t *testing.T) {
 	self, err := os.Executable()
 	if err != nil {

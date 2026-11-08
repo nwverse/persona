@@ -71,8 +71,9 @@ func runHubSwitch(args []string) error {
 // slotProgram is the program the edge's active slot runs, what `hub switch` goes on with unless given another: a
 // switch never moves the hub from personad to persona-hub or back (docs/operations/hub-restart.md "Blue-green
 // switch"). A slot that went back to <program>.prev after a switch that failed runs that program. With nothing serving
-// (the edge backing off a slot that keeps failing) it is the server binary, as before the hub could run as
-// persona-hub: the way out of a crash loop names the build on disk.
+// it is the server binary. The edge refuses any switch while it backs off a failing slot, so this only reaches a switch
+// it takes once a slot is up again; on a hub that runs persona-hub that moves it to personad until its service
+// restarts, so give --binary there.
 func slotProgram(slot string) (string, error) {
 	if slot == "" {
 		return hub.ServerBinary()
