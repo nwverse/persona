@@ -12,6 +12,10 @@ IDs; join the persisted credential binding, and keep same-name registrations
 ambiguous instead of pruning or merging them. Minute-level, route-template counters
 with opaque IDs avoid logging every request or exposing payloads; label application
 bytes separately from compressed wire bytes and logical pushes separately from retries.
+A missing client header does not identify a platform: infer only bounded UA/header
+markers plus enrollment evidence, keep the inference basis, and separate diagnostic
+clients sharing a phone credential. Native-default App labels are not proof that a
+widget extension did not use the same UA. Never log raw UAs to solve attribution.
 
 Foreground suppression must cover the push-to-start branch as well as updates,
 without consuming the start episode before the phone goes to the background.
@@ -19,6 +23,20 @@ Preference refreshes should compare the affected device's projected activity sta
 a same-value retry or a notification-only setting must not force all devices to
 refresh. A metrics-only foreground broadcast must use the newest fleet snapshot,
 not the last APNs-flushed snapshot while ordinary updates are coalescing.
+
+## Push-to-start budgets belong to delivery, not episodes (#1662)
+
+An episode counter allows an empty/active loop to start an activity every time and
+forgets all spending on hub restart. Client `started_at` is activity age, not a
+server push budget; registration and token rotation must not clear spending. Keep
+an independent device-FK budget and atomically claim it in Postgres before dispatch,
+including across overlapping blue-green slots. A failed or ambiguous claim fails
+closed; a successful claim stays spent even if APNs fails or the process exits.
+The ten-minute rolling cooldown applies only to starts, never ordinary alerts or
+urgent activity updates. Defer a wake time, not a payload: at expiry read the latest
+fleet, preferences, foreground state and tokens, and recheck after a slow claim.
+Empty/done, an open phone or a fresh update token suppresses a queued start. Restart
+reconstructs its deadline from the durable budget and the current manager snapshot.
 
 ## A custom HTTPS dial must opt into HTTP/2 (#1620)
 

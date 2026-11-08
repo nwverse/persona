@@ -714,6 +714,12 @@ Two more from the same harness:
 - The scenarios' times are fixed (`2026-01-02T…`), and the app ties a sent bubble to its transcript line partly by time. Lines the hub writes during a case get the time they were written (`SyncHub.writtenNow`).
 - A failed message is placed before later ones by the whole second it was written (`ChatLines.placeFailed`). Two sends in a row in a test land in the same second, so the harness spaces sends more than a second apart, as typing does.
 
+## Simulator screenshots for an agent's live reply (2026-11-09, #1309)
+
+- `mock_hub.py` is one long module: `REVIEW` is the PR #42 review agent's session id near the top, and the `MOCK_REVIEW` block much later rebound it to a bool, so `/mock/agent_live` (MOCK_AGENT_LIVE) and the later fixtures that use the session id looked up `False` (the step answered with a 500 and a `StopIteration` in the mock's log). The flag is `GIT_REVIEW` now; give a mock flag a name of its own, and when a mock step fails, read the mock's log before the app's.
+- `xcrun simctl status_bar … --time` on Xcode 27.1 takes only an ISO date with fractional seconds: `"$(date +%H:%M)"` and `…T10:24:00+08:00` fail with "Invalid, non-ISO date/time string"; `"$(date -u +%Y-%m-%dT%H:%M:%S.000Z)"` works and shows the local time.
+- A notification permission dialog left by a launch without `-pairURL` stays over every later launch, also after the app is uninstalled. Restarting SpringBoard clears it without shutting the simulator down: `xcrun simctl spawn <udid> launchctl stop com.apple.SpringBoard`, wait a few seconds, then launch with `-pairURL` (or `personactl.py launch --hub`).
+
 ## A model made in a unit test starts with what the simulator last saved (2026-11-09, #1638, #1637)
 
 `AppModel()` restores the last Dev snapshot (machines, agents, cards; `Library/Caches/state/dev.json`) and the outbox when the simulator's keychain holds a pairing, which any mock-hub UI test run leaves behind. A unit test that reads everything the model holds (the watch summary, all agents) then counts those too: it passes on a brand-new simulator and on hosted CI and fails on a used one. In the sync scenarios, a snapshot of 145 sessions pushed the case's chat out of the 40 newest that `AgentSync` plans, so its stall check never ran. The model also writes its own snapshot and outbox back over the app's.

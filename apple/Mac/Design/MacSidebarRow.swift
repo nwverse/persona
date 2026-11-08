@@ -21,11 +21,11 @@ struct MacSidebarRow: View {
 
     var body: some View {
         Button(action: action) {
-            HStack(spacing: Theme.Space.l) {
+            HStack(spacing: Theme.Sidebar.gap) {
                 // The title says it (VoiceOver read the symbol's name too).
                 Image(systemName: icon).resizable().scaledToFit().foregroundStyle(Color.primary)
-                    .scaledFrame(width: Theme.Size.iconS, height: Theme.Size.iconS)
-                    .scaledFrame(width: Theme.Size.icon)
+                    .scaledFrame(width: Theme.Sidebar.glyph, height: Theme.Sidebar.glyph)
+                    .scaledFrame(width: Theme.Sidebar.glyphColumn)
                     .accessibilityHidden(true)
                 // One small gap between the title and its count (the outer spacing on each side of the spacer was
                 // 32 pt): a mail account's address in the inbox's filters keeps more of itself.
@@ -40,10 +40,11 @@ struct MacSidebarRow: View {
                 }
             }
             .padding(.horizontal, Theme.Space.m)
-            .scaledFrame(minHeight: Theme.Size.avatarL)
+            .padding(.vertical, Theme.Sidebar.rowPadding)
+            .scaledFrame(minHeight: Theme.Sidebar.row)
             .background {
                 if selected || hovering {
-                    RoundedRectangle(cornerRadius: Theme.Radius.card, style: .continuous)
+                    RoundedRectangle(cornerRadius: Theme.Sidebar.radius, style: .continuous)
                         .fill(selected ? Theme.Fill.macSelected : Theme.Fill.macHover)
                 }
             }
