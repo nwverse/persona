@@ -96,7 +96,7 @@ result() {
   ci_run "Inspect test results ($name)" 120 python3 "$CI_ROOT/scripts/ci/apple_result.py" "$OUTPUT/$name.xcresult" "$@"
 }
 
-if [ "$LANE" = all ] || [ "$LANE" = packages ]; then
+if [ "$LANE" = all ] || [ "$LANE" = ios ] || [ "$LANE" = packages ]; then
   ci_run 'PersonaKit unit tests' 900 xcrun swift test --package-path "$SOURCE/apple/Packages/PersonaKit" --scratch-path "$SPM/PersonaKit"
 fi
 if [ "$LANE" = all ] || [ "$LANE" = ios ]; then
@@ -184,6 +184,14 @@ if [ "$LANE" = all ] || [ "$LANE" = macos ]; then
   ci_run 'Unsigned macOS app and notification extension build' 1800 "${XCODE[@]}" -scheme PersonaMac \
     -destination 'generic/platform=macOS' -derivedDataPath "$OUTPUT/macos-build" \
     -disableAutomaticPackageResolution "${UNSIGNED[@]}" build
+  # The real unsigned build above keeps all shipping entitlements. A Mac ad-hoc
+  # test host cannot claim profile-authorized push or shared Keychain groups:
+  # AMFI rejects it before main, even when codesign --verify succeeds. Prepare
+  # only the disposable snapshot for offline execution; retain its sandbox,
+  # other permissions, hardened-runtime settings and ad-hoc signatures.
+  ci_run 'Prepare profile-free Mac offline test entitlements' 60 python3 "$CI_ROOT/scripts/ci/apple_entitlements.py" \
+    "$SOURCE/apple/Mac/Resources/PersonaMac.entitlements" \
+    "$SOURCE/apple/PersonaNotify/PersonaMacNotify.entitlements"
   printf '%s\n' 'apple-ci: excluded Mac integration suite: ExtensionStreamSnapshotTests (5 live extension/hub cases requiring PERSONA_STREAM_TEST_PAIR). Mac UI/screenshot tests are a separate lane.'
   ci_run 'macOS offline unit tests' 1800 "${XCODE[@]}" -scheme PersonaMac \
     -destination 'platform=macOS' -derivedDataPath "$OUTPUT/macos-tests" -parallel-testing-enabled NO \
