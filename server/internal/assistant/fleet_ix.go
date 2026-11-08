@@ -834,7 +834,9 @@ type answeredJustNow struct {
 	kept   proto.Resolution // as the history keeps it
 }
 
-func (e *answeredJustNow) Error() string { return fmt.Sprintf("interaction %s is %v", e.id, errNotPending) }
+func (e *answeredJustNow) Error() string {
+	return fmt.Sprintf("interaction %s is %v", e.id, errNotPending)
+}
 func (e *answeredJustNow) Unwrap() error { return errNotPending }
 
 // endStatus is how an answer ends its card in the history.
