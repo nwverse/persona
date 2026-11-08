@@ -24,6 +24,22 @@ import (
 	"github.com/nwverse/persona/server/internal/streams"
 )
 
+func TestExtensionIdentityRevisionSurvivesPostgresTimestampPrecision(t *testing.T) {
+	stamp := time.Date(2026, 11, 8, 12, 0, 0, 123456789, time.UTC)
+	before := &extension.Extension{Record: extension.Record{ID: "new-name", StorageID: "old-name", UpdatedAt: stamp, InstalledAt: stamp.Add(-time.Hour)}}
+	after := *before
+	after.Record.UpdatedAt = stamp.Truncate(time.Microsecond)
+	after.Record.InstalledAt = before.Record.InstalledAt.Truncate(time.Microsecond)
+	if extensionNodeIdentity(before) != extensionNodeIdentity(&after) {
+		t.Fatal("Postgres reload changed the node revision or installation generation")
+	}
+	legacy := *before
+	legacy.Record.StorageID = ""
+	if extensionNodeRevision(&legacy) != 0 {
+		t.Fatal("same-ID legacy wire gained an identity revision")
+	}
+}
+
 func TestPluginIdentityCapabilityBeforeAnyDestructivePhase(t *testing.T) {
 	ctx := context.Background()
 	h, _ := extensionTestHub(t)

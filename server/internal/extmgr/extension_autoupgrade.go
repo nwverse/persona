@@ -607,7 +607,9 @@ func (u *extensionUpgrades) view(ctx context.Context) upgradesView {
 	defer u.mu.Unlock()
 	v.Auto = u.settings.Auto == nil || *u.settings.Auto
 	v.Off = []string{}
-	for _, id := range u.settings.Off { v.Off = append(v.Off, u.h.extensions.reg.CanonicalID(id)) }
+	for _, id := range u.settings.Off {
+		v.Off = append(v.Off, u.h.extensions.reg.CanonicalID(id))
+	}
 	v.Last = map[string]ExtensionUpgradeNote{}
 	for id, n := range u.settings.Last {
 		v.Last[u.h.extensions.reg.CanonicalID(id)] = n

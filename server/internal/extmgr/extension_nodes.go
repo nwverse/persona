@@ -309,20 +309,26 @@ func (ps *extensions) nodeInit(ctx context.Context, p *extension.Extension) (jso
 	return json.Marshal(params)
 }
 
+// Identity timestamps must match Postgres's microsecond precision before the
+// first node bind, or a database reload appears to move the revision backwards.
+func extensionIdentityTimestamp(stamp time.Time) int64 {
+	return stamp.Truncate(time.Microsecond).UnixNano()
+}
+
 func extensionNodeRevision(p *extension.Extension) int64 {
 	if p.Record.StorageID == "" {
 		return 0
 	}
-	return p.Record.UpdatedAt.UnixNano()
+	return extensionIdentityTimestamp(p.Record.UpdatedAt)
 }
 
 func extensionNodeIdentity(p *extension.Extension) proto.PluginNodeIdentity {
-	return proto.PluginNodeIdentity{ID: p.Record.ID, StorageID: p.Record.StorageKey(), Revision: extensionNodeRevision(p), InstalledAt: p.Record.InstalledAt.UnixNano()}
+	return proto.PluginNodeIdentity{ID: p.Record.ID, StorageID: p.Record.StorageKey(), Revision: extensionNodeRevision(p), InstalledAt: extensionIdentityTimestamp(p.Record.InstalledAt)}
 }
 
 func (ps *extensions) nodeIdentityCurrent(id string, revision int64) bool {
 	p := ps.reg.GetExact(id)
-	return p != nil && (extensionNodeRevision(p) == revision || p.Record.StorageID == "" && revision == p.Record.UpdatedAt.UnixNano())
+	return p != nil && (extensionNodeRevision(p) == revision || p.Record.StorageID == "" && revision == extensionIdentityTimestamp(p.Record.UpdatedAt))
 }
 
 func commitNodeIdentities(ctx context.Context, m *Machine, slots []proto.PluginNodeIdentity) error {
