@@ -166,12 +166,12 @@ func (s *Spec) attached() bool { return s.Attached && s.Command == "" }
 // Link is how an attached plugin is connected.
 type Link struct {
 	Online bool
-	// Since is when it came online or went offline (when it was last needed, until it first came online).
+	// Since is when it came online, went offline, or was needed while it was stopped.
 	Since time.Time
 	// Why it is offline, also while it is still starting; "" online.
 	Why string
-	// Said is the version it gave when it last answered initialize, whether or not the hub took it; "" once a try
-	// fails before that.
+	// Said is the version it gave when it last answered initialize as this plugin (its protocol and id), whether or not
+	// the hub took it; "" once a try fails before that.
 	Said string
 }
 
@@ -207,7 +207,8 @@ type Proc struct {
 	lastUse    time.Time
 	strikes    int
 	kill       func() // ends the current run (a restart); nil between runs
-	// An attached plugin's Link; linkKind is what failed last (failureKind), so one that stays away is not logged each try.
+	// An attached plugin's Link; linkKind is what failed last (failureKind; a refusal's whole text), so one that stays
+	// away is not logged each try.
 	linkSince time.Time
 	linkWhy   string
 	linkKind  string
@@ -580,6 +581,15 @@ func (p *Proc) loop(ctx context.Context) {
 			return
 		case <-time.After(again):
 		}
+		if p.spec.attached() {
+			// Nothing needs it any more: stopped, not offline, so when it is needed again it gets its grace anew
+			// (runOnce) and a call waits for it instead of failing on the error it was left in.
+			p.mu.Lock()
+			if !p.wantedLocked() {
+				p.setLocked(StateStopped, "")
+			}
+			p.mu.Unlock()
+		}
 	}
 }
 
@@ -588,6 +598,9 @@ func (p *Proc) loop(ctx context.Context) {
 // changes nothing: no state flip, no log line, no exit told to the Observer.
 func (p *Proc) offline(err error, wasUp bool, again time.Duration) {
 	why, kind, refusal := err.Error(), failureKind(err), errors.As(err, new(refused))
+	if refusal { // its details are the answer (another version is other news); the backoff bounds the lines
+		kind = why
+	}
 	p.mu.Lock()
 	now := time.Now()
 	if wasUp {
@@ -866,8 +879,12 @@ func (p *Proc) initialize(ctx context.Context, s *session) error {
 		}
 		return i18n.Err("extension-status.not_ready", i18n.Args{"err": err.Error()})
 	}
+	said := ""
+	if res.Protocol == extension.Protocol && (res.ID == params.Extension.ID || params.Extension.ID == "") {
+		said = res.Version // another program's version says nothing about this one
+	}
 	p.mu.Lock()
-	p.said = res.Version
+	p.said = said
 	p.mu.Unlock()
 	if res.Protocol != extension.Protocol {
 		return refused{i18n.Err("extension-status.protocol_version", i18n.Args{"current": res.Protocol, "required": extension.Protocol})}

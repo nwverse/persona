@@ -26,6 +26,14 @@ type far struct {
 }
 
 func serveFar(t *testing.T, sock string, mute bool) *far {
+	if mute {
+		return serveFarAs(t, sock, nil)
+	}
+	return serveFarAs(t, sock, demo)
+}
+
+// serveFarAs is serveFar with the program each connection gets (nil: closed at once).
+func serveFarAs(t *testing.T, sock string, program func() serve.Program) *far {
 	t.Helper()
 	ln, err := net.Listen("unix", sock)
 	if err != nil {
@@ -39,14 +47,14 @@ func serveFar(t *testing.T, sock string, mute bool) *far {
 				return
 			}
 			f.accepts.Add(1)
-			if mute {
+			if program == nil {
 				c.Close()
 				continue
 			}
 			f.mu.Lock()
 			f.conns = append(f.conns, c)
 			f.mu.Unlock()
-			go func() { defer c.Close(); _ = serve.Serve(context.Background(), c, c, demo()) }()
+			go func() { defer c.Close(); _ = serve.Serve(context.Background(), c, c, program()) }()
 		}
 	}()
 	t.Cleanup(f.stop)
@@ -84,6 +92,17 @@ func timings(t *testing.T, retry, grace time.Duration) {
 	r, g := RemoteRetry, OfflineGrace
 	RemoteRetry, OfflineGrace = retry, grace
 	t.Cleanup(func() { RemoteRetry, OfflineGrace = r, g })
+}
+
+func waitFor(t *testing.T, what string, ok func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for !ok() {
+		if time.Now().After(deadline) {
+			t.Fatal("never: " + what)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
 }
 
 // hubLines are the host's own lines about the plugin.
@@ -129,7 +148,8 @@ func TestAttachedTriedEveryRemoteRetry(t *testing.T) {
 }
 
 // Offline past the grace it is an error, and stays one (no flip back to starting at each try); once it answers it is
-// running and online; losing it again is starting, then an error.
+// running and online; losing it again, after it was up for longer than the grace, is starting, then an error a grace
+// after the loss.
 func TestAttachedGraceThenErrorThenBack(t *testing.T) {
 	timings(t, 20*time.Millisecond, 300*time.Millisecond)
 	sock := filepath.Join(farDir(t), "far.sock")
@@ -167,12 +187,20 @@ func TestAttachedGraceThenErrorThenBack(t *testing.T) {
 		t.Fatalf("the host's lines %q", lines)
 	}
 
+	time.Sleep(OfflineGrace + 100*time.Millisecond) // a program restarted after a long time up
+	lost := time.Now()
 	f.stop()
-	waitState(t, p, StateStarting)
+	waitFor(t, "lost", func() bool { st, _ := p.Status(); return st != StateRunning })
+	if st, why := p.Status(); st != StateStarting {
+		t.Fatalf("lost after a time up: %s (%s), want starting within the grace", st, why)
+	}
 	if l := p.Link(); l.Online || l.Why == "" {
 		t.Fatalf("link offline %+v", l)
 	}
 	waitState(t, p, StateError)
+	if took := time.Since(lost); took < OfflineGrace {
+		t.Fatalf("an error %s after the loss, before the grace", took)
+	}
 	_, runs, _ := o.snapshot()
 	var starts, exits int
 	for _, r := range runs {
@@ -214,6 +242,70 @@ func TestAttachedGraceCountsFromWhenNeeded(t *testing.T) {
 	}
 }
 
+// A call while it is offline within the grace waits for it, and works once the program is back.
+func TestAttachedCallWaitsWithinGrace(t *testing.T) {
+	timings(t, 20*time.Millisecond, time.Hour)
+	sock := filepath.Join(farDir(t), "far.sock")
+	f := serveFar(t, sock, false)
+	p := Start(context.Background(), attachedSpec(t, sock, nil))
+	defer p.Stop()
+	waitState(t, p, StateRunning)
+	f.stop()
+	waitState(t, p, StateStarting)
+	var n int
+	done := make(chan error, 1)
+	go func() { done <- p.Call(context.Background(), "demo.pid", struct{}{}, &n) }()
+	select {
+	case err := <-done:
+		t.Fatalf("the call did not wait for the program: %v", err)
+	case <-time.After(200 * time.Millisecond): // ten tries
+	}
+	serveFar(t, sock, false)
+	select {
+	case err := <-done:
+		if err != nil || n != os.Getpid() {
+			t.Fatalf("%v (%d)", err, n)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("the call never came back")
+	}
+}
+
+// One started by calls that failed and then went unused is stopped, not left in error: needed again, it gets its grace
+// anew while the program is still away, and a call waits for it and works once the program is back.
+func TestAttachedIdleAfterFailing(t *testing.T) {
+	timings(t, 20*time.Millisecond, 300*time.Millisecond)
+	sock := filepath.Join(farDir(t), "far.sock")
+	s := attachedSpec(t, sock, nil)
+	s.Startup, s.OnCall, s.Idle = false, true, 200*time.Millisecond
+	p := Start(context.Background(), s)
+	defer p.Stop()
+	var n int
+	if err := p.Call(context.Background(), "demo.pid", struct{}{}, &n); err == nil {
+		t.Fatal("a call with nothing there worked")
+	}
+	waitState(t, p, StateStopped) // unused past Idle
+
+	needed := time.Now()
+	release := p.Hold()
+	time.Sleep(100 * time.Millisecond) // a few tries, the program still away
+	if st, why := p.Status(); st != StateStarting {
+		release()
+		t.Fatalf("needed again: %s (%s), want starting within a new grace", st, why)
+	}
+	waitState(t, p, StateError)
+	if took := time.Since(needed); took < OfflineGrace {
+		t.Fatalf("an error %s after it was needed again, before the grace", took)
+	}
+	release()
+	waitState(t, p, StateStopped)
+
+	serveFar(t, sock, false)
+	if err := p.Call(context.Background(), "demo.pid", struct{}{}, &n); err != nil || n != os.Getpid() {
+		t.Fatalf("needed once the program was back: %v (%d)", err, n)
+	}
+}
+
 // One that answers as another version is refused: an error at once, whatever the grace, tried again with the backoff,
 // and Link says what it said.
 func TestAttachedOtherVersionIsRefused(t *testing.T) {
@@ -244,6 +336,64 @@ func TestAttachedOtherVersionIsRefused(t *testing.T) {
 	}
 	if lines := hubLines(o); len(lines) != 1 {
 		t.Fatalf("the host's lines %q: want one", lines)
+	}
+}
+
+// One that answers as another program (another id) is refused for that, and the version it says is not this plugin's.
+func TestAttachedOtherProgramSaysNoVersion(t *testing.T) {
+	timings(t, 10*time.Millisecond, time.Hour)
+	sock := filepath.Join(farDir(t), "far.sock")
+	serveFar(t, sock, false)
+	s := attachedSpec(t, sock, nil)
+	init := s.Init
+	s.Init = func(ctx context.Context) (params extension.InitializeParams, err error) {
+		params, err = init(ctx)
+		params.Extension.ID, params.Extension.Version = "other", "2.0.0"
+		return params, err
+	}
+	p := Start(context.Background(), s)
+	defer p.Stop()
+	waitState(t, p, StateError)
+	if _, why := p.Status(); !strings.Contains(why, `"other"`) {
+		t.Fatal(why)
+	}
+	if l := p.Link(); l.Said != "" {
+		t.Fatalf("link %+v", l)
+	}
+}
+
+// A refusal whose details change is news: the reason is the new one, told once.
+func TestAttachedChangedRefusalIsTold(t *testing.T) {
+	timings(t, 10*time.Millisecond, time.Hour)
+	last := RestartLast
+	RestartLast = 100 * time.Millisecond
+	t.Cleanup(func() { RestartLast = last })
+	sock := filepath.Join(farDir(t), "far.sock")
+	var says atomic.Value
+	says.Store("1.1.0")
+	f := serveFarAs(t, sock, func() serve.Program { d := demo(); d.Version = says.Load().(string); return d })
+	o := &observed{}
+	p := Start(context.Background(), attachedSpec(t, sock, o)) // approved: 1.0.0
+	defer p.Stop()
+	waitState(t, p, StateError)
+	tries := f.accepts.Load()
+	waitFor(t, "more tries", func() bool { return f.accepts.Load() >= tries+2 })
+	if lines := hubLines(o); len(lines) != 1 {
+		t.Fatalf("the host's lines %q: want one", lines)
+	}
+
+	says.Store("1.2.0") // the program on the socket is now another version
+	waitFor(t, "the new answer told", func() bool { return len(hubLines(o)) >= 2 })
+	tries = f.accepts.Load()
+	waitFor(t, "more tries", func() bool { return f.accepts.Load() >= tries+2 })
+	if lines := hubLines(o); len(lines) != 2 || !strings.Contains(lines[1], "1.2.0") {
+		t.Fatalf("the host's lines %q: want the new answer once", lines)
+	}
+	if _, why := p.Status(); !strings.Contains(why, "1.2.0") {
+		t.Fatal(why)
+	}
+	if l := p.Link(); l.Said != "1.2.0" || !strings.Contains(l.Why, "1.2.0") {
+		t.Fatalf("link %+v", l)
 	}
 }
 

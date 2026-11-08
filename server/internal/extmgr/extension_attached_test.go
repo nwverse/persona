@@ -18,7 +18,7 @@ import (
 	"github.com/nwverse/persona/server/internal/i18n"
 )
 
-// notesProgram is a generic extension running on its own on a unix socket, as the version it is started with.
+// notesProgram is a generic extension running on its own on a unix socket, as the id and version it is started with.
 type notesProgram struct {
 	ln    net.Listener
 	mu    sync.Mutex
@@ -26,6 +26,11 @@ type notesProgram struct {
 }
 
 func startNotes(t *testing.T, sock, version string) *notesProgram {
+	t.Helper()
+	return startProgram(t, sock, "example-notes", version)
+}
+
+func startProgram(t *testing.T, sock, id, version string) *notesProgram {
 	t.Helper()
 	ln, err := net.Listen("unix", sock)
 	if err != nil {
@@ -43,7 +48,7 @@ func startNotes(t *testing.T, sock, version string) *notesProgram {
 			n.mu.Unlock()
 			go func() {
 				defer c.Close()
-				_ = serve.Serve(context.Background(), c, c, serve.Program{ID: "example-notes", Version: version})
+				_ = serve.Serve(context.Background(), c, c, serve.Program{ID: id, Version: version})
 			}()
 		}
 	}()
@@ -69,7 +74,7 @@ func shortHostTimings(t *testing.T) {
 
 // An extension installed from remote: is attached: its view says whether it is online and since when, why it is not
 // (also while it is still starting, within the grace), and the version the program says it is when that was not
-// approved. Any other extension has no attached.
+// approved (never another extension's); none of that while nothing needs it. Any other extension has no attached.
 func TestAttachedExtensionView(t *testing.T) {
 	shortHostTimings(t)
 	h, _, _ := marketHub(t)
@@ -132,10 +137,40 @@ func TestAttachedExtensionView(t *testing.T) {
 	}
 
 	notes.stop()
-	startNotes(t, sock, "1.0.0")
+	notes = startNotes(t, sock, "1.0.0")
 	v = waitStatus(host.StateRunning)
 	if a := v.Attached; a == nil || !a.Online || a.Version != "" {
 		t.Fatalf("back: %+v", a)
+	}
+
+	notes.stop()
+	startProgram(t, sock, "example-other", "1.1.0") // another extension's program on its socket
+	waitLong(t, "refused as another program", func() bool {
+		v = view()
+		return v.Status == host.StateError && strings.Contains(v.Error, "example-other")
+	})
+	if a := v.Attached; a == nil || a.Online || a.Version != "" || strings.Contains(v.Error, "personad extension upgrade") {
+		t.Fatalf("another program: %q (%+v)", v.Error, a)
+	}
+
+	later, err := extension.Parse([]byte(fmt.Sprintf(`{"manifest_version":1,"id":"example-later","name":"Example later","version":"1.0.0","engines":{"extension_protocol":1},"runtime":{"command":{%q:"bin/later"}},"activation_events":["on_call"],"contributes":{"providers":[{"id":"later-provider","name":"Example","base_url":"https://provider.example.com"}]}}`, runtime.GOOS+"-"+runtime.GOARCH)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	reg.RemoteManifest = func(context.Context, extension.Remote) (*extension.Manifest, error) { return later, nil }
+	if pv, err = reg.Preview(ctx, "remote:rpc="+filepath.Join(dir, "later.sock"), ""); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = reg.Install(ctx, pv.ID, pv.Digest, "test"); err != nil {
+		t.Fatal(err)
+	}
+	var lv ExtensionView
+	waitLong(t, "the on-call one stopped", func() bool {
+		lv = h.extensions.view(ctx, reg.Get("example-later"))
+		return lv.Status == host.StateStopped
+	})
+	if a := lv.Attached; a == nil || a.Online || !a.Since.IsZero() || a.Error != "" || a.Version != "" {
+		t.Fatalf("nothing needs it: %+v", a)
 	}
 
 	pkg := declarativePackage(t, `{"manifest_version":1,"id":"plain","name":"Plain","version":"1.0.0","contributes":{"providers":[{"id":"plain-provider","name":"Example","base_url":"https://provider.example.com"}]}}`)
