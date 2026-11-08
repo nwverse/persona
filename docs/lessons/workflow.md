@@ -70,6 +70,10 @@ Pitfalls, odd behavior and the trade-offs made at the time (formerly in `CLAUDE.
 
 Node 24 removed `--experimental-default-type=module`; a portable SDK driver that works on Node 22 can therefore fail before running any assertions (#1163). Give freshly compiled temporary `.js` output its own `package.json` with `"type": "module"` instead of depending on an experimental CLI flag or on the caller's package scope. Run both the UI and transport suites on the supported Node versions, retain the temporary-directory cleanup, and fix the official SDK before resynchronizing downstream copies. Changes under `sdk/ts`, including its test scripts, also require regenerating the embedded `sdk/go/bundle/sdk.tar.gz` with `python3 scripts/gen/sdk_bundle.py`; the portable suites alone do not exercise that distribution check.
 
+## Guard SDK synchronization cleanup at the deletion site
+
+SDK synchronization intentionally replaces only the selected SDK subtree (#1471). Keep the destination guard on each recursive deletion (`"${dest:?}/sdk/go"` and `"${dest:?}/sdk/ts"`), even when the entrypoint already rejects an empty destination. Verify that selective synchronization preserves both the unselected SDK and unrelated destination files, and records the source checkout's commit in `sdk/VERSION`. This makes cleanup ownership explicit without changing the official copy contents or release versions.
+
 ## Hosted CI path aggregation
 
 - Native workflow-level PR path filters leave individually required checks pending when no run is created. Keep one always-triggered
