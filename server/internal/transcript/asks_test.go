@@ -54,7 +54,7 @@ func TestAskOfClips(t *testing.T) {
 
 // The sayings are matched on every session of every list a manager publishes, and most replies hold none of them: each
 // pattern keeps its gate (lazyre.NewGated), which turns such a reply away before the regexp engine walks every
-// alternative at every position (BenchmarkAskOf: about 110 to 5 microseconds for a reply that asks nothing). A
+// alternative at every position (BenchmarkAskOf, a reply that asks nothing: about 72 to 5 microseconds). A
 // saying that may start with anything (a class, a repeat, (?i)) would drop the gate.
 func TestAskPatternsGated(t *testing.T) {
 	for name, re := range map[string]interface{ Gated() bool }{"askPhrases": askPhrases, "askNone": askNone, "askInline": askInline} {
