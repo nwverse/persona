@@ -788,7 +788,7 @@ personad extension pack [<dir>] [--platforms linux-amd64,…] [--out <dir>] [--s
 ## Extension marketplace
 
 A repository or website publishes an **index** `persona-extensions.json` that declares all the extensions it offers. Once the hub registers this marketplace, the app, web, admin UI and command line can all browse, search,
-install, upgrade and uninstall its extensions. Only one official marketplace is preset (see "Official marketplace" below); every other marketplace is registered by the user. Code is in `server/internal/extension/market.go` (index, download, verification) and `server/internal/extmgr/extension_market.go` (registration, catalog, endpoints).
+install, upgrade and uninstall its extensions. Only one official marketplace is preset (see "Official marketplace" below); every other marketplace is registered by the user. Code is in `server/internal/extension/market.go` (index, download, verification) and `server/internal/extmgr/extension_market*.go` (registration, catalog, endpoints).
 
 **Marketplace address**:
 
@@ -873,7 +873,7 @@ Older hubs have none of this: they preview synchronously as before and wait for 
 - **Pinned signature**: every official alias uses the compiled-in key, including manual re-registration and cached catalogs. Unknown saved owner pins remain unchanged and isolated; there is no trust endpoint. Release integration fixes the official key id at `3cce0f471911a1cf` without rotating it for embedded signatures. A shipped update can explicitly list recognized retired official pins in `extension.Official.PreviousSigningKeys`: only exact matches are replaced, across all official aliases. Removed markets stay removed, unsigned registrations and unknown pins are not migrated, and a failed write leaves loading retryable. The retained old envelope or legacy detached payload cannot authorize installation until a complete new envelope verifies against the new pin.
 - **Order**: the official marketplace comes first in `markets` and in the catalog, the rest by registration time (all ordering is done on the hub; all three clients show the hub's order). The web (settings and `/admin`) and Android show an **Official** badge based on `official: true`; iOS / macOS do not yet (separate task).
 - **Name** (#5017): the official marketplace is always displayed as **Official extensions** (Japanese: 公式拡張機能, the shipped Japanese label), not the index's `name` (which names the publisher).
-  The hub fills `markets[].name` and the catalog's `market_name` in the owner's interface language (`marketName`, `extension_market.go`); when the web, Android, iOS / macOS see `official: true`, they localize it again,
+  The hub fills `markets[].name` and the catalog's `market_name` in the owner's interface language (`marketName`, `extension_market_catalog.go`); when the web, Android, iOS / macOS see `official: true`, they localize it again,
   so it also works with old hubs. Only display changes: spec, index, signature, and market id remain unchanged; `personad extension market list` uses this name too.
   In iOS / macOS Settings › Extensions, Extension marketplace is above installed extensions (also above extension cards on Mac).
 - Users' own marketplaces, such as ones on a company network, stay as they are.
