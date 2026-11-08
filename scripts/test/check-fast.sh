@@ -46,7 +46,8 @@
 #
 # Exit codes: 0 all checks passed, skipped or not needed; 1 one or more checks FAILED; 124 no failure but at least
 # one check TIMEOUT (a timeout is reported, not silently treated as success; run the full suite when that happens).
-# Ctrl-C, SIGTERM and SIGHUP stop every running check first, keep the log directory, and exit 130, 143 or 129.
+# Ctrl-C, SIGTERM and SIGHUP, to the script or to its whole process group, stop every running check first, keep the
+# log directory, and exit 130, 143 or 129.
 # A missing optional toolchain (node < 22, go, bun) skips only its checks in diff mode; in --all mode a missing
 # core tool (node >= 22, go, python3) is a failure.
 #
@@ -130,11 +131,15 @@ descendants() {
 # on_signal stops every check on Ctrl-C, TERM or HUP. A signal to this script alone never reaches them: the job
 # subshells run in the background (a non-interactive shell starts them ignoring SIGINT) and GNU timeout moves each
 # command into its own process group, so without this they keep running, reparented to init, writing into $WORK.
+# A signal to the whole process group (a closed terminal or tmux pane, kill -- -PGID) reaches the job subshells and
+# tee as well, so they ignore TERM and HUP too (launch_all); otherwise they would die first and orphan the checks.
 # The whole tree is frozen first (SIGSTOP, repeated until no new process appears) so nothing forks the next step or
-# escapes to init while it is being collected; then every process gets TERM and CONT (timeout forwards the TERM to
-# its process group), and whatever is still alive after timeout's own -k grace gets KILL.
+# escapes to init while it is being collected. The processes in this script's own process group (subshells, tee,
+# short helpers) then get KILL while still frozen; every other one is a check in the group timeout made for it and
+# gets TERM and CONT (timeout forwards the TERM to its group), and whatever is still alive after timeout's own -k
+# grace gets KILL.
 on_signal() {  # on_signal <signal name> <exit code>
-  local _sig=$1 _code=$2 _all=" " _new _p _pass _list _left
+  local _sig=$1 _code=$2 _all=" " _new _p _g _pass _list _left _own _groups
   trap '' INT TERM HUP
   for _pass in 1 2 3 4 5 6 7 8 9 10; do
     _new=0
@@ -146,12 +151,25 @@ on_signal() {  # on_signal <signal name> <exit code>
     done
     [ "$_new" -eq 0 ] && break
   done
+  # One ps for the process group of each frozen process; if it fails, every process takes the TERM path below.
+  _own=$(ps -o pgid= -p $$ 2>/dev/null | tr -d ' ')
+  _list=$(echo $_all | tr ' ' ',')
+  _groups=$(ps -o pid= -o pgid= -p "$_list" 2>/dev/null)
+  # bash reports each job subshell it reaps after a KILL ("line N: <pid> Killed ( ... )"); keep that noise off stderr.
+  exec 3>&2 2>/dev/null
+  if [ -n "$_own" ] && [ -n "$_groups" ]; then
+    _all=" "
+    while read -r _p _g; do
+      [ -n "$_p" ] || continue
+      if [ "$_g" = "$_own" ]; then kill -KILL "$_p" 2>/dev/null; else _all="$_all$_p "; fi
+    done < <(printf '%s\n' "$_groups")
+  fi
   for _p in $_all; do kill -TERM "$_p" 2>/dev/null; kill -CONT "$_p" 2>/dev/null; done
   _list=$(echo $_all | tr ' ' ',')
   if [ -n "$_list" ]; then
     _pass=0
     while [ "$_pass" -lt 70 ]; do  # up to ~7s: timeout's -k 5s grace plus a margin
-      # A finished job subshell stays a zombie (Z) until wait reaps it; count only live processes.
+      # A process that has exited stays a zombie (Z) until its parent reaps it; count only live processes.
       _left=$(ps -o stat= -p "$_list" 2>/dev/null | grep -vc '^Z')
       [ "${_left:-0}" -eq 0 ] && break
       sleep 0.1
@@ -159,7 +177,8 @@ on_signal() {  # on_signal <signal name> <exit code>
     done
     for _p in $_all; do kill -KILL "$_p" 2>/dev/null; done
   fi
-  wait 2>/dev/null
+  wait
+  exec 2>&3 3>&-
   KEEP_WORK=1
   echo >&2
   echo "check-fast: interrupted (SIG$_sig); stopped the running checks; logs in $WORK" >&2
@@ -239,6 +258,9 @@ launch_all() {
   local _i
   for _i in "${!JOB_NAME[@]}"; do
     (
+      # A TERM or HUP to the whole process group must not end the subshell (or the tee its steps start) before
+      # on_signal has frozen the checks under it; on_signal KILLs them itself (see there).
+      trap '' TERM HUP
       JOB_STATUS=${JOB_STATUS[$_i]}
       JOB_I=$_i
       SECONDS=0

@@ -435,7 +435,7 @@ class CheckFastSignalTests(unittest.TestCase):
                 left.append(line.strip())
         return left
 
-    def interrupt(self, sig, code):
+    def interrupt(self, sig, code, group=False):
         pid_file = self.repo / "scripts/privacy_check.py.pids"
         # An absolute script path puts the repo into the job subshells' command lines; TMPDIR puts it into tee's.
         # start_new_session keeps a stray signal off the test runner.
@@ -450,10 +450,16 @@ class CheckFastSignalTests(unittest.TestCase):
                 self.assertLess(time.monotonic(), deadline, "the stub check never started")
                 time.sleep(0.1)
             pids = {int(p) for p in pid_file.read_text().split()}
-            proc.send_signal(sig)
+            if group:
+                # A terminal's Ctrl-C or hangup, kill -- -PGID and runners that time out signal the whole process
+                # group: the job subshells and tee get the signal too, not just the script.
+                os.killpg(proc.pid, sig)
+            else:
+                proc.send_signal(sig)
             out, _ = proc.communicate(timeout=15)
             self.assertEqual(code, proc.returncode, out)
             self.assertIn("check-fast: interrupted", out)
+            self.assertNotIn("Killed", out)  # bash's report of each job subshell it KILLed stays off the output
             left = self.survivors(pids)
             deadline = time.monotonic() + 5
             while left and time.monotonic() < deadline:
@@ -480,6 +486,16 @@ class CheckFastSignalTests(unittest.TestCase):
 
     def test_sighup_stops_the_running_checks(self):
         self.interrupt(signal.SIGHUP, 129)
+
+    def test_sigint_to_the_process_group_stops_the_running_checks(self):
+        self.interrupt(signal.SIGINT, 130, group=True)
+
+    def test_sigterm_to_the_process_group_stops_the_running_checks(self):
+        self.interrupt(signal.SIGTERM, 143, group=True)
+
+    def test_sighup_to_the_process_group_stops_the_running_checks(self):
+        # Closing a terminal or a tmux pane sends SIGHUP to the whole foreground process group.
+        self.interrupt(signal.SIGHUP, 129, group=True)
 
 
 def web_lane_inputs():
