@@ -328,7 +328,7 @@
     "name": "interactions_list",
     "description": "待处理列表使用与事件相同的交互类型。",
     "source": [
-      "server/internal/hub/http.go: Hub.routes",
+      "server/internal/hub/elicitation.go: Hub.interactionRoutes",
       "apple/Shared/Models.swift: Interaction"
     ],
     "derived": true,

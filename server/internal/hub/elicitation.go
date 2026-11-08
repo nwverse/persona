@@ -1,8 +1,11 @@
 package hub
 
 import (
+	"cmp"
 	"net/http"
+	"slices"
 
+	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
@@ -73,4 +76,15 @@ func (h *Hub) sendPendingInteractions(c *client, elicitationOnly bool) {
 		}
 		c.sendJSON(map[string]any{"type": "interaction", "interaction": ix})
 	}
+}
+
+// interactionRoutes list the pending cards the request may see.
+func (h *Hub) interactionRoutes(api *http.ServeMux) {
+	api.HandleFunc("GET /api/v1/interactions", func(w http.ResponseWriter, r *http.Request) {
+		ixs := visibleInteractions(h.pendingInteractions(), h.requestHasElicitation(r))
+		if em := extensionManager(r); em != "" { // an extension's token: its manager's cards only
+			ixs = slices.DeleteFunc(ixs, func(ix proto.Interaction) bool { return cmp.Or(ix.Manager, assistantwire.AssistantID) != em })
+		}
+		writeJSON(w, map[string]any{"interactions": h.withMuted(ixs)})
+	})
 }
