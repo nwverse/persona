@@ -13,6 +13,11 @@ ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)
 
 
 class SDKBundle(unittest.TestCase):
+    def test_sync_cleanup_targets_guard_the_destination(self):
+        with open(os.path.join(ROOT, "scripts", "gen", "sync-sdk.sh")) as script:
+            cleanup = [line.strip() for line in script if line.strip().startswith("rm -rf ")]
+        self.assertEqual(cleanup, ['rm -rf "${dest:?}/sdk/go"', 'rm -rf "${dest:?}/sdk/ts"'])
+
     def test_bundle_is_up_to_date(self):
         r = subprocess.run([sys.executable, os.path.join(ROOT, "scripts", "gen", "sdk_bundle.py"), "--check"],
                            capture_output=True, text=True)
@@ -27,12 +32,23 @@ class SDKBundle(unittest.TestCase):
                       "sdk/ts/package-lock.json", "sdk/ts/tsconfig.ui.json", "sdk/ts/tsconfig.negative.json",
                       "sdk/ts/scripts/check-portable.ts", "sdk/ts/scripts/portable-ui.mjs",
                       "sdk/ts/scripts/check-negative-types.ts", "sdk/ts/typechecks/native.tsx",
+                      "sdk/ts/scripts/check-source-bundle.mjs", "sdk/ts/scripts/source-authoring-worker.mjs",
+                      "sdk/ts/scripts/source-authoring-tests.mjs", "sdk/ts/README.md",
                       "sdk/ts/typechecks/negative.tsx", "sdk/ts/fixtures/Manifest.custom-contributions.json",
                       "sdk/ts/fixtures/UIStreamDelta.operations.json"]:
                 self.assertTrue(os.path.exists(os.path.join(dest, f)), f)
             self.assertFalse(os.path.exists(os.path.join(dest, "sdk/go/bundle")), "the bundle is personad's, not an extension's")
             for name in ["node_modules", "dist", "bin", ".git"]:
                 self.assertFalse(os.path.exists(os.path.join(dest, "sdk/ts", name)), name)
+            for relative in ["sdk/ts/README.md", "sdk/ts/scripts/check-source-bundle.mjs",
+                             "sdk/ts/scripts/source-authoring-worker.mjs", "sdk/ts/scripts/source-authoring-tests.mjs"]:
+                with open(os.path.join(ROOT, relative), "rb") as original, \
+                        open(os.path.join(dest, relative), "rb") as copied, \
+                        tarfile.open(os.path.join(ROOT, "sdk/go/bundle/sdk.tar.gz")) as bundle:
+                    expected = original.read()
+                    self.assertEqual(expected, copied.read(), relative)
+                    with bundle.extractfile(relative.removeprefix("sdk/")) as packed:
+                        self.assertEqual(expected, packed.read(), relative)
             for folder in ["scripts", "typechecks"]:
                 source = os.path.join(ROOT, "sdk/ts", folder)
                 for top, _, files in os.walk(source):
@@ -59,6 +75,12 @@ class SDKBundle(unittest.TestCase):
                         self.assertEqual(packed.read(), expected, name)
 
     def test_selective_copy_preserves_the_other_sdk(self):
+        git_env = os.environ.copy()
+        for key in ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_OBJECT_DIRECTORY",
+                    "GIT_ALTERNATE_OBJECT_DIRECTORIES", "GIT_COMMON_DIR"):
+            git_env.pop(key, None)
+        commit = subprocess.check_output(["git", "-C", ROOT, "rev-parse", "--short", "HEAD"],
+                                         env=git_env, text=True, timeout=30).strip()
         for selected, preserved in [("go", "ts"), ("ts", "go")]:
             with self.subTest(selected=selected), tempfile.TemporaryDirectory() as dest:
                 other = os.path.join(dest, "sdk", preserved)
@@ -66,12 +88,19 @@ class SDKBundle(unittest.TestCase):
                 marker = os.path.join(other, "keep.txt")
                 with open(marker, "w") as f:
                     f.write("Unselected SDK fixture")
+                neighbor = os.path.join(dest, "unrelated.txt")
+                with open(neighbor, "w") as f:
+                    f.write("Unrelated extension fixture")
                 r = subprocess.run(["sh", os.path.join(ROOT, "scripts", "gen", "sync-sdk.sh"), dest, selected],
-                                   capture_output=True, text=True, timeout=30)
+                                   env=git_env, capture_output=True, text=True, timeout=30)
                 self.assertEqual(r.returncode, 0, r.stderr)
                 with open(marker) as f:
                     self.assertEqual(f.read(), "Unselected SDK fixture")
+                with open(neighbor) as f:
+                    self.assertEqual(f.read(), "Unrelated extension fixture")
                 self.assertTrue(os.path.isfile(os.path.join(dest, "sdk", "VERSION")))
+                with open(os.path.join(dest, "sdk", "VERSION")) as f:
+                    self.assertEqual(f.readline().strip(), "persona " + commit)
                 if selected == "ts":
                     self.assertTrue(os.path.isfile(os.path.join(dest, "sdk/ts/scripts/check-portable.ts")))
                 else:

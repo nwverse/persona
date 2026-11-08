@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"net/http"
 	"path"
-	"regexp"
 	"slices"
 	"sort"
 	"strings"
@@ -16,6 +15,7 @@ import (
 
 	"github.com/nwverse/persona/server/internal/apierr"
 	"github.com/nwverse/persona/server/internal/i18n"
+	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/prompts"
 	"github.com/nwverse/persona/server/internal/proto"
 )
@@ -175,7 +175,7 @@ func (s *Service) archiveRoutes() {
 	}
 }
 
-var sessionIDRe = regexp.MustCompile(`^[A-Za-z0-9._-]{1,128}$`)
+var sessionIDRe = lazyre.New(`^[A-Za-z0-9._-]{1,128}$`)
 
 func validSessionID(id string) bool { return sessionIDRe.MatchString(id) }
 
@@ -354,7 +354,7 @@ func (s *Service) queuedRelays() (map[string][]string, bool) {
 				out[id] = append(out[id], msg.FromTitle+"的通知")
 				continue
 			}
-			if msg.Tool == superviseTool { // the tasks to follow up (supervise.go)
+			if msg.Tool == superviseTool { // the tasks to follow up (supervise_digest.go)
 				out[id] = append(out[id], "督办消息")
 				continue
 			}
@@ -375,7 +375,7 @@ func (s *Service) deliverRelay(ctx context.Context, machine, to string, msg rela
 		return err
 	}
 	if msg.Tool == superviseTool {
-		s.holdPushes(ctx, to) // its answer is not pushed unless it pushes (supervise.go)
+		s.holdPushes(ctx, to) // its answer is not pushed unless it pushes (supervise_digest.go)
 		return nil
 	}
 	if msg.Tool == noticeTool {

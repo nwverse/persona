@@ -17,13 +17,16 @@ import (
 	"io/fs"
 	"reflect"
 	"strings"
+	"sync"
 	"text/template"
 )
 
 //go:embed agents assistant bot channel inbox kb tools shared mcp voice todo
 var files embed.FS
 
-var tmpl = parse()
+// tmpl is parsed on first use: a short-lived process that writes no prompt (a hook, #1308) does not pay for parsing
+// every template when it starts. The golden tests parse them all, so a broken one still fails there.
+var tmpl = sync.OnceValue(parse)
 
 func parse() *template.Template {
 	root := template.New("").Option("missingkey=error").Funcs(funcs)
@@ -45,7 +48,7 @@ func parse() *template.Template {
 // this package: it panics rather than hand a model half a prompt.
 func render(name string, data any) string {
 	var b strings.Builder
-	if err := tmpl.ExecuteTemplate(&b, name, data); err != nil {
+	if err := tmpl().ExecuteTemplate(&b, name, data); err != nil {
 		panic(fmt.Sprintf("prompts: %s: %v", name, err))
 	}
 	return b.String()
@@ -54,7 +57,7 @@ func render(name string, data any) string {
 // Names lists every template (for tests).
 func Names() []string {
 	var out []string
-	for _, t := range tmpl.Templates() {
+	for _, t := range tmpl().Templates() {
 		if t.Name() != "" {
 			out = append(out, t.Name())
 		}

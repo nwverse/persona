@@ -12,7 +12,6 @@ import (
 	"net/http/httputil"
 	"os"
 	"path/filepath"
-	"regexp"
 	"runtime"
 	"slices"
 	"strings"
@@ -29,6 +28,7 @@ import (
 	"github.com/nwverse/persona/server/internal/extwire"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/identity"
+	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/rpc"
 	wechat "github.com/nwverse/persona/server/internal/wechat/spec"
 )
@@ -105,10 +105,13 @@ const (
 	extensionIncompatible = "incompatible"
 )
 
-var extensionIDPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]{0,31}$`)
+var extensionIDPattern = lazyre.New(`^[a-z0-9][a-z0-9_-]{0,31}$`)
 
 // hubPlugin is one plugin as the hub runs it now.
 type hubExtension struct {
+	contributionsMu sync.Mutex
+	contributions   map[string][]extension.ExportedContribution
+
 	id     string
 	kind   string
 	socket string // its HTTP socket, when it serves HTTP
@@ -356,6 +359,9 @@ func (ps *extensions) view(ctx context.Context, p *extension.Extension) Extensio
 
 // get is the running state of plugin id (nil when none).
 func (ps *extensions) get(id string) *hubExtension {
+	if ps.reg != nil {
+		id = ps.reg.CanonicalID(id)
+	}
 	ps.mu.Lock()
 	defer ps.mu.Unlock()
 	return ps.byID[id]
@@ -469,6 +475,13 @@ func (ps *extensions) changed(c extension.Change) {
 	if c.Kind == "config" {
 		ps.settingsMoved(c.ID) // before the restart: the old address is refused from now on
 	}
+	if c.Old != nil && c.Old.Record.ID != c.ID {
+		// Retire the old public identity synchronously before opening the same data slot.
+		// This is not an uninstall: connector data and upgrade preferences survive.
+		ps.apply(ctx, c.Old.Record.ID)
+		ps.forgetAuth(c.Old.Record.ID)
+		ps.nodes.drop(ps.root, c.Old.Record.ID, "")
+	}
 	ps.apply(ctx, c.ID)
 	ps.forgetAuth(c.ID) // another version, removed, switched, set up again: ask again
 	switch c.Kind {
@@ -521,10 +534,13 @@ func (ps *extensions) changed(c extension.Change) {
 			ps.h.forgetConnector(ctx, id)
 		}
 	}
-	if c.Kind == "removed" && ps.h != nil && ps.reg.Get(c.ID) == nil {
-		ps.h.extensionUpgrades().forget(ctx, c.ID) // installed again later, it starts afresh (extension_autoupgrade.go)
+	if c.Kind == "removed" && c.Old != nil && ps.h != nil && ps.reg.Get(c.ID) == nil {
+		if c.Old.Record.StorageKey() != c.ID {
+			ps.forgetSandbox(ctx, c.Old.Record.StorageKey())
+		}
+		ps.h.extensionUpgrades().forget(ctx, c.Old.Record.StorageKey()) // installed again later, it starts afresh (extension_autoupgrade.go)
 	}
-	if c.Kind == "upgraded" && c.Old != nil {
+	if (c.Kind == "upgraded" || c.Kind == "renamed") && c.Old != nil {
 		from := c.Old.Record.Version
 		to := ""
 		if p := ps.reg.Get(c.ID); p != nil {
@@ -576,11 +592,12 @@ func (ps *extensions) apply(ctx context.Context, id string) {
 	old := ps.byID[id]
 	delete(ps.byID, id)
 	ps.mu.Unlock()
+	why := tokenStopReason(ps.reg.GetExact(id))
 	if ps.h != nil {
 		ps.h.pageDropExtension(id)
 		// Switched off, upgraded (maybe to fewer scopes), uninstalled or reconfigured: its token goes now, and a new
 		// one comes with its next start.
-		ps.h.extTokens.revoke(id)
+		ps.h.extTokens.revoke(id, why)
 	}
 	ps.forgetEgress(id) // the same for its proxy credential (extension_sandbox.go)
 	if old != nil {
@@ -597,14 +614,20 @@ func (ps *extensions) apply(ctx context.Context, id string) {
 	}
 	if ps.h != nil {
 		// Stop waits for the old start/initialize callbacks too: a token minted during shutdown must not survive.
-		ps.h.extTokens.revoke(id)
+		ps.h.extTokens.revoke(id, why)
 	}
-	p := ps.reg.Get(id)
+	p := ps.reg.GetExact(id)
 	if p == nil {
-		ps.forgetSandbox(ctx, id)
+		// An alias still owns this slot; only a genuine removal forgets its preferences.
+		if ps.reg.Get(id) == nil {
+			ps.forgetSandbox(ctx, id)
+		}
 		return
 	}
 	hp := &hubExtension{id: id, kind: p.Manifest.Kind(), stats: ps.stats.of(id)}
+	if p.Manifest.Exports != nil {
+		hp.contributions = ps.reg.ContributionsToContext(ctx, id)
+	}
 	if c, ok := p.Legacy.(ExtensionConfig); ok {
 		hp.kind = c.Kind
 	}
@@ -759,7 +782,7 @@ func (ps *extensions) spec(ctx context.Context, p *extension.Extension, hp *hubE
 // specOf is spec with only the old names of the extension's variables (PERSONA_PLUGIN_*).
 func (ps *extensions) specOf(ctx context.Context, p *extension.Extension, hp *hubExtension) (host.Spec, error) {
 	if ps.reg != nil {
-		if snapshot := ps.reg.Snapshot(p.Record.ID); snapshot != nil {
+		if snapshot := ps.reg.SnapshotExact(p.Record.ID); snapshot != nil {
 			p = snapshot
 		}
 	}
@@ -860,7 +883,7 @@ func (ps *extensions) specOf(ctx context.Context, p *extension.Extension, hp *hu
 			s.Env = append(s.Env, k+"="+v)
 		}
 		if rt.HTTP {
-			hp.socket = filepath.Join(ps.root, id+".sock")
+			hp.socket = filepath.Join(ps.root, p.Record.StorageKey()+".sock")
 			s.HTTP, s.Socket = true, hp.socket
 			s.Env = append(s.Env, "PERSONA_PLUGIN_SOCKET="+hp.socket)
 		}
@@ -937,7 +960,10 @@ func (ps *extensions) specOf(ctx context.Context, p *extension.Extension, hp *hu
 			}
 		}
 		if m.Exports != nil {
+			hp.contributionsMu.Lock()
 			params.ContributionsToMe = ps.reg.ContributionsToContext(ctx, id)
+			hp.contributions = params.ContributionsToMe
+			hp.contributionsMu.Unlock()
 		}
 		return params, nil
 	}
@@ -961,6 +987,9 @@ func (ps *extensions) specOf(ctx context.Context, p *extension.Extension, hp *hu
 	}
 	byID := map[string]*proc.Conn{}
 	s.Handle = func(ctx context.Context, method string, params json.RawMessage) (any, error) {
+		if current := ps.reg.SnapshotExact(id); current == nil || current.Record.Version != p.Record.Version || !current.Record.UpdatedAt.Equal(p.Record.UpdatedAt) {
+			return nil, &rpc.Error{Code: extension.CodePermissionDenied, Message: "retired extension runtime"}
+		}
 		switch method {
 		case "kb.list", "kb.get", "kb.day", "kb.search", "kb.update", "kb.owner", "kb.recent":
 			return ps.extensionKBCall(ctx, id, method, params)
@@ -999,6 +1028,9 @@ func (ps *extensions) specOf(ctx context.Context, p *extension.Extension, hp *hu
 		return nil, &rpc.Error{Code: extension.CodeUnknownMethod, Message: "unknown method " + method}
 	}
 	s.OnEvent = func(event string, params json.RawMessage) {
+		if current := ps.reg.SnapshotExact(id); current == nil || current.Record.Version != p.Record.Version || !current.Record.UpdatedAt.Equal(p.Record.UpdatedAt) {
+			return // A retired run cannot publish through an owner alias or replace newer state.
+		}
 		if event == "ui.page.snapshot" && ps.h != nil && hp.proc != nil {
 			ps.h.pageSnapshot(id, hp.proc, params)
 			return

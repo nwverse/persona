@@ -14,7 +14,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"regexp"
 	"runtime"
 	"strings"
 	"sync"
@@ -24,6 +23,7 @@ import (
 	"github.com/nwverse/persona/server/internal/assistantskills"
 	"github.com/nwverse/persona/server/internal/host"
 	"github.com/nwverse/persona/server/internal/i18n"
+	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/nodeproto"
 	"github.com/nwverse/persona/server/internal/nodeupdate"
 	"github.com/nwverse/persona/server/internal/proto"
@@ -53,7 +53,7 @@ type Node struct {
 	sock   os.FileInfo
 
 	// claudeStart, claudeReady: when set, how long a start waits for the shell to run claude, then for claude's
-	// input box, in place of claudeStartWait and claudeReadyWait (tests; control.go).
+	// input box, in place of claudeStartWait and claudeReadyWait (tests; claudeready.go).
 	claudeStart, claudeReady time.Duration
 
 	// doctorAt replaces the places node.doctor looks at (tests; doctor_rpc.go).
@@ -87,11 +87,11 @@ type Node struct {
 	fsw            fsWatcher // the folders the web panels have open (fswatch.go)
 
 	mu      sync.Mutex
-	titleMu sync.Mutex // orders the custom-title lines renames write (control.go retitle)
+	titleMu sync.Mutex // orders the custom-title lines renames write (rename.go retitle)
 	state   *stateFile
 	files   map[string]*transcript.File // session id -> parsed transcript
 	paths   map[string]string           // session id -> transcript path
-	pathsAt map[string]time.Time        // when a path not told by a hook was last chosen (transcriptPath)
+	pathsAt map[string]time.Time        // when a path was last reported or chosen (transcriptPath looks again after 30 s)
 	watches map[string]*watch
 	// waiting: watches of sessions with no transcript yet (watchFor), so session.unwatch finds them (#5389).
 	waiting map[string]*watch
@@ -106,7 +106,7 @@ type Node struct {
 	layouts   map[string]layout          // host kind -> space / slot names from its last snapshot
 	shellTabs *shellTabs                 // the sweep's memory; nil: the process's own (shelltabs.go)
 	procs     map[string]*assistantProc  // headless assistant conversations (assistant.go)
-	titles    map[string]string          // session id -> title given before its transcript existed (control.go retitle)
+	titles    map[string]string          // session id -> title given before its transcript existed (rename.go retitle)
 	spare     *assistantProc             // warm process waiting for the next new conversation
 	akeys     map[string]*assistantProc  // the key a Codex conversation's MCP server reports until its thread exists
 	lastList  string                     // serialized last sessions.changed payload
@@ -323,12 +323,7 @@ func (n *Node) Serve(ctx context.Context, r io.Reader, w io.Writer) error {
 		adopted = n.keeper.adopt(n)
 	}
 	n.startState(ctx, adopted)
-	ln, err := n.listenHookSocket(ctx)
-	if err != nil {
-		n.logger.Printf("hook socket: %v", err)
-	} else {
-		defer ln.Close()
-	}
+	// The runtimes before the hook socket: its MCP requests read n.runtimes, which attach sets (clicall.go mcpAssistantOf).
 	if rh := n.runtimeHost; rh != nil { // a resident node's: runtimes stay connected across hub connections
 		rh.attach(n)
 		defer rh.detach(n)
@@ -336,6 +331,12 @@ func (n *Node) Serve(ctx context.Context, r io.Reader, w io.Writer) error {
 		n.logger.Printf("runtime socket: %v", err)
 	} else {
 		defer rh.detach(n)
+	}
+	ln, err := n.listenHookSocket(ctx)
+	if err != nil {
+		n.logger.Printf("hook socket: %v", err)
+	} else {
+		defer ln.Close()
 	}
 	go n.startWhenConfigured(ctx) // polling and the engine's events, once the hub said which engine (engine.go)
 	go n.warmTranscripts(ctx)
@@ -461,6 +462,8 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 		return n.doctor(ctx, params, false)
 	case "node.doctor.fix": // the same path as `node doctor --fix`: Persona's own generated files only
 		return n.doctor(ctx, params, true)
+	case proto.MethodSecretRun: // the password card's commands (secretrun.go); its params never reach the decoding below
+		return n.secretRun(ctx, params)
 	}
 	if strings.HasPrefix(method, "plugin.node.") { // plugins' programs on this computer (plugins.go)
 		return n.handlePlugins(ctx, method, params)
@@ -1175,6 +1178,8 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 		return map[string]any{"settings": list}, err
 	case "file.upload.begin", "file.upload.chunk", "file.upload.end", "file.upload.abort":
 		return n.uploadCall(method, params)
+	case "file.rename", "file.move", "file.trash", "file.restore":
+		return n.fileEditCall(method, params)
 	case "health.reports.list", "health.reports.delete":
 		return n.healthReportsCall(method, params)
 	case "file.chunk":
@@ -1478,9 +1483,9 @@ func parseClaudeVersion(out string) string {
 }
 
 // terminalEscapes are OSC (ESC ] … BEL or ESC \\, e.g. iTerm2's shell integration) and CSI (colors) sequences.
-var terminalEscapes = regexp.MustCompile(`\x1b\][^\x07\x1b]*(\x07|\x1b\\)|\x1b\[[0-9;?]*[A-Za-z]`)
+var terminalEscapes = lazyre.New(`\x1b\][^\x07\x1b]*(\x07|\x1b\\)|\x1b\[[0-9;?]*[A-Za-z]`)
 
-var claudeVersionLine = regexp.MustCompile(`^\s*v?(\d+\.\d+\.\d+\S*)\s*(\(Claude Code\))?\s*$`)
+var claudeVersionLine = lazyre.New(`^\s*v?(\d+\.\d+\.\d+\S*)\s*(\(Claude Code\))?\s*$`)
 
 // interactiveShell is the shell a launcher runs in interactively, so its rc file defines the launcher function:
 // loginShellProgram. On Windows that is Git Bash, never a bare bash, which is WSL there (a claude handed to WSL found

@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"net/http"
-	"regexp"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -12,6 +11,7 @@ import (
 	"github.com/nwverse/persona/server/internal/ai"
 	"github.com/nwverse/persona/server/internal/apierr"
 	"github.com/nwverse/persona/server/internal/db"
+	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/prompts"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/transcript"
@@ -46,8 +46,8 @@ type taskDoneSignals struct {
 }
 
 var (
-	mergedWords  = regexp.MustCompile(`(?i)\bmerged\b|\bsquash(ed)?\b|已合并|合并了|已合入|合入了|自行合并`)
-	buildNumbers = regexp.MustCompile(`(?i)testflight[^\n]{0,40}?\d{3,}|构建号?\s*[:：#]?\s*\d{3,}|\bbuild\s*#?\s*\d{3,}`)
+	mergedWords  = lazyre.New(`(?i)\bmerged\b|\bsquash(ed)?\b|已合并|合并了|已合入|合入了|自行合并`)
+	buildNumbers = lazyre.New(`(?i)testflight[^\n]{0,40}?\d{3,}|构建号?\s*[:：#]?\s*\d{3,}|\bbuild\s*#?\s*\d{3,}`)
 )
 
 func doneSignals(replies []prompts.TaskDoneReply) taskDoneSignals {
@@ -162,7 +162,7 @@ func turnExchange(items []proto.Item) (ask, answer string) {
 }
 
 // userStoppedNotice is the notice the transcript reader puts where the user stopped a turn (Claude Code's "[Request
-// interrupted by user]", Codex's turn_aborted; transcript.go, codex.go).
+// interrupted by user]", Codex's turn_aborted; transcript/user_text.go, codex.go).
 const userStoppedNotice = transcript.InterruptedNotice
 
 // silentTurn: a turn the node could read (it has items, at least the prompt) in which the agent neither replied nor

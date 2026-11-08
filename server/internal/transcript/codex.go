@@ -5,12 +5,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/url"
-	"regexp"
 	"sort"
 	"strings"
 	"sync/atomic"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
@@ -377,7 +377,7 @@ var LocalMachine atomic.Value
 
 // The Codex app's directive for a thread it just created (its sidebar shows a card for it); in Persona a link that
 // opens that thread's chat (persona://session/<machine>/<session>, the in-chat link the apps navigate by).
-var codexCreatedThreadRe = regexp.MustCompile(`::created-thread\{threadId="([0-9a-fA-F-]+)"\}`)
+var codexCreatedThreadRe = lazyre.New(`::created-thread\{threadId="([0-9a-fA-F-]+)"\}`)
 
 func codexThreadLinks(s string) string {
 	machine, _ := LocalMachine.Load().(string)
@@ -392,7 +392,7 @@ func codexThreadLinks(s string) string {
 
 var (
 	// Ambient state the Codex app attaches to a message (open browser tabs and such), not something the user said.
-	codexAmbientRe = regexp.MustCompile(`(?s)<in-app-browser-context[^>]*>.*?</in-app-browser-context>`)
+	codexAmbientRe = lazyre.New(`(?s)<in-app-browser-context[^>]*>.*?</in-app-browser-context>`)
 )
 
 // codexUserText cleans what Codex records as the user's message: ambient context (and Persona's) goes, and the answer to a question
