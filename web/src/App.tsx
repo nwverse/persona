@@ -1,3 +1,4 @@
+// Temporary post-merge Web CI budget verification; do not merge.
 import { Component, Suspense, type ReactNode, useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import { api, errorText, getToken, handleUnauthorized, setToken } from "./lib/api";
 import { pair, takeToken } from "./lib/auth";
