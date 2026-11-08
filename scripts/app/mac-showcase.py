@@ -41,7 +41,8 @@ def scenes(names=None, snapshots=SNAPSHOTS):
     for name in selected:
         data = files[name].read_bytes()
         view = json.loads(data)
-        result.append({"name": name, "title": view.get("title") or name, "bottom": name in BOTTOM_PAGES})
+        result.append({"name": name, "title": view.get("title") or name, "bottom": name in BOTTOM_PAGES,
+                       "review": view.get("review") is not None})
         hashes[name] = hashlib.sha256(data).hexdigest()
     return result, hashes
 

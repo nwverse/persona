@@ -29,8 +29,13 @@ class ShowcasePlanTests(unittest.TestCase):
             (root / "a.json").write_text('{"title":"A","sections":[]}')
             (root / "b.json").write_text('{"sections":[]}')
             scenes, hashes = RUNNER.scenes(["b", "a"], snapshots=root)
-            self.assertEqual(scenes, [{"name": "b", "title": "b", "bottom": False}, {"name": "a", "title": "A", "bottom": False}])
+            self.assertEqual(scenes, [{"name": "b", "title": "b", "bottom": False, "review": False},
+                                      {"name": "a", "title": "A", "bottom": False, "review": False}])
             self.assertEqual(set(hashes), {"a", "b"})
+
+    def test_root_review_controls_are_required_by_the_capture_plan(self):
+        scenes, _ = RUNNER.scenes(["code-review-v5", "code-review", "button"])
+        self.assertEqual([scene["review"] for scene in scenes], [True, False, False])
 
     def test_long_pages_also_request_bottom_captures(self):
         scenes, _ = RUNNER.scenes()

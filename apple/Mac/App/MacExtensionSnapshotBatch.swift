@@ -32,6 +32,7 @@ import SwiftUI
         var name: String
         var title: String
         var bottom: Bool = false
+        var review: Bool?
     }
 
     private struct Capture: Encodable {
@@ -85,7 +86,7 @@ import SwiftUI
                     try await clearPage()
                     nativePage = "showcase/" + scene.name
                     MacShellState.shared.pluginPage = nativePage
-                    let window = try await readyWindow(title: scene.title, diagnostic: output.appending(path: "failed-\(scene.name)-\(appearance).png"), requiresNative: plan.requiresNative == true)
+                    let window = try await readyWindow(title: scene.title, diagnostic: output.appending(path: "failed-\(scene.name)-\(appearance).png"), requiresNative: plan.requiresNative == true, requiresReview: scene.review == true)
                     let nativeRevision = nativeVersion.map { "stream:\($0)" }
                     let url = output.appending(path: "mac-showcase-\(scene.name)-\(appearance).png")
                     guard MacSnapshot.capture(to: url, window: window) else { throw Failure.capture }
@@ -138,7 +139,7 @@ import SwiftUI
         throw Failure.notReady
     }
 
-    private static func readyWindow(title: String, diagnostic: URL, requiresNative: Bool) async throws -> NSWindow {
+    private static func readyWindow(title: String, diagnostic: URL, requiresNative: Bool, requiresReview: Bool) async throws -> NSWindow {
         let deadline = ContinuousClock.now.advanced(by: .seconds(20))
         var lastWindow: NSWindow?
         var lastEntries: [MacSnapshot.AccessibilityEntry] = []
@@ -160,6 +161,7 @@ import SwiftUI
                 if entries.contains(where: { $0.identifier == "extension-ui-ready" }),
                    !entries.contains(where: { $0.identifier == "extension-ui-waiting" }),
                    (!requiresNative || native),
+                   (!requiresReview || entries.contains(where: { $0.identifier == "extension-review-bar" })),
                    entries.contains(where: { $0.label == title }) {
                     try await Task.sleep(for: .milliseconds(600))
                     content.layoutSubtreeIfNeeded(); content.displayIfNeeded()
