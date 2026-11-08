@@ -621,3 +621,32 @@ func TestInboxNewerFilingCommitSupersedesOlderPendingWrite(t *testing.T) {
 		t.Fatalf("the older failed row rewound the committed filing: %s / %s, %v", stateOf(h, &row), stateOf(h, it), err)
 	}
 }
+
+func TestInboxFilingPreservesHandlingChangedBeforeSave(t *testing.T) {
+	for _, fail := range []bool{false, true} {
+		t.Run(fmt.Sprint("fail=", fail), func(t *testing.T) {
+			h, st := newBulkFailHub(t)
+			it := filingItem(h, "item")
+			filingConversation(h, it, "old-conversation")
+			h.inbox.mu.Lock()
+			w := h.inbox.beginFiling(it, time.Now(), "user")
+			h.inbox.file(it, w.now, w.why)
+			w.close = true
+			h.inbox.settleFiling(w)
+			// A newer result lands after the request's action, before its row snapshot can acquire saving.
+			it.Agent = &InboxAgent{State: AgentDrafted, MachineID: "server", SessionID: "new-conversation", Draft: "New draft", Wake: true}
+			it.Suggestion = &InboxSuggestion{Version: 8, Kind: SuggestReply, Text: "New draft", At: time.Now().UTC()}
+			it.Handling = &InboxHandling{Owner: HandlingOwner, State: HandlingLooking, MachineID: "server", SessionID: "new-conversation"}
+			h.inbox.mu.Unlock()
+			st.failAll = fail
+			if failed := h.saveInboxFilings(context.Background(), []*inboxFiling{w}); failed[it.ID] != fail {
+				t.Fatalf("failed ids = %v, want failure %v", failed, fail)
+			}
+			h.deliverNotes(context.Background(), it)
+			if it.open() != fail || it.Suggestion == nil || it.Suggestion.Version != 8 || it.Agent.Draft != "New draft" ||
+				!it.Agent.Wake || it.Handling.State != HandlingLooking || len(h.f.sentToAgents()) != 0 {
+				t.Fatalf("filing closed newer handling before its own save: %s", stateOf(h, it))
+			}
+		})
+	}
+}

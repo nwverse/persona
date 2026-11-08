@@ -12,17 +12,18 @@ import (
 // Closing handling is staged separately: neither a delivery pass nor another save may see its stop note until the
 // row commits. A failed row therefore never changes the live suggestion, draft, pending notes or delivery count.
 type inboxFiling struct {
-	it         *InboxItem
-	previous   doneState
-	applied    doneState
-	close      bool
-	now        time.Time
-	why        string
-	staged     []byte
-	agent      *InboxAgent
-	handling   *InboxHandling
-	suggestion *InboxSuggestion
-	told       int
+	it            *InboxItem
+	previous      doneState
+	applied       doneState
+	close         bool
+	now           time.Time
+	why           string
+	staged        []byte
+	beforeClosure []byte
+	agent         *InboxAgent
+	handling      *InboxHandling
+	suggestion    *InboxSuggestion
+	told          int
 	// A request can replace another request's optimistic marker while that row is still being written. If both
 	// fail, rollback must reach the state before either request, rather than restoring the first failed marker.
 	previousWrite *inboxFiling
@@ -44,7 +45,11 @@ func doneStateOf(it *InboxItem) doneState {
 }
 
 func (b *inboxBook) beginFiling(it *InboxItem, now time.Time, why string) *inboxFiling {
-	w := &inboxFiling{it: it, previous: doneStateOf(it), now: now, why: why}
+	w := &inboxFiling{it: it, previous: doneStateOf(it), now: now, why: why,
+		beforeClosure: closureState(it), agent: it.Agent, handling: it.Handling, suggestion: it.Suggestion}
+	if it.Agent != nil {
+		w.told = it.Agent.told
+	}
 	if pending := b.filing[it.ID]; pending != nil && b.holdsFiling(pending) {
 		w.previousWrite = pending
 	}
@@ -120,11 +125,14 @@ func (b *inboxBook) prepareClosing(w *inboxFiling) *InboxItem {
 		w.closed = true
 		return row // its earlier committed closure is already queued; keep that note for delivery
 	}
-	w.staged, w.agent, w.handling, w.suggestion = closureState(it), it.Agent, it.Handling, it.Suggestion
+	if !w.sameHandling(w.beforeClosure) {
+		return row // handling changed while this filing was waiting for its save turn
+	}
+	w.staged = w.beforeClosure
 	c := *row
 	if it.Agent != nil {
 		a := *it.Agent
-		c.Agent, w.told = &a, a.told
+		c.Agent = &a
 	}
 	if it.Handling != nil {
 		h := *it.Handling
@@ -132,6 +140,11 @@ func (b *inboxBook) prepareClosing(w *inboxFiling) *InboxItem {
 	}
 	b.closeHandling(&c, w.why, w.now)
 	return &c
+}
+
+func (w *inboxFiling) sameHandling(state []byte) bool {
+	return w.it.Agent == w.agent && w.it.Handling == w.handling && w.it.Suggestion == w.suggestion &&
+		(w.agent == nil || w.agent.told == w.told) && bytes.Equal(closureState(w.it), state)
 }
 
 // restoreFiling restores only this filing's done/chain edits. Keep entries and edits that arrived while storage was
@@ -214,8 +227,7 @@ func (s *Service) saveInboxFilings(ctx context.Context, ws []*inboxFiling) map[s
 					restoreFiling(w.it, p, false)
 				}
 			}
-			if !w.failed && w.prepared && w.staged != nil && w.it.Agent == w.agent && w.it.Handling == w.handling && w.it.Suggestion == w.suggestion &&
-				(w.agent == nil || w.agent.told == w.told) && bytes.Equal(closureState(w.it), w.staged) {
+			if !w.failed && w.prepared && w.staged != nil && w.sameHandling(w.staged) {
 				// A concurrent handling update owns its next save. Publish only the closure actually stored, on the
 				// same conversation; a replaced agent or a new suggestion must not be stopped by this older row.
 				if b.closeHandling(w.it, w.why, w.now) {
