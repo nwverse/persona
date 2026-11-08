@@ -4,6 +4,8 @@
 
 `time.Time.Sub` saturates at roughly 290 years, so XLSX dates after the duration limit all became the same serial. Subtract Unix seconds for parsed calendar dates, retaining the existing wall-clock normalization. Verify the emitted worksheet XML, including distant leap years, time fractions, offsets and text cells; a valid ZIP/XML structure alone does not prove date values are correct.
 
+The 1900 date system also has a calendar boundary (#1310): January 1 is serial 1, February 28 is 59, and March 1 is 61 because Excel reserves 60 for a fictitious leap day. Apply that adjustment only to January/February 1900, and leave earlier dates as text. Check the range after wall-clock normalization, so an offset cannot move a written date across the boundary.
+
 ## Installed provenance is not a mutable source identity (#1227)
 
 - A marketplace ID survives address moves. Its newly verified official catalog cannot authorize previously installed unsigned code, including code absent from that catalog. Capture an unforgeable entry-verification snapshot before downloading, bind it to the unchanged manifest and package fields, and save the verified key with the installed row in the same transaction. Clear it on unsigned upgrades; never backfill it from the current market. Owner sandbox choices remain independent.
