@@ -1,6 +1,7 @@
 package assistant
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -25,6 +26,8 @@ import (
 //   - once: a follow-up the assistant scheduled from a conversation (schedule_followup), or the user in the app;
 //   - daily: at a time on some weekdays (the morning briefing on weekdays at 09:00…), set up in the app or with schedule_routine;
 //   - interval: every N minutes (a 30-minute patrol), from schedule_followup's `every` or the app.
+// A daily or interval task may set Until. Once that time has passed, the scheduler turns the task off and records a
+// skipped run instead of running it. A one-off ignores Until.
 // A run goes into the conversation the task came from (SessionID), else into the task's own conversation
 // (RunSessionID: the first run starts it, later ones continue it so each run sees the ones before), with the task's
 // own launcher, permission mode and effort ("" = the assistant's defaults). A finished run pushes its answer like any agent turn
@@ -47,7 +50,10 @@ type Task struct {
 	Time         string    `json:"time,omitempty"`     // daily: "HH:MM" in the user's time zone
 	Weekdays     []int     `json:"weekdays,omitempty"` // daily: 1 = Monday … 7 = Sunday; empty = every day
 	EveryMinutes int       `json:"every_minutes,omitempty"`
-	Enabled      bool      `json:"enabled"`
+	// Until is when a daily or interval task stops, stored in UTC. Zero means unset and is omitted.
+	// A one-off ignores it: checkTask clears it, and the scheduler does not expire a one-off that still has one.
+	Until   time.Time `json:"until,omitempty"`
+	Enabled bool      `json:"enabled"`
 	// Push is what of a run reaches the phone (schedule_push.go): "" every run's answer, "asked" only what the run
 	// pushes itself (notify_user). Set where the request has it; a client that leaves it out keeps it (PUT, the old
 	// app's routines PUT, the tools without push).
@@ -468,6 +474,49 @@ func parseWhen(s string, now time.Time, loc *time.Location) (time.Time, error) {
 	return time.Time{}, fmt.Errorf("can't read time %q: use RFC 3339 (2026-10-27T09:50:00+08:00) or 30m / 2h / 1d", s)
 }
 
+// untilIn reads an optional end time. Absent leaves whatever is stored (has is false). JSON null clears it.
+// A string is parseWhen (RFC 3339, a clock time in loc, or 30m / 2h / 1d) and comes back in UTC.
+// An empty string, or a number, object or array, is an error; an unparsable string is parseWhen's error.
+func untilIn(raw map[string]json.RawMessage, now time.Time, loc *time.Location) (at time.Time, has, clear bool, err error) {
+	v, ok := raw["until"]
+	if !ok {
+		return time.Time{}, false, false, nil
+	}
+	if bytes.Equal(bytes.TrimSpace(v), []byte("null")) {
+		return time.Time{}, true, true, nil
+	}
+	var s string
+	if err := json.Unmarshal(v, &s); err != nil || strings.TrimSpace(s) == "" {
+		return time.Time{}, true, false, errors.New("until must be an RFC 3339 time, or 30m / 2h / 1d")
+	}
+	at, err = parseWhen(s, now, loc)
+	if err != nil {
+		return time.Time{}, true, false, err
+	}
+	return at.UTC(), true, false, nil
+}
+
+// applyUntil sets t.Until when the request carried the field. Absent does nothing; null clears it.
+func applyUntil(t *Task, at time.Time, has, clear bool) {
+	if !has {
+		return
+	}
+	if clear {
+		t.Until = time.Time{}
+		return
+	}
+	t.Until = at.UTC()
+}
+
+// stopsAt is the reply suffix for a repeating task that has an end time. Empty when it does not, so the
+// reply stays what it was.
+func stopsAt(t Task, loc *time.Location) string {
+	if t.Repeat == repeatOnce || t.Until.IsZero() {
+		return ""
+	}
+	return " Stops at " + t.Until.In(loc).Format("2006-01-02 15:04") + "."
+}
+
 // scheduleHeader is the first line of a run's message (taskPrompt, prompts/assistant/task_run.md) and the notes under it. A patrol told to
 // "schedule the next one with the same prompt" copies them along; they are dropped so they don't pile up.
 var scheduleHeader = lazyre.New(`^(?:⏰[^\n]*（[^\n]*(?:跟进|定时任务)[^\n]*）|（本该[^\n]*）|（(?:Persona|Persona) 会[^\n]*）|（又到时间了[^\n]*）|（这个任务只在你用 notify_user[^\n]*）)\s*`)
@@ -507,6 +556,10 @@ func sameText(a, b string) bool {
 }
 
 func (s *Service) toolScheduleFollowup(ctx context.Context, machine, sessionID string, args json.RawMessage) (string, error) {
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(args, &raw); err != nil {
+		return "", err
+	}
 	var a struct {
 		At              string  `json:"at"`
 		Every           string  `json:"every"`
@@ -554,7 +607,10 @@ func (s *Service) toolScheduleFollowup(ctx context.Context, machine, sessionID s
 	if at.Before(now.Add(-time.Minute)) {
 		return "", fmt.Errorf("%s is in the past", at.In(loc).Format("2006-01-02 15:04"))
 	}
-	if out, ok, err := s.scheduleOwn(ctx, sessionID, a.Title, a.Prompt, prompt, a.At, at, every, push); ok || err != nil {
+	// A one-off ignores until, even a bad one. An interval task takes it; scheduleOwn applies it when this run is
+	// rescheduling its own task (including a one-off this call turns into an interval).
+	end, hasUntil, clearUntil, untilErr := untilIn(raw, now, loc)
+	if out, ok, err := s.scheduleOwn(ctx, sessionID, a.Title, a.Prompt, prompt, a.At, at, every, push, end, hasUntil, clearUntil, untilErr); ok || err != nil {
 		return out, err
 	}
 	space, _ := s.selfSpace(ctx, sessionID) // not listed: the assistant's own, as before the health space
@@ -562,6 +618,15 @@ func (s *Service) toolScheduleFollowup(ctx context.Context, machine, sessionID s
 		MachineID: machine, Space: space, CreatedBy: "assistant", CreatedAt: now.UTC()}
 	if every > 0 {
 		t.Repeat, t.EveryMinutes = repeatInterval, every
+		if untilErr != nil {
+			return "", untilErr
+		}
+		if hasUntil && !clearUntil { // null on a new task leaves it unset
+			t.Until = end
+		}
+		if err := checkUntil(&t, now); err != nil {
+			return "", err
+		}
 	}
 	if !a.NewConversation {
 		t.SessionID = sessionID
@@ -585,7 +650,7 @@ func (s *Service) toolScheduleFollowup(ctx context.Context, machine, sessionID s
 	s.broadcastSchedule()
 	if every > 0 {
 		return fmt.Sprintf("Scheduled %s every %s, first at %s (%s); %s. It repeats by itself: don't schedule the next run from a run.",
-			t.ID, everyText(every), at.In(loc).Format("01-02 15:04 Mon"), until(at), pushText(t)), nil
+			t.ID, everyText(every), at.In(loc).Format("01-02 15:04 Mon"), until(at), pushText(t)) + stopsAt(t, loc), nil
 	}
 	return fmt.Sprintf("Scheduled %s for %s (%s); %s.", t.ID, at.In(loc).Format("01-02 15:04 Mon"), until(at), pushText(t)), nil
 }
@@ -596,7 +661,7 @@ func (s *Service) toolScheduleFollowup(ctx context.Context, machine, sessionID s
 // repeats stays as it is (a changed prompt is taken). A task deleted while its run was going stays deleted: the run is
 // told so, nothing is scheduled (#4792). ok is false when this conversation's latest run isn't one of the task's
 // (rawPrompt is what was asked, before stripScheduleHeader), or the title and prompt are another task's.
-func (s *Service) scheduleOwn(ctx context.Context, sessionID, title, rawPrompt, prompt, atArg string, at time.Time, every int, push *string) (string, bool, error) {
+func (s *Service) scheduleOwn(ctx context.Context, sessionID, title, rawPrompt, prompt, atArg string, at time.Time, every int, push *string, untilAt time.Time, hasUntil, clearUntil bool, untilErr error) (string, bool, error) {
 	if sessionID == "" {
 		return "", false, nil
 	}
@@ -661,6 +726,22 @@ func (s *Service) scheduleOwn(ctx context.Context, sessionID, title, rawPrompt, 
 			out = fmt.Sprintf("Rescheduled %s「%s」 for %s (%s).", t.ID, t.label(), at.In(loc).Format("01-02 15:04 Mon"), until(at))
 		}
 	}
+	// until applies only once the task is repeating. A one-off ignores it, including a bad value. Absent keeps
+	// the stored end time; null clears it. A past end time on an enabled task fails before anything is saved.
+	if t.Repeat == repeatOnce {
+		t.Until = time.Time{}
+	} else {
+		if untilErr != nil {
+			sc.mu.Unlock()
+			return "", true, untilErr
+		}
+		applyUntil(t, untilAt, hasUntil, clearUntil)
+		if err := checkUntil(t, time.Now()); err != nil {
+			sc.mu.Unlock()
+			return "", true, err
+		}
+	}
+	out += stopsAt(*t, loc)
 	err = s.saveLocked(sc, tasks)
 	sc.mu.Unlock()
 	if err != nil {
@@ -772,6 +853,9 @@ func (s *Service) describeSchedule(ctx context.Context, space string) string {
 		if t.LastStatus != "" {
 			fmt.Fprintf(&b, ", last run %s %s", t.LastRun.In(loc).Format("01-02 15:04"), t.LastStatus)
 		}
+		if t.Repeat != repeatOnce && !t.Until.IsZero() {
+			b.WriteString(", until " + t.Until.In(loc).Format("2006-01-02 15:04"))
+		}
 		b.WriteString("\n")
 	}
 	if n == 0 {
@@ -782,6 +866,10 @@ func (s *Service) describeSchedule(ctx context.Context, space string) string {
 
 // toolScheduleRoutine adds a daily task from a conversation ("give me a morning briefing at 9 every day"), or changes one by id.
 func (s *Service) toolScheduleRoutine(ctx context.Context, self string, args json.RawMessage) (string, error) {
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(args, &raw); err != nil {
+		return "", err
+	}
 	var a struct {
 		ID       string  `json:"id"`
 		Title    string  `json:"title"`
@@ -804,6 +892,11 @@ func (s *Service) toolScheduleRoutine(ctx context.Context, self string, args jso
 		push = &p
 	}
 	loc := s.location(ctx)
+	now := time.Now()
+	end, hasUntil, clearUntil, err := untilIn(raw, now, loc)
+	if err != nil {
+		return "", err
+	}
 	sc, err := s.lockedSchedule(ctx)
 	if err != nil {
 		return "", err
@@ -841,11 +934,12 @@ func (s *Service) toolScheduleRoutine(ctx context.Context, self string, args jso
 	if push != nil {
 		t.Push = *push
 	}
-	if err := checkTask(&t, time.Now()); err != nil {
+	applyUntil(&t, end, hasUntil, clearUntil)
+	if err := checkTask(&t, now); err != nil {
 		sc.mu.Unlock()
 		return "", err
 	}
-	rearm(old, &t, time.Now())
+	rearm(old, &t, now)
 	tasks := slices.Clone(sc.tasks)
 	if i < 0 {
 		tasks = append(tasks, t)
@@ -863,7 +957,7 @@ func (s *Service) toolScheduleRoutine(ctx context.Context, self string, args jso
 		state = "next run " + next.In(loc).Format("01-02 15:04 Mon") + " (" + until(next) + ")"
 	}
 	return fmt.Sprintf("Saved %s「%s」: %s, %s; %s. The user sees and edits it in the app (Persona › 定时任务).",
-		t.ID, t.label(), ruleText(t, loc), state, pushText(t)), nil
+		t.ID, t.label(), ruleText(t, loc), state, pushText(t)) + stopsAt(t, loc), nil
 }
 
 var launcherName = lazyre.New(`^[A-Za-z_][A-Za-z0-9_-]*$`)
@@ -906,6 +1000,7 @@ func checkTask(t *Task, now time.Time) error {
 		}
 		t.Time, t.Weekdays = "", nil
 	case repeatOnce:
+		t.Until = time.Time{} // a one-off never keeps an end time
 		if t.At.IsZero() {
 			return i18n.Err("assistant-schedule.pick_time")
 		}
@@ -928,6 +1023,23 @@ func checkTask(t *Task, now time.Time) error {
 	}
 	if t.Effort != "" && !slices.Contains(proto.EffortLevels, t.Effort) {
 		return i18n.Err("assistant-schedule.bad_effort", i18n.Args{"effort": strconv.Quote(t.Effort)})
+	}
+	return checkUntil(t, now)
+}
+
+// checkUntil is the end-time rule. A one-off drops it. An enabled daily or interval task cannot be saved
+// with an end time more than a minute ago (the same grace as a one-off's at). A disabled task may keep a past one.
+func checkUntil(t *Task, now time.Time) error {
+	if t.Repeat == repeatOnce {
+		t.Until = time.Time{}
+		return nil
+	}
+	if t.Until.IsZero() {
+		return nil
+	}
+	t.Until = t.Until.UTC()
+	if t.Enabled && t.Until.Before(now.Add(-time.Minute)) {
+		return i18n.Err("assistant-schedule.until_passed")
 	}
 	return nil
 }
@@ -1048,6 +1160,17 @@ func (s *Service) runDue(ctx context.Context, now time.Time) {
 	for i := range tasks {
 		t := &tasks[i]
 		if !t.Enabled {
+			continue
+		}
+		// End time reached: turn it off and record a skip. Do not run, and do not move At.
+		if t.Repeat != repeatOnce && !t.Until.IsZero() && !now.Before(t.Until) {
+			reason := i18n.T(s.lang(ctx), "assistant-schedule.until")
+			t.Enabled = false
+			t.LastRun = now.UTC()
+			t.LastStatus, t.LastError = runSkipped, reason
+			skipped = append(skipped, ScheduleRun{Kind: t.kind(), RefID: t.ID, Title: t.label(), Due: t.Until.UTC(), At: now.UTC(),
+				Status: runSkipped, Error: reason, of: now.UTC()})
+			changed = true
 			continue
 		}
 		switch t.Repeat {
@@ -1945,7 +2068,8 @@ func (s *Service) taskView(ctx context.Context, id string) (Task, bool) {
 }
 
 // editTask applies what the app changed (the hub's own fields and where runs go are kept; SessionID can only be
-// cleared, to run in a new conversation each time). Push is kept: the routes set it only when the body has it.
+// cleared, to run in a new conversation each time). Push and Until are kept: the routes set them only when the
+// body has them. A missing Until unmarshals as zero and would wipe a stored end time; null clears it.
 func editTask(old, in Task, now time.Time) Task {
 	t := old
 	t.Title, t.Prompt, t.Repeat, t.Enabled = in.Title, in.Prompt, in.Repeat, in.Enabled
@@ -1990,15 +2114,22 @@ func (s *Service) scheduleRoutes() {
 			apierr.Write(w, http.StatusBadRequest, err)
 			return
 		}
+		now := time.Now()
+		end, hasUntil, clearUntil, err := untilIn(raw, now, s.location(r.Context()))
+		if err != nil {
+			apierr.Write(w, http.StatusBadRequest, err)
+			return
+		}
+		delete(raw, "until") // not a time.Time: "30m" and a local clock time would not unmarshal
 		var in Task
 		encoded, _ := json.Marshal(raw)
 		if err := json.Unmarshal(encoded, &in); err != nil {
 			apierr.Write(w, http.StatusBadRequest, err)
 			return
 		}
-		now := time.Now()
 		t := editTask(Task{ID: "task_" + randomHex(4), CreatedAt: now.UTC()}, in, now)
 		t.SessionID, t.Push = "", push
+		applyUntil(&t, end, hasUntil, clearUntil)
 		if err := checkTask(&t, now); err != nil {
 			apierr.Write(w, http.StatusBadRequest, err)
 			return
@@ -2036,6 +2167,14 @@ func (s *Service) scheduleRoutes() {
 			apierr.Write(w, http.StatusNotFound, i18n.Err("assistant-schedule.gone"))
 			return
 		}
+		now := time.Now()
+		end, hasUntil, clearUntil, err := untilIn(raw, now, s.location(r.Context()))
+		if err != nil {
+			sc.mu.Unlock()
+			apierr.Write(w, http.StatusBadRequest, err)
+			return
+		}
+		delete(raw, "until") // not a time.Time: "30m" and a local clock time would not unmarshal
 		var in Task
 		encoded, _ := json.Marshal(raw)
 		if err := json.Unmarshal(encoded, &in); err != nil {
@@ -2043,7 +2182,6 @@ func (s *Service) scheduleRoutes() {
 			apierr.Write(w, 400, err)
 			return
 		}
-		now := time.Now()
 		t := editTask(sc.tasks[i], in, now)
 		push, has, err := pushIn(raw)
 		if err != nil {
@@ -2061,6 +2199,7 @@ func (s *Service) scheduleRoutes() {
 				return
 			}
 		}
+		applyUntil(&t, end, hasUntil, clearUntil)
 		if err := checkTask(&t, now); err != nil {
 			sc.mu.Unlock()
 			apierr.Write(w, http.StatusBadRequest, err)
