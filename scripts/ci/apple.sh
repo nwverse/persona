@@ -142,15 +142,23 @@ if len(matches) != 1:
 print(matches[0])
 PY
   )
+  # The real EventKit round-trip uses only this disposable simulator's store.
+  # TCC grants can precede installation of the synthetic CI app.
+  CI_BUNDLE_ID=$(python3 -I -c 'import json, sys; print(json.load(open(sys.argv[1]))["app"]["bundle_id"])' "$PERSONA_CONFIG")
+  ci_run 'Grant Reminders access to the owned test app' 60 xcrun simctl privacy "$SIM" grant reminders "$CI_BUNDLE_ID"
+  export TEST_RUNNER_PERSONA_EVENTKIT_ROUNDTRIP=1
+
   IOS_TESTS=("${XCODE[@]}" -scheme Persona -destination "platform=iOS Simulator,id=$SIM" \
     -destination-timeout 120 -derivedDataPath "$OUTPUT/ios-tests" -parallel-testing-enabled NO \
     -disableAutomaticPackageResolution "${TEST_SIGNING[@]}")
   # Explicit fixture-only exclusions, not evidence of those integrations passing.
+  # Swift Testing method selectors include (); without it disabled integration
+  # cases remain selected and appear as unexpected skips in the result bundle.
   IOS_EXCLUSIONS=(
     -skip-testing:PersonaTests/OldHubCompatibilityIntegrationTests
-    -skip-testing:PersonaTests/NotificationServiceTests/opensWhatTheRelayDelivered
-    -skip-testing:PersonaTests/VideoFileTests/nativeVideoPlaysSeeksAndCleansUp
-    -skip-testing:PersonaTests/VideoFileResourceTests/realHTTPReadsMiddleTailAndRejectsChangedRevision
+    "-skip-testing:PersonaTests/NotificationServiceTests/opensWhatTheRelayDelivered()"
+    "-skip-testing:PersonaTests/VideoFileTests/nativeVideoPlaysSeeksAndCleansUp()"
+    "-skip-testing:PersonaTests/VideoFileResourceTests/realHTTPReadsMiddleTailAndRejectsChangedRevision()"
   )
   printf '%s\n' 'apple-ci: excluded integration cases: old-hub lab; relay/APNs payload lab; native video fixture; real video HTTP fixture; destructive HTML loop (dedicated external watchdog required). UI tests are a separate mock-hub/screenshot lane.'
   # WebKit suites must run in separate batches, not interleave in Swift Testing
@@ -165,7 +173,7 @@ PY
   result ios-html-card AssistantHTMLCardTests
   ci_run 'iOS bounded HTML security tests (separate batch)' 600 "${IOS_TESTS[@]}" \
     -only-testing:PersonaTests/AssistantHTMLSecurityTests \
-    -skip-testing:PersonaTests/AssistantHTMLSecurityTests/aRealInfiniteLoopCanBeDiscardedWithoutBlockingANewCard \
+    "-skip-testing:PersonaTests/AssistantHTMLSecurityTests/aRealInfiniteLoopCanBeDiscardedWithoutBlockingANewCard()" \
     -resultBundlePath "$OUTPUT/ios-html-security.xcresult" test
   result ios-html-security AssistantHTMLSecurityTests
   ci_run 'Verify token baseline was not rewritten' 60 cmp "$CI_ROOT/apple/PersonaTests/TokenBaseline.json" "$SOURCE/apple/PersonaTests/TokenBaseline.json"

@@ -19,6 +19,25 @@ class AppleCIPreparationTests(unittest.TestCase):
             script.index("Unsigned iOS and embedded watch/extensions build"),
         )
 
+    def test_existing_integration_exclusions_use_exact_swift_testing_selectors(self):
+        script = SCRIPT.read_text()
+        block = script.split('IOS_EXCLUSIONS=(', 1)[1].split('\n  )', 1)[0]
+        actual = {line.strip().strip('"') for line in block.splitlines() if line.strip()}
+        self.assertEqual(actual, {
+            '-skip-testing:PersonaTests/OldHubCompatibilityIntegrationTests',
+            '-skip-testing:PersonaTests/NotificationServiceTests/opensWhatTheRelayDelivered()',
+            '-skip-testing:PersonaTests/VideoFileTests/nativeVideoPlaysSeeksAndCleansUp()',
+            '-skip-testing:PersonaTests/VideoFileResourceTests/realHTTPReadsMiddleTailAndRejectsChangedRevision()',
+        })
+        self.assertIn('-skip-testing:PersonaTests/AssistantHTMLSecurityTests/aRealInfiniteLoopCanBeDiscardedWithoutBlockingANewCard()', script)
+
+    def test_reminder_round_trip_is_enabled_with_owned_simulator_permission(self):
+        script = SCRIPT.read_text()
+        self.assertIn('xcrun simctl privacy "$SIM" grant reminders "$CI_BUNDLE_ID"', script)
+        self.assertIn('export TEST_RUNNER_PERSONA_EVENTKIT_ROUNDTRIP=1', script)
+        self.assertLess(script.index('Grant Reminders access'), script.index('iOS offline unit and design/token tests'))
+        self.assertNotIn('skip-testing:PersonaTests/PlaceReminderTests', script)
+
     def test_runtime_remains_pinned_to_minimum_compiler(self):
         script = SCRIPT.read_text()
         self.assertIn('for platform in iOS watchOS; do', script)

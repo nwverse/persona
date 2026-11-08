@@ -60,6 +60,8 @@ and five `ExtensionStreamSnapshotTests` Mac cases needing a live extension/hub p
 requires the four design-system suites; UI suites, visionOS, Persona Link and SSH-package integration remain outside this lane.
 Full simulator screenshots, device/instrumentation/UI suites, real Agent/phone integrations, release entitlements,
 production signing and publication are not PR gates. They need devices, explicit lab inputs or secrets; retain the manual checks below.
+The stock iOS unit-test simulator is granted Reminders access for the synthetic CI app, and `TEST_RUNNER_PERSONA_EVENTKIT_ROUNDTRIP=1`
+runs the existing EventKit create/list/update/delete round-trip against its disposable store. This does not use a personal device or account.
 Platform-gated and explicitly opt-in tests still report their own skips; they are not evidence of device/live integration coverage.
 On Linux, `test_hub_restart_mac.py` skips its three Mac-only cases; `test_persona_cutover.py` has six optional database/container cases
 without dedicated cutover inputs. The complete Python suite remains discovered and runs; no failing suite is excluded. CI's
