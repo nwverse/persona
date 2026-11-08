@@ -182,18 +182,22 @@ type Store struct {
 	readOnly bool
 	Dir      string
 	mu       sync.Mutex
-	metaMu   sync.Mutex
+	metaMu   sync.Mutex // acquire before mu when both are needed (projectInput reads Log under metaMu)
 	applyMu  sync.Mutex
 	recMu    sync.Mutex // a recording's read-compare-write (recordings.go)
 	dedupeMu sync.Mutex // projects/.dedupe.json's read-modify-write (dedupe.go)
-	// chatMu: a chat's read-modify-write by Ingest and WriteHistory (history.go), so an import never writes back a
-	// stale copy of the live archive's counters.
+	ingestMu sync.Mutex // live identity filtering through attachment preparation and commit
+	// chatMu: a chat's read-modify-write of meta.json by the pipeline (Ingest, saveArchived, WriteHistory in history.go,
+	// and compression's write-back, putCompressed), so none writes back a stale copy over what another wrote. Each
+	// reads the chat again under it and changes only the fields it owns. (A person's edits, edit.go, are not under it.)
 	chatMu    sync.Mutex
 	observeMu sync.RWMutex
 	changed   func(Change)
 	zone      *time.Location // the user's zone, the archive's days and times are written in (zone.go); nil: time.Local
 	// settled: the zone every file was last moved into without an error (Rezone skips the walk while it holds).
 	settled string
+	// ingestWrite is a per-store failure-injection seam; nil uses fsync and atomic replacement.
+	ingestWrite func(string, []byte) error
 }
 
 func NewStore(dir string) (*Store, error) {
@@ -203,6 +207,9 @@ func NewStore(dir string) (*Store, error) {
 		}
 	}
 	s := &Store{Dir: dir}
+	if err := s.recoverIngests(); err != nil {
+		return nil, err
+	}
 	_ = writeIfMissing(filepath.Join(dir, "README.md"), prompts.RenderKBReadme())
 	return s, nil
 }
@@ -562,7 +569,14 @@ func (s *Store) PruneBySource(now time.Time, textDays int, attachmentDays func(s
 	if s.readOnly {
 		return 0
 	}
-	zone := s.Zone()
+	s.chatMu.Lock()
+	defer s.chatMu.Unlock()
+	s.lockArchive()
+	defer s.unlockArchive()
+	if err := s.recoverIngestsLocked(); err != nil {
+		return 0
+	}
+	zone := s.zoneLocked()
 	textCut := now.AddDate(0, 0, -textDays).In(zone).Format("2006-01-02")
 	for _, id := range s.IDs(KindChat) {
 		for _, d := range s.Days(id) {
@@ -570,6 +584,7 @@ func (s *Store) PruneBySource(now time.Time, textDays int, attachmentDays func(s
 				removed++
 			}
 		}
+		_ = s.pruneReceipts(id, textCut, zone)
 		entries, _ := os.ReadDir(s.path(KindChat, id, "attachments"))
 		if len(entries) == 0 {
 			continue

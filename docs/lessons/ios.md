@@ -92,7 +92,7 @@ In shells that retain pages, `onDisappear` does not mean a card has scrolled off
 
 ## Use `EmptyView` for content-free platform stand-ins (#2001)
 
-visionOS lacks iOS drawer gestures; `DrawerPan.NoRowSwipe` only needs a content-free background. `Color.clear.frame(width: 0, height: 0)` adds unnecessary fixed dimensions; iOS token checks scan shared source and do not ignore visionOS branches. Return `EmptyView()` directly: no drawing, no layout space. Do not add zero-size tokens for the stand-in, raise the baseline or add exemptions.
+visionOS lacks iOS drawer gestures; `DrawerPan.NoRowSwipe` (a row mark, gone since #1244 took the swipes off Agents' rows) only needed a content-free background. `Color.clear.frame(width: 0, height: 0)` adds unnecessary fixed dimensions; iOS token checks scan shared source and do not ignore visionOS branches. Return `EmptyView()` directly: no drawing, no layout space. Do not add zero-size tokens for the stand-in, raise the baseline or add exemptions.
 
 ## Keyboard-dismiss button and model display in the composer (#2200)
 
@@ -338,6 +338,7 @@ Use an invalidation revision as the task key and handle the flag after completio
 
 ## `Layout` and components
 
+- Under iPhone Duo's vertical bars the system draws the navigation bar's title as a row over the content, not in the side column with the buttons: a page that draws its own title shows the name twice. Remove the system's with `.toolbar(removing: .title)` while yours is on screen (`ChatView`, 2026-11-08).
 - When capping chips in horizontal scrolling, do not put `frame(maxWidth:)` / `scaledFrame(maxWidth:)` outside the background (2026-11-05, #3010): `ScrollView(.horizontal)` proposes no width,
   and flexible frames pass that unlimited proposal through. The chip and background measure the entire title while only the frame's occupied space is capped;
   background and space diverge: shorter chips leave larger gaps, large text does not truncate and capsules overlap neighbors.
@@ -407,6 +408,7 @@ Use an invalidation revision as the task key and handle the flag after completio
 - `List` `.simultaneousGesture(TapGesture())` (blank-area dismiss) treats long-press release as a tap unless held >~2 seconds:
   newly opened message actions close on release. Suppress closing during that press and 0.3 seconds after release (`MessageMenu.pressChanged`).
 - `List` `Section` headers are not cells; `.contextMenu` rarely responds there. Give header actions visible buttons / `Menu`.
+- A `.contextMenu(menuItems:preview:)` preview is drawn in the context menu's own host, which the app's environment objects do not reach (2026-11-08, #1490): a preview showing a view with `@Environment(AppModel.self)` crashed the app on the long press, in SwiftUI's environment assertion with no app frame on the stack. Hand the preview what it reads (`.environment(model)`, the scopes it uses).
 - Put MarkdownUI `.markdownTextStyle` inside `.markdownTheme`, called first, or theme text styles overwrite it.
 - Link endings have one rule (`Links`): stop at whitespace or any non-ASCII (Chinese / fullwidth punctuation), strip trailing `.,;:!?` and unmatched `)` / `]`.
   MarkdownUI cmark-gfm autolinks stop only at whitespace, swallowing Chinese paragraphs after URLs (2026-10-30). Run all MarkdownUI text through
@@ -521,8 +523,8 @@ Use an invalidation revision as the task key and handle the flag after completio
   four `ShellSwitchTests`). Hidden native header now leaves the tree (`ShellBarAtRest(page:)`: omitted while the bar rests on another page, returned transparent at slide start);
   lists still leak. Identify shown page using `probe.shell`, not control exists / isHittable.
 - Moving filters into `List`'s first row (56b 2ead, to collapse search) turns them into UICollectionViewCell. Gesture rules yielding to row drags
-  (`DrawerPan.onRow`, right-swipes pin / interrupt / mark seen) then swallow filter-bar swipes back to assistant. Explicitly mark rows lacking their own right-swipe
-  (`DrawerPan.NoRowSwipe`).
+  (`DrawerPan.onRow`, right-swipes pin / interrupt / mark seen) then swallow filter-bar swipes back to assistant; the fix was to mark rows lacking their own
+  right-swipe (`DrawerPan.NoRowSwipe`). Since #1244 Agents' rows have no swipe at all (a ⋯ holds their actions), and both are gone: a drag along any row pages.
 
 - Do not retain two sources and synchronize with `.onChange`. New shell initially duplicated current page in `AppModel.selectedTab` and bar position,
   sliding from `onChange(of: selectedTab)`. SwiftUI sometimes never reevaluated body (trace showed tab change with no body / onChange),
@@ -577,8 +579,10 @@ Use an invalidation revision as the task key and handle the flag after completio
   - 单机详情直接从页面请求指标，不能因为概览的 fan-out 已在后台就认定单机详情也在后台（2026-11-06，#5730）；分别核对实际调用者。Xcode 27.1 的 `Thread.isMainThread` 带 `noasync`，测试后台准备时在同步 `nonisolated` 探针里读取，再从 detached task 调用，不在异步闭包直接读取。
 ### Minimum compatible compiler
 
-- **Minimum compiler remains Xcode 26.0 (Swift 6.2)** (2026-11-02): this and many development machines still use 26.0; master must compile there for iOS, Mac, watch and extensions. Release machine uses Xcode 27.1 / Swift 6.4.0, which proves nothing about 26.0.
+- **Minimum compiler remains Xcode 26.0 (Swift 6.2)** (2026-11-02): this and many development machines still use 26.0; `main` must compile there for iOS, Mac, watch and extensions. Release machine uses Xcode 27.1 / Swift 6.4.0, which proves nothing about 26.0.
   Three failures: #216 `isDynamicIslandLimitedInWidth` (iOS 27 SDK, fixed #217), `toolbarVerticalEdge` (iOS 27.1 SDK), #164 `ShowsSnippetView` / `view:` (fixed #430).
+- **Xcode 27.1 crashes on a nonisolated async Objective-C method that takes a bridged Foundation struct** (2026-11-08, #1378): under the project's `NonisolatedNonsendingByDefault` (`SWIFT_APPROACHABLE_CONCURRENCY`), Swift 6.4's SILGen crashes emitting the Objective-C thunk when a parameter is `URLRequest`, `URL`, `Date`, `UUID`, `IndexPath`… (an async `urlSession(_:task:willPerformHTTPRedirection:newRequest:)` or `willBeginDelayedRequest`). `String` / `Data` parameters, `@MainActor` and `@concurrent` methods compile, and 26.0 compiles all of it: CI stayed green while 27.1 could not build main, twice (`PushRelay`, then `LocalProxies`). Use the completion-handler form; `scripts/test/test_apple_compiler_traps.py` fails on the crashing ones.
+- **Members of an extension of a nonisolated type in a main-actor-default file** (#1378): Swift 6.2 makes them nonisolated, 6.4 the main actor's, so a call from nonisolated code (a test's `#expect`) compiles in CI and fails on 27.1. Mark them `nonisolated`.
 - Guard new-SDK symbols with `#if compiler(>=6.4)` (27.1 is 6.4.0;26.4–26.6 has Swift 6.3 but still iOS 26 SDK, so 6.3 guards fail there, #453), with old behavior under `#else`, not empty functionality. `#available` / `@available` checks only govern runtime and cannot resolve missing compile-time symbols.
 - `#if compiler(>=6.4)` identifies only the iOS 27 SDK. **It cannot guard symbols introduced in 26.x minor SDK releases such as 26.1–26.4**: doing so disables the feature in every Xcode 26 build (CarPlay voice UI `CPVoiceControlState.actionButtons` comes from the 26.4 SDK; this guard once left Xcode 26 builds without buttons in the car).
   Access Objective-C properties / methods at runtime instead: check `responds(to: NSSelectorFromString("setXxx:"))`, then use `setValue(_:forKey:)`; add a source-scanning regression test (`CarPlayVoiceButtonsTests`).
@@ -812,7 +816,7 @@ app chooses transcoding by size (`VideoPrep`, docs/protocol/protocol.md "Sending
 - **Lark drafts / outbox persist between simulator UI tests**:
   - Uncancelled previous replies become drafts and reopen the quote bar. Its summary matches original message text, so `label BEGINSWITH` finds it first and long-press fails.
   - Previous #fail messages remain below newly sent ones, shifting the "just above composer" expectation by 141 pt.
-  - Tests clean up by cancelling replies; before investigating failures, `simctl uninstall` for clean data then compare master.
+  - Tests clean up by cancelling replies; before investigating failures, `simctl uninstall` for clean data then compare with `main`.
 - Background `gh pr checks` waiting scripts prematurely report completion with empty output on this machine: put the waiter in a separate file, write its own log and use perl `select` rather than `sleep`.
 
 ## Register Persona MCP tools in `ToolPresentation` (2026-11-03, #677)
@@ -1193,21 +1197,21 @@ but UIKit still had a page with only Agents Back and empty content.
 
 ### `Localizable.xcstrings` rebase conflicts require key-based merging
 - Both sides adding entries can line-merge into invalid JSON (`The data couldn't be read because it isn't in the correct format`), breaking all targets.
-- Extract `git show ORIG_HEAD:<catalog> > ours`, `git show origin/master:<catalog> > theirs`; run `python3 scripts/i18n/apple_l10n.py merge ours theirs apple/Shared/Localization/Localizable.xcstrings` (merge keys, prefer complete `en` / ja on duplicates), then `check`.
-- **`merge` brings back keys master deleted, and rewrites the whole file** (2026-11-06, #5451): it keeps every key of both sides, so an entry master
-  removed (6 of them in one merge, for example "No Claude running") comes back as if the branch had added it. Its output also changes the
-  format and order (+78k / −77k lines against master for 40 new keys). Use its merged entries, but write master's file back in master's key order and format
-  (`json.dumps(d, ensure_ascii=False, indent=2) + "\n"`), add only the keys the branch added, and drop keys that were in the merge base but master
-  no longer has. `git diff origin/master --stat` should then show only `+` lines for your keys. Git's own text merge of two branches that added the
+- Extract `git show ORIG_HEAD:<catalog> > ours`, `git show origin/main:<catalog> > theirs`; run `python3 scripts/i18n/apple_l10n.py merge ours theirs apple/Shared/Localization/Localizable.xcstrings` (merge keys, prefer complete `en` / ja on duplicates), then `check`.
+- **`merge` brings back keys deleted on `main`, and rewrites the whole file** (2026-11-06, #5451): it keeps every key of both sides, so an entry removed
+  on `main` (6 of them in one merge, for example "No Claude running") comes back as if the branch had added it. Its output also changes the
+  format and order (+78k / −77k lines against `main` for 40 new keys). Use its merged entries, but write the file back in `main`'s key order and format
+  (`json.dumps(d, ensure_ascii=False, indent=2) + "\n"`), add only the keys the branch added, and drop keys that were in the merge base but `main`
+  no longer has. `git diff origin/main --stat` should then show only `+` lines for your keys. Git's own text merge of two branches that added the
   same key leaves a duplicate JSON key, which `check` rejects: keep one copy.
 
 ### Two PRs that add the same catalog key both pass, then break master (#5811)
 - #5743 and #5757 each added `"Run"` to `Localizable.xcstrings`. Each passed `apple_l10n.py check` against its own base, and git merged them
   without a conflict, because the two entries sat at different places in the file. Master then had a duplicate JSON key: `check` failed,
   and Xcode rejects such a catalog.
-- After every master merge into a branch, run `python3 scripts/i18n/apple_l10n.py check`, even when git reported no conflict in the catalog.
-  PR runs (scripts-tests.yml) each see their own base, so only a run on master itself catches two PRs that merged close together:
-  run `check` on master right after your PR merges, too.
+- After every merge of `main` into a branch, run `python3 scripts/i18n/apple_l10n.py check`, even when git reported no conflict in the catalog.
+  PR runs (scripts-tests.yml) each see their own base, so only a run on `main` itself catches two PRs that merged close together:
+  run `check` on `main` right after your PR merges, too.
 
 ### An interpolated String looks up a `%@` key the catalog doesn't have (#5544)
 - `String(localized: "Exit code \(code)")` with `code` a `String` (or a regex match's `Substring`) asks for `"Exit code %@"`. The catalog had
@@ -1237,13 +1241,13 @@ but UIKit still had a page with only Agents Back and empty content.
 - **Symptom**: after a `SWIFT_EMIT_LOC_STRINGS=YES` build, `apple_l10n.py sync` added this change's 82 keys, but also keys from other code that never
   made it into the catalog (a `"/"`), and rewrote 58 existing entries (merged comments, states): the diff was mostly other people's.
 - **Approach**: use sync only to see which keys are new. For the commit, put the catalog back and insert only your own entries with a script
-  (English key, explicit en / zh-Hans / ja), each before the first key that sorts after it, without re-sorting the file (master's is
+  (English key, explicit en / zh-Hans / ja), each before the first key that sorts after it, without re-sorting the file (`main`'s is
   nearly but not strictly sorted: `dict(sorted(...))` moves other people's entries), and write it back with
-  `json.dumps(d, ensure_ascii=False, indent=2) + "\n"` (the format `apple_english_keys.py` wrote; check that master's file round-trips
+  `json.dumps(d, ensure_ascii=False, indent=2) + "\n"` (the format `apple_english_keys.py` wrote; check that `main`'s file round-trips
   unchanged first, and that `git diff` shows only `+` lines). Then `apple_l10n.py check`. A conflict in the catalog resolves the same way:
-  take master's file, insert your entries.
-- **Rebased across the English-key migration (#5430)**: a branch written with Chinese keys does not need its keys hand-translated. Run master's
-  `scripts/i18n/apple_english_keys.py <scratch worktree>` on a scratch worktree of the branch's old tip (it still has the Chinese-source catalog),
+  take `main`'s file, insert your entries.
+- **Rebased across the English-key migration (#5430)**: a branch written with Chinese keys does not need its keys hand-translated. Run
+  `scripts/i18n/apple_english_keys.py <scratch worktree>` as it is on `main` against a scratch worktree of the branch's old tip (it still has the Chinese-source catalog),
   import it to get `migrate()`'s mapping, then take the migrated new files, the mapped entries, and the same key changes in the files you only
   touched. Keys it suffixes (`Mute [Voice Bar 7db2e1]`) collide with an existing English key that means something else in Chinese: keep the suffix.
   `apple_comments.py check` also fails on Chinese UI words in comments: write the English label (`Never Mind`), keep 「…」 for doc headings or text matched word for word.
@@ -1305,4 +1309,16 @@ DEBUG 的代码可能在 `Persona.debug.dylib` 中，40 KiB 的 `Persona` 只是
 
 - **What went wrong**: `AgentSync` left every subscribed session to its subscription. When the hub stopped pushing a session's `items` (a node whose transcript watch had ended), the open chat never showed the new message or reply, and the session's working status lit up the previous turn's work line, so the new turn's work read as more tools of the message before it. Reopening the chat showed everything in the right turns.
 - **Now**: `AgentSync.checkStall` asks for what came after the chat's `covered` when the session's `updated_at` is newer than the chat's newest line and no batch came for 4 s (`AgentSyncPacing.catchUpAt`, the web's rule and numbers). `ChatStore.arrivedAt` counts every batch, empty ones too, and streamed words: the hub sends a span for lines without items, and a headless session's `updated_at` is the node's clock at its last event, so neither a growing transcript nor a long reply being written looks quiet. Nothing is asked before the first batch (the backlog is on its way). While a message sent from here is still on its way, the session went to work after it was written and the transcript has nothing newer than it, the work line yields to the message's getting-ready line (`ChatAwaitingTurn.workIsForPending`). UI test: `ChatCatchUpTests` (`/mock/say?drop=1`).
-- **Signals that look usable but are not**: a session's `rev` is the transcript's byte count, not a line seq, so it cannot be compared with `covered`; compare `updated_at` (the newest activity or the file's mtime) with the newest item's `ts`. A `revs` event moves only `rev`; `updated_at` comes with the full list. A turn's `answer` is just its latest assistant text, set while the turn still runs, so it does not say the turn ended; the session's `stateSince` against the message's `createdAt` does, but only while no line is newer than the message: the hub resets `stateSince` on every change of state (blocked and back, its own restart), and a bubble whose copy is never matched would otherwise keep a whole turn's work line dark. `AppModel.session(_:)` keeps an older `updated_at` on purpose (`sameApartFromTicks`): read `latest(_:)` to compare times.
+- **Signals that look usable but are not**: a session's `rev` is the transcript's byte count, not a line seq, so it cannot be compared with `covered` (but it can say the transcript grew since the last items came: see #1179 below); compare `updated_at` (the newest activity or the file's mtime) with the newest item's `ts`. A `revs` event moves only `rev`; `updated_at` comes with the full list. A turn's `answer` is just its latest assistant text, set while the turn still runs, so it does not say the turn ended; the session's `stateSince` against the message's `createdAt` does, but only while no line is newer than the message: the hub resets `stateSince` on every change of state (blocked and back, its own restart), and a bubble whose copy is never matched would otherwise keep a whole turn's work line dark. `AppModel.session(_:)` keeps an older `updated_at` on purpose (`sameApartFromTicks`): read `latest(_:)` to compare times.
+
+## Time cannot tell the last line of a burst was lost (2026-11-08, #1179)
+
+- **What went wrong**: the open chat's catch-up ignored an `updated_at` within `staleSlack` (1 s) of its newest line's `ts`, as "the same write" (the file's mtime and the line's own clock compare loosely). An agent writes in bursts: a tool call, its result and the words after it within a second. When the last line's push was lost, `updated_at` stayed within the slack of the line before, which the chat held, and the chat never asked, until the agent wrote again. Found by the web's end-to-end sync run against the mock (two replies 0.3 s apart, the second push dropped: nothing in 20 s).
+- **Now**: `AgentSync` notes when each session's `rev` changes (the full list or the `revs` event; the first one heard is no change), and `AgentSyncPacing.catchUpAt` also asks when the rev moved after the chat's last items came, once it has been quiet for `staleQuiet` since both. The node reports revs on its next tick, mostly after the items they belong to, so a rev that moved for lines that did come costs one empty `after_seq` read once the chat goes quiet; that read is an arrival and ends the question. The time rule stays for sessions whose rev does not move. UI test: `ChatCatchUpTests.testALostLastLineOfABurstCatchesUp` (the mock with `MOCK_SYNC_REVS=1`, whose lines are written now; without it their times are old and `updated_at` alone tells). It writes both lines before looking at the screen: waiting for the first one on screen spaced them more than a second apart, and the old rule passed it too.
+
+## The background detail read of a chat must not report a session the list lacks (#1526)
+
+- **What went wrong**: opening a chat also reads that session's complete row from the paged session list (`AppModel.refreshSessionDetail`). The read looked the row up by paging the hub's list (up to 160 pages) and, finding nothing, threw "No matching sessions" into the chat's `error`, which the chat draws as a red line. A session the list does not have is not an error of the chat: the list can hide a session whose transcript still reads, and the read runs on its own at every open and at every "list changed" hint, so the line came back each time.
+- **Now**: with `sessions_lookup` in the hub's hello (`APIClient.sessionLookup`, set in `HubLink.api`), `sessionListDetail` asks once for the exact `machine_id` + `session_id` (`summary=0`, no `since` or `cursor`; the old paging is kept for hubs without the feature, never send `session_id` to those, since they ignore it and answer with an unrelated page). It returns nil when nothing matches, and the background read then does nothing. Other failures of the request go by the same `isQuiet` rule as before: a cancellation, a timeout and no network are not shown, the rest is.
+- **What this does not hide**: a session whose transcript cannot be read (for instance a main chat id that no computer has a transcript for) still shows an error. The hub's catch-up push on subscribe fails (its detail says the transcript was not found) and `AppModel` writes the hub's generic "request could not be completed" message into `chat.error`; showing an error there is right, and belongs to reading the transcript, not to this detail read. Read from the code, not seen on a device: before this change the two errors went into the same `chat.error` and the one written last showed.
+- **Rule**: a read the user did not ask for, run for every open, answers "not found" with nil and keeps the error line for failures of the request. Tests: `SessionListTests` (`aHubWithLookupIsAskedOnceForTheExactSession`, `aChatOnAnUnlistedSessionShowsNoError`, `theHubLinkOffersLookupOnlyWhenTheHelloDoes`).

@@ -8,7 +8,6 @@ import (
 	"path/filepath"
 	"reflect"
 	"regexp"
-	"runtime"
 	"sort"
 	"strings"
 	"testing"
@@ -235,8 +234,11 @@ func strictDecode(b []byte, v any) error {
 var syncName = regexp.MustCompile(`^[a-z][a-z0-9_]*$`)
 
 func TestSyncScenarios(t *testing.T) {
-	_, file, _, _ := runtime.Caller(0)
-	dir := filepath.Join(filepath.Dir(file), "../../../spec/fixtures/sync")
+	wd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := filepath.Join(wd, "../../../spec/fixtures/sync")
 	paths, err := filepath.Glob(filepath.Join(dir, "*.json"))
 	if err != nil || len(paths) == 0 {
 		t.Fatalf("no sync scenarios in %s: %v", dir, err)
@@ -431,6 +433,36 @@ func checkSyncCase(t *testing.T, c syncCase) {
 				for id := range h.ended { // the full refresh reads the card list
 					d.ended[id] = true
 				}
+			}
+			// the pending-card snapshot every hello is followed by: each pending card once, without event_seq,
+			// after the replayed broadcasts
+			var snapshot []string
+			replays := true
+			for _, raw := range st.Frames[st.Socket.Device] {
+				var f syncInteractionFrame
+				if json.Unmarshal(raw, &f) != nil || f.Type != "interaction" {
+					continue
+				}
+				if f.EventSeq != nil {
+					if !replays {
+						t.Fatalf("%s: a replayed broadcast after the pending-card snapshot", where)
+					}
+					continue
+				}
+				replays = false
+				snapshot = append(snapshot, f.Interaction.ID)
+			}
+			want, listed := []string{}, map[string]bool{}
+			for _, id := range h.order {
+				if _, ok := h.pending[id]; ok && !listed[id] {
+					want, listed[id] = append(want, id), true
+				}
+			}
+			if snapshot == nil {
+				snapshot = []string{}
+			}
+			if !reflect.DeepEqual(snapshot, want) {
+				t.Fatalf("%s: a hello is followed by every pending card %v, the step's frames have %v", where, want, snapshot)
 			}
 			d.stream, d.seq = h.stream, h.seq
 		case st.User != nil:

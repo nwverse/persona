@@ -5,6 +5,8 @@
   <img src="docs/assets/readme/banner-light.svg" alt="Persona: your SuperAgent. One place for every task." width="100%">
 </picture>
 
+[![Persona video tour preview](docs/assets/promo-preview-en.webp)](#video-tour)
+
 English · [简体中文](README.zh-CN.md)
 
 ### One SuperAgent for everything you do.<br>It knows your world, runs your Agents, and goes wherever you go.
@@ -36,6 +38,12 @@ English · [简体中文](README.zh-CN.md)
 - **Your phone's data, in reach.** Contacts, calendar, reminders, photos, health and location become tools, and writes are confirmed on your phone. [Phone tools](docs/apple/phone-tools.md)
 - **Connectors and channels.** Bring in Lark, mail, GitHub, iMessage, Telegram and WeChat; talk to Persona from the app, Lark, WeChat or by voice. [Connectors](docs/extensions/connectors.md) · [Channels](docs/extensions/channels.md)
 - **Every screen.** iPhone, Apple Watch, Mac, Vision Pro, Android and the web, in English, Chinese and Japanese. [Clients](docs/apple/ios.md)
+
+## Video tour
+
+https://github.com/user-attachments/assets/44eeb361-9f4b-480a-9f00-9fa7d2f8546c
+
+<sub>[HD video and subtitles](https://github.com/nwverse/persona/releases/tag/promo-v1).</sub>
 
 ## How it works
 

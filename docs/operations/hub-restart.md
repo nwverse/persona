@@ -57,12 +57,12 @@ on the Mac, ssh machines go offline for 2–8 s, and their sessions disappear fr
 ### Work in progress inside the hub
 
 - The assistant (the Persona tab's main chat, side chats, scheduled tasks, the AI twin, Lark /agent, bots, channel extensions: `hub/assistant*.go`; the AI twin is the manager's `assistant/inbox_agent.go`; Lark /agent lives in the Lark extension (since #1571, opening chats through the hub's public API);
-  the Lark bot is `botSend` in `assistant/feishu.go`; channel extensions are `channelForward` in `assistant/channels_plugin.go`) all goes through `assistant.send` (bots and channel extensions now use it only to open new chats; continuing uses `session.send_once` via `sendOnce`), and **the node on the assistant's machine** starts a headless claude:
-  `zsh -ic "<launcher> \"$@\"" … -p --input-format stream-json --output-format stream-json --include-partial-messages` (`spawnClaude` in `node/assistant.go`),
+  the Lark bot is `botSend` in `assistant/feishu_message.go`; channel extensions are `channelForward` in `assistant/channels_plugin.go`) all goes through `assistant.send` (bots and channel extensions now use it only to open new chats; continuing uses `session.send_once` via `sendOnce`), and **the node on the assistant's machine** starts a headless claude:
+  `zsh -ic "<launcher> \"$@\"" … -p --input-format stream-json --output-format stream-json --include-partial-messages` (`spawnClaude` in `node/assistant_start.go`),
   in its own process group (`Setpgid`), with pipes for stdin / stdout.
 - Streaming output: `readAssistant` accumulates `text_delta` in memory in `p.partial` and sends a `session.delta` every 80 ms (`readAssistant`, `emitDelta` in `node/assistant.go`); the hub forwards it to subscribers
   (`onEvent` in `hub/machine.go`, the `session.delta` branch). Text being generated exists only in memory; finished messages are in Claude Code's own transcript.
-- When the hub restarts: the node's connection drops → `Node.Serve` returns → `reapAssistants` stops all assistant processes (`reapAssistants` in `node/assistant.go`); the local node is killed with the hub by the cgroup anyway.
+- When the hub restarts: the node's connection drops → `Node.Serve` returns → `reapAssistants` stops all assistant processes (`reapAssistants` in `node/assistant_reap.go`); the local node is killed with the hub by the cgroup anyway.
   **A resident node (`node --attach`) is no different**: one `Node` per hub connection, and a new connection stops the old one (`Attach` in `node/attach.go`), taking its assistant processes with it.
 - Background commands from Monitor and `run_in_background` are child processes of claude and die with it. The node remembers each chat's background tasks (`background_tasks_changed` → `state.put`);
   after a restart, `recoverAssistantTasks` sends those chats a message "personad just restarted… background tasks stopped" (`node/assistant.go`, `prompts/assistant/lost_tasks.md`) so it can set them up again.
@@ -85,6 +85,10 @@ Why this one:
   a large surface for errors; the only gain is saving the new process's ~0.2 s startup, and clients cannot see those 0.2 s spent queued in the backlog.
 - **Socket activation**: standard, a few lines of code, no effect on Docker / launchd / running by hand (without `LISTEN_FDS` the hub listens itself); rolling back means deleting the socket unit.
   Cost: during the ~1 s while the old process stops, connections wait and get no immediate response, which is far within the clients' grace periods.
+
+Every hub process takes the passed sockets first thing (`claimInherited` in `hub/listen.go`, at the top of `Serve`, `Run` and `RunSlot`), before anything can start another process: `LISTEN_*` are cleared and the sockets made close-on-exec, and so is anything else the process was handed past stderr (`osproc.SealInherited`).
+Until 2026-11-08 a hub without its edge took them only when it first listened, and `runHub` could start the built-in manager before that: the manager, and through it every node, extension and agent it started, then held the hub's listening socket for as long as it lived (several pids on `ss -tlnp` for the hub's port).
+The manager's and the node's run entries (`managercli.Assistant`, `manager run`, `node`, `node --attach`) seal what they were handed as well, so a socket an older hub still leaks stops there. Not in `main`: the sandbox's launcher and the source validator are the same binaries and hand descriptors on by exec on purpose.
 
 `hub-systemd.sh` writes both units: the first time (or when the address changes) it stops the service once to hand the port to the socket (only this once is there a ~1 s gap); after that it always just runs `restart personad`.
 `TimeoutStopSec=20` (headroom beyond the 8 s shutdown budget).
@@ -125,7 +129,7 @@ Why not two hubs serving at once (that gateway's parallel switch): the hub has m
 Old and new coexist only during the standby self-check, with a 1–2 second hold at handover. Measured (NAS, 2026-11-06): one switch took 0.68 seconds, with 607 requests across 4 concurrent streams during it and 0 failures.
 
 Cases that bypass the edge: Windows, Docker (image updates), `PERSONA_HUB_EDGE=0`, a data directory path that is too long (Unix socket address limit). In these the hub listens itself as before.
-The in-place exec problem on this path is fixed too: the fds from systemd are kept (close-on-exec), the flag is cleared before exec, and `LISTEN_FDS` / `LISTEN_PID` are passed along (`execListenEnv` in `listen.go`).
+The in-place exec problem on this path is fixed too: the fds from systemd are kept (close-on-exec), the flag is cleared before exec, and `LISTEN_FDS` / `LISTEN_PID` are passed along (`execKeepingListeners` in `listen.go`: it holds `syscall.ForkLock` for reading from clearing the flag to the exec, so no process started meanwhile inherits the sockets, and sets the flag again when the exec fails).
 
 ### Planned shutdown (`hub/restart.go`)
 
@@ -153,7 +157,7 @@ Previously clients received a string of "machine offline" and "interaction ended
   It is reused only if handed over within 10 minutes. After a crash there is no handover; the new process opens a new stream and clients do a full refresh, so they never get duplicate sequence numbers.
 - Approval cards that need filling in (elicitation) are sent only to clients that declared the capability; during the reconnect replay the client has not sent `client_hello` yet, so the replay skips them and the pending-interactions snapshot after connecting fills them in.
 
-### Machines and sessions (`devices/warm.go`; on the hub side `startDevices` in `hub/devices_link.go`)
+### Machines and sessions (`devices/warm.go`; on the hub side `startDevices` in `hub/devices_reports.go`)
 
 Since 2026-11-04 computers are connected by the manager ([machines.md](../server/machines.md) ("Who connects computers")): the manager is a child process of the hub and also receives SIGTERM when the hub stops.
 It first hands the `NodeInfo` and session lists of the machines online at this moment to its next process (its own settings `hub.warm_machines`, plus each machine's engines `engines`), then disconnects them (without reporting them offline).
@@ -188,7 +192,7 @@ The assistant's claude no longer belongs to a single hub connection:
 - Monitor and background commands are child processes of claude, and they keep running as long as claude does, so they **continue automatically after a hub restart** and wake the chat as usual when they finish.
   `recoverAssistantTasks` only sends "just restarted" when the chat process is really gone (for example, the node itself restarted).
 - **The node updating itself** (a deployment swapped the binary): `deploy.sh` now uses `node-launchd.sh restart-idle`, which sends SIGHUP to the node's main process only
-  (`systemctl --user kill -s HUP --kill-whom=main`; on the Mac `launchctl kill SIGHUP`). The node waits until no chat is answering or waiting on background tasks,
+  (`systemctl --user kill -s HUP --kill-who=main`; on the Mac `launchctl kill SIGHUP`). The node waits until no chat is answering or waiting on background tasks,
   stops idle chat processes, and `exec`s the new binary (same PID, invisible to systemd / launchd). Idle chats `--resume` on their next message. Old resident nodes do not understand SIGHUP; they simply exit and are restarted, like the old `restart`.
 
 Machines without a resident node (where the hub starts `node --stdio` directly over ssh and it handles everything itself) behave as before: a hub restart still interrupts chats, and background tasks still get "just restarted".
