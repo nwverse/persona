@@ -73,3 +73,7 @@ func TestUpdateInventoryDistinguishesNotRunningFromUnreachable(t *testing.T) {
 		t.Fatalf("explicit not-running host is an authoritative empty source: %v", err)
 	}
 }
+
+func (h *inventoryHost) SnapshotForUpdate(ctx context.Context) (*host.Layout, error) {
+	return h.Snapshot(ctx)
+}

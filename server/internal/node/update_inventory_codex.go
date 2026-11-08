@@ -27,6 +27,8 @@ type updateCodexThread struct {
 	PendingInteractions int    `json:"pending_interactions"`
 	Ephemeral           bool   `json:"ephemeral"`
 	ParentThreadID      string `json:"parent_thread_id"`
+	BackgroundTerminals int    `json:"background_terminals"`
+	BackgroundRevision  string `json:"background_revision"`
 }
 
 // observeUpdateThreads reads without resuming/joining a thread, canceling asks or
@@ -43,7 +45,7 @@ func (c *codexRemote) observeUpdateThreads(ctx context.Context) (updateCodexObse
 	if !ready || c.spec.ID == "" || c.generation == "" {
 		return out, fmt.Errorf("app-server source identity is not ready")
 	}
-	ids, err := c.loaded(ctx)
+	ids, err := c.loadedForUpdate(ctx)
 	if err != nil {
 		return out, fmt.Errorf("read complete loaded thread inventory: %w", err)
 	}
@@ -80,10 +82,15 @@ func (c *codexRemote) observeUpdateThreads(ctx context.Context) (updateCodexObse
 		}
 		// Keep activity and identity only. Conversation previews, prompts, titles
 		// and transcript paths do not belong in an update receipt.
+		background, revision, err := observeUpdateBackground(ctx, c.wire, id)
+		if err != nil {
+			return out, err
+		}
 		out.Threads = append(out.Threads, updateCodexThread{ID: id, Status: status,
-			Ephemeral: d.Ephemeral, ParentThreadID: d.ParentThreadID})
+			Ephemeral: d.Ephemeral, ParentThreadID: d.ParentThreadID,
+			BackgroundTerminals: background, BackgroundRevision: revision})
 	}
-	finalIDs, err := c.loaded(ctx)
+	finalIDs, err := c.loadedForUpdate(ctx)
 	if err != nil {
 		return out, fmt.Errorf("recheck loaded thread inventory: %w", err)
 	}
@@ -114,4 +121,64 @@ func (c *codexRemote) observeUpdateThreads(ctx context.Context) (updateCodexObse
 	digest := sha256.Sum256(b)
 	out.Revision = hex.EncodeToString(digest[:])
 	return out, nil
+}
+
+// Both a Node-owned stdio connection and a shared app-server use this same
+// read-only RPC. A nil cache or omitted data is never an empty terminal list.
+func observeUpdateBackground(ctx context.Context, wire *codexConn, thread string) (int, string, error) {
+	var response struct {
+		Data *[]json.RawMessage `json:"data"`
+	}
+	if err := wire.call(ctx, "thread/backgroundTerminals/list", map[string]any{"threadId": thread}, &response); err != nil {
+		return 0, "", fmt.Errorf("fresh background terminal inventory unavailable: %w", err)
+	}
+	if response.Data == nil {
+		return 0, "", fmt.Errorf("explicit background terminal inventory unavailable")
+	}
+	for _, raw := range *response.Data {
+		var item map[string]json.RawMessage
+		if err := json.Unmarshal(raw, &item); err != nil || item == nil {
+			return 0, "", fmt.Errorf("invalid background terminal inventory item")
+		}
+	}
+	data, err := json.Marshal(*response.Data)
+	if err != nil {
+		return 0, "", err
+	}
+	digest := sha256.Sum256(data)
+	return len(*response.Data), hex.EncodeToString(digest[:]), nil
+}
+
+// The update contract requires an explicit list on every page, including an
+// empty final page. Display APIs may remain tolerant of older servers.
+func (c *codexRemote) loadedForUpdate(ctx context.Context) ([]string, error) {
+	ids := []string{}
+	cursor := ""
+	seen := map[string]bool{}
+	for pageNumber := 0; pageNumber < 1000; pageNumber++ {
+		var page struct {
+			Data       *[]string `json:"data"`
+			NextCursor *string   `json:"nextCursor"`
+		}
+		args := map[string]any{"limit": 100}
+		if cursor != "" {
+			args["cursor"] = cursor
+		}
+		if err := c.wire.call(ctx, "thread/loaded/list", args, &page); err != nil {
+			return nil, err
+		}
+		if page.Data == nil {
+			return nil, fmt.Errorf("explicit loaded thread list unavailable")
+		}
+		ids = append(ids, (*page.Data)...)
+		if page.NextCursor == nil || *page.NextCursor == "" {
+			return ids, nil
+		}
+		cursor = *page.NextCursor
+		if seen[cursor] {
+			return nil, fmt.Errorf("loaded thread page cursor repeated")
+		}
+		seen[cursor] = true
+	}
+	return nil, fmt.Errorf("loaded thread page budget exceeded")
 }

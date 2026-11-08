@@ -60,3 +60,24 @@ func TestUpdateSubagentsPreserveExplicitCompletionAndCancellation(t *testing.T) 
 		t.Fatal("canceled child collection succeeded")
 	}
 }
+
+func TestUpdateSubagentsIncludesNestedWorkflowAndRejectsSymlinks(t *testing.T) {
+	dir := t.TempDir()
+	run := filepath.Join(dir, "workflows", "run")
+	if err := os.MkdirAll(run, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(run, "agent-child.meta.json"), []byte(`{"finished":false}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	rows, err := observeUpdateSubagentTree(context.Background(), dir)
+	if err != nil || len(rows) != 1 || !rows[0].Running {
+		t.Fatalf("nested workflow omitted: %+v %v", rows, err)
+	}
+	if err := os.Symlink(run, filepath.Join(dir, "alias")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := observeUpdateSubagentTree(context.Background(), dir); err == nil {
+		t.Fatal("symlinked child source accepted")
+	}
+}

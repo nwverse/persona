@@ -490,33 +490,65 @@ Every client has the same page (web: `docs/web/web.md`, Android: `docs/android/a
 
 ## Automatic update idle evidence
 
-The private release publisher's manager idle collector (`scripts/release/manager_idle.py`)
-fails closed on ordinary display inventories. An authoritative producer must return
-`update_inventory: {schema: 1, complete: true, revision: "…", observed_at: "…"}`
-on both the explicitly scoped assistant conversation inventory (including archived
-conversations) and each owned machine's complete activity inventory. This is a new
-producer contract, not a claim that legacy HTTP responses already support it.
-Missing metadata or runtime fields cannot be supplied by a release configuration.
+A checked release candidate is not idle evidence. The original independent
+manager settings and the live Node own different parts of the proof. A newer
+full `personad` can read both without replacing or restarting that manager:
 
-The original main must be present in its scoped conversations; it need not occur
-in the ordinary machine display list. Rows are keyed by machine and session under
-the selected manager. Conflicting copies, missing revisions, ownership changes,
-partial pages, stale observations and changing complete reads are refused. Two
-complete reads must agree within a 30-second acquisition budget before evidence is
-hashed. Each underlying publisher HTTP request also has a bounded timeout.
+```sh
+personad manager update inventory --plan /absolute/original-plan.json \
+  --main ORIGINAL_MAIN --machine ORIGINAL_MACHINE --machine-uid ORIGINAL_UID
+```
 
-Idle checks require explicit live/starting, background, subagent, compaction and
-interaction evidence, independently of the display state. A history source or an
-`offline` state alone never establishes inactivity. Only explicitly non-live,
-terminal history with empty activity may be excluded. Old endpoints missing this
-contract remain unsupported for automatic activation; an explicit bootstrap window
-does not manufacture missing evidence. The publisher recollects immediately before
-activation, after transfer and local checks, then timestamps the plan. A local
-`checked` receipt remains distinct from complete idle evidence or confirmation.
+This command uses the plan only to bind the original manager directory, UID and
+config hash. It opens that manager's existing Postgres with read-only startup
+parameters and executes one fixed SELECT of the persisted main, machine, row
+version and observation time. It does not use the database migration entry point,
+write settings, create receipts or activate an update. Connection diagnostics do
+not print the DSN. A missing main or mismatched explicit identity fails closed.
 
-The versioned producer and native transaction transport must be implemented and
-negotiated before this contract can enable a legacy installation. Merely installing
-this collector does not enable an update or certify the current runtime as idle.
+The optional Node capability `manager_update_inventory_v1` announces the local
+0600 `node.sock` request kind `update.inventory`. The input is an explicit
+`{manager, main, machine_id, machine_uid, authority_revision}`. Its schema-1
+response binds that identity to the process instance, source revisions, complete
+activity rows and completion time. It is a local read-only interface; it does not
+add a Hub Link transaction-update adapter or raise the Node protocol floor.
+Legacy managers and Nodes remain compatible for ordinary use, but a legacy Node
+without this producer cannot furnish this proof.
+
+The producer reads full configured host snapshots, complete loaded Codex thread
+pages including ephemeral/child threads, fresh background terminal lists, and
+owned stdio app-servers. Starting keys, warm spares, resident processes and
+pending interactions cannot be omitted. Retained background/compaction and nested
+workflow child metadata remain blockers without explicit completion. It compares
+source membership, identity, configuration and the owner's process inventory
+again after reading. A cached display row, historical `offline` status, missing
+list or old mtime never proves completion. An unloaded persisted main is covered
+only after the complete live sources have answered. Snapshot data includes no
+prompts, task commands, transcript content or credentials.
+
+Terminal agents, live Claude streams without a synchronous background-inventory
+barrier, and third-party runtimes without an authoritative inventory contract
+remain unsupported for idle attestation. Their display saying idle does not
+remove the blocker. An unreachable source, unresolved retained activity, missing
+capability, changing ownership, partial page or clock conflict also fails closed.
+
+The native reader performs two complete runtime reads within 30 seconds, compares
+payload revisions, and rereads persisted identity after the final runtime read.
+Only a successful complete read returns `idle: true` and a SHA-256 digest. Its
+`completed_at` starts the evidence lifetime; it does not retimestamp a saved
+snapshot. Collect again immediately before the original transaction start after
+any transfer/check. The transaction's original lock, fresh plan, guardian,
+confirmation and rollback requirements remain in force. An explicit bootstrap
+window does not replace missing idle evidence.
+
+The native reader may be newer than the fixed formal manager candidate. The
+candidate retains its own source/hash checks and is not rebuilt merely to collect
+inventory. A Node-only executable lacking the manager CLI needs the same formal
+source's full `personad` reader, not a guessed executable or an installed manager
+replacement. Existing publisher HTTP collection (`manager_idle.py`) still refuses
+legacy display inventories without its complete scoped metadata; the local
+producer does not silently label those HTTP lists authoritative. Hub Link update
+transport is a separate capability and is not required for local collection.
 
 ## Clients (step 4)
 

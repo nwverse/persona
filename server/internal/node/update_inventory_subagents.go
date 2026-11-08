@@ -100,3 +100,42 @@ func observeUpdateSubagents(ctx context.Context, dir string) ([]proto.Subagent, 
 	}
 	return out, nil
 }
+
+// Workflow runs have the same explicit completion metadata in nested
+// directories. No workflow or nested child may disappear behind a display cap.
+func observeUpdateSubagentTree(ctx context.Context, dir string) ([]proto.Subagent, error) {
+	if _, err := os.Lstat(dir); os.IsNotExist(err) {
+		return []proto.Subagent{}, nil
+	} else if err != nil {
+		return nil, err
+	}
+	rows := []proto.Subagent{}
+	count := 0
+	err := filepath.WalkDir(dir, func(path string, entry os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		count++
+		if count > 10000 {
+			return fmt.Errorf("subagent inventory entry budget exceeded")
+		}
+		if entry.Type()&os.ModeSymlink != 0 {
+			return fmt.Errorf("subagent tree contains ambiguous symlink")
+		}
+		if entry.IsDir() {
+			children, err := observeUpdateSubagents(ctx, path)
+			if err != nil {
+				return err
+			}
+			rows = append(rows, children...)
+		}
+		return nil
+	})
+	if os.IsNotExist(err) {
+		return nil, fmt.Errorf("subagent tree changed or is unavailable")
+	}
+	return rows, err
+}
