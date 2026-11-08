@@ -105,7 +105,7 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 	case "model_profiles_list", "model_profile_get", "model_profile_switch", "model_profile_rollback":
 		return s.toolModelProfile(ctx, self, name, args)
 	case "task_review":
-		return s.toolTaskReview(ctx, self, args) // supervise.go
+		return s.toolTaskReview(ctx, self, args) // supervise_review.go
 	case "kb_search", "kb_list", "kb_get", "kb_update":
 		return s.toolKB(ctx, name, args)
 	case "interaction_answer":
