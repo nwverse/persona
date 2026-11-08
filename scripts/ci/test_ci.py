@@ -36,6 +36,34 @@ class PathTests(unittest.TestCase):
         self.assertTrue(all(paths.select([".github/workflows/ci.yml"]).values()))
         self.assertTrue(all(paths.select([], True).values()))
 
+    def test_dispatch_base_does_not_need_pr_payload(self):
+        self.assertEqual(paths.resolve_base(), "origin/main")
+        self.assertEqual(paths.resolve_base(event={"inputs": {"lanes": "auto"}}), "origin/main")
+        self.assertEqual(paths.resolve_base(event={"pull_request": {"base": {"sha": "pr-base"}}}), "pr-base")
+        self.assertEqual(paths.resolve_base(event={"merge_group": {"base_sha": "queue-base"}}), "queue-base")
+        self.assertEqual(paths.resolve_base("override", {"pull_request": {"base": {"sha": "ignored"}}}), "override")
+
+    def test_explicit_lanes_and_invalid_values(self):
+        self.assertTrue(all(paths.select_lanes([], "all").values()))
+        selected = paths.select_lanes(["apple/Shared/Hub.swift"], "server, web")
+        self.assertEqual({name for name, enabled in selected.items() if enabled}, {"server", "web"})
+        for value in ("", "typo", "auto,web", "image", "web,"):
+            with self.assertRaises(ValueError, msg=value):
+                paths.select_lanes([], value)
+
+    def test_local_cli_without_github_environment(self):
+        environment = {key: value for key, value in os.environ.items() if not key.startswith("GITHUB_")}
+        command = [sys.executable, str(Path(__file__).with_name("paths.py"))]
+        result = subprocess.run(command + ["--base", "HEAD"], env=environment, capture_output=True, text=True, timeout=30)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(json.loads(result.stdout), paths.select([]))
+        result = subprocess.run(command + ["--print-base", "--base", "HEAD"], env=environment, capture_output=True, text=True, timeout=30)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(len(result.stdout.strip()), 40)
+        result = subprocess.run(command + ["--lanes", "server,web"], env=environment, capture_output=True, text=True, timeout=30)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(json.loads(result.stdout), paths.select_lanes([], "server,web"))
+
     def test_deleted_and_renamed_old_paths_are_relevant(self):
         self.assertTrue(paths.select(["apple/Old.swift", "docs/archive/new.md"])["apple"])
 
