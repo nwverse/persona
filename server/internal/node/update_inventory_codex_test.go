@@ -74,7 +74,7 @@ func TestUpdateCodexInventoryRequiresFreshExplicitBackground(t *testing.T) {
 		}
 	}
 	f.mu.Lock()
-	f.backgroundReply = map[string]any{"data": []any{map[string]any{"command": "synthetic work"}}}
+	f.backgroundReply = map[string]any{"data": []any{map[string]any{"processId": "fixture-process", "command": "synthetic work"}}}
 	f.mu.Unlock()
 	out, err := c.observeUpdateThreads(context.Background())
 	if err != nil || len(out.Threads) != 1 || out.Threads[0].BackgroundTerminals != 1 || out.Threads[0].BackgroundRevision == "" {
@@ -104,7 +104,7 @@ func TestUpdateOwnedCodexReadsFreshThreadsTerminalsAndPendingActivity(t *testing
 	c.wire.turnID = ""
 	c.wire.mu.Unlock()
 	f.mu.Lock()
-	f.backgroundReply = map[string]any{"data": []any{map[string]any{"command": "synthetic"}}}
+	f.backgroundReply = map[string]any{"data": []any{map[string]any{"processId": "fixture-process", "command": "synthetic"}}}
 	f.mu.Unlock()
 	rows, _, err = n.observeUpdateAssistant(context.Background(), p)
 	if err != nil || rows[0].Background != 1 {
@@ -112,5 +112,48 @@ func TestUpdateOwnedCodexReadsFreshThreadsTerminalsAndPendingActivity(t *testing
 	}
 	if f.count("thread/resume") != 0 || f.count("turn/start") != 0 {
 		t.Fatal("inventory mutated the thread")
+	}
+}
+
+func TestUpdateCodexBackgroundReadsAllPages(t *testing.T) {
+	n := remoteTestNode(t)
+	f, c := connectRemoteFixture(t, n, t.TempDir(), "fixture", remoteRaw)
+	f.mu.Lock()
+	f.backgroundPages = map[string]map[string]any{
+		"":     {"data": []any{}, "nextCursor": "more"},
+		"more": {"data": []any{map[string]any{"processId": "last-page-process"}}},
+	}
+	f.mu.Unlock()
+	out, err := c.observeUpdateThreads(context.Background())
+	if err != nil || len(out.Threads) != 1 || out.Threads[0].BackgroundTerminals != 1 {
+		t.Fatalf("later-page work was omitted: %+v %v", out, err)
+	}
+	if f.count("thread/backgroundTerminals/list") != 2 {
+		t.Fatal("complete pagination was not read")
+	}
+}
+
+func TestUpdateCodexBackgroundRefusesIncompletePagination(t *testing.T) {
+	for _, name := range []string{"missing-page", "cycle", "duplicate", "missing-identity"} {
+		t.Run(name, func(t *testing.T) {
+			n := remoteTestNode(t)
+			f, c := connectRemoteFixture(t, n, t.TempDir(), "fixture", remoteRaw)
+			f.mu.Lock()
+			f.backgroundPages = map[string]map[string]any{
+				"": {"data": []any{map[string]any{"processId": "one"}}, "nextCursor": "more"},
+			}
+			switch name {
+			case "cycle":
+				f.backgroundPages["more"] = map[string]any{"data": []any{}, "nextCursor": "more"}
+			case "duplicate":
+				f.backgroundPages["more"] = map[string]any{"data": []any{map[string]any{"processId": "one"}}}
+			case "missing-identity":
+				f.backgroundPages["more"] = map[string]any{"data": []any{map[string]any{"command": "synthetic"}}}
+			}
+			f.mu.Unlock()
+			if _, err := c.observeUpdateThreads(context.Background()); err == nil {
+				t.Fatal("incomplete terminal pages were certified complete")
+			}
+		})
 	}
 }

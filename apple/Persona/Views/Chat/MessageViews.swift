@@ -240,6 +240,7 @@ struct PeerMessage: View {
     var item: Item
     var from: String
     @Environment(\.rowMemoScope) private var memoScope
+    @Environment(\.subagentsByCall) private var agents
 
     var body: some View {
         let d = RowMemo.assistant(RowMemo.key(memoScope, item.id)) { _ in AssistantRowText(item.text ?? "") } // once per message
@@ -248,20 +249,32 @@ struct PeerMessage: View {
                 .font(Theme.Font.labelStrong)
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
-            Markdown(d.markdown)
-                .markdownSoftBreakMode(.lineBreak)
-                .markdownTheme(.persona)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                #if os(macOS)
-                .textSelection(.enabled) // drag to select and ⌘C, as on the web (#2542)
-                #endif
+            if Self.isHandback(from: from, agents: agents.values) {
+                // A subagent's report that came as a message: one line until opened, as in its card.
+                FoldedReport(id: pinKey, text: item.text ?? "", font: Theme.Font.secondary) { words(d) }
+            } else {
+                words(d)
+            }
         }
         .padding(Theme.Space.m)
         .background(Theme.Fill.well, in: .rect(cornerRadius: Theme.Radius.card, style: .continuous))
         .overlay(RoundedRectangle(cornerRadius: Theme.Radius.card, style: .continuous).stroke(Color.primary.opacity(0.08), lineWidth: 0.5))
         .padding(.trailing, Theme.Space.xxl)
+        .chatPinned(pinKey)
         .messageLongPress(id: item.id)
         .messageActionBar(id: item.id, text: item.text ?? "", isUser: false, date: item.ts)
+    }
+
+    private var pinKey: String { "peer-" + item.id }
+
+    private func words(_ d: AssistantRowText) -> some View {
+        Markdown(d.markdown)
+            .markdownSoftBreakMode(.lineBreak)
+            .markdownTheme(.persona)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            #if os(macOS)
+            .textSelection(.enabled) // drag to select and ⌘C, as on the web (#2542)
+            #endif
     }
 }
 

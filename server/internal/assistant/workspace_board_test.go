@@ -113,6 +113,10 @@ func (d *boardDevs) List() []devices.Summary {
 	}
 	return out
 }
+func (d *boardDevs) MachineResources(string) (*proto.Machine, *proto.MetricSample, *bool) {
+	return nil, nil, nil
+}
+
 func (d *boardDevs) Sessions(id string) ([]proto.Session, bool) {
 	d.mu.Lock()
 	defer d.mu.Unlock()

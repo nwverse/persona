@@ -18,6 +18,9 @@ n=0 failed=""; for f in $(find scripts -name 'test_*.py' -not -path '*/node_modu
 `.github/workflows/ci.yml` runs on every PR and manual dispatch. There is no merge-queue trigger while the repository has no merge queue.
 Automatic PR CI allocates **one runner, named CI required**. That job performs repository/commit privacy and path safety, documentation
 paths and README checks, CI-regression tests, then the complete Web and runtime/SDK checks when selected by `scripts/ci/paths.py`.
+`scripts/ci/guards.sh` also runs `scripts/ci/migration_freeze.py`. An edit, deletion or rename of a `.sql` file already on the base under
+`server/internal/db/migrations/hub` or `server/internal/db/migrations/manager` fails that check. Comment-only and whitespace-only edits pass;
+add a new migration instead.
 It does not queue separate guards, script shards and an aggregate runner. Any executed step failure still fails the real check.
 Require **CI required** only; no repository rulesets are changed. A workflow change needs green hosted verification on the PR head.
 
@@ -163,6 +166,7 @@ Path mapping:
 | `sdk/ts/**` | `bun test` (skip with reason if bun absent) |
 | `sdk/go/**` | `go test ./...` in sdk/go module |
 | `server/internal/foo/**`, `server/cmd/bar/**` | Affected packages, e.g. `go test ./internal/foo/...`; unmappable server changes fall back to `go build ./...` |
+| `server/internal/db/migrations/**`, `scripts/ci/migration_freeze.py` | `python3 scripts/ci/migration_freeze.py`: a migration already on the base cannot be edited, deleted or renamed (comment-only and whitespace-only edits pass; a new file may be added). A rename out of the directory counts. `--all` runs it when the script is present |
 | `spec/fixtures/**`, `schema/extension/**`, `integrations/**`, `docs/<file>`, `scripts/test/server_test_env.py` | In addition to other checks in this table, `go test ./internal/<package>/...` for server packages reading these files (repository inputs covered by `server-test.yml` filters). At runtime, `git grep` finds packages referencing the path in `server/**/*_test.go` (strings or `filepath.Join` components; `//` comment lines excluded), so new readers need no script changes; other `spec/` files remain unmapped |
 | `android/**`, `scripts/app/*android*` (including both `test_android_*` self-tests) | `scripts/app/android_i18n_check.py` and Android checker unittests (i18n, token baseline; no Gradle build) |
 | `.github/**` | `scripts/test/pr_needs_issue_test.mjs` |
@@ -277,7 +281,7 @@ xcrun simctl launch --terminate-running-process $SIM <bundle id> \
   New conversation layout (#1666, `docs/apple/ios.md` "New conversation layout"): `MOCK_TASKS=1 MOCK_TASKS_REPORTS=1 MOCK_INJECTED=1 MOCK_EXCHANGES=1 MOCK_TASKS_NO_ASKS=1 MOCK_TASKS_AT=5.5` puts a long Persona → task message, the task's long report (a link in its words, two evidence links) and a supervision digest at the bottom.
   `NewChatLayoutTests` checks the headers, folding and Expand, no evidence list, the old layout with `-ui.newChatLayout NO`, and a slide along the right edge; `PERSONA_SHOTS` saves folded / expanded / off / the navigator (`-showEdgeScrub 3`).
   Task answer records (#1231): "Complete network-layer unit tests" has three full question/answer pairs; "Fix widget landscape crash" is an old summary-only record. `MOCK_TASKS=1 MOCK_TASKS_NO_ASKS=1 MOCK_TASKS_AT=23` puts them at bottom; `AnsweredLineTests` (`PERSONA_SHOTS`, collapsed/expanded) opens then collapses them.
-  What Persona sent to its tasks' agents (#1542): `MOCK_TASKS=1 MOCK_TASKS_SENT=1 MOCK_TASKS_NO_ASKS=1` adds, at the bottom, a task card whose long hand-off it takes in ("1 instruction sent"), a rework to the widget task as a folded line, and the user's own word to the unit-test task as a bubble; `SentToAgentTests` (`PERSONA_SHOTS`: folded, card list open, line open).
+  What Persona sent to its tasks' agents (#1542): `MOCK_TASKS=1 MOCK_TASKS_SENT=1 MOCK_TASKS_NO_ASKS=1` adds, at the bottom, a task card whose long hand-off it takes in ("1 instruction sent"), a rework to the widget task as a folded line, and the user's own word to the unit-test task as a bubble; `SentToAgentTests` (`PERSONA_SHOTS`: folded, card list open, line open). With `MOCK_TASKS_AT=1559` the bottom is yesterday's blog-migration card, now a line, with its hand-off as a folded line under it (#1668).
   The hub's notice line (#4305): `MOCK_TASKS=1 MOCK_TASKS_NOTICE=1 MOCK_TASKS_NO_ASKS=1` adds "电脑和模型接好了，定时任务恢复运行，这次是「早报」" as the conversation's last line, small and centered.
   What didn't go through overnight on the Today card (#4124): `MOCK_TODAY_FAILED=1` (with `MOCK_TASKS=1`) adds a task whose Agent didn't start, a failed scheduled run and a skipped one, with `failed_total` 5, so the row says how many in all and "2 more"; without it the card is as before.
   Message card states (#4797): `MOCK_TASKS_MESSAGE=filed` marks the card about the widget task as handled elsewhere (`filed_at`): no Send, the draft greyed out with a line saying it wasn't sent. `MOCK_TASKS_MESSAGE=sent` marks it as replied from the card (`sent_at`).

@@ -258,6 +258,49 @@ class CheckFastScriptsTests(unittest.TestCase):
         self.assertNotIn("failed: scripts/test/test_external_service_refs.py", out)
         self.assertNotIn("queued: scripts/tools/test_gone.py", out)  # one job, not one per suite
 
+    def test_a_migration_edit_runs_the_freeze_check(self):
+        self.write("scripts/ci/migration_freeze.py", "print('freeze-ran')\n")
+        self.write("server/internal/db/migrations/hub/0001_init.sql", "CREATE TABLE t (id int);\n")
+        self.git("add", "-A")
+        self.git("-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "-q", "-m", "migrations")
+        self.git("tag", "-f", "base")
+        self.write("server/internal/db/migrations/hub/0001_init.sql", "CREATE TABLE t (id text);\n")
+        code, out = self.check_fast(path=self.toolchain_without_node_and_go())
+        self.assertEqual(0, code, out)
+        self.assertIn("PASS     frozen migrations", out)
+        self.assertIn("server go tests (internal/db)", out)  # no Go module here; the freeze check still ran
+
+    def test_an_unrelated_change_does_not_run_the_freeze_check(self):
+        self.write("scripts/ci/migration_freeze.py", "print('freeze-ran')\n")
+        self.git("add", "-A")
+        self.git("-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "-q", "-m", "checker")
+        self.git("tag", "-f", "base")
+        self.write("docs/guide.md", "changed\n")
+        code, out = self.check_fast(path=self.toolchain_without_node_and_go())
+        self.assertEqual(0, code, out)
+        self.assertNotIn("frozen migrations", out)
+        self.assertIn("PASS     scripts/test/test_doc_paths.py", out)
+
+    def test_renaming_a_migration_out_of_its_directory_runs_the_freeze_check(self):
+        self.write("scripts/ci/migration_freeze.py", "print('freeze-ran')\n")
+        self.write("server/internal/db/migrations/hub/0001_init.sql", "CREATE TABLE t (id int);\n")
+        self.git("add", "-A")
+        self.git("-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "-q", "-m", "migrations")
+        self.git("tag", "-f", "base")
+        (self.repo / "notes").mkdir()
+        self.git("mv", "server/internal/db/migrations/hub/0001_init.sql", "notes/moved.sql")
+        code, out = self.check_fast(path=self.toolchain_without_node_and_go())
+        self.assertEqual(0, code, out)
+        self.assertIn("PASS     frozen migrations", out)
+        self.assertNotIn("server go test", out)  # the destination is outside server/, and --name-only drops the old path
+
+    def test_all_runs_the_freeze_check_when_the_script_exists(self):
+        self.write("scripts/ci/migration_freeze.py", "print('freeze-ran')\n")
+        code, out = self.check_fast("--all", path=self.toolchain_without_node_and_go())
+        self.assertEqual(1, code, out)  # the stubbed scripts/tools/test_other.py fails, and node/go are missing
+        self.assertIn("PASS     frozen migrations", out)
+        self.assertIn("queued: scripts unittest suites (6)", out)
+
     def test_all_reports_a_slow_suite_as_timeout_and_runs_the_rest(self):
         self.write("scripts/tools/test_other.py", PASSING)
         self.write("scripts/tools/test_slow.py", PASSING.replace("pass", "__import__('time').sleep(30)"))

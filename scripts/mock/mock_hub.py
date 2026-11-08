@@ -3164,6 +3164,10 @@ if MOCK_TASKS:
         for _i, _x in enumerate(ITEMS[ASK1]):
             _x["seq"] = _base + _i
         TASK_FEED[ASK1] += [
+            # Yesterday's hand-off with the blog migration's card (#1668): that card is a line now, so this stays a folded
+            # line under it (MOCK_TASKS_AT=1559 puts it at the bottom).
+            _feed("feed_s0", 60 * 26 - 0.61, "routed", "todo_task_blog",
+                  {"text": "把博客从 Hexo 迁到 Astro。\n\n要求：\n- 32 篇文章都要能构建\n- 旧链接全部 301 到新地址\n- Lighthouse 性能分 90 以上", "from": "assistant"}),
             _feed("feed_s1", 1.05, "task", "todo_task_memory"),
             _feed("feed_s2", 1.0499, "routed", "todo_task_memory", {"text": _handoff, "from": "assistant"}),
             _feed("feed_s3", 0.6, "routed", "todo_task_widget", {"text": _rework, "from": "assistant"}),
@@ -7456,6 +7460,45 @@ def mock_subagent_parallel():
 
 if os.environ.get("MOCK_SUBAGENT_PARALLEL") == "1":
     mock_subagent_parallel()
+
+
+# MOCK_REPORT_FOLD=1: subagents' reports read as one line until opened: a foreground subagent's result (a heading
+# first), a background one's notice, and that one's report again as another session's message (its handback, by its
+# type, as an older node shows it); a real peer's message stays whole.
+REPORTS = "a1f3c2d4-0000-4000-8000-0000000c1e07"
+
+
+def mock_report_fold():
+    report = ("## 结算回归：42 个用例全部通过\n\n- 下单、改地址、用优惠券三条主流程都过了。\n- 用时 1 分 48 秒，比上次快 20 秒。\n"
+              "- 没有新增的不稳定用例。")
+    bg = ("搜索和筛选的回归跑完了：120 个用例里 118 个通过，2 个失败都在价格筛选，原因是测试数据里两件下架商品没有价格。"
+          "已经在 fixtures 里补上价格，重跑后全部通过。\n\n改动：`e2e/fixtures/products.json`。")
+    _r = [it("user", "text", 12, text="把结算和搜索的回归拆给子 Agent 跑")]
+    _r += tool("Agent", {"description": "回归：结算流程", "subagent_type": "general-purpose", "prompt": "跑结算流程的回归用例，失败的列出来"},
+               report + "\nagentId: rfdone (use SendMessage with to: 'rfdone' to continue this agent)", 11)
+    _done = _r[-2]["tool_use_id"]
+    _r += tool("Agent", {"description": "回归：搜索和筛选", "subagent_type": "Explore", "prompt": "跑搜索和筛选的回归用例", "run_in_background": True},
+               "Async agent launched successfully.\nagentId: rfbg (This is an internal ID for your use)", 10.5)
+    _bg = _r[-2]["tool_use_id"]
+    _r.append(it("assistant", "text", 10, text="结算的回归跑完了，搜索和筛选的在后台跑。"))
+    _r.append(it("system", "notice", 4, text="Agent \"回归：搜索和筛选\" completed",
+                 task={"kind": "agent", "status": "completed", "title": "回归：搜索和筛选", "task_id": "rfbg", "tool_use_id": _bg, "detail": bg}))
+    _r.append(it("user", "text", 3.9, text=bg, **{"from": "Explore"}))
+    _r.append(it("user", "text", 3.5, text="发版分支已经切好了，可以开始回归。", **{"from": "release-bot"}))
+    _r.append(it("assistant", "text", 3, text="两块回归都过了：结算 42 个全过；搜索和筛选补了测试数据后全过。"))
+    ITEMS[REPORTS] = _r
+    sub = lambda i, desc, use, **kw: {"id": i, "session_id": REPORTS + "@" + i, "type": kw.pop("type", "general-purpose"), "description": desc,
+                                      "tool_use_id": use, "running": False, "started_at": ago(minutes=kw.pop("at", 11)), **kw}
+    ITEMS[REPORTS + "@rfdone"] = [it("user", "text", 11, text="跑结算流程的回归用例，失败的列出来"), it("assistant", "text", 10.8, text=report)]
+    ITEMS[REPORTS + "@rfbg"] = [it("user", "text", 10.5, text="跑搜索和筛选的回归用例"), it("assistant", "text", 4, text=bg)]
+    SESSIONS.append(sess("macbook", REPORTS, "回归报告", "/Users/me/code/shop-web", "done", "unread", "shop-web", 7, "reports", 1, 3,
+                         "两块回归都过了。", subagents=[
+                             sub("rfdone", "回归：结算流程", _done, steps=3, updated_at=ago(minutes=10.8)),
+                             sub("rfbg", "回归：搜索和筛选", _bg, at=10.5, type="Explore", background=True, steps=5, updated_at=ago(minutes=4))]))
+
+
+if os.environ.get("MOCK_REPORT_FOLD") == "1":
+    mock_report_fold()
 
 
 # MOCK_WORK_GROUPS=1: one finished conversation with every way a work group reads (#1963, web): a short run (five steps
@@ -14865,13 +14908,19 @@ class H(BaseHTTPRequestHandler):
             s = next((x for x in SESSIONS if x["session_id"] == p.split("/")[5]), None)
             if not (s or {}).get("queued"):
                 return self.send_json({"code": "nothing_queued", "error": "Nothing is queued for the agent any more."}, 409)
+            refuse = os.environ.get("MOCK_SEND_NOW")  # refuses with that code, to see the app's words for it
+            if refuse:
+                return self.send_json({"error": "refused (%s)" % refuse, "code": refuse,
+                                       **({"delivered": "unknown"} if refuse == "send_now_in_doubt" else {})}, 409)
             s["queued"] = []
             push_machine(s["machine_id"])
             return self.send_json({"sent": True})
         if p.startswith("/api/v1/sessions/") and p.endswith("/queue"):  # node editQueue: pull every queued message back, re-queue `keep`
             body = json.loads(self.last_body or b"{}")
             QUEUE_EDITS.append(body)
-            s = next((x for x in all_sessions() if x["session_id"] == p.split("/")[5]), None)
+            # The stored session (all_sessions() hands out copies): the new order is what the next list says (#6088).
+            s = next((x for x in SESSIONS if x["session_id"] == p.split("/")[5]), None) \
+                or next((x for x in all_sessions() if x["session_id"] == p.split("/")[5]), None)
             pulled = list((s or {}).get("queued") or [])
             if not pulled: return self.send_json({"error": "nothing is queued"}, 502)
             s["queued"] = [pulled[k] for k in body.get("keep") or [] if 0 <= k < len(pulled)]

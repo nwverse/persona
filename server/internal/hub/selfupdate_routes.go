@@ -72,6 +72,7 @@ func (u *updater) routes(api *http.ServeMux) {
 			writeErr(w, http.StatusServiceUnavailable, i18n.Err("http-status.unavailable"))
 			return
 		}
+		prev := u.settings
 		if body.Auto != nil {
 			a := *body.Auto
 			u.settings.Auto = &a
@@ -81,6 +82,10 @@ func (u *updater) routes(api *http.ServeMux) {
 			u.settings.AutoNoticeSeen = *body.AutoNoticeSeen
 		}
 		err := u.saveLocked(r.Context())
+		if err != nil {
+			// Not saved: an update waiting for idle and the view sent to the apps keep acting on the stored choice.
+			u.settings = prev
+		}
 		u.mu.Unlock()
 		if err != nil {
 			writeErr(w, http.StatusServiceUnavailable, i18n.Err("http-status.unavailable"))

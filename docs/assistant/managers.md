@@ -526,11 +526,31 @@ list or old mtime never proves completion. An unloaded persisted main is covered
 only after the complete live sources have answered. Snapshot data includes no
 prompts, task commands, transcript content or credentials.
 
-Terminal agents, live Claude streams without a synchronous background-inventory
-barrier, and third-party runtimes without an authoritative inventory contract
-remain unsupported for idle attestation. Their display saying idle does not
-remove the blocker. An unreachable source, unresolved retained activity, missing
-capability, changing ownership, partial page or clock conflict also fails closed.
+An explicitly remote Codex terminal can use the configured app-server's authority.
+The supported command form is `codex resume --remote <configured-local-endpoint> <thread-id>`:
+the host must report that exact session, its foreground PID must match the owner's
+process inventory, and kernel argv must bind that PID to the same endpoint and
+thread. Argument boundaries come from `/proc/<pid>/cmdline` on Linux and
+`KERN_PROCARGS2` on macOS, never the formatted `ps` command or a title. The endpoint
+must already be a configured, connected local app-server; collection neither starts
+one nor resumes the terminal. A matching historical thread ID alone is insufficient.
+All loaded threads, ephemeral children, background terminals and pending activity
+are retained even when the host displays idle. Activity revisions and foreground
+bindings are read again before completion. Missing sessions, duplicate bindings,
+changed membership and old app-servers without background-terminal reads are refused.
+
+Other terminal forms, live Claude streams without a synchronous background-inventory
+barrier, and third-party runtimes without an authoritative inventory contract remain
+unsupported for idle attestation. This adapter does not certify existing embedded
+or unbound terminals, upgrade a runtime, or establish a new runtime capability.
+Herdr's display revision, foreground process list and session snapshot are not a
+complete background or child inventory. A future runtime producer must expose a
+read-only snapshot for the same live session/process, with an instance/generation,
+complete source membership, children, background work, pending interactions,
+compaction and revision/freshness evidence. Installing a host adapter after a
+session starts cannot manufacture missing lifetime coverage. Their display saying
+idle does not remove the blocker. An unreachable source, unresolved retained activity,
+missing capability, changing ownership, partial page or clock conflict also fails closed.
 
 The native reader performs two complete runtime reads within 30 seconds, compares
 payload revisions, and rereads persisted identity after the final runtime read.

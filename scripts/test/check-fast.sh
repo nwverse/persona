@@ -17,6 +17,10 @@
 #   sdk/ts/**                  bun test (skipped with a reason when bun is absent)
 #   sdk/go/**                  go test ./... inside the sdk/go module
 #   server/internal/foo/**     go test ./internal/foo/...   (cmd/ likewise; uncategorized server changes: go build ./...)
+#   server/internal/db/migrations/**, scripts/ci/migration_freeze.py
+#                              python3 scripts/ci/migration_freeze.py (a migration already on the base must not be
+#                              edited, deleted or renamed; comment- and whitespace-only edits pass; a new file may be
+#                              added). A rename out of the directory counts too. --all runs it when the script is present.
 #   spec/fixtures/**, schema/extension/**, integrations/**, docs/<file>, scripts/test/server_test_env.py
 #                              also go test on each server package whose _test.go names that input (server-test.yml's
 #                              path filter), found at run time with git grep (comment lines are ignored)
@@ -319,6 +323,47 @@ job_pr_needs_issue() {
   step "$TIMEOUT_OTHER" "node scripts/test/pr_needs_issue_test.mjs" node scripts/test/pr_needs_issue_test.mjs || return $?
 }
 
+# job_migration_freeze compares migrations already on the base with the index and the working tree. In diff mode the
+# base is the merge-base check-fast already resolved (so --base agrees); --all resolves the default branch itself.
+job_migration_freeze() {
+  [ "$HAVE_PY" -eq 1 ] || skip "python3 not found"
+  if [ "$ALL" -eq 1 ]; then
+    step "$TIMEOUT_OTHER" "python3 scripts/ci/migration_freeze.py" python3 scripts/ci/migration_freeze.py || return $?
+  else
+    step "$TIMEOUT_OTHER" "python3 scripts/ci/migration_freeze.py --base $MB" \
+      python3 scripts/ci/migration_freeze.py --base "$MB" || return $?
+  fi
+}
+
+# migration_freeze_wanted is true when a migration already on the base might have changed, or when the checker itself
+# changed. --name-only lists a rename's destination only, so a file moved out of the directory shows up in the
+# name-status scan (status, then the old path, then the new path).
+migration_freeze_wanted() {
+  [ "$ALL" -eq 1 ] && return 0
+  local f status path newpath
+  while IFS= read -r f; do
+    case "$f" in
+      server/internal/db/migrations/*|scripts/ci/migration_freeze.py) return 0 ;;
+    esac
+  done <<< "$CHANGED"
+  while IFS= read -r -d '' status; do
+    IFS= read -r -d '' path || return 1
+    case "$status" in
+      R*|C*)
+        IFS= read -r -d '' newpath || return 1
+        case "$path" in server/internal/db/migrations/*) return 0 ;; esac
+        path=$newpath
+        ;;
+    esac
+    case "$path" in
+      server/internal/db/migrations/*|scripts/ci/migration_freeze.py) return 0 ;;
+    esac
+  done < <(git diff --name-status --find-renames -z "$MB" HEAD
+           git diff --name-status --find-renames -z
+           git diff --cached --name-status --find-renames -z)
+  return 1
+}
+
 job_extension_schema() {
   [ "$HAVE_PY" -eq 1 ] || skip "python3 not found"
   # The codegen-current check reformats generated Go and needs gofmt.
@@ -611,6 +656,16 @@ if [ "$PRNEEDS" -eq 1 ]; then
 fi
 if [ "$EXTSCHEMA" -eq 1 ]; then
   if [ "$HAVE_PY" -eq 1 ]; then schedule "extension schema conformance" job_extension_schema ""; else core_missing "python3 not found; extension schema test skipped"; fi
+fi
+
+if [ -f scripts/ci/migration_freeze.py ] && migration_freeze_wanted; then
+  if [ "$HAVE_PY" -eq 1 ]; then
+    schedule "frozen migrations" job_migration_freeze ""
+  elif [ "$ALL" -eq 1 ]; then
+    core_missing "python3 not found; frozen migration check skipped"
+  else
+    INFO+=("SKIP  frozen migrations: python3 not found")
+  fi
 fi
 
 if [ "$APPLE" -eq 1 ]; then

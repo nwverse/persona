@@ -119,10 +119,12 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
             }
         }
         PopFrames.startIfAsked()
-        // `-openChatsFresh YES`: no chat kept on disk from an earlier run (LiveUpdateTests: churned steps piled up), nor
-        // where one was left (`chat.read.<session>`: Persona's conversations reopen there too since #1666).
+        // `-openChatsFresh YES`: no chat kept on disk from an earlier run (LiveUpdateTests: churned steps piled up), every
+        // report folded again (ReportFoldUITests), and nowhere a chat was left (`chat.read.<session>`: Persona's
+        // conversations reopen there too since #1666).
         if d.bool(forKey: "openChatsFresh") {
             ChatCache.removeAll()
+            OpenReports.shared.closeAll()
             let kept = d.persistentDomain(forName: Bundle.main.bundleIdentifier ?? "") ?? [:]
             for k in kept.keys where k.hasPrefix("chat.read.") { d.removeObject(forKey: k) }
         }
