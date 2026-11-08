@@ -321,7 +321,6 @@ func (s *Service) providerTest(ctx context.Context, in probeInput) map[string]an
 	body, _ := json.Marshal(payload)
 	started := time.Now()
 	res, err := t.do(ctx, http.MethodPost, t.endpoint(path), bytes.NewReader(body))
-	out["ms"] = int(time.Since(started).Milliseconds())
 	if err != nil || res.StatusCode/100 != 2 {
 		msg, code := t.failure(ctx, res, err)
 		out["error"] = msg
@@ -344,6 +343,7 @@ func (s *Service) providerTest(ctx context.Context, in probeInput) map[string]an
 	if res != nil {
 		res.Body.Close()
 	}
+	out["ms"] = int(time.Since(started).Milliseconds())
 	return out
 }
 
