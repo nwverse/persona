@@ -22,7 +22,8 @@ So Persona's Discord = **server channels your own bot can see** + **messages you
 
 ## Shape: the `discord` extension
 
-- `extensions/discord/` in the extension repository, written in Go, using `disgoorg/disgo` as the Discord client (supports API v10, user-installed apps, and message search; not 1.0 yet, so the version is pinned in `go.mod`).
+- `extensions/discord/` in the extension repository, written in Go, using `disgoorg/disgo` for the REST API and Discord's types (supports API v10, user-installed apps, and message search; not 1.0 yet, so the version is pinned in `go.mod`).
+  The Gateway connection is the extension's own (D1): disgo v0.20's Gateway client races between its heartbeat and its close under `go test -race`, reconnects without saying why, and logs payloads.
 - A process extension on the hub (`runtime`) contributing one connector, called by the hub over the plugin protocol (`server/internal/connector/proc`), like Telegram.
   A Go program is still how a new extension ships (the extension repository's development guide, "Add a program extension"). A TypeScript source profile for the isolated runtime
   (`docs/archive/extensions/source-extension-migration-2026-11-07.md`) waits for controlled outbound WebSocket support (#1166), because the Gateway is a WebSocket; polling REST instead of the Gateway is not a substitute.
@@ -102,7 +103,7 @@ Gateway intents needed: `GUILDS`, `GUILD_MESSAGES`, `DIRECT_MESSAGES`, `MESSAGE_
 | --- | --- |
 | `discord_channels` | Servers and channels the bot can see, most recently active first |
 | `discord_messages` | Messages in a channel / thread, paging back in time |
-| `discord_search` | Search messages in a server (`GET /guilds/{id}/messages/search`); while Discord is still indexing (returns 202), falls back to knowledge-base search and says so |
+| `discord_search` | Search messages in a server (`GET /guilds/{id}/messages/search`); while Discord is still indexing (returns 202), says so and points the assistant at the knowledge base, which has the archived messages (the extension does not ask for `kb.read` to search it itself) |
 
 Tool descriptions and parameter docs live in the extension's own `internal/prompts/mcp/` (the rules in `docs/assistant/prompts.md`). Message content is treated as untrusted data (prompt injection); tool results carry no tokens and no user ids.
 
