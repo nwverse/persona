@@ -77,7 +77,7 @@ func Hub(ctx context.Context, build update.Build, args []string) error {
 		}
 		return hub.Doctor(ctx, os.Stdout)
 	case "pair":
-		return pair(rest)
+		return pair(ctx, rest)
 	case "setup": // docs/assistant/onboarding.md 4.1
 		err := hub.SetupCommand(ctx, rest, os.Stdout, os.Stderr)
 		if errors.Is(err, hub.ErrSetupStopped) {
@@ -87,7 +87,7 @@ func Hub(ctx context.Context, build update.Build, args []string) error {
 	case "admin":
 		return hub.AdminCommand(ctx, rest, os.Stdin, os.Stdout, os.Stderr)
 	case "peer":
-		return hub.PeerCommand(rest, os.Stdin, os.Stdout)
+		return hub.PeerCommand(ctx, rest, os.Stdin, os.Stdout)
 	case "manager-mode": // the built-in manager: started by the hub (child) or a service of its own (service)
 		return hub.ManagerMode(rest, os.Stdout)
 	case "manager-code": // a one-time code that binds the built-in manager's own service (persona-manager join --builtin)
@@ -107,7 +107,9 @@ func Hub(ctx context.Context, build update.Build, args []string) error {
 // UpdateWatch is `update-watch <pending.json>`: the old binary's watchdog over the hub's own update.
 func UpdateWatch(ctx context.Context, args []string) error { return runUpdateWatch(ctx, args) }
 
-func pair(args []string) error {
+// pair is `hub pair`: an argument mistake is a clitext.UsageError (exit 2), found before hub.json is read; ctx (the
+// command's, Ctrl-C) ends the wait for the hub.
+func pair(ctx context.Context, args []string) error {
 	flags := flag.NewFlagSet(Word+"pair", flag.ContinueOnError)
 	legacy := flags.Bool("legacy", false, "使用主 token 打印旧格式二维码")
 	android := flags.Bool("android", false, "同时打印 Android 安装包的临时下载链接")
@@ -116,25 +118,44 @@ func pair(args []string) error {
 	name := flags.String("name", "", "和 --add 一起用：新电脑的名字（可以是中文，默认同 id）")
 	peer := flags.Bool("peer", false, "生成和另一台 hub 互联的互联码（docs/server/mesh.md）")
 	if err := flags.Parse(args); err != nil {
-		return err
+		if errors.Is(err, flag.ErrHelp) {
+			return err
+		}
+		return clitext.UsageError(pairUsage()) // flag printed what was wrong and the flags
 	}
+	set := map[string]bool{}
+	flags.Visit(func(f *flag.Flag) { set[f.Name] = true })
 	switch {
 	case flags.NArg() != 0:
-		return fmt.Errorf("%spair 不接受位置参数", Word)
-	case *peer && (*machine != "" || *legacy || *android):
-		return fmt.Errorf("--peer 不能和 --machine、--legacy、--android 一起用")
+		return clitext.UsageError(fmt.Sprintf("%s takes no positional arguments (got %q)\n%s", pairCommand(), flags.Arg(0), pairUsage()))
+	case *peer && (set["machine"] || *legacy || *android || *add || set["name"]):
+		return clitext.UsageError("--peer cannot be combined with --machine, --legacy, --android, --add or --name\n" + pairUsage())
 	case *peer:
-		return hub.PairPeer()
+		return hub.PairPeer(ctx)
+	case set["machine"] && *machine == "":
+		return clitext.UsageError("--machine needs a machine id\n" + pairUsage())
 	case *machine != "" && (*legacy || *android):
-		return fmt.Errorf("--machine 不能和 --legacy、--android 一起用")
+		return clitext.UsageError("--machine cannot be combined with --legacy or --android\n" + pairUsage())
 	case (*add || *name != "") && *machine == "":
-		return fmt.Errorf("--add、--name 要和 --machine 一起用")
+		return clitext.UsageError("--add and --name go with --machine\n" + pairUsage())
 	case *name != "" && !*add:
-		return fmt.Errorf("--name 要和 --add 一起用")
+		return clitext.UsageError("--name goes with --add\n" + pairUsage())
+	case *legacy && *android:
+		return clitext.UsageError("--android needs a temporary token, so it cannot be combined with --legacy\n" + pairUsage())
 	case *machine != "":
-		return hub.PairMachine(*machine, *add, *name)
+		return hub.PairMachine(ctx, *machine, *add, *name)
 	}
-	return hub.Pair(*legacy, *android)
+	return hub.Pair(ctx, *legacy, *android)
+}
+
+func pairCommand() string { return commandName() + " " + Word + "pair" }
+
+// pairUsage is `hub pair`'s three forms.
+func pairUsage() string {
+	c := pairCommand()
+	return "usage: " + c + " [--legacy | --android]\n" +
+		"       " + c + " --machine <id> [--add [--name <name>]]\n" +
+		"       " + c + " --peer"
 }
 
 func usageError(s string) error { return clitext.UsageError(s) }

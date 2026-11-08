@@ -358,12 +358,13 @@ func (c *Config) PairURL() string {
 	return "persona://pair?" + url.Values{"url": {c.PublicURL}, "token": {c.Token}}.Encode()
 }
 
-func Pair(legacy bool, android ...bool) error {
+// Pair prints a pairing QR code for the app (`personad hub pair`); ctx is the command's (Ctrl-C ends the wait for the hub).
+func Pair(ctx context.Context, legacy bool, android ...bool) error {
 	cfg, err := runningHubConfig()
 	if err != nil {
 		return err
 	}
-	return cfg.printPair(context.Background(), legacy, os.Stdout, android...)
+	return cfg.printPair(ctx, legacy, os.Stdout, android...)
 }
 
 func (c *Config) printPair(ctx context.Context, legacy bool, out io.Writer, android ...bool) error {
@@ -393,13 +394,13 @@ func (c *Config) printPair(ctx context.Context, legacy bool, out io.Writer, andr
 
 // PairMachine prints a pairing link for one link machine's persona-link (docs/operations/link.md): the link alone on stdout,
 // so it can be piped (`… | persona-link pair -`), what to do with it on stderr. add: hub.json gets the machine first
-// when it has none of that id (named name; confirmed: the master token over loopback added it).
-func PairMachine(machine string, add bool, name string) error {
+// when it has none of that id (named name; confirmed: the master token over loopback added it). ctx is the command's.
+func PairMachine(ctx context.Context, machine string, add bool, name string) error {
 	cfg, err := runningHubConfig()
 	if err != nil {
 		return err
 	}
-	return cfg.printLinkPair(context.Background(), machine, add, name, os.Stdout, os.Stderr)
+	return cfg.printLinkPair(ctx, machine, add, name, os.Stdout, os.Stderr)
 }
 
 func (c *Config) printLinkPair(ctx context.Context, machine string, add bool, name string, out, help io.Writer) error {
