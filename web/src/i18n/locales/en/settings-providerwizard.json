@@ -62,6 +62,7 @@
   "subagent_hint": "For multi-agent runs such as workflows.",
   "force": "Force",
   "force_label": "Force subagents to use this model",
+  "chat_clear_legacy": "This provider has saved settings that Chat Completions cannot use. Clear those settings when saving. Saving is unavailable until you select this.",
   "chat_effort_hint": "Chat Completions does not use per-model thinking effort settings.",
   "chat_advanced_hint": "Chat Completions does not use provider-specific headers, environment variables, proxy, timeout, context, default effort, tier model or subagent settings.",
   "headers": "Request headers",

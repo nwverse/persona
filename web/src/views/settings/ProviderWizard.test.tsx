@@ -365,6 +365,27 @@ describe("ProviderWizard from presets", () => {
     expect(calls.find((c) => c.method === "PUT" && c.path.endsWith("/launchers/chat"))?.body).not.toHaveProperty("models");
   });
 
+  it("requires an explicit choice before clearing unsupported stored Chat settings", async () => {
+    const existing = { name: "chat", kind: "api" as const, api: "chat" as const, base_url: "https://api.example.com", model: "example-chat", has_key: true, has_headers: true, has_env: true, proxy: "http://proxy.example.com", no_proxy: "example.com", timeout_ms: 1200, compact_window: 100, max_context: 200, effort: "high", opus_model: "tier-a", sonnet_model: "tier-b", haiku_model: "tier-c", fable_model: "tier-d", subagent_force: true };
+    act(() => root.render(<ProviderWizard existing={existing} onClose={() => {}} onSaved={() => {}} />));
+    await flush();
+    expect(text()).toContain("保存时清除这些设置");
+    const checkbox = document.body.querySelector<HTMLInputElement>('input[type="checkbox"]')!;
+    expect(checkbox.checked).toBe(false);
+    expect(button("保存")!.disabled).toBe(true);
+    expect(calls.some((c) => c.method === "PUT")).toBe(false);
+    act(() => checkbox.click());
+    expect(button("保存")!.disabled).toBe(false);
+    act(() => checkbox.click());
+    expect(button("保存")!.disabled).toBe(true);
+    act(() => checkbox.click());
+    await act(async () => button("保存")!.click());
+    expect(calls.find((c) => c.method === "PUT" && c.path.endsWith("/launchers/chat"))?.body).toMatchObject({
+      headers: "", env: "", proxy: "", no_proxy: "", timeout_ms: 0, compact_window: 0, max_context: 0,
+      effort: "", opus_model: "", sonnet_model: "", haiku_model: "", fable_model: "", subagent_force: false,
+    });
+  });
+
   it("keeps the Chat Completions protocol when editing", async () => {
     act(() => root.render(<ProviderWizard existing={{ name: "chat", kind: "api", api: "chat", base_url: "https://api.example.com", model: "example-chat", has_key: true }} onClose={() => {}} onSaved={() => {}} />));
     await flush();

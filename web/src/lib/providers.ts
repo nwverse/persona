@@ -333,10 +333,26 @@ function extraFields(f: ProviderForm): Record<string, unknown> {
   };
 }
 
+/** Explicit clears for settings an older Chat provider may have stored but cannot use. */
+export function legacyChatClears(v: ProviderView | null): Record<string, string | number | boolean> {
+  if (!v || v.kind !== "api" || v.api !== "chat") return {};
+  const clears: Record<string, string | number | boolean> = {};
+  if (v.has_headers) clears.headers = "";
+  if (v.has_env) clears.env = "";
+  for (const key of ["proxy", "no_proxy", "effort", "opus_model", "sonnet_model", "haiku_model", "fable_model"] as const) {
+    if (v[key]) clears[key] = "";
+  }
+  for (const key of ["timeout_ms", "compact_window", "max_context"] as const) {
+    if (v[key]) clears[key] = 0;
+  }
+  if (v.subagent_force) clears.subagent_force = false;
+  return clears;
+}
+
 /** POST / PUT /api/v1/launchers' body. The base fields always go (the hub replaces them); #2455's fields on a PUT only
  *  when they changed from `old` (left out keeps what is stored), the headers and the environment only when touched (""
  *  clears them), the key only when typed. */
-export function providerBody(f: ProviderForm, old: ProviderView | null): Record<string, unknown> {
+export function providerBody(f: ProviderForm, old: ProviderView | null, clearLegacyChat = false): Record<string, unknown> {
   const api = f.kind === "api";
   const chat = api && f.api === "chat";
   const openAI = api && (f.api === "responses" || f.api === "chat");
@@ -364,6 +380,7 @@ export function providerBody(f: ProviderForm, old: ProviderView | null): Record<
   }
   if (!chat && f.headers_touched) body.headers = f.headers.trim();
   if (!chat && f.env_touched) body.env = f.env.replace(/\s+$/, ""); // the start kept: the hub's line numbers match the box
+  if (chat && clearLegacyChat) Object.assign(body, legacyChatClears(old));
   return body;
 }
 

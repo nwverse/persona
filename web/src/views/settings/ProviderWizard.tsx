@@ -35,6 +35,7 @@ import {
   formModel,
   formProblems,
   mergeDiscovered,
+  legacyChatClears,
   newForm,
   probeBody,
   providerBody,
@@ -85,6 +86,7 @@ export function ProviderWizard({ existing, onClose, onSaved }: { existing: Provi
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [advanced, setAdvanced] = useState(false);
+  const [clearLegacyChat, setClearLegacyChat] = useState(false);
   const [testing, setTesting] = useState(false);
   const [test, setTest] = useState<TestResult | null>(null);
   const [probeModel, setProbeModel] = useState("");
@@ -114,6 +116,7 @@ export function ProviderWizard({ existing, onClose, onSaved }: { existing: Provi
     if (existing === null) return;
     setError("");
     setAdvanced(false);
+    setClearLegacyChat(false);
     setTest(null);
     setFound(null);
     setProbeModel("");
@@ -161,9 +164,10 @@ export function ProviderWizard({ existing, onClose, onSaved }: { existing: Provi
   const set = <K extends keyof ProviderForm>(k: K) => (v: ProviderForm[K]) => setF((x) => ({ ...x, [k]: v }));
   const problems = formProblems(f, isNew, !!old?.has_key);
   const openAI = f.kind === "api" && (f.api === "responses" || f.api === "chat");
+  const hasLegacyChat = Object.keys(legacyChatClears(old)).length > 0;
   const presetFlow = isNew && choice !== CUSTOM;
   const presetReady = !!preset && (hubNames || !!pf.name.trim()) && !launcherNameProblem(pf.name) && !!pf.api_key.trim() && !keyTest?.running;
-  const canSave = step === "key" ? presetReady : !problems.connect && !problems.models && !problems.advanced;
+  const canSave = step === "key" ? presetReady : !problems.connect && !problems.models && !problems.advanced && (!hasLegacyChat || clearLegacyChat);
 
   const pick = (id: string) => {
     setError("");
@@ -224,7 +228,7 @@ export function ProviderWizard({ existing, onClose, onSaved }: { existing: Provi
         setStep("done");
         void readinessChanged();
       } else {
-        const body = providerBody(f, old);
+        const body = providerBody(f, old, clearLegacyChat);
         await api(isNew ? "/launchers" : `/launchers/${enc(String(body.name))}`, { method: isNew ? "POST" : "PUT", json: body });
         toast(isNew ? t("settings-providerwizard.added", { name: String(body.name) }) : t("settings-providerwizard.saved", { name: String(body.name) }), "ok");
         onSaved();
@@ -322,6 +326,11 @@ export function ProviderWizard({ existing, onClose, onSaved }: { existing: Provi
             </li>
           ))}
         </ol>
+
+        {hasLegacyChat && <label className="flex items-start gap-2 rounded-card bg-inset p-3 text-[12px] leading-relaxed text-ink-2">
+          <input type="checkbox" className="mt-0.5 shrink-0" checked={clearLegacyChat} onChange={(e) => setClearLegacyChat(e.target.checked)} />
+          <span>{t("settings-providerwizard.chat_clear_legacy")}</span>
+        </label>}
 
         {step === "pick" && <PickStep presets={presets} error={presetsError} choice={choice} onPick={pick} />}
 
