@@ -200,7 +200,15 @@ final class AssistantTopBarTests: XCTestCase {
 
         swipe(from: 0.2, to: 0.9, y: 0.6)
         XCTAssertTrue(sidebar(app).waitForExistence(timeout: 3), "the second swipe did not open the sidebar")
-        swipe(from: 0.7, to: 0.05, y: 0.6)
+        // A conversation row owns its left swipe (Archive). Start on the visible pushed-aside page,
+        // not at a fixed screen point that can land on a row after sidebar sizing changes.
+        let visiblePage = close.frame.intersection(window.frame)
+        XCTAssertFalse(visiblePage.isEmpty, "no visible page edge to swipe")
+        let origin = window.coordinate(withNormalizedOffset: .zero)
+        origin.withOffset(CGVector(dx: visiblePage.midX, dy: visiblePage.midY))
+            .press(forDuration: 0.05,
+                   thenDragTo: origin.withOffset(CGVector(dx: window.frame.width * 0.05, dy: visiblePage.midY)),
+                   withVelocity: .default, thenHoldForDuration: 0)
         waitGone(sidebar(app), "a swipe to the left did not close the sidebar")
 
         // A left swipe pages to Agents in the Shell, rather than opening the drawer.
