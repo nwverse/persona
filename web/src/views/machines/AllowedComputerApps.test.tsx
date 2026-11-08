@@ -72,8 +72,14 @@ beforeEach(async () => {
             method: init?.method ?? "GET",
             headers: new Headers(init?.headers),
             signal: init?.signal,
-            answer: (body, status = 200) =>
-              resolve(new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } })),
+            answer: (body, status = 200) => {
+              // A current manager acknowledges the immutable owner checked by its real route (covered by the hub integration test).
+              const data =
+                body && typeof body === "object" && "apps" in body
+                  ? { manager: new Headers(init?.headers).get(MANAGER_HEADER), ...body }
+                  : body;
+              resolve(new Response(JSON.stringify(data), { status, headers: { "Content-Type": "application/json" } }));
+            },
             reject,
           });
         }),
@@ -98,7 +104,7 @@ it.each([
   act(() => root.render(<ComputerSection mid="example-machine" computer={{ enabled }} online={online} manager="example-owner" />));
   expect(list().textContent).toContain("Loading");
   const read = take();
-  expect(read.path).toBe("/api/v1/machines/example-machine/computer/apps");
+  expect(read.path).toBe("/api/v1/machines/example-machine/computer/apps?expected_manager=example-owner");
   expect(read.headers.get(MANAGER_HEADER)).toBe("example-owner");
   expect(requests).toHaveLength(0);
   read.answer({ apps });
@@ -129,7 +135,9 @@ it.each(apps)("confirms and encodes the exact returned identifier $bundle_id", a
   choose();
   click("Revoke", dialog());
   const write = take("DELETE");
-  expect(write.path).toBe(`/api/v1/machines/example%20machine%2Fone/computer/apps/${encodeURIComponent(app.bundle_id)}`);
+  expect(write.path).toBe(
+    `/api/v1/machines/example%20machine%2Fone/computer/apps/${encodeURIComponent(app.bundle_id)}?expected_manager=example-manager`,
+  );
   expect(write.headers.get("Authorization")).toBe("Bearer synthetic-token-a");
   expect(write.headers.get(MANAGER_HEADER)).toBe("example-manager");
   write.answer({ apps: [] });
@@ -166,7 +174,7 @@ it.each([403, 404, 500, 0, 200])(
     else write.reject(new TypeError("Synthetic network failure"));
     await flush();
     expect(list().textContent).toContain("org.example.editor");
-    expect(list().textContent).not.toContain("Approval revoked");
+    expect(list().textContent).not.toContain("Saved approval removed");
     expect(dialog().querySelector('[role="alert"]')).not.toBeNull();
     click("Retry", dialog());
     const replacement = { name: "Another app", bundle_id: "org.example.another" };
@@ -377,7 +385,7 @@ it.each(["machine", "manager", "credential"])("drops a late successful revoke af
   oldWrite.answer({ apps: [] });
   await flush();
   expect(list().textContent).toContain("Whole screen");
-  expect(list().textContent).not.toContain("Approval revoked");
+  expect(list().textContent).not.toContain("Saved approval removed");
   expect(button("Cancel", dialog()).disabled).toBe(true);
   newWrite.answer({ apps: [] });
   await flush();
@@ -391,5 +399,33 @@ it("uses the authoritative list even when it retains the requested app", async (
   take("DELETE").answer({ apps });
   await flush();
   expect(list().textContent).toContain("org.example.editor");
-  expect(list().textContent).not.toContain("Approval revoked");
+  expect(list().textContent).not.toContain("Saved approval removed");
+});
+
+it.each([undefined, "example-wrong-owner"])("fails closed without the expected owner acknowledgement: %s", async (manager) => {
+  render();
+  take().answer({ apps, manager });
+  await flush();
+  expect(list().querySelector("li")).toBeNull();
+  expect(list().querySelector('[role="alert"]')).not.toBeNull();
+  expect(buttons("Revoke", list())).toHaveLength(0);
+  click("Retry", list());
+  take().answer({ apps });
+  await flush();
+  expect(list().textContent).toContain("org.example.editor");
+});
+
+it("retains approvals when the authoritative route rejects a stale owner before deletion", async () => {
+  await load();
+  choose();
+  expect(dialog().textContent).toContain("If app approval is enabled");
+  expect(dialog().textContent).toContain("does not change that setting");
+  click("Revoke", dialog());
+  const write = take("DELETE");
+  expect(new URL(write.path, "http://example.test").searchParams.get("expected_manager")).toBe("example-manager");
+  write.answer({ code: "machine_owner_changed", error: "Synthetic owner changed" }, 409);
+  await flush();
+  expect(list().textContent).toContain("org.example.editor");
+  expect(list().textContent).not.toContain("Saved approval removed");
+  expect(dialog().textContent).toContain("Refresh the machine page");
 });

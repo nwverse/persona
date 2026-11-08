@@ -6,10 +6,11 @@
   "invalid_response": "管理器返回的授权列表无效。请重试。",
   "empty": "没有已保存的应用授权。",
   "revoke": "撤销",
-  "revoked": "已撤销授权。Persona 下次需要访问此应用或屏幕时会再次询问。",
+  "revoked": "已移除保存的授权。如果已启用应用授权确认，Persona 下次会再次询问。",
   "approved_at": "授权时间：{at}",
   "confirm_title": "撤销已保存的授权？",
-  "confirm_detail": "Persona 下次需要访问此应用或屏幕时会再次询问。此操作不会停止正在进行的操作。",
+  "confirm_detail": "如果已启用应用授权确认，Persona 下次需要访问此应用或屏幕时会再次询问。移除此记录不会更改该设置，也不会停止正在进行的操作。",
   "refresh": "刷新",
-  "retry": "重试"
+  "retry": "重试",
+  "owner_changed": "这台电脑的管理器已更改。请刷新电脑详情页后重试。"
 }

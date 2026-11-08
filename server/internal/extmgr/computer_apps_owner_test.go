@@ -1,0 +1,65 @@
+package extmgr
+
+import (
+	"context"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"testing"
+)
+
+func TestComputerAppOwnerPreconditionAndLegacyRequests(t *testing.T) {
+	h, st := twoMacs(t)
+	h.opts.ManagerID = "example-manager"
+	for _, method := range []string{http.MethodGet, http.MethodDelete} {
+		path := "/api/v1/machines/a/computer/apps"
+		if method == http.MethodDelete {
+			path += "/com.apple.calculator"
+		}
+		// Exercise the production manager handlers directly, as the bus relay does.
+		run := func(query string) (int, map[string]any) {
+			r := httptest.NewRequest(method, path+query, nil)
+			r.SetPathValue("bundle", "com.apple.calculator")
+			w := httptest.NewRecorder()
+			if method == http.MethodGet {
+				h.getComputerApps(w, r, &Machine{cfg: MachineConfig{ID: "a"}})
+			} else {
+				h.deleteComputerApp(w, r, &Machine{cfg: MachineConfig{ID: "a"}})
+			}
+			var out map[string]any
+			_ = json.Unmarshal(w.Body.Bytes(), &out)
+			return w.Code, out
+		}
+		if code, out := run("?expected_manager=example-other"); code != http.StatusConflict || out["code"] != "machine_owner_changed" {
+			t.Fatalf("wrong owner: %d %v", code, out)
+		}
+		if len(st.stored(t)["a"]) != 2 || len(st.stored(t)["b"]) != 1 {
+			t.Fatal("wrong owner touched settings")
+		}
+		if code, out := run(""); code != http.StatusOK || out["manager"] != "example-manager" {
+			t.Fatalf("legacy request: %d %v", code, out)
+		}
+	}
+}
+
+func TestComputerAppRevocationPreservesDisabledApprovalPolicy(t *testing.T) {
+	h, st := extensionTestHub(t)
+	m, _ := computerMac(t, h, "example-machine")
+	ctx := context.Background()
+	if err := h.extensions.reg.SetConfig(ctx, cuaExtensionID, json.RawMessage(`{"machines":["example-machine"],"app_approval":false}`), "test"); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.PutSetting(ctx, computerAppsKey, map[string][]approvedApp{"example-machine": {{BundleID: "org.example.editor", Name: "Example Editor"}}}); err != nil {
+		t.Fatal(err)
+	}
+	code, out := call(t, h.routes(), http.MethodDelete, "/api/v1/machines/example-machine/computer/apps/org.example.editor?expected_manager=assistant", h.cfg.Token, "")
+	if code != http.StatusOK || len(out["apps"].([]any)) != 0 || out["manager"] != "assistant" {
+		t.Fatalf("revoke: %d %v", code, out)
+	}
+	if h.cua().approval() {
+		t.Fatal("revocation enabled app approval")
+	}
+	if asked, allowed := h.approveApps(ctx, m, asker{}, "computer_run", []string{"Example Editor"}, true, nil); asked || !allowed {
+		t.Fatalf("disabled policy must still allow without asking: asked=%v allowed=%v", asked, allowed)
+	}
+}

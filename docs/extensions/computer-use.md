@@ -468,7 +468,8 @@ Flags used:
   - `cua` extension Ask Before First Operating an App (`app_approval`), on by default.
   - The first time the assistant operates an App on a Mac (or views the whole screen), the phone shows a card: "Let the assistant operate Calculator on MacBook", options Allow / "Don't ask again for Calculator" / Deny.
   - Always Allow is stored by bundle id in hub settings (`computer.apps`, per machine), preventing future prompts.
-  - Allowed Apps for Assistant in Control Computer lists each one; Remove asks again next time (`GET` / `DELETE /api/v1/machines/{mid}/computer/apps[/{bundle}]`).
+  - Allowed Apps for Assistant in Control Computer lists each one; Remove deletes the saved approval. Future prompts follow `app_approval`; removing a record does not enable that setting (`GET` / `DELETE /api/v1/machines/{mid}/computer/apps[/{bundle}]`).
+  - The web binds both requests to `?expected_manager=<manager id>`. The receiving manager checks its immutable identity before accessing settings and returns `409 machine_owner_changed` on mismatch. Successful responses include `manager` to acknowledge support for this precondition; clients requiring owner isolation reject an absent or different identity. This prevents a delayed machine handover from redirecting a saved approval's mutation, including through an older hub that forwards queries. Legacy clients omitting the query keep existing behavior.
 - **Identifying Apps** (`callApps`, `computer_apps.go`):
   - `app` in `computer_state`; absent means whole screen, also asks once.
   - Each step's `app` in `computer_run` (or the call-level `app`).

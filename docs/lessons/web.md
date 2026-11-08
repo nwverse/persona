@@ -88,7 +88,7 @@ Adding Bcc to the request alone leaves Bcc-only edits lost on dismissal and Bcc-
 ### Persisted computer-app approvals survive live control being unavailable (#1489)
 
 - The approvals list and revoke use manager settings, so render them outside the online/enabled control gates. Display and encode the returned identifier verbatim: it may be a bundle ID, a `name:` identifier or `screen`.
-- Apply the successful DELETE's complete list, and invalidate earlier reads when admitting the write. Aborting a request alone cannot fence a transport that already has a response. Bind confirmation, retry and finalizers to the machine, actual manager and credential generation; pass captured credentials with their owner so current 401 recovery still works.
+- Apply the successful DELETE's complete list, and invalidate earlier reads when admitting the write. Aborting a request alone cannot fence a transport that already has a response. Machine routes ignore the manager header in favor of current ownership: a captured header is not a precondition. Check `expected_manager` against the receiving manager's immutable identity before touching settings, and require its response acknowledgement so an older manager cannot silently ignore it. Removing a saved record does not enable `app_approval`; future-prompt copy must be conditional. Bind confirmation, retry and finalizers to the machine, actual manager and credential generation; pass captured credentials with their owner so current 401 recovery still works.
 
 ## Overview with no computers (2026-11-06, #3729)
 

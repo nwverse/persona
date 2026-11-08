@@ -6,10 +6,11 @@
   "invalid_response": "The manager returned an invalid approvals list. Try again.",
   "empty": "No remembered app approvals.",
   "revoke": "Revoke",
-  "revoked": "Approval revoked. Persona will ask again the next time it needs this app or screen.",
+  "revoked": "Saved approval removed. If app approval is enabled, Persona will ask again next time.",
   "approved_at": "Approved {at}",
   "confirm_title": "Revoke remembered approval?",
-  "confirm_detail": "Persona will ask again the next time it needs this app or screen. This does not stop an operation already in progress.",
+  "confirm_detail": "If app approval is enabled, Persona will ask again the next time it needs this app or screen. Removing this record does not change that setting or stop an operation already in progress.",
   "refresh": "Refresh",
-  "retry": "Retry"
+  "retry": "Retry",
+  "owner_changed": "This computer changed managers. Refresh the machine page before trying again."
 }

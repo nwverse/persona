@@ -6,14 +6,18 @@ import { Button, Dialog, Spinner } from "../../ui/atoms";
 import { formatDate, t } from "../../i18n";
 
 type ComputerApp = { bundle_id: string; name: string; at?: string };
-type Answer = { apps: ComputerApp[] };
+type Answer = { apps: ComputerApp[]; manager?: string };
 const text = (key: string) => t(`machines-allowedcomputerapps.${key}`);
 function failure(error: unknown) {
+  if (error instanceof ApiError && error.code === "machine_owner_changed") return text("owner_changed");
   if (error instanceof ApiError && error.status === 403) return text("denied");
   if (error instanceof ApiError && error.status === 404) return text("unsupported");
   return errorText(error);
 }
-function appsFrom(answer: Answer): ComputerApp[] {
+function appsFrom(answer: Answer, manager: string): ComputerApp[] {
+  // A legacy manager may ignore the precondition. Its list cannot authorize a mutation on this page.
+  if (!answer.manager) throw new Error(text("unsupported"));
+  if (answer.manager !== manager) throw new Error(text("owner_changed"));
   if (!Array.isArray(answer.apps) || answer.apps.some((app) => !app || typeof app.bundle_id !== "string" || typeof app.name !== "string")) {
     throw new Error(text("invalid_response"));
   }
@@ -52,6 +56,7 @@ function OwnedApps({ mid, manager, owner, followsDefault }: { mid: string; manag
     write: null as AbortController | null,
   });
   const path = `/machines/${enc(mid)}/computer/apps`;
+  const precondition = `?expected_manager=${enc(manager)}`;
   const current = () => life.current.active && credentialOwner() === owner && (!followsDefault || defaultManager() === manager);
   const options = { token, tokenOwner: owner, headers: { [MANAGER_HEADER]: manager } };
 
@@ -65,7 +70,7 @@ function OwnedApps({ mid, manager, owner, followsDefault }: { mid: string; manag
     setLoading(true);
     setLoadError("");
     try {
-      const result = appsFrom(await api<Answer>(path, { ...options, signal: controller.signal }));
+      const result = appsFrom(await api<Answer>(`${path}${precondition}`, { ...options, signal: controller.signal }), manager);
       if (current() && revision === state.revision) setApps(result);
     } catch (error) {
       if (current() && revision === state.revision) setLoadError(failure(error));
@@ -112,7 +117,8 @@ function OwnedApps({ mid, manager, owner, followsDefault }: { mid: string; manag
     state.write = controller;
     try {
       const result = appsFrom(
-        await api<Answer>(`${path}/${enc(app.bundle_id)}`, { ...options, method: "DELETE", signal: controller.signal }),
+        await api<Answer>(`${path}/${enc(app.bundle_id)}${precondition}`, { ...options, method: "DELETE", signal: controller.signal }),
+        manager,
       );
       if (!current()) return;
       setApps(result);
