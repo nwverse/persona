@@ -278,6 +278,41 @@ func TestChatProbeCompleted(t *testing.T) {
 	}
 }
 
+func TestChatProbeMultilineEvents(t *testing.T) {
+	for _, ending := range []string{"\n", "\r\n"} {
+		for _, tc := range []struct {
+			name, body string
+			ok         bool
+		}{
+			{"answer", "data: {\ndata: \"choices\": [{\"index\": 0,\ndata: \"delta\": {\"content\": \"pong\"},\ndata: \"finish_reason\": \"stop\"}]}\n\ndata: [DONE]\n\n", true},
+			{"refusal", "data: {\ndata: \"choices\": [{\"delta\": {\"refusal\": \"No\"}}]}\n\ndata: [DONE]\n\n", false},
+			{"empty", "data: {\ndata: \"choices\": [{\"finish_reason\": \"stop\"}]}\n\ndata: [DONE]\n\n", false},
+			{"error after answer", "data: {\ndata: \"choices\": [{\"delta\": {\"content\": \"pong\"}, \"finish_reason\": \"stop\"}]}\n\ndata: {\ndata: \"error\": {\"message\": \"failed\"}}\n\n", false},
+		} {
+			t.Run(fmt.Sprintf("%q/%s", ending, tc.name), func(t *testing.T) {
+				gw := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					_, _ = w.Write([]byte(strings.ReplaceAll(tc.body, "\n", ending)))
+				}))
+				defer gw.Close()
+				s, _ := launcherTestService(t)
+				out := s.providerTest(i18n.With(context.Background(), i18n.En), probeInput{BaseURL: gw.URL, Model: "m", API: "chat"})
+				if out["ok"] != tc.ok {
+					t.Fatalf("probe: %v", out)
+				}
+			})
+		}
+	}
+}
+
+func TestChatProbeResponseLimit(t *testing.T) {
+	// A response after the eight MiB budget must not count as a successful probe.
+	stream := strings.Repeat(": ignored\n", (8<<20)/len(": ignored\n")+1) +
+		`data: {"choices":[{"delta":{"content":"pong"},"finish_reason":"stop"}]}` + "\n\n"
+	if chatProbeCompleted(strings.NewReader(stream)) {
+		t.Fatal("accepted a response beyond the probe budget")
+	}
+}
+
 func TestChatLauncherValidation(t *testing.T) {
 	for _, agent := range []string{"", "claude", "codex", "agy", "omp"} {
 		in := launcherInput{Name: "sample", Kind: "launcher", API: "chat", Agent: agent, BaseURL: "https://api.example.com", Model: "m"}

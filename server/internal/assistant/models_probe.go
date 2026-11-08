@@ -384,14 +384,16 @@ func chatProbeCompleted(body io.Reader) bool {
 	sc := bufio.NewScanner(io.LimitReader(body, 8<<20))
 	sc.Buffer(make([]byte, 64<<10), 4<<20)
 	finished, hasText := false, false
-	for sc.Scan() {
-		data, ok := strings.CutPrefix(sc.Text(), "data:")
-		if !ok {
-			continue
+	var lines []string
+	// An SSE event can span several data lines. A terminal result returns stop=true.
+	consume := func() (stop, success bool) {
+		if len(lines) == 0 {
+			return false, false
 		}
-		data = strings.TrimSpace(data)
-		if data == "[DONE]" {
-			return hasText
+		data := strings.Join(lines, "\n")
+		lines = nil
+		if strings.TrimSpace(data) == "[DONE]" {
+			return true, hasText
 		}
 		var event struct {
 			Error   json.RawMessage `json:"error"`
@@ -405,20 +407,39 @@ func chatProbeCompleted(body io.Reader) bool {
 			} `json:"choices"`
 		}
 		if json.Unmarshal([]byte(data), &event) != nil || len(event.Error) > 0 && string(event.Error) != "null" {
-			return false
+			return true, false
 		}
 		for _, choice := range event.Choices {
 			if choice.Index != 0 {
 				continue
 			}
 			if choice.FinishReason == "content_filter" || choice.Delta.Refusal != "" {
-				return false
+				return true, false
 			}
 			hasText = hasText || strings.TrimSpace(choice.Delta.Content) != ""
 			finished = finished || choice.FinishReason != ""
 		}
+		return false, false
 	}
-	return hasText && finished && sc.Err() == nil
+	for sc.Scan() {
+		line := sc.Text()
+		if line == "" {
+			if stop, success := consume(); stop {
+				return success
+			}
+			continue
+		}
+		if data, ok := strings.CutPrefix(line, "data:"); ok {
+			lines = append(lines, strings.TrimPrefix(data, " "))
+		}
+	}
+	if sc.Err() != nil {
+		return false
+	}
+	if stop, success := consume(); stop {
+		return success
+	}
+	return hasText && finished
 }
 
 // providerDiscover: GET <base>/v1/models, its models filled in from the catalog.
