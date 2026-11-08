@@ -637,7 +637,7 @@ nonisolated struct APIClient: Sendable {
         return out
     }
 
-    /// The bytes of a lazy image (`ImagePayload.ref`, "<machine>/<session>/<item id>").
+    /// The bytes of a lazy image on this hub: "<machine>/<session>/<item id>" (`ImageRef.split` of an `ImagePayload.ref`).
     func image(ref: String) async throws -> Data {
         let parts = ref.split(separator: "/", maxSplits: 2).map(String.init)
         guard parts.count == 3 else { throw APIError(status: 0, message: "bad image ref") }

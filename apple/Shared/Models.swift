@@ -1424,6 +1424,27 @@ nonisolated struct SessionKey: Hashable, Sendable, Codable {
     }
 }
 
+/// A lazy picture's ref: its chat's `SessionKey.path` and its item id, "<machine>/<session>/<item id>", or
+/// "<group>|<machine>/<session>/<item id>" for a chat on another group of hubs. The group says which hub has the bytes:
+/// asked of the current group's hub, a chat on another group's pictures never came (#1555).
+nonisolated enum ImageRef {
+    static func make(_ key: SessionKey, item: String) -> String { key.path + "/" + item }
+
+    /// The group whose hub has it, and the "<machine>/<session>/<item id>" that hub's `APIClient.image(ref:)` takes.
+    static func split(_ ref: String) -> (group: String, ref: String) {
+        guard let bar = ref.firstIndex(of: "|"), ref[..<bar].firstIndex(of: "/") == nil else { return ("", ref) }
+        return (String(ref[..<bar]), String(ref[ref.index(after: bar)...]))
+    }
+
+    /// The chat it is from.
+    static func session(_ ref: String) -> SessionKey? {
+        let (group, rest) = split(ref)
+        let parts = rest.split(separator: "/", maxSplits: 2).map(String.init)
+        guard parts.count == 3 else { return nil }
+        return SessionKey(group: group, machineID: parts[0], sessionID: parts[1])
+    }
+}
+
 nonisolated struct ImagePayload: Codable, Hashable, Sendable {
     var mime: String
     /// Base64; empty when `lazy`: history pages leave the bytes out and each image is fetched when it is shown.
@@ -1432,7 +1453,8 @@ nonisolated struct ImagePayload: Codable, Hashable, Sendable {
     var size: Int? = nil
     var width: Int? = nil
     var height: Int? = nil
-    /// Where a lazy image lives: "<machine>/<session>/<item id>" (filled in by ChatStore).
+    /// Where a lazy image lives: "<machine>/<session>/<item id>", "<group>|…" for another group of hubs (`ImageRef`,
+    /// filled in by ChatStore).
     var ref: String? = nil
 
     init(mime: String, data: String) {
@@ -1493,7 +1515,7 @@ nonisolated struct FoldImage: Codable, Hashable, Sendable {
     var size: Int?
     var width: Int?
     var height: Int?
-    /// Where its bytes are, like `ImagePayload.ref`: "<machine>/<session>/<item id>" (filled in by ChatStore).
+    /// Where its bytes are, like `ImagePayload.ref` (`ImageRef`, filled in by ChatStore).
     var ref: String? = nil
 
     enum CodingKeys: String, CodingKey {

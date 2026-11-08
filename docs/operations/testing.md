@@ -785,7 +785,7 @@ so wrong-hub routing is obvious. Mesh fields (`MOCK_HUB_ID`, `MOCK_HUB_NAME`, `M
 `MOCK_MACHINE_NAMES`, `MOCK_MACHINES_KEEP`, `GET /mock/mesh`) documented at file top; unset output unchanged (`scripts/mock/test_mock_hub_mesh.py`).
 
 ```sh
-PORT=18760 MOCK_HUB_ID=hub-a MOCK_HUB_NAME=Home python3 scripts/mock/mock_hub.py &
+PORT=18760 MOCK_HUB_ID=hub-a MOCK_HUB_NAME=Home MOCK_TURN_IMAGES=many python3 scripts/mock/mock_hub.py &
 PORT=18761 MOCK_HUB_ID=hub-b MOCK_HUB_NAME=Work \
   MOCK_MESH_PEERS='[{"hub_id":"hub-c","name":"Work 2","endpoints":["http://127.0.0.1:18762"]}]' \
   MOCK_MACHINE_OWNER='{"macbook":"hub-c"}' MOCK_MACHINES_KEEP=server,macbook \
@@ -795,7 +795,8 @@ PORT=18762 MOCK_HUB_ID=hub-c MOCK_HUB_NAME="Work 2" \
   MOCK_MACHINE_OWNER='{"server":"hub-b"}' MOCK_MACHINES_KEEP=server,macbook \
   MOCK_MACHINE_NAMES='{"server":"Work server","macbook":"Work MacBook"}' python3 scripts/mock/mock_hub.py &
 TEST_RUNNER_PERSONA_HUB_A=http://127.0.0.1:18760 TEST_RUNNER_PERSONA_HUB_B=http://127.0.0.1:18761 \
-  TEST_RUNNER_PERSONA_HUB_C=http://127.0.0.1:18762 xcodebuild test … -only-testing:PersonaUITests/MultiHubTests
+  TEST_RUNNER_PERSONA_HUB_C=http://127.0.0.1:18762 TEST_RUNNER_PERSONA_HUB_A_TURN_IMAGES=1 \
+  xcodebuild test … -only-testing:PersonaUITests/MultiHubTests
 ```
 
 - Shots: `-pairURL <A> -pairURL2 <B> -pairURL3 <C>` (DEBUG; same address/credentials retains group id across restart), plus
