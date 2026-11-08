@@ -140,6 +140,9 @@ final class AppModel {
     /// What the app's timed waits sleep on (`settleSend`'s wait for a transcript copy): the wall clock. The shared sync
     /// replay's own (`SyncClock`), so that a case's minutes take none.
     @ObservationIgnored var clock: any Clock<Duration> = ContinuousClock()
+    /// Where the snapshot and the outbox are kept (`StateCache`): the app's Caches/state (nil), or a folder of a test's
+    /// own, so that its model starts from what the test wrote, not from what the simulator's app saved (#1637).
+    let stateFolder: URL?
     #if DEBUG
     /// Unit tests: the client every group's requests go to (`FakeHub.client`) instead of the paired hubs'.
     @ObservationIgnored var apiForTests: APIClient?
@@ -147,6 +150,13 @@ final class AppModel {
     /// Mode's hub, which is one for the whole process: several models side by side, each a device of its own (the
     /// shared sync scenarios with two devices, `SyncDevice`).
     @ObservationIgnored var linkHooksForTests: (transport: APIClient.Transport, socket: () -> LocalSocket)?
+    /// Unit tests: no machines, agents or cards, whatever `init` restored. A simulator paired by an earlier run keeps
+    /// its last snapshot, and a test of everything the model holds (the watch summary) would count those too (#1638).
+    func forgetRestoredForTests() {
+        machines = []
+        sessionsByMachine = [:]
+        interactions = [:]
+    }
     #endif
     /// Cards being answered, and whether the hub ended them meanwhile: a failed answer puts back only the ones it did not.
     @ObservationIgnored private var answering = AnsweringInteractions()
@@ -275,7 +285,8 @@ final class AppModel {
     var isDemo: Bool { links.first?.isDemo == true }
     static let demoKey = "demo.on"
 
-    init() {
+    init(stateFolder: URL? = nil) {
+        self.stateFolder = stateFolder
         TextSize.current.applyToMacFonts() // what `textSize` starts at
         Task.detached(priority: .utility) { LarkAttachment.staging.sweep() }
         connection = ConnectionStatus()
@@ -285,7 +296,7 @@ final class AppModel {
         // too, Demo Mode from a clean start (UI tests, `launchPersona`).
         if UserDefaults.standard.bool(forKey: "openWelcome") {
             HubStore.save(HubRegistry()) // known empty: deletes the registry and the old single pairing
-            StateCache.remove(Self.snapshotName("")) // and the lists it left: Demo Mode would show them (a paired app)
+            StateCache.remove(Self.snapshotName(""), in: stateFolder) // and the lists it left: Demo Mode would show them (a paired app)
             UserDefaults.standard.removeObject(forKey: Self.demoKey)
         }
         #endif
@@ -321,8 +332,7 @@ final class AppModel {
         if registry.hubs.isEmpty, !registryUnreadable, UserDefaults.standard.bool(forKey: Self.demoKey) {
             links = [makeLink("", .demo)]
         }
-        // Last known machines, agents and pending interactions: the lists are there offline and on a cold start.
-        if isPaired { restoreSnapshot(); restoreOutbox() }
+        if isPaired { restoreSaved() }
         WatchSync.shared.configProvider = { [weak self] in self.flatMap { $0.watchConfigs().configs[""] ?? $0.watchConfigs().configs.values.first } }
         WatchSync.shared.configsProvider = { [weak self] in
             guard let self, !self.isDemo, !self.registry.hubs.isEmpty else { return nil }
@@ -391,8 +401,7 @@ final class AppModel {
             applyPersonaPalette()
         }
         guard isPaired else { return }
-        restoreSnapshot()
-        restoreOutbox()
+        restoreSaved()
         start()
         PushRegistrar.shared.registerIfPossible()
     }
@@ -712,6 +721,12 @@ final class AppModel {
 
 
     // MARK: Derived
+
+    /// A session whose `delta` is an agent's message as it shows (a Claude session Persona started, a runtime's), not
+    /// the headless assistant's whole reply: a listed session that is not the assistant's, or a chat already given one.
+    func streamsAgentReplies(_ key: SessionKey) -> Bool {
+        existingChat(key)?.liveIsAgents == true || session(key).map { !$0.assistant } ?? false
+    }
 
     /// One session, for views about it: its `rev`, `updatedAt` and last line may be older than the list's
     /// (`SessionCell`). An action that sends what the session is now reads `latest(_:)`.
@@ -1063,6 +1078,7 @@ final class AppModel {
         subscribers[key, default: []].insert(owner)
         guard first else { return }
         let store = chat(key)
+        forgetAgentLive(key) // a delta that crossed the last unsubscribe
         Task { await refreshSessionDetail(key) }
         socket(key.group)?.send(subscribeMessage(key))
         if socket(key.group)?.state != .connected && !store.loadedOnce { Task { await loadInitial(key) } }
@@ -1072,7 +1088,20 @@ final class AppModel {
         guard var owners = subscribers[key], owners.remove(owner) != nil else { return }
         guard owners.isEmpty else { subscribers[key] = owners; return }
         subscribers[key] = nil
+        forgetAgentLive(key)
         socket(key.group)?.send(["type": "unsubscribe", "machine_id": key.machineID, "session_id": key.sessionID])
+    }
+
+    /// An agent's live text holds only while its chat is subscribed: the hub sends `delta` to subscribers alone, so the
+    /// `""` that ended it while nobody here was subscribed never comes, and on subscribing again the hub sends the live
+    /// text only while a message is still being written (`sendLiveText`; the node checks it again on its new watch). Kept,
+    /// the old words would be drawn again under a later message of the turn (only the latest message and a late copy
+    /// of the one before are matched). So it goes when the subscription ends and again when one starts, as the web's
+    /// chat starts each time it opens with none. The main chat's live text keeps its own rules.
+    private func forgetAgentLive(_ key: SessionKey) {
+        guard let store = existingChat(key), store.liveIsAgents else { return }
+        deltas.drop(key)
+        store.dropLive()
     }
 
     /// The socket of a group.
@@ -1351,7 +1380,7 @@ final class AppModel {
             deltas.drop(key)
             // A delta that cleared it may have been lost with the old socket. A resumed hub sends the current one
             // right after the catch-up, so the answer goes on being written instead of blanking for a moment.
-            if plan.refetch { chat(key).liveText = "" }
+            if plan.refetch { chat(key).dropLive() }
             link.live.send(subscribeMessage(key))
         }
         guard plan.refetch else { return }
@@ -1666,7 +1695,8 @@ final class AppModel {
             ChatTrace.shared.note(key, ChatTrace.batch(items, span: span, backlog: backlog, gap: gap, resets: store.resets, covered: store.covered))
             settle(key, gap)
             // The streamed message landed in the transcript: stop drawing its live copy (and the newer one kept back).
-            if store.landed(items, pending: deltas.pendingText(key)) {
+            // An agent's is matched against the newest items by the store itself (`ChatStore.agentStreamed`).
+            if !store.liveIsAgents, store.landed(items, pending: deltas.pendingText(key)) {
                 deltas.drop(key)
                 ChatTrace.shared.note(key, "landed live=\(store.liveText.count)")
             }
@@ -1682,13 +1712,15 @@ final class AppModel {
             if text.isEmpty != chat(key).liveText.isEmpty {
                 ChatTrace.shared.note(key, text.isEmpty ? "delta clear live=\(chat(key).liveText.count)" : "delta start")
             }
+            // An agent's (a Claude session Persona started, a runtime's) is its message as it shows, matched against the
+            // transcript; the headless assistant's is its whole reply so far.
+            let agents = streamsAgentReplies(key)
             switch deltas.offer(key, text, now: .now) {
-            case .draw(let t) where t.isEmpty: chat(key).clearLive(newest: newest)
-            case .draw(let t): chat(key).liveText = t
+            case .draw(let t): chat(key).streamed(t, agents: agents, newest: newest)
             case .later(let wait):
                 DispatchQueue.main.asyncAfter(deadline: .now() + wait) { [weak self] in
                     guard let self, let t = self.deltas.due(key, now: .now) else { return }
-                    self.chat(key).liveText = t
+                    self.chat(key).streamed(t, agents: agents)
                 }
             case .kept: break
             }
@@ -1923,6 +1955,30 @@ final class AppModel {
             }
             Haptics.success()
             toast = Toast(delete ? String(localized: "Removed from the queue") : String(localized: "Moved back to the input box. Edit it and send again."), style: .success)
+        } catch {
+            show(error)
+        }
+    }
+
+    /// Moves a queued message one place up or down (#6088): the queue is pulled back and re-queued in the new order.
+    func moveQueued(_ key: SessionKey, index: Int, by step: Int) async {
+        guard allowSend(key), let api = api(key.group), let queue = session(key)?.queued,
+              let keep = QueueOrder.moved(count: queue.count, index: index, by: step) else { return }
+        do {
+            _ = try await api.editQueue(key, keep: keep)
+            Haptics.tap()
+        } catch {
+            show(error)
+        }
+    }
+
+    /// Gives the agent its queued messages now instead of at its next tool boundary (#6088).
+    func sendQueuedNow(_ key: SessionKey) async {
+        guard allowSend(key), let api = api(key.group) else { return }
+        do {
+            try await api.sendQueuedNow(key)
+            Haptics.success()
+            toast = Toast(String(localized: "Sent to the agent now [Queue Strip]"), style: .success)
         } catch {
             show(error)
         }
@@ -2545,10 +2601,17 @@ final class AppModel {
     /// Each group's snapshot: "dev" for the default group (what it always was), "dev.<group>" for the others.
     static func snapshotName(_ group: String) -> String { group.isEmpty ? "dev" : "dev." + group }
 
+    /// A paired launch: last known machines, agents and pending interactions, so the lists are there offline and on a
+    /// cold start, and what was on its way (`restoreOutbox`).
+    func restoreSaved() {
+        restoreSnapshot()
+        restoreOutbox()
+    }
+
     private func restoreSnapshot() {
         var allMachines: [Machine] = [], allSessions: [Session] = [], allInteractions: [Interaction] = []
         for g in groupIDs {
-            guard let snap = StateCache.load(Self.snapshotName(g), as: DevSnapshot.self) else { continue }
+            guard let snap = StateCache.load(Self.snapshotName(g), as: DevSnapshot.self, in: stateFolder) else { continue }
             allMachines += snap.machines.map { var m = $0; m.group = g; return m }
             allSessions += snap.sessions.map { var s = $0; s.group = g; return s }
             allInteractions += snap.interactions.map { var i = $0; i.group = g; return i }
@@ -2569,7 +2632,8 @@ final class AppModel {
                 StateCache.save(Self.snapshotName(g), DevSnapshot(
                     machines: self.machines.filter { $0.group == g },
                     sessions: self.sessionsByMachine.filter { $0.key.group == g }.values.flatMap { $0 },
-                    interactions: Array(self.interactions.values.filter { $0.group == g }), assistant: assistant))
+                    interactions: Array(self.interactions.values.filter { $0.group == g }), assistant: assistant),
+                    in: self.stateFolder)
             }
         }
     }
@@ -2587,7 +2651,7 @@ final class AppModel {
         if let k = openChat, gone.contains(k.group) { openChat = nil }
         if let k = assistantCurrent, gone.contains(k.group) { assistantCurrent = nil }
         for g in gone {
-            StateCache.remove(Self.snapshotName(g))
+            StateCache.remove(Self.snapshotName(g), in: stateFolder)
             ChatCache.removeGroup(g)
             PinsStore.forget(suffix: g)
             if !keepingPushKeys { PushCrypto.removeKey(group: g) }

@@ -3025,7 +3025,7 @@ if MOCK_TASKS:
             _feed("feed_r1", 4, "report", "todo_task_tests", {"kind": "question", "text": "Mock 用协议注入还是保留单例？\n协议注入要改 6 个文件。",
                                                              "evidence": ["https://github.com/example/weather/pull/42"]}),
             _feed("feed_r3", 3.5, "report", "todo_task_tests", {"kind": "question", "text": "统一用 snake_case 还是 camelCase 命名新接口？", "later": True}),
-            _feed("feed_r2", 3, "routed", "todo_task_tests", {"text": "用协议注入，先改网络层那 6 个文件", "interrupted": True}),
+            _feed("feed_r2", 3, "routed", "todo_task_tests", {"text": "用协议注入，先改网络层那 6 个文件", "interrupted": True, "from": "assistant"}),
         ]
     # MOCK_TASKS_PENDING_REVIEW=1: the Today card lists the stopped release-notes task waiting for review (#4889).
     if os.environ.get("MOCK_TASKS_PENDING_REVIEW") == "1":
@@ -3088,6 +3088,30 @@ if MOCK_TASKS:
         _base = min(x["seq"] for x in ITEMS[ASK1])
         for _i, _x in enumerate(ITEMS[ASK1]):
             _x["seq"] = _base + _i
+    # MOCK_EXCHANGES=1: the new conversation layout's material (#1666): Persona's long message to a task and the task's long
+    # report with a link in its words and an evidence list (folded to three lines, no list under it), and the hub's
+    # supervision digest (injected system / supervise), drawn as Persona writing to itself.
+    if os.environ.get("MOCK_EXCHANGES") == "1":
+        TASK_FEED[ASK1] += [
+            _feed("feed_x1", 6.5, "routed", "todo_task_tests", {"text": "先别动缓存层。\n1. 网络层的重试和超时先补测试，用本地假服务器；\n"
+                                                                "2. 覆盖率按 80% 算，生成的代码不算；\n3. 每补完一块就跑一次全量测试；\n"
+                                                                "4. 做完把 PR 链接和覆盖率截图发我。", "from": "assistant"}),
+            _feed("feed_x2", 6, "report", "todo_task_tests", {"kind": "done", "text": "网络层测试补完了，PR 在 https://github.com/example/weather/pull/45 。\n"
+                                                              "重试、超时和断网三块都有用例，用本地假服务器跑，不连真实接口。\n"
+                                                              "覆盖率从 52% 到 83%，生成的代码不算在里面。\n缓存层按你说的没动。",
+                                                              "evidence": ["https://github.com/example/weather/pull/45",
+                                                                           "https://github.com/example/weather/actions/runs/1001"]}),
+        ]
+        _digest = ("📋 督办：你派出去的任务有 2 个要你处理\n（这是 Persona 的督办消息，不是用户发的。这一轮正常结束时不会推送给用户。）\n\n"
+                   "1. 任务「补齐网络层的单元测试」：hub 判断做完了，等你验收\n2. 任务「修小组件横屏崩溃」：Agent 停下了，但没做完")
+        ITEMS[ASK1] += [
+            it("user", "text", 5.8, text=_digest, injected={"kind": "system", "state": "supervise", "line": "督办：2 个派出去的任务要处理"}),
+            it("assistant", "text", 5.7, text="网络层测试我核对过了：PR 已合并，覆盖率 83%，验收通过。小组件那个我让它接着修。"),
+        ]
+        ITEMS[ASK1].sort(key=lambda x: x["ts"])
+        _base = min(x["seq"] for x in ITEMS[ASK1])
+        for _i, _x in enumerate(ITEMS[ASK1]):
+            _x["seq"] = _base + _i
     # MOCK_RELAYED=1: a message another Persona conversation sent with conversation_send (prompts/assistant/relay.md),
     # then one you typed: only yours is the pale blue bubble (#2643).
     if os.environ.get("MOCK_RELAYED") == "1":
@@ -3104,6 +3128,52 @@ if MOCK_TASKS:
         _base = min(x["seq"] for x in ITEMS[ASK1])
         for _i, _x in enumerate(ITEMS[ASK1]):
             _x["seq"] = _base + _i
+    # MOCK_TASKS_SENT=1: what Persona sent to its tasks' agents (`routed` with from "assistant", #1542), last in the
+    # conversation: a long hand-off to a running agent right after its task's card (agent_send with task: the card
+    # takes it in), a rework sent to the widget fix whose card is far above (one folded line), and the user's own word
+    # to the unit tests' task (still the user's bubble).
+    if os.environ.get("MOCK_TASKS_SENT") == "1":
+        MEMORY = "a1f3c2d4-0000-4000-8000-0000000000e1"
+        SESSIONS.append(sess("macbook", MEMORY, "降低后台同步的内存占用", "/Users/me/code/weather", "working", "working", "weather", 1,
+                             "memory", 5, 0.5, "在 Instruments 里复现内存峰值。"))
+        ITEMS[MEMORY] = [it("assistant", "text", 0.5, text="在 Instruments 里复现内存峰值。")]
+        _mem = _task_todo("todo_task_memory", "降低后台同步的内存占用", "", "macbook", MEMORY, "/Users/me/code/weather", 1.05, "")
+        _mem["supervision"] = {"supervisor": ASK1, "done_when": ["峰值内存降一半以上", "30 分钟后台同步不被系统杀掉"], "state": "",
+                               "round": 0, "reviews": [], "updated_at": ago(minutes=1)}
+        TODOS_INIT.append(_mem)
+        TODOS.append(copy.deepcopy(_mem))
+        _handoff = ("把 weather 后台同步进程的常驻内存降下来，目标是不再因为内存压力被系统杀掉。\n\n背景：\n"
+                    "- 最近一周后台同步在 iPhone 上被系统杀了 14 次，崩溃日志在 ~/Library/Logs/weather/\n"
+                    "- 峰值出现在一次拉取 300 张以上的缩略图时\n\n要做的：\n"
+                    "1. 先用 Instruments 的 Allocations 复现，记下峰值和主要占用\n"
+                    "2. 缩略图改成按需、分批解码，解码后的位图不要整批留在内存里\n"
+                    "3. 网络层的响应体改成流式写盘，不要整段读进内存\n"
+                    "4. 加一个内存压力的回归测试（模拟 500 张图）\n"
+                    "5. 改完在真机上跑 30 分钟后台同步，截图贴进 PR\n\n完成标准：\n"
+                    "- 峰值内存比现在降一半以上\n- 30 分钟内没有被系统杀掉\n- PR 里有改前改后的 Allocations 截图\n\n"
+                    "有拿不准的先用 report_to_supervisor 问我，不要自己猜。")
+        _rework = ("（督办：验收没通过，第 1 轮返工，最多 2 轮）\n逐条验收：\n- ✅ PR 合并到 master\n- ❌ 横屏截图贴进 PR：只有竖屏截图\n"
+                   "要你做的：\n补一张横屏的截图贴进 PR，再告诉我。")
+        ITEMS[ASK1] += [it("user", "text", 1.3, text="后台同步老是被系统杀掉，让 MacBook 上 weather 那边开个 Agent 盯着把内存降下来")]
+        ITEMS[ASK1] += tool("mcp__persona__agent_send", {"machine": "macbook", "session_id": MEMORY, "text": _handoff,
+                                                         "task": {"title": "降低后台同步的内存占用"}},
+                            "Sent to the agent on MacBook. It is now your task todo_task_memory.", 1.1)
+        ITEMS[ASK1] += [it("assistant", "text", 1.0, text="交给 MacBook 上的 Agent 了，按两条完成标准督办，有进展我告诉你。")]
+        ITEMS[ASK1].sort(key=lambda x: x["ts"])
+        _base = min(x["seq"] for x in ITEMS[ASK1])
+        for _i, _x in enumerate(ITEMS[ASK1]):
+            _x["seq"] = _base + _i
+        TASK_FEED[ASK1] += [
+            # Yesterday's hand-off with the blog migration's card (#1668): that card is a line now, so this stays a folded
+            # line under it (MOCK_TASKS_AT=1559 puts it at the bottom).
+            _feed("feed_s0", 60 * 26 - 0.61, "routed", "todo_task_blog",
+                  {"text": "把博客从 Hexo 迁到 Astro。\n\n要求：\n- 32 篇文章都要能构建\n- 旧链接全部 301 到新地址\n- Lighthouse 性能分 90 以上", "from": "assistant"}),
+            _feed("feed_s1", 1.05, "task", "todo_task_memory"),
+            _feed("feed_s2", 1.0499, "routed", "todo_task_memory", {"text": _handoff, "from": "assistant"}),
+            _feed("feed_s3", 0.6, "routed", "todo_task_widget", {"text": _rework, "from": "assistant"}),
+            _feed("feed_s4", 0.4, "routed", "todo_task_tests", {"text": "先补重试和超时，缓存层下周再说"}),
+        ]
+        TASK_FEED[ASK1].sort(key=lambda x: x["at"])
     # MOCK_TASKS_CUT=1: the model service cut the release-notes task off (#1516): its agent's last words are the API
     # error (the hub's turn_error) and its receipt is interrupted; "Continue" (POST …/retry) makes it work and then finish.
     if os.environ.get("MOCK_TASKS_CUT") == "1":
@@ -5790,6 +5860,43 @@ def inbox_suggestion_bump(iid):
     return x, 200
 
 
+# Hand to AI's main-chat target (POST /api/v1/inbox/{id}/handoff, docs/assistant/inbox.md "Item actions", #1194): the text
+# goes after a block naming the item to the main conversation (started with it when there is none), once per client_id,
+# and lands in its transcript MOCK_ASSISTANT_TRANSCRIPT_SECONDS later (default 1) under that id, as the hub's
+# session.send_once does; under none when it started the conversation (the hub's start takes no message id). The item keeps the hand-off and its chain gets one entry per conversation. What went is in
+# /mock/sent and /mock/sent_to. MOCK_HANDOFF=old: a hub from before the route (404).
+HANDOFFS = {}  # client_id -> the answer given
+
+
+def inbox_handoff(iid, body):
+    if os.environ.get("MOCK_HANDOFF") == "old": return {"error": "404 page not found"}, 404
+    x = next((x for x in INBOX if x["id"] == iid), None)
+    if x is None: return {"error": "收件箱里没有这一条", "code": "not_found"}, 404
+    text, cid = (body.get("text") or "").strip(), (body.get("client_id") or "").lower()
+    if not text: return {"error": "text is required"}, 400
+    if cid in HANDOFFS: return HANDOFFS[cid], 200
+    mid, started = ASSISTANT_CONFIG["machine_id"], not ASSISTANT_CONFIG["main"]
+    if started:
+        sid = str(uuid.uuid4())
+        session = assistant_sess(sid, "", 0, "")
+        session.update(status="working", state="working", main=True)
+        ASSISTANT_CONFIG["main"] = sid
+        ASSISTANT.append(session)
+        push_machine(mid)
+    sid = ASSISTANT_CONFIG["main"]
+    head = '<persona-context kind="context" title="收件箱事件 · %s" url="">\n用户从收件箱把这件事交给你（事件 id：%s）。\n</persona-context>\n' % (
+        x["title"].replace('"', "'"), iid)
+    sent = {"text": head + text} if started else {"text": head + text, "client_msg_id": cid}
+    echo_sent(["", "api", "v1", "sessions", mid, sid, "messages"], sent, float(os.environ.get("MOCK_ASSISTANT_TRANSCRIPT_SECONDS", "1")))
+    SENT.append(dict(sent, inbox=iid))
+    SENT_TO.append({"machine_id": mid, "session_id": sid, "client_msg_id": sent.get("client_msg_id"), "text": sent["text"]})
+    x.setdefault("handoffs", []).append({"machine_id": mid, "session_id": sid, "at": ago()})
+    if not any(e.get("kind") == "handling" and (e.get("link") or {}).get("session_id") == sid for e in x.get("chain") or []):
+        _chain_add(x, "handling", "交给了 Persona 主对话", link={"type": "session", "machine_id": mid, "session_id": sid})
+    HANDOFFS[cid] = {"item": x, "session": {"machine_id": mid, "session_id": sid}}
+    return HANDOFFS[cid], 200
+
+
 # MOCK_INBOX_LINE=1: a "Thread" (#2128): the design review grew out of the chat with the sample contact (continues), which hangs under a todo; the
 # the weekend hiking group item grew out of the design review. GET /api/v1/inbox/tree/{kind}/{id} answers from the items' parents.
 if os.environ.get("MOCK_INBOX_LINE") == "1":
@@ -7392,6 +7499,45 @@ if os.environ.get("MOCK_SUBAGENT_PARALLEL") == "1":
     mock_subagent_parallel()
 
 
+# MOCK_REPORT_FOLD=1: subagents' reports read as one line until opened: a foreground subagent's result (a heading
+# first), a background one's notice, and that one's report again as another session's message (its handback, by its
+# type, as an older node shows it); a real peer's message stays whole.
+REPORTS = "a1f3c2d4-0000-4000-8000-0000000c1e07"
+
+
+def mock_report_fold():
+    report = ("## 结算回归：42 个用例全部通过\n\n- 下单、改地址、用优惠券三条主流程都过了。\n- 用时 1 分 48 秒，比上次快 20 秒。\n"
+              "- 没有新增的不稳定用例。")
+    bg = ("搜索和筛选的回归跑完了：120 个用例里 118 个通过，2 个失败都在价格筛选，原因是测试数据里两件下架商品没有价格。"
+          "已经在 fixtures 里补上价格，重跑后全部通过。\n\n改动：`e2e/fixtures/products.json`。")
+    _r = [it("user", "text", 12, text="把结算和搜索的回归拆给子 Agent 跑")]
+    _r += tool("Agent", {"description": "回归：结算流程", "subagent_type": "general-purpose", "prompt": "跑结算流程的回归用例，失败的列出来"},
+               report + "\nagentId: rfdone (use SendMessage with to: 'rfdone' to continue this agent)", 11)
+    _done = _r[-2]["tool_use_id"]
+    _r += tool("Agent", {"description": "回归：搜索和筛选", "subagent_type": "Explore", "prompt": "跑搜索和筛选的回归用例", "run_in_background": True},
+               "Async agent launched successfully.\nagentId: rfbg (This is an internal ID for your use)", 10.5)
+    _bg = _r[-2]["tool_use_id"]
+    _r.append(it("assistant", "text", 10, text="结算的回归跑完了，搜索和筛选的在后台跑。"))
+    _r.append(it("system", "notice", 4, text="Agent \"回归：搜索和筛选\" completed",
+                 task={"kind": "agent", "status": "completed", "title": "回归：搜索和筛选", "task_id": "rfbg", "tool_use_id": _bg, "detail": bg}))
+    _r.append(it("user", "text", 3.9, text=bg, **{"from": "Explore"}))
+    _r.append(it("user", "text", 3.5, text="发版分支已经切好了，可以开始回归。", **{"from": "release-bot"}))
+    _r.append(it("assistant", "text", 3, text="两块回归都过了：结算 42 个全过；搜索和筛选补了测试数据后全过。"))
+    ITEMS[REPORTS] = _r
+    sub = lambda i, desc, use, **kw: {"id": i, "session_id": REPORTS + "@" + i, "type": kw.pop("type", "general-purpose"), "description": desc,
+                                      "tool_use_id": use, "running": False, "started_at": ago(minutes=kw.pop("at", 11)), **kw}
+    ITEMS[REPORTS + "@rfdone"] = [it("user", "text", 11, text="跑结算流程的回归用例，失败的列出来"), it("assistant", "text", 10.8, text=report)]
+    ITEMS[REPORTS + "@rfbg"] = [it("user", "text", 10.5, text="跑搜索和筛选的回归用例"), it("assistant", "text", 4, text=bg)]
+    SESSIONS.append(sess("macbook", REPORTS, "回归报告", "/Users/me/code/shop-web", "done", "unread", "shop-web", 7, "reports", 1, 3,
+                         "两块回归都过了。", subagents=[
+                             sub("rfdone", "回归：结算流程", _done, steps=3, updated_at=ago(minutes=10.8)),
+                             sub("rfbg", "回归：搜索和筛选", _bg, at=10.5, type="Explore", background=True, steps=5, updated_at=ago(minutes=4))]))
+
+
+if os.environ.get("MOCK_REPORT_FOLD") == "1":
+    mock_report_fold()
+
+
 # MOCK_WORK_GROUPS=1: one finished conversation with every way a work group reads (#1963, web): a short run (five steps
 # or fewer, an empty thought and one with words, a command with and without a description), a long run with an edit
 # and its diff, one that only read and searched, a delivered report between two steps (it stays out of the fold), and
@@ -8895,7 +9041,7 @@ def replay_next(n):
 # MOCK_ECHO_SENT=1: a message sent to a session lands in its transcript a moment later, as claude writes it: for
 # Persona's conversations (claude -p) its pictures first, as image blocks, then its text; elsewhere the text, then the
 # pictures (a pasted image Claude inlined). For the chat showing what was sent once the transcript has it.
-def echo_sent(parts, body):
+def echo_sent(parts, body, delay=None):
     if len(parts) < 7 or body.get("clear_draft"):
         return
     mid, sid = parts[4], parts[5]
@@ -8923,7 +9069,7 @@ def echo_sent(parts, body):
                 try: out({"type": "items", "machine_id": mid, "session_id": sid, "items": line, **span(line, before)})
                 except Exception: pass
         sync_moved(sid)
-    threading.Timer(float(os.environ.get("MOCK_ECHO_SECONDS", "1.5")), written).start()
+    threading.Timer(delay if delay is not None else float(os.environ.get("MOCK_ECHO_SECONDS", "1.5")), written).start()
 
 
 # MOCK_HUB_LINKS=<origin the web is served at>: the assistant's latest answer links an agent and a task as the hub's own
@@ -9154,9 +9300,10 @@ MOCK_TREE = {
     "notes.txt": "Remember to water the plants.\n",
 }
 MOCK_REPO = "code/weather"
-# MOCK_REVIEW=1 (#151): git/review answers for this checkout (mock_review.py), with the files its review shows on disk
-REVIEW = bool(os.environ.get("MOCK_REVIEW"))
-if REVIEW:
+# MOCK_REVIEW=1 (#151): git/review answers for this checkout (mock_review.py), with the files its review shows on disk.
+# Not `REVIEW`: that is the PR #42 review agent's session id, which later code (MOCK_AGENT_LIVE, MOCK_IMAGES…) still uses.
+GIT_REVIEW = bool(os.environ.get("MOCK_REVIEW"))
+if GIT_REVIEW:
     sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
     import mock_review
     for _k, _v in {"/Sources/App/Forecast.swift": mock_review.FORECAST_NEW, "/Sources/App/Units.swift": "import Foundation\n\nlet celsius = UnitTemperature.celsius\n",
@@ -9443,7 +9590,7 @@ def mock_files(p, q):
     parts = p.split("/")
     if not (p.startswith("/api/v1/machines/") and len(parts) >= 6): return None
     mid, what = parts[4], "/".join(parts[5:])
-    if what not in ("file", "fs", "fs/find", "git/status", "git/diff", "git/show", "git/log", "git/branches", "git/pr") and not (what == "git/review" and REVIEW): return None
+    if what not in ("file", "fs", "fs/find", "git/status", "git/diff", "git/show", "git/log", "git/branches", "git/pr") and not (what == "git/review" and GIT_REVIEW): return None
     if not machine_online(mid): return {"error": "%s: machine is offline" % mid}, 503
     arg = lambda k: (q.get(k) or [""])[0]
     if what == "fs/find":  # #2438: every file under cwd, shallow first (the node's walk / git ls-files)
@@ -11359,7 +11506,7 @@ def cua_config(pl):
 
 
 _PLUGIN_VIEW = ["id", "name", "kind", "status", "error", "version", "source", "enabled", "description", "contributes", "needs_setup", "warnings",
-                "auto_upgrade", "upgrade", "upgrade_note", "nodes"]
+                "auto_upgrade", "auto_upgrade_paused", "upgrade", "upgrade_note", "nodes"]
 
 # ---------- MOCK_EXTENSIONS: declarative UI (docs/extensions/extensions.md "Declarative UI") ----------
 # example-gateway draws a page (plugin_page "home") and a section on every launcher's page (launcher_section "panel"),
@@ -11647,8 +11794,25 @@ def _catalog_item(c):
 
 # Auto-upgrade (docs/extensions/extensions.md "Automatic upgrades"): example-gateway, from a market at 1.0.0, has 1.1.0 there asking for one more
 # host. MOCK_PLUGIN_UPGRADE picks how it stands: needs_permission (default), waiting_idle, skipped, upgraded (the last
-# one went in by itself), none.
+# one went in by itself), disabled (switched off: auto-upgrade paused, its own switch kept), none.
 AUTO_UPGRADE = {"auto": True}
+# A market plugin's upgrade while it is on, put back when it is switched on again (_auto_upgrade_paused).
+_UPGRADE_WHILE_ON = {}
+
+
+def _auto_upgrade_paused(pl):
+    """A market plugin switched off is not upgraded, as the hub says: auto_upgrade_paused, its newer version "off" (its
+    own switch stays); switched on again, both are as before."""
+    if pl.get("auto_upgrade") is None:
+        return
+    pl["auto_upgrade_paused"] = None if pl["enabled"] else "disabled"
+    up = pl.get("upgrade")
+    if not pl["enabled"] and up and pl["id"] not in _UPGRADE_WHILE_ON:
+        _UPGRADE_WHILE_ON[pl["id"]] = up
+        pl["upgrade"] = {k: v for k, v in up.items() if k != "added_permissions"} | {
+            "state": "off", "detail": "扩展已关闭，自动升级暂停；重新打开后恢复你原来的设置"}  # i18n-ignore: the hub's words
+    elif pl["enabled"] and pl["id"] in _UPGRADE_WHILE_ON:
+        pl["upgrade"] = _UPGRADE_WHILE_ON.pop(pl["id"])
 
 
 def _gateway_upgrade(state):
@@ -11663,10 +11827,14 @@ def _gateway_upgrade(state):
         up["detail"] = "插件正在用"
     elif state == "skipped":
         pl["upgrade_note"] = {"kind": "rolled_back", "from": "1.0.0", "to": "1.1.0", "detail": "exited with status 3", "at": at(5)}
-    if state in ("needs_permission", "waiting_idle", "skipped"):
+    if state in ("needs_permission", "waiting_idle", "skipped", "disabled"):
         pl["upgrade"] = up
     elif state == "upgraded":
         pl["upgrade_note"] = {"kind": "upgraded", "from": "0.9.0", "to": "1.0.0", "at": at(3)}
+    if state == "disabled":
+        up["state"] = "available"
+        pl["enabled"], pl["status"] = False, "disabled"
+        _auto_upgrade_paused(pl)
 
 
 _gateway_upgrade(os.environ.get("MOCK_PLUGIN_UPGRADE", "needs_permission"))
@@ -12044,6 +12212,12 @@ def markets_route(handler, p, body):
                 ui = [{"plugin": "example-gateway", "id": "panel", "title": "Example 网关", "placement": "launcher_section"},
                       {"plugin": "example-gateway", "id": "elsewhere", "title": "别家网关", "placement": "launcher_section"}]
         ui += [u for u in INBOX_ITEM_UI if placement in ("", u["placement"])]
+        if os.environ.get("MOCK_EXTENSION_SHOWCASE") == "1" and placement in ("", "nav_page"):
+            from pathlib import Path
+            snapshots = Path(__file__).resolve().parents[2] / "schema/extension/examples/showcase"
+            ui += [{"plugin": "showcase", "plugin_name": "Component showcase", "id": file.stem,
+                    "title": file.stem, "placement": "nav_page", "size": "full", "icon": "list"}
+                   for file in sorted(snapshots.glob("*.json"))]
         handler.send_json({"ui": ui}); return True
     if len(parts) == 8 and parts[4] == "example-chat" and parts[5:7] == ["-", "ui"] and method == "POST" and INBOX_ITEM_UI:
         code, out = inbox_item_ui(parts[7], req)
@@ -12280,6 +12454,7 @@ def plugins_route(handler, p, body):
     elif rest == ["enabled"] and method == "PUT":
         pl["enabled"] = bool(req.get("enabled"))
         pl["status"] = "disabled" if not pl["enabled"] else ("needs_setup" if pl["source"] == "installed" else "running")
+        _auto_upgrade_paused(pl)
     elif rest == ["config"] and method == "PUT":
         cfg = req.get("config") or {}
         if pl["id"] == "example-gateway-quota":
@@ -12702,7 +12877,7 @@ class H(BaseHTTPRequestHandler):
             git = (q.get("git") or [""])[0] == "1"
             if git: FS_STATE["dirty"] += 1
             return self.send_json({"ok": True, "sent": fs_changed(mid, [path] if add else [], git), "path": path})
-        if p == "/mock/review" and REVIEW:
+        if p == "/mock/review" and GIT_REVIEW:
             return self.send_json(mock_review.control(q))
         if p == "/mock/git-write" and os.environ.get("MOCK_GIT_WRITE"):
             global GIT_W
@@ -14373,6 +14548,8 @@ class H(BaseHTTPRequestHandler):
                             st["value"] = ch.get("value")
                             return self.send_json(x)
             return self.send_json({"error": "no such row"}, 400)
+        if p.startswith("/api/v1/inbox/") and p.endswith("/handoff") and self.command == "POST":  # Hand to AI, main chat
+            return self.send_json(*inbox_handoff(unquote(p[len("/api/v1/inbox/"):-len("/handoff")]), json.loads(self.last_body or b"{}")))
         if p.startswith("/api/v1/inbox/") and p.endswith("/suggestion") and self.command == "POST":  # "Confirm" / "Reject" / "Say something"
             return self.send_json(*inbox_suggestion(unquote(p[len("/api/v1/inbox/"):-len("/suggestion")]), json.loads(self.last_body or b"{}")))
         if p.startswith("/api/v1/inbox/") and p.endswith("/draft"):  # AI draft reply
@@ -14777,13 +14954,19 @@ class H(BaseHTTPRequestHandler):
             s = next((x for x in SESSIONS if x["session_id"] == p.split("/")[5]), None)
             if not (s or {}).get("queued"):
                 return self.send_json({"code": "nothing_queued", "error": "Nothing is queued for the agent any more."}, 409)
+            refuse = os.environ.get("MOCK_SEND_NOW")  # refuses with that code, to see the app's words for it
+            if refuse:
+                return self.send_json({"error": "refused (%s)" % refuse, "code": refuse,
+                                       **({"delivered": "unknown"} if refuse == "send_now_in_doubt" else {})}, 409)
             s["queued"] = []
             push_machine(s["machine_id"])
             return self.send_json({"sent": True})
         if p.startswith("/api/v1/sessions/") and p.endswith("/queue"):  # node editQueue: pull every queued message back, re-queue `keep`
             body = json.loads(self.last_body or b"{}")
             QUEUE_EDITS.append(body)
-            s = next((x for x in all_sessions() if x["session_id"] == p.split("/")[5]), None)
+            # The stored session (all_sessions() hands out copies): the new order is what the next list says (#6088).
+            s = next((x for x in SESSIONS if x["session_id"] == p.split("/")[5]), None) \
+                or next((x for x in all_sessions() if x["session_id"] == p.split("/")[5]), None)
             pulled = list((s or {}).get("queued") or [])
             if not pulled: return self.send_json({"error": "nothing is queued"}, 502)
             s["queued"] = [pulled[k] for k in body.get("keep") or [] if 0 <= k < len(pulled)]
@@ -15397,6 +15580,7 @@ MOCK_HELP.append("MOCK_REWIND=1  检查 PR 的对话里有四条你的消息（�
 MOCK_HELP.append("MOCK_INBOX_SOURCES=none  还没接任何消息来源：收件箱空、没有邮箱账号、飞书没设置、GitHub 没登录（#4480）")
 MOCK_HELP.append("MOCK_INBOX_EXTRA=<n>  收件箱多 n 封知悉即可的示例通知，试「全部清理」的「将清理 N 件」确认")
 MOCK_HELP.append("MOCK_CHANNELS=1  设置 › 插件 › 渠道：App、飞书机器人和微信已连接、飞书 /agent 只读、一个待绑定（令牌 example-token）、一个出错、一个在市场里；主对话第一条来自微信")
+MOCK_HELP.append("MOCK_EXCHANGES=1  主对话新布局的素材（#1666）：Persona 发给任务的长消息、任务带链接和证据的长汇报、督办消息")
 MOCK_HELP.append("MOCK_AUTO_CONVERSATIONS=1  助手对话带来源 origin（feature conversation_origin）：另有 10 段自动对话（收件箱 6、定时任务 2、飞书 /agent、对话派生），侧边栏收进「自动对话」（#3264）")
 
 

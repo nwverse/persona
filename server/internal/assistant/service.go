@@ -97,6 +97,7 @@ type Service struct {
 	sched      schedule          // schedule.go
 	tasks      tasksState        // tasks.go
 	questions  questions         // tools.go (ask_user)
+	askTodos   askTodoBook       // ask_todo.go: the questions nobody answered, now to-dos
 	live       contextState      // context.go
 	todos      todoBook          // todos.go
 	work       workBook          // agents_work.go: the Agents business
@@ -487,6 +488,7 @@ func (s *Service) SessionsChanged(ctx context.Context, d DeviceSessions) {
 	s.originsChanged(d.MachineID, d.Sessions) // conversations from before origins were noted (origins.go)
 	s.todosSessionsChanged(ctx, d)
 	s.nativeArchivesListed(d.MachineID) // agent_archive_native.go
+	s.followStarts(ctx, d)              // the app's starts, for launcher health (launcher_health_starts.go)
 }
 
 func randomHex(n int) string {

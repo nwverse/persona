@@ -588,6 +588,9 @@ nonisolated enum Theme {
         static let agentsRoom: CGFloat = 34
         /// The optional third segment must leave both side buttons reachable on narrow screens.
         static let compactSwitchLargestTypeSize: DynamicTypeSize = .large
+        /// A segment of the switch on iPhone Duo's side rail (`ShellSideRail`): square, a symbol over the page's name, within
+        /// the column the system's bars take beside the content.
+        static let railSegment: CGFloat = 54
     }
 
     /// The page behind lists and chats.

@@ -122,6 +122,10 @@ func (d *fleetDevs) List() []devices.Summary {
 	return out
 }
 
+func (d *fleetDevs) MachineResources(string) (*proto.Machine, *proto.MetricSample, *bool) {
+	return nil, nil, nil
+}
+
 func (d *fleetDevs) Canonical(id string) string { return id }
 
 func (d *fleetDevs) Sessions(id string) ([]proto.Session, bool) {
@@ -134,11 +138,16 @@ func (d *fleetDevs) Sessions(id string) ([]proto.Session, bool) {
 	return append([]proto.Session(nil), n.sessions...), true
 }
 
+// Session finds one session in place, as devices.Session does: copying the whole list here would make a benchmark of a
+// lookup measure this fake instead.
 func (d *fleetDevs) Session(id, session string) (proto.Session, bool) {
-	list, _ := d.Sessions(id)
-	for _, s := range list {
-		if s.SessionID == session {
-			return s, true
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if n := d.machines[id]; n != nil {
+		for i := range n.sessions {
+			if n.sessions[i].SessionID == session {
+				return n.sessions[i], true
+			}
 		}
 	}
 	return proto.Session{}, false

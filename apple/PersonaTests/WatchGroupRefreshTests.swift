@@ -132,6 +132,7 @@ struct WatchGroupRefreshTests {
 
     @MainActor @Test func thePhoneSummaryKeepsAnOldWorkingAgent() throws {
         let model = AppModel()
+        model.forgetRestoredForTests() // only the agents below, not what the simulator's pairing saved (#1638)
         model.registry = HubRegistry(hubs: [PairedHub(id: "watchsummarybox",
                                                       config: ServerConfig(url: URL(string: "http://hub.example.com")!, token: "t"))])
         model.buildLinks()

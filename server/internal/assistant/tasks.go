@@ -51,9 +51,13 @@ type PlanTask struct {
 	// opened that has no agent yet, such as the todo a Lark topic opened (feishu_thread_open.go). Checked when the
 	// plan is made and again when it starts; it is not what the apps send back with an edit.
 	ReuseTodo string `json:"reuse_todo,omitempty"`
-	// Set once started: the todo the task is, and why its agent did not start.
-	TodoID string `json:"todo_id,omitempty"`
-	Error  string `json:"error,omitempty"`
+	// Set once started: the todo the task is, and why its agent did not start. ErrorCode and ErrorArgs: the start's
+	// coded refusal when it was one (launcher_missing, claude_missing… with its details, as a session's
+	// start_error_code / start_error_args), for a card to offer its remedy (#1642).
+	TodoID    string            `json:"todo_id,omitempty"`
+	Error     string            `json:"error,omitempty"`
+	ErrorCode string            `json:"error_code,omitempty"`
+	ErrorArgs map[string]string `json:"error_args,omitempty"`
 }
 
 // TaskPlan is a plan the assistant handed the user.
@@ -87,10 +91,15 @@ const (
 	feedTask     = "task"     // ref: the todo id
 	feedAnswered = "answered" // ref: the todo id; body: answeredBody (answered.go)
 	feedReceipt  = "receipt"  // ref: the todo id; body: title, state, summary, pr, machine
-	feedRouted   = "routed"   // ref: the todo id; body: text, interrupted (agent_interrupt stopped its turn first)
+	feedRouted   = "routed"   // ref: the todo id; body: text, interrupted (agent_interrupt stopped its turn first), from
 	feedReport   = "report"   // ref: the todo id; body: reportBody (a supervised task's agent reported, agent_control.go)
 	feedMessage  = "message"  // ref: the inbox item id; body: MessageCard (a message about a task, with its draft reply)
 )
+
+// routedFromAssistant is a routed item's from when Persona wrote it to the task's agent (agent_send with a task,
+// agent_interrupt's then, a rework): the apps draw it folded, as Persona's, not as the user's bubble (#1542). What the
+// user sent (a task card's Message, a decision relayed from Lark) has no from.
+const routedFromAssistant = "assistant"
 
 const trustSetting = "tasks.trust"
 
@@ -290,11 +299,15 @@ func (s *Service) toolTaskPlan(ctx context.Context, sessionID string, args json.
 	reused := map[string]bool{}
 	for i := range a.Tasks {
 		t := &a.Tasks[i]
-		t.TodoID, t.Error = "", ""
+		t.TodoID, t.Error, t.ErrorCode, t.ErrorArgs = "", "", "", nil
 		t.Title, t.Prompt, t.Cwd = strings.TrimSpace(t.Title), strings.TrimSpace(t.Prompt), strings.TrimSpace(t.Cwd)
+		t.Model = strings.TrimSpace(t.Model)
 		t.DoneWhen, t.ExpectMinutes = cleanDoneWhen(t.DoneWhen), max(0, min(t.ExpectMinutes, 24*60))
 		if t.Title == "" || t.Prompt == "" || t.Cwd == "" {
 			return "", fmt.Errorf("task %d: title, prompt and cwd are required", i+1)
+		}
+		if t.Model != "" && !proto.ValidModelID(t.Model) { // it goes to the agent as --model (#1644)
+			return "", fmt.Errorf("task %d: model %q is not a model id: %s", i+1, t.Model, proto.ModelIDRule)
 		}
 		if !s.placeTask(ctx, t) {
 			return "", fmt.Errorf("task %d: unknown machine %q (machines: %s)", i+1, t.Machine, s.machineIDs(ctx))
@@ -570,7 +583,10 @@ func (s *Service) taskRoutes() {
 }
 
 func planErr(w http.ResponseWriter, err error) {
+	var invalid planInvalid
 	switch {
+	case errors.As(err, &invalid):
+		apierr.Write(w, http.StatusBadRequest, invalid.error)
 	case errors.Is(err, errPlanNotFound):
 		apierr.Write(w, http.StatusNotFound, err)
 	case errors.Is(err, errPlanNotOpen):

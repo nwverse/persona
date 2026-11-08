@@ -38,6 +38,7 @@ type fakeHub struct {
 	rcFiles       map[string]string                  // a machine's launchers.list rc_file (its shell follows: bash or zsh)
 	slowLaunchers map[string]bool                    // a machine whose launchers.list answers only when the call gives up
 	agentModels   map[string][]proto.AgentModel      // the nodes' launchers.models, by launcher
+	modelsLocked  map[string]string                  // launchers.models's locked, by launcher
 	managed       map[string][]proto.ManagedLauncher // what each node was given (launchers.managed)
 	presets       []assistantwire.LauncherPreset
 	voice         []assistantwire.VoicePlugin
@@ -259,7 +260,7 @@ func (f *fakeHub) DeviceCall(ctx context.Context, p DeviceCall) (json.RawMessage
 		if models == nil {
 			models = []proto.AgentModel{}
 		}
-		return json.Marshal(proto.LauncherModels{Agent: launcherAgent(name), Models: models})
+		return json.Marshal(proto.LauncherModels{Agent: launcherAgent(name), Models: models, Locked: f.modelsLocked[name]})
 	case assistantwire.DeviceLaunchersManaged:
 		var m struct {
 			Launchers []proto.ManagedLauncher `json:"launchers"`
