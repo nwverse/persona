@@ -459,6 +459,9 @@ const modelNoAPIStatus = "status_no_api"
 // this text (iOS ModelConfigurationView, Android HttpVoiceExtensions) to leave it out.
 const modelUnverified = "未验证"
 
+// messagesAPI includes the legacy empty value for the Messages protocol.
+func messagesAPI(api string) bool { return api == "" || api == "messages" }
+
 // fallbackAPIProvider names the managed connection an unconfigured API use runs on: the first direct API provider,
 // else the first keyed launcher speaking Messages. Other launcher protocols cannot serve these uses. Hidden ones and
 // ones without an address, a default model or a key are skipped. "" when there is none.
@@ -474,7 +477,7 @@ func (s *Service) fallbackAPIProvider(ctx context.Context) string {
 		}
 	}
 	for _, l := range stored {
-		if l.Kind != "api" && (l.API == "" || l.API == "messages") && usable(l) {
+		if l.Kind != "api" && messagesAPI(l.API) && usable(l) {
 			return l.Name
 		}
 	}
@@ -534,7 +537,7 @@ func (s *Service) apiConfig(ctx context.Context, b ModelBinding) (ai.Config, err
 		found := false
 		for _, l := range s.storedLaunchers(ctx) {
 			if l.Name == name {
-				if l.Kind != "api" && l.API != "" && l.API != "messages" {
+				if l.Kind != "api" && !messagesAPI(l.API) {
 					return c, i18n.Err("assistant-models.err_launcher_not_responses")
 				}
 				c = ai.Config{API: l.API, BaseURL: l.BaseURL, Model: l.Model, Bearer: l.BearerAuth()}
@@ -646,12 +649,12 @@ func (s *Service) modelPurpose(ctx context.Context, id string, providers []Model
 	for _, v := range providers {
 		compatible := v.Kind == p.Kind
 		if p.Kind == "launcher" && v.Kind == "api" { // a direct Messages API provider starts Claude on its gateway (#2455)
-			compatible = v.API == "" || v.API == "messages"
+			compatible = messagesAPI(v.API)
 		}
 		if p.Kind == "api" && v.Kind == "launcher" {
 			for _, l := range stored {
 				if v.ID == "launcher."+l.Name {
-					compatible = l.API == "" || l.API == "messages"
+					compatible = messagesAPI(l.API)
 					break
 				}
 			}
@@ -1085,7 +1088,7 @@ func (s *Service) finishModel(ctx context.Context, id string, params map[string]
 	for _, provider := range s.storedLaunchers(ctx) {
 		// A direct API provider speaking Messages starts Claude on its gateway (node, contract #2455 §2);
 		// other direct API protocols cannot.
-		if provider.Name == name && provider.Kind == "api" && provider.API != "" && provider.API != "messages" {
+		if provider.Name == name && provider.Kind == "api" && !messagesAPI(provider.API) {
 			return i18n.Err("assistant-models.err_api_as_launcher")
 		}
 	}

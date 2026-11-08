@@ -4,7 +4,7 @@
 // another of its models; the hub fills in the name, the address, the kind and the rest.
 import { formatList, t } from "../i18n";
 import { api, ApiError } from "./api";
-import type { TestResult } from "./providers";
+import type { ProviderAPI, TestResult } from "./providers";
 
 export interface PresetModel {
   id: string;
@@ -17,7 +17,7 @@ export interface LauncherPreset {
   name: string;
   description?: string;
   kind: "launcher" | "api";
-  api?: "messages" | "responses" | "chat";
+  api?: ProviderAPI;
   base_url: string;
   model?: string;
   small_model?: string;

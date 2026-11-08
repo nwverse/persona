@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"reflect"
 	"slices"
 	"strings"
@@ -387,10 +388,7 @@ func TestQuotaAndProviders(t *testing.T) {
 	if pr := m.Providers(); len(pr) != 1 || len(pr[0].Models) != 2 || m.Runtime != nil {
 		t.Fatalf("%+v", pr)
 	}
-	chat := map[string]any{}
-	for k, v := range p {
-		chat[k] = v
-	}
+	chat := maps.Clone(p)
 	chat["api"] = "chat"
 	if _, err := Parse(provider(chat, false)); err != nil {
 		t.Fatalf("chat provider: %v", err)
@@ -403,10 +401,7 @@ func TestQuotaAndProviders(t *testing.T) {
 		"model twice":     func(i map[string]any) { i["models"] = []any{map[string]any{"id": "a"}, map[string]any{"id": "a"}} },
 		"dynamic, no rpc": func(i map[string]any) { i["dynamic_models"] = true },
 	} {
-		item := map[string]any{}
-		for k, v := range p {
-			item[k] = v
-		}
+		item := maps.Clone(p)
 		change(item)
 		if _, err := Parse(provider(item, false)); err == nil {
 			t.Errorf("%s: parsed", name)

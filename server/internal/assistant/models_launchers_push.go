@@ -48,7 +48,7 @@ func (s *Service) managedNodeCalls(ctx context.Context, machine string) []device
 func (s *Service) nodeLaunchers(stored []storedLauncher) ([]proto.ManagedLauncher, error) {
 	out := []proto.ManagedLauncher{}
 	for _, l := range stored {
-		if l.Kind == "api" && l.API != "" && l.API != "messages" {
+		if l.Kind == "api" && !messagesAPI(l.API) {
 			continue
 		}
 		m, err := s.openStoredLauncher(l)

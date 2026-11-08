@@ -7,6 +7,8 @@ import { launcherNameProblem } from "./launcher-presets";
 import { EFFORTS } from "./session-actions";
 import { t } from "../i18n";
 
+export type ProviderAPI = "messages" | "responses" | "chat";
+
 /** Claude Code's thinking levels (proto.EffortLevels), in order. */
 export const EFFORT_LEVELS = EFFORTS.map((e) => e.id);
 
@@ -27,7 +29,7 @@ export interface ProviderView {
   display_name?: string;
   kind?: "launcher" | "api";
   agent?: "claude" | "codex" | "agy" | "omp" | string;
-  api?: "messages" | "responses" | "chat";
+  api?: ProviderAPI;
   base_url?: string;
   model?: string;
   small_model?: string;
@@ -69,7 +71,7 @@ export interface FormModel {
 export interface ProviderForm {
   kind: "launcher" | "api";
   agent: "claude" | "codex" | "agy" | "omp";
-  api: "messages" | "responses" | "chat";
+  api: ProviderAPI;
   name: string;
   base_url: string;
   auth: "bearer" | "api_key";
