@@ -1,23 +1,24 @@
 package screen
 
 import (
-	"regexp"
 	"strings"
+
+	"github.com/nwverse/persona/server/internal/lazyre"
 )
 
 // secretRE are password prompts as the last line of a screen. Deliberately narrow (after Ovis's secret-prompt.ts):
 // prose that mentions passwords must not turn a card into a password field.
-var secretRE = []*regexp.Regexp{
-	regexp.MustCompile(`(?i)^\[sudo\] password for [^:\s]+:$`),
+var secretRE = []*lazyre.Regexp{
+	lazyre.New(`(?i)^\[sudo\] password for [^:\s]+:$`),
 	// su; ssh's me@host's password:
-	regexp.MustCompile(`(?i)^(?:\S+'s )?password:$`),
+	lazyre.New(`(?i)^(?:\S+'s )?password:$`),
 	// ssh keys, gpg
-	regexp.MustCompile(`(?i)^enter passphrase(?: for (?:key )?.+)?:$`),
+	lazyre.New(`(?i)^enter passphrase(?: for (?:key )?.+)?:$`),
 	// hardware tokens
-	regexp.MustCompile(`(?i)^(?:enter )?(?:pin|passcode)(?: for .+)?:$`),
+	lazyre.New(`(?i)^(?:enter )?(?:pin|passcode)(?: for .+)?:$`),
 	// git over https: Password for 'https://me@host':
-	regexp.MustCompile(`(?i)^password for (?:'[^']+'|[^\s:']+):$`),
-	regexp.MustCompile(`(?i)^\S+@\S+ password:$`),
+	lazyre.New(`(?i)^password for (?:'[^']+'|[^\s:']+):$`),
+	lazyre.New(`(?i)^\S+@\S+ password:$`),
 }
 
 // SecretPrompt: the screen ends in a password prompt, where what is typed must not be kept or logged.

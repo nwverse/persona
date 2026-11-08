@@ -4,13 +4,13 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
-	"regexp"
 	"slices"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/nwverse/persona/sdk/go/wire"
+	"github.com/nwverse/persona/server/internal/lazyre"
 )
 
 // Windows and rates of the Gate.
@@ -23,7 +23,7 @@ const (
 	idsMost    = 20000            // ids remembered at most (the oldest go first)
 )
 
-var idPattern = regexp.MustCompile(`^[A-Za-z0-9._:\-]{1,64}$`)
+var idPattern = lazyre.New(`^[A-Za-z0-9._:\-]{1,64}$`)
 
 // Normalize checks the fields a report must have and fills the ones it may leave out; an error: drop it.
 func Normalize(r *wire.ErrorReport, now time.Time) error {
@@ -53,9 +53,9 @@ func Normalize(r *wire.ErrorReport, now time.Time) error {
 }
 
 var (
-	digits  = regexp.MustCompile(`0x[0-9a-fA-F]+|\d+`)
-	spaces  = regexp.MustCompile(`\s+`)
-	logTime = regexp.MustCompile(`^\d{4}/\d{2}/\d{2} \d{2}:\d{2}:\d{2}(\.\d+)? `)
+	digits  = lazyre.New(`0x[0-9a-fA-F]+|\d+`)
+	spaces  = lazyre.New(`\s+`)
+	logTime = lazyre.New(`^\d{4}/\d{2}/\d{2} \d{2}:\d{2}:\d{2}(\.\d+)? `)
 )
 
 // Fingerprint says which problem r is: its source, kind, the type of the innermost exception and its nearest in-app

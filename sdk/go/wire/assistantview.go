@@ -10,6 +10,7 @@ import (
 	"slices"
 	"sort"
 	"strings"
+	"sync"
 	"unicode"
 )
 
@@ -18,7 +19,9 @@ const (
 	AssistantPagesMost = 8
 )
 
-var assistantPageName = regexp.MustCompile(`^[\p{L}\p{N}_-]{1,64}$`)
+// assistantPageName is compiled on first use: 64 copies of two Unicode classes take about 1 ms and 2.5 MB, paid by
+// every program that links this package when it starts (a hook, #1308).
+var assistantPageName = sync.OnceValue(func() *regexp.Regexp { return regexp.MustCompile(`^[\p{L}\p{N}_-]{1,64}$`) })
 
 func ParseAssistantView(raw json.RawMessage) (*View, error) {
 	if len(raw) > AssistantViewMost {
@@ -113,7 +116,7 @@ func CheckAssistantView(v *View) error {
 		return fmt.Errorf("pages: at most %d named pages", AssistantPagesMost)
 	}
 	for name, page := range v.Pages {
-		if !assistantPageName.MatchString(name) {
+		if !assistantPageName().MatchString(name) {
 			return fmt.Errorf("pages.%s: use 1–64 letters, numbers, underscores or hyphens", name)
 		}
 		if len(page.Pages) > 0 {

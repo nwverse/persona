@@ -29,5 +29,6 @@
   "image_failed": "Couldn’t check for a new image: {error}",
   "err_no_start": "The new version did not start; the old one keeps running: {error}",
   "reason_no_takeover": "The new version could not take over: {error}",
-  "reason_not_confirmed": "The new version was not confirmed within 3 minutes"
+  "reason_not_confirmed": "The new version was not confirmed within 3 minutes",
+  "err_program_unreplaced": "Version {version} has no {program} for {platform}, and {service} runs it: installing it would leave {program} on the old version. Wait for a release that includes it"
 }

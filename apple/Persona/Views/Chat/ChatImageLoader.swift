@@ -63,6 +63,21 @@ nonisolated enum ChatImageLoader {
             dir.appending(path: String(ref.map { $0.isLetter || $0.isNumber || $0 == "-" ? $0 : "_" }))
         }
 
+        /// A picture that did not come, in its chat's Copy Diagnostics (`ChatTrace`): which item, which group's hub, why.
+        /// What a phone saw can be read from there.
+        @MainActor private static func note(_ ref: String, _ why: String) {
+            guard let key = ImageRef.session(ref) else { return }
+            // The whole item id ("<line>#<block>"): the pictures of one message differ only in their block.
+            let item = ref.split(separator: "/").last.map(String.init) ?? ""
+            ChatTrace.shared.note(key, "image \(item) not loaded from hub \(key.group.isEmpty ? "default" : key.group): \(why)")
+        }
+
+        nonisolated private static func describe(_ error: Error) -> String {
+            if let e = error as? APIError { return "HTTP \(e.status)" + (e.message.isEmpty ? "" : " \(e.message.prefix(80))") }
+            if let e = error as? URLError { return "URLError \(e.code.rawValue)" }
+            return String(describing: type(of: error))
+        }
+
         /// Drops the kept bytes of an image that did not decode.
         func forget(_ ref: String) {
             try? FileManager.default.removeItem(at: file(ref))
@@ -73,10 +88,20 @@ nonisolated enum ChatImageLoader {
             if let d = try? Data(contentsOf: file) { return d }
             if let t = running[ref] { return await t.value }
             let t = Task<Data?, Never> {
-                guard let api = await MainActor.run(body: { AppModel.shared.api }),
-                      let d = try? await api.image(ref: ref) else { return nil }
-                try? d.write(to: file, options: .atomic)
-                return d
+                // From the hub of the chat's group, not the current one's (#1555).
+                let (group, path) = ImageRef.split(ref)
+                guard let api = await MainActor.run(body: { AppModel.shared.api(group) }) else {
+                    await Self.note(ref, "no hub for its group")
+                    return nil
+                }
+                do {
+                    let d = try await api.image(ref: path)
+                    try? d.write(to: file, options: .atomic)
+                    return d
+                } catch {
+                    await Self.note(ref, Self.describe(error))
+                    return nil
+                }
             }
             running[ref] = t
             let d = await t.value
@@ -178,12 +203,12 @@ struct ImageNotLoaded: View {
                 ViewThatFits(in: .horizontal) {
                     Label("Image didn't load. Tap to retry", systemImage: Theme.Icon.retry)
                     Label("Retry [Components b8784c]", systemImage: Theme.Icon.retry)
-                    Image(systemName: Theme.Icon.retry)
+                    ThemedIcon(Theme.Icon.retry)
                 }
             } else {
                 ViewThatFits(in: .horizontal) {
                     Label("Can't show this image", systemImage: Theme.Icon.error)
-                    Image(systemName: Theme.Icon.error)
+                    ThemedIcon(Theme.Icon.error)
                 }
             }
         }

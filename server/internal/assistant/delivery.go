@@ -2,11 +2,11 @@ package assistant
 
 import (
 	"context"
-	"regexp"
 	"sort"
 	"strings"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/prompts"
 )
 
@@ -53,9 +53,9 @@ func deliveryClosable(state string) bool { return state == deliveryLive || state
 
 // The line an agent ends its last reply with (assistant/task_delivery).
 var (
-	deliveryLine = regexp.MustCompile(`交付\s*[:：]\s*(已上线并实测|停在\s*PR|已合未上线|默认关待启用|不涉及上线)`)
-	gateField    = regexp.MustCompile(`卡点\s*[:：]\s*([^；;\n]+)`)
-	unblockField = regexp.MustCompile(`谁来解\s*[:：]\s*([^；;\n]+)`)
+	deliveryLine = lazyre.New(`交付\s*[:：]\s*(已上线并实测|停在\s*PR|已合未上线|默认关待启用|不涉及上线)`)
+	gateField    = lazyre.New(`卡点\s*[:：]\s*([^；;\n]+)`)
+	unblockField = lazyre.New(`谁来解\s*[:：]\s*([^；;\n]+)`)
 )
 
 var deliveryWords = map[string]string{"已上线并实测": deliveryLive, "停在PR": deliveryPR, "已合未上线": deliveryMerged,

@@ -69,6 +69,36 @@ final class MultiHubTests: XCTestCase {
         item.tap()
     }
 
+    /// A chat's pictures come from its own group's hub while another group is the current one (#1555: they were asked
+    /// of the current group's hub, which did not have them, and stayed on Retry). Home (A) runs with
+    /// `MOCK_TURN_IMAGES=many` (the blog chat on its studio machine, whose last turn looked at five pictures; Work keeps
+    /// no studio), said with TEST_RUNNER_PERSONA_HUB_A_TURN_IMAGES=1.
+    @MainActor func testAChatsPicturesComeFromItsOwnHub() throws {
+        let h = try hubs()
+        guard ProcessInfo.processInfo.environment["PERSONA_HUB_A_TURN_IMAGES"] == "1" else {
+            throw XCTSkip("hub A with MOCK_TURN_IMAGES=many (PERSONA_HUB_A_TURN_IMAGES=1)")
+        }
+        let app = launch(h, ["-tab", "dev", "-openHub", "2", "-openSession", "studio/a1f3c2d4-0000-4000-8000-000000000003",
+                             "-openImagesFresh", "YES"])
+        let tile = app.buttons["viewed-image-0"]
+        XCTAssertTrue(tile.waitForExistence(timeout: 30), "no viewed images in Home's blog chat:\n\(app.debugDescription)")
+        let notLoaded = "图片没载入，点按重试"
+        let tiles = (0..<5).map { app.buttons["viewed-image-\($0)"] }
+        // Loaded: every tile there has its picture's caption, none says it did not load.
+        let deadline = Date.now.addingTimeInterval(20)
+        while Date.now < deadline, tiles.contains(where: { $0.exists && $0.label == notLoaded }) || tile.label.isEmpty {
+            usleep(500_000)
+        }
+        shot("pictures from their own hub")
+        XCTAssertFalse(tiles.contains { $0.exists && $0.label == notLoaded }, "a picture did not load: \(tiles.map(\.label))")
+        tile.tap()
+        XCTAssertTrue(app.descendants(matching: .any)["viewer-page-0"].waitForExistence(timeout: 10), "the viewer has no picture")
+        // And none was asked of Work's hubs, which do not have them.
+        for (name, hub) in [("B", h.b), ("C", h.c)] {
+            XCTAssertEqual(mock(hub, "/mock/images?asked=1")["asked"] as? Int, 0, "a picture was asked of hub \(name)")
+        }
+    }
+
     /// The Agents list shows both groups' requests, each saying its group, and can show one group only; Allow on each
     /// goes to that group's hub only (both groups have the same interaction id on the same machine and session ids).
     @MainActor func testMergedListAndAnswersGoToTheirOwnHub() throws {
