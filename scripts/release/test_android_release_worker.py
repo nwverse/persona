@@ -148,6 +148,7 @@ class ReleaseWorkerTest(unittest.TestCase):
                 worker.atomic_json(directory / "signature.json", dict(
                     signed_sha256=worker.digest(directory / "signed.apk"), certificate_sha256="c" * 64))
                 (directory / "android-live-test-attempt.xml").write_text("original failure")
+                worker.atomic_json(directory / "failure.json", dict(source_sha=sha, error="probe failed"))
                 config = dict(state_directory=tmp, checkout=tmp, repository="example/app",
                               application_id="com.example.app", certificate_sha256="c" * 64,
                               verify_command=["verifier"])
@@ -168,6 +169,41 @@ class ReleaseWorkerTest(unittest.TestCase):
                 self.assertEqual((root / "published.json").exists(), not fails)
                 preserved = list(directory.glob("verification-retry-*/android-live-test-attempt.xml"))
                 self.assertEqual(preserved[0].read_text(), "original failure")
+
+    def test_timer_skips_failed_source_without_overwriting_evidence(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            sha = "b" * 40
+            directory = root / "runs" / sha
+            directory.mkdir(parents=True)
+            failure = dict(source_sha=sha, error="verification failed")
+            worker.atomic_json(directory / "failure.json", failure)
+            with patch.object(worker, "prepare", return_value=(root, sha)), \
+                    patch.object(worker, "version_code", return_value=100002), \
+                    patch.object(worker, "status") as status, \
+                    patch.object(worker, "build") as build, \
+                    patch.object(worker, "signing") as signing, \
+                    patch.object(worker, "publish") as publish:
+                worker.cycle(dict(state_directory=tmp, repository="example/app"))
+                for operation in (status, build, signing, publish):
+                    operation.assert_not_called()
+            self.assertEqual(json.loads((directory / "failure.json").read_text()), failure)
+            self.assertFalse((root / "published.json").exists())
+            self.assertFalse((directory / "verified.json").exists())
+
+    def test_failure_of_an_older_source_does_not_block_new_source(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            failed = root / "runs" / ("a" * 40)
+            failed.mkdir(parents=True)
+            worker.atomic_json(failed / "failure.json", dict(source_sha="a" * 40, error="old failure"))
+            with patch.object(worker, "prepare", return_value=(root, "b" * 40)), \
+                    patch.object(worker, "version_code", return_value=100002), \
+                    patch.object(worker, "status"), \
+                    patch.object(worker, "build", side_effect=RuntimeError("new source reached build")) as build:
+                with self.assertRaisesRegex(RuntimeError, "new source reached build"):
+                    worker.cycle(dict(state_directory=tmp, repository="example/app"))
+                build.assert_called_once()
 
     def test_recovery_rejects_wrong_source_repository_certificate_and_digest(self):
         with tempfile.TemporaryDirectory() as tmp:
