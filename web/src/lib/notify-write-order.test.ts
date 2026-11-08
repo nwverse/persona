@@ -9,7 +9,8 @@ type Call = {
   reject: (error: Error) => void;
 };
 const calls: Call[] = [];
-vi.mock("./api", () => ({
+vi.mock("./api", async (original) => ({
+  ...(await original<typeof import("./api")>()),
   api: (_path: string, init?: { json?: Partial<NotifyPrefs> }) =>
     new Promise((resolve, reject) => calls.push({ body: init?.json, resolve, reject })),
   enc: encodeURIComponent,

@@ -3,6 +3,7 @@
 // one-time install code (and the install commands when the hub has them). The list follows the hub's `managers` pushes.
 import { useCallback, useEffect, useState } from "react";
 import { formatList, t } from "../../i18n";
+import { isAbort } from "../../lib/api";
 import { clock, secondsLeft } from "../../lib/connect-device";
 import { ago } from "../../lib/format";
 import {
@@ -154,7 +155,9 @@ function PushSwitch({ id }: { id: string }) {
           <Switch
             on={on}
             label={t("settings-managers.push")}
-            onChange={(next) => void saveManagerPush(id, next).catch((e) => toast(t("settings-managers.push_failed", { error: managerError(e) }), "error"))}
+            onChange={(next) => void saveManagerPush(id, next).catch((e) => {
+              if (!isAbort(e)) toast(t("settings-managers.push_failed", { error: managerError(e) }), "error");
+            })}
           />
         </Row>
       </div>

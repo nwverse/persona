@@ -5,7 +5,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 type Call = { path: string; body?: unknown; resolve: (v: unknown) => void; reject: (e: unknown) => void };
 const calls: Call[] = [];
-vi.mock("./api", () => ({
+vi.mock("./api", async (original) => ({
+  ...(await original<typeof import("./api")>()),
   api: (path: string, init?: { json?: unknown }) => new Promise((resolve, reject) => calls.push({ path, body: init?.json, resolve, reject })),
   enc: encodeURIComponent,
 }));

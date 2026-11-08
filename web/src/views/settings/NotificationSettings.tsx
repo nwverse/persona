@@ -4,7 +4,7 @@
 // one (#4057): it is this browser's alone (lib/attention.ts), so it shows while the hub's prefs load, and it follows them.
 import { useEffect, useState } from "react";
 import { formatDate, t } from "../../i18n";
-import { errorText } from "../../lib/api";
+import { errorText, isAbort } from "../../lib/api";
 import { setAttentionSoundEnabled, useAttentionSoundSetting } from "../../lib/attention";
 import { DEFAULT_QUIET, durationText, loadNotifyPrefs, saveNotifyPrefs, setSystemNotify, useNotifyPrefs, useSystemNotify, type DonePref, type Permission, type QuietHours } from "../../lib/notify";
 import { Button, cx, Loading, toast } from "../../ui/atoms";
@@ -53,12 +53,14 @@ export function NotificationSettings() {
     setState("loading");
     loadNotifyPrefs().then(
       () => setState("ready"),
-      (e) => setState({ error: errorText(e) }),
+      (e) => { if (!isAbort(e)) setState({ error: errorText(e) }); },
     );
   };
   useEffect(load, []);
 
-  const save = (patch: Parameters<typeof saveNotifyPrefs>[0]) => saveNotifyPrefs(patch).catch((e) => toast(t("settings-notifications.save_failed", { error: errorText(e) }), "error"));
+  const save = (patch: Parameters<typeof saveNotifyPrefs>[0]) => saveNotifyPrefs(patch).catch((e) => {
+    if (!isAbort(e)) toast(t("settings-notifications.save_failed", { error: errorText(e) }), "error");
+  });
 
   const toggleSystem = async (on: boolean) => {
     setAsking(true);
