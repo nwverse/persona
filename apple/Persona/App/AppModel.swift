@@ -451,6 +451,9 @@ final class AppModel {
         // docs/operations/network.md). Base64: a launch argument that looks like a dictionary is read as a property list.
         if let s = UserDefaults.standard.string(forKey: "seedSSHTunnel"), !r.hubs.isEmpty, let json = Data(base64Encoded: s),
            let route = try? JSONDecoder().decode(SSHRoute.self, from: json) { r.hubs[0].ssh = route }
+        // `-seedLocalProxy <base64 of the LocalProxyRoute JSON>`: the first hub's local proxy, the same way.
+        if let s = UserDefaults.standard.string(forKey: "seedLocalProxy"), !r.hubs.isEmpty, let json = Data(base64Encoded: s),
+           let route = try? JSONDecoder().decode(LocalProxyRoute.self, from: json) { r.hubs[0].localProxy = route }
         registry = HubGrouping.regroup(r)
         saveRegistry(registry)
         buildLinks()

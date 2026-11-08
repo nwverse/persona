@@ -23,7 +23,7 @@ After separation, "Codex in Orca" and "an internal Codex variant in herdr" are j
 ## Current state: tightly coupled to herdr
 
 - node holds `*herdr.Client` directly (`node/node.go`), and its internal session model is `map[string]herdr.Agent`, with no interface.
-- Every feature calls herdr directly: snapshots and event streams (`sessions.go`, `herdrevents.go`), session recognition (`setAgents`, `sessionFromProcess`),
+- Every feature calls herdr directly: snapshots and event streams (`placement.go`, `herdrevents.go`), session recognition (`setAgents`, `sessionFromProcess`),
   launch (`start`, `waitReady` in `control.go`), sending and pre-send checks (`prompt`, `checkPane`, `ensureSubmitted`),
   mode / thinking-effort changes (`modes.go`), rename/close, and terminal observe / control / scroll (`terminal.go`).
 - Pane IDs are untyped: in-memory bindings `n.panes`, hub database `node_sessions.pane`, and hook `HERDR_PANE_ID` all assume herdr panes.

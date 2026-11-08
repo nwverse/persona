@@ -5,6 +5,10 @@
 - Check each known page revision before appending; retain known revisions across unversioned pages, but remove the aggregate revision when any accepted page lacks metadata. Legacy compatibility cannot prove a snapshot.
 - A complete-read helper must reject page failures, caps and retired owners instead of resolving the loaded prefix. Share the actual pending page result with concurrent readers, and scope callbacks to machine, path, working directory and reload so an old reader cannot borrow the new file. Keep an ordinary failed page retryable at its original offset; a known revision change requires a fresh read from the beginning. Explicit bounded previews need a separate completion flag, preserving a deliberate CSV/TSV cap without permitting partial exports. Go omits an empty text field: complete zero-byte text metadata is a valid empty file, while arbitrary missing content is not.
 
+## Connector sends acknowledge one draft revision (#1286)
+
+- Keep an editable composer's text and quote together: clear them after success only if neither changed during the send or its refresh. Comparing final text alone misses edits away and back to the same words. A synchronous ref admits one send before React rerenders, and the manager, item, source and thread scope its local draft and pending state. Exercise delayed success, failure/retry, quote changes and ownership switches in both chat and GitHub comment modes.
+
 ## Mail send admission must precede React updates (#1251)
 
 A busy button protects only its click path after rerender. Mail shortcuts and form submission need the same synchronous ref guard inside the send function, acquired after validation and released on failure. Keep it held after success until the composer closes. Regress mixed events in one React batch with a deferred transport, then check failure/retry, successful close, recipient validation and IME controls.
