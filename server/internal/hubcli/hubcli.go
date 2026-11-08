@@ -18,12 +18,13 @@ import (
 // Usage is the hub's commands, as `personad hub …` (clitext.Named puts the program's name in).
 const Usage = `  personad hub [run]        run the hub (config ~/.persona/hub.json); behind its edge on Linux and macOS, which
                            holds the ports and switches to a new binary with no restart (docs/operations/hub-restart.md「蓝绿切换」)
-  personad hub switch [--binary <path>] [--prev <path>] [--status]
+  personad hub switch [--binary <path>] [--prev <path>] [--timeout 8m] | --status
                            have the running edge start <path> (default: the program the hub runs now, personad or
-                           persona-hub) and switch to it once it is up;
-                           exit 0 switched, 1 it did not (the hub serves on), 3 no edge here (restart the service instead)
-  personad hub setup [--yes] [--listen :18660] [--tls :18662] [--outside] [--no-service] [--json]
-                                           set this machine up as the hub: hub.json, database, service, pairing (docs/assistant/onboarding.md)
+                           persona-hub) and switch to it once it is up, waiting at most --timeout; --status only says what
+                           serves now; exit 0 switched, 1 it did not (the hub serves on), 3 no edge here (restart the service instead)
+  personad hub setup [--yes] [--listen :18660] [--tls :18662] [--outside] [--no-service | --manager-service] [--json]
+                                           set this machine up as the hub: hub.json, database, service, pairing (docs/assistant/onboarding.md);
+                                           --manager-service: an existing hub's built-in manager becomes a service of its own (a new one has that)
   personad hub pair [--legacy] [--android] print a pairing QR code and optional Android download link
   personad hub pair --machine <id> [--add [--name <name>]]
                                            print a pairing link for that link machine's persona-link (docs/operations/link.md);
@@ -34,8 +35,8 @@ const Usage = `  personad hub [run]        run the hub (config ~/.persona/hub.js
   personad hub peer remove <hub_id>
                            unpair a hub (its credential is revoked on both sides)
   personad hub peer center [<hub_id>] [--confirm]   make that hub (this one by default) the group's center
-  personad hub doctor       只读检查 hub 配置、网络和证书
-  personad hub admin …      the admin UI on this machine: access <scope>, reset-password (docs/operations/admin.md)
+  personad hub doctor       check the hub's configuration, network and certificates (read only)
+  personad hub admin …      the admin UI on this machine: access <scope>, reset-password, setup-code (docs/operations/admin.md)
   personad hub manager-mode [child|service]
                            the built-in manager: started by the hub (child, the default) or a service of its own;
                            show it, or set it in hub.json (taken at the hub's next start: personad hub switch)
@@ -46,6 +47,10 @@ const Usage = `  personad hub [run]        run the hub (config ~/.persona/hub.js
 // Word is how the hub's commands are typed after the program's name in what they print: "hub " for personad
 // (`personad hub run`), "" for persona-hub (`persona-hub run`), which sets it.
 var Word = "hub "
+
+// Help is the usage text an unknown command prints after saying so: the hub's commands as `personad hub …`;
+// persona-hub sets its own.
+var Help = "usage:\n" + Usage
 
 // Hub runs `hub <args…>`: args[0] is the command (run when there is none). Setup that stopped exits 1 (the step that
 // stopped said why).
@@ -66,14 +71,14 @@ func Hub(ctx context.Context, build update.Build, args []string) error {
 		return hub.Serve(ctx, build)
 	case "slot": // the hub as its edge runs it (hub_edge.go): not for people
 		if len(rest) > 0 {
-			return clitext.UsageError(clitext.CommandName() + " " + Word + "slot takes no arguments")
+			return noArguments("slot")
 		}
 		return hub.RunSlot(ctx, build)
 	case "switch":
 		return runHubSwitch(rest)
 	case "doctor":
 		if len(rest) != 0 {
-			return fmt.Errorf("%sdoctor 不接受额外参数", Word)
+			return noArguments("doctor")
 		}
 		return hub.Doctor(ctx, os.Stdout)
 	case "pair":
@@ -92,16 +97,21 @@ func Hub(ctx context.Context, build update.Build, args []string) error {
 		return hub.ManagerMode(rest, os.Stdout)
 	case "manager-code": // a one-time code that binds the built-in manager's own service (persona-manager join --builtin)
 		if len(rest) != 0 {
-			return fmt.Errorf("%smanager-code takes no arguments", Word)
+			return noArguments("manager-code")
 		}
 		return hub.ManagerCode(ctx, os.Stdout)
 	case "assistant-token": // a token for an assistant run elsewhere (hub.json assistant.external, docs/assistant/assistant.md)
 		if len(rest) != 0 {
-			return fmt.Errorf("%sassistant-token 不接受额外参数", Word)
+			return noArguments("assistant-token")
 		}
 		return hub.AssistantToken(ctx, os.Stdout)
 	}
-	return fmt.Errorf("unknown %scommand %q", Word, sub)
+	return clitext.UsageError(fmt.Sprintf("unknown %scommand %q\n%s", Word, sub, clitext.Named(Help)))
+}
+
+// noArguments is the usage mistake of arguments after a command that takes none.
+func noArguments(command string) error {
+	return clitext.UsageError(clitext.CommandName() + " " + Word + command + " takes no arguments")
 }
 
 // UpdateWatch is `update-watch <pending.json>`: the old binary's watchdog over the hub's own update.
