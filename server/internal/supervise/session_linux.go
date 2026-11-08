@@ -9,6 +9,10 @@ import (
 // sessionMembers are the live processes in session sid (zombies, which a kill cannot end, left out), from
 // /proc/<pid>/stat: after the command's closing parenthesis come its state, parent, process group and session.
 func sessionMembers(sid int) []int {
+	// A /proc of another pid namespace (unshare without --mount-proc) names other processes by these numbers: none.
+	if self, err := os.Readlink("/proc/self"); err != nil || self != strconv.Itoa(os.Getpid()) {
+		return nil
+	}
 	entries, err := os.ReadDir("/proc")
 	if err != nil {
 		return nil

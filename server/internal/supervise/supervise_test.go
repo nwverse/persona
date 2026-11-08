@@ -421,11 +421,22 @@ func testLeftoversKilled(t *testing.T, ownGroup bool) {
 		return err == nil && gc > 0
 	})
 	f.stop(t, "assistant", 1)
-	waitFor(t, "what it left behind gone", func() bool {
-		var ws syscall.WaitStatus
-		_, _ = syscall.Wait4(gc, &ws, syscall.WNOHANG, nil) // not our child: just in case
-		return syscall.Kill(gc, 0) != nil
-	})
+	waitFor(t, "what it left behind gone", func() bool { return gone(gc) })
+}
+
+// gone: pid has ended. A zombie counts: whatever adopted it may never reap it (a container whose first process
+// doesn't), and its state in /proc says so where there is one.
+func gone(pid int) bool {
+	if syscall.Kill(pid, 0) != nil {
+		return true
+	}
+	b, err := os.ReadFile("/proc/" + strconv.Itoa(pid) + "/stat")
+	if err != nil {
+		return false
+	}
+	s := string(b)
+	f := strings.Fields(s[strings.LastIndexByte(s, ')')+1:])
+	return len(f) > 0 && f[0] == "Z"
 }
 
 // bindBuiltin: waits for the hub's health first; a code it made and did not trade is voided, one traded is not.
