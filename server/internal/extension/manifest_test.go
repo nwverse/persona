@@ -388,15 +388,18 @@ func TestQuotaAndProviders(t *testing.T) {
 	if pr := m.Providers(); len(pr) != 1 || len(pr[0].Models) != 2 || m.Runtime != nil {
 		t.Fatalf("%+v", pr)
 	}
-	chat := maps.Clone(p)
-	chat["api"] = "chat"
-	if _, err := Parse(provider(chat, false)); err != nil {
-		t.Fatalf("chat provider: %v", err)
+	for _, api := range []string{"messages", "responses"} {
+		item := maps.Clone(p)
+		item["api"] = api
+		if _, err := Parse(provider(item, false)); err != nil {
+			t.Fatalf("%s provider: %v", api, err)
+		}
 	}
 	for name, change := range map[string]func(map[string]any){
 		"base_url":        func(i map[string]any) { i["base_url"] = "ftp://x" },
 		"kind":            func(i map[string]any) { i["kind"] = "proxy" },
 		"api":             func(i map[string]any) { i["api"] = "unknown" },
+		"chat api":        func(i map[string]any) { i["api"] = "chat" },
 		"chat launcher":   func(i map[string]any) { i["api"], i["kind"] = "chat", "launcher" },
 		"model twice":     func(i map[string]any) { i["models"] = []any{map[string]any{"id": "a"}, map[string]any{"id": "a"}} },
 		"dynamic, no rpc": func(i map[string]any) { i["dynamic_models"] = true },
