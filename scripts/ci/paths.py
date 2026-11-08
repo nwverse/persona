@@ -16,7 +16,7 @@ SERVER_CLIENT_INPUTS = [
 
 FILTERS = {
     "server": ["server/**", "sdk/go/**", "schema/**", "spec/**", "integrations/**", "docs/assistant/prompts.md", "docs/protocol/**", "scripts/test/server_test_env.py", "scripts/ci/*server*", "scripts/ci/postgres.py", "scripts/ci/gofmt.py", ".github/workflows/server-test.yml"] + SERVER_CLIENT_INPUTS,
-    "web": ["web/**", "schema/extension/**", "spec/fixtures/injected/**", "scripts/mock/inbox_events.json", "scripts/ci/web.sh", ".github/workflows/web-test.yml"],
+    "web": ["web/**", "schema/extension/**", "spec/fixtures/injected/**", "spec/fixtures/sync/**", "scripts/mock/inbox_events.json", "scripts/ci/web.sh", ".github/workflows/web-test.yml"],
     "android": ["android/**", "schema/**", "spec/**", "scripts/app/*android*", "scripts/ci/*android*", ".github/workflows/android-test.yml"],
     "apple": ["apple/**", "schema/**", "spec/**", "scripts/app/sim-boot.sh", "scripts/i18n/**", "scripts/ci/apple*", ".github/workflows/apple-test.yml"],
     "runtimes": ["integrations/**", "sdk/ts/**", "schema/**", "spec/**", "scripts/ci/runtimes.sh", ".github/workflows/runtimes-test.yml"],
@@ -61,8 +61,10 @@ def select_lanes(paths, lanes="auto", all_platforms=False):
 def apply_event_policy(selected, event_name):
     selected = dict(selected)
     if event_name in ("pull_request", "merge_group"):
-        # The hosted macOS queue alone can exceed the PR wall-clock budget.
-        selected["apple"] = False
+        # Repeated hosted queues defeated the budget even for documentation PRs.
+        # Web/runtime checks share the PR's one runner; full heavy lanes are manual.
+        for lane in ("server", "android", "apple", "scripts", "image"):
+            selected[lane] = False
     return selected
 
 

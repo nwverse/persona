@@ -1,5 +1,21 @@
 # Lessons: hub / node and networking
 
+## A failed swap must not look like a new install
+
+`update.SwapProgram` recorded `Prev: ""` when copying the old program to `.prev` or putting the new build in place failed, and `Prev: ""` is how a swap says the program was new, so going back deleted a program the failed swap had never touched.
+A failing step reports what it actually changed: `copyFile` writes `.new` and renames, so a failed swap changed nothing (the zero `Swapped`, which `RestoreAll` skips) or only wrote `.prev` (putting that back is harmless).
+Don't add a `pending.json` field for it: older edges and watchdogs read the same file and know only `Prev == ""`.
+
+## Extension public identity is not storage or token authority (#1493)
+
+- An ID rename is not uninstall/reinstall: deleting the old row cascades secrets and node data. Keep the original storage primary key and directories, and commit public names, aliases, version and previous provenance atomically with compare-and-swap guards.
+- Source declarations reserve no names by themselves. Only an actual same-market, explicitly confirmed transition creates historical aliases. Validate the complete catalog graph, not a filtered list of declarations; a predecessor still present as a current entry is a collision even without a cycle.
+- Human compatibility lookup and program authentication differ. Resolve old owner-facing requests to the committed installation, but authenticate callbacks/tokens against exact public identity and current runtime generation. Internal model purposes and knowledge owners need the stable key too; do not fix only data and secrets.
+- Rollback keeps historical aliases; a successor alias is not a currently installed successor. Catalog presentation uses exact public IDs, while final conflict guards allow an alias only when it belongs to the same stable slot. Test the full rename → rollback → confirmed re-upgrade path, not just first migration.
+- Probe capabilities before sending identity-changing node messages. An old node can silently ignore extra fields and delete the absent old ID's data. New nodes retain slot/revision tombstones for stale messages, while authenticated fresh reinstall must establish its new binding rather than be permanently rejected.
+- Node identity revisions and installation generations must use Postgres timestamp precision before the first bind. Raw Go nanoseconds are truncated to microseconds on storage; after a reload, a node would reject that lower revision or mistake the installation time for a new generation. Normalize both fields and test before/after database precision, not only whole-second fixtures.
+- Persistent hook ownership must remain recognizable to the rollback binary. Stop and join the old process's heartbeat and cleanup before starting the replacement; a late cleanup can remove the new hook even when the database migration is correct.
+
 ## Mail account writes publish only committed candidates (#1302)
 
 Whole-account snapshots need one guard covering candidate capture, storage and publication across adds, OAuth
@@ -50,6 +66,10 @@ with a full accept queue never answers a SYN on Linux).
 Changing a compiled public key does not update a pin already saved in Postgres, and the registration marker can hide that difference. Migrate only explicitly recognized retired official pins, including every recognized repository or HTTPS alias; never infer trust from a downloaded catalog or replace an unknown owner choice. Save the legacy registration marker before migration so a removed market stays removed. A failed pin write must keep loading retryable.
 
 For embedded signatures, retain the complete envelope and verify the exact decoded payload bytes on restart. Postgres JSONB may normalize the outer envelope without changing those bytes; compare the decoded payload, not the envelope's formatting. A legacy detached payload or stale cached signed flag must not authorize installation. Cache quarantine can legitimately write the old record before pin migration: inject failure specifically on the new-pin write, rather than claiming a generic cache-write error proves migration retry. Keep every HTTP fixture local, including automatic refreshes of quarantined caches. Observe successful catalog delivery in rejection tests as well as `errors.Is(err, extension.ErrCatalogUnverified)`. `ErrCatalogUnavailable` must not lift a rotated cache's quarantine, and it must preserve the new key's catalog once that envelope has genuinely verified. Never infer these categories from localized message text.
+
+## A socket systemd passes reaches every child unless it is taken first (2026-11-08)
+
+Sockets passed by socket activation (`LISTEN_FDS`, descriptors 3 and up) are not close-on-exec, and Go's `os/exec` does not close what is not: every process started before the hub marks them is handed the hub's listening port, and hands it on to everything it starts in turn. The hub without its edge marked them only when it first listened, and it could start the built-in manager before that; the manager, the local node, extension programs and the agents the node started then all held the hub's listening socket (several pids on `ss -tlnp` for the hub's port). Take what a process was handed first thing, before anything can start a child (`claimInherited`, `osproc.SealInherited`); hand a child a descriptor only through `exec.Cmd.ExtraFiles`. Never seal in `main` of a binary whose helper commands hand descriptors on by exec (the sandbox's launcher passes its mount data to bwrap that way).
 
 ## A fixed name in the temp folder is shared on Linux (2026-11-07, #66)
 
@@ -1042,3 +1062,7 @@ Go's `http.Client` follows a 301, 302 or 303 as a GET for any method but GET and
 - A hub card snapshot can lag the manager's outcome. Resolve may return `200 already:true` for an earlier answer; a new notification choice must report `not_pending` rather than claim that its new selection took effect. A retry of the original operation instead replays its saved success receipt.
 - A dropped bus connection can wrap the offline error even after a request was sent. Notification choices use the send-aware forwarding path: only a definitely offline manager releases the receipt; a lost response keeps an unknown receipt so reconnecting cannot execute the same tap again.
 - Hub tests isolate `HOME` in `TestMain`. A subprocess such as the architecture guard's `go list -deps` can then lose the downloaded toolchain and module caches even though the parent `go test` compiled successfully. Before running tests with a downloaded `GOTOOLCHAIN`, export `GOPATH`, `GOMODCACHE` and `GOCACHE` from their original `go env` values; retain the isolated home rather than disabling it.
+
+## A source read newest first must not let an older entry replace a newer one
+
+A connector that folds several notifications into one thread (GitHub CI failures per repository and branch) read them newest first and let each replace the thread's thing, so the oldest one read won. It went unseen while the in-memory `seen` set skipped notifications already read; after every restart the whole unread backlog was read again, a few per poll, and the open item's time walked back by hours while its count rose once per step (#1527). Keep the newest per key by comparing times, never by reading order, and have the consumer ignore a step older than what it holds: a restart, a retry or a second page can each hand it an earlier one. Test it with a backlog larger than one poll's budget, read after a restart.
