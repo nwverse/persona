@@ -21,11 +21,14 @@ function resetIso(s: Session): string | undefined {
   return iso;
 }
 
-/** The CLI said it goes on by itself, or the hub scheduled a continuation (work.wake_at). */
+/** The CLI said it goes on by itself, or the hub scheduled this limit's continuation.
+ *  A wake counts only with the limit's own resets_at (the hub's limitTakenUp): another wait's wake_at does not. */
 export function usageLimitContinues(s: Session): boolean {
   if (s.turn_error_resumes) return true;
   const w = s.work;
-  return Boolean(w?.wake_at && w.phase === "blocked" && Number.isFinite(Date.parse(w.wake_at)));
+  return Boolean(
+    w?.phase === "blocked" && w.resets_at && w.wake_at && Number.isFinite(Date.parse(w.resets_at)) && Number.isFinite(Date.parse(w.wake_at)),
+  );
 }
 
 /** Stopped on a subscription usage limit whose reset is still ahead, or not known.

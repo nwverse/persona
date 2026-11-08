@@ -36,7 +36,7 @@ import {
 } from "../../lib/feed";
 import { runningWorkflows, workflowLine } from "../../lib/workflows";
 import { dockAgents, type DockAgent, interruption, isRemovable, mostUrgentAgent, runningSubagents, taskNow, todoStatus, TODO_STATUS_INFO, type SessionLookup, type Todo, type TodoStatus } from "../../lib/todos";
-import { usageLimitLabel } from "../../lib/usage-limit";
+import { usageLimitContinues, usageLimitLabel } from "../../lib/usage-limit";
 import { parseAPIError } from "../../lib/api-errors";
 import { boardSections, type BoardSectionKey } from "../../lib/task-board";
 import { openPanel } from "../../lib/panel";
@@ -428,7 +428,7 @@ export function TaskCard({ todoId, conversation }: { todoId: string; conversatio
   const ultra = useTaskUltracode(todo);
   const menu = useTaskMenu(todo, status);
   const retrying = useRetrying(todoId);
-  useNow(30_000, status === "working"); // how long its step has gone on
+  useNow(30_000, status === "working" || status === "usage_limit"); // a step's age, and the limit's grace running out
   // its turn ended to wait for a background workflow (#2935): the run's progress, under its own.
   // Called before the early return: a card drawn before its todo arrives must call the same hooks once it has (#5422).
   const wfNow = useNow(60_000, runningWorkflows(lead).length > 0);
@@ -552,8 +552,9 @@ export function TaskCard({ todoId, conversation }: { todoId: string; conversatio
             </span>
           ) : (
             <span className="flex items-center gap-4">
-              {cut?.canContinue && (
-                // The model service cut its turn off: "Continue" tells its agent to go on, as the chat's "Retry" does (#1516).
+              {(cut?.canContinue || (limitText && lead && !usageLimitContinues(lead))) && (
+                // The model service cut its turn off, or a usage limit nothing will take up: "Continue" tells its agent
+                // to go on. Hidden while the CLI or the hub will continue it (a message would cancel that).
                 <button
                   type="button"
                   disabled={retrying}
@@ -567,17 +568,19 @@ export function TaskCard({ todoId, conversation }: { todoId: string; conversatio
                   {t("assistant-tasks.continue")}
                 </button>
               )}
-              <button
-                type="button"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  setRoute(conversation, todo.id);
-                }}
-                className="inline-flex items-center gap-1 whitespace-nowrap font-semibold text-accent hover:underline"
-              >
-                <Icon name="send" size={12} />
-                {t("assistant-tasks.say_something")}
-              </button>
+              {!(limitText && lead && usageLimitContinues(lead)) && (
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setRoute(conversation, todo.id);
+                  }}
+                  className="inline-flex items-center gap-1 whitespace-nowrap font-semibold text-accent hover:underline"
+                >
+                  <Icon name="send" size={12} />
+                  {t("assistant-tasks.say_something")}
+                </button>
+              )}
             </span>
           )}
         </div>
@@ -720,15 +723,28 @@ function ReceiptCard({ item }: { item: FeedItem }) {
  *  a quiet line that opens the task (a later receipt says how it ended). */
 function InterruptedReceipt({ item }: { item: FeedItem }) {
   const todo = useTodo(item.ref);
-  const now = useTaskNow(todo);
+  const task = useTaskNow(todo);
+  const clock = useNow(30_000, task?.status === "usage_limit");
   const retrying = useRetrying(todo?.id);
-  const status = now?.status;
+  const status = task?.status;
   const title = field(item, "title") ?? t("assistant-tasks.task_fallback");
-  if (todo && status === "usage_limit") {
+  if (todo && task?.status === "usage_limit") {
+    const goesOn = task.lead ? usageLimitContinues(task.lead) : false;
     return (
       <div className="flex gap-3 rounded-card bg-field p-4">
         <Icon name="clock" size={18} stroke={2.4} className="text-orange" />
-        <div className="min-w-0 text-[14.5px] font-semibold">{usageLimitLabel(now?.lead) ?? t("lib-usage-limit.short")}</div>
+        <div className="flex min-w-0 flex-1 flex-col gap-1">
+          <div className="text-[14.5px] font-semibold">{title}</div>
+          <div className="text-[13px] text-ink-2">{usageLimitLabel(task.lead, clock) ?? t("lib-usage-limit.short")}</div>
+          <div className="mt-1 flex gap-2">
+            {!goesOn && (
+              <Button icon="retry" busy={retrying} disabled={retrying} onClick={() => retryTaskNow(todo, "continue")}>
+                {t("assistant-tasks.continue")}
+              </Button>
+            )}
+            {item.ref && <Button onClick={() => openTask(item.ref!)}>{t("assistant-tasks.look")}</Button>}
+          </div>
+        </div>
       </div>
     );
   }
@@ -740,7 +756,7 @@ function InterruptedReceipt({ item }: { item: FeedItem }) {
       </button>
     );
   }
-  const cut = todo ? interruption(now?.lead) : undefined;
+  const cut = todo ? interruption(task?.lead) : undefined;
   const raw = field(item, "error") ?? field(item, "summary");
   const reason = cut?.reason ?? parseAPIError(raw)?.reason;
   const canContinue = todo && (cut ? cut.canContinue : true);
@@ -1156,7 +1172,7 @@ export function TaskDock({ conversation }: { conversation: string }) {
         <div className="scrollbar-none -my-1 flex min-w-0 flex-1 items-center gap-2 overflow-x-auto py-1">
           {going.map(({ t: todo, st, ask, limit }) => {
             // a waiting task says what it waits on when hovered or read out (#3463)
-            const label = ask ? t("assistant-tasks.dock_task_asks", { title: todo.title, ask }) : undefined;
+            const label = ask ? t("assistant-tasks.dock_task_asks", { title: todo.title, ask }) : limit ? `${todo.title} · ${limit}` : undefined;
             return (
             <button
               key={todo.id}
@@ -1175,7 +1191,7 @@ export function TaskDock({ conversation }: { conversation: string }) {
               <span className="truncate">{todo.title}</span>
               {st === "needs_you" && <span className="shrink-0">{stateName("needs_you")}</span>}
               {st === "interrupted" && <span className="shrink-0">{stateName("interrupted")}</span>}
-              {st === "usage_limit" && <span className="shrink-0">{limit}</span>}
+              {st === "usage_limit" && <span className="shrink-0">{t("lib-usage-limit.short")}</span>}
             </button>
             );
           })}

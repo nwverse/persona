@@ -35,6 +35,8 @@ describe("usageLimitLabel", () => {
     const time = usageLimitClock(tomorrow, now);
     expect(usageLimitLabel(session({ turn_error_resets_at: tomorrow }), now)).toBe(`用量上限 · ${time} 重置`);
     expect(usageLimitLabel(session({ work: { phase: "blocked", on: "external", resets_at: tomorrow } }), now)).toBe(`用量上限 · ${time} 重置`);
+    // Another wait's wake is not this limit's continuation.
+    expect(usageLimitLabel(session({ turn_error_resets_at: tomorrow, work: { phase: "blocked", on: "transient", wake_at: today } }), now)).toBe(`用量上限 · ${time} 重置`);
   });
 
   it("has no clock when the reset is not known", () => {
