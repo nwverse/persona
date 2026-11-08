@@ -41,6 +41,20 @@ parent before its activity/budget, matching budget claim and revocation order.
 Test two database pools, late legacy writes, failure rollback and physical-install
 boundaries; never treat acceptance as a delivered notification or battery result.
 
+## Push-to-start budgets belong to delivery, not episodes (#1662)
+
+An episode counter allows an empty/active loop to start an activity every time and
+forgets all spending on hub restart. Client `started_at` is activity age, not a
+server push budget; registration and token rotation must not clear spending. Keep
+an independent device-FK budget and atomically claim it in Postgres before dispatch,
+including across overlapping blue-green slots. A failed or ambiguous claim fails
+closed; a successful claim stays spent even if APNs fails or the process exits.
+The ten-minute rolling cooldown applies only to starts, never ordinary alerts or
+urgent activity updates. Defer a wake time, not a payload: at expiry read the latest
+fleet, preferences, foreground state and tokens, and recheck after a slow claim.
+Empty/done, an open phone or a fresh update token suppresses a queued start. Restart
+reconstructs its deadline from the durable budget and the current manager snapshot.
+
 ## A custom HTTPS dial must opt into HTTP/2 (#1620)
 
 A custom `http.Transport.DialContext` conservatively disables Go's automatic HTTP/2 negotiation. Keep the checked-address dial callback and explicitly enable `ForceAttemptHTTP2`; do not replace it with a default dialer or let an upstream proxy resolve the name again. Verify real local TLS HTTP/2 negotiation, HTTP/1.1 fallback and request cancellation. A successful transport test is not evidence that a particular upstream challenge disappeared: verify the installed source separately, without raising budgets or substituting host-downloaded content.
