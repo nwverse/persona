@@ -3,7 +3,9 @@ package node
 import (
 	"bufio"
 	"bytes"
+	"errors"
 	"io"
+	"io/fs"
 	"maps"
 	"os"
 	"slices"
@@ -49,6 +51,9 @@ func (n *Node) backgroundTasks(path string) (tasks []proto.BackgroundTask, loop 
 	defer sc.mu.Unlock()
 	f, err := os.Open(path)
 	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) { // deleted: the scan would stay for the node's whole uptime
+			n.forgetBgScan(path, sc)
+		}
 		return nil, nil, nil, false
 	}
 	defer f.Close()
