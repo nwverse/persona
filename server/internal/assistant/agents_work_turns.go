@@ -164,6 +164,10 @@ func (s *Service) triageTurn(ctx context.Context, v *workView, machine string, c
 		return // it went on while the model read it: the next end decides
 	}
 	s.actOn(ctx, v, machine, c, &e)
+	if e.WakeAt != nil && e.Work.On == proto.WaitExternal && e.Work.ResetsAt == nil {
+		ask, reply := s.lastTurnOf(ctx, machine, c.SessionID)
+		startCIWatch(c, &e, time.Now(), ask, reply)
+	}
 	s.putWork(ctx, e)
 	s.logf("triage %s/%s: %s%s (%s %.1fs): %s", machine, short(c.SessionID), w.Phase, orEmpty("/", e.Work.On), by,
 		time.Since(start).Seconds(), e.Work.Line)

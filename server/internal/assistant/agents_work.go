@@ -141,15 +141,16 @@ type workStore interface {
 
 // workBook is the manager's copy of session_work, plus what only matters while it runs.
 type workBook struct {
-	mu       sync.Mutex
-	entries  map[[2]string]*db.SessionWork
-	cards    map[string]proto.Interaction // the cards out, by id (the snapshot's interactions)
-	loaded   bool
-	triaging map[[2]string]bool
-	tried    map[[2]string]triedTurn // the turn a triage was last attempted on, and when
-	sent     map[[2]string]time.Time // when the manager itself last sent the session something
-	seen     map[[2]string]time.Time // the turn whose first look was recorded
-	approved map[[2]string]approval  // a risky next step the user said yes to, for the wait it ends
+	mu        sync.Mutex
+	entries   map[[2]string]*db.SessionWork
+	cards     map[string]proto.Interaction // the cards out, by id (the snapshot's interactions)
+	loaded    bool
+	triaging  map[[2]string]bool
+	ciPolling map[[2]string]bool      // bounded concurrent check reads
+	tried     map[[2]string]triedTurn // the turn a triage was last attempted on, and when
+	sent      map[[2]string]time.Time // when the manager itself last sent the session something
+	seen      map[[2]string]time.Time // the turn whose first look was recorded
+	approved  map[[2]string]approval  // a risky next step the user said yes to, for the wait it ends
 	// answering marks cards whose answer is being delivered to the agent: a repeated callback in the send window
 	// (a redelivered webhook, a second tap, phone and watch together) is the same answer, not a second one.
 	answering map[string]bool
@@ -173,6 +174,7 @@ func (b *workBook) init() {
 		b.entries = map[[2]string]*db.SessionWork{}
 		b.cards = map[string]proto.Interaction{}
 		b.triaging = map[[2]string]bool{}
+		b.ciPolling = map[[2]string]bool{}
 		b.tried = map[[2]string]triedTurn{}
 		b.sent = map[[2]string]time.Time{}
 		b.seen = map[[2]string]time.Time{}
@@ -482,6 +484,7 @@ func (s *Service) workReport(ctx context.Context) *WorkReport {
 			continue // unsure: nothing shown
 		}
 		w := e.Work
+		w.CI = nil // internal poll target and outbox stay in the manager's store
 		w.TurnAt = e.TurnAt
 		r.Sessions = append(r.Sessions, SessionWork{MachineID: e.MachineID, SessionID: e.SessionID, Work: w})
 	}

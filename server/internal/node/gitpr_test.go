@@ -22,7 +22,8 @@ func fakePRGh(t *testing.T, auth string) (calls func() []string) {
 "autoMergeRequest":null,"statusCheckRollup":[
  {"name":"test","status":"COMPLETED","conclusion":"FAILURE","detailsUrl":"https://ci.example.com/1"},
  {"name":"lint","status":"COMPLETED","conclusion":"SUCCESS"},
- {"context":"deploy/preview","state":"PENDING","targetUrl":"https://ci.example.com/2"}]}`
+ {"context":"deploy/preview","state":"PENDING","targetUrl":"https://ci.example.com/2"},
+ {"name":"rerun","status":"IN_PROGRESS","conclusion":"SUCCESS"}]}`
 	threads := `{"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":[
  {"isResolved":false,"isOutdated":false,"path":"src/login.ts","line":12,"originalLine":10,
   "comments":{"nodes":[{"author":{"login":"reviewer"},"body":"Handle the empty password.","url":"https://github.com/acme/web/pull/42#r1","createdAt":"2026-11-01T10:00:00Z"}]}},
@@ -73,8 +74,8 @@ func TestGitPRView(t *testing.T) {
 	if !ok || pr.Number != 42 || pr.Review != "CHANGES_REQUESTED" || pr.AutoMerge {
 		t.Fatalf("pr %+v", out["pr"])
 	}
-	if pr.ChecksState != "failing" || len(pr.Checks) != 3 || pr.Checks[0].State != "fail" || pr.Checks[1].State != "pass" ||
-		pr.Checks[2].Name != "deploy/preview" || pr.Checks[2].State != "pending" || pr.Checks[2].URL == "" {
+	if pr.ChecksState != "failing" || !pr.ChecksComplete || len(pr.Checks) != 4 || pr.Checks[0].State != "fail" || pr.Checks[1].State != "pass" ||
+		pr.Checks[2].Name != "deploy/preview" || pr.Checks[2].State != "pending" || pr.Checks[2].URL == "" || pr.Checks[3].State != "pending" {
 		t.Fatalf("checks %s %+v", pr.ChecksState, pr.Checks)
 	}
 	if len(pr.Threads) != 1 || pr.Threads[0].Path != "src/login.ts" || pr.Threads[0].Line != 12 ||
