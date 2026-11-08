@@ -871,6 +871,9 @@ backtick paths/commands/config keys in `CLAUDE.local.md` (only ID/host/email/IP-
 (`app_store.feedback_email`, `privacy_url`, already public for App Store/OAuth). Docs say hub machine/another Mac;
 example machine ids `server` / `laptop`. `release.sh` scans before packaging;
 precommit hooks: `git config core.hooksPath scripts/hooks` (`pre-commit` staged content, `commit-msg` commit message, `pre-push` changed files/messages against `origin/master`).
+**Message lines** (#1107): `--message <file>` checks every line, Markdown headings included (a PR's title and body become the squash commit's message as they are).
+`commit-msg` passes `--commit-msg`, which checks only what `git commit` records: when git opened an editor it skips the comment lines (hints, branch, paths) and everything from the scissors line down (the `commit -v` diff);
+a `-m` / `-F` message keeps its `#` lines, so they are checked. It follows git's comment string and `commit.cleanup` (`commit_msg_lines`), but cannot see `--cleanup` or `-v` on the command line; `pre-push` still reads every recorded line.
 **Block again before merge** (#3696): `scripts/hooks/merge-pr.sh <PR number>` fetches the PR's base and head, runs `privacy_check.py --range origin/<base>..<head> --message <title/body>`,
 then only passes to `gh pr merge --squash --match-head-commit <head>` (exact scanned head merges) and deletes a same-repository branch through the API. `--range <base>..<head>` checks changed head-file contents and commit messages, not worktree, in seconds.
 Why not CI: private values come from local configs unavailable to CI, which only checks generic private-IP/email/npm rules; merge machine must possess values to block them.

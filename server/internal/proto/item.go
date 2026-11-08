@@ -162,8 +162,8 @@ type Item struct {
 // Injected says what a message Persona wrote for the model is, for the apps to show one line instead of it.
 type Injected struct {
 	Kind    string `json:"kind"`              // InjectedTaskNotice | InjectedFollowup | InjectedSystem
-	State   string `json:"state,omitempty"`   // task_notice: done|needs|interrupted|failed; followup: once|daily|interval|wake; system: lost_tasks
-	Title   string `json:"title,omitempty"`   // the task's, the scheduled task's, or what a woken agent waits for
+	State   string `json:"state,omitempty"`   // task_notice: done|needs|interrupted|failed; followup: once|daily|interval|wake; system: lost_tasks|supervise|inbox
+	Title   string `json:"title,omitempty"`   // the task's, the scheduled task's, the inbox item's, or what a woken agent waits for
 	Machine string `json:"machine,omitempty"` // task_notice: where its agent runs (a name)
 	TodoID  string `json:"todo_id,omitempty"` // task_notice: the task, when the hub can tell
 	Line    string `json:"line"`              // the one line to show
