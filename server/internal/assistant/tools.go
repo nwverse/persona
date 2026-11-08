@@ -183,6 +183,8 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 			// DismissNotice: close a notice that Enter only closes (no options) before sending; any other dialog
 			// still refuses the send.
 			DismissNotice bool `json:"dismiss_notice"`
+			// Task: new work handed to this agent becomes a supervised task of the main conversation (agent_control.go).
+			Task *sendTask `json:"task"`
 		}
 		_ = json.Unmarshal(args, &a)
 		am, c, err := s.findAgent(ctx, a.Machine, a.SessionID)
@@ -199,25 +201,36 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 		if strings.TrimSpace(a.Text) == "" {
 			return "", fmt.Errorf("text is empty")
 		}
+		if a.Task != nil { // refused before the user is asked to confirm a send that would not go
+			if err := s.sendTaskAllowed(ctx, self, am, c); err != nil {
+				return "", err
+			}
+		}
 		if ok, err := s.confirmOutbound(ctx, machine, self, name, agentLabel(c)+" · "+am.Name+"\n\n"+a.Text, args); err != nil {
 			return "", err
 		} else if !ok {
 			return "The user declined on the phone: nothing was sent to that agent.", nil
 		}
-		if c.Status != proto.StatusOffline {
-			if err := s.call(ctx, am.ID, DeviceSessionSend, sendParams(c.SessionID, a.Text, a.DismissNotice), nil); err != nil {
+		var task *handedTask
+		if a.Task != nil {
+			if task, err = s.handTask(ctx, self, am, c, *a.Task, a.Text); err != nil {
 				return "", err
 			}
-			return fmt.Sprintf("Sent to %s on %s.", agentLabel(c), am.Name), nil
+		}
+		if c.Status != proto.StatusOffline {
+			if err := s.call(ctx, am.ID, DeviceSessionSend, sendParams(c.SessionID, a.Text, a.DismissNotice), nil); err != nil {
+				return "", task.sendFailed(ctx, s, err)
+			}
+			return fmt.Sprintf("Sent to %s on %s.", agentLabel(c), am.Name) + task.sent(ctx, s, a.Text), nil
 		}
 		// Not running (a finished task's agent is closed: hub tasks_close.go): its node resumes it first, which can
 		// take minutes and goes on if this call stops waiting.
 		sctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Minute)
 		defer cancel()
 		if err := s.call(sctx, am.ID, DeviceSessionSend, sendParams(c.SessionID, a.Text, a.DismissNotice), nil); err != nil {
-			return "", err
+			return "", task.sendFailed(sctx, s, err)
 		}
-		return fmt.Sprintf("Resumed %s on %s (same session, directory and launcher) and sent.", agentLabel(c), am.Name), nil
+		return fmt.Sprintf("Resumed %s on %s (same session, directory and launcher) and sent.", agentLabel(c), am.Name) + task.sent(sctx, s, a.Text), nil
 	case "agent_interrupt":
 		return s.toolAgentInterrupt(ctx, machine, self, args) // agent_control.go
 	case "agent_supervise":

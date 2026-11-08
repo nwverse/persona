@@ -132,21 +132,39 @@ func (s *Service) toolAgentSupervise(ctx context.Context, self string, args json
 	if c.Assistant {
 		return "", fmt.Errorf("that is an assistant conversation, not a coding agent")
 	}
-	if err := s.ensureTodosLoaded(ctx); err != nil {
+	todo, made, err := s.adoptAgent(ctx, self, am, c, a.Title, i18n.T(s.lang(ctx), "assistant-tasks.adopt_notes",
+		i18n.Args{"agent": agentLabel(c), "machine": am.Name, "cwd": c.Cwd}), a.DoneWhen, a.ExpectMinutes)
+	if err != nil {
 		return "", err
+	}
+	if !made {
+		return fmt.Sprintf("%s already works for your task %s (%q): you supervise it, done_when %s.", agentLabel(c), todo.ID, todo.Title,
+			criteriaWords(nil, todo.Supervision)), nil
+	}
+	return fmt.Sprintf("%s on %s is now your task %s (%q, its card is in the conversation): you get a supervision message (📋) when it needs you, "+
+		"and close it with task_review. done_when %s. The agent was not told: if it should work to these criteria or report to you "+
+		"(report_to_supervisor), tell it with agent_send.", agentLabel(c), am.Name, todo.ID, todo.Title, criteriaWords(nil, todo.Supervision)), nil
+}
+
+// adoptAgent puts agent c of machine am under conversation self's supervision (agent_supervise, agent_send with a
+// task): a task of self already gets the new done_when / expect_minutes (none: kept), an agent of no task becomes one
+// (a todo titled title, else after the session, with notes, the agent linked, a task card in the feed: made true); another
+// conversation's task, or the user's own todo, stays theirs (an error). If the agent cannot be linked to the todo just
+// made, that todo is closed (no empty task stays).
+func (s *Service) adoptAgent(ctx context.Context, self string, am Device, c proto.Session, title, notes string, doneWhen []string,
+	expect int) (Todo, bool, error) {
+	if err := s.ensureTodosLoaded(ctx); err != nil {
+		return Todo{}, false, err
 	}
 	// One adoption at a time: two at once would both find the agent on no task and make two.
 	s.adoptMu.Lock()
 	defer s.adoptMu.Unlock()
-	doneWhen, expect := cleanDoneWhen(a.DoneWhen), max(0, min(a.ExpectMinutes, 24*60))
+	doneWhen, expect = cleanDoneWhen(doneWhen), max(0, min(expect, 24*60))
 	if t, ok := s.openTodoOfAgent(am.ID, c.SessionID); ok {
-		switch {
-		case t.Origin == "":
-			return "", fmt.Errorf("%s is on the user's own todo %q (%s): it stays theirs", agentLabel(c), t.Title, t.ID)
-		case t.Origin != self && (t.Supervision == nil || t.Supervision.Supervisor != self):
-			return "", fmt.Errorf("%s works for task %q (%s) of another conversation: it stays that conversation's", agentLabel(c), t.Title, t.ID)
+		if err := othersTask(c, t, self); err != nil {
+			return Todo{}, false, err
 		}
-		if _, _, err := s.updateSupervision(ctx, t.ID, func(v *Supervision) bool {
+		v, _, err := s.updateSupervision(ctx, t.ID, func(v *Supervision) bool {
 			v.Supervisor = self
 			if len(doneWhen) > 0 {
 				v.DoneWhen = doneWhen
@@ -155,39 +173,127 @@ func (s *Service) toolAgentSupervise(ctx context.Context, self string, args json
 				v.ExpectMinutes = expect
 			}
 			return true
-		}); err != nil {
-			return "", err
+		})
+		if err != nil {
+			return Todo{}, false, err
 		}
-		return fmt.Sprintf("%s already works for your task %s (%q): you supervise it, done_when %s.", agentLabel(c), t.ID, t.Title,
-			criteriaWords(doneWhen, t.Supervision)), nil
+		t.Supervision = &v
+		return t, false, nil
 	}
-	title := clip(oneLine(a.Title), 40)
+	title = clip(oneLine(title), 40)
 	if title == "" {
 		title = clip(oneLine(cmp.Or(strings.TrimSpace(c.Title), agentLabel(c))), 40)
 	}
-	notes := i18n.T(s.lang(ctx), "assistant-tasks.adopt_notes", i18n.Args{"agent": agentLabel(c), "machine": am.Name, "cwd": c.Cwd})
 	todo, err := s.createTodo(ctx, title, notes, self, "")
 	if err != nil {
-		return "", err
+		return Todo{}, false, err
 	}
-	if _, _, err := s.updateSupervision(ctx, todo.ID, func(v *Supervision) bool {
+	v, _, err := s.updateSupervision(ctx, todo.ID, func(v *Supervision) bool {
 		v.Supervisor, v.DoneWhen, v.ExpectMinutes = self, doneWhen, expect
 		return true
-	}); err != nil {
+	})
+	if err != nil {
 		s.dropAdoption(ctx, todo.ID, err)
-		return "", fmt.Errorf("supervise it: %w", err)
+		return Todo{}, false, fmt.Errorf("supervise it: %w", err)
 	}
+	todo.Supervision = &v
 	if err := s.linkTodoAgent(ctx, todo.ID, am.ID, c.SessionID, title, c.Cwd, c.Agent); err != nil {
 		s.dropAdoption(ctx, todo.ID, err)
-		return "", fmt.Errorf("link the agent: %w", err)
+		return Todo{}, false, fmt.Errorf("link the agent: %w", err)
 	}
 	if _, err := s.appendFeed(ctx, self, feedTask, todo.ID, nil); err != nil {
 		s.logf("task %s: feed: %v", todo.ID, err)
 	}
-	s.logf("agent_supervise %s on %s → task %s", short(c.SessionID), am.ID, todo.ID)
-	return fmt.Sprintf("%s on %s is now your task %s (%q, its card is in the conversation): you get a supervision message (📋) when it needs you, "+
-		"and close it with task_review. done_when %s. The agent was not told: if it should work to these criteria or report to you "+
-		"(report_to_supervisor), tell it with agent_send.", agentLabel(c), am.Name, todo.ID, title, criteriaWords(doneWhen, nil)), nil
+	s.logf("adopt %s on %s → task %s", short(c.SessionID), am.ID, todo.ID)
+	return todo, true, nil
+}
+
+// othersTask refuses an open todo t of agent c that is not conversation self's to supervise: the user's own todo, or
+// another conversation's task; nil when it is self's.
+func othersTask(c proto.Session, t Todo, self string) error {
+	switch {
+	case t.Origin == "":
+		return fmt.Errorf("%s is on the user's own todo %q (%s): it stays theirs", agentLabel(c), t.Title, t.ID)
+	case t.Origin != self && (t.Supervision == nil || t.Supervision.Supervisor != self):
+		return fmt.Errorf("%s works for task %q (%s) of another conversation: it stays that conversation's", agentLabel(c), t.Title, t.ID)
+	}
+	return nil
+}
+
+// ---- agent_send with a task ----
+
+// sendTask is agent_send's task: new work handed to an agent that runs already becomes a supervised task of the main
+// conversation, as agent_supervise makes one, so it is tracked like a task_plan task instead of only said.
+type sendTask struct {
+	Title         string   `json:"title"`
+	DoneWhen      []string `json:"done_when"`
+	ExpectMinutes int      `json:"expect_minutes"`
+}
+
+// handedTask is the task agent_send with a task put the agent on: made now, or self's own that it worked for already.
+type handedTask struct {
+	todo Todo
+	made bool
+	self string
+}
+
+// sendTaskAllowed refuses agent_send's task before anything is sent: only the main conversation supervises, and an
+// agent working for the user's own todo or another conversation's task stays theirs (a plain agent_send still goes).
+func (s *Service) sendTaskAllowed(ctx context.Context, self string, am Device, c proto.Session) error {
+	if !s.isMain(ctx, self) {
+		return fmt.Errorf("only the main conversation hands out tasks: send it without task")
+	}
+	if err := s.ensureTodosLoaded(ctx); err != nil {
+		return err
+	}
+	if t, ok := s.openTodoOfAgent(am.ID, c.SessionID); ok {
+		if err := othersTask(c, t, self); err != nil {
+			return fmt.Errorf("%w; nothing was sent (send it without task to only send it)", err)
+		}
+	}
+	return nil
+}
+
+// handTask puts the agent under self's supervision for task before text is sent to it (adoptAgent): text is the new
+// todo's notes, and its title when task has none.
+func (s *Service) handTask(ctx context.Context, self string, am Device, c proto.Session, task sendTask, text string) (*handedTask, error) {
+	todo, made, err := s.adoptAgent(ctx, self, am, c, cmp.Or(strings.TrimSpace(task.Title), text), text, task.DoneWhen, task.ExpectMinutes)
+	if err != nil {
+		return nil, fmt.Errorf("%w; nothing was sent", err)
+	}
+	return &handedTask{todo: todo, made: made, self: self}, nil
+}
+
+// sent puts what the agent was told into the conversation under its task (routed, as a message on the task's card
+// does) and says it for the tool's answer; nothing without a task.
+func (h *handedTask) sent(ctx context.Context, s *Service, text string) string {
+	if h == nil {
+		return ""
+	}
+	if _, err := s.appendFeed(ctx, h.self, feedRouted, h.todo.ID, map[string]string{"text": text}); err != nil {
+		s.logf("task %s: routed feed: %v", h.todo.ID, err)
+	}
+	if !h.made {
+		return fmt.Sprintf(" It already works for your task %s (%q): no new task was made, done_when %s. Work it does for the "+
+			"task counts there until you close it with task_review.", h.todo.ID, h.todo.Title, criteriaWords(nil, h.todo.Supervision))
+	}
+	return fmt.Sprintf(" It is now your task %s (%q, its card is in the conversation): you get a supervision message (📋) when it needs you, "+
+		"and close it with task_review. done_when %s. Agents it starts for the task join it on their own (herdr persona_from, botmux "+
+		"dispatch).", h.todo.ID, h.todo.Title, criteriaWords(nil, h.todo.Supervision))
+}
+
+// sendFailed: the send did not go, so a task made for it is closed (no empty task stays); err as the tool's error.
+// When the machine only did not answer in time (startResultUnknown: a resume can go on after the wait), the text may
+// still arrive, so the task stays.
+func (h *handedTask) sendFailed(ctx context.Context, s *Service, err error) error {
+	if h == nil || !h.made {
+		return err
+	}
+	if startResultUnknown(err) {
+		return fmt.Errorf("%w (it may still arrive: task %s stays; check with agent_read before sending again)", err, h.todo.ID)
+	}
+	s.dropAdoption(ctx, h.todo.ID, err)
+	return fmt.Errorf("%w (task %s was closed again)", err, h.todo.ID)
 }
 
 // dropAdoption closes the todo an adoption made when the agent could not be put on it (why), so no empty task stays.
