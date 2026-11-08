@@ -216,8 +216,7 @@ export function HandOffDialog({ item, onClose }: { item: InboxItem; onClose: () 
       const full = await api<InboxItem>(itemPath(item.id), { headers: itemRequest(item) });
       const text = handOffMessage({ ...item, ...full }, ask);
       if (target === "main") {
-        // the item's own manager's main conversation (docs/assistant/managers.md "Clients"), whatever the assistant page
-        // shows now: it opens with the message on its way, a failure shows there with "Retry"
+        // a failure after it opens shows there with "Retry"
         const { sent } = await askPersonaOf(item.manager, text);
         onClose();
         void sent.then((ok) => {

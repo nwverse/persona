@@ -203,12 +203,12 @@ export async function askPersona(text: string): Promise<void> {
 export async function askPersonaOf(owner: string | undefined, text: string): Promise<{ sent: Promise<boolean> }> {
   const headers = ownerHeaders(owner);
   const a = await api<AssistantInfo>("/assistant", { headers });
-  if (a.main) {
-    showConversation(owner, a.main);
+  if (a.machine_id && a.main) {
+    adoptConversation(owner, a.main);
     return { sent: sendToMain(a.machine_id, a.main, text) };
   }
   const r = await api<{ session: Session }>("/assistant/conversations", { method: "POST", json: { prompt: text, main: true }, headers });
-  showConversation(owner, r.session.session_id);
+  adoptConversation(owner, r.session.session_id);
   noteSent(r.session.machine_id, r.session.session_id, { text });
   void refreshAssistant().catch(() => {});
   navigate({ name: "persona", sid: r.session.session_id });
@@ -223,7 +223,7 @@ function sendToMain(mid: string, sid: string, text: string): Promise<boolean> {
 }
 
 /** owner's conversation sid: its requests go to owner, and the assistant page shows owner (none: the default). */
-function showConversation(owner: string | undefined, sid: string) {
+function adoptConversation(owner: string | undefined, sid: string) {
   noteConversation(sid, otherManager(owner));
   chooseManager(owner || null);
 }

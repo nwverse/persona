@@ -10,7 +10,7 @@ vi.mock("../../lib/router", () => ({ navigate: vi.fn() }));
 vi.mock("../../ui/atoms", async (orig) => ({ ...(await orig<typeof import("../../ui/atoms")>()), toast: vi.fn() }));
 
 import { reloadInbox, resetInboxForTests, type InboxItem } from "../../lib/inbox";
-import { chosenManager, managerHeaderFor, resetManagerChoice, setRosterDefault } from "../../lib/manager-choice";
+import { chooseManager, chosenManager, managerHeaderFor, resetManagerChoice, setRosterDefault } from "../../lib/manager-choice";
 import { navigate } from "../../lib/router";
 import { HandOffDialog } from "./InboxDialogs";
 
@@ -52,9 +52,9 @@ beforeEach(() => {
 afterEach(() => {
   act(() => root.unmount());
   host.remove();
-  vi.unstubAllGlobals();
   resetManagerChoice();
   resetInboxForTests();
+  vi.unstubAllGlobals();
 });
 
 const pick = (label: string) => {
@@ -89,11 +89,49 @@ describe("Hand to AI: Persona's main conversation", () => {
     expect(chosenManager()).toBeNull();
   });
 
-  it("files the item as done once the message got there, when asked to", async () => {
+  it("files the item as done only once the message got there, when asked to", async () => {
     await reloadInbox();
+    const fetcher = vi.mocked(fetch);
+    const answer = fetcher.getMockImplementation()!;
+    let deliver!: () => void;
+    const delivered = new Promise<void>((r) => (deliver = r));
+    fetcher.mockImplementation(async (url, init) => {
+      const reply = await answer(url, init);
+      if (String(url) === "/api/v1/sessions/mac/main-a/messages") await delivered;
+      return reply;
+    });
     act(() => root.render(<HandOffDialog item={item("assistant")} onClose={() => {}} />));
-    await send((c) => c.url === "/api/v1/inbox/lark:f1:1/done");
-    expect(calls.findIndex((c) => c.url.endsWith("/done"))).toBeGreaterThan(calls.findIndex(sentTo("main-a")));
+    await send(sentTo("main-a"));
+    await act(async () => {});
+    expect(calls.some((c) => c.url.endsWith("/done"))).toBe(false);
+    deliver();
+    await vi.waitFor(() => expect(calls.some((c) => c.url === "/api/v1/inbox/lark:f1:1/done")).toBe(true));
+  });
+
+  it("leaves the item open when the message didn't get there", async () => {
+    await reloadInbox();
+    const fetcher = vi.mocked(fetch);
+    const answer = fetcher.getMockImplementation()!;
+    fetcher.mockImplementation(async (url, init) => {
+      const reply = await answer(url, init);
+      return String(url) === "/api/v1/sessions/mac/main-a/messages"
+        ? ({ ok: false, status: 409, text: async () => JSON.stringify({ code: "refused", error: "Refused" }), headers: new Headers() } as Response)
+        : reply;
+    });
+    act(() => root.render(<HandOffDialog item={item("assistant")} onClose={() => {}} />));
+    await send(sentTo("main-a"));
+    await vi.waitFor(() => expect(navigate).toHaveBeenCalledWith({ name: "persona", sid: "main-a" }));
+    await act(async () => {});
+    expect(calls.some((c) => c.url.endsWith("/done"))).toBe(false);
+  });
+
+  it("sends the default's item to the default's main conversation while the page shows another manager", async () => {
+    chooseManager("m-1");
+    act(() => root.render(<HandOffDialog item={item("assistant")} onClose={() => {}} />));
+    await send(sentTo("main-a"));
+    expect(calls.some((c) => c.url === "/api/v1/assistant" && c.header === "assistant")).toBe(true);
+    expect(navigate).toHaveBeenCalledWith({ name: "persona", sid: "main-a" });
+    expect(chosenManager()).toBeNull();
   });
 
   it("sends another manager's item to that manager's main conversation and shows its page", async () => {
@@ -131,6 +169,24 @@ describe("Hand to AI: Persona's main conversation", () => {
     expect(navigate).not.toHaveBeenCalled();
     expect(chosenManager()).toBeNull();
     expect(calls.some((c) => c.url.includes("/messages") || c.url.endsWith("/assistant/conversations"))).toBe(false);
+  });
+
+  it("stays open with the reason when the manager's main conversation can't start, moving nothing", async () => {
+    mains["m-1"] = undefined;
+    const fetcher = vi.mocked(fetch);
+    const answer = fetcher.getMockImplementation()!;
+    fetcher.mockImplementation(async (url, init) => {
+      if (!String(url).endsWith("/assistant/conversations")) return answer(url, init);
+      calls.push({ url: String(url), method: "POST", header: new Headers(init?.headers).get("X-Persona-Manager"), body: undefined });
+      return { ok: false, status: 409, text: async () => JSON.stringify({ code: "refused", error: "Can't start a conversation" }), headers: new Headers() } as Response;
+    });
+    const onClose = vi.fn();
+    act(() => root.render(<HandOffDialog item={item("m-1")} onClose={onClose} />));
+    await send((c) => c.url.endsWith("/assistant/conversations"));
+    await vi.waitFor(() => expect(document.body.textContent).toContain("Can't start a conversation"));
+    expect(onClose).not.toHaveBeenCalled();
+    expect(navigate).not.toHaveBeenCalled();
+    expect(chosenManager()).toBeNull();
   });
 });
 

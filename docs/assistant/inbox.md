@@ -535,7 +535,7 @@ which users saw as one action: clear this batch they do not need to handle now. 
   reply), plus the requested action (default "Summarize this, tell me what I need to do, and suggest a reply," with two other presets), sent as one message.
   Targets: **Persona (main chat)**, the default (#1194, on the web and Android): the item's own manager's main conversation (another manager's item goes to that manager's,
   found by asking it; with none yet, the message starts it), which then opens; **Persona (new chat)** starts a new conversation with the item's manager (iOS / Mac still offer only this,
-  switching to Chats); an Agent (latest 8) receives it in its session (navigate there). Mark done simultaneously by default, once the message got there.
+  switching to the Persona tab); an Agent (latest 8) receives it in its session (navigate there). Marked done by default once the message got there.
   The hand-off is still plain chat text: the item does not yet know which conversation has it, and the main conversation cannot write back to it (`inbox_suggest` accepts only an item's processing conversation).
 - **Done**: row swipe-left, top-right ✓ in details, or alongside Send / Hand to AI.
 
