@@ -566,6 +566,7 @@ Pin the visual style, not an alternate navigation tree. A shared launch helper t
 
 - **Container `accessibilityIdentifier` overrides its children's identifiers**: identifying a row `VStack` made its `Menu` `market-menu-…` unfindable. Identify only clickable controls,
   or first apply `.accessibilityElement(children: .contain)` to the container.
+- **A `lineLimit`-cut `Text` still reads in full to XCUITest**: its label is the whole string, so "the last line is not there" never proves folding (#1666, `NewChatLayoutTests`). Assert the fold's control (Expand) and look at the screenshot.
 - **First taps just after sheet dismissal can be swallowed** (keyboard focus is still settling). Immediately tapping a list button after form Add does nothing, with no confirmation dialog.
   Wait for sheet-field `waitForNonExistence`, tap a harmless button (Refresh) first, then the target button.
 - Icon-sized `Menu` (20 pt) often does not expand under XCUITest. Put row actions in a row of `.borderless` text buttons, clearer on both phone and Mac.
