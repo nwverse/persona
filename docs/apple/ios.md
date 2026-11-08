@@ -664,7 +664,8 @@ and what this device asked are `AppModel.setUltracode` / `dismissUltracodeLost`,
   that opens with the card's choices. Start sends `ultracode` only on tasks whose choice differs from the assistant's, so a plain Start still sends no
   `tasks`. On a computer whose known Claude Code is older than 2.1.284 the chip is grayed, a task that was on gets an orange "Starts without ultracode: …"
   line, and it starts with it off. Task cards, folded task lines and to-do rows show `UltracodeMark` after the title while one of the task's Agents
-  carries the row mark (`rowMark`), or, before any Agent exists, when the plan task asks for it; done and failed-to-start to-dos show none. List rows
+  carries the row mark (`rowMark`); before any Agent exists, task cards and lines show it when the plan task asks for it (to-do rows, as on the web,
+  follow the Agents only). Done and failed-to-start to-dos show none. List rows
   (`summary=1`) omit `ultracode`, so `Session.preservingDetails` keeps the value already known. Rules: `apple/Shared/PlanUltracode.swift`; views:
   `apple/Persona/Views/Assistant/Tasks/PlanUltracodeViews.swift`; tests: `PlanUltracodeTests`.
 - **Tests**: `UltracodeTests` (FakeHub: decoding with older hubs, the requests, where it shows, graying, the ask, the quota) and `UltracodeUITests`
