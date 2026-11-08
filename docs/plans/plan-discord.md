@@ -82,15 +82,17 @@ The Gateway (from D3) asks for `GUILDS`, `GUILD_MESSAGES` and `MESSAGE_CONTENT` 
   A message that can't be decoded is left out (paging goes by what Discord answered, so it never ends a read early); a page with none that can is not read past.
 - **First time**: backfill `history_days` days (default 30) per channel, at most 500 messages per channel; `GET /channels/{id}/messages?before=` returns 100 per page.
   Threads are backfilled if active, or archived within that window: each channel's archived threads are listed when its last listing is older than 50 minutes (a thread archives after an hour of quiet at the earliest),
-  the first time over the window, then since an hour before its last listing. The listing time is kept per channel in the cursor, and written only once every thread it found has been read: a server joined later is listed over the window,
-  a listing the hub could not keep is done again, and a channel that can't be listed now holds up only itself. An archived thread that shows nothing (its messages deleted: the listing itself needs "Read Message History") gets its position anyway.
+  the first time over the window, then since an hour before its last listing. A listing goes a page per call and is kept per channel in the cursor (when it started, how far back it got); it moves back past a thread only once that thread was read,
+  so a server joined later is listed over the window, a listing the hub could not keep is done again, a channel that can't be listed now holds up only itself, and a large forum costs a request per call rather than its whole list again each call.
+  An archived thread that shows nothing (its messages deleted: the listing itself needs "Read Message History") gets its position anyway.
   Archived private threads are not read: Discord lists them only to moderators.
 - **After that**: each pass reads the channels whose `last_message_id` moved past the cursor, `after=` the cursor (pages come newest first: the next anchor is a page's largest id; `after=0` must be sent as 1).
-  The cursor (`archive.changes`' `cursor`, stored by the hub) is "conversation → last message id, channel → when its archived threads were last listed". One that can't be read starts over, and a position older than the window reads on from the window's start rather than everything since (the archive was off for months):
+  The cursor (`archive.changes`' `cursor`, stored by the hub) is "conversation → last message id; channel → when its archived threads were last listed completely, and how far a listing going on got". One that can't be read starts over, and a position older than the window reads on from the window's start rather than everything since (the archive was off for months):
   the knowledge base keeps a receipt per message id and drops replays (`Ingest` in `server/internal/kb/update.go`), so starting over costs requests, never duplicates. Channel ids are global, so another bot's positions stay valid. Entries of conversations gone for longer than the window are dropped.
 - **Message Content off**: Discord then sends messages with empty content over REST too. Each pass first reads the application's flags; while the intent is off, no cursor moves, so nothing is skipped: once it is back on, the next pass reads from where it stopped.
   Turning it off in the seconds between that check and a read is not caught: a per-page "content withheld" check would misread legitimately empty messages and make the status flap, which costs more than it saves.
-- **Budget**: a call reads at least one conversation, then stops after about 25 seconds, `limit` conversations or about 2 MB (source extensions carry 8 MB per frame) and answers `more`; the hub calls again (three calls per run). The conversations furthest behind come first, so none waits on busier ones.
+- **Budget**: a call reads at least one conversation, then stops after about 25 seconds, `limit` conversations or about 2 MB (source extensions carry 8 MB per frame) and answers `more`; the hub calls again (three calls per run).
+  Conversations read before (furthest behind first) and those never read take turns, so neither a busy server nor a newly joined one holds up the other.
 - **System messages**: a new thread is noted; joins, boosts and pins are left out (noise for the model). Attachments, stickers, polls, forwards, link cards with their fields and bots' component messages are archived as text from D1 on.
 - **Messages**: sender display name, body (mentions written as `@name`, `#channel`, custom emoji as `:name:`), the quoted reply, embed titles and links; messages "I" sent are marked `mine`.
   Edits and deletions are not synced in the first version (item 3 of "Decided by the user").
@@ -127,7 +129,8 @@ D3's "Send to Persona" messages wait in the data directory until a later cursor 
 | `discord_search` | Search messages in a server (`GET /guilds/{id}/messages/search`); while Discord is still indexing (returns 202), says so and points the assistant at the knowledge base, which has the archived messages (the extension does not ask for `kb.read` to search it itself) |
 
 Tool descriptions and parameter docs live in the extension's own `prompts/mcp/` (the rules in `docs/assistant/prompts.md`). Message content is treated as untrusted data (prompt injection); tool results carry no tokens and no user ids.
-Each message is one line that starts with its time; the sender's display name is quoted with "(the user)" outside the quotes, and a message's further lines are indented, so neither a display name nor a message's text can pass for the user or for another message.
+Each message is one line that starts with its time; the place (a thread's name is anyone's words) and the sender's display name are quoted with "(the user)" outside the quotes, and a message's further lines are indented,
+so neither a name nor a message's text can pass for the user or for another message. The tools' notes (attachments, replies) are English; the archive's follow the user's language.
 `discord_messages` reads any conversation the bot may read, archived threads and forum posts too (a search finds them; discovery lists only active ones).
 
 ## Conversation page
