@@ -14,13 +14,13 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
-	"regexp"
 	"sort"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/nwverse/persona/server/internal/kb"
+	"github.com/nwverse/persona/server/internal/lazyre"
 )
 
 // The history import's files, all under the knowledge base's history/ directory (search, lists and cleanup never look
@@ -316,7 +316,7 @@ func historyBackupDir(data string) string {
 	return filepath.Join(filepath.Dir(filepath.Clean(data)), "kb-backups")
 }
 
-var historyBackupName = regexp.MustCompile(`^kb-(\d{14})(?:-(\d+))?\.tar\.gz$`)
+var historyBackupName = lazyre.New(`^kb-(\d{14})(?:-(\d+))?\.tar\.gz$`)
 
 // backupKB archives the data directory into kb-backups/kb-YYYYMMDDHHMMSS.tar.gz (UTC; written to a temporary name
 // and renamed, 0600, the directory 0700), leaving out every attachments/ directory (never rewritten by the import, and
