@@ -642,6 +642,13 @@ func (n *Node) send(ctx context.Context, id, text string, images []proto.Image, 
 	if r := n.agentsListRefusal(id); r != nil { // claudebg.go
 		return r
 	}
+	if _, live := n.agent(id); !live {
+		// A claude outside Persona's panes has it open (the desktop app, another terminal): its peer inbox, or a
+		// refusal saying why not; never a second claude on the same transcript (claudebg.go).
+		if handled, err := n.sendOutside(ctx, id, text, images); handled {
+			return err
+		}
+	}
 	n.dropSuggestion(id)
 	if exitCommand(text) && len(images) == 0 && !n.isAssistantSession(id) && !n.runtimeAssistant(id) {
 		return n.exitAgent(ctx, id)

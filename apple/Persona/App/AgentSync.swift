@@ -3,9 +3,9 @@ import PersonaKit
 
 /// Keeps the recent agents' conversations current while the app is open and online, the way an IM client syncs:
 /// the hub pushes a tiny "this transcript changed" (each session's `rev`, in the session list and the `revs` event)
-/// and the app pulls only what is new (`after_seq`) — into the chat's store when it is in memory, else into the disk
-/// cache a chat paints from. Opening a chat then shows its latest messages at once. Chats on screen are live over
-/// their own subscription and are left alone, unless that subscription stops bringing items (`checkStall`).
+/// and the app warms the disk cache of recent chats not retained in memory. A retained hidden chat keeps its covered
+/// sequence until it becomes visible again; its subscription then replays what it missed without hidden rendering.
+/// Chats on screen are live over their own subscription and are left alone, unless it stops bringing items (`checkStall`).
 @MainActor
 final class AgentSync {
     static let shared = AgentSync()
@@ -90,7 +90,7 @@ final class AgentSync {
             guard let rev = known[s.key] ?? s.rev, synced[s.id] != rev else { continue }
             if model.isSubscribed(s.key) {
                 synced[s.id] = rev // on screen: its subscription brings what is new
-            } else if !running.contains(s.key) {
+            } else if !running.contains(s.key), canPrefetch(s.key) {
                 if let at = Self.heldUntil(working: s.state == .working, lastPull: lastPull[s.key], now: now) {
                     later = min(later ?? at, at)
                 } else {
@@ -102,6 +102,12 @@ final class AgentSync {
         pump()
         save()
         if let later { replan(at: later) }
+    }
+
+    private func canPrefetch(_ key: SessionKey) -> Bool {
+        let model = self.model()
+        return AgentSyncPacing.prefetchAllowed(hasRetainedStore: model.existingChat(key) != nil,
+                                               isSubscribed: model.isSubscribed(key))
     }
 
     /// When a chat with news is pulled (`AgentSyncPacing.heldUntil`).
@@ -143,6 +149,8 @@ final class AgentSync {
                 // Not asked again for this write once one page held all of it: the write may have added no line. After
                 // more pages (`fill`, `reload`, which keep their failures to themselves) the next look asks once more.
                 if try await Self.pullInto(store, key, api, model: model) == .none { caughtUpFor[key] = updatedAt }
+            } catch is CancellationError {
+                // Its last visible owner left; the next subscription owns missed-sequence replay.
             } catch {
                 ChatTrace.shared.note(key, "catch up failed: \(error.localizedDescription)")
             }
@@ -177,7 +185,7 @@ final class AgentSync {
     private func pump() {
         while running.count < Self.concurrency, !queue.isEmpty {
             let key = queue.removeFirst()
-            guard let rev = known[key] else { continue }
+            guard let rev = known[key], canPrefetch(key) else { continue }
             running.insert(key)
             lastPull[key] = .now
             Task {
@@ -197,13 +205,9 @@ final class AgentSync {
     /// Brings one session up to date; false when the hub could not be reached (it is tried again on the next change).
     private func pull(_ key: SessionKey) async -> Bool {
         let model = self.model()
-        guard let api = model.api(key.group) else { return false }
+        guard canPrefetch(key), let api = model.api(key.group) else { return false }
 
         do {
-            if let store = model.existingChat(key), !store.items.isEmpty {
-                try await Self.pullInto(store, key, api, model: model)
-                return true
-            }
             try await Self.pullToDisk(key, api)
             return true
         } catch {
@@ -215,12 +219,16 @@ final class AgentSync {
     /// says so). Returns what the first batch left to do.
     @discardableResult
     private static func pullInto(_ store: ChatStore, _ key: SessionKey, _ api: APIClient, model: AppModel) async throws -> ChatStore.Gap {
+        // Queued work and every follow-up page share the same visibility and store-identity fence.
+        let shouldApply: @MainActor () -> Bool = { model.isSubscribed(key) && model.existingChat(key) === store }
+        guard shouldApply() else { throw CancellationError() }
         let r = try await api.items(key, afterSeq: store.covered)
+        guard shouldApply() else { throw CancellationError() }
         let gap = store.apply(r.items, span: r.span, moreAfter: r.moreAfter == true)
         switch gap {
         case .none: break
-        case .fill: await model.fill(key)
-        case .reload: await model.reload(key)
+        case .fill: await model.fill(key, shouldApply: shouldApply)
+        case .reload: await model.reload(key, shouldApply: shouldApply)
         }
         return gap
     }

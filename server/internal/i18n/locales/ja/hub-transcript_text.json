@@ -98,5 +98,9 @@
   "fallback_write_bridge": "Agent SDKブリッジを書き出せません：{cause}",
   "fallback_no_bridge_script": "Agent SDKブリッジのパッケージにbridge.mjsがありません",
   "fallback_no_node": "Node.js 22以降がありません：{cause}",
-  "fallback_no_claude": "claudeが見つかりません：{cause}"
+  "fallback_no_claude": "claudeが見つかりません：{cause}",
+  "read_only_claude_bg": "Claude Codeのバックグラウンドセッション：ここでは表示のみ。返信はコンピューターで claude agents から開いてください",
+  "read_only_claude_no_inbox": "このClaudeにはメッセージ経路がありません（古いバージョンかオフ）：ここでは表示のみ。返信はコンピューターで",
+  "read_only_claude_inbox": "このClaudeのメッセージ経路はPersonaで使えません（不明なバージョンかキーがない）：ここでは表示のみ。返信はコンピューターで",
+  "attention_claude_computer": "コンピューターでしか答えられない質問または権限の確認を待っています"
 }
