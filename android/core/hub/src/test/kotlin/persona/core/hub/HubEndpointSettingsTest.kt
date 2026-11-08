@@ -391,12 +391,16 @@ class HubEndpointSettingsTest {
             Fixture(listOf(Endpoint(tls, "lan")), fingerprint(certificate), EndpointOverrides(manual = listOf(closed))).use { fixture ->
                 val settings = fixture.settings
                 val passed = settings.test(tls)
-                assertEquals(EndpointTestResult(tls, true, CoreText.of(CoreText.Key.EndpointVerified), 42, "2026-11-02T00:00:00Z"), passed)
+                // Hosted runners now and then get "Connection failed" here (#1519): the message names what the client threw.
+                assertEquals(failureOf(settings, tls), EndpointTestResult(tls, true, CoreText.of(CoreText.Key.EndpointVerified), 42, "2026-11-02T00:00:00Z"), passed)
                 settings.test(tls)
-                assertEquals(listOf(0, 0), synchronized(connections) { connections.toList() })
+                assertEquals(failureOf(settings, tls), listOf(0, 0), synchronized(connections) { connections.toList() })
                 val refusedPort = settings.test(closed)
                 assertFalse(refusedPort.passed)
                 assertEquals("连接被拒绝", (refusedPort.result).zhAny())
+                // The cause behind a failed test is kept for diagnosis; one that passed has none.
+                assertTrue(generateSequence(settings.lastFailures[endpointKey(closed)]) { it.cause }.any { it is java.net.ConnectException })
+                assertNull(settings.lastFailures[tls])
                 // Disabled candidates can be tested too.
                 settings.setEnabled(closed, false)
                 assertEquals("连接被拒绝", (settings.test(closed).result).zhAny())
@@ -447,6 +451,10 @@ class HubEndpointSettingsTest {
             }
         }
     }
+
+    /** The client's own exception behind [url]'s last failed test, for an assertion's message. */
+    private fun failureOf(settings: HubEndpointSettings, url: String) =
+        "the client's failure for $url: " + (settings.lastFailures[url]?.stackTraceToString() ?: "none")
 
     private fun fingerprint(certificate: HeldCertificate) = Base64.getUrlEncoder().withoutPadding().encodeToString(
         MessageDigest.getInstance("SHA-256").digest(certificate.certificate.publicKey.encoded))
