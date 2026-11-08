@@ -82,6 +82,8 @@ The full native page renderer supports UI v5 review controls, but its open inher
 
 Declare v5 specifically on native full-page opens, alongside the actual supported component list. Keep the shared Widget/Intent read-only context unchanged. Pin the emitted version in a request test and require positive native commits during installed-extension screenshot acceptance; do not remove compatibility fallback or treat a legacy page as native evidence.
 
+A positive native commit is not proof that every root-level control is rendered. The first v5 screenshots exposed an omitted `View.review`: the older HTTP fit had lowered it into ordinary components, masking the missing native bar. Mount the review bar outside the scrolling code content, preserve its named summary across native updates, and submit through the same frozen-action/confirmation path. Verify its visibility and actual submit/discard fences before accepting the full screenshot matrix.
+
 ## Evidence boundaries
 
 Unit tests use canonical valid/invalid fixtures and exact fence traces. Actual UI tests assert committed stream revisions, not just a loaded page that might be HTTP fallback. Screenshots contain synthetic data only; GUI captures are limited to the App window without other windows/desktop content. Clearly label offscreen rendering as such.

@@ -158,6 +158,40 @@ final class ExtensionStreamUITests: XCTestCase {
     }
     #endif
 
+    @MainActor private func reviewBar(_ appearance: String) throws {
+        let app = try launch(appearance, ui: "code-review-v5"); defer { app.terminate() }
+        let toggle = app.buttons["extension-review-toggle"]
+        XCTAssertTrue(toggle.waitForExistence(timeout: 10), app.debugDescription)
+        let summary = app.descendants(matching: .any)["extension-review-summary"].firstMatch
+        if !summary.exists { toggle.tap() }
+        XCTAssertTrue(summary.waitForExistence(timeout: 5), app.debugDescription)
+        summary.tap(); summary.typeText("Synthetic review summary")
+        toggle.tap()
+        toggle.tap()
+        XCTAssertEqual(summary.value as? String, "Synthetic review summary")
+        let comment = app.buttons.matching(NSPredicate(format: "label == %@", "评论")).firstMatch
+        XCTAssertTrue(comment.isHittable, app.debugDescription)
+        comment.tap()
+        let second = NSPredicate(format: "value == %@", "stream:2")
+        XCTAssertTrue(app.descendants(matching: .any).matching(second).firstMatch.waitForExistence(timeout: 15), app.debugDescription)
+        let discard = app.buttons.matching(NSPredicate(format: "label IN %@", ["放弃草稿", "Discard Drafts"])).firstMatch
+        discard.tap()
+        let cancel = app.buttons.matching(NSPredicate(format: "label IN %@", ["取消", "Cancel"])).firstMatch
+        XCTAssertTrue(cancel.waitForExistence(timeout: 5), app.debugDescription)
+        cancel.tap()
+        XCTAssertTrue(app.descendants(matching: .any).matching(second).firstMatch.exists)
+        discard.tap()
+        let confirm = app.buttons["plugin-ui-confirm"].firstMatch
+        XCTAssertTrue(confirm.waitForExistence(timeout: 5), app.debugDescription)
+        confirm.tap()
+        let third = NSPredicate(format: "value == %@", "stream:3")
+        XCTAssertTrue(app.descendants(matching: .any).matching(third).firstMatch.waitForExistence(timeout: 15), app.debugDescription)
+        try shot(app, name: "ios-review-bar-" + appearance)
+    }
+
+    @MainActor func testReviewBarLightNativeActionsAndCancellation() throws { try reviewBar("light") }
+    @MainActor func testReviewBarDarkNativeActionsAndCancellation() throws { try reviewBar("dark") }
+
     @MainActor func testShowcaseLightStreamFenceAndCancellation() throws { try buttons("light") }
     @MainActor func testShowcaseDarkStreamFenceAndCancellation() throws { try buttons("dark") }
 

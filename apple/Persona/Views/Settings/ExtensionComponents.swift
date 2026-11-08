@@ -452,6 +452,7 @@ struct ExtensionActionButton<Content: View>: View {
     var title: String
     var destructive = false
     var model: any ExtensionViewControlling
+    var values: [String: String] = [:]
     @Binding var link: LinkTarget?
     @ViewBuilder var label: Content
     @State private var asking = false
@@ -474,7 +475,7 @@ struct ExtensionActionButton<Content: View>: View {
     }
 
     private func run() {
-        let execute = model.prepared(action, with: [:], displayed: displayed)
+        let execute = model.prepared(action, with: values, displayed: displayed)
         if model.managesConfirmation && displayed == nil { Keyboard.dismiss() }
         Task {
             // Let the conversation's simultaneous focus-dismiss gesture settle before presenting a native alert.

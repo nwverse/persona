@@ -36790,6 +36790,14 @@
       },
       "extractionState": "manual"
     },
+    "Discard Drafts": {
+      "localizations": {
+        "en": { "stringUnit": { "state": "translated", "value": "Discard Drafts" } },
+        "ja": { "stringUnit": { "state": "translated", "value": "下書きを破棄" } },
+        "zh-Hans": { "stringUnit": { "state": "translated", "value": "放弃草稿" } }
+      },
+      "extractionState": "manual"
+    },
     "Discard Changes": {
       "localizations": {
         "en": {
@@ -127942,6 +127950,14 @@
             "value": "还没验收"
           }
         }
+      },
+      "extractionState": "manual"
+    },
+    "Review drafts · %lld": {
+      "localizations": {
+        "en": { "stringUnit": { "state": "translated", "value": "Review drafts · %lld" } },
+        "ja": { "stringUnit": { "state": "translated", "value": "レビューの下書き · %lld" } },
+        "zh-Hans": { "stringUnit": { "state": "translated", "value": "审阅草稿 · %lld" } }
       },
       "extractionState": "manual"
     },

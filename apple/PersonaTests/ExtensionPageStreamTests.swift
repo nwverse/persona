@@ -22,6 +22,19 @@ import Testing
             let id = request?["request_id"]?.string ?? ""
             emit(#"{"type":"extension_ui_stream","kind":"snapshot","manager":"owner","request_id":"\#(id)","snapshot":{"protocol":1,"session":"session","epoch":"\#(epoch)","version":\#(version),"root_key":"page","view":{"title":"\#(title)","sections":[{"key":"main","items":[{"type":"button","key":"button","title":"Use","action":{"id":"callback","confirm":"Confirm saved action"}}]}]}}}"#)
         }
+        func reviewSnapshot(version: Int64 = 1, present: Bool = true) {
+            var view: [String: Any] = ["title": "Review", "sections": []]
+            if present {
+                view["review"] = ["count": 2, "name": "summary", "buttons": [
+                    ["title": "Approve", "action": ["id": "review-submit", "values": ["event": "approve"]]]
+                ], "discard": ["id": "review-discard", "confirm": "Discard saved drafts?"]]
+            }
+            let frame: [String: Any] = ["type": "extension_ui_stream", "kind": "snapshot", "manager": "owner",
+                "request_id": request?["request_id"]?.string ?? "", "snapshot": [
+                    "protocol": 1, "session": "session", "epoch": "epoch", "version": version,
+                    "root_key": "page", "view": view]]
+            if let data = try? JSONSerialization.data(withJSONObject: frame) { deliver?(data) }
+        }
         func delta(version: Int64 = 2, base: Int64 = 1, epoch: String = "epoch") {
             emit(#"{"type":"extension_ui_stream","kind":"delta","manager":"owner","delta":{"protocol":1,"session":"session","epoch":"\#(epoch)","base_version":\#(base),"version":\#(version),"operations":[]}}"#)
         }
@@ -64,6 +77,46 @@ import Testing
         #expect(socket.request?["context"]?["stream"]?["components"]?.array?.contains(.string("html")) == false)
         socket.snapshot()
         #expect(page.ready && page.tree?.version == 1)
+    }
+
+    @Test func reviewSummarySurvivesUpdatesAndFreezesWithItsOwnActionValues() async throws {
+        let previous = LiveConnection.makeLocal; defer { LiveConnection.makeLocal = previous }
+        let socket = Socket(); LiveConnection.makeLocal = { socket }
+        let connection = LiveConnection(); connection.usesExtensionUIStream = true; connection.connect(.demo)
+        let model = ExtensionViewModel(plugin: "example", ui: "page", context: .here().forPage(),
+            deps: .init(api: { nil }, connection: { connection }))
+        defer { model.cancelConfirmation(); model.stream?.close(); connection.disconnect() }
+        model.setVisible(true); socket.reviewSnapshot()
+        let stream = try #require(model.stream)
+        let review = try #require(model.view?.review)
+        #expect(model.view?.wantsCodePage == true && review.count == 2)
+        model.values[review.name] = "Original summary"
+        socket.delta()
+        #expect(model.values[review.name] == "Original summary")
+        let execute = model.prepared(review.buttons[0].action,
+            with: [review.name: model.values[review.name] ?? ""], displayed: stream.displayedRevision)
+        model.values[review.name] = "Edited after tap"
+        let task = Task { await execute() }
+        for _ in 0..<10 where socket.request?["request"]?.string != "event" { await Task.yield() }
+        let event = try #require(socket.request?["interaction"]?["event_id"]?.string)
+        #expect(socket.request?["interaction"]?["value"]?[review.name] == .string("Original summary"))
+        #expect(socket.request?["interaction"]?["value"]?["event"] == .string("approve"))
+        #expect(socket.request?["interaction"]?["event"] == .string("submit"))
+        socket.receipt(event, version: 3)
+        socket.delta(version: 3, base: 2)
+        #expect(await task.value.toast == "Once")
+        #expect(model.values[review.name] == "Edited after tap")
+        let discard = try #require(review.discard)
+        let cancel = model.prepared(discard, displayed: stream.displayedRevision)
+        let cancelling = Task { await cancel() }
+        for _ in 0..<10 where model.confirmation == nil { await Task.yield() }
+        #expect(model.confirmation?.chosen.isEmpty == true)
+        model.cancelConfirmation()
+        #expect(await cancelling.value.cancelled)
+        #expect(socket.sent.filter { $0["request"]?["request"]?.string == "event" }.count == 1)
+        stream.refresh(); socket.reviewSnapshot(version: 4, present: false)
+        #expect(model.view?.review == nil && model.values[review.name] == nil)
+        #expect(model.view?.wantsCodePage == false)
     }
 
     @Test func receiptWaitsForEmptyFenceAndRetryDoesNotRepeatEffect() async throws {
