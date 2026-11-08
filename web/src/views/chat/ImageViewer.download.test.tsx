@@ -72,7 +72,7 @@ afterEach(async () => {
 });
 
 async function openLoaded(name?: string, src = source) {
-  await act(async () => root.render(<><ImageViewer images={[{ id: "synthetic-image", src, name, mime: "image/png" }]} start={0} onClose={() => {}} /><Toasts /></>));
+  await act(async () => root.render(<><Toasts /><ImageViewer images={[{ id: "synthetic-image", src, name, mime: "image/png" }]} start={0} onClose={() => {}} /></>));
   const image = document.querySelector<HTMLImageElement>('[role="dialog"] img')!;
   expect(image?.getAttribute("src")).toBe(src);
   Object.defineProperties(image, { naturalWidth: { configurable: true, value: 1 }, naturalHeight: { configurable: true, value: 1 } });
@@ -162,10 +162,10 @@ it("does not save a successful response whose body cannot be read", async () => 
 });
 
 it("keeps an in-flight download bound to the image that was requested when navigating", async () => {
-  await act(async () => root.render(<><ImageViewer images={[
+  await act(async () => root.render(<><Toasts /><ImageViewer images={[
     { id: "first", src: source, name: "first.png" },
     { id: "second", src: "/synthetic/second.png", name: "second.png" },
-  ]} start={0} onClose={() => {}} /><Toasts /></>));
+  ]} start={0} onClose={() => {}} /></>));
   let finish!: (response: Response) => void;
   fetchMock.mockReturnValueOnce(new Promise<Response>((resolve) => { finish = resolve; }));
   await clickDownload();
