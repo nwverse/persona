@@ -90,7 +90,8 @@ private struct LiftBlur: ViewModifier {
     var menu: MessageMenu
 
     func body(content: Content) -> some View {
-        content.blur(radius: menu.lift == nil ? 0 : Theme.Lift.blur, opaque: true)
+        // Not opaque: the page's background is behind this view, not in it, and an opaque blur fills what is clear with black.
+        content.blur(radius: menu.lift == nil ? 0 : Theme.Lift.blur)
     }
 }
 
