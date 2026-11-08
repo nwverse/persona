@@ -13,7 +13,8 @@ MOCK_STALE_DONE leaves the long chat idle, so its own animation (a working sessi
 comparison; --base-url serves origin/main's web against the same mock hub (the two shots are seconds apart).
 
 --shots saves wide light / dark (the rail at rest, the hover preview, keyboard focus), the tick a click jumped to, and
-the phone-width chat. Prints one line per check and a verdict; exits 1 on the first failure.
+the phone-width chat; the pixel comparison runs in both themes. Prints one line per check and a verdict; exits 1 on
+the first failure.
 """
 import argparse
 import os
@@ -56,10 +57,15 @@ def wait_for(page, cond, what, timeout=8.0):
 
 
 def open_chat(page, base, token, path, theme="light"):
+    """Opens a chat with the theme set explicitly (the app does not follow the browser's color scheme: index.html reads
+    persona.theme before the first paint), and holds the check that it took — a shot in the wrong theme is worse than
+    a failure here."""
     page.goto(base + "/overview?token=" + token)
     page.wait_for_function("localStorage.getItem('persona.token')")
     page.evaluate(f"localStorage.setItem('persona.theme', '{theme}')")
     page.goto(base + path)
+    dark_wanted = "true" if theme == "dark" else "false"
+    page.wait_for_function(f"document.documentElement.classList.contains('dark') === {dark_wanted}")
     page.wait_for_timeout(900)  # the transcript draws, the chat settles at its end
 
 
@@ -139,7 +145,7 @@ def case(browser, base, token, shots, base_url):
     wait_for(page, lambda: near_top("第 6 个问题"), "a dimmed tick did not jump")
     ok("wide: the rail dims when idle and a dimmed tick still jumps")
 
-    # dark: the same rail over the dark theme
+    # dark: the same rail over the dark theme (rest, hover, keyboard focus)
     open_chat(page, base, token, LONG_CHAT, theme="dark")
     expect(rail(page)).to_have_count(1)
     expect(ticks).to_have_count(QUESTIONS)
@@ -147,7 +153,12 @@ def case(browser, base, token, shots, base_url):
     ticks.nth(1).hover()
     expect(card).to_be_visible()
     shot(page, shots, "rail-wide-dark-hover")
-    ok("wide dark: the rail and its preview draw")
+    ticks.nth(3).click()
+    page.wait_for_timeout(700)
+    page.keyboard.press("Shift+Tab")
+    expect(card).to_contain_text("第 3 个问题")
+    shot(page, shots, "rail-wide-dark-focus")
+    ok("wide dark: the rail, its preview and the focus state draw")
     ctx.close()
 
     # ── a phone-width chat and a short chat draw nothing ──
@@ -164,38 +175,39 @@ def case(browser, base, token, shots, base_url):
         ctx.close()
         # the main conversation's avatar breathes (a liveness signal reduced motion keeps): no pixel comparison there
         if base_url and name != "short-main":
-            compare(browser, base, base_url, token, path, size, name)
+            compare(browser, base, base_url, token, path, size, name, "light")
+            compare(browser, base, base_url, token, path, size, name, "dark")
 
 
-def compare(browser, base, base_url, token, path, size, name):
-    """The same no-rail state from this build and from origin/main, taken seconds apart, is pixel-identical. The shot
-    is of the page (<main>: the chat and its margins, where the rail would be) — the sidebar's animated avatar is
-    outside it and not this change's. Reduced motion and no focus: a working session's own animation (a spinner, a
-    breathing dot) is exempt from reduced motion, so the mock's long chat runs idle (MOCK_STALE_DONE); a minute rolling
-    over between the two shots is covered by taking the pair again once."""
+def compare(browser, base, base_url, token, path, size, name, theme):
+    """The same no-rail state from this build and from origin/main, taken seconds apart, is pixel-identical (light and
+    dark each). The shot is of the page (<main>: the chat and its margins, where the rail would be) — the sidebar's
+    animated avatar is outside it and not this change's. Reduced motion and no focus: a working session's own animation
+    (a spinner, a breathing dot) is exempt from reduced motion, so the mock's long chat runs idle (MOCK_STALE_DONE); a
+    minute rolling over between the two shots is covered by taking the pair again once."""
     tmp = os.path.join("/tmp", "nav-rail-compare")
     os.makedirs(tmp, exist_ok=True)
+    pair = {label: os.path.join(tmp, f"{name}-{theme}-{label}.png") for label in ("base", "next")}
 
     def take(url, label):
         ctx = browser.new_context(viewport=size, device_scale_factor=2, locale="zh-CN", reduced_motion="reduce")
         page = ctx.new_page()
         page.set_default_timeout(10000)
-        open_chat(page, url, token, path)
+        open_chat(page, url, token, path, theme=theme)
         page.evaluate("document.activeElement?.blur()")
         page.wait_for_timeout(200)
-        page.locator("main").screenshot(path=os.path.join(tmp, f"{name}-{label}.png"))
+        page.locator("main").screenshot(path=pair[label])
         ctx.close()
 
-    pair = ("base", "next")
-    take(base_url, pair[0])
-    take(base, pair[1])
+    take(base_url, "base")
+    take(base, "next")
     for _ in (1, 2):
-        if not pixels_differ(os.path.join(tmp, f"{name}-base.png"), os.path.join(tmp, f"{name}-next.png")):
-            ok(f"{name}: pixel-identical to origin/main")
+        if not pixels_differ(pair["base"], pair["next"]):
+            ok(f"{name}/{theme}: pixel-identical to origin/main")
             return
         take(base_url, "base")
         take(base, "next")
-    fail(f"{name}: differs from origin/main (see /tmp/nav-rail-compare/{name}-*.png)")
+    fail(f"{name}/{theme}: differs from origin/main (see {pair['base']} and {pair['next']})")
 
 
 def main():
