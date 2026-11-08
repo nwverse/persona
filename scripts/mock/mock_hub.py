@@ -295,6 +295,7 @@ def mock_workspaces():
 # ---------- node self-check (#2429, docs/server/machines.md "Self-check") ----------
 # GET /api/v1/machines/{mid}/doctor and POST …/doctor/fix: the report `personad node doctor` prints, as the hub relays it.
 #   MOCK_TOKENS=none (a hub without per-machine token usage: no card tokens, the usage route 404s) | empty (nothing ran)
+#               | lopsided (the server ran nearly everything, the others a thousandth as much)
 #   MOCK_DOCTOR=healthy (default) | stale (hooks and MCP files out of date, "Repair" puts them right) | broken (node.sock gone)
 #                | mixed (stale files, the user's own PermissionRequest hook, no runtime.sock) | old (the node has no such method)
 #                | error (the check fails) | slow (the check takes MOCK_DOCTOR_SECONDS, default 3)
@@ -469,7 +470,8 @@ def machine_metrics(mid, span, step):
 
 
 # Token usage by machine (docs/server/machines.md "Token usage", #4973). MOCK_TOKENS=none: a hub before it (the usage route
-# answers 404, the cards have no tokens); =empty: no machine ran anything. The studio's node is an older one (its usage
+# answers 404, the cards have no tokens); =empty: no machine ran anything; =lopsided: the server ran nearly all of it
+# (the Machines page's share bar with minimum-width parts). The studio's node is an older one (its usage
 # names no launcher), the NAS is offline (its monitoring stops 3 hours ago, and so does its usage).
 MOCK_TOKENS = os.environ.get("MOCK_TOKENS", "")
 USAGE_MIX = {  # machine: [(model, launcher, share)]
@@ -491,7 +493,8 @@ def usage_minute(mid, minute):
     h = int(hashlib.md5(f"u{mid}{minute}".encode()).hexdigest()[:6], 16) / 0xFFFFFF
     if h < 0.25 and work < 0.2:
         return []
-    w = work * (0.5 + h) * USAGE_SCALE[mid] * (1.6 if mid == "server" and minute > T0 - 25 * 60 else 1)
+    scale = USAGE_SCALE[mid] * (0.001 if MOCK_TOKENS == "lopsided" and mid != "server" else 1)
+    w = work * (0.5 + h) * scale * (1.6 if mid == "server" and minute > T0 - 25 * 60 else 1)
     out = []
     for model, launcher, share in USAGE_MIX[mid]:
         f = w * share
@@ -1238,7 +1241,41 @@ def tab_panes_items():
     return {PANES_LEAD: [it("user", "text", 15, text="把 token 刷新挪到中间件里，开两个窗格分别审改动和补测试"),
                          it("assistant", "text", 0, text="开了两个窗格分头审改动、补测试，我在合中间件。")],
             PANES_REVIEW: [it("user", "text", 10, text="审一下登录重构的改动"), it("assistant", "text", 1, text="有两处会吞掉错误，要我直接改吗？")],
-            PANES_TESTS: [it("user", "text", 10, text="补刷新失败的测试"), it("assistant", "text", 3, text="补了 6 个用例，都过了。")]}
+            PANES_TESTS: [it("user", "text", 10, text="补刷新失败的测试"), it("assistant", "text", 3, text="补了 6 个用例，都过了。")],
+            PANES_PEER_B: bench_items()}
+
+
+def bench_items():
+    """Read and idle in a tab of three, about two screens (ChatReenterTests reads it to its top, leaves and comes back): a
+    short greeting and its answer, then a turn whose work line folds 12 tool calls, 5 thoughts and 3 replies, ending in
+    a long Markdown answer, so rows' real heights are far from the list's estimates. Items are numbered as they are made."""
+    head = [it("user", "text", 40, text="hi"),
+            it("assistant", "text", 40, text="你好。这个 worktree 在 `feat/cache-bench` 分支上，有三个文件还没提交：\n\n"
+               "- `scripts/bench/run_b.js`\n- `tests/fixtures/cacheBench.json`\n- `tests/cacheBench.test.js`\n\n"
+               "最近一次提交是「准备方案 B 的基准」，这三处应该就是接着那一步做的。要我继续，还是有别的事？"),
+            it("user", "text", 31, text="切回最新主分支，分析一下方案 B 为什么比 A 慢")]
+    work = []
+    for n in range(12):
+        if n % 3 == 0:
+            work.append(it("assistant", "thinking", 30, text=f"先看第 {n // 3 + 1} 组基准的数据，再对比两种方案的读路径。"))
+        if n in (4, 9):
+            work.append(it("assistant", "text", 30, text=f"第 {n // 4} 组数据看完了，接着看序列化的开销。"))
+        work += tool("Bash", {"command": f"node scripts/bench/run_b.js --round {n + 1}"}, f"round {n + 1}: p50 4.{n} ms, p99 9.{n} ms", 30)
+    work.append(it("assistant", "thinking", 29, text="两种方案的命中率一样，差别只在读的时候多了一次序列化。"))
+    answer = ("## 方案 B 慢在哪：每次读都多一次序列化，不是命中率的问题\n\n"
+              "已经确认。两种方案的命中率都在 **97%** 左右，B 的读路径在命中以后还会把值序列化一次再交出去，"
+              "这一步占了多出来的大部分时间。\n\n"
+              "### 发生了什么\n\n"
+              "- **慢了多少**：12 轮里 B 的 p50 平均比 A 高 0.5 ms，p99 高 1.1 ms，换算下来慢 12% 左右。\n"
+              "- **慢在哪**：`readThrough()` 命中以后调用了 `encode()`，A 直接返回缓存里的对象。\n"
+              "- **为什么这样写**：B 想让调用方拿到的值和缓存里的隔开，避免被改坏；A 是靠只读类型做到的。\n"
+              "- **别的开销**：写路径两边一样，过期清理 B 还略快一点，可以忽略。\n\n"
+              "### 建议\n\n"
+              "1. B 也换成只读类型，去掉命中后的 `encode()`，预计能追平 A。\n"
+              "2. 基准里加一组大对象的数据，序列化的差别在大对象上会更明显。\n"
+              "3. 两种方案的内存占用还没比，下一步补上。\n\n"
+              "要我先改第 1 条，还是先把大对象的基准补上？")
+    return head + work + [it("assistant", "text", 29, text=answer)]
 
 
 if os.environ.get("MOCK_TAB_PANES"):
@@ -2052,7 +2089,7 @@ MANAGERS = {"list": _managers_seed(), "default": "assistant"}
 # with `manager`, and computers, sessions and cards carry their computer's, with one manager too (MOCK_MANAGERS=1: all
 # the hub's own). 工作 has the MacBook, an inbox item and the second extension; 家里 (offline) a mail and the third
 # extension, and with MOCK_MANAGER_NAS=1 the NAS. A hub from before the roster (MOCK_MANAGERS=0) stamps nothing.
-# A computer of an offline manager is offline with the hub's words for it (devices_link.go offlineLocal): so 家里 has
+# A computer of an offline manager is offline with the hub's words for it (devices_reports.go offlineLocal): so 家里 has
 # none by default, and the computers the other screenshots count stay as they were.
 MANAGED_MACHINES = {"macbook": "m-3fa21c", **({"nas": "m-8b04d2"} if os.environ.get("MOCK_MANAGER_NAS") == "1" else {})}
 # With the NAS 家里's, the agent it had: the hub keeps an offline manager's sessions, in state unknown (stamp_row).
@@ -2105,9 +2142,9 @@ def inbox_owner(item_id):
 
 
 def merged_by_manager(items):
-    """A merged list as the hub writes it (ownership.go mergeList): the default's answer first, then each other installed
-    manager's (by id; an offline one's kept answer too), every item stamped. Each answer has the built-ins and that
-    manager's own ones."""
+    """A merged list as the hub writes it (ownership_lists.go mergeList): the default's answer first, then each other
+    installed manager's (by id; an offline one's kept answer too), every item stamped. Each answer has the built-ins
+    and that manager's own ones."""
     dflt = MANAGERS["default"]
     installed = sorted(m["id"] for m in MANAGERS["list"] if not m.get("installing"))
     order = [dflt] + [m for m in installed if m != dflt]
@@ -2485,7 +2522,9 @@ def long_tool(name, inp, whole, ts_min):
     items = tool(name, inp, "", ts_min)
     data = whole.encode()
     end = data.rfind(b"\n", 0, 4096)
-    items[1]["text"] = data[:end].decode() + "\n…（已截断，点开看全文，共 %d 字节）" % len(data)
+    if end < 0:  # one long line (a tool's JSON): its first 4 KB, a character cut in half dropped
+        end = 4096
+    items[1]["text"] = data[:end].decode(errors="ignore") + "\n…（已截断，点开看全文，共 %d 字节）" % len(data)
     items[1]["full_size"] = len(data)
     FULL[items[1]["id"]] = {k: v for k, v in items[1].items() if k != "full_size"} | {"text": whole}
     return items
@@ -3557,6 +3596,55 @@ if os.environ.get("MOCK_ASSISTANT_CARDS"):
         {"id": "ix_assistant_send", "machine_id": "server", "session_id": ASK1, "session_title": "Persona",
          "kind": "permission", "created_at": ago(minutes=1), "expires_at": later(minutes=14),
          "tool_name": "mail_send", "tool_input": {"to": "me@example.com"}, "summary": "给 me@example.com 发一封邮件"})
+
+# MOCK_SECRET_RUN=pending|ran|withheld|long: the password card (secret_run, #1137) in Persona's main conversation.
+# `pending`: the assistant asked to run two commands on the Mac Studio, its call waits and the card asks for the
+# password; `ran`: the card was answered, the call's result (the tool's JSON) says every command exited 0, and no card is
+# left; `withheld`: the same, but the first command's output held the password, so none of it came back; `long`: the
+# second command failed with a long output, so the page carries only the result's start (its whole text at
+# GET …/items/{id}/full) and the app reads the whole text to show the outcome.
+SECRET_RUN_INPUT = {
+    "machine": "studio", "machine_name": "Mac Studio", "delivery": "stdin",
+    "purpose": "把备份任务装成系统 launch daemon，每天凌晨 3 点自动备份文稿",
+    "commands": ["sudo -S -k -p '' cp -v ~/backup/com.example.backup.plist /Library/LaunchDaemons/",
+                 "sudo -S -k -p '' launchctl bootstrap system /Library/LaunchDaemons/com.example.backup.plist"]}
+if os.environ.get("MOCK_SECRET_RUN") in ("pending", "ran", "withheld", "long"):
+    ITEMS[ASK1] = ITEMS[ASK1] + [
+        it("user", "text", 2, text="在 Mac Studio 上把备份任务装成 launch daemon，每天凌晨 3 点跑"),
+        it("assistant", "text", 1.5, text="要装到系统目录，需要 Mac Studio 的管理员密码。要跑的命令都在卡片里，确认后在卡片里填密码，我这边看不到它。")]
+    if os.environ["MOCK_SECRET_RUN"] == "pending":
+        ITEMS[ASK1].append(it("assistant", "tool_use", 1, tool_use_id="toolu_secret_run", tool_name="mcp__persona__secret_run",
+                              tool_input=SECRET_RUN_INPUT))
+        INTERACTIONS.append(
+            {"id": "ix_secret_run", "machine_id": "server", "session_id": ASK1, "session_title": "Persona",
+             "kind": "permission", "created_at": ago(minutes=1), "expires_at": later(minutes=9),
+             "tool_name": "secret_run", "tool_use_id": "toolu_secret_run", "tool_input": SECRET_RUN_INPUT,
+             "summary": "在 Mac Studio 上运行（%s）：\n" % SECRET_RUN_INPUT["purpose"]
+                        + "\n".join("$ " + c for c in SECRET_RUN_INPUT["commands"]),
+             "fields": [{"key": "password", "label": "密码", "placeholder": "只用这一次，不会保存", "secret": True}]})
+    elif os.environ["MOCK_SECRET_RUN"] in ("ran", "withheld"):
+        _withheld = os.environ["MOCK_SECRET_RUN"] == "withheld"
+        _copied = "" if _withheld else "/Users/me/backup/com.example.backup.plist -> /Library/LaunchDaemons/com.example.backup.plist\n"
+        ITEMS[ASK1] = ITEMS[ASK1] + tool("mcp__persona__secret_run", SECRET_RUN_INPUT, json.dumps({
+            "status": "ran", "machine": "Mac Studio",
+            "message": "Ran 2 commands on Mac Studio with the password the user typed; the password was used once and discarded.",
+            "results": [{"command": c, "exit_code": 0, "output": out, "timed_out": False, "truncated": False, "output_withheld": hold}
+                        for c, out, hold in zip(SECRET_RUN_INPUT["commands"], [_copied, ""], [_withheld, False])]},
+            ensure_ascii=False), 1) + [
+            it("assistant", "text", 0.5, text="装好了：备份任务已经注册成系统 launch daemon，每天凌晨 3 点运行。两条命令都成功了，密码只用了这一次。")]
+    else:
+        _copied = "/Users/me/backup/com.example.backup.plist -> /Library/LaunchDaemons/com.example.backup.plist\n"
+        _log = "".join("%02d:%02d launchd: com.example.backup: retrying the job's bootstrap (attempt %d)\n" % (3, n % 60, n)
+                       for n in range(1, 51)) + "Bootstrap failed: 5: Input/output error\n"
+        ITEMS[ASK1] = ITEMS[ASK1] + long_tool("mcp__persona__secret_run", SECRET_RUN_INPUT, json.dumps({
+            "status": "failed", "machine": "Mac Studio",
+            "message": "Command 2 of 2 on Mac Studio exited with 5; the password was used once and discarded.",
+            "results": [{"command": SECRET_RUN_INPUT["commands"][0], "exit_code": 0, "output": _copied, "timed_out": False,
+                         "truncated": False, "output_withheld": False},
+                        {"command": SECRET_RUN_INPUT["commands"][1], "exit_code": 5, "output": _log, "timed_out": False,
+                         "truncated": True, "output_withheld": False}]},
+            ensure_ascii=False), 1) + [
+            it("assistant", "text", 0.5, text="第二条命令失败了（退出码 5）：launchd 没能加载这个任务。我先看看 plist 的权限再告诉你。")]
 
 # MOCK_SCREEN_DIALOG=1: a terminal dialog (screen interaction) as a newer hub reads it; MOCK_PROMPT_CHANGED=1 makes
 # answering it fail as if the dialog changed on the computer (409 prompt_changed).
@@ -6639,7 +6727,7 @@ LAUNCHERS = [
     # its codex is from its last list (stale).
     {"name": "codex", "source": "zshrc", "model": "默认", "machines": ["server", "studio"], "rc_files": ["~/.bashrc", "~/.zshrc"], "stale": ["studio"]},
     {"name": "cc_bash", "source": "zshrc", "base_url": "https://relay.example.net", "model": "example-pro", "machines": ["server"], "rc_files": ["~/.bashrc"]},
-    # Plain claude on every machine that has it (GET /api/v1/launchers, server/internal/assistant/models_launchers.go builtinClaude).
+    # Plain claude on every machine that has it (GET /api/v1/launchers, server/internal/assistant/models_launchers_list.go builtinClaude).
     {"name": "claude", "source": "builtin", "machines": ["server", "macbook", "studio"], "stale": ["studio"],
      "versions": {"server": "2.1.200", "macbook": "2.1.206", "studio": "2.1.190"}},
 ]
