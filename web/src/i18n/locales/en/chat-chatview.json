@@ -45,6 +45,7 @@
   "attach": "Live link",
   "terminal": "Terminal",
   "files": "Files",
+  "review_changes": "Review changes",
   "interrupt": "Interrupt",
   "session_info": "Session info",
   "rename": "Rename…",

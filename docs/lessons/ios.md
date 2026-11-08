@@ -310,6 +310,10 @@ Use an invalidation revision as the task key and handle the flag after completio
   Supply dark / light appearance (copy shell window `overrideUserInterfaceStyle`; later `ColorSchemeChoice` updates all scene windows), `app` text size
   (`textSize.applied(to:)`; a new window otherwise follows only system), `AppModel` and BeautifulUI theme. VoiceOver will not move to a non-touch window; announce through `AccessibilityNotification.Announcement`.
   XCUITest still finds it in the `app` tree. Place it below the shell header, not at the status bar where it covers segments (`ShellNavigationClearance.needed(at:)`).
+- The tabs (Old Layout, iPad) kept the toast in `RootView`'s overlay after the shell moved to `ToastWindow`, so every toast raised from a
+  `fullScreenCover` or sheet was drawn under it: Saved to Photos from the image viewer and the share card never showed (#1492). `PhotoSaveTests`
+  passed all along, because XCUITest finds a covered toast's words. A test that a toast is seen compares the pixels where it is with and without it
+  (`PhotoSaveTests.expectDrawn`). Now the tabs get a toast window too (`ToastWindowHook`); the overlay is left only where no such window exists.
 - Both new-shell pages remain mounted, the hidden one only opacity-hidden; UIKit glass buttons and lists stay in accessibility, with identical switcher ids.
   `exists` / `isHittable` / `firstMatch` cannot identify the drawn page; inspect pixels (`ShellSwitchTests.agentsDrawn`) and select the tappable switcher.
 - Pushing from active `.searchable` forces the navigation bar visible (double chat titles); closing search after pushing does not help.
