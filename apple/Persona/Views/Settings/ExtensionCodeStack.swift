@@ -254,8 +254,9 @@ struct CodeBlockStack: View {
 
     private func inlineThread(id: String, _ t: ExtensionThread) -> some View {
         VStack(alignment: .leading, spacing: Theme.Space.s) {
-            if t.outdated == true || t.resolved == true {
+            if t.pending == true || t.outdated == true || t.resolved == true {
                 HStack(spacing: Theme.Space.s) {
+                    if t.pending == true { Chip(text: String(localized: "Draft"), look: .neutral).lineLimit(1) }
                     if t.outdated == true { Chip(text: String(localized: "Outdated [Extension Code Stack 1148b6]"), look: .neutral).lineLimit(1) }
                     if t.resolved == true { Chip(text: String(localized: "Resolved"), look: .tint(Theme.positive)).lineLimit(1) }
                 }

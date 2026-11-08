@@ -84,6 +84,8 @@ Declare v5 specifically on native full-page opens, alongside the actual supporte
 
 A positive native commit is not proof that every root-level control is rendered. The first v5 screenshots exposed an omitted `View.review`: the older HTTP fit had lowered it into ordinary components, masking the missing native bar. Mount the review bar outside the scrolling code content, preserve its named summary across native updates, and submit through the same frozen-action/confirmation path. Verify its visibility and actual submit/discard fences before accepting the full screenshot matrix.
 
+A notification prompt's body also contains “icon”/“图标标记”. Classifying icon prompts first selected their OK button for the notification prompt, so no button matched and four real UI cases stayed inactive. Recognize the known notification prompt before the icon message, still requiring the tested app's brand and SpringBoard owner. Keep each failed route's diagnostic image distinct; never acknowledge an extension's own confirmation automatically.
+
 ## Evidence boundaries
 
 Unit tests use canonical valid/invalid fixtures and exact fence traces. Actual UI tests assert committed stream revisions, not just a loaded page that might be HTTP fallback. Screenshots contain synthetic data only; GUI captures are limited to the App window without other windows/desktop content. Clearly label offscreen rendering as such.

@@ -24,7 +24,7 @@ final class ExtensionStreamUITests: XCTestCase {
         let waiting = app.descendants(matching: .any)["extension-ui-waiting"].firstMatch
         let value = ready.exists ? (ready.value ?? "none") : (waiting.exists ? (waiting.value ?? "none") : "no page")
         if !committed {
-            try shot(app, name: "diagnostic-inactive-" + appearance)
+            try shot(app, name: "diagnostic-inactive-" + appearance + "-" + ui)
             #if os(iOS)
             let springboard = XCUIApplication(bundleIdentifier: "com.apple.springboard")
             XCTFail("No active committed native tree: \(value)\n" + springboard.debugDescription + "\n" + app.debugDescription)
@@ -58,8 +58,8 @@ final class ExtensionStreamUITests: XCTestCase {
             // Only acknowledge UIKit's icon-change message or this test app's notification prompt.
             // Never automatically answer an extension's saved-action confirmation.
             let titles: [String]
-            if alert.staticTexts.matching(icon).firstMatch.exists { titles = ["好", "OK", "了解"] }
-            else if alert.staticTexts.matching(notifications).firstMatch.exists { titles = ["允许", "Allow"] }
+            if alert.staticTexts.matching(notifications).firstMatch.exists { titles = ["允许", "Allow"] }
+            else if alert.staticTexts.matching(icon).firstMatch.exists { titles = ["好", "OK", "了解"] }
             else { continue }
             for title in titles where alert.buttons[title].exists { alert.buttons[title].tap(); return }
         }
@@ -160,6 +160,9 @@ final class ExtensionStreamUITests: XCTestCase {
 
     @MainActor private func reviewBar(_ appearance: String) throws {
         let app = try launch(appearance, ui: "code-review-v5"); defer { app.terminate() }
+        let main = app.buttons["code-open-main"]
+        if main.exists { main.tap() }
+        XCTAssertTrue(app.staticTexts["草稿"].waitForExistence(timeout: 10), app.debugDescription)
         let toggle = app.buttons["extension-review-toggle"]
         XCTAssertTrue(toggle.waitForExistence(timeout: 10), app.debugDescription)
         let summary = app.descendants(matching: .any)["extension-review-summary"].firstMatch
