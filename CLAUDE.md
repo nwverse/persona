@@ -19,7 +19,7 @@ uses Persona. Registered app identities (bundle IDs, App Groups, keychain groups
 ### Workflow
 
 - **Every change goes issue → claim → branch → PR → merge after CI passes** ("Development workflow" below). Code, docs and config alike;
-  never commit or push to master directly.
+  never commit or push to `main` directly.
 - **TestFlight feedback**: issues from crash reports or testers' feedback get the `testflight` label (or a `[TestFlight]` title prefix),
   with a scrubbed body and a dedupe marker (`docs/operations/collaboration.md`, "TestFlight feedback").
 - **Write lessons down as you go**: pitfalls into `docs/lessons/<topic>.md` (index `docs/lessons/README.md`), design trade-offs into the
@@ -50,7 +50,7 @@ This is a public open-source repository; everyone and every Agent maintains it t
 ### Language
 
 - **English for everything people read in the repository**: code comments, docs, commits, PR titles and bodies (a squash merge makes them
-  the commit on master), issues and comments. Natural, concise English, not word-for-word translation. `docs/` is English only.
+  the commit on `main`), issues and comments. Natural, concise English, not word-for-word translation. `docs/` is English only.
 - **The README is bilingual**: `README.md` and `README.zh-CN.md` carry the same content and change in the same PR; their images come from
   `scripts/assets/make_readme_assets.py` in both languages.
 - **User-facing text always goes through localization resources** (`docs/protocol/i18n.md`): Apple `apple/Shared/Localization/Localizable.xcstrings`,
@@ -96,7 +96,7 @@ People and Agents follow the same steps, each with their own GitHub account. Tem
    using the config's machine id, never the host name. The author of the latest claim owns the work; nobody is assigned.
 4. **Claimed by someone else**: if the owner updated it in the last 24 hours, leave it alone (adding information is fine). After 24 hours
    without an update, comment `Take over:` with the reason. Renew your own claim with `Progress:`.
-5. **Work on your own branch / worktree** named with the issue number (`fix/123-xxx`). Bring it up to date by merging `origin/master`
+5. **Work on your own branch / worktree** named with the issue number (`fix/123-xxx`). Bring it up to date by merging `origin/main`
    (preferred over a rebase; never force-push). Giving up: comment `Abandon:` with how far you got.
 6. **Open one PR per issue**, in English, with `Fixes #N` / `Closes #N` (or `Refs #N` to link without closing) in the body.
    `.github/workflows/pr-needs-issue.yml` closes PRs that link no issue and reopens them once the link is added.
@@ -126,8 +126,8 @@ People and Agents follow the same steps, each with their own GitHub account. Tem
 
 The full list is in `docs/lessons/`; read the file for the area you touch first.
 
-- **Several Agents share this repository**: work in your own worktree from `origin/master`, stage only your files, and check that
-  `git diff origin/master...HEAD --stat` lists only them before pushing. Use your own simulator and mock hub port (check with `lsof`; stop a
+- **Several Agents share this repository**: work in your own worktree from `origin/main`, stage only your files, and check that
+  `git diff origin/main...HEAD --stat` lists only them before pushing. Use your own simulator and mock hub port (check with `lsof`; stop a
   mock by its port, never `pkill -f mock_hub.py`). Look at every worktree before picking a database migration number (`docs/lessons/workflow.md`).
 - Scripts that wait for background jobs or logs always have a timeout and end with a one-line verdict on success, failure and timeout.
 - **Simulators only through `scripts/app/sim-boot.sh`** (`--profile default|watch|live-activity|stock`, slimmed by default); never

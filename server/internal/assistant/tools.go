@@ -28,7 +28,7 @@ import (
 // toolNames are the tools only assistant conversations get; their descriptions and schemas are in prompts/mcp
 // (docs/assistant/prompts.md).
 var toolNames = []string{"ask_user", "notify_user", "schedule_followup", "schedule_routine", "delete_routine", "list_followups",
-	"cancel_followup", "agents_list", "agent_read", "agent_send", "agent_interrupt", "agent_start", "agent_supervise", "interaction_answer", "inbox_suggest", "inbox_draft",
+	"cancel_followup", "agents_list", "agent_read", "agent_send", "agent_interrupt", "agent_start", "agent_supervise", "agent_archive", "agent_unarchive", "interaction_answer", "inbox_suggest", "inbox_draft",
 	"kb_search", "kb_list", "kb_get", "kb_update", "persona_settings",
 	"model_profiles_list", "model_profile_get", "model_profile_switch", "model_profile_rollback",
 	"conversations_list", "conversation_read", "conversation_rename", "conversation_archive", "conversation_unarchive",
@@ -235,6 +235,8 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 		return s.toolAgentInterrupt(ctx, machine, self, args) // agent_control.go
 	case "agent_supervise":
 		return s.toolAgentSupervise(ctx, self, args)
+	case "agent_archive", "agent_unarchive":
+		return s.toolAgentArchive(ctx, machine, self, args, name == "agent_archive") // agent_archive_tools.go
 	case "agent_start":
 		var a struct {
 			Machine  string `json:"machine"`
@@ -721,8 +723,13 @@ func (s *Service) describeAgents(ctx context.Context, state, machine, query stri
 			if c.Assistant {
 				continue
 			}
+			// Archived ones are out of the apps' lists: only "archived" lists them, and "all" with them marked.
 			switch state {
 			case "all":
+			case "archived":
+				if !c.Archived {
+					continue
+				}
 			case "active":
 				if c.State != proto.StateNeedsYou && c.State != proto.StateWorking && c.State != proto.StateUnread && !c.AwaitsReply {
 					continue // a seen one still asking the user is active too (#5096)
@@ -731,6 +738,9 @@ func (s *Service) describeAgents(ctx context.Context, state, machine, query stri
 				if c.State != state {
 					continue
 				}
+			}
+			if c.Archived && state != "all" && state != "archived" {
+				continue
 			}
 			if query != "" {
 				hay := strings.ToLower(c.Title + " " + c.Cwd + " " + c.SpaceName + " " + c.SlotName)
@@ -764,6 +774,9 @@ func (s *Service) describeAgents(ctx context.Context, state, machine, query stri
 			if c.Capabilities == nil || !c.Capabilities.Send {
 				fmt.Fprintf(&b, " · 仅查看：%s", c.ReadOnlyReason)
 			}
+		}
+		if c.Archived {
+			b.WriteString(" · archived")
 		}
 		if !c.UpdatedAt.IsZero() {
 			fmt.Fprintf(&b, " · %s", ago(c.UpdatedAt))

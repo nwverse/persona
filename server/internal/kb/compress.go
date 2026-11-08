@@ -34,6 +34,26 @@ const (
 	compressRetryMax = 6 * time.Hour
 )
 
+// retryWait is how long work waits after its failures-th failure in a row: compressRetry, doubled per further failure,
+// at most compressRetryMax. A project whose rewrite fails waits the same (RefreshProjects).
+func retryWait(failures int) time.Duration {
+	if n := failures - 1; n >= 0 && n < 16 {
+		return min(compressRetry<<n, compressRetryMax)
+	}
+	if failures <= 0 {
+		return compressRetry
+	}
+	return compressRetryMax
+}
+
+// projectRetry is a project whose rewrite failed: how many times in a row, and when it may be tried again. Kept in the
+// engine's memory, not in the project's file: PutProject would bump its Updated time and tell the clients about a
+// change that is not one, and after a restart one more try is cheap.
+type projectRetry struct {
+	failures int
+	at       time.Time
+}
+
 var importanceRe = regexp.MustCompile(`^P[0-3]$`)
 
 type chatDigest struct {
@@ -84,6 +104,8 @@ func (e *Engine) compressFailed(ctx context.Context, c *Chat, err error) error {
 	if ai.IsPaused(err) || ctx.Err() != nil {
 		return err
 	}
+	e.Store.chatMu.Lock() // read and written whole: what archiving or a history import wrote meanwhile stays
+	defer e.Store.chatMu.Unlock()
 	current, ok := e.Store.Chat(c.ID) // archiving may have added messages while the model was called
 	if !ok {
 		return err
@@ -100,15 +122,30 @@ func (e *Engine) compressFailed(ctx context.Context, c *Chat, err error) error {
 		return fmt.Errorf("%w: skipped its messages up to %s", err, c.LastAt.UTC().Format(time.RFC3339))
 	}
 	current.CompressFailures++
-	wait := compressRetryMax
-	if n := current.CompressFailures - 1; n < 16 {
-		wait = min(compressRetry<<n, compressRetryMax)
-	}
+	wait := retryWait(current.CompressFailures)
 	current.CompressRetryAt = time.Now().Add(wait)
 	if perr := e.Store.PutChat(current); perr != nil {
 		return perr
 	}
 	return fmt.Errorf("%w (failed %d time(s) in a row, next try in %s)", err, current.CompressFailures, wait)
+}
+
+// putCompressed writes what compression decided for c: the chat is read again under chatMu and only set changes it,
+// so the messages, people and history mode that archiving or a history import (WriteHistory) wrote while the model
+// was called stay. c gets the chat as written. A chat forgotten meanwhile is not written back (false).
+func (e *Engine) putCompressed(c *Chat, set func(cur *Chat)) (bool, error) {
+	e.Store.chatMu.Lock()
+	defer e.Store.chatMu.Unlock()
+	cur, ok := e.Store.Chat(c.ID)
+	if !ok {
+		return false, nil
+	}
+	set(cur)
+	if err := e.Store.PutChat(cur); err != nil {
+		return false, err
+	}
+	*c = *cur
+	return true, nil
 }
 
 // Compress folds a chat's new messages into its summary and tags, then evolves the projects and people it mentions.
@@ -133,8 +170,8 @@ func (e *Engine) Compress(ctx context.Context, c *Chat) error {
 	}
 	news := e.Store.Since(c.ID, from, compressInput)
 	if strings.TrimSpace(news) == "" {
-		c.Pending = 0
-		return e.Store.PutChat(c)
+		_, err := e.putCompressed(c, func(cur *Chat) { cur.Pending = 0 })
+		return err
 	}
 	in := prompts.RenderKBCompressInput(prompts.KBCompressInput{Name: c.Name, Kind: c.Kind, Automated: c.Kind == "mail" && !HasPeople(c),
 		Pinned: c.Pinned, People: e.pinnedPeople(c.People), Projects: e.knownProjects(), Tags: e.TopTags(40), Summary: e.Store.Summary(KindChat, c.ID), News: news})
@@ -148,6 +185,7 @@ func (e *Engine) Compress(ctx context.Context, c *Chat) error {
 	if _, ok := e.Store.Chat(c.ID); !ok { // forgotten while the model wrote (ForgetSource): not written back
 		return nil
 	}
+	started := *c // the chat as the model read it; c gets what compression decides, and only that is written back
 	now := time.Now().UTC()
 	if strings.TrimSpace(d.Summary) != "" {
 		if err := e.Store.PutSummary(KindChat, c.ID, "# "+c.Name+"\n\n"+d.Summary); err != nil {
@@ -165,12 +203,20 @@ func (e *Engine) Compress(ctx context.Context, c *Chat) error {
 	for _, p := range d.People {
 		e.notePersonNote(c, p.Name, p.Note)
 	}
-	c.Pending = 0
-	c.CompressedAt = now
-	c.CoveredUntil = c.LastAt.Add(time.Minute)
-	c.TagRev = tagRev
-	c.CompressFailures, c.CompressRetryAt = 0, time.Time{}
-	if err := e.Store.PutChat(c); err != nil {
+	written, err := e.putCompressed(c, func(cur *Chat) {
+		cur.Tagging, cur.OneLine, cur.TagRev = c.Tagging, c.OneLine, tagRev
+		for _, slug := range c.Projects {
+			cur.Projects = addUnique(cur.Projects, slug)
+		}
+		// Messages archived while the model wrote are after what it covered: they stay pending.
+		if !cur.LastAt.After(started.LastAt) {
+			cur.Pending = 0
+		}
+		cur.CompressedAt = now
+		cur.CoveredUntil = started.LastAt.Add(time.Minute)
+		cur.CompressFailures, cur.CompressRetryAt = 0, time.Time{}
+	})
+	if err != nil || !written {
 		return err
 	}
 	e.index(KindChat, c.ID, c.Name, c.Tagging, c.OneLine, c.LastAt)
@@ -264,9 +310,11 @@ func (e *Engine) RetagMail() int {
 		if c.Kind != "mail" || c.Mine || c.Locked || c.TagRev >= tagRev || c.CompressedAt.IsZero() {
 			continue
 		}
-		c.CoveredUntil = time.Time{} // read its messages again; the old summary goes in as context
-		c.Pending = max(c.Pending, 1)
-		if e.Store.PutChat(c) == nil {
+		written, err := e.putCompressed(c, func(cur *Chat) {
+			cur.CoveredUntil = time.Time{} // read its messages again; the old summary goes in as context
+			cur.Pending = max(cur.Pending, 1)
+		})
+		if written && err == nil {
 			n++
 		}
 	}
@@ -638,15 +686,29 @@ type projectDigest struct {
 	Keywords   []string `json:"keywords"`
 }
 
-// RefreshProjects rewrites the summaries of projects with news, at most max per run.
+// RefreshProjects rewrites the summaries of projects with news, at most max per run. A project whose rewrite failed
+// waits like a chat whose compression failed (retryWait), so a model that keeps failing (2026-11-08: a model name the
+// endpoint did not serve, 404 every two minutes) does not cost a call and a log line every round. Only the knowledge
+// base loop calls it.
 func (e *Engine) RefreshProjects(ctx context.Context, max int) int {
 	if e.Model == nil {
 		return 0
 	}
+	now := time.Now()
 	var dirty []*Project
+	live := map[string]bool{}
 	for _, p := range e.Store.Projects() {
 		if p.Dirty && p.Status != "ignored" && p.Live() {
+			live[p.Slug] = true
+			if now.Before(e.projectRetries[p.Slug].at) {
+				continue
+			}
 			dirty = append(dirty, p)
+		}
+	}
+	for slug := range e.projectRetries { // done, merged or gone in the meantime
+		if !live[slug] {
+			delete(e.projectRetries, slug)
 		}
 	}
 	sort.Slice(dirty, func(i, j int) bool { return dirty[i].Relevance > dirty[j].Relevance })
@@ -656,12 +718,21 @@ func (e *Engine) RefreshProjects(ctx context.Context, max int) int {
 			break
 		}
 		if err := e.refreshProject(ctx, p); err != nil {
-			if ai.IsPaused(err) { // the model's connection is held: the rest wait with it (still dirty)
+			if ai.IsPaused(err) || ctx.Err() != nil { // the connection is held or the run ended: the rest wait (still dirty)
 				break
 			}
-			e.logf("project %s: %v", p.Slug, err)
+			if e.projectRetries == nil {
+				e.projectRetries = map[string]projectRetry{}
+			}
+			r := e.projectRetries[p.Slug]
+			r.failures++
+			wait := retryWait(r.failures)
+			r.at = time.Now().Add(wait)
+			e.projectRetries[p.Slug] = r
+			e.logf("project %s: %v (failed %d time(s) in a row, next try in %s)", p.Slug, err, r.failures, wait)
 			continue
 		}
+		delete(e.projectRetries, p.Slug)
 		n++
 	}
 	return n
