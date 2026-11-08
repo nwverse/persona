@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="settings_background_title">Background diagnostics</string>
+    <string name="settings_background_copy">Copy background diagnostics</string>
+    <string name="settings_background_copied">Background diagnostics copied</string>
+    <string name="settings_background_app_version">App version</string>
+    <string name="settings_background_android">Android version</string>
+    <string name="settings_background_manufacturer">Manufacturer</string>
+    <string name="settings_background_model">Model</string>
+    <string name="settings_background_battery">Battery optimization exemption</string>
+    <string name="settings_background_exempt">Exempt</string>
+    <string name="settings_background_not_exempt">Not exempt</string>
+    <string name="settings_background_restriction">System background restriction</string>
+    <string name="settings_background_restricted">Restricted</string>
+    <string name="settings_background_not_restricted">Not restricted by this system setting</string>
+    <string name="settings_background_history">Recent main process exits</string>
+    <string name="settings_background_history_count">%1$d system records</string>
+    <string name="settings_background_no_history">Not obtained: no main-process exit in the recent system records</string>
+    <string name="settings_background_unavailable">Not obtained: unable to read</string>
+    <string name="settings_background_exit">Exit record %1$d</string>
+    <string name="settings_background_note">Local main-process records only, with no chat or connection details. They do not establish the cause of the current disappearance. Reason 10 cannot identify the exact action; before Android 14 it could also include app updates. PSS/RSS are sampled values; zero may mean no sample was taken.</string>
+    <string name="settings_background_reason_self">Process exited itself</string>
+    <string name="settings_background_reason_signal">Terminated by a signal</string>
+    <string name="settings_background_reason_memory">System reported low memory</string>
+    <string name="settings_background_reason_crash">App crash</string>
+    <string name="settings_background_reason_native">Native crash</string>
+    <string name="settings_background_reason_anr">App not responding (ANR)</string>
+    <string name="settings_background_reason_initialization">Initialization failure</string>
+    <string name="settings_background_reason_permission">Permission change</string>
+    <string name="settings_background_reason_resource">Excessive resource usage</string>
+    <string name="settings_background_reason_requested">User action or task removal; the exact action cannot be determined</string>
+    <string name="settings_background_reason_user_stopped">The Android user was stopped (multi-user device)</string>
+    <string name="settings_background_reason_dependency">A dependent process died</string>
+    <string name="settings_background_reason_freezer">System process-freezer termination</string>
+    <string name="settings_background_reason_package_state">App or component state changed</string>
+    <string name="settings_background_reason_update">App updated</string>
+    <string name="settings_background_reason_other">Other system-reported reason</string>
+    <string name="settings_background_reason_unknown">Unknown or unrecognized system reason</string>
+</resources>

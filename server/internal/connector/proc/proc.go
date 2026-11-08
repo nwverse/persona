@@ -80,6 +80,11 @@ type Config struct {
 	// GhToken, when set, answers the program's credentials.gh_token: a computer's gh login. The hub sets it only for
 	// an extension it granted gh_login (docs/extensions/extensions.md "Permissions"); nil refuses.
 	GhToken func(ctx context.Context, machine, host string) (string, error)
+	// RecallNotBefore, when set, is when this install of the extension began (extension.Record.InstalledAt): a send the
+	// ledger wrote before it was not this extension's (an earlier one with the connector's id, since uninstalled), so
+	// Recall does not offer it to the program. Zero: no such limit (built-in and hub.json extensions, which are never
+	// replaced by another under the same id).
+	RecallNotBefore time.Time
 }
 
 // Restarts of the program after it exits: doubling from the first to the last, back to the first once it ran a while.

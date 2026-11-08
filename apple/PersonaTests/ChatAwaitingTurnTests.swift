@@ -93,4 +93,49 @@ struct ChatAwaitingTurnTests {
         #expect(ChatAwaitingTurn.of(pending: both, last: before.last, status: .idle, failedSince: nil, now: now) == .sending)
         #expect(ChatAwaitingTurn.deadline(pending: both, last: before.last) == now.addingTimeInterval(-5 + ChatAwaitingTurn.window))
     }
+
+    /// The hub's working is for a message still on its way when the session went to work after it was written (within
+    /// a minute); a message sent while the agent was already at work joins the running turn, whose work line stays.
+    private func forPending(_ pending: [PendingMessage], _ status: SessionStatus = .working, since: Date?,
+                            newest: Date? = nil) -> Bool {
+        ChatAwaitingTurn.workIsForPending(pending, status: status, stateSince: since, newestLine: newest)
+    }
+
+    @Test func workThatStartedAfterAPendingMessageIsThatMessages() {
+        // sent 3 s ago, at work for 1 s: the agent took it in
+        let working = now.addingTimeInterval(-1)
+        #expect(forPending(sending(3), since: working))
+        #expect(forPending(sending(3, .sending), .blocked, since: working))
+        // at work since before it was sent: the turn running then goes on, the message joins it
+        #expect(!forPending(sending(3), since: now.addingTimeInterval(-30)))
+        // not at work, or no time for either
+        for status in [SessionStatus.idle, .done, .unknown, .offline] {
+            #expect(!forPending(sending(3), status, since: working))
+        }
+        #expect(!forPending(sending(3), since: nil))
+        var untimed = sending(3)
+        untimed[0].createdAt = nil
+        #expect(!forPending(untimed, since: working))
+        // waiting for the network or failed: not on its way; none at all: nothing to yield to
+        #expect(!forPending(sending(3, .waiting), since: working))
+        #expect(!forPending(sending(3, .failed), since: working))
+        #expect(!forPending([], since: working))
+        // work that began over a minute after it (a stuck bubble, the next turn started on the computer)
+        #expect(!forPending(sending(70), since: working))
+        // a stuck bubble next to a fresh one: the fresh one decides
+        #expect(forPending(sending(600) + sending(3), since: working))
+    }
+
+    /// The hub's `stateSince` moves on every change of state (blocked and back, its own restart): work the transcript
+    /// already shows after the message is the newest turn's, and its line stays lit.
+    @Test func workTheTranscriptShowsAfterAPendingMessageKeepsItsLine() {
+        // at work again for 1 s (approved after a block, or the hub restarted), the message sent 3 s ago
+        let since = now.addingTimeInterval(-1)
+        // the running turn wrote a step after the send: it is that turn's work
+        #expect(!forPending(sending(3), since: since, newest: now.addingTimeInterval(-2)))
+        // a bubble whose copy was never matched, its turn running in the transcript: not dark to its end
+        #expect(!forPending(sending(30), since: now.addingTimeInterval(-28), newest: now))
+        // the transcript stops before the send: the work is still the message's
+        #expect(forPending(sending(3), since: since, newest: now.addingTimeInterval(-4)))
+    }
 }

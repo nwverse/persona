@@ -573,6 +573,9 @@ const (
 	CapabilityConfigOwn = "config.own"
 	// CapabilityAgentSessionArchives: the manager owns recoverable Codex/Claude archives.
 	CapabilityAgentSessionArchives = "agent_session_archives"
+	// CapabilityAgentSessionArchiveClose: the manager's archive also takes ?close=1, "Archive and close", which closes
+	// the agent on its computer (session.retire) once archived (docs/protocol/protocol.md "Agent session archives").
+	CapabilityAgentSessionArchiveClose = "agent_session_archive_close"
 	// CapabilityMachinesOwn: the manager keeps its own list of computers in its manager.json and takes the hub's edits
 	// of it (devicewire MethodMachinesPut / Remove / Get) once the hub hands it MachinesOwn
 	// (docs/assistant/managers.md "Each manager's computers").

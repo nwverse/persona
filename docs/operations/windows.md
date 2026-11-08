@@ -18,7 +18,8 @@ The table below is for Orca; where the herdr engine differs is in the table in t
 | Send messages (multi-line as one), keys, interrupt | ✅ | Bracketed paste works under ConPTY |
 | Answer dialogs (AskUserQuestion, permissions) | ✅ | Answered by reading the screen, same as Orca on macOS |
 | Close a session | ✅ | |
-| Create a session from the phone, resume a session that isn't running | ❌ | The Orca engine doesn't support this on any platform yet ([plan-orca-support.md](../plans/plan-orca-support.md), "Phase 2"); not a Windows problem |
+| Create a session from the phone, resume a Claude session that isn't running | ✅ | Since #5548 Orca opens a terminal in the session's worktree and runs `claude --resume` there, as herdr does; other agents' sessions are refused with why (`orca_resume`) |
+| Claude in the desktop app or in a terminal Persona does not drive | ✅ | Listed as running with its own state, transcript streamed; messages go through the session's peer inbox (a named pipe). Questions and permission prompts there stay on the computer. See "Claude outside Persona's terminals" below |
 | Machine monitoring (CPU, memory, swap, network, disk, system info) | ✅ | Win32 calls, no processes spawned; the metrics follow the Windows column of [machines.md](../server/machines.md) ("Collection metrics") (#1943) |
 | Port forwarding, Codex / compatible Codex forks discovery | ❌ | Depends on `ps` / `lsof` / `/proc`; silently unavailable on Windows (#1179) |
 | Processes the node starts itself: managed launchers, `codex` start | ✅ | `osproc.Exec`: Windows has no exec, so it starts a child in the same console and exits with its exit code ("herdr" below) |
@@ -69,6 +70,7 @@ is a release or your own `go build`, the supervisor is the same program. Approac
 | --- | --- |
 | `persona-link status` | An extra line "Background service: scheduled task "Persona Link" · state · starts at logon"; the state is whatever schtasks prints in the system language (Running / 正在运行, the Chinese-locale "Running"…), shown but not parsed. Then a line for the tray: running or not, starts at sign-in or not (`tray` in `--json`) |
 | `persona-link uninstall [--purge]` | Ends and deletes the scheduled task (the node stops with it), deletes `persona-link-task.xml` and `persona-link-service.exe`; quits the tray and removes its sign-in entry, its link handlers and WebView2's cache. `--purge` is as on Linux and also deletes the supervisor's logs and lock |
+| `persona-link name [<new>\|--reset]` | As on Linux: shows or changes what the hub calls this computer ([link.md](link.md), "The computer's name") |
 | `persona-link tray [--open <link>]` | Runs the tray (what the sign-in entry runs). A second one shows the running tray's panel, or hands it the link |
 | `persona-link node install` / `node uninstall` | Not installed separately: the node is in the same scheduled task; use `install` (with node) / `install --no-node` |
 | `persona-link node status [--json]` | Whether the scheduled task includes the node, and the task's state |
@@ -91,6 +93,8 @@ It is part of persona-link (`internal/linktray`, `persona-link tray`), not a sep
 - **Panel and pairing window**: HTML pages (`internal/linktray/web`; every size and color comes from `tokens.css`) loaded from memory, with no server and nothing fetched. The panel is a flyout over acrylic next to the icon, on the taskbar's side;
   the pairing window (active and passive, as in the Mac App) is a normal window over Mica. Both follow the system's light or dark mode, accent color, transparency setting and the monitor's DPI (per-monitor v2).
   The backdrops need Windows 11 22H2 (build 22621); earlier builds get a solid background. Slow actions (install, restart, pair) run off the UI thread, and their result shows in the panel in the user's words.
+- **Rename this computer…**: in the panel (and the right-click menu) while connected to a hub that renames computers and once the computer is confirmed. It opens a name field in the panel; Save asks the running
+  persona-link to have the hub rename it, as `persona-link name` does ([link.md](link.md), "The computer's name"), and the panel says the hub's answer. The status line shows the name the hub gives the computer.
 - **Notifications**: once when the hub waits for your OK on this computer, and once when a link that was up has been down for a minute.
 - **Links**: `persona://` links, and the previous brand's ones that older hubs print, open the pairing window with the link filled in (`HKCU\Software\Classes\<scheme>`, running `tray --open "%1"`).
   A scheme that another program already handles is left alone (a desktop App's phone link must keep working), and uninstall removes only the handlers that are ours.
@@ -137,6 +141,7 @@ herdr has a native Windows build since 0.9.5 (ConPTY panes, [official notes](htt
 | Send messages (multi-line as one), keys, interrupt | ✅ | |
 | Answer question / permission cards | ✅ | Via Claude Code hooks, no screen reading |
 | Live terminal (`terminal session observe`) | ❌ | herdr has no direct terminal attach on Windows; falls back to reading the screen |
+| Claude in the desktop app or in a terminal Persona does not drive | ✅ | As in the Orca table above |
 
 - **socket**: herdr's API on Windows is a named pipe, named `\\.\pipe\` plus the socket path (`\\.\pipe\C:\Users\<you>\AppData\Roaming\herdr\herdr.sock`);
   the config directory is `%APPDATA%\herdr` (or `herdr` under `$XDG_CONFIG_HOME` if that's set). `socket_windows.go` in `internal/herdr` dials by this rule, matching herdr's own
@@ -174,11 +179,28 @@ Limits: the path can't exceed 108 bytes (a very deep `%USERPROFILE%` gives `bind
 - **Screen-reading card**: Orca reports the session as blocked as soon as the AskUserQuestion PreToolUse hook fires, but starting a hook process on Windows takes a few seconds, so the dialog appears late.
   The card the manager built at that moment couldn't read the dialog ("can't read this dialog yet"); after that the manager looks at the screen again every 500 ms (up to 30 seconds) and swaps in a card with options as soon as the dialog appears (`assistant.upgradeScreenCard` in `assistant/fleet_ix.go`, on all platforms).
 
+## Claude outside Persona's terminals
+
+The desktop app's Code page and a `claude` in an ordinary terminal (Windows Terminal, PowerShell) run where neither herdr nor Orca has a pane. The node finds them by their `sessions/<pid>.json` and lists them live; a message from the phone goes through the session's peer inbox, never by starting a second `claude --resume` on the same transcript. Design and the protocol: [claude-integration.md](../integrations/claude-integration.md), "Claude outside Persona's terminals".
+
+- **The inbox is a named pipe**, `\\.\pipe\LOCAL\cc-msg-<32 hex>`, dialed with `tailscale/go-winio`. On Windows it requires an auth line first: the token is in the key file next to `sessions/<pid>.json` (`<pid>.<sha256 of the pipe path, lower-cased>.key`), readable only by the user, as Persona's node is. Without it the session lists read-only, saying why.
+- **The desktop app's entrypoint** is `claude-desktop`, or in some builds `claude-desktop-3p`: both are the desktop app (also in the "open elsewhere" refusal's words).
+- **A terminal Persona drives is told apart by the claude process's environment**: a pane variable (`HERDR_PANE_ID`, `ORCA_PANE_KEY`…) read from its PEB means the engine lists it, so it is not listed twice.
+- **Pid reuse**: Claude Code writes `procStart` as the process's creation time (a FILETIME); the node compares it with the running process's (`procinfo.StartMark`), so a reused pid is not taken for the claude.
+- **Held messages**: the desktop app often runs sessions in bypass permissions mode, which holds a message from another sender until the person at the computer approves it in the session; the phone says the message is waiting there. `"crossSessionInbound": "accept"` in that Claude Code's settings delivers without asking.
+
 ## shell
 
 When the node runs shell scripts on Windows, such as launcher probing and `claude --version`, it uses Git for Windows' bash (`loginShellProgram`: `CLAUDE_CODE_GIT_BASH_PATH`,
 otherwise found from `git`'s location and common install directories), the same as Claude Code itself on Windows. It doesn't use a bare `bash`: in the PATH the service gets, `System32\bash.exe` comes first, and that's WSL.
 If Git Bash can't be found, these commands don't start (the machine info has no Claude version); they never end up running in WSL.
+
+## Verification record: Claude outside Persona's terminals (2026-11-07, real Windows 11 machine)
+
+- Claude Code 2.1.308 (the desktop app's own) and 2.1.291 (the CLI on PATH). Read only: every running session's `sessions/<pid>.json` had `messagingSocketPath` (a pipe that exists), `peerProtocol: 1`, `peerFeatures` `notify_idle` / `artifact_yield`, and a key file whose name is the sha256 of the lower-cased pipe path; `procStart` equalled each process's creation time.
+- End to end on a throwaway `claude` 2.1.291 (its own `CLAUDE_CONFIG_DIR`, an empty directory, a pseudo console; started for the test and closed after): the node's send was taken in 0.15–0.3 s and answered in the transcript ("reply with OK" → "OK"); a second message while it worked was queued and answered next; the transcript reader showed the message from "Persona" with only the user's words. With `--dangerously-skip-permissions` the message was held for approval in the terminal, as the code says.
+- Tests: the peer path against a fake inbox on a named pipe (`claudepeer_test.go`), listing, refusals and the echo; Windows start marks (`internal/procinfo`).
+- Not verified: sending into a session of the desktop app (only its files were read: no message was sent to a session in use); the phone and web UI against a real hub; macOS and Linux inboxes against a real claude (the code dials a unix socket; the tests run against a fake one on Linux).
 
 ## Verification record: tray (2026-11-07, real Windows 11 25H2 machine, build 26200)
 

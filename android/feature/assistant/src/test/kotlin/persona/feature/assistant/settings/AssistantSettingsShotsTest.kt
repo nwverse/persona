@@ -58,7 +58,7 @@ class AssistantSettingsShotsTest {
     private class FakeManagement(memoryTitle: String, memoryBody: String) : AssistantManagement {
         private val updated = Instant.now().minusSeconds(3_600).toString()
         var config = AssistantConfig(machineId = "workstation", launcher = "claude", cwd = "/home/me/.persona/assistant",
-            timezone = "Asia/Shanghai", notesEffective = "~/code", main = "main", mainTasksQuiet = true)
+            timezone = "Asia/Shanghai", notesEffective = "~/code", main = "main", mainTasksQuiet = true, manager = "assistant", defaultPermissionMode = "bypassPermissions")
         val files = listOf(
             MemoryFile("MEMORY.md", "- [$memoryTitle](morning.md)", updated),
             MemoryFile("morning.md", "---\nname: morning\ndescription: $memoryBody\ntype: feedback\n---\n\n$memoryBody", updated),

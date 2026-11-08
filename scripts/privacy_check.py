@@ -10,14 +10,17 @@ What counts as private comes from this machine, never from the repo: the values 
 (hosts, hub address, machine names, Apple ids, emails), ~/.config/persona/private-words.txt (one word per line:
 internal project names, people, anything else) and CLAUDE.local.md's `code spans`. On top of that, any private IPv4
 address, any email outside example.* domains, and the names in BANNED_NAMES (vendors and internal repositories that
-only extensions may name). Install as a hook: scripts/hooks/pre-commit (docs/operations/testing.md).
+only extensions may name). A hit says what kind of value matched and where it comes from (a config key path such as
+`machines.id`, private-words.txt, CLAUDE.local.md, the home directory), never the value. Install as a hook:
+scripts/hooks/pre-commit (docs/operations/testing.md).
 
 Not private: loopback addresses (127.0.0.0/8, ::1, also with a port or as a URL's host) even when the config or
 CLAUDE.local.md holds one, hosts under the example domains (RFC 2606, RFC 6761: example and example.com/.net/.org,
 and the .test, .invalid and .localhost TLDs) held there as placeholders, the documentation and IETF protocol ranges
 (192.0.0.0/24), an `xcode` in /Applications,
-values config.example.json ships as defaults, the repo's own Go module path (it names the
-GitHub owner),
+values config.example.json ships as defaults, a config value made only of ASCII letters that a `!word` line in
+private-words.txt takes back (an ordinary word, a machine id named after a room), the repo's own Go module path (it
+names the GitHub owner),
 CLAUDE.local.md spans that only name repo files, commands or config keys, a listed word of one case run where the text
 spells it only across a camel-case join ("fooBar", only_in_camel_joins), and in site/ the contact address and domain
 the App Store and the OAuth consent screen publish anyway.
@@ -28,6 +31,8 @@ from urllib.parse import unquote, urlsplit
 ROOT = subprocess.run(["git", "-C", os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
                        "rev-parse", "--show-toplevel"], capture_output=True, text=True, check=True).stdout.strip()
 HOME = os.path.expanduser("~")
+# Environment variables that name a build config, current name first (config_values reads each one set).
+CONFIG_ENV = ("PERSONA_CONFIG", "JARVIS_CONFIG")
 # Values too generic to search for (a machine called "mac", an OS name).
 IGNORE = {"darwin", "linux", "local", "ssh", "true", "false", "server", "localhost"}
 # Files that may hold placeholders that look like the real thing.
@@ -51,11 +56,12 @@ def url_term(url):
     return host
 
 
-def strings(o, key=""):
-    """(key, value) for every string in a JSON value; a list item takes its list's key."""
+def strings(o, key=()):
+    """(key path, value) for every string in a JSON value, the path a tuple of keys (("hub", "url")); a list item takes
+    its list's path (("machines", "id"))."""
     if isinstance(o, dict):
         for k, v in o.items():
-            yield from strings(v, k)
+            yield from strings(v, key + (k,))
     elif isinstance(o, list):
         for v in o:
             yield from strings(v, key)
@@ -76,12 +82,13 @@ def standard_app(key, value):
 
 
 def config_values():
-    """The config's values, and the subset that is published on purpose (PUBLIC_KEYS)."""
-    out, public = set(), set()
+    """The config's values, each with the key paths it is held under, and the subset that is published on purpose
+    (PUBLIC_KEYS)."""
+    out, public = {}, set()
     base = os.environ.get("XDG_CONFIG_HOME") or os.path.join(HOME, ".config")
     # Scan both profiles, even when only one is selected for deployment.
     paths = {os.path.join(base, brand, "config.json") for brand in ("persona", "jarvis")}
-    paths.update(os.path.expanduser(os.environ[key]) for key in ("PERSONA_CONFIG", "JARVIS_CONFIG") if os.environ.get(key))
+    paths.update(os.path.expanduser(os.environ[key]) for key in CONFIG_ENV if os.environ.get(key))
     defaults = example_values()
     for path in paths:
         try:
@@ -89,7 +96,8 @@ def config_values():
                 cfg = json.load(source)
         except (OSError, ValueError):
             continue
-        for key, o in strings(cfg):
+        for key_path, o in strings(cfg):
+            key = key_path[-1] if key_path else ""
             if key in ("os", "simulator") or o in defaults or standard_app(key, o):
                 continue
             if key == "url" or key.endswith("_url"):
@@ -98,7 +106,7 @@ def config_values():
                     continue
             elif key.endswith("path"):
                 o = o.replace(HOME, "~")
-            out.add(o)
+            out.setdefault(o, set()).add(key_path)
             if key in PUBLIC_KEYS:
                 public.add(o)
     return out, public
@@ -119,24 +127,45 @@ def private_looking(span):
     return False
 
 
+# What a `!word` line in private-words.txt can take back: a config value that is an ordinary word (a machine id named
+# after a room) matches every variable, comment and environment variable of that name. Only ASCII letters: a host with
+# a domain, an address, an email, a path or an id is never taken back. The waiver is by value, under every key that
+# holds it (an ssh alias or URL host spelled like the machine id goes with it).
+WAIVABLE = re.compile(r"[A-Za-z]+")
+# How a hit names a config key. Schema keys are snake_case words; any other key (provisioning_profiles is keyed by
+# bundle ids), or one that is itself a private value, shows as `*`: the report never carries a value.
+KEY_NAME = re.compile(r"[a-z][a-z0-9_]*")
+
+
 def word_list():
-    out = set()
+    """The listed words, each with the file that lists it, and the config values `!word` lines take back (lowercase)."""
+    out, waived = {}, set()
     base = os.environ.get("XDG_CONFIG_HOME") or os.path.join(HOME, ".config")
     for brand in ("persona", "jarvis"):
+        name = os.path.join(brand, "private-words.txt")
         try:
-            with open(os.path.join(base, brand, "private-words.txt")) as source:
-                for line in source:
+            with open(os.path.join(base, name)) as source:
+                for n, line in enumerate(source, 1):
                     line = line.strip()
-                    if line and not line.startswith("#"):
-                        out.add(line)
+                    if not line or line.startswith("#"):
+                        continue
+                    if line.startswith("!"):
+                        word = line[1:].strip()
+                        if WAIVABLE.fullmatch(word):
+                            waived.add(word.lower())
+                            continue
+                        # The line number only: the value may be private.
+                        print("privacy_check: %s:%d: a `!` line only takes back a config value made of ASCII letters; "
+                              "searched as written instead" % (name, n), file=sys.stderr)
+                    out.setdefault(line, set()).add("private-words.txt")
         except OSError:
             pass
     local = os.path.join(ROOT, "CLAUDE.local.md")
     if os.path.exists(local):
         for span in re.findall(r"`([^`\n]{4,})`", open(local).read()):
             if private_looking(span):  # hosts, addresses, accounts, ids; not prose, repo paths or commands
-                out.add(span.strip())
-    return out
+                out.setdefault(span.strip(), set()).add("CLAUDE.local.md")
+    return out, waived
 
 
 def loopback(value):
@@ -189,16 +218,35 @@ def reserved(value):
     return labels[-1] in RESERVED_TLDS or any(host == d or host.endswith("." + d) for d in RESERVED_DOMAINS)
 
 
-def terms():
-    """Words to look for, longest first, and those of them allowed in PUBLIC_DIRS."""
+def term_sources():
+    """Words to look for, longest first, each with where it comes from ("config machines.id", "private-words.txt",
+    "CLAUDE.local.md", "the home directory"); those of them allowed in PUBLIC_DIRS; and those a `!word` line could
+    take back (config values of ASCII letters that no file lists plainly)."""
     config, public = config_values()
-    vals = {v for v in config | word_list()
-            if len(v) >= 4 and v.lower() not in IGNORE and not loopback(v) and not reserved(v)}
+    listed, waived = word_list()
+    plain = {v.lower() for v in listed}
+    private = {v.lower() for v in config} | plain
+
+    def label(path):
+        return "config " + ".".join(k if KEY_NAME.fullmatch(k) and k not in private else "*" for k in path)
+
+    found = {v: {label(p) for p in paths} for v, paths in config.items() if v.lower() not in waived}
+    waivable = {v for v in found if WAIVABLE.fullmatch(v) and v.lower() not in plain}
+    for v, files in listed.items():
+        found.setdefault(v, set()).update(files)
+    found = {v: where for v, where in found.items()
+             if len(v) >= 4 and v.lower() not in IGNORE and not loopback(v) and not reserved(v)}
     user = os.path.basename(HOME)
     if len(user) >= 3:
-        vals.add("/Users/" + user)
-        vals.add("/home/" + user)
-    return sorted(vals, key=len, reverse=True), public
+        for v in ("/Users/" + user, "/home/" + user):
+            found.setdefault(v, set()).add("the home directory")
+    return {v: sorted(found[v]) for v in sorted(found, key=len, reverse=True)}, public, waivable
+
+
+def terms():
+    """Words to look for, longest first, and those of them allowed in PUBLIC_DIRS."""
+    found, public, _ = term_sources()
+    return list(found), public
 
 
 def module_paths():
@@ -279,10 +327,14 @@ def problems(text, words, emails=True):
     return found
 
 
-def private_kind(value):
+def private_kind(value, sources=None):
+    """What a hit is, never the value itself, and where the value comes from when it is a searched word (`sources`,
+    from term_sources): the operator tells a false positive from a leak by it (#1065)."""
     if BANNED_NAMES.fullmatch(value):
         return "banned name (a vendor or internal repository; use the extension's own wording, #4967)"
-    return "private IP" if IPV4.fullmatch(value) else "email" if "@" in value else "private value (%d chars)" % len(value)
+    kind = "private IP" if IPV4.fullmatch(value) else "email" if "@" in value else "private value (%d chars)" % len(value)
+    where = (sources or {}).get(value)
+    return kind + " from " + ", ".join(where) if where else kind
 
 
 NPM_LOCK_FILES = {"package-lock.json", "npm-shrinkwrap.json"}
@@ -419,7 +471,8 @@ def main():
     staged = "--staged" in sys.argv
     message = sys.argv[sys.argv.index("--message") + 1] if "--message" in sys.argv else None
     span = commit_range(sys.argv[sys.argv.index("--range") + 1]) if "--range" in sys.argv else None
-    words, public_words = terms()
+    sources, public_words, waivable = term_sources()
+    words = list(sources)
     modules = module_paths()
     if staged:
         files = git("diff", "--cached", "--name-only", "--diff-filter=ACMR", "-z").decode().split("\0")
@@ -435,12 +488,17 @@ def main():
                                       ":" if staged else span[1] + ":")
         except (OSError, ValueError, subprocess.CalledProcessError, subprocess.TimeoutExpired):
             sys.exit("privacy_check: cannot read Git objects; scan did not complete")
-    bad = []
+    bad, hit = [], set()
+
+    def report(f, where, w):
+        hit.add(w)
+        bad.append((f, where, private_kind(w, sources)))
+
     for f in files:
         public = f.startswith(PUBLIC_DIRS)
         allowed = [w for w in words if w not in public_words] if public else words
         for w in problems(f, words):
-            bad.append((f, "path", private_kind(w)))
+            report(f, "path", w)
         if f in SKIP_FILES:
             continue
         try:
@@ -467,21 +525,25 @@ def main():
             text = modules.sub("", text)
         for n, line in enumerate(text.splitlines(), 1):
             for w in problems(line, allowed, emails=not public):
-                bad.append((f, n, private_kind(w)))
+                report(f, n, w)
     if span:
         for c in filter(None, git("rev-list", span[0] + ".." + span[1]).decode().split()):
             for n, line in enumerate(git("log", "-1", "--format=%B", c).decode("utf-8", "replace").splitlines(), 1):
                 for w in problems(line, words):
-                    bad.append(("commit " + c[:9] + " message", n, private_kind(w)))
+                    report("commit " + c[:9] + " message", n, w)
     if message and os.path.exists(message):
         for n, line in enumerate(open(message).read().splitlines(), 1):
             if not line.startswith("#"):
                 for w in problems(line, words):
-                    bad.append(("commit message", n, private_kind(w)))
+                    report("commit message", n, w)
     for f, where, kind in bad:
         print("%s:%s: %s" % (f, where, kind))
     if bad:
         print("privacy_check: %d hit(s). Use placeholders (<hub 地址>, me@example.com); see CLAUDE.md." % len(bad), file=sys.stderr)
+        if hit & waivable:
+            print("privacy_check: a config value that is an ordinary word and names nobody (a machine id like a room's "
+                  "name) can be marked not private with a !<word> line in private-words.txt "
+                  "(docs/operations/testing.md, \"Privacy scan\").", file=sys.stderr)
         sys.exit(1)
     print("privacy_check: clean (%d values checked)" % len(words))
 

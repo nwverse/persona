@@ -344,3 +344,51 @@ func TestAgentSessionArchivesRestoreDeletePrecedence(t *testing.T) {
 		})
 	}
 }
+
+func archiveCloseCapability(t *testing.T, manager *guardManager, close bool) {
+	t.Helper()
+	capabilities := []string{assistantwire.CapabilityConfigOwn, assistantwire.CapabilityAgentSessionArchives}
+	if close {
+		capabilities = append(capabilities, assistantwire.CapabilityAgentSessionArchiveClose)
+	}
+	if err := manager.call(t, busHello, map[string]any{"id": manager.id, "capabilities": capabilities}, nil); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// "Archive and close" (?close=1) reaches only a manager that does it: an older one would archive and leave the agent
+// open while the app says it closed it.
+func TestAgentSessionArchiveCloseNeedsEveryManager(t *testing.T) {
+	h, srv, a, b := archiveRelayHub(t)
+	if slices.Contains(h.features(), featureAgentSessionArchiveClose) {
+		t.Fatal("close advertised before any manager named it")
+	}
+	archiveCloseCapability(t, a, true)
+	archiveCloseCapability(t, b, false)
+	if f := h.features(); !slices.Contains(f, featureAgentSessionArchives) || slices.Contains(f, featureAgentSessionArchiveClose) {
+		t.Fatalf("mixed managers: %v", f)
+	}
+	before := len(archiveHTTPCalls(t, b))
+	code, body := ownershipGet(t, h, srv, http.MethodPost, "/api/v1/sessions/mb/same/archive?close=1", nil)
+	if code != http.StatusNotImplemented || body["code"] != "agent_archive_close_unsupported" {
+		t.Fatalf("close to an old manager: %d %+v", code, body)
+	}
+	if len(archiveHTTPCalls(t, b)) != before {
+		t.Fatal("close request reached a manager that cannot close")
+	}
+	if code, body := ownershipGet(t, h, srv, http.MethodPost, "/api/v1/sessions/mb/same/archive", nil); code != http.StatusOK {
+		t.Fatalf("plain archive must still work: %d %+v", code, body)
+	}
+	archiveCloseCapability(t, b, true)
+	if f := h.features(); !slices.Contains(f, featureAgentSessionArchiveClose) {
+		t.Fatalf("every manager closes: %v", f)
+	}
+	code, body = ownershipGet(t, h, srv, http.MethodPost, "/api/v1/sessions/mb/same/archive?close=1", nil)
+	calls := archiveHTTPCalls(t, b)
+	if code != http.StatusOK || len(calls) == 0 || calls[len(calls)-1].Query != "close=1" {
+		t.Fatalf("close relay: %d %+v %+v", code, body, calls)
+	}
+	if calls := archiveHTTPCalls(t, a); len(calls) != 0 {
+		t.Fatalf("unrelated manager received the close: %+v", calls)
+	}
+}

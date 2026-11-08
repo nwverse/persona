@@ -23,6 +23,17 @@ type agentArchive struct {
 	Session   proto.Session `json:"session"`
 	Archived  bool          `json:"archived"`
 	ChangedAt time.Time     `json:"changed_at"`
+	// ClosedAt: "Archive and close" closed its agent then (agent_archive_close.go). Whatever the agent wrote while it
+	// was being closed is not new activity: only activity after this moment restores the session.
+	ClosedAt time.Time `json:"closed_at,omitempty"`
+}
+
+// activeAfter is the moment after which source activity restores the archived session.
+func (rec agentArchive) activeAfter() time.Time {
+	if rec.ClosedAt.After(rec.Session.UpdatedAt) {
+		return rec.ClosedAt
+	}
+	return rec.Session.UpdatedAt
 }
 
 type agentArchiveBook struct {
@@ -98,9 +109,11 @@ func agentArchiveBusy(s proto.Session) bool {
 			return true
 		}
 	}
+	// Awaiting the user's reply (a finished turn that ends with a question, #5096) is not busy: the agent is idle,
+	// and the user archiving it is the reply. "Delete chat" took those too, and archive replaces it.
 	return s.Starting || s.Status == proto.StatusWorking || s.Status == proto.StatusBlocked ||
 		s.State == proto.StateWorking || s.State == proto.StateNeedsYou || s.BackgroundWorking ||
-		s.BackgroundWaiting || s.AwaitsReply || s.PendingInteractions > 0 || len(s.Background) > 0
+		s.BackgroundWaiting || s.PendingInteractions > 0 || len(s.Background) > 0
 }
 
 // archiveSnapshot contains identity and display metadata, not stale runtime
@@ -150,7 +163,7 @@ func (svc *Service) archivedSessions(ctx context.Context, machine string, list [
 		if !ok || !rec.Archived {
 			continue
 		}
-		if agentArchiveBusy(s) || s.UpdatedAt.After(rec.Session.UpdatedAt) {
+		if agentArchiveBusy(s) || s.UpdatedAt.After(rec.activeAfter()) {
 			b.pending[key] = true
 		}
 		if b.pending[key] {
@@ -185,7 +198,7 @@ func overlayAgentArchives(machine string, list []proto.Session, records map[stri
 		if rec, ok := records[key]; ok && !list[i].Assistant {
 			// A storage timeout must neither reveal unrelated archived rows nor hide
 			// new work. The durable restore remains pending until its write succeeds.
-			active := agentArchiveBusy(list[i]) || list[i].UpdatedAt.After(rec.Session.UpdatedAt)
+			active := agentArchiveBusy(list[i]) || list[i].UpdatedAt.After(rec.activeAfter())
 			list[i].Archived = rec.Archived && !pending[key] && !active
 			list[i].ArchiveChangedAt = rec.ChangedAt
 		}
@@ -272,6 +285,7 @@ func (svc *Service) listArchivedSessions(w http.ResponseWriter, r *http.Request)
 		for _, row := range list {
 			if row.Archived && !row.Assistant {
 				row.Manager = svc.id
+				row.NativeArchive = svc.nativeArchiveView(m.ID, row.SessionID)
 				out = append(out, row)
 			}
 		}
@@ -285,51 +299,91 @@ func (svc *Service) listArchivedSessions(w http.ResponseWriter, r *http.Request)
 	apierr.WriteJSON(w, map[string]any{"sessions": out})
 }
 
-func (svc *Service) setAgentSessionArchive(w http.ResponseWriter, r *http.Request, mid string, archived bool) {
-	ctx, cancel := context.WithTimeout(r.Context(), agentArchiveTimeout)
+// agentArchiveError is a refusal of an archive operation: the HTTP status and code the apps get, and its message.
+type agentArchiveError struct {
+	status int
+	code   string
+	err    error
+}
+
+func (e *agentArchiveError) Error() string { return e.err.Error() }
+func (e *agentArchiveError) Unwrap() error { return e.err }
+
+func archiveRefusal(status int, code string, err error) error {
+	return &agentArchiveError{status: status, code: code, err: err}
+}
+
+// writeAgentArchiveError answers an archive operation's error: its refusal, else a storage failure.
+func (svc *Service) writeAgentArchiveError(w http.ResponseWriter, err error) {
+	var refusal *agentArchiveError
+	if errors.As(err, &refusal) {
+		apierr.WriteCode(w, refusal.status, refusal.code, refusal.err)
+		return
+	}
+	svc.logf("agent archive: %v", err)
+	apierr.Write(w, http.StatusInternalServerError, i18n.Err("hub-agent_archives.storage"))
+}
+
+// agentArchiveTarget is machine mid's session sid as the archive sees it (the overlay applied), with the canonical
+// machine id; a refusal when there is no such machine or session, or it is an assistant conversation (those archive
+// in their own API). Every other agent, whatever its runtime, archives the same way.
+func (svc *Service) agentArchiveTarget(ctx context.Context, mid, sid string) (proto.Session, error) {
+	m, ok := svc.fleetMachine(mid)
+	if !ok {
+		return proto.Session{}, archiveRefusal(http.StatusNotFound, "", i18n.Err("devices-api.unknown_machine"))
+	}
+	list, _, err := svc.archivedSessions(ctx, m.ID, svc.decoratedUnarchived(m.ID))
+	if err != nil {
+		return proto.Session{}, err
+	}
+	for _, row := range list {
+		if row.SessionID != sid {
+			continue
+		}
+		if row.Assistant {
+			return proto.Session{}, archiveRefusal(http.StatusBadRequest, "", i18n.Err("hub-agent_archives.unsupported"))
+		}
+		row.MachineID = m.ID
+		return row, nil
+	}
+	return proto.Session{}, archiveRefusal(http.StatusNotFound, "", i18n.Err("hub-deleted_sessions.unknown"))
+}
+
+// setAgentArchive archives (or restores) machine mid's session sid: the one way every caller changes an agent's
+// archive state (the apps' routes, "Archive and close", the assistant's tools). A busy session is refused (409).
+// The record is the manager's; the session's source stays as it is.
+func (svc *Service) setAgentArchive(ctx context.Context, mid, sid string, archived bool) (proto.Session, error) {
+	ctx, cancel := context.WithTimeout(ctx, agentArchiveTimeout)
 	defer cancel()
+	row, err := svc.agentArchiveTarget(ctx, mid, sid)
+	if err != nil {
+		return row, err
+	}
+	if archived && agentArchiveBusy(row) {
+		return row, archiveRefusal(http.StatusConflict, "agent_busy", i18n.Err("hub-agent_archives.running"))
+	}
+	if err := svc.noteAgentArchive(ctx, row, archived); err != nil {
+		return row, err
+	}
+	svc.publishList(row.MachineID)
+	return row, nil
+}
+
+func (svc *Service) setAgentSessionArchive(w http.ResponseWriter, r *http.Request, mid string, archived bool) {
 	if !fullRole(r) {
 		apierr.Write(w, http.StatusForbidden, i18n.Err("hub-agent_archives.forbidden"))
 		return
 	}
-	m, ok := svc.fleetMachine(mid)
-	if !ok {
-		apierr.Write(w, http.StatusNotFound, i18n.Err("devices-api.unknown_machine"))
+	if archived && r.URL.Query().Get("close") == "1" {
+		svc.archiveAndCloseHTTP(w, r, mid)
 		return
 	}
-	list, _, err := svc.archivedSessions(ctx, m.ID, svc.decoratedUnarchived(m.ID))
+	row, err := svc.setAgentArchive(r.Context(), mid, r.PathValue("sid"), archived)
 	if err != nil {
-		apierr.Write(w, http.StatusInternalServerError, i18n.Err("hub-agent_archives.storage"))
+		svc.writeAgentArchiveError(w, err)
 		return
 	}
-	var row proto.Session
-	found := false
-	for _, candidate := range list {
-		if candidate.SessionID == r.PathValue("sid") {
-			row, found = candidate, true
-			break
-		}
-	}
-	if !found {
-		apierr.Write(w, http.StatusNotFound, i18n.Err("hub-deleted_sessions.unknown"))
-		return
-	}
-	if row.Assistant || (row.Agent != "claude" && row.Agent != "codex") {
-		apierr.Write(w, http.StatusBadRequest, i18n.Err("hub-agent_archives.unsupported"))
-		return
-	}
-	if archived && agentArchiveBusy(row) {
-		apierr.Write(w, http.StatusConflict, i18n.Err("hub-agent_archives.running"))
-		return
-	}
-	row.MachineID = m.ID
-	if err := svc.noteAgentArchive(ctx, row, archived); err != nil {
-		svc.logf("save agent archive: %v", err)
-		apierr.Write(w, http.StatusInternalServerError, i18n.Err("hub-agent_archives.storage"))
-		return
-	}
-	svc.publishList(m.ID)
-	apierr.WriteJSON(w, map[string]any{"ok": true})
+	apierr.WriteJSON(w, map[string]any{"ok": true, "native": svc.nativeArchiveAwaited(r.Context(), row.MachineID, row.SessionID)}) // agent_archive_native.go
 }
 
 func (svc *Service) noteAgentArchive(ctx context.Context, s proto.Session, archived bool) error {
@@ -350,6 +404,7 @@ func (svc *Service) noteAgentArchive(ctx context.Context, s proto.Session, archi
 		return err
 	}
 	delete(b.pending, key)
+	svc.nativeArchiveWanted(s, archived) // the tool's own archive follows (agent_archive_native.go)
 	return nil
 }
 

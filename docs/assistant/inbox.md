@@ -38,13 +38,18 @@ or the manager restarts and retries). A previous interrupted send (hub stopped o
 - **Collection loses nothing** (since sources and Inbox share a process from 2026-11-05, this now matters only when the assistant Inbox temporarily cannot read stored state). Hub keeps collecting on schedule and buffers for the manager (`held`: latest version per thread / event / mail, retaining items that slide out of the window;
   at most 2000 items per source and 500 mails per mailbox, memory only, lost on hub restart—when the manager reconnects and immediately collects a round). Sources disabled at collection are not retained.
   On manager connection, hub immediately collects a complete round including mail and delivers it with buffered items, including those that slid out of windows such as latest 40 mails / 30 iMessages.
-  If delivery fails (no manager response or database unreadable), keep buffering for the next round. Incompletely written event batches are resubmitted by the plugin next round.
+  If delivery fails (no manager response or database unreadable), keep buffering for the next round. Rounds keep their usual pace meanwhile (a Lark event reads chats only, mail every 3 minutes);
+  the complete round owed for the failure waits until a round is accepted again. Incompletely written event batches are resubmitted by the plugin next round.
 - Plugin detail slots cannot render (the App keeps its original body). GitHub Inbox settings (CI, muted repositories, ignored branches) are hidden as a whole: hub never supplies settings missing muted repositories,
   which would look unmuted and clear everything on save. Saving without `muted_repos` (or with `null`) preserves mutes; only a supplied list, even empty, changes them.
   Deleting connector data still deletes knowledge-base data but reports the Inbox failure; retry deletion completes it.
 - Manager items are in the database: manager or hub restarts reload `inbox_items`. Hub restarts launch the manager again, with a full round on connection.
 - Connected manager but stored items / mutes unreadable (database unresponsive): Inbox APIs return `503 inbox_unavailable`, submitted rounds are rejected (hub retains them for retry),
   and nothing is written, avoiding overwriting database state with incomplete memory. Retry reading on next use.
+- Readable store, but an item's row cannot be written during a collection round: what the round changed in that item (new items, new messages or mail, a mail's text, items filed as
+  over, read elsewhere, settled, muted or superseded) is undone to what the row holds, and nothing is announced for it (`inbox_rollback.go`, #91), unless something else moved the item
+  meanwhile (that move's own save writes the row). It comes back with the next round, because the sources hand in the same things again: connectors answer `inbox.collect` from their
+  memory, mail rounds read each account's newest page, settling connectors are asked every round. Triage, admission and translation undo their failed rows the same way.
 - Immediately after restart, before a round lists sources, the manager still knows plugin-provided connectors (`extensions` in `inbox.config`). Their items still have no fallback and must wait for the model;
   unknown sources behave likewise, never defaulting to unimportant.
 

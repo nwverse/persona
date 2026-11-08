@@ -9,6 +9,8 @@ import (
 	"net"
 	"os"
 	"time"
+
+	"github.com/nwverse/persona/server/internal/acceptloop"
 )
 
 // listenControl serves `personad hub switch` on the control socket: owner only (0600 in a 0700 directory), the same
@@ -27,15 +29,7 @@ func (e *edge) listenControl() (net.Listener, error) {
 		_ = ln.Close()
 		return nil, err
 	}
-	go func() {
-		for {
-			c, err := ln.Accept()
-			if err != nil {
-				return
-			}
-			go e.serveControl(c)
-		}
-	}()
+	go acceptloop.Run(e.ctx, ln, e.acceptLogf, func(c net.Conn) { go e.serveControl(c) })
 	return ln, nil
 }
 

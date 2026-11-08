@@ -54,6 +54,50 @@ import { UsageSection } from "./UsageSection";
 import { MachineExtensionSections } from "../extensions/ExtensionSlots";
 import { t } from "../../i18n";
 
+// MACHINE_RENAME_FEATURE: the hub renames computers (PUT /api/v1/machines/{id}/name, docs/server/machines.md
+// "Renaming a computer"); an older one keeps the name its hub.json has.
+const MACHINE_RENAME_FEATURE = "machine_rename";
+
+// RenameMachine edits what the hub calls the computer, in place of its title row: the hub writes hub.json and every
+// app and the computer's Persona Link follow (a machines event), with no restart or reconnect. Empty is its id again.
+function RenameMachine({ m, onDone }: { m: DetailMachine; onDone: () => void }) {
+  const [value, setValue] = useState(m.name && m.name !== m.id ? m.name : "");
+  const [busy, setBusy] = useState(false);
+  const save = async (e?: React.FormEvent) => {
+    e?.preventDefault();
+    setBusy(true);
+    try {
+      const r = await api<{ name: string }>(`/machines/${enc(m.id)}/name`, { method: "PUT", json: { name: value.trim() } });
+      await refresh().catch(() => {});
+      toast(t("machines-machinedetail.renamed", { name: r.name }), "ok");
+      onDone();
+    } catch (err) {
+      toast(errorText(err), "error");
+      setBusy(false);
+    }
+  };
+  return (
+    <form onSubmit={save} className="flex flex-wrap items-center gap-2" onKeyDown={(e) => e.key === "Escape" && (e.stopPropagation(), onDone())}>
+      <input
+        autoFocus
+        value={value}
+        onChange={(e) => setValue(e.target.value)}
+        placeholder={m.id}
+        aria-label={t("machines-machinedetail.rename_label")}
+        maxLength={40}
+        className="h-8 w-[240px] max-w-full rounded-control bg-inset px-2.5 text-[13px] text-ink shadow-hairline outline-none placeholder:text-ink-3 focus:shadow-[0_0_0_1px_var(--line-strong),0_0_0_3px_var(--accent-tint)]"
+      />
+      <Button tone="quiet" className="h-8" onClick={onDone}>
+        {t("common.cancel")}
+      </Button>
+      <Button tone="primary" type="submit" className="h-8" busy={busy}>
+        {t("common.save")}
+      </Button>
+      <p className="w-full text-[11.5px] text-ink-3">{t("machines-machinedetail.rename_hint")}</p>
+    </form>
+  );
+}
+
 interface MachineLauncher {
   name: string;
   model?: string;
@@ -175,6 +219,9 @@ export function MachineDetail({ mid, onToggleSidebar }: { mid: string; onToggleS
   const route = routeText(m, machines);
   const system = data?.metrics.system ?? m?.system;
   const tz = useMemo(() => localOffset(), []);
+  // a hub that renames computers, and one of its own (a linked hub's is renamed there)
+  const canRename = useStore((s) => s.features.includes(MACHINE_RENAME_FEATURE)) && m?.kind !== "hub" && (!m?.hub_id || !selfHub || m.hub_id === selfHub);
+  const [renaming, setRenaming] = useState(false);
 
   if (!m) {
     return (
@@ -203,8 +250,10 @@ export function MachineDetail({ mid, onToggleSidebar }: { mid: string; onToggleS
             <Icon name="machine" size={18} />
           </span>
           <div className="min-w-0 flex-1">
-            <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+            {renaming && <RenameMachine key={m.id} m={m} onDone={() => setRenaming(false)} />}
+            <div className={cx("flex flex-wrap items-center gap-x-2 gap-y-1", renaming && "hidden")}>
               <h2 className="truncate text-[15px] font-semibold text-ink">{m.name}</h2>
+              {canRename && <IconButton icon="write" label={t("machines-machinedetail.rename")} size={24} iconSize={12} onClick={() => setRenaming(true)} />}
               <span className={cx("inline-flex h-5 items-center gap-1 whitespace-nowrap rounded-full px-1.5 text-[11px] font-medium", online ? "bg-green-tint text-green" : "bg-field text-ink-3")}>
                 <span className={cx("size-1.5 rounded-full", online ? "bg-green" : "bg-ink-3")} />
                 {online ? t("machines-machinedetail.online") : t("machines-machinedetail.offline")}
