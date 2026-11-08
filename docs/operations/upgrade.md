@@ -14,7 +14,7 @@ This guide takes an existing install to the split layout. A person or an agent c
 | Run by hand or by your own process manager: `hub setup --no-service`, Linux without a systemd user instance (WSL without systemd, some containers), only the install command without `--hub` | none of the above | [No service manager](#no-service-manager) |
 | Windows | The hub doesn't run natively on Windows: it runs in Docker Desktop or in WSL 2 | [Docker](#docker); in WSL 2, [Native](#native-linux-and-macos) with systemd, [No service manager](#no-service-manager) without |
 
-**An install made under the product's former name** keeps former names for its hub service, the binary in `bin/`, its data directory, its Postgres container, and its database and role. Wherever this guide says `personad` (the service or the binary), `~/.persona` or `persona-postgres`, use what your install has; [rolling-upgrade-compatibility.md](../protocol/rolling-upgrade-compatibility.md) lists them. The variables below already pick up the data directory and, from the service, the binary.
+**An install made under the product's former name** keeps former names for its hub service, the binary in `bin/`, its data directory, its Postgres container, and its database and role. Wherever this guide says `personad` (the service or the binary), `~/.persona` or `persona-postgres`, use what your install has; [rolling-upgrade-compatibility.md](../protocol/rolling-upgrade-compatibility.md) lists them. The variables below pick up the data directory; set `PD` from the service's `ExecStart` (below).
 
 ## Before you start
 
@@ -23,7 +23,8 @@ This guide takes an existing install to the split layout. A person or an agent c
 **The values the steps use** (native):
 
 ```sh
-DATA=$(cd -P "${PERSONA_HOME:-$HOME/.persona}" && pwd)        # the data directory, with symlinks resolved
+DIR=${PERSONA_HOME:-$HOME/.persona}                            # the data directory as the services name it
+DATA=$(cd -P "$DIR" && pwd)                                     # the same, with symlinks resolved
 PD="$DATA/bin/personad"                                         # the binary the hub's service runs
 PORT=$(jq -r '.listen // ":18660"' "$DATA/hub.json" | sed 's/.*://')
 HUB="http://127.0.0.1:$PORT"
@@ -45,7 +46,7 @@ Native:
 
 ```sh
 roster() {
-  curl -s -H "Authorization: Bearer $TOKEN" "$HUB/api/v1/managers" \
+  curl -s --max-time 5 -H "Authorization: Bearer $TOKEN" "$HUB/api/v1/managers" \
     | jq -c '.managers[] | select(.id == "assistant") | {online, deploy, version}'
 }
 ```
@@ -68,8 +69,8 @@ expect() {
   while [ "$i" -lt 120 ]; do roster 2>/dev/null | grep -q "$1" && { roster; return 0; }; sleep 1; i=$((i + 1)); done
   echo "not within 2 minutes: $1"; roster; return 1
 }
-# managers: one line per built-in manager running on this data directory (native).
-managers() { ps -axo pid=,args= | grep -E "[ ]$DATA/bin/[^ /]+ assistant\$"; }
+# managers: one line per built-in manager running on this data directory (native), under either of its paths.
+managers() { ps -axo pid=,args= | grep -E "[ ]($DATA|$DIR)/bin/[^ /]+ assistant\$"; }
 ```
 
 `expect '"online":true,"deploy":"child"'` and `expect '"online":true,"deploy":"service"'` are the two states. Right after a restart the built-in manager can take a moment to come back, which is why `expect` waits. A build from before the split may leave `deploy` empty: check `expect '"online":true'` there.
@@ -95,8 +96,10 @@ The ways back below don't restore them: they are for a step that went wrong in a
 **The databases.** The built-in manager keeps its data in a database of its own, which its `manager.json` names ([server.md](../server/server.md) ("The default manager's own database")):
 
 ```sh
-jq -r '.database_name // .database_container // "none"' "$DATA/managers/assistant/manager.json"
+jq -r '.database_name // .database_container // "none"' "$DATA/managers/assistant/manager.json" 2>/dev/null || echo none
 ```
+
+Docker: `sudo jq -r '.database_name // .database_container // "none"' data/managers/assistant/manager.json 2>/dev/null || echo none`.
 
 - `database_name`: a second database in the hub's Postgres server, named after the hub's with `_manager`.
 - `database_container`: a Postgres container of its own.
@@ -117,17 +120,18 @@ Back up every database there is, and restore them together.
 
   ```sh
   url=$(jq -r '.database_url' "$DATA/hub.json")
-  base=${url%/*}; db=${url##*/}; db=${db%%\?*}; rest=${url#"$base/$db"}
-  mdb=$(jq -r '.database_name // empty' "$DATA/managers/assistant/manager.json")
+  q=; case $url in *\?*) q="?${url#*\?}" ;; esac
+  base=${url%%\?*}; base=${base%/*}
+  mdb=$(jq -r '.database_name // empty' "$DATA/managers/assistant/manager.json" 2>/dev/null)
   pg_dump "$url" > "$BK/hub-db.sql"
-  [ -z "$mdb" ] || pg_dump "$base/$mdb$rest" > "$BK/manager-db.sql"
+  [ -z "$mdb" ] || pg_dump "$base/$mdb$q" > "$BK/manager-db.sql"
   ```
 
   **Check:** each file is there and has `CREATE TABLE` lines.
 
 - **The built-in manager's own container** (`database_container`): `docker exec <that container> sh -c 'pg_dumpall -U "${POSTGRES_USER:-postgres}"' > "$BK/manager-db.sql"`.
 
-- **Docker**, in the compose folder: `docker compose exec -T postgres sh -c 'pg_dumpall -U "${POSTGRES_USER:-postgres}"' > "$BK/db.sql"`. **Check:** `grep '^CREATE DATABASE' "$BK/db.sql"` lists the hub's database and its `_manager`.
+- **Docker**, in the compose folder: `docker compose exec -T postgres sh -c 'pg_dumpall -U "${POSTGRES_USER:-postgres}"' > "$BK/db.sql"`. **Check:** `grep '^CREATE DATABASE' "$BK/db.sql"` lists the hub's database, and its `_manager` when `manager.json` names one.
 
 **The data directory.** It has `hub.json`, the binaries you would go back to (`bin/`), the built-in manager's binding and keys (`managers/assistant/`) and the knowledge base:
 
@@ -142,7 +146,7 @@ tar tzf "$BK/data.tgz" | grep -c '/hub.json$'                            # 1 or 
 docker tag "$(docker compose images -q hub)" persona-hub:before-split
 ```
 
-**Restoring** (only when a way back below doesn't bring the hub back): stop the hub and the built-in manager's service if there is one. Put the data directory back (`tar xzf "$BK/data.tgz" -C "$(dirname "$DATA")"`). Restore the databases together, after dropping them or into an empty server: a `pg_dumpall` file with `docker exec -i persona-postgres sh -c 'psql -U "${POSTGRES_USER:-postgres}" -d postgres' < "$BK/db.sql"` (Docker: `docker compose exec -T postgres …`), each `pg_dump` file with `psql -d <its database> -f <file>`. Then start the hub's service.
+**Restoring** (only when a way back below doesn't bring the hub back): stop the hub and the built-in manager's service if there is one. Put the data directory back (`tar xzf "$BK/data.tgz" -C "$(dirname "$DATA")"`). Restore the databases together, after dropping them or into an empty server: a `pg_dumpall` file with `docker exec -i persona-postgres sh -c 'psql -U "${POSTGRES_USER:-postgres}" -d postgres' < "$BK/db.sql"` (Docker: `docker compose exec -T postgres …`), each `pg_dump` file with the same URL it was taken with (`psql "$url" -f "$BK/hub-db.sql"`, `psql "$base/$mdb$q" -f "$BK/manager-db.sql"`). Then start the hub's service.
 
 ## Native Linux and macOS
 
@@ -171,7 +175,17 @@ expect '"online":true,"deploy":"child"'
 - `install --builtin --check` must print `ready`. It changes nothing. It fails on a build from before the split (`flag provided but not defined: -builtin`), and on Linux without a systemd user instance (`cannot install its service`); then follow [No service manager](#no-service-manager).
 - `hub.json` is unchanged: the same `token`, no `assistant.mode`.
 
-**Way back:** the update's own rollback is automatic. By hand, put `bin/` back and restart the hub's service: `tar xzf "$BK/data.tgz" -C "$(dirname "$DATA")" "$(basename "$DATA")/bin"`, or `cp "$PD.prev" "$PD"` when the update left a `.prev`.
+**Way back:** the update's own rollback is automatic. By hand, put `bin/` back and restart the hub's service. Replace each file by a rename, never by writing into it: the running hub's binary can't be written over (`Text file busy`).
+
+```sh
+R="$BK/restore"; mkdir -p "$R" && tar xzf "$BK/data.tgz" -C "$R" "$(basename "$DATA")/bin"
+for f in "$R/$(basename "$DATA")/bin/"*; do
+  [ -f "$f" ] || continue
+  cp -p "$f" "$DATA/bin/.restore" && mv -f "$DATA/bin/.restore" "$DATA/bin/${f##*/}"
+done
+```
+
+When the update left `.prev` copies, `cp -p "$PD.prev" "$PD.new" && mv -f "$PD.new" "$PD"` does the same for `personad`.
 
 ### Step 2: switch with setup
 
@@ -228,9 +242,15 @@ Instead of setup, with the same result:
 
    ```sh
    "$PD" hub manager-mode service
+   systemctl --user restart personad                # macOS: launchctl kickstart -k gui/$(id -u)/com.persona.hub
    ```
 
-   **Check:** `managers` prints nothing (the hub no longer starts its child), and `expect '"online":false'` passes until the next step.
+   **Check:** the hub no longer starts its child, and the roster says offline until the next step:
+
+   ```sh
+   sleep 30; [ -z "$(managers)" ] && echo "no built-in manager runs"
+   expect '"online":false'
+   ```
 
 2. Bind and install with a one-time code. It is good for 10 minutes, once, and stays in the environment:
 
@@ -324,13 +344,7 @@ A hub run by hand, or by a process manager of your own, has nothing to install t
 
 **Optional: run the built-in manager yourself.** Run it under a process manager of your own, so that it is restarted when it stops.
 
-1. Set the mode, then start the hub again:
-
-   ```sh
-   "$PD" hub manager-mode service
-   ```
-
-   **Check:** `managers` prints nothing, and `expect '"online":false'`.
+1. Set the mode with `"$PD" hub manager-mode service`, then start the hub again. **Check:** as in step 2 by hand above: after half a minute `managers` still prints nothing, and `expect '"online":false'`.
 
 2. Bind it, without installing a service:
 
