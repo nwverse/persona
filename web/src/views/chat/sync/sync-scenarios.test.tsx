@@ -60,6 +60,9 @@ const KNOWN: Record<string, { issue: string; because: RegExp }> = {
   send_unknown_then_transcript_has_it: { issue: "#1121", because: /m1 shows 2 times|failed \["Reserve two bikes."\], want \[\]/ },
   send_failed_stays_above_later: { issue: "#1122", because: /m1 shows 0 times|failed \[\], want \["Find a dinner place."\]/ },
 };
+// a new conversation's first message (chat.new, user.start): the runner does not play it yet
+const NO_START = "the web runner does not play a new conversation's start yet";
+KNOWN.start_answer_cut_then_receipt = { issue: "#1382", because: new RegExp(NO_START) };
 
 let host: HTMLDivElement;
 let root: Root;
@@ -151,6 +154,8 @@ function differences(got: ReturnType<typeof project> & { status?: string }, want
 }
 
 async function run(c: SyncCase, device: string): Promise<string[]> {
+  // the new-conversation page and its start are not driven here yet (#1382)
+  if (c.chat.new) return [NO_START];
   hub = new SyncHub(c, device);
   FakeSocket.hub = hub;
   vi.stubGlobal("fetch", hub.fetch);
