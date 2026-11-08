@@ -6,6 +6,7 @@ import Observation
 @MainActor @Observable final class ExtensionPageStream {
     typealias Raw = ExtensionStreamJSON
     static let feature = "extension_ui_stream_v1"
+    static let uiVersion = 5
     // These are renderer implementations, not every component declared in the generated vocabulary.
     static let components: Set<String> = ["text", "metric", "progress", "row", "button", "link", "field", "divider",
         "chart", "stat_grid", "segmented", "markdown", "table", "empty", "loading", "header", "breadcrumb",
@@ -340,6 +341,7 @@ import Observation
             else { send(.snapshot(.init(protocol: 1, requestId: id, session: tree.session, epoch: tree.epoch, version: tree.version))) }
         } else {
             var context = context
+            context.uiVersion = Self.uiVersion
             context.stream = .init(protocol: 1, components: Self.components.sorted())
             send(.open(.init(protocol: 1, requestId: id, extension: owner, contribution: contribution, context: context, state: state)))
         }

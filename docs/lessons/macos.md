@@ -313,3 +313,16 @@ Each page has its own `NSHostingView`, with `isHidden` set while inactive. Pitfa
 - A capture batch must unmount its final page while its authenticated socket is still alive. Immediate process termination can discard a deferred native-session close. Keep bounded startup/committed-view waits, preserve failed readiness screenshots/logs, and never count an error page or a missing capture manifest as success.
 - Unmounting and deinitialization are not proof that a native session has been released. A full glass batch passed, but the following clay batch hit the manager's unchanged `quota` gate. During DEBUG capture, retain only the actually validated current page stream, close it explicitly, wait at most five seconds for its correlated `closed` reply on the owning connection, and require one acknowledged close per page/appearance in the manifest. Never increase quotas or dispose another client's sessions to get a matrix pass.
 - Label `cacheDisplay` evidence as actual-app offscreen capture. It validates content/layout but does not establish Window Server materials, real focus, gestures, SpringBoard WidgetKit installation or a watch face complication.
+
+## Menus and glass in offscreen screenshots (2026-11-07, #1307)
+
+- **`mac_shot.sh` cannot show a menu, but a small AppKit program can**: put the SwiftUI `Menu` in an `NSHostingView`, find its
+  `SwiftUIPopupButton`, `performClick`, and from a `Timer` added to `RunLoop.main` in `.common` mode (the menu's tracking loop runs in
+  `.eventTracking`) dump `button.menu?.items` (`title`, `subtitle`, `isSectionHeader`) and `cacheDisplay` the `NSPopupMenuWindow`'s content view to a PNG,
+  then `cancelTracking()`. It works with the screen locked. That is how ultracode's menu was checked: a `Toggle`'s second `Text` becomes
+  `NSMenuItem.subtitle` and wraps; a `Section` header is a one-line `isSectionHeader` item (a `\n` becomes a space, a long one widens the menu).
+- **Text on a `glassEffect` surface comes out in the wrong colors in `cacheDisplay`**, whatever the code says: in a test window `.secondary`,
+  `Color.secondary`, `.gray` and even `.blue` text on glass were drawn black (unreadable on the dark window), and a `.secondary` × white on white in
+  light mode; only `NSColor`-backed colors (`secondaryLabelColor`) came out as written. The real window draws glass with vibrancy, which the
+  offscreen copy does not have. A shot of a glass note (the resume line over the composer, `FailureNote`…) that looks unreadable is not evidence
+  either way: check it in a style with solid surfaces (`-ui.style lark`, the same layout and text styles) or in a real window when the Mac is unlocked.

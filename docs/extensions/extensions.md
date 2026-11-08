@@ -594,6 +594,18 @@ Reading it back (#5356): `personad extension audit [<id>] [--limit=N]` prints on
 extension's, a connector's or `feishu` for the bot, and without one it is everyone's. The same comes from `GET /api/v1/extensions/-/audit` (see the API table below).
 The table is append-only and never pruned: everyone's rows are read through `plugin_audit_at` (`at DESC, id DESC`), one id's through `plugin_audit_plugin`, each with its own statement.
 
+### Declared identity changes
+
+A market entry may declare one `replaces` predecessor. It is source metadata in the signed entry, never a package/runtime manifest field. A predecessor must be retired from the current catalog; duplicate claims, self-replacement, current-ID collisions and chains/cycles are rejected. The manager discovers a successor only in the installation's persisted market source. Publisher names, current official flags and an unsigned source's empty signing key are not authority to take over an installation.
+
+The preview includes `rename_from` and names both IDs; its non-empty `permissions_digest` must be explicitly confirmed even when no permissions grow. Catalog refresh and automatic updates only announce a rename, never commit it silently. The source address, pin, declaration, installed version and target uniqueness are rechecked under the final operation guard. A fresh installation without the predecessor creates no former-ID aliases, and an installed predecessor cannot be bypassed through a second ordinary install.
+
+`Record.ID` is the current public identity; `StorageID` (or `ID` for legacy rows) is its stable storage key. `PreviousID` follows the previous version and provenance. Postgres `plugins.id` and the `plugin_secrets` foreign key stay fixed; `public_id`, `previous_id` and unique `plugin_identities` names commit atomically with the version. Config, ciphertext, grants, switches, contribution choices, install time, auto-update choices, hub/node data, tools and rollback packages retain their slot. Internal model purposes `extension.<storage-id>` and knowledge owners `ext:<storage-id>` also stay stable; public reports keep the canonical ID.
+
+Owner-facing API/CLI requests resolve only historical names of that committed installation. Program authentication uses exact canonical identity and the current runtime generation: an old token cannot acquire new identity or grants through an alias. Rename retires the old process without ordinary uninstall cleanup, waits for its exit, then activates the replacement. Rollback restores the previous public ID, version and origin in the same slot; uncertain database commits block writes and retain recovery material.
+
+Before any renamed node upload/start/sync, the manager probes authenticated `plugin.node.identity` capability. Incompatible or unavailable nodes cannot receive a sync that would mistake the absent old ID for uninstall. Identity-aware nodes persist slot/revision bindings, preserve disabled/offline data and rollback packages, and reject late starts, uploads and events. The assistant's authenticated `extensions.identity` probe similarly guards stable model/knowledge ownership across manager versions. Do not manually move data or secret rows, or use uninstall/reinstall as a migration.
+
 ### Command-line programs (tools)
 
 When an extension works through some command-line tool (for example, wrapping the CLI of a company's internal service), it lists it in the manifest's `tools`, and the hub installs it at install time, so computers that never had that CLI can use it right away (#4507).
@@ -988,6 +1000,39 @@ Open retries keep the original request ID and complete request payload. While it
 - Global `fetch` uses a bounded broker over the **existing registered egress**. Deno's proxy-aware client still requires destination permissions, so proxy environment variables or a custom client alone are insufficient. Every target and redirect uses the registration's granted network rules; guest identity cannot select another registration. Registration replacement, settings changes and revocation cancel pending HTTP and tunnels. Input, output, bodies and pending queues are bounded. Source-only listeners also cap idle/pre-header sockets and header bytes; revocation closes sockets even before they submit a request.
 - Config, secrets, scoped tokens, grants, idle reclamation, timeout strikes and selective shutdown remain manager/`host.Proc` responsibilities. Full hub access, command-line tools, agent-runtime sockets, remote process sockets and source-runtime node programs are not supported by this stage. Existing executable node programs remain unchanged; no source program silently falls back to an unsandboxed node.
 - CLI source `test` verifies the package but refuses to label a bare engine launch as runtime acceptance. Actual-engine/namespace tests are separate from full resource acceptance; tests requiring unavailable enforcement explicitly report unavailable rather than passing via a developer bypass.
+
+### Opt-in exact JSON integer request params (#1201)
+
+The TypeScript SDK keeps `Handler(method, params)` and its default `JSON.parse` / `Number` behavior. A namespace that needs the original request tokens explicitly wraps its handler with `withExactParams`. Only inbound namespace RPC requests get the third `ExactCall` argument; events get `undefined`. This does not change tool schemas, replies, outbound calls/events, state, HTTP response parsing, authorization, egress or resource gates.
+
+```ts
+import { withExactParams, type Program } from "@persona/extension";
+
+export default {
+  id: "example", version: "1.0.0",
+  namespaces: {
+    connector: withExactParams((method, legacyParams, call) => {
+      if (method !== "tools.call" || !call) return {};
+      const args = call.params?.field("args");
+      const { topic, replies } = args?.int64Fields(["topic", "replies"])
+        ?? { topic: 0n, replies: 0n };
+      // Apply the existing tool's required/positive/range checks here.
+      // Render exact values as text; JSON.stringify cannot serialize bigint.
+      return { topic: topic.toString(), replies: replies.toString() };
+    }),
+  },
+} satisfies Program;
+```
+
+`legacyParams` is still the ordinary parsed object. `call.rawParams` preserves the selected original JSON text, including numeric lexemes; `call.params` is an `ExactJSON` view of it. The metadata selects the last Go-folded `params` RawMessage field (escaped/case-aliased keys included), without changing the legacy argument's exact-key lookup. Missing params (`undefined`) and JSON null (`raw === "null"`) stay distinct even though the legacy handler argument still defaults to `{}`. The view is made from raw input, never by converting a rounded Number to a string. `ExactJSON.parse(rawText)` also exposes the same validated view for explicit local use.
+
+- `member(name)` chooses the last exact JSON-decoded object key, including null, like a `json.RawMessage` map. Escaped keys match their decoded names.
+- `field(name)` chooses the last `json.RawMessage` struct field, including null, using Go's case-fold matching for an ASCII JSON field name (including the long-s and Kelvin-sign aliases). It does not merge repeated nested typed structs. A Go envelope with `Args json.RawMessage` first selects this last raw value, then decodes it separately.
+- `fieldValues(name)` yields all folded raw field occurrences in order for custom decoders, including mixed string/integer IDs. Apply the existing decoder to each occurrence, preserving its own null/type/error rules; looking only at the last token would erase earlier errors.
+- `int64(previous = 0n)` accepts only lexical `-?(0|[1-9][0-9]*)` within `[-9223372036854775808, 9223372036854775807]`, returning bigint. JSON null leaves `previous` unchanged. `1.0`, `1e0`, `1.0000000000000001`, strings, booleans and containers are errors, whereas `9007199254740993` and the full signed bounds are valid. Malformed numeric lexemes are invalid JSON and never dispatch.
+- `int64Fields(names)` decodes a fresh, non-embedded Go struct of int64 fields with distinct ASCII JSON names and distinct folds. Missing/null fields start at zero, duplicate fields are read in order, null does not overwrite, and an earlier type/lexical/overflow error cannot be erased by a later valid value. Unknown fields are ignored. Failures use `JSONIntegerError` (`invalid_params`) across separately bundled SDK copies. This is Go lexical integer decoding, **not** JSON Schema's mathematical integer meaning.
+
+The selected tokens are immutable, scanning is iterative (including deep unknown fields), and result field maps have null prototypes. The opt-in raw frame/view is bounded to 8 MiB of UTF-16 text; existing transport byte and process budgets are separate and unchanged. Extensions must keep their existing string-ID branch when a tool accepts both string IDs and numeric IDs; calling `int64Fields` unconditionally is not a migration of that mixed contract. There is no end-to-end exact JSON serialization promise.
 
 ### Development-only resource fallback (#5956)
 
@@ -1844,9 +1889,10 @@ Extension content **outside the app**: Home Screen widgets, Lock Screen and Appl
 and buttons on extension notifications. Extensions still do not run code in the app: widgets draw a subset of declarative View, while button and shortcut actions go back to the extension.
 Server implementation: `server/internal/extmgr/extension_system.go` (widgets, shortcuts, device widgets) and `FitWidget` in `server/internal/extension/ui.go`;
 schema in `schema/extension/` (`WidgetFamily`, `WidgetPlace`, `WidgetAnswer`, `DeviceWidget`, `ShortcutItem`, `ShortcutResult`, `NotifyAction`, `ExtensionNotification`),
-with types generated for all four clients. **Apple implementation is covered by #1862**; Android Home Screen widgets (Glance) can use the same endpoints later, not in this round.
+with types generated for all four clients. **#1147 adds Apple system surface wiring**, with build, visual, signing and device acceptance kept separate (see "Apple system surface boundaries" below); Android Home Screen widgets (Glance) can use the same endpoints later, not in this round.
 
 The corresponding capabilities exist only when `features` includes `extension_widgets` / `extension_shortcuts` / `extension_notify_actions` (see "Notification buttons" below).
+Public `/api/v1/health` deliberately omits `features` for some ingress paths, including with an Authorization header. An omitted field means unknown, not unsupported: system clients read the authenticated WebSocket `hello` before querying a catalog. An explicit feature list without the capability does not query that catalog.
 
 ### Widgets and watch faces (`widget`)
 
@@ -1882,7 +1928,7 @@ Returns 502 if nothing drawable remains. Prefer drawing directly for `size`: a `
 | --- | --- |
 | `GET /api/v1/extensions/-/widgets` | `{widgets: [{extension, extension_name, id, title, families, refresh_minutes, opens?}]}`: all widgets from enabled, running extensions. **Not in** `GET …/-/ui` (older apps do not see them) |
 | `POST /api/v1/extensions/{id}/-/widget/{ui}` `{context: {size: <family>, tz, locale, platform, ui_version}}` | `{view, expires_at}`: `expires_at` is now plus `refresh_minutes`, used by the app for the next timeline entry. The hub caches by (extension, widget, family, time zone, language, platform, UI version) until `expires_at`, avoiding duplicate extension calls for background refreshes and simultaneous device requests. `size` outside `families` returns 400; a non-`widget` contribution returns 400; drawing a widget via `…/-/ui/{ui}` also returns 400 |
-| `PUT /api/v1/devices/{id}/widgets` `{widgets: [{extension, id, family}]}` | Which widgets are on this device's screen (`id` is the app's own device id, as in `…/prefs`); **full replacement** (empty list clears all), at most 64; returns the stored copy. The app reports additions/removals (iOS: `WidgetCenter.getCurrentConfigurations`, reconciled when the app enters the foreground); stored in the hub setting `extension_widgets`, surviving hub restarts |
+| `PUT /api/v1/devices/{id}/widgets` `{widgets: [{extension, id, family}]}` | Which widgets are on this device's screen (`id` is the app's own device id, as in `…/prefs`); **full replacement** (empty list clears all), at most 64; returns the stored copy. Apple reconciles `WidgetCenter.getCurrentConfigurations` on foreground entry, timeline generation and a widget background wake. A failed configuration query is unknown, never an empty replacement. Removing the last widget has no guaranteed app callback; its report is cleared on the next foreground/background wake. Stored in the hub setting `extension_widgets`, surviving hub restarts |
 
 **Refresh**:
 
@@ -1916,8 +1962,20 @@ Manifest:
 | `GET /api/v1/extensions/-/shortcuts` | `{shortcuts: [{extension, extension_name, id, title, description?, params?, ui?}]}`: all shortcuts from enabled, running extensions |
 | `POST /api/v1/extensions/{id}/-/shortcut/{sid}` `{values: {name: string}, context: {tz, locale, platform, ui_version}}` | The hub checks values first: only declared parameters, required values present, numbers parseable, toggles `"true"` / `"false"`, choices one of the declared values; invalid input returns 400 `bad_request`. Then calls the extension's `shortcut.run {contribution, values, ui_version, tz?, locale?, platform?}` (20-second timeout), returning `{text?, view?}`: `text` is a sentence spoken / shown by Siri (at most 2000 characters), `view` trimmed to the `large` widget subset (Siri result card). Missing extension / shortcut returns 404, extension failure 502 `plugin_failed` |
 
-**App side** (#1862): one generic App Intent, **Run Extension Action**, with an **Action** parameter (dynamic choices from `GET …/-/shortcuts`, grouped by extension) and parameters generated from `params` (in text form).
-Running it calls the `POST` above; `text` becomes the Intent's result dialog, `view` is drawn as a result card with the app's widget renderer (`ShowsSnippetView`, note `#if compiler(>=6.4)`), and `ui` adds a button opening that app page. It runs on the watch too.
+**App side** (#1147): one generic App Intent, **Run Extension Action**, with an **Action** parameter (dynamic choices from `GET …/-/shortcuts`, labelled with the hub group and extension).
+App Intents cannot generate `@Parameter` declarations from a runtime manifest. Optional **Text**, **Number**, **Toggle** and **Choice** map to the first declared parameter of each kind; **JSON Values** accepts a string-to-string object for additional fields, with explicit JSON names winning. The client checks required values and declared kinds; the hub remains authoritative. Choice options come from the selected action, not another group.
+Running it uses the exact selected group's credential with `APIClient`, without the ordinary intent client's first-group fallback. `text` becomes the result value and dialog; iOS/visionOS on Swift 6.4+ adds a read-only card and **Open** when `ui` exists. Xcode 26.x, macOS and watchOS return the text/dialog without a snippet. The watch executes with its own credential.
+
+### Apple system surface boundaries (#1147)
+
+- `apple/Shared/ExtensionSurfaceStore.swift` holds a dedicated, bounded App Group snapshot: per-group credentials, widget/action directories and family/locale/time-zone content caches. Files are atomically replaced under a cross-process lock, mode 0600, excluded from backups and protected until first unlock. Nothing is written into Fleet's appearance store, URLs, logs or the repository. Group removal, credential rotation and authenticated 401/403 clear the affected content; generation and invalidation fences reject late render replies. A successful empty directory removes disabled/uninstalled contributions. Offline reads retain content, marked stale at `expires_at` rather than pretending it is current.
+- `apple/Shared/ExtensionSystemWidget.swift` provides one configurable widget kind: iOS small/medium/large and circular/rectangular/inline accessories; `PersonaWatchWidgets` supplies watchOS 10 complications for the three accessory families. Timelines use `expires_at` and include a stale entry at expiry. Foreground reconciliation reports the **entire** current configuration set per group, including empty lists; a WidgetCenter enumeration failure is unknown, never an empty report. Foreground refresh prewarms configured content. `extension_ui` invalidations and authenticated `extension_widget` background pushes invalidate caches and request timeline reloads, without changing notification-button handling. WidgetKit/APNs scheduling remains the system's decision, not a guaranteed refresh time.
+- The widget transport uses the configured direct hub URL, system TLS trust and no redirects; app-only tunnels are unavailable to extension processes. Offline cached content is the fallback, not another group's token. The phone forwards optional per-group `WatchConfigs.features` from the exported hub's authenticated hello. The wrist snapshot records `answerOnly` and optional `capabilities`: missing means unknown, `[]` means known unsupported. watchOS also treats pre-metadata snapshots as answer-only, including a complication launched before its containing app updates the snapshot. When public health omits features, an answer-only wrist uses that metadata, **never** `/api/v1/ws`; unknown metadata preserves credentials and cached projections and asks for a phone sync. Full-credential phone processes retain the authenticated hello fallback. Only hello metadata changes trigger the phone's extra snapshot sync and WatchConfigs push; identical exports do not rewrite the snapshot, and metadata-only changes preserve the pairing generation/cache while fencing older catalog replies.
+- Device widget reports need a formally issued device id. The wrist never lists `/api/v1/auth/tokens`. The phone migrates old watch credentials without ids by explicitly issuing a new `kind: watch` token and accepting only `role: answer`. The token listing exposes ids but no token hash, so names cannot safely identify the old token. Adoption is fenced by primary hub id, phone config, old watch config and old watch id. Unidentified legacy tokens and newly issued tokens orphaned by a concurrent pairing change are not automatically revoked: review and manually revoke obsolete Apple Watch entries in Settings › Devices after confirming the replacement works. A failed migration leaves the old wrist credential working but does not fabricate a device report.
+- `apple/Shared/ExtensionSurfaceView.swift` draws only metric/stat-grid/progress/chart/text/row with `apple/Shared/Design/ExtensionSurfaceTokens.swift`, without app renderer dependencies or interactive callbacks. Charts use monochrome labelled small multiples and VoiceOver data equivalents; pie/donut data uses bars, candles use an OHLC text projection. There is no hover on system widgets. This constrained rendering is not the full interactive page renderer.
+- Pairing, rotation and foreground entry sync the containing app's snapshot. The watch writes **only** its own WatchConfigs to a separate watch App Group; missing watch credentials never fall back to phone credentials. Complication links preserve group/owner/page/state, contain no credentials and reject unpaired groups. The watch resolves a complication's `opens` page to a widget contributed by the same owner and group, then uses its best-fitting declared family and context-matched cache/widget endpoint. It never requests the full `/-/ui` directory or page renderer; interactive controls and deep-link page state remain on iPhone.
+- The complication requires a **new** configured/derived Bundle ID and a **new** watch App Group attached to both watch app and complication. Existing IDs and the phone's App Group stay unchanged. See [release signing](../operations/release.md) and [configuration](../operations/config.md). This change does not register identities or modify account capabilities, profiles or private configuration.
+- Verification for #1147 is compiler-free only while Apple builds are paused. Swift tests were added, not executed. Xcode 26.0 compilation, Release App Intent metadata, light/dark widget and watch screenshots, actual WidgetCenter configuration removal, and first-unlock/offline/revocation/background-APNs behavior on paired devices are **pending**, not passing evidence.
 
 ### Notification buttons
 
@@ -1943,7 +2001,7 @@ When an extension sends a notification (hub `POST /api/v1/notify`, scope `notify
 - Foreground actions are first claimed by the system entry point held by AppModel, then executed with the notification's original `state`, afterwards sharing the ordinary extension page. Execute before rendering so a new state returned by rendering cannot replace the notification state; appearance changes or page rebuilding do not replay the action.
   The system entry temporarily shows a full page without competing for modal presentation with an open Settings sheet; **Done** returns to the original main page. Background buttons show only `toast`, not pages, links or navigation results; expiry cancels the request and completes the notification delegate callback once.
 - **Validation boundary**: `simctl push` does not run the Notification Service Extension. Dedicated local notifications can verify buttons, input and app callbacks, and unit tests of the shared registration logic can verify category merging, but neither proves that the first real-device background APNs notification was verified.
-  Full Home Screen widget, Watch complication and App Intent wiring remains later work under #1862; notification integration does not imply these are supported.
+  Home Screen widgets, watch complications and the generic App Intent are wired in #1147; device acceptance remains pending. Notification integration and compiler-free checks do not establish system-surface acceptance.
 
 ### Mock hub
 

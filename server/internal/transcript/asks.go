@@ -1,10 +1,11 @@
 package transcript
 
 import (
-	"regexp"
 	"strings"
 	"unicode"
 	"unicode/utf8"
+
+	"github.com/nwverse/persona/server/internal/lazyre"
 )
 
 // What an agent's last reply asks the user (docs/protocol/agent-states.md "Awaiting your reply", #5096): its closing question ("要不要推到
@@ -24,16 +25,16 @@ const askTail = 3
 const askClosers = `)）」』"'”’*_`
 
 var (
-	askFence    = regexp.MustCompile("(?s)```.*?```")
+	askFence    = lazyre.New("(?s)```.*?```")
 	askMarkdown = strings.NewReplacer("**", "", "__", "", "`", "", "~~", "")
-	askListMark = regexp.MustCompile(`^\s*(?:[-*+>#]+|\d+[.)、])\s*`)
+	askListMark = lazyre.New(`^\s*(?:[-*+>#]+|\d+[.)、])\s*`)
 	// Sentences that say nothing is asked ("没有需要你拍板的问题").
-	askNone = regexp.MustCompile(`没有(?:需要你|要你|什么要你)|不需要你|无需你|nothing (?:for you|needs you)|no (?:questions|decisions?) for you`)
+	askNone = lazyre.New(`没有(?:需要你|要你|什么要你)|不需要你|无需你|nothing (?:for you|needs you)|no (?:questions|decisions?) for you`)
 	// Inline code and links are no prose: "the `user?.name` crash", "…/pull/9?w=1" ask nothing (shield).
-	askInline = regexp.MustCompile("`[^`\n]*`|https?://\\S+")
+	askInline = lazyre.New("`[^`\n]*`|https?://\\S+")
 	// Sayings that hand a decision to the user, matched on a lower-cased sentence. Only whole sayings: 要我 alone is in
 	// "需要我们", 告诉我 in "日志告诉我们", 你想 in "如果你想看细节"; a sentence that ends in 吗 is a question anyway.
-	askPhrases = regexp.MustCompile(`要不要|是否(?:需要|要|继续|同意|可以)|你(?:来定|定一下|决定一下|看要不要|看行不行|看怎么样|选一个|选一下)|` +
+	askPhrases = lazyre.New(`要不要|是否(?:需要|要|继续|同意|可以)|你(?:来定|定一下|决定一下|看要不要|看行不行|看怎么样|选一个|选一下)|` +
 		`请(?:确认|选择|决定|告诉我|回复|指示)|告诉我(?:你|一下|要|用|选)|回我一下|你回我|跟我说一声|和我说一声|你(?:选定|定了|确认|同意)(?:后|以后|之后)|` +
 		`选定后|等你(?:决定|确认|回复|拍板)|选哪|哪个方案|哪种方案|` +
 		`\bshould i\b|\bshall i\b|\bdo you want\b|\bwould you like\b|\bwant me to\b|\blet me know\b|\bwhich (?:one|option|approach) (?:do|would|should)\b|` +
@@ -41,7 +42,7 @@ var (
 		`ますか|ですか|でしょうか|しましょうか|教えてください|確認してください`)
 	// A Chinese question without its question mark: the sentence ends in 吗 (punctuation aside). Not 么 / 呢: "…为什么。",
 	// "CI 还在跑呢。" are statements.
-	askParticle = regexp.MustCompile(`吗[。.！!~～]*$`)
+	askParticle = lazyre.New(`吗[。.！!~～]*$`)
 )
 
 // AskOf is the question text's last words put to the user, cleaned of Markdown and cut to a line; "" when they ask

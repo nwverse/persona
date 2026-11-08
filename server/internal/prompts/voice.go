@@ -1,6 +1,6 @@
 package prompts
 
-import "regexp"
+import "github.com/nwverse/persona/server/internal/lazyre"
 
 // The voice extension's prompts (voice/, docs/assistant/voice.md "Prompts"). Every one comes in the user's language: its Lang is
 // an i18n code, en or ja, anything else is Chinese.
@@ -264,7 +264,7 @@ type VoiceAgent struct{ ID, Title, State, Last string }
 func RenderVoiceToolResult(d VoiceToolResult) string { return render("voice/tool_result", d) }
 
 // agentOutputTag is anything a reader could take for the start or end of an <agent_output> block.
-var agentOutputTag = regexp.MustCompile(`(?i)<\s*/?\s*agent_output\b[^>]*>`)
+var agentOutputTag = lazyre.New(`(?i)<\s*/?\s*agent_output\b[^>]*>`)
 
 // AgentOutput is an agent's words to go inside an <agent_output> block, with nothing left in them that opens or closes
 // one, so none of them can stand outside it (docs/assistant/voice.md "Context for the fast layer" rule 5). Like ContextBody, a tag the removal

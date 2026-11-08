@@ -7,13 +7,13 @@ import (
 	"fmt"
 	"maps"
 	"os/exec"
-	"regexp"
 	"sort"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/osproc"
 	"github.com/nwverse/persona/server/internal/proto"
 )
@@ -250,7 +250,7 @@ func settingsArg(args []string) string {
 // --- what the probe means ---
 
 // secretEnv: variables whose values are never shown.
-var secretEnv = regexp.MustCompile(`(?i)(KEY|TOKEN|SECRET|PASSWORD|AUTH|COOKIE|CREDENTIAL)`)
+var secretEnv = lazyre.New(`(?i)(KEY|TOKEN|SECRET|PASSWORD|AUTH|COOKIE|CREDENTIAL)`)
 
 // shownArgs are a probe's arguments for the page: an inline --settings (JSON whose env can hold the key) as {…}, and
 // anything else that is a key by its form masked (maskSecrets).
@@ -273,7 +273,7 @@ func shownArgs(args []string) []string {
 }
 
 // launcherEnvKeys: the variables that configure the agent (the rest of a shell's environment is noise).
-var launcherEnvKeys = regexp.MustCompile(`^(ANTHROPIC_|CLAUDE_|CLAUDE_CODE_|API_TIMEOUT_MS$|DISABLE_|MAX_THINKING_TOKENS$|MAX_MCP_OUTPUT_TOKENS$|BASH_|MCP_|OPENAI_|CODEX_|HTTPS?_PROXY$|https?_proxy$|NO_PROXY$|no_proxy$)`)
+var launcherEnvKeys = lazyre.New(`^(ANTHROPIC_|CLAUDE_|CLAUDE_CODE_|API_TIMEOUT_MS$|DISABLE_|MAX_THINKING_TOKENS$|MAX_MCP_OUTPUT_TOKENS$|BASH_|MCP_|OPENAI_|CODEX_|HTTPS?_PROXY$|https?_proxy$|NO_PROXY$|no_proxy$)`)
 
 // LauncherDetail turns a probe into the page's fields: agent, gateway, how it authenticates, every model tier, the
 // context window, effort, flags, and the other settings — secrets masked.

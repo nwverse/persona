@@ -7,7 +7,6 @@ import (
 	"github.com/nwverse/persona/server/internal/compat"
 	"net/http"
 	"path"
-	"regexp"
 	"slices"
 	"sort"
 	"strings"
@@ -16,6 +15,7 @@ import (
 
 	"github.com/nwverse/persona/server/internal/apierr"
 	"github.com/nwverse/persona/server/internal/assistantwire"
+	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/rpc"
 )
@@ -368,7 +368,7 @@ func (s *Service) recordStartFailure(ctx context.Context, machine, launcher stri
 
 // startRequestErr are the node's answers to a session.start it would not run, whatever the launcher (node/control.go
 // checkStart and start, node/model_config.go check): a directory that is not there, a bad name, mode, effort or model.
-var startRequestErr = regexp.MustCompile(`^directory .* does not exist$|^invalid launcher |^invalid session id |^invalid model$|^unknown permission mode |^unknown effort level |^unsupported agent type |^permission mode and effort are only supported for Claude starts|^普通 Agent 的启动只支持|^新建 Codex 的思考强度由其启动器管理`)
+var startRequestErr = lazyre.New(`^directory .* does not exist$|^invalid launcher |^invalid session id |^invalid model$|^unknown permission mode |^unknown effort level |^unsupported agent type |^permission mode and effort are only supported for Claude starts|^普通 Agent 的启动只支持|^新建 Codex 的思考强度由其启动器管理`)
 
 // startRefusalCodes are the node's (and the hub's) coded refusals of the request itself (node/control.go,
 // node/codex_start.go, node/openelsewhere.go…). Codes about the machine's state (engine_missing, runtime_away,
@@ -393,12 +393,12 @@ func startRefused(err error) bool {
 
 var launcherErrorKinds = []struct {
 	kind string
-	re   *regexp.Regexp
+	re   *lazyre.Regexp
 }{
-	{errKindModelRoute, regexp.MustCompile(`(?i)bare claude model name|cannot be routed|no account match|model[^.\n]{0,60}(not found|not supported|not available|does not exist|unknown)|unknown model|invalid model`)},
-	{errKindAuth, regexp.MustCompile(`(?i)\b40[13]\b|invalid (or missing )?(api[ _-]?key|x-api-key|token|bearer)|authentication_error|unauthori[sz]ed|not logged in|please run /login|token (has )?expired|permission_error|forbidden|requires \w+ auth|no \w+ auth token|auth login`)},
-	{errKindCLIOutdated, regexp.MustCompile(`(?i)unknown option|unrecognized option|unexpected argument|please (update|upgrade)|(update|upgrade) (claude|codex|your)|version[^.\n]{0,40}(too old|no longer supported|not supported|outdated)|minimum (required )?version|requires (a )?newer`)},
-	{errKindTimeout, regexp.MustCompile(`(?i)context deadline exceeded|deadline exceeded|timed? ?out|秒内没有回答`)},
+	{errKindModelRoute, lazyre.New(`(?i)bare claude model name|cannot be routed|no account match|model[^.\n]{0,60}(not found|not supported|not available|does not exist|unknown)|unknown model|invalid model`)},
+	{errKindAuth, lazyre.New(`(?i)\b40[13]\b|invalid (or missing )?(api[ _-]?key|x-api-key|token|bearer)|authentication_error|unauthori[sz]ed|not logged in|please run /login|token (has )?expired|permission_error|forbidden|requires \w+ auth|no \w+ auth token|auth login`)},
+	{errKindCLIOutdated, lazyre.New(`(?i)unknown option|unrecognized option|unexpected argument|please (update|upgrade)|(update|upgrade) (claude|codex|your)|version[^.\n]{0,40}(too old|no longer supported|not supported|outdated)|minimum (required )?version|requires (a )?newer`)},
+	{errKindTimeout, lazyre.New(`(?i)context deadline exceeded|deadline exceeded|timed? ?out|秒内没有回答`)},
 }
 
 // classifyLauncherError names the class of a launcher's error, the first that matches.

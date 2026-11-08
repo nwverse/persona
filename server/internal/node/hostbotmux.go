@@ -14,13 +14,13 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"regexp"
 	"slices"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/nwverse/persona/server/internal/host"
+	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
@@ -378,7 +378,7 @@ func (r botmuxRow) agent() (host.Agent, bool) {
 }
 
 // botmuxCard is how botmux records a card it posted: "[card: <title>]" (the Chinese word for card) on the first line, then the card's text.
-var botmuxCard = regexp.MustCompile(`^\[卡片: ([^\]\n]*)\]`)
+var botmuxCard = lazyre.New(`^\[卡片: ([^\]\n]*)\]`)
 
 // botmuxReply is a reply as botmux recorded it, a card's title without botmux's label (the first words are the summary).
 func botmuxReply(s string) string { return botmuxCard.ReplaceAllString(s, "$1") }
@@ -756,7 +756,7 @@ func (n *Node) botmuxCodexHomes() []string {
 const botmuxHeadMax = 512 << 10
 
 // botmuxSessionRe is botmux's session block, as written or with JSON's escapes of < and >.
-var botmuxSessionRe = regexp.MustCompile(`(?:<|\\u003c)session_id(?:>|\\u003e)([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})(?:<|\\u003c)/session_id(?:>|\\u003e)`)
+var botmuxSessionRe = lazyre.New(`(?:<|\\u003c)session_id(?:>|\\u003e)([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})(?:<|\\u003c)/session_id(?:>|\\u003e)`)
 
 // botmuxHeads caches what each rollout's head says: read again only while the head is still being written.
 var botmuxHeads = struct {

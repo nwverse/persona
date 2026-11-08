@@ -2,13 +2,13 @@ package assistant
 
 import (
 	"context"
-	"regexp"
 	"strings"
 	"time"
 	"unicode"
 
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/db"
+	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/prompts"
 )
 
@@ -98,11 +98,11 @@ func (s *Service) ackViewErrors(ctx context.Context, p ContextParams) {
 // quotedValue is a quoted value in a check's message: a field or action name is kept, anything else (a link, HTML,
 // JSON, a sentence the view had) is not repeated back to the model. One cut before its closing quote (a message kept
 // only in part) runs to the end.
-var quotedValue = regexp.MustCompile(`"(?:[^"\\]|\\.)*(?:"|\\?$)`)
-var plainName = regexp.MustCompile(`^"[A-Za-z0-9_.\-]{1,40}"$`)
+var quotedValue = lazyre.New(`"(?:[^"\\]|\\.)*(?:"|\\?$)`)
+var plainName = lazyre.New(`^"[A-Za-z0-9_.\-]{1,40}"$`)
 
 // longToken is a run without spaces longer than any name or word a check writes itself: a name or value of the view's.
-var longToken = regexp.MustCompile(`[^\s.:]{65,}`)
+var longToken = lazyre.New(`[^\s.:]{65,}`)
 
 // scrubViewError is a check's message without the view's own text, on one line. It runs when the problem is recorded,
 // before the store keeps only its start, and again when it is read.

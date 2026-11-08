@@ -6,11 +6,11 @@ import (
 	"errors"
 	"net/http"
 	"net/url"
-	"regexp"
 	"strings"
 	"time"
 
 	"github.com/nwverse/persona/server/internal/i18n"
+	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
@@ -21,7 +21,7 @@ import (
 // service: its persona://connector link pasted here). ssh is not offered any more; hub.json entries of kind ssh keep
 // working.
 
-var adminMachineID = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,62}$`)
+var adminMachineID = lazyre.New(`^[a-z0-9][a-z0-9._-]{0,62}$`)
 
 type adminMachine struct {
 	ID           string             `json:"id"`

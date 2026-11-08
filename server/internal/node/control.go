@@ -141,7 +141,8 @@ func (n *Node) start(ctx context.Context, cwd, launcher, prompt, resume, workspa
 	}
 	// Persona's hooks: a plugin, or in --settings for a claude that loads none (hooksplugin.go).
 	settings, hooks := n.claudeStartSettings(ctx, launcher, "claude", cwd)
-	spec := claudeLaunch{Launcher: launcher, Settings: settings, Hooks: hooks, Model: execution.Model, Plugins: n.claudeLoadsPlugins(ctx)}
+	spec := claudeLaunch{Launcher: launcher, Settings: settings, Hooks: hooks, Display: n.liveRepliesPlugin(hooks), Model: execution.Model,
+		Plugins: n.claudeLoadsPlugins(ctx)}
 	// herdr told it is Claude (hostherdr.go): a launcher that wraps another binary is otherwise not seen as one. The
 	// node's directory in front, the assistant's environment left out (agentenv.go).
 	shells := paneShells(ctx)

@@ -3,10 +3,10 @@ package transcript
 import (
 	"encoding/json"
 	"html"
-	"regexp"
 	"strconv"
 	"strings"
 
+	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
@@ -18,10 +18,10 @@ import (
 //	Agent "<description>" finished / failed: … / is waiting on its own background work
 //	Dynamic workflow "<description>" completed / failed / was stopped
 var (
-	taskSummaryRe = regexp.MustCompile(`(?s)^(Background command|Monitor event:|Monitor|Agent|Dynamic workflow)\s+"(.*)$`)
+	taskSummaryRe = lazyre.New(`(?s)^(Background command|Monitor event:|Monitor|Agent|Dynamic workflow)\s+"(.*)$`)
 	// Where the quoted description ends: the last quote followed by how it went (descriptions may hold quotes).
-	taskOutcomeRe = regexp.MustCompile(`"\s+(completed|failed|was stopped|was killed|stream ended|stopped|finished|is waiting|timed out)`)
-	exitCodeRe    = regexp.MustCompile(`exit code (-?\d+)`)
+	taskOutcomeRe = lazyre.New(`"\s+(completed|failed|was stopped|was killed|stream ended|stopped|finished|is waiting|timed out)`)
+	exitCodeRe    = lazyre.New(`exit code (-?\d+)`)
 )
 
 // noteTitleLen: a title is one line of at most this many characters (the whole command is the detail).
