@@ -193,7 +193,10 @@ The connector checkpoint advances only after every batch on its page succeeds, u
 A failed later batch, an interrupted ingestion, or failure between ingestion and checkpoint can therefore replay a page without adding any already receipted ID.
 This transaction covers archive text, identity and chat metadata; people/document indexing and change notifications remain derived, best-effort work. A replay
 refreshes the chat's database index from its durable metadata. Compression compares both the latest timestamp and pending count before clearing work or advancing
-its coverage boundary; distinct IDs arriving during a model call can share the same timestamp or minute.
+its coverage boundary; distinct IDs arriving during a model call can share the same timestamp or minute. A refusal uses the same snapshot gate: it settles an
+unchanged batch without a summary, but leaves concurrent work pending and eligible without adding a refusal cooldown. Ingesting a new ID in a previously
+settled minute moves coverage back to that minute so later processing can read it. Other model failures retain their backoff; paused or cancelled calls do not
+settle pending work.
 
 New attachment filenames use a full SHA-256 digest of the raw message ID, plus the attachment index and bounded extension, under `attachments/<day>/messages/`.
 The separate subdirectory also protects old filenames that happen to resemble the new hashes.

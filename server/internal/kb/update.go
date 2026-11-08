@@ -80,6 +80,11 @@ func (e *Engine) Ingest(ctx context.Context, src Source, sc SourceChat, msgs []S
 		if m.At.After(c.LastAt) {
 			c.LastAt = m.At
 		}
+		// A new ID can arrive in a minute already summarized or refused. Reopen
+		// that minute instead of letting the old watermark hide its pending line.
+		if !c.CoveredUntil.IsZero() && m.At.Before(c.CoveredUntil) {
+			c.CoveredUntil = m.At.Truncate(time.Minute)
+		}
 	}
 	c.Messages += len(lines)
 	c.Pending += len(lines)

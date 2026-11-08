@@ -96,28 +96,43 @@ func (e *Engine) DueForCompression(now time.Time) []*Chat {
 	return out
 }
 
+// settleCompression advances only when no live pending work changed while the
+// model judged its snapshot. The minute boundary and pending count move together
+// for both a successful summary and a refusal; unseen IDs must remain readable.
+func settleCompression(current, snapshot *Chat) bool {
+	if current.Pending != snapshot.Pending || current.LastAt.After(snapshot.LastAt) {
+		return false
+	}
+	current.Pending = 0
+	current.CoveredUntil = snapshot.LastAt.Add(time.Minute)
+	return true
+}
+
 // compressFailed records that compressing c (the copy the call started from) failed with err, and returns the error to
-// log. The model declines the same messages again, so a refused batch is settled without a summary: the chat goes on
-// from the messages after it. Any other failure puts the chat off (compressRetry). A paused connection or an ended run
-// changes nothing: the chat stays due.
+// log. A refused snapshot is settled without a summary only when no new live work arrived; otherwise that work stays
+// eligible for another judgment. Any other failure puts the chat off (compressRetry). A paused connection or an ended
+// run changes nothing: the chat stays due.
 func (e *Engine) compressFailed(ctx context.Context, c *Chat, err error) error {
 	if ai.IsPaused(err) || ctx.Err() != nil {
 		return err
 	}
 	e.Store.chatMu.Lock() // read and written whole: what archiving or a history import wrote meanwhile stays
 	defer e.Store.chatMu.Unlock()
+	if perr := e.Store.recoverIngest(c.ID); perr != nil {
+		return perr
+	}
 	current, ok := e.Store.Chat(c.ID) // archiving may have added messages while the model was called
 	if !ok {
 		return err
 	}
 	if errors.Is(err, ai.ErrRefused) {
-		current.CoveredUntil = c.LastAt.Add(time.Minute)
-		if !current.LastAt.After(c.LastAt) {
-			current.Pending = 0
-		}
+		settled := settleCompression(current, c)
 		current.CompressFailures, current.CompressRetryAt = 0, time.Time{}
 		if perr := e.Store.PutChat(current); perr != nil {
 			return perr
+		}
+		if !settled {
+			return fmt.Errorf("%w: left concurrent messages pending", err)
 		}
 		return fmt.Errorf("%w: skipped its messages up to %s", err, c.LastAt.UTC().Format(time.RFC3339))
 	}
@@ -214,10 +229,7 @@ func (e *Engine) Compress(ctx context.Context, c *Chat) error {
 		// New IDs can share a timestamp or minute with the snapshot. Keep the
 		// pending work and its old coverage boundary when live ingestion moved,
 		// so the next pass also reads those messages at minute precision.
-		if !cur.LastAt.After(started.LastAt) && cur.Pending == started.Pending {
-			cur.Pending = 0
-			cur.CoveredUntil = started.LastAt.Add(time.Minute)
-		}
+		settleCompression(cur, &started)
 		cur.CompressedAt = now
 		cur.CompressFailures, cur.CompressRetryAt = 0, time.Time{}
 	})
