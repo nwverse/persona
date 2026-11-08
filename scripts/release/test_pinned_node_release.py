@@ -48,7 +48,7 @@ class PinnedNodeTests(unittest.TestCase):
         self.commit_error = None
         self.confirm_error = None
 
-    def relay(self, root, target, action, params=None):
+    def relay(self, root, target, action, params=None, **kwargs):
         self.assertEqual(root, self.root)
         self.assertEqual(target, TARGET)
         self.calls.append(action)
@@ -188,7 +188,7 @@ class PinnedNodeTests(unittest.TestCase):
     def test_transient_reconnect_is_bounded_and_reads_again(self):
         original = self.relay
         attempt = 0
-        def reconnect(root, target, action, params=None):
+        def reconnect(root, target, action, params=None, **kwargs):
             nonlocal attempt
             if action == 'info' and 'commit' in self.calls and not attempt:
                 attempt += 1
