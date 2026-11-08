@@ -1,5 +1,9 @@
 # Lessons: hub / node and networking
 
+## Model connection tests must match the runtime (#1732)
+
+A successful connection probe can still hide a request the model server will reject: exercise the same output-token field and its narrowly scoped fallback as the runtime. Parse SSE events rather than individual `data:` lines, including multiline events and CRLF, and test empty, truncated, refused, and errored replies separately.
+
 ## Battery investigations need attributed transport counts (#1633)
 
 A slow/error request log is not an access log, and successful Live Activity updates
