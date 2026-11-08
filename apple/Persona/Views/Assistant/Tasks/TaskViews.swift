@@ -492,6 +492,7 @@ struct TaskLine: View {
 struct FeedLine: View {
     var item: FeedItem
     var group: String = ""
+    @Environment(\.chatLayout) private var layout
     private var store: TasksStore { .shared }
 
     var body: some View {
@@ -509,9 +510,11 @@ struct FeedLine: View {
             if let id = item.ref, !store.laterMessages.contains(id) { MessageCard(item: item, itemID: id) }
         case .answered: AnsweredLine(item: item, taskTitle: taskTitle)
         case .receipt: ReceiptCard(item: item)
-        case .routed: routed
+        // The new conversation layout (#1666): "Persona → @task" / "task → @Persona", folded, in Persona's box.
+        case .routed: if layout.on { RoutedExchange(item: item, taskTitle: taskTitle, layout: layout) } else { routed }
         case .review: ReviewFeedLine(item: item, taskTitle: taskTitle)
-        case .report: ReportFeedLine(item: item, taskTitle: taskTitle)
+        case .report:
+            if layout.on { ReportExchange(item: item, taskTitle: taskTitle, layout: layout) } else { ReportFeedLine(item: item, taskTitle: taskTitle) }
         case .view:
             // Until the shared interactive renderer is connected, show the current card's plain-text fallback.
             if let id = item.ref,

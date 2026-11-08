@@ -3088,6 +3088,30 @@ if MOCK_TASKS:
         _base = min(x["seq"] for x in ITEMS[ASK1])
         for _i, _x in enumerate(ITEMS[ASK1]):
             _x["seq"] = _base + _i
+    # MOCK_EXCHANGES=1: the new conversation layout's material (#1666): Persona's long message to a task and the task's long
+    # report with a link in its words and an evidence list (folded to three lines, no list under it), and the hub's
+    # supervision digest (injected system / supervise), drawn as Persona writing to itself.
+    if os.environ.get("MOCK_EXCHANGES") == "1":
+        TASK_FEED[ASK1] += [
+            _feed("feed_x1", 6.5, "routed", "todo_task_tests", {"text": "先别动缓存层。\n1. 网络层的重试和超时先补测试，用本地假服务器；\n"
+                                                                "2. 覆盖率按 80% 算，生成的代码不算；\n3. 每补完一块就跑一次全量测试；\n"
+                                                                "4. 做完把 PR 链接和覆盖率截图发我。"}),
+            _feed("feed_x2", 6, "report", "todo_task_tests", {"kind": "done", "text": "网络层测试补完了，PR 在 https://github.com/example/weather/pull/45 。\n"
+                                                              "重试、超时和断网三块都有用例，用本地假服务器跑，不连真实接口。\n"
+                                                              "覆盖率从 52% 到 83%，生成的代码不算在里面。\n缓存层按你说的没动。",
+                                                              "evidence": ["https://github.com/example/weather/pull/45",
+                                                                           "https://github.com/example/weather/actions/runs/1001"]}),
+        ]
+        _digest = ("📋 督办：你派出去的任务有 2 个要你处理\n（这是 Persona 的督办消息，不是用户发的。这一轮正常结束时不会推送给用户。）\n\n"
+                   "1. 任务「补齐网络层的单元测试」：hub 判断做完了，等你验收\n2. 任务「修小组件横屏崩溃」：Agent 停下了，但没做完")
+        ITEMS[ASK1] += [
+            it("user", "text", 5.8, text=_digest, injected={"kind": "system", "state": "supervise", "line": "督办：2 个派出去的任务要处理"}),
+            it("assistant", "text", 5.7, text="网络层测试我核对过了：PR 已合并，覆盖率 83%，验收通过。小组件那个我让它接着修。"),
+        ]
+        ITEMS[ASK1].sort(key=lambda x: x["ts"])
+        _base = min(x["seq"] for x in ITEMS[ASK1])
+        for _i, _x in enumerate(ITEMS[ASK1]):
+            _x["seq"] = _base + _i
     # MOCK_RELAYED=1: a message another Persona conversation sent with conversation_send (prompts/assistant/relay.md),
     # then one you typed: only yours is the pale blue bubble (#2643).
     if os.environ.get("MOCK_RELAYED") == "1":
@@ -15418,6 +15442,7 @@ MOCK_HELP.append("MOCK_REWIND=1  检查 PR 的对话里有四条你的消息（�
 MOCK_HELP.append("MOCK_INBOX_SOURCES=none  还没接任何消息来源：收件箱空、没有邮箱账号、飞书没设置、GitHub 没登录（#4480）")
 MOCK_HELP.append("MOCK_INBOX_EXTRA=<n>  收件箱多 n 封知悉即可的示例通知，试「全部清理」的「将清理 N 件」确认")
 MOCK_HELP.append("MOCK_CHANNELS=1  设置 › 插件 › 渠道：App、飞书机器人和微信已连接、飞书 /agent 只读、一个待绑定（令牌 example-token）、一个出错、一个在市场里；主对话第一条来自微信")
+MOCK_HELP.append("MOCK_EXCHANGES=1  主对话新布局的素材（#1666）：Persona 发给任务的长消息、任务带链接和证据的长汇报、督办消息")
 MOCK_HELP.append("MOCK_AUTO_CONVERSATIONS=1  助手对话带来源 origin（feature conversation_origin）：另有 10 段自动对话（收件箱 6、定时任务 2、飞书 /agent、对话派生），侧边栏收进「自动对话」（#3264）")
 
 

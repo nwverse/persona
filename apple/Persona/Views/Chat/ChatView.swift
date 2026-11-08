@@ -169,6 +169,8 @@ struct ChatView: View {
     @State private var actions = ChatActions()
     /// The line a quote just led back to, lit up for a moment (`QuoteFlash`).
     @State private var quoteFlash: QuoteFlashMark?
+    /// The right-edge navigator while a finger is on it (new conversation layout, `ChatEdgeScrub`).
+    @State private var scrub = EdgeScrubState()
     /// Offered once this chat's pending card was answered and another conversation needs you (#4348); nil until then.
     @State private var offeredNext: SessionKey?
 
@@ -1497,7 +1499,15 @@ struct ChatView: View {
             UserDefaults.standard.removeObject(forKey: readKey)
             return
         }
-        let order = currentLines().map(\.id)
+        // Persona's conversation: a message, not the hub's lines (a task card, a day), which may come in after the
+        // transcript on the next launch and not be there yet to land on.
+        let order = currentLines().filter { line in
+            guard style == .assistant else { return true }
+            switch line.content {
+            case .feed, .day, .quick: return false
+            default: return true
+            }
+        }.map(\.id)
         // Lines only: a failed message's bubble among them (#6023) is no place to come back to.
         guard let top = scratch.visibleLines.filter({ order.contains($0) })
             .min(by: { (order.firstIndex(of: $0) ?? .max) < (order.firstIndex(of: $1) ?? .max) }) else { return }
@@ -1784,6 +1794,8 @@ struct ChatView: View {
             Color.clear.frame(height: Theme.Size.line)
             ChatRegion(name: "ChatTranscript.body") {
                 chatScroll()
+                    .overlay { if layout.on { EdgeScrubOverlay(state: scrub) } }
+                    .modifier(EdgeScrubbing(on: layout.on, band: scrubBand, changed: scrubbed))
                     .overlay(alignment: .bottomTrailing) { jumpArrow }
                     #if DEBUG
                     .overlay(alignment: .topLeading) { if Self.scrollProbe { scrollState } }
@@ -1819,6 +1831,7 @@ struct ChatView: View {
             footerRoom.fixedHeader = h
             footerRoom.chrome = style == .dev && !sideBars ? chrome : nil
         }
+        .environment(\.chatLayout, layout)
         .environment(\.openSubagent, actions.openSubagent)
         .environment(\.subagentsByCall, subagentsByCall)
         .environment(\.workflowChat, key)
@@ -1827,6 +1840,56 @@ struct ChatView: View {
         .environment(\.taskIndex, store.tasks)
         .environment(\.jumpToCall, actions.jumpToCall)
         .environment(\.openQuote, actions.openQuote)
+    }
+
+    /// How the chat draws (#1666): the new conversation layout in Persona's conversations on iPhone and iPad.
+    private var layout: ChatLayout { ChatLayoutSettings.shared.layout(assistant: style == .assistant) }
+
+    /// Where a slide opens the right-edge navigator (window coordinates): the band along the list's right edge,
+    /// below the top bar floating over it.
+    private var scrubBand: () -> CGRect {
+        let room = headerRoom
+        return { [scratch] in
+            let f = scratch.listFrame
+            return CGRect(x: f.maxX - Theme.Size.edgeBand, y: f.minY + room, width: Theme.Size.edgeBand, height: max(0, f.height - room))
+        }
+    }
+
+    #if os(iOS)
+    /// The right-edge navigator's finger (`EdgeScrubGesture`): opens on the messages the user typed, picks as it moves,
+    /// goes to the picked one as it lets go.
+    private func scrubbed(_ p: CGPoint, _ phase: UIGestureRecognizer.State) {
+        let y = p.y - scratch.listFrame.minY
+        switch phase {
+        case .began:
+            let opened = withAnimation(Theme.Motion.state) {
+                scrub.open(EdgeScrubState.marks(currentLines()), height: scratch.listFrame.height, top: headerRoom, at: y)
+            }
+            if opened { EdgeScrubHaptics.open() }
+        case .changed:
+            if scrub.move(to: y) { EdgeScrubHaptics.tick() }
+        case .ended:
+            if let mark = withAnimation(Theme.Motion.state, { scrub.close() }) { jumpToLine(mark.id) }
+        default:
+            withAnimation(Theme.Motion.state) { _ = scrub.close() }
+        }
+    }
+    #else
+    private func scrubbed(_ p: CGPoint, _ phase: Int) {}
+    #endif
+
+    /// Brings a line of the loaded chat to the middle of the list and lights it up, as a quote's does; the list stops
+    /// following the newest.
+    private func jumpToLine(_ id: String) {
+        wakeDrawer = nil
+        userScrolled = true
+        entry = nil
+        setFollow { $0.read() }
+        Task { @MainActor in
+            withAnimation(Theme.Motion.standard) { position.scrollTo(id: id, anchor: .center) }
+            try? await Task.sleep(for: .milliseconds(250))
+            quoteFlash = QuoteFlashMark(line: id)
+        }
     }
 
     /// From a quote in a sent bubble to the message it quotes (#986): brought to the middle of the list and lit up
@@ -3151,10 +3214,13 @@ struct ChatView: View {
                     // opened from a hub link to one of its messages (#2696): that message, not the newest
                 } else if style == .dev, session?.state == .unread || takeLatestAnswer() || Self.debugAsUnread {
                     entry = .latestAnswer // finished, not seen (or opened from its notification): the latest answer from its start
-                } else if style == .dev, let saved = UserDefaults.standard.string(forKey: readKey) {
-                    entry = .line(saved) // where you left off
+                } else if let saved = UserDefaults.standard.string(forKey: readKey) {
+                    entry = .line(saved) // where you left off (Persona's conversations too, #1666)
                 }
                 settleAtEnd()
+                #if DEBUG && os(iOS)
+                if style == .assistant, Self.debugEdgeScrub > 0 { Task { await showEdgeScrub(Self.debugEdgeScrub) } }
+                #endif
             }
             if style == .dev { AppModel.rememberChat(key) }
             #if DEBUG
@@ -3396,8 +3462,20 @@ struct ChatView: View {
     static let blankLanding = UserDefaults.standard.bool(forKey: "showBlankLanding")
     /// `-showAsUnread YES`: open the chat as if its answer had not been seen (where it lands).
     static let debugAsUnread = UserDefaults.standard.bool(forKey: "showAsUnread")
+    /// `-showEdgeScrub N`: Persona's conversation opens the right-edge navigator on the Nth newest message the user typed
+    /// and keeps it open (screenshots of the new conversation layout, #1666).
+    static let debugEdgeScrub = UserDefaults.standard.integer(forKey: "showEdgeScrub")
     #else
     static let debugAsUnread = false
+    #endif
+
+    #if DEBUG && os(iOS)
+    private func showEdgeScrub(_ n: Int) async {
+        try? await Task.sleep(for: .seconds(4)) // the chat loaded and settled
+        let marks = EdgeScrubState.marks(currentLines())
+        guard scrub.open(marks, height: scratch.listFrame.height, top: headerRoom, at: 0) else { return }
+        scrub.pick(max(0, marks.count - n))
+    }
     #endif
 
     private static var debugOpenAll: Bool {
@@ -5513,6 +5591,8 @@ private struct ChatLiveText: View {
     /// in a branch of its own beside this one (both rows `live`), the frozen words never showed, this view stayed in
     /// the lazy list and went on growing under the finger (2026-11-04, StreamingScrollTests: 9 to 30 pt every delta).
     var held: String?
+    /// The new conversation layout: the answer streams in the box it settles in (#1666).
+    @Environment(\.chatLayout) private var layout
 
     var body: some View {
         #if DEBUG || PERF_SIGNPOST
@@ -5520,7 +5600,17 @@ private struct ChatLiveText: View {
         #endif
         // Held: the store is not read, so the deltas do not draw this again.
         let text = held ?? (Self.shows(store) ? store.liveText : "")
-        if !text.isEmpty { StreamingText(text: text).id("live").flippedBack() }
+        if !text.isEmpty {
+            if layout.on {
+                StreamingText(text: text)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .chatBoxed(Theme.ChatBox.persona)
+                    .id("live")
+                    .flippedBack()
+            } else {
+                StreamingText(text: text).id("live").flippedBack()
+            }
+        }
     }
 
     /// There is streamed text, and its message is not the last row yet.

@@ -456,6 +456,8 @@ enum SettingsPage: Hashable {
     case persona, themeColor, style, layout, colorScheme, language, assistant, claude, codex, devices, phoneData, mail, feishu, feishuBot, notifications, storage, translation, modelConfiguration
     /// Settings › Session Triage (docs/assistant/agent-work.md「开关」).
     case triage
+    /// Settings › Appearance › New Conversation Layout (#1666, `ChatLayout`).
+    case chatLayout
     /// Settings › hub: the hubs paired, by group (docs/protocol/multi-hub.md).
     case hubs
     case hub, skills
@@ -509,6 +511,7 @@ private struct SettingsDestinations: ViewModifier {
         case .themeColor: ThemeColorSettingsPage()
         case .style: StyleSettingsPage()
         case .language: LanguageSettingsPage()
+        case .chatLayout: ChatLayoutSettingsPage()
         #if os(iOS) || os(visionOS)
         case .layout: LayoutSettingsPage()
         case .colorScheme: ColorSchemeSettingsPage()
