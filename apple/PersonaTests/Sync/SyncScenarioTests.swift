@@ -26,8 +26,7 @@ struct SyncScenarioTests {
 
     /// Cases this harness cannot play yet, and cases that fail on a bug filed for them: the name and why. A case leaves
     /// the list when it passes (a known issue that no longer happens fails the test).
-    nonisolated static let known: [String: String] = [
-    ]
+    nonisolated static let known: [String: String] = [:]
 
     @Test func everyFileHasCases() {
         #expect(Self.cases.count >= 24, "spec/fixtures/sync: \(Self.dir.path)")
