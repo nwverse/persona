@@ -395,8 +395,8 @@ func TestBackoffResetsAfterASteadyRun(t *testing.T) {
 func TestLeftoversKilled(t *testing.T) {
 	t.Run("group", func(t *testing.T) { testLeftoversKilled(t, false) })
 	t.Run("own group", func(t *testing.T) {
-		if runtime.GOOS != "linux" {
-			t.Skip("sessionMembers lists a session's processes on Linux only")
+		if self, _ := os.Readlink("/proc/self"); runtime.GOOS != "linux" || self != strconv.Itoa(os.Getpid()) {
+			t.Skip("sessionMembers lists a session's processes on Linux only, with this pid namespace's /proc")
 		}
 		testLeftoversKilled(t, true)
 	})
@@ -425,8 +425,11 @@ func testLeftoversKilled(t *testing.T, ownGroup bool) {
 }
 
 // gone: pid has ended. A zombie counts: whatever adopted it may never reap it (a container whose first process
-// doesn't), and its state in /proc says so where there is one.
+// doesn't), and its state in /proc says so where there is one; this test process reaps it when it adopted it (as the
+// first process of a pid namespace, or a subreaper).
 func gone(pid int) bool {
+	var ws syscall.WaitStatus
+	_, _ = syscall.Wait4(pid, &ws, syscall.WNOHANG, nil)
 	if syscall.Kill(pid, 0) != nil {
 		return true
 	}

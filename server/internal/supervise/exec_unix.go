@@ -26,8 +26,8 @@ const (
 )
 
 // killGroup kills what is left of cmd's session once it stopped: its process group, and every other process still
-// in the session where the system lists them (sessionMembers: Linux, which the image is). A session's id is not
-// given to another process while a member is left, so the sweep never reaches past it.
+// in the session where the system lists them (sessionMembers: Linux, which the image is, with this pid namespace's
+// /proc). A session's id is not given to another process while a member is left, so the sweep never reaches past it.
 func killGroup(cmd *exec.Cmd) {
 	if cmd.Process == nil {
 		return
