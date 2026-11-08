@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildRepoMachineTree, buildRepoTree, repoOf, type RepoTree } from "./agent-repos";
+import { buildRepoMachineTree, buildRepoTree, repoOf, showsWorktreeLevel, type RepoTree } from "./agent-repos";
 import type { AgentState, Machine, Session } from "./types";
 
 const machines: Machine[] = [
@@ -160,6 +160,212 @@ describe("按电脑分段的仓库树", () => {
   it("助手会话不进树", () => {
     const all = [session("ast", "/code/app", { machine_id: "machine-a", assistant: true })];
     expect(buildRepoMachineTree(all, machines)).toEqual([]);
+  });
+});
+
+const orca = (id: string, repoId: string, path: string, patch: Partial<Session> = {}): Session =>
+  session(id, path, { space_kind: "orca", space_id: `${repoId}::${path}`, ...patch });
+const spaceId = (repoId: string, path: string) => `${repoId}::${path}`;
+const onlyRepo = (all: Session[]) => buildRepoMachineTree(all, machines)[0]!.repos[0]!;
+
+describe("Orca projects in By repo", () => {
+  it("groups two worktrees by project id and resolves a name tie alphabetically", () => {
+    const a = "/home/u/orca/workspaces/myrepo/feature-a";
+    const b = "/home/u/orca/workspaces/myrepo/feature-b";
+    const tree = onlyRepo([orca("b", "repo-a", b), orca("a", "repo-a", a)]);
+    expect(tree.key).toBe("machine-a\u0000orca:repo-a");
+    expect(tree.repo).toBe("orca:repo-a");
+    expect(tree.name).toBe("feature-a");
+    expect(tree.worktrees.map((w) => [w.name, w.path, w.main])).toEqual([
+      ["feature-a", a, false],
+      ["feature-b", b, false],
+    ]);
+    expect(tree.count).toBe(2);
+  });
+
+  it("uses the most frequent folder name among distinct worktree paths", () => {
+    const x = "/home/u/orca/workspaces/myrepo/x";
+    const first = orca("x-1", "repo-a", x);
+    const tree = onlyRepo([
+      orca("main-1", "repo-a", "/home/u/orca/workspaces/one/myrepo"),
+      first,
+      session("x-2", `${x}/nested`, { space_kind: "orca", space_id: first.space_id }),
+      orca("main-2", "repo-a", "/home/u/orca/workspaces/two/myrepo"),
+    ]);
+    expect(tree.name).toBe("myrepo");
+    expect(tree.worktrees).toHaveLength(3);
+    const shared = tree.worktrees.find((w) => w.name === "x")!;
+    expect(shared.path).toBe(x);
+    expect(shared.sessions).toHaveLength(2);
+    expect(tree.count).toBe(4);
+  });
+
+  it("prefers the shortest folder name when frequencies tie", () => {
+    const tree = onlyRepo([
+      orca("long", "repo-a", "/home/u/orca/workspaces/myrepo/feature-a"),
+      orca("short", "repo-a", "/home/u/orca/workspaces/myrepo/tiny"),
+    ]);
+    expect(tree.name).toBe("tiny");
+  });
+
+  it("names a single-worktree project after that worktree's folder", () => {
+    const tree = onlyRepo([orca("one", "repo-a", "/home/u/orca/workspaces/myrepo/feature-a")]);
+    expect(tree.name).toBe("feature-a");
+    expect(tree.worktrees[0]!.name).toBe("feature-a");
+  });
+
+  it("keeps repo_root ahead of Orca project inference and does not nest those worktrees", () => {
+    const rootSpace = spaceId("repo-a", "/code/app");
+    const tree = onlyRepo([
+      session("main", "/code/app", { repo_root: "/code/app", space_kind: "orca", space_id: rootSpace }),
+      session("wt", "/home/u/orca/workspaces/myrepo/feature-a", {
+        repo_root: "/code/app",
+        space_kind: "orca",
+        space_id: spaceId("repo-a", "/home/u/orca/workspaces/myrepo/feature-a"),
+        parent_space_id: rootSpace,
+      }),
+    ]);
+    expect(tree.repo).toBe("/code/app");
+    expect(tree.name).toBe("app");
+    expect(tree.worktrees.map((w) => [w.name, w.main, w.children.length])).toEqual([
+      ["app", true, 0],
+      ["feature-a", false, 0],
+    ]);
+  });
+
+  it("leaves Orca folder workspaces and non-Orca ids containing :: on path-based grouping", () => {
+    const a = "/home/u/orca/workspaces/myrepo/feature-a";
+    const b = "/home/u/orca/workspaces/myrepo/feature-b";
+    const built = buildRepoMachineTree([
+      session("folder", a, { space_kind: "orca", space_id: "folder:00000000-0000-0000-0000-000000000000" }),
+      session("herdr", b, { space_kind: "herdr", space_id: spaceId("repo-a", b) }),
+    ], machines);
+    expect(built[0]!.repos.map((r) => [r.name, r.repo, r.worktrees[0]!.main])).toEqual([
+      ["feature-a", a, true],
+      ["feature-b", b, true],
+    ]);
+  });
+
+  it("keeps the same Orca project id separate on different machines", () => {
+    const path = "/home/u/orca/workspaces/myrepo/feature-a";
+    const built = buildRepoMachineTree([
+      orca("a", "repo-a", path),
+      orca("b", "repo-a", path, { machine_id: "machine-b" }),
+    ], machines);
+    expect(built.map((m) => m.machine.id)).toEqual(["machine-b", "machine-a"]);
+    expect(built.map((m) => [m.repos.length, m.repos[0]!.repo, m.repos[0]!.key])).toEqual([
+      [1, "orca:repo-a", "machine-b\u0000orca:repo-a"],
+      [1, "orca:repo-a", "machine-a\u0000orca:repo-a"],
+    ]);
+  });
+});
+
+describe("Orca child worktrees in By repo", () => {
+  it("nests recursively, sorts children, and fills descendant sessions and states", () => {
+    const a = "/home/u/orca/workspaces/myrepo/feature-a";
+    const b = "/home/u/orca/workspaces/myrepo/feature-b";
+    const c = "/home/u/orca/workspaces/myrepo/feature-c";
+    const d = "/home/u/orca/workspaces/myrepo/feature-d";
+    const tree = onlyRepo([
+      orca("c", "repo-a", c, { state: "working", status: "working", parent_space_id: spaceId("repo-a", a) }),
+      orca("d", "repo-a", d, { parent_space_id: spaceId("repo-a", b) }),
+      orca("a", "repo-a", a),
+      orca("b", "repo-a", b, { state: "needs_you", status: "needs_you", parent_space_id: spaceId("repo-a", a) }),
+    ]);
+    expect(tree.worktrees.map((w) => w.name)).toEqual(["feature-a"]);
+    expect(tree.count).toBe(4);
+    const parent = tree.worktrees[0]!;
+    expect(parent.children.map((w) => w.name)).toEqual(["feature-b", "feature-c"]);
+    expect(parent.children[0]!.children.map((w) => w.name)).toEqual(["feature-d"]);
+    expect(ids(parent.tree)).toEqual(["a", "b", "d", "c"]);
+    expect(parent.childStates).toEqual({ needs_you: 1, working: 1, done: 1 });
+    expect(parent.children[0]!.childStates).toEqual({ needs_you: 0, working: 0, done: 1 });
+    expect(parent.children[1]!.childStates).toEqual({ needs_you: 0, working: 0, done: 0 });
+  });
+
+  it("leaves a child with an unlisted parent at the top level", () => {
+    const a = "/home/u/orca/workspaces/myrepo/feature-a";
+    const tree = onlyRepo([orca("a", "repo-a", a, { parent_space_id: spaceId("repo-a", "/home/u/orca/workspaces/myrepo/missing") })]);
+    expect(tree.worktrees).toHaveLength(1);
+    expect(tree.worktrees[0]!.children).toEqual([]);
+    expect(ids(tree.worktrees[0]!.tree)).toEqual(["a"]);
+  });
+
+  it("leaves a self-parented worktree at the top level", () => {
+    const a = "/home/u/orca/workspaces/myrepo/feature-a";
+    const tree = onlyRepo([orca("a", "repo-a", a, { parent_space_id: spaceId("repo-a", a) })]);
+    expect(tree.worktrees).toHaveLength(1);
+    expect(tree.worktrees[0]!.children).toEqual([]);
+  });
+
+  it("breaks a two-worktree parent cycle", () => {
+    const a = "/home/u/orca/workspaces/myrepo/feature-a";
+    const b = "/home/u/orca/workspaces/myrepo/feature-b";
+    const tree = onlyRepo([
+      orca("a", "repo-a", a, { parent_space_id: spaceId("repo-a", b) }),
+      orca("b", "repo-a", b, { parent_space_id: spaceId("repo-a", a) }),
+    ]);
+    expect(tree.worktrees.map((w) => w.name)).toEqual(["feature-a", "feature-b"]);
+    expect(tree.worktrees.every((w) => w.children.length === 0)).toBe(true);
+  });
+
+  it("breaks a three-worktree parent cycle", () => {
+    const a = "/home/u/orca/workspaces/myrepo/feature-a";
+    const b = "/home/u/orca/workspaces/myrepo/feature-b";
+    const c = "/home/u/orca/workspaces/myrepo/feature-c";
+    const tree = onlyRepo([
+      orca("a", "repo-a", a, { parent_space_id: spaceId("repo-a", c) }),
+      orca("b", "repo-a", b, { parent_space_id: spaceId("repo-a", a) }),
+      orca("c", "repo-a", c, { parent_space_id: spaceId("repo-a", b) }),
+    ]);
+    expect(tree.worktrees.map((w) => w.name)).toEqual(["feature-a", "feature-b", "feature-c"]);
+    expect(tree.worktrees.every((w) => w.children.length === 0)).toBe(true);
+  });
+
+  it("does not nest a child under a parent in another project", () => {
+    const a = "/home/u/orca/workspaces/myrepo/feature-a";
+    const b = "/home/u/orca/workspaces/other/feature-b";
+    const built = buildRepoMachineTree([
+      orca("a", "repo-a", a, { parent_space_id: spaceId("repo-b", b) }),
+      orca("b", "repo-b", b),
+    ], machines)[0]!;
+    expect(built.repos).toHaveLength(2);
+    for (const repo of built.repos) {
+      expect(repo.worktrees).toHaveLength(1);
+      expect(repo.worktrees[0]!.children).toEqual([]);
+    }
+  });
+});
+
+describe("showsWorktreeLevel", () => {
+  it("hides the level for a single main worktree", () => {
+    expect(showsWorktreeLevel(buildRepoTree([session("main", "/code/app")], machines)[0]!)).toBe(false);
+  });
+
+  it("hides the level for a single Orca worktree named like its project", () => {
+    expect(showsWorktreeLevel(onlyRepo([orca("one", "repo-a", "/home/u/orca/workspaces/myrepo/feature-a")]))).toBe(false);
+  });
+
+  it("shows the level when a single top-level worktree has a child", () => {
+    const a = "/home/u/orca/workspaces/myrepo/feature-a";
+    const b = "/home/u/orca/workspaces/myrepo/feature-b";
+    const tree = onlyRepo([
+      orca("a", "repo-a", a),
+      orca("b", "repo-a", b, { parent_space_id: spaceId("repo-a", a) }),
+    ]);
+    expect(showsWorktreeLevel(tree)).toBe(true);
+  });
+
+  it("shows the level for two worktrees", () => {
+    const tree = onlyRepo([
+      orca("a", "repo-a", "/home/u/orca/workspaces/myrepo/feature-a"),
+      orca("b", "repo-a", "/home/u/orca/workspaces/myrepo/feature-b"),
+    ]);
+    expect(showsWorktreeLevel(tree)).toBe(true);
+  });
+
+  it("shows the level for a single non-main worktree with another name", () => {
+    expect(showsWorktreeLevel(buildRepoTree([session("wt", "/code/app/.worktrees/feature-a")], machines)[0]!)).toBe(true);
   });
 });
 

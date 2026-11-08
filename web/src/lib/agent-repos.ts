@@ -1,12 +1,25 @@
 import { byAttention, stateOf } from "./format";
+import { summaryState, type ChildStates } from "./herdr-tree";
 import type { Machine, Session } from "./types";
 
 /** Where a session's cwd sits: the repository it belongs to and the working tree inside it. */
 export type Repo = { repo: string; name: string; worktree: string; main: boolean };
 
-export type RepoWorktree = { key: string; name: string; path: string; main: boolean; sessions: Session[] };
+export type RepoWorktree = {
+  key: string;
+  name: string;
+  path: string;
+  main: boolean;
+  sessions: Session[];
+  /** Orca child worktrees, sorted by name. */
+  children: RepoWorktree[];
+  /** This worktree's own sessions, followed by every descendant's sessions. */
+  tree: Session[];
+  /** How many descendant worktrees need you, are working, or are done. */
+  childStates: ChildStates;
+};
 
-/** One repository on one machine, with its working trees (the main checkout first, then by name). */
+/** One repository on one machine, with its top-level working trees (the main checkout first, then by name). */
 export type RepoTree = {
   key: string;
   machineId: string;
@@ -62,39 +75,149 @@ export function repoOf(cwd: string, repoRoot?: string): Repo {
 
 const worktreeName = (path: string, repo: string) => (path === repo ? baseName(repo) : baseName(path));
 
+type Placement = Repo & { path: string; spaceId?: string };
+
+/** An Orca git worktree id is `<project id>::<absolute path>`; folder workspaces have no `::` and keep path inference. */
+function orcaSpace(s: Session): { repoId: string; path: string } | undefined {
+  if (s.space_kind !== "orca" || !s.space_id) return undefined;
+  const at = s.space_id.indexOf("::");
+  if (at <= 0) return undefined;
+  const repoId = s.space_id.slice(0, at);
+  const path = s.space_id.slice(at + 2).replace(/\/+$/, "");
+  return repoId && path ? { repoId, path } : undefined;
+}
+
+/** Where one session belongs in By repo. A host-supplied root wins; Orca's exact project id comes before path inference. */
+function placementOf(s: Session): Placement {
+  if (s.repo_root) {
+    const where = repoOf(s.cwd ?? "", s.repo_root);
+    return { ...where, path: where.worktree };
+  }
+  const orca = orcaSpace(s);
+  if (orca && s.space_id) {
+    return { repo: `orca:${orca.repoId}`, name: baseName(orca.path), worktree: s.space_id, path: orca.path, main: false, spaceId: s.space_id };
+  }
+  const where = repoOf(s.cwd ?? "", undefined);
+  return { ...where, path: where.worktree };
+}
+
+/** Orca does not send the project name yet: guess it from distinct worktree folder names, preferring the most frequent,
+ *  then the shortest, then alphabetical. A later repo_root replaces this guess with the exact repository name. */
+function orcaProjectName(worktrees: readonly RepoWorktree[]): string {
+  const counts = new Map<string, number>();
+  for (const path of new Set(worktrees.map((w) => w.path))) {
+    const name = baseName(path);
+    counts.set(name, (counts.get(name) ?? 0) + 1);
+  }
+  return [...counts].sort((a, b) => b[1] - a[1] || a[0].length - b[0].length || a[0].localeCompare(b[0]))[0]?.[0] ?? "";
+}
+
+/** Move Orca worktrees under their listed parent in the same project. A missing/self parent or any parent chain that
+ *  loops leaves the worktree at the top level, as in By machine; then fill descendant sessions and state counts. */
+function nestWorktrees(worktrees: RepoWorktree[], bySpace: ReadonlyMap<string, RepoWorktree>): RepoWorktree[] {
+  const orca = new Set(bySpace.values());
+  const parentOf = (w: RepoWorktree): RepoWorktree | undefined => {
+    if (!orca.has(w)) return undefined;
+    const pid = w.sessions[0]?.parent_space_id;
+    const parent = pid ? bySpace.get(pid) : undefined;
+    return parent === w ? undefined : parent;
+  };
+  const loops = (w: RepoWorktree) => {
+    const seen = new Set<RepoWorktree>([w]);
+    for (let p = parentOf(w); p; p = parentOf(p)) {
+      if (seen.has(p)) return true;
+      seen.add(p);
+    }
+    return false;
+  };
+  const top: RepoWorktree[] = [];
+  for (const w of worktrees) {
+    const parent = loops(w) ? undefined : parentOf(w);
+    if (parent) parent.children.push(w);
+    else top.push(w);
+  }
+  for (const w of worktrees) w.children.sort((a, b) => a.name.localeCompare(b.name));
+  const fill = (w: RepoWorktree): Session[] => {
+    const below = w.children.flatMap(fill);
+    const counts: ChildStates = { needs_you: 0, working: 0, done: 0 };
+    for (const c of w.children) {
+      for (const [k, v] of Object.entries(c.childStates) as [keyof ChildStates, number][]) counts[k] += v;
+      const st = summaryState(c.tree);
+      if (st === "needs_you" || st === "working") counts[st]++;
+      else if (st === "unread" || st === "idle") counts.done++;
+    }
+    w.childStates = counts;
+    w.tree = [...w.sessions, ...below];
+    return w.tree;
+  };
+  top.forEach(fill);
+  return top;
+}
+
+/** Whether By repo shows a worktree row, rather than putting a lone main or equivalently named worktree's agents
+ *  directly under the project. A worktree with children always keeps its level. */
+export function showsWorktreeLevel(tree: RepoTree): boolean {
+  if (tree.worktrees.length !== 1) return true;
+  const w = tree.worktrees[0]!;
+  return w.children.length > 0 || (!w.main && w.name !== tree.name);
+}
+
+type RepoBucket = { tree: RepoTree; orca: boolean; bySpace: Map<string, RepoWorktree> };
+
+/** Build one computer's repositories. Orca worktree identity is its space id, not cwd (which may be a subfolder). */
+function buildRepos(sessions: Session[], machineId: string): RepoTree[] {
+  const repos = new Map<string, RepoBucket>();
+  for (const s of sessions) {
+    const where = placementOf(s);
+    const key = `${machineId}\u0000${where.repo}`;
+    let bucket = repos.get(key);
+    if (!bucket) {
+      bucket = {
+        tree: { key, machineId, name: where.name, repo: where.repo, count: 0, worktrees: [] },
+        orca: Boolean(where.spaceId),
+        bySpace: new Map(),
+      };
+      repos.set(key, bucket);
+    }
+    const { tree } = bucket;
+    const identity = where.spaceId ?? where.worktree;
+    const worktreeKey = `${key}\u0000${identity}`;
+    let worktree = tree.worktrees.find((w) => w.key === worktreeKey);
+    if (!worktree) {
+      worktree = {
+        key: worktreeKey,
+        name: where.spaceId ? baseName(where.path) : worktreeName(where.worktree, where.repo),
+        path: where.path,
+        main: where.main,
+        sessions: [],
+        children: [],
+        tree: [],
+        childStates: { needs_you: 0, working: 0, done: 0 },
+      };
+      tree.worktrees.push(worktree);
+    }
+    if (where.spaceId && !bucket.bySpace.has(where.spaceId)) bucket.bySpace.set(where.spaceId, worktree);
+    worktree.sessions.push(s);
+    tree.count++;
+  }
+  return [...repos.values()].map((bucket) => {
+    const { tree } = bucket;
+    for (const w of tree.worktrees) w.sessions.sort(byAttention);
+    const worktrees = nestWorktrees(tree.worktrees, bucket.bySpace)
+      .sort((a, b) => Number(b.main) - Number(a.main) || a.name.localeCompare(b.name));
+    return { ...tree, name: bucket.orca ? orcaProjectName(tree.worktrees) : tree.name, worktrees };
+  }).sort((a, b) => a.name.localeCompare(b.name));
+}
+
 /**
  * The sidebar's repository tree: every live agent under the repository its cwd names, that repository's working trees
  * under it. Repositories sort by name (then machine), a tree's main checkout comes first, the rest by name; agents
  * inside a tree keep the sidebar's own order (needs-you first).
  */
 export function buildRepoTree(all: Session[], machines: Machine[]): RepoTree[] {
-  const online = new Set(machines.filter((m) => m.online).map((m) => m.id));
-  const repos = new Map<string, RepoTree>();
-  for (const s of all) {
-    if (s.assistant || !online.has(s.machine_id)) continue;
-    const where = repoOf(s.cwd ?? "", s.repo_root);
-    const key = `${s.machine_id}\u0000${where.repo}`;
-    let tree = repos.get(key);
-    if (!tree) {
-      tree = { key, machineId: s.machine_id, name: where.name, repo: where.repo, count: 0, worktrees: [] };
-      repos.set(key, tree);
-    }
-    let worktree = tree.worktrees.find((w) => w.path === where.worktree);
-    if (!worktree) {
-      worktree = { key: `${key}\u0000${where.worktree}`, name: worktreeName(where.worktree, where.repo), path: where.worktree, main: where.main, sessions: [] };
-      tree.worktrees.push(worktree);
-    }
-    worktree.sessions.push(s);
-    tree.count++;
-  }
   const order = (m: string) => machines.findIndex((x) => x.id === m);
-  return [...repos.values()]
-    .map((tree) => {
-      const worktrees = tree.worktrees
-        .map((w) => ({ ...w, sessions: w.sessions.sort(byAttention) }))
-        .sort((a, b) => Number(b.main) - Number(a.main) || a.name.localeCompare(b.name));
-      return { ...tree, worktrees };
-    })
+  return buildRepoMachineTree(all, machines)
+    .flatMap((m) => m.repos)
     .sort((a, b) => a.name.localeCompare(b.name) || order(a.machineId) - order(b.machineId));
 }
 
@@ -119,41 +242,14 @@ export function buildRepoMachineTree(all: Session[], machines: Machine[]): RepoM
   for (const m of machines) {
     const sessions = byMachine.get(m.id);
     if (!sessions || sessions.length === 0) continue;
-    const repos = new Map<string, RepoTree>();
-    for (const s of sessions) {
-      const where = repoOf(s.cwd ?? "", s.repo_root);
-      const key = `${m.id}\u0000${where.repo}`;
-      let tree = repos.get(key);
-      if (!tree) {
-        tree = { key, machineId: m.id, name: where.name, repo: where.repo, count: 0, worktrees: [] };
-        repos.set(key, tree);
-      }
-      let worktree = tree.worktrees.find((w) => w.path === where.worktree);
-      if (!worktree) {
-        worktree = { key: `${key}\u0000${where.worktree}`, name: worktreeName(where.worktree, where.repo), path: where.worktree, main: where.main, sessions: [] };
-        tree.worktrees.push(worktree);
-      }
-      worktree.sessions.push(s);
-      tree.count++;
-    }
-    const repoTrees = [...repos.values()]
-      .map((tree) => {
-        const worktrees = tree.worktrees
-          .map((w) => ({ ...w, sessions: w.sessions.sort(byAttention) }))
-          .sort((a, b) => Number(b.main) - Number(a.main) || a.name.localeCompare(b.name));
-        return { ...tree, worktrees };
-      })
-      .sort((a, b) => a.name.localeCompare(b.name));
-
     out.push({
       key: `repo-machine:${m.id}`,
       machine: m,
       foldKey: `repo-machine:${m.id}`,
-      repos: repoTrees,
+      repos: buildRepos(sessions, m.id),
       sessions,
       needs: sessions.filter((s) => stateOf(s) === "needs_you").length,
     });
   }
   return out;
 }
-
