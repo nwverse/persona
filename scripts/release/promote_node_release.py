@@ -106,7 +106,7 @@ def install(root, target, binary, manifest, timeout):
             if accepted.get('accepted') is not True:
                 raise ValueError('Node did not accept installation')
             committed = True
-    except Exception as failure:
+    except BaseException as failure:
         if not committed:
             try:
                 relay(root, target, 'abort', {'id': transaction},

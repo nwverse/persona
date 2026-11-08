@@ -110,6 +110,17 @@ class NodeReconnectTests(unittest.TestCase):
         self.assertNotIn('abort', self.calls)
         self.assertNotIn('confirm', self.calls)
 
+    def test_interrupted_transfer_still_aborts_original_transaction(self):
+        def handler(original, root, target, action, params, kwargs):
+            if action == 'chunk':
+                raise KeyboardInterrupt()
+            return original(root, target, action, params)
+        self.fault(handler)
+        with self.assertRaises(KeyboardInterrupt):
+            self.promote(True)
+        self.assertEqual(self.calls[-1], 'abort')
+        self.assertNotIn('commit', self.calls)
+
     def test_abort_failure_preserves_original_transfer_failure(self):
         def handler(original, root, target, action, params, kwargs):
             if action == 'chunk':
