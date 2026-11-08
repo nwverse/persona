@@ -122,11 +122,13 @@ const (
 )
 
 // AgentStartParams is agents.start_params's params: Params are POST /api/v1/sessions's (the node's session.start);
-// NameFrom is what the tab is named from now ("": not now: it has a name, resumes a session, or is named later).
+// NameFrom is what the tab is named from now ("": not now: it has a name, resumes a session, or is named later). Lang
+// is the app's language, the one a refusal is said in ("": the user's; an older hub sends none).
 type AgentStartParams struct {
 	MachineID string         `json:"machine_id"`
 	Params    map[string]any `json:"params"`
 	NameFrom  string         `json:"name_from,omitempty"`
+	Lang      string         `json:"lang,omitempty"`
 }
 
 // AgentResumeParams is agents.resume_params's params: Params are the message's (the node's session.send; the hub

@@ -1,6 +1,7 @@
 package hub
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -49,6 +50,11 @@ func (h *Hub) sessionModes(w http.ResponseWriter, r *http.Request, m *Machine) {
 		if err := m.call(ctx, "session.modes", p, &out); err != nil {
 			callErr(w, err)
 			return
+		}
+		if model, _ := p["model"].(string); strings.TrimSpace(model) != "" { // switched (the node read it back)
+			sid := r.PathValue("sid")
+			s, _ := m.session(sid)
+			h.modelUsed(h.sessionOwner(m.cfg.ID, sid), m.cfg.ID, cmp.Or(s.Launcher, "claude"), model)
 		}
 	}
 	if len(ultra) > 1 {

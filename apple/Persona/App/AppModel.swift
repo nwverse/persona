@@ -1954,6 +1954,30 @@ final class AppModel {
         }
     }
 
+    /// Moves a queued message one place up or down (#6088): the queue is pulled back and re-queued in the new order.
+    func moveQueued(_ key: SessionKey, index: Int, by step: Int) async {
+        guard allowSend(key), let api = api(key.group), let queue = session(key)?.queued,
+              let keep = QueueOrder.moved(count: queue.count, index: index, by: step) else { return }
+        do {
+            _ = try await api.editQueue(key, keep: keep)
+            Haptics.tap()
+        } catch {
+            show(error)
+        }
+    }
+
+    /// Gives the agent its queued messages now instead of at its next tool boundary (#6088).
+    func sendQueuedNow(_ key: SessionKey) async {
+        guard allowSend(key), let api = api(key.group) else { return }
+        do {
+            try await api.sendQueuedNow(key)
+            Haptics.success()
+            toast = Toast(String(localized: "Sent to the agent now [Queue Strip]"), style: .success)
+        } catch {
+            show(error)
+        }
+    }
+
     /// Launcher chosen in an assistant chat for its next messages (model switch).
     var assistantLaunchers: [SessionKey: String] = [:]
     /// The model picked for the next message here, with assistantLaunchers (nil: the launcher's default).
