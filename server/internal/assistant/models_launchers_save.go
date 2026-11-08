@@ -305,6 +305,7 @@ func (in launcherInput) check() error {
 var (
 	errChatProtocolChange = i18n.Err("assistant-models_launchers.err_chat_protocol_change")
 	errChatTransport      = i18n.Err("assistant-models_launchers.err_chat_transport")
+	errChatLaunchSettings = i18n.Err("assistant-models_launchers.err_chat_launch_settings")
 )
 
 // saveLauncher stores in (over old on an update) and tells the nodes.
@@ -412,6 +413,10 @@ func (s *Service) saveLauncher(ctx context.Context, in launcherInput, old *store
 			}
 			l.EnvSealed = sealed
 		}
+	}
+	if l.API == "chat" && (l.EnvSealed != "" || l.TimeoutMS != 0 || l.CompactWindow != 0 || l.MaxContext != 0 ||
+		l.Effort != "" || l.OpusModel != "" || l.SonnetModel != "" || l.HaikuModel != "" || l.FableModel != "" || l.SubagentForce) {
+		return storedLauncher{}, errChatLaunchSettings
 	}
 	l.APIKey, l.Headers, l.HasHeaders, l.Env, l.HasEnv = "", "", false, "", false // only ever stored sealed
 	if i := slices.IndexFunc(list, func(x storedLauncher) bool { return x.Name == l.Name }); i >= 0 {

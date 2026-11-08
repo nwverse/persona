@@ -107,6 +107,63 @@ func TestChatProviderTransportGuard(t *testing.T) {
 	}
 }
 
+func TestChatProviderRejectsLaunchSettings(t *testing.T) {
+	fields := []string{
+		`"env":"EXAMPLE=value"`, `"timeout_ms":1000`, `"compact_window":1000`, `"max_context":1000`,
+		`"effort":"high"`, `"opus_model":"m"`, `"sonnet_model":"m"`, `"haiku_model":"m"`,
+		`"fable_model":"m"`, `"subagent_force":true`,
+	}
+	for _, field := range fields {
+		t.Run(field, func(t *testing.T) {
+			_, mux := launcherTestService(t)
+			create := `{"name":"p","kind":"api","api":"chat","base_url":"https://api.example.com","model":"m",` + field + `}`
+			if code, body := launcherCall(t, mux, "POST", "/api/v1/launchers", create); code != 400 {
+				t.Fatalf("create: %d %s", code, body)
+			}
+			create = `{"name":"p","kind":"api","api":"messages","base_url":"https://api.example.com","model":"m",` + field + `}`
+			if code, body := launcherCall(t, mux, "POST", "/api/v1/launchers", create); code != 200 {
+				t.Fatalf("messages: %d %s", code, body)
+			}
+			update := `{"kind":"api","api":"chat","base_url":"https://api.example.com","model":"m"}`
+			if code, body := launcherCall(t, mux, "PUT", "/api/v1/launchers/p", update); code != 400 {
+				t.Fatalf("retained %s: %d %s", field, code, body)
+			}
+		})
+	}
+	s, mux := launcherTestService(t)
+	for _, lang := range []i18n.Lang{i18n.En, i18n.ZhHans, i18n.Ja} {
+		body := `{"name":"localized","kind":"api","api":"chat","base_url":"https://api.example.com","model":"m","timeout_ms":1000}`
+		res, err := serveHTTP(context.Background(), mux, assistantwire.HTTPRequest{Method: "POST", Path: "/api/v1/launchers", Body: []byte(body), Header: map[string][]string{"Accept-Language": {string(lang)}}}, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var response struct {
+			Error string `json:"error"`
+		}
+		if err := json.Unmarshal(res.Body, &response); err != nil {
+			t.Fatal(err)
+		}
+		if res.Status != 400 || response.Error != i18n.T(lang, "assistant-models_launchers.err_chat_launch_settings") {
+			t.Fatalf("lang=%s status=%d body=%s", lang, res.Status, res.Body)
+		}
+	}
+	create := `{"name":"p","kind":"api","api":"messages","base_url":"https://api.example.com","model":"m","env":"EXAMPLE=value","timeout_ms":1000,"compact_window":1000,"max_context":1000,"effort":"high","opus_model":"m","sonnet_model":"m","haiku_model":"m","fable_model":"m","subagent_force":true}`
+	if code, body := launcherCall(t, mux, "POST", "/api/v1/launchers", create); code != 200 {
+		t.Fatalf("create: %d %s", code, body)
+	}
+	clear := `{"kind":"api","api":"chat","base_url":"https://api.example.com","model":"m","env":"","timeout_ms":0,"compact_window":0,"max_context":0,"effort":"","opus_model":"","sonnet_model":"","haiku_model":"","fable_model":"","subagent_force":false,"models":[{"id":"m","context_window":32000,"efforts":["high"],"default_effort":"high"}]}`
+	if code, body := launcherCall(t, mux, "PUT", "/api/v1/launchers/p", clear); code != 200 {
+		t.Fatalf("clear settings and retain metadata: %d %s", code, body)
+	}
+	putLaunchers(t, s, storedLauncher{ManagedLauncher: proto.ManagedLauncher{Name: "old", Kind: "api", API: "chat", BaseURL: "https://api.example.com", Model: "m", TimeoutMS: 1000}})
+	if code, body := launcherCall(t, mux, "PUT", "/api/v1/launchers/old", `{"kind":"api","api":"chat","base_url":"https://api.example.com","model":"m"}`); code != 400 {
+		t.Fatalf("retained timeout: %d %s", code, body)
+	}
+	if code, body := launcherCall(t, mux, "PUT", "/api/v1/launchers/old", `{"kind":"api","api":"chat","base_url":"https://api.example.com","model":"m","timeout_ms":0}`); code != 200 {
+		t.Fatalf("clear timeout: %d %s", code, body)
+	}
+}
+
 func TestChatProbeDoesNotRetryStreamError(t *testing.T) {
 	calls := 0
 	gw := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
