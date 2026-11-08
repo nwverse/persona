@@ -67,8 +67,8 @@ func TestQuickMetaClaudeUsageLimit(t *testing.T) {
 	}
 }
 
-// A Claude pane's row says the limit, its reset and the promise; a read made stale by a write since says none of it
-// for the few seconds until the next (as for a Codex rollout, #2185).
+// A Claude pane's row says the limit, its reset and the promise; a read made stale by a write since says no error for
+// the few seconds until the next (as for a Codex rollout, #2185), but keeps the promise: nothing types into it then.
 func TestClaudePaneUsageLimitRow(t *testing.T) {
 	const id = "0d000000-0000-4000-8000-000000001710"
 	p := filepath.Join(t.TempDir(), id+".jsonl")
@@ -96,7 +96,7 @@ func TestClaudePaneUsageLimitRow(t *testing.T) {
 	}
 	lines = append(lines, `{"type":"system","subtype":"away_summary","uuid":"s1","parentUuid":"d1","timestamp":"2026-01-01T12:20:00Z","content":"recap"}`)
 	writeLines(t, p, lines) // within metaMinInterval: the last read stands, without its error
-	if s := row(); s.TurnError != "" || s.TurnErrorKind != "" || s.TurnErrorResetsAt != nil || s.TurnErrorResumes || s.TurnErrorAfterWork {
+	if s := row(); s.TurnError != "" || s.TurnErrorKind != "" || s.TurnErrorResetsAt != nil || !s.TurnErrorResumes || s.TurnErrorAfterWork {
 		t.Fatalf("a stale read: %q %q %v resumes %v after work %v", s.TurnError, s.TurnErrorKind, s.TurnErrorResetsAt, s.TurnErrorResumes, s.TurnErrorAfterWork)
 	}
 }

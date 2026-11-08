@@ -127,8 +127,10 @@ func (n *Node) meta(path string, st os.FileInfo) quickMeta {
 		}
 		if m.size != st.Size() || !m.mtime.Equal(st.ModTime()) {
 			// Written since that read: a turn error it saw may be over (a "Continue" ran and ended well within the interval),
-			// and a stale one would have it continued again. None for a few seconds is the safe side (#2185).
-			m.turnErr = turnFailure{}
+			// and a stale one would have it continued again. None for a few seconds is the safe side (#2185). The CLI's word
+			// that it resumes by itself stays: it keeps anything from typing into the session, the safe side too, and the
+			// writes that make the read stale are its own continuation at the reset or the wakes of the wait (#1710).
+			m.turnErr = turnFailure{resumes: m.turnErr.resumes}
 		}
 		return m
 	}
