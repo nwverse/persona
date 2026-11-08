@@ -7,7 +7,7 @@ import (
 )
 
 func TestGeneratedSourceRuntimeRoundTrip(t *testing.T) {
-	manifest := Manifest{ManifestVersion: 1, ID: "example", Name: "Example", Version: "1.0.0", Runtime: &Runtime{Mode: "deno", Source: &SourceRuntime{Entry: "src/main.tsx", Bundle: "bundle/main.mjs", Sha256: strings.Repeat("a", 64)}, Resources: &Resources{MemoryMb: 128, CpuPercent: 20}}}
+	manifest := Manifest{ManifestVersion: 1, ID: "example", Name: "Example", Version: "1.0.0", Engines: &Engines{ExtensionProtocol: 1}, Runtime: &Runtime{Mode: "deno", Source: &SourceRuntime{Entry: "src/main.tsx", Bundle: "bundle/main.mjs", Sha256: strings.Repeat("a", 64)}, Resources: &Resources{MemoryMb: 128, CpuPercent: 20}}}
 	b, err := json.Marshal(manifest)
 	if err != nil {
 		t.Fatal(err)
