@@ -28,11 +28,13 @@ var runningHubCommands = []struct {
 	name string
 	run  func() error
 }{
-	{"pair", func() error { return Pair(false) }},
-	{"pair --legacy", func() error { return Pair(true) }},
-	{"pair --machine --add", func() error { return PairMachine("study", true, "") }},
-	{"pair --peer", PairPeer},
-	{"peer list", func() error { return PeerCommand([]string{"list"}, strings.NewReader(""), io.Discard) }},
+	{"pair", func() error { return Pair(context.Background(), false) }},
+	{"pair --legacy", func() error { return Pair(context.Background(), true) }},
+	{"pair --machine --add", func() error { return PairMachine(context.Background(), "study", true, "") }},
+	{"pair --peer", func() error { return PairPeer(context.Background()) }},
+	{"peer list", func() error {
+		return PeerCommand(context.Background(), []string{"list"}, strings.NewReader(""), io.Discard)
+	}},
 	{"manager-code", func() error { return ManagerCode(context.Background(), io.Discard) }},
 	{"assistant-token", func() error { return AssistantToken(context.Background(), io.Discard) }},
 }

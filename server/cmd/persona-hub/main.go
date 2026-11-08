@@ -42,7 +42,7 @@ const usage = `usage:
   persona-hub setup [--yes] [--listen :18660] [--tls :18662] [--outside] [--no-service | --manager-service] [--json]
                            set this machine up as the hub (docs/assistant/onboarding.md); --manager-service: an existing
                            hub's built-in manager becomes a service of its own
-  persona-hub pair [--legacy] [--android] | --machine <id> [--add [--name <name>]] | --peer
+  persona-hub pair [--legacy | --android] | --machine <id> [--add [--name <name>]] | --peer
                            pairing codes for phones, a computer's persona-link, another hub
   persona-hub peer add|list|remove|center …    linked hubs (docs/server/mesh.md)
   persona-hub doctor        check the hub's configuration, network and certificates (read only)

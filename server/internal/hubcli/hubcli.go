@@ -25,7 +25,7 @@ const Usage = `  personad hub [run]        run the hub (config ~/.persona/hub.js
   personad hub setup [--yes] [--listen :18660] [--tls :18662] [--outside] [--no-service | --manager-service] [--json]
                                            set this machine up as the hub: hub.json, database, service, pairing (docs/assistant/onboarding.md);
                                            --manager-service: an existing hub's built-in manager becomes a service of its own (a new one has that)
-  personad hub pair [--legacy] [--android] print a pairing QR code and optional Android download link
+  personad hub pair [--legacy | --android] print a pairing QR code and optional Android download link
   personad hub pair --machine <id> [--add [--name <name>]]
                                            print a pairing link for that link machine's persona-link (docs/operations/link.md);
                                            --add adds it to hub.json first when it is not there
