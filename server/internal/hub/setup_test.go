@@ -737,14 +737,14 @@ func TestHubUnitsMatchHubSystemd(t *testing.T) {
 	if got := hubSocketUnit([]string{":18660", ":18662"}); got != want {
 		t.Fatalf("socket:\n%s", got)
 	}
-	svc := hubServiceUnit("/home/someone/.persona", false, true)
+	svc := hubServiceUnit("/home/someone/.persona", false, true, false)
 	for _, line := range []string{"Description=Persona hub (personad)", `ExecStart="/home/someone/.persona/bin/personad" hub`, "Wants=personad.socket", `Environment="PERSONA_HOME=/home/someone/.persona"`, "Restart=always"} {
 		if !strings.Contains(svc, line+"\n") {
 			t.Fatalf("no %q in:\n%s", line, svc)
 		}
 	}
 	// hub-systemd.sh's for a unit that runs persona-hub.
-	svc = hubServiceUnit("/home/someone/.persona", true, true)
+	svc = hubServiceUnit("/home/someone/.persona", true, true, false)
 	for _, line := range []string{"Description=Persona hub (persona-hub)", `ExecStart="/home/someone/.persona/bin/persona-hub" run`, "Wants=personad.socket"} {
 		if !strings.Contains(svc, line+"\n") {
 			t.Fatalf("no %q in:\n%s", line, svc)

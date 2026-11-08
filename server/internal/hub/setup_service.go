@@ -44,15 +44,25 @@ func (e *setupEnv) service(ctx context.Context, cfg *setupConfig) error {
 	return e.fail("service", e.goos+" 上还装不了常驻服务", "加 --no-service，自己让 personad hub run 一直运行")
 }
 
-// splitHub is <root>/bin/persona-hub when the hub's service runs it in personad's place (docs/server/server.md
-// "Programs"): it is there, it is <root>/bin/personad's build, and update.SplitEnv is not 0; "" otherwise. note says
-// why a persona-hub there was passed over. <root>/bin/personad, not the file it links to: the service names this one.
+// splitHub is <root>/bin/persona-hub when the hub's systemd unit runs it in personad's place (docs/server/server.md
+// "Programs"): it is there, it is <root>/bin/personad's build, and update.SplitEnv is not 0 (splitOff); "" otherwise.
+// note says why a persona-hub there was passed over. <root>/bin/personad, not the file it links to: the service names
+// this one.
 func (e *setupEnv) splitHub(ctx context.Context) (prog, note string) {
-	if strings.TrimSpace(e.getenv(update.SplitEnv)) == "0" {
+	if e.splitOff() {
 		return "", ""
 	}
 	return update.SplitBeside(ctx, filepath.Join(e.root, "bin", "personad"), "persona-hub", e.programVersion)
 }
+
+// splitOff says setup runs with update.SplitEnv 0. The unit it writes then keeps it, so the hub and what it starts
+// stay on personad too, until setup runs again without it.
+func (e *setupEnv) splitOff() bool { return strings.TrimSpace(e.getenv(update.SplitEnv)) == "0" }
+
+// macPersonad is what setup on a Mac says when persona-hub is beside personad: the hub's agent and the built-in
+// manager's stay on personad for now. macOS holds a LaunchAgent's children (the node of the hub's computer) to the
+// agent's program for its privacy permissions (Full Disk Access), so they move together with that node, later.
+const macPersonad = "；macOS 上 hub 和内置管理者暂时照旧运行 personad，以后会和本机的 node 一起换成 persona-hub 和 persona-manager"
 
 // programVersion is what the program at path says to `version -v`.
 func (e *setupEnv) programVersion(ctx context.Context, path string) (string, error) {
@@ -192,8 +202,9 @@ func hubExecStart(root string, split bool) string {
 	return "ExecStart=" + strings.ReplaceAll(systemdQuoteValue(root+"/bin/personad"), "$", "$$") + " hub"
 }
 
-// hubServiceUnit is personad.service, as hub-systemd.sh writes it; split: it runs persona-hub.
-func hubServiceUnit(root string, split, socket bool) string {
+// hubServiceUnit is personad.service, as hub-systemd.sh writes it; split: it runs persona-hub; splitOff: it keeps
+// update.SplitEnv 0 (hub-systemd.sh keeps it, as it keeps a unit's own lines).
+func hubServiceUnit(root string, split, socket, splitOff bool) string {
 	description := "Description=Persona hub (personad)"
 	if split {
 		description = "Description=Persona hub (persona-hub)"
@@ -206,8 +217,11 @@ func hubServiceUnit(root string, split, socket bool) string {
 		hubExecStart(root, split),
 		"Restart=always", "RestartSec=3", "TimeoutStopSec=20",
 		"Environment="+systemdQuoteValue("PERSONA_HOME="+root),
-		"Environment=PATH=%h/.local/bin:%h/bin:/usr/local/go/bin:/usr/local/bin:/usr/bin:/bin", "",
-		"[Install]", "WantedBy=default.target", "")
+		"Environment=PATH=%h/.local/bin:%h/bin:/usr/local/go/bin:/usr/local/bin:/usr/bin:/bin")
+	if splitOff {
+		lines = append(lines, "Environment="+update.SplitEnv+"=0")
+	}
+	lines = append(lines, "", "[Install]", "WantedBy=default.target", "")
 	return strings.Join(lines, "\n")
 }
 
@@ -362,7 +376,7 @@ func (e *setupEnv) systemdService(ctx context.Context, cfg *Config, bin string) 
 	if running != "" {
 		programBefore = running
 	}
-	service := compatibleUnitText(hubServiceUnit(e.root, split != "", useSocket), units)
+	service := compatibleUnitText(hubServiceUnit(e.root, split != "", useSocket, e.splitOff()), units)
 	if units.legacy && len(serviceBefore) > 0 {
 		service = string(serviceBefore)
 	}
@@ -499,22 +513,18 @@ func (e *setupEnv) plistPath() string {
 	return filepath.Join(e.home, "Library", "LaunchAgents", hubLaunchdLabel+".plist")
 }
 
-// hubPlist is the hub's launchd agent: it runs <root>/bin/personad hub (bin), or `<root>/bin/persona-hub run` (split,
-// the program's path), which hub-systemd.sh and self-update find.
-func hubPlist(home, root, bin, split string) string {
+// hubPlist is the hub's launchd agent: it runs <root>/bin/personad hub (bin), which hub-systemd.sh and self-update
+// find. Not persona-hub, on a Mac, for now (macPersonad).
+func hubPlist(home, root, bin string) string {
 	x := html.EscapeString
 	log := filepath.Join(root, "hub.log")
 	path := strings.Join([]string{filepath.Join(home, ".local", "bin"), filepath.Join(home, "bin"), filepath.Join(home, ".orbstack", "bin"),
 		"/opt/homebrew/bin", "/usr/local/bin", "/usr/bin", "/bin", "/usr/sbin", "/sbin"}, ":")
-	args := `<string>` + x(bin) + `</string><string>hub</string>`
-	if split != "" {
-		args = `<string>` + x(split) + `</string><string>run</string>`
-	}
 	return `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0"><dict>
   <key>Label</key><string>` + hubLaunchdLabel + `</string>
-  <key>ProgramArguments</key><array>` + args + `</array>
+  <key>ProgramArguments</key><array><string>` + x(bin) + `</string><string>hub</string></array>
   <key>EnvironmentVariables</key><dict>
     <key>PERSONA_HOME</key><string>` + x(root) + `</string>
     <key>PATH</key><string>` + x(path) + `</string>
@@ -670,20 +680,15 @@ func (e *setupEnv) launchdService(ctx context.Context, cfg *Config, bin string) 
 		return nil
 	}
 	file := e.plistPath()
-	split, splitNote := e.splitHub(ctx)
-	want := hubPlist(e.home, e.root, bin, split)
+	want := hubPlist(e.home, e.root, bin)
 	before, beforeErr := os.ReadFile(file)
 	programBefore := ""
 	if job, ok := readLaunchdJob(file); ok && len(job.args) > 0 {
 		programBefore = homePath(job.args[0], e.home)
 	}
-	after := bin
-	if split != "" {
-		after = split
-	}
-	notRun := ""
-	if splitNote != "" {
-		notRun = "；没用 persona-hub（" + splitNote + "），服务运行 personad"
+	macNote := ""
+	if fi, err := os.Stat(filepath.Join(e.root, "bin", "persona-hub")); err == nil && !fi.IsDir() {
+		macNote = macPersonad
 	}
 	_, loadedErr := e.run(ctx, nil, "launchctl", "print", domain+"/"+hubLaunchdLabel)
 	e.hubRestart = e.relaunch(domain + "/" + hubLaunchdLabel)
@@ -696,7 +701,7 @@ func (e *setupEnv) launchdService(ctx context.Context, cfg *Config, bin string) 
 			detail = "常驻服务已经装好；" + e.restartReason(binChanged) + "，重启了它（launchd " + hubLaunchdLabel + "）"
 		}
 		noteBinary(bin, sum)
-		e.report("service", true, detail+notRun, "")
+		e.report("service", true, detail+macNote, "")
 		return nil
 	}
 	if os.IsNotExist(beforeErr) && e.hubAnswers(ctx, cfg) {
@@ -720,8 +725,8 @@ func (e *setupEnv) launchdService(ctx context.Context, cfg *Config, bin string) 
 	noteBinary(bin, sum)
 	detail := fmt.Sprintf("装好了常驻服务（launchd %s，登录后自动运行），日志在 %s", hubLaunchdLabel, filepath.Join(e.root, "hub.log"))
 	if beforeErr == nil {
-		detail += switchNote(programBefore, after, loadedErr == nil, loadedErr == nil && cfg.Assistant.StartsBuiltin())
+		detail += switchNote(programBefore, bin, loadedErr == nil, loadedErr == nil && cfg.Assistant.StartsBuiltin())
 	}
-	e.report("service", true, detail+notRun, "")
+	e.report("service", true, detail+macNote, "")
 	return nil
 }

@@ -50,7 +50,7 @@ func TestSetupServiceRunsPersonaHub(t *testing.T) {
 	if err := os.MkdirAll(e.unitDir(), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(unit, []byte(hubServiceUnit(e.root, false, false)), 0o644); err != nil {
+	if err := os.WriteFile(unit, []byte(hubServiceUnit(e.root, false, false, false)), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	sum, _ := binaryChanged(bin)
@@ -84,7 +84,8 @@ func TestSetupServiceRunsPersonaHub(t *testing.T) {
 		t.Fatalf("runs another program: %v\n%s", cmds.calls, report)
 	}
 	delete(cmds.replies, mainPID)
-	// Opted out: back to personad, said the same way; a manager of its own (service mode) is not the hub's child.
+	// Opted out: back to personad, said the same way, and the unit keeps the opt-out; a manager of its own (service
+	// mode) is not the hub's child.
 	cmds.calls = nil
 	e.getenv = func(k string) string {
 		if k == "PERSONA_SPLIT_PROGRAMS" {
@@ -93,7 +94,8 @@ func TestSetupServiceRunsPersonaHub(t *testing.T) {
 		return ""
 	}
 	report = serviceReport(t, e, &Config{Listen: ":18662", Assistant: AssistantProfile{Mode: AssistantModeService}}, bin)
-	if b, _ := os.ReadFile(unit); !strings.Contains(string(b), `ExecStart="`+e.root+`/bin/personad" hub`+"\n") {
+	if b, _ := os.ReadFile(unit); !strings.Contains(string(b), `ExecStart="`+e.root+`/bin/personad" hub`+"\n") ||
+		!strings.Contains(string(b), "\nEnvironment=PERSONA_SPLIT_PROGRAMS=0\n") {
 		t.Fatalf("unit:\n%s", b)
 	}
 	if !cmds.called("systemctl --user restart personad") || !strings.Contains(report, "服务改成运行 personad，重启了 hub") || strings.Contains(report, "内置管理者") {
@@ -103,6 +105,16 @@ func TestSetupServiceRunsPersonaHub(t *testing.T) {
 		if strings.Contains(c, "version -v") {
 			t.Fatalf("opted out, still asked: %q", c)
 		}
+	}
+	// A rerun without it moves the unit back to persona-hub and drops it.
+	cmds.calls = nil
+	e.getenv = func(string) string { return "" }
+	report = serviceReport(t, e, &Config{Listen: ":18662"}, bin)
+	if b, _ := os.ReadFile(unit); !strings.Contains(string(b), `ExecStart="`+e.root+`/bin/persona-hub" run`+"\n") || strings.Contains(string(b), "PERSONA_SPLIT_PROGRAMS") {
+		t.Fatalf("unit:\n%s", b)
+	}
+	if !cmds.called("systemctl --user restart personad") || !strings.Contains(report, "服务改成运行 persona-hub，重启了 hub") {
+		t.Fatalf("%v\n%s", cmds.calls, report)
 	}
 }
 
@@ -198,8 +210,11 @@ func TestSetupServiceFormerNameKeepsPersonad(t *testing.T) {
 	}
 }
 
-// On a Mac the agent runs `persona-hub run`; a rerun over a personad agent says it switched.
-func TestSetupMacAgentRunsPersonaHub(t *testing.T) {
+// On a Mac the agent runs `personad hub` even with a persona-hub of its build beside it, and the report says why the
+// hub and the built-in manager stay on personad for now. An agent that ran persona-hub (edited by hand) is moved back
+// and the report says so: loaded, the hub restarts, its child with it. An agent of someone's own that runs this
+// persona-hub is still the hub's, left as it is.
+func TestSetupMacAgentStaysOnPersonad(t *testing.T) {
 	e, cmds, bin := splitSetup(t, "persona 1.0 abc\n")
 	e.goos, e.uid = "darwin", 501
 	cmds.replies["launchctl print"] = fakeReply{err: true}
@@ -207,42 +222,69 @@ func TestSetupMacAgentRunsPersonaHub(t *testing.T) {
 	if err := os.MkdirAll(filepath.Dir(file), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(file, []byte(hubPlist(e.home, e.root, bin, "")), 0o644); err != nil {
-		t.Fatal(err)
-	}
 	out := e.out.(interface{ String() string })
-	if err := e.launchdService(context.Background(), &Config{Listen: ":18662"}, bin); err != nil {
-		t.Fatalf("%v\n%s", err, out.String())
+	setup := func(plist string) string {
+		t.Helper()
+		if plist != "" {
+			if err := os.WriteFile(file, []byte(plist), 0o644); err != nil {
+				t.Fatal(err)
+			}
+		}
+		before := len(out.String())
+		if err := e.launchdService(context.Background(), &Config{Listen: ":18662"}, bin); err != nil {
+			t.Fatalf("%v\n%s", err, out.String())
+		}
+		if b, _ := os.ReadFile(file); string(b) != hubPlist(e.home, e.root, bin) {
+			t.Fatalf("plist:\n%s", b)
+		}
+		return strings.TrimSpace(out.String()[before:])
 	}
-	plist, _ := os.ReadFile(file)
 	hub := filepath.Join(e.root, "bin", "persona-hub")
-	if !strings.Contains(string(plist), "<string>"+hub+"</string><string>run</string>") {
-		t.Fatalf("plist:\n%s", plist)
+	personad := hubPlist(e.home, e.root, bin)
+	runsHub := strings.Replace(personad, "<string>"+bin+"</string><string>hub</string>", "<string>"+hub+"</string><string>run</string>", 1)
+	if runsHub == personad {
+		t.Fatal("no ProgramArguments to edit")
 	}
-	if !strings.HasSuffix(strings.TrimSpace(out.String()), "；服务改成运行 persona-hub") {
-		t.Fatalf("not loaded, so not restarted: %s", out.String())
+
+	if report := setup(personad); !strings.HasSuffix(report, macPersonad) || strings.Contains(report, "改成运行") {
+		t.Fatalf("report: %s", report)
 	}
-	// Loaded (it ran): restarted, its child with it.
-	if err := os.WriteFile(file, []byte(hubPlist(e.home, e.root, bin, "")), 0o644); err != nil {
-		t.Fatal(err)
+	for _, c := range cmds.calls {
+		if strings.Contains(c, "version -v") {
+			t.Fatalf("on a Mac, asked: %q", c)
+		}
+	}
+	if report := setup(runsHub); !strings.HasSuffix(report, "；服务改成运行 personad"+macPersonad) {
+		t.Fatalf("not loaded, so not restarted: %s", report)
 	}
 	delete(cmds.replies, "launchctl print")
-	if err := e.launchdService(context.Background(), &Config{Listen: ":18662"}, bin); err != nil {
-		t.Fatalf("%v\n%s", err, out.String())
+	if report := setup(runsHub); !strings.HasSuffix(report, "；服务改成运行 personad，重启了 hub，内置管理者跟着重启"+macPersonad) {
+		t.Fatalf("loaded: %s", report)
 	}
-	if !strings.HasSuffix(strings.TrimSpace(out.String()), "；服务改成运行 persona-hub，重启了 hub，内置管理者跟着重启") {
-		t.Fatalf("report: %s", out.String())
+	cmds.calls = nil
+	if report := setup(""); !strings.HasSuffix(report, "没动它（launchd "+hubLaunchdLabel+"）"+macPersonad) || cmds.called("launchctl kickstart") {
+		t.Fatalf("as it was: %v\n%s", cmds.calls, report)
 	}
-	plist, _ = os.ReadFile(file)
-	// Someone's own agent running this persona-hub is the hub's: left as it is.
+
 	if err := os.Remove(file); err != nil {
 		t.Fatal(err)
 	}
 	mine := filepath.Join(filepath.Dir(file), "org.example.hub.plist")
-	if err := os.WriteFile(mine, []byte(strings.Replace(string(plist), hubLaunchdLabel, "org.example.hub", 1)), 0o644); err != nil {
+	if err := os.WriteFile(mine, []byte(strings.Replace(runsHub, hubLaunchdLabel, "org.example.hub", 1)), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	if got := e.otherHubAgent(bin); got != "org.example.hub" {
 		t.Fatalf("other agent %q", got)
+	}
+	if err := os.Remove(mine); err != nil {
+		t.Fatal(err)
+	}
+
+	// Without a persona-hub there is nothing to say.
+	if err := os.Remove(hub); err != nil {
+		t.Fatal(err)
+	}
+	if report := setup(personad); strings.Contains(report, "macOS") {
+		t.Fatalf("no persona-hub: %s", report)
 	}
 }

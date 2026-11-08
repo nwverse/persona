@@ -63,7 +63,7 @@ func TestInstallBuiltinRunsPersonaManager(t *testing.T) {
 	if err := os.MkdirAll(filepath.Dir(unit), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(unit, []byte(builtinUnit(personad, data)), 0o644); err != nil {
+	if err := os.WriteFile(unit, []byte(builtinUnit(personad, data, false)), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	f.active = true
@@ -86,8 +86,14 @@ func TestInstallBuiltinRunsPersonaManager(t *testing.T) {
 	}
 	out = installOut(t, e)
 	if b, _ := os.ReadFile(unit); !strings.Contains(string(b), `ExecStart="`+personad+`" assistant`+"\n") ||
-		!strings.Contains(out, "the unit runs "+personad+" now, not "+pm) {
+		!strings.Contains(string(b), "\nEnvironment=PERSONA_SPLIT_PROGRAMS=0\n") || !strings.Contains(out, "the unit runs "+personad+" now, not "+pm) {
 		t.Fatalf("opted out:\n%s\n%s", b, out)
+	}
+	e.getenv = func(string) string { return "" }
+	out = installOut(t, e)
+	if b, _ := os.ReadFile(unit); !strings.Contains(string(b), `ExecStart="`+pm+`" assistant`+"\n") ||
+		strings.Contains(string(b), "PERSONA_SPLIT_PROGRAMS") || !strings.Contains(out, "the unit runs "+pm+" now, not "+personad) {
+		t.Fatalf("without it again:\n%s\n%s", b, out)
 	}
 }
 
@@ -129,28 +135,60 @@ func TestInstallBuiltinFormerNameKeepsPersonad(t *testing.T) {
 	}
 }
 
-// On a Mac the agent runs `persona-manager assistant`.
-func TestInstallBuiltinLaunchdRunsPersonaManager(t *testing.T) {
+// On a Mac the agent runs `personad assistant` even with a persona-manager of its build beside it, and install says
+// why the built-in manager and the hub stay on personad for now. An agent that ran persona-manager (edited by hand) is
+// moved back and says so, loaded or not.
+func TestInstallBuiltinLaunchdStaysOnPersonad(t *testing.T) {
 	e, f, data := splitManager(t, "darwin", "persona 1.0 abc")
+	asked := false
+	e.version = func(context.Context, string) (string, error) { asked = true; return "persona 1.0 abc", nil }
+	personad, pm := filepath.Join(data, "bin", "personad"), filepath.Join(data, "bin", "persona-manager")
 	plist := filepath.Join(e.home, "Library", "LaunchAgents", managerconf.BuiltinLabel+".plist")
 	if err := os.MkdirAll(filepath.Dir(plist), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(plist, []byte(builtinPlist(filepath.Join(data, "bin", "personad"), data, e.home)), 0o644); err != nil {
+	agent, runsPM := builtinPlist(personad, data, e.home), builtinPlist(pm, data, e.home)
+	note := "Program: " + personad + " (" + macPersonad + ").\n"
+	install := func(text string, loaded bool) string {
+		t.Helper()
+		if err := os.WriteFile(plist, []byte(text), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		f.active, f.calls = loaded, nil
+		out := installOut(t, e)
+		if b, _ := os.ReadFile(plist); string(b) != agent {
+			t.Fatalf("plist:\n%s\n%s", b, out)
+		}
+		return out
+	}
+
+	if out := install(agent, true); !strings.Contains(out, note) || !strings.Contains(out, "running already, left as it was") || f.called("launchctl bootstrap") {
+		t.Fatalf("loaded: %v\n%s", f.calls, out)
+	}
+	if out := install(agent, false); !strings.Contains(out, note) || !strings.Contains(out, ", started; it runs") || !f.called("launchctl bootstrap") {
+		t.Fatalf("not loaded: %v\n%s", f.calls, out)
+	}
+	for _, loaded := range []bool{true, false} {
+		if out := install(runsPM, loaded); !strings.Contains(out, note) || !strings.Contains(out, "started; the agent runs "+personad+" now, not "+pm) ||
+			!f.called("launchctl bootstrap") {
+			t.Fatalf("ran persona-manager, loaded %v: %v\n%s", loaded, f.calls, out)
+		}
+	}
+	if asked {
+		t.Fatal("on a Mac, asked for a build")
+	}
+
+	if err := os.Remove(pm); err != nil {
 		t.Fatal(err)
 	}
-	f.active = true
-	out := installOut(t, e)
-	pm := filepath.Join(data, "bin", "persona-manager")
-	if b, _ := os.ReadFile(plist); !strings.Contains(string(b), "<string>"+pm+"</string><string>assistant</string>") ||
-		!f.called("launchctl bootstrap") || !strings.Contains(out, "the agent runs "+pm+" now") {
-		t.Fatalf("%v\n%s\n%s", f.calls, b, out)
+	if out := install(agent, true); strings.Contains(out, "macOS") {
+		t.Fatalf("no persona-manager: %s", out)
 	}
 }
 
 func TestServiceProgram(t *testing.T) {
 	for text, want := range map[string]string{
-		builtinUnit(`/home/a "b"/100%/$x/personad`, "/h"):                         `/home/a "b"/100%/$x/personad`,
+		builtinUnit(`/home/a "b"/100%/$x/personad`, "/h", false):                  `/home/a "b"/100%/$x/personad`,
 		builtinPlist("/Users/a&b/.persona/bin/persona-manager", "/h", "/Users/a"): "/Users/a&b/.persona/bin/persona-manager",
 		"[Service]\nExecStart=\nExecStart=/opt/personad assistant\n":              "/opt/personad",
 		"": "",

@@ -27,9 +27,14 @@ import (
 // --builtin` binds it when it has to and installs the service (`personad hub setup` runs it with --join), `uninstall
 // --builtin` takes the service away and leaves the rest.
 
-// builtinUnit is the built-in manager's systemd user unit: bin's `assistant` on the data directory home. Exit status 2
-// is a configuration mistake (not bound, another one running): restarting cannot fix it.
-func builtinUnit(bin, home string) string {
+// builtinUnit is the built-in manager's systemd user unit: bin's `assistant` on the data directory home, keeping
+// update.SplitEnv 0 when splitOff. Exit status 2 is a configuration mistake (not bound, another one running):
+// restarting cannot fix it.
+func builtinUnit(bin, home string, splitOff bool) string {
+	keep := ""
+	if splitOff {
+		keep = "Environment=" + update.SplitEnv + "=0\n"
+	}
 	return `# Written by personad manager install --builtin (personad hub setup runs it); personad manager uninstall
 # --builtin removes it (docs/assistant/managers.md "The built-in manager as its own service").
 [Unit]
@@ -41,7 +46,7 @@ ExecStart=` + systemdQuote(bin) + ` assistant
 Environment=` + systemdEnvQuote("PERSONA_ASSISTANT_DEPLOY="+assistant.DeployService) + `
 Environment=` + systemdEnvQuote("PERSONA_HOME="+home) + `
 Environment=PATH=%h/.local/bin:%h/bin:/usr/local/go/bin:/usr/local/bin:/usr/bin:/bin
-Restart=always
+` + keep + `Restart=always
 RestartSec=5
 RestartPreventExitStatus=2
 TimeoutStopSec=20
@@ -196,12 +201,17 @@ func (e *env) installBuiltin(ctx context.Context, home string, j builtinJoin) er
 	return e.builtinService(ctx, home, bin, traded)
 }
 
-// builtinBinary is what the built-in manager's service runs: persona-manager beside bin when it is bin's build
-// (docs/server/server.md "Programs"), else bin. A service under its former name, or update.SplitEnv 0, keeps bin.
+// builtinBinary is what the built-in manager's service runs: on Linux persona-manager beside bin when it is bin's
+// build (docs/server/server.md "Programs"), else bin. A unit under its former name, or update.SplitEnv 0 (splitOff),
+// keeps bin, and so does a Mac, for now (macPersonad).
 func (e *env) builtinBinary(ctx context.Context, bin string) string {
-	id := assistantwire.AssistantID
-	if strings.TrimSpace(e.getenv(update.SplitEnv)) == "0" ||
-		e.goos == "linux" && e.compatUnit(id) != unitName(id) || e.goos == "darwin" && e.compatLabel(id) != launchdLabel(id) {
+	if e.goos == "darwin" {
+		if fileExists(update.ProgramBeside(bin, "persona-manager")) {
+			fmt.Fprintf(e.stdout, "Program: %s (%s).\n", bin, macPersonad)
+		}
+		return bin
+	}
+	if id := assistantwire.AssistantID; e.splitOff() || e.compatUnit(id) != unitName(id) {
 		return bin
 	}
 	pm, note := update.SplitBeside(ctx, bin, "persona-manager", e.version)
@@ -213,6 +223,15 @@ func (e *env) builtinBinary(ctx context.Context, bin string) string {
 	}
 	return pm
 }
+
+// splitOff says update.SplitEnv is 0 here. The unit written then keeps it, so the manager and the node it starts stay
+// on personad too, until install --builtin runs again without it.
+func (e *env) splitOff() bool { return strings.TrimSpace(e.getenv(update.SplitEnv)) == "0" }
+
+// macPersonad is why a Mac's agent stays on personad when persona-manager is beside it. macOS holds a LaunchAgent's
+// children (the node of the hub's computer) to the agent's program for its privacy permissions (Full Disk Access), so
+// the agents move together with that node, later.
+const macPersonad = "on macOS the built-in manager and the hub stay on personad until a later change moves them, together with this computer's node, to persona-manager and persona-hub"
 
 // serviceProgram is the program a unit's or an agent's text runs: its first ExecStart with a value, or the first
 // string of its ProgramArguments; "" when it has neither.
@@ -297,7 +316,7 @@ func (e *env) builtinService(ctx context.Context, home, bin string, bounce bool)
 	case "linux":
 		path := e.unitPath(id)
 		unit := e.compatUnit(id)
-		want := e.compatUnitText(id, builtinUnit(bin, home))
+		want := e.compatUnitText(id, builtinUnit(bin, home, e.splitOff()))
 		before, _ := os.ReadFile(path)
 		changed := string(before) != want
 		if changed {
