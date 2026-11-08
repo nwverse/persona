@@ -1,3 +1,4 @@
+// Temporary single-runner Android-change CI acceptance; do not merge.
 package persona.core.hub
 
 import java.io.FilterInputStream
