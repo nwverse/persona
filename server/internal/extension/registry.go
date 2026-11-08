@@ -39,17 +39,25 @@ const previewFor = 10 * time.Minute
 
 // Record is a plugin's row (table plugins): what the user installed and chose.
 type Record struct {
-	ID              string          `json:"id"`
-	Source          string          `json:"source"`
-	Origin          string          `json:"origin,omitempty"`
-	Version         string          `json:"version"`
-	PreviousVersion string          `json:"previous_version,omitempty"`
-	Manifest        json.RawMessage `json:"manifest"`
-	Granted         Permissions     `json:"granted"`
-	GrantedDigest   string          `json:"granted_digest,omitempty"`
-	Enabled         bool            `json:"enabled"`
-	Config          json.RawMessage `json:"config,omitempty"`
-	Remote          *Remote         `json:"remote,omitempty"`
+	ID     string `json:"id"`
+	Source string `json:"source"`
+	Origin string `json:"origin,omitempty"`
+	// MarketKey is the verified official key captured from this installed package's
+	// catalog entry, never inferred from the market's current mutable identity.
+	MarketKey       string `json:"market_key,omitempty"`
+	Version         string `json:"version"`
+	PreviousVersion string `json:"previous_version,omitempty"`
+	// PreviousOrigin and PreviousMarketKey are PreviousVersion's own Origin and MarketKey, kept by the upgrade that
+	// replaced it so a rollback restores that version's provenance, never the newer one's. An empty PreviousOrigin
+	// (a row upgraded before they were kept) is no snapshot: a rollback then drops the verified key.
+	PreviousOrigin    string          `json:"previous_origin,omitempty"`
+	PreviousMarketKey string          `json:"previous_market_key,omitempty"`
+	Manifest          json.RawMessage `json:"manifest"`
+	Granted           Permissions     `json:"granted"`
+	GrantedDigest     string          `json:"granted_digest,omitempty"`
+	Enabled           bool            `json:"enabled"`
+	Config            json.RawMessage `json:"config,omitempty"`
+	Remote            *Remote         `json:"remote,omitempty"`
 	// DisabledContributions are the contributions the user switched off ("<point>/<id>", docs/extensions/extensions.md "Contribution switches"):
 	// they do not take effect while the rest of the extension runs. A connector's switch is the connector's own.
 	DisabledContributions []string  `json:"disabled_contributions,omitempty"`
@@ -502,6 +510,7 @@ type Preview struct {
 	previous              *Manifest // immutable consent baseline captured when the preview was staged
 	source                Source
 	marketSpec, marketKey string
+	verifiedMarketKey     string // verified entry and package, separate from the mutable market's pin
 	fingerprint           string // all staged package bytes/modes as approved at preview
 	root                  string // the staged package
 	staging               string
@@ -565,6 +574,13 @@ func (r *Registry) PreviewMarket(ctx context.Context, mk *Market, marketID strin
 	if r.store == nil {
 		return nil, i18n.Err("extension-status.install_no_database")
 	}
+	verifiedKey := ""
+	if IsOfficialMarket(mk.Spec.String()) {
+		if e.verifiedKey == "" || e.verifiedKey != Official.SigningKey || e.verifiedKey != mk.TrustedKey || e.verifiedEntry != entryFingerprint(e) {
+			return nil, i18n.Err("extension-market_security.signature")
+		}
+		verifiedKey = e.verifiedKey
+	}
 	pkg := e.PackageFor(Platform())
 	if pkg == nil {
 		return nil, fmt.Errorf("%s 没有这台 hub（%s）能用的包", e.Parsed.ID, Platform())
@@ -593,6 +609,7 @@ func (r *Registry) PreviewMarket(ctx context.Context, mk *Market, marketID strin
 		return nil, fmt.Errorf("下载的包（%s %s）的完整清单和市场索引（%s %s）不一致", m.ID, m.Version, e.Parsed.ID, e.Parsed.Version)
 	}
 	pv.Market, pv.marketSpec, pv.marketKey = marketID, mk.Spec.String(), mk.TrustedKey
+	pv.verifiedMarketKey = verifiedKey
 	return pv, nil
 }
 
@@ -1003,6 +1020,12 @@ func (r *Registry) Rollback(ctx context.Context, id, actor string) (*Extension, 
 		}
 		row := snapshotExtension(cur).Record
 		row.Version, row.PreviousVersion, row.UpdatedAt = prev, "", r.now()
+		// The old version's own provenance, never the current one's: a verified key goes back only with a snapshot.
+		row.MarketKey = ""
+		if row.PreviousOrigin != "" {
+			row.Origin, row.MarketKey = row.PreviousOrigin, row.PreviousMarketKey
+		}
+		row.PreviousOrigin, row.PreviousMarketKey = "", ""
 		row.Manifest, _ = json.Marshal(m)
 		row.Granted, row.GrantedDigest = m.Permissions, Digest(m)
 		if err := r.store.PutExtension(ctx, row); err != nil {
