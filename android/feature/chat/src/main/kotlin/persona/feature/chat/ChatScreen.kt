@@ -263,6 +263,8 @@ private fun ChatPage(
     val chatList = rememberChatListState(readingKey, anchorStore)
     val search = remember { ChatSearchState() }
     val openWork = chatList.position.expanded
+    // The running work lines the user folded where they open on their own (Persona's own chat, #1614).
+    var liveFolded by remember { mutableStateOf(emptySet<String>()) }
     var timelineVersion by remember { mutableIntStateOf(0) }
     val timeline = remember { ChatTimeline() }
     // Sent, the hub not saying working yet (#3909): the turn counts as started for a minute after the message.
@@ -284,11 +286,16 @@ private fun ChatPage(
     // Which items the lines were last built from: until the first build finishes, the page is still loading, not empty.
     var projectedFrom by remember { mutableStateOf<List<Item>?>(null) }
     val projection by produceState(persona.core.domain.lines.ChatSnapshot(emptyList(), emptyList(), persona.core.domain.lines.TaskIndex()),
-        snapshot.items, live, openWork, timelineVersion) {
+        snapshot.items, live, openWork, liveFolded, renderStyle, timelineVersion) {
         val items = snapshot.items
-        value = withContext(Dispatchers.Default) { timeline.lines(items, live, openWork.toSet()) }
+        value = withContext(Dispatchers.Default) {
+            timeline.lines(items, live, openWork.toSet(), renderStyle.openLiveWork, liveFolded)
+        }
         projectedFrom = items
     }
+    val liveWorkLines = remember(projection) { liveWorkIds(projection.lines) }
+    // A turn that ended drops what was folded during it: its line folds, the next turn's opens (#1614).
+    LaunchedEffect(liveWorkLines) { liveFolded = settleLiveFolds(liveFolded, liveWorkLines) }
     val feeds by (tasks?.feeds ?: remember { kotlinx.coroutines.flow.MutableStateFlow(emptyMap<String, List<persona.core.contracts.FeedItem>>()) })
         .collectAsStateWithLifecycle()
     val feed = feeds[key.sessionId].orEmpty()
@@ -375,9 +382,10 @@ private fun ChatPage(
         }
     }
     fun toggle(id: String) {
-        val wasOpen = id in openWork
-        chatList.setExpanded(if (wasOpen) openWork - id else openWork + id)
-        if (!wasOpen) (projection.lines.firstOrNull { it.id == id } as? ChatLine.Work)?.steps
+        val (next, opened) = toggleWork(WorkOpenState(openWork.toSet(), liveFolded), id, id in liveWorkLines, renderStyle.openLiveWork)
+        if (next.open != openWork.toSet()) chatList.setExpanded(next.open)
+        liveFolded = next.liveFolded
+        if (opened) (projection.lines.firstOrNull { it.id == id } as? ChatLine.Work)?.steps
             ?.filterIsInstance<persona.core.domain.lines.WorkItem.Folded>()?.forEach { expand(it.item.item) }
     }
     /** Whether the message was taken (false: nothing went, the box or another send stands); [onFailed] if it then fails. */
