@@ -5,7 +5,9 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"net/http/httptest"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -73,6 +75,89 @@ func TestTypedModelRememberedAfterItRan(t *testing.T) {
 	}
 	if got := custom(); !slices.Equal(got, []string{"gw/switched"}) {
 		t.Fatalf("after forget: %v", got)
+	}
+}
+
+// A typed model that is no id is refused in the app's language (its Accept-Language goes to the manager with the
+// start), not the hub's.
+func TestTypedModelRefusedInTheAppsLanguage(t *testing.T) {
+	h, _ := modelTestHub(t)
+	modelsNode(t, h, MachineConfig{ID: "box"}, func(method string, p map[string]any) (any, error) {
+		return map[string]any{}, nil
+	})
+	connectAssistant(t, h)
+	for lang, want := range map[string]string{"en": "Model ID", "ja": "モデル ID", "zh-Hans": "模型 ID"} {
+		r := httptest.NewRequest("POST", "https://example.com/api/v1/sessions",
+			strings.NewReader(`{"machine_id":"box","cwd":"/code","launcher":"claude","model":"a b"}`))
+		r.RemoteAddr = "127.0.0.1:1234"
+		r.Header.Set("Authorization", "Bearer "+h.cfg.Token)
+		r.Header.Set("Accept-Language", lang)
+		w := httptest.NewRecorder()
+		h.routes().ServeHTTP(w, r)
+		if w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), want) {
+			t.Errorf("%s: %d %s", lang, w.Code, w.Body)
+		}
+	}
+}
+
+// An app's New Agent starts in the background (async: the node answers before it runs, node/starting.go): the
+// launcher's check and the agent coming up come after the answer, so a typed id is told to the manager only once the
+// session is listed as started, not while it starts nor when its start failed.
+func TestTypedModelOfAnAsyncStartRememberedOnceItStarted(t *testing.T) {
+	h, _ := modelTestHub(t)
+	h.listedWait = 50 * time.Millisecond
+	ids := map[string]string{"gw/async-fails": "a1", "gw/async-ok": "a2"}
+	modelsNode(t, h, MachineConfig{ID: "box"}, func(method string, p map[string]any) (any, error) {
+		switch method {
+		case "launchers.models":
+			return proto.LauncherModels{Agent: "claude", Models: []proto.AgentModel{{ID: "opus"}}}, nil
+		case "session.start":
+			model, _ := p["model"].(string)
+			return map[string]any{"session": proto.Session{SessionID: ids[model], Starting: true}}, nil
+		}
+		return map[string]any{}, nil
+	})
+	connectAssistant(t, h)
+	m := h.localMachine("box")
+	remembered := func() []string {
+		var list []struct{ Machine, Launcher, Model string }
+		_, _ = h.store.Setting(context.Background(), "launchers.custom_models", &list)
+		var out []string
+		for _, c := range list {
+			out = append(out, c.Model)
+		}
+		return out
+	}
+	start := func(model string) {
+		t.Helper()
+		body := `{"machine_id":"box","cwd":"/code","launcher":"claude","async":true,"model":"` + model + `"}`
+		if w := modelsRequest(h, "POST", "/api/v1/sessions", body); w.Code != http.StatusOK {
+			t.Fatalf("start %s: %d %s", model, w.Code, w.Body)
+		}
+	}
+	starting := proto.Session{SessionID: "a1", Status: proto.StatusIdle, Starting: true}
+	failed := proto.Session{SessionID: "a1", Status: proto.StatusOffline, StartError: "the launcher sets its own --model"}
+
+	start("gw/async-fails")
+	m.setSessionList([]proto.Session{starting})
+	time.Sleep(4 * startSettlePoll)
+	if got := remembered(); len(got) != 0 {
+		t.Fatalf("remembered while it starts: %v", got)
+	}
+	m.setSessionList([]proto.Session{failed})
+	time.Sleep(4 * startSettlePoll)
+
+	start("gw/async-ok")
+	m.setSessionList([]proto.Session{failed, {SessionID: "a2", Status: proto.StatusIdle, Starting: true}})
+	time.Sleep(4 * startSettlePoll)
+	if got := remembered(); len(got) != 0 {
+		t.Fatalf("remembered before it started: %v", got)
+	}
+	m.setSessionList([]proto.Session{failed, {SessionID: "a2", Status: proto.StatusIdle}})
+	eventually(t, 5*time.Second, "the started one's model remembered", func() bool { return slices.Equal(remembered(), []string{"gw/async-ok"}) })
+	time.Sleep(4 * startSettlePoll)
+	if got := remembered(); !slices.Equal(got, []string{"gw/async-ok"}) {
+		t.Fatalf("the failed one's came too: %v", got)
 	}
 }
 

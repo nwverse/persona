@@ -36,7 +36,8 @@ func TestHostileModelIsRefusedEverywhere(t *testing.T) {
 			t.Errorf("launcherModelCheck(%q) passed", m)
 		}
 	}
-	for _, m := range []string{"", "opus", "opus[1m]", "vendor/model-x", "qwen3:32b", "claude-x@20250101"} {
+	for _, m := range []string{"", "opus", "opus[1m]", "vendor/model-x", "qwen3:32b", "claude-x@20250101",
+		"~anthropic/claude-opus-latest", "~anthropic/claude-sonnet-latest[1m]"} {
 		if err := (modelExecution{Model: m}).check(); err != nil {
 			t.Errorf("check(%q) = %v", m, err)
 		}
@@ -45,7 +46,8 @@ func TestHostileModelIsRefusedEverywhere(t *testing.T) {
 
 // And the quoting holds on its own: the command herdr's pane runs for a start (shellQuote) and the resume command herdr
 // runs after a restart (eval of dquote'd words) give the agent the model as exactly one argument after --model, with
-// nothing else run, for real ids and for hostile ones that the rule would have refused.
+// nothing else run, for real ids (a gateway's ~-alias is not expanded to a home directory) and for hostile ones that the
+// rule would have refused.
 func TestModelIsOneQuotedArgumentOnTheCommandLine(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("POSIX shells")
@@ -56,7 +58,8 @@ func TestModelIsOneQuotedArgumentOnTheCommandLine(t *testing.T) {
 	}
 	withPaneShell(t, sh)
 	models := append([]string{"opus[1m]", "vendor/model-x", "qwen3:32b", "claude-x@20250101",
-		"arn:aws:bedrock:us-east-1:123456789012:inference-profile/us.anthropic.claude-x-v1:0"}, hostileModels...)
+		"arn:aws:bedrock:us-east-1:123456789012:inference-profile/us.anthropic.claude-x-v1:0",
+		"~anthropic/claude-opus-latest", "~anthropic/claude-sonnet-latest[1m]", "~root"}, hostileModels...)
 	for _, m := range models {
 		if strings.ContainsRune(m, 0) {
 			continue // no shell argument holds a NUL; the check refuses it above

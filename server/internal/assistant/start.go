@@ -570,6 +570,11 @@ func badRequest(err error, l ...i18n.Lang) error {
 	return &rpc.Error{Code: CodeBadRequest, Message: msg}
 }
 
+// appLang is the language an app's request came in (a bus call's lang), else the user's.
+func (s *Service) appLang(ctx context.Context, lang string) i18n.Lang {
+	return i18n.Lang(lang).Or(s.lang(ctx))
+}
+
 // SendParams is assistant.send_params: a message for conversation p.SessionID on p.MachineID, with what it runs on
 // filled in (sendModel) and, the first one to a new main conversation started empty, what the old one left before
 // its text. A conversation the machine does not list (yet) that is not the main one keeps what it runs on.
@@ -595,7 +600,7 @@ func (s *Service) SendParams(ctx context.Context, p SendParams) (map[string]any,
 		}
 	}
 	if err := s.sendModel(ctx, p.MachineID, p.SessionID, params); err != nil {
-		return nil, badRequest(err)
+		return nil, badRequest(err, s.appLang(ctx, p.Lang)) // a typed model that is no id is the app's user's to read
 	}
 	if text, ok := params["text"].(string); ok {
 		text = s.withWorkspaces(ctx, text) // an @-mentioned workspace: where it is and what worked there (workspace_mention.go)

@@ -2,7 +2,6 @@ package assistant
 
 import (
 	"context"
-	"errors"
 	"net/http"
 	"slices"
 	"strconv"
@@ -97,13 +96,16 @@ func (s *Service) ModelUsed(ctx context.Context, p assistantwire.ModelUsed) {
 }
 
 // rememberCustomModel keeps model for launcher on machine, first, unless the launcher's own list has it (an alias, a
-// listed id or what one resolves to): only what had to be typed is worth offering again. With the list unknown (an
-// agent without one, a failed call) it is kept: the apps offer a typed id there too.
+// listed id or what one resolves to): only what had to be typed is worth offering again. Nor for a launcher that takes
+// no model (takesTypedModel). With the list unknown (a failed call) it is kept: the apps offer a typed id there too.
 func (s *Service) rememberCustomModel(ctx context.Context, machine, launcher, model string) {
 	if machine == "" || launcher == "" || !proto.ValidModelID(model) || s.store() == nil {
 		return
 	}
-	if set := s.launcherModelSet(ctx, machine, launcher); set != nil && set[model] {
+	lctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	res, err := s.askLauncherModels(lctx, machine, launcher, false) // the node keeps its list a while
+	cancel()
+	if err == nil && (!takesTypedModel(res) || listsModel(res, model)) {
 		return
 	}
 	b := &s.models
@@ -147,9 +149,25 @@ func (s *Service) forgetCustomModel(ctx context.Context, machine, launcher, mode
 	return s.putSetting(ctx, launchersCustomModelsKey, kept)
 }
 
+// takesTypedModel: res being a launcher's /model list, a model typed for that launcher would reach its agent: the
+// agent is Claude Code or Codex (the node starts no other one with a model, control.go) and the launcher sets no
+// --model of its own over it (Locked). The other agents' lists are empty, which tells the apps to show no model row.
+func takesTypedModel(res proto.LauncherModels) bool {
+	return res.Locked == "" && (res.Agent == "claude" || res.Agent == "codex")
+}
+
+// listsModel: model is one of res's ids or what one of its aliases resolves to.
+func listsModel(res proto.LauncherModels, model string) bool {
+	return slices.ContainsFunc(res.Models, func(m proto.AgentModel) bool { return m.ID == model || m.Resolved == model })
+}
+
 // withCustomModels adds the ids remembered for launcher name on machine to its /model list, after its own entries
-// and without the ones it lists itself (custom: true; no efforts: they are not known).
+// and without the ones it lists itself (custom: true; no efforts: they are not known). A list of a launcher that takes
+// no typed model is left as it is.
 func (s *Service) withCustomModels(ctx context.Context, machine, name string, res proto.LauncherModels) proto.LauncherModels {
+	if !takesTypedModel(res) {
+		return res
+	}
 	custom := s.customModels(ctx, machine, name)
 	if len(custom) == 0 {
 		return res
@@ -177,7 +195,7 @@ func (s *Service) withCustomModels(ctx context.Context, machine, name string, re
 func (s *Service) customModelRoutes() {
 	s.handle("DELETE /api/v1/machines/{mid}/launchers/{name}/models/custom", func(w http.ResponseWriter, r *http.Request) {
 		if !fullRole(r) {
-			apierr.Write(w, http.StatusForbidden, errors.New("read-only role cannot forget models"))
+			apierr.Write(w, http.StatusForbidden, i18n.Err("assistant-models.err_role_forget"))
 			return
 		}
 		model := r.URL.Query().Get("model")

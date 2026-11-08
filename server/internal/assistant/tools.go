@@ -260,8 +260,7 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 		}
 		// Refused before the user is asked: a model goes to the agent as --model (#1644).
 		if a.Model = strings.TrimSpace(a.Model); a.Model != "" && !proto.ValidModelID(a.Model) {
-			return "", fmt.Errorf("model %q is not a model id: start with a letter or digit, then only letters, digits and . _ - / : @ [ ] (at most %d); "+
-				"no agent was started", a.Model, proto.MaxModelIDLen)
+			return "", fmt.Errorf("model %q is not a model id: %s; no agent was started", a.Model, proto.ModelIDRule)
 		}
 		a.Cwd = proto.ExpandHome(a.Cwd, am.Home)
 		branch := strings.TrimSpace(a.Worktree.Branch)

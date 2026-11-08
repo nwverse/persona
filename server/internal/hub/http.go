@@ -723,7 +723,12 @@ func (h *Hub) startSession(w http.ResponseWriter, r *http.Request) {
 	}
 	if model, _ := params["model"].(string); p.Model != "" && p.ResumeSessionID == "" && model == strings.TrimSpace(p.Model) {
 		launcher, _ := params["launcher"].(string) // the one it ran with: the manager filled it in
-		h.modelUsed(h.machineOwner(m.cfg.ID), m.cfg.ID, launcher, model)
+		if async {
+			// Acknowledged before it ran: the launcher's check and the agent coming up are still to come.
+			go h.modelUsedOnceStarted(m.cfg.ID, res.Session.SessionID, launcher, model)
+		} else {
+			h.modelUsed(h.machineOwner(m.cfg.ID), m.cfg.ID, launcher, model)
+		}
 	}
 	res.Session.MachineID = m.cfg.ID
 	if shown, ok := h.awaitListed(ctx, m, res.Session.SessionID); ok {

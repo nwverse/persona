@@ -19,6 +19,7 @@ import (
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/secretkey"
+	"github.com/nwverse/persona/server/internal/textfmt"
 )
 
 // The model configuration (docs/assistant/model-config.md) is the assistant's: the four categories' records (settings
@@ -1024,8 +1025,14 @@ func (s *Service) applyModel(ctx context.Context, id string, params map[string]a
 	if name, _ := params["launcher"].(string); name != "" && launcherProvider(name) != b.Provider {
 		b = ModelBinding{Provider: launcherProvider(name), Runtime: b.Runtime}
 	}
+	if b.Model != "" && strings.HasPrefix(b.Provider, "launcher.") && !proto.ValidModelID(b.Model) {
+		// Configured before a launcher's model was held to the model id rule (#1644; Model configuration refuses it as
+		// an edit now): the launcher's own default, rather than every run of this purpose failing, the main chat's too.
+		s.logf("model config %s: %q is no model id, running %s's default", id, textfmt.Clip(b.Model, 80), b.Provider)
+		b.Model = ""
+	}
 	if model, _ := params["model"].(string); strings.TrimSpace(model) != "" {
-		b.Model = strings.TrimSpace(model)
+		b.Model = strings.TrimSpace(model) // this call's pick: finishModel refuses one that is no model id
 	} else {
 		delete(params, "model") // none picked ("" or blanks): the binding's
 	}
@@ -1061,8 +1068,8 @@ func (s *Service) applyPickedModel(ctx context.Context, params map[string]any) e
 }
 
 // finishModel puts a final binding into params: the launcher name, the model / effort set, the execution fingerprint.
-// A launcher's model goes to the agent as --model, so it has to be a model id (#1644): the call's own pick or the
-// configured one, a pick the user typed included.
+// A launcher's model goes to the agent as --model, so it has to be a model id (#1644): a call's own pick that is not
+// one is refused here (a configured one that is not was dropped by applyModel).
 func (s *Service) finishModel(ctx context.Context, id string, params map[string]any, b ModelBinding) error {
 	name, ok := strings.CutPrefix(b.Provider, "launcher.")
 	if !ok {

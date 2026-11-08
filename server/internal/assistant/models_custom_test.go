@@ -3,6 +3,7 @@ package assistant
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -13,6 +14,7 @@ import (
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/proto"
+	"github.com/nwverse/persona/server/internal/rpc"
 )
 
 // customIDs are the ids of a /model list's custom entries, in order.
@@ -123,12 +125,109 @@ func TestCustomModelsMergedOnce(t *testing.T) {
 	f.agentModels = map[string][]proto.AgentModel{"work": {{ID: "opus"}}}
 	s.ModelUsed(ctx, assistantwire.ModelUsed{MachineID: "server", Launcher: "work", Model: "gw/new"})
 	f.agentModels["work"] = []proto.AgentModel{{ID: "opus"}, {ID: "gw/new", Name: "New"}} // the gateway lists it now
-	res := s.withCustomModels(ctx, "server", "work", proto.LauncherModels{Models: f.agentModels["work"]})
+	res := s.withCustomModels(ctx, "server", "work", proto.LauncherModels{Agent: "claude", Models: f.agentModels["work"]})
 	if len(res.Models) != 2 || res.Models[1].Custom || res.Models[1].Name != "New" {
 		t.Fatalf("listed twice: %+v", res.Models)
 	}
-	if res := s.withCustomModels(ctx, "elsewhere", "work", proto.LauncherModels{Models: []proto.AgentModel{}}); len(res.Models) != 0 {
+	if res := s.withCustomModels(ctx, "elsewhere", "work", proto.LauncherModels{Agent: "claude", Models: []proto.AgentModel{}}); len(res.Models) != 0 {
 		t.Fatalf("another machine's: %+v", res.Models)
+	}
+}
+
+// A typed id is only for a launcher whose agent would start with it (#1644): Claude Code or Codex, with no --model of
+// the launcher's own over it. Another agent's list (empty: the apps show no model row) and a locked one get no custom
+// entries, and an id used with them is not remembered.
+func TestCustomModelsOnlyWhereATypedModelReachesTheAgent(t *testing.T) {
+	ctx := context.Background()
+	s, f, _ := modelService(t)
+	f.agentModels = map[string][]proto.AgentModel{"work": {{ID: "opus"}}, "codex-w": {{ID: "gpt-x"}}}
+	f.modelsLocked = map[string]string{"fixed": "the launcher sets its own --model"}
+	for _, launcher := range []string{"gemini-w", "fixed", "work", "codex-w"} {
+		s.ModelUsed(ctx, assistantwire.ModelUsed{MachineID: "server", Launcher: launcher, Model: "gw/typed"})
+	}
+	for launcher, want := range map[string]string{"gemini-w": "[]", "fixed": "[]", "work": "[gw/typed]", "codex-w": "[gw/typed]"} {
+		if got := s.customModels(ctx, "server", launcher); fmt.Sprint(got) != want {
+			t.Errorf("%s remembered %v, want %s", launcher, got, want)
+		}
+	}
+	// Remembered before (an older hub, a launcher changed since): not offered where it would not reach the agent.
+	s.ModelUsed(ctx, assistantwire.ModelUsed{MachineID: "server", Launcher: "work", Model: "gw/other"})
+	for _, res := range []proto.LauncherModels{{Agent: "gemini", Models: []proto.AgentModel{}}, {Agent: "agy", Models: []proto.AgentModel{}},
+		{Agent: "claude", Models: []proto.AgentModel{{ID: "opus"}}, Locked: "fixed"}} {
+		if got := s.withCustomModels(ctx, "server", "work", res); len(got.Models) != len(res.Models) {
+			t.Errorf("%+v got custom entries: %+v", res, got.Models)
+		}
+	}
+	if got := customIDs(machineModels(t, s, "server", "fixed")); len(got) != 0 {
+		t.Fatalf("the locked launcher's list: %v", got)
+	}
+	if got := customIDs(machineModels(t, s, "server", "codex-w")); fmt.Sprint(got) != "[gw/typed]" {
+		t.Fatalf("codex's list: %v", got)
+	}
+}
+
+// A launcher purpose configured before the rule with a model that is no id (#1644) runs on the launcher's default
+// instead of failing every run, the main chat's included. An edit that keeps it is refused naming it (the node would
+// refuse it too), one that clears it or sets an id is taken; a gateway's ~-alias is an id.
+func TestOldConfiguredModelThatIsNoID(t *testing.T) {
+	ctx := context.Background()
+	s, f, _ := modelService(t)
+	f.launcherList = []proto.Launcher{{Name: "claude"}}
+	f.agentModels = map[string][]proto.AgentModel{"claude": {{ID: "opus"}}}
+	for _, id := range []string{"agent.new", "assistant"} {
+		if err := s.saveModelRecord(ctx, id, 0, ModelBinding{Provider: "launcher.claude", Model: "old model+x"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	p, err := s.AgentStartParams(ctx, AgentStartParams{MachineID: "server", Params: map[string]any{}})
+	if err != nil || p["launcher"] != "claude" || p["model"] != nil {
+		t.Fatalf("New Agent on the old record: %v %v", p, err)
+	}
+	params := map[string]any{}
+	if err := s.applyModel(ctx, "assistant", params); err != nil || params["model"] != nil {
+		t.Fatalf("the main chat on the old record: %v %v", params, err)
+	}
+	// This start's own pick is still held to the rule.
+	if _, err := s.AgentStartParams(ctx, AgentStartParams{MachineID: "server", Params: map[string]any{"model": "a b"}}); err == nil {
+		t.Fatal("a pick that is no id went through")
+	}
+	rev := purposeOf(t, s, "agent.new").Revision
+	if r := modelRequest(s, "PATCH", "agent.new", fmt.Sprintf(`{"revision":%d,"effort":"high"}`, rev)); r.Code != http.StatusBadRequest ||
+		!strings.Contains(r.Body.String(), "old model+x") {
+		t.Fatalf("an edit that keeps it: %d %s", r.Code, r.Body.String())
+	}
+	if r := modelRequest(s, "PATCH", "agent.new", fmt.Sprintf(`{"revision":%d,"model":"new model"}`, rev)); r.Code != http.StatusBadRequest {
+		t.Fatalf("setting a model that is no id: %d %s", r.Code, r.Body.String())
+	}
+	if r := modelRequest(s, "PATCH", "agent.new", fmt.Sprintf(`{"revision":%d,"model":null,"effort":"high"}`, rev)); r.Code != http.StatusOK {
+		t.Fatalf("clearing it: %d %s", r.Code, r.Body.String())
+	}
+	rev = purposeOf(t, s, "agent.new").Revision
+	if r := modelRequest(s, "PATCH", "agent.new", fmt.Sprintf(`{"revision":%d,"model":"~anthropic/claude-opus-latest"}`, rev)); r.Code != http.StatusOK {
+		t.Fatalf("a gateway's ~-alias: %d %s", r.Code, r.Body.String())
+	}
+	if p, err := s.AgentStartParams(ctx, AgentStartParams{MachineID: "server", Params: map[string]any{}}); err != nil || p["model"] != "~anthropic/claude-opus-latest" {
+		t.Fatalf("New Agent on the ~-alias: %v %v", p, err)
+	}
+}
+
+// A typed model that is no id is refused in the language of the app that sent it (the bus call's lang), not the hub's.
+func TestModelRefusalInTheAppsLanguage(t *testing.T) {
+	ctx := context.Background()
+	s, f, _ := modelService(t)
+	f.launcherList = []proto.Launcher{{Name: "claude"}}
+	f.setSessions("server", proto.Session{SessionID: "side", Launcher: "claude", Assistant: true})
+	for _, l := range []i18n.Lang{i18n.En, i18n.Ja, i18n.ZhHans} {
+		want := i18n.T(l, "assistant-models.err_model_invalid", i18n.Args{"model": `"a b"`})
+		_, err := s.AgentStartParams(ctx, AgentStartParams{MachineID: "server", Params: map[string]any{"launcher": "claude", "model": "a b"}, Lang: string(l)})
+		var re *rpc.Error
+		if !errors.As(err, &re) || re.Message != want {
+			t.Errorf("%s: New Agent's refusal %v, want %q", l, err, want)
+		}
+		_, err = s.SendParams(ctx, SendParams{MachineID: "server", SessionID: "side", Params: map[string]any{"text": "hi", "model": "a b"}, Lang: string(l)})
+		if !errors.As(err, &re) || re.Message != want {
+			t.Errorf("%s: the chip's refusal %v, want %q", l, err, want)
+		}
 	}
 }
 
