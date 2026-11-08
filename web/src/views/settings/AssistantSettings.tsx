@@ -2,11 +2,11 @@
 // AssistantMemoryView, Android's assistant settings): what Persona does on its own (a line into "Scheduled tasks"), what it knows about you
 // ("About me" = `notes`, saved on "Save" or when leaving; "Memory" = its memory files: read, edit the whole file, delete), and where
 // it runs (read-only here). Its model is Settings › Models › Main chat, not here (#1291).
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { t } from "../../i18n";
 import { BASE } from "../../lib/base";
 import { settingsHref } from "./nav";
-import { api, credentialOwner, enc, errorText } from "../../lib/api";
+import { api, credentialOwner, enc, errorText, subscribeCredentialOwner } from "../../lib/api";
 import { MANAGER_HEADER } from "../../lib/manager-choice";
 import { PERMISSION_MODES } from "../../lib/session-actions";
 import { ConfigurationManager } from "./ConfigurationManager";
@@ -41,7 +41,7 @@ interface AssistantState {
 }
 
 export function AssistantSettings({ bare }: { /** Without its header (the profile page has its own). */ bare?: boolean } = {}) {
-  const owner = credentialOwner();
+  const owner = useSyncExternalStore(subscribeCredentialOwner, credentialOwner);
   return <ConfigurationManager>{(manager) => <AssistantSettingsForManager key={JSON.stringify([manager, owner])} manager={manager} owner={owner} bare={bare} />}</ConfigurationManager>;
 }
 

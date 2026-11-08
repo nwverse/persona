@@ -14,17 +14,18 @@ vi.mock("../../lib/store", () => ({ useStore: () => [], refreshAssistant: vi.fn(
 vi.mock("../../ui/atoms", async (original) => ({ ...await original<typeof import("../../ui/atoms")>(), toast: vi.fn() }));
 import { initI18n, t } from "../../i18n";
 import { resetManagerChoice, setRosterDefault } from "../../lib/manager-choice";
-import { setToken } from "../../lib/api";
+import { handleUnauthorized, setToken } from "../../lib/api";
 import { toast } from "../../ui/atoms";
 import { AssistantSettings } from "./AssistantSettings";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-type Write = { manager: string; token: string; notes: string; signal?: AbortSignal | null; succeed: () => void; fail: () => void };
+type Write = { manager: string; token: string; notes: string; signal?: AbortSignal | null; succeed: () => void; fail: (status?: number) => void };
 let root: Root;
 let host: HTMLDivElement;
 let writes: Write[];
 let notes: Record<string, string | undefined>;
 let fallback: string;
+let unauthorized = vi.fn<() => void>();
 const key = (manager = "assistant", token = "Bearer example-owner") => `${token}/${manager}`;
 const json = (value: unknown, status = 200) => new Response(JSON.stringify(value), { status });
 const flush = async () => { for (let i = 0; i < 8; i++) await act(async () => { await Promise.resolve(); }); };
@@ -48,6 +49,7 @@ beforeEach(async () => {
   resetManagerChoice(); setRosterDefault("assistant"); setToken("example-owner");
   notes = { [key()]: "Initial instructions", [key("work")]: "Work instructions" }; fallback = "Hub fallback instructions"; writes = [];
   vi.mocked(toast).mockClear();
+  unauthorized = vi.fn<() => void>(); handleUnauthorized(unauthorized);
   host = document.createElement("div"); document.body.append(host); root = createRoot(host);
   // Exercise the real API's dispatch-time credential lookup and explicit token override.
   vi.stubGlobal("fetch", vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
@@ -64,7 +66,7 @@ beforeEach(async () => {
           const finish = (response: Response) => { signal?.removeEventListener("abort", abort); resolve(response); };
           writes.push({ manager, token, notes: body.notes, signal,
             succeed: () => { if (signal?.aborted) return; notes[key(manager, token)] = body.notes; finish(json({ manager, notes: body.notes })); },
-            fail: () => finish(json({ error: "Synthetic save failure" }, 500)),
+            fail: (status = 500) => finish(json({ error: "Synthetic save failure" }, status)),
           });
         });
       }
@@ -79,7 +81,7 @@ afterEach(async () => {
   await leave();
   // Settle cleanup writes before retiring this test's credential and synthetic transport.
   for (let i = 0; i < writes.length; i++) await complete(i);
-  act(() => root.unmount()); host.remove(); setToken(""); vi.unstubAllGlobals();
+  act(() => root.unmount()); host.remove(); setToken(""); handleUnauthorized(() => {}); vi.unstubAllGlobals();
 });
 
 it("orders a pending manual save before the newer leave-page save at the authoritative store", async () => {
@@ -188,7 +190,7 @@ it.each([false, true])("isolates a replacement credential from queued writes and
 });
 
 it("does not save an old editor's dirty text with a token replaced before cleanup", async () => {
-  await render(); await type("Old unsent draft"); setToken("replacement-owner"); await leave();
+  await render(); await type("Old unsent draft"); act(() => setToken("replacement-owner")); await leave();
   expect(writes).toHaveLength(0);
 });
 
@@ -223,4 +225,42 @@ it("reports failure of the unchanged inherited draft and allows retry after remo
   expect(box().value).toBe("Inherited draft"); expect(button("common.save").disabled).toBe(false);
   expect(toast).toHaveBeenCalledWith(expect.stringContaining("Synthetic save failure"), "error");
   await save(); await complete(2); expect(notes[key()]).toBe("Inherited draft");
+});
+
+
+it("reloads a surviving editor on a cross-tab credential replacement without transferring its draft", async () => {
+  await render(); await type("Retired owner draft");
+  const retiredBox = box();
+  notes[key("assistant", "Bearer replacement-owner")] = "Replacement instructions";
+  act(() => {
+    localStorage.setItem("persona.token", "replacement-owner");
+    window.dispatchEvent(new StorageEvent("storage", { key: "persona.token", oldValue: "example-owner", newValue: "replacement-owner", storageArea: localStorage }));
+  });
+  await flush();
+  expect(box()).not.toBe(retiredBox); expect(box().value).toBe("Replacement instructions");
+  expect(writes).toHaveLength(0);
+  await type("Replacement draft"); await save();
+  expect(writes.map((w) => [w.token, w.notes])).toEqual([["Bearer replacement-owner", "Replacement draft"]]);
+  await complete(0, true); expect(button("common.save").disabled).toBe(false);
+  await save(); await complete(1); expect(notes[key("assistant", "Bearer replacement-owner")]).toBe("Replacement draft");
+});
+
+it("preserves unauthorized recovery for a current credential's notes save", async () => {
+  await render(); await type("Current owner draft"); await save();
+  act(() => writes[0].fail(401)); await flush();
+  expect(unauthorized).toHaveBeenCalledTimes(1);
+  expect(button("common.save").disabled).toBe(false);
+});
+
+it("ignores an old credential's late 401 after a mounted replacement and saves the new draft", async () => {
+  await render(); await type("Old pending snapshot"); await save(); await type("Old queued draft");
+  notes[key("assistant", "Bearer replacement-owner")] = "Replacement instructions";
+  act(() => setToken("replacement-owner")); await flush();
+  expect(box().value).toBe("Replacement instructions");
+  await type("Replacement draft"); await save();
+  act(() => writes[0].fail(401)); await flush();
+  expect(unauthorized).not.toHaveBeenCalled(); expect(toast).not.toHaveBeenCalled();
+  expect(box().value).toBe("Replacement draft");
+  expect(writes.map((w) => [w.token, w.notes])).toEqual([["Bearer example-owner", "Old pending snapshot"], ["Bearer replacement-owner", "Replacement draft"]]);
+  await complete(1); expect(notes[key("assistant", "Bearer replacement-owner")]).toBe("Replacement draft");
 });

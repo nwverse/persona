@@ -36,7 +36,7 @@ class AboutMeSaves {
     if (this.pending?.value === value) return this.pending.promise;
     const promise = this.tail.then(async () => {
       if (this.owner !== credentialOwner()) return false;
-      await api("/assistant", { method: "PUT", json: { notes: value }, token: this.token, headers: { [MANAGER_HEADER]: this.manager } });
+      await api("/assistant", { method: "PUT", json: { notes: value }, token: this.token, tokenOwner: this.owner, headers: { [MANAGER_HEADER]: this.manager } });
       if (this.owner !== credentialOwner()) return false;
       this.saved = value;
       return true;
