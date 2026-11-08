@@ -1,5 +1,12 @@
 # Lessons: Android
 
+## Negotiated capabilities are not queued-event completion (#1669)
+
+The connection stores its authenticated hello before catch-up, but a separate queued event consumer can still be
+paused or attach after that non-replayed event. Derive message capabilities from the authoritative connection hello,
+not a second asynchronously updated flag. Preserve route/catch-up fences. Test with the consumer dispatcher held
+and a transport attached after hello delivery; do not hide the race by increasing waits or relaxing assertions.
+
 ## Assistant selection owns the whole request and draft lifecycle (#6567)
 
 A selected chip does not prove that its main conversation opened. Capture the hub and manager before suspending,
