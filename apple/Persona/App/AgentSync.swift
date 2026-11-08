@@ -10,6 +10,9 @@ import PersonaKit
 final class AgentSync {
     static let shared = AgentSync()
 
+    /// The app's model (the sync scenarios hand it theirs, PersonaTests/Sync).
+    var model: () -> AppModel = { AppModel.shared }
+
     /// Worth keeping current: every live agent, and any session used within this window.
     static let recentWindow: TimeInterval = 24 * 3600
     static let maxSessions = 40
@@ -18,6 +21,8 @@ final class AgentSync {
     nonisolated static let workingGap = AgentSyncPacing.workingGap
 
     private var known: [SessionKey: Int64] = [:]
+    /// When each session's rev last changed here: a chat on screen that got no items since has lost some (`checkStall`).
+    private var revMoved: [SessionKey: Date] = [:]
     /// What has been pulled, by rev ("<machine>/<session>" → rev); kept across launches, beside the chats' disk cache it
     /// describes (`StateCache`). Not in UserDefaults: it changes with nearly every push, and each write to UserDefaults
     /// draws every `@AppStorage` view in the app again; the Agents list re-laid itself out under the finger
@@ -49,14 +54,20 @@ final class AgentSync {
 
     /// A machine's full session list arrived.
     func sessions(_ list: [Session]) {
-        for s in list { if let r = s.rev { known[s.key] = r } }
+        for s in list { if let r = s.rev { heard(r, for: s.key) } }
         schedule()
     }
 
     /// Only some transcripts grew (the light `revs` event).
     func revs(machine: MachineRef, _ changed: [String: Int64]) {
-        for (sid, r) in changed { known[SessionKey(group: machine.group, machineID: machine.id, sessionID: sid)] = r }
+        for (sid, r) in changed { heard(r, for: SessionKey(group: machine.group, machineID: machine.id, sessionID: sid)) }
         schedule()
+    }
+
+    /// A session's rev as the hub has it now. The first one heard is no move: a chat's backlog is its baseline.
+    private func heard(_ rev: Int64, for key: SessionKey) {
+        if let old = known[key], old != rev { revMoved[key] = .now }
+        known[key] = rev
     }
 
     /// After a burst of events, look once.
@@ -71,7 +82,7 @@ final class AgentSync {
     }
 
     private func plan() {
-        let model = AppModel.shared
+        let model = self.model()
         // Each group's agents while its own socket is up (docs/protocol/multi-hub.md).
         let up = Set(model.groupIDs.filter { model.isLive($0) })
         guard !up.isEmpty else { return }
@@ -106,7 +117,7 @@ final class AgentSync {
     }
 
     private func canPrefetch(_ key: SessionKey) -> Bool {
-        let model = AppModel.shared
+        let model = self.model()
         return AgentSyncPacing.prefetchAllowed(hasRetainedStore: model.existingChat(key) != nil,
                                                isSubscribed: model.isSubscribed(key))
     }
@@ -131,14 +142,14 @@ final class AgentSync {
     /// its group's socket is down (in the background, offline): no push is due then, and the subscription asks for what
     /// it missed (`since_seq`) when the socket is back, whose next list looks again.
     private func checkStall(_ key: SessionKey) {
-        let model = AppModel.shared
+        let model = self.model()
         guard model.isSubscribed(key), model.isLive(key.group), let store = model.existingChat(key),
               !catchingUp.contains(key)
         else { return }
         let updatedAt = model.latest(key)?.updatedAt // `session(_:)` keeps an older one on purpose
         guard let at = AgentSyncPacing.catchUpAt(updatedAt: updatedAt, newestLine: store.newestLineAt,
-                                                lastArrival: store.arrivedAt, lastPull: lastCatchUp[key],
-                                                pulledFor: caughtUpFor[key])
+                                                revMoved: revMoved[key], lastArrival: store.arrivedAt,
+                                                lastPull: lastCatchUp[key], pulledFor: caughtUpFor[key])
         else { return }
         guard at <= .now else { return lookAgain(key, at: at) }
         guard let api = model.api(key.group) else { return }
@@ -149,7 +160,7 @@ final class AgentSync {
             do {
                 // Not asked again for this write once one page held all of it: the write may have added no line. After
                 // more pages (`fill`, `reload`, which keep their failures to themselves) the next look asks once more.
-                if try await Self.pullInto(store, key, api) == .none { caughtUpFor[key] = updatedAt }
+                if try await Self.pullInto(store, key, api, model: model) == .none { caughtUpFor[key] = updatedAt }
             } catch is CancellationError {
                 // Its last visible owner left; the next subscription owns missed-sequence replay.
             } catch {
@@ -227,7 +238,7 @@ final class AgentSync {
     /// transcript changes (`AgentSyncPacing.retryAt`): a runtime that refuses a session's page was asked again on
     /// every push of any session, dozens of times a minute.
     private func pull(_ key: SessionKey) async -> PullOutcome {
-        let model = AppModel.shared
+        let model = self.model()
         guard canPrefetch(key) else { return .skipped }
         guard let api = model.api(key.group) else { return .failed(refused: false) }
 
@@ -244,8 +255,7 @@ final class AgentSync {
     /// A store in memory: what came after its `covered` goes into it (filling a hole, or starting over, when the batch
     /// says so). Returns what the first batch left to do.
     @discardableResult
-    private static func pullInto(_ store: ChatStore, _ key: SessionKey, _ api: APIClient) async throws -> ChatStore.Gap {
-        let model = AppModel.shared
+    private static func pullInto(_ store: ChatStore, _ key: SessionKey, _ api: APIClient, model: AppModel) async throws -> ChatStore.Gap {
         // Queued work and every follow-up page share the same visibility and store-identity fence.
         let shouldApply: @MainActor () -> Bool = { model.isSubscribed(key) && model.existingChat(key) === store }
         guard shouldApply() else { throw CancellationError() }
