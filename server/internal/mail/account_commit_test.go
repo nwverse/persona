@@ -4,15 +4,21 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"net/http"
 	"reflect"
 	"sync/atomic"
 	"testing"
 	"testing/synctest"
+	"time"
 
 	"github.com/nwverse/persona/server/internal/db"
 )
 
 var errAccountWrite = errors.New("injected account write failure")
+
+type accountTokenTransport func(*http.Request) (*http.Response, error)
+
+func (f accountTokenTransport) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
 
 type accountWriteRecords struct {
 	*memRecords
@@ -118,7 +124,7 @@ func TestAccountCommitsSerializeSnapshots(t *testing.T) {
 								err = s.DeleteAccount("base")
 							case "refresh":
 								a, _ := s.account("base")
-								s.rotateRefresh(a.OAuth, "example-rotated-refresh", s.accessEntry(a.OAuth))
+								s.rotateRefresh(a.ID, a.OAuth, "example-rotated-refresh", s.accessEntry(a.OAuth))
 							}
 							return err
 						}
@@ -347,6 +353,15 @@ func TestRefreshRotationOwnsCommittedCredentials(t *testing.T) {
 	if _, err := s.upsertAccount(input); err != nil {
 		t.Fatal(err)
 	}
+	// Verification owns its candidate even if the provider returned credentials
+	// identical to an existing account's; a later rejection must leave that row alone.
+	pending := commitTestAccount("pending")
+	*pending.OAuth = *input.OAuth
+	s.rotateRefresh(pending.ID, pending.OAuth, "example-pending-refresh", s.accessEntry(pending.OAuth))
+	if got := committedAccounts(s)["base"]; got.OAuth.RefreshToken != input.OAuth.RefreshToken {
+		t.Fatal("uncommitted verification rotated another account's credentials")
+	}
+	assertAccountRestart(t, s, recs)
 	// Mutating the caller's object, an account copy or an inbox snapshot cannot
 	// change committed credentials or another operation's encryption input.
 	input.OAuth.RefreshToken = "example-caller-change"
@@ -360,20 +375,30 @@ func TestRefreshRotationOwnsCommittedCredentials(t *testing.T) {
 	}
 	s.noteLogin("base", errGoogleRevoked)
 	c := s.accessEntry(a.OAuth)
+	queued, _ := s.account(a.ID)
 	s.store.recs = &accountWriteRecords{memRecords: recs, replace: func(context.Context, []db.MailAccountRow) error { return errAccountWrite }}
-	s.rotateRefresh(a.OAuth, "example-next-refresh", c)
+	s.rotateRefresh(a.ID, a.OAuth, "example-next-refresh", c)
 	assertAccountRestart(t, s, recs)
 	if s.accessEntry(a.OAuth) != c {
 		t.Fatal("failed rotation moved access cache")
 	}
 	s.store.recs = recs
-	s.rotateRefresh(a.OAuth, "example-next-refresh", c)
+	s.rotateRefresh(a.ID, a.OAuth, "example-next-refresh", c)
 	assertAccountRestart(t, s, recs)
 	if a.OAuth.RefreshToken != "example-next-refresh" || s.accessEntry(a.OAuth) != c {
 		t.Fatal("successful rotation lost access cache")
 	}
 	if accounts, _ := s.ListAccounts(); len(accounts) != 1 || accounts[0].Status != "error" || accounts[0].Error != errGoogleRevoked.Error() {
 		t.Fatal("refresh rotation cleared account health")
+	}
+	c.mu.Lock()
+	c.token, c.expires = "example-cached-access", s.now().Add(time.Hour)
+	c.mu.Unlock()
+	s.googleHTTP = &http.Client{Transport: accountTokenTransport(func(*http.Request) (*http.Response, error) {
+		return nil, errors.New("unexpected token endpoint request")
+	})}
+	if token, err := s.oauthToken(context.Background(), queued); err != nil || token != "example-cached-access" {
+		t.Fatalf("queued account lost rotated access cache: %v", err)
 	}
 
 	stale, _ := s.account("base")
@@ -385,7 +410,7 @@ func TestRefreshRotationOwnsCommittedCredentials(t *testing.T) {
 	before := committedAccounts(s)
 	var writes atomic.Int32
 	s.store.recs = &accountWriteRecords{memRecords: recs, replace: func(context.Context, []db.MailAccountRow) error { writes.Add(1); return errAccountWrite }}
-	s.rotateRefresh(stale.OAuth, "example-stale-refresh", c)
+	s.rotateRefresh(stale.ID, stale.OAuth, "example-stale-refresh", c)
 	if !reflect.DeepEqual(committedAccounts(s), before) || writes.Load() != 0 {
 		t.Fatal("stale refresh overwrote reauthorization")
 	}
@@ -393,7 +418,7 @@ func TestRefreshRotationOwnsCommittedCredentials(t *testing.T) {
 	if err := s.DeleteAccount("base"); err != nil {
 		t.Fatal(err)
 	}
-	s.rotateRefresh(replacement.OAuth, "example-deleted-refresh", c)
+	s.rotateRefresh("base", replacement.OAuth, "example-deleted-refresh", c)
 	assertAccountRestart(t, s, recs)
 	if len(committedAccounts(s)) != 0 {
 		t.Fatal("stale refresh revived deleted account")
@@ -401,7 +426,7 @@ func TestRefreshRotationOwnsCommittedCredentials(t *testing.T) {
 
 	// A token rotated during verification belongs to the uncommitted candidate.
 	unsaved := commitTestAccount("unsaved")
-	s.rotateRefresh(unsaved.OAuth, "example-verification-refresh", c)
+	s.rotateRefresh(unsaved.ID, unsaved.OAuth, "example-verification-refresh", c)
 	if rows, _ := recs.MailAccounts(context.Background()); len(rows) != 0 {
 		t.Fatal("verification persisted an account")
 	}

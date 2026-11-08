@@ -1,5 +1,13 @@
 # Lessons: hub / node and networking
 
+## Mail account writes publish only committed candidates (#1302)
+
+Whole-account snapshots need one guard covering candidate capture, storage and publication across adds, OAuth
+upserts, imports, deletes and refresh-token rotation. Publishing first and rolling back later lets an unrelated
+successful write persist rejected credentials or a failed deletion. Copy nested OAuth credentials, keep network
+verification outside that guard, and retire health and cached connections only after the write succeeds. Concurrency
+regressions should park a second writer at the guard and check restart agreement, rather than require it to enter storage.
+
 ## Distant spreadsheet dates exceed time.Duration (#1061)
 
 `time.Time.Sub` saturates at roughly 290 years, so XLSX dates after the duration limit all became the same serial. Subtract Unix seconds for parsed calendar dates, retaining the existing wall-clock normalization. Verify the emitted worksheet XML, including distant leap years, time fractions, offsets and text cells; a valid ZIP/XML structure alone does not prove date values are correct.
