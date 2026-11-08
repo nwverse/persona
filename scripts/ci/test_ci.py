@@ -57,7 +57,7 @@ class PathTests(unittest.TestCase):
         result = subprocess.run(command + ["--base", "HEAD"], env=environment, capture_output=True, text=True, timeout=30)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(json.loads(result.stdout), paths.select([]))
-        result = subprocess.run(command + ["--print-base"], env=environment, capture_output=True, text=True, timeout=30)
+        result = subprocess.run(command + ["--print-base", "--base", "HEAD"], env=environment, capture_output=True, text=True, timeout=30)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(len(result.stdout.strip()), 40)
         result = subprocess.run(command + ["--lanes", "server,web"], env=environment, capture_output=True, text=True, timeout=30)
