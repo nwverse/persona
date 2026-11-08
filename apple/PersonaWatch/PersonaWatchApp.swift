@@ -30,6 +30,7 @@ final class WatchModel {
     /// Each group's credential ("" = the default group); one group from a phone before several hubs.
     var configs: [String: ServerConfig] = [:]
     @ObservationIgnored var extensionDeviceIDs: [String: String] = [:]
+    var extensionCapabilities: [String: [String]] = [:]
     var extensionSurface: WatchExtensionDestination?
     /// What the groups are called (labels, when there are several).
     var names: [String: String] = [:]
@@ -87,6 +88,7 @@ final class WatchModel {
         if let data = UserDefaults.standard.data(forKey: "configs"), let all = try? JSONDecoder().decode(WatchConfigs.self, from: data) {
             (configs, names, missing) = (all.configs, all.names, all.missing ?? [])
             extensionDeviceIDs = all.deviceIDs ?? [:]
+            extensionCapabilities = all.features ?? [:]
         } else if let data = UserDefaults.standard.data(forKey: "config"), let c = try? JSONDecoder().decode(ServerConfig.self, from: data) {
             configs = ["": c]
         }
@@ -102,25 +104,33 @@ final class WatchModel {
         }
         #endif
         WatchSync.shared.onConfig = { [weak self] c in
-            self?.configs = ["": c]
-            self?.names = [:]
-            self?.missing = []
-            self?.extensionDeviceIDs = [:]
-            self?.syncExtensionSurfaces()
+            guard let self else { return }
+            guard configs != ["": c] || !names.isEmpty || !missing.isEmpty ||
+                  !extensionDeviceIDs.isEmpty || !extensionCapabilities.isEmpty else { return }
+            configs = ["": c]
+            names = [:]
+            missing = []
+            extensionDeviceIDs = [:]
+            extensionCapabilities = [:]
+            syncExtensionSurfaces()
             UserDefaults.standard.set(try? JSONEncoder().encode(c), forKey: "config")
             UserDefaults.standard.removeObject(forKey: "configs")
-            Task { await self?.refresh() }
-            Task { await self?.refreshExtensionSurfaces() }
+            Task { await self.refresh() }
+            Task { await self.refreshExtensionSurfaces() }
         }
         WatchSync.shared.onConfigs = { [weak self] all in
-            self?.configs = all.configs
-            self?.names = all.names
-            self?.missing = all.missing ?? []
-            self?.extensionDeviceIDs = all.deviceIDs ?? [:]
-            self?.syncExtensionSurfaces()
+            guard let self else { return }
+            guard configs != all.configs || names != all.names || missing != (all.missing ?? []) ||
+                  extensionDeviceIDs != (all.deviceIDs ?? [:]) || extensionCapabilities != (all.features ?? [:]) else { return }
+            configs = all.configs
+            names = all.names
+            missing = all.missing ?? []
+            extensionDeviceIDs = all.deviceIDs ?? [:]
+            extensionCapabilities = all.features ?? [:]
+            syncExtensionSurfaces()
             UserDefaults.standard.set(try? JSONEncoder().encode(all), forKey: "configs")
-            Task { await self?.refresh() }
-            Task { await self?.refreshExtensionSurfaces() }
+            Task { await self.refresh() }
+            Task { await self.refreshExtensionSurfaces() }
         }
         WatchSync.shared.onPersona = { [weak self] id in
             self?.persona = id

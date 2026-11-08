@@ -7,7 +7,7 @@ extension AppModel {
         let configs = Dictionary(uniqueKeysWithValues: registry.groups.compactMap { group in registry.primary(group).map { (group, $0.config) } })
         let names = Dictionary(uniqueKeysWithValues: registry.groups.map { ($0, groupName($0)) })
         let devices = Dictionary(uniqueKeysWithValues: registry.groups.compactMap { group in registry.primary(group)?.deviceID.map { (group, $0) } })
-        try? ExtensionSurfaceSync.credentials(configs, names: names, devices: devices)
+        try? ExtensionSurfaceSync.credentials(configs, names: names, devices: devices, capabilities: extensionSurfaceCapabilities)
     }
 
     func refreshExtensionSurfaces() {

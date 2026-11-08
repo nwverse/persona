@@ -1,5 +1,28 @@
 import Foundation
 
+nonisolated struct ExtensionSurfaceProjection: Sendable {
+    var key: ExtensionSurfaceKey
+    var family: String
+    var cache: ExtensionSurfaceCache?
+}
+
+nonisolated extension ExtensionSurfaceSnapshot {
+    /// A watch deep link is a widget projection, not permission to render a full extension page.
+    func projection(_ link: ExtensionSystemLink) -> ExtensionSurfaceProjection? {
+        guard let group = groups[link.group],
+              let place = group.widgets.sorted(by: { $0.id < $1.id }).first(where: {
+                  $0.extension == link.owner && (link.ui == nil || $0.opens == link.ui)
+              }), let family = ["large", "medium", "small", "accessory_rectangular", "accessory_circular", "accessory_inline"]
+                .first(where: { place.families.contains($0) }) else { return nil }
+        let key = ExtensionSurfaceKey(group: link.group, owner: place.extension, contribution: place.id)
+        return ExtensionSurfaceProjection(key: key, family: family, cache: cache(key, family: family))
+    }
+}
+
+nonisolated struct ExtensionSurfaceCapabilitiesUnknown: LocalizedError {
+    var errorDescription: String? { String(localized: "Open Persona on iPhone to sync extension capabilities.") }
+}
+
 nonisolated struct ExtensionSurfaceHTTPError: Error, Sendable {
     var status: Int
 }
@@ -78,7 +101,10 @@ nonisolated struct ExtensionSurfaceClient: Sendable {
             // Public health intentionally omits features, even with Authorization. That is unknown, not an old hub.
             let features: Set<String>
             if let advertised = capabilities.features { features = Set(advertised) }
-            else { features = try await helloFeatures() }
+            else if credential.isAnswerOnly {
+                guard let forwarded = credential.capabilities else { throw ExtensionSurfaceCapabilitiesUnknown() }
+                features = Set(forwarded)
+            } else { features = try await helloFeatures() }
             async let widgets = widgetCatalog(enabled: features.contains("extension_widgets"))
             async let shortcuts = shortcutCatalog(enabled: features.contains("extension_shortcuts"))
             let (w, s) = try await (widgets, shortcuts)
@@ -168,6 +194,11 @@ nonisolated struct ExtensionSurfaceClient: Sendable {
               let place = group.widgets.first(where: { $0.extension == key.owner && $0.id == key.contribution }),
               place.families.contains(family), ExtensionWidgetFamily.all.contains(family),
               ExtensionSystemLink(owner: key.owner, ui: key.contribution, group: key.group).url != nil else { return nil }
+        if credential.isAnswerOnly {
+            // Unknown capabilities retain offline content; the wrist never probes a forbidden WebSocket.
+            guard let capabilities = credential.capabilities else { return snapshot.cache(key, family: family) }
+            guard capabilities.contains("extension_widgets") else { return nil }
+        }
         if let cache = snapshot.cache(key, family: family), cache.fresh(at: .now) { return cache }
         do {
             let answer: ExtensionWidgetAnswer = try await request("/api/v1/extensions/\(key.owner)/-/widget/\(key.contribution)", body: ExtensionWidgetRequest(context: .here(size: family)))

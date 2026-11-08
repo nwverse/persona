@@ -7,6 +7,23 @@ nonisolated struct ExtensionSurfaceCredential: Codable, Hashable, Sendable {
     var token: String
     var deviceID: String?
     var name: String
+    /// Only the wrist's answer-only token; nil decodes snapshots written before this metadata existed.
+    var answerOnly: Bool? = nil
+    /// Forwarded from the phone's authenticated hello, never inferred from an empty public health response.
+    var capabilities: [String]? = nil
+
+    var isAnswerOnly: Bool {
+        #if os(watchOS)
+        // An upgraded complication may run before the containing watch app rewrites its older snapshot.
+        true
+        #else
+        answerOnly == true
+        #endif
+    }
+
+    func sameAuthorization(as other: Self) -> Bool {
+        url == other.url && token == other.token
+    }
 }
 
 nonisolated struct ExtensionSurfaceKey: Codable, Hashable, Sendable {
@@ -81,8 +98,17 @@ nonisolated struct ExtensionSurfaceStore: Sendable {
 
     func replaceCredentials(_ credentials: [String: ExtensionSurfaceCredential]) throws {
         try transaction { snapshot in
-            snapshot.groups = credentials.mapValues { ExtensionSurfaceGroup(credential: $0) }.merging(
-                snapshot.groups.filter { credentials[$0.key] == $0.value.credential }, uniquingKeysWith: { _, old in old })
+            var replacement: [String: ExtensionSurfaceGroup] = [:]
+            for (id, credential) in credentials {
+                if var old = snapshot.groups[id], old.credential.sameAuthorization(as: credential) {
+                    // Metadata changes do not rotate the pairing or erase offline projections.
+                    old.credential = credential
+                    replacement[id] = old
+                } else {
+                    replacement[id] = ExtensionSurfaceGroup(credential: credential)
+                }
+            }
+            snapshot.groups = replacement
         }
     }
 
@@ -94,7 +120,8 @@ nonisolated struct ExtensionSurfaceStore: Sendable {
 
     func catalog(group: String, expected: ExtensionSurfaceGroup, widgets: [ExtensionWidgetPlace], shortcuts: [ExtensionShortcutPlace]) throws {
         try transaction { snapshot in
-            guard var current = snapshot.groups[group], current.generation == expected.generation else { return }
+            guard var current = snapshot.groups[group], current.generation == expected.generation,
+                  current.credential.capabilities == expected.credential.capabilities else { return }
             current.widgets = widgets
             current.shortcuts = shortcuts
             current.cache.removeAll { cached in
@@ -108,6 +135,7 @@ nonisolated struct ExtensionSurfaceStore: Sendable {
         try transaction { snapshot in
             guard var current = snapshot.groups[cache.key.group], current.generation == expected.generation,
                   current.invalidation == expected.invalidation,
+                  current.credential.capabilities == expected.credential.capabilities,
                   current.widgets.contains(where: { $0.extension == cache.key.owner && $0.id == cache.key.contribution && $0.families.contains(cache.family) }) else { return }
             current.cache.removeAll { $0.key == cache.key && $0.family == cache.family && $0.locale == cache.locale && $0.timeZone == cache.timeZone }
             current.cache.append(cache)

@@ -6,10 +6,17 @@ nonisolated struct WatchExtensionDestination: Identifiable {
     var id: String { link.url?.absoluteString ?? "" }
 }
 
+private nonisolated struct WatchExtensionLoad: Hashable {
+    var link: ExtensionSystemLink
+    var config: ServerConfig?
+    var features: [String]?
+}
+
 extension WatchModel {
     /// This is the wrist's own configuration, not the phone's registry; empty replaces and clears all groups.
     func syncExtensionSurfaces() {
-        try? ExtensionSurfaceSync.credentials(configs, names: names, devices: extensionDeviceIDs)
+        try? ExtensionSurfaceSync.credentials(configs, names: names, devices: extensionDeviceIDs,
+                                             answerOnly: true, capabilities: extensionCapabilities)
         if let destination = extensionSurface, configs[destination.link.group] == nil { extensionSurface = nil }
     }
     func refreshExtensionSurfaces() async {
@@ -22,21 +29,23 @@ extension WatchModel {
     }
 }
 
-/// A complication tap opens only the named group's page; unpaired groups do not fall back to another hub.
-/// The wrist presents a read-only projection. Interactive extension controls remain in the containing phone app.
+/// A complication tap opens only its group's widget projection, never a full page or interactive controls.
 struct WatchExtensionSurfacePage: View {
     var destination: WatchExtensionDestination
     @Environment(WatchModel.self) private var model
     @Environment(\.dismiss) private var dismiss
     @State private var view: ExtensionView?
+    @State private var family = "large"
     @State private var failed = false
+    @State private var needsSync = false
 
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: Theme.Space.s) {
-                if let view { ExtensionSurfaceView(view: view) }
+                if let view { ExtensionSurfaceView(view: view, family: family) }
                 else if failed { Text("This extension page is unavailable").font(Theme.Font.body) }
-                else if destination.link.ui != nil { ProgressView() }
+                else { ProgressView() }
+                if needsSync { Text("Open Persona on iPhone to sync extension capabilities.").font(Theme.Font.caption) }
                 Text("Open Persona on iPhone to use extension controls").font(Theme.Font.caption).foregroundStyle(.secondary)
             }
             .padding(Theme.Space.s)
@@ -46,19 +55,32 @@ struct WatchExtensionSurfacePage: View {
                 Button { dismiss() } label: { Text("Done").lineLimit(1) }
             }
         }
-        .task(id: destination.id) {
-            guard let ui = destination.link.ui, let api = model.api(destination.link.group) else { failed = true; return }
-            do {
-                let places: ExtensionUIPlaces = try await api.get("/api/v1/extensions/-/ui")
-                guard places.ui.contains(where: { $0.extension == destination.link.owner && $0.id == ui && ["nav_page", "extension_page"].contains($0.placement) }) else { failed = true; return }
-                let body = ExtensionUIRequest(context: .here(size: "large"), state: destination.link.state)
-                let result = try JSON.decoder.decode(ExtensionActionResult.self, from: try await api.request("POST", "/api/v1/extensions/\(destination.link.owner)/-/ui/\(ui)", body: body))
-                guard !Task.isCancelled, model.configs[destination.link.group] == api.config else { return }
-                view = result.view
-                failed = view == nil
-            } catch {
-                if !Task.isCancelled { failed = true }
+        .task(id: WatchExtensionLoad(link: destination.link, config: model.configs[destination.link.group],
+                                    features: model.extensionCapabilities[destination.link.group])) {
+            view = nil; failed = false; needsSync = false
+            let store = ExtensionSurfaceStore.shared
+            let link = destination.link
+            guard let config = model.configs[link.group], let group = store.read().groups[link.group],
+                  group.credential.url == config.url, group.credential.token == config.token else { failed = true; return }
+            let client = ExtensionSurfaceClient(credential: group.credential)
+            if let cached = store.read().projection(link) {
+                family = cached.family
+                view = cached.cache?.answer.view
             }
+            do { _ = try await client.refreshCatalog(group: link.group, expected: group) }
+            catch is ExtensionSurfaceCapabilitiesUnknown { if !Task.isCancelled { needsSync = true } }
+            catch { }
+            guard !Task.isCancelled else { return }
+            guard model.configs[link.group] == config,
+                  store.read().groups[link.group]?.generation == group.generation,
+                  let projection = store.read().projection(link) else { view = nil; failed = true; return }
+            let cache = await client.widget(projection.key, family: projection.family)
+            guard !Task.isCancelled else { return }
+            guard model.configs[link.group] == config,
+                  store.read().groups[link.group]?.generation == group.generation else { view = nil; return }
+            family = projection.family
+            view = cache?.answer.view
+            failed = view == nil
         }
     }
 }

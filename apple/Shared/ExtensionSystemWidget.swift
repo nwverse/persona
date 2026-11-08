@@ -17,6 +17,7 @@ nonisolated struct ExtensionWidgetEntry: TimelineEntry {
     var title: String
     var url: URL?
     var stale: Bool
+    var needsSync: Bool = false
 }
 
 struct ExtensionWidgetProvider: AppIntentTimelineProvider {
@@ -67,14 +68,19 @@ struct ExtensionWidgetProvider: AppIntentTimelineProvider {
     private nonisolated func cached(_ configuration: Intent, family: String) -> Entry {
         let snapshot = ExtensionSurfaceStore.shared.read()
         guard let id = configuration.widget?.id, let key = ExtensionSurfaceKey(id: id),
-              let group = snapshot.groups[key.group],
-              let place = group.widgets.first(where: { $0.extension == key.owner && $0.id == key.contribution && $0.families.contains(family) }) else {
+              let group = snapshot.groups[key.group] else {
             return Entry(date: .now, cache: nil, title: interfaceText("Choose an extension widget"), stale: false)
+        }
+        let needsSync = group.credential.isAnswerOnly && group.credential.capabilities == nil
+        guard let place = group.widgets.first(where: { $0.extension == key.owner && $0.id == key.contribution && $0.families.contains(family) }) else {
+            return Entry(date: .now, cache: nil,
+                         title: interfaceText(needsSync ? "Open Persona on iPhone to sync extension capabilities." : "Choose an extension widget"),
+                         stale: false, needsSync: needsSync)
         }
         let cache = snapshot.cache(key, family: family)
         return Entry(date: .now, cache: cache, title: place.title,
                      url: ExtensionSystemLink(owner: place.extension, ui: place.opens, group: key.group).url,
-                     stale: cache.map { !$0.fresh(at: .now) } ?? false)
+                     stale: cache.map { !$0.fresh(at: .now) } ?? false, needsSync: needsSync)
     }
 }
 
@@ -116,7 +122,10 @@ private struct ExtensionWidgetEntryView: View {
         VStack(alignment: .leading, spacing: ExtensionSurfaceTokens.compactSpacing) {
             if let cache = entry.cache {
                 ExtensionSurfaceView(view: cache.answer.view, family: ExtensionSystemWidget.family(family))
-                if entry.stale, family != .accessoryInline, family != .accessoryCircular {
+                if entry.needsSync, family != .accessoryInline, family != .accessoryCircular {
+                    Text("Open Persona on iPhone to sync extension capabilities.")
+                        .font(ExtensionSurfaceTokens.label).foregroundStyle(ExtensionSurfaceTokens.secondaryInk).lineLimit(2)
+                } else if entry.stale, family != .accessoryInline, family != .accessoryCircular {
                     Text("Cached content — open Persona to refresh")
                         .font(ExtensionSurfaceTokens.label).foregroundStyle(ExtensionSurfaceTokens.secondaryInk).lineLimit(1)
                 }

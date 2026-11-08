@@ -1499,6 +1499,7 @@ final class AppModel {
         let isHub = group == hub?.group
         switch ev {
         case .hello(let hello):
+            let previousSurfaceCapabilities = extensionSurfaceCapabilities
             link(group)?.received(hello)
             if let page = sessionLists.lists[group], page.loaded, !page.query.legacy, page.paged != hello.features.contains("sessions_list"), let link = link(group) {
                 page.cancel()
@@ -1522,6 +1523,10 @@ final class AppModel {
             #endif
             for (key, handler) in terminalHandlers where key.group == group { handler(.reconnected) }
             learned(hello, group: group)
+            if extensionSurfaceCapabilities != previousSurfaceCapabilities {
+                syncExtensionSurfaces()
+                pushWatchConfigs()
+            }
             // Marks the last socket may have swallowed, or an HTTP request that failed, go again over this one.
             for key in seenOutbox.unanswered(group: group, at: Date()) { deliverSeen(key) }
         case .terminal(let key, let event):

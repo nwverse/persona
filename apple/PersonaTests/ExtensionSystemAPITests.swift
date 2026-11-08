@@ -302,6 +302,96 @@ import Testing
         }
     }
 
+    @Test func publicWatchCapabilitiesNeverOpenAForbiddenSocket() async throws {
+        try await withAsyncStore { store in
+            var watch = credential
+            watch.answerOnly = true; watch.capabilities = ["extension_widgets", "extension_shortcuts"]
+            try store.replaceCredentials(["": watch])
+            let state = try #require(store.read().groups[""])
+            let client = ExtensionSurfaceClient(credential: watch, transport: { request in
+                #expect(request.value(forHTTPHeaderField: "Authorization") == "Bearer fixture-device-token")
+                let data: Data
+                switch (request.httpMethod, request.url?.path) {
+                case ("GET", "/api/v1/health"): data = Data(#"{"ok":true}"#.utf8)
+                case ("GET", "/api/v1/extensions/-/widgets"):
+                    data = Data(#"{"widgets":[{"extension":"sample","id":"today","title":"Today","families":["small"],"refresh_minutes":30,"opens":"usage"}]}"#.utf8)
+                case ("GET", "/api/v1/extensions/-/shortcuts"):
+                    data = Data(#"{"shortcuts":[{"extension":"sample","id":"echo","title":"Echo"}]}"#.utf8)
+                case ("POST", "/api/v1/extensions/sample/-/widget/today"):
+                    data = Data(#"{"view":{"sections":[]},"expires_at":"2040-01-01T00:00:00Z"}"#.utf8)
+                case ("POST", "/api/v1/extensions/sample/-/shortcut/echo"):
+                    data = Data(#"{"text":"Done"}"#.utf8)
+                default:
+                    Issue.record("The watch requested an endpoint outside its answer-only permissions")
+                    return (Data(), HTTPURLResponse(url: request.url!, statusCode: 403, httpVersion: nil, headerFields: nil)!)
+                }
+                return (data, HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!)
+            }, helloTransport: { _ in
+                Issue.record("The watch must never request /api/v1/ws")
+                throw ExtensionSurfaceHTTPError(status: 403)
+            })
+            #expect(try await client.refreshCatalog(group: "", expected: state, store: store) == Set(watch.capabilities!))
+            let link = ExtensionSystemLink(owner: "sample", ui: "usage", group: "")
+            let projection = try #require(store.read().projection(link))
+            #expect(projection.key.contribution == "today" && projection.family == "small")
+            #expect(await client.widget(projection.key, family: projection.family, store: store) != nil)
+            let action: ExtensionShortcutResult = try await client.request("/api/v1/extensions/sample/-/shortcut/echo",
+                body: ExtensionShortcutRequest(values: [:], context: .here()))
+            #expect(action.text == "Done")
+            #expect(store.read().groups[""]?.credential == watch)
+        }
+    }
+
+    @Test func unknownWatchCapabilitiesKeepTheOldProjectionAndCredential() async throws {
+        try await withAsyncStore { store in
+            let old = try seed(store)
+            var cached = cache()
+            cached.locale = ExtensionUIContext.appLocale; cached.timeZone = TimeZone.current.identifier
+            cached.answer.expiresAt = "2000-01-01T00:00:00Z"
+            try store.save(cached, expected: old)
+            var watch = credential; watch.answerOnly = true
+            try store.replaceCredentials(["": watch])
+            let state = try #require(store.read().groups[""])
+            #expect(state.generation == old.generation)
+            let client = ExtensionSurfaceClient(credential: watch, transport: { request in
+                #expect(request.url?.path == "/api/v1/health")
+                return (Data(#"{"ok":true}"#.utf8), HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!)
+            }, helloTransport: { _ in
+                Issue.record("Unknown Watch metadata is not permission to open a WebSocket")
+                throw ExtensionSurfaceHTTPError(status: 403)
+            })
+            do {
+                _ = try await client.refreshCatalog(group: "", expected: state, store: store)
+                Issue.record("Unknown capabilities must ask for a phone sync")
+            } catch is ExtensionSurfaceCapabilitiesUnknown { }
+            #expect(await client.widget(cached.key, family: "small", store: store)?.answer == cached.answer)
+            #expect(store.read().groups[""]?.credential == watch)
+            #expect(store.read().groups[""]?.widgets == [widget])
+            // A metadata-only update preserves offline state but fences replies based on the old capabilities.
+            watch.capabilities = []
+            try store.replaceCredentials(["": watch])
+            try store.catalog(group: "", expected: state, widgets: [], shortcuts: [])
+            #expect(store.read().groups[""]?.widgets == [widget])
+            let known = try #require(store.read().groups[""])
+            let unsupported = ExtensionSurfaceClient(credential: watch, transport: client.transport, helloTransport: client.helloTransport)
+            #expect(try await unsupported.refreshCatalog(group: "", expected: known, store: store).isEmpty)
+            #expect(store.read().groups[""]?.cache.isEmpty == true)
+        }
+    }
+
+    @Test func widgetProjectionUsesOpensBestFamilyAndExactGroup() throws {
+        try withStore { store in
+            let state = try seed(store)
+            var place = widget; place.families = ["accessory_inline", "accessory_circular", "accessory_rectangular"]
+            try store.catalog(group: "", expected: state, widgets: [place], shortcuts: [])
+            let link = ExtensionSystemLink(owner: "sample", ui: "usage", group: "")
+            #expect(store.read().projection(link)?.family == "accessory_rectangular")
+            #expect(store.read().projection(ExtensionSystemLink(owner: "sample", ui: "today", group: "")) == nil)
+            #expect(store.read().projection(ExtensionSystemLink(owner: "sample", ui: "usage", group: "other")) == nil)
+            #expect(store.read().projection(ExtensionSystemLink(owner: "other", ui: "usage", group: "")) == nil)
+        }
+    }
+
     @Test func readOnlyProjectionDropsControlsAndFitsAccessoryFamilies() {
         let view = ExtensionView(sections: [ExtensionSection(items: [
             .field(ExtensionFieldComponent()), .button(ExtensionButtonComponent()),

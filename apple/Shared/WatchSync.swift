@@ -12,6 +12,8 @@ nonisolated struct WatchConfigs: Codable, Sendable, Equatable {
     var missing: [String]? = nil
     /// Watch token ids only; absent from older phones. Never the phone's device ids.
     var deviceIDs: [String: String]? = nil
+    /// Authenticated phone hello capabilities by group; missing is unknown, an empty array is known unsupported.
+    var features: [String: [String]]? = nil
 }
 
 /// What the watch needs to render without its own WebSocket: live sessions and pending interactions.

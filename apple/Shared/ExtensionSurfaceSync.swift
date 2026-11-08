@@ -6,15 +6,18 @@ import WidgetKit
 
 /// The containing app owns credential changes; refresh only updates directories and reports actual configurations.
 nonisolated enum ExtensionSurfaceSync {
-    static func export(_ configs: [String: ServerConfig], names: [String: String], devices: [String: String] = [:]) -> [String: ExtensionSurfaceCredential] {
+    static func export(_ configs: [String: ServerConfig], names: [String: String], devices: [String: String] = [:],
+                       answerOnly: Bool = false, capabilities: [String: [String]] = [:]) -> [String: ExtensionSurfaceCredential] {
         Dictionary(uniqueKeysWithValues: configs.map { group, config in
-            (group, ExtensionSurfaceCredential(url: config.url, token: config.token, deviceID: devices[group], name: names[group] ?? group))
+            (group, ExtensionSurfaceCredential(url: config.url, token: config.token, deviceID: devices[group], name: names[group] ?? group,
+                                               answerOnly: answerOnly, capabilities: capabilities[group].map { Array(Set($0)).sorted() }))
         })
     }
 
     static func credentials(_ configs: [String: ServerConfig], names: [String: String], devices: [String: String] = [:],
+                            answerOnly: Bool = false, capabilities: [String: [String]] = [:],
                             store: ExtensionSurfaceStore = .shared) throws {
-        let credentials = export(configs, names: names, devices: devices)
+        let credentials = export(configs, names: names, devices: devices, answerOnly: answerOnly, capabilities: capabilities)
         guard store.read().groups.mapValues(\.credential) != credentials else { return }
         try store.replaceCredentials(credentials)
         #if os(iOS) || os(watchOS)
@@ -52,12 +55,8 @@ nonisolated enum ExtensionSurfaceSync {
                         }
                     }
                 }
-                var deviceID = state.credential.deviceID
-                if deviceID == nil, let identity = try? await api.deviceTokens(), let current = identity.current,
-                   identity.tokens.contains(where: { $0.id == current && $0.revokedAt == nil }) {
-                    // Legacy WatchConfigs omitted the id. Ask using this device's own token, never the phone's id.
-                    deviceID = current
-                }
+                // The phone migrates legacy watch tokens. An answer-only wrist cannot list /auth/tokens.
+                let deviceID = state.credential.deviceID
                 if let configurations, let device = deviceID,
                    store.read().groups[group]?.generation == state.generation {
                     let report = store.read().reports(configurations)[group] ?? []

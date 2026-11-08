@@ -13,6 +13,8 @@ final class HubLink: Identifiable {
     private(set) var hello = HubHello()
     /// What the hub listed in its hello beyond the first protocol (`terminal_stream`, `file_upload`…).
     private(set) var features: Set<String> = []
+    /// The credential whose authenticated hello supplied these capabilities; nil before the first hello.
+    @ObservationIgnored private(set) var surfaceCapabilitiesConfig: ServerConfig?
     /// The group's last Fleet state (hub/liveactivity.go): merged with the other groups' for the Live Activity.
     var fleet: FleetState?
     /// The desktop apps connected to the hub (the 「Mac 上的 Persona 已登录」 banner shows the hub-level group's).
@@ -82,6 +84,7 @@ final class HubLink: Identifiable {
 
     func received(_ hello: HubHello) {
         self.hello = hello
+        surfaceCapabilitiesConfig = config
         let f = Set(hello.features)
         let changed = f != features
         if changed { features = f }
@@ -385,7 +388,16 @@ extension AppModel {
                             missing: missing,
                             deviceIDs: Dictionary(uniqueKeysWithValues: configs.keys.compactMap { group in
                                 registry.primary(group)?.watchDeviceID.map { (group, $0) }
-                            }))
+                            }), features: extensionSurfaceCapabilities.filter { configs[$0.key] != nil })
+    }
+
+    /// Only the authenticated hello of the hub whose credential is exported, never another mesh member's.
+    var extensionSurfaceCapabilities: [String: [String]] {
+        Dictionary(uniqueKeysWithValues: registry.groups.compactMap { group in
+            guard let primary = registry.primary(group), let link = link(group),
+                  link.surfaceCapabilitiesConfig == primary.config else { return nil }
+            return (group, link.features.sorted())
+        })
     }
 
     func pushWatchConfigs() {
