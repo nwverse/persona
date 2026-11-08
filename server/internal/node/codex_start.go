@@ -146,7 +146,7 @@ func (n *Node) startCodex(ctx context.Context, launch host.Launcher, cwd, launch
 		delete(n.codexStarting, pane)
 		n.mu.Unlock()
 	}()
-	cmd := shellQuote(n.bin) + " codex-start " + shellQuote(file)
+	cmd := n.agentCommand(shellQuote(n.bin)+" codex-start "+shellQuote(file), shellQuote, paneShells(ctx)...) // agentenv.go
 	began := time.Now()
 	time.Sleep(300 * time.Millisecond) // the fresh shell loads ~/.zshrc; typed input is buffered either way
 	if err := launch.Run(ctx, created.Pane, cmd); err != nil {
@@ -326,6 +326,11 @@ func CodexStart(args []string) error {
 	path, err := exec.LookPath(words[0])
 	if err != nil {
 		return fmt.Errorf("%s %s not found in PATH", codexStartError, words[0])
+	}
+	// On Windows the launcher may be a batch file (npm's codex.cmd): the program behind it, never cmd.exe with the message.
+	path, env, err = codexStartProgram(path, f.Prompt != "", env)
+	if err != nil {
+		return fmt.Errorf("%s %v", codexStartError, err)
 	}
 	argv := append([]string(nil), words...)
 	if f.Prompt != "" { // a resume without a message (`personad tab-start`, pi.go) runs the words alone

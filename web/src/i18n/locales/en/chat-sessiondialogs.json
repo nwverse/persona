@@ -67,5 +67,8 @@
   "wt_confirm_loss": "I understand these changes will be lost",
   "wt_removed": "Worktree removed",
   "wt_removed_branch": "Worktree and branch removed",
-  "wt_remove_failed": "Couldn’t remove the worktree: {error}"
+  "wt_remove_failed": "Couldn’t remove the worktree: {error}",
+  "archive_close_title": "Archive and close agent",
+  "archive_close_detail": "Persona archives “{title}” and closes its tab and process on {machine}. The transcript stays on the computer: restore it from Archived agents, and a message resumes it.",
+  "archive_close": "Archive and close"
 }

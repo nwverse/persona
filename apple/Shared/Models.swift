@@ -249,9 +249,11 @@ nonisolated struct MachineComputer: Codable, Hashable, Sendable {
     var backend: String? = nil
     /// The official ChatGPT desktop app is installed (LCU's runtime).
     var chatgpt = false
+    /// The Mac's displays as arranged in its System Settings, read with `screenSharing` (empty from an older node).
+    var displays: [MachineDisplay] = []
 
     enum CodingKeys: String, CodingKey {
-        case enabled, installed, version, daemon, accessibility, desktop, ready, note, job, backend, chatgpt
+        case enabled, installed, version, daemon, accessibility, desktop, ready, note, job, backend, chatgpt, displays
         case screenRecording = "screen_recording", screenSharing = "screen_sharing", noAutoLock = "no_auto_lock"
     }
 
@@ -288,6 +290,8 @@ nonisolated struct MachineComputer: Codable, Hashable, Sendable {
         noAutoLock = try c.decodeIfPresent(Bool.self, forKey: .noAutoLock) ?? false
         backend = try c.decodeIfPresent(String.self, forKey: .backend)
         chatgpt = try c.decodeIfPresent(Bool.self, forKey: .chatgpt) ?? false
+        // An unreadable list only costs the display choice, not the machine.
+        displays = (try? c.decodeIfPresent([MachineDisplay].self, forKey: .displays)) ?? []
     }
 
     /// The node has said how it is (a never-asked one has neither a verdict nor a note).
@@ -314,9 +318,11 @@ nonisolated struct MachineBrowser: Codable, Hashable, Sendable {
     var note: String? = nil
     var screenSharing = false
     var job: ComputerJob? = nil
+    /// As `MachineComputer.displays`.
+    var displays: [MachineDisplay] = []
 
     enum CodingKeys: String, CodingKey {
-        case enabled, installed, version, imported, analytics, ready, note, job
+        case enabled, installed, version, imported, analytics, ready, note, job, displays
         case setUp = "set_up", screenSharing = "screen_sharing"
     }
 
@@ -346,10 +352,43 @@ nonisolated struct MachineBrowser: Codable, Hashable, Sendable {
         note = try c.decodeIfPresent(String.self, forKey: .note)
         screenSharing = try c.decodeIfPresent(Bool.self, forKey: .screenSharing) ?? false
         job = try? c.decodeIfPresent(ComputerJob.self, forKey: .job)
+        displays = (try? c.decodeIfPresent([MachineDisplay].self, forKey: .displays)) ?? []
     }
 
     /// The node has said how it is.
     var checked: Bool { ready || installed || !(note ?? "").isEmpty }
+}
+
+/// One of a Mac's displays, as its node read it (docs/extensions/computer-use.md "Displays"): the frame in points in the
+/// global display space (origin at the top-left corner of the main display, y down); `id` is macOS's display number.
+nonisolated struct MachineDisplay: Codable, Hashable, Sendable {
+    var id: Int
+    var x: Double
+    var y: Double
+    var width: Double
+    var height: Double
+    var main: Bool = false
+
+    init(id: Int, x: Double, y: Double, width: Double, height: Double, main: Bool = false) {
+        self.id = id
+        self.x = x
+        self.y = y
+        self.width = width
+        self.height = height
+        self.main = main
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(Int.self, forKey: .id)
+        x = try c.decode(Double.self, forKey: .x)
+        y = try c.decode(Double.self, forKey: .y)
+        width = try c.decode(Double.self, forKey: .width)
+        height = try c.decode(Double.self, forKey: .height)
+        main = try c.decodeIfPresent(Bool.self, forKey: .main) ?? false
+    }
+
+    var frame: CGRect { CGRect(x: x, y: y, width: width, height: height) }
 }
 
 /// One install or grant the node runs for the machine page (docs/extensions/computer-use.md「一键安装」).
@@ -668,6 +707,9 @@ nonisolated struct Session: Codable, Identifiable, Hashable, Sendable {
     /// on the CLI instead (「找不到 Node.js 22+」). Both nil otherwise.
     var runtime: String? = nil
     var runtimeFallback: String? = nil
+    /// The manager it belongs to (docs/protocol/protocol.md "Per-manager routing"); nil from hubs with one manager and
+    /// older ones. Requests the hub routes by the manager they name (its answered questions) name it.
+    var manager: String? = nil
     /// The group of paired hubs it came from (docs/protocol/multi-hub.md); nil for the default group. The app's own.
     var hubGroup: String? = nil
 
@@ -710,6 +752,9 @@ nonisolated struct Session: Codable, Identifiable, Hashable, Sendable {
         case "identity_conflict": String(localized: "Identity conflict")
         case "codex_history": String(localized: "Codex history")
         case "claude_bg": String(localized: "Claude background")
+        // Claude outside Persona's terminals (docs/integrations/claude-integration.md "Claude outside Persona's terminals")
+        case "claude_desktop": String(localized: "Claude desktop app")
+        case "claude_cli": String(localized: "Claude in a terminal")
         case "runtime": agentLabel // an agent runtime's session (docs/integrations/runtimes.md): its own name, "DSH"
         case .some(let kind) where !kind.isEmpty: kind
         default: nil
@@ -788,7 +833,7 @@ nonisolated struct Session: Codable, Identifiable, Hashable, Sendable {
              starting, startError = "start_error", todo, quiet, hubGroup = "app_hub_group",
              attentionReason = "attention_reason", failureReason = "failure_reason",
              turnError = "turn_error", turnErrorKind = "turn_error_kind", turnErrorCode = "turn_error_code", externalURL = "external_url", channels, origin, compaction, work,
-             runtime, runtimeFallback = "runtime_fallback"
+             runtime, runtimeFallback = "runtime_fallback", manager
     }
 
     init(from decoder: Decoder) throws {
@@ -797,6 +842,7 @@ nonisolated struct Session: Codable, Identifiable, Hashable, Sendable {
         sessionID = try c.decode(String.self, forKey: .sessionID)
         runtime = try c.decodeIfPresent(String.self, forKey: .runtime)
         runtimeFallback = try c.decodeIfPresent(String.self, forKey: .runtimeFallback)
+        manager = try c.decodeIfPresent(String.self, forKey: .manager)
         title = try c.decodeIfPresent(String.self, forKey: .title) ?? ""
         cwd = try c.decodeIfPresent(String.self, forKey: .cwd) ?? ""
         status = try c.decodeIfPresent(SessionStatus.self, forKey: .status) ?? .unknown
@@ -1678,6 +1724,15 @@ nonisolated struct Interaction: Codable, Identifiable, Hashable, Sendable {
     /// What `muted` is stored as: optional, so a card without the key decodes (a synthesized `Bool` with a default
     /// still requires it, #4763) and encodes without it again.
     var mutedFlag: Bool?
+    /// The assistant is deciding whether it may answer this question for the user (docs/assistant/assistant.md "Assistant
+    /// answers questions first"): nothing was pushed yet, and an answer given here wins. The same card comes again
+    /// without it, by `id`.
+    var delegating: Bool?
+    /// What the assistant filled in when it left the question to the user.
+    var delegate: Delegate?
+    /// The manager that reported it (docs/protocol/protocol.md "Per-manager routing"). Once it is no longer pending
+    /// the hub routes by the manager a request names, so Change Answer names this one.
+    var manager: String?
 
     var sessionKey: SessionKey { SessionKey(group: group, machineID: machineID, sessionID: sessionID) }
     var machineRef: MachineRef { MachineRef(group: group, id: machineID) }
@@ -1693,11 +1748,48 @@ nonisolated struct Interaction: Codable, Identifiable, Hashable, Sendable {
     var screenDialog: ScreenParser.Dialog? { dialog?.parsed ?? screen.flatMap(ScreenParser.dialog) }
 
     enum CodingKeys: String, CodingKey {
-        case id, kind, questions, plan, summary, screen, cwd, dialog, secret, fields, agent, reason
+        case id, kind, questions, plan, summary, screen, cwd, dialog, secret, fields, agent, reason, delegating, delegate, manager
         case machineID = "machine_id", sessionID = "session_id", sessionTitle = "session_title", taskTitle = "task_title",
              createdAt = "created_at", expiresAt = "expires_at", toolName = "tool_name", toolUseID = "tool_use_id",
              toolInput = "tool_input", alwaysLabel = "always_label", alwaysKeys = "always_keys", agentLabelHint = "agent_label", hubGroup = "app_hub_group",
              mutedFlag = "muted"
+    }
+}
+
+/// The context the assistant filled in when it left a question to the user (`Interaction.delegate`, the hub's
+/// proto.Delegate). Every field may be missing; an odd one never drops the card.
+nonisolated struct Delegate: Codable, Hashable, Sendable {
+    var what: String?
+    var whyNow: String?
+    /// For a card with options, an option's exact label (several questions: their answers joined by `；`).
+    var recommend: String?
+    var cost: String?
+    var reason: String?
+    var deadline: Date?
+
+    enum CodingKeys: String, CodingKey {
+        case what, recommend, cost, reason, deadline
+        case whyNow = "why_now"
+    }
+
+    init(what: String? = nil, whyNow: String? = nil, recommend: String? = nil, cost: String? = nil, reason: String? = nil,
+         deadline: Date? = nil) {
+        self.what = what
+        self.whyNow = whyNow
+        self.recommend = recommend
+        self.cost = cost
+        self.reason = reason
+        self.deadline = deadline
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try? decoder.container(keyedBy: CodingKeys.self)
+        what = (try? c?.decodeIfPresent(String.self, forKey: .what)).flatMap { $0 }
+        whyNow = (try? c?.decodeIfPresent(String.self, forKey: .whyNow)).flatMap { $0 }
+        recommend = (try? c?.decodeIfPresent(String.self, forKey: .recommend)).flatMap { $0 }
+        cost = (try? c?.decodeIfPresent(String.self, forKey: .cost)).flatMap { $0 }
+        reason = (try? c?.decodeIfPresent(String.self, forKey: .reason)).flatMap { $0 }
+        deadline = (try? c?.decodeIfPresent(Date.self, forKey: .deadline)).flatMap { $0 }
     }
 }
 
@@ -1728,10 +1820,15 @@ nonisolated struct Resolution: Codable, Sendable {
     /// A multi-select screen dialog: the options to have checked when it is sent (`text`: its free-text field).
     var options: [String]?
     var values: [String: String]?
+    /// "assistant" on a question the assistant answered for the user (the hub's history and its `already` reply); the
+    /// app never sends it.
+    var answeredBy: String?
+    /// Why the assistant answered so (with `answeredBy`).
+    var reason: String?
 
     enum CodingKeys: String, CodingKey {
-        case answers, approve, mode, feedback, allow, always, message, keys, text, dismiss, option, options, values
-        case preKeys = "pre_keys"
+        case answers, approve, mode, feedback, allow, always, message, keys, text, dismiss, option, options, values, reason
+        case preKeys = "pre_keys", answeredBy = "answered_by"
     }
 
     static let dismissed = Resolution(dismiss: true)

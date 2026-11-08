@@ -17,6 +17,8 @@ import { ModelEffortPopover } from "./ModelEffortPopover";
 import { UltraMark } from "./Ultracode";
 import { t } from "../../i18n";
 import { AlwaysPermissions } from "./AlwaysPermissions";
+import { DelegatedHistory } from "./Delegated";
+import { appArchiveDeps, archiveAgent } from "../../lib/agent-archives";
 
 interface SessionInfo {
   session_id?: string;
@@ -95,6 +97,7 @@ export function SessionInfoDialog({ session, machineName, open, onClose }: { ses
       {error && <p className="py-4 text-[13px] text-red">{error}</p>}
       <div className="flex flex-col gap-3">
         {open && session.assistant && <AlwaysPermissions key={session.session_id} session={session.session_id} />}
+        {open && !session.assistant && <DelegatedHistory key={`${session.machine_id}/${session.session_id}`} session={session} />}
         {groups.map((g) => {
           const rows = g.rows.filter(([, v]) => v);
           if (!rows.length) return null;
@@ -565,6 +568,43 @@ export function CloseAgentDialog({ open, onClose, onClosed, session, machineName
         {t("chat-chatview.close_agent_detail", { machine: machineName, where: [session.space_name, tabLabel(session)].filter(Boolean).join(" › ") || sessionTitle(session) })}
       </p>
       {wt && <WorktreeCleanup st={wt} value={cleanup} onChange={setCleanup} />}
+    </Dialog>
+  );
+}
+
+// "Archive and close" (lib/agent-archives.ts): archives the agent and closes its tab and process on its computer
+// (session.retire); its transcript stays, and a message resumes it. Asked first because it stops a process; the
+// worktree is never removed here (the archive is meant to come back). The chat's ⋯ and the row menu both ask here.
+export function ArchiveCloseDialog({ open, onClose, session, machineName }: { open: boolean; onClose: () => void; session: Session; machineName: string }) {
+  const [busy, setBusy] = useState(false);
+  const go = async () => {
+    // the latest row (its title); if it got busy meanwhile, the hub refuses (409) and the toast says why
+    const now = getSession(session.machine_id, session.session_id) ?? session;
+    setBusy(true);
+    try {
+      await archiveAgent(now, true, appArchiveDeps);
+      onClose();
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <Dialog
+      open={open}
+      onClose={onClose}
+      title={t("chat-sessiondialogs.archive_close_title")}
+      footer={
+        <>
+          <Button tone="quiet" onClick={onClose}>
+            {t("common.cancel")}
+          </Button>
+          <Button tone="primary" icon="archive" busy={busy} onClick={go}>
+            {t("chat-sessiondialogs.archive_close")}
+          </Button>
+        </>
+      }
+    >
+      <p className="text-[13px] leading-relaxed text-ink-2">{t("chat-sessiondialogs.archive_close_detail", { title: sessionTitle(session), machine: machineName })}</p>
     </Dialog>
   );
 }

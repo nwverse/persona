@@ -52,6 +52,7 @@ Optional (for each one present, the SDK declares the capability in `runtime.hell
 | `interrupt` / `rename` / `close` / `start({cwd, prompt})` | Interrupt, rename, close, create from the phone (with `start` and a configured `launcher`, the new-session form gains a launcher field) |
 | `hasLocalClient()` | Whether this runtime's own UI is open (decides who gets permission requests first, see below) |
 | `modes({session_id, permission_mode, effort})` | Switching permission mode / reasoning effort from the phone (`caps.modes`; values are Persona's: `default` / `acceptEdits` / `plan` / `auto` / `bypassPermissions`, `low` … `max`) |
+| `archive({session_id})` / `unarchive({session_id})` | The runtime's own reversible archive (`caps.archive`, declared only when both exist): when the user archives a session in Persona, it is archived in the runtime too, and restored with it. Archive an idle session without stopping or closing anything (Persona refuses busy sessions first) and keep it restorable; both must be idempotent (already archived / restored is success). A runtime whose archive also stops the session, or that has no way back, leaves them out: the archive is then Persona's alone (`docs/protocol/protocol.md`, "Agent session archives") |
 | `watchChanged(id, watching, {transcript})` | The phone starts / stops watching a session (when a new node connects or the runtime stops, all stop): for runtimes that only follow a session while someone is watching (Paseo subscribes to the timeline per session) |
 
 In `createRuntime`'s options, a runtime that runs several Agents can also pass `launchers: [{name, model, agent, models}]`: besides `launcher`, the new-session form then has these entries, one per provider,
@@ -240,6 +241,9 @@ A runtime that declares `caps.assistant` must:
 2. Attach the tools from `mcp.tools {assistant: true}` to the model (the phone's and mail's, plus assistant-only ones like `ask_user`, `schedule_followup`… and the tools declared by extension command gates);
    assistant-only tools go only to assistant chats, called as `mcp.call {…, assistant: true}`. node treats a call as the assistant's only when "this runtime declared the assistant, the session is its, and it's an assistant chat";
    otherwise as a regular tool (with no assistant-only tools).
+   A runtime that gives an assistant chat Persona's MCP server instead (`personad mcp` with `PERSONA_ASSISTANT=1` and the chat's `PERSONA_SESSION_ID`, as the Antigravity runtime does)
+   must start that server in its own process tree: node takes the server's word only from a descendant of the process connected to its runtime socket with `caps.assistant` (`node/clicall.go` `mcpAssistantOf`),
+   and only for a session id of the runtime's own shape (not empty, not a Claude or Codex uuid) that, once the runtime lists it, is this runtime's assistant chat.
 3. Lark always goes through tools declared by extension command gates (`proto.CommandGate.Tool`): node first passes the Lark gate (reads allowed, writes others will see confirmed on the phone, configured rules deny), then runs
    the skill's script on node; credentials live only in node's proxy, never in the runtime. The tools carry `shell` (the command name and the skill script's path); when the runtime sees them in the assistant chat's shell
    it blocks them and says which tool to use (DSH's `onPreExecute`).

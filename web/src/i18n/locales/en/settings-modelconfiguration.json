@@ -11,7 +11,7 @@
   "custom": "Custom",
   "separately_configured": "Separately configured",
   "follow_agents": "Follow Agents",
-  "manage_providers": "Manage model providers",
+  "manage_providers": "Manage shared model providers",
   "restored": "Inheritance restored",
   "saved": "Saved; applies from the next run",
   "conflict": "The configuration was changed elsewhere. Your edits are kept; reload, then edit and save again.",

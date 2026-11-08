@@ -1,5 +1,5 @@
 // Derived lists the sidebar, the home page and the palette share.
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useSyncExternalStore } from "react";
 import { api, credentialOwner } from "./api";
 import { stateOf } from "./format";
 import { getState, onHubEvent, subscribe, useStore } from "./store";
@@ -19,69 +19,116 @@ const FULL_LIST_RETRY_MS = 5_000;
 // so a large fallback list cannot be downloaded back-to-back while those hints keep arriving.
 const FULL_LIST_REFRESH_MS = 3_000;
 
-/** Pins and grouping need complete rows, including agents outside the bounded first page. Keep this
- * snapshot only while the legacy list is mounted; other views retain their bounded transport. */
+// A short handoff window covers Sidebar → AgentsPage and StrictMode remounts, not a permanent
+// full-list cache. Only the active credential partition can own this one shared transport.
+const FULL_LIST_GRACE_MS = 1_000;
+let fullSnapshot = { ...EMPTY_FULL_LIST, epoch: 0 };
+const fullListeners = new Set<() => void>();
+const subscribeFull = (listener: () => void) => {
+  fullListeners.add(listener);
+  return () => { fullListeners.delete(listener); };
+};
+const fullChanged = () => fullListeners.forEach((listener) => listener());
+const getFullSnapshot = () => fullSnapshot;
+let fullCache: ReturnType<typeof createFullCache> | undefined;
+
+function createFullCache(owner: string) {
+  let stopped = false, consumers = 0, pending = false, dirty = false, urgent = false;
+  let nextReadAt = 0;
+  let controller: AbortController | undefined;
+  let retry: ReturnType<typeof setTimeout> | undefined;
+  let trailing: ReturnType<typeof setTimeout> | undefined;
+  let expiry: ReturnType<typeof setTimeout> | undefined;
+  const valid = () => !stopped && getState().loaded && credentialOwner() === owner
+    && getState().features.includes(SESSIONS_LIST_FEATURE);
+  const read = async (immediate = false) => {
+    if (!valid()) return;
+    if (!consumers || pending) { dirty = true; urgent ||= immediate; return; }
+    const delay = nextReadAt - Date.now();
+    if (!immediate && delay > 0) {
+      // Hints share one fixed trailing deadline, even across consumer handoffs.
+      trailing ??= setTimeout(() => { trailing = undefined; void read(); }, delay);
+      return;
+    }
+    clearTimeout(trailing);
+    trailing = undefined;
+    clearTimeout(retry);
+    retry = undefined;
+    dirty = urgent = false;
+    pending = true;
+    controller = new AbortController();
+    const base = getState().sessions;
+    try {
+      const result = await api<{ sessions: Session[] }>("/sessions", { signal: controller.signal });
+      if (valid()) {
+        fullSnapshot = { sessions: (result.sessions ?? []).filter((s) => !s.assistant), loaded: true, base, epoch: fullSnapshot.epoch };
+        fullChanged();
+      }
+    } catch {
+      // An initial failure or quiet disconnected hub still needs a retry. During grace, retain
+      // the retry intent but do not download data without a consumer.
+      if (valid()) {
+        dirty = true;
+        if (consumers) retry = setTimeout(() => { retry = undefined; void read(true); }, FULL_LIST_RETRY_MS);
+      }
+    } finally {
+      pending = false;
+      nextReadAt = Date.now() + FULL_LIST_REFRESH_MS;
+      if (valid() && consumers && dirty && retry === undefined) void read(urgent);
+    }
+  };
+  const off = ["sessions_list", "session", "sessions", "sessions_delta", "hello"].map((event) => onHubEvent(event, () => { void read(event === "hello"); }));
+  const dispose = () => {
+    if (stopped) return;
+    stopped = true;
+    controller?.abort();
+    clearTimeout(retry);
+    clearTimeout(trailing);
+    clearTimeout(expiry);
+    off.forEach((unsubscribe) => unsubscribe());
+    fullCache = undefined;
+    fullSnapshot = { ...EMPTY_FULL_LIST, epoch: fullSnapshot.epoch + 1 };
+    fullChanged();
+  };
+  // Keep this fence subscribed through grace: a reset followed by the same login must not
+  // revive an old snapshot, even when React batches both store publications into one commit.
+  off.push(subscribe(() => { if (!valid()) dispose(); }));
+  return {
+    owner,
+    retain() {
+      consumers++;
+      clearTimeout(expiry);
+      expiry = undefined;
+      if (!pending && (dirty || !fullSnapshot.loaded) && retry === undefined) void read(urgent || !fullSnapshot.loaded);
+      return () => {
+        if (stopped || --consumers) return;
+        clearTimeout(retry);
+        retry = undefined;
+        if (trailing !== undefined) dirty = true;
+        clearTimeout(trailing);
+        trailing = undefined;
+        expiry = setTimeout(dispose, FULL_LIST_GRACE_MS);
+      };
+    },
+    dispose,
+  };
+}
+
+/** Pins and grouping need complete rows, including agents outside the bounded first page. Consumers
+ * share a scoped snapshot and request, released shortly after the last legacy list leaves. */
 export function useFullAgentSessions(): { sessions: Session[]; loaded: boolean } {
   const by = useStore((s) => s.sessions);
   const bounded = useStore((s) => s.features.includes(SESSIONS_LIST_FEATURE));
   const loaded = useStore((s) => s.loaded);
-  const [full, setFull] = useState(EMPTY_FULL_LIST);
+  const snapshot = useSyncExternalStore(subscribeFull, getFullSnapshot, getFullSnapshot);
+  const owner = credentialOwner();
+  const full = fullCache?.owner === owner ? snapshot : EMPTY_FULL_LIST;
   useEffect(() => {
     if (!bounded || !loaded) return;
-    const owner = credentialOwner();
-    let stopped = false, pending = false, dirty = false, urgent = false;
-    let nextReadAt = 0;
-    let controller: AbortController | undefined;
-    let retry: ReturnType<typeof setTimeout> | undefined;
-    let trailing: ReturnType<typeof setTimeout> | undefined;
-    const read = async (immediate = false) => {
-      if (stopped || !getState().loaded || credentialOwner() !== owner) return;
-      if (pending) { dirty = true; urgent ||= immediate; return; }
-      const delay = nextReadAt - Date.now();
-      if (!immediate && delay > 0) {
-        // Keep the deadline fixed: a continuous stream of hints must not postpone the trailing read.
-        trailing ??= setTimeout(() => { trailing = undefined; void read(); }, delay);
-        return;
-      }
-      clearTimeout(trailing);
-      trailing = undefined;
-      clearTimeout(retry);
-      pending = true;
-      controller = new AbortController();
-      const base = getState().sessions;
-      try {
-        const result = await api<{ sessions: Session[] }>("/sessions", { signal: controller.signal });
-        if (!stopped && getState().loaded && credentialOwner() === owner) {
-          setFull({ sessions: (result.sessions ?? []).filter((s) => !s.assistant), loaded: true, base });
-        }
-      } catch {
-        // A quiet hub may send no further hints after a transient failure, including the first read.
-        if (!stopped) retry = setTimeout(() => { void read(true); }, FULL_LIST_RETRY_MS);
-      } finally {
-        pending = false;
-        nextReadAt = Date.now() + FULL_LIST_REFRESH_MS;
-        if (dirty) {
-          const immediate = urgent;
-          dirty = urgent = false;
-          void read(immediate);
-        }
-      }
-    };
-    const off = ["sessions_list", "session", "sessions", "sessions_delta", "hello"].map((event) => onHubEvent(event, () => { void read(event === "hello"); }));
-    // reset() publishes synchronously, before React cleans up the effect. Fence late responses then,
-    // including a reset that keeps the same credentials, and release the previous account's rows.
-    off.push(subscribe(() => {
-      if (!getState().loaded || credentialOwner() !== owner) {
-        stopped = true;
-        controller?.abort();
-        clearTimeout(retry);
-        clearTimeout(trailing);
-        setFull(EMPTY_FULL_LIST);
-      }
-    }));
-    void read(true);
-    return () => { stopped = true; controller?.abort(); clearTimeout(retry); clearTimeout(trailing); off.forEach((unsubscribe) => unsubscribe()); };
-  }, [bounded, loaded]);
+    if (fullCache && fullCache.owner !== owner) fullCache.dispose();
+    fullCache ??= createFullCache(owner);
+    return fullCache.retain();
+  }, [bounded, loaded, owner, snapshot.epoch]);
   return useMemo(() => {
     if (!bounded) return { sessions: Object.values(by).flat().filter((s) => !s.assistant), loaded };
     if (!loaded) return EMPTY_FULL_LIST;

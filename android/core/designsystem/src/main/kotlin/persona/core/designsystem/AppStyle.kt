@@ -56,6 +56,12 @@ class AppStyleStore(context: Context) {
     private val currentGlass = MutableStateFlow(GlassPreference.fromKey(preferences.getString(KEY_GLASS, null)))
     val style: StateFlow<AppStyle> = currentStyle.asStateFlow()
     val glass: StateFlow<GlassPreference> = currentGlass.asStateFlow()
+    private val currentNativeInboxChats = MutableStateFlow(preferences.getBoolean(KEY_NATIVE_INBOX_CHATS, true))
+    val nativeInboxChats: StateFlow<Boolean> = currentNativeInboxChats.asStateFlow()
+    fun setNativeInboxChats(enabled: Boolean) {
+        preferences.edit().putBoolean(KEY_NATIVE_INBOX_CHATS, enabled).apply()
+        currentNativeInboxChats.value = enabled
+    }
     private val currentTheme = MutableStateFlow(preferences.getString(KEY_THEME, null))
     val themeKey: StateFlow<String?> = currentTheme.asStateFlow()
     fun setTheme(key: String?) {
@@ -132,6 +138,7 @@ class AppStyleStore(context: Context) {
         const val KEY_THEME = "extension-theme"
         const val KEY_SCHEME = "scheme"
         const val KEY_COLOR = "color"
+        const val KEY_NATIVE_INBOX_CHATS = "native-inbox-chats"
     }
 }
 

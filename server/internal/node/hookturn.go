@@ -37,7 +37,7 @@ type hookTurn struct {
 	promptAt  time.Time // the last UserPromptSubmit
 	stopAt    time.Time // the last Stop
 	pid       int       // the claude process the hooks run under, 0 when unknown
-	start     string    // that process' start ("linux:<starttime>"), "" when the platform cannot tell
+	start     string    // that process' start ("linux:<starttime>", "windows:<creation time>"), "" when the platform cannot tell
 	touched   time.Time
 }
 
@@ -234,7 +234,7 @@ func sameProcess(pid int, start string) bool {
 		return false
 	}
 	if start != "" {
-		if cur := procStartMark(pid); cur != "" || strings.HasPrefix(start, "linux:") {
+		if cur := procStartMark(pid); cur != "" || strings.HasPrefix(start, "linux:") || strings.HasPrefix(start, "windows:") {
 			return cur == start
 		}
 	}

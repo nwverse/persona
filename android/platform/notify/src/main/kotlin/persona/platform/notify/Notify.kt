@@ -34,6 +34,7 @@ object Notify {
     @Volatile internal var events: Flow<ServerEvent> = emptyFlow()
         private set
     internal val visibleSession = MutableStateFlow<SessionKey?>(null)
+    @Volatile private var lastViewedSession: SessionKey? = null
     internal val foreground = MutableStateFlow(false)
 
     /** Call once from Application.onCreate; Hilt access is deferred until application setup finishes. */
@@ -60,11 +61,26 @@ object Notify {
     }
 
     /** Set while a conversation is visible, and clear when leaving it. */
-    fun viewing(session: SessionKey?) { visibleSession.value = session }
+    fun viewing(session: SessionKey?) {
+        visibleSession.value = session
+        if (session != null) lastViewedSession = session
+    }
 
-    fun disconnect(context: Context) = dependencies(context).runtime().disconnect()
+    fun disconnect(context: Context) {
+        lastViewedSession = null
+        dependencies(context).runtime().disconnect()
+    }
 
     fun resume(context: Context) = dependencies(context).runtime().resume()
+
+    fun userInteraction(context: Context) = dependencies(context).runtime().onUserInteraction()
+
+    fun requireCapsuleConnection(context: Context, required: Boolean, userAction: Boolean = false) =
+        dependencies(context).runtime().requireCapsuleConnection(required, userAction)
+
+    fun capsuleVisible(context: Context, visible: Boolean) = dependencies(context).runtime().capsuleVisible(visible)
+
+    val viewedSession get() = visibleSession.value ?: lastViewedSession
 
     internal fun dependencies(context: Context): NotifyDependencies =
         EntryPointAccessors.fromApplication(context.applicationContext, NotifyDependencies::class.java)
@@ -91,6 +107,7 @@ class NotificationRuntime @Inject constructor(
     private val notifier: Notifier,
     private val fleet: FleetFeed,
     private val sessions: SessionsRepository,
+    private val requests: ResidentConnectionRequests,
 ) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private var started = false
@@ -120,11 +137,15 @@ class NotificationRuntime @Inject constructor(
             }
         }
         scope.launch {
-            pairing.isPaired.collect { paired ->
+            combine(pairing.isPaired, Notify.foreground, requests.capsule, requests.overlayVisible, HubService.runningState) {
+                    paired, foreground, capsule, overlay, running ->
+                paired to (!running && mayStartResidentConnection(paired, journal.userStopped, foreground,
+                    application.getSystemService(PowerManager::class.java).isIgnoringBatteryOptimizations(application.packageName),
+                    capsule, overlay))
+            }.distinctUntilChanged().collect { (paired, start) ->
                 if (paired) {
                     ConnectionWatchdog.schedule(application)
-                    if (!journal.userStopped && (Notify.foreground.value || application.getSystemService(PowerManager::class.java)
-                            .isIgnoringBatteryOptimizations(application.packageName))) HubService.start(application)
+                    if (start) HubService.start(application)
                 } else {
                     ConnectionWatchdog.cancel(application)
                     HubService.stop(application)
@@ -144,7 +165,12 @@ class NotificationRuntime @Inject constructor(
     fun onForeground() {
         start()
         if (!pairing.isPaired.value) return
-        if (journal.userStopped) notifier.userStopped() else HubService.start(application)
+        resume()
+    }
+
+    fun onUserInteraction() {
+        start()
+        if (pairing.isPaired.value && (journal.userStopped || !HubService.running)) resume()
     }
 
     fun resume() {
@@ -155,4 +181,11 @@ class NotificationRuntime @Inject constructor(
             HubService.start(application)
         }
     }
+
+    fun requireCapsuleConnection(required: Boolean, userAction: Boolean) {
+        requests.capsule(required)
+        if (userAction) resume()
+    }
+
+    fun capsuleVisible(visible: Boolean) { requests.overlayVisible(visible) }
 }

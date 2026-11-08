@@ -2877,23 +2877,28 @@ type MessagingError struct {
 }
 
 // ConnectorErrorCode: error.code a program answers or gets besides the base ErrorCode: rate_limited (tools.call /
-// actions.do, and the hub's answer to too many sent.record; data {retry_after} in seconds, fractional allowed), and
-// why credentials.gh_token has no token.
+// actions.do, and the hub's answer to too many sent.record; data {retry_after} in seconds, fractional allowed), why
+// credentials.gh_token has no token, and what recall answers: not_recallable (nothing was sent: the program cannot
+// take that message back) and recall_unknown (the request may have taken effect). not_signed_in, offline and
+// rate_limited also say that recall could not act now.
 const (
-	ConnectorErrorCodeRateLimited = "rate_limited"
-	ConnectorErrorCodeNoMachine   = "no_machine"
-	ConnectorErrorCodeOffline     = "offline"
-	ConnectorErrorCodeNodeTooOld  = "node_too_old"
-	ConnectorErrorCodeNoGh        = "no_gh"
-	ConnectorErrorCodeNotSignedIn = "not_signed_in"
+	ConnectorErrorCodeRateLimited   = "rate_limited"
+	ConnectorErrorCodeNoMachine     = "no_machine"
+	ConnectorErrorCodeOffline       = "offline"
+	ConnectorErrorCodeNodeTooOld    = "node_too_old"
+	ConnectorErrorCodeNoGh          = "no_gh"
+	ConnectorErrorCodeNotSignedIn   = "not_signed_in"
+	ConnectorErrorCodeNotRecallable = "not_recallable"
+	ConnectorErrorCodeRecallUnknown = "recall_unknown"
 )
 
 // ConnectorErrorCodes are the values of ConnectorErrorCode, in order.
-var ConnectorErrorCodes = []string{"rate_limited", "no_machine", "offline", "node_too_old", "no_gh", "not_signed_in"}
+var ConnectorErrorCodes = []string{"rate_limited", "no_machine", "offline", "node_too_old", "no_gh", "not_signed_in", "not_recallable", "recall_unknown"}
 
 // ConnectorCapability: what a connector declares (ConnectorItem.capabilities): the hub calls only the methods of
-// declared ones. fallback has no method: every inbox thing promises extra.rule_tier. An extension's connector with
-// one this hub does not know loses only that capability.
+// declared ones. fallback has no method: every inbox thing promises extra.rule_tier. recall is the program's word
+// that it can take back what it sent: the hub then calls connector.recall (only after the user agreed), and the
+// install preview says so. An extension's connector with one this hub does not know loses only that capability.
 const (
 	ConnectorCapabilityStatus   = "status"
 	ConnectorCapabilityTools    = "tools"
@@ -2912,10 +2917,11 @@ const (
 	ConnectorCapabilityMeta     = "meta"
 	ConnectorCapabilityFallback = "fallback"
 	ConnectorCapabilityMachines = "machines"
+	ConnectorCapabilityRecall   = "recall"
 )
 
 // ConnectorCapabilities are the values of ConnectorCapability, in order.
-var ConnectorCapabilities = []string{"status", "tools", "actions", "events", "inbox", "settle", "archive", "chats", "items", "login", "options", "threads", "snapshot", "group", "meta", "fallback", "machines"}
+var ConnectorCapabilities = []string{"status", "tools", "actions", "events", "inbox", "settle", "archive", "chats", "items", "login", "options", "threads", "snapshot", "group", "meta", "fallback", "machines", "recall"}
 
 // ConnectorState: connectorStatus.state. disabled is the hub's own (the user switched it off); a program never
 // answers it.
@@ -3112,6 +3118,36 @@ type ConnectorDoParams struct {
 	Name         string          `json:"name"`
 	Args         json.RawMessage `json:"args,omitempty"`
 	RequestID    string          `json:"request_id"`
+}
+
+// ConnectorRecallParams: recall: take back a message the connector's program sent in the user's name, which the
+// sent-as-user ledger has a row of (docs/extensions/connectors.md "Sent as the user"). Only for a connector that
+// declares the capability recall, and only once the user agreed on their own device; the program never starts one.
+// The fields are the row's, as the hub kept them: nothing of what the message said. A repeat after success is a
+// success too. Answer with ConnectorRecallResult (recalled true) only when the service confirms the message is no
+// longer there, one that was already gone included; otherwise an error: not_recallable (it cannot, and nothing was
+// sent), not_signed_in, offline or rate_limited (it cannot act now), recall_unknown (it may have gone through), any
+// other error is the service refusing, with one sentence for people (no secret, no text of the message).
+type ConnectorRecallParams struct {
+	Contribution string `json:"contribution"`
+	// What wrote it: the tool's name (actions.do), sent.record, or, for a write the node's gate forwarded, "METHOD
+	// /path".
+	Action string `json:"action"`
+	// The sent message's id on the other side, as the program gave it (actions.do or sent.record) or as the service's
+	// answer did (a write through the node's gate).
+	MessageRef string `json:"message_ref"`
+	// Where it went, as the ledger kept it (short values): the program's own for a send it recorded; for a write through
+	// the node's gate also method, path and command (the gate's name), and the ids its path names.
+	Target map[string]json.RawMessage `json:"target,omitempty"`
+	// When the ledger wrote the row, right after the send.
+	At time.Time `json:"at,omitzero"`
+}
+
+// ConnectorRecallResult: recall's answer: recalled true is the program's word that the service confirmed the message
+// is no longer there. Anything else (no recalled, false) is not taken for a yes: the hub then knows nothing, writes
+// nothing and lets the user ask again.
+type ConnectorRecallResult struct {
+	Recalled bool `json:"recalled"`
 }
 
 // ConnectorThreadParams: thread.page: one page of an inbox thread, oldest first; no before is the newest page.
@@ -5184,6 +5220,8 @@ var newDef = map[string]func() any{
 	"ConnectorAction":              func() any { return new(ConnectorAction) },
 	"ConnectorDescribeResult":      func() any { return new(ConnectorDescribeResult) },
 	"ConnectorDoParams":            func() any { return new(ConnectorDoParams) },
+	"ConnectorRecallParams":        func() any { return new(ConnectorRecallParams) },
+	"ConnectorRecallResult":        func() any { return new(ConnectorRecallResult) },
 	"ConnectorThreadParams":        func() any { return new(ConnectorThreadParams) },
 	"ConnectorThreadPage":          func() any { return new(ConnectorThreadPage) },
 	"ConnectorThreadChat":          func() any { return new(ConnectorThreadChat) },
@@ -5335,6 +5373,7 @@ var Calls = map[string]Call{
 	"connector.actions.list":         {Name: "connector.actions.list", From: "hub", Params: "ConnectorParams", Result: "ConnectorTools"},
 	"connector.actions.describe":     {Name: "connector.actions.describe", From: "hub", Params: "ConnectorCallParams", Result: "ConnectorDescribeResult"},
 	"connector.actions.do":           {Name: "connector.actions.do", From: "hub", Params: "ConnectorDoParams", Result: "ConnectorCallResult"},
+	"connector.recall":               {Name: "connector.recall", From: "hub", Params: "ConnectorRecallParams", Result: "ConnectorRecallResult"},
 	"connector.thread.page":          {Name: "connector.thread.page", From: "hub", Params: "ConnectorThreadParams", Result: "ConnectorThreadPage"},
 	"connector.thread.media":         {Name: "connector.thread.media", From: "hub", Params: "ConnectorMediaParams", Result: "ConnectorMedia"},
 	"connector.inbox.collect":        {Name: "connector.inbox.collect", From: "hub", Params: "ConnectorParams", Result: "ConnectorCollectResult"},

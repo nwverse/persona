@@ -15,9 +15,11 @@ import (
 type Capability string
 
 // Capabilities and the interface each stands for. The names are the ones GET /api/v1/connectors lists (except
-// CapSettle, CapGroup, CapMeta and CapFallback, which only the hub uses). CapFallback is a promise, not an interface:
-// every inbox thing carries a fallback tier (ThingExtra.RuleTier), so its items never need the model to come in
-// (docs/extensions/extensions.md).
+// CapSettle, CapGroup, CapMeta, CapFallback and CapRecall, which only the hub uses). CapFallback is a promise, not an
+// interface: every inbox thing carries a fallback tier (ThingExtra.RuleTier), so its items never need the model to come in
+// (docs/extensions/extensions.md). CapRecall is a declaration with no interface to check: a program's connector says it
+// can take back what it sent (connector.recall), and the hub offers it a recall only then (RecallerOf); a built-in
+// connector that can recall just implements Recaller.
 const (
 	CapStatus   Capability = "status"   // Accounts
 	CapTools    Capability = "tools"    // ReadTools
@@ -36,6 +38,7 @@ const (
 	CapMeta     Capability = "meta"     // EventWriter (with CapGroup and MetaDescription)
 	CapFallback Capability = "fallback" // (none: every inbox thing carries extra.rule_tier)
 	CapMachines Capability = "machines" // Machines
+	CapRecall   Capability = "recall"   // (none: a program's connector declares it; Recaller is found by RecallerOf)
 )
 
 type capability struct {
@@ -64,6 +67,7 @@ var capabilities = []capability{
 	{CapMeta, reflect.TypeFor[EventWriter](), false},
 	{CapFallback, nil, false},
 	{CapMachines, reflect.TypeFor[Machines](), false},
+	{CapRecall, nil, false},
 }
 
 // Manifest is what a connector says it is and does, in one place (docs/extensions/connectors.md "2 · 1"): read whenever the

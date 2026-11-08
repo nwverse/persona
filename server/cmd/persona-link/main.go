@@ -7,6 +7,7 @@ package main
 
 import (
 	"bufio"
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -63,6 +64,8 @@ const usage = `用法：
                                                  --log：日志写进这个文件（满 1 MB 换一个），不写标准错误
   persona-link tray [--open <配对链接>]           Windows 的托盘图标：看状态、立即重连、配对、开机启动（install 装好的
                                                  会在登录时自己启动）；--open 打开配对窗口并填上这条链接
+  persona-link name [<新名字>|--reset]           看 / 改这台电脑在 hub 上的名字（App、网页和管理界面里显示的那个；id 不变）：
+                                                 请正在运行、连着 hub 的 persona-link 去问 hub；--reset 改回 id
   persona-link address add <地址>                 手动加一个 hub 的候选地址（https://域名:端口，或 域名）
   persona-link address remove <地址>              去掉手动加的地址
   persona-link version
@@ -116,6 +119,8 @@ func main() {
 		err = trayCmd(e, args)
 	case "address":
 		err = address(args)
+	case "name":
+		err = nameCmd(e, args)
 	case "version", "--version", "-v":
 		fmt.Println(version)
 	case "help", "--help", "-h":
@@ -142,7 +147,7 @@ var errUsage = errors.New("usage")
 // helpTopics are the subcommands `<sub> -h` answers for (supervise is not for people: its -h shows the whole usage).
 var helpTopics = map[string]bool{"pair": true, "mode": true, "node": true, "discover": true, "install": true,
 	"uninstall": true, "status": true, "logs": true, "log": true, "run": true, "supervise": true, "address": true,
-	"tray": true}
+	"tray": true, "name": true}
 
 // wantsHelp says whether args ask for help (-h, -help or --help anywhere).
 func wantsHelp(args []string) bool {
@@ -247,7 +252,7 @@ func pairCmd(e *env, args []string) error {
 	if err != nil {
 		return err
 	}
-	fmt.Fprintf(e.stdout, "配对好了：这台是 hub 上的「%s」，凭据存在 %s。\n", c.Machine, e.configPath())
+	fmt.Fprintf(e.stdout, "配对好了：这台是 hub 上的「%s」，凭据存在 %s。\n", cmp.Or(c.MachineName, c.Machine), e.configPath())
 	switch {
 	case link.Running(e.configPath()):
 		fmt.Fprintln(e.stdout, "在运行的 persona-link 几秒内就会用上新凭据，不用重启。")

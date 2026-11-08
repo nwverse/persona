@@ -32,7 +32,9 @@ class HttpLarkConversationTransport(
         val url = base.newBuilder().addPathSegments("api/v1/lark/conversations")
             .addPathSegment(feedId).addPathSegment("read").build()
         val body = buildJsonObject {
-            put("position", position)
+            // The extension (and the web client) carry positions as strings; a number fails to decode there and
+            // every read came back 400 "position is required", so no Feishu message was ever marked read from Android.
+            put("position", position.toString())
             badgeCount?.let { put("badge_count", it) }
             putJsonArray("message_ids") { messageIds.distinct().forEach { add(it) } }
         }

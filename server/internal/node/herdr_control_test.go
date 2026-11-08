@@ -24,11 +24,12 @@ func startHerdr(f *fakeHerdr, pane, status string) {
 	f.reply("session.snapshot", snapshot(nil, nil, nil, nil))
 }
 
-// startCmd is the command a Claude start types into its herdr pane (and herdr's resume of it evals): herdr told the
-// agent is Claude (HERDR_AGENT), then the launcher with Persona's flags.
+// startCmd is the command a Claude start types into its herdr pane (and herdr's resume of it evals): the node's
+// directory in front and the assistant's environment left out (agentenv.go), herdr told the agent is Claude
+// (HERDR_AGENT), then the launcher with Persona's flags.
 func startCmd(launcher, args, dir string) string {
-	return "HERDR_AGENT=claude " + launcher + " " + args + " --settings " + shellQuote(filepath.Join(dir, "claude-settings.json")) +
-		" --mcp-config " + shellQuote(filepath.Join(dir, "mcp.json"))
+	return inAgentEnv(dir, "HERDR_AGENT=claude "+launcher+" "+args+" --settings "+shellQuote(filepath.Join(dir, "claude-settings.json"))+
+		" --mcp-config "+shellQuote(filepath.Join(dir, "mcp.json")), shellQuote)
 }
 
 // resumeHeld are the two reports that give herdr the pane's resume command (herdrresume.go): the pane held as
@@ -227,18 +228,18 @@ func TestHerdrStartIntoAGivenWorkspaceReturnsOnABlockedClaude(t *testing.T) {
 		markTab("w2:p5", startID),
 		// A managed launcher's start gets Persona's settings with its gateway merged in (#1336).
 		call("pane.send_input", map[string]any{"pane_id": "w2:p5", "keys": []string{"Enter"},
-			"text": "HERDR_AGENT=claude /tmp/persona-test/personad launch work_gw --session-id " + startID + " --settings " +
-				shellQuote(filepath.Join(personaDir(home), "launcher-settings", "work_gw-claude-settings.json")) +
-				" --mcp-config " + shellQuote(filepath.Join(personaDir(home), "mcp.json"))}),
+			"text": inAgentEnv(personaDir(home), "HERDR_AGENT=claude /tmp/persona-test/personad launch work_gw --session-id "+startID+" --settings "+
+				shellQuote(filepath.Join(personaDir(home), "launcher-settings", "work_gw-claude-settings.json"))+
+				" --mcp-config "+shellQuote(filepath.Join(personaDir(home), "mcp.json")), shellQuote)}),
 		readVisible("w2:p5"), agentGet("w2:p5"),
 		call("agent.rename", map[string]any{"target": "w2:p5", "name": "j-0e0000"}),
 		// herdr's restore resumes it through the launcher too, not with a bare `claude --resume` (#1879).
-		resumeHeld("w2:p5", startID, "HERDR_AGENT=claude /tmp/persona-test/personad launch work_gw --resume "+startID+" --settings "+
+		resumeHeld("w2:p5", startID, inAgentEnv(personaDir(home), "HERDR_AGENT=claude /tmp/persona-test/personad launch work_gw --resume "+startID+" --settings "+
 			filepath.Join(personaDir(home), "launcher-settings", "work_gw-claude-settings.json")+
-			" --mcp-config "+filepath.Join(personaDir(home), "mcp.json"))[0],
-		resumeHeld("w2:p5", startID, "HERDR_AGENT=claude /tmp/persona-test/personad launch work_gw --resume "+startID+" --settings "+
+			" --mcp-config "+filepath.Join(personaDir(home), "mcp.json"), dquote))[0],
+		resumeHeld("w2:p5", startID, inAgentEnv(personaDir(home), "HERDR_AGENT=claude /tmp/persona-test/personad launch work_gw --resume "+startID+" --settings "+
 			filepath.Join(personaDir(home), "launcher-settings", "work_gw-claude-settings.json")+
-			" --mcp-config "+filepath.Join(personaDir(home), "mcp.json"))[1],
+			" --mcp-config "+filepath.Join(personaDir(home), "mcp.json"), dquote))[1],
 		call("session.snapshot", nil),
 	})
 	f.reply("session.snapshot", snapshot(nil, nil, []any{claudeAgent(startID, proto.StatusIdle, "w2:p5", "w2:t5", "w2", home, "")}, nil))

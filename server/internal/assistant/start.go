@@ -123,6 +123,9 @@ func (s *Service) startOn(ctx context.Context, machine string, p StartParams, ma
 	if p.Space != "" && p.Space != SpaceHealth {
 		return proto.Session{}, badRequest(fmt.Errorf("space %q: health or none", p.Space))
 	}
+	if p.PermissionMode == "" && p.GuestTools == nil {
+		p.PermissionMode = s.settings(ctx).DefaultPermissionMode
+	}
 	var cwd string
 	var err error
 	if p.GuestTools != nil {
@@ -215,7 +218,7 @@ func (s *Service) startConversation(ctx context.Context, p startParams) (proto.S
 }
 
 // Start is assistant.start: a conversation one of the hub's features starts (the inbox's AI twin), or the channels'
-// (feishu.go, channels_plugin.go). It is named after its first turn like the app's, unless it is untitled.
+// (feishu_message.go, channels_plugin.go). It is named after its first turn like the app's, unless it is untitled.
 func (s *Service) Start(ctx context.Context, p StartParams) (proto.Session, error) {
 	sess, err := s.start(ctx, p)
 	if err != nil {

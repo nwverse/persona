@@ -1,0 +1,398 @@
+{
+  "version": 1,
+  "cases": [
+    {
+      "name": "restart_resumable_send_in_flight",
+      "description": "The hub restarts while a send is in flight; the old process typed it but its answer was lost; after the resumed hello the retry gets the receipt and the message shows once.",
+      "source": {
+        "rule": "Hub restarts: the client reconnects at once and keeps the UI; writes with an op id are done once",
+        "docs": "docs/operations/hub-restart.md",
+        "code": {
+          "mock": "scripts/mock/mock_hub.py /mock/restart drop_post"
+        }
+      },
+      "chat": {
+        "machine_id": "m1",
+        "session_id": "s1",
+        "assistant": true
+      },
+      "devices": [
+        "a"
+      ],
+      "start": {
+        "hub": {
+          "history": "h1",
+          "lines": [
+            {
+              "id": "l1#0",
+              "seq": 1,
+              "ts": "2026-01-02T03:04:05Z",
+              "role": "user",
+              "kind": "text",
+              "text": "Plan a weekend trip."
+            },
+            {
+              "id": "l2#0",
+              "seq": 2,
+              "ts": "2026-01-02T03:04:05Z",
+              "role": "assistant",
+              "kind": "text",
+              "text": "Saturday hike, Sunday museum."
+            }
+          ],
+          "to_seq": 3,
+          "interactions": [],
+          "session": {
+            "state": "idle"
+          },
+          "event_stream": "ev1",
+          "event_seq": 10
+        }
+      },
+      "steps": [
+        {
+          "user": {
+            "device": "a",
+            "send": {
+              "id": "m1",
+              "text": "Is the museum open on Sunday?"
+            }
+          }
+        },
+        {
+          "frames": {
+            "a": [
+              {
+                "type": "hub_restarting",
+                "back_in_ms": 1500
+              }
+            ]
+          }
+        },
+        {
+          "hub": {
+            "restart": {
+              "resumable": true
+            }
+          }
+        },
+        {
+          "socket": {
+            "device": "a",
+            "drop": true
+          }
+        },
+        {
+          "reply": {
+            "device": "a",
+            "write": "m1",
+            "cut": true,
+            "done": true,
+            "receipt": {
+              "status": 200,
+              "body": {
+                "ok": true
+              }
+            }
+          },
+          "expect": {
+            "a": {
+              "messages": [
+                {
+                  "from": "user",
+                  "text": "Plan a weekend trip.",
+                  "state": "shown"
+                },
+                {
+                  "from": "agent",
+                  "text": "Saturday hike, Sunday museum."
+                },
+                {
+                  "from": "user",
+                  "text": "Is the museum open on Sunday?",
+                  "state": "pending"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "socket": {
+            "device": "a",
+            "open": {
+              "resumed": true
+            }
+          }
+        },
+        {
+          "wait": 3000,
+          "expect": {
+            "a": {
+              "requests": [
+                {
+                  "post": "messages",
+                  "id": "m1"
+                },
+                {
+                  "post": "messages",
+                  "id": "m1"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "hub": {
+            "append": [
+              {
+                "id": "l4#0",
+                "seq": 4,
+                "ts": "2026-01-02T03:04:05Z",
+                "role": "user",
+                "kind": "text",
+                "text": "Is the museum open on Sunday?",
+                "client_msg_id": "m1"
+              },
+              {
+                "id": "l5#0",
+                "seq": 5,
+                "ts": "2026-01-02T03:04:05Z",
+                "role": "assistant",
+                "kind": "text",
+                "text": "Yes, from 10:00 to 18:00."
+              }
+            ],
+            "to_seq": 6
+          }
+        },
+        {
+          "frames": {
+            "a": [
+              {
+                "type": "items",
+                "machine_id": "m1",
+                "session_id": "s1",
+                "history": "h1",
+                "items": [
+                  {
+                    "id": "l4#0",
+                    "seq": 4,
+                    "ts": "2026-01-02T03:04:05Z",
+                    "role": "user",
+                    "kind": "text",
+                    "text": "Is the museum open on Sunday?",
+                    "client_msg_id": "m1"
+                  },
+                  {
+                    "id": "l5#0",
+                    "seq": 5,
+                    "ts": "2026-01-02T03:04:05Z",
+                    "role": "assistant",
+                    "kind": "text",
+                    "text": "Yes, from 10:00 to 18:00."
+                  }
+                ],
+                "to_seq": 6,
+                "from_seq": 3
+              }
+            ]
+          }
+        }
+      ],
+      "end": {
+        "a": {
+          "messages": [
+            {
+              "from": "user",
+              "text": "Plan a weekend trip.",
+              "state": "shown"
+            },
+            {
+              "from": "agent",
+              "text": "Saturday hike, Sunday museum."
+            },
+            {
+              "from": "user",
+              "text": "Is the museum open on Sunday?",
+              "state": "shown"
+            },
+            {
+              "from": "agent",
+              "text": "Yes, from 10:00 to 18:00."
+            }
+          ],
+          "cards": {}
+        }
+      }
+    },
+    {
+      "name": "restart_not_resumable_rereads_cards",
+      "description": "After a restart that cannot resume, the device takes the card list from the hub: a card that ended meanwhile goes, a new one shows.",
+      "source": {
+        "rule": "resumed false: do a full refresh",
+        "docs": "docs/protocol/protocol.md \"Event resume\""
+      },
+      "chat": {
+        "machine_id": "m1",
+        "session_id": "s1",
+        "assistant": true
+      },
+      "devices": [
+        "a"
+      ],
+      "start": {
+        "hub": {
+          "history": "h1",
+          "lines": [
+            {
+              "id": "l1#0",
+              "seq": 1,
+              "ts": "2026-01-02T03:04:05Z",
+              "role": "user",
+              "kind": "text",
+              "text": "Plan a weekend trip."
+            },
+            {
+              "id": "l2#0",
+              "seq": 2,
+              "ts": "2026-01-02T03:04:05Z",
+              "role": "assistant",
+              "kind": "text",
+              "text": "Saturday hike, Sunday museum."
+            }
+          ],
+          "to_seq": 3,
+          "interactions": [
+            {
+              "id": "ix1",
+              "machine_id": "m1",
+              "session_id": "s1",
+              "session_title": "Weekend trip",
+              "cwd": "/home/user/project",
+              "kind": "permission",
+              "created_at": "2026-01-02T03:04:05Z",
+              "expires_at": "2026-01-02T05:04:05Z",
+              "tool_name": "Bash",
+              "tool_use_id": "call_ix1",
+              "tool_input": {
+                "command": "ls"
+              },
+              "summary": "List the project folder"
+            }
+          ],
+          "session": {
+            "state": "needs_you"
+          },
+          "event_stream": "ev1",
+          "event_seq": 10
+        }
+      },
+      "steps": [
+        {
+          "frames": {
+            "a": [
+              {
+                "type": "hub_restarting",
+                "back_in_ms": 1500
+              }
+            ]
+          }
+        },
+        {
+          "socket": {
+            "device": "a",
+            "drop": true
+          }
+        },
+        {
+          "hub": {
+            "restart": {
+              "resumable": false
+            }
+          }
+        },
+        {
+          "hub": {
+            "end": {
+              "id": "ix1",
+              "status": "expired",
+              "by": "hub"
+            },
+            "raise": {
+              "id": "ix2",
+              "machine_id": "m1",
+              "session_id": "s1",
+              "session_title": "Weekend trip",
+              "cwd": "/home/user/project",
+              "kind": "permission",
+              "created_at": "2026-01-02T03:04:05Z",
+              "expires_at": "2026-01-02T05:04:05Z",
+              "tool_name": "Bash",
+              "tool_use_id": "call_ix2",
+              "tool_input": {
+                "command": "cat packing.md"
+              },
+              "summary": "Read the packing list"
+            }
+          }
+        },
+        {
+          "socket": {
+            "device": "a",
+            "open": {
+              "resumed": false
+            }
+          },
+          "frames": {
+            "a": [
+              {
+                "type": "interaction",
+                "interaction": {
+                  "id": "ix2",
+                  "machine_id": "m1",
+                  "session_id": "s1",
+                  "session_title": "Weekend trip",
+                  "cwd": "/home/user/project",
+                  "kind": "permission",
+                  "created_at": "2026-01-02T03:04:05Z",
+                  "expires_at": "2026-01-02T05:04:05Z",
+                  "tool_name": "Bash",
+                  "tool_use_id": "call_ix2",
+                  "tool_input": {
+                    "command": "cat packing.md"
+                  },
+                  "summary": "Read the packing list"
+                }
+              }
+            ]
+          },
+          "expect": {
+            "a": {
+              "cards": {
+                "ix2": "open"
+              }
+            }
+          }
+        }
+      ],
+      "end": {
+        "a": {
+          "messages": [
+            {
+              "from": "user",
+              "text": "Plan a weekend trip.",
+              "state": "shown"
+            },
+            {
+              "from": "agent",
+              "text": "Saturday hike, Sunday museum."
+            }
+          ],
+          "cards": {
+            "ix2": "open"
+          }
+        }
+      }
+    }
+  ]
+}

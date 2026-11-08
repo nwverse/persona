@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/nwverse/persona/server/internal/i18n"
+	"github.com/nwverse/persona/server/internal/link"
 )
 
 // Labels are the pages' fixed words, in one language, keyed as the pages use them. Each key is spelled out here
@@ -41,6 +42,11 @@ func Labels(l i18n.Lang) map[string]string {
 		"link-tray.firewall_proxy",
 		"link-tray.close",
 		"link-tray.pair_window_title",
+		"link-tray.rename_label",
+		"link-tray.rename_hint",
+		"link-tray.rename_save",
+		"link-tray.rename_saving",
+		"link-tray.rename_cancel",
 	}
 	out := make(map[string]string, len(keys))
 	for _, k := range keys {
@@ -58,7 +64,10 @@ func CodeAddrs(l i18n.Lang, addrs []string) string {
 // knows, with the raw error after them, else the error as it is.
 func ErrorText(l i18n.Lang, err error) string {
 	var pe *PairError
+	var re *link.RenameError
 	switch {
+	case errors.As(err, &re):
+		return re.Text(l)
 	case errors.Is(err, ErrNoService):
 		return i18n.T(l, "link-tray.error_no_service")
 	case errors.Is(err, ErrInstallInTerminal):
@@ -101,6 +110,7 @@ func MenuLabels(l i18n.Lang) map[string]string {
 		ActPanel:     i18n.T(l, "link-tray.action_panel"),
 		ActReconnect: i18n.T(l, "link-tray.action_reconnect"),
 		ActPair:      i18n.T(l, "link-tray.action_pair_change"),
+		ActRename:    i18n.T(l, "link-tray.action_rename"),
 		ActAutostart: i18n.T(l, "link-tray.action_autostart"),
 		ActQuit:      i18n.T(l, "link-tray.action_quit"),
 	}

@@ -1,3 +1,6 @@
 {
-  "launcher_agent": "{launcher} runs {agent}. The assistant can only use a launcher that starts Claude Code, Codex, or a runtime that can act as the assistant."
+  "launcher_agent": "{launcher} runs {agent}. The assistant can only use a launcher that starts Claude Code, Codex, or a runtime that can act as the assistant.",
+  "manager_required": "Choose an assistant before changing its default permission mode.",
+  "other_manager": "This request names a different assistant. Reload its settings and try again.",
+  "manager_conflict": "The header and URL name different assistants. Choose one target and try again."
 }

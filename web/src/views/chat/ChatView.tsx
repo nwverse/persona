@@ -14,7 +14,7 @@ import { attachLive, flipPin } from "../../lib/agent-actions";
 import { isPinned } from "../../lib/pins";
 import { acknowledgeLaunch, launchMessageId } from "../../lib/new-agent";
 import { useRuntimeSession } from "../../lib/runtime-session";
-import { SessionDetailNotice } from "../../ui/SessionDetailNotice";
+import { ArchivedNotice, SessionDetailNotice } from "../../ui/SessionDetailNotice";
 import { getSession, getState, listenSession, refresh, refreshTodos, saveMutes, useStore, viewSession } from "../../lib/store";
 import { agentsWorking, buildTaskIndex, stableSubagents, STOP_LOOP_MESSAGE, subagentParent, type TaskIndex } from "../../lib/tasks";
 import { stabilizeLines, stableValue } from "../../lib/stable-lines";
@@ -60,7 +60,9 @@ import { backgroundLine, backgroundWaitLine, waitingOnWorkflow, workflowCalls, w
 import { seekCall } from "./jump";
 import { ChatLineView, closedRecap, closeRecap, OpenRecapLine } from "./Lines";
 import { useTranscript } from "./useTranscript";
-import { CloseAgentDialog, DeleteSessionDialog, ModeChips, RenameDialog, RenameSpaceDialog, SessionInfoDialog } from "./SessionDialogs";
+import { ArchiveCloseDialog, CloseAgentDialog, DeleteSessionDialog, ModeChips, RenameDialog, RenameSpaceDialog, SessionInfoDialog } from "./SessionDialogs";
+import { archiveItems } from "../AgentMenus";
+import { appArchiveDeps, deleteInsteadOfArchive, restoreAgent, useArchived } from "../../lib/agent-archives";
 import { UltracodeLostNote } from "./Ultracode";
 import { isUltracodeQueued, ultracodeQueueDone } from "../../lib/ultracode";
 import { ChatActionsContext, type ChatActions } from "./chat-actions";
@@ -181,6 +183,8 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
   onRefresh?: () => void;
 }) {
   const { session, detail, retry: retryDetail } = useRuntimeSession(mid, sid);
+  // an archived agent (lib/agent-archives.ts) is not in the lists: its chat says so and offers Restore
+  const archivedHere = useArchived(mid, sid);
   // its manager offline (several managers): nothing can be sent, wherever it was opened from; the page's own word first
   const ownerOffline = useManagerOffline(session?.manager);
   const offlineLine = offline ?? ownerOffline;
@@ -198,6 +202,7 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
   const siblings = useStore((s) => (session?.space_id ? (s.sessions[mid] ?? []).filter((x) => x.space_id === session.space_id && stateOf(x) !== "offline") : []));
   const interactions = useStore((s) => s.interactions.filter((i) => i.machine_id === mid && i.session_id === sid));
   const answered = useStore((s) => Object.values(s.answered).filter((a) => a.ix.machine_id === mid && a.ix.session_id === sid));
+  const delegated = useStore((s) => Object.values(s.delegated).filter((d) => d.ix.machine_id === mid && d.ix.session_id === sid));
   // the list as pushed: its updated_at is what tells the page it fell behind (useTranscript)
   const viewed = readOnly ? (listed?.find((a) => a.session_id === sid) ?? null) : null;
   const tr = useTranscript(mid, sid, { starting: Boolean(launching) && !readOnly, updatedAt: (readOnly ? viewed : session)?.updated_at, cache: mainCache });
@@ -276,7 +281,7 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
   // The main conversation is always Persona (#1313): not its first message, the node's title for it.
   const mainConversation = useStore((s) => s.assistant?.main);
   const isMain = Boolean(assistant && (mainCache || sid === mainConversation));
-  const title = isMain ? MAIN_TITLE : session ? sessionTitle(session) : assistant ? t("chat-chatview.new_chat") : t("chat-chatview.session");
+  const title = isMain ? MAIN_TITLE : session ? sessionTitle(session) : archivedHere ? sessionTitle(archivedHere) : assistant ? t("chat-chatview.new_chat") : t("chat-chatview.session");
   const canFork = Boolean(session?.can_fork) && !readOnly;
   // "Rewind to here" (#2436): offered on your messages of a session in a terminal; off with a reason while it cannot
   const rewindOff = rewindBlock(session, working);
@@ -950,7 +955,7 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
         />
       )}
       {banner}
-      {!readOnly && detail.error && <SessionDetailNotice error={detail.error} retry={retryDetail} />}
+      {archivedHere ? <ArchivedNotice session={archivedHere} /> : !readOnly && detail.error && <SessionDetailNotice error={detail.error} retry={retryDetail} />}
       {session && !panel && panes.length > 1 && <PaneTabs sessions={panes} current={sid} onSelect={(s) => navigate(paneRoute(s), true)} />}
 
       {/* the page's middle: the chat and (once shown) the terminal stacked in one box; without a terminal to show it adds no box */}
@@ -1086,6 +1091,7 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
         <PendingCards
           interactions={focusedFirst(interactions, focusedCard())}
           answered={answered}
+          delegated={delegated}
           // the agent's own page only (#4091): in a side panel the link would change the page under it, and Persona's
           // conversations list what the tasks' agents ask in TaskQuestions
           offerNext={inPage && !readOnly && !assistant ? { mid, sid } : undefined}
@@ -1357,6 +1363,10 @@ export function Header({
   const panel = usePanel();
   const mutes = useStore((s) => s.mutes);
   const [closing, setClosing] = useState(false);
+  const [archiveClosing, setArchiveClosing] = useState(false);
+  const features = useStore((s) => s.features);
+  // archived (the Archived page listed it, or it was archived here): the menu offers Restore instead of archive / delete
+  const archived = useArchived(session?.machine_id ?? "", session?.session_id ?? "");
   const [dialog, setDialog] = useState<"info" | "rename" | "space" | "delete" | null>(null);
   const muted = Boolean(session && !assistant && isMuted(session, mutes));
   const pinned = useStore((s) => Boolean(session && isPinned(session, s.pins)));
@@ -1470,7 +1480,10 @@ export function Header({
         ...(session.cwd ? [{ key: "cwd", label: t("chat-chatview.copy_folder"), icon: "folder" as const, onSelect: () => copyText(session.cwd) }] : []),
         ...(allowed.includes("resume") ? [{ key: "resume", label: t("chat-chatview.copy_resume_command"), icon: "terminal" as const, onSelect: () => copyText(resumeCommand(session)) }] : []),
         ...(!assistant && allowed.includes("close") ? [{ key: "close", label: t("chat-chatview.close_agent_menu"), icon: "x" as const, danger: true, onSelect: () => setClosing(true) }] : []),
-        ...(sessionDeletable(session) ? [{ key: "delete", label: t("chat-chatview.delete_chat"), icon: "trash" as const, danger: true, onSelect: () => setDialog("delete") }] : []),
+        ...(archived
+          ? [{ key: "restore", label: t("chat-chatview.restore"), icon: "undo" as const, divider: true, onSelect: () => void restoreAgent(archived, appArchiveDeps) }]
+          : archiveItems(session, features, () => setArchiveClosing(true))),
+        ...(!archived && deleteInsteadOfArchive(features) && sessionDeletable(session) ? [{ key: "delete", label: t("chat-chatview.delete_chat"), icon: "trash" as const, danger: true, onSelect: () => setDialog("delete") }] : []),
       ]
     : [];
   const panelItems = chrome?.items ?? [];
@@ -1574,6 +1587,7 @@ export function Header({
       {pick.anchor && chrome?.agents && <Menu anchor={pick.anchor} onClose={pick.close} items={chrome.agents} width={320} />}
       {menu.anchor && <Menu anchor={menu.anchor} onClose={menu.close} align="right" items={items} />}
       {session && <CloseAgentDialog open={closing} onClose={() => setClosing(false)} onClosed={() => navigate({ name: "home" })} session={session} machineName={machineName} />}
+      {session && archiveClosing && <ArchiveCloseDialog open onClose={() => setArchiveClosing(false)} session={session} machineName={machineName} />}
       {session && <SessionInfoDialog open={dialog === "info"} onClose={() => setDialog(null)} session={session} machineName={machineName} />}
       {session && <RenameDialog open={dialog === "rename"} onClose={() => setDialog(null)} session={session} />}
       {session && <RenameSpaceDialog open={dialog === "space"} onClose={() => setDialog(null)} session={session} />}
