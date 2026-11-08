@@ -156,7 +156,9 @@ Capture short `docker compose exec` output before checking it with `grep -q`.
 An early-closing grep can make Docker's output forwarding fail with exit 255
 under pipefail even when the expected text was printed. Command substitution
 keeps the command's own failure fatal and consumes its complete output before
-applying the same content assertion.
+applying the same content assertion; so does a grep without `-q` that reads all
+of it (`holds` in `scripts/ci/image-smoke.sh`, where `hub pair` writes a QR code
+after the link and failed two runs in three).
 
 - In zsh, a glob that matches no files (`rm -rf /tmp/x-*`) makes the whole command fail (nomatch), and nothing after `&&` runs (2026-11-04: the end-to-end test never ran, yet the result was recorded as a failure).
   To clean temp directories use `find /tmp -maxdepth 1 -name 'x-*' -exec rm -rf {} +` or `setopt nullglob` first; before recording a check result, confirm the command actually ran.

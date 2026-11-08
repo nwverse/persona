@@ -14,11 +14,13 @@ vi.mock("../lib/api", async (original) => ({
   ...(await original<typeof import("../lib/api")>()),
   api: (path: string) => {
     if (path === hub.path) return new Promise((resolve, reject) => hub.pending.push({ resolve, reject }));
+    if (path === "/managers") return Promise.reject(new ApiError(404, "not found", {}));
     return Promise.resolve(path === "/looks" ? { looks: [], current: {} } : {});
   },
 }));
 
 import { ApiError } from "../lib/api";
+import { settleRosterDefault } from "../lib/manager-choice";
 import { t } from "../i18n";
 import { Settings } from "./Settings";
 
@@ -28,6 +30,7 @@ let root: Root;
 let host: HTMLDivElement;
 beforeEach(() => {
   localStorage.clear();
+  settleRosterDefault();
   hub.pending = [];
   host = document.createElement("div");
   document.body.append(host);
