@@ -169,6 +169,9 @@ type Computer struct {
 	// ScreenSharing: macOS's Screen Sharing answers on 127.0.0.1:5900, so the app can show this Mac's live screen
 	// (docs/extensions/computer-use.md "Live view"). Not needed to operate it.
 	ScreenSharing bool `json:"screen_sharing"`
+	// Displays: this Mac's displays as arranged in System Settings, read with ScreenSharing (only while it answers).
+	// The app lays them onto the Screen Sharing picture to offer one display at a time.
+	Displays []Display `json:"displays,omitempty"`
 	// NoAutoLock: "Don't auto-lock while the extension is on" is on for this Mac (the hub's, from the plugin's settings).
 	NoAutoLock bool `json:"no_auto_lock,omitempty"`
 	// Backend is which driver this status is for: "cua" (Cua Driver) or "lcu" (amontlabs/lcu). Empty from a hub that
@@ -203,8 +206,21 @@ type Browser struct {
 	Ready         bool         `json:"ready"`
 	Note          string       `json:"note,omitempty"`
 	ScreenSharing bool         `json:"screen_sharing"`
+	Displays      []Display    `json:"displays,omitempty"` // as in Computer
 	Job           *ComputerJob `json:"job,omitempty"`
 	Checked       time.Time    `json:"checked,omitempty"`
+}
+
+// Display is one of a Mac's displays: its frame in points in the global display space (origin at the top-left corner
+// of the main display, the one with the menu bar; y grows down), as System Settings › Displays arranges them. ID is
+// macOS's display number. Names are left out: they are the monitors' models, not needed to tell them apart.
+type Display struct {
+	ID     int  `json:"id"`
+	X      int  `json:"x"`
+	Y      int  `json:"y"`
+	Width  int  `json:"width"`
+	Height int  `json:"height"`
+	Main   bool `json:"main,omitempty"`
 }
 
 // BrowserCookie is one cookie imported into ego lite's default profile (hub → node browser.cookies.import, #1304). The
@@ -302,6 +318,8 @@ var Features = []string{
 	"file_convert",             // GET /api/v1/machines/{mid}/file/convert: LibreOffice → PDF on the machine
 	"git_blob",                 // GET /api/v1/machines/{mid}/git/blob: a file at a version, for comparing
 	"git_write",                // the Git panel's writes and the branch's pull request under /api/v1/machines/{mid}/git/ (#6121)
+	"git_review",               // GET /api/v1/machines/{mid}/git/review: every file a scope changed, with its hunks (#151)
+	"preview",                  // GET …/preview/servers, POST …/preview/start, WebSocket …/preview/connect: dev server previews in a headless browser on the computer (docs/web/preview.md)
 	"file_upload",              // POST /api/v1/machines/{mid}/files (docs/protocol/protocol.md "Sending files")
 	"machine_trust",            // machines' trust and error_code, POST /api/v1/machines/{id}/confirm|reject (docs/assistant/onboarding.md 5.3)
 	"machines_add",             // POST /api/v1/auth/pair-codes with add / machine from a signed-in device: it adds a computer and pairs it (docs/assistant/onboarding.md 5.3)
@@ -841,6 +859,10 @@ type Session struct {
 	// ArchiveChangedAt is the manager's last explicit archive/restore visibility change.
 	// The hub uses it only to order its legacy delete tombstones against that report.
 	ArchiveChangedAt time.Time `json:"archive_changed_at,omitzero"`
+	// NativeArchive is whether the tool that owns an archived (or just restored) agent session has it the same way
+	// in its own archive (Codex's archived threads): only on GET /api/v1/sessions/archived rows, nil when the manager
+	// never asked the tool.
+	NativeArchive *NativeArchive `json:"native_archive,omitempty"`
 	// Origin is who opened an assistant conversation and OriginRef what of (docs/protocol/protocol.md"Assistant conversation origins"):
 	// user, channel, inbox, task, spawned, lark_agent, extension; "" is the user's. Set by the manager's fleet from
 	// the assistant's snapshot (internal/assistant/fleet.go).
@@ -1795,4 +1817,16 @@ type GateTool struct {
 type LarkCLI struct {
 	Bin     string `json:"bin,omitempty"`
 	Profile string `json:"profile,omitempty"`
+}
+
+// NativeArchive is a session's state in its own tool's archive, as its manager last asked for it
+// (docs/protocol/protocol.md "session.archive").
+type NativeArchive struct {
+	// Archived is what the tool was asked for: archived (true) or restored.
+	Archived bool `json:"archived"`
+	// State: done (the tool has it so), pending (not yet: the machine offline, the agent working, an error; tried
+	// again), unsupported (the tool has no archive Persona can drive: the archive is Persona's alone).
+	State string `json:"state"`
+	// Error is why the last try did not finish, while pending.
+	Error string `json:"error,omitempty"`
 }

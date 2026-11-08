@@ -326,6 +326,8 @@ extension Theme {
         static let laptop = "laptopcomputer"
         /// A Mac's live screen (VNC, docs/extensions/computer-use.md「实时画面」).
         static let screen = "display"
+        /// Which of a Mac's displays its VNC shows, when it has more than one (#80).
+        static let displays = "display.2"
         /// The Mac's pointer drawn over its screen in the app's VNC (#1343), when the Mac sends none of its own.
         static let pointer = "cursorarrow"
         /// VNC in a small window over everything (picture in picture).

@@ -17,6 +17,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/acceptloop"
 	"github.com/nwverse/persona/server/internal/proxyproto"
 )
 
@@ -121,21 +122,14 @@ func orDefault(d *time.Duration, def time.Duration) {
 
 func (e *edge) logf(format string, args ...any) { e.o.Logf(format, args...) }
 
+// acceptLogf is what acceptloop.Run logs about the edge's sockets (its ports, the control socket).
+func (e *edge) acceptLogf(format string, args ...any) { e.logf("hub edge: "+format, args...) }
+
 // --- relaying ---------------------------------------------------------------------------------------------------
 
 func (e *edge) accept(ln net.Listener) {
 	_, port, _ := net.SplitHostPort(ln.Addr().String())
-	for {
-		c, err := ln.Accept()
-		if err != nil {
-			if errors.Is(err, net.ErrClosed) || e.ctx.Err() != nil {
-				return
-			}
-			time.Sleep(50 * time.Millisecond) // EMFILE and the like
-			continue
-		}
-		go e.relay(c, port)
-	}
+	acceptloop.Run(e.ctx, ln, e.acceptLogf, func(c net.Conn) { go e.relay(c, port) })
 }
 
 // relay waits for a slot that serves (a switch holds connections back meanwhile), dials its socket for port, says

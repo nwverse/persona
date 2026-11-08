@@ -4,6 +4,7 @@ import { attachLive, flipMute, flipPin, flipSpaceMute, flipSpacePin, handToPerso
 import { isSpaceMuted, unreadOf, type SpaceLike } from "../lib/agent-filter";
 import { errorText } from "../lib/api";
 import { resumeCommand, sessionCan, sessionDeletable, sessionMenuActions } from "../lib/format";
+import { appArchiveDeps, archiveAgent, archiveOffers, deleteInsteadOfArchive } from "../lib/agent-archives";
 import { machineWithHub } from "../lib/mesh";
 import { isPinned, isSpacePinned } from "../lib/pins";
 import { isMuted } from "../lib/session-actions";
@@ -21,8 +22,8 @@ import { markAllSeenLabel } from "../lib/state-labels";
 /** What a row's ⋯ (and its right click) offers. `onLinkTodo`: the row can hang on a todo ("Link to to-do…"; "Move to another to-do…" and
  *  "Unlink" when it does). Everything a row offers is here, so a touch screen (no right click; iOS Safari sends no contextmenu on a
  *  long press) reaches it from the ⋯ (#1996). */
-export function agentRowMenuItems(s: Session, o: { pinned: boolean; muted: boolean; onRename: (s: Session) => void; onDelete: (s: Session) => void; onLinkTodo?: (s: Session) => void; onCloseAgent?: (s: Session) => void }): MenuItem[] {
-  const { onRename, onDelete, onLinkTodo, onCloseAgent } = o;
+export function agentRowMenuItems(s: Session, o: { pinned: boolean; muted: boolean; onRename: (s: Session) => void; onDelete: (s: Session) => void; onLinkTodo?: (s: Session) => void; onCloseAgent?: (s: Session) => void; onArchiveClose?: (s: Session) => void; features?: readonly string[] }): MenuItem[] {
+  const { onRename, onDelete, onLinkTodo, onCloseAgent, onArchiveClose } = o;
   // "Live link" and "Close agent" show when the chat's ⋯ shows them (sessionMenuActions), and do the same (#3405)
   const allowed = sessionMenuActions(s);
   return [
@@ -37,7 +38,22 @@ export function agentRowMenuItems(s: Session, o: { pinned: boolean; muted: boole
     ...(s.cwd ? [{ key: "cwd", label: t("agentmenus.copy_folder"), icon: "folder" as const, accel: "c", onSelect: () => copyText(s.cwd) }] : []),
     ...(allowed.includes("resume") ? [{ key: "resume", label: t("agentmenus.copy_resume"), icon: "terminal" as const, onSelect: () => copyText(resumeCommand(s)) }] : []),
     ...(onCloseAgent && allowed.includes("close") ? [{ key: "close", label: t("chat-chatview.close_agent_menu"), icon: "x" as const, danger: true, onSelect: () => onCloseAgent(s) }] : []),
-    ...(sessionDeletable(s) ? [{ key: "delete", label: t("agentmenus.delete_chat"), icon: "trash" as const, danger: true, onSelect: () => onDelete(s) }] : []),
+    ...archiveItems(s, o.features ?? getState().features, onArchiveClose),
+    ...(deleteInsteadOfArchive(o.features ?? getState().features) && sessionDeletable(s) ? [{ key: "delete", label: t("agentmenus.delete_chat"), icon: "trash" as const, danger: true, onSelect: () => onDelete(s) }] : []),
+  ];
+}
+
+/** "Archive" and "Archive and close…" (lib/agent-archives.ts): a busy agent shows them disabled, saying why, so the
+ *  user knows they exist and what to wait for. The chat's ⋯ offers the same. `onArchiveClose` asks first. */
+export function archiveItems(s: Session, features: readonly string[], onArchiveClose?: (s: Session) => void): MenuItem[] {
+  const offers = archiveOffers(s, features);
+  return [
+    ...(offers.archive !== "no"
+      ? [{ key: "archive", label: t("agentmenus.archive"), icon: "archive" as const, divider: true, disabled: offers.archive === "busy", detail: offers.archive === "busy" ? t("agentmenus.archive_busy") : undefined, onSelect: () => void archiveAgent(s, false, appArchiveDeps) }]
+      : []),
+    ...(onArchiveClose && offers.close !== "no"
+      ? [{ key: "archive-close", label: t("agentmenus.archive_close"), icon: "archive" as const, disabled: offers.close === "busy", detail: offers.close === "busy" ? t("agentmenus.archive_close_busy") : undefined, onSelect: () => onArchiveClose(s) }]
+      : []),
   ];
 }
 
@@ -54,11 +70,12 @@ async function unlinkTodo(s: Session, todo: string) {
 
 /** The row's menu, then what any pane offers (copy its ids, split, git, close): src/lib/node-actions.ts. The path and the
  *  rename are the row's own above. `at`: where a right click opened it (the pointer); without it, beside `anchor`. */
-export function AgentRowMenu({ s, anchor, at, onClose, ...o }: { s: Session; anchor: HTMLElement; at?: MenuAt; onClose: () => void; onRename: (s: Session) => void; onDelete: (s: Session) => void; onLinkTodo?: (s: Session) => void; onCloseAgent?: (s: Session) => void }) {
+export function AgentRowMenu({ s, anchor, at, onClose, ...o }: { s: Session; anchor: HTMLElement; at?: MenuAt; onClose: () => void; onRename: (s: Session) => void; onDelete: (s: Session) => void; onLinkTodo?: (s: Session) => void; onCloseAgent?: (s: Session) => void; onArchiveClose?: (s: Session) => void }) {
   const pinned = useStore((st) => isPinned(s, st.pins));
   const muted = useStore((st) => isMuted(s, st.mutes));
+  const features = useStore((st) => st.features);
   const online = useStore((st) => st.machines.find((m) => m.id === s.machine_id)?.online !== false);
-  return <NodeMenu node={sessionNode(s, online)} at={at ?? { anchor }} onClose={onClose} before={agentRowMenuItems(s, { pinned, muted, ...o })} omit={["node-copy-path", "node-rename"]} />;
+  return <NodeMenu node={sessionNode(s, online)} at={at ?? { anchor }} onClose={onClose} before={agentRowMenuItems(s, { pinned, muted, features, ...o })} omit={["node-copy-path", "node-rename"]} />;
 }
 
 export function SpaceMenu({

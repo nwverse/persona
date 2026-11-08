@@ -13,9 +13,13 @@ import persona.core.contracts.Session
  */
 fun paneNumber(session: Session): Long {
     val id = session.paneId.orEmpty()
-    Regex(":p([0-9A-Za-z]+)$").find(id)?.let { match -> match.groupValues[1].lowercase().toLongOrNull(36)?.let { return it } }
-    return Regex("(\\d+)$").find(id)?.groupValues?.get(1)?.toLongOrNull() ?: Long.MAX_VALUE
+    HerdrPane.find(id)?.let { match -> match.groupValues[1].lowercase().toLongOrNull(36)?.let { return it } }
+    return TrailingNumber.find(id)?.groupValues?.get(1)?.toLongOrNull() ?: Long.MAX_VALUE
 }
+
+// Compiled once: paneNumber runs inside sort comparators, and compiling them per call froze the Agents list.
+private val HerdrPane = Regex(":p([0-9A-Za-z]+)$")
+private val TrailingNumber = Regex("(\\d+)$")
 
 /**
  * A tab's panes in their order: their place in the tab's layout (`pane_index`; panes without one after), then the

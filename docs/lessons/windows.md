@@ -41,6 +41,19 @@ Read this before changing the Windows node (#1090), or developing or testing `pe
   so when it disappears (`/End`, a crash, or a kill), its children disappear too.
 - A running `.exe` cannot be overwritten or deleted. Before reinstalling, `/End` the task and wait for persona-link to release the run lock; during uninstall, the daemon file may take a moment to become deletable.
 
+## Claude Code's peer inbox (desktop app, other terminals)
+
+Measured 2026-11-07 with Claude Code 2.1.308 / 2.1.291; see [claude-integration.md](../integrations/claude-integration.md) ("Claude outside Persona's terminals").
+
+- **The inbox takes the message but the model may answer the wrong party**: Claude Code prefixes a peer's message with "Another Claude session sent a message" and tells the model to reply with SendMessage to `from=`. With no `from`, the first throwaway session answered "the session named Persona is unreachable" instead of "OK". The text must say the words are the user's own and to answer in the session (`prompts/agents/peer_message`).
+- **A message without the `<cross-session-message>` envelope loses its sender and body in the transcript**: Claude Code fills `origin.name` / `origin.body` only from the envelope. Send the envelope, signed with `from-name`.
+- **The inbox says nothing on the connection**: no ack, no error. Whether a message was taken shows only in the transcript (a `queue-operation`, or a hidden user line with a peer origin, within a few hundred ms). A bypass-permissions session holds every message without `from-mode` for the person at the computer; nothing reaches the transcript until it is approved.
+- **Windows needs the auth line first**: the inbox drops any connection whose first line is not `{"type":"auth","token":…}`. The key file's name hashes the pipe path in lower case (`\\.\pipe\local\cc-msg-…`), not as `sessions/<pid>.json` writes it.
+- **`entrypoint` is not always `claude-desktop`**: one desktop build writes `claude-desktop-3p`. Match the prefix.
+- **`procStart` on Windows is a FILETIME** (100 ns since 1601) of the process's creation, not a Linux clock tick count; compare it with `GetProcessTimes` to tell a reused pid apart.
+- **An interactive claude under a pseudo console needs its std handles to be the console's**: a `CreatePseudoConsole` child that inherits the parent's redirected stdout decides it is not on a terminal and runs as `--print` ("Input must be provided … when using --print"). Set `STARTF_USESTDHANDLES` with null handles.
+- **Testing on a dev machine**: start a throwaway `claude` with its own `CLAUDE_CONFIG_DIR` (copy `settings.json`, write a `.claude.json` with `hasCompletedOnboarding` and the test directory trusted) and an empty working directory; never send into a session the user has open. The first failed start renamed the test `.claude.json` into `backups/`: write it again before the next try.
+
 ## Tray (WebView2, notification area)
 
 `internal/linktray`; see [windows.md](../operations/windows.md) ("Tray"). Found on a physical Windows 11 machine on 2026-11-07:
@@ -90,3 +103,4 @@ Read this before changing the Windows node (#1090), or developing or testing `pe
 - **`signal.Ignore(os.Interrupt)` cannot block Ctrl+C**: On Windows, only `signal.Notify` disables the default exit behavior for Ctrl+C / Ctrl+Break (see the os/signal documentation). When `osproc.Exec` used Ignore,
   one Ctrl+C in the console ended the launcher with `0xc000013a`; the child (claude) survived, the parent disappeared, and the exit code was lost. `TestExecSurvivesCtrlC` guards this.
 - A test program `xxx.test.exe` can keep running briefly after exit (child processes), making scp fail to overwrite it with `dest open … Failure`. Use another filename or end the process first.
+- **Stopping a background shell does not stop the mock hub it started, and a second mock still binds the port**: on Windows, ending the Git Bash job that ran `python3 scripts/mock/mock_hub.py` leaves the Python process running, and Python's `HTTPServer` sets `SO_REUSEADDR`, which on Windows lets a restarted mock bind the same port too. Requests then go to either process, so a fix in the mock seems to have no effect (an unknown `/mock/…` route answers 404). Before restarting, look with `netstat -ano | grep :<port>` and end your own old process by its PID (`taskkill //PID <pid> //F`), never every Python.

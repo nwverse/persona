@@ -52,5 +52,14 @@
   "updated": "Updated {when}",
   "empty_body": "(Empty)",
   "runs_on_none": "No computer chosen to run on yet. Once a computer is connected, conversations run in the background on it.",
-  "machine_none": "Not chosen yet"
+  "machine_none": "Not chosen yet",
+  "configuration_target": "Configure assistant",
+  "configuration_target_hint": "All settings below belong to this assistant. Switching keeps other assistants unchanged.",
+  "configuration_target_missing": "This assistant is no longer available. Select another assistant.",
+  "default_permissions": "Default permissions for new sessions",
+  "default_permissions_hint": "Applies only to new non-guest sessions without an explicit permission choice. Existing sessions keep their mode. Runtime policy may be limited by the platform.",
+  "default_permissions_unset": "Not set (existing behavior)",
+  "task_models": "Task models",
+  "main_chat_model": "Main chat model",
+  "default_permissions_unconfirmed": "The assistant did not confirm this permission setting. Reload before trying again."
 }

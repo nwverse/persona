@@ -287,17 +287,17 @@ User: "Why sign at all? Skip signing for the Linux service, it's too complicated
 - Hubs that do not want this risk: turn automatic updates off in the App, or deploy with Docker (you decide when you pull the image; but see the next point for the node builds a Docker hub fetches).
 - Node builds the manager fetches for the computers (`docs/operations/node-update.md` ("Node packages")) are checked the same way: the manifest's sha256s over HTTPS, the build's platform and kind, and `version -v` where it can run (the manager's own platform; over the node RPC the node's `node-update-check` reads the version too, the ssh and tailcat paths do not). Not signed either. A hub sends builds of its own version (the release's of that version included) to its computers by itself, Docker hubs too and whatever the automatic-update setting; a fallback build (another version) only when someone chooses **Redeploy**, and an update queued for the hub's version never resumes as one. A build put in `bin/nodes` by hand with a `.version` of another version goes out by itself too: putting it there is the owner's choice. `node_packages.url` set to `off`, or builds put in `bin/nodes` by hand, avoids the site for them.
 
-## 6. Direct deploys (when a master change is urgently needed)
+## 6. Direct deploys (when a change on the default branch is urgently needed)
 
-The existing path of building from master and deploying directly (`deploy.sh`, plus the main session's deploy script) stays, for when waiting for a release is not an option.
+The existing path of building from the default branch and deploying directly (`deploy.sh`, plus the main session's deploy script) stays, for when waiting for a release is not an option.
 - The resulting binary also gets `channel=release`, `build` (build time, UTC `YYYYMMDDHHMM`) and `updateURL`:
   - it is newer than the public release live at the time, so the hub's auto-update will not install the older public release: **no downgrade**;
   - once the publisher releases a newer version (larger build number), the hub takes over on its own;
   - `TestNoDowngrade` guards this: if the manifest's build number is not larger than its own, it is not installed; equal is not installed either.
 - It also gets `commit` (`-X main.commit`, with `-dirty` appended when server/ has uncommitted changes): a later public release only installs itself if it contains this commit ("no regression").
 - The main session's deploy script lives outside the repo and must add the same four `-X` flags to its `go build` (the report gives the line to add).
-- **Deploy only from a working tree that contains master** (#1314): `deploy.sh` first runs `git fetch origin master`; if the current HEAD does not contain it, nothing is deployed and it exits 2 (same if master cannot be fetched);
-  deploying a branch that is behind would swap changes someone else just deployed (hub and web) back to old ones. For a deliberate rollback, use `PERSONA_DEPLOY_ANY_COMMIT=1`. See `docs/lessons/server.md` ("Deploying from a branch that is behind").
+- **Deploy only from a working tree that contains the default branch**: `deploy.sh` first fetches the remote's default branch (how it finds the branch: the comment above the check); if the current HEAD does not contain it, nothing is deployed and it exits 2 (same if it cannot be fetched);
+  deploying a branch that is behind would swap changes someone else just deployed (hub and web) back to old ones. For a deliberate rollback, use `PERSONA_DEPLOY_ANY_COMMIT=1`. See `docs/lessons/server.md` ("Deploying from a stale branch").
 - The hub machine also needs `personad-wechat` (the WeChat bot program, `docs/extensions/wechat.md`): `deploy.sh` builds the same version for the hub and puts it next to personad; nodes do not need it.
   Telegram is not here: it is an extension (#1704), installed and upgraded on the hub from the extension market.
 - No staged rollout: after a release all hubs (ours included) update at the same time when idle; problems are handled by each hub's own rollback and bad-version marking.
@@ -396,6 +396,7 @@ Download → Verify → Prepare → Wait for idle → Replace → Restart → Co
      if it does not see the new build number and "confirmed" from the local `/api/v1/health` within 3 minutes, it rolls back itself:
      - Under systemd (with `INVOCATION_ID`) or launchd: restore `.prev`, kill the main process, and let the service manager start the old binary;
      - Without a service manager: after restoring it, start the old hub in the background with the original arguments.
+     - It signals the hub only while the hub is still its parent process (SIGTERM, then SIGKILL after 10 seconds if it is still there): once the hub has exited, its pid may belong to another process.
    - After rollback, record this build number in the **bad-version** list: automatic updates no longer try it and wait for a newer version. The user can still install it manually; the App says, "This version failed to start last time and was rolled back."
 9. **Update nodes along with it (only with `auto_update_nodes: true`)**:
    - After the hub confirms success, run `deploy.go` for each online machine with a different version (push binary, restart the persistent node, wait for it to reconnect), one at a time;

@@ -166,7 +166,7 @@ func (h *Hub) connectPort(w http.ResponseWriter, r *http.Request, m *Machine) {
 	}
 	mux := m.portStreams()
 	if mux == nil {
-		writeErr(w, http.StatusServiceUnavailable, fmt.Errorf("%s: %w", m.cfg.Name, errOffline))
+		writeErr(w, http.StatusServiceUnavailable, fmt.Errorf("%s: %w", m.name(), errOffline))
 		return
 	}
 	if mux.Len() >= maxPortStreams {

@@ -48,6 +48,9 @@ val Session.source: SessionSourceInfo?
             "codex_history" -> CoreText.of(Key.SourceCodexHistory)
             "identity_conflict" -> CoreText.of(Key.SourceIdentityConflict)
             "claude_bg" -> CoreText.of(Key.SourceClaudeBackground)
+            // Claude outside Persona's terminals (docs/integrations/claude-integration.md "Claude outside Persona's terminals").
+            "claude_desktop" -> CoreText.of(Key.SourceClaudeDesktop)
+            "claude_cli" -> CoreText.of(Key.SourceClaudeTerminal)
             // An agent runtime's session (docs/integrations/runtimes.md): its own name, "DSH".
             "runtime" -> CoreText.plain(agentLabel)
             else -> sourceKind?.takeIf(String::isNotEmpty)?.let(CoreText::plain)
