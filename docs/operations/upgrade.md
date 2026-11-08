@@ -157,11 +157,11 @@ systemctl --user restart personad                          # Linux
 launchctl kickstart -k gui/$(id -u)/com.persona.hub          # macOS
 ```
 
-`"$PD" hub switch` also works: the hub starts again behind its edge, without a gap (exit 3 means there is no edge: restart the service instead). The steps use `personad` (`$PD`): the services run it, and an install made with the install command doesn't have `persona-hub` and `persona-manager` until its next update. `persona-hub …` and `persona-manager …` are the same commands. Logs: `journalctl --user -u personad -n 100` (macOS: `tail -n 100 "$DATA/hub.log"`).
+`"$PD" hub switch` also works: the hub starts again behind its edge, without a gap (exit 3 means there is no edge: restart the service instead). The steps use `personad` (`$PD`): the services run it, and every install has it. `persona-hub …` and `persona-manager …` are the same commands, once the update in step 1 has put them beside it; `persona-hub switch` too goes on with the program the hub runs now. Logs: `journalctl --user -u personad -n 100` (macOS: `tail -n 100 "$DATA/hub.log"`).
 
 ### Step 1: update to a build with the split
 
-Update as usual: the automatic update, **Update now** in the apps, the install command again with `--hub`, or a direct deploy. The hub's self-update swaps `personad`, `persona-hub` and `persona-manager` together, and rolls them back by itself when the new version doesn't start ([hub-update.md](hub-update.md)). The install command runs `hub setup` again, which keeps an existing install's mode and says how to switch.
+Update as usual: the automatic update, **Update now** in the apps, the install command again with `--hub`, or a direct deploy. The hub's self-update swaps `personad`, `persona-hub` and `persona-manager` together, and rolls them back by itself when the new version doesn't start ([hub-update.md](hub-update.md)). The install command and a direct deploy install the three together too, on the computer that runs the hub. The install command also runs `hub setup` again, which keeps an existing install's mode and says how to switch.
 
 **Check:**
 
@@ -186,7 +186,7 @@ for f in "$R/$(basename "$DATA")/bin/"*; do
 done
 ```
 
-When the update left `.prev` copies, `cp -p "$PD.prev" "$PD.new" && mv -f "$PD.new" "$PD"` does the same for `personad`. If `$PD` is itself a link (some installs under the former name), do it on the file the link names.
+When the update left `.prev` copies, `cp -p "$PD.prev" "$PD.new" && mv -f "$PD.new" "$PD"` does the same for `personad`; `persona-hub.prev` and `persona-manager.prev` beside it go back the same way. One of the two without a `.prev` came with this update: it stays, and nothing starts it while the services run `personad`. If `$PD` is itself a link (some installs under the former name), do it on the file the link names.
 
 ### Step 2: switch with setup
 
@@ -384,7 +384,7 @@ Whatever the type, the upgrade is done when all of these hold:
 
 - **Nothing switches by itself.** Existing installs stay in child mode until switched, and child mode stays supported.
 - **The services still run `personad`** (`personad hub run`, `personad assistant`). A later release moves them to `persona-hub` and `persona-manager`.
-- **The first update that brings `persona-hub` and `persona-manager`:** if it rolls back, only `personad` goes back, because the old watchdog doesn't know the two. They stay behind, don't match the hub's version, and aren't started until the next update. The install command installs `personad` alone; the next update brings the other two.
+- **The first update that brings `persona-hub` and `persona-manager`:** if it rolls back, only `personad` goes back, because the old watchdog doesn't know the two. They stay behind, don't match the hub's version, and aren't started until the next update. The install command installs the three on the computer that runs the hub; a release without the two (from before the split) leaves them as they were, at another version than `personad`. When a service runs one of them, neither the install command nor the hub's self-update installs such a release ([hub-update.md](hub-update.md) ("Programs swapped together with personad")).
 - **A service left installed after going back to child mode** waits, refused by the hub, instead of running next to its child. Short overlaps remain while a refused service shuts down and a child starts. Remove it with `manager uninstall --builtin`.
 - **One built-in manager per data directory.** A second one exits 2, kept out by a lock on Linux and macOS. In Docker, if the hub's container still runs its own (no `PERSONA_BUILTIN_MANAGER: separate`) while a manager container runs, one of them keeps exiting 2 and trying again.
 - **A built-in manager that runs elsewhere** (`assistant.external`) is not switched: `--manager-service` refuses it and changes nothing.

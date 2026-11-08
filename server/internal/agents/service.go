@@ -7,13 +7,13 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"regexp"
 	"slices"
 	"strings"
 	"sync"
 	"time"
 	"unicode/utf16"
 
+	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/sessionlist"
 )
 
@@ -312,7 +312,7 @@ type SendResult struct {
 	Upstream  json.RawMessage `json:"upstream,omitempty"`
 }
 
-var uuidRe = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
+var uuidRe = lazyre.New(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
 
 func NewClientID() string {
 	b := make([]byte, 16)

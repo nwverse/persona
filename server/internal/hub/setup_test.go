@@ -11,6 +11,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -856,11 +857,16 @@ func TestSetupMacHubRunningElsewhere(t *testing.T) {
 }
 
 func TestLaunchdJob(t *testing.T) {
-	label, args, ok := launchdJob([]byte(`<plist version="1.0"><dict><key>Label</key><string>a.b</string><key>Program</key><string>/x/personad</string><key>RunAtLoad</key><true/></dict></plist>`))
-	if !ok || label != "a.b" || len(args) != 1 || args[0] != "/x/personad" {
-		t.Fatalf("%q %q %v", label, args, ok)
+	job, ok := launchdJob([]byte(`<plist version="1.0"><dict><key>Label</key><string>a.b</string><key>Program</key><string>/x/personad</string><key>RunAtLoad</key><true/></dict></plist>`))
+	if !ok || job.label != "a.b" || !slices.Equal(job.args, []string{"/x/personad"}) || job.disabled {
+		t.Fatalf("%+v %v", job, ok)
 	}
-	if _, _, ok := launchdJob([]byte("bplist00")); ok {
+	// Program is what runs; ProgramArguments[0] only names it.
+	job, ok = launchdJob([]byte(`<plist version="1.0"><dict><key>Program</key><string>/x/persona-hub</string><key>ProgramArguments</key><array><string>/x/personad</string><string>hub</string></array><key>Disabled</key><true/></dict></plist>`))
+	if !ok || !slices.Equal(job.args, []string{"/x/persona-hub", "hub"}) || !job.disabled {
+		t.Fatalf("%+v %v", job, ok)
+	}
+	if _, ok := launchdJob([]byte("bplist00")); ok {
 		t.Fatal("binary plist parsed")
 	}
 }

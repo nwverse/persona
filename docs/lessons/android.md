@@ -1,5 +1,12 @@
 # Lessons: Android
 
+## Negotiated capabilities are not queued-event completion (#1669)
+
+The connection stores its authenticated hello before catch-up, but a separate queued event consumer can still be
+paused or attach after that non-replayed event. Derive message capabilities from the authoritative connection hello,
+not a second asynchronously updated flag. Preserve route/catch-up fences. Test with the consumer dispatcher held
+and a transport attached after hello delivery; do not hide the race by increasing waits or relaxing assertions.
+
 ## Assistant selection owns the whole request and draft lifecycle (#6567)
 
 A selected chip does not prove that its main conversation opened. Capture the hub and manager before suspending,
@@ -68,6 +75,7 @@ Pitfalls in the new multi-module Android App (`android/`, `docs/android/android.
 
 - In an anonymous `BaseInputConnection`, `override fun getEditable() = editable` with an outer field also named `editable` resolves first to the object's own `getEditable()` (the property corresponding to the Java getter). It recurses, causing stack-overflow crashes as soon as the IME connects (`finishComposingText` → `getEditable`; terminal keyboard, 2026-11-02). Do not give outer fields framework-getter names (renamed to `buffer`). JVM unit tests cannot catch this; tap the keyboard on an emulator.
 - A status card above the terminal ("Taking over…") changes terminal height on both appearance and disappearance, causing two extra pane reflows during takeover and duplicating buffered scrollback. Put changing status in one line below the title; terminal height should change only with the keyboard.
+- Keep a field out of Autofill on the text field's own semantics node (2026-11-09, #1581). Compose's `AndroidAutofillManager` reads each node's own configuration, so `contentDataType = ContentDataType.None` on a wrapping `Column` leaves the `BasicTextField` node autofillable: the service still fills it and offers to save what was typed. Set it through the `BasicTextField` modifier (`JTextField(autofill = false)`, `JSecretField`). On that node it stops the autofill session (no view-entered or value-change notifications, autofill type NONE in the view structure); the save-on-removal commit follows only nodes with a `ContentType`, which such a field must not set. Assert `SemanticsProperties.ContentDataType == ContentDataType.None` on the `hasSetTextAction()` node.
 
 ## Native extension streams (#5956)
 
@@ -93,6 +101,10 @@ Pitfalls in the new multi-module Android App (`android/`, `docs/android/android.
 - `./gradlew --stop` stops all daemons of that Gradle version on the machine. Shared lanes (worktrees) therefore stop other people's builds too. To stop only yours, use Ctrl-C or kill your own command.
 
 ## Testing
+
+- `OkHttpHubConnection` publishes `Revoked` before it reports the last refusing hub through `onMemberRevoked`, outside the lock (HubGroupConnectionTest). A test that reads the callback list right after seeing `Revoked` can miss that last entry under load; one hosted run failed `theConnectionIsRevokedOnlyWhenNoHubOfTheGroupIsLeft` this way while main passed. Widening the gap with a temporary sleep before that report fails the old test every time (`but was:<[(hub-a, true), (hub-b, true)]>`). Production consumers launch their cleanup asynchronously and reach the same end state in either order, so the test now waits for the report it asserts, then checks the exact list.
+
+- Closing a `ServerSocket` that another thread is blocked accepting on does not free its port when `close()` returns (PortForwarder, #3483). The JDK only wakes the accepting thread; the port is released after that thread leaves `accept`. On a busy 2-CPU runner the next pairing's forwarder then found the number still taken and bound another one, failing `aClosedOpenerFreesItsPortForTheNext` on two hosted runs while it passed on a 64-CPU machine. A bare JVM probe on 2 CPUs failed an immediate rebind 18/300 times idle and about 200 to 260/300 under load, 0/300 after joining the accept thread. `Forward.close()` now joins its accept threads (bounded). Reproduce with the Gradle run pinned to two busy CPUs (`taskset -c 0,1` plus busy loops); `closeReturnsOnlyOnceItsPortIsFree` fails at once on the old code there. A test failing only on hosted runners can be a real bug; an earlier retry of the probed port here was the wrong diagnosis.
 
 - A resident node discovers development servers with `GET /`. On a queue-based MockWebServer, that unrelated request can consume the API response prepared for the test; the real request then reads the next fixture or times out. Recognize only the exact discovery request (method, root path, and either generation's probe User-Agent) in the compatibility test helper, without consuming a queued response or returning that probe from `takeRequest`. Keep ordinary root requests, API requests, error responses, and all existing assertions unchanged. Do not stop the resident node or increase timeouts to hide the race; reproduce it with a synthetic listener and rerun the complete suite after isolating its fixtures.
 
@@ -121,6 +133,7 @@ Pitfalls in the new multi-module Android App (`android/`, `docs/android/android.
 - Compose `Modifier.border(0.dp, …)` does not mean no border: `0.dp` is `Dp.Hairline`, drawing a one-pixel line (explicit in `BorderModifierNode`). Add the modifier conditionally for optional borders (editor color-selection ring).
 - Decode images with `ImageDecoder` (corrects EXIF orientation), not `BitmapFactory` (ignores it, displaying camera originals sideways). Bitmaps to draw into / reencode need `ALLOCATOR_SOFTWARE`; hardware bitmaps cannot be drawn into software Canvas. Flatten transparent areas onto white before saving JPEG: JPEG has no alpha, and the encoder otherwise makes them black (`jpegBytes`).
 - `Offset` is a value class with bitwise equality. `coerceIn(-0f, 0f)` can produce `-0f`, unequal to `Offset.Zero`. Return `0f` directly when no range exists (`ImageMath.clampPan`); use tolerance for computed floating-point offsets in tests.
+- Robolectric's default window is 320×470 dp (2026-11-09, #1581). `performClick` taps the node's centre; a node laid out below the window (a tall card set straight into `setContent`, no scroll container) gets nothing, and the test fails as if the button ignored the tap. Give the test a window that fits (`@Config(qualifiers = "zh-w400dp-h1200dp")`) or bring the node into view with `performScrollTo()` first.
 
 ## System capabilities
 
@@ -226,6 +239,13 @@ Pitfalls in the new multi-module Android App (`android/`, `docs/android/android.
 - Handshake failure does not mean the certificate changed (#1250). During a hub restart, Docker Desktop's port proxy and `adb reverse` accept TCP then close it because the backend is absent; an interrupted handshake also throws `SSLHandshakeException`. Previously all such exceptions meant "Hub certificate changed" with no retry, requiring a process kill to reconnect.
   Only an obtained certificate that fails validation is a certificate mismatch: rejection by `SpkiTrustManager` (`CertificateException` in the cause chain), or by hostname verifier (another hub's pin in the group, `SSLPeerUnverifiedException`). Retry other handshake failures with ordinary network-error backoff (`HubFailure.from`).
 - `OkHttpHubConnection.request` throws `HubFailure` itself for non-2xx responses instead of returning them. Caller-side `if (!response.isSuccessful)` error-body parsing is unreachable with the real connection (unit tests returning MockWebServer responses directly miss this). Required hub error fields (such as rejected plugin-settings `field` and `message`) must enter `ErrorBody` / `HubFailure` (2026-11-04, #1206: a rejected field became a page-top error on the emulator). Unit-test again with a request that throws first like the connection (`HttpPluginManagementTest`).
+
+- Never give OkHttp a `ConnectionPool(0, …)` for HTTP/2 calls whose body is read to the end (2026-11-08, #1519). The exchange completes once
+  the body's Content-Length bytes arrive; with no idle connection allowed the pool closes the socket right then, and a server that
+  sends the stream's end in a frame of its own (MockWebServer flushes the body, then ends the stream) has not been heard yet. The
+  read that waits for it fails: `StreamResetException: CANCEL` on Linux, `SocketException: Socket closed` on macOS, both shown as
+  "Connection failed". It hit `health(fresh = true)` only now and then on hosted runners; a MockWebServer `DuplexResponseBody` that
+  ends the stream 300 ms after the body reproduces it every time. Keep one idle connection with a short keep-alive instead.
 
 ## Module facades must include default interface methods (2026-11-04, #1619)
 

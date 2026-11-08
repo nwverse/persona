@@ -5,11 +5,11 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"regexp"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
@@ -27,9 +27,9 @@ var (
 	larkCLIRead      = map[string]bool{"schema": true, "skills": true, "whoami": true, "doctor": true, "help": true, "completion": true}
 	larkCLIAuthRead  = map[string]bool{"status": true, "check": true, "scopes": true, "list": true}
 	larkCLIEventRead = map[string]bool{"list": true, "schema": true, "status": true}
-	larkRiskRe       = regexp.MustCompile(`(?m)^\s*Risk:\s*([a-z-]+)`)
+	larkRiskRe       = lazyre.New(`(?m)^\s*Risk:\s*([a-z-]+)`)
 	// larkCLIRe: a lark-cli call anywhere in a command the gate cannot parse.
-	larkCLIRe = regexp.MustCompile("(^|[\\s;&|(`])(\\S*/)?lark-cli(\\s|$)")
+	larkCLIRe = lazyre.New("(^|[\\s;&|(`])(\\S*/)?lark-cli(\\s|$)")
 )
 
 func isLarkCLI(name string) bool { return name == "lark-cli" || filepath.Base(name) == "lark-cli" }

@@ -2,12 +2,12 @@ package assistant
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"github.com/nwverse/persona/server/internal/compat"
 	"net/http"
 	"path"
-	"regexp"
 	"slices"
 	"sort"
 	"strings"
@@ -16,6 +16,7 @@ import (
 
 	"github.com/nwverse/persona/server/internal/apierr"
 	"github.com/nwverse/persona/server/internal/assistantwire"
+	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/rpc"
 )
@@ -43,6 +44,11 @@ const (
 	errKindCLIOutdated = "cli_outdated"
 	errKindTimeout     = "timeout"
 	errKindOther       = "other"
+	// errKindNotInTerminal: a start's new terminal tab could not run the launcher, or its claude (node/shellmiss.go,
+	// #1642): the terminal reads other startup files than the login shell the launchers are listed and checked in, so
+	// a check passing says nothing of it, and no repair the manager has reaches it. Blocked at once; a start with it
+	// that works clears it (or it goes stale).
+	errKindNotInTerminal = "not_in_terminal"
 )
 
 var (
@@ -113,6 +119,9 @@ type machineRepair struct {
 type healthStore struct {
 	Records []LauncherHealth `json:"records"`
 	Repairs []machineRepair  `json:"repairs,omitempty"`
+	// Counted are the app's failed starts already counted (launcher_health_starts.go), kept across a restart while the
+	// node may still list them.
+	Counted []countedStart `json:"counted_starts,omitempty"`
 }
 
 type healthBook struct {
@@ -122,6 +131,10 @@ type healthBook struct {
 	repairs  map[string]*machineRepair  // by broken machine
 	online   map[string]bool            // reachable at the last look
 	checking map[string]bool            // machines being checked now
+	// The app's starts answered at once (launcher_health_starts.go): those seen starting, by machine and session, and
+	// the failed ones already counted, when (kept with the records: healthStore.Counted).
+	starting map[[2]string]startWatch
+	counted  map[[2]string]time.Time
 }
 
 func healthKey(machine, launcher string) string { return machine + "/" + launcher }
@@ -176,6 +189,14 @@ func (s *Service) healthLoadLocked(ctx context.Context) {
 		r := stored.Repairs[i]
 		b.repairs[r.Machine] = &r
 	}
+	for _, c := range stored.Counted {
+		if b.counted == nil {
+			b.counted = map[[2]string]time.Time{}
+		}
+		if key := [2]string{c.Machine, c.Session}; b.counted[key].IsZero() {
+			b.counted[key] = c.At
+		}
+	}
 	b.loaded = true
 }
 
@@ -197,6 +218,14 @@ func (s *Service) healthSaveLocked(ctx context.Context) {
 		out.Repairs = append(out.Repairs, *r)
 	}
 	sort.Slice(out.Repairs, func(i, j int) bool { return out.Repairs[i].Machine < out.Repairs[j].Machine })
+	for key, at := range b.counted {
+		if time.Since(at) <= startFollowFor {
+			out.Counted = append(out.Counted, countedStart{Machine: key[0], Session: key[1], At: at})
+		}
+	}
+	sort.Slice(out.Counted, func(i, j int) bool {
+		return out.Counted[i].Machine+"/"+out.Counted[i].Session < out.Counted[j].Machine+"/"+out.Counted[j].Session
+	})
 	// Bounded: b.mu is held, and every start waits for it; the records stay in memory either way (#5467).
 	wctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), historyTimeout)
 	defer cancel()
@@ -255,7 +284,19 @@ type healthResult struct {
 	millis       int
 	err          string
 	source       string
+	kind         string // the error's class when the outcome says it (a start's coded refusal); "": classifyLauncherError
 }
+
+// Where a result comes from (LauncherHealth.Source).
+const (
+	healthSourceCheck = "check" // launchers.check, in the node's login shell
+	healthSourceStart = "start" // an agent's start, in a terminal tab
+)
+
+// terminalBlockedReason is why a launcher the terminal cannot run is blocked: no repair reaches the terminal's startup files.
+const terminalBlockedReason = "not available in this computer's terminal: its shell reads other startup files than the login shell " +
+	"Persona lists and checks launchers in (another shell, a container, an rc file that returns early). Define the launcher where " +
+	"the terminal's shell reads it, or add it to Persona as a model provider; a start with it that works clears this"
 
 // recordHealth keeps r as launcher's latest on machine; the apps are told when its state changes.
 func (s *Service) recordHealth(ctx context.Context, machine, launcher string, r healthResult) LauncherHealth {
@@ -269,6 +310,13 @@ func (s *Service) recordHealth(ctx context.Context, machine, launcher string, r 
 		b.recs[key] = rec
 	}
 	before := rec.State
+	if r.source == healthSourceCheck && rec.Kind == errKindNotInTerminal && rec.unusable() {
+		// The check runs in the login shell, where the launcher works; the terminal is what cannot run it. Only a
+		// start says otherwise (#1642).
+		out := *rec
+		b.mu.Unlock()
+		return out
+	}
 	rec.CheckedAt, rec.Source, rec.Millis = time.Now().UTC(), r.source, r.millis
 	if r.agent != "" {
 		rec.Agent = r.agent
@@ -279,8 +327,14 @@ func (s *Service) recordHealth(ctx context.Context, machine, launcher string, r 
 	} else {
 		rec.Fails++
 		rec.Error = clip(oneLine(r.err), 400)
-		rec.Kind = classifyLauncherError(r.err)
-		if rec.State == "" || rec.State == healthOK {
+		rec.Kind = r.kind
+		if rec.Kind == "" {
+			rec.Kind = classifyLauncherError(r.err)
+		}
+		switch {
+		case rec.Kind == errKindNotInTerminal:
+			rec.State, rec.BlockedReason = healthBlocked, terminalBlockedReason // no repair round (repairMachine takes failing ones)
+		case rec.State == "" || rec.State == healthOK:
 			rec.State = healthFailing
 		}
 	}
@@ -352,12 +406,17 @@ func (s *Service) healthChanged(ctx context.Context, r LauncherHealth, before st
 
 // recordStartFailure: an agent did not start with launcher on machine. A dropped link says nothing about the
 // launcher, nor does a start the node turned down before running it (startRefused); anything else counts, and a
-// check follows at once to tell a blink from a broken launcher.
+// check follows at once to tell a blink from a broken launcher. Not after a start the terminal could not run
+// (errKindNotInTerminal): the check runs where it works.
 func (s *Service) recordStartFailure(ctx context.Context, machine, launcher string, err error) {
 	if err == nil || launcher == "" || transientStartErr(err) || errors.Is(err, ErrNoDevice) || startRefused(err) {
 		return
 	}
-	s.recordHealth(ctx, machine, launcher, healthResult{err: err.Error(), source: "start"})
+	if terminalMissing(err) {
+		s.recordHealth(ctx, machine, launcher, healthResult{err: err.Error(), source: healthSourceStart, kind: errKindNotInTerminal})
+		return
+	}
+	s.recordHealth(ctx, machine, launcher, healthResult{err: err.Error(), source: healthSourceStart})
 	go func() {
 		ctx := context.WithoutCancel(ctx)
 		if res, ok := s.probeLauncherHealth(ctx, machine, launcher); ok {
@@ -366,9 +425,35 @@ func (s *Service) recordStartFailure(ctx context.Context, machine, launcher stri
 	}()
 }
 
+// recordStartSuccess: an agent started with launcher on machine, so the terminal there runs it: a record saying it
+// does not (errKindNotInTerminal) is cleared. Any other record stays: a start that came up says nothing of the model
+// route or the key a check found broken.
+func (s *Service) recordStartSuccess(ctx context.Context, machine, launcher string) {
+	if launcher == "" {
+		launcher = "claude"
+	}
+	if r, ok := s.launcherHealth(ctx, machine, launcher); !ok || r.Kind != errKindNotInTerminal || r.State == healthOK {
+		return
+	}
+	s.recordHealth(ctx, machine, launcher, healthResult{ok: true, source: healthSourceStart})
+}
+
+// terminalMissing: err is the node's refusal of a start whose new terminal tab could not run the launcher or its claude
+// (launcher_missing / claude_missing with where "terminal", node/shellmiss.go, #1642).
+func terminalMissing(err error) bool {
+	var re *rpc.Error
+	if !errors.As(err, &re) || (re.Code != proto.CodeLauncherMissing && re.Code != proto.CodeClaudeMissing) {
+		return false
+	}
+	var data struct {
+		Where string `json:"where"`
+	}
+	return json.Unmarshal(re.Data, &data) == nil && data.Where == "terminal"
+}
+
 // startRequestErr are the node's answers to a session.start it would not run, whatever the launcher (node/control.go
 // checkStart and start, node/model_config.go check): a directory that is not there, a bad name, mode, effort or model.
-var startRequestErr = regexp.MustCompile(`^directory .* does not exist$|^invalid launcher |^invalid session id |^invalid model$|^unknown permission mode |^unknown effort level |^unsupported agent type |^permission mode and effort are only supported for Claude starts|^普通 Agent 的启动只支持|^新建 Codex 的思考强度由其启动器管理`)
+var startRequestErr = lazyre.New(`^directory .* does not exist$|^invalid launcher |^invalid session id |^invalid model$|^unknown permission mode |^unknown effort level |^unsupported agent type |^permission mode and effort are only supported for Claude starts|^普通 Agent 的启动只支持|^新建 Codex 的思考强度由其启动器管理`)
 
 // startRefusalCodes are the node's (and the hub's) coded refusals of the request itself (node/control.go,
 // node/codex_start.go, node/openelsewhere.go…). Codes about the machine's state (engine_missing, runtime_away,
@@ -393,12 +478,12 @@ func startRefused(err error) bool {
 
 var launcherErrorKinds = []struct {
 	kind string
-	re   *regexp.Regexp
+	re   *lazyre.Regexp
 }{
-	{errKindModelRoute, regexp.MustCompile(`(?i)bare claude model name|cannot be routed|no account match|model[^.\n]{0,60}(not found|not supported|not available|does not exist|unknown)|unknown model|invalid model`)},
-	{errKindAuth, regexp.MustCompile(`(?i)\b40[13]\b|invalid (or missing )?(api[ _-]?key|x-api-key|token|bearer)|authentication_error|unauthori[sz]ed|not logged in|please run /login|token (has )?expired|permission_error|forbidden|requires \w+ auth|no \w+ auth token|auth login`)},
-	{errKindCLIOutdated, regexp.MustCompile(`(?i)unknown option|unrecognized option|unexpected argument|please (update|upgrade)|(update|upgrade) (claude|codex|your)|version[^.\n]{0,40}(too old|no longer supported|not supported|outdated)|minimum (required )?version|requires (a )?newer`)},
-	{errKindTimeout, regexp.MustCompile(`(?i)context deadline exceeded|deadline exceeded|timed? ?out|秒内没有回答`)},
+	{errKindModelRoute, lazyre.New(`(?i)bare claude model name|cannot be routed|no account match|model[^.\n]{0,60}(not found|not supported|not available|does not exist|unknown)|unknown model|invalid model`)},
+	{errKindAuth, lazyre.New(`(?i)\b40[13]\b|invalid (or missing )?(api[ _-]?key|x-api-key|token|bearer)|authentication_error|unauthori[sz]ed|not logged in|please run /login|token (has )?expired|permission_error|forbidden|requires \w+ auth|no \w+ auth token|auth login`)},
+	{errKindCLIOutdated, lazyre.New(`(?i)unknown option|unrecognized option|unexpected argument|please (update|upgrade)|(update|upgrade) (claude|codex|your)|version[^.\n]{0,40}(too old|no longer supported|not supported|outdated)|minimum (required )?version|requires (a )?newer`)},
+	{errKindTimeout, lazyre.New(`(?i)context deadline exceeded|deadline exceeded|timed? ?out|秒内没有回答`)},
 }
 
 // classifyLauncherError names the class of a launcher's error, the first that matches.
@@ -431,7 +516,7 @@ func (s *Service) probeLauncherHealth(ctx context.Context, machine, launcher str
 		s.logf("launcher health: check %s on %s: %v", launcher, machine, err)
 		return healthResult{}, false
 	}
-	return healthResult{ok: res.OK, agent: res.Agent, model: res.Model, millis: res.Millis, err: res.Error, source: "check"}, true
+	return healthResult{ok: res.OK, agent: res.Agent, model: res.Model, millis: res.Millis, err: res.Error, source: healthSourceCheck}, true
 }
 
 // healthLaunchers are the launchers to check on machine: those it can start (its ~/.zshrc's, the managed ones) and
@@ -534,6 +619,9 @@ func (s *Service) checkMachine(ctx context.Context, d Device, cfg healthConfig, 
 			since := time.Since(r.CheckedAt)
 			if ok && since < cfg.interval && !(cameOnline && since >= healthOnlineRecheck) {
 				continue
+			}
+			if ok && r.Kind == errKindNotInTerminal && r.unusable() {
+				continue // the login shell's check cannot tell (recordHealth): it waits for a start, or goes stale
 			}
 		}
 		if res, ok := s.probeLauncherHealth(ctx, d.ID, name); ok {

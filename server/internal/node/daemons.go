@@ -33,7 +33,6 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
-	"regexp"
 	"slices"
 	"sort"
 	"strings"
@@ -42,6 +41,7 @@ import (
 
 	"github.com/coder/websocket"
 
+	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/rpc"
 )
 
@@ -51,9 +51,9 @@ const DaemonSubprotocol = "persona-runtime.v1"
 var (
 	// daemonIDRe: a daemon's id in daemons.json — its runtime id, space kind and session id prefix. No dots: the first
 	// dot of a session id ends the daemon's id.
-	daemonIDRe = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]{0,31}$`)
+	daemonIDRe = lazyre.New(`^[a-z0-9][a-z0-9_-]{0,31}$`)
 	// daemonLauncherRe: a launcher name given in daemons.json.
-	daemonLauncherRe = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$`)
+	daemonLauncherRe = lazyre.New(`^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$`)
 
 	// daemonDialTimeout bounds the handshake.
 	daemonDialTimeout = 15 * time.Second

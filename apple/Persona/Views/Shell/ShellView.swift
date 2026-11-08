@@ -13,6 +13,9 @@ struct ShellView: View {
     /// Opens on the app's tab: the page behind is built when it is first selected or dragged in.
     @State private var shell = ShellState(page: ShellState.index(for: AppModel.shared.selectedTab),
                                           pageCount: LarkHomePreference.shared.shows ? 3 : 2)
+    /// Where the system puts its bars down the side (iPhone Duo's outer display, the inner one on its side): the top
+    /// bars are the side rail there (`ShellSideRail`); nil on every other iPhone.
+    @State private var railEdge: HorizontalEdge?
 
     var body: some View {
         #if DEBUG || PERF_SIGNPOST
@@ -22,6 +25,8 @@ struct ShellView: View {
         AssistantDrawerLayout(drawer: shell.drawer, enabled: shell.atRoot,
                               backdrop: Theme.Shell.drawer, pager: shell.pager, sidebar: { sidebar }, page: pages)
             .environment(\.shell, shell)
+            .environment(\.shellRailEdge, railEdge)
+            .readsVerticalBarEdge($railEdge)
             .sheet(isPresented: $model.shellSettings) {
                 // The sheet outlives RootView's rebuild for a new look: it takes the look as its identity too, or Appearance's
                 // sample and everything else drawn with the static tokens keeps the old colors.
@@ -176,10 +181,13 @@ nonisolated struct ShellShown: Encodable, Equatable {
 /// `AgentsTopBar`, which lines up with Assistant's to the pixel.
 private struct ShellMovingBar: View {
     @Environment(AppModel.self) private var model
+    @Environment(\.shellRailEdge) private var railEdge
     let pager: ShellPager
 
     var body: some View {
-        if pager.moving || pager.lingering {
+        if let railEdge, pager.moving || pager.lingering {
+            movingRail(railEdge)
+        } else if pager.moving || pager.lingering {
             let p = Double(min(CGFloat(pager.pageCount - 1), max(0, pager.position)))
             HStack(alignment: .top, spacing: Theme.Space.s) {
                 ShellPersonaButton(id: "shell-moving-sidebar") {}
@@ -209,6 +217,31 @@ private struct ShellMovingBar: View {
             }
             .accessibilityHidden(true)
         }
+    }
+
+    /// The side rail while the strip moves (iPhone Duo): still in its column, the pill gliding down the switch with the
+    /// strip and the action crossfading, as the top bar above.
+    private func movingRail(_ edge: HorizontalEdge) -> some View {
+        let p = Double(min(CGFloat(pager.pageCount - 1), max(0, pager.position)))
+        return ShellSideRail(edge: edge) {
+            Group {
+                ShellPersonaButton(id: "shell-moving-sidebar") {}
+                ZStack {
+                    ShellCircleButton(symbol: Theme.Icon.compose, label: String(localized: "New Chat [Quick Actions ea4b29]"), id: "shell-moving-new") {}
+                        .opacity(max(0, 1 - p) * (model.assistantCurrent == nil ? 0.4 : 1))
+                    ShellCircleButton(symbol: Theme.Icon.compose, label: String(localized: "New Session [Chats View 58e21b]"), id: "shell-moving-agents-new") {}
+                        .opacity(max(0, 1 - abs(p - 1)))
+                    ShellCircleButton(symbol: Theme.Icon.settings, label: String(localized: "Lark Settings"), id: "shell-moving-feishu-settings") {}
+                        .opacity(max(0, p - 1))
+                }
+            }
+            .allowsHitTesting(false)
+        } switcher: {
+            ShellSwitch(tab: .constant(ShellState.tab(for: pager.page)), axis: .vertical) { EmptyView() } workMenu: { EmptyView() }
+                .environment(\.shellPillFollowsStrip, true)
+        }
+        .shellTopBarScaled()
+        .accessibilityHidden(true)
     }
 }
 #endif

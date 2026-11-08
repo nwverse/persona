@@ -57,6 +57,34 @@ func TestRestartHubWithoutAServiceManager(t *testing.T) {
 	t.Fatal("the restored binary was not started")
 }
 
+// A hub that ran as persona-hub is started again as persona-hub (Pending.Run), with its own arguments.
+func TestRestartHubAsPersonaHub(t *testing.T) {
+	t.Setenv("INVOCATION_ID", "")
+	t.Setenv("XPC_SERVICE_NAME", "")
+	dir := t.TempDir()
+	started := filepath.Join(dir, "started")
+	run := filepath.Join(dir, "persona-hub")
+	if err := os.WriteFile(run, []byte("#!/bin/sh\necho \"$0 $@\" > "+started+"\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	target := filepath.Join(dir, "personad")
+	if err := os.WriteFile(target, []byte("#!/bin/sh\nexit 1\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := restartHub(update.Pending{Target: target, Run: run, Args: []string{run, "run"}}); err != nil {
+		t.Fatal(err)
+	}
+	for deadline := time.Now().Add(30 * time.Second); time.Now().Before(deadline); time.Sleep(20 * time.Millisecond) {
+		if b, err := os.ReadFile(started); err == nil {
+			if string(b) != run+" run\n" {
+				t.Fatalf("started %q", b)
+			}
+			return
+		}
+	}
+	t.Fatal("persona-hub was not started")
+}
+
 // standInHub makes pid this process's parent, as the hub is the watchdog's, until gone is closed.
 func standInHub(t *testing.T, pid int, gone <-chan struct{}) {
 	old := hubIsParent

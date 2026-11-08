@@ -19,6 +19,7 @@ import (
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/secretkey"
+	"github.com/nwverse/persona/server/internal/textfmt"
 )
 
 // The model configuration (docs/assistant/model-config.md) is the assistant's: the four categories' records (settings
@@ -185,6 +186,8 @@ type modelsState struct {
 	cacheMu sync.Mutex
 	cacheAt map[string]time.Time
 	have    map[string]map[string]bool // machine \x00 launcher → its models (ids and what aliases resolve to)
+
+	customMu sync.Mutex // one change of the remembered typed ids at a time (models_custom.go)
 
 	zshrcMu sync.Mutex
 	zshrc   map[string][]proto.Launcher // machine → its rc-file launchers (nil: not asked since the start)
@@ -893,7 +896,7 @@ func (s *Service) modelConfigRoutes() {
 		}
 		// The extensions' own (model_rpc.go), after the categories: each with its own record, like Lark /agent.
 		for _, x := range s.modelExtensions(ctx) {
-			p, err := s.modelPurpose(ctx, assistantwire.ExtensionPurposePrefix+x.ID, providers)
+			p, err := s.modelPurpose(ctx, assistantwire.ExtensionPurposePrefix+x.StorageKey(), providers)
 			if err != nil {
 				apierr.Write(w, 500, err)
 				return
@@ -960,6 +963,12 @@ func (s *Service) modelConfigRoutes() {
 			apierr.Write(w, 400, err)
 			return
 		}
+		if p.Kind == "launcher" { // passed to an agent as --model: a model id (#1644)
+			if err := checkModelID(b.Model); err != nil {
+				apierr.Write(w, 400, err)
+				return
+			}
+		}
 		base, _, err := s.modelBaseline(ctx, p)
 		if err != nil {
 			apierr.Write(w, 500, err)
@@ -1016,8 +1025,16 @@ func (s *Service) applyModel(ctx context.Context, id string, params map[string]a
 	if name, _ := params["launcher"].(string); name != "" && launcherProvider(name) != b.Provider {
 		b = ModelBinding{Provider: launcherProvider(name), Runtime: b.Runtime}
 	}
-	if model, _ := params["model"].(string); model != "" {
-		b.Model = model
+	if b.Model != "" && strings.HasPrefix(b.Provider, "launcher.") && !proto.ValidModelID(b.Model) {
+		// Configured before a launcher's model was held to the model id rule (#1644; Model configuration refuses it as
+		// an edit now): the launcher's own default, rather than every run of this purpose failing, the main chat's too.
+		s.logf("model config %s: %q is no model id, running %s's default", id, textfmt.Clip(b.Model, 80), b.Provider)
+		b.Model = ""
+	}
+	if model, _ := params["model"].(string); strings.TrimSpace(model) != "" {
+		b.Model = strings.TrimSpace(model) // this call's pick: finishModel refuses one that is no model id
+	} else {
+		delete(params, "model") // none picked ("" or blanks): the binding's
 	}
 	if effort, _ := params["effort"].(string); effort != "" {
 		b.Effort = effort
@@ -1033,8 +1050,10 @@ func (s *Service) applyPickedModel(ctx context.Context, params map[string]any) e
 		return nil
 	}
 	b := ModelBinding{Provider: launcherProvider(name)}
-	if m, _ := params["model"].(string); m != "" {
-		b.Model = m
+	if m, _ := params["model"].(string); strings.TrimSpace(m) != "" {
+		b.Model = strings.TrimSpace(m)
+	} else {
+		delete(params, "model") // the launcher's own default
 	}
 	if e, _ := params["effort"].(string); e != "" {
 		b.Effort = e
@@ -1049,6 +1068,8 @@ func (s *Service) applyPickedModel(ctx context.Context, params map[string]any) e
 }
 
 // finishModel puts a final binding into params: the launcher name, the model / effort set, the execution fingerprint.
+// A launcher's model goes to the agent as --model, so it has to be a model id (#1644): a call's own pick that is not
+// one is refused here (a configured one that is not was dropped by applyModel).
 func (s *Service) finishModel(ctx context.Context, id string, params map[string]any, b ModelBinding) error {
 	name, ok := strings.CutPrefix(b.Provider, "launcher.")
 	if !ok {
@@ -1057,6 +1078,9 @@ func (s *Service) finishModel(ctx context.Context, id string, params map[string]
 			return nil
 		}
 		return i18n.Err("assistant-models.err_not_launcher")
+	}
+	if err := checkModelID(b.Model); err != nil {
+		return err
 	}
 	for _, provider := range s.storedLaunchers(ctx) {
 		// A direct API provider speaking Messages starts Claude on its gateway (node, contract #2455 §2); Responses

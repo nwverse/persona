@@ -9,13 +9,13 @@ import (
 	"fmt"
 	"net/http"
 	"net/netip"
-	"regexp"
 	"slices"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/nwverse/persona/server/internal/db"
+	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/link"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/screen"
@@ -41,6 +41,7 @@ type principal struct {
 	ID          string
 	Name        string
 	Role        string
+	Kind        string // persisted enrollment kind; diagnostic fallback only
 	PairHash    string
 	PairExpires time.Time
 	Machine     string // roleLink, roleLinkPair: the machine in hub.json it is bound to; rolePeer: the peer's hub_id
@@ -159,7 +160,7 @@ func (h *Hub) authenticate(ctx context.Context, tok string) (principal, bool) {
 		}
 		c = cachedToken{at: time.Now(), used: time.Now()}
 		if dt != nil {
-			c.p = &principal{ID: dt.ID, Name: dt.Name, Role: dt.Role, Machine: dt.MachineID}
+			c.p = &principal{ID: dt.ID, Name: dt.Name, Role: dt.Role, Kind: dt.Kind, Machine: dt.MachineID}
 		}
 		t.mu.Lock()
 		if c.p != nil && t.isRevoked(c.p.ID) {
@@ -230,14 +231,14 @@ func (h *Hub) authenticate(ctx context.Context, tok string) (principal, bool) {
 // GET is not harmless for being a GET (one reads any file of a computer, one runs a launcher), so none gets through for
 // its method. Something new the watch needs goes here.
 var (
-	answerReads = regexp.MustCompile(`^/api/v1/(machines|sessions|sessions/archived|interactions|inbox|workspace-board|workspaces|sessions/[^/]+/[^/]+/items|` +
+	answerReads = lazyre.New(`^/api/v1/(machines|sessions|sessions/archived|interactions|inbox|workspace-board|workspaces|sessions/[^/]+/[^/]+/items|` +
 		`extensions/-/(widgets|shortcuts))$`)
 	// The watch draws extensions' widgets on its faces and runs their shortcuts (docs/extensions/extensions.md "System-level places").
-	answerWrites = regexp.MustCompile(`^/api/v1/(interactions/[^/]+/(resolve|choose)|sessions/[^/]+/[^/]+/(messages|seen|interrupt)|` +
+	answerWrites = lazyre.New(`^/api/v1/(interactions/[^/]+/(resolve|choose)|sessions/[^/]+/[^/]+/(messages|seen|interrupt)|` +
 		`inbox/[^/]+/(done|reply|draft|suggestion)|extensions/[^/]+/-/(widget|shortcut)/[^/]+)$`)
-	answerPuts = regexp.MustCompile(`^/api/v1/devices/[^/]+/widgets$`)
+	answerPuts = lazyre.New(`^/api/v1/devices/[^/]+/widgets$`)
 	// answerKey is a key the watch can press on a screen card it could not read: a menu's number, Esc, Return.
-	answerKey = regexp.MustCompile(`^([1-9]|esc|enter)$`)
+	answerKey = lazyre.New(`^([1-9]|esc|enter)$`)
 )
 
 func allowed(p principal, method, path string) bool {

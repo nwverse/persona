@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
-	"regexp"
 	"slices"
 	"strings"
 	"sync"
@@ -14,6 +13,7 @@ import (
 	"github.com/nwverse/persona/server/internal/apierr"
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/i18n"
+	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/rpc"
 )
@@ -496,7 +496,8 @@ func (s *Service) readinessModel(ctx context.Context, lang i18n.Lang, d Device, 
 			ev = append(ev, readinessEvidence{at: main.UpdatedAt, ok: true})
 		}
 	}
-	if h, ok := s.launcherHealth(ctx, d.ID, launcher); ok && time.Since(h.CheckedAt) < healthStale && h.State != "" {
+	// A launcher only the terminal cannot run says nothing of the main conversation, which runs in the login shell.
+	if h, ok := s.launcherHealth(ctx, d.ID, launcher); ok && time.Since(h.CheckedAt) < healthStale && h.State != "" && h.Kind != errKindNotInTerminal {
 		if h.State == healthOK {
 			ev = append(ev, readinessEvidence{at: h.CheckedAt, ok: true})
 		} else if missingCode(h.Error) == "" { // a start that found no claude is the claude step's
@@ -595,7 +596,7 @@ func (s *Service) readinessClaude(ctx context.Context, lang i18n.Lang, d Device,
 		}
 		s.clearStart(ctx, *st)
 	}
-	if h, ok := s.launcherUnusable(ctx, d.ID, launcher); ok && !modelOK {
+	if h, ok := s.launcherUnusable(ctx, d.ID, launcher); ok && !modelOK && h.Kind != errKindNotInTerminal {
 		switch missingCode(h.Error) { // the launcher's health record: its start or check found no such command
 		case proto.CodeClaudeMissing:
 			return problem(proto.CodeClaudeMissing, "install_claude")
@@ -914,7 +915,7 @@ const deviceNodeDoctor = "node.doctor"
 
 // doctorVersion is the version at the start of the claude-version check's detail ("2.1.308, supports --plugin-dir");
 // none when it could not read one.
-var doctorVersion = regexp.MustCompile(`^\s*v?(\d+\.\d+\.\d+[0-9A-Za-z.+-]*)`)
+var doctorVersion = lazyre.New(`^\s*v?(\d+\.\d+\.\d+[0-9A-Za-z.+-]*)`)
 
 // missingCode is the start refusal's code a launcher error reads as (Claude Code or the command missing), "" else.
 func missingCode(text string) string {

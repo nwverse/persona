@@ -1,6 +1,7 @@
 package persona.core.hub
 
 import persona.core.contracts.Endpoint
+import persona.core.contracts.Hello
 import persona.core.contracts.HubScope
 import persona.core.contracts.JsonCodec
 import persona.core.contracts.SessionKey
@@ -11,6 +12,8 @@ import java.net.InetAddress
 import java.security.MessageDigest
 import java.util.Base64
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.ConcurrentLinkedQueue
+import kotlin.coroutines.CoroutineContext
 import kotlinx.coroutines.*
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.first
@@ -29,6 +32,80 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class HttpMessageTransportTest {
+    @Test fun negotiatedCapabilitiesDoNotWaitForAnEventConsumer() = runBlocking {
+        assertHelloCapabilities(listOf("client_ops"), expected = true, attachAfterHello = false)
+    }
+
+    @Test fun transportAttachedAfterHelloRetainsNegotiatedCapabilities() = runBlocking {
+        assertHelloCapabilities(listOf("client_ops"), expected = true, attachAfterHello = true)
+    }
+
+    @Test fun absentNegotiatedCapabilityIsNotInvented() = runBlocking {
+        assertHelloCapabilities(emptyList(), expected = false, attachAfterHello = false)
+    }
+
+    private suspend fun assertHelloCapabilities(
+        features: List<String>, expected: Boolean, attachAfterHello: Boolean,
+    ) = coroutineScope {
+        val certificate = HeldCertificate.Builder().commonName("example.com").build()
+        val fingerprint = Base64.getUrlEncoder().withoutPadding().encodeToString(
+            MessageDigest.getInstance("SHA-256").digest(certificate.certificate.publicKey.encoded))
+        val enteredReady = CompletableDeferred<Unit>()
+        val ready = CompletableDeferred<Unit>()
+        val pending = ConcurrentLinkedQueue<Runnable>()
+        // Deliberately never schedule the transport's event collector before
+        // assertions. Capability visibility must not depend on its dispatcher.
+        val dispatcher = object : CoroutineDispatcher() {
+            override fun dispatch(context: CoroutineContext, block: Runnable) { pending.add(block) }
+        }
+        val jobs = CoroutineScope(SupervisorJob() + dispatcher)
+        MockWebServer().use { server ->
+            server.useHttps(HandshakeCertificates.Builder().heldCertificate(certificate).build().sslSocketFactory(), false)
+            server.dispatcher = object : Dispatcher() {
+                override fun dispatch(request: RecordedRequest): MockResponse = when (request.requestUrl!!.encodedPath) {
+                    "/api/v1/health" -> MockResponse().setBody("""{"ok":true,"hub_id":"test-hub"}""")
+                    "/api/v1/ws" -> MockResponse().withWebSocketUpgrade(object : WebSocketListener() {
+                        override fun onOpen(webSocket: WebSocket, response: Response) {
+                            webSocket.send(buildJsonObject {
+                                put("type", "hello")
+                                put("hub_id", "test-hub")
+                                putJsonArray("features") { features.forEach { add(it) } }
+                            }.toString())
+                        }
+                    })
+                    else -> MockResponse().setResponseCode(404)
+                }
+            }
+            server.start(InetAddress.getLoopbackAddress(), 0)
+            val origin = server.url("/").newBuilder().host(InetAddress.getLoopbackAddress().hostAddress!!).build().toString()
+            lateinit var transport: HttpMessageTransport
+            OkHttpHubConnection(HubConnectionConfig("test-hub", fingerprint, "test-token",
+                listOf(Endpoint(origin, "lan")), "test"), HubNetwork("initial", available = false),
+                onReady = { enteredReady.complete(Unit); ready.await(); transport.onReady() }).use { connection ->
+                try {
+                    val pairing = HubScope("test-hub", "generation")
+                    val observedHello = async(start = CoroutineStart.UNDISPATCHED) {
+                        connection.events.first { it is Hello }
+                    }
+                    if (!attachAfterHello) {
+                        transport = HttpMessageTransport(pairing, connection, "test-token", jobs)
+                        assertFalse(transport.supportsClientOps)
+                    }
+                    connection.updateNetwork(HubNetwork("online"))
+                    withTimeout(5000) { enteredReady.await(); observedHello.await() }
+                    if (attachAfterHello) transport = HttpMessageTransport(pairing, connection, "test-token", jobs)
+                    assertEquals(expected, transport.supportsClientOps)
+                    assertFalse(transport.readyToSend.value)
+                } finally {
+                    ready.complete(Unit)
+                    jobs.cancel()
+                    // Drain canceled continuations, not an active event consumer.
+                    while (true) { (pending.poll() ?: break).run() }
+                }
+            }
+        }
+    }
+
     @Test fun waitsForCatchUpPreservesOperationIdentityAndReturnsDeliveryEvidence() = runBlocking {
         val certificate = HeldCertificate.Builder().commonName("example.com").build()
         val fingerprint = Base64.getUrlEncoder().withoutPadding().encodeToString(

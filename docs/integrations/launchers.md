@@ -18,7 +18,7 @@ Code: `server/internal/assistant/models_launchers.go` (owned by the manager; hub
 
 ## Sync state (#2854)
 
-`GET /api/v1/launchers` (handled by the assistant process, `assistant/models_launchers.go`; the hub gives each computer's Claude version as `claude_version` in `devices.list`) waits at most 10 seconds per computer (`launcherSyncTimeout`), so one slow or disconnected computer doesn't hold up the page. The node's list script isn't interrupted when the hub gives up: it finishes into the cache, ready for the next time the page opens.
+`GET /api/v1/launchers` (handled by the assistant process, `assistant/models_launchers_routes.go`; the hub gives each computer's Claude version as `claude_version` in `devices.list`) waits at most 10 seconds per computer (`launcherSyncTimeout`), so one slow or disconnected computer doesn't hold up the page. The node's list script isn't interrupted when the hub gives up: it finishes into the cache, ready for the next time the page opens.
 The answer adds `sync`: one item per computer, with `state` `ok` / `offline` / `timeout` / `error` (`error` carries the reason), plus `shell`, `rc_file` and the last successful sync time `synced_at`
 (settings `launchers.zshrc.meta`). A computer that didn't answer still shows its last list, but the entries' `stale` names that computer; every client marks them “Not updated” and explains why in the per-computer group.
 An entry's `rc_files` are the files it came from (`source: "zshrc"` only; older nodes don't report it, so it is `~/.zshrc`).
@@ -28,6 +28,29 @@ An entry's `rc_files` are the files it came from (`source: "zshrc"` only; older 
 The node runs the list script and the launchers in an interactive shell (`loginShellProgram`): zsh when there is one, but bash when the user's login shell is bash (`$SHELL`, or `/etc/passwd` under systemd, where it is unset) and there is no `~/.zshrc`;
 always bash without zsh (Git Bash on Windows). Bash runs as `bash -ic` and reads `~/.bashrc`, not `~/.bash_profile` / `~/.profile`: aliases kept there aren't listed.
 Bash has no zsh `(z)` / `(Q)`, and macOS's bundled bash 3.2 has no `BASH_ALIASES`, so under bash the script prints `alias -p`, and the node splits words and strips quotes by the shell's rules itself (nothing expanded or run, `node/launchers_shell.go`) before handing them to the same parser.
+
+### The terminal's shell is another environment (#1642)
+
+The node **lists** launchers, and runs "Test availability", the launcher health checks, probes and repairs, in its own login shell (`loginShellProgram -ic`). A start **types** the launcher into a new herdr tab, whose shell is whatever herdr opens there. When the two read different startup files, a launcher the list shows does not exist where it runs:
+
+- herdr's panes run inside a container (sharing the home directory) whose `~/.bashrc` detects the container and returns early, before the launchers are defined;
+- the node lists from zsh (`~/.zshrc`, zsh installed and a `~/.zshrc` there) while the account's login shell, and so the tab, is bash;
+- herdr's `[terminal] default_shell`, or a herdr server started outside the node with another `$SHELL`;
+- a bash login tab reads `~/.bash_profile` / `~/.profile`, which does not source `~/.bashrc`;
+- a Persona-managed launcher's `personad` (an absolute path) or `claude` is not visible inside the terminal's environment.
+
+The tab's shell answers within a second with its own line (`bash: <launcher>: command not found`, `zsh: command not found: <launcher>`, `sh: 1: <launcher>: not found`, `fish: Unknown command: <launcher>`, `…: No such file or directory`, `…: Permission denied`). The node reads that line while it waits for claude (`node/shellmiss.go`; only after the command it typed, never the echoed command itself, older scrollback, or claude's own output) and ends the start right away, closing the tab, with `launcher_missing` (or `claude_missing` when the launcher ran but the tab's PATH has no claude) and `where: "terminal"`.
+The hub says it in the user's language: which shell the tab opens, that it has no such command, and which shell and rc file the launcher list came from (`docs/protocol/protocol.md` "Errors"). Lines about other commands (rc noise, a `PROMPT_COMMAND`) do not end the start; a start that then times out names the last such line instead of guessing at a busy machine. Shells and locales whose lines are not recognized still wait for the timeout.
+A few lines need care: dash, ksh and busybox say `…: <path>: not found` of a missing path, which counts as a missing file like bash's `No such file or directory` (a managed launcher's `personad` the terminal cannot see); `personad launch` prints its `claude not found in PATH …` through `log.Fatal`, with the date and time in front; fish follows an error inside a function with a backtrace (`in function 'cc' with arguments '--session-id …'`) that repeats the session id but is no echo of the command.
+A launcher the node does not list either (removed from the rc file, a stale name from an old picker or plan) ends the start the same way but as plain `launcher_missing`, without `where`: it is gone from the login shell too, so it is neither worded nor kept as the terminal's problem.
+
+To fix it, make the launcher exist where the terminal's shell reads it:
+
+- define it above the early `return` of the rc file, or in a file both environments source (`~/.config/launchers.sh` sourced from `~/.zshrc` and `~/.bashrc`);
+- make the shell herdr opens the one the node lists from (the login shell, or herdr's `default_shell`), or have `~/.bash_profile` source `~/.bashrc`;
+- or add it in Persona as a model provider ("Running Persona-managed launchers" below): nothing then depends on rc files, as long as the terminal sees the node's `personad` and `claude`.
+
+Launcher health keeps such a launcher apart (`not_in_terminal`, `docs/server/launcher-health.md`): the login shell's check passes, so only a start with it that works clears it.
 
 ## Detecting launchers in ~/.zshrc (`launcherScript` in `node/launchers.go`)
 
@@ -293,6 +316,9 @@ When choosing a model for a new Agent (`GET /api/v1/machines/{mid}/launchers/{na
 but all preset models (`presetModels` in `assistant/models_presets.go`). Persona-managed entries use their stored preset; entries without one (manually added before extension presets existed) and ~/.zshrc entries
 match presets by gateway address (ignoring case and trailing `/`). Only `kind: launcher` presets and Claude Code launchers are eligible. Same-name entries already in `/model` are not duplicated;
 added entries use the preset name as `description`. One launcher per gateway can therefore select all its models, without a launcher per model; the picker follows updates to the extension's `dynamic_models`.
+A Persona-managed provider's own `models` (the field above) are listed the same way, after the `/model` entries and before the preset's,
+with the provider's display name as `description`: Claude Code's `/model` shows only its tier aliases, so a gateway's other models could not be
+picked otherwise. They also count for the send check (`launcherHasModel`), so a model picked from them is not dropped from a message.
 
 - iOS: `LauncherPresetModel` (`apple/Persona/Views/Settings/LauncherPresetModel.swift`, unit tests `LauncherPresetModelTests`), `LauncherPresetViews.swift`;
   DEBUG `-tab settings -openModelLaunchers YES -openLauncherEditor preset` opens From Extension directly (`-openLauncherEditor YES` opens the add page).

@@ -48,15 +48,32 @@ type sentSession struct {
 // encodeSessions encodes each session of list (the same bytes json.Marshal gives) into one buffer, each raw a slice
 // of it: one allocation for the list rather than a copy of every session and then a clone of its bytes, what a push
 // spent most of its memory on. The raws share the buffer and are only read from then on.
-func encodeSessions(list []proto.Session) []sentSession {
+func encodeSessions(list []proto.Session) []sentSession { return encodeRows(list, false, "") }
+
+// encodeStamped is encodeSessions of list as stamped with manager (stamped), without the copy of the list: a session
+// that names another manager is copied alone, into one scratch session, to be encoded.
+func encodeStamped(list []proto.Session, manager string) []sentSession {
+	return encodeRows(list, true, manager)
+}
+
+func encodeRows(list []proto.Session, stamp bool, manager string) []sentSession {
 	out := make([]sentSession, 0, len(list))
 	var buf bytes.Buffer
 	enc := json.NewEncoder(&buf) // escapes HTML as json.Marshal does
 	type span struct{ start, end int }
 	spans := make([]span, 0, len(list))
+	var scratch *proto.Session
 	for i := range list {
 		start := buf.Len()
-		if err := enc.Encode(&list[i]); err != nil {
+		s := &list[i]
+		if stamp && s.Manager != manager {
+			if scratch == nil {
+				scratch = new(proto.Session)
+			}
+			*scratch = *s
+			scratch.Manager, s = manager, scratch
+		}
+		if err := enc.Encode(s); err != nil {
 			buf.Truncate(start)
 			spans = append(spans, span{-1, -1})
 			continue
@@ -202,14 +219,18 @@ func sameSessions(a, b []sentSession) bool {
 // they last got (an interaction shown, a session seen, a node pass that changed nothing the app reads), a delta app
 // what changed for it. The whole-list message (~150 KB) is put together only when the list changed and an older app
 // is connected, once for all of them. The lock is held until everything is queued, so what was recorded is what the
-// apps got last.
+// apps got last. list is the machine's as kept (keptSessions) or as decorated: the apps get it stamped with its
+// manager either way, and it is never changed.
 func (h *Hub) broadcastSessions(m *Machine, list []proto.Session) {
+	owner := h.machineOwner(m.cfg.ID)
 	shown := h.shown(m.cfg.ID, list)
-	enc := encodeSessions(shown)
+	enc := encodeStamped(shown, owner)
 	h.sessionsMu.Lock()
 	defer h.sessionsMu.Unlock()
 	before := h.listCache.index.Revision()
-	h.indexSessionsLocked(m.cfg.ID, shown, enc)
+	if h.listCache.machines != nil { // a paginated reader: its index reads the sessions themselves
+		h.indexSessionsLocked(m.cfg.ID, stamped(shown, owner), enc)
+	}
 	revision := h.listCache.index.Revision()
 	prev, sent := h.sessionsSent[m.cfg.ID]
 	changed := !sent || !sameSessions(prev, enc)
@@ -250,7 +271,7 @@ func (h *Hub) broadcastSessions(m *Machine, list []proto.Session) {
 func (h *Hub) snapshotSessions(c *client, m *Machine) {
 	h.sessionsMu.Lock()
 	defer h.sessionsMu.Unlock()
-	shown := forDelta(encodeSessions(h.shown(m.cfg.ID, h.decorated(m))), nil)
+	shown := forDelta(encodeStamped(h.shown(m.cfg.ID, m.keptSessions()), h.machineOwner(m.cfg.ID)), nil)
 	have := make(map[string][]byte, len(shown))
 	for _, s := range shown {
 		have[s.id] = s.raw

@@ -245,7 +245,7 @@ struct ShellComposerBar<Attach: View, Modes: View>: View {
     /// An icon in the text area's corner, never competing with the model and send controls below it.
     private var enlargeButton: some View {
         Button(action: enlarge) {
-            Image(systemName: Theme.Icon.expandMessage)
+            ThemedIcon(Theme.Icon.expandMessage)
                 .font(Theme.Font.secondary)
                 .foregroundStyle(ink)
                 .scaledFrame(width: Theme.Size.tapTarget, height: Theme.Size.tapTarget)
@@ -298,7 +298,7 @@ struct ShellComposerBar<Attach: View, Modes: View>: View {
 
     private var plus: some View {
         Menu { attach() } label: {
-            Image(systemName: Theme.Icon.add)
+            ThemedIcon(Theme.Icon.add)
                 .font(Theme.Font.title)
                 .fontWeight(.regular)
                 .foregroundStyle(ink)
@@ -326,7 +326,12 @@ struct ShellComposerBar<Attach: View, Modes: View>: View {
                     .foregroundStyle(AppStyle.current.usesBeautifulUI ? theme.colors.ink2 : Color.secondary)
                     .fixedSize()
             }
+            // Claude Code's ultracode on, or a Codex thread at "ultra" (#1307): read out with the title (`spoken`).
+            if title.mark != nil {
+                UltracodeMark(font: Theme.Font.labelStrong, spoken: nil).transition(.opacity)
+            }
         }
+        .animation(UltracodeMark.motion, value: title.mark)
         .lineLimit(1)
         .padding(.leading, Theme.Space.s)
         .padding(.trailing, Theme.Space.xs)
@@ -468,7 +473,7 @@ private struct ComposerPageEditor: View {
                         commitTyped()
                         collapse()
                     } label: {
-                        Image(systemName: Theme.Icon.collapseMessage)
+                        ThemedIcon(Theme.Icon.collapseMessage)
                     }
                     .accessibilityLabel("Collapse the message box")
                     .accessibilityIdentifier("composer-page-collapse")
