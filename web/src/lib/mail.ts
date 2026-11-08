@@ -98,6 +98,31 @@ export function replyDraft(accountID: string, msg: MailMessage): ComposeDraft {
   };
 }
 
+// Generated fields use bare addresses: display names containing separators cannot round-trip through the composer.
+function recipientEmail(email?: string): string {
+  const value = email?.trim() ?? "";
+  return EMAIL.test(value) && !/[,;\uFF0C\uFF1B]/.test(value) ? value : "";
+}
+
+/** Reply to visible participants only, once each. Without the receiving identity, wait rather than include self.
+ * A self-sent message uses its other recipients; if only Cc remains, promote the first one to To. */
+export function replyAllDraft(accountID: string, msg: MailMessage, receivingEmail?: string): ComposeDraft | null {
+  const mine = recipientEmail(receivingEmail);
+  if (!mine) return null;
+  const seen = new Set([mine.toLowerCase()]);
+  const keep = (addresses: (MailAddress | undefined)[]) => addresses.flatMap((address) => {
+    const email = recipientEmail(address?.email);
+    const key = email.toLowerCase();
+    if (!email || seen.has(key)) return [];
+    seen.add(key);
+    return [email];
+  });
+  const to = keep([msg.from, ...(msg.to ?? [])]);
+  const cc = keep(msg.cc ?? []);
+  if (!to.length && cc.length) to.push(cc.shift()!);
+  return { ...replyDraft(accountID, msg), to: to.join(", "), cc: cc.join(", ") };
+}
+
 /** POST /api/v1/mail/send's body. The hub takes References as one string of ids (mail.SendRequest). */
 export function sendBody(d: ComposeDraft) {
   const refs = (d.references ?? []).filter(Boolean);
@@ -151,17 +176,19 @@ export function loadMailAccounts(manager?: string): Promise<MailAccount[]> {
  *  the hub's answer when it comes. */
 export function useMailAccounts(): MailAccount[] {
   const manager = useItemManager();
-  const [list, setList] = useState(() => known.get(accountsKey(manager)) ?? []);
+  const key = accountsKey(manager);
+  const [state, setState] = useState(() => ({ key, list: known.get(key) ?? [] }));
   useEffect(() => {
     let live = true;
     loadMailAccounts(manager)
-      .then((a) => live && setList(a))
+      .then((list) => live && setState({ key, list }))
       .catch(() => {});
     return () => {
       live = false;
     };
-  }, [manager]);
-  return list;
+  }, [manager, key]);
+  // A same-id account under another manager is not evidence of this item's receiving address.
+  return state.key === key ? state.list : known.get(key) ?? [];
 }
 
 /** Tests only. */

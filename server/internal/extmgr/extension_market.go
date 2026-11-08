@@ -221,10 +221,41 @@ func (h *Manager) seedOfficialMarket(ctx context.Context) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	ms, st := h.marketsState(), h.marketStore()
+	rotated := ""
+	for _, s := range ms.byID {
+		if !extension.IsOfficialMarket(s.rec.Spec) || s.rec.SigningKey == "" || s.rec.SigningKey == o.SigningKey ||
+			!slices.Contains(o.PreviousSigningKeys, s.rec.SigningKey) {
+			continue
+		}
+		key, err := extension.ParseSigningKey(o.SigningKey)
+		if err != nil {
+			return "", err
+		}
+		if !found || done.Spec != o.Spec {
+			registered := done
+			registered.Spec = o.Spec
+			if err := h.store.PutSetting(ctx, officialMarketKey, registered); err != nil {
+				return "", err
+			}
+			done, found = registered, true
+		}
+		rec := s.rec
+		rec.SigningKey = o.SigningKey
+		rec.Signature = extension.MarketSignature{State: extension.SigKeyChanged, KeyID: extension.KeyID(key)}
+		rec.Error = i18n.T(h.contextLang(ctx), "hub-extension_market.pin_rotated_pending")
+		if err := st.PutExtensionMarket(ctx, rec); err != nil {
+			return "", err
+		}
+		s.rec, s.index = rec, nil
+		rotated = rec.ID
+	}
+	if rotated != "" {
+		return rotated, nil
+	}
 	if found && done.Spec == o.Spec {
 		return "", nil
 	}
-	ms, st := h.marketsState(), h.marketStore()
 	mark := func() error { done.Spec = o.Spec; return h.store.PutSetting(ctx, officialMarketKey, done) }
 	for _, s := range ms.byID {
 		if extension.IsOfficialMarket(s.rec.Spec) {

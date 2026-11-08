@@ -10,11 +10,22 @@ import { clearFeedCache } from "./feed-cache";
 
 let ownerToken: string | undefined;
 let ownerGeneration = 0;
+const credentialListeners = new Set<(owner: string) => void>();
 /** Opaque in-memory auth partition; never expose credentials in tree keys or persisted drafts. */
 export function credentialOwner(): string {
   const token = getToken();
-  if (token !== ownerToken) { ownerToken = token; ownerGeneration++; }
+  if (token !== ownerToken) {
+    ownerToken = token;
+    ownerGeneration++;
+    credentialListeners.forEach((listener) => listener(`credential-${ownerGeneration}`));
+  }
   return `credential-${ownerGeneration}`;
+}
+
+/** Retire work when pairing or sign-out replaces its credential, including a return to the same token. */
+export function onCredentialChange(listener: (owner: string) => void): () => void {
+  credentialListeners.add(listener);
+  return () => { credentialListeners.delete(listener); };
 }
 
 export function getToken(): string {
@@ -105,6 +116,7 @@ export async function api<T>(path: string, init: RequestInit & { json?: unknown;
 }
 
 async function request<T>(path: string, init: RequestInit & { json?: unknown; token?: string }): Promise<T> {
+  const owner = init.token === undefined ? credentialOwner() : undefined;
   const headers = new Headers(init.headers);
   headers.set("Authorization", `Bearer ${init.token ?? getToken()}`);
   // the hub writes its error and status text in the interface language (docs/protocol/i18n.md "Protocol")
@@ -141,7 +153,7 @@ async function request<T>(path: string, init: RequestInit & { json?: unknown; to
   }
   if (!res.ok) {
     requestCrumb(method, path, res.status);
-    if (res.status === 401 && init.token === undefined) onUnauthorized();
+    if (res.status === 401 && owner !== undefined && owner === credentialOwner()) onUnauthorized();
     const msg = typeof data.error === "string" && data.error ? data.error : `HTTP ${res.status}`;
     throw new ApiError(res.status, msg, data, isJson, res.headers?.get("X-Request-Id") ?? undefined);
   }
