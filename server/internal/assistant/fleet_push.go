@@ -219,6 +219,12 @@ func (s *Service) notifyFinished(machine, id string, gen int) {
 		// Only the completion decision uses this copy; session state and reports stay intact.
 		sess.Background = append([]proto.BackgroundTask{{ID: "completion-children", Kind: "agent"}}, sess.Background...)
 	}
+	if ok && usageLimitWaiting(sess, time.Now()) {
+		// A usage limit stopped it until the reset, whatever the switches: the work did not finish, and nothing is to be
+		// done before then (the CLI goes on by itself, the manager continues it, or the user does). The turn stays
+		// followed, so the end after the reset is the one pushed, timed from this start.
+		return
+	}
 	if ok && !sess.Assistant && sess.Status != proto.StatusWorking {
 		s.kbAgentDone(machine, sess)
 	}

@@ -200,6 +200,12 @@ func (s *Service) taskTurnEnded(ctx context.Context, machine, sid string) {
 		if w := c.Work; w != nil && w.Phase == proto.WorkBlocked && w.On == proto.WaitTransient && w.WakeAt != nil {
 			return // "Continue" goes by itself (agents_work.go): the receipt waits for how that ends
 		}
+		if reset, ok := usageLimitReset(c); ok && usageLimitWaiting(c, time.Now()) {
+			// A usage limit stopped it until the reset (usage_limit.go): it goes on then, and the receipt waits for how
+			// that ends. Looked at again once the wait is over, so a turn nothing took up still gets its receipt.
+			s.taskTurnEndedAfter(ctx, machine, sid, reset.Add(limitResumeGrace))
+			return
+		}
 		if c.UpdatedAt.After(last.UpdatedAt) {
 			last = c
 		}
@@ -318,6 +324,13 @@ func (s *Service) taskTurnEnded(ctx context.Context, machine, sid string) {
 	}
 	s.taskReport(t, reportDone, name, [2]string{last.MachineID, last.SessionID}, text, nil)
 	s.autoFinishTask(t, since, worked) // the work may be finished: then the todo is done (done.go)
+}
+
+// taskTurnEndedAfter has taskTurnEnded look at sid's task again at at. What happened meanwhile decides as ever: a turn
+// that went on and ended had its own receipt, one that works again has none yet.
+func (s *Service) taskTurnEndedAfter(ctx context.Context, machine, sid string, at time.Time) {
+	ctx = context.WithoutCancel(ctx)
+	time.AfterFunc(time.Until(at), func() { s.taskTurnEnded(ctx, machine, sid) })
 }
 
 // routeToTask sends text straight to the agent of task todoID that most needs it, and keeps it in the conversation as
