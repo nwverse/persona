@@ -1,5 +1,6 @@
 import json
 import os
+import re
 from pathlib import Path
 import subprocess
 import sys
@@ -36,8 +37,79 @@ class PathTests(unittest.TestCase):
         self.assertTrue(all(paths.select([".github/workflows/ci.yml"]).values()))
         self.assertTrue(all(paths.select([], True).values()))
 
+    def test_dispatch_base_does_not_need_pr_payload(self):
+        self.assertEqual(paths.resolve_base(), "origin/main")
+        self.assertEqual(paths.resolve_base(event={"inputs": {"lanes": "auto"}}), "origin/main")
+        self.assertEqual(paths.resolve_base(event={"pull_request": {"base": {"sha": "pr-base"}}}), "pr-base")
+        self.assertEqual(paths.resolve_base(event={"merge_group": {"base_sha": "queue-base"}}), "queue-base")
+        self.assertEqual(paths.resolve_base("override", {"pull_request": {"base": {"sha": "ignored"}}}), "override")
+
+    def test_explicit_lanes_and_invalid_values(self):
+        self.assertTrue(all(paths.select_lanes([], "all").values()))
+        selected = paths.select_lanes(["apple/Shared/Hub.swift"], "server, web")
+        self.assertEqual({name for name, enabled in selected.items() if enabled}, {"server", "web"})
+        for value in ("", "typo", "auto,web", "image", "web,"):
+            with self.assertRaises(ValueError, msg=value):
+                paths.select_lanes([], value)
+
+    def test_local_cli_without_github_environment(self):
+        environment = {key: value for key, value in os.environ.items() if not key.startswith("GITHUB_")}
+        command = [sys.executable, str(Path(__file__).with_name("paths.py"))]
+        result = subprocess.run(command + ["--base", "HEAD"], env=environment, capture_output=True, text=True, timeout=30)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(json.loads(result.stdout), paths.select([]))
+        result = subprocess.run(command + ["--print-base", "--base", "HEAD"], env=environment, capture_output=True, text=True, timeout=30)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(len(result.stdout.strip()), 40)
+        result = subprocess.run(command + ["--lanes", "server,web"], env=environment, capture_output=True, text=True, timeout=30)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(json.loads(result.stdout), paths.select_lanes([], "server,web"))
+
+    def test_heavy_lanes_are_explicitly_manual_without_hiding_failures(self):
+        selected = paths.select_lanes([], "all")
+        for event in ("pull_request", "merge_group"):
+            automatic = paths.apply_event_policy(selected, event)
+            self.assertEqual({name for name, needed in automatic.items() if needed}, {"web", "runtimes"})
+        self.assertTrue(all(paths.apply_event_policy(selected, "workflow_dispatch").values()))
+        self.assertTrue(all(selected.values()))
+
+    def test_unrelated_client_screens_do_not_start_server(self):
+        for filename in ("android/feature/settings/Screen.kt", "android/app/build.gradle.kts", "apple/Mac/Screen.swift"):
+            self.assertFalse(paths.select([filename])["server"], filename)
+        for filename in ("android/core/contracts/Message.kt", "apple/Shared/Models.swift", "apple/Persona/Views/Interactions/InteractionViews.swift"):
+            self.assertTrue(paths.select([filename])["server"], filename)
+
+    def test_shard_implementation_changes_select_their_lane(self):
+        self.assertTrue(paths.select(["scripts/ci/server-shards.py"])["server"])
+        self.assertTrue(paths.select(["scripts/ci/android-shards.py"])["android"])
+
     def test_deleted_and_renamed_old_paths_are_relevant(self):
         self.assertTrue(paths.select(["apple/Old.swift", "docs/archive/new.md"])["apple"])
+
+
+class AutomaticWorkflowTests(unittest.TestCase):
+    def test_pr_checks_allocate_only_the_final_job(self):
+        root = Path(__file__).resolve().parents[2]
+        workflow = (root / '.github/workflows/ci.yml').read_text()
+        changes = workflow.split('\n  changes:\n', 1)[1].split('\n  server:\n', 1)[0]
+        self.assertIn("if: github.event_name == 'workflow_dispatch'", changes)
+        for name in ('server', 'web', 'android', 'apple', 'apple_macos', 'runtimes', 'scripts'):
+            block = re.split(r'\n  [a-z_]+:\n', workflow.split('\n  ' + name + ':\n', 1)[1], maxsplit=1)[0]
+            self.assertIn('needs: changes', block)
+            self.assertIn('needs.changes.outputs.', block)
+        gate = workflow.split('\n  required:\n', 1)[1]
+        self.assertIn('if: always()', gate)
+        for command in ('scripts/ci/guards.sh', 'scripts/ci/web.sh', 'scripts/ci/runtimes.sh',
+                        'scripts/test/test_doc_paths.py', 'scripts/test/test_doc_go_paths.py',
+                        "python3 -m unittest discover -s scripts/ci -p 'test_*.py'"):
+            self.assertIn(command, gate)
+        dependencies = gate.index('run: python3 -m pip install -r scripts/ci/requirements.txt')
+        self.assertLess(dependencies, gate.index('python3 scripts/test/test_readme_languages.py'))
+        self.assertIn("python-version: '3.11'", gate)
+        manual_gate = gate.split('- name: Verify selected manual platform results', 1)[1]
+        self.assertIn("if: github.event_name == 'workflow_dispatch'", manual_gate)
+        self.assertIn('run: python3 scripts/ci/required.py', manual_gate)
+        self.assertNotIn('continue-on-error:', workflow)
 
 
 class RequiredTests(unittest.TestCase):
@@ -89,7 +161,7 @@ class AppleWorkflowTests(unittest.TestCase):
         mac = workflow.split('\n  apple_macos:\n', 1)[1].split('\n  runtimes:\n', 1)[0]
         for block, lane in ((ios, 'ios'), (mac, 'macos')):
             self.assertIn('    needs: changes\n', block)
-            self.assertIn("    if: needs.changes.outputs.apple == 'true'", block)
+            self.assertIn("    if: needs.changes.outputs.apple == 'true' && github.event_name == 'workflow_dispatch'", block)
             self.assertIn('    uses: ./.github/workflows/apple-test.yml', block)
             self.assertIn('      lane: ' + lane, block)
         gate = workflow.split('\n  required:\n', 1)[1]

@@ -14,12 +14,12 @@ import (
 	"os"
 	"path"
 	"path/filepath"
-	"regexp"
 	"slices"
 	"sort"
 	"strings"
 
 	"github.com/nwverse/persona/server/internal/extension"
+	"github.com/nwverse/persona/server/internal/lazyre"
 )
 
 // Personas (docs/apple/persona.md): a look for Persona — its name, face, the animated dot in the Persona tab's top bar and the
@@ -45,7 +45,7 @@ const (
 //go:embed personas
 var builtinPersonas embed.FS
 
-var personaIDPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,31}$`)
+var personaIDPattern = lazyre.New(`^[a-z0-9][a-z0-9-]{0,31}$`)
 
 // personaStates are the dot's states; idle is the one a package must have (the app shows it for any it lacks).
 var personaStates = []string{"idle", "thinking", "working", "needs_you", "offline"}

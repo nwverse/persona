@@ -118,6 +118,10 @@ Pitfalls, odd behavior, and the tradeoffs made at the time (originally in `CLAUD
   For pure SwiftUI symbol/text/geometry layouts, use public `ImageRenderer.render(rasterizationScale:renderer:)` to draw directly into the test's CGContext, explicitly preserving point-to-pixel scale. Retain nonempty, radius, bounds, and four-digit overflow assertions; calibrate with rectangles of known sizes/offsets. No production UI changes or loosened thresholds.
   Parameterized-case xcresult summaries count methods, not expanded arguments. Verify completeness from test-tree Arguments nodes, ensuring every digit range executed. If postprocessing counts are wrong, fix reading only; retain original script exit code separately from actual XCTest results.
 
+- `xcrun simctl privacy <udid> grant` can take about a minute on a just-booted stock simulator (2026-11-08, #1402). On the hosted
+  iOS lane it needed 54.5 s on a passing run and passed 60 s on a failing one, after `simctl bootstatus -b` had already returned.
+  Give the step room in `scripts/ci/apple.sh` (300 s) rather than retrying it, and read a grant timeout as slowness, not a refused permission.
+
 - Validate display names separately from persisted identity during compatible renaming (2026-11-04, #1189). After `persona-link` / `Persona Link` shipped, compressed-install regressions still asserted old display names, causing full release exit 1. Update only display contracts, while verifying real `persona-link` files, legacy download names, old/new executable commands, and actual installer calls; never blindly rename compatibility identities. Script tests must discover `scripts/test`, `release`, `deploy`, `mock`, and `app` separately; rename-only subsets miss old assertions elsewhere. Preserve original failed freeze/exit code; after merge, rerun with a new build number.
 
 - Do not use computer-use to click simulators for screenshots (Mac lock screen hides windows; unlocked it steals the user's mouse). Use DEBUG launch arguments (`docs/apple/ios.md`) to open pages directly, then capture.
@@ -692,3 +696,12 @@ Walking files has pitfalls of its own. Reviews of `server/plugins/guard_test.go`
 - Shortcut 先由旧 App 在系统 UI 中创建，再检查持久化 action 的 `AppIntentDescriptor.AppIntentIdentifier`。不能搜索整个记录中的旧命名空间来认定旧类型：必须保留的 `BundleIdentifier` 也可能匹配。测试标题只能用于定位，不能替代 action 身份检查。
 - 带一次性配对码的 mock 不能在独立 suite 或深浅色轮次之间复用。每组配对 UI 测试启动自己的新 mock；保存原始失败，再记录修正隔离后的重跑结果。
 - Debug 的主程序可能只是加载 `.debug.dylib` 的壳；检查 Swift 类型时同时看实际动态库。模拟器的授权信息可以放在 Mach-O 的 `__entitlements` 中，`codesign` 输出为空不等于缺失；正式签名和 production APNs 仍需单独检查。
+
+## Scenarios through AppModel: make the model first, then hook up the test hub (2026-11-08, #1112)
+
+`AppModel()`'s init calls `DemoHub.install()`, which points `APIClient.local` and `LiveConnection.makeLocal` at Demo Mode's hub. A test that hooks up its own fake hub first and then makes the model sends every request to DemoHub (`DemoHub miss: …` in the log), and some assertions still pass, which hides it. Make the model, then hook up the test's hub, and again for the new model a `relaunch` makes (`SyncDevice.connect`).
+
+Two more from the same harness:
+
+- The scenarios' times are fixed (`2026-01-02T…`), and the app ties a sent bubble to its transcript line partly by time. Lines the hub writes during a case get the time they were written (`SyncHub.writtenNow`).
+- A failed message is placed before later ones by the whole second it was written (`ChatLines.placeFailed`). Two sends in a row in a test land in the same second, so the harness spaces sends more than a second apart, as typing does.

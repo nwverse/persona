@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"regexp"
 	"slices"
 	"sort"
 	"strconv"
@@ -17,6 +16,7 @@ import (
 	"github.com/nwverse/persona/server/internal/apierr"
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/i18n"
+	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/prompts"
 	"github.com/nwverse/persona/server/internal/proto"
 )
@@ -407,7 +407,7 @@ func (sc *schedule) indexLocked(id string) int {
 	return slices.IndexFunc(sc.tasks, func(t Task) bool { return t.ID == id })
 }
 
-var hhmm = regexp.MustCompile(`^([01]?\d|2[0-3]):([0-5]\d)$`)
+var hhmm = lazyre.New(`^([01]?\d|2[0-3]):([0-5]\d)$`)
 
 // nextRun is a daily task's first run strictly after `after`.
 func nextRun(t Task, after time.Time, loc *time.Location) time.Time {
@@ -468,7 +468,7 @@ func parseWhen(s string, now time.Time, loc *time.Location) (time.Time, error) {
 
 // scheduleHeader is the first line of a run's message (taskPrompt, prompts/assistant/task_run.md) and the notes under it. A patrol told to
 // "schedule the next one with the same prompt" copies them along; they are dropped so they don't pile up.
-var scheduleHeader = regexp.MustCompile(`^(?:⏰[^\n]*（[^\n]*(?:跟进|定时任务)[^\n]*）|（本该[^\n]*）|（(?:Persona|Persona) 会[^\n]*）|（又到时间了[^\n]*）|（这个任务只在你用 notify_user[^\n]*）)\s*`)
+var scheduleHeader = lazyre.New(`^(?:⏰[^\n]*（[^\n]*(?:跟进|定时任务)[^\n]*）|（本该[^\n]*）|（(?:Persona|Persona) 会[^\n]*）|（又到时间了[^\n]*）|（这个任务只在你用 notify_user[^\n]*）)\s*`)
 
 func stripScheduleHeader(p string) string {
 	p = strings.TrimSpace(p)
@@ -864,7 +864,7 @@ func (s *Service) toolScheduleRoutine(ctx context.Context, self string, args jso
 		t.ID, t.label(), ruleText(t, loc), state, pushText(t)), nil
 }
 
-var launcherName = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_-]*$`)
+var launcherName = lazyre.New(`^[A-Za-z_][A-Za-z0-9_-]*$`)
 
 // checkTask validates what the app or a tool set and tidies it (weekdays sorted, every day = none); the messages
 // are for the app.
@@ -953,7 +953,7 @@ func weekdayText(ds []int) string {
 func (s *Service) Run(ctx context.Context) {
 	go s.taskCloseLoop(ctx)    // the agents of finished tasks (tasks_close.go)
 	go s.superviseLoop(ctx)    // the tasks the main conversation follows up (supervise_signals.go)
-	go s.workLoop(ctx)         // due wakes and retries, cards past their day, missed turns (agents_work.go)
+	go s.workLoop(ctx)         // due wakes and retries, cards past their day, missed turns (agents_work_tick.go)
 	go s.replyLoop(ctx)        // questions the user looked at and left unanswered (agents_reply.go)
 	go s.nudgeLoop(ctx)        // the Lark bot's cards left unanswered (feishu_nudge.go)
 	go s.sourceReportLoop(ctx) // the reports back to where a todo was asked (todo_source.go)

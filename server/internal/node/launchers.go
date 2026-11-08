@@ -6,12 +6,12 @@ import (
 	"fmt"
 	"maps"
 	"path/filepath"
-	"regexp"
 	"sort"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
@@ -226,9 +226,9 @@ func matchLauncher(list []proto.Launcher, baseURL, model string) string {
 	return ""
 }
 
-var nameRe = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_-]*$`)
+var nameRe = lazyre.New(`^[A-Za-z_][A-Za-z0-9_-]*$`)
 
-var assignRe = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*=`)
+var assignRe = lazyre.New(`^[A-Za-z_][A-Za-z0-9_]*=`)
 
 // parseAliasLaunchers reads launcherScript's alias records and keeps the aliases that start claude: after the
 // variables set in front of it (`A=1 B=2 claude …`), through env / command / exec / noglob, by path or not, with

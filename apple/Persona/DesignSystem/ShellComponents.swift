@@ -148,7 +148,7 @@ struct ShellSwitch<ChatMenu: View, WorkMenu: View>: View {
     /// chosen one.
     private func railSegment(_ title: String, symbol: String, selected: Bool) -> some View {
         VStack(spacing: Theme.Space.xxs) {
-            Image(systemName: symbol).font(Theme.Font.heading)
+            ThemedIcon(symbol).font(Theme.Font.heading)
             Text(title).font(Theme.Font.caption).lineLimit(1).minimumScaleFactor(0.7)
         }
         .foregroundStyle(selected ? Color.primary : Color.secondary)
@@ -267,7 +267,7 @@ struct ShellCircleButton: View {
             Haptics.tap()
             action()
         } label: {
-            Image(systemName: symbol)
+            ThemedIcon(symbol)
                 .font(Theme.Font.heading)
                 .fontWeight(.medium) // a touch heavier and rounder, like ChatGPT's line icons
                 .dynamicTypeSize(...DynamicTypeSize.xxxLarge)
