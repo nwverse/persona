@@ -64,7 +64,7 @@
   "force_label": "Force subagents to use this model",
   "chat_clear_legacy": "This provider has saved settings that Chat Completions cannot use. Clear those settings when saving. Saving is unavailable until you select this.",
   "chat_effort_hint": "Chat Completions does not use per-model thinking effort settings.",
-  "chat_advanced_hint": "Chat Completions does not use provider-specific headers, environment variables, proxy, timeout, context, default effort, tier model or subagent settings.",
+  "chat_advanced_hint": "Chat Completions does not use provider-specific headers, environment variables, proxy, timeout, context limits, default effort, tier model or subagent settings. You can still record a context window for each model in the list.",
   "headers": "Request headers",
   "headers_set": "Set (hidden). Typing new ones replaces them all.",
   "headers_placeholder": "X-Name: value, one per line",
