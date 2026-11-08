@@ -133,7 +133,8 @@ final class AppModel {
     }
     /// When each group's whole list of pending interactions was last asked for (NotificationWithdrawal.stale).
     @ObservationIgnored var interactionsListedAt: [String: Date] = [:]
-    /// Interactions ended locally (answered, cancelled or gone): snapshots will not restore them (#1688).
+    /// Interactions ended locally (answered, cancelled or gone), by `uid`: neither the full list nor a card frame brings
+    /// them back (#1688, #1521). By `uid`, not the hub's id: another group's card with the same id is another card.
     @ObservationIgnored var endedInteractionIDs: Set<String> = []
     #if DEBUG
     /// Unit tests: the client every group's requests go to (`FakeHub.client`) instead of the paired hubs'.
@@ -451,6 +452,9 @@ final class AppModel {
         // docs/operations/network.md). Base64: a launch argument that looks like a dictionary is read as a property list.
         if let s = UserDefaults.standard.string(forKey: "seedSSHTunnel"), !r.hubs.isEmpty, let json = Data(base64Encoded: s),
            let route = try? JSONDecoder().decode(SSHRoute.self, from: json) { r.hubs[0].ssh = route }
+        // `-seedLocalProxy <base64 of the LocalProxyRoute JSON>`: the first hub's local proxy, the same way.
+        if let s = UserDefaults.standard.string(forKey: "seedLocalProxy"), !r.hubs.isEmpty, let json = Data(base64Encoded: s),
+           let route = try? JSONDecoder().decode(LocalProxyRoute.self, from: json) { r.hubs[0].localProxy = route }
         registry = HubGrouping.regroup(r)
         saveRegistry(registry)
         buildLinks()
@@ -573,6 +577,18 @@ final class AppModel {
         demo.live.connect(.demo)
         toast = Toast(String(localized: "Demo mode is on. All data is made up."))
     }
+
+    #if DEBUG
+    /// The sync scenarios (PersonaTests/Sync): this model talks to one made-up hub through the demo config's socket and
+    /// requests, as Demo Mode does, whatever the simulator has paired.
+    func connectOnly(_ config: ServerConfig) {
+        for link in links { link.live.disconnect() }
+        let link = makeLink("", config)
+        links = [link]
+        hubGroup = ""
+        link.live.connect(config)
+    }
+    #endif
 
     /// Out of Demo Mode (Sign Out or pairing): what it showed goes with it.
     private func leaveDemo() {
@@ -1324,7 +1340,7 @@ final class AppModel {
     /// pushes delivered before then that it does not have are over (#3513).
     func replaceInteractions(_ group: String, _ list: [Interaction], askedAt: Date? = nil) {
         var all = interactions.filter { $0.value.group != group }
-        for ix in list where all[ix.uid] == nil && !endedInteractionIDs.contains(ix.id) {
+        for ix in list where all[ix.uid] == nil && !endedInteractionIDs.contains(ix.uid) {
             all[ix.uid] = ix
         }
         if all != interactions { interactions = all }
@@ -1486,7 +1502,7 @@ final class AppModel {
         DispatchQueue.main.asyncAfter(deadline: .now() + Self.sessionsCoalesce) { [weak self] in self?.applyPendingSessions() }
     }
 
-    private func handle(_ ev: ServerEvent, group: String) {
+    func handle(_ ev: ServerEvent, group: String) {
         #if DEBUG || PERF_SIGNPOST
         PerfTrace.push(Self.perfName(ev))
         #endif
@@ -1632,16 +1648,23 @@ final class AppModel {
             case .kept: break
             }
         case .interaction(let ix):
-            let isNew = interactions[ix.uid] == nil
+            // Ended here (answered, cancelled, gone) stays ended, as in the full list (`replaceInteractions`, #1688): the
+            // pending-card snapshot after a hello that resumed still lists a card until the node ends it, and one this
+            // device had answered came back answerable (#1521). A failed answer takes the id out first (`putBack`).
+            guard !endedInteractionIDs.contains(ix.uid) else { break }
+            let announces = Delegated.announces(ix, replacing: interactions[ix.uid])
             interactions[ix.uid] = ix
-            if isNew { Haptics.attention() }
+            if announces { Haptics.attention() }
             WatchSync.shared.push(summary: watchSummary())
-        case .interactionResolved(let id):
-            endedInteractionIDs.insert(id)
+        case .interactionResolved(let id, let assistant):
             let uid = group.isEmpty ? id : group + "|" + id
+            endedInteractionIDs.insert(uid)
             answering.hubEnded(uid)
+            if let assistant, let ix = interactions[uid] { keepDelegated(ix, assistant) }
             interactions[uid] = nil
             WatchSync.shared.push(summary: watchSummary())
+        case .interactionReanswered(let id, let answers):
+            noteReanswer(group.isEmpty ? id : group + "|" + id, answers)
         case .toolCall(let callID, let name, let args):
             Task { await runPhoneTool(callID: callID, name: name, args: args, group: group) }
         case .hookEvent:
@@ -1666,6 +1689,7 @@ final class AppModel {
         case .delta: "delta"
         case .interaction: "interaction"
         case .interactionResolved: "interaction_resolved"
+        case .interactionReanswered: "interaction_reanswered"
         case .toolCall: "tool_call"
         case .hookEvent: "hook"
         case .revs: "revs"
@@ -1743,13 +1767,16 @@ final class AppModel {
     /// session's source allows. Every place that answers or greys a card asks this.
     func canAnswer(_ ix: Interaction) -> Bool { ix.canAnswer(session: session(ix.sessionKey)) }
 
+    /// This device's answer to the card is on its way (the card is hidden meanwhile).
+    func isAnswering(_ uid: String) -> Bool { answering.contains(uid) }
+
     func resolve(_ ix: Interaction, _ r: Resolution) async {
         // To the hub of the interaction's own group (docs/protocol/multi-hub.md「操作发到哪」).
         guard canAnswer(ix), let api = api(ix.group) else { return }
         // No network: the card stays as it is (taking it away and bringing it back a moment later read as "done").
         guard connection.networkUp else { notDone(); return }
         interactions[ix.uid] = nil
-        endedInteractionIDs.insert(ix.id)
+        endedInteractionIDs.insert(ix.uid)
         answering.begin(ix.uid)
         defer { answering.finish(ix.uid) }
         // One op id for this answer: a retry through a hub restart (the request died with the old process, a proxy
@@ -1758,7 +1785,10 @@ final class AppModel {
         let op = UUID()
         do {
             let res = try await OpRetry.untilDelivered { try await api.resolve(ix.id, r, opID: op) }
-            if res.already == true, let existing = res.resolution {
+            if res.already == true, let existing = res.resolution, existing.answeredBy == AssistantAnswer.assistant, ix.kind == .question {
+                // The assistant answered first: its answer shows in the chat, where the user may change it.
+                keepDelegated(ix, AssistantAnswer(answers: existing.answers ?? [:], reason: existing.reason ?? ""))
+            } else if res.already == true, let existing = res.resolution {
                 // Resolved already on server, show what was effective
                 let lines = Answered.answerLines(ix, existing)
                 let text = (lines.first?.answer.isEmpty == false) ? String(localized: "Already answered: \(lines.first!.answer)") : String(localized: "Already answered")
@@ -1783,8 +1813,50 @@ final class AppModel {
     /// A card whose answer failed, back among the pending ones, unless the hub has ended it meanwhile (#3922).
     private func putBack(_ ix: Interaction) {
         guard answering.putsBack(ix.uid) else { return }
-        endedInteractionIDs.remove(ix.id)
+        endedInteractionIDs.remove(ix.uid)
         interactions[ix.uid] = ix
+    }
+
+    // MARK: Questions the assistant answered (#544)
+
+    /// Questions the assistant answered for the user, oldest first: each stays in its chat with what it answered and
+    /// why until put away, at most `Delegated.kept` of them.
+    private(set) var delegatedAnswers: [DelegatedAnswer] = []
+    /// What the user changed an answer to, by `uid` (this device's Change Answer, or `interaction_reanswered`).
+    private(set) var reanswered: [String: [String: String]] = [:]
+
+    func delegated(for key: SessionKey) -> [DelegatedAnswer] { delegatedAnswers.filter { $0.interaction.sessionKey == key } }
+
+    private func keepDelegated(_ ix: Interaction, _ answer: AssistantAnswer) {
+        guard ix.kind == .question, !delegatedAnswers.contains(where: { $0.id == ix.uid }) else { return }
+        delegatedAnswers.append(DelegatedAnswer(interaction: ix, answers: answer.answers, reason: answer.reason, at: .now))
+        if delegatedAnswers.count > Delegated.kept { delegatedAnswers.removeFirst(delegatedAnswers.count - Delegated.kept) }
+    }
+
+    /// Puts an answered question's card away; what was changed stays for Session Info.
+    func dropDelegated(_ uid: String) { delegatedAnswers.removeAll { $0.id == uid } }
+
+    /// The hub names only the questions that changed: an earlier change to another question of the card stays.
+    private func noteReanswer(_ uid: String, _ answers: [String: String]) {
+        guard !answers.isEmpty else { return }
+        reanswered[uid, default: [:]].merge(answers) { _, new in new }
+    }
+
+    /// The new answer reaches the agent as a message, so Change Answer takes what sending does, not answering a card.
+    func canChangeAnswer(_ d: DelegatedAnswer) -> Bool { session(d.interaction.sessionKey)?.canSend == true }
+
+    /// Change Answer: nil once the changed answers reached the agent, else why not.
+    func reanswer(_ d: DelegatedAnswer, answers: [String: String]) async -> String? {
+        guard let api = api(d.interaction.group) else { return String(localized: "Can't reach the hub. That action didn't go through.") }
+        do {
+            try await api.reanswer(d.interaction.id, answers: answers, manager: d.interaction.manager)
+        } catch {
+            return Delegated.reanswerError(error)
+        }
+        noteReanswer(d.id, answers)
+        Haptics.success()
+        toast = Toast(String(localized: "Your new answer was sent to the agent"), style: .success)
+        return nil
     }
 
     /// Unsent composer text per chat (also where an edited queued message lands); kept across launches.
@@ -2556,6 +2628,20 @@ final class AppModel {
         edit(machine: g.machineRef) { s in if s.spaceID == g.spaceID { s.spaceName = name } }
         pinsStore(g.group)?.renameSpace(oldKey, to: newKey)
         do { try await api.renameSpace(machine: g.machineID, workspaceID: g.spaceID, name: name) } catch { show(error) }
+        await refresh()
+    }
+
+    /// The hub renames computers (feature `machine_rename`): machine details offer it.
+    func canRenameMachine(_ group: String) -> Bool { features(group).contains("machine_rename") }
+
+    /// Renames a computer on its hub ("" is its id again); the hub's `machines` push brings the new name everywhere.
+    func renameMachine(_ ref: MachineRef, to name: String) async {
+        let name = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let api = api(ref.group), name != machine(ref)?.name else { return }
+        do {
+            let shown = try await api.renameMachine(ref.id, to: name)
+            toast = Toast(String(localized: "Renamed to \(shown)"), style: .success)
+        } catch { show(error) }
         await refresh()
     }
 

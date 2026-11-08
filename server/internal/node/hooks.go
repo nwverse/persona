@@ -172,6 +172,15 @@ func (n *Node) serveSock(ctx context.Context, c net.Conn) {
 		resp = map[string]any{"ok": true}
 	case "ping": // personad node doctor, persona-link node switch: a round trip that changes nothing
 		resp = map[string]any{"ok": true, "program": n.Program, "version": n.Version}
+	case "update.inventory":
+		var target nodeclient.UpdateInventoryTarget
+		if err := json.Unmarshal(req.Input, &target); err != nil {
+			resp = map[string]any{"error": "invalid explicit update inventory target"}
+		} else if inventory, err := n.updateInventory(ctx, target); err != nil {
+			resp = map[string]any{"error": err.Error()}
+		} else {
+			resp = inventory
+		}
 	case "preflight": // personad node doctor's path-access check, read with this node's permissions (preflight.go)
 		resp = n.preflight(ctx)
 	case "ask": // personad ask (scriptcli.go)
@@ -184,9 +193,11 @@ func (n *Node) serveSock(ctx context.Context, c net.Conn) {
 		var res struct {
 			Tools []proto.Tool `json:"tools"`
 		}
+		// The assistant's only when the node says so too (clicall.go mcpSession).
+		session, assistant := n.mcpSession(c, req)
 		// A guest's (its MCP server says so, or this node knows it is one): the hub gives it only its own tools.
-		guest := req.Guest || n.guestOf(req.SessionID) != nil
-		if err := n.peer.Call(ctx, "mcp.tools", map[string]any{"assistant": req.Assistant, "session_id": req.SessionID, "guest": guest}, &res); err != nil {
+		guest := req.Guest || n.guestOf(session) != nil
+		if err := n.peer.Call(ctx, "mcp.tools", map[string]any{"assistant": assistant, "session_id": session, "guest": guest}, &res); err != nil {
 			resp = map[string]any{"tools": []proto.Tool{}, "error": err.Error()}
 		} else {
 			resp = res
@@ -195,13 +206,14 @@ func (n *Node) serveSock(ctx context.Context, c net.Conn) {
 		resp = n.cliCall(ctx, c, req)
 	case "mcp.call":
 		var res proto.ToolResult
-		sid := n.mcpCaller(req.Name, req.SessionID, req.Pane, req.Assistant)
+		session, assistant := n.mcpSession(c, req)
+		sid := n.mcpCaller(req.Name, session, req.Pane, assistant)
 		if req.Name == toolMailSaveAttachment { // writes on this machine (mailattachment.go)
-			resp = n.saveMailAttachment(ctx, req.Args, sid, req.Assistant, req.Guest || n.guestOf(sid) != nil)
+			resp = n.saveMailAttachment(ctx, req.Args, sid, assistant, req.Guest || n.guestOf(sid) != nil)
 			break
 		}
 		if err := n.peer.Call(ctx, "mcp.call", map[string]any{"name": req.Name, "args": req.Args, "session_id": sid,
-			"assistant": req.Assistant, "guest": req.Guest || n.guestOf(sid) != nil}, &res); err != nil {
+			"assistant": assistant, "guest": req.Guest || n.guestOf(sid) != nil}, &res); err != nil {
 			res = proto.TextResult("Persona hub error: "+err.Error(), true)
 		}
 		resp = res
@@ -496,10 +508,7 @@ func (n *Node) rememberTranscript(in hookInput) {
 	if in.TranscriptPath == "" || !validID(in.SessionID) {
 		return
 	}
-	n.mu.Lock()
-	n.paths[in.SessionID] = in.TranscriptPath
-	delete(n.pathsAt, in.SessionID) // Claude said so: no need to look again
-	n.mu.Unlock()
+	n.setPath(in.SessionID, in.TranscriptPath)
 }
 
 // notifyHookEvent tells the hub what a hook saw. reportOnly marks an event from a global hook (globalhooks.go), so
