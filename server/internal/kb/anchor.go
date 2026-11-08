@@ -77,12 +77,16 @@ func (f *AnchorFilter) Push(page []SourceMessage) []SourceMessage {
 		f.st.Read++
 		switch {
 		case f.Anchor != nil && f.Anchor(m):
+			// A new window unless this one touches the last: nothing was left out since it (still within its older
+			// span, or every message since is in the ring).
+			if f.st.Windows == 0 || f.st.Omitted > 0 {
+				f.st.Windows++
+			}
 			out = f.closeGap(out, true)
 			out = append(out, f.st.Ring...)
 			out = append(out, m)
 			f.st.Ring = nil
 			f.st.Older = f.span()
-			f.st.Windows++
 		case f.st.Older > 0:
 			out = append(out, m)
 			f.st.Older--

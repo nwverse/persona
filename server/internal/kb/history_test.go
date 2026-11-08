@@ -3,6 +3,7 @@ package kb
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math/rand"
 	"os"
@@ -473,5 +474,118 @@ func TestAnchorImportWritesOmissions(t *testing.T) {
 	}
 	if line := OmissionLine(msgs[0].At, 7); line.Type != TypeOmitted || line.SenderName != "·" || line.Text != "[……此处省略 7 条]" {
 		t.Fatalf("%+v", line)
+	}
+}
+
+// Windows counts windows, merged ones once: anchors whose windows overlap or touch are one window, a gap makes another
+// (also across a resume from the saved state).
+func TestAnchorFilterCountsMergedWindowsOnce(t *testing.T) {
+	for _, c := range []struct {
+		anchors []int
+		windows int
+	}{
+		{nil, 0},
+		{[]int{150}, 1},
+		{[]int{100, 160}, 1}, // overlapping
+		{[]int{100, 201}, 1}, // touching
+		{[]int{100, 202}, 2}, // one message between
+		{[]int{10, 12, 14, 200, 290}, 2},
+	} {
+		msgs := conversation(300, c.anchors...)
+		f := NewAnchorFilter(mine, 50, nil)
+		for end := len(msgs); end > 0; end -= 13 {
+			f.Push(msgs[max(0, end-13):end])
+			st := f.State()
+			f = NewAnchorFilter(mine, 50, &st)
+		}
+		f.Flush()
+		if got := f.State().Windows; got != c.windows {
+			t.Fatalf("anchors %v: %d windows, want %d", c.anchors, got, c.windows)
+		}
+	}
+}
+
+// Attachments never outlive their lines: a source's attachment days are capped by the text retention, for downloads
+// and for cleanup alike.
+func TestAttachmentDaysCappedByText(t *testing.T) {
+	st, e, _ := histStore(t)
+	e.TextDays = 365
+	e.AttachmentDaysBySource = map[string]int{"kept": 3650}
+	if d := e.AttachmentDaysFor("kept"); d != 365 {
+		t.Fatalf("capped %d", d)
+	}
+	if d := (&Engine{TextDays: 3650, AttachmentDaysBySource: map[string]int{"kept": 3650}}).AttachmentDaysFor("kept"); d != 3650 {
+		t.Fatalf("within the text retention %d", d)
+	}
+	if d := (&Engine{TextDays: 10}).AttachmentDaysFor("any"); d != 10 {
+		t.Fatalf("global days capped %d", d)
+	}
+	now := time.Now()
+	old := now.AddDate(-2, 0, 0).In(st.Zone()).Format("2006-01-02")
+	if err := st.PutChat(&Chat{ID: "kept-a", Source: "kept", SourceID: "a"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeFile(st.Path(KindChat, "kept-a", "attachments", old, "x.png"), []byte("x")); err != nil {
+		t.Fatal(err)
+	}
+	e.Prune(now)
+	if _, err := os.Stat(st.Path(KindChat, "kept-a", "attachments", old)); !os.IsNotExist(err) {
+		t.Fatalf("an attachment past the text retention stayed: %v", err)
+	}
+}
+
+// Imported history downloads a rich-text post's inline images, but not a video or file it embeds (by the reference's
+// file type): those keep a placeholder naming their kind.
+func TestWriteHistoryPostMedia(t *testing.T) {
+	st, e, zone := histStore(t)
+	e.AttachmentDaysBySource = map[string]int{"wx": 3650}
+	var got []string
+	dl := func(_ context.Context, media, dst string) error {
+		got = append(got, media)
+		return writeFile(dst, []byte("img"))
+	}
+	at := time.Now().In(zone).AddDate(0, -1, 0).Truncate(time.Hour)
+	msgs := []SourceMessage{{ID: "p", Type: "POST", SenderName: "甲", Text: "图文", Media: []string{"inline-image", "clip.mp4", "report.pdf", "photo.jpeg"}, At: at}}
+	if _, err := e.WriteHistory(context.Background(), &Chat{Source: "wx", SourceID: "g", Name: "群"}, msgs, HistoryWrite{Download: dl}); err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(got, []string{"inline-image", "photo.jpeg"}) {
+		t.Fatalf("downloaded %v", got)
+	}
+	text := dayText(t, st, "wx-g", at)
+	if !strings.Contains(text, "[视频]") || !strings.Contains(text, "[文件]") || strings.Count(text, "[附件](attachments/") != 2 {
+		t.Fatalf("archived:\n%s", text)
+	}
+}
+
+// A download that returns ErrDownloadAborted aborts the whole write: nothing of the batch goes in, no chat is made,
+// and the downloads after it are not asked for, so the caller can read the same messages again later.
+func TestWriteHistoryDownloadAborted(t *testing.T) {
+	st, e, zone := histStore(t)
+	e.AttachmentDaysBySource = map[string]int{"wx": 3650}
+	var got []string
+	dl := func(_ context.Context, media, dst string) error {
+		got = append(got, media)
+		if media == "second" {
+			return fmt.Errorf("stopping: %w", ErrDownloadAborted)
+		}
+		return writeFile(dst, []byte("img"))
+	}
+	at := time.Now().In(zone).AddDate(0, 0, -3).Truncate(time.Hour)
+	msgs := []SourceMessage{
+		{ID: "t", Type: "TEXT", SenderName: "A", Text: "before", At: at},
+		{ID: "i1", Type: "IMAGE", SenderName: "A", Media: []string{"first"}, At: at.Add(time.Minute)},
+		{ID: "i2", Type: "IMAGE", SenderName: "A", Media: []string{"second"}, At: at.Add(2 * time.Minute)},
+		{ID: "i3", Type: "IMAGE", SenderName: "A", Media: []string{"third"}, At: at.Add(3 * time.Minute)},
+	}
+	added, err := e.WriteHistory(context.Background(), &Chat{Source: "wx", SourceID: "g", Name: "G"}, msgs, HistoryWrite{Download: dl})
+	if !errors.Is(err, ErrDownloadAborted) || added != 0 {
+		t.Fatalf("added %d, err %v", added, err)
+	}
+	if !slices.Equal(got, []string{"first", "second"}) {
+		t.Fatalf("downloaded %v", got)
+	}
+	if _, ok := st.Chat("wx-g"); ok {
+		t.Fatal("an aborted write made the chat")
 	}
 }

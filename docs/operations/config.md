@@ -343,8 +343,17 @@ A manager's own sections of the configuration are in its `manager.json`, not in 
 - `inbox.rules`: personal rules for Inbox AI triage (natural language, e.g. "anything from this person needs me", "this alert group is only noise"), appended to the triage prompt and preferred over default judgments (`docs/assistant/inbox.md`).
   When a connector item carries its own rules (`rules`, e.g. an extension's `triage_rules` setting), those are used instead of this setting.
 - `kb`: knowledge base (`docs/assistant/knowledge.md`): `enabled` (on by default), `read_only` (off by default), `text_days` (text retention days, 365), `attachment_days` (attachments, 30),
-  `attachment_days_by_source` (attachment days for one source's chats, e.g. `{"<source>": 3650}` for a chat source whose history is imported with its images; sources not listed and values of 0 or less keep `attachment_days`;
-  used both when deciding whether to download an attachment and when cleanup deletes attachment days),
+  `attachment_days_by_source` (attachment days for one source's chats, e.g. `{"<source>": 3650}` with `"text_days": 3650` for a chat source whose history is imported with its images; sources not listed and values of 0 or less keep `attachment_days`;
+  used both when deciding whether to download an attachment and when cleanup deletes attachment days). `attachment_days` and `attachment_days_by_source` are both capped at `text_days`,
+  since an attachment goes with its line: with `text_days` 365, a source set to 3650 keeps 365 days of attachments,
+  `history` (importing chats' older history, **off unless `enabled` is `true`**; `docs/assistant/knowledge.md` "History import"):
+  `{"enabled": true, "sources": {"<connector id>": {"profile": "careful", "needs_search_index": true}}}`. Sources run one at a time in the order written, and only after
+  the owner approves each source's plan in the assistant chat. Per source: `profile` (`careful`, the default, or `standard`), `needs_search_index` (default `true`: wait for
+  the knowledge base's search index, #1273; `false` runs before it), `page_limit` (page size asked for, a hint, 50) and pace overrides, each `[least, most]` or one number:
+  `interval_seconds`, `batch_calls`, `rest_minutes`, `long_rest_every_hours` and `long_rest_minutes` (`[0, 0]`: none), `quiet_periods_per_day` and `quiet_hours`,
+  `switch_chat_pages`, `image_interval_seconds`, and `slow_factor` (≥ 1: every interval and rest multiplied by it, e.g. `2` after a stop the import caused). A range that
+  does not read (most below least, a negative number or bound) or a negative `slow_factor` is an error in `manager.json` like any other (a running manager keeps what it last read). Changing `kb.history`
+  never reopens the knowledge base: the import reads it again before every call, so `enabled: false` stops it before its next call,
   `ai` (model for compression and tagging, same fields as `ai`; defaults to `inbox.triage_ai`, then `ai`), `extra_dirs` (note directories you maintain on the manager's machine, the hub machine for the built-in manager,
   e.g. a git repo of facts / lessons: `kb_search` also searches Markdown in these directories (read-only, skips dot directories such as `.git`), and the assistant's CLAUDE.md mentions them; `~/` is that machine's home).
   With `enabled: true, read_only: true`, the manager serves existing local archives without collection, model calls,

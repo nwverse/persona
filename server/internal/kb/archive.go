@@ -2,6 +2,7 @@ package kb
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"regexp"
@@ -100,8 +101,11 @@ func or(n, d int) int {
 	return n
 }
 
-// textCutoff is the start of the oldest day Prune keeps (in the archive's zone): a message before it is past
-// TextDays and is not written.
+// TextCutoff is the start of the oldest day Prune keeps (in the archive's zone): a message before it is past
+// TextDays and is not written (the history import stops there too).
+func (e *Engine) TextCutoff() time.Time { return e.textCutoff() }
+
+// textCutoff is TextCutoff.
 func (e *Engine) textCutoff() time.Time {
 	zone := e.Store.Zone()
 	d := time.Now().AddDate(0, 0, -or(e.TextDays, 365)).In(zone)
@@ -109,12 +113,15 @@ func (e *Engine) textCutoff() time.Time {
 }
 
 // AttachmentDaysFor is how many days the attachments of a source's chats are kept: its AttachmentDaysBySource,
-// else AttachmentDays (30).
+// else AttachmentDays (30), and never longer than TextDays. An attachment belongs to its line: a message past the
+// text retention is not written (so its attachment is never downloaded) and its day file is deleted, so an
+// attachment kept longer would be a file no line points to any more.
 func (e *Engine) AttachmentDaysFor(source string) int {
-	if d := e.AttachmentDaysBySource[source]; d > 0 {
-		return d
+	d := or(e.AttachmentDays, 30)
+	if days := e.AttachmentDaysBySource[source]; days > 0 {
+		d = days
 	}
-	return or(e.AttachmentDays, 30)
+	return min(d, or(e.TextDays, 365))
 }
 
 // Prune deletes message days past TextDays and attachment days past each chat's AttachmentDaysFor: the same days
@@ -278,15 +285,18 @@ func (e *Engine) buildLine(ctx context.Context, download DownloadFunc, c *Chat, 
 	day := m.At.In(e.Store.Zone()).Format("2006-01-02")
 	recent := time.Since(m.At) <= time.Duration(e.AttachmentDaysFor(c.Source))*24*time.Hour
 	if history {
-		image := isImage(m.Type)
-		if !image && len(m.Media) == 0 && text == "" {
+		if !isImage(m.Type) && len(m.Media) == 0 && text == "" {
 			if p := mediaPlaceholder(m.Type); p != attachmentPlaceholder {
 				text = p // a voice message or video that came without its media reference
 			}
 		}
 		for i, media := range m.Media {
-			if !image {
-				text += " " + mediaPlaceholder(m.Type)
+			if !historyImage(m.Type, media) {
+				kind := m.Type
+				if kind == "POST" { // a post's embedded video or file, by its reference
+					kind = mediaKind(kind, media)
+				}
+				text += " " + mediaPlaceholder(kind)
 				continue
 			}
 			text += " " + e.attach(ctx, download, c, m, i, media, day, recent)
@@ -320,7 +330,9 @@ func (e *Engine) attach(ctx context.Context, download DownloadFunc, c *Chat, m S
 	name := fmt.Sprintf("%s-%d%s", SafeID(m.ID), i, extOf(media, m.Type))
 	dst := e.Store.path(KindChat, c.ID, "attachments", day, name)
 	if err := download(ctx, media, dst); err != nil {
-		e.failed.Add(1)
+		if !errors.Is(err, ErrDownloadAborted) { // an aborted write keeps nothing of the line anyway
+			e.failed.Add(1)
+		}
 		return attachmentPlaceholder
 	}
 	rel, _ := filepath.Rel(e.Store.path(KindChat, c.ID), dst)
@@ -329,6 +341,34 @@ func (e *Engine) attach(ctx context.Context, download DownloadFunc, c *Chat, m S
 
 // isImage: a message whose media are pictures (a rich-text post's are its inline images).
 func isImage(typ string) bool { return typ == "IMAGE" || typ == "POST" }
+
+// historyImage: imported history downloads this media of a message. An image message's are pictures; a rich-text
+// post's are mostly its inline images, but a post can embed a video or a file too, so one whose reference names a
+// file type that is no picture is not downloaded (the import downloads images only; the downloader also refuses
+// what does not come back as an image).
+func historyImage(typ, media string) bool {
+	switch typ {
+	case "IMAGE":
+		return true
+	case "POST":
+		return mediaKind(typ, media) == typ
+	}
+	return false
+}
+
+// mediaKind is the type a media reference says it is by its file extension (VIDEO, FILE, AUDIO), else typ.
+func mediaKind(typ, media string) string {
+	ext := strings.ToLower(filepath.Ext(strings.SplitN(media, "?", 2)[0]))
+	switch ext {
+	case ".mp4", ".mov", ".m4v", ".avi", ".mkv", ".webm":
+		return "VIDEO"
+	case ".mp3", ".m4a", ".aac", ".amr", ".wav", ".ogg", ".opus", ".silk":
+		return "AUDIO"
+	case ".pdf", ".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx", ".zip", ".rar", ".7z", ".txt", ".csv", ".key", ".pages", ".numbers":
+		return "FILE"
+	}
+	return typ
+}
 
 // mediaPlaceholder names the kind of an attachment imported history does not download.
 func mediaPlaceholder(typ string) string {

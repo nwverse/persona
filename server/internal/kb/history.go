@@ -51,7 +51,42 @@ type HistoryState struct {
 	UpdatedAt time.Time `json:"updated_at"`
 	// Filter: an anchor import's filter between pages (AnchorFilter.State), so it resumes mid-window.
 	Filter *AnchorFilterState `json:"filter,omitempty"`
+	// Positions: an anchor import that reads windows by position around anchors a source's search found.
+	Positions *PositionState `json:"positions,omitempty"`
 }
+
+// PositionState is how far an anchor import by position got, for a source whose positions are consecutive numbers
+// and that can search for the anchors (the assistant's driver, assistant/kb_history_anchor.go): the chat's anchors,
+// the positions read so far, the times of the messages at the windows' edges (to stamp the omission lines), and the
+// calendar years the search found nothing in, which are read backwards through an AnchorFilter afterwards (with
+// HistoryState.Cursor and Filter).
+type PositionState struct {
+	Anchors []PositionAnchor `json:"anchors,omitempty"`
+	// Have: the position ranges read so far, merged ([least, most], inclusive).
+	Have [][2]int64 `json:"have,omitempty"`
+	// Edges: the time of the message at a window's edge, by its position.
+	Edges map[int64]time.Time `json:"edges,omitempty"`
+	// WindowsDone: every window is read and the gaps between them are marked.
+	WindowsDone bool `json:"windows_done,omitempty"`
+	// Fallback: the uncovered years still to read backwards, newest first; Year is the one the filter is in.
+	Fallback []int `json:"fallback,omitempty"`
+	Year     int   `json:"year,omitempty"`
+	// Start: the time of the conversation's first message (position 0), once read; Probed: asked for once, so a
+	// conversation that does not say is not asked again.
+	Start  time.Time `json:"start,omitzero"`
+	Probed bool      `json:"probed,omitempty"`
+}
+
+// PositionAnchor is one anchor of a chat: its position and time.
+type PositionAnchor struct {
+	Pos int64     `json:"pos"`
+	At  time.Time `json:"at,omitzero"`
+}
+
+// SearchIndexed says the knowledge base keeps a persistent search index (#1273). Until it does, search reads every
+// archived line, which is too slow once millions of imported lines are in: the history import does not start a
+// source that needs the index (kb.history.sources.<id>.needs_search_index, true by default). The index work flips it.
+const SearchIndexed = false
 
 // Finished: the import of the chat is over and is not taken up again by itself.
 func (st HistoryState) Finished() bool {
@@ -120,6 +155,11 @@ func (s *Store) forgetHistory(source string) error {
 	return nil
 }
 
+// ErrDownloadAborted is what a HistoryWrite's Download returns (or wraps) to abort the whole write: nothing of the
+// batch is written, so its caller can read the same messages again later and download their images then, instead of
+// leaving placeholders that a later read could not replace (a line with its image differs from one without).
+var ErrDownloadAborted = errors.New("history: the download was aborted")
+
 // HistoryWrite is how WriteHistory writes one batch.
 type HistoryWrite struct {
 	Mode string // HistoryFull or HistoryAnchor, recorded as the chat's HistoryMode ("": left as it is)
@@ -164,11 +204,28 @@ func (e *Engine) WriteHistory(ctx context.Context, c *Chat, msgs []SourceMessage
 	}
 	probe := &Chat{ID: id, Source: source}
 	cut := e.textCutoff()
+	var aborted error
+	download := opt.Download
+	if download != nil {
+		download = func(ctx context.Context, ref, dst string) error {
+			if aborted != nil {
+				return aborted
+			}
+			err := opt.Download(ctx, ref, dst)
+			if errors.Is(err, ErrDownloadAborted) {
+				aborted = err
+			}
+			return err
+		}
+	}
 	var lines []Line
 	var kept []SourceMessage
 	for _, m := range msgs {
 		if ctx.Err() != nil {
 			return 0, ctx.Err()
+		}
+		if aborted != nil {
+			return 0, aborted
 		}
 		if m.At.Before(cut) {
 			continue
@@ -177,12 +234,15 @@ func (e *Engine) WriteHistory(ctx context.Context, c *Chat, msgs []SourceMessage
 		if m.Type == TypeOmitted {
 			l = Line{At: m.At, Sender: omissionSender, Text: strings.TrimSpace(m.Text)}
 		} else {
-			l = e.buildLine(ctx, opt.Download, probe, m, true)
+			l = e.buildLine(ctx, download, probe, m, true)
 			kept = append(kept, m)
 		}
 		if l.Text != "" {
 			lines = append(lines, l)
 		}
+	}
+	if aborted != nil {
+		return 0, aborted
 	}
 	sort.SliceStable(lines, func(i, j int) bool { return lines[i].At.Before(lines[j].At) })
 

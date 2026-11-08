@@ -360,11 +360,12 @@ func TestKBKeptAsTheHubSays(t *testing.T) {
 	if e2 := kbEng(t, s); e2.TextDays != 90 || e2.Store != e.Store {
 		t.Fatalf("after the hub's change %+v", e2)
 	}
-	// Attachment days per source: the engine goes by them, and a change opens it again.
+	// Attachment days per source: the engine goes by them (never past the text retention: no line, no attachment),
+	// and a change opens it again.
 	f.mu.Lock()
 	f.hello.KB = &KBSettings{TextDays: 90, AttachmentDaysBySource: map[string]int{"chat": 3650}}
 	f.mu.Unlock()
-	if e3 := kbEng(t, s); e3.AttachmentDaysFor("chat") != 3650 || e3.AttachmentDaysFor("other") != 30 || e3.Store != e.Store {
+	if e3 := kbEng(t, s); e3.AttachmentDaysBySource["chat"] != 3650 || e3.AttachmentDaysFor("chat") != 90 || e3.AttachmentDaysFor("other") != 30 || e3.Store != e.Store {
 		t.Fatalf("attachment days by source %+v", e3)
 	}
 	if !sameKBSettings(KBSettings{}, KBSettings{AttachmentDaysBySource: map[string]int{}}) ||

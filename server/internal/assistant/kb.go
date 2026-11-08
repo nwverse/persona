@@ -77,6 +77,8 @@ type kbState struct {
 	agentAt    map[string]time.Time        // agent → when its turn last went into a project timeline (kb_bus.go)
 	waiting    []assistantwire.KBAgentTurn // turns that came before it opened
 	postsDirty atomic.Bool                 // posts came in since the post archive's index was written (kb_posts.go)
+
+	history kbHistoryShared // the history import (kb_history.go)
 }
 
 // kbOpened is the open knowledge base and the hub's settings it was opened with.
@@ -95,6 +97,7 @@ type kbIndex interface {
 func (s *Service) kbInit(o *KBOptions) {
 	s.kb.kick = make(chan struct{}, 1)
 	s.kb.wake = make(chan struct{}, 1)
+	s.kbHistoryInit()
 	if o != nil {
 		s.kb.dir, s.kb.keyDir = o.Dir, o.KeyDir
 	}
