@@ -4,7 +4,7 @@ import XCTest
 /// (#1823). The list is upside down, where `.scrollDismissesKeyboard(.interactively)` alone never did.
 ///   PORT=18797 python3 scripts/mock/mock_hub.py &
 ///   TEST_RUNNER_PERSONA_MOCK_HUB=http://127.0.0.1:18797 xcodebuild test … -only-testing:PersonaUITests/ChatScrollKeyboardTests
-/// Both layouts (`-ui.oldLayout`) and both styles (TEST_RUNNER_PERSONA_UI_STYLE=beautiful).
+/// Both styles (TEST_RUNNER_PERSONA_UI_STYLE=beautiful).
 final class ChatScrollKeyboardTests: XCTestCase {
     private let widget = "macbook/a1f3c2d4-0000-4000-8000-000000000001"
     private var app: XCUIApplication!
@@ -17,18 +17,14 @@ final class ChatScrollKeyboardTests: XCTestCase {
     }
 
     @MainActor func testDraggingTheChatPutsTheKeyboardAway() {
-        dragCloses(layout: ["-ui.oldLayout", "NO"])
+        dragCloses()
     }
 
-    @MainActor func testDraggingTheChatPutsTheKeyboardAwayInTheOldLayout() {
-        dragCloses(layout: ["-ui.oldLayout", "YES"])
-    }
-
-    @MainActor private func dragCloses(layout: [String]) {
+    @MainActor private func dragCloses() {
         let hub = ProcessInfo.processInfo.environment["PERSONA_MOCK_HUB"]!
         app = XCUIApplication()
         let pair = "persona://pair?url=" + hub.addingPercentEncoding(withAllowedCharacters: .alphanumerics)! + "&token=mock"
-        app.launchArguments = ["-pairURL", pair, "-tab", "dev", "-openSession", widget] + layout
+        app.launchArguments = ["-pairURL", pair, "-tab", "dev", "-openSession", widget]
         app.launchPinned()
         let field = app.textViews.firstMatch.exists ? app.textViews.firstMatch : app.textFields.firstMatch
         XCTAssertTrue(field.waitForExistence(timeout: 15), "no composer:\n\(app.debugDescription)")

@@ -74,9 +74,11 @@ type entry struct {
 	// Origin: where a user line came from; a subagent handing back its report carries the report here (Claude Code
 	// 2.1.318+), on a hidden line its task notification then only points at (handbackOf). Raw: a shape not known yet
 	// must not lose the line.
-	Origin        json.RawMessage `json:"origin"`
-	Cwd           string          `json:"cwd"`
-	ToolUseResult json.RawMessage `json:"toolUseResult"`
+	Origin json.RawMessage `json:"origin"`
+	Cwd    string          `json:"cwd"`
+	// toolUseResult, a tool's own copy of its output (often as long as the tool_result itself), is not read: items take
+	// a result from the message, and a field here would copy every one of them for nothing.
+
 	// system/api_error: {message, formatted} (raw: other lines may carry a plain string here), and which retry this is.
 	Error        json.RawMessage `json:"error"`
 	RetryAttempt int             `json:"retryAttempt"`

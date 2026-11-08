@@ -128,9 +128,9 @@ export function presetBody(p: LauncherPreset, name: string, key: string, model: 
   };
 }
 
-/** Whether the hub can test a preset's key: its test speaks the Messages protocol only, so a Responses API cannot be. */
+/** Whether the preset uses a protocol supported by the connection test. */
 export function presetTestable(p: LauncherPreset): boolean {
-  return !(p.kind === "api" && p.api === "responses");
+  return !p.api || p.api === "messages" || p.api === "responses";
 }
 
 /** POST /api/v1/launchers/test's body for a preset: the hub fills in its address and, without one here, its default model. */

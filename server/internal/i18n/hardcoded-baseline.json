@@ -81,7 +81,7 @@
   "internal/extension/declarative.go": 1,
   "internal/extension/dev.go": 6,
   "internal/extension/inbox.go": 1,
-  "internal/extension/manifest.go": 1,
+  "internal/extension/manifest_validate.go": 1,
   "internal/extension/market.go": 34,
   "internal/extension/market_git.go": 9,
   "internal/extension/nodepkg.go": 2,

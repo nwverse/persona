@@ -33,6 +33,19 @@ class RequestEditorTest {
         assertTrue(disk.isEmpty())
     }
 
+    /** A password card's typed password (#1581) never reaches the saved request drafts, alone or beside other draft text. */
+    @Test fun aPasswordCardsTypedPasswordIsNeverJournaled() {
+        val disk = mutableMapOf<String, String>()
+        val journal = RequestDraftJournal(disk::get) { key, value -> if (value == null) disk.remove(key) else disk[key] = value }
+        val card = Interaction("ix_secret", machineId = "hub", sessionId = "chat", kind = "permission", toolName = "secret_run",
+            fields = listOf(InteractionField(key = "password", label = "Password", secret = true)))
+        journal.save("pairing-a", card, AnswerDraft(password = "private-value"))
+        assertTrue(disk.isEmpty())
+        journal.save("pairing-a", card, AnswerDraft(password = "private-value").copy(message = "note"))
+        assertFalse(disk.values.single().contains("private-value"))
+        assertEquals("", journal.load("pairing-a", card).password)
+    }
+
     @Test fun elicitationValidatesTypedFieldsAndAllOutcomesWhileSourcesAndCommandsRequireEvidence() {
         val request = JsonCodec.decodeFromString(Interaction.serializer(), """{
             "id":"form","kind":"elicitation","mcp_server_name":"example-service","agent_type":"Explore",

@@ -136,7 +136,7 @@ struct ShellSwitch<ChatMenu: View, WorkMenu: View>: View {
         }
     }
 
-    /// The page's symbol on the rail, as its tab has in the old layout.
+    /// The page's symbol on the rail, matching its shared tab.
     private static func symbol(_ value: AppTab) -> String {
         #if os(iOS) || os(visionOS)
         if value == .feishu { return Theme.Icon.feishuChats } // a phone's tab only (no such tab on the Mac)
@@ -283,7 +283,7 @@ struct ShellCircleButton: View {
 }
 
 /// The top bar's left button on both pages (2026-11-01 user request, in place of ☰): the persona's face in Persona's
-/// state, as the old layout's bar shows it in the middle (`PersonaDot`, docs/apple/persona.md「状态」), opening the drawer
+/// state, shared with the platform bar's centered `PersonaDot` (docs/apple/persona.md「状态」), opening the drawer
 /// (Chat History, Inbox…). The state is that of Persona's conversation on Assistant (`assistantCurrent`), on Agents too, so the
 /// face stays the same while the strip slides. While the inbox has something for the user a small soft red dot sits
 /// on the face's lower right (2026-11-04 user request, in place of a red tray beside it: smaller, paler, overlapping

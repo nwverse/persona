@@ -18,7 +18,7 @@ extension EnvironmentValues {
     @Entry var tabIsActive = true
 }
 
-/// Set on each tab's content in the old layout, iPad and iPhone Duo's TabView: whether it is in front (`tabIsActive`).
+/// Set on each tab's content in the platform TabView: whether it is in front (`tabIsActive`).
 @MainActor
 struct TabActivityScope: ViewModifier {
     let tab: AppTab

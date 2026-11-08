@@ -465,6 +465,9 @@ nonisolated enum Theme {
         static let sidebarMax: CGFloat = 480
         /// The narrowest column of a card grid (Machines' cards): two side by side in an iPad's detail column.
         static let cardColumn: CGFloat = 330
+        /// The narrowest column of a chat's grid of subagent cards: two side by side from about 540 pt (iPad, Mac), as
+        /// the web's from 560 px; one on a phone.
+        static let subagentColumn: CGFloat = 260
         // CarPlay.
         /// The image of a CarPlay voice control state: Apple's guide asks for 150 pt (CarPlay sets its own size).
         static let carPlayVoiceImage: CGFloat = 150
@@ -548,7 +551,7 @@ nonisolated enum Theme {
         LinearGradient(colors: [c, c.blended(with: .black, by: 0.12)], startPoint: .top, endPoint: .bottom)
     }
 
-    /// The ChatGPT-style shell (docs/apple/ios.md「新外壳」, iPhone without Old Layout): neutral like ChatGPT's, in every style.
+    /// The iPhone shell: neutral like ChatGPT's, in every style.
     enum Shell {
         /// The Assistant | Agents switch's selected segment, inside its glass capsule.
         static let segment = Color(light: 0xE6E6E6, dark: 0x3A3A3C)

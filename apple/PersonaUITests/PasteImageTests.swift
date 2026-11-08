@@ -15,7 +15,7 @@ final class PasteImageTests: XCTestCase {
             ctx.fill(CGRect(x: 0, y: 0, width: 40, height: 30))
         }
         let app = XCUIApplication()
-        app.launchArguments = ["-demo.on", "YES", "-ui.oldLayout", "NO", "-newAssistant", "YES", "-dev.openChat", "", "-tab", "assistant"]
+        app.launchArguments = ["-demo.on", "YES", "-newAssistant", "YES", "-dev.openChat", "", "-tab", "assistant"]
         app.launchPinned()
 
         let field = app.descendants(matching: .any)["shell-composer-field"].firstMatch

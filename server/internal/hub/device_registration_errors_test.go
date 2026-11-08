@@ -189,9 +189,16 @@ func TestRegistrationBackgroundWritesKeepRunning(t *testing.T) {
 	h.push.relay = &http.Client{Transport: registrationTransport(func(*http.Request) (*http.Response, error) {
 		return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(`{"grant":"renewed"}`))}, nil
 	})}
+	if _, ok := h.push.device(d.DeviceID); ok {
+		t.Fatal("failed enrollment became sendable")
+	}
+	// Renewal belongs to an already committed registration, not the failed one.
+	h.push.mu.Lock()
+	h.push.devices[d.DeviceID] = d
+	h.push.mu.Unlock()
 	renewed, err := h.push.renewGrant(d)
-	if err != nil || renewed.RelayGrant != "renewed" {
-		t.Fatalf("renewal stopped: %+v, %v", renewed, err)
+	if !errors.Is(err, failure) || renewed.RelayGrant != "old" {
+		t.Fatalf("renewal did not report persistence failure: %+v, %v", renewed, err)
 	}
 	h.live.update("phone", func(v *db.LiveActivity) { v.PushToStartToken = "new-token" })
 	if h.live.rows["phone"].PushToStartToken != "new-token" {

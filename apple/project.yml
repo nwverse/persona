@@ -681,7 +681,6 @@ targets:
     sources:
       - path: PersonaUITests/ExtensionStreamUITests.swift
       - path: PersonaUITests/UITestStyle.swift
-      - path: PersonaUITests/LaunchLayout.swift
     dependencies:
       - target: PersonaMac
     settings:

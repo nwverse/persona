@@ -29,6 +29,29 @@ The node runs the list script and the launchers in an interactive shell (`loginS
 always bash without zsh (Git Bash on Windows). Bash runs as `bash -ic` and reads `~/.bashrc`, not `~/.bash_profile` / `~/.profile`: aliases kept there aren't listed.
 Bash has no zsh `(z)` / `(Q)`, and macOS's bundled bash 3.2 has no `BASH_ALIASES`, so under bash the script prints `alias -p`, and the node splits words and strips quotes by the shell's rules itself (nothing expanded or run, `node/launchers_shell.go`) before handing them to the same parser.
 
+### The terminal's shell is another environment (#1642)
+
+The node **lists** launchers, and runs "Test availability", the launcher health checks, probes and repairs, in its own login shell (`loginShellProgram -ic`). A start **types** the launcher into a new herdr tab, whose shell is whatever herdr opens there. When the two read different startup files, a launcher the list shows does not exist where it runs:
+
+- herdr's panes run inside a container (sharing the home directory) whose `~/.bashrc` detects the container and returns early, before the launchers are defined;
+- the node lists from zsh (`~/.zshrc`, zsh installed and a `~/.zshrc` there) while the account's login shell, and so the tab, is bash;
+- herdr's `[terminal] default_shell`, or a herdr server started outside the node with another `$SHELL`;
+- a bash login tab reads `~/.bash_profile` / `~/.profile`, which does not source `~/.bashrc`;
+- a Persona-managed launcher's `personad` (an absolute path) or `claude` is not visible inside the terminal's environment.
+
+The tab's shell answers within a second with its own line (`bash: <launcher>: command not found`, `zsh: command not found: <launcher>`, `sh: 1: <launcher>: not found`, `fish: Unknown command: <launcher>`, `…: No such file or directory`, `…: Permission denied`). The node reads that line while it waits for claude (`node/shellmiss.go`; only after the command it typed, never the echoed command itself, older scrollback, or claude's own output) and ends the start right away, closing the tab, with `launcher_missing` (or `claude_missing` when the launcher ran but the tab's PATH has no claude) and `where: "terminal"`.
+The hub says it in the user's language: which shell the tab opens, that it has no such command, and which shell and rc file the launcher list came from (`docs/protocol/protocol.md` "Errors"). Lines about other commands (rc noise, a `PROMPT_COMMAND`) do not end the start; a start that then times out names the last such line instead of guessing at a busy machine. Shells and locales whose lines are not recognized still wait for the timeout.
+A few lines need care: dash, ksh and busybox say `…: <path>: not found` of a missing path, which counts as a missing file like bash's `No such file or directory` (a managed launcher's `personad` the terminal cannot see); `personad launch` prints its `claude not found in PATH …` through `log.Fatal`, with the date and time in front; fish follows an error inside a function with a backtrace (`in function 'cc' with arguments '--session-id …'`) that repeats the session id but is no echo of the command.
+A launcher the node does not list either (removed from the rc file, a stale name from an old picker or plan) ends the start the same way but as plain `launcher_missing`, without `where`: it is gone from the login shell too, so it is neither worded nor kept as the terminal's problem.
+
+To fix it, make the launcher exist where the terminal's shell reads it:
+
+- define it above the early `return` of the rc file, or in a file both environments source (`~/.config/launchers.sh` sourced from `~/.zshrc` and `~/.bashrc`);
+- make the shell herdr opens the one the node lists from (the login shell, or herdr's `default_shell`), or have `~/.bash_profile` source `~/.bashrc`;
+- or add it in Persona as a model provider ("Running Persona-managed launchers" below): nothing then depends on rc files, as long as the terminal sees the node's `personad` and `claude`.
+
+Launcher health keeps such a launcher apart (`not_in_terminal`, `docs/server/launcher-health.md`): the login shell's check passes, so only a start with it that works clears it.
+
 ## Detecting launchers in ~/.zshrc (`launcherScript` in `node/launchers.go`)
 
 node gathers two things in one login-shell invocation (`zsh -ic`, loading `~/.zshrc` first), cached for 1 minute.
@@ -210,7 +233,7 @@ Persona-managed entries swipe to “Delete,” removing the stored key too, with
 | `POST /api/v1/launchers` | Add `{name, base_url, model, small_model?, subagent_model?, custom_model?, custom_model_name?, custom_model_description?, args?, api_key, auth?, preset?, display_name?, assign?}`; `auth` is `api_key` (default) or `bearer`. With `preset`, missing values are filled from the preset, and `name` may be empty (see “Built-in presets” and “Adding from extensions” below); with `assign`, returns `{launcher, assigned, kept}` |
 | `GET /api/v1/launchers/presets` | Provider presets: built-ins (`plugin: "builtin"`) plus extensions (`docs/extensions/extensions.md`, “Model providers”), sorted by request language. Old hubs return 404; the app treats this as none |
 | `PUT /api/v1/launchers/{name}` | Edit (`api_key` unchanged if omitted); Persona-managed only. Fields under “Provider model and gateway parameters” below retain their old values if omitted |
-| `POST /api/v1/launchers/test` | Test connection (without node, see below): `{name?, base_url?, auth?, api_key?, headers?, model, preset?}` → `{ok, ms, model, error?, code?}` (`code: "region_blocked"` means Anthropic blocked the region; changing keys will not help, see `docs/protocol/protocol.md`). With `preset`, missing address and model use preset defaults |
+| `POST /api/v1/launchers/test` | Test connection (without node, see below): `{name?, base_url?, api?, auth?, api_key?, headers?, model, preset?}` → `{ok, ms, model, error?, code?}` (`code: "region_blocked"` means Anthropic blocked the region; changing keys will not help, see `docs/protocol/protocol.md`). With `preset`, missing address, protocol and model use preset defaults |
 | `POST /api/v1/launchers/discover` | Fetch models: `{name?, base_url?, auth?, api_key?, headers?}` → `{models:[{id, name?, context_window?, efforts?, default_effort?}], error?, code?}` |
 | `DELETE /api/v1/launchers/{name}` | Delete Persona-managed entries; hide ~/.zshrc entries |
 | `POST /api/v1/launchers/{name}/restore` | Unhide |
@@ -242,17 +265,12 @@ Persona-managed providers add these fields following cindy's model (`proto.Manag
 
 **Connection tests and model discovery** request the gateway directly from the manager (`assistant/models_probe.go`) (following cindy's `buildProbeRequest` / `provider-model-fetch`), also available before saving a new provider:
 
-- With `name`, use stored Base URL, key, headers, default model, and proxy; request values override stored values (`headers: ""` means no headers for this request).
-- Connection testing sends one `POST <base>/v1/messages` (`max_tokens: 1`, content `ping`); model discovery sends `GET <base>/v1/models`. Do not duplicate `/v1` if the Base URL already ends with it.
+- With `name`, use stored Base URL, protocol, key, headers, default model, and proxy; request values override stored values (`headers: ""` means no headers for this request).
+- Connection testing sends a short `ping` to `POST <base>/v1/messages` for Messages or a streaming `POST <base>/v1/responses` for Responses, requiring the Responses completion event. Model discovery sends `GET <base>/v1/models`. A deployment path prefix is retained and `/v1` is not duplicated in either probes or direct API calls.
   Both `x-api-key` and `Authorization: Bearer` are sent (strip leading `Bearer ` from the key), plus `anthropic-version: 2023-06-01` and custom headers.
-- Timeout: 30 seconds. Failures return a plain-language explanation (401 authentication failed, 403 forbidden, 404 wrong address, 429 rate limited, timeout, unreachable), followed by the gateway's own error;
-  key and header values are always replaced by `***`. Both APIs themselves always return 200; inspect `ok` / `error` for the result.
-- Model lists accept three shapes: `{data:[…]}`, `{models:[…]}`, or a bare array (objects or strings). ID comes from `id` / `slug` / `key` / `model_name` / `model_id`,
-  name from `display_name` / `name`, and window from `context_length` / `context_window` / `max_context_length` / `max_input_tokens`. Deduplicate while preserving order.
-- Fill missing gateway information from a **built-in catalog**: `server/internal/assistant/models_catalog.json`, taken from cindy's `model-registry.json` (Apache-2.0, see `THIRD_PARTY_NOTICES.md`):
-  Claude models and common gateway models such as GLM, Kimi, DeepSeek V4, Qwen3, MiniMax, Seed, and MiMo, with only id, name, context_window, efforts, default_effort.
-  Lookups are case-insensitive and strip vendor prefixes (`anthropic/…`), `[1m]`, and date suffixes. IDs absent from the catalog but ending in `[1m]` get a 1M window. Gateway-provided values take precedence.
-  To update the catalog, regenerate from the newer cindy version, taking only values explicitly stated in the registry, without guessing.
+- Timeout: 30 seconds for the whole operation. Failures identify authentication, missing endpoints, rejected request formats, rate limiting, timeout and connectivity; key and header values are redacted. Both APIs return 200; inspect `ok` / `error` and `code` for the result.
+- Model lists accept `{data:[…]}`, `{models:[…]}`, or a bare array (objects or strings). IDs use `id` / `slug` / `key` / `model_name` / `model_id`; names use `display_name` / `name`; windows use `max_model_len` / `context_length` / `context_window` / `max_context_length` / `max_input_tokens`. Pagination follows cursors or same-endpoint links, up to 100 pages, deduplicating IDs in order. Invalid, repeated or excessive pagination returns an error with the partial list.
+- The built-in catalog `server/internal/assistant/models_catalog.json` supplies known model metadata. Its context window takes precedence; otherwise a server-reported window is used. Lookups ignore case, vendor prefixes, `[1m]`, and date suffixes; unknown IDs ending in `[1m]` get a 1M window when the server reports none.
 
 ## Direct-API providers
 
@@ -301,7 +319,7 @@ picked otherwise. They also count for the send check (`launcherHasModel`), so a 
   DEBUG `-tab settings -openModelLaunchers YES -openLauncherEditor preset` opens From Extension directly (`-openLauncherEditor YES` opens the add page).
 - Web (#3693, onboarding #287 section 4.3, “Three paths,” B): the add dialog's first step directly lists every preset from `GET /api/v1/launchers/presets` (built-ins first, hub order; extensions marked “Extension”).
   “Custom compatible gateway” comes last; address and authentication method appear only there. The client no longer hardcodes “Official Anthropic,” using built-in preset `builtin/anthropic` instead. For a preset, paste only the key: after typing pauses for 0.7 seconds (at least 8 characters),
-  it automatically tests once with `POST /api/v1/launchers/test {preset, api_key, auth}` (direct-API presets with `api: "responses"` are not tested: hub testing sends only `/v1/messages`, so a one-line explanation appears instead). Failure shows hub's plain-language error and “Retest”; `signup_url` is “Where to get a key” (opens a new tab). Name (generated by hub if empty) and default model are under “More options.”
+  it automatically tests once with `POST /api/v1/launchers/test {preset, api_key, auth}` using the preset's protocol. Failure shows hub's plain-language error and “Retest”; `signup_url` is “Where to get a key” (opens a new tab). Name (generated by hub if empty) and default model are under “More options.”
   Save includes `assign: ["assistant", "agent.new"]` (toggle on by default, “Use for the main chat and new Agents”); the final screen uses `assigned` / `kept` to explain which purposes switched and which stayed unchanged, with reasons.
   Gap: the design requires the toggle to default off “when usable Claude Code already exists,” pending `assistant_readiness` (the fourth PR). Until then it always defaults on; hub's assign-if-default protects only purposes explicitly customized by users.
   Without `builtin_presets` in hub's `features` (old hub), name is required above the key, with no `assign` or toggle. “Import from ~/.zshrc” moves to “Advanced” below the list; without a computer, the button is disabled with an explanation.
