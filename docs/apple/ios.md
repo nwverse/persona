@@ -524,7 +524,9 @@ Apps built with older Xcode do not extend under the status bar and camera on Duo
   `.splitDetailPage(ownsBack: true)`: an outer `navigationBarBackButtonHidden(false)` overrides the page's `true`, bringing back the system button
   and stacking two Back buttons (2026-11-04, TestFlight).
   With the keyboard open, this header becomes fog only (title, same-space Agents and sub-Agents hide until the keyboard closes): inner landscape leaves only about 390pt above the keyboard,
-  and the header, mode buttons and input previously occupied it all, leaving no message visible (2026-11-04). The side column's system title still names the session.
+  and the header, mode buttons and input previously occupied it all, leaving no message visible (2026-11-04). The system draws its bar's title over the content, not in the side
+  column, so it is removed while the header shows its own (`toolbar(removing: .title)`; the session's name showed twice, one above the other, 2026-11-08, TestFlight)
+  and comes back while typing, when the header is only fog.
   Persona's top bar remains custom at the content top; its fog extends horizontally under the side status bar (`BarFog`; limiting it to content width leaves a vertical edge in dark mode).
 - **Short outer screen** (about 678pt): on Persona's new-chat page, Needs you rows above the input shrink to the remaining space (see "Empty chat" under "New shell" above).
 - **Simulator verification**: iPhone Duo has only the iOS 27.1 runtime (which supports only it). Folding / unfolding / half-folding can only be switched in Xcode Device Hub,
@@ -814,7 +816,8 @@ iOS, Mac, visionOS, watch and extensions support Simplified Chinese, English and
   - Exceptions: user-sized terminal grid, Dynamic Island grid, fixed-image share cards, small-circle numbers/badges.
   - Monospace only character comparison/copying: code/commands/paths/branches/hashes/IDs/versions/terminal/tool output. Chinese explanations/values system font
     (session info chooses by row: model/branch/directory/version monospace, others system + monospaced digits; memory editor/Knowledge recent messages system).
-  - `Theme.Icon` (`Shared/Design/Icons.swift`): one meaning per SF Symbol, pages `Theme.Icon.copy`, not `"doc.on.doc"`.
+  - `Theme.Icon` (`Shared/Design/Icons.swift`): one meaning per SF Symbol, pages `Theme.Icon.copy`, not `"doc.on.doc"`; drawn with
+    `ThemedIcon` / `IconTile` so each style's icon language applies (`IconSpec`; rules, exceptions and checks in `docs/apple/icons.md`).
     Symbols used in two files must register; errors triangles (`error` / `errorFilled`), octagon only critical machine alerts (`critical`); Copy `doc.on.doc`,
     Paste `doc.on.clipboard`, Interrupt `stop.fill`, model/launcher `cube` (`cpu` only processor), code files `curlybraces`, `</>` only Agents.
     `IconVocabularyTests` rejects direct registered names, shared unregistered symbols and retired error symbols.

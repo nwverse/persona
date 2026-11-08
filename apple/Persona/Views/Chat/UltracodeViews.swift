@@ -14,7 +14,7 @@ struct UltracodeMark: View {
     var spoken: String? = Ultracode.onWords
 
     var body: some View {
-        Image(systemName: Theme.Icon.workflow)
+        ThemedIcon(Theme.Icon.workflow)
             .font(font)
             .foregroundStyle(Theme.ai)
             .accessibilityHidden(spoken == nil)
@@ -30,7 +30,7 @@ struct UltracodeMark: View {
     /// the title's two halves. The label is the whole text's: an image's own inside a `Text` is not read.
     static func after(_ title: String, on: Bool, font: Font = Theme.Font.label) -> Text {
         guard on else { return Text(title) }
-        let mark = Text(Image(systemName: Theme.Icon.workflow)).font(font).foregroundStyle(Theme.ai)
+        let mark = Text(Theme.Icon.image(Theme.Icon.workflow)).font(font).foregroundStyle(Theme.ai)
         return (Text(title) + Text(verbatim: "\u{00A0}") + mark)
             .accessibilityLabel(title + String(localized: ", ", comment: "List separator") + Ultracode.onWords)
     }
@@ -78,7 +78,7 @@ struct UltracodeMenuSection: View {
             Toggle(isOn: binding(sw)) {
                 Text(verbatim: Ultracode.name)
                 Text(words.subtitle)
-                Image(systemName: Theme.Icon.workflow)
+                Theme.Icon.image(Theme.Icon.workflow)
             }
             .disabled(sw.disabled)
             .accessibilityIdentifier("ultracode.switch")
@@ -103,7 +103,7 @@ struct UltracodeLostNote: View {
         let ask = model.ultracodeAsk(key)
         let waiting = Ultracode.shownOn(session, ask: ask) && session.ultracodePending
         HStack(spacing: Theme.Space.s) {
-            Image(systemName: Theme.Icon.workflow).font(Theme.Font.labelStrong).foregroundStyle(Theme.ai)
+            ThemedIcon(Theme.Icon.workflow).font(Theme.Font.labelStrong).foregroundStyle(Theme.ai)
                 .accessibilityHidden(true)
             Text("ultracode off after resume")
                 .font(Theme.Font.secondary).foregroundStyle(.secondary)
@@ -114,7 +114,7 @@ struct UltracodeLostNote: View {
             } else {
                 Button { Task { await model.setUltracode(key, on: true) } } label: {
                     HStack(spacing: Theme.Space.xs) {
-                        if ask?.sending == true { ProgressView().controlSize(.mini) } else { Image(systemName: Theme.Icon.retry) }
+                        if ask?.sending == true { ProgressView().controlSize(.mini) } else { ThemedIcon(Theme.Icon.retry) }
                         Text("Turn Back On")
                     }
                     .font(Theme.Font.secondaryStrong)
@@ -128,7 +128,7 @@ struct UltracodeLostNote: View {
                 .accessibilityIdentifier("ultracode.reopen")
             }
             Button { Task { await model.dismissUltracodeLost(key) } } label: {
-                Image(systemName: Theme.Icon.close)
+                ThemedIcon(Theme.Icon.close)
                     .font(Theme.Font.labelStrong)
                     .foregroundStyle(.secondary)
                     .scaledFrame(width: Theme.Size.icon, height: Theme.Size.icon)
@@ -174,7 +174,7 @@ struct UltracodeStartRow: View {
                     }
                 }
             } icon: {
-                Image(systemName: Theme.Icon.workflow).foregroundStyle(Theme.ai)
+                ThemedIcon(Theme.Icon.workflow).foregroundStyle(Theme.ai)
             }
         }
         .disabled(blocked != nil)
