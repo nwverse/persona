@@ -2,17 +2,17 @@ package transcript
 
 import (
 	"encoding/json"
-	"regexp"
 	"strings"
 
+	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/prompts"
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
 // A message another Claude session sent this one ("Another Claude session sent a message:" + the tagged body + an
 // English note on how to treat it).
-var crossRe = regexp.MustCompile(`(?s)<cross-session-message([^>]*)>\s*(.*?)\s*</cross-session-message>`)
-var crossNameRe = regexp.MustCompile(`from-name="([^"]*)"`)
+var crossRe = lazyre.New(`(?s)<cross-session-message([^>]*)>\s*(.*?)\s*</cross-session-message>`)
+var crossNameRe = lazyre.New(`from-name="([^"]*)"`)
 
 // peerMessage is another Claude session's message that came while this one was idle: Claude Code (2.1.299 on) writes
 // it as a hidden (isMeta) user line with the sender in its origin, and it starts a turn, so it reads as the message it

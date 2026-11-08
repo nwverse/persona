@@ -19,10 +19,13 @@ struct ExtensionViewRenderer: View {
     @Binding var link: LinkTarget?
 
     var body: some View {
+        #if !os(macOS)
+        // Mac pages already expose the same search in their toolbar.
         if let search = view.search, let model, model.managesConfirmation {
             Section { ExtensionSearchRow(search: search, model: model, link: $link) }
                 .listRowInsets(EdgeInsets()).listRowBackground(Color.clear)
         }
+        #endif
         if let f = view.filter, let model {
             Section { ExtensionFilterChips(filter: f, model: model, link: $link) }
                 .listRowInsets(EdgeInsets())
@@ -186,7 +189,7 @@ struct ExtensionItemRow: View {
                 ExtensionActionButton(action: b.action, title: b.title, destructive: b.role == "destructive", model: model, link: $link) {
                     HStack(spacing: Theme.Space.s) {
                         if model.selected(b.action.id) {
-                            Image(systemName: Theme.Icon.success).foregroundStyle(Theme.positive).accessibilityLabel("Selected [Extension Components 7ecf1c]")
+                            ThemedIcon(Theme.Icon.success).foregroundStyle(Theme.positive).accessibilityLabel("Selected [Extension Components 7ecf1c]")
                         }
                         Text(b.title).lineLimit(1).minimumScaleFactor(0.8)
                         if model.running == b.action.id { ProgressView().controlSize(.small) }
@@ -196,7 +199,7 @@ struct ExtensionItemRow: View {
         case .link(let l):
             if let url = URL(string: l.url), url.scheme == "https" {
                 Button { link = LinkTarget(url: url) } label: {
-                    Label { Text(l.title.isEmpty ? (url.host() ?? "") : l.title).lineLimit(1) } icon: { Image(systemName: Theme.Icon.link) }
+                    Label { Text(l.title.isEmpty ? (url.host() ?? "") : l.title).lineLimit(1) } icon: { ThemedIcon(Theme.Icon.link) }
                 }
                 .accessibilityIdentifier("plugin-ui-link")
             }
@@ -515,7 +518,13 @@ struct ExtensionPageView: View {
     }
 
     private func updateVisibility() {
-        page.setVisible(pageVisible && tabActive && phase == .active)
+        var foreground = phase == .active
+        #if DEBUG && os(macOS)
+        // A validated loopback capture uses the normal stream while its window stays non-activating.
+        // This exception exists only for the DEBUG batch; production still requires an active scene.
+        foreground = foreground || MacExtensionSnapshotBatch.isCapturing
+        #endif
+        page.setVisible(pageVisible && tabActive && foreground)
     }
 
     private var form: some View {

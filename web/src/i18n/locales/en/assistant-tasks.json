@@ -146,5 +146,10 @@
   "report_step": "Step {step} · {text}",
   "report_from": "\"{title}\" to Persona",
   "report_later": "Can wait for the next briefing",
-  "said_to_interrupting": "Stopped \"{title}\" and told it"
+  "said_to_interrupting": "Stopped \"{title}\" and told it",
+  "sent_to": "Sent to \"{title}\"",
+  "sent_interrupting": "Stopped \"{title}\" and sent",
+  "sent_count_one": "{count} instruction sent",
+  "sent_count_other": "{count} instructions sent",
+  "copy": "Copy"
 }

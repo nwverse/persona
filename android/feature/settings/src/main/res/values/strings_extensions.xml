@@ -283,6 +283,7 @@
     <!-- Auto-upgrades (docs/extensions/extensions.md "Auto-upgrade") -->
     <string name="settings_ext_upgrade_title">Upgrades</string>
     <string name="settings_ext_upgrade_footer">When the market has a new version, it\'s installed while the extension is idle. If it asks for more permissions, you\'re asked first. A version that fails to start rolls back to the previous one.</string>
+    <string name="settings_ext_upgrade_paused_footer">Auto-upgrade is paused while this extension is off. Turn the extension back on and your auto-upgrade setting applies again.</string>
     <string name="settings_ext_auto_upgrade">Auto-upgrade</string>
     <string name="settings_ext_new_version">New version %1$s</string>
     <string name="settings_ext_auto_upgrade_on">Auto-upgrade on</string>

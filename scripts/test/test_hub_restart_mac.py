@@ -36,6 +36,11 @@ class AgentFixtureIdentity(unittest.TestCase):
                 self.assertEqual(Path(job['ProgramArguments'][0]).parent.parent.resolve(), canonical)
 
 
+def switch_calls(home: Path) -> set:
+    """The switch the script asks personad for: the program given (as the state directory resolves, or not)."""
+    return {f'personad hub switch --binary {p}/bin/personad --timeout 8m' for p in (home / '.persona', (home / '.persona').resolve())}
+
+
 @unittest.skipUnless(platform.system() == 'Darwin', 'the launchd branch runs only on macOS')
 class HubRestartOnMac(unittest.TestCase):
     def personad(self, home: Path, rc: int):
@@ -66,8 +71,10 @@ class HubRestartOnMac(unittest.TestCase):
             r = self.run_script(home, agents(home))
             self.assertEqual(r.returncode, 0, r.stderr)
             self.assertIn('restarted launchd agent my.hub', r.stdout)
-            self.assertEqual((home / 'calls').read_text().splitlines(), [
-                'personad hub switch --timeout 8m', f'launchctl kickstart -k gui/{os.getuid()}/my.hub'])
+            calls = (home / 'calls').read_text().splitlines()
+            self.assertEqual(len(calls), 2, calls)
+            self.assertIn(calls[0], switch_calls(home))
+            self.assertEqual(calls[1], f'launchctl kickstart -k gui/{os.getuid()}/my.hub')
 
     def test_switches_the_edge_instead_of_restarting(self):
         with tempfile.TemporaryDirectory() as d:
@@ -78,7 +85,9 @@ class HubRestartOnMac(unittest.TestCase):
             r = self.run_script(home, agents(home))
             self.assertEqual(r.returncode, 0, r.stderr)
             self.assertIn('switched to the new binary', r.stdout)
-            self.assertEqual((home / 'calls').read_text().splitlines(), ['personad hub switch --timeout 8m'])
+            calls = (home / 'calls').read_text().splitlines()
+            self.assertEqual(len(calls), 1, calls)
+            self.assertIn(calls[0], switch_calls(home))
 
     def test_no_agent_is_an_error_not_a_silent_success(self):
         with tempfile.TemporaryDirectory() as d:

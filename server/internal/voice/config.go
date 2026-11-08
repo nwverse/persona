@@ -13,11 +13,11 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"regexp"
 	"slices"
 	"strings"
 
 	"github.com/nwverse/persona/server/internal/identity"
+	"github.com/nwverse/persona/server/internal/lazyre"
 )
 
 // Dialects of the GPT-Live wire.
@@ -194,9 +194,9 @@ type Provider struct {
 }
 
 var (
-	providerIDPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]{0,31}$`)
-	modelPattern      = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$`)
-	voicePattern      = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$`)
+	providerIDPattern = lazyre.New(`^[a-z0-9][a-z0-9_-]{0,31}$`)
+	modelPattern      = lazyre.New(`^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$`)
+	voicePattern      = lazyre.New(`^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$`)
 )
 
 // LoadConfig reads the settings the hub hands the plugin (docs/assistant/voice.md "How the extension gets its settings"): the settings form in

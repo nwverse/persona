@@ -9,7 +9,6 @@ import (
 	"io"
 	"net/http"
 	"path/filepath"
-	"regexp"
 	"slices"
 	"strings"
 	"sync"
@@ -24,6 +23,7 @@ import (
 	"github.com/nwverse/persona/server/internal/db"
 	"github.com/nwverse/persona/server/internal/extwire"
 	"github.com/nwverse/persona/server/internal/i18n"
+	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/link"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/sessionlist"
@@ -289,7 +289,7 @@ func (h *Hub) auth(next http.Handler) http.Handler {
 		// API answers are live data: without this the phone's URLCache kept a copy of every page it pulled (megabytes,
 		// never read again). Images and media that may be cached set their own Cache-Control.
 		w.Header().Set("Cache-Control", "no-store")
-		next.ServeHTTP(w, r)
+		h.observeClientRequest(next, w, r, p)
 	})
 }
 
@@ -393,7 +393,7 @@ func atoi(s string) int {
 
 // agentTypeRe is what POST /api/v1/sessions takes as agent_type: claude, codex, traex, or a runtime's agent as the
 // launcher list says (a runtime's launcher starts through its runtime, whatever the type); the node checks the rest.
-var agentTypeRe = regexp.MustCompile(`^[a-z][a-z0-9_-]{0,31}$`)
+var agentTypeRe = lazyre.New(`^[a-z][a-z0-9_-]{0,31}$`)
 
 func (h *Hub) withMachine(fn func(http.ResponseWriter, *http.Request, *Machine)) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
@@ -1104,6 +1104,7 @@ func (h *Hub) serveWS(w http.ResponseWriter, r *http.Request) {
 			c.clean = s == websocket.StatusNormalClosure || s == websocket.StatusGoingAway
 			return
 		}
+		c.recordSocketTraffic("websocket_frame", "received", int64(len(data)), 0)
 		h.onClientMessage(ctx, c, data)
 	}
 }

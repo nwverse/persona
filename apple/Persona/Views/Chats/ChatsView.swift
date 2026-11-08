@@ -527,6 +527,8 @@ struct ChatsView: View {
 
 /// The Agents list itself: what follows the hub's pushes (`ChatsView` holds the navigation and the toolbar).
 private struct AgentsList: View {
+    /// iPhone Duo's bars down the side: the shell's bar is the side rail, and the list needs no room for it at its top.
+    @Environment(\.shellRailEdge) private var railEdge
     #if os(macOS)
     static let emptyMessage = String(localized: "Start an agent on any of your computers, then follow it live and take over here.")
     #else
@@ -912,7 +914,7 @@ private struct AgentsList: View {
                     } label: {
                         if compact {
                             HStack(spacing: CompactList.gap) {
-                                Image(systemName: Theme.Icon.success).font(CompactList.metaStrong).scaledFrame(width: CompactList.mark)
+                                ThemedIcon(Theme.Icon.success).font(CompactList.metaStrong).scaledFrame(width: CompactList.mark)
                                 Text(StateName.markAllSeen()).font(CompactList.title).lineLimit(1)
                                 Spacer()
                                 Text(StateName.count(.unread, unreadShown.count)).font(CompactList.meta).foregroundStyle(.secondary).lineLimit(1)
@@ -1019,7 +1021,7 @@ private struct AgentsList: View {
 
     private func styledAgentList<Content: View>(_ list: Content, base: [Session], interactions: [Interaction]) -> some View {
         list
-        .modifier(AgentsListStyle(capsules: capsules, room: ownsTop && shell != nil && !compactTop, ownsTop: ownsTop))
+        .modifier(AgentsListStyle(capsules: capsules, room: ownsTop && shell != nil && railEdge == nil && !compactTop, ownsTop: ownsTop))
         #if os(iOS) || os(visionOS)
         // Between the two layouts, slid with the field (`AgentsHeader.compact`); the page's color behind it.
         .modifier(ListShift(progress: ownsTop && header.up ? 1 : 0, compact: ownsTop && header.compact,
@@ -1445,7 +1447,7 @@ private struct AgentsList: View {
 
     /// The ⋯ on a space's or a repository's header.
     private var headerMenuLabel: some View {
-        Image(systemName: compact ? Theme.Icon.more : Theme.Icon.moreMenu)
+        ThemedIcon(compact ? Theme.Icon.more : Theme.Icon.moreMenu)
             .font(compact ? CompactList.metaStrong : Theme.Font.body)
             .foregroundStyle(.secondary)
             .scaledFrame(width: Theme.Size.tapTarget, height: Theme.Size.tapTarget)
@@ -1782,7 +1784,7 @@ private struct AgentsList: View {
                                 Button {
                                     openFromList(TodoDetailRoute(id: todoID))
                                 } label: {
-                                    Image(systemName: Theme.Icon.disclosure)
+                                    ThemedIcon(Theme.Icon.disclosure)
                                         .font(compact ? CompactList.metaStrong : Theme.Font.body)
                                         .foregroundStyle(.secondary)
                                         .scaledFrame(width: Theme.Size.tapTarget, height: Theme.Size.tapTarget)
@@ -1849,7 +1851,7 @@ private struct AgentsList: View {
             withAnimation(Theme.Motion.standard) { _ = expandedIdle.insert(key) }
         } label: {
             HStack(spacing: compact ? CompactList.gap : Theme.Space.s) {
-                Image(systemName: Theme.Icon.expand)
+                ThemedIcon(Theme.Icon.expand)
                     .font(compact ? CompactList.metaStrong : Theme.Font.secondaryMedium)
                     .scaledFrame(width: compact ? CompactList.mark : Theme.Size.iconS)
                 Text("Show All \(count)").font(compact ? CompactList.title : Theme.Font.secondaryMedium).lineLimit(1)
@@ -2053,7 +2055,7 @@ private struct AgentsList: View {
                             .padding(.leading, nested(level))
                         // Capsules draws its own chevron; List and Persona' own rows get the one a link would show. Where the
                         // row ends in its ⋯ (`rowMenus`), that is its end.
-                        if !capsules && !Self.rowMenus { Image(systemName: Theme.Icon.disclosure).font(Theme.Font.captionStrong).foregroundStyle(.tertiary) }
+                        if !capsules && !Self.rowMenus { ThemedIcon(Theme.Icon.disclosure).font(Theme.Font.captionStrong).foregroundStyle(.tertiary) }
                     }
                     .contentShape(.rect)
                 }
@@ -2733,7 +2735,7 @@ struct FoldButton<Content: View>: View {
 struct FoldChevron: View {
     var folded: Bool
     var body: some View {
-        Image(systemName: Theme.Icon.expand)
+        ThemedIcon(Theme.Icon.expand)
             .font(Theme.Font.labelHeavy)
             .foregroundStyle(.tertiary)
             .rotationEffect(.degrees(folded ? -90 : 0))
@@ -2783,7 +2785,7 @@ struct SpaceHeader: View {
         HStack(spacing: Theme.Space.s) {
             // Compact List's titles are big enough to tell a repository from a space: no mark (it cut a short name, "weat…").
             if let symbol, !compact {
-                Image(systemName: symbol).font(Theme.Font.label).foregroundStyle(Color.secondary)
+                ThemedIcon(symbol).font(Theme.Font.label).foregroundStyle(Color.secondary)
             }
             if compact {
                 // Compact List: the space is the title over its rows (Color.primary: a header dims `.primary` a level).
@@ -2792,8 +2794,8 @@ struct SpaceHeader: View {
                 Text(group.name).font(Theme.Font.sectionHeader).foregroundStyle(.secondary).textCase(nil).lineLimit(1)
             }
             let small = compact ? CompactList.meta : Theme.Font.label
-            if pinned { Image(systemName: Theme.Icon.pinned).font(small).foregroundStyle(Theme.accent).accessibilityLabel("Pinned [Personal Agent List View fb47db]") }
-            if muted { Image(systemName: Theme.Icon.muted).font(small).foregroundStyle(Color.secondary).accessibilityLabel("Muted [Chats View b66705]") }
+            if pinned { ThemedIcon(Theme.Icon.pinned).font(small).foregroundStyle(Theme.accent).accessibilityLabel("Pinned [Personal Agent List View fb47db]") }
+            if muted { ThemedIcon(Theme.Icon.muted).font(small).foregroundStyle(Color.secondary).accessibilityLabel("Muted [Chats View b66705]") }
             if showMachine, let machine {
                 Text(machine.title).font(small).foregroundStyle(Color.secondary).textCase(nil).lineLimit(1)
             }
@@ -2955,7 +2957,7 @@ nonisolated struct SlotRow: View, Equatable {
                                 BUIPill(session.stateLabel(muted: muted), tone: .custom(ink: tone.text, fill: tone.tint))
                             }
                             if muted {
-                                Image(systemName: Theme.Icon.muted).font(Theme.Font.label).foregroundStyle(.secondary).accessibilityLabel("Notifications muted")
+                                ThemedIcon(Theme.Icon.muted).font(Theme.Font.label).foregroundStyle(.secondary).accessibilityLabel("Notifications muted")
                             }
                         }
                         if more { moreRoom }
@@ -2963,8 +2965,15 @@ nonisolated struct SlotRow: View, Equatable {
                 } detail: {
                     if !session.runningWorkflows.isEmpty { WorkflowLine(runs: session.runningWorkflows) }
                 }
-                // The badge's column holds the state alone (#3004): the agent's mark leads the title (#6390).
-                .titleLeading(session.assistant ? nil : { AgentMark(session) })
+                // The badge's column holds the state alone (#3004): the agent's mark leads the title (#6390), with
+                // ultracode's mark after it while that is on (#1307; the library's row has no slot after the title).
+                .titleLeading(session.assistant ? nil : {
+                    HStack(spacing: Theme.Space.xs) {
+                        AgentMark(session)
+                        if ultracodeMark { UltracodeMark().transition(.opacity) }
+                    }
+                    .animation(UltracodeMark.motion, value: ultracodeMark)
+                })
                 // Over the room left for it at the row's end (inside the row's inset), centered on the row's height.
                 .overlay(alignment: .trailing) { if more { AgentRowMoreButton(session: session).padding(.trailing, TaskRowInset.horizontal) } }
             } else {
@@ -2981,11 +2990,13 @@ nonisolated struct SlotRow: View, Equatable {
                     // starts at the row's edge, and the tag takes no room from it nor pushes the preview down.
                     HStack(alignment: .firstTextBaseline, spacing: Theme.Space.sm) {
                         VStack(alignment: .leading, spacing: Theme.Space.xs) {
-                            Text(session.displayTitle)
+                            // Ultracode's mark right after the title's last word while it is on (#1307).
+                            UltracodeMark.after(session.displayTitle, on: ultracodeMark)
                                 .font(session.state == .unread ? Theme.Font.bodyHeavy : Theme.Font.bodyStrong)
                                 .lineLimit(2)
                                 .fixedSize(horizontal: false, vertical: true)
                                 .frame(maxWidth: .infinity, alignment: .leading)
+                                .animation(UltracodeMark.motion, value: ultracodeMark)
                             if let last = session.listPreview(muted: muted) {
                                 Text(last).font(Theme.Font.secondary).lineHeight(.secondary).foregroundStyle(.secondary).lineLimit(2)
                             }
@@ -2996,14 +3007,14 @@ nonisolated struct SlotRow: View, Equatable {
                                 if let todo = session.todo {
                                     ViewThatFits(in: .horizontal) {
                                         Chip(text: todo.title, symbol: Theme.Icon.todo, look: .outline)
-                                        Image(systemName: Theme.Icon.todo)
+                                        ThemedIcon(Theme.Icon.todo)
                                             .font(Theme.Font.caption)
                                             .foregroundStyle(.secondary)
                                             .help(todo.title)
                                     }
                                 }
                                 if muted {
-                                    Image(systemName: Theme.Icon.muted).font(Theme.Font.label).accessibilityLabel("Notifications muted")
+                                    ThemedIcon(Theme.Icon.muted).font(Theme.Font.label).accessibilityLabel("Notifications muted")
                                 }
                             }
                             .font(Theme.Font.caption)
@@ -3028,6 +3039,9 @@ nonisolated struct SlotRow: View, Equatable {
         }
         .opacity(muted ? 0.8 : 1) // quieter than live agents, never fainter than the idle spaces below
     }
+
+    /// Claude Code's ultracode is on (#1307): its mark beside the title; not on an offline row.
+    private var ultracodeMark: Bool { Ultracode.rowMark(session) }
 
     /// Where the ⋯ goes: drawn over the row (centered on its height, as tall as it is), so the room is a column of its
     /// width at the end (a finger's, `AgentRowMoreButton`), which the time and the pills stay clear of.
@@ -3156,6 +3170,8 @@ nonisolated struct CompactSlotRow: View, Equatable {
                     .font(session.state == .unread ? CompactList.titleUnread : CompactList.title)
                     .lineLimit(1)
                     .layoutPriority(1)
+                // Claude Code's ultracode on (#1307): its mark right after the title, never cut.
+                if Ultracode.rowMark(session) { UltracodeMark(font: CompactList.meta).fixedSize().transition(.opacity) }
                 // The starter mark stays whole: the line's other words give way to the title.
                 if pane?.launcher == true { Text("Started It").font(CompactList.metaStrong).foregroundStyle(.secondary).lineLimit(1).fixedSize() }
                 if let place, !place.isEmpty {
@@ -3165,16 +3181,17 @@ nonisolated struct CompactSlotRow: View, Equatable {
                 if let todo = session.todo {
                     ViewThatFits(in: .horizontal) {
                         Text(todo.title).font(CompactList.meta).foregroundStyle(Theme.accent).lineLimit(1)
-                        Image(systemName: Theme.Icon.todo).font(CompactList.meta).foregroundStyle(Theme.accent).help(todo.title)
+                        ThemedIcon(Theme.Icon.todo).font(CompactList.meta).foregroundStyle(Theme.accent).help(todo.title)
                     }
                 }
             }
+            .animation(UltracodeMark.motion, value: Ultracode.rowMark(session))
             Spacer(minLength: Theme.Space.xs)
             // Awaiting Reply in words (#5096): the dot is a seen agent's gray.
             if session.awaitsYourReply(muted: muted) && !hideState {
                 Text(session.stateLabel(muted: muted)).font(CompactList.metaStrong).foregroundStyle(StatusPalette.awaitingReply.text).lineLimit(1).fixedSize()
             }
-            if muted { Image(systemName: Theme.Icon.muted).font(CompactList.meta).foregroundStyle(.secondary).accessibilityLabel("Notifications muted") }
+            if muted { ThemedIcon(Theme.Icon.muted).font(CompactList.meta).foregroundStyle(.secondary).accessibilityLabel("Notifications muted") }
             AgentTimeText(time: time, fallback: session.updatedAt, font: CompactList.meta.monospacedDigit())
             #if os(macOS)
             if pendingCount { CountBadge(count: session.pendingInteractions, look: .tone(StatusPalette.needsYou)) }
@@ -3216,7 +3233,7 @@ struct AgentRowMoreButton: View {
             Menu {
                 AgentRowMenu(session, model: model, actions: actions).equatable()
             } label: {
-                Image(systemName: Theme.Icon.more)
+                ThemedIcon(Theme.Icon.more)
                     .font(compact ? CompactList.metaStrong : Theme.Font.labelStrong)
                     .foregroundStyle(.secondary)
                     .scaledFrame(width: compact ? Theme.Size.wellXS : Theme.Size.well, height: compact ? Theme.Size.iconXS : Theme.Size.well)
@@ -3247,7 +3264,7 @@ struct IdleFoldRow: View {
 
     var body: some View {
         HStack(spacing: Theme.Space.s) {
-            Image(systemName: Theme.Icon.idleFold)
+            ThemedIcon(Theme.Icon.idleFold)
                 .foregroundStyle(.secondary)
             Text("\(sessions.count) more idle")
                 .font(Theme.Font.secondaryMedium)
@@ -3281,7 +3298,7 @@ struct QuietSpaceRow: View {
 
     var body: some View {
         HStack(spacing: Theme.Space.m) {
-            Image(systemName: repo ? Theme.Icon.folder : Theme.Icon.space).foregroundStyle(.secondary)
+            ThemedIcon(repo ? Theme.Icon.folder : Theme.Icon.space).foregroundStyle(.secondary)
             VStack(alignment: .leading, spacing: Theme.Space.xxs) {
                 Text(group.name).font(Theme.Font.heading).lineLimit(1)
                 Text([showMachine ? machine?.title : nil, String(localized: "\(group.sessions.count) agents"),
@@ -3377,12 +3394,12 @@ struct QuietSpaceCardHead: View {
                             .compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: " · "),
                          status: .pending(step: 0)),
                 shape: .list(first: true, last: !open), accessory: .none, titleLines: 1, subtitleLines: 1) {
-            Image(systemName: repo ? Theme.Icon.folder : Theme.Icon.space).font(Theme.Font.body).foregroundStyle(.secondary)
+            ThemedIcon(repo ? Theme.Icon.folder : Theme.Icon.space).font(Theme.Font.body).foregroundStyle(.secondary)
                 .scaledFrame(width: Theme.Size.icon)
         } trailing: {
             HStack(spacing: Theme.Space.s) {
                 Text(Fmt.relative(group.updatedAt(feed))).font(Theme.Font.label).foregroundStyle(.secondary).lineLimit(1)
-                Image(systemName: Theme.Icon.disclosure).font(Theme.Font.labelStrong).foregroundStyle(.tertiary)
+                ThemedIcon(Theme.Icon.disclosure).font(Theme.Font.labelStrong).foregroundStyle(.tertiary)
                     .rotationEffect(.degrees(open ? 90 : 0))
             }
         } detail: {
@@ -3507,7 +3524,7 @@ struct MachineSectionHeader: View {
 
     var body: some View {
         HStack(spacing: Theme.Space.s) {
-            Image(systemName: machine.symbol).foregroundStyle(machine.online ? Theme.accent : .secondary)
+            ThemedIcon(machine.symbol).foregroundStyle(machine.online ? Theme.accent : .secondary)
             if compact {
                 Text(machine.title).font(CompactList.sectionTitle).foregroundStyle(Color.primary).textCase(nil).lineLimit(1)
             } else {
@@ -3834,6 +3851,8 @@ private struct SearchCloseProbe: UIViewRepresentable {
 /// options (Group By, Display, Machines…).
 struct AgentsTopBar: View, Equatable {
     @Environment(AppModel.self) private var model
+    /// iPhone Duo's bars down the side: the bar is the side rail there (`ShellSideRail`).
+    @Environment(\.shellRailEdge) private var railEdge
     let shell: ShellState
     var menuActions: AgentsListMenu.Actions
     var newSession: () -> Void // sets the page's state: the same each time
@@ -3847,13 +3866,36 @@ struct AgentsTopBar: View, Equatable {
         let _ = PerfTrace.body("AgentsTopBar")
         #endif
         @Bindable var model = model
+        #if os(iOS) || os(visionOS)
+        if let railEdge {
+            ShellSideRail(edge: railEdge) {
+                ShellPersonaButton(id: "work-sidebar-button") { shell.drawer.open() }
+                ShellCircleButton(symbol: Theme.Icon.compose, label: String(localized: "New Session [Chats View 58e21b]"), id: "agents-new", action: newSession)
+            } switcher: {
+                ShellSwitch(tab: $model.selectedTab, axis: .vertical) { EmptyView() } workMenu: {
+                    AgentsListMenu(actions: menuActions, inline: true)
+                }
+            }
+            .shellTopBarScaled()
+            .accessibilityElement(children: .contain)
+            .accessibilityIdentifier("agents-top-bar")
+            .modifier(ShellBarAtRest(page: 1)) // ShellMovingBar stands in while the strip slides
+        } else {
+            row($model.selectedTab)
+        }
+        #else
+        row($model.selectedTab)
+        #endif
+    }
+
+    private func row(_ tab: Binding<AppTab>) -> some View {
         HStack(alignment: .top, spacing: Theme.Space.s) {
             ShellPersonaButton(id: "work-sidebar-button") { shell.drawer.open() }
             Spacer(minLength: 0)
             ShellCircleButton(symbol: Theme.Icon.compose, label: String(localized: "New Session [Chats View 58e21b]"), id: "agents-new", action: newSession)
         }
         .overlay(alignment: .top) {
-            ShellSwitch(tab: $model.selectedTab) { EmptyView() } workMenu: {
+            ShellSwitch(tab: tab) { EmptyView() } workMenu: {
                 AgentsListMenu(actions: menuActions, inline: true)
             }
         }

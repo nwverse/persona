@@ -3,12 +3,12 @@ package assistant
 import (
 	"context"
 	"errors"
-	"regexp"
 	"strings"
 	"time"
 
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/i18n"
+	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
@@ -173,13 +173,11 @@ type receiptReview struct {
 // interruptedSummary is an interrupted task's receipt: the error itself is no conclusion (#1516).
 const interruptedSummary = assistantwire.InterruptedSummary
 
-// silentTurnError is the interrupted receipt's detail for a turn with no output at all (silentTurn, #2349), in the
-// default language (silentTurnErrorIn: the user's).
-var silentTurnError = silentTurnErrorIn(i18n.Default)
-
+// silentTurnErrorIn is the interrupted receipt's detail for a turn with no output at all (silentTurn, #2349), in l.
+// Not kept in a package variable: that would read the catalogs whenever personad starts, a hook too (#1308).
 func silentTurnErrorIn(l i18n.Lang) string { return i18n.T(l, "assistant-tasks.silent_turn") }
 
-var prLink = regexp.MustCompile(`https://github\.com/[\w.-]+/[\w.-]+/pull/\d+`)
+var prLink = lazyre.New(`https://github\.com/[\w.-]+/[\w.-]+/pull/\d+`)
 
 // taskTurnEnded: one of the task's agents (sid on machine) ended a turn. Once none of them works or waits for the
 // user any more, the conversation gets a receipt (once per stretch of work), and the todo is closed if the judge
@@ -322,7 +320,8 @@ func (s *Service) taskTurnEnded(ctx context.Context, machine, sid string) {
 	s.autoFinishTask(t, since, worked) // the work may be finished: then the todo is done (done.go)
 }
 
-// routeToTask sends text straight to the agent of task todoID that most needs it, and keeps it in the conversation.
+// routeToTask sends text straight to the agent of task todoID that most needs it, and keeps it in the conversation as
+// the user's (no from: a task card's Message, or a decision the owner made in Lark).
 func (s *Service) routeToTask(ctx context.Context, conversation, todoID, text string) (FeedItem, error) {
 	if err := s.ensureTodosLoaded(ctx); err != nil {
 		return FeedItem{}, err

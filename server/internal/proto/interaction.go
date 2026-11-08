@@ -23,6 +23,11 @@ const AnsweredByAssistant = "assistant"
 // conversation instead of answering it (#9): channels say "replied in the chat" on its card, not "dismissed".
 const DismissedInChat = "replied_in_chat"
 
+// DismissedExpired is the Reason of a Dismiss the manager hands one of the assistant's own questions whose card expired
+// unanswered (#1617): an ask_user that expires becomes a to-do instead. Only the manager sets it; the apps' answers have
+// their Reason dropped (assistant/fleet_routes.go).
+const DismissedExpired = "expired"
+
 // QuestionOptionDefer dismisses a triage question without sending an agent reply.
 // Other question runtimes do not interpret this triage-only action.
 const QuestionOptionDefer = "defer"

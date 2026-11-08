@@ -591,8 +591,11 @@ nonisolated struct APIClient: Sendable {
         /// What the tab name is made from when the first message is sent as a message of its own (not `prompt`).
         var nameHint: String? = nil
         var todoID: String? = nil
+        /// Claude Code's ultracode for this start (#3427): only `true` is ever sent (a new Claude is off anyway, and an
+        /// older hub would ignore the field rather than refuse it); nil leaves it out.
+        var ultracode: Bool? = nil
         enum CodingKeys: String, CodingKey {
-            case cwd, launcher, prompt, effort, async, model
+            case cwd, launcher, prompt, effort, async, model, ultracode
             case machineID = "machine_id", resumeSessionID = "resume_session_id", workspaceID = "workspace_id",
                  permissionMode = "permission_mode", tabName = "tab_name", nameHint = "name_hint", todoID = "todo_id"
         }
@@ -634,7 +637,7 @@ nonisolated struct APIClient: Sendable {
         return out
     }
 
-    /// The bytes of a lazy image (`ImagePayload.ref`, "<machine>/<session>/<item id>").
+    /// The bytes of a lazy image on this hub: "<machine>/<session>/<item id>" (`ImageRef.split` of an `ImagePayload.ref`).
     func image(ref: String) async throws -> Data {
         let parts = ref.split(separator: "/", maxSplits: 2).map(String.init)
         guard parts.count == 3 else { throw APIError(status: 0, message: "bad image ref") }
@@ -891,11 +894,31 @@ nonisolated struct APIClient: Sendable {
         /// Claude Code's model (#3119, the web's #2434): the node types `/model <id>` through the guards of a message
         /// and reads the screen back (node/model_switch.go).
         var model: String? = nil
-        enum CodingKeys: String, CodingKey { case effort, model; case permissionMode = "permission_mode" }
+        /// Claude Code's session-only ultracode switch (#3427); never sent with the others (`setUltracode`).
+        var ultracode: Bool? = nil
+        /// Only takes the resume notice away (`ultracode_lost_at`), the switch untouched.
+        var ultracodeDismissLost: Bool? = nil
+        enum CodingKeys: String, CodingKey {
+            case effort, model, ultracode
+            case permissionMode = "permission_mode", ultracodeDismissLost = "ultracode_dismiss_lost"
+        }
     }
     /// Changes a session's permission mode, effort level and / or model (nil leaves it); a TUI agent takes a second or two.
     func setModes(_ k: SessionKey, permissionMode: String? = nil, effort: String? = nil, model: String? = nil) async throws {
         try await post(sp(k) + "/modes", body: ModesBody(permissionMode: permissionMode, effort: effort, model: model), timeout: 30)
+    }
+
+    /// POST …/modes {"ultracode": on} (docs/protocol/protocol.md "Claude Code ultracode"): its own request, never with
+    /// the model or effort. Success says the node took it, maybe queued (`ultracode_pending`), not that it is on: the
+    /// session's fields say that. 409 `node_outdated` (the computer's node predates it) or `ultracode_unsupported`.
+    func setUltracode(_ k: SessionKey, on: Bool) async throws {
+        // The node may wait for its session state after a restart (about 20 s) before it answers.
+        try await post(sp(k) + "/modes", body: ModesBody(permissionMode: nil, effort: nil, ultracode: on), timeout: 60)
+    }
+
+    /// POST …/modes {"ultracode_dismiss_lost": true}: only takes the resume notice away.
+    func dismissUltracodeLost(_ k: SessionKey) async throws {
+        try await post(sp(k) + "/modes", body: ModesBody(permissionMode: nil, effort: nil, ultracodeDismissLost: true), timeout: 60)
     }
 
     struct QueueEdit: Encodable { var keep: [Int] }
@@ -1198,12 +1221,12 @@ nonisolated struct APIClient: Sendable {
         enum CodingKeys: String, CodingKey { case prompt, images, launcher, effort, main, space; case permissionMode = "permission_mode" }
     }
     /// `main`: the new conversation becomes the main one. `space`: the space it opens in (nil: the assistant's own).
+    /// `opID`: the first message's op id (`AssistantStart`, hub feature `assistant_start_ops`): the hub starts it once.
     func startConversation(prompt: String, images: [ImagePayload] = [], launcher: String? = nil, permissionMode: String? = nil,
-                           effort: String? = nil, main: Bool = false, space: String? = nil) async throws -> Session {
-        var s = try await post("/api/v1/assistant/conversations", body: NewConversation(prompt: HubNaming.outbound(prompt, canonical: personaNaming), images: images.isEmpty ? nil : images,
-                                                                                      launcher: launcher, permissionMode: permissionMode, effort: effort,
-                                                                                      main: main ? true : nil, space: space),
-                               timeout: 110, as: SessionResponse.self).session
+                           effort: String? = nil, main: Bool = false, space: String? = nil, opID: UUID? = nil) async throws -> Session {
+        let body = NewConversation(prompt: HubNaming.outbound(prompt, canonical: personaNaming), images: images.isEmpty ? nil : images,
+                                   launcher: launcher, permissionMode: permissionMode, effort: effort, main: main ? true : nil, space: space)
+        var s = try JSON.decoder.decode(SessionResponse.self, from: try await post("/api/v1/assistant/conversations", body: body, timeout: 110, opID: opID)).session
         if s.assistantSpace == nil { s.assistantSpace = space }
         return stamp(s)
     }
@@ -1266,6 +1289,19 @@ nonisolated struct APIClient: Sendable {
     func setBlockedClaudeDirs(machine: String, blocked: [String]) async throws -> ClaudeDirsState {
         try JSON.decoder.decode(ClaudeDirsState.self, from: try await request("PUT", "/api/v1/machines/\(machine)/claude-dirs/blocked",
             body: SetBlockedClaudeDirs(blocked: blocked)))
+    }
+
+    /// Settings › Claude Code › Live Replies (#1309, docs/integrations/claude-integration.md "Live replies (MessageDisplay)"):
+    /// whether the Claude sessions Persona starts on the machine send their replies as Claude writes them. On unless
+    /// turned off; an older hub has no such route (404).
+    struct LiveReplies: Codable, Sendable, Equatable { var on: Bool }
+    func claudeLiveReplies(machine: String) async throws -> Bool {
+        try await get("/api/v1/machines/\(machine)/claude-live-replies", as: LiveReplies.self).on
+    }
+    /// What the hub keeps after the change.
+    func setClaudeLiveReplies(machine: String, on: Bool) async throws -> Bool {
+        try JSON.decoder.decode(LiveReplies.self, from: try await request("PUT", "/api/v1/machines/\(machine)/claude-live-replies",
+            body: LiveReplies(on: on))).on
     }
 
     func interactions() async throws -> [Interaction] {

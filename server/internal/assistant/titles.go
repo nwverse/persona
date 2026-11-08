@@ -3,7 +3,6 @@ package assistant
 import (
 	"context"
 	"github.com/nwverse/persona/server/internal/compat"
-	"regexp"
 	"slices"
 	"strings"
 	"sync"
@@ -13,6 +12,7 @@ import (
 	"github.com/nwverse/persona/sdk/go/wire"
 	"github.com/nwverse/persona/server/internal/ai"
 	"github.com/nwverse/persona/server/internal/i18n"
+	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/prompts"
 	"github.com/nwverse/persona/server/internal/proto"
 )
@@ -334,7 +334,7 @@ func (s *Service) makeTitle(ctx context.Context, started time.Time, first, reply
 // titleDay is MMDD of t in the user's time zone (the hub runs in UTC: 00:30 in Shanghai is the day before there).
 func titleDay(t time.Time, loc *time.Location) string { return t.In(loc).Format("0102") }
 
-var titleDate = regexp.MustCompile(`^\d{4}\s*$`)
+var titleDate = lazyre.New(`^\d{4}\s*$`)
 
 // titleTopicMax is how many characters a topic in the user's language may have: 14 in Chinese (and when the hub says
 // no language), more where a word takes more characters.
@@ -379,19 +379,19 @@ func parseTitleMax(out string, max int) (kind, topic string, ok bool) {
 	return kind, topic, kind != "" && n > 0 && n <= max
 }
 
-var contextBlock = regexp.MustCompile(`(?s)<` + compat.ContextPattern() + `\b[^>]*>.*?</` + compat.ContextPattern() + `>`)
+var contextBlock = lazyre.New(`(?s)<` + compat.ContextPattern() + `\b[^>]*>.*?</` + compat.ContextPattern() + `>`)
 
 var (
 	// A whole tag block a source channel wraps text in (an at mention or font tag from a card, an older node's
 	// injected context block): nothing inside it is part of the title.
-	titleTagBlock = regexp.MustCompile(`(?s)<[a-zA-Z][\w-]*[^>]*>.*?</[a-zA-Z][\w-]*>`)
+	titleTagBlock = lazyre.New(`(?s)<[a-zA-Z][\w-]*[^>]*>.*?</[a-zA-Z][\w-]*>`)
 	// Markdown punctuation that is only syntax at the start of a line: an ATX heading, a quote, a list bullet and
 	// the clock a scheduled task opens with. The same character mid-line is text: C#, A*, #3471, a>b (#3869). The
 	// anchored group repeats, so a whole prefix chain (">>>", "> - x", "- # x") goes in one linear-time match.
-	titleLineHead = regexp.MustCompile(`(?m)^[ \t]*(?:[ \t]{0,3}#{1,6}[ \t]+|[ \t]*>+[ \t]?|[ \t]*[-*+][ \t]+|[ \t]*⏰)+`)
+	titleLineHead = lazyre.New(`(?m)^[ \t]*(?:[ \t]{0,3}#{1,6}[ \t]+|[ \t]*>+[ \t]?|[ \t]*[-*+][ \t]+|[ \t]*⏰)+`)
 	// A paired inline wrap is unwrapped and the text inside is kept; a lone marker is not a wrap and stays.
-	titleCodeWrap = regexp.MustCompile("`([^`\n]+)`")
-	titleBoldWrap = regexp.MustCompile(`\*\*([^*\n]+)\*\*`)
+	titleCodeWrap = lazyre.New("`([^`\n]+)`")
+	titleBoldWrap = lazyre.New(`\*\*([^*\n]+)\*\*`)
 )
 
 // cleanTitleNoise drops the tag blocks and markdown wrapping a title comes with, without deleting characters that

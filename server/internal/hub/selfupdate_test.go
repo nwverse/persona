@@ -98,6 +98,7 @@ func updatingHub(t *testing.T, p *fakePublisher, channel string) (*Hub, *Machine
 		t.Fatal(err)
 	}
 	u.target = func() (string, error) { return target, nil }
+	u.services = serviceFinder{} // not this computer's
 	var mu sync.Mutex
 	var execd []string
 	u.exec = func(path string) error { mu.Lock(); execd = append(execd, path); mu.Unlock(); return nil }
