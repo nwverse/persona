@@ -2908,7 +2908,7 @@ and `/items/{iid}/full` all carry it. Recognition is by text, so old messages an
 "injected": {
   "kind": "task_notice|followup|system",
   "state": "…",            // see the table below
-  "title": "Remove the extension list from README", // task name / scheduled task title / what a wake-up is waiting for; may be empty
+  "title": "Remove the extension list from README", // task name / scheduled task title / what a wake-up is waiting for / the inbox item's title; may be empty
   "machine": "<computer name>",  // task_notice only: which computer the Agent is on (name; may be empty)
   "todo_id": "td_…",        // task_notice only: when the hub can identify the task (still open, unique title); may be empty, in which case the client looks for a task card in the same chat by title
   "line": "Task 'Remove the extension list from README' is done", // one human-readable sentence, displayed directly
@@ -2923,6 +2923,7 @@ and `/items/{iid}/full` all carry it. Recognition is by text, so old messages an
 | Wake an Agent that is waiting (`agents/wake.md`, Agents chats) | `⏰（Persona 叫醒你，第 N 次）` ("Persona wakes you, attempt N") | `followup` | `wake` | Persona woke it: check whether "what it's waiting for" is ready |
 | A node restart lost background tasks (`assistant/lost_tasks.md`) | `⚠️ 运行你的 node 刚重启过` ("The node running you just restarted") | `system` | `lost_tasks` | The node restarted; N background tasks stopped |
 | A supervision message in the main chat (`assistant/supervise.md`, #3124) | `📋 督办：你派出去的任务有 N 个要你处理` ("Supervision: N tasks you dispatched need your attention"), with `这是 Persona 的督办消息` ("This is a Persona supervision message") on the second line | `system` | `supervise` | Supervision: N dispatched tasks need attention |
+| News of an inbox item for a chat it was handed to (`inbox/handoff_note.md`, #1194; [inbox.md](../assistant/inbox.md) "Item actions") | `📥 收件箱事件「标题」有了下文` ("Inbox item 'title' has news"), with `这是 Persona 的收件箱通知` ("This is a Persona inbox notice") on the second line | `system` | `inbox` | Inbox: an update on "title" |
 
 **Display** (the same on every client):
 
@@ -2938,7 +2939,7 @@ and `/items/{iid}/full` all carry it. Recognition is by text, so old messages an
   Group 2 maps to `done` / `needs` / `interrupted` / `failed`; group 3 is `machine`.
 - `followup`: the first line matches `^⏰ (.+)（(你之前安排的跟进|定时任务(?:，每 [^）]+)?)）$`: `你之前安排的跟进` ("a follow-up you scheduled") is `once`, `定时任务，每 …` ("scheduled task, every …") is `interval`, `定时任务` ("scheduled task") is `daily`;
   `detail` is the body after the first blank line (remove the trailing instruction paragraph starting with `（知识库`, "(knowledge base"). A first line starting with `⏰（Persona 叫醒你，第` ("Persona wakes you, attempt") is `wake`; `title` is the text inside `在等「…」` ("waiting for '…'").
-- `system`: starts with `⚠️ 运行你的 node 刚重启过` ("The node running you just restarted"); the count of lines starting with `- ` is the number of stopped tasks. Supervision messages are only sent by new hubs that write them, and always carry `injected` when sent; they aren't in the shared fixtures, and clients don't need to recognize them themselves.
+- `system`: starts with `⚠️ 运行你的 node 刚重启过` ("The node running you just restarted"); the count of lines starting with `- ` is the number of stopped tasks. Supervision messages and inbox notices are only sent by new hubs that write them, and always carry `injected` when sent; they aren't in the shared fixtures, and clients don't need to recognize them themselves.
 - Anything unrecognized stays a user bubble (better to miss recognition than hide the user's words).
 - Shared fixtures: `spec/fixtures/injected/cases.json` (Go test `TestParseInjected` generates them from templates; `UPDATE_GOLDEN=1` rewrites them): `input.text` → `expected` (`null` means not recognized); all clients run their fallback recognition against these fixtures.
 

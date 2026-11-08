@@ -208,15 +208,18 @@ func clearDraft(it *InboxItem) {
 
 // renderHandoffNote is a handling note for a conversation the item was handed to, wrapped to name the item.
 func renderHandoffNote(n inboxNote, owner, id, title string) string {
+	if title == "" { // the head the hub recognizes needs a title (prompts.ParseInjected)
+		title = id
+	}
 	note := prompts.RenderInboxHandlingNote(n.Name, prompts.InboxHandlingNote{Owner: owner, Text: n.Text, Edited: n.Edited,
 		Context: n.Context, Machine: n.Machine, Session: n.Session, Handoff: true})
 	return prompts.RenderInboxHandoffNote(prompts.InboxHandoffNote{ID: id, Title: title, Note: note})
 }
 
 // tellHandoff tells the conversation a suggestion came from what the user did with it, in the background (a request
-// answers first): once per suggestion version and note (its message id), so a repeat is not a second message. A
-// failure is only logged.
-func (s *Service) tellHandoff(ctx context.Context, id, title string, to SessionRef, version int, n inboxNote) {
+// answers first). It is a Persona notice, not the user's words: a plain session.send without a message id, which the
+// hub shows the apps as one line (prompts.ParseInjected). A failure is only logged.
+func (s *Service) tellHandoff(ctx context.Context, id, title string, to SessionRef, n inboxNote) {
 	ctx = context.WithoutCancel(ctx)
 	go func() {
 		if s.isWorkMachine(to.MachineID) {
@@ -226,11 +229,10 @@ func (s *Service) tellHandoff(ctx context.Context, id, title string, to SessionR
 		cctx, cancel := context.WithTimeout(ctx, time.Minute)
 		defer cancel()
 		text := renderHandoffNote(n, s.owner(cctx), id, title)
-		cid := namedClientID(fmt.Sprintf("inbox handoff note\n%s\n%d\n%s", id, version, n.Name))
 		params, err := s.SendParams(cctx, SendParams{MachineID: to.MachineID, SessionID: to.SessionID,
-			Params: map[string]any{"session_id": to.SessionID, "text": text, "client_msg_id": cid}})
+			Params: map[string]any{"session_id": to.SessionID, "text": text}})
 		if err == nil {
-			err = s.sendOnce(cctx, to.MachineID, params)
+			err = s.call(cctx, to.MachineID, DeviceSessionSend, params, nil)
 		}
 		if err != nil {
 			s.logf("inbox: tell %s about %s: %v", short(to.SessionID), id, err)
@@ -300,7 +302,7 @@ func (s *Service) actOnHandedSuggestion(ctx context.Context, it *InboxItem, g *I
 			s.tellSoon(ctx, it)
 		}
 		if note != nil {
-			s.tellHandoff(ctx, it.ID, title, to, g.Version, *note)
+			s.tellHandoff(ctx, it.ID, title, to, *note)
 		}
 		b.mu.Lock()
 		out := it.listed()
@@ -338,7 +340,7 @@ func (s *Service) confirmHandedReply(ctx context.Context, it *InboxItem, g *Inbo
 	if open { // new messages came in while it was out: the reply's own save left the item as it was
 		s.saveInbox(ctx, []*InboxItem{it})
 	}
-	s.tellHandoff(ctx, it.ID, title, to, g.Version, inboxNote{Name: prompts.NoteSent, Text: text, Edited: edited})
+	s.tellHandoff(ctx, it.ID, title, to, inboxNote{Name: prompts.NoteSent, Text: text, Edited: edited})
 	return out, nil
 }
 
@@ -374,7 +376,7 @@ func (s *Service) confirmHandedAgent(ctx context.Context, it *InboxItem, g *Inbo
 	b.mu.Unlock()
 	s.saveInbox(ctx, []*InboxItem{it})
 	if err == nil {
-		s.tellHandoff(ctx, it.ID, title, to, g.Version, inboxNote{Name: prompts.NoteAgentStarted, Text: text, Edited: edited,
+		s.tellHandoff(ctx, it.ID, title, to, inboxNote{Name: prompts.NoteAgentStarted, Text: text, Edited: edited,
 			Machine: machine, Session: session})
 	}
 	return out, err

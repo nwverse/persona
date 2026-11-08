@@ -547,7 +547,8 @@ which users saw as one action: clear this batch they do not need to handle now. 
   The item keeps the hand-off (`handoffs`: `machine_id`, `session_id`, `at`, the latest 5) and its chain gets one `handling` entry per conversation ("Handed to Persona's main chat",
   linked to it). Its processing conversation (`agent`, `handling`) is not touched, so the AI twin's sweep and timeouts never take the main conversation for one of its own.
   That conversation may then write back with `inbox_suggest` and `item` (above). What the user does with its suggestion is told there, wrapped to name the item
-  (`prompts/inbox/handoff_note.md`, once per suggestion version and action, a failure only logged): reject, instruct, handback, a confirmed reply sent (which files the item as replied:
+  (`prompts/inbox/handoff_note.md`; a Persona notice sent as a plain `session.send` without a message id, a failure only logged, which the hub marks `injected` (`system` / `inbox`)
+  so the apps show one line, "Inbox: an update on “title”", not the model's text as a user bubble): reject, instruct, handback, a confirmed reply sent (which files the item as replied:
   nobody there follows the other side's answer) and an Agent started (as that conversation's own task; the chain's `agent` entry links it). A confirmed conclusion files the item as
   usual; a processing conversation still on the item is told it is over.
   "Also mark as done" is off by default for the main chat (it may still write back) and on for the other targets; switching targets follows that default until the user sets the box,

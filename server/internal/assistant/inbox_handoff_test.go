@@ -70,7 +70,7 @@ func sendOnces(f *fakeHub) []map[string]any {
 	return out
 }
 
-// toMain is every text sent to the main conversation m1 once-only.
+// toMain is every text sent to the main conversation m1 once-only (the user's hand-offs).
 func toMain(f *fakeHub) []string {
 	var out []string
 	for _, p := range sendOnces(f) {
@@ -82,12 +82,26 @@ func toMain(f *fakeHub) []string {
 	return out
 }
 
-// toldMain waits for the main conversation to be told something containing want, and returns everything it got.
+// notesOf are the texts the manager sent conversation sid with a plain session.send (its notes, not the user's words).
+func notesOf(f *fakeHub, sid string) []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	var out []string
+	for _, p := range f.agentSent {
+		if p["session_id"] == sid {
+			text, _ := p["text"].(string)
+			out = append(out, text)
+		}
+	}
+	return out
+}
+
+// toldMain waits for the main conversation to be told something containing want, and returns every note it got.
 func toldMain(t *testing.T, h *inboxHub, want string) []string {
 	t.Helper()
 	deadline := time.Now().Add(3 * time.Second)
 	for {
-		got := toMain(h.f)
+		got := notesOf(h.f, "m1")
 		if strings.Contains(strings.Join(got, "\n"), want) {
 			return got
 		}
@@ -271,7 +285,7 @@ func TestInboxSuggestFromAHandoff(t *testing.T) {
 	}
 	told := toldMain(t, h, "已经发出")
 	note := told[len(told)-1]
-	for _, want := range []string{"（收件箱通知，不是用户在这里说的话）", "「张三」", `item: "lark:f1:100"`, "对方之后的回复不会转到这里"} {
+	for _, want := range []string{"📥 收件箱事件「张三」有了下文\n", "这是 Persona 的收件箱通知", `item: "lark:f1:100"`, "对方之后的回复不会转到这里"} {
 		if !strings.Contains(note, want) {
 			t.Errorf("the note lacks %q:\n%s", want, note)
 		}
@@ -279,7 +293,21 @@ func TestInboxSuggestFromAHandoff(t *testing.T) {
 	if strings.Contains(note, "对方回了会发到这里") {
 		t.Errorf("the note promises what comes later:\n%s", note)
 	}
-	for _, s := range h.f.sentToAgents() {
+	// A Persona notice: no message id, so the hub shows the apps one line instead of a bubble of the user's.
+	if in := prompts.ParseInjected(note); in == nil || in.State != "inbox" || in.Title != "张三" {
+		t.Fatalf("the note is not an injected notice: %+v", in)
+	}
+	h.f.mu.Lock()
+	for _, p := range h.f.agentSent {
+		if p["client_msg_id"] != nil {
+			t.Errorf("a note sent with a message id: %v", p)
+		}
+	}
+	h.f.mu.Unlock()
+	if got := toMain(h.f); len(got) != 1 {
+		t.Fatalf("%d once-only sends to the main conversation, want only the hand-off", len(got))
+	}
+	for _, s := range notesOf(h.f, "s1") {
 		if strings.Contains(s, "已经发出") {
 			t.Fatalf("the processing conversation was told of the send: %s", s)
 		}
@@ -414,8 +442,11 @@ func TestInboxHandedSuggestionNotes(t *testing.T) {
 		t.Fatalf("handback: %d %v", code, out)
 	}
 	toldMain(t, h, "交回给你去做")
-	if got := h.f.sentToAgents(); len(got) != 0 {
+	if got := notesOf(h.f, "s1"); len(got) != 0 {
 		t.Fatalf("the processing conversation was told: %v", got)
+	}
+	if got := len(toMain(h.f)); got != 1 {
+		t.Fatalf("%d once-only sends to the main conversation, want only the hand-off", got)
 	}
 	h.inbox.mu.Lock()
 	defer h.inbox.mu.Unlock()
@@ -472,6 +503,14 @@ func TestInboxSweepLeavesAHandoffAlone(t *testing.T) {
 	defer h.inbox.mu.Unlock()
 	if it.Agent != nil || it.Handling != nil || it.Suggestion == nil || len(it.Chain) != chain || it.status() != StatusAction {
 		t.Fatalf("the sweep moved it: %+v %+v %v", it.Agent, it.Handling, chainKinds(it))
+	}
+}
+
+// A note for an item without a title still reads as the inbox's notice: the item's id stands in.
+func TestInboxHandoffNoteWithoutATitle(t *testing.T) {
+	note := renderHandoffNote(inboxNote{Name: prompts.NoteRejected, Text: "好的"}, "示例用户", "lark:f1:100", "")
+	if in := prompts.ParseInjected(note); in == nil || in.State != "inbox" || in.Title != "lark:f1:100" {
+		t.Fatalf("ParseInjected = %+v\n%s", in, note)
 	}
 }
 
