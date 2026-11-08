@@ -46,9 +46,10 @@ final class InboxHandOffModel {
 
     @ObservationIgnored private var doneChosen = false
     /// The main chat's hand-off being tried, by its ask: the same ask sent again sends the first text again under the same
-    /// client id, whatever came in on the item since, and the hub and the manager send it once. It stays while a try under
-    /// that id may have gone (`mayHaveGone`) and through a failure that says nothing about it (`saysNothing`); an answer
-    /// that it failed ends it, and the next try is a new hand-off.
+    /// client id, whatever came in on the item since, and the hub and the manager send it once. It stays through a failure
+    /// that says nothing about a try under that id (`saysNothing`) and, once a try may have gone (`mayHaveGone`), through
+    /// every answer that leaves that try open (`leavesOpen`), a missing route included. Another ask or a reopened sheet
+    /// is a new hand-off.
     @ObservationIgnored private var attempt: Attempt?
     @ObservationIgnored private let itemID: String
     @ObservationIgnored private let deps: Deps
@@ -167,16 +168,19 @@ final class InboxHandOffModel {
     }
 
     /// A failed send whose text may still have reached the conversation: no answer (a timeout here or behind the hub, the
-    /// connection lost after the request went out, a bare 502 / 503 / 504 from in front of the hub), the hub's pending or
-    /// unknown receipt, or an answer saying so (`assistant_in_doubt`, `delivered: unknown` or `yes`, the node lost
-    /// without `delivered: none`). The sheet says to look first, and the same ask again is the same hand-off.
+    /// connection lost after the request went out, a bare 5xx from something in front of the hub, whose own answers carry
+    /// a `code`), the hub's pending or unknown receipt, or an answer saying so (`assistant_in_doubt`, `delivered: unknown`
+    /// or `yes`, the node lost without `delivered: none`). The sheet says to look first, and the same ask again is the same
+    /// hand-off.
     private static func mayHaveGone(_ error: Error) -> Bool {
         if error is InDoubt { return true }
         if error.isCancellation { return false }
-        if (error as? URLError)?.code == .networkConnectionLost || error.isTimeout || (error.isGap && !error.isOffline) { return true }
-        let api = error as? APIError, code = api?.code, delivered = api?.fields["delivered"]
-        return code == "timeout" || code == "assistant_in_doubt" || delivered == "unknown" || delivered == "yes"
-            || code == OpReceipt.unknownCode || code == OpReceipt.pendingCode || (code == "node_unreachable" && delivered != "none")
+        if (error as? URLError)?.code == .networkConnectionLost || error.isTimeout { return true }
+        guard let api = error as? APIError else { return false }
+        let code = api.code, delivered = api.fields["delivered"]
+        return (api.status >= 500 && code == nil && delivered == nil) || code == "timeout" || code == "assistant_in_doubt"
+            || delivered == "unknown" || delivered == "yes" || code == OpReceipt.unknownCode || code == OpReceipt.pendingCode
+            || (code == "node_unreachable" && delivered != "none")
     }
 
     /// A failure that says nothing about an earlier try under the same client id: no connection to the hub, a cancelled
@@ -185,43 +189,54 @@ final class InboxHandOffModel {
         error.isCancellation || (error.isOffline && !mayHaveGone(error)) || (error as? APIError)?.code == "assistant_offline"
     }
 
-    /// An answer under a client id a try may already have gone under that says nothing about that try: the hub keeps a
-    /// relay the phone or a proxy cut off as a bare 5xx (`internal`) and gives it back for that id, while the manager may
-    /// have sent the text. A refusal (4xx) or `delivered: none` says it failed.
+    /// After a try under the same client id may have gone, an answer that leaves that try open: any but one saying nothing
+    /// went (`delivered: none`). The hub keeps a relay the phone or a proxy cut off as a bare 5xx (`internal`) and gives it
+    /// back for that id while the manager may have sent the text, and a refusal may be the hub's (`op_id_reused`) or a
+    /// fresh run's at the manager, which say nothing about the first try either.
     private static func leavesOpen(_ error: Error) -> Bool {
-        guard let api = error as? APIError else { return true }
-        return api.status >= 500 && api.fields["delivered"] != "none"
+        (error as? APIError)?.fields["delivered"] != "none"
     }
 
     private func handOff(ask: String, text: String) async throws {
-        var tried = attempt.flatMap { $0.ask == ask ? $0 : nil } ?? Attempt(ask: ask, text: text, id: UUID())
+        let tried = attempt.flatMap { $0.ask == ask ? $0 : nil } ?? Attempt(ask: ask, text: text, id: UUID())
         attempt = tried
         let to: SessionKey
         do {
             to = try await deps.handOff(itemID, text, tried.id)
         } catch let e as APIError where e.status == 404 || e.status == 405 {
-            attempt = nil
-            // After a try that may have gone, the hub may have lost the item's manager or the manager the item since: look
-            // first, and the next send is a new one.
+            // After a try that may have gone, the manager may have lost the item since: look first, and keep the hand-off
+            // so the same ask never sends it as a plain message as well.
             if tried.inDoubt { throw InDoubt() }
             // An older hub or manager: the text goes to the main chat as a plain message, with nothing to write back to.
-            try await deps.plainToMain(text)
+            do {
+                try await deps.plainToMain(text)
+            } catch {
+                settle(tried, after: error)
+                throw error
+            }
+            attempt = nil
             if markDone { deps.markDone() }
             return
         } catch let error where Self.saysNothing(error) {
             throw error
         } catch {
             let answer: Error = tried.inDoubt && Self.leavesOpen(error) ? InDoubt() : error
-            if Self.mayHaveGone(answer) {
-                tried.inDoubt = true
-                attempt = tried
-            } else {
-                attempt = nil
-            }
+            settle(tried, after: answer)
             throw answer
         }
         attempt = nil
         deps.openMain(to, text, tried.id)
         if markDone { deps.markDone() }
+    }
+
+    /// After a failed try: kept in doubt while it may have gone, else over.
+    private func settle(_ tried: Attempt, after error: Error) {
+        guard Self.mayHaveGone(error) else {
+            attempt = nil
+            return
+        }
+        var kept = tried
+        kept.inDoubt = true
+        attempt = kept
     }
 }
