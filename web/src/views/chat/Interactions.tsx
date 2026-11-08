@@ -204,7 +204,7 @@ function QuestionCard({ ix }: { ix: Interaction }) {
         </div>
       )}
       <div key={qi} className="flex flex-col gap-0.5" style={{ animation: `fade-up 300ms ${EASE} both` }}>
-        {q.options.map((o) => (
+        {(q.options ?? []).map((o) => (
           <Choice key={o.label} on={(picked[qi] ?? []).includes(o.label)} multi={q.multi_select} label={o.label} desc={o.description} pick={picks[qi]?.includes(o.label)} onClick={() => toggle(o.label)} />
         ))}
         <label className="-mx-1.5 flex items-center gap-2 rounded-control px-1.5 py-1.5 transition-colors focus-within:bg-hover hover:bg-hover">

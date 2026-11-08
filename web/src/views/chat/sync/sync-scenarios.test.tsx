@@ -47,8 +47,6 @@ const files = import.meta.glob<{ cases: SyncCase[] }>("../../../../../spec/fixtu
  *  for another reason, or passes, fails the suite: the fixed bug comes off this list, and a new one is not hidden. */
 const KNOWN: Record<string, { issue: string; because: RegExp }> = {
   catch_up_over_cap_asks_rest: { issue: "#1118", because: /after_seq":12\}|want \[.*Question 6/ },
-  send_unknown_then_transcript_has_it: { issue: "#1121", because: /m1 shows 2 times|failed \["Reserve two bikes."\], want \[\]/ },
-  send_failed_stays_above_later: { issue: "#1122", because: /m1 shows 0 times|failed \[\], want \["Find a dinner place."\]/ },
 };
 // a new conversation's first message (chat.new, user.start): the runner does not play it yet, so every such case is
 // this one known failure
@@ -97,6 +95,18 @@ function typeAndSend(words: string) {
   box.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }));
 }
 
+/** Taps a failed bubble's Retry or Delete for the message with these words. */
+function onFailed(words: string, button: "retry" | "delete") {
+  const label = t(`chat-outboxbubbles.${button}`);
+  const entry = [...host.querySelectorAll<HTMLElement>("[data-outbox]")].find(
+    (el) => el.querySelector('[data-user-bubble][data-send-state="failed"] [data-bubble-text]')?.textContent?.trim() === words,
+  );
+  if (!entry) throw new Error(`no failed bubble for ${JSON.stringify(words)}`);
+  const el = [...entry.querySelectorAll("button")].find((b) => b.textContent === label);
+  if (!el) throw new Error(`no ${label} on the failed bubble for ${JSON.stringify(words)}`);
+  el.click();
+}
+
 function answer(id: string, resolution: Record<string, unknown>) {
   const card = [...host.querySelectorAll<HTMLElement>("[data-card]")].find((el) => el.dataset.card === id);
   if (!card) throw new Error(`no card ${id} on screen`);
@@ -125,15 +135,12 @@ function matchRequests(want: Request[], seen: Seen[], ops: (key: string) => Set<
   return null;
 }
 
-/** Compares the page with a view: failed messages back in the composer have no place in the list (README "Allowed
- *  differences"), so they are compared apart from the order. */
+/** Compares the page with a view: every message in its place, failed ones too. */
 function differences(got: ReturnType<typeof project> & { status?: string }, want: View): string[] {
   const out: string[] = [];
   if (want.messages) {
-    const placed = (ms: Message[]) => ms.filter((m) => m.state !== "failed").map((m) => `${m.from}:${m.state ?? ""}:${m.text}`);
-    const failed = (ms: Message[]) => ms.filter((m) => m.state === "failed").map((m) => m.text).sort();
-    if (JSON.stringify(placed(got.messages)) !== JSON.stringify(placed(want.messages))) out.push(`messages ${JSON.stringify(placed(got.messages))}, want ${JSON.stringify(placed(want.messages))}`);
-    if (JSON.stringify(failed(got.messages)) !== JSON.stringify(failed(want.messages))) out.push(`failed ${JSON.stringify(failed(got.messages))}, want ${JSON.stringify(failed(want.messages))}`);
+    const listed = (ms: Message[]) => ms.map((m) => `${m.from}:${m.state ?? ""}:${m.text}`);
+    if (JSON.stringify(listed(got.messages)) !== JSON.stringify(listed(want.messages))) out.push(`messages ${JSON.stringify(listed(got.messages))}, want ${JSON.stringify(listed(want.messages))}`);
   }
   if (want.cards) {
     const open = (cs: Record<string, string>) => Object.keys(cs).filter((id) => cs[id] === "open").sort();
@@ -233,10 +240,11 @@ async function step(st: Step, device: string, t: { sent: { id: string; text: str
       t.answering.add(u.answer.id);
       await act(async () => answer(u.answer!.id, u.answer!.resolution));
     } else if (u.retry) {
-      const words = t.sent.find((s) => s.id === u.retry)!.text;
-      await act(async () => typeAndSend(words));
+      await act(async () => onFailed(t.sent.find((s) => s.id === u.retry)!.text, "retry"));
     } else if (u.discard) {
-      t.sent.find((s) => s.id === u.discard)!.discarded = true;
+      const s = t.sent.find((x) => x.id === u.discard)!;
+      s.discarded = true;
+      await act(async () => onFailed(s.text, "delete"));
     }
   }
   const r = st.reply;
