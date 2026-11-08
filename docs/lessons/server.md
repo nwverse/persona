@@ -1,5 +1,9 @@
 # Lessons: hub / node and networking
 
+## Distant spreadsheet dates exceed time.Duration (#1061)
+
+`time.Time.Sub` saturates at roughly 290 years, so XLSX dates after the duration limit all became the same serial. Subtract Unix seconds for parsed calendar dates, retaining the existing wall-clock normalization. Verify the emitted worksheet XML, including distant leap years, time fractions, offsets and text cells; a valid ZIP/XML structure alone does not prove date values are correct.
+
 ## Completion reads must belong to the current turn (#6525)
 
 A model judgment can return after a resumed turn has already stopped again. Checking only the current

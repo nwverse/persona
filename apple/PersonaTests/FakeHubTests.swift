@@ -28,4 +28,25 @@ struct FakeHubTests {
         #expect(next == Data(#"{"ok":true}"#.utf8))
         #expect(hub.sent("GET", "/next").count == 1)
     }
+
+    @Test func backgroundTransportPreservesRouteErrors() async throws {
+        let hub = FakeHub()
+        hub.on("DELETE", "/fixture") { _ in
+            MainActor.assertIsolated()
+            throw APIError(status: 409, message: "fixture refusal")
+        }
+        let transport = try #require(hub.client.transport)
+        let status = await Task.detached {
+            do {
+                _ = try await transport(LocalRequest(method: "DELETE", path: "/fixture", query: [:], body: nil))
+                return 0
+            } catch let error as APIError {
+                return error.status
+            } catch {
+                return -1
+            }
+        }.value
+        #expect(status == 409)
+        #expect(hub.sent("DELETE", "/fixture").count == 1)
+    }
 }
