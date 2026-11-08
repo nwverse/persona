@@ -51,6 +51,12 @@ This is static evidence; the tests were not run. main's protocol continues chang
 
 Unix socket files use mode 0600, with owner/permission checks for directories and rendezvous too (`codex-rs/app-server-transport/src/transport/unix_socket.rs:79–98,325–340,497–503`). Persona must not loosen permissions to connect. Local transports found in source are selected at startup; no RPC was found for adding a local listener while running.
 
+**Windows** (2026-11-07, Codex 0.163 and the Codex App 26.1027): `--listen unix://` serves an AF_UNIX socket file there too (`<CODEX_HOME>\app-server-control\app-server-control.sock`, its directory's access list this user's alone), and the node dials it like a Unix one.
+With no mode bits, "private" is the owner and the access list: the socket and its directory must be this user's and grant nothing to anyone but this user, SYSTEM and Administrators (`codex_remote_windows.go`).
+`codex app-server daemon start` refuses to run from npm's launcher ("this Windows launcher prevents background processes from outliving it"), so the shared daemon is not there for a plain `codex`.
+The desktop App's app-server is stdio here as well; its windows talk over the App's own bus, the named pipe `\\.\pipe\codex-ipc` ([codex.md](codex.md), "Windows").
+Which threads a stdio app-server or a CLI holds open comes from each process's handle table instead of `lsof` / `/proc` ([windows.md](../operations/windows.md), "Codex").
+
 **Implementation when the current desktop uses stdio**: if supported by the desktop app, use an official shareable Unix/daemon channel on its next normal launch, letting desktop and node connect to the original server. The desktop must actually support those connection settings. Do not merely add `--listen unix://` to an old desktop launch command while it continues writing requests to stdin. If the desktop has no shared-connection configuration, add a cooperative channel in the desktop / launch integration. Plain TCP byte forwarding cannot replace multi-client JSON-RPC routing, one-time initialization, and response/event/approval distribution. Without that cooperation, Persona is explicitly read-only and must not claim "takeover".
 
 ## Threads, state, and send semantics
@@ -157,7 +163,7 @@ Implementation order and reuse points:
 | --- | --- | --- |
 | Multi-directory / multi-server discovery | Add a Codex registry / discovery in node, following `claudedirs.go`; configuration delivery / settings memory patterns in `hub/config.go`, `devices/claudedirs.go` | Server inventory independent of terminal engine choice; home may have no endpoint; insufficient permissions only mark inaccessible |
 | Separate connections and threads | Extract transport, RPC pending, per-thread state, and approval routing from `node/assistant_codex.go`; owned assistants retain their existing entry point | Owned/external processes must not share stop / reap ownership; unconnected external stdio must not auto-start replacements |
-| Listing and control | Add app-server sources in `node/sessions.go`; route by source before looking for a pane in `server/internal/node/control.go:307` | app-server sessions must not fall through to Claude resume; hide terminal actions without a pane |
+| Listing and control | Add app-server sources in `node/sessions.go`; route by source before looking for a pane (`send` and `paneFor` in `server/internal/node/send.go`) | app-server sessions must not fall through to Claude resume; hide terminal actions without a pane |
 | Persistence and protocol | `proto/session.go`, DB `node_sessions` / settings; hub HTTP/WS and Agent MCP tools | Same-source / cross-source identity, restart recovery, session routing, client compatibility; check migration numbers across lanes first |
 | History and live output | Reuse `transcript/codex.go` and File pagination; provide equivalent protocol-history pagination / spans if needed | Original source/thread/turn/item IDs are merge keys; after resubscription, discard partial deltas whose completeness cannot be proven and fill gaps from snapshots, rather than continuing to concatenate blindly |
 | Clients | `apple/Shared/Models.swift`, ChatStore, session menus, corresponding Android/web models | source, capabilities, clear read-only reasons; migrate old cache versions; automatic notifications must not overwrite new results |
