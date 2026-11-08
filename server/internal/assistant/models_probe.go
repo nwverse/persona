@@ -101,6 +101,9 @@ func (s *Service) probeTarget(ctx context.Context, in probeInput) (probeTarget, 
 	if t.api != "" && t.api != "messages" && t.api != "responses" && t.api != "chat" {
 		return t, i18n.Err("assistant-models_launchers.err_api")
 	}
+	if t.api == "chat" && (strings.TrimSpace(t.headers) != "" || strings.TrimSpace(t.proxy) != "") {
+		return t, errChatTransport
+	}
 	// Both credential headers go anyway (cindy's buildProbeRequest), so Auth only tidies a pasted "Bearer …".
 	t.key = strings.TrimSpace(strings.TrimPrefix(t.key, "Bearer "))
 	if err := checkGateway(t.base); err != nil {
