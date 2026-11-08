@@ -195,6 +195,87 @@ describe.each(["item", "source", "thread", "manager", "context"])("connector %s 
 describe.each(["older", "reach"] as const)("connector %s history", (kind) => {
   const start = () => kind === "older" ? startOlder() : startReach();
 
+  const disjoint = (): ThreadPage => ({
+    ...page(["7", "8"], "cursor-7"),
+    messages: [message("7"), message("8", { reply_to: { id: "1", text: "Original message" } })],
+  });
+
+  it("retries from the replacement window's cursor without skipping the discarded middle", async () => {
+    await refresh(1);
+    await resolve(0, quoted());
+    start();
+    await refresh(2);
+    await resolve(2, disjoint());
+    await resolve(1, page(["1", "2", "3", "4"], "cursor-1"));
+    expect(ids()).toEqual(["7", "8"]);
+    expect(olderButton().disabled).toBe(false);
+    expect(toast).not.toHaveBeenCalled();
+    start();
+    expect(transport.load.mock.calls[3][2]).toBe("cursor-7");
+    await resolve(3, page(["5", "6"], "cursor-5"));
+    expect(ids()).toEqual(["5", "6", "7", "8"]);
+    if (kind === "older") start();
+    expect(transport.load.mock.calls[4][2]).toBe("cursor-5");
+    await resolve(4, page(["1", "2", "3", "4"], "cursor-1"));
+    expect(ids()).toEqual(["1", "2", "3", "4", "5", "6", "7", "8"]);
+    expect(olderButton().disabled).toBe(false);
+    if (kind === "reach") expect(host.querySelector('[data-mid="1"]')!.className).toContain("bg-accent-tint");
+  });
+
+  it.each(["success", "failure"])("retires the discarded window before a stale %s and preserves a retry's busy state", async (result) => {
+    await refresh(1);
+    await resolve(0, quoted());
+    start();
+    await refresh(2);
+    await resolve(2, disjoint());
+    expect(olderButton().disabled).toBe(false);
+    start();
+    expect(transport.load.mock.calls[3][2]).toBe("cursor-7");
+    expect(olderButton().disabled).toBe(true);
+    if (result === "success") await resolve(1, page(["1", "2", "3", "4"], "cursor-1"));
+    else await reject(1, new Error("Synthetic discarded-window failure"));
+    expect(ids()).toEqual(["7", "8"]);
+    expect(olderButton().disabled).toBe(true);
+    expect(reads).toHaveLength(4);
+    expect(toast).not.toHaveBeenCalled();
+    await resolve(3, page(["1", "2", "3", "4", "5", "6"]));
+    expect(ids()).toEqual(["1", "2", "3", "4", "5", "6", "7", "8"]);
+    expect(host.textContent).not.toContain(t("inbox-connectorthread.older"));
+  });
+
+  it("retires history even when replacement and history responses settle in one React batch", async () => {
+    await refresh(1);
+    await resolve(0, quoted());
+    start();
+    await refresh(2);
+    await act(async () => {
+      reads[2].resolve(disjoint());
+      reads[1].resolve(page(["1", "2", "3", "4"], "cursor-1"));
+    });
+    expect(ids()).toEqual(["7", "8"]);
+    expect(olderButton().disabled).toBe(false);
+    expect(toast).not.toHaveBeenCalled();
+    startOlder();
+    expect(transport.load.mock.calls[3][2]).toBe("cursor-7");
+  });
+
+  if (kind === "reach") it("retires a second history page after a disjoint refresh during a quote search", async () => {
+    await refresh(1);
+    await resolve(0, quoted());
+    startReach();
+    await resolve(1, page(["3", "4"], "cursor-3"));
+    expect(transport.load.mock.calls[2][2]).toBe("cursor-3");
+    await refresh(2);
+    await resolve(3, disjoint());
+    expect(olderButton().disabled).toBe(false);
+    await resolve(2, page(["1", "2"], "cursor-1"));
+    expect(ids()).toEqual(["7", "8"]);
+    expect(reads).toHaveLength(4);
+    expect(toast).not.toHaveBeenCalled();
+    startReach();
+    expect(transport.load.mock.calls[4][2]).toBe("cursor-7");
+  });
+
   it.each([false, true])("preserves history and a concurrent newest refresh (history first: %s)", async (historyFirst) => {
     await refresh(1);
     await resolve(0, quoted());

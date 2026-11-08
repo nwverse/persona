@@ -45,14 +45,16 @@ function ConnectorThreadBody({ item, manager }: { item: InboxItem; manager?: str
   const [page, setPage] = useState<ThreadPage | null>(null);
   const [failure, setFailure] = useState<string | null>(null);
   const [older, setOlder] = useState(false);
+  // Apply responses synchronously so a history continuation sees a replaced window even in one React batch.
+  const currentPage = useRef<ThreadPage | null>(null);
   const owner = useRef<object | null>(null);
   const newestRead = useRef(0);
-  const historyPending = useRef(false);
+  const historyPending = useRef<object | null>(null);
   useLayoutEffect(() => {
     owner.current = {};
     return () => {
       owner.current = null;
-      historyPending.current = false;
+      historyPending.current = null;
     };
   }, []);
 
@@ -64,7 +66,14 @@ function ConnectorThreadBody({ item, manager }: { item: InboxItem; manager?: str
     try {
       const p = await loadThread(id, thread, undefined, manager);
       if (!current()) return;
-      setPage((have) => mergeNewest(have, p));
+      const next = mergeNewest(currentPage.current, p);
+      // mergeNewest returns the incoming page when it discards the previous window: its history cursor retires too.
+      if (next === p) {
+        historyPending.current = null;
+        setOlder(false);
+      }
+      currentPage.current = next;
+      setPage(next);
       setFailure(null);
     } catch (e) {
       if (!current()) return;
@@ -78,18 +87,24 @@ function ConnectorThreadBody({ item, manager }: { item: InboxItem; manager?: str
 
   const loadOlder = async () => {
     const scope = owner.current;
-    if (!scope || !page?.before || historyPending.current) return;
-    historyPending.current = true;
+    const start = currentPage.current;
+    if (!scope || !start?.before || historyPending.current) return;
+    const pending = {};
+    historyPending.current = pending;
+    const current = () => owner.current === scope && historyPending.current === pending;
     setOlder(true);
     try {
-      const p = await loadThread(id, thread, page.before, manager);
-      if (owner.current !== scope) return;
-      setPage((have) => (have ? mergeOlder(have, p) : p));
+      const p = await loadThread(id, thread, start.before, manager);
+      const have = currentPage.current;
+      if (!current() || !have) return;
+      const next = mergeOlder(have, p);
+      currentPage.current = next;
+      setPage(next);
     } catch (e) {
-      if (owner.current === scope) toast(t("inbox-connectorthread.older_failed", { error: errorText(e) }), "error");
+      if (current()) toast(t("inbox-connectorthread.older_failed", { error: errorText(e) }), "error");
     } finally {
-      if (owner.current === scope) {
-        historyPending.current = false;
+      if (current()) {
+        historyPending.current = null;
         setOlder(false);
       }
     }
@@ -98,27 +113,33 @@ function ConnectorThreadBody({ item, manager }: { item: InboxItem; manager?: str
   // A quote's message: the pages before it read until it is on screen (a few at most, as iOS); whether it is.
   const reach = async (msg: string) => {
     const scope = owner.current;
-    if (!scope || !page) return;
-    if (page.messages.some((m) => m.id === msg)) return true;
+    const start = currentPage.current;
+    if (!scope || !start) return;
+    if (start.messages.some((m) => m.id === msg)) return true;
     if (historyPending.current) return;
-    historyPending.current = true;
+    const pending = {};
+    historyPending.current = pending;
+    const current = () => owner.current === scope && historyPending.current === pending;
     setOlder(true);
     try {
-      const r = await reachMessage(page, msg, async (before) => {
-        if (owner.current !== scope) throw new Error("Thread view retired");
+      const r = await reachMessage(start, msg, async (before) => {
+        if (!current()) throw new Error("Thread history retired");
         const p = await loadThread(id, thread, before, manager);
-        if (owner.current !== scope) throw new Error("Thread view retired");
+        const have = currentPage.current;
+        if (!current() || !have) throw new Error("Thread history retired");
         // Merge only the fetched history, not the jump's older snapshot of the newest messages.
-        setPage((have) => (have ? mergeOlder(have, p) : p));
+        const next = mergeOlder(have, p);
+        currentPage.current = next;
+        setPage(next);
         return p;
       });
-      if (owner.current !== scope) return;
+      if (!current()) return;
       return r.found;
     } catch (e) {
-      if (owner.current === scope) toast(t("inbox-connectorthread.older_failed", { error: errorText(e) }), "error");
+      if (current()) toast(t("inbox-connectorthread.older_failed", { error: errorText(e) }), "error");
     } finally {
-      if (owner.current === scope) {
-        historyPending.current = false;
+      if (current()) {
+        historyPending.current = null;
         setOlder(false);
       }
     }
