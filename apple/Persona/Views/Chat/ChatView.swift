@@ -1,5 +1,6 @@
 import BeautifulUI
 import MarkdownUI
+import OSLog
 import PersonaKit
 import PhotosUI
 import SwiftUI
@@ -10,9 +11,6 @@ enum ChatStyle {
     /// Chat (assistant): thoughts hidden, tool runs folded into one line, lives at the root of its tab.
     case assistant
 }
-
-/// Whether a chat's page was in front when it was last told (`ChatView`); a class, so setting it draws nothing.
-private final class FrontFlag { var value = true }
 
 struct ChatView: View {
     @Environment(AppModel.self) private var model
@@ -90,7 +88,10 @@ struct ChatView: View {
         /// and came back on release (the Mac, 2026-11-04: 80 pt into a drag the list was at the newest again, 380 pt
         /// away as it glided, then back).
         var text = ""
-        var pending: [UUID] = []
+        /// By `ChatLines.frozenKey`, which a resend keeps (its id changes).
+        var pending: Set<String> = []
+        /// Where the failed ones among them were drawn: the line each sat before (`ChatLines.placeFrozen`).
+        var failedAt: [String: String] = [:]
     }
     /// The user dragged the list at least once: only then does reaching the top load older pages (a lazy stack may
     /// lay out the top row while settling at the bottom, which used to chain-load history on entry).
@@ -137,6 +138,8 @@ struct ChatView: View {
     /// The Persona conversation in the shell (docs/apple/ios.md「新外壳」).
     @Environment(\.shellChat) private var shellChat
     @Environment(\.shell) private var shell
+    /// iPhone Duo's bars down the side: the shell's bar over the Persona conversation is the side rail (`ShellSideRail`).
+    @Environment(\.shellRailEdge) private var railEdge
     /// The shell's composer (`ShellComposerBar`): the assistant's conversation and, in the shell, an agent's too, in every
     /// style (#1091); the old layout keeps `ComposerRow` / `PromptComposer` and the mode chips above them. On the Mac
     /// the card in every style but BeautifulUI's (its prompt bar is already one): the field, and under it Add, the model
@@ -154,9 +157,6 @@ struct ChatView: View {
     /// The page's height, read by the pending cards only (#926).
     @State private var footerRoom = FooterRoom()
     @Environment(\.openSpace) private var openSpace
-    /// Whether its page was in front when last told (`PageFrontWatcher`; the Mac keeps a section's page in the window
-    /// behind another). Not observed: it draws nothing.
-    @State private var shownInFront = FrontFlag()
     @State private var link: LinkTarget?
     /// Where a Model Not Connected card's Fix It goes (`ReadinessSheets`).
     @State private var readinessRoute: ReadinessRoute?
@@ -266,6 +266,10 @@ struct ChatView: View {
         .toolbarVisibility(sideBars ? .visible : .hidden, for: .navigationBar)
         .navigationBarBackButtonHidden(sideBars)
         .pageToolbar { if sideBars { sideBarItems } }
+        // The system draws that bar's title over the content, not in the column: a second title right above the
+        // header's own. Removed while the header shows its title; while typing the header is only fog, and the
+        // system's title names the session.
+        .toolbar(removing: sideBars && !composerTyping ? .title : nil)
         #if os(macOS)
         // On the Mac an Agents chat's title, state and actions are in the title bar's row of its column (#2113), not
         // in a header of its own over the chat: `macTitleRow`, and `macChrome` for what has no place there.
@@ -345,7 +349,7 @@ struct ChatView: View {
         HStack(spacing: Theme.Space.s) {
             if macShowsBack {
                 Button { back() } label: {
-                    Image(systemName: backSymbol).font(Theme.Font.heading)
+                    ThemedIcon(backSymbol).font(Theme.Font.heading)
                         .scaledFrame(width: Theme.Size.icon, height: Theme.Size.icon).contentShape(.rect)
                 }
                 .buttonStyle(.borderless)
@@ -355,7 +359,7 @@ struct ChatView: View {
             }
             if pane == .chat, let expand = host?.expand {
                 Button { expand(key) } label: {
-                    Image(systemName: Theme.Icon.enlarge).font(Theme.Font.heading)
+                    ThemedIcon(Theme.Icon.enlarge).font(Theme.Font.heading)
                         .scaledFrame(width: Theme.Size.icon, height: Theme.Size.icon).contentShape(.rect)
                 }
                 .buttonStyle(.borderless)
@@ -438,7 +442,7 @@ struct ChatView: View {
                         }
                     }
                 } label: {
-                    Image(systemName: Theme.Icon.space).font(Theme.Font.heading).foregroundStyle(Color.primary)
+                    ThemedIcon(Theme.Icon.space).font(Theme.Font.heading).foregroundStyle(Color.primary)
                         .scaledFrame(width: Theme.Size.avatarL, height: Theme.Size.avatarL)
                         .surface(interactive: true, in: .circle)
                 }
@@ -461,7 +465,7 @@ struct ChatView: View {
                     }
                 }
             } label: {
-                Image(systemName: Theme.Icon.space).font(Theme.Font.heading).foregroundStyle(Color.primary)
+                ThemedIcon(Theme.Icon.space).font(Theme.Font.heading).foregroundStyle(Color.primary)
                     .scaledFrame(width: Theme.Size.avatarL, height: Theme.Size.avatarL)
                     .surface(interactive: true, in: .circle)
             }
@@ -476,7 +480,7 @@ struct ChatView: View {
             }
         }
         Menu { moreMenuItems } label: {
-            Image(systemName: Theme.Icon.more).font(Theme.Font.heading).foregroundStyle(Color.primary)
+            ThemedIcon(Theme.Icon.more).font(Theme.Font.heading).foregroundStyle(Color.primary)
                 .scaledFrame(width: Theme.Size.avatarL, height: Theme.Size.avatarL)
                 .surface(interactive: true, in: .circle)
         }
@@ -746,37 +750,24 @@ struct ChatView: View {
         .onChange(of: scenePhase) { _, phase in if phase == .background { rememberReadPosition() } }
         .onDisappear {
             ChatTrace.shared.note(shownKey, "close")
+        }
+        // Kept shell pages do not disappear. Only the visible chat owns its
+        // transcript stream; the Agent keeps working on the hub while hidden.
+        // Returning subscribes from the retained store's covered sequence.
+        .onTabVisibility(appear: {
+            model.subscribe(key, by: owner)
+            if viewing != nil { model.subscribe(shownKey, by: owner) }
+            model.show(key, by: owner)
+            model.markSeen(key)
+        }, disappear: {
             rememberReadPosition()
             if viewing != nil { model.unsubscribe(shownKey, by: owner) }
             model.unsubscribe(key, by: owner)
             model.hide(by: owner)
-        }
+        })
         .onChange(of: session?.state) { _, st in
             if st == .unread && model.visibleSession == key { model.markSeen(key) }
         }
-        #if os(macOS)
-        // Its section behind another one (the page stays in the window, `MacPageStack`): as when the page was left
-        // before it was kept. Not the chat on screen, so a reply that finishes meanwhile stays Unread and notifies;
-        // not subscribed, so its streaming does not draw a chat nobody sees (about 20 ms a push behind Knowledge). Back in
-        // front, as on entry: subscribed again from what it holds (`since_seq`). Not told as it appears: a page built
-        // behind (its first visit, in front a turn later) would unsubscribe what `appeared()` just subscribed.
-        .background {
-            PageFrontWatcher(initial: false) { [model, key, owner, shownKey, viewing] front in
-                guard front != shownInFront.value else { return }
-                shownInFront.value = front
-                if front {
-                    model.subscribe(key, by: owner)
-                    if viewing != nil { model.subscribe(shownKey, by: owner) }
-                    model.show(key, by: owner)
-                    model.markSeen(key)
-                } else {
-                    if viewing != nil { model.unsubscribe(shownKey, by: owner) }
-                    model.unsubscribe(key, by: owner)
-                    model.hide(by: owner)
-                }
-            }
-        }
-        #endif
     }
 
     /// The chat as a flat list of lines (see `ChatLine`): every message of a turn opens its own exchange — the
@@ -791,7 +782,7 @@ struct ChatView: View {
         let key = ChatScratch.LinesKey(store: "\(shownKey.machineID)/\(shownKey.sessionID)", version: frozen == nil ? store.version : cut,
                                        first: items.first?.id, live: frozen == nil ? liveTurnID : frozen?.live, open: openWork,
                                        runs: openRuns, frozen: frozen, feed: feed.map(\.id),
-                                       streaming: style == .assistant && (frozen.map { !$0.text.isEmpty } ?? liveShown),
+                                       streaming: drawsLive && (frozen.map { !$0.text.isEmpty } ?? liveShown),
                                        quietAgents: quietSubagents, workflowCalls: workflowCalls)
         if scratch.linesKey == key { return scratch.lines }
         var blocks = store.blocks
@@ -802,7 +793,8 @@ struct ChatView: View {
         }
         var lines = lineBuilder.build(Self.debugTrim(blocks), live: key.live, streaming: key.streaming)
         if style == .assistant { // docs/assistant/unified-entry.md: the hub's items, quick results, a line for each day
-            lines = ChatLines.daySections(ChatLines.quickResults(ChatLines.mergeFeed(lines, feed)))
+            // The hand-offs the task cards take in are drawn there, not among the lines (#1542).
+            lines = ChatLines.daySections(ChatLines.quickResults(ChatLines.mergeFeed(lines, SentToAgents.shown(feed))))
         }
         scratch.lines = lines
         scratch.linesKey = key
@@ -1241,7 +1233,7 @@ struct ChatView: View {
                 // The foot of the open work line's card.
                 Button { toggleWork(group, fromHeader: false) } label: {
                     HStack(spacing: Theme.Space.sm) {
-                        Image(systemName: Theme.Icon.collapse).font(Theme.Font.labelStrong)
+                        ThemedIcon(Theme.Icon.collapse).font(Theme.Font.labelStrong)
                         Text("Collapse \(count) steps [Chat View 608bfc]").lineLimit(1).fixedSize()
                     }
                     .font(Theme.Font.caption)
@@ -1356,6 +1348,7 @@ struct ChatView: View {
             position.scrollTo(id: id, anchor: .bottomLeading)
             try? await Task.sleep(for: .milliseconds(100))
             landed()
+            await mendBlankLanding(on: id)
         }
     }
 
@@ -1387,6 +1380,71 @@ struct ChatView: View {
     /// A landing is over: near the newest end it follows (a line in the last screenful lands there: what arrived after
     /// it was held back with no ↓, TestFlight 50/51), further up it reads (#597), by the geometry.
     private func landed() { setFollow { $0.landed() } }
+
+    /// Opened again at the place it was left, a chat on a phone showed only its header, ↓ and the composer, no line
+    /// drawn anywhere, until it was closed (#1386; never on a simulator). A landing that leaves no line in the viewport
+    /// builds the list again and lands once more; still nothing, it goes to the newest. Each step writes one line to the
+    /// system log (category `chat-landing`) with counts and geometry only, never ids or text.
+    private func mendBlankLanding(on id: String) async {
+        let key = shownKey
+        var pretend = false
+        #if DEBUG
+        pretend = Self.blankLanding
+        #if os(iOS) || os(visionOS)
+        if pretend, let list = pin.list { list.contentOffset.y = list.contentSize.height + 2 * list.bounds.height }
+        #endif
+        #endif
+        for attempt in 1...2 {
+            try? await Task.sleep(for: .milliseconds(150))
+            let lines = currentLines()
+            let blank = scratch.drawnLines.isEmpty || pretend
+            pretend = false
+            guard shownKey == key, !lines.isEmpty, blank, !scratch.userDragging, entry == nil else {
+                if attempt > 1 { logLanding("mended", attempt: attempt - 1, on: id, lines: lines) }
+                return
+            }
+            logLanding("blank", attempt: attempt, on: id, lines: lines)
+            #if DEBUG
+            scratch.blankLandings += 1
+            #endif
+            listBuild += 1
+            try? await Task.sleep(for: .milliseconds(50))
+            if attempt == 1, lines.contains(where: { $0.id == id }) {
+                setFollow { $0.land() }
+                position.scrollTo(id: id, anchor: .bottomLeading)
+                try? await Task.sleep(for: .milliseconds(300))
+                position.scrollTo(id: id, anchor: .bottomLeading)
+                landed()
+            } else {
+                setFollow { $0.follow() }
+                position.scrollTo(edge: .top)
+            }
+        }
+        try? await Task.sleep(for: .milliseconds(150))
+        guard shownKey == key else { return }
+        logLanding(scratch.drawnLines.isEmpty ? "still blank" : "mended", attempt: 2, on: id, lines: currentLines())
+    }
+
+    private static let landingLog = Logger(subsystem: "persona", category: "chat-landing")
+
+    /// One line about a landing: where the target is among the lines, what is drawn, where the list is.
+    private func logLanding(_ what: String, attempt: Int, on id: String, lines: [ChatLine]) {
+        let at = lines.firstIndex(where: { $0.id == id }) ?? -1
+        #if os(iOS) || os(visionOS)
+        let list = pin.list
+        let offset = list.map { Int($0.contentOffset.y) } ?? -1
+        let content = list.map { Int($0.contentSize.height) } ?? -1
+        let height = list.map { Int($0.bounds.height) } ?? -1
+        #else
+        let offset = -1, content = -1, height = -1
+        #endif
+        Self.landingLog.notice("""
+            \(what, privacy: .public) after landing (try \(attempt, privacy: .public)): line \(at, privacy: .public) of \(lines.count, privacy: .public), \
+            drawn \(scratch.drawnLines.count, privacy: .public), visible \(scratch.visibleLines.count, privacy: .public), \
+            offset \(offset, privacy: .public), content \(content, privacy: .public), height \(height, privacy: .public), \
+            mode \(String(describing: follow.mode), privacy: .public), build \(listBuild, privacy: .public)
+            """)
+    }
 
     /// New content arrived: following goes to the newest, unless a tapped header is held in place (`ChatPin`). Nothing
     /// here turns following on; that is `ChatFollow`'s (it used to, at the newest end untouched, to make up for the
@@ -1422,13 +1480,14 @@ struct ChatView: View {
                 try? await Task.sleep(for: .milliseconds(60))
                 if n == 1 { hideChrome() } // once the header has measured itself
                 guard let bottom = scratch.landingMaxY, scratch.listFrame.height > 0 else { continue }
-                let want = scratch.listFrame.minY + (style == .dev ? (sideBars ? sideHeaderHeight : chrome.settledHeight) : AssistantTopBar.height) + Self.inputTail
+                let want = scratch.listFrame.minY + (style == .dev ? (sideBars ? sideHeaderHeight : chrome.settledHeight) : AssistantTopBar.room(railEdge)) + Self.inputTail
                 let off = want - bottom // > 0: too high; the flipped list scrolls toward older to lower it
                 if abs(off) < 1 { break }
                 scrollList(to: chrome.offset + off)
             }
             landing = nil
             landed()
+            await mendBlankLanding(on: input)
         }
     }
 
@@ -1462,8 +1521,31 @@ struct ChatView: View {
         // Already there, and the stored position says so: setting it again only re-evaluated the whole page (a
         // streaming reply asks every 40 characters; the flipped list stays at its newest end by itself).
         if !animated, scratch.atNewest, position.edge == .top { return }
-        if animated { withAnimation(Theme.Motion.standard) { position.scrollTo(edge: .top) } } else { position.scrollTo(edge: .top) }
+        if animated {
+            #if os(iOS) || os(visionOS)
+            withAnimation(Theme.Motion.standard, completionCriteria: .removed) {
+                position.scrollTo(edge: .top)
+            } completion: {
+                reconcileNewestGeometry()
+            }
+            #else
+            withAnimation(Theme.Motion.standard) { position.scrollTo(edge: .top) }
+            #endif
+        } else {
+            position.scrollTo(edge: .top)
+        }
     }
+
+    #if os(iOS) || os(visionOS)
+    /// Revealing held-back rows can move UIKit to the end without another SwiftUI geometry callback (#1211).
+    /// Read the real final position, including an interrupted jump, rather than forcing following or near=true.
+    private func reconcileNewestGeometry() {
+        guard model.isSubscribed(shownKey, by: owner), let gap = pin.measuredNewestGap else { return }
+        scratch.newestGap = gap
+        scratch.atNewest = gap <= 0.5
+        setFollow { $0.scrolled(gap: gap) }
+    }
+    #endif
 
     /// On entry / returning to the chat tab: at the newest (already the natural start of the flipped list).
     private func settleAtEnd() {
@@ -1539,6 +1621,9 @@ struct ChatView: View {
 
     /// Streamed words are drawn after the lines (`ChatLiveText`'s rule: not once the message is in the rows).
     private var liveShown: Bool { ChatLiveText.shows(store) }
+    /// The chat draws live text: the assistant's in the main chat, and an agent's as Claude shows it in any chat of it
+    /// (docs/integrations/claude-integration.md "Live replies (MessageDisplay)"), the same way.
+    private var drawsLive: Bool { style == .assistant || store.liveIsAgents }
 
     /// A message of yours is the newest thing and the agent has not begun on it: no turn running yet, the session at
     /// work or starting up, or the message just sent and the hub not saying working yet (#3853).
@@ -1668,7 +1753,7 @@ struct ChatView: View {
         // The Mac has no header over the chat (`chrome` stays empty): the row over it is `macChrome`.
         style == .dev ? macChromeHeight : AssistantTopBar.height
         #else
-        style == .dev ? (sideBars ? sideHeaderHeight : chrome.height) : AssistantTopBar.height
+        style == .dev ? (sideBars ? sideHeaderHeight : chrome.height) : AssistantTopBar.room(railEdge)
         #endif
     }
 
@@ -1723,9 +1808,9 @@ struct ChatView: View {
             .frame(minHeight: .zero)
             ChatRegion(name: "ChatFooter.body") { footer }
                 // What the footer takes of the page: the pending cards grow into the rest while the keyboard is up.
-                .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { h in
-                    if abs(footerRoom.footer - h) >= 1 { footerRoom.footer = h }
-                }
+                // Exact, like the cards' own height inside it (`PendingCards.shown`): the cards take one from the other for
+                // what the footer holds besides them, which must not move with their own height (#1580).
+                .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { footerRoom.footer = $0 }
         }
         // The height the page offers, even when what is in it is taller: the pending cards size themselves by it. A
         // frame with both bounds takes the offered size whatever the content (not a design value: no token for it).
@@ -1733,10 +1818,10 @@ struct ChatView: View {
         .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { h in
             if abs(footerRoom.height - h) >= 1 { footerRoom.height = h }
         }
-        // As short as the list may get while the keyboard is up: the header over it (folded or not), its top margin and the
-        // hairline above it. The cards take the rest (#1912).
+        // As short as the list may get while the keyboard is up: the header over it (folded or not) and the hairline above
+        // it. The cards take the rest (#1912).
         .onChange(of: headerRoom, initial: true) { _, h in
-            footerRoom.listFloor = Self.newestMargin + Theme.Size.line + Theme.Space.s // and a gap over 「N 个待处理」
+            footerRoom.listFloor = Theme.Size.line + Theme.Space.s // and a gap over 「N 个待处理」
             footerRoom.fixedHeader = h
             footerRoom.chrome = style == .dev && !sideBars ? chrome : nil
         }
@@ -1843,7 +1928,8 @@ struct ChatView: View {
                 .padding(.horizontal, Theme.Space.m)
                 .padding(.vertical, Theme.Space.s)
         } else {
-            mainFooter.padding(.top, Theme.Space.s)
+            // No room of its own above: the newest message is one row gap over its first row (`newestGap`, #1108).
+            mainFooter
         }
     }
 
@@ -1870,14 +1956,14 @@ struct ChatView: View {
             // streamed under it read as moving 56 pt and back, on screenshots identical to the pixel (#1046).
             Color.clear.frame(width: Theme.Size.line, height: Theme.Size.line)
                 .screenProbe("chat-rows", page: style == .assistant ? "assistant" : "agents",
-                             ChatRowsShown(items: store.items.count, lines: order.count, visible: visible.count,
+                             ChatRowsShown(items: store.items.count, lines: order.count, visible: visible.count, drawn: scratch.drawnLines.count,
                                            top: visible.first, topY: visible.first.flatMap { scratch.workHeadY[$0] ?? scratch.lineY[$0] }.map { Int($0.rounded()) },
                                            newest: scratch.atNewest, follows: follow.follows,
                                            offset: Int(scratch.scrollY.rounded()), content: Int(scratch.contentHeight.rounded()),
                                            frozen: frozen != nil, ids: order.suffix(4).map { String($0.suffix(16)) },
                                            x: Int(scratch.offsetX.rounded()),
                                            near: follow.near, mode: "\(follow.mode)", arrow: arrowShows, gap: Int(scratch.newestGap.rounded()),
-                                           dragging: scratch.userDragging, held: pin.holding))
+                                           dragging: scratch.userDragging, held: pin.holding, blank: scratch.blankLandings))
         }
     }
 
@@ -1913,7 +1999,7 @@ struct ChatView: View {
     @ViewBuilder private var jumpArrow: some View {
             if arrowShows {
                 Button(action: jumpToEnd) {
-                    Image(systemName: Theme.Icon.down).font(Theme.Font.bodyStrong).scaledFrame(width: Theme.Size.avatar, height: Theme.Size.avatar)
+                    ThemedIcon(Theme.Icon.down).font(Theme.Font.bodyStrong).scaledFrame(width: Theme.Size.avatar, height: Theme.Size.avatar)
                 }
                 .accessibilityLabel("Jump to Latest")
                 #if os(macOS)
@@ -1994,6 +2080,10 @@ struct ChatView: View {
                 }
                 if !pendingCards.isEmpty {
                     PendingCards(cards: pendingCards, room: footerRoom)
+                }
+                // The latest question the assistant answered here (#544), until put away; Session Info lists them all.
+                if let answered = model.delegated(for: key).last {
+                    DelegatedCard(answer: answered)
                 }
                 // The last card was answered: one low-key entry to the next conversation that needs you (#4348).
                 if let next = nextNeedsYouSession {
@@ -2089,8 +2179,10 @@ struct ChatView: View {
         return LazyVStack(alignment: .leading, spacing: Theme.Space.l) {
             // Newest first (the list is drawn upside down): the end sentinel, live text, unsent messages, lines (a failed
             // message among them, before the first line written after it).
+            // It takes no room: the rows' spacing alone is the gap to the footer, as between any two rows (#1108).
             Color.clear
                 .frame(height: Theme.Size.line)
+                .padding(.bottom, -Theme.Size.line)
                 .id(Self.bottomID)
             // A voice call's captions, the thread's last rows while it is bound here (docs/assistant/voice.md 6.2): they read the
             // call themselves; the page only asks whether one is bound.
@@ -2104,7 +2196,7 @@ struct ChatView: View {
             }
             // Streamed text, the typing line and unsent messages sit at the newest end too: while you read
             // history they wait with the rest, as they were drawn then (`Frozen`).
-            if style == .assistant { ChatLiveText(store: store, held: frozen?.text) }
+            if drawsLive { ChatLiveText(store: store, held: frozen?.text) }
             // Sent, and the agent not on it yet: the line the new-conversation page showed under the first message
             // (`FirstMessagePending`), where the turn's work line comes in. Without it the chat that took over showed
             // the message a line lower, then pushed it up when the turn began (#1911).
@@ -2114,9 +2206,12 @@ struct ChatView: View {
                     .id("starting-turn")
             }
             // Sent from here, not in the transcript yet (ones Claude queued show in the queue strip instead). One that
-            // failed with messages sent after it sits before the first of them, among the lines below (#6023); not
-            // while history is read (`Frozen`): nothing moves under the reader then.
-            let placed = frozen.map { f in (before: [String: [PendingMessage]](), rest: pending.filter { f.pending.contains($0.id) }) }
+            // failed with messages sent after it sits before the first of them, among the lines below (#6023). While
+            // history is read (`Frozen`) each stays where it was drawn when the freeze began: nothing moves under the
+            // reader then (#1243).
+            let placed = frozen.map { f in
+                ChatLines.placeFrozen(lines, pending.filter { f.pending.contains(ChatLines.frozenKey($0)) }, at: f.failedAt)
+            }
                 ?? ChatLines.placeFailed(lines, pending, writtenAt: store.writtenAt)
             ForEach(placed.rest.reversed()) { msg in pendingBubble(msg) }
             // The first message of a conversation, not in the transcript yet: its day over it, as the new-conversation
@@ -2144,7 +2239,7 @@ struct ChatView: View {
             }
             switch ChatLines.placeholder(lines: lines, hasTranscript: !rows.isEmpty,
                                          hasPending: !pending.isEmpty || !store.pending.isEmpty || !store.arriving.isEmpty,
-                                         hasLiveText: style == .assistant && !(frozen?.text ?? store.liveText).isEmpty,
+                                         hasLiveText: drawsLive && !(frozen?.text ?? store.liveText).isEmpty,
                                          loadedOnce: store.loadedOnce) {
             case .loading:
                 ChatSkeleton().flippedBack().accessibilityIdentifier("chat-loading-placeholder")
@@ -2187,12 +2282,15 @@ struct ChatView: View {
         // margin instead of the screen edge (padding shifted the page 16pt sideways after landing on a row).
         .contentMargins(.horizontal, 16, for: .scrollContent)
         .onScrollTargetVisibilityChange(idType: String.self) { ids in scratch.visibleLines = ids }
+        // Any part of a row on screen: `visibleLines` counts a row once half of it is, and a line taller than two
+        // screens never is. None at all after a landing is a blank page (`mendBlankLanding`).
+        .onScrollTargetVisibilityChange(idType: String.self, threshold: 0.01) { ids in scratch.drawnLines = ids }
         .flippedBack() // the scroll view itself upside down; every row above is flipped back
         // Safe areas would land on the wrong ends of a flipped scroll view: ignore them and add the room ourselves.
-        // (Content top = the composer side on screen, content bottom = the navigation side.)
+        // (Content top = the composer side on screen, content bottom = the navigation side.) The newest end has no
+        // margin: the rows' spacing is its gap to the footer (`newestGap`).
         // The header floats over the list (Agents): the oldest end leaves its full height free, so nothing hides
         // under it; the list's own frame never changes as it folds, so folding never moves the messages.
-        .contentMargins(.top, Self.newestMargin, for: .scrollContent)
         .contentMargins(.bottom, headerRoom + 10, for: .scrollContent)
         .scrollIndicators(.hidden)
         // iOS 26's soft edge blur works out its region on the unflipped view and fogged the whole list.
@@ -2294,8 +2392,10 @@ struct ChatView: View {
             if !holds {
                 frozen = nil
             } else if let last = store.items.last {
+                let failed = ChatLines.placeFailed(currentLines(), store.pending, writtenAt: store.writtenAt).before
                 frozen = Frozen(seq: last.seq, part: last.part, live: liveTurnID,
-                                text: style == .assistant && liveShown ? store.liveText : "", pending: store.pending.map(\.id))
+                                text: drawsLive && liveShown ? store.liveText : "",
+                                pending: Set(store.pending.map(ChatLines.frozenKey)), failedAt: ChatLines.failedLines(failed))
             }
         }
         .onChange(of: store.rows.last?.id) { _, _ in contentArrived(foldChrome: false) }
@@ -2425,7 +2525,7 @@ struct ChatView: View {
     private var compactChrome: some View {
         HStack(spacing: 0) {
             Button { back() } label: {
-                Image(systemName: backSymbol).font(Theme.Font.secondaryStrong).dynamicTypeSize(...DynamicTypeSize.xxLarge).scaledFrame(width: Theme.Size.tapTarget, height: Theme.Size.wellM)
+                ThemedIcon(backSymbol).font(Theme.Font.secondaryStrong).dynamicTypeSize(...DynamicTypeSize.xxLarge).scaledFrame(width: Theme.Size.tapTarget, height: Theme.Size.wellM)
             }
             .buttonStyle(.plain)
             .accessibilityLabel(backLabel)
@@ -2471,7 +2571,7 @@ struct ChatView: View {
             HStack(spacing: 0) {
                 if let goal = session?.goal {
                     Button { Haptics.tap(); showGoal = true } label: {
-                        Image(systemName: Theme.Icon.goal)
+                        ThemedIcon(Theme.Icon.goal)
                             .font(Theme.Font.labelHeavy)
                             .foregroundStyle(goal.tint)
                             .scaledFrame(width: Theme.Size.tapTarget, height: Theme.Size.wellM)
@@ -2495,7 +2595,7 @@ struct ChatView: View {
     private var activityMark: some View {
         let bg = session?.background?.count ?? 0
         return HStack(spacing: Theme.Space.xxs) {
-            Image(systemName: bg > 0 ? ActivityChips.backgroundSymbol : ActivityChips.loopSymbol)
+            ThemedIcon(bg > 0 ? ActivityChips.backgroundSymbol : ActivityChips.loopSymbol)
                 .font(Theme.Font.labelHeavy)
             if bg > 0 { Text("\(bg)").font(Theme.Font.labelHeavy.monospacedDigit()) }
         }
@@ -2620,7 +2720,7 @@ struct ChatView: View {
             HStack(spacing: Theme.Space.xs) {
                 Text(title).font(Theme.Font.heading).lineLimit(1).truncationMode(.tail)
                 if chevron {
-                    Image(systemName: Theme.Icon.expand).font(Theme.Font.labelStrong).foregroundStyle(.secondary)
+                    ThemedIcon(Theme.Icon.expand).font(Theme.Font.labelStrong).foregroundStyle(.secondary)
                 }
             }
             ZStack {
@@ -2761,7 +2861,7 @@ struct ChatView: View {
                         // Files (a swipe to the left now quotes a message, #1058), the terminal (it comes up from the
                         // bottom, TerminalCover) and Git are in ···: one button there (#1205).
                         Menu { moreMenuItems } label: {
-                            Image(systemName: Theme.Icon.more).font(Theme.Font.heading).dynamicTypeSize(...DynamicTypeSize.xxLarge).scaledFrame(width: Theme.Size.tapTarget, height: Theme.Size.tapTarget)
+                            ThemedIcon(Theme.Icon.more).font(Theme.Font.heading).dynamicTypeSize(...DynamicTypeSize.xxLarge).scaledFrame(width: Theme.Size.tapTarget, height: Theme.Size.tapTarget)
                                 .contentShape(.circle)
                         }
                         .labelOnlyMenu()
@@ -2824,11 +2924,10 @@ struct ChatView: View {
     /// Back: out of files / Git to the chat first, then off the page.
     /// The widest the conversation gets: lines longer than this are hard to read.
     static let readableWidth: CGFloat = 760
-    /// The list's margin at its newest end (over the composer; the list is upside down, so its top margin).
-    static let newestMargin: CGFloat = 10
-    /// From the newest row's bottom to the composer: the margin, the end marker and the rows' spacing. The first message
-    /// of a new conversation is laid out with it before the chat takes over (`FirstMessagePending`, #1911).
-    static let newestGap: CGFloat = newestMargin + Theme.Size.line + Theme.Space.l
+    /// From the newest row's bottom to the footer's first row: the rows' spacing, as between any two rows (#1108); the
+    /// end marker takes no room and neither the list nor the footer adds a margin there. The first message of a new
+    /// conversation is laid out with it before the chat takes over (`FirstMessagePending`, #1911).
+    static let newestGap: CGFloat = Theme.Space.l
 
     /// An Agents chat whose actions are in the system's side column (no header of its own).
     private var sideBars: Bool { style == .dev && barsVertical }
@@ -2862,7 +2961,8 @@ struct ChatView: View {
     /// and when there are any the space's other agents, a /loop or background work and subagents. It stays put, but
     /// while the keyboard is up on the composer it is only the fog: iPhone Duo's inner display on its side has about
     /// 390pt over the keyboard, and the title, the tabs and the mode chips over the box left no row of the chat
-    /// (2026-11-04). The system's title in the side column still says which session it is.
+    /// (2026-11-04). The system's title over the content says which session it is then (it is removed while the
+    /// header shows its own).
     private var sideHeader: some View {
         VStack(spacing: Theme.Space.sm) {
             if !composerTyping { sideHeaderRows }
@@ -2971,7 +3071,7 @@ struct ChatView: View {
 
     private var headerBackButton: some View {
         Button { back() } label: {
-            Image(systemName: backSymbol).font(Theme.Font.heading).dynamicTypeSize(...DynamicTypeSize.xxLarge).scaledFrame(width: Theme.Size.tapTarget, height: Theme.Size.tapTarget)
+            ThemedIcon(backSymbol).font(Theme.Font.heading).dynamicTypeSize(...DynamicTypeSize.xxLarge).scaledFrame(width: Theme.Size.tapTarget, height: Theme.Size.tapTarget)
                 .contentShape(.circle)
         }
         .buttonStyle(.plain)
@@ -2982,7 +3082,7 @@ struct ChatView: View {
     /// A hosting sheet's Full Screen beside its ✕ (#3743): the agent's full page instead of the sheet.
     private func hostedExpandButton(_ expand: @escaping (SessionKey) -> Void) -> some View {
         Button { expand(key) } label: {
-            Image(systemName: Theme.Icon.enlarge).font(Theme.Font.heading).dynamicTypeSize(...DynamicTypeSize.xxLarge)
+            ThemedIcon(Theme.Icon.enlarge).font(Theme.Font.heading).dynamicTypeSize(...DynamicTypeSize.xxLarge)
                 .scaledFrame(width: Theme.Size.tapTarget, height: Theme.Size.tapTarget)
                 .contentShape(.circle)
         }
@@ -3062,9 +3162,6 @@ struct ChatView: View {
                 }
                 settleAtEnd()
             }
-            model.subscribe(key, by: owner)
-            model.show(key, by: owner)
-            model.markSeen(key)
             if style == .dev { AppModel.rememberChat(key) }
             #if DEBUG
             if UserDefaults.standard.bool(forKey: "openTerminalPane") { openTerminal() }
@@ -3299,6 +3396,10 @@ struct ChatView: View {
     /// Simulator automation: `-openAllWork YES` shows every work line unfolded (screenshots of the expanded state).
     #if DEBUG
     static let foldProbe = UserDefaults.standard.bool(forKey: "showFoldProbe") || UserDefaults.standard.bool(forKey: "showFreezeProbe")
+    /// `-showBlankLanding YES`: every landing is thrown past the end of the list and its first look finds nothing drawn,
+    /// as on the page of #1386, for `mendBlankLanding` to bring back (`ChatReenterTests`). (Thrown alone, the list comes
+    /// back inside its content by itself, somewhere else, with rows drawn.)
+    static let blankLanding = UserDefaults.standard.bool(forKey: "showBlankLanding")
     /// `-showAsUnread YES`: open the chat as if its answer had not been seen (where it lands).
     static let debugAsUnread = UserDefaults.standard.bool(forKey: "showAsUnread")
     #else
@@ -3492,7 +3593,7 @@ struct StartingNote: View {
     var body: some View {
         HStack(alignment: .firstTextBaseline, spacing: Theme.Space.s) {
             if let error {
-                Image(systemName: Theme.Icon.errorFilled).font(Theme.Font.labelStrong).foregroundStyle(Theme.danger)
+                ThemedIcon(Theme.Icon.errorFilled).font(Theme.Font.labelStrong).foregroundStyle(Theme.danger)
                 Text("Didn't start: \(error) [Chat View 38dec8]").font(Theme.Font.secondary).foregroundStyle(.secondary).lineLimit(3)
             } else {
                 ProgressView().controlSize(.mini)
@@ -3515,7 +3616,7 @@ struct AttentionNote: View {
 
     var body: some View {
         HStack(alignment: .firstTextBaseline, spacing: Theme.Space.s) {
-            Image(systemName: Theme.Icon.needsYou).font(Theme.Font.labelStrong).foregroundStyle(StatusPalette.needsYou.text)
+            ThemedIcon(Theme.Icon.needsYou).font(Theme.Font.labelStrong).foregroundStyle(StatusPalette.needsYou.text)
             Text(reason).font(Theme.Font.secondary).foregroundStyle(.secondary).lineLimit(3)
             Spacer(minLength: 0)
             if let link { FeishuLink(url: link).font(Theme.Font.secondaryStrong) }
@@ -3545,11 +3646,11 @@ struct NextNeedsYouStrip: View {
     var body: some View {
         Button(action: open) {
             HStack(spacing: Theme.Space.s) {
-                Image(systemName: Theme.Icon.needsYou).font(Theme.Font.labelStrong).foregroundStyle(StatusPalette.needsYou.text)
+                ThemedIcon(Theme.Icon.needsYou).font(Theme.Font.labelStrong).foregroundStyle(StatusPalette.needsYou.text)
                 Text("Next Needing You").font(Theme.Font.secondaryStrong).foregroundStyle(Color.primary).lineLimit(1)
                 Text(title).font(Theme.Font.secondary).foregroundStyle(.secondary).lineLimit(1).truncationMode(.tail)
                 Spacer(minLength: 0)
-                Image(systemName: Theme.Icon.forward).font(Theme.Font.label).foregroundStyle(.secondary)
+                ThemedIcon(Theme.Icon.forward).font(Theme.Font.label).foregroundStyle(.secondary)
             }
             .padding(.horizontal, Theme.Space.m).padding(.vertical, Theme.Space.s)
             .surface(interactive: true, in: .rect(cornerRadius: Theme.Radius.card, style: .continuous))
@@ -3569,7 +3670,7 @@ struct FailureNote: View {
     var body: some View {
         VStack(alignment: .leading, spacing: Theme.Space.s) {
             HStack(alignment: .firstTextBaseline, spacing: Theme.Space.s) {
-                Image(systemName: Theme.Icon.errorFilled).font(Theme.Font.labelStrong).foregroundStyle(Theme.danger)
+                ThemedIcon(Theme.Icon.errorFilled).font(Theme.Font.labelStrong).foregroundStyle(Theme.danger)
                 Text(Session.failureText(reason)).font(Theme.Font.secondary).foregroundStyle(.secondary).lineLimit(3)
                 Spacer(minLength: 0)
             }
@@ -3612,7 +3713,7 @@ struct SuggestionPill: View {
             fill()
         } label: {
             HStack(spacing: Theme.Space.s) {
-                Image(systemName: Theme.Icon.ai).font(Theme.Font.labelStrong).foregroundStyle(Theme.ai)
+                ThemedIcon(Theme.Icon.ai).font(Theme.Font.labelStrong).foregroundStyle(Theme.ai)
                 Text(text).font(Theme.Font.secondary).foregroundStyle(.secondary).lineLimit(1).truncationMode(.tail)
                 Spacer(minLength: 4)
                 Text("Use").font(Theme.Font.labelStrong).foregroundStyle(Theme.accent).lineLimit(1).fixedSize()
@@ -3805,7 +3906,7 @@ struct Composer: View, Equatable {
                         selection = TextSelection(insertionPoint: text.endIndex)
                         focused = true
                     } label: {
-                        Label { Text(prompt.title).lineLimit(1) } icon: { Image(systemName: Theme.Icon.insert) }
+                        Label { Text(prompt.title).lineLimit(1) } icon: { ThemedIcon(Theme.Icon.insert) }
                     }
                     .accessibilityIdentifier("extension-prompt-\(prompt.id)")
                 }
@@ -3893,7 +3994,16 @@ struct Composer: View, Equatable {
         composerNotes
             .readinessSheets($failureRoute)
             .modifier(MainReadinessRefresh(enabled: isMain))
+            // The Claude quota beside ultracode's switch (#1307): kept no older than two minutes while the chat offers the
+            // switch and is in front, so a menu opened after a long stay in the chat says where the quota is now.
+            .tabActiveTask(id: ultracodeOffered && phase == .active) {
+                guard ultracodeOffered, phase == .active else { return }
+                await UsageWindowsStore.shared.keepFresh(model)
+            }
     }
+
+    /// This chat offers Claude Code's ultracode switch (#1307).
+    private var ultracodeOffered: Bool { Ultracode.offered(model.session(key), features: model.features(key.group)) }
 
     /// Persona's main conversation: it carries the readiness card and the send gate (as the web, `useReadinessGate`).
     private var isMain: Bool { model.assistantMain == key && model.session(key)?.assistant == true }
@@ -3920,6 +4030,11 @@ struct Composer: View, Equatable {
                     model.sendNow(key, text: "继续") // i18n-ignore
                 }
                 .transition(.move(edge: .bottom).combined(with: .opacity))
+            }
+            // A resume turned ultracode off (#1307): one line to turn it back on, or dismiss.
+            if let s = model.session(key), Ultracode.lostShown(s, features: model.features(key.group)) {
+                UltracodeLostNote(key: key, session: s)
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
             }
             if isMain {
                 // The main conversation: what it still needs, or a refused send (docs/assistant/onboarding.md 4.4, 5.2).
@@ -4347,7 +4462,7 @@ struct LoopDraftNote: View {
 
     var body: some View {
         HStack(alignment: .firstTextBaseline, spacing: Theme.Space.s) {
-            Image(systemName: Theme.Icon.inProgress).font(Theme.Font.labelStrong)
+            ThemedIcon(Theme.Icon.inProgress).font(Theme.Font.labelStrong)
                 .foregroundStyle(hint.missing ? AnyShapeStyle(.tertiary) : AnyShapeStyle(Theme.loop))
             Text(hint.text).font(Theme.Font.secondary)
                 .foregroundStyle(hint.missing ? AnyShapeStyle(.tertiary) : AnyShapeStyle(.secondary))
@@ -4515,7 +4630,7 @@ struct QueueStrip: View {
             .padding(.top, Theme.Space.sm)
         } label: {
             HStack(spacing: Theme.Space.sm) {
-                Image(systemName: "tray.and.arrow.down").accessibilityHidden(true)
+                ThemedIcon("tray.and.arrow.down").accessibilityHidden(true)
                 Text("\(queued.count) queued · Claude will handle them in order").lineLimit(1)
                 Spacer(minLength: 0)
                 if busy { ProgressView().controlSize(.mini) }
@@ -4547,7 +4662,7 @@ struct QueueStrip: View {
                             .background(Theme.accent.opacity(0.14), in: .circle)
                         Text(q).font(Theme.Font.secondary).foregroundStyle(Color.primary).lineLimit(2).multilineTextAlignment(.leading)
                         Spacer(minLength: 0)
-                        Image(systemName: Theme.Icon.more).font(Theme.Font.label).foregroundStyle(.secondary).padding(.top, Theme.Space.xs)
+                        ThemedIcon(Theme.Icon.more).font(Theme.Font.label).foregroundStyle(.secondary).padding(.top, Theme.Space.xs)
                     }
                     .padding(.horizontal, Theme.Space.m)
                     .padding(.vertical, Theme.Space.s)
@@ -4628,6 +4743,7 @@ struct SessionInfoSheet: View {
     @State private var error: String?
     @State private var showTodo = false
     @State private var grants = AlwaysGrantsModel()
+    @State private var delegatedHistory = DelegatedHistoryModel()
 
     /// Only assistant conversations remember "always allow" (docs/assistant/assistant.md); Agents sessions keep theirs in Claude.
     private var isAssistant: Bool { assistant || (model.session(key) ?? session)?.assistant == true }
@@ -4641,6 +4757,8 @@ struct SessionInfoSheet: View {
                 if let link = session?.externalLink { Section { FeishuLink(url: link) } }
                 if isAssistant {
                     AlwaysGrantsSection(page: grants, conversation: key.sessionID, api: model.api(key.group))
+                } else {
+                    DelegatedHistorySection(page: delegatedHistory, key: key, manager: session?.manager, api: model.api(key.group))
                 }
                 if let info {
                     Section("Runtime") {
@@ -4652,13 +4770,18 @@ struct SessionInfoSheet: View {
                         row("shippingbox", agent, info.version)
                         if let route = session?.codexRoute { routeRow(route, note: session?.codexRouteNote) }
                         row("lock.open", String(localized: "Permissions"), SessionModes.modeLabel(info.permissionMode))
-                        row("gauge.with.dots.needle.50percent", String(localized: "Thinking Effort"), SessionModes.effortLabel(info.effort))
+                        row(Theme.Icon.effort, String(localized: "Thinking Effort"), SessionModes.effortLabel(info.effort))
+                        // Claude Code's ultracode (#1307): on, off, or unknown (no evidence yet, an older node).
+                        if let s = model.session(key) ?? session, Ultracode.infoShown(s, features: model.features(key.group)) {
+                            row(Theme.Icon.workflow, Ultracode.name, Ultracode.stateWord(s.ultracode))
+                                .accessibilityIdentifier("session-ultracode")
+                        }
                     }
                     Section("Usage") {
                         row(Theme.Icon.context, String(localized: "Context"), Self.tokens(info.contextTokens) + " tokens")
                         // The share of the window, live from the session list (#3289); nil while the window is unknown.
                         if let usage = ContextUsage(model.session(key) ?? session) { ContextUsageRow(usage: usage) }
-                        if info.compactions > 0 { row("rectangle.compress.vertical", String(localized: "Compactions"), String(localized: "\(info.compactions) times")) }
+                        if info.compactions > 0 { row(Theme.Icon.collapseAll, String(localized: "Compactions"), String(localized: "\(info.compactions) times")) }
                         row(Theme.Icon.conversation, String(localized: "Chat"), String(localized: "\(info.turns) turns"))
                         row("text.word.spacing", String(localized: "Output"), Self.tokens(info.outputTokens) + " tokens")
                         if let started = info.startedAt, started.isMeaningful {
@@ -4683,7 +4806,7 @@ struct SessionInfoSheet: View {
                             }
                         }
                         row(Theme.Icon.folder, String(localized: "Folder [Task Views 52daa7]"), Fmt.path(info.cwd ?? session?.cwd ?? "", home: model.namedMachine(key.machineRef)?.home), mono: true)
-                        if let b = info.gitBranch, !b.isEmpty { row("arrow.triangle.branch", String(localized: "Branch"), b, mono: true) }
+                        if let b = info.gitBranch, !b.isEmpty { row(Theme.Icon.gitBranch, String(localized: "Branch"), b, mono: true) }
                     }
                     Section {
                         copyButton(String(localized: "Copy Session ID [Chat View e63671]"), symbol: Theme.Icon.id, text: info.sessionID, toast: String(localized: "Session ID copied"))
@@ -4715,6 +4838,10 @@ struct SessionInfoSheet: View {
         // Keyed on `isAssistant` too: on a cold open the session arrives after this sheet does.
         .task(id: isAssistant ? key : nil) {
             if isAssistant { await grants.load(conversation: key.sessionID, api: model.api(key.group)) }
+        }
+        // The questions the assistant answered for an agent (#544); its own conversations have none.
+        .task(id: isAssistant ? nil : key) {
+            if !isAssistant { await delegatedHistory.load(key, manager: session?.manager, api: model.api(key.group)) }
         }
     }
 
@@ -5131,7 +5258,7 @@ struct WorkEndView: View, Equatable {
             }
             Button(action: collapse) {
                 HStack(spacing: Theme.Space.sm) {
-                    Image(systemName: Theme.Icon.collapse).font(Theme.Font.labelStrong)
+                    ThemedIcon(Theme.Icon.collapse).font(Theme.Font.labelStrong)
                     Text("Collapse \(count) steps [Chat View 608bfc]").lineLimit(1).fixedSize()
                 }
                 .font(Theme.Font.caption)
@@ -5282,7 +5409,7 @@ struct WorkLine: View, Equatable {
             .accessibilityIdentifier("work-head")
             Spacer(minLength: 0)
             if let openTerminal {
-                Button(action: openTerminal) { Image(systemName: Theme.Icon.terminal).font(Theme.Font.caption).foregroundStyle(.secondary) }
+                Button(action: openTerminal) { ThemedIcon(Theme.Icon.terminal).font(Theme.Font.caption).foregroundStyle(.secondary) }
                     .buttonStyle(.plain)
                     .accessibilityLabel("Open terminal")
             }
@@ -5304,7 +5431,7 @@ struct WorkLine: View, Equatable {
                             summary(now: end ?? .now)
                         }
                         if !isEmpty {
-                            Image(systemName: Theme.Icon.disclosure)
+                            ThemedIcon(Theme.Icon.disclosure)
                                 .font(Theme.Font.labelStrong)
                                 .rotationEffect(.degrees(open ? 90 : 0))
                         }
@@ -5321,7 +5448,7 @@ struct WorkLine: View, Equatable {
                 .accessibilityIdentifier("work-head")
                 Spacer(minLength: 0)
                 if let openTerminal {
-                    Button(action: openTerminal) { Image(systemName: Theme.Icon.terminal).font(Theme.Font.caption).foregroundStyle(.secondary) }
+                    Button(action: openTerminal) { ThemedIcon(Theme.Icon.terminal).font(Theme.Font.caption).foregroundStyle(.secondary) }
                         .buttonStyle(.plain)
                         .accessibilityLabel("Open terminal")
                 }
@@ -5402,10 +5529,12 @@ private struct ChatLiveText: View {
         if !text.isEmpty { StreamingText(text: text).id("live").flippedBack() }
     }
 
-    /// There is streamed text, and its message is not the last row yet.
+    /// There is streamed text, and its message is not the last row yet. An agent's is already what its newest items
+    /// lack (`ChatStore.agentStreamed`): its words may begin like the row before them.
     static func shows(_ store: ChatStore) -> Bool {
         let live = store.liveText
         guard !live.isEmpty else { return false }
+        if store.liveIsAgents { return true }
         if case .assistant(let item) = store.rows.last, let text = item.text { return !(text.hasPrefix(live) || live == text) }
         return true
     }
@@ -5529,9 +5658,13 @@ final class ChatScratch {
     var frozenSettled: ChatStore.SettledRows?
     /// Rows on screen (for remembering where you left off), written by the list as it scrolls.
     var visibleLines: [String] = []
+    /// Rows with any part on screen (`ChatView.mendBlankLanding`).
+    var drawnLines: [String] = []
     /// When a work line was last folded (the list may follow again if that leaves it at the newest end).
     var foldedAt = Date.distantPast
     #if DEBUG
+    /// Landings that left nothing drawn (`ChatView.mendBlankLanding`, `probe.chat-rows`).
+    var blankLandings = 0
     /// Where the list is and how tall its content is (`probe.chat-rows`).
     var scrollY: CGFloat = 0
     var contentHeight: CGFloat = 0
@@ -5646,6 +5779,8 @@ nonisolated struct ChatRowsShown: Encodable, Equatable {
     var items: Int
     var lines: Int
     var visible: Int
+    /// Rows with any part on screen (`visible` counts a row once half of it is).
+    var drawn: Int
     var top: String?
     var topY: Int?
     var newest: Bool
@@ -5665,5 +5800,7 @@ nonisolated struct ChatRowsShown: Encodable, Equatable {
     var gap: Int
     var dragging: Bool
     var held: Bool
+    /// Landings that left nothing drawn and were mended (`ChatView.mendBlankLanding`).
+    var blank: Int
 }
 #endif

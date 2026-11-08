@@ -15,13 +15,13 @@ import (
 	"net/http/httputil"
 	"net/url"
 	"reflect"
-	"regexp"
 	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
@@ -568,7 +568,7 @@ func gatePassHeader(name string, allowed []string) bool {
 	return name != "authorization" && slices.Contains(allowed, name)
 }
 
-var gateAuthRef = regexp.MustCompile(`\$\{([A-Z_][A-Z0-9_]*)\}`)
+var gateAuthRef = lazyre.New(`\$\{([A-Z_][A-Z0-9_]*)\}`)
 
 // gateAuthValue is a gate's Auth.Value with its credentials filled in.
 func gateAuthValue(tmpl string, env map[string]string) string {

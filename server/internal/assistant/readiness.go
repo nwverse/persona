@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
-	"regexp"
 	"slices"
 	"strings"
 	"sync"
@@ -14,6 +13,7 @@ import (
 	"github.com/nwverse/persona/server/internal/apierr"
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/i18n"
+	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/rpc"
 )
@@ -445,7 +445,19 @@ func (s *Service) readinessMain(ctx context.Context, machine, main string) (prot
 	if main == "" {
 		return proto.Session{}, false
 	}
-	list, _ := s.sessions(ctx, machine)
+	var list []proto.Session
+	if s.fleetOn() {
+		if m, ok := s.fleetMachine(machine); ok {
+			if sess, found := s.nodeSession(m.ID, main); found && m.isAssistant(sess) {
+				// Readiness needs one headless conversation, not a decorated
+				// and serialized copy of every coding session on the machine.
+				list = s.decorateInventory(m.ID, []proto.Session{sess}, false)
+			}
+		}
+	}
+	if list == nil {
+		list, _ = s.sessions(ctx, machine)
+	}
 	for _, sess := range list {
 		if sess.SessionID == main {
 			if text, kind := turnError(sess); text != "" && sess.TurnError == "" {
@@ -902,7 +914,7 @@ const deviceNodeDoctor = "node.doctor"
 
 // doctorVersion is the version at the start of the claude-version check's detail ("2.1.308, supports --plugin-dir");
 // none when it could not read one.
-var doctorVersion = regexp.MustCompile(`^\s*v?(\d+\.\d+\.\d+[0-9A-Za-z.+-]*)`)
+var doctorVersion = lazyre.New(`^\s*v?(\d+\.\d+\.\d+[0-9A-Za-z.+-]*)`)
 
 // missingCode is the start refusal's code a launcher error reads as (Claude Code or the command missing), "" else.
 func missingCode(text string) string {

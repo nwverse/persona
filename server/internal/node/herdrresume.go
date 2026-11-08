@@ -4,6 +4,7 @@ import (
 	"context"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/nwverse/persona/server/internal/host"
@@ -30,7 +31,8 @@ const resumeSource = "custom:persona"
 type agentLaunch struct {
 	Agent                            string // "claude" (empty means claude), "codex", "traex", "pi"
 	Launcher, Settings, Hooks, Model string
-	Plugins                          bool // claude loads plugins: Persona's plugin directory and office rule
+	Display                          string // the live replies plugin's directory, "" for none (liveRepliesPlugin)
+	Plugins                          bool   // claude loads plugins: Persona's plugin directory and office rule
 	ID                               string
 }
 
@@ -53,6 +55,9 @@ func (n *Node) claudeCommandLine(spec claudeLaunch, args string, q func(string) 
 	if spec.Hooks != "" {
 		cmd += " --plugin-dir " + q(spec.Hooks)
 	}
+	if spec.Display != "" {
+		cmd += " --plugin-dir " + q(spec.Display)
+	}
 	return cmd
 }
 
@@ -70,10 +75,12 @@ func dquote(s string) string {
 }
 
 // claudeResumeArgv is the resume_argv of a Claude Persona started: eval of its start command with --resume id, herdr
-// told it is Claude as at the start (resumeHerdrAgent). ok is false when the command cannot be said without an
-// apostrophe (a path with one in it): herdr would refuse it.
+// told it is Claude as at the start (resumeHerdrAgent), with the node's directory and without the assistant's
+// environment (agentenv.go). ok is false when the command cannot be said without an apostrophe (a path with one in
+// it): herdr would refuse it.
 func (n *Node) claudeResumeArgv(spec claudeLaunch, id string) (argv []string, ok bool) {
 	cmd := withHerdrAgent(resumeHerdrAgent("claude"), n.claudeCommandLine(spec, "--resume "+id, dquote))
+	cmd = n.agentCommand(cmd, dquote, herdrPaneShell())
 	if strings.Contains(cmd, "'") || !validID(id) {
 		return nil, false
 	}
@@ -88,6 +95,7 @@ func (n *Node) agentResumeArgv(spec agentLaunch, id string) (argv []string, ok b
 		return n.claudeResumeArgv(spec, id)
 	}
 	cmd := withHerdrAgent(resumeHerdrAgent(kind), n.launcherCommandQ(spec.Launcher, dquote)+" resume "+id)
+	cmd = n.agentCommand(cmd, dquote, herdrPaneShell())
 	if strings.Contains(cmd, "'") || !validID(id) {
 		return nil, false
 	}
@@ -121,7 +129,20 @@ func (n *Node) holdResume(ctx context.Context, launch host.Launcher, pane, id st
 	n.reportResume(ctx, h, pane, spec)
 }
 
+// reportResume gives herdr the resume command of the agent Persona started in pane.
+//
+// A pane's reports take turns, and each one says what n.launches holds for the pane when its turn comes (spec only
+// while the pane has nothing there). Every change to n.launches is followed by a report, so the last one herdr gets is
+// the newest command: two in flight at once (the live replies setting turned off and on again quickly, a SessionStart
+// meanwhile) would otherwise reach herdr in either order, and the older one, arriving last, would stay until the next
+// change.
 func (n *Node) reportResume(ctx context.Context, h *herdrHost, pane string, spec claudeLaunch) {
+	defer n.resumes.lock(pane)()
+	n.mu.Lock()
+	if cur, ok := n.launches[pane]; ok {
+		spec = cur
+	}
+	n.mu.Unlock()
 	argv, ok := n.agentResumeArgv(spec, spec.ID)
 	if !ok {
 		n.logf("herdr resume: %s (%s) not given a resume command (it cannot be said without an apostrophe)", pane, spec.ID)
@@ -220,8 +241,8 @@ func (n *Node) backfillResume(agents []host.Agent) {
 			var spec agentLaunch
 			if w.kind == "claude" || w.kind == "" {
 				settings, hooks := n.claudeStartSettings(ctx, w.st.Launcher, "claude", w.st.Cwd)
-				spec = agentLaunch{Agent: w.kind, Launcher: w.st.Launcher, Settings: settings, Hooks: hooks, Model: w.st.Model,
-					Plugins: n.claudeLoadsPlugins(ctx), ID: w.id}
+				spec = agentLaunch{Agent: w.kind, Launcher: w.st.Launcher, Settings: settings, Hooks: hooks, Display: n.liveRepliesPlugin(hooks),
+					Model: w.st.Model, Plugins: n.claudeLoadsPlugins(ctx), ID: w.id}
 			} else {
 				spec = agentLaunch{Agent: w.kind, Launcher: w.st.Launcher, Model: w.st.Model, ID: w.id}
 			}
@@ -235,4 +256,26 @@ func (n *Node) backfillResume(agents []host.Agent) {
 			n.reportResume(ctx, h, w.pane, spec)
 		}
 	}()
+}
+
+// resumeLocks makes the resume reports of one herdr pane take turns (reportResume).
+type resumeLocks struct {
+	mu    sync.Mutex
+	locks map[string]*sync.Mutex
+}
+
+// lock waits for the pane's report in flight, if any, and returns the unlock.
+func (r *resumeLocks) lock(pane string) func() {
+	r.mu.Lock()
+	if r.locks == nil {
+		r.locks = map[string]*sync.Mutex{}
+	}
+	l := r.locks[pane]
+	if l == nil {
+		l = &sync.Mutex{}
+		r.locks[pane] = l
+	}
+	r.mu.Unlock()
+	l.Lock()
+	return l.Unlock
 }

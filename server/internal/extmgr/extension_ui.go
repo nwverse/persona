@@ -9,7 +9,6 @@ import (
 	"maps"
 	"net/http"
 	"net/url"
-	"regexp"
 	"slices"
 	"strings"
 	"sync"
@@ -19,6 +18,7 @@ import (
 	"github.com/nwverse/persona/server/internal/connector/proc"
 	"github.com/nwverse/persona/server/internal/extension"
 	"github.com/nwverse/persona/server/internal/i18n"
+	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/quota"
 	"github.com/nwverse/persona/server/internal/rpc"
 )
@@ -187,7 +187,7 @@ func (h *Manager) uiFallbackLang(ctx context.Context, locale string) i18n.Lang {
 	return i18n.Resolve(locale)
 }
 
-var localePattern = regexp.MustCompile(`^[A-Za-z]{2,3}([-_][A-Za-z0-9]{1,8}){0,4}$`)
+var localePattern = lazyre.New(`^[A-Za-z]{2,3}([-_][A-Za-z0-9]{1,8}){0,4}$`)
 
 func uiLocaleMatches(l i18n.Lang, tag string) bool {
 	primary, _, _ := strings.Cut(strings.ReplaceAll(tag, "_", "-"), "-")

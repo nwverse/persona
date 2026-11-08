@@ -1,0 +1,1997 @@
+{
+  "version": 1,
+  "cases": [
+    {
+      "name": "send_tied_by_echo",
+      "description": "A sent message stays as one bubble until the line the node tied to its client_msg_id arrives, then shows once.",
+      "source": {
+        "rule": "Matching pending messages: an item with client_msg_id collapses the pending message with that id",
+        "docs": "docs/protocol/protocol.md \"Matching pending messages\"",
+        "code": {
+          "web": "web/src/lib/echo.ts",
+          "ios": "apple/Shared/ChatStore.swift PendingMessage.arrived",
+          "android": "MessageEcho.tag"
+        }
+      },
+      "chat": {
+        "machine_id": "m1",
+        "session_id": "s1",
+        "assistant": true
+      },
+      "devices": [
+        "a"
+      ],
+      "start": {
+        "hub": {
+          "history": "h1",
+          "lines": [
+            {
+              "id": "l1#0",
+              "seq": 1,
+              "ts": "2026-01-02T03:04:05Z",
+              "role": "user",
+              "kind": "text",
+              "text": "Plan a weekend trip."
+            },
+            {
+              "id": "l2#0",
+              "seq": 2,
+              "ts": "2026-01-02T03:04:05Z",
+              "role": "assistant",
+              "kind": "text",
+              "text": "Saturday hike, Sunday museum."
+            }
+          ],
+          "to_seq": 3,
+          "interactions": [],
+          "session": {
+            "state": "idle"
+          },
+          "event_stream": "ev1",
+          "event_seq": 10
+        }
+      },
+      "steps": [
+        {
+          "user": {
+            "device": "a",
+            "send": {
+              "id": "m1",
+              "text": "Book the museum tickets."
+            }
+          },
+          "expect": {
+            "a": {
+              "messages": [
+                {
+                  "from": "user",
+                  "text": "Plan a weekend trip.",
+                  "state": "shown"
+                },
+                {
+                  "from": "agent",
+                  "text": "Saturday hike, Sunday museum."
+                },
+                {
+                  "from": "user",
+                  "text": "Book the museum tickets.",
+                  "state": "pending"
+                }
+              ],
+              "requests": [
+                {
+                  "post": "messages",
+                  "id": "m1"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "reply": {
+            "device": "a",
+            "write": "m1",
+            "status": 200,
+            "body": {
+              "ok": true
+            }
+          },
+          "expect": {
+            "a": {
+              "messages": [
+                {
+                  "from": "user",
+                  "text": "Plan a weekend trip.",
+                  "state": "shown"
+                },
+                {
+                  "from": "agent",
+                  "text": "Saturday hike, Sunday museum."
+                },
+                {
+                  "from": "user",
+                  "text": "Book the museum tickets.",
+                  "state": "pending"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "hub": {
+            "append": [
+              {
+                "id": "l4#0",
+                "seq": 4,
+                "ts": "2026-01-02T03:04:05Z",
+                "role": "user",
+                "kind": "text",
+                "text": "Book the museum tickets.",
+                "client_msg_id": "m1"
+              }
+            ],
+            "to_seq": 4,
+            "session": {
+              "state": "working"
+            }
+          }
+        },
+        {
+          "frames": {
+            "a": [
+              {
+                "type": "items",
+                "machine_id": "m1",
+                "session_id": "s1",
+                "history": "h1",
+                "items": [
+                  {
+                    "id": "l4#0",
+                    "seq": 4,
+                    "ts": "2026-01-02T03:04:05Z",
+                    "role": "user",
+                    "kind": "text",
+                    "text": "Book the museum tickets.",
+                    "client_msg_id": "m1"
+                  }
+                ],
+                "to_seq": 4,
+                "from_seq": 3
+              },
+              {
+                "type": "sessions_delta",
+                "machine_id": "m1",
+                "upsert": [
+                  {
+                    "machine_id": "m1",
+                    "session_id": "s1",
+                    "title": "Weekend trip",
+                    "cwd": "/home/user/project",
+                    "status": "working",
+                    "assistant": true,
+                    "state": "working",
+                    "updated_at": "2026-01-02T03:04:05Z",
+                    "rev": 100
+                  }
+                ],
+                "remove": []
+              }
+            ]
+          },
+          "expect": {
+            "a": {
+              "messages": [
+                {
+                  "from": "user",
+                  "text": "Plan a weekend trip.",
+                  "state": "shown"
+                },
+                {
+                  "from": "agent",
+                  "text": "Saturday hike, Sunday museum."
+                },
+                {
+                  "from": "user",
+                  "text": "Book the museum tickets.",
+                  "state": "shown"
+                }
+              ],
+              "status": "working"
+            }
+          }
+        },
+        {
+          "hub": {
+            "append": [
+              {
+                "id": "l5#0",
+                "seq": 5,
+                "ts": "2026-01-02T03:04:05Z",
+                "role": "assistant",
+                "kind": "text",
+                "text": "Tickets are booked for Sunday at 10:00."
+              }
+            ],
+            "to_seq": 6,
+            "session": {
+              "state": "idle"
+            }
+          }
+        },
+        {
+          "frames": {
+            "a": [
+              {
+                "type": "items",
+                "machine_id": "m1",
+                "session_id": "s1",
+                "history": "h1",
+                "items": [
+                  {
+                    "id": "l5#0",
+                    "seq": 5,
+                    "ts": "2026-01-02T03:04:05Z",
+                    "role": "assistant",
+                    "kind": "text",
+                    "text": "Tickets are booked for Sunday at 10:00."
+                  }
+                ],
+                "to_seq": 6,
+                "from_seq": 4
+              },
+              {
+                "type": "sessions_delta",
+                "machine_id": "m1",
+                "upsert": [
+                  {
+                    "machine_id": "m1",
+                    "session_id": "s1",
+                    "title": "Weekend trip",
+                    "cwd": "/home/user/project",
+                    "status": "idle",
+                    "assistant": true,
+                    "state": "idle",
+                    "updated_at": "2026-01-02T03:04:05Z",
+                    "rev": 100
+                  }
+                ],
+                "remove": []
+              }
+            ]
+          }
+        }
+      ],
+      "end": {
+        "a": {
+          "messages": [
+            {
+              "from": "user",
+              "text": "Plan a weekend trip.",
+              "state": "shown"
+            },
+            {
+              "from": "agent",
+              "text": "Saturday hike, Sunday museum."
+            },
+            {
+              "from": "user",
+              "text": "Book the museum tickets.",
+              "state": "shown"
+            },
+            {
+              "from": "agent",
+              "text": "Tickets are booked for Sunday at 10:00."
+            }
+          ],
+          "cards": {},
+          "status": "idle"
+        }
+      }
+    },
+    {
+      "name": "send_tied_by_words_without_echo",
+      "description": "A transcript line without client_msg_id (an older node) still takes the bubble by its words, once.",
+      "source": {
+        "rule": "Items without client_msg_id are matched by text as before",
+        "docs": "docs/protocol/protocol.md \"Matching pending messages\""
+      },
+      "chat": {
+        "machine_id": "m1",
+        "session_id": "s1",
+        "assistant": true
+      },
+      "devices": [
+        "a"
+      ],
+      "start": {
+        "hub": {
+          "history": "h1",
+          "lines": [
+            {
+              "id": "l1#0",
+              "seq": 1,
+              "ts": "2026-01-02T03:04:05Z",
+              "role": "user",
+              "kind": "text",
+              "text": "Plan a weekend trip."
+            },
+            {
+              "id": "l2#0",
+              "seq": 2,
+              "ts": "2026-01-02T03:04:05Z",
+              "role": "assistant",
+              "kind": "text",
+              "text": "Saturday hike, Sunday museum."
+            }
+          ],
+          "to_seq": 3,
+          "interactions": [],
+          "session": {
+            "state": "idle"
+          },
+          "event_stream": "ev1",
+          "event_seq": 10
+        }
+      },
+      "steps": [
+        {
+          "user": {
+            "device": "a",
+            "send": {
+              "id": "m1",
+              "text": "Pack the rain jackets too."
+            }
+          }
+        },
+        {
+          "reply": {
+            "device": "a",
+            "write": "m1",
+            "status": 200,
+            "body": {
+              "ok": true
+            }
+          }
+        },
+        {
+          "hub": {
+            "append": [
+              {
+                "id": "l4#0",
+                "seq": 4,
+                "ts": "2026-01-02T03:04:05Z",
+                "role": "user",
+                "kind": "text",
+                "text": "Pack the rain jackets too."
+              },
+              {
+                "id": "l5#0",
+                "seq": 5,
+                "ts": "2026-01-02T03:04:05Z",
+                "role": "assistant",
+                "kind": "text",
+                "text": "Added rain jackets to the list."
+              }
+            ],
+            "to_seq": 6
+          }
+        },
+        {
+          "frames": {
+            "a": [
+              {
+                "type": "items",
+                "machine_id": "m1",
+                "session_id": "s1",
+                "history": "h1",
+                "items": [
+                  {
+                    "id": "l4#0",
+                    "seq": 4,
+                    "ts": "2026-01-02T03:04:05Z",
+                    "role": "user",
+                    "kind": "text",
+                    "text": "Pack the rain jackets too."
+                  },
+                  {
+                    "id": "l5#0",
+                    "seq": 5,
+                    "ts": "2026-01-02T03:04:05Z",
+                    "role": "assistant",
+                    "kind": "text",
+                    "text": "Added rain jackets to the list."
+                  }
+                ],
+                "to_seq": 6,
+                "from_seq": 3
+              }
+            ]
+          },
+          "expect": {
+            "a": {
+              "messages": [
+                {
+                  "from": "user",
+                  "text": "Plan a weekend trip.",
+                  "state": "shown"
+                },
+                {
+                  "from": "agent",
+                  "text": "Saturday hike, Sunday museum."
+                },
+                {
+                  "from": "user",
+                  "text": "Pack the rain jackets too.",
+                  "state": "shown"
+                },
+                {
+                  "from": "agent",
+                  "text": "Added rain jackets to the list."
+                }
+              ]
+            }
+          }
+        }
+      ],
+      "end": {
+        "a": {
+          "messages": [
+            {
+              "from": "user",
+              "text": "Plan a weekend trip.",
+              "state": "shown"
+            },
+            {
+              "from": "agent",
+              "text": "Saturday hike, Sunday museum."
+            },
+            {
+              "from": "user",
+              "text": "Pack the rain jackets too.",
+              "state": "shown"
+            },
+            {
+              "from": "agent",
+              "text": "Added rain jackets to the list."
+            }
+          ],
+          "cards": {}
+        }
+      }
+    },
+    {
+      "name": "send_accepted_transcript_late",
+      "description": "A message the hub accepted stays on screen while the transcript takes 40 seconds to write it, even when other lines arrive meanwhile.",
+      "source": {
+        "rule": "Never missing: a bubble the hub accepted may only go when its transcript copy shows",
+        "found": "Reading the web chat page: its own sending bubbles go 30 seconds after sending at the next change of the transcript, whether or not the copy came",
+        "code": {
+          "web": "web/src/views/chat/ChatView.tsx pending",
+          "ios": "AppModel.settleSend",
+          "android": "OutboxMessageSender"
+        }
+      },
+      "chat": {
+        "machine_id": "m1",
+        "session_id": "s1",
+        "assistant": true
+      },
+      "devices": [
+        "a"
+      ],
+      "start": {
+        "hub": {
+          "history": "h1",
+          "lines": [
+            {
+              "id": "l1#0",
+              "seq": 1,
+              "ts": "2026-01-02T03:04:05Z",
+              "role": "user",
+              "kind": "text",
+              "text": "Plan a weekend trip."
+            },
+            {
+              "id": "l2#0",
+              "seq": 2,
+              "ts": "2026-01-02T03:04:05Z",
+              "role": "assistant",
+              "kind": "text",
+              "text": "Saturday hike, Sunday museum."
+            }
+          ],
+          "to_seq": 3,
+          "interactions": [],
+          "session": {
+            "state": "idle"
+          },
+          "event_stream": "ev1",
+          "event_seq": 10
+        }
+      },
+      "steps": [
+        {
+          "user": {
+            "device": "a",
+            "send": {
+              "id": "m1",
+              "text": "Add a picnic on Saturday."
+            }
+          }
+        },
+        {
+          "reply": {
+            "device": "a",
+            "write": "m1",
+            "status": 200,
+            "body": {
+              "ok": true
+            }
+          }
+        },
+        {
+          "wait": 35000
+        },
+        {
+          "hub": {
+            "append": [
+              {
+                "id": "l4#0",
+                "seq": 4,
+                "ts": "2026-01-02T03:04:05Z",
+                "role": "system",
+                "kind": "notice",
+                "text": "Context compacted"
+              }
+            ],
+            "to_seq": 4
+          }
+        },
+        {
+          "frames": {
+            "a": [
+              {
+                "type": "items",
+                "machine_id": "m1",
+                "session_id": "s1",
+                "history": "h1",
+                "items": [
+                  {
+                    "id": "l4#0",
+                    "seq": 4,
+                    "ts": "2026-01-02T03:04:05Z",
+                    "role": "system",
+                    "kind": "notice",
+                    "text": "Context compacted"
+                  }
+                ],
+                "to_seq": 4,
+                "from_seq": 3
+              }
+            ]
+          },
+          "expect": {
+            "a": {
+              "messages": [
+                {
+                  "from": "user",
+                  "text": "Plan a weekend trip.",
+                  "state": "shown"
+                },
+                {
+                  "from": "agent",
+                  "text": "Saturday hike, Sunday museum."
+                },
+                {
+                  "from": "user",
+                  "text": "Add a picnic on Saturday.",
+                  "state": "pending"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "wait": 5000
+        },
+        {
+          "hub": {
+            "append": [
+              {
+                "id": "l5#0",
+                "seq": 5,
+                "ts": "2026-01-02T03:04:05Z",
+                "role": "user",
+                "kind": "text",
+                "text": "Add a picnic on Saturday.",
+                "client_msg_id": "m1"
+              },
+              {
+                "id": "l6#0",
+                "seq": 6,
+                "ts": "2026-01-02T03:04:05Z",
+                "role": "assistant",
+                "kind": "text",
+                "text": "Picnic added after the hike."
+              }
+            ],
+            "to_seq": 7
+          }
+        },
+        {
+          "frames": {
+            "a": [
+              {
+                "type": "items",
+                "machine_id": "m1",
+                "session_id": "s1",
+                "history": "h1",
+                "items": [
+                  {
+                    "id": "l5#0",
+                    "seq": 5,
+                    "ts": "2026-01-02T03:04:05Z",
+                    "role": "user",
+                    "kind": "text",
+                    "text": "Add a picnic on Saturday.",
+                    "client_msg_id": "m1"
+                  },
+                  {
+                    "id": "l6#0",
+                    "seq": 6,
+                    "ts": "2026-01-02T03:04:05Z",
+                    "role": "assistant",
+                    "kind": "text",
+                    "text": "Picnic added after the hike."
+                  }
+                ],
+                "to_seq": 7,
+                "from_seq": 4
+              }
+            ]
+          },
+          "expect": {
+            "a": {
+              "messages": [
+                {
+                  "from": "user",
+                  "text": "Plan a weekend trip.",
+                  "state": "shown"
+                },
+                {
+                  "from": "agent",
+                  "text": "Saturday hike, Sunday museum."
+                },
+                {
+                  "from": "user",
+                  "text": "Add a picnic on Saturday.",
+                  "state": "shown"
+                },
+                {
+                  "from": "agent",
+                  "text": "Picnic added after the hike."
+                }
+              ]
+            }
+          }
+        }
+      ],
+      "end": {
+        "a": {
+          "messages": [
+            {
+              "from": "user",
+              "text": "Plan a weekend trip.",
+              "state": "shown"
+            },
+            {
+              "from": "agent",
+              "text": "Saturday hike, Sunday museum."
+            },
+            {
+              "from": "user",
+              "text": "Add a picnic on Saturday.",
+              "state": "shown"
+            },
+            {
+              "from": "agent",
+              "text": "Picnic added after the hike."
+            }
+          ],
+          "cards": {}
+        }
+      }
+    },
+    {
+      "name": "send_answer_cut_then_receipt",
+      "description": "The hub typed the message but its answer was lost; the retry with the same op id gets the receipt, and the message shows once.",
+      "source": {
+        "rule": "Operation receipts: a repeated write replays the original answer without executing again",
+        "docs": "docs/protocol/protocol.md \"Operation receipts (client_ops)\"",
+        "code": {
+          "hub": "server/internal/hub/send.go"
+        }
+      },
+      "chat": {
+        "machine_id": "m1",
+        "session_id": "s1",
+        "assistant": true
+      },
+      "devices": [
+        "a"
+      ],
+      "start": {
+        "hub": {
+          "history": "h1",
+          "lines": [
+            {
+              "id": "l1#0",
+              "seq": 1,
+              "ts": "2026-01-02T03:04:05Z",
+              "role": "user",
+              "kind": "text",
+              "text": "Plan a weekend trip."
+            },
+            {
+              "id": "l2#0",
+              "seq": 2,
+              "ts": "2026-01-02T03:04:05Z",
+              "role": "assistant",
+              "kind": "text",
+              "text": "Saturday hike, Sunday museum."
+            }
+          ],
+          "to_seq": 3,
+          "interactions": [],
+          "session": {
+            "state": "idle"
+          },
+          "event_stream": "ev1",
+          "event_seq": 10
+        }
+      },
+      "steps": [
+        {
+          "user": {
+            "device": "a",
+            "send": {
+              "id": "m1",
+              "text": "Check the train times."
+            }
+          }
+        },
+        {
+          "reply": {
+            "device": "a",
+            "write": "m1",
+            "cut": true,
+            "done": true,
+            "receipt": {
+              "status": 200,
+              "body": {
+                "ok": true
+              }
+            }
+          },
+          "expect": {
+            "a": {
+              "messages": [
+                {
+                  "from": "user",
+                  "text": "Plan a weekend trip.",
+                  "state": "shown"
+                },
+                {
+                  "from": "agent",
+                  "text": "Saturday hike, Sunday museum."
+                },
+                {
+                  "from": "user",
+                  "text": "Check the train times.",
+                  "state": "pending"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "wait": 5000,
+          "expect": {
+            "a": {
+              "requests": [
+                {
+                  "post": "messages",
+                  "id": "m1"
+                },
+                {
+                  "post": "messages",
+                  "id": "m1"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "hub": {
+            "append": [
+              {
+                "id": "l4#0",
+                "seq": 4,
+                "ts": "2026-01-02T03:04:05Z",
+                "role": "user",
+                "kind": "text",
+                "text": "Check the train times.",
+                "client_msg_id": "m1"
+              },
+              {
+                "id": "l5#0",
+                "seq": 5,
+                "ts": "2026-01-02T03:04:05Z",
+                "role": "assistant",
+                "kind": "text",
+                "text": "Trains leave at 8:10 and 9:40."
+              }
+            ],
+            "to_seq": 6
+          }
+        },
+        {
+          "frames": {
+            "a": [
+              {
+                "type": "items",
+                "machine_id": "m1",
+                "session_id": "s1",
+                "history": "h1",
+                "items": [
+                  {
+                    "id": "l4#0",
+                    "seq": 4,
+                    "ts": "2026-01-02T03:04:05Z",
+                    "role": "user",
+                    "kind": "text",
+                    "text": "Check the train times.",
+                    "client_msg_id": "m1"
+                  },
+                  {
+                    "id": "l5#0",
+                    "seq": 5,
+                    "ts": "2026-01-02T03:04:05Z",
+                    "role": "assistant",
+                    "kind": "text",
+                    "text": "Trains leave at 8:10 and 9:40."
+                  }
+                ],
+                "to_seq": 6,
+                "from_seq": 3
+              }
+            ]
+          }
+        }
+      ],
+      "end": {
+        "a": {
+          "messages": [
+            {
+              "from": "user",
+              "text": "Plan a weekend trip.",
+              "state": "shown"
+            },
+            {
+              "from": "agent",
+              "text": "Saturday hike, Sunday museum."
+            },
+            {
+              "from": "user",
+              "text": "Check the train times.",
+              "state": "shown"
+            },
+            {
+              "from": "agent",
+              "text": "Trains leave at 8:10 and 9:40."
+            }
+          ],
+          "cards": {}
+        }
+      }
+    },
+    {
+      "name": "send_refused_draft_resend_new_op",
+      "description": "A message refused because the computer's input box had text is shown failed; sending it again uses a new op id and it goes through once.",
+      "source": {
+        "rule": "A refused id's receipt answers its repeats, so the apps send a refused message again under a new id",
+        "docs": "docs/protocol/protocol.md \"Sending messages\" (clear_draft)"
+      },
+      "chat": {
+        "machine_id": "m1",
+        "session_id": "s1",
+        "assistant": true
+      },
+      "devices": [
+        "a"
+      ],
+      "start": {
+        "hub": {
+          "history": "h1",
+          "lines": [
+            {
+              "id": "l1#0",
+              "seq": 1,
+              "ts": "2026-01-02T03:04:05Z",
+              "role": "user",
+              "kind": "text",
+              "text": "Plan a weekend trip."
+            },
+            {
+              "id": "l2#0",
+              "seq": 2,
+              "ts": "2026-01-02T03:04:05Z",
+              "role": "assistant",
+              "kind": "text",
+              "text": "Saturday hike, Sunday museum."
+            }
+          ],
+          "to_seq": 3,
+          "interactions": [],
+          "session": {
+            "state": "idle"
+          },
+          "event_stream": "ev1",
+          "event_seq": 10
+        }
+      },
+      "steps": [
+        {
+          "user": {
+            "device": "a",
+            "send": {
+              "id": "m1",
+              "text": "Swap the days around."
+            }
+          }
+        },
+        {
+          "reply": {
+            "device": "a",
+            "write": "m1",
+            "status": 409,
+            "body": {
+              "error": "The computer's input box has text in it",
+              "code": "input_draft",
+              "delivered": "none",
+              "draft": "half a sentence",
+              "clearable": "half a sentence"
+            }
+          },
+          "expect": {
+            "a": {
+              "messages": [
+                {
+                  "from": "user",
+                  "text": "Plan a weekend trip.",
+                  "state": "shown"
+                },
+                {
+                  "from": "agent",
+                  "text": "Saturday hike, Sunday museum."
+                },
+                {
+                  "from": "user",
+                  "text": "Swap the days around.",
+                  "state": "failed"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "user": {
+            "device": "a",
+            "retry": "m1"
+          },
+          "expect": {
+            "a": {
+              "requests": [
+                {
+                  "post": "messages",
+                  "new_op": true
+                }
+              ]
+            }
+          }
+        },
+        {
+          "reply": {
+            "device": "a",
+            "write": "m1",
+            "status": 200,
+            "body": {
+              "ok": true
+            }
+          }
+        },
+        {
+          "hub": {
+            "append": [
+              {
+                "id": "l4#0",
+                "seq": 4,
+                "ts": "2026-01-02T03:04:05Z",
+                "role": "user",
+                "kind": "text",
+                "text": "Swap the days around."
+              },
+              {
+                "id": "l5#0",
+                "seq": 5,
+                "ts": "2026-01-02T03:04:05Z",
+                "role": "assistant",
+                "kind": "text",
+                "text": "Museum on Saturday, hike on Sunday."
+              }
+            ],
+            "to_seq": 6
+          }
+        },
+        {
+          "frames": {
+            "a": [
+              {
+                "type": "items",
+                "machine_id": "m1",
+                "session_id": "s1",
+                "history": "h1",
+                "items": [
+                  {
+                    "id": "l4#0",
+                    "seq": 4,
+                    "ts": "2026-01-02T03:04:05Z",
+                    "role": "user",
+                    "kind": "text",
+                    "text": "Swap the days around."
+                  },
+                  {
+                    "id": "l5#0",
+                    "seq": 5,
+                    "ts": "2026-01-02T03:04:05Z",
+                    "role": "assistant",
+                    "kind": "text",
+                    "text": "Museum on Saturday, hike on Sunday."
+                  }
+                ],
+                "to_seq": 6,
+                "from_seq": 3
+              }
+            ]
+          }
+        }
+      ],
+      "end": {
+        "a": {
+          "messages": [
+            {
+              "from": "user",
+              "text": "Plan a weekend trip.",
+              "state": "shown"
+            },
+            {
+              "from": "agent",
+              "text": "Saturday hike, Sunday museum."
+            },
+            {
+              "from": "user",
+              "text": "Swap the days around.",
+              "state": "shown"
+            },
+            {
+              "from": "agent",
+              "text": "Museum on Saturday, hike on Sunday."
+            }
+          ],
+          "cards": {}
+        }
+      }
+    },
+    {
+      "name": "send_failed_stays_above_later",
+      "description": "A message that failed keeps its place above a message sent after it and that message's answer.",
+      "source": {
+        "rule": "A failed message stays where it was sent",
+        "found": "A past iOS bug drew failed messages below later ones",
+        "code": {
+          "ios": "apple/Shared/ChatLines.swift placeFailed"
+        }
+      },
+      "chat": {
+        "machine_id": "m1",
+        "session_id": "s1",
+        "assistant": true
+      },
+      "devices": [
+        "a"
+      ],
+      "start": {
+        "hub": {
+          "history": "h1",
+          "lines": [
+            {
+              "id": "l1#0",
+              "seq": 1,
+              "ts": "2026-01-02T03:04:05Z",
+              "role": "user",
+              "kind": "text",
+              "text": "Plan a weekend trip."
+            },
+            {
+              "id": "l2#0",
+              "seq": 2,
+              "ts": "2026-01-02T03:04:05Z",
+              "role": "assistant",
+              "kind": "text",
+              "text": "Saturday hike, Sunday museum."
+            }
+          ],
+          "to_seq": 3,
+          "interactions": [],
+          "session": {
+            "state": "idle"
+          },
+          "event_stream": "ev1",
+          "event_seq": 10
+        }
+      },
+      "steps": [
+        {
+          "user": {
+            "device": "a",
+            "send": {
+              "id": "m1",
+              "text": "Find a dinner place."
+            }
+          }
+        },
+        {
+          "reply": {
+            "device": "a",
+            "write": "m1",
+            "status": 409,
+            "body": {
+              "error": "A dialog on the computer holds the keyboard",
+              "code": "dialog_open",
+              "delivered": "none",
+              "dialog": "Do you trust the files in this folder?"
+            }
+          }
+        },
+        {
+          "user": {
+            "device": "a",
+            "send": {
+              "id": "m2",
+              "text": "And a backup plan for rain."
+            }
+          }
+        },
+        {
+          "reply": {
+            "device": "a",
+            "write": "m2",
+            "status": 200,
+            "body": {
+              "ok": true
+            }
+          }
+        },
+        {
+          "hub": {
+            "append": [
+              {
+                "id": "l4#0",
+                "seq": 4,
+                "ts": "2026-01-02T03:04:05Z",
+                "role": "user",
+                "kind": "text",
+                "text": "And a backup plan for rain.",
+                "client_msg_id": "m2"
+              },
+              {
+                "id": "l5#0",
+                "seq": 5,
+                "ts": "2026-01-02T03:04:05Z",
+                "role": "assistant",
+                "kind": "text",
+                "text": "If it rains: the aquarium."
+              }
+            ],
+            "to_seq": 6
+          }
+        },
+        {
+          "frames": {
+            "a": [
+              {
+                "type": "items",
+                "machine_id": "m1",
+                "session_id": "s1",
+                "history": "h1",
+                "items": [
+                  {
+                    "id": "l4#0",
+                    "seq": 4,
+                    "ts": "2026-01-02T03:04:05Z",
+                    "role": "user",
+                    "kind": "text",
+                    "text": "And a backup plan for rain.",
+                    "client_msg_id": "m2"
+                  },
+                  {
+                    "id": "l5#0",
+                    "seq": 5,
+                    "ts": "2026-01-02T03:04:05Z",
+                    "role": "assistant",
+                    "kind": "text",
+                    "text": "If it rains: the aquarium."
+                  }
+                ],
+                "to_seq": 6,
+                "from_seq": 3
+              }
+            ]
+          },
+          "expect": {
+            "a": {
+              "messages": [
+                {
+                  "from": "user",
+                  "text": "Plan a weekend trip.",
+                  "state": "shown"
+                },
+                {
+                  "from": "agent",
+                  "text": "Saturday hike, Sunday museum."
+                },
+                {
+                  "from": "user",
+                  "text": "Find a dinner place.",
+                  "state": "failed"
+                },
+                {
+                  "from": "user",
+                  "text": "And a backup plan for rain.",
+                  "state": "shown"
+                },
+                {
+                  "from": "agent",
+                  "text": "If it rains: the aquarium."
+                }
+              ]
+            }
+          }
+        }
+      ],
+      "end": {
+        "a": {
+          "messages": [
+            {
+              "from": "user",
+              "text": "Plan a weekend trip.",
+              "state": "shown"
+            },
+            {
+              "from": "agent",
+              "text": "Saturday hike, Sunday museum."
+            },
+            {
+              "from": "user",
+              "text": "Find a dinner place.",
+              "state": "failed"
+            },
+            {
+              "from": "user",
+              "text": "And a backup plan for rain.",
+              "state": "shown"
+            },
+            {
+              "from": "agent",
+              "text": "If it rains: the aquarium."
+            }
+          ],
+          "cards": {}
+        }
+      }
+    },
+    {
+      "name": "send_unknown_then_transcript_has_it",
+      "description": "A send cut off while typing (delivered unknown) is never typed again; when the transcript turns out to have it, it shows once.",
+      "source": {
+        "rule": "delivered unknown: resending the same id only returns the same error, never typing it a second time",
+        "docs": "docs/protocol/protocol.md \"Sending messages\" (client_msg_id)",
+        "code": {
+          "hub": "server/internal/hub/send.go"
+        }
+      },
+      "chat": {
+        "machine_id": "m1",
+        "session_id": "s1",
+        "assistant": true
+      },
+      "devices": [
+        "a"
+      ],
+      "start": {
+        "hub": {
+          "history": "h1",
+          "lines": [
+            {
+              "id": "l1#0",
+              "seq": 1,
+              "ts": "2026-01-02T03:04:05Z",
+              "role": "user",
+              "kind": "text",
+              "text": "Plan a weekend trip."
+            },
+            {
+              "id": "l2#0",
+              "seq": 2,
+              "ts": "2026-01-02T03:04:05Z",
+              "role": "assistant",
+              "kind": "text",
+              "text": "Saturday hike, Sunday museum."
+            }
+          ],
+          "to_seq": 3,
+          "interactions": [],
+          "session": {
+            "state": "idle"
+          },
+          "event_stream": "ev1",
+          "event_seq": 10
+        }
+      },
+      "steps": [
+        {
+          "user": {
+            "device": "a",
+            "send": {
+              "id": "m1",
+              "text": "Reserve two bikes."
+            }
+          }
+        },
+        {
+          "reply": {
+            "device": "a",
+            "write": "m1",
+            "status": 502,
+            "body": {
+              "error": "The connection to the computer broke while typing",
+              "code": "rpc_error",
+              "delivered": "unknown"
+            },
+            "done": true,
+            "receipt": {
+              "status": 502,
+              "body": {
+                "error": "The connection to the computer broke while typing",
+                "code": "rpc_error",
+                "delivered": "unknown"
+              }
+            }
+          }
+        },
+        {
+          "hub": {
+            "append": [
+              {
+                "id": "l4#0",
+                "seq": 4,
+                "ts": "2026-01-02T03:04:05Z",
+                "role": "user",
+                "kind": "text",
+                "text": "Reserve two bikes.",
+                "client_msg_id": "m1"
+              },
+              {
+                "id": "l5#0",
+                "seq": 5,
+                "ts": "2026-01-02T03:04:05Z",
+                "role": "assistant",
+                "kind": "text",
+                "text": "Two bikes reserved."
+              }
+            ],
+            "to_seq": 6
+          }
+        },
+        {
+          "frames": {
+            "a": [
+              {
+                "type": "items",
+                "machine_id": "m1",
+                "session_id": "s1",
+                "history": "h1",
+                "items": [
+                  {
+                    "id": "l4#0",
+                    "seq": 4,
+                    "ts": "2026-01-02T03:04:05Z",
+                    "role": "user",
+                    "kind": "text",
+                    "text": "Reserve two bikes.",
+                    "client_msg_id": "m1"
+                  },
+                  {
+                    "id": "l5#0",
+                    "seq": 5,
+                    "ts": "2026-01-02T03:04:05Z",
+                    "role": "assistant",
+                    "kind": "text",
+                    "text": "Two bikes reserved."
+                  }
+                ],
+                "to_seq": 6,
+                "from_seq": 3
+              }
+            ]
+          },
+          "expect": {
+            "a": {
+              "messages": [
+                {
+                  "from": "user",
+                  "text": "Plan a weekend trip.",
+                  "state": "shown"
+                },
+                {
+                  "from": "agent",
+                  "text": "Saturday hike, Sunday museum."
+                },
+                {
+                  "from": "user",
+                  "text": "Reserve two bikes.",
+                  "state": "shown"
+                },
+                {
+                  "from": "agent",
+                  "text": "Two bikes reserved."
+                }
+              ]
+            }
+          }
+        }
+      ],
+      "end": {
+        "a": {
+          "messages": [
+            {
+              "from": "user",
+              "text": "Plan a weekend trip.",
+              "state": "shown"
+            },
+            {
+              "from": "agent",
+              "text": "Saturday hike, Sunday museum."
+            },
+            {
+              "from": "user",
+              "text": "Reserve two bikes.",
+              "state": "shown"
+            },
+            {
+              "from": "agent",
+              "text": "Two bikes reserved."
+            }
+          ],
+          "cards": {}
+        }
+      }
+    },
+    {
+      "name": "start_answer_cut_then_receipt",
+      "description": "The first message of a new conversation started it, but the answer was lost; the retry with the same op id gets the receipt, so one conversation opens and the message shows once, even though the session list already had it.",
+      "source": {
+        "rule": "Operation receipts: a repeated write replays the original answer without executing again; the start of an assistant conversation is one (assistant_start)",
+        "issue": "#1349",
+        "docs": "docs/protocol/protocol.md \"Operation receipts (client_ops)\"",
+        "code": {
+          "hub": "server/internal/hub/assistant_link.go startConversationOnce",
+          "ios": "apple/Persona/App/AssistantStart.swift"
+        }
+      },
+      "chat": {
+        "machine_id": "m1",
+        "session_id": "s1",
+        "assistant": true,
+        "new": true
+      },
+      "devices": [
+        "a"
+      ],
+      "start": {
+        "hub": {
+          "history": "h1",
+          "lines": [],
+          "to_seq": 0,
+          "interactions": [],
+          "session": {},
+          "event_stream": "ev1",
+          "event_seq": 10
+        }
+      },
+      "steps": [
+        {
+          "user": {
+            "device": "a",
+            "start": {
+              "id": "c1",
+              "text": "Plan a weekend trip."
+            }
+          },
+          "expect": {
+            "a": {
+              "messages": [
+                {
+                  "from": "user",
+                  "text": "Plan a weekend trip.",
+                  "state": "pending"
+                }
+              ],
+              "requests": [
+                {
+                  "post": "conversations",
+                  "id": "c1"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "reply": {
+            "device": "a",
+            "write": "c1",
+            "cut": true,
+            "done": true,
+            "receipt": {
+              "status": 200,
+              "body": {
+                "session": {
+                  "machine_id": "m1",
+                  "session_id": "s1",
+                  "title": "Weekend trip",
+                  "cwd": "/home/user/persona",
+                  "status": "working",
+                  "assistant": true,
+                  "state": "working",
+                  "updated_at": "2026-01-02T03:04:05Z",
+                  "rev": 101
+                }
+              }
+            }
+          },
+          "expect": {
+            "a": {
+              "messages": [
+                {
+                  "from": "user",
+                  "text": "Plan a weekend trip.",
+                  "state": "pending"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "frames": {
+            "a": [
+              {
+                "type": "sessions_delta",
+                "machine_id": "m1",
+                "upsert": [
+                  {
+                    "machine_id": "m1",
+                    "session_id": "s1",
+                    "title": "Weekend trip",
+                    "cwd": "/home/user/persona",
+                    "status": "working",
+                    "assistant": true,
+                    "state": "working",
+                    "updated_at": "2026-01-02T03:04:05Z",
+                    "rev": 101
+                  }
+                ],
+                "remove": []
+              }
+            ]
+          },
+          "expect": {
+            "a": {
+              "messages": [
+                {
+                  "from": "user",
+                  "text": "Plan a weekend trip.",
+                  "state": "pending"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "hub": {
+            "append": [
+              {
+                "id": "l1#0",
+                "seq": 1,
+                "ts": "2026-01-02T03:04:05Z",
+                "role": "user",
+                "kind": "text",
+                "text": "Plan a weekend trip."
+              }
+            ],
+            "to_seq": 1
+          }
+        },
+        {
+          "frames": {
+            "a": [
+              {
+                "type": "items",
+                "machine_id": "m1",
+                "session_id": "s1",
+                "history": "h1",
+                "items": [
+                  {
+                    "id": "l1#0",
+                    "seq": 1,
+                    "ts": "2026-01-02T03:04:05Z",
+                    "role": "user",
+                    "kind": "text",
+                    "text": "Plan a weekend trip."
+                  }
+                ],
+                "to_seq": 1,
+                "from_seq": 0
+              },
+              {
+                "type": "sessions_delta",
+                "machine_id": "m1",
+                "upsert": [
+                  {
+                    "machine_id": "m1",
+                    "session_id": "s1",
+                    "title": "Weekend trip",
+                    "cwd": "/home/user/persona",
+                    "status": "working",
+                    "assistant": true,
+                    "state": "working",
+                    "updated_at": "2026-01-02T03:04:06Z",
+                    "rev": 102
+                  }
+                ],
+                "remove": []
+              }
+            ]
+          }
+        },
+        {
+          "wait": 3000,
+          "expect": {
+            "a": {
+              "messages": [
+                {
+                  "from": "user",
+                  "text": "Plan a weekend trip.",
+                  "state": "shown"
+                }
+              ],
+              "requests": [
+                {
+                  "post": "conversations",
+                  "id": "c1"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "hub": {
+            "append": [
+              {
+                "id": "l2#0",
+                "seq": 2,
+                "ts": "2026-01-02T03:04:05Z",
+                "role": "assistant",
+                "kind": "text",
+                "text": "Saturday hike, Sunday museum."
+              }
+            ],
+            "to_seq": 2,
+            "session": {
+              "state": "idle"
+            }
+          }
+        },
+        {
+          "frames": {
+            "a": [
+              {
+                "type": "items",
+                "machine_id": "m1",
+                "session_id": "s1",
+                "history": "h1",
+                "items": [
+                  {
+                    "id": "l2#0",
+                    "seq": 2,
+                    "ts": "2026-01-02T03:04:05Z",
+                    "role": "assistant",
+                    "kind": "text",
+                    "text": "Saturday hike, Sunday museum."
+                  }
+                ],
+                "to_seq": 2,
+                "from_seq": 1
+              },
+              {
+                "type": "sessions_delta",
+                "machine_id": "m1",
+                "upsert": [
+                  {
+                    "machine_id": "m1",
+                    "session_id": "s1",
+                    "title": "Weekend trip",
+                    "cwd": "/home/user/persona",
+                    "status": "idle",
+                    "assistant": true,
+                    "state": "idle",
+                    "updated_at": "2026-01-02T03:04:07Z",
+                    "rev": 103
+                  }
+                ],
+                "remove": []
+              }
+            ]
+          },
+          "expect": {
+            "a": {
+              "messages": [
+                {
+                  "from": "user",
+                  "text": "Plan a weekend trip.",
+                  "state": "shown"
+                },
+                {
+                  "from": "agent",
+                  "text": "Saturday hike, Sunday museum."
+                }
+              ],
+              "status": "idle"
+            }
+          }
+        }
+      ],
+      "end": {
+        "a": {
+          "messages": [
+            {
+              "from": "user",
+              "text": "Plan a weekend trip.",
+              "state": "shown"
+            },
+            {
+              "from": "agent",
+              "text": "Saturday hike, Sunday museum."
+            }
+          ],
+          "cards": {},
+          "status": "idle"
+        }
+      }
+    },
+    {
+      "name": "start_refused_then_resent_new_op",
+      "description": "A first message the hub refused stays on the new-conversation page as failed, its words kept; sent again, it goes with a new op id (the old one's receipt holds the refusal) and starts one conversation.",
+      "source": {
+        "rule": "A failed send stays where it was sent with Retry and Delete, the composer empty (#1122 option A); a refused write's receipt answers its op id with the refusal",
+        "issue": "#1368",
+        "code": {
+          "ios": "apple/Persona/App/FailedStart.swift"
+        }
+      },
+      "chat": {
+        "machine_id": "m1",
+        "session_id": "s1",
+        "assistant": true,
+        "new": true
+      },
+      "devices": [
+        "a"
+      ],
+      "start": {
+        "hub": {
+          "history": "h1",
+          "lines": [],
+          "to_seq": 0,
+          "interactions": [],
+          "session": {},
+          "event_stream": "ev1",
+          "event_seq": 10
+        }
+      },
+      "steps": [
+        {
+          "user": {
+            "device": "a",
+            "start": {
+              "id": "c1",
+              "text": "Plan a weekend trip."
+            }
+          },
+          "expect": {
+            "a": {
+              "messages": [
+                {
+                  "from": "user",
+                  "text": "Plan a weekend trip.",
+                  "state": "pending"
+                }
+              ],
+              "requests": [
+                {
+                  "post": "conversations",
+                  "id": "c1"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "reply": {
+            "device": "a",
+            "write": "c1",
+            "status": 409,
+            "body": {
+              "error": "The assistant's launcher is not installed on its computer.",
+              "code": "launcher_missing"
+            }
+          },
+          "expect": {
+            "a": {
+              "messages": [
+                {
+                  "from": "user",
+                  "text": "Plan a weekend trip.",
+                  "state": "failed"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "user": {
+            "device": "a",
+            "retry": "c1"
+          },
+          "expect": {
+            "a": {
+              "messages": [
+                {
+                  "from": "user",
+                  "text": "Plan a weekend trip.",
+                  "state": "pending"
+                }
+              ],
+              "requests": [
+                {
+                  "post": "conversations",
+                  "new_op": true
+                }
+              ]
+            }
+          }
+        },
+        {
+          "reply": {
+            "device": "a",
+            "write": "c1",
+            "status": 200,
+            "body": {
+              "session": {
+                "machine_id": "m1",
+                "session_id": "s1",
+                "title": "Weekend trip",
+                "cwd": "/home/user/persona",
+                "status": "working",
+                "assistant": true,
+                "state": "working",
+                "updated_at": "2026-01-02T03:04:05Z",
+                "rev": 101
+              }
+            }
+          }
+        },
+        {
+          "hub": {
+            "append": [
+              {
+                "id": "l1#0",
+                "seq": 1,
+                "ts": "2026-01-02T03:04:05Z",
+                "role": "user",
+                "kind": "text",
+                "text": "Plan a weekend trip."
+              }
+            ],
+            "to_seq": 1
+          }
+        },
+        {
+          "frames": {
+            "a": [
+              {
+                "type": "items",
+                "machine_id": "m1",
+                "session_id": "s1",
+                "history": "h1",
+                "items": [
+                  {
+                    "id": "l1#0",
+                    "seq": 1,
+                    "ts": "2026-01-02T03:04:05Z",
+                    "role": "user",
+                    "kind": "text",
+                    "text": "Plan a weekend trip."
+                  }
+                ],
+                "to_seq": 1,
+                "from_seq": 0
+              },
+              {
+                "type": "sessions_delta",
+                "machine_id": "m1",
+                "upsert": [
+                  {
+                    "machine_id": "m1",
+                    "session_id": "s1",
+                    "title": "Weekend trip",
+                    "cwd": "/home/user/persona",
+                    "status": "working",
+                    "assistant": true,
+                    "state": "working",
+                    "updated_at": "2026-01-02T03:04:06Z",
+                    "rev": 102
+                  }
+                ],
+                "remove": []
+              }
+            ]
+          },
+          "expect": {
+            "a": {
+              "messages": [
+                {
+                  "from": "user",
+                  "text": "Plan a weekend trip.",
+                  "state": "shown"
+                }
+              ]
+            }
+          }
+        }
+      ],
+      "end": {
+        "a": {
+          "messages": [
+            {
+              "from": "user",
+              "text": "Plan a weekend trip.",
+              "state": "shown"
+            }
+          ],
+          "cards": {},
+          "status": "working"
+        }
+      }
+    }
+  ]
+}

@@ -2,7 +2,6 @@ package node
 
 import (
 	"encoding/json"
-	"regexp"
 	"slices"
 	"sort"
 	"strings"
@@ -10,6 +9,7 @@ import (
 	"time"
 	"unicode"
 
+	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/transcript"
 )
@@ -253,7 +253,9 @@ func echoLines(items []proto.Item) []echoLine {
 	}
 	return slices.DeleteFunc(out, func(ln echoLine) bool {
 		for _, it := range ln.items {
-			if it.From != "" || it.Task != nil {
+			// Another session's message is not the user's send — except one signed peerSender: the node's own send
+			// through a claude's peer inbox (claudepeer.go), which the session writes as a peer's message.
+			if it.From != "" && it.From != peerSender || it.Task != nil {
 				return true
 			}
 		}
@@ -267,11 +269,11 @@ func echoLines(items []proto.Item) []echoLine {
 	})
 }
 
-var echoDropped = []*regexp.Regexp{
+var echoDropped = []*lazyre.Regexp{
 	transcript.ContextRe,
-	regexp.MustCompile(`(?s)<system-reminder>.*?</system-reminder>`), // a hook's context on the user's line
-	regexp.MustCompile(`(?s)<attached_images>.*?</attached_images>`),
-	regexp.MustCompile(`<[\\/]*pasted_content[^>]*>`),
+	lazyre.New(`(?s)<system-reminder>.*?</system-reminder>`), // a hook's context on the user's line
+	lazyre.New(`(?s)<attached_images>.*?</attached_images>`),
+	lazyre.New(`<[\\/]*pasted_content[^>]*>`),
 	boxChips, // [Image #1], [Pasted text #2 …]
 }
 

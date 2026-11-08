@@ -179,7 +179,7 @@ Pitfalls, odd behavior, and the trade-offs made at the time (formerly in `CLAUDE
   `~/.claude/projects` transcripts and `sessions/<pid>.json` (`entrypoint: "claude-desktop"`). Without a terminal host, Persona couldn't see it running, listed it from transcripts as
   "Not running", and phone sends attempted `claude --resume` in herdr. With herdr installed, this starts a second process writing the same session; without it, the error was
   `herdr is not running on this machine: herdr workspace list: exec: "herdr"…`. Before resuming, now check whether a live claude's `sessions/<pid>.json` has this session open;
-  if so, reject (`open_elsewhere`, explaining where). Engine startup failures also get human-readable refusals (`engine_missing`). Lists still show "Not running"; there is no "Open elsewhere" state yet.
+  if so, reject (`open_elsewhere`, explaining where). Engine startup failures also get human-readable refusals (`engine_missing`). Since 2026-11-07 such sessions list as running (`claude_desktop` / `claude_cli`) and take messages through Claude Code's peer inbox (`docs/integrations/claude-integration.md` ("Claude outside Persona's terminals"), pitfalls in `docs/lessons/windows.md` ("Claude Code's peer inbox")).
 - Codex / an internal Codex variant's sub-Agents write their own rollouts alongside the main chat, with the same directory and cwd, and newer updates. The internal variant's pre-tool automatic approval evaluation (guardian)
   is written by the same process, with its own owner file. Identifying sessions by "newest rollout / newest owner file" makes the App show the review chat, unlike the terminal (2026-11-01).
   Always inspect `thread_source` / `source.subagent` in `session_meta`; replace sub-Agent `session_id` with its main chat (`docs/integrations/codex.md`).
@@ -317,6 +317,18 @@ other engines' panes (Orca) keep their original error.
 - Global reporting-only events still count toward turns (they are the only hook signals for user-created sessions), but don't mean "this session runs Persona hooks": that makes hub suppress screen cards while waiting for a hook card that will never arrive.
   Persona-started sessions already report through the plugin, so discard the global duplicates before counting, or each submission counts twice. See `docs/protocol/agent-states.md` ("Hook turn signals").
 
+## Package-level work is paid by every short personad command (2026-11-08, #1308)
+
+- Claude Code runs `personad hook` (or `persona-node hook`) on each of Persona's hook events and waits for it to exit. Most of that run was package initialization of the server it links: the i18n catalogs (parsed at start, and still parsed after they were made lazy because `extension.UISlots` and `assistant.silentTurnError` called `i18n.T` in package variables), every prompt template (parsed at start, and still parsed after they were made lazy because `prompts.peerMessageHead` rendered one in a package variable), about 460 package-level regexps (one `[\p{L}\p{N}_-]{1,64}` alone 0.8 ms and 2.5 MB), and the six garbage collections those 28 MB of allocations set off. On a busy Apple silicon Mac, where a Go program that only reads stdin took 6.8 ms, the hook took 40.4 ms (median of 50 runs; persona-node 45.3 ms); after making them lazy (`internal/lazyre` for patterns, `sync.OnceValue` for the rest and in the contract packages, which use the standard library only) it takes 15.2 ms (persona-node 16.4 ms), with init down from 29.5 ms / 28 MB to 3.6 ms / 1.4 MB and no collection. Keep package-level work out of anything personad links: `GODEBUG=inittrace=1 personad hook </dev/null` lists what each package's init costs, `GODEBUG=gctrace=1` the collections during it; a package-level `i18n.T` or prompt render defeats the lazy catalogs and templates, and `lazyre`'s guard test refuses a package-level `regexp.MustCompile`.
+
+## MessageDisplay holds the terminal; measuring it in an isolated claude (2026-11-07, #1309, 2.1.319)
+
+- Registering any `MessageDisplay` hook changes how the TUI shows replies: batch by batch instead of token by token, each batch only once its hooks are done, `"async": true` or not (the debug log says "Detected async hook but forceSyncExecution is true"). A slow hook delays every line on the user's own terminal by its run time, and a hook that prints `hookSpecificOutput.displayContent` replaces the lines on screen. Persona's hook therefore passes the lines to the node and exits at once, printing nothing (`docs/integrations/claude-integration.md` "Live replies (MessageDisplay)"). A Python logging hook cost 90–260 ms per batch just to start. What `personad hook` itself costs, and why it was slow to start, is the section above. Those are the program's own times (exec to exit): a shell-form hook (`command` a command line) runs as `/bin/sh -c`, which on a Mac adds another 6–8 ms to every batch, so a hook on the display path is in exec form (`{"command": "<program>", "args": [...]}`, started directly; in Claude Code 2.1.150 and every build with MessageDisplay, not in 2.1.110). Measure a hook the way Claude Code runs it, shell included, before calling it fast. Without a shell there is nowhere to put `PERSONA_HOME=<dir>` in front, and a command hook has no `env` field (2.1.319's schema: `command`, `args`, `shell`, `timeout`, `async`, …), so the live replies hook gets the node's directory as an argument (`personad hook --persona-home <dir>`).
+- Its ids match nothing in the transcript but `prompt_id`; the transcript can be written before the batches arrive and a Stop can come before the last batch. Never let the live text decide anything: replace it by prefix with the transcript and drop late batches.
+- Live state tied to "a Stop clears it" stays stuck: Esc (and Persona's stop) fires no Stop, a model error fires `StopFailure` instead. Tie it to the turn as the transcript tells it (an interrupt line, `turn_duration`, `API Error: …`, the next prompt or wake), comparing line timestamps with when the state began, so the end of the turn before, read late, does not count.
+- Matching live text to the transcript by prefix across the whole exchange goes wrong two ways: the message before a tool and the one after often begin alike ("I'll …"), and an item can be a prefix of the live text in the middle of a word (`好的` / `好的，…`). Match only the live message's own API message (the words after the last tool result, or the message before it when the node knows that one's text), and only where a word ends (`livereply.go` `unlanded`).
+- Measuring in a pty-driven `claude` with a per-run `--settings` (never the user's `~/.claude/settings.json`): the 2.1.319 trust dialog preselects "No, exit" (press Down, then Enter); after the first turn a "Teach auto mode about your environment?" guide can appear (after several starts and denials) and swallow what is typed next, and `"skillOverrides": {"auto-mode-setup": "off"}` in that run's settings keeps it away; start the child with a clean environment (drop `CLAUDECODE`, `CLAUDE_CODE_*`, `HERDR_*`) so it does not attach to the herdr pane it runs from. Claude Code records the temporary folder's trust in `~/.claude.json`, and the run's transcripts land under `~/.claude/projects`: copy them out and delete them afterwards.
+
 ## Sessions dispatched by other platforms: use file markers and filter before truncation (2026-11-05, #2428)
 
 - Cloud Agent platforms start claude / codex on the computer in the same `~/.claude` / `~/.codex` as the user's sessions, so muting config directories can't separate them. Reliable markers are at the start of session files:
@@ -362,7 +374,7 @@ Recorded screens: `server/internal/screen/testdata/claude-2.1.318-rewind-*`; par
 - **After a terminal rewind the next line is not always a message** (2026-11-06, #4966): after a while away Claude writes a `system` / `away_summary` line whose `parentUuid` is the rewind point, and there may be no new message for hours, so the app kept the rewound turn
   (with a red "Model request failed" card when that turn ended in an `API Error`). So a system line also counts as a rewind, more narrowly: the user message beside it must have been answered **and that turn must have ended** (a `turn_duration` in its subtree),
   so a recap written with a stale parent cannot hide a turn still running. An unanswered message stays (#3036). In the corpus (about 19.7k Claude transcripts) a system line beside an answered message appeared once, and it was this rewind.
-  The session list's quick read (`node/sessions.go`, last 384 KB only) uses the same tree (`transcript.Tail`) to pick the last assistant text; otherwise the rewound turn's `API Error` stays LastText and the hub derives TurnError ("model service error") from it.
+  The session list's quick read (`node/session_meta.go`, last 384 KB only) uses the same tree (`transcript.Tail`) to pick the last assistant text; otherwise the rewound turn's `API Error` stays LastText and the hub derives TurnError ("model service error") from it.
   The quick read does not parse user lines over 8 KB (image prompts, long pastes, big tool results), but those lines must still enter the tree (`Tail.Skipped` parses a copy without the image data and tool-result content):
   the reported prompt carried an image (one 360 KB line); left out of the tree, the rewind was not recognised, and a big tool result in the turn broke the chain so the `API Error` after it stayed.
   In the real transcript the next message after the rewind hangs from that recap (not from the rewind point), so the old "two messages under one parent" rule would not have caught this rewind even when the next message came.
@@ -495,8 +507,8 @@ Closing is not durable merely because the card vanished: persist the interaction
     `esc` when the picker is open but does not close.
   - Guarded: the `/model` picker (`node/model_switch.go`, Esc only once `modelPicker(s)` saw the picker), the `/rewind`
     panel (`node/rewind.go`'s `close`, which returns unless `screen.ParseRewind` still parses a panel) and the automatic
-    guide (`node/sendsafe.go`'s `declineGuide`, reached only after `screen.Guide` / `CheckClaude` recognized the screen).
-    Each sends Esc only after its own screen was recognized.
+    guide (`node/sendsafe_submit.go`'s `declineGuide`, reached only after `screen.Guide` / `CheckClaude` recognized the
+    screen). Each sends Esc only after its own screen was recognized.
   - Free key presses from a phone terminal, a watch answer, or a Feishu screen card's Esc button
     (`assistant/feishu_cards.go`): the user's own key, not a decision Persona makes.
 - Before sending `esc` as "stop", confirm the turn is running (session state, or the working status line above the box);
@@ -538,3 +550,36 @@ Closing is not durable merely because the card vanished: persist the interaction
 ## Profile acceptance must include launcher defaults
 
 A purpose-level model override does not change the managed launcher's default. Launcher health checks invoke the launcher without that override, and small-model and subagent paths read their own environment aliases. When testing a model profile, read back the launcher's main, small, subagent and alias fields, then exercise a real health check. Preserve sealed credentials and unrelated fields; capture the before-image in the same transaction as the switch. A purpose-only readback is not evidence that every execution path changed.
+
+## Each tool's own archive (measured 2026-11-07, codex-cli 0.163.0, Claude Code 2.1.291)
+
+- Codex's `thread/archive` / `thread/unarchive` (and `codex archive|unarchive <id>`) are not idempotent: a second archive answers `-32600 "no rollout found for thread id …"`
+  and the command exits 1 with only "Error: failed to archive session". Decide from where the rollout is (`sessions/…` or `archived_sessions/`), before and after the call, never from the answer alone.
+- An archived Codex thread can't be resumed (`thread/resume` and `codex resume` say "Run `codex unarchive …` first"): restore it natively before anything resumes it.
+- `codex archive` from another process fails while a Codex process still writes the thread (its cross-process writer lock); it succeeds once that process exits.
+  Through the app-server that has the thread loaded, archive shuts the thread down there first. Test with a throwaway `CODEX_HOME`: `thread/start` alone materializes a thread to archive, with no model call.
+- Claude Code has no archive for local sessions: its archive/unarchive is for cloud and Remote Control sessions (the sessions API). The Claude desktop app's Code sessions keep
+  their own `isArchived` in the app's private session records (`claude-code-sessions/…/local_<id>.json` plus an `archived-sessions.idx`), keyed by the app's own session id: an undocumented
+  store the running app writes, so Persona doesn't write it. Never move or delete `~/.claude/projects/*.jsonl` as an "archive": it breaks `--resume` and can't be told apart from a deletion.
+
+## An Agent's environment is its engine's, not the node's (2026-11-08, #744)
+
+- A pane runs with the environment its engine was started with. Orca had been started from the assistant's Bash tool,
+  so every Agent in it had `PERSONA_ASSISTANT=1`, `CLAUDE_CODE_AUTO_COMPACT_WINDOW=200000`, `ENABLE_TOOL_SEARCH=false`
+  and the parent Claude's own markers (`CLAUDECODE`, `CLAUDE_CODE_ENTRYPOINT`, `CLAUDE_EFFORT`, …). As a result:
+  - every Agent compacted at 200K;
+  - every Agent loaded all tool schemas up front;
+  - `personad launch` took them for the assistant and kept the inherited window;
+  - their MCP servers listed the assistant's tools.
+
+  Restarting the engine from launchd cleared it.
+- The same machine still had an older, independent data directory next to `~/.persona`. Only the node's service
+  definition set `PERSONA_HOME`, so `personad mcp` and `hook` in the Agents resolved the older directory and dialed a
+  socket no node listened on.
+- Anything the node starts in a pane must say itself which node it belongs to, and must not count on the pane being clean:
+  - the node writes its directory into `mcp.json`, the hook commands and the typed start commands;
+  - the typed commands `unset` the assistant-only variables (`node/agentenv.go`).
+
+  A new variable the node gives only the assistant goes into `assistantOnlyEnv`.
+- To see what an Agent really got, read its process environment (`ps -E -ww -o command= -p <pid>` on a Mac). Print the
+  names only. Its Bash tool's `env` also shows what its own Claude added for its children.

@@ -3,6 +3,7 @@ package i18n
 import (
 	"regexp"
 	"strings"
+	"sync"
 
 	"github.com/nwverse/persona/server/internal/proto"
 )
@@ -13,7 +14,7 @@ func ComputerText(l Lang, text string) string {
 	if text == "" || l == "" {
 		return text
 	}
-	for _, form := range computerTemplates {
+	for _, form := range computerTemplates() {
 		match := form.pattern.FindStringSubmatch(text)
 		if match == nil {
 			continue
@@ -27,7 +28,7 @@ func ComputerText(l Lang, text string) string {
 	return text
 }
 
-var computerTemplates = makeComputerTemplates()
+var computerTemplates = sync.OnceValue(makeComputerTemplates)
 
 func makeComputerTemplates() []deploymentTemplate {
 	forms := makeCatalogTemplates(func(key string) bool {

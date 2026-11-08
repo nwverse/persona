@@ -15,6 +15,7 @@ import (
 	"github.com/nwverse/persona/sdk/go/wire"
 	"github.com/nwverse/persona/server/internal/channel"
 	"github.com/nwverse/persona/server/internal/extwire"
+	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
@@ -30,7 +31,7 @@ type Point struct {
 	Item func(raw json.RawMessage) (id string, err error)
 }
 
-var connectorID = regexp.MustCompile(`^[a-z][a-z0-9]*$`)
+var connectorID = lazyre.New(`^[a-z][a-z0-9]*$`)
 
 // ConnectorItem is a contribution to connectors: the connector protocol's manifest (docs/protocol/connector-protocol.md), known
 // before the program ever runs.
@@ -86,7 +87,7 @@ type (
 	ShortcutParam = wire.ShortcutParam
 )
 
-var shortcutParamName = regexp.MustCompile(`^[a-z][a-z0-9_]{0,31}$`)
+var shortcutParamName = lazyre.New(`^[a-z][a-z0-9_]{0,31}$`)
 
 // checkShortcut holds a shortcut to what the apps can ask for.
 func checkShortcut(s ShortcutItem) error {
@@ -135,7 +136,7 @@ type AgentSourceItem struct {
 	Providers []string `json:"providers,omitempty"`
 }
 
-var providerPattern = regexp.MustCompile(`^[a-z][a-z0-9_]{0,31}$`)
+var providerPattern = lazyre.New(`^[a-z][a-z0-9_]{0,31}$`)
 
 // ProviderItem is a contribution to providers: a model provider the user can add a launcher from (Settings › Model providers),
 // its address and models filled in (docs/extensions/extensions.md "Model providers").
@@ -210,8 +211,8 @@ type MCPServerItem struct {
 }
 
 var (
-	mcpEnvName  = regexp.MustCompile(`^PERSONA_[A-Z0-9_]{1,56}$`)
-	mcpToolName = regexp.MustCompile(`^[A-Za-z0-9_-]{1,64}$`)
+	mcpEnvName  = lazyre.New(`^PERSONA_[A-Z0-9_]{1,56}$`)
+	mcpToolName = lazyre.New(`^[A-Za-z0-9_-]{1,64}$`)
 	// mcpRunners are commands that run whatever their arguments say: never an MCP server's command.
 	mcpRunners = []string{"sh", "bash", "zsh", "dash", "ksh", "fish", "csh", "tcsh", "env", "sudo", "doas", "xargs",
 		"nohup", "timeout", "nice", "exec", "eval", "python", "python2", "python3", "perl", "ruby", "php", "lua", "tclsh",
@@ -249,10 +250,10 @@ type GateFileAuth struct {
 }
 
 var (
-	gateCommand = regexp.MustCompile(`^[a-z][a-z0-9_-]{0,31}$`)
-	gateEnv     = regexp.MustCompile(`^[A-Z_][A-Z0-9_]*$`)
-	gateHeader  = regexp.MustCompile(`^[A-Za-z0-9-]{1,64}$`)
-	gateAuthRef = regexp.MustCompile(`\$\{([A-Z_][A-Z0-9_]*)\}`)
+	gateCommand = lazyre.New(`^[a-z][a-z0-9_-]{0,31}$`)
+	gateEnv     = lazyre.New(`^[A-Z_][A-Z0-9_]*$`)
+	gateHeader  = lazyre.New(`^[A-Za-z0-9-]{1,64}$`)
+	gateAuthRef = lazyre.New(`\$\{([A-Z_][A-Z0-9_]*)\}`)
 	// gateHeldHeaders are the proxy's, or the transport's, to set: an auth header cannot be one of them.
 	gateHeldHeaders = []string{"host", "content-length", "content-type", "transfer-encoding", "connection", "upgrade", "te",
 		"trailer", "keep-alive", "origin", "cookie", "proxy-authorization"}
@@ -333,7 +334,7 @@ func ParseGate(raw []byte) (*GateFile, error) {
 	return &g, nil
 }
 
-var namePattern = regexp.MustCompile(`^[a-z][a-z0-9_]{0,47}$`)
+var namePattern = lazyre.New(`^[a-z][a-z0-9_]{0,47}$`)
 
 // checkPackagePath is a path inside a package: relative, clean, not out of it.
 func checkPackagePath(p string) error {
@@ -346,7 +347,7 @@ func checkPackagePath(p string) error {
 // cliName is a connector's command line on the assistant's PATH (ConnectorItem.CLI); reservedCommands are the ones the
 // assistant has already, which no connector's may hide.
 var (
-	cliName          = regexp.MustCompile(`^[a-z][a-z0-9-]{0,31}$`)
+	cliName          = lazyre.New(`^[a-z][a-z0-9-]{0,31}$`)
 	reservedCommands = []string{"personad", compat.DaemonBinary, "lark-cli", "sh", "bash", "git", "gh", "curl", "python3", "node", "claude", "codex"}
 )
 

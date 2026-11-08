@@ -56,6 +56,43 @@ class AssistantConfigTest {
         }
     }
 
+    @Test fun permissionDefaultsNameBothOwnersAndSendOnlyTheNewField() = runBlocking {
+        MockWebServer().use { server ->
+            val source = HttpAssistantManagement(server.url("/").toString(), "test-token", OkHttpClient())
+            for ((owner, mode) in listOf("assistant" to "plan", "work" to "bypassPermissions")) {
+                val api = source.forManager(owner)
+                server.enqueue(MockResponse().setBody("""{"manager":"$owner","default_permission_mode":"$mode","main":"kept"}"""))
+                val config = api.updateConfig(AssistantConfigUpdate(defaultPermissionMode = mode))
+                val write = server.takeRequest()
+                assertEquals(owner, write.getHeader(ManagerHeader))
+                assertEquals(owner, write.requestUrl?.queryParameter(ManagerQuery))
+                assertEquals("""{"default_permission_mode":"$mode"}""", write.body.readUtf8())
+                assertEquals(owner, config.manager)
+                assertEquals(mode, config.defaultPermissionMode)
+                assertEquals("kept", config.main)
+                server.enqueue(MockResponse().setBody("""{"manager":"$owner","default_permission_mode":"$mode"}"""))
+                assertEquals(mode, source.forManager(owner).config().defaultPermissionMode)
+                assertEquals(owner, server.takeRequest().getHeader(ManagerHeader))
+            }
+        }
+    }
+
+    @Test fun managerContractIsDecodedWithoutGuessingFromHubOrSavedValue() = runBlocking {
+        MockWebServer().use { server ->
+            val api = HttpAssistantManagement(server.url("/").toString(), "test-token", OkHttpClient()).forManager("work")
+            val modes = "[\"default\",\"acceptEdits\",\"plan\",\"auto\",\"bypassPermissions\"]"
+            for (backend in listOf("claude", "codex")) {
+                server.enqueue(MockResponse().setBody("""{"manager":"work","launcher":"$backend",
+                    "permission_defaults":{"version":1,"manager":"work","modes":$modes}}"""))
+                val config = api.config()
+                assertTrue(config.permissionDefaults?.supports(config.manager) == true)
+                assertEquals("work", server.takeRequest().getHeader(ManagerHeader))
+            }
+            server.enqueue(MockResponse().setBody("""{"manager":"work","default_permission_mode":"plan"}"""))
+            assertNull(api.config().permissionDefaults)
+        }
+    }
+
     @Test fun listsTheLaunchersOfTheChosenMachine() = runBlocking {
         MockWebServer().use { server ->
             val api = HttpAssistantManagement(server.url("/").toString(), "test-token", OkHttpClient())

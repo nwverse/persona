@@ -52,6 +52,7 @@ class AssistantSettingsStateTest {
                 notesEffective = update.notes ?: config.notesEffective,
                 main = if (update.main == AssistantConfigUpdate.CLEAR_MAIN) null else update.main ?: config.main,
                 mainTasksQuiet = update.mainTasksQuiet ?: config.mainTasksQuiet,
+                defaultPermissionMode = update.defaultPermissionMode ?: config.defaultPermissionMode,
             )
             return config
         }
@@ -74,6 +75,34 @@ class AssistantSettingsStateTest {
     private val server = Machine("server", name = "服务器", kind = "local", online = true, home = "/home/me")
     private val laptop = Machine("laptop", name = "笔记本", kind = "ssh", online = true, home = "/Users/me")
     private val offline = Machine("lab", name = "实验室", kind = "ssh", online = false)
+
+    @Test fun futureDefaultsStayIndependentAndKeepExistingConversations() = runTest {
+        val a = FakeApi().apply { config = config.copy(manager = "assistant", defaultPermissionMode = "default", permissionDefaults = persona.core.contracts.api.AssistantPermissionDefaults(1, "assistant", persona.core.contracts.api.AssistantPermissionDefaults.MODES)) }
+        val b = FakeApi().apply { config = config.copy(manager = "work", defaultPermissionMode = "plan", permissionDefaults = persona.core.contracts.api.AssistantPermissionDefaults(1, "work", persona.core.contracts.api.AssistantPermissionDefaults.MODES)) }
+        val first = AssistantSettingsState(a, Zone())
+        val second = AssistantSettingsState(b, Zone())
+        first.load(); second.load()
+        first.setDefaultPermission("acceptEdits")
+        second.setDefaultPermission("bypassPermissions")
+        val restartedA = AssistantSettingsState(a, Zone()).also { it.load() }
+        val restartedB = AssistantSettingsState(b, Zone()).also { it.load() }
+        assertEquals("acceptEdits", restartedA.state.value.config?.defaultPermissionMode)
+        assertEquals("bypassPermissions", restartedB.state.value.config?.defaultPermissionMode)
+        assertEquals("main-id", a.config.main)
+        assertEquals("main-id", b.config.main)
+        assertEquals(AssistantConfigUpdate(defaultPermissionMode = "acceptEdits"), a.updates.single())
+        assertEquals(AssistantConfigUpdate(defaultPermissionMode = "bypassPermissions"), b.updates.single())
+        second.setDefaultPermission("default")
+        assertEquals("default", second.state.value.config?.defaultPermissionMode)
+    }
+
+    @Test fun oldHubsNeverPretendToSaveDefaults() = runTest {
+        val api = FakeApi()
+        val model = AssistantSettingsState(api, Zone())
+        model.load()
+        model.setDefaultPermission("bypassPermissions")
+        assertTrue(api.updates.isEmpty())
+    }
 
     @Test fun quietTasksSwitchSavesAndComesBackOnFailure() = runTest {
         val api = FakeApi()

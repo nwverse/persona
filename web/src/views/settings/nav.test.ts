@@ -17,6 +17,10 @@ describe("settings location", () => {
     expect(settingsHref("channels", "wechat", false)).toBe("/settings?tab=channels&channel=wechat");
     expect(settingsHref("hub", "ignored", true)).toBe("/settings?tab=hub");
   });
+  it("preserves an explicit assistant owner in configuration links", () => {
+    expect(settingsHref("model-config", "agent.new", false, "work")).toBe("/settings?tab=model-config&purpose=agent.new&manager=work");
+    expect(settingsHref("assistant", null, false, "assistant")).toBe("/settings?tab=assistant&manager=assistant");
+  });
   it("round-trips every category through its URL", () => {
     for (const t of TABS) expect(settingsAt(settingsHref(t, null, true).split("?")[1] ?? "").tab).toBe(t);
   });

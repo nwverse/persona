@@ -48,14 +48,19 @@ func HomeDir() string {
 
 // PrepareHome creates only the configured state directory. Existing directory
 // symlinks are accepted, but unavailable targets are never repaired or replaced.
+// An installation still kept under the former name gets the current name as an
+// alias, so both spellings reach it; one under the current name gets no alias
+// under the former name (#1445). An alias already there is left as it is.
 func PrepareHome(home string) (string, error) {
 	root := DataDir(home)
 	currentPath, legacyPath := filepath.Join(home, ".persona"), filepath.Join(home, compat.StateDir)
 	if root == currentPath || root == legacyPath {
 		a, aerr := os.Stat(currentPath)
 		b, berr := os.Stat(legacyPath)
-		if aerr == nil && berr == nil && !os.SameFile(a, b) {
-			return "", fmt.Errorf("independent state directories exist; select an explicit shared root without moving either directory")
+		// An explicit PERSONA_HOME has picked one of two independent stores: it is used, and the other is left as
+		// it is (it is never aliased over, below). Without one, neither is guessed.
+		if aerr == nil && berr == nil && !os.SameFile(a, b) && explicitRoot(home) == "" {
+			return "", fmt.Errorf("independent state directories exist; set PERSONA_HOME to the one to use, without moving either directory")
 		}
 	}
 	if st, err := os.Lstat(root); err == nil && st.Mode()&os.ModeSymlink != 0 {
@@ -71,11 +76,8 @@ func PrepareHome(home string) (string, error) {
 		return "", err
 	}
 	current, legacy := filepath.Join(home, ".persona"), filepath.Join(home, compat.StateDir)
-	if root == current || root == legacy {
-		alias := legacy
-		if root == legacy {
-			alias = current
-		}
+	if root == legacy {
+		alias := current
 		if _, err := os.Lstat(alias); os.IsNotExist(err) {
 			if err := os.Symlink(filepath.Base(root), alias); err != nil && !os.IsExist(err) {
 				return "", err

@@ -6,10 +6,10 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"regexp"
 	"time"
 
 	"github.com/nwverse/persona/server/internal/host"
+	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
@@ -25,7 +25,7 @@ const piAgent = "pi"
 // piResumeWait is how long a resume in the engine waits for the pi it started to list the session (its extension).
 var piResumeWait = 30 * time.Second
 
-var paneIDRe = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$`)
+var paneIDRe = lazyre.New(`^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$`)
 
 // validPane: a pane id a runtime may name (herdr's "w1:p1"), nothing that could mean something else.
 func validPane(p string) bool { return paneIDRe.MatchString(p) }
@@ -109,7 +109,7 @@ func (n *Node) resumeInEngine(ctx context.Context, h *runtimeConn, id string, ar
 	pane := created.Pane.String()
 	n.bindPane(pane, id)               // the pane is this session's before herdr or the extension says so
 	time.Sleep(300 * time.Millisecond) // the fresh shell loads ~/.zshrc; typed input is buffered either way
-	if err := launch.Run(ctx, created.Pane, shellQuote(n.bin)+" tab-start "+shellQuote(file)); err != nil {
+	if err := launch.Run(ctx, created.Pane, n.agentCommand(shellQuote(n.bin)+" tab-start "+shellQuote(file), shellQuote, paneShells(ctx)...)); err != nil {
 		return nil, fmt.Errorf("run %s: %w", argv[0], err)
 	}
 	deadline := time.Now().Add(piResumeWait)

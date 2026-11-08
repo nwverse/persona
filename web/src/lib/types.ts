@@ -144,6 +144,15 @@ export interface TriageSwitches {
   reply_reminder_minutes?: number;
 }
 
+/** A port an agent's processes listen on that answers HTTP (docs/operations/ports.md): its dev server. */
+export interface Port {
+  port: number;
+  addr?: string;
+  pid?: number;
+  process?: string;
+  title?: string;
+}
+
 export interface Session {
   /** The engine host it lives in (herdr, herdr-core, orca, paseo…), and the other hosts it is live in at once (#2576). */
   host?: string;
@@ -267,8 +276,9 @@ export interface Session {
   /** An assistant conversation moved out of the list (docs/assistant/assistant.md "Managing its own conversations"), or
    *  an archived agent (docs/protocol/protocol.md "Agent session archives": only the Archived list has those). */
   archived?: boolean;
-  /** The HTTP ports its processes listen on (docs/operations/ports.md): closing it would stop those servers. */
-  ports?: { port: number; addr?: string }[];
+  /** The HTTP ports its processes listen on (docs/operations/ports.md): closing it would stop those servers, and they are
+   *  the dev servers a preview offers (docs/web/preview.md). */
+  ports?: Port[];
   /** Who opened an assistant conversation (docs/protocol/protocol.md "Assistant conversation origins"): user, channel, inbox, task, spawned,
    *  lark_agent, extension, or one this page doesn't know; none is the user's (older hubs never say). */
   origin?: string;
@@ -503,7 +513,8 @@ export interface Question {
   question: string;
   header?: string;
   multi_select?: boolean;
-  options: { label: string; description?: string }[];
+  /** Missing or null for a question asked in free text (Codex request_user_input; a Go nil slice, #1573). */
+  options?: { label: string; description?: string }[] | null;
 }
 
 export interface DialogOption {
@@ -576,6 +587,24 @@ export interface Interaction {
   elicitation?: Elicitation;
   /** What a permission card needs filled in before it is approved (a password): such a card is never approved in one tap. */
   fields?: { key: string; label: string; secret?: boolean }[];
+  /** The assistant is deciding whether it may answer this question for the user (docs/assistant/assistant.md "Assistant
+   *  answers questions first"): nothing was pushed yet, and an answer given here wins. The same card comes again without it. */
+  delegating?: boolean;
+  /** What the assistant filled in when it left the question to the user. */
+  delegate?: Delegate;
+}
+
+/** The assistant's context on a question it left to the user (Interaction.delegate). */
+export interface Delegate {
+  what?: string;
+  why_now?: string;
+  /** The answer it recommends: an option's label when the question has options. */
+  recommend?: string;
+  /** What not taking the recommendation costs. */
+  cost?: string;
+  /** Why the user has to decide. */
+  reason?: string;
+  deadline?: string;
 }
 
 export interface Launcher {

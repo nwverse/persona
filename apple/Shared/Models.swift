@@ -605,6 +605,17 @@ nonisolated struct Session: Codable, Identifiable, Hashable, Sendable {
     /// `context_window`, #2430); nil while the node cannot tell (no reply yet, a window it does not know, an older node).
     var contextTokens: Int? = nil
     var contextWindow: Int? = nil
+    /// Claude Code's session-only ultracode switch (#3427, docs/protocol/protocol.md "Claude Code ultracode"): what the
+    /// node last saw, nil while unknown (no evidence yet, an older node, not Claude); never what was asked for.
+    var ultracode: Bool? = nil
+    /// The node's reason (fixed text, in Chinese) why the switch is unavailable, was refused, could not be confirmed
+    /// or still waits; nil when it has none.
+    var ultracodeNote: String? = nil
+    /// A switch request waits for the turn to end or the terminal's box to clear: it applies next turn. A queue flag,
+    /// not the value asked for.
+    var ultracodePending: Bool = false
+    /// When a session that had it on was resumed with it off: the chat offers to turn it back on (never done by itself).
+    var ultracodeLostAt: Date? = nil
     var startedByPersona: Bool
     var assistant: Bool
     /// An assistant conversation moved out of the sidebar (listed under Archived; nothing is deleted).
@@ -707,6 +718,9 @@ nonisolated struct Session: Codable, Identifiable, Hashable, Sendable {
     /// on the CLI instead (「找不到 Node.js 22+」). Both nil otherwise.
     var runtime: String? = nil
     var runtimeFallback: String? = nil
+    /// The manager it belongs to (docs/protocol/protocol.md "Per-manager routing"); nil from hubs with one manager and
+    /// older ones. Requests the hub routes by the manager they name (its answered questions) name it.
+    var manager: String? = nil
     /// The group of paired hubs it came from (docs/protocol/multi-hub.md); nil for the default group. The app's own.
     var hubGroup: String? = nil
 
@@ -749,6 +763,9 @@ nonisolated struct Session: Codable, Identifiable, Hashable, Sendable {
         case "identity_conflict": String(localized: "Identity conflict")
         case "codex_history": String(localized: "Codex history")
         case "claude_bg": String(localized: "Claude background")
+        // Claude outside Persona's terminals (docs/integrations/claude-integration.md "Claude outside Persona's terminals")
+        case "claude_desktop": String(localized: "Claude desktop app")
+        case "claude_cli": String(localized: "Claude in a terminal")
         case "runtime": agentLabel // an agent runtime's session (docs/integrations/runtimes.md): its own name, "DSH"
         case .some(let kind) where !kind.isEmpty: kind
         default: nil
@@ -817,6 +834,7 @@ nonisolated struct Session: Codable, Identifiable, Hashable, Sendable {
         case agentSurface = "agent_surface"
         case permissionMode = "permission_mode"
         case contextTokens = "context_tokens", contextWindow = "context_window"
+        case ultracode, ultracodeNote = "ultracode_note", ultracodePending = "ultracode_pending", ultracodeLostAt = "ultracode_lost_at"
         case repoRoot = "repo_root"
         case machineID = "machine_id", sessionID = "session_id", paneID = "pane_id", tabID = "tab_id",
              workspaceID = "workspace_id", agentName = "agent_name", startedByPersona = "started_by_persona", assistant, archived, state,
@@ -827,7 +845,7 @@ nonisolated struct Session: Codable, Identifiable, Hashable, Sendable {
              starting, startError = "start_error", todo, quiet, hubGroup = "app_hub_group",
              attentionReason = "attention_reason", failureReason = "failure_reason",
              turnError = "turn_error", turnErrorKind = "turn_error_kind", turnErrorCode = "turn_error_code", externalURL = "external_url", channels, origin, compaction, work,
-             runtime, runtimeFallback = "runtime_fallback"
+             runtime, runtimeFallback = "runtime_fallback", manager
     }
 
     init(from decoder: Decoder) throws {
@@ -836,6 +854,7 @@ nonisolated struct Session: Codable, Identifiable, Hashable, Sendable {
         sessionID = try c.decode(String.self, forKey: .sessionID)
         runtime = try c.decodeIfPresent(String.self, forKey: .runtime)
         runtimeFallback = try c.decodeIfPresent(String.self, forKey: .runtimeFallback)
+        manager = try c.decodeIfPresent(String.self, forKey: .manager)
         title = try c.decodeIfPresent(String.self, forKey: .title) ?? ""
         cwd = try c.decodeIfPresent(String.self, forKey: .cwd) ?? ""
         status = try c.decodeIfPresent(SessionStatus.self, forKey: .status) ?? .unknown
@@ -863,6 +882,11 @@ nonisolated struct Session: Codable, Identifiable, Hashable, Sendable {
         efforts = try c.decodeIfPresent([String].self, forKey: .efforts)
         contextTokens = try? c.decodeIfPresent(Int.self, forKey: .contextTokens) // an odd one never drops the session
         contextWindow = try? c.decodeIfPresent(Int.self, forKey: .contextWindow)
+        // An odd ultracode field never drops the session; omitted is unknown (an older hub or node), not off.
+        ultracode = (try? c.decodeIfPresent(Bool.self, forKey: .ultracode)).flatMap { $0 }
+        ultracodeNote = (try? c.decodeIfPresent(String.self, forKey: .ultracodeNote)).flatMap { $0 }.flatMap { $0.isEmpty ? nil : $0 }
+        ultracodePending = (try? c.decodeIfPresent(Bool.self, forKey: .ultracodePending)).flatMap { $0 } ?? false
+        ultracodeLostAt = (try? c.decodeIfPresent(Date.self, forKey: .ultracodeLostAt)).flatMap { $0 }.flatMap { $0.isMeaningful ? $0 : nil }
         let legacy = try decoder.container(keyedBy: HubNaming.Field.self)
         startedByPersona = try c.decodeIfPresent(Bool.self, forKey: .startedByPersona)
             ?? legacy.decodeIfPresent(Bool.self, forKey: HubNaming.Field(LegacyNames.startedByField)) ?? false
@@ -1260,13 +1284,13 @@ extension Session {
     var spaceKey: String? { spaceID.map { "\(machineID)/\($0)" } }
 
     /// Tab label, or "#n" when the label is just herdr's default number.
-    var slotLabel: String? {
+    nonisolated var slotLabel: String? {
         guard let name = slotName, !name.isEmpty else { return slotIndex.map { "#\($0)" } }
         if let i = slotIndex, name == String(i) { return "#\(i)" }
         return name
     }
 
-    var displayTitle: String { title.isEmpty || title == "Claude Code" ? folderName : title }
+    nonisolated var displayTitle: String { title.isEmpty || title == "Claude Code" ? folderName : title }
     /// The line a list row shows under the title: why it waits for you when its host says so, what it concluded or
     /// waits for once the hub triaged its turn (`workLine`), else the last words; Awaiting Reply's question first unless
     /// it is muted (`replyLine`).
@@ -1321,7 +1345,7 @@ extension Session {
     }
 
     /// Idle or unclassified: folded away in busy spaces (an Awaiting Reply one stays out: `AgentListOrder.stays`).
-    var isQuiet: Bool { state == .idle || state == .unknown }
+    nonisolated var isQuiet: Bool { state == .idle || state == .unknown }
 }
 
 /// Unified agent state (docs/protocol/agent-states.md), computed by the hub from herdr status, pending interactions and
@@ -1400,6 +1424,27 @@ nonisolated struct SessionKey: Hashable, Sendable, Codable {
     }
 }
 
+/// A lazy picture's ref: its chat's `SessionKey.path` and its item id, "<machine>/<session>/<item id>", or
+/// "<group>|<machine>/<session>/<item id>" for a chat on another group of hubs. The group says which hub has the bytes:
+/// asked of the current group's hub, a chat on another group's pictures never came (#1555).
+nonisolated enum ImageRef {
+    static func make(_ key: SessionKey, item: String) -> String { key.path + "/" + item }
+
+    /// The group whose hub has it, and the "<machine>/<session>/<item id>" that hub's `APIClient.image(ref:)` takes.
+    static func split(_ ref: String) -> (group: String, ref: String) {
+        guard let bar = ref.firstIndex(of: "|"), ref[..<bar].firstIndex(of: "/") == nil else { return ("", ref) }
+        return (String(ref[..<bar]), String(ref[ref.index(after: bar)...]))
+    }
+
+    /// The chat it is from.
+    static func session(_ ref: String) -> SessionKey? {
+        let (group, rest) = split(ref)
+        let parts = rest.split(separator: "/", maxSplits: 2).map(String.init)
+        guard parts.count == 3 else { return nil }
+        return SessionKey(group: group, machineID: parts[0], sessionID: parts[1])
+    }
+}
+
 nonisolated struct ImagePayload: Codable, Hashable, Sendable {
     var mime: String
     /// Base64; empty when `lazy`: history pages leave the bytes out and each image is fetched when it is shown.
@@ -1408,7 +1453,8 @@ nonisolated struct ImagePayload: Codable, Hashable, Sendable {
     var size: Int? = nil
     var width: Int? = nil
     var height: Int? = nil
-    /// Where a lazy image lives: "<machine>/<session>/<item id>" (filled in by ChatStore).
+    /// Where a lazy image lives: "<machine>/<session>/<item id>", "<group>|…" for another group of hubs (`ImageRef`,
+    /// filled in by ChatStore).
     var ref: String? = nil
 
     init(mime: String, data: String) {
@@ -1469,7 +1515,7 @@ nonisolated struct FoldImage: Codable, Hashable, Sendable {
     var size: Int?
     var width: Int?
     var height: Int?
-    /// Where its bytes are, like `ImagePayload.ref`: "<machine>/<session>/<item id>" (filled in by ChatStore).
+    /// Where its bytes are, like `ImagePayload.ref` (`ImageRef`, filled in by ChatStore).
     var ref: String? = nil
 
     enum CodingKeys: String, CodingKey {
@@ -1670,7 +1716,9 @@ nonisolated struct Interaction: Codable, Identifiable, Hashable, Sendable {
     /// The terminal asks for a password: typed into a password field, not kept anywhere.
     var secret: Bool?
     var fields: [InteractionField]?
-    var requiresInput: Bool { !(fields ?? []).isEmpty }
+    /// Something to fill in before it can be allowed: every quick Allow (lists, menus, Siri, the watch) is off. The
+    /// password card counts even without its field, so no path allows it without a password.
+    var requiresInput: Bool { !(fields ?? []).isEmpty || isSecretRun }
     /// Who asks when it is not Claude Code: "codex" / "traex" (a card read off a Codex TUI, docs/integrations/codex.md「提问和审批」).
     var agent: String?
     /// Why the agent asks for this permission, in its words.
@@ -1693,6 +1741,15 @@ nonisolated struct Interaction: Codable, Identifiable, Hashable, Sendable {
     /// What `muted` is stored as: optional, so a card without the key decodes (a synthesized `Bool` with a default
     /// still requires it, #4763) and encodes without it again.
     var mutedFlag: Bool?
+    /// The assistant is deciding whether it may answer this question for the user (docs/assistant/assistant.md "Assistant
+    /// answers questions first"): nothing was pushed yet, and an answer given here wins. The same card comes again
+    /// without it, by `id`.
+    var delegating: Bool?
+    /// What the assistant filled in when it left the question to the user.
+    var delegate: Delegate?
+    /// The manager that reported it (docs/protocol/protocol.md "Per-manager routing"). Once it is no longer pending
+    /// the hub routes by the manager a request names, so Change Answer names this one.
+    var manager: String?
 
     var sessionKey: SessionKey { SessionKey(group: group, machineID: machineID, sessionID: sessionID) }
     var machineRef: MachineRef { MachineRef(group: group, id: machineID) }
@@ -1708,11 +1765,48 @@ nonisolated struct Interaction: Codable, Identifiable, Hashable, Sendable {
     var screenDialog: ScreenParser.Dialog? { dialog?.parsed ?? screen.flatMap(ScreenParser.dialog) }
 
     enum CodingKeys: String, CodingKey {
-        case id, kind, questions, plan, summary, screen, cwd, dialog, secret, fields, agent, reason
+        case id, kind, questions, plan, summary, screen, cwd, dialog, secret, fields, agent, reason, delegating, delegate, manager
         case machineID = "machine_id", sessionID = "session_id", sessionTitle = "session_title", taskTitle = "task_title",
              createdAt = "created_at", expiresAt = "expires_at", toolName = "tool_name", toolUseID = "tool_use_id",
              toolInput = "tool_input", alwaysLabel = "always_label", alwaysKeys = "always_keys", agentLabelHint = "agent_label", hubGroup = "app_hub_group",
              mutedFlag = "muted"
+    }
+}
+
+/// The context the assistant filled in when it left a question to the user (`Interaction.delegate`, the hub's
+/// proto.Delegate). Every field may be missing; an odd one never drops the card.
+nonisolated struct Delegate: Codable, Hashable, Sendable {
+    var what: String?
+    var whyNow: String?
+    /// For a card with options, an option's exact label (several questions: their answers joined by `；`).
+    var recommend: String?
+    var cost: String?
+    var reason: String?
+    var deadline: Date?
+
+    enum CodingKeys: String, CodingKey {
+        case what, recommend, cost, reason, deadline
+        case whyNow = "why_now"
+    }
+
+    init(what: String? = nil, whyNow: String? = nil, recommend: String? = nil, cost: String? = nil, reason: String? = nil,
+         deadline: Date? = nil) {
+        self.what = what
+        self.whyNow = whyNow
+        self.recommend = recommend
+        self.cost = cost
+        self.reason = reason
+        self.deadline = deadline
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try? decoder.container(keyedBy: CodingKeys.self)
+        what = (try? c?.decodeIfPresent(String.self, forKey: .what)).flatMap { $0 }
+        whyNow = (try? c?.decodeIfPresent(String.self, forKey: .whyNow)).flatMap { $0 }
+        recommend = (try? c?.decodeIfPresent(String.self, forKey: .recommend)).flatMap { $0 }
+        cost = (try? c?.decodeIfPresent(String.self, forKey: .cost)).flatMap { $0 }
+        reason = (try? c?.decodeIfPresent(String.self, forKey: .reason)).flatMap { $0 }
+        deadline = (try? c?.decodeIfPresent(Date.self, forKey: .deadline)).flatMap { $0 }
     }
 }
 
@@ -1743,10 +1837,15 @@ nonisolated struct Resolution: Codable, Sendable {
     /// A multi-select screen dialog: the options to have checked when it is sent (`text`: its free-text field).
     var options: [String]?
     var values: [String: String]?
+    /// "assistant" on a question the assistant answered for the user (the hub's history and its `already` reply); the
+    /// app never sends it.
+    var answeredBy: String?
+    /// Why the assistant answered so (with `answeredBy`).
+    var reason: String?
 
     enum CodingKeys: String, CodingKey {
-        case answers, approve, mode, feedback, allow, always, message, keys, text, dismiss, option, options, values
-        case preKeys = "pre_keys"
+        case answers, approve, mode, feedback, allow, always, message, keys, text, dismiss, option, options, values, reason
+        case preKeys = "pre_keys", answeredBy = "answered_by"
     }
 
     static let dismissed = Resolution(dismiss: true)

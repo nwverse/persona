@@ -1,6 +1,7 @@
 from pathlib import Path
 import json
 import os
+import re
 import shutil
 import subprocess
 import tempfile
@@ -84,6 +85,58 @@ class DockerEntrypointTests(unittest.TestCase):
             self.assertNotIn("PERSONA_PUBLIC_URL", result.stderr)
             self.assertNotIn("PERSONA_ADMIN_ACCESS", result.stderr)
 
+    def run_command(self, *args):
+        """The entrypoint with args (no hub.json yet): what it ran personad with, its log, and the files it wrote."""
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            bin_dir = root / "bin"
+            bin_dir.mkdir()
+            home = root / "home"
+            home.mkdir()
+            write_stubs(bin_dir, {
+                "id": '#!/bin/sh\ncase "$1" in -u) echo 1000 ;; -un) echo persona ;; *) exit 1 ;; esac\n',
+                "getent": '#!/bin/sh\nexit 1\n',
+                "personad": '#!/bin/sh\nprintf "%s\\n" "$@"\n',
+            })
+            link_tools(bin_dir)
+            result = subprocess.run(["/bin/sh", str(ENTRYPOINT), *args], env={"PATH": str(bin_dir), "HOME": str(home)},
+                                    capture_output=True, text=True, timeout=5)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            files = sorted(str(p.relative_to(home)) for p in home.rglob("*") if p.is_file())
+            return result.stdout.splitlines(), result.stderr, files
+
+    def test_the_hub_runs_under_the_supervisor(self):
+        # The image's command: personad supervise, which runs the built-in manager beside the hub in service mode and
+        # becomes the hub itself otherwise (internal/supervise).
+        ran, logs, files = self.run_command("hub", "run")
+        self.assertEqual(ran, ["supervise"])
+        self.assertEqual(files, [".persona/hub.json"])
+        self.assertIn("PERSONA_ADMIN_ACCESS is not set", logs)
+        # Any other command goes to personad as it is.
+        self.assertEqual(self.run_command("hub", "pair")[0], ["hub", "pair"])
+
+    def test_manager_only_container_is_not_a_hub(self):
+        # The built-in manager in a container of its own (compose.yaml's commented example): no hub.json, no reminders.
+        ran, logs, files = self.run_command("supervise", "--manager-only", "--hub", "http://hub:18660")
+        self.assertEqual(ran, ["supervise", "--manager-only", "--hub", "http://hub:18660"])
+        self.assertEqual(files, [])
+        self.assertNotIn("PERSONA_PUBLIC_URL", logs)
+        self.assertNotIn("PERSONA_ADMIN_ACCESS", logs)
+        # The flag anywhere, in every spelling Go's flags take as true.
+        for args in (("supervise", "--hub", "http://hub:18660", "--manager-only"), ("supervise", "--manager-only=true"),
+                     ("supervise", "-manager-only"), ("supervise", "-manager-only=TRUE"), ("supervise", "--manager-only=1"),
+                     ("supervise", "--manager-only=t"), ("supervise", "--manager-only=false", "--manager-only")):
+            with self.subTest(args=args):
+                ran, logs, files = self.run_command(*args)
+                self.assertEqual((ran, files), (list(args), []))
+                self.assertNotIn("PERSONA_ADMIN_ACCESS", logs)
+        # False, or overridden by a later false: the hub's container (hub.json written, the hub's reminders).
+        for args in (("supervise", "--manager-only=false"), ("supervise", "--manager-only", "-manager-only=0")):
+            with self.subTest(args=args):
+                ran, logs, files = self.run_command(*args)
+                self.assertEqual((ran, files), (list(args), [".persona/hub.json"]))
+                self.assertIn("PERSONA_ADMIN_ACCESS is not set", logs)
+
     def test_desktop_api_guidance_is_independent_of_admin_access(self):
         for access in ("", "lan", "loopback", "cidrs", "any"):
             with self.subTest(access=access):
@@ -111,6 +164,7 @@ class DockerEntrypointTests(unittest.TestCase):
             "public": {"tls_listen": ":18662"},
             "admin": {"first_setup": "code"},
             "machines": [],
+            "assistant": {"mode": "service"},
         })
         # No token: the hub makes one when it first reads the file, as with db.sh's.
         self.assertNotIn("token", text)
@@ -267,7 +321,7 @@ class ComposeTests(unittest.TestCase):
 
     def test_compose_needs_only_the_image(self):
         text = COMPOSE.read_text()
-        self.assertIn("${PERSONA_IMAGE-${JARVIS_IMAGE:?", text)
+        self.assertIn("image: ${PERSONA_IMAGE-${JARVIS_IMAGE:-}}", text)
         for name in ("PERSONA_DB_PASSWORD", "PERSONA_PUBLIC_URL", "PUID", "PGID"):
             self.assertNotIn("${" + name + ":?", text)
             self.assertNotIn("${" + name + ":-1000}", text)
@@ -275,6 +329,89 @@ class ComposeTests(unittest.TestCase):
         self.assertIn("- ./data/docker:/run/persona", text)
         self.assertIn("PERSONA_DATABASE_URL: postgres://${PERSONA_DB_USER:-jarvis}:${PERSONA_DB_PASSWORD-${JARVIS_DB_PASSWORD:-}}@postgres:5432/", text)
         self.assertIn('$PERSONA_HOME/docker/db-password', WRAPPER.read_text())
+
+    def test_compose_has_no_required_check_inside_a_default(self):
+        # Compose before 5.0.2 evaluates `${A-${B:?…}}`'s default even when A is set: installs with only A would fail.
+        nested, depth, text, i = [], 0, COMPOSE.read_text(), 0
+        while i < len(text):
+            if text.startswith("$$", i):
+                i += 2
+                continue
+            if text.startswith("${", i):
+                if depth and re.match(r"\$\{\w+:?\?", text[i:]):
+                    nested.append(text[i:text.find("}", i) + 1])
+                depth += 1
+                i += 2
+                continue
+            if text[i] == "}" and depth:
+                depth -= 1
+            i += 1
+        self.assertEqual(nested, [])
+
+    DISK_WRITE_DEFAULTS = {
+        "PERSONA_HUB_HEALTHCHECK_INTERVAL": "30s",
+        "PERSONA_HUB_HEALTHCHECK_TIMEOUT": "5s",
+        "PERSONA_HUB_HEALTHCHECK_RETRIES": "3",
+        "PERSONA_LOG_DRIVER": "json-file",
+        "PERSONA_LOG_MAX_SIZE": "10m",
+        "PERSONA_LOG_MAX_FILE": "3",
+        "PERSONA_POSTGRES_SYNCHRONOUS_COMMIT": "on",
+        "PERSONA_POSTGRES_WAL_COMPRESSION": "off",
+        "PERSONA_POSTGRES_CHECKPOINT_TIMEOUT": "5min",
+        "PERSONA_POSTGRES_WAL_WRITER_DELAY": "200ms",
+        "PERSONA_POSTGRES_HEALTHCHECK_INTERVAL": "5s",
+        "PERSONA_POSTGRES_HEALTHCHECK_TIMEOUT": "5s",
+        "PERSONA_POSTGRES_HEALTHCHECK_RETRIES": "30",
+    }
+
+    def test_compose_disk_write_settings_default_to_the_old_timings_and_postgres_defaults(self):
+        text = COMPOSE.read_text()
+        names = "|".join(self.DISK_WRITE_DEFAULTS)
+        self.assertEqual(dict(re.findall(r"\$\{(" + names + r"):-([^}]*)\}", text)), self.DISK_WRITE_DEFAULTS)
+        # The image's entry point runs its first-start setup only when the command starts with postgres.
+        self.assertIn("    command:\n      - postgres\n      - -c\n      - synchronous_commit=", text)
+        self.assertIn("\n    logging: &logging\n", text)
+        self.assertIn("\n    logging: *logging\n", text)
+        env_example = (DOCKER / ".env.example").read_text()
+        doc = (ROOT / "docs/operations/docker.md").read_text()
+        for name, default in self.DISK_WRITE_DEFAULTS.items():
+            self.assertIn("# " + name + "=" + default + "\n", env_example)
+            self.assertIn("`" + name + "`", doc)
+
+    def test_compose_config_resolves_the_disk_write_settings(self):
+        if not shutil.which("docker"):
+            self.skipTest("Docker Compose is unavailable; no containers are started by this check")
+        overrides = {"PERSONA_POSTGRES_SYNCHRONOUS_COMMIT": "off", "PERSONA_POSTGRES_HEALTHCHECK_INTERVAL": "60s",
+                     "PERSONA_POSTGRES_HEALTHCHECK_RETRIES": "5", "PERSONA_LOG_DRIVER": "local"}
+        for env_values in ({}, overrides):
+            with self.subTest(overrides=bool(env_values)), tempfile.TemporaryDirectory() as directory:
+                env = {"PATH": os.environ["PATH"], "HOME": directory, "PERSONA_IMAGE": "example.invalid/fixture:1",
+                       "COMPOSE_PROJECT_NAME": "persona-test-" + os.urandom(4).hex(), **env_values}
+                if os.environ.get("PERSONA_TEST_DOCKER_CONFIG"):
+                    env["DOCKER_CONFIG"] = os.environ["PERSONA_TEST_DOCKER_CONFIG"]
+                result = subprocess.run(["docker", "compose", "-f", str(COMPOSE), "config", "--format", "json"],
+                                        env=env, capture_output=True, text=True, timeout=15)
+                if "is not a docker command" in result.stderr:
+                    self.skipTest("Docker Compose is unavailable")
+                self.assertEqual(result.returncode, 0, result.stderr)
+                services = json.loads(result.stdout)["services"]
+                values = {**self.DISK_WRITE_DEFAULTS, **env_values}
+                postgres = services["postgres"]
+                self.assertEqual(postgres["command"], [
+                    "postgres",
+                    "-c", "synchronous_commit=" + values["PERSONA_POSTGRES_SYNCHRONOUS_COMMIT"],
+                    "-c", "wal_compression=" + values["PERSONA_POSTGRES_WAL_COMPRESSION"],
+                    "-c", "checkpoint_timeout=" + values["PERSONA_POSTGRES_CHECKPOINT_TIMEOUT"],
+                    "-c", "wal_writer_delay=" + values["PERSONA_POSTGRES_WAL_WRITER_DELAY"],
+                ])
+                self.assertEqual(postgres["healthcheck"]["retries"], int(values["PERSONA_POSTGRES_HEALTHCHECK_RETRIES"]))
+                self.assertEqual(services["hub"]["healthcheck"]["retries"], 3)
+                self.assertNotIn("test", services["hub"]["healthcheck"])
+                for service in ("hub", "postgres"):
+                    self.assertEqual(services[service]["logging"], {
+                        "driver": values["PERSONA_LOG_DRIVER"],
+                        "options": {"max-size": "10m", "max-file": "3"},
+                    })
 
     def test_tls_port_is_published_and_exposed(self):
         self.assertIn('- "${PERSONA_TLS_PORT-${JARVIS_TLS_PORT:-18662}}:18662"', COMPOSE.read_text())

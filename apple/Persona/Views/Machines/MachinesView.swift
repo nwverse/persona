@@ -1,3 +1,4 @@
+import PersonaKit
 import SwiftUI
 
 /// The machine pages are pushed by value (MachineListRoute, MachineDetailRoute) and so are the chats they open
@@ -224,7 +225,7 @@ struct MachinesView: View {
                 .labelStyle(DotLabel(color: online == machines.count ? Theme.positive : .secondary))
             if let worst = alerts.max() {
                 HStack(spacing: Theme.Space.xs) {
-                    Image(systemName: Theme.Icon.errorFilled).foregroundStyle(MetricColor.level(worst))
+                    ThemedIcon(Theme.Icon.errorFilled).foregroundStyle(MetricColor.level(worst))
                     Text("\(alerts.count) machines running high")
                 }
             }
@@ -451,10 +452,12 @@ struct TodayTokensCard: View {
             }
             if today.total > 0 {
                 GeometryReader { g in
+                    // A small share's minimum width comes out of the large ones, so the bar ends at the card's edge.
+                    let widths = ShareBar.widths(ranked.map { Double($0.usage.today.total) }, width: g.size.width,
+                                                 gap: Theme.Space.xxs, minimum: Theme.Size.dotXS)
                     HStack(spacing: Theme.Space.xxs) {
-                        ForEach(Array(ranked.enumerated()), id: \.offset) { i, s in
-                            Capsule().fill(Color.primary.opacity(Self.shade(i)))
-                                .frame(width: max(Theme.Size.dotXS, g.size.width * Double(s.usage.today.total) / Double(today.total)))
+                        ForEach(Array(widths.enumerated()), id: \.offset) { i, w in
+                            Capsule().fill(Color.primary.opacity(Self.shade(i))).frame(width: w)
                         }
                     }
                 }
@@ -532,7 +535,7 @@ struct MetricCell<Chart: View>: View {
             HStack(spacing: Theme.Space.xs) {
                 Text(title).font(Theme.Font.label).foregroundStyle(Color.secondary)
                 if level > .normal {
-                    Image(systemName: Theme.Icon.errorFilled).font(Theme.Font.label).imageScale(.small).foregroundStyle(MetricColor.level(level))
+                    ThemedIcon(Theme.Icon.errorFilled).font(Theme.Font.label).imageScale(.small).foregroundStyle(MetricColor.level(level))
                 }
             }
             Text(value).font(Theme.Font.bodyStrong.monospacedDigit()).foregroundStyle(Color.primary).lineLimit(1).minimumScaleFactor(0.7)
@@ -551,7 +554,7 @@ struct AlertChip: View {
     var body: some View {
         let color = MetricColor.level(alert.level)
         HStack(spacing: Theme.Space.xs) {
-            Image(systemName: alert.level == .critical ? Theme.Icon.critical : Theme.Icon.errorFilled)
+            ThemedIcon(alert.level == .critical ? Theme.Icon.critical : Theme.Icon.errorFilled)
                 .foregroundStyle(color)
             Text(alert.label).foregroundStyle(Color.primary)
         }

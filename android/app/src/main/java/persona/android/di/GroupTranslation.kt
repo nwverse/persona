@@ -198,6 +198,7 @@ internal fun MachineManagement.inGroup(names: GroupNames): MachineManagement {
         override suspend fun launcherQuota(machineId: String, name: String, refresh: Boolean) =
             source.launcherQuota(names.rawMachine(machineId), name, refresh).let { a -> a.copy(machine = a.machine?.takeIf { it.isNotBlank() }?.let(names::machineId)) }
         override suspend fun reconnect(machineId: String) = source.reconnect(names.rawMachine(machineId))
+        override suspend fun rename(machineId: String, name: String) = source.rename(names.rawMachine(machineId), name)
         override suspend fun deploy(machineId: String) = source.deploy(names.rawMachine(machineId))
         override suspend fun herdr(machineId: String) = source.herdr(names.rawMachine(machineId))
         override suspend fun startHerdr(machineId: String) = source.startHerdr(names.rawMachine(machineId))
@@ -261,6 +262,8 @@ internal fun AssistantManagement.inGroup(names: GroupNames): AssistantManagement
         override suspend fun saveMemory(name: String, content: String) = source.saveMemory(name, content)
         override suspend fun deleteMemory(name: String) = source.deleteMemory(name)
         override suspend fun skills() = source.skills().let { it.copy(machineId = names.machineId(it.machineId)) }
+        override suspend fun alwaysGrants(session: SessionKey) = source.alwaysGrants(names.raw(session))
+        override suspend fun revokeAlwaysGrant(session: SessionKey, keyHash: String) = source.revokeAlwaysGrant(names.raw(session), keyHash)
     }
 }
 

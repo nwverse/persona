@@ -1,26 +1,4 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <issues format="6" by="lint 9.5.0" type="baseline" client="gradle" dependencies="false" name="AGP (9.5.0)" variant="all" version="9.5.0">
 
-    <issue
-        id="MissingPermission"
-        message="Call requires permission which may be rejected by user: code should explicitly check to see if permission is available (with `checkPermission`) or explicitly handle a potential `SecurityException`"
-        errorLine1="        runCatching { nm.notify(ix.id.hashCode(), b.build()) }"
-        errorLine2="                      ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
-        <location
-            file="src/main/java/persona/android/service/Notifier.kt"
-            line="121"
-            column="23"/>
-    </issue>
-
-    <issue
-        id="MissingPermission"
-        message="Call requires permission which may be rejected by user: code should explicitly check to see if permission is available (with `checkPermission`) or explicitly handle a potential `SecurityException`"
-        errorLine1="        if (allowed()) runCatching { nm.notify(ONGOING_ID, ongoing(conn, pending)) }"
-        errorLine2="                                     ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
-        <location
-            file="src/main/java/persona/android/service/Notifier.kt"
-            line="165"
-            column="38"/>
-    </issue>
-
 </issues>

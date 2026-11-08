@@ -217,11 +217,12 @@ func TestSameProcess(t *testing.T) {
 	if !sameProcess(self, "") || sameProcess(0, "") || sameProcess(999999, "") {
 		t.Fatal("liveness by pid alone")
 	}
-	if runtime.GOOS != "linux" {
+	prefix := map[string]string{"linux": "linux:", "windows": "windows:"}[runtime.GOOS]
+	if prefix == "" {
 		return
 	}
 	start := procStartMark(self)
-	if !strings.HasPrefix(start, "linux:") {
+	if !strings.HasPrefix(start, prefix) {
 		t.Fatalf("start of this process: %q", start)
 	}
 	if !sameProcess(self, start) {
@@ -230,10 +231,10 @@ func TestSameProcess(t *testing.T) {
 	if sameProcess(self, start+"1") {
 		t.Fatal("a pid whose start differs was taken for the same process (pid reuse)")
 	}
-	if sameProcess(999999, "linux:1") {
+	if sameProcess(999999, prefix+"1") {
 		t.Fatal("a process that does not exist")
 	}
-	if claudeFileStart("123") != "linux:123" || claudeFileStart("") != "" {
+	if claudeFileStart("123") != prefix+"123" || claudeFileStart("") != "" {
 		t.Fatal("claudeFileStart")
 	}
 }
@@ -241,8 +242,9 @@ func TestSameProcess(t *testing.T) {
 // A session file left by a claude that exited names a pid another program may hold by now. Claude Code writes the
 // process' start into it, so a pid with another start is not that claude and the session is not open elsewhere.
 func TestOpenElsewhereIgnoresReusedPid(t *testing.T) {
-	if runtime.GOOS != "linux" {
-		t.Skip("the process start is only read on Linux")
+	prefix := map[string]string{"linux": "linux:", "windows": "windows:"}[runtime.GOOS]
+	if prefix == "" {
+		t.Skip("the process start is only read on Linux and Windows")
 	}
 	n, _, home := herdrNode(t)
 	const reused = "0bd545f1-681d-4d98-bf5a-eb7c1251a0f0"
@@ -250,7 +252,7 @@ func TestOpenElsewhereIgnoresReusedPid(t *testing.T) {
 	writeClaudeSession(t, home, self, reused, "cli")
 	f := filepath.Join(home, ".claude", "sessions", fmt.Sprintf("%d.json", self))
 	b, _ := os.ReadFile(f)
-	start := strings.TrimPrefix(procStartMark(self), "linux:")
+	start := strings.TrimPrefix(procStartMark(self), prefix)
 	// Same file, written by a claude that started at a different time than the process now holding the pid.
 	if err := os.WriteFile(f, []byte(strings.TrimSuffix(string(b), "}")+`,"procStart":"1"}`), 0o600); err != nil {
 		t.Fatal(err)
