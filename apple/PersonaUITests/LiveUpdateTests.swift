@@ -99,20 +99,29 @@ final class LiveUpdateTests: XCTestCase {
     func testListMenuHoldsStillThroughUpdates() {
         launch()
         // The tab bar's ⋯, or in the shell the selected Agents of the top switch (docs/apple/ios.md「新外壳」).
-        let classic = app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "分组：")).firstMatch
+        let classic = app.navigationBars.buttons.matching(NSPredicate(format: "label CONTAINS %@", "分组：")).firstMatch
         // Both pages carry the switch (the other one out of sight): the one that can be tapped.
         XCTAssertTrue(classic.waitForExistence(timeout: 15) || app.buttons["shell-agents"].firstMatch.exists, "the list's options")
         let shells = app.buttons.matching(identifier: "shell-agents").allElementsBoundByIndex
-        let menuButton = classic.exists ? classic : (shells.first(where: { $0.isHittable }) ?? shells[0])
+        let menuButton = shells.first(where: { $0.isHittable }) ?? classic
         sleep(2)
         menuButton.tap()
         let machines = app.buttons["全部机器"]
         XCTAssertTrue(machines.waitForExistence(timeout: 5), "the menu opened")
-        // Scrolled down to the machines, as when choosing one.
-        machines.swipeUp(velocity: .slow)
+        if !machines.isHittable {
+            // The long native menu exposes offscreen rows. Drag inside its visible bounds, not an empty row frame.
+            let first = app.buttons["按仓库"]
+            let display = app.buttons["细列表"]
+            XCTAssertTrue(first.isHittable && display.isHittable, "visible menu rows for the scroll gesture")
+            let origin = app.windows.firstMatch.coordinate(withNormalizedOffset: .zero)
+            let start = origin.withOffset(CGVector(dx: display.frame.midX, dy: display.frame.midY))
+            let end = origin.withOffset(CGVector(dx: first.frame.midX, dy: first.frame.midY))
+            start.press(forDuration: 0.05, thenDragTo: end, withVelocity: 600, thenHoldForDuration: 0)
+        }
+        XCTAssertTrue(machines.isHittable, "machine choices must really be on screen")
         sleep(1)
         let last = app.buttons["训练机"]
-        XCTAssertTrue(last.exists, "the last machine")
+        XCTAssertTrue(last.isHittable, "the last machine must really be on screen")
         let lastY = last.frame.minY
         let machinesY = machines.frame.minY
         let before = counts()
@@ -132,8 +141,8 @@ final class LiveUpdateTests: XCTestCase {
 
     // A row's long-press menu stays open through updates of that very agent (it is working: a new line every push).
     @MainActor func testRowMenuHoldsStillThroughUpdates() {
-        launch()
-        let row = app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "给天气 App 加主屏幕小组件")).firstMatch
+        launch(["-dev.machineFilter", "macbook"])
+        let row = app.buttons.matching(NSPredicate(format: "identifier == 'agents.row' AND label CONTAINS %@", "给天气 App 加主屏幕小组件")).firstMatch
         XCTAssertTrue(app.buttons["agents.filter.all"].waitForExistence(timeout: 15))
         sleep(2)
         // Below the cards that need you, out of sight and not built yet (#836).

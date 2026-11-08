@@ -10327,9 +10327,14 @@ def churn(rounds, ms, steps=1, final=False, inbox=False, waiting=False, real=Fal
             working[0]["updated_at"] = ago(minutes=30)
         for m in MACHINES:
             m["last_seen"] = now
-        if waiting and INTERACTIONS:  # the hub's own list follows what is pushed below (/mock/truth reads it)
-            INTERACTIONS[:] = [x for x in INTERACTIONS if x["id"] != "ix_churn"]
-            if k % 2 == 0: INTERACTIONS.append(dict(INTERACTIONS[0], id="ix_churn", created_at=now))
+        churn_removed = []
+        churn_added = None
+        if waiting:  # Resolved identities never become a different question on the real hub.
+            churn_removed = [x["id"] for x in INTERACTIONS if x["id"].startswith("ix_churn")]
+            INTERACTIONS[:] = [x for x in INTERACTIONS if x["id"] not in churn_removed]
+            if k % 2 == 0 and INTERACTIONS:
+                churn_added = "ix_churn_" + uuid.uuid4().hex
+                INTERACTIONS.append(dict(INTERACTIONS[0], id=churn_added, created_at=now))
         by = {}
         for s in out_by_machine(all_sessions()): by.setdefault(s["machine_id"], []).append(s)
         for send, subscribed in list(LIVE):
@@ -10340,11 +10345,13 @@ def churn(rounds, ms, steps=1, final=False, inbox=False, waiting=False, real=Fal
                 if inbox:
                     send({"type": "inbox"})
                     for ix in pending: send({"type": "interaction", "interaction": ix})
-                if waiting and pending:  # another agent starts waiting, then is answered elsewhere
-                    if k % 2 == 0:
-                        send({"type": "interaction", "interaction": dict(pending[0], id="ix_churn", created_at=now)})
-                    else:
-                        send({"type": "interaction_resolved", "id": "ix_churn"})
+                if waiting:  # another agent starts waiting, then is answered elsewhere
+                    for retired in churn_removed:
+                        send({"type": "interaction_resolved", "id": retired})
+                    if churn_added:
+                        added = next((ix for ix in pending if ix["id"] == churn_added), None)
+                        if added:
+                            send({"type": "interaction", "interaction": added})
                 for sid in list(subscribed):
                     items = ITEMS.get(sid)
                     if not items: continue
