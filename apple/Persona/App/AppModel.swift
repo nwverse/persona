@@ -140,6 +140,9 @@ final class AppModel {
     /// What the app's timed waits sleep on (`settleSend`'s wait for a transcript copy): the wall clock. The shared sync
     /// replay's own (`SyncClock`), so that a case's minutes take none.
     @ObservationIgnored var clock: any Clock<Duration> = ContinuousClock()
+    /// Where the snapshot and the outbox are kept (`StateCache`): the app's Caches/state (nil), or a folder of a test's
+    /// own, so that its model starts from what the test wrote, not from what the simulator's app saved (#1637).
+    let stateFolder: URL?
     #if DEBUG
     /// Unit tests: the client every group's requests go to (`FakeHub.client`) instead of the paired hubs'.
     @ObservationIgnored var apiForTests: APIClient?
@@ -282,7 +285,8 @@ final class AppModel {
     var isDemo: Bool { links.first?.isDemo == true }
     static let demoKey = "demo.on"
 
-    init() {
+    init(stateFolder: URL? = nil) {
+        self.stateFolder = stateFolder
         TextSize.current.applyToMacFonts() // what `textSize` starts at
         Task.detached(priority: .utility) { LarkAttachment.staging.sweep() }
         connection = ConnectionStatus()
@@ -292,7 +296,7 @@ final class AppModel {
         // too, Demo Mode from a clean start (UI tests, `launchPersona`).
         if UserDefaults.standard.bool(forKey: "openWelcome") {
             HubStore.save(HubRegistry()) // known empty: deletes the registry and the old single pairing
-            StateCache.remove(Self.snapshotName("")) // and the lists it left: Demo Mode would show them (a paired app)
+            StateCache.remove(Self.snapshotName(""), in: stateFolder) // and the lists it left: Demo Mode would show them (a paired app)
             UserDefaults.standard.removeObject(forKey: Self.demoKey)
         }
         #endif
@@ -328,8 +332,7 @@ final class AppModel {
         if registry.hubs.isEmpty, !registryUnreadable, UserDefaults.standard.bool(forKey: Self.demoKey) {
             links = [makeLink("", .demo)]
         }
-        // Last known machines, agents and pending interactions: the lists are there offline and on a cold start.
-        if isPaired { restoreSnapshot(); restoreOutbox() }
+        if isPaired { restoreSaved() }
         WatchSync.shared.configProvider = { [weak self] in self.flatMap { $0.watchConfigs().configs[""] ?? $0.watchConfigs().configs.values.first } }
         WatchSync.shared.configsProvider = { [weak self] in
             guard let self, !self.isDemo, !self.registry.hubs.isEmpty else { return nil }
@@ -398,8 +401,7 @@ final class AppModel {
             applyPersonaPalette()
         }
         guard isPaired else { return }
-        restoreSnapshot()
-        restoreOutbox()
+        restoreSaved()
         start()
         PushRegistrar.shared.registerIfPossible()
     }
@@ -2545,10 +2547,17 @@ final class AppModel {
     /// Each group's snapshot: "dev" for the default group (what it always was), "dev.<group>" for the others.
     static func snapshotName(_ group: String) -> String { group.isEmpty ? "dev" : "dev." + group }
 
+    /// A paired launch: last known machines, agents and pending interactions, so the lists are there offline and on a
+    /// cold start, and what was on its way (`restoreOutbox`).
+    func restoreSaved() {
+        restoreSnapshot()
+        restoreOutbox()
+    }
+
     private func restoreSnapshot() {
         var allMachines: [Machine] = [], allSessions: [Session] = [], allInteractions: [Interaction] = []
         for g in groupIDs {
-            guard let snap = StateCache.load(Self.snapshotName(g), as: DevSnapshot.self) else { continue }
+            guard let snap = StateCache.load(Self.snapshotName(g), as: DevSnapshot.self, in: stateFolder) else { continue }
             allMachines += snap.machines.map { var m = $0; m.group = g; return m }
             allSessions += snap.sessions.map { var s = $0; s.group = g; return s }
             allInteractions += snap.interactions.map { var i = $0; i.group = g; return i }
@@ -2569,7 +2578,8 @@ final class AppModel {
                 StateCache.save(Self.snapshotName(g), DevSnapshot(
                     machines: self.machines.filter { $0.group == g },
                     sessions: self.sessionsByMachine.filter { $0.key.group == g }.values.flatMap { $0 },
-                    interactions: Array(self.interactions.values.filter { $0.group == g }), assistant: assistant))
+                    interactions: Array(self.interactions.values.filter { $0.group == g }), assistant: assistant),
+                    in: self.stateFolder)
             }
         }
     }
@@ -2587,7 +2597,7 @@ final class AppModel {
         if let k = openChat, gone.contains(k.group) { openChat = nil }
         if let k = assistantCurrent, gone.contains(k.group) { assistantCurrent = nil }
         for g in gone {
-            StateCache.remove(Self.snapshotName(g))
+            StateCache.remove(Self.snapshotName(g), in: stateFolder)
             ChatCache.removeGroup(g)
             PinsStore.forget(suffix: g)
             if !keepingPushKeys { PushCrypto.removeKey(group: g) }
