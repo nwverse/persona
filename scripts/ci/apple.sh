@@ -127,15 +127,6 @@ if [ "$LANE" = all ] || [ "$LANE" = ios ]; then
     printf 'apple-ci: selected compatible %s runtime %s\n' "$platform" "$runtime"
     if [ "$platform" = iOS ]; then IOS_RUNTIME="$runtime"; fi
   done
-  # The 26.0.x runtime is downloaded on every hosted run, and its first boot
-  # also builds its dyld shared cache. Build that cache in its own bounded step
-  # so the unchanged 900-second boot deadline measures only the boot (#1218).
-  # simctl does not document whether <runtime> is the runtime identifier or the
-  # image UUID; if it refuses the identifier, ask for every available runtime.
-  # An existing cache returns at once. Never pass --force: it deletes the cache.
-  ci_run "Build the iOS $IOS_RUNTIME dyld shared cache" 1200 bash -c \
-    'xcrun simctl runtime dyld_shared_cache update "$1" || { echo "apple-ci: runtime identifier refused; updating all runtimes"; xcrun simctl runtime dyld_shared_cache update --all; }' \
-    -- "$IOS_RUNTIME"
   resolve Persona
   # Generic device builds compile the actual watch/widget/notification/share
   # dependency graph; do not delete the watch target to accommodate the runner.
