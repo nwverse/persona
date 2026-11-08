@@ -289,7 +289,7 @@ func (h *Hub) auth(next http.Handler) http.Handler {
 		// API answers are live data: without this the phone's URLCache kept a copy of every page it pulled (megabytes,
 		// never read again). Images and media that may be cached set their own Cache-Control.
 		w.Header().Set("Cache-Control", "no-store")
-		next.ServeHTTP(w, r)
+		h.observeClientRequest(next, w, r, p)
 	})
 }
 
@@ -1104,6 +1104,7 @@ func (h *Hub) serveWS(w http.ResponseWriter, r *http.Request) {
 			c.clean = s == websocket.StatusNormalClosure || s == websocket.StatusGoingAway
 			return
 		}
+		c.recordSocketTraffic("websocket_frame", "received", int64(len(data)), 0)
 		h.onClientMessage(ctx, c, data)
 	}
 }
