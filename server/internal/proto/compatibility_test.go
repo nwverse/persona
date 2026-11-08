@@ -1,8 +1,10 @@
 package proto
 
 import (
+	"bytes"
 	"encoding/json"
 	"testing"
+	"time"
 )
 
 func TestPreCutoverSessionSourceContract(t *testing.T) {
@@ -32,6 +34,33 @@ func TestPreCutoverSessionSourceContract(t *testing.T) {
 		}
 		if json.Unmarshal(raw, &old) != nil || json.Unmarshal(raw, &current) != nil || old.Started != tc.want || current.Started != tc.want || old.ID != "s" {
 			t.Fatal(string(raw))
+		}
+	}
+}
+
+// A session is sent as the bytes the struct-copying MarshalJSON gave before MarshalJSONTo: through MarshalJSON (a
+// value in an interface), MarshalJSONTo (a pointer, a slice element) and an encoder that leaves HTML alone.
+func TestSessionWireBytesUnchanged(t *testing.T) {
+	at := time.Unix(1700000000, 5)
+	s := Session{SessionID: "s1", Title: "<b>&</b> \u2028", LastText: "\xff", StartedByPersona: true, UpdatedAt: at,
+		ActivityAt: &at, Queued: []string{}, Efforts: []string{"<hi>"}, Subagents: []Subagent{{}}}
+	before, err := json.Marshal(struct {
+		sessionJSON
+		LegacyStarted bool `json:"started_by_jarvis"`
+	}{sessionJSON(s), s.StartedByPersona})
+	if err != nil {
+		t.Fatal(err)
+	}
+	value, _ := json.Marshal(s)
+	pointer, _ := json.Marshal(&s)
+	var noHTML bytes.Buffer
+	enc := json.NewEncoder(&noHTML)
+	enc.SetEscapeHTML(false)
+	_ = enc.Encode([]Session{s})
+	for name, c := range map[string][2]string{"value": {string(value), string(before)}, "pointer": {string(pointer), string(before)},
+		"no-HTML encoder": {noHTML.String(), "[" + string(before) + "]\n"}} {
+		if c[0] != c[1] {
+			t.Errorf("%s:\n got %s\nwant %s", name, c[0], c[1])
 		}
 	}
 }

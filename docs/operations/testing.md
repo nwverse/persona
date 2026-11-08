@@ -239,7 +239,7 @@ or invalid output; `GET /_calls` inspects received calls. Point the manager's `m
 ```sh
 python3 scripts/mock/mock_hub.py &                                  # 127.0.0.1:18760
 SIM=$(scripts/app/sim-boot.sh "Persona Shots <issue number>")          # create/slim boot ("Simulators"), normal boot if simslim absent
-xcrun simctl status_bar $SIM override --time "$(date +%H:%M)" --batteryState charged --batteryLevel 100 --wifiBars 3 --cellularBars 4
+xcrun simctl status_bar $SIM override --time "$(date -u +%Y-%m-%dT%H:%M:%S.000Z)" --batteryState charged --batteryLevel 100 --wifiBars 3 --cellularBars 4
 xcrun simctl launch --terminate-running-process $SIM <bundle id> \
   -pairURL "persona://pair?url=http%3A%2F%2F127.0.0.1%3A18760&token=mock" [-tab dev|mail] [-openSession <machine>/<session>]
 ```

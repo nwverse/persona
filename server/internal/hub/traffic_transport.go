@@ -10,9 +10,15 @@ func (c *client) recordSocketTraffic(event, action string, bytes int64, elapsed 
 		return
 	}
 	c.mu.Lock()
-	platform := trafficPlatform(c.meta.Platform)
+	a := c.traffic
+	if platform := trafficPlatform(c.meta.Platform); platform != "unknown" {
+		a.platform, a.platformBasis = platform, "client-hello"
+	}
 	c.mu.Unlock()
-	c.hub.recordTraffic(trafficKey{minute: time.Now(), identity: trafficIdentity(c.device), registration: "none", platform: platform, route: "/api/v1/ws", event: event, action: action}, bytes, elapsed)
+	if a.platform == "" {
+		a.platform = "unknown"
+	}
+	c.hub.recordTraffic(trafficKey{minute: time.Now(), identity: trafficIdentity(c.device), registration: "none", platform: a.platform, source: a.source, platformBasis: a.platformBasis, sourceBasis: a.sourceBasis, route: "/api/v1/ws", event: event, action: action}, bytes, elapsed)
 }
 
 // notePush records a logical send result, not each retry. Only fixed protocol
@@ -22,7 +28,13 @@ func (p *Pusher) notePush(d Device, payload map[string]any, kind, route, action 
 		return
 	}
 	event := trafficPushEvent(payload, kind)
-	p.traffic(trafficKey{minute: time.Now(), identity: trafficIdentity(d.CredentialID), registration: trafficIdentity(d.DeviceID), platform: trafficPlatform(d.Kind), route: route, event: event, action: action, status: status}, bytes, elapsed)
+	source := "app"
+	if strings.HasPrefix(event, "liveactivity") {
+		source = "liveactivity"
+	} else if event == "background_widget" {
+		source = "widget"
+	}
+	p.traffic(trafficKey{minute: time.Now(), identity: trafficIdentity(d.CredentialID), registration: trafficIdentity(d.DeviceID), platform: trafficPlatform(d.Kind), source: source, platformBasis: "push-registration", sourceBasis: "push-kind", route: route, event: event, action: action, status: status}, bytes, elapsed)
 }
 
 // Capture the classification before asynchronous sends, so diagnostics never
