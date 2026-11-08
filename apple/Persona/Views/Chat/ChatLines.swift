@@ -15,9 +15,13 @@ struct ChatLines {
         return loadedOnce ? .empty : .loading
     }
 
-    /// Work lines the user opened; `openAll` flips them all (DEBUG `-openAllWork`).
+    /// Work lines the user flipped from how they start (folded, or open while running with `opensLive`); `openAll`
+    /// flips them all (DEBUG `-openAllWork`).
     var openWork: Set<String>
     var openAll = false
+    /// The running work line starts open, so its tool calls list one by one as they come; once the turn ends it is
+    /// folded again (the chat forgets the user's flip of it then) and opens to all of them (#1614, the assistant).
+    var opensLive = false
     /// Runs of tool calls the user opened; `openAllRuns` flips them all (DEBUG `-showRunsOpen`).
     var openRuns: Set<String> = []
     var openAllRuns = false
@@ -170,10 +174,10 @@ struct ChatLines {
         out.reserveCapacity(lines.count)
         for line in lines {
             out.append(line)
-            if case .work(let id, let items, let live, _, _) = line.content, !isOpen(id) {
+            if case .work(let id, let items, let live, _, _) = line.content, !isOpen(id, live: live) {
                 for case .step(.call(let c)) in items where showsFolded(c, live) { out.append(.agentOut(group: id, call: c)) }
             }
-            if case .work(let id, let items, _, _, _) = line.content, isOpen(id), !items.isEmpty {
+            if case .work(let id, let items, let live, _, _) = line.content, isOpen(id, live: live), !items.isEmpty {
                 // The BeautifulUI style folds runs of tool calls into a line of chips; the others list every step.
                 out += chipRuns ? runLines(group: id, items: items)
                     : items.enumerated().map { .workStep(group: id, item: $0.element, first: $0.offset == 0) }
@@ -185,7 +189,8 @@ struct ChatLines {
         return out
     }
 
-    func isOpen(_ work: String) -> Bool { openWork.contains(work) != openAll }
+    /// Whether a work line is open; `live`: it is the running one.
+    func isOpen(_ work: String, live: Bool) -> Bool { openWork.contains(work) != (openAll || (opensLive && live)) }
 
     /// The files a work line's edits and writes changed, in the order first touched, with the lines added and removed
     /// (the counts its diffs show, `ToolDiffMemo`). Failed edits changed nothing and are left out.
