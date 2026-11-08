@@ -312,6 +312,9 @@ func TestNotifyNotForAnswerOnly(t *testing.T) {
 // Through APNs: the level and the prefixed collapse id reach the push; "Phone Muted" holds it while a desktop is online.
 func TestNotifyAPNs(t *testing.T) {
 	h, f := macHub(t)
+	// Ordinary alerts do not use the Live Activity-only store from testLive.
+	// Leave API authentication on this fixture's original in-memory path.
+	h.store = nil
 	srv := httptest.NewServer(h.routes())
 	defer srv.Close()
 	post := func(token, body string) {
