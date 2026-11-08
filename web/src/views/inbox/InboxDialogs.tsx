@@ -3,7 +3,7 @@
 import { chooseManager, noteConversation, otherManager, ownerHeaders } from "../../lib/manager-choice";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { api, errorText } from "../../lib/api";
-import { noteSent, sendToSession } from "../../lib/outbox";
+import { askPersonaOf, noteSent, sendToSession } from "../../lib/outbox";
 import { sessionTitle, stateOf } from "../../lib/format";
 import {
   agentDraft, connectorReference, conversationRoute, docChangeLine, HANDOFF_PRESETS, handOffMessage, isLark, itemKey, itemPath, itemRequest, sendReply, setDone, unsentReplies,
@@ -34,43 +34,60 @@ export function draftTitle(it: InboxItem): string {
 }
 
 /** The drafted reply, editable; "Rewrite" asks again with an instruction; "Send" replies and files the item as done. */
-export function DraftDialog({ item, onClose }: { item: InboxItem; onClose: () => void }) {
+export function DraftDialog(props: { item: InboxItem; onClose: () => void }) {
+  return <DraftEditor key={itemKey(props.item)} {...props} />;
+}
+
+function DraftEditor({ item, onClose }: { item: InboxItem; onClose: () => void }) {
   const sessions = useStore((s) => s.sessions);
   const assistant = useStore((s) => s.assistant);
+  const key = itemKey(item);
   const agentText = agentDraft(item);
-  const [text, setText] = useState(() => unsentReplies.get(itemKey(item)) ?? agentText ?? "");
+  const [text, setText] = useState(() => unsentReplies.get(key) ?? agentText ?? "");
   const [instruction, setInstruction] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [dropped, setDropped] = useState<Set<string>>(new Set());
   const proposed = agentText ? item.agent?.changes ?? [] : [];
   const kept = proposed.filter((c) => !dropped.has(changeKey(c)));
-  const live = useRef(true);
+  const generation = useRef(0);
   const agent = item.agent;
 
+  // Save as text changes: navigation can unmount without onClose, and sendReply owns clearing/restoring on send.
+  const keepText = (value: string) => {
+    unsentReplies.set(key, value);
+    setText(value);
+  };
+
   const load = async (ask: string) => {
+    const request = ++generation.current;
     setLoading(true);
     try {
       const r = await api<{ text?: string }>(`${itemPath(item.id)}/draft`, { method: "POST", json: { instruction: ask }, headers: itemRequest(item) });
-      if (!live.current) return;
-      setText(r.text ?? "");
+      if (request !== generation.current) return;
+      keepText(r.text ?? "");
       setInstruction("");
       setError("");
     } catch (e) {
-      if (live.current) setError(errorText(e));
+      if (request === generation.current) setError(errorText(e));
     } finally {
-      if (live.current) setLoading(false);
+      if (request === generation.current) setLoading(false);
     }
   };
 
   useEffect(() => {
-    live.current = true;
-    if (!unsentReplies.has(itemKey(item)) && !agentText) void load("");
+    if (!unsentReplies.has(key) && !agentText) void load("");
     return () => {
-      live.current = false;
+      generation.current++;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [item.id]);
+  }, [key]);
+
+  const cancel = () => {
+    // Like manual mail, Cancel discards; incidental dismissal keeps the reply.
+    unsentReplies.delete(key);
+    onClose();
+  };
 
   const send = () => {
     void sendReply(item, text.trim(), kept);
@@ -86,7 +103,7 @@ export function DraftDialog({ item, onClose }: { item: InboxItem; onClose: () =>
       width={580}
       footer={
         <>
-          <Button tone="quiet" onClick={onClose}>{t("common.cancel")}</Button>
+          <Button tone="quiet" onClick={cancel}>{t("common.cancel")}</Button>
           <Button tone="accent" icon="send" disabled={!canSend} onClick={send}>{t("inbox-inboxdialogs.send")}</Button>
         </>
       }
@@ -138,7 +155,7 @@ export function DraftDialog({ item, onClose }: { item: InboxItem; onClose: () =>
       <div className="relative">
         <textarea
           value={text}
-          onChange={(e) => setText(e.target.value)}
+          onChange={(e) => keepText(e.target.value)}
           disabled={loading}
           rows={8}
           aria-label={t("inbox-inboxdialogs.reply_label")}
@@ -172,12 +189,13 @@ export function DraftDialog({ item, onClose }: { item: InboxItem; onClose: () =>
   );
 }
 
-/** Hands the item to Persona (a new conversation) or to a running agent, as a <persona-context> plus the ask. */
+/** Hands the item to Persona (its manager's main conversation by default, or a new one) or to a running agent, as a
+ *  <persona-context> plus the ask. */
 export function HandOffDialog({ item, onClose }: { item: InboxItem; onClose: () => void }) {
   const sessions = useStore((s) => s.sessions);
   const machines = useStore((s) => s.machines);
   const [ask, setAsk] = useState("");
-  const [target, setTarget] = useState<Session | null>(null);
+  const [target, setTarget] = useState<"main" | "new" | Session>("main");
   const [markDone, setMarkDone] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -197,7 +215,16 @@ export function HandOffDialog({ item, onClose }: { item: InboxItem; onClose: () 
     try {
       const full = await api<InboxItem>(itemPath(item.id), { headers: itemRequest(item) });
       const text = handOffMessage({ ...item, ...full }, ask);
-      if (target) {
+      if (target === "main") {
+        // a failure after it opens shows there with "Retry"
+        const { sent } = await askPersonaOf(item.manager, text);
+        onClose();
+        void sent.then((ok) => {
+          if (ok && markDone) void setDone(item, true);
+        });
+        return;
+      }
+      if (target !== "new") {
         // the conversation opens at once with the message on its way; a failure shows there with "Retry"
         onClose();
         navigate({ name: "session", mid: target.machine_id, sid: target.session_id });
@@ -268,11 +295,12 @@ export function HandOffDialog({ item, onClose }: { item: InboxItem; onClose: () 
 
       <p className="mt-4 mb-1.5 text-[12px] font-medium text-ink-2">{t("inbox-inboxdialogs.target_label")}</p>
       <div role="radiogroup" aria-label={t("inbox-inboxdialogs.target_label")} className="max-h-[300px] divide-y divide-line overflow-y-auto rounded-card bg-surface shadow-card">
-        <Target on={target === null} onPick={() => setTarget(null)} title={t("inbox-inboxdialogs.target_persona")} sub={t("inbox-inboxdialogs.target_persona_sub")} icon={<span className="flex size-6 items-center justify-center rounded-[7px] bg-accent-tint text-accent-ink"><Icon name="spark" size={12} /></span>} />
+        <Target on={target === "main"} onPick={() => setTarget("main")} title={t("inbox-inboxdialogs.target_main")} sub={t("inbox-inboxdialogs.target_main_sub")} icon={<span className="flex size-6 items-center justify-center rounded-[7px] bg-accent-tint text-accent-ink"><Icon name="spark" size={12} /></span>} />
+        <Target on={target === "new"} onPick={() => setTarget("new")} title={t("inbox-inboxdialogs.target_persona")} sub={t("inbox-inboxdialogs.target_persona_sub")} icon={<span className="flex size-6 items-center justify-center rounded-[7px] bg-field text-ink-2"><Icon name="compose" size={12} /></span>} />
         {agents.map((s) => (
           <Target
             key={`${s.machine_id}/${s.session_id}`}
-            on={target?.machine_id === s.machine_id && target.session_id === s.session_id}
+            on={typeof target === "object" && target.machine_id === s.machine_id && target.session_id === s.session_id}
             onPick={() => setTarget(s)}
             title={sessionTitle(s)}
             sub={[machineWithHub(s.machine_id, machines), s.space_name].filter(Boolean).join(" › ")}
