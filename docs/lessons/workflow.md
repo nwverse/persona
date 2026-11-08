@@ -8,6 +8,8 @@ Pitfalls, odd behavior and the trade-offs made at the time (formerly in `CLAUDE.
 
 - Resuming a workflow-owned agent with `SendMessage` before the runtime registered it created a second writer in the same worktree (#5956). Use only workflow pipeline stages to resume workflow-owned work. If writers collide, stop both, preserve all files in a full backup, then designate one recovery writer before changing anything.
 
+- Synthetic Git tests must remove inherited repository-locator variables from each child process environment (#1161): `GIT_DIR`, `GIT_WORK_TREE`, `GIT_INDEX_FILE`, `GIT_COMMON_DIR`, `GIT_OBJECT_DIRECTORY` and `GIT_ALTERNATE_OBJECT_DIRECTORIES` can redirect a command even when it uses `git -C` with a temporary fixture. Use independent test Git metadata, not the reviewed worktree's refs or index. If a test accidentally writes to that worktree, verify its branch, HEAD, index and protected files after restoring only the test's changes; report the write rather than claiming an entirely read-only review. This occurred during the Sentry source review: a local test commit changed refs/index; those changes were restored and protected source/diff hashes remained unchanged. No push occurred. Never prune the shared repository to hide test objects.
+
 - Multiple agents working in this repo at once: each uses its own simulator (`SIM=<udid> scripts/app/sim.sh`); when someone else's unfinished files do not compile, build your own changes in a `git worktree`;
   commits stage only your own files / hunks.
 - mock hub ports collide too (2026-10-31: another lane's `mock_hub.py` held 18794, your own mock with `MOCK_DRAWER=1` could not start, the tests connected to someone else's mock
