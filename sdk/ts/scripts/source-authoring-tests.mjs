@@ -2,10 +2,10 @@ import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { mkdtempSync, mkdirSync, readFile, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { availableParallelism, tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { test } from "node:test";
+import { describe, test } from "node:test";
 import { checkSourceBundle } from "./check-source-bundle.mjs";
 
 const good = 'export default { id: "example", version: "1.0.0" };';
@@ -54,8 +54,9 @@ const realmInitialization = `
   const read=await reader.read(); check(read,Object,"stream read"); check(read.value,Uint8Array,"stream value");
   reader.releaseLock();
   const pair=await crypto.subtle.generateKey({name:"ECDSA",namedCurve:"P-256"},true,["sign","verify"]);
-  // Node intentionally returns a null-prototype key-pair record, not an Object instance.
-  if (pair instanceof Object || Object.getPrototypeOf(pair)!==null) throw Error("key pair prototype");
+  // Follow native Node: some releases (22.16) return a null-prototype key-pair record,
+  // which must not become an Object instance; others (24.22.2) return an ordinary object.
+  if (Object.getPrototypeOf(pair)===null ? pair instanceof Object : !(pair instanceof Object)) throw Error("key pair prototype");
   check(pair.publicKey,CryptoKey,"public key");
   check(await crypto.subtle.exportKey("jwk",pair.publicKey),Object,"jwk");
   class ChildMap extends Map {} class ChildObject {} class ChildArray extends Array {}
@@ -85,6 +86,35 @@ const settings = { timeout: 15000 };
 const cleanEnv = { ...process.env };
 // Every subprocess, including SDK tests that may launch Git, must own its locator metadata.
 for (const key of ["GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_COMMON_DIR", "GIT_OBJECT_DIRECTORY", "GIT_ALTERNATE_OBJECT_DIRECTORIES"]) delete cleanEnv[key];
+// Bounded parallelism: each slot is one owned checker worker or child process, so
+// overlapping cases never oversubscribe a small runner. Waiting for a slot happens
+// before a call starts its own deadline.
+const slotLimit = Math.max(2, Math.min(4, availableParallelism() - 1));
+let activeSlots = 0;
+const slotWaiters = [];
+async function inSlot(work) {
+  if (activeSlots < slotLimit) activeSlots++;
+  else await new Promise(resolve => slotWaiters.push(resolve));
+  try { return await work(); }
+  finally { const next = slotWaiters.shift(); if (next) next(); else activeSlots--; }
+}
+const check = options => inSlot(() => checkSourceBundle(options));
+// Like spawnSync, but never blocks the parent event loop that supervises other
+// cases' library workers; the child keeps its own hard deadline.
+function run(command, args, timeoutMs) {
+  return inSlot(async () => {
+    const child = spawn(command, args, { stdio: ["ignore", "pipe", "pipe"], env: cleanEnv });
+    let stdout = "", stderr = "";
+    child.stdout.setEncoding("utf8"); child.stderr.setEncoding("utf8");
+    child.stdout.on("data", data => stdout += data); child.stderr.on("data", data => stderr += data);
+    const { code, signal } = await waitForExit(child, timeoutMs);
+    return { status: code, signal, stdout, stderr };
+  });
+}
+// Tests that neither block the parent event loop, stall it on purpose, nor count
+// process-wide resources run after the serial tests, two at a time when slots allow.
+const independentTests = [];
+const independentTest = (name, options, fn) => independentTests.push([name, options, fn]);
 function fixture(text = good) {
   const root = realpathSync(mkdtempSync(join(tmpdir(), "persona-source-authoring-")));
   // Canonical tmpdir supports macOS, where /tmp is a system symlink.
@@ -95,7 +125,7 @@ function fixture(text = good) {
 }
 async function result(text, overrides = {}) {
   const f = fixture(text);
-  try { return await checkSourceBundle({ ...f.options, ...overrides }); }
+  try { return await check({ ...f.options, ...overrides }); }
   finally { f.close(); }
 }
 async function accepted(text, overrides) {
@@ -110,13 +140,13 @@ async function refused(text, code, overrides) {
   return r;
 }
 
-test("static checks never execute initialization or claim runtime Program verification", settings, async () => {
+independentTest("static checks never execute initialization or claim runtime Program verification", settings, async () => {
   const r = await accepted('throw Error("must not run");' + good, { probe: false });
   assert.equal(r.code, "STATIC_OK"); assert.equal(r.program, "not-probed");
   await refused('throw Error("must run");' + good, "EVALUATION");
 });
 
-test("default Program accepts optional manifest, function maps and official page shapes", settings, async () => {
+independentTest("default Program accepts optional manifest, function maps and official page shapes", settings, async () => {
   const r = await accepted(good); assert.equal(r.program, "verified");
   await accepted('export default { id: "example", version: "1.0.0", manifest: undefined, init() {},'
     + 'namespaces: { service() {} }, shortcuts: { run() {} }, ui: {'
@@ -124,19 +154,19 @@ test("default Program accepts optional manifest, function maps and official page
   await accepted('const p = { id: "example", version: "1.0.0" }; export { p as default };');
 });
 
-test("an actual browser bundle built from the official SDK passes the source contract", settings, async () => {
+independentTest("an actual browser bundle built from the official SDK passes the source contract", settings, async () => {
   const f = fixture();
   try {
     const sdk = fileURLToPath(new URL("../src/index.ts", import.meta.url));
     writeFileSync(join(f.root, "entry.ts"), `import { componentPage, type Program } from ${JSON.stringify(sdk)};
       export default { id: "example", version: "1.0.0", ui: { home: componentPage(() => () => ({ sections: [] })) },
         namespaces: { example: (_method: string, params: unknown) => params } } satisfies Program;`);
-    const build = spawnSync("bun", ["build", "--target=browser", "--format=esm", "--no-macros", join(f.root, "entry.ts"),
-      "--outfile", join(f.root, "main.mjs")], { timeout: 10000, encoding: "utf8", env: cleanEnv });
+    const build = await run("bun", ["build", "--target=browser", "--format=esm", "--no-macros", join(f.root, "entry.ts"),
+      "--outfile", join(f.root, "main.mjs")], 10000);
     assert.equal(build.status, 0, build.stderr);
     const manifest = outer(f, { memory_mb: 128, cpu_percent: 25 });
     writeFileSync(join(f.root, "manifest.json"), JSON.stringify(manifest));
-    const verdict = await checkSourceBundle({ ...f.options, manifest: "manifest.json" });
+    const verdict = await check({ ...f.options, manifest: "manifest.json" });
     assert.equal(verdict.status, "PASS", JSON.stringify(verdict));
   } finally { f.close(); }
 });
@@ -151,7 +181,7 @@ test("MessageChannel ports, already closed ports and intervals cannot keep the c
   assert.equal(process.getActiveResourcesInfo().filter(type => type === "MessagePort").length, before);
 });
 
-test("standard Abort, URLSearchParams, streams and WebCrypto initializers", settings, async () => {
+independentTest("standard Abort, URLSearchParams, streams and WebCrypto initializers", settings, async () => {
   await accepted('const a = new AbortController(); a.abort(); if (!a.signal.aborted) throw Error("abort");'
     + 'const p = new URLSearchParams("a=1"); if (p.get("a") !== "1") throw Error("params");'
     + 'await crypto.subtle.digest("SHA-256", new TextEncoder().encode("example"));'
@@ -162,77 +192,90 @@ test("standard Abort, URLSearchParams, streams and WebCrypto initializers", sett
     + 'structuredClone({ a: 1 }); if (atob(btoa("example")) !== "example") throw Error("encoding");' + good);
 });
 
-test("no guest filesystem, environment, process, module, worker or network authority is supplied", settings, async () => {
+independentTest("no guest filesystem, environment, process, module, worker or network authority is supplied", settings, async () => {
   await accepted('for (const name of ["process", "Buffer", "Bun", "Deno", "Worker", "require"]) '
     + 'if (typeof globalThis[name] !== "undefined") throw Error("authority");' + good);
   await refused('await fetch("https://example.com/");' + good, "EVALUATION");
 });
 
-test("all runtime import forms and unbound loader references fail", settings, async () => {
-  for (const prefix of ['import "example";', 'import { x } from "example";', 'export * from "example";',
+independentTest("all runtime import forms and unbound loader references fail", settings, async () => {
+  await independentCases(['import "example";', 'import { x } from "example";', 'export * from "example";',
     'export { x } from "example";', 'function later() { return import("example"); }',
     'const meta = import.meta;', 'function later() { return require("example"); }',
     'const load = require;', 'const obj = { require };', 'function later() { return requ\\u0069re("example"); }',
-    'const load = globalThis.require;', 'const load = globalThis["require"];']) {
-    await refused(prefix + good, "IMPORT");
-  }
+    'const load = globalThis.require;', 'const load = globalThis["require"];'],
+    prefix => refused(prefix + good, "IMPORT"));
 });
 
-test("comments, strings, ordinary require properties and lexical bindings are not imports", settings, async () => {
-  for (const prefix of ['// import("example"); require("example");\nconst words = "require import";',
+independentTest("comments, strings, ordinary require properties and lexical bindings are not imports", settings, async () => {
+  await independentCases(['// import("example"); require("example");\nconst words = "require import";',
     'const p = { require: true }; p.require;', 'const p = { require() {} }; p.require();',
     'const p = { require: true }; const { require: v } = p;', 'const require = true; const p = { require };',
     'function local(require) { return require; } local(true);',
     'function local({ require }) { return require; } local({ require: true });',
     'function require(v) { return v; } require(true);', '{ const require = () => true; require(); }',
     'function local() { return require(); function require() { return true; } } local();',
-    'const globalThis = { require: true }; globalThis.require;']) await accepted(prefix + good);
+    'const globalThis = { require: true }; globalThis.require;'], prefix => accepted(prefix + good));
 });
 
-test("local require in one scope does not hide a global loader in another", settings, async () => {
+independentTest("local require in one scope does not hide a global loader in another", settings, async () => {
   for (const prefix of ['function local(require) { return require; } function other() { return require("example"); }',
     '{ const require = true; } function outside() { return require("example"); }',
     'function local() { const load = require; return load("example"); }']) await refused(prefix + good, "IMPORT");
 });
 
-test("ECMAScript syntax, truncated bundles and missing defaults fail without evaluation", settings, async () => {
+independentTest("ECMAScript syntax, truncated bundles and missing defaults fail without evaluation", settings, async () => {
   for (const text of ['export default {', 'const value: number = 1;' + good,
     'export default { id: "example", version: "1.0.0" }; export default null;']) await refused(text, "SYNTAX", { probe: false });
   await refused('export const p = {};', "DEFAULT_EXPORT", { probe: false });
 });
 
-test("non-Program values, getters and malformed handlers fail in the trusted probe", settings, async () => {
-  for (const value of ['null', '() => ({})', '{ render() {} }', '{ id: "example", version: "1.0.0", init: true }',
+independentTest("non-Program values, getters and malformed handlers fail in the trusted probe", settings, async () => {
+  await independentCases(['null', '() => ({})', '{ render() {} }', '{ id: "example", version: "1.0.0", init: true }',
     '{ id: "example", version: "1.0.0", namespaces: { service: {} } }',
     '{ id: "example", version: "1.0.0", shortcuts: { run: true } }',
     '{ id: "example", version: "1.0.0", ui: { home: {} } }',
     '{ id: "example", version: "1.0.0", ui: { home: { componentPage: true, root() {} } } }',
     '{ get id() { throw Error("getter must not run"); }, version: "1.0.0" }',
-    '{ id: "example", version: "1.0.0", namespaces: { get service() { return () => {}; } } }']) {
-    await refused('export default ' + value + ';', "PROGRAM");
-  }
+    '{ id: "example", version: "1.0.0", namespaces: { get service() { return () => {}; } } }'],
+    value => refused('export default ' + value + ';', "PROGRAM"));
 });
 
-test("Program.fetch is unsupported only by this source authoring contract", settings, async () => {
+independentTest("Program.fetch is unsupported only by this source authoring contract", settings, async () => {
   for (const value of ['() => new Response("ok")', 'false', 'true', 'null']) {
     await refused('export default { id: "example", version: "1.0.0", fetch: ' + value + ' };', "PROGRAM");
   }
   await accepted('export default { id: "example", version: "1.0.0", fetch: undefined };');
 });
 
-test("top-level await is supported and asynchronous/CPU hangs have a deadline", settings, async () => {
+independentTest("top-level await is supported and asynchronous/CPU hangs have a deadline", settings, async () => {
   await accepted('await new Promise(resolve => setTimeout(resolve, 1));' + good);
   await refused('await new Promise(() => {});' + good, "TIMEOUT", { timeoutMs: 500 });
   await refused('while (true) {};' + good, "TIMEOUT", { timeoutMs: 500 });
   await refused('queueMicrotask(function again() { queueMicrotask(again); });' + good, "TIMEOUT", { timeoutMs: 500 });
 });
 
-test("initialization throws, async rejections and late errors never print a false PASS", settings, async () => {
+independentTest("initialization throws, async rejections and late errors never print a false PASS", settings, async () => {
   await refused('throw Error("example");' + good, "EVALUATION");
   await refused('Promise.reject(Error("example"));' + good, "EVALUATION");
   await refused('setTimeout(() => { throw Error("example"); }, 10);' + good, "WORKER");
   await refused('setTimeout(() => Promise.reject(Error("example")), 10);' + good, "EVALUATION");
 });
+
+async function independentCases(values, inspect) {
+  let next = 0;
+  // Only disjoint temporary fixtures may overlap. Wait for both lanes even on
+  // failure so owned workers/children settle before their test ends.
+  const lane = async () => { while (next < values.length) await inspect(values[next++]); };
+  await settled([lane(), lane()]);
+}
+// Like Promise.all, but owned workers/children settle before a failure ends the test.
+async function settledValues(pending) {
+  const results = await Promise.allSettled(pending);
+  for (const result of results) if (result.status === "rejected") throw result.reason;
+  return results.map(result => result.value);
+}
+const settled = async pending => { await settledValues(pending); };
 
 function outer(f, resources) {
   const sha256 = createHash("sha256").update(readFileSync(join(f.root, "main.mjs"))).digest("hex");
@@ -241,7 +284,7 @@ function outer(f, resources) {
   } };
 }
 
-test("outer manifest uses the exact final hash and preserves valid resource budgets and all inputs", settings, async () => {
+independentTest("outer manifest uses the exact final hash and preserves valid resource budgets and all inputs", settings, async () => {
   const f = fixture();
   try {
     const before = readFileSync(join(f.root, "main.mjs"));
@@ -252,7 +295,7 @@ test("outer manifest uses the exact final hash and preserves valid resource budg
     for (const resources of [{}, { memory_mb: 128, cpu_percent: 25 }, { memory_mb: 64, cpu_percent: 10 },
       { memory_mb: 8192, cpu_percent: 800 }]) {
       const bytes = JSON.stringify(outer(f, resources)); writeFileSync(join(f.root, "manifest.json"), bytes);
-      const r = await checkSourceBundle({ ...f.options, manifest: "manifest.json" });
+      const r = await check({ ...f.options, manifest: "manifest.json" });
       assert.equal(r.status, "PASS", JSON.stringify(r));
       assert.equal(readFileSync(join(f.root, "manifest.json"), "utf8"), bytes);
       assert.deepEqual(readFileSync(join(f.root, "main.mjs")), before);
@@ -262,26 +305,26 @@ test("outer manifest uses the exact final hash and preserves valid resource budg
   } finally { f.close(); }
 });
 
-test("outer source profile rejects invalid descriptors, resources, runtime and identity mismatches", settings, async () => {
+independentTest("outer source profile rejects invalid descriptors, resources, runtime and identity mismatches", settings, async () => {
   const f = fixture();
   try {
     for (const resources of [null, [], true, { disk_mb: 128 }, { memory_mb: 63 }, { memory_mb: 8193 },
       { cpu_percent: 9 }, { cpu_percent: 801 }, { memory_mb: true }, { memory_mb: 128.5 }, { cpu_percent: "25" }]) {
       writeFileSync(join(f.root, "manifest.json"), JSON.stringify(outer(f, resources)));
-      assert.equal((await checkSourceBundle({ ...f.options, manifest: "manifest.json" })).code, "RESOURCES");
+      assert.equal((await check({ ...f.options, manifest: "manifest.json" })).code, "RESOURCES");
     }
     for (const patch of [m => m.runtime.source.sha256 = "0".repeat(64), m => m.runtime.source.entry = "../main.ts",
       m => m.runtime.source.bundle = "other.mjs", m => m.runtime.source.sha256 = "A".repeat(64)]) {
       const m = outer(f); patch(m); writeFileSync(join(f.root, "manifest.json"), JSON.stringify(m));
-      assert.equal((await checkSourceBundle({ ...f.options, manifest: "manifest.json" })).code, "SOURCE_DESCRIPTOR");
+      assert.equal((await check({ ...f.options, manifest: "manifest.json" })).code, "SOURCE_DESCRIPTOR");
     }
     for (const patch of [m => m.runtime.command = "bin/example", m => m.runtime.http = true,
       m => m.runtime.env = {}, m => m.runtime.args = [], m => m.runtime.rpc = "none", m => m.runtime.mode = "process"]) {
       const m = outer(f); patch(m); writeFileSync(join(f.root, "manifest.json"), JSON.stringify(m));
-      assert.equal((await checkSourceBundle({ ...f.options, manifest: "manifest.json" })).code, "SOURCE_RUNTIME");
+      assert.equal((await check({ ...f.options, manifest: "manifest.json" })).code, "SOURCE_RUNTIME");
     }
     const m = outer(f); m.id = "other"; writeFileSync(join(f.root, "manifest.json"), JSON.stringify(m));
-    assert.equal((await checkSourceBundle({ ...f.options, manifest: "manifest.json" })).code, "PROGRAM");
+    assert.equal((await check({ ...f.options, manifest: "manifest.json" })).code, "PROGRAM");
   } finally { f.close(); }
 });
 
@@ -321,11 +364,11 @@ test("cancel before and during a pending probe cleans only the owned worker", se
   await accepted(good);
 });
 
-function cliResult(options, { flags = [], entry = script } = {}) {
+async function cliResult(options, { flags = [], entry = script } = {}) {
   const args = [entry, "--root", options.root, "--bundle", options.bundle,
     ...(options.manifest !== undefined ? ["--manifest", options.manifest] : []),
     ...(options.probe ? ["--probe-trusted"] : []), "--timeout-ms", String(options.timeoutMs)];
-  const r = spawnSync(process.execPath, [...flags, ...args], { timeout: 10000, encoding: "utf8", env: cleanEnv });
+  const r = await run(process.execPath, [...flags, ...args], 10000);
   assert.equal(r.signal, null, r.stderr);
   assert.equal(r.stdout.trim().split("\n").length, 1, r.stdout + r.stderr);
   const verdict = JSON.parse(r.stdout);
@@ -335,10 +378,8 @@ async function both(text, code, overrides = {}) {
   const f = fixture(text);
   try {
     const options = { ...f.options, ...overrides };
-    // Both real workers can progress together; keep the original per-call deadline.
-    const pendingLibrary = checkSourceBundle(options);
-    const cli = cliResult(options);
-    const library = await pendingLibrary;
+    // The CLI child does not block the parent event loop supervising the library worker.
+    const [library, cli] = await settledValues([check(options), cliResult(options)]);
     for (const r of [library, cli.verdict]) {
       assert.equal(r.code, code, JSON.stringify(r));
       assert.equal(r.status, code.endsWith("_OK") ? "PASS" : "FAIL", JSON.stringify(r));
@@ -347,24 +388,60 @@ async function both(text, code, overrides = {}) {
   } finally { f.close(); }
 }
 
-test("SDK-inherited Program members and getters are inspected, not silently dropped", settings, async () => {
-  for (const prototype of ['{ init: true }', '{ fetch() {} }',
+independentTest("SDK-inherited Program members and getters are inspected, not silently dropped", settings, async () => {
+  await independentCases(['{ init: true }', '{ fetch() {} }',
     '{ get init() { throw Error("getter"); } }', '{ get fetch() { throw Error("getter"); } }',
     '{ get id() { throw Error("getter"); } }', '{ namespaces: Object.create({ service: true }) }',
-    '{ shortcuts: Object.create({ run: true }) }', '{ ui: { home: Object.create({ render: true }) } }']) {
+    '{ shortcuts: Object.create({ run: true }) }', '{ ui: { home: Object.create({ render: true }) } }'], async prototype => {
     const own = prototype.includes("get id") ? '{ version: "1.0.0" }' : '{ id: "example", version: "1.0.0" }';
     await both(`export default Object.assign(Object.create(${prototype}), ${own});`, "PROGRAM");
-  }
-  await both('class Program { id = "example"; version = "1.0.0"; init() {} } export default new Program();', "PROGRAM_OK");
-  await both('const p = { id: "example", version: "1.0.0", init() {}, fetch: undefined,'
-    + 'namespaces: Object.create({ service() {} }), shortcuts: Object.create({ run() {} }),'
-    + 'ui: Object.create({ home: Object.create({ render() {}, action() {} }) }) }; export default Object.create(p);', "PROGRAM_OK");
-  // A shadowed prototype getter is never read by connect and must not be called by the probe.
-  await both('export default Object.setPrototypeOf({ id: "example", version: "1.0.0", init() {} },'
-    + '{ get init() { throw Error("not read"); } });', "PROGRAM_OK");
+  });
 });
 
-test("real public SDK connect reproduces invalid inherited init and accepts a class Program", settings, async () => {
+independentTest("hidden inherited constructor members are contributions the SDK dispatches", settings, async () => {
+  // A hidden inherited member named constructor is a contribution the SDK dispatches
+  // (real connect: "h is not a function"). Only a prototype's own back-reference to
+  // its class or function is structural; a class or function stored elsewhere is not.
+  await independentCases([["namespaces", "true"], ["shortcuts", "true"], ["ui", "true"],
+    ["namespaces", "class Hidden {}"], ["shortcuts", "class Hidden {}"], ["ui", "class Hidden {}"],
+    ["ui", "function Page() {}"]], ([slot, value]) => both(`const map = Object.create(
+    Object.defineProperty({}, "constructor", {value:${value}}));
+    export default {id:"example",version:"1.0.0",${slot}:map};`, "PROGRAM"));
+});
+
+independentTest("structural class/function constructors and nearer own constructors remain valid maps", settings, async () => {
+  await independentCases([
+    // Structural class-map constructors are metadata, not contributions. Other
+    // inherited callable constructors and nearer own data remain valid SDK lookups.
+    `class Namespaces {service(){}} class Shortcuts {home(){}}
+    class Pages {getPage={render(){}}}
+    export default {id:"example",version:"1.0.0",namespaces:new Namespaces(),
+      shortcuts:new Shortcuts(),ui:new Pages()};`,
+    `class Base {service(){}} class Namespaces extends Base {other(){}}
+    function Shortcuts() {} Shortcuts.prototype.home = function () {};
+    class BasePages {} class Pages extends BasePages {home={render(){}}}
+    export default {id:"example",version:"1.0.0",namespaces:new Namespaces(),
+      shortcuts:new Shortcuts(),ui:new Pages()};`,
+    `const namespaces=Object.create(Object.defineProperty({},"constructor",{value:()=>{}}));
+    const shortcuts=Object.create(Object.defineProperty({},"constructor",{value:()=>{}}));
+    const ui=Object.create(Object.defineProperty({},"constructor",{value:{render(){}}}));
+    export default {id:"example",version:"1.0.0",namespaces,shortcuts,ui};`,
+    `const proto=Object.defineProperty({},"constructor",{get(){while(true){}}});
+    const namespaces=Object.defineProperty(Object.create(proto),"constructor",{value:()=>{}});
+    const shortcuts=Object.defineProperty(Object.create(proto),"constructor",{value:()=>{}});
+    const ui=Object.defineProperty(Object.create(proto),"constructor",{value:{render(){}}});
+    export default {id:"example",version:"1.0.0",namespaces,shortcuts,ui};`,
+    'class Program { id = "example"; version = "1.0.0"; init() {} } export default new Program();',
+    'const p = { id: "example", version: "1.0.0", init() {}, fetch: undefined,'
+    + 'namespaces: Object.create({ service() {} }), shortcuts: Object.create({ run() {} }),'
+    + 'ui: Object.create({ home: Object.create({ render() {}, action() {} }) }) }; export default Object.create(p);',
+    // A shadowed prototype getter is never read by connect and must not be called by the probe.
+    'export default Object.setPrototypeOf({ id: "example", version: "1.0.0", init() {} },'
+    + '{ get init() { throw Error("not read"); } });',
+  ], text => both(text, "PROGRAM_OK"));
+});
+
+independentTest("real public SDK connect reproduces invalid inherited init/constructor and accepts a class Program", settings, async () => {
   const f = fixture();
   try {
     mkdirSync(join(f.root, "node_modules", "@persona"), { recursive: true });
@@ -377,29 +454,43 @@ test("real public SDK connect reproduces invalid inherited init and accepts a cl
         conn.line(JSON.stringify({id:"init",method:"initialize",params:{protocol:PROTOCOL}}));
         await conn.shutdown();
       }
+      const hidden = value => Object.create(Object.defineProperty({},"constructor",{value}));
+      for (const [slots, method, params] of [[{namespaces:hidden(true)}, "constructor.status", {}],
+        [{shortcuts:hidden(true)}, "shortcut.run", {contribution:"constructor"}],
+        [{ui:hidden(true)}, "ui.render", {contribution:"constructor"}],
+        [{namespaces:hidden(class Hidden {})}, "constructor.status", {}]]) {
+        const conn = connect({id:"example",version:"1.0.0",...slots}, line => replies.push(JSON.parse(line)));
+        conn.line(JSON.stringify({id:"init",method:"initialize",params:{protocol:PROTOCOL}}));
+        conn.line(JSON.stringify({id:"call",method,params}));
+        await conn.shutdown();
+      }
       console.log(JSON.stringify(replies));`);
-    const build = spawnSync("bun", ["build", "--target=browser", "--format=esm", "--no-macros",
-      join(f.root, "transport.ts"), "--outfile", join(f.root, "transport.mjs")], { timeout: 10000, encoding: "utf8", env: cleanEnv });
+    const build = await run("bun", ["build", "--target=browser", "--format=esm", "--no-macros",
+      join(f.root, "transport.ts"), "--outfile", join(f.root, "transport.mjs")], 10000);
     assert.equal(build.status, 0, build.stderr);
-    const run = spawnSync(process.execPath, [join(f.root, "transport.mjs")], { timeout: 5000, encoding: "utf8", env: cleanEnv });
-    assert.equal(run.status, 0, run.stderr);
-    const replies = JSON.parse(run.stdout);
+    const transport = await run(process.execPath, [join(f.root, "transport.mjs")], 5000);
+    assert.equal(transport.status, 0, transport.stderr);
+    const replies = JSON.parse(transport.stdout);
     assert.match(replies[0].error.message, /init is not a function/);
     assert.equal(replies[1].result.id, "example");
+    // The checker refuses these hidden constructor contributions for the same reason.
+    const calls = replies.filter(reply => reply.id === "call");
+    assert.equal(calls.length, 4);
+    for (const call of calls.slice(0, 3)) assert.match(call.error.message, /is not a function/);
+    assert.match(calls[3].error.message, /Class constructor/);
   } finally { f.close(); }
 });
 
-test("observation revalidates mutated members, inherited values and the live default binding", settings, async () => {
-  for (const change of ['p.init = true', 'p.fetch = () => {}', 'p.namespaces = { service: true }', 'p = null',
-    'Object.setPrototypeOf(p, { init: true })', 'Object.defineProperty(p, "init", { get() { throw Error("getter"); } })']) {
-    await both('let p = { id: "example", version: "1.0.0" }; export { p as default };'
-      + `setTimeout(() => { ${change}; }, 10);`, "PROGRAM");
-  }
+independentTest("observation revalidates mutated members, inherited values and the live default binding", settings, async () => {
+  await independentCases(['p.init = true', 'p.fetch = () => {}', 'p.namespaces = { service: true }', 'p = null',
+    'Object.setPrototypeOf(p, { init: true })', 'Object.defineProperty(p, "init", { get() { throw Error("getter"); } })'],
+    change => both('let p = { id: "example", version: "1.0.0" }; export { p as default };'
+      + `setTimeout(() => { ${change}; }, 10);`, "PROGRAM"));
   await both('let p = null; p = { id: "example", version: "1.0.0" }; export { p as default };'
     + 'setTimeout(() => { p = Object.create(p); }, 10);', "PROGRAM_OK");
 });
 
-test("Web API binary results and all available WebCrypto constructors keep Node semantics", settings, async () => {
+independentTest("Web API binary results and all available WebCrypto constructors keep Node semantics", settings, async () => {
   const cryptoNames = ["Crypto", "CryptoKey", "SubtleCrypto"];
   const binaries = ["ArrayBuffer", "SharedArrayBuffer", "DataView", "Int8Array", "Uint8Array", "Uint8ClampedArray",
     "Int16Array", "Uint16Array", "Int32Array", "Uint32Array", "Float16Array", "Float32Array", "Float64Array", "BigInt64Array", "BigUint64Array"];
@@ -422,26 +513,26 @@ test("Web API binary results and all available WebCrypto constructors keep Node 
   const f = fixture(text);
   try {
     // Ordinary Node is the reference, not a mock implementation of a Web API.
-    const normal = spawnSync(process.execPath, [join(f.root, "main.mjs")], { timeout: 5000, encoding: "utf8", env: cleanEnv });
+    const normal = await run(process.execPath, [join(f.root, "main.mjs")], 5000);
     assert.equal(normal.status, 0, normal.stderr);
   } finally { f.close(); }
   await both(text, "PROGRAM_OK");
 });
 
-test("no-substitution templates follow the same literal global loader rule", settings, async () => {
-  for (const name of ["globalThis", "global", "window", "self"]) {
-    await both(`const load = ${name}[\`require\`];` + good, "IMPORT", { probe: false });
-    await both(`const load = ${name}[\`requ\\u0069re\`];` + good, "IMPORT", { probe: false });
-    await both(`const ${name} = { require: true }; const load = ${name}[\`require\`];` + good, "PROGRAM_OK");
-  }
-  await both('const p = { require: true }; p[`require`];' + good, "PROGRAM_OK");
-});
+for (const name of ["globalThis", "global", "window", "self"]) {
+  independentTest(`no-substitution templates follow the same literal ${name} loader rule`, settings, async () => {
+    await independentCases([[`const load = ${name}[\`require\`];`, "IMPORT"], [`const load = ${name}[\`requ\\u0069re\`];`, "IMPORT"],
+      [`const ${name} = { require: true }; const load = ${name}[\`require\`];`, "PROGRAM_OK"],
+      ...(name === "globalThis" ? [['const p = { require: true }; p[`require`];', "PROGRAM_OK"]] : [])],
+      ([prefix, code]) => both(prefix + good, code, code === "IMPORT" ? { probe: false } : {}));
+  });
+}
 
 test("real Node permission denial stays denied and returns TOOL from CLI and library", settings, async () => {
   const f = fixture();
   try {
     const flags = [Number(process.versions.node.split(".")[0]) === 22 ? "--experimental-permission" : "--permission", "--allow-fs-read=*"];
-    const cli = cliResult(f.options, { flags });
+    const cli = await cliResult(f.options, { flags });
     assert.equal(cli.status, 2, cli.stderr);
     assert.equal(cli.verdict.code, "TOOL"); assert.equal(cli.verdict.status, "FAIL");
     writeFileSync(join(f.root, "library.mjs"), `import { checkSourceBundle } from ${JSON.stringify(new URL("./check-source-bundle.mjs", import.meta.url).href)};
@@ -475,7 +566,7 @@ test("absolute deadline rejects late results after a parent I/O event-loop stall
         return count;
       };
       syncBuiltinESMExports();`);
-    const late = cliResult({ ...f.options, timeoutMs: 600 }, { flags: ["--import", preload] });
+    const late = await cliResult({ ...f.options, timeoutMs: 600 }, { flags: ["--import", preload] });
     assert.equal(late.status, 124, late.stdout + late.stderr); assert.equal(late.verdict.code, "TIMEOUT");
     const pending = checkSourceBundle({ ...f.options, timeoutMs: 600 });
     await new Promise(resolve => {
@@ -490,14 +581,14 @@ test("absolute deadline rejects late results after a parent I/O event-loop stall
   } finally { f.close(); }
 });
 
-test("host Web API plain-object Programs pass CLI, library, native ESM and real public SDK connect", settings, async () => {
+independentTest("host Web API plain-object Programs pass CLI, library, native ESM and real public SDK connect", settings, async () => {
   const f = fixture();
   try {
     mkdirSync(join(f.root, "node_modules", "@persona"), { recursive: true });
     symlinkSync(fileURLToPath(new URL("..", import.meta.url)), join(f.root, "node_modules", "@persona", "extension"), "dir");
     writeFileSync(join(f.root, "adapter.ts"), 'export { connect, PROTOCOL } from "@persona/extension";');
-    const build = spawnSync("bun", ["build", "--target=browser", "--format=esm", "--no-macros",
-      join(f.root, "adapter.ts"), "--outfile", join(f.root, "adapter.mjs")], { timeout: 10000, encoding: "utf8", env: cleanEnv });
+    const build = await run("bun", ["build", "--target=browser", "--format=esm", "--no-macros",
+      join(f.root, "adapter.ts"), "--outfile", join(f.root, "adapter.mjs")], 10000);
     assert.equal(build.status, 0, build.stderr);
     const programs = [realmInitialization + good,
       'export default structuredClone({id:"example",version:"1.0.0"});',
@@ -520,25 +611,27 @@ test("host Web API plain-object Programs pass CLI, library, native ESM and real 
         await conn.shutdown();
       }
       console.log(JSON.stringify(replies));`);
-    const run = spawnSync(process.execPath, [join(f.root, "native.mjs")], { timeout: 5000, encoding: "utf8", env: cleanEnv });
-    assert.equal(run.status, 0, run.stderr);
-    const replies = JSON.parse(run.stdout);
+    const native = await run(process.execPath, [join(f.root, "native.mjs")], 5000);
+    assert.equal(native.status, 0, native.stderr);
+    const replies = JSON.parse(native.stdout);
     assert.equal(replies.length, programs.length);
     for (const reply of replies) {
       assert.equal(reply.result.id, "example"); assert.equal(reply.result.version, "1.0.0");
     }
-    for (const change of ['Object.setPrototypeOf(p, {init:true})', 'Object.setPrototypeOf(p, {fetch() {}})',
-      'Object.defineProperty(p, "init", {get() {throw Error("getter");}})',
-      'p.namespaces = structuredClone({service:true})', 'p.ui = structuredClone({home:{render:true}})']) {
-      await both('const p = structuredClone({id:"example",version:"1.0.0"});' + change + '; export default p;', "PROGRAM");
-    }
-    await both('class Program { init() {} } const p = structuredClone({id:"example",version:"1.0.0"});'
-      + 'Object.setPrototypeOf(p, Program.prototype); export default p;', "PROGRAM_OK");
   } finally { f.close(); }
 });
 
+independentTest("host Web API plain objects still follow inherited SDK lookup and class prototypes", settings, async () => {
+  await independentCases(['Object.setPrototypeOf(p, {init:true})', 'Object.setPrototypeOf(p, {fetch() {}})',
+    'Object.defineProperty(p, "init", {get() {throw Error("getter");}})',
+    'p.namespaces = structuredClone({service:true})', 'p.ui = structuredClone({home:{render:true}})'],
+    change => both('const p = structuredClone({id:"example",version:"1.0.0"});' + change + '; export default p;', "PROGRAM"));
+  await both('class Program { init() {} } const p = structuredClone({id:"example",version:"1.0.0"});'
+    + 'Object.setPrototypeOf(p, Program.prototype); export default p;', "PROGRAM_OK");
+});
+
 for (const name of ["globalThis", "global", "window", "self"]) {
-  test(`direct literal ${name} loader destructuring follows CLI and library IMPORT policy`, settings, async () => {
+  independentTest(`direct literal ${name} loader destructuring follows CLI and library IMPORT policy`, settings, async () => {
     const bindings = name === "globalThis"
       ? ['require: load', '"require": load', '["require"]: load', '[`require`]: load', 'require'] : ['require: load'];
     for (const binding of bindings) {
@@ -552,7 +645,7 @@ for (const name of ["globalThis", "global", "window", "self"]) {
   });
 }
 
-test("literal destructuring respects local bindings without chasing arbitrary aliases", settings, async () => {
+independentTest("literal destructuring respects local bindings without chasing arbitrary aliases", settings, async () => {
   for (const text of ['const require = true; const {require:load} = globalThis;',
     'const {requ\\u0069re:load} = globalThis;']) await both(text + good, "IMPORT", { probe: false });
   for (const text of ['const p = {require() {return true;}}; const {require:load} = p; load();',
@@ -571,7 +664,7 @@ test("tool-entry symlinks and npm script bin links run the real CLI, unlike forb
     writeFileSync(join(f.root, "package.json"), JSON.stringify({private:true,
       scripts:{check:'node node_modules/.bin/persona-source-check.mjs'}}));
     for (const linked of [entry, join(f.root, "node_modules", ".bin", "persona-source-check.mjs")]) {
-      for (let i = 0; i < 2; i++) assert.equal(cliResult(f.options, {entry:linked}).verdict.code, "PROGRAM_OK");
+      for (let i = 0; i < 2; i++) assert.equal((await cliResult(f.options, {entry:linked})).verdict.code, "PROGRAM_OK");
       const unknown = spawnSync(process.execPath, [linked, "--unknown"], {timeout:5000, encoding:"utf8", env:cleanEnv});
       assert.equal(unknown.status, 2); assert.equal(unknown.stdout.trim().split("\n").length, 1);
       assert.equal(JSON.parse(unknown.stdout).code, "USAGE");
@@ -584,32 +677,32 @@ test("tool-entry symlinks and npm script bin links run the real CLI, unlike forb
       assert.equal(JSON.parse(npm.stdout).code, args[0] === "--unknown" ? "USAGE" : "PROGRAM_OK");
     }
     symlinkSync(join(f.root, "main.mjs"), join(f.root, "input-link.mjs"));
-    const input = cliResult({...f.options, bundle:"input-link.mjs"}, {entry});
+    const input = await cliResult({...f.options, bundle:"input-link.mjs"}, {entry});
     assert.equal(input.status, 1); assert.equal(input.verdict.code, "SYMLINK");
   } finally { f.close(); }
 });
 
-test("canonical source runtime http:false preserves final digest and never enables HTTP", settings, async () => {
+independentTest("canonical source runtime http:false preserves final digest and never enables HTTP", settings, async () => {
   const f = fixture();
   try {
     const manifest = outer(f); manifest.runtime.http = false; manifest.runtime.rpc = "stdio";
     writeFileSync(join(f.root, "manifest.json"), JSON.stringify(manifest));
     const options = {...f.options, manifest:"manifest.json"};
-    for (const r of [await checkSourceBundle(options), cliResult(options).verdict]) {
+    for (const r of [await check(options), (await cliResult(options)).verdict]) {
       assert.equal(r.code, "PROGRAM_OK"); assert.equal(r.sha256, manifest.runtime.source.sha256);
     }
     for (const http of [true, null, 0, "false", {}]) {
       manifest.runtime.http = http; writeFileSync(join(f.root, "manifest.json"), JSON.stringify(manifest));
-      for (const r of [await checkSourceBundle(options), cliResult(options).verdict]) assert.equal(r.code, "SOURCE_RUNTIME");
+      for (const r of [await check(options), (await cliResult(options)).verdict]) assert.equal(r.code, "SOURCE_RUNTIME");
     }
     manifest.runtime.http = false; manifest.runtime.source.sha256 = "0".repeat(64);
     writeFileSync(join(f.root, "manifest.json"), JSON.stringify(manifest));
-    assert.equal((await checkSourceBundle(options)).code, "SOURCE_DESCRIPTOR");
+    assert.equal((await check(options)).code, "SOURCE_DESCRIPTOR");
     await both('export default {id:"example",version:"1.0.0",fetch() {}};', "PROGRAM");
   } finally { f.close(); }
 });
 
-test("invalid options and signal getters fail before Worker creation; registration/cleanup always reap", settings, async t => {
+independentTest("invalid options and signal getters fail before Worker creation; registration/cleanup always reap", settings, async t => {
   const f = fixture('new MessageChannel().port1.onmessage = () => {};' + good);
   try {
     writeFileSync(join(f.root, "signals.mjs"), `import assert from "node:assert/strict";
@@ -668,8 +761,7 @@ test("invalid options and signal getters fail before Worker creation; registrati
       for (let i = 0; i < 3; i++) assert.equal((await checkSourceBundle(options)).code,"PROGRAM_OK");
       await new Promise(resolve => setImmediate(resolve)); assert.equal(ports(),baseline); assert.equal(created,terminated);
       console.log(JSON.stringify({status:"PASS",created,terminated,messagePorts:ports(),baseline}));`);
-    const child = spawnSync(process.execPath, ["--unhandled-rejections=strict", join(f.root, "signals.mjs")],
-      {timeout:10000, encoding:"utf8", env:cleanEnv});
+    const child = await run(process.execPath, ["--unhandled-rejections=strict", join(f.root, "signals.mjs")], 10000);
     assert.equal(child.status, 0, child.stdout + child.stderr);
     assert.equal(child.stdout.trim().split("\n").length, 1);
     const r = JSON.parse(child.stdout); assert.equal(r.status, "PASS"); assert.equal(r.created, r.terminated);
@@ -679,7 +771,7 @@ test("invalid options and signal getters fail before Worker creation; registrati
 });
 
 for (const name of ["globalThis", "global", "window", "self"]) {
-  test(`parenthesized static loader matrix for ${name}`, settings, async () => {
+  independentTest(`parenthesized static loader matrix for ${name}`, settings, async () => {
     for (const prefix of [
       `const load = (((${name})))[((("require")))];`,
       `const {[((\`require\`))]: alias} = (((${name})));`,
@@ -691,7 +783,7 @@ for (const name of ["globalThis", "global", "window", "self"]) {
   });
 }
 
-test("synchronous signal protocol refuses promises and thenables without strict rejection crashes", settings, async t => {
+independentTest("synchronous signal protocol refuses promises and thenables without strict rejection crashes", settings, async t => {
   const f = fixture('new MessageChannel().port1.onmessage = () => {};' + good);
   try {
     const entry=join(f.root,"async-signals.mjs");
@@ -754,15 +846,14 @@ test("synchronous signal protocol refuses promises and thenables without strict 
         await new Promise(setImmediate);assert.equal(created,terminated);assert.equal(ports(),baseline);
       }
       console.log(JSON.stringify({status:"PASS",cases:35,created,terminated,baseline,ports:ports()}));`);
-    const child=spawnSync(process.execPath,["--unhandled-rejections=strict",entry],
-      {timeout:12000,encoding:"utf8",env:cleanEnv});
+    const child=await run(process.execPath,["--unhandled-rejections=strict",entry],12000);
     assert.equal(child.status,0,child.stdout+child.stderr);
     assert.equal(child.stdout.trim().split("\n").length,1);
     t.diagnostic(child.stdout.trim());
   } finally { f.close(); }
 });
 
-test("cancellation remains observable while successful verification is awaiting cleanup", settings, async t => {
+independentTest("cancellation remains observable while successful verification is awaiting cleanup", settings, async t => {
   const f=fixture('new MessageChannel().port1.onmessage=()=>{};'+good);
   try {
     const entry=join(f.root,"cancel-during-cleanup.mjs");
@@ -777,14 +868,14 @@ test("cancellation remains observable while successful verification is awaiting 
       await new Promise(setImmediate);assert.equal(result.code,"CANCELED");assert.equal(result.status,"FAIL");
       assert.equal(result.sha256,undefined);assert.equal(created,stopped);assert.equal(ports(),before);
       console.log(JSON.stringify({status:"PASS",created,stopped,before,after:ports()}));`);
-    const child=spawnSync(process.execPath,["--unhandled-rejections=strict",entry],{timeout:5000,encoding:"utf8",env:cleanEnv});
+    const child=await run(process.execPath,["--unhandled-rejections=strict",entry],5000);
     assert.equal(child.status,0,child.stdout+child.stderr);assert.equal(child.stdout.trim().split("\n").length,1);
     t.diagnostic(child.stdout.trim());
   } finally {f.close();}
 });
 
-test("intrinsic contributions inspect both realms without rejecting native baselines or own shadows", settings, async () => {
-  for (const host of [false,true]) {
+for (const host of [false,true]) {
+  independentTest(`intrinsic contributions inspect the ${host?"host":"VM"} realm without rejecting native baselines or own shadows`, settings, async () => {
     const map=host?'structuredClone({})':'{}';
     const proto=host?'Object.getPrototypeOf(structuredClone({}))':'Object.prototype';
     const cases=[];
@@ -800,8 +891,12 @@ test("intrinsic contributions inspect both realms without rejecting native basel
     for (const key of ["get","value"]) cases.push(refused(`const map=${map};
       Object.defineProperty(${proto},${JSON.stringify(key)},{get(){while(true){}}});
       export default {id:"example",version:"1.0.0",namespaces:map};`, "PROGRAM"));
-    // Cases are independent owned workers; parallelism avoids lengthening the portable gate.
-    await Promise.all(cases);
+    // A replaced native constructor is a changed intrinsic, not structural metadata.
+    for (const slot of ["namespaces","shortcuts","ui"]) cases.push(refused(`const map=${map};
+      Object.defineProperty(${proto},"constructor",{configurable:true,writable:true,value:class Polluted{}});
+      export default {id:"example",version:"1.0.0",${slot}:map};`, "PROGRAM"));
+    // Cases are independent owned workers; slots bound how many run at once.
+    await settled(cases);
     await refused(`const map=${map}; ${proto}.toString=1;
       export default {id:"example",version:"1.0.0",namespaces:map};`, "PROGRAM");
     await accepted(`const namespaces=${map},shortcuts=${map},ui=${map};
@@ -811,11 +906,11 @@ test("intrinsic contributions inspect both realms without rejecting native basel
       Object.defineProperty(ui,"service",{value:{render(){}}});
       export default {id:"example",version:"1.0.0",namespaces,shortcuts,ui};`);
     await accepted(`export default {id:"example",version:"1.0.0",namespaces:${map},shortcuts:${map},ui:${map}};`);
-  }
-});
+  });
+}
 
-test("direct classes cannot fill call slots; methods and opaque future behavior remain shape-only", settings, async () => {
-  await Promise.all([
+independentTest("direct classes cannot fill call slots; methods and opaque future behavior remain shape-only", settings, async () => {
+  await settled([
     'init:class Init{}', 'namespaces:{service:class Service{}}', 'shortcuts:{home:class Shortcut{}}',
     'ui:{home:{render:class Render{}}}', 'ui:{home:{render(){},action:class Action{}}}',
     'ui:{home:{componentPage:true,options:{},root:class Root{},createRenderer(){}}}',
@@ -833,7 +928,7 @@ test("direct classes cannot fill call slots; methods and opaque future behavior 
     service:(class Bound{}).bind(null),proxy:new Proxy(()=>{},{apply(){throw Error("future proxy");}})}};`);
 });
 
-test("caller species observation errors are structured, not proof of handling the original rejection", settings, async t => {
+independentTest("caller species observation errors are structured, not proof of handling the original rejection", settings, async t => {
   const f=fixture('new MessageChannel().port1.onmessage=()=>{};'+good);
   try {
     const entry=join(f.root,"species.mjs");
@@ -860,7 +955,7 @@ test("caller species observation errors are structured, not proof of handling th
         assert.deepEqual(Object.getOwnPropertyDescriptor(p,"constructor"),descriptor);
       }
       console.log(JSON.stringify({status:"PASS",cases:6,created,started,stopped}));`);
-    const child=spawnSync(process.execPath,["--unhandled-rejections=strict",entry],{timeout:10000,encoding:"utf8",env:cleanEnv});
+    const child=await run(process.execPath,["--unhandled-rejections=strict",entry],10000);
     assert.equal(child.status,0,child.stdout+child.stderr);
     assert.equal(child.stdout.trim().split("\n").length,1);t.diagnostic(child.stdout.trim());
     // With no caller handler, the same bad Promise fails under Node's strict policy
@@ -871,7 +966,7 @@ test("caller species observation errors are structured, not proof of handling th
         Object.defineProperty(p,"constructor",{get(){throw Error("constructor");}});
         ${checker?`console.log(JSON.stringify(await checkSourceBundle({...${JSON.stringify(f.options)},probe:p})));`:''}
         await new Promise(resolve=>setTimeout(resolve,20));`);
-      const invalid=spawnSync(process.execPath,["--unhandled-rejections=strict",entry],{timeout:5000,encoding:"utf8",env:cleanEnv});
+      const invalid=await run(process.execPath,["--unhandled-rejections=strict",entry],5000);
       assert.equal(invalid.status,1,invalid.stdout+invalid.stderr);assert.match(invalid.stderr,/caller rejection/);
       if(checker)assert.equal(JSON.parse(invalid.stdout).code,"OPTIONS");
       else assert.equal(invalid.stdout,"");
@@ -993,4 +1088,9 @@ test("recorded signals outrank cleanup deadlines and cleanup failures never clai
       }
     }
   } finally { sentinel.kill("SIGTERM");await waitForExit(sentinel);f.close(); }
+});
+
+// Registered last, so the serial tests above never overlap these cases.
+describe("independent source authoring cases", { concurrency: slotLimit > 2 ? 2 : 1 }, () => {
+  for (const [name, options, fn] of independentTests) test(name, options, fn);
 });

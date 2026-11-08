@@ -106,7 +106,12 @@ and are rejected without calling the getter; an own data member may shadow an
 inherited accessor that the SDK would not read. Inherited contribution members
 added to or changed on either realm's `Object.prototype` are inspected against a
 baseline captured before evaluation. Unchanged native baseline members are not
-contributions, and nearer data members take precedence. Directly recognizable
+contributions, and nearer data members take precedence. A class or function
+prototype's own non-enumerable `constructor` back-reference to that class or
+function is structural metadata, as created by class syntax and function
+prototypes; an enumerable back-reference, such as one assigned in an ES5-style
+prototype object literal, is inspected like any other member; any other inherited `constructor` member, enumerable or
+not, is a contribution like any other name. Directly recognizable
 class constructors are rejected in handler and renderer slots. This is a bounded
 shape check, not a complete TypeScript check or a proof of future behavior for
 opaque bound functions or proxies. Proxies and other dynamic behavior are not a
@@ -141,7 +146,8 @@ covers Object, Array, Date, Map, Set, RegExp, Error, Promise and the other langu
 constructors present in that toolchain, including nested/cyclic `structuredClone`
 graphs, iterator results, stream read records and `Response.json()` payloads.
 It does not rewrite object graphs, spoof subclass instances or turn null-prototype
-records (such as WebCrypto key pairs) into Object instances.
+records (such as the WebCrypto key pairs some Node releases return) into Object
+instances.
 
 The supported comparison is ordinary `instanceof` against those global intrinsic
 constructors and the existing shared Web/binary constructors. Exact host-vs-VM

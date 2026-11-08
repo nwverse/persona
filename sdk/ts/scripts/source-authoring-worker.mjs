@@ -91,7 +91,12 @@ function validateProgram(program, identity, objectBaselines) {
           .every(field => Object.hasOwn(descriptor, field) === Object.hasOwn(original, field)
             && (!Object.hasOwn(descriptor, field) || descriptor[field] === original[field]))) continue;
         if (!Object.hasOwn(descriptor, "value")) throw Error("PROGRAM");
-        if (!baseline && current !== value && key === "constructor" && !descriptor.enumerable) continue;
+        // Class/function prototypes carry structural constructor metadata. Identify
+        // the back-reference without reading a user getter; an arbitrary hidden
+        // member named constructor is still an SDK contribution.
+        if (!baseline && current !== value && key === "constructor" && !descriptor.enumerable
+            && typeof descriptor.value === "function"
+            && Object.getOwnPropertyDescriptor(descriptor.value, "prototype")?.value === current) continue;
         result[key] = descriptor.value;
       }
     }
