@@ -35,6 +35,8 @@ type Devices interface {
 	// another one absorbed: that one), its sessions as its node listed them, when its node's connection began, the
 	// token usage.
 	List() []devices.Summary
+	// MachineResources returns the retained system and latest sample, including a stale sample's timestamp.
+	MachineResources(id string) (*proto.Machine, *proto.MetricSample, *bool)
 	Canonical(id string) string
 	Sessions(id string) ([]proto.Session, bool)
 	Session(id, session string) (proto.Session, bool)

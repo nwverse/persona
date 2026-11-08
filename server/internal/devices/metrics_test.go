@@ -155,6 +155,16 @@ func TestUsageAndMetricsForgetARemovedMachine(t *testing.T) {
 	if d.metrics.now("kept", time.Now()) == nil {
 		t.Fatal("the kept machine lost its live metrics")
 	}
+	// The assistant needs the last sample even when it is no longer current, and no data for a removed machine.
+	d.onMetrics("kept", []byte(`{"sample":{"t":1}}`))
+	d.onSystem("kept", &proto.System{OS: "linux", Cores: 4})
+	machine, latest, outdated := d.MachineResources("kept")
+	if machine == nil || machine.System == nil || machine.System.Cores != 4 || latest == nil || latest.T != 1 || outdated != nil {
+		t.Fatalf("retained facts: machine=%+v latest=%+v outdated=%v", machine, latest, outdated)
+	}
+	if machine, latest, outdated := d.MachineResources("gone"); machine != nil || latest != nil || outdated != nil {
+		t.Fatalf("removed machine still listed: %+v %+v %v", machine, latest, outdated)
+	}
 }
 
 // newCancelledOnCleanup is newTestDevices whose machines are stopped and waited for when the test ends.

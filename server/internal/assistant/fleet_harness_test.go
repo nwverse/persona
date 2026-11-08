@@ -122,6 +122,10 @@ func (d *fleetDevs) List() []devices.Summary {
 	return out
 }
 
+func (d *fleetDevs) MachineResources(string) (*proto.Machine, *proto.MetricSample, *bool) {
+	return nil, nil, nil
+}
+
 func (d *fleetDevs) Canonical(id string) string { return id }
 
 func (d *fleetDevs) Sessions(id string) ([]proto.Session, bool) {
