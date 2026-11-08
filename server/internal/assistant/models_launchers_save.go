@@ -252,8 +252,11 @@ func (in launcherInput) check() error {
 	if in.Agent != "" && in.Agent != "claude" && in.Agent != "codex" && in.Agent != "agy" && in.Agent != "omp" {
 		return i18n.Err("assistant-models_launchers.err_kind")
 	}
-	if in.API != "" && in.API != "messages" && in.API != "responses" {
+	if in.API != "" && in.API != "messages" && in.API != "responses" && in.API != "chat" {
 		return i18n.Err("assistant-models_launchers.err_api")
+	}
+	if in.Kind != "api" && in.API == "chat" {
+		return i18n.Err("assistant-models_launchers.err_chat_launcher")
 	}
 	if in.Kind != "api" && (in.Agent == "" || in.Agent == "claude") && in.API == "responses" {
 		return i18n.Err("assistant-models_launchers.err_claude_messages")
@@ -343,7 +346,7 @@ func (s *Service) saveLauncher(ctx context.Context, in launcherInput, old *store
 		l.DisplayName = strings.TrimSpace(*in.DisplayName)
 	}
 	switch {
-	case in.API == "responses": // always goes as Bearer: nothing to keep
+	case in.API == "responses" || in.API == "chat": // always goes as Bearer: nothing to keep
 		l.Auth = ""
 	case in.Auth == "bearer":
 		l.Auth = in.Auth

@@ -2,6 +2,7 @@
   "err_no_preset": "没有这个供应商预设（提供它的扩展停用或卸载了？）",
   "err_kind": "接入类型不支持",
   "err_api": "API 协议不支持",
+  "err_chat_launcher": "Chat Completions 接入不能作为启动器运行",
   "err_claude_messages": "Claude 启动器只支持 Messages 接入",
   "err_auth": "认证方式不支持",
   "err_api_launch_fields": "直接 API 接入不能设置启动参数、小模型或子 Agent 模型",
