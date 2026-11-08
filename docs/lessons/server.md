@@ -1,5 +1,13 @@
 # Lessons: hub / node and networking
 
+## Mail account writes publish only committed candidates (#1302)
+
+Whole-account snapshots need one guard covering candidate capture, storage and publication across adds, OAuth
+upserts, imports, deletes and refresh-token rotation. Publishing first and rolling back later lets an unrelated
+successful write persist rejected credentials or a failed deletion. Copy nested OAuth credentials, keep network
+verification outside that guard, and retire health and cached connections only after the write succeeds. Concurrency
+regressions should park a second writer at the guard and check restart agreement, rather than require it to enter storage.
+
 ## Distant spreadsheet dates exceed time.Duration (#1061)
 
 `time.Time.Sub` saturates at roughly 290 years, so XLSX dates after the duration limit all became the same serial. Subtract Unix seconds for parsed calendar dates, retaining the existing wall-clock normalization. Verify the emitted worksheet XML, including distant leap years, time fractions, offsets and text cells; a valid ZIP/XML structure alone does not prove date values are correct.
@@ -36,6 +44,12 @@ dialer's own timeout at the request's deadline can arrive before the context rep
 decide by the deadline, not by the attempts' errors. Test the scheduling with a fake dialer in a `testing/synctest` bubble, whose clock makes the
 order and timing of attempts exact; it proves nothing about real sockets' error identities, so keep a real-socket test for those (a loopback listener
 with a full accept queue never answers a SYN on Linux).
+
+## Approved official-market pins outlive built-in constants (#1157)
+
+Changing a compiled public key does not update a pin already saved in Postgres, and the registration marker can hide that difference. Migrate only explicitly recognized retired official pins, including every recognized repository or HTTPS alias; never infer trust from a downloaded catalog or replace an unknown owner choice. Save the legacy registration marker before migration so a removed market stays removed. A failed pin write must keep loading retryable.
+
+For embedded signatures, retain the complete envelope and verify the exact decoded payload bytes on restart. Postgres JSONB may normalize the outer envelope without changing those bytes; compare the decoded payload, not the envelope's formatting. A legacy detached payload or stale cached signed flag must not authorize installation. Cache quarantine can legitimately write the old record before pin migration: inject failure specifically on the new-pin write, rather than claiming a generic cache-write error proves migration retry. Keep every HTTP fixture local, including automatic refreshes of quarantined caches. Observe successful catalog delivery in rejection tests as well as `errors.Is(err, extension.ErrCatalogUnverified)`. `ErrCatalogUnavailable` must not lift a rotated cache's quarantine, and it must preserve the new key's catalog once that envelope has genuinely verified. Never infer these categories from localized message text.
 
 ## A fixed name in the temp folder is shared on Linux (2026-11-07, #66)
 
@@ -79,6 +93,10 @@ Revocation ended pairing codes with `expires_at = now()` (Postgres's clock) whil
 
 - The write gate reads a call's arguments into a map and compares field names exactly. A connector that decodes the same bytes into a struct with `encoding/json` matches a name without regard to its case (Unicode simple folding), and a field given more than once does not simply resolve to its last value: a `null` is ignored, and an object or an array is decoded onto what the earlier one left. A rule judged on the gate's reading can therefore be wrong about what the connector will do, so the two have to compare names, and resolve repeats, the same way.
 - When a decision is made on arguments that another decoder reads later, compare names the way that decoder does, and refuse the call where the readings can still differ rather than ranking them rule by rule. `connector.Decide` refuses a call that gives a field more than once, the same name or one that folds to it (`repeatedField`, top level only), and a deny or confirm compares names without regard to capitals (`matchFieldsAny`) while an allow keeps the exact reading, so a rule that lets a call through is never wider than one that refuses or asks. Test the folding against `encoding/json` itself (`TestTwoSpellingsAreWhatTheDecoderFolds`), not against a list of cases. A gate that matches a body before some other service decodes it (the node's Feishu gate) depends on that service's rules and is not covered.
+
+## Bracketed registry hosts (#1324)
+
+Splitting a registry at its first colon reads `[::1]:5000` as `[`, selecting HTTPS for a local HTTP registry. Extract the hostname with `url.URL.Hostname` and compare IPv6 addresses with `net.IP.Equal`; keep the original registry spelling and port in the request. Test compressed/expanded loopback, a real TCP6 request, and controls retaining external HTTPS and existing IPv4 behavior.
 
 ## Scrubbing patterns: Go tries regexp alternatives in order
 

@@ -338,7 +338,7 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 
 // agentStartTimeout bounds the wait for an agent_start answer: the node creates the session and launches the agent
 // first, and a machine waking from sleep or a launcher cold start can take minutes. Same bound as a quiet task's
-// own start (tasks.go's taskStartTimeout). A var so tests shorten it instead of sleeping past it.
+// own start (tasks_start.go's taskStartTimeout). A var so tests shorten it instead of sleeping past it.
 var agentStartTimeout = taskStartTimeout
 
 // agentStartAdoptWindow bounds how fresh a listed session's last sign of life must be to count as the one an
