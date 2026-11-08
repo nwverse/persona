@@ -15,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/acceptloop"
 	"github.com/nwverse/persona/server/internal/host"
 	"github.com/nwverse/persona/server/internal/nodeclient"
 	"github.com/nwverse/persona/server/internal/prompts"
@@ -97,15 +98,7 @@ func (n *Node) listenOnce(ctx context.Context) (net.Listener, error) {
 		<-ctx.Done()
 		ln.Close()
 	}()
-	go func() {
-		for {
-			c, err := ln.Accept()
-			if err != nil {
-				return
-			}
-			go n.serveSock(ctx, c)
-		}
-	}()
+	go acceptloop.Run(ctx, ln, n.logf, func(c net.Conn) { go n.serveSock(ctx, c) })
 	return ln, nil
 }
 

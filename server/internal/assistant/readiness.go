@@ -445,7 +445,19 @@ func (s *Service) readinessMain(ctx context.Context, machine, main string) (prot
 	if main == "" {
 		return proto.Session{}, false
 	}
-	list, _ := s.sessions(ctx, machine)
+	var list []proto.Session
+	if s.fleetOn() {
+		if m, ok := s.fleetMachine(machine); ok {
+			if sess, found := s.nodeSession(m.ID, main); found && m.isAssistant(sess) {
+				// Readiness needs one headless conversation, not a decorated
+				// and serialized copy of every coding session on the machine.
+				list = s.decorateInventory(m.ID, []proto.Session{sess}, false)
+			}
+		}
+	}
+	if list == nil {
+		list, _ = s.sessions(ctx, machine)
+	}
 	for _, sess := range list {
 		if sess.SessionID == main {
 			if text, kind := turnError(sess); text != "" && sess.TurnError == "" {

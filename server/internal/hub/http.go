@@ -44,8 +44,9 @@ func (h *Hub) routes() http.Handler {
 		}
 		writeJSON(w, map[string]any{"machines": localizedMachines(h.requestLang(r), list)})
 	})
-	// Confirm / reject a computer (machine_trust.go).
+	// Confirm / reject / rename a computer (machine_trust.go, machine_rename.go).
 	h.machineTrustRoutes(api)
+	h.machineRenameRoutes(api)
 	h.deviceRoutesRelayed(api) // the manager's own: reconnect, engine, herdr, deploy, claude-dirs (devices_link.go)
 	api.HandleFunc("GET /api/v1/machines/{mid}/dirs", h.proxy("dirs.list", func(r *http.Request) any {
 		return map[string]any{"path": r.URL.Query().Get("path")}
@@ -92,6 +93,8 @@ func (h *Hub) routes() http.Handler {
 	api.HandleFunc("GET /api/v1/machines/{mid}/git/show", h.proxy("git.show", func(r *http.Request) any {
 		return map[string]any{"cwd": r.URL.Query().Get("cwd"), "hash": r.URL.Query().Get("hash")}
 	}))
+	// Every file a scope changed with its hunks, for the web's Review panel (gitreview.go, #151).
+	api.HandleFunc("GET /api/v1/machines/{mid}/git/review", h.withMachine(h.gitReview))
 	api.HandleFunc("GET /api/v1/machines/{mid}/git/log", h.proxy("git.log", func(r *http.Request) any {
 		q := r.URL.Query()
 		return map[string]any{"cwd": q.Get("cwd"), "skip": atoi(q.Get("skip")), "limit": atoi(q.Get("limit"))}
@@ -247,6 +250,7 @@ func (h *Hub) routes() http.Handler {
 	api.HandleFunc("GET /api/v1/ws", h.serveWS)
 	h.tokenRoutes(api)
 	h.portRoutes(api)
+	h.previewRoutes(api)
 	h.pairRoutes(api)
 	h.managerRoutes(api) // the roster (managers.go)
 	h.linkRoutes(api)

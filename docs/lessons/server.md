@@ -11,6 +11,10 @@ and a local session revision protect that boundary without changing the node pro
 
 Pitfalls, odd behavior, and the trade-offs made at the time (formerly "Lessons" in `CLAUDE.md`; index in `docs/lessons/README.md`). Add new lessons to the relevant section, or create one if none fits.
 
+## A fixed name in the temp folder is shared on Linux (2026-11-07, #66)
+
+`os.TempDir()` is the per-user `$TMPDIR` on macOS but the shared `/tmp` on Linux, so a fixed name there (`persona-herdr-server.log`, `persona-orca-images`) looks private on a Mac and is not on a Linux node. Another local user can create the name first: a symlink makes the next `O_CREATE|O_TRUNC` open empty and write into a file of the node's user, and a world-writable folder receives every file written into it, since `MkdirAll` succeeds on an existing folder whatever its owner or mode. Keep such files under `privateCacheDir` (`internal/node/cachedir.go`: the user's cache folder, checked to be a private folder of this user; a per-process `os.MkdirTemp` folder when there is none).
+
 ## An expiry written by one clock and checked by another (2026-11-07, #6543, #6553)
 
 Revocation ended pairing codes with `expires_at = now()` (Postgres's clock) while the hub judged them by its own `time.Now()`: with Postgres in a VM whose clock runs ahead (a macOS hub with Docker Desktop or colima), a revoked code kept working for the difference. When a time is written on one side and compared on the other, make it past by both (`LEAST(expires_at, now(), $hub_now)`, `endedNow`). A time the hub hands out has the same problem even when every check is in SQL: a voided manager install code still showed a future expiry in the roster (#6553). Tests that compare a database-written time with `time.Now()` fail on such a machine, while Linux CI, with Postgres on the same kernel clock, never shows it.
@@ -139,6 +143,8 @@ Revocation ended pairing codes with `expires_at = now()` (Postgres's clock) whil
 - A cursor freezes order and target revision, whereas a delta checkpoint advances only after all delta pages are applied. Expired cursors/checkpoints must return an explicit reset error, not an apparently successful empty page.
 - Exact active-chat detail needs its own `sessions_lookup` feature gate (#6054): older bounded-list hubs ignore an unknown `session_id` and return up to 50 unrelated rows. Resolve the composite identity before row filtering/counting, reuse the full collection DTO, and never replace chat-only task/configuration fields with a summary. Exact baselines reject `since`/`cursor`; coalesced invalidations trigger a new exact read without scanning the change journal.
 - Measure cold initialization separately from warm first-page requests, and distinguish allocation churn, retained heap and process peak RSS. A transport index trades bounded retained memory for far smaller repeat requests; a warm-cache benchmark alone is not a cold-start measurement.
+- A small assistant overview can still traverse the entire runtime inventory (#739). Select headless conversations before decorating rows, and use typed in-process data instead of a local RPC JSON round trip. With 8,200 synthetic sessions, the old overview took 450–464 ms and allocated 205–219 MB; early selection took 5.84–6.67 ms and allocated 12.25 MB. Partial decoration must not prune other sessions' state marks or hook flags; only a complete inventory can establish that a session disappeared.
+- Audit neighboring entry requests too (#1075): `readinessMain` still serialized the full inventory to find one main conversation after the overview was fixed. A verified headless identity can use exact local lookup and the same partial decorator, with the legacy/unusual-session fallback preserved. The identical 8,200-row benchmark went from 479–596 ms to 2.71–3.26 ms. Keep first-use history parsing and large initial feed responses separate from warm switching claims.
 
 ## Extension version notices must preserve localization through the response chain (#3598)
 
@@ -579,7 +585,7 @@ home volume (docs/operations/link.md "Without systemd").
   and hub deployment also replaced the web with that directory's `web/`. Not cache: index.html is `no-cache`, assets hashed, no Service Worker.
 - Diagnose through each startup version (`git describe`) in `journalctl --user -u personad`, and production `web/index.html` mtime (tar preserves build time);
   a PR-specific string in the live bundle identifies the web version.
-- `deploy.sh` now requires HEAD to contain `origin/master`, otherwise refuses; deliberately deploying an old commit requires `PERSONA_DEPLOY_ANY_COMMIT=1`.
+- `deploy.sh` now requires HEAD to contain the remote's default branch, otherwise refuses; deliberately deploying an old commit requires `PERSONA_DEPLOY_ANY_COMMIT=1`.
 - Fake backends can't catch dependencies in connectors written in other languages (2026-11-04, #1487): an external Lark connector pinned `SQLAlchemy==2.0.30`, which crashes on import under Python 3.13; green `CheckProgram` tests miss it. Build a real package and run actual pip/install/import checks. Accountless parts (dependencies, imports, QR initialization, decoding one synthetic push frame) can all be tested this way.
 - `./scripts/test/test-server.sh ./... | tail` hides failed packages: Go sorts package names, putting `cmd/` first; `tail` leaves only final `FAIL` (2026-11-04). Save output, grep `^FAIL`; zsh uses `$pipestatus`, not `$PIPESTATUS`. If the hub can't reach proxy.golang.org, new-dependency packages show `[setup failed]`, not test failure.
 

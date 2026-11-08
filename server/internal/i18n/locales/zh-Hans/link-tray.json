@@ -121,5 +121,12 @@
   "error_no_service": "后台服务还没安装：先点「安装后台服务」",
   "error_install_in_terminal": "这里装不了：在终端里运行 persona-link install",
   "error_pair_unreachable": "连不上 hub（{hosts}）：检查 hub 在不在跑、地址对不对、这台电脑的网络通不通，再试一次\n（原始错误：{detail}）",
-  "error_pair_rejected": "hub 不认这条配对链接（过期了、用过了或被撤销了）：在「添加电脑」里拿一条新链接，粘贴到这里\n（原始错误：{detail}）"
+  "error_pair_rejected": "hub 不认这条配对链接（过期了、用过了或被撤销了）：在「添加电脑」里拿一条新链接，粘贴到这里\n（原始错误：{detail}）",
+  "action_rename": "给这台电脑改名…",
+  "rename_label": "在 hub 上的名字",
+  "rename_hint": "App、网页和管理界面里显示这个名字；这台电脑的 id 不变。",
+  "rename_save": "保存",
+  "rename_saving": "正在保存…",
+  "rename_cancel": "取消",
+  "renamed_ok": "这台电脑在 hub 上现在叫「{name}」"
 }

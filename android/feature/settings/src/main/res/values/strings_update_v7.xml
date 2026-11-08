@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="settings_update_v7_identity">The hub identity could not be verified. Check the pairing.</string>
+    <string name="settings_update_v7_pair_expired">The hub pairing expired. Pair again before checking for updates.</string>
+    <string name="settings_update_v7_local_permission">Allow local network access in system settings and try again.</string>
+    <string name="settings_update_v7_address_policy">This download address does not meet the connection security requirements. Check the hub address.</string>
+    <string name="settings_update_v7_invalid_info">The hub did not provide valid update information. Try again later.</string>
+    <string name="settings_update_v7_missing_apk">The hub did not provide the installation package. Try again later.</string>
+    <string name="settings_update_v7_check_network">Cannot connect to the hub to check for updates. Check the network and try again.</string>
+    <string name="settings_update_v7_download_network">The update download failed. Check the network connection to the hub and try again.</string>
+    <string name="settings_update_v7_save_storage">Cannot save the installation package. Check available storage and try again.</string>
+    <string name="settings_update_v7_digest">Package verification failed. Download it again.</string>
+    <string name="settings_update_v7_digest_missing">The update information has no valid SHA-256 checksum. Check for updates again.</string>
+    <string name="settings_update_v7_permission">Allow app installation in system settings and try again.</string>
+    <string name="settings_update_v7_archive">Cannot read the installation package. Download it again.</string>
+    <string name="settings_update_v7_package">The package is for a different app. Installation was cancelled.</string>
+    <string name="settings_update_v7_metadata_version">The package version does not match the update information. Check for updates again.</string>
+    <string name="settings_update_v7_not_newer">The package is not newer than the installed app. Installation was cancelled.</string>
+    <string name="settings_update_v7_signer_missing">Cannot read the app signature. Installation was cancelled.</string>
+    <string name="settings_update_v7_signer">The package signature does not match the installed app. Installation was cancelled.</string>
+    <string name="settings_update_v7_launch">Cannot open the system installer. Check storage and installation permission, then try again.</string>
+    <string name="settings_update_v7_system_permission">The system did not allow installation. Check installation permission and try again.</string>
+    <string name="settings_update_v7_read_launch">Cannot read the package or open the system installer. Download it again and retry.</string>
+    <string name="settings_update_v7_system_downgrade">The system rejected an older package version.</string>
+    <string name="settings_update_v7_system_signature">The system rejected a package whose signature differs from the installed app.</string>
+    <string name="settings_update_v7_system_invalid">The system could not validate the package or its signature. Download it again.</string>
+    <string name="settings_update_v7_system_storage">There is not enough storage. Free up space and try again.</string>
+    <string name="settings_update_v7_system_blocked">The system blocked installation. Check installation permission and system security settings.</string>
+    <string name="settings_update_v7_system_incompatible">The package is incompatible with this device.</string>
+    <string name="settings_update_v7_system_conflict">The package conflicts with the installed app. Check its version and signature.</string>
+    <string name="settings_update_v7_system_failed">System installation did not finish. Try again.</string>
+    <string name="settings_update_v7_native_title">Open native chats by default</string>
+    <string name="settings_update_v7_native_subtitle">Use chat bubbles when on, or the extension event details when off. Applies the next time you open an item.</string>
+    <string name="settings_update_v7_native_section">Inbox</string>
+</resources>

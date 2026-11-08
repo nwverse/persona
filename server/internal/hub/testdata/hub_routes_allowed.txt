@@ -52,12 +52,15 @@ GET /api/v1/machines/{mid}/git/branches
 GET /api/v1/machines/{mid}/git/diff
 GET /api/v1/machines/{mid}/git/log
 GET /api/v1/machines/{mid}/git/pr
+GET /api/v1/machines/{mid}/git/review
 GET /api/v1/machines/{mid}/git/show
 GET /api/v1/machines/{mid}/git/status
 GET /api/v1/machines/{mid}/omp-settings
 GET /api/v1/machines/{mid}/panes
 GET /api/v1/machines/{mid}/ports/{port}
 GET /api/v1/machines/{mid}/ports/{port}/connect
+GET /api/v1/machines/{mid}/preview/connect
+GET /api/v1/machines/{mid}/preview/servers
 GET /api/v1/machines/{mid}/stat
 GET /api/v1/managers
 GET /api/v1/mutes
@@ -131,6 +134,7 @@ POST /api/v1/machines/{mid}/panes/close
 POST /api/v1/machines/{mid}/panes/git
 POST /api/v1/machines/{mid}/panes/split
 POST /api/v1/machines/{mid}/ports/{port}/open
+POST /api/v1/machines/{mid}/preview/start
 POST /api/v1/machines/{mid}/spaces/{wid}/rename
 POST /api/v1/machines/{mid}/tabs/close
 POST /api/v1/machines/{mid}/tabs/rename
@@ -163,11 +167,13 @@ POST {bus.JoinPath}
 POST {peerPairPath}
 PUT /api/v1/admin/assistant
 PUT /api/v1/admin/hub
+PUT /api/v1/admin/machines/{id}
 PUT /api/v1/admin/network/access
 PUT /api/v1/admin/network/public
 PUT /api/v1/devices/{id}/prefs
 PUT /api/v1/hub/update/settings
 PUT /api/v1/looks/current
+PUT /api/v1/machines/{id}/name
 PUT /api/v1/machines/{mid}/agy-settings
 PUT /api/v1/machines/{mid}/claude-settings
 PUT /api/v1/machines/{mid}/codex-settings

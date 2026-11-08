@@ -123,6 +123,9 @@ func (s *Service) startOn(ctx context.Context, machine string, p StartParams, ma
 	if p.Space != "" && p.Space != SpaceHealth {
 		return proto.Session{}, badRequest(fmt.Errorf("space %q: health or none", p.Space))
 	}
+	if p.PermissionMode == "" && p.GuestTools == nil {
+		p.PermissionMode = s.settings(ctx).DefaultPermissionMode
+	}
 	var cwd string
 	var err error
 	if p.GuestTools != nil {

@@ -190,6 +190,21 @@ internal class AssistantSettingsState(
         loadMemory()
     }
 
+    /** A default for future conversations; never writes the current conversation's mode. */
+    suspend fun setDefaultPermission(mode: String) {
+        val config = state.value.config ?: return
+        if (config.manager.isNullOrBlank() || (config.defaultPermissionMode ?: "default") == mode) return
+        require(mode in listOf("default", "acceptEdits", "plan", "auto", "bypassPermissions"))
+        perform(SettingsText(R.string.assistant_settings_permission_failed)) {
+            val updated = api.updateConfig(AssistantConfigUpdate(defaultPermissionMode = mode))
+            check(updated.manager == config.manager) { "Assistant identity changed" }
+            check(updated.defaultPermissionMode == mode || (mode == "default" && updated.defaultPermissionMode.isNullOrBlank())) {
+                "The hub did not save the permission default"
+            }
+            set { copy(config = updated) }
+        }
+    }
+
     suspend fun setFollowPhone(follow: Boolean) {
         if (state.value.busy || follow == state.value.followPhone) return
         timezone.followPhone = follow

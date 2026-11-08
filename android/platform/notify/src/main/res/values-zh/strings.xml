@@ -40,7 +40,7 @@
     <string name="notify_body_elicitation">MCP 表单：%1$s</string>
     <string name="notify_title_done">做完了</string>
     <string name="notify_title_alert">提醒</string>
-    <string name="notify_stopped_title">后台连接被你停止了</string>
+    <string name="notify_stopped_title">后台连接已暂停</string>
     <string name="notify_stopped_text">点「恢复」重新接收通知</string>
     <string name="notify_resume">恢复</string>
     <string name="notify_public_title">Persona 有新消息</string>

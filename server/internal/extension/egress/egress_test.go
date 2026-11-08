@@ -47,6 +47,21 @@ func newProxy(t *testing.T, target string, upstream func(*url.URL) (*url.URL, er
 	return p
 }
 
+// shortTempDir is a temporary directory for Unix sockets: sun_path holds 104 bytes on macOS, and t.TempDir() under
+// /var/folders/…/T/ with a test's name does not fit.
+func shortTempDir(t *testing.T) string {
+	t.Helper()
+	if runtime.GOOS == "windows" {
+		return t.TempDir()
+	}
+	dir, err := os.MkdirTemp("/tmp", "egress")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.RemoveAll(dir) })
+	return dir
+}
+
 func client(proxy string) *http.Client {
 	u, _ := url.Parse(proxy)
 	return &http.Client{Transport: &http.Transport{Proxy: http.ProxyURL(u)}}
@@ -227,16 +242,7 @@ func TestProxyUnixSocketIsTheExtension(t *testing.T) {
 	defer srv.Close()
 	p := newProxy(t, strings.TrimPrefix(srv.URL, "http://"), nil)
 	p.Register("notes", Rule{Hosts: []string{"api.example.com"}})
-	// sun_path holds 104 bytes on macOS; t.TempDir() under /var/folders/…/T/ with this test's name does not fit.
-	dir := t.TempDir()
-	if runtime.GOOS != "windows" {
-		var err error
-		if dir, err = os.MkdirTemp("/tmp", "egress"); err != nil {
-			t.Fatal(err)
-		}
-		t.Cleanup(func() { os.RemoveAll(dir) })
-	}
-	sock := filepath.Join(dir, "proxy.sock")
+	sock := filepath.Join(shortTempDir(t), "proxy.sock")
 	if err := p.ListenUnix("notes", sock); err != nil {
 		t.Fatal(err)
 	}
@@ -466,12 +472,7 @@ func TestProxyTunnelHalfClose(t *testing.T) {
 	p := newProxy(t, ln.Addr().String(), nil)
 	purl := p.Register("notes", Rule{Hosts: []string{"api.example.com"}})
 	pu, _ := url.Parse(purl)
-	dir, err := os.MkdirTemp("/tmp", "egress")
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { os.RemoveAll(dir) })
-	sock := filepath.Join(dir, "proxy.sock")
+	sock := filepath.Join(shortTempDir(t), "proxy.sock")
 	if err := p.ListenUnix("notes", sock); err != nil {
 		t.Fatal(err)
 	}

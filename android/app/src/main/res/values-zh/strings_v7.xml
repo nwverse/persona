@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_capsule_undo_complete">撤销完成</string>
+    <string name="app_capsule_complete">完成此事</string>
+    <string name="app_capsule_attachment">附件：%1$s</string>
+    <string name="app_capsule_image_full_chat">图片 · 在完整会话查看</string>
+    <string name="app_capsule_audio_full_chat">语音 · 在完整会话查看</string>
+    <string name="app_capsule_video_full_chat">视频 · 在完整会话查看</string>
+    <string name="app_capsule_sticker">表情</string>
+    <string name="app_capsule_forwarded_history">聊天记录：%1$s</string>
+    <string name="app_capsule_reply_pending_check">回复尚未完成，请在完整会话核对结果</string>
+    <string name="app_capsule_changed_return_list">会话已变化，请返回列表</string>
+    <string name="app_capsule_item_changed_return_list">事项已变化，请返回列表</string>
+    <string name="app_capsule_message_notice_gone">新消息提示已失效</string>
+    <string name="app_capsule_choose_chat">请选择会话</string>
+    <string name="app_capsule_body_unsynced">会话正文尚未同步，请稍后重试</string>
+    <string name="app_capsule_prior_reply_check">上次回复结果尚待核对，请打开完整会话</string>
+    <string name="app_capsule_send_unconfirmed_draft">发送结果未确认，草稿已保留，请在完整会话核对</string>
+    <string name="app_capsule_connect_first">请先连接 hub</string>
+    <string name="app_capsule_read_partial_failed">部分已读同步失败，未读提醒已保留，请重试</string>
+    <string name="app_capsule_read_partial_skipped">部分消息尚未加载或已有新消息，请打开查看；未读提醒已保留</string>
+    <string name="app_capsule_item_updated_check">事项已有更新，请重新查看后再处理</string>
+    <string name="app_capsule_action_unavailable">此操作尚不可用</string>
+    <string name="app_capsule_read_sync_failed">已读状态同步失败</string>
+    <string name="app_capsule_read_retry">已读同步失败，请重试</string>
+    <string name="app_capsule_messages_unsynced">消息尚未同步完整，请恢复连接后重试</string>
+    <string name="app_capsule_new_message_stay">当前会话有新消息，先留在这里</string>
+    <string name="app_capsule_you">你</string>
+    <string name="app_capsule_original_chat">原会话</string>
+</resources>

@@ -151,3 +151,30 @@ func TestRuntimeFallbackInEachLanguage(t *testing.T) {
 		}
 	}
 }
+
+// What the node says about a Claude session outside Persona's terminals (why it is view only, that it waits on the
+// computer) goes out in the user's language; zh-Hans as the node wrote it, anything else untouched.
+func TestClaudeLiveTextInEachLanguage(t *testing.T) {
+	for _, reason := range []string{proto.ReadOnlyClaudeBg, proto.ReadOnlyClaudeNoInbox, proto.ReadOnlyClaudeInbox} {
+		s := proto.Session{ReadOnlyReason: reason, AttentionReason: proto.AttentionClaudeComputer}
+		localizeSession(i18n.En, &s)
+		if s.ReadOnlyReason == reason || s.ReadOnlyReason == "" || s.AttentionReason == proto.AttentionClaudeComputer {
+			t.Errorf("en: %q / %q", s.ReadOnlyReason, s.AttentionReason)
+		}
+		j := proto.Session{ReadOnlyReason: reason}
+		localizeSession(i18n.Ja, &j)
+		if j.ReadOnlyReason == reason || j.ReadOnlyReason == s.ReadOnlyReason {
+			t.Errorf("ja: %q", j.ReadOnlyReason)
+		}
+		z := proto.Session{ReadOnlyReason: reason}
+		localizeSession(i18n.ZhHans, &z)
+		if z.ReadOnlyReason != reason {
+			t.Errorf("zh-Hans: %q", z.ReadOnlyReason)
+		}
+	}
+	other := proto.Session{ReadOnlyReason: "仅查看：这个子 Agent 由父 Agent 驱动"}
+	localizeSession(i18n.En, &other)
+	if other.ReadOnlyReason != "仅查看：这个子 Agent 由父 Agent 驱动" {
+		t.Errorf("a reason the hub does not know was rewritten: %q", other.ReadOnlyReason)
+	}
+}
