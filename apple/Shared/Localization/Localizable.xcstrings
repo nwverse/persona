@@ -131552,6 +131552,144 @@
           }
         }
       }
+    },
+    "Send Now [Queue Strip]": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Send Now"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "今すぐ送信"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "立即发送"
+          }
+        }
+      },
+      "extractionState": "manual"
+    },
+    "Send the queued messages now? [Queue Strip]": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Send the queued messages now?"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "送信待ちのメッセージを今すぐ送りますか？"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "现在就发送排队的消息？"
+          }
+        }
+      },
+      "extractionState": "manual"
+    },
+    "Sends the queued messages to the agent now. A command it is running keeps running in the background; a reply it is writing starts again with your message. [Queue Strip]": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sends the queued messages to the agent now. A command it is running keeps running in the background; a reply it is writing starts again with your message."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "送信待ちのメッセージを今すぐエージェントに送ります。実行中のコマンドはバックグラウンドで続き、書いている途中の返信はあなたのメッセージを含めてやり直します。"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "现在就把排队的消息发给 Agent。它正在跑的命令会转到后台继续跑；正在写的回复会带上你的消息重新开始。"
+          }
+        }
+      },
+      "extractionState": "manual"
+    },
+    "Sent to the agent now [Queue Strip]": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sent to the agent now"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "今すぐエージェントに送りました"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "已立即发给 Agent"
+          }
+        }
+      },
+      "extractionState": "manual"
+    },
+    "Move Up [Queue Strip]": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Move Up"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "上へ移動"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "上移"
+          }
+        }
+      },
+      "extractionState": "manual"
+    },
+    "Move Down [Queue Strip]": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Move Down"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "下へ移動"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "下移"
+          }
+        }
+      },
+      "extractionState": "manual"
     }
   },
   "version" : "1.0"
