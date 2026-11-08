@@ -97,6 +97,7 @@ The clients draw the same states differently. A consumer maps what it draws onto
 | [sends.json](sends.json) | Sending, the receipt, the transcript copy, refusals and retries |
 | [cards.json](cards.json) | Answering cards; old snapshots and replays after an answer |
 | [reconnect.json](reconnect.json) | Disconnects, lost and duplicated pushes, gaps |
+| [relaunch.json](relaunch.json) | The app killed and started again from what it stored |
 | [restart.json](restart.json) | Hub restarts, resumable or not |
 | [devices.json](devices.json) | Two devices on the same chat |
 | [wake.json](wake.json) | Background tasks waking the agent |
