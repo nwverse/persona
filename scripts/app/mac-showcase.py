@@ -5,8 +5,10 @@ Build PersonaMac separately through xcode-slot, then:
   python3 scripts/app/mac-showcase.py --app /tmp/build/Build/Products/Debug/Persona.app \
       --output /tmp/mac-showcase-glass --port 17490
 
-No production hub, keychain credentials or image hosting is used. Each snapshot is
-served unchanged by mock HTTP; the app's normal sidebar/page renderer draws it.
+No production hub, keychain credentials or image hosting is used. The actual Mac
+sidebar/page renderer draws either auxiliary mock HTTP or an installed extension
+on a dedicated loopback test hub. The capture manifest records that distinction.
+Long shared pages include a second capture after scrolling to the bottom.
 """
 from __future__ import annotations
 
@@ -26,6 +28,7 @@ import uuid
 
 ROOT = Path(__file__).resolve().parents[2]
 SNAPSHOTS = ROOT / "schema/extension/examples/showcase"
+BOTTOM_PAGES = {"row", "field", "chart", "stat_grid", "table", "code-browse", "code-review", "code-review-v5"}
 
 
 def scenes(names=None, snapshots=SNAPSHOTS):
@@ -37,7 +40,7 @@ def scenes(names=None, snapshots=SNAPSHOTS):
     for name in selected:
         data = files[name].read_bytes()
         view = json.loads(data)
-        result.append({"name": name, "title": view.get("title") or name})
+        result.append({"name": name, "title": view.get("title") or name, "bottom": name in BOTTOM_PAGES})
         hashes[name] = hashlib.sha256(data).hexdigest()
     return result, hashes
 
@@ -132,13 +135,16 @@ def main():
                 if status != 0:
                     raise RuntimeError("Mac app failed: " + log[-3000:])
                 captures = json.loads((output / "captures.json").read_text())
-                expected = {(scene["name"], appearance) for scene in selected for appearance in ("light", "dark")}
-                actual = {(capture["sample"], capture["appearance"]) for capture in captures}
+                expected = {(scene["name"], appearance, position) for scene in selected
+                            for appearance in ("light", "dark") for position in (["top", "bottom"] if scene["bottom"] else ["top"])}
+                actual = {(capture["sample"], capture["appearance"], capture["position"]) for capture in captures}
                 if actual != expected or len(captures) != len(expected):
                     raise RuntimeError("The app did not capture every selected page and appearance")
                 if any(not (output / capture["file"]).is_file() for capture in captures):
                     raise RuntimeError("A reported capture file is missing")
                 (output / "source-sha256.json").write_text(json.dumps(hashes, indent=2, sort_keys=True) + "\n")
+                (output / "capture-mode.json").write_text(json.dumps({"backend": "installed-test-extension" if args.hub_config else "auxiliary-mock-http",
+                    "style": args.style, "capture": "actual-app-offscreen", "source": "shared-snapshot-inputs"}, indent=2) + "\n")
                 (output / "app.log").write_text(log)
                 print("RESULT Mac showcase: PASS; %d captures; %.1fs; %s" % (len(captures), time.monotonic() - started, output))
                 return 0

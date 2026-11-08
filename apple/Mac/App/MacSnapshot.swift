@@ -115,7 +115,7 @@ import SwiftUI
 
     /// Every scroll view in the window that scrolls vertically (SwiftUI's `List`, `Form` and `ScrollView` are
     /// NSScrollViews with flipped document views) moved `points` further down its content, as far as it goes.
-    private static func scroll(by points: Double) {
+    static func scroll(by points: Double) {
         guard points > 0, let frameView = mainWindow?.contentView?.superview else { return }
         for view in descendants(of: frameView) {
             guard let scroll = view as? NSScrollView, isShown(scroll), let doc = scroll.documentView, doc.isFlipped else { continue }

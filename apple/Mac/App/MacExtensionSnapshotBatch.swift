@@ -16,11 +16,13 @@ import SwiftUI
     struct Scene: Decodable {
         var name: String
         var title: String
+        var bottom: Bool = false
     }
 
     private struct Capture: Encodable {
         var sample: String
         var appearance: String
+        var position: String
         var file: String
     }
 
@@ -60,8 +62,17 @@ import SwiftUI
                     let window = try await readyWindow(title: scene.title)
                     let url = output.appending(path: "mac-showcase-\(scene.name)-\(appearance).png")
                     guard MacSnapshot.capture(to: url, window: window) else { throw Failure.capture }
-                    captures.append(Capture(sample: scene.name, appearance: appearance, file: url.lastPathComponent))
+                    captures.append(Capture(sample: scene.name, appearance: appearance, position: "top", file: url.lastPathComponent))
                     FileHandle.standardError.write(Data("extension snapshot wrote \(url.lastPathComponent)\n".utf8))
+                    if scene.bottom {
+                        MacSnapshot.scroll(by: Double.greatestFiniteMagnitude)
+                        try await Task.sleep(for: .milliseconds(600))
+                        guard !NSApp.isActive, !window.isKeyWindow else { throw Failure.focusChanged }
+                        let bottom = output.appending(path: "mac-showcase-\(scene.name)-bottom-\(appearance).png")
+                        guard MacSnapshot.capture(to: bottom, window: window) else { throw Failure.capture }
+                        captures.append(Capture(sample: scene.name, appearance: appearance, position: "bottom", file: bottom.lastPathComponent))
+                        FileHandle.standardError.write(Data("extension snapshot wrote \(bottom.lastPathComponent)\n".utf8))
+                    }
                 }
             }
             let encoder = JSONEncoder(); encoder.outputFormatting = [.prettyPrinted, .sortedKeys]

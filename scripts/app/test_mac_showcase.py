@@ -29,8 +29,16 @@ class ShowcasePlanTests(unittest.TestCase):
             (root / "a.json").write_text('{"title":"A","sections":[]}')
             (root / "b.json").write_text('{"sections":[]}')
             scenes, hashes = RUNNER.scenes(["b", "a"], snapshots=root)
-            self.assertEqual(scenes, [{"name": "b", "title": "b"}, {"name": "a", "title": "A"}])
+            self.assertEqual(scenes, [{"name": "b", "title": "b", "bottom": False}, {"name": "a", "title": "A", "bottom": False}])
             self.assertEqual(set(hashes), {"a", "b"})
+
+    def test_long_pages_also_request_bottom_captures(self):
+        scenes, _ = RUNNER.scenes()
+        by_name = {scene["name"]: scene for scene in scenes}
+        for name in RUNNER.BOTTOM_PAGES:
+            self.assertTrue(by_name[name]["bottom"])
+        self.assertFalse(by_name["button"]["bottom"])
+        self.assertFalse(by_name["widget-small"]["bottom"])
 
     def test_empty_duplicate_and_unknown_selections_are_rejected(self):
         for names in ([], ["button", "button"], ["missing"], ["../button"]):
