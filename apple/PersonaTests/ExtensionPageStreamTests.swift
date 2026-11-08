@@ -30,10 +30,10 @@ import Testing
         }
     }
 
-    private func setup(_ socket: Socket) -> (LiveConnection, ExtensionPageStream) {
+    private func setup(_ socket: Socket, context: ExtensionUIContext = .here()) -> (LiveConnection, ExtensionPageStream) {
         LiveConnection.makeLocal = { socket }
         let connection = LiveConnection(); connection.usesExtensionUIStream = true; connection.connect(.demo)
-        let page = ExtensionPageStream(connection: connection, owner: "example", contribution: "page", context: .here(), state: "")
+        let page = ExtensionPageStream(connection: connection, owner: "example", contribution: "page", context: context, state: "")
         page.setVisible(true)
         return (connection, page)
     }
@@ -45,9 +45,22 @@ import Testing
 
     @Test func opensWithExplicitStateAndHonestCapabilities() throws {
         let previous = LiveConnection.makeLocal; defer { LiveConnection.makeLocal = previous }
-        let socket = Socket(); let (connection, page) = setup(socket); defer { page.close(); connection.disconnect() }
+        let socket = Socket()
+        let context = ExtensionUIContext.here(launcher: "test-launcher", machine: "test-computer", item: "test-item", size: "full")
+        let (connection, page) = setup(socket, context: context); defer { page.close(); connection.disconnect() }
         #expect(socket.request?["request"]?.string == "open")
         #expect(socket.request?["state"] == .string(""))
+        #expect(ExtensionPageStream.uiVersion == 5)
+        #expect(socket.request?["context"]?["ui_version"] == .number("5"))
+        #expect(context.uiVersion == 3 && ExtensionUIContext.here().uiVersion == 3)
+        #expect(socket.request?["context"]?["launcher"] == .string("test-launcher"))
+        #expect(socket.request?["context"]?["machine"] == .string("test-computer"))
+        #expect(socket.request?["context"]?["item"] == .string("test-item"))
+        #expect(socket.request?["context"]?["size"] == .string("full"))
+        let locale = try #require(context.locale)
+        let tz = try #require(context.tz)
+        #expect(socket.request?["context"]?["locale"] == .string(locale))
+        #expect(socket.request?["context"]?["tz"] == .string(tz))
         #expect(socket.request?["context"]?["stream"]?["components"]?.array?.contains(.string("html")) == false)
         socket.snapshot()
         #expect(page.ready && page.tree?.version == 1)

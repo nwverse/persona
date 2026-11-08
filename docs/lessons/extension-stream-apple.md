@@ -76,6 +76,12 @@ Shared legacy snapshots can reuse an action name across code-review diffs. A nat
 
 Exercise both direct contributions and state-selected pushed pages. A search fixture that always returns the static query-`1` snapshot can pass initial parity but fail a real query such as `02`. Filtering only when the factory's name is `list` still misses a `showcase` factory pushed with `{p: "list"}`. Use the selected page and submitted values for dynamic responses, preserving the unchanged initial snapshots; test both routes and an empty-result query.
 
+## Native component negotiation also needs the correct UI version
+
+The full native page renderer supports UI v5 review controls, but its open inherited the shared read-only context's v3 declaration. Against the same installed process-mode fixture, a v3 open of `code-review-v5` was rejected while a v5 open committed a snapshot and correlated close. A rendered page alone concealed the rejection because initial read-only negotiation can legitimately fall back to HTTP.
+
+Declare v5 specifically on native full-page opens, alongside the actual supported component list. Keep the shared Widget/Intent read-only context unchanged. Pin the emitted version in a request test and require positive native commits during installed-extension screenshot acceptance; do not remove compatibility fallback or treat a legacy page as native evidence.
+
 ## Evidence boundaries
 
 Unit tests use canonical valid/invalid fixtures and exact fence traces. Actual UI tests assert committed stream revisions, not just a loaded page that might be HTTP fallback. Screenshots contain synthetic data only; GUI captures are limited to the App window without other windows/desktop content. Clearly label offscreen rendering as such.
