@@ -51,6 +51,11 @@ PY
     ) || true
   fi
   if [ -n "$SIM" ]; then
+    if [ "$code" != 0 ]; then
+      # Capture the failed device before cleanup destroys its boot evidence.
+      ci_run 'Capture simulator state' 60 bash -c 'xcrun simctl list devices -j > "$1"' -- "$OUTPUT/simulator-state.json" || printf 'apple-ci: simulator state capture failed\n' >&2
+      ci_run 'Capture simulator diagnostics' 120 xcrun simctl diagnose --output="$OUTPUT/simulator-diagnostics" || printf 'apple-ci: simulator diagnostics failed; preserving original exit %s\n' "$code" >&2
+    fi
     ci_run 'Shut down owned simulator' 120 xcrun simctl shutdown "$SIM" || true
     ci_run 'Delete owned simulator' 120 xcrun simctl delete "$SIM" || true
   fi
