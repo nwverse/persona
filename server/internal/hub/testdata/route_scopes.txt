@@ -188,6 +188,7 @@ machines.read        GET /api/v1/machines/{id}/usage
 -                    GET /api/v1/machines/{mid}/git/diff
 -                    GET /api/v1/machines/{mid}/git/log
 -                    GET /api/v1/machines/{mid}/git/pr
+-                    GET /api/v1/machines/{mid}/git/review
 -                    GET /api/v1/machines/{mid}/git/show
 -                    GET /api/v1/machines/{mid}/git/status
 -                    GET /api/v1/machines/{mid}/health/reports
@@ -198,6 +199,8 @@ machines.read        GET /api/v1/machines/{id}/usage
 -                    GET /api/v1/machines/{mid}/panes
 -                    GET /api/v1/machines/{mid}/ports/{port}
 -                    GET /api/v1/machines/{mid}/ports/{port}/connect
+-                    GET /api/v1/machines/{mid}/preview/connect
+-                    GET /api/v1/machines/{mid}/preview/servers
 machines.read        GET /api/v1/machines/{mid}/stat
 -                    GET /api/v1/managers
 -                    GET /api/v1/messaging
@@ -233,6 +236,7 @@ agents.read          GET /api/v1/workspaces
 -                    GET /i/{code}
 -                    GET /i/{code}/docker
 -                    GET {base}/catalog
+-                    GET {base}/market-settings
 -                    GET {base}/markets
 -                    GET {bus.Path}
 -                    GET {devicewire.RelayPath}
@@ -327,6 +331,7 @@ inbox.write          POST /api/v1/inbox/refresh
 inbox.write          POST /api/v1/inbox/{id}/doc/status
 inbox.write          POST /api/v1/inbox/{id}/done
 inbox.write          POST /api/v1/inbox/{id}/draft
+inbox.write          POST /api/v1/inbox/{id}/handoff
 inbox.write          POST /api/v1/inbox/{id}/reply
 inbox.write          POST /api/v1/inbox/{id}/suggestion
 agents.control       POST /api/v1/interactions/{id}/choose
@@ -364,6 +369,7 @@ agents.control       POST /api/v1/interactions/{id}/resolve
 -                    POST /api/v1/machines/{mid}/panes/git
 -                    POST /api/v1/machines/{mid}/panes/split
 -                    POST /api/v1/machines/{mid}/ports/{port}/open
+-                    POST /api/v1/machines/{mid}/preview/start
 -                    POST /api/v1/machines/{mid}/reconnect
 -                    POST /api/v1/machines/{mid}/spaces/{wid}/rename
 -                    POST /api/v1/machines/{mid}/tabs/close
@@ -413,13 +419,13 @@ todos.write          POST /api/v1/todos
 -                    POST {base}/catalog/preview
 -                    POST {base}/markets
 -                    POST {base}/markets/{mid}/refresh
--                    POST {base}/markets/{mid}/trust
 -                    POST {bus.JoinPath}
 -                    POST {peerPairPath}
 -                    PUT /api/v1/admin/assistant
 -                    PUT /api/v1/admin/extensions/{id}/enabled
 -                    PUT /api/v1/admin/extensions/{id}/sandbox
 -                    PUT /api/v1/admin/hub
+-                    PUT /api/v1/admin/machines/{id}
 -                    PUT /api/v1/admin/network/access
 -                    PUT /api/v1/admin/network/public
 -                    PUT /api/v1/admin/usage-sources
@@ -449,6 +455,7 @@ inbox.write          PUT /api/v1/inbox/{id}/parent
 kb.write             PUT /api/v1/kb/{kind}/{id}
 -                    PUT /api/v1/launchers/{name}
 -                    PUT /api/v1/looks/current
+-                    PUT /api/v1/machines/{id}/name
 -                    PUT /api/v1/machines/{mid}/agy-settings
 -                    PUT /api/v1/machines/{mid}/botmux
 -                    PUT /api/v1/machines/{mid}/browser
@@ -468,6 +475,7 @@ todos.write          PUT /api/v1/todos/{id}/agents/{mid}/{sid}
 todos.write          PUT /api/v1/todos/{id}/spaces/{mid}/{space...}
 -                    PUT /api/v1/todos/{id}/thread
 -                    PUT /api/v1/workspace-board/settings
+-                    PUT {base}/market-settings
 -                    PUT {base}/markets/{mid}
 -                    PUT {base}/markets/{mid}/token
 -                    {from}/

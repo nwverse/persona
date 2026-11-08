@@ -86,7 +86,11 @@ func TestOtherAgentStartTellsHerdrCodex(t *testing.T) {
 				}
 			})
 			_, _ = n.startOtherAgent(ctx, n.hosts.Get(host.Herdr).(*herdrHost), home, tc.launcher, tc.kind, "hi", "", "w1", "")
-			want := call("pane.send_input", map[string]any{"pane_id": "w1:p2", "keys": []string{"Enter"}, "text": tc.want})
+			text := tc.want
+			if tc.shell == "/bin/zsh" { // with the node's directory, without the assistant's environment (agentenv.go)
+				text = inAgentEnv(n.dir, text, shellQuote)
+			}
+			want := call("pane.send_input", map[string]any{"pane_id": "w1:p2", "keys": []string{"Enter"}, "text": text})
 			if got := f.trace("pane.send_input"); len(got) != 1 || got[0] != want {
 				t.Errorf("typed %v, want %s", got, want)
 			}

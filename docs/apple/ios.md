@@ -15,6 +15,7 @@ Mac's previous / next Agent follows pinned order then recent activity in this mo
 ## iPhone Agents 分组入口与长列表（#5766）
 
 - 快速筛选下方增加独立 List 单元中的分组菜单，始终显示当前分组名称，不与搜索输入框共用单元。菜单与原 ⋯ 菜单共用 `dev.grouping`，重启后保留选择。已有分组和默认值不变，平铺视图仍叫「最近使用」。
+- In the new shell a **Personal Agents ›** pill sits right of the grouping menu (`AgentsPersonalPill`, #140) and opens the personal agents page: on a phone the shell has no toolbar, so this is the only way there. When the two don't fit on one line (large text) they stack. The old layout, iPad and Mac keep the toolbar button and show no pill. UI test `PersonalAgentsEntryTests`.
 - 分组折叠继续使用 `dev.folded`，搜索时展开匹配内容。
 - 长列表首次显示前 20 项并提供「显示全部 N 个」；不超过 25 项时全部显示。适用于最近使用、状态、待办、机器的活跃行，以及项目和工作树的活跃项；快速筛选或搜索时不截断。Mac 不截断，保留 ↑ / ↓ 导航行为。
 - 「显示全部」的展开状态与分组折叠分开，不跨重启保存。项目内一个多 Agent tab 仍作为一项，不拆散 tab。
@@ -63,9 +64,13 @@ Chat page:
     ready to send with a note; only available when opened from a chat. Pending input images can also be tapped to edit before sending.
   - Screenshots: `-openFirstImage YES` / `-openViewedImage N`, `-showViewerChromeHidden YES` hides bars, `-showViewerInfo YES` opens info.
 - Background sync (push + pull like IM; only foregrounded and connected): hub pushes which session changed; App pulls increments by cursor.
-  Agents (`AgentSync`): changed `rev` in session list / `revs` triggers `after_seq` fetch, merged into memory if present,
-  otherwise written to disk (`ChatCache.folder`, currently `chats-v3`) so opening is already current; scope active Agents + sessions used within 24 hours (at most 40, newest first, concurrency 3),
-  currently viewed chats rely on their subscriptions without duplicate fetches. Working Agents fetch at most once per minute (`AgentSync.workingGap`; each fetch decodes and rewrites the entire disk cache),
+  Agents (`AgentSync`): changed `rev` in session list / `revs` triggers `after_seq` prefetch into the disk cache only for chats not retained in memory,
+  so opening is already current; scope active Agents + sessions used within 24 hours (at most 40, newest first, concurrency 3).
+  Retained chats without a subscription owner keep their store and covered sequence unchanged until their next visible subscription replays `since_seq`.
+  Eligibility is rechecked when queued work starts; a visible catch-up cannot apply after the last owner leaves or the store is replaced.
+  Currently viewed chats rely on their subscriptions without duplicate fetches. When a subscription stops (the session's `updated_at` is newer
+  than the open chat's newest line and no items came for 4 seconds), the chat fetches after its `covered` and merges silently: at most every
+  10 seconds, once per `updated_at` (`AgentSyncPacing.catchUpAt`, the rule of the web's `web/src/lib/stale-page.ts`). Working Agents fetch at most once per minute (`AgentSync.workingGap`; each fetch decodes and rewrites the entire disk cache),
   immediately at turn end / Needs you (most likely to open); 19-minute real-hub replay: 45 calls/minute → 9 (2026-11-02 battery investigation). Lark (`LarkSync`): hub forwards gateway live events (`lark`), refreshing Inbox Lark chats and open chats
   (polling fallback only: list 90 seconds, chat 60); changed Inbox chats fetch the newest page into `lark-chat-<id>` cache; on hub connection catch up latest 20;
   unread chats open from cache if it reaches the first unread message.
@@ -75,6 +80,14 @@ Chat page:
 - Lazy images: history pages and pushes omit image bytes (`lazy_images`, reducing pages from MB to hundreds of KB), dimensions only; visible rows fetch through
   `ImagePayload.ref` (`ChatImageLoader`: one download, NSCache + `Caches/chat-images`, immutable images valid forever),
   reserving dimensions before arrival to avoid jumps. Thumbnails and full viewer share it; locally sent images retain inline base64.
+  A failed load (hub unreachable, download failed) does not spin forever (#182): tool-result and file-page images (`Base64Image`) say
+  "Image didn't load. Tap to retry" on the placeholder, and the viewer's page says so with Retry, keeping its bars (and Close) and the
+  page's own backdrop while it is the page shown; downloaded bytes that are not an image are not kept on disk.
+  Sent photos (`SentPhotos`, the sending bubble, both `ChatThumbnail`) and the images viewed this turn (`ViewedImageThumb`) use the
+  same placeholder (`ImageNotLoaded`: narrow ones fall back to "Retry" or the symbol; bytes already here that don't decode say
+  "Can't show this image", without a retry); a file's thumbnail known only by path keeps its symbol (`FileThumbnails` keeps
+  that failure for the session, #559). Their thumbnails sit inside the tile's button that opens the viewer, so they record a
+  failure in `ImageRetries` and that button asks the hub again instead of opening the viewer, and VoiceOver reads it as the retry.
 - Links (`Views/Link/LinkSheet.swift`): chat http(s) opens an in-App bottom card like Telegram: full screen immediately, at 60% pulled down the chat remains usable, further down closes;
   behind a 60% card chat still scrolls and accepts input (`presentationBackgroundInteraction`). Lark docs / Knowledge use native `FeishuDocReader`,
   other websites `WebViewPool`: preload first 3 links in each appearing reply, at most 6 resident WKWebViews (LRU), sharing default disk website data (cache, login),
@@ -372,6 +385,15 @@ Chat page:
   keys/input under View terminal; unparseable dialog shows terminal directly. DEBUG `-showSampleScreen YES`.
 - Interaction panel above input: questions (`QuestionForm`, iOS grouped list, question + rounded choice group, terminal-style numbered circles become checks, "(Recommended)" shown as Recommended badge but original sent; Other answer… last row becomes input on tap; single-question single-choice submits immediately, multiple title "Heading · 1/2", small Previous / Next / Submit below, auto-next after single choice; `-showSampleQuestion YES`), plans (Markdown + full screen, Approve and run automatically /
   Approve and auto-accept edits / Request changes with feedback), permissions (Allow / Deny / Always allow this session), terminal (screen + parsed choices + keys + text).
+- Questions the assistant sees first (#544, iOS and Mac; `docs/assistant/assistant.md` "Assistant answers questions first", the web's rules in `docs/web/web.md`; `Shared/Delegated.swift`, `Views/Interactions/DelegateViews.swift`):
+  a card with `delegating: true` shows **Assistant is looking** above its questions and can still be answered (the first answer wins). It gets no haptic or notification
+  (`Delegated.announces`; Mac `MacAttention.lookingOnly`, watch `WatchInteractions`), and rings like a new card when the hub sends it again without `delegating`. The hub still counts it as pending, so lists and badges show Needs you meanwhile.
+  `delegate` is shown as **What the assistant found** (What / Why now / Recommended / If not / Why you decide / Deadline, empty ones left out); a `recommend` that is a choice's own label (several questions joined with `；`) tags that choice **Assistant's pick** instead.
+  `interaction_resolved` with `answered_by: "assistant"` leaves an **Answered by the assistant** card above the input (answer, reason, close button; the latest 50 are kept in memory), also when this device's own answer came second (the hub's `already` reply).
+  **Change Answer** (sessions that take messages only) opens a sheet with each question's choices and Other answer…, sends only the questions you changed to `POST /api/v1/interactions/{id}/reanswer`, and `interaction_reanswered` marks it **You changed it** with the assistant's answer.
+  Session info lists the session's questions the assistant answered (`GET /api/v1/interactions/history`, newest first); a hub without the route shows none. The history keeps the assistant's answer, so a change shows only on devices that saw it.
+  Both requests name the card's or session's `manager` as `?manager=` (the question is no longer pending, so the hub routes by the manager named; docs/protocol/protocol.md "Per-manager routing").
+  DEBUG `-openChangeAnswer YES` opens the sheet of the first answered card; mock `MOCK_DELEGATE=1` (`docs/operations/testing.md`).
 - Codex / internal Codex fork cards (`agent`, `docs/integrations/codex.md` ("Questions and approvals")): Codex has a question / Codex needs permission, same `QuestionForm`;
   `AgentPermissionForm` shows reason/full command or changes/Deny/Approve, Always approve · Stop asking for commands beginning with … (`always_label`, absent hides),
   Deny with reason… opens input (stops turn and sends reason next message). Claude card unchanged; inability to type (computer draft etc.) keeps card,
@@ -414,7 +436,7 @@ Shell tests: `ShellTests`, `ShellAvatarTests` (top-left avatar and Inbox badge),
 
 ## Foreground-only work (polling and reporting read state)
 
-Only two kinds of background work require "the view is in the window and its page is foregrounded" (`Views/TabActivity.swift`): **polling** and **reporting read state**.
+Foreground-only work requires "the view is in the window and its page is foregrounded" (`Views/TabActivity.swift`): **polling**, **reporting read state**, and a chat's **display subscription**.
 Previously the system `TabView` removed the old tab from the window on switching (`onDisappear`, cancellation of `.task`). The new shell's Assistant and Agents pages are a ZStack;
 the hidden page is merely transparent and noninteractive, **still mounted**, so `onDisappear` never fires: without a signal it would keep polling and mark messages read for the user.
 
@@ -422,7 +444,8 @@ the hidden page is merely transparent and noninteractive, **still mounted**, so 
 - `.tabActiveTask` / `.tabActiveTask(id:)` cancels when the page goes behind and restarts from scratch when foregrounded. `.onTabVisibility(appear:disappear:)` replaces paired
   `onAppear` / `onDisappear`, each called once; the system briefly remounting the old tab during a switch does not count as appearance.
 - Used for Lark chat's 60-second fallback polling and read reporting (catch up on foregrounding), and Machines-page (`MachinesView`) / machine-detail (`MachineDetailView`, including its computer-control and browser sections) polling.
-- **Not for** chat subscriptions, generating replies, Agent tasks, dictation or timers (work-row stopwatch, terminal 250ms tick, header auto-collapse). These continue regardless of the foreground page.
+- Shared `ChatView` transcript streams and visible/read ownership use paired visibility edges on iPhone as well as Mac. Hidden chats keep their store and scroll state but unsubscribe; returning resumes with the store's `since_seq`, without recreating the page or downloading all history.
+- **Not for** generating replies, Agent tasks, dictation or timers (work-row stopwatch, terminal 250ms tick, header auto-collapse). These continue regardless of the foreground page; releasing a display subscription does not interrupt work on the hub.
 - Under system `TabView`, timing matches window removal, so UI and behavior stay unchanged. New polling and read reporting must use these helpers, not direct `onDisappear` / `.task`.
 
 ## Persona top bar and sidebar (2026-10-30)
@@ -1181,7 +1204,7 @@ iPhone, iPad and Mac crashes go to the hub's `error_reports` (format and rules: 
 `-showNewChat YES`, `-tab dev|mail|settings`, `-openAssistant <machine>/<session>`, `-newAssistant YES`, `-openAssistantSidebar YES|0.5` (Persona tab sidebar open / halfway open), `-openFirstImage YES` (open the viewer for the first image in the chat), `-showScrollState YES|visible` (chat-list position and following state, readable by UI tests; `visible` draws it), `-openTerminalPane YES`, `-showPad YES`, `-showKeyMods locked,once,held` (set the terminal key bar's ctrl / alt / shift to these states), `-terminalWrap NO`, `-terminalTheme ink|midnight|persona|solarized`, `-terminalInputMode direct|field` (terminal direct typing / input field), `-terminalTipsSeen YES` (skip "Terminal tips"), `-openTerminalTips YES` (show them again), `-focusTerminalInput YES` (shows the keyboard in direct-typing mode), `-openShortcutsPanel YES`, `-openTerminalSettings YES`, `-showLark YES` (go directly to Inbox), `-larkFocus <messageId>` (scroll to that message), `-larkProfile <userId>` (show this person's profile card in the chat), `-larkPicker YES` (show the reaction picker for the last message), `-larkMoments <postId>` (open a Moments post), `-openInboxFirst YES` (open the first unhandled Inbox item), `-larkTop YES` (show the Lark chat from its earliest message, for screenshots of long cards), `-addMail YES` (open Manage email accounts › Add email account), `-tab settings -openHubUpdate YES` (Settings › hub, `docs/operations/hub-update.md`), `-tab settings -openSkills YES` (Settings › Assistant › Skills), `-tab settings -openAssistantPage assistant|routines|routine|intervalTask|followup|bypassTask|newRoutine|memory|memoryFile|memoryEdit|about` (pages under Settings › Assistant; `routine` opens the first scheduled task, `intervalTask` / `followup` the first interval / one-time task, `bypassTask` shows the "Allow everything?" confirmation in the editor, `newRoutine` shows the creation sheet with the "End-of-day review" template, `memoryFile` / `memoryEdit` opens the first memory / its editor). `scripts/app/sim.sh` wraps building, installation, pairing and launch (`SIM=<udid>` changes the simulator; concurrent agents must use separate simulators or overwrite each other's installs).
 Check history rendering: `-loadAll YES` (load all history and scroll to the top), `-showFromSeq <seq>` (display from the turn containing this user message; scroll positioning can drift in long histories),
 `-dropUsers YES` (hide that turn's user bubbles to fit its process rows and answer on one screen). `-openPane terminal|git|files` opens the chat page's terminal (from the bottom) / Git / Files;
-`-simulateTap <machine>/<session>` runs the notification-tap handler 4 seconds after launch; `-tab settings -openNotificationSettings YES` (Settings › Notifications; add `-openIslandSettings YES` for Dynamic Island); `-tab settings -openSentAsYou YES` (Settings › Sent as You, #5278); `-showFleetSample needsYou|working|done` (`-fleetDetails YES`, `-fleetIsland b|c|custom:<left>,<right>`) starts a Live Activity with fake data; `-showTestNotification permission|plan` shows a local notification matching an interaction push 3 seconds after backgrounding (UI tests use it to test buttons); `-openFilePath <path>` (open this file after opening the chat; `-openFileLine <line>` jumps to that line), `-showFilePerf YES` (write file-open timings and per-second frame rates to Caches/file-perf.log; `-showFileAutoScroll YES` scrolls the file at constant speed, `-showFileAutoScrollSpeed 1500` changes the speed); `-showMenu YES` opens the long-press action bar on the last reply (with `-showFromSeq`, that turn's reply); `-openWelcome YES` forgets pairing and exits demo mode at launch, stopping on the pairing page (`DemoModeTests`).
+`-simulateTap <machine>/<session>` runs the notification-tap handler 4 seconds after launch; `-tab settings -openNotificationSettings YES` (Settings › Notifications; add `-openIslandSettings YES` for Dynamic Island); `-tab settings -openSentAsYou YES` (Settings › Sent as You, #5278); `-showFleetSample needsYou|working|done` (`-fleetDetails YES`, `-fleetIsland b|c|custom:<left>,<right>`) starts a Live Activity with fake data; `-showTestNotification permission|plan` shows a local notification matching an interaction push 3 seconds after backgrounding (UI tests use it to test buttons); `-openFilePath <path>` (open this file after opening the chat; `-openFileLine <line>` jumps to that line), `-showFilePerf YES` (write file-open timings and per-second frame rates to Caches/file-perf.log; `-showFileAutoScroll YES` scrolls the file at constant speed, `-showFileAutoScrollSpeed 1500` changes the speed); `-showMenu YES` opens the long-press action bar on the last reply (with `-showFromSeq`, that turn's reply); `-openWelcome YES` forgets pairing and exits demo mode at launch, stopping on the pairing page (`DemoModeTests`); `-openChangeAnswer YES` opens Change Answer on the first **Answered by the assistant** card (#544).
 
 `-showVoiceOrbs YES`: without connecting to the hub or opening the microphone, show a sheet listing every phase of the voice orb (fake fluctuating volume) and two large orbs; combine with `-ui.style`, `-ui.scheme` for screenshots (#3506).
 

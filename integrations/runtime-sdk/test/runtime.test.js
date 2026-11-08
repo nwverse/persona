@@ -402,6 +402,30 @@ test('a runtime running several agents: launchers in hello and when they change,
   assert.deepEqual(n.last('runtime.launchers').launchers, [{ name: 'paseo-codex', agent: 'paseo' }])
 })
 
+test('archive: caps.archive only with both ways, calls reach the driver, one way alone is not offered', async (t) => {
+  const n = await startFakeNode(t)
+  const got = []
+  const rt = createRuntime(minimal({
+    archive: async (p) => got.push(['archive', p.session_id]),
+    unarchive: async (p) => got.push(['unarchive', p.session_id]),
+  }), { runtime: 'toy', socketPath: n.path, retryMs: 20 })
+  t.after(() => rt.stop())
+  rt.start()
+  await n.ready
+  assert.equal(n.hello.caps.archive, true)
+  assert.deepEqual(await n.peer.call('session.archive', { session_id: 's1' }), { ok: true })
+  assert.deepEqual(await n.peer.call('session.unarchive', { session_id: 's1' }), { ok: true })
+  assert.deepEqual(got, [['archive', 's1'], ['unarchive', 's1']])
+
+  const half = await startFakeNode(t)
+  const rt2 = createRuntime(minimal({ archive: async () => {} }), { runtime: 'half', socketPath: half.path, retryMs: 20 })
+  t.after(() => rt2.stop())
+  rt2.start()
+  await half.ready
+  assert.equal(half.hello.caps.archive, undefined)
+  await assert.rejects(half.peer.call('session.archive', { session_id: 's1' }), (err) => err.code === 'unsupported')
+})
+
 test('a watch for a session the node reads from its transcript streams live text only', async (t) => {
   const n = await startFakeNode(t)
   let paged = 0

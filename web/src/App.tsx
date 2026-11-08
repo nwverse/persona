@@ -24,6 +24,7 @@ import { Button, cx, EASE, IconButton, Loading, Spinner, Toasts } from "./ui/ato
 import { focusables, trapTab } from "./ui/overlay";
 import { Empty } from "./views/session/files/parts";
 import { AgentsPage } from "./views/AgentsPage";
+import { AgentArchives } from "./views/agents/AgentArchives";
 import { ChatView } from "./views/chat/ChatView";
 import { Home } from "./views/Home";
 import { PersonaAssistant } from "./views/PersonaAssistant";
@@ -278,7 +279,7 @@ function Shell() {
   const title =
     pane ? "Agent" : route.name === "persona" ? "Persona" : route.name === "persona-new" ? t("app.title_new_chat") : route.name === "history" ? t("app.title_history") : route.name === "health" ? t("app.title_health") : route.name === "profile" ? t("app.title_profile") : route.name === "inbox" ? t("app.title_inbox") : route.name === "messages" ? t("app.title_messages")
       : route.name === "routines" ? t("app.title_routines") : route.name === "kb" ? t("app.title_kb") : route.name === "workspace-board" ? t("app.title_workspace_board") : route.name === "todos" ? t("app.title_todos") : route.name === "machines" || route.name === "machine" ? t("app.title_machines") : route.name === "space" ? route.space : route.name === "terminal" ? t("app.title_terminal") : route.name === "settings" ? t("app.title_settings")
-      : route.name === "agents" ? t("app.title_agents") : route.name === "agent-list" ? "Agents" : route.name === "extension" ? extensionTitle || t("app.title_extension") : t("app.title_home");
+      : route.name === "agents" ? t("app.title_agents") : route.name === "agent-list" ? "Agents" : route.name === "agent-archives" ? t("app.title_agent_archives") : route.name === "extension" ? extensionTitle || t("app.title_extension") : t("app.title_home");
 
   // never reached the hub: say so with a way to try again, instead of pages loading forever (kept through a retry)
   const [away, setAway] = useState(false);
@@ -332,6 +333,9 @@ function Shell() {
       break;
     case "agent-list":
       main = <AgentsPage route={route} onToggleSidebar={toggle} onNewAgent={openNewAgent} />;
+      break;
+    case "agent-archives":
+      main = <AgentArchives onToggleSidebar={toggle} />;
       break;
     case "machines":
       main = <Machines onToggleSidebar={toggle} />;

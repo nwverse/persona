@@ -19,6 +19,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -90,6 +91,9 @@ type runtimeHello struct {
 		// (#3974): its permission cards that offer always get the node's key for the tool. A runtime that keeps its own
 		// rule (opencode's save rule, Paseo's suggestions) does not say it, so its grant is never widened to the tool.
 		KeepAlways bool `json:"keep_always"`
+		// Archive: session.archive / session.unarchive go to it, for its own reversible archive (archive.go): a
+		// session the user archives in Persona is archived there too, and restored with it.
+		Archive bool `json:"archive"`
 	} `json:"caps"`
 }
 
@@ -114,6 +118,10 @@ type runtimeConn struct {
 	transcripts map[string]string
 	// daemon is its id in daemons.json when the node dialed it (daemons.go), "" for a runtime on the socket.
 	daemon string
+	// pid is the process at the other end of the runtime socket; 0 when not known (a daemon's link, the Orca bridge,
+	// a system that does not tell). A runtime running the assistant vouches for its descendants' MCP servers
+	// (mcpAssistantOf).
+	pid int
 }
 
 // isDaemon: the node dialed it (a daemon in daemons.json), it did not connect to the socket.
@@ -476,6 +484,25 @@ func (b *runtimeRegistry) resetWatches() {
 		h.watched = map[string]bool{}
 		h.mu.Unlock()
 	}
+}
+
+// assistantIn is the connected runtime that runs assistant conversations (caps.assistant in its hello) whose process
+// is one of pids, nil when none is.
+func (b *runtimeRegistry) assistantIn(pids []int) *runtimeConn {
+	if b == nil {
+		return nil
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	for _, h := range b.conns {
+		h.mu.Lock()
+		ok := h.ready && h.hello.Caps.Assistant && h.pid > 0 && slices.Contains(pids, h.pid)
+		h.mu.Unlock()
+		if ok {
+			return h
+		}
+	}
+	return nil
 }
 
 func (b *runtimeRegistry) add(peer *rpc.Peer) *runtimeConn {
@@ -1055,7 +1082,7 @@ func (n *Node) runtimeFor(ctx context.Context, method, id string) (*runtimeConn,
 		return h, nil
 	}
 	if known {
-		if claimMethods[method] || method == "session.rename" || method == "session.close" {
+		if claimMethods[method] || method == "session.rename" || method == "session.close" || method == "session.archive" || method == "session.unarchive" {
 			return nil, errRuntimeAway(label)
 		}
 		return nil, nil // unwatching and the like: nothing to refuse
@@ -1244,6 +1271,15 @@ func (n *Node) runtimeHandle(ctx context.Context, h *runtimeConn, method string,
 		}
 		_, err := call("session.close", map[string]any{"session_id": p.SessionID})
 		return okResult(err), err, true
+	case "session.archive", "session.unarchive":
+		// Its own archive (archive.go): one that has none keeps the archive Persona's alone.
+		if !caps.Archive || strings.Contains(p.SessionID, subagentSep) {
+			return archiveUnsupported(label + " has no archive the node can drive"), nil, true
+		}
+		if _, err := call(method, map[string]any{"session_id": p.SessionID}); err != nil {
+			return nil, err, true
+		}
+		return nativeArchiveResult{Native: nativeArchiveDone, Via: "runtime"}, nil, true
 	case "session.rename":
 		if p.Title == nil || strings.TrimSpace(*p.Title) == "" {
 			return okResult(nil), nil, true // a tab name: these sessions have no tab

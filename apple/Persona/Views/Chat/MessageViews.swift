@@ -366,7 +366,10 @@ struct SentPhotos: View {
             Spacer(minLength: 48)
             ForEach(Array(images.enumerated()), id: \.offset) { i, p in
                 let side: CGFloat = images.count == 1 ? 140 : 84
+                // A photo that did not load: the tap asks the hub again instead of opening an empty viewer (#559).
+                let again = ImageRetries.shared.canRetry(p)
                 Button {
+                    if ImageRetries.shared.retry(p) { return }
                     if let viewImages {
                         viewImages(ImageViewing(images: images, index: i, conversation: chatImages, source: p.identity))
                     } else { viewer = i }
@@ -378,7 +381,8 @@ struct SentPhotos: View {
                         .overlay(RoundedRectangle(cornerRadius: Theme.Radius.control, style: .continuous).stroke(Color.primary.opacity(0.1), lineWidth: 0.5))
                 }
                 .buttonStyle(.plain)
-                .accessibilityLabel("Image \(i + 1), tap to view full size")
+                .accessibilityLabel(again ? Text("Image didn't load. Tap to retry") : Text("Image \(i + 1), tap to view full size"))
+                .accessibilityIdentifier("sent-photo-\(i)")
             }
         }
         .frame(maxWidth: .infinity, alignment: .trailing)

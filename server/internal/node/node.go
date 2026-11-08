@@ -2,6 +2,7 @@
 package node
 
 import (
+	"bytes"
 	"cmp"
 	"context"
 	"encoding/json"
@@ -52,7 +53,7 @@ type Node struct {
 	sock   os.FileInfo
 
 	// claudeStart, claudeReady: when set, how long a start waits for the shell to run claude, then for claude's
-	// input box, in place of claudeStartWait and claudeReadyWait (tests; control.go).
+	// input box, in place of claudeStartWait and claudeReadyWait (tests; claudeready.go).
 	claudeStart, claudeReady time.Duration
 
 	// doctorAt replaces the places node.doctor looks at (tests; doctor_rpc.go).
@@ -86,11 +87,11 @@ type Node struct {
 	fsw            fsWatcher // the folders the web panels have open (fswatch.go)
 
 	mu      sync.Mutex
-	titleMu sync.Mutex // orders the custom-title lines renames write (control.go retitle)
+	titleMu sync.Mutex // orders the custom-title lines renames write (rename.go retitle)
 	state   *stateFile
 	files   map[string]*transcript.File // session id -> parsed transcript
 	paths   map[string]string           // session id -> transcript path
-	pathsAt map[string]time.Time        // when a path not told by a hook was last chosen (transcriptPath)
+	pathsAt map[string]time.Time        // when a path was last reported or chosen (transcriptPath looks again after 30 s)
 	watches map[string]*watch
 	// waiting: watches of sessions with no transcript yet (watchFor), so session.unwatch finds them (#5389).
 	waiting map[string]*watch
@@ -105,7 +106,7 @@ type Node struct {
 	layouts   map[string]layout          // host kind -> space / slot names from its last snapshot
 	shellTabs *shellTabs                 // the sweep's memory; nil: the process's own (shelltabs.go)
 	procs     map[string]*assistantProc  // headless assistant conversations (assistant.go)
-	titles    map[string]string          // session id -> title given before its transcript existed (control.go retitle)
+	titles    map[string]string          // session id -> title given before its transcript existed (rename.go retitle)
 	spare     *assistantProc             // warm process waiting for the next new conversation
 	akeys     map[string]*assistantProc  // the key a Codex conversation's MCP server reports until its thread exists
 	lastList  string                     // serialized last sessions.changed payload
@@ -184,6 +185,9 @@ type Node struct {
 	// ports: the agents' listening ports (ports.go); streams: the forwarded connections to them (streams.Mux).
 	ports   portState
 	streams *streams.Mux
+	// preview: the headless browser of dev server previews (preview_browser.go), made on first use.
+	preview     *previewHost
+	previewOnce sync.Once
 
 	// hostAgents: each host's agents in its last answer (refreshHosts), kept for a host that does not answer.
 	hostAgents map[string][]host.Agent
@@ -319,12 +323,7 @@ func (n *Node) Serve(ctx context.Context, r io.Reader, w io.Writer) error {
 		adopted = n.keeper.adopt(n)
 	}
 	n.startState(ctx, adopted)
-	ln, err := n.listenHookSocket(ctx)
-	if err != nil {
-		n.logger.Printf("hook socket: %v", err)
-	} else {
-		defer ln.Close()
-	}
+	// The runtimes before the hook socket: its MCP requests read n.runtimes, which attach sets (clicall.go mcpAssistantOf).
 	if rh := n.runtimeHost; rh != nil { // a resident node's: runtimes stay connected across hub connections
 		rh.attach(n)
 		defer rh.detach(n)
@@ -332,6 +331,12 @@ func (n *Node) Serve(ctx context.Context, r io.Reader, w io.Writer) error {
 		n.logger.Printf("runtime socket: %v", err)
 	} else {
 		defer rh.detach(n)
+	}
+	ln, err := n.listenHookSocket(ctx)
+	if err != nil {
+		n.logger.Printf("hook socket: %v", err)
+	} else {
+		defer ln.Close()
 	}
 	go n.startWhenConfigured(ctx) // polling and the engine's events, once the hub said which engine (engine.go)
 	go n.warmTranscripts(ctx)
@@ -1203,6 +1208,12 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 		return n.portDial(ctx, params)
 	case "port.probe":
 		return n.portProbeRPC(ctx, params)
+	case "preview.servers": // a session folder's dev servers, from its .claude/launch.json (preview_launch.go)
+		return n.previewServersRPC(ctx, params)
+	case "preview.start": // run one of them in a new terminal tab, after the user confirmed its command
+		return n.previewStartRPC(ctx, params)
+	case "preview.open": // a headless browser tab on a port of this computer, on a stream (preview.go)
+		return n.previewOpenRPC(ctx, params)
 	// The built-in programs cua and ego by their old names, for a hub from before builtin_programs (builtin.go).
 	case "computer.status", "computer.call", "computer.install", "computer.grant", "computer.cancel", "computer.clipboard",
 		"computer.cursor", "computer.nolock", "computer.lock",
@@ -1237,6 +1248,12 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 		return n.gitDiff(ctx, p.Cwd, p.Path, p.Staged)
 	case "git.show":
 		return n.gitShow(ctx, p.Cwd, p.Hash)
+	case "git.review": // every file a scope changed, with its hunks, for the web's Review panel (gitreview.go)
+		var rv proto.GitReviewRequest
+		if err := json.Unmarshal(params, &rv); err != nil {
+			return nil, err
+		}
+		return n.gitReview(ctx, rv)
 	case "git.log":
 		list, err := n.gitLog(ctx, p.Cwd, p.Skip, p.Limit)
 		return map[string]any{"commits": list}, err
@@ -1324,6 +1341,8 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 			return ok(nil)
 		}
 		return ok(n.close(ctx, p.SessionID))
+	case "session.archive", "session.unarchive": // the tool's own archive (archive.go); a runtime's answers above
+		return n.nativeArchive(ctx, p.SessionID, method == "session.archive")
 	}
 	return nil, fmt.Errorf("unknown method %s", method)
 }
@@ -1484,13 +1503,29 @@ func loginShell(ctx context.Context, script string) *exec.Cmd {
 
 func marshalJSON(v any) ([]byte, error) { return json.MarshalIndent(v, "", "  ") }
 
-// writeFileAtomic replaces path whole: a reader sees the old file or the new one.
-func writeFileAtomic(path string, b []byte) error {
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, b, 0o600); err != nil {
+// writeFileAtomic replaces path whole with b (writeAtomic).
+func writeFileAtomic(path string, b []byte) error { return writeAtomic(path, bytes.NewReader(b)) }
+
+// writeAtomic replaces path whole with what r reads: a reader sees the old file or the new one. The new one is written
+// to a temp file of its own in the same folder (0600), so two writers of one path do not share it and the rename never
+// crosses file systems.
+func writeAtomic(path string, r io.Reader) error {
+	f, err := os.CreateTemp(filepath.Dir(path), "."+filepath.Base(path)+".*.tmp")
+	if err != nil {
 		return err
 	}
-	return os.Rename(tmp, path)
+	tmp := f.Name()
+	_, err = io.Copy(f, r)
+	if cerr := f.Close(); err == nil {
+		err = cerr
+	}
+	if err == nil {
+		err = os.Rename(tmp, path)
+	}
+	if err != nil {
+		os.Remove(tmp)
+	}
+	return err
 }
 
 func shellQuote(s string) string {

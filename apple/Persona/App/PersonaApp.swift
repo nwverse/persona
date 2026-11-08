@@ -121,6 +121,8 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
         // `-openChatsFresh YES`: no chat kept on disk from an earlier run (LiveUpdateTests: churned steps piled up), and
         // every report folded again (ReportFoldUITests).
         if d.bool(forKey: "openChatsFresh") { ChatCache.removeAll(); OpenReports.shared.closeAll() }
+        // `-openImagesFresh YES`: no chat picture kept on disk from an earlier run, so a hub that fails it fails it (#182).
+        if d.bool(forKey: "openImagesFresh") { try? FileManager.default.removeItem(at: URL.cachesDirectory.appending(path: "chat-images")) }
         // `-openAgentsFresh YES`: the Agents list's saved look forgotten (AgentsListTests).
         if d.bool(forKey: "openAgentsFresh") {
             for k in ["dev.machineFilter", HubFilter.key, "dev.grouping", "dev.sort", "dev.compact", "dev.folded"] { d.removeObject(forKey: k) }

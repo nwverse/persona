@@ -130,6 +130,7 @@ func lcuStatus(ctx context.Context) proto.Computer {
 			c.Desktop = parseConsole(string(out), os.Getuid())
 		}
 		c.ScreenSharing = screenSharing(ctx)
+		c.Displays = screenDisplays(ctx, c.ScreenSharing)
 	}
 	c.Ready, c.Note = lcuReady(c)
 	c.Job = currentJob()

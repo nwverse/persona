@@ -133,4 +133,14 @@
     <string name="assistant_refused_retry">Try again</string>
     <string name="assistant_manager_offline">%1$s · %2$s</string>
     <string name="assistant_manager_offline_empty">%1$s is offline: you can read the history, but it can\'t take messages now.</string>
+    <string name="assistant_settings_target">Assistant</string>
+    <string name="assistant_settings_permission">New conversation permissions</string>
+    <string name="assistant_settings_permission_hint">Applies to new conversations without an explicit permission choice. Existing conversations keep their permissions.</string>
+    <string name="assistant_settings_permission_default">Default</string>
+    <string name="assistant_settings_permission_edits">Allow edits</string>
+    <string name="assistant_settings_permission_plan">Plan only</string>
+    <string name="assistant_settings_permission_auto">Auto</string>
+    <string name="assistant_settings_permission_full">Full access</string>
+    <string name="assistant_settings_permission_failed">Could not save the permission default</string>
+    <string name="assistant_settings_permission_unavailable">Unavailable until this assistant can confirm support for permission defaults. Other settings remain available.</string>
 </resources>

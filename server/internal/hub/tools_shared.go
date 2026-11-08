@@ -27,7 +27,7 @@ func (h *Hub) machineByName(id string) *Machine {
 		return m
 	}
 	for _, m := range h.machinesNow() {
-		if strings.EqualFold(m.cfg.Name, id) || strings.EqualFold(m.cfg.SSHHost, id) {
+		if strings.EqualFold(m.name(), id) || strings.EqualFold(m.cfg.SSHHost, id) {
 			return m
 		}
 	}

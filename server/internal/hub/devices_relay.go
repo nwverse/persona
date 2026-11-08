@@ -88,8 +88,8 @@ func (h *Hub) linkCaller(w http.ResponseWriter, r *http.Request) (principal, boo
 		h.securityError(w, r, http.StatusForbidden, "tls_required", 0)
 		return p, false
 	}
-	if mc := h.cfgEntry(p.Machine); mc == nil || mc.Kind != kindLink {
-		writeErr(w, http.StatusNotFound, fmt.Errorf("hub.json has no machine %q of kind link", p.Machine))
+	if mc := h.knownEntry(p.Machine); mc == nil || mc.Kind != kindLink {
+		writeErr(w, http.StatusNotFound, fmt.Errorf("no machine %q of kind link", p.Machine))
 		return p, false
 	}
 	return p, true
