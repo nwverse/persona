@@ -45,8 +45,8 @@ type inboxBulkResult struct {
 	// Unchanged were already in the state asked for (a retried request, another device): nothing written.
 	Unchanged []string        `json:"unchanged"`
 	Skipped   []inboxBulkSkip `json:"skipped"`
-	// Failed are the ids whose new state could not be written; they keep the state they had, so the client leaves
-	// them in the list and can retry. Additive: older clients ignore it and see an empty changed for those ids.
+	// Failed are the ids whose requested state could not be written or confirmed while another filing is pending.
+	// The client keeps them in the list and can retry. Additive: older clients see no changed entry for those ids.
 	Failed []string `json:"failed"`
 }
 
@@ -129,7 +129,8 @@ func (s *Service) setInboxBulk(ctx context.Context, action string, targets []inb
 	if filter != nil {
 		targets = nil
 		for _, it := range b.items {
-			if filter.match(it) {
+			view, _ := b.filingSnapshot(it, nil)
+			if filter.match(view) {
 				if it.arrivedAfter(asOf) {
 					res.Skipped = append(res.Skipped, inboxBulkSkip{it.ID, bulkSkipChanged})
 				} else {
@@ -146,9 +147,13 @@ func (s *Service) setInboxBulk(ctx context.Context, action string, targets []inb
 		}
 		seen[t.ID] = true
 		it, ok := b.items[t.ID]
+		pending := b.filing[t.ID]
 		switch {
 		case !ok:
 			res.Skipped = append(res.Skipped, inboxBulkSkip{t.ID, bulkSkipMissing})
+		case pending != nil && b.holdsFiling(pending):
+			// Its optimistic marker may still roll back. Only a committed state can be acknowledged unchanged.
+			res.Failed = append(res.Failed, t.ID)
 		case done && !it.open(), !done && it.open():
 			res.Unchanged = append(res.Unchanged, t.ID)
 		case done && t.Version != "" && t.Version != inboxVersion(it):
