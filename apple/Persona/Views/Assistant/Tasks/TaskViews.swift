@@ -352,6 +352,7 @@ struct TaskCard: View {
         if let todo = store.todos[todoID] {
             let state = store.state(todo)
             let lead = store.leadSession(todo)
+            let ultracode = store.ultracode(todo)
             Button {
                 store.detailTask = todo.id
             } label: {
@@ -359,12 +360,13 @@ struct TaskCard: View {
                     HStack(spacing: Theme.Space.s) {
                         TaskMark(state: state).scaledFrame(width: Theme.Size.markM)
                         Text(todo.title).font(Theme.Font.bodyStrong).lineLimit(1)
-                        if store.ultracode(todo) { UltracodeMark(font: Theme.Font.labelStrong) }
+                        if ultracode { UltracodeMark(font: Theme.Font.labelStrong).transition(.opacity) }
                         Spacer(minLength: Theme.Space.s)
                         if let t = TaskClock.since(todo.createdAt), state != .done, state != .failed {
                             Text(t).font(Theme.Font.caption).foregroundStyle(.tertiary).lineLimit(1).fixedSize()
                         }
                     }
+                    .animation(UltracodeMark.motion, value: ultracode)
                     Text(TaskPlace.line(todo, lead: lead))
                         .font(Theme.Font.caption).foregroundStyle(.secondary).lineLimit(1)
                     TaskNowLine(todo: todo, state: state, lead: lead)
@@ -503,15 +505,17 @@ struct TaskLine: View {
     var body: some View {
         if let todo = store.todos[todoID] {
             let state = store.state(todo)
+            let ultracode = store.ultracode(todo)
             Button { store.detailTask = todo.id } label: {
                 HStack(spacing: Theme.Space.s) {
                     TaskMark(state: state).scaledFrame(width: Theme.Size.markM)
                     Text(todo.title).font(Theme.Font.secondaryMedium).lineLimit(1)
-                    if store.ultracode(todo) { UltracodeMark(font: Theme.Font.label) }
+                    if ultracode { UltracodeMark(font: Theme.Font.label).transition(.opacity) }
                     Spacer(minLength: Theme.Space.s)
                     Text(state.label).font(Theme.Font.caption).foregroundStyle(state.labelColor).lineLimit(1).fixedSize()
                     ThemedIcon(Theme.Icon.disclosure).font(Theme.Font.labelStrong).foregroundStyle(.tertiary)
                 }
+                .animation(UltracodeMark.motion, value: ultracode)
                 .padding(.horizontal, Theme.Space.m)
                 .padding(.vertical, Theme.Space.s)
                 .background(Theme.Fill.well, in: .rect(cornerRadius: Theme.Radius.control, style: .continuous))

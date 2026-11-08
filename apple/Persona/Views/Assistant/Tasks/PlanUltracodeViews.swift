@@ -69,8 +69,9 @@ struct PlanUltracodeRow: View {
                 VStack(alignment: .leading, spacing: Theme.Space.xxs) {
                     Text(verbatim: Ultracode.name).lineLimit(1)
                     Text(blocked ?? Ultracode.subtitle)
-                        .font(Theme.Font.caption)
+                        .font(Theme.Font.label)
                         .foregroundStyle(blocked == nil ? Color.secondary : Theme.cautionText)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
             }
         }

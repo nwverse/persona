@@ -14,7 +14,7 @@ nonisolated struct PlanTask: Codable, Hashable, Sendable {
     var model: String?
     var permission: String?
     /// Claude Code's ultracode for this task (#12): the assistant's choice; on start, true / false replaces it and left
-    /// out keeps it (Ultracode.swift).
+    /// out keeps it (PlanUltracode.swift).
     var ultracode: Bool?
     var readonly: Bool?
     var why: String?

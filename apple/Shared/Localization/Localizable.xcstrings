@@ -88133,75 +88133,6 @@
       },
       "extractionState" : "manual"
     },
-    "Starts with ultracode: every task runs as a multi-agent workflow, which uses a lot of quota" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Starts with ultracode: every task runs as a multi-agent workflow, which uses a lot of quota"
-          }
-        },
-        "ja" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "ultracode オンで開始：すべてのタスクをマルチエージェントの workflow で進め、使用量を大きく消費します"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "开着 ultracode 开始：每个任务都编排多 Agent workflow，很费额度"
-          }
-        }
-      }
-    },
-    "Starts without ultracode. With it, every task runs as a multi-agent workflow, which uses a lot of quota" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Starts without ultracode. With it, every task runs as a multi-agent workflow, which uses a lot of quota"
-          }
-        },
-        "ja" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "ultracode オフで開始。オンにすると、すべてのタスクをマルチエージェントの workflow で進め、使用量を大きく消費します"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "不开 ultracode 开始。开着的话，每个任务都编排多 Agent workflow，很费额度"
-          }
-        }
-      }
-    },
-    "Starts without ultracode: %@" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Starts without ultracode: %1$@"
-          }
-        },
-        "ja" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "ultracode オフで開始：%1$@"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "不开 ultracode 开始：%1$@"
-          }
-        }
-      }
-    },
     "SOCKS5 Proxy" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -97854,6 +97785,75 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "Starts with ultracode: every task runs as a multi-agent workflow, which uses a lot of quota" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Starts with ultracode: every task runs as a multi-agent workflow, which uses a lot of quota"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ultracode オンで開始：すべてのタスクをマルチエージェントの workflow で進め、使用量を大きく消費します"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "开着 ultracode 开始：每个任务都编排多 Agent workflow，很费额度"
+          }
+        }
+      }
+    },
+    "Starts without ultracode. With it, every task runs as a multi-agent workflow, which uses a lot of quota" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Starts without ultracode. With it, every task runs as a multi-agent workflow, which uses a lot of quota"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ultracode オフで開始。オンにすると、すべてのタスクをマルチエージェントの workflow で進め、使用量を大きく消費します"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "不开 ultracode 开始。开着的话，每个任务都编排多 Agent workflow，很费额度"
+          }
+        }
+      }
+    },
+    "Starts without ultracode: %@" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Starts without ultracode: %1$@"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ultracode オフで開始：%1$@"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "不开 ultracode 开始：%1$@"
+          }
+        }
+      }
     },
     "Starts work on schedule, follows up on what it promised you, and notifies your phone when it's done. Say “Give me a morning briefing every day at 9” or “Remind me in an hour” in a chat to add one here." : {
       "localizations" : {
