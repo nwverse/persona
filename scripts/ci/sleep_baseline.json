@@ -71,6 +71,7 @@
   "server/internal/assistant/schedule_session_test.go": 20,
   "server/internal/assistant/schedule_streak_test.go": 2,
   "server/internal/assistant/schedule_test.go": 2,
+  "server/internal/assistant/schedule_usage_limit_test.go": 3,
   "server/internal/assistant/secret_run_test.go": 1,
   "server/internal/assistant/start_errors_test.go": 2,
   "server/internal/assistant/supervise_retry_test.go": 1,
