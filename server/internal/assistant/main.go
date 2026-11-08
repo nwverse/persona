@@ -39,7 +39,8 @@ import (
 // Main is `personad assistant`: the assistant as its own process, on the hub's bus. The hub starts one beside itself
 // (hub/assistant_process.go) and hands it its token on stdin; one run elsewhere (hub.json assistant.external) gets it
 // from PERSONA_ASSISTANT_TOKEN (`personad hub assistant-token` makes one); one that is a service of its own on the
-// hub's machine (DeployService, hub.json assistant.mode service) has it in its manager.json (managerconf.Binding). It keeps its state in the hub's Postgres,
+// hub's machine (DeployService, hub.json assistant.mode service) has it in its manager.json (managerconf.Binding).
+// An external assistant to a self-signed hub pins its public key with PERSONA_ASSISTANT_FINGERPRINT. It keeps its state in the hub's Postgres,
 // found as the hub finds it: hub.json's database_url, PERSONA_DATABASE_URL over it.
 func Main(ctx context.Context, build update.Build, stdin io.Reader) error {
 	return MainWith(ctx, build, stdin, MainHooks{})
@@ -107,6 +108,7 @@ func MainWith(ctx context.Context, build update.Build, stdin io.Reader, h MainHo
 		if hub == "" {
 			hub = localHubURL(cfg.Listen)
 		}
+		fingerprint = strings.TrimSpace(identity.Getenv("PERSONA_ASSISTANT_FINGERPRINT"))
 	}
 	home := identity.HomeDir()
 	file := managerconf.DefaultFile(home)
