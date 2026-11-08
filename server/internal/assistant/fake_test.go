@@ -566,6 +566,8 @@ type memStore struct {
 	puts int
 	// failSetting: what reading a setting fails with (nil: it reads).
 	failSetting error
+	// failPut: what writing settings fails with (nil: it writes); nothing is written then.
+	failPut error
 }
 
 // noPlans is a store without the task_plans and assistant_feed tables.
@@ -616,6 +618,9 @@ func (m *memStore) PutSetting(_ context.Context, key string, v any) error {
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if m.failPut != nil {
+		return m.failPut
+	}
 	if m.vals == nil {
 		m.vals = map[string][]byte{}
 	}
@@ -638,6 +643,9 @@ func (m *memStore) PutSettings(ctx context.Context, values map[string]any) error
 	defer m.mu.Unlock()
 	if err := ctx.Err(); err != nil {
 		return err
+	}
+	if m.failPut != nil {
+		return m.failPut
 	}
 	if m.vals == nil {
 		m.vals = map[string][]byte{}

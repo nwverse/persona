@@ -123,13 +123,19 @@ func (s *Service) briefFeed(session, task, title string, f *briefFacts) {
 
 func (s *Service) briefRoutes() {
 	// POST /api/v1/later/{id}/handled: the Handled button of a question in a `brief` item's later list. It leaves the queue; a
-	// question already handled, dropped (its to-do ended, or 7 days) or unknown is 409.
+	// question already handled, dropped (its to-do ended, or 7 days) or unknown is 409. A queue that can't be read or
+	// written is 503, and the question stays.
 	s.handle("POST /api/v1/later/{id}/handled", func(w http.ResponseWriter, r *http.Request) {
 		if !fullRole(r) {
 			apierr.Write(w, http.StatusForbidden, errors.New("read-only role cannot change the queue"))
 			return
 		}
-		if !s.laterHandled(r.Context(), r.PathValue("id"), time.Now()) {
+		ok, err := s.laterHandled(r.Context(), r.PathValue("id"), time.Now())
+		if err != nil {
+			apierr.Write(w, http.StatusServiceUnavailable, i18n.Err("http-status.unavailable"))
+			return
+		}
+		if !ok {
 			apierr.Write(w, http.StatusConflict, i18n.Err("assistant-feishu_cards.already_handled"))
 			return
 		}

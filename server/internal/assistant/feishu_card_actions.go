@@ -48,7 +48,11 @@ func (s *Service) botCardAction(ctx context.Context, a *feishubot.CardAction, ac
 		}
 		return toast("info", i18n.T(l, "assistant-feishu_cards.already_handled"))
 	case "later_done": // the Handled button of a question that can wait, on a briefing card (later.go)
-		if s.laterHandled(ctx, a.Str("id"), time.Now()) {
+		ok, err := s.laterHandled(ctx, a.Str("id"), time.Now())
+		if err != nil { // the queue can't be read or written: the question stays, the button works again
+			return toast("error", i18n.T(l, "http-status.unavailable"))
+		}
+		if ok {
 			return toast("success", i18n.T(l, "assistant-briefing.later_handled"))
 		}
 		return toast("info", i18n.T(l, "assistant-feishu_cards.already_handled"))
