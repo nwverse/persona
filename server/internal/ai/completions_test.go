@@ -106,6 +106,9 @@ func TestChatCompletionsErrors(t *testing.T) {
 		{"error", `data: {"error":{"message":"provider failed"}}` + "\n\n", nil, "provider failed"},
 		{"malformed", "data: {bad json}\n\n", nil, "decode stream"},
 		{"interrupted", `data: {"choices":[{"delta":{"content":"partial"}}]}` + "\n\n", nil, "without a completed reply"},
+		{"empty done", "data: [DONE]\n\n", nil, "without a reply"},
+		{"empty choice", `data: {"choices":[{"delta":{},"finish_reason":"stop"}]}` + "\n\n", nil, "without a reply"},
+		{"reasoning only", `data: {"choices":[{"delta":{"reasoning_content":"private","content":"  "},"finish_reason":"stop"}]}` + "\n\n", nil, "without a reply"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			_, err := readCompletions(strings.NewReader(tt.stream))
@@ -150,7 +153,7 @@ func TestChatCompletionsJSONRetriesTruncation(t *testing.T) {
 		}
 		limits = append(limits, req.MaxTokens)
 		if len(limits) == 1 {
-			fmt.Fprint(w, "data: {\"choices\":[{\"delta\":{\"content\":\"{\\\"answer\\\":\"},\"finish_reason\":\"length\"}]}\n\ndata: [DONE]\n\n")
+			fmt.Fprint(w, "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"length\"}]}\n\ndata: [DONE]\n\n")
 		} else {
 			fmt.Fprint(w, "data: {\"choices\":[{\"delta\":{\"content\":\"{\\\"answer\\\":42}\"},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n")
 		}

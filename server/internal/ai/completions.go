@@ -159,5 +159,8 @@ func readCompletions(body io.Reader) (Reply, error) {
 		return reply, ErrRefused
 	}
 	reply.Text = text.String()
+	if strings.TrimSpace(reply.Text) == "" && !reply.Truncated {
+		return Reply{}, errors.New("ai: stream ended without a reply")
+	}
 	return reply, nil
 }
