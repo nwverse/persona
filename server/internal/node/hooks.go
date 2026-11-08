@@ -485,10 +485,7 @@ func (n *Node) rememberTranscript(in hookInput) {
 	if in.TranscriptPath == "" || !validID(in.SessionID) {
 		return
 	}
-	n.mu.Lock()
-	n.paths[in.SessionID] = in.TranscriptPath
-	delete(n.pathsAt, in.SessionID) // Claude said so: no need to look again
-	n.mu.Unlock()
+	n.setPath(in.SessionID, in.TranscriptPath)
 }
 
 // notifyHookEvent tells the hub what a hook saw. reportOnly marks an event from a global hook (globalhooks.go), so

@@ -2562,6 +2562,20 @@ final class AppModel {
         await refresh()
     }
 
+    /// The hub renames computers (feature `machine_rename`): machine details offer it.
+    func canRenameMachine(_ group: String) -> Bool { features(group).contains("machine_rename") }
+
+    /// Renames a computer on its hub ("" is its id again); the hub's `machines` push brings the new name everywhere.
+    func renameMachine(_ ref: MachineRef, to name: String) async {
+        let name = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let api = api(ref.group), name != machine(ref)?.name else { return }
+        do {
+            let shown = try await api.renameMachine(ref.id, to: name)
+            toast = Toast(String(localized: "Renamed to \(shown)"), style: .success)
+        } catch { show(error) }
+        await refresh()
+    }
+
     /// Renames an agent's herdr tab and / or its Claude session name (nil leaves that one alone).
     func renameSession(_ k: SessionKey, tab: String?, title: String?) async {
         guard session(k)?.canTerminal == true, let api = api(k.group) else { return }

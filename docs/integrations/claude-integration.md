@@ -296,7 +296,7 @@ For subscribed working / blocked sessions, node runs `pane read --source visible
 
 ## Headless assistant (Chat tab)
 
-Assistant does not enter herdr: node directly launches `zsh -ic '<launcher> "$@"' -p --input-format stream-json --output-format stream-json --verbose --include-partial-messages --session-id|--resume <id> --plugin-dir ~/.persona/assistant-hooks --mcp-config …` (`node/assistant.go`, tested 2026-10-25; hooks are plugins as above, plus a Lark Bash gate; older Claude gets `--settings ~/.persona/assistant-settings.json`):
+Assistant does not enter herdr: node directly launches `zsh -ic '<launcher> "$@"' -p --input-format stream-json --output-format stream-json --verbose --include-partial-messages --session-id|--resume <id> --plugin-dir ~/.persona/assistant-hooks --mcp-config …` (`node/assistant_start.go`, tested 2026-10-25; hooks are plugins as above, plus a Lark Bash gate; older Claude gets `--settings ~/.persona/assistant-settings.json`):
 
 - One process supports consecutive turns through stdin, one `{"type":"user","message":{…}}` per line, images as base64 image blocks.
 - `stream_event` `content_block_delta/text_delta` supplies word-by-word output → WS delta; result ends the turn. Structured messages still read from transcript.
@@ -307,7 +307,7 @@ Assistant does not enter herdr: node directly launches `zsh -ic '<launcher> "$@"
 - Interrupt: no stdin interrupt in -p; terminate process, resume next message.
 - First user content in headless transcript is a block array; without ai-title, first sentence becomes title.
 
-## Background tasks (trackBackground in `transcript.go`, tested 2026-10-25)
+## Background tasks (trackBackground in `transcript/background.go`, tested 2026-10-25)
 
 - Start: Bash `run_in_background:true` result is `Command running in background with ID: <id>. Output is being written to: <path>.`; async Agent result `Async agent launched … agentId: <id>`; timed-out foreground commands become `…moved to the background (ID: <id>)`.
 - End: `<task-notification><task-id>…</task-id><status>completed|failed|killed</status><summary>…</summary></task-notification>`, in queue-operation enqueue (**not user input, never in queue list**), `queued_command` attachment (commandMode=task-notification, absorbed mid-turn), or idle user message. `TaskStop` / `KillShell` also end tasks.
@@ -439,7 +439,7 @@ Variable injection when disabled:
 
 - Herdr pane: prepend `CLAUDE_CODE_DISABLE_REFUSAL_FALLBACK=1 ` to pane run command and herdr `resume_argv` (`claudeCommandLine` in `node/herdrresume.go`). Most launchers are shell functions; env cannot run functions. Assignment + function forwards the variable to launched Claude in zsh / bash; fish differs, as in report-only hooks above. Verify each.
 - Managed launchers: `managedEnv` in `node/managed.go`, like `CLAUDE_CODE_DISABLE_ARTIFACT`; personad launch carries it.
-- Headless assistant: `cmd.Env` in node/assistant.go.
+- Headless assistant: `cmd.Env` in node/assistant_start.go.
 - User-started computer sessions are untouched, display only. Setting changes affect only subsequently started / resumed processes; explain in UI.
 
 ### Multi-Agent collaboration
