@@ -1305,7 +1305,7 @@ function RepoSection({ tree, reg, hover, activeKey, go, onRowMenu }: { tree: Rep
 /** One working tree's agents under its own folding row: the main checkout wears a home mark, and a tree with nothing
  *  running says so. Orca child worktrees have their own remembered, initially expanded chip after the parent's agents. */
 function RepoWorktreeRows({ w, repo, row, activeKey }: { w: RepoWorktree; repo: string; row: (s: Session, hint: string) => React.ReactNode; activeKey: string }) {
-  const [folded, toggle] = useFolded(w.key, w.sessions.length === 0, { holds: holdsRow(w.sessions, activeKey) });
+  const [folded, toggle] = useFolded(w.key, w.sessions.length === 0, { holds: holdsRow(w.tree, activeKey) });
   const descendants = w.tree.slice(w.sessions.length);
   const [childrenFolded, toggleChildren] = useFolded(`${w.key}/children`, false, { holds: holdsRow(descendants, activeKey) });
   const mutes = useStore((st) => st.mutes);
@@ -1344,7 +1344,7 @@ function RepoChildToggle({ count, counts, folded, onToggle }: { count: number; c
   const description = parts.map((k) => stateCount(k, counts[k])).join(t("sidebar.list_separator"));
   const action = t(folded ? "sidebar.show_child_workspaces" : "sidebar.hide_child_workspaces", { count });
   return (
-    <div className="@container relative mt-1 flex min-w-0 justify-start">
+    <div className="@container relative mt-1 flex min-w-0 justify-start pl-7">
       <button
         type="button"
         aria-expanded={!folded}
