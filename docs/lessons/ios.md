@@ -2,6 +2,10 @@
 
 Pitfalls, odd behavior and the decisions made at the time (formerly "Lessons" in `CLAUDE.md`; index in `docs/lessons/README.md`). Add new lessons to the relevant section, or create one if none fits.
 
+## Hosted minimum-Xcode initialization (#1218)
+
+Pin both `DEVELOPER_DIR` and the disposable hosted runner's system Xcode selection, then run that Xcode's first-launch initialization before downloading platforms or creating a simulator. An environment variable selects foreground tools but does not change the system selection used by background platform services. Keep system-wide selection/initialization in the hosted workflow, not the locally runnable Apple script. SDK discovery, a successful runtime download and a `Booted` device state still do not prove `simctl bootstatus` completed: the main run reached a successful iOS/embedded Watch build and then exhausted its unchanged 900-second boot deadline without entering app tests. Retain that deadline, stock profile and failure diagnostics; initialization must be verified by a new hosted run, not reported as a proven simulator fix from Linux source checks.
+
 ## Hosted simulator boot diagnostics (#1124)
 
 A successful minimum-Xcode app/Watch build does not prove the test simulator became ready. A stock iOS 26.0 boot failed its existing 900-second deadline before tests started; the shared helper had discarded `simctl bootstatus` output, and the workflow retained no diagnostic artifact. Keep boot command/phase errors on stderr (stdout remains the sole UDID), capture them separately, and collect `simctl list` before shutting down the owned simulator. Upload only those logs, runtime metadata and existing xcresult bundles after failure; never the source snapshot, configuration, keys or links outside result bundles. Keep the original boot/step timeouts and do not add automatic retries. A maintainer-approved manual rerun is distinct from a retry policy, but uses the original run's commit: diagnostic changes need a new-head run first.
