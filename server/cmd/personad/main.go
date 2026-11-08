@@ -163,4 +163,3 @@ type usageError = nodecmd.UsageError
 
 func commandName() string      { return nodecmd.CommandName() }
 func named(text string) string { return nodecmd.Named(text) }
-func isHelpArg(a string) bool  { return nodecmd.IsHelpArg(a) }
