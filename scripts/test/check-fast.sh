@@ -12,6 +12,9 @@
 # Path mapping (diff mode):
 #   web/**                     npm ci (only with no node_modules or a changed package.json/package-lock.json),
 #                              typecheck, vitest run
+#   schema/extension/**, spec/fixtures/injected/**, spec/fixtures/sync/**, scripts/mock/inbox_events.json
+#                              also the web check: web/src and its vitest suite read these files. They are the inputs
+#                              outside web/ of the web lane in scripts/ci/paths.py; test_check_fast.py keeps the two in sync
 #   integrations/<pkg>/**      node --test test/*.test.{js,mjs} (packages without tests are skipped)
 #   site/**                    node --test site/worker.test.mjs
 #   sdk/ts/**                  bun test (skipped with a reason when bun is absent)
@@ -47,6 +50,8 @@
 #
 # Exit codes: 0 all checks passed, skipped or not needed; 1 one or more checks FAILED; 124 no failure but at least
 # one check TIMEOUT (a timeout is reported, not silently treated as success; run the full suite when that happens).
+# Ctrl-C, SIGTERM and SIGHUP, to the script or to its whole process group, stop every running check first, keep the
+# log directory, and exit 130, 143 or 129.
 # A missing optional toolchain (node < 22, go, bun) skips only its checks in diff mode; in --all mode a missing
 # core tool (node >= 22, go, python3) is a failure.
 #
@@ -112,6 +117,80 @@ WORK=$(mktemp -d "${TMPDIR:-/tmp}/check-fast.XXXXXX")
 KEEP_WORK=0
 cleanup_work() { [ "$KEEP_WORK" -eq 0 ] && rm -rf "$WORK"; }
 trap cleanup_work EXIT
+
+# descendants prints every process below pid $1, parents before their children (POSIX ps, so it runs on macOS too).
+descendants() {
+  ps -A -o pid= -o ppid= 2>/dev/null | awk -v root="$1" '
+    { kids[$2] = kids[$2] " " $1 }
+    END {
+      n = split(kids[root], queue, " ")
+      for (i = 1; i <= n; i++) {
+        print queue[i]
+        m = split(kids[queue[i]], c, " ")
+        for (j = 1; j <= m; j++) queue[++n] = c[j]
+      }
+    }'
+}
+
+# on_signal stops every check on Ctrl-C, TERM or HUP. A signal to this script alone never reaches them: the job
+# subshells run in the background (a non-interactive shell starts them ignoring SIGINT) and GNU timeout moves each
+# command into its own process group, so without this they keep running, reparented to init, writing into $WORK.
+# A signal to the whole process group (a closed terminal or tmux pane, kill -- -PGID) reaches the job subshells and
+# tee as well, so they ignore TERM and HUP too (launch_all); otherwise they would die first and orphan the checks.
+# The whole tree is frozen first (SIGSTOP, repeated until no new process appears) so nothing forks the next step or
+# escapes to init while it is being collected. The processes in this script's own process group (subshells, tee,
+# short helpers) then get KILL while still frozen; every other one is a check in the group timeout made for it and
+# gets TERM and CONT (timeout forwards the TERM to its group), and whatever is still alive after timeout's own -k
+# grace gets KILL.
+on_signal() {  # on_signal <signal name> <exit code>
+  local _sig=$1 _code=$2 _all=" " _new _p _g _pass _list _left _own _groups
+  trap '' INT TERM HUP
+  for _pass in 1 2 3 4 5 6 7 8 9 10; do
+    _new=0
+    for _p in $(descendants $$); do
+      case "$_all" in *" $_p "*) continue ;; esac
+      # The ps and awk of the snapshot have exited by now, so kill fails for them and they are not collected.
+      kill -STOP "$_p" 2>/dev/null || continue
+      _all="$_all$_p "; _new=1
+    done
+    [ "$_new" -eq 0 ] && break
+  done
+  # One ps for the process group of each frozen process; if it fails, every process takes the TERM path below.
+  _own=$(ps -o pgid= -p $$ 2>/dev/null | tr -d ' ')
+  _list=$(echo $_all | tr ' ' ',')
+  _groups=$(ps -o pid= -o pgid= -p "$_list" 2>/dev/null)
+  # bash reports each job subshell it reaps after a KILL ("line N: <pid> Killed ( ... )"); keep that noise off stderr.
+  exec 3>&2 2>/dev/null
+  if [ -n "$_own" ] && [ -n "$_groups" ]; then
+    _all=" "
+    while read -r _p _g; do
+      [ -n "$_p" ] || continue
+      if [ "$_g" = "$_own" ]; then kill -KILL "$_p" 2>/dev/null; else _all="$_all$_p "; fi
+    done < <(printf '%s\n' "$_groups")
+  fi
+  for _p in $_all; do kill -TERM "$_p" 2>/dev/null; kill -CONT "$_p" 2>/dev/null; done
+  _list=$(echo $_all | tr ' ' ',')
+  if [ -n "$_list" ]; then
+    _pass=0
+    while [ "$_pass" -lt 70 ]; do  # up to ~7s: timeout's -k 5s grace plus a margin
+      # A process that has exited stays a zombie (Z) until its parent reaps it; count only live processes.
+      _left=$(ps -o stat= -p "$_list" 2>/dev/null | grep -vc '^Z')
+      [ "${_left:-0}" -eq 0 ] && break
+      sleep 0.1
+      _pass=$((_pass + 1))
+    done
+    for _p in $_all; do kill -KILL "$_p" 2>/dev/null; done
+  fi
+  wait
+  exec 2>&3 3>&-
+  KEEP_WORK=1
+  echo >&2
+  echo "check-fast: interrupted (SIG$_sig); stopped the running checks; logs in $WORK" >&2
+  exit "$_code"
+}
+trap 'on_signal INT 130' INT
+trap 'on_signal TERM 143' TERM
+trap 'on_signal HUP 129' HUP
 
 # Job bookkeeping (plain indexed arrays for macOS's bash 3.2).
 JOB_NAME=(); JOB_FN=(); JOB_ARG=(); JOB_LOG=(); JOB_STATUS=(); JOB_PID=()
@@ -183,6 +262,9 @@ launch_all() {
   local _i
   for _i in "${!JOB_NAME[@]}"; do
     (
+      # A TERM or HUP to the whole process group must not end the subshell (or the tee its steps start) before
+      # on_signal has frozen the checks under it; on_signal KILLs them itself (see there).
+      trap '' TERM HUP
       JOB_STATUS=${JOB_STATUS[$_i]}
       JOB_I=$_i
       SECONDS=0
@@ -434,6 +516,11 @@ else
   fi
   echo "check-fast: $(printf '%s\n' "$CHANGED" | wc -l | tr -d ' ') changed file(s) against $(git rev-parse --short "$MB") (merge-base with $BASE_REF)"
   while IFS= read -r f; do
+    # Repository files outside web/ that web/src and its vitest suite read: a change to one also runs the web check,
+    # on top of its own mapping below. The same list is the web lane's filter in scripts/ci/paths.py.
+    case "$f" in
+      schema/extension/*|spec/fixtures/injected/*|spec/fixtures/sync/*|scripts/mock/inbox_events.json) WEB=1 ;;
+    esac
     case "$f" in
       web/*) WEB=1 ;;
       site/*) SITE=1 ;;
