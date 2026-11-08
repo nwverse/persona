@@ -1684,7 +1684,7 @@ The app's file browser (the session's Files pane, the machine page's Files row) 
   - An old node that does not know `dest=dir` (answers `unknown upload destination`, or an even older one ignores `dest`): 409 `code: node_outdated`. The hub requires begin to echo `dest`
     and aborts without the echo, so the file never lands in a temp folder quietly. `upload_dir` in the hello `features` says the hub takes these parameters.
 - **Rename, move, trash, restore** (`node/fileedit.go`, `hub/fileedit.go`): `POST /api/v1/machines/{mid}/files/{rename,move,trash,restore}` with a JSON body; paths as in a listing (`~/…`, absolute, or relative to `cwd`).
-  The folder an entry is in has its links followed and is checked like an upload's; the entry's own name is not followed, so a link is renamed, moved or trashed as the link. The home itself, `~/.persona`, `~/.jarvis` and `~/Library`
+  The folder an entry is in has its links followed and is checked like an upload's; the entry's own name is not followed, so a link is renamed, moved or trashed as the link. The home itself, `~/.persona`, the former state folder and `~/Library`
   (and anything in them) are 409 `read_only`, as is a name that would land there. Answers give paths in the form the request used. `file_edit` in the hello `features` says the hub has these routes.
   - `rename {path, cwd, name}` → `{path}`: in the same folder. `name` can't be empty, `.`, `..`, or contain `/` (400). A taken name is 409 `exists` (`name`) and nothing changes; changing only the case is allowed.
   - `move {paths[], cwd, dir, conflict?}` → `{moved: [{from, to}]}`: into folder `dir`. Without `conflict`, any taken name refuses the whole move with 409 `exists` before anything moves; `keep` names it `name 2.ext`…;
