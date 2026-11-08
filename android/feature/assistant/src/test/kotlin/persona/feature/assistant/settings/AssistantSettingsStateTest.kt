@@ -26,6 +26,7 @@ class AssistantSettingsStateTest {
     private val MemoryEntry.typeLabel get() = typeLabel(res)
 
     private class FakeApi : AssistantSettingsApi {
+        override fun supportsDefaultPermission(manager: String) = manager == config.manager
         var config = AssistantConfig(machineId = "server", launcher = "claude", cwd = "/home/me/.persona/assistant",
             timezone = "Asia/Shanghai", notesEffective = "from hub.json", main = "main-id")
         val updates = mutableListOf<AssistantConfigUpdate>()

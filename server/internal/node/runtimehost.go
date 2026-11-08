@@ -10,6 +10,7 @@ import (
 	"log"
 	"net"
 	"os"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -160,10 +161,21 @@ func (rh *RuntimeHost) serveConn(ctx context.Context, c io.ReadWriteCloser, daem
 	defer stop()
 	defer c.Close()
 	peer := rpc.New("r", c)
+	pid := 0
+	if nc, ok := c.(net.Conn); ok {
+		pid, _ = peerPID(nc) // 0 for a pipe, or where the system does not tell
+	}
+	// This node or an ancestor of it is a relay, not the runtime's own process: the manager's egress proxy leads an
+	// extension's sandbox here (extmgr/extension_sandbox.go), and the manager may run this node, so everything the node
+	// runs would descend from it.
+	if pid > 0 && slices.Contains(nodeLineage(), pid) {
+		pid = 0
+	}
 	h := rh.reg.add(peer)
 	h.mu.Lock()
 	h.drop = cancel
 	h.daemon = daemon
+	h.pid = pid
 	h.mu.Unlock()
 	peer.OnRequest = func(ctx context.Context, method string, params json.RawMessage) (any, error) {
 		return rh.request(ctx, h, method, params)
