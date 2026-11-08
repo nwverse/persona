@@ -72,11 +72,11 @@ final class NewChatLayoutTests: XCTestCase {
     }
 
     /// Off: the conversation as it was, the report's evidence list and the old lines back, no headers.
-    @MainActor func testOldLayoutWhenSwitchedOff() throws {
+    @MainActor func testBaselineConversationWhenPreviewIsOff() throws {
         let app = launch(["-ui.newChatLayout", "NO"])
         let any = app.descendants(matching: .any)
         XCTAssertTrue(any["report-line"].firstMatch.waitForExistence(timeout: 20), "the old report line is missing:\n\(app.debugDescription)")
-        XCTAssertFalse(any["exchange.header"].firstMatch.exists, "a new layout header in the old layout")
+        XCTAssertFalse(any["exchange.header"].firstMatch.exists, "a preview header appears in baseline conversation presentation")
         XCTAssertFalse(any["exchange.routed"].firstMatch.exists)
         XCTAssertTrue(has(app, "actions/runs/1001").exists, "the old evidence list is missing")
         XCTAssertFalse(has(app, "督办巡查").exists)

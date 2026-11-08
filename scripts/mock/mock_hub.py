@@ -7463,6 +7463,39 @@ def mock_subagent_reports():
 
 if os.environ.get("MOCK_SUBAGENT_REPORTS") == "1":
     mock_subagent_reports()
+# GET /mock/subagent-step (MOCK_SUBAGENT_CARDS): the background subagent "scrun" goes one step on, pushed to whoever
+# follows its own conversation as the hub would: its running call gets its result and it starts the next one (#5602,
+# the open card's latest steps).
+SUBSTEP = {"n": 0}
+
+
+def subagent_step():
+    sid = SUBCARDS + "@scrun"
+    SUBSTEP["n"] += 1
+    n = SUBSTEP["n"]
+    prev = "toolu_scrunb" if n == 1 else "toolu_scrun%d" % (n - 1)
+    new = [it("user", "tool_result", 0, tool_use_id=prev, text="%d passed" % (30 + n)),
+           it("assistant", "tool_use", 0, tool_use_id="toolu_scrun%d" % n, tool_name="Grep",
+              tool_input={"pattern": "filter-%d" % n, "path": "e2e"})]
+    before = ITEMS[sid][-1]["seq"]
+    for i, x in enumerate(new):
+        x["seq"] = before + 1 + i
+    ITEMS[sid] = ITEMS[sid] + new
+    for out, subs in list(LIVE):
+        try:
+            if sid in subs:
+                out({"type": "items", "machine_id": "macbook", "session_id": sid, "items": new, **span(new, before)})
+        except Exception:
+            pass
+    for sess_ in SESSIONS:
+        if sess_["session_id"] == SUBCARDS:
+            for a in sess_.get("subagents") or []:
+                if a["id"] == "scrun":
+                    a.update(steps=3 + n, last_tool={"id": "toolu_scrun%d" % n, "name": "Grep", "summary": "filter-%d" % n},
+                             updated_at=ago(minutes=0))
+            sess_["rev"] = (sess_.get("rev") or 0) + 1
+            push_machine("macbook")
+    return {"step": n}
 
 
 # MOCK_SUBAGENT_PARALLEL=1: three subagents launched together in the live exchange (#5602, the grid): one done, one
@@ -13143,6 +13176,8 @@ class H(BaseHTTPRequestHandler):
         if p == "/mock/session_close":
             if "fail" in q: SESSION_CLOSE["fail"] = q["fail"][0] == "1"
             return self.send_json({k: SESSION_CLOSE[k] for k in ("fail", "attempts", "closed")})
+        if p == "/mock/subagent-step" and os.environ.get("MOCK_SUBAGENT_CARDS") == "1":
+            return self.send_json(subagent_step())
         if p == "/mock/workflow" and MOCK_WORKFLOW_CARDS:  # MOCK_WORKFLOW_CARDS: the small run at ?step=0..3
             return self.send_json(set_wf_step(int(q.get("step", ["0"])[0] or 0)))
         if p == "/mock/workflow" and os.environ.get("MOCK_WORKFLOW") == "1":  # MOCK_WORKFLOW=1: parity-audit at ?step=0..4

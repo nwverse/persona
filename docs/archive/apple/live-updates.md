@@ -73,7 +73,7 @@ User: "The machine-switch refresh issue and refreshes while scrolling in chats t
   - Inbox changes (new Lark messages).
   - Pending interactions (one Agent asks a question, another gets answered).
 - "Badges" read these: the Agents and Inbox counts on the old tab bar, and the red dot on ☰ / count on "Agents" in the new shell. The mock never pushed either, so tests stayed green.
-- The new shell (fd9c99e) is the default iPhone layout, but all UI tests ran with `-ui.oldLayout YES` (`launchPersona`). These tests had never run under the new shell.
+- At the time of this investigation, the shell (fd9c99e) was the default iPhone navigation, but the UI-test helper forced tab navigation. These tests had never run under the shell. Current helpers must exercise default navigation instead.
 
 ### Cause
 
@@ -81,12 +81,12 @@ Both layouts share the cause: badges live on the view containing the page, so a 
 
 | Layout | Badge reader | On badge change | Result |
 | --- | --- | --- | --- |
-| Old layout | Each `Tab` | `Tab` reevaluates and recreates its page: `ChatsView` and `AssistantView` bodies run again (`Tab` content is not compared by value) | Agents toolbar is resubmitted to UIKit; ⋯ menu resets to the top. The open Persona chat reevaluates in full (27 times in 8 seconds) |
+| Historical tab navigation | Each `Tab` | `Tab` reevaluates and recreates its page: `ChatsView` and `AssistantView` bodies run again (`Tab` content is not compared by value) | Agents toolbar is resubmitted to UIKit; ⋯ menu resets to the top. The open Persona chat reevaluates in full (27 times in 8 seconds) |
 | New shell | Bodies of both top bars | Entire top bar reevaluates | The "Agents" button is the machine menu (`Menu`), with the count in its label. A count change changes the label, relaying out the open menu and resetting it to the top. The Persona top bar and "Assistant" menu rebuild on every push |
 
 ### Fix
 
-- Old layout: wrap each `Tab` page in `TabPage { … }.equatable()`.
+- Historical tab navigation: wrap each `Tab` page in `TabPage { … }.equatable()`.
   - The page takes nothing from `Tab`, so a `Tab` reevaluation need not rerun its body.
   - State, environment, and models read by the page itself still update it normally.
 - New shell:
@@ -101,15 +101,15 @@ Tests: the mock's `/mock/churn` gained two parameters.
 - `&inbox=1`: change an Inbox item each round, vary the "Needs you" count every other round, and repush pending interactions. Every `LiveUpdateTests` case includes it.
 - `&waiting=1`: add an Agent waiting for you each round, then answer it the next round. The count changes every round, and the top card appears / disappears. Menu cases include it.
 
-These tests now run with both layouts. With `TEST_RUNNER_PERSONA_LAYOUT=shell`, `launchPersona` defaults to the new shell.
+The results below record both historical navigation implementations. Current UI tests launch the default shell at compact iPhone width and the sidebar at regular iPad width, without a navigation override.
 
 "Before" below is origin/master, using the same tests.
 
 | Scenario | Layout | Before | After |
 | --- | --- | --- | --- |
 | ⋯ menu open, scrolled to machines, 12 push rounds | New shell | Menu resets to top (469 → 809 pt); menu content rebuilds 1.1 times per round | Stays put, 0 |
-| ⋯ menu open, scrolled to machines, 12 push rounds | Old layout | Menu resets to top (467 → 807 pt); `ChatsView` and menu content rebuild 2.5 times per round; main thread 535 ms per round | Stays put, 0, 121 ms |
-| Persona chat open, 14 push rounds in 8 seconds | Old layout | `AssistantView` / `ChatView` / top bar each 27 times; total push main-thread time 158 ms | Page and top bar 0 (`ChatView` still 9, for steps the mock adds to this chat), 45 ms |
+| ⋯ menu open, scrolled to machines, 12 push rounds | Historical tab navigation | Menu resets to top (467 → 807 pt); `ChatsView` and menu content rebuild 2.5 times per round; main thread 535 ms per round | Stays put, 0, 121 ms |
+| Persona chat open, 14 push rounds in 8 seconds | Historical tab navigation | `AssistantView` / `ChatView` / top bar each 27 times; total push main-thread time 158 ms | Page and top bar 0 (`ChatView` still 9, for steps the mock adds to this chat), 45 ms |
 | Persona chat open, 14 push rounds in 8 seconds | New shell | Top bar 40 times, `ShellSwitch` (containing the "Assistant" menu) 39 times, 41 ms | 0, 14 ms |
 
 ### Not reproduced
@@ -119,7 +119,7 @@ Recorded the new shell and inspected frame by frame (`simctl io recordVideo`, fr
 - Selecting a machine and switching back to all machines with these pushes showed no flicker or jumps.
 - Scrolling back in Agent and Persona chats, then stopping, left the view completely still under pushes.
 
-The old layout's whole-chat reevaluation from badges is fixed. The new shell's chat page itself did not reevaluate with badges, and "refreshes while scrolling" did not reproduce with the new-shell mock. If it persists after the fix, record against the real hub.
+The historical tab navigation's whole-chat reevaluation from badges is fixed. The new shell's chat page itself did not reevaluate with badges, and "refreshes while scrolling" did not reproduce with the new-shell mock. If it persists after the fix, record against the real hub.
 
 ### Test pitfalls
 
@@ -195,7 +195,7 @@ Working through the layers revealed five causes:
   Updates are held in the following cases and applied together once the condition clears:
   - Finger dragging, deceleration, and the first 1.5 seconds after stopping: consecutive flicks count as one scroll (later changed to 0.5 seconds; see "Follow-up" below).
   - Covered by a pushed page (not when the list remains visible beside it in split view).
-  - On the new shell's other page or the old layout's other tab (released while swiping between the new shell's two pages).
+  - On the new shell's other page or the historical tab navigation's other tab (released while swiping between the new shell's two pages).
   Holding changes only an unobserved switch, so starting a scroll does not redraw the list; scroll phase also lives in an unobserved object.
 - Close the leaks:
   - Store `AgentSync` progress in `StateCache` (a file in Caches, alongside the transcript cache it describes), not UserDefaults.
@@ -212,7 +212,7 @@ Working through the layers revealed five causes:
 | Scenario | Layout | Before | After |
 | --- | --- | --- | --- |
 | Agents list | New shell | 10 jumps ≥ 100 pt (maximum 1349 pt), 5 relative row movements, 2 row replacements, 5 UserDefaults writes during scrolling; list reevaluated 52 times and rows 129 times during scrolling | All 0; list reevaluated 0 times during scrolling, rows 45–51 times (rows entering the screen) |
-| Agents list | Old layout | 8 jumps (maximum 917 pt), 4 movements, 1 replacement, 2 writes; list 47 times, rows 144 times | All 0; list 0 times, rows 46–52 times |
+| Agents list | Historical tab navigation | 8 jumps (maximum 917 pt), 4 movements, 1 replacement, 2 writes; list 47 times, rows 144 times | All 0; list 0 times, rows 46–52 times |
 | Agent chat | Both | Agents list behind it reevaluated 47–50 times; 2 UserDefaults writes | 0, 0 |
 | Persona chat | Both | 3–4 UserDefaults writes | 0 |
 

@@ -10,19 +10,11 @@ final class NewConversationEntryTests: XCTestCase {
     private static let mainConversation = "b2e4d6f8-0000-4000-8000-000000000001"
 
     @MainActor func testInboxHandOffOpensTheMainChatOnTheSentMessage() throws {
-        try handOff(layout: ["-ui.oldLayout", "NO"], name: "main-shell", newChat: false)
-    }
-
-    @MainActor func testInboxHandOffOpensTheMainChatOnTheSentMessageInTheOldLayout() throws {
-        try handOff(layout: ["-ui.oldLayout", "YES"], name: "main-old", newChat: false)
+        try handOff(name: "main-shell", newChat: false)
     }
 
     @MainActor func testInboxHandOffOpensANewChatOnTheSentMessage() throws {
-        try handOff(layout: ["-ui.oldLayout", "NO"], name: "shell", newChat: true)
-    }
-
-    @MainActor func testInboxHandOffOpensANewChatOnTheSentMessageInTheOldLayout() throws {
-        try handOff(layout: ["-ui.oldLayout", "YES"], name: "old", newChat: true)
+        try handOff(name: "shell", newChat: true)
     }
 
     /// The answer to a hand-off gets lost after the hub ran it (the mock's lost_receipt fault: 502, delivered unknown): the
@@ -34,7 +26,7 @@ final class NewConversationEntryTests: XCTestCase {
 
     @MainActor private func inDoubt(scheme: String) throws {
         let hub = try mockHub()
-        let app = open(hub, ["-ui.oldLayout", "NO", "-ui.scheme", scheme])
+        let app = open(hub, ["-ui.scheme", scheme])
         defer {
             app.terminate()
             fault(hub, on: false)
@@ -78,9 +70,9 @@ final class NewConversationEntryTests: XCTestCase {
         XCTAssertNotNil(handed.first?["client_msg_id"] as? String, "the hand-off went without a client id")
     }
 
-    @MainActor private func handOff(layout: [String], name: String, newChat: Bool) throws {
+    @MainActor private func handOff(name: String, newChat: Bool) throws {
         let hub = try mockHub()
-        let app = open(hub, layout)
+        let app = open(hub, [])
         func shot(_ name: String) { self.shot(app, name) }
         // Every case hands off its own words: the main conversation keeps the earlier cases' hand-offs (in the mock and
         // in the app's chat cache), which would count as a second copy.
