@@ -14,6 +14,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/acceptloop"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/rpc"
 	"github.com/nwverse/persona/server/internal/runtimepkg"
@@ -142,7 +143,7 @@ func (rh *RuntimeHost) listenOnce(ctx context.Context) (net.Listener, error) {
 		<-ctx.Done()
 		ln.Close()
 	}()
-	go acceptLoop(ctx, ln, rh.logger.Printf, func(c net.Conn) { go rh.serve(ctx, c) })
+	go acceptloop.Run(ctx, ln, rh.logger.Printf, func(c net.Conn) { go rh.serve(ctx, c) })
 	return ln, nil
 }
 
@@ -282,6 +283,9 @@ func (rh *RuntimeHost) request(ctx context.Context, h *runtimeConn, method strin
 		}
 		// As the assistant only for one of the assistant's conversations that this runtime runs.
 		assistant := p.Assistant && h.assistant() && rh.reg.owns(h, p.SessionID) && n.isAssistantSession(p.SessionID)
+		if p.Name == toolMailSaveAttachment { // writes on this machine (mailattachment.go)
+			return n.saveMailAttachment(ctx, p.Args, p.SessionID, assistant, n.guestOf(p.SessionID) != nil), nil
+		}
 		if g := n.gateTool(p.Name); assistant && g != nil {
 			return n.assistantGateTool(ctx, g, p.SessionID, p.Args), nil
 		}

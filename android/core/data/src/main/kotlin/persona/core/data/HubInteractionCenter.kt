@@ -7,6 +7,7 @@ import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.encodeToString
+import java.time.Instant
 
 class HubInteractionCenter(
     private val transport: ChatTransport,
@@ -15,6 +16,8 @@ class HubInteractionCenter(
     private val snapshots: ListSnapshotStore? = null,
     /** The hub's sessions: where an agent stood when its card was answered here ([answered]). */
     private val sessions: StateFlow<List<Session>>? = null,
+    /** When a card is answered here ([AnsweredMark.at]). */
+    private val clock: () -> Instant = Instant::now,
 ) : InteractionCenter {
     private val mutablePending = MutableStateFlow<List<Interaction>>(emptyList())
     override val pending = mutablePending.asStateFlow()
@@ -30,6 +33,8 @@ class HubInteractionCenter(
      * served before the hub caught up, does not bring its card back (#1688). Only a live event for the id does.
      */
     private val ended = LinkedHashSet<String>()
+    /** Cards the hub withdrew (interaction_resolved), newest last: the event often comes before the answer's own reply. */
+    private val withdrawn = LinkedHashSet<String>()
     private var discarded = emptySet<String>()
 
     private val restored = scope.async {
@@ -49,7 +54,7 @@ class HubInteractionCenter(
                     is InteractionEvent -> if (event.interaction.id !in discarded) {
                         ended.remove(event.interaction.id); change(event.interaction.id, event.interaction)
                     }
-                    is InteractionResolvedEvent -> end(event.id)
+                    is InteractionResolvedEvent -> { withdrew(event.id); end(event.id) }
                     else -> Unit
                 }
             } }
@@ -97,10 +102,12 @@ class HubInteractionCenter(
             lock.withLock { end(id) }
             throw gone
         }
-        lock.withLock { end(id) }
+        val seen = lock.withLock { end(id); id in withdrawn }
         // Answered (now, or already): its agent goes on. An expired or withdrawn card (gone) says nothing of that, and a
-        // card handed back to the computer (dismiss) leaves the agent waiting there (web Interactions.tsx does the same).
-        if (resolution.dismiss != true || outcome.already) asked?.let { answered(it, AnsweredMark(since)) }
+        // card handed back to the computer, now or already (a second tap), leaves the agent waiting there (#709, as the
+        // web's card-answer.ts).
+        val handedBack = if (outcome.already) outcome.status == "dismissed" else resolution.dismiss == true
+        if (!handedBack) asked?.let { answered(it, AnsweredMark(since, id, pending = !outcome.already && !seen, at = clock())) }
         return outcome
     }
 
@@ -109,7 +116,18 @@ class HubInteractionCenter(
         scope.launch {
             delay(ANSWERED_MILLIS)
             // A later answer for the same agent keeps its own time.
-            mutableAnswered.update { if (it[key] === mark) it - key else it }
+            mutableAnswered.update { if (it[key]?.answer === mark.answer) it - key else it }
+        }
+    }
+
+    /** The hub withdrew a card: an answer here for it is no longer waiting on that (under [lock]). */
+    private fun withdrew(id: String) {
+        withdrawn.remove(id)
+        withdrawn.add(id)
+        while (withdrawn.size > ENDED_LIMIT) withdrawn.remove(withdrawn.first())
+        mutableAnswered.update { marks ->
+            if (marks.values.none { it.card == id && it.pending }) marks
+            else marks.mapValues { (_, mark) -> if (mark.card == id && mark.pending) mark.withdrawn() else mark }
         }
     }
 

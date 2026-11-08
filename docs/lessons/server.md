@@ -1,5 +1,16 @@
 # Lessons: hub / node and networking
 
+## Distant spreadsheet dates exceed time.Duration (#1061)
+
+`time.Time.Sub` saturates at roughly 290 years, so XLSX dates after the duration limit all became the same serial. Subtract Unix seconds for parsed calendar dates, retaining the existing wall-clock normalization. Verify the emitted worksheet XML, including distant leap years, time fractions, offsets and text cells; a valid ZIP/XML structure alone does not prove date values are correct.
+
+## Installed provenance is not a mutable source identity (#1227)
+
+- A marketplace ID survives address moves. Its newly verified official catalog cannot authorize previously installed unsigned code, including code absent from that catalog. Capture an unforgeable entry-verification snapshot before downloading, bind it to the unchanged manifest and package fields, and save the verified key with the installed row in the same transaction. Clear it on unsigned upgrades; never backfill it from the current market. Owner sandbox choices remain independent.
+- A successful catalog mirror has not synchronized a git checkout. Fetch repository-relative packages lazily from the original git source/ref, keeping credential restrictions and time budgets; do not clone for OCI or HTTPS package downloads. Package hashes still check the downloaded bytes.
+- Recursive JSON duplicate checks must distinguish case-sensitive maps from protocol structs. Compare arbitrary map keys exactly; reject known struct-field aliases using Unicode simple folding (`strings.EqualFold`, as in `encoding/json`). Lowercasing every object both rejects valid configuration keys and misses long-s signature aliases.
+- Address migration must repeat target uniqueness checks after network reads under the final state lock, including the one official identity across branch and transport aliases. This was a pre-existing migration defect, not an embedded-signature regression.
+
 ## Completion reads must belong to the current turn (#6525)
 
 A model judgment can return after a resumed turn has already stopped again. Checking only the current
@@ -39,6 +50,7 @@ Revocation ended pairing codes with `expires_at = now()` (Postgres's clock) whil
 - Keep custom JSON methods off an anonymously embedded DTO. A method promoted from the embedded launcher swallowed its surrounding health and agent-type fields on both encode and decode. Use an explicit root transport envelope and test that embedding the plain DTO preserves sibling fields.
 - Child-process environment updates must mirror both names with current-name presence taking priority. Updating only one test database or manager root variable leaves old child binaries attached to the parent's previous value. Real node verification belongs in isolated PID/network/home containers: a node scans process environments and must not inspect other agents on the development host.
 - Preserve an existing service, executable and data store instead of creating a second identity. Refuse independent installations; permit verified aliases. Atomic binary replacement must target the real file so both executable names remain attached. A discovery goodbye removes one service record, not a hub still advertised by the other service.
+- A Compose fallback between two spellings takes no `?` check in its default (2026-11-07): Compose before 5.0.2 (2.x included) evaluates `${NEW-${OLD:?…}}`'s default even when `NEW` is set, so installs that set only the new name failed. Leave the default empty and let Compose's own error for a missing value stop it (an empty image: "neither an image nor a build context"). `scripts/test/test_docker_entrypoint.py` rejects a nested check.
 
 ## Retired look IDs are still reserved (#6219)
 
@@ -143,6 +155,8 @@ Revocation ended pairing codes with `expires_at = now()` (Postgres's clock) whil
 - A cursor freezes order and target revision, whereas a delta checkpoint advances only after all delta pages are applied. Expired cursors/checkpoints must return an explicit reset error, not an apparently successful empty page.
 - Exact active-chat detail needs its own `sessions_lookup` feature gate (#6054): older bounded-list hubs ignore an unknown `session_id` and return up to 50 unrelated rows. Resolve the composite identity before row filtering/counting, reuse the full collection DTO, and never replace chat-only task/configuration fields with a summary. Exact baselines reject `since`/`cursor`; coalesced invalidations trigger a new exact read without scanning the change journal.
 - Measure cold initialization separately from warm first-page requests, and distinguish allocation churn, retained heap and process peak RSS. A transport index trades bounded retained memory for far smaller repeat requests; a warm-cache benchmark alone is not a cold-start measurement.
+- A small assistant overview can still traverse the entire runtime inventory (#739). Select headless conversations before decorating rows, and use typed in-process data instead of a local RPC JSON round trip. With 8,200 synthetic sessions, the old overview took 450–464 ms and allocated 205–219 MB; early selection took 5.84–6.67 ms and allocated 12.25 MB. Partial decoration must not prune other sessions' state marks or hook flags; only a complete inventory can establish that a session disappeared.
+- Audit neighboring entry requests too (#1075): `readinessMain` still serialized the full inventory to find one main conversation after the overview was fixed. A verified headless identity can use exact local lookup and the same partial decorator, with the legacy/unusual-session fallback preserved. The identical 8,200-row benchmark went from 479–596 ms to 2.71–3.26 ms. Keep first-use history parsing and large initial feed responses separate from warm switching claims.
 
 ## Extension version notices must preserve localization through the response chain (#3598)
 
@@ -436,12 +450,16 @@ home volume (docs/operations/link.md "Without systemd").
 
 - An asynchronous dedupe answer must recheck a user's split, record its verdict and merge under the same project-mutation lock as unmerge. The verdict-file mutex prevents lost JSON updates but cannot stop an already queued merge from reversing a completed split. A verdict write failure must stop the merge.
 - Enforce retention at write entry points, not only daily cleanup: initial archive reads "latest 100 messages", which in quiet sessions can reach years back;
-  after cleanup, 47 expired day files reappeared 6 seconds later (production 2026-11-02). All day-file writes (`Archive`, `Ingest`, `Backfill`) share
+  after cleanup, 47 expired day files reappeared 6 seconds later (production 2026-11-02). All day-file writes (`Archive`, `Ingest`, `WriteHistory`) share
   `Engine.textCutoff()` (midnight of the earliest retained day); cleanup uses `Engine.Prune`, with the same retention days. New write paths use it too. `TestArchiveKeepsToTheTextRetention` checks "cleanup immediately after writing should delete 0 days".
 - For slow search, measure traversal first (#2632): with 37,000 archived files, caching contents improved only 1.6×; most remaining cost was serial `filepath.WalkDir` (~70 ms,
   more than 8-way parallel `stat` on all files at ~30 ms). Directory mtime changes for entry additions/deletions/renames, not content appends; cache directory listings by directory mtime,
   file contents by mtime + size. Together, warm search improves ~360 ms → 85 ms (~4.2×, docs/assistant/knowledge.md). Skip "just changed" entries for mtime caches (another same-tick write with unchanged size is invisible).
   Tests age files/directories with `os.Chtimes`, or never exercise the cache path.
+- Rewriting a day file (`Store.MergeMessages`, imported history) must keep what readers cannot parse: split on `\n` only, keep `\r`, hand edits, odd lines and a missing final
+  newline as they are, and test it as a property (original lines an exact subsequence of the result, count included) plus a fuzz target. The fuzzer found within seconds that a
+  sender name with a line break formatted into two physical lines no reader took for one message, so its duplicate was written again; `Line.Format` now folds line breaks in
+  the sender. Day files have no message ids: duplicates are "same minute, sender and text", which is exactly the formatted line.
 
 ## Port forwarding (docs/operations/ports.md)
 
@@ -583,7 +601,7 @@ home volume (docs/operations/link.md "Without systemd").
   and hub deployment also replaced the web with that directory's `web/`. Not cache: index.html is `no-cache`, assets hashed, no Service Worker.
 - Diagnose through each startup version (`git describe`) in `journalctl --user -u personad`, and production `web/index.html` mtime (tar preserves build time);
   a PR-specific string in the live bundle identifies the web version.
-- `deploy.sh` now requires HEAD to contain `origin/master`, otherwise refuses; deliberately deploying an old commit requires `PERSONA_DEPLOY_ANY_COMMIT=1`.
+- `deploy.sh` now requires HEAD to contain the remote's default branch, otherwise refuses; deliberately deploying an old commit requires `PERSONA_DEPLOY_ANY_COMMIT=1`.
 - Fake backends can't catch dependencies in connectors written in other languages (2026-11-04, #1487): an external Lark connector pinned `SQLAlchemy==2.0.30`, which crashes on import under Python 3.13; green `CheckProgram` tests miss it. Build a real package and run actual pip/install/import checks. Accountless parts (dependencies, imports, QR initialization, decoding one synthetic push frame) can all be tested this way.
 - `./scripts/test/test-server.sh ./... | tail` hides failed packages: Go sorts package names, putting `cmd/` first; `tail` leaves only final `FAIL` (2026-11-04). Save output, grep `^FAIL`; zsh uses `$pipestatus`, not `$PIPESTATUS`. If the hub can't reach proxy.golang.org, new-dependency packages show `[setup failed]`, not test failure.
 
@@ -696,8 +714,17 @@ and add that directory to image workflow PR paths.
 
 ## Reject corrupt signatures on first verification too (2026-11-05, #2214)
 
-Extension markets accept unsigned indexes only when the signature file is absent. An existing malformed file must be rejected even on first registration, not allowed for compatibility with sites returning the same page for every path.
-Fake unsigned markets return 404 for `.sig`; test both first read and an already-trusted public key, distinguishing empty files from missing files.
+Official extension catalogs embed payload and signatures in one document. Reject malformed envelopes, duplicate fields and invalid UTF-8 before verification; verify the decoded payload string without trimming or regenerating JSON. No detached signature fetch or unsigned fallback is permitted for any official alias, including cached catalogs and manual re-registration. Nonofficial TOFU metadata is no longer a trust grant or an installation lock.
+
+## Catalog mirrors must not carry credentials or partial download state (#1227)
+
+- A mirror changes transport, never a source spec, package digest or signing key. Give it an independent bounded timeout, no market credential and a separate origin-bound bearer session. On every validation or transport failure, retry upstream with a fresh staging file, hash and watchdog; a partial mirror archive cannot contaminate the fallback.
+- GHCR authorization is derived from a registered GitHub owner and marketplace-repository prefix, not catalog hints. Bind realm, service, pull scope and every redirect; both the initial market credential and issued bearer are secrets. A git clone token never authorizes a registry.
+- Persist the complete signed envelope in JSONB and verify its payload again after restart. Saving a parsed index destroys signed whitespace; a stored signed flag is not verification. Quarantine unverifiable official caches and unrecognized pins while preserving retryable database errors and the deleted-market marker.
+- Keep mirror settings in each extension manager's existing setting store. Opening settings must not initialize markets or start network reads. A settings screen on the hub is not evidence of cross-manager distribution.
+- A rollback is a version change like any other: whatever is captured per installed version (here the verified market key and origin) must be snapshotted next to `previous_version` at upgrade and restored by the rollback, never copied from the row being left. Without a snapshot, drop the trust-bearing field rather than inherit it.
+- Do not quarantine a signed market because the network failed. Tell "could not read the catalog" from "read a catalog that does not verify" with typed errors (`errors.Is`), not message text: only the second may mark it invalid; the first keeps the last verified catalog installable. A negative signature test must prove it received an HTTP 200 catalog, or a 404 passes for the wrong reason.
+- The final official sandbox allowlist and compiled-in signing key must ship together. A fixture key proving envelope mechanics does not prove final-key verification, GHCR visibility or cutover completion.
 
 ## Daemon-launched user sessions must leave its cgroup (2026-11-04)
 
