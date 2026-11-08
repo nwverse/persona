@@ -6,10 +6,10 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"regexp"
 	"strings"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/prompts"
 	"github.com/nwverse/persona/server/internal/proto"
 )
@@ -112,8 +112,8 @@ func (n *Node) launcherCheck(ctx context.Context, name string) proto.LauncherChe
 func checkOutput(text string) string { return clipText(redactCheck(lastLines(text, 6)), 400) }
 
 var (
-	checkURL = regexp.MustCompile(`(?i)\b[a-z][a-z0-9+.-]*://[^\s"'<>]+`)
-	checkIP  = regexp.MustCompile(`\b\d{1,3}(\.\d{1,3}){3}(:\d+)?\b`)
+	checkURL = lazyre.New(`(?i)\b[a-z][a-z0-9+.-]*://[^\s"'<>]+`)
+	checkIP  = lazyre.New(`\b\d{1,3}(\.\d{1,3}){3}(:\d+)?\b`)
 )
 
 // redactCheck keeps keys, gateway URLs and addresses out of a check's error (it is shown and may be logged).

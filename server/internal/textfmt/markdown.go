@@ -1,13 +1,13 @@
 package textfmt
 
 import (
-	"regexp"
 	"strings"
 
 	"golang.org/x/net/html"
 
 	"github.com/nwverse/persona/sdk/go/wire"
 
+	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/yuin/goldmark"
 	"github.com/yuin/goldmark/ast"
 	"github.com/yuin/goldmark/extension"
@@ -17,7 +17,7 @@ import (
 var plainParser = goldmark.New(goldmark.WithExtensions(extension.GFM)).Parser()
 
 // What a clip can leave behind with nothing to pair with: emphasis and strike-through runs, backticks.
-var danglingMarks = regexp.MustCompile("\\*{2,}|_{2,}|~{2,}|`+")
+var danglingMarks = lazyre.New("\\*{2,}|_{2,}|~{2,}|`+")
 
 // PlainMarkdown is md without its markup, for places that show text as it is (a push, a one-line preview): a line per
 // block, emphasis and code without their marks, a link as its text. Marks a clip left unpaired are dropped too.
@@ -37,8 +37,8 @@ func PushText(md string) string {
 
 var (
 	// A table's delimiter row inside a line: at least two cells of three dashes or more (| --- | :-: |).
-	tableDelimiter = regexp.MustCompile(`\|(\s*:?-{3,}:?\s*\|){2,}`)
-	codeSpan       = regexp.MustCompile("`+[^`]*`+")
+	tableDelimiter = lazyre.New(`\|(\s*:?-{3,}:?\s*\|){2,}`)
+	codeSpan       = lazyre.New("`+[^`]*`+")
 )
 
 // oneLineTables rewrites each line of md that holds a whole table (its rows run together) as its cells joined by

@@ -168,6 +168,7 @@ func (s *deviceSessionConnection) disconnected(readErr error) {
 			reason = "closed"
 		}
 	}
+	s.client.recordSocketTraffic("websocket_close", reason, 0, 0)
 	s.client.mu.Lock()
 	interval := s.client.meta.heartbeat.Interval
 	s.client.mu.Unlock()

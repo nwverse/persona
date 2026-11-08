@@ -28,6 +28,9 @@ nonisolated struct HubExtension: Codable, Hashable, Sendable, Identifiable {
     /// A plugin from a market (a hub with plugin_auto_upgrade): its own auto-upgrade switch, its newer version and what
     /// happened last with an upgrade (docs/extensions/extensions.md「自动升级」).
     var autoUpgrade: Bool?
+    /// Why its own switch does not apply now: "disabled" while the extension is switched off (the hub keeps the switch
+    /// for when it is on again). Nil from a hub from before it.
+    var autoUpgradePaused: String?
     var upgrade: ExtensionUpgrade?
     var upgradeNote: ExtensionUpgradeNote?
     /// An extension with a program on computers: how that program is on each machine it is switched on for.
@@ -39,7 +42,7 @@ nonisolated struct HubExtension: Codable, Hashable, Sendable, Identifiable {
 
     enum CodingKeys: String, CodingKey {
         case id, name, kind, status, error, version, source, enabled, description, contributes, warnings, upgrade, nodes, auth, tools
-        case needsSetup = "needs_setup", autoUpgrade = "auto_upgrade", upgradeNote = "upgrade_note"
+        case needsSetup = "needs_setup", autoUpgrade = "auto_upgrade", autoUpgradePaused = "auto_upgrade_paused", upgradeNote = "upgrade_note"
     }
 }
 
@@ -392,6 +395,9 @@ enum ExtensionText {
         default: return ""
         }
     }
+
+    /// The auto-upgrade switch as shown: off while it is paused (the extension switched off), else the extension's own.
+    static func autoUpgradeShown(_ p: HubExtension) -> Bool { p.autoUpgradePaused == nil && (p.autoUpgrade ?? true) }
 
     /// Whether the line asks something of the user (its row opens the upgrade in the market).
     static func upgradeAction(_ u: ExtensionUpgrade) -> String? {

@@ -8,6 +8,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/nwverse/persona/server/internal/assistantwire"
@@ -34,13 +35,14 @@ type builtinPreset struct {
 	Region string `json:"region"`
 }
 
-var builtinPresets = func() []builtinPreset {
+// builtinPresets are read on first use, not whenever personad starts (a hook too, #1308).
+var builtinPresets = sync.OnceValue(func() []builtinPreset {
 	var list []builtinPreset
 	if err := json.Unmarshal(builtinPresetsJSON, &list); err != nil {
 		panic("presets_builtin.json: " + err.Error())
 	}
 	return list
-}()
+})
 
 // presetSlug is the vendor part of a preset id (builtin/deepseek → deepseek, <plugin>/<provider> → <provider>).
 func presetSlug(id string) string {
@@ -61,7 +63,7 @@ func builtinLauncherPresets(l i18n.Lang) []LauncherPreset {
 		return region != "cn"
 	}
 	var head, tail []LauncherPreset
-	for _, b := range builtinPresets {
+	for _, b := range builtinPresets() {
 		pr := b.LauncherPreset
 		pr.Extension = builtinPlugin
 		pr.Models = slices.Clone(pr.Models)
@@ -246,26 +248,50 @@ func withPresetModels(res proto.LauncherModels, pr LauncherPreset) proto.Launche
 	return res
 }
 
-// presetModels adds the models of the plugin preset behind launcher name on machine (managed: its preset or gateway;
-// ~/.zshrc: the gateway the node read from it) to a Claude Code /model list.
+// withProviderModels adds a managed provider's own models (its `models`) to a launcher's /model list, after the
+// entries already there: Claude Code's /model shows only its tier aliases, so a gateway's other models could not be
+// picked in "New Agent" or sent with a message (launcherHasModel) though --model runs them.
+func withProviderModels(res proto.LauncherModels, l storedLauncher) proto.LauncherModels {
+	seen := map[string]bool{}
+	for _, m := range res.Models {
+		seen[m.ID] = true
+		if m.Resolved != "" {
+			seen[m.Resolved] = true
+		}
+	}
+	for _, m := range l.Models {
+		if m.ID == "" || seen[m.ID] {
+			continue
+		}
+		seen[m.ID] = true
+		res.Models = append(res.Models, proto.AgentModel{ID: m.ID, Name: cmp.Or(m.Name, m.ID), Description: cmp.Or(l.DisplayName, l.Name),
+			Efforts: m.Efforts, DefaultEffort: m.DefaultEffort})
+	}
+	return res
+}
+
+// presetModels adds to a Claude Code /model list the models of the managed provider behind launcher name (its own
+// `models`), then those of the plugin preset behind it (managed: its preset or gateway; ~/.zshrc: the gateway the
+// node read from it).
 func (s *Service) presetModels(ctx context.Context, machine, name string, res proto.LauncherModels) proto.LauncherModels {
 	if res.Agent != "" && res.Agent != "claude" {
 		return res
 	}
 	presets := s.launcherPresets(ctx)
-	if len(presets) == 0 {
-		return res
-	}
 	for _, l := range s.storedLaunchers(ctx) {
 		if l.Name == name {
 			if l.Kind == "api" {
 				return res
 			}
+			res = withProviderModels(res, l)
 			if pr, ok := presetFor(presets, l.Preset, l.BaseURL); ok {
 				return withPresetModels(res, pr)
 			}
 			return res
 		}
+	}
+	if len(presets) == 0 {
+		return res
 	}
 	if l, ok := s.knownZshrcLauncher(ctx, machine, name); ok && l.Agent == "" {
 		if pr, ok := presetFor(presets, "", l.BaseURL); ok {

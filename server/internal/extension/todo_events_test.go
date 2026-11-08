@@ -5,6 +5,8 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/nwverse/persona/server/internal/i18n"
 )
 
 // The to-do events (#5279) are told to the extensions that subscribed AND hold the todos.read grant. The user agrees to
@@ -78,7 +80,7 @@ func TestTodoEventTopicsAreDeclaredAndRequireConsent(t *testing.T) {
 		t.Fatalf("topics: %v", after.Topics())
 	}
 	b, _ := json.Marshal(Added(before, after))
-	if !strings.Contains(string(b), EventTopics["todo.changed"]) || !strings.Contains(string(b), EventTopics["todo.decision"]) {
+	if !strings.Contains(string(b), permissionText(i18n.Default, "event_todo_changed")) || !strings.Contains(string(b), permissionText(i18n.Default, "event_todo_decision")) {
 		t.Fatalf("new subscriptions need consent: %s", b)
 	}
 	if _, err := Parse(with(t, func(m map[string]any) {

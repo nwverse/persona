@@ -6,13 +6,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"regexp"
 	"strings"
 	"time"
 
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/kb"
+	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
@@ -320,7 +320,7 @@ func askedQuestions(ix proto.Interaction) string {
 // ---- inbox_draft (prompts/mcp/inbox) ----
 
 // placeholderRE: a blank a draft leaves for the user to fill in — text in full-width lenticular brackets, {{…}}.
-var placeholderRE = regexp.MustCompile(`【[^】\n]*】|\{\{[^}\n]*\}\}`)
+var placeholderRE = lazyre.New(`【[^】\n]*】|\{\{[^}\n]*\}\}`)
 
 // draftPlaceholder is the first blank in a draft left to fill in; empty when it has none.
 func draftPlaceholder(text string) string {

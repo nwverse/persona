@@ -43,10 +43,12 @@ export function bubbleLines(text: string, perLine = CHARS_PER_LINE): number {
   return text.split("\n").reduce((n, l) => n + Math.max(1, Math.ceil([...l].length / perLine)), 0);
 }
 
-export function UserBubble({ msg, mid, sid, pending }: { msg: UserMessage; mid: string; sid: string; pending?: boolean }) {
+/** `sendState`: a message not in the transcript yet (a sending bubble, the outbox's), marked for the sync scenarios
+ *  (spec/fixtures/sync); the transcript's own bubbles have none. */
+export function UserBubble({ msg, mid, sid, pending, sendState }: { msg: UserMessage; mid: string; sid: string; pending?: boolean; sendState?: "sending" | "sent" | "failed" }) {
   const own = isOwnMessage(msg);
   return (
-    <div className="ml-auto flex max-w-[488px] min-w-0 flex-col items-end gap-1.5 pl-[12%]" style={pending ? { animation: `fade-up 300ms ${EASE} both` } : undefined} data-user-bubble data-items={pending ? undefined : [msg.id, ...msg.images.map((i) => i.id)].join(" ")}>
+    <div className="ml-auto flex max-w-[488px] min-w-0 flex-col items-end gap-1.5 pl-[12%]" style={pending ? { animation: `fade-up 300ms ${EASE} both` } : undefined} data-user-bubble data-send-state={sendState} data-items={pending ? undefined : [msg.id, ...msg.images.map((i) => i.id)].join(" ")}>
       {msg.images.length > 0 && (
         <div className="flex flex-wrap justify-end gap-1.5">
           {msg.images.map((im) => (
@@ -99,6 +101,7 @@ function BubbleText({ text: full, ts, mid, sid, own, pending }: { text: string; 
       {...fold}
       className={`text-[length:var(--chat-body)] leading-[1.6] whitespace-pre-wrap [overflow-wrap:anywhere] ${folded ? FOLDED : ""}`}
       data-folded={folded || undefined}
+      data-bubble-text
     >
       <PathText text={text} mid={mid} cwd={getSession(mid, sid)?.cwd} />
     </div>
@@ -185,6 +188,7 @@ export const SegmentView = memo(function SegmentView({
   mid,
   sid,
   streaming,
+  batchedWords,
   expandFold,
   beforeWords,
 }: {
@@ -193,6 +197,10 @@ export const SegmentView = memo(function SegmentView({
   mid: string;
   sid: string;
   streaming?: string;
+  /** The live words are an agent's as Claude shows them (docs/integrations/claude-integration.md "Live replies"): a batch
+   *  of lines at a time, and still while a tool runs. The live work row stays under them; the headless assistant's
+   *  words stream as they are written and stand for it. */
+  batchedWords?: boolean;
   expandFold: (f: Item) => Promise<void>;
   /** Drawn between the work and the agent's last words (the wakes chip, #3783); above the work while it is live. */
   beforeWords?: ReactNode;
@@ -216,7 +224,8 @@ export const SegmentView = memo(function SegmentView({
   // a finished exchange's last words (the run of them at its end) come after those pictures
   let cut = nodes.length;
   for (let n = nodes[cut - 1]; !live && n?.kind === "step" && n.step.kind === "text"; n = nodes[cut - 1]) cut--;
-  const working = live && streaming === undefined && !nodes.some((n) => n.kind === "group" && n.live);
+  const working = live && (streaming === undefined || batchedWords) && !nodes.some((n) => n.kind === "group" && n.live);
+  const liveRow = working && <WorkGroup g={{ kind: "group", id: `work-live-${seg.id}`, children: [], live: true, startedAt: Date.parse(turnStart ?? "") || undefined }} p={p} />;
   const imageStrip = images.length > 0 && <TurnImages images={images} mid={mid} sid={sid} cwd={getSession(mid, sid)?.cwd} />;
   return (
     <section className="flex flex-col gap-3" data-segment>
@@ -224,12 +233,14 @@ export const SegmentView = memo(function SegmentView({
       {/* while the agent works, its live work stays at the bottom */}
       {live && <Fragment key="before-words">{beforeWords}</Fragment>}
       <WorkNodes nodes={nodes.slice(0, cut)} p={p} live={live} fade />
-      {/* working with no run of steps going (its words just came, or nothing yet): the live group still shows */}
-      {working && <WorkGroup g={{ kind: "group", id: `work-live-${seg.id}`, children: [], live: true, startedAt: Date.parse(turnStart ?? "") || undefined }} p={p} />}
+      {/* working with no run of steps going (its words just came, or nothing yet): the live group still shows, under an
+          agent's live words while they are there (batchedWords) */}
+      {streaming === undefined && liveRow}
       {imageStrip}
       {!live && <Fragment key="before-words">{beforeWords}</Fragment>}
       <WorkNodes nodes={nodes.slice(cut)} p={p} fade />
       {streaming !== undefined && <Answer streaming={streaming} mid={mid} sid={sid} />}
+      {streaming !== undefined && liveRow}
     </section>
   );
 });

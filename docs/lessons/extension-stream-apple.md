@@ -70,8 +70,28 @@ An event snapshot must match the pending event's connection, manager, session, e
 
 Initial UI readiness requires a positive committed version. During process reconstruction, wait for temporarily disabled page entries instead of blindly tapping. Transient snapshot failures get bounded read-only retries only. Never change an old write's event ID/protocol or resend it automatically.
 
+## Snapshot parity is not callback registration
+
+Shared legacy snapshots can reuse an action name across code-review diffs. A native SDK fixture must lower every action slot to a registered opaque callback, not only `action` and `load`: review discard, reply, comment, mark-viewed, context, draft, resolve and expansion controls also carry actions. Otherwise helper data parity can pass while the real manager rejects the page for a duplicate action ID. Check that all callbacks are registered, unique and preserve their metadata, then exercise the installed extension through the manager. Do not weaken manager validation or omit failing showcase pages to obtain a screenshot pass.
+
+Exercise both direct contributions and state-selected pushed pages. A search fixture that always returns the static query-`1` snapshot can pass initial parity but fail a real query such as `02`. Filtering only when the factory's name is `list` still misses a `showcase` factory pushed with `{p: "list"}`. Use the selected page and submitted values for dynamic responses, preserving the unchanged initial snapshots; test both routes and an empty-result query.
+
+## Native component negotiation also needs the correct UI version
+
+The full native page renderer supports UI v5 review controls, but its open inherited the shared read-only context's v3 declaration. Against the same installed process-mode fixture, a v3 open of `code-review-v5` was rejected while a v5 open committed a snapshot and correlated close. A rendered page alone concealed the rejection because initial read-only negotiation can legitimately fall back to HTTP.
+
+Declare v5 specifically on native full-page opens, alongside the actual supported component list. Keep the shared Widget/Intent read-only context unchanged. Pin the emitted version in a request test and require positive native commits during installed-extension screenshot acceptance; do not remove compatibility fallback or treat a legacy page as native evidence.
+
+A positive native commit is not proof that every root-level control is rendered. The first v5 screenshots exposed an omitted `View.review`: the older HTTP fit had lowered it into ordinary components, masking the missing native bar. Mount the review bar outside the scrolling code content, preserve its named summary across native updates, and submit through the same frozen-action/confirmation path. Verify its visibility and actual submit/discard fences before accepting the full screenshot matrix.
+
+A notification prompt's body also contains “icon”/“图标标记”. Classifying icon prompts first selected their OK button for the notification prompt, so no button matched and four real UI cases stayed inactive. Recognize the known notification prompt before the icon message, still requiring the tested app's brand and SpringBoard owner. Keep each failed route's diagnostic image distinct; never acknowledge an extension's own confirmation automatically.
+
+Root review buttons use `submit`, but `review.discard` uses `press` (the canonical manager `EventAction` rule). Marking the whole review object as submit let cancellation appear healthy, yet confirmation was rejected before callback entry and never advanced its fence. Infer submit only for the review's button array, and test confirmed discard through the actual manager as well as a fake socket.
+
 ## Evidence boundaries
 
 Unit tests use canonical valid/invalid fixtures and exact fence traces. Actual UI tests assert committed stream revisions, not just a loaded page that might be HTTP fallback. Screenshots contain synthetic data only; GUI captures are limited to the App window without other windows/desktop content. Clearly label offscreen rendering as such.
+
+A tooling exit code is not an execution or UI verdict. An actual `idb-repl` run printed a Swift compilation error (missing the injected function's `Any` return) yet exited zero. Require an explicit executed-result marker and check diagnostics; then observe the resulting screen or XCTest state. An empty accessibility tree is not positive readiness, and successful HID dispatch alone does not prove the intended UI changed.
 
 Use an independent build identity and machine-wide `xcode-slot` for every Xcode invocation. Own simulators follow the global count limit and are shut down afterward. Record the actual toolchain and that Xcode 26.0 was not verified when unavailable. Raw XCTest logs/xcresults can contain paths, device identifiers and launch credentials: publish only sanitized summaries and inspected images in the PR. Keep verification media outside the final source tree, following `docs/README.md`.

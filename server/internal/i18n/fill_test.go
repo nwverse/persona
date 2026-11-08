@@ -79,7 +79,7 @@ func TestFillMatchesRegexpRandom(t *testing.T) {
 
 // fill matches the regexp version on every catalog text, with all its placeholders known and with none known.
 func TestFillMatchesRegexpCatalogs(t *testing.T) {
-	for l, cat := range catalogs {
+	for l, cat := range catalogs() {
 		for k, s := range cat {
 			all := Args{}
 			for _, m := range oldPlaceholder.FindAllStringSubmatch(s, -1) {

@@ -9,12 +9,12 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
-	"regexp"
 	"slices"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
@@ -251,14 +251,14 @@ var claudeSwitches = []string{"--dangerously-skip-permissions", "--allow-dangero
 var claudeTextFlags = []string{"--append-system-prompt", "--system-prompt"}
 
 // varRef is $NAME or ${NAME}; any other ${…} form (${A:-b}, ${A%/}) is left as written, which makes the value unknown.
-var varRef = regexp.MustCompile(`\$\{([A-Za-z_][A-Za-z0-9_]*)\}|\$([A-Za-z_][A-Za-z0-9_]*)`)
+var varRef = lazyre.New(`\$\{([A-Za-z_][A-Za-z0-9_]*)\}|\$([A-Za-z_][A-Za-z0-9_]*)`)
 
 // singleQuotedDollar: a line with a $ in single quotes, which the shell keeps as written (the words the line is split
 // into have lost their quotes, so its values are not expanded at all).
-var singleQuotedDollar = regexp.MustCompile(`'[^']*\$[^']*'`)
+var singleQuotedDollar = lazyre.New(`'[^']*\$[^']*'`)
 
 // heredocStart: a here-document, whose body lines are text, not commands (<<EOF, <<-'EOF', <<"EOF"; not <<< word).
-var heredocStart = regexp.MustCompile(`(?:^|[^<])<<-?\s*['"]?([A-Za-z_][A-Za-z0-9_]*)['"]?`)
+var heredocStart = lazyre.New(`(?:^|[^<])<<-?\s*['"]?([A-Za-z_][A-Za-z0-9_]*)['"]?`)
 
 // blockOpen / blockClose / blockWords: a branch or a loop and its parts. A claude command inside one may not be what
 // runs.

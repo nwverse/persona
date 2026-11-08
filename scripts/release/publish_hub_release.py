@@ -15,6 +15,8 @@ from urllib.parse import urlsplit
 
 import paramiko
 
+from publisher_io import KEEPALIVE_SECONDS
+
 
 def credential_fields(credentials):
     if 'fields' not in credentials:
@@ -30,20 +32,9 @@ def credential_fields(credentials):
     return values
 
 
-def main():
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--config', required=True, type=Path)
-    parser.add_argument('--artifact-dir', required=True, type=Path)
-    args = parser.parse_args()
-    cfg = json.loads(args.config.read_text())
+def connect_publisher(cfg):
+    """Open the configured publisher connection with existing host-key validation."""
     credentials = credential_fields(json.loads(subprocess.check_output(cfg['credentials_command'])))
-    manifest = json.loads((args.artifact_dir / 'latest.json').read_text())
-    packages = node_manifest(args.artifact_dir, manifest) if cfg.get('publish_nodes', False) else None
-    if cfg.get('publish_nodes', False) and packages is None:
-        raise ValueError('Matching node packages are required by this publisher')
-    remote_root = cfg['remote_root']
-    release_root = release_directory(remote_root, cfg.get('release_namespace', 'hub'))
-    staged = str(release_root / f'.upload-{manifest["build"]}-{uuid.uuid4().hex}')
     client = paramiko.SSHClient()
     client.load_system_host_keys()
     sock = None
@@ -71,6 +62,7 @@ def main():
                 client.connect(credentials['host'], port=int(credentials.get('port', 22)),
                                username=credentials['username'], password=credentials['password'],
                                look_for_keys=False, allow_agent=False, timeout=20, sock=sock)
+                client.get_transport().set_keepalive(KEEPALIVE_SECONDS)
                 break
             except OSError:
                 client.close()
@@ -79,6 +71,29 @@ def main():
                 if attempt == 2:
                     raise
                 time.sleep(3)
+        return client, sock
+    except BaseException:
+        client.close()
+        if sock is not None:
+            sock.close()
+        raise
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--config', required=True, type=Path)
+    parser.add_argument('--artifact-dir', required=True, type=Path)
+    args = parser.parse_args()
+    cfg = json.loads(args.config.read_text())
+    manifest = json.loads((args.artifact_dir / 'latest.json').read_text())
+    packages = node_manifest(args.artifact_dir, manifest) if cfg.get('publish_nodes', False) else None
+    if cfg.get('publish_nodes', False) and packages is None:
+        raise ValueError('Matching node packages are required by this publisher')
+    remote_root = cfg['remote_root']
+    release_root = release_directory(remote_root, cfg.get('release_namespace', 'hub'))
+    staged = str(release_root / f'.upload-{manifest["build"]}-{uuid.uuid4().hex}')
+    client, sock = connect_publisher(cfg)
+    try:
         with client.open_sftp() as sftp:
             namespace = cfg.get('release_namespace', 'hub')
             prepare_remote_staging(sftp, remote_root, namespace, staged)
@@ -89,7 +104,7 @@ def main():
                 destination = validate_remote_upload(sftp, remote_root, namespace, staged, name)
                 sftp.put(str(args.artifact_dir / name), destination)
         sources = {name: Path(__file__).with_name(name + '.py').read_text()
-                   for name in ['hub_release_paths', 'node_artifacts', 'promote_hub_release']}
+                   for name in ['hub_release_paths', 'node_artifacts', 'node_package_mirror', 'promote_hub_release']}
         payload = {'root': remote_root, 'staged': staged, 'timeout': cfg.get('timeout',1200),
                    'publish_nodes': cfg.get('publish_nodes', False),
                    'release_namespace': cfg.get('release_namespace', 'hub')}

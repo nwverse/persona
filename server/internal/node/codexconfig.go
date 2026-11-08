@@ -4,9 +4,10 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"regexp"
 	"strconv"
 	"strings"
+
+	"github.com/nwverse/persona/server/internal/lazyre"
 )
 
 // Codex's options the app may change ("Settings › Codex Settings"), in ~/.codex/config.toml. Only these top-level keys are read
@@ -109,8 +110,8 @@ func checkSettingValue(def ClaudeSetting, value any) error {
 // --- the few TOML lines we touch ---
 
 var (
-	tomlTable = regexp.MustCompile(`^\s*\[`)
-	tomlKV    = regexp.MustCompile(`^\s*([A-Za-z0-9_-]+)\s*=\s*(.*)$`)
+	tomlTable = lazyre.New(`^\s*\[`)
+	tomlKV    = lazyre.New(`^\s*([A-Za-z0-9_-]+)\s*=\s*(.*)$`)
 )
 
 // tomlTopLevel reads the top-level `key = value` lines (before the first table) whose value is a string or a bool.
