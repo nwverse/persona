@@ -326,7 +326,7 @@ Link flags: `-lpersonatunnel -lresolv -framework Security -framework CoreFoundat
 
 ## Connecting to hub through a local SOCKS5 proxy
 
-When the hub sits on a private network this device reaches only through another app that serves a local SOCKS5 proxy (for example a VPN-like client listening on `127.0.0.1:<port>` instead of taking the system VPN slot), the iOS and macOS apps can go through that proxy (#5786). Only Persona's hub traffic uses it.
+When the hub sits on a private network this device reaches only through another app that serves a local SOCKS5 proxy (for example a VPN-like client listening on `127.0.0.1:<port>` instead of taking the system VPN slot), the iOS and macOS apps can go through that proxy (#1248). Only Persona's hub traffic uses it.
 
 ```text
 App ──HTTP / WebSocket──▶ 127.0.0.1:<port> (inside app process)
