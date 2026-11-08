@@ -6,6 +6,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+
+	"github.com/nwverse/persona/server/internal/extension"
 )
 
 func TestComputerAppOwnerPreconditionAndLegacyRequests(t *testing.T) {
@@ -81,5 +83,29 @@ func TestGuardedComputerAppAliasRequiresItsOwner(t *testing.T) {
 		if len(st.stored(t)["a"]) != 2 {
 			t.Fatal("guarded alias changed settings without its owner")
 		}
+	}
+}
+
+// Saved-approval management keeps the legacy endpoint's full-credential boundary; granting extension scopes does
+// not grant this mutation, including the token representing every named extension scope.
+func TestGuardedComputerAppAliasKeepsFullCredentialBoundary(t *testing.T) {
+	h, st := twoMacs(t)
+	h.opts.ManagerID = "example-manager"
+	_, seen := computerMac(t, h, "a")
+	mux := h.routes()
+	tokens := []string{h.extTokens.issue("example-scoped", "Example extension", extension.HubScopes), h.extTokens.issueAll("example-all", "Example all scopes")}
+	for _, token := range tokens {
+		for _, path := range []string{"/api/v1/machines/a/computer/apps/com.apple.calculator", "/api/v1/machines/a/computer/apps/revoke/com.apple.calculator?expected_manager=example-manager"} {
+			code, out := call(t, mux, http.MethodDelete, path, token, "")
+			if code != http.StatusForbidden || out["code"] != "permission_denied" || len(st.stored(t)["a"]) != 2 {
+				t.Fatalf("extension scope reached saved approvals: %d %v", code, out)
+			}
+		}
+	}
+	if code, out := call(t, mux, http.MethodDelete, "/api/v1/machines/a/computer/apps/revoke/com.apple.calculator?expected_manager=example-manager", h.cfg.Token, ""); code != http.StatusOK || len(st.stored(t)["a"]) != 1 {
+		t.Fatalf("full credential could not revoke: %d %v", code, out)
+	}
+	if _, calls := seen(); len(calls) != 0 {
+		t.Fatalf("persisted revoke called a node: %+v", calls)
 	}
 }
