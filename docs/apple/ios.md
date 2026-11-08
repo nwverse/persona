@@ -391,6 +391,7 @@ Chat page:
   `interaction_resolved` with `answered_by: "assistant"` leaves an **Answered by the assistant** card above the input (answer, reason, close button; the latest 50 are kept in memory), also when this device's own answer came second (the hub's `already` reply).
   **Change Answer** (sessions that take messages only) opens a sheet with each question's choices and Other answer…, sends only the questions you changed to `POST /api/v1/interactions/{id}/reanswer`, and `interaction_reanswered` marks it **You changed it** with the assistant's answer.
   Session info lists the session's questions the assistant answered (`GET /api/v1/interactions/history`, newest first); a hub without the route shows none. The history keeps the assistant's answer, so a change shows only on devices that saw it.
+  Both requests name the card's or session's `manager` as `?manager=` (the question is no longer pending, so the hub routes by the manager named; docs/protocol/protocol.md "Per-manager routing").
   DEBUG `-openChangeAnswer YES` opens the sheet of the first answered card; mock `MOCK_DELEGATE=1` (`docs/operations/testing.md`).
 - Codex / internal Codex fork cards (`agent`, `docs/integrations/codex.md` ("Questions and approvals")): Codex has a question / Codex needs permission, same `QuestionForm`;
   `AgentPermissionForm` shows reason/full command or changes/Deny/Approve, Always approve · Stop asking for commands beginning with … (`always_label`, absent hides),

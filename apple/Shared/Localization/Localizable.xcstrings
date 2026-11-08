@@ -87719,29 +87719,6 @@
       },
       "extractionState": "manual"
     },
-    "Send New Answer": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Send New Answer"
-          }
-        },
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "新しい回答を送信"
-          }
-        },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "发送新答案"
-          }
-        }
-      },
-      "extractionState": "manual"
-    },
     "Send Now": {
       "localizations": {
         "en": {

@@ -4646,7 +4646,7 @@ struct SessionInfoSheet: View {
                 if isAssistant {
                     AlwaysGrantsSection(page: grants, conversation: key.sessionID, api: model.api(key.group))
                 } else {
-                    DelegatedHistorySection(page: delegatedHistory, key: key, api: model.api(key.group))
+                    DelegatedHistorySection(page: delegatedHistory, key: key, manager: session?.manager, api: model.api(key.group))
                 }
                 if let info {
                     Section("Runtime") {
@@ -4724,7 +4724,7 @@ struct SessionInfoSheet: View {
         }
         // The questions the assistant answered for an agent (#544); its own conversations have none.
         .task(id: isAssistant ? nil : key) {
-            if !isAssistant { await delegatedHistory.load(key, api: model.api(key.group)) }
+            if !isAssistant { await delegatedHistory.load(key, manager: session?.manager, api: model.api(key.group)) }
         }
     }
 

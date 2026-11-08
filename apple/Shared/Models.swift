@@ -707,6 +707,9 @@ nonisolated struct Session: Codable, Identifiable, Hashable, Sendable {
     /// on the CLI instead (「找不到 Node.js 22+」). Both nil otherwise.
     var runtime: String? = nil
     var runtimeFallback: String? = nil
+    /// The manager it belongs to (docs/protocol/protocol.md "Per-manager routing"); nil from hubs with one manager and
+    /// older ones. Requests the hub routes by the manager they name (its answered questions) name it.
+    var manager: String? = nil
     /// The group of paired hubs it came from (docs/protocol/multi-hub.md); nil for the default group. The app's own.
     var hubGroup: String? = nil
 
@@ -830,7 +833,7 @@ nonisolated struct Session: Codable, Identifiable, Hashable, Sendable {
              starting, startError = "start_error", todo, quiet, hubGroup = "app_hub_group",
              attentionReason = "attention_reason", failureReason = "failure_reason",
              turnError = "turn_error", turnErrorKind = "turn_error_kind", turnErrorCode = "turn_error_code", externalURL = "external_url", channels, origin, compaction, work,
-             runtime, runtimeFallback = "runtime_fallback"
+             runtime, runtimeFallback = "runtime_fallback", manager
     }
 
     init(from decoder: Decoder) throws {
@@ -839,6 +842,7 @@ nonisolated struct Session: Codable, Identifiable, Hashable, Sendable {
         sessionID = try c.decode(String.self, forKey: .sessionID)
         runtime = try c.decodeIfPresent(String.self, forKey: .runtime)
         runtimeFallback = try c.decodeIfPresent(String.self, forKey: .runtimeFallback)
+        manager = try c.decodeIfPresent(String.self, forKey: .manager)
         title = try c.decodeIfPresent(String.self, forKey: .title) ?? ""
         cwd = try c.decodeIfPresent(String.self, forKey: .cwd) ?? ""
         status = try c.decodeIfPresent(SessionStatus.self, forKey: .status) ?? .unknown
@@ -1702,6 +1706,9 @@ nonisolated struct Interaction: Codable, Identifiable, Hashable, Sendable {
     var delegating: Bool?
     /// What the assistant filled in when it left the question to the user.
     var delegate: Delegate?
+    /// The manager that reported it (docs/protocol/protocol.md "Per-manager routing"). Once it is no longer pending
+    /// the hub routes by the manager a request names, so Change Answer names this one.
+    var manager: String?
 
     var sessionKey: SessionKey { SessionKey(group: group, machineID: machineID, sessionID: sessionID) }
     var machineRef: MachineRef { MachineRef(group: group, id: machineID) }
@@ -1717,7 +1724,7 @@ nonisolated struct Interaction: Codable, Identifiable, Hashable, Sendable {
     var screenDialog: ScreenParser.Dialog? { dialog?.parsed ?? screen.flatMap(ScreenParser.dialog) }
 
     enum CodingKeys: String, CodingKey {
-        case id, kind, questions, plan, summary, screen, cwd, dialog, secret, fields, agent, reason, delegating, delegate
+        case id, kind, questions, plan, summary, screen, cwd, dialog, secret, fields, agent, reason, delegating, delegate, manager
         case machineID = "machine_id", sessionID = "session_id", sessionTitle = "session_title", taskTitle = "task_title",
              createdAt = "created_at", expiresAt = "expires_at", toolName = "tool_name", toolUseID = "tool_use_id",
              toolInput = "tool_input", alwaysLabel = "always_label", alwaysKeys = "always_keys", agentLabelHint = "agent_label", hubGroup = "app_hub_group",
@@ -1730,7 +1737,7 @@ nonisolated struct Interaction: Codable, Identifiable, Hashable, Sendable {
 nonisolated struct Delegate: Codable, Hashable, Sendable {
     var what: String?
     var whyNow: String?
-    /// For a card with options, an option's exact label (several questions: their answers joined by 「；」).
+    /// For a card with options, an option's exact label (several questions: their answers joined by `；`).
     var recommend: String?
     var cost: String?
     var reason: String?

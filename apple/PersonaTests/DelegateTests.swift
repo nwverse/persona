@@ -254,4 +254,57 @@ struct DelegateTests {
         await old.load(key, api: FakeHub().client)
         #expect(old.rows?.isEmpty == true && old.error == nil)
     }
+
+    /// With several managers the hub routes an answered question by the manager a request names (docs/protocol/protocol.md
+    /// "Per-manager routing"): Change Answer names the card's, Session Info's history the session's.
+    @Test func answeredQuestionsGoToTheirOwnManager() async throws {
+        let hub = FakeHub()
+        hub.on("POST", "/api/v1/interactions/ix_1/reanswer", json: #"{"ok":true}"#)
+        hub.on("GET", "/api/v1/interactions/history", json: #"{"interactions":[{"interaction":{"id":"h","machine_id":"m","session_id":"s","kind":"question","questions":[{"question":"用哪个库？","options":[{"label":"pgx"}]}]},"status":"resolved","resolution":{"answers":{"用哪个库？":"pgx"},"answered_by":"assistant"},"resolved_at":"2026-11-07T10:00:00Z"}]}"#)
+        let model = AppModel()
+        model.apiForTests = hub.client
+        let json = #"{"id":"ix_1","machine_id":"m","session_id":"s","kind":"question","manager":"m-2","questions":[{"question":"用哪个库？","options":[{"label":"pgx"},{"label":"sqlc"}]}]}"#
+        let ix = try JSON.decoder.decode(Interaction.self, from: Data(json.utf8))
+        #expect(ix.manager == "m-2")
+        model.handle(.interaction(ix), group: "")
+        model.handle(.interactionResolved("ix_1", assistant: AssistantAnswer(answers: ["用哪个库？": "pgx"], reason: "")), group: "")
+        let d = try #require(model.delegated(for: ix.sessionKey).first)
+        #expect(await model.reanswer(d, answers: ["用哪个库？": "sqlc"]) == nil)
+        #expect(hub.sent("POST", "/api/v1/interactions/ix_1/reanswer").first?.query == ["manager": "m-2"])
+
+        let owned = try JSON.decoder.decode(Session.self, from: Data(#"{"machine_id":"m","session_id":"s","manager":"m-2"}"#.utf8))
+        #expect(owned.manager == "m-2" && session(send: true).manager == nil)
+        let page = DelegatedHistoryModel()
+        await page.load(ix.sessionKey, manager: owned.manager, api: hub.client)
+        #expect(hub.sent("GET", "/api/v1/interactions/history").first?.query["manager"] == "m-2")
+        #expect(page.rows?.first?.interaction.manager == "m-2", "changed from Session Info, it names the same manager")
+
+        // One manager, or an older hub: nothing named, the default manager answers.
+        let plain = FakeHub()
+        plain.on("POST", "/api/v1/interactions/ix_1/reanswer", json: #"{"ok":true}"#)
+        model.apiForTests = plain.client
+        var unowned = d
+        unowned.interaction.manager = nil
+        #expect(await model.reanswer(unowned, answers: ["用哪个库？": "sqlc"]) == nil)
+        #expect(plain.sent("POST", "/api/v1/interactions/ix_1/reanswer").first?.query.isEmpty == true)
+    }
+
+    /// The BeautifulUI card tags the options the assistant would pick; one the agent itself marked Recommended keeps that tag.
+    @Test func theCardTagsTheAssistantsPick() {
+        let card = BUIQuestionForm.card(q("用哪个库？", ["pgx (Recommended)", "sqlc", "gorm"]), picks: ["pgx (Recommended)", "sqlc"])
+        #expect(card.choices.map(\.tag) == ["推荐", "助手推荐", nil])
+        #expect(BUIQuestionForm.card(q("用哪个库？", ["pgx", "sqlc"])).choices.allSatisfy { $0.tag == nil })
+    }
+
+    /// The watch's own pull leaves out a question the assistant is still looking at and buzzes once it is handed over.
+    @Test func theWatchWaitsUntilTheQuestionIsHandedOver() {
+        #expect(WatchInteractions.leavingMuted([card(delegating: true)]).isEmpty)
+        let handed = WatchInteractions.leavingMuted([card()])
+        #expect(WatchInteractions.newOnes(in: handed, alreadyShown: []).map(\.id) == ["ix_1"])
+        #expect(WatchInteractions.newOnes(in: handed, alreadyShown: handed).isEmpty)
+        // Only questions are delegated: a permission card marked so still shows.
+        var permission = card(delegating: true)
+        permission.kind = .permission
+        #expect(WatchInteractions.leavingMuted([permission]).map(\.id) == ["ix_1"])
+    }
 }

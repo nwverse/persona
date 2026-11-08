@@ -241,7 +241,7 @@ struct ReanswerSheet: View {
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     Button { send() } label: {
-                        if sending { ProgressView().controlSize(.small) } else { Text("Send New Answer").lineLimit(1) }
+                        if sending { ProgressView().controlSize(.small) } else { Text("Send").lineLimit(1) }
                     }
                     .disabled(changes.isEmpty || sending)
                 }
@@ -318,11 +318,13 @@ final class DelegatedHistoryModel {
     private(set) var rows: [DelegatedAnswer]?
     private(set) var error: String?
 
-    func load(_ key: SessionKey, api: APIClient?) async {
+    /// `manager`: the session's.
+    func load(_ key: SessionKey, manager: String? = nil, api: APIClient?) async {
         guard let api else { return }
         error = nil
         do {
-            rows = Delegated.history(try await api.interactionHistory(machine: key.machineID, session: key.sessionID))
+            rows = Delegated.history(try await api.interactionHistory(machine: key.machineID, session: key.sessionID,
+                                                                      manager: manager))
         } catch let refused as APIError where refused.status == 403 || refused.status == 404 {
             rows = []
         } catch {
@@ -334,6 +336,7 @@ final class DelegatedHistoryModel {
 struct DelegatedHistorySection: View {
     let page: DelegatedHistoryModel
     let key: SessionKey
+    var manager: String?
     let api: APIClient?
 
     var body: some View {
@@ -346,7 +349,7 @@ struct DelegatedHistorySection: View {
                 }
                 .font(Theme.Font.caption)
                 .foregroundStyle(Theme.danger)
-                Button { Task { await page.load(key, api: api) } } label: { Text("Retry").lineLimit(1) }
+                Button { Task { await page.load(key, manager: manager, api: api) } } label: { Text("Retry").lineLimit(1) }
             } header: {
                 Text("Questions the assistant answered")
             }

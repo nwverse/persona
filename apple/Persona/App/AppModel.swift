@@ -1829,7 +1829,7 @@ final class AppModel {
     func reanswer(_ d: DelegatedAnswer, answers: [String: String]) async -> String? {
         guard let api = api(d.interaction.group) else { return String(localized: "Can't reach the hub. That action didn't go through.") }
         do {
-            try await api.reanswer(d.interaction.id, answers: answers)
+            try await api.reanswer(d.interaction.id, answers: answers, manager: d.interaction.manager)
         } catch {
             return Delegated.reanswerError(error)
         }
