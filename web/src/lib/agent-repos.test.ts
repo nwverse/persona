@@ -214,7 +214,7 @@ describe("Orca projects in By repo", () => {
     expect(tree.worktrees[0]!.name).toBe("feature-a");
   });
 
-  it("keeps repo_root ahead of Orca project inference and does not nest those worktrees", () => {
+  it("uses Orca attribution ahead of repo_root, names the project from the root, and marks its checkout main", () => {
     const rootSpace = spaceId("repo-a", "/code/app");
     const tree = onlyRepo([
       session("main", "/code/app", { repo_root: "/code/app", space_kind: "orca", space_id: rootSpace }),
@@ -225,12 +225,12 @@ describe("Orca projects in By repo", () => {
         parent_space_id: rootSpace,
       }),
     ]);
-    expect(tree.repo).toBe("/code/app");
+    expect(tree.repo).toBe("orca:repo-a");
     expect(tree.name).toBe("app");
     expect(tree.worktrees.map((w) => [w.name, w.main, w.children.length])).toEqual([
-      ["app", true, 0],
-      ["feature-a", false, 0],
+      ["app", true, 1],
     ]);
+    expect(tree.worktrees[0]!.children.map((w) => [w.name, w.main])).toEqual([["feature-a", false]]);
   });
 
   it("leaves Orca folder workspaces and non-Orca ids containing :: on path-based grouping", () => {
@@ -260,6 +260,138 @@ describe("Orca projects in By repo", () => {
   });
 });
 
+describe("Every agent source in Orca worktrees", () => {
+  it("attributes a native session in a worktree subfolder to that worktree", () => {
+    const path = "/home/u/orca/workspaces/myrepo/feature-a";
+    const tree = onlyRepo([
+      orca("hosted", "repo-a", path),
+      session("native", `${path}/src/components`),
+    ]);
+    expect(tree.repo).toBe("orca:repo-a");
+    expect(tree.count).toBe(2);
+    expect(tree.worktrees).toHaveLength(1);
+    expect(ids(tree.worktrees[0]!.sessions)).toEqual(["hosted", "native"]);
+    expect(ids(tree.worktrees[0]!.tree)).toEqual(["hosted", "native"]);
+  });
+
+  it("attributes Codex by cwd ahead of repo_root and names the project from that root", () => {
+    const path = "/home/u/orca/workspaces/myrepo/feature-a";
+    const tree = onlyRepo([
+      orca("hosted", "repo-a", path),
+      session("codex", `${path}/backend`, {
+        space_kind: "codex_app",
+        space_id: "codex-project:/code/myrepo",
+        repo_root: "/code/myrepo",
+      }),
+    ]);
+    expect(tree.repo).toBe("orca:repo-a");
+    expect(tree.name).toBe("myrepo");
+    expect(tree.worktrees).toHaveLength(1);
+    expect(ids(tree.worktrees[0]!.sessions)).toEqual(["codex", "hosted"]);
+    expect(tree.worktrees[0]!.main).toBe(false);
+    expect(tree.count).toBe(2);
+  });
+
+  it("does not attribute other git worktrees below known marker folders", () => {
+    const path = "/home/u/orca/workspaces/myrepo/feature-a";
+    const markers = [".worktrees", ".claude/worktrees", ".herdr/worktrees"];
+    const nested = markers.map((marker, index) => session(`herdr-${index}`, `${path}/${marker}/feature-x`, {
+      space_kind: "herdr",
+      space_id: `herdr:space-${index}`,
+    }));
+    const built = buildRepoMachineTree([orca("hosted", "repo-a", path), ...nested], machines)[0]!;
+    expect(built.repos).toHaveLength(2);
+    const orcaRepo = built.repos.find((r) => r.repo === "orca:repo-a")!;
+    expect(ids(orcaRepo.worktrees[0]!.sessions)).toEqual(["hosted"]);
+    const inferred = built.repos.find((r) => r.repo === path)!;
+    expect(inferred.count).toBe(3);
+    expect(inferred.worktrees.map((w) => w.path)).toEqual(nested.map((s) => s.cwd));
+  });
+
+  it("matches complete path segments rather than a string prefix", () => {
+    const path = "/home/u/orca/workspaces/myrepo/feature-a";
+    const outside = `${path}-copy`;
+    const built = buildRepoMachineTree([
+      orca("hosted", "repo-a", path),
+      session("native", `${outside}/src`),
+    ], machines)[0]!;
+    expect(built.repos).toHaveLength(2);
+    expect(ids(built.repos.find((r) => r.repo === "orca:repo-a")!.worktrees[0]!.sessions)).toEqual(["hosted"]);
+    const inferred = built.repos.find((r) => r.repo === `${outside}/src`)!;
+    expect(inferred.worktrees[0]!.main).toBe(true);
+    expect(ids(inferred.worktrees[0]!.sessions)).toEqual(["native"]);
+  });
+
+  it("chooses the deepest known Orca worktree", () => {
+    const outer = "/home/u/orca/workspaces/myrepo/feature-a";
+    const inner = `${outer}/nested`;
+    const tree = onlyRepo([
+      orca("outer", "repo-a", outer),
+      orca("inner", "repo-a", inner),
+      session("native", `${inner}/src`),
+    ]);
+    expect(tree.worktrees).toHaveLength(2);
+    expect(ids(tree.worktrees.find((w) => w.path === outer)!.sessions)).toEqual(["outer"]);
+    expect(ids(tree.worktrees.find((w) => w.path === inner)!.sessions)).toEqual(["inner", "native"]);
+  });
+
+  it("uses workspace_cwd when cwd does not match an Orca worktree", () => {
+    const path = "/home/u/orca/workspaces/myrepo/feature-a";
+    const tree = onlyRepo([
+      orca("hosted", "repo-a", path),
+      session("native", "/home/u/elsewhere", { workspace_cwd: `${path}/src` }),
+    ]);
+    expect(tree.worktrees).toHaveLength(1);
+    expect(ids(tree.worktrees[0]!.sessions)).toEqual(["hosted", "native"]);
+  });
+
+  it("leaves a native session outside every known Orca worktree unchanged", () => {
+    const path = "/home/u/orca/workspaces/myrepo/feature-a";
+    const outside = "/home/u/projects/other";
+    const built = buildRepoMachineTree([
+      orca("hosted", "repo-a", path),
+      session("native", outside),
+    ], machines)[0]!;
+    expect(built.repos).toHaveLength(2);
+    const inferred = built.repos.find((r) => r.repo === outside)!;
+    expect(inferred.name).toBe("other");
+    expect(inferred.worktrees[0]!.main).toBe(true);
+    expect(ids(inferred.worktrees[0]!.sessions)).toEqual(["native"]);
+  });
+
+  it("does not learn Orca worktree paths from another machine", () => {
+    const path = "/home/u/orca/workspaces/myrepo/feature-a";
+    const built = buildRepoMachineTree([
+      orca("hosted", "repo-a", path),
+      session("native", `${path}/src`, { machine_id: "machine-b" }),
+    ], machines);
+    const a = built.find((m) => m.machine.id === "machine-a")!;
+    const b = built.find((m) => m.machine.id === "machine-b")!;
+    expect(a.repos[0]!.repo).toBe("orca:repo-a");
+    expect(b.repos[0]!.repo).toBe(`${path}/src`);
+    expect(b.repos[0]!.worktrees[0]!.main).toBe(true);
+  });
+
+  it("does not recognize an Orca worktree without a live Orca-hosted session", () => {
+    const path = "/home/u/orca/workspaces/myrepo/feature-a";
+    const tree = onlyRepo([session("native", `${path}/src`)]);
+    expect(tree.repo).toBe(`${path}/src`);
+    expect(tree.name).toBe("src");
+    expect(tree.worktrees[0]!.main).toBe(true);
+  });
+
+  it("keeps the first space id learned for a path when attributing another source", () => {
+    const path = "/home/u/orca/workspaces/myrepo/feature-a";
+    const built = buildRepoMachineTree([
+      orca("first", "repo-a", path),
+      orca("second", "repo-b", path),
+      session("native", `${path}/src`),
+    ], machines)[0]!;
+    expect(ids(built.repos.find((r) => r.repo === "orca:repo-a")!.worktrees[0]!.sessions)).toEqual(["first", "native"]);
+    expect(ids(built.repos.find((r) => r.repo === "orca:repo-b")!.worktrees[0]!.sessions)).toEqual(["second"]);
+  });
+});
+
 describe("Orca child worktrees in By repo", () => {
   it("nests recursively, sorts children, and fills descendant sessions and states", () => {
     const a = "/home/u/orca/workspaces/myrepo/feature-a";
@@ -278,9 +410,22 @@ describe("Orca child worktrees in By repo", () => {
     expect(parent.children.map((w) => w.name)).toEqual(["feature-b", "feature-c"]);
     expect(parent.children[0]!.children.map((w) => w.name)).toEqual(["feature-d"]);
     expect(ids(parent.tree)).toEqual(["a", "b", "d", "c"]);
-    expect(parent.childStates).toEqual({ needs_you: 1, working: 1, done: 1 });
+    expect(parent.childStates).toEqual({ needs_you: 1, working: 1, done: 0 });
     expect(parent.children[0]!.childStates).toEqual({ needs_you: 0, working: 0, done: 1 });
     expect(parent.children[1]!.childStates).toEqual({ needs_you: 0, working: 0, done: 0 });
+  });
+
+  it("ignores a non-Orca member session's parent_space_id when nesting", () => {
+    const a = "/home/u/orca/workspaces/myrepo/feature-a";
+    const b = "/home/u/orca/workspaces/myrepo/feature-b";
+    const tree = onlyRepo([
+      orca("a", "repo-a", a),
+      session("native", `${a}/src`, { parent_space_id: spaceId("repo-a", b) }),
+      orca("b", "repo-a", b),
+    ]);
+    expect(tree.worktrees.map((w) => w.name)).toEqual(["feature-a", "feature-b"]);
+    expect(tree.worktrees.every((w) => w.children.length === 0)).toBe(true);
+    expect(ids(tree.worktrees[0]!.sessions)).toEqual(["a", "native"]);
   });
 
   it("leaves a child with an unlisted parent at the top level", () => {

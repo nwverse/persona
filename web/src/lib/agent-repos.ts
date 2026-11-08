@@ -15,7 +15,7 @@ export type RepoWorktree = {
   children: RepoWorktree[];
   /** This worktree's own sessions, followed by every descendant's sessions. */
   tree: Session[];
-  /** How many descendant worktrees need you, are working, or are done. */
+  /** Direct child worktrees needing you, working, or done, by each child's whole-subtree summary. */
   childStates: ChildStates;
 };
 
@@ -76,34 +76,64 @@ export function repoOf(cwd: string, repoRoot?: string): Repo {
 const worktreeName = (path: string, repo: string) => (path === repo ? baseName(repo) : baseName(path));
 
 type Placement = Repo & { path: string; spaceId?: string };
+type OrcaWorktree = { repoId: string; spaceId: string; path: string };
 
 /** An Orca git worktree id is `<project id>::<absolute path>`; folder workspaces have no `::` and keep path inference. */
-function orcaSpace(s: Session): { repoId: string; path: string } | undefined {
+function orcaSpace(s: Session): OrcaWorktree | undefined {
   if (s.space_kind !== "orca" || !s.space_id) return undefined;
   const at = s.space_id.indexOf("::");
   if (at <= 0) return undefined;
   const repoId = s.space_id.slice(0, at);
   const path = s.space_id.slice(at + 2).replace(/\/+$/, "");
-  return repoId && path ? { repoId, path } : undefined;
+  return repoId && path ? { repoId, spaceId: s.space_id, path } : undefined;
 }
 
-/** Where one session belongs in By repo. A host-supplied root wins; Orca's exact project id comes before path inference. */
-function placementOf(s: Session): Placement {
+/** The deepest known Orca worktree containing this session's cwd. A separate git worktree below a marker is not
+ *  part of the containing Orca worktree. workspace_cwd is the node's verified fallback when cwd does not match. */
+function containingOrcaWorktree(s: Session, known: ReadonlyMap<string, OrcaWorktree>): OrcaWorktree | undefined {
+  const cwds = [s.cwd ?? ""];
+  if (s.workspace_cwd && s.workspace_cwd !== s.cwd) cwds.push(s.workspace_cwd);
+  for (const value of cwds) {
+    const cwd = value.replace(/\/+$/, "");
+    if (!cwd) continue;
+    let deepest: OrcaWorktree | undefined;
+    for (const [path, worktree] of known) {
+      if (deepest && path.length <= deepest.path.length) continue;
+      if (cwd !== path && !cwd.startsWith(`${path}/`)) continue;
+      const below = cwd === path ? "" : cwd.slice(path.length + 1);
+      if (WORKTREE_SEGMENTS.some(([marker]) => below.startsWith(marker.slice(1)))) continue;
+      deepest = worktree;
+    }
+    if (deepest) return deepest;
+  }
+  return undefined;
+}
+
+/** Orca's exact project id wins for its own sessions and for any source running inside a known Orca worktree.
+ *  Other sessions keep the host-supplied root or path inference. */
+function placementOf(s: Session, known: ReadonlyMap<string, OrcaWorktree>): Placement {
+  const orca = orcaSpace(s) ?? containingOrcaWorktree(s, known);
+  if (orca) {
+    return { repo: `orca:${orca.repoId}`, name: baseName(orca.path), worktree: orca.spaceId, path: orca.path, main: false, spaceId: orca.spaceId };
+  }
   if (s.repo_root) {
     const where = repoOf(s.cwd ?? "", s.repo_root);
     return { ...where, path: where.worktree };
-  }
-  const orca = orcaSpace(s);
-  if (orca && s.space_id) {
-    return { repo: `orca:${orca.repoId}`, name: baseName(orca.path), worktree: s.space_id, path: orca.path, main: false, spaceId: s.space_id };
   }
   const where = repoOf(s.cwd ?? "", undefined);
   return { ...where, path: where.worktree };
 }
 
-/** Orca does not send the project name yet: guess it from distinct worktree folder names, preferring the most frequent,
- *  then the shortest, then alphabetical. A later repo_root replaces this guess with the exact repository name. */
+/** Prefer the repository name a member session's repo_root supplies. Without one Orca does not send the project name:
+ *  guess it from distinct worktree folder names, preferring the most frequent, then the shortest, then alphabetical. */
 function orcaProjectName(worktrees: readonly RepoWorktree[]): string {
+  const roots = worktrees.flatMap((w) => w.sessions.map((s) => (s.repo_root ?? "").replace(/\/+$/, "")).filter(Boolean));
+  if (roots.length) {
+    const counts = new Map<string, number>();
+    for (const root of roots) counts.set(root, (counts.get(root) ?? 0) + 1);
+    const root = [...counts].sort((a, b) => b[1] - a[1] || a[0].length - b[0].length || a[0].localeCompare(b[0]))[0]?.[0] ?? "";
+    return baseName(root);
+  }
   const counts = new Map<string, number>();
   for (const path of new Set(worktrees.map((w) => w.path))) {
     const name = baseName(path);
@@ -118,8 +148,9 @@ function nestWorktrees(worktrees: RepoWorktree[], bySpace: ReadonlyMap<string, R
   const orca = new Set(bySpace.values());
   const parentOf = (w: RepoWorktree): RepoWorktree | undefined => {
     if (!orca.has(w)) return undefined;
-    const pid = w.sessions[0]?.parent_space_id;
-    const parent = pid ? bySpace.get(pid) : undefined;
+    // Sessions attributed by cwd may carry their own unrelated parent id; only Orca-hosted sessions define this edge.
+    const hosted = w.sessions.find((s) => s.parent_space_id && orcaSpace(s));
+    const parent = hosted?.parent_space_id ? bySpace.get(hosted.parent_space_id) : undefined;
     return parent === w ? undefined : parent;
   };
   const loops = (w: RepoWorktree) => {
@@ -141,7 +172,6 @@ function nestWorktrees(worktrees: RepoWorktree[], bySpace: ReadonlyMap<string, R
     const below = w.children.flatMap(fill);
     const counts: ChildStates = { needs_you: 0, working: 0, done: 0 };
     for (const c of w.children) {
-      for (const [k, v] of Object.entries(c.childStates) as [keyof ChildStates, number][]) counts[k] += v;
       const st = summaryState(c.tree);
       if (st === "needs_you" || st === "working") counts[st]++;
       else if (st === "unread" || st === "idle") counts.done++;
@@ -164,11 +194,17 @@ export function showsWorktreeLevel(tree: RepoTree): boolean {
 
 type RepoBucket = { tree: RepoTree; orca: boolean; bySpace: Map<string, RepoWorktree> };
 
-/** Build one computer's repositories. Orca worktree identity is its space id, not cwd (which may be a subfolder). */
+/** Build one computer's repositories. Learn Orca worktrees from live Orca-hosted sessions first, so every agent source
+ *  running in one can share its exact identity; without a live Orca-hosted session its path is not known to be Orca's. */
 function buildRepos(sessions: Session[], machineId: string): RepoTree[] {
+  const known = new Map<string, OrcaWorktree>();
+  for (const s of sessions) {
+    const worktree = orcaSpace(s);
+    if (worktree && !known.has(worktree.path)) known.set(worktree.path, worktree);
+  }
   const repos = new Map<string, RepoBucket>();
   for (const s of sessions) {
-    const where = placementOf(s);
+    const where = placementOf(s, known);
     const key = `${machineId}\u0000${where.repo}`;
     let bucket = repos.get(key);
     if (!bucket) {
@@ -202,7 +238,10 @@ function buildRepos(sessions: Session[], machineId: string): RepoTree[] {
   }
   return [...repos.values()].map((bucket) => {
     const { tree } = bucket;
-    for (const w of tree.worktrees) w.sessions.sort(byAttention);
+    for (const w of tree.worktrees) {
+      w.sessions.sort(byAttention);
+      if (bucket.orca) w.main = w.sessions.some((s) => (s.repo_root ?? "").replace(/\/+$/, "") === w.path);
+    }
     const worktrees = nestWorktrees(tree.worktrees, bucket.bySpace)
       .sort((a, b) => Number(b.main) - Number(a.main) || a.name.localeCompare(b.name));
     return { ...tree, name: bucket.orca ? orcaProjectName(tree.worktrees) : tree.name, worktrees };
