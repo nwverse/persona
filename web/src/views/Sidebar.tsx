@@ -1,4 +1,4 @@
-import { storedValue, storeValue } from "../lib/compatibility";
+import { removeStoredValue, storedValue, storeValue } from "../lib/compatibility";
 // Beautiful UI's Sidebar Nav: workspace row, quick search, sections, one gliding highlight. Persona's main conversation
 // is the first entry (the app opens on the assistant); a new conversation and a new agent are the "+" of their sections (#1239).
 import { BASE } from "../lib/base";
@@ -571,7 +571,12 @@ function AgentsBlock(props: AgentsBlockProps) {
     setGrouping(g);
     props.hover(null);
   };
-  return bounded && !full ? <BoundedAgentsBlock {...props} chooseGrouping={chooseGrouping} /> : <LegacyAgentsBlock {...props} grouping={agentGrouping(grouping)} chooseGrouping={chooseGrouping} />;
+  // Back to the paged list: forget the saved grouping. Offered only where the paged list exists and nothing is pinned
+  // (pins keep the full list either way).
+  const pagedList = bounded && grouped && pins.sessions.length === 0 && pins.spaces.length === 0
+    ? () => { removeStoredValue("persona.agentGrouping"); setGrouping(null); props.hover(null); }
+    : undefined;
+  return bounded && !full ? <BoundedAgentsBlock {...props} chooseGrouping={chooseGrouping} /> : <LegacyAgentsBlock {...props} grouping={agentGrouping(grouping)} chooseGrouping={chooseGrouping} pagedList={pagedList} />;
 }
 
 function BoundedAgentsBlock({ reg, hover, activeKey, go, onNewAgent, add = true, chooseGrouping }: AgentsBlockProps) {
@@ -604,7 +609,7 @@ function BoundedAgentsBlock({ reg, hover, activeKey, go, onNewAgent, add = true,
   </>;
 }
 
-function LegacyAgentsBlock({ reg, hover, activeKey, go, onNewAgent, onNavigate, add = true, foldable = false, grouping, chooseGrouping }: AgentsBlockProps & { grouping: AgentGrouping; chooseGrouping: (g: AgentGrouping) => void }) {
+function LegacyAgentsBlock({ reg, hover, activeKey, go, onNewAgent, onNavigate, add = true, foldable = false, grouping, chooseGrouping, pagedList }: AgentsBlockProps & { grouping: AgentGrouping; chooseGrouping: (g: AgentGrouping) => void; pagedList?: () => void }) {
   const machines = useStore((s) => s.machines);
   const { sessions: all, loaded } = useFullAgentSessions();
   const mutes = useStore((s) => s.mutes);
@@ -766,6 +771,8 @@ function LegacyAgentsBlock({ reg, hover, activeKey, go, onNewAgent, onNavigate, 
           { key: "open-all", label: t("sidebar.open_all"), icon: "chevron", checked: false, onSelect: () => { setAgentsFolded(false); hover(null); } },
           // the agents archived from a row's ⋯ (lib/agent-archives.ts), to find and restore
           ...(archives ? [{ key: "archived", label: t("agentmenus.archived_agents"), icon: "archive" as const, divider: true, onSelect: () => { navigate({ name: "agent-archives" }); onNavigate?.(); hover(null); } }] : []),
+          // a hub with the paged list: return to it from a grouping chosen there (its Browse by offers By repo)
+          ...(pagedList ? [{ key: "paged-list", label: t("sidebar.paged_list"), icon: "clock" as const, divider: true, onSelect: pagedList }] : []),
         ]} />
       )}
       <FoldScope.Provider value={AGENTS_FOLD}>
