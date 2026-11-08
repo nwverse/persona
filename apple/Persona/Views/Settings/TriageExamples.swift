@@ -81,7 +81,7 @@ struct TriageExampleView: View {
             case .replyReminder:
                 VStack(alignment: .leading, spacing: Theme.Space.xs) {
                     Chip(text: String(localized: "Seen, no reply for \(replyMinutes) min"), symbol: Theme.Icon.replyReminder)
-                    Image(systemName: Theme.Icon.down).font(Theme.Font.label).foregroundStyle(.tertiary)
+                    ThemedIcon(Theme.Icon.down).font(Theme.Font.label).foregroundStyle(.tertiary)
                     PushBannerSample(title: TriageExample.reminderTitle, message: TriageExample.reminderMessage)
                 }
             }

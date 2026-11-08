@@ -35,7 +35,7 @@ struct ExampleChange<Off: View, On: View>: View {
     var body: some View {
         VStack(alignment: .leading, spacing: Theme.Space.xs) {
             row(String(localized: "Off [Example]")) { off }
-            row(nil) { Image(systemName: Theme.Icon.down).font(Theme.Font.label).foregroundStyle(.tertiary) }
+            row(nil) { ThemedIcon(Theme.Icon.down).font(Theme.Font.label).foregroundStyle(.tertiary) }
             row(String(localized: "On [Example]")) { on }
         }
     }
@@ -93,7 +93,7 @@ struct ExampleTimeline: View {
 
     @ViewBuilder private func chain(arrow: String) -> some View {
         ForEach(steps.indices, id: \.self) { i in
-            if i > 0 { Image(systemName: arrow).font(Theme.Font.label).foregroundStyle(.tertiary) }
+            if i > 0 { ThemedIcon(arrow).font(Theme.Font.label).foregroundStyle(.tertiary) }
             Chip(text: steps[i].text, symbol: steps[i].symbol, look: steps[i].look)
         }
     }
