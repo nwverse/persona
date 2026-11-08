@@ -155,9 +155,22 @@ func restoreFiling(it *InboxItem, w *inboxFiling, owned bool) {
 		prior = prior.previousWrite
 	}
 	prev := prior.previous
+	// An intervening successful request can separate failed writers. Its captured previous chain still contains
+	// those older optimistic entries, so normalize it before restoring it; otherwise rollback resurrects them.
+	chain := InboxItem{Chain: prev.chain, ChainSeq: prev.chainSeq}
+	for p := prior.previousWrite; p != nil; p = p.previousWrite {
+		if p.failed {
+			restoreFilingChain(&chain, p, p.previous)
+		}
+	}
+	prev.chain, prev.chainSeq = chain.Chain, chain.ChainSeq
 	if owned {
 		it.DoneAt, it.DoneBy = prev.DoneAt, prev.DoneBy
 	}
+	restoreFilingChain(it, w, prev)
+}
+
+func restoreFilingChain(it *InboxItem, w *inboxFiling, prev doneState) {
 	old := make(map[string]bool, len(prev.chain))
 	for _, e := range prev.chain {
 		old[e.ID] = true
@@ -221,6 +234,19 @@ func (s *Service) saveInboxFilings(ctx context.Context, ws []*inboxFiling) map[s
 				// A newer filing owns the done marker, but must not keep the failed request's chain entries.
 				if pending {
 					restoreFiling(w.it, w, owned)
+					if owned {
+						// Saves can reach storage out of mutation order. Rolling back the latest writer restores an
+						// older pending marker; keep its ownership so filters and later saves still see that chain.
+						for p := w.previousWrite; p != nil; p = p.previousWrite {
+							if p.failed {
+								continue
+							}
+							if !p.settled && w.it.DoneAt == p.applied.DoneAt && w.it.DoneBy == p.applied.DoneBy {
+								b.filing[w.it.ID] = p
+							}
+							break
+						}
+					}
 				}
 			} else if w.prepared {
 				for p := w.previousWrite; p != nil && (!p.settled || p.failed); p = p.previousWrite {

@@ -103,6 +103,31 @@ func (f *inboxBulkFilter) match(it *InboxItem) bool {
 		(len(f.Kinds) == 0 || slices.Contains(f.Kinds, it.Kind))
 }
 
+// A list may have exposed any pending reopen, even when both the latest marker and the stored base are closed.
+// Include every open state that can still commit, so admission reports Failed until the pending chain resolves.
+// Filing changes only DoneAt among the filter fields; apply the other fields to the current item. Under mu.
+func (b *inboxBook) matchesBulkFilter(it *InboxItem, f *inboxBulkFilter) bool {
+	open := *it
+	open.DoneAt = nil
+	if !f.match(&open) {
+		return false
+	}
+	if it.open() {
+		return true
+	}
+	latest := b.filing[it.ID]
+	if latest == nil || !b.holdsFiling(latest) {
+		return false
+	}
+	for w := latest; w != nil && (!w.settled || w.failed); w = w.previousWrite {
+		if !w.settled && w.applied.DoneAt == nil {
+			return true
+		}
+	}
+	committed, _ := b.filingSnapshot(it, nil)
+	return committed.open()
+}
+
 // setInboxDoneBulk files (done) or brings back (!done) the targets in one go: setInboxBulk without a filter.
 func (s *Service) setInboxDoneBulk(ctx context.Context, targets []inboxBulkTarget, done bool, now time.Time) inboxBulkResult {
 	action := bulkReopen
@@ -129,9 +154,7 @@ func (s *Service) setInboxBulk(ctx context.Context, action string, targets []inb
 	if filter != nil {
 		targets = nil
 		for _, it := range b.items {
-			view, _ := b.filingSnapshot(it, nil)
-			// A pending move can be open in either view. Include it so the pending guard reports a retry.
-			if filter.match(it) || filter.match(view) {
+			if b.matchesBulkFilter(it, filter) {
 				if it.arrivedAfter(asOf) {
 					res.Skipped = append(res.Skipped, inboxBulkSkip{it.ID, bulkSkipChanged})
 				} else {
