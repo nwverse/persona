@@ -25,8 +25,6 @@ import java.util.TimeZone
 
 /** The calls Settings › Assistant makes: narrower than [AssistantManagement], so it stays put while that one grows. */
 internal interface AssistantSettingsApi {
-    /** No production capability contract exists yet. Identity and optional values are not proof of support. */
-    fun supportsDefaultPermission(manager: String): Boolean = false
     suspend fun config(): AssistantConfig
     suspend fun updateConfig(update: AssistantConfigUpdate): AssistantConfig
     suspend fun memory(): List<MemoryFile>
@@ -168,7 +166,7 @@ internal class AssistantSettingsState(
             val config = api.config()
             currentCoroutineContext().ensureActive()
             if (revision != configRevision) return
-            val supported = config.manager?.takeIf(String::isNotBlank)?.let(api::supportsDefaultPermission) == true
+            val supported = config.permissionDefaults?.supports(config.manager) == true
             set { copy(config = config, permissionSupported = supported) }
             // Like iOS: opening the page brings the hub's zone along with the phone's.
             quietly {
@@ -209,12 +207,13 @@ internal class AssistantSettingsState(
     suspend fun setDefaultPermission(mode: String) {
         val config = state.value.config ?: return
         val owner = config.manager?.takeIf(String::isNotBlank) ?: return
-        if (!state.value.permissionSupported || !api.supportsDefaultPermission(owner) ||
+        if (!state.value.permissionSupported || config.permissionDefaults?.supports(owner) != true ||
             (config.defaultPermissionMode ?: "default") == mode) return
-        require(mode in listOf("default", "acceptEdits", "plan", "auto", "bypassPermissions"))
+        require(mode in persona.core.contracts.api.AssistantPermissionDefaults.MODES)
         val revision = configRevision
         fun verify(value: AssistantConfig) {
             check(value.manager == owner) { "Assistant identity changed" }
+            check(value.permissionDefaults?.supports(owner) == true) { "Assistant permission support changed" }
             check(value.defaultPermissionMode == mode || (mode == "default" && value.defaultPermissionMode.isNullOrBlank())) {
                 "The hub did not save the permission default"
             }
