@@ -1,3 +1,4 @@
+import UIKit
 import XCTest
 
 /// The Persona tab's top bar and its sidebar (docs/apple/ios.md「Persona 顶栏和侧边栏」): the avatar's menu (Knowledge, Details, the
@@ -32,7 +33,7 @@ final class AssistantTopBarTests: XCTestCase {
     }
 
     @MainActor private func avatar(_ app: XCUIApplication) -> XCUIElement {
-        let a = app.buttons["persona-avatar"]
+        let a = app.buttons["shell-assistant"]
         XCTAssertTrue(a.waitForExistence(timeout: 15), "no avatar in the top bar:\n\(app.debugDescription)")
         return a
     }
@@ -45,11 +46,18 @@ final class AssistantTopBarTests: XCTestCase {
         XCTAssertEqual(XCTWaiter.wait(for: [gone], timeout: 5), .completed, why)
     }
 
-    /// The name pill says what was copied for a moment.
+    /// The Shell menu copies the requested payload; its floating bar has no name-pill confirmation.
     @MainActor private func copied(_ app: XCUIApplication, _ text: String) {
-        // It shows for 3 s, and XCUITest waits for the menu to finish closing first: look right away.
-        let hint = app.staticTexts[text]
-        XCTAssertTrue(hint.exists || hint.waitForExistence(timeout: 1), "the pill did not say \(text):\n\(app.debugDescription)")
+        let value = UIPasteboard.general.string ?? ""
+        XCTAssertFalse(value.isEmpty, "the menu copied no text")
+        let session = String(main.split(separator: "/").last!)
+        if text == "已拷贝会话 ID" {
+            XCTAssertEqual(value, session, "the menu did not copy the session ID")
+        } else if text == "已拷贝对话信息" {
+            XCTAssertTrue(value.contains(session), "the chat info does not identify this conversation")
+        } else {
+            XCTAssertTrue(value.hasPrefix("/") || value.hasPrefix("~/"), "the directory copy is not a path")
+        }
     }
 
     /// The avatar's menu: every item is there, the copies say so (in the name pill), Details and Knowledge open their pages.
@@ -98,7 +106,7 @@ final class AssistantTopBarTests: XCTestCase {
         // (nothing to start anew from) is off.
         XCTAssertTrue(app.staticTexts["今天有什么需要我处理的？"].waitForNonExistence(timeout: 5) && !new.isEnabled,
                       "新对话 did not open the new-conversation page:\n\(app.debugDescription)")
-        XCTAssertTrue(app.textViews["问 Persona…"].exists || app.textFields["问 Persona…"].exists, "no composer on the new-conversation page")
+        XCTAssertTrue(app.descendants(matching: .any)["shell-composer-field"].firstMatch.exists, "no composer on the new-conversation page")
         shot(app, "home")
 
         let history = app.buttons["历史对话"]
@@ -106,16 +114,16 @@ final class AssistantTopBarTests: XCTestCase {
         history.tapCenter()
         XCTAssertTrue(sidebar(app).waitForExistence(timeout: 3), "历史对话 did not open the sidebar:\n\(app.debugDescription)")
         // Doubao's layout (2026-10-31): the main conversation first, what to start, Recent, Persona and Settings at the foot.
-        for row in ["新对话", "定时任务", "知识库", "最近"] {
+        for row in ["定时任务", "知识库", "最近"] {
             XCTAssertTrue(app.staticTexts[row].firstMatch.exists, "no \(row) in the sidebar:\n\(app.debugDescription)")
         }
+        XCTAssertTrue(app.drawerNewChatButton.exists, "the drawer has no New Chat action")
         // The main conversation is the first row, named Persona, once: not under Pin or Recent (#2004, every layout).
         let mainRow = app.buttons["sidebar-main"].firstMatch
         XCTAssertTrue(mainRow.exists && mainRow.label.hasPrefix("Persona"), "no Persona row:\n\(app.debugDescription)")
-        XCTAssertLessThan(mainRow.frame.minY, app.staticTexts["新对话"].firstMatch.frame.minY, "Persona is not the first row")
+        XCTAssertLessThan(mainRow.frame.minY, app.buttons["sidebar-inbox"].firstMatch.frame.minY, "Persona is not the first row")
         XCTAssertEqual(app.buttons.matching(identifier: "sidebar-main").count, 1, "the main conversation shows more than once")
-        XCTAssertTrue(app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@ AND label ENDSWITH %@", "Persona，", "查看资料")).firstMatch.exists,
-                      "no Persona at the foot")
+        XCTAssertTrue(app.drawerSettingsButton.exists, "no Settings at the drawer's foot")
         XCTAssertTrue(app.buttons["搜索对话"].exists, "no search button")
         shot(app, "sidebar")
         // A conversation the user opened, in Recent: the morning brief's is that scheduled task's own, under Scheduled Tasks (#3566, #5197).
@@ -172,9 +180,9 @@ final class AssistantTopBarTests: XCTestCase {
         waitGone(sidebar(app), "the sidebar stays open after picking")
         XCTAssertTrue(app.staticTexts["已经在日历里加好了。"].waitForExistence(timeout: 10), "did not switch conversations")
 
-        // The tab bar still switches tabs.
-        app.tabBars.buttons["Agents"].tap()
-        waitGone(app.buttons["persona-avatar"], "the tab bar did not switch")
+        // The Shell switch still reaches Agents.
+        ShellFinger(app).switchTo(agents: true, "Agents after picking a conversation")
+        XCTAssertTrue(app.buttons["agents-new"].firstMatch.waitForExistence(timeout: 5), "the switch did not reach Agents")
     }
 
     /// Scrolling a long conversation leaves the top bar where it was.

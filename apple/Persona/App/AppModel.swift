@@ -287,6 +287,7 @@ final class AppModel {
 
     init(stateFolder: URL? = nil) {
         self.stateFolder = stateFolder
+        RetiredPreferences.clear(from: .standard)
         TextSize.current.applyToMacFonts() // what `textSize` starts at
         Task.detached(priority: .utility) { LarkAttachment.staging.sweep() }
         connection = ConnectionStatus()
@@ -2494,13 +2495,6 @@ final class AppModel {
 
     /// Agents (not the assistant) waiting on the user, not muted: the Agents tab's badge, the shell's Agents.
     var agentsWaiting: Int { badges.agents }
-
-    /// Settings › Appearance › Old Layout (2026-11-01, docs/apple/ios.md「新外壳」): on, the iPhone keeps the four tabs exactly as before;
-    /// off (the default), it is the ChatGPT-style shell (Assistant | Agents, the drawer, Settings as a sheet). Kept for a few days
-    /// of transition. iPad, iPhone Duo open and the Mac always use their own layouts.
-    var oldLayout: Bool = UserDefaults.standard.bool(forKey: "ui.oldLayout") {
-        didSet { UserDefaults.standard.set(oldLayout, forKey: "ui.oldLayout") }
-    }
 
     /// The shell's Settings sheet is up. Here and not in the shell's state: picking a style in it rebuilds the whole tree
     /// (`look`), and the rebuilt shell puts the sheet back on the same page (`settingsPath`).

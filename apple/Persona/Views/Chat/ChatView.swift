@@ -141,7 +141,7 @@ struct ChatView: View {
     /// iPhone Duo's bars down the side: the shell's bar over the Persona conversation is the side rail (`ShellSideRail`).
     @Environment(\.shellRailEdge) private var railEdge
     /// The shell's composer (`ShellComposerBar`): the assistant's conversation and, in the shell, an agent's too, in every
-    /// style (#1091); the old layout keeps `ComposerRow` / `PromptComposer` and the mode chips above them. On the Mac
+    /// style (#1091). Other platforms retain `ComposerRow` / `PromptComposer` and their mode chips. On the Mac
     /// the card in every style but BeautifulUI's (its prompt bar is already one): the field, and under it Add, the model
     /// and its modes, send / stop, as Codex's and ChatGPT's desktop apps (#2113).
     private var usesShellComposer: Bool { shellChat || shell != nil || ChatComposerKind.card }
@@ -1580,7 +1580,7 @@ struct ChatView: View {
 
     /// An anchored header (`changeWork`) lost: the steps under it laid out all at once and the lazy list then measured
     /// them taller than it had guessed, so the header went off the top and left the list, and the pin had nothing to
-    /// put back (old layout + BeautifulUI, #1173's test failed on master too). By id the list lays that row out exactly:
+    /// put back (BeautifulUI, #1173's test failed on master too). By id the list lays that row out exactly:
     /// it goes to the top, under the bar as far as `rise` let it, and the pin holds it from there.
     private func keepHeader(_ key: String, rise: CGFloat) {
         let target = scratch.listFrame.minY + headerRoom + Theme.Space.l
@@ -3762,12 +3762,11 @@ enum ChatComposerKind {
         #endif
     }
 
-    /// The iPad (and an open iPhone Duo): a regular width keeps the tabs and the split, not the shell, but draws the
-    /// iPhone's composer (`ShellComposerBar`, one line that grows into a card) in every style, as the shell does, unless
-    /// Old Layout is on (#2779). The page caps its width (`ChatView.readableWidth`), the composer with it.
+    /// iPad and an open iPhone Duo keep their regular-width tabs and split, with the iPhone's
+    /// expanding composer card in every style. Its width follows the page's readable width.
     static var padCard: Bool {
         #if os(iOS)
-        !AppModel.shared.oldLayout
+        true
         #else
         false
         #endif
@@ -3791,7 +3790,7 @@ struct Composer: View, Equatable {
     @Environment(\.shellChat) private var shellChat
     @Environment(\.shell) private var shell
     /// The shell's composer (`ShellComposerBar`): the assistant's conversation and, in the shell, an agent's too, in every
-    /// style (#1091); the old layout keeps `ComposerRow` / `PromptComposer` and the mode chips above them. On the Mac
+    /// style (#1091). Other platforms retain `ComposerRow` / `PromptComposer` and their mode chips. On the Mac
     /// the card in every style but BeautifulUI's (its prompt bar is already one): the field, and under it Add, the model
     /// and its modes, send / stop, as Codex's and ChatGPT's desktop apps (#2113).
     private var usesShellComposer: Bool { shellChat || shell != nil || ChatComposerKind.card }

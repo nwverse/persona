@@ -81,13 +81,23 @@ final class DemoModeTests: XCTestCase {
     }
 
     @MainActor private func tab(_ name: String) {
-        app.buttons[name].firstMatch.tap()
+        if name == "Persona" {
+            ShellFinger(app).switchTo(agents: false, "Assistant in the demo walkthrough")
+        } else {
+            if app.navigationBars["收件箱"].exists { back() }
+            let drawer = app.buttons.matching(NSPredicate(format: "identifier IN %@", ["assistant-sidebar-button", "work-sidebar-button"]))
+                .allElementsBoundByIndex.first(where: \.isHittable)
+            XCTAssertNotNil(drawer, "no visible drawer button")
+            drawer?.tapCenter()
+            let entry = name == "收件箱" ? app.buttons["sidebar-inbox"].firstMatch : app.drawerSettingsButton
+            see(entry, "the drawer's \(name)").tapCenter()
+        }
         sleep(1)
     }
 
     /// An agent's row in the Agents list (scrolling to it).
     @MainActor private func openAgent(_ title: String) {
-        let list = app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "分组：")).firstMatch
+        let list = app.buttons["shell-agents"].firstMatch
         // Back on the list already, it can take a moment to be hittable: wait for that first. A back() on the list
         // itself found no Back and tapped the first bar button, New Session, and the search went on inside its sheet.
         func onList() -> Bool { list.exists && list.isHittable }
@@ -104,8 +114,7 @@ final class DemoModeTests: XCTestCase {
             return max(nav.exists ? nav.frame.maxY : 0, filters.exists && filters.isHittable ? filters.frame.maxY : 0)
         }
         func clear() -> Bool {
-            let tabs = app.tabBars.firstMatch
-            let bottom = tabs.exists ? tabs.frame.minY : app.frame.maxY
+            let bottom = app.frame.maxY
             return row.exists && row.frame.minY > top() + 8 && row.frame.maxY < bottom - 8
         }
         toTop()
@@ -136,7 +145,9 @@ final class DemoModeTests: XCTestCase {
 
         // Agents: spaces in every state, the quick filters, Compact List.
         see(text(Self.firstAgent), "the demo's agents", timeout: 10)
+        for _ in 0..<8 where !text("weather").exists { app.swipeUp() }
         XCTAssertTrue(text("weather").exists)
+        toTop()
         noErrors("agents")
         shot("agents")
         see(app.buttons["agents.filter.unread"], "the 完成未看 filter").tap()
@@ -144,7 +155,7 @@ final class DemoModeTests: XCTestCase {
         XCTAssertFalse(text("给天气 App 加主屏幕小组件").exists, "a working agent under 完成未看")
         shot("agents-unread")
         app.buttons["agents.filter.all"].tap()
-        let menu = see(app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "分组：")).firstMatch, "the list menu")
+        let menu = see(app.buttons["shell-agents"].firstMatch, "the list menu")
         menu.tap()
         see(app.buttons["细列表"], "细列表 in the menu").tap()
         see(app.buttons.matching(identifier: "agents.compactRow").firstMatch, "compact rows")
@@ -158,7 +169,7 @@ final class DemoModeTests: XCTestCase {
         see(text("小组件的时间线已经能按小时刷新了"), "the Claude session's reply")
         noErrors("claude chat")
         shot("claude")
-        let field = see(app.textFields.firstMatch, "the message field")
+        let field = see(app.descendants(matching: .any)["shell-composer-field"].firstMatch, "the message field")
         field.tap()
         field.typeText("看一下进度")
         see(app.buttons["发送"], "send").tap()
@@ -216,12 +227,12 @@ final class DemoModeTests: XCTestCase {
         toTop()
 
         // Machines: all of them, one machine, its 24 hours.
-        menu.tap()
-        see(app.buttons["机器"], "机器 in the menu").tap()
-        see(app.staticTexts["服务器"], "the machines")
+        see(app.buttons["work-sidebar-button"].firstMatch, "Agents' drawer").tapCenter()
+        see(app.buttons["sidebar-machines"].firstMatch, "Machines in the drawer").tap()
+        let serverCard = see(app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "服务器、")).firstMatch, "the server's machine card")
         noErrors("machines")
         shot("machines")
-        app.staticTexts["服务器"].tap()
+        serverCard.tap()
         let range = see(app.descendants(matching: .any)["metric-range"].firstMatch, "the machine page") // either style's segmented control
         if !range.isHittable { app.swipeUp() }
         range.buttons["24 小时"].tap()
@@ -241,7 +252,7 @@ final class DemoModeTests: XCTestCase {
         shot("persona-sidebar")
         see(app.buttons["assistant-drawer-close"], "the drawer's close card").tapCenter()
         sleep(1)
-        see(app.buttons["persona-avatar"], "the avatar").tapCenter()
+        see(app.buttons["shell-assistant"], "the avatar").tapCenter()
         see(app.buttons["详细信息"], "详细信息").tap()
         let routines = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "定时任务")).firstMatch
         for _ in 0..<4 where !(routines.exists && routines.isHittable) { app.swipeUp() }

@@ -147,7 +147,7 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
         FrameProbe.listenIfAsked()
         #endif
         // Every tab a UI test can ask for. One it asks for and this does not know leaves the tab the last run saved
-        // (`app.tab`): after a run in the old layout with `-tab settings`, the shell opened on the Settings sheet and the
+        // (`app.tab`): after a run with `-tab settings`, the shell opened on the Settings sheet and the
         // Feishu tests that asked for `-tab feishu` never saw the Messages page (#1664).
         switch d.string(forKey: "tab") {
         case "dev": AppModel.shared.selectedTab = .chats

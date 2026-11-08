@@ -6,21 +6,17 @@ import XCTest
 /// request at once and writes the first line that much later, as the node does.
 final class NewConversationEntryTests: XCTestCase {
     @MainActor func testInboxHandOffOpensOnTheSentMessage() throws {
-        try handOff(layout: ["-ui.oldLayout", "NO"], name: "shell")
+        try handOff(name: "shell")
     }
 
-    @MainActor func testInboxHandOffOpensOnTheSentMessageInTheOldLayout() throws {
-        try handOff(layout: ["-ui.oldLayout", "YES"], name: "old")
-    }
-
-    @MainActor private func handOff(layout: [String], name: String) throws {
+    @MainActor private func handOff(name: String) throws {
         guard let hub = ProcessInfo.processInfo.environment["PERSONA_MOCK_HUB"] else {
             throw XCTSkip("needs scripts/mock/mock_hub.py (PERSONA_MOCK_HUB)")
         }
         let app = XCUIApplication()
         let pair = "persona://pair?url=" + hub.addingPercentEncoding(withAllowedCharacters: .alphanumerics)! + "&token=mock"
         app.launchArguments = ["-pairURL", pair, "-tab", "mail", "-inbox.kind", "", "-inbox.source", "",
-                               "-openInboxItem", "mail:acc1:t1:501", "-showInboxAction", "handoff"] + layout
+                               "-openInboxItem", "mail:acc1:t1:501", "-showInboxAction", "handoff"]
         app.launchPinned()
         func shot(_ name: String) {
             let a = XCTAttachment(screenshot: app.screenshot())

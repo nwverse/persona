@@ -1,6 +1,6 @@
 import XCTest
 
-/// Switching models in the effort chip (#3119): in the old layout's mode bar the effort chip also lists Claude Code's models; picking
+/// Switching models in the composer's model menu (#3119): the menu lists Claude Code's models; picking
 /// one posts `…/modes {"model": …}`. Against scripts/mock/mock_hub.py (PERSONA_MOCK_HUB), which logs the requests at
 /// /mock/modes. With PERSONA_SHOTS set it writes the open menu there (PERSONA_SHOTS_APPEARANCE names the appearance).
 final class ModelSwitchChipTests: XCTestCase {
@@ -30,8 +30,12 @@ final class ModelSwitchChipTests: XCTestCase {
     @MainActor private func open(_ session: String) -> XCUIApplication {
         let app = XCUIApplication()
         let pair = "persona://pair?url=" + hub.addingPercentEncoding(withAllowedCharacters: .alphanumerics)! + "&token=mock"
-        app.launchArguments = ["-pairURL", pair, "-ui.oldLayout", "YES", "-openSession", session]
+        app.launchArguments = ["-pairURL", pair, "-openSession", session]
         app.launchPinned()
+        let field = app.descendants(matching: .any)["shell-composer-field"].firstMatch
+        XCTAssertTrue(field.waitForExistence(timeout: 20), "no composer:\n\(app.debugDescription)")
+        field.tapCenter()
+        XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5), "no keyboard")
         return app
     }
 
@@ -43,7 +47,7 @@ final class ModelSwitchChipTests: XCTestCase {
 
     @MainActor func testTheEffortChipSwitchesTheModel() throws {
         let app = open(idle)
-        let chip = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "思考强度与模型")).firstMatch
+        let chip = app.buttons["shell-composer-modes"].firstMatch
         XCTAssertTrue(chip.waitForExistence(timeout: 20), "no effort chip with the model:\n\(app.debugDescription)")
         sleep(1)
         chip.tap()
@@ -64,7 +68,7 @@ final class ModelSwitchChipTests: XCTestCase {
 
     @MainActor func testAWorkingAgentWaitsToSwitch() throws {
         let app = open(working)
-        let chip = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "思考强度与模型")).firstMatch
+        let chip = app.buttons["shell-composer-modes"].firstMatch
         XCTAssertTrue(chip.waitForExistence(timeout: 20), "no effort chip with the model:\n\(app.debugDescription)")
         sleep(1)
         chip.tap()

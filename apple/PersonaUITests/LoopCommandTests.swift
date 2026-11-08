@@ -2,8 +2,8 @@ import XCTest
 
 /// /loop in an agent's composer (#2601, as on the web): the quick commands offer it to a Claude agent and picking it
 /// only puts `/loop ` in the box, with a line over it saying what is still missing; a Codex agent's have no /loop.
-/// The quick commands are in the + menu, or the prompt bar's "/" menu in the BeautifulUI style's four tabs
-/// (`TEST_RUNNER_PERSONA_UI_STYLE=beautiful`). Demo Mode (Demo.json): a Claude agent at rest and the Codex one at work.
+/// The quick commands are in the composer's + menu in every style.
+/// Demo Mode (Demo.json): a Claude agent at rest and the Codex one at work.
 final class LoopCommandUITests: XCTestCase {
     private let claude = "macbook/a1f3c2d4-0000-4000-8000-000000000006"
     private let codex = "server/a1f3c2d4-0000-4000-8000-000000000004"
@@ -21,9 +21,6 @@ final class LoopCommandUITests: XCTestCase {
 
     private var field: XCUIElement { app.textViews.firstMatch.exists ? app.textViews.firstMatch : app.textFields.firstMatch }
 
-    /// The prompt bar of the BeautifulUI style outside the shell: its "/" menu, not +, has the quick commands.
-    private var slashMenu: Bool { UITestStyle.isBeautiful && ProcessInfo.processInfo.environment["PERSONA_LAYOUT"] != "shell" }
-
     /// Opens the quick commands; returns the /loop entry and one that is always there.
     /// `draft`: typed in the box first (before the "/" of the prompt bar's menu).
     @MainActor private func openCommands(after draft: String = "") -> (loop: XCUIElement, report: XCUIElement) {
@@ -32,11 +29,6 @@ final class LoopCommandUITests: XCTestCase {
         sleep(2) // the session list loads
         clearDraft() // a failed run's draft stays for the next launch
         if !draft.isEmpty { field.typeText(draft) }
-        if slashMenu {
-            field.typeText(draft.isEmpty ? "/" : " /")
-            return (app.buttons.matching(NSPredicate(format: "label BEGINSWITH '/loop'")).firstMatch,
-                    app.buttons.matching(NSPredicate(format: "label BEGINSWITH '/汇报'")).firstMatch)
-        }
         plus.tap()
         XCTAssertTrue(app.buttons["照片"].waitForExistence(timeout: 5), "the + menu did not open")
         return (app.buttons["定时重复 /loop"], app.buttons["汇报进展"])
@@ -96,6 +88,7 @@ final class LoopCommandUITests: XCTestCase {
         let (loop, report) = openCommands()
         XCTAssertTrue(report.waitForExistence(timeout: 5), "the quick commands did not open")
         XCTAssertFalse(loop.exists, "/loop offered to a Codex agent")
-        if slashMenu { clearDraft(); sleep(2) }
+        clearDraft()
+        sleep(2)
     }
 }

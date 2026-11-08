@@ -2318,7 +2318,7 @@ Views, components, actions, responses, placements and context all use schema-gen
   An action returning `open_url: persona://inbox/<this item>/source` (view in chat, `InboxSourceLink`; only this drawn item allowed) switches to the original body (Lark chat positioned at the event's first message),
   with "Back to <page title>" returning to the extension page (same `ExtensionViewModel`, preserving state and entered text); other `open_url`s and links follow extension-page rules through page `openURL`
   (Lark docs in the reader, Mac adjacent panel). Code `Persona/Views/Inbox/InboxItemSlot.swift` (`InboxItemSlots`, `InboxItemSlotModel`, `InboxExtensionItemPage`),
-  unit test `InboxItemSlotTests`; screenshots: add `MOCK_INBOX_ITEM_UI=1` to mock (extension `example-chat`), `-ui.oldLayout YES -tab mail -openInboxItem lark:f1:100`
+  unit test `InboxItemSlotTests`; screenshots: add `MOCK_INBOX_ITEM_UI=1` to mock (extension `example-chat`), `-tab mail -openInboxItem lark:f1:100`
   (`lark:f3:300` is the group chat / extension-error item).
 - Extension marketplace (#1328, "Extension marketplace"): when `GET /api/v1/extensions` returns `markets: true`, the list starts with **Extension Market**. The catalog has search (waits 0.3 seconds before querying),
   marketplace filter chips (`FilterChip`, only with more than one marketplace), extension names, versions, descriptions, tags and status (available / upgradable / installed / reason unavailable),

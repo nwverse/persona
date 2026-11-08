@@ -1,7 +1,7 @@
 import XCTest
 
 /// The flat activity timeline against the standard mock hub (no extra scenarios).
-/// TEST_RUNNER_PERSONA_RECENT_HUB=<mock URL>; PERSONA_LAYOUT=shell also exercises the new shell.
+/// TEST_RUNNER_PERSONA_RECENT_HUB=<mock URL>; runs in the iPhone's Shell.
 final class RecentAgentsTests: XCTestCase {
     private var hub = ""
     private var app: XCUIApplication!
@@ -67,11 +67,8 @@ final class RecentAgentsTests: XCTestCase {
     }
 
     @MainActor private func menu() -> XCUIElement {
-        if ProcessInfo.processInfo.environment["PERSONA_LAYOUT"] == "shell" {
-            return app.buttons.matching(identifier: "shell-agents").allElementsBoundByIndex.first(where: \.isHittable)
-                ?? app.buttons["shell-agents"].firstMatch
-        }
-        return app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "分组：")).firstMatch
+        app.buttons.matching(identifier: "shell-agents").allElementsBoundByIndex.first(where: \.isHittable)
+            ?? app.buttons["shell-agents"].firstMatch
     }
 
     @MainActor private func choose(_ title: String) {
@@ -110,7 +107,7 @@ final class RecentAgentsTests: XCTestCase {
         add(attachment)
         if let path = ProcessInfo.processInfo.environment["PERSONA_SHOTS"] {
             let style = ProcessInfo.processInfo.environment["PERSONA_STYLE"] ?? "system"
-            let layout = ProcessInfo.processInfo.environment["PERSONA_LAYOUT"] ?? "tabs"
+            let layout = "shell"
             try screenshot.pngRepresentation.write(to: URL(fileURLWithPath: path).appendingPathComponent("\(name)-\(layout)-\(style).png"))
         }
     }
