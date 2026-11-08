@@ -328,10 +328,29 @@ func (s *Service) taskTurnEnded(ctx context.Context, machine, sid string) {
 }
 
 // taskTurnEndedAfter has taskTurnEnded look at sid's task again at at. What happened meanwhile decides as ever: a turn
-// that went on and ended had its own receipt, one that works again has none yet.
+// that went on and ended had its own receipt, one that works again has none yet. A look already set for as early is
+// enough (one still waiting then sets the next): the wait's wakes (a background task reporting, a /loop) end a turn
+// each, and each comes here.
 func (s *Service) taskTurnEndedAfter(ctx context.Context, machine, sid string, at time.Time) {
-	ctx = context.WithoutCancel(ctx)
-	time.AfterFunc(time.Until(at), func() { s.taskTurnEnded(ctx, machine, sid) })
+	ref := SessionRef{MachineID: machine, SessionID: sid}
+	s.tasks.mu.Lock()
+	if s.tasks.limitLooks == nil {
+		s.tasks.limitLooks = map[SessionRef]time.Time{}
+	}
+	if pending, ok := s.tasks.limitLooks[ref]; ok && !pending.After(at) { // one as early is set: it looks again if need be
+		s.tasks.mu.Unlock()
+		return
+	}
+	s.tasks.limitLooks[ref] = at
+	s.tasks.mu.Unlock()
+	time.AfterFunc(time.Until(at), func() {
+		s.tasks.mu.Lock()
+		if s.tasks.limitLooks[ref].Equal(at) {
+			delete(s.tasks.limitLooks, ref)
+		}
+		s.tasks.mu.Unlock()
+		s.taskTurnEnded(ctx, machine, sid)
+	})
 }
 
 // routeToTask sends text straight to the agent of task todoID that most needs it, and keeps it in the conversation as

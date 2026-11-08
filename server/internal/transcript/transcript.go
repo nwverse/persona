@@ -196,7 +196,7 @@ type Meta struct {
 	// TurnErrorAfterWork: the failed turn did some work (a reply, a tool call, thinking) before the error ended it.
 	TurnErrorAfterWork bool
 	// turnWorked: the turn under way did some work so far (TurnErrorAfterWork when it fails); its end or the next
-	// turn's start sets it back. turnErrorLine: the uuid of the line that said TurnError (Tail.SettleTurnError).
+	// turn's start sets it back. turnErrorLine: the uuid of the line that said TurnError (Tail.Settle).
 	turnWorked    bool
 	turnErrorLine string
 	// codexLimitFull: when the full windows of a rollout's latest rate limits (Codex's own limit, at 100%) reset, the

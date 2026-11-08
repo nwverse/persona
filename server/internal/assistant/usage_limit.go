@@ -32,7 +32,7 @@ const (
 // read off its words when they name a time zone. A kind the node gave stands: it read the record, and a gateway's 429
 // without quotaLimits is not a subscription's limit. Without a turn error, or for another kind, nothing of a limit is left.
 func decorateLimit(sess *proto.Session) {
-	if sess.TurnError != "" && sess.TurnErrorKind == "" && transcript.UsageLimitText(sess.TurnError) {
+	if sess.TurnErrorKind == "" && transcript.UsageLimitText(sess.TurnError) {
 		sess.TurnErrorKind = proto.TurnErrorUsageLimit
 	}
 	if sess.TurnError == "" || sess.TurnErrorKind != proto.TurnErrorUsageLimit {
@@ -72,15 +72,6 @@ func limitTakenUp(sess proto.Session, now time.Time) bool {
 	}
 	w := sess.Work
 	return sess.TurnErrorResumes || w != nil && w.ResetsAt != nil && (w.WakeAt != nil || w.InteractionID != "")
-}
-
-// limitNotTakenUp marks w, a usage-limit wait, as one nothing continues (auto_continue off, or turned off since its
-// continue was set): what it waits for is named (its line), so the lists keep it for the user — an external wait with
-// nothing named is one that ends by itself (managerWaits, the apps' hubWaits).
-func limitNotTakenUp(w *proto.WorkState) {
-	if w.ResetsAt != nil && w.Wait == "" {
-		w.Wait = w.Line
-	}
 }
 
 // limitContinueAt is when the manager continues work a usage limit stopped, the limit resetting at reset: about a

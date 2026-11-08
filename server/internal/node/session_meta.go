@@ -230,7 +230,6 @@ func readQuickMetaSince(path string, st os.FileInfo, prev quickMeta) quickMeta {
 		m.rewound = rest
 	}
 	rewound := tail.Settle(&tm)
-	tail.SettleTurnError(&tm)
 	m.title, m.cwd, m.model, m.lastText, m.first, m.activity, m.queue = tm.Title, tm.Cwd, tm.Model, tm.LastText, first, tm.LastActivity, tm.Queue
 	m.surface = tm.Surface
 	if m.surface == "" {

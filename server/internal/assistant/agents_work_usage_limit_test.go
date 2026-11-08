@@ -141,7 +141,7 @@ func TestUsageLimitLeftAlone(t *testing.T) {
 	f.setSessions("box", limitTurn("s1", reset, true))
 	triage(t, s, "s1")
 	if e := entryOf(t, s, "s1"); e.WakeAt != nil || e.InteractionID != "" || e.Work.ResetsAt == nil || !strings.Contains(e.Work.Line, "自己接着做") ||
-		!managerWaits(&e.Work) {
+		!managerWaits(workOf("", limitTurn("s1", reset, true), &e.Work, nil)) {
 		t.Fatalf("goes on by itself: %+v", e)
 	}
 	s.workTick(ctx, reset.Add(time.Hour))
@@ -154,7 +154,8 @@ func TestUsageLimitLeftAlone(t *testing.T) {
 	f.setSessions("box", limitTurn("s1", reset, false))
 	triage(t, s, "s1")
 	// Nothing continues it: the lists keep it for the user (a named wait), not as one that ends by itself.
-	if e := entryOf(t, s, "s1"); e.WakeAt != nil || e.InteractionID != "" || !strings.Contains(e.Work.Line, "重置") || managerWaits(&e.Work) {
+	if e := entryOf(t, s, "s1"); e.WakeAt != nil || e.InteractionID != "" || !strings.Contains(e.Work.Line, "重置") ||
+		managerWaits(workOf("", limitTurn("s1", reset, false), &e.Work, nil)) {
 		t.Fatalf("auto_continue off: %+v", e)
 	}
 
@@ -164,13 +165,13 @@ func TestUsageLimitLeftAlone(t *testing.T) {
 	if err := s.putTriageSwitches(ctx, TriageSwitches{Enabled: true, AutoContinue: true, Decide: true}); err != nil {
 		t.Fatal(err)
 	}
-	if e := entryOf(t, s, "s1"); e.WakeAt == nil || !managerWaits(&e.Work) {
+	if e := entryOf(t, s, "s1"); e.WakeAt == nil || !managerWaits(workOf("", limitTurn("s1", reset, false), &e.Work, nil)) {
 		t.Fatal("wake off dropped a usage limit's continue")
 	}
 	if err := s.putTriageSwitches(ctx, TriageSwitches{Enabled: true, Wake: true, Decide: true}); err != nil {
 		t.Fatal(err)
 	}
-	if e := entryOf(t, s, "s1"); e.WakeAt != nil || managerWaits(&e.Work) {
+	if e := entryOf(t, s, "s1"); e.WakeAt != nil || managerWaits(workOf("", limitTurn("s1", reset, false), &e.Work, nil)) {
 		t.Fatal("auto_continue off kept the continue, or the lists still say it ends by itself")
 	}
 	s.workTick(ctx, reset.Add(time.Hour))
@@ -255,7 +256,7 @@ func TestUsageLimitCountIsItsOwn(t *testing.T) {
 		{"wait after a wait", wait, wait, refused, 2, 3},
 	} {
 		e := db.SessionWork{Work: tc.now}
-		carryCounts(&e, db.SessionWork{Work: tc.last, Retries: 2, Wakes: 3}, true, tc.c)
+		carryCounts(&e, db.SessionWork{Work: tc.last, Retries: 2, Wakes: 3}, tc.c)
 		if e.Retries != tc.retries || e.Wakes != tc.wake {
 			t.Errorf("%s: retries %d wakes %d", tc.name, e.Retries, e.Wakes)
 		}
@@ -433,4 +434,31 @@ func TestUsageLimitTaskState(t *testing.T) {
 
 func TestGoldenAgentLimitContinue(t *testing.T) {
 	golden(t, "agent_limit_continue", prompts.RenderAgentLimitContinue())
+}
+
+// The wait's wakes end a turn each: a task agent's usage-limit wait is looked at again once, not once per turn; an
+// earlier look takes over.
+func TestUsageLimitLooksOncePerAgent(t *testing.T) {
+	s, _ := newTaskService(t)
+	ctx := context.Background()
+	at := time.Now().Add(time.Hour)
+	for range 5 {
+		s.taskTurnEndedAfter(ctx, "box", "s1", at)
+	}
+	s.taskTurnEndedAfter(ctx, "box", "s1", at.Add(time.Minute)) // a later one: the earlier look sets it if need be
+	ref := SessionRef{MachineID: "box", SessionID: "s1"}
+	s.tasks.mu.Lock()
+	n, got := len(s.tasks.limitLooks), s.tasks.limitLooks[ref]
+	s.tasks.mu.Unlock()
+	if n != 1 || !got.Equal(at) {
+		t.Fatalf("%d looks, at %v", n, got)
+	}
+	earlier := at.Add(-30 * time.Minute)
+	s.taskTurnEndedAfter(ctx, "box", "s1", earlier)
+	s.tasks.mu.Lock()
+	got = s.tasks.limitLooks[ref]
+	s.tasks.mu.Unlock()
+	if !got.Equal(earlier) {
+		t.Fatalf("the earlier look did not take over: %v", got)
+	}
 }

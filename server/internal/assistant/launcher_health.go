@@ -375,16 +375,13 @@ func (s *Service) recordHealth(ctx context.Context, machine, launcher string, r 
 		if rec.Kind == "" {
 			rec.Kind = classifyLauncherError(r.err)
 		}
-		if rec.Kind == errKindUsageLimit {
-			rec.ResetsAt = limitResetOf(r, rec.CheckedAt)
-		}
 		switch {
 		case rec.Kind == errKindNotInTerminal:
 			rec.State, rec.BlockedReason = healthBlocked, terminalBlockedReason // no repair round (repairMachine takes failing ones)
 		case rec.Kind == errKindUsageLimit:
 			// The request got through to the subscription, whose limit is used up: nothing is broken, so no repair
 			// is due (repairNow) and a block for an earlier error no longer stands. The reset clears it.
-			rec.State, rec.BlockedReason = healthFailing, ""
+			rec.State, rec.BlockedReason, rec.ResetsAt = healthFailing, "", limitResetOf(r, rec.CheckedAt)
 		case rec.State == "" || rec.State == healthOK:
 			rec.State = healthFailing
 		}
@@ -538,11 +535,8 @@ func (s *Service) launcherLimitTurnEnded(ctx context.Context, machine, sid strin
 // word, else Claude Code's last words when they are the error. Whatever sess's state now, unlike the lists'
 // turnError: a background task wakes an agent its limit stopped again and again, and it counts as working meanwhile.
 func limitOfTurn(sess proto.Session) proto.Session {
-	out := proto.Session{TurnError: strings.TrimSpace(sess.TurnError), TurnErrorKind: sess.TurnErrorKind,
-		TurnErrorResetsAt: sess.TurnErrorResetsAt, UpdatedAt: sess.UpdatedAt}
-	if text := strings.TrimSpace(sess.LastText); out.TurnError == "" && assistantwire.CutOff(text) {
-		out.TurnError, out.TurnErrorKind = text, ""
-	}
+	out := proto.Session{TurnErrorResetsAt: sess.TurnErrorResetsAt, UpdatedAt: sess.UpdatedAt}
+	out.TurnError, out.TurnErrorKind = latestTurnError(sess)
 	decorateLimit(&out)
 	return out
 }

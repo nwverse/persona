@@ -3,6 +3,7 @@ package transcript
 import (
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/nwverse/persona/server/internal/lazyre"
@@ -40,15 +41,12 @@ func UsageLimitReset(text string, at time.Time) (time.Time, bool) {
 	if m == nil || at.IsZero() {
 		return time.Time{}, false
 	}
-	loc, err := time.LoadLocation(m[7])
-	if err != nil || m[7] == "Local" {
+	loc, ok := zone(m[7])
+	if !ok {
 		return time.Time{}, false
 	}
 	hour, _ := strconv.Atoi(m[4])
-	minute := 0
-	if m[5] != "" {
-		minute, _ = strconv.Atoi(m[5])
-	}
+	minute, _ := strconv.Atoi(m[5]) // none: 0
 	if hour < 1 || hour > 12 || minute > 59 {
 		return time.Time{}, false
 	}
@@ -81,4 +79,24 @@ func UsageLimitReset(text string, at time.Time) (time.Time, bool) {
 		t = time.Date(year+1, month, day, hour, minute, 0, 0, loc) // "Jan 2" written on Dec 30
 	}
 	return t.UTC(), true
+}
+
+// zones keeps the time zones UsageLimitReset loaded (name → *time.Location): the session lists read the same limit's
+// words each time they are built, and time.LoadLocation reads the zone file every call. Only real zones are kept,
+// so the words cannot grow it past the zone database.
+var zones sync.Map
+
+func zone(name string) (*time.Location, bool) {
+	if name == "Local" {
+		return nil, false // the reader's own zone, not the writer's
+	}
+	if v, ok := zones.Load(name); ok {
+		return v.(*time.Location), true
+	}
+	loc, err := time.LoadLocation(name)
+	if err != nil {
+		return nil, false
+	}
+	zones.Store(name, loc)
+	return loc, true
 }

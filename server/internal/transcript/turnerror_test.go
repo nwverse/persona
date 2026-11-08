@@ -264,7 +264,6 @@ func TestTailSettlesARewoundTurnError(t *testing.T) {
 			tail.Line(&m, ParseLine(i, []byte(l), &m))
 		}
 		tail.Settle(&m)
-		tail.SettleTurnError(&m)
 		return m
 	}
 	if m := read(lines); m.TurnError != fixtureLimit || !m.TurnErrorResumes {

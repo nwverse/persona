@@ -108,11 +108,7 @@ func (s *Service) actOn(ctx context.Context, v *workView, machine string, c prot
 // (a reset read too early is refused again at once); then the user is asked. card: e's work is the user's now.
 func actOnLimit(c proto.Session, e *db.SessionWork, autoContinue bool, l i18n.Lang, now time.Time) (card bool) {
 	w := &e.Work
-	if c.TurnErrorResumes {
-		return false
-	}
-	if !autoContinue {
-		limitNotTakenUp(w)
+	if c.TurnErrorResumes || !autoContinue {
 		return false
 	}
 	if e.Retries >= maxLimitContinues {

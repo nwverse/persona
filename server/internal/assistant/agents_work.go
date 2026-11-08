@@ -272,7 +272,6 @@ func (s *Service) putTriageSwitches(ctx context.Context, sw TriageSwitches) erro
 			stale = append(stale, *e)
 		} else if e.WakeAt != nil && off {
 			e.WakeAt, e.Work.WakeAt = nil, nil
-			limitNotTakenUp(&e.Work)
 			stale = append(stale, *e)
 		}
 	}

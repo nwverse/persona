@@ -159,7 +159,7 @@ func (s *Service) triageTurn(ctx context.Context, v *workView, machine string, c
 	s.applyApproval(k, w, same)
 	w.TurnAt, w.At, w.By = c.UpdatedAt, time.Now().UTC(), by
 	e := db.SessionWork{MachineID: machine, SessionID: c.SessionID, TurnAt: c.UpdatedAt, Work: *w}
-	carryCounts(&e, last, had, c)
+	carryCounts(&e, last, c)
 	if now, ok := s.session(ctx, machine, c.SessionID); ok && !sameTurn(now, e.TurnAt) {
 		return // it went on while the model read it: the next end decides
 	}
@@ -172,13 +172,13 @@ func (s *Service) triageTurn(ctx context.Context, v *workView, machine string, c
 }
 
 // carryCounts: the same wait goes on (the manager woke or continued it, it still waits), so e's counts are last's
-// (had: there is a last). A usage limit's count is its own: it carries from the turn before only when that one stopped
+// (none: a zero last). A usage limit's count is its own: it carries from the turn before only when that one stopped
 // on a usage limit too (its card after the continues included) and this one did no work before the limit refused it
 // again; a turn that did work starts it again. An ordinary wait never takes a usage limit's count, nor the other way.
-func carryCounts(e *db.SessionWork, last db.SessionWork, had bool, c proto.Session) {
+func carryCounts(e *db.SessionWork, last db.SessionWork, c proto.Session) {
 	w := &e.Work
 	switch limit := w.ResetsAt != nil; {
-	case !had || last.Work.Phase != proto.WorkBlocked || w.Phase != proto.WorkBlocked:
+	case last.Work.Phase != proto.WorkBlocked || w.Phase != proto.WorkBlocked:
 	case limit != (last.Work.ResetsAt != nil):
 	case limit:
 		if !c.TurnErrorAfterWork {

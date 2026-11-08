@@ -2,6 +2,7 @@ package transcript
 
 import (
 	"encoding/json"
+	"strconv"
 	"strings"
 	"time"
 
@@ -70,7 +71,8 @@ func claudeErrorKind(code string, e *entry) (kind string, reset time.Time) {
 	switch code {
 	case "rate_limit":
 		if q := e.QuotaLimits; q != nil && q.Status == "rejected" {
-			return proto.TurnErrorUsageLimit, epochTime(q.ResetsAt)
+			reset, _ := ParseResetsAt(q.ResetsAt)
+			return proto.TurnErrorUsageLimit, reset
 		}
 	case "authentication_failed", "model_not_found":
 		return proto.TurnErrorUser, time.Time{}
@@ -80,17 +82,24 @@ func claudeErrorKind(code string, e *entry) (kind string, reset time.Time) {
 	return "", time.Time{}
 }
 
-// epochTime reads a time written as epoch seconds (milliseconds when it is that large); zero for 0, null or anything
-// else.
-func epochTime(raw json.RawMessage) time.Time {
-	var f float64
-	if json.Unmarshal(raw, &f) != nil || f <= 0 {
-		return time.Time{}
+// ParseResetsAt reads a reset time given as a number (epoch seconds, or milliseconds when it is that large), a
+// numeric string or an RFC 3339 string: Claude Code's quotaLimits.resetsAt, the usage windows' resets_at
+// (node/usagewindows.go).
+func ParseResetsAt(raw json.RawMessage) (time.Time, bool) {
+	s := strings.Trim(strings.TrimSpace(string(raw)), `"`)
+	if s == "" || s == "null" {
+		return time.Time{}, false
 	}
-	if f > 1e11 {
-		return time.UnixMilli(int64(f)).UTC()
+	if f, err := strconv.ParseFloat(s, 64); err == nil && f > 0 {
+		if f > 1e11 {
+			return time.UnixMilli(int64(f)).UTC(), true
+		}
+		return time.Unix(int64(f), 0).UTC(), true
 	}
-	return time.Unix(int64(f), 0).UTC()
+	if t, err := time.Parse(time.RFC3339, s); err == nil {
+		return t.UTC(), true
+	}
+	return time.Time{}, false
 }
 
 // claudeLimitNotice reads Claude Code's notices on going on by itself after a usage limit (system/informational,
@@ -107,14 +116,5 @@ func (m *Meta) claudeLimitNotice(text string) {
 	case strings.HasPrefix(t, "usage limit reset"), strings.HasPrefix(t, "usage limit available again"):
 	case strings.Contains(t, "continuing automatically"):
 		m.TurnErrorResumes = true
-	}
-}
-
-// SettleTurnError takes the turn's error out of meta when the line that said it lies on a branch gone back over (a
-// rewind in the terminal or from the app): the conversation that is left did not fail there. Nothing older comes back:
-// the user went back to start over.
-func (t *Tail) SettleTurnError(meta *Meta) {
-	if meta.turnErrorLine != "" && t.tree.hidden[meta.turnErrorLine] {
-		meta.clearTurnError()
 	}
 }
