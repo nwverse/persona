@@ -43,4 +43,21 @@ for (const [name, expected] of Object.entries(fixtures)) {
   }
 }
 console.log(`RESULT fixture-native data parity: ${passed}/${Object.keys(fixtures).length}; helper-only, not hub/runtime acceptance`);
+const page = program.ui.list;
+const renderer = page.createRenderer({ authorize: () => true });
+try {
+  renderer.mount(await page.root({ contribution: "list", placement: "nav_page", size: "full", hub, ui_version: 5, locale: "zh-Hans", platform: "mac", state: "" }));
+  for (const [index, query] of ["02", "no-synthetic-match"].entries()) {
+    const snapshot = renderer.current();
+    await renderer.event({ generation: snapshot.generation, version: snapshot.version, eventId: "query-" + index,
+      key: snapshot.rootKey, actionId: snapshot.view.search.action.id, values: { q: query } });
+    await new Promise<void>(resolve => queueMicrotask(resolve));
+    const view = renderer.current().view;
+    const rows = view.sections.flatMap((section: any) => section.items).filter((item: any) => item.type === "row");
+    if (view.search.value !== query || (index === 0 ? !rows.some((item: any) => item.title.includes("02")) : rows.length !== 0)) {
+      throw new Error("Search must filter the submitted query, not return the fixed search snapshot");
+    }
+  }
+  console.log("RESULT fixture native search values: matching and empty queries PASS; helper-only");
+} finally { renderer.dispose(); }
 process.exit(passed === Object.keys(fixtures).length ? 0 : 1);

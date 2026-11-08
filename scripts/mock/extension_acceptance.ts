@@ -41,6 +41,14 @@ function Snapshot({ name, request }: { name: string; request: any }) {
   else if (selected === "list" && more) selected = "list-more";
   if (selected === "segmented" && values.range === "30d") selected = "segmented-30d";
   const view = structuredClone(fixtures[selected] ?? fixtures.home);
+  if (name === "list" && values.q) {
+    const query = values.q;
+    const rows = structuredClone(fixtures["list-more"].sections[0].items)
+      .filter((item: any) => item.title?.toLocaleLowerCase().includes(query.toLocaleLowerCase()));
+    view.search.value = query;
+    view.sections[0].items = rows.length ? rows : structuredClone(fixtures["list-none"].sections[0].items);
+    view.sections[0].title = view.sections[0].title.replace(/\d+/g, String(rows.length));
+  }
   const run = (action: any, input: Record<string, string>) => {
     actions++;
     bus?.notify("ui.badge", { contribution: "button", text: String(actions), tone: "positive" });
