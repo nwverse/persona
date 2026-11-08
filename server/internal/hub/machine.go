@@ -375,8 +375,8 @@ func (m *Machine) settleEnded(id string) {
 
 // listsLocked reports whether the node's last list has session id; m.mu is held.
 func (m *Machine) listsLocked(id string) bool {
-	for i := range m.sessions {
-		if m.sessions[i].SessionID == id {
+	for _, s := range m.sessions {
+		if s.SessionID == id {
 			return true
 		}
 	}

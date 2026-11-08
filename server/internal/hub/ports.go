@@ -136,8 +136,8 @@ func (h *Hub) portAllowed(m *Machine, port int) bool {
 		return true
 	}
 	m.mu.Lock()
-	for i := range m.sessions { // by index: a range value copies every (large) session it passes
-		for _, p := range m.sessions[i].Ports {
+	for _, s := range m.sessions {
+		for _, p := range s.Ports {
 			if p.Port == port {
 				m.mu.Unlock()
 				return true
