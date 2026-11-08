@@ -1632,6 +1632,48 @@
           }
         },
         {
+          "frames": {
+            "a": [
+              {
+                "type": "items",
+                "machine_id": "m1",
+                "session_id": "s1",
+                "history": "h1",
+                "items": [
+                  {
+                    "id": "l1#0",
+                    "seq": 1,
+                    "ts": "2026-01-02T03:04:05Z",
+                    "role": "user",
+                    "kind": "text",
+                    "text": "Plan a weekend trip."
+                  }
+                ],
+                "to_seq": 1,
+                "from_seq": 0
+              },
+              {
+                "type": "sessions_delta",
+                "machine_id": "m1",
+                "upsert": [
+                  {
+                    "machine_id": "m1",
+                    "session_id": "s1",
+                    "title": "Weekend trip",
+                    "cwd": "/home/user/persona",
+                    "status": "working",
+                    "assistant": true,
+                    "state": "working",
+                    "updated_at": "2026-01-02T03:04:06Z",
+                    "rev": 102
+                  }
+                ],
+                "remove": []
+              }
+            ]
+          }
+        },
+        {
           "wait": 3000,
           "expect": {
             "a": {
@@ -1702,8 +1744,8 @@
                     "status": "idle",
                     "assistant": true,
                     "state": "idle",
-                    "updated_at": "2026-01-02T03:04:05Z",
-                    "rev": 102
+                    "updated_at": "2026-01-02T03:04:07Z",
+                    "rev": 103
                   }
                 ],
                 "remove": []

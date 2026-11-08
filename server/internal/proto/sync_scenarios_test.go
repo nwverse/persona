@@ -461,8 +461,8 @@ func checkSyncCase(t *testing.T, c syncCase) {
 				if u.Send.ID == "" || strings.TrimSpace(u.Send.Text) == "" || d.send(u.Send.ID) != nil {
 					t.Fatalf("%s: a send needs a new id and words", where)
 				}
-				if c.Chat.New && !slicesAny(d.sends, func(s *syncSend) bool { return s.start && s.outcome == "accepted" }) {
-					t.Fatalf("%s: a send in a new chat comes after this device's start was answered", where)
+				if c.Chat.New && !slicesAny(d.sends, func(s *syncSend) bool { return s.start && (s.outcome == "accepted" || s.receipt) }) {
+					t.Fatalf("%s: a send in a new chat comes after this device's start was carried out and answered (or has its receipt)", where)
 				}
 				d.sends = append(d.sends, &syncSend{id: u.Send.ID, text: u.Send.Text, atToSeq: h.toSeq, outcome: "inflight"})
 			case u.Answer != nil:
