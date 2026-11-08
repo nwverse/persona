@@ -283,7 +283,7 @@ export function formProblems(f: ProviderForm, isNew: boolean, hadKey = false): F
     if (!id) models = t("lib-providers.model_no_id");
     else if (ids.has(id)) models = t("lib-providers.model_duplicate", { id });
     else if (!nonNegInt(m.context_window)) models = t("lib-providers.model_context_int", { id });
-    else if (!chat && m.default_effort && m.efforts.length > 0 && !m.efforts.includes(m.default_effort)) models = t("lib-providers.model_effort_unsupported", { id });
+    else if (m.default_effort && m.efforts.length > 0 && !m.efforts.includes(m.default_effort)) models = t("lib-providers.model_effort_unsupported", { id });
     if (models) break;
     ids.add(id);
   }

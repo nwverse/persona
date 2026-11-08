@@ -84,7 +84,7 @@ describe("formProblems", () => {
     expect(formProblems(ready({ models: [{ ...formModel({ id: "m1" }), context_window: "12k" }] }), true).models).toMatch(/上下文窗口/);
     expect(formProblems(ready({ models: [formModel({ id: "m1", efforts: ["low"], default_effort: "max" })] }), true).models).toMatch(/默认思考档位/);
     const mismatch = ready({ kind: "api", api: "chat", models: [formModel({ id: "m1", efforts: ["low"], default_effort: "high" })] });
-    expect(formProblems(mismatch, true).models).toBe("");
+    expect(formProblems(mismatch, true).models).toMatch(/默认思考档位/);
     expect(formProblems({ ...mismatch, api: "messages" }, true).models).toMatch(/默认思考档位/);
     expect(formProblems({ ...mismatch, api: "responses" }, true).models).toMatch(/默认思考档位/);
     expect(providerBody(mismatch, null).models).toEqual([{ id: "m1", efforts: ["low"], default_effort: "high" }]);
