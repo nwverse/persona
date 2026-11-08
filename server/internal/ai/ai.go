@@ -163,6 +163,15 @@ func (c *Client) Chat(ctx context.Context, r Request) (Reply, error) {
 	return reply, g.done(probe, answered, err)
 }
 
+// apiEndpoint preserves deployment prefixes and accepts bases with or without /v1.
+func apiEndpoint(base, path string) string {
+	base = strings.TrimRight(base, "/")
+	if !strings.HasSuffix(base, "/v1") {
+		base += "/v1"
+	}
+	return base + "/" + path
+}
+
 // messages calls the Messages API; answered is whether the upstream said 200, Truncated whether the reply stopped at
 // MaxTokens. A model that thinks spends its thinking from the same MaxTokens, so a long answer can stop half written.
 func (c *Client) messages(ctx context.Context, hc *http.Client, key string, r Request) (reply Reply, answered bool, err error) {
@@ -171,7 +180,7 @@ func (c *Client) messages(ctx context.Context, hc *http.Client, key string, r Re
 		turns = append(turns, map[string]any{"role": m.Role, "content": m.Content})
 	}
 	body, _ := json.Marshal(map[string]any{"model": c.cfg.Model, "max_tokens": r.MaxTokens, "system": r.System, "messages": turns})
-	req, err := http.NewRequestWithContext(ctx, "POST", strings.TrimRight(c.cfg.BaseURL, "/")+"/v1/messages", bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(ctx, "POST", apiEndpoint(c.cfg.BaseURL, "messages"), bytes.NewReader(body))
 	if err != nil {
 		return reply, false, err
 	}
@@ -231,7 +240,7 @@ func (c *Client) respond(ctx context.Context, hc *http.Client, key string, r Req
 		req["reasoning"] = map[string]any{"effort": c.cfg.ReasoningEffort}
 	}
 	body, _ := json.Marshal(req)
-	hreq, err := http.NewRequestWithContext(ctx, "POST", strings.TrimRight(c.cfg.BaseURL, "/")+"/v1/responses", bytes.NewReader(body))
+	hreq, err := http.NewRequestWithContext(ctx, "POST", apiEndpoint(c.cfg.BaseURL, "responses"), bytes.NewReader(body))
 	if err != nil {
 		return reply, false, err
 	}

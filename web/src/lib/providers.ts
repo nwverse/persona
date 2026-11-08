@@ -364,7 +364,7 @@ export function providerBody(f: ProviderForm, old: ProviderView | null): Record<
 
 /** POST /api/v1/launchers/test and /discover's body: by name when editing (the stored key and headers), what is typed over it. */
 export function probeBody(f: ProviderForm, stored: string | null, model?: string): Record<string, unknown> {
-  const b: Record<string, unknown> = { base_url: f.base_url.trim(), auth: f.auth };
+  const b: Record<string, unknown> = { base_url: f.base_url.trim(), auth: f.auth, api: f.api };
   if (stored) b.name = stored;
   if (f.api_key.trim()) b.api_key = f.api_key.trim();
   if (f.headers_touched) b.headers = f.headers.trim();

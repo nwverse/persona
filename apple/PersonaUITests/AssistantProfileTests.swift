@@ -36,7 +36,7 @@ final class AssistantProfileTests: XCTestCase {
 
     @MainActor private func openProfile(_ app: XCUIApplication) {
         // The face in the top bar opens a menu; Details is the profile.
-        let avatar = app.buttons["persona-avatar"]
+        let avatar = app.buttons["shell-assistant"]
         XCTAssertTrue(avatar.waitForExistence(timeout: 15), "no avatar on the Persona tab:\n\(app.debugDescription)")
         avatar.tap()
         XCTAssertTrue(app.buttons["详细信息"].waitForExistence(timeout: 3), "no 详细信息 in the avatar's menu")
@@ -81,7 +81,7 @@ final class AssistantProfileTests: XCTestCase {
         while try !ran().contains("morning"), Date() < deadline { usleep(200_000) }
         XCTAssertTrue(try ran().contains("morning"), "立即运行 did not reach the hub")
         // It opens the conversation it started: the profile is gone.
-        XCTAssertTrue(app.buttons["persona-avatar"].waitForExistence(timeout: 5), "not back on the conversation")
+        XCTAssertTrue(app.buttons["shell-assistant"].waitForExistence(timeout: 5), "not back on the conversation")
         XCTAssertFalse(app.staticTexts["历史记录"].exists, "still on the routine page")
     }
 
@@ -104,25 +104,19 @@ final class AssistantProfileTests: XCTestCase {
 
     /// A task with no conversation of its own to go into runs in its own one (docs/assistant/assistant.md「定时任务」): its page
     /// says Runs in the Same Chat and opens it; New Chat Next Time lets the next run start over, and that run's conversation is the
-    /// task's again. Reached from the shell's drawer and from the old layout's profile.
-    @MainActor func testATaskOpensItsOwnConversationInTheShell() throws { try ownConversation(shell: true) }
-    @MainActor func testATaskOpensItsOwnConversationInTheOldLayout() throws { try ownConversation(shell: false) }
+    /// task's again. Reached from the shell's drawer.
+    @MainActor func testATaskOpensItsOwnConversationInTheShell() throws { try ownConversation() }
 
-    @MainActor private func ownConversation(shell: Bool) throws {
-        let app = launch(shell ? ["-ui.oldLayout", "NO"] : ["-ui.oldLayout", "YES"])
-        let name = shell ? "shell" : "old"
+    @MainActor private func ownConversation() throws {
+        let app = launch()
+        let name = "shell"
         func openMorning() {
-            if shell {
-                let menu = app.buttons["assistant-sidebar-button"].firstMatch
-                XCTAssertTrue(menu.waitForExistence(timeout: 15), "no ☰:\n\(app.debugDescription)")
-                menu.tapCenter()
-                let routines = app.buttons.matching(NSPredicate(format: "label == '定时任务'")).firstMatch
-                XCTAssertTrue(routines.waitForExistence(timeout: 5), "no 定时任务 in the drawer:\n\(app.debugDescription)")
-                routines.tap()
-            } else {
-                openProfile(app)
-                app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "定时任务")).firstMatch.tap()
-            }
+            let menu = app.buttons["assistant-sidebar-button"].firstMatch
+            XCTAssertTrue(menu.waitForExistence(timeout: 15), "no drawer button:\n\(app.debugDescription)")
+            menu.tapCenter()
+            let routines = app.buttons.matching(NSPredicate(format: "label == '定时任务'")).firstMatch
+            XCTAssertTrue(routines.waitForExistence(timeout: 5), "no Scheduled Tasks in the drawer:\n\(app.debugDescription)")
+            routines.tap()
             let morning = app.descendants(matching: .any)["task-morning"]
             XCTAssertTrue(morning.waitForExistence(timeout: 5), "no 早报:\n\(app.debugDescription)")
             morning.tap()
@@ -164,7 +158,7 @@ final class AssistantProfileTests: XCTestCase {
         reach(runNow)
         runNow.tap()
         // The shell's top bar has the Assistant | Agents switch where the old one has Persona's face.
-        XCTAssertTrue(app.buttons[shell ? "shell-assistant" : "persona-avatar"].waitForExistence(timeout: 8), "not back on the conversation")
+        XCTAssertTrue(app.buttons["shell-assistant"].waitForExistence(timeout: 8), "not back on the conversation")
         XCTAssertTrue(app.staticTexts["什么时候"].waitForNonExistence(timeout: 5), "still on the task's page")
         XCTAssertNotNil(try tasks().first(where: { $0["id"] as? String == "morning" })?["run_session_id"], "the run's conversation is not the task's")
     }
@@ -172,7 +166,7 @@ final class AssistantProfileTests: XCTestCase {
     /// The scheduled tasks' conversations are on Scheduled Tasks, not in the drawer's Recent (#2838): 「早报」's own conversation is not
     /// listed there, the user's own ones are, and Scheduled Tasks opens it from under 「早报」's row.
     @MainActor func testATasksConversationsAreOnItsRowNotInRecent() throws {
-        let app = launch(["-ui.oldLayout", "NO"])
+        let app = launch()
         let menu = app.buttons["assistant-sidebar-button"].firstMatch
         XCTAssertTrue(menu.waitForExistence(timeout: 15), "no ☰:\n\(app.debugDescription)")
         menu.tapCenter()

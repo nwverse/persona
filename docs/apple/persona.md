@@ -173,7 +173,7 @@ are the same in every tier; only how the character itself moves changes, so stat
 - **An incomplete tier** (missing files) gets the default tier instead; the phone never gets half an avatar.
 ## States (the top bar dot)
 
-In the Old Layout it sits at the center of Persona's top bar (above the name capsule); in the iPhone's new shell it's the button at the top left of both pages that opens the drawer (`ShellPersonaButton`, docs/apple/ios.md ("New shell")).
+In the iPhone shell it's the button at the top left of both pages that opens the drawer (`ShellPersonaButton`, docs/apple/ios.md ("New shell")).
 
 | State | `dot.states` key | When (`AppModel.personaState`) | Generation script's animation |
 | --- | --- | --- | --- |
@@ -349,7 +349,7 @@ and `GET /mock/persona-tier?tier=<tier>` changes tier at runtime and pushes `per
 DEBUG launch arguments for screenshots and recordings:
 
 - `-openPersona <id>`: select this avatar at launch (the pack must already be on the phone, or come down with the list).
-- `-showPersonaState idle|thinking|working|needs_you|offline`: pin the top bar avatar (center in the Old Layout, top left in the new shell) to one state.
+- `-showPersonaState idle|thinking|working|needs_you|offline`: pin the shell's top-left avatar to one state.
 
 Following the CLAUDE.md convention, launch argument names start with `open…` / `show…` and are added to the list in `release.sh`.
 - `-tab assistant -openAssistantPage avatars`: every avatar's picture and five states, once in light and once in dark.

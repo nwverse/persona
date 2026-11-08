@@ -24,13 +24,13 @@ final class FileUploadTests: XCTestCase {
         return (obj["hits"] as? [String: Int])?["GET " + path] ?? 0
     }
 
-    /// Opening a chat at launch builds it once (#2061): in the old layout the push came before the list had appeared,
+    /// Opening a chat at launch builds it once (#2061): a push before the list appeared previously
     /// and the chat was built three times, its items read three times and `-openUploadDemo` uploading twice.
     @MainActor func testOpeningAChatAtLaunchReadsItOnce() throws {
         let items = "/api/v1/sessions/macbook/\(widget)/items"
         let before = hits(items)
         let app = try launch([])
-        let plus = app.buttons["Add"].exists ? app.buttons["Add"] : app.buttons["添加"]
+        let plus = app.buttons["shell-composer-add"].firstMatch
         XCTAssertTrue(plus.waitForExistence(timeout: 15), "the chat did not open:\n\(app.debugDescription)")
         sleep(3) // a second and third build came within half a second of the first
         XCTAssertEqual(hits(items) - before, 1, "the chat's items read once")
@@ -39,7 +39,7 @@ final class FileUploadTests: XCTestCase {
     /// The + menu offers Files next to Photos and Take Photo.
     @MainActor func testMenuHasFiles() throws {
         let app = try launch([])
-        let plus = app.buttons["Add"].exists ? app.buttons["Add"] : app.buttons["添加"]
+        let plus = app.buttons["shell-composer-add"].firstMatch
         XCTAssertTrue(plus.waitForExistence(timeout: 15), "no + button:\n\(app.debugDescription)")
         plus.tap()
         XCTAssertTrue(app.buttons["文件"].waitForExistence(timeout: 5), "no 文件 item:\n\(app.debugDescription)")

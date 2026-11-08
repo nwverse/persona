@@ -1,8 +1,8 @@
 import XCTest
 
 /// The shell's top-left button is the persona's face (docs/apple/ios.md「新外壳」): it opens the drawer on Assistant and on Agents,
-/// and carries the inbox's dot while the inbox has something for the user (Demo Mode's has). The old layout keeps its ☰
-/// and the face in the middle of the bar. The empty-inbox case needs scripts/mock/mock_hub.py started with
+/// and carries the inbox's dot while the inbox has something for the user (Demo Mode's has).
+/// The empty-inbox case needs scripts/mock/mock_hub.py started with
 /// MOCK_INBOX=empty (PERSONA_EMPTY_INBOX_HUB).
 final class ShellAvatarTests: XCTestCase {
     private var app: XCUIApplication!
@@ -34,7 +34,7 @@ final class ShellAvatarTests: XCTestCase {
     }
 
     @MainActor func testFaceOpensTheDrawerOnBothPagesWithTheInboxMark() {
-        launch(["-demo.on", "YES", "-ui.oldLayout", "NO", "-newAssistant", "YES"])
+        launch(["-demo.on", "YES", "-newAssistant", "YES"])
         let face = app.buttons["assistant-sidebar-button"].firstMatch
         XCTAssertTrue(face.waitForExistence(timeout: 15), "no face on 助手")
         XCTAssertEqual(face.label, "历史对话")
@@ -56,7 +56,7 @@ final class ShellAvatarTests: XCTestCase {
             throw XCTSkip("needs scripts/mock/mock_hub.py with MOCK_INBOX=empty (PERSONA_EMPTY_INBOX_HUB)")
         }
         let pair = "persona://pair?url=" + hub.addingPercentEncoding(withAllowedCharacters: .alphanumerics)! + "&token=mock"
-        launch(["-pairURL", pair, "-ui.oldLayout", "NO", "-newAssistant", "YES"])
+        launch(["-pairURL", pair, "-newAssistant", "YES"])
         let face = app.buttons["assistant-sidebar-button"].firstMatch
         XCTAssertTrue(face.waitForExistence(timeout: 15), "no face on 助手")
         sleep(3) // the inbox has been fetched
@@ -64,13 +64,4 @@ final class ShellAvatarTests: XCTestCase {
         openAndCloseDrawer(face, "助手")
     }
 
-    /// The old layout: the tab bar, ☰ on the left, the face (its menu) in the middle.
-    @MainActor func testOldLayoutKeepsItsBar() {
-        launch(["-demo.on", "YES", "-ui.oldLayout", "YES", "-tab", "assistant"])
-        XCTAssertTrue(app.tabBars.firstMatch.waitForExistence(timeout: 15), "no tab bar in the old layout")
-        XCTAssertTrue(app.buttons["persona-avatar"].firstMatch.waitForExistence(timeout: 10), "no face in the old bar's middle")
-        let menu = app.buttons["assistant-sidebar-button"].firstMatch
-        XCTAssertTrue(menu.exists, "no ☰ in the old bar")
-        XCTAssertEqual(value(menu), "", "the old bar's ☰ became the face")
-    }
 }

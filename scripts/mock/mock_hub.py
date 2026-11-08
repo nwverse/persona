@@ -3088,6 +3088,30 @@ if MOCK_TASKS:
         _base = min(x["seq"] for x in ITEMS[ASK1])
         for _i, _x in enumerate(ITEMS[ASK1]):
             _x["seq"] = _base + _i
+    # MOCK_EXCHANGES=1: the new conversation layout's material (#1666): Persona's long message to a task and the task's long
+    # report with a link in its words and an evidence list (folded to three lines, no list under it), and the hub's
+    # supervision digest (injected system / supervise), drawn as Persona writing to itself.
+    if os.environ.get("MOCK_EXCHANGES") == "1":
+        TASK_FEED[ASK1] += [
+            _feed("feed_x1", 6.5, "routed", "todo_task_tests", {"text": "先别动缓存层。\n1. 网络层的重试和超时先补测试，用本地假服务器；\n"
+                                                                "2. 覆盖率按 80% 算，生成的代码不算；\n3. 每补完一块就跑一次全量测试；\n"
+                                                                "4. 做完把 PR 链接和覆盖率截图发我。", "from": "assistant"}),
+            _feed("feed_x2", 6, "report", "todo_task_tests", {"kind": "done", "text": "网络层测试补完了，PR 在 https://github.com/example/weather/pull/45 。\n"
+                                                              "重试、超时和断网三块都有用例，用本地假服务器跑，不连真实接口。\n"
+                                                              "覆盖率从 52% 到 83%，生成的代码不算在里面。\n缓存层按你说的没动。",
+                                                              "evidence": ["https://github.com/example/weather/pull/45",
+                                                                           "https://github.com/example/weather/actions/runs/1001"]}),
+        ]
+        _digest = ("📋 督办：你派出去的任务有 2 个要你处理\n（这是 Persona 的督办消息，不是用户发的。这一轮正常结束时不会推送给用户。）\n\n"
+                   "1. 任务「补齐网络层的单元测试」：hub 判断做完了，等你验收\n2. 任务「修小组件横屏崩溃」：Agent 停下了，但没做完")
+        ITEMS[ASK1] += [
+            it("user", "text", 5.8, text=_digest, injected={"kind": "system", "state": "supervise", "line": "督办：2 个派出去的任务要处理"}),
+            it("assistant", "text", 5.7, text="网络层测试我核对过了：PR 已合并，覆盖率 83%，验收通过。小组件那个我让它接着修。"),
+        ]
+        ITEMS[ASK1].sort(key=lambda x: x["ts"])
+        _base = min(x["seq"] for x in ITEMS[ASK1])
+        for _i, _x in enumerate(ITEMS[ASK1]):
+            _x["seq"] = _base + _i
     # MOCK_RELAYED=1: a message another Persona conversation sent with conversation_send (prompts/assistant/relay.md),
     # then one you typed: only yours is the pale blue bubble (#2643).
     if os.environ.get("MOCK_RELAYED") == "1":
@@ -5836,6 +5860,43 @@ def inbox_suggestion_bump(iid):
     return x, 200
 
 
+# Hand to AI's main-chat target (POST /api/v1/inbox/{id}/handoff, docs/assistant/inbox.md "Item actions", #1194): the text
+# goes after a block naming the item to the main conversation (started with it when there is none), once per client_id,
+# and lands in its transcript MOCK_ASSISTANT_TRANSCRIPT_SECONDS later (default 1) under that id, as the hub's
+# session.send_once does; under none when it started the conversation (the hub's start takes no message id). The item keeps the hand-off and its chain gets one entry per conversation. What went is in
+# /mock/sent and /mock/sent_to. MOCK_HANDOFF=old: a hub from before the route (404).
+HANDOFFS = {}  # client_id -> the answer given
+
+
+def inbox_handoff(iid, body):
+    if os.environ.get("MOCK_HANDOFF") == "old": return {"error": "404 page not found"}, 404
+    x = next((x for x in INBOX if x["id"] == iid), None)
+    if x is None: return {"error": "收件箱里没有这一条", "code": "not_found"}, 404
+    text, cid = (body.get("text") or "").strip(), (body.get("client_id") or "").lower()
+    if not text: return {"error": "text is required"}, 400
+    if cid in HANDOFFS: return HANDOFFS[cid], 200
+    mid, started = ASSISTANT_CONFIG["machine_id"], not ASSISTANT_CONFIG["main"]
+    if started:
+        sid = str(uuid.uuid4())
+        session = assistant_sess(sid, "", 0, "")
+        session.update(status="working", state="working", main=True)
+        ASSISTANT_CONFIG["main"] = sid
+        ASSISTANT.append(session)
+        push_machine(mid)
+    sid = ASSISTANT_CONFIG["main"]
+    head = '<persona-context kind="context" title="收件箱事件 · %s" url="">\n用户从收件箱把这件事交给你（事件 id：%s）。\n</persona-context>\n' % (
+        x["title"].replace('"', "'"), iid)
+    sent = {"text": head + text} if started else {"text": head + text, "client_msg_id": cid}
+    echo_sent(["", "api", "v1", "sessions", mid, sid, "messages"], sent, float(os.environ.get("MOCK_ASSISTANT_TRANSCRIPT_SECONDS", "1")))
+    SENT.append(dict(sent, inbox=iid))
+    SENT_TO.append({"machine_id": mid, "session_id": sid, "client_msg_id": sent.get("client_msg_id"), "text": sent["text"]})
+    x.setdefault("handoffs", []).append({"machine_id": mid, "session_id": sid, "at": ago()})
+    if not any(e.get("kind") == "handling" and (e.get("link") or {}).get("session_id") == sid for e in x.get("chain") or []):
+        _chain_add(x, "handling", "交给了 Persona 主对话", link={"type": "session", "machine_id": mid, "session_id": sid})
+    HANDOFFS[cid] = {"item": x, "session": {"machine_id": mid, "session_id": sid}}
+    return HANDOFFS[cid], 200
+
+
 # MOCK_INBOX_LINE=1: a "Thread" (#2128): the design review grew out of the chat with the sample contact (continues), which hangs under a todo; the
 # the weekend hiking group item grew out of the design review. GET /api/v1/inbox/tree/{kind}/{id} answers from the items' parents.
 if os.environ.get("MOCK_INBOX_LINE") == "1":
@@ -7402,6 +7463,39 @@ def mock_subagent_reports():
 
 if os.environ.get("MOCK_SUBAGENT_REPORTS") == "1":
     mock_subagent_reports()
+# GET /mock/subagent-step (MOCK_SUBAGENT_CARDS): the background subagent "scrun" goes one step on, pushed to whoever
+# follows its own conversation as the hub would: its running call gets its result and it starts the next one (#5602,
+# the open card's latest steps).
+SUBSTEP = {"n": 0}
+
+
+def subagent_step():
+    sid = SUBCARDS + "@scrun"
+    SUBSTEP["n"] += 1
+    n = SUBSTEP["n"]
+    prev = "toolu_scrunb" if n == 1 else "toolu_scrun%d" % (n - 1)
+    new = [it("user", "tool_result", 0, tool_use_id=prev, text="%d passed" % (30 + n)),
+           it("assistant", "tool_use", 0, tool_use_id="toolu_scrun%d" % n, tool_name="Grep",
+              tool_input={"pattern": "filter-%d" % n, "path": "e2e"})]
+    before = ITEMS[sid][-1]["seq"]
+    for i, x in enumerate(new):
+        x["seq"] = before + 1 + i
+    ITEMS[sid] = ITEMS[sid] + new
+    for out, subs in list(LIVE):
+        try:
+            if sid in subs:
+                out({"type": "items", "machine_id": "macbook", "session_id": sid, "items": new, **span(new, before)})
+        except Exception:
+            pass
+    for sess_ in SESSIONS:
+        if sess_["session_id"] == SUBCARDS:
+            for a in sess_.get("subagents") or []:
+                if a["id"] == "scrun":
+                    a.update(steps=3 + n, last_tool={"id": "toolu_scrun%d" % n, "name": "Grep", "summary": "filter-%d" % n},
+                             updated_at=ago(minutes=0))
+            sess_["rev"] = (sess_.get("rev") or 0) + 1
+            push_machine("macbook")
+    return {"step": n}
 
 
 # MOCK_SUBAGENT_PARALLEL=1: three subagents launched together in the live exchange (#5602, the grid): one done, one
@@ -8980,7 +9074,7 @@ def replay_next(n):
 # MOCK_ECHO_SENT=1: a message sent to a session lands in its transcript a moment later, as claude writes it: for
 # Persona's conversations (claude -p) its pictures first, as image blocks, then its text; elsewhere the text, then the
 # pictures (a pasted image Claude inlined). For the chat showing what was sent once the transcript has it.
-def echo_sent(parts, body):
+def echo_sent(parts, body, delay=None):
     if len(parts) < 7 or body.get("clear_draft"):
         return
     mid, sid = parts[4], parts[5]
@@ -9008,7 +9102,7 @@ def echo_sent(parts, body):
                 try: out({"type": "items", "machine_id": mid, "session_id": sid, "items": line, **span(line, before)})
                 except Exception: pass
         sync_moved(sid)
-    threading.Timer(float(os.environ.get("MOCK_ECHO_SECONDS", "1.5")), written).start()
+    threading.Timer(delay if delay is not None else float(os.environ.get("MOCK_ECHO_SECONDS", "1.5")), written).start()
 
 
 # MOCK_HUB_LINKS=<origin the web is served at>: the assistant's latest answer links an agent and a task as the hub's own
@@ -13082,6 +13176,8 @@ class H(BaseHTTPRequestHandler):
         if p == "/mock/session_close":
             if "fail" in q: SESSION_CLOSE["fail"] = q["fail"][0] == "1"
             return self.send_json({k: SESSION_CLOSE[k] for k in ("fail", "attempts", "closed")})
+        if p == "/mock/subagent-step" and os.environ.get("MOCK_SUBAGENT_CARDS") == "1":
+            return self.send_json(subagent_step())
         if p == "/mock/workflow" and MOCK_WORKFLOW_CARDS:  # MOCK_WORKFLOW_CARDS: the small run at ?step=0..3
             return self.send_json(set_wf_step(int(q.get("step", ["0"])[0] or 0)))
         if p == "/mock/workflow" and os.environ.get("MOCK_WORKFLOW") == "1":  # MOCK_WORKFLOW=1: parity-audit at ?step=0..4
@@ -14480,6 +14576,8 @@ class H(BaseHTTPRequestHandler):
                             st["value"] = ch.get("value")
                             return self.send_json(x)
             return self.send_json({"error": "no such row"}, 400)
+        if p.startswith("/api/v1/inbox/") and p.endswith("/handoff") and self.command == "POST":  # Hand to AI, main chat
+            return self.send_json(*inbox_handoff(unquote(p[len("/api/v1/inbox/"):-len("/handoff")]), json.loads(self.last_body or b"{}")))
         if p.startswith("/api/v1/inbox/") and p.endswith("/suggestion") and self.command == "POST":  # "Confirm" / "Reject" / "Say something"
             return self.send_json(*inbox_suggestion(unquote(p[len("/api/v1/inbox/"):-len("/suggestion")]), json.loads(self.last_body or b"{}")))
         if p.startswith("/api/v1/inbox/") and p.endswith("/draft"):  # AI draft reply
@@ -15510,6 +15608,7 @@ MOCK_HELP.append("MOCK_REWIND=1  检查 PR 的对话里有四条你的消息（�
 MOCK_HELP.append("MOCK_INBOX_SOURCES=none  还没接任何消息来源：收件箱空、没有邮箱账号、飞书没设置、GitHub 没登录（#4480）")
 MOCK_HELP.append("MOCK_INBOX_EXTRA=<n>  收件箱多 n 封知悉即可的示例通知，试「全部清理」的「将清理 N 件」确认")
 MOCK_HELP.append("MOCK_CHANNELS=1  设置 › 插件 › 渠道：App、飞书机器人和微信已连接、飞书 /agent 只读、一个待绑定（令牌 example-token）、一个出错、一个在市场里；主对话第一条来自微信")
+MOCK_HELP.append("MOCK_EXCHANGES=1  主对话新布局的素材（#1666）：Persona 发给任务的长消息、任务带链接和证据的长汇报、督办消息")
 MOCK_HELP.append("MOCK_AUTO_CONVERSATIONS=1  助手对话带来源 origin（feature conversation_origin）：另有 10 段自动对话（收件箱 6、定时任务 2、飞书 /agent、对话派生），侧边栏收进「自动对话」（#3264）")
 
 
