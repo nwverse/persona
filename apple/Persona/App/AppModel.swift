@@ -1489,7 +1489,7 @@ final class AppModel {
         DispatchQueue.main.asyncAfter(deadline: .now() + Self.sessionsCoalesce) { [weak self] in self?.applyPendingSessions() }
     }
 
-    private func handle(_ ev: ServerEvent, group: String) {
+    func handle(_ ev: ServerEvent, group: String) {
         #if DEBUG || PERF_SIGNPOST
         PerfTrace.push(Self.perfName(ev))
         #endif
@@ -1635,16 +1635,19 @@ final class AppModel {
             case .kept: break
             }
         case .interaction(let ix):
-            let isNew = interactions[ix.uid] == nil
+            let announces = Delegated.announces(ix, replacing: interactions[ix.uid])
             interactions[ix.uid] = ix
-            if isNew { Haptics.attention() }
+            if announces { Haptics.attention() }
             WatchSync.shared.push(summary: watchSummary())
-        case .interactionResolved(let id):
+        case .interactionResolved(let id, let assistant):
             endedInteractionIDs.insert(id)
             let uid = group.isEmpty ? id : group + "|" + id
             answering.hubEnded(uid)
+            if let assistant, let ix = interactions[uid] { keepDelegated(ix, assistant) }
             interactions[uid] = nil
             WatchSync.shared.push(summary: watchSummary())
+        case .interactionReanswered(let id, let answers):
+            noteReanswer(group.isEmpty ? id : group + "|" + id, answers)
         case .toolCall(let callID, let name, let args):
             Task { await runPhoneTool(callID: callID, name: name, args: args, group: group) }
         case .hookEvent:
@@ -1669,6 +1672,7 @@ final class AppModel {
         case .delta: "delta"
         case .interaction: "interaction"
         case .interactionResolved: "interaction_resolved"
+        case .interactionReanswered: "interaction_reanswered"
         case .toolCall: "tool_call"
         case .hookEvent: "hook"
         case .revs: "revs"
@@ -1761,7 +1765,10 @@ final class AppModel {
         let op = UUID()
         do {
             let res = try await OpRetry.untilDelivered { try await api.resolve(ix.id, r, opID: op) }
-            if res.already == true, let existing = res.resolution {
+            if res.already == true, let existing = res.resolution, existing.answeredBy == AssistantAnswer.assistant, ix.kind == .question {
+                // The assistant answered first: its answer shows in the chat, where the user may change it.
+                keepDelegated(ix, AssistantAnswer(answers: existing.answers ?? [:], reason: existing.reason ?? ""))
+            } else if res.already == true, let existing = res.resolution {
                 // Resolved already on server, show what was effective
                 let lines = Answered.answerLines(ix, existing)
                 let text = (lines.first?.answer.isEmpty == false) ? String(localized: "Already answered: \(lines.first!.answer)") : String(localized: "Already answered")
@@ -1788,6 +1795,48 @@ final class AppModel {
         guard answering.putsBack(ix.uid) else { return }
         endedInteractionIDs.remove(ix.id)
         interactions[ix.uid] = ix
+    }
+
+    // MARK: Questions the assistant answered (#544)
+
+    /// Questions the assistant answered for the user, oldest first: each stays in its chat with what it answered and
+    /// why until put away, at most `Delegated.kept` of them.
+    private(set) var delegatedAnswers: [DelegatedAnswer] = []
+    /// What the user changed an answer to, by `uid` (this device's Change Answer, or `interaction_reanswered`).
+    private(set) var reanswered: [String: [String: String]] = [:]
+
+    func delegated(for key: SessionKey) -> [DelegatedAnswer] { delegatedAnswers.filter { $0.interaction.sessionKey == key } }
+
+    private func keepDelegated(_ ix: Interaction, _ answer: AssistantAnswer) {
+        guard ix.kind == .question, !delegatedAnswers.contains(where: { $0.id == ix.uid }) else { return }
+        delegatedAnswers.append(DelegatedAnswer(interaction: ix, answers: answer.answers, reason: answer.reason, at: .now))
+        if delegatedAnswers.count > Delegated.kept { delegatedAnswers.removeFirst(delegatedAnswers.count - Delegated.kept) }
+    }
+
+    /// Puts an answered question's card away; what was changed stays for Session Info.
+    func dropDelegated(_ uid: String) { delegatedAnswers.removeAll { $0.id == uid } }
+
+    /// The hub names only the questions that changed: an earlier change to another question of the card stays.
+    private func noteReanswer(_ uid: String, _ answers: [String: String]) {
+        guard !answers.isEmpty else { return }
+        reanswered[uid, default: [:]].merge(answers) { _, new in new }
+    }
+
+    /// The new answer reaches the agent as a message, so Change Answer takes what sending does, not answering a card.
+    func canChangeAnswer(_ d: DelegatedAnswer) -> Bool { session(d.interaction.sessionKey)?.canSend == true }
+
+    /// Change Answer: nil once the changed answers reached the agent, else why not.
+    func reanswer(_ d: DelegatedAnswer, answers: [String: String]) async -> String? {
+        guard let api = api(d.interaction.group) else { return String(localized: "Can't reach the hub. That action didn't go through.") }
+        do {
+            try await api.reanswer(d.interaction.id, answers: answers, manager: d.interaction.manager)
+        } catch {
+            return Delegated.reanswerError(error)
+        }
+        noteReanswer(d.id, answers)
+        Haptics.success()
+        toast = Toast(String(localized: "Your new answer was sent to the agent"), style: .success)
+        return nil
     }
 
     /// Unsent composer text per chat (also where an edited queued message lands); kept across launches.

@@ -8870,6 +8870,30 @@
       },
       "extractionState": "manual"
     },
+    ", the assistant's pick": {
+      "comment": "Accessibility suffix: the option the assistant recommends",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": ", the assistant's pick"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "、アシスタントのおすすめ"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "，助手推荐"
+          }
+        }
+      },
+      "extractionState": "manual"
+    },
     ". %lld with new messages stayed in the Inbox.": {
       "localizations": {
         "en": {
@@ -16163,6 +16187,29 @@
       },
       "extractionState": "manual"
     },
+    "Assistant is looking": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Assistant is looking"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "アシスタントが確認中"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "助手在看"
+          }
+        }
+      },
+      "extractionState": "manual"
+    },
     "Assistant replying": {
       "localizations": {
         "en": {
@@ -16181,6 +16228,29 @@
           "stringUnit": {
             "state": "translated",
             "value": "助手在回答"
+          }
+        }
+      },
+      "extractionState": "manual"
+    },
+    "Assistant's pick": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Assistant's pick"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "アシスタントのおすすめ"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "助手推荐"
           }
         }
       },
@@ -21873,6 +21943,29 @@
       },
       "extractionState": "manual"
     },
+    "Change Answer": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Change Answer"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "回答を変更"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "改答"
+          }
+        }
+      },
+      "extractionState": "manual"
+    },
     "Change Client ID": {
       "localizations": {
         "en": {
@@ -23640,6 +23733,29 @@
           "stringUnit": {
             "state": "translated",
             "value": "跳到 Google 选择账号并授权 Persona 收发邮件，不需要密码。授权随时可以在 Google 账号的「第三方应用和服务」里撤销；授权失效时再登录一次即可恢复。"
+          }
+        }
+      },
+      "extractionState": "manual"
+    },
+    "Choose an answer first": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Choose an answer first"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "先に回答を選んでください"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "先选一个答案"
           }
         }
       },
@@ -30184,6 +30300,29 @@
       },
       "extractionState": "manual"
     },
+    "Couldn't change the answer: %@": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Couldn't change the answer: %1$@"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "回答を変更できませんでした：%1$@"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "没能改答：%1$@"
+          }
+        }
+      },
+      "extractionState": "manual"
+    },
     "Couldn't change the app icon: %@": {
       "localizations": {
         "en": {
@@ -32301,6 +32440,29 @@
       },
       "extractionState": "manual"
     },
+    "Couldn't send the new answer to the agent: %@": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Couldn't send the new answer to the agent: %1$@"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "新しい回答をエージェントに送れませんでした：%1$@"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "新答案没能发给 Agent：%1$@"
+          }
+        }
+      },
+      "extractionState": "manual"
+    },
     "Couldn't send the reply": {
       "localizations": {
         "zh-Hans": {
@@ -34205,6 +34367,30 @@
           "stringUnit": {
             "state": "translated",
             "value": "日期"
+          }
+        }
+      },
+      "extractionState": "manual"
+    },
+    "Deadline": {
+      "comment": "The context the assistant filled in on a question: answer by when",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Deadline"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "期限"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "截止"
           }
         }
       },
@@ -48494,6 +48680,30 @@
           "stringUnit": {
             "state": "translated",
             "value": "系统要是提示退出并重新打开 Cua Driver，或问它能否直接访问屏幕，都选允许"
+          }
+        }
+      },
+      "extractionState": "manual"
+    },
+    "If not": {
+      "comment": "The context the assistant filled in on a question: what not taking its recommendation costs",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "If not"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "選ばない場合"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "不选的代价"
           }
         }
       },
@@ -78001,6 +78211,29 @@
         }
       }
     },
+    "Why: %@": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Why: %1$@"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "理由：%1$@"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "理由：%1$@"
+          }
+        }
+      },
+      "extractionState": "manual"
+    },
     "Working [State Names]": {
       "extractionState": "manual",
       "localizations": {
@@ -78643,6 +78876,29 @@
           "stringUnit": {
             "state": "translated",
             "value": "所有 Agent 的提问"
+          }
+        }
+      },
+      "extractionState": "manual"
+    },
+    "Questions the assistant answered": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Questions the assistant answered"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "アシスタントが代理回答した質問"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "助手代答过的问题"
           }
         }
       },
@@ -99085,6 +99341,29 @@
       },
       "extractionState": "manual"
     },
+    "The agent already went on with the assistant's answer. Your new answer goes to it as a message.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The agent already went on with the assistant's answer. Your new answer goes to it as a message."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "エージェントはアシスタントの回答で作業を進めています。新しい回答はメッセージとして送られます。"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Agent 已经按助手的答案往下做了，新答案会作为一条消息发给它。"
+          }
+        }
+      },
+      "extractionState": "manual"
+    },
     "The agent didn't start": {
       "localizations": {
         "en": {
@@ -105120,6 +105399,29 @@
       },
       "extractionState": "manual"
     },
+    "This device can only answer with a card's own choices, so it can't change answers": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This device can only answer with a card's own choices, so it can't change answers"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "このデバイスはカードの選択肢でしか回答できないため、回答を変更できません"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "这台设备只能按卡片上的选项回答，不能改答"
+          }
+        }
+      },
+      "extractionState": "manual"
+    },
     "This device can only view and answer": {
       "localizations": {
         "en": {
@@ -105575,6 +105877,29 @@
           "stringUnit": {
             "state": "translated",
             "value": "这台 hub 还不支持整组挂，升级 hub 后再试"
+          }
+        }
+      },
+      "extractionState": "manual"
+    },
+    "This hub can't change answers yet. Update the hub first": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This hub can't change answers yet. Update the hub first"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "このハブはまだ回答の変更に対応していません。先にハブを更新してください"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "这个 hub 还不支持改答，先更新 hub"
           }
         }
       },
@@ -116403,6 +116728,30 @@
       },
       "extractionState": "manual"
     },
+    "What": {
+      "comment": "The context the assistant filled in on a question: what it is about",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "What"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "内容"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "这件事"
+          }
+        }
+      },
+      "extractionState": "manual"
+    },
     "What It Can Do": {
       "localizations": {
         "en": {
@@ -116720,6 +117069,29 @@
           "stringUnit": {
             "state": "translated",
             "value": "要让 Agent 做什么？"
+          }
+        }
+      },
+      "extractionState": "manual"
+    },
+    "What the assistant found": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "What the assistant found"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "アシスタントの補足"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "助手补充的情况"
           }
         }
       },
@@ -117860,6 +118232,54 @@
           "stringUnit": {
             "state": "translated",
             "value": "为什么算达成"
+          }
+        }
+      },
+      "extractionState": "manual"
+    },
+    "Why now": {
+      "comment": "The context the assistant filled in on a question: why the agent asks now",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Why now"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "今聞く理由"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "为什么现在问"
+          }
+        }
+      },
+      "extractionState": "manual"
+    },
+    "Why you decide": {
+      "comment": "The context the assistant filled in on a question: why it is the user's to answer",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Why you decide"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "あなたが決める理由"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "为什么要你定"
           }
         }
       },
@@ -119291,6 +119711,29 @@
       },
       "extractionState": "manual"
     },
+    "You changed it": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "You changed it"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "あなたが変更しました"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "你改答了"
+          }
+        }
+      },
+      "extractionState": "manual"
+    },
     "You didn’t say this, so it wasn’t sent": {
       "localizations": {
         "en": {
@@ -119608,6 +120051,29 @@
           "stringUnit": {
             "state": "translated",
             "value": "iPhone 现在没有网络。网络恢复后会自动连上，期间写的消息会自动发出去。"
+          }
+        }
+      },
+      "extractionState": "manual"
+    },
+    "Your new answer was sent to the agent": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Your new answer was sent to the agent"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "新しい回答をエージェントに送りました"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "新答案已发给 Agent"
           }
         }
       },
@@ -128847,6 +129313,98 @@
           }
         }
       }
+    },
+    "The assistant answered: %@": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The assistant answered: %1$@"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "アシスタントの元の回答：%1$@"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "助手原来答的：%1$@"
+          }
+        }
+      },
+      "extractionState": "manual"
+    },
+    "The assistant didn't answer this question, so its answer can't be changed here": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The assistant didn't answer this question, so its answer can't be changed here"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "この質問はアシスタントが回答したものではないため、ここでは変更できません"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "这个问题不是助手代答的，不能在这里改答"
+          }
+        }
+      },
+      "extractionState": "manual"
+    },
+    "The assistant is deciding whether it can answer this for you and hasn't notified you yet. You can still answer; whichever answer comes first counts.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The assistant is deciding whether it can answer this for you and hasn't notified you yet. You can still answer; whichever answer comes first counts."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "アシスタントが代わりに答えられるか判断しているところで、まだ通知していません。ここで答えることもでき、先に届いた回答が使われます。"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "助手正在判断能不能替你答，还没通知你。你也可以直接答，先到的算。"
+          }
+        }
+      },
+      "extractionState": "manual"
+    },
+    "The assistant is offline. Try again shortly": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The assistant is offline. Try again shortly"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "アシスタントがオフラインです。しばらくしてからもう一度お試しください"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "助手不在线，稍后再试"
+          }
+        }
+      },
+      "extractionState": "manual"
     },
     "The extension sent it on its own: no rule and no card.": {
       "localizations": {

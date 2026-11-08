@@ -356,7 +356,7 @@ func (s *Service) publish(ctx context.Context) {
 	snap.Epoch, snap.Seq, snap.At = s.epoch, s.seq, time.Now().UTC()
 	s.pubMu.Unlock()
 	if s.fleetOn() {
-		s.fleetTakeSnapshot(snap) // the lists' decoration, its own cards on the phone (fleet.go)
+		s.fleetTakeSnapshot(snap) // the lists' decoration, its own cards on the phone (fleet_snapshot.go)
 		snap.Interactions = nil
 	}
 	if _, err := s.hub.Snapshot(ctx, snap); err != nil && !errors.Is(err, ErrStaleSnapshot) {
@@ -453,7 +453,7 @@ func (s *Service) TurnStarted(ctx context.Context, r SessionRef) {
 func (s *Service) TurnEnded(ctx context.Context, r SessionRef) {
 	go s.registerInlineTurn(context.WithoutCancel(ctx), r)
 	go s.taskTurnEnded(context.WithoutCancel(ctx), r.MachineID, r.SessionID)
-	go s.workTurnEnded(context.WithoutCancel(ctx), r.MachineID, r.SessionID)    // the turn's triage (agents_work.go)
+	go s.workTurnEnded(context.WithoutCancel(ctx), r.MachineID, r.SessionID)    // its triage (agents_work_turns.go)
 	go s.channelTurnEnded(context.WithoutCancel(ctx), r.MachineID, r.SessionID) // a channel's answer, the sync mirror
 	s.titleAfterTurn(ctx, r.MachineID, r.SessionID)
 }

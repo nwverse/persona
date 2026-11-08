@@ -2000,6 +2000,10 @@ struct ChatView: View {
                 if !pendingCards.isEmpty {
                     PendingCards(cards: pendingCards, room: footerRoom)
                 }
+                // The latest question the assistant answered here (#544), until put away; Session Info lists them all.
+                if let answered = model.delegated(for: key).last {
+                    DelegatedCard(answer: answered)
+                }
                 // The last card was answered: one low-key entry to the next conversation that needs you (#4348).
                 if let next = nextNeedsYouSession {
                     NextNeedsYouStrip(title: next.assistant ? (next.title.isEmpty ? model.persona.name : next.title) : next.displayTitle) {
@@ -4635,6 +4639,7 @@ struct SessionInfoSheet: View {
     @State private var error: String?
     @State private var showTodo = false
     @State private var grants = AlwaysGrantsModel()
+    @State private var delegatedHistory = DelegatedHistoryModel()
 
     /// Only assistant conversations remember "always allow" (docs/assistant/assistant.md); Agents sessions keep theirs in Claude.
     private var isAssistant: Bool { assistant || (model.session(key) ?? session)?.assistant == true }
@@ -4648,6 +4653,8 @@ struct SessionInfoSheet: View {
                 if let link = session?.externalLink { Section { FeishuLink(url: link) } }
                 if isAssistant {
                     AlwaysGrantsSection(page: grants, conversation: key.sessionID, api: model.api(key.group))
+                } else {
+                    DelegatedHistorySection(page: delegatedHistory, key: key, manager: session?.manager, api: model.api(key.group))
                 }
                 if let info {
                     Section("Runtime") {
@@ -4722,6 +4729,10 @@ struct SessionInfoSheet: View {
         // Keyed on `isAssistant` too: on a cold open the session arrives after this sheet does.
         .task(id: isAssistant ? key : nil) {
             if isAssistant { await grants.load(conversation: key.sessionID, api: model.api(key.group)) }
+        }
+        // The questions the assistant answered for an agent (#544); its own conversations have none.
+        .task(id: isAssistant ? nil : key) {
+            if !isAssistant { await delegatedHistory.load(key, manager: session?.manager, api: model.api(key.group)) }
         }
     }
 
