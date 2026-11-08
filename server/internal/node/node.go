@@ -53,7 +53,7 @@ type Node struct {
 	sock   os.FileInfo
 
 	// claudeStart, claudeReady: when set, how long a start waits for the shell to run claude, then for claude's
-	// input box, in place of claudeStartWait and claudeReadyWait (tests; control.go).
+	// input box, in place of claudeStartWait and claudeReadyWait (tests; claudeready.go).
 	claudeStart, claudeReady time.Duration
 
 	// doctorAt replaces the places node.doctor looks at (tests; doctor_rpc.go).
@@ -87,7 +87,7 @@ type Node struct {
 	fsw            fsWatcher // the folders the web panels have open (fswatch.go)
 
 	mu      sync.Mutex
-	titleMu sync.Mutex // orders the custom-title lines renames write (control.go retitle)
+	titleMu sync.Mutex // orders the custom-title lines renames write (rename.go retitle)
 	state   *stateFile
 	files   map[string]*transcript.File // session id -> parsed transcript
 	paths   map[string]string           // session id -> transcript path
@@ -106,7 +106,7 @@ type Node struct {
 	layouts   map[string]layout          // host kind -> space / slot names from its last snapshot
 	shellTabs *shellTabs                 // the sweep's memory; nil: the process's own (shelltabs.go)
 	procs     map[string]*assistantProc  // headless assistant conversations (assistant.go)
-	titles    map[string]string          // session id -> title given before its transcript existed (control.go retitle)
+	titles    map[string]string          // session id -> title given before its transcript existed (rename.go retitle)
 	spare     *assistantProc             // warm process waiting for the next new conversation
 	akeys     map[string]*assistantProc  // the key a Codex conversation's MCP server reports until its thread exists
 	lastList  string                     // serialized last sessions.changed payload
