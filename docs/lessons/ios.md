@@ -2,6 +2,10 @@
 
 Pitfalls, odd behavior and the decisions made at the time (formerly "Lessons" in `CLAUDE.md`; index in `docs/lessons/README.md`). Add new lessons to the relevant section, or create one if none fits.
 
+## Newest geometry after programmatic scrolling (#1211)
+
+A frozen transcript can reveal its withheld rows during Jump to Latest and move UIKit to the end without another SwiftUI scroll-geometry report. The real failure trace had offset -10 pt and adjusted top inset 10 pt (gap 0), while the follow state kept gap 1480 and `near=false`. A visible reply and following mode do not prove that the position state is current. Reconcile from the actual scroll container when the animation ends, keep the existing tolerance and reading intent, and skip a completion without this view's live subscription owner or without a measured container. Query the owner at completion: a captured visibility environment value can be stale, and another visible owner's subscription must not keep a hidden view eligible. Never fix the regression by forcing `near=true` or relaxing the UI assertion. For repeated UI failures, stop at the first failure and resolve the app container after testing: reinstall can change its data container, and a later successful launch overwrites the trace.
+
 ## Retained chat visibility (#739)
 
 A shell can keep a chat mounted after switching tabs: `onDisappear` alone does not release its transcript subscription or visible/read owner. Use paired `onTabVisibility` edges on iPhone as well as Mac, keep the store and scroll state, and resume with `since_seq` on return. This pauses client display traffic, not the Agent's work on the hub. Test hidden initial mounts, duplicate visibility notifications, shared subscription owners and returning after missed items. Linux source checks cannot establish SwiftUI frame times; compile, profile both directions and inspect light/dark simulator screenshots on a Mac before publishing the Apple build.
