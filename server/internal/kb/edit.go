@@ -69,36 +69,42 @@ func (t *Tagging) fieldLocked(field string) bool {
 
 // putEntity rereads protected fields while holding the metadata lock. A stale pipeline object cannot
 // restore locked links or overwrite a hand edit made while a model or connector was running.
-func (s *Store) putEntity(kind, id string, v any, t *Tagging, manual bool) error {
+func (s *Store) putEntity(kind, id string, v any, t *Tagging, manual bool) (err error) {
 	if s.readOnly {
 		return ErrReadOnly
 	}
-	unlockDays := func() {}
-	defer func() { unlockDays() }()
+	s.metaMu.Lock()
 	if kind == KindChat {
 		s.mu.Lock()
-		if err := s.pendingIngestLocked(id); err != nil {
+	}
+	changed := false
+	defer func() {
+		if kind == KindChat {
 			s.mu.Unlock()
+		}
+		s.metaMu.Unlock()
+		if err == nil && changed {
+			s.notify(kind, id, "metadata")
+		}
+	}()
+	if kind == KindChat {
+		if err := s.pendingIngestLocked(id); err != nil {
 			return err
 		}
-		unlockDays = s.mu.Unlock
 	}
-	s.metaMu.Lock()
 	path := s.entityPath(kind, id)
 	current := map[string]json.RawMessage{}
 	exists, err := readJSON(path, &current)
 	if err != nil {
-		s.metaMu.Unlock()
 		return err
 	}
 	if !exists && t.persisted {
-		s.metaMu.Unlock()
 		return nil
 	} // forgotten during an external call
 	incoming := protectedEntity(v, t, current, manual)
 	before, _ := json.Marshal(current)
 	after, _ := json.Marshal(incoming)
-	changed := !exists || !bytes.Equal(before, after)
+	changed = !exists || !bytes.Equal(before, after)
 	if changed {
 		err = writeJSON(path, incoming)
 	}
@@ -117,12 +123,6 @@ func (s *Store) putEntity(kind, id string, v any, t *Tagging, manual bool) error
 		}
 		_ = json.Unmarshal(after, v)
 		t.persisted = true
-	}
-	s.metaMu.Unlock()
-	unlockDays()
-	unlockDays = func() {}
-	if err == nil && changed {
-		s.notify(kind, id, "metadata")
 	}
 	return err
 }

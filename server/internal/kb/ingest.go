@@ -117,10 +117,8 @@ func (s *Store) pendingIngestLocked(id string) error {
 
 // recoverIngest is called under chatMu before a pipeline caller reads counters.
 func (s *Store) recoverIngest(id string) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.metaMu.Lock()
-	defer s.metaMu.Unlock()
+	s.lockArchive()
+	defer s.unlockArchive()
 	return s.recoverIngestLocked(id)
 }
 
@@ -182,11 +180,9 @@ func (s *Store) finishIngestLocked(in *ingestIntent) error {
 // existing protected-field merge also applies here, so manual edits remain intact.
 // The caller holds chatMu and has filtered identities before building attachments.
 func (s *Store) commitIngest(c *Chat, lines []Line, r messageReceipts) (err error) {
-	s.mu.Lock()
-	s.metaMu.Lock()
+	s.lockArchive()
 	defer func() {
-		s.metaMu.Unlock()
-		s.mu.Unlock()
+		s.unlockArchive()
 		if err == nil {
 			s.notify(KindChat, c.ID, "messages")
 			s.notify(KindChat, c.ID, "metadata")
@@ -240,9 +236,26 @@ func (s *Store) commitIngest(c *Chat, lines []Line, r messageReceipts) (err erro
 	return nil
 }
 
-func (s *Store) recoverIngestsLocked() error {
+// lockArchive follows the existing project commit order: projectInput reads Log
+// while metadata is frozen, so no path may hold mu while waiting for metaMu.
+func (s *Store) lockArchive() {
 	s.metaMu.Lock()
-	defer s.metaMu.Unlock()
+	s.mu.Lock()
+}
+
+func (s *Store) unlockArchive() {
+	s.mu.Unlock()
+	s.metaMu.Unlock()
+}
+
+func (s *Store) recoverIngests() error {
+	s.lockArchive()
+	defer s.unlockArchive()
+	return s.recoverIngestsLocked()
+}
+
+// recoverIngestsLocked requires both persistence locks, in metadata/day order.
+func (s *Store) recoverIngestsLocked() error {
 	for _, id := range s.IDs(KindChat) {
 		if err := s.recoverIngestLocked(id); err != nil {
 			return fmt.Errorf("recover archive %s: %w", id, err)

@@ -40,8 +40,8 @@ func (s *Store) Rezone(to *time.Location) (int, error) {
 	if s.readOnly {
 		return 0, ErrReadOnly
 	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	s.lockArchive()
+	defer s.unlockArchive()
 	if err := s.recoverIngestsLocked(); err != nil {
 		return 0, err
 	}

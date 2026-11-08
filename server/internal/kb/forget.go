@@ -28,10 +28,7 @@ func (e *Engine) ForgetSource(source string) (Forgotten, error) {
 	defer e.Store.ingestMu.Unlock()
 	e.Store.chatMu.Lock()
 	defer e.Store.chatMu.Unlock()
-	e.Store.mu.Lock()
-	err := e.Store.recoverIngestsLocked()
-	e.Store.mu.Unlock()
-	if err != nil {
+	if err := e.Store.recoverIngests(); err != nil {
 		return Forgotten{}, err
 	}
 	var out Forgotten

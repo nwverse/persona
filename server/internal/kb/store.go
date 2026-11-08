@@ -182,7 +182,7 @@ type Store struct {
 	readOnly bool
 	Dir      string
 	mu       sync.Mutex
-	metaMu   sync.Mutex
+	metaMu   sync.Mutex // acquire before mu when both are needed (projectInput reads Log under metaMu)
 	applyMu  sync.Mutex
 	recMu    sync.Mutex // a recording's read-compare-write (recordings.go)
 	dedupeMu sync.Mutex // projects/.dedupe.json's read-modify-write (dedupe.go)
@@ -207,7 +207,7 @@ func NewStore(dir string) (*Store, error) {
 		}
 	}
 	s := &Store{Dir: dir}
-	if err := s.recoverIngestsLocked(); err != nil {
+	if err := s.recoverIngests(); err != nil {
 		return nil, err
 	}
 	_ = writeIfMissing(filepath.Join(dir, "README.md"), prompts.RenderKBReadme())
@@ -571,8 +571,8 @@ func (s *Store) PruneBySource(now time.Time, textDays int, attachmentDays func(s
 	}
 	s.chatMu.Lock()
 	defer s.chatMu.Unlock()
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	s.lockArchive()
+	defer s.unlockArchive()
 	if err := s.recoverIngestsLocked(); err != nil {
 		return 0
 	}

@@ -2,6 +2,8 @@ package kb
 
 import (
 	"context"
+	"crypto/rand"
+	"crypto/sha256"
 	"fmt"
 	"path/filepath"
 	"regexp"
@@ -342,7 +344,7 @@ func (e *Engine) attach(ctx context.Context, download DownloadFunc, c *Chat, m S
 	if !recent || download == nil {
 		return attachmentPlaceholder
 	}
-	name := fmt.Sprintf("%s-%d%s", SafeID(m.ID), i, extOf(media, m.Type))
+	name := attachmentName(m.ID, i, media, m.Type)
 	dst := e.Store.path(KindChat, c.ID, "attachments", day, name)
 	if err := download(ctx, media, dst); err != nil {
 		e.failed.Add(1)
@@ -350,6 +352,19 @@ func (e *Engine) attach(ctx context.Context, download DownloadFunc, c *Chat, m S
 	}
 	rel, _ := filepath.Rel(e.Store.path(KindChat, c.ID), dst)
 	return fmt.Sprintf("%s(%s)", attachmentPlaceholder, rel)
+}
+
+// A filename must keep the raw identity, including punctuation, case and long
+// suffixes. Lowercase full hashes stay distinct on case-insensitive filesystems.
+// Missing IDs have no replay identity: give each delivery's attachment its own
+// name instead of overwriting the previous anonymous message's file. Existing
+// links and files keep their names; no legacy filename is reused or rewritten.
+func attachmentName(id string, i int, media, typ string) string {
+	key := fmt.Sprintf("%x", sha256.Sum256([]byte(id)))
+	if id == "" {
+		key = "anonymous-" + strings.ToLower(rand.Text())
+	}
+	return fmt.Sprintf("message-%s-%d%s", key, i, extOf(media, typ))
 }
 
 // isImage: a message whose media are pictures (a rich-text post's are its inline images).

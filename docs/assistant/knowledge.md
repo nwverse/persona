@@ -186,12 +186,21 @@ metadata, including both counters. Each file is replaced through a temporary fil
 only after all succeed. A writable `NewStore` finishes pending intents before returning; `Ingest`, history, compression and archive metadata updates also recover
 before reading counters. Until recovery succeeds, other writes to that chat refuse to overwrite the pending snapshots, timezone conversion waits, and cleanup
 keeps the files. A read-only open refuses an unfinished intent because it cannot repair it. Remove the filesystem obstruction and retry the operation or reopen
-the writable store; retain the intent for recovery. The directory has one owning writer, with concurrent callers serialized by the Store's locks.
+the writable store; retain the intent for recovery. The directory has one owning writer, with concurrent callers serialized by the Store's locks. Operations needing
+both persistence locks acquire metadata before message files, matching project commit's frozen-input check when it reads the timeline.
 
 The connector checkpoint advances only after every batch on its page succeeds, using atomic replacement so a failed replacement preserves the previous cursor.
 A failed later batch, an interrupted ingestion, or failure between ingestion and checkpoint can therefore replay a page without adding any already receipted ID.
 This transaction covers archive text, identity and chat metadata; people/document indexing and change notifications remain derived, best-effort work. A replay
-refreshes the chat's database index from its durable metadata.
+refreshes the chat's database index from its durable metadata. Compression compares both the latest timestamp and pending count before clearing work or advancing
+its coverage boundary; distinct IDs arriving during a model call can share the same timestamp or minute.
+
+New attachment filenames use a full SHA-256 digest of the raw message ID, plus the attachment index and bounded extension, within the existing chat/day directory.
+This avoids the older sanitized-name collisions from punctuation, case-insensitive filesystems and truncated long IDs. Distinct raw IDs cannot overwrite each
+other's saved attachment through those filename collisions. Missing IDs use a fresh random filename per attachment, preserving append behavior without inventing
+a durable source identity. Existing filenames and Markdown links stay untouched; a known receipted ID skips downloads on replay, including after restart. The
+first newly receipted delivery from a legacy unreceipted archive may create a new hashed file alongside its old file; it does not overwrite or relink that old file.
+Attachment retention still deletes the same day directories.
 
 Compatibility is explicit: messages without IDs keep the previous append behavior, and a retry may append them again; a `Position` or text hash cannot safely
 invent an identity. Existing Markdown has no IDs to reconstruct. The first newly receipted delivery can therefore repeat an older unreceipted line with matching

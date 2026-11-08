@@ -211,12 +211,14 @@ func (e *Engine) Compress(ctx context.Context, c *Chat) error {
 		for _, slug := range c.Projects {
 			cur.Projects = addUnique(cur.Projects, slug)
 		}
-		// Messages archived while the model wrote are after what it covered: they stay pending.
-		if !cur.LastAt.After(started.LastAt) {
+		// New IDs can share a timestamp or minute with the snapshot. Keep the
+		// pending work and its old coverage boundary when live ingestion moved,
+		// so the next pass also reads those messages at minute precision.
+		if !cur.LastAt.After(started.LastAt) && cur.Pending == started.Pending {
 			cur.Pending = 0
+			cur.CoveredUntil = started.LastAt.Add(time.Minute)
 		}
 		cur.CompressedAt = now
-		cur.CoveredUntil = started.LastAt.Add(time.Minute)
 		cur.CompressFailures, cur.CompressRetryAt = 0, time.Time{}
 	})
 	if err != nil || !written {

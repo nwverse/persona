@@ -213,7 +213,7 @@ func TestIngestReplayKeepsAttachmentsAndSurvivesRezone(t *testing.T) {
 	if n, err := e.Ingest(context.Background(), src, chat, []SourceMessage{m}); n != 1 || err != nil {
 		t.Fatalf("image ingest: %d, %v", n, err)
 	}
-	path := s.path(KindChat, "example-thread", "attachments", at.UTC().Format("2006-01-02"), "image-0.png")
+	path := s.path(KindChat, "example-thread", "attachments", at.UTC().Format("2006-01-02"), attachmentName("image", 0, "image.png", "IMAGE"))
 	if raw, err := os.ReadFile(path); err != nil || string(raw) != "synthetic attachment" {
 		t.Fatalf("attachment lost: %q, %v", raw, err)
 	}
@@ -329,6 +329,50 @@ func TestIngestOtherPipelineWritersRecoverBeforeCounters(t *testing.T) {
 			}
 			ingestMessages(t, e, "example", "thread", 0, m)
 			assertArchiveCounts(t, s, "example-thread", messages, pending)
+		})
+	}
+}
+
+type ingestDuringCompression struct {
+	e  *Engine
+	at time.Time
+}
+
+func (m ingestDuringCompression) JSONMax(ctx context.Context, system, user string, limit int, out any) error {
+	if _, err := m.e.Ingest(ctx, named("example"), SourceChat{ID: "thread"}, []SourceMessage{{
+		ID: "second", At: m.at, SenderName: "Example", Text: "Same synthetic text",
+	}}); err != nil {
+		return err
+	}
+	return (&fakeModel{}).JSONMax(ctx, system, user, limit, out)
+}
+
+func TestIngestDuringCompressionStaysPending(t *testing.T) {
+	for _, offset := range []time.Duration{0, 30 * time.Second, 2 * time.Minute} {
+		t.Run(offset.String(), func(t *testing.T) {
+			s, e := replayStore(t)
+			at := time.Now().Add(-time.Hour).Truncate(time.Minute)
+			ingestMessages(t, e, "example", "thread", 1, SourceMessage{
+				ID: "first", At: at, SenderName: "Example", Text: "Same synthetic text",
+			})
+			e.Model = ingestDuringCompression{e: e, at: at.Add(offset)}
+			c, _ := s.Chat("example-thread")
+			if err := e.Compress(context.Background(), c); err != nil {
+				t.Fatal(err)
+			}
+			assertArchiveCounts(t, s, c.ID, 2, 2)
+			if !c.CoveredUntil.IsZero() {
+				t.Fatalf("coverage advanced past concurrent pending work: %v", c.CoveredUntil)
+			}
+			model := &fakeModel{}
+			e.Model = model
+			if err := e.Compress(context.Background(), c); err != nil {
+				t.Fatal(err)
+			}
+			assertArchiveCounts(t, s, c.ID, 2, 0)
+			if len(model.calls) == 0 || strings.Count(model.calls[0], "Same synthetic text") != 2 {
+				t.Fatalf("next compression missed concurrent messages: %v", model.calls)
+			}
 		})
 	}
 }
