@@ -86,9 +86,16 @@ func TestClaudeInEnginePaneNotOutside(t *testing.T) {
 		t.Errorf("a claude in an engine pane listed as outside: %+v", s)
 	}
 
-	// An Orca pane on a node that does not enable Orca: nothing lists it, so it is a live terminal claude.
+	// An Orca pane on a node that does not enable Orca: nothing lists it. Just seen, it is left to its engine for a
+	// moment (an engine reports a claude typed into its pane a little after it starts); then it is a live terminal claude.
 	paneEnvOfPID = func(int) map[string]string { return map[string]string{orcaPaneEnv: "tab-1:leaf-1"} }
 	f.reply("session.snapshot", snapshot(nil, nil, nil, nil))
+	if s, ok := byID(listSessions(t, n))[sidA]; ok && s.SourceKind != "" {
+		t.Errorf("a claude just seen in an engine pane listed as outside: %+v", s)
+	}
+	oldGrace := outsidePaneGrace
+	outsidePaneGrace = 0
+	t.Cleanup(func() { outsidePaneGrace = oldGrace })
 	if s := byID(listSessions(t, n))[sidA]; s.SourceKind != proto.SourceClaudeTerminal || s.Status != proto.StatusWorking {
 		t.Errorf("a claude in a pane no engine lists: %+v", s)
 	}
