@@ -214,3 +214,13 @@ Keep automatic fast checks and their final result in one runner allocation;
 leave full heavy lanes manual when their queue-inclusive latency is not bounded.
 Record the failed samples as counterexamples and re-run fresh post-merge PRs.
 Do not cancel other work or change repository rules to manufacture a fast run.
+
+Bound manual matrix fan-out as well as automatic PR fan-out. A stale manual
+main/lane dispatch can consume capacity long after its source is obsolete.
+Group by workflow-file identity, qualified branch and lane, with cancellation
+of older work in the same group. The repository qualifier prevents unrelated
+forks with the same branch name cancelling each other. A reusable workflow's
+`github.workflow` is the caller's name: distinct file prefixes keep Apple or
+another lane from accidentally cancelling the caller, while allowing its direct
+and reusable invocations to deduplicate the same branch/lane. Keep every shard,
+set `max-parallel`, and measure normal-load PRs separately from peak queues.
