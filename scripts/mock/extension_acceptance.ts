@@ -22,10 +22,11 @@ function context(request: any) {
     .filter(key => request[key] !== undefined).map(key => [key, request[key]])));
   if (contexts.length > 128) contexts.shift();
 }
+export const actionSlots = ["action", "load", "discard", "reply", "comment", "mark_viewed", "context", "draft", "resolve", "expand"];
 function nativeProps(value: any, field: string, run: (action: any, values: any) => any): any {
   if (Array.isArray(value)) return value.map(item => nativeProps(item, field, run));
   if (!value || typeof value !== "object") return value;
-  if (["action", "load"].includes(field) && typeof value.id === "string") {
+  if (actionSlots.includes(field) && typeof value.id === "string") {
     const { id, ...options } = value;
     return UI.callback(values => run(value, values), options);
   }

@@ -70,6 +70,10 @@ An event snapshot must match the pending event's connection, manager, session, e
 
 Initial UI readiness requires a positive committed version. During process reconstruction, wait for temporarily disabled page entries instead of blindly tapping. Transient snapshot failures get bounded read-only retries only. Never change an old write's event ID/protocol or resend it automatically.
 
+## Snapshot parity is not callback registration
+
+Shared legacy snapshots can reuse an action name across code-review diffs. A native SDK fixture must lower every action slot to a registered opaque callback, not only `action` and `load`: review discard, reply, comment, mark-viewed, context, draft, resolve and expansion controls also carry actions. Otherwise helper data parity can pass while the real manager rejects the page for a duplicate action ID. Check that all callbacks are registered, unique and preserve their metadata, then exercise the installed extension through the manager. Do not weaken manager validation or omit failing showcase pages to obtain a screenshot pass.
+
 ## Evidence boundaries
 
 Unit tests use canonical valid/invalid fixtures and exact fence traces. Actual UI tests assert committed stream revisions, not just a loaded page that might be HTTP fallback. Screenshots contain synthetic data only; GUI captures are limited to the App window without other windows/desktop content. Clearly label offscreen rendering as such.
