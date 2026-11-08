@@ -32,7 +32,7 @@ final class NewConversationEntryTests: XCTestCase {
         let app = XCUIApplication()
         let pair = "persona://pair?url=" + hub.addingPercentEncoding(withAllowedCharacters: .alphanumerics)! + "&token=mock"
         app.launchArguments = ["-pairURL", pair, "-tab", "mail", "-inbox.kind", "", "-inbox.source", "",
-                               "-openInboxItem", "mail:acc1:t1:501", "-showInboxAction", "handoff"] + layout
+                               "-openInboxItem", "mail:acc1:t1:501", "-showInboxAction", "handoff", "-openChatsFresh", "YES"] + layout
         app.launchPinned()
         func shot(_ name: String) {
             let a = XCTAttachment(screenshot: app.screenshot())
