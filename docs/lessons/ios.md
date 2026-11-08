@@ -1310,3 +1310,13 @@ DEBUG 的代码可能在 `Persona.debug.dylib` 中，40 KiB 的 `Persona` 只是
 
 - **What went wrong**: the open chat's catch-up ignored an `updated_at` within `staleSlack` (1 s) of its newest line's `ts`, as "the same write" (the file's mtime and the line's own clock compare loosely). An agent writes in bursts: a tool call, its result and the words after it within a second. When the last line's push was lost, `updated_at` stayed within the slack of the line before, which the chat held, and the chat never asked, until the agent wrote again. Found by the web's end-to-end sync run against the mock (two replies 0.3 s apart, the second push dropped: nothing in 20 s).
 - **Now**: `AgentSync` notes when each session's `rev` changes (the full list or the `revs` event; the first one heard is no change), and `AgentSyncPacing.catchUpAt` also asks when the rev moved after the chat's last items came, once it has been quiet for `staleQuiet` since both. The node reports revs on its next tick, mostly after the items they belong to, so a rev that moved for lines that did come costs one empty `after_seq` read once the chat goes quiet; that read is an arrival and ends the question. The time rule stays for sessions whose rev does not move. UI test: `ChatCatchUpTests.testALostLastLineOfABurstCatchesUp` (the mock with `MOCK_SYNC_REVS=1`, whose lines are written now; without it their times are old and `updated_at` alone tells). It writes both lines before looking at the screen: waiting for the first one on screen spaced them more than a second apart, and the old rule passed it too.
+
+## Selectable text under a tappable header eats the header's taps (2026-11-08, #1542)
+
+- **What went wrong**: Persona's folded message line (`AgentSentLine`) opened to its text with `.textSelection(.enabled)` right
+  under the header. Once open, taps on the header's words did nothing: the selectable text took touches a little above its
+  own frame, so only the chevron (to the right of the text's column) folded it. The UI test caught it (`SentToAgentTests`
+  folding at 0.6 / 0.8 of the header failed, at 0.95 passed); without the modifier every spot folds.
+- **Now**: the open text is plain, with a Copy button under it. Don't put `.textSelection(.enabled)` directly under a header
+  that toggles on tap; if a selectable body is needed, give it its own gap or make the toggle a separate control. Test the
+  fold by tapping the header's words, not just its chevron.

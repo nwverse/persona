@@ -330,6 +330,8 @@ struct TaskCard: View {
                     Text(TaskPlace.line(todo, lead: lead))
                         .font(Theme.Font.caption).foregroundStyle(.secondary).lineLimit(1)
                     TaskNowLine(todo: todo, state: state, lead: lead)
+                    // What Persona sent its agent (#1542): the hand-off sent with this card is drawn only here.
+                    TaskSentList(todoID: todo.id, conversation: conversation)
                     if state == .done, todo.supervision != nil {
                         ReviewChip(todo: todo)
                     }
@@ -509,7 +511,9 @@ struct FeedLine: View {
             if let id = item.ref, !store.laterMessages.contains(id) { MessageCard(item: item, itemID: id) }
         case .answered: AnsweredLine(item: item, taskTitle: taskTitle)
         case .receipt: ReceiptCard(item: item)
-        case .routed: routed
+        case .routed:
+            // Persona's own message to the task's agent is folded, never the user's bubble (#1542).
+            if item.sentByPersona { AgentSentLine(item: item, taskTitle: taskTitle) } else { routed }
         case .review: ReviewFeedLine(item: item, taskTitle: taskTitle)
         case .report: ReportFeedLine(item: item, taskTitle: taskTitle)
         case .view:
@@ -539,9 +543,11 @@ struct FeedLine: View {
 
     private var taskTitle: String { item.ref.flatMap { store.todos[$0]?.title } ?? String(localized: "Tasks") }
 
+    /// What the user said straight to the task (its card's Message): the user's bubble under where it went.
     private var routed: some View {
         VStack(alignment: .trailing, spacing: Theme.Space.xs) {
-            // Persona stopped the agent's turn and then told it (agent_interrupt with then, #5112).
+            // Persona stopped the agent's turn and then told it (agent_interrupt with then, #5112): from a hub before #1542,
+            // which did not say it was Persona's.
             Label(item.interrupted ? String(localized: "Stopped “\(taskTitle)” and told it") : String(localized: "Message “\(taskTitle)”"),
                   systemImage: item.interrupted ? Theme.Icon.interrupt : Theme.Icon.routeToTask)
                 .font(Theme.Font.captionMedium)

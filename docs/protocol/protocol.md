@@ -2523,6 +2523,8 @@ Tasks dispatched from an assistant chat ([unified-entry.md](../assistant/unified
 //   A turn with no reply, no tool calls and no error (the model service returned 200 with empty content, #2349) is also interrupted, with error "This turn produced no output: …"
 // routed: {"text":"…"} (the note sent to the Agent when the supervisor sends work back is also a routed);
 //         "interrupted":true when the assistant stopped the Agent's turn first and then told it (agent_interrupt with then, #5112); clients that don't know it show an ordinary line to the task
+//         "from":"assistant" when Persona wrote it (agent_send with task, agent_interrupt's then, a rework; #1542): the apps fold it (a line, or the task card's
+//         "N instructions sent", docs/assistant/unified-entry.md "Messages to agents") instead of the user's bubble; what the user sent has no from; older clients ignore it
 // report: ref is the to-do id; a supervised task's Agent reported to Persona (report_to_supervisor, #5112): {"kind":"question|blocked|done","text":"…","evidence":["…"],"step":2,"steps":5,"later"?:true};
 //         progress reports are not written here (only supervision.progress); clients that don't know it skip this entry. `later`: a question the Agent sent with urgent false (#6287): nobody was woken, it is in the briefing's "Can wait" queue (`docs/extensions/bots.md` ("Questions that can wait")); clients that don't know the field draw it as any question
 // notice: no ref; a one-line note the hub writes into the chat {"text":"…"} (already written in the hub's language); clients draw it as a centered line of small text, and clients that don't know it skip it.

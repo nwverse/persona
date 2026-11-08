@@ -3022,7 +3022,7 @@ if MOCK_TASKS:
             _feed("feed_r1", 4, "report", "todo_task_tests", {"kind": "question", "text": "Mock 用协议注入还是保留单例？\n协议注入要改 6 个文件。",
                                                              "evidence": ["https://github.com/example/weather/pull/42"]}),
             _feed("feed_r3", 3.5, "report", "todo_task_tests", {"kind": "question", "text": "统一用 snake_case 还是 camelCase 命名新接口？", "later": True}),
-            _feed("feed_r2", 3, "routed", "todo_task_tests", {"text": "用协议注入，先改网络层那 6 个文件", "interrupted": True}),
+            _feed("feed_r2", 3, "routed", "todo_task_tests", {"text": "用协议注入，先改网络层那 6 个文件", "interrupted": True, "from": "assistant"}),
         ]
     # MOCK_TASKS_PENDING_REVIEW=1: the Today card lists the stopped release-notes task waiting for review (#4889).
     if os.environ.get("MOCK_TASKS_PENDING_REVIEW") == "1":
@@ -3101,6 +3101,48 @@ if MOCK_TASKS:
         _base = min(x["seq"] for x in ITEMS[ASK1])
         for _i, _x in enumerate(ITEMS[ASK1]):
             _x["seq"] = _base + _i
+    # MOCK_TASKS_SENT=1: what Persona sent to its tasks' agents (`routed` with from "assistant", #1542), last in the
+    # conversation: a long hand-off to a running agent right after its task's card (agent_send with task: the card
+    # takes it in), a rework sent to the widget fix whose card is far above (one folded line), and the user's own word
+    # to the unit tests' task (still the user's bubble).
+    if os.environ.get("MOCK_TASKS_SENT") == "1":
+        MEMORY = "a1f3c2d4-0000-4000-8000-0000000000e1"
+        SESSIONS.append(sess("macbook", MEMORY, "降低后台同步的内存占用", "/Users/me/code/weather", "working", "working", "weather", 1,
+                             "memory", 5, 0.5, "在 Instruments 里复现内存峰值。"))
+        ITEMS[MEMORY] = [it("assistant", "text", 0.5, text="在 Instruments 里复现内存峰值。")]
+        _mem = _task_todo("todo_task_memory", "降低后台同步的内存占用", "", "macbook", MEMORY, "/Users/me/code/weather", 1.05, "")
+        _mem["supervision"] = {"supervisor": ASK1, "done_when": ["峰值内存降一半以上", "30 分钟后台同步不被系统杀掉"], "state": "",
+                               "round": 0, "reviews": [], "updated_at": ago(minutes=1)}
+        TODOS_INIT.append(_mem)
+        TODOS.append(copy.deepcopy(_mem))
+        _handoff = ("把 weather 后台同步进程的常驻内存降下来，目标是不再因为内存压力被系统杀掉。\n\n背景：\n"
+                    "- 最近一周后台同步在 iPhone 上被系统杀了 14 次，崩溃日志在 ~/Library/Logs/weather/\n"
+                    "- 峰值出现在一次拉取 300 张以上的缩略图时\n\n要做的：\n"
+                    "1. 先用 Instruments 的 Allocations 复现，记下峰值和主要占用\n"
+                    "2. 缩略图改成按需、分批解码，解码后的位图不要整批留在内存里\n"
+                    "3. 网络层的响应体改成流式写盘，不要整段读进内存\n"
+                    "4. 加一个内存压力的回归测试（模拟 500 张图）\n"
+                    "5. 改完在真机上跑 30 分钟后台同步，截图贴进 PR\n\n完成标准：\n"
+                    "- 峰值内存比现在降一半以上\n- 30 分钟内没有被系统杀掉\n- PR 里有改前改后的 Allocations 截图\n\n"
+                    "有拿不准的先用 report_to_supervisor 问我，不要自己猜。")
+        _rework = ("（督办：验收没通过，第 1 轮返工，最多 2 轮）\n逐条验收：\n- ✅ PR 合并到 master\n- ❌ 横屏截图贴进 PR：只有竖屏截图\n"
+                   "要你做的：\n补一张横屏的截图贴进 PR，再告诉我。")
+        ITEMS[ASK1] += [it("user", "text", 1.3, text="后台同步老是被系统杀掉，让 MacBook 上 weather 那边开个 Agent 盯着把内存降下来")]
+        ITEMS[ASK1] += tool("mcp__persona__agent_send", {"machine": "macbook", "session_id": MEMORY, "text": _handoff,
+                                                         "task": {"title": "降低后台同步的内存占用"}},
+                            "Sent to the agent on MacBook. It is now your task todo_task_memory.", 1.1)
+        ITEMS[ASK1] += [it("assistant", "text", 1.0, text="交给 MacBook 上的 Agent 了，按两条完成标准督办，有进展我告诉你。")]
+        ITEMS[ASK1].sort(key=lambda x: x["ts"])
+        _base = min(x["seq"] for x in ITEMS[ASK1])
+        for _i, _x in enumerate(ITEMS[ASK1]):
+            _x["seq"] = _base + _i
+        TASK_FEED[ASK1] += [
+            _feed("feed_s1", 1.05, "task", "todo_task_memory"),
+            _feed("feed_s2", 1.0499, "routed", "todo_task_memory", {"text": _handoff, "from": "assistant"}),
+            _feed("feed_s3", 0.6, "routed", "todo_task_widget", {"text": _rework, "from": "assistant"}),
+            _feed("feed_s4", 0.4, "routed", "todo_task_tests", {"text": "先补重试和超时，缓存层下周再说"}),
+        ]
+        TASK_FEED[ASK1].sort(key=lambda x: x["at"])
     # MOCK_TASKS_CUT=1: the model service cut the release-notes task off (#1516): its agent's last words are the API
     # error (the hub's turn_error) and its receipt is interrupted; "Continue" (POST …/retry) makes it work and then finish.
     if os.environ.get("MOCK_TASKS_CUT") == "1":
