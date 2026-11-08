@@ -11,6 +11,21 @@ import SwiftUI
     private static var nativeFailure: String?
     private static var nativeStream: ExtensionPageStream?
     private static var closedPages: [String] = []
+    private static var imageLoads: [UUID: (page: String, url: String)] = [:]
+    private static var loadedImages: Set<String> = []
+
+    static func beginImageLoad(_ url: URL) -> UUID? {
+        guard isCapturing, let nativePage else { return nil }
+        let id = UUID()
+        loadedImages.remove(url.absoluteString)
+        imageLoads[id] = (nativePage, url.absoluteString)
+        return id
+    }
+
+    static func finishImageLoad(_ id: UUID?, loaded: Bool) {
+        guard let id, let load = imageLoads.removeValue(forKey: id), load.page == nativePage else { return }
+        if loaded { loadedImages.insert(load.url) }
+    }
 
     static func observeNativeFailure(owner: String, contribution: String, code: String) {
         guard isCapturing, nativePage == owner + "/" + contribution else { return }
@@ -36,6 +51,8 @@ import SwiftUI
         var title: String
         var bottom: Bool = false
         var review: Bool?
+        var images: [String]?
+        var scrollAll: Bool?
     }
 
     private struct Capture: Encodable {
@@ -44,6 +61,8 @@ import SwiftUI
         var position: String
         var file: String
         var nativeRevision: String? = nil
+        var scroll: MacSnapshot.ScrollMetrics? = nil
+        var loadedImages: [String]? = nil
     }
 
     private enum Failure: Error { case invalidPlan, notReady, focusChanged, capture }
@@ -91,18 +110,38 @@ import SwiftUI
                     nativePage = "showcase/" + scene.name
                     MacShellState.shared.pluginPage = nativePage
                     let window = try await readyWindow(title: scene.title, diagnostic: output.appending(path: "failed-\(scene.name)-\(appearance).png"), requiresNative: plan.requiresNative == true, requiresReview: scene.review == true)
-                    let nativeRevision = nativeVersion.map { "stream:\($0)" }
+                    try await waitForImages(scene.images ?? [], window: window, diagnostic: output.appending(path: "failed-images-\(scene.name)-\(appearance).png"))
                     let url = output.appending(path: "mac-showcase-\(scene.name)-\(appearance).png")
                     guard MacSnapshot.capture(to: url, window: window) else { throw Failure.capture }
-                    captures.append(Capture(sample: scene.name, appearance: appearance, position: "top", file: url.lastPathComponent, nativeRevision: nativeRevision))
+                    captures.append(Capture(sample: scene.name, appearance: appearance, position: "top", file: url.lastPathComponent, nativeRevision: nativeVersion.map { "stream:\($0)" },
+                                            scroll: scene.scrollAll == true ? MacSnapshot.captureScrollMetrics(in: window) : nil,
+                                            loadedImages: scene.images?.filter { loadedImages.contains($0) }))
                     FileHandle.standardError.write(Data("extension snapshot wrote \(url.lastPathComponent)\n".utf8))
-                    if scene.bottom {
+                    if scene.scrollAll == true {
+                        var step = 0
+                        while MacSnapshot.advanceCapturePage(in: window) {
+                            step += 1
+                            guard step <= 64 else { throw Failure.capture }
+                            try await Task.sleep(for: .milliseconds(600))
+                            try await waitForImages(scene.images ?? [], window: window, diagnostic: output.appending(path: "failed-images-\(scene.name)-\(appearance).png"))
+                            guard !NSApp.isActive, !window.isKeyWindow,
+                                  let scroll = MacSnapshot.captureScrollMetrics(in: window) else { throw Failure.capture }
+                            let position = scroll.offset >= scroll.end - 1 ? "bottom" : "middle-\(step)"
+                            let tile = output.appending(path: "mac-showcase-\(scene.name)-\(position)-\(appearance).png")
+                            guard MacSnapshot.capture(to: tile, window: window) else { throw Failure.capture }
+                            captures.append(Capture(sample: scene.name, appearance: appearance, position: position, file: tile.lastPathComponent, nativeRevision: nativeVersion.map { "stream:\($0)" },
+                                                    scroll: scroll, loadedImages: scene.images?.filter { loadedImages.contains($0) }))
+                            FileHandle.standardError.write(Data("extension snapshot wrote \(tile.lastPathComponent)\n".utf8))
+                        }
+                    } else if scene.bottom {
                         MacSnapshot.scroll(by: Double.greatestFiniteMagnitude)
                         try await Task.sleep(for: .milliseconds(600))
+                        try await waitForImages(scene.images ?? [], window: window, diagnostic: output.appending(path: "failed-images-\(scene.name)-\(appearance).png"))
                         guard !NSApp.isActive, !window.isKeyWindow else { throw Failure.focusChanged }
                         let bottom = output.appending(path: "mac-showcase-\(scene.name)-bottom-\(appearance).png")
                         guard MacSnapshot.capture(to: bottom, window: window) else { throw Failure.capture }
-                        captures.append(Capture(sample: scene.name, appearance: appearance, position: "bottom", file: bottom.lastPathComponent, nativeRevision: nativeRevision))
+                        captures.append(Capture(sample: scene.name, appearance: appearance, position: "bottom", file: bottom.lastPathComponent, nativeRevision: nativeVersion.map { "stream:\($0)" },
+                                                loadedImages: scene.images?.filter { loadedImages.contains($0) }))
                         FileHandle.standardError.write(Data("extension snapshot wrote \(bottom.lastPathComponent)\n".utf8))
                     }
                 }
@@ -123,6 +162,25 @@ import SwiftUI
         }
     }
 
+    private static func waitForImages(_ urls: [String], window: NSWindow, diagnostic: URL) async throws {
+        guard !urls.isEmpty else { return }
+        let required = Set(urls)
+        let deadline = ContinuousClock.now.advanced(by: .seconds(30))
+        while ContinuousClock.now < deadline {
+            guard !NSApp.isActive, !window.isKeyWindow else { throw Failure.focusChanged }
+            if required.isSubset(of: loadedImages), !imageLoads.values.contains(where: { required.contains($0.url) }) {
+                try await Task.sleep(for: .milliseconds(200))
+                window.contentView?.layoutSubtreeIfNeeded()
+                window.contentView?.displayIfNeeded()
+                return
+            }
+            try await Task.sleep(for: .milliseconds(100))
+        }
+        _ = MacSnapshot.capture(to: diagnostic, window: window)
+        FileHandle.standardError.write(Data("snapshot images still missing: \(required.subtracting(loadedImages).sorted())\n".utf8))
+        throw Failure.notReady
+    }
+
     private static func clearPage() async throws {
         if let nativeStream {
             try await nativeStream.closeForCapture()
@@ -132,6 +190,8 @@ import SwiftUI
         nativePage = nil
         nativeVersion = nil
         nativeFailure = nil
+        imageLoads = [:]
+        loadedImages = []
         MacShellState.shared.pluginPage = nil
         let deadline = ContinuousClock.now.advanced(by: .seconds(10))
         while ContinuousClock.now < deadline {

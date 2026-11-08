@@ -127,6 +127,38 @@ import SwiftUI
         }
     }
 
+    struct ScrollMetrics: Encodable {
+        var offset: Double
+        var viewport: Double
+        var end: Double
+    }
+
+    private static func captureScrollView(in window: NSWindow) -> NSScrollView? {
+        guard let root = window.contentView else { return nil }
+        return descendants(of: root).compactMap { $0 as? NSScrollView }
+            .filter { scroll in
+                guard isShown(scroll), let doc = scroll.documentView, doc.isFlipped else { return false }
+                return doc.frame.height > scroll.contentView.bounds.height + 1
+            }
+            .max { $0.contentView.bounds.width * $0.contentView.bounds.height < $1.contentView.bounds.width * $1.contentView.bounds.height }
+    }
+
+    static func captureScrollMetrics(in window: NSWindow) -> ScrollMetrics? {
+        guard let scroll = captureScrollView(in: window), let doc = scroll.documentView else { return nil }
+        let clip = scroll.contentView
+        return ScrollMetrics(offset: clip.bounds.origin.y, viewport: clip.bounds.height,
+                             end: max(0, doc.frame.height - clip.bounds.height + scroll.contentInsets.bottom))
+    }
+
+    static func advanceCapturePage(in window: NSWindow) -> Bool {
+        guard let scroll = captureScrollView(in: window), let metrics = captureScrollMetrics(in: window),
+              metrics.offset < metrics.end - 1 else { return false }
+        let clip = scroll.contentView
+        clip.scroll(to: NSPoint(x: clip.bounds.origin.x, y: min(metrics.offset + metrics.viewport * 0.75, metrics.end)))
+        scroll.reflectScrolledClipView(clip)
+        return clip.bounds.origin.y > metrics.offset + 1
+    }
+
     /// The window's frame view (title bar and toolbar included) drawn into a bitmap at the screen's scale. Views
     /// draw themselves through `cacheDisplay`, which does not need the window server's picture of the screen.
     /// Materials (NSVisualEffectView, glass) render as the window server would composite them only on screen: here

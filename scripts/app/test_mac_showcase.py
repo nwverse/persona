@@ -29,8 +29,8 @@ class ShowcasePlanTests(unittest.TestCase):
             (root / "a.json").write_text('{"title":"A","sections":[]}')
             (root / "b.json").write_text('{"sections":[]}')
             scenes, hashes = RUNNER.scenes(["b", "a"], snapshots=root)
-            self.assertEqual(scenes, [{"name": "b", "title": "b", "bottom": False, "review": False},
-                                      {"name": "a", "title": "A", "bottom": False, "review": False}])
+            self.assertEqual(scenes, [{"name": "b", "title": "b", "bottom": False, "review": False, "images": [], "scrollAll": False},
+                                      {"name": "a", "title": "A", "bottom": False, "review": False, "images": [], "scrollAll": False}])
             self.assertEqual(set(hashes), {"a", "b"})
 
     def test_each_native_page_has_an_acknowledged_close_in_both_appearances(self):
@@ -65,6 +65,39 @@ class ShowcasePlanTests(unittest.TestCase):
             self.assertTrue(RUNNER.native_revision(value))
         for value in (None, "legacy", "stream:0", "stream:01", "stream:1:visible=false", "stream:١"):
             self.assertFalse(RUNNER.native_revision(value))
+
+    def test_images_require_real_decode_completion_except_reserved_failure_fixture(self):
+        scene = RUNNER.scenes(["row"])[0][0]
+        self.assertEqual(len(scene["images"]), 3)
+        self.assertNotIn("https://example.invalid/none.png", scene["images"])
+        self.assertEqual(RUNNER.image_urls({"avatar": {"url": "https://cdn.example.com/a.png"},
+                                          "thumbnail": {"url": "http://example.com/b.png"}}), ["https://cdn.example.com/a.png"])
+        rows = [{"sample": "row", "appearance": appearance, "position": position,
+                 "file": appearance + position, "loadedImages": scene["images"]}
+                for appearance in ("light", "dark") for position in ("top", "bottom")]
+        self.assertTrue(RUNNER.complete_captures(rows, [scene]))
+        rows[0]["loadedImages"] = scene["images"][:2]
+        self.assertFalse(RUNNER.complete_captures(rows, [scene]))
+
+    def test_scroll_tiles_must_overlap_and_reach_the_actual_end(self):
+        scene = {"name": "list-more", "bottom": False, "scrollAll": True}
+        rows = [{"sample": scene["name"], "appearance": appearance, "position": position,
+                 "file": appearance + position, "scroll": {"offset": offset, "viewport": 900, "end": 1400}}
+                for appearance in ("light", "dark") for position, offset in (("top", 0), ("middle-1", 675), ("middle-2", 1350), ("bottom", 1400))]
+        self.assertTrue(RUNNER.complete_captures(rows, [scene]))
+        for invalid in (rows[:-1], [*rows[:1], *rows[2:]], []):
+            self.assertFalse(RUNNER.complete_captures(invalid, [scene]))
+        rows[1]["scroll"]["offset"] = 800
+        self.assertFalse(RUNNER.complete_captures(rows, [scene]))
+        rows[1]["scroll"]["offset"] = 675
+        rows[-1]["scroll"]["offset"] = 1390
+        self.assertFalse(RUNNER.complete_captures(rows, [scene]))
+        rows[-1]["scroll"]["offset"] = float("nan")
+        self.assertFalse(RUNNER.complete_captures(rows, [scene]))
+
+    def test_omitted_overview_and_list_pages_request_complete_scrolling(self):
+        scenes, _ = RUNNER.scenes(sorted(RUNNER.SCROLL_ALL_PAGES))
+        self.assertTrue(all(scene["scrollAll"] for scene in scenes))
 
     def test_empty_duplicate_and_unknown_selections_are_rejected(self):
         for names in ([], ["button", "button"], ["missing"], ["../button"]):

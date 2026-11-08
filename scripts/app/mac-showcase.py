@@ -16,6 +16,7 @@ import argparse
 from collections import Counter
 import hashlib
 import json
+import math
 import os
 from pathlib import Path
 import re
@@ -31,6 +32,24 @@ import uuid
 ROOT = Path(__file__).resolve().parents[2]
 SNAPSHOTS = ROOT / "schema/extension/examples/showcase"
 BOTTOM_PAGES = {"row", "field", "chart", "stat_grid", "table", "code-browse", "code-review", "code-review-v5"}
+SCROLL_ALL_PAGES = {"home", "list", "list-filter", "list-more", "list-search", "code-overview"}
+
+
+def image_urls(value):
+    found = set()
+    if isinstance(value, dict):
+        for field in ("avatar", "thumbnail"):
+            image = value.get(field)
+            if isinstance(image, dict) and isinstance(image.get("url"), str):
+                url = urllib.parse.urlparse(image["url"])
+                if url.scheme == "https" and url.hostname and not url.hostname.endswith(".invalid"):
+                    found.add(image["url"])
+        for child in value.values():
+            found.update(image_urls(child))
+    elif isinstance(value, list):
+        for child in value:
+            found.update(image_urls(child))
+    return sorted(found)
 
 
 def scenes(names=None, snapshots=SNAPSHOTS):
@@ -43,7 +62,8 @@ def scenes(names=None, snapshots=SNAPSHOTS):
         data = files[name].read_bytes()
         view = json.loads(data)
         result.append({"name": name, "title": view.get("title") or name, "bottom": name in BOTTOM_PAGES,
-                       "review": view.get("review") is not None})
+                       "review": view.get("review") is not None, "images": image_urls(view),
+                       "scrollAll": name in SCROLL_ALL_PAGES})
         hashes[name] = hashlib.sha256(data).hexdigest()
     return result, hashes
 
@@ -55,6 +75,39 @@ def native_revision(value):
 def native_closes(value, selected):
     return (isinstance(value, list) and all(isinstance(page, str) for page in value)
             and Counter(value) == Counter({"showcase/" + scene["name"]: 2 for scene in selected}))
+
+
+def complete_captures(captures, selected):
+    if not isinstance(captures, list) or not captures:
+        return False
+    expected = {(scene["name"], appearance) for scene in selected for appearance in ("light", "dark")}
+    if {(c.get("sample"), c.get("appearance")) for c in captures if isinstance(c, dict)} != expected:
+        return False
+    if any(not isinstance(c, dict) for c in captures):
+        return False
+    for scene in selected:
+        for appearance in ("light", "dark"):
+            rows = [c for c in captures if c.get("sample") == scene["name"] and c.get("appearance") == appearance]
+            positions = [c.get("position") for c in rows]
+            if any(not set(scene.get("images", [])).issubset(c.get("loadedImages") or []) for c in rows):
+                return False
+            if not scene.get("scrollAll"):
+                if positions != (["top", "bottom"] if scene["bottom"] else ["top"]):
+                    return False
+                continue
+            if positions == ["top"] and rows[0].get("scroll") is None:
+                continue
+            if len(rows) < 2 or len(rows) > 65 or positions != ["top", *[f"middle-{i}" for i in range(1, len(rows) - 1)], "bottom"]:
+                return False
+            metrics = [c.get("scroll") for c in rows]
+            if any(not isinstance(s, dict) or any(type(s.get(key)) not in (int, float) or not math.isfinite(s[key]) for key in ("offset", "viewport", "end"))
+                   or s["viewport"] <= 0 or s["end"] <= 0 for s in metrics):
+                return False
+            if metrics[0]["offset"] > 1 or metrics[-1]["offset"] < metrics[-1]["end"] - 1:
+                return False
+            if any(b["offset"] <= a["offset"] or b["offset"] - a["offset"] > a["viewport"] * 0.8 + 1 for a, b in zip(metrics, metrics[1:])):
+                return False
+    return len({c.get("file") for c in captures}) == len(captures)
 
 
 def capture_plan(hub, output, selected, requires_native=False):
@@ -161,11 +214,8 @@ def main():
                     closed = json.loads((output / "closed-pages.json").read_text())
                     if not native_closes(closed, selected):
                         raise RuntimeError("Every native page must have an acknowledged close in both appearances")
-                expected = {(scene["name"], appearance, position) for scene in selected
-                            for appearance in ("light", "dark") for position in (["top", "bottom"] if scene["bottom"] else ["top"])}
-                actual = {(capture["sample"], capture["appearance"], capture["position"]) for capture in captures}
-                if actual != expected or len(captures) != len(expected):
-                    raise RuntimeError("The app did not capture every selected page and appearance")
+                if not complete_captures(captures, selected):
+                    raise RuntimeError("The app did not capture every selected page/appearance, loaded image or overlapping scroll position")
                 if any(not (output / capture["file"]).is_file() for capture in captures):
                     raise RuntimeError("A reported capture file is missing")
                 (output / "source-sha256.json").write_text(json.dumps(hashes, indent=2, sort_keys=True) + "\n")
