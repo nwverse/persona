@@ -267,20 +267,28 @@ $command")
 # install_program <hub machine id> <os-arch> <program>: a program released with personad (update.ProgramNames) next to
 # the hub's personad, the same build as personad: personad-wechat (the WeChat bot, docs/extensions/wechat.md; the hub
 # starts it only when `version -v` matches; Telegram's connector is an extension now, #1704), and persona-hub and
-# persona-manager, the hub's and the manager's own programs (docs/server/server.md "Programs").
+# persona-manager, the hub's and the manager's own programs (docs/server/server.md "Programs"). Those two keep a .prev
+# of the one replaced (none when there was none, so no older one is left there): a hub run as persona-hub goes back
+# on them with personad when the switch fails (hub-systemd.sh).
 install_program() {
-  local id=$1 plat=$2 name=$3 bin
+  local id=$1 plat=$2 name=$3 bin keep=
   bin="bin/$name-$plat"
   GOOS=${plat%-*} GOARCH=${plat#*-} CGO_ENABLED=0 go build -trimpath -ldflags "$LDFLAGS" -o "$bin" "./cmd/$name" || return 1
+  case $name in persona-hub | persona-manager)
+    keep="{ if [ -f \"\$PERSONA_HOME/bin/$name\" ]; then cp -p \"\$PERSONA_HOME/bin/$name\" \"\$PERSONA_HOME/bin/$name.prev\"; else rm -f \"\$PERSONA_HOME/bin/$name.prev\"; fi; } && " ;;
+  esac
   if is_here "$id"; then
     local root
     root=$(state_root)
     mkdir -p "$root/bin"
+    if [ -n "$keep" ]; then
+      PERSONA_HOME="$root" sh -c "${keep% && }" || return 1
+    fi
     local target="$root/bin/$name"
     cp "$bin" "$target.new" && { [ ! -L "$target" ] || rm -f "$target"; } && mv "$target.new" "$target" || return 1
     python3 ../scripts/persona_identity.py --alias-binaries "$root/bin"
   else
-    remote_state "$PERSONA_HUB_SSH" "mkdir -p \"\$PERSONA_HOME/bin\" && cat > \"\$PERSONA_HOME/bin/$name.new\" && chmod 755 \"\$PERSONA_HOME/bin/$name.new\" && { [ ! -L \"\$PERSONA_HOME/bin/$name\" ] || rm -f \"\$PERSONA_HOME/bin/$name\"; } && mv \"\$PERSONA_HOME/bin/$name.new\" \"\$PERSONA_HOME/bin/$name\" && persona_alias_binaries \"\$PERSONA_HOME/bin\"" < "$bin"
+    remote_state "$PERSONA_HUB_SSH" "$keep""mkdir -p \"\$PERSONA_HOME/bin\" && cat > \"\$PERSONA_HOME/bin/$name.new\" && chmod 755 \"\$PERSONA_HOME/bin/$name.new\" && { [ ! -L \"\$PERSONA_HOME/bin/$name\" ] || rm -f \"\$PERSONA_HOME/bin/$name\"; } && mv \"\$PERSONA_HOME/bin/$name.new\" \"\$PERSONA_HOME/bin/$name\" && persona_alias_binaries \"\$PERSONA_HOME/bin\"" < "$bin"
   fi
 }
 
