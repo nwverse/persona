@@ -60,9 +60,10 @@ const KNOWN: Record<string, { issue: string; because: RegExp }> = {
   send_unknown_then_transcript_has_it: { issue: "#1121", because: /m1 shows 2 times|failed \["Reserve two bikes."\], want \[\]/ },
   send_failed_stays_above_later: { issue: "#1122", because: /m1 shows 0 times|failed \[\], want \["Find a dinner place."\]/ },
 };
-// a new conversation's first message (chat.new, user.start): the runner does not play it yet
+// a new conversation's first message (chat.new, user.start): the runner does not play it yet, so every such case is
+// this one known failure
 const NO_START = "the web runner does not play a new conversation's start yet";
-KNOWN.start_answer_cut_then_receipt = { issue: "#1382", because: new RegExp(NO_START) };
+const START_KNOWN = { issue: "#1382", because: new RegExp(NO_START) };
 
 let host: HTMLDivElement;
 let root: Root;
@@ -266,7 +267,7 @@ for (const [path, file] of Object.entries(files)) {
     for (const c of file.cases) {
       for (const device of c.devices) {
         const name = c.devices.length > 1 ? `${c.name} as ${device}` : c.name;
-        const known = KNOWN[name];
+        const known = KNOWN[name] ?? (c.chat.new ? START_KNOWN : undefined);
         it(known ? `${name} (known: ${known.issue})` : name, async () => {
           const failures = await run(c, device);
           if (!known) return expect(failures, `${name}; requests this hub does not answer: ${hub.unknown.join(", ")}`).toEqual([]);
