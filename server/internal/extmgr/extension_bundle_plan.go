@@ -272,7 +272,8 @@ func (h *Manager) guardExtensionPlan(ctx context.Context, previews []*extension.
 		}
 		if pv.RenameFrom != "" {
 			old := h.extensions.reg.SnapshotExact(pv.RenameFrom)
-			if entry.Parsed.ID != pv.Manifest.ID || entry.Replaces != pv.RenameFrom || old == nil || old.Record.Source != extension.SourceInstalled || old.Record.Origin != "market:"+pv.Market+"/"+pv.RenameFrom || h.extensions.reg.Get(pv.Manifest.ID) != nil {
+			target := h.extensions.reg.Snapshot(pv.Manifest.ID)
+			if entry.Parsed.ID != pv.Manifest.ID || entry.Replaces != pv.RenameFrom || old == nil || old.Record.Source != extension.SourceInstalled || old.Record.Origin != "market:"+pv.Market+"/"+pv.RenameFrom || (target != nil && target.Record.StorageKey() != old.Record.StorageKey()) {
 				return fail(i18n.Err("extension-identity.invalid"))
 			}
 		}

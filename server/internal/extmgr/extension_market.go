@@ -724,7 +724,7 @@ func (h *Manager) catalogIn(l i18n.Lang, q, market string) []CatalogItem {
 			} else if _, err := extension.CheckEngines(m, h.build.Number); err != nil {
 				it.Problem = i18n.Localize(err, l)
 			}
-			cur := h.extensions.reg.Get(m.ID)
+			cur := h.extensions.reg.GetExact(m.ID)
 			if cur == nil && e.Replaces != "" {
 				if old := h.extensions.reg.GetExact(e.Replaces); old != nil && old.Record.Source == extension.SourceInstalled && old.Record.Origin == "market:"+s.rec.ID+"/"+e.Replaces {
 					cur, it.RenameFrom = old, old.Record.ID

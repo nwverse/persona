@@ -152,6 +152,30 @@ func TestExtensionIdentityCommittedOwnerAliasAndRetiredToken(t *testing.T) {
 	if auth := h.authorize(extwire.Authorize{Hash: hashToken(token), Pattern: "GET /api/v1/model-config", Method: "GET", Path: "/api/v1/model-config"}); auth.OK || auth.Extension != "" {
 		t.Fatalf("retired token gained alias authority: %+v", auth)
 	}
+	// Rollback retains both historical names, but the successor is not installed
+	// under its public ID until the owner explicitly confirms another rename.
+	code, rolled := call(t, mux, "POST", "/api/v1/extensions/renamed-helper/-/rollback", phone, `{}`)
+	if code != 200 || rolled["id"] != "example-helper" || reg.GetExact("renamed-helper") != nil {
+		t.Fatalf("identity rollback: %d %+v", code, rolled)
+	}
+	items := h.catalog("", mid)
+	if len(items) != 1 || items[0].RenameFrom != "example-helper" || items[0].Installed != "1.0.0" || !items[0].Upgradable {
+		t.Fatalf("successor alias hid rename after rollback: %+v", items)
+	}
+	for _, id := range []string{"example-helper", "renamed-helper"} {
+		code, rename = call(t, mux, "POST", "/api/v1/extensions/-/catalog/preview", phone, fmt.Sprintf(`{"market":%q,"extension":%q}`, mid, id))
+		if code != 200 || rename["rename_from"] != "example-helper" {
+			t.Fatalf("re-upgrade preview through %s: %d %+v", id, code, rename)
+		}
+	}
+	code, blocked = call(t, mux, "POST", "/api/v1/extensions/example-helper/-/upgrade", phone, fmt.Sprintf(`{"preview_id":%q,"permissions_digest":""}`, rename["preview_id"]))
+	if code == 200 || reg.GetExact("example-helper") == nil {
+		t.Fatalf("rollback alias bypassed explicit confirmation: %d %+v", code, blocked)
+	}
+	code, changed = call(t, mux, "POST", "/api/v1/extensions/example-helper/-/upgrade", phone, fmt.Sprintf(`{"preview_id":%q,"permissions_digest":%q}`, rename["preview_id"], rename["permissions_digest"]))
+	if code != 200 || changed["id"] != "renamed-helper" || reg.SnapshotExact("renamed-helper").Record.StorageKey() != old.Record.StorageKey() {
+		t.Fatalf("confirmed re-upgrade of the same slot: %d %+v", code, changed)
+	}
 }
 
 // marketTestStore keeps plugins and markets (the device tokens are the hub's).
