@@ -123,8 +123,16 @@ read -r UDID STATE PLATFORM <<<"$INFO"
 finish() { log "$1 $PROFILE $UDID"; echo "$UDID"; exit "${2:-0}"; }
 wait_booted() { timed "${SIM_BOOT_TIMEOUT:-900}" xcrun simctl bootstatus "$UDID" -b >/dev/null 2>&1; }
 plain_boot() {
-  timed 120 xcrun simctl boot "$UDID" 2>/dev/null
-  wait_booted || { log "$UDID did not finish booting"; exit 1; }
+  local attempt
+  for attempt in 1 2; do
+    if timed 120 xcrun simctl boot "$UDID" 2>/dev/null && wait_booted; then return 0; fi
+    if [ "$attempt" = 1 ]; then
+      log "$UDID did not finish booting; restarting once"
+      timed 120 xcrun simctl shutdown --terminate-running-processes "$UDID" >/dev/null 2>&1 || true
+    fi
+  done
+  log "$UDID did not finish booting after retry"
+  exit 1
 }
 # number of services simslim has turned off on this device (0 for stock or unknown)
 disabled_count() {
