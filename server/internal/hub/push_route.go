@@ -83,7 +83,17 @@ func (p *Pusher) pushed(d Device, err error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if err == nil {
+		cur, ok := p.devices[d.DeviceID]
+		if !ok || cur.APNSToken != d.APNSToken || cur.RelayURL != d.RelayURL {
+			return
+		}
 		delete(p.failed, d.DeviceID)
+		cur.LastPushAt = p.now().UTC()
+		p.devices[d.DeviceID] = cur
+		if p.acceptedDirty == nil {
+			p.acceptedDirty = map[string]bool{}
+		}
+		p.acceptedDirty[d.DeviceID] = true
 		return
 	}
 	p.failed[d.DeviceID] = pushFailure{text: clipRelayError(err.Error()), at: p.now().UTC()}

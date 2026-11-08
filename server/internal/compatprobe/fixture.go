@@ -9,16 +9,16 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"regexp"
 	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/nodeproto"
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
-var ownedDB = regexp.MustCompile(`^persona_compat_[0-9a-f]{16}(?:_manager)?$`)
+var ownedDB = lazyre.New(`^persona_compat_[0-9a-f]{16}(?:_manager)?$`)
 
 func main() {
 	if err := run(); err != nil {

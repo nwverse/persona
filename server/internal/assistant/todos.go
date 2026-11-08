@@ -6,7 +6,6 @@ import (
 	"errors"
 	"github.com/nwverse/persona/server/internal/compat"
 	"net/http"
-	"regexp"
 	"sort"
 	"strings"
 	"sync"
@@ -14,6 +13,7 @@ import (
 
 	"github.com/nwverse/persona/server/internal/apierr"
 	"github.com/nwverse/persona/server/internal/db"
+	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
@@ -407,11 +407,15 @@ func (s *Service) createTodo(ctx context.Context, title, notes, origin, planID s
 // newTodo is createTodo, quiet or not as given (a launcher repair's has no conversation and is quiet,
 // launcher_repair.go).
 func (s *Service) newTodo(ctx context.Context, title, notes, origin, planID string, quiet bool) (Todo, error) {
+	return s.newTodoAs(ctx, "todo_"+randomHex(8), title, notes, origin, planID, quiet)
+}
+
+// newTodoAs is newTodo with the id given (a question's to-do has its card's, ask_todo.go).
+func (s *Service) newTodoAs(ctx context.Context, id, title, notes, origin, planID string, quiet bool) (Todo, error) {
 	if err := s.ensureTodosLoaded(ctx); err != nil {
 		return Todo{}, err
 	}
 	now := time.Now().UTC()
-	id := "todo_" + randomHex(8)
 	if st := s.todoDB(); st != nil {
 		row := db.TodoRow{ID: id, Title: title, Notes: notes, CreatedAt: now, UpdatedAt: now, Origin: origin, PlanID: planID, Quiet: quiet}
 		if err := st.CreateTodo(ctx, row); err != nil {
@@ -520,7 +524,8 @@ func (s *Service) todoNow(id string) (Todo, bool) {
 	return copyTodoLocked(t), true
 }
 
-// todosOf are the todos opened from conversation ("*": from any); none when they can't be read.
+// todosOf are the todos opened from conversation ("*": from any) as tasks; none when they can't be read. A question's
+// to-do (ask_todo.go) is no task: it has its own line in the snapshot and its own row in the briefing.
 func (s *Service) todosOf(ctx context.Context, conversation string) []Todo {
 	if s.ensureTodosLoaded(ctx) != nil {
 		return nil
@@ -529,6 +534,9 @@ func (s *Service) todosOf(ctx context.Context, conversation string) []Todo {
 	defer s.todos.mu.RUnlock()
 	list := []Todo{}
 	for _, t := range s.todos.todos {
+		if isAskTodo(t.ID) {
+			continue
+		}
 		if conversation == "*" && t.Origin != "" || conversation != "*" && t.Origin == conversation {
 			list = append(list, copyTodoLocked(t))
 		}
@@ -740,6 +748,7 @@ func (s *Service) todoRoutes() {
 			// Done by the user: what the task came to goes in its decisions and its projects' timelines (#2820). cur
 			// still has the agents that were working on it.
 			s.goRecordTaskOutcome(cur, *updatedRow.DoneAt)
+			s.askTodoClosed(context.WithoutCancel(r.Context()), id, updatedRow.Title) // a question's to-do closed unanswered (ask_todo.go)
 		}
 		apierr.WriteJSON(w, map[string]any{"todo": resTodo})
 	})
@@ -755,7 +764,8 @@ func (s *Service) todoRoutes() {
 			return
 		}
 		id := r.PathValue("id")
-		if _, ok := s.todoNow(id); !ok {
+		cur, ok := s.todoNow(id)
+		if !ok {
 			apierr.Write(w, http.StatusNotFound, errors.New("todo not found"))
 			return
 		}
@@ -768,6 +778,7 @@ func (s *Service) todoRoutes() {
 			}
 			return
 		}
+		s.askTodoClosed(context.WithoutCancel(r.Context()), id, cur.Title) // a question's to-do deleted unanswered (ask_todo.go)
 		apierr.WriteJSON(w, map[string]any{"ok": true})
 	})
 
@@ -1585,8 +1596,8 @@ func (s *Service) TodoLink(ctx context.Context, p TodoLinkParams) (TodoLinkResul
 
 // contextLeadRe and contextCloseRe are where a prompt's context block starts and ends (contextOpenRe: channels_plugin.go).
 var (
-	contextLeadRe  = regexp.MustCompile(`^<` + compat.ContextPattern() + `\b`)
-	contextCloseRe = regexp.MustCompile(`</` + compat.ContextPattern() + `>`)
+	contextLeadRe  = lazyre.New(`^<` + compat.ContextPattern() + `\b`)
+	contextCloseRe = lazyre.New(`</` + compat.ContextPattern() + `>`)
 )
 
 // cleanPromptTitle is a title for an agent from the prompt it was started with: its first line past a

@@ -276,4 +276,18 @@ describe("the user's bubble and the answer", () => {
     expect(html).toContain(">已工作 9 秒 · 读取 1 个文件<");
     expect(html.indexOf("已工作")).toBeLessThan(html.indexOf("看完了。"));
   });
+
+  it("live words: the assistant's stand for the live work row, an agent's keep it under them (#1309)", () => {
+    const user: Item = { id: "u1#0", seq: 1, role: "user", kind: "text", text: "跑一遍测试", ts: at(0) };
+    const seg = { id: "s", user: { id: "u1#0", text: "跑一遍测试", images: [], contexts: [], ts: at(0) }, steps: [], tools: 0, thoughts: 0, replies: 0, folds: [], start: user.ts };
+    const live = (batchedWords?: boolean) =>
+      renderToStaticMarkup(<SegmentView seg={seg} live mid="m" sid="s" streaming="接下来跑一遍单元测试。" batchedWords={batchedWords} expandFold={async () => {}} />);
+    expect(live()).not.toContain('data-work-group="live"');
+    const agent = live(true);
+    expect(agent).toContain('data-work-group="live"');
+    expect(agent.indexOf('data-answer="streaming"')).toBeLessThan(agent.indexOf('data-work-group="live"'));
+    // no live words yet: the row as before
+    const waiting = renderToStaticMarkup(<SegmentView seg={seg} live mid="m" sid="s" batchedWords expandFold={async () => {}} />);
+    expect(waiting).toContain('data-work-group="live"');
+  });
 });

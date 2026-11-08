@@ -3,7 +3,7 @@ import Foundation
 // Messages written while the hub is out of reach (docs/apple/ios.md「连接状态」): they stay in their chat as pending bubbles
 // with a clock (Sends when connected) and go out by themselves once the app is connected and caught up, in the order they
 // were written. Kept on disk too, so quitting the app (or iOS ending it in the background) does not lose them.
-// Sent bubbles live here too: they stay until the transcript's copy arrives (`settleSend`, `showSent`).
+// Sent bubbles live here too: they stay until the transcript's copy arrives (`settleSend`, `showSent`), on disk as well.
 
 enum SendOutcome: Equatable {
     case sent, failed, waiting
@@ -25,8 +25,11 @@ extension AppModel {
 
     /// A message the hub already has, on screen as sent until its transcript copy arrives: a new Persona conversation's
     /// first one went with the start request, and the node shows no transcript until claude has written it (#511).
-    func showSent(_ key: SessionKey, text: String, images: [ImagePayload]) {
-        let msg = PendingMessage(text: text, images: images)
+    /// `id`: the message id the hub sent it under (an inbox hand-off's client id), which its transcript copy carries; no
+    /// bubble when that copy is in already (a retried hand-off the hub answered from its receipt).
+    func showSent(_ key: SessionKey, text: String, images: [ImagePayload], id: UUID = UUID()) {
+        guard !chat(key).items.contains(where: { PendingMessage.tied($0, to: id) == true }) else { return }
+        let msg = PendingMessage(id: id, text: text, images: images)
         chat(key).pending.append(msg)
         settleSend(key, msg.id, .sent)
     }
@@ -42,9 +45,9 @@ extension AppModel {
             Task {
                 // Normally the transcript shows it within a second or two. Behind a long turn it may only be written
                 // when that turn ends (Codex keeps its queue to itself): stay while the agent works, then go.
-                try? await Task.sleep(for: .seconds(60))
+                try? await clock.sleep(for: .seconds(60))
                 for _ in 0..<90 where store.pending.contains(where: { $0.id == id }) && session(key)?.status.isActive == true {
-                    try? await Task.sleep(for: .seconds(10))
+                    try? await clock.sleep(for: .seconds(10))
                 }
                 store.pending.removeAll { $0.id == id }
             }
@@ -90,28 +93,39 @@ extension AppModel {
 
     private static let outboxName = "outbox"
 
+    /// The longest a sent message waits for its transcript copy (`settleSend`): a minute, then ten seconds at a time
+    /// while the agent works, 90 times.
+    static let sentWait: TimeInterval = 60 + 90 * 10
+
     func saveOutbox() {
         outboxWriter.run { [weak self] in // one write at a time, the latest last
             guard let self else { return }
-            let list = self.chats.flatMap { key, store in
-                store.pending.filter { $0.state != .sent }.map { OutboxEntry(key: key, message: $0) }
-            }
-            StateCache.save(Self.outboxName, list)
+            let list = self.chats.flatMap { key, store in store.pending.map { OutboxEntry(key: key, message: $0) } }
+            StateCache.save(Self.outboxName, list, in: self.stateFolder)
         }
     }
 
     /// At launch: what was still going out comes back as waiting (a resend carries the same id, so one that did
-    /// arrive is not typed twice).
+    /// arrive is not typed twice). A sent one comes back as sent, waiting for its transcript copy again: it was left
+    /// out, and a message the hub had taken was gone from its chat until the copy came, behind a long turn for minutes
+    /// (#1455). One whose copy is already in the chat's cache does not come back: copies are looked for only among
+    /// the items that arrive from now on, and it showed twice until its wait ran out.
     func restoreOutbox() {
-        for e in StateCache.load(Self.outboxName, as: [OutboxEntry].self) ?? [] {
+        for e in StateCache.load(Self.outboxName, as: [OutboxEntry].self, in: stateFolder) ?? [] {
             var msg = e.message
-            if msg.state == .failed { // a failed one stays failed, the user decides; not forever
+            switch msg.state {
+            case .failed: // a failed one stays failed, the user decides; not forever
                 if let at = msg.createdAt, at < Date().addingTimeInterval(-86400) { continue }
-            } else {
+            case .sent:
+                if let at = msg.createdAt, at < Date().addingTimeInterval(-Self.sentWait) { continue }
+            case .sending, .waiting:
                 msg.state = .waiting
             }
             let store = chat(e.key)
-            if !store.pending.contains(where: { $0.id == msg.id }) { store.pending.append(msg) }
+            guard !store.pending.contains(where: { $0.id == msg.id }),
+                  !store.items.contains(where: { PendingMessage.tied($0, to: msg.id) == true }) else { continue }
+            store.pending.append(msg)
+            if msg.state == .sent { settleSend(e.key, msg.id, .sent) } // its wait for the copy starts again
         }
     }
 }

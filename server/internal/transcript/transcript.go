@@ -4,12 +4,12 @@ package transcript
 import (
 	"encoding/json"
 	"fmt"
-	"regexp"
 	"slices"
 	"strings"
 	"time"
 
 	"github.com/nwverse/persona/server/internal/compat"
+	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
@@ -74,9 +74,11 @@ type entry struct {
 	// Origin: where a user line came from; a subagent handing back its report carries the report here (Claude Code
 	// 2.1.318+), on a hidden line its task notification then only points at (handbackOf). Raw: a shape not known yet
 	// must not lose the line.
-	Origin        json.RawMessage `json:"origin"`
-	Cwd           string          `json:"cwd"`
-	ToolUseResult json.RawMessage `json:"toolUseResult"`
+	Origin json.RawMessage `json:"origin"`
+	Cwd    string          `json:"cwd"`
+	// toolUseResult, a tool's own copy of its output (often as long as the tool_result itself), is not read: items take
+	// a result from the message, and a field here would copy every one of them for nothing.
+
 	// system/api_error: {message, formatted} (raw: other lines may carry a plain string here), and which retry this is.
 	Error        json.RawMessage `json:"error"`
 	RetryAttempt int             `json:"retryAttempt"`
@@ -257,14 +259,14 @@ func withoutBotmuxSentinel(text string) string {
 
 // pastedRe matches the wrapper Claude Code puts around long pasted input (also what herdr's bracketed paste from
 // the phone, e.g. a WeChat voice-input transcript, turns into): <pasted_content id="ae9b">…</pasted_content id="ae9b">.
-var pastedRe = regexp.MustCompile(`<[\\/]*pasted_content(?:\s+id="[^"]*")?\s*>`) // also <\pasted…> / <\/pasted…> from nested pastes
+var pastedRe = lazyre.New(`<[\\/]*pasted_content(?:\s+id="[^"]*")?\s*>`) // also <\pasted…> / <\/pasted…> from nested pastes
 
 // ContextRe matches the live snapshot Persona starts each message to its assistant with (node/assistant_context.go):
 // context for the model, not something the user wrote. It is <persona-context>; history and older nodes have
 // <persona-context> (#3182).
-var ContextRe = regexp.MustCompile(`(?s)<` + compat.ContextPattern() + `>.*?</` + compat.ContextPattern() + `>\s*`)
+var ContextRe = lazyre.New(`(?s)<` + compat.ContextPattern() + `>.*?</` + compat.ContextPattern() + `>\s*`)
 
-var tagRe = regexp.MustCompile(`(?s)<(command-name|command-message|command-args|local-command-stdout|local-command-stderr|task-notification|system-reminder)>(.*?)</(command-name|command-message|command-args|local-command-stdout|local-command-stderr|task-notification|system-reminder)>`)
+var tagRe = lazyre.New(`(?s)<(command-name|command-message|command-args|local-command-stdout|local-command-stderr|task-notification|system-reminder)>(.*?)</(command-name|command-message|command-args|local-command-stdout|local-command-stderr|task-notification|system-reminder)>`)
 
 // APIRetrying ends an API error notice Claude Code is still retrying: the turn goes on.
 const APIRetrying = "（正在重试）"
@@ -705,7 +707,7 @@ func (m *Meta) said(t string, ts time.Time) {
 }
 
 // ansiRe matches terminal escape sequences (colors, bold) that local command output keeps.
-var ansiRe = regexp.MustCompile(`\x1b\[[0-9;?]*[ -/]*[@-~]`)
+var ansiRe = lazyre.New(`\x1b\[[0-9;?]*[ -/]*[@-~]`)
 
 // apiErrorText is what an api_error line says went wrong: error.formatted / error.message, or older lines' content.
 func apiErrorText(e entry) string {

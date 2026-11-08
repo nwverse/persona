@@ -4,13 +4,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"regexp"
 	"slices"
 	"sort"
 	"strings"
 	"time"
 
 	"github.com/nwverse/persona/server/internal/ai"
+	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/prompts"
 )
 
@@ -54,14 +54,14 @@ type projectRetry struct {
 	at       time.Time
 }
 
-var importanceRe = regexp.MustCompile(`^P[0-3]$`)
+var importanceRe = lazyre.New(`^P[0-3]$`)
 
 type chatDigest struct {
-	Summary    string   `json:"summary"`
-	OneLine    string   `json:"one_line"`
-	Importance string   `json:"importance"`
-	Relevance  int      `json:"relevance"`
-	Tags       []string `json:"tags"`
+	Summary    string     `json:"summary"`
+	OneLine    string     `json:"one_line"`
+	Importance string     `json:"importance"`
+	Relevance  modelScore `json:"relevance"`
+	Tags       []string   `json:"tags"`
 	Projects   []struct {
 		Name    string   `json:"name"`
 		Kind    string   `json:"kind"`
@@ -211,7 +211,7 @@ func (e *Engine) Compress(ctx context.Context, c *Chat) error {
 		}
 	}
 	c.OneLine = oneLine(d.OneLine)
-	applyTags(&c.Tagging, d.Importance, d.Relevance, d.Tags, now)
+	applyTags(&c.Tagging, d.Importance, int(d.Relevance), d.Tags, now)
 	if HasPeople(c) {
 		for _, p := range d.Projects {
 			slug := e.evolveProject(p.Name, p.Kind, p.Aliases, p.MyRole, c, p.Update, now)
@@ -255,16 +255,16 @@ func (e *Engine) Compress(ctx context.Context, c *Chat) error {
 
 // automatedSender matches mail addresses of notifications and newsletters (only the inbox is read, so a reply of
 // the owner's rarely shows up: the sender is what tells).
-var automatedSender = regexp.MustCompile(`(?i)(^|[-_.@])(no[-_]?reply|do[-_]?not[-_]?reply|notifications?|notify|news(letter)?|marketing|mailer|mailer-daemon|postmaster|bounces?|info|support|service|billing|account|alerts?|updates?|hello|team|receipts?|orders?|invoices?|payments?|contact|sales|promo(tions)?|offers?|rewards?|digest|submissions?|feedback|welcome)([-_.@]|$)`)
+var automatedSender = lazyre.New(`(?i)(^|[-_.@])(no[-_]?reply|do[-_]?not[-_]?reply|notifications?|notify|news(letter)?|marketing|mailer|mailer-daemon|postmaster|bounces?|info|support|service|billing|account|alerts?|updates?|hello|team|receipts?|orders?|invoices?|payments?|contact|sales|promo(tions)?|offers?|rewards?|digest|submissions?|feedback|welcome)([-_.@]|$)`)
 
 // automatedLocal: a local part ending in one of those words ("applesupport", "teamnotify").
-var automatedLocal = regexp.MustCompile(`(?i)(support|service|notify|notifications?|alerts?|news|updates?|receipts?|billing)$`)
+var automatedLocal = lazyre.New(`(?i)(support|service|notify|notifications?|alerts?|news|updates?|receipts?|billing)$`)
 
 // bulkDomain: the subdomains bulk mail goes out from (email.apple.com, em-s.dropbox.com, txn.dropbox.com, mg.…).
-var bulkDomain = regexp.MustCompile(`(?i)^(e|em|em-[a-z]+|email|emails|emessaging|message|messages|mail|mailer|mailing|news|newsletter|txn|transactional|notify|notifications|mg|send|sendgrid|bounce|marketing)[.]`)
+var bulkDomain = lazyre.New(`(?i)^(e|em|em-[a-z]+|email|emails|emessaging|message|messages|mail|mailer|mailing|news|newsletter|txn|transactional|notify|notifications|mg|send|sendgrid|bounce|marketing)[.]`)
 
 // newsletterHost: platforms every sender on is a newsletter.
-var newsletterHost = regexp.MustCompile(`(?i)(^|[.])(substack\.com|beehiiv\.com|mailchimp(app)?\.com|convertkit\.com|buttondown\.email|ghost\.io|medium\.com)$`)
+var newsletterHost = lazyre.New(`(?i)(^|[.])(substack\.com|beehiiv\.com|mailchimp(app)?\.com|convertkit\.com|buttondown\.email|ghost\.io|medium\.com)$`)
 
 // automatedAddress reports whether a mail address looks like a system or bulk sender rather than a person.
 func automatedAddress(addr string) bool {
@@ -362,7 +362,7 @@ func applyTags(t *Tagging, importance string, relevance int, tags []string, now 
 
 // --- projects ---
 
-var slugRe = regexp.MustCompile(`[^\p{L}\p{N}]+`)
+var slugRe = lazyre.New(`[^\p{L}\p{N}]+`)
 
 // Slug is the directory name of a project name ("Persona 2.0 Launch" → "persona-2-0-launch"; letters of any script are kept).
 func Slug(name string) string {
@@ -397,7 +397,7 @@ func (e *Engine) FindProject(name string) *Project {
 }
 
 // trailingGroupRe is one bracket group at the end of a name: 「（…）」 or 「(...)」.
-var trailingGroupRe = regexp.MustCompile(`\s*[（(][^（()）]*[)）]\s*$`)
+var trailingGroupRe = lazyre.New(`\s*[（(][^（()）]*[)）]\s*$`)
 
 // displayBases are the shorter names a project name in the shown form may stand for, longest first: without the
 // one line after 「：」, then without one trailing bracket group at a time. 2026-11-06 a knowledge base got projects
@@ -692,15 +692,15 @@ func (e *Engine) evolveProject(name, kind string, aliases []string, myRole strin
 }
 
 type projectDigest struct {
-	Summary    string   `json:"summary"`
-	OneLine    string   `json:"one_line"`
-	Goal       string   `json:"goal"`
-	Kind       string   `json:"kind"`
-	Status     string   `json:"status"`
-	Importance string   `json:"importance"`
-	Relevance  int      `json:"relevance"`
-	Tags       []string `json:"tags"`
-	Keywords   []string `json:"keywords"`
+	Summary    string     `json:"summary"`
+	OneLine    string     `json:"one_line"`
+	Goal       string     `json:"goal"`
+	Kind       string     `json:"kind"`
+	Status     string     `json:"status"`
+	Importance string     `json:"importance"`
+	Relevance  modelScore `json:"relevance"`
+	Tags       []string   `json:"tags"`
+	Keywords   []string   `json:"keywords"`
 }
 
 // RefreshProjects rewrites the summaries of projects with news, at most max per run. A project whose rewrite failed

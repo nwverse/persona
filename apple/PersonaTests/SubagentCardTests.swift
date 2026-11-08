@@ -50,6 +50,34 @@ struct SubagentCardTests {
         #expect(SubagentCardStatus.report("a", tasks: TaskIndex.build(launched + [note])) == "3 failed: checkout")
     }
 
+    @Test func theOpenCardShowsItsLatestCallsWithTheirResults() {
+        let items = [item(1, .text, role: "user", text: "跑回归"),
+                     item(2, .toolUse, tool: "Bash", id: "t1"), item(3, .toolResult, role: "user", text: "ok", id: "t1"),
+                     item(4, .toolUse, tool: "Read", id: "t2"), item(5, .toolResult, role: "user", text: "…", id: "t2"),
+                     item(6, .thinking, text: "接着查筛选"),
+                     item(7, .toolUse, tool: "Grep", id: "t3"), item(8, .toolResult, role: "user", text: "3 matches", id: "t3"),
+                     item(9, .toolUse, tool: "Bash", id: "t4")]
+        let calls = SubagentRecent.calls(items)
+        #expect(calls.map(\.use.toolUseID) == ["t2", "t3", "t4"], "the latest three, oldest first")
+        #expect(calls.map(\.isRunning) == [false, false, true], "each with its result once it is in")
+        #expect(SubagentRecent.calls([item(1, .text, role: "user", text: "跑回归")]).isEmpty)
+    }
+
+    /// The hub folds the run it replays: a short fold is opened for the latest calls, a long one is not fetched.
+    @Test func theOpenCardOpensAShortFoldForItsLatestCalls() {
+        func fold(_ tools: Int) -> Item {
+            var f = item(2, .fold)
+            f.fold = Fold(items: tools * 2, tools: tools, thoughts: 0, until: nil, throughSeq: 8, throughID: "8#0")
+            return f
+        }
+        let head = item(1, .text, role: "user", text: "跑回归")
+        #expect(SubagentRecent.foldToOpen([head, fold(5), item(9, .toolUse, tool: "Bash", id: "t9")])?.kind == .fold)
+        #expect(SubagentRecent.foldToOpen([head, fold(SubagentRecent.foldLimit + 1)]) == nil, "too long to fetch for three rows")
+        let after = (0..<SubagentRecent.count).map { item(10 + $0, .toolUse, tool: "Read", id: "r\($0)") }
+        #expect(SubagentRecent.foldToOpen([head, fold(5)] + after) == nil, "enough calls after it")
+        #expect(SubagentRecent.foldToOpen([head]) == nil)
+    }
+
     @Test func theLineSaysWhatItDoesThenHowItWent() {
         var agent = Subagent(id: "x", sessionID: "s@x", running: true)
         #expect(SubagentCardText.line(.running, agent: agent, took: nil) == String(localized: "Starting… [Subagent Card]"))

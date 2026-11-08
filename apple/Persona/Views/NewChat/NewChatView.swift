@@ -33,6 +33,9 @@ struct NewChatView: View {
     @State private var configuredModel = ""
     @State private var mode = ""   // "" = whatever the launcher uses
     @State private var effort = ""
+    /// Claude Code's ultracode for this start (#1307): off each time the sheet opens and never saved, unlike the effort
+    /// (no choice carries over, the server's rule); only an explicit on is sent.
+    @State private var ultracode = false
     @State private var prompt = ""
     @State private var tabName = ""
     @State private var launchers: [Launcher] = []
@@ -54,6 +57,12 @@ struct NewChatView: View {
     @State private var purposeGroup: String?
     @State private var starting = false
     @State private var error: String?
+    /// The picked folder's repository, as its computer says (#6115); nil: not in one, or it cannot say.
+    @State private var repo: WorktreeStatus?
+    /// Start the agent in a new worktree of `repo`; off each time the sheet opens.
+    @State private var inWorktree = false
+    /// The worktree's branch as typed; "": the one the computer picks.
+    @State private var worktreeBranch = ""
     @FocusState private var promptFocused: Bool
 
     /// `machineID` is what is remembered: the machine id, "group|id" for another group of hubs (`MachineRef.path`).
@@ -81,6 +90,22 @@ struct NewChatView: View {
         guard let efforts = modelChoice?.efforts else { return SessionModes.startEffortLevels }
         return SessionModes.startEffortLevels.filter { efforts.contains($0.id) }
     }
+
+    /// What the launcher that will run starts: its model list's agent, else the launcher's; Claude Code by default.
+    private var startAgent: String {
+        if let a = models?.agent, !a.isEmpty { return a }
+        guard let l = launchers.first(where: { $0.name == runLauncher }) else { return "claude" }
+        if l.baseURL == "(traex)" { return "traex" }
+        return l.agent.flatMap { $0.isEmpty ? nil : $0 } ?? "claude"
+    }
+
+    /// The ultracode row (#1307): Claude Code whose effort can be set here, on a hub that has the switch.
+    private var ultracodeShown: Bool {
+        !codex && !effortOptions.isEmpty && Ultracode.startOffered(features: model.features(ref.group), agent: startAgent)
+    }
+
+    /// Why this computer can't start with it (its Claude Code is known to be too old); nil when it can.
+    private var ultracodeBlocked: String? { ultracodeShown ? Ultracode.startBlocked(claudeVersion: machine?.claudeVersion) : nil }
 
     private var promptHint: String { codex ? String(localized: "What should Codex do? (Required: Codex starts a session only after the first message)")
                                        : String(localized: "What should Claude do? (Optional)") }
@@ -153,7 +178,7 @@ struct NewChatView: View {
                         DirectoryBrowser(ref: ref, start: cwd.isEmpty ? "" : cwd) { picked in cwd = picked }
                     } label: {
                         HStack {
-                            Image(systemName: Theme.Icon.folderFilled).foregroundStyle(Theme.accent)
+                            ThemedIcon(Theme.Icon.folderFilled).foregroundStyle(Theme.accent)
                             VStack(alignment: .leading, spacing: Theme.Space.xxs) {
                                 Text(cwd.isEmpty ? String(localized: "Choose Directory") : (cwd as NSString).lastPathComponent).font(Theme.Font.heading)
                                 if !cwd.isEmpty {
@@ -170,7 +195,7 @@ struct NewChatView: View {
                                 Haptics.tap()
                             } label: {
                                 HStack {
-                                    Image(systemName: cwd == r.path ? Theme.Icon.successFilled : Theme.Icon.recent)
+                                    ThemedIcon(cwd == r.path ? Theme.Icon.successFilled : Theme.Icon.recent)
                                         .foregroundStyle(cwd == r.path ? Theme.accent : .secondary)
                                     VStack(alignment: .leading, spacing: Theme.Space.xxs) {
                                         Text(r.name).foregroundStyle(Color.primary)
@@ -184,6 +209,10 @@ struct NewChatView: View {
                         }
                     }
                 } header: { Text("Folder [Task Views 52daa7]") }
+                if let repo, !repo.path.isEmpty {
+                    NewAgentWorktreeSection(repo: repo, on: $inWorktree, branch: $worktreeBranch,
+                                            suggested: AgentWorktree.branch(nameHint: worktreeNameHint), home: machine?.home)
+                }
                 }
 
                 Section {
@@ -191,7 +220,7 @@ struct NewChatView: View {
                         LauncherPicker(launchers: launchers, selection: $launcher, allowDefault: unifiedModels, defaultLabel: defaultLabel)
                     } label: {
                         HStack {
-                            Image(systemName: Theme.Icon.model).foregroundStyle(Theme.accent)
+                            ThemedIcon(Theme.Icon.model).foregroundStyle(Theme.accent)
                             VStack(alignment: .leading, spacing: Theme.Space.xxs) {
                                 HStack(spacing: Theme.Space.sm) {
                                     Text(launcher.isEmpty ? (unifiedModels ? defaultLabel : String(localized: "Choose Launcher")) : launcher).font(Theme.Font.heading.monospaced()).lineLimit(1)
@@ -219,12 +248,15 @@ struct NewChatView: View {
                         Picker(selection: $mode) {
                             Text("Use Launcher's").tag("")
                             ForEach(SessionModes.permissionModes) { o in Label(o.title, systemImage: o.symbol).tag(o.id) }
-                        } label: { Label { Text("Permission Mode") } icon: { Image(systemName: Theme.Icon.permissions).foregroundStyle(Theme.accent) } }
+                        } label: { Label { Text("Permission Mode") } icon: { ThemedIcon(Theme.Icon.permissions).foregroundStyle(Theme.accent) } }
                         if !effortOptions.isEmpty {
                             Picker(selection: $effort) {
                                 Text("Use Launcher's").tag("")
                                 ForEach(effortOptions) { o in Label(o.title, systemImage: o.symbol).tag(o.id) }
-                            } label: { Label { Text("Thinking Effort") } icon: { Image(systemName: Theme.Icon.effort).foregroundStyle(Theme.accent) } }
+                            } label: { Label { Text("Thinking Effort") } icon: { ThemedIcon(Theme.Icon.effort).foregroundStyle(Theme.accent) } }
+                        }
+                        if ultracodeShown {
+                            UltracodeStartRow(on: $ultracode, blocked: ultracodeBlocked, group: ref.group)
                         }
                     } header: { Text("Permissions & Thinking") } footer: {
                         Text(SessionModes.mode(mode)?.detail
@@ -304,7 +336,10 @@ struct NewChatView: View {
                 .padding(.bottom, Theme.Space.s)
             }
             .task(id: machineID) { await loadMachine() }
+            // The Claude quota under ultracode's row (#1307).
+            .task(id: ultracodeShown) { if ultracodeShown { await UsageWindowsStore.shared.loadIfOld(model) } }
             .task(id: "\(machineID)|\(runLauncher)|\(machine?.online == true)|\(defaultsFor)") { await loadModels() }
+            .task(id: "\(machineID)|\(cwd)|\(machine?.online == true)") { await loadRepo() }
             .onChange(of: effortOptions.map(\.id)) { _, ids in
                 if !effort.isEmpty, !ids.contains(effort) { effort = "" } // the picked model does not take it
             }
@@ -350,7 +385,7 @@ struct NewChatView: View {
         } label: {
             VStack(alignment: .leading, spacing: Theme.Space.s) {
                 HStack {
-                    Image(systemName: m.symbol).font(Theme.Font.title)
+                    ThemedIcon(m.symbol).font(Theme.Font.title)
                     Spacer()
                     Circle().fill(m.online ? Theme.positive : Color.secondary.opacity(0.4)).scaledFrame(width: Theme.Size.dot, height: Theme.Size.dot)
                 }
@@ -465,13 +500,13 @@ struct NewChatView: View {
     @ViewBuilder private var modelRow: some View {
         if let modelsError {
             HStack(spacing: Theme.Space.m) {
-                Image(systemName: Theme.Icon.error).foregroundStyle(Theme.cautionText)
+                ThemedIcon(Theme.Icon.error).foregroundStyle(Theme.cautionText)
                 VStack(alignment: .leading, spacing: Theme.Space.xxs) {
                     Text("Couldn't Load Models").font(Theme.Font.heading).lineLimit(1)
                     Text(modelsError).font(Theme.Font.label).foregroundStyle(.secondary).lineLimit(3)
                 }
                 Spacer(minLength: Theme.Space.s)
-                Button { Task { await loadModels(refresh: true) } } label: { Image(systemName: Theme.Icon.retry) }
+                Button { Task { await loadModels(refresh: true) } } label: { ThemedIcon(Theme.Icon.retry) }
                     .buttonStyle(.borderless)
                     .accessibilityLabel("Retry [Components b8784c]")
             }
@@ -498,7 +533,7 @@ struct NewChatView: View {
 
     private func modelLabel(title: String, detail: String?, trailing: String?) -> some View {
         HStack {
-            Image(systemName: Theme.Icon.ai).foregroundStyle(Theme.accent)
+            ThemedIcon(Theme.Icon.ai).foregroundStyle(Theme.accent)
             VStack(alignment: .leading, spacing: Theme.Space.xxs) {
                 Text(title).font(Theme.Font.heading).lineLimit(1)
                 if let detail {
@@ -507,7 +542,7 @@ struct NewChatView: View {
             }
             Spacer()
             if modelsLoading { ProgressView().controlSize(.small) }
-            if let trailing { Image(systemName: trailing).foregroundStyle(.secondary) }
+            if let trailing { ThemedIcon(trailing).foregroundStyle(.secondary) }
         }
     }
 
@@ -536,6 +571,23 @@ struct NewChatView: View {
         }
     }
 
+    /// What names the worktree's branch: the todo's name, else the first message, else the folder.
+    private var worktreeNameHint: String {
+        AgentWorktree.nameHint(prompt: nameHint ?? prompt, cwd: cwd)
+    }
+
+    /// Asks the computer whether the folder is in a Git repository, a moment after it stops changing.
+    private func loadRepo() async {
+        repo = nil
+        let dir = cwd
+        guard preset == nil, !dir.isEmpty, machine?.online == true, let api = model.api(ref.group) else { return }
+        try? await Task.sleep(for: .milliseconds(400))
+        guard !Task.isCancelled else { return }
+        let st = await api.worktreeStatus(machine: ref.id, cwd: dir)
+        guard !Task.isCancelled, dir == cwd else { return }
+        repo = st
+    }
+
     private func start() async {
         guard let api = model.api(ref.group) else {
             error = String(localized: "Can't reach this computer's hub. Try again later.")
@@ -544,6 +596,17 @@ struct NewChatView: View {
         starting = true
         error = nil
         defer { starting = false }
+        // In a worktree of its own (#6115): made first; a failure says why, and nothing starts.
+        var dir = cwd
+        if inWorktree, preset == nil, repo?.path.isEmpty == false {
+            do {
+                dir = try await api.addAgentWorktree(machine: ref.id, cwd: cwd, nameHint: worktreeNameHint, branch: worktreeBranch).path
+            } catch {
+                self.error = String(localized: "Couldn't create the worktree: \(error.shown ?? error.localizedDescription) [Agent Worktree]")
+                Haptics.error()
+                return
+            }
+        }
         do {
             let p = prompt.trimmingCharacters(in: .whitespacesAndNewlines)
             let name = tabName.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -552,7 +615,7 @@ struct NewChatView: View {
             if codex {
                 // Codex picks its thread's id once it has the first message: it goes with the start, which answers
                 // with that thread (one session, already working on it).
-                let s = try await api.start(.init(machineID: ref.id, cwd: cwd, launcher: launcher, prompt: contextBlock == nil ? prompt : outgoing,
+                let s = try await api.start(.init(machineID: ref.id, cwd: dir, launcher: launcher, prompt: contextBlock == nil ? prompt : outgoing,
                                                   workspaceID: preset?.workspaceID, model: modelChoice?.sent, tabName: name.isEmpty ? nil : name,
                                                   nameHint: nameHint ?? (p.isEmpty ? nil : p), todoID: todoID))
                 UserDefaults.standard.set(launcher, forKey: "launcher.\(machineID)")
@@ -564,10 +627,11 @@ struct NewChatView: View {
             }
             // The hub answers at once and starts claude in the background; the first message goes out as an ordinary
             // message (on screen right away, typed in once claude is ready).
-            let s = try await api.start(.init(machineID: ref.id, cwd: cwd, launcher: launcher, prompt: nil,
+            let s = try await api.start(.init(machineID: ref.id, cwd: dir, launcher: launcher, prompt: nil,
                                               workspaceID: preset?.workspaceID, permissionMode: mode.isEmpty ? nil : mode,
                                               effort: effort.isEmpty ? nil : effort, model: modelChoice?.sent, tabName: name.isEmpty ? nil : name,
-                                              async: true, nameHint: nameHint ?? (p.isEmpty ? nil : p), todoID: todoID))
+                                              async: true, nameHint: nameHint ?? (p.isEmpty ? nil : p), todoID: todoID,
+                                              ultracode: sendsUltracode ? true : nil))
             if !unifiedModels {
                 UserDefaults.standard.set(launcher, forKey: "launcher.\(machineID)")
                 UserDefaults.standard.set(effort, forKey: "effort.\(machineID)")
@@ -579,10 +643,20 @@ struct NewChatView: View {
             if !outgoing.isEmpty { model.sendNow(s.key, text: outgoing) }
             onStarted(s)
         } catch {
-            self.error = error.shown
+            if sendsUltracode, Ultracode.refused(error) {
+                // The hub won't start it with ultracode here (an old node, a CLI or engine that can't take it): asking
+                // again would get the same answer, so the switch goes off and Start Chat starts it without.
+                ultracode = false
+                self.error = String(localized: "Couldn't start with ultracode: \(Ultracode.errorText(error)). Retry starts without it")
+            } else {
+                self.error = error.shown
+            }
             Haptics.error()
         }
     }
+
+    /// The start asks for ultracode: offered, not blocked, switched on.
+    private var sendsUltracode: Bool { ultracodeShown && ultracodeBlocked == nil && ultracode }
 }
 
 struct LauncherPicker: View {
@@ -604,7 +678,7 @@ struct LauncherPicker: View {
                     HStack {
                         Label(defaultLabel, systemImage: Theme.Icon.model).lineLimit(1)
                         Spacer()
-                        if selection.isEmpty { Image(systemName: Theme.Icon.done).foregroundStyle(Theme.accent).fontWeight(.semibold) }
+                        if selection.isEmpty { ThemedIcon(Theme.Icon.done).foregroundStyle(Theme.accent).fontWeight(.semibold) }
                     }
                 }
                 .accessibilityIdentifier("launcherPicker.default")
@@ -628,7 +702,7 @@ struct LauncherPicker: View {
                             }
                         }
                         Spacer()
-                        if l.name == selection { Image(systemName: Theme.Icon.done).foregroundStyle(Theme.accent).fontWeight(.semibold) }
+                        if l.name == selection { ThemedIcon(Theme.Icon.done).foregroundStyle(Theme.accent).fontWeight(.semibold) }
                     }
                 }
             }
@@ -670,7 +744,7 @@ struct DirectoryBrowser: View {
                         if loading {
                             ProgressView()
                         } else if editing, DirectoryPath.resolve(draft, from: list.path) != list.path {
-                            Button { go() } label: { Image(systemName: Theme.Icon.enter) }
+                            Button { go() } label: { ThemedIcon(Theme.Icon.enter) }
                                 .accessibilityLabel("Go [New Chat View fa9607]")
                         }
                     }
@@ -699,7 +773,7 @@ struct DirectoryBrowser: View {
                     ForEach(list.entries) { e in
                         Button { Task { await load(e.path) } } label: {
                             HStack {
-                                Image(systemName: e.isGit ? Theme.Icon.gitRepository : Theme.Icon.folder).foregroundStyle(e.isGit ? Theme.accent : .secondary)
+                                ThemedIcon(e.isGit ? Theme.Icon.gitRepository : Theme.Icon.folder).foregroundStyle(e.isGit ? Theme.accent : .secondary)
                                 Text(e.name).foregroundStyle(.primary)
                                 Spacer()
                                 if e.isGit { Chip(text: "git") }

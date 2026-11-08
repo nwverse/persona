@@ -15,6 +15,7 @@ import {
   getFeedState,
   receiptState,
   isToday,
+  sentByPersona,
   later,
   planEditsToSend,
   planUltracodeToSend,
@@ -51,6 +52,7 @@ import { useClamped } from "../../ui/use-clamped";
 import { Icon, type IconName } from "../../ui/icons";
 import { ReportLine, ReviewBadge, ReviewLine } from "./Supervision";
 import { BriefCard } from "./Brief";
+import { SentLine, TaskSentList } from "./Sent";
 import { progressLine } from "../../lib/supervision";
 import { planLabel, planLine, planShown } from "../../lib/plan";
 import { AnsweredCard, InteractionCard } from "../chat/Interactions";
@@ -504,6 +506,8 @@ export function TaskCard({ todoId, conversation }: { todoId: string; conversatio
           )}
         </span>
       </div>
+      {/* what Persona sent its agent (#1542): the hand-off sent with this card is drawn only here */}
+      <TaskSentList todoId={todo.id} conversation={conversation} />
       {status === "done" && todo.supervision && (
         <div className="flex items-center text-[12.5px]">
           <ReviewBadge todo={todo} />
@@ -622,6 +626,9 @@ export const FeedLineView = memo(function FeedLineView({ item }: { item: FeedIte
     case "report":
       return <ReportLine item={item} title={title} onOpenTask={known && item.ref ? () => openTask(item.ref!) : undefined} />;
     case "routed":
+      // Persona's own message to the task's agent is folded, never the user's bubble (#1542)
+      if (sentByPersona(item)) return <SentLine item={item} title={title} onOpenTask={known && item.ref ? () => openTask(item.ref!) : undefined} />;
+      // what the user said straight to the task (its card's Message); interrupted: from a hub before #1542
       return (
         <div className="flex flex-col items-end gap-1 pl-10">
           <span className="inline-flex items-center gap-1 text-[12px] font-medium text-accent">

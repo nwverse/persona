@@ -5,5 +5,12 @@
   "claude_missing_here": "このコンピューターにはまだ Claude Code がインストールされていません。",
   "launcher_missing": "{machine} でモデルの入口「{launcher}」が見つかりません。削除された可能性があります。",
   "launcher_missing_here": "このコンピューターでモデルの入口「{launcher}」が見つかりません。削除された可能性があります。",
+  "launcher_missing_terminal": "{machine} の新しいターミナルタブ（{pane_shell}）には「{launcher}」というコマンドがありません。Persona は {launcher_shell}（{rc_file}）でこれを見つけました。ターミナルのシェルが読む起動ファイルで定義するか、Persona でモデルプロバイダーとして追加してください。",
+  "launcher_missing_terminal_here": "このコンピューターの新しいターミナルタブ（{pane_shell}）には「{launcher}」というコマンドがありません。Persona は {launcher_shell}（{rc_file}）でこれを見つけました。ターミナルのシェルが読む起動ファイルで定義するか、Persona でモデルプロバイダーとして追加してください。",
+  "launcher_missing_terminal_path": "{machine} の新しいターミナルタブ（{pane_shell}）では、モデルの入口「{launcher}」を起動する「{missing}」を実行できません。ターミナルの環境にそのファイルがないか、実行できません（コンテナなど）。それが見えるターミナルで Agent を起動するか、別のモデルの入口を選んでください。",
+  "launcher_missing_terminal_path_here": "このコンピューターの新しいターミナルタブ（{pane_shell}）では、モデルの入口「{launcher}」を起動する「{missing}」を実行できません。ターミナルの環境にそのファイルがないか、実行できません（コンテナなど）。それが見えるターミナルで Agent を起動するか、別のモデルの入口を選んでください。",
+  "claude_missing_terminal": "{machine} の新しいターミナルタブ（{pane_shell}）では、モデルの入口「{launcher}」の起動に必要な Claude Code（「{missing}」）が見つかりません。ターミナルから見える場所に Claude Code をインストールするか、そのシェルの PATH に追加してください。",
+  "claude_missing_terminal_here": "このコンピューターの新しいターミナルタブ（{pane_shell}）では、モデルの入口「{launcher}」の起動に必要な Claude Code（「{missing}」）が見つかりません。ターミナルから見える場所に Claude Code をインストールするか、そのシェルの PATH に追加してください。",
+  "terminal_default_shell": "既定のシェル",
   "assistant_control_failed": "Claudeはこの設定を適用できませんでした：{reason}"
 }

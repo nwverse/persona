@@ -34,6 +34,15 @@ struct AppearanceSection: View {
                                 value: AppLanguage.settingsSummary, look: .oneLine)
                 }
                 .accessibilityIdentifier("settings-language")
+                #if os(iOS)
+                // Persona's conversation on iPhone and iPad (#1666); the Mac and Vision Pro keep their look.
+                NavigationLink(value: SettingsPage.chatLayout) {
+                    SettingsRow(title: String(localized: "New Conversation Layout"), symbol: Theme.Icon.conversation, tint: Theme.Hue.orange,
+                                value: ChatLayoutSettings.shared.on ? String(localized: "On") : String(localized: "Off"), look: .oneLine)
+                }
+                .settingsListRow(SettingsPage.chatLayout)
+                .accessibilityIdentifier("settings-chat-layout")
+                #endif
                 #if os(iOS) || os(visionOS)
                 NavigationLink(value: SettingsPage.colorScheme) {
                     SettingsRow(title: String(localized: "Light & Dark"), symbol: Theme.Icon.colorScheme, tint: Theme.Hue.indigo,
@@ -127,7 +136,7 @@ struct StyleSettingsPage: View {
                 Group {
                     if AppStyle.current.usesBeautifulUI {
                         BUIListRow(String(localized: "Text Size")) {
-                            BUIIconTile(Theme.Icon.textSize, tint: Theme.Hue.gray)
+                            IconTile(Theme.Icon.textSize, tint: Theme.Hue.gray)
                         } trailing: {
                             BUISegmented(TextSize.allCases.map { .init($0, $0.title) },
                                          selection: Binding(get: { model.textSize }, set: { model.textSize = $0 }))
@@ -214,7 +223,7 @@ struct ColorSchemeSettingsPage: View {
             Section {
                 Picker("Light & Dark", selection: Binding(get: { model.colorScheme }, set: { model.colorScheme = $0 })) {
                     ForEach(ColorSchemeChoice.allCases) { c in
-                        Label { Text(c.title).lineLimit(1) } icon: { Image(systemName: c.symbol) }
+                        Label { Text(c.title).lineLimit(1) } icon: { ThemedIcon(c.symbol) }
                             .tag(c)
                             .accessibilityIdentifier("scheme-\(c.rawValue)")
                     }
