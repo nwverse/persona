@@ -9164,6 +9164,10 @@ GIT_PULL_STATE = {"behind": 28, "mode": "success", "pulls": 0}
 # back. Off: none, as on a hub without the Lark extension.
 PERSONAL_AGENTS = os.environ.get("MOCK_PERSONAL_AGENTS")
 PERSONAL_HIDDEN = {}  # session id -> when (ms)
+# #1368: GET /mock/start-fail?n=<count>&code=<code>&delay=<seconds>: the next n starts of an assistant conversation
+# (POST /api/v1/assistant/conversations) answer 502 with that code (default assistant_in_doubt, delivered unknown), and
+# every start, failed or not, first takes `delay` seconds (to see a retry spin). n=0&delay=0 puts it back.
+START_FAIL = {"n": 0, "code": "assistant_in_doubt", "delay": 0.0}
 def personal_rows():
     now = int(time.time() * 1000)
     rows = [("muse", "周报助手", 0.1, 2), ("grok_bot", "旅行规划", 1.5, 0), ("cue", "读书笔记", 5, 1), ("muse", "代码评审", 30, 0),
@@ -12881,6 +12885,10 @@ class H(BaseHTTPRequestHandler):
         if p == "/api/v1/agents": return self.send_json({"sources": []})
         if p == "/api/v1/agents/sessions": return self.send_json({"sessions": personal_listed(False), "items": []})
         if p == "/api/v1/agents/hidden": return self.send_json({"sessions": personal_listed(True)})
+        if p == "/mock/start-fail":
+            START_FAIL.update(n=int(q.get("n", ["1"])[0]), code=q.get("code", ["assistant_in_doubt"])[0],
+                              delay=float(q.get("delay", ["0"])[0]))
+            return self.send_json(START_FAIL)
         if p == "/mock/personal-agents":
             if q.get("reset"): PERSONAL_HIDDEN.clear()
             return self.send_json({"hidden": sorted(PERSONAL_HIDDEN)})
@@ -13962,7 +13970,11 @@ class H(BaseHTTPRequestHandler):
             # with none, and its watch sends the first line once claude has written it (MOCK_ASSISTANT_TRANSCRIPT_SECONDS
             # later, default 1). MOCK_ASSISTANT_START_SECONDS: the request itself takes that long (the hub prepares the
             # directory, the model config and the live snapshot first); meanwhile the app shows "Preparing".
-            time.sleep(float(os.environ.get("MOCK_ASSISTANT_START_SECONDS", "0")))
+            time.sleep(float(os.environ.get("MOCK_ASSISTANT_START_SECONDS", "0")) + START_FAIL["delay"])
+            if START_FAIL["n"] > 0:  # GET /mock/start-fail: this start is cut off on its way to the assistant
+                START_FAIL["n"] -= 1
+                return self.send_json({"error": "和助手的连接在发送途中断了，可能已经发出去了：先看看再决定要不要重发",  # i18n-ignore
+                                       "code": START_FAIL["code"], "delivered": "unknown", "retryable": False}, 502)
             body = json.loads(self.last_body or b"{}")
             prompt = body.get("prompt", "")
             SENT.append({"text": prompt, "images": body.get("images"), **({"launcher": body["launcher"]} if body.get("launcher") else {})})
