@@ -722,7 +722,7 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
   // eslint-disable-next-line react-hooks/exhaustive-deps
   const wfCalls = useMemo(() => workflowCalls(runs), [wfKey]);
   const ctx = useMemo<ChatContextValue>(
-    () => ({ tasks, subagents: assistant ? NO_SUBAGENTS : (subagents ?? NO_SUBAGENTS), scope: `${mid}/${sid}:`, jumpToCall: jump, workflowCalls: wfCalls }),
+    () => ({ tasks, subagents: assistant ? NO_SUBAGENTS : (subagents ?? NO_SUBAGENTS), scope: `${mid}/${sid}:`, jumpToCall: jump, workflowCalls: wfCalls, lineStyle: assistant ? "assistant" : "agents" }),
     [tasks, subagents, assistant, mid, sid, jump, wfCalls],
   );
   // ── "Search in chat" (ChatSearch.tsx, Android ChatSearchState): where the reader was when it opened, going to a hit (the

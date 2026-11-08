@@ -200,14 +200,14 @@ export const SegmentView = memo(function SegmentView({
   /** Drawn between the work and the agent's last words (the wakes chip, #3783); above the work while it is live. */
   beforeWords?: ReactNode;
 }) {
-  const { subagents, scope, workflowCalls = NO_WORKFLOW_CALLS } = useChatContext();
+  const { subagents, scope, workflowCalls = NO_WORKFLOW_CALLS, lineStyle } = useChatContext();
   const steps = useMemo(() => planSteps(exchangeSteps(seg)), [seg]);
   const turnStart = seg.user?.ts ?? seg.start;
   const thinking = useMemo(() => thinkingDurations(steps, turnStart), [steps, turnStart]);
   const p = useMemo<WorkProps>(() => {
     const agent = (s: ToolStep) => agentStatus(s.result, subagentFor(subagents, s.use), live);
-    return { mid, sid, scope, expandFold, agentStatus: agent, thinking, segment: seg.id, workflowCalls };
-  }, [mid, sid, scope, expandFold, subagents, live, thinking, seg.id, workflowCalls]);
+    return { mid, sid, scope, expandFold, agentStatus: agent, thinking, segment: seg.id, workflowCalls, lineStyle, turnLive: live };
+  }, [mid, sid, scope, expandFold, subagents, live, thinking, seg.id, workflowCalls, lineStyle]);
   const nodes = useMemo(
     () => workBlocks(steps, { live, turnStart, agentStatus: p.agentStatus, workflowCard: (s) => workflowCalls.known.has(s.use.tool_use_id ?? "") }),
     [steps, live, turnStart, p.agentStatus, workflowCalls],
