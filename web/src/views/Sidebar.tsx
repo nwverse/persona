@@ -2,7 +2,7 @@ import { storedValue, storeValue } from "../lib/compatibility";
 // Beautiful UI's Sidebar Nav: workspace row, quick search, sections, one gliding highlight. Persona's main conversation
 // is the first entry (the app opens on the assistant); a new conversation and a new agent are the "+" of their sections (#1239).
 import { BASE } from "../lib/base";
-import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { memo, useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { t } from "../i18n";
 import { NARROW, useMedia } from "../lib/viewport";
 import { AGENT_FILTERS, agentFilter, applyFilter, arrangeSpaces, BOTMUX_HIDDEN_KEY, botmuxAndFilter, filterCounts, isBotmux, isSpaceMuted, matchingKeys, shownFilters, unreadOf, withoutBotmux, type AgentFilter, type FilterCounts } from "../lib/agent-filter";
@@ -1303,11 +1303,11 @@ function RepoSection({ tree, reg, hover, activeKey, go, onRowMenu }: { tree: Rep
 }
 
 /** One working tree's agents under its own folding row: the main checkout wears a home mark, and a tree with nothing
- *  running says so. Orca child worktrees have their own remembered fold after the parent's agents, as in By machine. */
+ *  running says so. Orca child worktrees have their own remembered, initially expanded chip after the parent's agents. */
 function RepoWorktreeRows({ w, repo, row, activeKey }: { w: RepoWorktree; repo: string; row: (s: Session, hint: string) => React.ReactNode; activeKey: string }) {
   const [folded, toggle] = useFolded(w.key, w.sessions.length === 0, { holds: holdsRow(w.sessions, activeKey) });
   const descendants = w.tree.slice(w.sessions.length);
-  const [childrenFolded, toggleChildren] = useFolded(`${w.key}/children`, true, { holds: holdsRow(descendants, activeKey) });
+  const [childrenFolded, toggleChildren] = useFolded(`${w.key}/children`, false, { holds: holdsRow(descendants, activeKey) });
   const mutes = useStore((st) => st.mutes);
   const running = w.sessions.filter((s) => !isQuiet(s, mutes)).length;
   return (
@@ -1316,30 +1316,70 @@ function RepoWorktreeRows({ w, repo, row, activeKey }: { w: RepoWorktree; repo: 
         <Icon name="chevron" size={9} stroke={2.4} className="shrink-0 opacity-60 transition-transform" style={{ transform: folded ? "rotate(-90deg)" : "none" }} />
         {w.main && <Icon name="home" size={11} stroke={2} className="shrink-0 text-ink-3" />}
         <span className="min-w-0 truncate">{w.name}</span>
-        <span className="ml-auto flex shrink-0 items-center gap-1.5">
-          {w.children.length > 0 && <ChildSummary counts={w.childStates} />}
-          <span className="shrink-0 text-[10.5px] text-ink-3 tabular-nums">{running > 0 ? t("sidebar.worktree_agents", { count: w.sessions.length }) : t("sidebar.idle")}</span>
-        </span>
+        <span className="ml-auto shrink-0 text-[10.5px] text-ink-3 tabular-nums">{running > 0 ? t("sidebar.worktree_agents", { count: w.sessions.length }) : t("sidebar.idle")}</span>
       </button>
       <Collapse open={!folded}>
         <div inert={folded || undefined}>
           <div className="flex flex-col gap-px pl-2">{w.sessions.map((s) => row(s, `${repo} › ${w.name}`))}</div>
           {w.children.length > 0 && (
-            <div>
-              <button type="button" aria-expanded={!childrenFolded} onClick={toggleChildren} className="relative z-10 flex min-h-7 w-full min-w-0 items-center gap-1.5 pr-2 pl-2 text-left text-[11.5px] whitespace-nowrap text-ink-3 hover:text-ink [@media(pointer:coarse)]:min-h-11">
-                <Icon name="chevron" size={9} stroke={2.4} className="shrink-0 transition-transform duration-200" style={{ transform: childrenFolded ? "rotate(-90deg)" : "none" }} />
-                <span className="min-w-0 flex-1 truncate">{t("sidebar.child_count", { count: w.children.length })}</span>
-                {childrenFolded && <SessionTally sessions={descendants} folded />}
-              </button>
+            <>
+              <RepoChildToggle count={w.children.length} counts={w.childStates} folded={childrenFolded} onToggle={toggleChildren} />
               <Collapse open={!childrenFolded}>
-                <div className="ml-2 flex flex-col gap-px border-l border-line pl-3" inert={childrenFolded || undefined}>
+                <div className="ml-3.5 flex w-[calc(100%-0.875rem)] flex-col gap-px" inert={childrenFolded || undefined}>
                   {w.children.map((c) => <RepoWorktreeRows key={c.key} w={c} repo={repo} row={row} activeKey={activeKey} />)}
                 </div>
               </Collapse>
-            </div>
+            </>
           )}
         </div>
       </Collapse>
+    </div>
+  );
+}
+
+/** Orca's child-workspace chip: one status per direct child, summarized from that child's whole subtree. */
+function RepoChildToggle({ count, counts, folded, onToggle }: { count: number; counts: ChildStates; folded: boolean; onToggle: () => void }) {
+  const descriptionId = useId();
+  const parts = (["needs_you", "working", "done"] as const).filter((k) => counts[k] > 0);
+  const description = parts.map((k) => stateCount(k, counts[k])).join(t("sidebar.list_separator"));
+  const action = t(folded ? "sidebar.show_child_workspaces" : "sidebar.hide_child_workspaces", { count });
+  return (
+    <div className="@container relative mt-1 flex min-w-0 justify-start">
+      <button
+        type="button"
+        aria-expanded={!folded}
+        aria-label={action}
+        aria-describedby={description ? descriptionId : undefined}
+        title={description ? `${action}\n${description}` : action}
+        onClick={(e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          onToggle();
+        }}
+        className="relative z-10 flex min-h-4 max-w-full items-center whitespace-nowrap rounded-[4px] border border-line bg-surface px-0.5 text-[10px] leading-none text-ink-3 shadow-hairline transition-colors hover:bg-hover hover:text-ink-2 focus-visible:bg-hover focus-visible:ring-2 focus-visible:ring-canvas"
+      >
+        <span className="inline-flex min-w-0 max-w-full flex-wrap items-center gap-x-1 gap-y-0.5 py-0.5">
+          <span className="inline-flex shrink-0 items-center gap-1">
+            <Icon name="workflow" size={10} stroke={2.2} className="shrink-0" />
+            <span className={cx("tabular-nums", parts.length > 0 && "hidden @min-[13rem]:inline")}>{t("sidebar.child_worktree_count", { count })}</span>
+            {parts.length > 0 && <span className="tabular-nums @min-[13rem]:hidden">{count}</span>}
+          </span>
+          <span className="inline-flex min-w-0 max-w-full items-center gap-0.5">
+            {parts.length > 0 && (
+              <span className="inline-flex min-w-0 flex-wrap items-center gap-0.5 border-l border-line pl-1 text-ink-3 @max-[13rem]:pl-0.5">
+                {parts.map((k) => (
+                  <span key={k} aria-hidden className="inline-flex shrink-0 items-center gap-0.5 tabular-nums @max-[13rem]:gap-0">
+                    <StatusMark state={k === "done" ? "unread" : k} size="sm" label={false} />
+                    {counts[k]}
+                  </span>
+                ))}
+              </span>
+            )}
+            <Icon name="chevron" size={10} stroke={2.4} className="size-2.5 shrink-0 text-ink-3 transition-transform duration-200 motion-reduce:transition-none" style={{ transform: folded ? "rotate(-90deg)" : "none" }} />
+          </span>
+        </span>
+      </button>
+      {description && <span id={descriptionId} className="sr-only">{description}</span>}
     </div>
   );
 }
