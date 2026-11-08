@@ -98,10 +98,16 @@ type updater struct {
 	edgeConfirmed func()
 	startWatch    func(prev, pendingPath string) error
 	target        func() (string, error)
-	notify        func(title, body string)
-	confirmIn     time.Duration
-	idleEvery     time.Duration
-	manualIdle    time.Duration
+	// self is the binary this hub runs as (runningBinary): persona-hub goes on as the persona-hub the update
+	// swapped, personad as personad (runAs).
+	self func() (string, error)
+	// services finds what runs a program beside personad: a release that would leave one a service runs as it was is
+	// not installed (unreplaced).
+	services   serviceFinder
+	notify     func(title, body string)
+	confirmIn  time.Duration
+	idleEvery  time.Duration
+	manualIdle time.Duration
 
 	mu          sync.Mutex
 	settings    updateSettings
@@ -110,6 +116,7 @@ type updater struct {
 	progress    string
 	errText     string
 	release     *update.Published
+	blocked     error  // why release cannot be installed here (unreplaced), as of when it was read; nil when it can
 	newestImage string // a Docker hub: the newest release tag of its image
 	lastCheck   time.Time
 	busy        []busyItem
@@ -136,7 +143,7 @@ func newUpdater(h *Hub) *updater {
 			// The hub's arguments; `hub …` when it runs as persona-hub and path is personad (update.TargetArgs).
 			return execKeepingListeners(path, append([]string{path}, update.TargetArgs(os.Args, path)...), os.Environ())
 		},
-		startWatch: startWatchdog, target: ServerBinary, confirmIn: updateConfirmIn, idleEvery: updateIdleEvery,
+		startWatch: startWatchdog, target: ServerBinary, self: runningBinary, services: systemServices(), confirmIn: updateConfirmIn, idleEvery: updateIdleEvery,
 		manualIdle: updateManualIdle, state: "idle", confirmed: true,
 		notify: func(title, body string) {
 			h.push.send(map[string]any{"aps": map[string]any{
@@ -173,10 +180,10 @@ func runningBinary() (string, error) {
 }
 
 // ServerBinary is the program that is the whole server: this one, unless it is persona-hub, which runs the hub
-// alone: then the personad beside it. What runs or replaces the server goes by it until the hub/manager split is done
-// (docs/server/server.md "Programs"): the built-in manager the hub starts (`personad assistant`), the update's target
-// (personad is the release's main download; persona-hub is swapped as a program), setup's service binary and the
-// edge's default switch.
+// alone: then the personad beside it (docs/server/server.md "Programs"). The update's target goes by it (personad is
+// the release's main download; persona-hub is swapped as a program and the hub goes on as it: runAs), and so does
+// setup's service binary. What the hub runs goes by the program it runs as: the built-in manager it starts is
+// persona-manager beside persona-hub (managerBinary).
 func ServerBinary() (string, error) {
 	p, err := runningBinary()
 	if err != nil {
@@ -185,17 +192,41 @@ func ServerBinary() (string, error) {
 	return serverBinaryOf(p)
 }
 
-// serverBinaryOf is ServerBinary for the running binary p.
+// serverBinaryOf is ServerBinary for the running binary p. The personad beside persona-hub is resolved through
+// symlinks, as the running binary is: an update replaces the file, never a link to it (an install under the former
+// name keeps personad as a link to that file).
 func serverBinaryOf(p string) (string, error) {
-	ext := filepath.Ext(p)
-	if strings.TrimSuffix(filepath.Base(p), ext) != "persona-hub" {
+	if !isProgram(p, "persona-hub") {
 		return p, nil
 	}
-	sibling := filepath.Join(filepath.Dir(p), "personad"+ext)
-	if _, err := os.Stat(sibling); err != nil {
+	sibling := filepath.Join(filepath.Dir(p), "personad"+filepath.Ext(p))
+	resolved, err := filepath.EvalSymlinks(sibling)
+	if err != nil {
 		return "", fmt.Errorf("persona-hub runs the hub alone and needs the personad beside it (%s): %w", sibling, err)
 	}
-	return sibling, nil
+	return resolved, nil
+}
+
+// isProgram says whether the binary at p is the program name (on Windows name.exe).
+func isProgram(p, name string) bool {
+	return strings.TrimSuffix(filepath.Base(p), filepath.Ext(p)) == name
+}
+
+// runAs is Pending.Run for an update that swapped programs beside personad: the persona-hub among them when the hub
+// runs as that persona-hub, so it goes on as the hub's own program; "" otherwise (it goes on as personad, the target).
+// A release without persona-hub leaves it on personad, the same build, rather than on a persona-hub the update did
+// not replace.
+func runAs(running func() (string, error), programs []update.Swapped) string {
+	self, err := running()
+	if err != nil || !isProgram(self, "persona-hub") {
+		return ""
+	}
+	for _, s := range programs {
+		if filepath.Clean(s.Target) == filepath.Clean(self) {
+			return s.Target
+		}
+	}
+	return ""
 }
 
 // startWatchdog runs `<old binary> update-watch <pending>` in its own session, its output in update/watch.log.
@@ -419,8 +450,8 @@ func (u *updater) rollback(p update.Pending, reason string) {
 		u.h.logf("update: restore %s: %v", p.Prev, err)
 		return
 	}
-	if err := u.exec(p.Target); err != nil {
-		u.h.logf("update: run %s: %v", p.Target, err)
+	if err := u.exec(p.RunPath()); err != nil {
+		u.h.logf("update: run %s: %v", p.RunPath(), err)
 	}
 }
 
@@ -534,7 +565,8 @@ type latestView struct {
 	Notes    string     `json:"notes,omitempty"`
 	Newer    bool       `json:"newer"`
 	Bad      bool       `json:"bad"` // went back before: not installed automatically
-	// Held: why a newer release is not installed automatically even with auto-update on (Build.Hold), for people.
+	// Held: why a newer release is not installed automatically even with auto-update on (Build.Hold, unreplaced), for
+	// people.
 	Held string `json:"held,omitempty"`
 }
 
@@ -563,6 +595,9 @@ func (u *updater) viewIn(l i18n.Lang) updateView {
 			Newer: u.h.build.Newer(r.Manifest.Build), Bad: slices.Contains(u.settings.Bad, r.Manifest.Build)}
 		if v.Latest.Newer && u.h.build.SelfUpdates() {
 			v.Latest.Held = u.h.build.Hold(r.Manifest)
+			if v.Latest.Held == "" && u.blocked != nil {
+				v.Latest.Held = i18n.Localize(u.blocked, l)
+			}
 		}
 	}
 	if u.h.build.Channel == update.Docker {

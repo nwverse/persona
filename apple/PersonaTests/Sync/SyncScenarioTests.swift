@@ -28,6 +28,7 @@ struct SyncScenarioTests {
     /// the list when it passes (a known issue that no longer happens fails the test).
     nonisolated static let known: [String: String] = [
         "start_answer_cut_then_receipt": "#1112: a new chat starts from the new-conversation page, which the harness does not drive",
+        "start_refused_then_resent_new_op": "#1112: a new chat starts from the new-conversation page, which the harness does not drive",
     ]
 
     @Test func everyFileHasCases() {

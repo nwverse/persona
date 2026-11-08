@@ -705,3 +705,7 @@ Two more from the same harness:
 
 - The scenarios' times are fixed (`2026-01-02T…`), and the app ties a sent bubble to its transcript line partly by time. Lines the hub writes during a case get the time they were written (`SyncHub.writtenNow`).
 - A failed message is placed before later ones by the whole second it was written (`ChatLines.placeFailed`). Two sends in a row in a test land in the same second, so the harness spaces sends more than a second apart, as typing does.
+
+## A model made in a unit test starts with what the simulator last saved (2026-11-09, #1638, #1637)
+
+`AppModel()` restores the last Dev snapshot (machines, agents, cards; `Library/Caches/state/dev.json`) and the outbox when the simulator's keychain holds a pairing, which any mock-hub UI test run leaves behind. A unit test that reads everything the model holds (the watch summary, all agents) then counts those too: it passes on a brand-new simulator and on hosted CI and fails on a used one. Such a test calls `forgetRestoredForTests()` after making the model. To check that a failure is this, move `dev.json` aside in the app's data container and run the test again.
