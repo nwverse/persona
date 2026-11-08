@@ -19,6 +19,7 @@ const item = { market: market.id, market_name: market.name, id: newID, name: "By
   replaces: oldID, rename_from: oldID, permissions: [] };
 const consent = { preview_id: "identity-preview", manifest: { id: newID, name: item.name, version: item.version },
   upgrade: true, rename_from: oldID, from: item.installed, permissions: [], permissions_digest: "a".repeat(64),
+  warnings: [`This update changes the extension ID from ${oldID} to ${newID}. Explicit confirmation is required; settings and data stay with the same installation.`],
   expires_at: new Date(Date.now() + 600_000).toISOString() };
 let browser, vite, mock, currentPage, timedOut = false, verdict = "FAIL";
 const cleanup = ownedCleanup(() => ({ browser, vite, mock }));
