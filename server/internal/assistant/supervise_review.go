@@ -230,6 +230,7 @@ func (s *Service) reviewDoneTodo(ctx context.Context, id, reason string, accepte
 		row = db.TodoRow{ID: t.ID, Title: t.Title, Notes: t.Notes, CreatedAt: t.CreatedAt, Origin: t.Origin, PlanID: t.PlanID,
 			ReopenedAt: t.ReopenedAt, Quiet: t.Quiet}
 		row.DoneAt, row.DoneBy, row.DoneReason, row.UpdatedAt = &now, db.DoneByReview, reason, now
+		t.keepPlan(&row)
 	}
 	var before Todo
 	_, doneKeys, ok := s.setTodoRow(id, row, func(t *Todo) bool {
