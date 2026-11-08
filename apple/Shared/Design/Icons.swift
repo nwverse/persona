@@ -113,6 +113,8 @@ extension Theme {
         /// Upload: files from this device into a folder on a machine (#4858).
         static let upload = "doc.badge.arrow.up"
         static let down = "arrow.down"
+        /// One step turns into the next (a setting's example: before → after, a timeline).
+        static let becomes = "arrow.forward"
         static let gitBranch = "arrow.triangle.branch"
         /// The spaces a host nests under another (Orca's child worktrees,「N 个子项」, #3075).
         static let childSpaces = "square.3.layers.3d.down.right"
