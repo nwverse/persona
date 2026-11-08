@@ -63,7 +63,7 @@ type Service struct {
 	// shorten it).
 	taskRetry time.Duration
 	// superviseTimes are how supervision messages gather and space out (zero fields: the package's; tests shorten
-	// them, supervise.go superviseTimings).
+	// them, supervise_signals.go superviseTimings).
 	superviseTimes superviseTimings
 	// retryNow is the clock a due retry checks the task's time against (retryStillDue; nil: time.Now, tests set it).
 	retryNow func() time.Time
@@ -85,7 +85,7 @@ type Service struct {
 	guests     guestBook         // guest.go
 	relays     relayBook         // conversations.go
 	quiet      quietBook         // quiet.go
-	supervise  superviseBook     // supervise.go
+	supervise  superviseBook     // supervise_signals.go
 	reports    reportBook        // reports.go
 	upReports  reportRate        // agent_control.go: report_to_supervisor
 	noteRate   reportRate        // todo_decisions.go: todo_decision_add
@@ -410,7 +410,7 @@ func (s *Service) snapshot(ctx context.Context) Snapshot {
 		view(id, here).Queued = q // a conversation sent to is on the assistant's machine
 	}
 	for _, id := range s.heldConversations() {
-		view(id, here).Supervising = true // a supervision message started its turn: not pushed (supervise.go)
+		view(id, here).Supervising = true // a supervision message started its turn: not pushed (supervise_digest.go)
 	}
 	if cfg.Main != "" { // not snap.Profile: that is left out while a settings read fails
 		view(cfg.Main, cfg.MachineID).Title = mainTitle // never its first message, a model's name or a rename (#1313)
@@ -433,7 +433,7 @@ func (s *Service) snapshot(ctx context.Context) Snapshot {
 // UserSpoke: the user is talking in the conversation again: back in the list, and it works for them, not for a chain
 // of conversations.
 func (s *Service) UserSpoke(ctx context.Context, r SessionRef) {
-	s.releasePushes(ctx, r.SessionID) // the user speaks: its turns are pushed as ever (supervise.go)
+	s.releasePushes(ctx, r.SessionID) // the user speaks: its turns are pushed as ever (supervise_digest.go)
 	s.withdrawAskUser(r.SessionID)    // a question it waits on is taken back: the user's words are not left behind its turn
 	s.unarchiveOnSend(r.MachineID, r.SessionID)
 	s.userSpoke(r.SessionID)
