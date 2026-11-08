@@ -96,6 +96,7 @@ const loadTerminal = () => import("../session/TerminalPanel");
 const TerminalPanel = lazy(() => loadTerminal().then((m) => ({ default: m.TerminalPanel })));
 
 const NO_FEED: FeedItem[] = [];
+const NO_PANES: Session[] = [];
 // the assistant has no subagents: one array, so the chat context does not change with every render
 const NO_SUBAGENTS: Subagent[] = [];
 /** Going to a search hit: how long the rows that hold it get to open before the line it is on stands in, when to give
@@ -199,8 +200,8 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
   const subagents = stableSubagents(lastSubagents.current, listed);
   lastSubagents.current = subagents;
   const machineName = useStore((s) => machineWithHub(mid, s.machines));
-  const allSessions = useStore((s) => s.sessions[mid]);
-  const panes = useMemo(() => (session && !assistant && !readOnly ? tabSessions(allSessions ?? [], session) : []), [allSessions, session, assistant, readOnly]);
+  // only the tab's own rows (the same objects, the same array): a push for another agent on the machine leaves the chat be
+  const panes = useStore((s) => (session && !assistant && !readOnly ? tabSessions(s.sessions[mid] ?? [], session) : NO_PANES));
   const siblings = useStore((s) => (session?.space_id ? (s.sessions[mid] ?? []).filter((x) => x.space_id === session.space_id && stateOf(x) !== "offline") : []));
   const interactions = useStore((s) => s.interactions.filter((i) => i.machine_id === mid && i.session_id === sid));
   const answered = useStore((s) => Object.values(s.answered).filter((a) => a.ix.machine_id === mid && a.ix.session_id === sid));
