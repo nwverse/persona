@@ -125,7 +125,7 @@ class InboxConversationSwipeTest {
         swipe(true)
         swipe(true)
         swipe(false)
-        rule.runOnIdle { assertEquals(1, inbox.calls.size) }
+        rule.runOnIdle { assertEquals(1, inbox.calls.size); assertTrue("Pending swipes must not navigate", opened.isEmpty()) }
         rule.runOnIdle { result.completeExceptionally(IllegalStateException("Synthetic failure")) }
         rule.waitForIdle()
         rule.onNodeWithText("previous state is back", substring = true).assertExists()

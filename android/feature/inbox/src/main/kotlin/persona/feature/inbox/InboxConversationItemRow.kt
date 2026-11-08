@@ -32,7 +32,7 @@ internal fun InboxConversationItemRow(
             status = when (row.section) { InboxConversationSection.Action -> Status.NeedsYou; InboxConversationSection.Fyi -> Status.Unread; else -> null },
             avatar = rememberLarkAvatar(record.avatar, onlineSince),
             selected = isInboxItemSelected(LocalDetailKey.current, row.itemId, row.key.thread),
-            onClick = { navigator.navigate(pages.open(record)) }, onLongClick = { menu = true })
+            onClick = { if (!busy) navigator.navigate(pages.open(record)) }, onLongClick = { if (!busy) menu = true })
     }
 }
 

@@ -22,7 +22,8 @@ An absent or unsupported connector action must not be fabricated to restore thes
 
 Restore `JSwipeActions` around the grouped row, keep its click/long-click navigation, and call the
 existing versioned bulk Done/Reopen and Hand-to-AI sheet. Block both directions and menu actions
-while any displayed item is pending. Empty grouped records render no actions. Hand-to-AI opens the
+while any displayed item is pending. Also gate clicks and long presses then: a disabled swipe can otherwise
+be treated as a click. Empty grouped records render no actions. Hand-to-AI opens the
 existing sheet; the gesture alone sends no message and grants no new authorization.
 The existing repository retains partial-failure rollback, manager routing and reconciliation.
 Extract existing individual-row rendering to keep `InboxScreen.kt` within 500 lines.
