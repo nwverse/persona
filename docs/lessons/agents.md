@@ -525,8 +525,8 @@ Closing is not durable merely because the card vanished: persist the interaction
     `esc` when the picker is open but does not close.
   - Guarded: the `/model` picker (`node/model_switch.go`, Esc only once `modelPicker(s)` saw the picker), the `/rewind`
     panel (`node/rewind.go`'s `close`, which returns unless `screen.ParseRewind` still parses a panel) and the automatic
-    guide (`node/sendsafe.go`'s `declineGuide`, reached only after `screen.Guide` / `CheckClaude` recognized the screen).
-    Each sends Esc only after its own screen was recognized.
+    guide (`node/sendsafe_submit.go`'s `declineGuide`, reached only after `screen.Guide` / `CheckClaude` recognized the
+    screen). Each sends Esc only after its own screen was recognized.
   - Free key presses from a phone terminal, a watch answer, or a Feishu screen card's Esc button
     (`assistant/feishu_cards.go`): the user's own key, not a decision Persona makes.
 - Before sending `esc` as "stop", confirm the turn is running (session state, or the working status line above the box);

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"maps"
 	"net/http"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -175,8 +176,8 @@ type liveActivities struct {
 	mu        sync.Mutex
 	rows      map[string]db.LiveActivity // device -> its activity
 	coal      coalescer
-	shown     []byte // last state broadcast to the open apps
-	resend    bool   // a device's settings changed: push even if the state did not
+	shown     []byte          // last state broadcast to the open apps
+	resend    map[string]bool // only devices whose activity settings changed
 	last      FleetState
 	emptyAt   time.Time // since when the fleet has been over (empty, or only finished agents for a while)
 	doneSince time.Time
@@ -233,10 +234,26 @@ func (la *liveActivities) changed() {
 	}
 }
 
-// settingsChanged: a device turned the activity or its lock screen details on / off.
-func (la *liveActivities) settingsChanged() {
+// settingsChanged refreshes only what this device's activity actually displays.
+// Notification and translation choices, and identical retries, need no activity push.
+func (la *liveActivities) settingsChanged(device string, before, after NotifyPrefs) {
+	st, stats := la.h.fleetLive()
+	old, _ := json.Marshal(forDevice(st, before, stats))
+	next, _ := json.Marshal(forDevice(st, after, stats))
+	if before.LiveActivity == after.LiveActivity && bytes.Equal(old, next) {
+		return
+	}
 	la.mu.Lock()
-	la.resend = true
+	if la.resend == nil {
+		la.resend = map[string]bool{}
+	}
+	la.resend[device] = true
+	if !before.LiveActivity && after.LiveActivity {
+		// Re-enabled: its previous activity may have ended while pushes were off.
+		delete(la.sent, device)
+		delete(la.sentAt, device)
+		delete(la.started, device)
+	}
 	la.mu.Unlock()
 	la.changed()
 }
@@ -267,7 +284,9 @@ func (h *Hub) fleetStats() FleetStats {
 
 func (la *liveActivities) run(ctx context.Context) {
 	la.load(ctx)
+	la.changed() // restart reconstructs any deferred start from the current fleet, not an old payload
 	timer := time.NewTimer(time.Hour)
+	defer timer.Stop()
 	timer.Stop()
 	tick := time.NewTicker(15 * time.Second)
 	defer tick.Stop()
@@ -278,18 +297,12 @@ func (la *liveActivities) run(ctx context.Context) {
 		case <-la.signal:
 			la.mu.Lock()
 			resend, repair := la.resend, la.repair
-			la.resend, la.repair = false, false
+			la.resend, la.repair = nil, false
 			la.mu.Unlock()
 			st := la.snapshot()
 			if b, _ := json.Marshal(st); !bytes.Equal(b, la.shown) { // the open app updates its activity itself
 				la.shown = b
 				la.broadcast(st)
-			}
-			if resend {
-				// A device's settings changed (details on the lock screen, the island's sides): show it now.
-				la.coal.sent = nil
-				la.wakeAt(timer, la.flush(st, false, true))
-				continue
 			}
 			now, schedule := la.coal.offer(st)
 			switch {
@@ -299,6 +312,12 @@ func (la *liveActivities) run(ctx context.Context) {
 				la.wakeAt(timer, la.now().Add(fleetCoalesce))
 			case repair:
 				la.wakeAt(timer, la.flush(st, false, false))
+			}
+			if len(resend) > 0 {
+				// Ordinary and urgent fleet changes keep their own delivery above.
+				// A settings refresh bypasses the gap only for these devices; the
+				// existing timer still flushes anything other devices have pending.
+				la.wakeAt(timer, la.flush(st, false, false, slices.Sorted(maps.Keys(resend))...))
 			}
 		case <-timer.C:
 			la.wake = time.Time{}
@@ -394,7 +413,9 @@ func (la *liveActivities) refresh(last FleetState, now time.Time) {
 func (la *liveActivities) metrics(last FleetState, now time.Time) {
 	stats := la.h.fleetStats()
 	if b, _ := json.Marshal(stats); !bytes.Equal(b, la.stats) {
-		la.broadcast(last)
+		// The open app already saw the latest snapshot, even while its APNs
+		// update is being coalesced. Metrics must not broadcast the older last.
+		la.broadcast(la.snapshot())
 	}
 	every := la.h.cfg.Notify.liveMetrics()
 	la.mu.Lock()
@@ -451,7 +472,9 @@ func (la *liveActivities) phoneLeft(device string, clean bool) {
 	d, ok := la.h.push.device(device)
 	now := la.now()
 	la.mu.Lock()
-	if clean && ok && !la.shownAt.IsZero() && now.Sub(la.shownAt) < fleetOpenFresh {
+	r := la.rows[device]
+	needsStart := r.PushToStartToken != "" && (r.PushToken == "" || now.Sub(r.StartedAt) >= fleetMaxAge)
+	if clean && ok && !needsStart && !la.shownAt.IsZero() && now.Sub(la.shownAt) < fleetOpenFresh {
 		b, _ := json.Marshal(forDevice(la.shownState, devicePrefs(d.Prefs), la.shownStats))
 		la.sent[device], la.sentAt[device] = b, la.shownAt.Add(fleetOpenFresh-fleetRefresh)
 	} else {
@@ -475,11 +498,13 @@ func (la *liveActivities) markSent(device string, dst FleetState, now time.Time,
 	return true
 }
 
-// flush pushes st to every device that wants the activity: update a running one, or start one (once per episode).
+// flush pushes st to every device that wants the activity: update a running one, or start one (once per episode,
+// and at most once per fleetRefresh rolling window, atomically persisted across hub restarts and overlapping slots).
 // A device whose own version did not change (the change was something it does not show) is skipped unless forced; one
 // whose app is open is not pushed (it draws the activity itself); one pushed less than fleetMinGap ago gets an ordinary
-// change later: next is when the first of those is due (zero: none).
-func (la *liveActivities) flush(st FleetState, urgent, force bool) (next time.Time) {
+// change later: next is when the first of those is due (zero: none). A settings refresh
+// names only its devices and bypasses their gap, not their content deduplication.
+func (la *liveActivities) flush(st FleetState, urgent, force bool, settingsDevices ...string) (next time.Time) {
 	if la.h.isMember() { // the center pushes the group's Live Activity; a member's devices are the center's now
 		return time.Time{}
 	}
@@ -520,6 +545,9 @@ func (la *liveActivities) flush(st FleetState, urgent, force bool) (next time.Ti
 	// whose agents the activity counts (one manager's: fleetLiveOf): a device that muted it gets no start alert
 	_, stats, from := la.h.fleetLiveOf()
 	for _, r := range rows {
+		if len(settingsDevices) > 0 && !slices.Contains(settingsDevices, r.DeviceID) {
+			continue
+		}
 		d, ok := la.h.push.device(r.DeviceID)
 		if !ok {
 			continue
@@ -532,13 +560,17 @@ func (la *liveActivities) flush(st FleetState, urgent, force bool) (next time.Ti
 		if showsNothing(dst) {
 			continue // only the assistant answering, not on this island: ended by tick like an empty fleet
 		}
+		if la.h.phoneOpen(r.DeviceID) {
+			if r.PushToken != "" && now.Sub(r.StartedAt) < fleetMaxAge {
+				la.markSent(r.DeviceID, dst, now, false) // what its app just drew from the fleet event
+			}
+			// No update token yet: the foreground app starts its own activity.
+			// Do not consume this episode's push-start opportunity until it leaves.
+			continue
+		}
 		switch {
 		case r.PushToken != "" && now.Sub(r.StartedAt) < fleetMaxAge:
-			if la.h.phoneOpen(r.DeviceID) {
-				la.markSent(r.DeviceID, dst, now, false) // what its app just drew from the fleet event
-				continue
-			}
-			if due, wait := la.notYet(r.DeviceID, dst, now, urgent || force); wait {
+			if due, wait := la.notYet(r.DeviceID, dst, now, urgent || force || len(settingsDevices) > 0); wait {
 				if next.IsZero() || due.Before(next) {
 					next = due
 				}
@@ -551,20 +583,73 @@ func (la *liveActivities) flush(st FleetState, urgent, force bool) (next time.Ti
 		case r.PushToStartToken != "" && !fleetEmpty(st) && st.Phase != "done":
 			la.mu.Lock()
 			already := la.started[r.DeviceID] == episode
+			la.mu.Unlock()
+			if already {
+				continue
+			}
+			observed, _ := json.Marshal(la.snapshot())
+			due, claimed := la.claimStart(r, now)
+			if !claimed {
+				if !due.IsZero() && (next.IsZero() || due.Before(next)) {
+					next = due
+				}
+				continue
+			}
+			// Token registration or foreground entry during the database call wins.
+			// The spent budget is deliberately not refunded: a crash or ambiguous
+			// delivery must not let the other blue-green process start again.
+			la.mu.Lock()
+			current := la.rows[r.DeviceID]
+			la.mu.Unlock()
+			latest, _ := json.Marshal(la.snapshot())
+			currentDevice, present := la.h.push.device(r.DeviceID)
+			valid := current == r && bytes.Equal(observed, latest) && present && bytes.Equal(currentDevice.Prefs, d.Prefs)
+			if !valid || la.h.phoneOpen(r.DeviceID) {
+				la.h.logf("live activity start suppressed: reason=state_changed device=%s due=%s", trafficIdentity(r.DeviceID), due.UTC().Format(time.RFC3339))
+				if next.IsZero() || due.Before(next) {
+					next = due
+				}
+				continue
+			}
+			la.mu.Lock()
 			la.started[r.DeviceID] = episode
 			la.mu.Unlock()
-			if !already {
-				la.markSent(r.DeviceID, dst, now, true)
-				// "Phone Muted" while a desktop is online, the device's quiet hours (quiethours.go), or the device turned off
-				// the pushes of the manager whose agents it counts (NotifyPrefs.MutedManagers): the activity still starts,
-				// without its alert (desktops.go).
-				quiet := prefs.MuteWhileDesktop && la.h.push.desktopOnline != nil && la.h.push.desktopOnline() ||
-					la.h.push.inQuiet(prefs) || prefs.mutes(from)
-				la.sendStart(d, r, startPayloadIn(la.h.userLang(), dst, now, quiet))
-			}
+			la.markSent(r.DeviceID, dst, now, true)
+			// "Phone Muted" while a desktop is online, the device's quiet hours (quiethours.go), or the device turned off
+			// the pushes of the manager whose agents it counts (NotifyPrefs.MutedManagers): the activity still starts,
+			// without its alert (desktops.go).
+			quiet := prefs.MuteWhileDesktop && la.h.push.desktopOnline != nil && la.h.push.desktopOnline() ||
+				la.h.push.inQuiet(prefs) || prefs.mutes(from)
+			la.sendStart(d, r, startPayloadIn(la.h.userLang(), dst, now, quiet))
 		}
 	}
 	return next
+}
+
+// claimStart authorizes only push-to-start, never ordinary alerts or activity updates.
+// Persist before sending; without storage (or on any error) fail closed and retry
+// with the latest snapshot. A timer carries no payload or token across episodes.
+func (la *liveActivities) claimStart(r db.LiveActivity, now time.Time) (time.Time, bool) {
+	retry := now.Add(fleetMinGap)
+	if la.h.store == nil {
+		la.h.logf("live activity start deferred: reason=store_unavailable device=%s due=%s", trafficIdentity(r.DeviceID), retry.UTC().Format(time.RFC3339))
+		return retry, false
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), la.storeTimeout)
+	defer cancel()
+	due, claimed, err := la.h.store.ClaimLiveActivityStart(ctx, r.DeviceID, r.PushToStartToken, now, fleetRefresh, fleetMaxAge)
+	if err != nil {
+		la.h.logf("live activity start deferred: reason=claim_failed device=%s due=%s error=%v", trafficIdentity(r.DeviceID), retry.UTC().Format(time.RFC3339), err)
+		return retry, false
+	}
+	if !claimed {
+		reason := "token_changed"
+		if !due.IsZero() {
+			reason = "rolling_cooldown"
+		}
+		la.h.logf("live activity start deferred: reason=%s device=%s due=%s", reason, trafficIdentity(r.DeviceID), due.UTC().Format(time.RFC3339))
+	}
+	return due, claimed
 }
 
 func (la *liveActivities) endAll() { la.end(nil) }

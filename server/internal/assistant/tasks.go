@@ -91,10 +91,15 @@ const (
 	feedTask     = "task"     // ref: the todo id
 	feedAnswered = "answered" // ref: the todo id; body: answeredBody (answered.go)
 	feedReceipt  = "receipt"  // ref: the todo id; body: title, state, summary, pr, machine
-	feedRouted   = "routed"   // ref: the todo id; body: text, interrupted (agent_interrupt stopped its turn first)
+	feedRouted   = "routed"   // ref: the todo id; body: text, interrupted (agent_interrupt stopped its turn first), from
 	feedReport   = "report"   // ref: the todo id; body: reportBody (a supervised task's agent reported, agent_control.go)
 	feedMessage  = "message"  // ref: the inbox item id; body: MessageCard (a message about a task, with its draft reply)
 )
+
+// routedFromAssistant is a routed item's from when Persona wrote it to the task's agent (agent_send with a task,
+// agent_interrupt's then, a rework): the apps draw it folded, as Persona's, not as the user's bubble (#1542). What the
+// user sent (a task card's Message, a decision relayed from Lark) has no from.
+const routedFromAssistant = "assistant"
 
 const trustSetting = "tasks.trust"
 

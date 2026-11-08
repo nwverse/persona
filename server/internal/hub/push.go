@@ -30,9 +30,10 @@ const kindMac = "mac"
 type apnsConfig = apns.Config
 
 type Pusher struct {
-	dir   string
-	store Store
-	logf  func(string, ...any)
+	dir     string
+	store   Store
+	logf    func(string, ...any)
+	traffic func(trafficKey, int64, time.Duration)
 	// direct: the hub's own APNs key. Set, every push goes straight to APNs as before; nil, through the relay.
 	direct *apns.Client
 	relay  *http.Client

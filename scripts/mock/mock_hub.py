@@ -3025,7 +3025,7 @@ if MOCK_TASKS:
             _feed("feed_r1", 4, "report", "todo_task_tests", {"kind": "question", "text": "Mock 用协议注入还是保留单例？\n协议注入要改 6 个文件。",
                                                              "evidence": ["https://github.com/example/weather/pull/42"]}),
             _feed("feed_r3", 3.5, "report", "todo_task_tests", {"kind": "question", "text": "统一用 snake_case 还是 camelCase 命名新接口？", "later": True}),
-            _feed("feed_r2", 3, "routed", "todo_task_tests", {"text": "用协议注入，先改网络层那 6 个文件", "interrupted": True}),
+            _feed("feed_r2", 3, "routed", "todo_task_tests", {"text": "用协议注入，先改网络层那 6 个文件", "interrupted": True, "from": "assistant"}),
         ]
     # MOCK_TASKS_PENDING_REVIEW=1: the Today card lists the stopped release-notes task waiting for review (#4889).
     if os.environ.get("MOCK_TASKS_PENDING_REVIEW") == "1":
@@ -3104,6 +3104,48 @@ if MOCK_TASKS:
         _base = min(x["seq"] for x in ITEMS[ASK1])
         for _i, _x in enumerate(ITEMS[ASK1]):
             _x["seq"] = _base + _i
+    # MOCK_TASKS_SENT=1: what Persona sent to its tasks' agents (`routed` with from "assistant", #1542), last in the
+    # conversation: a long hand-off to a running agent right after its task's card (agent_send with task: the card
+    # takes it in), a rework sent to the widget fix whose card is far above (one folded line), and the user's own word
+    # to the unit tests' task (still the user's bubble).
+    if os.environ.get("MOCK_TASKS_SENT") == "1":
+        MEMORY = "a1f3c2d4-0000-4000-8000-0000000000e1"
+        SESSIONS.append(sess("macbook", MEMORY, "降低后台同步的内存占用", "/Users/me/code/weather", "working", "working", "weather", 1,
+                             "memory", 5, 0.5, "在 Instruments 里复现内存峰值。"))
+        ITEMS[MEMORY] = [it("assistant", "text", 0.5, text="在 Instruments 里复现内存峰值。")]
+        _mem = _task_todo("todo_task_memory", "降低后台同步的内存占用", "", "macbook", MEMORY, "/Users/me/code/weather", 1.05, "")
+        _mem["supervision"] = {"supervisor": ASK1, "done_when": ["峰值内存降一半以上", "30 分钟后台同步不被系统杀掉"], "state": "",
+                               "round": 0, "reviews": [], "updated_at": ago(minutes=1)}
+        TODOS_INIT.append(_mem)
+        TODOS.append(copy.deepcopy(_mem))
+        _handoff = ("把 weather 后台同步进程的常驻内存降下来，目标是不再因为内存压力被系统杀掉。\n\n背景：\n"
+                    "- 最近一周后台同步在 iPhone 上被系统杀了 14 次，崩溃日志在 ~/Library/Logs/weather/\n"
+                    "- 峰值出现在一次拉取 300 张以上的缩略图时\n\n要做的：\n"
+                    "1. 先用 Instruments 的 Allocations 复现，记下峰值和主要占用\n"
+                    "2. 缩略图改成按需、分批解码，解码后的位图不要整批留在内存里\n"
+                    "3. 网络层的响应体改成流式写盘，不要整段读进内存\n"
+                    "4. 加一个内存压力的回归测试（模拟 500 张图）\n"
+                    "5. 改完在真机上跑 30 分钟后台同步，截图贴进 PR\n\n完成标准：\n"
+                    "- 峰值内存比现在降一半以上\n- 30 分钟内没有被系统杀掉\n- PR 里有改前改后的 Allocations 截图\n\n"
+                    "有拿不准的先用 report_to_supervisor 问我，不要自己猜。")
+        _rework = ("（督办：验收没通过，第 1 轮返工，最多 2 轮）\n逐条验收：\n- ✅ PR 合并到 master\n- ❌ 横屏截图贴进 PR：只有竖屏截图\n"
+                   "要你做的：\n补一张横屏的截图贴进 PR，再告诉我。")
+        ITEMS[ASK1] += [it("user", "text", 1.3, text="后台同步老是被系统杀掉，让 MacBook 上 weather 那边开个 Agent 盯着把内存降下来")]
+        ITEMS[ASK1] += tool("mcp__persona__agent_send", {"machine": "macbook", "session_id": MEMORY, "text": _handoff,
+                                                         "task": {"title": "降低后台同步的内存占用"}},
+                            "Sent to the agent on MacBook. It is now your task todo_task_memory.", 1.1)
+        ITEMS[ASK1] += [it("assistant", "text", 1.0, text="交给 MacBook 上的 Agent 了，按两条完成标准督办，有进展我告诉你。")]
+        ITEMS[ASK1].sort(key=lambda x: x["ts"])
+        _base = min(x["seq"] for x in ITEMS[ASK1])
+        for _i, _x in enumerate(ITEMS[ASK1]):
+            _x["seq"] = _base + _i
+        TASK_FEED[ASK1] += [
+            _feed("feed_s1", 1.05, "task", "todo_task_memory"),
+            _feed("feed_s2", 1.0499, "routed", "todo_task_memory", {"text": _handoff, "from": "assistant"}),
+            _feed("feed_s3", 0.6, "routed", "todo_task_widget", {"text": _rework, "from": "assistant"}),
+            _feed("feed_s4", 0.4, "routed", "todo_task_tests", {"text": "先补重试和超时，缓存层下周再说"}),
+        ]
+        TASK_FEED[ASK1].sort(key=lambda x: x["at"])
     # MOCK_TASKS_CUT=1: the model service cut the release-notes task off (#1516): its agent's last words are the API
     # error (the hub's turn_error) and its receipt is interrupted; "Continue" (POST …/retry) makes it work and then finish.
     if os.environ.get("MOCK_TASKS_CUT") == "1":
@@ -9154,9 +9196,10 @@ MOCK_TREE = {
     "notes.txt": "Remember to water the plants.\n",
 }
 MOCK_REPO = "code/weather"
-# MOCK_REVIEW=1 (#151): git/review answers for this checkout (mock_review.py), with the files its review shows on disk
-REVIEW = bool(os.environ.get("MOCK_REVIEW"))
-if REVIEW:
+# MOCK_REVIEW=1 (#151): git/review answers for this checkout (mock_review.py), with the files its review shows on disk.
+# Not `REVIEW`: that is the PR #42 review agent's session id, which later code (MOCK_AGENT_LIVE, MOCK_IMAGES…) still uses.
+GIT_REVIEW = bool(os.environ.get("MOCK_REVIEW"))
+if GIT_REVIEW:
     sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
     import mock_review
     for _k, _v in {"/Sources/App/Forecast.swift": mock_review.FORECAST_NEW, "/Sources/App/Units.swift": "import Foundation\n\nlet celsius = UnitTemperature.celsius\n",
@@ -9443,7 +9486,7 @@ def mock_files(p, q):
     parts = p.split("/")
     if not (p.startswith("/api/v1/machines/") and len(parts) >= 6): return None
     mid, what = parts[4], "/".join(parts[5:])
-    if what not in ("file", "fs", "fs/find", "git/status", "git/diff", "git/show", "git/log", "git/branches", "git/pr") and not (what == "git/review" and REVIEW): return None
+    if what not in ("file", "fs", "fs/find", "git/status", "git/diff", "git/show", "git/log", "git/branches", "git/pr") and not (what == "git/review" and GIT_REVIEW): return None
     if not machine_online(mid): return {"error": "%s: machine is offline" % mid}, 503
     arg = lambda k: (q.get(k) or [""])[0]
     if what == "fs/find":  # #2438: every file under cwd, shallow first (the node's walk / git ls-files)
@@ -11352,7 +11395,7 @@ def cua_config(pl):
 
 
 _PLUGIN_VIEW = ["id", "name", "kind", "status", "error", "version", "source", "enabled", "description", "contributes", "needs_setup", "warnings",
-                "auto_upgrade", "upgrade", "upgrade_note", "nodes"]
+                "auto_upgrade", "auto_upgrade_paused", "upgrade", "upgrade_note", "nodes"]
 
 # ---------- MOCK_EXTENSIONS: declarative UI (docs/extensions/extensions.md "Declarative UI") ----------
 # example-gateway draws a page (plugin_page "home") and a section on every launcher's page (launcher_section "panel"),
@@ -11640,8 +11683,25 @@ def _catalog_item(c):
 
 # Auto-upgrade (docs/extensions/extensions.md "Automatic upgrades"): example-gateway, from a market at 1.0.0, has 1.1.0 there asking for one more
 # host. MOCK_PLUGIN_UPGRADE picks how it stands: needs_permission (default), waiting_idle, skipped, upgraded (the last
-# one went in by itself), none.
+# one went in by itself), disabled (switched off: auto-upgrade paused, its own switch kept), none.
 AUTO_UPGRADE = {"auto": True}
+# A market plugin's upgrade while it is on, put back when it is switched on again (_auto_upgrade_paused).
+_UPGRADE_WHILE_ON = {}
+
+
+def _auto_upgrade_paused(pl):
+    """A market plugin switched off is not upgraded, as the hub says: auto_upgrade_paused, its newer version "off" (its
+    own switch stays); switched on again, both are as before."""
+    if pl.get("auto_upgrade") is None:
+        return
+    pl["auto_upgrade_paused"] = None if pl["enabled"] else "disabled"
+    up = pl.get("upgrade")
+    if not pl["enabled"] and up and pl["id"] not in _UPGRADE_WHILE_ON:
+        _UPGRADE_WHILE_ON[pl["id"]] = up
+        pl["upgrade"] = {k: v for k, v in up.items() if k != "added_permissions"} | {
+            "state": "off", "detail": "扩展已关闭，自动升级暂停；重新打开后恢复你原来的设置"}  # i18n-ignore: the hub's words
+    elif pl["enabled"] and pl["id"] in _UPGRADE_WHILE_ON:
+        pl["upgrade"] = _UPGRADE_WHILE_ON.pop(pl["id"])
 
 
 def _gateway_upgrade(state):
@@ -11656,10 +11716,14 @@ def _gateway_upgrade(state):
         up["detail"] = "插件正在用"
     elif state == "skipped":
         pl["upgrade_note"] = {"kind": "rolled_back", "from": "1.0.0", "to": "1.1.0", "detail": "exited with status 3", "at": at(5)}
-    if state in ("needs_permission", "waiting_idle", "skipped"):
+    if state in ("needs_permission", "waiting_idle", "skipped", "disabled"):
         pl["upgrade"] = up
     elif state == "upgraded":
         pl["upgrade_note"] = {"kind": "upgraded", "from": "0.9.0", "to": "1.0.0", "at": at(3)}
+    if state == "disabled":
+        up["state"] = "available"
+        pl["enabled"], pl["status"] = False, "disabled"
+        _auto_upgrade_paused(pl)
 
 
 _gateway_upgrade(os.environ.get("MOCK_PLUGIN_UPGRADE", "needs_permission"))
@@ -12279,6 +12343,7 @@ def plugins_route(handler, p, body):
     elif rest == ["enabled"] and method == "PUT":
         pl["enabled"] = bool(req.get("enabled"))
         pl["status"] = "disabled" if not pl["enabled"] else ("needs_setup" if pl["source"] == "installed" else "running")
+        _auto_upgrade_paused(pl)
     elif rest == ["config"] and method == "PUT":
         cfg = req.get("config") or {}
         if pl["id"] == "example-gateway-quota":
@@ -12701,7 +12766,7 @@ class H(BaseHTTPRequestHandler):
             git = (q.get("git") or [""])[0] == "1"
             if git: FS_STATE["dirty"] += 1
             return self.send_json({"ok": True, "sent": fs_changed(mid, [path] if add else [], git), "path": path})
-        if p == "/mock/review" and REVIEW:
+        if p == "/mock/review" and GIT_REVIEW:
             return self.send_json(mock_review.control(q))
         if p == "/mock/git-write" and os.environ.get("MOCK_GIT_WRITE"):
             global GIT_W

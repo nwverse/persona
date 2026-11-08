@@ -211,3 +211,16 @@ func TestDeleteIdleSessions(t *testing.T) {
 		t.Fatalf("a session waiting for an answer is listed: %s", got)
 	}
 }
+
+// shown hands back the list itself when it leaves nothing out (most pushes: a copy was ~200 KB for a busy machine), and
+// otherwise a new list, the given one untouched.
+func TestShownCopiesOnlyToLeaveOut(t *testing.T) {
+	h := newTestHub(t)
+	list := []proto.Session{{SessionID: "a"}, {SessionID: "b", Archived: true}, {SessionID: "c"}}
+	if got := h.shown("box", list[:1]); len(got) != 1 || &got[0] != &list[0] {
+		t.Fatalf("nothing left out, copied: %v", got)
+	}
+	if got := h.shown("box", list); len(got) != 2 || got[1].SessionID != "c" || &got[0] == &list[0] || list[1].SessionID != "b" {
+		t.Fatalf("archived row: shown %v, list %v", got, list)
+	}
+}
