@@ -30,7 +30,7 @@ func TestProviderProtocolProbe(t *testing.T) {
 					if r.Header.Get("Accept") != "text/event-stream" {
 						t.Errorf("accept: %s", r.Header.Get("Accept"))
 					}
-					_, _ = w.Write([]byte("data: {\"choices\":[{\"finish_reason\":\"stop\"}]}\n\n"))
+					_, _ = w.Write([]byte("data: {\"choices\":[{\"delta\":{\"content\":\"pong\"},\"finish_reason\":\"stop\"}]}\n\n"))
 				}
 				if strings.HasSuffix(r.URL.Path, "/responses") {
 					if r.Header.Get("Accept") != "text/event-stream" {
@@ -239,10 +239,13 @@ func TestChatProbeRejectsUnfinishedStreams(t *testing.T) {
 		`{"error":"not a stream"}`,
 		`data: {"error":{"message":"failed"}}` + "\n\n",
 		`data: {"choices":[{"delta":{"content":"partial"}}]}` + "\n\n",
-		`data: {"choices":[{"index":1,"finish_reason":"stop"}]}` + "\n\n",
+		`data: [DONE]` + "\n\n",
+		`data: {"choices":[{"finish_reason":"stop"}]}` + "\n\n",
+		`data: {"choices":[{"delta":{"content":"  "}}]}` + "\n\ndata: [DONE]\n\n",
+		`data: {"choices":[{"index":1,"delta":{"content":"other"},"finish_reason":"stop"}]}` + "\n\ndata: [DONE]\n\n",
 		`data: {"choices":[{"finish_reason":"content_filter"}]}` + "\n\n",
 		`data: {"choices":[{"delta":{"refusal":"No"}}]}` + "\n\n",
-		`data: {"choices":[{"finish_reason":"stop"}]}` + "\n\ndata: {\"error\":{\"message\":\"failed\"}}\n\n",
+		`data: {"choices":[{"delta":{"content":"partial"},"finish_reason":"stop"}]}` + "\n\ndata: {\"error\":{\"message\":\"failed\"}}\n\n",
 		`data: {invalid}` + "\n\n",
 	} {
 		if chatProbeCompleted(strings.NewReader(body)) {
@@ -251,11 +254,23 @@ func TestChatProbeRejectsUnfinishedStreams(t *testing.T) {
 	}
 }
 
+func TestChatProbeRejectsEmptyResponse(t *testing.T) {
+	gw := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte("data: [DONE]\n\n"))
+	}))
+	defer gw.Close()
+	s, _ := launcherTestService(t)
+	out := s.providerTest(i18n.With(context.Background(), i18n.En), probeInput{BaseURL: gw.URL, Model: "m", API: "chat"})
+	if out["ok"] != false || out["error"] == nil {
+		t.Fatalf("empty response reported success: %v", out)
+	}
+}
+
 func TestChatProbeCompleted(t *testing.T) {
 	for _, body := range []string{
-		`data: [DONE]` + "\n\n",
-		`data: {"choices":[{"index":0,"finish_reason":"length"}]}` + "\n\n",
-		`data: {"choices":[{"index":0,"finish_reason":"stop"}]}` + "\n\ndata: {\"choices\":[],\"usage\":{}}\n\n",
+		`data: {"choices":[{"delta":{"content":"pong"}}]}` + "\n\ndata: [DONE]\n\n",
+		`data: {"choices":[{"index":0,"delta":{"content":"pong"},"finish_reason":"length"}]}` + "\n\n",
+		`data: {"choices":[{"index":0,"delta":{"content":"pong"},"finish_reason":"stop"}]}` + "\n\ndata: {\"choices\":[],\"usage\":{}}\n\n",
 	} {
 		if !chatProbeCompleted(strings.NewReader(body)) {
 			t.Fatalf("rejected %q", body)

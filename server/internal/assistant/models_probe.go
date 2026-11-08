@@ -383,7 +383,7 @@ func responsesProbeCompleted(body io.Reader) bool {
 func chatProbeCompleted(body io.Reader) bool {
 	sc := bufio.NewScanner(io.LimitReader(body, 8<<20))
 	sc.Buffer(make([]byte, 64<<10), 4<<20)
-	finished := false
+	finished, hasText := false, false
 	for sc.Scan() {
 		data, ok := strings.CutPrefix(sc.Text(), "data:")
 		if !ok {
@@ -391,7 +391,7 @@ func chatProbeCompleted(body io.Reader) bool {
 		}
 		data = strings.TrimSpace(data)
 		if data == "[DONE]" {
-			return true
+			return hasText
 		}
 		var event struct {
 			Error   json.RawMessage `json:"error"`
@@ -399,6 +399,7 @@ func chatProbeCompleted(body io.Reader) bool {
 				Index        int    `json:"index"`
 				FinishReason string `json:"finish_reason"`
 				Delta        struct {
+					Content string `json:"content"`
 					Refusal string `json:"refusal"`
 				} `json:"delta"`
 			} `json:"choices"`
@@ -413,10 +414,11 @@ func chatProbeCompleted(body io.Reader) bool {
 			if choice.FinishReason == "content_filter" || choice.Delta.Refusal != "" {
 				return false
 			}
+			hasText = hasText || strings.TrimSpace(choice.Delta.Content) != ""
 			finished = finished || choice.FinishReason != ""
 		}
 	}
-	return finished && sc.Err() == nil
+	return hasText && finished && sc.Err() == nil
 }
 
 // providerDiscover: GET <base>/v1/models, its models filled in from the catalog.
