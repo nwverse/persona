@@ -1,5 +1,29 @@
 # Lessons: hub / node and networking
 
+## A failed swap must not look like a new install
+
+`update.SwapProgram` recorded `Prev: ""` when copying the old program to `.prev` or putting the new build in place failed, and `Prev: ""` is how a swap says the program was new, so going back deleted a program the failed swap had never touched.
+A failing step reports what it actually changed: `copyFile` writes `.new` and renames, so a failed swap changed nothing (the zero `Swapped`, which `RestoreAll` skips) or only wrote `.prev` (putting that back is harmless).
+Don't add a `pending.json` field for it: older edges and watchdogs read the same file and know only `Prev == ""`.
+
+## Extension public identity is not storage or token authority (#1493)
+
+- An ID rename is not uninstall/reinstall: deleting the old row cascades secrets and node data. Keep the original storage primary key and directories, and commit public names, aliases, version and previous provenance atomically with compare-and-swap guards.
+- Source declarations reserve no names by themselves. Only an actual same-market, explicitly confirmed transition creates historical aliases. Validate the complete catalog graph, not a filtered list of declarations; a predecessor still present as a current entry is a collision even without a cycle.
+- Human compatibility lookup and program authentication differ. Resolve old owner-facing requests to the committed installation, but authenticate callbacks/tokens against exact public identity and current runtime generation. Internal model purposes and knowledge owners need the stable key too; do not fix only data and secrets.
+- Rollback keeps historical aliases; a successor alias is not a currently installed successor. Catalog presentation uses exact public IDs, while final conflict guards allow an alias only when it belongs to the same stable slot. Test the full rename → rollback → confirmed re-upgrade path, not just first migration.
+- Probe capabilities before sending identity-changing node messages. An old node can silently ignore extra fields and delete the absent old ID's data. New nodes retain slot/revision tombstones for stale messages, while authenticated fresh reinstall must establish its new binding rather than be permanently rejected.
+- Node identity revisions and installation generations must use Postgres timestamp precision before the first bind. Raw Go nanoseconds are truncated to microseconds on storage; after a reload, a node would reject that lower revision or mistake the installation time for a new generation. Normalize both fields and test before/after database precision, not only whole-second fixtures.
+- Persistent hook ownership must remain recognizable to the rollback binary. Stop and join the old process's heartbeat and cleanup before starting the replacement; a late cleanup can remove the new hook even when the database migration is correct.
+
+## Mail account writes publish only committed candidates (#1302)
+
+Whole-account snapshots need one guard covering candidate capture, storage and publication across adds, OAuth
+upserts, imports, deletes and refresh-token rotation. Publishing first and rolling back later lets an unrelated
+successful write persist rejected credentials or a failed deletion. Copy nested OAuth credentials, keep network
+verification outside that guard, and retire health and cached connections only after the write succeeds. Concurrency
+regressions should park a second writer at the guard and check restart agreement, rather than require it to enter storage.
+
 ## Distant spreadsheet dates exceed time.Duration (#1061)
 
 `time.Time.Sub` saturates at roughly 290 years, so XLSX dates after the duration limit all became the same serial. Subtract Unix seconds for parsed calendar dates, retaining the existing wall-clock normalization. Verify the emitted worksheet XML, including distant leap years, time fractions, offsets and text cells; a valid ZIP/XML structure alone does not prove date values are correct.
@@ -23,6 +47,29 @@ not replace a live session notification received while that RPC was in flight. A
 and a local session revision protect that boundary without changing the node protocol.
 
 Pitfalls, odd behavior, and the trade-offs made at the time (formerly "Lessons" in `CLAUDE.md`; index in `docs/lessons/README.md`). Add new lessons to the relevant section, or create one if none fits.
+
+## One silent address must not take the whole dial (2026-11-08, #1181)
+
+A name with several addresses, dialed one at a time with one long timeout, fails as soon as the first address drops SYNs: the attempt sits until the
+caller's budget runs out and the working addresses are never tried. curl and browsers move on, so the same URL "works everywhere else". On one host a
+news site's first IPv4 addresses often never answered while its IPv6 one always did, and most reads through the source runtime broker failed at the
+extension's own 15-second request budget. Race the already checked addresses (`dialRace`): interleave families, a short attempt delay, bounded
+attempts, losers closed. Do not reach for `net.Dialer.FallbackDelay` here: it resolves the name itself, which would dial addresses the egress checks
+never saw. Making room by canceling an old attempt must give its address another turn later, or the only address that answers slowly is lost. A real
+dialer's own timeout at the request's deadline can arrive before the context reports it, as an "i/o timeout" that is not `context.DeadlineExceeded`:
+decide by the deadline, not by the attempts' errors. Test the scheduling with a fake dialer in a `testing/synctest` bubble, whose clock makes the
+order and timing of attempts exact; it proves nothing about real sockets' error identities, so keep a real-socket test for those (a loopback listener
+with a full accept queue never answers a SYN on Linux).
+
+## Approved official-market pins outlive built-in constants (#1157)
+
+Changing a compiled public key does not update a pin already saved in Postgres, and the registration marker can hide that difference. Migrate only explicitly recognized retired official pins, including every recognized repository or HTTPS alias; never infer trust from a downloaded catalog or replace an unknown owner choice. Save the legacy registration marker before migration so a removed market stays removed. A failed pin write must keep loading retryable.
+
+For embedded signatures, retain the complete envelope and verify the exact decoded payload bytes on restart. Postgres JSONB may normalize the outer envelope without changing those bytes; compare the decoded payload, not the envelope's formatting. A legacy detached payload or stale cached signed flag must not authorize installation. Cache quarantine can legitimately write the old record before pin migration: inject failure specifically on the new-pin write, rather than claiming a generic cache-write error proves migration retry. Keep every HTTP fixture local, including automatic refreshes of quarantined caches. Observe successful catalog delivery in rejection tests as well as `errors.Is(err, extension.ErrCatalogUnverified)`. `ErrCatalogUnavailable` must not lift a rotated cache's quarantine, and it must preserve the new key's catalog once that envelope has genuinely verified. Never infer these categories from localized message text.
+
+## A socket systemd passes reaches every child unless it is taken first (2026-11-08)
+
+Sockets passed by socket activation (`LISTEN_FDS`, descriptors 3 and up) are not close-on-exec, and Go's `os/exec` does not close what is not: every process started before the hub marks them is handed the hub's listening port, and hands it on to everything it starts in turn. The hub without its edge marked them only when it first listened, and it could start the built-in manager before that; the manager, the local node, extension programs and the agents the node started then all held the hub's listening socket (several pids on `ss -tlnp` for the hub's port). Take what a process was handed first thing, before anything can start a child (`claimInherited`, `osproc.SealInherited`); hand a child a descriptor only through `exec.Cmd.ExtraFiles`. Never seal in `main` of a binary whose helper commands hand descriptors on by exec (the sandbox's launcher passes its mount data to bwrap that way).
 
 ## A fixed name in the temp folder is shared on Linux (2026-11-07, #66)
 
@@ -66,6 +113,10 @@ Revocation ended pairing codes with `expires_at = now()` (Postgres's clock) whil
 
 - The write gate reads a call's arguments into a map and compares field names exactly. A connector that decodes the same bytes into a struct with `encoding/json` matches a name without regard to its case (Unicode simple folding), and a field given more than once does not simply resolve to its last value: a `null` is ignored, and an object or an array is decoded onto what the earlier one left. A rule judged on the gate's reading can therefore be wrong about what the connector will do, so the two have to compare names, and resolve repeats, the same way.
 - When a decision is made on arguments that another decoder reads later, compare names the way that decoder does, and refuse the call where the readings can still differ rather than ranking them rule by rule. `connector.Decide` refuses a call that gives a field more than once, the same name or one that folds to it (`repeatedField`, top level only), and a deny or confirm compares names without regard to capitals (`matchFieldsAny`) while an allow keeps the exact reading, so a rule that lets a call through is never wider than one that refuses or asks. Test the folding against `encoding/json` itself (`TestTwoSpellingsAreWhatTheDecoderFolds`), not against a list of cases. A gate that matches a body before some other service decodes it (the node's Feishu gate) depends on that service's rules and is not covered.
+
+## Bracketed registry hosts (#1324)
+
+Splitting a registry at its first colon reads `[::1]:5000` as `[`, selecting HTTPS for a local HTTP registry. Extract the hostname with `url.URL.Hostname` and compare IPv6 addresses with `net.IP.Equal`; keep the original registry spelling and port in the request. Test compressed/expanded loopback, a real TCP6 request, and controls retaining external HTTPS and existing IPv4 behavior.
 
 ## Scrubbing patterns: Go tries regexp alternatives in order
 
@@ -406,6 +457,8 @@ home volume (docs/operations/link.md "Without systemd").
 
 ## Unified model configuration
 
+- A managed-provider read failure is not an empty list (#1365). Read the whole raw setting reliably before changing providers, deciding assignments or resolving deletion dependencies; preserve readable sealed records so users can explicitly replace or remove corrupt credentials. Keep the confirmed snapshot through nested model resolution under the configuration lock, and publish that same committed snapshot to nodes. Decrypt only where import matching or node publication needs credentials. Reconnects and profile/trust notifications must omit a replacement on read or credential errors, and a safe committed edit must log and defer unsafe publication; only a genuinely missing setting permits first creation. Regress with selective failures at individual reads while writes remain available, full sealed-record equality, zero writes or node pushes on rejection, and a healthy retry.
+
 - A "provider" isn't necessarily a runnable launcher: direct API configurations can't be sent to nodes or listed for new sessions; filter purpose selections by API / launcher / plugin capabilities. UI or `ANTHROPIC_MODEL` changes alone don't guarantee the model is used; shell launchers may clear environment variables. Verify argument forwarding and pass the model to the actual executor.
 - Model caches and process reuse must include an effective-config fingerprint: changing URL, credentials, or model under the same provider name must invalidate old translation results and warmed processes. Test both same-config hits and changed-config misses; a changed fake API endpoint isn't the same config.
 - Exact node model metadata and `node_sessions` must save atomically; use Postgres `settings` key `node_model.<machine>.<session>` with SQL CTE, no local JSON state. Single-purpose edits use database revision-conditional updates; PATCH read-modify-write isn't concurrency-safe by itself.
@@ -451,6 +504,17 @@ home volume (docs/operations/link.md "Without systemd").
 ## Knowledge base (docs/assistant/knowledge.md)
 
 - An asynchronous dedupe answer must recheck a user's split, record its verdict and merge under the same project-mutation lock as unmerge. The verdict-file mutex prevents lost JSON updates but cannot stop an already queued merge from reversing a completed split. A verdict write failure must stop the merge.
+- A checkpoint after append is a replay window (#1343): connector pages can repeat after a cursor failure, a later batch failure or a process interruption.
+  Preserve stable message IDs scoped by exact source and chat, including IDs such as `body` reused across threads. Formatted-text matching loses distinct messages;
+  in-memory sets and atomic cursors do not repair append/receipt/counter failures. Journal the intended file replacements before changing text, then recover them
+  before another writer reads counters or changes the same files. Test failure before and after every replacement with a fresh Store, and expire identities with
+  retained text and source deletion. Legacy text and missing IDs cannot supply identities they never recorded. Compression must compare pending counts too:
+  new IDs can share a timestamp or minute, so advancing coverage from time alone can skip concurrent messages. Success and refusal must share the snapshot gate,
+  and a new ID in an already settled minute must reopen it for processing. Acquire metadata before message files:
+  the existing project commit holds metadata while its frozen input reads the timeline under the message mutex, so the opposite order deadlocks ingestion.
+  Attachment filenames must hash the full raw ID, not sanitize or truncate it: punctuation, case and long suffixes can otherwise overwrite an earlier message's
+  attachment even when receipts correctly keep both IDs. Put new files in a separate day subdirectory so hash-shaped legacy names stay intact, keep legacy
+  links/files, and use separate anonymous filenames when no stable ID is supplied.
 - Enforce retention at write entry points, not only daily cleanup: initial archive reads "latest 100 messages", which in quiet sessions can reach years back;
   after cleanup, 47 expired day files reappeared 6 seconds later (production 2026-11-02). All day-file writes (`Archive`, `Ingest`, `WriteHistory`) share
   `Engine.textCutoff()` (midnight of the earliest retained day); cleanup uses `Engine.Prune`, with the same retention days. New write paths use it too. `TestArchiveKeepsToTheTextRetention` checks "cleanup immediately after writing should delete 0 days".
@@ -618,7 +682,8 @@ home volume (docs/operations/link.md "Without systemd").
 - **Resident node systemd units need the same PATH as hub**: local node formerly inherited hub unit `PATH=%h/.local/bin:…` as a child;
   separate `personad-node` used systemd's default PATH and missed herdr / claude in `~/.local/bin`. `node-launchd.sh` now writes the same PATH.
 - **Signal only the resident node's main process**: `systemctl --user kill -s HUP personad-node` defaults to the whole cgroup, sending SIGHUP to assistant claude and background commands too.
-  Use `--kill-whom=main` (`node-launchd.sh restart-idle`).
+  Use `--kill-who=main` (`node-launchd.sh restart-idle`): `--kill-whom=` is only systemd 252's new name, and systemd 241 / 245 reject it as an unknown option,
+  so the signal never goes out; deploy.sh ignores that failure, and the resident node stays on its old binary. Every version reads `--kill-who=`.
 - **During resident-node `exec`, `node --stdio` could take over the connection**: the socket file remains (`SetUnlinkOnClose(false)`) but refuses connections; old `Relay` interpreted this as no resident node,
   serving the connection itself and putting assistant chats back in hub's cgroup, killed on next restart. Now wait up to 8 s on refusal (`dialResident`).
 - **Shutdown "offline" broadcasts are false**: hub canceled ctx on SIGTERM, then disconnected machines broadcast offline `machines` and ended questions, so clients saw an offline cascade before disconnect.
@@ -643,6 +708,12 @@ home volume (docs/operations/link.md "Without systemd").
 
 - **Name limits differ by file system**: Linux takes 255 bytes per name, APFS 255 characters, so a 100-character Chinese name (300 bytes) lands on a Mac and is refused on Linux. A folder upload keeps the file's own name, so `beginInto` probes with `Lstat` and, on `ENAMETOOLONG`, shortens with `splitName` before any byte is sent (and refuses at begin if the shortened name is still too long for that file system). Before, begin accepted the name and the node only refused after the whole body (up to 2 GB) had been received. Windows is unchanged: Go does not surface `ENAMETOOLONG` there.
 - **Test with more than 255 characters**: a shorter multibyte name passes on a Mac and fails on Linux, so the test would mean different things locally and in CI.
+
+## Upload cancellation owns a terminal lifecycle (#1348)
+
+- Keep a busy upload in the registry: removing it during a chunk or finalization hides it from abort. Mark cancellation terminal under a per-upload lock, then let the active file owner close/remove the part after its I/O settles. Completion must never reinsert retired state, and disk I/O must stay outside the registry lock.
+- Stop idle timers when work starts and bind each new idle period to a generation. A callback already running when its timer is stopped must not cancel fresh activity. A short write is a failed upload, even when the writer returns no error.
+- Serialize cancellation with the final rename on that upload. Abort winning first prevents publication and removes any empty reservation; a successful rename commits the upload, so a later abort leaves it intact. Test chunk cancellation and end cancellation separately through real RPC with gated regular files. The hub returns after a canceled chunk and sends deferred abort; it does not normally send end afterward.
 
 ## ego cookies (2026-11-04, #1304)
 
@@ -943,6 +1014,10 @@ A verified download or unpacked binary is still temporary until its final rename
 
 `strconv.ParseFloat` accepts `NaN` and infinity without an error. Reject them when coercing formula text so existing `#VALUE!` and `IFERROR` behavior works instead of caching non-finite numbers. Verify generated workbook values, with numeric text, range references and lazy branches as controls.
 
+## Decimal rounding scales can overflow before the result does (#1335)
+
+`ROUND` can have a finite result even when its power of ten or scaled intermediate overflows. Bound places by the float64 range, split large positive scales for tiny inputs, and retain numbers whose rounding place is already below their precision. Only a genuinely overflowing rounded result becomes `#NUM!`. Test emitted XLSX caches, including subnormal values, large finite results, 15-digit ties and `IFERROR`.
+
 ## Database passwords need URI userinfo encoding (#6160)
 
 Query escaping turns spaces into plus signs, but URI userinfo decoding keeps a plus literal. Build credentials with `url.UserPassword`, and check the generated database URL with the actual driver's parser. Comparing a provisioning result against the same URL helper cannot detect this password change.
@@ -995,3 +1070,7 @@ Go's `http.Client` follows a 301, 302 or 303 as a GET for any method but GET and
 - A hub card snapshot can lag the manager's outcome. Resolve may return `200 already:true` for an earlier answer; a new notification choice must report `not_pending` rather than claim that its new selection took effect. A retry of the original operation instead replays its saved success receipt.
 - A dropped bus connection can wrap the offline error even after a request was sent. Notification choices use the send-aware forwarding path: only a definitely offline manager releases the receipt; a lost response keeps an unknown receipt so reconnecting cannot execute the same tap again.
 - Hub tests isolate `HOME` in `TestMain`. A subprocess such as the architecture guard's `go list -deps` can then lose the downloaded toolchain and module caches even though the parent `go test` compiled successfully. Before running tests with a downloaded `GOTOOLCHAIN`, export `GOPATH`, `GOMODCACHE` and `GOCACHE` from their original `go env` values; retain the isolated home rather than disabling it.
+
+## A source read newest first must not let an older entry replace a newer one
+
+A connector that folds several notifications into one thread (GitHub CI failures per repository and branch) read them newest first and let each replace the thread's thing, so the oldest one read won. It went unseen while the in-memory `seen` set skipped notifications already read; after every restart the whole unread backlog was read again, a few per poll, and the open item's time walked back by hours while its count rose once per step (#1527). Keep the newest per key by comparing times, never by reading order, and have the consumer ignore a step older than what it holds: a restart, a retry or a second page can each hand it an earlier one. Test it with a backlog larger than one poll's budget, read after a restart.

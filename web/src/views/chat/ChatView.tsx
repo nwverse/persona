@@ -20,7 +20,7 @@ import { agentsWorking, buildTaskIndex, stableSubagents, STOP_LOOP_MESSAGE, suba
 import { stabilizeLines, stableValue } from "../../lib/stable-lines";
 import { planProgress } from "../../lib/work-groups";
 import { echoed, taggedSeen } from "../../lib/echo";
-import { outboxKey, settleOutbox } from "../../lib/outbox";
+import { outboxKey, SENT_GRACE_MS, settleOutbox } from "../../lib/outbox";
 import { apiOp } from "../../lib/ops";
 import { conversationKey, pickedLauncher, pickedModel } from "../../lib/assistant-chat";
 import { unlinkAgentFromTodo } from "../../lib/todos";
@@ -312,8 +312,10 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
     if (!pending.length) return;
     setPending((ps) => {
       const shown = echoed(ps, users, (p) => ({ id: p.id, text: p.msg.text, images: p.msg.images, at: p.at }), claimed.current);
-      // one held back for an ultracode change waits as long as the turn does
-      return ps.filter((p) => !shown.has(p) && (p.waits || Date.now() - p.at < 30_000));
+      // a sent one waits for its copy while the agent works and SENT_GRACE_MS after, as the outbox and the apps do: the
+      // transcript can write it late (a long context compacted first, #1119); one held back for an ultracode change
+      // waits as long as the turn does
+      return ps.filter((p) => !shown.has(p) && (p.waits || state === "working" || Date.now() - p.at < SENT_GRACE_MS));
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [segs]);
@@ -1034,7 +1036,7 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
             </LiveClockContext.Provider>
             {!readOnly && shownPending.map((p) => (
               <div key={p.id} className="flex flex-col gap-3">
-                <UserBubble msg={p.msg} mid={mid} sid={sid} pending />
+                <UserBubble msg={p.msg} mid={mid} sid={sid} pending sendState="sending" />
               </div>
             ))}
             {!readOnly && <OutboxBubbles mid={mid} sid={sid} entries={outbox} />}
