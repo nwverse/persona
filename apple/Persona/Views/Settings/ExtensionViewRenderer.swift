@@ -19,10 +19,13 @@ struct ExtensionViewRenderer: View {
     @Binding var link: LinkTarget?
 
     var body: some View {
+        #if !os(macOS)
+        // Mac pages already expose the same search in their toolbar.
         if let search = view.search, let model, model.managesConfirmation {
             Section { ExtensionSearchRow(search: search, model: model, link: $link) }
                 .listRowInsets(EdgeInsets()).listRowBackground(Color.clear)
         }
+        #endif
         if let f = view.filter, let model {
             Section { ExtensionFilterChips(filter: f, model: model, link: $link) }
                 .listRowInsets(EdgeInsets())
@@ -515,7 +518,13 @@ struct ExtensionPageView: View {
     }
 
     private func updateVisibility() {
-        page.setVisible(pageVisible && tabActive && phase == .active)
+        var foreground = phase == .active
+        #if DEBUG && os(macOS)
+        // A validated loopback capture uses the normal stream while its window stays non-activating.
+        // This exception exists only for the DEBUG batch; production still requires an active scene.
+        foreground = foreground || MacExtensionSnapshotBatch.isCapturing
+        #endif
+        page.setVisible(pageVisible && tabActive && foreground)
     }
 
     private var form: some View {
