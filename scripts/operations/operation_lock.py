@@ -14,7 +14,7 @@ import sys
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "scripts"))
 from persona_config import load  # noqa: E402
-from persona_identity import data_dir  # noqa: E402
+from persona_identity import data_dir, service_environment  # noqa: E402
 
 # Deployments share a lock on the hub; releases share a lock on their build computer.
 REMOTE = r'''
@@ -63,9 +63,12 @@ def main():
                 host = machine.get("ssh", hub)
         if host:
             import shlex
+            prefix = subprocess.check_output(
+                [sys.executable, str(ROOT / "scripts/persona_identity.py"),
+                 "--service", "hub", "--prepare", "--prefix", "-"], text=True)
             remote = subprocess.Popen(
                 ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=15", host,
-                 "python3 -u -c " + shlex.quote(REMOTE)],
+                 prefix + "\npython3 -u -c " + shlex.quote(REMOTE)],
                 stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
             if not select.select([remote.stdout], [], [], 30)[0]:
                 raise RuntimeError("timed out acquiring the hub operation lock")
@@ -76,7 +79,7 @@ def main():
             if answer != "READY":
                 raise RuntimeError("could not acquire the hub operation lock")
         else:
-            path = (Path(data_dir()) / "releases/hub/.publish.lock" if args.name == "deploy"
+            path = (Path(data_dir(environment=service_environment(role="hub"))) / "releases/hub/.publish.lock" if args.name == "deploy"
                     else Path.home() / ".local/state/persona/locks/release.lock")
             path.parent.mkdir(parents=True, exist_ok=True)
             stream = path.open("a")

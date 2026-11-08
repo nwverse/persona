@@ -13,11 +13,15 @@ import urllib.request
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "scripts"))
-from persona_identity import data_dir  # noqa: E402
+from persona_identity import data_dir, service_environment  # noqa: E402
+
+
+def state_root():
+    return Path(data_dir(environment=service_environment(role="hub")))
 
 
 def api(path, payload=None):
-    cfg = json.loads((Path(data_dir()) / "hub.json").read_text())
+    cfg = json.loads((state_root() / "hub.json").read_text())
     port = cfg.get("listen", ":18660").rsplit(":", 1)[1]
     request = urllib.request.Request("http://127.0.0.1:" + port + "/api/v1/" + path,
                                     headers={"Authorization": "Bearer " + cfg["token"],
@@ -34,7 +38,7 @@ def status():
 
 
 def verify(commit, worktree):
-    root = Path(data_dir())
+    root = state_root()
     expected_version = subprocess.check_output(["git", "describe", "--always", "--dirty"], cwd=worktree, text=True).strip()
     expected_binary = worktree / "server/bin/personad-linux-amd64"
     deadline = time.monotonic() + 180
