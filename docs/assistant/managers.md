@@ -121,7 +121,7 @@ A manager keeps the computers it connects in its `manager.json` (`machines`, eac
 - **A start without the hub.** A manager whose hub hasn't answered within 20 seconds of its start connects the computers of its list, as the last hand-over had them; a hub that is up answers well within that (the built-in manager is started by its hub), so then nothing connects before the hub's hand-over. Local, ssh and tailcat computers work while the hub is away; Persona Link and connector computers need the hub anyway. It waits for the hub instead when the hub was in a mesh group at the last hand-over (which computers are this hub's to connect, and when, are the group's), and when the list is another hub's (the manager joined another hub since: its `hub_id` differs).
 - **When the hub comes.** Its hand-over is the list: a computer it no longer has is let go, a new one connected, one whose entry changed connected again with it, and the hub is reported each entry as it has it. What the early connections couldn't do without the hub is done then: the computers waiting to be confirmed are read again (the managed launchers go out with the hub's part of each connection), a node on another build is offered the hub's, and tailcat makes its tunnels again with the hub's DERP map, at the next dial, when it differs from the one the list had. A computer moved away while this manager was stopped is connected until then, and so is the list of a manager that was installed again elsewhere (its old copy's token no longer works, but it connects its list before it learns that): stop the old copy's service.
 - **Its own list as the list** (`machines.own`). A manager names the capability `machines.own` in its hello. The first time the hub hands it `machines_own` in `devices`, the hand-over's `machines` is taken over as its own (over a list taken over before, which may be out of date, or another hub's), and `machines_from_hub` says so (`own`). Another hub's own list (the manager joined another hub, or the hub's id changed with its database made again) is kept beside `manager.json` first (`manager.json.machines-<time>`, 0600) and the log says where. From then on its own list is the list: later hand-overs don't change it, and the hub edits it over the bus (`devices.machines.put`, `remove`, `get`; `docs/protocol/protocol.md`), each edit written to `manager.json` and the computer connected, connected again or let go at once. A list that doesn't read is then never written over: the computers stay as they are (at the manager's start, the hub's hand-over meanwhile) and the log says so until it is fixed by hand. An edit by hand takes effect at the manager's next start, the hub's next hand-over or its next edit. A hub that hands the list again without `machines_own` (an older build switched back to) has its hand-over run, but the own list is kept, not written over, for when a hub hands `machines_own` again; meanwhile the hub's edits are refused.
-- **The hub's side** (`server/internal/hub/machines_kept.go`). The hub hands `machines_own` to every manager that names `machines.own`. Once such a manager's report says it holds its list as its own (`devices.state` `own_list`: its `manager.json` list reads, is marked its own and is the one running), the hub moves the `hub.json` machines it reports out of `hub.json`: a copy of them as `hub.json` had them goes beside it (`hub.json.machines-kept-<time>`, 0600), and from then on the hub knows each as kept by that manager (`hub.machines_kept`, beside the owners of `hub.json`'s machines) and by what it last reported of it ("What the hub keeps of each manager": the entry without its secrets). The hub's readers (Persona Link and device-token checks, a member's node streams, the admin page, pairing, trust, mesh records, the warm start) go by `hub.json` plus those.
+- **The hub's side** (`server/internal/hub/machines_kept.go`). The hub hands `machines_own` to every manager that names `machines.own`. Once such a manager's report says it holds its list as its own (`devices.state` `own_list`: its `manager.json` list reads, is marked its own and is the one running), the hub moves the `hub.json` machines it reports out of `hub.json`: a copy of them as `hub.json` had them goes beside it (`hub.json.machines-kept-<time>`, 0600), and from then on the hub knows each as kept by that manager (`hub.machines_kept`, beside the owners of `hub.json`'s machines) and by what it last reported of it ("What the hub keeps of each manager": the entry without its secrets). The hub's readers (Persona Link and device-token checks, a member's node streams, the admin page, pairing, trust, mesh records, the warm start) go by `hub.json` plus those. Its hand-over (`devices`) then carries no machines (`null`); the computers waiting to be confirmed and the rest of it, as before. Each new connection counts as holding its list only once its report says so: until then its hand-over carries what `hub.json` stages for it, and edits are staged there. A kept machine its manager's report lacks (its list doesn't read) stays known as last reported.
   - **Edits go to the manager that keeps the computer**: adding one (the admin page, a computer's code) puts it in the carrier's own list when the carrier keeps one and is connected; removing one (the admin page, a rejected computer) and a connector's new address change it there, at once and without a hub restart. With that manager away they are answered `503 assistant_offline`, and nothing changes; an add then goes to `hub.json`.
   - **`hub.json` is where the hub stages what such a manager doesn't have yet**: a computer added while it was away, one moved to it, one edited in `hub.json`, or one an older hub build added while switched back to. Each time it reports, the hub asks it for each of its `hub.json` machines (`devices.machines.get`): one it has as `hub.json` has it moves out; one it lacks, or has otherwise, is put to it as `hub.json` has it (the same entry once), and moves out at its next report. A machine its report names that is no longer its own (moved away while it couldn't let it go) is taken out of its list then. A kept machine its list no longer has (its `manager.json` lost) is said in the log: put it back from a copy beside `hub.json`, or remove it. Nothing is settled before the hub has read who owns what.
   - A kept machine's `trust` (`work`) is its manager's entry's now, as are its other settings.
@@ -234,6 +234,134 @@ On an upgraded install the manager's `secret.key` began as the same bytes as the
 - **While the old key goes.** The running manager reads the old keys when it starts and keeps them in memory until it stops, also after the file is deleted. A value one of its services read before and writes back afterwards still opens, and the running manager seals it again within a minute, and once more when it stops. A process started after the file went never has the old key.
 - **During a hub switch,** an older manager process still running cannot open what the rotation sealed again (model providers' keys, connectors' secrets): it is about to stop.
 - **A legacy `mail_accounts.json` that fails to import** keeps the old key: each start says so, and it is deleted once the file is imported.
+
+## Automatic updates for an independent manager
+
+An independent manager's executable is separate from the Hub and the node. Updating either
+of those does not update that manager. Older `manager run` processes have no update command
+or RPC. Their first update is driven externally by the existing release publisher, executing
+the **new, same-source release artifact** as `personad manager update`. It does not ask the
+old process to execute a new command, reinstall or join again.
+
+The existing `scripts/release/hub_release.py` worker accepts an explicit manager scope:
+
+```sh
+python3 scripts/release/hub_release.py --config <existing-worker-config> \
+  --scope manager --manager-id <manager-id> --commit <full-main-commit>
+```
+
+An existing service that supplies no arguments can select the same operation through its
+private worker configuration: `scope: "manager"`, `manager_id`, and `manager_commit` (the full
+source SHA). Unconfigured workers keep their existing Hub behavior. `manager_targets` maps
+that exact ID to a `publish_command` argv array invoking
+`scripts/release/publish_manager_release.py --config <private-target-config>`; add `--apply`
+only for an authorized activation window. There is no inferred default manager or new timer.
+Use `--validate-only` to build and validate without publication.
+
+This manager operation is a pinned, one-shot bootstrap. The existing release service and
+timer must stay gated outside its separately scheduled window, including after completion;
+selecting manager scope does not enable periodic manager upgrades. The old baseline hash
+and bootstrap window are not a continuing health probe. Repeating an obsolete operation
+must fail its current preconditions, rather than return a historical deployment success.
+Further activation requires a newly reviewed baseline and authorization window.
+
+The worker retains the original `state_dir/lock`, source-branch ancestry checks and full
+release validation. `--publish-managers` produces `manager-manifest.json` containing the
+same-source Linux and Darwin personad artifacts; it does not publish node packages or
+change a node pointer. Each manager has its own `state_dir/manager/<id>/last.json`.
+The target configuration's bytes enter the cache identity: a Hub-only success cannot skip
+an unfinished manager, and changing an explicit target causes a new publication check.
+Validated builds may be reused, but a historical manager success never skips the current
+publisher invocation. Validation-only statuses use `manager-release/validation`, separate
+from activation's `manager-release/worker` status.
+A checked package is not installed. Only a confirmed receipt bound to this run, manager
+and source makes that manager operation successful. Consumers must require that success
+before resuming application publication.
+
+### Transport and the first update
+
+The manager publisher reuses the original publisher's `credentials_command`, `ssh_proxy`,
+`remote_root` and `release_namespace` configuration and authenticated connection to the Hub.
+On the Hub it holds the existing `releases/hub/.publish.lock` for the whole manager operation.
+It then uses a configured SSH transport to the target Mac. The new transport is a product
+entry point, not a claim that an installation already has the required endpoint or identity.
+A Persona Link connection or a reverse SSH connection does not establish this route.
+
+The private publisher configuration adds a `target` object with these required values:
+
+| Values | Meaning |
+| --- | --- |
+| `manager_id`, `main`, `machine_id` | Exact existing manager and original assistant identity |
+| `dir`, `binary`, `uid` | Canonical manager directory, its own `bin/personad`, operating-system owner |
+| `unit`, `plist_path` | Original launchd label and existing plist; compatibility labels are accepted |
+| `previous_sha256`, `config_sha256`, `plist_sha256` | Read-only baseline hashes for the executable, manager.json and original plist |
+| `transport` | `kind: "ssh"`, explicit `host`, `port`, `user`, `identity_file`, `known_hosts_file` on the Hub |
+| `freeze`, `activation_enabled`, `bootstrap_authorized`, `bootstrap_window_until` | Explicit activation policy; frozen/disabled is the default |
+
+SSH uses only those selected identity and known-host files, strict host-key checking and
+batch mode. No default key, hostname inference, reverse route or trust-on-first-use is used.
+Missing transport configuration fails without guessing. Direct SSH (`kind: "ssh"`) and
+managed Cloudflare SSH (`kind: "cloudflare-ssh"`) are supported. Cloudflare targets use
+the same explicit SSH fields with origin port 22, plus `cloudflared_path` (canonical,
+executable absolute path on the Hub) and `cloudflared_sha256` (the installed binary's
+verified SHA256). The publisher generates only the fixed proxy command
+`cloudflared access ssh --hostname <host>`; arbitrary proxy commands, SSH aliases and
+implicit jumps are rejected. The selected managed route and any required noninteractive
+Cloudflare Access authorization must already work for the publisher identity. An account
+API token or a tunnel management certificate does not establish client authorization.
+Install the architecture-matching official client through the existing configuration lane
+and record its hash before selecting it; the publisher does not download clients or create
+tunnels, DNS records, services, Access policies or SSH authorizations.
+Other transports and platforms are rejected. The operator must
+provision the intended endpoint, trusted host key and identity reference through their normal
+configuration process before checking connectivity. The publisher never provisions them.
+
+Without `--apply`, publication only reads the service and product state and returns `checked`.
+It does not create remote staging, rewrite product configuration or operate a service.
+Applying additionally requires an unfrozen, explicit maintenance window of at most fifteen
+minutes and a fresh scoped session snapshot. Older managers do not report full background
+idleness; the window explicitly authorizes that first bootstrap and is not represented as
+proof that every background activity is idle. Working, compacting, unknown or offline
+session state refuses the operation. Idle evidence is refreshed after artifact transfer.
+
+### Confirmation and recovery
+
+The formal artifact is staged in the manager's own `.manager-updates/<run-id>` directory.
+The new CLI checks the release channel, complete clean source identity, platform, native
+checksum, size, owner, original loaded service arguments and baseline hashes. Stage/dev
+executables cannot activate a formal update. `manager update check --plan <plan>` is read-only.
+
+`manager update start` creates a separate, restartable launchd transaction guardian. It never
+rewrites the original plist or its environment, calls install/join, or changes the manager's
+configuration, database bindings, node, Hub or other manager. The guardian journals before
+replacing the independent executable and restarts only that original validated service.
+A crash during activation resumes recovery rather than retrying the candidate.
+An unfinished active transaction prevents another run from taking ownership. A recovering
+guardian may restore an image only while the active marker still belongs to its exact run
+and target; a missing or foreign marker cannot authorize rollback of a later transaction.
+
+The new manager reports readiness only after its stores opened and its authenticated Hub
+handshake completed. The guardian checks that readiness against the original service's
+actual PID, image, native checksum and unchanged configuration. It then waits for the
+publisher to verify the live manager version, scoped assistant's original main/machine and
+unchanged node inventory through existing Hub GET routes. `confirm` acknowledges these
+checks; only then is the receipt `confirmed`. Roster, machine or main-session resync may
+lag the authenticated handshake: the publisher allows at most sixty seconds from the
+`start` command's return for these temporary absences to settle. Explicit ownership or
+identity conflicts fail immediately.
+A health rejection, missing acknowledgement,
+startup timeout or interrupted activation restores the verified previous executable and
+restarts the same service. An unrelated replacement or changed service identity is never
+overwritten. Receipts distinguish `checked`, `applied`, `confirmed` and `rollback`; failures
+must not release dependent publication steps.
+A rollback receipt proves that the previous executable was restored and the original
+service's restart command succeeded; reconnect and service health still require verification.
+
+This path does not change default permissions. After the manager version is confirmed,
+permission settings and inheritance require their own explicitly scoped product acceptance.
+The presence of `config.own` or an omitted optional `default_permission_mode` field alone
+does not prove support or an active runtime approval policy. Existing main conversations and
+history remain the acceptance baseline; updating the manager does not send a new turn.
 
 ## The built-in manager as its own service
 

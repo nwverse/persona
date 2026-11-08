@@ -5,6 +5,8 @@
   <img src="docs/assets/readme/banner-light.zh-CN.svg" alt="Persona：你的 SuperAgent，一个入口解决所有问题。" width="100%">
 </picture>
 
+[![Persona 视频介绍预览](docs/assets/promo-preview-zh.webp)](#视频介绍)
+
 [English](README.md) · 简体中文
 
 ### 一个 SuperAgent，搞定你的所有事。<br>懂你的上下文，指挥你的 Agent，走到哪儿跟到哪儿。
@@ -36,6 +38,12 @@
 - **用上手机里的数据**。通讯录、日历、提醒事项、照片、健康、位置都成了工具，写入要先在手机上确认。[手机工具](docs/apple/phone-tools.md)
 - **连接器和渠道**。接入飞书、邮件、GitHub、iMessage、Telegram、微信；在 App、飞书、微信里或用语音都能找 Persona。[连接器](docs/extensions/connectors.md) · [渠道](docs/extensions/channels.md)
 - **全端客户端**。iPhone、Apple Watch、Mac、Vision Pro、Android 和网页，支持中文、英文、日文。[客户端](docs/apple/ios.md)
+
+## 视频介绍
+
+https://github.com/user-attachments/assets/1957768c-188a-4d9d-8c23-cd16eb72cdd4
+
+<sub>[高清视频与字幕](https://github.com/nwverse/persona/releases/tag/promo-v1)。</sub>
 
 ## 怎么工作
 
