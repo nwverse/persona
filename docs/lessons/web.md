@@ -8,6 +8,10 @@ A queue also survives in-place sign-out and re-pairing. Bind it to the credentia
 
 Retiring a generation must also wake mounted consumers to read the next generation's preferences. Another tab's token replacement can leave Settings mounted; an effect that loads only on mount strands an aborted initial read or a hidden manager switch. Subscribe to the generation independently of the preference value, bind loading state to it, and test actual components with abort-aware fetches rather than manually loading the new login in the test.
 
+## Connector sends acknowledge one draft revision (#1286)
+
+- Keep an editable composer's text and quote together: clear them after success only if neither changed during the send or its refresh. Comparing final text alone misses edits away and back to the same words. A synchronous ref admits one send before React rerenders, and the manager, item, source and thread scope its local draft and pending state. Exercise delayed success, failure/retry, quote changes and ownership switches in both chat and GitHub comment modes.
+
 ## Mail send admission must precede React updates (#1251)
 
 A busy button protects only its click path after rerender. Mail shortcuts and form submission need the same synchronous ref guard inside the send function, acquired after validation and released on failure. Keep it held after success until the composer closes. Regress mixed events in one React batch with a deferred transport, then check failure/retry, successful close, recipient validation and IME controls.
