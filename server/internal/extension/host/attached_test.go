@@ -2,6 +2,7 @@ package host
 
 import (
 	"context"
+	"encoding/json"
 	"net"
 	"net/http"
 	"os"
@@ -14,6 +15,7 @@ import (
 
 	"github.com/nwverse/persona/server/internal/extension"
 	"github.com/nwverse/persona/server/internal/extension/serve"
+	"github.com/nwverse/persona/server/internal/rpc"
 )
 
 // far is a plugin running on its own on a unix socket: it serves demo() on each connection, or closes it at once
@@ -34,6 +36,14 @@ func serveFar(t *testing.T, sock string, mute bool) *far {
 
 // serveFarAs is serveFar with the program each connection gets (nil: closed at once).
 func serveFarAs(t *testing.T, sock string, program func() serve.Program) *far {
+	if program == nil {
+		return serveFarWith(t, sock, nil)
+	}
+	return serveFarWith(t, sock, func(c net.Conn) { _ = serve.Serve(context.Background(), c, c, program()) })
+}
+
+// serveFarWith is serveFar with what serves each connection (nil: closed at once).
+func serveFarWith(t *testing.T, sock string, handle func(net.Conn)) *far {
 	t.Helper()
 	ln, err := net.Listen("unix", sock)
 	if err != nil {
@@ -47,14 +57,14 @@ func serveFarAs(t *testing.T, sock string, program func() serve.Program) *far {
 				return
 			}
 			f.accepts.Add(1)
-			if program == nil {
+			if handle == nil {
 				c.Close()
 				continue
 			}
 			f.mu.Lock()
 			f.conns = append(f.conns, c)
 			f.mu.Unlock()
-			go func() { defer c.Close(); _ = serve.Serve(context.Background(), c, c, program()) }()
+			go func() { defer c.Close(); handle(c) }()
 		}
 	}()
 	t.Cleanup(f.stop)
@@ -306,6 +316,23 @@ func TestAttachedIdleAfterFailing(t *testing.T) {
 	}
 }
 
+// A program the host runs, started by calls, that failed and then went unused keeps its error: only an attached plugin
+// is stopped then.
+func TestRunProgramIdleAfterFailingKeepsError(t *testing.T) {
+	s := spec(t, "quit")
+	s.OnCall, s.Idle = true, 100*time.Millisecond
+	p := Start(context.Background(), s)
+	defer p.Stop()
+	var n int
+	if err := p.Call(context.Background(), "demo.pid", struct{}{}, &n); err == nil {
+		t.Fatal("a call to a program that quits worked")
+	}
+	time.Sleep(s.Idle + time.Second) // past Idle, and past the restart wait that was running when it ran out
+	if st, why := p.Status(); st != StateError {
+		t.Fatalf("state %s (%s), want the error it was left in", st, why)
+	}
+}
+
 // One that answers as another version is refused: an error at once, whatever the grace, tried again with the backoff,
 // and Link says what it said.
 func TestAttachedOtherVersionIsRefused(t *testing.T) {
@@ -355,6 +382,29 @@ func TestAttachedOtherProgramSaysNoVersion(t *testing.T) {
 	defer p.Stop()
 	waitState(t, p, StateError)
 	if _, why := p.Status(); !strings.Contains(why, `"other"`) {
+		t.Fatal(why)
+	}
+	if l := p.Link(); l.Said != "" {
+		t.Fatalf("link %+v", l)
+	}
+}
+
+// One that answers as this extension but in another protocol is refused for that, and the version it says, in a
+// protocol this host does not speak, is not recorded.
+func TestAttachedOtherProtocolSaysNoVersion(t *testing.T) {
+	timings(t, 10*time.Millisecond, time.Hour)
+	sock := filepath.Join(farDir(t), "far.sock")
+	serveFarWith(t, sock, func(c net.Conn) {
+		peer := rpc.New("p", c)
+		peer.OnRequest = func(context.Context, string, json.RawMessage) (any, error) {
+			return extension.InitializeResult{Protocol: extension.Protocol + 1, ID: "demo", Version: "1.1.0"}, nil
+		}
+		_ = peer.Serve(context.Background(), c)
+	})
+	p := Start(context.Background(), attachedSpec(t, sock, nil))
+	defer p.Stop()
+	waitState(t, p, StateError)
+	if _, why := p.Status(); !strings.Contains(why, "协议版本") {
 		t.Fatal(why)
 	}
 	if l := p.Link(); l.Said != "" {
