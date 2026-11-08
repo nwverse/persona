@@ -1,9 +1,12 @@
 package hub
 
 import (
+	"context"
+	"crypto/ecdh"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -15,9 +18,11 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/nwverse/persona/server/internal/apns"
+	"github.com/nwverse/persona/server/internal/relayproto"
 
 	"github.com/nwverse/persona/server/internal/db"
 	"github.com/nwverse/persona/server/internal/proto"
@@ -312,7 +317,7 @@ func TestPrefsChangeResends(t *testing.T) {
 	}
 	resp.Body.Close()
 	h.live.mu.Lock()
-	resend := h.live.resend
+	resend := h.live.resend["phone"]
 	h.live.mu.Unlock()
 	if !resend {
 		t.Fatal("a prefs change should force the next fleet push")
@@ -320,6 +325,358 @@ func TestPrefsChangeResends(t *testing.T) {
 	if p := h.push.prefs("phone"); !p.LockDetails || !p.LiveActivity {
 		t.Fatalf("%+v", p)
 	}
+}
+
+// fleetPushSink uses an in-memory relay transport: synctest can settle every push
+// goroutine without real sockets, a database or wall-clock waits.
+type fleetPushSink struct {
+	mu  sync.Mutex
+	got []fleetPushCall
+}
+
+type fleetPushCall struct {
+	device, kind, event, priority string
+	state                         FleetState
+}
+
+func (s *fleetPushSink) RoundTrip(r *http.Request) (*http.Response, error) {
+	var req relayproto.PushRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		return nil, err
+	}
+	_ = r.Body.Close()
+	call := fleetPushCall{device: strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer grant-"), kind: req.Type, priority: req.Priority}
+	call.event, _ = req.APS["event"].(string)
+	if b, err := json.Marshal(req.APS["content-state"]); err == nil {
+		_ = json.Unmarshal(b, &call.state)
+	}
+	s.mu.Lock()
+	s.got = append(s.got, call)
+	s.mu.Unlock()
+	return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(`{"ok":true}`)), Request: r}, nil
+}
+
+func (s *fleetPushSink) count(device, kind, event string) int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	n := 0
+	for _, call := range s.got {
+		if (device == "" || call.device == device) && call.kind == kind && call.event == event {
+			n++
+		}
+	}
+	return n
+}
+
+func localFleetLoop(t *testing.T) (*Hub, *fleetPushSink, func()) {
+	t.Helper()
+	h := newTestHub(t)
+	sink := &fleetPushSink{}
+	h.push.relay = &http.Client{Transport: sink}
+	key, err := ecdh.P256().GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range []string{"phone", "pad"} {
+		if err := h.push.register(Device{DeviceID: id, Name: id, Kind: "iphone", APNSToken: id + "-device",
+			Topic: "app.example", PushKey: base64.StdEncoding.EncodeToString(key.PublicKey().Bytes()),
+			RelayURL: "https://relay.example", RelayGrant: "grant-" + id}); err != nil {
+			t.Fatal(err)
+		}
+		h.live.update(id, func(v *db.LiveActivity) {
+			v.ActivityID, v.PushToken, v.PushToStartToken, v.StartedAt = id+"-activity", id+"-update", id+"-start", time.Now()
+		})
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		h.live.run(ctx)
+	}()
+	synctest.Wait()
+	return h, sink, func() { cancel(); <-done }
+}
+
+func putFleetPrefs(t *testing.T, h *Hub, device, body string) {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodPut, "/api/v1/devices/"+device+"/prefs", strings.NewReader(body))
+	req.RemoteAddr = "127.0.0.1:1234"
+	req.Header.Set("Authorization", "Bearer "+h.cfg.Token)
+	w := httptest.NewRecorder()
+	h.routes().ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("prefs: %d %s", w.Code, w.Body.String())
+	}
+	synctest.Wait()
+}
+
+func TestFleetPrefsPushOnlyChangedDevice(t *testing.T) {
+	for _, tc := range []struct {
+		name, body string
+		want       int
+	}{
+		{"same", `{}`, 0},
+		{"input", `{"input":false}`, 0},
+		{"done", `{"done":"off"}`, 0},
+		{"translation", `{"translate":{"enabled":true,"target":"ja","mail":true}}`, 0},
+		{"details", `{"lock_details":true}`, 1},
+		{"look", `{"look":{"design":"visor","light":1,"dark":2}}`, 1},
+		{"island", `{"island":{"preset":"b"}}`, 1},
+		{"disabled", `{"live_activity":false}`, 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				h, sink, stop := localFleetLoop(t)
+				defer stop()
+				reportLive(t, h, FleetState{Phase: "working", Working: 1}, FleetStats{TPM: 12000})
+				synctest.Wait()
+				time.Sleep(fleetCoalesce)
+				synctest.Wait()
+				beforePhone, beforePad := sink.count("phone", "liveactivity", "update"), sink.count("pad", "liveactivity", "update")
+				if beforePhone != 1 || beforePad != 1 {
+					t.Fatalf("baseline updates: phone=%d pad=%d", beforePhone, beforePad)
+				}
+				putFleetPrefs(t, h, "phone", tc.body)
+				phone := sink.count("phone", "liveactivity", "update") - beforePhone
+				pad := sink.count("pad", "liveactivity", "update") - beforePad
+				t.Logf("first prefs update: phone=%d other=%d", phone, pad)
+				if phone != tc.want || pad != 0 {
+					t.Errorf("first prefs update: phone=%d other=%d, want %d/0", phone, pad, tc.want)
+				}
+				beforePhone, beforePad = sink.count("phone", "liveactivity", "update"), sink.count("pad", "liveactivity", "update")
+				putFleetPrefs(t, h, "phone", tc.body)
+				phone = sink.count("phone", "liveactivity", "update") - beforePhone
+				pad = sink.count("pad", "liveactivity", "update") - beforePad
+				t.Logf("identical retry: phone=%d other=%d", phone, pad)
+				if phone != 0 || pad != 0 {
+					t.Errorf("identical prefs retry: phone=%d other=%d, want 0/0", phone, pad)
+				}
+			})
+		})
+	}
+}
+
+func TestFleetPushStartWaitsForLastPhoneToLeave(t *testing.T) {
+	for _, clean := range []bool{true, false} {
+		t.Run(fmt.Sprintf("clean=%v", clean), func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				h, sink, stop := localFleetLoop(t)
+				defer stop()
+				h.live.update("phone", func(v *db.LiveActivity) { v.PushToken, v.ActivityID = "", "" })
+				app := &client{out: make(chan []byte, 64), phone: true, pushDevice: "phone", clean: clean}
+				other := &client{out: make(chan []byte, 64), phone: true, pushDevice: "phone", clean: clean}
+				h.mu.Lock()
+				h.clients[app], h.clients[other] = struct{}{}, struct{}{}
+				h.mu.Unlock()
+				working := FleetState{Phase: "working", Working: 1}
+				reportLive(t, h, working, FleetStats{})
+				synctest.Wait()
+				time.Sleep(fleetCoalesce)
+				synctest.Wait()
+				open := sink.count("phone", "liveactivity", "start")
+				t.Logf("foreground starts=%d", open)
+				if open != 0 {
+					t.Errorf("push-start to foreground phone: %d, want 0", open)
+				}
+				h.dropClient(app)
+				synctest.Wait()
+				if n := sink.count("phone", "liveactivity", "start"); n != 0 {
+					t.Errorf("push-start while another phone connection remains: %d", n)
+				}
+				h.dropClient(other)
+				synctest.Wait()
+				closed := sink.count("phone", "liveactivity", "start")
+				t.Logf("last connection left: total starts=%d", closed)
+				if closed != 1 {
+					t.Errorf("active round lost its start opportunity: %d, want 1", closed)
+				}
+				h.live.changed()
+				synctest.Wait()
+				if n := sink.count("phone", "liveactivity", "start"); n != 1 {
+					t.Errorf("same round started more than once: %d", n)
+				}
+				// Foreground suppression is only for the activity, never the ordinary alert.
+				h.notifyInteraction("", proto.Interaction{ID: "ordinary", Kind: proto.IxPermission, Summary: "Approve the operation"}, "computer")
+				synctest.Wait()
+				if n := sink.count("", "alert", ""); n != 2 {
+					t.Errorf("ordinary alert fanout=%d, want 2", n)
+				}
+			})
+		})
+	}
+}
+
+func TestFleetPrefsKeepsPendingFleetDelivery(t *testing.T) {
+	for _, urgent := range []bool{false, true} {
+		t.Run(fmt.Sprintf("urgent=%v", urgent), func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				h, sink, stop := localFleetLoop(t)
+				defer stop()
+				one := FleetState{Phase: "working", Working: 1}
+				reportLive(t, h, one, FleetStats{})
+				synctest.Wait()
+				time.Sleep(fleetCoalesce)
+				synctest.Wait()
+				two := one
+				two.Working = 2
+				reportLive(t, h, two, FleetStats{})
+				synctest.Wait()
+				putFleetPrefs(t, h, "phone", `{"lock_details":true}`)
+				if n := sink.count("pad", "liveactivity", "update"); n != 1 {
+					t.Fatalf("settings advanced the other device's pending ordinary push: %d", n)
+				}
+				if urgent {
+					two.Phase, two.NeedsYou = "needsYou", 1
+					two.Items = []FleetItem{{ID: "m/a", Kind: proto.IxPermission, Interaction: "pending"}}
+					reportLive(t, h, two, FleetStats{})
+					synctest.Wait()
+					sink.mu.Lock()
+					defer sink.mu.Unlock()
+					for _, device := range []string{"phone", "pad"} {
+						var last fleetPushCall
+						for _, call := range sink.got {
+							if call.device == device && call.kind == "liveactivity" {
+								last = call
+							}
+						}
+						if last.priority != "10" || last.state.NeedsYou != 1 || last.state.Working != 2 {
+							t.Errorf("settings swallowed %s's urgent latest state: %+v", device, last)
+						}
+					}
+				} else {
+					time.Sleep(fleetMinGap)
+					synctest.Wait()
+					if n := sink.count("pad", "liveactivity", "update"); n != 2 {
+						t.Errorf("settings swallowed the other device's pending ordinary push: %d, want 2", n)
+					}
+				}
+			})
+		})
+	}
+}
+
+func TestFleetPrefsPartialLookAndReenable(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		h, sink, stop := localFleetLoop(t)
+		defer stop()
+		prefs := defaultPrefs()
+		prefs.Look = &FleetLook{Design: "visor", Light: 1, Dark: 2}
+		if err := h.push.setPrefs("phone", prefs); err != nil {
+			t.Fatal(err)
+		}
+		reportLive(t, h, FleetState{Phase: "working", Working: 1}, FleetStats{})
+		synctest.Wait()
+		time.Sleep(fleetCoalesce)
+		synctest.Wait()
+		putFleetPrefs(t, h, "phone", `{"look":{"light":3}}`)
+		if got := h.push.prefs("phone").Look; got == nil || got.Design != "visor" || got.Light != 3 || got.Dark != 2 {
+			t.Fatalf("partial look lost its other fields: %+v", got)
+		}
+		if n := sink.count("phone", "liveactivity", "update"); n != 2 {
+			t.Fatalf("partial look was not immediately refreshed: %d, want 2", n)
+		}
+		putFleetPrefs(t, h, "phone", `{"live_activity":false}`)
+		putFleetPrefs(t, h, "phone", `{"live_activity":true}`)
+		putFleetPrefs(t, h, "phone", `{"live_activity":true}`)
+		if phone, pad := sink.count("phone", "liveactivity", "update"), sink.count("pad", "liveactivity", "update"); phone != 3 || pad != 1 {
+			t.Errorf("re-enable needs one fresh target update, not a global resend: phone=%d pad=%d, want 3/1", phone, pad)
+		}
+	})
+}
+
+func TestFleetPushStartUsesStateAndTokenAtDeparture(t *testing.T) {
+	for _, tc := range []string{"empty", "done", "reported_token", "expired_token"} {
+		t.Run(tc, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				h, sink, stop := localFleetLoop(t)
+				defer stop()
+				h.live.update("phone", func(v *db.LiveActivity) {
+					v.ActivityID, v.PushToken = "", ""
+					if tc == "expired_token" {
+						v.ActivityID, v.PushToken, v.StartedAt = "expired", "expired-update", time.Now().Add(-fleetMaxAge)
+					}
+				})
+				app := &client{out: make(chan []byte, 64), phone: true, pushDevice: "phone", clean: true}
+				h.mu.Lock()
+				h.clients[app] = struct{}{}
+				h.mu.Unlock()
+				reportLive(t, h, FleetState{Phase: "working", Working: 1}, FleetStats{})
+				synctest.Wait()
+				time.Sleep(fleetCoalesce)
+				synctest.Wait()
+				switch tc {
+				case "empty":
+					reportLive(t, h, FleetState{}, FleetStats{})
+				case "done":
+					reportLive(t, h, FleetState{Phase: "done", Unread: 1}, FleetStats{})
+				case "reported_token":
+					h.live.update("phone", func(v *db.LiveActivity) { v.ActivityID, v.PushToken, v.StartedAt = "local", "local-update", time.Now() })
+				}
+				synctest.Wait()
+				time.Sleep(fleetCoalesce)
+				synctest.Wait()
+				h.dropClient(app)
+				synctest.Wait()
+				want := 0
+				if tc == "expired_token" {
+					want = 1
+				}
+				if n := sink.count("phone", "liveactivity", "start"); n != want {
+					t.Errorf("departure %s: starts=%d, want %d", tc, n, want)
+				}
+				if n := sink.count("phone", "liveactivity", "update"); n != 0 {
+					t.Errorf("departure %s: unexpected updates=%d", tc, n)
+				}
+			})
+		})
+	}
+}
+
+func TestFleetMetricsKeepsNewestForegroundState(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		h, _, stop := localFleetLoop(t)
+		defer stop()
+		app := &client{out: make(chan []byte, 64), phone: true, pushDevice: "phone"}
+		h.mu.Lock()
+		h.clients[app] = struct{}{}
+		h.mu.Unlock()
+		one := FleetState{Phase: "working", Working: 1}
+		reportLive(t, h, one, FleetStats{TPM: 100})
+		synctest.Wait()
+		time.Sleep(14 * time.Second)
+		synctest.Wait()
+		two := one
+		two.Working = 2
+		reportLive(t, h, two, FleetStats{TPM: 100})
+		synctest.Wait()
+		reportLive(t, h, two, FleetStats{TPM: 200})
+		synctest.Wait()
+		time.Sleep(time.Second) // Metrics tick, before the ordinary state's coalesced flush.
+		synctest.Wait()
+		var latest FleetState
+		backwards, sawTwo := 0, false
+		for len(app.out) > 0 {
+			var event struct {
+				Type  string     `json:"type"`
+				Fleet FleetState `json:"fleet"`
+			}
+			if err := json.Unmarshal(<-app.out, &event); err != nil {
+				t.Fatal(err)
+			}
+			if event.Type != "fleet" {
+				continue
+			}
+			if sawTwo && event.Fleet.Working < 2 {
+				backwards++
+			}
+			sawTwo = sawTwo || event.Fleet.Working == 2
+			latest = event.Fleet
+		}
+		t.Logf("foreground backward transitions=%d latest working=%d", backwards, latest.Working)
+		if backwards != 0 || latest.Working != 2 || latest.Stats == nil || latest.Stats.TPM != 200 {
+			t.Fatalf("metrics replaced a newer foreground state: backwards=%d latest=%+v", backwards, latest)
+		}
+	})
 }
 
 func TestIslandSides(t *testing.T) {

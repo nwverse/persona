@@ -97,7 +97,7 @@ struct TriageSettingsView: View {
                     Text(hint).font(Theme.Font.caption).foregroundStyle(.secondary)
                 }
             } icon: {
-                Image(systemName: symbol)
+                ThemedIcon(symbol)
             }
         }
         .disabled(model?.canChange(key) != true)

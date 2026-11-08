@@ -706,6 +706,11 @@ Two more from the same harness:
 - The scenarios' times are fixed (`2026-01-02T…`), and the app ties a sent bubble to its transcript line partly by time. Lines the hub writes during a case get the time they were written (`SyncHub.writtenNow`).
 - A failed message is placed before later ones by the whole second it was written (`ChatLines.placeFailed`). Two sends in a row in a test land in the same second, so the harness spaces sends more than a second apart, as typing does.
 
-## `AppModel()` in a test starts from what the simulator's app saved (2026-11-09, #1637)
+## A model made in a unit test starts with what the simulator last saved (2026-11-09, #1638, #1637)
 
-On a simulator whose app is paired (any mock-hub UI test pairs it), `AppModel()`'s init restores the app's saved snapshot (`Caches/state/dev.json`: machines, sessions, interactions) and outbox. A unit test that makes a model then starts with that: one simulator's 145 saved sessions pushed a sync scenario's chat out of the 40 newest that `AgentSync` plans, so its stall check never ran. A brand-new simulator and hosted CI pass, which hides it. The model also writes its own snapshot and outbox back over the app's. A test that cares gives the model a folder of its own, `AppModel(stateFolder:)`, and makes the model again on the same folder for a relaunch.
+`AppModel()` restores the last Dev snapshot (machines, agents, cards; `Library/Caches/state/dev.json`) and the outbox when the simulator's keychain holds a pairing, which any mock-hub UI test run leaves behind. A unit test that reads everything the model holds (the watch summary, all agents) then counts those too: it passes on a brand-new simulator and on hosted CI and fails on a used one. In the sync scenarios, a snapshot of 145 sessions pushed the case's chat out of the 40 newest that `AgentSync` plans, so its stall check never ran. The model also writes its own snapshot and outbox back over the app's.
+
+- A test that only needs the model empty calls `forgetRestoredForTests()` after making it.
+- A test that saves and reads back (a relaunch, the outbox) makes its models with `AppModel(stateFolder:)` on a folder of its own, and again on the same folder for the relaunch (`SyncDevice`, `OutboxRestoreTests`). Nothing it writes reaches the app's files.
+
+To check that a failure is this, move `dev.json` aside in the app's data container and run the test again.
