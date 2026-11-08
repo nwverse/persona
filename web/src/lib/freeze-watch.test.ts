@@ -30,6 +30,10 @@ function fakeDocument(initial = "visible") {
       visibilityState = "visible";
       emit("visibilitychange");
     },
+    /** The property updates before the event is delivered. */
+    hideQuiet() {
+      visibilityState = "hidden";
+    },
     freeze() {
       emit("freeze");
     },
@@ -42,7 +46,7 @@ function fakeDocument(initial = "visible") {
   };
 }
 
-function setup(over: { types?: readonly string[]; throwOn?: string; visibility?: string; enabled?: boolean } = {}) {
+function setup(over: { types?: readonly string[]; throwOn?: string; visibility?: string; enabled?: boolean; interactiveAt?: () => number | null; wall?: () => number } = {}) {
   const created: Fake[] = [];
   class Fake implements FreezeObserver {
     static supportedEntryTypes: readonly string[] = over.types ?? ["long-animation-frame", "longtask"];
@@ -79,6 +83,8 @@ function setup(over: { types?: readonly string[]; throwOn?: string; visibility?:
     },
     origin: ORIGIN,
     now: () => clock,
+    wall: over.wall,
+    interactiveAt: over.interactiveAt,
     document: doc,
     Observer: Fake as unknown as FreezeObserverCtor,
   });
@@ -114,6 +120,17 @@ describe("classifyFreeze", () => {
     expect(classifyFreeze(long(2_000, FREEZE_MS), { ...base, gaps: [{ start: 0, end: 2_000 }] })?.durationMs).toBe(FREEZE_MS);
     expect(classifyFreeze(long(0, Number.NaN), base)).toBeNull();
   });
+  it("drops the first load, a debugger pause and a sleep, and keeps the block that remains", () => {
+    const base = { mechanism: "long-animation-frame" as const, origin: ORIGIN, foreground: true, gaps: [] as { start: number; end: number | null }[] };
+    expect(classifyFreeze(long(0, 8_000), { ...base, interactiveAt: 0 })).toBeNull();
+    expect(classifyFreeze(long(10, 8_000), { ...base, interactiveAt: 1_000 })).toBeNull();
+    expect(classifyFreeze(long(1_000, FREEZE_MS), { ...base, interactiveAt: 1_000 })?.durationMs).toBe(FREEZE_MS);
+    const paused = long(2_000, 12_000, { scripts: [{ sourceURL: `${ORIGIN}/assets/a.js`, pauseDuration: 8_000, sourceFunctionName: "onClick" }] });
+    expect(classifyFreeze(paused, { ...base, interactiveAt: 1 })).toBeNull();
+    expect(classifyFreeze(long(2_000, 7_000, { scripts: [{ sourceURL: `${ORIGIN}/assets/a.js`, pauseDuration: 1_000 }] }), { ...base, interactiveAt: 1 })?.durationMs).toBe(6_000);
+    expect(classifyFreeze(long(2_000, 21_000), { ...base, sleepMs: 20_000 })).toBeNull();
+    expect(classifyFreeze(long(2_000, 26_000), { ...base, sleepMs: 20_000 })?.durationMs).toBe(6_000);
+  });
 });
 
 describe("startFreezeWatch", () => {
@@ -128,7 +145,7 @@ describe("startFreezeWatch", () => {
           { sourceURL: `${ORIGIN}/assets/short.js?token=t0k`, sourceFunctionName: "small", duration: 100 },
           { sourceURL: "//cdn.example/proto.js", sourceFunctionName: "leaked", duration: 4_000 },
           { sourceURL: "data:text/javascript,secret", sourceFunctionName: "secret", duration: 9_000 },
-          { sourceURL: "https://cdn.example/lib.js?user=ada", sourceFunctionName: "me@example.com", duration: 500 },
+          Object.assign({ sourceURL: "https://user:s3cret@cdn.example/lib.js?user=ada&token=t0k", sourceFunctionName: "me@example.com", duration: 500 }, { invoker: "https://user:s3cret@cdn.example/on.js", containerId: "s3cret-element" }),
           { sourceURL: `${ORIGIN}/assets/hot.js`, sourceFunctionName: "onClick", duration: 5_000 },
         ],
         attribution: [{ containerSrc: `${ORIGIN}/assets/should-not-use.js` }],
@@ -147,6 +164,8 @@ describe("startFreezeWatch", () => {
     expect(JSON.stringify(w.hits[0])).not.toContain("secret");
     expect(JSON.stringify(w.hits[0])).not.toContain("ada");
     expect(JSON.stringify(w.hits[0])).not.toContain("cdn.example");
+    expect(JSON.stringify(w.hits[0])).not.toContain("s3cret");
+    expect(JSON.stringify(w.hits[0])).not.toContain("invoker");
     expect(JSON.stringify(w.hits[0])).not.toContain("should-not-use");
     expect(JSON.stringify(w.hits[0])).not.toContain("proto");
     expect(JSON.stringify(w.hits[0])).not.toContain("leaked");
@@ -301,6 +320,47 @@ describe("startFreezeWatch", () => {
     const w = setup();
     w.active()[0].emit([long(0, 5_000, { scripts })]);
     expect(w.hits[0].frames.map((frame) => frame.function)).toEqual(["f2", "f3", "f4", "f5", "f6", "f7", "f8", "f9"]);
+    w.stop();
+  });
+
+  it("does not spend the one report on the first load, a breakpoint or a sleep, then reports a real block", () => {
+    let interactive = 0;
+    let wall = 1_000_000;
+    const w = setup({ interactiveAt: () => interactive, wall: () => wall });
+    w.active()[0].emit([long(0, 9_000)]);
+    expect(w.hits).toHaveLength(0);
+    interactive = 500;
+    // started while the document was still loading
+    w.active()[0].emit([long(0, 9_000)]);
+    // a breakpoint accounts for most of a later long frame
+    w.active()[0].emit([long(500, 12_000, { scripts: [{ sourceURL: `${ORIGIN}/assets/app.js`, sourceFunctionName: "onClick", pauseDuration: 8_000 }] })]);
+    expect(w.hits).toHaveLength(0);
+    wall += 30_000;
+    w.active()[0].emit([long(500, 31_000)]);
+    expect(w.hits).toHaveLength(0);
+    expect(w.active()).toHaveLength(1);
+    wall += 5;
+    w.at(600);
+    w.active()[0].emit([long(600, 5_200, { scripts: [{ sourceURL: `${ORIGIN}/assets/app.js`, sourceFunctionName: "onClick", pauseDuration: 200 }] })]);
+    expect(w.hits).toHaveLength(1);
+    expect(w.hits[0].durationMs).toBe(5_000);
+    // the one report is spent even if the feature flips off and back on
+    w.setEnabled(false);
+    w.setEnabled(true);
+    expect(w.active()).toHaveLength(0);
+    w.stop();
+  });
+
+  it("reads a hidden tab from the visibility property before the event", () => {
+    const w = setup();
+    w.doc.hideQuiet();
+    w.active()[0].emit([long(0, 8_000)]);
+    expect(w.hits).toHaveLength(0);
+    expect(w.active()).toHaveLength(1);
+    w.at(10);
+    w.doc.show();
+    w.active()[0].emit([long(10, FREEZE_MS)]);
+    expect(w.hits).toHaveLength(1);
     w.stop();
   });
 });

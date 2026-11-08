@@ -2,8 +2,9 @@
 // One anr warning per page load, through the error-report pipeline, and only while the caller says the hub is
 // advertising error_reports. long-animation-frame where the browser has it, otherwise longtask; with neither, nothing.
 // A hidden tab is not a freeze, and neither is an entry that overlaps the page being hidden or frozen (visibilitychange,
-// freeze / resume): a background tab, or the clock jumping while the machine sleeps, must not be reported. Script
-// attribution is a URL path only.
+// freeze / resume). The first load (before DOMContentLoaded), time a script spent paused (a debugger breakpoint, a
+// modal, a synchronous request) and a wall-clock jump the monotonic clock did not see (sleep) are not a freeze either.
+// Script attribution is a URL path only.
 
 import type { ErrorFrame } from "./extension-wire";
 import { FREEZE_MS, scriptFrame } from "./error-reports";
@@ -16,6 +17,8 @@ export interface FreezeScript {
   sourceURL?: string;
   sourceFunctionName?: string;
   duration?: number;
+  /** Time the script spent paused: a debugger breakpoint, a modal, a synchronous request. Not a freeze. */
+  pauseDuration?: number;
 }
 
 /** A long task's frame attribution. containerId and containerName are never read: they are page content. */
@@ -69,15 +72,38 @@ export function freezeFrames(entry: FreezeEntry, mechanism: FreezeMechanism, ori
   return frames.slice(-MAX_SCRIPTS);
 }
 
-/** The entry is one freeze, or null when it is too short, the page is not in front, or it overlaps a gap. */
+/** Time the entry's scripts spent paused. A number only; anything else is ignored. */
+function pausedMs(entry: FreezeEntry): number {
+  let paused = 0;
+  for (const script of entry.scripts ?? []) {
+    if (typeof script.pauseDuration === "number" && Number.isFinite(script.pauseDuration) && script.pauseDuration > 0) paused += script.pauseDuration;
+  }
+  return paused;
+}
+
+/** The entry is one freeze, or null when it is too short, still the first load, not in front, paused, asleep, or overlapping a gap.
+ *  `interactiveAt`: DOMContentLoaded (`0` = not yet). Omitted or null: no first-load filter (the timing is unavailable).
+ *  `sleepMs`: how far the wall clock jumped ahead of the monotonic clock since the previous look. */
 export function classifyFreeze(
   entry: FreezeEntry,
-  opts: { mechanism: FreezeMechanism; origin: string; foreground: boolean; gaps: readonly FreezeGap[] },
+  opts: {
+    mechanism: FreezeMechanism;
+    origin: string;
+    foreground: boolean;
+    gaps: readonly FreezeGap[];
+    interactiveAt?: number | null;
+    sleepMs?: number;
+  },
 ): FreezeHit | null {
   if (!opts.foreground) return null;
-  if (!Number.isFinite(entry.startTime) || !Number.isFinite(entry.duration) || entry.duration < FREEZE_MS) return null;
+  if (!Number.isFinite(entry.startTime) || !Number.isFinite(entry.duration) || entry.duration < 0) return null;
+  const started = opts.interactiveAt;
+  if (started === 0 || (typeof started === "number" && started > 0 && entry.startTime < started)) return null;
+  const sleep = typeof opts.sleepMs === "number" && Number.isFinite(opts.sleepMs) && opts.sleepMs > 0 ? opts.sleepMs : 0;
+  const blocked = entry.duration - pausedMs(entry) - sleep;
+  if (!(blocked >= FREEZE_MS)) return null;
   if (freezeOverlaps(entry.startTime, entry.duration, opts.gaps)) return null;
-  return { durationMs: entry.duration, mechanism: opts.mechanism, frames: freezeFrames(entry, opts.mechanism, opts.origin) };
+  return { durationMs: blocked, mechanism: opts.mechanism, frames: freezeFrames(entry, opts.mechanism, opts.origin) };
 }
 
 interface RawEntry {
@@ -96,6 +122,7 @@ function readEntry(raw: RawEntry): FreezeEntry {
       sourceURL: typeof script.sourceURL === "string" ? script.sourceURL : undefined,
       sourceFunctionName: typeof script.sourceFunctionName === "string" ? script.sourceFunctionName : undefined,
       duration: typeof script.duration === "number" ? script.duration : undefined,
+      pauseDuration: typeof script.pauseDuration === "number" ? script.pauseDuration : undefined,
     })),
     attribution: raw.attribution?.map((item) => ({ containerSrc: typeof item.containerSrc === "string" ? item.containerSrc : undefined })),
   };
@@ -126,6 +153,10 @@ export interface FreezeWatchOptions {
   subscribe?: (listener: () => void) => (() => void) | void;
   origin?: string;
   now?: () => number;
+  /** Wall clock, for telling sleep from a freeze. Default `Date.now`. */
+  wall?: () => number;
+  /** DOMContentLoaded time, or 0 when the document is not interactive yet. Omit: read the navigation timing. */
+  interactiveAt?: () => number | null;
   document?: FreezeDocument;
   /** Null: this browser has no PerformanceObserver. Omit: the page's own. */
   Observer?: FreezeObserverCtor | null;
@@ -155,6 +186,17 @@ function browserObserver(): FreezeObserverCtor | null {
   }
 }
 
+/** `0` until DOMContentLoaded, then that event's time. Null when the page has no navigation timing (nothing to filter). */
+function browserInteractiveAt(): number | null {
+  try {
+    const timing = globalThis.performance?.getEntriesByType?.("navigation")[0] as { domContentLoadedEventEnd?: number } | undefined;
+    if (!timing || typeof timing.domContentLoadedEventEnd !== "number") return null;
+    return timing.domContentLoadedEventEnd;
+  } catch {
+    return null;
+  }
+}
+
 function browserDocument(): FreezeDocument | null {
   try {
     return typeof document === "undefined" ? null : (document as unknown as FreezeDocument);
@@ -174,7 +216,12 @@ export function startFreezeWatch(opts: FreezeWatchOptions): () => void {
   const doc: FreezeDocument = found;
   const origin = opts.origin ?? pageOrigin();
   const now = opts.now ?? monoNow;
+  const wallNow = opts.wall ?? (() => Date.now());
+  const interactiveAt = opts.interactiveAt ?? browserInteractiveAt;
   const Observer = opts.Observer === undefined ? browserObserver() : opts.Observer;
+  // A sleep moves the wall clock and not the monotonic one. The extra is taken off the next entry's duration.
+  let lastWall = wallNow();
+  let lastMono = now();
 
   let hidden = doc.visibilityState !== "visible";
   let frozen = false;
@@ -239,15 +286,35 @@ export function startFreezeWatch(opts: FreezeWatchOptions): () => void {
     unsubscribe = undefined;
   }
 
+  function takeSleep(): number {
+    const wall = wallNow();
+    const mono = now();
+    const extra = wall - lastWall - (mono - lastMono);
+    lastWall = wall;
+    lastMono = mono;
+    return extra >= 1_000 ? extra : 0;
+  }
+
+  /** The visibility state can change before the event is delivered; the property is already the truth. */
+  function refreshHidden() {
+    const next = doc.visibilityState !== "visible";
+    if (next === hidden) return;
+    hidden = next;
+    sync();
+  }
+
   function onEntries(raws: RawEntry[], type: FreezeMechanism) {
     try {
       if (reported || !opts.enabled()) return;
+      refreshHidden();
+      const sleepMs = takeSleep();
+      const started = interactiveAt();
       for (const raw of raws) {
         if (reported || !opts.enabled()) return;
         const entry = readEntry(raw);
         const id = `${type}:${entry.startTime}:${entry.duration}`;
         if (skipped.has(id)) continue;
-        const hit = classifyFreeze(entry, { mechanism: type, origin, foreground: !hidden && !frozen, gaps: allGaps() });
+        const hit = classifyFreeze(entry, { mechanism: type, origin, foreground: !hidden && !frozen, gaps: allGaps(), interactiveAt: started, sleepMs });
         if (!hit) continue;
         let accepted = false;
         try {

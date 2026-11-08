@@ -249,6 +249,7 @@ describe("a frozen page", () => {
     frames: [
       { file: `${ORIGIN}/assets/index-abc.js?token=t0k`, function: "render", in_app: false },
       { file: "data:text/javascript,secret", function: "secret", in_app: false },
+      { file: "https://user:s3cret@hub.example/assets/x.js?token=abc", function: "render2", in_app: false },
       { file: "https://cdn.example/lib.js?x=1", function: "me@example.com", in_app: true },
     ],
   };
@@ -272,6 +273,7 @@ describe("a frozen page", () => {
     expect(rep.previous_launch).toBeUndefined();
     expect(rep.exceptions?.[0].frames).toEqual([
       { file: "/assets/index-abc.js", function: "render", in_app: true },
+      { file: "/assets/x.js", function: "render2", in_app: true },
       { file: "/lib.js", in_app: false },
     ]);
     expect(rep.breadcrumbs).toEqual([{ time: "2026-11-06T09:00:00.000Z", category: "navigation", message: "session", level: "info" }]);
@@ -279,6 +281,7 @@ describe("a frozen page", () => {
     expect(JSON.stringify(rep)).not.toContain("secret");
     expect(JSON.stringify(rep)).not.toContain("example.com");
     expect(JSON.stringify(rep)).not.toContain("cdn.example");
+    expect(JSON.stringify(rep)).not.toContain("s3cret");
   });
 
   it("sends nothing under 5 seconds, or once the feature is off", () => {
