@@ -49,6 +49,42 @@ The hub and the managers apart:
 | `internal/relay` | Publisher-run personad relay, `docs/operations/push-relay.md` |
 | `internal/tunnel` | Tailcat node key / endpoint, hub dialing, new-binary transfer over tailcat (“Tailcat hole punching” below) |
 
+## Client traffic diagnostics
+
+The hub writes privacy-safe `traffic` minute buckets to its normal journal. These are
+transport diagnostics, not application state or a delivery receipt. No extra API,
+database table, request body, device name, literal dynamic path, query, bearer token,
+or push token is introduced. Credential and registration IDs are independently
+hashed with a fixed domain separator; use the device registry's credential binding
+when joining them, never a display-name match.
+
+- Authenticated registered-client requests have `action=started` counts on receipt
+  and `action=completed` counts on return, grouped by the ServeMux route template,
+  platform and response status. Sum **started only** for request volume; completed
+  counters supply duration and response-size measurements. Failed authentication is
+  still covered by the separate rate-limited security log, not attributed to a device.
+- `body_bytes` and `max_body_bytes` count application response bytes before gzip,
+  or WebSocket application-frame bytes after a successful write/read. They are not
+  TLS, compression or physical wire-byte measurements. WebSocket ping/pong buckets
+  count attempts/replies and the latter's elapsed time; the persisted device-session
+  history retains connection duration and observed close reasons.
+- Push buckets distinguish alert, background categories and Live Activity
+  start/update/end, with logical attempt and accepted/failed actions. A successful
+  transport retry produces one terminal result for the logical send; do not add
+  attempts and accepts together. Acceptance does not prove iOS delivery or wake-up.
+- Completed minute buckets are emitted at most once per minute per key; the final
+  partial bucket is emitted on orderly shutdown. Active key cardinality is bounded,
+  with overflow counts retained without identities. An abrupt process loss can
+  lose the still-buffered minute; telemetry cannot reconstruct earlier unlogged
+  successful HTTP requests or Live Activity updates.
+
+Live Activity settings refresh only the affected device's projected content.
+Same-value retries and non-activity preferences do not force a fleet-wide resend.
+Foreground suppression applies to both activity updates and push-to-start; a start
+suppressed in the foreground remains eligible after the last matching phone socket
+leaves. Important interaction alerts and the existing urgent activity fast path
+remain unchanged.
+
 ## Connecting to herdr
 
 - Node directly uses herdr Unix socket (`$HERDR_SOCKET_PATH`, otherwise `$XDG_CONFIG_HOME/herdr/herdr.sock`, default `~/.config/herdr/herdr.sock`). Each call opens a connection, writes one `{"id","method","params"}` line, reads one response; 64 MB line cap, 10-second timeout. Herdr CLI is a thin client for the same API, with an extra ping per call; result shape identical. Socket failure or old herdr unknown method (`invalid_request` + `unknown variant`) falls back to CLI. Method names follow `herdr api schema --json`; pane run = `pane.send_input` + `keys:["Enter"]`; `pane.process_info` requires `pane_id`, since target would return focused pane.
