@@ -431,12 +431,12 @@ func TestRecordingPausedCommitReaders(t *testing.T) {
 			t.Run(fmt.Sprintf("%s/fail=%t", boundary, fail), func(t *testing.T) {
 				e := goldenEngine(t, nil)
 				now := time.Date(2026, 11, 5, 12, 0, 0, 0, time.UTC)
-				seed := recUpload(1, now, true, "accepted orchard")
+				seed := recUpload(1, now, true, "accepted orchard coherent-marker")
 				seed.Title = "Accepted orchard"
 				mustStoreRecording(t, e, recID, seed, now)
 				// Populate Find's entry cache too; equal-length metadata must not alias
 				// physical stats belonging to an unfinished generation.
-				e.Find("accepted orchard", 10)
+				e.Find("accepted orchard coherent-marker", 10)
 				parked, release := make(chan struct{}), make(chan struct{})
 				var once sync.Once
 				pause := func() error {
@@ -464,7 +464,7 @@ func TestRecordingPausedCommitReaders(t *testing.T) {
 					}
 					return os.Remove(path)
 				}
-				candidate := recUpload(2, now, true, "candidate zeppelin")
+				candidate := recUpload(2, now, true, "candidate zeppelin coherent-marker")
 				candidate.Title = "Candidate zeppelin"
 				written := make(chan error, 1)
 				go func() { _, err := e.PutRecording(recID, candidate, now); written <- err }()
@@ -474,6 +474,9 @@ func TestRecordingPausedCommitReaders(t *testing.T) {
 					t.Fatal("writer never reached boundary")
 				}
 				defer releaseRecordingGate(release)
+				// A shared transcript token keeps bounded legacy search focused on the
+				// recording; broad single-letter queries can fill the hit limit
+				// with README and metadata lines before reaching the transcript.
 				readers := []func() any{
 					func() any {
 						d, err := e.Get(KindRecording, recID, 10000)
@@ -482,9 +485,9 @@ func TestRecordingPausedCommitReaders(t *testing.T) {
 						}
 						return d
 					},
-					func() any { return e.Find("a", 10) },
-					func() any { return e.Search("a", true, 10) },
-					func() any { return e.Matches(KindRecording, recID, "a", 10) },
+					func() any { return e.Find("coherent-marker", 10) },
+					func() any { return e.Search("coherent-marker", true, 10) },
+					func() any { return e.Matches(KindRecording, recID, "coherent-marker", 10) },
 					func() any { return e.Store.RecordingSegments(recID) },
 					func() any { kept, _ := e.RecordingStates(); return kept },
 				}
@@ -517,9 +520,9 @@ func TestRecordingPausedCommitReaders(t *testing.T) {
 						if err, ok := got.(error); ok {
 							t.Fatalf("reader failed after resuming: %v", err)
 						}
-						wantText, wantTitle, wantRev := "candidate zeppelin", "Candidate zeppelin", int64(2)
+						wantText, wantTitle, wantRev := "candidate zeppelin coherent-marker", "Candidate zeppelin", int64(2)
 						if fail {
-							wantText, wantTitle, wantRev = "accepted orchard", "Accepted orchard", 1
+							wantText, wantTitle, wantRev = "accepted orchard coherent-marker", "Accepted orchard", 1
 						}
 						switch value := got.(type) {
 						case *Detail:
@@ -571,9 +574,9 @@ func TestRecordingPausedCommitReaders(t *testing.T) {
 				}
 				e.Store.recordingReadWait = nil
 				if fail {
-					assertRecordingView(t, e, true, "accepted orchard", "candidate zeppelin")
+					assertRecordingView(t, e, true, "accepted orchard coherent-marker", "candidate zeppelin coherent-marker")
 				} else {
-					assertRecordingView(t, e, true, "candidate zeppelin", "accepted orchard")
+					assertRecordingView(t, e, true, "candidate zeppelin coherent-marker", "accepted orchard coherent-marker")
 				}
 			})
 		}
