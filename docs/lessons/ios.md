@@ -353,6 +353,7 @@ Use an invalidation revision as the task key and handle the flag after completio
 ## `Layout` and components
 
 - Under iPhone Duo's vertical bars the system draws the navigation bar's title as a row over the content, not in the side column with the buttons: a page that draws its own title shows the name twice. Remove the system's with `.toolbar(removing: .title)` while yours is on screen (`ChatView`, 2026-11-08).
+- A `GeometryReader` that ignores the safe area on an edge reports no inset of its own there (`safeAreaInsets.trailing` was 0 on iPhone Duo's outer display, where the system's bars take the right-hand column): a rail meant for that column came out 59 pt wide against the screen edge, half off it. Measure the column as a reader inside the safe area less one that ignores it (`ShellSideRail`, 2026-11-07).
 - When capping chips in horizontal scrolling, do not put `frame(maxWidth:)` / `scaledFrame(maxWidth:)` outside the background (2026-11-05, #3010): `ScrollView(.horizontal)` proposes no width,
   and flexible frames pass that unlimited proposal through. The chip and background measure the entire title while only the frame's occupied space is capped;
   background and space diverge: shorter chips leave larger gaps, large text does not truncate and capsules overlap neighbors.
@@ -803,6 +804,11 @@ clipping only chat bottom when oversized. Apply this to all sheet-embedded pages
   Measure original container outside scrolling (`Color.clear.containerRelativeFrame(.vertical)` in outer `background`), pass `cardRoom` environment.
 - Card `@State` holds partial answers: use one `ScrollView` in both fitting / overflowing cases, not separate branches that lose text when another card crosses the threshold.
 - Pixel-identical fitting scroll region: use `.scrollDisabled` / `.scrollClipDisabled` while fitting to preserve shadows, add `contentMargins` only on overflow for cut-edge shadows. Compare before / after screenshots pixelwise (`PendingCardsTests.testOneCardAsBefore`, only clock / timer differ), asserting elements lie within card-region bounds.
+- **A size derived from a measurement that contains the sized view needs both measurements exact** (2026-11-09, #1580). With the keyboard up, `PendingCards.cap`
+  is the page less what the footer holds besides the cards (`room.footer - shown`). The footer was written only when it moved by 1 pt or more, `shown` on every change,
+  so the difference ran up to a point stale: the cap cycled 301.1 → 302.0 → 302.9 → 302.0 pt, every frame, and the app froze once a tall card's field took the keyboard.
+  Never put a dead band on a measurement that feeds back into its own size: write both sides of such a difference on every change, derive the size from
+  the difference (it does not move with the size), and put the dead band against float noise on that difference only (`PendingCards.footerRest`).
 
 ## Images sent to Persona disappear in chat (2026-11-03, #987)
 

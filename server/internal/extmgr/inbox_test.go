@@ -24,7 +24,7 @@ import (
 	"github.com/nwverse/persona/server/internal/rpc"
 )
 
-// The hub's half of the inbox (inbox.go): reading the sources into a round, handing it to the manager, answering what
+// The hub's half of the inbox (inbox*.go): reading the sources into a round, handing it to the manager, answering what
 // the manager asks of the sources, relaying the routes. The inbox itself (items, triage, events, mutes…) is the
 // manager's and tested there (internal/assistant's inbox*_test.go).
 

@@ -9264,6 +9264,10 @@ GIT_PULL_STATE = {"behind": 28, "mode": "success", "pulls": 0}
 # back. Off: none, as on a hub without the Lark extension.
 PERSONAL_AGENTS = os.environ.get("MOCK_PERSONAL_AGENTS")
 PERSONAL_HIDDEN = {}  # session id -> when (ms)
+# #1368: GET /mock/start-fail?n=<count>&code=<code>&delay=<seconds>: the next n starts of an assistant conversation
+# (POST /api/v1/assistant/conversations) answer 502 with that code (default assistant_in_doubt, delivered unknown), and
+# every start, failed or not, first takes `delay` seconds (to see a retry spin). n=0&delay=0 puts it back.
+START_FAIL = {"n": 0, "code": "assistant_in_doubt", "delay": 0.0}
 def personal_rows():
     now = int(time.time() * 1000)
     rows = [("muse", "周报助手", 0.1, 2), ("grok_bot", "旅行规划", 1.5, 0), ("cue", "读书笔记", 5, 1), ("muse", "代码评审", 30, 0),
@@ -11348,7 +11352,7 @@ def cua_config(pl):
 
 
 _PLUGIN_VIEW = ["id", "name", "kind", "status", "error", "version", "source", "enabled", "description", "contributes", "needs_setup", "warnings",
-                "auto_upgrade", "upgrade", "upgrade_note", "nodes"]
+                "auto_upgrade", "auto_upgrade_paused", "upgrade", "upgrade_note", "nodes"]
 
 # ---------- MOCK_EXTENSIONS: declarative UI (docs/extensions/extensions.md "Declarative UI") ----------
 # example-gateway draws a page (plugin_page "home") and a section on every launcher's page (launcher_section "panel"),
@@ -11636,8 +11640,25 @@ def _catalog_item(c):
 
 # Auto-upgrade (docs/extensions/extensions.md "Automatic upgrades"): example-gateway, from a market at 1.0.0, has 1.1.0 there asking for one more
 # host. MOCK_PLUGIN_UPGRADE picks how it stands: needs_permission (default), waiting_idle, skipped, upgraded (the last
-# one went in by itself), none.
+# one went in by itself), disabled (switched off: auto-upgrade paused, its own switch kept), none.
 AUTO_UPGRADE = {"auto": True}
+# A market plugin's upgrade while it is on, put back when it is switched on again (_auto_upgrade_paused).
+_UPGRADE_WHILE_ON = {}
+
+
+def _auto_upgrade_paused(pl):
+    """A market plugin switched off is not upgraded, as the hub says: auto_upgrade_paused, its newer version "off" (its
+    own switch stays); switched on again, both are as before."""
+    if pl.get("auto_upgrade") is None:
+        return
+    pl["auto_upgrade_paused"] = None if pl["enabled"] else "disabled"
+    up = pl.get("upgrade")
+    if not pl["enabled"] and up and pl["id"] not in _UPGRADE_WHILE_ON:
+        _UPGRADE_WHILE_ON[pl["id"]] = up
+        pl["upgrade"] = {k: v for k, v in up.items() if k != "added_permissions"} | {
+            "state": "off", "detail": "扩展已关闭，自动升级暂停；重新打开后恢复你原来的设置"}  # i18n-ignore: the hub's words
+    elif pl["enabled"] and pl["id"] in _UPGRADE_WHILE_ON:
+        pl["upgrade"] = _UPGRADE_WHILE_ON.pop(pl["id"])
 
 
 def _gateway_upgrade(state):
@@ -11652,10 +11673,14 @@ def _gateway_upgrade(state):
         up["detail"] = "插件正在用"
     elif state == "skipped":
         pl["upgrade_note"] = {"kind": "rolled_back", "from": "1.0.0", "to": "1.1.0", "detail": "exited with status 3", "at": at(5)}
-    if state in ("needs_permission", "waiting_idle", "skipped"):
+    if state in ("needs_permission", "waiting_idle", "skipped", "disabled"):
         pl["upgrade"] = up
     elif state == "upgraded":
         pl["upgrade_note"] = {"kind": "upgraded", "from": "0.9.0", "to": "1.0.0", "at": at(3)}
+    if state == "disabled":
+        up["state"] = "available"
+        pl["enabled"], pl["status"] = False, "disabled"
+        _auto_upgrade_paused(pl)
 
 
 _gateway_upgrade(os.environ.get("MOCK_PLUGIN_UPGRADE", "needs_permission"))
@@ -12033,6 +12058,12 @@ def markets_route(handler, p, body):
                 ui = [{"plugin": "example-gateway", "id": "panel", "title": "Example 网关", "placement": "launcher_section"},
                       {"plugin": "example-gateway", "id": "elsewhere", "title": "别家网关", "placement": "launcher_section"}]
         ui += [u for u in INBOX_ITEM_UI if placement in ("", u["placement"])]
+        if os.environ.get("MOCK_EXTENSION_SHOWCASE") == "1" and placement in ("", "nav_page"):
+            from pathlib import Path
+            snapshots = Path(__file__).resolve().parents[2] / "schema/extension/examples/showcase"
+            ui += [{"plugin": "showcase", "plugin_name": "Component showcase", "id": file.stem,
+                    "title": file.stem, "placement": "nav_page", "size": "full", "icon": "list"}
+                   for file in sorted(snapshots.glob("*.json"))]
         handler.send_json({"ui": ui}); return True
     if len(parts) == 8 and parts[4] == "example-chat" and parts[5:7] == ["-", "ui"] and method == "POST" and INBOX_ITEM_UI:
         code, out = inbox_item_ui(parts[7], req)
@@ -12269,6 +12300,7 @@ def plugins_route(handler, p, body):
     elif rest == ["enabled"] and method == "PUT":
         pl["enabled"] = bool(req.get("enabled"))
         pl["status"] = "disabled" if not pl["enabled"] else ("needs_setup" if pl["source"] == "installed" else "running")
+        _auto_upgrade_paused(pl)
     elif rest == ["config"] and method == "PUT":
         cfg = req.get("config") or {}
         if pl["id"] == "example-gateway-quota":
@@ -13095,6 +13127,10 @@ class H(BaseHTTPRequestHandler):
         if p == "/api/v1/agents": return self.send_json({"sources": []})
         if p == "/api/v1/agents/sessions": return self.send_json({"sessions": personal_listed(False), "items": []})
         if p == "/api/v1/agents/hidden": return self.send_json({"sessions": personal_listed(True)})
+        if p == "/mock/start-fail":
+            START_FAIL.update(n=int(q.get("n", ["1"])[0]), code=q.get("code", ["assistant_in_doubt"])[0],
+                              delay=float(q.get("delay", ["0"])[0]))
+            return self.send_json(START_FAIL)
         if p == "/mock/personal-agents":
             if q.get("reset"): PERSONAL_HIDDEN.clear()
             return self.send_json({"hidden": sorted(PERSONAL_HIDDEN)})
@@ -14182,7 +14218,11 @@ class H(BaseHTTPRequestHandler):
             # with none, and its watch sends the first line once claude has written it (MOCK_ASSISTANT_TRANSCRIPT_SECONDS
             # later, default 1). MOCK_ASSISTANT_START_SECONDS: the request itself takes that long (the hub prepares the
             # directory, the model config and the live snapshot first); meanwhile the app shows "Preparing".
-            time.sleep(float(os.environ.get("MOCK_ASSISTANT_START_SECONDS", "0")))
+            time.sleep(float(os.environ.get("MOCK_ASSISTANT_START_SECONDS", "0")) + START_FAIL["delay"])
+            if START_FAIL["n"] > 0:  # GET /mock/start-fail: this start is cut off on its way to the assistant
+                START_FAIL["n"] -= 1
+                return self.send_json({"error": "和助手的连接在发送途中断了，可能已经发出去了：先看看再决定要不要重发",  # i18n-ignore
+                                       "code": START_FAIL["code"], "delivered": "unknown", "retryable": False}, 502)
             body = json.loads(self.last_body or b"{}")
             prompt = body.get("prompt", "")
             SENT.append({"text": prompt, "images": body.get("images"), **({"launcher": body["launcher"]} if body.get("launcher") else {})})

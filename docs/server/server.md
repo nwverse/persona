@@ -18,8 +18,9 @@ The server's code ships as these programs (`server/cmd/`), all of one build (`ve
 The hub and the managers apart:
 
 - **Each without the other's code.** `TestPersonaHubDoesNotLinkTheManager` (`cmd/persona-hub`) lets the hub's program link only the hub's own packages and the shared ones (`internal/depguard`: `HubOwn`, `Shared`); `TestPersonaManagerDoesNotLinkTheHub` (`cmd/persona-manager`) keeps the hub's own packages out of the manager's. Both check the four release platforms and Windows. The two talk over the bus only. The hub's one exception for now (`HubExceptions`, which may only shrink): `internal/extension` and what it pulls in, for the looks it serves, until extensions are a part of their own.
-- **Released together.** The release, a direct deploy (`scripts/deploy/deploy.sh`) and the Docker image put `persona-hub` and `persona-manager` beside `personad`, and the hub's self-update swaps them with it (`update.ProgramNames`, [hub-update.md](../operations/hub-update.md) ("Programs swapped together with personad")): two more downloads and `.prev` copies per update. `install.sh` installs `personad` alone; the next update brings the two.
-- **The hub runs as personad for now.** The hub's service runs `personad hub run`, which starts `personad assistant` as its child unless `assistant.mode` is `service`. A hub run as `persona-hub` goes by the `personad` beside it for what runs or replaces the server (`hub.ServerBinary`): the built-in manager it starts, the update's target, setup's service binary, the edge's default switch.
+- **Released together.** The release, a direct deploy (`scripts/deploy/deploy.sh`) and the Docker image put `persona-hub` and `persona-manager` beside `personad`, and the hub's self-update swaps them with it (`update.ProgramNames`, [hub-update.md](../operations/hub-update.md) ("Programs swapped together with personad")): two more downloads and `.prev` copies per update. `install.sh` installs the two with `personad` on the computer that runs the hub (`--hub`, a `hub.json`, or the two there already), each downloaded and checked before any is put in place; other computers get neither. A release that lacks one leaves the file there as it was, unless a service runs it: then the self-update and `install.sh` refuse it ([hub-update.md](../operations/hub-update.md) ("A release without `persona-hub` or `persona-manager`")).
+- **The services run personad for now.** The hub's service runs `personad hub run`, which starts `personad assistant` as its child unless `assistant.mode` is `service`. Nothing moves an install to the other programs by itself: a deploy keeps the program the hub's unit runs (`scripts/deploy/hub-systemd.sh`, [hub-restart.md](../operations/hub-restart.md)), and so does a self-update.
+- **A hub run as persona-hub stays persona-hub.** It starts the built-in manager as `persona-manager assistant` beside it when that is the same build (`version -v`), else as the `personad` beside it (`hub.managerBinary`). A self-update replaces `personad` (the release's main download, `hub.ServerBinary`) with the two programs and goes on as the swapped `persona-hub`: the restart, the edge's hand-over and every way back (the new process, the edge, the watchdog) run it (`run` in `pending.json`; a build that does not know `run` brings the hub back as `personad hub run`, the same hub). `hub switch` without `--binary` goes on with the program the edge's active slot runs, from either program, so while a slot serves it never moves a hub between `personad` and `persona-hub`; with nothing serving it names `personad` (`hub.ServerBinary`), as before. The edge refuses any switch while it backs off a failing slot, so that default only reaches a switch it takes once a slot is up again; on a hub that runs `persona-hub` it moves the hub to `personad` until its service restarts, so give `--binary` there. Setup still installs `personad` as the service's binary.
 - **One container in Docker.** The hub image runs the hub and the built-in manager as two processes under `personad supervise`, each restarted on its own ([docker.md](../operations/docker.md) ("The hub and the built-in manager in one container")).
 - **Two services on a new install.** `hub setup` installs the hub's service and the built-in manager's own (`persona-manager-assistant.service`, or the launchd agent `com.persona.manager.assistant`, running `personad assistant` with `PERSONA_ASSISTANT_DEPLOY=service`), and binds the second to the first with a one-time code. Existing installs keep the hub's child until `hub setup --manager-service` ([upgrade.md](../operations/upgrade.md): every install type, step by step). See [managers.md](../assistant/managers.md) ("The built-in manager as its own service").
 
@@ -47,6 +48,42 @@ The hub and the managers apart:
 | `internal/pushcrypto` | Push-body encryption with phone public key (HPKE), `docs/operations/push-relay.md` |
 | `internal/relay` | Publisher-run personad relay, `docs/operations/push-relay.md` |
 | `internal/tunnel` | Tailcat node key / endpoint, hub dialing, new-binary transfer over tailcat (“Tailcat hole punching” below) |
+
+## Client traffic diagnostics
+
+The hub writes privacy-safe `traffic` minute buckets to its normal journal. These are
+transport diagnostics, not application state or a delivery receipt. No extra API,
+database table, request body, device name, literal dynamic path, query, bearer token,
+or push token is introduced. Credential and registration IDs are independently
+hashed with a fixed domain separator; use the device registry's credential binding
+when joining them, never a display-name match.
+
+- Authenticated registered-client requests have `action=started` counts on receipt
+  and `action=completed` counts on return, grouped by the ServeMux route template,
+  platform and response status. Sum **started only** for request volume; completed
+  counters supply duration and response-size measurements. Failed authentication is
+  still covered by the separate rate-limited security log, not attributed to a device.
+- `body_bytes` and `max_body_bytes` count application response bytes before gzip,
+  or WebSocket application-frame bytes after a successful write/read. They are not
+  TLS, compression or physical wire-byte measurements. WebSocket ping/pong buckets
+  count attempts/replies and the latter's elapsed time; the persisted device-session
+  history retains connection duration and observed close reasons.
+- Push buckets distinguish alert, background categories and Live Activity
+  start/update/end, with logical attempt and accepted/failed actions. A successful
+  transport retry produces one terminal result for the logical send; do not add
+  attempts and accepts together. Acceptance does not prove iOS delivery or wake-up.
+- Completed minute buckets are emitted at most once per minute per key; the final
+  partial bucket is emitted on orderly shutdown. Active key cardinality is bounded,
+  with overflow counts retained without identities. An abrupt process loss can
+  lose the still-buffered minute; telemetry cannot reconstruct earlier unlogged
+  successful HTTP requests or Live Activity updates.
+
+Live Activity settings refresh only the affected device's projected content.
+Same-value retries and non-activity preferences do not force a fleet-wide resend.
+Foreground suppression applies to both activity updates and push-to-start; a start
+suppressed in the foreground remains eligible after the last matching phone socket
+leaves. Important interaction alerts and the existing urgent activity fast path
+remain unchanged.
 
 ## Connecting to herdr
 
