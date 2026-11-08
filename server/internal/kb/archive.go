@@ -244,6 +244,9 @@ func (e *Engine) archiveChat(ctx context.Context, src Source, sc SourceChat) (in
 func (e *Engine) saveArchived(c *Chat, cursor string, n int, listed time.Time) error {
 	e.Store.chatMu.Lock()
 	defer e.Store.chatMu.Unlock()
+	if err := e.Store.recoverIngest(c.ID); err != nil {
+		return err
+	}
 	cur, ok := e.Store.Chat(c.ID)
 	if !ok {
 		cur = c

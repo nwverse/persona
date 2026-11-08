@@ -392,6 +392,16 @@ func (e *Engine) claim(kind, id string, u Update, by string, evidence []Evidence
 // editTagging changes the tagging fields of an entity's metadata in place (other fields as they are on disk); it
 // writes and notifies only when edit says it changed something and the file differs.
 func (s *Store) editTagging(kind, id string, edit func(*Tagging) bool) error {
+	unlockDays := func() {}
+	defer func() { unlockDays() }()
+	if kind == KindChat {
+		s.mu.Lock()
+		if err := s.pendingIngestLocked(id); err != nil {
+			s.mu.Unlock()
+			return err
+		}
+		unlockDays = s.mu.Unlock
+	}
 	s.metaMu.Lock()
 	path := s.entityPath(kind, id)
 	current := map[string]json.RawMessage{}
@@ -430,6 +440,8 @@ func (s *Store) editTagging(kind, id string, edit func(*Tagging) bool) error {
 		err = writeJSON(path, next)
 	}
 	s.metaMu.Unlock()
+	unlockDays()
+	unlockDays = func() {}
 	if err == nil && changed {
 		s.notify(kind, id, "metadata")
 	}

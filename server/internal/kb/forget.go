@@ -24,6 +24,16 @@ func (e *Engine) ForgetSource(source string) (Forgotten, error) {
 	}
 	e.Store.applyMu.Lock()
 	defer e.Store.applyMu.Unlock()
+	e.Store.ingestMu.Lock()
+	defer e.Store.ingestMu.Unlock()
+	e.Store.chatMu.Lock()
+	defer e.Store.chatMu.Unlock()
+	e.Store.mu.Lock()
+	err := e.Store.recoverIngestsLocked()
+	e.Store.mu.Unlock()
+	if err != nil {
+		return Forgotten{}, err
+	}
 	var out Forgotten
 	prefix := source + "-"
 	names := map[string]bool{} // the forgotten chats' names: the source of their timeline lines

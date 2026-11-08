@@ -136,6 +136,9 @@ func (e *Engine) compressFailed(ctx context.Context, c *Chat, err error) error {
 func (e *Engine) putCompressed(c *Chat, set func(cur *Chat)) (bool, error) {
 	e.Store.chatMu.Lock()
 	defer e.Store.chatMu.Unlock()
+	if err := e.Store.recoverIngest(c.ID); err != nil {
+		return false, err
+	}
 	cur, ok := e.Store.Chat(c.ID)
 	if !ok {
 		return false, nil

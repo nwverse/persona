@@ -73,6 +73,16 @@ func (s *Store) putEntity(kind, id string, v any, t *Tagging, manual bool) error
 	if s.readOnly {
 		return ErrReadOnly
 	}
+	unlockDays := func() {}
+	defer func() { unlockDays() }()
+	if kind == KindChat {
+		s.mu.Lock()
+		if err := s.pendingIngestLocked(id); err != nil {
+			s.mu.Unlock()
+			return err
+		}
+		unlockDays = s.mu.Unlock
+	}
 	s.metaMu.Lock()
 	path := s.entityPath(kind, id)
 	current := map[string]json.RawMessage{}
@@ -85,35 +95,7 @@ func (s *Store) putEntity(kind, id string, v any, t *Tagging, manual bool) error
 		s.metaMu.Unlock()
 		return nil
 	} // forgotten during an external call
-	incoming := entityMap(v)
-	// Keep an explicit clear in metadata; omitting it makes detail clients fall back to cached tags.
-	if t.Tags != nil && len(t.Tags) == 0 {
-		incoming["tags"] = json.RawMessage(`[]`)
-	}
-	if exists {
-		var protected Tagging
-		raw, _ := json.Marshal(current)
-		_ = json.Unmarshal(raw, &protected)
-		if !manual {
-			for _, field := range append([]string{"pinned", "locked_fields", "locked", "provenance"}, protected.LockedFields...) {
-				key := fieldKey(field)
-				if value, ok := current[key]; ok {
-					incoming[key] = value
-				} else {
-					delete(incoming, key)
-				}
-			}
-			if protected.Locked {
-				for _, key := range []string{"importance", "relevance", "tags"} {
-					if value, ok := current[key]; ok {
-						incoming[key] = value
-					} else {
-						delete(incoming, key)
-					}
-				}
-			}
-		}
-	}
+	incoming := protectedEntity(v, t, current, manual)
 	before, _ := json.Marshal(current)
 	after, _ := json.Marshal(incoming)
 	changed := !exists || !bytes.Equal(before, after)
@@ -137,10 +119,46 @@ func (s *Store) putEntity(kind, id string, v any, t *Tagging, manual bool) error
 		t.persisted = true
 	}
 	s.metaMu.Unlock()
+	unlockDays()
+	unlockDays = func() {}
 	if err == nil && changed {
 		s.notify(kind, id, "metadata")
 	}
 	return err
+}
+
+// protectedEntity merges fields held by a person or extension into a pipeline write.
+func protectedEntity(v any, t *Tagging, current map[string]json.RawMessage, manual bool) map[string]json.RawMessage {
+	incoming := entityMap(v)
+	// Keep an explicit clear in metadata; omitting it makes detail clients fall back to cached tags.
+	if t.Tags != nil && len(t.Tags) == 0 {
+		incoming["tags"] = json.RawMessage(`[]`)
+	}
+	if len(current) > 0 {
+		var protected Tagging
+		raw, _ := json.Marshal(current)
+		_ = json.Unmarshal(raw, &protected)
+		if !manual {
+			for _, field := range append([]string{"pinned", "locked_fields", "locked", "provenance"}, protected.LockedFields...) {
+				key := fieldKey(field)
+				if value, ok := current[key]; ok {
+					incoming[key] = value
+				} else {
+					delete(incoming, key)
+				}
+			}
+			if protected.Locked {
+				for _, key := range []string{"importance", "relevance", "tags"} {
+					if value, ok := current[key]; ok {
+						incoming[key] = value
+					} else {
+						delete(incoming, key)
+					}
+				}
+			}
+		}
+	}
+	return incoming
 }
 
 func (s *Store) putSummary(kind, id, text string, manual bool) error {
