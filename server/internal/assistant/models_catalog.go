@@ -76,9 +76,9 @@ func catalogGenerationKey(id string) string {
 }
 
 // catalogModel looks a model id up: as given, then without a vendor prefix ("anthropic/…"), the "[1m]" marker and a
-// date suffix ("-20250929"), case-insensitively. An id the catalog does not list inherits capabilities from the
-// closest earlier generation of the same family. The returned model's InheritedFrom is set only in that case, and its
-// name is left empty.
+// date suffix ("-20250929"), case-insensitively. The same generation written with the other separator (glm-5-3 and
+// glm-5.3) is that catalog entry. Anything else the catalog does not list inherits capabilities from the closest
+// earlier generation of the same family. InheritedFrom is set only then, and the name is left empty.
 func catalogModel(id string) (proto.ProviderModel, bool) {
 	key := normalizeCatalogID(id)
 	cat := modelCatalog()
@@ -90,6 +90,11 @@ func catalogModel(id string) (proto.ProviderModel, bool) {
 		if m, ok := cat.byID[stripped]; ok {
 			return m, true
 		}
+	}
+	// glm-5-3 and glm-5.3 are the same generation. Treating the dot form as missing would
+	// inherit from an older one (glm-5.2) and drop capabilities the catalog already states.
+	if twin, ok := sameGeneration(stripped, cat.gens); ok {
+		return twin.model, true
 	}
 	src, ok := closestGeneration(stripped, cat.gens)
 	if !ok {
@@ -107,6 +112,28 @@ func inheritedModel(id string, src proto.ProviderModel) proto.ProviderModel {
 		DefaultEffort: src.DefaultEffort,
 		InheritedFrom: src.ID,
 	}
+}
+
+// sameGeneration is the catalog entry of this family whose version compares equal (5.3 and 5-3).
+// A parameter size has no generation, so it cannot land here.
+func sameGeneration(key string, gens []catalogGeneration) (catalogGeneration, bool) {
+	want, ok := parseModelGeneration(key)
+	if !ok {
+		return catalogGeneration{}, false
+	}
+	best := -1
+	for i := range gens {
+		if gens[i].gen.family != want.family || compareVersion(gens[i].gen.version, want.version) != 0 {
+			continue
+		}
+		if best < 0 || gens[i].model.ID < gens[best].model.ID {
+			best = i
+		}
+	}
+	if best < 0 {
+		return catalogGeneration{}, false
+	}
+	return gens[best], true
 }
 
 // closestGeneration is the newest catalog generation strictly older than key in the same family.
@@ -132,16 +159,21 @@ func closestGeneration(key string, gens []catalogGeneration) (catalogGeneration,
 }
 
 // enrichModel fills what the gateway did not say from the catalog; what it said wins. A name is filled only from an
-// exact entry. InheritedFrom is set when a missing capability came from an earlier generation. A "[1m]" id whose
-// window is still unknown is 1M.
+// exact entry (a listed id, or the same generation written with the other separator). InheritedFrom is set only when
+// a missing capability was copied from an earlier generation. An unlisted "[1m]" id is a 1M window, ahead of an
+// inherited window; an exact entry keeps the window the catalog states.
 func enrichModel(m proto.ProviderModel) proto.ProviderModel {
 	if c, ok := catalogModel(m.ID); ok {
 		if m.Name == "" && c.InheritedFrom == "" {
 			m.Name = c.Name
 		}
+		window := c.ContextWindow
+		if c.InheritedFrom != "" && strings.HasSuffix(strings.ToLower(m.ID), "[1m]") {
+			window = 0
+		}
 		filled := false
-		if m.ContextWindow == 0 && c.ContextWindow != 0 {
-			m.ContextWindow = c.ContextWindow
+		if m.ContextWindow == 0 && window != 0 {
+			m.ContextWindow = window
 			filled = true
 		}
 		if len(m.Efforts) == 0 && len(c.Efforts) > 0 {
