@@ -87,6 +87,15 @@ class AppleCIPreparationTests(unittest.TestCase):
         })
         self.assertIn('-skip-testing:PersonaTests/AssistantHTMLSecurityTests/aRealInfiniteLoopCanBeDiscardedWithoutBlockingANewCard()', script)
 
+    def test_mac_lane_excludes_the_same_old_hub_lab_suite_as_ios(self):
+        # The suite is compiled into PersonaMacTests too; selected without its lab hub it is reported as a skip,
+        # which result inspection rightly refuses.
+        script = SCRIPT.read_text()
+        mac = script.split("ci_run 'macOS offline unit tests'", 1)[1].split('result macos-unit', 1)[0]
+        self.assertIn('-skip-testing:PersonaMacTests/OldHubCompatibilityIntegrationTests', mac)
+        self.assertIn('-skip-testing:PersonaMacTests/ExtensionStreamSnapshotTests', mac)
+        self.assertIn('-skip-testing:PersonaTests/OldHubCompatibilityIntegrationTests', script)
+
     def test_reminder_round_trip_is_enabled_with_owned_simulator_permission(self):
         script = SCRIPT.read_text()
         self.assertIn('xcrun simctl privacy "$SIM" grant reminders "$CI_BUNDLE_ID"', script)
