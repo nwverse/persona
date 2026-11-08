@@ -4,7 +4,10 @@ name: ${PERSONA_COMPOSE_PROJECT:-jarvis}
 
 services:
   hub:
-    image: ${PERSONA_IMAGE-${JARVIS_IMAGE:?set PERSONA_IMAGE in .env}}
+    # PERSONA_IMAGE in .env (or the older JARVIS_IMAGE); with neither, compose stops: the hub has "neither an image
+    # nor a build context". No `:?` inside the default: Compose before 5.0.2 evaluates a default even when its
+    # variable is set, so a check there would fail installs that set only PERSONA_IMAGE.
+    image: ${PERSONA_IMAGE-${JARVIS_IMAGE:-}}
     restart: unless-stopped
     init: true
     depends_on:

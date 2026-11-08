@@ -428,7 +428,7 @@ The built-in manager (the assistant the hub starts) used to keep its state in th
 Adding a migration:
 
 1. Decide whose table it is: the side whose store reads and writes it. A table both sides need is a sign that one side should ask the other over the bus instead (as the manager learns the computers waiting to be confirmed from the hub's handover, `devicewire.Config.Pending`, rather than reading `machine_trust`).
-2. Put the file in exactly that set's directory, named `NNNN_what.sql` with a number neither set has: look in both `hub/` and `manager/`, on master and in every worktree (`docs/lessons/workflow.md`). Two lines once took 421 at the same time (`hub/0421_hub_settings.sql`, `manager/0421_machine_usage.sql`); that pair is frozen in the guard, harmless since each set records its own part. Write it idempotently (`IF NOT EXISTS`) where you can.
+2. Put the file in exactly that set's directory, named `NNNN_what.sql` with a number neither set has: look in both `hub/` and `manager/`, on `main` and in every worktree (`docs/lessons/workflow.md`). Two lines once took 421 at the same time (`hub/0421_hub_settings.sql`, `manager/0421_machine_usage.sql`); that pair is frozen in the guard, harmless since each set records its own part. Write it idempotently (`IF NOT EXISTS`) where you can.
 3. Guards: `TestMigrationSets` (`internal/db`) fails for a file in both sets or at the top level; `TestStoresTouchTheirOwnTables` (`internal/hub`) fails when a store interface of the hub reaches a table outside the hub set, or one of the managers' (assistant, devices, extmgr, extension, mail, agents) a table outside the manager set.
 
 ## Configuration (hub `~/.persona/`, 0600, never committed)

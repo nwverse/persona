@@ -52,4 +52,8 @@ You run a small hub on an always-on machine; your devices talk only to it, and i
 
 [Getting started](docs/operations/getting-started.md) · [Architecture](docs/server/architecture.md) · [Protocol](docs/protocol/protocol.md) · [Docker](docs/operations/docker.md) · [iOS](docs/apple/ios.md) · [Mac](docs/apple/mac.md) · [Android](docs/android/android.md) · [Web](docs/web/web.md) · [All docs](CLAUDE.md#docs-index)
 
+## License
+
+Persona is licensed under the [MIT License](LICENSE).
+
 <sub>Third-party licenses: [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).</sub>
