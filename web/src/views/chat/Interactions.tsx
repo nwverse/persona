@@ -49,16 +49,18 @@ function useCardKeys({ enter, digit }: { enter?: () => boolean | void; digit?: (
   const [focused, setFocused] = useState(false);
   const at = useRef({ enter, digit });
   at.current = { enter, digit };
+  // a card this page cannot answer (a disabled fieldset, which stops its buttons but not a plain div's focus) shows no
+  // hints: cardKeyAction already leaves its keys alone
+  const answerable = () => !ref.current?.closest("fieldset[disabled]");
   const onKeyDown = (e: React.KeyboardEvent) => {
     const act = cardKeyAction(e.nativeEvent, ref.current);
     if (!act) return;
     if (act.kind === "esc") {
-      // with no composer to hand focus back to (an overview, a bare test), the key is left alone
-      if (focusComposer()) {
-        e.preventDefault();
-        // Esc stays this card's: the window's own Esc (ChatView's interrupt of a working agent) must not take it too
-        e.stopPropagation();
-      }
+      // always this card's: the window's own Esc (ChatView's interrupt of a working agent) must not take it. The
+      // composer is where focus goes when there is one to type into; without one (read-only) focus stays put
+      e.preventDefault();
+      e.stopPropagation();
+      focusComposer();
     } else if (act.kind === "digit") {
       if (at.current.digit?.(act.digit)) e.preventDefault();
     } else if (at.current.enter?.() !== false) e.preventDefault();
@@ -69,7 +71,7 @@ function useCardKeys({ enter, digit }: { enter?: () => boolean | void; digit?: (
       ref,
       tabIndex: -1,
       "data-card-keys": true,
-      onFocus: (e: React.FocusEvent<HTMLDivElement>) => setFocused(e.target === ref.current),
+      onFocus: (e: React.FocusEvent<HTMLDivElement>) => setFocused(e.target === ref.current && answerable()),
       onBlur: (e: React.FocusEvent<HTMLDivElement>) => {
         if (!ref.current?.contains(e.relatedTarget)) setFocused(false);
       },
@@ -159,6 +161,13 @@ function QuestionCard({ ix }: { ix: Interaction }) {
   const [custom, setCustom] = useState<Record<number, string>>({});
   const [busy, setBusy] = useState(false);
   const q = qs[qi];
+  // picking on a single-select slides to the next question by itself, a beat later; going on before that (Enter, the
+  // arrow) cancels the slide, or the two would advance a question each and skip one
+  const slide = useRef<number | undefined>(undefined);
+  const advance = () => {
+    clearTimeout(slide.current);
+    setQi((i) => Math.min(qs.length - 1, i + 1));
+  };
   // the card's own keys (a hook, so before the early return): digits pick this question's options, Enter is what the
   // send arrow does, Esc is the card's wherever in it focus sits
   const keys = useCardKeys({
@@ -171,7 +180,7 @@ function QuestionCard({ ix }: { ix: Interaction }) {
     enter: () => {
       if (busy || (last ? !all : !answered(qi))) return false;
       if (last) void send();
-      else setQi(qi + 1);
+      else advance();
     },
   });
   if (!q) return null;
@@ -201,7 +210,7 @@ function QuestionCard({ ix }: { ix: Interaction }) {
       const next = q.multi_select ? (have.includes(label) ? have.filter((x) => x !== label) : [...have, label]) : [label];
       return { ...cur, [qi]: next };
     });
-    if (!q.multi_select && !last) setTimeout(() => setQi((i) => Math.min(qs.length - 1, i + 1)), 380);
+    if (!q.multi_select && !last) slide.current = window.setTimeout(() => setQi((i) => Math.min(qs.length - 1, i + 1)), 380);
   };
 
   return (
@@ -239,7 +248,7 @@ function QuestionCard({ ix }: { ix: Interaction }) {
             )}
             {q.multi_select && <span className="text-[11.5px] text-ink-3">{t("chat-interactions.multi_select")}</span>}
           </span>
-          <SendArrow ready={last ? all : answered(qi)} busy={busy} kbd={keys.focused} label={last ? t("chat-interactions.send_answer") : t("chat-interactions.next_question")} onClick={() => (last ? void send() : setQi(qi + 1))} />
+          <SendArrow ready={last ? all : answered(qi)} busy={busy} kbd={keys.focused} label={last ? t("chat-interactions.send_answer") : t("chat-interactions.next_question")} onClick={() => (last ? void send() : advance())} />
         </>
       }
     >
@@ -730,7 +739,7 @@ function MultiScreenCard({ ix }: { ix: Interaction }) {
     >
       {d.detail && <p className="mb-2 text-[12.5px] leading-relaxed whitespace-pre-wrap text-ink-2">{d.detail}</p>}
       <div className="flex flex-col gap-0.5">
-        {options.filter((o) => !o.kind).map((o) => (
+        {options.filter((o) => !o.kind).map((o, i) => (
           <button
             key={o.key}
             type="button"
@@ -743,6 +752,7 @@ function MultiScreenCard({ ix }: { ix: Interaction }) {
             <span className={`mt-[1px] flex h-4.5 min-w-4.5 shrink-0 items-center justify-center rounded-[5px] px-1 font-mono text-[10.5px] shadow-hairline ${picked.has(o.key) ? "bg-accent text-white" : "bg-field text-ink-2"}`}>
               {picked.has(o.key) ? "✓" : o.key}
             </span>
+            {keys.focused && i < 9 && <DigitHint n={i + 1} />}
             <span className="min-w-0">
               <OptionLabel label={o.label} />
               {o.detail && <span className="block text-[12px] text-ink-3">{o.detail}</span>}

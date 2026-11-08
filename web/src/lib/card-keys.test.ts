@@ -1,8 +1,9 @@
 // @vitest-environment jsdom
 // cardKeyAction: whose a key pressed inside a waiting card is (lib/card-keys.ts). Esc is the card's wherever in it
 // focus sits; digits and a bare Enter are the card's only when the key is nobody else's — not an input method's, not a
-// chord's, not a text field's, and not a focused control's own activation. focusComposer / focusWaitingCard are the
-// two ways focus goes (jsdom's elements have no boxes, so every element counts as showing).
+// chord's, not a text field's, and not the focused control's own to press. A card inside a disabled fieldset (a session
+// this page cannot answer) has no keys at all. focusComposer / focusWaitingCard are the two ways focus goes (jsdom's
+// elements have no boxes, so every element counts as showing).
 import { afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { cardKeyAction, focusComposer, focusWaitingCard } from "./card-keys";
 
@@ -15,12 +16,13 @@ beforeAll(() => {
 
 beforeEach(() => {
   document.body.innerHTML = `
-    <main><textarea id="composer"></textarea></main>
+    <main><div data-chat-dock><textarea id="composer"></textarea></div></main>
     <div id="card" data-card-keys tabindex="-1">
       <button id="deny">Deny</button>
       <input id="field" />
       <span id="text">what it asks</span>
     </div>
+    <fieldset disabled><div id="locked" data-card-keys tabindex="-1"><button id="lockedDeny">Deny</button></div></fieldset>
     <div id="other"></div>`;
 });
 
@@ -50,10 +52,11 @@ describe("a waiting card's keys", () => {
     expect(cardKeyAction(press("Escape", "card", { altKey: true }), card())).toBeNull();
   });
 
-  it("takes a digit 1–9 from the card and from its controls, but not from a field, shifted, with a modifier, or outside", () => {
+  it("takes a digit 1–9 on the card itself or on plain content, but not from a field, a control, shifted, with a modifier, or outside", () => {
     expect(cardKeyAction(press("3", "card"), card())).toEqual({ kind: "digit", digit: 3 });
-    expect(cardKeyAction(press("1", "deny"), card())).toEqual({ kind: "digit", digit: 1 });
     expect(cardKeyAction(press("9", "text"), card())).toEqual({ kind: "digit", digit: 9 });
+    // a digit with a control focused is that control's to press (its click's), not the card's
+    expect(cardKeyAction(press("1", "deny"), card())).toBeNull();
     expect(cardKeyAction(press("3", "field"), card())).toBeNull();
     expect(cardKeyAction(press("3", "card", { shiftKey: true }), card())).toBeNull();
     expect(cardKeyAction(press("3", "card", { ctrlKey: true }), card())).toBeNull();
@@ -73,6 +76,14 @@ describe("a waiting card's keys", () => {
     }
   });
 
+  it("has no keys at all for a card this page cannot answer (a disabled fieldset)", () => {
+    const locked = document.getElementById("locked")!;
+    for (const k of ["Escape", "1", "Enter"]) {
+      expect(cardKeyAction(press(k, "locked"), locked)).toBeNull();
+      expect(cardKeyAction(press(k, "lockedDeny"), locked)).toBeNull();
+    }
+  });
+
   it("yields to an input method composing, and to keys that are no card's", () => {
     for (const composing of [{ isComposing: true }, { keyCode: 229 }]) {
       expect(cardKeyAction(press("Escape", "card", composing), card())).toBeNull();
@@ -87,16 +98,23 @@ describe("a waiting card's keys", () => {
 });
 
 describe("where focus goes", () => {
-  it("Esc's target: the chat's composer", () => {
+  it("Esc's target: the chat's composer in its dock (not a textarea elsewhere on the page)", () => {
+    const stray = document.createElement("textarea");
+    stray.id = "stray";
+    document.getElementById("other")!.append(stray);
     expect(focusComposer()).toBe(true);
     expect(document.activeElement).toBe(document.getElementById("composer"));
   });
 
-  it("the shortcut's target: the first waiting card that is showing", () => {
+  it("the shortcut's target: the first waiting card that is showing and can be answered", () => {
     expect(focusWaitingCard()).toBe(true);
     expect(document.activeElement).toBe(card());
+    // the locked card is never the target
+    document.getElementById("card")!.remove();
+    (document.getElementById("composer") as HTMLTextAreaElement).focus();
+    expect(focusWaitingCard()).toBe(false);
     // no card, no handoff: the caller leaves the key alone
-    document.body.querySelector("[data-card-keys]")!.remove();
+    document.body.querySelector("#locked")!.closest("fieldset")!.remove();
     expect(focusWaitingCard()).toBe(false);
   });
 });

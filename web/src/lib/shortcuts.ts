@@ -525,6 +525,9 @@ export function jumpHint(bindings: Bindings, platform: Platform = currentPlatfor
 /** Where the key was pressed: in a terminal (xterm's helper textarea), in a text field, or on the page. */
 export type FocusKind = "terminal" | "input" | "page";
 
+/** Elements that type; whoever reads them (the dispatcher's focusKind, a card's own keys) needs the same list. */
+export const EDITABLE = "input, textarea, select, [contenteditable=''], [contenteditable='true']";
+
 interface ElementLike {
   closest?: (selector: string) => unknown;
   tagName?: string;
@@ -535,7 +538,7 @@ export function focusKind(target: unknown): FocusKind {
   const el = target as ElementLike | null;
   if (!el || typeof el.closest !== "function") return "page";
   if (el.closest(".xterm")) return "terminal";
-  if (el.closest("input, textarea, select, [contenteditable=''], [contenteditable='true']") || el.isContentEditable) return "input";
+  if (el.closest(EDITABLE) || el.isContentEditable) return "input";
   return "page";
 }
 

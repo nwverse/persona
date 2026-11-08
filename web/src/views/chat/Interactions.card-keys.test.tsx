@@ -47,6 +47,12 @@ const question = JSON.parse(
     '"questions":[{"question":"哪个框架？","header":"测试","multi_select":false,"options":[' +
     '{"label":"Swift Testing","description":"新代码统一用"},{"label":"XCTest","description":"和现有的一致"}]}]}',
 ) as Interaction;
+const threeQuestions = JSON.parse(
+  '{"id":"q_3","machine_id":"m","session_id":"s","kind":"question","tool_name":"AskUserQuestion",' +
+    '"questions":[{"question":"第一题","multi_select":false,"options":[{"label":"A"},{"label":"B"}]},' +
+    '{"question":"第二题","multi_select":false,"options":[{"label":"C"}]},' +
+    '{"question":"第三题","multi_select":false,"options":[{"label":"D"}]}]}',
+) as Interaction;
 const permission = JSON.parse(
   '{"id":"p_1","machine_id":"m","session_id":"s","kind":"permission","tool_name":"Bash","tool_input":{"command":"npm test"},"summary":"跑测试"}',
 ) as Interaction;
@@ -106,13 +112,44 @@ describe("a card answering from the keyboard", () => {
 
   it("Esc goes back to the composer and answers nothing", async () => {
     const composer = document.createElement("main");
-    composer.innerHTML = '<textarea></textarea>';
+    composer.innerHTML = '<div data-chat-dock><textarea></textarea></div>';
     document.body.append(composer);
     act(() => root.render(<InteractionCard ix={permission} />));
     act(() => cardRoot().focus());
     await press("Escape");
     await flush();
     expect(document.activeElement).toBe(composer.querySelector("textarea"));
+    expect(calls).toEqual([]);
+  });
+
+  it("a digit then Enter right away advances one question, not two (the pick's own slide is cancelled)", async () => {
+    vi.useFakeTimers();
+    try {
+      act(() => root.render(<InteractionCard ix={threeQuestions} />));
+      act(() => cardRoot().focus());
+      await press("1");
+      await press("Enter");
+      act(() => vi.advanceTimersByTime(400));
+      expect(host.textContent).toContain("第二题");
+      expect(host.textContent).not.toContain("第三题");
+      // unanswered as it is, Enter sends nothing
+      await press("Enter");
+      await flush();
+      expect(calls).toEqual([]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("a card this page cannot answer (a disabled fieldset) takes no keys: nothing is picked, nothing sent", async () => {
+    Object.assign(getState(), { sessions: { m: [{ machine_id: "m", session_id: "s", source_kind: "codex_history" } as Session] } });
+    act(() => root.render(<InteractionCard ix={question} />));
+    expect(host.querySelector("fieldset[disabled]")).toBeTruthy();
+    act(() => cardRoot().focus());
+    await press("1");
+    await press("Enter");
+    await flush();
+    for (const b of host.querySelectorAll("button[aria-pressed]")) expect(b.getAttribute("aria-pressed")).toBe("false");
     expect(calls).toEqual([]);
   });
 
