@@ -30,6 +30,9 @@ export interface PlanTask {
   why?: string;
   todo_id?: string;
   error?: string;
+  /** The failed start's coded refusal and its details (as a session's start_error_code / start_error_args). */
+  error_code?: string;
+  error_args?: Record<string, string>;
 }
 
 export interface TaskPlan {

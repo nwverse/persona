@@ -29,6 +29,29 @@ The node runs the list script and the launchers in an interactive shell (`loginS
 always bash without zsh (Git Bash on Windows). Bash runs as `bash -ic` and reads `~/.bashrc`, not `~/.bash_profile` / `~/.profile`: aliases kept there aren't listed.
 Bash has no zsh `(z)` / `(Q)`, and macOS's bundled bash 3.2 has no `BASH_ALIASES`, so under bash the script prints `alias -p`, and the node splits words and strips quotes by the shell's rules itself (nothing expanded or run, `node/launchers_shell.go`) before handing them to the same parser.
 
+### The terminal's shell is another environment (#1642)
+
+The node **lists** launchers, and runs "Test availability", the launcher health checks, probes and repairs, in its own login shell (`loginShellProgram -ic`). A start **types** the launcher into a new herdr tab, whose shell is whatever herdr opens there. When the two read different startup files, a launcher the list shows does not exist where it runs:
+
+- herdr's panes run inside a container (sharing the home directory) whose `~/.bashrc` detects the container and returns early, before the launchers are defined;
+- the node lists from zsh (`~/.zshrc`, zsh installed and a `~/.zshrc` there) while the account's login shell, and so the tab, is bash;
+- herdr's `[terminal] default_shell`, or a herdr server started outside the node with another `$SHELL`;
+- a bash login tab reads `~/.bash_profile` / `~/.profile`, which does not source `~/.bashrc`;
+- a Persona-managed launcher's `personad` (an absolute path) or `claude` is not visible inside the terminal's environment.
+
+The tab's shell answers within a second with its own line (`bash: <launcher>: command not found`, `zsh: command not found: <launcher>`, `sh: 1: <launcher>: not found`, `fish: Unknown command: <launcher>`, `…: No such file or directory`, `…: Permission denied`). The node reads that line while it waits for claude (`node/shellmiss.go`; only after the command it typed, never the echoed command itself, older scrollback, or claude's own output) and ends the start right away, closing the tab, with `launcher_missing` (or `claude_missing` when the launcher ran but the tab's PATH has no claude) and `where: "terminal"`.
+The hub says it in the user's language: which shell the tab opens, that it has no such command, and which shell and rc file the launcher list came from (`docs/protocol/protocol.md` "Errors"). Lines about other commands (rc noise, a `PROMPT_COMMAND`) do not end the start; a start that then times out names the last such line instead of guessing at a busy machine. Shells and locales whose lines are not recognized still wait for the timeout.
+A few lines need care: dash, ksh and busybox say `…: <path>: not found` of a missing path, which counts as a missing file like bash's `No such file or directory` (a managed launcher's `personad` the terminal cannot see); `personad launch` prints its `claude not found in PATH …` through `log.Fatal`, with the date and time in front; fish follows an error inside a function with a backtrace (`in function 'cc' with arguments '--session-id …'`) that repeats the session id but is no echo of the command.
+A launcher the node does not list either (removed from the rc file, a stale name from an old picker or plan) ends the start the same way but as plain `launcher_missing`, without `where`: it is gone from the login shell too, so it is neither worded nor kept as the terminal's problem.
+
+To fix it, make the launcher exist where the terminal's shell reads it:
+
+- define it above the early `return` of the rc file, or in a file both environments source (`~/.config/launchers.sh` sourced from `~/.zshrc` and `~/.bashrc`);
+- make the shell herdr opens the one the node lists from (the login shell, or herdr's `default_shell`), or have `~/.bash_profile` source `~/.bashrc`;
+- or add it in Persona as a model provider ("Running Persona-managed launchers" below): nothing then depends on rc files, as long as the terminal sees the node's `personad` and `claude`.
+
+Launcher health keeps such a launcher apart (`not_in_terminal`, `docs/server/launcher-health.md`): the login shell's check passes, so only a start with it that works clears it.
+
 ## Detecting launchers in ~/.zshrc (`launcherScript` in `node/launchers.go`)
 
 node gathers two things in one login-shell invocation (`zsh -ic`, loading `~/.zshrc` first), cached for 1 minute.

@@ -27,6 +27,7 @@ import (
 	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/link"
 	"github.com/nwverse/persona/server/internal/proto"
+	"github.com/nwverse/persona/server/internal/rpc"
 	"github.com/nwverse/persona/server/internal/sessionlist"
 )
 
@@ -722,8 +723,12 @@ func (h *Hub) startSession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := m.call(ctx, "session.start", params, &res); err != nil {
-		callErr(w, err)
+		h.startEnded(m.cfg.ID, p.ResumeSessionID, params, err)
+		callErr(w, apierr.OnMachine(err, m.name())) // a launcher the new tab cannot run "on <name>'s MacBook"
 		return
+	}
+	if !async {
+		h.startEnded(m.cfg.ID, p.ResumeSessionID, params, nil)
 	}
 	if model, _ := params["model"].(string); p.Model != "" && p.ResumeSessionID == "" && model == strings.TrimSpace(p.Model) {
 		launcher, _ := params["launcher"].(string) // the one it ran with: the manager filled it in
@@ -768,6 +773,29 @@ func (h *Hub) startSession(w http.ResponseWriter, r *http.Request) {
 			}
 		}(res.Session.SessionID)
 	}
+}
+
+// startEnded tells the machine's manager how an app's start went, for launcher health (#1642,
+// assistant/launcher_health_starts.go): one that failed, or one the node ran before answering that worked; the manager
+// follows one answered at once (async) in the session list. A start whose outcome the hub does not know (the machine
+// away, the call timed out) is not told, nor a resume on the launcher it had (which one the node ran is its).
+func (h *Hub) startEnded(mid, resume string, params map[string]any, err error) {
+	launcher, _ := params["launcher"].(string)
+	if launcher == "" && resume != "" {
+		return
+	}
+	r := assistantwire.StartEnded{MachineID: mid, SessionID: resume, Launcher: launcher, OK: err == nil}
+	if err != nil {
+		if code := apierr.NodeCode(err); code == "timeout" || code == "node_unreachable" || errors.Is(err, context.Canceled) {
+			return
+		}
+		r.Error = err.Error()
+		var re *rpc.Error
+		if errors.As(err, &re) {
+			r.Code, r.Data = re.Code, re.Data
+		}
+	}
+	h.asstOf(h.machineOwner(mid)).notify(assistantwire.EventStartEnded, r)
 }
 
 // startsAsync: a start the app asked to have answered at once is, when the node can acknowledge it before the session
