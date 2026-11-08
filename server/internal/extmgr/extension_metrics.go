@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"math"
 	"net/http"
-	"regexp"
 	"slices"
 	"sort"
 	"strings"
@@ -14,6 +13,7 @@ import (
 
 	"github.com/nwverse/persona/server/internal/db"
 	"github.com/nwverse/persona/server/internal/extension/host"
+	"github.com/nwverse/persona/server/internal/lazyre"
 )
 
 // How the extensions are running (docs/extensions/extensions.md "How they run", #1857): the hub counts each extension's calls,
@@ -297,11 +297,11 @@ func (s *extensionStats) follow(ch chan LogLine) (stop func()) {
 }
 
 // secretPatterns find what looks like a credential in a line: it is replaced before the line is kept.
-var secretPatterns = []*regexp.Regexp{
-	regexp.MustCompile(`(?i)((?:authorization|cookie)["']?\s*[:=]\s*["']?)(?:(?:bearer|basic|token)\s+)?[^\s"',;&]{6,}`),
-	regexp.MustCompile(`(?i)(bearer\s+)[A-Za-z0-9._~+/=-]{8,}`),
-	regexp.MustCompile(`(?i)((?:token|secret|password|passwd|api[_-]?key|access[_-]?key)["']?\s*[:=]\s*["']?)[^\s"',;&]{6,}`),
-	regexp.MustCompile(`(?i)([?&](?:token|key|secret|access_token|sig)=)[^\s&"']+`),
+var secretPatterns = []*lazyre.Regexp{
+	lazyre.New(`(?i)((?:authorization|cookie)["']?\s*[:=]\s*["']?)(?:(?:bearer|basic|token)\s+)?[^\s"',;&]{6,}`),
+	lazyre.New(`(?i)(bearer\s+)[A-Za-z0-9._~+/=-]{8,}`),
+	lazyre.New(`(?i)((?:token|secret|password|passwd|api[_-]?key|access[_-]?key)["']?\s*[:=]\s*["']?)[^\s"',;&]{6,}`),
+	lazyre.New(`(?i)([?&](?:token|key|secret|access_token|sig)=)[^\s&"']+`),
 }
 
 // redactSecrets is line with what looks like a credential in it replaced by "***".

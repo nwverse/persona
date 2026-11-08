@@ -605,6 +605,17 @@ nonisolated struct Session: Codable, Identifiable, Hashable, Sendable {
     /// `context_window`, #2430); nil while the node cannot tell (no reply yet, a window it does not know, an older node).
     var contextTokens: Int? = nil
     var contextWindow: Int? = nil
+    /// Claude Code's session-only ultracode switch (#3427, docs/protocol/protocol.md "Claude Code ultracode"): what the
+    /// node last saw, nil while unknown (no evidence yet, an older node, not Claude); never what was asked for.
+    var ultracode: Bool? = nil
+    /// The node's reason (fixed text, in Chinese) why the switch is unavailable, was refused, could not be confirmed
+    /// or still waits; nil when it has none.
+    var ultracodeNote: String? = nil
+    /// A switch request waits for the turn to end or the terminal's box to clear: it applies next turn. A queue flag,
+    /// not the value asked for.
+    var ultracodePending: Bool = false
+    /// When a session that had it on was resumed with it off: the chat offers to turn it back on (never done by itself).
+    var ultracodeLostAt: Date? = nil
     var startedByPersona: Bool
     var assistant: Bool
     /// An assistant conversation moved out of the sidebar (listed under Archived; nothing is deleted).
@@ -823,6 +834,7 @@ nonisolated struct Session: Codable, Identifiable, Hashable, Sendable {
         case agentSurface = "agent_surface"
         case permissionMode = "permission_mode"
         case contextTokens = "context_tokens", contextWindow = "context_window"
+        case ultracode, ultracodeNote = "ultracode_note", ultracodePending = "ultracode_pending", ultracodeLostAt = "ultracode_lost_at"
         case repoRoot = "repo_root"
         case machineID = "machine_id", sessionID = "session_id", paneID = "pane_id", tabID = "tab_id",
              workspaceID = "workspace_id", agentName = "agent_name", startedByPersona = "started_by_persona", assistant, archived, state,
@@ -870,6 +882,11 @@ nonisolated struct Session: Codable, Identifiable, Hashable, Sendable {
         efforts = try c.decodeIfPresent([String].self, forKey: .efforts)
         contextTokens = try? c.decodeIfPresent(Int.self, forKey: .contextTokens) // an odd one never drops the session
         contextWindow = try? c.decodeIfPresent(Int.self, forKey: .contextWindow)
+        // An odd ultracode field never drops the session; omitted is unknown (an older hub or node), not off.
+        ultracode = (try? c.decodeIfPresent(Bool.self, forKey: .ultracode)).flatMap { $0 }
+        ultracodeNote = (try? c.decodeIfPresent(String.self, forKey: .ultracodeNote)).flatMap { $0 }.flatMap { $0.isEmpty ? nil : $0 }
+        ultracodePending = (try? c.decodeIfPresent(Bool.self, forKey: .ultracodePending)).flatMap { $0 } ?? false
+        ultracodeLostAt = (try? c.decodeIfPresent(Date.self, forKey: .ultracodeLostAt)).flatMap { $0 }.flatMap { $0.isMeaningful ? $0 : nil }
         let legacy = try decoder.container(keyedBy: HubNaming.Field.self)
         startedByPersona = try c.decodeIfPresent(Bool.self, forKey: .startedByPersona)
             ?? legacy.decodeIfPresent(Bool.self, forKey: HubNaming.Field(LegacyNames.startedByField)) ?? false
@@ -1267,13 +1284,13 @@ extension Session {
     var spaceKey: String? { spaceID.map { "\(machineID)/\($0)" } }
 
     /// Tab label, or "#n" when the label is just herdr's default number.
-    var slotLabel: String? {
+    nonisolated var slotLabel: String? {
         guard let name = slotName, !name.isEmpty else { return slotIndex.map { "#\($0)" } }
         if let i = slotIndex, name == String(i) { return "#\(i)" }
         return name
     }
 
-    var displayTitle: String { title.isEmpty || title == "Claude Code" ? folderName : title }
+    nonisolated var displayTitle: String { title.isEmpty || title == "Claude Code" ? folderName : title }
     /// The line a list row shows under the title: why it waits for you when its host says so, what it concluded or
     /// waits for once the hub triaged its turn (`workLine`), else the last words; Awaiting Reply's question first unless
     /// it is muted (`replyLine`).
@@ -1328,7 +1345,7 @@ extension Session {
     }
 
     /// Idle or unclassified: folded away in busy spaces (an Awaiting Reply one stays out: `AgentListOrder.stays`).
-    var isQuiet: Bool { state == .idle || state == .unknown }
+    nonisolated var isQuiet: Bool { state == .idle || state == .unknown }
 }
 
 /// Unified agent state (docs/protocol/agent-states.md), computed by the hub from herdr status, pending interactions and
@@ -1407,6 +1424,27 @@ nonisolated struct SessionKey: Hashable, Sendable, Codable {
     }
 }
 
+/// A lazy picture's ref: its chat's `SessionKey.path` and its item id, "<machine>/<session>/<item id>", or
+/// "<group>|<machine>/<session>/<item id>" for a chat on another group of hubs. The group says which hub has the bytes:
+/// asked of the current group's hub, a chat on another group's pictures never came (#1555).
+nonisolated enum ImageRef {
+    static func make(_ key: SessionKey, item: String) -> String { key.path + "/" + item }
+
+    /// The group whose hub has it, and the "<machine>/<session>/<item id>" that hub's `APIClient.image(ref:)` takes.
+    static func split(_ ref: String) -> (group: String, ref: String) {
+        guard let bar = ref.firstIndex(of: "|"), ref[..<bar].firstIndex(of: "/") == nil else { return ("", ref) }
+        return (String(ref[..<bar]), String(ref[ref.index(after: bar)...]))
+    }
+
+    /// The chat it is from.
+    static func session(_ ref: String) -> SessionKey? {
+        let (group, rest) = split(ref)
+        let parts = rest.split(separator: "/", maxSplits: 2).map(String.init)
+        guard parts.count == 3 else { return nil }
+        return SessionKey(group: group, machineID: parts[0], sessionID: parts[1])
+    }
+}
+
 nonisolated struct ImagePayload: Codable, Hashable, Sendable {
     var mime: String
     /// Base64; empty when `lazy`: history pages leave the bytes out and each image is fetched when it is shown.
@@ -1415,7 +1453,8 @@ nonisolated struct ImagePayload: Codable, Hashable, Sendable {
     var size: Int? = nil
     var width: Int? = nil
     var height: Int? = nil
-    /// Where a lazy image lives: "<machine>/<session>/<item id>" (filled in by ChatStore).
+    /// Where a lazy image lives: "<machine>/<session>/<item id>", "<group>|…" for another group of hubs (`ImageRef`,
+    /// filled in by ChatStore).
     var ref: String? = nil
 
     init(mime: String, data: String) {
@@ -1476,7 +1515,7 @@ nonisolated struct FoldImage: Codable, Hashable, Sendable {
     var size: Int?
     var width: Int?
     var height: Int?
-    /// Where its bytes are, like `ImagePayload.ref`: "<machine>/<session>/<item id>" (filled in by ChatStore).
+    /// Where its bytes are, like `ImagePayload.ref` (`ImageRef`, filled in by ChatStore).
     var ref: String? = nil
 
     enum CodingKeys: String, CodingKey {

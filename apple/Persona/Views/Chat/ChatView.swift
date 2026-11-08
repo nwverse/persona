@@ -345,7 +345,7 @@ struct ChatView: View {
         HStack(spacing: Theme.Space.s) {
             if macShowsBack {
                 Button { back() } label: {
-                    Image(systemName: backSymbol).font(Theme.Font.heading)
+                    ThemedIcon(backSymbol).font(Theme.Font.heading)
                         .scaledFrame(width: Theme.Size.icon, height: Theme.Size.icon).contentShape(.rect)
                 }
                 .buttonStyle(.borderless)
@@ -355,7 +355,7 @@ struct ChatView: View {
             }
             if pane == .chat, let expand = host?.expand {
                 Button { expand(key) } label: {
-                    Image(systemName: Theme.Icon.enlarge).font(Theme.Font.heading)
+                    ThemedIcon(Theme.Icon.enlarge).font(Theme.Font.heading)
                         .scaledFrame(width: Theme.Size.icon, height: Theme.Size.icon).contentShape(.rect)
                 }
                 .buttonStyle(.borderless)
@@ -438,7 +438,7 @@ struct ChatView: View {
                         }
                     }
                 } label: {
-                    Image(systemName: Theme.Icon.space).font(Theme.Font.heading).foregroundStyle(Color.primary)
+                    ThemedIcon(Theme.Icon.space).font(Theme.Font.heading).foregroundStyle(Color.primary)
                         .scaledFrame(width: Theme.Size.avatarL, height: Theme.Size.avatarL)
                         .surface(interactive: true, in: .circle)
                 }
@@ -461,7 +461,7 @@ struct ChatView: View {
                     }
                 }
             } label: {
-                Image(systemName: Theme.Icon.space).font(Theme.Font.heading).foregroundStyle(Color.primary)
+                ThemedIcon(Theme.Icon.space).font(Theme.Font.heading).foregroundStyle(Color.primary)
                     .scaledFrame(width: Theme.Size.avatarL, height: Theme.Size.avatarL)
                     .surface(interactive: true, in: .circle)
             }
@@ -476,7 +476,7 @@ struct ChatView: View {
             }
         }
         Menu { moreMenuItems } label: {
-            Image(systemName: Theme.Icon.more).font(Theme.Font.heading).foregroundStyle(Color.primary)
+            ThemedIcon(Theme.Icon.more).font(Theme.Font.heading).foregroundStyle(Color.primary)
                 .scaledFrame(width: Theme.Size.avatarL, height: Theme.Size.avatarL)
                 .surface(interactive: true, in: .circle)
         }
@@ -1228,7 +1228,7 @@ struct ChatView: View {
                 // The foot of the open work line's card.
                 Button { toggleWork(group, fromHeader: false) } label: {
                     HStack(spacing: Theme.Space.sm) {
-                        Image(systemName: Theme.Icon.collapse).font(Theme.Font.labelStrong)
+                        ThemedIcon(Theme.Icon.collapse).font(Theme.Font.labelStrong)
                         Text("Collapse \(count) steps [Chat View 608bfc]").lineLimit(1).fixedSize()
                     }
                     .font(Theme.Font.caption)
@@ -1810,10 +1810,10 @@ struct ChatView: View {
         .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { h in
             if abs(footerRoom.height - h) >= 1 { footerRoom.height = h }
         }
-        // As short as the list may get while the keyboard is up: the header over it (folded or not), its top margin and the
-        // hairline above it. The cards take the rest (#1912).
+        // As short as the list may get while the keyboard is up: the header over it (folded or not) and the hairline above
+        // it. The cards take the rest (#1912).
         .onChange(of: headerRoom, initial: true) { _, h in
-            footerRoom.listFloor = Self.newestMargin + Theme.Size.line + Theme.Space.s // and a gap over 「N 个待处理」
+            footerRoom.listFloor = Theme.Size.line + Theme.Space.s // and a gap over 「N 个待处理」
             footerRoom.fixedHeader = h
             footerRoom.chrome = style == .dev && !sideBars ? chrome : nil
         }
@@ -1920,7 +1920,8 @@ struct ChatView: View {
                 .padding(.horizontal, Theme.Space.m)
                 .padding(.vertical, Theme.Space.s)
         } else {
-            mainFooter.padding(.top, Theme.Space.s)
+            // No room of its own above: the newest message is one row gap over its first row (`newestGap`, #1108).
+            mainFooter
         }
     }
 
@@ -1990,7 +1991,7 @@ struct ChatView: View {
     @ViewBuilder private var jumpArrow: some View {
             if arrowShows {
                 Button(action: jumpToEnd) {
-                    Image(systemName: Theme.Icon.down).font(Theme.Font.bodyStrong).scaledFrame(width: Theme.Size.avatar, height: Theme.Size.avatar)
+                    ThemedIcon(Theme.Icon.down).font(Theme.Font.bodyStrong).scaledFrame(width: Theme.Size.avatar, height: Theme.Size.avatar)
                 }
                 .accessibilityLabel("Jump to Latest")
                 #if os(macOS)
@@ -2170,8 +2171,10 @@ struct ChatView: View {
         return LazyVStack(alignment: .leading, spacing: Theme.Space.l) {
             // Newest first (the list is drawn upside down): the end sentinel, live text, unsent messages, lines (a failed
             // message among them, before the first line written after it).
+            // It takes no room: the rows' spacing alone is the gap to the footer, as between any two rows (#1108).
             Color.clear
                 .frame(height: Theme.Size.line)
+                .padding(.bottom, -Theme.Size.line)
                 .id(Self.bottomID)
             // A voice call's captions, the thread's last rows while it is bound here (docs/assistant/voice.md 6.2): they read the
             // call themselves; the page only asks whether one is bound.
@@ -2276,10 +2279,10 @@ struct ChatView: View {
         .onScrollTargetVisibilityChange(idType: String.self, threshold: 0.01) { ids in scratch.drawnLines = ids }
         .flippedBack() // the scroll view itself upside down; every row above is flipped back
         // Safe areas would land on the wrong ends of a flipped scroll view: ignore them and add the room ourselves.
-        // (Content top = the composer side on screen, content bottom = the navigation side.)
+        // (Content top = the composer side on screen, content bottom = the navigation side.) The newest end has no
+        // margin: the rows' spacing is its gap to the footer (`newestGap`).
         // The header floats over the list (Agents): the oldest end leaves its full height free, so nothing hides
         // under it; the list's own frame never changes as it folds, so folding never moves the messages.
-        .contentMargins(.top, Self.newestMargin, for: .scrollContent)
         .contentMargins(.bottom, headerRoom + 10, for: .scrollContent)
         .scrollIndicators(.hidden)
         // iOS 26's soft edge blur works out its region on the unflipped view and fogged the whole list.
@@ -2514,7 +2517,7 @@ struct ChatView: View {
     private var compactChrome: some View {
         HStack(spacing: 0) {
             Button { back() } label: {
-                Image(systemName: backSymbol).font(Theme.Font.secondaryStrong).dynamicTypeSize(...DynamicTypeSize.xxLarge).scaledFrame(width: Theme.Size.tapTarget, height: Theme.Size.wellM)
+                ThemedIcon(backSymbol).font(Theme.Font.secondaryStrong).dynamicTypeSize(...DynamicTypeSize.xxLarge).scaledFrame(width: Theme.Size.tapTarget, height: Theme.Size.wellM)
             }
             .buttonStyle(.plain)
             .accessibilityLabel(backLabel)
@@ -2560,7 +2563,7 @@ struct ChatView: View {
             HStack(spacing: 0) {
                 if let goal = session?.goal {
                     Button { Haptics.tap(); showGoal = true } label: {
-                        Image(systemName: Theme.Icon.goal)
+                        ThemedIcon(Theme.Icon.goal)
                             .font(Theme.Font.labelHeavy)
                             .foregroundStyle(goal.tint)
                             .scaledFrame(width: Theme.Size.tapTarget, height: Theme.Size.wellM)
@@ -2584,7 +2587,7 @@ struct ChatView: View {
     private var activityMark: some View {
         let bg = session?.background?.count ?? 0
         return HStack(spacing: Theme.Space.xxs) {
-            Image(systemName: bg > 0 ? ActivityChips.backgroundSymbol : ActivityChips.loopSymbol)
+            ThemedIcon(bg > 0 ? ActivityChips.backgroundSymbol : ActivityChips.loopSymbol)
                 .font(Theme.Font.labelHeavy)
             if bg > 0 { Text("\(bg)").font(Theme.Font.labelHeavy.monospacedDigit()) }
         }
@@ -2709,7 +2712,7 @@ struct ChatView: View {
             HStack(spacing: Theme.Space.xs) {
                 Text(title).font(Theme.Font.heading).lineLimit(1).truncationMode(.tail)
                 if chevron {
-                    Image(systemName: Theme.Icon.expand).font(Theme.Font.labelStrong).foregroundStyle(.secondary)
+                    ThemedIcon(Theme.Icon.expand).font(Theme.Font.labelStrong).foregroundStyle(.secondary)
                 }
             }
             ZStack {
@@ -2850,7 +2853,7 @@ struct ChatView: View {
                         // Files (a swipe to the left now quotes a message, #1058), the terminal (it comes up from the
                         // bottom, TerminalCover) and Git are in ···: one button there (#1205).
                         Menu { moreMenuItems } label: {
-                            Image(systemName: Theme.Icon.more).font(Theme.Font.heading).dynamicTypeSize(...DynamicTypeSize.xxLarge).scaledFrame(width: Theme.Size.tapTarget, height: Theme.Size.tapTarget)
+                            ThemedIcon(Theme.Icon.more).font(Theme.Font.heading).dynamicTypeSize(...DynamicTypeSize.xxLarge).scaledFrame(width: Theme.Size.tapTarget, height: Theme.Size.tapTarget)
                                 .contentShape(.circle)
                         }
                         .labelOnlyMenu()
@@ -2913,11 +2916,10 @@ struct ChatView: View {
     /// Back: out of files / Git to the chat first, then off the page.
     /// The widest the conversation gets: lines longer than this are hard to read.
     static let readableWidth: CGFloat = 760
-    /// The list's margin at its newest end (over the composer; the list is upside down, so its top margin).
-    static let newestMargin: CGFloat = 10
-    /// From the newest row's bottom to the composer: the margin, the end marker and the rows' spacing. The first message
-    /// of a new conversation is laid out with it before the chat takes over (`FirstMessagePending`, #1911).
-    static let newestGap: CGFloat = newestMargin + Theme.Size.line + Theme.Space.l
+    /// From the newest row's bottom to the footer's first row: the rows' spacing, as between any two rows (#1108); the
+    /// end marker takes no room and neither the list nor the footer adds a margin there. The first message of a new
+    /// conversation is laid out with it before the chat takes over (`FirstMessagePending`, #1911).
+    static let newestGap: CGFloat = Theme.Space.l
 
     /// An Agents chat whose actions are in the system's side column (no header of its own).
     private var sideBars: Bool { style == .dev && barsVertical }
@@ -3061,7 +3063,7 @@ struct ChatView: View {
 
     private var headerBackButton: some View {
         Button { back() } label: {
-            Image(systemName: backSymbol).font(Theme.Font.heading).dynamicTypeSize(...DynamicTypeSize.xxLarge).scaledFrame(width: Theme.Size.tapTarget, height: Theme.Size.tapTarget)
+            ThemedIcon(backSymbol).font(Theme.Font.heading).dynamicTypeSize(...DynamicTypeSize.xxLarge).scaledFrame(width: Theme.Size.tapTarget, height: Theme.Size.tapTarget)
                 .contentShape(.circle)
         }
         .buttonStyle(.plain)
@@ -3072,7 +3074,7 @@ struct ChatView: View {
     /// A hosting sheet's Full Screen beside its ✕ (#3743): the agent's full page instead of the sheet.
     private func hostedExpandButton(_ expand: @escaping (SessionKey) -> Void) -> some View {
         Button { expand(key) } label: {
-            Image(systemName: Theme.Icon.enlarge).font(Theme.Font.heading).dynamicTypeSize(...DynamicTypeSize.xxLarge)
+            ThemedIcon(Theme.Icon.enlarge).font(Theme.Font.heading).dynamicTypeSize(...DynamicTypeSize.xxLarge)
                 .scaledFrame(width: Theme.Size.tapTarget, height: Theme.Size.tapTarget)
                 .contentShape(.circle)
         }
@@ -3583,7 +3585,7 @@ struct StartingNote: View {
     var body: some View {
         HStack(alignment: .firstTextBaseline, spacing: Theme.Space.s) {
             if let error {
-                Image(systemName: Theme.Icon.errorFilled).font(Theme.Font.labelStrong).foregroundStyle(Theme.danger)
+                ThemedIcon(Theme.Icon.errorFilled).font(Theme.Font.labelStrong).foregroundStyle(Theme.danger)
                 Text("Didn't start: \(error) [Chat View 38dec8]").font(Theme.Font.secondary).foregroundStyle(.secondary).lineLimit(3)
             } else {
                 ProgressView().controlSize(.mini)
@@ -3606,7 +3608,7 @@ struct AttentionNote: View {
 
     var body: some View {
         HStack(alignment: .firstTextBaseline, spacing: Theme.Space.s) {
-            Image(systemName: Theme.Icon.needsYou).font(Theme.Font.labelStrong).foregroundStyle(StatusPalette.needsYou.text)
+            ThemedIcon(Theme.Icon.needsYou).font(Theme.Font.labelStrong).foregroundStyle(StatusPalette.needsYou.text)
             Text(reason).font(Theme.Font.secondary).foregroundStyle(.secondary).lineLimit(3)
             Spacer(minLength: 0)
             if let link { FeishuLink(url: link).font(Theme.Font.secondaryStrong) }
@@ -3636,11 +3638,11 @@ struct NextNeedsYouStrip: View {
     var body: some View {
         Button(action: open) {
             HStack(spacing: Theme.Space.s) {
-                Image(systemName: Theme.Icon.needsYou).font(Theme.Font.labelStrong).foregroundStyle(StatusPalette.needsYou.text)
+                ThemedIcon(Theme.Icon.needsYou).font(Theme.Font.labelStrong).foregroundStyle(StatusPalette.needsYou.text)
                 Text("Next Needing You").font(Theme.Font.secondaryStrong).foregroundStyle(Color.primary).lineLimit(1)
                 Text(title).font(Theme.Font.secondary).foregroundStyle(.secondary).lineLimit(1).truncationMode(.tail)
                 Spacer(minLength: 0)
-                Image(systemName: Theme.Icon.forward).font(Theme.Font.label).foregroundStyle(.secondary)
+                ThemedIcon(Theme.Icon.forward).font(Theme.Font.label).foregroundStyle(.secondary)
             }
             .padding(.horizontal, Theme.Space.m).padding(.vertical, Theme.Space.s)
             .surface(interactive: true, in: .rect(cornerRadius: Theme.Radius.card, style: .continuous))
@@ -3660,7 +3662,7 @@ struct FailureNote: View {
     var body: some View {
         VStack(alignment: .leading, spacing: Theme.Space.s) {
             HStack(alignment: .firstTextBaseline, spacing: Theme.Space.s) {
-                Image(systemName: Theme.Icon.errorFilled).font(Theme.Font.labelStrong).foregroundStyle(Theme.danger)
+                ThemedIcon(Theme.Icon.errorFilled).font(Theme.Font.labelStrong).foregroundStyle(Theme.danger)
                 Text(Session.failureText(reason)).font(Theme.Font.secondary).foregroundStyle(.secondary).lineLimit(3)
                 Spacer(minLength: 0)
             }
@@ -3703,7 +3705,7 @@ struct SuggestionPill: View {
             fill()
         } label: {
             HStack(spacing: Theme.Space.s) {
-                Image(systemName: Theme.Icon.ai).font(Theme.Font.labelStrong).foregroundStyle(Theme.ai)
+                ThemedIcon(Theme.Icon.ai).font(Theme.Font.labelStrong).foregroundStyle(Theme.ai)
                 Text(text).font(Theme.Font.secondary).foregroundStyle(.secondary).lineLimit(1).truncationMode(.tail)
                 Spacer(minLength: 4)
                 Text("Use").font(Theme.Font.labelStrong).foregroundStyle(Theme.accent).lineLimit(1).fixedSize()
@@ -3896,7 +3898,7 @@ struct Composer: View, Equatable {
                         selection = TextSelection(insertionPoint: text.endIndex)
                         focused = true
                     } label: {
-                        Label { Text(prompt.title).lineLimit(1) } icon: { Image(systemName: Theme.Icon.insert) }
+                        Label { Text(prompt.title).lineLimit(1) } icon: { ThemedIcon(Theme.Icon.insert) }
                     }
                     .accessibilityIdentifier("extension-prompt-\(prompt.id)")
                 }
@@ -3984,7 +3986,16 @@ struct Composer: View, Equatable {
         composerNotes
             .readinessSheets($failureRoute)
             .modifier(MainReadinessRefresh(enabled: isMain))
+            // The Claude quota beside ultracode's switch (#1307): kept no older than two minutes while the chat offers the
+            // switch and is in front, so a menu opened after a long stay in the chat says where the quota is now.
+            .tabActiveTask(id: ultracodeOffered && phase == .active) {
+                guard ultracodeOffered, phase == .active else { return }
+                await UsageWindowsStore.shared.keepFresh(model)
+            }
     }
+
+    /// This chat offers Claude Code's ultracode switch (#1307).
+    private var ultracodeOffered: Bool { Ultracode.offered(model.session(key), features: model.features(key.group)) }
 
     /// Persona's main conversation: it carries the readiness card and the send gate (as the web, `useReadinessGate`).
     private var isMain: Bool { model.assistantMain == key && model.session(key)?.assistant == true }
@@ -4011,6 +4022,11 @@ struct Composer: View, Equatable {
                     model.sendNow(key, text: "继续") // i18n-ignore
                 }
                 .transition(.move(edge: .bottom).combined(with: .opacity))
+            }
+            // A resume turned ultracode off (#1307): one line to turn it back on, or dismiss.
+            if let s = model.session(key), Ultracode.lostShown(s, features: model.features(key.group)) {
+                UltracodeLostNote(key: key, session: s)
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
             }
             if isMain {
                 // The main conversation: what it still needs, or a refused send (docs/assistant/onboarding.md 4.4, 5.2).
@@ -4438,7 +4454,7 @@ struct LoopDraftNote: View {
 
     var body: some View {
         HStack(alignment: .firstTextBaseline, spacing: Theme.Space.s) {
-            Image(systemName: Theme.Icon.inProgress).font(Theme.Font.labelStrong)
+            ThemedIcon(Theme.Icon.inProgress).font(Theme.Font.labelStrong)
                 .foregroundStyle(hint.missing ? AnyShapeStyle(.tertiary) : AnyShapeStyle(Theme.loop))
             Text(hint.text).font(Theme.Font.secondary)
                 .foregroundStyle(hint.missing ? AnyShapeStyle(.tertiary) : AnyShapeStyle(.secondary))
@@ -4606,7 +4622,7 @@ struct QueueStrip: View {
             .padding(.top, Theme.Space.sm)
         } label: {
             HStack(spacing: Theme.Space.sm) {
-                Image(systemName: "tray.and.arrow.down").accessibilityHidden(true)
+                ThemedIcon("tray.and.arrow.down").accessibilityHidden(true)
                 Text("\(queued.count) queued · Claude will handle them in order").lineLimit(1)
                 Spacer(minLength: 0)
                 if busy { ProgressView().controlSize(.mini) }
@@ -4638,7 +4654,7 @@ struct QueueStrip: View {
                             .background(Theme.accent.opacity(0.14), in: .circle)
                         Text(q).font(Theme.Font.secondary).foregroundStyle(Color.primary).lineLimit(2).multilineTextAlignment(.leading)
                         Spacer(minLength: 0)
-                        Image(systemName: Theme.Icon.more).font(Theme.Font.label).foregroundStyle(.secondary).padding(.top, Theme.Space.xs)
+                        ThemedIcon(Theme.Icon.more).font(Theme.Font.label).foregroundStyle(.secondary).padding(.top, Theme.Space.xs)
                     }
                     .padding(.horizontal, Theme.Space.m)
                     .padding(.vertical, Theme.Space.s)
@@ -4746,13 +4762,18 @@ struct SessionInfoSheet: View {
                         row("shippingbox", agent, info.version)
                         if let route = session?.codexRoute { routeRow(route, note: session?.codexRouteNote) }
                         row("lock.open", String(localized: "Permissions"), SessionModes.modeLabel(info.permissionMode))
-                        row("gauge.with.dots.needle.50percent", String(localized: "Thinking Effort"), SessionModes.effortLabel(info.effort))
+                        row(Theme.Icon.effort, String(localized: "Thinking Effort"), SessionModes.effortLabel(info.effort))
+                        // Claude Code's ultracode (#1307): on, off, or unknown (no evidence yet, an older node).
+                        if let s = model.session(key) ?? session, Ultracode.infoShown(s, features: model.features(key.group)) {
+                            row(Theme.Icon.workflow, Ultracode.name, Ultracode.stateWord(s.ultracode))
+                                .accessibilityIdentifier("session-ultracode")
+                        }
                     }
                     Section("Usage") {
                         row(Theme.Icon.context, String(localized: "Context"), Self.tokens(info.contextTokens) + " tokens")
                         // The share of the window, live from the session list (#3289); nil while the window is unknown.
                         if let usage = ContextUsage(model.session(key) ?? session) { ContextUsageRow(usage: usage) }
-                        if info.compactions > 0 { row("rectangle.compress.vertical", String(localized: "Compactions"), String(localized: "\(info.compactions) times")) }
+                        if info.compactions > 0 { row(Theme.Icon.collapseAll, String(localized: "Compactions"), String(localized: "\(info.compactions) times")) }
                         row(Theme.Icon.conversation, String(localized: "Chat"), String(localized: "\(info.turns) turns"))
                         row("text.word.spacing", String(localized: "Output"), Self.tokens(info.outputTokens) + " tokens")
                         if let started = info.startedAt, started.isMeaningful {
@@ -4777,7 +4798,7 @@ struct SessionInfoSheet: View {
                             }
                         }
                         row(Theme.Icon.folder, String(localized: "Folder [Task Views 52daa7]"), Fmt.path(info.cwd ?? session?.cwd ?? "", home: model.namedMachine(key.machineRef)?.home), mono: true)
-                        if let b = info.gitBranch, !b.isEmpty { row("arrow.triangle.branch", String(localized: "Branch"), b, mono: true) }
+                        if let b = info.gitBranch, !b.isEmpty { row(Theme.Icon.gitBranch, String(localized: "Branch"), b, mono: true) }
                     }
                     Section {
                         copyButton(String(localized: "Copy Session ID [Chat View e63671]"), symbol: Theme.Icon.id, text: info.sessionID, toast: String(localized: "Session ID copied"))
@@ -5229,7 +5250,7 @@ struct WorkEndView: View, Equatable {
             }
             Button(action: collapse) {
                 HStack(spacing: Theme.Space.sm) {
-                    Image(systemName: Theme.Icon.collapse).font(Theme.Font.labelStrong)
+                    ThemedIcon(Theme.Icon.collapse).font(Theme.Font.labelStrong)
                     Text("Collapse \(count) steps [Chat View 608bfc]").lineLimit(1).fixedSize()
                 }
                 .font(Theme.Font.caption)
@@ -5380,7 +5401,7 @@ struct WorkLine: View, Equatable {
             .accessibilityIdentifier("work-head")
             Spacer(minLength: 0)
             if let openTerminal {
-                Button(action: openTerminal) { Image(systemName: Theme.Icon.terminal).font(Theme.Font.caption).foregroundStyle(.secondary) }
+                Button(action: openTerminal) { ThemedIcon(Theme.Icon.terminal).font(Theme.Font.caption).foregroundStyle(.secondary) }
                     .buttonStyle(.plain)
                     .accessibilityLabel("Open terminal")
             }
@@ -5402,7 +5423,7 @@ struct WorkLine: View, Equatable {
                             summary(now: end ?? .now)
                         }
                         if !isEmpty {
-                            Image(systemName: Theme.Icon.disclosure)
+                            ThemedIcon(Theme.Icon.disclosure)
                                 .font(Theme.Font.labelStrong)
                                 .rotationEffect(.degrees(open ? 90 : 0))
                         }
@@ -5419,7 +5440,7 @@ struct WorkLine: View, Equatable {
                 .accessibilityIdentifier("work-head")
                 Spacer(minLength: 0)
                 if let openTerminal {
-                    Button(action: openTerminal) { Image(systemName: Theme.Icon.terminal).font(Theme.Font.caption).foregroundStyle(.secondary) }
+                    Button(action: openTerminal) { ThemedIcon(Theme.Icon.terminal).font(Theme.Font.caption).foregroundStyle(.secondary) }
                         .buttonStyle(.plain)
                         .accessibilityLabel("Open terminal")
                 }

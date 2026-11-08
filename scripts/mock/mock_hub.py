@@ -31,13 +31,14 @@ def features():
     return ["error_codes", "client_hello", "heartbeat", "app_ping", "client_msg_id", "send_refusals",
             "screen_dialog", "resumable_interactions", "secret_prompts", "request_id", "file_upload",
             "tls", "endpoints", "connectors", "lark_attachments", "file_stream", "file_thumb", "git_blob", "task_push",
-            "machine_rename"] + (["git_write"] if os.environ.get("MOCK_GIT_WRITE") else []) + (["terminal_stream"] if TERMINAL_STREAM else []) + (
+            "machine_rename"] + (["git_write"] if os.environ.get("MOCK_GIT_WRITE") else []) + (["git_review"] if os.environ.get("MOCK_REVIEW") else []) + (["terminal_stream"] if TERMINAL_STREAM else []) + (
                 ["terminal_control", "terminal_scroll", "terminal_click", "terminal_mouse"] if TERMINAL_CONTROL else []) + (
                 ["terminal_panes"] if os.environ.get("MOCK_TERMINAL_PANES") else []) + (["herdr_client"] + ([] if os.environ.get("MOCK_TERMINAL_FULL_NOFOCUS") else ["herdr_focus"]) if TERMINAL_FULL else []) + (
                 ["assistant_compact", "assistant_main_new"] if os.environ.get("MOCK_MAIN_ACTIONS") == "1" else []) + (
                 ["messaging"] if os.environ.get("MOCK_MESSAGING") == "1" else []) + (
                 ["conversation_origin"] if os.environ.get("MOCK_AUTO_CONVERSATIONS") == "1" else []) + (
-                ["sessions_list", "sessions_lookup"] if os.environ.get("MOCK_SESSIONS_LIST") == "1" else [])
+                ["sessions_list", "sessions_lookup"] if os.environ.get("MOCK_SESSIONS_LIST") == "1" else []) + (
+                ["preview"] if os.environ.get("MOCK_PREVIEW") else [])
 
 
 def identity():
@@ -764,7 +765,7 @@ def wf_review_runs(step):
             "tool_use_id": "toolu_wf_docs", "agents_started": 4, "agents_done": 2, "agents_running": 0, "agents_failed": 1,
             "started_at": ago(minutes=50), "ended_at": ago(minutes=40), "error": "Error: Workflow aborted",
             "agents": [wf_review_agent("d1", "scan:ios", "Scan", "done", 50, 46, tool=("Grep", "找 docs/ios.md 里的旧说法")),
-                       wf_review_agent("d2", "scan:web", "Scan", "done", 49.5, 45, tool=("Grep", "找 docs/web.md 里的旧说法")),
+                       wf_review_agent("d2", "scan:web", "Scan", "done", 49.5, 45, tool=("Grep", "找 docs/web/web.md 里的旧说法")),
                        wf_review_agent("d3", "scan:android", "Scan", "failed", 49, 44, tool=("Read", "读 docs/android.md")),
                        wf_review_agent("d4", "fix:ios", "Fix", "stopped", 44, 40, tool=("Edit", "改 docs/ios.md"))]}
     return [parity, docs]
@@ -944,6 +945,8 @@ if os.environ.get("MOCK_TREE"):
                 TREE_MUTED.append("%s/%s" % (mid, sid))
 # "Show botmux sessions too" per machine (PUT /api/v1/machines/{mid}/botmux); unset is on, as on a real hub.
 BOTMUX_ON: dict = {}
+# Settings › Claude Code › Live replies per machine (PUT /api/v1/machines/{mid}/claude-live-replies, #1309); unset is on.
+LIVE_REPLIES_ON: dict = {}
 
 # MOCK_BOTMUX=1: a botmux session (docs/integrations/engines.md "botmux") that needs you, with botmux's reason and its Feishu topic
 # (attention_reason, external_url), a working one with only the topic, and one botmux stopped on an error
@@ -2756,7 +2759,7 @@ if os.environ.get("MOCK_WORKFLOW") == "1":
                      + [it("assistant", "text", 50, text="文档扫描放到后台了。")]
                      + [it("user", "text", 15, text="各端的功能对齐审计一遍，每条发现再核对一次")]
                      + tool("Grep", {"pattern": "struct .*View", "path": "apple/Persona/Views"}, "ChatView.swift:12\nInboxView.swift:8", 15)
-                     + tool("Read", {"file_path": "/Users/me/code/persona/docs/web.md"}, "1\t# Web", 15)
+                     + tool("Read", {"file_path": "/Users/me/code/persona/docs/web/web.md"}, "1\t# Web", 15)
                      + wf_call("toolu_wf_parity", "parity-audit", 14)
                      + [it("assistant", "text", 14, text="审计交给 workflow 在后台跑了，跑完我再汇总。")])
     for _w in wf_review_runs(0) + wf_review_runs(4)[:1]:
@@ -9151,6 +9154,15 @@ MOCK_TREE = {
     "notes.txt": "Remember to water the plants.\n",
 }
 MOCK_REPO = "code/weather"
+# MOCK_REVIEW=1 (#151): git/review answers for this checkout (mock_review.py), with the files its review shows on disk
+REVIEW = bool(os.environ.get("MOCK_REVIEW"))
+if REVIEW:
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    import mock_review
+    for _k, _v in {"/Sources/App/Forecast.swift": mock_review.FORECAST_NEW, "/Sources/App/Units.swift": "import Foundation\n\nlet celsius = UnitTemperature.celsius\n",
+                   "/docs/hourly.md": mock_review.HOURLY_MD, "/Package.resolved": mock_review.RESOLVED,
+                   "/deploy/": None, "/deploy/id_ed25519": "made-up key\n", "/Resources/": None}.items():
+        MOCK_TREE[MOCK_REPO + _k] = _v
 # MOCK_FILES_LIVE=1 (#2439, the Files tree and its auto refresh): a deeper tree, folders Git ignores (the list marks them
 # `ignored`), a socket that remembers what each browser asked to watch (fs_watch, GET /mock/fs-watch) and a hook that
 # changes a folder and pushes fs_changed to the browsers watching it (GET /mock/fs-change?dir=…&add=…&git=1).
@@ -9252,6 +9264,10 @@ GIT_PULL_STATE = {"behind": 28, "mode": "success", "pulls": 0}
 # back. Off: none, as on a hub without the Lark extension.
 PERSONAL_AGENTS = os.environ.get("MOCK_PERSONAL_AGENTS")
 PERSONAL_HIDDEN = {}  # session id -> when (ms)
+# #1368: GET /mock/start-fail?n=<count>&code=<code>&delay=<seconds>: the next n starts of an assistant conversation
+# (POST /api/v1/assistant/conversations) answer 502 with that code (default assistant_in_doubt, delivered unknown), and
+# every start, failed or not, first takes `delay` seconds (to see a retry spin). n=0&delay=0 puts it back.
+START_FAIL = {"n": 0, "code": "assistant_in_doubt", "delay": 0.0}
 def personal_rows():
     now = int(time.time() * 1000)
     rows = [("muse", "周报助手", 0.1, 2), ("grok_bot", "旅行规划", 1.5, 0), ("cue", "读书笔记", 5, 1), ("muse", "代码评审", 30, 0),
@@ -9427,7 +9443,7 @@ def mock_files(p, q):
     parts = p.split("/")
     if not (p.startswith("/api/v1/machines/") and len(parts) >= 6): return None
     mid, what = parts[4], "/".join(parts[5:])
-    if what not in ("file", "fs", "fs/find", "git/status", "git/diff", "git/show", "git/log", "git/branches", "git/pr"): return None
+    if what not in ("file", "fs", "fs/find", "git/status", "git/diff", "git/show", "git/log", "git/branches", "git/pr") and not (what == "git/review" and REVIEW): return None
     if not machine_online(mid): return {"error": "%s: machine is offline" % mid}, 503
     arg = lambda k: (q.get(k) or [""])[0]
     if what == "fs/find":  # #2438: every file under cwd, shallow first (the node's walk / git ls-files)
@@ -9462,10 +9478,10 @@ def mock_files(p, q):
     home, cwd = mock_abs(mid, arg("cwd"), "")
     root = home + "/" + MOCK_REPO
     if not (cwd == root or cwd.startswith(root + "/")):
+        if what == "git/review": return {"error": "not a Git repository", "code": "not_git"}, 409
         return ({"is_repo": False, "files": [], "commits": []}, 200) if what == "git/status" else ({"error": "not a git repository"}, 502)
-    if what == "git/status":
-        if os.environ.get("MOCK_GIT_WRITE"):
-            return git_write_status(root), 200
+    if what == "git/review":
+        return mock_review.answer(q, root, MOCK_TREE, MOCK_REPO, MOCK_COMMITS, EDIT_OLD, EDIT_NEW)
     if what == "git/branches":
         return (git_branches(), 200) if os.environ.get("MOCK_GIT_WRITE") else ({"error": "not found"}, 404)
     if what == "git/pr":
@@ -9474,6 +9490,9 @@ def mock_files(p, q):
         if GIT_W["pr_fail"]:
             return {"error": {"no_gh": "gh is not installed on this machine", "not_signed_in": "gh is not signed in on this machine: run gh auth login"}.get(GIT_W["pr_fail"], GIT_W["pr_fail"]), "code": GIT_W["pr_fail"]}, 409
         return {"branch": GIT_W["branch"], "pr": GIT_W["pr"] if GIT_W["pr"] and GIT_W["pr"]["head"] == GIT_W["branch"] else None}, 200
+    if what == "git/status":
+        if os.environ.get("MOCK_GIT_WRITE"):
+            return git_write_status(root), 200
         if os.environ.get("MOCK_GIT_PULL"):
             commits = MOCK_COMMITS[:30]
             if GIT_PULL_STATE["behind"] == 0:
@@ -10624,6 +10643,102 @@ service:
 
 有问题随时说。""",
 }
+
+
+# MOCK_AGENT_LIVE=1 (#1309): an agent's reply streams the way a Claude session Persona started sends it (its
+# MessageDisplay hook, docs/integrations/claude-integration.md "Live replies"): `delta` grows a batch of whole lines at a
+# time, the words before a tool call stay live while the tool runs (the transcript writes them with its result), then the
+# items land and the live text is cleared, and the words after the tool are a message of their own. Off by default.
+# GET /mock/agent_live?step=… drives the PR #42 review agent one step at a time (for screenshots and checks):
+#   prompt      a new message of the user's; the agent is working
+#   lines&n=K   the first message's first K lines live (all of them: the last without its newline, as the final batch)
+#   land        its text, the call and the call's result land; the live text is cleared
+#   late        the first message's whole text again, as a delta that comes after its item (the page must not show it twice)
+#   second&n=K  the message after the tool, its first K lines live
+#   done        that message lands, the live text is cleared, the agent is idle
+#   reset       the agent as it was before the first step: what the steps added goes (open pages keep it until reloaded)
+# What the steps add is stamped as a transcript would be: a message when its first line showed, the tool call when the
+# message's last line came, the call's result when it lands; so durations and the run bar's clock agree.
+AGENT_LIVE = os.environ.get("MOCK_AGENT_LIVE") == "1"
+AGENT_LIVE_BASE = {}  # the agent's items and list row before the first step (reset puts them back)
+AGENT_LIVE_AT = {}  # when the current message's first and last lines showed (the stamps above)
+AGENT_LIVE_FIRST = ["两条命名建议都改好了：", "", "- `fetchForecast` 改名为 `loadForecast`，和其他加载方法一致",
+                    "- `tmp` 改成 `hourlyEntries`，读起来清楚多了", "", "接下来跑一遍单元测试，确认没有改坏。"]
+AGENT_LIVE_SECOND = ["测试全部通过：42 个用例，用时 3.1 秒。", "", "改动已经推到 PR #42 的分支上，可以再看一眼。"]
+
+
+def agent_live_text(lines, n):
+    """The first n lines as the hook's batches build them: whole lines, the last one only with the final batch."""
+    n = max(0, min(n, len(lines)))
+    return "".join(l + "\n" for l in lines[:n]) if n < len(lines) else "\n".join(lines)
+
+
+def agent_live(step, n):
+    sid, mid = REVIEW, "macbook"
+    row = next(x for x in SESSIONS if x["session_id"] == sid)
+    if not AGENT_LIVE_BASE:
+        AGENT_LIVE_BASE.update(items=list(ITEMS[sid]), row=dict(row))
+
+    def send_all(msg):
+        for out, subs in list(LIVE):
+            if sid in subs:
+                try: out(msg)
+                except Exception: pass
+
+    def stamp():
+        return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+
+    def add(new, at=()):
+        before = ITEMS[sid][-1]["seq"]
+        for i, x in enumerate(new):
+            x["seq"], x["ts"] = before + 1 + i, (at[i] if i < len(at) and at[i] else stamp())
+        ITEMS[sid] = ITEMS[sid] + new
+        send_all({"type": "items", "machine_id": mid, "session_id": sid, "items": new, **span(new, before)})
+
+    def state(st, last=None):
+        now = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+        row.update(state=st, status=STATUS_OF_STATE[st], updated_at=now, state_since=now, rev=(row.get("rev") or 0) + 1)
+        if last: row["last_text"] = last
+        push_machine(mid)
+
+    def delta(text):
+        send_all({"type": "delta", "machine_id": mid, "session_id": sid, "text": text})
+
+    if step == "prompt":
+        add([it("user", "text", 0, text="把命名的两条建议改掉，再跑一遍测试")])
+        state("working")
+    elif step == "lines":
+        AGENT_LIVE_AT.setdefault("first", stamp())
+        if n >= len(AGENT_LIVE_FIRST):
+            AGENT_LIVE_AT.setdefault("final", stamp())
+        delta(agent_live_text(AGENT_LIVE_FIRST, n))
+    elif step == "land":
+        add([it("assistant", "text", 0, text="\n".join(AGENT_LIVE_FIRST))]
+            + tool("Bash", {"command": "swift test", "description": "跑单元测试"}, "Executed 42 tests, with 0 failures (0 unexpected) in 3.1 seconds", 0),
+            (AGENT_LIVE_AT.get("first"), AGENT_LIVE_AT.get("final")))
+        AGENT_LIVE_AT.clear()
+        delta("")
+    elif step == "late":
+        delta("\n".join(AGENT_LIVE_FIRST))
+    elif step == "second":
+        AGENT_LIVE_AT.setdefault("first", stamp())
+        delta(agent_live_text(AGENT_LIVE_SECOND, n))
+    elif step == "done":
+        add([it("assistant", "text", 0, text="\n".join(AGENT_LIVE_SECOND))], (AGENT_LIVE_AT.get("first"),))
+        AGENT_LIVE_AT.clear()
+        delta("")
+        state("idle", AGENT_LIVE_SECOND[-1])
+    elif step == "reset":
+        AGENT_LIVE_AT.clear()
+        delta("")
+        ITEMS[sid] = list(AGENT_LIVE_BASE["items"])
+        rev = (row.get("rev") or 0) + 1
+        row.clear()
+        row.update(AGENT_LIVE_BASE["row"], rev=rev)
+        push_machine(mid)
+    else:
+        return {"error": "step is prompt, lines, land, late, second, done or reset"}
+    return {"ok": True, "step": step}
 
 
 def say(text, user=None, stream=False, steps=10, ms=300, late=0, drop=False):
@@ -11922,6 +12037,12 @@ def markets_route(handler, p, body):
                 ui = [{"plugin": "example-gateway", "id": "panel", "title": "Example 网关", "placement": "launcher_section"},
                       {"plugin": "example-gateway", "id": "elsewhere", "title": "别家网关", "placement": "launcher_section"}]
         ui += [u for u in INBOX_ITEM_UI if placement in ("", u["placement"])]
+        if os.environ.get("MOCK_EXTENSION_SHOWCASE") == "1" and placement in ("", "nav_page"):
+            from pathlib import Path
+            snapshots = Path(__file__).resolve().parents[2] / "schema/extension/examples/showcase"
+            ui += [{"plugin": "showcase", "plugin_name": "Component showcase", "id": file.stem,
+                    "title": file.stem, "placement": "nav_page", "size": "full", "icon": "list"}
+                   for file in sorted(snapshots.glob("*.json"))]
         handler.send_json({"ui": ui}); return True
     if len(parts) == 8 and parts[4] == "example-chat" and parts[5:7] == ["-", "ui"] and method == "POST" and INBOX_ITEM_UI:
         code, out = inbox_item_ui(parts[7], req)
@@ -12088,7 +12209,8 @@ def file_ops_route(h, p, body):
             name = rel.rpartition("/")[2]
             final = file_ops_free(drel, name, req.get("conflict"))
             if final is None: return h.send_json({"error": "已经有了", "code": "exists", "name": name}, 409) or True
-            if req.get("conflict") == "replace": file_ops_take(drel + final)
+            if req.get("conflict") == "replace":  # the node moves the one there to the trash (#315), never deletes it
+                FILE_TRASH["t%d" % (len(FILE_TRASH) + 1)] = (req["dir"].rstrip("/") + "/" + final, file_ops_take(drel + final))
             for k, v in file_ops_take(rel).items(): MOCK_TREE[drel + final + k[len(rel):]] = v
             changed.update({(home + "/" + rel.rpartition("/")[0]).rstrip("/"), (home + "/" + drel).rstrip("/")})
             moved.append({"from": path, "to": req["dir"].rstrip("/") + "/" + final})
@@ -12422,6 +12544,13 @@ def voice_socket(h):
         h.close_connection = True
 
 
+preview_route = None
+if os.environ.get("MOCK_PREVIEW"):  # dev server previews (docs/web/preview.md): scripts/mock/mock_preview.py
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    import mock_preview
+    preview_route = mock_preview.install(sys.modules[__name__])
+
+
 if VOICE_MODE:  # iOS's protocol 2 beside the script above (docs/assistant/voice.md 6.8): scripts/mock/voice_mock.py
     sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
     import voice_mock
@@ -12550,6 +12679,7 @@ class H(BaseHTTPRequestHandler):
         u = urlparse(self.path); p = u.path; q = parse_qs(u.query)
         HITS["GET " + p] = HITS.get("GET " + p, 0) + 1
         if self.token_refused(): return
+        if preview_route and preview_route(self, "GET", p, q): return
         if p == "/api/v1/assistant/conversations/" + ASK1 + "/always":
             return self.send_json({"grants": ALWAYS_GRANTS})
         if recordings_route(self, "GET", p): return
@@ -12571,6 +12701,8 @@ class H(BaseHTTPRequestHandler):
             git = (q.get("git") or [""])[0] == "1"
             if git: FS_STATE["dirty"] += 1
             return self.send_json({"ok": True, "sent": fs_changed(mid, [path] if add else [], git), "path": path})
+        if p == "/mock/review" and REVIEW:
+            return self.send_json(mock_review.control(q))
         if p == "/mock/git-write" and os.environ.get("MOCK_GIT_WRITE"):
             global GIT_W
             if q.get("reset"): GIT_W = git_write_fresh()
@@ -12637,6 +12769,8 @@ class H(BaseHTTPRequestHandler):
         if p == "/mock/mark": return self.send_json({"ok": True})  # a test's marker in the request log (explore)
         if p == "/mock/photo": return self.send_json(set_photo(q.get("on", ["1"])[0] == "1"))  # PhotoSaveTests' own fixture
         if p == "/mock/lark_send_delay": return self.send_json(set_lark_send_delay(q.get("s", [""])[0]))  # LarkSendTests
+        if p == "/mock/agent_live" and AGENT_LIVE:  # an agent's reply streaming as Claude shows it (MOCK_AGENT_LIVE above)
+            return self.send_json(agent_live(q.get("step", [""])[0], int(q.get("n", ["0"])[0])))
         if p == "/mock/say":  # ChatFollowTests: a reply arrives in every open conversation (?text=…, ?user=… a message before it)
             # &steps=50&ms=80: the hub's own pace (a delta every 80 ms, node/assistant.go).
             # &history=mock-1.r1: the transcript's history token from now on, on pushes and pages alike (a branch was abandoned,
@@ -12702,6 +12836,8 @@ class H(BaseHTTPRequestHandler):
             return self.send_json({"text": FAKE_SCREEN["clipboard"]})  # the Mac's clipboard through its node (#1343)
         if p.startswith("/api/v1/machines/") and p.endswith("/botmux"):  # "Show botmux sessions too" (#2575): on by default
             return self.send_json({"on": BOTMUX_ON.get(p.split("/")[4], True)})
+        if p.startswith("/api/v1/machines/") and p.endswith("/claude-live-replies"):  # live replies (#1309): on by default
+            return self.send_json({"on": LIVE_REPLIES_ON.get(p.split("/")[4], True)})
         if p.startswith("/api/v1/machines/") and p.endswith("/computer"):  # the plugin cua (MOCK_COMPUTER)
             machine = next((m for m in MACHINES if m["id"] == p.split("/")[4]), None)
             if machine is None or "computer" not in machine:
@@ -12969,6 +13105,10 @@ class H(BaseHTTPRequestHandler):
         if p == "/api/v1/agents": return self.send_json({"sources": []})
         if p == "/api/v1/agents/sessions": return self.send_json({"sessions": personal_listed(False), "items": []})
         if p == "/api/v1/agents/hidden": return self.send_json({"sessions": personal_listed(True)})
+        if p == "/mock/start-fail":
+            START_FAIL.update(n=int(q.get("n", ["1"])[0]), code=q.get("code", ["assistant_in_doubt"])[0],
+                              delay=float(q.get("delay", ["0"])[0]))
+            return self.send_json(START_FAIL)
         if p == "/mock/personal-agents":
             if q.get("reset"): PERSONAL_HIDDEN.clear()
             return self.send_json({"hidden": sorted(PERSONAL_HIDDEN)})
@@ -13394,6 +13534,7 @@ class H(BaseHTTPRequestHandler):
             return self.upload()
         self.last_body = self.body()
         p = urlparse(self.path).path
+        if preview_route and preview_route(self, self.command, p, parse_qs(urlparse(self.path).query)): return
         if PERSONAL_AGENTS and p.startswith("/api/v1/agents/sessions/") and p.rsplit("/", 1)[-1] in ("hide", "unhide"):
             sid, op = unquote(p[len("/api/v1/agents/sessions/"):].rsplit("/", 1)[0]), p.rsplit("/", 1)[-1]
             if sid not in [r["id"] for r in personal_rows()]: return self.send_json({"error": "no such session"}, 404)
@@ -13872,6 +14013,11 @@ class H(BaseHTTPRequestHandler):
             if not isinstance(body.get("on"), bool): return self.send_json({"error": "需要 on"}, 400)
             BOTMUX_ON[p.split("/")[4]] = body["on"]
             return self.send_json({"on": body["on"]})
+        if self.command == "PUT" and p.startswith("/api/v1/machines/") and p.endswith("/claude-live-replies"):
+            body = json.loads(self.last_body or b"{}")
+            if not isinstance(body.get("on"), bool): return self.send_json({"error": "on is required"}, 400)
+            LIVE_REPLIES_ON[p.split("/")[4]] = body["on"]
+            return self.send_json({"on": body["on"]})
         if self.command == "PUT" and p.startswith("/api/v1/machines/") and p.endswith("/engine"):
             mid = p.split("/")[4]
             machine = next((m for m in MACHINES if m["id"] == mid), None)
@@ -14050,7 +14196,11 @@ class H(BaseHTTPRequestHandler):
             # with none, and its watch sends the first line once claude has written it (MOCK_ASSISTANT_TRANSCRIPT_SECONDS
             # later, default 1). MOCK_ASSISTANT_START_SECONDS: the request itself takes that long (the hub prepares the
             # directory, the model config and the live snapshot first); meanwhile the app shows "Preparing".
-            time.sleep(float(os.environ.get("MOCK_ASSISTANT_START_SECONDS", "0")))
+            time.sleep(float(os.environ.get("MOCK_ASSISTANT_START_SECONDS", "0")) + START_FAIL["delay"])
+            if START_FAIL["n"] > 0:  # GET /mock/start-fail: this start is cut off on its way to the assistant
+                START_FAIL["n"] -= 1
+                return self.send_json({"error": "和助手的连接在发送途中断了，可能已经发出去了：先看看再决定要不要重发",  # i18n-ignore
+                                       "code": START_FAIL["code"], "delivered": "unknown", "retryable": False}, 502)
             body = json.loads(self.last_body or b"{}")
             prompt = body.get("prompt", "")
             SENT.append({"text": prompt, "images": body.get("images"), **({"launcher": body["launcher"]} if body.get("launcher") else {})})

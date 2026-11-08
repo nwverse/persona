@@ -5,6 +5,9 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
+
+	"github.com/nwverse/persona/server/internal/lazyre"
 )
 
 // DeploymentText translates recognized deployment text at the response boundary. Deployment records and manager
@@ -19,8 +22,8 @@ type deploymentTemplate struct {
 	fixed   int
 }
 
-var deploymentPlaceholders = regexp.MustCompile(`\{(\w+)\}`)
-var deploymentTemplates = makeDeploymentTemplates()
+var deploymentPlaceholders = lazyre.New(`\{(\w+)\}`)
+var deploymentTemplates = sync.OnceValue(makeDeploymentTemplates)
 
 func makeDeploymentTemplates() []deploymentTemplate {
 	return makeCatalogTemplates(func(key string) bool {
@@ -31,7 +34,7 @@ func makeDeploymentTemplates() []deploymentTemplate {
 func makeCatalogTemplates(eligible func(string) bool) []deploymentTemplate {
 	var out []deploymentTemplate
 	for _, l := range Langs {
-		for key, text := range catalogs[l] {
+		for key, text := range catalogs()[l] {
 			if !eligible(key) {
 				continue
 			}
@@ -82,7 +85,7 @@ func deploymentText(l Lang, text string, depth int) string {
 	if text == "" || depth >= 8 {
 		return text
 	}
-	for _, form := range deploymentTemplates {
+	for _, form := range deploymentTemplates() {
 		match := form.pattern.FindStringSubmatch(text)
 		if match == nil {
 			continue

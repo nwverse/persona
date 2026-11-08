@@ -12,12 +12,12 @@ package node
 import (
 	"os"
 	"path/filepath"
-	"regexp"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/nwverse/persona/server/internal/identity"
+	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/rpc"
 )
@@ -35,7 +35,7 @@ func RuntimeSocketPath() string {
 var runtimeCallTimeout = 30 * time.Second
 
 // runtimeIDRe: runtime ids and the session ids a runtime may use. Wider than validID (DSH names them session-<uuid>), never a path.
-var runtimeIDRe = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$`)
+var runtimeIDRe = lazyre.New(`^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$`)
 
 // runtimeHello is what a runtime says about itself first.
 type runtimeHello struct {

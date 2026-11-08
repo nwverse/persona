@@ -51,8 +51,9 @@ var NodePrograms = []string{"persona-node"}
 // hub's and the manager's own programs (personad runs the same code: docs/server/server.md "Programs").
 var ProgramNames = []string{"personad-wechat", "persona-hub", "persona-manager"}
 
-// splitPrograms are the ProgramNames named persona-* (no legacy name): their artifacts are <name>-<os>-<arch>.gz.
-var splitPrograms = []string{"persona-hub", "persona-manager"}
+// SplitPrograms are the ProgramNames named persona-* (no legacy name): their artifacts are <name>-<os>-<arch>.gz. A
+// service can run one in personad's place, so a release without one is not always installed (internal/hub unreplaced).
+var SplitPrograms = []string{"persona-hub", "persona-manager"}
 
 // program names the program a download belongs to ("personad-wechat-linux-amd64.gz" -> "personad-wechat"), "" for
 // personad's own.

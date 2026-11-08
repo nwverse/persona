@@ -14,6 +14,8 @@ struct ShellHome: View {
     @Binding var mode: String
     @Binding var effort: String
     var openInbox: (InboxItem) -> Void
+    var resend: () -> Void = {}
+    var delete: () -> Void = {}
     var send: (String, [ImagePayload]) -> Void
     @State private var room = NeedsRoom()
     @State private var route: ReadinessRoute?
@@ -32,7 +34,7 @@ struct ShellHome: View {
     var body: some View {
         ScrollView {
             if let pending {
-                FirstMessagePending(pending: pending, name: model.persona.name, shell: true)
+                FirstMessagePending(pending: pending, name: model.persona.name, shell: true, resend: resend, delete: delete)
                     // The page's height inside its margins, the message at its bottom (a long one runs up out of it, as the
                     // chat shows its newest end).
                     .containerRelativeFrame(.vertical, alignment: .bottom)
@@ -55,7 +57,8 @@ struct ShellHome: View {
         .background(Theme.pageBackground.ignoresSafeArea())
         .safeAreaInset(edge: .bottom, spacing: 0) {
             VStack(alignment: .leading, spacing: Theme.Space.m) {
-                if pending == nil {
+                // On the welcome, and under a failed first message (#1368): why it failed, what to do about it.
+                if pending == nil || pending?.failed != nil {
                     if let error = shownError {
                         Group {
                             if AppStyle.current.usesBeautifulUI {
@@ -72,6 +75,8 @@ struct ShellHome: View {
                     ReadinessHomeCard(route: $route)
                         .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { room.card = $0 }
                         .onDisappear { room.card = 0 }
+                }
+                if pending == nil {
                     ShellNeedsYou(maxHeight: room.needs(withError: shownError != nil), openInbox: openInbox).shellScaled()
                 }
                 StarterComposer(disabled: pending != nil, shell: StarterComposer.ShellModes(launcher: $launcher, mode: $mode, effort: $effort),
@@ -169,7 +174,7 @@ private struct ShellErrorNote: View {
 
     var body: some View {
         HStack(alignment: .firstTextBaseline, spacing: Theme.Space.sm) {
-            Image(systemName: Theme.Icon.error)
+            ThemedIcon(Theme.Icon.error)
             Text(text).fixedSize(horizontal: false, vertical: true)
             Spacer(minLength: 0)
         }
@@ -253,7 +258,7 @@ struct ShellNeedsYou: View {
                 let rest = more(all.dropFirst(shown))
                 Button(action: rest.open) {
                     BUIListRow(rest.text, accessory: .disclosure) {
-                        BUIIconTile(Theme.Icon.inbox, tint: Color.secondary)
+                        IconTile(Theme.Icon.inbox, tint: Color.secondary)
                     }
                 }
                 .buttonStyle(.plain)
@@ -271,7 +276,7 @@ struct ShellNeedsYou: View {
             Button { model.open(ix.sessionKey) } label: {
                 BUIListRow(agentName(ix), detail: oneLine(ix.summary ?? ix.questions?.first?.question ?? ix.title),
                            accessory: .disclosure, detailLines: 1) {
-                    BUIIconTile(ix.kind.symbol, tint: Theme.needsYou)
+                    IconTile(ix.kind.symbol, tint: Theme.needsYou)
                 }
             }
             .buttonStyle(.plain)
@@ -292,7 +297,7 @@ struct ShellNeedsYou: View {
         if let brand = Self.brand(it) {
             BrandTile(brand)
         } else {
-            BUIIconTile(Self.symbol(it), tint: Theme.accent)
+            IconTile(Self.symbol(it), tint: Theme.accent)
         }
     }
 
@@ -305,7 +310,7 @@ struct ShellNeedsYou: View {
                 let rest = more(all.dropFirst(shown))
                 Button(action: rest.open) {
                     HStack(spacing: Theme.Space.m) {
-                        Image(systemName: Theme.Icon.inbox)
+                        ThemedIcon(Theme.Icon.inbox)
                             .font(Theme.Font.heading)
                             .foregroundStyle(.secondary)
                             .scaledFrame(width: Theme.Size.icon)
@@ -328,7 +333,7 @@ struct ShellNeedsYou: View {
         case .agent(let ix):
             Button { model.open(ix.sessionKey) } label: {
                 HStack(spacing: Theme.Space.m) {
-                    Image(systemName: ix.kind.symbol)
+                    ThemedIcon(ix.kind.symbol)
                         .font(Theme.Font.heading)
                         .foregroundStyle(Theme.needsYou)
                         .scaledFrame(width: Theme.Size.icon)
@@ -365,7 +370,7 @@ struct ShellNeedsYou: View {
             BrandMark(brand, side: Theme.Size.iconS)
                 .scaledFrame(width: Theme.Size.icon)
         } else {
-            Image(systemName: Self.symbol(it))
+            ThemedIcon(Self.symbol(it))
                 .font(Theme.Font.heading)
                 .foregroundStyle(.secondary)
                 .scaledFrame(width: Theme.Size.icon)
