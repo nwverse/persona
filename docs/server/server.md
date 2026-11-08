@@ -501,6 +501,10 @@ Pairing: hub `~/.persona/bin/personad hub pair` calls running hub via loopback H
 
 ## Push policy (`hub/push.go`, `hub/notify.go`)
 
+- Registration ownership: the newest authenticated registration supersedes an older ID only when both share a nonempty credential owner, topic and APNs environment, plus the same nonempty encryption public key or exact APNs token. Names and addresses never prove installation identity. Commit registration and retirement before making the target sendable; preserve notification settings on same-ID registration.
+- Lifecycle: reconcile at startup, on enrollment and every five minutes. Retire revoked owners and registrations idle for at least 90 days, measured from true enrollment, owner activity or APNs/relay acceptance (coalesced writes), not relay/prefs metadata updates. Existing rows receive migration-time observation grace. A genuinely returning inactive installation may enroll again; a superseded ID is permanently fenced, including old-version late writes and Live Activity state.
+- Retiring a duplicate removes its activity row and transfers the longest existing Live Activity start deadline to the canonical ID, so identity rollover cannot reset the budget. Registration ownership conflicts return localized HTTP 409; storage failures remain retryable failures, never success. APNs acceptance does not prove OS delivery or a client wake.
+
 - Needs you (question / plan / permission / terminal): immediate, `time-sensitive`, `category: INTERACTION_<KIND>` with app-registered buttons. Hook-blocked dialogs do not appear in computer TUI and cannot be answered there, so no delay.
 - Completed: follows Ovis (`github.com/devswha/ovis` `server/push.ts`, MIT); push is for users away from the computer:
   - Working → done / idle waits `notify.done_delay_seconds`, 60 seconds, before deciding. Resumed work remains same turn with original start time; idle (seen in herdr) or app `seen_at` suppresses push.

@@ -60,6 +60,9 @@ type Pusher struct {
 	replaced map[string]string
 	// failed: per device, the last push that did not go (routeOf); cleared by the next that does.
 	failed map[string]pushFailure
+	// acceptedDirty is flushed by maintenance, not once per push. Accepted means
+	// APNs/relay acceptance, never proof of OS delivery or a client wake.
+	acceptedDirty map[string]bool
 	// withdrawals: where each card's push went, to take it back when the card is over (push_withdraw.go).
 	withdrawals withdrawals
 	saveMu      sync.Mutex // one device row write at a time, always the latest state (save, setPrefs)
@@ -74,13 +77,18 @@ func newPusher(dir string, store Store, logf func(string, ...any)) *Pusher {
 	p := &Pusher{dir: dir, store: store, logf: logf, devices: map[string]Device{}, replaced: map[string]string{}, failed: map[string]pushFailure{}, withdrawals: newWithdrawals(), relay: &http.Client{Timeout: 20 * time.Second},
 		retryWaits: []time.Duration{time.Second, 4 * time.Second}, now: time.Now, storeTimeout: deviceStoreTimeout}
 	if store != nil {
-		if list, err := store.Devices(context.Background()); err == nil {
+		ctx, cancel := context.WithTimeout(context.Background(), deviceStoreTimeout)
+		if _, err := store.ReconcilePushDevices(ctx, p.now().UTC(), pushDeviceMaxIdle); err != nil {
+			logf("push registration startup reconciliation: %v", err)
+		}
+		if list, err := store.Devices(ctx); err == nil {
 			for _, d := range list {
 				p.devices[d.DeviceID] = d
 			}
 		} else {
 			logf("load devices: %v", err)
 		}
+		cancel()
 	}
 	b, err := os.ReadFile(filepath.Join(dir, "apns.json"))
 	if err != nil {
@@ -120,7 +128,11 @@ func validRelayURL(s string) bool {
 }
 
 func (p *Pusher) register(d Device) error {
-	d.UpdatedAt = time.Now().UTC()
+	d.UpdatedAt = p.now().UTC()
+	d.RegisteredAt = d.UpdatedAt
+	d.Registering = true
+	p.saveMu.Lock()
+	defer p.saveMu.Unlock()
 	d.RelayURL = strings.TrimRight(d.RelayURL, "/")
 	if d.RelayURL != "" && !validRelayURL(d.RelayURL) {
 		p.logf("device %s: ignoring relay url %q", d.Name, d.RelayURL)
@@ -134,15 +146,35 @@ func (p *Pusher) register(d Device) error {
 	p.mu.Lock()
 	cur := p.devices[d.DeviceID]
 	d.Prefs = cur.Prefs // registration carries the token, not the settings
-	if d.APNSToken != cur.APNSToken || d.RelayURL != cur.RelayURL {
-		delete(p.failed, d.DeviceID) // a new way: what the old one did says nothing about it
-	}
+	d.LastPushAt = cur.LastPushAt
 	if d.RelayGrant != "" && d.RelayGrant == p.replaced[d.DeviceID] && d.RelayURL == cur.RelayURL && d.APNSToken == cur.APNSToken {
 		d.RelayGrant = cur.RelayGrant // the app's cached grant, which the hub already renewed
 	}
-	p.devices[d.DeviceID] = d
 	p.mu.Unlock()
-	return p.save(d.DeviceID)
+	// Publish only after the ownership check and duplicate retirement commit.
+	// A failed enrollment must not expose an unpersisted APNs target to sends.
+	if err := p.writeDevice(d); err != nil {
+		return err
+	}
+	d.Registering = false
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if d.APNSToken != cur.APNSToken || d.RelayURL != cur.RelayURL {
+		delete(p.failed, d.DeviceID)
+	}
+	for id, old := range p.devices {
+		if id != d.DeviceID && db.SamePushInstallation(old, d) {
+			delete(p.devices, id)
+			delete(p.failed, id)
+			delete(p.replaced, id)
+			delete(p.acceptedDirty, id)
+		}
+	}
+	if latest := p.devices[d.DeviceID]; latest.LastPushAt.After(d.LastPushAt) {
+		d.LastPushAt = latest.LastPushAt
+	}
+	p.devices[d.DeviceID] = d
+	return nil
 }
 
 // save writes a device's current row (whatever the latest register / renewal left), one write at a time.
@@ -152,10 +184,26 @@ func (p *Pusher) save(id string) error {
 	}
 	p.saveMu.Lock()
 	defer p.saveMu.Unlock()
+	return p.saveLocked(id)
+}
+
+// saveLocked requires saveMu; renewal and maintenance already hold it.
+func (p *Pusher) saveLocked(id string) error {
+	if p.store == nil {
+		return nil
+	}
 	p.mu.Lock()
 	d, ok := p.devices[id]
 	p.mu.Unlock()
 	if !ok {
+		return nil
+	}
+	return p.writeDevice(d)
+}
+
+// writeDevice requires saveMu and never publishes a failed write.
+func (p *Pusher) writeDevice(d Device) error {
+	if p.store == nil {
 		return nil
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), p.storeTimeout)
@@ -210,6 +258,8 @@ func (p *Pusher) signedOut(credential string) {
 
 // forget drops a device, whatever token it has now (signedOut).
 func (p *Pusher) forget(d Device) {
+	p.saveMu.Lock()
+	defer p.saveMu.Unlock()
 	p.mu.Lock()
 	delete(p.devices, d.DeviceID)
 	p.mu.Unlock()

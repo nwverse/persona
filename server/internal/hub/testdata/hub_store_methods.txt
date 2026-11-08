@@ -26,6 +26,8 @@ SettleSend
 UpsertDevice
 Devices
 DeleteDevice
+# The hub owns push registration retirement and delivery liveness, not manager data.
+ReconcilePushDevices
 SetDevicePrefs
 LiveActivities
 SaveLiveActivity

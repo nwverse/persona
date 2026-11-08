@@ -37,7 +37,7 @@ func (p *Pusher) sendDirect(d Device, r apns.Request) (apns.Result, error) {
 		p.pushed(d, err)
 	case res.Status != 200 && !res.Gone():
 		p.pushed(d, fmt.Errorf("APNs %d %s", res.Status, res.Reason))
-	default:
+	case res.Status == 200:
 		p.pushed(d, nil)
 	}
 	if tries > 1 {
@@ -61,7 +61,11 @@ type relayResult struct{ gone bool }
 // no longer takes (its secret was replaced) is renewed once with the device's token, which the hub already has. A
 // failure that may pass is tried again (postRelayRetrying): one dropped connection used to lose the push (#2150).
 func (p *Pusher) postRelay(d Device, req relayproto.PushRequest) (res relayResult, err error) {
-	defer func() { p.pushed(d, err) }()
+	defer func() {
+		if !res.gone {
+			p.pushed(d, err)
+		}
+	}()
 	res, status, err := p.postRelayRetrying(d, req)
 	if status != http.StatusUnauthorized {
 		return res, err
@@ -160,20 +164,29 @@ func (p *Pusher) renewGrant(d Device) (Device, error) {
 	if resp.StatusCode != 200 || out.Grant == "" {
 		return d, fmt.Errorf("register: %d %s", resp.StatusCode, out.Error)
 	}
+	p.saveMu.Lock()
+	defer p.saveMu.Unlock()
 	p.mu.Lock()
 	cur, ok := p.devices[d.DeviceID]
 	kept := ok && cur.RelayURL == d.RelayURL && cur.APNSToken == d.APNSToken
-	if kept {
-		if cur.RelayGrant != out.Grant {
-			p.replaced[d.DeviceID] = cur.RelayGrant
-		}
-		cur.RelayGrant = out.Grant
-		p.devices[d.DeviceID] = cur
-	}
 	p.mu.Unlock()
-	if kept {
-		p.save(d.DeviceID)
+	if !kept {
+		return d, fmt.Errorf("push registration changed during grant renewal")
 	}
+	previous := cur.RelayGrant
+	cur.RelayGrant = out.Grant
+	if err := p.writeDevice(cur); err != nil {
+		return d, err
+	}
+	p.mu.Lock()
+	if previous != out.Grant {
+		p.replaced[d.DeviceID] = previous
+	}
+	if latest := p.devices[d.DeviceID]; latest.LastPushAt.After(cur.LastPushAt) {
+		cur.LastPushAt = latest.LastPushAt
+	}
+	p.devices[d.DeviceID] = cur
+	p.mu.Unlock()
 	p.logf("relay %s: grant renewed", d.Name)
 	d.RelayGrant = out.Grant
 	return d, nil
