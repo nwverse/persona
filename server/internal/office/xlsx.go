@@ -341,8 +341,15 @@ func excelDate(v string) (float64, bool) {
 		if t, err := time.Parse(layout, v); err == nil {
 			epoch := time.Date(1899, 12, 30, 0, 0, 0, 0, time.UTC)
 			t = time.Date(t.Year(), t.Month(), t.Day(), t.Hour(), t.Minute(), t.Second(), 0, time.UTC) // as written: no zone
+			if t.Year() < 1900 {
+				return 0, false
+			}
 			// Subtract seconds to avoid saturating time.Duration for distant dates.
-			return float64(t.Unix()-epoch.Unix()) / 86400, true
+			serial := float64(t.Unix()-epoch.Unix()) / 86400
+			if t.Year() == 1900 && t.Month() < time.March {
+				serial-- // Excel reserves serial 60 for the nonexistent 1900-02-29.
+			}
+			return serial, true
 		}
 	}
 	return 0, false
