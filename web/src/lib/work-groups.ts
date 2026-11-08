@@ -453,6 +453,10 @@ export function groupOpens(g: WorkGroupNode): boolean {
  *  reader did during the run, and from then on a tap opens and closes them as in "agents". */
 export type WorkLineStyle = "agents" | "assistant";
 
+/** A chat's work line style: "assistant" on the assistant's page, or for a Persona conversation opened anywhere else
+ *  (the Agents page's link to it); "agents" for a coding agent's chat. */
+export const workLineStyle = (assistantView?: boolean, assistantSession?: boolean): WorkLineStyle => (assistantView || assistantSession ? "assistant" : "agents");
+
 export interface WorkLineState {
   style: WorkLineStyle;
   /** The exchange this line is of is still running. */

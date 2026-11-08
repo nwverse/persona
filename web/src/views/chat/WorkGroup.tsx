@@ -115,7 +115,9 @@ export const WorkGroup = memo(function WorkGroup({ g, p }: { g: WorkGroupNode; p
   const [failed, setFailed] = useState(false);
   const [attempt, setAttempt] = useState(0);
   useEffect(() => {
-    if (!foldKey) return;
+    // every fold is in: done. A run cut short by the last fold coming in (its key changed) does not get to say so, and
+    // the header's spinner kept spinning (#1614)
+    if (!foldKey) return setLoading(false);
     let live = true;
     setLoading(true);
     setFailed(false);

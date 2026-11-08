@@ -8,6 +8,7 @@ import {
   nestedLineDefault,
   togglesLiveOverride,
   workLineOpen,
+  workLineStyle,
   groupsHolding,
   explorationSummary,
   groupOpens,
@@ -437,5 +438,15 @@ describe("workLineOpen (#1614)", () => {
     expect(togglesLiveOverride("agents", true)).toBe(false);
     expect(nestedLineDefault("agents")).toBe(false);
     expect(nestedLineDefault("assistant")).toBe(true);
+  });
+});
+
+describe("workLineStyle (#1614)", () => {
+  it("a Persona conversation is assistant style on the assistant page and when opened from the Agents page", () => {
+    expect(workLineStyle(true, undefined)).toBe("assistant");
+    expect(workLineStyle(false, true)).toBe("assistant");
+    expect(workLineStyle(undefined, true)).toBe("assistant");
+    expect(workLineStyle(false, false)).toBe("agents");
+    expect(workLineStyle(undefined, undefined)).toBe("agents");
   });
 });
