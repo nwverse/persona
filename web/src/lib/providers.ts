@@ -307,7 +307,11 @@ function modelsOf(f: ProviderForm): ProviderModel[] {
       const out: ProviderModel = { id: m.id.trim() };
       if (m.name.trim()) out.name = m.name.trim();
       if (int(m.context_window)) out.context_window = int(m.context_window);
-      if (m.efforts.length) out.efforts = [...m.efforts];
+      if (m.efforts.length) {
+        out.efforts = [...m.efforts];
+        // Discovery can omit the default from its list. Preserve it while satisfying the hub's metadata invariant.
+        if (f.kind === "api" && f.api === "chat" && m.default_effort && !out.efforts.includes(m.default_effort)) out.efforts.push(m.default_effort);
+      }
       if (m.default_effort) out.default_effort = m.default_effort;
       return out;
     });

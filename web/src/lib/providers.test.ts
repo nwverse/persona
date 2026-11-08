@@ -87,6 +87,8 @@ describe("formProblems", () => {
     expect(formProblems(mismatch, true).models).toBe("");
     expect(formProblems({ ...mismatch, api: "messages" }, true).models).toMatch(/默认思考档位/);
     expect(formProblems({ ...mismatch, api: "responses" }, true).models).toMatch(/默认思考档位/);
+    expect(providerBody(mismatch, null).models).toEqual([{ id: "m1", efforts: ["low", "high"], default_effort: "high" }]);
+    expect(mismatch.models[0].efforts).toEqual(["low"]);
     // an unchecked duplicate does not count
     expect(formProblems(ready({ models: [formModel({ id: "m1" }), formModel({ id: "m1" }, false)] }), true).models).toBe("");
   });
