@@ -708,4 +708,9 @@ Two more from the same harness:
 
 ## A model made in a unit test starts with what the simulator last saved (2026-11-09, #1638, #1637)
 
-`AppModel()` restores the last Dev snapshot (machines, agents, cards; `Library/Caches/state/dev.json`) and the outbox when the simulator's keychain holds a pairing, which any mock-hub UI test run leaves behind. A unit test that reads everything the model holds (the watch summary, all agents) then counts those too: it passes on a brand-new simulator and on hosted CI and fails on a used one. Such a test calls `forgetRestoredForTests()` after making the model. To check that a failure is this, move `dev.json` aside in the app's data container and run the test again.
+`AppModel()` restores the last Dev snapshot (machines, agents, cards; `Library/Caches/state/dev.json`) and the outbox when the simulator's keychain holds a pairing, which any mock-hub UI test run leaves behind. A unit test that reads everything the model holds (the watch summary, all agents) then counts those too: it passes on a brand-new simulator and on hosted CI and fails on a used one. In the sync scenarios, a snapshot of 145 sessions pushed the case's chat out of the 40 newest that `AgentSync` plans, so its stall check never ran. The model also writes its own snapshot and outbox back over the app's.
+
+- A test that only needs the model empty calls `forgetRestoredForTests()` after making it.
+- A test that saves and reads back (a relaunch, the outbox) makes its models with `AppModel(stateFolder:)` on a folder of its own, and again on the same folder for the relaunch (`SyncDevice`, `OutboxRestoreTests`). Nothing it writes reaches the app's files.
+
+To check that a failure is this, move `dev.json` aside in the app's data container and run the test again.

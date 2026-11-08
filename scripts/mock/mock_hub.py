@@ -11352,7 +11352,7 @@ def cua_config(pl):
 
 
 _PLUGIN_VIEW = ["id", "name", "kind", "status", "error", "version", "source", "enabled", "description", "contributes", "needs_setup", "warnings",
-                "auto_upgrade", "upgrade", "upgrade_note", "nodes"]
+                "auto_upgrade", "auto_upgrade_paused", "upgrade", "upgrade_note", "nodes"]
 
 # ---------- MOCK_EXTENSIONS: declarative UI (docs/extensions/extensions.md "Declarative UI") ----------
 # example-gateway draws a page (plugin_page "home") and a section on every launcher's page (launcher_section "panel"),
@@ -11640,8 +11640,25 @@ def _catalog_item(c):
 
 # Auto-upgrade (docs/extensions/extensions.md "Automatic upgrades"): example-gateway, from a market at 1.0.0, has 1.1.0 there asking for one more
 # host. MOCK_PLUGIN_UPGRADE picks how it stands: needs_permission (default), waiting_idle, skipped, upgraded (the last
-# one went in by itself), none.
+# one went in by itself), disabled (switched off: auto-upgrade paused, its own switch kept), none.
 AUTO_UPGRADE = {"auto": True}
+# A market plugin's upgrade while it is on, put back when it is switched on again (_auto_upgrade_paused).
+_UPGRADE_WHILE_ON = {}
+
+
+def _auto_upgrade_paused(pl):
+    """A market plugin switched off is not upgraded, as the hub says: auto_upgrade_paused, its newer version "off" (its
+    own switch stays); switched on again, both are as before."""
+    if pl.get("auto_upgrade") is None:
+        return
+    pl["auto_upgrade_paused"] = None if pl["enabled"] else "disabled"
+    up = pl.get("upgrade")
+    if not pl["enabled"] and up and pl["id"] not in _UPGRADE_WHILE_ON:
+        _UPGRADE_WHILE_ON[pl["id"]] = up
+        pl["upgrade"] = {k: v for k, v in up.items() if k != "added_permissions"} | {
+            "state": "off", "detail": "扩展已关闭，自动升级暂停；重新打开后恢复你原来的设置"}  # i18n-ignore: the hub's words
+    elif pl["enabled"] and pl["id"] in _UPGRADE_WHILE_ON:
+        pl["upgrade"] = _UPGRADE_WHILE_ON.pop(pl["id"])
 
 
 def _gateway_upgrade(state):
@@ -11656,10 +11673,14 @@ def _gateway_upgrade(state):
         up["detail"] = "插件正在用"
     elif state == "skipped":
         pl["upgrade_note"] = {"kind": "rolled_back", "from": "1.0.0", "to": "1.1.0", "detail": "exited with status 3", "at": at(5)}
-    if state in ("needs_permission", "waiting_idle", "skipped"):
+    if state in ("needs_permission", "waiting_idle", "skipped", "disabled"):
         pl["upgrade"] = up
     elif state == "upgraded":
         pl["upgrade_note"] = {"kind": "upgraded", "from": "0.9.0", "to": "1.0.0", "at": at(3)}
+    if state == "disabled":
+        up["state"] = "available"
+        pl["enabled"], pl["status"] = False, "disabled"
+        _auto_upgrade_paused(pl)
 
 
 _gateway_upgrade(os.environ.get("MOCK_PLUGIN_UPGRADE", "needs_permission"))
@@ -12279,6 +12300,7 @@ def plugins_route(handler, p, body):
     elif rest == ["enabled"] and method == "PUT":
         pl["enabled"] = bool(req.get("enabled"))
         pl["status"] = "disabled" if not pl["enabled"] else ("needs_setup" if pl["source"] == "installed" else "running")
+        _auto_upgrade_paused(pl)
     elif rest == ["config"] and method == "PUT":
         cfg = req.get("config") or {}
         if pl["id"] == "example-gateway-quota":

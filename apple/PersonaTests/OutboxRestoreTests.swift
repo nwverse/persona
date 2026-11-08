@@ -9,6 +9,8 @@ import Testing
 @Suite(.serialized)
 struct OutboxRestoreTests {
     private let key = SessionKey(machineID: "box", sessionID: "outbox-restore")
+    /// The app's disk: a folder of the test's own, not the simulator's app's (#1637).
+    private let folder = FileManager.default.temporaryDirectory.appending(path: "outbox-restore-\(UUID().uuidString)")
 
     private func message(_ state: PendingMessage.State, age: TimeInterval = 0) -> PendingMessage {
         var p = PendingMessage(text: "Is the museum open on Sunday?", images: [])
@@ -26,19 +28,19 @@ struct OutboxRestoreTests {
     }
 
     private func clean() {
-        StateCache.remove("outbox")
+        try? FileManager.default.removeItem(at: folder)
         ChatCache.remove(key)
     }
 
     /// The app with `pending` in the chat is ended once its outbox is written (300 ms after a change) and starts again.
     private func relaunched(with pending: [PendingMessage], cached: [Item] = []) async throws -> [PendingMessage] {
         clean()
-        let before = AppModel()
+        let before = AppModel(stateFolder: folder)
         before.chat(key).pending = pending
         before.saveOutbox()
         try await Task.sleep(for: .milliseconds(600))
         if !cached.isEmpty { ChatCache.save(key, items: cached, hasMore: false) }
-        let after = AppModel()
+        let after = AppModel(stateFolder: folder)
         after.restoreOutbox()
         let restored = after.chat(key).pending
         try await Task.sleep(for: .milliseconds(600)) // what the restore writes back, before the next test starts
