@@ -356,7 +356,7 @@ func (s *Service) publish(ctx context.Context) {
 	snap.Epoch, snap.Seq, snap.At = s.epoch, s.seq, time.Now().UTC()
 	s.pubMu.Unlock()
 	if s.fleetOn() {
-		s.fleetTakeSnapshot(snap) // the lists' decoration, its own cards on the phone (fleet.go)
+		s.fleetTakeSnapshot(snap) // the lists' decoration, its own cards on the phone (fleet_snapshot.go)
 		snap.Interactions = nil
 	}
 	if _, err := s.hub.Snapshot(ctx, snap); err != nil && !errors.Is(err, ErrStaleSnapshot) {
