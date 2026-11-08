@@ -62,7 +62,7 @@ final class InboxHandOffModel {
     }
 
     /// A failed retry of a hand-off already in doubt: whatever it was answered, a try before it under the same client id
-    /// may have gone, and the same ask sent again, with no other ask in between, keeps that id.
+    /// may have gone, and the same ask sent again, with no other ask handed to the main chat in between, keeps that id.
     nonisolated private struct InDoubt: Error {}
 
     init(itemID: String, deps: Deps) {

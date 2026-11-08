@@ -568,10 +568,10 @@ which users saw as one action: clear this batch they do not need to handle now. 
   by the same ask. On any try, the id and first text are also kept through no connection, a cancelled request and `assistant_offline`, which say nothing about an earlier try and show
   their own words (a cancelled request shows nothing). On a first try, any other answer is final for that id, and a failed load of the item, which sent nothing, says the hub can't be
   reached (a timeout or a bare 5xx) or what went wrong. The hub answers what it kept for that id or runs it again, and the manager's `session.send_once` drops a repeat, so the same
-  ask sent again from one sheet, with no other ask in between, hands the item over once (except a hand-off that started the main conversation and whose record the manager lost);
-  another ask or a reopened sheet is a new hand-off, and so is the first ask again after another. Once it went, they open the main conversation on the message as sent under that id
-  (its transcript copy carries it and takes the bubble's place; no bubble when the copy is there already) and read the assistant settings again, since the hand-off may have started
-  the main conversation. Like every other inbox request from iOS and Mac, it names no manager, so it goes to the default manager.
+  ask sent again from one sheet, with no other ask handed to the main chat in between, hands the item over once (except a hand-off that started the main conversation and whose record
+  the manager lost); another ask or a reopened sheet is a new hand-off, and so is the first ask again after another one went to the main chat. Once it went, they open the main
+  conversation on the message as sent under that id (its transcript copy carries it and takes the bubble's place; no bubble when the copy is there already) and read the assistant
+  settings again, since the hand-off may have started the main conversation. Like every other inbox request from iOS and Mac, it names no manager, so it goes to the default manager.
   Android still sends plain chat text without write-back (#1384); the web, iOS and Mac fall back to that when the hub or manager answers 404 / 405. On iOS and Mac the fallback goes
   through the main conversation's outbox when it is listed (a failure shows there with Retry); otherwise it is sent or the conversation started from the sheet, which stays open
   with the error when that fails.
