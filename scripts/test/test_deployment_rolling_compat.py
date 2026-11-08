@@ -251,6 +251,32 @@ class DeploymentRollingCompatibilityTests(unittest.TestCase):
                 self.assertEqual(config['services']['postgres']['environment']['POSTGRES_DB'], FORMER)
                 self.assertEqual(hub['image'], 'example.invalid/fixture-new:2' if canonical else 'example.invalid/fixture-old:1')
 
+    def test_compose_config_needs_one_image_spelling(self):
+        import shutil
+        if not shutil.which('docker'):
+            self.skipTest('Docker Compose is unavailable; no containers are started by this check')
+        for image in ('example.invalid/fixture-new:2', None):
+            with self.subTest(image=image), tempfile.TemporaryDirectory() as directory:
+                env = {'PATH': os.environ['PATH'], 'HOME': directory,
+                       'COMPOSE_PROJECT_NAME': 'persona-test-' + os.urandom(4).hex()}
+                if os.environ.get('PERSONA_TEST_DOCKER_CONFIG'):
+                    env['DOCKER_CONFIG'] = os.environ['PERSONA_TEST_DOCKER_CONFIG']
+                if image:
+                    env['PERSONA_IMAGE'] = image
+                result = subprocess.run(['docker', 'compose', '-f', str(ROOT / 'deploy/docker/compose.yaml'),
+                                         'config', '--format', 'json'], env=env, capture_output=True, text=True, timeout=15)
+                if 'is not a docker command' in result.stderr:
+                    self.skipTest('Docker Compose is unavailable')
+                if image:
+                    # The former spelling unset: Compose before 5.0.2 still evaluated a required check inside the default.
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    hub = json.loads(result.stdout)['services']['hub']
+                    self.assertEqual((hub['image'], hub['environment']['PERSONA_IMAGE']), (image, image))
+                else:
+                    self.assertNotEqual(result.returncode, 0, result.stdout)
+                    self.assertIn('"hub"', result.stderr)
+                    self.assertIn('image', result.stderr)
+
 
 if __name__ == "__main__":
     unittest.main()

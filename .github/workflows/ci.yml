@@ -52,9 +52,19 @@ jobs:
     if: needs.changes.outputs.android == 'true'
     uses: ./.github/workflows/android-test.yml
   apple:
+    name: iOS and Watch
     needs: changes
     if: needs.changes.outputs.apple == 'true'
     uses: ./.github/workflows/apple-test.yml
+    with:
+      lane: ios
+  apple_macos:
+    name: Mac (non-blocking)
+    needs: changes
+    if: needs.changes.outputs.apple == 'true'
+    uses: ./.github/workflows/apple-test.yml
+    with:
+      lane: macos
   runtimes:
     needs: changes
     if: needs.changes.outputs.runtimes == 'true'
@@ -63,6 +73,8 @@ jobs:
     needs: changes
     if: needs.changes.outputs.scripts == 'true'
     uses: ./.github/workflows/scripts-tests.yml
+  # By maintainer decision, Mac runs and reports its real result independently
+  # but temporarily does not block merging. Never mask it with continue-on-error.
   required:
     name: CI required
     needs: [changes, server, web, android, apple, runtimes, scripts]

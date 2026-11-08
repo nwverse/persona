@@ -1,4 +1,5 @@
 """Release orchestration invariants independent of machine-specific credentials."""
+import hashlib
 import importlib.util
 import json
 from pathlib import Path
@@ -13,6 +14,13 @@ spec.loader.exec_module(worker)
 
 
 class ReleaseWorkerTest(unittest.TestCase):
+    def test_digest_empty_and_multichunk_binary_files(self):
+        for data in (b"", bytes(range(256)) * 513 + b"\x00\xff\x80"):
+            with self.subTest(size=len(data)), tempfile.TemporaryDirectory() as tmp:
+                path = Path(tmp) / "artifact.bin"
+                path.write_bytes(data)
+                self.assertEqual(worker.digest(path), hashlib.sha256(data).hexdigest())
+
     def test_versions_follow_main_history_and_retries_are_stable(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
