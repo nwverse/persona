@@ -64,10 +64,54 @@ class RequiredTests(unittest.TestCase):
         del needs["changes"]["outputs"]["apple"]
         self.assertTrue(required.failures(needs))
 
+    def test_mac_result_does_not_change_required_ios_policy(self):
+        for mac_result in ('failure', 'cancelled', 'skipped', None, 'success'):
+            needs = self.needs()
+            needs['changes']['outputs']['apple'] = 'true'
+            needs['apple']['result'] = 'success'
+            needs['apple_macos'] = {'result': mac_result}
+            self.assertEqual(required.failures(needs), [])
+            for ios_result in ('failure', 'cancelled', 'skipped', None):
+                needs['apple']['result'] = ios_result
+                self.assertTrue(required.failures(needs))
+
     def test_guard_failure_never_passes(self):
         needs = self.needs()
         needs["changes"]["result"] = "failure"
         self.assertTrue(required.failures(needs))
+
+
+class AppleWorkflowTests(unittest.TestCase):
+    def test_mac_and_ios_are_independent_but_only_ios_blocks(self):
+        root = Path(__file__).resolve().parents[2]
+        workflow = (root / '.github/workflows/ci.yml').read_text()
+        ios = workflow.split('\n  apple:\n', 1)[1].split('\n  apple_macos:\n', 1)[0]
+        mac = workflow.split('\n  apple_macos:\n', 1)[1].split('\n  runtimes:\n', 1)[0]
+        for block, lane in ((ios, 'ios'), (mac, 'macos')):
+            self.assertIn('    needs: changes\n', block)
+            self.assertIn("    if: needs.changes.outputs.apple == 'true'", block)
+            self.assertIn('    uses: ./.github/workflows/apple-test.yml', block)
+            self.assertIn('      lane: ' + lane, block)
+        gate = workflow.split('\n  required:\n', 1)[1]
+        self.assertIn('needs: [changes, server, web, android, apple, runtimes, scripts]', gate)
+        self.assertNotIn('apple_macos', gate)
+        self.assertNotIn('continue-on-error:', workflow)
+
+    def test_reusable_lane_uses_quoted_environment_not_script_interpolation(self):
+        root = Path(__file__).resolve().parents[2]
+        workflow = (root / '.github/workflows/apple-test.yml').read_text()
+        self.assertIn('options: [ios, macos]', workflow)
+        self.assertIn('APPLE_CI_LANE: ${{ inputs.lane }}', workflow)
+        self.assertIn('run: scripts/ci/apple.sh "$APPLE_CI_LANE"', workflow)
+        self.assertNotIn('continue-on-error:', workflow)
+        script = (root / 'scripts/ci/apple.sh').read_text()
+        package_gate = script.split("ci_run 'PersonaKit unit tests'", 1)[0].rsplit('\nif ', 1)[1]
+        self.assertIn('[ "$LANE" = ios ]', package_gate)
+        for required_batch in ('Unsigned iOS and embedded watch/extensions build',
+                               'iOS offline unit and design/token tests',
+                               'iOS HTML card tests (separate batch)',
+                               'iOS bounded HTML security tests (separate batch)'):
+            self.assertIn(required_batch, script)
 
 
 class RunnerTests(unittest.TestCase):

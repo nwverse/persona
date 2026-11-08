@@ -390,7 +390,7 @@ Legacy `phone_tools.json`, `devices.json`, `mail_accounts.json`, `sessions.json`
 The migrations are two sets, one per side (`server/internal/db/migrations/`):
 
 - `hub/`: the hub's own tables: devices and their tokens, pairing, phone tools, Live Activities, device sessions, client operations, lock tests, peers and the mesh, connector credentials, the admin page, bus identities and the managers' install codes, machine trust, what the managers handed it (`handed_over`).
-- `manager/`: a manager's: interactions, mail, the computers' sessions and metrics, session views and work, the inbox, the knowledge base, todos, task plans and the assistant's feed and views, extensions and their markets, secrets and metrics, the workspace board, the outbox it keeps while the hub is away (`manager_outbox`).
+- `manager/`: a manager's: interactions, mail, the computers' sessions and metrics, session views and work, the inbox, the knowledge base, todos, task plans and the assistant's feed and views, extensions and their markets, secrets and metrics, the record of the extensions' hub tokens (`extension_tokens`), the workspace board, the outbox it keeps while the hub is away (`manager_outbox`).
 
 `db.Open(ctx, url, sets)` applies the pending migrations of the sets it is given: the hub opens its database with `db.HubSet`, a manager with `db.ManagerSet` (tests that use both sides' tables: `db.AllSets`). While the default manager shares the hub's database, both sets run there, each when its side starts. Non-default managers have databases of their own (`docs/assistant/managers.md`) and get only the manager set.
 
@@ -427,7 +427,7 @@ The built-in manager (the assistant the hub starts) used to keep its state in th
 Adding a migration:
 
 1. Decide whose table it is: the side whose store reads and writes it. A table both sides need is a sign that one side should ask the other over the bus instead (as the manager learns the computers waiting to be confirmed from the hub's handover, `devicewire.Config.Pending`, rather than reading `machine_trust`).
-2. Put the file in exactly that set's directory, named `NNNN_what.sql` with a number neither set has: look in both `hub/` and `manager/`, on master and in every worktree (`docs/lessons/workflow.md`). Two lines once took 421 at the same time (`hub/0421_hub_settings.sql`, `manager/0421_machine_usage.sql`); that pair is frozen in the guard, harmless since each set records its own part. Write it idempotently (`IF NOT EXISTS`) where you can.
+2. Put the file in exactly that set's directory, named `NNNN_what.sql` with a number neither set has: look in both `hub/` and `manager/`, on `main` and in every worktree (`docs/lessons/workflow.md`). Two lines once took 421 at the same time (`hub/0421_hub_settings.sql`, `manager/0421_machine_usage.sql`); that pair is frozen in the guard, harmless since each set records its own part. Write it idempotently (`IF NOT EXISTS`) where you can.
 3. Guards: `TestMigrationSets` (`internal/db`) fails for a file in both sets or at the top level; `TestStoresTouchTheirOwnTables` (`internal/hub`) fails when a store interface of the hub reaches a table outside the hub set, or one of the managers' (assistant, devices, extmgr, extension, mail, agents) a table outside the manager set.
 
 ## Configuration (hub `~/.persona/`, 0600, never committed)

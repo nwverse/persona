@@ -405,7 +405,7 @@ Local Claude Code 2.1.310 binary lacks `model_refusal_*` / `CLAUDE_CODE_DISABLE_
 - Clearing `TurnError`: Claude currently does not set `Meta.TurnError`; hub infers from `LastText`, naturally cleared by later replies. New `TurnErrorKind = "refusal"` must follow Codex's `task_started` clearing: **clear `TurnError` / `TurnErrorKind` on next real user message or nonsynthetic assistant reply**. Otherwise refusal row still in fast-meta tail makes successful rephrased turns push Blocked, retain triage cards, and leave tasks Interrupted.
 - Unknown model_refusal-prefixed subtypes or missing model / category: always show notice with original content, or “Claude's Safety Checks Handled This Message (Persona Cannot Identify the Details)” if absent; leave `refusal.outcome` empty. Unknown categories display raw value; cyber → Cybersecurity, others initially raw.
 - Session: add `proto.Session` `model_fallback` `{from, to, category, scope, at}` only when latest fallback has `scope: "session"` and latest assistant still uses to. User `/model` switch removes it. Track in incremental scanning with `bgScan`, without extra file reads.
-- Item-structure change requires iOS `ChatCache` directory version bump (currently `chats-v8`; use latest master version at implementation), per docs/lessons/transcript.md. Update hub golden and `../protocol/protocol.md` Item / Session field tables together.
+- Item-structure change requires iOS `ChatCache` directory version bump (currently `chats-v8`; use the latest version on `main` at implementation), per docs/lessons/transcript.md. Update hub golden and `../protocol/protocol.md` Item / Session field tables together.
 
 ### Client wording
 

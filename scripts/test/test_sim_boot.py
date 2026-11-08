@@ -34,7 +34,10 @@ FAKE_XCRUN = textwrap.dedent('''\
         st["devices"].setdefault(a[3], []).append({"udid": st["next"], "name": a[1], "state": "Shutdown", "isAvailable": True}); save()
         print(st["next"])
     elif a[0] == "boot": dev(a[1])["state"] = "Booted"; save()
-    elif a[0] == "bootstatus": sys.exit(0 if dev(a[1])["state"] == "Booted" else 1)
+    elif a[0] == "bootstatus":
+        print("Boot phase: waiting for SpringBoard")
+        print("bootstatus stderr diagnostic", file=sys.stderr)
+        sys.exit(st.get("bootstatus_rc", 0) if dev(a[1])["state"] == "Booted" else 1)
     else: sys.exit("unexpected simctl " + " ".join(a))
     ''')
 FAKE_SIMSLIM = textwrap.dedent('''\
@@ -173,6 +176,24 @@ class SimBootTests(unittest.TestCase):
         self.assertEqual(self.verdict(r), f"sim-boot: stock stock {PHONE}")
         self.assertIn(f"simslim off {PHONE} --preserve-boot-state", calls)
         self.assertEqual(self.device(PHONE)["state"], "Booted")
+
+    def test_bootstatus_diagnostics_are_preserved_without_polluting_udid(self):
+        r, calls = self.run_boot('--profile', 'stock', 'mine')
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(r.stdout.strip(), PHONE)
+        self.assertIn('Boot phase: waiting for SpringBoard', r.stderr)
+        self.assertIn('bootstatus stderr diagnostic', r.stderr)
+
+    def test_failed_bootstatus_is_reported_without_automatic_retry(self):
+        self.state['bootstatus_rc'] = 1
+        self.save()
+        r, calls = self.run_boot('--profile', 'stock', 'mine')
+        self.assertEqual(r.returncode, 1, r.stderr)
+        self.assertEqual(r.stdout, '')
+        self.assertIn('Boot phase: waiting for SpringBoard', r.stderr)
+        self.assertIn('did not finish booting', r.stderr)
+        self.assertEqual(calls.count(f'xcrun simctl boot {PHONE}'), 1)
+        self.assertFalse(any(call.startswith('xcrun simctl shutdown') for call in calls))
 
     def test_usage_errors_exit_2_and_touch_nothing(self):
         for args in (("--profile", "nope", "mine"), ("44444444-4444-4444-4444-444444444444",), ()):
