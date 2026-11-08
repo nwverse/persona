@@ -136,9 +136,16 @@ final class AppModel {
     /// Interactions ended locally (answered, cancelled or gone), by `uid`: neither the full list nor a card frame brings
     /// them back (#1688, #1521). By `uid`, not the hub's id: another group's card with the same id is another card.
     @ObservationIgnored var endedInteractionIDs: Set<String> = []
+    /// What the app's timed waits sleep on (`settleSend`'s wait for a transcript copy): the wall clock. The shared sync
+    /// replay's own (`SyncClock`), so that a case's minutes take none.
+    @ObservationIgnored var clock: any Clock<Duration> = ContinuousClock()
     #if DEBUG
     /// Unit tests: the client every group's requests go to (`FakeHub.client`) instead of the paired hubs'.
     @ObservationIgnored var apiForTests: APIClient?
+    /// Unit tests: the socket and the requests of every link made from now on (`makeLink`) go to these, not to Demo
+    /// Mode's hub, which is one for the whole process: several models side by side, each a device of its own (the
+    /// shared sync scenarios with two devices, `SyncDevice`).
+    @ObservationIgnored var linkHooksForTests: (transport: APIClient.Transport, socket: () -> LocalSocket)?
     #endif
     /// Cards being answered, and whether the hub ended them meanwhile: a failed answer puts back only the ones it did not.
     @ObservationIgnored private var answering = AnsweringInteractions()
@@ -432,6 +439,12 @@ final class AppModel {
         link.live.onConnected = { [weak self] in self?.didConnect(group) }
         link.live.onChange = { [weak self] in self?.connection.update() }
         link.live.credential = { [weak self] config in DeviceCredentialTrade.current(config, traded: self?.tradedTokens ?? [:]) }
+        #if DEBUG
+        if let hooks = linkHooksForTests {
+            link.transportForTests = hooks.transport
+            link.live.makeLocalForTests = hooks.socket
+        }
+        #endif
         return link
     }
 
