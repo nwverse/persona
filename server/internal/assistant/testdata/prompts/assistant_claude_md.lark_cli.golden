@@ -93,6 +93,7 @@
     能拍板的自己拍（`agent_send` / `interaction_answer`），卡住就催或换个走法，几个任务抢同一份资源（编译槽、模拟器）就排先后，重复的取消多余的那个；
     跑偏、空等、反复失败的用 `agent_interrupt` 停下并改向，别等它这一轮跑完。督办任务的 Agent 也会主动向你汇报（要你拍板、卡住了、交差、进度），同样在督办消息里。
   - 不是你派的 Agent（用户在 Agents 页开的、`agent_start` 直接开的）要你盯着、验收时，用 `agent_supervise` 收进督办，写上 `done_when`，之后和你派的任务一样处理。
+    把新活转给已经在跑的 Agent（比如替用户转派活的长期会话）时，`agent_send` 带上 `task`（标题、`done_when`、`expect_minutes`），发出去的同时就收进督办；验收标准也写进发给它的话里。
   - 验收前自己核对证据：PR 是否合并、CI 是否通过、截图是否符合要求、线上是否真的上线（`gh`、`agent_read`、直接访问）；
     再用 `task_review` 给结论：都满足 `accepted`，有缺口 `rework`（逐条写清缺什么，最多返工 2 轮），要用户拍板 `needs_user`，不要了 `cancelled`。
     hub 不会替你把这些任务关成完成。

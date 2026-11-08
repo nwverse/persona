@@ -1441,8 +1441,31 @@ struct ChatView: View {
         // Already there, and the stored position says so: setting it again only re-evaluated the whole page (a
         // streaming reply asks every 40 characters; the flipped list stays at its newest end by itself).
         if !animated, scratch.atNewest, position.edge == .top { return }
-        if animated { withAnimation(Theme.Motion.standard) { position.scrollTo(edge: .top) } } else { position.scrollTo(edge: .top) }
+        if animated {
+            #if os(iOS) || os(visionOS)
+            withAnimation(Theme.Motion.standard, completionCriteria: .removed) {
+                position.scrollTo(edge: .top)
+            } completion: {
+                reconcileNewestGeometry()
+            }
+            #else
+            withAnimation(Theme.Motion.standard) { position.scrollTo(edge: .top) }
+            #endif
+        } else {
+            position.scrollTo(edge: .top)
+        }
     }
+
+    #if os(iOS) || os(visionOS)
+    /// Revealing held-back rows can move UIKit to the end without another SwiftUI geometry callback (#1211).
+    /// Read the real final position, including an interrupted jump, rather than forcing following or near=true.
+    private func reconcileNewestGeometry() {
+        guard model.isSubscribed(shownKey, by: owner), let gap = pin.measuredNewestGap else { return }
+        scratch.newestGap = gap
+        scratch.atNewest = gap <= 0.5
+        setFollow { $0.scrolled(gap: gap) }
+    }
+    #endif
 
     /// On entry / returning to the chat tab: at the newest (already the natural start of the flipped list).
     private func settleAtEnd() {
