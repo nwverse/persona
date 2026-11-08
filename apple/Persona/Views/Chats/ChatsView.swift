@@ -2932,8 +2932,15 @@ nonisolated struct SlotRow: View, Equatable {
                 } detail: {
                     if !session.runningWorkflows.isEmpty { WorkflowLine(runs: session.runningWorkflows) }
                 }
-                // The badge's column holds the state alone (#3004): the agent's mark leads the title (#6390).
-                .titleLeading(session.assistant ? nil : { AgentMark(session) })
+                // The badge's column holds the state alone (#3004): the agent's mark leads the title (#6390), with
+                // ultracode's mark after it while that is on (#1307; the library's row has no slot after the title).
+                .titleLeading(session.assistant ? nil : {
+                    HStack(spacing: Theme.Space.xs) {
+                        AgentMark(session)
+                        if ultracodeMark { UltracodeMark().transition(.opacity) }
+                    }
+                    .animation(UltracodeMark.motion, value: ultracodeMark)
+                })
             } else {
                 HStack(alignment: .top, spacing: Theme.Space.m) {
                     // The agent's mark before its state (#6390): what runs there, then how it is doing.
@@ -2948,11 +2955,13 @@ nonisolated struct SlotRow: View, Equatable {
                     // starts at the row's edge, and the tag takes no room from it nor pushes the preview down.
                     HStack(alignment: .firstTextBaseline, spacing: Theme.Space.sm) {
                         VStack(alignment: .leading, spacing: Theme.Space.xs) {
-                            Text(session.displayTitle)
+                            // Ultracode's mark right after the title's last word while it is on (#1307).
+                            UltracodeMark.after(session.displayTitle, on: ultracodeMark)
                                 .font(session.state == .unread ? Theme.Font.bodyHeavy : Theme.Font.bodyStrong)
                                 .lineLimit(2)
                                 .fixedSize(horizontal: false, vertical: true)
                                 .frame(maxWidth: .infinity, alignment: .leading)
+                                .animation(UltracodeMark.motion, value: ultracodeMark)
                             if let last = session.listPreview(muted: muted) {
                                 Text(last).font(Theme.Font.secondary).lineHeight(.secondary).foregroundStyle(.secondary).lineLimit(2)
                             }
@@ -2993,6 +3002,9 @@ nonisolated struct SlotRow: View, Equatable {
         }
         .opacity(muted ? 0.8 : 1) // quieter than live agents, never fainter than the idle spaces below
     }
+
+    /// Claude Code's ultracode is on (#1307): its mark beside the title; not on an offline row.
+    private var ultracodeMark: Bool { Ultracode.rowMark(session) }
 
     /// Where it was opened, under the time; not for the assistant's own conversation.
     @MainActor @ViewBuilder private var sourceLabel: some View {
@@ -3115,6 +3127,8 @@ nonisolated struct CompactSlotRow: View, Equatable {
                     .font(session.state == .unread ? CompactList.titleUnread : CompactList.title)
                     .lineLimit(1)
                     .layoutPriority(1)
+                // Claude Code's ultracode on (#1307): its mark right after the title, never cut.
+                if Ultracode.rowMark(session) { UltracodeMark(font: CompactList.meta).fixedSize().transition(.opacity) }
                 // The starter mark stays whole: the line's other words give way to the title.
                 if pane?.launcher == true { Text("Started It").font(CompactList.metaStrong).foregroundStyle(.secondary).lineLimit(1).fixedSize() }
                 if let place, !place.isEmpty {
@@ -3128,6 +3142,7 @@ nonisolated struct CompactSlotRow: View, Equatable {
                     }
                 }
             }
+            .animation(UltracodeMark.motion, value: Ultracode.rowMark(session))
             Spacer(minLength: Theme.Space.xs)
             // Awaiting Reply in words (#5096): the dot is a seen agent's gray.
             if session.awaitsYourReply(muted: muted) && !hideState {

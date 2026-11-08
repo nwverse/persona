@@ -582,8 +582,11 @@ nonisolated struct APIClient: Sendable {
         /// What the tab name is made from when the first message is sent as a message of its own (not `prompt`).
         var nameHint: String? = nil
         var todoID: String? = nil
+        /// Claude Code's ultracode for this start (#3427): only `true` is ever sent (a new Claude is off anyway, and an
+        /// older hub would ignore the field rather than refuse it); nil leaves it out.
+        var ultracode: Bool? = nil
         enum CodingKeys: String, CodingKey {
-            case cwd, launcher, prompt, effort, async, model
+            case cwd, launcher, prompt, effort, async, model, ultracode
             case machineID = "machine_id", resumeSessionID = "resume_session_id", workspaceID = "workspace_id",
                  permissionMode = "permission_mode", tabName = "tab_name", nameHint = "name_hint", todoID = "todo_id"
         }
@@ -881,11 +884,31 @@ nonisolated struct APIClient: Sendable {
         /// Claude Code's model (#3119, the web's #2434): the node types `/model <id>` through the guards of a message
         /// and reads the screen back (node/model_switch.go).
         var model: String? = nil
-        enum CodingKeys: String, CodingKey { case effort, model; case permissionMode = "permission_mode" }
+        /// Claude Code's session-only ultracode switch (#3427); never sent with the others (`setUltracode`).
+        var ultracode: Bool? = nil
+        /// Only takes the resume notice away (`ultracode_lost_at`), the switch untouched.
+        var ultracodeDismissLost: Bool? = nil
+        enum CodingKeys: String, CodingKey {
+            case effort, model, ultracode
+            case permissionMode = "permission_mode", ultracodeDismissLost = "ultracode_dismiss_lost"
+        }
     }
     /// Changes a session's permission mode, effort level and / or model (nil leaves it); a TUI agent takes a second or two.
     func setModes(_ k: SessionKey, permissionMode: String? = nil, effort: String? = nil, model: String? = nil) async throws {
         try await post(sp(k) + "/modes", body: ModesBody(permissionMode: permissionMode, effort: effort, model: model), timeout: 30)
+    }
+
+    /// POST …/modes {"ultracode": on} (docs/protocol/protocol.md "Claude Code ultracode"): its own request, never with
+    /// the model or effort. Success says the node took it, maybe queued (`ultracode_pending`), not that it is on: the
+    /// session's fields say that. 409 `node_outdated` (the computer's node predates it) or `ultracode_unsupported`.
+    func setUltracode(_ k: SessionKey, on: Bool) async throws {
+        // The node may wait for its session state after a restart (about 20 s) before it answers.
+        try await post(sp(k) + "/modes", body: ModesBody(permissionMode: nil, effort: nil, ultracode: on), timeout: 60)
+    }
+
+    /// POST …/modes {"ultracode_dismiss_lost": true}: only takes the resume notice away.
+    func dismissUltracodeLost(_ k: SessionKey) async throws {
+        try await post(sp(k) + "/modes", body: ModesBody(permissionMode: nil, effort: nil, ultracodeDismissLost: true), timeout: 60)
     }
 
     struct QueueEdit: Encodable { var keep: [Int] }

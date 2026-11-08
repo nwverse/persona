@@ -1302,3 +1302,28 @@ DEBUG 的代码可能在 `Persona.debug.dylib` 中，40 KiB 的 `Persona` 只是
 - **What went wrong**: `AgentSync` left every subscribed session to its subscription. When the hub stopped pushing a session's `items` (a node whose transcript watch had ended), the open chat never showed the new message or reply, and the session's working status lit up the previous turn's work line, so the new turn's work read as more tools of the message before it. Reopening the chat showed everything in the right turns.
 - **Now**: `AgentSync.checkStall` asks for what came after the chat's `covered` when the session's `updated_at` is newer than the chat's newest line and no batch came for 4 s (`AgentSyncPacing.catchUpAt`, the web's rule and numbers). `ChatStore.arrivedAt` counts every batch, empty ones too, and streamed words: the hub sends a span for lines without items, and a headless session's `updated_at` is the node's clock at its last event, so neither a growing transcript nor a long reply being written looks quiet. Nothing is asked before the first batch (the backlog is on its way). While a message sent from here is still on its way, the session went to work after it was written and the transcript has nothing newer than it, the work line yields to the message's getting-ready line (`ChatAwaitingTurn.workIsForPending`). UI test: `ChatCatchUpTests` (`/mock/say?drop=1`).
 - **Signals that look usable but are not**: a session's `rev` is the transcript's byte count, not a line seq, so it cannot be compared with `covered`; compare `updated_at` (the newest activity or the file's mtime) with the newest item's `ts`. A `revs` event moves only `rev`; `updated_at` comes with the full list. A turn's `answer` is just its latest assistant text, set while the turn still runs, so it does not say the turn ended; the session's `stateSince` against the message's `createdAt` does, but only while no line is newer than the message: the hub resets `stateSince` on every change of state (blocked and back, its own restart), and a bubble whose copy is never matched would otherwise keep a whole turn's work line dark. `AppModel.session(_:)` keeps an older `updated_at` on purpose (`sameApartFromTicks`): read `latest(_:)` to compare times.
+
+## A switch with words under it inside a menu (2026-11-07, #1307)
+
+- **An iOS menu draws a subtitle only from a second `Text` directly in the item's label** (`Toggle { Text("ultracode"); Text(line) }`, `Button { Text; Text }`).
+  Inside a `Label { Text; Text } icon:` the second `Text` is dropped, which is why the effort levels' details in `SessionModes` never show.
+  A third `Image` in the same label still becomes the item's icon. The subtitle is cut after three lines (a Chinese sentence and a quota line
+  did not fit), and UI tests read it as part of the item's label.
+- **Words that are not an action go in the section's header, not a disabled item**: a `Button {}.disabled(true)` for the quota was drawn in the
+  disabled gray (about 2.3:1 on the menu's glass) and looked like an option not available now. `Section { … } header: { Text(…) }` is drawn in
+  the system's secondary style, line by line on iOS with no three-line cut (a `\n` starts a new line), and stays on top of its section in a menu
+  that lists its items the other way round. Nothing in a menu takes a color: a warning can only be as clear as the words around it.
+- **A menu that opens upward lists its items the other way round** (the shell composer's model menu, the old layout's chips: the items declared
+  first sit next to the button): a quota row declared after its switch landed above it, and a section declared after the effort went above the
+  effort, out of view until a scroll. Declare them in the reverse order on iOS (`UltracodeMenuSection.leadsEffort`; the Mac keeps the declared
+  order); `.menuOrder(.fixed)` would turn the whole existing menu over.
+- **The same menu on the Mac** (checked by opening it in a small AppKit program and dumping the `NSMenu`, `docs/lessons/macos.md`): the second
+  `Text` becomes `NSMenuItem.subtitle`, which wraps instead of being cut; a section's header is an `isSectionHeader` item drawn on one line (a `\n`
+  turns into a space and a long header widens the menu); a `Label`'s second `Text` is dropped there too.
+- **A mark after a title that can wrap is part of the text**: `HStack(alignment: .firstTextBaseline) { Text(title).lineLimit(2); Image }` put the
+  mark after the first line of a two-line title, between its halves (the watch's list showed it). `Text(title) + Text("\u{00A0}") + Text(Image(…))`
+  puts it after the last word (`UltracodeMark.after`). VoiceOver does not read an `accessibilityLabel` given to the image's own `Text`
+  inside the sum (the row read 「给天气 App 加主屏幕小组件 」): label the whole `Text`.
+- **A menu over the keyboard has room for only part of it**, and a UI test can't scroll it: a swipe on an item closed the menu. Type a short draft
+  and put the keyboard away before opening the composer's menu, then take the draft out again (`UltracodeUITests.modesButton` / `clearDraft`).
+- **A `try` in the message of `XCTAssertTrue` does not compile** (the message's autoclosure doesn't throw): evaluate first, or use `try?` there.

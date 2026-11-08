@@ -108,8 +108,14 @@ nonisolated enum SessionModes {
     struct ComposerTitle: Equatable, Sendable {
         var model: String
         var effort: String?
-        /// For VoiceOver and the UI tests: "Opus 5.5 High".
-        var spoken: String { effort.map { "\(model) \($0)" } ?? model }
+        /// The workflow mark after the effort (#1307): ultracode on, or a Codex thread at "ultra".
+        var mark: Ultracode.Mark? = nil
+        /// For VoiceOver and the UI tests: "Opus 5.5 High", "Opus 5.5 High, ultracode on".
+        var spoken: String {
+            let words = effort.map { "\(model) \($0)" } ?? model
+            guard let extra = mark?.spoken else { return words }
+            return words + String(localized: ", ", comment: "List separator") + extra
+        }
     }
 
     /// "Opus 5.5" + "High"; the model alone; "Thinking" + "High" with no model known; nil with neither.
@@ -183,12 +189,16 @@ struct SessionModeBar: View {
                 .accessibilityLabel("Permission Mode: \(SessionModes.modeLabel(mode) ?? SessionModes.unknown)")
             }
             Menu {
+                // Claude Code's ultracode (#1307): its own switch under the effort, not a level of it (declared before it where
+                // the menu lists its items the other way round, `UltracodeMenuSection.leadsEffort`).
+                if UltracodeMenuSection.leadsEffort { UltracodeMenuSection(key: key, session: session) }
                 Picker("Thinking Effort", selection: Binding(get: { effort ?? "" }, set: { new in change(effort: new) })) {
                     ForEach(SessionModes.effortOptions(session)) { o in
                         Label { Text(o.title); Text(o.detail) } icon: { Image(systemName: o.symbol) }.tag(o.id)
                     }
                 }
                 .pickerStyle(.inline)
+                if !UltracodeMenuSection.leadsEffort { UltracodeMenuSection(key: key, session: session) }
                 // The model in the same chip (#3119, the web's #2434): Claude Code takes `/model`, typed by the node.
                 if SessionModes.switchesModel(session) {
                     let busy = SessionModes.modelBusy(session)
@@ -206,17 +216,26 @@ struct SessionModeBar: View {
                 }
             } label: {
                 ModeChip(symbol: SessionModes.effort(effort)?.symbol ?? Theme.Icon.effort,
-                         text: effort.map { String(localized: "Thinking \(SessionModes.effortLabel($0) ?? $0) [Session Modes e77236]") } ?? String(localized: "Thinking Effort"), tint: .secondary, known: effort != nil)
+                         text: effort.map { String(localized: "Thinking \(SessionModes.effortLabel($0) ?? $0) [Session Modes e77236]") } ?? String(localized: "Thinking Effort"), tint: .secondary, known: effort != nil,
+                         mark: Ultracode.chipMark(session))
             }
             .labelOnlyMenu()
-            .accessibilityLabel(SessionModes.switchesModel(session)
-                ? String(localized: "Thinking effort and model: \(SessionModes.effortLabel(effort) ?? String(localized: "Unknown [Session Modes 4d8c1c]")), \(SessionModes.modelName(session?.model) ?? String(localized: "Unknown model"))")
-                : String(localized: "Thinking effort: \(SessionModes.effortLabel(effort) ?? String(localized: "Unknown [Session Modes 4d8c1c]"))"))
+            .accessibilityLabel(effortSpoken)
             if changing { ProgressView().controlSize(.mini) }
             Spacer(minLength: 0)
         }
         .disabled(changing)
         .animation(Theme.Motion.standard, value: changing)
+    }
+
+    /// The effort chip read out, with ", ultracode on" while it carries the mark (#1307).
+    private var effortSpoken: String {
+        let effort = session?.effort
+        let words = SessionModes.switchesModel(session)
+            ? String(localized: "Thinking effort and model: \(SessionModes.effortLabel(effort) ?? String(localized: "Unknown [Session Modes 4d8c1c]")), \(SessionModes.modelName(session?.model) ?? String(localized: "Unknown model"))")
+            : String(localized: "Thinking effort: \(SessionModes.effortLabel(effort) ?? String(localized: "Unknown [Session Modes 4d8c1c]"))")
+        guard let extra = Ultracode.chipMark(session)?.spoken else { return words }
+        return words + String(localized: ", ", comment: "List separator") + extra
     }
 
     /// The switchable options plus the current one when it is not among them (bypassPermissions, an unknown mode).
@@ -251,10 +270,12 @@ struct SessionModesMenu: View {
     /// Only the effort can change, among the session's own levels (a Codex thread on its app-server, `Session.setsEffortOnly`).
     var setsEffortOnly = false
 
-    /// The button's title for this conversation.
+    /// The button's title for this conversation; the effort carries the workflow mark while ultracode is on (#1307).
     static func title(_ session: Session?, setsModes: Bool) -> SessionModes.ComposerTitle? {
-        SessionModes.composerTitle(model: SessionModes.modelName(session?.model),
-                                   effort: setsModes ? SessionModes.effortLabel(session?.effort) : nil)
+        var title = SessionModes.composerTitle(model: SessionModes.modelName(session?.model),
+                                               effort: setsModes ? SessionModes.effortLabel(session?.effort) : nil)
+        if setsModes { title?.mark = Ultracode.chipMark(session) }
+        return title
     }
 
     var body: some View {
@@ -281,6 +302,9 @@ struct SessionModesMenu: View {
             }
         }
         if setsModes || setsEffortOnly {
+            // Claude Code's ultracode (#1307): its own switch under the effort, not a level of it (declared before it where
+            // the menu lists its items the other way round, `UltracodeMenuSection.leadsEffort`).
+            if UltracodeMenuSection.leadsEffort { UltracodeMenuSection(key: key, session: session) }
             Section("Thinking Effort") {
                 Picker("Thinking Effort", selection: Binding(get: { effort ?? "" }, set: { new in change(effort: new) })) {
                     ForEach(SessionModes.effortOptions(session)) { o in
@@ -289,6 +313,7 @@ struct SessionModesMenu: View {
                 }
                 .pickerStyle(.inline)
             }
+            if !UltracodeMenuSection.leadsEffort { UltracodeMenuSection(key: key, session: session) }
         }
         if setsModes {
             Picker(selection: Binding(get: { mode ?? "" }, set: { new in change(mode: new) })) {
@@ -332,13 +357,20 @@ struct ModeChip: View {
     var text: String
     var tint: Color
     var known = true
+    /// The workflow mark after the label (#1307): ultracode on, or a Codex thread at "ultra". The chip's menu says it
+    /// to VoiceOver (`SessionModeBar.effortSpoken`).
+    var mark: Ultracode.Mark? = nil
 
     var body: some View {
         HStack(spacing: Theme.Space.xs) {
             Image(systemName: symbol).font(Theme.Font.labelStrong)
             Text(text).lineLimit(1)
+            if mark != nil {
+                UltracodeMark(font: Theme.Font.labelStrong, spoken: nil).transition(.opacity)
+            }
             Image(systemName: Theme.Icon.choices).font(Theme.Font.labelHeavy).imageScale(.small).opacity(0.6)
         }
+        .animation(UltracodeMark.motion, value: mark)
         .font(Theme.Font.labelMedium)
         .foregroundStyle(known ? (tint == .secondary ? Color.primary : tint) : Color.secondary)
         .padding(.horizontal, Theme.Space.m)

@@ -416,7 +416,7 @@ struct WatchRootView: View {
                                     Circle().fill(s.state.color).frame(width: 8, height: 8)
                                         .alignmentGuide(.firstTextBaseline) { $0[.bottom] + 2 }
                                     VStack(alignment: .leading, spacing: Theme.Watch.lineSpacing) {
-                                        Text(s.displayTitle).font(.headline).lineLimit(2)
+                                        WatchTitle(session: s)
                                         Text([s.spaceName, s.slotLabel].compactMap { $0 }.joined(separator: " › ").isEmpty
                                              ? (model.machine(s.machineRef)?.title ?? s.machineID)
                                              : [s.spaceName, s.slotLabel].compactMap { $0 }.joined(separator: " › "))
@@ -979,6 +979,31 @@ struct WatchInboxItemView: View {
 private extension Error {
     /// The watch has no connection title (the phone's Waiting for Network / Connecting…): no network is still worth a line here.
     var watchShown: String? { isOffline ? localizedDescription : shown }
+}
+
+/// A running agent's title in the list, with Claude Code's ultracode mark after its last word while that is on (#1307; no
+/// switch on the watch). The mark is part of the text: beside the text's frame it sat after the first line of a title on
+/// two, between its halves. It comes and goes with a state change, at once with Reduce Motion.
+struct WatchTitle: View {
+    var session: Session
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    var body: some View {
+        let mark = Ultracode.rowMark(session)
+        title(mark)
+            .font(.headline)
+            .lineLimit(2)
+            .animation(reduceMotion ? nil : Theme.Motion.state, value: mark)
+    }
+
+    /// The label is the whole text's: an image's own inside a `Text` is not read.
+    private func title(_ mark: Bool) -> Text {
+        let title = session.displayTitle
+        guard mark else { return Text(title) }
+        let icon = Text(Image(systemName: Theme.Icon.workflow)).font(.footnote.weight(.semibold)).foregroundStyle(Theme.ai)
+        return (Text(title) + Text(verbatim: "\u{00A0}") + icon)
+            .accessibilityLabel(title + String(localized: ", ", comment: "List separator") + Ultracode.onWords)
+    }
 }
 
 /// A workflow its agent runs in the background (#2935), on the watch: a small chip 「workflow 169/185」, not expanded.
