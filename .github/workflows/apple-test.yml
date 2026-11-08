@@ -28,7 +28,7 @@ jobs:
           restore-keys: spm-${{ runner.os }}-${{ runner.arch }}-xcode-26.0-
       - name: Apple checks
         run: scripts/ci/apple.sh
-      - name: Preserve failed simulator diagnostics
+      - name: Preserve failed test results and simulator diagnostics
         if: failure()
         uses: actions/upload-artifact@v4
         with:
@@ -36,6 +36,7 @@ jobs:
           if-no-files-found: warn
           retention-days: 7
           path: |
+            ${{ runner.temp }}/persona-apple-ci.*/*.xcresult/**
             ${{ runner.temp }}/persona-apple-ci.*/simulator.log
             ${{ runner.temp }}/persona-apple-ci.*/simulator-state.json
             ${{ runner.temp }}/persona-apple-ci.*/simulator-diagnostics/**
