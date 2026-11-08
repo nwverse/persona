@@ -36,10 +36,11 @@ func (d *DB) PutSessionWork(ctx context.Context, w SessionWork) error {
 	return err
 }
 
-// SessionWorks are the stored work states of the sessions whose turn ended after since.
+// SessionWorks are recent states plus older CI watches with a pending wake.
+// The latter can remain pending while the machine is offline or a wake is in flight.
 func (d *DB) SessionWorks(ctx context.Context, since time.Time) ([]SessionWork, error) {
 	rows, err := d.pool.Query(ctx, `SELECT machine_id, session_id, turn_at, work, wake_at, retries, wakes, interaction_id,
-			updated_at FROM session_work WHERE turn_at > $1`, since)
+			updated_at FROM session_work WHERE turn_at > $1 OR (wake_at IS NOT NULL AND work ? 'ci')`, since)
 	if err != nil {
 		return nil, err
 	}

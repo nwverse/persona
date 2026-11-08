@@ -257,3 +257,51 @@ func TestCICheckNamesAreBoundedUntrustedData(t *testing.T) {
 		t.Fatalf("unsafe check names: %q", result)
 	}
 }
+
+func TestCILongOfflineWatchAndOutboxRestore(t *testing.T) {
+	for _, outbox := range []bool{false, true} {
+		name := "poll"
+		if outbox {
+			name = "outbox"
+		}
+		t.Run(name, func(t *testing.T) {
+			ctx := context.Background()
+			f := newFakeHub()
+			st := &workMemStore{}
+			c := stopped("ci", "PR #12 CI")
+			c.UpdatedAt = time.Now().UTC().Add(-72 * time.Hour).Truncate(time.Second)
+			f.sessions["box"] = []proto.Session{c}
+			s := newServiceOn(t, f, st)
+			if err := s.putTriageSwitches(ctx, TriageSwitches{Enabled: true, Wake: true}); err != nil {
+				t.Fatal(err)
+			}
+			at := time.Now().UTC().Add(-time.Minute)
+			ci := &proto.WorkCI{Number: 12, FallbackAt: c.UpdatedAt.Add(10 * time.Minute)}
+			if outbox {
+				ci.Message = "CI finished"
+			}
+			s.putWork(ctx, db.SessionWork{MachineID: "box", SessionID: "ci", TurnAt: c.UpdatedAt, WakeAt: &at, Work: proto.WorkState{Phase: proto.WorkBlocked, On: proto.WaitExternal, Wait: "CI", WakeAt: &at, CI: ci}})
+			if !outbox {
+				f.devices = []Device{{ID: "box", Online: false, Reachable: false}}
+			}
+			restarted := newServiceOn(t, f, st)
+			if !restarted.loadWork(ctx) {
+				t.Fatal("could not load work")
+			}
+			if got := entryOf(t, restarted, "ci"); got.Work.CI == nil {
+				t.Fatal("old active CI state not restored")
+			}
+			sends := 0
+			f.answerNode(DeviceSessionSendOnce, func(_ string, _ json.RawMessage) (any, error) { sends++; return map[string]any{}, nil })
+			restarted.workWake(ctx, restarted.newWorkView(ctx), [2]string{"box", "ci"}, time.Now())
+			got := entryOf(t, restarted, "ci")
+			if outbox {
+				if sends != 1 || got.WakeAt != nil {
+					t.Fatalf("outbox: sends %d state %+v", sends, got)
+				}
+			} else if sends != 0 || got.Work.CI != nil || got.WakeAt == nil {
+				t.Fatalf("offline fallback: sends %d state %+v", sends, got)
+			}
+		})
+	}
+}
