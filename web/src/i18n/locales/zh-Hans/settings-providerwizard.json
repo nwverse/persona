@@ -62,7 +62,7 @@
   "force": "强制",
   "force_label": "强制子代理用这个模型",
   "chat_effort_hint": "Chat Completions 不使用模型的思考档位设置。",
-  "chat_advanced_hint": "Chat Completions 不使用供应商专属请求头、环境变量、代理、超时、上下文或默认思考档位设置。",
+  "chat_advanced_hint": "Chat Completions 不使用供应商专属请求头、环境变量、代理、超时、上下文、默认思考档位、分档模型或子代理设置。",
   "headers": "请求头",
   "headers_set": "已设置（不显示）；输入新的会整体替换",
   "headers_placeholder": "X-Name: value，一行一个",

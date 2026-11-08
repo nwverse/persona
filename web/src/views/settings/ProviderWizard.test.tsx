@@ -333,7 +333,7 @@ describe("ProviderWizard from presets", () => {
     await act(async () => button("测试连接")!.click());
     expect(keyTests()[0]!.body).not.toHaveProperty("headers");
     act(() => button("下一步")!.click());
-    expect(text()).toContain("Chat Completions 不使用供应商专属请求头、环境变量、代理、超时、上下文或默认思考档位设置");
+    expect(text()).toContain("Chat Completions 不使用供应商专属请求头、环境变量、代理、超时、上下文、默认思考档位、分档模型或子代理设置");
     expect(document.body.querySelector('textarea[placeholder^="X-Name"]')).toBeNull();
     expect(document.body.querySelector('input[placeholder="http://127.0.0.1:7890"]')).toBeNull();
     expect(document.body.querySelector('input[placeholder="localhost,127.0.0.1"]')).toBeNull();

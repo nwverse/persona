@@ -359,7 +359,7 @@ export function providerBody(f: ProviderForm, old: ProviderView | null): Record<
   const extra = extraFields(f);
   const before = old && extraFields(formFromView(old));
   for (const [k, v] of Object.entries(extra)) {
-    if (chat && ["proxy", "no_proxy", "timeout_ms", "compact_window", "max_context", "effort"].includes(k)) continue;
+    if (chat && ["proxy", "no_proxy", "timeout_ms", "compact_window", "max_context", "effort", "opus_model", "sonnet_model", "haiku_model", "fable_model", "subagent_force"].includes(k)) continue;
     if (before ? !sameJSON(before[k], v) : v !== "" && v !== 0 && v !== false && !(Array.isArray(v) && v.length === 0)) body[k] = v;
   }
   if (!chat && f.headers_touched) body.headers = f.headers.trim();

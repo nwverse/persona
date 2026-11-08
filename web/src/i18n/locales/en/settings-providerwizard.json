@@ -63,7 +63,7 @@
   "force": "Force",
   "force_label": "Force subagents to use this model",
   "chat_effort_hint": "Chat Completions does not use per-model thinking effort settings.",
-  "chat_advanced_hint": "Chat Completions does not use provider-specific headers, environment variables, proxy, timeout, context or default effort settings.",
+  "chat_advanced_hint": "Chat Completions does not use provider-specific headers, environment variables, proxy, timeout, context, default effort, tier model or subagent settings.",
   "headers": "Request headers",
   "headers_set": "Set (hidden). Typing new ones replaces them all.",
   "headers_placeholder": "X-Name: value, one per line",
