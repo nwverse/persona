@@ -12,8 +12,8 @@ import (
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
-// limitLine is Claude Code's line for a session limit that resets in about in (to the minute, in UTC), and that reset.
-func limitLine(in time.Duration) (string, time.Time) {
+// sessionLimitLine is Claude Code's line for a session limit that resets in about in (to the minute, in UTC), and that reset.
+func sessionLimitLine(in time.Duration) (string, time.Time) {
 	reset := time.Now().UTC().Add(in).Truncate(time.Minute)
 	return fmt.Sprintf("You've hit your session limit · resets %s (UTC)", reset.Format("3:04pm")), reset
 }
@@ -95,7 +95,7 @@ func TestLauncherHealthUsageLimitUnusableUntilTheReset(t *testing.T) {
 	if r := healthState(s, "l4", "work"); r.State != healthBlocked {
 		t.Fatalf("l4 not blocked first: %+v", r)
 	}
-	line, reset := limitLine(2 * time.Hour)
+	line, reset := sessionLimitLine(2 * time.Hour)
 	r := s.recordHealth(ctx, "l4", "work", healthResult{err: "Error: " + line, source: healthSourceCheck})
 	if r.State != healthFailing || r.Kind != errKindUsageLimit || r.ResetsAt == nil || !r.ResetsAt.Equal(reset) || r.BlockedReason != "" || !r.unusable() {
 		t.Fatalf("with a reset: %+v", r)
@@ -122,7 +122,7 @@ func TestLauncherHealthUsageLimitUnusableUntilTheReset(t *testing.T) {
 func TestLauncherHealthUsageLimitWaitsForTheReset(t *testing.T) {
 	s, f := launcherHealthHub(t)
 	f.hello.Agents.LauncherHealth.Repair.Skill = "agent-cli-setup" // any other failure gets a repair agent
-	line, reset := limitLine(3 * time.Hour)
+	line, reset := sessionLimitLine(3 * time.Hour)
 	f.checks["l4/work"] = proto.LauncherCheck{Agent: "claude", Error: line}
 	ctx := context.Background()
 	s.healthRound(ctx, true)
@@ -213,7 +213,7 @@ func TestLauncherHealthRepairRecheckMeetsAUsageLimit(t *testing.T) {
 	if r := healthState(s, "l4", "work"); r.State != healthRepairing {
 		t.Fatalf("repairing: %+v", r)
 	}
-	line, reset := limitLine(time.Hour)
+	line, reset := sessionLimitLine(time.Hour)
 	f.mu.Lock()
 	f.checks["l4/work"] = proto.LauncherCheck{Agent: "claude", Error: line}
 	f.sessions["server"] = []proto.Session{{SessionID: "s1", MachineID: "server", State: proto.StateUnread, Status: proto.StatusIdle, LastText: "reconfigured the gateway"}}
@@ -238,7 +238,7 @@ func TestLauncherHealthFromAnAgentsUsageLimit(t *testing.T) {
 	s, f := launcherHealthHub(t)
 	ctx := context.Background()
 	now := time.Now()
-	line, reset := limitLine(2 * time.Hour)
+	line, reset := sessionLimitLine(2 * time.Hour)
 	codexReset := now.Add(90 * time.Minute).UTC().Truncate(time.Second)
 	old := now.Add(-2 * time.Hour).UTC().Truncate(time.Minute)
 	f.setSessions("box",
@@ -293,7 +293,7 @@ func TestLauncherHealthFromAnAgentsUsageLimit(t *testing.T) {
 func TestLauncherHealthUsageLimitInReadiness(t *testing.T) {
 	_, s, _ := readyMachine(t, proto.Session{SessionID: "m1", State: proto.StateIdle, LastText: "你好，我是 Persona。", UpdatedAt: time.Now().Add(-time.Hour)})
 	ctx := context.Background()
-	line, reset := limitLine(time.Hour)
+	line, reset := sessionLimitLine(time.Hour)
 	s.recordHealth(ctx, "server", "claude", healthResult{err: line, source: healthSourceSession, kind: errKindUsageLimit, resetsAt: &reset})
 	if m := readinessStep(t, getReadiness(t, s, "", ""), StepModel); m.State != StepProblem || m.Code != proto.TurnErrorRateLimited {
 		t.Fatalf("limited: %+v", m)

@@ -289,6 +289,8 @@ func turnErrorCode(text string) string {
 		return proto.TurnErrorModelRoute
 	}
 	switch classifyLauncherError(t) { // the launcher health checks' classes (launcher_health.go)
+	case errKindUsageLimit:
+		return proto.TurnErrorRateLimited
 	case errKindAuth:
 		return proto.TurnErrorAuthFailed
 	case errKindModelRoute:
