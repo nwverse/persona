@@ -235,9 +235,9 @@ func (s *Service) appendFeedAt(ctx context.Context, conversation, kind, ref stri
 
 const feedPage = 500
 
-// feed is a conversation's items after since, oldest first (with the message cards sent after since: the client
-// has them, not that they went out), and the plans they name.
-func (s *Service) feed(ctx context.Context, conversation string, since time.Time) ([]FeedItem, map[string]*TaskPlan, error) {
+// feedItems is a conversation's items after since, oldest first (with the message cards sent after since: the client
+// has them, not that they went out), without the plans they name: for readers that look only at the items.
+func (s *Service) feedItems(ctx context.Context, conversation string, since time.Time) ([]FeedItem, error) {
 	var items []FeedItem
 	if st := s.store(); st == nil {
 		s.tasks.mu.Lock()
@@ -250,7 +250,7 @@ func (s *Service) feed(ctx context.Context, conversation string, since time.Time
 	} else {
 		rows, err := st.Feed(ctx, conversation, since, feedPage)
 		if err != nil {
-			return nil, nil, err
+			return nil, err
 		}
 		for _, r := range rows {
 			items = append(items, FeedItem{ID: r.ID, Conversation: r.Conversation, At: r.At, Kind: r.Kind, Ref: r.Ref, Body: r.Body})
@@ -258,6 +258,15 @@ func (s *Service) feed(ctx context.Context, conversation string, since time.Time
 	}
 	s.settleCards(ctx, items)
 	s.fileCards(ctx, items)
+	return items, nil
+}
+
+// feed is feedItems and the plans they name.
+func (s *Service) feed(ctx context.Context, conversation string, since time.Time) ([]FeedItem, map[string]*TaskPlan, error) {
+	items, err := s.feedItems(ctx, conversation, since)
+	if err != nil {
+		return nil, nil, err
+	}
 	return items, s.feedPlans(ctx, items), nil
 }
 
