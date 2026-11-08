@@ -473,6 +473,16 @@ The hub has an **egress proxy** (`server/internal/extension/egress`), started th
 - **Who it recognizes**: on the local TCP port, extensions are identified by proxy credentials (`HTTP(S)_PROXY=http://ext:<credential>@127.0.0.1:<port>`, renewed at every start, invalid once disabled or uninstalled); the Linux sandbox also has one unix socket per extension
   (`~/.persona/extensions/run/<id>/proxy.sock`), and the socket itself says who it is.
 - **The hub's own upstream proxy**: when the hub's environment has `HTTPS_PROXY` / `HTTP_PROXY` (`NO_PROXY` honored), the proxy goes out through it (CONNECT); extensions don't need to know.
+- **Several addresses** (#1181): when a name resolves to several addresses, the proxy checks every one first (the rules above), then races only those
+  (`dialRace` in `extension/egress/race.go`, after RFC 8305 Happy Eyeballs v2): IPv4 and IPv6 alternate starting with the resolver's first family, the next address starts 250 ms after
+  the previous one or at once when one fails, at most four attempts are open at once (with four open and addresses waiting, the oldest is canceled after 10 s and its address goes once
+  more to the back of the line, with 20 s that time, so making room never removes the only address that answers slowly), the first connection wins and every other attempt is canceled
+  or closed. When the request's deadline passes, the error is the deadline (with each address's cause), even when the attempts' own timeouts come first. Nothing is resolved again, so the address dialed is always one that was checked. The fetch broker of source runtimes pins the address
+  even through the hub's upstream proxy, so there each attempt is its own CONNECT to one checked address and is raced the same way. Process extensions race the addresses the proxy
+  resolves itself (allowed names and settings addresses); when the hub has an upstream proxy for them, the CONNECT carries the name and the upstream proxy picks the address, so there is
+  one attempt. The request budgets and the broker's admission limits are unchanged.
+  Known limits: within a 15-second budget only the first eight addresses get an attempt (the ninth would start at 20 s; dialing one by one reached no further); and the process path
+  bounds sockets per request, not in total: an extension's 128 pending requests can hold up to 512 attempts at once, with no cap across extensions.
 - Env vars: `HTTP_PROXY`, `HTTPS_PROXY`, `http_proxy`, `https_proxy`, `ALL_PROXY`, `all_proxy` point at the proxy, and `NO_PROXY` is empty. Go, Node (libraries that apply the proxy themselves), Python and curl all honor them;
   old clients that only honor `HTTPS_PROXY` still can't get out from the sandbox, which is the intended effect.
 
