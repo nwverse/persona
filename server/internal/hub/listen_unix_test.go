@@ -17,6 +17,7 @@ import (
 	"syscall"
 	"testing"
 
+	"github.com/nwverse/persona/server/internal/compat"
 	"github.com/nwverse/persona/server/internal/osproc/osproctest"
 	"github.com/nwverse/persona/server/internal/update"
 )
@@ -111,7 +112,7 @@ func TestPassedSocketsReachNoChild(t *testing.T) {
 	var base []string
 	for _, kv := range os.Environ() {
 		k, _, _ := strings.Cut(kv, "=")
-		if k == "HOME" || strings.HasPrefix(k, "LISTEN_") || strings.HasPrefix(k, "PERSONA_") || strings.HasPrefix(k, "JARVIS_") {
+		if k == "HOME" || strings.HasPrefix(k, "LISTEN_") || compat.ReservedEnv(k) {
 			continue
 		}
 		base = append(base, kv)
