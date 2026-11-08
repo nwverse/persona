@@ -1036,6 +1036,8 @@ if os.environ.get("MOCK_WORK"):
 CODEX_LIVE = "c0de9a1f-1111-4000-8000-000000000001"
 CODEX_HISTORY = "c0de9a1f-2222-4000-8000-000000000002"
 DSH_SESSION = "session-3f2a9c4e-0000-4000-8000-000000000003"
+CLAUDE_DESKTOP = "c1a0de00-1111-4000-8000-000000000004"
+CLAUDE_TERMINAL = "c1a0de00-2222-4000-8000-000000000005"
 NO_SPACE = dict(space_kind=None, space_id=None, space_name=None, space_index=None, slot_id=None, slot_name=None,
                 slot_index=None, pane_id=None, tab_id=None, workspace_id=None, launcher=None)
 if os.environ.get("MOCK_SOURCES"):
@@ -1056,6 +1058,15 @@ if os.environ.get("MOCK_SOURCES"):
              source_kind="runtime", source_instance_id="dsh",
              capabilities={"read": True, "send": True, "interrupt": True, "approve": True, "terminal": False, "attach": False},
              **dict(NO_SPACE, space_kind="dsh")),
+        # Claude outside Persona's terminals (docs/integrations/claude-integration.md): one in the desktop app that takes
+        # messages through its peer inbox, one in another terminal whose inbox the node cannot use.
+        sess("server", CLAUDE_DESKTOP, "整理发布说明", "/home/me/code/release", "working", "working", "", 0, "", 0, 1,
+             "把这周合并的 PR 按模块分好了，正在写摘要。", agent="claude", source_kind="claude_desktop",
+             capabilities={"read": True, "send": True}, **NO_SPACE),
+        sess("server", CLAUDE_TERMINAL, "排查构建缓存", "/home/me/code/build", "idle", "idle", "", 0, "", 0, 12,
+             "缓存键里少了 Go 版本，已经补上。", agent="claude", source_kind="claude_cli",
+             read_only_reason="这个 Claude 没有开放会话之间的消息通道（版本较旧或功能关着）：手机上只能看，回复请在电脑上",
+             capabilities={"read": True}, **NO_SPACE),
     ]
 
 # MOCK_OVERVIEW_DENSE=1: the overview on a wide screen with many finished rows: agents run through a runtime (a source
@@ -10147,7 +10158,7 @@ def incoming_message(query):
         if sid in subscribed:
             try: send({"type": "items", "machine_id": mid, "session_id": sid, "items": [item], **span([item], before)})
             except OSError: pass
-    return {"session": decorated_session(session), "item": item}, 200
+    return {"session": stamp_row(decorated_session(session)), "item": item}, 200
 
 
 def quiet_capsule():
