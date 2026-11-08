@@ -57,9 +57,10 @@ type UISlot struct {
 	Context string
 	// Badge: the plugin may put a badge (ui.badge) on its entry.
 	Badge bool
-	// Shown: the user is shown before installing that the plugin draws here, and agrees again when an upgrade adds it
-	// (Explain, Digest): it sits among the app's own pages, outside the plugin's settings.
-	Shown string
+	// Shown: the user is shown before installing that the plugin draws here (extension-permissions.slot_<Name>), and
+	// agrees again when an upgrade adds it (Explain, Digest): it sits among the app's own pages, outside the plugin's
+	// settings.
+	Shown bool
 	// Since is the UI version that brought it.
 	Since int
 }
@@ -70,17 +71,17 @@ var UISlots = []UISlot{
 	// extension_page is plugin_page's new name: the same slot (PageSlot).
 	{Name: "extension_page", Size: SizeFull, Since: 3},
 	{Name: "launcher_section", Size: SizeFull, Context: "launcher", Since: 1},
-	{Name: "nav_page", Size: SizeFull, Badge: true, Shown: permissionText(i18n.Default, "slot_nav_page"), Since: 2},
-	{Name: "overview_card", Size: SizeCompact, Shown: permissionText(i18n.Default, "slot_overview_card"), Since: 2},
-	{Name: "capsule_card", Size: SizeCompact, Shown: permissionText(i18n.Default, "slot_capsule_card"), Since: 3},
-	{Name: "machine_section", Size: SizeFull, Context: "machine", Shown: permissionText(i18n.Default, "slot_machine_section"), Since: 2},
+	{Name: "nav_page", Size: SizeFull, Badge: true, Shown: true, Since: 2},
+	{Name: "overview_card", Size: SizeCompact, Shown: true, Since: 2},
+	{Name: "capsule_card", Size: SizeCompact, Shown: true, Since: 3},
+	{Name: "machine_section", Size: SizeFull, Context: "machine", Shown: true, Since: 2},
 	// inbox_item draws the body of an inbox item from the plugin's connector (its own header stays the app's): the
 	// same items a plugin's connector brought in, with the hub's triage on them. Drawn with UI version 2's items.
-	{Name: "inbox_item", Size: SizeFull, Context: "item", Shown: permissionText(i18n.Default, "slot_inbox_item"), Since: 2},
+	{Name: "inbox_item", Size: SizeFull, Context: "item", Shown: true, Since: 2},
 	// widget is drawn outside the app (docs/extensions/extensions.md "System-level places"): a home screen widget, a Lock Screen or watch
 	// face complication. The size it is asked for is the family (FitWidget holds the view to it); the apps list
 	// widgets on their own (GET /api/v1/extensions/-/widgets), not with the slots drawn in the app.
-	{Name: "widget", Size: WidgetFamilySmall, Shown: permissionText(i18n.Default, "slot_widget"), Since: 3},
+	{Name: "widget", Size: WidgetFamilySmall, Shown: true, Since: 3},
 }
 
 // Widgets: the families a widget is drawn at and how often it is drawn again (docs/extensions/extensions.md "System-level places").
@@ -225,14 +226,16 @@ type AuthRelayItem = wire.AuthRelayItem
 
 // Events this hub has.
 var (
-	EventTopics = map[string]string{
-		"kb.changed":      permissionText(i18n.Default, "event_kb_changed"),
-		"kb.forgotten":    permissionText(i18n.Default, "event_kb_forgotten"),
-		"inbox.changed":   permissionText(i18n.Default, "event_inbox_changed"),
-		"agent.needs_you": permissionText(i18n.Default, "event_agent_needs_you"),
-		"agent.finished":  permissionText(i18n.Default, "event_agent_finished"),
-		"todo.changed":    permissionText(i18n.Default, "event_todo_changed"),
-		"todo.decision":   permissionText(i18n.Default, "event_todo_decision"),
+	// EventTopics are the events by topic; how the install screen says each is extension-permissions.event_<topic with
+	// _ for .> (Explain). No text here: the catalogs are read on first use, not when the package starts (#1308).
+	EventTopics = map[string]bool{
+		"kb.changed":      true,
+		"kb.forgotten":    true,
+		"inbox.changed":   true,
+		"agent.needs_you": true,
+		"agent.finished":  true,
+		"todo.changed":    true,
+		"todo.decision":   true,
 	}
 
 	// EventScopes are the hub scopes an event needs besides the subscription: only an extension granted the scope

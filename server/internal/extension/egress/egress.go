@@ -721,14 +721,21 @@ func (p *Proxy) tunnel(w http.ResponseWriter, r *http.Request, dial func() (net.
 var hop = []string{"Connection", "Proxy-Connection", "Keep-Alive", "Proxy-Authorization", "Proxy-Authenticate", "Te",
 	"Trailer", "Transfer-Encoding", "Upgrade"}
 
-// forward is a plain http:// request of extension ext: sent on over a connection dial makes, the answer back.
-func (p *Proxy) forward(w http.ResponseWriter, r *http.Request, ext string, dial func() (net.Conn, error)) {
-	tr := &http.Transport{
+// forwardTransport keeps the approved dial callback while negotiating ordinary TLS HTTP/2.
+// A custom DialContext otherwise conservatively disables Go's HTTP/2 support.
+func forwardTransport(dial func() (net.Conn, error)) *http.Transport {
+	return &http.Transport{
 		Proxy:                 nil,
 		DialContext:           func(context.Context, string, string) (net.Conn, error) { return dial() },
+		ForceAttemptHTTP2:     true,
 		DisableKeepAlives:     true,
 		ResponseHeaderTimeout: 2 * time.Minute,
 	}
+}
+
+// forward sends HTTP through the approved connection and preserves the upstream response.
+func (p *Proxy) forward(w http.ResponseWriter, r *http.Request, ext string, dial func() (net.Conn, error)) {
+	tr := forwardTransport(dial)
 	defer tr.CloseIdleConnections()
 	out := r.Clone(r.Context())
 	out.RequestURI = ""

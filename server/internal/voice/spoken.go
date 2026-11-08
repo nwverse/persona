@@ -2,11 +2,11 @@ package voice
 
 import (
 	"fmt"
-	"regexp"
 	"strconv"
 	"strings"
 
 	"github.com/nwverse/persona/server/internal/i18n"
+	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/prompts"
 )
 
@@ -21,29 +21,29 @@ import (
 const spokenMost = 3000
 
 var (
-	fenceRe    = regexp.MustCompile("^\\s{0,3}(`{3,}|~{3,})")
-	tableSepRe = regexp.MustCompile(`^\s*\|?\s*:?-{2,}:?\s*(\|\s*:?-{2,}:?\s*)*\|?\s*$`)
-	headingRe  = regexp.MustCompile(`^\s{0,3}#{1,6}\s+`)
-	quoteRe    = regexp.MustCompile(`^\s{0,3}(?:>\s?)+`)
-	listRe     = regexp.MustCompile(`^\s*(?:[-*+]|\d{1,3}[.)])\s+(?:\[[ xX]\]\s+)?`)
-	ruleRe     = regexp.MustCompile(`^\s{0,3}(?:(?:-\s*){3,}|(?:\*\s*){3,}|(?:_\s*){3,})$`)
+	fenceRe    = lazyre.New("^\\s{0,3}(`{3,}|~{3,})")
+	tableSepRe = lazyre.New(`^\s*\|?\s*:?-{2,}:?\s*(\|\s*:?-{2,}:?\s*)*\|?\s*$`)
+	headingRe  = lazyre.New(`^\s{0,3}#{1,6}\s+`)
+	quoteRe    = lazyre.New(`^\s{0,3}(?:>\s?)+`)
+	listRe     = lazyre.New(`^\s*(?:[-*+]|\d{1,3}[.)])\s+(?:\[[ xX]\]\s+)?`)
+	ruleRe     = lazyre.New(`^\s{0,3}(?:(?:-\s*){3,}|(?:\*\s*){3,}|(?:_\s*){3,})$`)
 
-	inlineCodeRe = regexp.MustCompile("(`+)([^`\n]+?)(`+)")
-	imageRe      = regexp.MustCompile(`!\[([^\]\n]*)\]\([^)\n]*\)`)
-	linkRe       = regexp.MustCompile(`\[([^\]\n]+)\]\([^)\s]+(?:\s+"[^"\n]*")?\)`)
-	autolinkRe   = regexp.MustCompile(`<((?:https?|ftp)://[^>\s]+)>`)
-	urlRe        = regexp.MustCompile(`\b(?:(?:https?|ftp|file)://|www\.)[^\s<>"\x{80}-\x{10FFFF}]+`)
-	fileLineRe   = regexp.MustCompile(`((?:~/|\.{1,2}/|/)?(?:[\w@+-][\w.@+-]*/)*[\w@+-][\w.@+-]*\.[A-Za-z][A-Za-z0-9]{0,7}):(\d+)(?::\d+)?\b`)
-	pathRe       = regexp.MustCompile(`(?:~/|\.{1,2}/|/)?(?:[\w@+-][\w.@+-]*/)+[\w@+-][\w.@+-]*`)
-	extRe        = regexp.MustCompile(`\.[A-Za-z][A-Za-z0-9]{0,7}$`)
-	uuidRe       = regexp.MustCompile(`\b[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\b`)
-	hashRe       = regexp.MustCompile(`\b[0-9a-f]{7,64}\b`)
-	boldRe       = regexp.MustCompile(`(\*\*|__)([^\n]+?)(\*\*|__)`)
-	strikeRe     = regexp.MustCompile(`~~([^\n]+?)~~`)
-	emRe         = regexp.MustCompile(`(^|[^\w*])\*([^*\s][^*\n]*?)\*($|[^\w*])`)
-	brRe         = regexp.MustCompile(`(?i)<br\s*/?>`)
-	blankRunsRe  = regexp.MustCompile(`\n{3,}`)
-	heldRe       = regexp.MustCompile("\uE000(\\d+)\uE001")
+	inlineCodeRe = lazyre.New("(`+)([^`\n]+?)(`+)")
+	imageRe      = lazyre.New(`!\[([^\]\n]*)\]\([^)\n]*\)`)
+	linkRe       = lazyre.New(`\[([^\]\n]+)\]\([^)\s]+(?:\s+"[^"\n]*")?\)`)
+	autolinkRe   = lazyre.New(`<((?:https?|ftp)://[^>\s]+)>`)
+	urlRe        = lazyre.New(`\b(?:(?:https?|ftp|file)://|www\.)[^\s<>"\x{80}-\x{10FFFF}]+`)
+	fileLineRe   = lazyre.New(`((?:~/|\.{1,2}/|/)?(?:[\w@+-][\w.@+-]*/)*[\w@+-][\w.@+-]*\.[A-Za-z][A-Za-z0-9]{0,7}):(\d+)(?::\d+)?\b`)
+	pathRe       = lazyre.New(`(?:~/|\.{1,2}/|/)?(?:[\w@+-][\w.@+-]*/)+[\w@+-][\w.@+-]*`)
+	extRe        = lazyre.New(`\.[A-Za-z][A-Za-z0-9]{0,7}$`)
+	uuidRe       = lazyre.New(`\b[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\b`)
+	hashRe       = lazyre.New(`\b[0-9a-f]{7,64}\b`)
+	boldRe       = lazyre.New(`(\*\*|__)([^\n]+?)(\*\*|__)`)
+	strikeRe     = lazyre.New(`~~([^\n]+?)~~`)
+	emRe         = lazyre.New(`(^|[^\w*])\*([^*\s][^*\n]*?)\*($|[^\w*])`)
+	brRe         = lazyre.New(`(?i)<br\s*/?>`)
+	blankRunsRe  = lazyre.New(`\n{3,}`)
+	heldRe       = lazyre.New("\uE000(\\d+)\uE001")
 )
 
 // inlineCodeMost: inline code this short is said as it is (`npm test`); longer is a stand-in.

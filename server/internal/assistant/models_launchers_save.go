@@ -3,7 +3,6 @@ package assistant
 import (
 	"context"
 	"net/url"
-	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -12,6 +11,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/nwverse/persona/server/internal/i18n"
+	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
@@ -117,9 +117,9 @@ func checkEnv(raw string) error {
 	return nil
 }
 
-var exportPrefix = regexp.MustCompile(`^export\s+`)
+var exportPrefix = lazyre.New(`^export\s+`)
 
-var envName = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
+var envName = lazyre.New(`^[A-Za-z_][A-Za-z0-9_]*$`)
 
 func (in launcherInput) checkProvider() error {
 	if in.Models != nil {

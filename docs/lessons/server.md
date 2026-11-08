@@ -1,5 +1,9 @@
 # Lessons: hub / node and networking
 
+## A custom HTTPS dial must opt into HTTP/2 (#1620)
+
+A custom `http.Transport.DialContext` conservatively disables Go's automatic HTTP/2 negotiation. Keep the checked-address dial callback and explicitly enable `ForceAttemptHTTP2`; do not replace it with a default dialer or let an upstream proxy resolve the name again. Verify real local TLS HTTP/2 negotiation, HTTP/1.1 fallback and request cancellation. A successful transport test is not evidence that a particular upstream challenge disappeared: verify the installed source separately, without raising budgets or substituting host-downloaded content.
+
 ## A failed swap must not look like a new install
 
 `update.SwapProgram` recorded `Prev: ""` when copying the old program to `.prev` or putting the new build in place failed, and `Prev: ""` is how a swap says the program was new, so going back deleted a program the failed swap had never touched.
@@ -917,6 +921,14 @@ Uploads already had a `dest` parameter (`terminal`, `health`), but older nodes n
 The app saw a successful upload while the folder stayed empty, with no error anywhere. A node that knows `dest` but not `dir` answers `unknown upload destination`, which is easy to handle.
 Now the node echoes `dest` in its begin result; without the echo the hub aborts the upload and answers 409 `node_outdated`.
 Whenever an existing method gains a "write somewhere else" / "do it differently" parameter, work out what an old node does with it: if it would quietly do something else, have new nodes echo it and check the echo in the hub before going on.
+
+## Where a file may be written isn't what may be renamed or deleted (2026-11-06, #315)
+
+The write guard `writable()` answers "may a file go into this folder": the home itself says yes, and a path has its links followed first. Reused as is for rename / move / trash it would have let the phone
+move the whole home to the trash, and a link `~/out → /elsewhere` would be judged (and changed) as its target. `file.rename / move / trash` check the entry differently (`node/fileedit.go` `entry`): the folder it is in
+is resolved with links followed, the entry's own name is not (a link is renamed as the link), and the home itself is refused on its own.
+Also, `os.Rename` replaces whatever has the new name without a word: a rename or move that must not overwrite uses `renameat2(RENAME_NOREPLACE)` on Linux and `renamex_np(RENAME_EXCL)` on macOS (`renameExcl`), not Lstat-then-rename.
+And an Undo id must carry everything it needs (`trash_id` holds where the file went and came from): the hub and node get redeployed between the delete and the Undo.
 
 ## Docker: containers can't write `.env`; Postgres loopback doesn't verify passwords (2026-11-06, #4045)
 

@@ -305,3 +305,16 @@ Each page has its own `NSHostingView`, with `isHidden` set while inactive. Pitfa
 - **One background for the whole column**: Persona's `macListRow` covers system selection with `Theme.pageBackground` on every chat row; title, task entry, and empty areas were transparent, showing the window background.
   Real-window screenshots in the default glass style show a color band too, but offscreen screenshots may render both colors alike and cannot establish that no issue exists. Clay reproduces reliably in light and dark mode. Mac `AssistantSidebar` now fills its whole column with the same token,
   without changing row selection/hover or iOS. Check title, group headers, unselected rows, and bottom empty space together, and also inspect a style with a colored page background.
+
+## Menus and glass in offscreen screenshots (2026-11-07, #1307)
+
+- **`mac_shot.sh` cannot show a menu, but a small AppKit program can**: put the SwiftUI `Menu` in an `NSHostingView`, find its
+  `SwiftUIPopupButton`, `performClick`, and from a `Timer` added to `RunLoop.main` in `.common` mode (the menu's tracking loop runs in
+  `.eventTracking`) dump `button.menu?.items` (`title`, `subtitle`, `isSectionHeader`) and `cacheDisplay` the `NSPopupMenuWindow`'s content view to a PNG,
+  then `cancelTracking()`. It works with the screen locked. That is how ultracode's menu was checked: a `Toggle`'s second `Text` becomes
+  `NSMenuItem.subtitle` and wraps; a `Section` header is a one-line `isSectionHeader` item (a `\n` becomes a space, a long one widens the menu).
+- **Text on a `glassEffect` surface comes out in the wrong colors in `cacheDisplay`**, whatever the code says: in a test window `.secondary`,
+  `Color.secondary`, `.gray` and even `.blue` text on glass were drawn black (unreadable on the dark window), and a `.secondary` × white on white in
+  light mode; only `NSColor`-backed colors (`secondaryLabelColor`) came out as written. The real window draws glass with vibrancy, which the
+  offscreen copy does not have. A shot of a glass note (the resume line over the composer, `FailureNote`…) that looks unreadable is not evidence
+  either way: check it in a style with solid surfaces (`-ui.style lark`, the same layout and text styles) or in a real window when the Mac is unlocked.
