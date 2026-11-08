@@ -2,6 +2,8 @@
 
 Pitfalls, odd behavior, and the tradeoffs made at the time (originally in `CLAUDE.md`, "Lessons"; index in `docs/lessons/README.md`). Add new lessons to the relevant section, or start a section if none fits.
 
+- Mock mutation responses must use the same session decoration and manager ownership as HTTP lists and WebSocket deltas (#1124). An incoming reply returned the undecorated ownership envelope while its delta included `manager`; reuse `stamp_row(decorated_session(...))` rather than weakening full-session equality assertions.
+
 - Run release privacy preflight with the actual selected build config (#1245): a scan without `PERSONA_CONFIG` can miss account-specific inputs. Generic provisioning profile labels already published in the default mapping or deployment fixture are not private merely because an account selects them. Classify only those exact literal labels under `app_store.provisioning_profiles`, reading the already published `origin/main` definitions rather than allowing a working-tree or unpublished commit to approve its own new label; keep custom/near-match labels, values under another key and explicit `private-words.txt` entries protected. Parse historical fixture data without executing it, and never work around the failure by dropping signing overrides, renaming registered resources or disabling the source/bundle privacy gates. Compound release commands use `set -euo pipefail` and stop on a rejected preflight before commit, push, archive or upload.
 
 

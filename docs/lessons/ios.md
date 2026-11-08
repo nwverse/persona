@@ -2,6 +2,10 @@
 
 Pitfalls, odd behavior and the decisions made at the time (formerly "Lessons" in `CLAUDE.md`; index in `docs/lessons/README.md`). Add new lessons to the relevant section, or create one if none fits.
 
+## Hosted simulator boot diagnostics (#1124)
+
+A successful minimum-Xcode app/Watch build does not prove the test simulator became ready. A stock iOS 26.0 boot failed its existing 900-second deadline before tests started; the shared helper had discarded `simctl bootstatus` output, and the workflow retained no diagnostic artifact. Keep boot command/phase errors on stderr (stdout remains the sole UDID), capture them separately, and collect `simctl list` before shutting down the owned simulator. Upload only those logs, runtime metadata and existing xcresult bundles after failure; never the source snapshot, configuration, keys or links outside result bundles. Keep the original boot/step timeouts and do not add automatic retries. A maintainer-approved manual rerun is distinct from a retry policy, but uses the original run's commit: diagnostic changes need a new-head run first.
+
 ## Newest geometry after programmatic scrolling (#1211)
 
 A frozen transcript can reveal its withheld rows during Jump to Latest and move UIKit to the end without another SwiftUI scroll-geometry report. The real failure trace had offset -10 pt and adjusted top inset 10 pt (gap 0), while the follow state kept gap 1480 and `near=false`. A visible reply and following mode do not prove that the position state is current. Reconcile from the actual scroll container when the animation ends, keep the existing tolerance and reading intent, and skip a completion without this view's live subscription owner or without a measured container. Query the owner at completion: a captured visibility environment value can be stale, and another visible owner's subscription must not keep a hidden view eligible. Never fix the regression by forcing `near=true` or relaxing the UI assertion. For repeated UI failures, stop at the first failure and resolve the app container after testing: reinstall can change its data container, and a later successful launch overwrites the trace.
@@ -57,11 +61,23 @@ SwiftUI 的 `.frame(maxWidth: .infinity)` 默认把内容居中；父层 `VStack
 
 ## Compiler-free English catalog keys (#5090)
 
+On hosted images, successful SDK lookup does not prove Xcode can resolve a generic device destination (#1124). Prepare the matching iOS platform/runtime before the first device build, not only before simulator tests; retain the minimum compiler and explicit runtime pin. The failed device build reported that iOS 26.0 was not installed even though the SDK checks passed. The pinned Xcode downloads a compatible patch runtime (26.0.1); forcing `-buildVersion 26.0` returned "not available for download". Let that Xcode select its platform, then require an available stable 26.0.x runtime and pass its exact identifier to the simulator helper. Reject newer minor versions and beta runtimes. An embedded watch app also needs the compiler-compatible watchOS runtime before a generic iOS device build; preparing iOS alone then fails with "watchOS 26.0 must be installed". Prepare and validate both platforms without removing the watch target.
+
+A SwiftUI body can compile on a newer toolchain but exceed the minimum compiler's type-checking budget (#1124). Split List construction, style modifiers and observation/lifecycle modifiers into opaque helper functions. Preserve row content and modifier order exactly; do not add type erasure or container views just to shorten the expression. Verify the minimum compiler on hosted CI, not only a newer local build.
+
+The minimum compiler can reject Boolean autoclosures that capture a main-actor probe dictionary containing `Any` (#1124). Read Bool/Double fields on that actor first, then combine the Sendable scalar values. Preserve the settling criteria and assertions; do not disable concurrency checks or skip the test target.
+
+A Sendable fake transport does not make its stored callbacks actor-safe (#1124). MainActor model-test handlers must retain that function-type contract and be invoked with an explicit actor hop. A detached request against the old FakeHub produced an xcresult host crash and SIGTRAP stack through `swift_task_checkIsolated` and the route callback. Keep the route-table lock outside callback execution so handlers can register responses and inspect requests without deadlocking; verify the minimum-toolchain full run separately from a newer local subset.
+
+Swift Testing method selectors include `()` (#1124). An incomplete pre-existing exclusion leaves an opt-in integration selected, so it appears as `Skipped` in xcresult even when xcodebuild exits zero. Match the declared selection precisely and keep the strict result guard; do not add a skip allowlist. The Reminders round-trip can run on a disposable stock simulator by granting its app Reminders access and setting `TEST_RUNNER_PERSONA_EVENTKIT_ROUNDTRIP=1`; keep its real store assertions and cleanup intact.
+
 Changing the catalog's development language also changes the identity the Swift compiler extracts. Preserve each colliding English translation in its own contextual key and keep explicit English values; do not merge different Chinese or Japanese meanings. Reorder interpolation expressions together with translated argument numbers, and audit reordered expressions for side effects. Named App Intent parameters follow their names, not their old position.
 
 Keep `LocalizedStringResource` and `LocalizedStringKey` arguments as localization values: wrapping a literal in `String(localized:)` is correct for a `String`, but breaks a helper requiring either localization type. Read each helper's signature rather than guessing from its name. Migrate nested literals from the inside out. Without a Swift compiler, reject unresolved raw literals and ambiguous argument types instead of silently guessing.
 
 Source percent signs are literal text, while catalog `%%` is an escaped percent. Parsing `% left` as a printf specifier (`% le`) falsely rejects a valid key. Source-key checks must not run printf normalization twice. Compiler-free checks complement, but do not replace, Apple builds, Swift tests and three-language screenshots.
+
+A catalog can be valid JSON and still fail every Apple consumer (#1123): inserting a complete string entry inside another entry's `localizations` makes the new key look like a locale with no `stringUnit`. The required en / zh-Hans / ja entries may remain valid, so checking only those languages misses it. Reject nested string entries in every locale object, keep new entries as siblings under `strings`, and verify that moving them preserves all translations.
 
 
 ## Asynchronous HTML sandbox loading and teardown (#2025)

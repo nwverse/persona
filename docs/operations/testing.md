@@ -18,7 +18,11 @@ n=0 failed=""; for f in $(find scripts -name 'test_*.py' -not -path '*/node_modu
 `.github/workflows/ci.yml` runs on every PR, merge-queue group, and manual dispatch. It checks repository privacy and path safety, then
 uses `scripts/ci/paths.py` to call independent reusable platform workflows. Filters live in that one tested file, not duplicated native
 workflow filters: this makes dependencies and results visible to the final **CI required** job, which always reports and rejects failed,
-cancelled, missing or unexpectedly skipped selected jobs. Unselected platforms are deliberately skipped. Require **CI required** only;
+cancelled, missing or unexpectedly skipped selected required jobs. By maintainer decision, the independent Mac lane temporarily does not
+block merging: it still runs and reports its actual success/failure, without `continue-on-error`, but is not a dependency of **CI required**.
+The required Apple lane remains iOS, including embedded Watch builds, PersonaKit, offline unit/design tests and both separate HTML batches.
+Both Apple lanes depend only on path selection and run in parallel on separate hosted runners. Unselected platforms are deliberately
+skipped. Require **CI required** only; repository rulesets are not changed by this policy split.
 remove older individual conditional required checks when branch protection is available. A workflow change must have a real green hosted
 PR run before merging. Use `python3 scripts/ci/paths.py --base origin/master` to inspect local selection; dispatch runs all platforms.
 
@@ -31,7 +35,7 @@ metadata through the API. Image publishing has `packages: write` only in the non
 | Server / `.github/workflows/server-test.yml` | `scripts/ci/server.sh` | gofmt, vet, complete Go tests against disposable Postgres 18, build, Windows cross-build/vet, extension schema/examples/SDK bundle, Go SDK tests; hub route/architecture, prompts and hub i18n guards are Go tests | ubuntu-latest | 8–15 / 15–30 min |
 | Web / `.github/workflows/web-test.yml` | `scripts/ci/web.sh` | npm ci, scoped ESLint, TypeScript, complete Vitest, production build and privacy | ubuntu-latest | 2–4 / 4–7 min |
 | Android / `.github/workflows/android-test.yml` | `scripts/ci/android.sh` | i18n/token checker tests, translations/literals, token ratchet, all-module lint and unit-test variants, debug APK | ubuntu-latest | 8–15 / 15–30 min |
-| Apple / `.github/workflows/apple-test.yml` | `scripts/ci/apple.sh` | synthetic project configuration, unsigned iOS/macOS builds, package and offline app unit tests including design-system guards; no distribution signing | macos-26, Xcode 26.0.1 (Swift 6.2) | 20–35 / 35–60 min |
+| Apple / `.github/workflows/apple-test.yml` | `scripts/ci/apple.sh ios` and `scripts/ci/apple.sh macos` | independent parallel lanes: required PersonaKit/iOS/Watch/HTML checks and temporarily non-blocking Mac build/unit tests; synthetic configuration, no distribution signing; real Mac failures remain visible | separate macos-26 runners, Xcode 26.0.1 (Swift 6.2) | measure each lane; prior combined estimate 20–35 / 35–60 min |
 | Scripts/docs / `.github/workflows/scripts-tests.yml` | `scripts/ci/scripts.sh` | every Python script test, doc/code paths and index, layout/shell/Python compatibility, privacy-rule regression, catalog/translation/token checks, actionlint, issue-link logic, website worker | ubuntu-latest | 2–4 / 4–7 min |
 | Runtimes / `.github/workflows/runtimes-test.yml` | `scripts/ci/runtimes.sh` | TypeScript SDK typecheck/test/portability, Agent SDK build, every runtime integration's npm tests | ubuntu-latest | 2–4 / 4–7 min |
 | Container / `.github/workflows/hub-image.yml` | `scripts/ci/hub-image.sh` | amd64 build; isolated Compose Postgres, HTTP/TLS health, pairing, web, admin isolation, file ownership/0600; non-PR publish remains amd64+arm64 | ubuntu-latest | 8–15 / 15–30 min |
@@ -45,12 +49,22 @@ Cancellation reduces wasted old runs, not already-used minutes.
 Public-repository standard hosted runners do not consume private Actions minutes. Billing multipliers/plans may change; check the account
 before budgeting. Apple is selected only by Apple inputs (Apple files, shared schema/spec, simulator/localization/Apple CI infrastructure),
 never by a plain docs/web/server edit. Go/npm/Gradle/SPM download/build caches are used; Gradle PR caches are read-only and no credentials
-are stored. The initial SPM/runtime download makes a cold Apple run materially slower.
+are stored. The initial SPM/runtime download makes a cold Apple run materially slower. DerivedData/SPM cache improvements and further parallelization
+are tracked in #1214; the job split does not introduce cache-based test substitution.
 
 Local prerequisites: Go from `server/go.mod`, Node from `web/.nvmrc`, Python 3.9+ (CI uses 3.11), Docker/Compose for server/image,
 `pip install -r scripts/ci/requirements.txt` and `go install github.com/rhysd/actionlint/cmd/actionlint@v1.7.12` for scripts, Bun 1.4.2 for
 TypeScript SDK. Android needs JDK 21 and SDK `platforms;android-37.0` / `build-tools;37.0.0` plus GNU timeout; Apple needs macOS 26,
 Xcode 26.0.1, XcodeGen and rsync. Local scripts fail on missing required tools rather than claim success. They do not deploy or publish.
+The unsigned Mac app/notification-extension build keeps shipping entitlements. Before the ad-hoc signed offline Mac test invocation,
+`scripts/ci/apple_entitlements.py` removes only profile-authorized push, time-sensitive notification and shared Keychain permissions from
+the disposable source snapshot. The sandbox, other permissions and project hardened-runtime settings remain unchanged; the checked-in
+project and release entitlements are not edited. A valid ad-hoc signature carrying restricted permissions can still be rejected before `main`.
+On Apple failure, collect the simulator UDID log, boot command/status log, installed runtime metadata, `xcrun simctl list --json`, available
+disk space, and any xcresult bundles before deleting the owned simulator. The workflow uploads the allowlisted diagnostics as
+`apple-<lane>-diagnostics-<run id>-<attempt>` artifacts for seven days. Source/configuration files, keys and result-bundle symlink targets
+are excluded. Do not infer a simulator boot timeout's cause without its diagnostics, add automatic retries, or extend the boot deadline.
+A maintainer-approved `gh run rerun --failed` runs the original commit; it cannot acquire diagnostic code added by a later commit.
 
 Deliberate boundaries: web `compatibility.live.test.ts` needs an isolated live hub/token and explicitly skips its one probe without them.
 The offline web tests still run completely. Apple explicitly excludes five fixture/watchdog-dependent iOS cases (`OldHubCompatibilityIntegrationTests`,
@@ -60,6 +74,8 @@ and five `ExtensionStreamSnapshotTests` Mac cases needing a live extension/hub p
 requires the four design-system suites; UI suites, visionOS, Persona Link and SSH-package integration remain outside this lane.
 Full simulator screenshots, device/instrumentation/UI suites, real Agent/phone integrations, release entitlements,
 production signing and publication are not PR gates. They need devices, explicit lab inputs or secrets; retain the manual checks below.
+The stock iOS unit-test simulator is granted Reminders access for the synthetic CI app, and `TEST_RUNNER_PERSONA_EVENTKIT_ROUNDTRIP=1`
+runs the existing EventKit create/list/update/delete round-trip against its disposable store. This does not use a personal device or account.
 Platform-gated and explicitly opt-in tests still report their own skips; they are not evidence of device/live integration coverage.
 On Linux, `test_hub_restart_mac.py` skips its three Mac-only cases; `test_persona_cutover.py` has six optional database/container cases
 without dedicated cutover inputs. The complete Python suite remains discovered and runs; no failing suite is excluded. CI's
