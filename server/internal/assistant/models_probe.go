@@ -379,34 +379,44 @@ func responsesProbeCompleted(body io.Reader) bool {
 	return false
 }
 
-// chatProbeCompleted requires a finished choice, rather than accepting an HTTP 200 error body.
+// chatProbeCompleted follows the first choice to a terminal event, including errors after its finish reason.
 func chatProbeCompleted(body io.Reader) bool {
 	sc := bufio.NewScanner(io.LimitReader(body, 8<<20))
 	sc.Buffer(make([]byte, 64<<10), 4<<20)
+	finished := false
 	for sc.Scan() {
 		data, ok := strings.CutPrefix(sc.Text(), "data:")
 		if !ok {
 			continue
 		}
+		data = strings.TrimSpace(data)
+		if data == "[DONE]" {
+			return true
+		}
 		var event struct {
 			Error   json.RawMessage `json:"error"`
 			Choices []struct {
+				Index        int    `json:"index"`
 				FinishReason string `json:"finish_reason"`
+				Delta        struct {
+					Refusal string `json:"refusal"`
+				} `json:"delta"`
 			} `json:"choices"`
 		}
-		if json.Unmarshal([]byte(strings.TrimSpace(data)), &event) != nil {
-			continue
-		}
-		if len(event.Error) > 0 && string(event.Error) != "null" {
+		if json.Unmarshal([]byte(data), &event) != nil || len(event.Error) > 0 && string(event.Error) != "null" {
 			return false
 		}
 		for _, choice := range event.Choices {
-			if choice.FinishReason == "stop" || choice.FinishReason == "length" {
-				return true
+			if choice.Index != 0 {
+				continue
 			}
+			if choice.FinishReason == "content_filter" || choice.Delta.Refusal != "" {
+				return false
+			}
+			finished = finished || choice.FinishReason != ""
 		}
 	}
-	return false
+	return finished && sc.Err() == nil
 }
 
 // providerDiscover: GET <base>/v1/models, its models filled in from the catalog.

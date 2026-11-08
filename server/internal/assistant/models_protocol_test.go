@@ -239,10 +239,26 @@ func TestChatProbeRejectsUnfinishedStreams(t *testing.T) {
 		`{"error":"not a stream"}`,
 		`data: {"error":{"message":"failed"}}` + "\n\n",
 		`data: {"choices":[{"delta":{"content":"partial"}}]}` + "\n\n",
-		`data: [DONE]` + "\n\n",
+		`data: {"choices":[{"index":1,"finish_reason":"stop"}]}` + "\n\n",
+		`data: {"choices":[{"finish_reason":"content_filter"}]}` + "\n\n",
+		`data: {"choices":[{"delta":{"refusal":"No"}}]}` + "\n\n",
+		`data: {"choices":[{"finish_reason":"stop"}]}` + "\n\ndata: {\"error\":{\"message\":\"failed\"}}\n\n",
+		`data: {invalid}` + "\n\n",
 	} {
 		if chatProbeCompleted(strings.NewReader(body)) {
 			t.Fatalf("accepted %q", body)
+		}
+	}
+}
+
+func TestChatProbeCompleted(t *testing.T) {
+	for _, body := range []string{
+		`data: [DONE]` + "\n\n",
+		`data: {"choices":[{"index":0,"finish_reason":"length"}]}` + "\n\n",
+		`data: {"choices":[{"index":0,"finish_reason":"stop"}]}` + "\n\ndata: {\"choices\":[],\"usage\":{}}\n\n",
+	} {
+		if !chatProbeCompleted(strings.NewReader(body)) {
+			t.Fatalf("rejected %q", body)
 		}
 	}
 }
