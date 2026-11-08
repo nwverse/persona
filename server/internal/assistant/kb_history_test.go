@@ -82,7 +82,7 @@ func (f *fakeHistory) enter() func() {
 		f.most.Store(n)
 	}
 	if f.real > 0 {
-		time.Sleep(f.real)
+		time.Sleep(f.real) // sleep-ok: holds the call open in real time, so a second call made meanwhile would overlap and be counted
 	}
 	if f.clock != nil {
 		f.clock.Advance(f.took)
