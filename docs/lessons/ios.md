@@ -334,6 +334,7 @@ Use an invalidation revision as the task key and handle the flag after completio
 
 ## `Layout` and components
 
+- Under iPhone Duo's vertical bars the system draws the navigation bar's title as a row over the content, not in the side column with the buttons: a page that draws its own title shows the name twice. Remove the system's with `.toolbar(removing: .title)` while yours is on screen (`ChatView`, 2026-11-08).
 - When capping chips in horizontal scrolling, do not put `frame(maxWidth:)` / `scaledFrame(maxWidth:)` outside the background (2026-11-05, #3010): `ScrollView(.horizontal)` proposes no width,
   and flexible frames pass that unlimited proposal through. The chip and background measure the entire title while only the frame's occupied space is capped;
   background and space diverge: shorter chips leave larger gaps, large text does not truncate and capsules overlap neighbors.
