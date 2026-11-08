@@ -41,7 +41,10 @@ def _coverage(response):
             or not isinstance(evidence.get('revision'), str) or not evidence['revision']):
         raise ValueError('Authoritative manager update inventory capability is unavailable')
     try:
-        observed = dt.datetime.fromisoformat(evidence['observed_at'].replace('Z', '+00:00'))
+        timestamp = evidence.get('observed_at')
+        if not isinstance(timestamp, str):
+            raise ValueError('observation time must be a string')
+        observed = dt.datetime.fromisoformat(timestamp.replace('Z', '+00:00'))
         age = (dt.datetime.now(dt.timezone.utc) - observed).total_seconds()
     except (KeyError, TypeError, ValueError) as error:
         raise ValueError('Manager inventory observation time is unavailable') from error
