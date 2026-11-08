@@ -213,7 +213,7 @@ func TestIngestReplayKeepsAttachmentsAndSurvivesRezone(t *testing.T) {
 	if n, err := e.Ingest(context.Background(), src, chat, []SourceMessage{m}); n != 1 || err != nil {
 		t.Fatalf("image ingest: %d, %v", n, err)
 	}
-	path := s.path(KindChat, "example-thread", "attachments", at.UTC().Format("2006-01-02"), attachmentName("image", 0, "image.png", "IMAGE"))
+	path := s.path(KindChat, "example-thread", "attachments", at.UTC().Format("2006-01-02"), "messages", attachmentName("image", 0, "image.png", "IMAGE"))
 	if raw, err := os.ReadFile(path); err != nil || string(raw) != "synthetic attachment" {
 		t.Fatalf("attachment lost: %q, %v", raw, err)
 	}

@@ -195,7 +195,8 @@ This transaction covers archive text, identity and chat metadata; people/documen
 refreshes the chat's database index from its durable metadata. Compression compares both the latest timestamp and pending count before clearing work or advancing
 its coverage boundary; distinct IDs arriving during a model call can share the same timestamp or minute.
 
-New attachment filenames use a full SHA-256 digest of the raw message ID, plus the attachment index and bounded extension, within the existing chat/day directory.
+New attachment filenames use a full SHA-256 digest of the raw message ID, plus the attachment index and bounded extension, under `attachments/<day>/messages/`.
+The separate subdirectory also protects old filenames that happen to resemble the new hashes.
 This avoids the older sanitized-name collisions from punctuation, case-insensitive filesystems and truncated long IDs. Distinct raw IDs cannot overwrite each
 other's saved attachment through those filename collisions. Missing IDs use a fresh random filename per attachment, preserving append behavior without inventing
 a durable source identity. Existing filenames and Markdown links stay untouched; a known receipted ID skips downloads on replay, including after restart. The

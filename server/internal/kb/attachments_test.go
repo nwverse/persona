@@ -162,6 +162,38 @@ func TestAttachmentLegacyLinksRemainUntouched(t *testing.T) {
 	}
 }
 
+func TestAttachmentHashShapedLegacyFilenameRemainsUntouched(t *testing.T) {
+	s, e := replayStore(t)
+	at := time.Now().Add(-time.Hour)
+	c := &Chat{ID: "example-thread", Source: "example", SourceID: "thread", Name: "Example", Messages: 1}
+	// An older raw ID could itself look like the new hash prefix. New files need
+	// a separate directory, not just a different basename in the legacy directory.
+	name := attachmentName("asset/a", 0, "new.png", "IMAGE")
+	rel := filepath.Join("attachments", at.In(s.Zone()).Format("2006-01-02"), name)
+	old := filepath.Join(s.path(KindChat, c.ID), rel)
+	if err := archiveWrite(old, []byte("legacy hash-shaped attachment")); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.AppendMessages(c, []Line{{At: at, Sender: "Example", Text: "Legacy picture " + attachmentPlaceholder + "(" + rel + ")"}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.PutChat(c); err != nil {
+		t.Fatal(err)
+	}
+	src := &identityAttachmentSource{named: "example"}
+	if n, err := e.Ingest(context.Background(), src, SourceChat{ID: "thread"}, []SourceMessage{{
+		ID: "asset/a", At: at, Text: "New picture", Type: "IMAGE", Media: []string{"new.png"},
+	}}); n != 1 || err != nil {
+		t.Fatalf("new delivery: %d, %v", n, err)
+	}
+	assertAttachmentBytes(t, old, "legacy hash-shaped attachment")
+	links := attachmentLinks(s, c.ID)
+	if len(links) != 2 || links[0] != old || strings.EqualFold(links[0], links[1]) {
+		t.Fatalf("legacy filename reused: %v", links)
+	}
+	assertAttachmentBytes(t, links[1], "new.png")
+}
+
 func TestMissingMessageIDsKeepSeparateAttachments(t *testing.T) {
 	s, e := replayStore(t)
 	src := &identityAttachmentSource{named: "example"}

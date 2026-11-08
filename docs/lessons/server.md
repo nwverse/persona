@@ -477,7 +477,8 @@ home volume (docs/operations/link.md "Without systemd").
   new IDs can share a timestamp or minute, so advancing coverage from time alone can skip concurrent messages. Acquire metadata before message files:
   the existing project commit holds metadata while its frozen input reads the timeline under the message mutex, so the opposite order deadlocks ingestion.
   Attachment filenames must hash the full raw ID, not sanitize or truncate it: punctuation, case and long suffixes can otherwise overwrite an earlier message's
-  attachment even when receipts correctly keep both IDs. Keep legacy links/files and use separate anonymous filenames when no stable ID is supplied.
+  attachment even when receipts correctly keep both IDs. Put new files in a separate day subdirectory so hash-shaped legacy names stay intact, keep legacy
+  links/files, and use separate anonymous filenames when no stable ID is supplied.
 - Enforce retention at write entry points, not only daily cleanup: initial archive reads "latest 100 messages", which in quiet sessions can reach years back;
   after cleanup, 47 expired day files reappeared 6 seconds later (production 2026-11-02). All day-file writes (`Archive`, `Ingest`, `WriteHistory`) share
   `Engine.textCutoff()` (midnight of the earliest retained day); cleanup uses `Engine.Prune`, with the same retention days. New write paths use it too. `TestArchiveKeepsToTheTextRetention` checks "cleanup immediately after writing should delete 0 days".

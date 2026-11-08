@@ -338,14 +338,14 @@ func (e *Engine) buildLine(ctx context.Context, download DownloadFunc, c *Chat, 
 // attachmentPlaceholder stands for an attachment that is not saved (too old, not downloaded, or failed).
 const attachmentPlaceholder = "[附件]" // i18n-ignore: archive data
 
-// attach saves a message's i-th media under attachments/<day>/ and returns the link the line gets, or the
+// attach saves a message's i-th media under attachments/<day>/messages/ and returns the link the line gets, or the
 // placeholder when it is not saved.
 func (e *Engine) attach(ctx context.Context, download DownloadFunc, c *Chat, m SourceMessage, i int, media, day string, recent bool) string {
 	if !recent || download == nil {
 		return attachmentPlaceholder
 	}
 	name := attachmentName(m.ID, i, media, m.Type)
-	dst := e.Store.path(KindChat, c.ID, "attachments", day, name)
+	dst := e.Store.path(KindChat, c.ID, "attachments", day, "messages", name)
 	if err := download(ctx, media, dst); err != nil {
 		e.failed.Add(1)
 		return attachmentPlaceholder
