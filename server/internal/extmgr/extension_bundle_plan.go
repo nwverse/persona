@@ -259,9 +259,15 @@ func (h *Manager) guardExtensionPlan(ctx context.Context, previews []*extension.
 		if pv.Market == "" {
 			continue
 		}
-		rec, _, err := marketEntryLocked(ms, pv.Market, pv.Manifest.ID)
+		rec, entry, err := marketEntryLocked(ms, pv.Market, pv.Manifest.ID)
 		if err != nil {
 			return fail(err)
+		}
+		if pv.RenameFrom != "" {
+			old := h.extensions.reg.SnapshotExact(pv.RenameFrom)
+			if entry.Parsed.ID != pv.Manifest.ID || entry.Replaces != pv.RenameFrom || old == nil || old.Record.Source != extension.SourceInstalled || old.Record.Origin != "market:"+pv.Market+"/"+pv.RenameFrom || h.extensions.reg.Get(pv.Manifest.ID) != nil {
+				return fail(i18n.Err("extension-identity.invalid"))
+			}
 		}
 		spec, key := pv.MarketTrust()
 		currentKey := rec.SigningKey
