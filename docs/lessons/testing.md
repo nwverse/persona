@@ -705,3 +705,7 @@ Two more from the same harness:
 
 - The scenarios' times are fixed (`2026-01-02T…`), and the app ties a sent bubble to its transcript line partly by time. Lines the hub writes during a case get the time they were written (`SyncHub.writtenNow`).
 - A failed message is placed before later ones by the whole second it was written (`ChatLines.placeFailed`). Two sends in a row in a test land in the same second, so the harness spaces sends more than a second apart, as typing does.
+
+## `AppModel()` in a test starts from what the simulator's app saved (2026-11-09, #1637)
+
+On a simulator whose app is paired (any mock-hub UI test pairs it), `AppModel()`'s init restores the app's saved snapshot (`Caches/state/dev.json`: machines, sessions, interactions) and outbox. A unit test that makes a model then starts with that: one simulator's 145 saved sessions pushed a sync scenario's chat out of the 40 newest that `AgentSync` plans, so its stall check never ran. A brand-new simulator and hosted CI pass, which hides it. The model also writes its own snapshot and outbox back over the app's. A test that cares gives the model a folder of its own, `AppModel(stateFolder:)`, and makes the model again on the same folder for a relaunch.
