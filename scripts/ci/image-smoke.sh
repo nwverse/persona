@@ -8,13 +8,32 @@ holds() { grep "$@" >/dev/null; }
 cd "${CI_IMAGE_FIXTURE:?}"
 smoke_url="http://127.0.0.1:${CI_IMAGE_PORT:?}"
 docker run --rm persona-hub:ci version | grep -Fx "${CI_IMAGE_VERSION:?}"
+healthy() {
+  for attempt in $(seq 1 60); do
+    if curl --max-time 3 -fsS "$smoke_url/api/v1/health"; then return 0; fi
+    sleep 2
+  done
+  printf 'TIMEOUT hub health endpoint\n' >&2
+  return 1
+}
+# The container's programs (docs/operations/docker.md "Programs"): the hub's, then the built-in manager's, which starts
+# once it is bound, a moment after the hub answers.
+runs() {
+  for attempt in $(seq 1 30); do
+    if docker compose exec -T hub ps -o args | holds -Ex "$2"; then
+      docker compose exec -T hub ps -o args | holds -Ex "$1"
+      return
+    fi
+    sleep 2
+  done
+  printf 'TIMEOUT no process %s\n' "$2" >&2
+  docker compose exec -T hub ps -o args >&2
+  return 1
+}
 docker compose up -d
-ok=
-for attempt in $(seq 1 60); do
-  if curl --max-time 3 -fsS "$smoke_url/api/v1/health"; then ok=1; break; fi
-  sleep 2
-done
-[ -n "$ok" ] || { printf 'TIMEOUT hub health endpoint\n' >&2; exit 1; }
+healthy
+printf 'Checking the hub and the built-in manager run as persona-hub and persona-manager\n'
+runs '/opt/persona/nodes/persona-hub run' '/opt/persona/nodes/persona-manager assistant'
 # Drain producer output under pipefail: an early grep exit can make Docker exec
 # return 255 even when the expected pairing link was present.
 printf 'Checking pairing and tailcat key\n'
@@ -55,4 +74,8 @@ else
 fi
 [ "$(docker compose exec -T --user 0 hub stat -c %u /home/persona/.persona/hub.json)" = "$(id -u)" ]
 [ "$(docker compose exec -T --user 0 hub stat -c %a /home/persona/.persona/hub.json)" = 600 ]
-printf 'PASS hub image: health, TLS, pairing, web, admin isolation and file ownership\n'
+printf 'Checking PERSONA_SPLIT_PROGRAMS=0 runs both on personad\n'
+PERSONA_SPLIT_PROGRAMS=0 docker compose up -d hub
+healthy
+runs '/opt/persona/nodes/personad-linux-[a-z0-9]+ hub run' '/opt/persona/nodes/personad-linux-[a-z0-9]+ assistant'
+printf 'PASS hub image: health, TLS, pairing, web, admin isolation, file ownership and its programs\n'

@@ -21,24 +21,38 @@ import (
 	"time"
 )
 
-// The test binary stands in for the hub and the manager (`hub run`, `assistant`) when SUPERVISE_TEST_DIR is set: it
-// notes each start (its pid and PERSONA_ASSISTANT_DEPLOY) in <dir>/<role>.starts, exits with the code in
-// <dir>/<role>.exit when that file shows up (taking it), stops on SIGTERM unless <dir>/<role>.stubborn is there.
+// The test binary stands in for the hub and the manager (`hub run` and persona-hub's `run`, `assistant`) when
+// SUPERVISE_TEST_DIR is set: it notes each start (its pid and PERSONA_ASSISTANT_DEPLOY) in <dir>/<role>.starts and
+// the program and arguments it ran as in <dir>/<role>.programs, exits with the code in <dir>/<role>.exit when that
+// file shows up (taking it), stops on SIGTERM unless <dir>/<role>.stubborn is there.
 func TestMain(m *testing.M) {
 	dir := os.Getenv("SUPERVISE_TEST_DIR")
-	if dir != "" && len(os.Args) > 1 && (os.Args[1] == "hub" || os.Args[1] == "assistant") {
-		child(dir, os.Args[1])
+	if dir != "" && len(os.Args) > 1 {
+		switch os.Args[1] {
+		case "hub", "run":
+			child(dir, "hub")
+		case "assistant":
+			child(dir, "assistant")
+		}
 	}
 	os.Exit(m.Run())
 }
 
+// child is the fake hub or manager. It catches SIGTERM before it writes <role>.starts: the tests stop it as soon as
+// they see that file.
 func child(dir, role string) {
+	term := make(chan os.Signal, 1)
+	signal.Notify(term, syscall.SIGTERM)
 	f, err := os.OpenFile(filepath.Join(dir, role+".starts"), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
 	if err != nil {
 		os.Exit(9)
 	}
 	fmt.Fprintf(f, "%d %s\n", os.Getpid(), os.Getenv("PERSONA_ASSISTANT_DEPLOY"))
 	f.Close()
+	if f, err := os.OpenFile(filepath.Join(dir, role+".programs"), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600); err == nil {
+		fmt.Fprintf(f, "%s %s\n", filepath.Base(os.Args[0]), strings.Join(os.Args[1:], " "))
+		f.Close()
+	}
 	if _, err := os.Stat(filepath.Join(dir, role+".spawn")); err == nil { // leave something behind: a process of its own
 		gc := exec.Command("sleep", "30")
 		if _, err := os.Stat(filepath.Join(dir, role+".spawn-group")); err == nil { // in a group of its own (an extension)
@@ -48,8 +62,6 @@ func child(dir, role string) {
 			_ = os.WriteFile(filepath.Join(dir, role+".grandchild"), []byte(strconv.Itoa(gc.Process.Pid)), 0o600)
 		}
 	}
-	term := make(chan os.Signal, 1)
-	signal.Notify(term, syscall.SIGTERM)
 	for {
 		select {
 		case <-term:
@@ -91,6 +103,7 @@ type fixture struct {
 	out      *syncBuffer
 	mu       sync.Mutex
 	execs    int
+	execd    string // the last exec's program and arguments
 	binds    []string
 	bindErrs []error // what the next binds answer (nil after)
 }
@@ -106,6 +119,7 @@ func newFixture(t *testing.T, hubJSON string) *fixture {
 		10*time.Millisecond, 40*time.Millisecond, time.Hour, 2*time.Second, 20*time.Millisecond, 20*time.Millisecond
 	t.Setenv("PERSONA_LISTEN", "")
 	t.Setenv(SeparateEnv, "")
+	t.Setenv("PERSONA_SPLIT_PROGRAMS", "")
 	home, dir := t.TempDir(), t.TempDir()
 	if hubJSON != "" {
 		if err := os.WriteFile(filepath.Join(home, "hub.json"), []byte(hubJSON), 0o600); err != nil {
@@ -115,9 +129,10 @@ func newFixture(t *testing.T, hubJSON string) *fixture {
 	f := &fixture{dir: dir, out: &syncBuffer{}}
 	f.e = &env{self: os.Args[0], home: home, out: f.out,
 		environ: append(os.Environ(), "SUPERVISE_TEST_DIR="+dir),
-		execHub: func(string, []string) error {
+		execHub: func(bin string, args, _ []string) error {
 			f.mu.Lock()
 			f.execs++
+			f.execd = filepath.Base(bin) + " " + strings.Join(args, " ")
 			f.mu.Unlock()
 			return nil
 		},
@@ -189,9 +204,93 @@ func running(t *testing.T, fn func(ctx context.Context) error) (stop func() erro
 func TestChildModeIsTheHubAsBefore(t *testing.T) {
 	for _, hubJSON := range []string{"", `{"token":"t"}`, `{"assistant":{"mode":"child"}}`, `{"assistant":{"mode":"service","external":true}}`} {
 		f := newFixture(t, hubJSON)
-		if err := f.e.hubContainer(context.Background()); err != nil || f.execs != 1 || len(f.starts("hub")) != 0 || len(f.binds) != 0 {
-			t.Fatalf("%s: err %v, execs %d, starts %v, binds %v", hubJSON, err, f.execs, f.starts("hub"), f.binds)
+		if err := f.e.hubContainer(context.Background()); err != nil || f.execs != 1 || len(f.starts("hub")) != 0 || len(f.binds) != 0 ||
+			f.execd != filepath.Base(os.Args[0])+" hub run" {
+			t.Fatalf("%s: err %v, execs %d %q, starts %v, binds %v", hubJSON, err, f.execs, f.execd, f.starts("hub"), f.binds)
 		}
+	}
+}
+
+// programs are the programs and arguments role ran as, one a start.
+func (f *fixture) programs(role string) []string {
+	b, _ := os.ReadFile(filepath.Join(f.dir, role+".programs"))
+	if len(b) == 0 {
+		return nil
+	}
+	return strings.Split(strings.TrimSpace(string(b)), "\n")
+}
+
+// split puts the test binary as personad, persona-hub and persona-manager in a directory of its own, personad the
+// supervisor's self, each answering `version -v` with builds[name] ("persona 1.0 abc" when not there).
+func (f *fixture) split(t *testing.T, builds map[string]string) {
+	t.Helper()
+	dir := t.TempDir()
+	for _, name := range []string{"personad", "persona-hub", "persona-manager"} {
+		if err := os.Symlink(os.Args[0], filepath.Join(dir, name)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	f.e.self = filepath.Join(dir, "personad")
+	f.e.version = func(_ context.Context, p string) (string, error) {
+		if b, ok := builds[filepath.Base(p)]; ok {
+			return b, nil
+		}
+		return "persona 1.0 abc", nil
+	}
+}
+
+// The image's programs of the same build: the hub runs as `persona-hub run` and the built-in manager as
+// `persona-manager assistant`, side by side, or the hub alone (exec) when it starts the manager itself.
+func TestSplitPrograms(t *testing.T) {
+	f := newFixture(t, `{"assistant":{"mode":"service"}}`)
+	f.split(t, nil)
+	stop := running(t, f.e.hubContainer)
+	waitFor(t, "both started", func() bool { return len(f.starts("hub")) == 1 && len(f.starts("assistant")) == 1 })
+	_ = stop()
+	if h, m := f.programs("hub"), f.programs("assistant"); len(h) != 1 || h[0] != "persona-hub run" || len(m) != 1 || m[0] != "persona-manager assistant" {
+		t.Fatalf("hub %v, manager %v", h, m)
+	}
+
+	f = newFixture(t, `{"assistant":{"mode":"child"}}`)
+	f.split(t, nil)
+	if err := f.e.hubContainer(context.Background()); err != nil || f.execd != "persona-hub run" {
+		t.Fatalf("%v %q", err, f.execd)
+	}
+
+	f = newFixture(t, `{"assistant":{"mode":"service"}}`)
+	f.split(t, nil)
+	stop = running(t, func(ctx context.Context) error { return f.e.managerOnly(ctx, "http://hub:18660") })
+	waitFor(t, "the manager", func() bool { return len(f.starts("assistant")) == 1 })
+	_ = stop()
+	if m := f.programs("assistant"); len(m) != 1 || m[0] != "persona-manager assistant" {
+		t.Fatalf("manager %v", m)
+	}
+}
+
+// PERSONA_SPLIT_PROGRAMS=0 keeps both on personad, and asks nothing of the others; one of another build is passed
+// over, saying why.
+func TestSplitProgramsOff(t *testing.T) {
+	f := newFixture(t, `{"assistant":{"mode":"service"}}`)
+	f.split(t, nil)
+	asked := false
+	f.e.version = func(context.Context, string) (string, error) { asked = true; return "persona 1.0 abc", nil }
+	t.Setenv("PERSONA_SPLIT_PROGRAMS", "0")
+	stop := running(t, f.e.hubContainer)
+	waitFor(t, "both started", func() bool { return len(f.starts("hub")) == 1 && len(f.starts("assistant")) == 1 })
+	_ = stop()
+	if h, m := f.programs("hub"), f.programs("assistant"); len(h) != 1 || h[0] != "personad hub run" || len(m) != 1 || m[0] != "personad assistant" || asked {
+		t.Fatalf("hub %v, manager %v, asked %v", h, m, asked)
+	}
+
+	t.Setenv("PERSONA_SPLIT_PROGRAMS", "")
+	f = newFixture(t, `{"assistant":{"mode":"service"}}`)
+	f.split(t, map[string]string{"persona-manager": "persona 0.9 old"})
+	stop = running(t, f.e.hubContainer)
+	waitFor(t, "both started", func() bool { return len(f.starts("hub")) == 1 && len(f.starts("assistant")) == 1 })
+	_ = stop()
+	if h, m := f.programs("hub"), f.programs("assistant"); len(h) != 1 || h[0] != "persona-hub run" || len(m) != 1 || m[0] != "personad assistant" ||
+		!strings.Contains(f.out.String(), "persona-manager is another build") || !strings.Contains(f.out.String(), "running personad assistant instead") {
+		t.Fatalf("hub %v, manager %v\n%s", h, m, f.out.String())
 	}
 }
 
