@@ -87,7 +87,7 @@ The decision always depends on the chat's space (the trusted session directory),
 | --- | --- | --- |
 | Push: turn ended, `notify_user`, plan waiting for you to start, scheduled task failed | Only says "New in your health space. Open Persona to see it.", without the body, chat title or task name | `hub/machine.go` `doneAlert`, `assistant/tools.go`, `tasks.go`, `schedule.go` |
 | Push for question / authorization cards | The lock screen likewise only says **Health**; the card content is viewed in the App | `hub/push.go` `interactionPayloadIn` (looks at `ix.Cwd`) |
-| Lark bot, plugin channels | Forwarded `notify_user` only says there is a new message; answers in a scheduled task's chat are not mirrored; "all cards" and "all questions" exclude health chat cards (the chat the channel itself is driving works as usual) | `assistant/feishu_cards.go`, `channels_plugin.go` |
+| Lark bot, plugin channels | Forwarded `notify_user` only says there is a new message; answers in a scheduled task's chat are not mirrored; "all cards" and "all questions" exclude health chat cards (the chat the channel itself is driving works as usual) | `assistant/feishu_cards.go`, `feishu_push.go`, `channels_plugin.go` |
 | `agent_send` / `agent_start` | Confirmed on the phone every time; the card states that once handed over, the record on the other side is not deleted with the Health space | `assistant/health.go` `confirmOutbound` |
 | `task_plan` | Never starts automatically; always waits for the user to tap start on the plan card | `assistant/tasks.go` |
 | `mail_send` and connector write operations | Confirmed on the phone every time; gate allow rules do not let it through (deny still rejects) | `connector.ConfirmEach`, `callConnector` in `extmgr/connectors.go` |

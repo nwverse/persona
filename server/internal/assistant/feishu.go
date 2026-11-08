@@ -126,7 +126,7 @@ type feishuBook struct {
 	statusAt time.Time
 	now      func() time.Time     // tests
 	cotOff   bool                 // Feishu refused an agent message (feishu_cot.go)
-	startAt  map[string]time.Time // recent /start form presses, for one press one agent (feishu_cards.go)
+	startAt  map[string]time.Time // recent /start form presses, for one press one agent (feishu_card_actions.go)
 	// line is closed when the last message taken is through (FeishuMessage): the chat's messages are handled one at
 	// a time, in the order they came.
 	line chan struct{}
