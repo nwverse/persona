@@ -12658,8 +12658,8 @@ def model_defaults_launchers(h, p, q):
         default = {"provider": b.get("provider", "").removeprefix("launcher."), "model": b.get("model", ""), "effort": b.get("effort", "")}
         if purpose.get("runtimes"):
             default["runtime"] = b.get("runtime") or "cli"
-    h.send_json({"launchers": [{"name": "claude", "model": "opus"}, {"name": "sonnetcc", "model": "sonnet"},
-                               {"name": "codex", "model": "gpt-5.5", "agent": "codex", "agent_type": "codex"}], "default": default})
+    h.send_json({"launchers": launcher_health_list([{"name": "claude", "model": "opus"}, {"name": "sonnetcc", "model": "sonnet"},
+                                                    {"name": "codex", "model": "gpt-5.5", "agent": "codex", "agent_type": "codex"}]), "default": default})
     return True
 
 
@@ -12668,6 +12668,49 @@ if MODEL_DEFAULTS:
         if _s["session_id"] == ASSISTANT_CONFIG["main"]:
             _s["runtime_fallback"] = MODEL_DEFAULTS_FALLBACK
 # ---------- end of area: model defaults ----------
+
+
+# ---------- area: launcher health (#1643) ----------
+# MOCK_LAUNCHER_HEALTH=1: "New Agent"'s launchers carry their health on the computer (docs/server/launcher-health.md): claude
+# checked fine, work_gw blocked because new terminal tabs can't run it (not_in_terminal, #1642), team_gw blocked on its key.
+# MOCK_LAUNCHER_HEALTH=default: Model Settings' New Agent default is work_gw too. Either way a start that runs work_gw fails
+# after MOCK_START_SECONDS with the hub's coded sentence (start_error_code launcher_missing, where terminal), and a session
+# that already failed so is listed (macbook/f1643000-0000-4000-8000-000000000001, for -openSession).
+LAUNCHER_HEALTH = os.environ.get("MOCK_LAUNCHER_HEALTH", "")
+LAUNCHER_HEALTH_FAILED = "f1643000-0000-4000-8000-000000000001"
+
+
+def launcher_health_list(launchers):
+    """The machine's launchers with health records (MOCK_LAUNCHER_HEALTH), else as they are."""
+    if not LAUNCHER_HEALTH:
+        return launchers
+    out = [dict(l, health={"state": "ok", "checked_at": ago(minutes=12)}) if l["name"] == "claude" else dict(l) for l in launchers]
+    out[1:1] = [
+        {"name": "work_gw", "model": "glm-5.3", "health": {"state": "blocked", "kind": "not_in_terminal", "checked_at": ago(minutes=3),
+                                                          "error": "bash: work_gw: command not found"}},
+        {"name": "team_gw", "model": "sonnet", "health": {"state": "blocked", "kind": "auth", "checked_at": ago(minutes=40),
+                                                         "error": 'API Error: 401 {"type":"error","error":{"type":"authentication_error","message":"invalid x-api-key"}}'}},
+    ]
+    return out
+
+
+def launcher_health_refusal(machine_name):
+    """What the hub says of a start the new tab's shell could not run work_gw in: its sentence, code and details."""
+    args = {"launcher": "work_gw", "where": "terminal", "missing": "work_gw", "kind": "not_found", "pane_shell": "bash",
+            "launcher_shell": "zsh", "rc_file": "~/.zshrc", "line": "bash: work_gw: command not found"}
+    # i18n-ignore: the hub's zh-Hans sentence (server/internal/i18n/locales/zh-Hans/apierr-apierr.json)
+    text = ("%s 上新开的终端标签页（bash）里没有「work_gw」这个命令；Persona 是在 zsh（~/.zshrc）里找到它的。"
+            "请在终端的 shell 会读到的启动文件里定义它，或者在 Persona 里把它添加为模型供应商。") % machine_name
+    return {"start_error": text, "start_error_code": "launcher_missing", "start_error_args": args}
+
+
+if LAUNCHER_HEALTH == "default":
+    MODEL_BINDINGS["agent.new"] = {"revision": 1, "override": {"provider": "launcher.work_gw"}}
+if LAUNCHER_HEALTH:
+    SESSIONS.append(sess("macbook", LAUNCHER_HEALTH_FAILED, "整理天气数据", "/Users/me/code/weather-app", "offline", "offline",
+                         "weather-app", 2, "agent-3", 3, 1, "", launcher="work_gw",
+                         **launcher_health_refusal(next((m["name"] for m in MACHINES if m["id"] == "macbook"), "macbook"))))
+# ---------- end of area: launcher health ----------
 
 
 # ---------- HTTP ----------
@@ -13391,8 +13434,8 @@ class H(BaseHTTPRequestHandler):
             return self.send_json(LAUNCHER_MODELS.get(unquote(p.split("/")[6]), {"agent": "traex", "models": []}))
         if doctor_route(self, p, "GET"): return
         if p.startswith("/api/v1/machines/") and p.endswith("/launchers"):
-            return self.send_json({"launchers": [{"name": "claude", "model": "opus"}, {"name": "sonnetcc", "model": "sonnet"},
-                                                 {"name": "codex", "model": "gpt-5.5", "agent": "codex", "agent_type": "codex"}]})  # Codex: "Create from the phone"
+            return self.send_json({"launchers": launcher_health_list([{"name": "claude", "model": "opus"}, {"name": "sonnetcc", "model": "sonnet"},
+                                                                      {"name": "codex", "model": "gpt-5.5", "agent": "codex", "agent_type": "codex"}])})  # Codex: "Create from the phone"
         if p.startswith("/api/v1/machines/") and p.endswith("/claude-settings"):
             return self.send_json({"settings": CLAUDE_SETTINGS.setdefault(p.split("/")[4], _claude_settings())})
         if p.startswith("/api/v1/machines/") and p.endswith("/claude-dirs"):
@@ -14710,10 +14753,13 @@ class H(BaseHTTPRequestHandler):
                 ITEMS[s["session_id"]] = [it("user", "text", 0, text=body["prompt"])]
             if body.get("async"):  # answered at once, claude still starting (node/starting.go); MOCK_START_SECONDS later it is up
                 s.update(status="idle", state="idle", starting=True, title=body.get("name_hint") or s["title"])
-                def started(s=s):
+                runs = body.get("launcher") or ("work_gw" if LAUNCHER_HEALTH == "default" else "claude")
+                def started(s=s, runs=runs):
                     s.pop("starting", None)
                     # MOCK_START_ERROR=<why>: claude never gets ready; the chat says "Failed to start" and sends get the error.
                     if os.environ.get("MOCK_START_ERROR"): s.update(status="offline", state="offline", start_error=os.environ["MOCK_START_ERROR"])
+                    if LAUNCHER_HEALTH and runs == "work_gw":  # the new tab's shell has no work_gw (MOCK_LAUNCHER_HEALTH)
+                        s.update(status="offline", state="offline", **launcher_health_refusal(next((m["name"] for m in MACHINES if m["id"] == s["machine_id"]), s["machine_id"])))
                 threading.Timer(float(os.environ.get("MOCK_START_SECONDS", "6")), started).start()
             SESSIONS.append(s)
             if todo_id:

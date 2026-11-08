@@ -40,7 +40,7 @@ It clears when a start with that launcher on that computer works (any of the sta
 `failing` / `repairing` / `blocked` all count as **unavailable** (when the latest result is within 6 hours).
 
 - `agents_list`: gets an extra "unavailable launchers" section at the end, one line each: computer / launcher / state / category / error.
-- The launcher list for creating an Agent (`GET /api/v1/machines/{mid}/launchers`) carries `health` on each item (`{state, error, kind, checked_at}`), so the App can gray it out (UI to be done separately).
+- The launcher list for creating an Agent (`GET /api/v1/machines/{mid}/launchers`) carries `health` on each item (`{state, error, kind, checked_at}`); the clients gray out the blocked ones ("In the App" below).
 - `agent_start`, `task_plan`: when the launcher to use is unavailable on this computer, switch to another online computer where this launcher is healthy (a directory under the original computer's home becomes the new computer's home),
   and the "reason" in the answer / card says it switched and why; if no healthy one is found, start as originally planned and warn in the answer that the latest check failed. A task plan switches once when the card is produced and checks again when it actually starts.
   Healthy first: last check passed > never checked; never checked is not treated as broken.
@@ -80,8 +80,23 @@ set `default` if you want it to wait for your approval at every step. Member hub
 - A state change broadcasts a `launcher_health` event (`{type, record}`, only to connected clients, not a push).
   The "decisions / blocked / progress" board reads `state=blocked` records, or subscribes to this event, to list what is blocked.
 
+## In the App (#1643)
+
+Decided with the user: gray out with the reason, never hide.
+
+- **New Agent** (iOS / Mac / visionOS `LauncherPicker` in `NewChatView`, web `NewAgent.tsx`): a launcher whose `health.state` is `blocked` on the picked computer stays listed, dimmed, with one line saying why
+  (`not_in_terminal`: "Not available in this computer's terminal"; the other classes a line each: key or sign-in rejected, gateway can't use the model, CLI too old, didn't answer, failed its last check).
+  Choosing it does not pick it: it opens how to fix it (iOS / Mac a sheet, web a panel under the launchers): why, what to do (define it where the terminal's shell reads it, or add it as a model provider,
+  with **Add Provider** going to the provider wizard; other classes: fix its key, gateway or CLI), the record's `error` under Details, and **Try Anyway**, which picks it after all:
+  a start with it that works is what clears a `not_in_terminal` record, so the user must be able to start it once it is fixed. `failing` / `repairing` launchers are offered as before (the hub is still on them); an older hub sends no `health` and nothing changes.
+- The first pick when nothing is configured to follow (an older hub without model configuration) skips blocked launchers: the one used last on that computer unless blocked, else the first that is not (`LauncherChoices.initial`, web `initialLauncher`).
+  When the launcher that will run is blocked anyway (Model Settings' default, or Try Anyway) the form says so under the launcher row; Start stays enabled.
+- **Run Agent here** (a shell pane is a terminal too): web's menu shows a blocked launcher disabled with the same line; iOS / Mac's sheet picks a usable launcher first and says the line under the picker.
+- The assistant's launcher menus (headless `claude -p` in the login shell) are unchanged: `not_in_terminal` does not apply there, and the main chat's readiness covers its model.
+- A failed start whose session has `start_error_code` (#1642) shows the hub's whole sentence under "Didn't Start" in the chat (iOS `StartingNote`, web chat page) instead of clipping it after three lines; without a code it is shown as before.
+
 ## Not done
 
 - An Agent that starts but fails on its first turn (the gateway rejecting the model name; `session.start` succeeded) is not recorded from the session; periodic checks find it.
-- Graying out unavailable launchers in the App.
+- Android does not read `health` yet.
 - **New Agent** in the App (`agents.start_params`, on a computer the user picked) does not switch computers; Agents started by the Lark bot are not wired in yet.

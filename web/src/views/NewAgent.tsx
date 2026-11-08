@@ -26,6 +26,9 @@ import { ModelPicker, type ModelList } from "../ui/ModelPicker";
 import { t } from "../i18n";
 import { useAddComputer } from "./machines/AddComputerEntry";
 import { currentHosts, engineName, startHosts } from "../lib/engines";
+import { initialLauncher, launcherBlock } from "../lib/launcher-health";
+import { navigate } from "../lib/router";
+import { LauncherBlockedHelp } from "./LauncherBlockedHelp";
 
 interface Dirs {
   path: string;
@@ -53,6 +56,8 @@ export function NewAgent({ open, onClose, preset }: { open: boolean; onClose: ()
   const [configured, setConfigured] = useState<ModelBinding | null>(null);
   const [loadingModels, setLoadingModels] = useState(false);
   const [launchersOf, setLaunchersOf] = useState(""); // the machine `launchers` and `configured` are for
+  // the grayed-out launcher whose "how to fix" is open (#1643); "": none
+  const [helpFor, setHelpFor] = useState("");
   // this start's model (an id from the list; "": the default) and effort ("": the launcher's), never saved
   const [models, setModels] = useState<ModelList>({ status: "idle" });
   const [model, setModel] = useState("");
@@ -143,6 +148,7 @@ export function NewAgent({ open, onClose, preset }: { open: boolean; onClose: ()
     if (!open || !mid) return;
     localStorage.setItem("new.machine", mid);
     setLaunchers([]);
+    setHelpFor("");
     const controller = new AbortController();
     setLauncher("");
     setModelDefault("");
@@ -168,8 +174,8 @@ export function NewAgent({ open, onClose, preset }: { open: boolean; onClose: ()
           setConfigured(config.purpose.effective ?? {});
           setLauncher("");
         } else {
-          const saved = localStorage.getItem(`new.launcher.${mid}`);
-          setLauncher(ls.some((l) => l.name === saved) ? saved! : (ls[0]?.name ?? ""));
+          // the last one used here, unless this computer can't run it now (#1643): then the first that can
+          setLauncher(initialLauncher(localStorage.getItem(`new.launcher.${mid}`), ls));
         }
       })
       .catch((e) => { if (!controller.signal.aborted) toast(errorText(e), "error"); })
@@ -235,6 +241,12 @@ export function NewAgent({ open, onClose, preset }: { open: boolean; onClose: ()
   const hostDefault = picked ? currentHosts(picked).default : "";
   useEffect(() => { setHost(""); }, [open, mid]);
   const agent = launcherAgent(listLauncher, launchers, models.list);
+  // the launchers this computer can't start now (#1643), each said under the choices with a way to see how to fix it
+  const blocked = launchers.flatMap((l) => {
+    const block = launcherBlock(l);
+    return block ? [{ l, block }] : [];
+  });
+  const help = blocked.find((b) => b.l.name === helpFor);
   const pickedModel = models.list?.models.find((m) => m.id === model);
   const efforts = effortChoices(models.list, model, followed);
   const effortsKey = efforts.join(" ");
@@ -441,19 +453,64 @@ export function NewAgent({ open, onClose, preset }: { open: boolean; onClose: ()
             </Field>
           )}
 
-          {(unified || launchers.length > 1) && (
+          {(unified || launchers.length > 1 || blocked.length > 0) && (
             <Field label={unified ? t("newagent.launcher_override") : t("newagent.launcher")}>
               <div className="flex flex-wrap gap-1.5">
                 {unified && <Choice selected={launcher === ""} onClick={() => setLauncher("")} title={modelDefault}>{hubDefault ? defaultLabel(hubDefault) : t("newagent.follow_model_settings")}</Choice>}
-                {launchers.map((l) => (
-                  <Choice key={l.name} mono selected={launcher === l.name} onClick={() => setLauncher(l.name)} title={l.model}>
-                    <span className="flex items-center gap-1.5">
-                      <AgentMark agent={l.agent_type || l.agent} size={13} className="text-current" />
-                      {l.name}
-                    </span>
-                  </Choice>
-                ))}
+                {launchers.map((l) => {
+                  const block = launcherBlock(l);
+                  return (
+                    <Choice
+                      key={l.name}
+                      mono
+                      selected={launcher === l.name}
+                      // grayed out with why, never hidden (#1643): choosing it shows how to fix it instead of picking it
+                      blocked={Boolean(block)}
+                      onClick={() => (block ? setHelpFor((open) => (open === l.name ? "" : l.name)) : setLauncher(l.name))}
+                      title={block ? block.reason : l.model}
+                    >
+                      <span className="flex items-center gap-1.5">
+                        {block ? <Icon name="warning" size={12} className="text-orange" /> : <AgentMark agent={l.agent_type || l.agent} size={13} className="text-current" />}
+                        {l.name}
+                      </span>
+                    </Choice>
+                  );
+                })}
               </div>
+              {blocked.length > 0 && (
+                <ul data-testid="new-agent-blocked" className="mt-1.5 flex flex-col gap-0.5">
+                  {blocked.map(({ l, block }) => (
+                    <li key={l.name} className="flex min-w-0 items-center gap-1.5 text-[11.5px] text-ink-3">
+                      <Icon name="warning" size={12} className="shrink-0 text-orange" />
+                      <span className="shrink-0 font-mono text-ink-2">{l.name}</span>
+                      <span className="min-w-0 truncate">{block.reason}</span>
+                      <button
+                        type="button"
+                        aria-expanded={helpFor === l.name}
+                        onClick={() => setHelpFor((open) => (open === l.name ? "" : l.name))}
+                        className="shrink-0 whitespace-nowrap text-accent-ink hover:underline"
+                      >
+                        {t("newagent.how_to_fix")}
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              )}
+              {help && (
+                <LauncherBlockedHelp
+                  name={help.l.name}
+                  block={help.block}
+                  onTryAnyway={() => {
+                    setLauncher(help.l.name);
+                    setHelpFor("");
+                  }}
+                  onAddProvider={() => {
+                    onClose();
+                    navigate("/settings?tab=models&add=1"); // the provider wizard, as readiness's connect_model
+                  }}
+                  onClose={() => setHelpFor("")}
+                />
+              )}
               {unified && (
                 <p className="mt-1.5 flex min-w-0 items-center gap-1.5 text-[11.5px] text-ink-3">
                   {launcher && <Pill tone="accent">{oneOff()}</Pill>}
@@ -565,16 +622,23 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
   );
 }
 
-function Choice({ selected, onClick, title, mono, radio, children }: { selected: boolean; onClick: () => void; title?: string; mono?: boolean; /** One of a radiogroup. */ radio?: boolean; children: React.ReactNode }) {
+function Choice({ selected, onClick, title, mono, radio, blocked, children }: { selected: boolean; onClick: () => void; title?: string; mono?: boolean; /** One of a radiogroup. */ radio?: boolean; /** Grayed out: this computer can't start it now (#1643); a click explains instead of picking. */ blocked?: boolean; children: React.ReactNode }) {
   return (
     <button
       type="button"
       role={radio ? "radio" : undefined}
       aria-checked={radio ? selected : undefined}
       aria-pressed={radio ? undefined : selected}
+      aria-disabled={blocked || undefined}
       onClick={onClick}
       title={title}
-      className={cx("h-7 rounded-control px-2.5 text-[12px] whitespace-nowrap transition-colors", mono && "font-mono", selected ? "bg-ink text-surface" : "bg-surface text-ink-2 shadow-btn hover:bg-hover hover:text-ink")}
+      className={cx(
+        "h-7 rounded-control px-2.5 text-[12px] whitespace-nowrap transition-colors",
+        mono && "font-mono",
+        selected ? "bg-ink text-surface" : "bg-surface text-ink-2 shadow-btn hover:bg-hover hover:text-ink",
+        // dimmed like an offline computer's chip, and a little less so under the pointer: it still explains itself
+        blocked && (selected ? "opacity-60" : "opacity-45 hover:opacity-70"),
+      )}
     >
       {children}
     </button>

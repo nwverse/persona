@@ -89,6 +89,23 @@ describe("splitting and running an agent", () => {
     expect(d.post).toHaveBeenCalledWith("m1", "panes/agent", { pane: "w1:p2", launcher: "work" });
   });
 
+  it("grays out a launcher this computer's terminal can't run, with why, and still lists it (#1643)", async () => {
+    const d = deps({
+      launchers: vi.fn(async () => [
+        { name: "claude", health: { state: "ok" } },
+        { name: "work", health: { state: "blocked", kind: "not_in_terminal", error: "bash: work: command not found" } },
+        { name: "slow", health: { state: "failing", kind: "timeout" } },
+      ]),
+    });
+    const list = await (by(nodeActions(tab, d), "node-agent").children as () => Promise<MenuItem[]>)();
+    expect(list.map((i) => i.label)).toEqual(["claude", "work", "slow"]);
+    expect(list[1].disabled).toBe(true);
+    expect(list[1].detail).toBe("这台电脑的终端里用不了");
+    // still being retried by the hub: offered as before
+    expect(list[2].disabled).toBeUndefined();
+    expect(list[0].detail).toBeUndefined();
+  });
+
   it("is for a plain shell only", () => {
     const withAgent = nodeActions({ ...tab, agent: "claude", sessionId: "sid-1" }, deps());
     expect(keys(withAgent)).not.toContain("node-agent");

@@ -10,6 +10,7 @@ import { copyText, toast } from "../ui/atoms";
 import { openNewAgent } from "./new-agent";
 import { openNewWorktree } from "./worktree";
 import type { MenuItem } from "../ui/menu-model";
+import { launcherBlock } from "./launcher-health";
 
 export type NodeKind = "machine" | "workspace" | "tab" | "pane";
 
@@ -184,17 +185,22 @@ export function nodeActions(node: MenuNode, deps: NodeActionDeps, opts: NodeActi
       deps.changed();
     },
   });
-  const onHere = (l: Launcher): MenuItem => ({
-    key: `node-agent-${l.name}`,
-    label: l.name,
-    hint: l.model,
-    inline: true,
-    onSelect: async () => {
-      await deps.post(mid, "panes/agent", { pane: node.paneId, launcher: l.name }).catch((e) => Promise.reject(fail("lib-node-actions.start_failed", e)));
-      deps.notify(t("lib-node-actions.started_in_pane", { name: l.name }), "ok");
-      deps.changed();
-    },
-  });
+  const onHere = (l: Launcher): MenuItem => {
+    const block = launcherBlock(l);
+    return {
+      key: `node-agent-${l.name}`,
+      label: l.name,
+      hint: l.model,
+      // the pane's shell is a terminal's too: what "New agent" grays out is grayed here, with why (#1643)
+      ...(block ? { disabled: true, detail: block.reason } : {}),
+      inline: true,
+      onSelect: async () => {
+        await deps.post(mid, "panes/agent", { pane: node.paneId, launcher: l.name }).catch((e) => Promise.reject(fail("lib-node-actions.start_failed", e)));
+        deps.notify(t("lib-node-actions.started_in_pane", { name: l.name }), "ok");
+        deps.changed();
+      },
+    };
+  };
   const gitMenu = writes && node.kind !== "machine" && Boolean(gitTarget);
   const newWorktree = deps.newWorktree;
   group(

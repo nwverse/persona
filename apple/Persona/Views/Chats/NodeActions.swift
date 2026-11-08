@@ -428,6 +428,9 @@ struct RunAgentHereSheet: View {
                 } footer: {
                     if let failure {
                         Text(failure).foregroundStyle(Theme.danger)
+                    } else if let block = launchers.first(where: { $0.name == launcher })?.block {
+                        // The pane's shell is a terminal's too: what New Agent grays out is said here (#1643), not hidden.
+                        LauncherBlockLine(block: block)
                     } else {
                         Text("Starts in the selected shell without opening a new tab. Codex needs a first message, so use New Session.")
                     }
@@ -447,7 +450,7 @@ struct RunAgentHereSheet: View {
             let shells = NodeMenu.shells(in: loaded.panes, workspaceID: workspaceID)
             if !shells.contains(where: { $0.pane == pane }) { pane = shells.first?.pane ?? "" }
             let usable = loaded.launchers.filter(NodeMenu.launchableHere)
-            if !usable.contains(where: { $0.name == launcher }) { launcher = usable.first?.name ?? "" }
+            if !usable.contains(where: { $0.name == launcher }) { launcher = LauncherChoices.initial(saved: nil, in: usable) }
             state = .loaded(loaded)
         } catch {
             state = .failed(error.shown ?? error.localizedDescription)

@@ -455,6 +455,9 @@ Provider responses carry only the description and `has_key`, never secrets. Defa
 {"name":"example_launcher","base_url":"https://example.com","model":"<model name>","agent_type":"claude"}
 // Codex launchers (codex on PATH, aliases that run codex) carry agent; starting one requires prompt and can't be async (docs/integrations/codex.md "Starting from the phone")
 {"name":"codex","model":"Default","agent":"codex","agent_type":"codex"}
+// GET /machines/{mid}/launchers adds health: that launcher's latest check or start on this computer (docs/server/launcher-health.md); absent when never checked,
+// when a failure is older than 6 hours, and from older hubs. Clients gray out state "blocked" with a reason per kind and never hide it (#1643).
+{"name":"example_gateway","model":"<model name>","agent_type":"claude","health":{"state":"blocked","kind":"not_in_terminal","error":"bash: example_gateway: command not found","checked_at":"2026-11-09T08:00:00Z"}}
 // A start request may carry agent_type, and wrapper functions launch per the declared type: Claude keeps the original arguments, Codex / compatible forks don't get Claude-only arguments, and get the real session ID
 // through the existing herdr / process detection; the first message is passed to the launcher as a single argument. Permission mode and reasoning effort apply only to Claude for now; Android's new-session form hides both when another type is chosen.
 
