@@ -41,7 +41,7 @@ function Snapshot({ name, request }: { name: string; request: any }) {
   else if (selected === "list" && more) selected = "list-more";
   if (selected === "segmented" && values.range === "30d") selected = "segmented-30d";
   const view = structuredClone(fixtures[selected] ?? fixtures.home);
-  if (name === "list" && values.q) {
+  if ((name === "list" || initial.p === "list") && values.q) {
     const query = values.q;
     const rows = structuredClone(fixtures["list-more"].sections[0].items)
       .filter((item: any) => item.title?.toLocaleLowerCase().includes(query.toLocaleLowerCase()));

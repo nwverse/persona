@@ -74,6 +74,8 @@ Initial UI readiness requires a positive committed version. During process recon
 
 Shared legacy snapshots can reuse an action name across code-review diffs. A native SDK fixture must lower every action slot to a registered opaque callback, not only `action` and `load`: review discard, reply, comment, mark-viewed, context, draft, resolve and expansion controls also carry actions. Otherwise helper data parity can pass while the real manager rejects the page for a duplicate action ID. Check that all callbacks are registered, unique and preserve their metadata, then exercise the installed extension through the manager. Do not weaken manager validation or omit failing showcase pages to obtain a screenshot pass.
 
+Exercise both direct contributions and state-selected pushed pages. A search fixture that always returns the static query-`1` snapshot can pass initial parity but fail a real query such as `02`. Filtering only when the factory's name is `list` still misses a `showcase` factory pushed with `{p: "list"}`. Use the selected page and submitted values for dynamic responses, preserving the unchanged initial snapshots; test both routes and an empty-result query.
+
 ## Evidence boundaries
 
 Unit tests use canonical valid/invalid fixtures and exact fence traces. Actual UI tests assert committed stream revisions, not just a loaded page that might be HTTP fallback. Screenshots contain synthetic data only; GUI captures are limited to the App window without other windows/desktop content. Clearly label offscreen rendering as such.
