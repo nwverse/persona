@@ -3,12 +3,12 @@ package feishubot
 import (
 	"bytes"
 	"encoding/json"
-	"regexp"
 	"slices"
 	"strings"
 
 	"github.com/nwverse/persona/sdk/go/wire"
 	"github.com/nwverse/persona/server/internal/channel"
+	"github.com/nwverse/persona/server/internal/lazyre"
 )
 
 // Card is a message card (card JSON 2.0: Markdown with headings, tables and code blocks; Feishu 7.20 and later).
@@ -201,8 +201,8 @@ func (c *Card) Raw() *CardPayload { return &CardPayload{Type: "raw", Data: c} }
 // --- Markdown ---
 
 var (
-	fenceRe  = regexp.MustCompile("(?s)```.*?(?:```|$)|~~~.*?(?:~~~|$)")
-	inlineRe = regexp.MustCompile("`[^`\n]+`")
+	fenceRe  = lazyre.New("(?s)```.*?(?:```|$)|~~~.*?(?:~~~|$)")
+	inlineRe = lazyre.New("`[^`\n]+`")
 )
 
 // CardMarkdown turns GitHub Markdown (a model's answer) into what a card shows as written: outside code, "<" is
@@ -236,7 +236,7 @@ func cardProse(s string) string {
 
 var (
 	// A CommonMark autolink a card can open: http(s) or mailto, the scheme in any case.
-	autolinkRe = regexp.MustCompile(`^<((?i:https?://|mailto:)[^\s<>]+)>`)
+	autolinkRe = lazyre.New(`^<((?i:https?://|mailto:)[^\s<>]+)>`)
 	// Percent-encodes what would end a card link's address early. "[" and "]" stay in an http(s) host (IPv6).
 	hostEncoder = strings.NewReplacer("(", "%28", ")", "%29")
 	pathEncoder = strings.NewReplacer("(", "%28", ")", "%29", "[", "%5B", "]", "%5D")

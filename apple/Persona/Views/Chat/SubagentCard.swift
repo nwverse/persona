@@ -125,7 +125,7 @@ struct SubagentCard: View {
                 if status == .running {
                     ProgressView().controlSize(.mini).tint(tint)
                 } else {
-                    Image(systemName: ToolPresentation.symbol(call.name))
+                    ThemedIcon(ToolPresentation.symbol(call.name))
                         .font(Theme.Font.labelStrong).dynamicTypeSize(...DynamicTypeSize.xLarge)
                         .foregroundStyle(tint)
                 }
@@ -139,7 +139,7 @@ struct SubagentCard: View {
                     .contentTransition(.opacity)
             }
             Spacer(minLength: Theme.Space.xs)
-            Image(systemName: Theme.Icon.disclosure)
+            ThemedIcon(Theme.Icon.disclosure)
                 .font(Theme.Font.labelStrong)
                 .foregroundStyle(.tertiary)
                 .rotationEffect(.degrees(open ? 90 : 0))
@@ -160,10 +160,15 @@ struct SubagentCard: View {
             if let id = call.use.toolUseID, tasks.started.contains(id) {
                 // Sent to the background: its result is the receipt; its report is its notice's (#5886).
                 if let report = SubagentCardStatus.report(id, tasks: tasks) {
-                    ResultBlock(text: report, isError: status == .failed, cut: nil)
+                    FoldedReport(id: key, text: report, isError: status == .failed) {
+                        ResultBlock(text: report, isError: status == .failed, cut: nil)
+                    }
                 }
             } else if let result = call.result {
-                ResultBlock(text: result.cutText, isError: result.isError ?? false, cut: result.fullSize.map { (result.id, $0) })
+                // What it reported, one line until opened (its card's id keeps it open).
+                FoldedReport(id: key, text: result.cutText, isError: result.isError ?? false) {
+                    ResultBlock(text: result.cutText, isError: result.isError ?? false, cut: result.fullSize.map { (result.id, $0) })
+                }
             }
             if let open = openSubagent, let id = call.use.toolUseID {
                 Button { open(id) } label: {

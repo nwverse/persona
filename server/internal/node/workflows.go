@@ -6,11 +6,11 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"regexp"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
@@ -36,10 +36,10 @@ const workflowKeep = 24 * time.Hour
 const workflowReadInterval = 1500 * time.Millisecond
 
 var (
-	wfPhasesRe = regexp.MustCompile("(?s)phases:\\s*\\[(.*?)\\]")
-	wfTitleRe  = regexp.MustCompile("title:\\s*['\"`]([^'\"`\\n]+)['\"`]")
-	wfMetaRe   = regexp.MustCompile("(?s)export\\s+const\\s+meta\\s*=\\s*\\{(.*?)\\n\\}")
-	wfMetaName = regexp.MustCompile("(?m)^\\s*name:\\s*['\"`]([^'\"`\\n]+)['\"`]")
+	wfPhasesRe = lazyre.New("(?s)phases:\\s*\\[(.*?)\\]")
+	wfTitleRe  = lazyre.New("title:\\s*['\"`]([^'\"`\\n]+)['\"`]")
+	wfMetaRe   = lazyre.New("(?s)export\\s+const\\s+meta\\s*=\\s*\\{(.*?)\\n\\}")
+	wfMetaName = lazyre.New("(?m)^\\s*name:\\s*['\"`]([^'\"`\\n]+)['\"`]")
 )
 
 // wfCache remembers each run's progress by run directory (the least recently asked for forgotten first). A running

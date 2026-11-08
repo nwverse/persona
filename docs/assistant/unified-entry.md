@@ -102,6 +102,27 @@ The prototype is the UI and interaction standard; compare screen by screen durin
 - To speak directly to a task, type `@` for a list (tasks, computers, projects, people) and select a task, or tap Message on its card. A purple routing label appears above the input,
   "To ‘xx’ ×." The App sends directly to that Agent, bypassing Persona. The chat bubble carries the same label (`routed` chat-activity entry).
 
+### Messages to agents (#1542)
+
+What Persona itself sends to a task's agent (`agent_send` with `task`, `agent_interrupt` with `then`, a supervision rework) is
+also a `routed` entry, marked `from: "assistant"`. It is never drawn as the user's bubble: those instructions run to dozens of
+lines, and in the user's own color and alignment they read as something the user said.
+
+- **On the task's card**: a row "N instructions sent" lists every message Persona sent to that task (time and first line);
+  tapping one opens its whole text with Copy (the web's text is also selectable). Tapping these rows does not open the task.
+- **The hand-off sent with the card** (Persona's message to the same task in the same conversation at most 60 seconds after
+  the card's `task` entry; `agent_send` with `task` writes the card and then the text) is drawn only on the card, not as a line.
+- **Any other message of Persona's** (a rework, a later instruction, one whose task has no card in this chat) is one folded
+  line on the left, styled like the answered and review lines: a send icon (a stop when Persona cut the turn short first),
+  "Sent to ‘xx’" (tap to open the task) and the first line; tapping the line opens the whole text with Copy.
+- What the user sends to a task (its card's Message, or the composer's routing label) has no `from` and keeps the bubble.
+- Older entries: migration `0441_feed_routed_from.sql` marks those Persona wrote before the field existed (see "Chat activity").
+  Older apps ignore `from` and keep drawing the bubble.
+- Apple: `AgentSentLine`, `TaskSentList` (`apple/Persona/Views/Assistant/Tasks/SentViews.swift`), the pure rules in
+  `SentToAgents` (`apple/Shared/Tasks.swift`); web: `web/src/views/assistant/Sent.tsx`, `takenIn` / `sentTo` in `web/src/lib/feed.ts`.
+  Mock: `MOCK_TASKS=1 MOCK_TASKS_SENT=1 MOCK_TASKS_NO_ASKS=1` (a hand-off after its card, a rework to an older task, the
+  user's own word); UI test `SentToAgentTests`.
+
 ### Task details
 
 - Tap a task card, dock pill, or Review changes in a receipt to open task details from the bottom, like link cards (`LinkSheet`): initially full-screen;
@@ -159,15 +180,16 @@ The main chat **supervises** tasks it dispatches (`task_plan`, and to-dos create
   The to-do records its supervisor (the creating chat), criteria, estimated duration, and review state in `todo_supervision` (one row per supervised to-do, deleted with it). To-do JSON adds `supervision` (`docs/protocol/protocol.md`).
   Review states: in progress → `pending_review` → `accepted` (to-do done, `done_by = review`) / `rework` (`round` tracks iterations) / `needs_user` (awaiting user decision) / `cancelled` (to-do done).
 - **No automatic closure**: when hub judges a supervised to-do complete (the "Automatic completion" check in `docs/assistant/todos.md`), it does not write `done_at`; it marks it pending review. If judged incomplete (`not_done` / `waiting` / `needs_user` / `unsure`), tell the supervisor "Stopped but not finished." Manual completion is unchanged.
-- **Supervisor loop** (`server/internal/assistant/supervise.go`, no model calls): every 30 seconds, inspect supervised tasks plus task events and derive signals:
+- **Supervisor loop** (`server/internal/assistant/supervise_signals.go`, no model calls): every 30 seconds, inspect supervised tasks plus task events and derive signals:
   `review` pending review, `idle` stopped unfinished, `needs_you` waiting for an answer over 3 minutes (immediately for quiet tasks, since the user received no push), `stalled` working without progress (no session update) for more than max(20 minutes, estimate × 1.5), `interrupted` by model-service error, `failed` to start.
   The same signal for the same task is reported only once within the same state segment (reported again only after state changes or new progress). Signals from multiple tasks are combined into **one "📋 督办" (supervision) message** in the main chat (`prompts/assistant/supervise.md`: task, signal, criteria, question, Agent's last text, links, and handling instructions).
   The first waits 15 seconds to coalesce; subsequent messages are at most one per 10 minutes, with a 2-minute minimum for decision-waiting signals such as `needs_you` / `idle` / `interrupted` / `failed`. If the main chat is running, queue between turns ("Supervision message" above the input); replace any queued, undelivered supervision message with the merged one.
   Supervised tasks no longer emit "🔔 任务…" (task notices) from `quiet.go`; all appear in supervision messages. Tasks started by other chats are unchanged.
 - **No push by default**: when a turn initiated by a supervision message ends normally, send no completion push (`fleet_push.go`) or channel mirror (the snapshot marks the main chat's `SessionView.supervising`). Errors and interruptions still push normally. Normal behavior resumes when the user speaks in the main chat or another message is injected. Use `notify_user` to tell the user and `ask_user` for decisions.
-- **Review**: MCP tool `task_review {todo_id, verdict, checks:[{criterion, met, evidence}], note}`. `accepted` closes the to-do (then closes the Agent according to "Close Agents for finished tasks").
+- **Review**: MCP tool `task_review {todo_id, verdict, checks:[{criterion, met, evidence}], note, outcome?, reason?, link?, recommend?}`. `accepted` closes the to-do (then closes the Agent according to "Close Agents for finished tasks").
+  `accepted` and `needs_user` send the owner one conclusion card (`docs/extensions/bots.md` ("Conclusions")): `outcome` done / cannot, `reason` one sentence, `link` one link, and for `needs_user` the `recommend`ed option, which "OK" takes.
   `rework` sends the itemized gaps and instructions (`prompts/assistant/supervise_rework.md`) to the task's Agent (`session.send`, first restoring a closed Agent with its original launcher), leaves a `routed` entry in the chat, and judges again when the Agent stops. **At most 2 rounds**; a third `rework` becomes `needs_user`.
-  After `needs_user`, no more supervision signals are emitted; the assistant must ask the user. `cancelled` closes the to-do (reason "取消：…", meaning "Cancelled: …"). Every review inserts a `review` chat-activity entry and is recorded in ledger `reviews`. Only the supervising chat can review its tasks.
+  After `needs_user`, no more supervision signals are emitted; the conclusion card asks the user (without the Lark bot, the assistant must ask them). `cancelled` closes the to-do (reason "取消：…", meaning "Cancelled: …"). Every review inserts a `review` chat-activity entry and is recorded in ledger `reviews`. Only the supervising chat can review its tasks.
 - **Assignment deduplication**: `task_plan` compares new tasks with ongoing to-dos and working / waiting Agents. The same issue / PR number, or the same computer and directory (including nested directories) with similar titles, or very similar titles, yields "Possible duplicate" in the result. The assistant is told to inspect before deciding whether to merge or cancel; dispatch is not blocked.
 - **Snapshot**: supervised tasks under "Tasks started from this chat" include "Supervision: normal / stalled N minutes / waiting for an answer N minutes / pending review / rework round N / awaiting your decision / accepted" and a criteria count. Items needing action come first.
 - **Assistant workflow** is in its CLAUDE.md (`prompts/assistant/claude_md.md`, "How to work"): always provide `done_when` when assigning; make decisions independently when possible, nudge or change approach when stalled, sequence resource contention, cancel duplicates; verify PR / CI / screenshots / live status personally before acceptance; tell the user only about decisions they must make and accepted results; split downstream follow-through (deployment, issue closure, TestFlight) into subsequent tasks or follow-ups.
@@ -211,7 +233,7 @@ Hub-inserted chat entries do not enter Claude's transcript (that would trigger a
 | `task` | A task starts | To-do ID |
 | `answered` | A task interaction is handled | To-do ID; one-line summary (question, your answer), and full question / answer `items` per question |
 | `receipt` | Task finishes / fails to start / is interrupted by a model-service error (`interrupted`, #1516) | To-do ID; summary, changed-file count, tests, PR; interrupted receipts include original error `error` |
-| `routed` | You speak directly to a task | To-do ID; original text |
+| `routed` | You speak directly to a task, or Persona sends its agent work (`agent_send` with `task`, `agent_interrupt` with `then`, a rework) | To-do ID; original text; `interrupted` (agent_interrupt); `from: "assistant"` when Persona wrote it ("Messages to agents"). Migration 0441 marked older ones Persona wrote: an `interrupted` key, the rework prompt's opening line, or a `task` card of the same to-do at most 5 seconds before; the case it can't tell (agent_send with `task` to an agent already on that task, which writes no card) keeps the bubble |
 | `message` | AI twin drafts a reply to an Inbox message related to a task | Inbox item ID; task, source, chat, sender, original message, draft |
 | `today` | First opening of this chat that day (App calls `POST …/today`) | Date; tasks completed overnight, waiting tasks, open supervised tasks awaiting review (`pending_review`, excluded from waiting / working / done), working count, remaining Lark meetings today, chats mentioning me, other unread counts, unsuccessful items since yesterday at 18:00 (failed-start tasks, failed / skipped scheduled tasks, #4124) |
 
@@ -230,7 +252,7 @@ Hub-inserted chat entries do not enter Claude's transcript (that would trigger a
 
 ## App (iOS)
 
-- The assistant's `ChatView(style: .assistant)` merges chat activity (inserted by time in `ChatLines`). New row types: plan card, task card, receipt, answered question, routed bubble.
+- The assistant's `ChatView(style: .assistant)` merges chat activity (inserted by time in `ChatLines`). New row types: plan card, task card, receipt, answered question, routed bubble, Persona's folded message to an agent (without the hand-offs the cards take in, `SentToAgents.shown`).
   Instant phone-tool calls (`phone_reminders_create`, `phone_calendar_create_event`, etc.) are extracted from the "Tools N" row and rendered as result cards.
 - `mainFooter` adds a question-card queue (task interactions with task names) and dock above `InteractionPanel`; the input gains `@` and routing labels.
 - New components belong in the design system (`apple/Persona/DesignSystem`), using `AgentState.tone` colors and `Theme.Motion` animations.

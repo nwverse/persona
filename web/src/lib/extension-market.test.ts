@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   addMarket, agreeLabel, canUninstall, catalogOf, catalogQuery, getCatalog, installPreview, isGitMarket, itemLine, itemState, listMarkets, MARKET_SPEC_HINT, marketView, marketKind, marketLine, marketOf,
-  extensionsRoute, previewFromMarket, previewVersion, refreshMarket, removeMarket, routeSub, setMarketToken, specLabel, uninstallExtension, upgradePreview, wantsGitHubToken,
+  extensionsRoute, previewFromMarket, previewVersion, renameConsent, refreshMarket, removeMarket, routeSub, setMarketToken, specLabel, uninstallExtension, upgradePreview, wantsGitHubToken,
   type CatalogItem, type Market, type MarketPreview, type ExtensionsRoute,
 } from "./extension-market";
 
@@ -57,7 +57,7 @@ describe("市场的规矩", () => {
     expect(marketLine(m, () => "1 小时前")).toBe("3 个扩展 · 1 小时前读过 · 有 token");
     expect(marketLine({ ...m, has_token: false, fetched_at: undefined }, () => "")).toBe("3 个扩展 · 还没读过");
     expect(marketLine({ ...m, signature: { state: "verified", key_id: "32ed46cdbe349656" } }, () => "1 小时前")).toBe("3 个扩展 · 1 小时前读过 · 有 token · 签名已验证");
-    expect(marketLine({ ...m, signature: { state: "key_changed" } }, () => "1 小时前")).toContain("签名的 key 换了");
+    expect(marketLine({ ...m, signature: { state: "key_changed" } }, () => "1 小时前")).toContain("官方签名 key 不匹配，等待验签");
     expect(specLabel("github:example/x")).toBe("example/x");
     expect(specLabel("https://extensions.example.com/persona/persona-extensions.json")).toBe("extensions.example.com/persona/persona-extensions.json");
     expect(specLabel("https://example.com/")).toBe("example.com");
@@ -94,6 +94,23 @@ describe("市场的接口", () => {
     vi.stubGlobal("localStorage", { getItem: () => "t" });
     vi.stubGlobal("fetch", async () => new Response(JSON.stringify({ ok: true, warnings })));
     expect(await uninstallExtension("example")).toEqual({ ok: true, warnings });
+  });
+  it("requires identity consent and upgrades the installed predecessor", async () => {
+    const pv: MarketPreview = { preview_id: "rename-pv", manifest: { id: "new-name", name: "Example", version: "2.0.0" },
+      upgrade: true, rename_from: "old-name", from: "1.0.0", permissions: [], permissions_digest: "confirmed-digest", expires_at: "" };
+    expect(agreeLabel(pv)).toBe("确认更名");
+    expect(renameConsent(pv)).toContain("old-name");
+    expect(renameConsent(pv)).toContain("new-name");
+    expect(renameConsent({ ...pv, rename_from: undefined })).toBe("");
+    const calls: { url: string; body: unknown; manager: string | null }[] = [];
+    vi.stubGlobal("localStorage", { getItem: () => "t", setItem: () => {}, removeItem: () => {} });
+    vi.stubGlobal("fetch", async (url: string, init: RequestInit) => {
+      calls.push({ url, body: JSON.parse(String(init.body)), manager: new Headers(init.headers).get("X-Persona-Manager") });
+      return new Response(JSON.stringify({ id: "new-name", name: "Example" }));
+    });
+    await upgradePreview("new-name", pv, "manager-two");
+    expect(calls).toEqual([{ url: "/api/v1/extensions/old-name/-/upgrade", body: {
+      preview_id: "rename-pv", permissions_digest: "confirmed-digest" }, manager: "manager-two" }]);
   });
   it("calls the hub's market routes", async () => {
     const calls: string[] = [];

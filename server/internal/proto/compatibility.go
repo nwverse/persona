@@ -2,17 +2,32 @@ package proto
 
 import (
 	"encoding/json"
+	"encoding/json/jsontext"
+	jsonv2 "encoding/json/v2"
 )
 
 // Both keys carry the same value on all hub/node/manager boundaries. Old peers
 // ignore the canonical key. Presence, not boolean truth, gives it precedence.
 type sessionJSON Session
 
+// sessionWire is a Session as sent: its fields, then the legacy key. The session is embedded by pointer, so encoding
+// one copies none of its ~1 KB of fields.
+type sessionWire struct {
+	*sessionJSON
+	LegacyStarted bool `json:"started_by_jarvis"`
+}
+
 func (s Session) MarshalJSON() ([]byte, error) {
-	return json.Marshal(struct {
-		sessionJSON
-		LegacyStarted bool `json:"started_by_jarvis"`
-	}{sessionJSON(s), s.StartedByPersona})
+	return json.Marshal(&sessionWire{(*sessionJSON)(&s), s.StartedByPersona})
+}
+
+// MarshalJSONTo writes MarshalJSON's bytes straight into the encoder that asked: the hub encodes every session of a
+// list on each push, and MarshalJSON's bytes were then checked and copied again by that encoder. On a pointer, so the
+// session is not copied either; encoding/json calls it for an addressable session (a pointer, a slice element) and
+// MarshalJSON for the rest. Encoded with encoding/json's options, as MarshalJSON is, so an encoder that does not
+// escape HTML still gets it escaped; the caller's indentation applies, as it did to MarshalJSON's output.
+func (s *Session) MarshalJSONTo(enc *jsontext.Encoder) error {
+	return jsonv2.MarshalEncode(enc, &sessionWire{(*sessionJSON)(s), s.StartedByPersona}, json.DefaultOptionsV1())
 }
 func (s *Session) UnmarshalJSON(data []byte) error {
 	v := struct {

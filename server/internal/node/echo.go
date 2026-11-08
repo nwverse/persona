@@ -2,7 +2,6 @@ package node
 
 import (
 	"encoding/json"
-	"regexp"
 	"slices"
 	"sort"
 	"strings"
@@ -10,6 +9,7 @@ import (
 	"time"
 	"unicode"
 
+	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/transcript"
 )
@@ -269,11 +269,11 @@ func echoLines(items []proto.Item) []echoLine {
 	})
 }
 
-var echoDropped = []*regexp.Regexp{
+var echoDropped = []*lazyre.Regexp{
 	transcript.ContextRe,
-	regexp.MustCompile(`(?s)<system-reminder>.*?</system-reminder>`), // a hook's context on the user's line
-	regexp.MustCompile(`(?s)<attached_images>.*?</attached_images>`),
-	regexp.MustCompile(`<[\\/]*pasted_content[^>]*>`),
+	lazyre.New(`(?s)<system-reminder>.*?</system-reminder>`), // a hook's context on the user's line
+	lazyre.New(`(?s)<attached_images>.*?</attached_images>`),
+	lazyre.New(`<[\\/]*pasted_content[^>]*>`),
 	boxChips, // [Image #1], [Pasted text #2 …]
 }
 

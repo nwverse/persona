@@ -58,6 +58,7 @@
   "protocol_version": "Protocol version is {current}; the hub requires {required}",
   "wrong_id": "the program says it is \"{current}\", not \"{required}\"",
   "wrong_version": "the program says it is version \"{current}\", not \"{required}\"",
+  "attached_version": "The program running on its own is version {current}; this manager approved {approved}. It is not used until you approve that version on the hub machine (personad extension upgrade {id} <its remote: source>)",
   "socket_connect": "Cannot connect to {path}: {err}",
   "program_missing": "Cannot find the program for {name} ({path})",
   "sandbox_start": "Cannot start the sandbox for {name}: {err}",

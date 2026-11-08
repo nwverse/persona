@@ -248,8 +248,10 @@ func (e *setupEnv) systemdService(ctx context.Context, cfg *Config, bin string) 
 	switch {
 	case useSocket && (!socketActive || socketChanged):
 		// First time, or other addresses: a running hub holds the port itself; one stop to hand it to the socket.
-		steps = append(steps, []string{"stop", "personad"}, []string{"enable", "personad.socket"},
-			[]string{"restart", "personad.socket"}, []string{"start", "personad"})
+		// Both in one stop: the service stopped alone while the socket listens is started again by the next
+		// connection, and the socket then cannot start while it runs (hub-systemd.sh, the same steps).
+		steps = append(steps, []string{"stop", "personad.socket", "personad"}, []string{"enable", "personad.socket"},
+			[]string{"start", "personad.socket"}, []string{"start", "personad"})
 	case !useSocket && (socketActive || len(socketBefore) > 0):
 		steps = append(steps, []string{"stop", "personad"}, []string{"disable", "--now", "personad.socket"}, []string{"start", "personad"})
 	case changed || !serviceActive:
@@ -344,8 +346,8 @@ func hubPlist(home, root, bin string) string {
 }
 
 // otherHubAgent is the label of a launchd agent someone set up before that already runs this hub ("" when none):
-// left as it is, like hub-systemd.sh does. Matched the way that script matches: ProgramArguments (or Program) is
-// "<personad> hub", the binary resolved through symlinks and ~, so an agent naming ~/.persona/bin/personad is found
+// left as it is, like hub-systemd.sh does. Matched the way that script matches: the job runs "<personad> hub"
+// (launchdJob), the binary resolved through symlinks and ~, so an agent naming ~/.persona/bin/personad is found
 // when ~/.persona and ~/.persona are the same directory.
 func (e *setupEnv) otherHubAgent(bin string) string {
 	want := resolvedPath(bin)
@@ -355,15 +357,11 @@ func (e *setupEnv) otherHubAgent(bin string) string {
 		if filepath.Base(f) == hubLaunchdLabel+".plist" {
 			continue
 		}
-		b, err := os.ReadFile(f)
-		if err != nil {
+		job, ok := readLaunchdJob(f)
+		if !ok || len(job.args) < 2 || job.args[1] != "hub" {
 			continue
 		}
-		label, args, ok := launchdJob(b)
-		if !ok || len(args) < 2 || args[1] != "hub" {
-			continue
-		}
-		prog := args[0]
+		label, prog := job.label, job.args[0]
 		if prog == "~" || strings.HasPrefix(prog, "~/") {
 			prog = filepath.Join(e.home, strings.TrimPrefix(prog, "~"))
 		}
@@ -392,34 +390,49 @@ type plistNode struct {
 	Nodes   []plistNode `xml:",any"`
 }
 
-// launchdJob reads an XML property list's Label and its ProgramArguments (or Program when there are none).
-func launchdJob(b []byte) (label string, args []string, ok bool) {
+// plistJob is what a launchd property list runs: args[0] is the program and the rest its arguments, and disabled says
+// launchd leaves the job unloaded.
+type plistJob struct {
+	label    string
+	args     []string
+	disabled bool
+}
+
+// launchdJob reads an XML property list's job. launchd runs Program when there is one, with ProgramArguments as its
+// argv (ProgramArguments[0] is only the name it is given), else ProgramArguments[0].
+func launchdJob(b []byte) (job plistJob, ok bool) {
 	var root plistNode
 	if err := xml.Unmarshal(b, &root); err != nil || root.XMLName.Local != "plist" || len(root.Nodes) == 0 || root.Nodes[0].XMLName.Local != "dict" {
-		return "", nil, false
+		return plistJob{}, false
 	}
 	var program string
 	kv := root.Nodes[0].Nodes
 	for i := 0; i+1 < len(kv); i += 2 {
 		if kv[i].XMLName.Local != "key" {
-			return "", nil, false
+			return plistJob{}, false
 		}
 		v := kv[i+1]
 		switch strings.TrimSpace(kv[i].Text) {
 		case "Label":
-			label = strings.TrimSpace(v.Text)
+			job.label = strings.TrimSpace(v.Text)
 		case "Program":
 			program = strings.TrimSpace(v.Text)
 		case "ProgramArguments":
 			for _, a := range v.Nodes {
-				args = append(args, a.Text)
+				job.args = append(job.args, a.Text)
 			}
+		case "Disabled":
+			job.disabled = v.XMLName.Local == "true"
 		}
 	}
-	if len(args) == 0 && program != "" {
-		args = []string{program}
+	if program != "" {
+		if len(job.args) == 0 {
+			job.args = []string{program}
+		} else {
+			job.args[0] = program
+		}
 	}
-	return label, args, true
+	return job, true
 }
 
 func (e *setupEnv) agentPlist(label string) string {

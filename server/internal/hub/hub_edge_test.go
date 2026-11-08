@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -124,5 +125,30 @@ func TestRestoreUpdate(t *testing.T) {
 	}
 	if _, ok := restoreUpdateIn(dir, 2, nil); ok {
 		t.Fatal("restored twice")
+	}
+}
+
+// A hub that ran as persona-hub comes back as persona-hub: the edge restores every program the update swapped and
+// runs Pending.Run, not personad. A pending without Run (an older build's) runs Target, as TestRestoreUpdate shows.
+func TestRestoreUpdateRunsTheHubsProgram(t *testing.T) {
+	dir := t.TempDir()
+	target, hubBin := filepath.Join(dir, "personad"), filepath.Join(dir, "persona-hub")
+	for path, old := range map[string]string{target: "old personad", hubBin: "old persona-hub"} {
+		os.WriteFile(path, []byte("new"), 0o755)
+		os.WriteFile(path+".prev", []byte(old), 0o755)
+	}
+	pending := update.Pending{FromBuild: 1, ToBuild: 2, Target: target, Prev: target + ".prev", Run: hubBin,
+		Programs: []update.Swapped{{Target: hubBin, Prev: hubBin + ".prev"}}}
+	if err := update.Save(update.PendingPath(dir), pending); err != nil {
+		t.Fatal(err)
+	}
+	bin, ok := restoreUpdateIn(dir, 2, nil)
+	if !ok || bin != hubBin {
+		t.Fatalf("restore = %q %v, want %q", bin, ok, hubBin)
+	}
+	for path, want := range map[string]string{target: "old personad", hubBin: "old persona-hub"} {
+		if b, _ := os.ReadFile(path); string(b) != want {
+			t.Fatalf("%s is %q after going back", filepath.Base(path), b)
+		}
 	}
 }
