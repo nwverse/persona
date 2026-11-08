@@ -23,7 +23,7 @@ Node's `session.start`:
    This marker exists only in node memory; after node restart, herdr state is shown.
    The first message was not made a `claude` argument: launchers may be zsh functions / aliases / `personad launch`, with inconsistent argument forwarding. Variable-length options such as `--allowedTools` can swallow later positional arguments, and long messages would enter the shell command line. Transcript verification works for every launcher.
 
-For Persona-started sessions, node state records the launcher. Manually started Claude sessions using launcher functions have no such record; inference uses `matchLauncher` in `server/internal/node/sessions.go`. Every 30 seconds, node scans running Claude processes' environment variables (also `CLAUDE_CONFIG_DIR` in the same scan, see `claudedirs.go`; only processes owned by node's user; Linux shares one `/proc` traversal with Codex discovery, see `userprocs.go`), records `ANTHROPIC_BASE_URL` / `ANTHROPIC_MODEL`, and maps to sessions through `sessions/<pid>.json`. Match the launcher list (`_claude_launchers` functions and aliases calling claude):
+For Persona-started sessions, node state records the launcher. Manually started Claude sessions using launcher functions have no such record; inference uses `matchLauncher` in `server/internal/node/launchers.go`. Every 30 seconds, node scans running Claude processes' environment variables (also `CLAUDE_CONFIG_DIR` in the same scan, see `claudedirs.go`; only processes owned by node's user; Linux shares one `/proc` traversal with Codex discovery, see `userprocs.go`), records `ANTHROPIC_BASE_URL` / `ANTHROPIC_MODEL`, and maps to sessions through `sessions/<pid>.json`. Match the launcher list (`_claude_launchers` functions and aliases calling claude):
 if exactly one launcher matches both base URL and model, use it; otherwise, if exactly one launcher has that base URL (runtime-selected model, displayed as `(claude-choose)`), use it too.
 Leave other cases blank (multiple launchers share a base URL with no model match, or no base URL), without guessing between candidates. Listing sessions does not wait for the launcher list, which requires a login shell: use cache, refresh expired cache in background. The first list after node startup may therefore lack inferred launchers.
 
@@ -307,7 +307,7 @@ Assistant does not enter herdr: node directly launches `zsh -ic '<launcher> "$@"
 - Interrupt: no stdin interrupt in -p; terminate process, resume next message.
 - First user content in headless transcript is a block array; without ai-title, first sentence becomes title.
 
-## Background tasks (trackBackground in `transcript.go`, tested 2026-10-25)
+## Background tasks (trackBackground in `transcript/background.go`, tested 2026-10-25)
 
 - Start: Bash `run_in_background:true` result is `Command running in background with ID: <id>. Output is being written to: <path>.`; async Agent result `Async agent launched … agentId: <id>`; timed-out foreground commands become `…moved to the background (ID: <id>)`.
 - End: `<task-notification><task-id>…</task-id><status>completed|failed|killed</status><summary>…</summary></task-notification>`, in queue-operation enqueue (**not user input, never in queue list**), `queued_command` attachment (commandMode=task-notification, absorbed mid-turn), or idle user message. `TaskStop` / `KillShell` also end tasks.
