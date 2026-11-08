@@ -31,9 +31,9 @@ nonisolated struct ExtensionActionQuery: EntityStringQuery {
     }
 }
 
-nonisolated struct ExtensionActionChoices: DynamicOptionsProvider {
+@MainActor struct ExtensionActionChoices: DynamicOptionsProvider {
     @IntentParameterDependency<RunExtensionActionIntent>(\.$action) var intent
-    nonisolated func results() async throws -> [String] {
+    func results() async throws -> [String] {
         guard let id = intent?.action.id, let key = ExtensionSurfaceKey(id: id) else { return [] }
         let place = ExtensionSurfaceStore.shared.read().groups[key.group]?.shortcuts.first { $0.extension == key.owner && $0.id == key.contribution }
         return place?.params?.first { $0.kind == "choice" }?.choices?.map(\.value) ?? []
