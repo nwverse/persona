@@ -235,6 +235,134 @@ On an upgraded install the manager's `secret.key` began as the same bytes as the
 - **During a hub switch,** an older manager process still running cannot open what the rotation sealed again (model providers' keys, connectors' secrets): it is about to stop.
 - **A legacy `mail_accounts.json` that fails to import** keeps the old key: each start says so, and it is deleted once the file is imported.
 
+## Automatic updates for an independent manager
+
+An independent manager's executable is separate from the Hub and the node. Updating either
+of those does not update that manager. Older `manager run` processes have no update command
+or RPC. Their first update is driven externally by the existing release publisher, executing
+the **new, same-source release artifact** as `personad manager update`. It does not ask the
+old process to execute a new command, reinstall or join again.
+
+The existing `scripts/release/hub_release.py` worker accepts an explicit manager scope:
+
+```sh
+python3 scripts/release/hub_release.py --config <existing-worker-config> \
+  --scope manager --manager-id <manager-id> --commit <full-main-commit>
+```
+
+An existing service that supplies no arguments can select the same operation through its
+private worker configuration: `scope: "manager"`, `manager_id`, and `manager_commit` (the full
+source SHA). Unconfigured workers keep their existing Hub behavior. `manager_targets` maps
+that exact ID to a `publish_command` argv array invoking
+`scripts/release/publish_manager_release.py --config <private-target-config>`; add `--apply`
+only for an authorized activation window. There is no inferred default manager or new timer.
+Use `--validate-only` to build and validate without publication.
+
+This manager operation is a pinned, one-shot bootstrap. The existing release service and
+timer must stay gated outside its separately scheduled window, including after completion;
+selecting manager scope does not enable periodic manager upgrades. The old baseline hash
+and bootstrap window are not a continuing health probe. Repeating an obsolete operation
+must fail its current preconditions, rather than return a historical deployment success.
+Further activation requires a newly reviewed baseline and authorization window.
+
+The worker retains the original `state_dir/lock`, source-branch ancestry checks and full
+release validation. `--publish-managers` produces `manager-manifest.json` containing the
+same-source Linux and Darwin personad artifacts; it does not publish node packages or
+change a node pointer. Each manager has its own `state_dir/manager/<id>/last.json`.
+The target configuration's bytes enter the cache identity: a Hub-only success cannot skip
+an unfinished manager, and changing an explicit target causes a new publication check.
+Validated builds may be reused, but a historical manager success never skips the current
+publisher invocation. Validation-only statuses use `manager-release/validation`, separate
+from activation's `manager-release/worker` status.
+A checked package is not installed. Only a confirmed receipt bound to this run, manager
+and source makes that manager operation successful. Consumers must require that success
+before resuming application publication.
+
+### Transport and the first update
+
+The manager publisher reuses the original publisher's `credentials_command`, `ssh_proxy`,
+`remote_root` and `release_namespace` configuration and authenticated connection to the Hub.
+On the Hub it holds the existing `releases/hub/.publish.lock` for the whole manager operation.
+It then uses a configured SSH transport to the target Mac. The new transport is a product
+entry point, not a claim that an installation already has the required endpoint or identity.
+A Persona Link connection or a reverse SSH connection does not establish this route.
+
+The private publisher configuration adds a `target` object with these required values:
+
+| Values | Meaning |
+| --- | --- |
+| `manager_id`, `main`, `machine_id` | Exact existing manager and original assistant identity |
+| `dir`, `binary`, `uid` | Canonical manager directory, its own `bin/personad`, operating-system owner |
+| `unit`, `plist_path` | Original launchd label and existing plist; compatibility labels are accepted |
+| `previous_sha256`, `config_sha256`, `plist_sha256` | Read-only baseline hashes for the executable, manager.json and original plist |
+| `transport` | `kind: "ssh"`, explicit `host`, `port`, `user`, `identity_file`, `known_hosts_file` on the Hub |
+| `freeze`, `activation_enabled`, `bootstrap_authorized`, `bootstrap_window_until` | Explicit activation policy; frozen/disabled is the default |
+
+SSH uses only those selected identity and known-host files, strict host-key checking and
+batch mode. No default key, hostname inference, reverse route or trust-on-first-use is used.
+Missing transport configuration fails without guessing. Direct SSH (`kind: "ssh"`) and
+managed Cloudflare SSH (`kind: "cloudflare-ssh"`) are supported. Cloudflare targets use
+the same explicit SSH fields with origin port 22, plus `cloudflared_path` (canonical,
+executable absolute path on the Hub) and `cloudflared_sha256` (the installed binary's
+verified SHA256). The publisher generates only the fixed proxy command
+`cloudflared access ssh --hostname <host>`; arbitrary proxy commands, SSH aliases and
+implicit jumps are rejected. The selected managed route and any required noninteractive
+Cloudflare Access authorization must already work for the publisher identity. An account
+API token or a tunnel management certificate does not establish client authorization.
+Install the architecture-matching official client through the existing configuration lane
+and record its hash before selecting it; the publisher does not download clients or create
+tunnels, DNS records, services, Access policies or SSH authorizations.
+Other transports and platforms are rejected. The operator must
+provision the intended endpoint, trusted host key and identity reference through their normal
+configuration process before checking connectivity. The publisher never provisions them.
+
+Without `--apply`, publication only reads the service and product state and returns `checked`.
+It does not create remote staging, rewrite product configuration or operate a service.
+Applying additionally requires an unfrozen, explicit maintenance window of at most fifteen
+minutes and a fresh scoped session snapshot. Older managers do not report full background
+idleness; the window explicitly authorizes that first bootstrap and is not represented as
+proof that every background activity is idle. Working, compacting, unknown or offline
+session state refuses the operation. Idle evidence is refreshed after artifact transfer.
+
+### Confirmation and recovery
+
+The formal artifact is staged in the manager's own `.manager-updates/<run-id>` directory.
+The new CLI checks the release channel, complete clean source identity, platform, native
+checksum, size, owner, original loaded service arguments and baseline hashes. Stage/dev
+executables cannot activate a formal update. `manager update check --plan <plan>` is read-only.
+
+`manager update start` creates a separate, restartable launchd transaction guardian. It never
+rewrites the original plist or its environment, calls install/join, or changes the manager's
+configuration, database bindings, node, Hub or other manager. The guardian journals before
+replacing the independent executable and restarts only that original validated service.
+A crash during activation resumes recovery rather than retrying the candidate.
+An unfinished active transaction prevents another run from taking ownership. A recovering
+guardian may restore an image only while the active marker still belongs to its exact run
+and target; a missing or foreign marker cannot authorize rollback of a later transaction.
+
+The new manager reports readiness only after its stores opened and its authenticated Hub
+handshake completed. The guardian checks that readiness against the original service's
+actual PID, image, native checksum and unchanged configuration. It then waits for the
+publisher to verify the live manager version, scoped assistant's original main/machine and
+unchanged node inventory through existing Hub GET routes. `confirm` acknowledges these
+checks; only then is the receipt `confirmed`. Roster, machine or main-session resync may
+lag the authenticated handshake: the publisher allows at most sixty seconds from the
+`start` command's return for these temporary absences to settle. Explicit ownership or
+identity conflicts fail immediately.
+A health rejection, missing acknowledgement,
+startup timeout or interrupted activation restores the verified previous executable and
+restarts the same service. An unrelated replacement or changed service identity is never
+overwritten. Receipts distinguish `checked`, `applied`, `confirmed` and `rollback`; failures
+must not release dependent publication steps.
+A rollback receipt proves that the previous executable was restored and the original
+service's restart command succeeded; reconnect and service health still require verification.
+
+This path does not change default permissions. After the manager version is confirmed,
+permission settings and inheritance require their own explicitly scoped product acceptance.
+The presence of `config.own` or an omitted optional `default_permission_mode` field alone
+does not prove support or an active runtime approval policy. Existing main conversations and
+history remain the acceptance baseline; updating the manager does not send a new turn.
+
 ## The built-in manager as its own service
 
 By default the hub starts the built-in manager as its child (`personad assistant`) and gives it a new bus token at every start. With `assistant.mode` set to `service` in `hub.json`, the built-in manager is a service of its own instead: the hub neither starts it nor gives it a token. It is bound to the hub once with a one-time code, and hub restarts (blue-green switches) no longer restart it. It runs on the hub's machine (or in a container beside the hub): it shares the hub's data directory, `hub.json` included, as the child does.
