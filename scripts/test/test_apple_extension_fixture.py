@@ -36,6 +36,20 @@ class AppleExtensionFixtureTests(unittest.TestCase):
                          {"text", "number", "choice", "toggle"})
         self.assertIn("shortcut-count", self.snapshots)
 
+    def test_process_fixture_is_a_distinct_supported_runtime_not_a_source_bypass(self):
+        process = BUILDER.manifest(self.snapshots, runtime="process")
+        runtime = process["runtime"]
+        self.assertEqual(runtime["mode"], "process")
+        self.assertEqual(runtime["command"], {"linux-amd64": "bin/showcase-linux-amd64"})
+        self.assertNotIn("source", runtime)
+        self.assertNotIn("env", runtime)
+        self.assertNotIn("sandbox", runtime)
+        self.assertEqual(process["contributes"], self.manifest["contributes"])
+        self.assertEqual(runtime["resources"], self.manifest["runtime"]["resources"])
+        self.assertEqual(self.manifest["runtime"]["mode"], "deno")
+        with self.assertRaises(ValueError):
+            BUILDER.manifest(self.snapshots, runtime="unrestricted")
+
     def test_fixture_does_not_opt_out_of_source_validation_or_sandboxing(self):
         runtime = self.manifest["runtime"]
         self.assertEqual(runtime["mode"], "deno")

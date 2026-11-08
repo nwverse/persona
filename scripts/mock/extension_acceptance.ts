@@ -1,4 +1,4 @@
-import { componentPage, type Program } from "@persona/extension";
+import { componentPage, type Hub, type Program } from "@persona/extension";
 import * as UI from "@persona/extension/ui";
 import { useState } from "@persona/extension/ui";
 import snapshots from "./snapshots.json";
@@ -14,7 +14,8 @@ const components: Record<string, any> = {
   loading: UI.Loading, header: UI.Header, breadcrumb: UI.Breadcrumb, file_tree: UI.FileTree,
   code: UI.Code, diff: UI.Diff, comment_thread: UI.CommentThread, composer: UI.Composer,
 };
-let actions = 0;
+let actions = 0, widgetRevision = 0;
+let bus: Hub | undefined;
 const contexts: Record<string, unknown>[] = [];
 function context(request: any) {
   contexts.push(Object.fromEntries(["size", "platform", "locale", "tz", "ui_version", "machine"]
@@ -41,6 +42,7 @@ function Snapshot({ name, request }: { name: string; request: any }) {
   const view = structuredClone(fixtures[selected] ?? fixtures.home);
   const run = (action: any, input: Record<string, string>) => {
     actions++;
+    bus?.notify("ui.badge", { contribution: "button", text: String(actions), tone: "positive" });
     if (action.push) return { push: action.push };
     if (action.id === "more") { setMore(true); return {}; }
     if (["range", "search", "kind", "answer"].includes(action.id)) { setValues(previous => ({ ...previous, ...input })); return {}; }
@@ -65,12 +67,20 @@ for (const name of Object.keys(fixtures)) {
 }
 ui.showcase = componentPage(request => { context(request); return UI.createElement(Snapshot, { name: "home", request, key: "fixture" }); });
 ui["showcase-card"] = { render: (request: any) => { context(request); return fixtures.card; } };
-ui["showcase-widget"] = { render: (request: any) => { context(request); return fixtures["widget-" + request.size]; } };
+ui["showcase-widget"] = { render: (request: any) => {
+  context(request);
+  const view = structuredClone(fixtures["widget-" + request.size]);
+  if (widgetRevision > 0) {
+    const metric = view.sections.flatMap((section: any) => section.items).find((item: any) => item.type === "metric");
+    if (metric) metric.value = String(widgetRevision);
+  }
+  return view;
+} };
 ui.machine = { render: (request: any) => { context(request); return { sections: [{ items: [{ type: "metric", label: "Test computer", value: request.machine?.id ?? "missing" }] }] }; } };
 
 export default {
-  id: "showcase", version: "0.1.0",
-  init: () => manifest.contributes,
+  id: "showcase", version: manifest.version,
+  init: (_input, hub) => { bus = hub; return manifest.contributes; },
   ui,
   shortcuts: {
     echo: (request: any) => { context(request); return { text: request.values.text }; },
@@ -82,6 +92,11 @@ export default {
       const text = `${request.values.n} ${request.values.unit ?? "star"}`;
       return { text: request.values.loud === "true" ? text.toUpperCase() : text, view };
     },
-    stats: () => ({ text: JSON.stringify({ actions, contexts }) }),
+    invalidate: () => {
+      widgetRevision++;
+      bus?.notify("ui.invalidate", { contribution: "showcase-widget" });
+      return { text: "Synthetic widget invalidation " + widgetRevision };
+    },
+    stats: () => ({ text: JSON.stringify({ actions, widgetRevision, contexts }) }),
   },
 } satisfies Program;
