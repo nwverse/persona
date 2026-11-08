@@ -137,8 +137,8 @@ func (s *Service) toolSecretRun(ctx context.Context, machine, self string, args 
 }
 
 const (
-	secretRefusedText = "The card was answered where the password cannot be typed in (only the iPhone app fills it in), or " +
-		"without the password: nothing ran."
+	secretRefusedText = "The card was answered where the password cannot be typed in (the Persona app fills it in on the " +
+		"iPhone, Mac, Vision Pro, Android or the web; the watch can only decline), or without the password: nothing ran."
 	secretRunUsed = "The password was used once and discarded."
 )
 

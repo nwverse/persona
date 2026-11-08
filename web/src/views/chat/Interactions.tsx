@@ -1,5 +1,5 @@
 // What the agent is waiting on (questions, plans, permissions, terminal dialogs, MCP forms and links), as Beautiful UI's Approval Card.
-import { Fragment, useEffect, useId, useState } from "react";
+import { Fragment, useEffect, useId, useLayoutEffect, useRef, useState } from "react";
 import { answerCard } from "../../lib/card-answer";
 import { delegateLines, isDelegating, recommendedLabels, type DelegatedAnswer } from "../../lib/delegate";
 import { Choice } from "./Choice";
@@ -16,7 +16,7 @@ import { mcpServerLabel, toolDisplayName } from "../../lib/turns";
 import { isSecretRun, optionDisplay, secretRunInput } from "../../lib/tool-detail";
 import { RecommendedTag } from "../../ui/RecommendedTag";
 import { dropAnswered, getSession, useStore, type AnsweredCard as Answered } from "../../lib/store";
-import { Button, Collapse, cx, EASE, Menu, toast, useMenu } from "../../ui/atoms";
+import { Button, Collapse, cx, EASE, Menu, SECRET_INPUT, toast, useMenu } from "../../ui/atoms";
 import { Icon } from "../../ui/icons";
 import { Markdown } from "../../ui/Markdown";
 import { permissionDetail, permissionReason, summaryExtra } from "../../lib/tool-detail";
@@ -390,14 +390,36 @@ function PermissionBody({ ix }: { ix: Interaction }) {
   );
 }
 
-/** The assistant's password card (#1137): what would run where, filled in only on the iPhone; here it is only declined. */
+/**
+ * The assistant's password card (#1137, #1581): what runs where, every command verbatim and read-only, the password
+ * field, Decline and Run. The password lives only in this card's state and its input: emptied as Run sends it, on
+ * Decline, and when the card goes (a card with another id is a new SecretRunCard, see InteractionCard). No form and
+ * nothing Enter submits: the commands run on a click on Run, never on a key pressed while typing.
+ */
 function SecretRunCard({ ix }: { ix: Interaction }) {
-  const [busy, setBusy] = useState(false);
+  const [busy, setBusy] = useState<"run" | "decline" | null>(null);
+  const [password, setPassword] = useState("");
+  const input = useRef<HTMLInputElement>(null);
+  // a field taken off the page keeps its value until collected, and Firefox offers to save a formless password field
+  // that is removed while it holds one (its form-removal capture): it is emptied before React removes it
+  useLayoutEffect(() => {
+    const el = input.current;
+    return () => {
+      if (el) el.value = "";
+    };
+  }, []);
   const { machine, purpose, commands } = secretRunInput(ix.tool_input);
-  const decline = async () => {
-    setBusy(true);
-    await resolve(ix, { allow: false });
-    setBusy(false);
+  // without commands in tool_input the hub's summary (the computer, the purpose and every command) stands in for them;
+  // with neither, nothing says what would run and Run stays off
+  const summary = commands.length ? "" : (ix.summary?.trim() ?? "");
+  // the hub refuses a password of spaces alone
+  const ready = password.trim() !== "" && (commands.length > 0 || summary !== "");
+  const label = ix.fields?.find((f) => f.key === "password")?.label?.trim() || t("chat-interactions.password");
+  const send = async (body: Record<string, unknown>, key: "run" | "decline") => {
+    setPassword("");
+    setBusy(key);
+    await resolve(ix, body);
+    setBusy(null);
   };
   return (
     <Card
@@ -405,24 +427,54 @@ function SecretRunCard({ ix }: { ix: Interaction }) {
       title={t("chat-interactions.secret_run_title", { machine })}
       footer={
         <>
-          <span data-secret-run-elsewhere className="flex min-w-0 items-center gap-1.5 text-[11.5px] text-ink-3">
-            <Icon name="phone" size={13} stroke={2} className="shrink-0" />
-            <span className="min-w-0">{t("chat-interactions.secret_run_on_iphone")}</span>
-          </span>
-          <Button tone="secondary" busy={busy} onClick={decline}>
+          <Button tone="quiet" busy={busy === "decline"} disabled={busy !== null} onClick={() => void send({ allow: false }, "decline")}>
             {t("chat-interactions.secret_run_decline")}
+          </Button>
+          <Button tone="primary" busy={busy === "run"} disabled={busy !== null || !ready} onClick={() => void send({ allow: true, values: { password } }, "run")}>
+            {t("chat-interactions.secret_run_run")}
           </Button>
         </>
       }
     >
       <div className="flex flex-col gap-2">
         {purpose && <p className="text-[13px] leading-relaxed whitespace-pre-wrap text-ink">{purpose}</p>}
-        <div>
-          <div className="mb-1 text-[11px] font-medium text-ink-3">{t("chat-interactions.secret_run_commands")}</div>
-          {/* one block per command: a long one that wraps never reads as two */}
-          <div className="flex flex-col gap-1.5">
-            {commands.map((c, i) => <pre key={i} data-secret-run-command className={CODE_BOX}>{c}</pre>)}
+        {commands.length > 0 ? (
+          <div>
+            <div className="mb-1 text-[11px] font-medium text-ink-3">{t("chat-interactions.secret_run_commands")}</div>
+            {/* one block per command: a long one that wraps never reads as two */}
+            <div className="flex flex-col gap-1.5">
+              {commands.map((c, i) => <pre key={i} data-secret-run-command className={CODE_BOX}>{c}</pre>)}
+            </div>
           </div>
+        ) : (
+          summary && <pre data-secret-run-summary className={CODE_BOX}>{summary}</pre>
+        )}
+        <div className="flex flex-col gap-1">
+          {/* The user's computer password, not this site's: "one-time-code" keeps Chrome from offering to save it (its
+              password parser skips such fields) and from suggesting a generated one ("new-password" would); no name, no
+              form. */}
+          <input
+            ref={input}
+            type="password"
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+            // Enter only puts the keyboard away, as Return does on the iPhone card
+            onKeyDown={(e) => {
+              if (e.key !== "Enter") return;
+              e.preventDefault();
+              e.currentTarget.blur();
+            }}
+            placeholder={label}
+            aria-label={label}
+            disabled={busy !== null}
+            {...SECRET_INPUT}
+            autoComplete="one-time-code"
+            autoCapitalize="off"
+            autoCorrect="off"
+            enterKeyHint="done"
+            className="h-8 w-full min-w-0 rounded-control bg-surface px-2.5 text-[13px] text-ink shadow-btn outline-none placeholder:text-ink-3"
+          />
+          <span className="text-[12px] leading-snug text-ink-3">{t("chat-interactions.secret_run_note")}</span>
         </div>
       </div>
     </Card>
@@ -793,7 +845,7 @@ export function InteractionCard({ ix }: { ix: Interaction }) {
   const canApprove = useStore(() => sessionCan(getSession(ix.machine_id, ix.session_id), "approve"));
   const card = ix.kind === "question" ? <QuestionCard ix={ix} />
     : ix.kind === "plan" ? <PlanCard ix={ix} />
-    : isSecretRun(ix) ? <SecretRunCard ix={ix} />
+    : isSecretRun(ix) ? <SecretRunCard key={ix.id} ix={ix} />
     : ix.kind === "permission" ? <PermissionCard ix={ix} />
     : ix.kind === "elicitation" ? <ElicitationCard ix={ix} /> : <ScreenCard ix={ix} />;
   // data-card: which card this is, for the sync scenarios (spec/fixtures/sync); `contents` keeps the layout as it was
