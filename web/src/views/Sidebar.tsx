@@ -1911,7 +1911,7 @@ export const PersonaRow = memo(function PersonaRow({ reg, hover, active, go, mai
 export function PinnedHeading({ onMenu }: { onMenu: (at: MenuAt) => void }) {
   return (
     <div className="flex items-center gap-1 px-2 pt-0.5 pb-0.5" {...contextMenuProps((at) => onMenu(at))}>
-      <span className="flex min-w-0 flex-1 items-center gap-1 truncate whitespace-nowrap text-[10.5px] font-medium tracking-[0.06em] text-ink-3">
+      <span className="flex min-w-0 flex-1 items-center gap-1 truncate whitespace-nowrap text-[11px] font-semibold text-ink-3">
         <Icon name="pin" size={10} stroke={2.2} className="shrink-0" />
         {t("sidebar.pinned_section")}
       </span>
