@@ -233,7 +233,7 @@ Persona-managed entries swipe to “Delete,” removing the stored key too, with
 | `POST /api/v1/launchers` | Add `{name, base_url, model, small_model?, subagent_model?, custom_model?, custom_model_name?, custom_model_description?, args?, api_key, auth?, preset?, display_name?, assign?}`; `auth` is `api_key` (default) or `bearer`. With `preset`, missing values are filled from the preset, and `name` may be empty (see “Built-in presets” and “Adding from extensions” below); with `assign`, returns `{launcher, assigned, kept}` |
 | `GET /api/v1/launchers/presets` | Provider presets: built-ins (`plugin: "builtin"`) plus extensions (`docs/extensions/extensions.md`, “Model providers”), sorted by request language. Old hubs return 404; the app treats this as none |
 | `PUT /api/v1/launchers/{name}` | Edit (`api_key` unchanged if omitted); Persona-managed only. Fields under “Provider model and gateway parameters” below retain their old values if omitted |
-| `POST /api/v1/launchers/test` | Test connection (without node, see below): `{name?, base_url?, auth?, api_key?, headers?, model, preset?}` → `{ok, ms, model, error?, code?}` (`code: "region_blocked"` means Anthropic blocked the region; changing keys will not help, see `docs/protocol/protocol.md`). With `preset`, missing address and model use preset defaults |
+| `POST /api/v1/launchers/test` | Test connection (without node, see below): `{name?, base_url?, api?, auth?, api_key?, headers?, model, preset?}` → `{ok, ms, model, error?, code?}` (`code: "region_blocked"` means Anthropic blocked the region; changing keys will not help, see `docs/protocol/protocol.md`). With `preset`, missing address, protocol and model use preset defaults |
 | `POST /api/v1/launchers/discover` | Fetch models: `{name?, base_url?, auth?, api_key?, headers?}` → `{models:[{id, name?, context_window?, efforts?, default_effort?}], error?, code?}` |
 | `DELETE /api/v1/launchers/{name}` | Delete Persona-managed entries; hide ~/.zshrc entries |
 | `POST /api/v1/launchers/{name}/restore` | Unhide |
@@ -265,17 +265,12 @@ Persona-managed providers add these fields following cindy's model (`proto.Manag
 
 **Connection tests and model discovery** request the gateway directly from the manager (`assistant/models_probe.go`) (following cindy's `buildProbeRequest` / `provider-model-fetch`), also available before saving a new provider:
 
-- With `name`, use stored Base URL, key, headers, default model, and proxy; request values override stored values (`headers: ""` means no headers for this request).
-- Connection testing sends one `POST <base>/v1/messages` (`max_tokens: 1`, content `ping`); model discovery sends `GET <base>/v1/models`. Do not duplicate `/v1` if the Base URL already ends with it.
+- With `name`, use stored Base URL, protocol, key, headers, default model, and proxy; request values override stored values (`headers: ""` means no headers for this request).
+- Connection testing sends a short `ping` to `POST <base>/v1/messages` for Messages or `POST <base>/v1/responses` for Responses. Model discovery sends `GET <base>/v1/models`. A deployment path prefix is retained and `/v1` is not duplicated.
   Both `x-api-key` and `Authorization: Bearer` are sent (strip leading `Bearer ` from the key), plus `anthropic-version: 2023-06-01` and custom headers.
-- Timeout: 30 seconds. Failures return a plain-language explanation (401 authentication failed, 403 forbidden, 404 wrong address, 429 rate limited, timeout, unreachable), followed by the gateway's own error;
-  key and header values are always replaced by `***`. Both APIs themselves always return 200; inspect `ok` / `error` for the result.
-- Model lists accept three shapes: `{data:[…]}`, `{models:[…]}`, or a bare array (objects or strings). ID comes from `id` / `slug` / `key` / `model_name` / `model_id`,
-  name from `display_name` / `name`, and window from `context_length` / `context_window` / `max_context_length` / `max_input_tokens`. Deduplicate while preserving order.
-- Fill missing gateway information from a **built-in catalog**: `server/internal/assistant/models_catalog.json`, taken from cindy's `model-registry.json` (Apache-2.0, see `THIRD_PARTY_NOTICES.md`):
-  Claude models and common gateway models such as GLM, Kimi, DeepSeek V4, Qwen3, MiniMax, Seed, and MiMo, with only id, name, context_window, efforts, default_effort.
-  Lookups are case-insensitive and strip vendor prefixes (`anthropic/…`), `[1m]`, and date suffixes. IDs absent from the catalog but ending in `[1m]` get a 1M window. Gateway-provided values take precedence.
-  To update the catalog, regenerate from the newer cindy version, taking only values explicitly stated in the registry, without guessing.
+- Timeout: 30 seconds for the whole operation. Failures identify authentication, missing endpoints, rejected request formats, rate limiting, timeout and connectivity; key and header values are redacted. Both APIs return 200; inspect `ok` / `error` and `code` for the result.
+- Model lists accept `{data:[…]}`, `{models:[…]}`, or a bare array (objects or strings). IDs use `id` / `slug` / `key` / `model_name` / `model_id`; names use `display_name` / `name`; windows use `max_model_len` / `context_length` / `context_window` / `max_context_length` / `max_input_tokens`. Pagination follows cursors or same-endpoint links, up to 100 pages, deduplicating IDs in order. Invalid, repeated or excessive pagination returns an error with the partial list.
+- The built-in catalog `server/internal/assistant/models_catalog.json` supplies known model metadata. Its context window takes precedence; otherwise a server-reported window is used. Lookups ignore case, vendor prefixes, `[1m]`, and date suffixes; unknown IDs ending in `[1m]` get a 1M window when the server reports none.
 
 ## Direct-API providers
 
@@ -324,7 +319,7 @@ picked otherwise. They also count for the send check (`launcherHasModel`), so a 
   DEBUG `-tab settings -openModelLaunchers YES -openLauncherEditor preset` opens From Extension directly (`-openLauncherEditor YES` opens the add page).
 - Web (#3693, onboarding #287 section 4.3, “Three paths,” B): the add dialog's first step directly lists every preset from `GET /api/v1/launchers/presets` (built-ins first, hub order; extensions marked “Extension”).
   “Custom compatible gateway” comes last; address and authentication method appear only there. The client no longer hardcodes “Official Anthropic,” using built-in preset `builtin/anthropic` instead. For a preset, paste only the key: after typing pauses for 0.7 seconds (at least 8 characters),
-  it automatically tests once with `POST /api/v1/launchers/test {preset, api_key, auth}` (direct-API presets with `api: "responses"` are not tested: hub testing sends only `/v1/messages`, so a one-line explanation appears instead). Failure shows hub's plain-language error and “Retest”; `signup_url` is “Where to get a key” (opens a new tab). Name (generated by hub if empty) and default model are under “More options.”
+  it automatically tests once with `POST /api/v1/launchers/test {preset, api_key, auth}` using the preset's protocol. Failure shows hub's plain-language error and “Retest”; `signup_url` is “Where to get a key” (opens a new tab). Name (generated by hub if empty) and default model are under “More options.”
   Save includes `assign: ["assistant", "agent.new"]` (toggle on by default, “Use for the main chat and new Agents”); the final screen uses `assigned` / `kept` to explain which purposes switched and which stayed unchanged, with reasons.
   Gap: the design requires the toggle to default off “when usable Claude Code already exists,” pending `assistant_readiness` (the fourth PR). Until then it always defaults on; hub's assign-if-default protects only purposes explicitly customized by users.
   Without `builtin_presets` in hub's `features` (old hub), name is required above the key, with no `assign` or toggle. “Import from ~/.zshrc” moves to “Advanced” below the list; without a computer, the button is disabled with an explanation.

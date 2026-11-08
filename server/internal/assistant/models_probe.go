@@ -18,8 +18,8 @@ import (
 )
 
 // "Test connection" / "Fetch models" for a provider being added or edited (#2455, docs/integrations/launchers.md): the manager itself talks to the
-// gateway, as cindy's provider-diagnostics / provider-model-fetch do. POST /api/v1/launchers/test sends one 1-token
-// Messages request; POST /api/v1/launchers/discover lists GET <base>/v1/models, filled in from the built-in catalog.
+// gateway. POST /api/v1/launchers/test sends a short request using the configured protocol;
+// POST /api/v1/launchers/discover reads model pages and fills in metadata from the built-in catalog.
 // Neither ever puts the key or a header value in what it answers.
 
 // probeTimeout bounds one request to the gateway (a var for the tests).
@@ -28,6 +28,7 @@ var probeTimeout = 30 * time.Second
 // probeInput is the provider to talk to: a stored one by name, what the request gives overriding it.
 type probeInput struct {
 	Name    string  `json:"name"`
+	API     string  `json:"api"`
 	BaseURL string  `json:"base_url"`
 	Auth    string  `json:"auth"`
 	APIKey  string  `json:"api_key"`
@@ -39,7 +40,7 @@ type probeInput struct {
 
 // probeTarget is a resolved gateway: everything needed for one request.
 type probeTarget struct {
-	base, key, headers, model, proxy string
+	base, key, headers, model, proxy, api string
 }
 
 func (s *Service) probeTarget(ctx context.Context, in probeInput) (probeTarget, error) {
@@ -59,7 +60,7 @@ func (s *Service) probeTarget(ctx context.Context, in probeInput) (probeTarget, 
 		if err != nil {
 			return t, i18n.Err("assistant-models_probe.err_open_headers")
 		}
-		t = probeTarget{base: l.BaseURL, key: key, headers: headers, model: l.Model, proxy: l.Proxy}
+		t = probeTarget{base: l.BaseURL, key: key, headers: headers, model: l.Model, proxy: l.Proxy, api: l.API}
 	}
 	if b := strings.TrimSpace(in.BaseURL); b != "" {
 		// The stored key and headers only go to the stored gateway: another address gets just what the request brings.
@@ -88,6 +89,15 @@ func (s *Service) probeTarget(ctx context.Context, in probeInput) (probeTarget, 
 		if t.model == "" {
 			t.model = presetModel(pr)
 		}
+		if t.api == "" {
+			t.api = pr.API
+		}
+	}
+	if in.API != "" {
+		t.api = in.API
+	}
+	if t.api != "" && t.api != "messages" && t.api != "responses" {
+		return t, i18n.Err("assistant-models_launchers.err_api")
 	}
 	// Both credential headers go anyway (cindy's buildProbeRequest), so Auth only tidies a pasted "Bearer …".
 	t.key = strings.TrimSpace(strings.TrimPrefix(t.key, "Bearer "))
@@ -201,10 +211,16 @@ func (t probeTarget) failure(ctx context.Context, res *http.Response, err error)
 	switch res.StatusCode {
 	case http.StatusUnauthorized:
 		head = pt(l, "status_401")
+		code = "auth"
 	case http.StatusForbidden:
 		head = pt(l, "status_403")
+		code = "auth"
 	case http.StatusNotFound:
 		head = pt(l, "status_404")
+		code = "not_found"
+	case http.StatusMethodNotAllowed, http.StatusUnsupportedMediaType:
+		head = pt(l, "status_protocol", i18n.Args{"status": res.StatusCode})
+		code = "wrong_protocol"
 	case http.StatusTooManyRequests:
 		head = pt(l, "status_429")
 	default:
@@ -213,7 +229,7 @@ func (t probeTarget) failure(ctx context.Context, res *http.Response, err error)
 	if said != "" {
 		head = pt(l, "said", i18n.Args{"head": head, "said": said})
 	}
-	return clip(oneLine(t.redact(head)), 300), ""
+	return clip(oneLine(t.redact(head)), 300), code
 }
 
 // atAnthropic: the target is Anthropic's own API (not a relay or another vendor).
@@ -277,7 +293,7 @@ func gatewayMessage(raw []byte) string {
 	return clip(oneLine(string(raw)), 160)
 }
 
-// providerTest: POST <base>/v1/messages, 1 token of "ping".
+// providerTest sends a short request using the configured protocol.
 func (s *Service) providerTest(ctx context.Context, in probeInput) map[string]any {
 	out := map[string]any{"ok": false, "ms": 0, "model": in.Model}
 	t, err := s.probeTarget(ctx, in)
@@ -291,10 +307,16 @@ func (s *Service) providerTest(ctx context.Context, in probeInput) map[string]an
 	}
 	ctx, cancel := context.WithTimeout(ctx, probeTimeout)
 	defer cancel()
-	body, _ := json.Marshal(map[string]any{"model": t.model, "max_tokens": 1,
-		"messages": []any{map[string]any{"role": "user", "content": "ping"}}})
+	path := "messages"
+	payload := map[string]any{"model": t.model, "max_tokens": 1,
+		"messages": []any{map[string]any{"role": "user", "content": "ping"}}}
+	if t.api == "responses" {
+		path = "responses"
+		payload = map[string]any{"model": t.model, "input": "ping", "max_output_tokens": 16, "store": false}
+	}
+	body, _ := json.Marshal(payload)
 	started := time.Now()
-	res, err := t.do(ctx, http.MethodPost, t.endpoint("messages"), bytes.NewReader(body))
+	res, err := t.do(ctx, http.MethodPost, t.endpoint(path), bytes.NewReader(body))
 	out["ms"] = int(time.Since(started).Milliseconds())
 	if err != nil || res.StatusCode/100 != 2 {
 		msg, code := t.failure(ctx, res, err)
@@ -315,7 +337,14 @@ func (s *Service) providerTest(ctx context.Context, in probeInput) map[string]an
 // providerDiscover: GET <base>/v1/models, its models filled in from the catalog.
 func (s *Service) providerDiscover(ctx context.Context, in probeInput) map[string]any {
 	models := []proto.ProviderModel{}
-	fail := func(msg string) map[string]any { return map[string]any{"models": models, "error": msg} }
+	enriched := func() []proto.ProviderModel {
+		out := make([]proto.ProviderModel, len(models))
+		for i, m := range models {
+			out[i] = enrichDiscoveredModel(m)
+		}
+		return out
+	}
+	fail := func(msg string) map[string]any { return map[string]any{"models": enriched(), "error": msg} }
 	t, err := s.probeTarget(ctx, in)
 	if err != nil {
 		return fail(i18n.Localize(err, i18n.From(ctx)))
@@ -331,25 +360,125 @@ func (s *Service) providerDiscover(ctx context.Context, in probeInput) map[strin
 		}
 		return out
 	}
-	res, err := t.do(ctx, http.MethodGet, t.endpoint("models"), nil)
-	if res != nil {
-		defer res.Body.Close()
+	const maxPages = 100
+	seenModels := map[string]int{}
+	seenCursors := map[string]bool{}
+	query := url.Values{}
+	for page := 0; page < maxPages; page++ {
+		endpoint := t.endpoint("models")
+		if len(query) > 0 {
+			endpoint += "?" + query.Encode()
+		}
+		res, err := t.do(ctx, http.MethodGet, endpoint, nil)
+		if err != nil || res.StatusCode/100 != 2 {
+			out := failed(res, err)
+			if res != nil {
+				res.Body.Close()
+			}
+			return out
+		}
+		raw, err := io.ReadAll(io.LimitReader(res.Body, 8<<20))
+		res.Body.Close()
+		if err != nil {
+			return failed(nil, err)
+		}
+		listed, ok := parseModelsList(raw)
+		if !ok {
+			return fail(pt(i18n.From(ctx), "models_unreadable"))
+		}
+		for _, m := range listed {
+			if i, ok := seenModels[m.ID]; ok {
+				models[i] = mergeDiscoveredMetadata(models[i], m)
+			} else {
+				seenModels[m.ID] = len(models)
+				models = append(models, m)
+			}
+		}
+		var meta struct {
+			HasMore            bool            `json:"has_more"`
+			LastID             string          `json:"last_id"`
+			Next               string          `json:"next"`
+			NextCursor         string          `json:"next_cursor"`
+			NextPage           json.RawMessage `json:"next_page"`
+			NextPageToken      string          `json:"next_page_token"`
+			NextPageTokenCamel string          `json:"nextPageToken"`
+			Links              struct {
+				Next string `json:"next"`
+			} `json:"links"`
+		}
+		if len(bytes.TrimSpace(raw)) > 0 && bytes.TrimSpace(raw)[0] == '{' {
+			if err := json.Unmarshal(raw, &meta); err != nil {
+				return fail(pt(i18n.From(ctx), "models_pagination"))
+			}
+		}
+		query = url.Values{}
+		var nextPage string
+		if len(meta.NextPage) > 0 && string(meta.NextPage) != "null" {
+			if json.Unmarshal(meta.NextPage, &nextPage) != nil {
+				var n json.Number
+				if json.Unmarshal(meta.NextPage, &n) != nil {
+					return fail(pt(i18n.From(ctx), "models_pagination"))
+				}
+				nextPage = n.String()
+			}
+		}
+		switch {
+		case meta.NextCursor != "":
+			query.Set("cursor", meta.NextCursor)
+		case meta.NextPageToken != "":
+			query.Set("page_token", meta.NextPageToken)
+		case meta.NextPageTokenCamel != "":
+			query.Set("pageToken", meta.NextPageTokenCamel)
+		case nextPage != "":
+			query.Set("page", nextPage)
+		case meta.Next != "" || meta.Links.Next != "":
+			next := meta.Next
+			if next == "" {
+				next = meta.Links.Next
+			}
+			base, _ := url.Parse(t.endpoint("models"))
+			ref, err := url.Parse(next)
+			if err != nil {
+				return fail(pt(i18n.From(ctx), "models_pagination"))
+			}
+			resolved := base.ResolveReference(ref)
+			if resolved.User != nil || resolved.Scheme != base.Scheme || resolved.Host != base.Host || resolved.Path != base.Path || resolved.Fragment != "" || resolved.RawQuery == "" {
+				return fail(pt(i18n.From(ctx), "models_pagination"))
+			}
+			query = resolved.Query()
+		case meta.HasMore && meta.LastID != "":
+			query.Set("after_id", meta.LastID)
+		case meta.HasMore:
+			return fail(pt(i18n.From(ctx), "models_pagination"))
+		default:
+			return map[string]any{"models": enriched()}
+		}
+		cursor := query.Encode()
+		if seenCursors[cursor] {
+			return fail(pt(i18n.From(ctx), "models_pagination"))
+		}
+		seenCursors[cursor] = true
 	}
-	if err != nil || res.StatusCode/100 != 2 {
-		return failed(res, err)
+	return fail(pt(i18n.From(ctx), "models_pagination"))
+}
+
+// mergeDiscoveredMetadata keeps the first value and fills gaps from a repeated model.
+func mergeDiscoveredMetadata(first, next proto.ProviderModel) proto.ProviderModel {
+	if first.Name == "" {
+		first.Name = next.Name
 	}
-	raw, err := io.ReadAll(io.LimitReader(res.Body, 8<<20))
-	if err != nil {
-		return failed(nil, err)
+	if first.ContextWindow == 0 {
+		first.ContextWindow = next.ContextWindow
 	}
-	listed, ok := parseModelsList(raw)
-	if !ok {
-		return fail(pt(i18n.From(ctx), "models_unreadable"))
+	return first
+}
+
+// enrichDiscoveredModel prefers a catalog window while retaining other server metadata.
+func enrichDiscoveredModel(m proto.ProviderModel) proto.ProviderModel {
+	if c, ok := catalogModel(m.ID); ok && c.ContextWindow > 0 {
+		m.ContextWindow = c.ContextWindow
 	}
-	for _, m := range listed {
-		models = append(models, enrichModel(m))
-	}
-	return map[string]any{"models": models}
+	return enrichModel(m)
 }
 
 // parseModelsList reads the three shapes of a model list (cindy's parseModelsListResponse): {"data":[…]},
@@ -374,7 +503,7 @@ func parseModelsList(raw []byte) ([]proto.ProviderModel, bool) {
 		}
 	}
 	var out []proto.ProviderModel
-	seen := map[string]bool{}
+	seen := map[string]int{}
 	for _, item := range list {
 		var m proto.ProviderModel
 		var id string
@@ -410,18 +539,22 @@ func parseModelsList(raw []byte) ([]proto.ProviderModel, bool) {
 			if m.Name == id {
 				m.Name = ""
 			}
-			for _, k := range []string{"context_length", "context_window", "max_context_length", "max_input_tokens"} {
+			for _, k := range []string{"max_model_len", "context_length", "context_window", "max_context_length", "max_input_tokens"} {
 				if m.ContextWindow = num(k); m.ContextWindow != 0 {
 					break
 				}
 			}
 		}
 		id = strings.TrimSpace(id)
-		if id == "" || seen[id] {
+		if id == "" {
 			continue
 		}
-		seen[id] = true
 		m.ID = id
+		if i, ok := seen[id]; ok {
+			out[i] = mergeDiscoveredMetadata(out[i], m)
+			continue
+		}
+		seen[id] = len(out)
 		out = append(out, m)
 	}
 	return out, true
