@@ -28,8 +28,6 @@ struct SyncScenarioTests {
     /// the list when it passes (a known issue that no longer happens fails the test).
     nonisolated static let known: [String: String] = [
         "relaunch_after_accept_before_transcript": "#1455: a sent message waiting for its transcript copy is not stored",
-        "send_accepted_transcript_late": "#1112: a 35 s wait needs the app's timers on a test clock",
-        "wake_reply_latest_is_answer": "#1112: a 10 min wait needs the app's timers on a test clock",
     ]
 
     @Test func everyFileHasCases() {
@@ -65,6 +63,8 @@ final class SyncRun {
     var devices: [String: SyncDevice] = [:]
     /// The device whose model `AgentSync` (one for the process) works for: the first one.
     private var first = "a"
+    /// What every device's timed waits sleep on (`AppModel.clock`); a case's `wait` moves it.
+    let clock = SyncClock()
     var held: [HeldWrite] = []
     /// Op id (upper case) → what a retry with it gets at once.
     var receipts: [String: SyncReply] = [:]
@@ -119,6 +119,7 @@ final class SyncRun {
     /// The device already shows the start: connected, its lists in, the chat open and loaded.
     private func start(_ name: String) async throws {
         let d = SyncDevice(name: name, key: key)
+        d.model.clock = clock
         devices[name] = d
         d.answersSubscribe = { [hub] in hub.backlogFrame }
         d.connect()
@@ -146,6 +147,7 @@ final class SyncRun {
         held.removeAll { $0.device == d.name }
         heldReads.removeAll { $0.device == d.name }
         d.relaunch()
+        d.model.clock = clock // before the outbox's sent messages start waiting on it
         d.model.restoreOutbox() // as a paired app's launch does (AppModel.init)
         d.connect()
         if d.name == first { AgentSync.shared.model = { [weak d] in d?.model ?? AppModel.shared } }
@@ -217,8 +219,15 @@ final class SyncRun {
             answer(d, reply)
         }
         if let ms = step["wait"]?.int {
-            guard ms <= 6000 else { throw SyncUnplayable(description: "a wait of \(ms) ms needs the app's timers on a test clock") }
-            try await Task.sleep(for: .milliseconds(ms))
+            // The app's timed waits (`AppModel.clock`) see the whole of it, a second at a time, so a wait that ends and
+            // starts the next one (a sent message's 60 s, then 10 s at a time) runs on as it would. Everything else
+            // paced (gap fills, streamed text) is on the wall clock and gets up to 6 s of it.
+            for _ in 0..<(ms / 1000) {
+                clock.advance(by: .seconds(1))
+                for _ in 0..<5 { await Task.yield() }
+            }
+            clock.advance(by: .milliseconds(ms % 1000))
+            try await Task.sleep(for: .milliseconds(min(ms, 6000)))
         }
         if let hold = step["hold"] {
             let d = try device(hold["device"])

@@ -135,6 +135,9 @@ final class AppModel {
     @ObservationIgnored var interactionsListedAt: [String: Date] = [:]
     /// Interactions ended locally (answered, cancelled or gone): snapshots will not restore them (#1688).
     @ObservationIgnored var endedInteractionIDs: Set<String> = []
+    /// What the app's timed waits sleep on (`settleSend`'s wait for a transcript copy): the wall clock. The shared sync
+    /// replay's own (`SyncClock`), so that a case's minutes take none.
+    @ObservationIgnored var clock: any Clock<Duration> = ContinuousClock()
     #if DEBUG
     /// Unit tests: the client every group's requests go to (`FakeHub.client`) instead of the paired hubs'.
     @ObservationIgnored var apiForTests: APIClient?
