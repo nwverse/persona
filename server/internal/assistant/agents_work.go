@@ -85,7 +85,7 @@ const (
 	workSampleGap = 5 * time.Minute
 )
 
-// continueText (tasks.go) is what goes on a turn the model service cut off, as the chat's "Retry" on an API error card.
+// continueText (tasks_start.go) is what goes on a turn the model service cut off, as the chat's "Retry" on an API error card.
 
 // Card answers the manager acts on itself instead of handing them to the agent: each one's default-language label,
 // which names it here. A card shows answerLabel's (the user's language); canonicalAnswer reads any language's back.
