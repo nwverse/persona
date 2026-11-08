@@ -3,6 +3,7 @@ import type { AgentGroup, AgentMutes } from "./agent-groups";
 import { repoOf } from "./agent-repos";
 import { backgroundWaiting, stateOf } from "./format";
 import { buildTodoAgentGroups, interruptedAgent, todoStatus, type SessionLookup, type Todo, type TodoStatus } from "./todos";
+import { usageLimitAgent } from "./usage-limit";
 import type { Machine, Session } from "./types";
 import { stateName } from "./state-labels";
 
@@ -67,6 +68,7 @@ export interface TodoTree {
 
 export function agentTreeState(s: Session): TreeState {
   const st = stateOf(s);
+  if (usageLimitAgent(s)) return "working";
   if (st === "needs_you" || interruptedAgent(s)) return "needs_you";
   if (s.starting) return "working";
   if (backgroundWaiting(s)) return "bg_waiting";
@@ -78,6 +80,7 @@ export function agentTreeState(s: Session): TreeState {
  *  waits) is "Waiting in the background" (#6045). */
 export function todoTreeState(status: TodoStatus, agents: readonly Session[] = []): TreeState {
   if (status === "needs_you" || status === "interrupted") return "needs_you";
+  if (status === "usage_limit") return "working";
   if (status === "working") {
     const states = agents.map(agentTreeState);
     return states.includes("bg_waiting") && !states.includes("working") ? "bg_waiting" : "working";

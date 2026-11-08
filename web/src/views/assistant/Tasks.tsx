@@ -36,6 +36,7 @@ import {
 } from "../../lib/feed";
 import { runningWorkflows, workflowLine } from "../../lib/workflows";
 import { dockAgents, type DockAgent, interruption, isRemovable, mostUrgentAgent, runningSubagents, taskNow, todoStatus, TODO_STATUS_INFO, type SessionLookup, type Todo, type TodoStatus } from "../../lib/todos";
+import { usageLimitLabel } from "../../lib/usage-limit";
 import { parseAPIError } from "../../lib/api-errors";
 import { boardSections, type BoardSectionKey } from "../../lib/task-board";
 import { openPanel } from "../../lib/panel";
@@ -180,7 +181,7 @@ function useTaskMenu(todo: Todo | undefined, status: TodoStatus | undefined) {
 
 /** The task's state as an agent state, for its dot and tone. */
 function dotState(st: TodoStatus): AgentState {
-  return st === "needs_you" || st === "interrupted" ? "needs_you" : st === "working" || st === "not_started" ? "working" : st === "unread" ? "unread" : st === "follow_up" ? "idle" : "offline"; // done, failed
+  return st === "needs_you" || st === "interrupted" ? "needs_you" : st === "usage_limit" ? "idle" : st === "working" || st === "not_started" ? "working" : st === "unread" ? "unread" : st === "follow_up" ? "idle" : "offline"; // done, failed
 }
 
 const TONE: Record<string, string> = {
@@ -192,6 +193,7 @@ const TONE: Record<string, string> = {
 };
 
 function TaskMark({ status, size = 9 }: { status: TodoStatus; size?: number }) {
+  if (status === "usage_limit") return <Icon name="clock" size={size + 4} stroke={2.4} className="text-orange" />;
   if (status === "failed" || status === "interrupted") return <Icon name="info" size={size + 4} stroke={2.4} className="text-red" />;
   if (status === "done" || status === "unread")
     return <Icon name="check" size={size + 4} stroke={2.4} className={status === "done" ? "text-ink-3" : "text-green"} />;
@@ -434,11 +436,14 @@ export function TaskCard({ todoId, conversation }: { todoId: string; conversatio
   const info = TODO_STATUS_INFO[status];
   const startError = todo.agents?.find((a) => a.start_error)?.start_error;
   const cut = status === "interrupted" ? interruption(lead) : undefined;
+  const limitText = status === "usage_limit" ? (usageLimitLabel(lead) ?? t("lib-usage-limit.short")) : undefined;
   const progress = progressOf(lead);
   const now =
     status === "needs_you"
       ? (taskAsk(ix) ?? t("assistant-tasks.needs_answer"))
-      : cut
+      : limitText
+        ? limitText
+        : cut
         ? t("assistant-tasks.interrupted_reason", { reason: cut.reason })
         : status === "failed"
         ? t("assistant-tasks.start_failed", { error: startFailure(todo, plans) ?? t("assistant-tasks.unknown_reason") })
@@ -473,7 +478,7 @@ export function TaskCard({ todoId, conversation }: { todoId: string; conversatio
       </div>
       <div className="truncate text-[12px] text-ink-2">{where}</div>
       <div className={cx("flex items-start gap-2 rounded-control bg-field px-3 py-2 text-[13px]", status === "needs_you" ? "text-attention" : (status === "failed" || cut) && "text-red")}>
-        <Icon name={status === "needs_you" ? "hand" : status === "failed" || cut ? "info" : "terminal"} size={13} className="mt-0.5 shrink-0 text-ink-2" />
+        <Icon name={status === "needs_you" ? "hand" : limitText ? "clock" : status === "failed" || cut ? "info" : "terminal"} size={13} className="mt-0.5 shrink-0 text-ink-2" />
         <span className="flex min-w-0 flex-col gap-0.5">
           <span className="line-clamp-2">
             {now}
@@ -719,6 +724,14 @@ function InterruptedReceipt({ item }: { item: FeedItem }) {
   const retrying = useRetrying(todo?.id);
   const status = now?.status;
   const title = field(item, "title") ?? t("assistant-tasks.task_fallback");
+  if (todo && status === "usage_limit") {
+    return (
+      <div className="flex gap-3 rounded-card bg-field p-4">
+        <Icon name="clock" size={18} stroke={2.4} className="text-orange" />
+        <div className="min-w-0 text-[14.5px] font-semibold">{usageLimitLabel(now?.lead) ?? t("lib-usage-limit.short")}</div>
+      </div>
+    );
+  }
   if (todo && status && status !== "interrupted") {
     return (
       <button type="button" onClick={() => openTask(todo.id)} className="flex items-center gap-1.5 self-start text-left text-[13px] text-ink-2 hover:text-ink">
@@ -1092,17 +1105,25 @@ export function TaskQuestions({ conversation }: { conversation: string }) {
 /** The dock: "All N" held at its left edge (it does not scroll), then a pill for each task going on (waiting first) and,
  * in the main conversation, each agent going on that no task stands for (#1113), scrolling on their own (iOS TaskDock). */
 // Failed, done and stopped tasks are not in the dock.
-const DOCK_RANK: Partial<Record<TodoStatus, number>> = { needs_you: 0, interrupted: 0, working: 1, not_started: 1, unread: 2 };
+const DOCK_RANK: Partial<Record<TodoStatus, number>> = { needs_you: 0, interrupted: 0, usage_limit: 0, working: 1, not_started: 1, unread: 2 };
 
 /** The dock's task pills, waiting first: each task going on, its status and what it waits on (#3463). */
-function dockTasksIn(s: State, conversation: string, plans: Record<string, TaskPlan>): { t: Todo; st: TodoStatus; ask?: string }[] {
+function dockTasksIn(s: State, conversation: string, plans: Record<string, TaskPlan>): { t: Todo; st: TodoStatus; ask?: string; limit?: string }[] {
   const lookup = answeredLookup(s.sessions, s.interactions, s.answered);
   return s.todos
     .filter((t) => t.origin === conversation)
     .map((t) => ({ t, st: statusOf(t, lookup, plans) }))
     .filter((x) => DOCK_RANK[x.st] !== undefined)
     .sort((a, b) => DOCK_RANK[a.st]! - DOCK_RANK[b.st]! || byTime(b.t.created_at, a.t.created_at))
-    .map(({ t, st }) => ({ t, st, ask: st === "needs_you" ? taskAsk(taskInteraction(t, s.interactions, mostUrgentAgent(t, lookup)?.session)) : undefined }));
+    .map(({ t: todo, st }) => {
+      const lead = mostUrgentAgent(todo, lookup)?.session;
+      return {
+        t: todo,
+        st,
+        ask: st === "needs_you" ? taskAsk(taskInteraction(todo, s.interactions, lead)) : undefined,
+        limit: st === "usage_limit" ? (usageLimitLabel(lead) ?? t("lib-usage-limit.short")) : undefined,
+      };
+    });
 }
 
 export function TaskDock({ conversation }: { conversation: string }) {
@@ -1133,7 +1154,7 @@ export function TaskDock({ conversation }: { conversation: string }) {
         // The scroller pads by the focus ring's width and takes it back, so the ring is not clipped and the row
         // stays a pill high.
         <div className="scrollbar-none -my-1 flex min-w-0 flex-1 items-center gap-2 overflow-x-auto py-1">
-          {going.map(({ t: todo, st, ask }) => {
+          {going.map(({ t: todo, st, ask, limit }) => {
             // a waiting task says what it waits on when hovered or read out (#3463)
             const label = ask ? t("assistant-tasks.dock_task_asks", { title: todo.title, ask }) : undefined;
             return (
@@ -1154,6 +1175,7 @@ export function TaskDock({ conversation }: { conversation: string }) {
               <span className="truncate">{todo.title}</span>
               {st === "needs_you" && <span className="shrink-0">{stateName("needs_you")}</span>}
               {st === "interrupted" && <span className="shrink-0">{stateName("interrupted")}</span>}
+              {st === "usage_limit" && <span className="shrink-0">{limit}</span>}
             </button>
             );
           })}
@@ -1261,7 +1283,8 @@ export function TaskBoard({ open, conversation, onClose }: { open: boolean; conv
     const where = place(todo, lead);
     const failure = status === "failed" ? startFailure(todo, plans) : undefined;
     const ask = status === "needs_you" ? taskAsk(taskInteraction(todo, interactions, lead)) : undefined;
-    const now = failure ?? ask ?? progressOf(lead)?.text;
+    const limit = status === "usage_limit" ? (usageLimitLabel(lead) ?? t("lib-usage-limit.short")) : undefined;
+    const now = failure ?? ask ?? limit ?? progressOf(lead)?.text;
     return [where, now].filter(Boolean).join(" · ");
   };
   return (
