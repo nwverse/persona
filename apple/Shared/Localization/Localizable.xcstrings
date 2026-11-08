@@ -7294,6 +7294,42 @@
       },
       "extractionState" : "manual"
     },
+    "%lld places" : {
+      "comment" : "Saved places count",
+      "localizations" : {
+        "en" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%1$lld place"
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%1$lld places"
+                }
+              }
+            }
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$lld 件"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$lld 个"
+          }
+        }
+      },
+      "extractionState" : "manual"
+    },
     "%lld projects" : {
       "localizations" : {
         "en" : {
@@ -10500,6 +10536,29 @@
       },
       "extractionState" : "manual"
     },
+    "A reminder goes off when you cross this circle. Indoors your phone's location is often 50–100 m off, so a smaller circle can miss." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "A reminder goes off when you cross this circle. Indoors your phone's location is often 50–100 m off, so a smaller circle can miss."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "この円を出入りしたときにリマインダーが通知されます。屋内では位置が 50〜100 m ずれることが多いため、小さい円だと通知されないことがあります。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "进出这个圆圈时提醒会响。在室内，手机定位常有 50–100 米的偏差，圈太小可能会错过。"
+          }
+        }
+      },
+      "extractionState" : "manual"
+    },
     "A terminal needs you" : {
       "localizations" : {
         "en" : {
@@ -11787,6 +11846,29 @@
           }
         }
       }
+    },
+    "Add home, the office and other places you go, so a reminder like “remind me to buy milk on the way home” goes off at the right spot." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Add home, the office and other places you go, so a reminder like “remind me to buy milk on the way home” goes off at the right spot."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "自宅や職場などよく行く場所を追加すると、「帰り道に牛乳を買うよう知らせて」のようなリマインダーが正しい場所で通知されます。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "添加家、公司和其他常去的地方，「回家路上提醒我买牛奶」这样的提醒就会在对的地方响。"
+          }
+        }
+      },
+      "extractionState" : "manual"
     },
     "Add item" : {
       "localizations" : {
@@ -14166,6 +14248,29 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "请在系统设置中允许 Persona 使用麦克风"
+          }
+        }
+      },
+      "extractionState" : "manual"
+    },
+    "Allow Persona to use your location in Settings › Privacy & Security › Location Services, or search for the address." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Allow Persona to use your location in Settings › Privacy & Security › Location Services, or search for the address."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "「設定 › プライバシーとセキュリティ › 位置情報サービス」で Persona に位置情報の使用を許可するか、住所を検索してください。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "请在「设置 › 隐私与安全性 › 定位服务」里允许 Persona 使用你的位置，或者直接搜索地址。"
           }
         }
       },
@@ -31569,6 +31674,29 @@
       },
       "extractionState" : "manual"
     },
+    "Couldn't Load Saved Places" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Couldn't Load Saved Places"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "よく使う場所を読み込めませんでした"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无法加载常用地点"
+          }
+        }
+      },
+      "extractionState" : "manual"
+    },
     "Couldn't Load Scheduled Tasks" : {
       "localizations" : {
         "en" : {
@@ -32465,6 +32593,29 @@
           }
         }
       }
+    },
+    "Couldn't get your location. Try again outdoors, or search for the address." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Couldn't get your location. Try again outdoors, or search for the address."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "現在地を取得できませんでした。屋外でもう一度試すか、住所を検索してください。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "没拿到你的位置。到室外再试一次，或者直接搜索地址。"
+          }
+        }
+      },
+      "extractionState" : "manual"
     },
     "Couldn't import: %@" : {
       "localizations" : {
@@ -36442,6 +36593,29 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "删除 hub 上已存的信息"
+          }
+        }
+      },
+      "extractionState" : "manual"
+    },
+    "Delete Place" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Delete Place"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "場所を削除"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "删除地点"
           }
         }
       },
@@ -48180,6 +48354,29 @@
           }
         }
       }
+    },
+    "Home, Office…" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Home, Office…"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "自宅、職場…"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "家、公司…"
+          }
+        }
+      },
+      "extractionState" : "manual"
     },
     "Host" : {
       "localizations" : {
@@ -61039,6 +61236,29 @@
       },
       "extractionState" : "manual"
     },
+    "Name" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Name"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "名前"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "名称"
+          }
+        }
+      },
+      "extractionState" : "manual"
+    },
     "Name (leave empty for an automatic one)" : {
       "localizations" : {
         "zh-Hans" : {
@@ -62481,6 +62701,29 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "新建 Persona 对话"
+          }
+        }
+      },
+      "extractionState" : "manual"
+    },
+    "New Place" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "New Place"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "新しい場所"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "新地点"
           }
         }
       },
@@ -64182,6 +64425,29 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "还没有运行过"
+          }
+        }
+      },
+      "extractionState" : "manual"
+    },
+    "No Saved Places" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No Saved Places"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "よく使う場所はありません"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "没有常用地点"
           }
         }
       },
@@ -66046,6 +66312,29 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "还没有 Pin 消息"
+          }
+        }
+      },
+      "extractionState" : "manual"
+    },
+    "No places found for “%@”." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No places found for “%1$@”."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "「%1$@」に一致する場所が見つかりません。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "没有找到「%1$@」。"
           }
         }
       },
@@ -76682,6 +76971,29 @@
         }
       }
     },
+    "Persona uses these for reminders like “remind me to buy milk on the way home”. It adds a place here only after you confirm it in a chat." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Persona uses these for reminders like “remind me to buy milk on the way home”. It adds a place here only after you confirm it in a chat."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Persona はこれらの場所を「帰り道に牛乳を買うよう知らせて」のようなリマインダーに使います。チャットで確認した場所だけがここに追加されます。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Persona 用这些地点做「回家路上提醒我买牛奶」这样的提醒。只有你在对话里确认过，它才会把地点加到这里。"
+          }
+        }
+      },
+      "extractionState" : "manual"
+    },
     "Persona will use %@ from the next message" : {
       "localizations" : {
         "en" : {
@@ -82804,6 +83116,29 @@
         }
       }
     },
+    "Reminder Radius" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Reminder Radius"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "通知の範囲"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "提醒范围"
+          }
+        }
+      },
+      "extractionState" : "manual"
+    },
     "Reminder [Add Todo Intent 357f8a]" : {
       "localizations" : {
         "en" : {
@@ -82868,6 +83203,29 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "提醒事项"
+          }
+        }
+      },
+      "extractionState" : "manual"
+    },
+    "Reminders already set for this place keep going off where they are." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Reminders already set for this place keep going off where they are."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "この場所に設定済みのリマインダーは、元の位置で引き続き通知されます。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已经为这个地点设好的提醒，还会在原来的位置响。"
           }
         }
       },
@@ -87850,6 +88208,29 @@
       },
       "extractionState" : "manual"
     },
+    "Saved Places" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Saved Places"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "よく使う場所"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "常用地点"
+          }
+        }
+      },
+      "extractionState" : "manual"
+    },
     "Saved environment will be cleared when you save" : {
       "localizations" : {
         "en" : {
@@ -88909,6 +89290,29 @@
           }
         }
       }
+    },
+    "Search for an Address or Place" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Search for an Address or Place"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "住所や場所を検索"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "搜索地址或地点"
+          }
+        }
+      },
+      "extractionState" : "manual"
     },
     "Search names or numbers" : {
       "localizations" : {
@@ -117858,6 +118262,29 @@
       },
       "extractionState" : "manual"
     },
+    "Use Current Location" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Use Current Location"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "現在地を使用"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "使用当前位置"
+          }
+        }
+      },
+      "extractionState" : "manual"
+    },
     "Use Launcher's" : {
       "localizations" : {
         "en" : {
@@ -121681,6 +122108,29 @@
           }
         }
       }
+    },
+    "What you call it in a chat, as in “remind me when I get home”." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "What you call it in a chat, as in “remind me when I get home”."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "チャットでの呼び方です。「家に着いたら知らせて」の「家」のように。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "你在对话里怎么叫它，比如「到家提醒我」里的「家」。"
+          }
+        }
+      },
+      "extractionState" : "manual"
     },
     "What you say goes to this chat" : {
       "localizations" : {

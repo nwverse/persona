@@ -1565,6 +1565,36 @@ def put_routines(body):
     return schedule_routines(), None
 
 
+# Saved places (Settings › Assistant › Saved Places, #1598): the user's named places that reminders by place go off at.
+PLACES = [
+    {"id": "pl1", "name": "家", "address": "上海市黄浦区示例路 1 号", "latitude": 31.2304, "longitude": 121.4737,
+     "radius_meters": 150, "created_at": ago(days=3), "updated_at": ago(days=3)},
+    {"id": "pl2", "name": "公司", "address": "上海市浦东新区示例大道 100 号", "latitude": 31.2397, "longitude": 121.4998,
+     "radius_meters": 300, "created_at": ago(days=2), "updated_at": ago(days=2)},
+]
+
+
+def save_place(body, pid):
+    """Adds a saved place (pid None) or changes place pid, as the manager does (assistant/places.go): (answer, status)."""
+    name = str(body.get("name") or "").strip()
+    if not name or body.get("latitude") is None or body.get("longitude") is None:
+        return {"error": "地点需要名称和经纬度"}, 400
+    if any(x["name"] == name and x["id"] != pid for x in PLACES):
+        return {"error": f"已经有叫「{name}」的地点了。"}, 409
+    radius = min(max(int(body.get("radius_meters") or 150), 100), 2000)
+    place = {"name": name, "address": str(body.get("address") or "").strip(), "latitude": float(body["latitude"]),
+             "longitude": float(body["longitude"]), "radius_meters": radius, "updated_at": ago()}
+    if pid:
+        for x in PLACES:
+            if x["id"] == pid:
+                x.update(place)
+                return {"place": x}, 200
+        return {"error": "这个常用地点已经不在了。"}, 404
+    place.update(id=f"pl{uuid.uuid4().hex[:8]}", created_at=place["updated_at"])
+    PLACES.append(place)
+    return {"place": place}, 200
+
+
 MEMORY = [
     {"name": "MEMORY.md", "content": "- [早报格式](morning-format.md) — 一屏以内，结论先行", "updated_at": ago(days=1)},
     {"name": "morning-format.md", "content": "---\nname: morning-format\ndescription: 早报一屏以内\nmetadata:\n  type: feedback\n---\n\n早报一屏以内，结论先行。",
@@ -12954,6 +12984,8 @@ class H(BaseHTTPRequestHandler):
         if p == "/api/v1/assistant/runs":
             ref = parse_qs(urlparse(self.path).query).get("ref", [""])[0]
             return self.send_json({"runs": [r for r in RUNS if not ref or r["ref_id"] == ref]})
+        if p == "/api/v1/assistant/places":
+            return self.send_json({"places": PLACES})
         if p == "/api/v1/assistant/memory":
             if parse_qs(urlparse(self.path).query).get("space", [""])[0] == "health":
                 return self.send_json({"files": HEALTH_MEMORY, "dir": "/home/me/.persona/health/memory"})
@@ -14125,6 +14157,14 @@ class H(BaseHTTPRequestHandler):
             mute, settled = mute_item(body.get("item_id"), body.get("tag"), other[0] if other else None)
             if not mute: return self.send_json({"error": "这一条没有可静音的" + str(body.get("tag"))}, 400)
             return self.send_json({"mute": mute, "settled": settled})
+        if p == "/api/v1/assistant/places" and self.command == "POST":
+            return self.send_json(*save_place(json.loads(self.last_body or b"{}"), None))
+        if p.startswith("/api/v1/assistant/places/") and self.command == "PUT":
+            return self.send_json(*save_place(json.loads(self.last_body or b"{}"), p.rsplit("/", 1)[1]))
+        if p.startswith("/api/v1/assistant/places/") and self.command == "DELETE":
+            pid = p.rsplit("/", 1)[1]
+            PLACES[:] = [x for x in PLACES if x["id"] != pid]
+            return self.send_json({"ok": True})
         if p == "/api/v1/inbox/policies" and self.command == "POST":
             other = other_manager(self)
             if other and other[1]: return self.send_json(*other[1])
