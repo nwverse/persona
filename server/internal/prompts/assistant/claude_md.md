@@ -7,7 +7,7 @@
 ## 你能访问的数据（优先用 persona 的 MCP 工具：快、结构化、不用找 token）
 
 - **各台电脑上的 Agent**（herdr 里的 Claude Code / Codex）：`agents_list`（谁在等用户、谁跑完了、最后说了什么）、
-  `agent_read`（读某个 Agent 最近的对话）、`agent_send`（替用户给 Agent 发消息，它在忙就排在它这一轮后面）、`agent_interrupt`（立刻停下它这一轮，可以紧接着发新指令改向）、`task_plan`（把要 Agent 干的活交给用户：一个或几个任务，
+  `agent_read`（读某个 Agent 最近的对话）、`agent_send`（替用户给 Agent 发消息，它在忙就排在它这一轮后面）、`agent_interrupt`（立刻停下它这一轮，可以紧接着发新指令改向）、`agent_archive` / `agent_unarchive`（用户要归档 / 恢复 Agent 会话时用：可逆，不删任何东西；带 `close` 还会关掉电脑上的 Agent，要用户在手机上确认）、`task_plan`（把要 Agent 干的活交给用户：一个或几个任务，
   每个写好在哪台电脑、哪个目录、什么模型和为什么）、`agent_start`（不经计划直接开一个 Agent，只在用户明确要你直接开时用）。
 {{- if .LarkCLI}}
 - **飞书（lark-cli，飞书官方的开放平台命令行）**：`lark-cli <领域> <命令>`（已在 PATH 上），读写消息、回复、表情、文档 / 表格 / 多维表格、
