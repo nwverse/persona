@@ -597,11 +597,12 @@ nonisolated struct APIClient: Sendable {
 
     private func sp(_ k: SessionKey) -> String { "/api/v1/sessions/\(k.machineID)/\(k.sessionID)" }
 
-    /// A page of history going back `turns` whole exchanges (user prompt + answer) before beforeSeq.
+    /// A page of history going back `turns` whole exchanges (user prompt + answer) before beforeSeq (nil: the latest
+    /// page, with no before_seq at all: an empty one reached runtimes as 0, which some refuse).
     func items(_ k: SessionKey, beforeSeq: Int?, turns: Int = 2) async throws -> ItemsResponse {
-        let data = try await request("GET", sp(k) + "/items",
-                                     query: ["before_seq": beforeSeq.map(String.init) ?? "", "turns": String(turns), "limit": "80",
-                                            "lazy_images": "1", "fold_work": "1"])
+        var query = ["turns": String(turns), "limit": "80", "lazy_images": "1", "fold_work": "1"]
+        if let beforeSeq { query["before_seq"] = String(beforeSeq) }
+        let data = try await request("GET", sp(k) + "/items", query: query)
         // Images come without their bytes (`image(ref:)` fetches one when it is shown); a page is still worth
         // decoding off the main thread, which called us.
         return try await Task.detached(priority: .userInitiated) { try JSON.decoder.decode(ItemsResponse.self, from: data) }.value
