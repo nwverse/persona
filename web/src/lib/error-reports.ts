@@ -1,8 +1,9 @@
 // The page's own errors, sent to the hub's error reports (docs/protocol/protocol.md "Error reports", docs/web/web.md "Error reports").
-// Captured: uncaught errors, unhandled rejections and what the page boundaries catch. Sent only while the hub's hello
-// `features` has `error_reports`; kept in localStorage until a 2xx (at most 50, at most 7 days); dropped as soon as a
-// hello says the feature is off. Nothing the user wrote goes in: an error's name, message and stack (with URLs cut to
-// their path), and breadcrumbs of code-chosen text (a route's name, a failed request's method, path pattern and status).
+// Captured: uncaught errors, unhandled rejections, what the page boundaries catch, and a main thread blocked for 5 seconds
+// or more (one anr warning per page load, lib/freeze-watch.ts). Sent only while the hub's hello `features` has
+// `error_reports`; kept in localStorage until a 2xx (at most 50, at most 7 days); dropped as soon as a hello says the
+// feature is off. Nothing the user wrote goes in: an error's name, message and stack (with URLs cut to their path), a
+// freeze's script paths, and breadcrumbs of code-chosen text (a route's name, a failed request's method, path pattern and status).
 // Reporting never throws and never reports itself.
 
 import type { ErrorBreadcrumb, ErrorException, ErrorFrame, ErrorLevel, ErrorReport } from "./extension-wire";
@@ -15,6 +16,8 @@ export const BATCH = 20;
 export const MAX_BREADCRUMBS = 30;
 export const FLUSH_DELAY_MS = 2_000;
 export const DEDUPE_MS = 5_000;
+/** A main-thread block of this long, or longer, is one anr warning (lib/freeze-watch.ts). */
+export const FREEZE_MS = 5_000;
 const MAX_MESSAGE = 1024;
 const MAX_FRAMES = 50;
 
@@ -112,6 +115,20 @@ export function componentFrames(stack: string | null | undefined, origin = pageO
     if (frames.length >= MAX_FRAMES) break;
   }
   return frames.reverse();
+}
+
+/** A script URL as one frame of a freeze report: the path only. No host, query, fragment, element id or name, and no
+ *  `data:`, `blob:` or `javascript:` URL. `fn` is kept only when it is a function name. */
+export function scriptFrame(url: string, origin: string, fn?: string): ErrorFrame | null {
+  const raw = url.trim();
+  if (!raw || raw.startsWith("//") || /^(?:data|blob|javascript):/i.test(raw)) return null;
+  if (!raw.startsWith("/") && !/^https?:\/\//i.test(raw)) return null;
+  const { file, inApp } = frameFile(raw, origin);
+  if (!file.startsWith("/") || file.startsWith("//") || file === "/" || file.includes("@") || file.includes("://") || /[?#]/.test(file)) return null;
+  const frame: ErrorFrame = { file, in_app: inApp };
+  const name = (fn ?? "").trim();
+  if (/^[$A-Za-z_][\w$.]*$/.test(name)) frame.function = truncate(name, 200);
+  return frame;
 }
 
 function pageOrigin(): string {
@@ -212,6 +229,48 @@ export class ErrorReporter {
       this.save();
       this.schedule(FLUSH_DELAY_MS);
     });
+  }
+
+  /** One frozen page: the main thread blocked for FREEZE_MS or more. `kind: "anr"`, `level: "warning"`, with the
+   *  breadcrumbs already kept. Frames are script paths only (scriptFrame again, so a full URL cannot ride along).
+   *  `false` when the feature is off or it is under the threshold, so the caller can report a later freeze. */
+  captureFreeze(hit: { durationMs: number; mechanism: string; frames: ErrorFrame[] }): boolean {
+    if (this.busy || this.gate === "off") return false;
+    if (!Number.isFinite(hit.durationMs) || hit.durationMs < FREEZE_MS) return false;
+    let queued = false;
+    this.guard(() => {
+      if (this.gate === "off") return;
+      const text = truncate(`Main thread blocked for ${Math.round(hit.durationMs)}ms`, MAX_MESSAGE);
+      const frames = cleanFreezeFrames(hit.frames, this.deps.origin);
+      const exception: ErrorException = { type: "ANR", value: text };
+      if (frames.length) exception.frames = frames;
+      const report: ErrorReport = {
+        id: this.deps.uuid(),
+        source: "web",
+        kind: "anr",
+        level: "warning",
+        time: new Date(this.deps.now()).toISOString(),
+        ...this.deps.platform,
+        message: text,
+        exceptions: [exception],
+      };
+      if (this.crumbs.length) report.breadcrumbs = this.crumbs.slice();
+      if (hit.mechanism === "long-animation-frame" || hit.mechanism === "longtask") report.tags = { mechanism: hit.mechanism };
+      const key = `anr|${text}|${topFrame(report)}`;
+      const now = this.deps.now();
+      for (const [k, at] of this.recent) if (now - at > DEDUPE_MS) this.recent.delete(k);
+      if (this.recent.has(key)) {
+        queued = true;
+        return;
+      }
+      this.recent.set(key, now);
+      this.queue.push({ report });
+      this.trim();
+      this.save();
+      this.schedule(FLUSH_DELAY_MS);
+      queued = true;
+    });
+    return queued;
   }
 
   /** Sends what is kept, BATCH at a time, while the feature is on. */
@@ -356,6 +415,19 @@ function topFrame(r: ErrorReport): string {
   return f ? `${f.file}:${f.line}:${f.column}` : "";
 }
 
+/** Freeze frames, scrubbed again: a path only, at most MAX_FRAMES, innermost last as given. */
+function cleanFreezeFrames(frames: ErrorFrame[], origin: string): ErrorFrame[] {
+  const out: ErrorFrame[] = [];
+  for (const f of frames) {
+    if (typeof f.file !== "string") continue;
+    const frame = scriptFrame(f.file, origin, f.function);
+    if (!frame) continue;
+    out.push(frame);
+    if (out.length >= MAX_FRAMES) break;
+  }
+  return out;
+}
+
 function safeString(v: unknown): string {
   try {
     return String(v);
@@ -389,6 +461,11 @@ export function reportBoundary(error: unknown, boundary: string, chunk: boolean,
 
 export function reportError(error: unknown, mechanism?: string) {
   reporter?.capture(error, { mechanism });
+}
+
+/** A frozen page, through the page's reporter. `false` when reporting is off or nothing was queued. */
+export function reportFreeze(hit: { durationMs: number; mechanism: string; frames: ErrorFrame[] }): boolean {
+  return reporter?.captureFreeze(hit) ?? false;
 }
 
 /** Starts reporting for this page: the window's error events, and the hub's features from the store. */

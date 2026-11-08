@@ -1,7 +1,8 @@
 // Wires the page's error reporter (lib/error-reports.ts) to the hub: reports go to POST /api/v1/error-reports, and the
-// hello's `features` say whether to send them at all.
+// hello's `features` say whether to send them at all. A frozen page (lib/freeze-watch.ts) uses the same gate.
 import { api, ApiError } from "./api";
-import { startErrorReports, type SendResult } from "./error-reports";
+import { ERROR_REPORTS_FEATURE, reportFreeze, startErrorReports, type SendResult } from "./error-reports";
+import { startFreezeWatch } from "./freeze-watch";
 import type { ErrorReport } from "./extension-wire";
 import { uuid } from "./format";
 import { getState, subscribe } from "./store";
@@ -23,4 +24,11 @@ startErrorReports({
     return { online: s.conn === "online", features: s.features };
   },
   uuid,
+});
+
+// After the reporter, so a hello applies the feature before the watch starts and a buffered freeze can be queued.
+startFreezeWatch({
+  subscribe,
+  enabled: () => getState().features.includes(ERROR_REPORTS_FEATURE),
+  report: reportFreeze,
 });
