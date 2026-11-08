@@ -1161,7 +1161,7 @@ function AgentSection({ group, machines, byTodo, showHost, reg, hover, activeKey
 
 type TreeRowProps = { machines: Machine[]; showHost?: boolean; reg: RegFn; hover: (k: string | null) => void; activeKey: string; go: GoFn; onRowMenu: RowMenuFn; onNavigate?: () => void };
 
-const TREE_TONE: Record<TreeState, string> = { needs_you: "text-attention", working: "text-orange", bg_waiting: "text-status-waiting", done: "text-ink-3" };
+const TREE_TONE: Record<TreeState, string> = { needs_you: "text-attention", working: "text-orange", bg_waiting: "text-status-waiting", waiting: "text-ink-2", done: "text-ink-3" };
 
 /** "Needs you" / "Working" / "Done" at the end of a tree node's line. */
 function TreeStateText({ state }: { state: TreeState }) {

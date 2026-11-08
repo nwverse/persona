@@ -458,7 +458,7 @@ function steadyViews(prev: ReadonlyMap<string, TodoRowView>, next: ReadonlyMap<s
 
 // ── Project Section ──────────────────────────────────────────
 
-const TREE_TONE: Record<TreeState, string> = { needs_you: "text-attention", working: "text-orange", bg_waiting: "text-status-waiting", done: "text-ink-3" };
+const TREE_TONE: Record<TreeState, string> = { needs_you: "text-attention", working: "text-orange", bg_waiting: "text-status-waiting", waiting: "text-ink-2", done: "text-ink-3" };
 
 /** One project's open todos under a folding title with its Needs you / Working / Done (#2526). */
 const TodoProjectSection = memo(function TodoProjectSection({
