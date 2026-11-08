@@ -23,7 +23,9 @@ const Usage = `  personad hub [run]        run the hub (config ~/.persona/hub.js
                            persona-hub) and switch to it once it is up;
                            exit 0 switched, 1 it did not (the hub serves on), 3 no edge here (restart the service instead)
   personad hub setup [--yes] [--listen :18660] [--tls :18662] [--outside] [--no-service] [--json]
-                                           set this machine up as the hub: hub.json, database, service, pairing (docs/assistant/onboarding.md)
+                                           set this machine up as the hub: hub.json, database, service, pairing (docs/assistant/onboarding.md);
+                                           PERSONA_SPLIT_PROGRAMS=0 keeps its services on personad (not persona-hub, persona-manager)
+                                           and stays in their units until setup runs again without it (Linux; macOS stays on personad)
   personad hub pair [--legacy] [--android] print a pairing QR code and optional Android download link
   personad hub pair --machine <id> [--add [--name <name>]]
                                            print a pairing link for that link machine's persona-link (docs/operations/link.md);

@@ -500,20 +500,28 @@ func mergeModel(base, over ModelBinding) ModelBinding {
 
 // resolveModel reads category defaults, except the opt-in Lark /agent override and independent plugin models.
 func (s *Service) resolveModel(ctx context.Context, id string) (ModelBinding, error) {
+	return s.resolveModelRecord(ctx, id, nil)
+}
+
+// resolveModelRecord is resolveModel on id's record r when the caller has read it already (nil: it reads it).
+func (s *Service) resolveModelRecord(ctx context.Context, id string, r *modelRecord) (ModelBinding, error) {
 	p, err := s.modelPurposeDef(ctx, id)
 	if err != nil {
 		return ModelBinding{}, err
 	}
-	if recordID := modelRecordID(p); recordID != id {
+	if recordID := modelRecordID(p); recordID != id { // r is id's, not recordID's
 		return s.resolveModel(ctx, recordID)
 	}
 	base, _, err := s.modelBaseline(ctx, p)
 	if err != nil {
 		return base, err
 	}
-	r, err := s.modelRecord(ctx, id)
-	if err != nil {
-		return base, i18n.Err("assistant-models.err_read_config", i18n.Args{"error": err.Error()})
+	if r == nil {
+		read, err := s.modelRecord(ctx, id)
+		if err != nil {
+			return base, i18n.Err("assistant-models.err_read_config", i18n.Args{"error": err.Error()})
+		}
+		r = &read
 	}
 	return mergeModel(base, r.Binding), nil
 }
