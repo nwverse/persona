@@ -31,6 +31,7 @@ struct SyncScenarioTests {
         "card_answered_on_other_device": "#1112: two devices need a transport each (the demo transport is the app's)",
         "sent_on_other_device_once": "#1112: two devices need a transport each (the demo transport is the app's)",
         "send_accepted_transcript_late": "#1112: a 35 s wait needs the app's timers on a test clock",
+        "start_answer_cut_then_receipt": "#1112: a new chat starts from the new-conversation page, which the harness does not drive",
         "wake_reply_latest_is_answer": "#1112: a 10 min wait needs the app's timers on a test clock",
     ]
 
@@ -89,6 +90,9 @@ final class SyncRun {
         defer { Self.current = nil; stop() }
         let names = c["devices"]?.array?.compactMap(\.string) ?? ["a"]
         guard names.count == 1 else { throw SyncUnplayable(description: "two devices: one AppModel per device needs a transport each") }
+        // A new chat's first message starts it from the new-conversation page (AssistantStart, #1349), not through
+        // AppModel's send, so there is no chat page to project until it has started.
+        if c["chat"]?["new"]?.bool == true { throw SyncUnplayable(description: "a new chat: its start is the new-conversation page's, not AppModel's") }
         ChatCache.remove(key)
         StateCache.remove("outbox")
         for n in names { try await start(n) }
