@@ -39,6 +39,7 @@ vi.mock("../../lib/panel", async (load) => ({ ...(await load<typeof import("../.
 vi.mock("../assistant/Persona", () => ({ usePersona: () => ({ name: "Persona" }) }));
 
 import { applyCompleteSessions, reset, type ItemsEvent } from "../../lib/store";
+import { ago } from "../../lib/format";
 import { whenComposer } from "../../lib/links";
 import type { Item, Session } from "../../lib/types";
 import { t } from "../../i18n";
@@ -73,10 +74,11 @@ afterEach(() => {
   live.listeners.clear();
   reset();
   vi.unstubAllGlobals();
+  vi.useRealTimers();
 });
 
-async function open(view: React.ReactElement) {
-  act(() => applyCompleteSessions([row()]));
+async function open(view: React.ReactElement, session = row()) {
+  act(() => applyCompleteSessions([session]));
   act(() => root.render(view));
   for (let i = 0; i < 6; i++) await settle();
   expect(live.listeners.size).toBeGreaterThan(0);
@@ -109,6 +111,19 @@ it("the assistant: the header draws again only when what its face reads changes"
   await push(11, { role: "user" });
   expect(renders.info).toBe(1);
   expect(renders.chips).toBe(0);
+});
+
+it("a Persona conversation's subtitle: its age moves on with the clock while nothing is pushed", async () => {
+  // only the clock and intervals are fake: the pushes and fetches above still settle on real timeouts
+  vi.useFakeTimers({ toFake: ["Date", "setInterval", "clearInterval"] });
+  const updated = new Date(Date.now() - 10_000).toISOString();
+  await open(<ChatView mid="mac" sid="s1" assistant />, row({ updated_at: updated }));
+  const header = () => host.querySelector("header")?.textContent ?? "";
+  expect(header()).toContain(t("lib-format.just_now"));
+
+  act(() => vi.advanceTimersByTime(3 * 60_000));
+  expect(ago(updated)).not.toBe(t("lib-format.just_now"));
+  expect(header()).toContain(ago(updated));
 });
 
 it("after the pushes, sending and stopping still go out", async () => {

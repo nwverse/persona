@@ -33,7 +33,7 @@ import { sendDraft } from "../../lib/drafts";
 import { chatLines, freshWords, openRecap, parseUserText, segments, type ChatLine, type UserMessage } from "../../lib/turns";
 import type { Item, Session, Subagent } from "../../lib/types";
 import { anchoredScroll, followsAgain, isScrollbarPress, jumpLabel, leavesOnKey, leavesOnScrollbarDrag, leavesOnTouch, leavesOnWheel, followsAfterUnfold, UNFOLD_PAUSE, type ScrollAnchor } from "../../lib/disclosure";
-import { Button, copyText, cx, Dialog, IconButton, Loading, Menu, StatePill, toast, useMenu, type MenuItem } from "../../ui/atoms";
+import { Button, copyText, cx, Dialog, IconButton, Loading, Menu, StatePill, toast, useMenu, useNow, type MenuItem } from "../../ui/atoms";
 import { awaitsReply } from "../../lib/agent-groups";
 import { StatusMark } from "../../ui/StatusMark";
 import { Icon } from "../../ui/icons";
@@ -1413,6 +1413,9 @@ export const Header = memo(function Header({
   const state = session ? stateOf(session) : "unknown";
   // Awaiting Reply (#5096): seen, but it asked you something you have not answered
   const awaiting = session ? awaitsReply(session, mutes) : false;
+  // a Persona conversation's subtitle ends with its age: the memo keeps pushes from drawing the header again, so a minute
+  // tick does (docs/lessons/web.md, SessionRow)
+  useNow(60_000, Boolean(!chrome?.sub && !main && assistant && session?.updated_at));
   const sub = chrome?.sub
     ? chrome.sub
     : main
