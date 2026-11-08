@@ -100,6 +100,13 @@ func TestCatalogGenerationFallback(t *testing.T) {
 		{"claude-opus-5.5", true, "", "Opus 5.5", 1000000},
 		{"claude-opus-5.5-20260101", true, "", "Opus 5.5", 1000000},
 		{"qwen3-8-27b", true, "", "Qwen3.8 27B", 991808},
+		{"qwen3.9.27b", true, "qwen3.8-27b", "", 991808},
+		{"qwen3.8.27b", true, "", "Qwen3.8 27B", 991808},
+		{"qwen3.9.max", true, "qwen3.8-max", "", 983616},
+		{"deepseek-v4.pro", true, "", "DeepSeek V4 Pro", 1048576},
+		{"glm-5.3.0", true, "glm-5.3", "", 1000000},
+		{"claude-opus-5-6[1m]-20260101", true, "claude-opus-5-5", "", 1000000},
+		{"claude-opus-5-5[1m]-20260101", true, "", "Opus 5.5", 1000000},
 		{"anthropic/claude-opus-5.5", true, "", "Opus 5.5", 1000000},
 		{"vendor/qwen3.9-plus-20260101", true, "qwen3.7-plus", "", 991808},
 		{"qwen3.8-max-20260301", true, "", "Qwen 3.8 Max", 983616},
@@ -224,6 +231,13 @@ func TestEnrichDiscoveredModelWindows(t *testing.T) {
 	}
 }
 
+func TestTrailingZeroDoesNotReplaceGatewayWindow(t *testing.T) {
+	got := enrichDiscoveredModel(proto.ProviderModel{ID: "glm-5.3.0", Name: "Gateway", ContextWindow: 128000})
+	if got.Name != "Gateway" || got.ContextWindow != 128000 || got.InheritedFrom != "glm-5.3" || !slices.Contains(got.Efforts, "low") {
+		t.Fatalf("%+v", got)
+	}
+}
+
 func TestDiscoveredExactCatalogWindowWins(t *testing.T) {
 	for id, want := range modelCatalog().byID {
 		if want.ContextWindow == 0 {
@@ -237,6 +251,20 @@ func TestDiscoveredExactCatalogWindowWins(t *testing.T) {
 		if marked.ContextWindow != want.ContextWindow || marked.InheritedFrom != "" {
 			t.Errorf("%s[1m]: %+v", id, marked)
 		}
+	}
+}
+
+func TestDatedCatalogRowIsAGenerationSource(t *testing.T) {
+	var gens []catalogGeneration
+	m := proto.ProviderModel{ID: "claude-opus-5-5-20250929", Name: "Opus 5.5", ContextWindow: 1000000, Efforts: []string{"low"}, DefaultEffort: "low"}
+	g, ok := parseModelGeneration(catalogGenerationKey(m.ID))
+	if !ok {
+		t.Fatal("dated row has no generation")
+	}
+	gens = append(gens, catalogGeneration{model: m, gen: g})
+	got, ok := closestGeneration("claude-opus-5-6", gens)
+	if !ok || got.model.ID != m.ID {
+		t.Fatalf("dated source: %+v %v", got.model, ok)
 	}
 }
 
