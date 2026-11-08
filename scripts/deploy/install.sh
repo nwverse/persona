@@ -297,22 +297,35 @@ runs_hub() {
 	done
 	return 1
 }
-# service_runs <program>: prints the systemd unit or launchd property list here that starts $DEST/<program>, the way
-# the hub's setup and hub-systemd.sh write them (quoted or not, or under %h); fails when there is none. A drop-in that
-# takes a unit back to personad is not looked at: such a unit counts as running it.
+# unit_forms <path>: the ways a systemd unit names <path>: as is, with systemd's %% and $$, and inside quotes as the
+# hub's setup and hub-systemd.sh write it (\\ and \" too). One per line.
+unit_forms() { printf '%s\n' "$1" "$1" "$1" | sed '2s/%/%%/g; 2s/\$/$$/g; 3s/[\\"]/\\&/g; 3s/%/%%/g; 3s/\$/$$/g'; }
+# service_runs <program>: prints a file here that names $DEST/<program> (in a form of unit_forms, or under %h), or fails
+# when there is none: a systemd unit or drop-in with it in an ExecStart line (any section; key and = may have spaces
+# around them), or a launchd property list with it in a <string>. Followed by a space, a quote, "<" or the line's end:
+# persona-hub.prev is not persona-hub. Wider than the hub's own check (docs/operations/hub-update.md "Programs swapped
+# together"): a unit a later drop-in took back to personad, a disabled one and a wrapper (sh -c '...') count too.
 service_runs() {
-	units="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"
-	for f in "$units"/*.service "$units"/*.service.d/*.conf /etc/systemd/user/*.service /etc/systemd/system/*.service \
+	forms=$(unit_forms "$DEST/$1")
+	case $DEST in "$HOME"/*) forms="$forms
+$(unit_forms "${DEST#"$HOME"}/$1" | sed 's/^/%h/')" ;; esac
+	config="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user" data="${XDG_DATA_HOME:-$HOME/.local/share}/systemd/user"
+	for f in "$config"/*.service "$config"/*.service.d/*.conf /etc/systemd/user/*.service /etc/systemd/user/*.service.d/*.conf \
+		"$data"/*.service "$data"/*.service.d/*.conf /usr/lib/systemd/user/*.service /usr/lib/systemd/user/*.service.d/*.conf \
+		/etc/systemd/system/*.service /etc/systemd/system/*.service.d/*.conf /usr/lib/systemd/system/*.service \
+		/usr/lib/systemd/system/*.service.d/*.conf \
 		"$HOME"/Library/LaunchAgents/*.plist /Library/LaunchAgents/*.plist /Library/LaunchDaemons/*.plist; do
 		[ -f "$f" ] || continue
-		if awk -v a="$DEST/$1" -v b="%h${DEST#"$HOME"}/$1" '
+		# The paths go in through the environment: awk -v would read backslashes in them as escapes.
+		if SERVICE_FORMS="$forms" awk '
 			function names(s, p,  i, c) {
 				i = index(s, p)
-				if (!i) return 0
+				if (p == "" || !i) return 0
 				c = substr(s, i + length(p), 1)
 				return c == "" || c == " " || c == "\t" || c == "\"" || c == "'\''" || c == "<"
 			}
-			/^[ \t]*ExecStart=/ || /<string>/ { if (names($0, a) || names($0, b)) { found = 1; exit } }
+			BEGIN { n = split(ENVIRON["SERVICE_FORMS"], form, "\n") }
+			/^[ \t]*ExecStart[ \t]*=/ || /<string>/ { for (k = 1; k <= n; k++) if (names($0, form[k])) { found = 1; exit } }
 			END { exit !found }' "$f"; then
 			echo "$f"
 			return 0

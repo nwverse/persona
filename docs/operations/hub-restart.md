@@ -98,7 +98,7 @@ and had to wait for systemd's `Restart=always` to bring it back, needlessly burn
 Now `personad hub run` (Linux, macOS) is an **edge**:
 
 - The edge holds the hub's ports: the socket from systemd, or its own listener if there is none. It never lets go while the service runs.
-- The hub itself runs as a **slot**: `personad hub slot`, a child process of the edge, listening on `~/.persona/run/slot-<a|b>-<port>.sock`. The edge runs its slots from its own program (`persona-hub hub slot` for an edge started as `persona-hub run`); a switch names the binary for the next one (`hub switch` without `--binary` names the program it is run as).
+- The hub itself runs as a **slot**: `personad hub slot`, a child process of the edge, listening on `~/.persona/run/slot-<a|b>-<port>.sock`. The edge runs its slots from its own program (`persona-hub hub slot` for an edge started as `persona-hub run`); a switch names the binary for the next one. `hub switch` without `--binary` names the program the active slot runs, whichever program runs the command (`persona-hub switch` or `personad hub switch`), so a switch never moves a hub between `personad` and `persona-hub`; a slot that went back to `<program>.prev` after a failed switch names `<program>`.
 - The edge forwards every connection byte for byte, first writing a PROXY v2 header stating the origin. So the slot's `RemoteAddr` / `LocalAddr` are still the client's address and the address it connected to,
   and trust decisions by origin (loopback, LAN, VPN interface, the user's own PROXY protocol upstream) work as before.
 - TLS certificates, public-key pinning and the database belong to the slot; the edge only forwards TCP.
@@ -255,12 +255,17 @@ Unchanged: Docker deployment (`deploy/docker/`, no `LISTEN_FDS`, still listens i
 After blue-green switching ("Blue-green switching" above):
 
 - Before replacing the hub binary, deploy.sh saves the old one as `personad.prev` (and `persona-hub.prev`, `persona-manager.prev` for the two programs it puts beside it).
-- When the unit has not changed and the hub is running, `hub-systemd.sh` first runs `personad hub switch --prev …`:
+- When the unit has not changed and the hub is running, `hub-systemd.sh` first runs `personad hub switch --binary <personad> --prev …` (the program it means, not the default):
   - Exit code 0: switch complete, restart nothing;
   - Exit code 1: the new version could not take over, the old one keeps serving; the script restores `personad.prev` and deployment fails;
   - Other exit codes: no edge (the first deployment of this version, an old binary), or an older edge protocol; restart the service the old way.
-- The unit keeps the program it runs ([../server/server.md](../server/server.md) ("Programs")): a unit whose `ExecStart` (the unit's or a drop-in's, as systemd reads them) runs this data directory's `persona-hub` stays `persona-hub run`, and the switch is `persona-hub hub switch --prev persona-hub.prev`; when that fails, `personad`, `persona-hub` and `persona-manager` all go back to their `.prev`. Every other unit is written for `personad` as before. The script never moves an install from one program to the other, and stops with an error when the unit runs a `persona-hub` that is not there.
-- Mac (launchd) also tries switching first, then `kickstart` if that fails. It finds the agent that runs this data directory's `personad hub` or its `persona-hub` (`run`, or no arguments) and switches with that program.
+- The unit keeps the program it runs ([../server/server.md](../server/server.md) ("Programs")). The script reads the unit's `ExecStart` as systemd does and as the hub's self-update does (`unit_program`; one table of forms tests both): the last one in `[Service]`, the drop-ins' after the unit's, spaces around the key's `=`, the first word unquoted (double or single quotes), `%h`, `%%` and `$$` replaced, compared by real path.
+  - A unit that runs this data directory's `persona-hub` stays `persona-hub run`, and the switch is `persona-hub hub switch --binary persona-hub --prev persona-hub.prev`; when that fails, `personad`, `persona-hub` and `persona-manager` all go back to their `.prev`. Without `persona-hub.prev` (the script run outside deploy.sh) there would be nothing to go back to, so the service restarts on the build on disk instead of switching.
+  - Every other unit is written for `personad` as before.
+  - It stops with an error and leaves the unit as it is when the unit runs a `persona-hub` that is not there, or when its `ExecStart` names a `persona-hub` other than this data directory's (a wrapper such as `sh -c '…/persona-hub run'`, another copy, a bare name).
+  - A `.prev` goes back through a symlink onto the file it names (an install under the former name keeps `personad` as a link to that file), so both names run the old build.
+  - The script never moves an install from one program to the other.
+- Mac (launchd) also tries switching first, then `kickstart` if that fails. It finds the agent that runs this data directory's `personad hub` or its `persona-hub` (`run`, or no arguments; the program is `Program` when the agent has one, else `ProgramArguments[0]`, as launchd runs it) and switches with that program, given with `--binary`.
 - Rollback: run `PERSONA_HUB_EDGE=0 scripts/deploy/hub-systemd.sh` on the hub machine. It writes this variable into the unit's `Environment=`, and after the service restarts the hub listens itself;
   later deployments preserve it until you run it again with `PERSONA_HUB_EDGE=1`. When running manually, set this environment variable directly.
 

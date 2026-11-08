@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/nwverse/persona/server/internal/hub"
@@ -20,7 +21,7 @@ const exitNoEdge = 3
 // once it is up (docs/operations/hub-restart.md "Blue-green switch"). One line per phase, then one with the outcome.
 func runHubSwitch(args []string) error {
 	fs := flag.NewFlagSet("hub switch", flag.ContinueOnError)
-	binary := fs.String("binary", "", "the binary to switch to (default: this one)")
+	binary := fs.String("binary", "", "the binary to switch to (default: the program the hub runs now)")
 	prev := fs.String("prev", "", "the binary to go back to if the new one fails while taking over")
 	status := fs.Bool("status", false, "only say what serves now")
 	within := fs.Duration("timeout", 8*time.Minute, "give up waiting after this long (the edge finishes the switch by itself)")
@@ -43,8 +44,8 @@ func runHubSwitch(args []string) error {
 		fmt.Printf("hub switch: the edge speaks protocol %d, this binary %d: restart the hub's service instead\n", st.Proto, hubedge.Proto)
 		os.Exit(exitNoEdge)
 	}
-	if *binary == "" { // this binary: `persona-hub switch` to persona-hub, `personad hub switch` to personad
-		p, err := hub.RunningBinary()
+	if *binary == "" {
+		p, err := slotProgram(st.Binary)
 		if err != nil {
 			return err
 		}
@@ -65,4 +66,19 @@ func runHubSwitch(args []string) error {
 	}
 	fmt.Printf("hub switch: done, serving %s (build %d)\n", done.Version, done.Build)
 	return nil
+}
+
+// slotProgram is the program the edge's active slot runs, what `hub switch` goes on with unless given another: a
+// switch never moves the hub from personad to persona-hub or back (docs/operations/hub-restart.md "Blue-green
+// switch"). A slot that went back to <program>.prev after a switch that failed runs that program.
+func slotProgram(slot string) (string, error) {
+	if slot == "" {
+		return "", errors.New("hub switch: nothing serves now, so the program to switch to is unknown: give it with --binary")
+	}
+	if p, ok := strings.CutSuffix(slot, ".prev"); ok {
+		if _, err := os.Stat(p); err == nil {
+			return p, nil
+		}
+	}
+	return slot, nil
 }

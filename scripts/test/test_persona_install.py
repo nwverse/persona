@@ -357,6 +357,8 @@ class PersonaInstallTests(unittest.TestCase):
         for name, path, content, missing in (
                 ('unit', '.config/systemd/user/personad.service', '[Service]\nExecStart="{bin}/persona-hub" run\n', 'persona-hub'),
                 ('unit under %h', '.config/systemd/user/personad.service', '[Service]\nExecStart=%h/.persona/bin/persona-hub run\n', 'persona-hub'),
+                ('spaces around =', '.config/systemd/user/personad.service', "[Service]\nExecStart = '{bin}/persona-hub' run\n", 'persona-hub'),
+                ('a unit of the machine', '.local/share/systemd/user/persona.service', '[Service]\nExecStart={bin}/persona-hub\n', 'persona-hub'),
                 ('drop-in', '.config/systemd/user/personad.service.d/90-persona-compat.conf',
                  '[Service]\nExecStart=\nExecStart={bin}/persona-hub run\n', 'persona-hub'),
                 ('launchd agent', 'Library/LaunchAgents/com.persona.manager.assistant.plist',
@@ -377,6 +379,24 @@ class PersonaInstallTests(unittest.TestCase):
                 self.assertIn(str(home / path), result.stderr)
                 self.assertEqual({name: (bin_dir / name).read_bytes() for name in before}, before)
                 self.assertEqual((home / 'personad-calls').read_text(), calls, 'hub setup ran')
+
+    def test_a_service_running_a_program_under_a_path_systemd_escapes(self):
+        # A data directory with %, $, a backslash and a quote, named as the hub's setup writes it (and under %h): found.
+        for name, start in (('quoted', '"{q}/persona-hub" run'), ('under %h', '"%h/{rel}/persona-hub" run')):
+            with self.subTest(name), tempfile.TemporaryDirectory() as directory:
+                home = Path(directory)
+                state = home / 'data 50% $x \\ "q"'
+                bin_dir = state / 'bin'
+                extra = {'PERSONA_HOME': str(state)}
+                self.assertEqual(self.run_install(home, programs=HUB_PROGRAMS, extra=extra).returncode, 0)
+                def escaped(value):
+                    return value.replace('\\', '\\\\').replace('"', '\\"').replace('%', '%%').replace('$', '$$')
+                unit = home / '.config/systemd/user/personad.service'
+                unit.parent.mkdir(parents=True)
+                unit.write_text('[Service]\nExecStart=' + start.format(q=escaped(str(bin_dir)), rel=escaped(str(bin_dir.relative_to(home)))) + '\n')
+                result = self.run_install(home, programs=('persona-manager',), release='3', extra=extra)
+                self.assertEqual(result.returncode, 1, result.stderr)
+                self.assertIn('no persona-hub', result.stderr)
 
     def test_other_computers_do_not_get_the_hubs_programs(self):
         # A device's node service, a computer that runs only an app-made manager, and one asked "not the hub": as before.

@@ -1,6 +1,7 @@
 """hub-systemd.sh with systemd: the units unchanged and the hub running, it switches the hub's edge to the new binary
 (blue-green, docs/operations/hub-restart.md "Blue-green switch") instead of restarting; no edge, it restarts as before; the new binary
 failing to take over puts the old one back and fails the deploy."""
+import json
 import os
 from pathlib import Path
 import plistlib
@@ -83,7 +84,7 @@ class HubSwitchOnDeploy(unittest.TestCase):
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertIn('switched to the new binary', r.stdout)
         calls = self.calls()
-        self.assertIn(f'personad hub switch --timeout 8m --prev {self.root}/bin/personad.prev', calls)
+        self.assertIn(f'personad hub switch --binary {self.root}/bin/personad --timeout 8m --prev {self.root}/bin/personad.prev', calls)
         self.assertFalse(any(c.startswith('systemctl --user restart') or c.startswith('systemctl --user stop') for c in calls), calls)
 
     def test_restarts_without_an_edge(self):
@@ -245,7 +246,7 @@ class HubProgramKeptOnDeploy(unittest.TestCase):
         self.assertFalse((self.unit_dir / 'personad.service.d').exists(), 'a drop-in overrides the unit')
         self.assertIn('switched to the new binary', r.stdout)
         calls = self.calls()
-        self.assertIn(f'persona-hub hub switch --timeout 8m --prev {self.root}/bin/persona-hub.prev', calls)
+        self.assertIn(f'persona-hub hub switch --binary {self.root}/bin/persona-hub --timeout 8m --prev {self.root}/bin/persona-hub.prev', calls)
         self.assertFalse(any(c.startswith('personad') for c in calls), calls)
 
     def test_a_persona_hub_drop_in_stays(self):
@@ -295,6 +296,141 @@ class HubProgramKeptOnDeploy(unittest.TestCase):
         self.assertEqual((self.unit_dir / 'personad.service').read_text(), before)
         self.assertFalse(any(c.startswith(('systemctl --user restart', 'systemctl --user stop')) for c in self.calls()))
 
+    def test_a_persona_hub_unit_in_any_form_systemd_reads_stays(self):
+        # Under %h, in single quotes, with spaces around the key's =: all persona-hub to systemd, so to the deploy too.
+        def escaped(value):
+            return value.replace('\\', '\\\\').replace('%', '%%').replace('$', '$$')
+        rel = str(self.root.relative_to(self.home))
+        for start in ('="%h/' + escaped(rel).replace('"', '\\"') + '/bin/persona-hub" run',
+                      "='" + escaped(str(self.root)) + "/bin/persona-hub' run",
+                      ' = ' + self.quoted('persona-hub') + ' run'):
+            with self.subTest(start=start):
+                shutil.rmtree(self.unit_dir, ignore_errors=True)
+                self.switched_unit()
+                unit = self.unit_dir / 'personad.service'
+                unit.write_text(unit.read_text().replace('ExecStart=' + self.quoted('persona-hub') + ' run', 'ExecStart' + start))
+                self.assertIn('ExecStart' + start, unit.read_text())
+                r = self.run_script()
+                self.assertEqual(r.returncode, 0, r.stderr)
+                self.assertEqual(self.exec_starts()[-1], 'ExecStart=' + self.quoted('persona-hub') + ' run')
+
+    def test_a_unit_naming_another_persona_hub_is_left_alone(self):
+        # The backstop: an ExecStart that names persona-hub without being this root's (a wrapper, another copy, a bare
+        # name) fails the deploy before the unit is rewritten.
+        self.program('personad')
+        self.program('persona-hub')
+        self.unit_dir.mkdir(parents=True)
+        unit = self.unit_dir / 'personad.service'
+        for start in ("/bin/sh -c '" + str(self.root / 'bin/persona-hub') + " run'", '/opt/other/bin/persona-hub run', 'persona-hub run'):
+            with self.subTest(start=start):
+                text = '[Unit]\nDescription=hub\n\n[Service]\nExecStart=' + start + '\n'
+                unit.write_text(text)
+                r = self.run_script()
+                self.assertEqual(r.returncode, 1)
+                self.assertIn('the unit is left as it is', r.stderr)
+                self.assertEqual(unit.read_text(), text)
+                self.assertFalse((self.unit_dir / 'personad.service.d').exists())
+                self.assertFalse((self.unit_dir / 'personad.socket').exists())
+                self.assertFalse(any(c.startswith(('systemctl', 'persona')) for c in self.calls()))
+
+    def test_a_persona_hub_unit_without_its_prev_restarts(self):
+        # Nothing to go back to if the switch failed: the service restarts on the build on disk instead.
+        self.switched_unit()
+        self.program('persona-hub', rc=1)
+        r = self.run_script()
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn('persona-hub.prev to go back to', r.stdout)
+        calls = self.calls()
+        self.assertFalse(any('hub switch' in c for c in calls), calls)
+        self.assertIn('systemctl --user restart personad', calls)
+
+    def test_a_failed_switch_puts_back_through_a_link(self):
+        # An install under the former name keeps personad as a link to that file: the old build goes back into the
+        # file, and the link stays.
+        from test_persona_script_identity import identity
+        former = identity.BINARY_NAMES['hub'][1]
+        self.switched_unit()
+        for name in ('personad', 'persona-hub', 'persona-manager'):
+            self.program(name, rc=1)
+            self.prev(name)
+        personad = self.root / 'bin/personad'
+        personad.rename(self.root / 'bin' / former)
+        personad.symlink_to(former)
+        r = self.run_script()
+        self.assertEqual(r.returncode, 1, r.stdout)
+        self.assertTrue(personad.is_symlink())
+        self.assertIn('# old personad', (self.root / 'bin' / former).read_text())
+        for name in ('persona-hub', 'persona-manager'):
+            self.assertIn(f'# old {name}', (self.root / 'bin' / name).read_text(), name)
+
+
+@unittest.skipUnless(shutil.which('bash') and os.name == 'posix', 'needs bash on a Unix')
+class HubProgramFormsKept(unittest.TestCase):
+    """A unit whose only ExecStart names this root's persona-hub in a form systemd accepts stays on persona-hub after
+    a deploy (the forms a review found moved back to personad)."""
+
+    def test_forms(self):
+        for start in ('ExecStart="<root>/bin/persona-hub" run', 'ExecStart=%h/.persona/bin/persona-hub run',
+                      "ExecStart='<root>/bin/persona-hub' run", 'ExecStart = <root>/bin/persona-hub run'):
+            with self.subTest(start=start), tempfile.TemporaryDirectory() as d:
+                home = Path(d)
+                root = home / '.persona'
+                (root / 'hub.json').parent.mkdir(parents=True)
+                (root / 'hub.json').write_text('{"listen": ":18660"}')
+                executable(home / 'fakebin/systemctl', '#!/bin/sh\necho "systemctl $*" >> "$HOME/calls"\nexit 0\n')
+                for name in ('personad', 'persona-hub'):
+                    executable(root / 'bin' / name, f'#!/bin/sh\necho "{name} $*" >> "$HOME/calls"\nexit 3\n')
+                service = home / '.config/systemd/user/personad.service'
+                service.parent.mkdir(parents=True)
+                service.write_text('[Unit]\nDescription=Persona hub (persona-hub)\n\n[Service]\n' + start.replace('<root>', str(root))
+                                   + '\nRestart=always\n')
+                env = {**os.environ, 'HOME': str(home), 'XDG_CONFIG_HOME': str(home / '.config'),
+                       'PATH': f'{home / "fakebin"}:{os.environ["PATH"]}', 'PERSONA_HOME': str(root)}
+                for key in ('PERSONA_HUB_SOCKET', 'PERSONA_HUB_EDGE', '_PERSONA_STATE_DIR', '_PERSONA_HUB_UNIT'):
+                    env.pop(key, None)
+                r = subprocess.run(['bash', str(SCRIPT)], capture_output=True, text=True, env=env)
+                self.assertEqual(r.returncode, 0, r.stderr)
+                files = [service] + sorted((service.parent / 'personad.service.d').glob('*.conf'))
+                starts = [line for f in files for line in f.read_text().splitlines() if line.strip().startswith('ExecStart')]
+                effective = [line for line in starts if line.split('=', 1)[1].strip()][-1]
+                self.assertEqual(effective, f'ExecStart="{root}/bin/persona-hub" run')
+
+
+@unittest.skipUnless(shutil.which('bash') and os.name == 'posix', 'needs bash on a Unix')
+class UnitProgramReader(unittest.TestCase):
+    """hub-systemd.sh reads a unit's ExecStart as the hub's self-update does (unitPrograms): both over one table,
+    server/internal/hub/testdata/exec_start.json (TestExecProgram there)."""
+
+    def read(self, home: Path, unit: Path, **extra) -> subprocess.CompletedProcess:
+        return subprocess.run(['bash', str(SCRIPT), '--unit-program', str(unit)], capture_output=True, text=True,
+                              env={**os.environ, 'HOME': str(home), **extra})
+
+    def test_the_table(self):
+        cases = json.loads((ROOT / 'server/internal/hub/testdata/exec_start.json').read_text())
+        with tempfile.TemporaryDirectory() as d:
+            home = Path(d)
+            unit = home / 'a.service'
+            for case in cases:
+                with self.subTest(line=case['line']):
+                    unit.write_text('[Service]\n' + case['line'] + '\n')
+                    r = self.read(home, unit)
+                    self.assertEqual(r.returncode, 0, r.stderr)
+                    want = case['program'].replace('<home>', str(home))
+                    self.assertEqual(r.stdout.rstrip('\n'), os.path.realpath(want) if want else '')
+
+    def test_another_persona_hub_fails(self):
+        with tempfile.TemporaryDirectory() as d:
+            home = Path(d)
+            split = home / 'p/bin/persona-hub'
+            unit = home / 'a.service'
+            for start, fails in (('"%h/p/bin/persona-hub" run', False), ('/srv/persona-hub-data/bin/personad hub', False),
+                                 ('/srv/persona-hub/bin/personad hub', False), ("/bin/sh -c '%h/p/bin/persona-hub run'", True),
+                                 ('/opt/other/persona-hub run', True), ('persona-hub run', True)):
+                with self.subTest(start=start):
+                    unit.write_text('[Service]\nExecStart=' + start + '\n')
+                    r = self.read(home, unit, SPLIT_HUB=str(split))
+                    self.assertEqual(r.returncode != 0, fails, r.stdout + r.stderr)
+
 
 @unittest.skipUnless(shutil.which('bash') and shutil.which('python3') and os.name == 'posix', 'needs bash and python3')
 class HubProgramOnAMac(unittest.TestCase):
@@ -303,6 +439,8 @@ class HubProgramOnAMac(unittest.TestCase):
     switches with that program and restarts that agent when there is no edge."""
 
     def run_mac(self, jobs: dict, programs: dict) -> tuple:
+        """jobs: label -> ProgramArguments, or the whole job; programs: name in bin/ -> what `hub switch` exits. The
+        calls come back with the root as <root>."""
         with tempfile.TemporaryDirectory() as d:
             home = Path(d)
             root = home / '.persona'
@@ -310,8 +448,11 @@ class HubProgramOnAMac(unittest.TestCase):
                 executable(root / 'bin' / name, f'#!/bin/sh\necho "{name} $*" >> "$HOME/calls"\nexit {rc}\n')
             (home / 'Library/LaunchAgents').mkdir(parents=True)
             for label, args in jobs.items():
+                job = args if isinstance(args, dict) else {'ProgramArguments': args}
+                job = {k: [a.replace('<root>', str(root)) for a in v] if isinstance(v, list) else v.replace('<root>', str(root))
+                       for k, v in job.items()}
                 with open(home / 'Library/LaunchAgents' / f'{label}.plist', 'wb') as f:
-                    plistlib.dump({'Label': label, 'ProgramArguments': [a.replace('<root>', str(root)) for a in args]}, f)
+                    plistlib.dump({'Label': label, **job}, f)
             tools = home / 'tools'
             executable(tools / 'uname', '#!/bin/sh\necho Darwin\n')
             executable(tools / 'launchctl', '#!/bin/sh\necho "launchctl $*" >> "$HOME/calls"\n')
@@ -320,18 +461,31 @@ class HubProgramOnAMac(unittest.TestCase):
             env = {'HOME': str(home), 'PATH': str(tools), 'PERSONA_HOME': str(root)}
             r = subprocess.run([shutil.which('bash'), str(SCRIPT)], capture_output=True, text=True, env=env)
             calls = (home / 'calls').read_text().splitlines() if (home / 'calls').exists() else []
-            return r, calls, os.getuid()
+            return r, [c.replace(str(root), '<root>') for c in calls], os.getuid()
 
     def test_an_agent_running_persona_hub(self):
         r, calls, uid = self.run_mac({'a.node': ['<root>/bin/personad', 'node'], 'my.hub': ['<root>/bin/persona-hub', 'run']},
-                                     {'personad': 3, 'persona-hub': 3})
+                                     {'personad': 3, 'persona-hub': 3, 'persona-hub.prev': 0})
         self.assertEqual(r.returncode, 0, r.stderr)
-        self.assertEqual(calls, ['persona-hub hub switch --timeout 8m', f'launchctl kickstart -k gui/{uid}/my.hub'])
+        self.assertEqual(calls, ['persona-hub hub switch --binary <root>/bin/persona-hub --timeout 8m --prev <root>/bin/persona-hub.prev',
+                                 f'launchctl kickstart -k gui/{uid}/my.hub'])
+
+    def test_an_agent_whose_program_is_persona_hub(self):
+        # launchd runs Program, with ProgramArguments only as its argv.
+        job = {'Program': '<root>/bin/persona-hub', 'ProgramArguments': ['<root>/bin/personad', 'hub']}
+        r, calls, uid = self.run_mac({'my.hub': job}, {'personad': 3, 'persona-hub': 3, 'persona-hub.prev': 0})
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertTrue(calls and calls[0].startswith('persona-hub hub switch --binary <root>/bin/persona-hub '), calls)
+
+    def test_an_agent_running_persona_hub_without_its_prev_restarts(self):
+        r, calls, uid = self.run_mac({'my.hub': ['<root>/bin/persona-hub', 'run']}, {'personad': 0, 'persona-hub': 0})
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(calls, [f'launchctl kickstart -k gui/{uid}/my.hub'])
 
     def test_an_agent_running_personad_stays_on_personad(self):
         r, calls, uid = self.run_mac({'my.hub': ['<root>/bin/personad', 'hub']}, {'personad': 0, 'persona-hub': 0})
         self.assertEqual(r.returncode, 0, r.stderr)
-        self.assertEqual(calls, ['personad hub switch --timeout 8m'])
+        self.assertEqual(calls, ['personad hub switch --binary <root>/bin/personad --timeout 8m'])
 
     def test_no_agent_is_an_error(self):
         r, calls, _ = self.run_mac({'other': ['<root>/bin/persona-hub', 'pair']}, {'personad': 0, 'persona-hub': 0})

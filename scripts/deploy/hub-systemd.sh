@@ -7,6 +7,58 @@
 # (`persona-hub run`) once its owner switched to it, else personad (`personad hub`). This script never switches an
 # install from one to the other.
 set -euo pipefail
+# unit_program <unit file>: the program a systemd unit runs, read as systemd reads it and as the hub's self-update does
+# (unitPrograms in server/internal/hub/selfupdate_services.go; scripts/test/test_hub_switch_deploy.py runs both over
+# one table): the last ExecStart in [Service] (key and value trimmed), the drop-ins' after the unit's, an empty one
+# resetting it; its first word unquoted, with %h, %% and $$ replaced, resolved through symlinks; "" when that is not an
+# absolute path. With SPLIT_HUB set, an ExecStart that names a persona-hub other than that one fails: the unit is left
+# for its owner. `hub-systemd.sh --unit-program <file>` runs only this.
+unit_program() {
+  SERVICE_FILE="$1" python3 - <<'PY'
+import glob, os, re, sys
+service, home = os.environ['SERVICE_FILE'], os.path.expanduser('~')
+def program(value):
+    """The first word of an ExecStart value, unquoted, with the specifiers systemd replaces in a path."""
+    value = value.lstrip('-@:+!')
+    if value[:1] in ('"', "'"):
+        word, i = [], 1
+        while i < len(value) and value[i] != value[0]:
+            if value[i] == '\\' and i + 1 < len(value):
+                i += 1
+            word.append(value[i])
+            i += 1
+        word = ''.join(word)
+    else:
+        word = value.split()[0] if value.split() else ''
+    return re.sub(r'%%|%h|\$\$', lambda m: {'%%': '%', '%h': home, '$$': '$'}[m.group()], word)
+start = ''
+for path in [service] + sorted(glob.glob(glob.escape(service) + '.d/*.conf')):
+    try:
+        text = open(path).read()
+    except OSError:
+        continue
+    section = ''
+    for line in text.replace('\\\n', ' ').splitlines():
+        line = line.strip()
+        if line.startswith('['):
+            section = line
+            continue
+        key, sep, value = line.partition('=')
+        if sep and section == '[Service]' and key.strip() == 'ExecStart':
+            start = value.strip()  # empty resets it
+word = program(start)
+runs = os.path.realpath(word) if word.startswith('/') else ''
+split = os.environ.get('SPLIT_HUB')
+if split and runs != os.path.realpath(split) and re.search('(^|[\\s/"\'=])persona-hub($|[\\s"\';])', start):
+    sys.exit('hub: ' + os.path.basename(service) + ' runs ' + start + ', a persona-hub other than ' + split
+             + ': the unit is left as it is; point its ExecStart at ' + split + ' (or at personad hub) and deploy again')
+print(runs)
+PY
+}
+if [ "${1:-}" = --unit-program ]; then
+  unit_program "$2"
+  exit
+fi
 if [ -z "${_PERSONA_HUB_UNIT:-}" ]; then
   _env=$(python3 "$(dirname "${BASH_SOURCE[0]}")/../persona_identity.py" --shell --service hub --prepare) || exit $?
   eval "$_env"; unset _env
@@ -17,6 +69,13 @@ UNIT="$_PERSONA_HUB_UNIT"
 SPLIT_HUB="$ROOT/bin/persona-hub"
 # The programs a deploy replaces besides personad: a hub run as persona-hub goes back on all of them (switch_or_restart).
 SPLIT_PROGRAMS=(persona-hub persona-manager)
+# put_back <program>: its .prev back in place, through a symlink to the file it names (an install under the former name
+# keeps personad as a link to that file), so that every name of it runs the old build again.
+put_back() {
+  local file
+  file=$(python3 -c 'import os, sys; print(os.path.realpath(sys.argv[1]))' "$1")
+  cp -p "$1.prev" "$file.new" && mv "$file.new" "$file"
+}
 # use_split_hub: the service runs this root's persona-hub, so the deploy switches to it and the unit keeps it.
 use_split_hub() {
   if [ ! -x "$SPLIT_HUB" ]; then
@@ -32,20 +91,26 @@ use_split_hub() {
 switch_or_restart() {
   local prev=() rc=0 name
   [ -x "$ROOT/bin/${BIN##*/}.prev" ] && prev=(--prev "$ROOT/bin/${BIN##*/}.prev")
-  "$BIN" hub switch --timeout 8m ${prev[@]+"${prev[@]}"} || rc=$?
+  if [ "$BIN" = "$SPLIT_HUB" ] && [ ${#prev[@]} -eq 0 ]; then
+    # Nothing to go back to: a failed switch would leave the old persona-hub serving beside the new personad and
+    # persona-manager. A restart runs the build that is on disk.
+    echo "hub: no $SPLIT_HUB.prev to go back to if the switch fails (deploy.sh keeps one): restarting the service"
+    return 1
+  fi
+  # The program given, not hub switch's default: the deploy says which one the hub runs.
+  "$BIN" hub switch --binary "$BIN" --timeout 8m ${prev[@]+"${prev[@]}"} || rc=$?
   case $rc in
     0) echo "hub: switched to the new binary (blue-green, nothing restarted)"; return 0 ;;
     1) ;;
     *) echo "hub: no edge to switch on (hub switch: exit $rc): restarting the service"; return 1 ;;
   esac
   if [ ${#prev[@]} -gt 0 ]; then
-    cp -p "$ROOT/bin/${BIN##*/}.prev" "$ROOT/bin/${BIN##*/}.new" && mv "$ROOT/bin/${BIN##*/}.new" "$BIN"
+    put_back "$BIN"
     if [ "$BIN" = "$SPLIT_HUB" ]; then
       # The hub runs as persona-hub, which starts persona-manager beside it and goes by personad for updates:
       # the old build of each goes back with it (deploy.sh kept a .prev of each it replaced).
       for name in "${_PERSONA_HUB_BIN##*/}" "${SPLIT_PROGRAMS[@]}"; do
-        [ "$ROOT/bin/$name" = "$BIN" ] || [ ! -x "$ROOT/bin/$name.prev" ] ||
-          { cp -p "$ROOT/bin/$name.prev" "$ROOT/bin/$name.new" && mv "$ROOT/bin/$name.new" "$ROOT/bin/$name"; }
+        [ "$ROOT/bin/$name" = "$BIN" ] || [ ! -x "$ROOT/bin/$name.prev" ] || put_back "$ROOT/bin/$name"
       done
     fi
     echo "hub: the new binary did not take over; the old one serves on and is back in place" >&2
@@ -68,13 +133,15 @@ for path in sorted(glob.glob(os.path.expanduser('~/Library/LaunchAgents/*.plist'
             job = plistlib.load(f)
     except Exception:
         continue
-    args = job.get('ProgramArguments') or ([job['Program']] if job.get('Program') else [])
-    program = os.path.realpath(os.path.expanduser(args[0])) if args else ''
-    if program == personad and len(args) >= 2 and args[1] == 'hub':
+    # launchd runs Program when there is one, with ProgramArguments as its argv; else ProgramArguments[0].
+    argv = job.get('ProgramArguments') or []
+    run = job.get('Program') or (argv[0] if argv else '')
+    program, args = (os.path.realpath(os.path.expanduser(run)) if run else ''), argv[1:]
+    if program == personad and args[:1] == ['hub']:
         print('personad\t' + job.get('Label', ''))
         break
     # persona-hub runs the hub with no arguments, "run", or personad's "hub [run]".
-    if program == split and args[1:] in ([], ['run'], ['hub'], ['hub', 'run']):
+    if program == split and args in ([], ['run'], ['hub'], ['hub', 'run']):
         print('persona-hub\t' + job.get('Label', ''))
         break
 PY
@@ -98,38 +165,9 @@ SOCKET_FILE="$UNIT_DIR/$UNIT.socket"
 SERVICE_FILE="$UNIT_DIR/$UNIT.service"
 socket_before=$(cat "$SOCKET_FILE" 2>/dev/null || true)
 service_before=$(cat "$SERVICE_FILE" "$SERVICE_FILE.d/90-persona-compat.conf" 2>/dev/null || true)
-# The program the unit runs now: its last ExecStart, the drop-ins' after the unit's (systemd's order).
-runs=$(SERVICE_FILE="$SERVICE_FILE" python3 - <<'PY'
-import glob, os
-service = os.environ['SERVICE_FILE']
-def program(value):
-    """The first word of an ExecStart value, unquoted as systemd reads it."""
-    value = value.lstrip('-@:+!')
-    if value.startswith('"'):
-        word, i = [], 1
-        while i < len(value) and value[i] != '"':
-            if value[i] == '\\' and i + 1 < len(value):
-                i += 1
-            word.append(value[i])
-            i += 1
-        word = ''.join(word)
-    else:
-        word = value.split()[0] if value.split() else ''
-    return word.replace('$$', '$').replace('%%', '%')
-start = ''
-for path in [service] + sorted(glob.glob(service + '.d/*.conf')):
-    try:
-        lines = open(path).read().splitlines()
-    except OSError:
-        continue
-    for line in lines:
-        line = line.strip()
-        if line.startswith('ExecStart='):
-            start = line[len('ExecStart='):]  # empty resets it
-word = program(start)
-print(os.path.realpath(word) if word else '')
-PY
-)
+# The program the unit runs now (unit_program): persona-hub stays persona-hub; an ExecStart naming another persona-hub
+# stops the deploy here, before the unit is rewritten.
+runs=$(SPLIT_HUB="$SPLIT_HUB" unit_program "$SERVICE_FILE") || exit 1
 if [ -n "$runs" ] && [ "$runs" = "$(python3 -c 'import os, sys; print(os.path.realpath(sys.argv[1]))' "$SPLIT_HUB")" ]; then
   use_split_hub
 fi

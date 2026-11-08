@@ -157,7 +157,7 @@ systemctl --user restart personad                          # Linux
 launchctl kickstart -k gui/$(id -u)/com.persona.hub          # macOS
 ```
 
-`"$PD" hub switch` also works: the hub starts again behind its edge, without a gap (exit 3 means there is no edge: restart the service instead). The steps use `personad` (`$PD`): the services run it, and every install has it. `persona-hub …` and `persona-manager …` are the same commands, once the update in step 1 has put them beside it. Logs: `journalctl --user -u personad -n 100` (macOS: `tail -n 100 "$DATA/hub.log"`).
+`"$PD" hub switch` also works: the hub starts again behind its edge, without a gap (exit 3 means there is no edge: restart the service instead). The steps use `personad` (`$PD`): the services run it, and every install has it. `persona-hub …` and `persona-manager …` are the same commands, once the update in step 1 has put them beside it; `persona-hub switch` too goes on with the program the hub runs now. Logs: `journalctl --user -u personad -n 100` (macOS: `tail -n 100 "$DATA/hub.log"`).
 
 ### Step 1: update to a build with the split
 

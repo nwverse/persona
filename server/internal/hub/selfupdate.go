@@ -178,10 +178,6 @@ func (u *updater) slotExec(path string) error {
 	return u.h.slot.Switch(context.Background(), path, "", hubedge.KindRollback, 0)
 }
 
-// RunningBinary is the binary this process runs from, resolved through symlinks: what `hub switch` switches to
-// unless told otherwise (the hub as the program it is run as).
-func RunningBinary() (string, error) { return runningBinary() }
-
 func runningBinary() (string, error) {
 	p, err := os.Executable()
 	if err != nil {
@@ -193,8 +189,8 @@ func runningBinary() (string, error) {
 // ServerBinary is the program that is the whole server: this one, unless it is persona-hub, which runs the hub
 // alone: then the personad beside it (docs/server/server.md "Programs"). The update's target goes by it (personad is
 // the release's main download; persona-hub is swapped as a program and the hub goes on as it: runAs), and so does
-// setup's service binary. What the hub runs goes by the program it runs as: the edge's default switch is this binary,
-// the built-in manager it starts is persona-manager beside persona-hub (managerBinary).
+// setup's service binary. What the hub runs goes by the program it runs as: the built-in manager it starts is
+// persona-manager beside persona-hub (managerBinary).
 func ServerBinary() (string, error) {
 	p, err := runningBinary()
 	if err != nil {
@@ -801,6 +797,10 @@ func (u *updater) install(ctx context.Context, auto bool) {
 	}
 	target, err := u.target()
 	if err != nil {
+		fail(err)
+		return
+	}
+	if err := u.unreplaced(m); err != nil { // a service pointed at a program meanwhile
 		fail(err)
 		return
 	}
