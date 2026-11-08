@@ -5,6 +5,7 @@ extension MacSnapshot {
     struct AccessibilityEntry {
         var identifier: String?
         var label: String?
+        var value: String?
         var frame: NSRect?
     }
 
@@ -22,7 +23,8 @@ extension MacSnapshot {
             let frame = object.responds(to: NSSelectorFromString("accessibilityFrame"))
                 ? (object.value(forKey: "accessibilityFrame") as? NSValue)?.rectValue : nil
             result.append(AccessibilityEntry(identifier: read(object, "accessibilityIdentifier") as? String,
-                                             label: read(object, "accessibilityLabel") as? String, frame: frame))
+                                             label: read(object, "accessibilityLabel") as? String,
+                                             value: read(object, "accessibilityValue") as? String, frame: frame))
             for child in read(object, "accessibilityChildren") as? [NSObject] ?? [] { visit(child, depth: depth + 1) }
         }
         visit(root, depth: 0)

@@ -40,6 +40,20 @@ class ShowcasePlanTests(unittest.TestCase):
         self.assertFalse(by_name["button"]["bottom"])
         self.assertFalse(by_name["widget-small"]["bottom"])
 
+    def test_installed_hub_plan_requires_positive_native_readiness(self):
+        scenes, _ = RUNNER.scenes(["button"])
+        output = Path("/tmp/test-captures")
+        plan = RUNNER.capture_plan("http://127.0.0.1:17490", output, scenes, requires_native=True)
+        self.assertIs(plan["requiresNative"], True)
+        self.assertEqual(plan["extensionShowcase"], scenes)
+        self.assertIs(RUNNER.capture_plan(plan["hub"], output, scenes)["requiresNative"], False)
+
+    def test_retained_legacy_or_zero_revision_is_not_native_readiness(self):
+        for value in ("stream:1", "stream:42"):
+            self.assertTrue(RUNNER.native_revision(value))
+        for value in (None, "legacy", "stream:0", "stream:01", "stream:1:visible=false", "stream:١"):
+            self.assertFalse(RUNNER.native_revision(value))
+
     def test_empty_duplicate_and_unknown_selections_are_rejected(self):
         for names in ([], ["button", "button"], ["missing"], ["../button"]):
             with self.subTest(names=names), self.assertRaises(ValueError):

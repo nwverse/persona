@@ -10,6 +10,7 @@ import SwiftUI
     struct Plan: Decodable {
         var hub: URL
         var output: URL
+        var requiresNative: Bool?
         var extensionShowcase: [Scene]
     }
 
@@ -24,6 +25,7 @@ import SwiftUI
         var appearance: String
         var position: String
         var file: String
+        var nativeRevision: String? = nil
     }
 
     private enum Failure: Error { case invalidPlan, notReady, focusChanged, capture }
@@ -68,10 +70,11 @@ import SwiftUI
                     // Tear down the previous page before waiting for this page's HTTP-backed committed view.
                     try await clearPage()
                     MacShellState.shared.pluginPage = "showcase/" + scene.name
-                    let window = try await readyWindow(title: scene.title, diagnostic: output.appending(path: "failed-\(scene.name)-\(appearance).png"))
+                    let window = try await readyWindow(title: scene.title, diagnostic: output.appending(path: "failed-\(scene.name)-\(appearance).png"), requiresNative: plan.requiresNative == true)
+                    let nativeRevision = window.contentView.flatMap { MacSnapshot.accessibilityEntries($0).first { $0.identifier == "extension-ui-ready" }?.value }
                     let url = output.appending(path: "mac-showcase-\(scene.name)-\(appearance).png")
                     guard MacSnapshot.capture(to: url, window: window) else { throw Failure.capture }
-                    captures.append(Capture(sample: scene.name, appearance: appearance, position: "top", file: url.lastPathComponent))
+                    captures.append(Capture(sample: scene.name, appearance: appearance, position: "top", file: url.lastPathComponent, nativeRevision: nativeRevision))
                     FileHandle.standardError.write(Data("extension snapshot wrote \(url.lastPathComponent)\n".utf8))
                     if scene.bottom {
                         MacSnapshot.scroll(by: Double.greatestFiniteMagnitude)
@@ -79,7 +82,7 @@ import SwiftUI
                         guard !NSApp.isActive, !window.isKeyWindow else { throw Failure.focusChanged }
                         let bottom = output.appending(path: "mac-showcase-\(scene.name)-bottom-\(appearance).png")
                         guard MacSnapshot.capture(to: bottom, window: window) else { throw Failure.capture }
-                        captures.append(Capture(sample: scene.name, appearance: appearance, position: "bottom", file: bottom.lastPathComponent))
+                        captures.append(Capture(sample: scene.name, appearance: appearance, position: "bottom", file: bottom.lastPathComponent, nativeRevision: nativeRevision))
                         FileHandle.standardError.write(Data("extension snapshot wrote \(bottom.lastPathComponent)\n".utf8))
                     }
                 }
@@ -117,7 +120,7 @@ import SwiftUI
         throw Failure.notReady
     }
 
-    private static func readyWindow(title: String, diagnostic: URL) async throws -> NSWindow {
+    private static func readyWindow(title: String, diagnostic: URL, requiresNative: Bool) async throws -> NSWindow {
         let deadline = ContinuousClock.now.advanced(by: .seconds(20))
         var lastWindow: NSWindow?
         var lastEntries: [MacSnapshot.AccessibilityEntry] = []
@@ -135,8 +138,10 @@ import SwiftUI
                 let entries = MacSnapshot.accessibilityEntries(content)
                 lastWindow = window
                 lastEntries = entries
+                let native = entries.contains { $0.identifier == "extension-ui-ready" && $0.value?.range(of: "^stream:[1-9][0-9]*$", options: .regularExpression) != nil }
                 if entries.contains(where: { $0.identifier == "extension-ui-ready" }),
                    !entries.contains(where: { $0.identifier == "extension-ui-waiting" }),
+                   (!requiresNative || native),
                    entries.contains(where: { $0.label == title }) {
                     try await Task.sleep(for: .milliseconds(600))
                     content.layoutSubtreeIfNeeded(); content.displayIfNeeded()
@@ -151,7 +156,8 @@ import SwiftUI
         let ready = lastEntries.contains { $0.identifier == "extension-ui-ready" }
         let waiting = lastEntries.contains { $0.identifier == "extension-ui-waiting" }
         let labels = lastEntries.compactMap(\.label).prefix(40)
-        FileHandle.standardError.write(Data("snapshot readiness title=\(title) ready=\(ready) waiting=\(waiting) labels=\(Array(labels))\n".utf8))
+        let lifecycle = lastEntries.filter { $0.identifier == "extension-ui-ready" || $0.identifier == "extension-ui-waiting" }.compactMap(\.value)
+        FileHandle.standardError.write(Data("snapshot readiness title=\(title) ready=\(ready) waiting=\(waiting) lifecycle=\(lifecycle) labels=\(Array(labels))\n".utf8))
         throw Failure.notReady
     }
 

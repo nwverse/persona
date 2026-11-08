@@ -17,6 +17,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import re
 import socket
 import subprocess
 import tempfile
@@ -43,6 +44,14 @@ def scenes(names=None, snapshots=SNAPSHOTS):
         result.append({"name": name, "title": view.get("title") or name, "bottom": name in BOTTOM_PAGES})
         hashes[name] = hashlib.sha256(data).hexdigest()
     return result, hashes
+
+
+def native_revision(value):
+    return isinstance(value, str) and re.fullmatch(r"stream:[1-9][0-9]*", value) is not None
+
+
+def capture_plan(hub, output, selected, requires_native=False):
+    return {"hub": hub, "output": output.as_uri(), "requiresNative": requires_native, "extensionShowcase": selected}
 
 
 def stop(process):
@@ -110,7 +119,7 @@ def main():
         with tempfile.TemporaryDirectory(prefix="persona-mac-showcase-", dir="/tmp") as temporary:
             directory = Path(temporary)
             plan = directory / "plan.json"
-            plan.write_text(json.dumps({"hub": hub, "output": output.as_uri(), "extensionShowcase": selected}))
+            plan.write_text(json.dumps(capture_plan(hub, output, selected, requires_native=args.hub_config is not None)))
             identity = str(uuid.uuid4())
             inherited = {key: os.environ[key] for key in ("PATH", "HOME", "TMPDIR", "LANG", "LC_ALL") if key in os.environ}
             env = dict(inherited, PORT=str(args.port), MOCK_HUB_ID=identity, MOCK_EXTENSIONS="1", MOCK_EXTENSION_SHOWCASE="1",
@@ -139,6 +148,8 @@ def main():
                 if not (output / "captures.json").is_file():
                     raise RuntimeError("The app exited without a capture manifest: " + log[-3000:])
                 captures = json.loads((output / "captures.json").read_text())
+                if args.hub_config and any(not native_revision(capture.get("nativeRevision")) for capture in captures):
+                    raise RuntimeError("An installed-extension capture lacks a positive committed native revision")
                 expected = {(scene["name"], appearance, position) for scene in selected
                             for appearance in ("light", "dark") for position in (["top", "bottom"] if scene["bottom"] else ["top"])}
                 actual = {(capture["sample"], capture["appearance"], capture["position"]) for capture in captures}
@@ -148,7 +159,8 @@ def main():
                     raise RuntimeError("A reported capture file is missing")
                 (output / "source-sha256.json").write_text(json.dumps(hashes, indent=2, sort_keys=True) + "\n")
                 (output / "capture-mode.json").write_text(json.dumps({"backend": "installed-test-extension" if args.hub_config else "auxiliary-mock-http",
-                    "style": args.style, "capture": "actual-app-offscreen", "source": "shared-snapshot-inputs"}, indent=2) + "\n")
+                    "style": args.style, "capture": "actual-app-offscreen", "source": "shared-snapshot-inputs",
+                    "readiness": "positive-native-committed-revision" if args.hub_config else "rendered-page"}, indent=2) + "\n")
                 (output / "app.log").write_text(log)
                 print("RESULT Mac showcase: PASS; %d captures; %.1fs; %s" % (len(captures), time.monotonic() - started, output))
                 return 0
