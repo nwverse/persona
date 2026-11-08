@@ -5,7 +5,7 @@ from pathlib import Path
 import re
 import sys
 
-LANES = ("full", "lint-build", "test-core", "test-feature", "test-platform-app")
+LANES = ("full", "lint-build", "test-core", "test-feature-0", "test-feature-1", "test-platform-app")
 TOKEN = re.compile(r'"(?:\\.|[^"\\])*"|[A-Za-z_][A-Za-z_0-9]*|\S')
 PROJECT = re.compile(r":[A-Za-z0-9_-]+(?::[A-Za-z0-9_-]+)*\Z")
 
@@ -100,6 +100,10 @@ def tasks(source, lane):
         return ["lint", "test", ":app:assembleDebug"]
     if lane == "lint-build":
         return ["lint", ":app:assembleDebug"]
+    if lane.startswith("test-feature-"):
+        # Split the complete sorted feature set, including future modules, once.
+        features = [project for project in projects if test_lane(project) == "test-feature"]
+        return [project + ":test" for project in features[int(lane[-1])::2]]
     # The per-project test lifecycle task includes all variants (not only Debug),
     # and works for JVM modules too. No test filters or exclusions are introduced.
     return [project + ":test" for project in projects if test_lane(project) == lane]

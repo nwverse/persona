@@ -5,7 +5,7 @@ set -euo pipefail
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
 usage() {
   printf '%s\n' \
-    'Usage: scripts/ci/android.sh [--lane full|lint-build|test-core|test-feature|test-platform-app] [--profile]' \
+    'Usage: scripts/ci/android.sh [--lane full|lint-build|test-core|test-feature-0|test-feature-1|test-platform-app] [--profile]' \
     '       scripts/ci/android.sh --help' \
     'Requires Bash, Python 3, timeout (or gtimeout), JAVA_HOME pointing to JDK 21,' \
     'and ANDROID_HOME (or ANDROID_SDK_ROOT) pointing to an installed Android SDK.' \
@@ -39,7 +39,7 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 case $LANE in
-  full|lint-build|test-core|test-feature|test-platform-app) ;;
+  full|lint-build|test-core|test-feature-0|test-feature-1|test-platform-app) ;;
   *) usage >&2; exit 2 ;;
 esac
 

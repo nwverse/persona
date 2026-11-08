@@ -51,7 +51,8 @@ inside fake-clock tests. Scripts split complete sorted discovery across two inde
 mock ports. Source/documentation guards still read across modules, so scripts remain selected for every PR. Platform paths are narrower:
 unrelated Android/Mac screens no longer select server, but shared client contracts read by Go compatibility tests still do.
 
-Android uses independent lint/build and core, feature, platform/app test runners. Module declarations are dynamically partitioned; unknown
+Android uses five independent runners: lint/build, core tests, two disjoint sorted feature-test shards, and platform/app tests. Module
+declarations are dynamically partitioned; unknown
 module prefixes use a fallback shard, while unsupported declarations fail rather than skip coverage. Every module's complete test selector
 retains all variants. Gradle workers remain bounded; build and public Robolectric dependency caches do not contain private config. Per-shard
 Gradle profiles and test/lint reports are uploaded for diagnosis. Local entry points without shard options still run complete verification.

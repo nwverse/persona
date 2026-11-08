@@ -18,13 +18,13 @@ SETTINGS = (ROOT / "android/settings.gradle.kts").read_text()
 class ShardTests(unittest.TestCase):
     def test_repository_partition_has_no_duplicates_or_omissions(self):
         projects = shards.modules(SETTINGS)
-        lanes = [shards.tasks(SETTINGS, lane) for lane in shards.LANES if lane.startswith("test-")]
-        selected = [task for lane in lanes for task in lane]
+        lanes = {lane: shards.tasks(SETTINGS, lane) for lane in shards.LANES if lane.startswith("test-")}
+        selected = [task for lane in lanes.values() for task in lane]
         self.assertEqual(len(selected), len(set(selected)))
         self.assertEqual(sorted(selected), [project + ":test" for project in projects])
-        self.assertTrue(all(lanes))
-        self.assertIn(":core:contracts:test", lanes[0])  # JVM test lifecycle stays covered.
-        self.assertIn(":app:test", lanes[2])  # Debug and Release, not testDebugUnitTest.
+        self.assertTrue(all(lanes.values()))
+        self.assertIn(":core:contracts:test", lanes["test-core"])  # JVM test lifecycle stays covered.
+        self.assertIn(":app:test", lanes["test-platform-app"])  # Debug and Release, not testDebugUnitTest.
 
     def test_literals_multiline_comments_duplicates_and_included_builds(self):
         source = '''
@@ -43,7 +43,8 @@ class ShardTests(unittest.TestCase):
     def test_new_modules_and_nested_paths_have_a_fallback(self):
         source = 'include(":core:new", ":feature:new:deep", ":platform:new", ":new", ":core")'
         self.assertEqual(shards.tasks(source, "test-core"), [":core:new:test"])
-        self.assertEqual(shards.tasks(source, "test-feature"), [":feature:new:deep:test"])
+        self.assertEqual(shards.tasks(source, "test-feature-0"), [":feature:new:deep:test"])
+        self.assertEqual(shards.tasks(source, "test-feature-1"), [])
         self.assertEqual(shards.tasks(source, "test-platform-app"), [":core:test", ":new:test", ":platform:new:test"])
 
     def test_full_and_lint_keep_original_all_module_selectors(self):

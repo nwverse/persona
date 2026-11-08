@@ -13,7 +13,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        lane: [lint-build, test-core, test-feature, test-platform-app]
+        lane: [lint-build, test-core, test-feature-0, test-feature-1, test-platform-app]
     steps:
       - uses: actions/checkout@v4
         with:
