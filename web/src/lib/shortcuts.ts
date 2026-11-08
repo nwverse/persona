@@ -258,6 +258,10 @@ export const SHORTCUTS: readonly ShortcutDef[] = [
   { id: "terminal-mode", label: t("terminal-full.cmd_terminal_mode"), chord: "Mod+Alt+F", scope: "session", icon: "sidebar" },
   { id: "right-panel", label: t("lib-shortcuts.cmd_right_panel"), chord: "Mod+B", scope: "session", icon: "sidebar" },
   { id: "focus-input", label: t("lib-shortcuts.cmd_focus_input"), chord: "Mod+I", scope: "session", icon: "keyboard" },
+  // Persona's own: the first waiting card answers from the keyboard while it has focus (lib/card-keys.ts). Mod+Alt+Enter
+  // is free — Mod+Enter is the dialogs' (reserved above), Mod+Shift+Enter maximizes, and ⌘⌥⏎ / Ctrl+Alt+Enter is no
+  // browser or system key
+  { id: "focus-card", label: t("lib-shortcuts.cmd_focus_card"), chord: "Mod+Alt+Enter", scope: "session", icon: "enter" },
   { id: "prev-tab", label: t("lib-shortcuts.cmd_prev_tab"), chord: "Mod+Alt+Left", scope: "session", icon: "arrowLeft" },
   { id: "next-tab", label: t("lib-shortcuts.cmd_next_tab"), chord: "Mod+Alt+Right", scope: "session", icon: "arrowRight" },
   { id: "sidebar-grouping", label: t("lib-shortcuts.cmd_sidebar_grouping"), chord: "Mod+E", scope: "sidebar", icon: "filter" },

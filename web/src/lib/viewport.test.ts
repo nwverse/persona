@@ -25,9 +25,10 @@ describe("keyboardVars", () => {
 });
 
 describe("enterSends", () => {
-  it("sends on Enter with a precise pointer, never with Shift", () => {
+  it("sends on Enter with a precise pointer, never with Shift or Alt", () => {
     expect(enterSends({ key: "Enter", shiftKey: false }, true)).toBe(true);
     expect(enterSends({ key: "Enter", shiftKey: true }, true)).toBe(false);
+    expect(enterSends({ key: "Enter", shiftKey: false, altKey: true }, true)).toBe(false);
     expect(enterSends({ key: "a", shiftKey: false }, true)).toBe(false);
   });
 
