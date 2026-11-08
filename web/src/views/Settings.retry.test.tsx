@@ -20,6 +20,8 @@ vi.mock("../lib/api", async (original) => ({
 }));
 
 import { ApiError } from "../lib/api";
+import { resetManagerChoice } from "../lib/manager-choice";
+import { resetRoster } from "../lib/managers";
 import { settleRosterDefault } from "../lib/manager-choice";
 import { t } from "../i18n";
 import { Settings } from "./Settings";
@@ -30,6 +32,8 @@ let root: Root;
 let host: HTMLDivElement;
 beforeEach(() => {
   localStorage.clear();
+  resetManagerChoice();
+  resetRoster();
   settleRosterDefault();
   hub.pending = [];
   host = document.createElement("div");

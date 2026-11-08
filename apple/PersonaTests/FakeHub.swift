@@ -4,8 +4,11 @@ import Foundation
 /// A hub in memory for unit tests: canned JSON by "METHOD path", every request recorded. Hand its `transport` to an
 /// `APIClient` (`FakeHub.client`); a view model built with that client runs its real requests and decoding.
 final class FakeHub: @unchecked Sendable {
+    /// Model-test handlers capture actor-owned fixtures. Preserve that contract
+    /// across the asynchronous, Sendable API transport boundary.
+    typealias Route = @MainActor (LocalRequest) throws -> Data
+
     private let lock = NSLock()
-    private typealias Route = @MainActor (LocalRequest) throws -> Data
     private var routes: [String: Route] = [:]
     private(set) var requests: [LocalRequest] = []
 
@@ -15,7 +18,7 @@ final class FakeHub: @unchecked Sendable {
     }
 
     /// Answers with what `make` returns for the request (to look at the body, or to fail).
-    func on(_ method: String, _ path: String, _ make: @escaping @MainActor (LocalRequest) throws -> Data) {
+    func on(_ method: String, _ path: String, _ make: @escaping Route) {
         lock.withLock { routes["\(method) \(path)"] = make }
     }
 
@@ -29,14 +32,12 @@ final class FakeHub: @unchecked Sendable {
         lock.withLock { requests.filter { $0.method == method && $0.path == path } }
     }
 
-    private func answer(_ req: LocalRequest) async throws -> Data {
+    @MainActor private func answer(_ req: LocalRequest) throws -> Data {
         let route = lock.withLock { () -> Route? in
             requests.append(req)
             return routes["\(req.method) \(req.path)"]
         }
         guard let route else { throw APIError(status: 404, message: "FakeHub: no route for \(req.method) \(req.path)") }
-        // Fixtures capture main-actor models and mutable test state. Transport
-        // requests can arrive on a cooperative executor, so hop before calling.
-        return try await route(req)
+        return try route(req)
     }
 }

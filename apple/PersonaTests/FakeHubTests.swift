@@ -4,25 +4,29 @@ import Testing
 
 @MainActor
 struct FakeHubTests {
-    private final class State {
-        var calls = 0
-    }
-
-    @Test func backgroundTransportRunsRoutesOnTheirActor() async throws {
+    @Test func actorOwnedRoutesAreSafeFromDetachedRequests() async throws {
         let hub = FakeHub()
-        let state = State()
-        hub.on("GET", "/fixture") { _ in
+        var calls = 0
+        hub.on("GET", "/actor-owned") { _ in
             MainActor.assertIsolated()
-            state.calls += 1
-            return Data("answer".utf8)
+            calls += 1
+            // Route execution must be outside the table lock: handlers can
+            // register the next response and inspect the recorded request.
+            #expect(hub.sent("GET", "/actor-owned").count == 1)
+            hub.on("GET", "/next", json: #"{"ok":true}"#)
+            return Data(#"{"first":true}"#.utf8)
         }
-        let transport = try #require(hub.client.transport)
-        let reply = try await Task.detached {
-            try await transport(LocalRequest(method: "GET", path: "/fixture", query: [:], body: nil))
+        let client = hub.client
+        let first = try await Task.detached {
+            try await client.request("GET", "/actor-owned")
         }.value
-        #expect(reply == Data("answer".utf8))
-        #expect(state.calls == 1)
-        #expect(hub.sent("GET", "/fixture").count == 1)
+        #expect(first == Data(#"{"first":true}"#.utf8))
+        #expect(calls == 1)
+        let next = try await Task.detached {
+            try await client.request("GET", "/next")
+        }.value
+        #expect(next == Data(#"{"ok":true}"#.utf8))
+        #expect(hub.sent("GET", "/next").count == 1)
     }
 
     @Test func backgroundTransportPreservesRouteErrors() async throws {

@@ -367,6 +367,8 @@ final class ImageViewerTests: XCTestCase {
         var sample: [String: Any] = [:]
         let aligned = waitUntil(5) {
             sample = (try? self.ctl("viewerPaging")) ?? [:]
+            // Keep the non-Sendable probe dictionary on this actor; Boolean
+            // autoclosures capture only the copied scalar values.
             let dragging = sample["dragging"] as? Bool
             let decelerating = sample["decelerating"] as? Bool
             let alignmentError = sample["alignmentError"] as? Double ?? .infinity

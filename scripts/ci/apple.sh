@@ -25,6 +25,7 @@ xcrun swift --version
 xcodegen --version
 
 OUTPUT=$(mktemp -d "${RUNNER_TEMP:-${TMPDIR:-/tmp}}/persona-apple-ci.XXXXXX")
+DIAGNOSTICS="${CI_APPLE_DIAGNOSTICS:-$OUTPUT/diagnostics}"
 SOURCE="$OUTPUT/source"
 PROJECT="$SOURCE/apple/Persona.xcodeproj"
 SPM="${CI_SPM_CACHE:-$HOME/Library/Caches/persona-ci/spm}"
@@ -50,12 +51,13 @@ except (OSError, ValueError, subprocess.SubprocessError) as error:
 PY
     ) || true
   fi
+  if [ "$code" -ne 0 ]; then
+    # Capture simulator state before cleanup; only allowlisted logs and xcresult
+    # bundles leave the disposable output, never synthetic/private config or keys.
+    ci_run 'Collect Apple failure diagnostics' 180 python3 "$CI_ROOT/scripts/ci/apple_diagnostics.py" \
+      "$OUTPUT" "$DIAGNOSTICS" || printf 'apple-ci: failure diagnostics could not be collected\n' >&2
+  fi
   if [ -n "$SIM" ]; then
-    if [ "$code" != 0 ]; then
-      # Capture the failed device before cleanup destroys its boot evidence.
-      ci_run 'Capture simulator state' 60 bash -c 'xcrun simctl list devices -j > "$1"' -- "$OUTPUT/simulator-state.json" || printf 'apple-ci: simulator state capture failed\n' >&2
-      ci_run 'Capture simulator diagnostics' 120 xcrun simctl diagnose --output="$OUTPUT/simulator-diagnostics" || printf 'apple-ci: simulator diagnostics failed; preserving original exit %s\n' "$code" >&2
-    fi
     ci_run 'Shut down owned simulator' 120 xcrun simctl shutdown "$SIM" || true
     ci_run 'Delete owned simulator' 120 xcrun simctl delete "$SIM" || true
   fi
@@ -101,57 +103,31 @@ result() {
   ci_run "Inspect test results ($name)" 120 python3 "$CI_ROOT/scripts/ci/apple_result.py" "$OUTPUT/$name.xcresult" "$@"
 }
 
-if [ "$LANE" = all ] || [ "$LANE" = packages ]; then
+if [ "$LANE" = all ] || [ "$LANE" = ios ] || [ "$LANE" = packages ]; then
   ci_run 'PersonaKit unit tests' 900 xcrun swift test --package-path "$SOURCE/apple/Packages/PersonaKit" --scratch-path "$SPM/PersonaKit"
 fi
 if [ "$LANE" = all ] || [ "$LANE" = ios ]; then
   for sdk in iphoneos iphonesimulator watchos watchsimulator; do
     ci_run "Require $sdk SDK" 60 xcrun --sdk "$sdk" --show-sdk-version
   done
+  # Current hosted images omit the Xcode 26.0-compatible iOS/watch runtimes.
+  # Generic device builds validate both platforms for the embedded watch app,
+  # even though SDK lookup succeeds. Prepare both before resolving/building.
+  # The pinned Xcode selects compatible patch runtimes (such as iOS 26.0.1).
+  # Validate 26.0.x explicitly; never substitute a newer minor or compiler.
+  for platform in iOS watchOS; do
+    runtimes="$OUTPUT/runtimes-$platform-before.json"
+    ci_run "List $platform simulator runtimes" 120 bash -c 'xcrun simctl list runtimes -j > "$1"' -- "$runtimes"
+    if ! runtime=$(python3 "$CI_ROOT/scripts/ci/apple_runtime.py" "$runtimes" --platform "$platform"); then
+      ci_run "Download matching $platform 26.0 simulator runtime" 1200 xcodebuild -downloadPlatform "$platform" -architectureVariant universal
+      runtimes="$OUTPUT/runtimes-$platform-after.json"
+      ci_run "List downloaded $platform simulator runtimes" 120 bash -c 'xcrun simctl list runtimes -j > "$1"' -- "$runtimes"
+      runtime=$(python3 "$CI_ROOT/scripts/ci/apple_runtime.py" "$runtimes" --platform "$platform")
+    fi
+    printf 'apple-ci: selected compatible %s runtime %s\n' "$platform" "$runtime"
+    if [ "$platform" = iOS ]; then IOS_RUNTIME="$runtime"; fi
+  done
   resolve Persona
-  # The iOS 26.0 SDK (23A339) maps to runtime 26.0.1 (23A8464).
-  # SDK versions and downloadable runtime versions are different identifiers.
-  [ "$(xcrun --sdk iphoneos --show-sdk-build-version)" = 23A339 ] || {
-    printf 'apple-ci: FAIL unexpected iOS SDK build for the pinned runtime\n' >&2; exit 1;
-  }
-  select_runtime() {
-    python3 -I - "$1" "${2:-iOS}" "${3:-26.0.1}" "${4:-23A8464}" <<'PYTHON'
-import json, sys
-with open(sys.argv[1]) as source:
-    runtimes = json.load(source)["runtimes"]
-hits = [r["identifier"] for r in runtimes if r.get("isAvailable")
-        and r.get("version") == sys.argv[3] and r.get("buildversion") == sys.argv[4]
-        and ("." + sys.argv[2] + "-") in r["identifier"]]
-if len(hits) != 1:
-    sys.exit(1)
-print(hits[0])
-PYTHON
-  }
-  ci_run 'List simulator runtimes' 120 bash -c 'xcrun simctl list runtimes -j > "$1"' -- "$OUTPUT/runtimes-before.json"
-  if ! IOS_RUNTIME=$(select_runtime "$OUTPUT/runtimes-before.json"); then
-    # Let the selected Xcode resolve its default platform; do not pass an SDK
-    # version as -buildVersion or silently run on a newer installed runtime.
-    ci_run 'Download selected Xcode iOS simulator platform' 1200 xcodebuild -downloadPlatform iOS
-    ci_run 'List downloaded simulator runtimes' 120 bash -c 'xcrun simctl list runtimes -j > "$1"' -- "$OUTPUT/runtimes-after.json"
-    IOS_RUNTIME=$(select_runtime "$OUTPUT/runtimes-after.json") || {
-      printf 'apple-ci: FAIL expected available iOS 26.0.1 runtime build 23A8464 after download\n' >&2; exit 1;
-    }
-  fi
-  printf 'apple-ci: selected runtime %s (26.0.1, 23A8464)\n' "$IOS_RUNTIME"
-  # The embedded Watch target also needs the selected Xcode's watchOS
-  # platform. Apple's catalog maps SDK 23R351 to runtime 26.0 (23R353).
-  [ "$(xcrun --sdk watchos --show-sdk-build-version)" = 23R351 ] || {
-    printf 'apple-ci: FAIL unexpected watchOS SDK build for the pinned runtime\n' >&2; exit 1;
-  }
-  ci_run 'List watchOS simulator runtimes' 120 bash -c 'xcrun simctl list runtimes -j > "$1"' -- "$OUTPUT/watch-runtimes-before.json"
-  if ! WATCH_RUNTIME=$(select_runtime "$OUTPUT/watch-runtimes-before.json" watchOS 26.0 23R353); then
-    ci_run 'Download selected Xcode watchOS simulator platform' 1200 xcodebuild -downloadPlatform watchOS
-    ci_run 'List downloaded watchOS runtimes' 120 bash -c 'xcrun simctl list runtimes -j > "$1"' -- "$OUTPUT/watch-runtimes-after.json"
-    WATCH_RUNTIME=$(select_runtime "$OUTPUT/watch-runtimes-after.json" watchOS 26.0 23R353) || {
-      printf 'apple-ci: FAIL expected available watchOS 26.0 runtime build 23R353 after download\n' >&2; exit 1;
-    }
-  fi
-  printf 'apple-ci: selected Watch runtime %s (26.0, 23R353)\n' "$WATCH_RUNTIME"
   # Generic device builds compile the actual watch/widget/notification/share
   # dependency graph; do not delete the watch target to accommodate the runner.
   ci_run 'Unsigned iOS and embedded watch/extensions build' 1800 "${XCODE[@]}" -scheme Persona \
@@ -159,11 +135,11 @@ PYTHON
     -disableAutomaticPackageResolution "${UNSIGNED[@]}" build
 
   # sim-boot is the sole creation/boot entry, with a fresh stock simulator (not
-  # paired to a real hub), pinned to the compiler's runtime.
+  # paired to a real hub), pinned to the validated compiler-compatible runtime.
   SIM_STARTED=1
-  ci_run 'Create and boot stock iOS 26.0.1 test simulator' 1000 bash -c \
-    'SIM_BOOT_TIMEOUT=900 "$1" --profile stock --runtime "$4" --device-type "iPhone 17 Pro" "$2" > "$3"' \
-    -- "$SOURCE/scripts/app/sim-boot.sh" "$SIM_NAME" "$OUTPUT/simulator.log" "$IOS_RUNTIME"
+  ci_run 'Create and boot stock iOS 26.0 test simulator' 1000 bash -c \
+    'SIM_BOOT_TIMEOUT=900 "$1" --profile stock --runtime "$4" --device-type "iPhone 17 Pro" "$2" > "$3" 2> >(tee "$5" >&2)' \
+    -- "$SOURCE/scripts/app/sim-boot.sh" "$SIM_NAME" "$OUTPUT/simulator.log" "$IOS_RUNTIME" "$OUTPUT/simulator-boot.log"
   # Accept only the helper's single UDID, never a partial/error log.
   SIM=$(python3 -I - "$OUTPUT/simulator.log" <<'PY'
 import re, sys
@@ -173,15 +149,23 @@ if len(matches) != 1:
 print(matches[0])
 PY
   )
+  # The real EventKit round-trip uses only this disposable simulator's store.
+  # TCC grants can precede installation of the synthetic CI app.
+  CI_BUNDLE_ID=$(python3 -I -c 'import json, sys; print(json.load(open(sys.argv[1]))["app"]["bundle_id"])' "$PERSONA_CONFIG")
+  ci_run 'Grant Reminders access to the owned test app' 60 xcrun simctl privacy "$SIM" grant reminders "$CI_BUNDLE_ID"
+  export TEST_RUNNER_PERSONA_EVENTKIT_ROUNDTRIP=1
+
   IOS_TESTS=("${XCODE[@]}" -scheme Persona -destination "platform=iOS Simulator,id=$SIM" \
     -destination-timeout 120 -derivedDataPath "$OUTPUT/ios-tests" -parallel-testing-enabled NO \
     -disableAutomaticPackageResolution "${TEST_SIGNING[@]}")
   # Explicit fixture-only exclusions, not evidence of those integrations passing.
+  # Swift Testing method selectors include (); without it disabled integration
+  # cases remain selected and appear as unexpected skips in the result bundle.
   IOS_EXCLUSIONS=(
     -skip-testing:PersonaTests/OldHubCompatibilityIntegrationTests
-    -skip-testing:PersonaTests/NotificationServiceTests/opensWhatTheRelayDelivered
-    -skip-testing:PersonaTests/VideoFileTests/nativeVideoPlaysSeeksAndCleansUp
-    -skip-testing:PersonaTests/VideoFileResourceTests/realHTTPReadsMiddleTailAndRejectsChangedRevision
+    "-skip-testing:PersonaTests/NotificationServiceTests/opensWhatTheRelayDelivered()"
+    "-skip-testing:PersonaTests/VideoFileTests/nativeVideoPlaysSeeksAndCleansUp()"
+    "-skip-testing:PersonaTests/VideoFileResourceTests/realHTTPReadsMiddleTailAndRejectsChangedRevision()"
   )
   printf '%s\n' 'apple-ci: excluded integration cases: old-hub lab; relay/APNs payload lab; native video fixture; real video HTTP fixture; destructive HTML loop (dedicated external watchdog required). UI tests are a separate mock-hub/screenshot lane.'
   # WebKit suites must run in separate batches, not interleave in Swift Testing
@@ -196,7 +180,7 @@ PY
   result ios-html-card AssistantHTMLCardTests
   ci_run 'iOS bounded HTML security tests (separate batch)' 600 "${IOS_TESTS[@]}" \
     -only-testing:PersonaTests/AssistantHTMLSecurityTests \
-    -skip-testing:PersonaTests/AssistantHTMLSecurityTests/aRealInfiniteLoopCanBeDiscardedWithoutBlockingANewCard \
+    "-skip-testing:PersonaTests/AssistantHTMLSecurityTests/aRealInfiniteLoopCanBeDiscardedWithoutBlockingANewCard()" \
     -resultBundlePath "$OUTPUT/ios-html-security.xcresult" test
   result ios-html-security AssistantHTMLSecurityTests
   ci_run 'Verify token baseline was not rewritten' 60 cmp "$CI_ROOT/apple/PersonaTests/TokenBaseline.json" "$SOURCE/apple/PersonaTests/TokenBaseline.json"
@@ -207,6 +191,14 @@ if [ "$LANE" = all ] || [ "$LANE" = macos ]; then
   ci_run 'Unsigned macOS app and notification extension build' 1800 "${XCODE[@]}" -scheme PersonaMac \
     -destination 'generic/platform=macOS' -derivedDataPath "$OUTPUT/macos-build" \
     -disableAutomaticPackageResolution "${UNSIGNED[@]}" build
+  # The real unsigned build above keeps all shipping entitlements. A Mac ad-hoc
+  # test host cannot claim profile-authorized push or shared Keychain groups:
+  # AMFI rejects it before main, even when codesign --verify succeeds. Prepare
+  # only the disposable snapshot for offline execution; retain its sandbox,
+  # other permissions, hardened-runtime settings and ad-hoc signatures.
+  ci_run 'Prepare profile-free Mac offline test entitlements' 60 python3 "$CI_ROOT/scripts/ci/apple_entitlements.py" \
+    "$SOURCE/apple/Mac/Resources/PersonaMac.entitlements" \
+    "$SOURCE/apple/PersonaNotify/PersonaMacNotify.entitlements"
   printf '%s\n' 'apple-ci: excluded Mac integration suite: ExtensionStreamSnapshotTests (5 live extension/hub cases requiring PERSONA_STREAM_TEST_PAIR). Mac UI/screenshot tests are a separate lane.'
   ci_run 'macOS offline unit tests' 1800 "${XCODE[@]}" -scheme PersonaMac \
     -destination 'platform=macOS' -derivedDataPath "$OUTPUT/macos-tests" -parallel-testing-enabled NO \
