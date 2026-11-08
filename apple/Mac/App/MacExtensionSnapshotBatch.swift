@@ -84,6 +84,9 @@ import SwiftUI
                     }
                 }
             }
+            // Unmount the final page while the socket still exists, so its deferred close can be sent.
+            try await clearPage()
+            try await Task.sleep(for: .milliseconds(600))
             let encoder = JSONEncoder(); encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
             try encoder.encode(captures).write(to: output.appending(path: "captures.json"), options: .atomic)
             FileHandle.standardError.write(Data("RESULT Mac extension snapshots: \(captures.count) captures; no activation\n".utf8))

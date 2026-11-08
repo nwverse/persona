@@ -19,10 +19,13 @@ struct ExtensionViewRenderer: View {
     @Binding var link: LinkTarget?
 
     var body: some View {
+        #if !os(macOS)
+        // Mac pages already expose the same search in their toolbar.
         if let search = view.search, let model, model.managesConfirmation {
             Section { ExtensionSearchRow(search: search, model: model, link: $link) }
                 .listRowInsets(EdgeInsets()).listRowBackground(Color.clear)
         }
+        #endif
         if let f = view.filter, let model {
             Section { ExtensionFilterChips(filter: f, model: model, link: $link) }
                 .listRowInsets(EdgeInsets())

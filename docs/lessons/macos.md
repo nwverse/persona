@@ -304,3 +304,9 @@ Each page has its own `NSHostingView`, with `isHidden` set while inactive. Pitfa
 - **One background for the whole column**: Persona's `macListRow` covers system selection with `Theme.pageBackground` on every chat row; title, task entry, and empty areas were transparent, showing the window background.
   Real-window screenshots in the default glass style show a color band too, but offscreen screenshots may render both colors alike and cannot establish that no issue exists. Clay reproduces reliably in light and dark mode. Mac `AssistantSidebar` now fills its whole column with the same token,
   without changing row selection/hover or iOS. Check title, group headers, unselected rows, and bottom empty space together, and also inspect a style with a colored page background.
+
+## Native extension showcase capture (2026-11-08, #1149)
+
+- A native page's inline search row must not duplicate the Mac toolbar's search field. The real shared-list screenshots exposed both after native confirmation/search hosting was introduced. Preserve the inline control on iOS and the existing Mac toolbar control; do not redesign either platform.
+- A capture batch must unmount its final page while its authenticated socket is still alive. Immediate process termination can discard a deferred native-session close. Keep bounded startup/committed-view waits, preserve failed readiness screenshots/logs, and never count an error page or a missing capture manifest as success.
+- Label `cacheDisplay` evidence as actual-app offscreen capture. It validates content/layout but does not establish Window Server materials, real focus, gestures, SpringBoard WidgetKit installation or a watch face complication.
