@@ -68,6 +68,10 @@ A busy button protects only its click path after rerender. Mail shortcuts and fo
 - **Loading gates distinguish empty lists from failures**: an empty list object is loaded and cached data can display immediately; a first-load failure must still allow category switching or retry. Search is independent of category lists and must not be blocked by this gate.
 - **Validate real layout**: jsdom checks timing only. Measure wrapping with Playwright + mock hub at width 390, using `layout-shift` over 4 seconds after navigation, excluding `hadRecentInput`, with 3 repetitions per group. Also delay list responses and capture light / dark loading and loaded states. Pin time and animation frames for before / after comparisons, checking loaded pixels rather than mistaking timers or animation for layout changes.
 
+### Confirmed facts belong to the requested entry (#1341)
+
+- A detail pane can retain its old response while its route changes. Key the editing boundary by requested kind/id, opaque credential generation and the actual default manager; capture that manager and token on reads and writes, and fence late results as well as submission. The server canonicalizes source IDs, including recording UUID case, so response ownership follows the captured request rather than raw ID equality. After a successful write, a failed authoritative read needs a read-only retry; returning to the save action can repeat an already accepted mutation. Admit saves synchronously before React renders busy state, and send only the confirmed-facts field so unrelated metadata and locks stay intact.
+
 ## Overview with no computers (2026-11-06, #3729)
 
 - No pending Agent does not mean an Agent can be started. Overview's idle summary and cards distinguish "No computers" from "Computers exist, no tasks"; the header must not keep suggesting New Agent. Use the total computer count, not treating offline computers as never connected.
