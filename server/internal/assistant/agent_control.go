@@ -133,7 +133,7 @@ func (s *Service) toolAgentSupervise(ctx context.Context, self string, args json
 		return "", fmt.Errorf("that is an assistant conversation, not a coding agent")
 	}
 	todo, made, err := s.adoptAgent(ctx, self, am, c, a.Title, i18n.T(s.lang(ctx), "assistant-tasks.adopt_notes",
-		i18n.Args{"agent": agentLabel(c), "machine": am.Name, "cwd": c.Cwd}), a.DoneWhen, a.ExpectMinutes)
+		i18n.Args{"agent": agentLabel(c), "machine": am.Name, "cwd": c.Cwd}), a.DoneWhen, a.ExpectMinutes, true)
 	if err != nil {
 		return "", err
 	}
@@ -148,13 +148,14 @@ func (s *Service) toolAgentSupervise(ctx context.Context, self string, args json
 }
 
 // adoptAgent puts agent c of machine am under conversation self's supervision (agent_supervise, agent_send with a
-// task): a task of self already gets the new done_when / expect_minutes (none: kept), an agent of no task becomes one
+// task): a task of self already gets the new done_when / expect_minutes (none: kept; update false: left as it is, for
+// the caller to write later), an agent of no task becomes one
 // (a todo titled title, else after the session, with notes, the agent linked: made true; the caller puts its card in
 // the feed, taskCard); another
 // conversation's task, or the user's own todo, stays theirs (an error). If the agent cannot be linked to the todo just
 // made, that todo is closed (no empty task stays).
 func (s *Service) adoptAgent(ctx context.Context, self string, am Device, c proto.Session, title, notes string, doneWhen []string,
-	expect int) (Todo, bool, error) {
+	expect int, update bool) (Todo, bool, error) {
 	if err := s.ensureTodosLoaded(ctx); err != nil {
 		return Todo{}, false, err
 	}
@@ -165,6 +166,9 @@ func (s *Service) adoptAgent(ctx context.Context, self string, am Device, c prot
 	if t, ok := s.openTodoOfAgent(am.ID, c.SessionID); ok {
 		if err := othersTask(c, t, self); err != nil {
 			return Todo{}, false, err
+		}
+		if !update {
+			return t, false, nil
 		}
 		v, _, err := s.updateSupervision(ctx, t.ID, func(v *Supervision) bool {
 			v.Supervisor = self
@@ -259,7 +263,13 @@ func (s *Service) sendTaskAllowed(ctx context.Context, self string, am Device, c
 	if err := othersTask(c, t, self); err != nil {
 		return fmt.Errorf("%w; nothing was sent (send it without task to only send it)", err)
 	}
-	if title := clip(oneLine(task.Title), 40); title != "" && title != t.Title {
+	return otherWork(c, t, task)
+}
+
+// otherWork refuses task for agent c on self's own task t when its title is another (other work, not to be filed under
+// t); an empty title is more of t.
+func otherWork(c proto.Session, t Todo, task sendTask) error {
+	if title := clip(oneLine(task.Title), 40); title != "" && title != clip(oneLine(t.Title), 40) {
 		return fmt.Errorf("%s already works for your task %s (%q), not %q; nothing was sent. More of that task: send it with that "+
 			"title, or without task. Other work: close that task first (task_review), or hand the work to another agent",
 			agentLabel(c), t.ID, t.Title, title)
@@ -270,14 +280,18 @@ func (s *Service) sendTaskAllowed(ctx context.Context, self string, am Device, c
 // handTask puts the agent under self's supervision for task before text is sent to it (adoptAgent): text is the new
 // todo's notes, and its title when task has none. An agent on a task of self's stays on it, unchanged until the send.
 func (s *Service) handTask(ctx context.Context, self string, am Device, c proto.Session, task sendTask, text string) (*handedTask, error) {
-	if t, ok := s.openTodoOfAgent(am.ID, c.SessionID); ok && othersTask(c, t, self) == nil {
-		return &handedTask{todo: t, self: self, task: task}, nil
-	}
-	todo, made, err := s.adoptAgent(ctx, self, am, c, cmp.Or(strings.TrimSpace(task.Title), text), text, task.DoneWhen, task.ExpectMinutes)
+	// Decided under adoptMu (adoptAgent): another hand-off may have put the agent on a task since sendTaskAllowed.
+	todo, made, err := s.adoptAgent(ctx, self, am, c, cmp.Or(strings.TrimSpace(task.Title), text), text, task.DoneWhen, task.ExpectMinutes, false)
 	if err != nil {
 		return nil, fmt.Errorf("%w; nothing was sent", err)
 	}
-	return &handedTask{todo: todo, made: made, self: self}, nil
+	if made {
+		return &handedTask{todo: todo, made: true, self: self}, nil
+	}
+	if err := otherWork(c, todo, task); err != nil {
+		return nil, err
+	}
+	return &handedTask{todo: todo, self: self, task: task}, nil
 }
 
 // sent: the text went. A task made for it gets its card in the conversation; one it was on already gets task's
