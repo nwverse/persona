@@ -313,6 +313,23 @@ describe("Reply all through the reader and composer", () => {
     expect(field("body").value).toBe("New ordinary draft");
   });
 
+  it.each(["dismiss", "cancel"] as const)("a late failure respects a newer same-mode draft's %s", async (action) => {
+    await show();
+    click("inbox-inboxbodies.reply_all");
+    edit("body", "Older pending reply all");
+    burst();
+    dismiss();
+    click("inbox-inboxbodies.reply_all");
+    edit("body", "Newer reply all edits");
+    if (action === "dismiss") dismiss();
+    else click("common.cancel");
+    await act(async () => delivery.resolve(new Response('{"error":"Synthetic failure"}', { status: 503 })));
+    click("inbox-inboxbodies.reply_all");
+    expect(field("body").value).not.toBe("Older pending reply all");
+    if (action === "dismiss") expect(field("body").value).toBe("Newer reply all edits");
+    else expect(field("body").value).toContain("> Synthetic original 1");
+  });
+
   it("requires a deliberate recipient for self-only mail and sends none of the receiving identity", async () => {
     messages.set(1, deferred());
     messages.get(1)!.resolve({ ...message(), from: { email: "ME@example.com" }, to: [{ email: "me@example.com" }], cc: [] });
