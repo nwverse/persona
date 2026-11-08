@@ -1480,6 +1480,189 @@
     }
   },
   {
+    "name": "todo_list",
+    "description": "List the user's Persona to-dos (the To-dos page in the app, not Feishu tasks): open ones by default, earliest due first (those without a due date last), each with its id, title, state, priority, due date, reminder and the agents on it, and the first line of its notes. Times are in the user's time zone. Filter by state, by due date (due_before / due_after: a day or a moment), overdue ones only, with or without agents, or a word in the title or notes. Use it before changing a to-do, to find its id; ask with todo_get for one in full.",
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "status": {
+          "type": "string",
+          "enum": [
+            "open",
+            "done",
+            "all"
+          ],
+          "description": "which to-dos: open (default), done, or all"
+        },
+        "due_before": {
+          "type": "string",
+          "description": "only those due by then: a day (2026-11-15, through its end) or a moment (2026-11-15 18:00, RFC 3339); leaves out those without a due date"
+        },
+        "due_after": {
+          "type": "string",
+          "description": "only those due from then on: a day or a moment; leaves out those without a due date"
+        },
+        "overdue": {
+          "type": "boolean",
+          "description": "only open ones whose due date has passed"
+        },
+        "with_agents": {
+          "type": "boolean",
+          "description": "true: only those agents work on (tasks); false: only the user's own"
+        },
+        "query": {
+          "type": "string",
+          "description": "words to find in the title or notes"
+        },
+        "limit": {
+          "type": "integer",
+          "description": "at most this many (default 50, at most 200)"
+        }
+      }
+    }
+  },
+  {
+    "name": "todo_get",
+    "description": "One of the user's Persona to-dos in full: its title, state, priority, due date, reminder (and whether it was pushed), when it was made and changed, the conversation and plan it came from when it is a task, its notes, the agents that work or worked on it, and the decisions in force on it.",
+    "input_schema": {
+      "type": "object",
+      "required": [
+        "id"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "the to-do's id (todo_…), as todo_list gives it"
+        }
+      }
+    }
+  },
+  {
+    "name": "todo_create",
+    "description": "Add a to-do to the user's Persona to-dos, when the user asks you to note something to do or to remind them of it (or agrees to your suggestion): it shows on the To-dos page of the app, sorted by its due date, and with remind set the phone is pushed about it at that time. It is the user's own to-do, with no agent on it: work for an agent is task_plan. Done at once, nothing to confirm. An open to-do with the same title and due date is not made twice: you get that one back. Write the title as the thing to do (short, the user's language); put links, amounts and details in notes. Read due dates and times in the user's time zone; when only the day is known, give the day.",
+    "input_schema": {
+      "type": "object",
+      "required": [
+        "title"
+      ],
+      "properties": {
+        "title": {
+          "type": "string",
+          "description": "what is to be done, in a line"
+        },
+        "notes": {
+          "type": "string",
+          "description": "details: where it came from, links, amounts, what to bring"
+        },
+        "due": {
+          "type": "string",
+          "description": "when it is due: a day (2026-11-15) when only the day is known, else a moment (2026-11-15 18:00 in the user's time zone, or RFC 3339 with its offset); 2h / 3d from now also work"
+        },
+        "remind": {
+          "type": "string",
+          "description": "when to push the phone about it: a moment (2026-11-14 09:00 in the user's time zone, or RFC 3339), or 30m / 2h / 1d from now; not in the past. Leave it out unless the user asked for a reminder or the deadline is close and matters"
+        },
+        "priority": {
+          "type": "string",
+          "enum": [
+            "high",
+            "normal",
+            "low"
+          ],
+          "description": "normal when left out"
+        }
+      }
+    }
+  },
+  {
+    "name": "todo_update",
+    "description": "Change one of the user's Persona to-dos: its title, notes, due date, reminder or priority. Only what you give changes; \"\" clears notes, due or remind. A new reminder time is pushed again even when the old one already was. Done at once, nothing to confirm, also for a task's to-do. To mark it done or open it again use todo_complete / todo_reopen.",
+    "input_schema": {
+      "type": "object",
+      "required": [
+        "id"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "the to-do's id (todo_…), as todo_list gives it"
+        },
+        "title": {
+          "type": "string",
+          "description": "the new title"
+        },
+        "notes": {
+          "type": "string",
+          "description": "the new notes (they replace the old ones: keep what should stay); \"\" clears them"
+        },
+        "due": {
+          "type": "string",
+          "description": "the new due date: a day (2026-11-15) or a moment (2026-11-15 18:00 in the user's time zone, RFC 3339); \"\" clears it"
+        },
+        "remind": {
+          "type": "string",
+          "description": "the new reminder: a moment (2026-11-14 09:00, RFC 3339) or 30m / 2h / 1d from now, not in the past; \"\" clears it"
+        },
+        "priority": {
+          "type": "string",
+          "enum": [
+            "high",
+            "normal",
+            "low"
+          ]
+        }
+      }
+    }
+  },
+  {
+    "name": "todo_complete",
+    "description": "Mark one of the user's Persona to-dos done, when the user says it is done (or asks you to close it). The user's own to-do is closed at once. A task's, or one agents work on, is confirmed on the phone first, because closing it also closes its agents once they are idle; if the user declines, nothing changes.",
+    "input_schema": {
+      "type": "object",
+      "required": [
+        "id"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "the to-do's id (todo_…), as todo_list gives it"
+        }
+      }
+    }
+  },
+  {
+    "name": "todo_reopen",
+    "description": "Open a done Persona to-do again, when the user says it is not done after all. The user's own to-do is reopened at once; a task's, or one agents worked on, is confirmed on the phone first.",
+    "input_schema": {
+      "type": "object",
+      "required": [
+        "id"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "the to-do's id (todo_…), as todo_list gives it"
+        }
+      }
+    }
+  },
+  {
+    "name": "todo_delete",
+    "description": "Delete one of the user's Persona to-dos for good (its notes, links to agents and decisions go with it), only when the user asks for it to be deleted; one that is finished is completed instead (todo_complete). Every delete is confirmed on the phone first; if the user declines, writes instead, or does not answer, nothing is deleted. The agents that worked on it are left as they are.",
+    "input_schema": {
+      "type": "object",
+      "required": [
+        "id"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "the to-do's id (todo_…), as todo_list gives it"
+        }
+      }
+    }
+  },
+  {
     "name": "jarvis_settings",
     "description": "Read and change Persona's own settings for the user: their inbox sorting rules, how their inbox items link to their tasks, 关于我 (what you know about them), your default launcher (model), their mail accounts, which Claude Code config directories each machine keeps out of Agents. Start with action list (what there is, what each takes); get reads one. set / add / remove put a card on the user's phone that says what changes (before → after) and nothing changes until they approve; what the card needs filled in, like a mail password, the user types there, so never ask for passwords in the conversation. Change only what the user asked for.",
     "input_schema": {
