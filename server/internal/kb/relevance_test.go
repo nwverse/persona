@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/nwverse/persona/server/internal/ai"
 )
@@ -91,8 +92,8 @@ func TestModelScoreReadsWhatModelsWrite(t *testing.T) {
 	}
 }
 
-// A project rewrite and a batch of tagged items read the same way: one odd score no longer fails the rest (before
-// #1099 one quoted score failed the whole batch of up to 40 items).
+// A project rewrite, a batch of tagged items and a recording summary read the same way: one odd score no longer fails
+// the rest (before #1099 one quoted score failed the whole batch of up to 40 items).
 func TestProjectAndItemDigestsTakeAQuotedRelevance(t *testing.T) {
 	var p projectDigest
 	if err := json.Unmarshal([]byte(`{"summary":"s","importance":"P1","relevance":"75"}`), &p); err != nil || p.Relevance != 75 {
@@ -108,5 +109,29 @@ func TestProjectAndItemDigestsTakeAQuotedRelevance(t *testing.T) {
 	}
 	if len(got) != 3 || got[0] != 60 || got[1] != 70 || got[2] != -1 {
 		t.Errorf("item relevances = %v, want [60 70 -1]", got)
+	}
+	var r recordingSummary
+	if err := json.Unmarshal([]byte(`{"title":"t","summary":"s","relevance":"80"}`), &r); err != nil || r.Relevance != 80 {
+		t.Errorf("recordingSummary relevance = %d, %v; want 80", r.Relevance, err)
+	}
+}
+
+// A recording's summary reads the same way end to end: a quoted score is taken, and the title and summary the model
+// wrote are kept instead of the recording staying unsummarized.
+func TestSummarizeRecordingsTakesARelevanceWrittenAsAString(t *testing.T) {
+	e := testEngine(t, modelReplying(t, `{"title":"Weekly sync","summary":"Release on Friday.","one_line":"Friday","importance":"P2","relevance":"80","tags":["sync"]}`))
+	now := time.Date(2026, 11, 5, 12, 0, 0, 0, time.UTC)
+	if _, err := e.PutRecording(recID, recUpload(1, now.Add(-time.Hour), true, "release first", "Friday rollout"), now); err != nil {
+		t.Fatal(err)
+	}
+	if n := e.SummarizeRecordings(context.Background(), 3); n != 1 {
+		t.Fatalf("summarized %d, want 1", n)
+	}
+	r, _ := e.Store.Recording(recID)
+	if r.Relevance != 80 || r.Importance != "P2" || r.AITitle != "Weekly sync" {
+		t.Errorf("recording = %s / %d / %q, want P2 / 80 / \"Weekly sync\"", r.Importance, r.Relevance, r.AITitle)
+	}
+	if e.Store.Summary(KindRecording, recID) == "" {
+		t.Error("the summary was not written")
 	}
 }

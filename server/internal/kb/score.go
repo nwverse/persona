@@ -10,8 +10,9 @@ import (
 
 // modelScore is a 0–100 relevance score as a model writes it in its JSON. Models sometimes quote it ("80") or write a
 // fraction (80.5): both read as that number, rounded. Anything else (a word, a value outside 0–100, an object) reads
-// as -1, which applyTags ignores, so the chat, project or item keeps the relevance it had. Before #1099 such a field
-// failed the whole answer: a chat's summary, a project's rewrite, or a batch of up to 40 tagged items.
+// as -1, which applyTags ignores, so the chat, project, recording or item keeps the relevance it had. Before #1099
+// such a field failed the whole answer: a chat's summary, a project's rewrite, a recording's title and summary, or a
+// batch of up to 40 tagged items.
 // null and an absent field leave it at 0, as the int field it replaces did.
 type modelScore int
 
