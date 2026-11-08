@@ -1171,6 +1171,8 @@ struct ClaudeSettingsView: View {
     @State private var loading = false
     @State private var error: String?
     @State private var strings: [String: String] = [:]
+    /// Live Replies of the machine shown (Claude Code only; nil before it loads, and gone on a hub without it).
+    @State private var liveReplies: LiveRepliesModel?
 
     var body: some View {
         SettingsForm {
@@ -1193,6 +1195,9 @@ struct ClaudeSettingsView: View {
                 ForEach(settings) { s in row(s) }
             }
             #endif
+            if agent == .claude, let live = liveReplies, live.ref == ref, !live.unsupported {
+                LiveRepliesSection(model: live, others: applyAll ? model.machines.filter { $0.online && $0.ref != ref }.map(\.ref) : [])
+            }
             if agent == .claude, !machineID.isEmpty { ClaudeDirsSection(ref: ref) }
         }
         .themedPage()
@@ -1200,7 +1205,19 @@ struct ClaudeSettingsView: View {
         .onAppear { if machineID.isEmpty { machineID = model.hubRef(model.hubMachineID).path } } // first visit: the hub's machine
         .overlay { if loading && settings.isEmpty { ProgressView() } }
         .task(id: machineID) { await load() }
-        .refreshable { await load() }
+        .task(id: agent == .claude ? machineID : "") { await loadLiveReplies() }
+        .refreshable {
+            await load()
+            await liveReplies?.load()
+        }
+    }
+
+    /// The machine's Live Replies switch, read again whenever another machine is picked.
+    private func loadLiveReplies() async {
+        guard agent == .claude, !machineID.isEmpty else { return }
+        let live = LiveRepliesModel(ref: ref, deps: .live(model))
+        liveReplies = live
+        await live.load()
     }
 
     @ViewBuilder private func row(_ s: APIClient.ClaudeSetting) -> some View {

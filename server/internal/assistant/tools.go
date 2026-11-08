@@ -452,8 +452,8 @@ func (s *Service) adoptStartedSession(ctx context.Context, m Device, launcher, c
 // askUserWait is how long an ask_user card waits for the user. It is longer than the Lark nudge's default wait
 // (assistantwire.NudgeAfterDefault), so an owner who is away is nudged while the question still waits (#9); the
 // turn that asked is held for as long, which is why the user speaking in the conversation withdraws the question
-// (withdrawAskUser).
-const askUserWait = 2 * time.Hour
+// (withdrawAskUser). A question nobody answers in it becomes a to-do (ask_todo.go). A variable for the tests.
+var askUserWait = 2 * time.Hour
 
 // question is an ask_user waiting for the user: the card the hub shows, and where the answer goes.
 type question struct {
@@ -510,6 +510,13 @@ func (s *Service) toolAskUser(ctx context.Context, machine, sessionID string, ar
 	}
 	if r.Cancel {
 		return prompts.RenderQuestionCancelled(), nil
+	}
+	if s.askExpiredResolution(ix, r) { // nobody answered in time: it waits as a to-do (ask_todo.go)
+		t, err := s.askExpired(context.WithoutCancel(ctx), ix)
+		if err == nil {
+			return prompts.RenderQuestionMovedToTodo(prompts.QuestionMovedToTodo{TodoID: t.ID, Title: t.Title}), nil
+		}
+		s.logf("ask_user %s: expired, and no to-do could be made: %v", ix.ID, err)
 	}
 	if r.Dismiss || len(r.Answers) == 0 {
 		return "The user did not answer (dismissed or timed out). Don't go ahead with what you asked about; say what is waiting for them.", nil

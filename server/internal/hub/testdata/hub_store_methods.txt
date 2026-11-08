@@ -29,6 +29,8 @@ DeleteDevice
 SetDevicePrefs
 LiveActivities
 SaveLiveActivity
+# Atomic push delivery budget only; no manager business state or device registration fields.
+ClaimLiveActivityStart
 Setting
 PutSetting
 TakeSetting
