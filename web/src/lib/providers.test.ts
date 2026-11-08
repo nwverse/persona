@@ -63,13 +63,13 @@ describe("formProblems", () => {
     expect(formProblems(ready({ api_key: "" }), false, true).connect).toBe("");
   });
   it("ignores unsupported chat draft values without weakening other protocols' validation", () => {
-    const draft = ready({ kind: "api", api: "chat", headers: "invalid", headers_touched: true, proxy: "invalid", no_proxy: "example.com" });
+    const draft = ready({ kind: "api", api: "chat", headers: "invalid", headers_touched: true, proxy: "invalid", no_proxy: "example.com", env: "invalid", env_touched: true, timeout_ms: "bad", compact_window: "bad", max_context: "bad", effort: "high" });
     expect(formProblems(draft, true).advanced).toBe("");
     expect(formProblems({ ...draft, api: "responses" }, true).advanced).not.toBe("");
     for (const body of [providerBody(draft, null), providerBody(draft, { name: "gw", kind: "api", api: "chat", model: "m1" }), probeBody(draft, null)]) {
       expect(body).not.toHaveProperty("headers");
       expect(body).not.toHaveProperty("proxy");
-      expect(body).not.toHaveProperty("no_proxy");
+      for (const key of ["no_proxy", "env", "timeout_ms", "compact_window", "max_context", "effort"]) expect(body).not.toHaveProperty(key);
     }
     const responses = providerBody({ ...draft, api: "responses" }, null);
     expect(responses).toMatchObject({ headers: "invalid", proxy: "invalid", no_proxy: "example.com" });

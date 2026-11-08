@@ -288,11 +288,11 @@ export function formProblems(f: ProviderForm, isNew: boolean, hadKey = false): F
   const chat = f.kind === "api" && f.api === "chat";
   const advanced =
     (!chat && f.headers_touched && headersProblem(f.headers)) ||
-    (f.env_touched && envProblem(f.env)) ||
+    (!chat && f.env_touched && envProblem(f.env)) ||
     (!chat && proxyProblem(f.proxy)) ||
-    (!nonNegInt(f.timeout_ms) && t("lib-providers.timeout_int")) ||
-    (!nonNegInt(f.compact_window) && t("lib-providers.compact_int")) ||
-    (!nonNegInt(f.max_context) && t("lib-providers.max_context_int")) ||
+    (!chat && !nonNegInt(f.timeout_ms) && t("lib-providers.timeout_int")) ||
+    (!chat && !nonNegInt(f.compact_window) && t("lib-providers.compact_int")) ||
+    (!chat && !nonNegInt(f.max_context) && t("lib-providers.max_context_int")) ||
     (f.kind !== "api" && f.args.split(/\s+/).some((a) => a && !a.startsWith("-")) && t("lib-providers.args_dash")) ||
     "";
   return { connect, models, advanced };
@@ -359,11 +359,11 @@ export function providerBody(f: ProviderForm, old: ProviderView | null): Record<
   const extra = extraFields(f);
   const before = old && extraFields(formFromView(old));
   for (const [k, v] of Object.entries(extra)) {
-    if (chat && (k === "proxy" || k === "no_proxy")) continue;
+    if (chat && ["proxy", "no_proxy", "timeout_ms", "compact_window", "max_context", "effort"].includes(k)) continue;
     if (before ? !sameJSON(before[k], v) : v !== "" && v !== 0 && v !== false && !(Array.isArray(v) && v.length === 0)) body[k] = v;
   }
   if (!chat && f.headers_touched) body.headers = f.headers.trim();
-  if (f.env_touched) body.env = f.env.replace(/\s+$/, ""); // the start kept: the hub's line numbers match the box
+  if (!chat && f.env_touched) body.env = f.env.replace(/\s+$/, ""); // the start kept: the hub's line numbers match the box
   return body;
 }
 

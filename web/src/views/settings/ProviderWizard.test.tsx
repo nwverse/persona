@@ -327,19 +327,30 @@ describe("ProviderWizard from presets", () => {
     act(() => { setter.call(header, "X-Example: value"); header.dispatchEvent(new Event("input", { bubbles: true })); });
     type(document.body.querySelector<HTMLInputElement>('input[placeholder="http://127.0.0.1:7890"]')!, "http://proxy.example.com");
     type(document.body.querySelector<HTMLInputElement>('input[placeholder="localhost,127.0.0.1"]')!, "example.com");
+    type(document.body.querySelector<HTMLInputElement>('input[placeholder="3000000"]')!, "1234");
     act(() => button("上一步")!.click());
     act(() => button("Chat Completions")!.click());
     await act(async () => button("测试连接")!.click());
     expect(keyTests()[0]!.body).not.toHaveProperty("headers");
     act(() => button("下一步")!.click());
-    expect(text()).toContain("Chat Completions 不使用供应商专属请求头和代理设置");
+    expect(text()).toContain("Chat Completions 不使用供应商专属请求头、环境变量、代理、超时、上下文或默认思考档位设置");
     expect(document.body.querySelector('textarea[placeholder^="X-Name"]')).toBeNull();
     expect(document.body.querySelector('input[placeholder="http://127.0.0.1:7890"]')).toBeNull();
     expect(document.body.querySelector('input[placeholder="localhost,127.0.0.1"]')).toBeNull();
+    expect(document.body.querySelector('input[placeholder="3000000"]')).toBeNull();
+    expect(document.body.querySelector('textarea[placeholder^="NAME=value"]')).toBeNull();
+    act(() => button("上一步")!.click());
+    act(() => button("Anthropic Messages")!.click());
+    act(() => button("下一步")!.click());
+    expect(document.body.querySelector<HTMLInputElement>('input[placeholder="3000000"]')?.value).toBe("1234");
+    expect(document.body.querySelector<HTMLInputElement>('input[placeholder="http://127.0.0.1:7890"]')?.value).toBe("http://proxy.example.com");
+    act(() => button("上一步")!.click());
+    act(() => button("Chat Completions")!.click());
+    act(() => button("下一步")!.click());
     await act(async () => button("保存")!.click());
     const body = calls.find((c) => c.method === "POST" && c.path.endsWith("/launchers"))?.body;
     expect(body).toMatchObject({ api: "chat" });
-    for (const key of ["headers", "proxy", "no_proxy"]) expect(body).not.toHaveProperty(key);
+    for (const key of ["headers", "proxy", "no_proxy", "env", "timeout_ms", "compact_window", "max_context", "effort"]) expect(body).not.toHaveProperty(key);
   });
 
   it("keeps the Chat Completions protocol when editing", async () => {

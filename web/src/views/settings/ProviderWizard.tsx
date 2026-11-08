@@ -736,6 +736,7 @@ function Advanced({ f, setF, set, hadHeaders, hadEnv }: {
   const ids = useMemo(() => f.models.filter((m) => m.checked).map((m) => m.id), [f.models]);
   const launcher = f.kind !== "api";
   const chat = !launcher && f.api === "chat";
+  if (chat) return <p className="text-[11.5px] leading-relaxed text-ink-3">{t("settings-providerwizard.chat_advanced_hint")}</p>;
   const tier = (k: "opus_model" | "sonnet_model" | "haiku_model" | "fable_model" | "small_model", label: string, hint?: string) => (
     <Labelled label={label} hint={hint}>
       <input value={f[k]} onChange={(e) => set(k)(e.target.value)} list={list} placeholder={t("settings-providerwizard.same_as_default")} aria-label={label} autoComplete="off" spellCheck={false} className={cx(INPUT, "font-mono")} />
@@ -770,7 +771,7 @@ function Advanced({ f, setF, set, hadHeaders, hadEnv }: {
           </div>
         </>
       )}
-      {chat ? <p className="text-[11.5px] leading-relaxed text-ink-3">{t("settings-providerwizard.chat_advanced_hint")}</p> : <SecretField
+      <SecretField
         label={t("settings-providerwizard.headers")}
         multiline
         value={f.headers}
@@ -787,7 +788,7 @@ function Advanced({ f, setF, set, hadHeaders, hadEnv }: {
             t("settings-providerwizard.headers_hint")
           )
         }
-      />}
+      />
       <SecretField
         label={t("settings-providerwizard.env")}
         multiline
@@ -807,10 +808,8 @@ function Advanced({ f, setF, set, hadHeaders, hadEnv }: {
         }
       />
       <div className="grid gap-3 sm:grid-cols-2">
-        {!chat && <>
-          <TextField label={t("settings-providerwizard.proxy")} value={f.proxy} onChange={set("proxy")} mono placeholder="http://127.0.0.1:7890" hint="HTTP_PROXY / HTTPS_PROXY" />
-          <TextField label="NO_PROXY" value={f.no_proxy} onChange={set("no_proxy")} mono placeholder="localhost,127.0.0.1" />
-        </>}
+        <TextField label={t("settings-providerwizard.proxy")} value={f.proxy} onChange={set("proxy")} mono placeholder="http://127.0.0.1:7890" hint="HTTP_PROXY / HTTPS_PROXY" />
+        <TextField label="NO_PROXY" value={f.no_proxy} onChange={set("no_proxy")} mono placeholder="localhost,127.0.0.1" />
         <TextField label={t("settings-providerwizard.timeout")} value={f.timeout_ms} onChange={set("timeout_ms")} mono inputMode="numeric" placeholder="3000000" />
         <TextField label={t("settings-providerwizard.compact_window")} value={f.compact_window} onChange={set("compact_window")} mono inputMode="numeric" placeholder={t("settings-providerwizard.same_as_model_context")} />
         <TextField label={t("settings-providerwizard.max_context")} value={f.max_context} onChange={set("max_context")} mono inputMode="numeric" placeholder={t("settings-providerwizard.same_as_model_context")} />
