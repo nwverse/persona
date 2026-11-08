@@ -12,6 +12,7 @@ import time
 import unittest
 
 from persona_migration_fixtures import GO_MAIN, NODE_INSTALL, NODE_QUERY
+from migration_go import fixture_toolchain
 
 ROOT = Path(__file__).resolve().parents[2]
 CONFIG = ROOT / 'scripts/persona_config.py'
@@ -97,7 +98,10 @@ class PersonaMigrationEdgesTests(unittest.TestCase):
             return cls.go_helper
         source = self.base / 'go-helper-source'
         source.mkdir(exist_ok=True)
-        (source / "go.mod").write_text("module github.com/nwverse/persona/server\n\ngo 1.23\n")
+        go, directives = fixture_toolchain(
+            self.go, ROOT / "server", self.clean_env())
+        (source / "go.mod").write_text(
+            "module github.com/nwverse/persona/server\n\n" + directives)
         for package in ("compat", "nodeproto", "proto", "dialogwire"):
             shutil.copytree(ROOT / "server/internal" / package, source / "internal" / package,
                             ignore=shutil.ignore_patterns("*_test.go"), dirs_exist_ok=True)
@@ -107,7 +111,7 @@ class PersonaMigrationEdgesTests(unittest.TestCase):
             (source / name).write_text(text.replace('package identity', 'package main', 1))
         (source / 'main.go').write_text(GO_MAIN)
         helper = self.base / 'go-helper'
-        result = self.run_command([self.go, 'build', '-buildvcs=false', '-o', str(helper), '.'],
+        result = self.run_command([go, 'build', '-buildvcs=false', '-o', str(helper), '.'],
                                   self.clean_env(GO111MODULE='on', GOWORK='off'),
                                   timeout=120, cwd=source)
         self.assertEqual(result.returncode, 0, result.stderr)
