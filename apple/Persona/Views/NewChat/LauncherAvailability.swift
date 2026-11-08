@@ -51,6 +51,17 @@ nonisolated enum LauncherChoices {
         return launchers.filter { $0.name.localizedCaseInsensitiveContains(q) || ($0.model ?? "").localizedCaseInsensitiveContains(q) }
     }
 
+    /// The grayed-out launchers under their reasons, for a menu that can only title a section (Run Agent Here's picker):
+    /// reasons in the order their first launcher is listed, launchers as listed.
+    static func blockedByReason(_ launchers: [Launcher]) -> [(reason: String, launchers: [Launcher])] {
+        var out: [(reason: String, launchers: [Launcher])] = []
+        for l in launchers {
+            guard let reason = l.block?.reason else { continue }
+            if let i = out.firstIndex(where: { $0.reason == reason }) { out[i].launchers.append(l) } else { out.append((reason, [l])) }
+        }
+        return out
+    }
+
     /// The launcher a computer's sheet starts with when it has no default to follow: the one used there last unless it is
     /// blocked now, else the first that is not; only when every one is blocked, the last one (or the first), grayed
     /// reason and all on the row, rather than nothing to start with.

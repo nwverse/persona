@@ -90,8 +90,13 @@ Decided with the user: gray out with the reason, never hide.
   with **Add Provider** going to the provider wizard; other classes: fix its key, gateway or CLI), the record's `error` under Details, and **Try Anyway**, which picks it after all:
   a start with it that works is what clears a `not_in_terminal` record, so the user must be able to start it once it is fixed. `failing` / `repairing` launchers are offered as before (the hub is still on them); an older hub sends no `health` and nothing changes.
 - The first pick when nothing is configured to follow (an older hub without model configuration) skips blocked launchers: the one used last on that computer unless blocked, else the first that is not (`LauncherChoices.initial`, web `initialLauncher`).
-  When the launcher that will run is blocked anyway (Model Settings' default, or Try Anyway) the form says so under the launcher row; Start stays enabled.
-- **Run Agent here** (a shell pane is a terminal too): web's menu shows a blocked launcher disabled with the same line; iOS / Mac's sheet picks a usable launcher first and says the line under the picker.
+  When the launcher that will run is blocked anyway (Model Settings' default, or Try Anyway) the form says so; Start stays enabled. iOS / Mac say the line under the launcher row (and under the picker's Default row);
+  the web marks the Default chip and puts that launcher's line first, tagged "Used this time".
+- The list is read fresh each time the sheet opens (iOS / Mac `AppModel.launchersForStart`, which refreshes the app's launcher cache; the web reads it per dialog): health changes behind any cache, as a start that fails blocks a launcher and one that works clears it.
+- **Run Agent here** (a shell pane is a terminal too) and the web's hand-off of a to-do to a new agent: a blocked launcher stays a choice, listed after the usable ones with its line before it is chosen
+  (iOS / Mac under a section of the picker's menu titled with the line, which a menu shows where it drops an option's second line, and the line in the footer once picked; web a description under the menu row, or the reason in the option and under the select), and the first pick is a usable one.
+  Neither has a separate help, so it stays selectable on both clients for the same reason as Try Anyway.
+- **Add Provider** in the help is offered only for a computer in the hub group the provider wizard saves to (the hub-level one); on another group's computer the words still say to add a provider there.
 - The assistant's launcher menus (headless `claude -p` in the login shell) are unchanged: `not_in_terminal` does not apply there, and the main chat's readiness covers its model.
 - A failed start whose session has `start_error_code` (#1642) shows the hub's whole sentence under "Didn't Start" in the chat (iOS `StartingNote`, web chat page) instead of clipping it after three lines; without a code it is shown as before.
 

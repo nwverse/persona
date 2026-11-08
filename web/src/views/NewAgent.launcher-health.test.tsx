@@ -129,6 +129,48 @@ describe("New agent's launcher health", () => {
     expect(help.textContent).not.toContain("添加模型供应商");
   });
 
+  it("marks Model settings' default when the launcher it runs can't start here, and still starts with it", async () => {
+    purpose = { purpose: { id: "agent.new", effective: { provider: "launcher.work_gw" } }, providers: [] };
+    launchers = [OK, BLOCKED];
+    await open("g");
+    const mark = q('[data-testid="new-agent-default-blocked"]')!;
+    const def = mark.closest("button")!;
+    // still the choice, not grayed out: it is Model settings' to change
+    expect(def.getAttribute("aria-pressed")).toBe("true");
+    expect(def.getAttribute("aria-disabled")).toBeNull();
+    expect(def.title).toContain("这台电脑的终端里用不了");
+    // the line for the launcher this start runs comes first and says so
+    const rows = [...document.body.querySelectorAll('[data-testid="new-agent-blocked"] li')];
+    expect(rows[0].hasAttribute("data-runs")).toBe(true);
+    expect(rows[0].textContent).toContain("本次使用");
+    expect(rows[0].textContent).toContain("work_gw");
+    expect(rows[0].textContent).toContain("这台电脑的终端里用不了");
+    act(() => button("启动").click());
+    expect(launched[0]).toMatchObject({ machineId: "mac", launcher: "" });
+  });
+
+  it("no mark on the default when what it runs can start; the blocked one is still said", async () => {
+    purpose = { purpose: { id: "agent.new", effective: { provider: "launcher.claude" } }, providers: [] };
+    await open("h");
+    expect(q('[data-testid="new-agent-default-blocked"]')).toBeNull();
+    expect(q('[data-testid="new-agent-blocked"] li[data-runs]')).toBeNull();
+    expect(q('[data-testid="new-agent-blocked"]')!.textContent).not.toContain("本次使用");
+    expect(q('[data-testid="new-agent-blocked"]')!.textContent).toContain("work_gw");
+  });
+
+  it("names the launcher on each How to fix for a screen reader, and points at the help it opens", async () => {
+    launchers = [OK, BLOCKED, { name: "team_gw", health: { state: "blocked", kind: "auth" } }];
+    await open("i");
+    const fixes = [...document.body.querySelectorAll<HTMLButtonElement>('[data-testid="new-agent-blocked"] button')];
+    expect(fixes.map((b) => b.getAttribute("aria-label"))).toEqual(["怎么修好 work_gw", "怎么修好 team_gw"]);
+    act(() => fixes[1].click());
+    expect(fixes[1].getAttribute("aria-expanded")).toBe("true");
+    const help = q('[data-testid="launcher-blocked-help"]')!;
+    expect(fixes[1].getAttribute("aria-controls")).toBe(help.id);
+    // the cause itself is in the help, whole, not only in the line that can be narrow
+    expect(q('[data-testid="launcher-blocked-reason"]')!.textContent).toBe("Key 或登录被拒绝了");
+  });
+
   it("an older hub's launchers (no health) are offered as before", async () => {
     launchers = [{ name: "claude" }, { name: "work_gw" }];
     await open("f");

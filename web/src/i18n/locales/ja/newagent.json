@@ -36,6 +36,8 @@
   "worktree_path": "チェックアウト先：{path}",
   "worktree_failed": "worktree を作れませんでした：{error}",
   "how_to_fix": "直し方",
+  "how_to_fix_named": "{name} の直し方",
+  "runs_this_time": "今回使用",
   "blocked_terminal_body": "Persona はこのコンピューターのログインシェルで「{name}」を見つけましたが、新しいターミナルタブで動くシェルにはありません（別のシェル、コンテナ、途中で終わる起動ファイルなど）。新しい Agent はこれらのタブで起動します。",
   "blocked_terminal_fix_rc": "ターミナルのシェルが読む起動ファイル（bash なら ~/.bashrc）で定義してから、もう一度起動してください。",
   "blocked_terminal_fix_provider": "または Persona にモデルプロバイダーとして追加してください。どのターミナルでも使えます。",

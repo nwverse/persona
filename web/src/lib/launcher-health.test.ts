@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { blockReason, initialLauncher, launcherBlock, NOT_IN_TERMINAL } from "./launcher-health";
+import { blockReason, initialLauncher, launcherBlock, NOT_IN_TERMINAL, usableFirst } from "./launcher-health";
 import type { Launcher } from "./types";
 
 // A launcher's health on the computer "New agent" is for (#1643, docs/server/launcher-health.md): only a blocked record
@@ -53,5 +53,13 @@ describe("initialLauncher", () => {
     expect(initialLauncher("team_gw", all)).toBe("team_gw");
     expect(initialLauncher(undefined, all)).toBe("work_gw");
     expect(initialLauncher("x", [])).toBe("");
+  });
+});
+
+describe("usableFirst", () => {
+  it("puts the blocked ones after the rest, each group in the hub's order", () => {
+    const list = [l("work_gw", { state: "blocked", kind: NOT_IN_TERMINAL }), l("claude", { state: "ok" }), l("team_gw", { state: "blocked", kind: "auth" }), l("slow", { state: "failing" })];
+    expect(usableFirst(list).map((x) => x.name)).toEqual(["claude", "slow", "work_gw", "team_gw"]);
+    expect(usableFirst([])).toEqual([]);
   });
 });

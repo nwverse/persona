@@ -1391,3 +1391,15 @@ DEBUG 的代码可能在 `Persona.debug.dylib` 中，40 KiB 的 `Persona` 只是
 - **Now**: the open text is plain, with a Copy button under it. Don't put `.textSelection(.enabled)` directly under a header
   that toggles on tap; if a selectable body is needed, give it its own gap or make the toggle a separate control. Test the
   fold by tapping the header's words, not just its chevron.
+
+## A picker's menu drops an option's second line; a DisclosureGroup's chevron ignores the tint (2026-11-09, #1643)
+
+- **Picker in a menu**: Run Agent Here wanted to say why a launcher is unavailable before it is picked. An option drawn as
+  `VStack { Text(name); Text(reason) }`, or a `Label` whose title is two `Text`s, shows only the first line in the
+  `Picker`'s menu (iOS 27 simulator; a `Menu` button's second `Text` does become a subtitle, a `Picker` option's does
+  not). What a picker menu does show is a `Section`'s title: the blocked launchers go under a section per reason
+  (`LauncherChoices.blockedByReason`), after the usable ones. The runtime CLI's `activate` cannot choose a menu item (it
+  needs a real touch through `idb`), so a DEBUG switch picks the launcher for the screenshot instead (`-showRunHereLauncher`).
+- **DisclosureGroup**: `.tint(.secondary)` on it leaves its chevron in the primary color, so a gray "Details" label sat
+  next to a black / white chevron that read as a navigation link. Use a borderless button with the expand / collapse icon
+  in `.secondary`, as `ReadinessCard`'s Details does.

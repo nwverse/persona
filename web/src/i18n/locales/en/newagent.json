@@ -36,6 +36,8 @@
   "worktree_path": "Checks out to {path}",
   "worktree_failed": "Couldn’t create the worktree: {error}",
   "how_to_fix": "How to fix",
+  "how_to_fix_named": "How to fix {name}",
+  "runs_this_time": "Used this time",
   "blocked_terminal_body": "Persona found “{name}” in this computer's login shell, but the shell new terminal tabs run doesn't have it: another shell, a container, or a startup file that stops early. New agents start in those tabs.",
   "blocked_terminal_fix_rc": "Define it in a startup file the terminal's shell reads (for bash, ~/.bashrc), then start again.",
   "blocked_terminal_fix_provider": "Or add it to Persona as a model provider: those work in any terminal.",

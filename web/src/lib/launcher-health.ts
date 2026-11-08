@@ -65,3 +65,9 @@ export function initialLauncher(saved: string | null | undefined, launchers: Lau
   if (usable) return usable.name;
   return last?.name ?? launchers[0]?.name ?? "";
 }
+
+/** The launchers in order for a plain menu ("Run agent here"): the ones that can start first, then the grayed-out ones,
+ *  each group as the hub listed it. */
+export function usableFirst(launchers: Launcher[]): Launcher[] {
+  return [...launchers.filter((l) => !launcherBlock(l)), ...launchers.filter((l) => launcherBlock(l))];
+}

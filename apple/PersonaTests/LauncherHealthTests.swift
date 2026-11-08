@@ -119,6 +119,50 @@ import Testing
         #expect(LauncherChoices.initial(saved: "x", in: []) == "")
     }
 
+    @Test func aPlainMenuSaysWhyUnderASectionPerReason() {
+        // Run Agent Here: a blocked one is still a choice, after the ones that can start, under its reason (a menu
+        // titles a section, it has no second line for an option): one section per reason, in the order listed.
+        let ls = [launcher("work_gw", state: "blocked", kind: "not_in_terminal"), launcher("claude", state: "ok"),
+                  launcher("team_gw", state: "blocked", kind: "auth"), launcher("slow", state: "failing", kind: "timeout"),
+                  launcher("home_gw", state: "blocked", kind: "not_in_terminal")]
+        let groups = LauncherChoices.blockedByReason(ls)
+        #expect(groups.map(\.reason) == [String(localized: "Not available in this computer's terminal"), String(localized: "Its key or sign-in was rejected")])
+        #expect(groups.map { $0.launchers.map(\.name) } == [["work_gw", "home_gw"], ["team_gw"]])
+        #expect(LauncherChoices.blockedByReason([launcher("claude", state: "ok")]).isEmpty)
+    }
+
+    // MARK: Read fresh for a start
+
+    /// The pickers of a start read the computer's list again, not what the app cached when another page first asked:
+    /// a start that fails blocks a launcher there, one that works clears it, and the sheet must say so the next time.
+    @Test func aStartReadsTheHealthAgainNotTheCache() async throws {
+        let hub = FakeHub()
+        let path = "/api/v1/machines/box/launchers"
+        let fine = #"{"launchers":[{"name":"work_gw","health":{"state":"ok"}},{"name":"claude"}]}"#
+        let blocked = #"{"launchers":[{"name":"work_gw","health":{"state":"blocked","kind":"not_in_terminal"}},{"name":"claude"}]}"#
+        hub.on("GET", path, json: fine)
+        let model = AppModel()
+        model.apiForTests = hub.client
+        let ref = MachineRef(id: "box")
+        // Another page (the assistant's launcher menu) filled the cache first.
+        #expect(try await model.launchers(ref).allSatisfy { $0.block == nil })
+
+        // A start with work_gw failed: the hub blocked it. New Agent opens again on the same computer.
+        hub.on("GET", path, json: blocked)
+        let now = try await model.launchersForStart(ref)
+        #expect(now.first { $0.name == "work_gw" }?.block?.notInTerminal == true)
+        #expect(LauncherChoices.initial(saved: "work_gw", in: now) == "claude")
+        // The cache has it too, for the pages that read it.
+        #expect(try await model.launchers(ref).first { $0.name == "work_gw" }?.block != nil)
+
+        // Fixed, Try Anyway worked and the hub cleared it: the next sheet offers it again.
+        hub.on("GET", path, json: fine)
+        let cleared = try await model.launchersForStart(ref)
+        #expect(cleared.allSatisfy { $0.block == nil })
+        #expect(LauncherChoices.initial(saved: "work_gw", in: cleared) == "work_gw")
+        #expect(hub.sent("GET", path).count == 3)
+    }
+
     // MARK: A failed start's sentence
 
     @Test func aCodedStartFailureKeepsItsCode() throws {

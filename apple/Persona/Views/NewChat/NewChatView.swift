@@ -366,7 +366,9 @@ struct NewChatView: View {
 
     private var launcherPicker: some View {
         LauncherPicker(launchers: launchers, selection: $launcher, allowDefault: unifiedModels, defaultLabel: defaultLabel,
-                       defaultBlock: unifiedModels ? launchers.first(where: { $0.name == defaultLauncher })?.block : nil)
+                       defaultBlock: unifiedModels ? launchers.first(where: { $0.name == defaultLauncher })?.block : nil,
+                       // The provider wizard saves to the hub-level group: on another group's computer it would land elsewhere.
+                       addsProvider: ref.group == (model.hub?.group ?? ""))
     }
 
     /// The machines offered: this hub's when a todo is handed over (`onlyGroup`), else all of them.
@@ -445,7 +447,9 @@ struct NewChatView: View {
             // The three requests are independent; start all of them together,
             // then apply the purpose result before launchers and dirs finish.
             async let p: ModelPurpose? = purposeForNewChat(api)
-            async let l = model.launchers(ref)
+            // Read again each time, not the app's cached list: a launcher's health here (#1643) changes behind it (a
+            // start that fails blocks it, one that works clears it), and the web's dialog reads it fresh too.
+            async let l = model.launchersForStart(ref)
             async let d = api.dirs(machine: ref.id, path: "")
             let purpose = try await p
             guard current() else { return }
@@ -653,6 +657,8 @@ struct LauncherPicker: View {
     /// Why the launcher Default runs is grayed out on this computer; nil when it is not. Default stays pickable: it is
     /// Model Settings' choice, said under it.
     var defaultBlock: LauncherBlock? = nil
+    /// The help offers Add Provider: the computer is in the hub group the provider wizard saves to.
+    var addsProvider = true
     @Environment(\.dismiss) private var dismiss
     @State private var query = ""
     /// The grayed-out launcher whose help is open.
@@ -668,9 +674,18 @@ struct LauncherPicker: View {
                     dismiss()
                 } label: {
                     HStack {
-                        VStack(alignment: .leading, spacing: Theme.Space.xs) {
+                        if let defaultBlock {
+                            // Why under the words, in the Label's title column: lined up with the title and the separator.
+                            Label {
+                                VStack(alignment: .leading, spacing: Theme.Space.xs) {
+                                    Text(defaultLabel).lineLimit(1)
+                                    LauncherBlockLine(block: defaultBlock)
+                                }
+                            } icon: {
+                                ThemedIcon(Theme.Icon.model)
+                            }
+                        } else {
                             Label(defaultLabel, systemImage: Theme.Icon.model).lineLimit(1)
-                            if let defaultBlock { LauncherBlockLine(block: defaultBlock) }
                         }
                         Spacer()
                         if selection.isEmpty { ThemedIcon(Theme.Icon.done).foregroundStyle(Theme.accent).fontWeight(.semibold) }
@@ -709,7 +724,7 @@ struct LauncherPicker: View {
             Haptics.tap()
             dismiss()
         }) { l in
-            LauncherBlockedHelp(launcher: l, block: l.block ?? LauncherBlock(kind: "")) {
+            LauncherBlockedHelp(launcher: l, block: l.block ?? LauncherBlock(kind: ""), addsProvider: addsProvider) {
                 pickAfterHelp = l.name
                 help = nil
             }

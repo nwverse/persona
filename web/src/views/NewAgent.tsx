@@ -241,11 +241,17 @@ export function NewAgent({ open, onClose, preset }: { open: boolean; onClose: ()
   const hostDefault = picked ? currentHosts(picked).default : "";
   useEffect(() => { setHost(""); }, [open, mid]);
   const agent = launcherAgent(listLauncher, launchers, models.list);
-  // the launchers this computer can't start now (#1643), each said under the choices with a way to see how to fix it
-  const blocked = launchers.flatMap((l) => {
-    const block = launcherBlock(l);
-    return block ? [{ l, block }] : [];
-  });
+  // the launchers this computer can't start now (#1643), each said under the choices with a way to see how to fix it; the
+  // one this start runs (the chosen one, or the one Model settings' default runs) first, said so: Start stays enabled
+  const runs = launchersOf === mid ? listLauncher : "";
+  const defaultRuns = unified && launchersOf === mid ? pickerLauncher("", followedBinding("", configured)) : "";
+  const defaultBlock = defaultRuns ? launcherBlock(launchers.find((l) => l.name === defaultRuns)) : null;
+  const blocked = launchers
+    .flatMap((l) => {
+      const block = launcherBlock(l);
+      return block ? [{ l, block }] : [];
+    })
+    .sort((a, b) => Number(b.l.name === runs) - Number(a.l.name === runs));
   const help = blocked.find((b) => b.l.name === helpFor);
   const pickedModel = models.list?.models.find((m) => m.id === model);
   const efforts = effortChoices(models.list, model, followed);
@@ -456,7 +462,21 @@ export function NewAgent({ open, onClose, preset }: { open: boolean; onClose: ()
           {(unified || launchers.length > 1 || blocked.length > 0) && (
             <Field label={unified ? t("newagent.launcher_override") : t("newagent.launcher")}>
               <div className="flex flex-wrap gap-1.5">
-                {unified && <Choice selected={launcher === ""} onClick={() => setLauncher("")} title={modelDefault}>{hubDefault ? defaultLabel(hubDefault) : t("newagent.follow_model_settings")}</Choice>}
+                {unified && (
+                  <Choice selected={launcher === ""} onClick={() => setLauncher("")} title={defaultBlock ? `${modelDefault} · ${defaultBlock.reason}` : modelDefault}>
+                    {defaultBlock ? (
+                      // what the default runs can't start here (#1643): marked, still the default, said in the list below
+                      <span data-testid="new-agent-default-blocked" className="flex items-center gap-1.5">
+                        <Icon name="warning" size={12} className="text-orange" />
+                        {hubDefault ? defaultLabel(hubDefault) : t("newagent.follow_model_settings")}
+                      </span>
+                    ) : hubDefault ? (
+                      defaultLabel(hubDefault)
+                    ) : (
+                      t("newagent.follow_model_settings")
+                    )}
+                  </Choice>
+                )}
                 {launchers.map((l) => {
                   const block = launcherBlock(l);
                   return (
@@ -478,20 +498,30 @@ export function NewAgent({ open, onClose, preset }: { open: boolean; onClose: ()
                 })}
               </div>
               {blocked.length > 0 && (
-                <ul data-testid="new-agent-blocked" className="mt-1.5 flex flex-col gap-0.5">
+                <ul data-testid="new-agent-blocked" className="mt-1.5 flex flex-col gap-1">
                   {blocked.map(({ l, block }) => (
-                    <li key={l.name} className="flex min-w-0 items-center gap-1.5 text-[11.5px] text-ink-3">
-                      <Icon name="warning" size={12} className="shrink-0 text-orange" />
-                      <span className="shrink-0 font-mono text-ink-2">{l.name}</span>
-                      <span className="min-w-0 truncate">{block.reason}</span>
-                      <button
-                        type="button"
-                        aria-expanded={helpFor === l.name}
-                        onClick={() => setHelpFor((open) => (open === l.name ? "" : l.name))}
-                        className="shrink-0 whitespace-nowrap text-accent-ink hover:underline"
-                      >
-                        {t("newagent.how_to_fix")}
-                      </button>
+                    // one flow of words that wraps (never cut off: a phone has no hover for a tooltip), the link a unit
+                    <li key={l.name} data-runs={l.name === runs || undefined} className="flex min-w-0 items-start gap-1.5 text-[11.5px] leading-snug text-ink-3">
+                      <Icon name="warning" size={12} className="mt-px shrink-0 text-orange" />
+                      <p className="min-w-0 [overflow-wrap:anywhere]">
+                        {l.name === runs && (
+                          <>
+                            <Pill tone="orange">{t("newagent.runs_this_time")}</Pill>{" "}
+                          </>
+                        )}
+                        <span className="font-mono text-ink-2">{l.name}</span>{" "}
+                        <span>{block.reason}</span>{" "}
+                        <button
+                          type="button"
+                          aria-expanded={helpFor === l.name}
+                          aria-controls={helpFor === l.name ? "new-agent-blocked-help" : undefined}
+                          aria-label={t("newagent.how_to_fix_named", { name: l.name })}
+                          onClick={() => setHelpFor((open) => (open === l.name ? "" : l.name))}
+                          className="whitespace-nowrap text-accent-ink hover:underline"
+                        >
+                          {t("newagent.how_to_fix")}
+                        </button>
+                      </p>
                     </li>
                   ))}
                 </ul>

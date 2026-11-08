@@ -16,7 +16,7 @@ export function LauncherBlockedHelp({ name, block, onTryAnyway, onAddProvider, o
   onClose: () => void;
 }) {
   return (
-    <div role="region" aria-label={block.title} data-testid="launcher-blocked-help" className="mt-2 rounded-control bg-surface px-3.5 py-3 shadow-hairline">
+    <div id="new-agent-blocked-help" role="region" aria-label={block.title} data-testid="launcher-blocked-help" className="mt-2 rounded-control bg-surface px-3.5 py-3 shadow-hairline">
       <div className="flex items-start gap-2.5">
         <Icon name="warning" size={14} className="mt-0.5 shrink-0 text-orange" />
         <div className="flex min-w-0 flex-1 flex-col gap-1.5">
@@ -24,6 +24,9 @@ export function LauncherBlockedHelp({ name, block, onTryAnyway, onAddProvider, o
             <span className="shrink-0 text-[13px] font-medium text-ink">{block.title}</span>
             <span className="min-w-0 truncate font-mono text-[11.5px] text-ink-3">{name}</span>
           </div>
+          {/* the cause itself, whole (the line under the launchers was the only other place it was said); the title of
+              one the terminal can't run says it already */}
+          {!block.notInTerminal && <p data-testid="launcher-blocked-reason" className="text-[12.5px] font-medium leading-snug text-orange">{block.reason}</p>}
           <p className="text-[12.5px] leading-relaxed text-ink-2">
             {block.notInTerminal ? t("newagent.blocked_terminal_body", { name }) : t("newagent.blocked_other_body")}
           </p>

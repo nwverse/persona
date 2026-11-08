@@ -12694,13 +12694,18 @@ def launcher_health_list(launchers):
     return out
 
 
+# MOCK_LANG=en|ja|zh-Hans (default zh-Hans, the hub's default): the language of the hub's sentence, as a hub answering a
+# client in that language would write it, so a screenshot in English or Japanese is not checked against Chinese words.
+LAUNCHER_HEALTH_LANG = os.environ.get("MOCK_LANG", "zh-Hans")
+
+
 def launcher_health_refusal(machine_name):
     """What the hub says of a start the new tab's shell could not run work_gw in: its sentence, code and details."""
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    import readiness_mock  # the hub's own catalogs (server/internal/i18n)
     args = {"launcher": "work_gw", "where": "terminal", "missing": "work_gw", "kind": "not_found", "pane_shell": "bash",
             "launcher_shell": "zsh", "rc_file": "~/.zshrc", "line": "bash: work_gw: command not found"}
-    # i18n-ignore: the hub's zh-Hans sentence (server/internal/i18n/locales/zh-Hans/apierr-apierr.json)
-    text = ("%s 上新开的终端标签页（bash）里没有「work_gw」这个命令；Persona 是在 zsh（~/.zshrc）里找到它的。"
-            "请在终端的 shell 会读到的启动文件里定义它，或者在 Persona 里把它添加为模型供应商。") % machine_name
+    text = readiness_mock.t(LAUNCHER_HEALTH_LANG, "apierr-apierr.launcher_missing_terminal", machine=machine_name, **args)
     return {"start_error": text, "start_error_code": "launcher_missing", "start_error_args": args}
 
 

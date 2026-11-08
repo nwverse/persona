@@ -7,10 +7,24 @@ struct LauncherBlockedHelp: View {
     @Environment(\.dismiss) private var dismiss
     var launcher: Launcher
     var block: LauncherBlock
+    /// Add Provider is offered: the computer is in the hub group the provider wizard saves to (the hub-level one). On a
+    /// computer of another group of hubs a provider added here would land on the wrong hub, so only the words say it.
+    var addsProvider: Bool
     /// Picks it after all: the help closes, then the list.
     var tryAnyway: () -> Void
     @State private var addingProvider = false
     @State private var showDetail = false
+
+    init(launcher: Launcher, block: LauncherBlock, addsProvider: Bool = true, tryAnyway: @escaping () -> Void) {
+        self.launcher = launcher
+        self.block = block
+        self.addsProvider = addsProvider
+        self.tryAnyway = tryAnyway
+        #if DEBUG
+        // `-openLauncherDetails YES`: Details open, for screenshots.
+        _showDetail = State(initialValue: UserDefaults.standard.bool(forKey: "openLauncherDetails"))
+        #endif
+    }
 
     var body: some View {
         NavigationStack {
@@ -39,20 +53,33 @@ struct LauncherBlockedHelp: View {
                         }
                     }
                     if let detail = block.detail {
-                        DisclosureGroup(isExpanded: $showDetail) {
-                            Text(detail).font(Theme.Font.code).foregroundStyle(.secondary).textSelection(.enabled)
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                                .padding(.top, Theme.Space.xs)
-                        } label: {
-                            Text("Details [Readiness Card 979a33]").font(Theme.Font.secondaryStrong).lineLimit(1)
+                        VStack(alignment: .leading, spacing: Theme.Space.s) {
+                            // A toggle like ReadinessCard's, not a DisclosureGroup: its chevron ignores the tint and
+                            // reads as a heavy navigation link next to a gray label.
+                            Button {
+                                withAnimation(Theme.Motion.state) { showDetail.toggle() }
+                            } label: {
+                                Label("Details [Readiness Card 979a33]", systemImage: showDetail ? Theme.Icon.collapse : Theme.Icon.expand)
+                                    .font(Theme.Font.secondaryStrong).lineLimit(1)
+                            }
+                            .buttonStyle(.borderless)
+                            .foregroundStyle(.secondary)
+                            .accessibilityValue(showDetail ? Text("Expanded") : Text("Collapsed [Readiness Card ee6046]"))
+                            .accessibilityIdentifier("launcherHelp.details")
+                            if showDetail {
+                                Text(detail).font(Theme.Font.code).lineHeight(.code).foregroundStyle(.secondary).textSelection(.enabled)
+                                    .fixedSize(horizontal: false, vertical: true)
+                                    .padding(Theme.Space.s)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                    .background(Theme.codeBackground, in: .rect(cornerRadius: Theme.Radius.control, style: .continuous))
+                                    .transition(.opacity)
+                            }
                         }
-                        .tint(.secondary)
-                        .accessibilityIdentifier("launcherHelp.details")
                     }
                     para(block.notInTerminal ? String(localized: "A start with it that works clears this; otherwise it clears by itself after 6 hours.")
                                              : String(localized: "A check or start with it that works clears this."), secondary: true)
                     VStack(spacing: Theme.Space.s) {
-                        if block.notInTerminal {
+                        if block.notInTerminal, addsProvider {
                             Button { addingProvider = true } label: {
                                 Text("Add Provider").font(Theme.Font.heading).lineLimit(1).minimumScaleFactor(0.8)
                                     .scaledFrame(maxWidth: .infinity, minHeight: Theme.Size.wellS)
