@@ -64,7 +64,10 @@ android {
     }
     buildTypes {
         release {
-            isMinifyEnabled = false
+            // R8 shrinks only (proguard-rules.pro): class and method names stay the source's for error reports
+            // (docs/android/android.md "Release shrinking"; scripts/release/check_android_shrink.py checks the APK).
+            isMinifyEnabled = true
+            proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
         }
     }
 }
