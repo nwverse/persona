@@ -80,10 +80,19 @@ struct ExtensionSettingsView<Configuration: View, AdvancedInformation: View>: Vi
             SettingsHeading(String(localized: "Enabled"))
                 .accessibilityIdentifier("extension-section-enabled")
         } footer: {
-            Text(offline ? offlineReason : policy.canEnable
-                 ? String(localized: "When off, this extension’s capabilities are unavailable. Your configuration is kept.")
-                 : String(localized: "This extension is set in its manager's manager.json; change its switch and settings there, then restart the manager."))
+            Text(enabledReason)
         }
+    }
+
+    private var enabledReason: String {
+        if offline { return offlineReason }
+        if policy.canEnable {
+            return String(localized: "When off, this extension’s capabilities are unavailable. Your configuration is kept.")
+        }
+        if detail.readOnly || ["hub.json", "manager.json"].contains(detail.plugin.source ?? "") {
+            return String(localized: "This extension is set in its manager's manager.json; change its switch and settings there, then restart the manager.")
+        }
+        return String(localized: "This manager does not provide this action.")
     }
 
     private var information: some View {
@@ -91,7 +100,7 @@ struct ExtensionSettingsView<Configuration: View, AdvancedInformation: View>: Vi
             identity("Version", value: detail.plugin.version)
             identity("Extension ID", value: detail.plugin.id)
             identity("Source", value: policy.source)
-            identity("Runtime", value: detail.plugin.kind)
+            identity("Runtime", value: policy.runtime)
             identity("Installed from", value: policy.provenance)
             if let attached = detail.plugin.attached {
                 if let version = attached.version, !version.isEmpty { identity("Reported version", value: version) }
@@ -213,6 +222,7 @@ struct ExtensionSettingsView<Configuration: View, AdvancedInformation: View>: Vi
             Button(role: .destructive) {} label: {
                 Label { Text("Uninstall").lineLimit(1) } icon: { ThemedIcon(Theme.Icon.delete) }
             }
+            .themedButton()
             .tint(Theme.danger)
             .disabled(busy || !policy.canUninstall)
             .accessibilityIdentifier("extension-uninstall")

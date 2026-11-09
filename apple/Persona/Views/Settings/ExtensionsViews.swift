@@ -305,7 +305,7 @@ struct ExtensionDetailView: View {
     private var stateText: String {
         guard let p = page.detail?.plugin else { return page.loading ? String(localized: "Loading… [File Viewer 86b6d0]") : String(localized: "Couldn't load [Connector Thread Models 153e20]") }
         // Another manager's copy says whose it is (the default's page is as before).
-        return [ExtensionText.state(p), p.version, ExtensionText.source(p.source), page.managerName].compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: " · ")
+        return [ExtensionText.state(p), page.managerName].compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: " · ")
     }
 
     private func hasConfiguration(_ d: HubExtensionDetail) -> Bool {

@@ -26,6 +26,8 @@ struct ExtensionSettingsLifecycleTests {
         let market = ExtensionSettingsPolicy(detail: detail)
         #expect(market.market == "m1" && market.canCheck && market.canAutoUpgrade && market.canEnable)
         #expect(!market.canUninstall && market.uninstallReason == ExtensionSettingsPolicy.uninstallPreviewGap)
+        #expect(market.runtime == String(localized: "Not provided"))
+        #expect(market.runtime != detail.plugin.kind, "a contribution category is not execution-runtime metadata")
         #expect(ExtensionText.autoUpgradeShown(detail.plugin))
         detail.plugin.source = "builtin"
         let builtin = ExtensionSettingsPolicy(detail: detail)

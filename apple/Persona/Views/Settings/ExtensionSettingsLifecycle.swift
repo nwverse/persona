@@ -12,6 +12,7 @@ nonisolated struct ExtensionSettingsPolicy {
     let uninstallReason: String
     let source: String
     let provenance: String
+    let runtime: String
     let market: String?
 
     static var uninstallPreviewGap: String {
@@ -23,6 +24,8 @@ nonisolated struct ExtensionSettingsPolicy {
 
     init(detail: HubExtensionDetail) {
         let plugin = detail.plugin
+        // kind is Manifest.Kind(), a contribution category; installed runtime metadata is not exposed.
+        runtime = String(localized: "Not provided")
         let builtin = plugin.source == "builtin"
         let configured = detail.readOnly || ["hub.json", "manager.json"].contains(plugin.source ?? "")
         let attached = plugin.attached != nil
@@ -35,16 +38,16 @@ nonisolated struct ExtensionSettingsPolicy {
         canAutoUpgrade = canCheck && plugin.autoUpgrade != nil
         // DELETE is destructive even when dependency checks fail. There is no safe removal preview API.
         canUninstall = false
-        if builtin {
+        if attached {
+            source = String(localized: "Attached")
+            updateReason = String(localized: "This extension is not managed by an extension market. Update it at its source.")
+            uninstallReason = String(localized: "This extension is managed outside the extension market. Remove it at its source.")
+        } else if builtin {
             source = String(localized: "Built-in")
             updateReason = String(localized: "Built-in extensions are updated with Persona.")
             uninstallReason = String(localized: "Built-in extensions cannot be uninstalled. Turn the extension off instead.")
         } else if configured {
             source = String(localized: "Configured (manager.json)")
-            updateReason = String(localized: "This extension is not managed by an extension market. Update it at its source.")
-            uninstallReason = String(localized: "This extension is managed outside the extension market. Remove it at its source.")
-        } else if attached {
-            source = String(localized: "Attached")
             updateReason = String(localized: "This extension is not managed by an extension market. Update it at its source.")
             uninstallReason = String(localized: "This extension is managed outside the extension market. Remove it at its source.")
         } else {
