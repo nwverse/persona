@@ -3,7 +3,6 @@ package db
 import (
 	"context"
 	"encoding/json"
-	"slices"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -75,38 +74,11 @@ type MachineSample struct {
 
 // InsertMetrics stores samples of several machines (the nodes sample on the same tick) as InsertMetric does, in one
 // transaction: one commit, so one WAL flush, instead of one a machine. One machine's bad sample does not cost the
-// others theirs: when the batch fails, the samples are written again in one transaction, each under its own
-// savepoint, and rejected[i] is the error samples[i] got (rejected is nil when all were stored). err is a failure of
-// the whole write (the connection, the commit, ctx); then none was stored.
+// others theirs: rejected[i] is the error samples[i] got (writeAll).
 func (d *DB) InsertMetrics(ctx context.Context, samples []MachineSample) (rejected []error, err error) {
-	if len(samples) == 0 {
-		return nil, nil
-	}
-	err = pgx.BeginFunc(ctx, d.pool, func(tx pgx.Tx) error {
-		batch := &pgx.Batch{}
-		for _, s := range samples {
-			batch.Queue(insertMetricSQL, insertMetricArgs(s.Machine, s.Sample)...)
-		}
-		return tx.SendBatch(ctx, batch).Close()
+	return d.writeAll(ctx, len(samples), func(b *pgx.Batch, i int) {
+		b.Queue(insertMetricSQL, insertMetricArgs(samples[i].Machine, samples[i].Sample)...)
 	})
-	if err == nil || ctx.Err() != nil {
-		return nil, err
-	}
-	// A batch stops at its first error, and the transaction with it: find which samples Postgres takes.
-	rejected = make([]error, len(samples))
-	err = pgx.BeginFunc(ctx, d.pool, func(tx pgx.Tx) error {
-		for i, s := range samples {
-			rejected[i] = pgx.BeginFunc(ctx, tx, func(sp pgx.Tx) error { // a savepoint
-				_, err := sp.Exec(ctx, insertMetricSQL, insertMetricArgs(s.Machine, s.Sample)...)
-				return err
-			})
-		}
-		return nil
-	})
-	if err != nil || !slices.ContainsFunc(rejected, func(err error) bool { return err != nil }) {
-		return nil, err
-	}
-	return rejected, nil
 }
 
 // rollupMetricsSQL moves the raw rows before $1 (Unix seconds) into one row a machine and minute of step $2. The raw
