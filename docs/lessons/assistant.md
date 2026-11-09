@@ -113,4 +113,25 @@ Pitfalls, unusual behavior, and decisions at the time (formerly `CLAUDE.md` “L
 
 - **`confirmOutbound` is not a general confirmation**: it asks on the phone only in the health space and returns true at once everywhere else (`assistant/health.go`). A tool that must always ask the user (closing an Agent with `agent_archive` and `close`, changing an assistant setting) builds its own permission card through `s.ask`, as `ownSettingAction` and `archiveAndCloseTool` do, and treats a dismissed, expired or unanswered card as declined.
 
+- **A selection that does not read is not the defaults** (#1523): the knowledge base's default selection stops writing plain group messages, so falling back
+  to it while the settings table is unavailable would silently drop what chats send (the connectors' cursors move on regardless). `kbSelectionNow` keeps
+  everything (every rule on, days null: the behaviour before the selection) until the document reads again, and keeps the last document read while the
+  database is away. That stand-in (`kb.KeepEverything`) is a stopgap, not a document: pruning under it would cut every line to `text_days`, including a
+  mention the user keeps ten years, so `Engine.Prune` skips while `Selection.Stopgap`, and the history import neither revokes nor records an approval by it.
+  A failed read with a document cached pushes the next try a minute out, or every ingest during an outage waits on the database in turn.
+- **A whole read plan does not say `mine`** (#1523): `Selection.ReadChat` returns `whole` without the personal flags, since everything is read anyway. The
+  history import still runs the filter around the owner's messages in a whole read, or the lines around them get the chat's rule (say 30 days) instead of the
+  `mine` rule's longer days; `TestHistoryWholeReadKeepsTheOwnersContext` holds it.
+- **Approve what is read, not which chats** (#1523): the import's approval is a fingerprint of every chat's read plan (`historyPlan.Approved`), compared with
+  `ReadPlan.Wider` before every call, so a selection edit (a `PUT`, or `kb_history_plan`'s `set`) that reads more takes the approval back while one that reads less goes on. A chat's
+  state keeps the narrowest plan it ran under: recording the plan a read started with would let a later widening take a half-narrowed read as complete.
+- **A search hit knows more than the page** (#1523): a source's search says a hit mentions the owner, but the page read around it may not set `mentioned` on
+  the message, and the selection would then drop the very message the window was read for. Positional reads take the hit's word for its own message, as
+  `keepAnchorHits` does for unreadable chats. Only for the mention, never for who sent it: a hit with neither flag counts as the owner's for the window
+  read around it, but setting `mine` on the page's message would write someone else's words as the owner's. The window (`near`) is all it needs.
+- **A mention kept on its own is not near the owner** (#1523): `kb.AnchorFilter` keeps a lone mention without a window (`Keep`), so marking every message
+  it hands out as within the `mine` context made a lone mention `mentions+mine` (the longer days) where daily ingestion says `mentions`. Its `Kept` hook
+  names those; `pick` leaves them out of `near`.
 - **A small-task model call is sized by what the model is today, not by the first measurement** (#1532): chat titles had 15 s per call and `max_tokens` 200 from a 2–3 s measurement. Once "Chat title" inherited a thinking flash model behind the gateway, a title-sized call took p50 6 s / p90 21.6 s and its thinking ate the 200 tokens (188–192 thinking + 4–8 output, `stop_reason: max_tokens`), so about a fifth of new chats kept "explore | the first message cut short" and some kept a two-character half topic that still parsed. A call off the user's path gets minutes, room for the thinking, and `Chat` instead of `Complete` so a cut-off reply (`Reply.Truncated`) is not taken as an answer; retry only what another try can change (`ai.Transient`: no answer, 5xx; not a 4xx or a model that isn't set up), each kind of failure once, so one doesn't use up another's retry; a naming that got no answer is a stand-in, done again later, and "again later" must read the first turn (`after_seq: 0`): `turns: 1` is the newest. To find which, match the hub's `context deadline exceeded` lines with the gateway's request log: the hub's cancellations sit at the call's timeout to the millisecond (14 996 ms).
+
+- **Model listing and saving must agree on online launcher selection** (#1840). A cached provider's first machine can be offline even when another machine successfully lists its models. For a purpose without a bound machine, reuse `pickMachine` for model validation; if no reported candidate is online, allow saving without a live check. Keep known bound-machine validation and managed-launcher behavior intact. Cover the HTTP save and profile-apply paths, including effort-only edits, rejected online models, exact RPC destinations, and unchanged storage after rejection.
