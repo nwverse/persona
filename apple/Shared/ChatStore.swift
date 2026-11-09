@@ -1390,11 +1390,12 @@ nonisolated enum ChatCache {
     /// (#5511); v9's copies would keep its Chinese text for English and Japanese users. v11: folds carry the task
     /// lists their calls left (`Fold.tasks`), the chat's plan while its TodoWrite is folded (#5602).
     /// v12: relayed and automated assistant input retains additive source metadata.
-    /// v13: injected supervision levels and folded promotion are retained, including client evidence on replaced folds.
+    /// v13: cached tails count user questions, not automatic supervision; discard the old shallow tails.
+    /// v14: injected supervision levels and folded promotion are retained, including client evidence on replaced folds.
     /// Bump it whenever the item structure or the text the hub gives an item changes.
-    static let folder = "chats-v13"
+    static let folder = "chats-v14"
     /// The folder before, removed on the first launch with this one.
-    private static let previous = "chats-v12"
+    private static let previous = "chats-v13"
 
     /// Once per launch, before the first copy is read or written (a static let runs once, on whichever thread asks first).
     private static let dropOlder: Void = {
@@ -1466,11 +1467,12 @@ nonisolated enum ChatCache {
         try? data.write(to: url, options: .atomic)
     }
 
-    /// Items from the start of the `turns`-th last user prompt on (never half a transcript line: what a page before
+    /// Items from the `turns`-th last user question on; automatic prompts do not consume the budget (never half a transcript line: what a page before
     /// its first seq would bring back leaves out the rest of that line).
     static func tail(_ items: [Item], turns: Int) -> [Item] {
         var seen = 0
-        for i in items.indices.reversed() where items[i].role == "user" && items[i].kind == .text && items[i].queued != true {
+        for i in items.indices.reversed() where items[i].role == "user" && items[i].kind == .text
+            && items[i].queued != true && items[i].wake != true && Injected.of(items[i]) == nil {
             seen += 1
             if seen == turns {
                 var start = i
