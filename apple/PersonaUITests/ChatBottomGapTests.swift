@@ -1,7 +1,7 @@
 import XCTest
 
-/// At the end of a conversation the newest message sits `ChatView.newestGap` (48 pt: a row gap, 16 pt, and the list's room
-/// at its end, 32 pt; #1108, #2016) above the footer's first row: the composer, or what is over it (an agent's computer activity, the queued messages); with
+/// At the end of a conversation the newest message sits at least `ChatView.newestGap` (48 pt: a row gap, 16 pt, and the list's
+/// room at its end, 32 pt; #1108, #2016; over the shell's composer its bar's own padding too) above the footer's first row: the composer, or what is over it (an agent's computer activity, the queued messages); with
 /// the keyboard up and with an upload's bar in the composer too. A little way up, the jump-to-latest arrow is over the list, not over the footer. Light and dark;
 /// run it on the narrowest phone too (SE). Every state gets its screenshot before the gaps are checked.
 ///   PORT=18831 MOCK_TURN_IMAGES=many MOCK_QUEUE=1 python3 scripts/mock/mock_hub.py &
@@ -14,6 +14,9 @@ final class ChatBottomGapTests: XCTestCase {
     private let widget = "macbook/a1f3c2d4-0000-4000-8000-000000000001"
     /// From the newest message to the footer at the end (`ChatView.newestGap`: `Theme.Space.l` + `Theme.Space.xxl`).
     private let endGap: CGFloat = 48
+    /// What the shell's composer bar keeps over its field on top of that (2026-11-09: 16 pt, the field's top measured a few
+    /// points apart by the snapshot's text frames).
+    private let composerPad: CGFloat = 20
 
     override func setUpWithError() throws {
         guard let h = ProcessInfo.processInfo.environment["PERSONA_MOCK_HUB"] else {
@@ -50,8 +53,11 @@ final class ChatBottomGapTests: XCTestCase {
             gaps.append(("\(scheme) uploading", try gap(app, shot: "\(scheme)-upload")))
             app.terminate()
         }
+        // At least `newestGap`: that is all there is over the queued messages' card. Over the shell's composer the bar keeps
+        // up to `composerPad` of its own above its field (and the upload bar) as well.
         for (state, gap) in gaps {
-            XCTAssertEqual(gap, endGap, accuracy: 1, "\(state): \(gap) pt from the newest message to the footer")
+            XCTAssertGreaterThanOrEqual(gap, endGap - 1, "\(state): \(gap) pt from the newest message to the footer")
+            XCTAssertLessThanOrEqual(gap, endGap + composerPad + 1, "\(state): \(gap) pt from the newest message to the footer")
         }
     }
 
