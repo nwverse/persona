@@ -1,10 +1,10 @@
 import XCTest
 
 /// Saving to the photo library for real (scripts/mock/mock_hub.py, PERSONA_MOCK_HUB): the image viewer's Save
-/// and the share card's Save, each after allowing the system's permission alert, in the old layout and in the shell.
+/// and the share card's Save, each after allowing the system's permission alert, in the shell.
 /// Photos runs the change block on its own queue; a block the compiler took for main-actor code crashed the app there
 /// (2026-10-31), so the test only passes if the app is still alive and says Saved to Photos, drawn over the viewer or
-/// the card: the old layout drew its toasts under both (#1492).
+/// the card: the toast must remain visible above both (#1492).
 /// The conversation with the screenshot is put in by the test (GET /mock/photo?on=1) rather than by starting the mock
 /// with MOCK_PHOTO=1: a mock started the usual way had no such conversation, the chat opened empty and both failed (#2334).
 final class PhotoSaveTests: XCTestCase {
@@ -34,11 +34,11 @@ final class PhotoSaveTests: XCTestCase {
                              "no /mock/photo in this mock (an older scripts/mock/mock_hub.py?)")
     }
 
-    @MainActor private func launch(_ extra: [String], oldLayout: Bool) -> XCUIApplication {
+    @MainActor private func launch(_ extra: [String]) -> XCUIApplication {
         let app = XCUIApplication()
         app.resetAuthorizationStatus(for: .photos) // the alert comes up again, like on a fresh install
         let pair = "persona://pair?url=" + hub.addingPercentEncoding(withAllowedCharacters: .alphanumerics)! + "&token=mock"
-        app.launchArguments = ["-pairURL", pair, "-tab", "dev", "-openSession", session, "-ui.oldLayout", oldLayout ? "YES" : "NO"] + extra
+        app.launchArguments = ["-pairURL", pair, "-tab", "dev", "-openSession", session] + extra
         app.launchPinned()
         return app
     }
@@ -98,13 +98,11 @@ final class PhotoSaveTests: XCTestCase {
         return px
     }
 
-    @MainActor func testSaveFromTheImageViewer() throws { saveFromTheImageViewer(oldLayout: true) }
-    @MainActor func testSaveFromTheImageViewerInTheShell() throws { saveFromTheImageViewer(oldLayout: false) }
-    @MainActor func testSaveTheShareCard() throws { saveTheShareCard(oldLayout: true) }
-    @MainActor func testSaveTheShareCardInTheShell() throws { saveTheShareCard(oldLayout: false) }
+    @MainActor func testSaveFromTheImageViewerInTheShell() throws { saveFromTheImageViewer() }
+    @MainActor func testSaveTheShareCardInTheShell() throws { saveTheShareCard() }
 
-    @MainActor private func saveFromTheImageViewer(oldLayout: Bool) {
-        let app = launch(["-openFirstImage", "YES"], oldLayout: oldLayout)
+    @MainActor private func saveFromTheImageViewer() {
+        let app = launch(["-openFirstImage", "YES"])
         let save = app.buttons["保存"]
         XCTAssertTrue(save.waitForExistence(timeout: 20), "the image viewer did not open:\n\(app.debugDescription)")
         XCTAssertTrue(NSPredicate(format: "isEnabled == true").evaluate(with: save) || {
@@ -112,15 +110,15 @@ final class PhotoSaveTests: XCTestCase {
             return save.isEnabled
         }(), "保存 stays disabled: the image never decoded")
         save.tap()
-        allowAndExpectSaved(app, oldLayout ? "photo-save-viewer-old" : "photo-save-viewer-shell")
+        allowAndExpectSaved(app, "photo-save-viewer-shell")
     }
 
-    @MainActor private func saveTheShareCard(oldLayout: Bool) {
-        let app = launch(["-showShareCard", "YES"], oldLayout: oldLayout)
+    @MainActor private func saveTheShareCard() {
+        let app = launch(["-showShareCard", "YES"])
         let save = app.buttons["保存"]
         XCTAssertTrue(save.waitForExistence(timeout: 20), "the share card did not open:\n\(app.debugDescription)")
         _ = XCTWaiter.wait(for: [XCTNSPredicateExpectation(predicate: NSPredicate(format: "isEnabled == true"), object: save)], timeout: 10)
         save.tap()
-        allowAndExpectSaved(app, oldLayout ? "photo-save-card-old" : "photo-save-card-shell")
+        allowAndExpectSaved(app, "photo-save-card-shell")
     }
 }

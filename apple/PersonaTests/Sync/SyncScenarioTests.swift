@@ -28,6 +28,7 @@ struct SyncScenarioTests {
     /// the list when it passes (a known issue that no longer happens fails the test).
     nonisolated static let known: [String: String] = [
         "start_answer_cut_then_receipt": "#1112: a new chat starts from the new-conversation page, which the harness does not drive",
+        "start_refused_then_resent_new_op": "#1112: a new chat starts from the new-conversation page, which the harness does not drive",
     ]
 
     @Test func everyFileHasCases() {
@@ -73,6 +74,8 @@ final class SyncRun {
     var heldReads: [(device: String, path: String, data: Data, cont: CheckedContinuation<Data, Error>)] = []
     /// Requests a relaunched app had in flight: nobody hears their answers. Ended when the case is over.
     private var dead: [CheckedContinuation<Data, Error>] = []
+    /// The case's devices' disks, a folder each (`SyncDevice.folder`); removed when the case is over.
+    private let disks = FileManager.default.temporaryDirectory.appending(path: "sync-scenario-\(UUID().uuidString)")
     var failures: [String] = []
 
     init(_ c: JSONValue) {
@@ -93,7 +96,6 @@ final class SyncRun {
         // AppModel's send, so there is no chat page to project until it has started.
         if c["chat"]?["new"]?.bool == true { throw SyncUnplayable(description: "a new chat: its start is the new-conversation page's, not AppModel's") }
         ChatCache.remove(key)
-        StateCache.remove("outbox")
         for n in names { try await start(n) }
         for (i, step) in (c["steps"]?.array ?? []).enumerated() {
             try await run(step)
@@ -114,6 +116,7 @@ final class SyncRun {
         for c in dead { c.resume(throwing: URLError(.cancelled)) }
         dead = []
         for d in devices.values { for link in d.model.links { link.live.disconnect() } }
+        try? FileManager.default.removeItem(at: disks)
         APIClient.local = nil
         LiveConnection.makeLocal = nil
         AgentSync.shared.model = { AppModel.shared }
@@ -121,11 +124,13 @@ final class SyncRun {
 
     /// The device already shows the start: connected, its lists in, the chat open and loaded.
     private func start(_ name: String) async throws {
-        let d = SyncDevice(name: name, key: key)
+        let d = SyncDevice(name: name, key: key, folder: disks.appending(path: name))
         d.model.clock = clock
         devices[name] = d
         d.answersSubscribe = { [hub] in hub.backlogFrame }
         d.connect()
+        #expect(d.model.machines.isEmpty)
+        #expect(d.model.allSessions.isEmpty, "scenario setup must not retain a paired app's snapshot")
         if name == first { AgentSync.shared.model = { [weak d] in d?.model ?? AppModel.shared } }
         let socket = try await nextSocket(d, after: 0)
         socket.send(hub.hello(resumed: false))
@@ -141,9 +146,9 @@ final class SyncRun {
         d.noteCards()
     }
 
-    /// `relaunch`: the app is killed and starts again from what it stored (`ChatCache`, the outbox), back on the chat it
-    /// showed, as iOS brings it back. What it had in flight dies with it: those requests are never answered (a resumed
-    /// write would let the dead app save its outbox over the new one's). The case's next `socket.open` greets it.
+    /// `relaunch`: the app is killed and starts again from what it stored (`ChatCache`, the snapshot, the outbox), back
+    /// on the chat it showed, as iOS brings it back. What it had in flight dies with it: those requests are never answered
+    /// (a resumed write would let the dead app save its outbox over the new one's). The case's next `socket.open` greets it.
     private func relaunch(_ d: SyncDevice) async {
         await settle() // what the app saves on its own (the outbox, the chat's cache) is on disk by now
         dead += held.filter { $0.device == d.name }.map(\.continuation) + heldReads.filter { $0.device == d.name }.map(\.cont)
@@ -151,7 +156,7 @@ final class SyncRun {
         heldReads.removeAll { $0.device == d.name }
         d.relaunch()
         d.model.clock = clock // before the outbox's sent messages start waiting on it
-        d.model.restoreOutbox() // as a paired app's launch does (AppModel.init)
+        d.model.restoreSaved() // as a paired app's launch does (AppModel.init), on a simulator paired or not
         d.connect()
         if d.name == first { AgentSync.shared.model = { [weak d] in d?.model ?? AppModel.shared } }
         d.model.subscribe(key, by: d.owner)

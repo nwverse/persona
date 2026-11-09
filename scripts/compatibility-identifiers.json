@@ -302,6 +302,7 @@
     "docs/lessons/rename.md": {
       "reason": "Published upgrade, storage identity or compatibility documentation retained for existing installations.",
       "tokens": [
+        ".jarvis",
         "jarvis-postgres"
       ],
       "path_tokens": [],

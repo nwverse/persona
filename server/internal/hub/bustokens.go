@@ -4,11 +4,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"regexp"
 	"strings"
 
 	"github.com/nwverse/persona/server/internal/bus"
 	"github.com/nwverse/persona/server/internal/db"
+	"github.com/nwverse/persona/server/internal/lazyre"
 )
 
 // The bus's identities and their tokens (bus.go, migration 0311): one token per service, only its sha256 kept. Every
@@ -17,7 +17,7 @@ import (
 
 const busTokenPrefix = "jb_"
 
-var busManagerID = regexp.MustCompile(`^[a-z][a-z0-9-]{0,31}$`)
+var busManagerID = lazyre.New(`^[a-z][a-z0-9-]{0,31}$`)
 
 // busStore keeps the identities (internal/db/bus.go on Postgres). Optional like peerStore: a hub whose store lacks
 // it accepts no bus connections.

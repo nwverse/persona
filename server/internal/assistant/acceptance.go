@@ -5,7 +5,8 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
-	"regexp"
+	"errors"
+	"fmt"
 	"slices"
 	"sort"
 	"strconv"
@@ -16,6 +17,7 @@ import (
 	"github.com/nwverse/persona/server/internal/db"
 	"github.com/nwverse/persona/server/internal/feishubot"
 	"github.com/nwverse/persona/server/internal/i18n"
+	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/prompts"
 )
 
@@ -118,19 +120,29 @@ func (s *Service) loadAcceptLocked(ctx context.Context) bool {
 	return true
 }
 
-// saveAcceptLocked writes the asks, once they were read (see loadAcceptLocked).
+// errAcceptStore: the asks could not be read, or an acceptance could not be saved. Nothing was accepted and the ask still
+// waits; the owner is told the service is unavailable (try again), never "already handled" or "verified".
+var errAcceptStore = errors.New("acceptance: the asks could not be read or saved")
+
+// saveAcceptLocked writes the asks, once they were read (see loadAcceptLocked); a failed write is logged.
 func (s *Service) saveAcceptLocked(ctx context.Context) {
-	if !s.accept.loaded {
-		return
-	}
-	if st := s.store(); st != nil {
-		if err := st.PutSetting(ctx, acceptanceKey, s.accept.asks); err != nil {
-			s.logf("acceptance: save: %v", err)
-		}
+	if err := s.saveAcceptErrLocked(ctx); err != nil {
+		s.logf("acceptance: save: %v", err)
 	}
 }
 
-var urlRe = regexp.MustCompile(`https?://[^\s<>()\[\]"'，。；、）]+`)
+// saveAcceptErrLocked is saveAcceptLocked returning the failed write instead of logging it.
+func (s *Service) saveAcceptErrLocked(ctx context.Context) error {
+	if !s.accept.loaded {
+		return nil
+	}
+	if st := s.store(); st != nil {
+		return st.PutSetting(ctx, acceptanceKey, s.accept.asks)
+	}
+	return nil
+}
+
+var urlRe = lazyre.New(`https?://[^\s<>()\[\]"'，。；、）]+`)
 
 // askAcceptance keeps task t's "Please verify" ask once (reply: what its agent said last, on machine/session) and posts its
 // card when the bot can. The ask is a fact of the hub, not of the card: with no card due it is kept all the same (NoCard),
@@ -182,6 +194,7 @@ func (s *Service) postAsk(ctx context.Context, t Todo, a acceptAsk) bool {
 	default:
 		a.NoCard = true
 	}
+	posted := a.MessageID != "" // read before a is shared: a retry may set its card once the book has it
 	b.mu.Lock()
 	if c := b.asks[t.ID]; c != nil && c.AskedAt.IsZero() {
 		a.Earlier = c.Earlier // the claim's: it also has a card of the round before that a retry posted meanwhile
@@ -190,7 +203,7 @@ func (s *Service) postAsk(ctx context.Context, t Todo, a acceptAsk) bool {
 	s.saveAcceptLocked(ctx)
 	b.mu.Unlock()
 	s.boardChanged() // it waits for the owner now
-	return a.MessageID != ""
+	return posted
 }
 
 // acceptLines are the card's three lines: the small model reads the task and the reply; without it (or when it
@@ -303,22 +316,23 @@ func (s *Service) acceptFor(ids ...string) (todo string, earlier bool) {
 	return "", false
 }
 
-// acceptAskLocked returns todo id's stored ask (nil: none); callers only read its immutable AskedAt.
-func (s *Service) acceptAskLocked(id string) *acceptAsk {
+// acceptAskLocked returns todo id's stored ask (nil: none), or errAcceptStore when the asks cannot be read; callers only
+// read its immutable AskedAt.
+func (s *Service) acceptAskLocked(id string) (*acceptAsk, error) {
 	b := &s.accept
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	if !s.loadAcceptLocked(context.Background()) { // after a restart nothing may have read them yet (a button of an old briefing)
-		return nil
+		return nil, errAcceptStore
 	}
-	return b.asks[id]
+	return b.asks[id], nil
 }
 
 // passWords accepts bare approval, optionally prefixed with the Chinese word for "verify" and followed by one or two
 // Chinese completion particles (as in "ok" plus a particle) or a stop. Question particles stay out, and
 // both full-width and ASCII question marks are neither particles nor stops, so questions still go to the agent, and
 // negations ("not passed", "can't pass", "no good") never match because the regex anchors on the approval word.
-var passWords = regexp.MustCompile(`(?i)^\s*(验收)?(通过|没问题|可以|好的?|ok|okay|lgtm|pass(ed)?|approved?|👍)(?:[了啦呀咯喽呗哒啊]{1,2})?\s*[。.!！]?\s*$`)
+var passWords = lazyre.New(`(?i)^\s*(验收)?(通过|没问题|可以|好的?|ok|okay|lgtm|pass(ed)?|approved?|👍)(?:[了啦呀咯喽呗哒啊]{1,2})?\s*[。.!！]?\s*$`)
 
 // acceptReply answers a reply to a "Please verify" card or a conclusion's (true: it was one): "Pass" marks it verified (a
 // decision: takes the option recommended), anything else is the user's change (a decision: their choice), written into the
@@ -351,12 +365,14 @@ func (s *Service) acceptReply(ctx context.Context, messageID, text string, media
 	if passWords.MatchString(text) && !(decideAsk(&ask) && ask.Recommend == "") {
 		// Approval on a pre-reopen card is answered but neither accepts nor reopens; a gone todo keeps old behavior.
 		if ok {
-			if a := s.acceptAskLocked(id); a != nil && acceptAskStale(a, t) {
+			if a, _ := s.acceptAskLocked(id); a != nil && acceptAskStale(a, t) { // acceptFor read the asks
 				s.botNote(ctx, messageID, i18n.T(l, "assistant-feishu_cards.already_handled"))
 				return true
 			}
 		}
-		if ok, err := s.acceptTry(ctx, id, ""); err != nil {
+		if ok, err := s.acceptTry(ctx, id, ""); errors.Is(err, errAcceptStore) {
+			s.botNote(ctx, messageID, i18n.T(l, "http-status.unavailable"))
+		} else if err != nil {
 			s.botNote(ctx, messageID, i18n.T(l, "assistant-reports.accept_not_sent", i18n.Args{"error": clip(oneLine(err.Error()), 120)}))
 		} else if ok {
 			s.botNote(ctx, messageID, acceptedNote(l, &ask))
@@ -367,7 +383,7 @@ func (s *Service) acceptReply(ctx context.Context, messageID, text string, media
 		s.botNote(ctx, messageID, i18n.T(l, "assistant-reports.accept_gone"))
 		return true
 	}
-	if a := s.acceptAskLocked(id); a != nil && acceptAskStale(a, t) { // old round's change is answered, not routed
+	if a, _ := s.acceptAskLocked(id); a != nil && acceptAskStale(a, t) { // old round's change is answered, not routed
 		s.botNote(ctx, messageID, i18n.T(l, "assistant-feishu_cards.already_handled"))
 		return true
 	}
@@ -438,15 +454,16 @@ func (s *Service) accepted(ctx context.Context, id, card string) bool {
 	return ok
 }
 
-// acceptTry is accepted, with the error of a decision whose recommendation did not reach the task's agent: then nothing
-// was taken, the ask still waits, and the owner can try again.
+// acceptTry is accepted, with the error of a decision whose recommendation did not reach the task's agent, or
+// errAcceptStore when the asks cannot be read or the acceptance cannot be saved: either way nothing was taken, the ask
+// still waits, and the owner can try again.
 func (s *Service) acceptTry(ctx context.Context, id, card string) (bool, error) {
 	t, todoOK := s.todoNow(id)
 	b := &s.accept
 	b.mu.Lock()
 	if !s.loadAcceptLocked(ctx) {
 		b.mu.Unlock()
-		return false, nil
+		return false, errAcceptStore
 	}
 	a, ok := b.asks[id]
 	if !ok || a.AskedAt.IsZero() || !a.AcceptedAt.IsZero() || (todoOK && acceptAskStale(a, t)) || (card != "" && card != a.MessageID && !slices.Contains(a.Messages, card)) ||
@@ -455,8 +472,14 @@ func (s *Service) acceptTry(ctx context.Context, id, card string) (bool, error) 
 		return false, nil
 	}
 	a.AcceptedAt = time.Now().UTC()
+	if err := s.saveAcceptErrLocked(ctx); err != nil {
+		// Kept only in memory, it would wait again after a restart: not accepted, and nothing that follows one runs.
+		a.AcceptedAt = time.Time{}
+		b.mu.Unlock()
+		s.logf("task %s: acceptance: save: %v", id, err)
+		return false, fmt.Errorf("%w: %w", errAcceptStore, err)
+	}
 	cp := *a
-	s.saveAcceptLocked(ctx)
 	b.mu.Unlock()
 	s.boardChanged() // it no longer waits
 	switch {

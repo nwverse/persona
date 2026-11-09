@@ -3,6 +3,7 @@ package assistant
 import (
 	"context"
 	"errors"
+	"slices"
 	"strings"
 	"time"
 
@@ -137,12 +138,27 @@ func (s *Service) threadMessage(ctx context.Context, ev feishubot.MessageEvent, 
 		return
 	}
 	content.Text = prompts.RenderTodoThreadReply(prompts.TodoThreadReply{Title: contextText(clip(oneLine(t.Title), 80)), Text: text, Recorded: recorded})
+	// A to-do that came from a question nobody answered (ask_todo.go): the reply is the owner's call, and goes to the
+	// conversation that asked (not to an Agent) as the answer; the to-do then closes.
+	asked := false
+	if convs := slices.DeleteFunc(slices.Clone(routes), func(r botTarget) bool { return r.Kind == targetAgent }); text != "" && len(convs) > 0 {
+		if answer, ok := s.askTodoTopicAnswer(ctx, t, text); ok {
+			content.Text, routes, asked = answer, convs, true
+		}
+	}
 	var err error
 	for _, target := range routes { // one that cannot take it (offline, gone, refusing) leaves it to the next
 		if err = s.botSendIn(ctx, &ev, content, target, topic); err == nil {
+			if asked {
+				s.settleAskClaim(ctx, t.ID, true)
+				s.closeAskTodo(ctx, t.ID)
+			}
 			return
 		}
 		s.logf("bots: topic message of todo %s to %s: %v", t.ID, target.Kind, err)
+	}
+	if asked {
+		s.settleAskClaim(ctx, t.ID, false)
 	}
 	notDelivered(err)
 }

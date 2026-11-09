@@ -326,7 +326,12 @@ struct ShellComposerBar<Attach: View, Modes: View>: View {
                     .foregroundStyle(AppStyle.current.usesBeautifulUI ? theme.colors.ink2 : Color.secondary)
                     .fixedSize()
             }
+            // Claude Code's ultracode on, or a Codex thread at "ultra" (#1307): read out with the title (`spoken`).
+            if title.mark != nil {
+                UltracodeMark(font: Theme.Font.labelStrong, spoken: nil).transition(.opacity)
+            }
         }
+        .animation(UltracodeMark.motion, value: title.mark)
         .lineLimit(1)
         .padding(.leading, Theme.Space.s)
         .padding(.trailing, Theme.Space.xs)

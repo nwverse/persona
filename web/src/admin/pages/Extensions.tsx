@@ -170,6 +170,7 @@ function ExtensionRow({
             <span className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
               <span className="truncate text-[13.5px] font-medium text-ink">{p.name}</span>
               {p.version && <span className="font-mono text-[11.5px] text-ink-3">{p.version}</span>}
+              {p.attached?.version && <Tag tone="red">{t("admin-logic.ext_program_version", { version: p.attached.version })}</Tag>}
               <Tag tone={p.source === "installed" ? "accent" : "gray"}>{extensionSourceLabel(p.source)}</Tag>
             </span>
             <span className="mt-1 flex min-w-0 items-center gap-1.5 text-[11.5px] text-ink-3">

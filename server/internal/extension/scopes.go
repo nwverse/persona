@@ -22,11 +22,12 @@ const (
 	ScopeTodosRead     = extwire.ScopeTodosRead
 	ScopeTodosWrite    = extwire.ScopeTodosWrite
 	ScopeModels        = extwire.ScopeModels
+	ScopeAssistantRead = extwire.ScopeAssistantRead
 )
 
 // HubScopes are the scopes, in the order the install screen lists them.
 var HubScopes = []string{ScopeKBRead, ScopeKBWrite, ScopeInboxRead, ScopeInboxWrite, ScopeAgentsRead, ScopeAgentsControl,
-	ScopeMachinesRead, ScopeNotify, ScopeAssistantAsk, ScopeTodosRead, ScopeTodosWrite, ScopeModels}
+	ScopeMachinesRead, ScopeNotify, ScopeAssistantAsk, ScopeAssistantRead, ScopeTodosRead, ScopeTodosWrite, ScopeModels}
 
 var scopeTitles = map[string]string{
 	ScopeKBRead:        "scope_kb_read",
@@ -41,6 +42,7 @@ var scopeTitles = map[string]string{
 	ScopeTodosRead:     "scope_todos_read",
 	ScopeTodosWrite:    "scope_todos_write",
 	ScopeModels:        "scope_models",
+	ScopeAssistantRead: "scope_assistant_read",
 }
 
 // ScopeTitle is how the install screen says scope s; ok false for what is not a scope.

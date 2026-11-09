@@ -854,6 +854,8 @@ export interface InitializeResult {
   version: string;
   /** A subset of the manifest's. */
   contributes?: Record<string, unknown>;
+  /** Request-ID scoped rpc.cancel for mounted page lifecycle calls only. */
+  ui_page_cancellation?: 1;
 }
 
 /**
@@ -4512,12 +4514,14 @@ export interface TodoDecisionEvent {
  * error.code of model.complete besides permission_denied (data {scope: "models"}): invalid_params; assistant_offline
  * (the manager is away: try again); model_unavailable (nothing to call for this extension: the user picks a model for
  * it in Settings › Model configuration); model_paused (the connection is held for quota or load, nothing was sent;
- * data ModelPause: try again after until); model_failed (the upstream refused or failed the request); timeout (past
+ * data ModelPause: try again after until); model_failed (the upstream failed the request: an error status or a
+ * dropped connection); model_refused (the model declined to answer this input, a refusal or a content filter: sending
+ * it again unchanged gets the same answer, so split it, drop a part or report it; data ModelRefusal); timeout (past
  * timeout_seconds); invalid_output (with json_schema, the reply was still not JSON matching it after one more try;
  * data ModelInvalidOutput).
  */
-export type ModelErrorCode = "invalid_params" | "assistant_offline" | "model_unavailable" | "model_paused" | "model_failed" | "timeout" | "invalid_output" | (string & {});
-export const MODEL_ERROR_CODES = ["invalid_params", "assistant_offline", "model_unavailable", "model_paused", "model_failed", "timeout", "invalid_output"] as const;
+export type ModelErrorCode = "invalid_params" | "assistant_offline" | "model_unavailable" | "model_paused" | "model_failed" | "model_refused" | "timeout" | "invalid_output" | (string & {});
+export const MODEL_ERROR_CODES = ["invalid_params", "assistant_offline", "model_unavailable", "model_paused", "model_failed", "model_refused", "timeout", "invalid_output"] as const;
 
 /**
  * One turn of the conversation: the user's, or the model's earlier answer.
@@ -4593,6 +4597,94 @@ export interface ModelInvalidOutput {
   problem: string;
   text: string;
   usage: ModelUsage;
+}
+
+/**
+ * The data of model_refused: what the upstream said and what the declined call spent.
+ */
+export interface ModelRefusal {
+  /** The upstream's reason: refusal (a refusal stop or part) or content_filter. */
+  stop_reason?: string;
+  usage: ModelUsage;
+}
+
+/**
+ * error.code of the assistant calls besides permission_denied (data {scope: "assistant.read"}): invalid_params;
+ * not_found (assistant.messages: no such conversation in the assistant's own space); assistant_offline (the manager
+ * is away: try again); machine_offline (the assistant's computer is not connected or not set up: try again).
+ */
+export type AssistantErrorCode = "invalid_params" | "not_found" | "assistant_offline" | "machine_offline" | (string & {});
+export const ASSISTANT_ERROR_CODES = ["invalid_params", "not_found", "assistant_offline", "machine_offline"] as const;
+
+/**
+ * assistant.conversations (assistant.read): the conversations last active at or after since, newest first.
+ */
+export interface AssistantConversationsParams {
+  /** An RFC 3339 time: last active at or after it. */
+  since: string;
+  /** An RFC 3339 time: those known to have started at or after it are left out. */
+  until?: string;
+  include_archived?: boolean;
+  /** 0 is 50. */
+  limit?: number;
+  offset?: number;
+}
+
+export interface AssistantConversation {
+  id: string;
+  /** Empty while it has none. */
+  title: string;
+  /** The main conversation. */
+  main?: boolean;
+  archived?: boolean;
+  /** Who opened it: user, channel, inbox, task, spawned, lark_agent or extension. */
+  origin: string;
+  /** When it began, when known. */
+  started?: string;
+  /** Its last activity. */
+  updated: string;
+}
+
+export interface AssistantConversationsResult {
+  items: AssistantConversation[];
+  total: number;
+  next_offset?: number;
+}
+
+/**
+ * assistant.messages (assistant.read): one conversation's words in time order, paged by seq.
+ */
+export interface AssistantMessagesParams {
+  /** The conversation (assistant.conversations' id). */
+  id: string;
+  /** An RFC 3339 time: messages at or after it. */
+  since?: string;
+  /** An RFC 3339 time: messages before it. */
+  until?: string;
+  /** Continue after this seq (the last page's next_seq). */
+  after_seq?: number;
+  /** 0 is 200. */
+  limit?: number;
+}
+
+export interface AssistantMessage {
+  seq: number;
+  at: string;
+  role: AssistantRole;
+  text: string;
+  /** The text was cut for pages (a very long message). */
+  truncated?: boolean;
+}
+
+export type AssistantRole = "user" | "assistant" | (string & {});
+export const ASSISTANT_ROLES = ["user", "assistant"] as const;
+
+/**
+ * next_seq is set while there is more to read (pass it as after_seq), even when this page has no messages.
+ */
+export interface AssistantMessagesResult {
+  messages: AssistantMessage[];
+  next_seq?: number;
 }
 
 /**
@@ -4993,4 +5085,6 @@ export const CALLS: Record<string, Call> = {
   "event.todo.changed": { from: "hub", params: "TodoChangedEvent", event: true },
   "event.todo.decision": { from: "hub", params: "TodoDecisionEvent", event: true },
   "model.complete": { from: "program", params: "ModelCompleteParams", result: "ModelCompleteResult" },
+  "assistant.conversations": { from: "program", params: "AssistantConversationsParams", result: "AssistantConversationsResult" },
+  "assistant.messages": { from: "program", params: "AssistantMessagesParams", result: "AssistantMessagesResult" },
 };

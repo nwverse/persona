@@ -9,7 +9,6 @@ import (
 	"maps"
 	"net/http"
 	"net/url"
-	"regexp"
 	"slices"
 	"strings"
 	"sync"
@@ -19,13 +18,14 @@ import (
 	"github.com/nwverse/persona/server/internal/connector/proc"
 	"github.com/nwverse/persona/server/internal/extension"
 	"github.com/nwverse/persona/server/internal/i18n"
+	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/quota"
 	"github.com/nwverse/persona/server/internal/rpc"
 )
 
 // Declarative UI and events (docs/extensions/extensions.md "Declarative UI" "Events"). The apps ask the hub what plugins draw where
 // (GET /api/v1/plugins/-/ui) and for one of them (POST /api/v1/plugins/{id}/-/ui/{ui}); the hub asks the plugin
-// (ui.render, ui.action), holds the View to what the apps draw (plugin.CheckView) and gives it to them. A launcher
+// (ui.render, ui.action), holds the View to what the apps draw (extension.CheckView) and gives it to them. A launcher
 // section may reach the launcher's gateway with its key the way quota does (gateway.http), never seeing the key. An
 // inbox item's page is drawn from that item (context.item), only for the items of the plugin's own connector.
 
@@ -39,7 +39,7 @@ type UIPlace struct {
 	Title         string `json:"title"`
 	Placement     string `json:"placement"`
 	Size          string `json:"size,omitempty"`
-	// Icon: a nav_page's (plugin.UIIcons); Opens: the page an overview_card opens; Badge: on a nav_page's entry;
+	// Icon: a nav_page's (extension.UIIcons); Opens: the page an overview_card opens; Badge: on a nav_page's entry;
 	// Connector: the connector whose items an inbox_item draws.
 	Icon      string           `json:"icon,omitempty"`
 	Opens     string           `json:"opens,omitempty"`
@@ -187,7 +187,7 @@ func (h *Manager) uiFallbackLang(ctx context.Context, locale string) i18n.Lang {
 	return i18n.Resolve(locale)
 }
 
-var localePattern = regexp.MustCompile(`^[A-Za-z]{2,3}([-_][A-Za-z0-9]{1,8}){0,4}$`)
+var localePattern = lazyre.New(`^[A-Za-z]{2,3}([-_][A-Za-z0-9]{1,8}){0,4}$`)
 
 func uiLocaleMatches(l i18n.Lang, tag string) bool {
 	primary, _, _ := strings.Cut(strings.ReplaceAll(tag, "_", "-"), "-")
@@ -413,7 +413,7 @@ func checkPushes(m *extension.Manifest, from extension.UIItem, v *extension.View
 }
 
 // checkOpenURL holds what extension id's action opens to https; an inbox_item may also open its item's own source page
-// (plugin.InboxSourceURL), that item's only, and any of its pages its own settings (extension.SettingsURL), its own
+// (extension.InboxSourceURL), that item's only, and any of its pages its own settings (extension.SettingsURL), its own
 // only.
 func checkOpenURL(id string, ui extension.UIItem, itemID, raw string) error {
 	if raw == "" || raw == extension.SettingsURL(id) {

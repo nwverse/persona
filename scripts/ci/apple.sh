@@ -201,11 +201,12 @@ if [ "$LANE" = all ] || [ "$LANE" = macos ]; then
   ci_run 'Prepare profile-free Mac offline test entitlements' 60 python3 "$CI_ROOT/scripts/ci/apple_entitlements.py" \
     "$SOURCE/apple/Mac/Resources/PersonaMac.entitlements" \
     "$SOURCE/apple/PersonaNotify/PersonaMacNotify.entitlements"
-  printf '%s\n' 'apple-ci: excluded Mac integration suite: ExtensionStreamSnapshotTests (5 live extension/hub cases requiring PERSONA_STREAM_TEST_PAIR). Mac UI/screenshot tests are a separate lane.'
+  printf '%s\n' 'apple-ci: excluded Mac integration suites: ExtensionStreamSnapshotTests (5 live extension/hub cases requiring PERSONA_STREAM_TEST_PAIR); OldHubCompatibilityIntegrationTests (old-hub lab requiring PERSONA_COMPAT_TEST_URL, excluded on iOS too). Mac UI/screenshot tests are a separate lane.'
   ci_run 'macOS offline unit tests' 1800 "${XCODE[@]}" -scheme PersonaMac \
     -destination 'platform=macOS' -derivedDataPath "$OUTPUT/macos-tests" -parallel-testing-enabled NO \
     -disableAutomaticPackageResolution "${TEST_SIGNING[@]}" \
     -only-testing:PersonaMacTests -skip-testing:PersonaMacTests/ExtensionStreamSnapshotTests \
+    -skip-testing:PersonaMacTests/OldHubCompatibilityIntegrationTests \
     -resultBundlePath "$OUTPUT/macos-unit.xcresult" test
   result macos-unit
 fi

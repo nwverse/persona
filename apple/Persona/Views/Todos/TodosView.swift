@@ -242,6 +242,7 @@ struct TodoRow: View {
         let status = TodosLogic.todoStatus(todo, lookup: lookup)
         let urgent = TodosLogic.mostUrgentAgent(todo, lookup: lookup)
         let activeAgents = todo.agents.filter { $0.releasedAt == nil }
+        let ultracode = Ultracode.todoShown(todo, lookup: lookup)
 
         HStack(alignment: .top, spacing: Theme.Space.m) {
             Button(action: onToggleDone) {
@@ -254,11 +255,12 @@ struct TodoRow: View {
 
             VStack(alignment: .leading, spacing: Theme.Space.xs) {
                 HStack(alignment: .firstTextBaseline) {
-                    Text(todo.title)
+                    UltracodeMark.after(todo.title, on: ultracode, font: Theme.Font.labelStrong)
                         .font(Theme.Font.bodyStrong)
                         .foregroundStyle(todo.isDone ? Color.secondary : Color.primary)
                         .strikethrough(todo.isDone)
                         .lineLimit(2)
+                        .animation(UltracodeMark.motion, value: ultracode)
                     Spacer(minLength: Theme.Space.xs)
                     if let d = todo.updatedAt ?? todo.createdAt {
                         Text(Fmt.relative(d))
@@ -281,6 +283,8 @@ struct TodoRow: View {
                     }
                     if !todo.isDone { ReviewChip(todo: todo, compact: true) }
                 }
+
+                TodoPlanLine(todo: todo)
 
                 if let reason = todo.closedReason {
                     Text(reason)

@@ -2,6 +2,7 @@ package hub
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"os"
@@ -9,6 +10,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"slices"
+	"strconv"
 	"time"
 
 	"github.com/nwverse/persona/server/internal/i18n"
@@ -35,6 +37,9 @@ func (u *updater) begin(ctx context.Context, now bool) error {
 	if r == nil || !u.h.build.Newer(r.Manifest.Build) {
 		return errNoUpdate
 	}
+	if err := u.unreplaced(r.Manifest); err != nil {
+		return err
+	}
 	u.mu.Lock()
 	u.now = now
 	u.mu.Unlock()
@@ -53,7 +58,11 @@ func (u *updater) install(ctx context.Context, auto bool) {
 	r := u.release
 	u.mu.Unlock()
 	started := time.Now()
+	// What this update downloads goes under staged. Once it fails nothing reads that again (another try downloads
+	// afresh), so it goes before another install can start.
+	staged := u.stagedDir(r.Manifest.Build)
 	fail := func(err error) {
+		u.removeDownloads(staged)
 		u.mu.Lock()
 		u.running, u.now = false, false
 		u.busy = nil
@@ -70,7 +79,10 @@ func (u *updater) install(ctx context.Context, auto bool) {
 		fail(i18n.Err("hub-selfupdate.err_no_binary", i18n.Args{"platform": runtime.GOOS + "/" + runtime.GOARCH}))
 		return
 	}
-	staged := filepath.Join(u.dir, fmt.Sprint(m.Build))
+	if err := u.unreplaced(m); err != nil {
+		fail(err)
+		return
+	}
 	u.set("downloading", "hub", "")
 	bin, err := update.Download(ctx, u.client, u.h.build.UpdateURL, file, staged)
 	if err != nil {
@@ -86,7 +98,9 @@ func (u *updater) install(ctx context.Context, auto bool) {
 		fail(err)
 		return
 	}
-	// The programs the hub runs beside it (personad-wechat): this platform's build of each, checked like personad.
+	// The programs the hub runs beside it (personad-wechat): this platform's build of each, checked like personad. One
+	// the release has no build of keeps its old file (persona-hub and persona-manager only when no service runs it:
+	// unreplaced).
 	programs := map[string]string{} // name -> the downloaded binary
 	for _, name := range update.ProgramNames {
 		f, ok := m.Programs[name][runtime.GOOS+"-"+runtime.GOARCH]
@@ -136,6 +150,10 @@ func (u *updater) install(ctx context.Context, auto bool) {
 		fail(err)
 		return
 	}
+	if err := u.unreplaced(m); err != nil { // a service pointed at a program meanwhile
+		fail(err)
+		return
+	}
 	p := update.Pending{FromVersion: u.h.version, FromBuild: u.h.build.Number, ToVersion: m.Version, ToBuild: m.Build,
 		Target: target, Started: started, Online: u.onlineIDs(), Auto: auto, PID: os.Getpid(), Args: os.Args,
 		HealthURL: u.healthURL(), Nodes: nodes}
@@ -156,6 +174,7 @@ func (u *updater) install(ctx context.Context, auto bool) {
 			}
 		}
 	}
+	p.Run = runAs(u.self, p.Programs)
 	if err := update.Save(update.PendingPath(u.dir), p); err != nil {
 		_ = update.RestoreAll(p)
 		fail(err)
@@ -167,7 +186,7 @@ func (u *updater) install(ctx context.Context, auto bool) {
 		// The edge is the watchdog too (it goes back when the new one does not confirm the update in time).
 		u.set("restarting", "", "")
 		u.h.logf("update: handing over to %s", m.Version)
-		if err := u.handover(ctx, target, m.Build); err != nil {
+		if err := u.handover(ctx, p.RunPath(), m.Build); err != nil {
 			_ = update.RestoreAll(p)
 			_ = os.Remove(update.PendingPath(u.dir))
 			fail(i18n.Err("hub-selfupdate.err_no_start", i18n.Args{"error": err.Error()}))
@@ -180,10 +199,44 @@ func (u *updater) install(ctx context.Context, auto bool) {
 	u.set("restarting", "", "")
 	u.h.logf("update: restarting into %s", m.Version)
 	time.Sleep(500 * time.Millisecond) // the apps get the restarting event before the socket goes
-	if err := u.exec(target); err != nil {
+	if err := u.exec(p.RunPath()); err != nil {
 		_ = update.RestoreAll(p)
 		_ = os.Remove(update.PendingPath(u.dir))
 		fail(err)
+	}
+}
+
+// stagedDir is where the update to build downloads its files: the hub's binary, the node binaries in nodes/ and the
+// programs in programs/ (docs/operations/hub-update.md "Updating").
+func (u *updater) stagedDir(build int64) string {
+	return filepath.Join(u.dir, strconv.FormatInt(build, 10))
+}
+
+// removeDownloads removes an update's downloads once nothing reads them any more: after the update failed, was
+// confirmed (its node binaries are in NodeBinaryDir by then) or went back. Each one is tens to hundreds of MB.
+func (u *updater) removeDownloads(staged string) {
+	if err := os.RemoveAll(staged); err != nil {
+		u.h.logf("update: remove the downloads in %s: %v", staged, err)
+	}
+}
+
+// pruneDownloads removes the downloads of every update but the one to build keep (0: none) when the hub starts: one
+// that went back through the watchdog or the edge (both start the old build, which never knew of it), one a stop
+// cut short, and those an older build left. Only <build>/ directories go; the markers and logs beside them stay.
+func (u *updater) pruneDownloads(keep int64) {
+	entries, err := os.ReadDir(u.dir)
+	if err != nil {
+		if !errors.Is(err, os.ErrNotExist) {
+			u.h.logf("update: list the downloads: %v", err)
+		}
+		return
+	}
+	for _, e := range entries {
+		build, err := strconv.ParseInt(e.Name(), 10, 64)
+		if !e.IsDir() || err != nil || build <= 0 || build == keep || strconv.FormatInt(build, 10) != e.Name() {
+			continue
+		}
+		u.removeDownloads(filepath.Join(u.dir, e.Name()))
 	}
 }
 
@@ -234,7 +287,9 @@ func (h *Hub) updateBusy() []busyItem {
 		m.mu.Lock()
 		resident := m.info.NodeUpdate // advertised only by a resident supervisor
 		m.mu.Unlock()
-		for _, s := range h.decorated(m) {
+		list := m.keptSessions() // only read, and no copy of it: the manager stamp is not read here
+		for i := range list {
+			s := &list[i]
 			// Terminal-host sessions outlive the node transport. Unknown hosts and
 			// direct assistant processes still wait: an ephemeral SSH node may own them.
 			if h.slot != nil && !h.upd.nodesEnabled() && m.cfg.Kind != "local" &&
@@ -244,7 +299,7 @@ func (h *Hub) updateBusy() []busyItem {
 			// On a turn, not working on in the background (#2228): a server an agent left running would hold the
 			// update back for as long as it runs, and the restart does not stop it.
 			if s.Status == proto.StatusWorking || s.State == proto.StateNeedsYou {
-				out = append(out, busyItem{MachineID: m.cfg.ID, Machine: m.name(), SessionID: s.SessionID, Title: agentTitle(s)})
+				out = append(out, busyItem{MachineID: m.cfg.ID, Machine: m.name(), SessionID: s.SessionID, Title: agentTitle(*s)})
 			}
 		}
 	}

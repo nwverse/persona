@@ -2,7 +2,7 @@ import XCTest
 
 /// Archiving Persona's conversations (docs/assistant/assistant.md「管理自己的对话」): a conversation in the sidebar swipes left to
 /// Archive (the open drawer leaves the drag to the row), it shows up under Archived, and a swipe there brings it back. In
-/// the new shell and the old layout, on demo data.
+/// the shell, on demo data.
 final class AssistantArchiveTests: XCTestCase {
     private var app: XCUIApplication!
 
@@ -10,9 +10,9 @@ final class AssistantArchiveTests: XCTestCase {
         continueAfterFailure = false
     }
 
-    @MainActor private func launch(oldLayout: Bool) {
+    @MainActor private func launch() {
         app = XCUIApplication()
-        app.launchArguments = ["-demo.on", "YES", "-ui.oldLayout", oldLayout ? "YES" : "NO", "-newAssistant", "YES",
+        app.launchArguments = ["-demo.on", "YES", "-newAssistant", "YES",
                                "-app.tab", "assistant", "-dev.openChat", ""]
         app.launchPinned()
         let menu = app.buttons["assistant-sidebar-button"].firstMatch
@@ -69,7 +69,7 @@ final class AssistantArchiveTests: XCTestCase {
     }
 
     @MainActor func testArchiveInTheShell() {
-        launch(oldLayout: false)
+        launch()
         archiveAndBringBack("shell")
         // A drag to the left off the rows still closes the drawer.
         let w = app.windows.firstMatch
@@ -78,15 +78,10 @@ final class AssistantArchiveTests: XCTestCase {
         XCTAssertTrue(conversation("帮我约周五").waitForNonExistence(timeout: 3), "the drawer did not close")
     }
 
-    @MainActor func testArchiveInTheOldLayout() {
-        launch(oldLayout: true)
-        archiveAndBringBack("old")
-    }
-
     /// The main conversation has no Archive. In the shell it is the drawer's first row, Persona, above Inbox and once
     /// only: not again under Pin or Recent (#2004).
     @MainActor func testTheMainConversationStays() {
-        launch(oldLayout: false)
+        launch()
         let main = app.buttons["sidebar-main"].firstMatch
         XCTAssertTrue(main.waitForExistence(timeout: 5), "no Persona row at the top of the drawer")
         XCTAssertFalse(conversation("Persona").exists, "the main conversation is under 置顶 too")

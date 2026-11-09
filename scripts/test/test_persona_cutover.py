@@ -634,7 +634,8 @@ class CutoverTests(unittest.TestCase):
         for required in ("\\set ON_ERROR_STOP on", "BEGIN;", "COMMIT;", "INSERT INTO cutover_name VALUES (:'source_name')",
                          "Cutover schema mismatch", "Extension ID conflict", "ACCESS EXCLUSIVE MODE",
                          "UPDATE public.plugin_secrets", "UPDATE public.plugin_audit", "Sealed secrets changed",
-                         "{look,package}", "key='look'", "persona-visor", "remaining"):
+                         "{look,package}", "key='look'", "persona-visor", "remaining",
+                         "pg_temp.cutover_manager_moved_out()", "direction = ''out''", "built-in manager database too"):
             self.assertIn(required, sql)
         for table in ("settings", "hub_settings"):
             self.assertIn("LOCK TABLE public." + table + " IN ACCESS EXCLUSIVE MODE;", sql)
@@ -762,6 +763,41 @@ INSERT INTO devices (device_id,prefs,topic) VALUES ('fixture','{"look":{"package
         self.sql("DROP TABLE plugin_secrets,plugin_audit,plugins,settings,node_sessions")
         self.sql(CUTOVER.database_sql(SOURCE))
         self.assertEqual(self.sql("SELECT prefs#>>'{look,package}' FROM devices").stdout.strip(), "persona-visor/r1")
+
+    def manager_moved(self, direction):
+        # As migrations/manager/0428_manager_moved.sql: 'out' in the hub's database, 'in' in the manager's own.
+        self.sql("CREATE TABLE manager_moved (direction text PRIMARY KEY CHECK (direction IN ('in','out')),"
+                 " at timestamptz NOT NULL DEFAULT now(), peer text NOT NULL DEFAULT '');"
+                 " INSERT INTO manager_moved (direction,peer) VALUES ('" + direction + "','sandbox/peer')")
+
+    def test_sql_leaves_the_frozen_manager_tables_of_a_moved_out_hub_database(self):
+        # The built-in manager moved its data into its own database: the hub's keeps its old manager tables as they
+        # were, which nothing reads. Rewriting and verifying them would report a cutover the manager never sees (#1686).
+        self.manager_moved("out")
+        self.sql("INSERT INTO node_sessions VALUES ('hub','a','/home/u/.previous/assistant');"
+                 " ALTER TABLE settings ALTER COLUMN value TYPE text USING value::text")  # a frozen copy's schema is not checked
+        result = self.sql(CUTOVER.database_sql(SOURCE, ["/home/u"]))
+        self.assertIn("committed for the hub tables only", result.stdout)
+        self.assertIn("built-in manager database too", result.stdout)
+        self.assertNotIn("stored session folders verified", result.stdout)
+        self.assertEqual(self.sql("SELECT id FROM plugins").stdout.strip(), "previous-apps")
+        self.assertEqual(self.sql("SELECT plugin FROM plugin_secrets").stdout.strip(), "previous-apps")
+        self.assertEqual(self.sql("SELECT plugin FROM plugin_audit").stdout.strip(), "previous-apps")
+        self.assertEqual(self.sql("SELECT value::jsonb->>'id' FROM settings WHERE key='look'").stdout.strip(), "previous")
+        self.assertEqual(self.sql("SELECT cwd FROM node_sessions").stdout.strip(), "/home/u/.previous/assistant")
+        self.assertEqual(self.sql("SELECT count(*) FROM hub_settings WHERE key='hub.extensions_report'").stdout.strip(), "0")
+        self.assertEqual(self.sql("SELECT prefs#>>'{look,package}' FROM devices").stdout.strip(), "persona-visor/r1")
+
+    def test_sql_migrates_the_manager_database_its_data_moved_into(self):
+        self.manager_moved("in")
+        self.sql("DROP TABLE hub_settings,devices;"
+                 " INSERT INTO node_sessions VALUES ('hub','a','/home/u/.previous/assistant')")
+        result = self.sql(CUTOVER.database_sql(SOURCE, ["/home/u"]))
+        self.assertIn("stored session folders verified", result.stdout)
+        self.assertEqual(self.sql("SELECT id FROM plugins").stdout.strip(), "persona-apps")
+        self.assertEqual(self.sql("SELECT plugin FROM plugin_secrets").stdout.strip(), "persona-apps")
+        self.assertEqual(self.sql("SELECT value->>'id' FROM settings WHERE key='look'").stdout.strip(), "persona-visor")
+        self.assertEqual(self.sql("SELECT cwd FROM node_sessions").stdout.strip(), "/home/u/.persona/assistant")
 
 
 if __name__ == "__main__":

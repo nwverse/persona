@@ -36,8 +36,11 @@ import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.autofill.ContentDataType
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.clearAndSetSemantics
+import androidx.compose.ui.semantics.contentDataType
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.selected
@@ -45,6 +48,9 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.toggleableState
 import androidx.compose.ui.state.ToggleableState
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
@@ -214,6 +220,8 @@ fun JTextField(
     keyboardOptions: KeyboardOptions = KeyboardOptions.Default,
     keyboardActions: KeyboardActions = KeyboardActions.Default,
     visualTransformation: VisualTransformation = VisualTransformation.None,
+    /** False keeps the field out of Autofill: nothing is filled into it, nothing typed is offered to be saved. */
+    autofill: Boolean = true,
 ) {
     val palette = PersonaTheme.palette
     val style = PersonaTheme.style
@@ -235,7 +243,8 @@ fun JTextField(
             minLines = minLines, maxLines = maxLines, interactionSource = interaction,
             textStyle = PersonaTheme.type.body.copy(color = palette.ink), cursorBrush = SolidColor(palette.accent.takeIf { style != AppStyle.Brief } ?: palette.ink),
             keyboardOptions = keyboardOptions, keyboardActions = keyboardActions, visualTransformation = visualTransformation,
-            modifier = Modifier.fillMaxWidth(),
+            // On the text field's own semantics node: Autofill reads the node it would fill, not its parents.
+            modifier = if (autofill) Modifier.fillMaxWidth() else Modifier.fillMaxWidth().semantics { contentDataType = ContentDataType.None },
             decorationBox = { field ->
                 Row(
                     Modifier.fillMaxWidth().heightIn(min = 48.dp).clip(shape).background(fill)
@@ -257,6 +266,22 @@ fun JTextField(
             Text(it, style = PersonaTheme.type.caption, color = if (isError) palette.danger.text else palette.ink3)
         }
     }
+}
+
+/**
+ * A password the app never keeps (iOS `SecretField`): masked, on the password keyboard without corrections or
+ * suggestions, and outside Autofill (`ContentDataType.None`), since it is a password of the user's own computer, not
+ * this app's. The keyboard's action key only puts the keyboard away; nothing is sent from the keyboard.
+ */
+@Composable
+fun JSecretField(value: String, onValueChange: (String) -> Unit, label: String, modifier: Modifier = Modifier, enabled: Boolean = true) {
+    val focus = LocalFocusManager.current
+    JTextField(
+        value, onValueChange, modifier, label = label, singleLine = true, enabled = enabled,
+        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password, autoCorrectEnabled = false, imeAction = ImeAction.Done),
+        keyboardActions = KeyboardActions(onDone = { focus.clearFocus() }),
+        visualTransformation = PasswordVisualTransformation(), autofill = false,
+    )
 }
 
 @Composable

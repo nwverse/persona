@@ -11,9 +11,9 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"regexp"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/update"
 )
 
@@ -45,10 +45,10 @@ type Plan struct {
 	Freeze              bool      `json:"freeze"`
 }
 
-var idPattern = regexp.MustCompile(`^[a-z][a-z0-9-]{0,31}$`)
-var runPattern = regexp.MustCompile(`^[a-zA-Z0-9_-]{1,80}$`)
-var shaPattern = regexp.MustCompile(`^[0-9a-f]{64}$`)
-var sourcePattern = regexp.MustCompile(`^[0-9a-f]{40}$`)
+var idPattern = lazyre.New(`^[a-z][a-z0-9-]{0,31}$`)
+var runPattern = lazyre.New(`^[a-zA-Z0-9_-]{1,80}$`)
+var shaPattern = lazyre.New(`^[0-9a-f]{64}$`)
+var sourcePattern = lazyre.New(`^[0-9a-f]{40}$`)
 
 func ReadPlan(path string) (Plan, error) {
 	var p Plan

@@ -45,7 +45,7 @@ import Testing
     @Test func mutedLiveAgentsGoBelowTheRestButNeedsYouStaysFirst() {
         let list = [session("a", "unread"), session("b", "working"), session("c", "needs_you"), session("d", "idle")]
         let o = order(muted: ["a", "c"])
-        #expect(o.rank(list[0]) == 5, "muted and unread ranks as 已屏蔽")
+        #expect(o.rank(list[0]) == AgentListOrder.stateKeys.firstIndex(of: "muted"), "muted and unread ranks as 已屏蔽")
         #expect(o.rank(list[2]) == 0, "muted but needs you stays first")
         #expect(o.ordered(list).map(\.sessionID) == ["c", "b", "a", "d"])
     }
@@ -165,7 +165,7 @@ import Testing
     @Test func awaitingAReplyStaysOutOfTheIdleFoldUnlessMuted() {
         let ask = awaiting("ask")
         #expect(order().stays(ask))
-        #expect(!order(muted: ["ask"]).stays(ask) && order(muted: ["ask"]).rank(ask) == 6, "a muted one folds as 已看")
+        #expect(!order(muted: ["ask"]).stays(ask) && order(muted: ["ask"]).rank(ask) == AgentListOrder.stateKeys.firstIndex(of: "idle"), "a muted one folds as 已看")
         let g = SpaceGroup(id: "s", machineID: "m", spaceID: "w1", group: "", name: "app", index: 0, sessions: [ask, session("q", "idle")])
         #expect(!order().isQuiet(g), "a space with one is not in 空闲的空间")
         #expect(order(muted: ["ask"]).isQuiet(g))
@@ -195,6 +195,53 @@ import Testing
         #expect(order(muted: ["ask"]).awaitsReply(ask) == ask.awaitsYourReply(muted: true))
     }
 
+    // MARK: Waiting in the Background (#6045)
+
+    private func waiting(_ id: String, state: String = "working", updated: TimeInterval = 0) -> Session {
+        let json = """
+        {"machine_id":"m","session_id":"\(id)","title":"\(id)","cwd":"/tmp/p","status":"done","state":"\(state)",
+         "space_id":"w1","space_name":"app","background_working":true,"background_waiting":true,
+         "background":[{"id":"b1","kind":"shell","description":"等 CI"}],
+         "updated_at":"\(ISO8601DateFormatter().string(from: Date(timeIntervalSince1970: updated)))"}
+        """
+        do { return try JSON.decoder.decode(Session.self, from: Data(json.utf8)) }
+        catch { fatalError("bad fixture: \(error)") }
+    }
+
+    @Test func waitingInTheBackgroundDecodesAndOlderHubsSayNothing() {
+        let w = waiting("w")
+        #expect(w.backgroundWaiting && w.waitsInBackground && w.state == .working, "still working for whatever acts on it")
+        #expect(!session("p", "working").waitsInBackground, "an older hub never sends it: Working as before")
+        #expect(!waiting("i", state: "idle").waitsInBackground, "only with Working")
+        let odd = try? JSON.decoder.decode(Session.self, from: Data(#"{"session_id":"x","background_waiting":"yes"}"#.utf8))
+        #expect(odd?.backgroundWaiting == false, "an odd value never drops the session")
+    }
+
+    @Test func waitingInTheBackgroundIsNotCountedOrFilteredAsWorking() {
+        let w = waiting("w"), work = session("work", "working")
+        #expect(!AgentFilter.working.matches(w) && AgentFilter.working.matches(work))
+        #expect(AgentFilter.all.matches(w))
+        #expect(AgentFilter.backgroundWaiting.matches(w) && !AgentFilter.backgroundWaiting.matches(work))
+        #expect(!AgentFilter.backgroundWaiting.matches(w, muted: true), "a muted one is under Muted, as Working's are")
+        let g = SpaceGroup(id: "s", machineID: "m", spaceID: "w1", group: "", name: "app", index: 0, sessions: [w, work])
+        #expect(g.count(.working) == 1 && g.count(.idle) == 1 && g.waitingInBackground == 1)
+        #expect(StateCounts.spoken(g).hasSuffix("1 " + String(localized: "Waiting in the background")), "said apart, not as idle")
+        #expect(SpaceGroup(id: "s", machineID: "m", spaceID: "w1", group: "", name: "app", index: 0, sessions: [w]).state == .idle)
+        #expect(AgentTally([w, work]) == { var t = AgentTally([]); t.working = 1; t.idle = 1; return t }())
+    }
+
+    @Test func waitingInTheBackgroundHasItsOwnSectionAndSaysSo() {
+        let list = [session("idle", "idle", updated: 50), waiting("bg", updated: 40), session("work", "working", updated: 1)]
+        #expect(order().rank(list[1]) == AgentListOrder.stateKeys.firstIndex(of: "background"))
+        #expect(order().ordered(list).map(\.sessionID) == ["work", "bg", "idle"])
+        #expect(order().stays(list[1]), "it stays out of the idle fold")
+        #expect(order(muted: ["bg"]).rank(list[1]) == AgentListOrder.stateKeys.firstIndex(of: "muted"))
+        let w = waiting("w")
+        #expect(w.stateLabel == "后台等待中" && w.stateLabel(muted: false) == "后台等待中")
+        #expect(w.stateTone.text == StatusPalette.backgroundWaiting.text && w.stateTone(muted: true).text == StatusPalette.backgroundWaiting.text)
+        #expect(session("work", "working").stateTone.text == StatusPalette.working.text)
+    }
+
     // MARK: The open agent held in place (#2213)
 
     @Test func theOpenAgentSeenByOpeningKeepsItsPlaceUntilLeft() {
@@ -205,7 +252,7 @@ import Testing
         #expect(held.rank(read) == 1, "still 完成未看's place")
         #expect(held.ordered(list).map(\.sessionID) == ["read", "work", "old"])
         let left = order()
-        #expect(!left.stays(read) && left.rank(read) == 6, "folds as soon as it is left")
+        #expect(!left.stays(read) && left.rank(read) == AgentListOrder.stateKeys.firstIndex(of: "idle"), "folds as soon as it is left")
     }
 
     @Test func aQuietSpaceWithTheHeldAgentIsNotQuiet() {
@@ -268,6 +315,18 @@ import Testing
         #expect(rows(.repo, folded: [main.childrenFoldID]).repos(tree, byHost: false).map(\.sessionID) == ["p"])
         #expect(rows(.repo).repos(tree, byHost: false).map(\.sessionID) == ["p", "c"])
         #expect(rows(.repo, folded: [main.id]).repos(tree, byHost: false).isEmpty, "a folded working tree hides its children too")
+    }
+
+    @Test func catalogCardsTraverseVisibleAgentsIndependentlyOfTheirChildFold() {
+        let child = RepoTree.Worktree(id: "child", name: "Child", path: "/code/child", main: false,
+                                      sessions: [session("child", "idle")], catalog: true)
+        let parent = RepoTree.Worktree(id: "parent", name: "Parent", path: "/code/parent", main: false,
+                                       sessions: [session("idle", "idle"), session("busy", "working")], children: [child], catalog: true)
+        let machine = MachineRef(group: "", id: "m")
+        let tree = [RepoTree.Host(ref: machine, repos: [RepoTree.Repo(id: "repo", machine: machine, name: "App", path: "/code", worktrees: [parent])])]
+        #expect(rows(.repo, folded: [parent.agentsFoldID]).repos(tree, byHost: false).map(\.sessionID) == ["child"])
+        #expect(Set(rows(.repo, folded: [parent.childrenFoldID]).repos(tree, byHost: false).map(\.sessionID)) == ["busy", "idle"])
+        #expect(Set(rows(.repo).repos(tree, byHost: false).map(\.sessionID)) == ["busy", "idle", "child"])
     }
 
     @Test func stepGoesToTheNeighbourAndStopsAtTheEnds() {

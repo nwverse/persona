@@ -6,13 +6,13 @@ import (
 	"crypto/sha256"
 	"fmt"
 	"path/filepath"
-	"regexp"
 	"slices"
 	"strings"
 	"sync/atomic"
 	"time"
 
 	"github.com/nwverse/persona/server/internal/kbwire"
+	"github.com/nwverse/persona/server/internal/lazyre"
 )
 
 // Defined in the contract package kbwire (docs/server/architecture.md "Contract packages"); the old names stay.
@@ -30,6 +30,20 @@ type Source interface {
 	Messages(ctx context.Context, chat SourceChat, after string, limit int) (msgs []SourceMessage, newer string, more bool, err error)
 	// Download saves one media path to dst.
 	Download(ctx context.Context, media, dst string) error
+}
+
+// attributeChat keeps a connector's ownership separate from its archive-source name.
+// Once attributed, another connector cannot append to or take over that chat.
+func attributeChat(c *Chat, src Source) error {
+	owner := src.Name()
+	if named, ok := src.(interface{ ConnectorID() string }); ok && named.ConnectorID() != "" {
+		owner = named.ConnectorID()
+	}
+	if c.Connector != "" && c.Connector != owner {
+		return fmt.Errorf("archive connector mismatch for %s", c.ID)
+	}
+	c.Connector = owner
+	return nil
 }
 
 // Engine runs the pipeline: archive, compress, evolve, tag, prune (docs/assistant/knowledge.md).
@@ -169,6 +183,9 @@ func (e *Engine) archiveChat(ctx context.Context, src Source, sc SourceChat) (in
 	if !ok {
 		c = &Chat{ID: id, Source: src.Name(), SourceID: sc.ID, Kind: sc.Kind, Name: sc.Name, Created: time.Now().UTC()}
 	}
+	if err := attributeChat(c, src); err != nil {
+		return 0, err
+	}
 	if sc.Name != "" {
 		c.Name = sc.Name
 	}
@@ -277,7 +294,7 @@ func (e *Engine) saveArchived(c *Chat, cursor string, n int, listed time.Time) e
 	return nil
 }
 
-var docLink = regexp.MustCompile(`https?://[\w.-]+\.(?:feishu\.cn|larksuite\.com|larkoffice\.com)/(?:docx|docs|wiki|sheets|base|mindnotes|slides)/[A-Za-z0-9]+`)
+var docLink = lazyre.New(`https?://[\w.-]+\.(?:feishu\.cn|larksuite\.com|larkoffice\.com)/(?:docx|docs|wiki|sheets|base|mindnotes|slides)/[A-Za-z0-9]+`)
 
 // DownloadFunc saves one media path of a message to dst (Source.Download, or a connector's attachments).
 type DownloadFunc func(ctx context.Context, media, dst string) error
@@ -330,7 +347,7 @@ func (e *Engine) buildLine(ctx context.Context, download DownloadFunc, c *Chat, 
 		text += " " + e.attach(ctx, download, c, m, i, media, day, true)
 	}
 	for _, u := range docLink.FindAllString(text, 5) {
-		e.noteDoc(u, c.ID, m.At)
+		e.noteDoc(u, c, m.At)
 	}
 	return Line{At: m.At, Sender: sender, Text: text}
 }
@@ -411,7 +428,28 @@ func (e *Engine) notePerson(c *Chat, source string, m SourceMessage) {
 	pid := PersonID(source, m.SenderID)
 	p, ok := e.Store.Person(pid)
 	if !ok {
-		p = &Person{ID: pid, Source: source, SourceID: m.SenderID, Name: m.SenderName}
+		p = &Person{ID: pid, Source: source, SourceID: m.SenderID, Name: m.SenderName, Connector: c.Connector}
+	}
+	if p.Connector != "" && p.Connector != c.Connector {
+		return
+	}
+	attributed := false
+	if p.Connector == "" && c.Connector != "" {
+		known := len(p.Chats) > 0
+		for _, id := range p.Chats {
+			if id == c.ID {
+				continue
+			}
+			other, exists := e.Store.Chat(id)
+			if !exists || other.Connector != c.Connector {
+				known = false
+				break
+			}
+		}
+		if known {
+			p.Connector = c.Connector
+			attributed = true
+		}
 	}
 	if m.SenderName != "" {
 		p.Name = m.SenderName
@@ -424,7 +462,7 @@ func (e *Engine) notePerson(c *Chat, source string, m SourceMessage) {
 	c.People = addUnique(c.People, pid)
 	e.addHandles(pid, m.SenderHandles)
 	// Only write when something a reader cares about changed (not on every message of a busy group).
-	if !ok || len(p.Chats) != before || p.LastSeen.Sub(seen) > time.Hour {
+	if !ok || attributed || len(p.Chats) != before || p.LastSeen.Sub(seen) > time.Hour {
 		if err := e.Store.PutPerson(p); err == nil {
 			e.index(KindPerson, p.ID, p.Name, p.Tagging, p.Note, p.LastSeen)
 		}
@@ -432,10 +470,10 @@ func (e *Engine) notePerson(c *Chat, source string, m SourceMessage) {
 }
 
 // noteDoc remembers a document link seen in a chat.
-func (e *Engine) noteDoc(u, chatID string, at time.Time) {
+func (e *Engine) noteDoc(u string, chat *Chat, at time.Time) {
 	id := SafeID(u[strings.LastIndex(u, "/")+1:])
 	if _, ok := e.Store.Item(KindDoc, id); ok {
 		return
 	}
-	_ = e.Store.PutItem(&Item{Kind: KindDoc, ID: id, URL: u, At: at, Where: chatID, Seen: time.Now().UTC()})
+	_ = e.Store.PutItem(&Item{Kind: KindDoc, ID: id, URL: u, At: at, Where: chat.ID, Source: chat.Connector, Seen: time.Now().UTC()})
 }

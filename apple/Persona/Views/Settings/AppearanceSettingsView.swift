@@ -2,9 +2,9 @@ import BeautifulUI
 import SwiftUI
 
 // Settings › Appearance (2026-11-01): laid out like Connectors, one row per thing that changes how the app looks
-// (Avatar, Theme Color, Interface Style, Light & Dark on iPhone and iPad, and Layout on an iPhone), each opening its own page; the first three are apart (docs/apple/ios.md「设计语言」).
+// (Avatar, Theme Color, Interface Style, Light & Dark on iPhone and iPad), each opening its own page; the first three are apart (docs/apple/ios.md「设计语言」).
 // The home screen icon is the Avatar's, not a row of its own (#3203). Picking anything
-// there rebuilds the whole tree (`AppModel.look`, the layout switch); the settings path lives in AppModel, so the
+// there rebuilds the whole tree (`AppModel.look`); the settings path lives in AppModel, so the
 // rebuilt app is back on the same page.
 
 /// The Appearance section of Settings: one row per scene with what it is set to now.
@@ -34,6 +34,15 @@ struct AppearanceSection: View {
                                 value: AppLanguage.settingsSummary, look: .oneLine)
                 }
                 .accessibilityIdentifier("settings-language")
+                #if os(iOS)
+                // Persona's conversation on iPhone and iPad (#1666); the Mac and Vision Pro keep their look.
+                NavigationLink(value: SettingsPage.chatLayout) {
+                    SettingsRow(title: String(localized: "New Conversation Layout"), symbol: Theme.Icon.conversation, tint: Theme.Hue.orange,
+                                value: ChatLayoutSettings.shared.on ? String(localized: "On") : String(localized: "Off"), look: .oneLine)
+                }
+                .settingsListRow(SettingsPage.chatLayout)
+                .accessibilityIdentifier("settings-chat-layout")
+                #endif
                 #if os(iOS) || os(visionOS)
                 NavigationLink(value: SettingsPage.colorScheme) {
                     SettingsRow(title: String(localized: "Light & Dark"), symbol: Theme.Icon.colorScheme, tint: Theme.Hue.indigo,
@@ -41,14 +50,6 @@ struct AppearanceSection: View {
                 }
                 .settingsListRow(SettingsPage.colorScheme)
                 .accessibilityIdentifier("settings-scheme")
-                if UIDevice.current.userInterfaceIdiom == .phone {
-                    NavigationLink(value: SettingsPage.layout) {
-                        SettingsRow(title: String(localized: "Layout"), symbol: Theme.Icon.layout, tint: Theme.Hue.blue,
-                                    value: model.oldLayout ? String(localized: "Old Layout") : String(localized: "New Layout"), look: .oneLine)
-                    }
-                    .settingsListRow(SettingsPage.layout)
-                    .accessibilityIdentifier("settings-layout")
-                }
                 #endif
             }
             .bareListRow()
@@ -156,36 +157,6 @@ struct StyleSettingsPage: View {
         .navigationBarTitleDisplayMode(.inline)
     }
 }
-
-#if os(iOS) || os(visionOS)
-/// Settings › Appearance › Layout (iPhone): the ChatGPT-style shell or the old four tabs.
-struct LayoutSettingsPage: View {
-    @Environment(AppModel.self) private var model
-
-    var body: some View {
-        List {
-            Section {
-                Toggle(isOn: Binding(get: { model.oldLayout }, set: { setOldLayout($0) })) {
-                    Text("Old Layout").lineLimit(1)
-                }
-                .accessibilityIdentifier("old-layout")
-            } footer: {
-                Text("Turn on to go back to the four tabs at the bottom (Persona, Agents, Inbox, Settings). The new layout has “Assistant | Agents” at the top, with Inbox, scheduled tasks and Knowledge in the sidebar at the top left. This switch goes away after a few days.")
-            }
-        }
-        .themedGroupedPage()
-        .navigationTitle("Layout")
-        .navigationBarTitleDisplayMode(.inline)
-    }
-
-    /// Switching rebuilds the root: land on Settings › Appearance › Layout again either way (the old layout's Settings tab, the shell's sheet).
-    private func setOldLayout(_ on: Bool) {
-        model.shellSettings = !on
-        model.oldLayout = on
-        model.selectedTab = .settings
-    }
-}
-#endif
 
 #if os(iOS) || os(visionOS)
 #if DEBUG

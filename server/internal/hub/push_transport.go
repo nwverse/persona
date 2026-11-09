@@ -22,6 +22,11 @@ import (
 // other answers (400, 403, 410…) stand. As for the relay (#2150): one blip used to lose the push (#3989). The same
 // apns-collapse-id makes a push that did land twice show once. Callers run it in their own goroutine.
 func (p *Pusher) sendDirect(d Device, r apns.Request) (apns.Result, error) {
+	p.sendMu.RLock()
+	defer p.sendMu.RUnlock()
+	if !p.currentPushTarget(d) {
+		return apns.Result{}, fmt.Errorf("push registration changed before dispatch")
+	}
 	res, err := p.direct.Send(context.Background(), r)
 	tries := 1
 	for _, wait := range p.retryWaits {
@@ -34,11 +39,11 @@ func (p *Pusher) sendDirect(d Device, r apns.Request) (apns.Result, error) {
 	}
 	switch {
 	case err != nil:
-		p.pushed(d, err)
+		p.pushedAs(d, r.PushType, err)
 	case res.Status != 200 && !res.Gone():
-		p.pushed(d, fmt.Errorf("APNs %d %s", res.Status, res.Reason))
-	default:
-		p.pushed(d, nil)
+		p.pushedAs(d, r.PushType, fmt.Errorf("APNs %d %s", res.Status, res.Reason))
+	case res.Status == 200:
+		p.pushedAs(d, r.PushType, nil)
 	}
 	if tries > 1 {
 		if err == nil && res.Status == 200 {
@@ -61,7 +66,16 @@ type relayResult struct{ gone bool }
 // no longer takes (its secret was replaced) is renewed once with the device's token, which the hub already has. A
 // failure that may pass is tried again (postRelayRetrying): one dropped connection used to lose the push (#2150).
 func (p *Pusher) postRelay(d Device, req relayproto.PushRequest) (res relayResult, err error) {
-	defer func() { p.pushed(d, err) }()
+	p.sendMu.RLock()
+	defer p.sendMu.RUnlock()
+	if !p.currentPushTarget(d) {
+		return res, fmt.Errorf("push registration changed before dispatch")
+	}
+	defer func() {
+		if !res.gone {
+			p.pushedAs(d, req.Type, err)
+		}
+	}()
 	res, status, err := p.postRelayRetrying(d, req)
 	if status != http.StatusUnauthorized {
 		return res, err
@@ -160,20 +174,29 @@ func (p *Pusher) renewGrant(d Device) (Device, error) {
 	if resp.StatusCode != 200 || out.Grant == "" {
 		return d, fmt.Errorf("register: %d %s", resp.StatusCode, out.Error)
 	}
+	p.saveMu.Lock()
+	defer p.saveMu.Unlock()
 	p.mu.Lock()
 	cur, ok := p.devices[d.DeviceID]
 	kept := ok && cur.RelayURL == d.RelayURL && cur.APNSToken == d.APNSToken
-	if kept {
-		if cur.RelayGrant != out.Grant {
-			p.replaced[d.DeviceID] = cur.RelayGrant
-		}
-		cur.RelayGrant = out.Grant
-		p.devices[d.DeviceID] = cur
-	}
 	p.mu.Unlock()
-	if kept {
-		p.save(d.DeviceID)
+	if !kept {
+		return d, fmt.Errorf("push registration changed during grant renewal")
 	}
+	previous := cur.RelayGrant
+	cur.RelayGrant = out.Grant
+	if err := p.writeDevice(cur); err != nil {
+		return d, err
+	}
+	p.mu.Lock()
+	if previous != out.Grant {
+		p.replaced[d.DeviceID] = previous
+	}
+	if latest := p.devices[d.DeviceID]; latest.LastPushAt.After(cur.LastPushAt) {
+		cur.LastPushAt = latest.LastPushAt
+	}
+	p.devices[d.DeviceID] = cur
+	p.mu.Unlock()
 	p.logf("relay %s: grant renewed", d.Name)
 	d.RelayGrant = out.Grant
 	return d, nil
@@ -187,13 +210,12 @@ func (p *Pusher) sealFor(d Device, payload map[string]any) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	maxPlain := relayproto.MaxSealed/4*3 - pushcrypto.MinSealed
 	stamped := make(map[string]any, len(payload)+1)
 	for k, v := range payload {
 		stamped[k] = v
 	}
 	stamped["iat"] = p.now().Unix()
-	plain, err := fitAlert(stamped, maxPlain)
+	plain, err := fitAlert(stamped, relayMaxPlain)
 	if err != nil {
 		return "", err
 	}
@@ -206,6 +228,9 @@ func (p *Pusher) sealFor(d Device, payload map[string]any) (string, error) {
 
 // apnsMaxAlert is APNs' limit for an alert push's body (bytes); a bigger one is refused with 413 PayloadTooLarge.
 const apnsMaxAlert = 4096
+
+// relayMaxPlain is the most JSON one sealed push carries (bytes): what seals to relayproto.MaxSealed base64 characters.
+const relayMaxPlain = relayproto.MaxSealed/4*3 - pushcrypto.MinSealed
 
 // fitAlert is payload as JSON of at most most bytes: its alert texts are shortened (1000 characters, then half that…)
 // until it fits; the full text is in the app. payload's "aps" is replaced in place by a shortened copy.

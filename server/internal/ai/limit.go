@@ -10,11 +10,12 @@ import (
 	"log"
 	"net/http"
 	"net/url"
-	"regexp"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/nwverse/persona/server/internal/lazyre"
 )
 
 // Upstream limits (docs/assistant/model-config.md "Upstream rate limits"). A relay answering "the account's quota is used up" (HTTP 429
@@ -270,7 +271,7 @@ func retryAfter(v string) time.Duration {
 	return min(max(d, 0), afterMost)
 }
 
-var quotaWords = regexp.MustCompile(`quota|usage limit|exhaust|insufficient|credit|billing`)
+var quotaWords = lazyre.New(`quota|usage limit|exhaust|insufficient|credit|billing`)
 
 // classify: whether err is an answer that holds the connection, why, for how long the upstream asked, and what it
 // said (for the log line).
