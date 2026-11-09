@@ -8,6 +8,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.test.assert
 import androidx.compose.ui.test.assertCountEquals
@@ -24,6 +25,7 @@ import androidx.compose.ui.test.performImeAction
 import androidx.compose.ui.test.performTextClearance
 import androidx.compose.ui.test.performTextInput
 import androidx.test.ext.junit.runners.AndroidJUnit4
+import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.serialization.json.JsonObject
@@ -51,10 +53,11 @@ import java.net.ConnectException
 class PairingFlowTest {
     @get:Rule val rule = createAndroidComposeRule<ComponentActivity>()
 
-    private class FakePairing(paired: Boolean = false, private val error: Exception? = null) : PairingService {
+    /** [hang]: the hub never answers, so the page stays on "Connecting". */
+    private class FakePairing(paired: Boolean = false, private val error: Exception? = null, private val hang: Boolean = false) : PairingService {
         override val isPaired = MutableStateFlow(paired)
         var attempts = 0
-        override suspend fun pair(request: PairingRequest) { attempts++; error?.let { throw it } }
+        override suspend fun pair(request: PairingRequest) { attempts++; if (hang) awaitCancellation(); error?.let { throw it } }
         override suspend fun unpair() = Unit
     }
     private val sessions = object : SessionsRepository {
@@ -134,10 +137,14 @@ class PairingFlowTest {
     @Test fun systemBackStepsBackOnePage() {
         var case by mutableIntStateOf(0)
         val refused = FakePairing(error = ConnectException("refused"))
+        val silent = FakePairing(hang = true)
         show {
             key(case) {
-                if (case == 0) PairingScreen(FakePairing(), sessions, onReady = {}, onDiagnostics = {})
-                else PairingScreen(refused, sessions, onReady = {}, onDiagnostics = {}, skipWelcome = true)
+                when (case) {
+                    0 -> PairingScreen(FakePairing(), sessions, onReady = {}, onDiagnostics = {})
+                    1 -> PairingScreen(refused, sessions, onReady = {}, onDiagnostics = {}, skipWelcome = true)
+                    else -> PairingScreen(silent, sessions, onReady = {}, onDiagnostics = {}, skipWelcome = true)
+                }
             }
         }
         val cases = listOf<Pair<() -> Unit, () -> Unit>>(
@@ -152,6 +159,10 @@ class PairingFlowTest {
                 back()
                 rule.onNodeWithText(text(R.string.settings_pairing_scan)).assertExists()
                 fields().assertCountEquals(0)
+            },
+            // Confirm pairing with a hub that doesn't answer, back while connecting: still connecting.
+            { fillManual("http://127.0.0.1:1"); tap(R.string.settings_pairing_next); tap(R.string.settings_pairing_confirm) } to {
+                rule.onNodeWithText(text(R.string.settings_pairing_connecting_title)).assertExists()
             },
         )
         cases.forEachIndexed { index, (steps, landed) ->
@@ -188,7 +199,7 @@ class PairingFlowTest {
         rule.onAllNodes(hasText(text(R.string.settings_done)) and hasClickAction()).assertCountEquals(1)
     }
 
-    @Test fun settingsPairingStartsAtTheConnectChoices() {
+    @Test fun settingsPairingStartsAtTheConnectChoicesAndBackStepsThroughIt() {
         val services = SettingsServices(
             pairing = FakePairing(paired = true),
             connection = object : HubConnection {
@@ -200,11 +211,32 @@ class PairingFlowTest {
             sessions = sessions,
             updates = object : AppUpdates { override suspend fun check(): AppUpdate? = null },
         )
-        show { SettingsScreen(services, initialPage = "pair") }
-        rule.onNodeWithText(text(R.string.settings_pairing_scan)).assertExists()
-        rule.onNodeWithText(text(R.string.settings_pairing_welcome_title)).assertDoesNotExist()
-        back()
-        rule.onNodeWithText(text(R.string.settings_pairing_scan)).assertDoesNotExist()
-        assertFalse(rule.activity.isFinishing)
+        // As the shell opens it (its own destination, with onBack) and in place (no onBack).
+        var routed by mutableStateOf(true)
+        var left = 0
+        show { key(routed) { SettingsScreen(services, initialPage = "pair", onBack = if (routed) ({ left++ }) else null) } }
+        for (wiring in listOf(true, false)) {
+            routed = wiring; left = 0
+            rule.waitForIdle()
+            rule.onNodeWithText(text(R.string.settings_pairing_scan)).assertExists()
+            rule.onNodeWithText(text(R.string.settings_pairing_welcome_title)).assertDoesNotExist()
+            // The form, back: the connect choices, and the form again keeps the address. Confirm, back: the form.
+            fillManual("http://127.0.0.1:1")
+            back()
+            rule.onNodeWithText(text(R.string.settings_pairing_scan)).assertExists()
+            tap(R.string.settings_pairing_manual)
+            fields()[0].assert(hasText("http://127.0.0.1:1"))
+            tap(R.string.settings_pairing_next)
+            rule.onAllNodesWithText(text(R.string.settings_pairing_confirm)).onFirst().assertExists()
+            back()
+            fields()[0].assert(hasText("http://127.0.0.1:1"))
+            assertEquals(0, left)
+            // Back from the form, then from the choices, leaves the page.
+            back()
+            back()
+            if (wiring) assertEquals(1, left)
+            else rule.onNodeWithText(text(R.string.settings_pairing_scan)).assertDoesNotExist()
+            assertFalse(rule.activity.isFinishing)
+        }
     }
 }

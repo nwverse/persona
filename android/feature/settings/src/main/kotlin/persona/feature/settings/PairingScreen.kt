@@ -235,15 +235,16 @@ fun PairingScreen(
         }
     }
     // System Back goes back one page: failure or confirm to the form (or the connect choices), the form to the choices,
-    // the choices to the welcome page, and the first checklist into the app. The engine step keeps its own rule.
+    // the choices to the welcome page or out through onBack, and the first checklist into the app. It does nothing while
+    // connecting; the engine step keeps its own rule. The host leaves this page's back to it (SettingsScreen).
     val back: (() -> Unit)? = when {
         engineStep != null -> null
         readiness -> onBack ?: onReady
-        running -> null
+        running -> { {} }
         confirm != null || failure != null || progress.isNotEmpty() -> { { confirm = null; failure = null; progress = emptyList(); notice = null } }
         manual -> { { manual = false } }
         !welcome && !skipWelcome && initialLink == null -> { { welcome = true; notice = null } }
-        else -> null
+        else -> onBack
     }
     BackHandler(back != null) { back?.invoke() }
     val step = engineStep
