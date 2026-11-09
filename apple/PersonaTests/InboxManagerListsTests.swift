@@ -15,7 +15,7 @@ struct InboxManagerListsTests {
         HubManager(id: "m-3", name: "家里", online: false),
     ], defaultID: "assistant")
 
-    /// A hub whose managers each answer `path` with their own `key` list: none named is the default's; 家里 is offline.
+    /// A hub whose managers each answer `path` with their own `key` list: none named is the default's; m-3 is offline.
     private static func hub(_ path: String, _ key: String, mine: String, work: String) -> FakeHub {
         let hub = FakeHub()
         hub.on("GET", path) { req in
@@ -87,7 +87,7 @@ struct InboxManagerListsTests {
 
         await m.remove(try #require(m.shares?[1].items.first))
         #expect(named == ["m-2"])
-        #expect(m.shownShares?.map(\.manager.id) == ["assistant", "m-3"]) // 工作 has none left
+        #expect(m.shownShares?.map(\.manager.id) == ["assistant", "m-3"]) // m-2 has none left
         #expect(m.state.value?.map(\.name) == ["甲"]) // the default's rule with the same id stays
         #expect(toasts.map(\.message) == ["已移除“乙”的规则"])
     }
