@@ -162,6 +162,41 @@ func TestClaudeQuestionResumeWithIdenticalTranscriptCallsDoesNotGuess(t *testing
 	if err != nil || out != nil || asked != 0 || cancelled != 1 {
 		t.Fatalf("ambiguous Resume waited instead of handing back to the terminal: %v, %v (asked=%d cancelled=%d)", out, err, asked, cancelled)
 	}
+
+	// No PreToolUse is pending in this replacement Node. The outstanding transcript id still isolates Q2.
+	ctx2, cancel2 := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel2()
+	out, err = n.handleHook(ctx2, sockRequest{Input: permission, Attempt: "a2"})
+	waitFor(t, "the outstanding ambiguous card to be withdrawn", func() bool { _, cancelled := h.counts(); return cancelled == 2 })
+	asked, cancelled = h.counts()
+	if err != nil || out != nil || asked != 0 || cancelled != 2 {
+		t.Fatalf("the outstanding ambiguous question created an unpaired wait: %v, %v (asked=%d cancelled=%d)", out, err, asked, cancelled)
+	}
+	postInput, _ := json.Marshal(map[string]any{"questions": questions, "answers": map[string]string{"Which?": "A"}})
+	post := questionHookInput("PostToolUse", postInput, "toolu_new", path)
+	if _, err := n.handleHook(context.Background(), sockRequest{Input: post}); err != nil {
+		t.Fatal(err)
+	}
+
+	// Q1's Post is deliberately absent: its transcript result already completed it. Q2's Post frees Q3.
+	pre := questionHookInput("PreToolUse", input, "toolu_third", path)
+	if _, err := n.handleHook(context.Background(), sockRequest{Input: pre}); err != nil {
+		t.Fatal(err)
+	}
+	ctx3, cancel3 := context.WithCancel(context.Background())
+	done := make(chan any, 1)
+	finished := make(chan struct{})
+	go func() {
+		defer close(finished)
+		out, _ := n.handleHook(ctx3, sockRequest{Input: permission, Attempt: "a3"})
+		done <- out
+	}()
+	waitFor(t, "the next new question's card", func() bool { asked, _ := h.counts(); return asked == 1 })
+	if ids := h.toolUseIDs(); len(ids) != 1 || ids[0] != "toolu_third" {
+		t.Fatalf("the next question did not recover its own id: %v", ids)
+	}
+	cancel3()
+	<-finished
 }
 
 // The replay gate opens when session state is delayed; a resumed question must still not race ahead of its PostToolUse.

@@ -17,6 +17,7 @@ import (
 type cancelHub struct {
 	mu        sync.Mutex
 	asked     []string
+	toolIDs   []string
 	cancelled []string
 }
 
@@ -24,6 +25,12 @@ func (h *cancelHub) counts() (asked, cancelled int) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	return len(h.asked), len(h.cancelled)
+}
+
+func (h *cancelHub) toolUseIDs() []string {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return append([]string(nil), h.toolIDs...)
 }
 
 func withCancelHub(t *testing.T, n *Node) *cancelHub {
@@ -44,6 +51,7 @@ func withCancelHub(t *testing.T, n *Node) *cancelHub {
 		_ = json.Unmarshal(params, &p)
 		h.mu.Lock()
 		h.asked = append(h.asked, p.Interaction.ID)
+		h.toolIDs = append(h.toolIDs, p.Interaction.ToolUseID)
 		h.mu.Unlock()
 		<-ctx.Done() // nobody on the phone answers
 		return nil, ctx.Err()

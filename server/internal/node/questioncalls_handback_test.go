@@ -19,7 +19,7 @@ func TestQuestionHandBackPreventsLaterOriginalPair(t *testing.T) {
 	pre.HookEventName, pre.ToolUseID = "PreToolUse", "toolu_handback"
 	now := time.Now()
 	q.before(pre, now)
-	if !q.handBack(in, "a1", now) {
+	if !q.handBack(in, "a1", nil, now) {
 		t.Fatal("an unpaired ambiguous attempt was not handed back")
 	}
 	if id := q.pair(in, "a1", false, now); id != "" {
@@ -37,7 +37,7 @@ func TestQuestionHandBackDoesNotLeakPendingIntoNextQuestion(t *testing.T) {
 		pre.HookEventName, pre.ToolUseID = "PreToolUse", id
 		q.before(pre, now)
 	}
-	if !q.handBack(in, "a1", now) {
+	if !q.handBack(in, "a1", nil, now) {
 		t.Fatal("the ambiguous attempt was not handed back")
 	}
 	if id := q.pair(in, "a2", false, now); id != "" {
@@ -56,6 +56,36 @@ func TestQuestionHandBackDoesNotLeakPendingIntoNextQuestion(t *testing.T) {
 	}
 }
 
+// A completion that preceded handBack must not keep the whole generation closed after the other call ends.
+func TestQuestionHandBackSkipsAlreadyCompletedPending(t *testing.T) {
+	q := &questionCalls{}
+	in := handBackInput()
+	now := time.Now()
+	for _, id := range []string{"toolu_first", "toolu_second"} {
+		pre := in
+		pre.HookEventName, pre.ToolUseID = "PreToolUse", id
+		q.before(pre, now)
+	}
+	firstPost := in
+	firstPost.HookEventName, firstPost.ToolUseID = "PostToolUse", "toolu_first"
+	q.complete(firstPost, now)
+	if !q.handBack(in, "a1", nil, now) {
+		t.Fatal("the ambiguous attempt was not handed back")
+	}
+	if id := q.pair(in, "a2", false, now); id != "" {
+		t.Fatalf("the outstanding question paired the completed id %q", id)
+	}
+	secondPost := in
+	secondPost.HookEventName, secondPost.ToolUseID = "PostToolUse", "toolu_second"
+	q.complete(secondPost, now)
+	pre := in
+	pre.HookEventName, pre.ToolUseID = "PreToolUse", "toolu_third"
+	q.before(pre, now)
+	if id := q.pair(in, "a3", false, now); id != "toolu_third" {
+		t.Fatalf("an already-completed pending id blocked the next question: %q", id)
+	}
+}
+
 // If the original request paired while the transcript was being read, the stale ambiguity cannot cancel its card.
 func TestQuestionOriginalPairBeforeHandBackWins(t *testing.T) {
 	q := &questionCalls{}
@@ -67,7 +97,7 @@ func TestQuestionOriginalPairBeforeHandBackWins(t *testing.T) {
 	if id := q.pair(in, "a1", false, now); id != "toolu_original" {
 		t.Fatalf("original pair %q", id)
 	}
-	if q.handBack(in, "a1", now) {
+	if q.handBack(in, "a1", nil, now) {
 		t.Fatal("a stale ambiguous read handed back an already-paired attempt")
 	}
 	if id := q.pair(in, "a1", true, now); id != "toolu_original" {

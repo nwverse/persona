@@ -7,9 +7,10 @@ import (
 )
 
 type transcriptQuestion struct {
-	id        string
-	completed bool
-	ambiguous bool
+	id          string
+	completed   bool
+	ambiguous   bool
+	outstanding []string
 }
 
 // restoreQuestionFromTranscript recovers an attempt whose Node was replaced before it could keep the PreToolUse
@@ -22,7 +23,7 @@ func (n *Node) restoreQuestionFromTranscript(in hookInput, attempt string, now t
 	}
 	recovered := n.questionFromTranscript(in)
 	if recovered.ambiguous {
-		return n.questions.handBack(in, attempt, now)
+		return n.questions.handBack(in, attempt, recovered.outstanding, now)
 	}
 	if recovered.id != "" {
 		n.questions.restore(in, attempt, recovered.id, recovered.completed, now)
@@ -57,7 +58,13 @@ func (n *Node) questionFromTranscript(in hookInput) transcriptQuestion {
 		}
 	}
 	if len(calls) > 1 {
-		return transcriptQuestion{ambiguous: true}
+		recovered := transcriptQuestion{ambiguous: true}
+		for _, call := range calls {
+			if !results[call.ToolUseID] {
+				recovered.outstanding = append(recovered.outstanding, call.ToolUseID)
+			}
+		}
+		return recovered
 	}
 	if len(calls) == 0 {
 		return transcriptQuestion{}

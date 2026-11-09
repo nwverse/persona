@@ -201,7 +201,7 @@ func (q *questionCalls) assignLocked(key, attemptKey, id string, now time.Time) 
 
 // handBack atomically decides an ambiguous attempt. An original pair that won the race keeps its card; otherwise the
 // decision is remembered so the original request cannot create a phone wait after the resumed one handed back.
-func (q *questionCalls) handBack(in hookInput, attempt string, now time.Time) bool {
+func (q *questionCalls) handBack(in hookInput, attempt string, outstanding []string, now time.Time) bool {
 	key := permissionKey(in)
 	attemptKey := questionAttemptKey(key, attempt)
 	if attemptKey == "" {
@@ -213,15 +213,25 @@ func (q *questionCalls) handBack(in hookInput, attempt string, now time.Time) bo
 	if _, ok := q.attempts[attemptKey]; ok {
 		return false
 	}
-	if ids := q.pending[key]; len(ids) > 0 {
+	mark := func(id string) {
+		if id == "" {
+			return
+		}
+		if _, done := q.completed[key+"\x00"+id]; done {
+			return // a receipt that already arrived needs no future PostToolUse to release this generation
+		}
 		if q.handedBackIDs == nil {
 			q.handedBackIDs = map[string]time.Time{}
 		}
-		for _, id := range ids {
-			q.handedBackIDs[key+"\x00"+id.id] = now
-		}
-		delete(q.pending, key)
+		q.handedBackIDs[key+"\x00"+id] = now
 	}
+	for _, id := range outstanding {
+		mark(id)
+	}
+	for _, id := range q.pending[key] {
+		mark(id.id)
+	}
+	delete(q.pending, key)
 	q.markHandBackLocked(attemptKey, now)
 	return true
 }
