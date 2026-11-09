@@ -1,6 +1,7 @@
 package i18n
 
 import (
+	"regexp"
 	"slices"
 	"strings"
 	"testing"
@@ -109,6 +110,25 @@ func TestTemplateIndexFindsTheSameTemplate(t *testing.T) {
 		for _, text := range unknownTexts {
 			if n, all := len(x.candidates(text)), len(x.forms); n > all/6 {
 				t.Errorf("%s tries %d of its %d templates on %q", name, n, all, text)
+			}
+		}
+	}
+}
+
+// Each template compiles its regexp the first time a text fits it, so a broken source would fail only then: compile
+// every catalog's sources here, each with a group for each placeholder.
+func TestEveryTemplateCompiles(t *testing.T) {
+	sets := map[string][]deploymentTemplate{"extension-status": extensionStatusTemplates()}
+	for name, x := range catalogIndexes() {
+		sets[name] = x.forms
+	}
+	for name, forms := range sets {
+		for _, f := range forms {
+			rx, err := regexp.Compile(f.pattern.src)
+			if err != nil {
+				t.Errorf("%s %s: %v", name, f.key, err)
+			} else if rx.NumSubexp() != len(f.names) {
+				t.Errorf("%s %s: %d groups for %d placeholders in %q", name, f.key, rx.NumSubexp(), len(f.names), f.pattern.src)
 			}
 		}
 	}
