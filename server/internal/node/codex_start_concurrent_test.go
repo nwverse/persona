@@ -12,6 +12,7 @@ import (
 	"github.com/nwverse/persona/server/internal/host"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/rpc"
+	"github.com/nwverse/persona/server/internal/screen"
 )
 
 // Both requests must reach their own thread wait before either is released. A lock spanning startCodex would
@@ -32,7 +33,7 @@ func TestCodexStartsInSameDirectoryRunConcurrently(t *testing.T) {
 			waiting := make(chan string, 2)
 			seen := map[string]bool{}
 			f.after(func(c herdrCall) {
-				if c.Method == "pane.read" && c.Params["source"] == "recent" {
+				if c.Method == "pane.read" && c.Params["source"] == "visible" && c.Params["lines"] == float64(screen.DialogLines) {
 					pane := str(c.Params["pane_id"])
 					if !seen[pane] {
 						seen[pane] = true

@@ -15,7 +15,6 @@ import (
 	"github.com/nwverse/persona/server/internal/extension/sandbox"
 	"github.com/nwverse/persona/server/internal/host"
 	"github.com/nwverse/persona/server/internal/identity"
-	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/osproc"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/rpc"
@@ -164,7 +163,10 @@ func (n *Node) startCodex(ctx context.Context, launch host.Launcher, cwd, launch
 	defer done()
 	id, err := n.waitCodexThread(ctx, pane, cwd, prompt, began)
 	if err != nil {
-		screen, _ := n.readPane(ctx, pane, "recent-unwrapped", 30)
+		shown, _ := n.readPane(ctx, pane, "recent-unwrapped", 30)
+		if strings.TrimSpace(shown) == "" { // a screen Codex draws from the top of a tall pane: the bottom rows are blank
+			shown, _ = n.readPane(ctx, pane, "visible", 30)
+		}
 		start := codexAbandonedStart{launch: launch, created: created, workspace: ws}
 		cleanupErr := closeCodexStart(ctx, start)
 		if cleanupErr != nil {
@@ -175,7 +177,7 @@ func (n *Node) startCodex(ctx context.Context, launch host.Launcher, cwd, launch
 			n.codexAbandoned[key] = append(n.codexAbandoned[key], start)
 			n.mu.Unlock()
 		}
-		message := fmt.Sprintf("%v\n%s", err, lastLines(screen, 12))
+		message := fmt.Sprintf("%v\n%s", err, lastLines(shown, 12))
 		if cleanupErr != nil {
 			return nil, &rpc.Error{Code: proto.CodeAgentStartStalled, Message: message + "\n" + cleanupErr.Error()}
 		}
@@ -183,7 +185,7 @@ func (n *Node) startCodex(ctx context.Context, launch host.Launcher, cwd, launch
 		if errors.As(err, &coded) {
 			return nil, &rpc.Error{Code: coded.Code, Message: message, Data: coded.Data}
 		}
-		return nil, fmt.Errorf("%w\n%s", err, lastLines(screen, 12))
+		return nil, fmt.Errorf("%w\n%s", err, lastLines(shown, 12))
 	}
 	n.bindPane(pane, id)
 	st := sessionState{Pane: pane, Launcher: launcher, Cwd: cwd, StartedAt: began.UTC()}
@@ -244,17 +246,25 @@ func (n *Node) waitCodexThread(ctx context.Context, pane, cwd, prompt string, be
 				}
 			}
 		}
-		text, err := n.readPane(ctx, pane, "recent", 40)
+		// The screen without the blank rows under it: Codex 0.167 draws its trust dialog from the top of the pane, and in
+		// a pane 51 rows tall the last 40 "recent" rows were all blank (#2351).
+		text, err := n.readPane(ctx, pane, "visible", screen.DialogLines)
 		if err != nil {
 			continue
 		}
 		if i := strings.LastIndex(text, codexStartError); i >= 0 {
 			return "", errors.New(strings.TrimSpace(strings.SplitN(text[i:], "\n", 2)[0]))
 		}
-		switch {
-		case codexTrustRE.MatchString(text):
-			_ = n.sendKeys(ctx, pane, "enter") // the selected option is trust and continue
-		case strings.Contains(text, "Update available") && strings.Contains(text, "Skip"):
+		if keys := codexTrustKeys(text); keys != nil {
+			_ = n.sendKeys(ctx, pane, keys...)
+			select { // the dialog goes before the next look, which would otherwise answer it again
+			case <-ctx.Done():
+				return "", ctx.Err()
+			case <-time.After(time.Second):
+			}
+			continue
+		}
+		if strings.Contains(text, "Update available") && strings.Contains(text, "Skip") {
 			if d := screen.ParseDialog(text); d != nil {
 				for _, o := range d.Options {
 					if o.Label == "Skip" {
@@ -271,9 +281,38 @@ func (n *Node) waitCodexThread(ctx context.Context, pane, cwd, prompt string, be
 	return "", errors.New(message)
 }
 
-// codexTrustRE is Codex's folder trust dialog with "trust and continue" selected (0.163: "› 1. Trust and continue";
-// 0.153: "› 1. Yes, continue"): enter picks it.
-var codexTrustRE = lazyre.New(`(?m)^\s*›\s*1\.\s+(?:Trust and continue|Yes, continue)\s*$`)
+// codexTrustKeys are the keys that answer Codex's folder trust dialog by trusting the folder, nil when the screen does
+// not show that dialog with its cursor. The dialog is known by its question asking about trust (0.163 and 0.167 "Trust
+// this folder?", 0.153 "Do you trust the contents of this directory?"), and the option to pick by what it says
+// ("Trust and continue", "Yes, continue"), not by its number or the other option's label: 0.167 has "2. Back to Agent
+// Command Center" where 0.163 had "2. Quit". The cursor is walked to it and enter picks it. Only the question counts:
+// an approval's command above its "Yes, proceed" may say trust too.
+func codexTrustKeys(text string) []string {
+	d := screen.ParseDialog(text)
+	if d == nil || d.Cursor == "" || !strings.Contains(strings.ToLower(d.Question), "trust") {
+		return nil
+	}
+	cur, trust := -1, -1
+	for i, o := range d.Options {
+		if o.Key == d.Cursor {
+			cur = i
+		}
+		if l := strings.ToLower(o.Label); trust < 0 && (strings.HasPrefix(l, "trust") || strings.HasPrefix(l, "yes")) {
+			trust = i
+		}
+	}
+	if cur < 0 || trust < 0 {
+		return nil
+	}
+	var keys []string
+	for i := cur; i < trust; i++ {
+		keys = append(keys, "down")
+	}
+	for i := cur; i > trust; i-- {
+		keys = append(keys, "up")
+	}
+	return append(keys, "enter")
+}
 
 // codexThreadStart is when a rollout's thread began (its session_meta) and the text of its first user message ("" when
 // there is none yet).

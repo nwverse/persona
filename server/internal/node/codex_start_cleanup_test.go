@@ -32,6 +32,7 @@ func stalledCodexNode(t *testing.T) (*Node, *fakeHerdr) {
 
 func TestCodexStalledStartClosesBeforeRetry(t *testing.T) {
 	n, f := stalledCodexNode(t)
+	tallPane(f, 51) // diagnostic fallback must retain the screen and code before closing the pane
 	for range 2 {
 		_, err := request(t, n, "session.start", map[string]any{"cwd": "~/proj", "launcher": "codex", "prompt": "do the task"})
 		var coded *rpc.Error

@@ -5036,6 +5036,35 @@ ITEM_MUTES = {
 }
 for _x in INBOX:
     if _x["id"] in ITEM_MUTES: _x["mutes"] = ITEM_MUTES[_x["id"]]
+
+# Folders (docs/assistant/inbox.md "Folders", #2463): GET/PUT /api/v1/inbox/folders and PUT /api/v1/inbox/{id}/folder.
+# MOCK_INBOX_FOLDERS=1 turns automatic folders on and files most items (one by hand); the rest stay unfiled.
+FOLDER_CFG = {"enabled": bool(os.environ.get("MOCK_INBOX_FOLDERS")), "rules": ""}
+if os.environ.get("MOCK_INBOX_FOLDERS"):
+    FOLDER_CFG["rules"] = "Messages from build and alert bots go to work/alerts/<service>"
+    for _id, _f, _by in [("lark:f1:100", "projects/atlas/release", "model"), ("lark:f2:200", "projects/atlas/design", "user"),
+                         ("mail:acc1:t1:501", "work/talks", "model"), ("lark:f3:300", "personal/hiking", "model"),
+                         ("mail:acc1:t2:502", "personal/shopping", "model"), ("mail:acc1:t3:503", "subscriptions/newsletters", "model"),
+                         ("github:review12", "work/reviews/example-repo", "model"), ("github:ci7", "work/alerts/ci", "model")]:
+        for _x in INBOX:
+            if _x["id"] == _id: _x["folder"], _x["folder_by"] = _f, _by
+
+
+def folder_state(query):
+    """GET /api/v1/inbox/folders: the settings and the folders the listed items are filed in, most used first."""
+    by = {}
+    for x in inbox_for(query):
+        if not x.get("folder"): continue
+        f = by.setdefault(x["folder"], {"path": x["folder"], "count": 0, "open": 0})
+        f["count"] += 1
+        if not x.get("done_at"): f["open"] += 1
+    return dict(FOLDER_CFG, folders=sorted(by.values(), key=lambda f: (-f["count"], f["path"])))
+
+
+def normalize_folder(s):
+    """The hub's normalizeFolder, enough for the mock."""
+    segs = [" ".join(seg.split())[:40] for seg in str(s).replace("\\", "/").split("/")]
+    return "/".join([x for x in segs if x and x not in (".", "..")][:6])
 SOURCE_NAMES = {"lark": "飞书", "mail": "邮件", "github": "GitHub", "imessage": "信息", "telegram": "Telegram"}
 # The mutes the user set (GET/POST/DELETE /api/v1/inbox/mutes); MOCK_MUTES=1 starts with two.
 MUTES = [] if not os.environ.get("MOCK_MUTES") else [
@@ -13963,6 +13992,7 @@ class H(BaseHTTPRequestHandler):
             other = other_manager(self)
             if other and other[1]: return self.send_json(*other[1])
             return self.send_json({"mutes": OTHER_MUTES.get(other[0], []) if other else MUTES})
+        if p == "/api/v1/inbox/folders": return self.send_json(folder_state(q))
         if p == "/api/v1/inbox/policies":
             other = other_manager(self)
             if other and other[1]: return self.send_json(*other[1])
@@ -15136,6 +15166,25 @@ class H(BaseHTTPRequestHandler):
             pid = p.rsplit("/", 1)[1]
             PLACES[:] = [x for x in PLACES if x["id"] != pid]
             return self.send_json({"ok": True})
+        if p == "/api/v1/inbox/folders" and self.command == "PUT":
+            body = json.loads(self.last_body or b"{}")
+            if "enabled" in body: FOLDER_CFG["enabled"] = bool(body["enabled"])
+            if "rules" in body: FOLDER_CFG["rules"] = str(body["rules"] or "").strip()
+            return self.send_json(folder_state({}))
+        if p.startswith("/api/v1/inbox/") and p.endswith("/folder") and self.command == "PUT":
+            iid = unquote(p[len("/api/v1/inbox/"):-len("/folder")])
+            inbox_item = next((x for x in INBOX if x["id"] == iid), None)
+            if not inbox_item: return self.send_json({"error": "no such inbox item"}, 404)
+            folder = json.loads(self.last_body or b"{}").get("folder")
+            if folder is None:
+                inbox_item.pop("folder", None); inbox_item.pop("folder_by", None)
+            else:
+                f = normalize_folder(folder)
+                if not f and str(folder).strip(): return self.send_json({"error": "folder must have at least one name between the slashes"}, 400)
+                inbox_item["folder_by"] = "user"
+                if f: inbox_item["folder"] = f
+                else: inbox_item.pop("folder", None)
+            return self.send_json(dict({k: v for k, v in inbox_item.items() if k != "context"}, version=inbox_version(inbox_item)))
         if p == "/api/v1/inbox/policies" and self.command == "POST":
             other = other_manager(self)
             if other and other[1]: return self.send_json(*other[1])
