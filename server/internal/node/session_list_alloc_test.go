@@ -50,14 +50,46 @@ func runtimeListNode(tb testing.TB, rows int) *Node {
 	return n
 }
 
-// BenchmarkSessionList is one session list of a node whose runtime lists 50 or 300 sessions (sessionList, as each poll,
-// notify and sessions.list builds it).
+// transcriptListNode is a node whose list is rows Claude transcripts of the last few days, none of them running: the
+// offline rows most of a workstation's list is.
+func transcriptListNode(tb testing.TB, rows int) *Node {
+	tb.Helper()
+	n, _ := listNode(tb)
+	dir := filepath.Join(n.home, ".claude", "projects", "-work-app")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		tb.Fatal(err)
+	}
+	prompt := strings.Repeat("Make the upload test pass on slow disks. ", 60) // over the 2 KB a listed transcript has
+	for i := range rows {
+		p := filepath.Join(dir, listID(i)+".jsonl")
+		line := fmt.Sprintf(`{"type":"user","cwd":"/work/app","timestamp":"2026-11-01T08:00:00Z","message":{"role":"user","content":%q}}`+"\n"+
+			`{"type":"assistant","timestamp":"2026-11-01T08:01:00Z","message":{"id":"m%d","role":"assistant","model":"claude-sonnet-4-5",`+
+			`"content":[{"type":"text","text":"Done: the test waits for the write to land."}]}}`+"\n"+
+			`{"type":"custom-title","customTitle":"task %d"}`+"\n", prompt, i, i)
+		at := time.Now().Add(-time.Duration(i%40) * time.Hour)
+		if err := os.WriteFile(p, []byte(line), 0o600); err != nil {
+			tb.Fatal(err)
+		}
+		if err := os.Chtimes(p, at, at); err != nil {
+			tb.Fatal(err)
+		}
+	}
+	return n
+}
+
+// BenchmarkSessionList is one session list (sessionList, as each poll, notify and sessions.list builds it) of a node
+// whose runtime lists 50 or 300 sessions, and of one with 80 recent transcripts, as many as are listed (their scan
+// cached, as it is for 20 s).
 func BenchmarkSessionList(b *testing.B) {
-	for _, rows := range []int{50, 300} {
-		b.Run(fmt.Sprint(rows), func(b *testing.B) {
-			n := runtimeListNode(b, rows)
-			if got := len(n.sessionList(context.Background(), false)); got != rows {
-				b.Fatalf("listed %d sessions, want %d", got, rows)
+	for _, c := range []struct {
+		name string
+		rows int
+		node func(testing.TB, int) *Node
+	}{{"runtime/50", 50, runtimeListNode}, {"runtime/300", 300, runtimeListNode}, {"transcripts/80", 80, transcriptListNode}} {
+		b.Run(c.name, func(b *testing.B) {
+			n := c.node(b, c.rows)
+			if got := len(n.sessionList(context.Background(), false)); got != c.rows {
+				b.Fatalf("listed %d sessions, want %d", got, c.rows)
 			}
 			b.ReportAllocs()
 			for b.Loop() {
