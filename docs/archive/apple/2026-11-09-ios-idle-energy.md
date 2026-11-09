@@ -71,6 +71,10 @@ An unmatched Persona trial recorded 5.5371% CPU and 39,593 interrupt wakeups, an
 
 Full hosted scripts initially failed four exact compatibility registrations in unchanged lesson/node carriers on both the branch and main; #1722 / #1723 owns that separate fix. No blanket exemption or repository setting change was made. After merging #1723, the [full hosted scripts run](https://github.com/nwverse/persona/actions/runs/42530492135) passes at `79b3ba449`. Latest-merge CI/build/screenshot details are recorded in the linked PR; local minimum Xcode 26.0 is not verified.
 
+## Final pinned-compiler result
+
+The [Xcode 26.0 lane retry](https://github.com/nwverse/persona/actions/runs/42538201491) passes at `82cbabd92` using Xcode 26.0.1 (17A400) / Swift 6.2. It builds the unsigned iOS app, embedded Watch and extensions, then passes 2,846 offline unit/design cases, 13 HTML-card cases and 10 bounded HTML-security cases with zero failed/skipped. Swift Testing retains the same two pre-existing harness known issues. The later Web-fix merge and documentation commits preserve that shipping/offline-test tree; an unrelated New Chat UI test file is the only subsequent Apple difference. The [required documentation-head check](https://github.com/nwverse/persona/actions/runs/42542088561) at `0bffdfb19` also passes. This closes the pinned-compiler execution gap, not the physical-device or Instruments gaps below; preceding failures remain recorded.
+
 ## Instruments status
 
 | Window | Baseline Time Profiler | Candidate Time Profiler |
