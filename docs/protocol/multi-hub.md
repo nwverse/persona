@@ -30,7 +30,8 @@
   `HubStore.read` returns `.unreadable`. The App initially displays itself as unpaired but **writes nothing** (`AppModel.saveRegistry` blocks writes; an empty registry will not delete keychain entries either).
   It reads again when returning to the foreground or when the phone unlocks (`protectedDataDidBecomeAvailable`), and connects as at normal startup if the read succeeds. Read-only callers (Siri, notification buttons, push registration) treat unreadable data as absent and do not write.
 - Device credentials are separate per hub: each paired hub exchanges its pairing token for this device's own credentials (`upgradeCredentials`). Watch credentials are per group (exchanged at the first hub in the group).
-- Push keys are separate per group: the default group uses the original `push-key`; other groups use `push-key.<group id>` (`PushCrypto.account(group:)`). Disconnecting a group deletes its key.
+- Push keys are separate per group: the default group uses the original `push-key`; other groups use `push-key.<group id>` (`PushCrypto.account(group:)`). Disconnecting a group deletes its key;
+  disconnecting the last group (or all of them) deletes every key left in the keychain.
 
 ## Grouping (`HubGrouping.regroup`, a pure function with unit tests)
 
@@ -77,7 +78,11 @@
 - Push registration: register once per group with its first hub (the credential issuer; contract 2.6 forwards other hubs' events to it for pushing, with one registration per device), using that group's own push public key.
 - On receiving a push, determine its group in this order: payload top-level `hub_id` (contract 2.6, added in L1) → the group whose key decrypts it (the notification service extension tries each key and writes the successful one into `persona_group`)
   → the group containing the session → the first group. Notification buttons (allow / deny / approve / send back) target that group's hub; tapping opens that group's session; silent wakeups wake only that group's connection.
-- Disconnecting a group only forgets it locally (as with the old "Disconnect and forget server"; it does not revoke the device on the hub). Subsequent pushes from that hub, encrypted with the deleted key, display only the relay's "New message" text.
+- Disconnecting signs this device out first (`apple/Persona/App/HubSignOut.swift`): Disconnect This Group, Disconnect This Hub, Disconnect and Forget Server, Disconnect All Hubs, and Revoke and Unpair in Settings › Devices.
+  On each hub it forgets, the App reads its own credential id (`current` of `GET /api/v1/auth/tokens`), revokes the watch's answer-only credential made there, then its own (`DELETE /api/v1/auth/tokens/{id}`), all hubs at once with a 10-second timeout per request.
+  The hub then drops the push registration and Live Activity tokens that credential made (`Pusher.signedOut`), so pushes and remote Live Activity starts stop. A credential already revoked (401) counts as signed out.
+  The local cleanup runs either way. A hub out of reach, one that refuses, or one paired with the master token (no id to revoke) is named in a toast: it may keep pushing until this device is revoked in Settings › Devices on another device.
+  When the removed hub was its group's first hub, the App registers for pushes again and gets the watch a new credential at the group's next hub.
 
 ## Live Activities
 
@@ -99,7 +104,7 @@
 
 - In the background, Live Activities reflect only the first group (see above).
 - Hub-level pages such as Inbox, Persona, Knowledge, model configuration, and notification settings show one group at a time (contract 2.6: no cross-hub merging).
-- Disconnecting a group does not revoke this device's credentials or push registration on its hub.
+- A hub that can't be reached while disconnecting keeps this device's credential and push registration; the App only names it ("Push and notifications").
 - When a group's first hub goes offline, push registration remains there (the contract has the issuer send pushes), so that group's pushes may not arrive during the outage.
 - Hubs known only through mesh (not paired with this device) use only the addresses they advertise. With TLS enabled, these are https addresses with self-signed certificates. iOS does not yet pin them using `fp`,
   so probes fail and those addresses are not selected (routing switches only among paired hubs). To let the phone switch directly to a particular hub in a group, pair it too (it will join the same group).
