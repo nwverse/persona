@@ -298,6 +298,7 @@ targets:
       - path: LiveActivity/FleetIslandViews.swift
     dependencies:
       - target: PersonaVisionShare
+      - target: PersonaVisionNotify
       - package: MarkdownUI
       - package: BeautifulUI
       - package: PersonaSSH
@@ -503,6 +504,35 @@ targets:
         PRODUCT_MODULE_NAME: PersonaShare
         PRODUCT_NAME: PersonaShare
         INFOPLIST_FILE: PersonaShare/Info.plist
+        SWIFT_ACTIVE_COMPILATION_CONDITIONS: "$(inherited) NATIVE_MIGRATION_STORAGE_ONLY"
+        CODE_SIGN_STYLE: Automatic
+        GENERATE_INFOPLIST_FILE: NO
+        SKIP_INSTALL: YES
+        APPLICATION_EXTENSION_API_ONLY: YES
+  # PersonaNotify on Apple Vision Pro (#1981): opens pushes that came through the relay before they are shown. Same code,
+  # Info.plist and bundle id as the iPhone's (the Vision app has the iPhone's bundle id, so its extension does too).
+  PersonaVisionNotify:
+    type: app-extension
+    platform: visionOS
+    sources:
+      - path: PersonaNotify
+        excludes: ["*.plist", "*.entitlements"]
+      - path: Shared/PushCrypto.swift
+      - path: Shared/NativeStateMigration.swift
+      - path: Shared/Generated/ExtensionWire.swift
+      - path: Shared/JSONValue.swift
+      - path: Shared/ExtensionNotificationActions.swift
+    entitlements:
+      path: PersonaNotify/PersonaVisionNotify.entitlements
+      properties:
+        keychain-access-groups: ["$(AppIdentifierPrefix)$(PERSONA_BUNDLE_ID).push"]
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: $(PERSONA_BUNDLE_ID).notify
+        PRODUCT_MODULE_NAME: PersonaNotify
+        PRODUCT_NAME: PersonaNotify
+        INFOPLIST_FILE: PersonaNotify/Info.plist
+        SWIFT_DEFAULT_ACTOR_ISOLATION: nonisolated
         SWIFT_ACTIVE_COMPILATION_CONDITIONS: "$(inherited) NATIVE_MIGRATION_STORAGE_ONLY"
         CODE_SIGN_STYLE: Automatic
         GENERATE_INFOPLIST_FILE: NO
