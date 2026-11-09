@@ -171,6 +171,7 @@ struct MacTodosPage: View {
         let status = TodosLogic.todoStatus(todo, lookup: lookup)
         let urgent = TodosLogic.mostUrgentAgent(todo, lookup: lookup)
         let activeAgents = todo.agents.filter { $0.releasedAt == nil }
+        let ultracode = Ultracode.todoShown(todo, lookup: lookup)
 
         return Button {
             selectedTodoID = todo.id
@@ -192,6 +193,7 @@ struct MacTodosPage: View {
                             .foregroundStyle(todo.isDone ? Color.secondary : Color.primary)
                             .strikethrough(todo.isDone)
                             .lineLimit(1)
+                        if ultracode { UltracodeMark(font: Theme.Font.labelStrong).transition(.opacity) }
                         Spacer()
                         if let d = todo.updatedAt ?? todo.createdAt {
                             Text(Fmt.relative(d))
@@ -199,6 +201,7 @@ struct MacTodosPage: View {
                                 .foregroundStyle(.secondary)
                         }
                     }
+                    .animation(UltracodeMark.motion, value: ultracode)
 
                     HStack(spacing: Theme.Space.xs) {
                         StatusDot(state: urgent?.status ?? (status == .done ? .idle : .unknown), size: Theme.Size.dotS)
@@ -213,6 +216,8 @@ struct MacTodosPage: View {
                         }
                         if !todo.isDone { ReviewChip(todo: todo, compact: true) }
                     }
+
+                    TodoPlanLine(todo: todo)
 
                     if let reason = todo.closedReason {
                         Text(reason)

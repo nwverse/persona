@@ -16,7 +16,7 @@ final class ShellPagerTests: XCTestCase {
     @MainActor private func launch(_ extra: [String] = []) {
         app = XCUIApplication()
         // Not a chat an earlier test left open on Agents (it comes back when Agents is first built).
-        app.launchArguments = ["-demo.on", "YES", "-ui.oldLayout", "NO", "-probes", "YES", "-newAssistant", "YES", "-dev.openChat", ""] + extra
+        app.launchArguments = ["-demo.on", "YES", "-probes", "YES", "-newAssistant", "YES", "-dev.openChat", ""] + extra
         app.launchPinned()
         XCTAssertTrue(app.buttons["assistant-sidebar-button"].firstMatch.waitForExistence(timeout: 15), "no shell")
         sleep(1)
@@ -151,7 +151,7 @@ final class ShellPagerTests: XCTestCase {
         guard let hub = ProcessInfo.processInfo.environment["PERSONA_MOCK_HUB"] else { throw XCTSkip("needs mock Hub") }
         let pair = "persona://pair?url=" + hub.addingPercentEncoding(withAllowedCharacters: .alphanumerics)! + "&token=mock"
         app = XCUIApplication()
-        app.launchArguments = ["-pairURL", pair, "-demo.on", "NO", "-ui.oldLayout", "NO", "-probes", "YES", "-newAssistant", "YES",
+        app.launchArguments = ["-pairURL", pair, "-demo.on", "NO", "-probes", "YES", "-newAssistant", "YES",
                                "-dev.openChat", "", "-tab", "assistant", "-integrations.lark.enabled", "YES"]
         app.launchPinned()
         XCTAssertTrue(app.buttons["assistant-sidebar-button"].firstMatch.waitForExistence(timeout: 20), "no shell")
@@ -180,7 +180,7 @@ final class ShellPagerTests: XCTestCase {
         guard let hub = ProcessInfo.processInfo.environment["PERSONA_MOCK_HUB_TABS"] else { throw XCTSkip("needs the tab panes mock") }
         let pair = "persona://pair?url=" + hub.addingPercentEncoding(withAllowedCharacters: .alphanumerics)! + "&token=mock"
         app = XCUIApplication()
-        app.launchArguments = ["-pairURL", pair, "-demo.on", "NO", "-ui.oldLayout", "NO", "-probes", "YES", "-newAssistant", "YES",
+        app.launchArguments = ["-pairURL", pair, "-demo.on", "NO", "-probes", "YES", "-newAssistant", "YES",
                                "-dev.openChat", "", "-tab", "assistant"]
         app.launchPinned()
         XCTAssertTrue(app.buttons["assistant-sidebar-button"].firstMatch.waitForExistence(timeout: 20), "no shell")

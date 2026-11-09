@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
-	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -15,6 +14,7 @@ import (
 	"github.com/nwverse/persona/server/internal/channel"
 	"github.com/nwverse/persona/server/internal/feishubot"
 	"github.com/nwverse/persona/server/internal/i18n"
+	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/rpc"
 	"github.com/nwverse/persona/server/internal/transcript"
@@ -411,6 +411,8 @@ func resolutionText(l i18n.Lang, ix proto.Interaction, r proto.Resolution) strin
 	switch {
 	case r.Dismiss && r.Reason == proto.DismissedInChat && r.AnsweredBy == "":
 		return i18n.T(l, "assistant-feishu_cards.replied_in_chat")
+	case r.Dismiss && r.Reason == proto.DismissedExpired && r.AnsweredBy == "":
+		return i18n.T(l, "assistant-feishu_cards.moved_to_todos")
 	case r.Dismiss:
 		return i18n.T(l, "assistant-feishu_cards.dismissed")
 	case r.Approve != nil && *r.Approve:
@@ -654,7 +656,7 @@ func elicitationTarget(raw string) (string, string) {
 }
 
 // elicitationURLRe: http(s):// and then a host at once (not https:///host or https:host, which parsers forgive).
-var elicitationURLRe = regexp.MustCompile(`(?i)^https?://[^/\\?#@]`)
+var elicitationURLRe = lazyre.New(`(?i)^https?://[^/\\?#@]`)
 
 // elicitationCard is an MCP server asking to authorize (a link) or to fill in a form: what it asks on the card, its
 // link as a button; a form is filled in the app (its values may be secrets), so only its fields' names are shown.

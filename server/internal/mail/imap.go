@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"html"
 	"io"
-	"regexp"
 	"sort"
 	"strings"
 	"sync"
@@ -18,6 +17,8 @@ import (
 	"github.com/emersion/go-imap/v2/imapclient"
 	gomessage "github.com/emersion/go-message"
 	gomail "github.com/emersion/go-message/mail"
+
+	"github.com/nwverse/persona/server/internal/lazyre"
 )
 
 const (
@@ -939,10 +940,10 @@ func storeFlag(c *imapclient.Client, set imap.UIDSet, flag imap.Flag, on bool) e
 func PlainText(html string) string { return strings.Join(strings.Fields(stripHTML(html)), " ") }
 
 var (
-	blockTag   = regexp.MustCompile(`(?i)<\s*(br|/p|/div|/ul|/ol|/tr|/h[1-6]|/blockquote|/table)\b[^>]*>`)
-	listItem   = regexp.MustCompile(`(?i)<\s*li\b[^>]*>`)
-	spaces     = regexp.MustCompile(`[ \t\x{00a0}]+`)
-	blankLines = regexp.MustCompile(`\n{3,}`)
+	blockTag   = lazyre.New(`(?i)<\s*(br|/p|/div|/ul|/ol|/tr|/h[1-6]|/blockquote|/table)\b[^>]*>`)
+	listItem   = lazyre.New(`(?i)<\s*li\b[^>]*>`)
+	spaces     = lazyre.New(`[ \t\x{00a0}]+`)
+	blankLines = lazyre.New(`\n{3,}`)
 )
 
 // ReadableText is an HTML mail as text that keeps its paragraphs and list items (PlainText flattens everything onto

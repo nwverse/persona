@@ -18,7 +18,7 @@ final class LarkJumpLatestFlowTests: XCTestCase {
         let hub = try XCTUnwrap(ProcessInfo.processInfo.environment["PERSONA_MOCK_HUB"])
         let app = XCUIApplication()
         app.launchArguments = ["-pairURL", "persona://pair?url=" + hub.addingPercentEncoding(withAllowedCharacters: .alphanumerics)! + "&token=mock",
-            "-tab", "feishu", "-demo.on", "NO", "-ui.oldLayout", "NO", "-integrations.lark.enabled", "YES",
+            "-tab", "feishu", "-demo.on", "NO", "-integrations.lark.enabled", "YES",
             "-larkTop", "NO", "-UIPreferredContentSizeCategoryName", "UICTContentSizeCategoryL"]
         app.launchPinned()
         XCTAssertTrue(app.buttons["shell-feishu"].firstMatch.waitForExistence(timeout: 20))

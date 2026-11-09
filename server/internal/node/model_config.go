@@ -6,7 +6,6 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
-	"strings"
 
 	"github.com/nwverse/persona/server/internal/proto"
 )
@@ -24,8 +23,10 @@ type modelExecution struct {
 	IsMain  bool   `json:",omitempty"`
 }
 
+// check refuses a model that is not a model id (proto.ValidModelID, #1644) before anything runs; the error's text is
+// what the manager reads as a refused request (assistant startRequestErr), so it stays "invalid model".
 func (m modelExecution) check() error {
-	if len(m.Model) > 512 || strings.ContainsAny(m.Model, "\r\n\x00") {
+	if m.Model != "" && !proto.ValidModelID(m.Model) {
 		return errors.New("invalid model")
 	}
 	return validModes("", m.Effort)

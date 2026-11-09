@@ -35,15 +35,15 @@ struct PersonaPicker: View {
         .task { await store.refresh(model.api) }
     }
 
-    /// The chosen one's dot in each state, moving as in the top bar.
+    /// The chosen one's dot in each state, moving as in the top bar: in a row; at the accessibility text sizes two a row,
+    /// where five in a row cut every name to "…" and three ran them together (#1796).
     private var states: some View {
-        HStack(spacing: Theme.Space.xxs) {
-            ForEach(PersonaState.allCases) { s in
-                VStack(spacing: Theme.Space.xs) {
-                    PersonaDot(size: Theme.Size.avatar, state: s)
-                    Text(s.title).font(Theme.Font.label).foregroundStyle(.secondary).lineLimit(1).minimumScaleFactor(0.8)
-                }
-                .frame(maxWidth: .infinity)
+        Group {
+            if typeSize.isAccessibilitySize {
+                LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: Theme.Space.xxs, alignment: .top), count: 2),
+                          spacing: Theme.Space.s) { stateCells }
+            } else {
+                HStack(spacing: Theme.Space.xxs) { stateCells }
             }
         }
         .padding(.vertical, Theme.Space.s)
@@ -51,6 +51,16 @@ struct PersonaPicker: View {
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("\(model.persona.name)'s five states in the top bar: idle, thinking, working, waiting for you, offline")
         .accessibilityIdentifier("persona-states")
+    }
+
+    @ViewBuilder private var stateCells: some View {
+        ForEach(PersonaState.allCases) { s in
+            VStack(spacing: Theme.Space.xs) {
+                PersonaDot(size: Theme.Size.avatar, state: s)
+                Text(s.title).font(Theme.Font.label).foregroundStyle(.secondary).lineLimit(1).minimumScaleFactor(0.8)
+            }
+            .frame(maxWidth: .infinity)
+        }
     }
 
     private func card(_ p: Persona) -> some View {
@@ -73,7 +83,7 @@ struct PersonaPicker: View {
                             if store.downloading.contains(p.id) {
                                 ProgressView().padding(Theme.Space.xxs).background(.regularMaterial, in: .circle)
                             } else if !here {
-                                Image(systemName: "arrow.down.circle.fill")
+                                ThemedIcon("arrow.down.circle.fill")
                                     .font(Theme.Font.heading)
                                     .foregroundStyle(.white, Theme.accent)
                                     .accessibilityHidden(true)
@@ -86,7 +96,7 @@ struct PersonaPicker: View {
                     .stroke(selected ? Theme.accent : Color.primary.opacity(0.1), lineWidth: selected ? 2.5 : 1))
                 VStack(spacing: Theme.Space.xxs) {
                     HStack(spacing: Theme.Space.xs) {
-                        if selected { Image(systemName: Theme.Icon.successFilled).foregroundStyle(Theme.accent) }
+                        if selected { ThemedIcon(Theme.Icon.successFilled).foregroundStyle(Theme.accent) }
                         Text(p.cardTitle).font(Theme.Font.captionStrong).lineLimit(1)
                     }
                     if p.isBuiltin {

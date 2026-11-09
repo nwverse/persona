@@ -39,16 +39,16 @@ nonisolated struct ExtensionStreamTree: Equatable, Sendable {
     /// Action IDs may appear in several slots; a caller must not silently select an ambiguous slot.
     func slots(action: String) -> [(key: String, event: String, saved: Raw)] {
         var result: [(String, String, Raw)] = []
-        func visit(_ value: Raw, owner: String, event inherited: String = "press") {
+        func visit(_ value: Raw, owner: String, event inherited: String = "press", review: Bool = false) {
             if let object = value.object {
                 let key = object["key"]?.string ?? owner
                 let ownEvent = object["type"]?.string == "segmented" ? "change" : inherited
                 for (name, child) in object {
                     let nextEvent = ["search", "filter", "tabs", "control"].contains(name) ? "change" :
-                        (name == "review" || (name == "buttons" && object["type"]?.string == "composer") ? "submit" : ownEvent)
+                        (name == "buttons" && (review || object["type"]?.string == "composer") ? "submit" : ownEvent)
                     if child["id"]?.string == action, name != "push" {
                         result.append((key, nextEvent, child))
-                    } else { visit(child, owner: key, event: nextEvent) }
+                    } else { visit(child, owner: key, event: nextEvent, review: name == "review") }
                 }
             } else if let array = value.array { for child in array { visit(child, owner: owner, event: inherited) } }
         }

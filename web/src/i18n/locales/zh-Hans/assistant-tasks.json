@@ -1,4 +1,6 @@
 {
+  "receipt_review_followup": "由 Persona 跟进",
+  "report_progress": "进度更新 · {title}",
   "removed": "已移除「{title}」",
   "remove_failed": "没移除：{error}",
   "remove_ellipsis": "移除任务…",
@@ -132,5 +134,9 @@
   "report_step": "第 {step} 步 · {text}",
   "report_from": "「{title}」向 Persona 汇报",
   "report_later": "不急，等下次早晚报",
-  "said_to_interrupting": "打断「{title}」并告诉它"
+  "said_to_interrupting": "打断「{title}」并告诉它",
+  "sent_to": "发给「{title}」",
+  "sent_interrupting": "打断「{title}」后发送",
+  "sent_count_other": "已发 {count} 条指令",
+  "copy": "复制"
 }

@@ -72,8 +72,8 @@ func (m *Machine) claudeDirs(ctx context.Context) []string {
 // windows unless it says false (#2432).
 func (m *Machine) usageWindows() bool { return m.cfg.UsageWindows == nil || *m.cfg.UsageWindows }
 
-// configureNode hands the node its config directories and whether it lists botmux's sessions, before the first
-// session list. Older nodes do not know node.configure; they keep looking in ~/.claude only.
+// configureNode hands the node its config directories, whether it lists botmux's sessions and whether its Claude starts
+// stream their replies (live_replies.go), before the first session list. Older nodes do not know node.configure; they keep looking in ~/.claude only.
 // hub is the hub's part (devices.connected: Codex settings, the sends it remembers; nil while it is not
 // connected: it is done again when it is), then, when own, the manager's own (Options.NodeCalls: the managed launchers
 // with their keys; not on a machine the hub says is another manager's now).
@@ -81,7 +81,7 @@ func (m *Machine) configureNode(ctx context.Context, peer *rpc.Peer, hub *device
 	params := map[string]any{"machine_id": m.cfg.ID, "claude_dirs": m.claudeDirs(ctx),
 		"claude_dirs_blocked": m.blockedClaudeDirs(ctx), "botmux": m.botmux(ctx), "claude_start_dir": m.cfg.ClaudeStartDir,
 		"herdr_autostart": m.herdrAutostart(ctx), "herdr_autoinstall": m.cfg.HerdrAutoinstall, "claude_global_hooks": m.cfg.ClaudeGlobalHooks,
-		"usage_windows": m.usageWindows()}
+		"usage_windows": m.usageWindows(), "claude_live_replies": m.liveReplies(ctx)}
 	// The sessions it lists however quiet are the assistant's to say (its profile); before it said, the node keeps
 	// what it has.
 	if keep, ok := m.d.keptOn(m.cfg.ID); ok {

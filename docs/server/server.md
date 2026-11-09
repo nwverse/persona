@@ -8,20 +8,23 @@ Go, single binary, `server/cmd/personad`. Modes: `docs/server/architecture.md`; 
 
 The server's code ships as these programs (`server/cmd/`), all of one build (`version -v` matches):
 
-- `personad` (alias `jarvisd`): everything, and the compatibility entry. Every command it ever had keeps working (`personad hub …`, `personad assistant`, `personad manager …`), and the services installed so far run it. Its device commands (`node …`, `hook`, `mcp`, `ask`, `notify`, `tool`, `launch`, `codex-start`, `tab-start`, `office`, `sysmon`, `node-update-check`, `node-update-watch`) are `internal/nodecmd`'s, its hub commands `internal/hubcli`'s, its managers' commands `internal/managercli`'s.
+- `personad` (alias `jarvisd`): everything, and the compatibility entry. Every command it ever had keeps working (`personad hub …`, `personad assistant`, `personad manager …`), and the services installed before the programs below run it. Its device commands (`node …`, `hook`, `mcp`, `ask`, `notify`, `tool`, `launch`, `codex-start`, `tab-start`, `office`, `sysmon`, `node-update-check`, `node-update-watch`) are `internal/nodecmd`'s, its hub commands `internal/hubcli`'s, its managers' commands `internal/managercli`'s.
 - `persona-hub`: the hub alone, `internal/hubcli`: `persona-hub [run]`, `switch`, `setup`, `pair`, `peer`, `doctor`, `admin`, `manager-mode`, `manager-code`, `assistant-token`, `update-watch`; `persona-hub hub <command>` works too (what the edge and older scripts run).
-- `persona-manager`: the managers alone, `internal/managercli`: `assistant` (the built-in one; a service of its own with `PERSONA_ASSISTANT_DEPLOY=service`, bound by `join --builtin`, [managers.md](../assistant/managers.md) ("The built-in manager as its own service")), `join`, `run`, `install`, `uninstall`, `status` (one made in the app; `persona-manager manager <command>` works too), `extension …`, `voice`, `tailcat-key`, and `node …` for this computer's node, which it starts.
-- `persona-node`: the device's program, `internal/nodecmd` alone. It takes the same commands and arguments and gives the same output and exit codes as `personad`, and links neither the hub, the manager nor the database (`cmd/persona-node/main_test.go` guards that on every platform it ships for). The node writes `<its own binary> hook` / `mcp` into the settings it manages, so either program serves what it wrote.
+- `persona-manager`: the managers alone, `internal/managercli`: `assistant` (the built-in one; a service of its own with `PERSONA_ASSISTANT_DEPLOY=service`, bound by `join --builtin`, [managers.md](../assistant/managers.md) ("The built-in manager as its own service")), `join`, `run`, `install`, `uninstall`, `status` (one made in the app; `persona-manager manager <command>` works too), `extension …`, `voice`, `tailcat-key`, and `node …`: this computer's node, when the manager runs it as itself. The manager starts the node as `persona-node` or `personad` of its build beside it, and as itself only when neither is there or with `PERSONA_SPLIT_PROGRAMS=0` (`devices.Machine.localNode`, under `persona-node` below).
+- `persona-node`: the device's program, `internal/nodecmd` alone. It takes the same commands and arguments and gives the same output and exit codes as `personad`, and links neither the hub, the manager nor the database (`cmd/persona-node/main_test.go` guards that on every platform it ships for). The node writes `<its own binary> hook` / `mcp` into the settings it manages, so either program serves what it wrote. The node of the hub's computer, which the manager starts, runs as the first program beside the manager's that is the same build (`version -v`): `persona-node`, then `personad`; else as the manager's program itself (`devices.Machine.localNode`). So a manager run as `persona-manager` starts `personad node --stdio`, and the hook and MCP entries the node writes keep naming `personad`. `PERSONA_SPLIT_PROGRAMS=0` in the manager's environment keeps the node on the manager's program. Nothing puts a `persona-node` on the hub's computer yet (a later change), and the hub's self-update does not swap one: one put there by hand of another build is passed over, with a line in the manager's log.
 - `persona-link` (directory alias `cmd/persona-link`): the connector, `docs/operations/link.md`.
 - `personad-wechat`: the WeChat bot, a built-in extension's program (`docs/extensions/wechat.md`).
 
 The hub and the managers apart:
 
 - **Each without the other's code.** `TestPersonaHubDoesNotLinkTheManager` (`cmd/persona-hub`) lets the hub's program link only the hub's own packages and the shared ones (`internal/depguard`: `HubOwn`, `Shared`); `TestPersonaManagerDoesNotLinkTheHub` (`cmd/persona-manager`) keeps the hub's own packages out of the manager's. Both check the four release platforms and Windows. The two talk over the bus only. The hub's one exception for now (`HubExceptions`, which may only shrink): `internal/extension` and what it pulls in, for the looks it serves, until extensions are a part of their own.
-- **Released together.** The release, a direct deploy (`scripts/deploy/deploy.sh`) and the Docker image put `persona-hub` and `persona-manager` beside `personad`, and the hub's self-update swaps them with it (`update.ProgramNames`, [hub-update.md](../operations/hub-update.md) ("Programs swapped together with personad")): two more downloads and `.prev` copies per update. `install.sh` installs `personad` alone; the next update brings the two.
-- **The hub runs as personad for now.** The hub's service runs `personad hub run`, which starts `personad assistant` as its child unless `assistant.mode` is `service`. A hub run as `persona-hub` goes by the `personad` beside it for what runs or replaces the server (`hub.ServerBinary`): the built-in manager it starts, the update's target, setup's service binary, the edge's default switch.
-- **One container in Docker.** The hub image runs the hub and the built-in manager as two processes under `personad supervise`, each restarted on its own ([docker.md](../operations/docker.md) ("The hub and the built-in manager in one container")).
-- **Two services on a new install.** `hub setup` installs the hub's service and the built-in manager's own (`persona-manager-assistant.service`, or the launchd agent `com.persona.manager.assistant`, running `personad assistant` with `PERSONA_ASSISTANT_DEPLOY=service`), and binds the second to the first with a one-time code. Existing installs keep the hub's child until `hub setup --manager-service` ([upgrade.md](../operations/upgrade.md): every install type, step by step). See [managers.md](../assistant/managers.md) ("The built-in manager as its own service").
+- **Released together.** The release, a direct deploy (`scripts/deploy/deploy.sh`) and the Docker image put `persona-hub` and `persona-manager` beside `personad`, and the hub's self-update swaps them with it (`update.ProgramNames`, [hub-update.md](../operations/hub-update.md) ("Programs swapped together with personad")): two more downloads and `.prev` copies per update. `install.sh` installs the two with `personad` on the computer that runs the hub (`--hub`, a `hub.json`, or the two there already), each downloaded and checked before any is put in place; other computers get neither. A release that lacks one leaves the file there as it was, unless a service runs it: then the self-update and `install.sh` refuse it ([hub-update.md](../operations/hub-update.md) ("A release without `persona-hub` or `persona-manager`")).
+- **Setup writes services that run them, on Linux.** `hub setup` writes the hub's systemd unit to run `persona-hub run` and `manager install --builtin` (which setup runs) the built-in manager's to run `persona-manager assistant`, each when that program is beside `personad` and the same build (`version -v`, `update.SplitBeside`); otherwise, or with `PERSONA_SPLIT_PROGRAMS=0` in their environment, `personad hub` and `personad assistant` as before. Setup's report says when it passed `persona-hub` over and why, and `manager install --builtin` prints the same for `persona-manager`. A rerun of setup (the install command with `--hub` runs it again) moves a service it wrote to the program it would write now and restarts it, and its report says so, and that the built-in manager restarted with the hub when the hub starts it as its child. The opt-out stays in the units it was given to (`Environment=PERSONA_SPLIT_PROGRAMS=0`), so what the hub and the manager start stays on `personad` too; a later rerun without it moves the services back to the programs. The drop-in `90-persona-compat.conf` that `hub-systemd.sh` adds over a unit setup wrote is moved with it; another drop-in that sets `ExecStart` (one of your own) is left, and setup says which program the service really runs and how to change it.
+- **Macs stay on personad, for now.** On a Mac the hub's launchd agent (`com.persona.hub`) and the built-in manager's (`com.persona.manager.assistant`) run `personad hub` and `personad assistant`, with the programs beside `personad` or not (the one exception: `persona-manager install --builtin` with no `personad` of its build to run, [managers.md](../assistant/managers.md) ("The built-in manager as its own service")); setup's report and `manager install --builtin` say so when they are there. macOS holds what an agent starts, the node of the hub's computer among them, to the agent's program for its privacy permissions (Full Disk Access), so the agents move to `persona-hub` and `persona-manager` in a later change, together with that node. A rerun moves an agent that runs either program (one edited by hand) back to `personad`; an agent of your own that runs this data directory's `persona-hub` is still taken as the hub's and left as it is. `PERSONA_SPLIT_PROGRAMS` means something on Linux and in Docker only.
+- **Some services stay on personad.** The hub's unit, or the built-in manager's unit or agent, under the former name keeps its program (`compatibility_service.go`, `manager/compatibility.go`), and so do the managers made in the app (`manager install`: `personad manager run`). Nothing else moves an install: a deploy keeps the program the hub's unit runs (`scripts/deploy/hub-systemd.sh`, [hub-restart.md](../operations/hub-restart.md)), and so does a self-update.
+- **A hub run as persona-hub stays persona-hub.** It starts the built-in manager as `persona-manager assistant` beside it when that is the same build (`version -v`), else as the `personad` beside it (`hub.managerBinary`). A self-update replaces `personad` (the release's main download, `hub.ServerBinary`) with the two programs and goes on as the swapped `persona-hub`: the restart, the edge's hand-over and every way back (the new process, the edge, the watchdog) run it (`run` in `pending.json`; a build that does not know `run` brings the hub back as `personad hub run`, the same hub). `hub switch` without `--binary` goes on with the program the edge's active slot runs, from either program, so while a slot serves it never moves a hub between `personad` and `persona-hub`; with nothing serving it names `personad` (`hub.ServerBinary`), as before. The edge refuses any switch while it backs off a failing slot, so that default only reaches a switch it takes once a slot is up again; on a hub that runs `persona-hub` it moves the hub to `personad` until its service restarts, so give `--binary` there.
+- **One container in Docker.** The hub image runs the hub and the built-in manager as two processes under `personad supervise`, each restarted on its own, as `persona-hub run` and `persona-manager assistant` unless `PERSONA_SPLIT_PROGRAMS=0` ([docker.md](../operations/docker.md) ("Programs")).
+- **Two services on a new install.** `hub setup` installs the hub's service and the built-in manager's own (`persona-manager-assistant.service` running `persona-manager assistant`, or on a Mac the launchd agent `com.persona.manager.assistant` running `personad assistant`, each with `PERSONA_ASSISTANT_DEPLOY=service`), and binds the second to the first with a one-time code. Existing installs keep the hub's child until `hub setup --manager-service` ([upgrade.md](../operations/upgrade.md): every install type, step by step). See [managers.md](../assistant/managers.md) ("The built-in manager as its own service").
 
 ## Code
 
@@ -47,6 +50,59 @@ The hub and the managers apart:
 | `internal/pushcrypto` | Push-body encryption with phone public key (HPKE), `docs/operations/push-relay.md` |
 | `internal/relay` | Publisher-run personad relay, `docs/operations/push-relay.md` |
 | `internal/tunnel` | Tailcat node key / endpoint, hub dialing, new-binary transfer over tailcat (“Tailcat hole punching” below) |
+
+## Client traffic diagnostics
+
+The hub writes privacy-safe `traffic` minute buckets to its normal journal. These are
+transport diagnostics, not application state or a delivery receipt. No extra API,
+database table, request body, device name, literal dynamic path, query, bearer token,
+or push token is introduced. Credential and registration IDs are independently
+hashed with a fixed domain separator; use the device registry's credential binding
+when joining them, never a display-name match.
+
+- Authenticated registered-client requests have `action=started` counts on receipt
+  and `action=completed` counts on return, grouped by the ServeMux route template,
+  platform, surface and response status. `source=app|widget|liveactivity` is inferred
+  from bounded client headers and User-Agent markers; `platform_basis` and
+  `source_basis` retain the evidence. Native Apple UAs use the enrolled device kind
+  or iPhone push binding when their OS is absent. Browser UAs count as `web` even
+  on phones; curl/Python/Go clients stay diagnostic rather than borrowing a phone
+  credential's platform. Raw UAs/headers never enter logs. `native-default` means
+  App is inferred from a native UA with no extension marker, not hardware/process proof.
+  Sum **started only** for request volume; completed
+  counters supply duration and response-size measurements. Failed authentication is
+  still covered by the separate rate-limited security log, not attributed to a device.
+- `body_bytes` and `max_body_bytes` count application response bytes before gzip,
+  or WebSocket application-frame bytes after a successful write/read. They are not
+  TLS, compression or physical wire-byte measurements. WebSocket ping/pong buckets
+  count attempts/replies and the latter's elapsed time; the persisted device-session
+  history retains connection duration and observed close reasons.
+- Push buckets distinguish alert, background categories and Live Activity
+  start/update/end, with logical attempt and accepted/failed actions. A successful
+  transport retry produces one terminal result for the logical send; do not add
+  attempts and accepts together. Acceptance does not prove iOS delivery or wake-up.
+- Completed minute buckets are emitted at most once per minute per key; the final
+  partial bucket is emitted on orderly shutdown. Active key cardinality is bounded,
+  with overflow counts retained without identities. An abrupt process loss can
+  lose the still-buffered minute; telemetry cannot reconstruct earlier unlogged
+  successful HTTP requests or Live Activity updates.
+
+`python3 scripts/diag/hub_traffic_report.py --since <UTC start> --until <UTC end>
+--identity-file <private identity JSON> --output <new private report JSON>` reads
+minute buckets and device-session history without changing production state or waiting.
+The identity file contains `{"identity":"<16-hex opaque credential hash>"}`, never a
+bearer/push token. Specify `--unit`/`--container` for an installation whose service or
+container name differs from discovery; sanitized exports can use `--journal-file`
+and `--connections-file`. Collect two minutes after the end so the last bucket has
+flushed. The output separates platforms/surfaces/types/routes/hours, start vs completion
+counts, and incomplete/unknown attribution; connection reasons remain observed reasons.
+
+Live Activity settings refresh only the affected device's projected content.
+Same-value retries and non-activity preferences do not force a fleet-wide resend.
+Foreground suppression applies to both activity updates and push-to-start; a start
+suppressed in the foreground remains eligible after the last matching phone socket
+leaves. Important interaction alerts and the existing urgent activity fast path
+remain unchanged.
 
 ## Connecting to herdr
 
@@ -370,7 +426,7 @@ Without Docker, use system Postgres (Ubuntu postgresql, version 16 tested, local
 | Table | Content |
 | --- | --- |
 | `live_activities` | Per-device activity / push-to-start tokens and start time, `docs/apple/live-activity.md` |
-| devices | APNs devices; 410 / BadDeviceToken deletes only if current token still equals failed one, not a newly registered token. JSONB prefs for device notifications (app Settings › Notifications), not overwritten on registration |
+| devices | APNs registrations; 410 / BadDeviceToken uses a persisted registration compare-and-delete, never another slot's newer token. Enrollment publishes only after ownership/retirement commit. JSONB prefs are not overwritten on registration |
 | `phone_tools` | iPhone's last declared phone_* tools, visible to Claude even offline |
 | `node_sessions` | Persona-started sessions per machine: pane, launcher, directory. Node uses hub `state.load` / `state.put`, Mac no direct DB. `state.load` reads last 60 days via `node_sessions_started` index (machine_id, started_at), not entire machine history |
 | `mail_accounts` | Nonsensitive JSONB + AES-GCM ciphertext; the manager's `secret.key` excluded from DB |
@@ -429,7 +485,7 @@ Adding a migration:
 
 1. Decide whose table it is: the side whose store reads and writes it. A table both sides need is a sign that one side should ask the other over the bus instead (as the manager learns the computers waiting to be confirmed from the hub's handover, `devicewire.Config.Pending`, rather than reading `machine_trust`).
 2. Put the file in exactly that set's directory, named `NNNN_what.sql` with a number neither set has: look in both `hub/` and `manager/`, on `main` and in every worktree (`docs/lessons/workflow.md`). Two lines once took 421 at the same time (`hub/0421_hub_settings.sql`, `manager/0421_machine_usage.sql`); that pair is frozen in the guard, harmless since each set records its own part. Write it idempotently (`IF NOT EXISTS`) where you can.
-3. Guards: `TestMigrationSets` (`internal/db`) fails for a file in both sets or at the top level; `TestStoresTouchTheirOwnTables` (`internal/hub`) fails when a store interface of the hub reaches a table outside the hub set, or one of the managers' (assistant, devices, extmgr, extension, mail, agents) a table outside the manager set.
+3. Guards: `TestMigrationSets` (`internal/db`) fails for a file in both sets or at the top level, and for a number used by both sets outside the frozen exceptions above; `TestStoresTouchTheirOwnTables` (`internal/hub`) fails when a store interface of the hub reaches a table outside the hub set, or one of the managers' (assistant, devices, extmgr, extension, mail, agents) a table outside the manager set. `scripts/ci/migration_freeze.py` (from `scripts/ci/guards.sh` on every pull request, and from `scripts/check-fast.sh` when a migration changes) fails when a file already on the base branch is edited, deleted or renamed. A comment-only or whitespace-only edit passes; add a new migration instead.
 
 ## Configuration (hub `~/.persona/`, 0600, never committed)
 
@@ -441,11 +497,15 @@ Adding a migration:
 | `secret.key` | The hub's own 32-byte key (peer tokens, connector credentials). The built-in manager's key, which seals its secrets (mail, model providers, extensions), is in `managers/assistant/` with its `tailcat-hub.json` and `handles.key`: a copy of the hub's on an upgraded install until it rotates to its own after the move ([managers.md](../assistant/managers.md) ("The built-in manager's own files", "Its own secret.key")) |
 | `apns.json`, `apns_key.p8` | Push config / key. Present → direct APNs; absent → per-phone registered relay (`docs/operations/push-relay.md`); no relay → no push |
 
-Each computer ~/.persona also contains node-generated hooks (`claude-hooks/` / `assistant-hooks/` plugins, `claude-settings.json` / `assistant-settings.json` for older Claude), `mcp.json`, `node.sock`, uploads/.
+Each computer ~/.persona also contains node-generated hooks (`claude-hooks/` / `assistant-hooks/` plugins, the Agents' `claude-live-replies/` plugin, `claude-settings.json` / `assistant-settings.json` for older Claude), `mcp.json`, `node.sock`, uploads/.
 
 Pairing: hub `~/.persona/bin/personad hub pair` calls running hub via loopback HTTP, prints temporary link, QR, expiry, TLS public-key fingerprint if enabled. Listen must accept IPv4 loopback. Token valid 10 minutes, single device-token redemption, at most 2-minute post-redemption grace; protocol policies. `--legacy` prints main token / old QR offline, not for public networks. New QR parameters: [Protocol](../protocol/protocol.md#临时配对).
 
 ## Push policy (`hub/push.go`, `hub/notify.go`)
+
+- Registration ownership: the newest authenticated registration supersedes an older ID only when both share a nonempty credential owner, topic and APNs environment, plus the same nonempty encryption public key or exact APNs token. Names and addresses never prove installation identity. Commit registration and retirement before making the target sendable; preserve notification settings on same-ID registration.
+- Lifecycle: reconcile at startup, on enrollment and every five minutes. Retire revoked owners and registrations idle for at least 90 days, measured from true enrollment, owner activity or APNs/relay acceptance (coalesced writes), not relay/prefs metadata updates. Existing rows receive migration-time observation grace. A genuinely returning inactive installation may enroll again; a revoked installation may re-pair under a different live owner only with matching scoped installation proof. Stale superseded writes stay fenced; a fresh post-retirement enrollment with the same owner and current installation proof may atomically replace the historical canonical ID, preserving preferences and the longest start budget. This keeps an existing client's cached ID usable without trusting old `updated_at` as enrollment history. Old-version late writes, route regressions, unconditional deletes and activity saves cannot bypass those fences. Maintenance skips busy transports/enrollments and aborts inactivity cleanup if recent acceptance fails to persist; an idle pass has a shared five-second database deadline.
+- Retiring a duplicate removes its activity row and transfers the longest existing Live Activity start deadline to the canonical ID, so identity rollover cannot reset the budget. Registration ownership conflicts return localized HTTP 409; storage failures remain retryable failures, never success. APNs acceptance does not prove OS delivery or a client wake.
 
 - Needs you (question / plan / permission / terminal): immediate, `time-sensitive`, `category: INTERACTION_<KIND>` with app-registered buttons. Hook-blocked dialogs do not appear in computer TUI and cannot be answered there, so no delay.
 - Completed: follows Ovis (`github.com/devswha/ovis` `server/push.ts`, MIT); push is for users away from the computer:
@@ -492,7 +552,7 @@ Foreground app keeps WebSocket to hub, receiving change broadcasts. A 19-minute 
 ## Self-update (`hub/selfupdate.go`, `docs/operations/hub-update.md`)
 
 `channel=release` hubs check release site's `latest.json` every hour. New version waits until assistant / Agents idle, replaces binary / restarts, rolls back if unable to start.
-- Files under `~/.persona/update/`: `<build>/` downloads, node binaries in `nodes/` later copied to `~/.persona/bin/nodes/`; `pending.json` ongoing update, deleted after confirmation; `rolledback.json` latest rollback, recorded by old version, marked bad then deleted; `watch.log` watchdog output, `hub.log` rollback hub output without service manager.
+- Files under `~/.persona/update/`: `<build>/` downloads, node binaries in `nodes/` later copied to `~/.persona/bin/nodes/` (the whole `<build>/` is removed once the update fails, is confirmed or goes back, and a hub start removes any other `<build>/` left behind); `pending.json` ongoing update, deleted after confirmation; `rolledback.json` latest rollback, recorded by old version, marked bad then deleted; `watch.log` watchdog output, `hub.log` rollback hub output without service manager.
 - Previous binary ~/.persona/bin/personad.prev. Manual restore: `cp ~/.persona/bin/personad.prev ~/.persona/bin/personad && systemctl --user restart personad`; launchd uses launchctl kickstart -k. Disable auto-update in app afterward to avoid reinstall (rolled-back builds already excluded automatically).
 - Disable in app Settings or `PUT /api/v1/hub/update/settings {"auto": false}`.
 - Notifications: confirmed auto-update pushes Hub Updated to X; recorded rollback pushes Hub Update Failed + reason (`updater.notify`, all devices, thread `hub_update`). Manual updates no separate push.

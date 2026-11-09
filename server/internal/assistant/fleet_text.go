@@ -4,6 +4,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/nwverse/persona/server/internal/apierr"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/transcript"
@@ -218,4 +219,21 @@ func runtimeFallbackText(l i18n.Lang, s string) string {
 		}
 	}
 	return s
+}
+
+// startErrorText is a failed start's start_error in l: for a start the node refused with a code the hub words itself
+// (a launcher or claude the new tab's shell does not have, node/shellmiss.go, #1642) that sentence, naming machine,
+// for every app in the user's language; else the node's text as it is. The code and its details stay on the session.
+func startErrorText(l i18n.Lang, machine string, s proto.Session) string {
+	if s.StartErrorCode == "" {
+		return s.StartError
+	}
+	data := map[string]any{"machine_name": machine}
+	for k, v := range s.StartErrorArgs {
+		data[k] = v
+	}
+	if text := apierr.Sentence(l, s.StartErrorCode, data); text != "" {
+		return text
+	}
+	return s.StartError
 }

@@ -9,7 +9,6 @@ import (
 	"encoding/json"
 	"errors"
 	mrand "math/rand/v2"
-	"regexp"
 	"slices"
 	"strings"
 	"time"
@@ -19,6 +18,7 @@ import (
 	"github.com/nwverse/persona/server/internal/channel"
 	"github.com/nwverse/persona/server/internal/feishubot"
 	"github.com/nwverse/persona/server/internal/i18n"
+	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/rpc"
 )
@@ -206,7 +206,7 @@ func (h *Manager) botSendNote(api *feishubot.Client, chatID, text string) {
 	}
 }
 
-var regexpDigits = regexp.MustCompile(`^\d{4,8}$`)
+var regexpDigits = lazyre.New(`^\d{4,8}$`)
 
 func (h *Manager) botWelcome(openID, chatID string) {
 	b := &h.bots
@@ -499,7 +499,7 @@ func (h *Manager) botName(ctx context.Context, api *feishubot.Client, openID str
 }
 
 // feishuKeyRE is what a caller's key (feishu.post / feishu.text uuid) may be made of: letters, digits, ":", "_" and "-".
-var feishuKeyRE = regexp.MustCompile(`^[A-Za-z0-9:_-]+$`)
+var feishuKeyRE = lazyre.New(`^[A-Za-z0-9:_-]+$`)
 
 // callerKey is the key a call names, cut to max characters, or "" when it names none or one that is not made of the
 // characters above (it is then ignored, and the key is the one the call would have had without it).

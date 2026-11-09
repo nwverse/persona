@@ -5,7 +5,9 @@
 // built-in manager as its own service"): the supervisor binds it to the hub (a one-time code made from the hub's
 // database, traded over loopback) before it starts it. Otherwise the hub starts its own child as it always has, and
 // the supervisor becomes the hub (exec): the container is what it was. With --manager-only it runs the built-in
-// manager alone, for a container of its own beside the hub's (compose.yaml's commented example).
+// manager alone, for a container of its own beside the hub's (compose.yaml's commented example). The hub runs as
+// persona-hub and the built-in manager as persona-manager, the image's programs beside personad, unless
+// update.SplitEnv is 0 (docs/server/server.md "Programs").
 package supervise
 
 import (
@@ -31,6 +33,7 @@ import (
 	"github.com/nwverse/persona/server/internal/hub"
 	"github.com/nwverse/persona/server/internal/identity"
 	"github.com/nwverse/persona/server/internal/manager"
+	"github.com/nwverse/persona/server/internal/update"
 )
 
 // SeparateEnv on the hub's container says the built-in manager runs in a container of its own (--manager-only):
@@ -68,11 +71,13 @@ var (
 
 // env is what the supervisor touches outside itself, so that tests stand in for it.
 type env struct {
-	self string // the program to run the two with
+	self string // personad: the program to run the two with, unless the one of their own beside it (programOf)
 	home string // the data directory
 	out  io.Writer
-	// execHub replaces this process with the hub (the container as it was).
-	execHub func(self string, env []string) error
+	// execHub replaces this process with the hub, bin with args (the container as it was).
+	execHub func(bin string, args, env []string) error
+	// version is what a program says to `version -v` (update.BuildOf when nil).
+	version func(ctx context.Context, path string) (string, error)
 	// bind makes sure the built-in manager is bound to the hub at hubURL (bind, below).
 	bind    func(ctx context.Context, hubURL string) error
 	environ []string
@@ -171,6 +176,23 @@ func loopback(listen string) string {
 	return "http://" + net.JoinHostPort(host, port)
 }
 
+// programOf is what runs name's part (persona-hub, persona-manager): that program beside e.self with own when it is
+// e.self's build and update.SplitEnv is not 0, else e.self (personad) with command, saying why one there was passed
+// over.
+func (e *env) programOf(ctx context.Context, name string, own, command []string) (bin string, args []string) {
+	if update.SplitOff() {
+		return e.self, command
+	}
+	p, note := update.SplitBeside(ctx, e.self, name, e.version)
+	if p == "" {
+		if note != "" {
+			e.logf("%s: running %s %s instead", note, filepath.Base(e.self), strings.Join(command, " "))
+		}
+		return e.self, command
+	}
+	return p, own
+}
+
 // hubContainer is the hub's container: the hub alone (exec) unless the built-in manager is a service of its own here;
 // then the two side by side (the manager not, when SeparateEnv says it has a container of its own).
 func (e *env) hubContainer(ctx context.Context) error {
@@ -178,14 +200,15 @@ func (e *env) hubContainer(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	hubBin, hubArgs := e.programOf(ctx, "persona-hub", []string{"run"}, []string{"hub", "run"})
 	if !f.serviceMode() {
 		e.logf("assistant.mode is not service: the hub starts the built-in manager itself, as before")
-		return e.execHub(e.self, e.environ)
+		return e.execHub(hubBin, hubArgs, e.environ)
 	}
 	e.stop = f.stopWait()
 	// The hub reads hub.json when it starts: one that starts again with another mode (manager-mode, then an admin's
 	// restart of the hub) needs the supervisor to decide again too. It stops then, and the container starts it again.
-	progs := []*program{{name: "hub", args: []string{"hub", "run"}, after: func() error {
+	progs := []*program{{name: "hub", bin: hubBin, args: hubArgs, after: func() error {
 		now, err := e.readHubFile()
 		if err != nil {
 			return fmt.Errorf("%w: %w", errUnreadable, err)
@@ -203,7 +226,8 @@ func (e *env) hubContainer(ctx context.Context) error {
 			e.logf("%s=%s is not separate: ignored, the built-in manager runs here", SeparateEnv, v)
 		}
 		hubURL := loopback(f.Listen)
-		progs = append(progs, &program{name: "manager", args: []string{"assistant"},
+		bin, args := e.programOf(ctx, "persona-manager", []string{"assistant"}, []string{"assistant"})
+		progs = append(progs, &program{name: "manager", bin: bin, args: args,
 			env:    []string{"PERSONA_ASSISTANT_DEPLOY=" + assistant.DeployService},
 			before: func(ctx context.Context) error { return e.bind(ctx, hubURL) }})
 	}
@@ -214,7 +238,8 @@ func (e *env) hubContainer(ctx context.Context) error {
 // says assistant.mode service (the hub starts its own child otherwise). hub.json is read again before each start:
 // a hub gone back to its child since hands the child a new token, which stops this one, and then it waits.
 func (e *env) managerOnly(ctx context.Context, hubURL string) error {
-	return e.supervise(ctx, []*program{{name: "manager", args: []string{"assistant"},
+	bin, args := e.programOf(ctx, "persona-manager", []string{"assistant"}, []string{"assistant"})
+	return e.supervise(ctx, []*program{{name: "manager", bin: bin, args: args,
 		env: []string{"PERSONA_ASSISTANT_DEPLOY=" + assistant.DeployService},
 		before: func(ctx context.Context) error {
 			if !e.waitService(ctx) {
@@ -252,6 +277,7 @@ func (e *env) waitService(ctx context.Context) bool {
 // program is one of the programs supervised.
 type program struct {
 	name string
+	bin  string // e.self when ""
 	args []string
 	env  []string
 	// before runs before each start; an error is said, and it is tried again after bindRetry (growing).
@@ -340,7 +366,11 @@ func (e *env) keep(ctx context.Context, p *program, others bool) error {
 // extensions' programs too, which have process groups of their own, so that a program started again after a crash
 // doesn't find the last one's still running.
 func (e *env) run(ctx context.Context, p *program) error {
-	cmd := exec.Command(e.self, p.args...)
+	bin := p.bin
+	if bin == "" {
+		bin = e.self
+	}
+	cmd := exec.Command(bin, p.args...)
 	cmd.Env = append(append([]string{}, e.environ...), p.env...)
 	cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
 	ownGroup(cmd)

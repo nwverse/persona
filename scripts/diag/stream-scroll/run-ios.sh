@@ -2,8 +2,9 @@
 # Records StreamingScrollTests (docs/apple/ios-state.md "Scrolling while streaming"): builds once, then per case a fresh mock hub, a screen
 # recording of the simulator and the app's scroll trace, into $OUT/<case>.{mp4,trace.txt,log,marks,recstart}.
 #   SIM=<simulator udid> OUT=/tmp/stream-shots scripts/diag/stream-scroll/run-ios.sh [case…]
-# Env: SIM (required), OUT, PORT (mock hub, default 18831; never one another agent's mock is on), LAYOUT (shell|old),
-# STYLE (glass|beautiful), SPM (a SourcePackages directory to reuse). One RESULT line per case and one at the end.
+# Env: SIM (required), OUT, PORT (mock hub, default 18831; never one another agent's mock is on),
+# STYLE (glass|beautiful), SPM (a SourcePackages directory to reuse). Navigation follows the app's defaults.
+# One RESULT line per case and one at the end.
 set -u
 ROOT=$(cd "$(dirname "$0")/../../.." && pwd)
 SIM=${SIM:?SIM=<simulator udid>}; PORT=${PORT:-18831}; OUT=${OUT:-/tmp/stream-shots}; mkdir -p "$OUT"
@@ -27,7 +28,7 @@ for c in $CASES; do
   # The recording starts about a second before this is written (analyze.sh allows for it).
   sleep 1; python3 -c 'import time; print("%.3f" % time.time())' > "$OUT/$c.recstart"
   env TEST_RUNNER_PERSONA_MOCK_HUB=http://127.0.0.1:$PORT TEST_RUNNER_PERSONA_RUN_HUB=http://127.0.0.1:$PORT \
-    TEST_RUNNER_PERSONA_LAYOUT=${LAYOUT:-shell} TEST_RUNNER_PERSONA_UI_STYLE=${STYLE:-glass} \
+    TEST_RUNNER_PERSONA_UI_STYLE=${STYLE:-glass} \
     perl -e 'alarm 600; exec @ARGV' xcodebuild test-without-building "${COMMON[@]}" -only-testing:PersonaUITests/StreamingScrollTests/$c > "$OUT/$c.log" 2>&1
   rc=$?
   kill -INT $REC; wait $REC 2>/dev/null

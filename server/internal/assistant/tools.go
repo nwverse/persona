@@ -27,12 +27,13 @@ import (
 
 // toolNames are the tools only assistant conversations get; their descriptions and schemas are in prompts/mcp
 // (docs/assistant/prompts.md).
-var toolNames = []string{"ask_user", "notify_user", "schedule_followup", "schedule_routine", "delete_routine", "list_followups",
-	"cancel_followup", "agents_list", "agent_read", "agent_send", "agent_interrupt", "agent_start", "agent_supervise", "agent_archive", "agent_unarchive", "interaction_answer", "inbox_suggest", "inbox_draft",
+var toolNames = []string{"ask_user", "notify_user", "supervision_finish", "schedule_followup", "schedule_routine", "delete_routine", "list_followups",
+	"cancel_followup", "list_places", "save_place", "machines_list", "agents_list", "agent_read", "agent_send", "agent_interrupt", "agent_start", "agent_supervise", "agent_archive", "agent_unarchive", "interaction_answer", "inbox_suggest", "inbox_draft",
 	"kb_search", "kb_list", "kb_get", "kb_update", "persona_settings", "secret_run",
 	"model_profiles_list", "model_profile_get", "model_profile_switch", "model_profile_rollback",
 	"conversations_list", "conversation_read", "conversation_rename", "conversation_archive", "conversation_unarchive",
-	"conversation_new", "conversation_send", "task_plan", "task_review"}
+	"conversation_new", "conversation_send", "task_plan", "task_review",
+	"todo_list", "todo_get", "todo_create", "todo_update", "todo_complete", "todo_reopen", "todo_delete"}
 
 // Tools are the assistant's tools (assistant.tools).
 func (s *Service) Tools(ctx context.Context) []proto.Tool {
@@ -96,6 +97,8 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 		}
 	}
 	switch name {
+	case "supervision_finish":
+		return s.toolSupervisionFinish(ctx, self, args)
 	case "ask_user":
 		return s.toolAskUser(ctx, machine, self, args)
 	case "view_show", "view_update", "view_get":
@@ -105,13 +108,28 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 	case "model_profiles_list", "model_profile_get", "model_profile_switch", "model_profile_rollback":
 		return s.toolModelProfile(ctx, self, name, args)
 	case "task_review":
-		return s.toolTaskReview(ctx, self, args) // supervise_review.go
+		res, err := s.toolTaskReview(ctx, self, args) // supervise_review.go
+		if err == nil {
+			var a struct {
+				Verdict string `json:"verdict"`
+			}
+			if json.Unmarshal(args, &a) == nil && (a.Verdict == reviewAccepted || a.Verdict == reviewNeedsUser) {
+				s.promoteSupervision(self)
+			}
+		}
+		return res, err
+	case "todo_list", "todo_get", "todo_create", "todo_update", "todo_complete", "todo_reopen", "todo_delete":
+		return s.toolTodo(ctx, machine, self, name, args) // todo_tools.go
 	case "kb_search", "kb_list", "kb_get", "kb_update":
 		return s.toolKB(ctx, name, args)
 	case "interaction_answer":
 		return s.toolInteractionAnswer(ctx, self, args)
 	case "secret_run":
 		return s.toolSecretRun(ctx, machine, self, args) // secret_run.go
+	case "list_places":
+		return s.toolListPlaces(ctx) // places.go
+	case "save_place":
+		return s.toolSavePlace(ctx, args)
 	case "inbox_draft":
 		return s.toolInboxDraft(ctx, self, args)
 	case "inbox_suggest":
@@ -127,6 +145,7 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 		// Asked for explicitly: every device, the Feishu bot too, and no separate push when this turn ends.
 		s.push(ctx, Notification{Subtitle: "Persona", DeviceID: machine, SessionID: self, Title: a.Title, Body: a.Body, Asked: true})
 		s.channelsPushed(machine, self, a.Title, a.Body) // the Feishu bot and the channels with pushes on (channels.go)
+		s.promoteSupervision(self)
 		return "Notification sent.", nil
 	case "conversations_list":
 		return s.toolConversationsList(ctx, self, args)
@@ -165,6 +184,8 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 			return "Deleted.", nil
 		}
 		return "Cancelled.", nil
+	case "machines_list":
+		return s.toolMachinesList(ctx)
 	case "agents_list":
 		var a struct{ State, Machine, Query string }
 		_ = json.Unmarshal(args, &a)
@@ -219,8 +240,17 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 				return "", err
 			}
 		}
+		text := a.Text
+		if a.Task == nil {
+			if err := s.ensureTodosLoaded(ctx); err != nil {
+				return "", err // Unknown task ownership must not strip message provenance.
+			}
+			if assigned, ok := s.taskOf(ctx, am.ID, c.SessionID); ok && assigned.Supervision != nil && assigned.Supervision.Supervisor != self {
+				text = prompts.RenderSideConversation(prompts.SideConversation{From: self, Text: a.Text})
+			}
+		}
 		if c.Status != proto.StatusOffline {
-			if err := s.call(ctx, am.ID, DeviceSessionSend, sendParams(c.SessionID, a.Text, a.DismissNotice), nil); err != nil {
+			if err := s.call(ctx, am.ID, DeviceSessionSend, sendParams(c.SessionID, text, a.DismissNotice), nil); err != nil {
 				return "", task.sendFailed(ctx, s, err)
 			}
 			return fmt.Sprintf("Sent to %s on %s.", agentLabel(c), am.Name) + task.sent(ctx, s, a.Text), nil
@@ -229,7 +259,7 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 		// take minutes and goes on if this call stops waiting.
 		sctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Minute)
 		defer cancel()
-		if err := s.call(sctx, am.ID, DeviceSessionSend, sendParams(c.SessionID, a.Text, a.DismissNotice), nil); err != nil {
+		if err := s.call(sctx, am.ID, DeviceSessionSend, sendParams(c.SessionID, text, a.DismissNotice), nil); err != nil {
 			return "", task.sendFailed(sctx, s, err)
 		}
 		return fmt.Sprintf("Resumed %s on %s (same session, directory and launcher) and sent.", agentLabel(c), am.Name) + task.sent(sctx, s, a.Text), nil
@@ -258,11 +288,18 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 		if !ok {
 			return "", fmt.Errorf("unknown machine %q (machines: %s)", a.Machine, s.machineIDs(ctx))
 		}
+		// Refused before the user is asked: a model goes to the agent as --model (#1644).
+		if a.Model = strings.TrimSpace(a.Model); a.Model != "" && !proto.ValidModelID(a.Model) {
+			return "", fmt.Errorf("model %q is not a model id: %s; no agent was started", a.Model, proto.ModelIDRule)
+		}
 		a.Cwd = proto.ExpandHome(a.Cwd, am.Home)
 		branch := strings.TrimSpace(a.Worktree.Branch)
 		where := am.Name + " · " + a.Cwd
 		if branch != "" {
 			where += i18n.T(s.lang(ctx), "assistant-tools.new_worktree", i18n.Args{"branch": branch})
+		}
+		if a.Model != "" { // the user sees what it will run on before saying yes
+			where += i18n.T(s.lang(ctx), "assistant-tools.with_model", i18n.Args{"model": a.Model})
 		}
 		if a.Ultracode {
 			where += " · ultracode"
@@ -328,6 +365,7 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 			}
 			return "", err
 		}
+		s.recordStartSuccess(ctx, am.ID, launcher)
 		s.inboxAgentStarted(ctx, self, am.ID, res.Session.SessionID, a.Prompt) // an inbox event's conversation: its chain
 		if s.quietAgentTask(ctx, self, am, a.Cwd, a.Prompt, params["tab_name"], res.Session.SessionID) {
 			return fmt.Sprintf("Started on %s in %s: session %s, a task of this conversation (its card is in the conversation; "+
@@ -445,8 +483,8 @@ func (s *Service) adoptStartedSession(ctx context.Context, m Device, launcher, c
 // askUserWait is how long an ask_user card waits for the user. It is longer than the Lark nudge's default wait
 // (assistantwire.NudgeAfterDefault), so an owner who is away is nudged while the question still waits (#9); the
 // turn that asked is held for as long, which is why the user speaking in the conversation withdraws the question
-// (withdrawAskUser).
-const askUserWait = 2 * time.Hour
+// (withdrawAskUser). A question nobody answers in it becomes a to-do (ask_todo.go). A variable for the tests.
+var askUserWait = 2 * time.Hour
 
 // question is an ask_user waiting for the user: the card the hub shows, and where the answer goes.
 type question struct {
@@ -494,6 +532,7 @@ func (s *Service) toolAskUser(ctx context.Context, machine, sessionID string, ar
 	if proto.HasDuplicateQuestionText(ix.Questions) {
 		return "", i18n.Err("hub-hub.duplicate_question")
 	}
+	s.promoteSupervision(sessionID)
 	r, err := s.ask(ctx, ix)
 	if errors.Is(err, errUserSpoke) {
 		return prompts.RenderQuestionUserSpoke(), nil
@@ -503,6 +542,13 @@ func (s *Service) toolAskUser(ctx context.Context, machine, sessionID string, ar
 	}
 	if r.Cancel {
 		return prompts.RenderQuestionCancelled(), nil
+	}
+	if s.askExpiredResolution(ix, r) { // nobody answered in time: it waits as a to-do (ask_todo.go)
+		t, err := s.askExpired(context.WithoutCancel(ctx), ix)
+		if err == nil {
+			return prompts.RenderQuestionMovedToTodo(prompts.QuestionMovedToTodo{TodoID: t.ID, Title: t.Title}), nil
+		}
+		s.logf("ask_user %s: expired, and no to-do could be made: %v", ix.ID, err)
 	}
 	if r.Dismiss || len(r.Answers) == 0 {
 		return "The user did not answer (dismissed or timed out). Don't go ahead with what you asked about; say what is waiting for them.", nil

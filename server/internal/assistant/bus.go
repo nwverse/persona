@@ -513,6 +513,12 @@ func (b *BusHub) request(ctx context.Context, method string, params json.RawMess
 	case assistantwire.MethodAgentStartParams, assistantwire.MethodAgentResumeParams, assistantwire.MethodAgentTabName:
 		return b.agentRequest(ctx, s, method, decode) // agents_bus.go
 	// The channels' (channels.go, feishu.go).
+	case assistantwire.MethodChannelUnbound:
+		var p ChannelUnbound
+		if err := decode(&p); err != nil {
+			return nil, err
+		}
+		return map[string]any{}, s.ChannelUnbound(ctx, p)
 	case assistantwire.MethodChannelReceive:
 		var p ChannelReceive
 		if err := decode(&p); err != nil {
@@ -543,6 +549,9 @@ func (b *BusHub) request(ctx context.Context, method string, params json.RawMess
 		return s.askHub(ctx, p.Interaction)
 	}
 	if out, ok, err := s.kbRequest(ctx, method, params); ok { // the knowledge base's (kb_bus.go)
+		return out, err
+	}
+	if out, ok, err := s.conversationsRequest(ctx, method, params); ok { // extensions' assistant.read (conversations_rpc.go)
 		return out, err
 	}
 	if out, ok, err := inboxRequest(ctx, s, method, decode); ok { // the inbox's (inbox_bus.go)
@@ -688,6 +697,12 @@ func (b *BusHub) event(ctx context.Context, ev busEvent) error {
 			return err
 		}
 		s.SessionsChanged(ctx, p)
+	case assistantwire.EventStartEnded:
+		var p StartEnded
+		if err := decode(&p); err != nil {
+			return err
+		}
+		go s.StartEnded(context.WithoutCancel(ctx), p)
 	case assistantwire.EventInteractionResolved:
 		var p InteractionResolved
 		if err := decode(&p); err != nil {
@@ -724,6 +739,12 @@ func (b *BusHub) event(ctx context.Context, ev busEvent) error {
 			return err
 		}
 		s.SessionSeen(ctx, p)
+	case assistantwire.EventModelUsed: // a typed model id ran (models_custom.go); may ask the node for its list
+		var p assistantwire.ModelUsed
+		if err := decode(&p); err != nil {
+			return err
+		}
+		go s.ModelUsed(context.WithoutCancel(ctx), p)
 	case assistantwire.EventTodoSpaceRenamed:
 		var p TodoSpaceRenamed
 		if err := decode(&p); err != nil {

@@ -116,6 +116,10 @@ POST /api/v1/machines/{id}/confirm
 POST /api/v1/machines/{id}/reject
 POST /api/v1/machines/{mid}/doctor/fix
 POST /api/v1/machines/{mid}/files
+POST /api/v1/machines/{mid}/files/move
+POST /api/v1/machines/{mid}/files/rename
+POST /api/v1/machines/{mid}/files/restore
+POST /api/v1/machines/{mid}/files/trash
 POST /api/v1/machines/{mid}/git/commit
 POST /api/v1/machines/{mid}/git/pr
 POST /api/v1/machines/{mid}/git/pr/merge
@@ -124,6 +128,7 @@ POST /api/v1/machines/{mid}/git/push
 POST /api/v1/machines/{mid}/git/stage
 POST /api/v1/machines/{mid}/git/stash
 POST /api/v1/machines/{mid}/git/switch
+POST /api/v1/machines/{mid}/node-update/{action}
 POST /api/v1/machines/{mid}/panes
 POST /api/v1/machines/{mid}/panes/agent
 POST /api/v1/machines/{mid}/panes/close

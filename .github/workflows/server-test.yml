@@ -4,6 +4,9 @@ on:
   workflow_dispatch:
 permissions:
   contents: read
+concurrency:
+  group: server-${{ github.event.pull_request.head.repo.full_name || github.repository }}-${{ github.head_ref || github.ref_name }}-server
+  cancel-in-progress: true
 jobs:
   server:
     name: Server ${{ matrix.shard }}
@@ -11,6 +14,7 @@ jobs:
     timeout-minutes: 15
     strategy:
       fail-fast: false
+      max-parallel: 2
       matrix:
         shard: [node, managers, other, build]
     env:
@@ -34,5 +38,9 @@ jobs:
           restore-keys: |
             server-go-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.go.outputs.go-version }}-${{ matrix.shard }}-${{ hashFiles('server/go.sum', 'sdk/go/go.sum') }}-
             server-go-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.go.outputs.go-version }}-${{ matrix.shard }}-
+      - uses: oven-sh/setup-bun@v2
+        if: matrix.shard == 'other'
+        with:
+          bun-version: '1.4.2'
       - name: Server checks
         run: scripts/ci/server.sh "$CI_SERVER_SHARD"

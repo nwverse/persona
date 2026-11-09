@@ -2,11 +2,11 @@ package transcript
 
 import (
 	"encoding/json"
-	"regexp"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
@@ -17,16 +17,16 @@ import (
 // …\nRun ID: wf_…"; a Monitor "Monitor started (task bqke1prjm, expires in 30m unless …)".
 var (
 	// agentId needs its colon: newer results first warn about "the agentId below", whose next word is not the id.
-	bgIDRe     = regexp.MustCompile(`(?:running in background with ID:?|agentId:|in background\. Task ID:?|Monitor started \(task:?)\s*([A-Za-z0-9_-]+)`)
-	wfRunRe    = regexp.MustCompile(`(?m)^Run ID:\s*(wf_[A-Za-z0-9_-]+)`)
-	wfSumRe    = regexp.MustCompile(`(?m)^Summary:\s*(.+)$`)
-	wfScriptRe = regexp.MustCompile(`(?m)^Script file:\s*(\S+\.js)\s*$`)
-	wfDirRe    = regexp.MustCompile(`(?m)^Transcript dir:\s*\S*/(wf_[A-Za-z0-9_-]+)\s*$`)
-	wfNameRe   = regexp.MustCompile("\\bname:\\s*['\"`]([^'\"`\\n]+)['\"`]")
-	expiresRe  = regexp.MustCompile(`expires in (\d+)(ms|s|m|h)\b`)
-	wakeInRe   = regexp.MustCompile(`Next wakeup scheduled for [^(]*\(in (\d+)s\)`)
-	bgMovedRe  = regexp.MustCompile(`moved to the background \(ID: ([A-Za-z0-9_-]+)\)`) // a foreground command that timed out
-	bgOutputRe = regexp.MustCompile(`Output is being written to:\s*(\S+?)\.?(?:\s|$)`)
+	bgIDRe     = lazyre.New(`(?:running in background with ID:?|agentId:|in background\. Task ID:?|Monitor started \(task:?)\s*([A-Za-z0-9_-]+)`)
+	wfRunRe    = lazyre.New(`(?m)^Run ID:\s*(wf_[A-Za-z0-9_-]+)`)
+	wfSumRe    = lazyre.New(`(?m)^Summary:\s*(.+)$`)
+	wfScriptRe = lazyre.New(`(?m)^Script file:\s*(\S+\.js)\s*$`)
+	wfDirRe    = lazyre.New(`(?m)^Transcript dir:\s*\S*/(wf_[A-Za-z0-9_-]+)\s*$`)
+	wfNameRe   = lazyre.New("\\bname:\\s*['\"`]([^'\"`\\n]+)['\"`]")
+	expiresRe  = lazyre.New(`expires in (\d+)(ms|s|m|h)\b`)
+	wakeInRe   = lazyre.New(`Next wakeup scheduled for [^(]*\(in (\d+)s\)`)
+	bgMovedRe  = lazyre.New(`moved to the background \(ID: ([A-Za-z0-9_-]+)\)`) // a foreground command that timed out
+	bgOutputRe = lazyre.New(`Output is being written to:\s*(\S+?)\.?(?:\s|$)`)
 )
 
 func (m *Meta) trackBackground(toolUseID, name string, raw json.RawMessage, ts time.Time) {
