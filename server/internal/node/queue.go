@@ -5,10 +5,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"regexp"
 	"strings"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/rpc"
 )
 
@@ -69,7 +69,7 @@ var sendNowHints = []struct {
 }
 
 // otherSendNowRE is a send-now hint naming keys that are not in sendNowHints, for the refusal to quote.
-var otherSendNowRE = regexp.MustCompile(`(?:\S+\+\S+ )+to send now`)
+var otherSendNowRE = lazyre.New(`(?:\S+\+\S+ )+to send now`)
 
 // sendNowOffer is the send-now hint the screen shows beside a queued message and the keys it names: no keys for a hint
 // Persona does not know, "" for none.
