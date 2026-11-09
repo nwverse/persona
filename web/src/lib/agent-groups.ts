@@ -25,11 +25,16 @@ export function agentGrouping(value: string | null): AgentGrouping {
 // the host kinds a pane ref may be prefixed with (keep in step with Kinds in server/internal/host/host.go); herdr's ids go bare and may hold a colon
 const HOST_KINDS = ["orca", "herdr-core", "botmux"];
 
-/** The host tool a session lives in, from its pane ref (`botmux:…`, `orca:…`; anything else is herdr's); "" for none. */
-export function sessionHost(s: Session): string {
-  if (!s.pane_id) return "";
-  const kind = s.pane_id.slice(0, s.pane_id.indexOf(":"));
+/** The host tool a pane belongs to, from its ref (`botmux:…`, `orca:…`; anything else is herdr's); "" for none. */
+export function paneHost(pane: string | undefined): string {
+  if (!pane) return "";
+  const kind = pane.slice(0, pane.indexOf(":"));
   return HOST_KINDS.includes(kind) ? kind : "herdr";
+}
+
+/** The host tool a session lives in, from its pane ref; "" for none. */
+export function sessionHost(s: Session): string {
+  return paneHost(s.pane_id);
 }
 
 /** Where an agent was opened (#2526): "feishu" for a botmux session (a Feishu group's topic), "terminal" for a pane of a

@@ -732,6 +732,7 @@ hub → browser: `herdr_state {id, state: "open", cols, rows}`, `herdr_data {id,
 - **Inactive**: retained but hidden terminals (`inert`) and fading-out views release computer clients (don't occupy four slots or compete for layout), reconnect when shown.
 - **Automatic Single pane fallback**: view ends **before ever connecting** (`unsupported`, `forbidden`, `too_many`, immediate client exit… except offline). Show "Full view couldn't open: reason. Switched to Single pane" and switch;
   remember machine unsupported for this page's lifetime, other terminals on it use Single pane immediately (manually selecting Full view retries).
+- **Terminals of other hosts** (#2449): Full view is herdr's own client, so a terminal of any other host (a botmux session, in botmux's own tmux) is never in it. Its panel opens as Single pane with no switch (`inHerdrClient`, from the session's `pane_id` or the `pane:` address).
 - **First-use hint**: once on first connection: "Full view is herdr's own client. Operations here lay out the computer's panes at this panel's size; operating on the computer changes them back." (`persona.terminal.fullHint`).
 
 ### Two clients on one session
