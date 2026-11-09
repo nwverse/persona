@@ -175,3 +175,20 @@ describe("Settings > Claude Code, two saves at once", () => {
     expect(sw("optB").disabled).toBe(true);
   });
 });
+
+describe("Settings > Claude Code, live replies (#1309)", () => {
+  const liveGet = () => calls.filter((c) => c.method === "GET" && c.path.endsWith("/claude-live-replies"));
+
+  it("has the live replies switch for the shown computer under Claude Code only", async () => {
+    await loaded();
+    expect(liveGet().map((c) => c.path)).toEqual(["/machines/m-1/claude-live-replies"]);
+    await answer(liveGet()[0], { on: true });
+    expect(sw(t("settings-livereplies.label")).getAttribute("aria-checked")).toBe("true");
+
+    act(() => root.unmount());
+    root = createRoot(host);
+    calls.length = 0;
+    await act(async () => root.render(<AgentSettings agent="codex" />));
+    expect(liveGet()).toEqual([]);
+  });
+});

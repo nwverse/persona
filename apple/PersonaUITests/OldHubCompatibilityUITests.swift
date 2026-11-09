@@ -16,7 +16,7 @@ final class OldHubCompatibilityUITests: XCTestCase {
             throw XCTSkip("requires an explicitly supplied isolated pre-rename fixture hub")
         }
         let app = XCUIApplication()
-        let open = ["-openSession", session, "-ui.scheme", appearance, "-ui.oldLayout", "YES", "-dev.openChat", ""]
+        let open = ["-openSession", session, "-ui.scheme", appearance, "-dev.openChat", ""]
         app.launchArguments = ["-pairURL", pair, "-openChatsFresh", "YES"] + open
         app.launchPinned()
         dismissSystemAlerts()
@@ -47,7 +47,7 @@ final class OldHubCompatibilityUITests: XCTestCase {
         app.terminate()
 
         app.launchArguments = ["-pairURL", pair, "-app.tab", "assistant", "-tab", "assistant", "-openAssistant", main,
-                               "-ui.scheme", appearance, "-ui.oldLayout", "YES"]
+                               "-ui.scheme", appearance]
         app.launchPinned()
         dismissSystemAlerts()
         XCTAssertTrue(app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "echo: Compatibility main screenshot fixture")).firstMatch.waitForExistence(timeout: 30),

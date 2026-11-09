@@ -2,6 +2,7 @@ import { canonicalAppURL } from "../lib/compatibility";
 // Pure helpers behind the admin pages, kept apart so they can be tested without a browser.
 import { formatDate, formatLocale, t } from "../i18n";
 import type { UIItem } from "../lib/extension-ui";
+import { clock } from "../lib/format";
 import type { Access, AdminMachine, AdminExtension, Device, DoctorItem, ExtensionMetrics, LogLine, MeshHub, MeshView, MetricsWindow, Peer, PeerProbe, Restart } from "./types";
 
 // ── access scope (docs/operations/admin.md "Access scope") ──────────────
@@ -352,8 +353,19 @@ export function extensionStatus(p: Pick<AdminExtension, "status">): { tone: "gre
 }
 
 // extensionRunNote: whether an enabled extension's program runs right now (the details' small print); "" otherwise.
-export function extensionRunNote(p: Pick<AdminExtension, "status">): string {
+export function extensionRunNote(p: Pick<AdminExtension, "status" | "attached">): string {
+  if (p.attached) return attachedRunNote(p.status, p.attached);
   return p.status === "running" ? t("admin-logic.run_running") : p.status === "stopped" ? t("admin-logic.run_stopped") : "";
+}
+
+// attachedRunNote: online or offline since when, and why while it is still reconnecting (its status says no error yet).
+function attachedRunNote(status: string, a: NonNullable<AdminExtension["attached"]>): string {
+  if (status === "disabled") return "";
+  const time = clock(a.since);
+  if (!time) return status === "stopped" ? t("admin-logic.run_attached_idle") : "";
+  if (a.online) return t("admin-logic.run_attached_online", { time });
+  if (status === "starting") return a.error ? t("admin-logic.run_attached_reconnecting_why", { time, why: a.error }) : t("admin-logic.run_attached_reconnecting", { time });
+  return t("admin-logic.run_attached_offline", { time });
 }
 
 export function extensionSourceLabel(source?: string): string {

@@ -3,6 +3,9 @@ import { t } from "../../i18n";
 import { Button, cx, EASE } from "../../ui/atoms";
 import { Icon, type IconName } from "../../ui/icons";
 
+export const settingsInputClass =
+  "h-8 w-full rounded-control bg-field px-2.5 text-[12.5px] text-ink shadow-inset-field outline-none placeholder:text-ink-3 focus:shadow-[inset_0_0_0_1px_var(--accent)] disabled:opacity-60";
+
 export function Group({ title, footer, children, right }: { title?: React.ReactNode; footer?: React.ReactNode; children: React.ReactNode; right?: React.ReactNode }) {
   return (
     <section className="mb-6">
@@ -82,7 +85,8 @@ export function RowConfirm({ open, trigger, confirm, busy, onCancel, onConfirm }
 
 const FOCUSABLE = 'a[href], button:not([disabled]), input:not([disabled]):not([type="hidden"]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
 
-export function Row({ label, hint, children, onClick, mono, icon }: { label: React.ReactNode; hint?: React.ReactNode; children?: React.ReactNode; onClick?: () => void; mono?: boolean; icon?: IconName }) {
+/** `wrapHint`: the hint wraps onto more lines instead of being cut at one (a sentence that says what the row does). */
+export function Row({ label, hint, children, onClick, mono, icon, wrapHint }: { label: React.ReactNode; hint?: React.ReactNode; children?: React.ReactNode; onClick?: () => void; mono?: boolean; icon?: IconName; wrapHint?: boolean }) {
   const body = (
     <>
       {icon && (
@@ -92,7 +96,7 @@ export function Row({ label, hint, children, onClick, mono, icon }: { label: Rea
       )}
       <div className="min-w-0 flex-1">
         <div className="truncate text-[13px] text-ink">{label}</div>
-        {hint && <div className="mt-0.5 truncate text-[11.5px] text-ink-3">{hint}</div>}
+        {hint && <div className={cx("mt-0.5 text-[11.5px] text-ink-3", wrapHint ? "leading-snug" : "truncate")}>{hint}</div>}
       </div>
       {children !== undefined && <div className={cx("flex min-w-0 shrink-0 items-center gap-2 text-[12.5px] text-ink-2", mono && "font-mono")}>{children}</div>}
       {onClick && <Icon name="chevronRight" size={12} stroke={2} className="shrink-0 text-ink-3" />}
@@ -104,6 +108,18 @@ export function Row({ label, hint, children, onClick, mono, icon }: { label: Rea
     </button>
   ) : (
     <div className="flex items-center gap-3 px-4 py-2.5">{body}</div>
+  );
+}
+
+/** A group's content that could not be read: what went wrong, and a button to read it again. */
+export function RowFailed({ text, retry, onRetry }: { text: React.ReactNode; retry: string; onRetry: () => void }) {
+  return (
+    <div className="flex items-center gap-3 px-4 py-3">
+      <p className="min-w-0 flex-1 text-[12.5px] text-red">{text}</p>
+      <Button tone="secondary" icon="retry" onClick={onRetry}>
+        {retry}
+      </Button>
+    </div>
   );
 }
 

@@ -18,6 +18,7 @@ Pitfalls, unusual behavior, and the trade-offs made at the time (originally in "
 - Only a response paginated from the newest end knows "whether there are earlier messages" (`has_more`). Subscription catch-up with since_seq used to send `has_more: false`;
   if it arrived before the first HTTP page, the App assumed it had reached the start of history and stopped upward scrolling at the earliest loaded message (2026-10-26). The hub now omits this field in catch-up,
   and the App treats its absence as unknown. A batch that does not cover the earliest local message must not set it to false either. Reproduce with `-showScrollToOldest YES`, scrolling all the way up while logging.
+- A runtime rewatch's eight-page replay cap needs the same `more_after` recovery marker as the hub's HTTP backlog, propagated through the live `session.items` path too. Without it, contiguous batches look complete and a reconnect leaves everything after page eight missing until another append (#1621).
 - When the chat page is "not following," the list freezes at the messages present at that moment (`frozen`, so content stays still while scrolling up). Only a **change** in the bottom sentinel's visibility enables following. If the landing point (the last read position,
   or the start of an unread reply) is on the last screen, landing already puts the list at the bottom. The sentinel stays visible and never changes; later replies are all held back, with no "Back to latest" either (2026-10-31, TestFlight 50/51:
   "stuck on the message I sent"). Rule: if the list is at the newest end and no finger is down, it must follow (`landed` / `contentArrived`). Run `ChatFollowTests` when changing follow logic.
@@ -105,5 +106,5 @@ A view that fetches once per id cannot recover when the store puts the same id b
   an agent started normally must keep whatever its launcher decided.
 - Symptom to recognize: a pane whose Claude works and herdr reports an id, and a `sessions/<pid>.json` that names a session
   id whose `projects/…/<id>.jsonl` never appears. (The pid file has no transcript path; node derives it from the session id —
-  `transcriptPath` in `node/sessions.go` looks for `<config dir>/projects/*/<id>.jsonl`.) Check the node's own environment
+  `transcriptPath` in `node/transcript_files.go` looks for `<config dir>/projects/*/<id>.jsonl`.) Check the node's own environment
   for the child flag first (`/proc/<pid>/environ`, on macOS `KERN_PROCARGS2`), then the pane shell's.

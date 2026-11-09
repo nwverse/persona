@@ -32,6 +32,35 @@ How computers connect:
 - **ssh**: mount the NAS user's `~/.ssh` read-only into the container (there's a commented-out line in compose). It must contain the private key, the aliases in `config`, and `known_hosts`
   (the hub uses `BatchMode=yes`, so an unknown host just fails instead of prompting).
 
+## The hub and the built-in manager in one container
+
+The hub container runs two programs side by side: the hub (`persona-hub run`) and the built-in manager (`persona-manager assistant` with `PERSONA_ASSISTANT_DEPLOY=service`, [managers.md](../assistant/managers.md) ("The built-in manager as its own service")). Neither starts the other. The image's command goes through `personad supervise` (`server/internal/supervise`), a small supervisor that does the following:
+
+- **Mode check.** It reads `assistant.mode` in `hub.json` when the container starts. A new install's `hub.json` (written on first start) says `service`. Without it (a `hub.json` from before, or `child`), or with `assistant.external`, the supervisor becomes the hub itself (exec), and the hub starts the built-in manager as its child, exactly as before.
+- **Binding.** Before it starts the built-in manager, it binds it unless its binding works. The binding is a one-time code made in the hub's database (as `persona-hub manager-code` does), traded over loopback once the hub answers its health check. A failed binding is logged and tried again after 10 seconds, the wait doubling up to 5 minutes while it keeps failing; the hub runs meanwhile.
+- **Restarts.** A program that stops is started again, and the other is left running. The pause before the restart starts at 1 second and doubles, up to 30 seconds, while the program keeps stopping within a minute of its start. A hub that exits on purpose (the admin page's restart) comes back the same way. Each program runs in a session of its own. When it stops, even after a crash, whatever is left in that session is killed, its extensions' programs too, so that the program started again doesn't find the old ones still running.
+- **Stopping.** On `docker stop` both get SIGTERM and are killed if still running after the hub's shutdown budget and a second more: 9 seconds by default, inside Docker's own stop timeout (10 seconds). With a longer `shutdown_timeout_seconds` in `hub.json`, raise compose's `stop_grace_period` with it, or Docker kills the container first. The supervisor reads it when the container starts, so a change takes effect with the container's next start.
+- **Logs.** `docker compose logs hub` has both programs' lines, interleaved as they come. The supervisor's lines start with `supervise:`.
+
+**Older installs keep the hub's child** until you switch. Switch with `docker compose exec hub personad hub manager-mode service`, then `docker compose restart hub`. Step by step, with backups, checks and the way back: [upgrade.md](upgrade.md). To go back, use `manager-mode child` and restart. The supervisor decides when the container starts. If the hub starts again on its own (the admin page's restart) after the mode or its `listen` address changed in `hub.json`, the supervisor stops everything and says why, so that Docker starts the container again and the new mode takes effect.
+
+**Going back to an image from before this one** on an install in service mode (every install made with this image) leaves nothing to run the built-in manager: that image's hub doesn't start it, and it has no supervisor. First `docker compose exec hub personad hub manager-mode child`, then change the image.
+
+### Programs
+
+The image carries `persona-hub` and `persona-manager` beside `personad`, all of one build ([server.md](../server/server.md) ("Programs")). The supervisor runs the hub as `persona-hub run`, also when it becomes the hub (then the hub starts its child as `persona-manager assistant`), and the built-in manager as `persona-manager assistant`, here and in a container of its own. One that is not there, or answers `version -v` otherwise than `personad`, is passed over, the second with a `supervise:` line saying why, and `personad` runs that part (`personad hub run`, `personad assistant`).
+
+`PERSONA_SPLIT_PROGRAMS=0` in `.env` keeps both on `personad`, as older images ran them; compose passes it to the hub's container (and to the commented `manager` service). Then `docker compose up -d`. Commands you run yourself (`docker compose exec hub personad …`) are `personad`'s either way, and the hub, its data and its binding are the same with either program. `docker compose exec hub ps -o args` shows which programs run.
+
+### The built-in manager in a container of its own
+
+`compose.yaml` has a commented `manager` service: the same image running `supervise --manager-only --hub http://hub:18660`. To use it:
+
+1. Uncomment it.
+2. Set `PERSONA_BUILTIN_MANAGER: separate` on the hub service, so that the hub's container runs the hub alone.
+
+It shares the hub's data folder (mounted at both of the hub container's paths) and database. It waits while `hub.json` doesn't say `service` (read again before each start), and binds itself to the hub over the compose network (a private address, which the hub counts as local). Like the side-by-side setup, it restarts the manager when it stops. Two built-in managers never run on one data folder: the second one stops with exit status 2 (a lock in `data/managers/assistant/`), and its supervisor tries it again later.
+
 ## Image
 
 `ghcr.io/<owner>/persona` (the image name follows the repo: `<owner>` is the account or organization that owns the repo, `persona` is the repo name; put it in `PERSONA_IMAGE` in `.env`), linux/amd64 and linux/arm64, built by `.github/workflows/hub-image.yml`:
@@ -65,7 +94,7 @@ The hub in the image is on the `docker` channel: it never replaces its own binar
 To be clear first: **the NAS is only the hub; the AI doesn't work on the NAS**. The image has no Claude Code, so the assistant and Agents all run on another computer of yours. After installing the hub you still need to add a computer (step 5 below); until then the App can pair and browse, but the main chat can't start.
 
 1. On the NAS, create a directory (e.g. `/volume1/docker/persona`) with a `data` subdirectory inside, both created with the NAS's file manager: if `data/` belongs to you, the hub's files belong to you (if Docker creates `data/` itself, it belongs to root, and then all files belong to 1000; see the table below). Put `deploy/docker/compose.yaml` and `deploy/docker/.env.example` in the directory, rename the latter to `.env`, and fill in two lines:
-   - `PERSONA_IMAGE`: the image, `ghcr.io/<owner>/persona:latest` (see "Image" above; for a private image, `docker login ghcr.io` first).
+   - `PERSONA_IMAGE`: the image, `ghcr.io/<owner>/persona:latest` (see "Image" above; for a private image, `docker login ghcr.io` first). An older `.env` that has only the image's former variable keeps working. With neither, `docker compose` stops with `service "hub" has neither an image nor a build context specified`.
    - `PERSONA_PUBLIC_URL`: how the phone reaches this NAS, usually `http://<NAS LAN address>:18660`.
 2. Run `docker compose up -d` in that directory.
 3. Pair the phone: `docker compose exec hub personad hub pair`, and scan the QR code in the terminal with the App.
@@ -128,11 +157,54 @@ then `docker compose restart hub`.
 | `PERSONA_NODE_BINARIES` | Where node builds of the hub's version for **Redeploy** are put (default `~/.persona/bin/nodes`, in the image `data/bin/nodes` of the data volume); see "Node builds" |
 | `PERSONA_NODE_BUNDLED` | The image's own build (`/opt/persona/nodes`, set in the image) |
 | `PERSONA_NODE_PACKAGES` | Where the other node builds are fetched from: a release's `dl/` or a mirror of it, `off` for never (overrides hub.json's `node_packages.url`; see "Node builds") |
+| `PERSONA_SPLIT_PROGRAMS=0` | Run the hub and the built-in manager on `personad` rather than as `persona-hub` and `persona-manager`; see "Programs" |
 | `PUID` / `PGID`, `TZ` | See above (when `PUID` / `PGID` are unset, the owner of `data/` is used) |
 | `PERSONA_IMAGE`, `PERSONA_POSTGRES_IMAGE`, `PERSONA_PORT`, `PERSONA_TLS_PORT` | Used by compose: where to pull the two images from, and which host ports the hub's HTTP / TLS ports map to. `PERSONA_IMAGE` is also passed into the hub container: the hub checks its tags for a newer image (see "Upgrading" below) |
 | `PERSONA_REGISTRY_TOKEN` | For a private image, a token that can read it (GitHub: a Personal Access Token with `read:packages`); the hub uses it to check for new images. Not needed for public images |
+| `PERSONA_POSTGRES_HEALTHCHECK_*`, `PERSONA_HUB_HEALTHCHECK_*`, `PERSONA_POSTGRES_SYNCHRONOUS_COMMIT`, `PERSONA_POSTGRES_WAL_COMPRESSION`, `PERSONA_POSTGRES_CHECKPOINT_TIMEOUT`, `PERSONA_POSTGRES_WAL_WRITER_DELAY`, `PERSONA_LOG_*` | Used by compose: how often the containers are checked, how Postgres flushes its log, and where container logs go; see "Disk writes" below |
 
 The native method also honors these variables (e.g. systemd's `Environment=`), but normally doesn't need them.
+
+## Disk writes
+
+Some hosts pay heavily for every `fsync`: a NAS volume on a single SSD formatted btrfs (copy-on-write, metadata kept twice) turns each one into several metadata writes, so how often things are flushed matters more than how many bytes are written. Two flushers dominate:
+
+- **Postgres commits.** With `synchronous_commit=on` every commit waits for its WAL to be flushed, and a hub in everyday use commits often (one measured install: about 125 commits a minute).
+- **Health checks.** dockerd rewrites and fsyncs a container's state file on every health check run (about 1 MB a run on btrfs): the postgres check runs every 5 s, the hub's every 30 s.
+
+`compose.yaml` takes all of these from `.env`. Every default is what compose did before, or PostgreSQL's own default, so nothing changes until you set one; Postgres settings take effect when the container is recreated (`docker compose up -d`), health checks and logging likewise.
+
+| Variable | Default | What it does and what it costs |
+| --- | --- | --- |
+| `PERSONA_POSTGRES_HEALTHCHECK_INTERVAL` | `5s` | How often `pg_isready` runs. Longer: fewer state rewrites, but a stuck database is noticed later, and the hub's start waits longer, as compose starts it only once postgres has passed a check (`service_healthy`; the first check runs one interval after postgres starts, so `docker compose up` waits about one interval more) |
+| `PERSONA_POSTGRES_HEALTHCHECK_TIMEOUT` | `5s` | How long one check may take |
+| `PERSONA_POSTGRES_HEALTHCHECK_RETRIES` | `30` | Failed checks in a row before postgres is unhealthy. Interval × retries is how long a slow start (crash recovery included) may take before `docker compose up` gives up on the hub: keep it at a few minutes |
+| `PERSONA_HUB_HEALTHCHECK_INTERVAL`, `PERSONA_HUB_HEALTHCHECK_TIMEOUT`, `PERSONA_HUB_HEALTHCHECK_RETRIES` | `30s`, `5s`, `3` | The same for the image's own hub check (its 60 s start period stays). Only `docker ps` and a separate manager container (`depends_on: hub`) look at it |
+| `PERSONA_POSTGRES_SYNCHRONOUS_COMMIT` | `on` | `off`: a commit returns before its WAL is flushed and the WAL writer flushes in batches. A crash of the machine or of Postgres can lose the last commits (at most three times `wal_writer_delay`: 0.6 s by default, 3 s with `1s`), which the hub had already answered for. The database stays consistent: nothing is corrupted or half-written, it just comes back as of slightly earlier. A clean `docker compose stop` or restart loses nothing |
+| `PERSONA_POSTGRES_WAL_WRITER_DELAY` | `200ms` | How often the WAL writer flushes. With `synchronous_commit=off` this sets how many commits share one flush and how much a crash can lose; with `on` it matters little |
+| `PERSONA_POSTGRES_CHECKPOINT_TIMEOUT` | `5min` | Longest time between checkpoints. Longer: fewer checkpoints, and fewer full page images in the WAL after each, at the cost of a longer crash recovery (replaying up to that much WAL, usually seconds on an SSD). Checkpoints still come sooner when `max_wal_size` (1 GB) fills |
+| `PERSONA_POSTGRES_WAL_COMPRESSION` | `off` | `lz4` (or `pglz`, `zstd`) compresses the full page images in the WAL: fewer bytes for a little CPU. The official `postgres:18-alpine` image is built with lz4 and zstd |
+| `PERSONA_LOG_DRIVER` | `json-file` | The containers' log driver: `json-file` or `local` (Docker's compact format, compressed). `docker compose logs` reads both. Other drivers reject the size options below, so the containers would not start |
+| `PERSONA_LOG_MAX_SIZE`, `PERSONA_LOG_MAX_FILE` | `10m`, `3` | Size of one log file and how many are kept per container |
+
+The Postgres settings are passed on its command line (`postgres -c …`), which wins over `ALTER SYSTEM` and `postgresql.conf`: a setting made with `ALTER SYSTEM` is ignored while compose passes the same one. Check what is in effect with `docker compose exec postgres psql -U <user> -c "SELECT name, setting, source FROM pg_settings WHERE name IN ('synchronous_commit', 'wal_compression', 'checkpoint_timeout', 'wal_writer_delay')"` (`source` says `command line`), and drop old ones with `ALTER SYSTEM RESET <name>`. An invalid value stops postgres from starting; `docker compose logs postgres` names it.
+
+The logging block replaces the Docker daemon's default driver for these two containers. Synology's Container Manager defaults to its own `db` driver and its **Log** tab shows only what that driver keeps: with this compose file the tab stays empty, and `docker compose logs` (or `docker logs`) shows the logs instead. Before, the daemon's default applied, which on most Linux hosts is `json-file` without a size limit.
+
+For a write-sensitive host (btrfs, a single SSD, SD cards), these keep the database consistent and cut its WAL flushes to about one a second and the health check rewrites to two a minute:
+
+```sh
+PERSONA_POSTGRES_HEALTHCHECK_INTERVAL=60s
+PERSONA_POSTGRES_HEALTHCHECK_RETRIES=5
+PERSONA_HUB_HEALTHCHECK_INTERVAL=60s
+PERSONA_POSTGRES_SYNCHRONOUS_COMMIT=off
+PERSONA_POSTGRES_WAL_WRITER_DELAY=1s
+PERSONA_POSTGRES_CHECKPOINT_TIMEOUT=15min
+PERSONA_POSTGRES_WAL_COMPRESSION=lz4
+PERSONA_LOG_DRIVER=local
+```
+
+With them a crash can lose up to about 3 s of the hub's last writes, a stuck database or hub shows up within a few minutes, and `docker compose up` waits up to a minute more for postgres.
 
 ## Node builds
 
@@ -171,6 +243,7 @@ Upgrading from 0.1.1 or earlier, the App won't prompt; switch manually: back the
 `ghcr.io/<owner>/persona`, and the old name won't get new versions. Change `PERSONA_IMAGE` in `.env` to the new name and version, replace `compose.yaml` with the new one
 (it passes `PERSONA_IMAGE` and `PERSONA_REGISTRY_TOKEN` to the hub, which is what lets later versions be announced), then run the command above.
 To set where node builds are fetched from with `PERSONA_NODE_PACKAGES` in `.env` (see "Node builds"), take the new `compose.yaml` as well: an older one does not pass it to the hub (`node_packages` in hub.json works either way).
+A new image doesn't change how the built-in manager runs on an existing install. Its `hub.json` keeps the hub's child until you switch (see "The hub and the built-in manager in one container"). An older `compose.yaml` works unchanged with either mode.
 
 ## Network
 

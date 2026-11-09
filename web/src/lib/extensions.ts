@@ -9,6 +9,7 @@ import { refreshExtensionPlaces } from "./extension-slots";
 import { EXTENSIONS_CHANGED } from "./extension-prompts";
 import type { Contribution, DependencyState, PackMember } from "./extension-model";
 import type { ExtensionAuth, ExtensionTool } from "./extension-auth";
+import { clock } from "./format";
 import { t } from "../i18n";
 
 export type Json = string | number | boolean | null | Json[] | { [k: string]: Json };
@@ -37,6 +38,8 @@ export interface HubExtension {
   /** An extension from a market (a hub with plugin_auto_upgrade): its own auto-upgrade switch, its newer version and what
    *  happened last with an upgrade (docs/extensions/extensions.md "Automatic upgrades"). */
   auto_upgrade?: boolean;
+  /** Why its own switch does not apply now: "disabled" while the extension is off (the switch is kept for when it is on). */
+  auto_upgrade_paused?: string;
   upgrade?: ExtensionUpgrade;
   upgrade_note?: ExtensionUpgradeNote;
   /** An extension with a program on computers: how that program is on each machine it is switched on for. */
@@ -47,6 +50,19 @@ export interface HubExtension {
   auth?: ExtensionAuth;
   /** The command-line programs this version uses. */
   tools?: ExtensionTool[];
+  /** An extension running on its own that the hub reaches on its sockets (a `remote:` install): how it is connected. */
+  attached?: ExtensionAttached;
+}
+
+/** How an attached extension is connected (docs/extensions/extensions.md "Attached extensions"). */
+export interface ExtensionAttached {
+  online: boolean;
+  /** When it came online or went offline; none while it is switched off or nothing needs it. */
+  since?: string;
+  /** Why it is offline, also while its status is still `starting` (the hub waits 30 seconds before it says `error`). */
+  error?: string;
+  /** The version the program says it is, when that is not the approved `version`: it is not used until approved. */
+  version?: string;
 }
 
 /** Whether an installed extension runs isolated, and what it reached through the egress proxy (Android ExtensionSandbox). */
@@ -102,6 +118,8 @@ export interface ExtensionUpgrade {
   state: string;
   added_permissions?: ExtensionPermission[];
   detail?: string;
+  /** "user" when a skipped version is one the user rolled back from (absent: it didn't start). */
+  skipped_by?: string;
 }
 
 /** What happened last with an extension's upgrade. */
@@ -269,7 +287,26 @@ const STATES: Record<string, string> = {
 export const extensionState = (p: HubExtension) => STATES[p.status] ?? t("lib-extensions.state_unknown");
 
 /** Whether an enabled extension's program runs right now (the detail page's small print); "" for any other state. */
-export const runNote = (p: HubExtension) => (p.status === "running" ? t("lib-extensions.running") : p.status === "stopped" ? t("lib-extensions.idle_note") : "");
+export const runNote = (p: HubExtension) =>
+  p.attached ? attachedNote(p) : p.status === "running" ? t("lib-extensions.running") : p.status === "stopped" ? t("lib-extensions.idle_note") : "";
+
+/** An attached extension's small print: online or offline since when, and why while it is still reconnecting (its
+ *  status says no error yet); "" while it is switched off. */
+export function attachedNote(p: Pick<HubExtension, "status" | "attached">): string {
+  const a = p.attached;
+  if (!a || p.status === "disabled") return "";
+  const time = clock(a.since);
+  if (!time) return p.status === "stopped" ? t("lib-extensions.attached_idle") : "";
+  if (a.online) return t("lib-extensions.attached_online", { time });
+  if (p.status === "starting") return a.error ? t("lib-extensions.attached_reconnecting_why", { time, why: a.error }) : t("lib-extensions.attached_reconnecting", { time });
+  return t("lib-extensions.attached_offline", { time });
+}
+
+/** The version as the detail's line says it: the approved one, and the program's when it says another. */
+export function versionText(p: Pick<HubExtension, "version" | "attached">): string | undefined {
+  const current = p.attached?.version;
+  return current ? t("lib-extensions.version_differs", { approved: p.version ?? "", current }) : p.version;
+}
 
 export const isProblem = (p: HubExtension) => p.status === "error" || p.status === "incompatible";
 
@@ -297,7 +334,10 @@ export function upgradeDetail(u: ExtensionUpgrade): string {
     case "waiting_idle": return t("lib-extensions.upgrade_waiting_idle");
     case "available": return t("lib-extensions.upgrade_available");
     case "off": return t("lib-extensions.upgrade_off");
-    case "skipped": return t("lib-extensions.upgrade_skipped", { from: u.from ?? "" });
+    case "skipped":
+      return u.skipped_by === "user"
+        ? t("lib-extensions.upgrade_skipped_user", { from: u.from ?? "" })
+        : t("lib-extensions.upgrade_skipped", { from: u.from ?? "" });
     case "failed": return u.detail ? t("lib-extensions.upgrade_failed_detail", { detail: u.detail }) : t("lib-extensions.upgrade_failed");
     case "incompatible": return u.detail ? t("lib-extensions.upgrade_incompatible_detail", { detail: u.detail }) : t("lib-extensions.upgrade_incompatible");
     default: return "";
@@ -327,7 +367,7 @@ export function upgradeNote(n: ExtensionUpgradeNote): string | null {
   return null;
 }
 
-export const stateLine = (p: HubExtension) => [extensionState(p), p.version, sourceText(p.source)].filter(Boolean).join(" · ");
+export const stateLine = (p: HubExtension) => [extensionState(p), versionText(p), sourceText(p.source)].filter(Boolean).join(" · ");
 
 /** How many, and how many need the user. */
 export function listSummary(list?: HubExtension[] | null): string {
