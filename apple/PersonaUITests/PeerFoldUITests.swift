@@ -31,6 +31,7 @@ final class PeerFoldUITests: XCTestCase {
         app.launchPinned()
         let short = app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "深色主题的对比度修好了")).firstMatch
         XCTAssertTrue(short.waitForExistence(timeout: 20), "the chat did not open:\n\(app.debugDescription)")
+        acceptIconAlert(timeout: 3) // the scheme's icon
         sleep(1)
         shot("folded")
 
@@ -40,7 +41,11 @@ final class PeerFoldUITests: XCTestCase {
         // Folded, the long message's last lines are not drawn.
         XCTAssertFalse(app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "所有版本一起搜")).firstMatch.isHittable)
         expand.firstMatch.tap()
-        XCTAssertTrue(app.buttons["message.collapse"].waitForExistence(timeout: 5), "Expand did not open it")
+        let collapse = app.buttons["message.collapse"]
+        XCTAssertTrue(collapse.waitForExistence(timeout: 5), "Expand did not open it")
+        sleep(1)
+        // The message's end and Collapse, a little further down.
+        if !collapse.isHittable { app.swipeUp(velocity: .slow) }
         sleep(1)
         shot("expanded")
     }
