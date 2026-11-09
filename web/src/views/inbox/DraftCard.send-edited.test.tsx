@@ -10,6 +10,7 @@ vi.hoisted(() => {
 });
 const listed = vi.hoisted(() => ({ items: [] as unknown[] }));
 const replies = vi.hoisted(() => [] as { path: string; json: unknown }[]);
+const hub = vi.hoisted(() => ({ refuse: false }));
 vi.mock("../../lib/api", async (original) => ({
   ...await original<typeof import("../../lib/api")>(),
   api: async (path: string, init?: { json?: unknown }) => {
@@ -17,6 +18,7 @@ vi.mock("../../lib/api", async (original) => ({
     if (path.startsWith("/inbox?")) return { items: listed.items };
     if (path.endsWith("/reply")) {
       replies.push({ path, json: init?.json });
+      if (hub.refuse) throw new Error("Synthetic refusal");
       return {};
     }
     return {};
@@ -63,11 +65,11 @@ const type = (text: string) => act(() => {
   area().dispatchEvent(new Event("input", { bubbles: true }));
 });
 const escape = () => act(async () => window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
-const show = async (it: InboxItem) => {
+const show = async (it: InboxItem, text = AI) => {
   listed.items = [it];
   act(() => root.render(<InboxList />));
   await flush();
-  expect(card().querySelector("[data-draft-text]")!.textContent).toBe(AI);
+  expect(card().querySelector("[data-draft-text]")!.textContent).toBe(text);
 };
 const edit = async () => {
   await act(async () => cardButton(t("inbox-inboxparts.edit")).click());
@@ -78,6 +80,7 @@ beforeEach(() => {
   resetInboxForTests();
   resetMailForTests();
   replies.length = 0;
+  hub.refuse = false;
   host = document.createElement("div");
   document.body.append(host);
   root = createRoot(host);
@@ -125,5 +128,14 @@ describe("the draft card after the draft dialog", () => {
     await act(async () => cardButton(t("inbox-inboxparts.send")).click());
     await flush();
     expect(replies.map((r) => r.json)).toEqual([{ text: AI, changes: [{ ref: "r1", field: "f1", value: "Done" }] }]);
+  });
+
+  it("is not marked Edited after a failed Send of the AI's own draft, which is sent trimmed", async () => {
+    await show({ ...mail, agent: { state: "drafted", draft: `${AI}\n` } }, `${AI}\n`);
+    hub.refuse = true;
+    await act(async () => cardButton(t("inbox-inboxparts.send")).click());
+    await flush();
+    expect(replies.map((r) => r.json)).toEqual([{ text: AI, changes: undefined }]);
+    expect(card().querySelector("[data-draft-edited]")).toBeNull();
   });
 });

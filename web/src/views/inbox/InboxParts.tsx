@@ -197,7 +197,8 @@ export function DraftCard({ it, onEdit, onSend }: { it: InboxItem; onEdit: () =>
   if (!draft) return null;
   const text = kept ?? draft;
   const changes = keptChanges(it, dropped);
-  const edited = (kept !== undefined && kept !== draft) || dropped.length > 0;
+  // as sent: a failed send keeps the text trimmed, and the AI's own draft with a trailing newline is not an edit
+  const edited = (kept !== undefined && kept.trim() !== draft.trim()) || dropped.length > 0;
   return (
     <div className="rounded-[10px] bg-inset p-3 shadow-hairline">
       <p className="flex items-center text-[11.5px] font-medium text-accent-ink">

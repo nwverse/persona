@@ -8,8 +8,8 @@ import { startConversation } from "../../lib/assistant-start";
 import { adoptConversation, askPersonaOf, noteSent, sendToSession } from "../../lib/outbox";
 import { sessionTitle, stateOf, uuid } from "../../lib/format";
 import {
-  agentDraft, connectorReference, conversationRoute, docChangeLine, HANDOFF_PRESETS, handOffMessage, handOffToMain, isLark, itemKey, itemPath, itemRequest, keepDropped, keptChanges, sendReply, useDroppedChanges,
-  setDone, unsentReplies, type DocChange, type InboxItem,
+  agentDraft, connectorReference, conversationRoute, docChangeKey, docChangeLine, HANDOFF_PRESETS, handOffMessage, handOffToMain, isLark, itemKey, itemPath, itemRequest, keepDropped, keptChanges, sendReply, useDroppedChanges,
+  setDone, unsentReplies, type InboxItem,
 } from "../../lib/inbox";
 import { isTransient } from "../../lib/ops";
 import { machineWithHub } from "../../lib/mesh";
@@ -22,8 +22,6 @@ import { StatusMark } from "../../ui/StatusMark";
 import { Icon } from "../../ui/icons";
 import { Spark } from "./InboxParts";
 import { byTime } from "../../lib/times";
-
-const changeKey = (c: DocChange) => `${c.ref}|${c.field}`;
 
 export function draftTitle(it: InboxItem): string {
   if (it.moment) return t("inbox-inboxdialogs.title_moment");
@@ -137,13 +135,13 @@ function DraftEditor({ item, onClose }: { item: InboxItem; onClose: () => void }
         <div className="mb-3">
           <p className="mb-1 text-[11.5px] font-medium text-ink-3">{t("inbox-inboxdialogs.changes_on_send")}</p>
           {proposed.map((c) => {
-            const on = !dropped.includes(changeKey(c));
+            const on = !dropped.includes(docChangeKey(c));
             return (
-              <label key={changeKey(c)} className="flex cursor-pointer items-center gap-2 py-1 text-[12.5px] text-ink">
+              <label key={docChangeKey(c)} className="flex cursor-pointer items-center gap-2 py-1 text-[12.5px] text-ink">
                 <input
                   type="checkbox"
                   checked={on}
-                  onChange={() => keepDropped(key, on ? [...dropped, changeKey(c)] : dropped.filter((k) => k !== changeKey(c)))}
+                  onChange={() => keepDropped(key, on ? [...dropped, docChangeKey(c)] : dropped.filter((k) => k !== docChangeKey(c)))}
                   className="size-3.5 accent-[var(--accent)]"
                 />
                 <span className={cx("truncate", !on && "text-ink-3 line-through")}>{docChangeLine(c, item.doc)}</span>
