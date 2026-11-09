@@ -102,15 +102,6 @@ fun AssistantScreen(
     onOpenNeed: ((NeedsYouLine) -> Unit)? = null,
     /** "N more in the inbox": opens the inbox as a secondary page. */
     onOpenInbox: (() -> Unit)? = null,
-    onOpenSettings: (() -> Unit)? = null,
-    /** A shared-sidebar selection brings the Assistant home to the foreground. */
-    onSidebarSelection: (() -> Unit)? = null,
-    sidebarPages: List<NavItem> = emptyList(),
-    onSidebarPage: (String) -> Unit = {},
-    inboxCount: Int = 0,
-    settingsCount: Int = 0,
-    settingsDot: Boolean = false,
-    settingsBadge: String? = null,
     /** Pins or unpins a conversation (the hub's pins); none: the history offers no pinning. */
     onTogglePin: (suspend (SessionKey) -> Unit)? = null,
     /** "Voice chat" in the title menu, when the hub runs a voice extension. */
@@ -269,6 +260,7 @@ fun AssistantScreen(
     // new-conversation page.
     val faceState = personaState(active?.let { key -> snapshot.conversations.firstOrNull { it.key == key } }, hubOnline,
         machines, assistantMachine)
+    SideEffect { sharedSidebar?.personaState = faceState; sharedSidebar?.active = active }
     fun openConversation(key: SessionKey) {
         if (key == PendingMainConversation) {
             viewingMainQueue = true
@@ -494,6 +486,26 @@ fun AssistantScreen(
     LaunchedEffect(requestedSession) {
         requestedSession?.let { openedMain = true; proactiveOpen = false; settingsOpen = false; openConversation(it) }
     }
+    LaunchedEffect(sharedSidebar?.action) {
+        val action = sharedSidebar?.action ?: return@LaunchedEffect
+        when (action) {
+            AssistantSidebarAction.Home -> newConversation()
+            AssistantSidebarAction.NewConversation -> startNewConversation()
+            AssistantSidebarAction.MainConversation -> {
+                openedMain = true
+                snapshot.mainSession?.let(::openConversation) ?: run { newConversation(); viewingMainQueue = true }
+            }
+            AssistantSidebarAction.ScheduledTasks -> if (pageManagement != null) proactiveOpen = true else info = AssistantInfo.Schedule
+            AssistantSidebarAction.SessionInfo -> info = AssistantInfo.Session
+            AssistantSidebarAction.Launcher -> if (pageManagement != null) settingsOpen = true else info = AssistantInfo.Launcher
+        }
+        if (sharedSidebar.action == action) sharedSidebar.action = null
+    }
+    LaunchedEffect(sharedSidebar?.retired) {
+        val retired = sharedSidebar?.retired.orEmpty()
+        if (active != null && active in retired) newConversation()
+        sharedSidebar?.retired = emptySet()
+    }
     LaunchedEffect(snapshot.mainSession, snapshot.conversations, managerChoice) {
         if (!demo && !openedMain && requestedSession == null && mainMessages.isEmpty()) {
             val initial = snapshot.mainSession
@@ -524,26 +536,22 @@ fun AssistantScreen(
         AssistantDrawer(query, { query = it }, groups, active, snapshot.mainSession != null,
             onEnd = if (pageManagement != null) ({ ending = it }) else null,
             onMain = {
-                onSidebarSelection?.invoke()
                 openedMain = true
                 snapshot.mainSession?.let(::openConversation) ?: run { newConversation(); viewingMainQueue = true }
                 scope.launch { drawerOpen = false }
             },
-            onOpen = { onSidebarSelection?.invoke(); openConversation(it); scope.launch { drawerOpen = false } },
+            onOpen = { openConversation(it); scope.launch { drawerOpen = false } },
             onInfo = {
-                onSidebarSelection?.invoke()
                 if (it == AssistantInfo.Knowledge && onKnowledge != null) onKnowledge()
                 else if (pageManagement != null && it == AssistantInfo.Launcher) settingsOpen = true
                 else if (pageManagement != null && it == AssistantInfo.Schedule) proactiveOpen = true
                 else info = it
                 scope.launch { drawerOpen = false }
             },
-            onNew = { onSidebarSelection?.invoke(); startNewConversation() },
-            onHome = { onSidebarSelection?.invoke(); newConversation() },
-            onSettings = { drawerOpen = false; onOpenSettings?.invoke() ?: navigator.navigate(SettingsRoute) },
+            onNew = ::startNewConversation,
+            onHome = { newConversation() },
+            onSettings = { drawerOpen = false; navigator.navigate(SettingsRoute) },
             onInbox = { drawerOpen = false; onOpenInbox?.invoke() ?: navigator.navigate(InboxRoute) },
-            inboxCount = inboxCount, settingsCount = settingsCount, settingsDot = settingsDot, settingsBadge = settingsBadge,
-            pages = sidebarPages, onPage = { drawerOpen = false; onSidebarPage(it) },
             onPin = if (onTogglePin != null) ({ session -> togglePins(listOf(session.key)) }) else null,
             // The hub's pins also hold the Agents list's sessions: only Persona's own conversations are unpinned here.
             onUnpinAll = if (onTogglePin != null) ({
@@ -558,13 +566,6 @@ fun AssistantScreen(
             todoCount = todoCount,
             showTodos = showTodos,
         )
-    }
-    // Publish a stable slot, not a new lambda on every push: both primary pages open this same sidebar.
-    val currentSidebar = rememberUpdatedState(sidebar)
-    DisposableEffect(sharedSidebar) {
-        val content: @Composable () -> Unit = { currentSidebar.value() }
-        sharedSidebar?.content = content
-        onDispose { if (sharedSidebar?.content === content) sharedSidebar.content = null }
     }
     val body: @Composable (Boolean) -> Unit = { wide ->
         val hasComposer = active == null || !hasChat || demo

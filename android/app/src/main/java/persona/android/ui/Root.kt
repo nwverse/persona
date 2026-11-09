@@ -13,6 +13,7 @@ import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
@@ -60,6 +61,7 @@ import persona.feature.agents.AgentsPreferencesSnapshot
 import persona.feature.agents.AgentsWiring
 import persona.feature.assistant.AssistantScreen
 import persona.feature.assistant.AssistantSidebarHost
+import persona.feature.assistant.AssistantSidebarContent
 import persona.feature.assistant.LocalAssistantSidebarHost
 import persona.feature.assistant.assistantEntries
 import persona.feature.chat.*
@@ -239,6 +241,8 @@ private fun PersonaShell(session: ShellSession, openNavigation: MutableState<((R
     val agentsStack = rememberNavBackStack(AgentsRoute, *listOfNotNull(saved.chats[AppTab.Agents]).toTypedArray())
     val stacks = mapOf(AppTab.Persona to assistantStack, AppTab.Agents to agentsStack)
     val sidebar = remember { AssistantSidebarHost() }
+    val sidebarOperations = rememberCoroutineScope()
+    val sidebarState = rememberSaveableStateHolder()
     fun showAssistantHome() {
         while (assistantStack.size > 1) assistantStack.removeAt(assistantStack.lastIndex)
         selected = AppTab.Persona
@@ -508,10 +512,7 @@ private fun PersonaShell(session: ShellSession, openNavigation: MutableState<((R
                     else Column(Modifier.fillMaxSize()) {
                         HomeNavigation(items, selected.name, onSelect = { navigator.selectTab(AppTab.valueOf(it)) },
                             leading = {
-                                JPersonaButton(PersonaState.Idle, stringResource(R.string.app_sidebar), {
-                                    // A secondary page can hide the Assistant root. Restore it without switching
-                                    // away from Agents so the same real sidebar can be composed again.
-                                    if (sidebar.content == null) while (assistantStack.size > 1) assistantStack.removeAt(assistantStack.lastIndex)
+                                JPersonaButton(sidebar.personaState, stringResource(R.string.app_sidebar), {
                                     sidebar.opened.value = true
                                 })
                             })
@@ -528,16 +529,6 @@ private fun PersonaShell(session: ShellSession, openNavigation: MutableState<((R
                     requestedSession = assistantRequest, onKnowledge = { sidebarDestination(KnowledgeRoute) },
                     needsYou = needsYou, onOpenNeed = { line -> openWithCard(needsYouRoute(line)) },
                     onOpenInbox = { sidebarDestination(InboxRoute) },
-                    onOpenSettings = { sidebar.opened.value = false; navigator.navigate(SettingsRoute) },
-                    onSidebarSelection = ::showAssistantHome,
-                    sidebarPages = sidebarPages,
-                    onSidebarPage = { key ->
-                        if (key == "machines") sidebarDestination(MachinesRoute)
-                        else extensionPages.firstOrNull { extensionRailKey(it.extension, it.id) == key }?.let { page ->
-                            sidebarDestination(ExtensionUiRoute(page.extension, page.id, page.title.ifBlank { page.id }))
-                        }
-                    },
-                    inboxCount = inboxNeeds, settingsCount = slotBadge.count, settingsDot = slotBadge.dot, settingsBadge = demoBadge,
                     onTogglePin = { key -> session.preferences.togglePin(key.path) },
                     onVoice = voiceExtension?.let { extension -> { navigator.navigate(VoiceRoute(extension.id, extension.name)) } },
                     onTodos = { sidebarDestination(persona.core.navigation.TodosRoute) },
@@ -652,8 +643,27 @@ private fun PersonaShell(session: ShellSession, openNavigation: MutableState<((R
             }
             if (sidebar.opened.value) JSheet(onDismiss = { sidebar.opened.value = false },
                 title = stringResource(persona.feature.assistant.R.string.assistant_conversation_list)) {
-                Box(Modifier.fillMaxWidth().fillMaxHeight()) {
-                    sidebar.content?.invoke() ?: JLoading()
+                sidebarState.SaveableStateProvider("shared-sidebar") {
+                    AssistantSidebarContent(assistant, session.assistant, pins, sidebar.active, sidebarOperations, session.demo != null,
+                        onOpen = { key ->
+                            sidebar.opened.value = false
+                            selected = openResolved(ResolvedRoute(AppTab.Persona, ChatRoute(key.machineId, key.sessionId, ConversationKind.Assistant)))
+                        },
+                        onAction = { action -> sidebar.opened.value = false; showAssistantHome(); sidebar.action = action },
+                        onSettings = { sidebar.opened.value = false; navigator.navigate(SettingsRoute) },
+                        onInbox = { sidebarDestination(InboxRoute) },
+                        onKnowledge = { sidebarDestination(KnowledgeRoute) },
+                        onTodos = { sidebarDestination(TodosRoute) }, todoCount = uncompletedTodosCount, showTodos = todosSupported,
+                        inboxCount = inboxNeeds, settingsCount = slotBadge.count, settingsDot = slotBadge.dot, settingsBadge = demoBadge,
+                        pages = sidebarPages,
+                        onPage = { key ->
+                            if (key == "machines") sidebarDestination(MachinesRoute)
+                            else extensionPages.firstOrNull { extensionRailKey(it.extension, it.id) == key }?.let { page ->
+                                sidebarDestination(ExtensionUiRoute(page.extension, page.id, page.title.ifBlank { page.id }))
+                            }
+                        },
+                        onTogglePin = { key -> session.preferences.togglePin(key.path) },
+                        onRetired = { key -> sidebar.retired = sidebar.retired + key })
                 }
             }
           }
