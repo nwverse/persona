@@ -46,7 +46,7 @@ Hand the user a plan of one or more tasks for agents on their computers, instead
           },
           "launcher": {
             "type": "string",
-            "description": "launcher name; empty: the default"
+            "description": "launcher name, one that machine has (a name it lacks is refused, listing the ones it has); empty: the default, or one the machine has when it lacks the default (claude first; the why says so)"
           },
           "model": {
             "type": "string",
