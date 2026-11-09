@@ -241,7 +241,6 @@ struct PeerMessage: View {
     var from: String
     @Environment(\.rowMemoScope) private var memoScope
     @Environment(\.subagentsByCall) private var agents
-    @Environment(\.messageFold) private var fold
 
     var body: some View {
         card
@@ -263,8 +262,8 @@ struct PeerMessage: View {
                 // A subagent's report that came as a message: one line until opened, as in its card.
                 FoldedReport(id: pinKey, text: item.text ?? "", font: Theme.Font.secondary) { words(d) }
             } else {
-                // A long one: its first lines until opened, as many as the exchanges' setting shows (#2010).
-                LineFold(shown: fold, id: pinKey) { words(d) }
+                // A long one: its first lines until opened, as many as an exchange shows (#2010).
+                LineFold(lines: ChatLayoutSettings.defaultLines, id: pinKey) { words(d) }
             }
         }
         .padding(Theme.Space.m)
@@ -526,6 +525,8 @@ struct AssistantText: View, Equatable {
             }
             PortChips(text: item.text ?? "")
         }
+        // A single line break is one, as in the terminal and Claude's web chat (#2088): not a space.
+        .markdownSoftBreakMode(.lineBreak)
         .lookUpFiles(d.asked)
         .messageActionBar(id: item.id, text: item.text ?? "", isUser: false, date: item.ts)
         #if os(macOS)
@@ -1031,8 +1032,9 @@ struct RecapDrawer: View {
                                 Text(Self.written(ts, latest: n == 0 && items.count > 1))
                                     .font(Theme.Font.caption).foregroundStyle(.secondary)
                             }
-                            Markdown(Links.markdown(MathMarkdown.rewrite(item.text ?? "")))
+                            Markdown(Links.markdown(MathMarkdown.rewrite(ReplyBreaks.apply(item.text ?? ""))))
                                 .markdownTheme(.persona)
+                                .markdownSoftBreakMode(.lineBreak)
                                 .textSelection(.enabled)
                                 .frame(maxWidth: .infinity, alignment: .leading)
                         }
@@ -1071,6 +1073,7 @@ struct StreamingText: View {
                 .markdownTheme(.persona)
                 .padding(.top, parts.done.last.map { StreamChunks.gap(after: $0, before: parts.tail) } ?? 0)
         }
+        .markdownSoftBreakMode(.lineBreak) // as the finished reply (`AssistantText`)
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
@@ -1101,11 +1104,11 @@ nonisolated enum WebLinks {
 /// Parsed Markdown per text: MarkdownUI parses (cmark) in `Markdown.init`, on every redraw of the row.
 nonisolated enum MarkdownMemo {
     private static let memo = TextMemo<MarkdownContent>(limit: 128)
-    static func content(_ text: String) -> MarkdownContent { memo(text) { MarkdownContent(Links.markdown(MathMarkdown.rewrite($0))) } }
+    static func content(_ text: String) -> MarkdownContent { memo(text) { MarkdownContent(Links.markdown(MathMarkdown.rewrite(ReplyBreaks.apply($0)))) } }
 
     private static let pathsMemo = TextMemo<PathMarkdown>(limit: 128)
     /// Where the paths are in the same Markdown (`content`).
-    static func paths(_ text: String) -> PathMarkdown { pathsMemo(text) { PathMarkdown(Links.markdown(MathMarkdown.rewrite($0))) } }
+    static func paths(_ text: String) -> PathMarkdown { pathsMemo(text) { PathMarkdown(Links.markdown(MathMarkdown.rewrite(ReplyBreaks.apply($0)))) } }
 }
 
 /// Markdown with the paths that are there on the conversation's machine as links (docs/apple/ios.md「文件查看器」), the code
@@ -1183,7 +1186,9 @@ nonisolated struct AssistantRowText {
     /// limit) and its pictures, videos and sounds; documents aside (their cards).
     let chips: [String]
     init(_ text: String) {
-        let source = Links.markdown(MathMarkdown.rewrite(text)) // links end where `Links` says, not at the next space; formulas as pictures
+        // Steps that go on at "5." under a line of text are a list (`ReplyBreaks`, #2088); links end where `Links` says,
+        // not at the next space; formulas as pictures.
+        let source = Links.markdown(MathMarkdown.rewrite(ReplyBreaks.apply(text)))
         markdown = MarkdownContent(source)
         let paths = PathMarkdown(source)
         self.paths = paths

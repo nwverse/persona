@@ -1,6 +1,6 @@
 import XCTest
 
-/// A long message another session sent an agent folds to the lines the exchanges' setting shows (3 by default), with
+/// A long message another session sent an agent folds to three lines, as an exchange does, with
 /// Expand; opened it reads in full with Collapse; a short one stays whole with no button (#2010). Against
 /// scripts/mock/mock_hub.py with MOCK_PEER_FOLD=1 (PERSONA_MOCK_HUB). PERSONA_PEER_SCHEME: light or dark.
 final class PeerFoldUITests: XCTestCase {
