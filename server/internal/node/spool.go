@@ -776,6 +776,7 @@ func (n *Node) retryNotificationsOnce(ctx context.Context, sp *spool) (again boo
 // that standby answered: no card, it is long over or asks again by itself.
 func (n *Node) replayHook(e spoolEntry) error {
 	req := e.Request
+	req.Pane = n.ownPane(req.Pane)
 	var in hookInput
 	if json.Unmarshal(req.Input, &in) != nil {
 		return nil

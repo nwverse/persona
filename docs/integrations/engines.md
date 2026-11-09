@@ -169,6 +169,31 @@ Typical use: work Agents in botmux, personal Agents in herdr, viewed together.
 - **To-dos**: attach by session ID as usual; project-wide grouping uses botmux session cwd.
 - Live test: `go test -tags botmuxlive -run BotmuxLive ./internal/node/ -v` (read-only listing plus one dry-run delivery: validation / rendering, no dispatch).
 
+## Named herdr sessions (#2196)
+
+herdr can run more than one server per account: besides the default one, named sessions (`herdr --session <name>`, listed by
+`herdr session list`), each with its own socket under `<herdr config dir>/sessions/<name>/` and its own ids, so `w4:p1` can be a pane of two
+of them at once. A node on the default herdr server drives every **running** named session as part of the herdr engine
+(`node/hostherdr_sessions.go`):
+
+- **Ids**: a named session's pane, tab and workspace ids are `@<session>:<id>` (`@build:w4:p1`, `herdr.QualifyID`); the default server's stay
+  bare, so stored rows, hooks and clients read as before. No host kind starts with `@`, so the hub and every client take them for herdr panes, and they
+  hold no `/` a path could split on. Sessions and their live rows are listed, read, sent to, interrupted, closed, renamed, split, streamed and focused
+  on the session the id names; ids herdr hands back (a split, a new tab) are qualified again.
+- **Showing the session**: a named session's spaces are labelled `<session> · <workspace label>`; renaming one given with that prefix renames
+  the workspace without it.
+- **Left alone**: stopped sessions, the `persona-<hash>` sessions of other nodes' data directories (`herdr/session.go`), names that cannot stand in an
+  id, and every other session on a node that runs on a session of its own or on a socket `HERDR_SOCKET_PATH` moved. Windows drives the default server only.
+- **Pane identity from processes**: hooks, MCP calls and the process scans read `HERDR_SESSION` (or the session directory in `HERDR_SOCKET_PATH`)
+  with `HERDR_PANE_ID` (`nodeclient.HookPane`, `herdr.PaneOf`), so a hook in a named session's `w4:p1` never binds the default server's `w4:p1`.
+- **Never in the default server's way**: the session list is asked again at most every 5 s, in the background; each named session is asked alongside the
+  default server, and what it has not answered within 2 s comes from its last answer, with one call to it out at a time. A named session that does not
+  answer keeps its last agents; the default server failing is the herdr host failing, as before. Each session has its own event stream; one that ends
+  is opened again on its own.
+- **Pane-less work stays on the default server**: new workspaces, and new sessions started without naming a workspace (a named session's labels
+  never match a start's directory name). A start or a new tab in a named session's workspace opens there.
+- Focus following (`herdr.client.focus`) is the default server's: it is the computer's own herdr window.
+
 ## When herdr is not running
 
 After reboot, launchd / systemd starts node, but no terminal has started classic `herdr` server (#1879). Node starts it on demand:

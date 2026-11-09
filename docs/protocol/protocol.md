@@ -1971,6 +1971,10 @@ trade-offs in `docs/plans/plan-orca-support.md` ("herdr-core host")).
   Orca is available = `orca-runtime.json` exists, its socket answers `status.get`,
   and the protocol version is compatible (if incompatible, `available` is false, `note` is a one-sentence reason in Chinese for the user, and `version` is still included; also asked only once during `node.info`).
   `version` is the version each reports; omitted if there is none. Old nodes only report the first two.
+- **Named herdr sessions (#2196)**: a node on the default herdr server also drives every running named herdr session (`herdr --session <name>`) as part of
+  the `herdr` host. Their pane, tab and workspace ids (`pane_id`, `tab_id`, `workspace_id`, `space_id`, `slot_id`, panes and `pane:` addresses) are
+  `@<session>:<id>`, the default server's stay bare; `host` and `space_kind` stay `herdr`, and the spaces are named `<session> · <label>`. Clients treat
+  the ids as opaque, as before (`docs/integrations/engines.md` "Named herdr sessions").
 - `herdr_running` / `herdr_running_known` in `node.info`: whether the classic herdr server answers right now, and whether the node can tell (a machine using herdr-core
   has no such socket and sends neither). Old nodes send neither; the hub uses this to tell "not running" from "unknown" (`docs/integrations/engines.md`).
 - `builtin_programs` in `node.info`: the extension programs built into personad (`["cua", "ego", "imessage"]`, #1830 steps 5 and 6; imessage's method names are still `connector.*`). For nodes that report it, the hub calls them via `plugin.node.call {id, method, params}`;
