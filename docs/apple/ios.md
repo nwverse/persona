@@ -573,6 +573,11 @@ Apps built with older Xcode do not extend under the status bar and camera on Duo
   (`AssistantTopBar.room`, Agents' list `room`, Messages' top inset), so the content starts at the top. Menus (tapping the chosen segment), the badge and the drawer work as before; horizontal bars
   (ordinary iPhone, inner portrait) are unchanged. The rail measures the column as the page's width with the side's safe area less its width without: a `GeometryReader` that
   ignores the safe area reports no inset of its own on that edge.
+- **Switching pages under side bars** (2026-11-09, TestFlight: switching between Assistant and Agents stuttered on the outer screen): with bars on the side the two pages
+  cross-fade in place instead of sliding (`ShellPageSlide`); a drag between them fades with the finger. A page that moved sideways under iPhone Duo's vertical bars, however
+  it was moved (an offset, a render-only `transformEffect`, under a mask), made both pages' navigation controllers run a deferred transition and lay the page out twice on
+  every frame: about 27 ms a frame and 140 ms of hitches a second through a switch on the simulator, against 58 ms and 2.8 ms in place (an ordinary iPhone's numbers).
+  Horizontal bars keep the slide.
 - **Short outer screen** (about 678pt): on Persona's new-chat page, Needs you rows above the input shrink to the remaining space (see "Empty chat" under "New shell" above).
 - **Simulator verification**: iPhone Duo has only the iOS 27.1 runtime (which supports only it). Folding / unfolding / half-folding can only be switched in Xcode Device Hub,
   with no CLI. Screenshots must specify the display: `xcrun simctl io <udid> screenshot --display=1` (outer) / `--display=3` (inner, 2853×2007 in landscape);
