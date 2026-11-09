@@ -166,7 +166,7 @@ func (s *Service) toolTaskReview(ctx context.Context, self string, args json.Raw
 		pushed := ""
 		if s.pushDecision(ctx, t.ID) {
 			pushed = " A push with your recommendation also went to their phone; its \"OK\" takes the recommendation and sends it " +
-				"to the task's agent, which ends the decision too."
+				"to the task's agent, which ends the decision too (drop a question of yours about it then)."
 		}
 		if carded {
 			said := "a card with what they are to decide went to them in Lark, and their answer goes to the task's agent"
@@ -176,7 +176,7 @@ func (s *Service) toolTaskReview(ctx context.Context, self string, args json.Raw
 			}
 			if over {
 				return fmt.Sprintf("Task %s was sent back %d times already: it now waits for the user (needs_user): %s. Don't ask them "+
-					"again; review it once the agent stops.", t.ID, maxReworkRounds, said), nil
+					"again; review it once the agent stops.%s", t.ID, maxReworkRounds, said, pushed), nil
 			}
 			return fmt.Sprintf("Task %s waits for the user: %s. Don't ask them again; review it once the agent stops.%s", t.ID, said, pushed), nil
 		}

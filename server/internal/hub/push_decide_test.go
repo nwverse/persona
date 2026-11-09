@@ -30,7 +30,7 @@ func decideNotification(t *testing.T) assistantwire.Notification {
 	return n
 }
 
-var decideTodo = map[string]any{"id": "todo_1", "asked_at": "2026-11-09T05:06:07.123456789Z", "recommend": "先灰度 10%"}
+var decideTodo = map[string]any{"id": "todo_1", "asked_at": "2026-11-09T05:06:07.123456789Z", "recommend": "先灰度 10%", "manager": assistantwire.AssistantID}
 
 // decideHub is a hub with one device, pushed directly (a fake APNs) and connected with ws_notify, taking "needs you"
 // pushes or not.
@@ -95,14 +95,14 @@ func TestDecisionPushHasItsCategoryAndTodo(t *testing.T) {
 	}
 }
 
-// A decision of another manager's to-do names that manager, which OK names in ManagerHeader; the assistant's names none,
-// as its lists and events do.
+// A decision's push names the manager whose to-do it is, which OK names in ManagerHeader: another manager's, and the
+// assistant's too (the default manager may be another one).
 func TestDecisionPushNamesItsManager(t *testing.T) {
 	n := decideNotification(t)
 	if td, _ := decidePayloadIn("m-0b0b0b", "mb", "mb", "b1", n.Title, n.Body, *n.Todo)["todo"].(map[string]any); td["manager"] != "m-0b0b0b" {
 		t.Fatalf("another manager's: %v", td)
 	}
-	if td, _ := decidePayloadIn(assistantwire.AssistantID, "m", "m", "conv1", n.Title, n.Body, *n.Todo)["todo"].(map[string]any); td["manager"] != nil {
+	if td, _ := decidePayloadIn(assistantwire.AssistantID, "m", "m", "conv1", n.Title, n.Body, *n.Todo)["todo"].(map[string]any); td["manager"] != assistantwire.AssistantID {
 		t.Fatalf("the assistant's: %v", td)
 	}
 }
