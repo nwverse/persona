@@ -3,6 +3,7 @@ package assistant
 import (
 	"encoding/json"
 	"fmt"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -86,5 +87,48 @@ func TestShownKeepsOnlyRowsAwaitingReply(t *testing.T) {
 	ft.s.fleet.shownMu.Unlock()
 	if !told || kept == nil || len(kept) != 0 {
 		t.Fatalf("kept %+v (told %v), want an empty list", kept, told)
+	}
+}
+
+// decoratedOf is a manager whose machine "mac" lists 50 sessions, as a finished turn's push reads one of them.
+func decoratedOf(tb testing.TB) (*Service, string) {
+	tb.Helper()
+	d := newFleetDevs()
+	d.add("mac", "Mac")
+	s := New(Options{Hub: newFakeHub(), Logf: func(string, ...any) {}, Devices: d})
+	list := make([]proto.Session, 50)
+	for i := range list {
+		list[i] = proto.Session{SessionID: fmt.Sprintf("s%03d", i), Cwd: "/code/app", Agent: "claude", Status: proto.StatusDone,
+			PaneID: fmt.Sprintf("p%d", i), Title: "a session", LastText: strings.Repeat("the last words of the turn ", 8)}
+	}
+	d.setSessions("mac", list)
+	if got, ok := s.decoratedSession("mac", "s025"); !ok || got.SessionID != "s025" || got.State == "" {
+		tb.Fatalf("decorated %+v (found %v)", got, ok)
+	}
+	return s, "s025"
+}
+
+func BenchmarkDecoratedSession(b *testing.B) {
+	s, sid := decoratedOf(b)
+	b.ReportAllocs()
+	for b.Loop() {
+		s.decoratedSession("mac", sid)
+	}
+}
+
+// A finished turn's push decorates only its own row, not its machine's whole list (#2472): about 680 bytes a lookup
+// measured, where decorating the 50 sessions was 85.7 KB.
+func TestDecoratedSessionDecoratesOneRow(t *testing.T) {
+	s, sid := decoratedOf(t)
+	const runs = 2000
+	runtime.GC()
+	var before, after runtime.MemStats
+	runtime.ReadMemStats(&before)
+	for range runs {
+		s.decoratedSession("mac", sid)
+	}
+	runtime.ReadMemStats(&after)
+	if per := (after.TotalAlloc - before.TotalAlloc) / runs; per > 700 {
+		t.Fatalf("one decorated session allocated %d bytes, want at most 700", per)
 	}
 }

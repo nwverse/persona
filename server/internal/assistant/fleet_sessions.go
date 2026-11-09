@@ -319,8 +319,17 @@ func (s *Service) decorateInventory(machine string, list []proto.Session, comple
 	return list
 }
 
-// decoratedSession is one of the machine's sessions as the apps get it.
+// decoratedSession is one of the machine's sessions as the apps get it. Each row is decorated on its own, so the one
+// the node lists is decorated alone (as readinessMain does), not the machine's whole list for each finished turn; one
+// the node does not list may still be an archived row (archivedSessions), found in the whole list.
 func (s *Service) decoratedSession(machine, sid string) (proto.Session, bool) {
+	if row, ok := s.nodeSession(machine, sid); ok {
+		list, _, err := s.archivedSessions(context.Background(), machine, s.decorateInventory(machine, []proto.Session{row}, false))
+		if err != nil {
+			s.logf("load agent archives: %v", err)
+		}
+		return list[0], true // the row itself: the archive appends only the rows it was not given
+	}
 	for _, sess := range s.decorated(machine) {
 		if sess.SessionID == sid {
 			return sess, true
