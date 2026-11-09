@@ -738,7 +738,9 @@ func (e *Engine) searchText(p string, gen uint64, recording map[string]map[strin
 			}
 			st := fileStat{path: p, size: int64(len(raw)), content: sha256.Sum256(raw)}
 			text := string(raw)
-			return &findText{raw: text, lower: fold(text)}, st, true
+			t := &findText{stat: st, raw: text, lower: fold(text)}
+			t.same = t.lower == t.raw
+			return t, st, true
 		}
 	}
 	return e.find.text(p, gen)
