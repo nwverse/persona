@@ -58,11 +58,12 @@ func indexedMachineHub(n int) (*Hub, *Machine) {
 	return h, m
 }
 
-// revsMachineHub is indexedMachineHub with the machine's list kept as the manager's lists are: with the bytes each
-// session came in (setSessionListRaws), and revs is what onEvent("sessions.revs") keeps for each revs after the
-// first: list, a copy of the kept list with the new revs, now described by the same bytes. It is handed copies whose
-// row 0 has another rev in turn, so that what is measured is the hub's reindex alone, not onEvent's copy of the list.
-func revsMachineHub(n int) (h *Hub, m *Machine, revs func(list []proto.Session)) {
+// oneRevMachine is indexedMachineHub with the machine's list taken as the manager's lists are: kept with the bytes
+// each session came in (setSessionListRaws) and pushed (takeFleetSessionsFrom). bump does to it what
+// onEvent("sessions.revs") does for a new rev of one session: the machine keeps a copy of its list with that rev,
+// still described by the same bytes. The two copies it hands over in turn are made beforehand, so that what is
+// measured is the hub's reindex, not onEvent's copy.
+func oneRevMachine(n int) (h *Hub, m *Machine, bump func()) {
 	h, m = indexedMachineHub(n)
 	raws := make([]string, len(m.sessions))
 	for i := range m.sessions {
@@ -70,13 +71,21 @@ func revsMachineHub(n int) (h *Hub, m *Machine, revs func(list []proto.Session))
 		raws[i] = string(b)
 	}
 	m.setSessionListRaws(m.sessions, raws)
-	return h, m, func(list []proto.Session) {
+	h.broadcastSessions(m, m.keptSessions())
+	var lists [2][]proto.Session
+	for i := range lists {
+		lists[i] = slices.Clone(m.sessions)
+		lists[i][0].Rev = int64(i + 1)
+	}
+	next := 0
+	return h, m, func() {
 		m.mu.Lock()
 		defer m.mu.Unlock()
 		if m.rawsOf == keptListOf(m.sessions) {
-			m.rawsOf = keptListOf(list)
+			m.rawsOf = keptListOf(lists[next])
 		}
-		m.sessions = list
+		m.sessions = lists[next]
+		next ^= 1
 	}
 }
 
@@ -86,20 +95,29 @@ func revsMachineHub(n int) (h *Hub, m *Machine, revs func(list []proto.Session))
 func BenchmarkReindexOneRev(b *testing.B) {
 	for _, n := range []int{150, 2000} {
 		b.Run(fmt.Sprint(n), func(b *testing.B) {
-			h, m, revs := revsMachineHub(n)
-			var lists [2][]proto.Session
-			for i := range lists {
-				lists[i] = slices.Clone(m.sessions)
-				lists[i][0].Rev = int64(i + 1)
-			}
+			h, m, bump := oneRevMachine(n)
 			b.ReportAllocs()
-			i := 0
 			for b.Loop() {
-				revs(lists[i])
+				bump()
 				h.reindexSessions(m)
-				i ^= 1
 			}
 		})
+	}
+}
+
+// A sessions.revs of one session on a 150-row machine reindexes it from the kept list and the kept rows
+// (indexKeptLocked): 111,809 B measured, 578,625 B when the list was copied and every row encoded again.
+func TestReindexOneRevAllocation(t *testing.T) {
+	if !isolatedSessionAllocation(t) {
+		return
+	}
+	h, m, bump := oneRevMachine(150)
+	per := allocated(func() {
+		bump()
+		h.reindexSessions(m)
+	})
+	if per > 115_200 {
+		t.Fatalf("a sessions.revs of one session reindexes a 150-row machine in %d allocated bytes", per)
 	}
 }
 
