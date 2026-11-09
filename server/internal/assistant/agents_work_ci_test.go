@@ -208,7 +208,7 @@ func TestCIWatchDoesNotWakeForPRReview(t *testing.T) {
 	}
 }
 
-func TestCIEmptyChecksReturnToScheduledWake(t *testing.T) {
+func TestCIEmptyChecksKeepWaiting(t *testing.T) {
 	ctx := context.Background()
 	s, f := workService(t)
 	c := stopped("ci", "Waiting for PR #12 CI")
@@ -226,8 +226,8 @@ func TestCIEmptyChecksReturnToScheduledWake(t *testing.T) {
 	}
 	s.workWake(ctx, s.newWorkView(ctx), [2]string{"box", "ci"}, at)
 	got := entryOf(t, s, "ci")
-	if got.Work.CI != nil || got.WakeAt == nil || got.WakeAt.After(at) {
-		t.Fatalf("did not fall back: %+v", got)
+	if got.Work.CI == nil || got.WakeAt == nil || !got.WakeAt.After(at) {
+		t.Fatalf("empty checks did not remain pending: %+v", got)
 	}
 }
 
@@ -304,8 +304,8 @@ func TestCILongOfflineWatchAndOutboxRestore(t *testing.T) {
 				if sends != 1 || got.WakeAt != nil {
 					t.Fatalf("outbox: sends %d state %+v", sends, got)
 				}
-			} else if sends != 0 || got.Work.CI != nil || got.WakeAt == nil {
-				t.Fatalf("offline fallback: sends %d state %+v", sends, got)
+			} else if sends != 0 || got.Work.CI == nil || got.WakeAt == nil || !got.WakeAt.After(time.Now()) {
+				t.Fatalf("offline watch not retained: sends %d state %+v", sends, got)
 			}
 		})
 	}
@@ -341,6 +341,8 @@ func TestCIWatchPullRequestReferences(t *testing.T) {
 		number                     int
 	}{
 		{"number without hash", "Waiting for CI on PR 12", "", "", 12},
+		{"bare hash number", "Waiting for #12 CI", "", "", 12},
+		{"ambiguous bare numbers", "Waiting for #12 and #13 CI", "", "", 0},
 		{"repository artifact", "Waiting for CI", "example/repo#12", "example/repo", 12},
 		{"numeric artifact", "Waiting for CI", "12", "", 12},
 		{"ambiguous numbers", "CI on PR 12 and PR #13", "", "", 0},
@@ -655,5 +657,88 @@ func TestCIWatchHeadChangeRestartsStabilityWindow(t *testing.T) {
 	s.workWake(ctx, s.newWorkView(ctx), [2]string{"box", "ci"}, turnEnd.Add(5*time.Minute))
 	if sends != 1 {
 		t.Fatalf("sent %d wakes", sends)
+	}
+}
+
+func TestCIWatchContinuesForLongRunningChecks(t *testing.T) {
+	ctx := context.Background()
+	s, f := workService(t)
+	now := time.Now().UTC()
+	c := stopped("ci", "PR #12 CI")
+	c.UpdatedAt = now.Add(-72 * time.Hour)
+	f.sessions["box"] = []proto.Session{c}
+	wake := now.Add(-time.Minute)
+	ci := &proto.WorkCI{Number: 12, FallbackAt: c.UpdatedAt.Add(10 * time.Minute), Polls: 240}
+	s.putWork(ctx, db.SessionWork{MachineID: "box", SessionID: "ci", TurnAt: c.UpdatedAt, WakeAt: &wake, Work: proto.WorkState{Phase: proto.WorkBlocked, On: proto.WaitExternal, Wait: "CI", WakeAt: &wake, CI: ci}})
+	f.answerNode("git.pr", func(_ string, _ json.RawMessage) (any, error) {
+		return map[string]any{"pr": map[string]any{"number": 12, "url": "https://github.com/example/repo/pull/12", "head_oid": "0123456789abcdef0123456789abcdef01234567", "checks_complete": true, "checks": []map[string]string{{"name": "test", "state": "pending"}}}}, nil
+	})
+	s.workWake(ctx, s.newWorkView(ctx), [2]string{"box", "ci"}, now)
+	got := entryOf(t, s, "ci")
+	if got.Work.CI == nil || got.WakeAt == nil || !got.WakeAt.After(now) || len(f.sentToAgents()) != 0 {
+		t.Fatalf("long wait stopped: %+v", got)
+	}
+}
+
+func TestCIWatchTriageDoesNotReviveAfterTurnStarts(t *testing.T) {
+	ctx := context.Background()
+	s, f := workService(t)
+	c := stopped("ci", "Waiting for PR #12 CI")
+	f.sessions["box"] = []proto.Session{c}
+	f.triage = `{"phase":"blocked","on":"external","line":"CI","wait":{"what":"PR #12 CI","check_minutes":10}}`
+	calls := 0
+	h := &ciSwapHub{fakeHub: f}
+	h.onDevice = func(p DeviceCall) {
+		if p.Method == DeviceSessionItems {
+			calls++
+			if calls == 2 {
+				s.workStarted(ctx, "box", "ci", turnEnd.Add(time.Minute))
+			}
+		}
+	}
+	s.hub = h
+	triage(t, s, "ci")
+	if calls < 2 {
+		t.Fatalf("only %d transcript reads", calls)
+	}
+	if e, ok := s.workEntry([2]string{"box", "ci"}); ok && e.WakeAt != nil {
+		t.Fatalf("old triage revived wait: %+v", e)
+	}
+}
+
+func TestCIWatchURLWithoutSessionDirectory(t *testing.T) {
+	ctx := context.Background()
+	s, f := workService(t)
+	c := stopped("ci", "CI https://github.com/example/repo/pull/12")
+	c.Cwd = ""
+	f.sessions["box"] = []proto.Session{c}
+	at := turnEnd.Add(10 * time.Minute)
+	e := db.SessionWork{MachineID: "box", SessionID: "ci", TurnAt: turnEnd, WakeAt: &at, Work: proto.WorkState{Phase: proto.WorkBlocked, On: proto.WaitExternal, Wait: "CI", WakeAt: &at}}
+	startCIWatch(c, &e, turnEnd, "", "")
+	if e.Work.CI == nil {
+		t.Fatal("full URL without cwd not watched")
+	}
+	s.putWork(ctx, e)
+	calls := 0
+	s.ext = fakeCIExtensions{call: func(_ context.Context, repo string, n int) (github.PRCheckSnapshot, time.Time, bool, error) {
+		calls++
+		if repo != "example/repo" || n != 12 {
+			t.Fatalf("wrong PR %s #%d", repo, n)
+		}
+		return github.PRCheckSnapshot{Count: 1, Fingerprint: "ready"}, time.Time{}, true, nil
+	}}
+	sends := 0
+	f.answerNode(DeviceSessionSendOnce, func(_ string, _ json.RawMessage) (any, error) { sends++; return map[string]any{}, nil })
+	s.workWake(ctx, s.newWorkView(ctx), [2]string{"box", "ci"}, turnEnd.Add(time.Minute))
+	s.workWake(ctx, s.newWorkView(ctx), [2]string{"box", "ci"}, turnEnd.Add(3*time.Minute))
+	if calls != 2 || sends != 1 {
+		t.Fatalf("connector calls %d, sends %d", calls, sends)
+	}
+	c.LastText = "CI PR #12"
+	e.Work.CI = nil
+	e.WakeAt = &at
+	startCIWatch(c, &e, turnEnd, "", "")
+	if e.Work.CI != nil {
+		t.Fatal("number without repository or cwd was accepted")
 	}
 }

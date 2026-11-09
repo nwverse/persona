@@ -45,6 +45,9 @@ func (s *Service) workStarted(ctx context.Context, machine, sid string, now time
 	k := [2]string{machine, sid}
 	s.work.mu.Lock()
 	s.work.init()
+	if s.work.triaging[k] {
+		s.work.generation[k]++
+	}
 	e, ok := s.work.entries[k]
 	if !ok || e.Work.Phase == proto.WorkWorking {
 		s.work.mu.Unlock()
@@ -85,6 +88,9 @@ func (s *Service) workSeen(machine, sid string, at time.Time) {
 	k := [2]string{machine, sid}
 	s.work.mu.Lock()
 	s.work.init()
+	if s.work.triaging[k] && !at.Before(s.work.tried[k].turn) {
+		s.work.generation[k]++
+	}
 	e, ok := s.work.entries[k]
 	if !ok || e.Work.Phase == "" {
 		s.work.mu.Unlock()
@@ -137,12 +143,17 @@ func (s *Service) triageTurn(ctx context.Context, v *workView, machine string, c
 	s.work.mu.Lock()
 	s.work.init()
 	prev, had := s.work.entries[k]
+	if s.work.triaging[k] {
+		s.work.mu.Unlock()
+		return
+	}
 	s.work.tried[k] = triedTurn{c.UpdatedAt, time.Now()}
-	if had && sameTurn(c, prev.TurnAt) && (prev.Work.Phase != "" || prev.Work.By != "") || s.work.triaging[k] {
+	if had && sameTurn(c, prev.TurnAt) && (prev.Work.Phase != "" || prev.Work.By != "") {
 		s.work.mu.Unlock()
 		return
 	}
 	s.work.triaging[k] = true
+	generation := s.work.generation[k]
 	var last db.SessionWork
 	if had {
 		last = *prev
@@ -151,6 +162,7 @@ func (s *Service) triageTurn(ctx context.Context, v *workView, machine string, c
 	defer func() {
 		s.work.mu.Lock()
 		delete(s.work.triaging, k)
+		delete(s.work.generation, k)
 		s.work.mu.Unlock()
 	}()
 
@@ -183,8 +195,19 @@ func (s *Service) triageTurn(ctx context.Context, v *workView, machine string, c
 	if e.WakeAt != nil && e.Work.On == proto.WaitExternal && e.Work.ResetsAt == nil {
 		ask, reply := s.lastTurnOf(ctx, machine, c.SessionID)
 		startCIWatch(c, &e, time.Now(), ask, reply)
+		latest, ok := s.session(ctx, machine, c.SessionID)
+		if !ok || latest.Status == proto.StatusWorking || !sameTurn(latest, e.TurnAt) {
+			return // activity during the transcript read invalidated this turn
+		}
+		if latest.Status != proto.StatusDone || latest.PendingInteractions > 0 || len(latest.Queued) > 0 {
+			e.WakeAt, e.Work.WakeAt, e.Work.CI = nil, nil, nil
+		}
+		if !s.putTriageWork(e, generation) {
+			return
+		}
+	} else {
+		s.putWork(ctx, e)
 	}
-	s.putWork(ctx, e)
 	s.logf("triage %s/%s: %s%s (%s %.1fs): %s", machine, short(c.SessionID), w.Phase, orEmpty("/", e.Work.On), by,
 		time.Since(start).Seconds(), e.Work.Line)
 	s.workEvent(machine, c.SessionID, "triaged", map[string]any{"phase": w.Phase, "on": e.Work.On, "by": by,

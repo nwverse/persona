@@ -9,25 +9,29 @@ import (
 	"github.com/nwverse/persona/server/internal/connector/github"
 )
 
-func githubChecksPublicHost(c *github.Connector) bool {
+func githubChecksPublicHost(c connector.Connector) bool {
 	hosts := c.Manifest().Hosts
 	return len(hosts) == 1 && strings.EqualFold(hosts[0], "github.com")
 }
 
-// PRChecks uses the active built-in GitHub connector only when it is enabled and
-// signed in. Extensions replacing it do not expose this structured capability.
+// PRChecks uses the active authorized GitHub connector. An extension must
+// explicitly offer the versioned structured snapshot tool.
 func (h *Manager) PRChecks(ctx context.Context, repo string, number int) (github.PRCheckSnapshot, time.Time, bool, error) {
 	if !h.ready(ctx) || h.connectors == nil || !h.connectors.Enabled("github") {
 		return github.PRCheckSnapshot{}, time.Time{}, false, nil
 	}
-	c := h.githubConnector()
-	if c == nil {
+	registered := h.connectors.Get("github")
+	if registered == nil {
 		return github.PRCheckSnapshot{}, time.Time{}, false, nil
 	}
 	// The watched URL is on github.com; a connector signed into another host
 	// can have the same owner/repository and PR number with unrelated checks.
-	if !githubChecksPublicHost(c) {
+	if !githubChecksPublicHost(registered) {
 		return github.PRCheckSnapshot{}, time.Time{}, false, nil
+	}
+	c, builtin := registered.(*github.Connector)
+	if !builtin {
+		return githubExtensionChecks(ctx, registered, repo, number)
 	}
 	status := c.Status(ctx)
 	if status.State == connector.StateRateLimited {

@@ -73,4 +73,20 @@ func TestSessionWorkRestoresOldCI(t *testing.T) {
 	if err != nil || len(got) != 1 || got[0].SessionID != "active" || got[0].Work.CI == nil || got[0].Work.CI.Message != "CI finished" {
 		t.Fatalf("restored %+v: %v", got, err)
 	}
+	ancient := old
+	ancient.SessionID, ancient.TurnAt = "ancient", now.Add(-40*24*time.Hour)
+	if err := d.PutSessionWork(ctx, ancient); err != nil {
+		t.Fatal(err)
+	}
+	cancelled.TurnAt = ancient.TurnAt
+	if err := d.PutSessionWork(ctx, cancelled); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.PruneSessionWork(ctx, now.Add(-30*24*time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	got, err = d.SessionWorks(ctx, now.Add(-48*time.Hour))
+	if err != nil || len(got) != 2 {
+		t.Fatalf("active CI watches not retained: %+v, %v", got, err)
+	}
 }

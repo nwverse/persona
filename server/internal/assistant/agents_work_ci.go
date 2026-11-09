@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"html"
-	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -15,22 +14,24 @@ import (
 	"github.com/nwverse/persona/server/internal/connector/github"
 	"github.com/nwverse/persona/server/internal/db"
 	"github.com/nwverse/persona/server/internal/i18n"
+	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/rpc"
 )
 
-var ciPRURL = regexp.MustCompile(`https://github\.com/([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)/pull/([1-9][0-9]*)\b`)
-var ciPRNumber = regexp.MustCompile(`(?i)\b(?:pr|pull request)\s*#?([1-9][0-9]*)\b`)
-var ciArtifactNumber = regexp.MustCompile(`^#?[1-9][0-9]*$`)
-var ciArtifactRepo = regexp.MustCompile(`^([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)#([1-9][0-9]*)$`)
-var ciWaitSignal = regexp.MustCompile(`(?i)\b(ci|checks?|pipeline|workflows?|builds?|tests?)\b|持续集成|构建|测试|检查|ビルド|テスト|チェック`) // i18n-ignore: match model output
-var ciOtherWait = regexp.MustCompile(`(?i)\b(review|reviews|approval|deployment|deploy)\b|审核|审查|评审|部署|上线|レビュー|承認|デプロイ`)     // i18n-ignore: match model output
+var ciPRURL = lazyre.New(`https://github\.com/([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)/pull/([1-9][0-9]*)\b`)
+var ciPRNumber = lazyre.New(`(?i)\b(?:pr|pull request)\s*#?([1-9][0-9]*)\b`)
+var ciBareNumber = lazyre.New(`(?:^|[^A-Za-z0-9_/#])#([1-9][0-9]*)\b`)
+var ciArtifactNumber = lazyre.New(`^#?[1-9][0-9]*$`)
+var ciArtifactRepo = lazyre.New(`^([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)#([1-9][0-9]*)$`)
+var ciWaitSignal = lazyre.New(`(?i)\b(ci|checks?|pipeline|workflows?|builds?|tests?)\b|持续集成|构建|测试|检查|ビルド|テスト|チェック`) // i18n-ignore: match model output
+var ciOtherWait = lazyre.New(`(?i)\b(review|reviews|approval|deployment|deploy)\b|审核|审查|评审|部署|上线|レビュー|承認|デプロイ`)     // i18n-ignore: match model output
 
 // startCIWatch records only an unambiguous PR. A number without a repository
 // can be checked only against the session directory's current branch.
 func startCIWatch(c proto.Session, e *db.SessionWork, now time.Time, ask, reply string) {
 	w := &e.Work
-	if e.WakeAt == nil || w.On != proto.WaitExternal || w.ResetsAt != nil || c.Cwd == "" {
+	if e.WakeAt == nil || w.On != proto.WaitExternal || w.ResetsAt != nil {
 		return
 	}
 	wait := w.Wait + " " + w.Line
@@ -59,15 +60,17 @@ func startCIWatch(c proto.Session, e *db.SessionWork, now time.Time, ask, reply 
 			}
 			repo, number = match[1], n
 		}
-		for _, match := range ciPRNumber.FindAllStringSubmatch(text, -1) {
-			n, _ := strconv.Atoi(match[1])
-			if n == 0 || number != 0 && number != n {
-				return
+		for _, pattern := range []*lazyre.Regexp{ciPRNumber, ciBareNumber} {
+			for _, match := range pattern.FindAllStringSubmatch(text, -1) {
+				n, _ := strconv.Atoi(match[1])
+				if n == 0 || number != 0 && number != n {
+					return
+				}
+				number = n
 			}
-			number = n
 		}
 	}
-	if number == 0 {
+	if number == 0 || repo == "" && c.Cwd == "" {
 		return
 	}
 	w.CI = &proto.WorkCI{Repo: repo, Number: number, FallbackAt: *e.WakeAt}
@@ -146,6 +149,12 @@ func (s *Service) ciChecks(ctx context.Context, e db.SessionWork, c proto.Sessio
 	}
 	if result, reset, ok := fromConnector(ci.Repo); ok {
 		return result, reset, true
+	}
+	if c.Cwd == "" {
+		if retryable {
+			return ciResult{pending: true, count: 1}, time.Time{}, true
+		}
+		return ciResult{}, time.Time{}, false
 	}
 	var result struct {
 		PR *struct {
@@ -260,34 +269,16 @@ func (s *Service) pollCI(ctx context.Context, e db.SessionWork, c proto.Session,
 		s.replaceCI(e, current)
 		return "", true
 	}
-	// An empty result may precede check creation, but a PR without checks must
-	// still get the ordinary timed wake instead of waiting a full day.
-	if reset.IsZero() && result.count == 0 && !now.Before(ci.FallbackAt) {
-		current.Work.CI = nil
-		at := now.UTC()
-		current.WakeAt, current.Work.WakeAt = &at, &at
-		s.replaceCI(e, current)
-		return "", true
-	}
 	if !reset.IsZero() || result.pending || result.count == 0 || result.fingerprint == "" {
 		ci.Observed, ci.ObservedAt = "", time.Time{}
-		ci.Polls++
+		ci.Polls = min(ci.Polls+1, 15) // cap the interval, not the lifetime
 		current.Work.CI = &ci
-		if ci.Polls >= 240 || now.After(current.TurnAt.Add(24*time.Hour)) {
-			current.Work.CI = nil
-			at := now.UTC()
-			if reset.After(at) {
-				at = reset.Add(time.Minute).UTC()
-			}
-			current.WakeAt, current.Work.WakeAt = &at, &at
-		} else {
-			delay := time.Minute * time.Duration(1<<min(ci.Polls/5, 3))
-			at := now.Add(delay).UTC()
-			if reset.After(at) {
-				at = reset.Add(time.Minute).UTC()
-			}
-			current.WakeAt, current.Work.WakeAt = &at, &at
+		delay := time.Minute * time.Duration(1<<min(ci.Polls/5, 3))
+		at := now.Add(delay).UTC()
+		if reset.After(at) {
+			at = reset.Add(time.Minute).UTC()
 		}
+		current.WakeAt, current.Work.WakeAt = &at, &at
 		s.replaceCI(e, current)
 		return "", true
 	}

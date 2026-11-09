@@ -42,7 +42,7 @@ func (s *Service) workTick(ctx context.Context, now time.Time) {
 	agents := map[[2]string]proto.WorkAgent{}
 	for k, e := range s.work.entries {
 		switch {
-		case e.WakeAt != nil && (!e.WakeAt.After(now) || e.Work.CI != nil && e.Work.CI.Message == "" && !now.Before(e.TurnAt.Add(24*time.Hour))):
+		case e.WakeAt != nil && !e.WakeAt.After(now):
 			due = append(due, k)
 		case e.WakeAt != nil && e.Work.On == proto.WaitAgent && e.Work.Agent != nil:
 			waits, agents[k] = append(waits, k), *e.Work.Agent
@@ -148,14 +148,6 @@ func (s *Service) workWake(ctx context.Context, v *workView, k [2]string, now ti
 	e, ok := s.workEntry(k)
 	if !ok || e.WakeAt == nil {
 		return
-	}
-	// Expire an uncompleted watch even while its node is offline. A prepared
-	// message remains an outbox entry until the once-only send is settled.
-	if e.Work.CI != nil && e.Work.CI.Message == "" && !now.Before(e.TurnAt.Add(24*time.Hour)) {
-		current := e
-		current.Work.CI = nil
-		s.replaceCI(e, current)
-		return // the next tick handles the ordinary fallback
 	}
 	// Read again right before acting: the pass's view may be a send or two old.
 	c, why := s.workGuard(s.newWorkView(ctx), e, false)

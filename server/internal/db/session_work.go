@@ -61,9 +61,9 @@ func (d *DB) SessionWorks(ctx context.Context, since time.Time) ([]SessionWork, 
 	return out, rows.Err()
 }
 
-// PruneSessionWork drops the work states of turns that ended before before, and the events older than it.
+// PruneSessionWork keeps active CI watches, and drops other old work and events.
 func (d *DB) PruneSessionWork(ctx context.Context, before time.Time) error {
-	if _, err := d.pool.Exec(ctx, `DELETE FROM session_work WHERE turn_at < $1`, before); err != nil {
+	if _, err := d.pool.Exec(ctx, `DELETE FROM session_work WHERE turn_at < $1 AND NOT (wake_at IS NOT NULL AND work ? 'ci')`, before); err != nil {
 		return err
 	}
 	_, err := d.pool.Exec(ctx, `DELETE FROM session_work_events WHERE at < $1`, before)
