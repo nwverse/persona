@@ -26,6 +26,7 @@ type codexRegistry struct {
 	byPane       map[string]string
 	threads      map[string]codexSource
 	remotes      map[string]*codexRemote
+	retries      map[string]codexRetry // server id -> attempts that did not connect (codex_backoff.go)
 	report       func(proto.CodexConfig)
 	kick         chan struct{}
 	scan         func() []codexProcess

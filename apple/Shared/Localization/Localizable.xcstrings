@@ -1,6 +1,328 @@
 {
   "sourceLanguage": "en",
   "strings": {
+    "Avatar [Agent Row Style]": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Avatar"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "头像"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "アバター"
+          }
+        }
+      }
+    },
+    "Two Lines [Agent Row Style]": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Two Lines"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "紧凑两行"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "2 行"
+          }
+        }
+      }
+    },
+    "State Cards [Agent Row Style]": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "State Cards"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "色条卡片"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "状態カード"
+          }
+        }
+      }
+    },
+    "The agent's avatar, its title and time, two lines of what it last said, and where it runs.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The agent's avatar, its title and time, two lines of what it last said, and where it runs."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "头像、标题和时间，两行最新的话，再一行写它在哪儿跑。"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "アバター、タイトルと時刻、最新の発言 2 行、実行場所。"
+          }
+        }
+      }
+    },
+    "Two lines per agent: its title and time, then one line of what it last said.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Two lines per agent: its title and time, then one line of what it last said."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "每个 Agent 两行：标题和时间，再一行最新的话。"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "エージェントごとに 2 行：タイトルと時刻、最新の発言 1 行。"
+          }
+        }
+      }
+    },
+    "A card per agent, its state's color down the side; the one waiting for you is tinted.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "A card per agent, its state's color down the side; the one waiting for you is tinted."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "每个 Agent 一张卡片，左边一条状态色；等你处理的那张整张淡蓝底。"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "エージェントごとに 1 枚のカード。左端に状態の色があり、あなたを待つカードは色付きです。"
+          }
+        }
+      }
+    },
+    "One line per agent: its state, title and time.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "One line per agent: its state, title and time."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "每个 Agent 一行：状态、标题和时间。"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "エージェントごとに 1 行：状態、タイトル、時刻。"
+          }
+        }
+      }
+    },
+    "Agents List [Layout]": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Agents List"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Agents 列表"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "エージェント一覧"
+          }
+        }
+      }
+    },
+    "The BeautifulUI style draws its agents as its own capsules; this choice shows in the other styles and in Compact List.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The BeautifulUI style draws its agents as its own capsules; this choice shows in the other styles and in Compact List."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "BeautifulUI 风格用自己的胶囊画 Agent；这里的选择在其他风格和细列表里生效。"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "BeautifulUI スタイルは独自のカプセルでエージェントを描きます。この選択は他のスタイルとコンパクトリストで使われます。"
+          }
+        }
+      }
+    },
+    "By Repository keeps its own tree of worktrees and agents.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "By Repository keeps its own tree of worktrees and agents."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "「按仓库」仍用它自己的工作树和 Agent 树。"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "「リポジトリ別」は独自のワークツリーとエージェントのツリーを使います。"
+          }
+        }
+      }
+    },
+    "Add tests for the network layer [Layout sample]": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Add tests for the network layer"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "补齐网络层的单元测试"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ネットワーク層のテストを追加"
+          }
+        }
+      }
+    },
+    "Which test framework should it use? I'd go with Swift Testing. [Layout sample]": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Which test framework should it use? I'd go with Swift Testing."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "用哪个测试框架？我建议用 Swift Testing。"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "どのテストフレームワークを使いますか？Swift Testing をおすすめします。"
+          }
+        }
+      }
+    },
+    "Add the weather widget to the home screen [Layout sample]": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Add the weather widget to the home screen"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "给天气 App 加主屏幕小组件"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "天気アプリにホーム画面ウィジェットを追加"
+          }
+        }
+      }
+    },
+    "Running the tests: 128 of 160 pass so far. [Layout sample]": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Running the tests: 128 of 160 pass so far."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "跑测试：目前 160 个里过了 128 个。"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "テスト実行中：これまでに 160 件中 128 件が成功。"
+          }
+        }
+      }
+    },
     "List" : {
       "extractionState" : "manual",
       "localizations" : {
