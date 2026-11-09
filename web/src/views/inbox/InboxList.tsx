@@ -17,6 +17,7 @@ import { useStore } from "../../lib/store";
 import { ManagerHeading } from "../ManagerParts";
 import type { Interaction } from "../../lib/types";
 import { t } from "../../i18n";
+import { requestRoute } from "../../lib/card-focus";
 import { Button, Collapse, cx, Dialog, IconButton, Loading, Menu, toast, useMenu, type MenuItem } from "../../ui/atoms";
 import { errorText } from "../../lib/api";
 import { contextMenuProps } from "../../ui/context-menu";
@@ -26,6 +27,7 @@ import { openPolicyDialog, RulesDialog } from "./PolicyDialog";
 import { isNoHover } from "../../ui/media-query";
 import { DraftDialog } from "./InboxDialogs";
 import { TriageBanner } from "./TriageBanner";
+import { UnreadNotice } from "./UnreadNotice";
 import { EventMark } from "./InboxEvent";
 import { AgentWorking, Chip, Count, DraftCard, Glyph, ItemAvatar, Spark, StatusMenu, Tag, type GlyphName } from "./InboxParts";
 
@@ -181,6 +183,7 @@ export function InboxList({ selected }: { selected?: { id: string; manager?: str
         <BulkConfirm confirm={confirm} onClose={() => setConfirm(null)} />
 
         <TriageBanner triage={triage} />
+        <UnreadNotice triage={triage} />
         {/* never loaded (an error and no items): its own empty state with "Retry", not "All caught up" under the error (#2970);
             with agents waiting the list is not empty, so the reason stays a line over it */}
         {ready && failed && !empty && <p className="mt-4 text-[12.5px] text-red">{error}</p>}
@@ -511,7 +514,7 @@ const IX_GLYPH: Record<Interaction["kind"], GlyphName | "list" | "terminal"> = {
  * only when one of those changed.
  */
 const AgentRow = memo(function AgentRow({ ix }: { ix: Interaction }) {
-  const to = useStore((s) => conversationRoute(ix.machine_id, ix.session_id, s.sessions, s.assistant));
+  const to = useStore((s) => ix.session_id === "" ? requestRoute(ix) : conversationRoute(ix.machine_id, ix.session_id, s.sessions, s.assistant));
   const persona = to.name === "persona";
   const where = useStore((s) => (persona ? "Persona" : machineWithHub(ix.machine_id, s.machines)));
   const ask = interactionAsk(ix);

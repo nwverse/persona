@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/compat"
 	"github.com/nwverse/persona/server/internal/link"
 )
 
@@ -234,5 +235,27 @@ func shortHome(t *testing.T) string {
 	t.Cleanup(func() { os.RemoveAll(home) })
 	t.Setenv("HOME", home)
 	t.Setenv("USERPROFILE", home) // os.UserHomeDir on Windows
+	clearPersonaHome(t)
 	return home
+}
+
+func clearPersonaHome(t *testing.T) {
+	t.Helper()
+	current, legacy := compat.EnvNames("PERSONA_HOME")
+	t.Setenv(current, "")
+	t.Setenv(legacy, "")
+}
+
+func TestAttachSocketPathIsolateFromPersonaHome(t *testing.T) {
+	current, legacy := compat.EnvNames("PERSONA_HOME")
+	for _, envVar := range []string{current, legacy} {
+		t.Run(envVar, func(t *testing.T) {
+			t.Setenv(envVar, "/some/real/persona/dir")
+			home := shortHome(t)
+			sock := AttachSocketPath()
+			if !strings.HasPrefix(sock, home) {
+				t.Fatalf("%s set: AttachSocketPath() = %q, want path under %q", envVar, sock, home)
+			}
+		})
+	}
 }

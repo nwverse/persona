@@ -54,6 +54,13 @@ func (s *Service) healthyPlace(ctx context.Context, t *PlanTask) bool {
 		t.Why = strings.TrimSpace(t.Why + " (" + note + ")")
 	}
 	if moved {
+		// Keep the machine the task was first placed on across repeated moves; each move refreshes the landing and the
+		// health-check reason. Names, not ids, go on the card/receipt (#2271).
+		if t.Reroute == nil {
+			t.Reroute = &PlanReroute{FromMachine: firstNonEmpty(m.Name, m.ID)}
+		}
+		t.Reroute.ToMachine = firstNonEmpty(alt.Name, alt.ID)
+		t.Reroute.Reason = note
 		t.Machine, t.Cwd = alt.ID, rehome(t.Cwd, m, alt)
 	}
 	return moved
@@ -63,6 +70,7 @@ func (s *Service) healthyPlace(ctx context.Context, t *PlanTask) bool {
 // and answers the machine's id and the session's: the machine it reached is the one the agent is linked to (looking it
 // up again after the start could find another, or none). A failed start counts against the launcher there.
 func (s *Service) startTaskAgent(ctx context.Context, t *PlanTask, retry bool) (mid, sid string, err error) {
+	t.normalizeReadonlyPermission()
 	if err := t.normalizeMachinePolicy(); err != nil {
 		return "", "", err
 	}
@@ -108,9 +116,14 @@ func (s *Service) startTaskAgent(ctx context.Context, t *PlanTask, retry bool) (
 	if t.Model != "" {
 		params["model"] = t.Model
 	}
-	if t.Permission != "" {
-		params["permission_mode"] = t.Permission
+	mode := t.Permission
+	if mode == "" {
+		mode = s.settings(ctx).DefaultPermissionMode
+		if mode == "" {
+			mode = "default"
+		}
 	}
+	params["permission_mode"] = mode
 	if t.Ultracode != nil && *t.Ultracode {
 		params["ultracode"] = true
 	}
@@ -146,6 +159,7 @@ func (s *Service) updatePlanTask(ctx context.Context, planID string, i int, t Pl
 		return
 	}
 	p.Tasks[i].Machine, p.Tasks[i].Cwd, p.Tasks[i].Why = t.Machine, t.Cwd, t.Why
+	p.Tasks[i].Reroute = t.Reroute
 	p.Tasks[i].Launcher, p.Tasks[i].Model, p.Tasks[i].Effort = t.Launcher, t.Model, t.Effort
 	if _, err := s.movePlan(ctx, p, planStarted); err != nil {
 		s.logf("plan %s: %v", planID, err)

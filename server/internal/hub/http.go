@@ -444,6 +444,10 @@ func (h *Hub) proxy(method string, params func(*http.Request) any) http.HandlerF
 func (h *Hub) sessionItems(w http.ResponseWriter, r *http.Request, m *Machine) {
 	q := r.URL.Query()
 	params := map[string]any{"session_id": r.PathValue("sid")}
+	userInputs := q.Get("user_inputs") == "1"
+	if userInputs {
+		params["user_inputs"] = true // only a count/position projection, never message bodies
+	}
 	// Only the paging the app gave: one it left out or sent empty (iOS's latest page has before_seq=) is not 0 to a
 	// runtime, which may take before_seq 0 as a bad value and refuse every page, and the app's sync then asks again.
 	for _, k := range []string{"before_seq", "limit", "turns"} {
@@ -465,6 +469,20 @@ func (h *Hub) sessionItems(w http.ResponseWriter, r *http.Request, m *Machine) {
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
 	defer cancel()
+	if userInputs {
+		var index proto.UserInputIndex
+		if err := m.call(ctx, "session.items", params, &index); err != nil {
+			callErr(w, err)
+			return
+		}
+		if index.Inputs == nil || index.Total != len(index.Inputs) {
+			writeErr(w, http.StatusBadGateway, errors.New("incomplete user input index"))
+			return
+		}
+		w.Header().Set("Cache-Control", "no-store")
+		writeJSON(w, index)
+		return
+	}
 	var res struct {
 		Items     []proto.Item `json:"items"`
 		HasMore   bool         `json:"has_more"`
@@ -961,15 +979,17 @@ func (h *Hub) broadcastTo(typ string, b []byte, elicitation bool) {
 		h.events = newEventLog()
 	}
 	b = h.events.add(b, elicitation, time.Now())
+	// Each broadcast has one type and localizer; keep its language forms local to this call.
+	localize := i18n.ExtensionEvent
+	if typ == "machines" {
+		localize = localizedMachineEvent
+	}
+	forms := map[i18n.Lang][]byte{}
 	for c := range h.clients {
 		if elicitation && !c.has("elicitation") {
 			continue
 		}
-		if typ == "machines" {
-			c.queue(localizedMachineEvent(c.lang(), b))
-		} else {
-			c.queue(i18n.ExtensionEvent(c.lang(), b))
-		}
+		c.queue(localizedOnce(forms, c.lang(), b, localize))
 	}
 }
 
@@ -981,10 +1001,14 @@ func (h *Hub) toSubscribers(machineID, sessionID string, v any) {
 // URL's ?features= or in client_hello. v is encoded only once some client follows the session: most streamed deltas
 // are for sessions no app has open.
 func (h *Hub) toSubscribersWith(machineID, sessionID, feature string, v any) {
-	key := [2]string{machineID, sessionID}
-	var b []byte
 	h.mu.Lock()
 	defer h.mu.Unlock()
+	h.toSubscribersLocked(machineID, sessionID, feature, v)
+}
+
+func (h *Hub) toSubscribersLocked(machineID, sessionID, feature string, v any) {
+	key := [2]string{machineID, sessionID}
+	var b []byte
 	for c := range h.clients {
 		c.mu.Lock()
 		sub := c.subs[key]

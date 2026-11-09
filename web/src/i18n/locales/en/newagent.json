@@ -53,5 +53,8 @@
   "recent_setups": "Recent",
   "recent_options": "Recent setup options",
   "recent_remove": "Remove from Recent",
-  "recent_clear": "Clear recent setups"
+  "recent_clear": "Clear recent setups",
+  "preset": "Preset",
+  "preset_hint": "From {profile}: fills in launcher, model and effort, which you can still change.",
+  "preset_left_out": "Not applied here: {what}. The launcher's or model's own setting runs."
 }

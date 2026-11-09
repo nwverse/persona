@@ -28,6 +28,7 @@ func standbyHome(t *testing.T) string {
 	}
 	t.Cleanup(func() { os.RemoveAll(home) })
 	t.Setenv("HOME", home)
+	clearPersonaHome(t)
 	return home
 }
 
