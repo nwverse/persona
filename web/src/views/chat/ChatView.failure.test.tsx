@@ -83,7 +83,7 @@ const { ChatView } = await import("./ChatView");
 const { t } = await import("../../i18n");
 const { getState, setOutbox } = await import("../../lib/store");
 const { setRoute } = await import("../../lib/feed");
-const { keepOutgoing, outboxKey, resetRestoredForTests, SENT_GRACE_MS } = await import("../../lib/outbox");
+const { keepOutgoing, outboxKey, resetOutboxClaimsForTests, SENT_GRACE_MS } = await import("../../lib/outbox");
 const { SESSIONS_LOOKUP_FEATURE } = await import("../../lib/runtime-list");
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -242,6 +242,138 @@ describe("a message the node held back for an ultracode change (#3428)", () => {
   });
 });
 
+describe("accepted messages waiting for their transcript copy (#2792)", () => {
+  let bodies: { client_msg_id: string; text: string }[];
+  beforeEach(() => {
+    bodies = [];
+    resetOutboxClaimsForTests();
+    vi.stubGlobal("fetch", vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input).endsWith("/messages")) bodies.push(JSON.parse(String(init?.body)));
+      return Promise.resolve(json({}));
+    }));
+  });
+  afterEach(() => { transcript.items = []; });
+
+  it.each(["reload", "navigation"])("keeps one pending copy after %s without sending again, then replaces it with the echo", async (reopen) => {
+    act(() => root.render(<ChatView mid="hub" sid="c1" />));
+    await flush();
+    await act(async () => void (await captured.onSend!({ text: "Is the museum open on Sunday?", images: [] })));
+    await flush();
+    const id = bodies[0].client_msg_id;
+    const key = `outbox-msg:hub/c1/${id}`;
+    expect(JSON.parse(localStorage.getItem(key)!)).toMatchObject({ id, state: "sent" });
+    expect(host.querySelectorAll("[data-user-bubble]")).toHaveLength(1);
+
+    act(() => root.render(null));
+    if (reopen === "reload") {
+      for (const chat of Object.keys(getState().outbox)) setOutbox(chat, []);
+      resetOutboxClaimsForTests();
+    }
+    act(() => root.render(<ChatView mid="hub" sid="c1" />));
+    await flush();
+    expect(host.querySelectorAll("[data-user-bubble]")).toHaveLength(1);
+    expect(host.querySelector(`[data-outbox="${id}"] [data-user-bubble]`)?.getAttribute("data-send-state")).toBe("sent");
+    expect(host.querySelector("[data-outbox] [role=alert]")).toBeNull();
+    expect([...host.querySelectorAll("[data-outbox] button")].some((b) => b.textContent === t("chat-outboxbubbles.retry"))).toBe(false);
+    expect(bodies).toHaveLength(1);
+
+    transcript.items = [{ id: "accepted-copy", seq: 1, role: "user", kind: "text", text: bodies[0].text, client_msg_id: id }];
+    act(() => root.render(<ChatView mid="hub" sid="c1" />));
+    await flush();
+    expect(host.querySelectorAll("[data-user-bubble]")).toHaveLength(1);
+    expect(host.querySelector("[data-user-bubble]")?.hasAttribute("data-send-state")).toBe(false);
+    expect(localStorage.getItem(key)).toBeNull();
+    expect(bodies).toHaveLength(1);
+  });
+
+  it("does not save an accepted bubble again when its echo arrived before HTTP 200", async () => {
+    let accept!: () => void;
+    vi.stubGlobal("fetch", vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      if (!String(input).endsWith("/messages")) return Promise.resolve(json({}));
+      bodies.push(JSON.parse(String(init?.body)));
+      return new Promise<Response>((resolve) => (accept = () => resolve(json({}))));
+    }));
+    act(() => root.render(<ChatView mid="hub" sid="c1" />));
+    await flush();
+    let sending!: Promise<boolean>;
+    act(() => { sending = captured.onSend!({ text: "Please check the opening hours", images: [] }); });
+    await flush();
+    const id = bodies[0].client_msg_id;
+    const key = `outbox-msg:hub/c1/${id}`;
+    expect(localStorage.getItem(key)).not.toBeNull();
+    transcript.items = [{ id: "early-copy", seq: 1, role: "user", kind: "text", text: bodies[0].text, client_msg_id: id }];
+    act(() => root.render(<ChatView mid="hub" sid="c1" />));
+    await flush();
+    expect(localStorage.getItem(key)).toBeNull();
+    expect(host.querySelectorAll("[data-user-bubble]")).toHaveLength(1);
+
+    accept();
+    await act(async () => void (await sending));
+    await flush();
+    expect(localStorage.getItem(key)).toBeNull();
+    expect(host.querySelectorAll("[data-user-bubble]")).toHaveLength(1);
+    expect(bodies).toHaveLength(1);
+  });
+
+  it("updates a restored bubble when the original POST is accepted after navigation", async () => {
+    let accept!: () => void;
+    vi.stubGlobal("fetch", vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      if (!String(input).endsWith("/messages")) return Promise.resolve(json({}));
+      bodies.push(JSON.parse(String(init?.body)));
+      return new Promise<Response>((resolve) => (accept = () => resolve(json({}))));
+    }));
+    act(() => root.render(<ChatView mid="hub" sid="c1" />));
+    await flush();
+    let sending!: Promise<boolean>;
+    act(() => { sending = captured.onSend!({ text: "Please check the visiting hours", images: [] }); });
+    await flush();
+    const id = bodies[0].client_msg_id;
+    const key = `outbox-msg:hub/c1/${id}`;
+
+    act(() => root.render(null));
+    act(() => root.render(<ChatView mid="hub" sid="c1" />));
+    await flush();
+    expect(host.querySelector(`[data-outbox="${id}"] [data-user-bubble]`)?.getAttribute("data-send-state")).toBe("failed");
+    accept();
+    await act(async () => void (await sending));
+    await flush();
+    expect(host.querySelectorAll("[data-user-bubble]")).toHaveLength(1);
+    expect(host.querySelector(`[data-outbox="${id}"] [data-user-bubble]`)?.getAttribute("data-send-state")).toBe("sent");
+    expect(host.querySelector("[data-outbox] [role=alert]")).toBeNull();
+    expect(JSON.parse(localStorage.getItem(key)!)).toMatchObject({ id, state: "sent" });
+    expect(bodies).toHaveLength(1);
+
+    transcript.items = [{ id: "navigated-copy", seq: 1, role: "user", kind: "text", text: bodies[0].text, client_msg_id: id }];
+    act(() => root.render(<ChatView mid="hub" sid="c1" />));
+    await flush();
+    expect(host.querySelectorAll("[data-user-bubble]")).toHaveLength(1);
+    expect(host.querySelector("[data-user-bubble]")?.hasAttribute("data-send-state")).toBe(false);
+    expect(localStorage.getItem(key)).toBeNull();
+    expect(bodies).toHaveLength(1);
+  });
+
+  it("expires a restored accepted bubble even when no further transcript arrives", async () => {
+    vi.useFakeTimers();
+    const key = "outbox-msg:hub/c1/accepted";
+    keepOutgoing(outboxKey("hub", "c1"), { id: "accepted", text: "Waiting for a copy", images: [], at: Date.now(), state: "sent" });
+    try {
+      act(() => root.render(<ChatView mid="hub" sid="c1" />));
+      await act(async () => { await vi.advanceTimersByTimeAsync(100); });
+      expect(host.querySelector('[data-outbox="accepted"] [data-user-bubble]')?.getAttribute("data-send-state")).toBe("sent");
+      expect(localStorage.getItem(key)).not.toBeNull();
+
+      await act(async () => { await vi.advanceTimersByTimeAsync(SENT_GRACE_MS); });
+      await act(async () => { await vi.advanceTimersByTimeAsync(100); });
+      expect(host.querySelector('[data-outbox="accepted"]')).toBeNull();
+      expect(localStorage.getItem(key)).toBeNull();
+      expect(bodies).toEqual([]);
+    } finally {
+      act(() => root.render(null));
+      vi.useRealTimers();
+    }
+  });
+});
+
 describe("sending in order, and with no row yet", () => {
   const known = captured.session;
   afterEach(() => void (captured.session = known));
@@ -278,12 +410,13 @@ describe("sending in order, and with no row yet", () => {
     act(() => root.render(<ChatView mid="hub" sid="c1" />));
     await flush();
     let first!: Promise<boolean>, second!: Promise<boolean>;
+    const sentAt = Date.now();
     act(() => {
       first = captured.onSend!({ text: "one", images: [] });
       second = captured.onSend!({ text: "two", images: [] });
     });
     await flush();
-    const later = Date.now() + SENT_GRACE_MS + 1;
+    const later = Date.now() + 3 * SENT_GRACE_MS;
     const clock = vi.spyOn(Date, "now").mockImplementation(() => later);
     transcript.items = [{ id: "n1", seq: 1, role: "notice", kind: "notice", text: "something else" }];
     try {
@@ -295,6 +428,13 @@ describe("sending in order, and with no row yet", () => {
       await flush();
       release[1]();
       await act(async () => void (await Promise.all([first, second])));
+      expect(Object.keys(localStorage).filter((k) => k.startsWith("outbox-msg:"))).toHaveLength(2);
+      // Untagged echoes use the original send time, even when acceptance took longer than the clock slack.
+      transcript.items = bodies.map((body, i) => ({ id: `slow-copy-${i}`, seq: i + 1, role: "user", kind: "text", text: body.text, ts: new Date(sentAt).toISOString() }));
+      act(() => root.render(<ChatView mid="hub" sid="c1" />));
+      await flush();
+      expect(host.querySelectorAll("[data-user-bubble]")).toHaveLength(2);
+      expect(host.querySelector("[data-user-bubble][data-send-state]")).toBeNull();
       expect(Object.keys(localStorage).filter((k) => k.startsWith("outbox-msg:"))).toHaveLength(0);
     } finally {
       clock.mockRestore();
@@ -398,7 +538,6 @@ describe("sending in order, and with no row yet", () => {
   });
 
   it("brings a reload's unconfirmed message back only once the chat is known and the hub's first page is in", async () => {
-    resetRestoredForTests();
     keepOutgoing(outboxKey("hub", "c1"), { id: "kept", text: "unconfirmed", images: [], at: Date.now() });
     captured.session = undefined;
     transcript.firstRead = false;
