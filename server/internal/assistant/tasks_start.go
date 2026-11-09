@@ -13,7 +13,6 @@ import (
 	"github.com/nwverse/persona/server/internal/apierr"
 	"github.com/nwverse/persona/server/internal/db"
 	"github.com/nwverse/persona/server/internal/i18n"
-	"github.com/nwverse/persona/server/internal/prompts"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/rpc"
 )
@@ -21,6 +20,9 @@ import (
 // ---- starting and dismissing a plan ----
 
 var errPlanNotOpen = errors.New("this plan was already started or dismissed")
+
+// planInvalid is a start the user's edits make impossible as they are (a model that is no model id): 400.
+type planInvalid struct{ error }
 
 // startPlan opens a todo for each task of the open plan id (edits, when given, replace the tasks' fields the user can
 // change) and starts their agents in the background; remember lets this kind start without asking next time.
@@ -38,6 +40,12 @@ func (s *Service) startPlan(ctx context.Context, id string, edits []PlanTask, re
 	for i := range p.Tasks {
 		if i < len(edits) {
 			applyPlanEdit(&p.Tasks[i], edits[i])
+		}
+		if err := p.Tasks[i].normalizeMachinePolicy(); err != nil {
+			return nil, planInvalid{err}
+		}
+		if err := checkModelID(p.Tasks[i].Model); err != nil { // typed on the card (#1644): refused before anything starts
+			return nil, planInvalid{err}
 		}
 		if !s.placeTask(ctx, &p.Tasks[i]) {
 			return nil, i18n.Err("assistant-tasks.task_no_machine", i18n.Args{"task": p.Tasks[i].Title, "machine": strconv.Quote(p.Tasks[i].Machine)})
@@ -165,40 +173,6 @@ func (s *Service) releaseTakenTodo(id string) {
 	s.tasks.mu.Unlock()
 }
 
-// applyPlanEdit takes what the user changed on the card; an empty field keeps the assistant's.
-func applyPlanEdit(t *PlanTask, e PlanTask) {
-	if s := strings.TrimSpace(e.Title); s != "" {
-		t.Title = s
-	}
-	if s := strings.TrimSpace(e.Prompt); s != "" {
-		t.Prompt = s
-	}
-	if s := strings.TrimSpace(e.Machine); s != "" {
-		t.Machine = s
-	}
-	if s := strings.TrimSpace(e.Cwd); s != "" {
-		t.Cwd = s
-	}
-	if s := strings.TrimSpace(e.Launcher); s != "" {
-		t.Launcher = s
-	}
-	if s := strings.TrimSpace(e.Model); s != "" {
-		t.Model = s
-	}
-	if s := strings.TrimSpace(e.Tier); s != "" {
-		t.Tier = s
-	}
-	if s := strings.TrimSpace(e.Effort); s != "" {
-		t.Effort = s
-	}
-	if s := strings.TrimSpace(e.Permission); s != "" {
-		t.Permission = s
-	}
-	if e.Ultracode != nil {
-		t.Ultracode = e.Ultracode
-	}
-}
-
 // taskStartTimeout bounds one start of a task's agent: a busy machine's shell can take minutes to run claude
 // (node's claudeStartWait, #1396).
 var taskStartTimeout = 5 * time.Minute
@@ -215,19 +189,19 @@ func (s *Service) startPlanTask(planID, conversation string, i int, t PlanTask, 
 	ctx, cancel := context.WithTimeout(context.Background(), taskStartTimeout)
 	defer cancel()
 	placed := t.Machine
-	mid, sid, err := s.startTaskAgent(ctx, &t)
+	mid, sid, err := s.startTaskAgent(ctx, &t, retry)
 	if err != nil && ctx.Err() == nil {
 		// The machine's link dropped (a node restarting, a tunnel blinking): try once more after a moment. Any other
-		// failure now counts against the launcher there, so the retry goes to a machine where it works, if one has it.
-		retry := transientStartErr(err)
-		if !retry {
-			_, _, retry = s.healthDetour(ctx, Device{ID: t.Machine}, s.startLauncher(ctx, t.Launcher))
+		// failure counts against the launcher there. Only flexible tasks may retry on another healthy machine.
+		shouldRetry := transientStartErr(err)
+		if !shouldRetry && t.MachinePolicy == machineFlexible {
+			_, _, shouldRetry = s.healthDetour(ctx, Device{ID: t.Machine}, s.startLauncher(ctx, t.Launcher))
 		}
-		if retry {
+		if shouldRetry {
 			s.logf("task %s: start: %v; retrying", t.TodoID, err)
 			select {
 			case <-time.After(s.taskStartRetry()):
-				mid, sid, err = s.startTaskAgent(ctx, &t)
+				mid, sid, err = s.startTaskAgent(ctx, &t, retry)
 			case <-ctx.Done():
 			}
 		}
@@ -254,12 +228,17 @@ func (s *Service) startPlanTask(planID, conversation string, i int, t PlanTask, 
 	// on it failed too, and the task stayed "starting" with no agent for ever (#4510). The bookkeeping gets its own time.
 	ctx, cancel = context.WithTimeout(context.WithoutCancel(ctx), taskFailTimeout)
 	defer cancel()
-	reason := clip(oneLine(err.Error()), 200)
+	limit := 200
+	if code, _ := codedStartRefusal(err); code != "" {
+		limit = proto.CodedStartErrorMax // the hub's sentence, whose remedy comes last (#1642): kept whole
+	}
+	reason := clip(oneLine(s.startFailureText(ctx, t.Machine, err)), limit)
 	if ferr := s.failTodo(ctx, t.TodoID, reason); ferr != nil {
 		s.logf("task %s: fail: %v", t.TodoID, ferr)
 	}
 	if p, lerr := s.loadPlan(ctx, planID); lerr == nil && i < len(p.Tasks) {
 		p.Tasks[i].Error = err.Error()
+		p.Tasks[i].ErrorCode, p.Tasks[i].ErrorArgs = codedStartRefusal(err)
 		_, _ = s.movePlan(ctx, p, planStarted)
 		s.event(ctx, map[string]any{"type": "task_plan", "plan": p})
 	}
@@ -365,7 +344,7 @@ func (s *Service) retryTask(ctx context.Context, todoID string) (json.RawMessage
 	if !ok { // another assistant sharing the store reopened it first
 		return view, nil
 	}
-	p.Tasks[i].Error = ""
+	p.Tasks[i].Error, p.Tasks[i].ErrorCode, p.Tasks[i].ErrorArgs = "", "", nil
 	if _, err := s.movePlan(ctx, p, planStarted); err != nil {
 		s.logf("plan %s: %v", p.ID, err)
 	}
@@ -470,88 +449,6 @@ func transientStartErr(err error) bool {
 	var re *rpc.Error
 	return errors.Is(err, rpc.ErrClosed) || errors.Is(err, apierr.ErrOffline) ||
 		errors.As(err, &re) && re.Message == rpc.ErrClosed.Error()
-}
-
-// healthyPlace moves t off a machine where its launcher failed its health check, to one where it works
-// (launcher_health.go); its why says so. False: it stays.
-func (s *Service) healthyPlace(ctx context.Context, t *PlanTask) bool {
-	m, ok := s.machineByName(ctx, t.Machine)
-	if !ok {
-		return false
-	}
-	alt, note, moved := s.healthDetour(ctx, m, s.startLauncher(ctx, t.Launcher))
-	if note != "" && !strings.Contains(t.Why, note) {
-		t.Why = strings.TrimSpace(t.Why + "（" + note + "）")
-	}
-	if moved {
-		t.Machine, t.Cwd = alt.ID, rehome(t.Cwd, m, alt)
-	}
-	return moved
-}
-
-// startTaskAgent starts the agent for t on its machine (another when its launcher does not work there: t says which)
-// and answers the machine's id and the session's: the machine it reached is the one the agent is linked to (looking it
-// up again after the start could find another, or none). A failed start counts against the launcher there.
-func (s *Service) startTaskAgent(ctx context.Context, t *PlanTask) (mid, sid string, err error) {
-	params := map[string]any{"launcher": t.Launcher, "model": t.Model, "effort": t.Effort, "tier": t.Tier}
-	if err := s.applyStartTier(ctx, params); err != nil {
-		return "", "", err
-	}
-	if err := s.applyModel(ctx, "agent.new", params); err != nil {
-		return "", "", err
-	}
-	t.Launcher, _ = params["launcher"].(string)
-	t.Model, _ = params["model"].(string)
-	t.Effort, _ = params["effort"].(string)
-	s.healthyPlace(ctx, t)
-	m, ok := s.machineByName(ctx, t.Machine)
-	if !ok {
-		return "", "", fmt.Errorf("unknown machine %q", t.Machine)
-	}
-	prompt := t.Prompt
-	if len(t.DoneWhen) > 0 { // what the supervisor will check (supervise.go)
-		prompt += "\n\n" + prompts.RenderTaskDoneWhen(t.DoneWhen)
-	}
-	if !t.Readonly && s.doneNeedsDelivery(ctx) { // what done means: live and checked (delivery.go)
-		prompt += "\n\n" + prompts.RenderTaskDelivery()
-	}
-	// The project background, and the todo's decisions (a task started again may have some), go before the prompt
-	// (#2820, #1618); the tab is named from the title.
-	prompt = s.withProjectContext(ctx, m.ID, t.Cwd, s.withTodoDecisions(ctx, t.TodoID, prompt))
-	params["cwd"], params["prompt"], params["tab_name"] = t.Cwd, prompt, s.tabName(ctx, t.Title)
-	if t.Model != "" {
-		params["model"] = t.Model
-	}
-	if t.Permission != "" {
-		params["permission_mode"] = t.Permission
-	}
-	if t.Ultracode != nil && *t.Ultracode {
-		params["ultracode"] = true
-	}
-	var res struct {
-		Session proto.Session `json:"session"`
-	}
-	if err := s.call(ctx, m.ID, DeviceSessionStart, params, &res); err != nil {
-		picked, _ := params["launcher"].(string)
-		s.recordStartFailure(ctx, m.ID, s.startLauncher(ctx, picked), err)
-		return "", "", err
-	}
-	return m.ID, res.Session.SessionID, nil
-}
-
-// updatePlanTask keeps the machine, directory and why task i of started plan planID runs with now.
-func (s *Service) updatePlanTask(ctx context.Context, planID string, i int, t PlanTask) {
-	p, err := s.loadPlan(ctx, planID)
-	if err != nil || i >= len(p.Tasks) {
-		return
-	}
-	p.Tasks[i].Machine, p.Tasks[i].Cwd, p.Tasks[i].Why = t.Machine, t.Cwd, t.Why
-	p.Tasks[i].Launcher, p.Tasks[i].Model, p.Tasks[i].Effort = t.Launcher, t.Model, t.Effort
-	if _, err := s.movePlan(ctx, p, planStarted); err != nil {
-		s.logf("plan %s: %v", planID, err)
-		return
-	}
-	s.event(ctx, map[string]any{"type": "task_plan", "plan": p})
 }
 
 func (s *Service) dismissPlan(ctx context.Context, id string) (*TaskPlan, error) {

@@ -33,7 +33,7 @@ final class AgentsListTests: XCTestCase {
     private func launch(fresh: Bool = true, chat: String = "") {
         app = XCUIApplication()
         let pair = "persona://pair?url=" + hub.addingPercentEncoding(withAllowedCharacters: .alphanumerics)! + "&token=mock"
-        app.launchArguments = ["-pairURL", pair, "-app.tab", "chats", "-dev.openChat", chat, "-tab", "dev", "-dev.grouping", "space"]
+        app.launchArguments = ["-pairURL", pair, "-app.tab", "chats", "-dev.openChat", chat, "-tab", "dev", "-dev.grouping", "space", "-probes", "YES"]
             + (fresh ? ["-openAgentsFresh", "YES"] : [])
         app.launchPinned()
         if chat.isEmpty { see(filter("all"), "the quick filters", timeout: 15) }
@@ -109,7 +109,7 @@ final class AgentsListTests: XCTestCase {
     }
 
     private func listMenu() -> XCUIElement {
-        see(app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "分组：")).firstMatch, "the list menu")
+        see(app.buttons["shell-agents"].firstMatch, "the list menu")
     }
 
     /// Back to the top of the list, where the quick filters are (a list scrolled to a row below the cards).
@@ -191,8 +191,7 @@ final class AgentsListTests: XCTestCase {
     @MainActor func testMachineFilterShowsInShell() throws {
         app = XCUIApplication()
         let pair = "persona://pair?url=" + hub.addingPercentEncoding(withAllowedCharacters: .alphanumerics)! + "&token=mock"
-        app.launchArguments = ["-pairURL", pair, "-app.tab", "chats", "-dev.openChat", "", "-tab", "dev", "-openAgentsFresh", "YES",
-                               "-ui.oldLayout", "NO"]
+        app.launchArguments = ["-pairURL", pair, "-app.tab", "chats", "-dev.openChat", "", "-tab", "dev", "-openAgentsFresh", "YES"]
         app.launchPinned()
         see(filter("all"), "the quick filters", timeout: 15)
         let chip = app.buttons["agents.machineFilter"]
@@ -211,7 +210,7 @@ final class AgentsListTests: XCTestCase {
         wait("every machine again (\(filter("unread").label))") { filter("unread").label == all }
 
         app.terminate()
-        app.launchArguments = ["-pairURL", pair, "-app.tab", "chats", "-dev.openChat", "", "-tab", "dev", "-ui.oldLayout", "NO"]
+        app.launchArguments = ["-pairURL", pair, "-app.tab", "chats", "-dev.openChat", "", "-tab", "dev"]
         app.launchPinned()
         see(filter("all"), "the list after a relaunch", timeout: 15)
         XCTAssertFalse(app.buttons["agents.machineFilter"].exists, "cleared for good, not only for this run")
@@ -415,7 +414,7 @@ final class AgentsListTests: XCTestCase {
     /// collection view of its own, outside `keyboards`), so an element swipe there never moved the list. An element
     /// swipe on the list itself starts from the middle of its whole frame, which on a small phone is about the
     /// keyboard's edge (it did not scroll on an iPhone SE). So drag inside the part of the list that takes touches:
-    /// below the bars and the search field, above the strip, the keys and the tab bar.
+    /// below the bars and the search field, above the suggestion strip and the keys.
     private func dragListUp() {
         let list = app.collectionViews.containing(.button, identifier: "agents.filter.all").firstMatch.frame
         var top = max(list.minY, app.navigationBars.firstMatch.frame.maxY)
@@ -424,8 +423,6 @@ final class AgentsListTests: XCTestCase {
         var bottom = list.maxY
         let keyboard = app.keyboards.firstMatch
         if keyboard.exists { bottom = min(bottom, keyboard.frame.minY) }
-        let tabBar = app.tabBars.firstMatch
-        if tabBar.exists && tabBar.isHittable { bottom = min(bottom, tabBar.frame.minY) }
         // Strips sitting on that edge (the suggestion bar on the keys) cover the rows too.
         for other in app.collectionViews.allElementsBoundByIndex where other.frame != list {
             if other.frame.maxY >= bottom - 1, other.frame.minY > top { bottom = min(bottom, other.frame.minY) }
@@ -500,9 +497,9 @@ final class AgentsListTests: XCTestCase {
         app.activate()
         see(filter("all"), "the list after coming back")
         XCTAssertLessThan(gapAboveFilters("foreground", searchShown: true), limit)
-        app.buttons["Persona"].firstMatch.tap()
+        ShellFinger(app).switchTo(agents: false, "Assistant during the filter-bar round trip")
         sleep(1)
-        app.buttons["Agents"].firstMatch.tap()
+        ShellFinger(app).switchTo(agents: true, "Agents during the filter-bar round trip")
         see(filter("all"), "the list after switching tabs")
         XCTAssertLessThan(gapAboveFilters("tabs"), limit, "the reopened tab starts with folded search")
         shot("filters-after-tabs")

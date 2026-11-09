@@ -3,8 +3,10 @@ import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api, enc, errorText } from "../lib/api";
 import { ago, clock, shortPath, stateOf, tabLabel, uuid } from "../lib/format";
 import { launchAgent } from "../lib/new-agent";
+import { initialLauncher, launcherBlock, usableFirst } from "../lib/launcher-health";
 import { navigate } from "../lib/router";
 import { interactionAsk } from "../lib/inbox";
+import { usageLimitLabel } from "../lib/usage-limit";
 import { plainMarkdown } from "../lib/plain-markdown";
 import { composing } from "../lib/send-history";
 import { useAgentSessions } from "../lib/sessions";
@@ -457,7 +459,7 @@ function steadyViews(prev: ReadonlyMap<string, TodoRowView>, next: ReadonlyMap<s
 
 // ── Project Section ──────────────────────────────────────────
 
-const TREE_TONE: Record<TreeState, string> = { needs_you: "text-attention", working: "text-orange", bg_waiting: "text-status-waiting", done: "text-ink-3" };
+const TREE_TONE: Record<TreeState, string> = { needs_you: "text-attention", working: "text-orange", bg_waiting: "text-status-waiting", waiting: "text-ink-2", done: "text-ink-3" };
 
 /** One project's open todos under a folding title with its Needs you / Working / Done (#2526). */
 const TodoProjectSection = memo(function TodoProjectSection({
@@ -527,6 +529,7 @@ export type TodoRowView = {
 const DOT_STATE: Record<TodoStatus, AgentState> = {
   needs_you: "needs_you",
   interrupted: "needs_you",
+  usage_limit: "idle",
   unread: "unread",
   working: "working",
   follow_up: "idle",
@@ -542,6 +545,12 @@ export function todoRowView(todo: Todo, lookup: SessionLookup, interactions: Int
   const activeCount = (todo.agents ?? []).filter((a) => !a.released_at).length;
   const view: TodoRowView = { status, dotState: DOT_STATE[status], age: ago(todo.updated_at || todo.created_at), activeCount, urgentLine: false, urgentLead: "", urgentText: "", ultracode: todoUltracode(todo, lookup) };
   if (todo.done_at || !urgent?.session) return view;
+  const limit = status === "usage_limit" ? usageLimitLabel(urgent.session) : undefined;
+  if (limit) {
+    view.urgentLine = true;
+    view.urgentText = limit;
+    return view;
+  }
   const urgentNow = taskNow(urgent.session, stateOf(urgent.session) === "working");
   const urgentIx = interactions.find((i) => i.machine_id === urgent.agent.machine_id && i.session_id === urgent.agent.session_id);
   // what it waits on, from its card (#4111): the question, the command; not its last words
@@ -801,6 +810,8 @@ function TodoDetail({
   const dotState =
     status === "needs_you" || status === "interrupted"
       ? "needs_you"
+      : status === "usage_limit"
+        ? "idle"
       : status === "unread"
         ? "unread"
         : status === "working"
@@ -1525,7 +1536,7 @@ function NewTodoDialog({
 
 // ── Handover to Agent Dialog ─────────────────────────────────
 
-function HandoverDialog({
+export function HandoverDialog({
   open,
   todo,
   machines,
@@ -1575,7 +1586,8 @@ function HandoverDialog({
     api<{ launchers: Launcher[] }>(`/machines/${enc(mid)}/launchers`, { signal: controller.signal })
       .then((r) => {
         setLaunchers(r.launchers ?? []);
-        if (r.launchers?.[0]) setLauncher(r.launchers[0].name);
+        // the first this computer can start now, not one its terminal can't run (#1643)
+        if (r.launchers?.length) setLauncher(initialLauncher(null, r.launchers));
       })
       .catch(() => {});
     return () => controller.abort();
@@ -1584,6 +1596,7 @@ function HandoverDialog({
   const previewCard = useMemo(() => {
     return formatTodoContext(todo.title, todo.notes);
   }, [todo]);
+  const pickedBlock = launcherBlock(launchers.find((l) => l.name === launcher));
 
   const submitNew = async () => {
     if (!mid) return;
@@ -1698,12 +1711,22 @@ function HandoverDialog({
                   onChange={(e) => setLauncher(e.target.value)}
                   className="w-full rounded-control border border-line bg-canvas px-2.5 py-1.5 text-[13px] text-ink outline-none"
                 >
-                  {launchers.map((l) => (
-                    <option key={l.name} value={l.name}>
-                      {l.name}
-                    </option>
-                  ))}
+                  {usableFirst(launchers).map((l) => {
+                    const block = launcherBlock(l);
+                    // still a choice (a start that works clears it), with why, after the ones that can start (#1643)
+                    return (
+                      <option key={l.name} value={l.name}>
+                        {block ? `${l.name} · ${block.reason}` : l.name}
+                      </option>
+                    );
+                  })}
                 </select>
+                {pickedBlock && (
+                  <p data-testid="todo-handoff-blocked" className="mt-1.5 flex min-w-0 items-start gap-1.5 text-[11.5px] leading-snug text-ink-3">
+                    <Icon name="warning" size={12} className="mt-px shrink-0 text-orange" />
+                    <span className="min-w-0">{pickedBlock.reason}</span>
+                  </p>
+                )}
               </div>
             )}
           </div>

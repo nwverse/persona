@@ -157,11 +157,11 @@ systemctl --user restart personad                          # Linux
 launchctl kickstart -k gui/$(id -u)/com.persona.hub          # macOS
 ```
 
-`"$PD" hub switch` also works: the hub starts again behind its edge, without a gap (exit 3 means there is no edge: restart the service instead). The steps use `personad` (`$PD`): the services run it, and an install made with the install command doesn't have `persona-hub` and `persona-manager` until its next update. `persona-hub …` and `persona-manager …` are the same commands. Logs: `journalctl --user -u personad -n 100` (macOS: `tail -n 100 "$DATA/hub.log"`).
+`"$PD" hub switch` also works: the hub starts again behind its edge, without a gap (exit 3 means there is no edge: restart the service instead). The steps use `personad` (`$PD`): every install has it, whether its services run it or the programs beside it. `persona-hub …` and `persona-manager …` are the same commands, once the update in step 1 has put them beside it; `persona-hub switch` too goes on with the program the hub runs now. Logs: `journalctl --user -u personad -n 100` (macOS: `tail -n 100 "$DATA/hub.log"`).
 
 ### Step 1: update to a build with the split
 
-Update as usual: the automatic update, **Update now** in the apps, the install command again with `--hub`, or a direct deploy. The hub's self-update swaps `personad`, `persona-hub` and `persona-manager` together, and rolls them back by itself when the new version doesn't start ([hub-update.md](hub-update.md)). The install command runs `hub setup` again, which keeps an existing install's mode and says how to switch.
+Update as usual: the automatic update, **Update now** in the apps, the install command again with `--hub`, or a direct deploy. The hub's self-update swaps `personad`, `persona-hub` and `persona-manager` together, and rolls them back by itself when the new version doesn't start ([hub-update.md](hub-update.md)). The install command and a direct deploy install the three together too, on the computer that runs the hub. The install command also runs `hub setup` again, which keeps an existing install's mode and says how to switch. On Linux that rerun also moves the hub's service to `persona-hub run` and restarts it, and says so (on a Mac the hub and the built-in manager stay on `personad` for now, and setup says that); the automatic update and a direct deploy leave the service on `personad` until setup runs ([server.md](../server/server.md) ("Programs")).
 
 **Check:**
 
@@ -186,7 +186,7 @@ for f in "$R/$(basename "$DATA")/bin/"*; do
 done
 ```
 
-When the update left `.prev` copies, `cp -p "$PD.prev" "$PD.new" && mv -f "$PD.new" "$PD"` does the same for `personad`. If `$PD` is itself a link (some installs under the former name), do it on the file the link names.
+When the update left `.prev` copies, `cp -p "$PD.prev" "$PD.new" && mv -f "$PD.new" "$PD"` does the same for `personad`; `persona-hub.prev` and `persona-manager.prev` beside it go back the same way. One of the two without a `.prev` came with this update: it stays, and nothing starts it while the services run `personad`. If setup moved the hub's service to `persona-hub` (the install command's rerun), move it back before you put `bin/` back, with this build still in place: `PERSONA_SPLIT_PROGRAMS=0 "$PD" hub setup`. A build from before has no `persona-hub`, and the unit would go on starting the newer one. If `$PD` is itself a link (some installs under the former name), do it on the file the link names.
 
 ### Step 2: switch with setup
 
@@ -198,9 +198,9 @@ jq -c 'select(.step == "manager") | .ok' "$BK/setup.json"      # true
 Setup checks first that the service can be installed, and changes nothing when it can't. Then it:
 
 1. sets `assistant.mode` to `service`;
-2. restarts the hub's service;
+2. restarts the hub's service, moved to `persona-hub run` on Linux if it still ran `personad`;
 3. binds the built-in manager with a one-time code, passed in the environment and never on a command line;
-4. installs its service: `persona-manager-assistant.service` on Linux, the launchd agent `com.persona.manager.assistant` on a Mac;
+4. installs its service: on Linux `persona-manager-assistant.service`, running `persona-manager assistant`; on a Mac the launchd agent `com.persona.manager.assistant`, running `personad assistant`;
 5. waits up to 90 seconds for it on the hub's bus.
 
 Without `--json` it prints one line per step.
@@ -267,13 +267,14 @@ Instead of setup, with the same result:
 ### Going back to a build from before the split
 
 1. Go back to child mode (above). A build from before the split doesn't start a service-mode built-in manager, and nothing else would.
-2. Put `bin/` back (step 1's way back) and restart the hub's service.
+2. Put the hub's service back on `personad`, with this build still in place: `PERSONA_SPLIT_PROGRAMS=0 "$PD" hub setup` (Linux; a Mac's agent runs `personad` already). A build from before the split has no `persona-hub` to run.
+3. Put `bin/` back (step 1's way back) and restart the hub's service.
 
 **Check:** `expect '"online":true'`, and `managers` shows one line. The build from just before the split already has the built-in manager's own database and runs on it. An older build, from before that database, finds the manager's data only as it was when it moved: see the known limits. Restore the databases only when the older build doesn't start.
 
 ## Docker
 
-The image's command runs `personad supervise`. In service mode it runs the hub and the built-in manager side by side; otherwise it runs the hub alone, which starts its child. Your compose file can stay as it is.
+The image's command runs `personad supervise`. In service mode it runs the hub and the built-in manager side by side; otherwise it runs the hub alone, which starts its child. The hub runs as `persona-hub` and the built-in manager as `persona-manager` ([docker.md](docker.md) ("Programs")). Your compose file can stay as it is.
 
 ### Step 1: update the image
 
@@ -299,7 +300,7 @@ docker compose restart hub
 **Check:**
 
 - `expect '"online":true,"deploy":"service"'`.
-- `docker compose exec hub ps -o pid,ppid,args` shows `personad supervise` with two children, `… hub run` and `… assistant`.
+- `docker compose exec hub ps -o pid,ppid,args` shows `personad supervise` with two children, `…/persona-hub run` and `…/persona-manager assistant`.
 - `docker compose logs --no-log-prefix --since 5m hub | grep 'supervise:'` shows `bound the built-in manager to the hub at http://127.0.0.1:18660` the first time.
 - When either program stops, the supervisor starts it again and leaves the other running. Its log says so: `supervise: … stopped (…): starting it again in 1s; the other runs on`.
 
@@ -383,14 +384,14 @@ Whatever the type, the upgrade is done when all of these hold:
 ## Known limits
 
 - **Nothing switches by itself.** Existing installs stay in child mode until switched, and child mode stays supported.
-- **The services still run `personad`** (`personad hub run`, `personad assistant`). A later release moves them to `persona-hub` and `persona-manager`.
-- **The first update that brings `persona-hub` and `persona-manager`:** if it rolls back, only `personad` goes back, because the old watchdog doesn't know the two. They stay behind, don't match the hub's version, and aren't started until the next update. The install command installs `personad` alone; the next update brings the other two.
+- **Some services stay on `personad`.** Setup on Linux and the image move the hub and the built-in manager to `persona-hub` and `persona-manager`, but a Mac's agents (until a later change moves them together with the node of the hub's computer), a service under the former name, the managers made in the app, and anything run with `PERSONA_SPLIT_PROGRAMS=0` (Linux and Docker) keep `personad`. The node of the hub's computer runs as `personad` too ([server.md](../server/server.md) ("Programs")).
+- **The first update that brings `persona-hub` and `persona-manager`:** if it rolls back, only `personad` goes back, because the old watchdog doesn't know the two. They stay behind, don't match the hub's version, and aren't started until the next update. The install command installs the three on the computer that runs the hub; a release without the two (from before the split) leaves them as they were, at another version than `personad`. When a service runs one of them, neither the install command nor the hub's self-update installs such a release ([hub-update.md](hub-update.md) ("Programs swapped together with personad")).
 - **A service left installed after going back to child mode** waits, refused by the hub, instead of running next to its child. Short overlaps remain while a refused service shuts down and a child starts. Remove it with `manager uninstall --builtin`.
 - **One built-in manager per data directory.** A second one exits 2, kept out by a lock on Linux and macOS. In Docker, if the hub's container still runs its own (no `PERSONA_BUILTIN_MANAGER: separate`) while a manager container runs, one of them keeps exiting 2 and trying again.
 - **A built-in manager that runs elsewhere** (`assistant.external`) is not switched: `--manager-service` refuses it and changes nothing.
 - **Builds from before the built-in manager's own database:** they find the manager's data as it was when it moved to its own database. Anything written after that is not there for them. Forward again, the newer build runs on its own database as it was ([server.md](../server/server.md) ("The default manager's own database")).
 - **New binaries:**
-  - The built-in manager's service picks up a new `personad` by itself within a minute, once it is idle. It waits at most 30 minutes, and an extension's live view left open holds it that long.
+  - The built-in manager's service picks up a new binary (`persona-manager`, or `personad` when it runs that) by itself within a minute, once it is idle. It waits at most 30 minutes, and an extension's live view left open holds it that long.
   - Managers made in the app run their old build until their service restarts.
 - **Docker:**
   - The programs get the hub's shutdown budget and a second more to stop: 9 seconds by default. A longer `shutdown_timeout_seconds` needs a longer `stop_grace_period` in compose, and the supervisor reads it when the container starts.

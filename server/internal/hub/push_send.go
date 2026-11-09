@@ -72,10 +72,15 @@ func (p *Pusher) sendLiveActivity(d Device, token string, payload map[string]any
 	if p == nil || token == "" || !p.reachable(d) {
 		return
 	}
+	body, _ := json.Marshal(payload)
+	event := trafficPushEvent(payload, "liveactivity")
 	if p.relayed(d) {
 		aps, _ := payload["aps"].(map[string]any)
+		p.notePush(d, nil, event, "relay", "attempt", 0, int64(len(body)), 0)
 		go func() {
+			started := time.Now()
 			res, err := p.postRelay(d, relayproto.PushRequest{Type: "liveactivity", Priority: priority, Token: token, APS: aps})
+			p.noteRelayResult(d, nil, event, err, res.gone, int64(len(body)), time.Since(started))
 			if err != nil {
 				p.logf("relay live activity %s: %v", d.Name, err)
 			} else if res.gone {
@@ -84,9 +89,11 @@ func (p *Pusher) sendLiveActivity(d Device, token string, payload map[string]any
 		}()
 		return
 	}
-	body, _ := json.Marshal(payload)
+	p.notePush(d, nil, event, "apns", "attempt", 0, int64(len(body)), 0)
 	go func() {
+		started := time.Now()
 		res, err := p.sendDirect(d, apns.Request{Token: token, Env: d.APNSEnv, Topic: d.Topic, PushType: "liveactivity", Priority: priority, Body: body})
+		p.noteDirectResult(d, nil, event, err, res.Status, int64(len(body)), time.Since(started))
 		if err != nil {
 			p.logf("apns live activity %s: %v", d.Name, err)
 			return
@@ -213,14 +220,18 @@ func (p *Pusher) sendBuiltWith(build localized, collapseID, pushType, priority s
 			byLang[key] = b
 		}
 		payload, body := b.payload, b.body
+		event := trafficPushEvent(payload, pushType)
 		if p.relayed(d) {
 			sealed, err := p.sealFor(d, payload)
 			if err != nil {
 				p.logf("relay %s: seal: %v", d.Name, err) // never falls back to sending it in the clear
 				continue
 			}
+			p.notePush(d, nil, event, "relay", "attempt", 0, int64(len(body)), 0)
 			go func(d Device) {
+				started := time.Now()
 				res, err := p.postRelay(d, relayproto.PushRequest{Type: pushType, Priority: priority, CollapseID: relayCollapseID(collapseID), Sealed: sealed})
+				p.noteRelayResult(d, nil, event, err, res.gone, int64(len(body)), time.Since(started))
 				if err != nil {
 					p.logf("relay %s: %v", d.Name, err)
 				} else if res.gone {
@@ -229,10 +240,12 @@ func (p *Pusher) sendBuiltWith(build localized, collapseID, pushType, priority s
 			}(d)
 			continue
 		}
+		p.notePush(d, nil, event, "apns", "attempt", 0, int64(len(body)), 0)
 		go func(d Device) {
 			sent := time.Now()
 			res, err := p.sendDirect(d, apns.Request{Token: d.APNSToken, Env: d.APNSEnv, Topic: d.Topic,
 				PushType: pushType, Priority: priority, CollapseID: collapseID, Body: body})
+			p.noteDirectResult(d, nil, event, err, res.Status, int64(len(body)), time.Since(sent))
 			if err != nil {
 				p.logf("apns %s: %v", d.Name, err)
 				return

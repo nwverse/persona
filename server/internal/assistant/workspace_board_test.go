@@ -113,6 +113,10 @@ func (d *boardDevs) List() []devices.Summary {
 	}
 	return out
 }
+func (d *boardDevs) MachineResources(string) (*proto.Machine, *proto.MetricSample, *bool) {
+	return nil, nil, nil
+}
+
 func (d *boardDevs) Sessions(id string) ([]proto.Session, bool) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
@@ -121,6 +125,11 @@ func (d *boardDevs) Sessions(id string) ([]proto.Session, bool) {
 		return nil, false
 	}
 	return append([]proto.Session(nil), m.sessions...), true
+}
+
+func (d *boardDevs) SessionsWhere(id string, keep func(*proto.Session) bool) ([]proto.Session, bool) {
+	list, ok := d.Sessions(id)
+	return keptWhere(list, keep), ok
 }
 func (d *boardDevs) CallNode(ctx context.Context, id, method string, params json.RawMessage) (json.RawMessage, error) {
 	d.mu.Lock()

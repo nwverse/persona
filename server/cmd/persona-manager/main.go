@@ -58,7 +58,8 @@ const usage = `usage:
   persona-manager extension …  the extensions on this machine (docs/extensions/extensions.md "Command line")
   persona-manager voice     the built-in voice extension (the manager runs it)
   persona-manager tailcat-key  print the built-in manager's tailcat key (created the first time)
-  persona-manager node …    this computer's node, as the manager starts it (personad node …)
+  persona-manager node …    this computer's node, when the manager runs it as itself: with no persona-node or
+                           personad of its build beside it, or PERSONA_SPLIT_PROGRAMS=0 (personad node …)
   persona-manager version [-v]  the version; -v adds the channel and build number`
 
 func main() {
@@ -84,7 +85,9 @@ func main() {
 		stop()
 		os.Exit(sandbox.Run(args[1:], os.Stderr))
 	}
-	// The node of this computer the manager starts (`<self> node --stdio`, internal/devices) and the commands it runs.
+	// This computer's node, when the manager starts it as itself (`<self> node --stdio`), and the commands it runs. The
+	// manager starts persona-node or personad of its build beside it instead, and itself only when neither is there or
+	// with PERSONA_SPLIT_PROGRAMS=0 (devices.Machine.localNode).
 	if handled, err := nodecmd.Run(ctx, stop, args, nodecmd.Build{Version: version, Program: nodeproto.ProgramPersonad}); handled {
 		finish(err)
 		return

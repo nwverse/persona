@@ -102,6 +102,29 @@ The prototype is the UI and interaction standard; compare screen by screen durin
 - To speak directly to a task, type `@` for a list (tasks, computers, projects, people) and select a task, or tap Message on its card. A purple routing label appears above the input,
   "To ‘xx’ ×." The App sends directly to that Agent, bypassing Persona. The chat bubble carries the same label (`routed` chat-activity entry).
 
+### Messages to agents (#1542)
+
+What Persona itself sends to a task's agent (`agent_send` with `task`, `agent_interrupt` with `then`, a supervision rework) is
+also a `routed` entry, marked `from: "assistant"`. It is never drawn as the user's bubble: those instructions run to dozens of
+lines, and in the user's own color and alignment they read as something the user said.
+
+- **On the task's card**: a row "N instructions sent" lists every message Persona sent to that task (time and first line);
+  tapping one opens its whole text with Copy (the web's text is also selectable). Tapping these rows does not open the task.
+- **The hand-off sent with the card** (Persona's message to the same task in the same conversation at most 60 seconds after
+  the card's `task` entry; `agent_send` with `task` writes the card and then the text) is drawn only on the card, not as a line.
+  Only a card drawn in full (from today) takes it in: a task card from another day is a one-line row with no list, so its
+  hand-off stays a folded line under it (#1668).
+- **Any other message of Persona's** (a rework, a later instruction, one whose task has no card in this chat) is one folded
+  line on the left, styled like the answered and review lines: a send icon (a stop when Persona cut the turn short first),
+  "Sent to ‘xx’" (tap to open the task) and the first line; tapping the line opens the whole text with Copy.
+- What the user sends to a task (its card's Message, or the composer's routing label) has no `from` and keeps the bubble.
+- Older entries: migration `0441_feed_routed_from.sql` marks those Persona wrote before the field existed (see "Chat activity").
+  Older apps ignore `from` and keep drawing the bubble.
+- Apple: `AgentSentLine`, `TaskSentList` (`apple/Persona/Views/Assistant/Tasks/SentViews.swift`), the pure rules in
+  `SentToAgents` (`apple/Shared/Tasks.swift`); web: `web/src/views/assistant/Sent.tsx`, `takenIn` / `sentTo` in `web/src/lib/feed.ts`.
+  Mock: `MOCK_TASKS=1 MOCK_TASKS_SENT=1 MOCK_TASKS_NO_ASKS=1` (a hand-off after its card, a rework to an older task, the
+  user's own word); UI test `SentToAgentTests`.
+
 ### Task details
 
 - Tap a task card, dock pill, or Review changes in a receipt to open task details from the bottom, like link cards (`LinkSheet`): initially full-screen;
@@ -192,11 +215,11 @@ Add two columns to `todos`:
 
 ### Plans
 
-Table `task_plans`: `id`, `conversation`, `tasks` (JSON: each item's `title`, `notes`, `machine`, `cwd`, `launcher`, `model`, `permission`, `ultracode`, `readonly`, `user_requested`, `why`),
+Table `task_plans`: `id`, `conversation`, `tasks` (JSON: each item's `title`, `notes`, `machine`, `machine_policy`, `cwd`, `launcher`, `model`, `permission`, `ultracode`, `readonly`, `user_requested`, `why`),
 `state` (`open` / `started` / `dismissed`), `created_at`, `updated_at`.
 
 - MCP tool `task_plan` (assistant only): accepts a task list. Start directly if every item is read-only, `user_requested` (with `assistant.start_requested_tasks` enabled), or matched by `tasks.trust`; otherwise save an `open` plan and emit chat activity.
-  Return the plan ID and each task's state (text).
+  Return the plan ID and each task's state (text). Automatic dispatch is reported as queued, not as proof of an Agent start. `machine_policy` defaults to `fixed` (including old saved plans); only explicit `flexible` tasks may move off an unhealthy machine. The policy survives storage, card edits and retry. Fixed tasks fail on their own target and can retry there after health recovery.
 - `POST /api/v1/task-plans/{id}/start`: may include user-edited fields. Create a to-do per task (`origin`, `plan_id`), then start its Agent (`startSession` with `todo_id`).
   With `remember: true`, record this kind in `tasks.trust`. `POST …/dismiss`: do not start.
 - `ultracode` (#12): the assistant sets it per task, as on `agent_start`, rather than writing the word into the prompt; the Agent starts with Claude Code's ultracode on (`session.start` `ultracode: true`). On start, `true` / `false` from the card overrides it and leaving it out keeps the assistant's choice.
@@ -212,7 +235,7 @@ Hub-inserted chat entries do not enter Claude's transcript (that would trigger a
 | `task` | A task starts | To-do ID |
 | `answered` | A task interaction is handled | To-do ID; one-line summary (question, your answer), and full question / answer `items` per question |
 | `receipt` | Task finishes / fails to start / is interrupted by a model-service error (`interrupted`, #1516) | To-do ID; summary, changed-file count, tests, PR; interrupted receipts include original error `error` |
-| `routed` | You speak directly to a task | To-do ID; original text |
+| `routed` | You speak directly to a task, or Persona sends its agent work (`agent_send` with `task`, `agent_interrupt` with `then`, a rework) | To-do ID; original text; `interrupted` (agent_interrupt); `from: "assistant"` when Persona wrote it ("Messages to agents"). Migration 0441 marked older ones Persona wrote: an `interrupted` key, the rework prompt's opening line, or a `task` card of the same to-do at most 5 seconds before; the case it can't tell (agent_send with `task` to an agent already on that task, which writes no card) keeps the bubble |
 | `message` | AI twin drafts a reply to an Inbox message related to a task | Inbox item ID; task, source, chat, sender, original message, draft |
 | `today` | First opening of this chat that day (App calls `POST …/today`) | Date; tasks completed overnight, waiting tasks, open supervised tasks awaiting review (`pending_review`, excluded from waiting / working / done), working count, remaining Lark meetings today, chats mentioning me, other unread counts, unsuccessful items since yesterday at 18:00 (failed-start tasks, failed / skipped scheduled tasks, #4124) |
 
@@ -231,7 +254,7 @@ Hub-inserted chat entries do not enter Claude's transcript (that would trigger a
 
 ## App (iOS)
 
-- The assistant's `ChatView(style: .assistant)` merges chat activity (inserted by time in `ChatLines`). New row types: plan card, task card, receipt, answered question, routed bubble.
+- The assistant's `ChatView(style: .assistant)` merges chat activity (inserted by time in `ChatLines`). New row types: plan card, task card, receipt, answered question, routed bubble, Persona's folded message to an agent (without the hand-offs the cards take in, `SentToAgents.shown`).
   Instant phone-tool calls (`phone_reminders_create`, `phone_calendar_create_event`, etc.) are extracted from the "Tools N" row and rendered as result cards.
 - `mainFooter` adds a question-card queue (task interactions with task names) and dock above `InteractionPanel`; the input gains `@` and routing labels.
 - New components belong in the design system (`apple/Persona/DesignSystem`), using `AgentState.tone` colors and `Theme.Motion` animations.

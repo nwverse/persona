@@ -26,6 +26,9 @@ PROFILE_VARIABLES = {
     "XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_STATE_HOME", "XDG_CACHE_HOME",
     "BASH_ENV", "ENV", "ZDOTDIR",
 }
+# Service routing must not redirect synthetic DNS, loopback Git servers or
+# sandbox assertions. Fixtures may still configure their own proxy after launch.
+PROXY_VARIABLES = {"HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY"}
 
 
 def test_database_url(config_file):
@@ -58,7 +61,8 @@ def test_database_url(config_file):
 
 def clean_environment(environment):
     cleaned = {key: value for key, value in environment.items()
-               if not key.startswith(RUNTIME_PREFIXES) and key not in PROFILE_VARIABLES}
+               if not key.startswith(RUNTIME_PREFIXES) and key not in PROFILE_VARIABLES
+               and key.upper() not in PROXY_VARIABLES}
     roots = [Path(value).expanduser().resolve() for key, value in environment.items()
              if key in {"PERSONA_HOME", "JARVIS_HOME"} and value]
     if roots and "PATH" in cleaned:
@@ -76,10 +80,15 @@ def clean_environment(environment):
 
 def run_tests(config_file, command, environment=None):
     database = test_database_url(config_file)
-    environment = clean_environment(os.environ if environment is None else environment)
+    parent = os.environ if environment is None else environment
+    environment = clean_environment(parent)
     # Resolve only build/toolchain cache locations before replacing HOME. Never carry the service profile into Go.
+    # Toolchain resolution may need the parent's network route; only test children
+    # must not inherit it. Keep runtime/profile isolation in both environments.
+    toolchain_environment = dict(environment)
+    toolchain_environment.update({key: value for key, value in parent.items() if key.upper() in PROXY_VARIABLES})
     result = subprocess.run(["go", "env", "-json", "GOCACHE", "GOMODCACHE", "GOPATH"],
-                            env=environment, capture_output=True, text=True, timeout=30)
+                            env=toolchain_environment, capture_output=True, text=True, timeout=30)
     if result.returncode:
         raise ValueError("could not resolve Go build cache locations")
     caches = json.loads(result.stdout)

@@ -144,7 +144,9 @@ cidrs) [ -n "${PERSONA_ADMIN_CIDRS:-}" ] || echo "warning: PERSONA_ADMIN_ACCESS=
   "to this container until it is fixed" >&2 ;;
 esac
 # The hub (the image's command): under personad supervise, which runs the built-in manager beside it when hub.json
-# says assistant.mode service, each started again when it stops; otherwise it becomes the hub itself, as before.
+# says assistant.mode service, each started again when it stops; otherwise it becomes the hub itself, as before. Each
+# runs as its own program (persona-hub, persona-manager) unless PERSONA_SPLIT_PROGRAMS=0 (docs/operations/docker.md
+# "Programs").
 if [ "$#" -eq 2 ] && [ "$1" = hub ] && [ "$2" = run ]; then
   exec personad supervise
 fi

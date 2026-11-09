@@ -140,7 +140,7 @@ struct VoiceEndedStrip: View {
 }
 
 extension PromptItems {
-    /// Voice Chat in the old layout's BeautifulUI prompt bar, beside its attachments (docs/assistant/voice.md 6.1).
+    /// Voice Chat in the platform's BeautifulUI prompt bar, beside its attachments (docs/assistant/voice.md 6.1).
     static var voice: PromptSource {
         PromptSource(id: "voice", name: String(localized: "Voice Chat"), detail: String(localized: "What you say goes to this chat"),
                      icon: .symbol(Theme.Icon.voiceChannel), kind: .attach)

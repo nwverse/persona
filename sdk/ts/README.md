@@ -5,6 +5,56 @@ The SDK runtime and public types live in `src/`. Source programs default-export 
 retain their existing APIs. See `docs/extensions/extensions.md` in the Persona
 repository for the source runtime and its production admission rules.
 
+## Exact integer request params (explicit opt-in)
+
+`withExactParams((method, legacyParams, call) => ...)` keeps the legacy parsed
+`Number` argument and exposes original namespace RPC request params as
+`call.rawParams` / `call.params`. Events have no call metadata; replies and
+serialization are unchanged. Use `call.params?.field("args")` for a Go
+`json.RawMessage` struct field (case-folded names, last duplicate including null),
+then `int64()` or `int64Fields(["topic", "replies"])` for lexical Go signed-64
+integers as bigint. `member(name)` instead uses exact decoded map keys.
+
+Decimal/exponent tokens such as `1.0` / `1e0` are rejected even when Number rounds
+them to an integer. `9007199254740993` and both signed-64 bounds remain valid.
+Struct decoding keeps ordered duplicate/null/error behavior, ignores unknown
+fields, uses iterative scanning and null-prototype results, and bounds the opt-in
+raw text to 8 MiB of UTF-16 text. This is not JSON Schema integer validation or an
+end-to-end serialization guarantee. Preserve an existing string-ID branch and
+business validation when adopting the API. Full semantics and a default-export
+Program example are in `docs/extensions/extensions.md` ("Opt-in exact JSON integer
+request params"). The portable suite tests raw input against independently
+bundled official host and default Program modules under Node without Bun globals.
+
+## Exact initialization params (explicit opt-in)
+
+`withExactInit((init, hub, call) => ...)` preserves the ordinary parsed `Init`,
+`Hub` and initializer receiver. An initialization RPC additionally supplies
+frozen `call.rawParams` / `call.params`; inspect `call.params?.field("config")`
+with the existing exact reader to retain configuration tokens and duplicate
+order. Do not log raw initialization/configuration text: it can contain secrets.
+
+An unwrapped initializer still receives exactly two arguments. Namespace
+`withExactParams` does not opt initialization in. Direct/manual initializer
+calls and trusted authoring probes have no original RPC frame, so `call` is
+undefined there; never serialize parsed values and present them as original
+raw metadata. Protocol checks, initialization single-flight/retry, events,
+reply serialization, page deadlines and sandbox permissions remain unchanged.
+
+## Finite page loading
+
+Use `useLoadEffect` from `@persona/extension/ui` for finite data loads. Keep
+subscriptions and long-lived effects on `useEffect`. The official component-page
+factory advertises snapshot readiness; owner-bound HTTP snapshot sessions wait
+for finite loads within the existing deadline, while native streams retain
+immediate loading and asynchronous updates. The manager selects the transport,
+not the page's UI version.
+
+Page cancellation is negotiated through canonical initialization and stays scoped
+to its mount/event/resume request. Service handlers, exact namespace metadata,
+permissions and resource budgets are unchanged. Cancellation/visibility/generation
+fences suppress late success; arbitrary uncooperative JavaScript is not preempted.
+
 ## Offline CLI
 
 Install this official SDK copy's development dependencies with `npm ci`. The

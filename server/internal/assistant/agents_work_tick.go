@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/server/internal/db"
+	"github.com/nwverse/persona/server/internal/prompts"
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
@@ -68,6 +69,10 @@ func (s *Service) workTick(ctx context.Context, now time.Time) {
 		}
 	}
 	for _, k := range due {
+		if e, ok := s.workEntry(k); ok && e.Work.CI != nil {
+			s.startCIPoll(ctx, k, now)
+			continue
+		}
 		s.workWake(ctx, v, k, now)
 	}
 	for _, k := range cards {
@@ -137,7 +142,8 @@ func (s *Service) workGuard(v *workView, e db.SessionWork, ownCard bool) (proto.
 	return c, ""
 }
 
-// workWake sends what is due for k: "Continue" after a transient error, or a wake for a wait.
+// workWake sends what is due for k: "Continue" after a transient error, the continue once a usage limit reset, or a
+// wake for a wait.
 func (s *Service) workWake(ctx context.Context, v *workView, k [2]string, now time.Time) {
 	e, ok := s.workEntry(k)
 	if !ok || e.WakeAt == nil {
@@ -148,28 +154,99 @@ func (s *Service) workWake(ctx context.Context, v *workView, k [2]string, now ti
 	switch why {
 	case "":
 	case "offline":
+		before := e
 		at := now.Add(time.Minute).UTC() // try again when it is back
 		e.WakeAt, e.Work.WakeAt = &at, &at
-		s.putWork(ctx, e)
+		if before.Work.CI != nil {
+			s.replaceCI(before, e)
+		} else {
+			s.putWork(ctx, e)
+		}
 		return
 	default:
 		s.logf("work %s/%s: not woken: %s", k[0], short(k[1]), why)
+		before := e
 		e.WakeAt, e.Work.WakeAt = nil, nil
-		s.putWork(ctx, e)
+		if before.Work.CI != nil {
+			e.Work.CI = nil
+			s.replaceCI(before, e)
+		} else {
+			s.putWork(ctx, e)
+		}
 		return
 	}
 	sw := s.triageSwitches(ctx)
-	if e.Work.On == proto.WaitTransient && !sw.AutoContinue || e.Work.On != proto.WaitTransient && !sw.Wake {
+	if continues(e.Work) && !sw.AutoContinue || !continues(e.Work) && !sw.Wake {
+		before := e
 		e.WakeAt, e.Work.WakeAt = nil, nil // turned off since it was set
-		s.putWork(ctx, e)
+		if before.Work.CI != nil {
+			e.Work.CI = nil
+			s.replaceCI(before, e)
+		} else {
+			s.putWork(ctx, e)
+		}
 		return
 	}
+	if e.Work.CI != nil {
+		closed, _, err := s.ciClosedTodo(ctx, e.MachineID, e.SessionID, e.Work.CI.TodoProof, proto.WorkState{}, time.Time{})
+		if err != nil || closed {
+			current := e
+			if err != nil {
+				at := now.Add(time.Minute).UTC()
+				current.WakeAt, current.Work.WakeAt = &at, &at
+			} else {
+				current.WakeAt, current.Work.WakeAt, current.Work.CI = nil, nil, nil
+			}
+			s.replaceCI(e, current)
+			return
+		}
+	}
+	if e.Work.CI != nil && e.Work.CI.Message != "" {
+		_, guest, err := s.guestOf(ctx, e.MachineID, e.SessionID)
+		if err != nil || guest || s.isWorkMachine(e.MachineID) {
+			current := e
+			at := e.Work.CI.FallbackAt
+			if at.Before(now) {
+				at = now.UTC()
+			}
+			current.Work.CI = nil
+			current.WakeAt, current.Work.WakeAt = &at, &at
+			s.replaceCI(e, current)
+			return
+		}
+		s.deliverCI(ctx, e, now)
+		return
+	}
+	polled := e
+	ciLine, handled := s.pollCI(ctx, polled, c, now)
+	if handled {
+		return
+	}
+	if ciLine != "" {
+		var still bool
+		e, still = s.workEntry(k)
+		if !still || !sameCIWatch(polled, e) {
+			return
+		}
+		if latest, why := s.workGuard(s.newWorkView(ctx), e, false); why != "" {
+			return
+		} else {
+			c = latest
+		}
+	}
 	var text, kind string
-	switch e.Work.On {
-	case proto.WaitTransient:
+	switch {
+	case e.Work.ResetsAt != nil:
+		if !s.limitStillDue(ctx, &e, c, now) {
+			s.putWork(ctx, e)
+			return
+		}
+		e.Retries++
+		text, kind = prompts.RenderAgentLimitContinue(), "limit_continued"
+	case e.Work.On == proto.WaitTransient:
 		e.Retries++
 		text, kind = continueText, "continued"
-	case proto.WaitExternal, proto.WaitAgent:
+	case e.Work.On == proto.WaitExternal || e.Work.On == proto.WaitAgent:
 		e.Wakes++
 		wk := agentWake{Attempt: e.Wakes, Wait: e.Work.Wait, Then: e.Work.Then}
 		s.work.mu.Lock()
@@ -184,7 +261,18 @@ func (s *Service) workWake(ctx context.Context, v *workView, k [2]string, now ti
 			}
 		}
 		text, kind = renderWake(wk), "woke"
+		if ciLine != "" {
+			text = ciLine + "\n\n" + text
+		}
 	default:
+		return
+	}
+	if ciLine != "" {
+		if s.prepareCI(ctx, e, text) {
+			if pending, ok := s.workEntry(k); ok {
+				s.deliverCI(ctx, pending, now)
+			}
+		}
 		return
 	}
 	e.WakeAt, e.Work.WakeAt = nil, nil
@@ -193,16 +281,39 @@ func (s *Service) workWake(ctx context.Context, v *workView, k [2]string, now ti
 		s.logf("work %s/%s: %s: %v", k[0], short(k[1]), kind, err)
 		at := now.Add(2 * time.Minute).UTC()
 		e.WakeAt, e.Work.WakeAt = &at, &at
-		if kind == "continued" {
-			e.Retries--
-		} else {
+		if kind == "woke" {
 			e.Wakes--
+		} else {
+			e.Retries--
 		}
 		s.putWork(ctx, e)
 		return
 	}
 	s.logf("work %s/%s: %s (%d)", k[0], short(k[1]), kind, max(e.Retries, e.Wakes))
 	s.workEvent(k[0], k[1], kind, map[string]any{"attempt": max(e.Retries, e.Wakes), "after": now.Sub(e.TurnAt).Seconds()})
+}
+
+// continues: w's wake goes on with what the turn was doing ("Continue" after a transient error, or once a usage limit
+// reset): the auto_continue switch's, not the wake switch's.
+func continues(w proto.WorkState) bool { return w.On == proto.WaitTransient || w.ResetsAt != nil }
+
+// limitStillDue: e's continue after a usage limit goes now, c being its session as read right before. Not when the
+// CLI now says it goes on by itself (typing would cancel that): the wake is dropped. Not when the limit resets later
+// than the wait was set for (the session says so now): it is set again for then. Either way e is changed.
+func (s *Service) limitStillDue(ctx context.Context, e *db.SessionWork, c proto.Session, now time.Time) bool {
+	if c.TurnErrorResumes {
+		s.logf("work %s/%s: not continued: it goes on by itself after the usage limit", e.MachineID, short(e.SessionID))
+		e.WakeAt, e.Work.WakeAt = nil, nil
+		return false
+	}
+	if reset, ok := usageLimitReset(c); ok && reset.After(now) {
+		at := limitContinueAt(reset, now)
+		e.WakeAt, e.Work.WakeAt, e.Work.ResetsAt = &at, &at, &reset
+		e.Work.Line = limitLine(s.lang(ctx), reset, false, now, s.location(ctx))
+		s.logf("work %s/%s: the usage limit resets at %s now: continued then", e.MachineID, short(e.SessionID), reset.UTC().Format(time.RFC3339))
+		return false
+	}
+	return true
 }
 
 // cardsUp are the manager's cards the hub has up now, by id (none when it cannot say).

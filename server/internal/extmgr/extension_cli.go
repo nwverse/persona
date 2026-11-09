@@ -76,6 +76,10 @@ func ExtensionCommand(ctx context.Context, args []string, stdin io.Reader, stdou
 		fmt.Fprintln(stdout, clitext.Named(extensionUsage+extensionBuildUsage))
 		return nil
 	}
+	// Before hub.json is read or the hub is called: a mistyped option must not run the command without it.
+	if err := checkExtensionArgs(args); err != nil {
+		return err
+	}
 	cfg, err := localHubConfig()
 	if err != nil {
 		return err
@@ -89,17 +93,11 @@ func ExtensionCommand(ctx context.Context, args []string, stdin io.Reader, stdou
 		}
 		return false
 	}
-	var positional []string
+	var positional []string // as many as extensionCommandArgs allows
 	for _, a := range args[1:] {
-		if !strings.HasPrefix(a, "--") {
+		if !isExtensionOption(a) {
 			positional = append(positional, a)
 		}
-	}
-	need := func(n int) error {
-		if len(positional) < n {
-			return errors.New(clitext.Named(extensionUsage))
-		}
-		return nil
 	}
 	switch args[0] {
 	case "dev":
@@ -124,13 +122,11 @@ func ExtensionCommand(ctx context.Context, args []string, stdin io.Reader, stdou
 			if len(p.NeedsSetup) > 0 {
 				line += "；还缺：" + strings.Join(p.NeedsSetup, "、")
 			}
+			line += attachedLine(p.Attached, p.Error == "")
 			fmt.Fprintln(stdout, strings.TrimRight(line, " "))
 		}
 		return nil
 	case "show":
-		if err := need(1); err != nil {
-			return err
-		}
 		var d ExtensionDetail
 		if err := c.do(ctx, "GET", "/api/v1/extensions/"+url.PathEscape(positional[0])+"/-/", nil, &d); err != nil {
 			return err
@@ -141,14 +137,8 @@ func ExtensionCommand(ctx context.Context, args []string, stdin io.Reader, stdou
 	case "install", "upgrade":
 		upgrade, source := "", ""
 		if args[0] == "upgrade" {
-			if err := need(2); err != nil {
-				return err
-			}
 			upgrade, source = positional[0], positional[1]
 		} else {
-			if err := need(1); err != nil {
-				return err
-			}
 			source = positional[0]
 		}
 		var pv extension.Preview
@@ -189,9 +179,6 @@ func ExtensionCommand(ctx context.Context, args []string, stdin io.Reader, stdou
 		}
 		return nil
 	case "market":
-		if err := need(1); err != nil {
-			return err
-		}
 		switch positional[0] {
 		case "list":
 			var out struct {
@@ -215,9 +202,6 @@ func ExtensionCommand(ctx context.Context, args []string, stdin io.Reader, stdou
 			}
 			return nil
 		case "add":
-			if err := need(2); err != nil {
-				return err
-			}
 			body := map[string]string{"spec": positional[1]}
 			if flag("--token") {
 				tok, err := readSecret(stdin, stdout)
@@ -241,9 +225,6 @@ func ExtensionCommand(ctx context.Context, args []string, stdin io.Reader, stdou
 			}
 			return nil
 		case "set-spec":
-			if err := need(3); err != nil {
-				return err
-			}
 			var m MarketView
 			if err := c.do(ctx, "PUT", "/api/v1/extensions/-/markets/"+url.PathEscape(positional[1]), map[string]string{"spec": positional[2]}, &m); err != nil {
 				return err
@@ -251,9 +232,6 @@ func ExtensionCommand(ctx context.Context, args []string, stdin io.Reader, stdou
 			fmt.Fprintf(stdout, "%s：%s，%d 个扩展（%s）\n", m.ID, m.Name, m.Extensions, m.Spec)
 			return nil
 		case "token":
-			if err := need(2); err != nil {
-				return err
-			}
 			tok := ""
 			if !flag("--clear") {
 				var err error
@@ -279,9 +257,6 @@ func ExtensionCommand(ctx context.Context, args []string, stdin io.Reader, stdou
 			fmt.Fprintln(stdout, line)
 			return nil
 		case "remove", "refresh":
-			if err := need(2); err != nil {
-				return err
-			}
 			if positional[0] == "remove" {
 				return c.do(ctx, "DELETE", "/api/v1/extensions/-/markets/"+url.PathEscape(positional[1]), nil, nil)
 			}
@@ -319,9 +294,6 @@ func ExtensionCommand(ctx context.Context, args []string, stdin io.Reader, stdou
 		}
 		return nil
 	case "auto-upgrade":
-		if err := need(1); err != nil {
-			return err
-		}
 		if positional[0] != "on" && positional[0] != "off" {
 			return errors.New(clitext.Named(extensionUsage))
 		}
@@ -353,9 +325,6 @@ func ExtensionCommand(ctx context.Context, args []string, stdin io.Reader, stdou
 		printUpgrades(stdout, v)
 		return nil
 	case "rollback":
-		if err := need(1); err != nil {
-			return err
-		}
 		var d ExtensionDetail
 		if err := c.do(ctx, "POST", "/api/v1/extensions/"+url.PathEscape(positional[0])+"/-/rollback", map[string]string{}, &d); err != nil {
 			return err
@@ -363,9 +332,6 @@ func ExtensionCommand(ctx context.Context, args []string, stdin io.Reader, stdou
 		fmt.Fprintf(stdout, "%s 回到了 %s\n", d.ID, d.Version)
 		return nil
 	case "enable", "disable":
-		if err := need(1); err != nil {
-			return err
-		}
 		var d ExtensionDetail
 		body := map[string]bool{"enabled": args[0] == "enable", "cascade": flag("--cascade")}
 		if err := c.do(ctx, "PUT", "/api/v1/extensions/"+url.PathEscape(positional[0])+"/-/enabled", body, &d); err != nil {
@@ -374,14 +340,8 @@ func ExtensionCommand(ctx context.Context, args []string, stdin io.Reader, stdou
 		fmt.Fprintf(stdout, "%s：%s\n", d.ID, d.Status)
 		return nil
 	case "auth": // docs/extensions/extensions.md "Sign-in (auth)"
-		if err := need(1); err != nil {
-			return err
-		}
 		return extensionAuthCommand(ctx, c, positional, stdin, stdout)
 	case "sandbox": // docs/extensions/extensions.md "Sandbox"
-		if err := need(2); err != nil {
-			return err
-		}
 		var on *bool
 		switch positional[1] {
 		case "on", "off":
@@ -407,9 +367,6 @@ func ExtensionCommand(ctx context.Context, args []string, stdin io.Reader, stdou
 		}
 		return nil
 	case "config":
-		if err := need(2); err != nil {
-			return err
-		}
 		id := positional[0]
 		var d ExtensionDetail
 		if err := c.do(ctx, "GET", "/api/v1/extensions/"+url.PathEscape(id)+"/-/", nil, &d); err != nil {
@@ -438,9 +395,6 @@ func ExtensionCommand(ctx context.Context, args []string, stdin io.Reader, stdou
 		fmt.Fprintf(stdout, "%s：%s\n", d.ID, d.Status)
 		return nil
 	case "secret":
-		if err := need(2); err != nil {
-			return err
-		}
 		path := "/api/v1/extensions/" + url.PathEscape(positional[0]) + "/-/secrets/" + url.PathEscape(positional[1])
 		var d ExtensionDetail
 		if flag("--delete") {
@@ -454,15 +408,15 @@ func ExtensionCommand(ctx context.Context, args []string, stdin io.Reader, stdou
 		if err != nil {
 			return err
 		}
+		if strings.TrimSpace(value) == "" { // the hub would refuse it with a size error
+			return errors.New("the secret is empty: to remove it, use --delete")
+		}
 		if err := c.do(ctx, "PUT", path, map[string]string{"value": value}, &d); err != nil {
 			return err
 		}
 		fmt.Fprintf(stdout, "%s：%s\n", d.ID, d.Status)
 		return nil
 	case "uninstall":
-		if err := need(1); err != nil {
-			return err
-		}
 		q := url.Values{}
 		for f, k := range map[string]string{"--keep-data": "keep_data", "--cascade": "cascade", "--members": "members"} {
 			if flag(f) {
@@ -488,7 +442,103 @@ func ExtensionCommand(ctx context.Context, args []string, stdin io.Reader, stdou
 	if done, err := extensionModelCommand(ctx, c, args[0], positional, stdout); done {
 		return err
 	}
-	return fmt.Errorf("unknown extension command %q\n%s\n%s", args[0], extensionUsage, extensionModelUsage)
+	return unknownExtensionCommand(args[0])
+}
+
+func unknownExtensionCommand(name string) error {
+	return fmt.Errorf("unknown extension command %q\n%s\n%s", name, clitext.Named(extensionUsage), extensionModelUsage)
+}
+
+// extensionArgs is what a hub command takes (extensionUsage, docs/extensions/extensions.md "Command line").
+type extensionArgs struct {
+	min, max  int      // positional arguments (a market command's include its own word); max -1: any number
+	options   []string // exact words; one ending in "=" takes a value after it (--token-from=<id>)
+	exclusive bool     // at most one of the options
+	usage     string   // printed with a mistake; extensionUsage when empty
+}
+
+// extensionCommandArgs are the hub commands and their arguments; `audit` parses its own, and new / test / pack need
+// no hub.
+var extensionCommandArgs = map[string]extensionArgs{
+	"list":            {},
+	"upgrades":        {},
+	"show":            {min: 1, max: 1},
+	"rollback":        {min: 1, max: 1},
+	"install":         {min: 1, max: 1, options: []string{"--yes"}},
+	"upgrade":         {min: 2, max: 2, options: []string{"--yes"}},
+	"enable":          {min: 1, max: 1, options: []string{"--cascade"}},
+	"disable":         {min: 1, max: 1, options: []string{"--cascade"}},
+	"sandbox":         {min: 2, max: 2},
+	"auth":            {min: 1, max: 2},
+	"config":          {min: 2, max: -1},
+	"secret":          {min: 2, max: 2, options: []string{"--delete"}},
+	"uninstall":       {min: 1, max: 1, options: []string{"--keep-data", "--cascade", "--members"}},
+	"search":          {max: -1},
+	"auto-upgrade":    {min: 1, max: 2},
+	"dev":             {max: 1},
+	"contributions":   {min: 1, max: 1, usage: extensionModelUsage},
+	"contribution":    {min: 3, max: 3, usage: extensionModelUsage},
+	"market list":     {min: 1, max: 1},
+	"market add":      {min: 2, max: 2, options: []string{"--token", "--token-from="}, exclusive: true},
+	"market set-spec": {min: 3, max: 3},
+	"market remove":   {min: 2, max: 2},
+	"market refresh":  {min: 2, max: 2},
+	"market token":    {min: 2, max: 2, options: []string{"--clear"}},
+}
+
+// isExtensionOption is a word that is not a positional argument.
+func isExtensionOption(a string) bool { return len(a) > 1 && strings.HasPrefix(a, "-") }
+
+// checkExtensionArgs refuses a hub command line extensionCommandArgs does not allow: an unknown command, an option
+// the command does not take, a missing or an extra argument.
+func checkExtensionArgs(args []string) error {
+	if args[0] == "audit" {
+		return nil
+	}
+	var positional, options []string
+	for _, a := range args[1:] {
+		if isExtensionOption(a) {
+			options = append(options, a)
+		} else {
+			positional = append(positional, a)
+		}
+	}
+	name := args[0]
+	if name == "market" {
+		if len(positional) == 0 {
+			return errors.New(clitext.Named(extensionUsage))
+		}
+		name += " " + positional[0]
+	}
+	spec, ok := extensionCommandArgs[name]
+	if !ok {
+		return unknownExtensionCommand(name)
+	}
+	usage := clitext.Named(extensionUsage)
+	if spec.usage != "" {
+		usage = spec.usage
+	}
+	mistake := func(format string, a ...any) error {
+		return fmt.Errorf("%s: %s\n%s", clitext.Named("personad extension "+name), fmt.Sprintf(format, a...), usage)
+	}
+	for _, o := range options {
+		known := func(want string) bool { return o == want || strings.HasSuffix(want, "=") && strings.HasPrefix(o, want) }
+		switch {
+		case strings.HasSuffix(o, "=") && slices.Contains(spec.options, o): // --token-from= with nothing after it
+			return mistake("%s needs a value", o)
+		case !slices.ContainsFunc(spec.options, known):
+			return mistake("unknown option %q", o)
+		case spec.exclusive && o != options[0]:
+			return mistake("%q and %q do not go together", options[0], o)
+		}
+	}
+	if len(positional) < spec.min {
+		return errors.New(usage)
+	}
+	if spec.max >= 0 && len(positional) > spec.max {
+		return mistake("unexpected argument %q", positional[spec.max])
+	}
+	return nil
 }
 
 func printPreview(w io.Writer, pv *extension.Preview) {
@@ -530,6 +580,28 @@ func confirm(stdin io.Reader, stdout io.Writer) bool {
 	line, _ := bufio.NewReader(stdin).ReadString('\n')
 	line = strings.ToLower(strings.TrimSpace(line))
 	return line == "y" || line == "yes"
+}
+
+// attachedLine is what `extension list` adds for an attached extension: online or offline and since when, why it is
+// offline when the line does not say it yet, and the version the program says it is when that was not approved.
+func attachedLine(a *ExtensionAttached, withError bool) string {
+	if a == nil {
+		return ""
+	}
+	line := "；独立运行，离线"
+	if a.Online {
+		line = "；独立运行，在线"
+	}
+	if !a.Since.IsZero() {
+		line += "（自 " + a.Since.Format("01-02 15:04:05") + "）"
+	}
+	if withError && a.Error != "" {
+		line += "：" + a.Error
+	}
+	if a.Version != "" {
+		line += "；程序自报版本 " + a.Version
+	}
+	return line
 }
 
 // readSecret reads a secret from the terminal without echo, or the first line of a pipe.

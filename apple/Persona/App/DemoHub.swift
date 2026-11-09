@@ -33,6 +33,8 @@ final class DemoHub {
     private let providers = DemoProviders()
     /// Settings › Claude Code › Blocked Config Folders: machine id → the rules typed in the demo (it has no other directories).
     private var blockedClaudeDirs: [String: [JSONValue]] = [:]
+    /// Settings › Claude Code › Live Replies, by machine (on unless turned off, as on a hub).
+    private var liveReplies: [String: Bool] = [:]
     private var memory: [JSONValue] = []
     private var prefs: JSONValue = .object([:])
     private var pins: JSONValue = .object([:])
@@ -198,6 +200,7 @@ final class DemoHub {
             return .object(a)
         case ["model-config"]: return DemoModelCatalog.configuration(tasks: tasks, overrides: modelBindings)
         case ["assistant", "tasks"]: return ["tasks": .array(tasks)]
+        case ["assistant", "places"]: return ["places": .array([])] // Saved Places, empty in the demo
         case ["assistant", "runs"]:
             let runs = data["runs"]?.array ?? []
             return ["runs": .array(q["ref"].map { ref in runs.filter { $0["ref_id"]?.string == ref } } ?? runs)]
@@ -241,6 +244,7 @@ final class DemoHub {
                 return data["dirs"] ?? .object([:])
             case "claude-settings", "codex-settings": return ["settings": .array([])]
             case "claude-dirs": return claudeDirsState(id)
+            case "claude-live-replies": return ["on": .bool(liveReplies[id] ?? true)]
             #if os(macOS)
             case "file": // the Mac's file viewer (and its ⌘F find): one made-up source file, whatever is asked for
                 let path = q["path"] ?? "Sources/Forecast.swift"
@@ -475,6 +479,10 @@ final class DemoHub {
                 return .object(o)
             }
             return ["ok": true]
+        case ("machines", 3) where p[2] == "claude-live-replies" && method == "PUT":
+            guard let on = body["on"]?.bool else { throw refuse() }
+            liveReplies[p[1]] = on
+            return ["on": .bool(on)]
         case ("machines", 4) where p[2] == "claude-dirs" && p[3] == "blocked" && method == "PUT":
             blockedClaudeDirs[p[1]] = body["blocked"]?.array ?? []
             return claudeDirsState(p[1])

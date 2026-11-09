@@ -1,5 +1,80 @@
 # Lessons: hub / node and networking
 
+## Model connection tests must match the runtime (#1732)
+
+A successful connection probe can still hide a request the model server will reject: exercise the same output-token field and its narrowly scoped fallback as the runtime. Parse SSE events rather than individual `data:` lines, including multiline events and CRLF, and test empty, truncated, refused, and errored replies separately.
+
+## Battery investigations need attributed transport counts (#1633)
+
+A slow/error request log is not an access log, and successful Live Activity updates
+were silent while start logs recorded only intent. Do not turn missing records into
+zero requests, acceptances into device deliveries, or a normal close handshake into
+a proven initiator. The systemd edge can retain an older binary while a new slot
+serves requests: establish the serving revision from health and the deployment
+receipt, not the edge's MainPID alone. APNs registration IDs differ from credential
+IDs; join the persisted credential binding, and keep same-name registrations
+ambiguous instead of pruning or merging them. Minute-level, route-template counters
+with opaque IDs avoid logging every request or exposing payloads; label application
+bytes separately from compressed wire bytes and logical pushes separately from retries.
+A missing client header does not identify a platform: infer only bounded UA/header
+markers plus enrollment evidence, keep the inference basis, and separate diagnostic
+clients sharing a phone credential. Native-default App labels are not proof that a
+widget extension did not use the same UA. Never log raw UAs to solve attribution.
+
+Foreground suppression must cover the push-to-start branch as well as updates,
+without consuming the start episode before the phone goes to the background.
+Preference refreshes should compare the affected device's projected activity state:
+a same-value retry or a notification-only setting must not force all devices to
+refresh. A metrics-only foreground broadcast must use the newest fleet snapshot,
+not the last APNs-flushed snapshot while ordinary updates are coalescing.
+
+## Push retirement needs installation proof and a late-write fence (#1663)
+
+Registration IDs and credential IDs are different. Sharing a name or owner is not
+proof that two APNs targets belong to the same installation: also require topic,
+environment and a matching nonempty encryption public key or exact APNs token.
+Use a true enrollment timestamp, not the timestamp rewritten by prefs or grant
+maintenance. Protect active owners and coalesce APNs acceptance timestamps; lack
+of pre-migration delivery history needs observation grace, not immediate expiry.
+
+Publish a registration only after its ownership check and retirement commit.
+A BEFORE INSERT check must allow a prefs upsert that retains the old owner in its
+ON CONFLICT UPDATE; check the actual updated owner before rejecting it. Targeted
+lifecycle tests do not replace the full device/prefs contract suite.
+A process mutex cannot fence another blue-green slot: use a Postgres retirement
+ledger and serialized old-writer triggers. A late APNs gone response must compare
+against the persisted registration, not just one process's memory. Fence all
+retirement reasons; fresh authenticated re-pairing needs a live new owner plus
+scoped installation proof, never an old save. Historical metadata cannot prove
+which cached ID the current app uses: allow a fresh post-retirement, same-owner,
+proven enrollment to replace the canonical target atomically, carrying preferences
+and the longest start deadline. Delayed enrollment timestamps remain fenced.
+If acceptance fails to flush, skip
+inactivity; skip busy transports so completion cannot race the expiry snapshot.
+Remove activity state and transfer the
+longest persisted start deadline before deleting a duplicate. Lock the device
+parent before its activity/budget, matching budget claim and revocation order.
+Test two database pools, late legacy writes, failure rollback and physical-install
+boundaries; never treat acceptance as a delivered notification or battery result.
+
+## Push-to-start budgets belong to delivery, not episodes (#1662)
+
+An episode counter allows an empty/active loop to start an activity every time and
+forgets all spending on hub restart. Client `started_at` is activity age, not a
+server push budget; registration and token rotation must not clear spending. Keep
+an independent device-FK budget and atomically claim it in Postgres before dispatch,
+including across overlapping blue-green slots. A failed or ambiguous claim fails
+closed; a successful claim stays spent even if APNs fails or the process exits.
+The ten-minute rolling cooldown applies only to starts, never ordinary alerts or
+urgent activity updates. Defer a wake time, not a payload: at expiry read the latest
+fleet, preferences, foreground state and tokens, and recheck after a slow claim.
+Empty/done, an open phone or a fresh update token suppresses a queued start. Restart
+reconstructs its deadline from the durable budget and the current manager snapshot.
+
+## A custom HTTPS dial must opt into HTTP/2 (#1620)
+
+A custom `http.Transport.DialContext` conservatively disables Go's automatic HTTP/2 negotiation. Keep the checked-address dial callback and explicitly enable `ForceAttemptHTTP2`; do not replace it with a default dialer or let an upstream proxy resolve the name again. Verify real local TLS HTTP/2 negotiation, HTTP/1.1 fallback and request cancellation. A successful transport test is not evidence that a particular upstream challenge disappeared: verify the installed source separately, without raising budgets or substituting host-downloaded content.
+
 ## A failed swap must not look like a new install
 
 `update.SwapProgram` recorded `Prev: ""` when copying the old program to `.prev` or putting the new build in place failed, and `Prev: ""` is how a swap says the program was new, so going back deleted a program the failed swap had never touched.
@@ -61,6 +136,10 @@ decide by the deadline, not by the attempts' errors. Test the scheduling with a 
 order and timing of attempts exact; it proves nothing about real sockets' error identities, so keep a real-socket test for those (a loopback listener
 with a full accept queue never answers a SYN on Linux).
 
+## A deploy that rewrites a unit decides which program the service runs (2026-11-08)
+
+`scripts/deploy/hub-systemd.sh` writes the hub's unit on every deploy, and for a unit that differs from its own text it adds a drop-in that overrides `ExecStart`. So once a unit can run another program (`persona-hub run` instead of `personad hub`), a script that writes the old `ExecStart` quietly switches the install back, and nothing in its output says so. Whatever writes a service file has to read which program the service runs now (the last `ExecStart` of the unit and its drop-ins, unquoted as systemd reads it, compared by real path) and keep it; only the owner's own step (`hub setup`) moves an install from one program to another. The same holds for the launchd branch, which looks the agent up by its program. Every reader of that question (the deploy script, the hub's update check) has to read it the same way, so run them over one table of the forms systemd accepts (`%h`, single quotes, spaces around `=`): a form one reader missed moved units back silently. A unit that names the program in a form the reader cannot resolve is left to its owner with an error, not rewritten. A command's default can move an install too: `hub switch` without `--binary` once followed the program that ran it, so `persona-hub switch` (which messages told people to run) moved a `personad` hub onto `persona-hub`. It goes by the program the hub runs now, and with nothing serving keeps its old default, `personad`. Check what the edge accepts before calling such a default a way out: while it backs off a failing slot it refuses any switch, so the default only reaches a switch it takes once a slot is up again, and there it moves a hub that runs `persona-hub` to `personad` until its service restarts (give `--binary`).
+
 ## Approved official-market pins outlive built-in constants (#1157)
 
 Changing a compiled public key does not update a pin already saved in Postgres, and the registration marker can hide that difference. Migrate only explicitly recognized retired official pins, including every recognized repository or HTTPS alias; never infer trust from a downloaded catalog or replace an unknown owner choice. Save the legacy registration marker before migration so a removed market stays removed. A failed pin write must keep loading retryable.
@@ -89,7 +168,7 @@ Revocation ended pairing codes with `expires_at = now()` (Postgres's clock) whil
 
 ## Registration success requires persistence (#5827)
 
-- Return device and Live Activity save errors to HTTP callers so they can retry. Keep logging in shared persistence helpers because token renewal and background cleanup still need to continue with their in-memory state when storage is unavailable. Bound request writes by both the request context and the existing 5-second device-store timeout; test cancellation and the inherited deadline with a waiting store stub. Use typed `i18n.Err` values for localized HTTP summaries: wrapping translated text in a plain error lets the shared API error mapping replace it with a generic diagnostic message.
+- Return device and Live Activity save errors to HTTP callers so they can retry. Keep logging in shared persistence helpers; registration and grant renewal publish only committed candidates, while failed maintenance retains retry state. Bound request writes by both the request context and the existing 5-second device-store timeout; test cancellation and the inherited deadline with a waiting store stub. Use typed `i18n.Err` values for localized HTTP summaries: wrapping translated text in a plain error lets the shared API error mapping replace it with a generic diagnostic message.
 
 ## Rolling-upgrade identity contracts (#6223)
 
@@ -139,9 +218,22 @@ Splitting a registry at its first colon reads `[::1]:5000` as `[`, selecting HTT
 
 - Resuming hooks can read the same cached data and still publish a fresh wrapper, unnecessarily changing the render version and invalidating a displayed legacy callback. Preserve equivalent results using their service/request identity, cached timestamps, item references and missed/error semantics, while still publishing genuine changes and new requests. A bundled Program regression plus actual HTTP callback/navigation tests catches this; merely checking that a fitted View loads does not.
 
+## Finite source-page snapshots (#1184)
+
+- Mount → snapshot → suspend can cancel every asynchronous load before it publishes, even though native open-session tests pass. Mark finite loads explicitly with `useLoadEffect`, negotiate the bundled readiness contract and select snapshot transport from the manager's legacy session, never UI version. Do not await arbitrary subscriptions or raise deadlines. Count fetches, cancellations and rendered content across cold mount/resume turns.
+- Keep raw namespace params and page cancellation as independent dispatch inputs. Both fixes changed the same internal third argument; composing them must retain original frame text and a separate scoped signal. Test them on one connection with a legal large int64, a rejected decimal and a canceled page callback while its service sibling completes.
+- Install callback guards before invoking asynchronous work, recheck abort/visibility/generation after synchronous flushing, and release finite-load admission per completed task rather than imposing a lifetime ceiling. Recovery cannot turn suspension into success. Late work from a retired allocation has no authority, even though independent allocations are not globally serialized.
+- Required source-page integration tests need the official bundler on their server shard too. Installing Bun only in automatic/runtime CI does not provide it to a separate Go runner. Pin the same version before the `other` shard checks, and verify setup order and package selection with a regression; do not hide missing build dependencies by skipping the new contract checks.
+
 ## Copied SDK commands need their development inputs (#6132)
 
 - Copying a package's scripts without their referenced configs, helper scripts and typecheck fixtures leaves a plausible-looking but unusable SDK. Keep the official TypeScript copy complete, including its dependency lockfile; exclude installed dependencies and build output. Test a fresh destination, not only the source checkout, and verify selective copying leaves the other SDK untouched. Schema-conformance fixtures must also be collected from their canonical source into the SDK package and archive; tests cannot depend on an outer repository schema directory or silently skip missing fixtures. Installing these declared development dependencies is a build-time operation, never source-runtime dependency resolution.
+
+## Exact initialization metadata belongs at the initializer (#1777)
+
+- Namespace raw params cannot recover configuration tokens already lost before `Program.init`. Use the explicit initializer opt-in on the original `initialize.params` frame; keep parsed defaults and ordinary two-argument calls unchanged. Direct authoring probes have no raw frame and must not invent one by serializing parsed values. Raw initialization may contain credentials: never log it.
+- Preserve the initializer receiver, single getter lookup and single-flight/retry behavior. Only an own data marker opts in; inherited/accessor markers do not. Use the function's actual invocation rather than its replaceable `call` property. Resolve the initializer symbol lazily so unrelated source imports gain no new top-level side effect.
+- Optional invocation skips only null/undefined, not falsy non-callables such as false, zero or an empty string. Preserve rejection and failed-init retry for own and inherited members when factoring invocation into a helper. Run the complete portable/source-authoring gate as well as Bun tests: a browser-bundled Node fixture can pin an existing failure contract that a focused new suite misses.
 
 ## SDK transport shutdown and error identity (2026-11-07, #6125)
 
@@ -1082,3 +1174,24 @@ Go's `http.Client` follows a 301, 302 or 303 as a GET for any method but GET and
 ## A source read newest first must not let an older entry replace a newer one
 
 A connector that folds several notifications into one thread (GitHub CI failures per repository and branch) read them newest first and let each replace the thread's thing, so the oldest one read won. It went unseen while the in-memory `seen` set skipped notifications already read; after every restart the whole unread backlog was read again, a few per poll, and the open item's time walked back by hours while its count rose once per step (#1527). Keep the newest per key by comparing times, never by reading order, and have the consumer ignore a step older than what it holds: a restart, a retry or a second page can each hand it an earlier one. Test it with a backlog larger than one poll's budget, read after a restart.
+
+## Hot paths: an alternation of sayings and a MarshalJSON that copies the struct (2026-11-09)
+
+- Go's `regexp` runs an unanchored alternation by trying every branch at every position of the text. `transcript.AskOf`'s seventy sayings took about 0.3 µs a byte on a reply that asks nothing, and it runs on every session of every list a manager publishes: a node's `sessions.changed` for 300 sessions spent 37 of its 41 ms there. A pattern run often on texts it seldom matches is `lazyre.NewGated`: it first looks for the literals every match starts with (worked out from the pattern) and skips the engine when there are none. It needs every branch to start with a literal; a leading class, repeat or `(?i)` leaves it ungated, which `TestAskPatternsGated` catches for the ask patterns.
+- A `MarshalJSON` that builds `struct{ T; Extra }{T(s), …}` copies the whole value, and the calling encoder then validates and copies the returned bytes again. For a large type encoded in bulk (a `proto.Session` is ~1.4 KB, a machine lists up to 150 on every push), embed the value by pointer and also implement `MarshalJSONTo` on the pointer, encoding with `json.DefaultOptionsV1()` so a caller's `SetEscapeHTML(false)` cannot change the bytes. Compare the bytes against the old encoding through a value, a pointer and a no-HTML encoder (`TestSessionWireBytesUnchanged`).
+
+## Hot paths: a list copied to stamp one field, an UnmarshalJSON on a list's element (2026-11-09, #1704)
+
+- The hub copied a machine's whole list (~200 KB for 150 sessions) on every push only to put the manager on each session. A list read without a copy has to be one that is never changed in place: `Machine.sessions` is replaced, and anything that changes it (`markUnknownLocked`, `sessions.revs`) copies it first. Put such a field on while encoding (`encodeStamped`), copying only a row that differs; a new writer that changes the kept list in place breaks every reader holding it.
+- A type with `UnmarshalJSON` decoded in bulk makes the decoder find, validate and copy each element's bytes before the method decodes them again. Implement `UnmarshalJSONFrom` (it takes precedence) and decode from the list's decoder in one pass. Keep what `UnmarshalJSON` did on a bad value: decode into the value, so restore it on error, and compare both on many raw inputs (`TestSessionDecodeMatchesTwoPass`), repeated and case-folded keys and invalid types included.
+- A benchmark of a lookup measures its fakes too: `BenchmarkReadinessMainLargeInventory` spent 11.8 MB a run in a fake `Session` that copied the whole inventory, which the real one does not. Fakes on a measured path find things the way production does.
+
+## Hot paths: a replacement that matches nothing still copies, a whole list held before it is sent (2026-11-09, #1725)
+
+- `regexp`'s `ReplaceAllString` and a `strings.Replacer` return a fresh copy of the text even when nothing in it matches. Run per line of every session's last words (`transcript.AskOf`), a list-mark regexp and a Markdown replacer copied each line two or three times for nothing. Cut a fixed prefix by hand (compare it with the regexp it replaces on edge cases, `TestCutListMarkMatchesRegexp`), check for the marks before running a replacer, and use `lazyre.NewGated` for a pattern most texts lack: its string replacements give such a text back as it is.
+- An answer of thousands of rows built as one slice and one buffer (`GET /api/v1/sessions` for older clients, about 10 MB for 8,000 sessions) costs memory in proportion to the answer on every request. Encode it a row at a time into a small buffer and write that out as it fills (`writeSessionLists`); compare the bytes with the old whole encoding. Benchmark such a handler with a `ResponseWriter` that keeps nothing: an `httptest.ResponseRecorder` holds the whole body, and its growth hides what the handler itself allocates.
+
+## Hot paths: a whole-input check before decoding, a list copied to read a few rows (2026-11-09, #1755)
+
+- `json.Unmarshal` checks the whole input before it decodes it, only to report errors the way it always has; on transcript lines, whose message content is decoded again as a string and as blocks, that check was about a fifth of a cold read. Where only `err != nil` is read, decode with `jsonv2.JoinOptions(json.DefaultOptionsV1(), json.ReportErrorsWithLegacySemantics(false))` (`transcript.unmarshalLine`): the same values and the same failures (compare both on every fixture line, cut and wrong-typed ones included, `TestLineJSONMatchesUnmarshal`), but a value that fails is partly decoded, so the caller has to drop it.
+- An accessor that clones a whole list costs the whole list for a caller that keeps a few rows (the assistant's view keeps about 14 of 8,200 sessions): give the store an accessor that copies out only what a predicate keeps (`Devices.SessionsWhere`). A lookup that returns its range value (`for _, s := range list { if … { return s } }`) copies every session it passes (a `proto.Session` is about 1.4 KB): `Machine.session` took 91 µs to find the last of 2,000, 6 µs ranging by index. A loop that only reads a field of the value is not copied, and by index it measured slower (`portAllowed`, 1.6 to 2.2 µs), so measure before changing one. Stamp a field only on the row returned (`Hub.decoratedSession`).

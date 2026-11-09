@@ -145,7 +145,7 @@ var firstPromptPoll = 500 * time.Millisecond
 func (n *Node) readyForFirstPrompt(ctx context.Context, pane, prompt string) string {
 	rctx, cancel := context.WithTimeout(ctx, firstPromptRecover)
 	defer cancel()
-	a, err := n.waitReady(rctx, pane)
+	a, err := n.waitReady(rctx, pane, nil)
 	switch {
 	case ctx.Err() != nil:
 		return lostTimeout

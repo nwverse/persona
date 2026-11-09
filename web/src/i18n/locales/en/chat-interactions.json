@@ -88,6 +88,8 @@
   "secret_run_kicker": "Password needed",
   "secret_run_title": "Run on {machine} with your password",
   "secret_run_commands": "Commands, run in order",
-  "secret_run_on_iphone": "Fill this in on your iPhone",
-  "secret_run_decline": "Decline"
+  "secret_run_decline": "Decline",
+  "secret_run_run": "Run",
+  "secret_run_note": "Used once, never saved. The assistant never sees it.",
+  "secret_run_card_only": "Answer it on the card: type the password and Run, or Decline"
 }

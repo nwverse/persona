@@ -29,7 +29,10 @@ import (
 const settingsKey = "assistant"
 
 // assistantRel is this manager's assistant directory on a machine, relative to its home (node assistant.prepare):
-// .persona/assistant for the built-in manager, .persona/assistant-<id> for another (identity.AssistantDirName).
+// assistant for the built-in manager, assistant-<id> for another (identity.AssistantDirName), in the state directory. It
+// is spelled with the former state directory's name (compat.StateDir), which older nodes join to HOME as it is; a
+// current node resolves either spelling to the state directory it runs on (node/assistant_guest.go assistantDirOf,
+// #1681), so the spelling never decides where the directory is.
 func (s *Service) assistantRel() string {
 	return path.Join(compat.StateDir, identity.AssistantDirName(s.id))
 }
@@ -345,15 +348,10 @@ func (s *Service) view(ctx context.Context, withArchived bool, space ...string) 
 		out.Cwd = s.spaceCwd(d, sp)
 		var list []proto.Session
 		if s.fleetOn() {
-			// Select the headless conversations before decorating or serializing
-			// the inventory: coding sessions can outnumber them by thousands.
+			// Select the headless conversations before copying, decorating or serializing the inventory: coding
+			// sessions can outnumber them by thousands.
 			if m, found := s.fleetMachine(d.ID); found {
-				for _, c := range s.nodeSessions(m.ID) {
-					if m.isAssistant(c) {
-						list = append(list, c)
-					}
-				}
-				list = s.decorateInventory(m.ID, list, false)
+				list = s.decorateInventory(m.ID, s.assistantSessions(m), false)
 			}
 		} else {
 			list, _ = s.sessions(ctx, d.ID)

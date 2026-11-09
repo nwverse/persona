@@ -1,11 +1,14 @@
 package extension
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
+
+	"github.com/nwverse/persona/server/internal/compat"
 )
 
 // The JSON Schema only checks shape; Parse also runs the hub's semantic Validate. The example manifests are what
@@ -61,6 +64,26 @@ func TestManifestExamplesTemplatesParse(t *testing.T) {
 				t.Fatalf("the hub refuses the %s template: %v", lang, err)
 			}
 		})
+	}
+}
+
+// The manifest schema refuses the connector cli names the hub reserves (reservedCommands), so that a catalog's and
+// the SDK's validation fail on them as the install does. The legacy daemon name aside: legacy literals stay in compat.
+func TestManifestSchemaReservesTheHubsCommands(t *testing.T) {
+	var schema struct {
+		Defs map[string]struct {
+			Properties map[string]struct {
+				Not struct{ Enum []string }
+			}
+		} `json:"$defs"`
+	}
+	if err := json.Unmarshal(readExample(t, "../../../schema/extension/manifest.schema.json"), &schema); err != nil {
+		t.Fatal(err)
+	}
+	got := slices.Sorted(slices.Values(schema.Defs["ConnectorItem"].Properties["cli"].Not.Enum))
+	want := slices.Sorted(slices.Values(slices.DeleteFunc(slices.Clone(reservedCommands), func(c string) bool { return c == compat.DaemonBinary })))
+	if !slices.Equal(got, want) {
+		t.Fatalf("manifest.schema.json ConnectorItem.cli refuses %v, the hub reserves %v", got, want)
 	}
 }
 
