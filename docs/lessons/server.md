@@ -1,5 +1,19 @@
 # Lessons: hub / node and networking
 
+## Runtime policy and publisher-owned node packages (#2566)
+
+A persisted node-update choice must override startup configuration everywhere:
+API readback, manager handshakes, downloads and busy checks. Preserve an explicit
+false with a nullable stored value; publish a changed choice only after the
+database accepts it. Package activation is not consumer notification. A repeated
+explicit enable can request the existing package-check RPC after configuration,
+without pretending that a deployment has finished.
+
+Treat a node binary directory symlink as publisher-owned. Swapping files or
+removing version markers through it corrupts the immutable release manifest.
+Protect both enabled installs and disabled-policy cleanup, and let the publisher
+activate its verified directory after Hub health confirmation.
+
 ## Durable storage receipts do not extend authority (#1187)
 
 Check current declared keys and queue/blob flags before replay lookup, including
@@ -1434,3 +1448,5 @@ When decorating a large session list, reserve the timestamp snapshot by the smal
 ## Publication follows the explicit node policy (#1175)
 
 A Hub-only receipt requires unchanged node versions. When the user explicitly enables automatic node updates, that condition would reject legitimate guarded transfers. Require matching verified packages and unchanged machine IDs, owners and UIDs instead; report each node's observed deployment state without treating Hub confirmation as fleet completion. Never send deployment requests from the publisher. Prefer the effective policy returned by the running Hub over its bootstrap file, and retain the strict unchanged-inventory check when the policy is off.
+
+After activating matching native and downloadable packages, reapply an enabled runtime node policy through its existing settings route so managers recheck the new pointer. A filesystem pointer change has no consumer watcher. Check the current policy first so an intervening disable is respected; a failed recheck must not produce a completed publication receipt.

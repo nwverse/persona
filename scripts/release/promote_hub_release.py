@@ -40,12 +40,13 @@ def validate_next(previous, candidate):
             raise ValueError('Candidate does not contain previous published commit')
 
 
-def api(root, path, method='GET'):
+def api(root, path, method='GET', body=None):
     cfg = json.loads((root / 'hub.json').read_text())
     address = cfg.get('listen', ':18660')
     port = address.rsplit(':', 1)[1]
     req = urllib.request.Request(f'http://127.0.0.1:{port}/api/v1/{path}',
-                                 method=method, data=b'{}' if method == 'POST' else None,
+                                 method=method, data=(json.dumps(body).encode() if body is not None
+                                                      else b'{}' if method == 'POST' else None),
                                  headers={'Authorization': 'Bearer ' + cfg['token'],
                                           'Content-Type': 'application/json'})
     with urllib.request.urlopen(req, timeout=30) as response:
@@ -186,6 +187,13 @@ def promote(payload):
                     activate_nodes(root, prepared, packages, health)
                     published_downloads = activate_downloads(root, namespace, downloads, packages, health)
                     prune_nodes(root)
+                    if automatic and api(root, 'hub/update').get('auto_update_nodes') is True:
+                        # The pointer has no watcher. Recheck through the existing
+                        # persisted policy route after both matching feeds are active.
+                        rechecked = api(root, 'hub/update/settings', 'PUT',
+                                        {'auto_update_nodes': True})
+                        if rechecked.get('auto_update_nodes') is not True:
+                            raise RuntimeError('Automatic node policy recheck was not acknowledged')
                 elif not managed_nodes(root):
                     raise RuntimeError('Unmanaged node packages were created')
                 history = api(root, 'hub/update/history')
