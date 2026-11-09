@@ -55,6 +55,8 @@ func TestMain(m *testing.M) {
 	botmuxBin = func() string { return "" }
 	// Nor the user's Tern: no tern binary is found (a test that wants one gives its client a fake).
 	ternClient = func() *terncli.Client { return &terncli.Client{Bin: func() string { return "" }} }
+	// Nor the user's gh outside the test's PATH (ghpath.go).
+	ghFallbackDirs = func() []string { return nil }
 	// Nor the user's Paseo: its home points nowhere (a test that wants one sets its own).
 	os.Setenv("PASEO_HOME", "/tmp/persona-test-no-paseo")
 	// Nor the user's Claude config directory (claude under a profile, or these tests run from inside a Claude Code
