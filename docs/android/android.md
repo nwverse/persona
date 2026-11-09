@@ -697,6 +697,7 @@ Notifications that @mention you or comment on your Lark documents, sheets and ba
 The and-inbox batch of #2919; iOS is the reference throughout.
 
 - **Mute** (G119, `InboxMutes.kt`): item `mutes` becomes `InboxRecord.mutes`; below Done / Hand to AI, the long-press menu lists "Mute this repository / conversation / sender · name" (repository name without owner). Tapping first marks matching unhandled items—same source, tag + value—done (`mutedBy`), then `POST /api/v1/inbox/mutes`; failure rolls back, success says "Muted “X”; it won't enter Inbox again". Inbox ⋯ gains **Muted** sheet (`GET /inbox/mutes`, newest first); each **Unmute** removes the row immediately (`DELETE /inbox/mutes/{id}`), rolling back on failure. Separate from Agent muting (`/api/v1/mutes`).
+- **Rules** (#2140, `InboxPolicies.kt`, [inbox.md](../assistant/inbox.md) "Policies"): after the mute entries the long-press menu lists "Rule for this repository / conversation / sender · name"; the sheet (`InboxPolicySheet`) reads `GET /inbox/policies` to prefill the item's rule, offers the tier and the AI twin as option rows, Save (`POST` for a new rule, `PATCH /{id}` for one there, off until something is chosen for a new rule) and **Remove** for an existing one. Saving moves the matching open, triaged, not-working items of that source to the new tier at once (`applyPolicyTier`, under the repository's refresh lock), restored on failure. Inbox ⋯ gains **Rules** after **Muted** (`InboxRulesSheet`, newest first; a tap edits, **Remove** sends `DELETE /inbox/policies/{id}` and rolls back on failure). Tests: `InboxPoliciesTest`, `ParityInboxTransportTest`, `InboxRepositoryTest`; shots in `ParityInboxShotsTest` (row menu, ⋯, new / existing rule, Rules, empty Rules).
 - **Pinned messages** (G124, `LarkPinsSheet` in `LarkChatExtras.kt`): chat ⋯ **Pinned messages**, fetched only on opening (reading the list marks it read upstream), with **Load more** if `next_cursor` exists. Tapping an item first asks the hub where the original is (`pin-messages/{id}`, with chat `topic` so topic groups can find the thread); thread replies open the topic sheet (using the same message-display settings), otherwise jump near that message in chat. ⋯ / long-press **Unpin** confirms first. The message long-press menu offers **Pin** when `can_pin`, sending after confirmation (account from the Pin list's `account_id`). Account changed, unclear result and old hub (404 / 405 without code) each get a sentence. Account change clears and disables the list (only "Lark account changed; reopen the chat" remains); after removal or unclear result, no further removal before the list reloads. Previews show retained content only according to that Pin-list account's message-display settings; an account mismatch treats all options as off.
 - **Read receipts** (G133): only query your own messages already in Lark (`LarkReadReceipts`: up to 100 per request, once per 3 seconds per chat, no more queries once all read; 404 / 405 stops queries for this visit). Left of the time: direct chat **Read / Unread**; groups (from Inbox `lark.is_group`, including two-person groups) "N unread" or **All read**; without the chat in Inbox, group status is inferred from counts. List changes do not cancel requests (rapid changes would prevent any receipt arriving); the next interval queries the updated list. iOS uses a progress ring for groups; Android uses text.
 - **Message display** (G131): Settings › Lark › Message display (`LarkDisplaySettings.kt`, `GET / POST /lark/message-display`, with `expected`), **Keep recalled messages**, **Edit history**. Failure, 409, 403 and 404 each explain and offer **Reload**. Read once on chat opening (failure means all off): recalled `retained` messages display normally with **Recalled** below if keeping recalled messages is on, but take no reactions (no emoji bar in the long-press menu, existing reactions hidden), no thread and no card buttons (#5306, as on iOS, `docs/protocol/protocol.md`); **Edited** opens prior versions when edit history is on and `edit_history` exists. Both preferences form one `LarkMessageDisplay`, shared through `LocalLarkMessageDisplay` by chat, topic and Pin sheets.
@@ -1233,6 +1234,7 @@ Specification [extensions.md](../extensions/extensions.md) ("Declarative UI", "E
   Unsupported shows hub reason/no refresh; failed refresh retains old result with reason. Tests `LauncherQuotaTest`, `HttpMachineManagementTest`; `LauncherQuotaShotsTest`, styles × light / dark, `feature/settings/build/launcher-quota-shots/`.
 - **Auto-upgrade, machine toggles and uninstall** (#3049, web/iOS, [extensions.md](../extensions/extensions.md) ("Auto-upgrade", "Machines (`format: machine`)")):
   - Market extension `HubExtension.autoUpgrade` detail adds Upgrade below Enabled, toggle `PUT …/{id}/-/auto-upgrade`; new version row with `ExtensionText.upgradeDetail`, Confirm (pending/rolled-back caution) or Upgrade opens catalog preview/confirmation; no `market` means text only. Toggle failure says Couldn't enable/disable auto-upgrade: reason; no update shows last automatic-upgrade/rollback result. List pending version appends New version needs confirmation.
+  - `auto_upgrade_paused` (switch off and greyed out) picks the footer by value (`ExtensionText.upgradeFooter`, #1895): `disabled` paused while the extension is off; `market_removed` its market was removed, so no upgrades until it is added again with the same address; any other value only "paused". Removing a market says its extensions stop upgrading.
   - Manage markets top Auto-upgrade extensions master (`GET/PUT /api/v1/extensions/-/upgrades`), explanatory copy follows value; hidden for old404/no markets.
   - Form `type: array`, `items.format: machine` uses `MachineSwitches`: filter OS by `items.os`, repository machine id/name/OS/online only so metric changes don't redraw; online/offline text. `node_machines` enabled machines add program status (`ExtensionText.programStatus`); computer-providing extension (cua) adds other online Mac Cua Driver status (Not installed / Not running / Missing permission / Locked / Ready), from `Machine.computer` → `ExtensionText.cuaStatus`, web `machineStatus`, omitted before node response. Unknown ids still listed/removable. Immediate `ExtensionModel.saveNow` changes only this saved config field, preserves other unsaved draft; rejection rolls back and explains above. `confirm` / `x-confirm` asks before enabling only. Forms with only these fields have no Save.
   - Market-origin `market:…` detail bottom red Uninstall even config-read-only, shared `UninstallDialog`; wide adjacent list reloads via `ExtensionChanges` after uninstall/toggle/auto-upgrade/save. **Keep data checked by default**, like web; `ExtensionMarkets.uninstall.keepData` now defaults true.
@@ -1301,6 +1303,42 @@ Specification [extensions.md](../extensions/extensions.md) ("UI version 4: code 
 Specification [extensions.md](../extensions/extensions.md) ("UI version 5: code review"), `ui_version: 5`. `ExtensionCodeReview.kt` matches web `lib/code-review.ts` algorithms/cases, UI `ExtensionCodeReviewUi.kt`:
 word-level highlight, context expansion, viewed (`mark_viewed` or local SharedPreferences `path@revision`), generated/large/viewed files collapsed, two line-number taps select comment range, drafts/bottom review strip (summary sheet), suggestion, ignore whitespace.
 Context/mark_viewed/auto-load use nonbusy `ExtensionUiState.fetch`, response items replace by key in place. Unified only. `ExtensionCodeReviewTest`, `ExtensionReviewShotsTest`.
+
+### Host-owned extension settings (#2397)
+
+Android follows [the shared settings contract](../extensions/extension-settings.md). Every `ExtensionPage`, including direct navigation,
+installation/sign-in returns and the standalone Settings fallback, delegates the standard sections to `ExtensionSettingsPage`:
+**Enabled → Extension configuration (including Save) → Information → Updates → Danger zone**. The configuration slot retains schema fields,
+secrets, sign-in, machine selection, custom-page links and connector/channel configuration links. Contribution switches, isolation and
+permissions remain host diagnostics after the identity rows. Custom extension views, connector/channel business pages and the marketplace
+consent screen are not replacement extension settings pages.
+
+- Built-in, configured, development, attached, market-installed and other installed sources all use the same renderer. Unsupported check,
+  auto-upgrade and uninstall controls stay visible, disabled and explained. Unknown manager capabilities fail closed. Source metadata, not
+  extension-owned settings or arbitrary URLs, determines lifecycle authority. `attached` is decoded from existing manager metadata.
+- Information always includes installed version, selectable extension ID, source, runtime and installation provenance. Missing values say
+  **Not provided**; local installation directories are never displayed. Homepages must be valid HTTPS URLs without embedded credentials.
+- Save belongs to configuration, before Information. Enabled, Auto-upgrade and Check for updates never submit dirty configuration. A failed
+  canonical read keeps the last detail and draft but blocks lifecycle writes and Save until a successful retry.
+- Checks refresh the owning manager's market catalog and then reload its canonical extension detail. Missing markets, catalog errors and
+  missing catalog entries are not reported as current. The saved auto-upgrade preference stays on while paused; disabled-extension,
+  removed-market and manager-global pauses are explained separately. A global preference read failure is visible rather than assumed on.
+- Catalog/upgrade routes retain the manager through consent, installation and sign-in; operation pushes are filtered by that owner.
+  The application facade forwards the existing per-extension and global auto-upgrade APIs. Uninstall confirmation includes installed version
+  and defaults to keeping data; dependency refusal still uses the existing explicit cascade confirmation.
+
+**Existing API boundaries; no server changes:** the detail response does not provide a declared runtime kind (`kind` is its first contribution
+point), so Runtime says **Not provided**. Rollback has an execution endpoint but no consent preview; when a previous version exists, Roll back
+is visible and disabled with that reason. There is no non-mutating uninstall/dependency preflight endpoint; Android never issues DELETE to
+probe before confirmation. Pack-member uninstall, a complete history list and detailed installed dependency/pack inspection remain outside
+this change; the existing Android member-removal gap is described below. Adding safe runtime metadata or preview contracts requires a
+separate server decision, not a fabricated field or operation in the client.
+
+Regression tests: `ExtensionSettingsStateTest`, `ExtensionSettingsShotsTest`, `CatalogExtensionManagerTest` and
+`ExtensionCatalogRouteCompatibilityTest`. Screenshots render actual `ExtensionPage` instances for built-in realtime voice, installed Example
+Notes and configured Example Weather, in all three styles × light/dark, using Robolectric native graphics. They are Compose/JVM evidence,
+not emulator, physical-device or production deployment evidence. Images go to the settings module's generated build output, in the
+`extension-settings-shots` subdirectory, and are attached to the PR, not committed.
 
 ### Extension model and declarative contributions (#2226)
 
