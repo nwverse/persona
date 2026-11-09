@@ -3145,6 +3145,15 @@ if MOCK_TASKS:
                           "done_when": ["List this week's merged changes"], "reviews": [], "updated_at": ago(minutes=20)})
         next(i for i in TASK_FEED[ASK1] if i["kind"] == "today")["body"]["pending_review"] = [
             {"id": "todo_task_release", "title": "整理发布说明"}]
+    # MOCK_TASKS_AUTO_REVIEW=1 (with MOCK_TASKS_PENDING_REVIEW=1): the independent reviewer looked at the release notes
+    # task's change first (#2173): nothing blocking, one finding, its report under the criteria.
+    if os.environ.get("MOCK_TASKS_AUTO_REVIEW") == "1":
+        for _t in TODOS_INIT + TODOS:
+            if _t["id"] == "todo_task_release" and _t.get("supervision"):
+                _t["supervision"]["auto_review"] = {
+                    "id": "rv_mock", "state": "clean", "round": 0, "count": 1, "blocking": 0,
+                    "findings": "1. P2 docs/release-notes.md:12 the fixes section lists #41 twice: drop the second line",
+                    "started_at": ago(minutes=24), "ended_at": ago(minutes=20)}
     # MOCK_TASKS_NOTICE=1: the line the hub writes when a routine runs again once the computer and model are ready
     # (#4253, kind notice, drawn by the clients since #4305), last in the conversation.
     if os.environ.get("MOCK_TASKS_NOTICE") == "1":
@@ -5853,6 +5862,27 @@ if IMESSAGE_DENIED:
                                  "回到 Persona 刷新。注意：这样经 ssh 登录这台 Mac 的任何会话都能读整个磁盘"]}
 IMESSAGE_CONNECTOR = {"id": "imessage", "name": "信息", "status": IMESSAGE_STATUS["status"], "account": "MacBook",
                       "via": "MacBook 上的「信息」", "error": IMESSAGE_STATUS.get("error"), "capabilities": ["status"]}
+
+
+def _imessage_connector():
+    """The built-in Messages extension's connector, or the legacy mock's when extensions are not being tested."""
+    base = {**IMESSAGE_CONNECTOR, "guide": IMESSAGE_STATUS.get("guide"), "inbox": True, "archive": True}
+    pl = PLUGINS.get("imessage") if PLUGINS_MODE else None
+    if pl is None:
+        return base
+    machines = pl.get("config", {}).get("machines") or []
+    if not pl.get("enabled") or not machines:
+        return {**base, "status": "not_configured", "account": None, "via": None, "enabled": False,
+                "error": "没有设置「信息」：在 设置 › 扩展 › 信息 选一台 Mac", "guide": ["在 设置 › 扩展 › 信息 选一台 Mac"]}
+    name = next((m["name"] for m in MACHINES if m["id"] == machines[0]), machines[0])
+    return {**base, "account": name, "via": name + " 上的「信息」", "enabled": True}
+
+
+def _imessage_status():
+    if PLUGINS_MODE and not _imessage_connector().get("enabled"):
+        return None
+    name = _imessage_connector().get("account")
+    return {**IMESSAGE_STATUS, "machine": name} if name else IMESSAGE_STATUS
 
 
 def _im_person(handle, name=None):
@@ -11173,6 +11203,70 @@ def agent_live(step, n):
     return {"ok": True, "step": step}
 
 
+NARRATED = {}  # session id → machine id of the conversations /mock/narrate?step=start streamed in
+NARRATED_WORDS = {}  # session id → the words streamed there, which step=finish writes as the thinking line
+LIVE_TEXT = {}  # session id → the text being generated, sent again after a subscription's backlog as the hub does
+
+
+def narrate(step, words, answer, steps=8, ms=250, line=True, ask="帮我把网络层单元测试的事交给负责的 Agent。"):
+    """/mock/narrate: what the Persona assistant's turn with a tool call looks like on the wire (#1966). Claude Code
+    streams the words it writes before a tool call as text deltas; its transcript records them as a thinking block,
+    written with the tool call once the tool is done.
+    step=start: in every open conversation, the user's message `ask` that starts the turn, then `words` stream as deltas
+    (`steps` × `ms`). step=finish: the thinking line (`line=0`: none, a turn cut off), the tool call and its result, the
+    answer `answer`, then the clearing delta. With no app connected (GET /mock/restart?gap_ms=… between the two), the
+    lines wait for the resumed subscription and the clear is lost, as on the hub: deltas are not replayed. A text still
+    being generated is sent again after a backlog."""
+    import time
+    if step == "start":
+        NARRATED.clear(); NARRATED_WORDS.clear()
+        followers = {}  # each open conversation, once, and every socket that follows it (a closed one is skipped)
+        for send, subscribed in list(LIVE):
+            for sid in list(subscribed):
+                if ITEMS.get(sid): followers.setdefault(sid, []).append(send)
+        for sid in followers:
+            NARRATED[sid] = next((x["machine_id"] for x in all_sessions() if x["session_id"] == sid), "macbook")
+            NARRATED_WORDS[sid] = words
+            CHURN_ITEMS.setdefault(sid, list(ITEMS[sid]))  # /mock/reset takes them away again
+        for sid, sends in followers.items():
+            mid = NARRATED[sid]
+            if ask:
+                before = ITEMS[sid][-1]["seq"]
+                asked = [it("user", "text", 0, text=ask)]
+                ITEMS[sid] = ITEMS[sid] + asked
+                for send in sends:
+                    try: send({"type": "items", "machine_id": mid, "session_id": sid, "items": asked, **span(asked, before)})
+                    except Exception: pass
+            for k in range(1, steps + 1):
+                time.sleep(ms / 1000)
+                text = words[:len(words) * k // steps]
+                LIVE_TEXT[sid] = text
+                for send in sends:
+                    try: send({"type": "delta", "machine_id": mid, "session_id": sid, "text": text})
+                    except Exception: pass
+        return {"ok": True, "streamed": len(NARRATED)}
+    if step == "finish":
+        def send_all(sid, msg):  # whoever follows the conversation now (nobody during a restart's gap); how many got it
+            sent = 0
+            for out, subs in list(LIVE):
+                if sid in subs:
+                    try: out(msg); sent += 1
+                    except Exception: pass
+            return sent
+
+        cleared = 0  # sockets the clear reached
+        for sid, mid in list(NARRATED.items()):
+            before = ITEMS[sid][-1]["seq"]
+            new = ([it("assistant", "thinking", 0, text=NARRATED_WORDS.get(sid, words))] if line else []) \
+                + tool("Bash", {"command": "ls agents", "description": "找负责的 Agent"}, "找到了", 0) + [it("assistant", "text", 0, text=answer)]
+            ITEMS[sid] = ITEMS[sid] + new
+            LIVE_TEXT.pop(sid, None)
+            send_all(sid, {"type": "items", "machine_id": mid, "session_id": sid, "items": new, **span(new, before)})
+            cleared += send_all(sid, {"type": "delta", "machine_id": mid, "session_id": sid, "text": ""})
+        return {"ok": True, "finished": len(NARRATED), "cleared": cleared}
+    return {"error": "step is start or finish"}
+
+
 def say(text, user=None, stream=False, steps=10, ms=300, late=0, drop=False):
     """A reply (after `user`'s message, if given) in every conversation an app has open (/mock/say). `stream`: the
     message first, then the reply arrives as growing `delta` text over about 3 s, like the Persona assistant's. `drop`: the
@@ -11732,7 +11826,8 @@ if MOCK_BROWSER:
 if PLUGINS_MODE:
     _im_off = os.environ.get("MOCK_IMESSAGE_EXT") == "off"
     PLUGINS["imessage"] = {"id": "imessage", "name": "信息（iMessage）", "kind": "", "status": "disabled" if _im_off else "running",
-                           "version": "202611051200", "source": "builtin", "enabled": not _im_off, "contributes": {},
+                           "version": "202611051200", "source": "builtin", "enabled": not _im_off,
+                           "contributes": {"connectors": ["imessage"]},
                            "description": "读你一台 Mac 上「信息」App 的短信和 iMessage（只读，不发送），交给收件箱、知识库和助手。读哪台在这里选；「交给 Persona」和删除已存的数据在 设置 › 连接器 › 信息。",
                            "form": {"fields": [
                                {"name": "machines", "type": "array", "title": "读哪台 Mac", "unique_items": True, "max_items": 1,
@@ -12717,7 +12812,10 @@ def _plugin_needs(pl):
     missing = ["密钥「%s」" % s["title"] for s in pl.get("secrets", []) if s.get("required") and not s.get("set")]
     if pl["enabled"] and pl["status"] in ("needs_setup", "running") and pl["source"] == "installed":
         pl["status"] = "needs_setup" if missing else "running"
-    pl["needs_setup"] = missing or None
+    pl["needs_setup"] = missing or (["没有设置「信息」：在 设置 › 扩展 › 信息 选一台 Mac"]
+                                      if pl["id"] == "imessage" and pl["enabled"] and not pl["config"].get("machines") else None)
+    if pl["id"] == "imessage" and pl["enabled"]:
+        pl["status"] = "needs_setup" if pl["needs_setup"] else "running"
     return pl
 
 
@@ -13285,6 +13383,13 @@ class H(BaseHTTPRequestHandler):
         if p == "/mock/lark_send_delay": return self.send_json(set_lark_send_delay(q.get("s", [""])[0]))  # LarkSendTests
         if p == "/mock/agent_live" and AGENT_LIVE:  # an agent's reply streaming as Claude shows it (MOCK_AGENT_LIVE above)
             return self.send_json(agent_live(q.get("step", [""])[0], int(q.get("n", ["0"])[0])))
+        if p == "/mock/narrate":  # #1966: words streamed before a tool call, recorded as thinking; ?step=start|finish
+            args = (q.get("step", [""])[0], q.get("words", ["我先找一下负责的 Agent，再把任务交给它。"])[0], q.get("answer", ["已交给负责的 Agent。"])[0],
+                    int(q.get("steps", ["8"])[0]), int(q.get("ms", ["250"])[0]), q.get("line", ["1"])[0] != "0")
+            if args[0] == "start":  # streams for a few seconds: the test looks for the words meanwhile
+                threading.Thread(target=narrate, args=args, daemon=True).start()
+                return self.send_json({"ok": True})
+            return self.send_json(narrate(*args))
         if p == "/mock/say":  # ChatFollowTests: a reply arrives in every open conversation (?text=…, ?user=… a message before it)
             # &steps=50&ms=80: the hub's own pace (a delta every 80 ms, node/assistant.go).
             # &history=mock-1.r1: the transcript's history token from now on, on pushes and pages alike (a branch was abandoned,
@@ -13465,6 +13570,7 @@ class H(BaseHTTPRequestHandler):
             reset_agent_archives()  # MOCK_AGENT_ARCHIVES: the two archived agents again, the rest back in the list as they were
             PINS.update(spaces=["macbook/weather"], sessions=[])
             for sid, items in CHURN_ITEMS.items(): ITEMS[sid] = list(items)  # LiveUpdateTests, ChatFollowTests: what churn / say added goes
+            NARRATED.clear(); NARRATED_WORDS.clear(); LIVE_TEXT.clear()  # an AssistantLiveTextTests turn that died mid-stream
             for row in SESSIONS + ASSISTANT:
                 if row["session_id"] in DROPPED_AT: row["updated_at"] = DROPPED_AT[row["session_id"]]
             DROPPED_AT.clear()
@@ -13706,12 +13812,13 @@ class H(BaseHTTPRequestHandler):
         if github_thread_area(self, "GET", p, b""): return
         if github_area(self, "GET", p, b""): return
         if p == "/api/v1/connectors":  # Settings › Connectors › GitHub; MOCK_GITHUB=signed_out: its gh login has expired
-            listed = [GITHUB_CONNECTOR, {k: v for k, v in IMESSAGE_CONNECTOR.items() if v is not None}] + ([telegram_connector()] if TELEGRAM_MODE else [])
+            listed = [GITHUB_CONNECTOR, {k: v for k, v in _imessage_connector().items() if v is not None}] + ([telegram_connector()] if TELEGRAM_MODE else [])
             listed += [PLUGIN_CONNECTOR] if PLUGIN_CONNECTOR else []
             listed += [wechat_connector()] if WECHAT_MODE else []
             return self.send_json({"connectors": (LEGACY_CONNECTORS if q.get("all") == ["1"] else []) + listed})
         if p == "/api/v1/imessage":  # Settings › Connectors › Messages; MOCK_IMESSAGE=denied: no Full Disk Access on the Mac
-            return self.send_json(IMESSAGE_STATUS)
+            status = _imessage_status()
+            return self.send_json(status) if status else self.send_json({"error": "没有设置「信息」：在 设置 › 扩展 › 信息 选一台 Mac", "code": "not_configured"}, 404)
         if p == "/api/v1/imessage/chats" or p.startswith("/api/v1/imessage/chats/") and p.endswith("/messages"):
             if IMESSAGE_DENIED:
                 return self.send_json({"error": IMESSAGE_STATUS["error"], "code": "no_permission"}, 403)
@@ -15754,6 +15861,9 @@ class H(BaseHTTPRequestHandler):
                                "items": lazy_images(fold_work(page) if msg.get("fold_work") else page)}
                         served(sid, "backlog", out)
                         send(out)
+                    # What is being generated, right after the backlog, as the hub's sendLiveText does (#1966).
+                    if LIVE_TEXT.get(sid):
+                        send({"type": "delta", "machine_id": mid, "session_id": sid, "text": LIVE_TEXT[sid]})
         except Exception as e:
             LOG.write("  WS closed %r\n" % e); LOG.flush()
         SOCKETS.discard(self.connection)
@@ -16912,7 +17022,7 @@ MOCK_HELP.append("MOCK_ADD_COMPUTER=1|seed  机器 › 添加电脑（#287）：
 # the states the setup card shows, in the hub's shapes and words (its own catalogs, by Accept-Language): the features
 # assistant_readiness, machines_add, machine_trust and builtin_presets; GET /api/v1/assistant/readiness[?probe=1],
 # POST …/readiness/dismiss, POST /api/v1/assistant/warm with readiness; POST /api/v1/assistant/conversations refused
-# with the scenario's code (409 no_machine / claude_missing / launcher_missing, 503 node_unreachable); POST
+# with the scenario's code (409 no_machine / machine_pending / claude_missing / launcher_missing, 503 node_unreachable); POST
 # /api/v1/sessions on a pending computer 409 machine_pending; GET /api/v1/launchers/presets with the built-in providers
 # (presets_builtin.json) before the plugins'. The computer is the example user's MacBook (mbp) alone, with no agents, except in
 # demo (full on the usual data, the assistant on server). Adding and confirming a computer works (MOCK_ADD_COMPUTER), and the
@@ -16976,13 +17086,17 @@ if READINESS:
 
 def ready_machine():
     """The main conversation's computer as readiness_mock wants it: the one set in Settings › Assistant when it is among the
-    confirmed ones served, else the first of them (assistant/profile.go effective); None when there is none."""
-    ok = [m for m in out_machines() if m.get("trust") != "pending"]
+    confirmed ones served, else the first of them (assistant/profile.go effective). With none confirmed, name the
+    pending computer with the smallest id for confirmation; None when neither exists."""
+    machines = out_machines()
+    ok = [m for m in machines if m.get("trust") != "pending"]
     m = next((x for x in ok if x["id"] == ASSISTANT_CONFIG["machine_id"]), ok[0] if ok else None)
+    if m is None:
+        m = min((x for x in machines if x.get("trust") == "pending"), key=lambda x: x["id"], default=None)
     if m is None:
         return None
     return {"id": m["id"], "name": m["name"], "online": bool(m.get("online")), "claude_version": m.get("claude_version", ""),
-            "node_outdated": m.get("error_code") == "node_outdated"}
+            "pending": m.get("trust") == "pending", "node_outdated": m.get("error_code") == "node_outdated"}
 
 
 def ready_lang(handler):
@@ -16993,7 +17107,7 @@ def ready_state(handler, probe=False):
     sc, m = READY["sc"], ready_machine()
     launcher = ASSISTANT_CONFIG["launcher"] or "claude"
     result = None
-    if probe and m and m["online"] and not m["node_outdated"]:
+    if probe and m and not m["pending"] and m["online"] and not m["node_outdated"]:
         result = readiness_mock.probe_result(sc, launcher)
         if result["ok"] and not sc.get("model"):
             READY["sc"] = sc = dict(sc, model="ok")  # what a probe that answered says of the model, from now on
@@ -17094,6 +17208,8 @@ if READINESS or BUILTIN_PRESETS:
             if not code:
                 if m is None:
                     code = "no_machine"
+                elif m["pending"]:
+                    code = "machine_pending"
                 elif not m["online"]:
                     code = "node_unreachable"
                 elif READY["sc"].get("claude") == "missing":
