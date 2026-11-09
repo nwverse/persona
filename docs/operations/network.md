@@ -40,7 +40,7 @@ Domains are examples; replace with your configuration. HTTP addresses should be 
 | `public.advertise_lan` | Unset or `true` automatically advertises LAN IPv4 / ULA candidates, delivered only after authentication |
 | `public.ddns` | Omitted disables it; use a domain to recover hub after prefix changes; see [configuration](config.md#ddnspublicddns) |
 
-Both listeners share header timeout, idle-connection timeout, and header-size limits. No whole-request read / write timeout, avoiding truncating WebSockets or large-file transfers. Instead a request body that sends nothing for 2 minutes is answered and its connection closed; a slow upload that keeps moving is not cut (`server/internal/hub/bodyidle.go`).
+Both listeners share header timeout, idle-connection timeout, and header-size limits. No whole-request read / write timeout, avoiding truncating WebSockets or large-file transfers. Instead a request body that sends nothing for 2 minutes is answered and let go: over HTTP/1 its connection is closed; over HTTP/2, which clients of the TLS listener usually negotiate, only that request's stream ends. A slow upload that keeps moving is not cut (`server/internal/hub/bodyidle.go`).
 
 The two `advertise_*` switches control only discovery, not explicitly configured `public_url` / `public.advertise`. With TLS enabled, discovered candidates use HTTPS and the TLS port; explicit HTTP URLs remain unchanged.
 
