@@ -127,6 +127,7 @@ func TestResponsesProbeReadsStreamsLikeTheRuntime(t *testing.T) {
 		"no blank line between events":     {delta + "\n" + `data: {"type":"response.completed"}` + "\n", true},
 		"cut before the terminal event":    {delta + "\n\n", false},
 		"failed without a blank line":      {delta + "\n" + `data: {"type":"response.failed"}` + "\n", false},
+		"completed after failed, no blank": {delta + "\n" + `data: {"type":"response.failed"}` + "\n" + `data: {"type":"response.completed"}`, false},
 		"completed after a comment and id": {": ping\n\n" + delta + "\n\nid: 2\n" + `data: {"type":"response.completed"}`, true},
 	} {
 		t.Run(name, func(t *testing.T) {

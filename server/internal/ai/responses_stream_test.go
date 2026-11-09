@@ -61,6 +61,9 @@ func TestResponsesStreamFramesEventsTheSSEWay(t *testing.T) {
 		// a line ending in } inside an object that goes on does not end the event
 		"nested object across lines": "data: {\"type\":\"response.output_text.delta\",\"delta\":\"hello\"}\n\n" +
 			"data: {\"type\":\"response.completed\",\"response\":{\n" + "data: \"model\":\"gpt-x\"}\n" + "data: }\n\n",
+		// the terminal event ends the reply even when more data lines follow it with no blank line between
+		"data after the terminal event": "data: {\"type\":\"response.output_text.delta\",\"delta\":\"hello\"}\n" +
+			"data: " + completed + "\n" + "data: [DONE]\n" + "data: {\"type\":\"response.output_text.delta\",\"delta\":\" more\"}\n",
 	} {
 		t.Run(name, func(t *testing.T) {
 			r, err := responsesStream(t, body)
