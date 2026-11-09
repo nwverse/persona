@@ -48,5 +48,6 @@
   "details": "詳細",
   "add_provider": "モデルプロバイダーを追加",
   "try_anyway": "それでも使う",
-  "close_help": "閉じる"
+  "close_help": "閉じる",
+  "forget_failed": "「{id}」を削除できませんでした：{error}"
 }

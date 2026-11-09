@@ -48,5 +48,6 @@
   "details": "详情",
   "add_provider": "添加模型供应商",
   "try_anyway": "仍然使用",
-  "close_help": "关闭"
+  "close_help": "关闭",
+  "forget_failed": "没能忘记「{id}」：{error}"
 }

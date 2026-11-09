@@ -48,5 +48,6 @@
   "details": "Details",
   "add_provider": "Add model provider",
   "try_anyway": "Try anyway",
-  "close_help": "Close"
+  "close_help": "Close",
+  "forget_failed": "Couldn't forget “{id}”: {error}"
 }
