@@ -289,13 +289,18 @@ private struct NodeActionPrompts: ViewModifier {
         content
             #if DEBUG
             // `-showRunAgentHere <machine id>`: Run Agent Here for that computer's first herdr space once its agents are
-            // in, for screenshots (#1643). Without it the list's sessions are not read here (no redraw on each push).
-            .task(id: UserDefaults.standard.string(forKey: "showRunAgentHere") == nil ? -1 : model.allSessions.count) {
-                guard !debugShownHere, let mid = UserDefaults.standard.string(forKey: "showRunAgentHere"),
-                      let g = SpaceGroup.build(model.allSessions).first(where: { $0.machineID == mid && NodeMenu.offersSpaceActions($0) })
-                else { return }
-                debugShownHere = true
-                actions.runningHere = g
+            // in, for screenshots (#1643). It polls `sessionsNow`, which nothing watches, so the view is not redrawn on
+            // each push; without the argument it reads nothing.
+            .task {
+                guard !debugShownHere, let mid = UserDefaults.standard.string(forKey: "showRunAgentHere") else { return }
+                for _ in 0..<60 {
+                    if let g = SpaceGroup.build(model.sessionsNow).first(where: { $0.machineID == mid && NodeMenu.offersSpaceActions($0) }) {
+                        debugShownHere = true
+                        actions.runningHere = g
+                        return
+                    }
+                    try? await Task.sleep(for: .milliseconds(500))
+                }
             }
             #endif
             .confirmationDialog(actions.closingTab.map { $0.name.isEmpty ? String(localized: "Close This Tab?") : String(localized: "Close Tab “\($0.name)”?") } ?? "",
