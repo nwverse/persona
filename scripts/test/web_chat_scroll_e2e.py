@@ -210,7 +210,8 @@ def offscreen_exchanges(page, what):
     at_end(page, what + ", back to the end")
     if not page.evaluate("() => !document.querySelector('[data-chat-scroll] section.seg-cv')?.firstElementChild?.checkVisibility({ contentVisibilityAuto: true })"):
         fail(f"{what}: the first exchange is drawn while off screen")
-    if not page.evaluate("() => window.find('第 1 个问题') && String(getSelection()) === '第 1 个问题'"):
+    # wrapping around as Ctrl+F does: the search starts where the pill was clicked, below the words
+    if not page.evaluate("() => window.find('第 1 个问题', false, false, true) && String(getSelection()) === '第 1 个问题'"):
         fail(f"{what}: the browser's find does not reach an exchange that skipped drawing")
     page.evaluate("() => getSelection().removeAllRanges()")
     ok(f"{what}: the browser's find reaches an exchange that skipped drawing")
@@ -229,7 +230,7 @@ def offscreen_exchanges(page, what):
 
     page.locator("[data-jump-pill]").click()
     at_end(page, what + ", back to the end again")
-    page.get_by_role("button", name="更多", exact=True).click()
+    page.locator("header").get_by_role("button", name="更多", exact=True).click()  # the chat's menu, not a message's
     page.get_by_role("menuitem", name="会话内搜索").click()
     page.locator("[data-chat-search] input").fill("第 3 个问题")
     page.locator("[data-search-result]").first.click()
@@ -318,7 +319,8 @@ def wide(browser, base, a, other):
     link = page.locator(f'aside a[href="{path}"]')
     if link.count():
         link.first.click()
-        page.wait_for_function(f"location.pathname === '{path}'")
+        # an agent's chat opens in its terminal tab (/t/<machine>/<workspace>/<tab>/<session>)
+        page.wait_for_function(f"location.pathname.endsWith('/{AGENT[1]}')")
     else:
         page.goto(base + path)
     at_end(page, "wide agent chat, from the sidebar")
