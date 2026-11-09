@@ -12,6 +12,7 @@ import (
 
 	"github.com/nwverse/persona/sdk/go/wire"
 	"github.com/nwverse/persona/server/internal/host"
+	"github.com/nwverse/persona/server/internal/identity"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/transcript"
 )
@@ -266,7 +267,9 @@ func (n *Node) decorate(s *proto.Session) {
 		s.StartedByPersona = true
 		s.Launcher = st.Launcher
 		s.Compaction = st.Compaction
-		if s.Cwd == "" {
+		// A row without a pane is listed where its record says it started, when that is an assistant or health
+		// directory: not where a `cd` in its transcript left it (#2368). A pane's directory is its host's.
+		if s.Cwd == "" || s.PaneID == "" && identity.IsAssistantDir(st.Cwd) {
 			s.Cwd = st.Cwd
 		}
 	}
