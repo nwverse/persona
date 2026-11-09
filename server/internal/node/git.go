@@ -341,7 +341,11 @@ func (n *Node) gitDiff(ctx context.Context, cwd, path string, staged bool) (map[
 	}
 	var out string
 	if staged {
-		out, err = git(ctx, root, "--literal-pathspecs", "diff", "--cached", "--no-color", "--", path)
+		args := []string{"--literal-pathspecs", "diff", "--cached", "--no-color", "--", path}
+		if from := n.stagedRenameSource(ctx, root, path); from != "" {
+			args = []string{"--literal-pathspecs", "diff", "--cached", "-M", "--no-color", "--", from, path}
+		}
+		out, err = git(ctx, root, args...)
 	} else {
 		out, err = git(ctx, root, "--literal-pathspecs", "diff", "--no-color", "--", path)
 		if err == nil && strings.TrimSpace(out) == "" {
@@ -360,6 +364,40 @@ func (n *Node) gitDiff(ctx context.Context, cwd, path string, staged bool) (map[
 		out = out[:maxDiffBytes]
 	}
 	return map[string]any{"path": path, "diff": out, "truncated": truncated}, nil
+}
+
+// stagedRenameSource is the source of the staged rename (or copy) whose destination is path, or "" when there is none.
+// Rename detection pairs only files inside the pathspec, so without its source a renamed file diffs as wholly new. The
+// source is left out (path diffs alone, as before) when file.read refuses it, or when its name covers more than the
+// one file in the index (it is a folder now): a pathspec takes everything under that name into the diff.
+func (n *Node) stagedRenameSource(ctx context.Context, root, path string) string {
+	o, err := git(ctx, root, "diff", "--cached", "-M", "--name-status", "-z")
+	if err != nil {
+		return ""
+	}
+	from := ""
+	recs := strings.Split(o, "\x00")
+	for i := 0; i+1 < len(recs) && from == ""; i += 2 {
+		k := recs[i]
+		if k == "" {
+			i--
+			continue
+		}
+		if (k[0] == 'R' || k[0] == 'C') && i+2 < len(recs) { // from, to
+			if recs[i+2] == path {
+				from = recs[i+1]
+			}
+			i++
+		}
+	}
+	if from == "" || n.guardRepoPath(root, from) != nil {
+		return ""
+	}
+	names, err := git(ctx, root, "--literal-pathspecs", "diff", "--cached", "--no-renames", "--name-only", "-z", "--", from)
+	if err != nil || names != from+"\x00" {
+		return ""
+	}
+	return from
 }
 
 func (n *Node) gitShow(ctx context.Context, cwd, hash string) (*GitShow, error) {
