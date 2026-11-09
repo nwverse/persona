@@ -6,7 +6,7 @@ nonisolated enum SentSettingsLink {
         guard HubNaming.accepts(scheme: url.scheme), url.host()?.lowercased() == "settings",
               let components = URLComponents(url: url, resolvingAgainstBaseURL: false) else { return false }
         switch components.path {
-        case "/sent", "/connectors/sent", "/connectors/-sent": return true
+        case "/sent", "/connectors/-sent": return true
         case "", "/":
             let query = components.queryItems ?? []
             let tab = query.first { $0.name == "tab" }?.value

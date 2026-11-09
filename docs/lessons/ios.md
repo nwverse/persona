@@ -9,7 +9,7 @@ Pitfalls, odd behavior and the decisions made at the time (formerly "Lessons" in
 
 ## Nested settings navigation (#2522)
 
-- A nested settings page must keep its parent in programmatic paths too. Apple Connectors was an inline section, not a page: moving the sent ledger required a real Connectors destination and `[.connectors, .sent]` for legacy launches. A generic `connectors/<id>` parser otherwise mistakes `connectors/sent` for a connector; reserve the ledger aliases explicitly, keep unrelated URL/security rules unchanged, and test Back in compact and Mac split layouts.
+- A nested settings page must keep its parent in programmatic paths too. Apple Connectors was an inline section, not a page: moving the sent ledger required a real Connectors destination and `[.connectors, .sent]` for legacy launches. A generic `connectors/<id>` parser needs a distinct ledger sentinel: use `connectors/-sent` as the web does, retain a connector whose ID is `sent`, keep unrelated URL/security rules unchanged, and test Back in compact and Mac split layouts.
 
 ## Retiring a conversation preference (#2477)
 

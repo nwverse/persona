@@ -13,9 +13,12 @@ final class ConnectorsTests: XCTestCase {
         app.launchPinned()
         func row(_ label: String) -> XCUIElement {
             let r = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", label)).firstMatch
-            // From the top, down to it: after a back the list may be anywhere.
-            for _ in 0..<3 { app.swipeDown() }
-            for _ in 0..<6 where !(r.exists && r.isHittable) { app.swipeUp() }
+            let list = app.descendants(matching: .any)["connectors-list"].firstMatch
+            XCTAssertTrue(list.waitForExistence(timeout: 10))
+            // Scroll only the connector list and only when needed; dragging the whole short page can dismiss Settings.
+            for _ in 0..<4 where !(r.exists && r.isHittable) { list.swipeDown() }
+            for _ in 0..<8 where !(r.exists && r.isHittable) { list.swipeUp() }
+            XCTAssertTrue(r.exists && r.isHittable, "no connector \(label):\n\(app.debugDescription)")
             return r
         }
         func shot(_ name: String) {
