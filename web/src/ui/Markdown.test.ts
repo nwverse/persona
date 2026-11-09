@@ -5,6 +5,13 @@ import { hasMath, linkify, normalizeMath, splitCode } from "./Markdown";
 // The machine's answers about paths (lib/path-presence.ts), for the cache's path-link key; every other request is real.
 const api = vi.hoisted(() => vi.fn(async (_url: string) => ({ stats: [] as { path: string; kind: string }[] })));
 vi.mock("../lib/api", async (orig) => ({ ...(await orig<typeof import("../lib/api")>()), api: (url: string) => api(url) }));
+// How many blocks react-markdown parsed: its Markdown() runs once per parse, called by markdown-cache.ts or drawn as
+// <ReactMarkdown>.
+const parses = vi.hoisted(() => ({ n: 0 }));
+vi.mock("react-markdown", async (orig) => {
+  const real = await orig<typeof import("react-markdown")>();
+  return { ...real, default: (options: Parameters<typeof real.default>[0]) => (parses.n++, real.default(options)) };
+});
 
 describe("normalizeMath", () => {
   it("rewrites \\( \\) to inline dollars", () => {
@@ -335,6 +342,18 @@ describe("Markdown cache (#2465)", () => {
     }
     expect(html({ text: CORPUS[3], mid: "mac", cwd: "/repo" })).toContain("file/download?path=%2Frepo%2Fsrc%2Fa.ts");
     forget();
+  });
+
+  it("draws a conversation opened again from its kept trees, without parsing its replies", async () => {
+    const { html, forgetMarkdown } = await draw();
+    forgetMarkdown();
+    // each draw is a new root, as a conversation opened again mounts its replies anew (ChatView remounts)
+    const open = () => CORPUS.map((text) => html({ text, mid: "mac", cwd: "/repo" }));
+    const before = parses.n;
+    const first = open();
+    expect(parses.n - before).toBe(CORPUS.length);
+    expect(open()).toEqual(first);
+    expect(parses.n - before).toBe(CORPUS.length);
   });
 
   it("draws a block again without parsing it, and does not keep one block that would push out a chat", async () => {
