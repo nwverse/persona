@@ -7,8 +7,8 @@ import Testing
 /// answered, which the user may answer again (the web's lib/delegate.ts and its store).
 @MainActor
 struct DelegateTests {
-    /// The app's saved state, its own (#2117): `AppModel()` restores what the simulator's app saved once it was paired
-    /// (mock-hub UI tests), cards included, and saves into it again.
+    /// A state folder of this test's own (#2117). `AppModel()` would restore the snapshot the simulator's app saved once
+    /// it was paired (mock-hub UI tests), cards included, and save over it.
     private let folder = FileManager.default.temporaryDirectory.appending(path: "delegate-tests-\(UUID().uuidString)")
     private func newModel() -> AppModel { AppModel(stateFolder: folder) }
 
