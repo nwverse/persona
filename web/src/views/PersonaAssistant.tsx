@@ -23,7 +23,7 @@ import { PersonaAvatar, usePersona } from "./assistant/Persona";
 import { ChatOnlyNote, FailureCard, ReadinessCard, useReadinessGate } from "./assistant/Readiness";
 import { DayLine } from "./assistant/Tasks";
 import { ShellHeaderSlots, ShellSwitch } from "./ShellSwitch";
-import { MAIN_TITLE } from "./assistant/conversations";
+import { MAIN_TITLE, conversationTitle } from "./assistant/conversations";
 import { formatList, t } from "../i18n";
 import { ManagerSwitcher, useShownOffline } from "./ManagerParts";
 import { chosenManager, noteConversation, ownerHeaders, shownManager } from "../lib/manager-choice";
@@ -224,7 +224,7 @@ function Starter({ main, onToggleSidebar }: { main?: boolean; onToggleSidebar: (
       {sending ? (
         // the conversation page's own header, as it will read once the conversation is there
         <Header
-          title={main ? MAIN_TITLE : firstLine(sending.out.text) || t("chat-chatview.new_chat")}
+          title={main ? MAIN_TITLE : conversationTitle({ title: "" })}
           subtitle={main ? undefined : [sending.launcher, ago(new Date(sending.at).toISOString())].join(" · ")}
           machineName=""
           assistant
@@ -319,11 +319,6 @@ function Starter({ main, onToggleSidebar }: { main?: boolean; onToggleSidebar: (
       </div>
     </div>
   );
-}
-
-/** The header's title for a conversation still starting: its first message's first line, as the node names a new one. */
-function firstLine(text: string): string {
-  return text.trim().split("\n")[0]?.trim() ?? "";
 }
 
 /** True once a start has taken SLOW_START_MS: "Preparing" gives way to "Still starting claude…" so it doesn't look stuck. */
