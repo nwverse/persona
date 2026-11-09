@@ -38,7 +38,8 @@ def features():
                 ["messaging"] if os.environ.get("MOCK_MESSAGING") == "1" else []) + (
                 ["conversation_origin"] if os.environ.get("MOCK_AUTO_CONVERSATIONS") == "1" else []) + (
                 ["sessions_list", "sessions_lookup"] if os.environ.get("MOCK_SESSIONS_LIST") == "1" else []) + (
-                ["preview"] if os.environ.get("MOCK_PREVIEW") else [])
+                ["preview"] if os.environ.get("MOCK_PREVIEW") else []) + (
+                [] if os.environ.get("MOCK_LOOK_UPLOADS") == "off" else ["look_uploads"])
 
 
 def identity():
@@ -1988,8 +1989,8 @@ def format_todo(t):
 
 
 def apply_todo_plan(t, body):
-    """A POST / PATCH body's due_at | due_date, remind_at and priority (#1683, server/internal/assistant/todo_plan.go):
-    null or "" clears; a new reminder time is pushed again. The error to answer with 400, else None."""
+    """A POST / PATCH body's due_at | due_date, remind_at, priority (#1683, server/internal/assistant/todo_plan.go) and
+    project (#2581): null or "" clears; a new reminder time is pushed again. The error to answer with 400, else None."""
     if "due_at" in body or "due_date" in body:
         at, day = body.get("due_at") or None, body.get("due_date") or None
         if at and day: return "give due_at or due_date, not both"
@@ -2003,6 +2004,14 @@ def apply_todo_plan(t, body):
         pr = "" if pr == "normal" else pr
         if pr not in ("", "high", "low"): return "priority must be high, normal or low"
         t["priority"] = pr
+    if "project" in body:  # a knowledge-base project's slug or name, "" for none (#2581, todo_project.go)
+        name = (body.get("project") or "").strip()
+        if not name:
+            t.pop("project", None)
+        else:
+            e = next((e for e in KB["projects"] if name in (e["id"], e["name"]) and not e.get("extra", "").endswith("ignored")), None)
+            if e is None: return f"no knowledge-base project {name!r}"
+            t["project"] = e["id"]
     return None
 
 
@@ -2876,6 +2885,14 @@ if os.environ.get("MOCK_WORKFLOW") == "1":
         for _a in _w["agents"]:
             ITEMS[_a["session_id"]] = [it("user", "text", 14, text="%s：审这一块，列出问题" % _a["label"]),
                                        it("assistant", "text", 13, text=_a.get("last_text") or "这一块看完了，没有发现问题。")]
+# MOCK_MENTIONS=1 (#2319, the composer's @ list): the review agent read two files of its folder, each call alone between
+# replies, so the hub leaves them unfolded (fold_work) and they are this chat's files in the app (PersonaUITests/MentionMenuTests).
+if os.environ.get("MOCK_MENTIONS"):
+    ITEMS[REVIEW] = (_REVIEW_BEFORE + [it("user", "text", 100, text="看一下 PR #42")]
+                     + tool("Read", {"file_path": "/Users/me/code/weather/README.md"}, "# Weather", 99)
+                     + [it("assistant", "text", 98, text="先看了 README，再看小组件的改动。")]
+                     + tool("Read", {"file_path": "/Users/me/code/weather/WeatherWidget/Provider.swift"}, "1\timport WidgetKit", 97)
+                     + [it("assistant", "text", 95, text="PR #42 看完了：逻辑没问题，留了两条关于命名的小建议。")])
 ITEMS[CODEX_LIVE] = (
     [it("user", "text", 12, text="把三个环境的部署变量合到一个 env 文件里")]
     + tool("Bash", {"command": "ls deploy/env"}, "dev.env\nprod.env\nstaging.env", 8)
@@ -9313,12 +9330,121 @@ def ext_look_personas():
     return out
 
 
+# ---------- uploaded looks (docs/apple/persona.md "Uploading an image", #2404) ----------
+# POST /api/v1/looks/uploads makes a package in a temporary directory, as the hub does in personas/u-<hex>; the mock
+# keeps the image as it came for every size and state (the hub scales it and draws the states). DELETE takes it away.
+# MOCK_LOOK_UPLOADS=off: a hub without them (no look_uploads feature, 404); =demo: one uploaded look at start.
+UPLOADED_LOOKS = tempfile.mkdtemp(prefix="mock-look-uploads-")
+PERSONA_ROOTS.append(UPLOADED_LOOKS)
+UPLOAD_STATES = ("idle", "thinking", "working", "needs_you", "offline")
+
+
+def _png_rgba(w, h, pixel):
+    """A PNG of w×h, pixel(x, y) → (r, g, b, a), without Pillow."""
+    rows = b"".join(b"\x00" + bytes(c for x in range(w) for c in pixel(x, y)) for y in range(h))
+    chunk = lambda t, d: struct.pack(">I", len(d)) + t + d + struct.pack(">I", zlib.crc32(t + d) & 0xffffffff)
+    return (b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", w, h, 8, 6, 0, 0, 0))
+            + chunk(b"IDAT", zlib.compress(rows, 9)) + chunk(b"IEND", b""))
+
+
+def _demo_upload_png(side=256):
+    """A made-up picture for the seeded upload: a warm gradient with two eyes."""
+    def px(x, y):
+        d = min(1.0, ((x - side / 2) ** 2 + (y - side * 0.47) ** 2) ** 0.5 / (side * 0.7))
+        if ((x - side * 0.37) ** 2 + (y - side * 0.42) ** 2) ** 0.5 < side * 0.05 or ((x - side * 0.63) ** 2 + (y - side * 0.42) ** 2) ** 0.5 < side * 0.05:
+            return (48, 36, 36, 255)
+        return (int(250 - 60 * d), int(196 - 90 * d), int(140 - 70 * d), 255)
+    return _png_rgba(side, side, px)
+
+
+def make_uploaded_look(name, image, subtitle="", lid=None):
+    lid = lid or "u-" + uuid.uuid4().hex[:8]
+    root = os.path.join(UPLOADED_LOOKS, lid)
+    os.makedirs(os.path.join(root, "avatar"))
+    os.makedirs(os.path.join(root, "dot"))
+    sizes = {}
+    for side in (64, 128, 256, 512):
+        open(os.path.join(root, "avatar", "%d.png" % side), "wb").write(image)
+        sizes[str(side)] = "avatar/%d.png" % side
+    for st in UPLOAD_STATES:
+        open(os.path.join(root, "dot", st + ".png"), "wb").write(image)
+    m = {"format": 1, "id": lid, "name": name, "avatar": {"sizes": sizes, "safe": 1},
+         "dot": {"size": 144, "states": {st: {"file": "dot/%s.png" % st} for st in UPLOAD_STATES}},
+         "app_icon_fallback": "persona", "source": {"kind": "upload", "uploaded_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}}
+    if subtitle:
+        m["subtitle"] = subtitle
+    json.dump(m, open(os.path.join(root, "persona.json"), "w"), ensure_ascii=False, indent=2)
+    return lid
+
+
+if os.environ.get("MOCK_LOOK_UPLOADS") == "demo":
+    make_uploaded_look("豆豆", _demo_upload_png(), lid="u-demo0001")
+
+
+def _push_live(msg):
+    for send, _ in list(LIVE):
+        try:
+            send(msg)
+        except Exception:
+            pass
+
+
+def look_uploads_route(handler, method, p, raw):
+    if os.environ.get("MOCK_LOOK_UPLOADS") == "off" or not p.startswith("/api/v1/looks/uploads"):
+        return False
+    if p == "/api/v1/looks/uploads" and method == "POST":
+        body = json.loads(raw or b"{}")
+        name = (body.get("name") or "").strip()
+        if not name:
+            handler.send_json({"error": "给形象起个名字", "code": "no_name"}, 400)
+            return True
+        data = body.get("image") or ""
+        if data.startswith("data:") and ";base64," in data:
+            data = data.split(";base64,", 1)[1]
+        try:
+            image = base64.b64decode(data + "=" * (-len(data) % 4))
+        except Exception:
+            image = b""
+        if not (image.startswith(b"\x89PNG") or image.startswith(b"\xff\xd8") or image[8:12] == b"WEBP" or image.startswith(b"GIF8")):
+            handler.send_json({"error": "这个文件不是 Persona 能读的图片，请用 PNG、JPEG、WebP 或 GIF", "code": "not_image"}, 400)
+            return True
+        lid = make_uploaded_look(name, image, (body.get("subtitle") or "").strip())
+        looks = looks_list()
+        out = {"look": next(l for l in looks if l["id"] == lid)}
+        _push_live({"type": "personas"})
+        if body.get("choose"):
+            LOOK_CHOICE.update(id=lid, updated_at=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()))
+            out["current"] = look_current(looks)
+            _push_live({"type": "look", "id": lid, "effective": lid})
+        handler.send_json(out)
+        return True
+    lid = p[len("/api/v1/looks/uploads/"):]
+    if method == "DELETE" and lid and "/" not in lid:
+        root = os.path.join(UPLOADED_LOOKS, lid)
+        if not os.path.isdir(root) or lid.startswith("."):
+            if any(x["id"] == lid for x in personas()):  # a package of the hub's not made from an upload
+                handler.send_json({"error": "这里只能删除用上传的图片做的形象", "code": "not_uploaded"}, 409)
+            else:
+                handler.send_json({"error": "这个形象已经不在 hub 上了", "code": "not_found"}, 404)
+            return True
+        shutil.rmtree(root)
+        _push_live({"type": "personas"})
+        if LOOK_CHOICE["id"] == lid:
+            LOOK_CHOICE.update(id="persona", updated_at=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()))
+            _push_live({"type": "look", "id": "persona", "effective": "persona"})
+        handler.send_json({"current": look_current()})
+        return True
+    return False
+
+
 def looks_list():
     out = [{"id": i, "source": "builtin", "name": n, "names": ns, "app_icon": i} for i, n, ns in BUILTIN_LOOKS]
     ext = _ext_looks()
     for p in personas() + ext_look_personas():
         m = p["manifest"]
         v = {"id": p["id"], "source": "hub", "name": m.get("name", ""), "app_icon": "persona", "rev": p["rev"], "bytes": p["bytes"], "manifest": m}
+        if (m.get("source") or {}).get("kind") == "upload":
+            v["uploaded"] = True
         for k in ("names", "subtitle", "subtitles"):
             if k in m:
                 v[k] = m[k]
@@ -13135,6 +13261,7 @@ MOCK_HELP = [
     "MOCK_SESSIONS_LIST=1  Paged Agents, counts and exact lookup; list-mode sockets send hints instead of full lists (#6362)",
     "MOCK_MANUAL_HERDR=1  没挂待办的 herdr Agent 算手动开的（started_by_persona 为假），Agents「按待办」里出「手动开的」一段（#2917）",
     "MOCK_ORCA_CHILDREN=1  MacBook 上一个 Orca 工作区带三个子工作区（其中一个还有子项，parent_space_id，#2073）",
+    "MOCK_MENTIONS=1  The review agent read README.md and WeatherWidget/Provider.swift in unfolded calls: its composer's @ list starts with them (#2319)",
     "MOCK_EXTENSIONS=1  设置 › 插件：五个示例插件（需要设置 / 运行中 / hub.json / 已停用 / 不兼容），表单、密钥、开关在内存里",
     "MOCK_CONNECTOR_PLUGIN=1  设置 › 连接器：一个插件提供的通用连接器「示例笔记」，令牌 example-token 一步登录",
     "PORT=<端口>  监听端口，默认 18760；0 表示自动分配（启动时打印 mock hub on <地址>:<端口>）",
@@ -14418,6 +14545,7 @@ class H(BaseHTTPRequestHandler):
                 lark_messaging.route(self, self.command, p, parse_qs(urlparse(self.path).query), self.last_body): return
         if pins_route(self, p): return
         if file_ops_route(self, p, self.last_body): return
+        if look_uploads_route(self, self.command, p, self.last_body): return
         if looks_route(self, self.command, p, self.last_body): return
         if recordings_route(self, self.command, p): return
         if machine_rename_route(self, self.command, p, self.last_body): return
