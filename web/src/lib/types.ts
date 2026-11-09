@@ -139,6 +139,8 @@ export interface TriageSwitches {
   auto_continue: boolean;
   wake: boolean;
   decide: boolean;
+  /** Detect repeated tool calls during a turn (off when absent). */
+  tool_loop?: boolean;
   /** Remind When Seen, Unanswered (#5096): remind once when an agent asked the user something and it stays unanswered after they saw
    *  it. Rule-based, no tokens, so it is on when absent and does not depend on `enabled`. */
   reply_reminder?: boolean;
