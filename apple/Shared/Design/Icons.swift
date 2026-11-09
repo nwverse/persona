@@ -30,6 +30,8 @@ extension Theme {
         static let byState = "circle.grid.2x1"
         static let muted = "bell.slash.fill"
         static let notifications = "bell.badge"
+        /// The hours this device's notifications keep quiet (Settings › Notifications).
+        static let quietHours = "moon.zzz.fill"
         /// An Agent at work (the fleet's working count).
         static let working = "gearshape.fill"
         /// Calls moved to the background.
@@ -237,6 +239,8 @@ extension Theme {
         static let unarchive = "tray.and.arrow.up"
         static let mute = "bell.slash"
         static let unmute = "bell"
+        /// An Inbox rule: where a chat's, sender's or repository's items go and what the AI twin does with them.
+        static let inboxRule = "signpost.right"
         static let collapseAll = "rectangle.compress.vertical"
         static let expandAll = "rectangle.expand.vertical"
         static let newConversation = "plus.bubble"
@@ -533,6 +537,8 @@ extension Theme {
         static let questionFilled = "questionmark.bubble.fill"
         static let plan = "list.bullet.clipboard"
         static let planFilled = "list.bullet.clipboard.fill"
+        /// An MCP server's form to fill in (an `elicitation` card; its link card draws `link`).
+        static let mcpForm = "rectangle.and.pencil.and.ellipsis"
         /// A file edited in place (the Edit tools; Auto-Edit mode).
         static let editFile = "pencil.line"
         static let newFile = "doc.badge.plus"
