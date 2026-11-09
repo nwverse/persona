@@ -1,18 +1,21 @@
 // The build and Vitest inline each catalog as one module (i18n-catalogs.ts); the dev server imports each namespace
 // file. These tests pin that the inlined catalog holds exactly the strings the import form builds, so the page and
-// the tests see the same keys whichever form loaded them.
+// the tests see the same keys whichever form loaded them, and that the client catalog's two parts make up the whole.
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { catalogFallbacks, catalogFiles, catalogModule, i18nCatalogs } from "./i18n-catalogs";
 import { flatten } from "./src/i18n/locales/flatten";
+import startupNamespaces from "./src/i18n/startup-namespaces.json";
 
-type Catalog = { default: Record<string, string> };
+type Catalog = { default: Record<string, string>; fallbacks: Record<string, Record<string, string>> };
 
 const metas = import.meta.glob("./src/i18n/locales/*/_meta.json");
 const client = import.meta.glob<Catalog>("./src/i18n/locales/*/_meta.json", { query: "?catalog=client" });
 const admin = import.meta.glob<Catalog>("./src/i18n/locales/*/_meta.json", { query: "?catalog=admin" });
+const startup = import.meta.glob<Catalog>("./src/i18n/locales/*/_meta.json", { query: "?catalog=client-startup" });
+const rest = import.meta.glob<Catalog>("./src/i18n/locales/*/_meta.json", { query: "?catalog=client-rest" });
 /** flatten() over a language's namespace files of one kind, keyed like the import form's entries. The files are read
  *  from disk, not through an eager import.meta.glob: that made ~900 JSON modules, the slowest import of the suite. */
 function expected(lang: string, kind: "client" | "admin"): Record<string, string> {
@@ -39,6 +42,16 @@ describe("i18n catalogs under Vitest", () => {
     });
     it(`${lang}: the inlined admin catalog equals flatten() of its admin-*.json files`, async () => {
       expect((await admin[key]()).default).toEqual(expected(lang, "admin"));
+    });
+    it(`${lang}: client-startup holds the startup namespaces and client-rest the others, together the client catalog`, async () => {
+      const [whole, first, second] = await Promise.all([client[key](), startup[key](), rest[key]()]);
+      const listed = (k: string) => startupNamespaces.includes(k.split(".")[0]);
+      expect(Object.keys(first.default).every(listed)).toBe(true);
+      expect(Object.keys(second.default).some(listed)).toBe(false);
+      expect({ ...first.default, ...second.default }).toEqual(whole.default);
+      const fallbacks: Catalog["fallbacks"] = {};
+      for (const part of [first, second]) for (const [l, entries] of Object.entries(part.fallbacks)) fallbacks[l] = { ...fallbacks[l], ...entries };
+      expect(fallbacks).toEqual(whole.fallbacks);
     });
   }
 });

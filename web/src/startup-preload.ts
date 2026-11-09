@@ -1,5 +1,5 @@
-// The inline <head> script vite.config.ts's startup-preload plugin writes into index.html, and the brotli copies it
-// writes of the files that script and the page load. It lives here, with no imports of the client code, so the config
+// The inline <head> script vite.config.ts's startup-preload plugin writes into index.html, the brotli copies it
+// writes of the files that script and the page load, and its check of the startup namespaces. It lives here, with no imports of the client code, so the config
 // can load it and a test can check it against src/i18n/index.ts: the languages it has catalogs for (LANGS) and how it
 // picks one (preferredLanguage) must stay the same as the client's.
 import { readdirSync, readFileSync } from "node:fs";
@@ -83,4 +83,17 @@ export async function brotliCopies(dir: string, files: string[]): Promise<{ file
     out.after += br.length;
   }));
   return out;
+}
+
+/**
+ * The client namespaces the first screen's chunks (`code`) name in a key literal ("ns.…", 'ns.…' or `ns.…) that
+ * `startup` (src/i18n/startup-namespaces.json) leaves out, sorted. Their keys could be read before the rest of the
+ * catalog is in (src/i18n/index.ts startI18n), so the build fails on any. Build time only.
+ */
+export function startupNamespaceGaps(code: string[], namespaces: Iterable<string>, startup: Iterable<string>): string[] {
+  const known = new Set(namespaces);
+  const listed = new Set(startup);
+  const gaps = new Set<string>();
+  for (const c of code) for (const [, ns] of c.matchAll(/["'`]([a-z0-9][a-z0-9-]*)\./g)) if (known.has(ns) && !listed.has(ns)) gaps.add(ns);
+  return [...gaps].sort();
 }

@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { brotliDecompressSync } from "node:zlib";
 import { LANG_MATCHES, LANGS, preferredLanguage } from "./i18n";
-import { brotliCopies, BROTLI_MIN_SIZE, localeDirs, preloadScript } from "./startup-preload";
+import { brotliCopies, BROTLI_MIN_SIZE, localeDirs, preloadScript, startupNamespaceGaps } from "./startup-preload";
 
 const langs = localeDirs(join(__dirname, "i18n/locales"));
 
@@ -82,5 +82,14 @@ describe("brotli copies", () => {
     await brotliCopies(dir, ["assets/App-1.js"]);
     expect(readFileSync(join(dir, "assets/App-1.js.br")).equals(br)).toBe(true);
     rmSync(dir, { recursive: true });
+  });
+});
+
+describe("startup namespace check", () => {
+  it("names each namespace the first screen's code reads that the startup list leaves out", () => {
+    const code = ['t("common.ok");t("page.title");x(`page.${n}`);y("settings.json");z("other.key")', 'w(\'menu.open\')'];
+    const namespaces = ["common", "page", "menu", "settings", "unread"];
+    expect(startupNamespaceGaps(code, namespaces, ["common"])).toEqual(["menu", "page", "settings"]);
+    expect(startupNamespaceGaps(code, namespaces, ["common", "menu", "page", "settings"])).toEqual([]);
   });
 });

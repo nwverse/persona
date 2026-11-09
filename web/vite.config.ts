@@ -1,12 +1,14 @@
 /// <reference types="vitest/config" />
+import { readFileSync } from "node:fs";
+import { basename } from "node:path";
 import { fileURLToPath } from "node:url";
 import { defineConfig, type Plugin } from "vite";
 import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
-import { brotliCopies, localeDirs, preloadScript } from "./src/startup-preload";
+import { brotliCopies, localeDirs, preloadScript, startupNamespaceGaps } from "./src/startup-preload";
 import { textScale } from "./src/lib/text-scale";
 import { classicWorkerProblem } from "./src/sw-entry-check";
-import { i18nCatalogs } from "./i18n-catalogs";
+import { catalogFiles, i18nCatalogs, startupNamespacesFile } from "./i18n-catalogs";
 import { pageTokensPlugin } from "./page-tokens";
 import { thirdPartyLicenses } from "./third-party-licenses";
 
@@ -69,9 +71,15 @@ const showcaseImages: Plugin = {
 // script is src/startup-preload.ts, tested against it); the live screen (/screen/<machine>, screen/screen.ts) never
 // loads App, so it gets only the catalog.
 //
-// The same files, with main and everything it imports statically, are what a cold first screen fetches: once they
-// are written, each of 1 KB or more gets a brotli copy beside it (name.br, src/startup-preload.ts brotliCopies),
-// which the hub sends as stored to a browser that takes br (docs/web/web.md "Precompressed assets").
+// The catalog is the first screen's part of it (client-startup, web/i18n-catalogs.ts): the rest loads once the page
+// has started (i18n/index.ts startI18n), and holdLazyImports makes every other module wait for it. So the first
+// screen's chunks, all that can run before it, must name only startup namespaces: the build fails, naming the
+// namespaces to add to src/i18n/startup-namespaces.json, if they name another.
+//
+// The same files, with main and everything it imports statically and the rest of the catalog, are what a cold first
+// screen fetches: once they are written, each of 1 KB or more gets a brotli copy beside it (name.br,
+// src/startup-preload.ts brotliCopies), which the hub sends as stored to a browser that takes br (docs/web/web.md
+// "Precompressed assets").
 function startupPreload(): Plugin {
   let startup: string[] | undefined; // the first screen's files, set by transformIndexHtml for the client page
   return {
@@ -107,6 +115,8 @@ function startupPreload(): Plugin {
           return files;
         };
         const langs = localeDirs(fileURLToPath(new URL("./src/i18n/locales", import.meta.url)));
+        const meta = (lang: string) => fileURLToPath(new URL(`./src/i18n/locales/${lang}/_meta.json`, import.meta.url));
+        const catalogs = (kind: string) => Object.fromEntries(Object.keys(langs).map((lang) => [lang, find(`i18n-catalog:${kind}:${meta(lang)}.js`).fileName]));
         const main = new Set([ctx.chunk.fileName, ...ctx.chunk.imports]);
         // main, what it imports statically and their CSS: the page's own tags (Vite preloads the whole static closure)
         const entry = group([ctx.chunk], new Set());
@@ -116,11 +126,21 @@ function startupPreload(): Plugin {
           shared,
           app: page(["/src/ui/ExtensionThemePicker.tsx", "/src/App.tsx"]),
           screen: page(["/src/screen/ScreenView.tsx"]),
-          catalogs: Object.fromEntries(Object.keys(langs).map((lang) => [lang, find(`i18n-catalog:client:${fileURLToPath(new URL(`./src/i18n/locales/${lang}/_meta.json`, import.meta.url))}.js`).fileName])),
+          catalogs: catalogs("client-startup"),
           matches: Object.fromEntries(Object.entries(langs).flatMap(([lang, ms]) => ms.map((m) => [m.toLowerCase(), lang]))),
         };
         const script = preloadScript(files);
-        startup = [...new Set([...entry, ...shared, ...files.app, ...files.screen, ...Object.values(files.catalogs)])];
+        // What runs before the rest of the catalog is in: the groups, and main.tsx's other imports (not preloaded).
+        const first = new Set([...entry, ...shared, ...files.app, ...files.screen, ...group(["/src/lib/back-close.ts", "/src/lib/error-reports-start.ts"].map(find), new Set())]);
+        const gaps = startupNamespaceGaps(
+          chunks.filter((c) => first.has(c.fileName)).map((c) => c.code),
+          catalogFiles(meta("en"), "client").map((file) => basename(file, ".json")),
+          JSON.parse(readFileSync(startupNamespacesFile(meta("en")), "utf8")) as string[],
+        );
+        if (gaps.length) {
+          throw new Error(`startup-preload: the first screen's code names keys of ${gaps.join(", ")}, which the page reads before the rest of the catalog is in: add them to src/i18n/startup-namespaces.json`);
+        }
+        startup = [...new Set([...entry, ...shared, ...files.app, ...files.screen, ...Object.values(files.catalogs), ...Object.values(catalogs("client-rest"))])];
         return { html, tags: [{ tag: "script", children: script, injectTo: "head" }] };
       },
     },
@@ -152,8 +172,22 @@ const katexFonts: Plugin = {
   },
 };
 
+// Build only: the page waits for just the first screen's part of the client catalog (src/i18n/index.ts startI18n), so
+// every lazy import of the client's code waits for the rest before it runs: `import(x)` becomes one that starts once
+// i18nRest() resolves. The download itself does not wait: Vite preloads a lazy chunk (and what it imports) before
+// calling the import. Left alone: main.tsx's own imports, which are the first screen (startupPreload checks they read
+// only its part); the catalogs' loads; and the admin UI, which waits for the whole catalog.
+const holdLazyImports: Plugin = {
+  name: "hold-lazy-imports",
+  apply: "build",
+  renderDynamicImport({ moduleId, targetModuleId }) {
+    if (moduleId.endsWith("/src/main.tsx") || moduleId.includes("/src/admin/") || targetModuleId?.startsWith("\0i18n-catalog:")) return null;
+    return { left: "Promise.resolve(globalThis.__personaI18nRest?.()).then(()=>import(", right: "))" };
+  },
+};
+
 export default defineConfig({
-  plugins: [katexFonts, i18nCatalogs, pageTokensPlugin, react(), tailwindcss(), adminFallback, showcaseImages, startupPreload(), classicWorker, thirdPartyLicenses],
+  plugins: [katexFonts, i18nCatalogs, pageTokensPlugin, react(), tailwindcss(), adminFallback, showcaseImages, startupPreload(), holdLazyImports, classicWorker, thirdPartyLicenses],
   // Text size (src/lib/text-scale.ts): font sizes become calc(size * var(--text-scale, 1)), after Tailwind wrote them.
   css: { postcss: { plugins: [textScale()] } },
   server: {
