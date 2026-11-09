@@ -355,7 +355,7 @@ struct ProviderWizard: View {
                 } footer: { Text("Only changes what nobody has set; models you picked stay.") }
             } else {
                 Section {
-                    Text("The main conversation and Agents can't run on it. Processing, Sorting and other uses without a picked model may now use it; change that under Models.")
+                    Text("The main chat and Agents can't run on it. Processing, Sorting and other uses without a picked model may now use it; change that under Models.")
                         .font(Theme.Font.secondary).foregroundStyle(.secondary)
                 }
             }
@@ -377,7 +377,7 @@ struct ProviderWizard: View {
 
     @ViewBuilder private func keyTestRow(_ p: LauncherPreset) -> some View {
         if !p.testable {
-            Text("A Responses API key can't be tested here; save it and use it.").font(Theme.Font.label).foregroundStyle(.secondary)
+            Text("This API protocol's key can't be tested here; save it and use it.").font(Theme.Font.label).foregroundStyle(.secondary)
         } else if wizard.keyTesting {
             HStack(spacing: Theme.Space.s) {
                 ProgressView()
@@ -441,7 +441,7 @@ struct ProviderWizard: View {
                     Text(k).font(Theme.Font.secondary).foregroundStyle(.secondary).multilineTextAlignment(.center)
                 }
                 if let p = wizard.preset, !p.runsClaude {
-                    Text("The main conversation and Agents can't run on it. Processing, Sorting and other uses without a picked model may now use it; change that under Models.")
+                    Text("The main chat and Agents can't run on it. Processing, Sorting and other uses without a picked model may now use it; change that under Models.")
                         .font(Theme.Font.secondary).foregroundStyle(.secondary).multilineTextAlignment(.center)
                 } else if summary.assigned.isEmpty {
                     Text("To use it for the main conversation or agents, pick it in Model Settings.").font(Theme.Font.secondary).foregroundStyle(.secondary)

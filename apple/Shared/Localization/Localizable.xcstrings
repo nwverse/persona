@@ -13961,24 +13961,24 @@
       },
       "extractionState" : "manual"
     },
-    "A Responses API key can't be tested here; save it and use it." : {
+    "This API protocol's key can't be tested here; save it and use it." : {
       "localizations" : {
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Responses 协议的 Key 没法在这里测试，保存后直接用就行。"
+            "value" : "这种协议的 Key 没法在这里测试，保存后直接用就行。"
           }
         },
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "A Responses API key can't be tested here; save it and use it."
+            "value" : "This API protocol's key can't be tested here; save it and use it."
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Responses プロトコルのキーはここではテストできません。保存してそのまま使えます。"
+            "value" : "この種類のAPIのキーはここではテストできません。保存してそのまま使えます。"
           }
         }
       },
@@ -119611,7 +119611,7 @@
       },
       "extractionState" : "manual"
     },
-    "The main conversation and Agents can't run on it. Processing, Sorting and other uses without a picked model may now use it; change that under Models." : {
+    "The main chat and Agents can't run on it. Processing, Sorting and other uses without a picked model may now use it; change that under Models." : {
       "localizations" : {
         "zh-Hans" : {
           "stringUnit" : {
@@ -119622,13 +119622,13 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "The main conversation and Agents can't run on it. Processing, Sorting and other uses without a picked model may now use it; change that under Models."
+            "value" : "The main chat and Agents can't run on it. Processing, Sorting and other uses without a picked model may now use it; change that under Models."
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "メインの会話と Agent では使えません。情報処理や仕分けなど、モデルを選んでいない用途ではこれが使われることがあります。変更は「モデル設定」で。"
+            "value" : "メインチャットとエージェントでは使えません。情報処理や仕分けなど、モデルを選んでいない用途ではこれが使われることがあります。変更は「モデル設定」で。"
           }
         }
       },
