@@ -1,6 +1,6 @@
 // What the agent is waiting on (questions, plans, permissions, terminal dialogs, MCP forms and links), as Beautiful UI's Approval Card.
 import { createContext, Fragment, useContext, useEffect, useId, useLayoutEffect, useRef, useState } from "react";
-import { answerCard, usePendingAnswer } from "../../lib/card-answer";
+import { answerCard, usePendingLine } from "../../lib/card-answer";
 import { cardKeyAction, focusComposer } from "../../lib/card-keys";
 import { delegateLines, isDelegating, recommendedLabels, type DelegatedAnswer } from "../../lib/delegate";
 import { Choice, DigitHint } from "./Choice";
@@ -9,7 +9,7 @@ import { allowBody, denyBody } from "../../lib/quick-answers";
 import { BUSY_MOTION, spinStyle } from "../../lib/busy-motion";
 import type { Interaction } from "../../lib/types";
 import { defaults, elicitationDraft, elicitationResolution, elicitationSource, fields, numberInputMode, saveElicitationDraft, urlHost, urlTarget, validate, type ElicitationAction, type Field, type Values } from "../../lib/elicitation";
-import { answerLines, type Resolution } from "../../lib/answered";
+import { answerLines } from "../../lib/answered";
 import { interactionCanAnswer, sessionTitle } from "../../lib/format";
 import { interactionAsk } from "../../lib/inbox";
 import { plainMarkdown } from "../../lib/plain-markdown";
@@ -97,7 +97,7 @@ type CardKeys = ReturnType<typeof useCardKeys>;
 /** The card the voice is asking about (docs/web/web.md "Voice"): InteractionCard says so, Card marks its kicker row. */
 const AskedByVoice = createContext(false);
 /** The answer on its way for the card, as a line for its footer ("Sending: Allowed"); empty when none. InteractionCard
- *  says so (lib/card-answer.ts keeps it past the card's own state) and disables every answer meanwhile. */
+ *  says so (lib/card-answer.ts usePendingLine, past the card's own state) and disables every answer meanwhile. */
 const SendingAnswer = createContext("");
 
 function Card({ title, kicker, onDismiss, busy, children, footer, looking = false, cardKeys }: { title: string; kicker: string; onDismiss?: () => void; busy?: boolean; children: React.ReactNode; footer: React.ReactNode; looking?: boolean; cardKeys?: CardKeys }) {
@@ -1057,17 +1057,10 @@ export function AnsweredCard({ card }: { card: Answered }) {
   );
 }
 
-/** The footer line for an answer on its way: what it says, and whether it waits for the hub to be back. */
-function sendingLine(ix: Interaction, answer: Resolution, offline: boolean): string {
-  const words = answerLines(ix, answer).map((l) => l.answer).join(t("lib-answered.separator"));
-  return t(offline ? "chat-interactions.pending_offline" : "chat-interactions.pending_sending", { answer: words });
-}
-
 export function InteractionCard({ ix }: { ix: Interaction }) {
   const canApprove = useStore(() => interactionCanAnswer(ix, getSession(ix.machine_id, ix.session_id)));
   // an answer still on its way (the hub away, apiOp retrying) holds the card, also after leaving the chat and coming back
-  const pending = usePendingAnswer(ix.id);
-  const offline = useStore((s) => s.conn !== "online");
+  const { pending, line } = usePendingLine(ix);
   const card = ix.kind === "question" && ix.tool_name === "persona_tool_loop" ? <ToolLoopCard key={ix.id} ix={ix} />
     : ix.kind === "question" ? <QuestionCard ix={ix} />
     : ix.kind === "plan" ? <PlanCard ix={ix} />
@@ -1081,8 +1074,8 @@ export function InteractionCard({ ix }: { ix: Interaction }) {
   return (
     <div data-card={ix.id} className="contents">
       <AskedByVoice.Provider value={asked}>
-        <SendingAnswer.Provider value={pending ? sendingLine(ix, pending, offline) : ""}>
-          <fieldset disabled={!canApprove || !!pending} className={canApprove ? "contents" : undefined}>{card}</fieldset>
+        <SendingAnswer.Provider value={line}>
+          <fieldset disabled={!canApprove || pending} className={canApprove ? "contents" : undefined}>{card}</fieldset>
         </SendingAnswer.Provider>
       </AskedByVoice.Provider>
     </div>

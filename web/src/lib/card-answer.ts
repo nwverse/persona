@@ -4,11 +4,11 @@
 import { useSyncExternalStore } from "react";
 import { t } from "../i18n";
 import { ApiError, enc, errorText } from "./api";
-import { endedText, type Resolution, type ResolveResult } from "./answered";
+import { answerLines, endedText, type Resolution, type ResolveResult } from "./answered";
 import { fields } from "./elicitation";
 import { interactionCanAnswer } from "./format";
 import { apiOp } from "./ops";
-import { endInteraction, getSession, keepDelegated } from "./store";
+import { endInteraction, getSession, keepDelegated, useStore } from "./store";
 import { isSecretRun } from "./tool-detail";
 import type { Interaction } from "./types";
 
@@ -99,6 +99,19 @@ const watch = (l: () => void) => {
 export function usePendingAnswer(id: string): Resolution | undefined {
   const read = () => pending.get(id)?.shown;
   return useSyncExternalStore(watch, read, read);
+}
+
+/**
+ * An answer on its way for this card, wherever it was given (the card's buttons, Overview's row, a notification), and
+ * the line that says so, the same on the chat's card and Overview's row: "Sending: Allowed", or "Sends when connected:
+ * Allowed" while the hub is away. `line` is empty when there is none.
+ */
+export function usePendingLine(ix: Interaction): { pending: boolean; line: string } {
+  const answer = usePendingAnswer(ix.id);
+  const offline = useStore((s) => s.conn !== "online");
+  if (!answer) return { pending: false, line: "" };
+  const words = answerLines(ix, answer).map((l) => l.answer).join(t("lib-answered.separator"));
+  return { pending: true, line: t(offline ? "chat-interactions.pending_offline" : "chat-interactions.pending_sending", { answer: words }) };
 }
 
 async function send(ix: Interaction, body: Resolution): Promise<CardAnswer> {
