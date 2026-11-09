@@ -247,9 +247,13 @@ func startWatchdog(prev, pendingPath string) error {
 
 // boot runs once, first thing when the hub starts, before the config or the database: a new version that keeps
 // dying (in a service manager's restart loop) goes back after updateMaxStarts starts; an old version that finds a
-// marker for an update it is not (the watchdog or a person put it back) clears it for recording. It says whether
-// this process has an update of its own to confirm.
+// marker for an update it is not (the watchdog or a person put it back) clears it for recording. A marker a watchdog
+// claimed and then died with (update.Unclaim) counts as the marker. It says whether this process has an update of its
+// own to confirm.
 func (u *updater) boot() (pending bool) {
+	if err := update.Unclaim(update.PendingPath(u.dir)); err != nil {
+		u.h.logf("update: put back the watchdog's claim on the pending marker: %v", err)
+	}
 	var p update.Pending
 	ok, err := update.Load(update.PendingPath(u.dir), &p)
 	if err != nil || !ok {

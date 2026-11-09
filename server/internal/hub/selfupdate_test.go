@@ -405,6 +405,46 @@ func TestUpdateConfirmLeavesAClaimedUpdateToTheWatchdog(t *testing.T) {
 	}
 }
 
+// A watchdog that died while it held the claim (power loss, or a stop of the hub's unit, whose cgroup it shares)
+// leaves pending.json.watch: the next start takes it as the marker. The new build counts its start and confirms; the
+// old build records the rollback, so the build is marked bad.
+func TestUpdateBootTakesBackAWatchdogsClaim(t *testing.T) {
+	pending := update.Pending{FromVersion: "v1-202611021500", FromBuild: 202611021500, ToVersion: "v2-202611021700", ToBuild: 202611021700, Online: []string{"box"}}
+	t.Run("new build", func(t *testing.T) {
+		p := newPublisher(t, "v2-202611021700", 202611021700)
+		h, _, target, execs := updatingHub(t, p, "release")
+		h.build = update.Make("v2-202611021700", "release", "202611021700", p.srv.URL+"/dl")
+		pending.Target, pending.Prev = target, target+".prev"
+		update.Save(update.PendingPath(h.upd.dir)+".watch", pending)
+		if !h.upd.boot() || len(execs()) != 0 {
+			t.Fatalf("the new build has no update to confirm (execd %v)", execs())
+		}
+		var back update.Pending
+		if ok, _ := update.Load(update.PendingPath(h.upd.dir), &back); !ok || back.Starts != 1 {
+			t.Fatalf("the start is not counted: %v %+v", ok, back)
+		}
+		if _, err := os.Stat(update.PendingPath(h.upd.dir) + ".watch"); !os.IsNotExist(err) {
+			t.Fatal("the claim stayed")
+		}
+	})
+	t.Run("old build", func(t *testing.T) {
+		p := newPublisher(t, "v2-202611021700", 202611021700)
+		h, _, target, _ := updatingHub(t, p, "release")
+		pending.Target, pending.Prev = target, target+".prev"
+		update.Save(update.PendingPath(h.upd.dir)+".watch", pending)
+		if h.upd.boot() {
+			t.Fatal("the old build thinks it has an update to confirm")
+		}
+		var rb update.RolledBack
+		if ok, _ := update.Load(update.RolledBackPath(h.upd.dir), &rb); !ok || rb.ToBuild != 202611021700 {
+			t.Fatal("the rollback is not written down")
+		}
+		if left, _ := filepath.Glob(update.PendingPath(h.upd.dir) + "*"); len(left) != 0 {
+			t.Fatalf("left %v behind", left)
+		}
+	})
+}
+
 // A build deployed straight from master during an update's checks clears the marker without calling it a failure.
 func TestUpdateDirectDeployIsNotARollback(t *testing.T) {
 	p := newPublisher(t, "v2-202611021700", 202611021700)

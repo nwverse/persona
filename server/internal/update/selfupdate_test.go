@@ -12,6 +12,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -385,5 +386,82 @@ func TestWatchKeepsTheMarkerWhenRestoreFails(t *testing.T) {
 	}
 	if _, err := os.Stat(RolledBackPath(dir)); !os.IsNotExist(err) {
 		t.Fatal("wrote down a rollback that did not happen")
+	}
+}
+
+// An update directory the watchdog cannot rename in (read-only, wrong owner) does not stop it going back: it restores
+// and restarts without the claim, as before claims (a confirm cannot remove the marker there either).
+func TestWatchGoesBackWhenTheMarkerCannotBeClaimed(t *testing.T) {
+	if runtime.GOOS == "windows" || os.Geteuid() == 0 {
+		t.Skip("needs a directory the test cannot write to")
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		json.NewEncoder(w).Encode(map[string]any{"build": 202611021700, "update": map[string]bool{"confirmed": false}})
+	}))
+	defer srv.Close()
+	dir := t.TempDir()
+	p := Pending{FromBuild: 202611021500, ToBuild: 202611021700, HealthURL: srv.URL}
+	if err := Save(PendingPath(dir), p); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(dir, 0o500); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Chmod(dir, 0o700) })
+	restored, restarted := false, false
+	err := Watch(context.Background(), srv.Client(), p, PendingPath(dir), time.Now(), 50*time.Millisecond,
+		func() error { restored = true; return nil }, func() error { restarted = true; return nil })
+	if err != nil || !restored || !restarted {
+		t.Fatalf("did not go back: %v, restored %v, restarted %v", err, restored, restarted)
+	}
+}
+
+// A claim a watchdog died with goes back to the pending marker; a marker that is there already is left as it is.
+func TestUnclaim(t *testing.T) {
+	dir := t.TempDir()
+	pending := PendingPath(dir)
+	if err := Unclaim(pending); err != nil {
+		t.Fatalf("no marker and no claim: %v", err)
+	}
+	Save(pending+".watch", Pending{ToBuild: 202611021700})
+	if err := Unclaim(pending); err != nil {
+		t.Fatal(err)
+	}
+	var back Pending
+	if ok, _ := Load(pending, &back); !ok || back.ToBuild != 202611021700 {
+		t.Fatal("the claimed marker did not come back")
+	}
+	if _, err := os.Stat(pending + ".watch"); !os.IsNotExist(err) {
+		t.Fatal("the claim stayed")
+	}
+	Save(pending+".watch", Pending{ToBuild: 202611021600})
+	if err := Unclaim(pending); err != nil {
+		t.Fatal(err)
+	}
+	if ok, _ := Load(pending, &back); !ok || back.ToBuild != 202611021700 {
+		t.Fatalf("a marker that was there was replaced: %+v", back)
+	}
+}
+
+// A hub that starts while the watchdog goes back puts the claim back (Unclaim): the rollback the watchdog writes down
+// ends that update too, so the new build does not confirm an update whose old binary is back in place.
+func TestWatchEndsAnUpdateUnclaimedWhileItWentBack(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		json.NewEncoder(w).Encode(map[string]any{"build": 202611021700, "update": map[string]bool{"confirmed": false}})
+	}))
+	defer srv.Close()
+	dir := t.TempDir()
+	p := Pending{FromBuild: 202611021500, ToBuild: 202611021700, HealthURL: srv.URL}
+	Save(PendingPath(dir), p)
+	err := Watch(context.Background(), srv.Client(), p, PendingPath(dir), time.Now(), 50*time.Millisecond,
+		func() error { return Unclaim(PendingPath(dir)) }, func() error { return nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if left, _ := filepath.Glob(PendingPath(dir) + "*"); len(left) != 0 {
+		t.Fatalf("left %v behind", left)
+	}
+	if _, err := os.Stat(RolledBackPath(dir)); err != nil {
+		t.Fatal("the rollback is not written down")
 	}
 }
