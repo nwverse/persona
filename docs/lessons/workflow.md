@@ -24,6 +24,8 @@ Pitfalls, odd behavior and the trade-offs made at the time (formerly in `CLAUDE.
   `worker.mjs` wholesale with the old version, and for about 30 minutes the relay again rate-limited only by the entry's egress IP; the old `wrangler.jsonc` also tried to bind the site's apex domain, already handed to DNS, back to the Worker
   (Cloudflare rejected it with `externally managed DNS records`, publish exited 1, but the script had already uploaded). Run `git fetch` before creating the worktree, and check `git rev-parse HEAD origin/main`
   match before deploying; when publish errors, first check whether the live site already switched to this code, then decide how to fix it.
+- Trimmed Go build metadata can omit linker flags, so a serving-binary verifier must read exact `vcs.revision` and clean-source settings instead of searching for `main.commit` in the flags (#1553). Keep the serving/built binary hash comparison. A hub deployment already publishes its web artifact; acknowledge that only with a matching commit and exact built/installed tree receipt, rather than repeat a stale deploy after main advances.
+- Unattended releases need locks shared with manual entry points, not only a worker lock (#1477). Use the hub's existing promotion lock for deployments from every build computer, resolving its state root from the installed service rather than assuming a default directory; use a build-computer release lock through upload and TestFlight processing. A successful upload followed by a processing timeout must resume the same build number, not upload another binary. Hub notification acceptance is not a phone-display receipt; installation acceptance needs an observed notification.
 - Two sessions releasing at once collide on the build number (2026-11-04): both started `release.sh` (without a build number) in the same minute and got the same time-based number `202611040002`;
   the one that finished uploading first went into TestFlight, the later upload was rejected by App Store Connect (`Redundant Binary Upload`, exit 70), and only one archive with that name was left in Organizer.
   Before releasing, check `pgrep -fl scripts/release/release.sh` for someone else releasing; to release, get a number with `asc_testflight.py next-build` and pass it explicitly to `release.sh <build number>`.
@@ -36,6 +38,7 @@ Pitfalls, odd behavior and the trade-offs made at the time (formerly in `CLAUDE.
   do your fix in `git worktree add --detach /tmp/x origin/main`.
 - Database migration numbers are split into ranges per lane (00x1…); before picking a number, check `server/internal/db/migrations/` in every worktree and `schema_migrations` in the `persona_test` database:
   another lane's unmerged migration may already hold the number (2026-10-30, 0051 collided; switched to 0061).
+- A migration already on the default branch is frozen (`scripts/ci/migration_freeze.py`, also from `scripts/check-fast.sh`): editing, deleting or renaming it fails. A comment-only or whitespace-only change passes. Repair an applied migration by adding a new one.
 - On 2026-11-01 `ios/` was renamed to `apple/` (the iOS, watch and macOS Apps and shared code are in the same XcodeGen project): when rebasing an old branch / worktree,
   files newly created under `ios/` must be moved to `apple/` by hand (git follows the rename for changes to existing files).
 - On 2026-10-28 the whole git history was rewritten once (removing intranet and personal information; the GitHub repo was deleted and recreated): all earlier commit hashes are invalid;
@@ -69,6 +72,10 @@ Pitfalls, odd behavior and the trade-offs made at the time (formerly in `CLAUDE.
 ## Portable JavaScript test output
 
 Node 24 removed `--experimental-default-type=module`; a portable SDK driver that works on Node 22 can therefore fail before running any assertions (#1163). Give freshly compiled temporary `.js` output its own `package.json` with `"type": "module"` instead of depending on an experimental CLI flag or on the caller's package scope. Run both the UI and transport suites on the supported Node versions, retain the temporary-directory cleanup, and fix the official SDK before resynchronizing downstream copies. Changes under `sdk/ts`, including its test scripts, also require regenerating the embedded `sdk/go/bundle/sdk.tar.gz` with `python3 scripts/gen/sdk_bundle.py`; the portable suites alone do not exercise that distribution check.
+
+## Guard SDK synchronization cleanup at the deletion site
+
+SDK synchronization intentionally replaces only the selected SDK subtree (#1471). Keep the destination guard on each recursive deletion (`"${dest:?}/sdk/go"` and `"${dest:?}/sdk/ts"`), even when the entrypoint already rejects an empty destination. Verify that selective synchronization preserves both the unselected SDK and unrelated destination files, and records the source checkout's commit in `sdk/VERSION`. This makes cleanup ownership explicit without changing the official copy contents or release versions.
 
 ## Hosted CI path aggregation
 
@@ -175,3 +182,56 @@ after the link and failed two runs in three).
 
 - In zsh, a glob that matches no files (`rm -rf /tmp/x-*`) makes the whole command fail (nomatch), and nothing after `&&` runs (2026-11-04: the end-to-end test never ran, yet the result was recorded as a failure).
   To clean temp directories use `find /tmp -maxdepth 1 -name 'x-*' -exec rm -rf {} +` or `setopt nullglob` first; before recording a check result, confirm the command actually ran.
+
+## Manual CI dispatch payloads
+
+A `workflow_dispatch` event has no pull-request number or comparison base. Resolve
+an explicit base first, otherwise use the PR/merge-group base when present and
+`origin/main` for a manual run. A PR's base is the first parent of the merge
+commit `actions/checkout` checks out, not the event's `pull_request.base.sha`:
+that one stays where the PR was opened, so every commit that later lands on
+`main` would count as the PR's (#1962: a PR failed the commit privacy check on a
+`main` commit it did not contain). Keep full checkout history and resolve the base to
+a commit before the privacy range check. An explicit lane override must reject
+unknown names rather than silently skip tests. An `auto` dispatch on unchanged
+`main` tests only the paths selected for an empty diff; use `lanes=all` for a full
+run. Manual issue-link enforcement takes an explicit PR number, reads metadata
+through the API, and runs its write-token job only from the default branch.
+
+## CI wall-clock budgets and test shards
+
+Queue time belongs in a PR budget; a green job shorter than 15 minutes does not
+prove push-to-aggregate latency below 15 minutes. Hosted macOS queue time can
+already exceed that budget, so keep its full test coverage manual when latency
+cannot be bounded. Do not reinterpret a timeout or deliberately unselected lane
+as a test pass.
+
+Partition package/module/suite discovery, not a hand-maintained test allowlist.
+Assert the union covers every input once and route new inputs to a fallback shard
+(or fail closed on an unsupported declaration). Keep real-browser packages on a
+separate runner and each Postgres/HOME/mock-port fixture independently owned.
+Go's dependency-only primary cache key is immutable: it can keep restoring old
+compiled inputs after source changes. Use exact-toolchain, shard, dependency and
+source keys with validated Go build-cache fallbacks; still force uncached test
+execution. Large cache uploads and repeated runner setup also count as latency.
+Measure real test events before replacing sleeps: `testing/synctest` sleeps use
+fake time and are not necessarily the slow tests.
+
+A sharded Linux workflow can still miss the budget through repeated queue
+boundaries. After the first optimization, a documentation-only PR executed for
+about 4m11s but finished in 20m35s: guards, script shards and the aggregate each
+waited for another runner. A low-load green run is not proof under shared load.
+Keep automatic fast checks and their final result in one runner allocation;
+leave full heavy lanes manual when their queue-inclusive latency is not bounded.
+Record the failed samples as counterexamples and re-run fresh post-merge PRs.
+Do not cancel other work or change repository rules to manufacture a fast run.
+
+Bound manual matrix fan-out as well as automatic PR fan-out. A stale manual
+main/lane dispatch can consume capacity long after its source is obsolete.
+Group by workflow-file identity, qualified branch and lane, with cancellation
+of older work in the same group. The repository qualifier prevents unrelated
+forks with the same branch name cancelling each other. A reusable workflow's
+`github.workflow` is the caller's name: distinct file prefixes keep Apple or
+another lane from accidentally cancelling the caller, while allowing its direct
+and reusable invocations to deduplicate the same branch/lane. Keep every shard,
+set `max-parallel`, and measure normal-load PRs separately from peak queues.

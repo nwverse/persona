@@ -95,6 +95,7 @@ final class ChatTrace {
         case .recaps(_, let items): "recaps\(items.count)"
         case .workStep: "step"
         case .agentOut: "agent"
+        case .agents(_, let calls, _, _): "agents\(calls.count)"
         case .toolRun(_, let calls, _, _): "run\(calls.count)"
         case .workEnd: "end"
         case .apiError(let item, _, let count): "err\(item.seq)x\(count)"

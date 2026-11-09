@@ -37,4 +37,8 @@ func (h *Hub) fileRoutes(api *http.ServeMux) {
 		return map[string]any{"cwd": r.URL.Query().Get("cwd"), "limit": atoi(r.URL.Query().Get("limit"))}
 	}))
 	api.HandleFunc("POST /api/v1/machines/{mid}/files", h.withMachine(h.uploadFile))
+	api.HandleFunc("POST /api/v1/machines/{mid}/files/rename", h.fileEdit("rename"))
+	api.HandleFunc("POST /api/v1/machines/{mid}/files/move", h.fileEdit("move"))
+	api.HandleFunc("POST /api/v1/machines/{mid}/files/trash", h.fileEdit("trash"))
+	api.HandleFunc("POST /api/v1/machines/{mid}/files/restore", h.fileEdit("restore"))
 }

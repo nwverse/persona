@@ -3,7 +3,6 @@ package assistant
 import (
 	"context"
 	"encoding/json"
-	"regexp"
 	"sort"
 	"strings"
 	"sync"
@@ -12,6 +11,7 @@ import (
 
 	"github.com/nwverse/persona/server/internal/feishubot"
 	"github.com/nwverse/persona/server/internal/i18n"
+	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
@@ -21,8 +21,8 @@ import (
 // what needs the user's decision on top (each with its own answerable card below it), then each task with its stage
 // (plan → develop → review → merge → deploy → verified), a line of what happened and links to its page, its PR and its agent.
 // The bot's reports switch turns it off (on by default). With only_conclusions on (#1226) the card carries only how tasks
-// ended (closed, did not start): started, waiting and interrupted stay in the task list and the briefing, and a decision
-// waiting still gets its own answerable card. A supervised task's review sends its conclusion card instead (conclusion.go).
+// ended (closed, did not start): a finished turn, waiting and interrupted stay in the task list and the briefing, and a
+// decision waiting still gets its own answerable card. A supervised task's review sends its conclusion card instead (conclusion.go).
 
 // reportDelay is how long a change waits for others before the card goes out (reportBook.delay overrides it).
 const reportDelay = time.Minute
@@ -63,21 +63,21 @@ func stageIndex(s string) int {
 }
 
 var (
-	deployWords = regexp.MustCompile(`(?i)\bdeployed\b|\bis live\b|\bwent live\b|已部署|已经部署|完成部署|部署好|部署了|部署完|部署到|部署上线|上线了|已上线|发布了|已发布|发版了`)
-	verifyWords = regexp.MustCompile(`(?i)\bverified\b|已验证|验证通过|实测通过|实测.{0,6}(通过|成功|收到)|截图.{0,4}(确认|为证)`)
+	deployWords = lazyre.New(`(?i)\bdeployed\b|\bis live\b|\bwent live\b|已部署|已经部署|完成部署|部署好|部署了|部署完|部署到|部署上线|上线了|已上线|发布了|已发布|发版了`)
+	verifyWords = lazyre.New(`(?i)\bverified\b|已验证|验证通过|实测通过|实测.{0,6}(通过|成功|收到)|截图.{0,4}(确认|为证)`)
 	// A deploy or verify phrase does not count when, in its own clause, the few words right before it negate or defer
 	// it ("not deployed to … yet", "don't deploy yet", "deploy after you confirm", not yet deployed, it will be deployed) or what follows asks or says
 	// "yet" ("deployed?", deployed yet): a false "deployed" would ask the user to check something that is not there.
-	notYetZh = regexp.MustCompile(`没|未|不|别|无需|暂不|无法|待|等|还要|需要|准备`)
-	notYetEn = regexp.MustCompile(`(?i)\b(not|never|nothing|before|will|once|awaiting|pending)\b|n't\b|\byet to\b|\bto be\b`)
-	askAfter = regexp.MustCompile(`(?i)^\s*(吗|么|没有?|与否|\?|？|yet\b)`)
+	notYetZh = lazyre.New(`没|未|不|别|无需|暂不|无法|待|等|还要|需要|准备`)
+	notYetEn = lazyre.New(`(?i)\b(not|never|nothing|before|will|once|awaiting|pending)\b|n't\b|\byet to\b|\bto be\b`)
+	askAfter = lazyre.New(`(?i)^\s*(吗|么|没有?|与否|\?|？|yet\b)`)
 )
 
 // clauseMarks end a clause: a negation before one of them is about something else.
 const clauseMarks = "，。；：,.;:!?！？\n"
 
 // said: re matches text somewhere it is told as done, not negated, deferred or asked.
-func said(re *regexp.Regexp, text string) bool {
+func said(re *lazyre.Regexp, text string) bool {
 	for _, m := range re.FindAllStringIndex(text, -1) {
 		if askAfter.MatchString(text[m[1]:]) || negatedBefore(text[:m[0]]) {
 			continue
@@ -316,6 +316,12 @@ func (s *Service) sendReports() {
 		return keep[i].todo < keep[j].todo // identical timestamps stay in a stable, repost-safe order
 	})
 	cards, fallbacks := s.reportCards(ctx, keep)
+	// A notifications companion takes the report (feishu_companions.go); the decisions' own cards, which answer for
+	// the owner, still go to the chat below.
+	if s.divertNotices(ctx, "report", cards, fallbacks) {
+		s.postReportAsks(append(asks, keep...))
+		return
+	}
 	// Every card must land: a failure after some went out requeues the whole batch (reposts early ones, retry-capped).
 	for i, c := range cards {
 		if _, err := s.botPost(ctx, "", c, fallbacks[i]); err != nil {

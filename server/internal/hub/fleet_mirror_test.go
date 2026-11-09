@@ -62,6 +62,10 @@ func (d *mirrorDevices) List() []devices.Summary {
 	return out
 }
 
+func (d *mirrorDevices) MachineResources(string) (*proto.Machine, *proto.MetricSample, *bool) {
+	return nil, nil, nil
+}
+
 func (d *mirrorDevices) Canonical(id string) string {
 	if m := d.h.localMachine(id); m != nil {
 		return m.cfg.ID
@@ -81,6 +85,11 @@ func (d *mirrorDevices) Sessions(id string) ([]proto.Session, bool) {
 		list = m.sessionList() // set on the machine by the test itself
 	}
 	return slices.Clone(list), true
+}
+
+func (d *mirrorDevices) SessionsWhere(id string, keep func(*proto.Session) bool) ([]proto.Session, bool) {
+	list, ok := d.Sessions(id)
+	return slices.DeleteFunc(list, func(s proto.Session) bool { return !keep(&s) }), ok
 }
 
 func (d *mirrorDevices) Session(id, session string) (proto.Session, bool) {

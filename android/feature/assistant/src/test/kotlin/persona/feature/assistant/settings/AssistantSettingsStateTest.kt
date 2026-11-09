@@ -26,7 +26,6 @@ class AssistantSettingsStateTest {
     private val MemoryEntry.typeLabel get() = typeLabel(res)
 
     private class FakeApi : AssistantSettingsApi {
-        override fun supportsDefaultPermission(manager: String) = manager == config.manager
         var config = AssistantConfig(machineId = "server", launcher = "claude", cwd = "/home/me/.persona/assistant",
             timezone = "Asia/Shanghai", notesEffective = "from hub.json", main = "main-id")
         val updates = mutableListOf<AssistantConfigUpdate>()
@@ -78,8 +77,8 @@ class AssistantSettingsStateTest {
     private val offline = Machine("lab", name = "实验室", kind = "ssh", online = false)
 
     @Test fun futureDefaultsStayIndependentAndKeepExistingConversations() = runTest {
-        val a = FakeApi().apply { config = config.copy(manager = "assistant", defaultPermissionMode = "default") }
-        val b = FakeApi().apply { config = config.copy(manager = "work", defaultPermissionMode = "plan") }
+        val a = FakeApi().apply { config = config.copy(manager = "assistant", defaultPermissionMode = "default", permissionDefaults = persona.core.contracts.api.AssistantPermissionDefaults(1, "assistant", persona.core.contracts.api.AssistantPermissionDefaults.MODES)) }
+        val b = FakeApi().apply { config = config.copy(manager = "work", defaultPermissionMode = "plan", permissionDefaults = persona.core.contracts.api.AssistantPermissionDefaults(1, "work", persona.core.contracts.api.AssistantPermissionDefaults.MODES)) }
         val first = AssistantSettingsState(a, Zone())
         val second = AssistantSettingsState(b, Zone())
         first.load(); second.load()

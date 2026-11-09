@@ -36,7 +36,7 @@ func benchmarkBroadcastSessions(b *testing.B, older int) {
 	for b.Loop() {
 		n++
 		m.sessions[n%len(m.sessions)].LastText = fmt.Sprintf("%600d", n)
-		h.broadcastSessions(m, h.decorated(m))
+		h.sessionsChanged(m) // what a new list from the manager ends in (takeFleetSessions)
 		for c := range h.clients {
 			for len(c.out) > 0 {
 				<-c.out

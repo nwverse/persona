@@ -17,6 +17,9 @@ import persona.core.contracts.*
 import persona.core.designsystem.*
 import persona.core.designsystem.icons.PhIcons
 import persona.core.domain.answer.*
+import persona.feature.chat.SecretRunActions
+import persona.feature.chat.SecretRunSummary
+import persona.feature.chat.rememberTransientSecret
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import java.time.Instant
@@ -31,7 +34,10 @@ internal fun RequestCard(
     /** False when the session's source does not let the phone approve (a Codex thread not joined live). */
     approvable: Boolean = true,
 ) {
-    val enabled = online && !readOnly && approvable && !request.expired(now) && !RequestDeliveries.locks(delivery)
+    val expired = request.expired(now)
+    val enabled = online && !readOnly && approvable && !expired && !RequestDeliveries.locks(delivery)
+    // A password card's password (#1581): only in this card, emptied once it expires or an answer's delivery is unknown.
+    var password by rememberTransientSecret(request.id, clearWhen = expired || delivery == RequestDelivery.Unknown)
     val question = request.quickQuestion()
     val source = listOfNotNull(machine, space ?: request.cwd?.trimEnd('/')?.substringAfterLast('/')?.takeIf { it.isNotBlank() }).joinToString(" / ")
     val answer: (AnswerAction) -> Unit = { onAnswer(request, it, AnswerDraft(), false) }
@@ -46,7 +52,8 @@ internal fun RequestCard(
         body = {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 when (request.kind) {
-                    "permission" -> {
+                    // A password card (#1137), as in the chat: why, and every command exactly as it will run.
+                    "permission" -> if (request.isSecretRun) SecretRunSummary(request) else {
                         val summary = request.permissionSummary()
                         val input = request.toolInput as? JsonObject
                         val command = (input?.get("command") as? JsonPrimitive)?.takeIf { it.isString }?.content
@@ -77,14 +84,19 @@ internal fun RequestCard(
                     style = PersonaTheme.type.caption, color = PersonaTheme.palette.ink3) }
                 if (!approvable && !readOnly) Text(stringResource(R.string.agents_approve_blocked),
                     style = PersonaTheme.type.caption, color = PersonaTheme.palette.cautionText)
-                if (request.needsFieldValues && approvable && !readOnly) Text(stringResource(R.string.agents_request_fields_elsewhere),
+                if (request.needsFieldValues && !request.isSecretRun && approvable && !readOnly) Text(stringResource(R.string.agents_request_fields_elsewhere),
                     style = PersonaTheme.type.caption, color = PersonaTheme.palette.ink2)
                 delivery?.let { RequestDeliveryStatus(it) }
             }
         },
         actions = if (readOnly) null else ({
             when (request.kind) {
-                "permission" -> DecisionButtons(
+                // A password card (#1137, #1581), as in the chat: its password, Decline and Run.
+                "permission" -> if (request.isSecretRun) SecretRunActions(password, { password = it }, enabled, canDecline = enabled,
+                    canRun = enabled && AnswerBuilder.build(request, AnswerAction.Allow, AnswerDraft(password = password)).allowed,
+                    onDecline = { password = ""; answer(AnswerAction.Deny) },
+                    onRun = { onAnswer(request, AnswerAction.Allow, AnswerDraft(password = password), false); password = "" })
+                else DecisionButtons(
                     // A card with fields to fill in cannot be allowed here yet (#4987).
                     primary = JAction(stringResource(R.string.agents_request_allow), enabled = enabled && !request.needsFieldValues, onClick = { answer(AnswerAction.Allow) }),
                     secondary = JAction(stringResource(R.string.agents_request_deny), enabled = enabled, onClick = { answer(AnswerAction.Deny) }),
@@ -177,8 +189,9 @@ internal fun RequestDetail(
                     }
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         JButton(stringResource(R.string.agents_action_open_session), { onOpenChat(request) }, Modifier.weight(1f), kind = JButtonKind.Secondary)
-                        // A session without a terminal (a Codex thread, an agent runtime's) has none to open.
-                        onTerminal?.let { JButton(stringResource(R.string.agents_request_open_terminal), it, Modifier.weight(1f), kind = JButtonKind.Secondary) }
+                        // A session without a terminal (a Codex thread, an agent runtime's) has none to open; nor has the
+                        // assistant's own password card (#1137).
+                        onTerminal?.takeUnless { request.isSecretRun }?.let { JButton(stringResource(R.string.agents_request_open_terminal), it, Modifier.weight(1f), kind = JButtonKind.Secondary) }
                     }
                 }
             }
@@ -200,7 +213,7 @@ private fun RequestDeliveryStatus(delivery: RequestDelivery, live: Boolean = tru
 }
 
 private val Interaction.decisionKind: DecisionKind get() = when (kind) {
-    "permission" -> if (toolName == "Bash") DecisionKind.Command else DecisionKind.Tool
+    "permission" -> if (toolName == "Bash" || isSecretRun) DecisionKind.Command else DecisionKind.Tool
     "plan" -> DecisionKind.Plan
     "question" -> DecisionKind.Question
     "elicitation" -> DecisionKind.Form

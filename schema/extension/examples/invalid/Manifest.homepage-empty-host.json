@@ -1,0 +1,17 @@
+{
+  "manifest_version": 1,
+  "id": "x",
+  "name": "X",
+  "version": "1.0.0",
+  "homepage": "https://@",
+  "contributes": {
+    "prompts": [
+      {
+        "id": "p",
+        "kind": "quick",
+        "title": "P",
+        "text": "Say hello."
+      }
+    ]
+  }
+}

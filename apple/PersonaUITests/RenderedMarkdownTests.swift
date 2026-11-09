@@ -4,7 +4,7 @@ import XCTest
 /// pictures; a formula KaTeX cannot read shows its source.
 ///   PORT=18785 MOCK_AGENTS=1 MOCK_RENDER=1 python3 scripts/mock/mock_hub.py &
 ///   TEST_RUNNER_PERSONA_MOCK_HUB=http://127.0.0.1:18785 xcodebuild test … -only-testing:PersonaUITests/RenderedMarkdownTests
-/// Both layouts (TEST_RUNNER_PERSONA_LAYOUT=shell) and both styles (TEST_RUNNER_PERSONA_UI_STYLE=beautiful).
+/// Both styles (TEST_RUNNER_PERSONA_UI_STYLE=beautiful).
 final class RenderedMarkdownTests: XCTestCase {
     private var app: XCUIApplication!
 

@@ -55,10 +55,19 @@ struct GitHubConnectorSections: View {
     var connector: HubConnector
     var reload: () async -> Void
     @Environment(AppModel.self) private var app
-    @State private var model = ConnectorSignInModel(id: "github")
+    @State private var model: ConnectorSignInModel
     @State private var auth: GitHubAuth?
     /// The row being chosen (a machine's id, "device"), while the hub applies it.
     @State private var choosing: String?
+    /// Whose GitHub (another manager's: every request names it); nil: the default manager's.
+    private let manager: String?
+
+    init(connector: HubConnector, manager: String? = nil, reload: @escaping () async -> Void) {
+        self.connector = connector
+        self.manager = manager
+        self.reload = reload
+        _model = State(initialValue: ConnectorSignInModel(id: "github", manager: manager))
+    }
 
     var body: some View {
         ConnectorSwitchSection(connector: connector, model: model, reload: reload)
@@ -105,7 +114,7 @@ struct GitHubConnectorSections: View {
                      action: @escaping () -> Void) -> some View {
         Button(action: action) {
             HStack(spacing: Theme.Space.m) {
-                Image(systemName: icon).foregroundStyle(.secondary)
+                ThemedIcon(icon).foregroundStyle(.secondary)
                     .scaledFrame(width: Theme.Size.icon, height: Theme.Size.icon)
                 VStack(alignment: .leading, spacing: Theme.Space.xxs) {
                     Text(title).font(Theme.Font.body).foregroundStyle(Color.primary).lineLimit(1)
@@ -115,7 +124,7 @@ struct GitHubConnectorSections: View {
                 if choosing == key {
                     ProgressView()
                 } else if selected {
-                    Image(systemName: Theme.Icon.done).foregroundStyle(Theme.accent)
+                    ThemedIcon(Theme.Icon.done).foregroundStyle(Theme.accent)
                 }
             }
             .contentShape(.rect)
@@ -151,7 +160,7 @@ struct GitHubConnectorSections: View {
                      : String(localized: "gh on \(machine) is missing the \(names) scope: run gh auth refresh -s \(flags) on that computer, or use device code sign-in."))
                     .font(Theme.Font.body).textSelection(.enabled)
             } icon: {
-                Image(systemName: Theme.Icon.error).foregroundStyle(Theme.caution)
+                ThemedIcon(Theme.Icon.error).foregroundStyle(Theme.caution)
             }
             .accessibilityIdentifier("github.missingScopes")
             ForEach(missing.flatMap(\.affects), id: \.self) { a in
@@ -163,7 +172,7 @@ struct GitHubConnectorSections: View {
     }
 
     private func load() async {
-        guard let api = app.api else { return }
+        guard let api = app.api?.manager(manager) else { return }
         do {
             auth = try await api.githubAuth()
         } catch {
@@ -172,7 +181,7 @@ struct GitHubConnectorSections: View {
     }
 
     private func choose(machine: String?) {
-        guard let api = app.api else { return }
+        guard let api = app.api?.manager(manager) else { return }
         choosing = machine ?? "device"
         Task {
             defer { choosing = nil }

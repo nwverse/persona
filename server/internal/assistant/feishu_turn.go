@@ -189,7 +189,7 @@ func (f feishuSink) answer(ctx context.Context, r *channel.Run, answer, note str
 		processPanel(l, c, steps)
 		cards = []botAnswerCard{{card: c.Note(foot)}}
 	}
-	// r is a copy of the run (channels_runs.go): its Ext is read without the lock.
+	// r is a copy of the run (channels_answer.go): its Ext is read without the lock.
 	to := runTo(r.Ext)
 	var missing []int // the pieces that did not get out (1-based): said at the end, not sent again
 	defer func() {
