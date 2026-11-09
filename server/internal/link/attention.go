@@ -13,6 +13,10 @@ const FeatureAttention = "attention"
 // ConnectorAttentionPath is passive mode's endpoint for the summary: the body is an Attention, the answer 204.
 const ConnectorAttentionPath = "/api/v1/connector/attention"
 
+// InstanceHeader is on the answer to a summary the connector took: its run (ConnectorInfo.Instance). Another than
+// before means the summary went to a new run, which its menu bar app takes as a baseline.
+const InstanceHeader = "X-Persona-Instance"
+
 // AttentionBodyMax caps a posted summary. A full one is far below it (AttentionMaxItems items of clipped text).
 const AttentionBodyMax = 64 << 10
 

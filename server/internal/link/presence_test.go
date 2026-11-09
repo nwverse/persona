@@ -1,6 +1,7 @@
 package link
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"net/http"
@@ -134,5 +135,26 @@ func TestPassiveInfoCarriesPresence(t *testing.T) {
 	info := h.infoOf(tokenA)
 	if p := info.Presence; p == nil || !p.Active || !p.Notifies || p.TTLMS <= 0 || p.TTLMS > PresenceTTL.Milliseconds() {
 		t.Fatalf("info %+v", info.Presence)
+	}
+}
+
+// The connector names its run in its info and on the answer to a summary it took, the same name for the same run: the
+// manager tells from it that a summary went to a new run (its menu bar app's baseline).
+func TestPassiveNamesItsRun(t *testing.T) {
+	_, h := pairedConnector(t)
+	first := h.infoOf(tokenA).Instance
+	if first == "" || h.infoOf(tokenA).Instance != first {
+		t.Fatalf("info names its run %q, then %q", first, h.infoOf(tokenA).Instance)
+	}
+	body, _ := json.Marshal(sampleAttention("r1"))
+	req, _ := http.NewRequest(http.MethodPost, h.base+ConnectorAttentionPath, bytes.NewReader(body))
+	req.Header.Set("Authorization", "Bearer "+tokenA)
+	resp, err := h.client.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusNoContent || resp.Header.Get(InstanceHeader) != first {
+		t.Fatalf("HTTP %d, run %q, want %q", resp.StatusCode, resp.Header.Get(InstanceHeader), first)
 	}
 }
