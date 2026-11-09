@@ -41,11 +41,13 @@ func TestDigestWaitsForTheMainConversation(t *testing.T) {
 }
 
 // A digest due while the main conversation is busy and its relay queue can't be read keeps its signals: they are
-// neither dropped nor marked told, and go out once the queue reads again.
+// neither dropped nor marked told, and go out once the queue reads again. Nothing went out, so a signal that is not
+// urgent is tried again in the urgent gap, not a full gap after the attempt that failed.
 func TestDigestKeptWhenRelayUnreadable(t *testing.T) {
 	st := &memStore{}
 	st.failKey(relayKey, errors.New("database hiccup"))
 	s, f := newQuietServiceOn(t, st)
+	s.superviseTimes.every = time.Hour // a review is not urgent: only the urgent gap brings it back within the test
 	ctx := context.Background()
 	todo, err := s.createTodo(ctx, "甲", "做甲", "conv1", "")
 	if err != nil {
@@ -98,7 +100,7 @@ func TestDigestKeptWhenRelayUnreadable(t *testing.T) {
 }
 
 // Signals that could not be queued give way to a newer one of the same task and kind that came meanwhile; a newer
-// report joins them, so neither question is lost.
+// report joins them, so neither question is lost. A message that went out meanwhile stays the last one.
 func TestDigestUnqueuedKeepsNewerSignals(t *testing.T) {
 	st := &memStore{}
 	st.failKey(relayKey, errors.New("database hiccup"))
@@ -113,12 +115,18 @@ func TestDigestUnqueuedKeepsNewerSignals(t *testing.T) {
 	b.init()
 	b.sent[stalled.id()], b.sent[asked.id()] = stalled.Key, asked.Key
 	b.pending[newer.id()], b.pending[again.id()] = newer, again
+	at := time.Now().Add(-time.Minute)
+	later := at.Add(30 * time.Second)
+	b.last = later
 	b.mu.Unlock()
-	if s.queueDigest("conv1", relayMsg{Tool: superviseTool}, []superviseSignal{stalled, asked}) {
+	if s.queueDigest("conv1", relayMsg{Tool: superviseTool}, []superviseSignal{stalled, asked}, at, time.Time{}) {
 		t.Fatal("queued with the relay queue unreadable")
 	}
 	b.mu.Lock()
 	defer b.mu.Unlock()
+	if !b.last.Equal(later) {
+		t.Errorf("last = %v; want the message that went out meanwhile (%v)", b.last, later)
+	}
 	if g := b.pending[stalled.id()]; g.Key != "2" || g.Minutes != 40 {
 		t.Errorf("stalled = %+v; want the newer one", g)
 	}

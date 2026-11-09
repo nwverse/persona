@@ -64,6 +64,7 @@ func (s *Service) sendDigest(ctx context.Context) {
 	for _, g := range list {
 		b.sent[g.id()] = g.Key
 	}
+	prev := b.last
 	b.last = now
 	b.mu.Unlock()
 
@@ -105,7 +106,7 @@ func (s *Service) sendDigest(ctx context.Context) {
 	s.logf("supervise: %d signal(s) to the main conversation", len(entries))
 	c, ok := s.session(ctx, here.MachineID, here.Main)
 	if !ok || c.Status == proto.StatusWorking || c.Starting || s.queuedFor(here.Main) > 0 {
-		if !s.queueDigest(here.Main, msg, kept) {
+		if !s.queueDigest(here.Main, msg, kept, now, prev) {
 			return
 		}
 		s.publish(ctx)
@@ -116,7 +117,7 @@ func (s *Service) sendDigest(ctx context.Context) {
 	}
 	if err := s.deliverRelay(ctx, here.MachineID, here.Main, msg); err != nil {
 		s.logf("supervise: %v; queued", err)
-		if s.queueDigest(here.Main, msg, kept) {
+		if s.queueDigest(here.Main, msg, kept, now, prev) {
 			s.publish(ctx)
 		}
 		return
@@ -126,11 +127,12 @@ func (s *Service) sendDigest(ctx context.Context) {
 	b.mu.Unlock()
 }
 
-// queueDigest queues msg, the message of signals kept, behind the main conversation's turn. When the relay queue can't
-// be read nothing is queued (false): the signals wait again, no longer marked told (a newer one of the same task and
-// kind keeps its place), the message still queued (supervise.queued) stays as it was, and the digest is tried again
-// in the urgent gap.
-func (s *Service) queueDigest(to string, msg relayMsg, kept []superviseSignal) bool {
+// queueDigest queues msg, the message of signals kept, behind the main conversation's turn; at is when sendDigest
+// marked it as the last message and prev the last message before. When the relay queue can't be read nothing is
+// queued (false): the signals wait again, no longer marked told (a newer one of the same task and kind keeps its
+// place), the message still queued (supervise.queued) stays as it was, the last message is prev again (nothing went
+// out), and the digest is tried again in the urgent gap, or later when the gap after prev has not passed yet.
+func (s *Service) queueDigest(to string, msg relayMsg, kept []superviseSignal, at, prev time.Time) bool {
 	b := &s.supervise
 	if s.queueRelay(to, msg) > 0 {
 		b.mu.Lock()
@@ -143,6 +145,9 @@ func (s *Service) queueDigest(to string, msg relayMsg, kept []superviseSignal) b
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	b.init()
+	if b.last.Equal(at) { // no later message went out meanwhile
+		b.last = prev
+	}
 	for _, g := range kept {
 		id := g.id()
 		if b.sent[id] != g.Key {
