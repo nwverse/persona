@@ -1338,6 +1338,35 @@ iPhone, iPad and Mac crashes go to the hub's `error_reports` (format and rules: 
 - **Queue and sending**: one JSON file a report in Application Support `error-reports/` (`<time ms>-<id>.json`), at most 50, at most 7 days old. A file, not UserDefaults: it is written right before the app dies. It is sent only to the hub of the group the hub-level pages show (the one picked, else the first), after each hello and each `machines` message; when its hello's `features` has no `error_reports`, the queue is deleted. Batches of ≤ 20 reports and ≤ 240 KB through `APIClient`; 2xx deletes the batch (and `{"enabled": false}` deletes the rest); 4xx drops it, except 408 / 429; 5xx or no answer keeps it for the next time. A retry sends the same `id`.
 - **Not yet** (#5621 phase 2): signal crashes, MetricKit crash and hang diagnostics, the Mac's main-thread exceptions (`NSApplicationCrashOnExceptions`, or reporting what AppKit catches), breadcrumbs, the watch (through the phone) and visionOS.
 
+## Extensions and connectors of several managers (#1827)
+
+[managers.md](../assistant/managers.md) ("Grouping"): with more than one installed manager, the hub's merged lists stamp each item with
+its `manager`, and every manager lists its own built-ins, so the same id comes once per manager. With one manager, or a hub without a
+roster, none of this draws and the pages are as before.
+
+- **Roster**: Settings › Extensions (`ExtensionsModel`) and the Connectors section (`ConnectorsListModel`) read `GET /api/v1/managers`
+  with their list, and again on `{"type":"managers"}` for Extensions. `ManagerRoster` (`Persona/Views/Settings/ManagerGroups.swift`)
+  has `installed` (the default first, then the roster's order, installing ones left out), `isMulti`, `owner` / `named` (no stamp, or a
+  manager the roster doesn't have installed, is the default's) and `groups(items)`. A roster that can't be read keeps the last one; a hub
+  without one (404) groups nothing.
+- **Grouping**: each manager's items are a section under `ManagerHeading` (dot, name, count, and "Offline · last synced …" while
+  offline), empty groups left out; the list's footer goes under the last group. In Connectors the device, mail, Lark and Lark Bot rows
+  stay in the Connectors section and the hub's other connectors follow, grouped. Rows are keyed by id and manager (`listKey`).
+- **Routing**: navigation carries the manager (`SettingsPage.plugin(id, manager:)`, `.connector(id, manager:)`,
+  `.pluginPage(…, manager:)`, `MessagesChatsRoute` / `MessagesThreadRoute`; nil for the default's). Each page's model keeps its
+  manager and makes every request through `APIClient.manager(_:)`, which adds `X-Persona-Manager` (nothing for the default): an
+  extension's details, switch, settings, secrets, auto-update, provided features, sign-in, its connectors' Show in Inbox; a connector's
+  status, sign-in and sign-out, switches, Delete Saved Data / Knowledge, GitHub's sign-in source and Inbox options, and Messages.
+  Extension pages get the manager too (`ExtensionPageView(manager:)`, `?manager=` on their actions). Another manager's extension or
+  connector page adds that manager's name to its status line (`ManagerRoster.name`); the default's pages are as before.
+- **Kept apart**: sign-in states (`ExtensionAuthStore`) and unsaved settings drafts (`ExtensionDrafts.Key`) are kept by id and manager.
+  The market (installs, upgrades, uninstall) and `extension_auth` / `extension_operation` pushes are still the default manager's.
+- **Tests**: `ManagerGroupsTests` (decoding, roster order and ownership, grouping, one manager, a hub without a roster, the header on
+  every request of another manager's extension, sign-in, connector and Messages pages and none on the default's). UI test
+  `ManagerGroupsUITests` against the mock hub's three managers (`MOCK_EXTENSIONS=1`, `TEST_RUNNER_PERSONA_MANAGERS_HUB`, shots with
+  `TEST_RUNNER_PERSONA_SHOTS`; with `MOCK_MANAGERS=1` add `TEST_RUNNER_PERSONA_MANAGERS_ONE=1`). By hand: `-tab settings -openExtensions
+  YES`, or `-openExtension <id> -openExtensionManager m-3fa21c` for 工作's copy.
+
 ## DEBUG launch arguments (Debug only; Release checks exclude these strings)
 
 `-pairURL persona://pair?...` (pair without scanning a QR code, no notification permission prompt), `-openSession <machine>/<session>`,
@@ -1388,3 +1417,18 @@ After successful QR-code or manual pairing, first choose an engine for the hub m
 Both mock hub and demo mode support selection and machine pushes. For screenshots, first open the pairing page with `-openWelcome YES`, then open a `persona://pair` link to the mock hub to enter the real post-pairing flow; settings details keep using `-tab settings -openMachines YES -openMachineDetail server`. No new DEBUG arguments.
 
 The To-dos page (iOS / Mac) and the assistant's tasks share `TodoItem` / `TaskState` in `apple/Shared/Tasks.swift`. The To-dos page uses the state labels, sorting and colors specified in `docs/assistant/todos.md`.
+
+
+### Orca workspace containers in Agents (#1399)
+
+By Repository uses the manager-owned `/api/v1/workspaces` catalog for Orca containers, including existing workspaces with no Agent. The host's project ID groups independent root workspaces under one project heading; workspace titles are not project names. Workspaces keep their host titles, order and source-local parent IDs; a parent can be in another Orca project on the same computer, in which case the child stays under that parent's tree. Every level has its own child fold, and status counts and Mac keyboard traversal include descendants only while their branches are open. Quiet workspace trees retain their structure. Search and quick filters keep the ancestor path of visible Agents. Other grouping modes retain their existing behavior.
+
+Repository browsing follows Orca's workspace-card geometry: one project heading, a card with its title, an optional Primary badge, then project/branch identity, compact Agent rows with short activity ages (`now`, `5m`, `3h`, `2d`) and a child-count chip. Cross-project children show their repository badge only when their repository differs from the direct parent; descendants in that same repository omit the repeated badge, even under a different outer project heading. Stable project IDs take precedence over path/name fallbacks for older catalogs. Detached checkouts keep the technical label `Detached HEAD` in every interface language. Nested cards advance by twenty points, and selection shades the selected workspace and its ancestors. Detached Git checkouts show the host's short HEAD identity; the node bulk-reads it only when needed, with a bounded optional request and no terminal inspection. Host `unread`, `sidebar_status` and `workspace_kind` values drive workspace presentation separately from Agent state; older nodes fall back to the sessions they report. Reply previews and repeated location metadata stay out of the list. Multiple Agents fold behind a compact icon/count strip. Keyboard traversal follows those exact Agent and child folds, including idle sessions. Conversation navigation, context menus and session actions remain available.
+
+The catalog is read every ten seconds while this list is visible, independently of the Workflow board toggle. Offline discovery uses the manager's existing snapshots. Transient failures retain the last successful catalog; older hubs fall back to the session-derived tree. The list creates no synthetic Agent and starts or stops no process. iOS and Mac share this model and view; this does not update an already installed TestFlight binary.
+
+Clicking a worktree's title or branch opens its first direct Agent in the sidebar's displayed order, including when its Agent strip is folded. Clicking a specific Agent opens that conversation. Selection replaces the previous conversation; it does not open a separate worktree details page. An Agent-free worktree stays selected with the normal empty pane and keeps New Session and New Child Worktree in its context menu. The separate chevrons only fold Agents or children. Explicit workspace IDs take precedence over directories. Provider history without an Orca binding is associated by exact directory only when the catalog has one workspace at that path on that machine and hub; ambiguous history stays unassigned. Read-only history retains its original capabilities.
+
+Right-click a worktree title, branch or direct Agent row on Mac, or long-press it on iPhone, for the same worktree commands: Open Worktree, New Session, New Child Worktree, Copy Path, Copy Worktree Name and, when present, Open Parent Worktree. It uses that exact workspace as the initial code source and parent, including a nested or Agent-free container. The form can change either choice independently; a folder needs a Git code source. Successful creation refreshes the sidebar catalog and opens the existing New Session form for the new child using the server-acknowledged parent. All regions use the owning worktree's identity. An Agent row also retains its session commands. A title with one Agent offers those commands directly; with multiple Agents it offers named submenus so session actions have an explicit target. Each descendant keeps its own menu scope. The UI names these containers worktrees; protocol and accessibility identifiers retain their workspace names for compatibility.
+
+New Session also offers a searchable workspace picker, with full ancestor paths and an explicit Choose by Folder fallback. A chosen workspace sends its source ID and directory to the existing session-start route. New Child Worktree separates Code Source (the repository and base commit) from Parent Worktree (any Orca workspace on the same computer, including empty folders and other projects). On a phone, the selected parent's name has its own line above the ancestor path so a deep breadcrumb cannot hide the selected destination. The node advertises `choose_parent` before the client enables independent parent selection. With `automatic_name`, Create Worktree is ready without entering a branch or path on every supported engine. The native form keeps those overrides in Advanced, collapsed initially. An unnamed create sends `auto_name: true`. Orca receives a generated creature seed without a branch override and owns its prefix, retired-name/collision policy and first-work rename. Other supported hosts use a unique node-generated branch and directory through their existing creation route; subsequent naming follows the host’s capabilities. Explicit branch/path inputs retain their existing validation; older nodes keep the manual form. A created worktree appears through discovery even if the New Session form is cancelled before an Agent starts. Stale explicit launch targets and missing parents are refused rather than silently redirected.

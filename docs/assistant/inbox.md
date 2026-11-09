@@ -251,6 +251,7 @@ Triage, drafting, AI twin, done state, and retention use hub's generic logic.
 All sources work alike. Long-press an Inbox row for Done / Reopen plus available mute targets: Mute repository (GitHub), Mute chat
 (Lark chats, Messages, Telegram), Mute sender (people in Lark groups, mail senders, latest GitHub actor). Names appear below (repositories omit owner; menu labels never wrap).
 Muting handles this item and other covered open items in the same source, reason "Muted: <name>," with toast "Muted ‘…’; future items will not enter the Inbox."
+The handling chain says "Muted, done" for existing items, newly admitted items and grouped events; `done_by=read` stays unchanged for compatibility.
 Muted under More at the Inbox's top right lists all mutes (name, source · repository / chat / sender), with swipe-left or long-press Unmute. Unmuting admits only future items; already handled ones stay handled.
 
 - **APIs**: `GET /api/v1/inbox/mutes` (creation order, oldest first); `POST /api/v1/inbox/mutes {item_id, tag}` mutes the item's value for `tag` (read from the item,
@@ -320,7 +321,7 @@ awaiting response → Working; failure → Needs you; otherwise `tier` (FYI / Ne
 | `self_replied` | You reply directly at the source, outside Persona: "You replied in Lark"; item still becomes done (`done_by=replied`) | Source page |
 | `failed` | Handling fails / times out (`detail` = reason) | Expand inline |
 | `concluded` | Manager conclusion (`detail` = conclusion) | Expand inline |
-| `done` | Handled: "You marked done" / "You ignored it" / "Read elsewhere; done" / "Manager reviewed; no action needed." **An added kind outside the contract table**; Apps render unknown kinds from `text` with a generic icon | Expand inline |
+| `done` | Handled: "You marked done" / "You ignored it" / "Read elsewhere; done" / "Muted, done" / "Manager reviewed; no action needed." **An added kind outside the contract table**; Apps render unknown kinds from `text` with a generic icon | Expand inline |
 
 - Stored in item JSON (`inbox_items.data`, no new table), IDs `c1`, `c2`… increasing indefinitely; discard oldest beyond 50.
 - **Old items** (stored before this phase) have no chain. On read, backfill two entries from existing fields (`received`: start time, count, sender; if triaged, `triaged`: tier / reason), then append normally.
@@ -340,7 +341,10 @@ awaiting response → Working; failure → Needs you; otherwise `tier` (FYI / Ne
 
 The AI twin becomes a **handling chat**. With `inbox.agent.enabled` on, every Needs you item goes to the manager (no longer filtered by model 2), **one chat per item**,
 bound to that item (`handling` on the item; chat source `inbox`, `origin_ref` = item ID). It runs in the manager background. Code: `assistant/inbox_agent.go` (promotion, chat creation, reconciliation),
-`inbox_handle.go` (chat notifications, suggestion tool, confirmation API). Actions visible to others **produce suggestions only**; code executes them verbatim after your confirmation. With the switch off: no promotion, Working state, or suggestions; chain recording continues.
+`inbox_handle.go` (chat notifications, suggestion tool, confirmation API). Actions visible to others **produce suggestions only**; code executes them verbatim after your confirmation. With the switch off, the manager stops automatic promotion, new handling chats, and chat notifications; chain recording continues.
+
+- **Turning the twin off releases unfinished work**: the next handling pass (including collection after a restart) returns open `looking` / `agent` items, queued or running, to Needs you with `handling.state = failed` and the localized reason "The AI twin is off". Queued messages and start retries are discarded, so later messages can be triaged normally. The release is saved and announced through the normal item-change path; a failed save is retried on the next pass.
+- Existing completed suggestions remain available. Rejecting, adding instructions, or confirming a handback while the twin is off returns the item to Needs you immediately with the same reason, without waking or starting its handling chat. Confirmed replies already `waiting` on the other side retain that state. Explicitly handed-off conversations keep their separate workflow. Turning off the twin does not terminate processes already running on a computer.
 
 | Step | Who | Purpose |
 | --- | --- | --- |
