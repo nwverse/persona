@@ -10,7 +10,7 @@ import { INERT, ViewSections } from "./ViewBody";
 vi.hoisted(() => {
   const g = globalThis as Record<string, unknown>;
   g.matchMedia = () => ({ matches: false, addEventListener() {}, removeEventListener() {} });
-  const kept = new Map<string, string>([["jarvis.token", "tok"], ["persona.token", "tok"]]);
+  const kept = new Map<string, string>([["persona.token", "tok"]]);
   g.localStorage = { getItem: (k: string) => kept.get(k) ?? null, setItem: (k: string, v: string) => void kept.set(k, v), removeItem: (k: string) => void kept.delete(k) };
 });
 
