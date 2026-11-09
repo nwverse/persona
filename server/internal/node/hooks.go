@@ -408,7 +408,7 @@ func (n *Node) handleHook(ctx context.Context, req sockRequest) (any, error) {
 		// A terminal answer includes answers; PermissionRequest's original input did not. Complete only the same
 		// tool_use_id, whether its waiter is already present or its completion arrives first (#2382).
 		in.ToolInput = questionInputWithoutAnswers(in.ToolInput)
-		n.decided.completeQuestion(in, time.Now())
+		n.questions.complete(in, time.Now())
 		return nil, nil
 
 	case in.HookEventName == "PreToolUse" && in.ToolName == "AskUserQuestion":
@@ -420,7 +420,7 @@ func (n *Node) handleHook(ctx context.Context, req sockRequest) (any, error) {
 			return preToolDecision("deny", duplicateQuestionReason), nil
 		}
 		// Let Claude draw its own dialog. PermissionRequest below carries the phone card and its answer (#2382).
-		n.decided.beforeQuestion(in, time.Now())
+		n.questions.before(in, time.Now())
 		return nil, nil
 
 	case in.HookEventName == "PermissionRequest" && in.ToolName == "ExitPlanMode":
@@ -459,8 +459,11 @@ func (n *Node) handleHook(ctx context.Context, req sockRequest) (any, error) {
 		if proto.HasDuplicateQuestionText(ix.Questions) {
 			return permissionDecision(map[string]any{"behavior": "deny", "message": duplicateQuestionReason}), nil
 		}
-		ctx, answered, stop, toolUseID := n.decided.watchQuestion(ctx, in)
-		defer stop()
+		ctx, otherAnswered, stopOther := n.decided.watch(ctx, permissionKey(in))
+		defer stopOther()
+		ctx, questionAnswered, stopQuestion, toolUseID := n.questions.watch(ctx, in, req.Attempt, req.Resume)
+		defer stopQuestion()
+		answered := func() bool { return otherAnswered() || questionAnswered() }
 		ix.ToolUseID = toolUseID
 		if n.decided.grace(ctx, answered) {
 			return nil, nil

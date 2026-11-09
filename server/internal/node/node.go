@@ -43,6 +43,8 @@ type Node struct {
 
 	// decided: calls another PermissionRequest hook answered (hookdecided.go).
 	decided decisions
+	// questions: AskUserQuestion calls shared by the terminal and the phone (questioncalls.go).
+	questions questionCalls
 
 	// bootAt: when this node started. A session whose record says it was started in a pane before this ran in the
 	// previous herdr server, so the restart is what ended it (interrupted.go).

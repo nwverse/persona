@@ -75,6 +75,12 @@ func TestClaudeQuestionTerminalAnswerWithdrawsPhoneCard(t *testing.T) {
 	h := withCancelHub(t, n)
 	questions := []any{map[string]any{"question": "Which?", "header": "Pick",
 		"options": []any{map[string]any{"label": "A"}, map[string]any{"label": "B"}}}}
+	input, _ := json.Marshal(map[string]any{"questions": questions})
+	pre, _ := json.Marshal(hookInput{HookEventName: "PreToolUse", SessionID: decidedSession, ToolName: "AskUserQuestion",
+		ToolUseID: "toolu_q1", ToolInput: input})
+	if _, err := n.handleHook(context.Background(), sockRequest{Input: pre}); err != nil {
+		t.Fatal(err)
+	}
 	done := runHookAsync(t, n, map[string]any{
 		"hook_event_name": "PermissionRequest", "session_id": decidedSession, "tool_name": "AskUserQuestion",
 		"tool_input": map[string]any{"questions": questions},
@@ -125,6 +131,71 @@ func TestClaudeQuestionTerminalCompletionBeforePermissionRequest(t *testing.T) {
 		ToolName: "AskUserQuestion", ToolInput: input})
 	if out != nil || len(fh.interactions()) != 0 || took > time.Second {
 		t.Fatalf("an already-answered question asked the phone again: %v after %v (cards=%d)", out, took, len(fh.interactions()))
+	}
+}
+
+// A resumed PermissionRequest keeps the id assigned on its first attempt, never the next question's id.
+func TestClaudeQuestionResumeKeepsOriginalToolUseID(t *testing.T) {
+	n := codexTestNode(t)
+	fh := withFakeHub(t, n)
+	fh.answer = func(proto.Interaction) proto.Resolution {
+		return proto.Resolution{Answers: map[string]string{"Which?": "A"}}
+	}
+	questions := []map[string]any{{"question": "Which?", "options": []map[string]any{{"label": "A"}, {"label": "B"}}}}
+	input, _ := json.Marshal(map[string]any{"questions": questions})
+	pre := func(id string) {
+		raw, _ := json.Marshal(hookInput{HookEventName: "PreToolUse", SessionID: "s1", ToolName: "AskUserQuestion",
+			ToolUseID: id, ToolInput: input})
+		if _, err := n.handleHook(context.Background(), sockRequest{Input: raw}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	in := hookInput{HookEventName: "PermissionRequest", SessionID: "s1", ToolName: "AskUserQuestion", ToolInput: input}
+	pre("toolu_first")
+	raw, _ := json.Marshal(in)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if out, err := n.handleHook(ctx, sockRequest{Input: raw, Attempt: "a1"}); err != nil || out == nil {
+		t.Fatalf("the first answer was not delivered: %v, %v", out, err)
+	}
+	pre("toolu_second")
+	out, err := n.handleHook(ctx, sockRequest{Input: raw, Attempt: "a1", Resume: true})
+	if err != nil || out == nil {
+		t.Fatalf("the resumed answer was not delivered: %v, %v", out, err)
+	}
+	cards := fh.interactions()
+	if len(cards) != 2 || cards[1].ToolUseID != "toolu_first" {
+		t.Fatalf("resume took the next question's id: %+v", cards)
+	}
+}
+
+// Standby replays the question lifecycle, not just hook.event: a terminal answer while away stays answered.
+func TestClaudeQuestionStandbyReplayKeepsTerminalAnswer(t *testing.T) {
+	n := codexTestNode(t)
+	fh := withFakeHub(t, n)
+	fh.answer = func(proto.Interaction) proto.Resolution {
+		return proto.Resolution{Answers: map[string]string{"Which?": "A"}}
+	}
+	questions := []map[string]any{{"question": "Which?", "options": []map[string]any{{"label": "A"}, {"label": "B"}}}}
+	input, _ := json.Marshal(map[string]any{"questions": questions})
+	pre, _ := json.Marshal(hookInput{HookEventName: "PreToolUse", SessionID: "s1", ToolName: "AskUserQuestion",
+		ToolUseID: "toolu_spooled", ToolInput: input})
+	permission, _ := json.Marshal(hookInput{HookEventName: "PermissionRequest", SessionID: "s1", ToolName: "AskUserQuestion", ToolInput: input})
+	postInput, _ := json.Marshal(map[string]any{"questions": questions, "answers": map[string]string{"Which?": "A"}})
+	post, _ := json.Marshal(hookInput{HookEventName: "PostToolUse", SessionID: "s1", ToolName: "AskUserQuestion",
+		ToolUseID: "toolu_spooled", ToolInput: postInput})
+	at := time.Now().Add(-5 * time.Minute) // standby may hold a reconnecting hook for ten minutes
+	for i, raw := range []json.RawMessage{pre, permission, post} {
+		if err := n.replayHook(spoolEntry{ID: string(rune('a' + i)), At: at.Add(time.Duration(i) * time.Second), Kind: "hook",
+			Request: sockRequest{Kind: "hook", Input: raw, Attempt: "a1"}}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	out, err := n.handleHook(ctx, sockRequest{Input: permission, Attempt: "a1", Resume: true})
+	if err != nil || out != nil || len(fh.interactions()) != 0 {
+		t.Fatalf("the spooled terminal answer was lost: %v, %v (cards=%d)", out, err, len(fh.interactions()))
 	}
 }
 

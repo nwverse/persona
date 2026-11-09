@@ -26,24 +26,16 @@ const decidedKeep = 2 * time.Minute
 // One hook.decided stands for one call (#4646): it goes to the earliest card waiting for that call, or, when none
 // waits, to the first that asks after it, and is used up. A later call with the same input is a new call and asks.
 type decisions struct {
-	mu          sync.Mutex
-	seen        bool                         // some hook said hook.decided since the node started
-	unused      map[string][]time.Time       // answers no card took yet, by permissionKey, oldest first
-	waiting     map[string][]*decisionWaiter // cards waiting, by permissionKey, in the order they asked
-	questionIDs map[string][]questionID      // PreToolUse ids awaiting their PermissionRequest, by permissionKey
-	completed   map[string]time.Time         // PostToolUse completions, by permissionKey + toolUseID
+	mu      sync.Mutex
+	seen    bool                         // some hook said hook.decided since the node started
+	unused  map[string][]time.Time       // answers no card took yet, by permissionKey, oldest first
+	waiting map[string][]*decisionWaiter // cards waiting, by permissionKey, in the order they asked
 }
 
 // decisionWaiter is one card watching for another hook's answer.
 type decisionWaiter struct {
 	cancel   context.CancelFunc
 	answered bool
-	id       string // AskUserQuestion's tool_use_id; empty for other tools and older hooks
-}
-
-type questionID struct {
-	id string
-	at time.Time
 }
 
 // permissionKey names one tool call: its session, its subagent, the tool and its input (decoded and encoded again,
@@ -96,105 +88,19 @@ func (d *decisions) forget(now time.Time) {
 			d.unused[k] = ats[i:]
 		}
 	}
-	for k, ids := range d.questionIDs {
-		i := 0
-		for i < len(ids) && now.Sub(ids[i].at) > decidedKeep {
-			i++
-		}
-		if i == len(ids) {
-			delete(d.questionIDs, k)
-		} else {
-			d.questionIDs[k] = ids[i:]
-		}
-	}
-	for k, at := range d.completed {
-		if now.Sub(at) > decidedKeep {
-			delete(d.completed, k)
-		}
-	}
-}
-
-// beforeQuestion remembers the id PermissionRequest will not carry. Duplicate PreToolUse retries share one entry.
-func (d *decisions) beforeQuestion(in hookInput, now time.Time) {
-	if in.ToolUseID == "" {
-		return
-	}
-	key := permissionKey(in)
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	d.forget(now)
-	for _, q := range d.questionIDs[key] {
-		if q.id == in.ToolUseID {
-			return
-		}
-	}
-	if d.questionIDs == nil {
-		d.questionIDs = map[string][]questionID{}
-	}
-	d.questionIDs[key] = append(d.questionIDs[key], questionID{id: in.ToolUseID, at: now})
-}
-
-// watchQuestion pairs PermissionRequest with its PreToolUse id, and with a completion that may have arrived first.
-func (d *decisions) watchQuestion(ctx context.Context, in hookInput) (context.Context, func() bool, func(), string) {
-	key := permissionKey(in)
-	d.mu.Lock()
-	d.forget(time.Now())
-	var id string
-	if ids := d.questionIDs[key]; len(ids) > 0 {
-		id = ids[0].id
-		if d.questionIDs[key] = ids[1:]; len(ids) == 1 {
-			delete(d.questionIDs, key)
-		}
-	}
-	d.mu.Unlock()
-	ctx, answered, stop := d.watchID(ctx, key, id)
-	return ctx, answered, stop, id
-}
-
-// completeQuestion records PostToolUse by its exact tool_use_id. A late receipt cannot cancel the next identical call;
-// a completion already present when PermissionRequest starts prevents a card from being created (#2382).
-func (d *decisions) completeQuestion(in hookInput, now time.Time) {
-	key, id := permissionKey(in), in.ToolUseID
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	d.forget(now)
-	for _, w := range d.waiting[key] {
-		if !w.answered && (id == "" || w.id == "" || w.id == id) {
-			w.answered = true
-			w.cancel()
-			break
-		}
-	}
-	if id != "" {
-		if d.completed == nil {
-			d.completed = map[string]time.Time{}
-		}
-		d.completed[key+"\x00"+id] = now
-	}
 }
 
 // watch returns a context that ends when another hook answers this call (or ctx ends), a function saying whether it
 // did, and the function that stops watching. An answer kept for key is taken now.
 func (d *decisions) watch(ctx context.Context, key string) (context.Context, func() bool, func()) {
-	return d.watchID(ctx, key, "")
-}
-
-// watchID also honors a question completion for the exact tool_use_id. An answer kept for key is taken now.
-func (d *decisions) watchID(ctx context.Context, key, id string) (context.Context, func() bool, func()) {
 	ctx, cancel := context.WithCancel(ctx)
-	w := &decisionWaiter{cancel: cancel, id: id}
+	w := &decisionWaiter{cancel: cancel}
 	d.mu.Lock()
 	d.forget(time.Now())
 	if len(d.unused[key]) > 0 {
 		w.answered = true
 		if d.unused[key] = d.unused[key][1:]; len(d.unused[key]) == 0 {
 			delete(d.unused, key)
-		}
-	}
-	if id != "" {
-		if _, ok := d.completed[key+"\x00"+id]; ok {
-			w.answered = true
-			delete(d.completed, key+"\x00"+id)
 		}
 	}
 	if d.waiting == nil {

@@ -917,6 +917,19 @@ func (n *Node) replayHook(e spoolEntry) error {
 		}
 	}
 	n.rememberTranscript(in)
+	// Standby also spools the question lifecycle: a terminal answer taken while the manager was away must complete
+	// the same attempt when its PermissionRequest reconnects, rather than create a second phone card (#2382).
+	if !req.ReportOnly && in.ToolName == "AskUserQuestion" {
+		switch in.HookEventName {
+		case "PreToolUse":
+			n.questions.before(in, e.At)
+		case "PermissionRequest":
+			n.questions.pair(in, req.Attempt, false, e.At)
+		case "PostToolUse":
+			in.ToolInput = questionInputWithoutAnswers(in.ToolInput)
+			n.questions.complete(in, e.At)
+		}
+	}
 	p := hookEventParams(in, stopSig, req.ReportOnly)
 	p["spool_id"], p["spooled_at"] = e.ID, e.At
 	return n.peer.Notify("hook.event", p)
