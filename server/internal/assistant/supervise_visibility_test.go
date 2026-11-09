@@ -64,8 +64,17 @@ func TestDigestDedupDoesNotWakeMainTwice(t *testing.T) {
 	s.signal(g)
 	waitFor(t, "first synthetic supervision wake", func() bool { return len(f.notices()) == 1 })
 	g.Key = "second-turn"
+	g.At = time.Now().Add(-time.Minute)
 	s.signal(g)
-	time.Sleep(4 * shortSuperviseTimings.every)
+	// Make dispatch due synchronously, without a wall-clock sleep or changing the deduplication clock.
+	b := &s.supervise
+	b.mu.Lock()
+	if b.timer != nil {
+		b.timer.Stop()
+	}
+	b.timer, b.last = nil, time.Time{}
+	b.mu.Unlock()
+	s.sendDigest(ctx)
 	if notices := f.notices(); len(notices) != 1 {
 		t.Fatalf("unchanged task/Agent/status/summary woke main again: %q", notices)
 	}
