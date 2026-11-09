@@ -341,13 +341,17 @@ describe("Markdown cache (#2465)", () => {
     const { cachedMarkdown, forgetMarkdown } = await import("./markdown-cache");
     forgetMarkdown();
     const parsed = vi.fn();
-    const opts = (children: string) => ({ children, remarkPlugins: [() => parsed] });
+    const plugins = [() => parsed];
+    const opts = (children: string, remarkPlugins = plugins) => ({ children, remarkPlugins });
     const tree = cachedMarkdown("k", opts("# a"));
     expect(cachedMarkdown("k", opts("# a"))).toBe(tree);
     expect(parsed).toHaveBeenCalledTimes(1);
+    // another remark plugin list (a reply read line by line, say) is another tree under the same key
+    expect(cachedMarkdown("k", opts("# a", [...plugins]))).not.toBe(tree);
+    expect(parsed).toHaveBeenCalledTimes(2);
     const long = "x".repeat(300_000);
     expect(cachedMarkdown(long, opts(long))).not.toBe(cachedMarkdown(long, opts(long)));
-    expect(parsed).toHaveBeenCalledTimes(3);
+    expect(parsed).toHaveBeenCalledTimes(4);
   });
 
   it("keys the machine, the directory and the path-link set", async () => {

@@ -2,8 +2,8 @@
 // tree that react-markdown's synchronous Markdown() makes of a block is kept, so a block drawn again from the same input
 // skips the whole parse (micromark, mdast, hast, the rehype plugins, the JSX): a conversation opened again (ChatView
 // remounts per conversation) or a reply that re-renders for another reason. The key is everything that tree is made
-// from: the Markdown text, which rehype plugins run (KaTeX in or not, the path-link set) and the machine and directory
-// the link components belong to. A tree is plain data (elements and the hast nodes they carry), so one tree can be drawn
+// from: the Markdown text, the remark plugin list (by identity), which rehype plugins run (KaTeX in or not, the
+// path-link set) and the machine and directory the link components belong to. A tree is plain data (elements and the hast nodes they carry), so one tree can be drawn
 // in several places at once. Streaming and fading blocks are not kept: they change at every update.
 import type { ReactElement } from "react";
 import ReactMarkdown, { type Options } from "react-markdown";
@@ -30,8 +30,21 @@ export function markdownKey(md: string, plugins: string, mid: string | undefined
   return `${plugins}\0${mid ?? ""}\0${mid ? (cwd ?? "\u0001") : ""}\0${md}`;
 }
 
-/** The tree of `options` (react-markdown's Markdown), kept under `key`: drawn again from the cache while it is there. */
-export function cachedMarkdown(key: string, options: Readonly<Options>): ReactElement {
+/** The remark plugin lists met, by identity: a block parsed with another list (a module constant each) is kept apart
+ *  without the caller naming it in the key. A list made afresh for each draw would only miss. */
+const remarkLists = new WeakMap<object, number>();
+let remarkCount = 0;
+function remarkId(list: Options["remarkPlugins"]): number {
+  if (!list) return 0;
+  let id = remarkLists.get(list);
+  if (id === undefined) remarkLists.set(list, (id = ++remarkCount));
+  return id;
+}
+
+/** The tree of `options` (react-markdown's Markdown), kept under `key` and its remark plugin list: drawn again from the
+ *  cache while it is there. */
+export function cachedMarkdown(blockKey: string, options: Readonly<Options>): ReactElement {
+  const key = `${remarkId(options.remarkPlugins)}\0${blockKey}`;
   const hit = trees.get(key);
   if (hit) {
     trees.delete(key);
