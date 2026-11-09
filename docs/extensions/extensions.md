@@ -306,6 +306,7 @@ To call the hub's HTTP API, an extension lists the scopes it uses in `permission
 | `assistant.ask` | Start chats with Persona and read chat activity | `GET /api/v1/assistant`, `POST /api/v1/assistant/conversations`, `GET …/conversations/{id}/feed` |
 | `todos.read` | See to-dos | `GET /api/v1/todos`, `GET /api/v1/todos/{id}/decisions` |
 | `todos.write` | Create and edit to-dos, attach chats to to-dos | `POST /api/v1/todos`, `PATCH /api/v1/todos/{id}`, a to-do's `agents/{mid}/{sid}` and `spaces/{mid}/{space…}` (`PUT` / `DELETE`); deleting to-dos, decisions, completion checks and retries still require full access |
+| `assistant.read` | Read your Persona chats (your messages and its replies) | No HTTP route: the `assistant.conversations` / `assistant.messages` RPC (see "Assistant conversations"). `assistant.ask` does not include it |
 | `models` | Use the model you pick for it in Settings › Model configuration (never the key) | No HTTP route: the `model.complete` RPC (see "Model calls"). Not covered by the legacy `hub_api` full access |
 | `extensions.call:<extension id>` | Call the API of extension "…" | That extension's own HTTP: `/api/v1/extensions/<id>/…` (excluding the hub's `/-/` endpoints) |
 
@@ -401,6 +402,41 @@ The schema is `schema/extension/models.schema.json`; the Go SDK has it as `ext.H
 
 ```json
 {"permissions":{"hub":["kb.read","kb.write","models"]}}
+```
+
+### Assistant conversations (#1288)
+
+An extension that learns from what the user tells the assistant (how they judge, what they prefer, how they work) reads those
+conversations over its process connection instead of a copy of the transcripts: it declares `assistant.read` in `permissions.hub`,
+and the hub checks the grant the user gave, as for `kb.read` (the legacy `hub_api` full access counts too). Read-only: nothing here
+sends, renames, archives or changes a conversation. The manager, which owns the conversations, answers both methods.
+
+| Method | Parameters | Returns | Scope |
+| --- | --- | --- | --- |
+| `assistant.conversations` | `{since, until?, include_archived?, limit?, offset?}` | `{items: [{id, title, main?, archived?, origin, started?, updated}], total, next_offset?}` | `assistant.read` |
+| `assistant.messages` | `{id, since?, until?, after_seq?, limit?}` | `{messages: [{seq, at, role, text, truncated?}], next_seq?}` | `assistant.read` |
+
+The schema is `schema/extension/assistant.schema.json`; the Go SDK has them as `ext.Hub.AssistantConversations` and `AssistantMessages`.
+
+- **Which conversations**: only the assistant's own space. The health space's (docs/assistant/health.md "Isolation") and guest
+  conversations are never listed or read (`not_found`), nor are other agents' sessions (those are `agents.read`'s).
+  `assistant.conversations` lists the ones last active at or after `since`, newest first, 50 a page (at most 200); with `until`, one
+  known to have started at or after it is left out (`started` is set when the manager knows when it began). `origin` says who opened it
+  (`user`, `channel`, `inbox`, `task`, `spawned`, `lark_agent`, `extension`; what the hub cannot tell is `user`), `title` is empty while
+  it has none, `main` marks the main conversation.
+- **Only words**: `assistant.messages` gives the user's messages (`role: user`) and the assistant's replies (`role: assistant`) in time
+  order. Tool calls and results, thinking, notices and images are left out; so are the messages Persona typed into the conversation for
+  the model (task notices, scheduled runs, wake-ups, follow-ups: `prompts.ParseInjected`), messages from other sessions and messages that
+  are only a slash command. The user's text comes without context blocks and system reminders (`transcript.StripInjected`), the
+  assistant's view cards as their text. `truncated` marks a message cut for pages.
+- **Paging**: by `seq`. `limit` is 200 by default, at most 500. One call reads at most 8 of the node's pages (4,000 transcript items):
+  a stretch of tool work can end a call with no messages and `next_seq` set. Pass `next_seq` as `after_seq` until it is absent.
+  `since` / `until` (RFC 3339) bound the messages' times.
+- **Errors**: `permission_denied` (`{scope: "assistant.read"}`), `invalid_params` (params are strict), `not_found`, `assistant_offline`,
+  `machine_offline` (the assistant's computer is not connected or not set up).
+
+```json
+{"permissions":{"hub":["kb.read","assistant.read"]}}
 ```
 
 ### Sent as the user: `sent.record` (#5278)

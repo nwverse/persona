@@ -53,6 +53,7 @@ type fakeHub struct {
 	sessions      map[string][]proto.Session // by machine: the machines there are
 	sessionsFail  map[string]int             // by machine: sessions.list fails offline this many more times (then recovers)
 	items         []proto.Item               // session.items answers this
+	itemsPage     int                        // > 0: session.items with after_seq pages them by seq, this many a page
 	calls         []DeviceCall
 	known         map[string]bool  // conversations the nodes have
 	made          int              // conversations started, for the next id
@@ -230,6 +231,19 @@ func (f *fakeHub) deviceCall(ctx context.Context, p DeviceCall) (json.RawMessage
 		}
 		return json.Marshal(map[string]any{"ok": false})
 	case DeviceSessionItems:
+		if after, ok := a["after_seq"].(float64); ok && f.itemsPage > 0 {
+			page := []proto.Item{}
+			for _, it := range f.items {
+				if it.Seq > int(after) {
+					page = append(page, it)
+				}
+			}
+			more := len(page) > f.itemsPage
+			if more {
+				page = page[:f.itemsPage]
+			}
+			return json.Marshal(map[string]any{"items": page, "more_after": more})
+		}
 		return json.Marshal(map[string]any{"items": f.items})
 	case DeviceSessionRename:
 		f.sends = append(f.sends, map[string]any{"rename": a})
