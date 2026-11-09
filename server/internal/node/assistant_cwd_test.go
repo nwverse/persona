@@ -72,6 +72,10 @@ func TestQuickMetaKeepsAnAssistantConversationWhereItStarted(t *testing.T) {
 		{"another manager's assistant", filepath.Join(home, ".persona", "assistant-m-0b0b0b"), "/tmp/x", filepath.Join(home, ".persona", "assistant-m-0b0b0b")},
 		{"an agent into a subfolder", "/work/app", "/work/app/web", "/work/app/web"},
 		{"an agent into the assistant's skills", "/work/app", skill, skill},
+		// The other way round: an agent started in the home directory whose `cd` landed exactly in an assistant or
+		// health directory is listed where it started, not taken for one of their conversations.
+		{"an agent into the assistant directory", home, assistant, home},
+		{"an agent into the health directory", home, health, home},
 	} {
 		p := writeDrift(t, home, "aaaaaaaa-0000-0000-0000-00000000000"+string(rune('1'+i)), c.start, c.later)
 		m := quickMetaOf(t, p)
@@ -168,6 +172,10 @@ func TestOfflineAssistantConversationIsListedWhereItStarted(t *testing.T) {
 		t.Fatal(err)
 	}
 	writeDrift(t, home, agent, work, filepath.Join(work, "web"))
+	intoDirs := map[string]string{"dddddddd-0000-0000-0000-000000000005": assistant, "dddddddd-0000-0000-0000-000000000006": health}
+	for id, d := range intoDirs {
+		writeDrift(t, home, id, home, d)
+	}
 	rows := func() map[string]proto.Session {
 		t.Helper()
 		offlineCache.Lock()
@@ -189,6 +197,13 @@ func TestOfflineAssistantConversationIsListedWhereItStarted(t *testing.T) {
 	}
 	if s := got[agent]; s.Cwd != filepath.Join(work, "web") {
 		t.Errorf("an agent keeps its latest directory: %q", s.Cwd)
+	}
+	// Agents whose `cd` landed in the assistant or health directory itself: at rest they are where they started,
+	// never in those directories, where the hub would take them for the assistant's conversations.
+	for id, d := range intoDirs {
+		if s := got[id]; s.Cwd != home || identity.IsAssistantDir(s.Cwd) {
+			t.Errorf("an agent that cd'd into %s is listed in %q, want %q", d, s.Cwd, home)
+		}
 	}
 	// The directories offered for new agents and checked by the doctor are not the folders a conversation `cd`d into.
 	for _, d := range n.recentDirs() {

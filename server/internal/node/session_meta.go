@@ -28,8 +28,9 @@ type quickMeta struct {
 	wf       []proto.Workflow       // workflow runs, as the transcript tells them (bgWorkflows)
 	wfScript map[string]string      // their script files by run id
 	// cwd: where the session runs. An agent's latest directory (Claude Code writes the shell's directory after each
-	// Bash `cd` into every line); for a conversation that started in an assistant or health directory, that
-	// directory, wherever its `cd`s took it since (#2368).
+	// Bash `cd` into every line), but where it started when that latest one is an assistant or health directory; for
+	// a conversation that started in an assistant or health directory, that directory, wherever its `cd`s took it
+	// since (#2368).
 	cwd string
 	// start: the first directory the transcript's head names, where the session started ("" when the head has none:
 	// a first prompt bigger than the head read).
@@ -269,9 +270,12 @@ func readQuickMetaSince(path string, st os.FileInfo, prev quickMeta) quickMeta {
 	rewound := tail.Settle(&tm)
 	m.title, m.cwd, m.model, m.lastText, m.first, m.activity, m.queue = tm.Title, tm.Cwd, tm.Model, tm.LastText, first, tm.LastActivity, tm.Queue
 	m.start = start
-	if identity.IsAssistantDir(start) {
+	if identity.IsAssistantDir(start) || start != "" && identity.IsAssistantDir(m.cwd) {
 		// An assistant or health conversation is where it started: its space, CLAUDE.md, memory and resume project.
-		// A `cd` into a skill's folder had it listed as an agent there (#2368).
+		// A `cd` into a skill's folder had it listed as an agent there (#2368). The other way round, an agent whose
+		// `cd` landed in an assistant or health directory (one started in the home directory) is not one of their
+		// conversations: listed there at rest, the hub took it for one. An exact assistant or health directory is
+		// only ever where a session started.
 		m.cwd = start
 	}
 	m.surface = tm.Surface

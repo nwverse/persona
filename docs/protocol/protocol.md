@@ -473,8 +473,10 @@ Provider responses carry only the description and `has_key`, never secrets. Defa
 
 // Session: (machine_id, session_id) is unique. session_id is Claude Code's session uuid.
 {"machine_id":"server","session_id":"uuid","title":"AI-generated title or directory name","cwd":"<project directory>",
- // cwd: an Agent's latest working directory (Claude Code records the shell's directory after each Bash `cd`). For an assistant or health chat it is the
- // directory the chat runs in, where it started, never where its last `cd` left it (#2368): the node lists it there running, at rest and in session info
+ // cwd: an Agent's latest working directory (Claude Code records the shell's directory after each Bash `cd`), except that an Agent whose `cd` landed in an
+ // assistant or health directory itself is listed where it started. For an assistant or health chat it is the directory the chat runs in, where it started,
+ // never where its last `cd` left it (#2368): the node lists it there running, at rest and in session info. Only an updated node keeps to this: one from
+ // before #2368 reports the latest directory for rows at rest (a chat drifts out of its directory, an Agent into an assistant one), and nothing tells the two apart
  "workspace_cwd":"<physical directory verified by the node>",   // optional; used for workspace association, falls back to cwd when missing, doesn't replace the original cwd
  "repo_root":"<main checkout of the repo cwd belongs to>",   // optional (#2840): named by the host (the Paseo bridge: its worktrees live under Paseo's own directory), else read by the node off git (#1805);
                    // "By Repository" groups by it: cwd inside it is the main checkout, otherwise one of its worktrees. When absent, clients infer from the cwd path as before
