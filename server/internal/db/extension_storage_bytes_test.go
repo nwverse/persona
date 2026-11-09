@@ -11,6 +11,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/nwverse/persona/server/internal/extension"
 )
 
 // storageBytesRows is how many of key's spaces there are, failing when one's stored state_bytes is not the encoded
@@ -144,6 +145,72 @@ func TestStorageDocumentBoundChecksStateBytes(t *testing.T) {
 	err = tx.QueryRow(ctx, fill, row.ID, extensionStorageDocumentMost-12).Scan(&stored)
 	if pe := (*pgconn.PgError)(nil); !errors.As(err, &pe) || pe.Code != "23514" || pe.ConstraintName != "extension_storage_spaces_state_bytes_check" {
 		t.Fatal("a document one byte over the bound was not refused by its check:", err)
+	}
+}
+
+// The budget check under the lock sums state_bytes: total stored bytes exactly at the 128 MiB cap are admitted, one byte
+// over is refused and rolled back. A read still works when the total is over the cap (only a manual edit gets it there),
+// since a read-only call no longer runs the check.
+func TestStorageAggregateBoundChecksStateBytes(t *testing.T) {
+	d := open(t)
+	const filler = "fixture-storage-aggregate-filler"
+	row, scope := storageFixture(t, d, "fixture-storage-aggregate")
+	cleanupStorageFixture(t, d, row.ID, filler)
+	ctx := t.Context()
+	if _, err := d.ExtensionStorage(ctx, scope, fixtureInitial(), fixtureStorageUpdate("x")); err != nil {
+		t.Fatal(err)
+	}
+	scope.Start = false
+	total := func() int64 {
+		t.Helper()
+		var n int64
+		if err := d.pool.QueryRow(ctx, `SELECT coalesce(sum(state_bytes),0) FROM extension_storage_spaces`).Scan(&n); err != nil {
+			t.Fatal(err)
+		}
+		return n
+	}
+	// Retained documents, built inside Postgres, bring the total to one byte under the cap. jsonb's text form of
+	// {"value": "<n x>"} is n plus 13 bytes, and no document may pass the 12 MiB bound.
+	left := int64(extensionStorageAggregateMost) - 1 - total()
+	for i := 0; left > 0; i++ {
+		size := min(left, extensionStorageDocumentMost)
+		if rest := left - size; rest > 0 && rest < 13 {
+			size -= 13
+		}
+		var stored int64
+		if err := d.pool.QueryRow(ctx, `INSERT INTO extension_storage_spaces(id,extension_key,retained,state)
+			VALUES($1,$2,true,jsonb_build_object('value', repeat('x', $3::int))) RETURNING state_bytes`,
+			filler+"-"+string(rune('a'+i)), filler, size-13).Scan(&stored); err != nil {
+			t.Fatal(err)
+		}
+		if stored != size {
+			t.Fatalf("filler document stores %d bytes, want %d", stored, size)
+		}
+		left -= size
+	}
+
+	// {"value": "xx"} is one byte longer than {"value": "x"}: the total lands exactly on the cap.
+	if _, err := d.ExtensionStorage(ctx, scope, fixtureInitial(), fixtureStorageUpdate("xx")); err != nil {
+		t.Fatal("a write that fills the budget exactly was refused:", err)
+	}
+	if n := total(); n != extensionStorageAggregateMost {
+		t.Fatalf("total %d after filling the budget, want %d", n, extensionStorageAggregateMost)
+	}
+	if _, err := d.ExtensionStorage(ctx, scope, fixtureInitial(), fixtureStorageUpdate("xxx")); !errors.Is(err, extension.ErrStorageQuota) {
+		t.Fatal("a write one byte over the budget was not refused:", err)
+	}
+	if value, err := d.ExtensionStorage(ctx, scope, fixtureInitial(), fixtureStorageUpdate("read")); err != nil || value != "xx" {
+		t.Fatal("the refused write changed the stored document", value, err)
+	}
+
+	if _, err := d.pool.Exec(ctx, `INSERT INTO extension_storage_spaces(id,extension_key,retained,state) VALUES($1,$2,true,'{}')`, filler+"-over", filler); err != nil {
+		t.Fatal(err)
+	}
+	if n := total(); n <= extensionStorageAggregateMost {
+		t.Fatalf("total %d, want it over the cap", n)
+	}
+	if value, err := d.ExtensionStorage(ctx, scope, fixtureInitial(), fixtureStorageUpdate("read")); err != nil || value != "xx" {
+		t.Fatal("a read failed while the total is over the cap", value, err)
 	}
 }
 
