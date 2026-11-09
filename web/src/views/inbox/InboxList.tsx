@@ -4,7 +4,7 @@ import { Fragment, memo, useCallback, useEffect, useMemo, useState, type Dispatc
 import {
   agentDraft, agentWorking, conversationRoute, fromLine, interactionAgentTitle, interactionAsk, interactionTitle, isDone, isLark,
   itemKey, itemRoute, listInboxMutes, muteItem, muteLine, muteShortName, muteTitle, policyMenuTitle, sameItem, unmuteInbox,
-  BULK_CONFIRM_AT, bulkScope, bulkScopeName, connectorSources, KIND_FILTERS, kindLabel, labelIsUrgent, mailAccounts, mailShort, reloadInbox, sections, sendReply, setAllDone, setDone, shortTime, TIERS,
+  BULK_CONFIRM_AT, bulkScope, bulkScopeName, connectorSources, KIND_FILTERS, kindLabel, labelIsUrgent, mailAccounts, mailShort, matches, reloadInbox, sections, sendReply, setAllDone, setDone, shortTime, TIERS,
   useInbox, waitingAgents, type InboxItem, type InboxMute, type SectionKey, doneWithHistory, loadOlderDone,
 } from "../../lib/inbox";
 import { doneGroups, groupBySource, groupByTime, openAtFirst, type Grouping, type InboxGroup } from "../../lib/inbox-groups";
@@ -18,6 +18,7 @@ import { useStore } from "../../lib/store";
 import { ManagerHeading } from "../ManagerParts";
 import type { Interaction } from "../../lib/types";
 import { t } from "../../i18n";
+import { requestRoute } from "../../lib/card-focus";
 import { Button, Collapse, cx, Dialog, IconButton, Loading, Menu, toast, useMenu, type MenuItem } from "../../ui/atoms";
 import { errorText } from "../../lib/api";
 import { contextMenuProps } from "../../ui/context-menu";
@@ -27,7 +28,10 @@ import { openPolicyDialog, RulesDialog } from "./PolicyDialog";
 import { isNoHover } from "../../ui/media-query";
 import { DraftDialog } from "./InboxDialogs";
 import { TriageBanner } from "./TriageBanner";
+import { UnreadNotice } from "./UnreadNotice";
 import { EventMark } from "./InboxEvent";
+import { FolderBar, FolderLine, FolderSettingsDialog, openFolderDialog, useFoldersShown } from "./InboxFolders";
+import { folderCrumbs, UNFILED } from "../../lib/inbox-folders";
 import { AgentWorking, Chip, Count, DraftCard, Glyph, ItemAvatar, Spark, StatusMenu, Tag, type GlyphName } from "./InboxParts";
 import { CheckMark } from "../settings/ProviderFields";
 
@@ -84,11 +88,15 @@ export function InboxList({ selected, picked = null, onPicked }: { selected?: { 
   const historyMore = useInbox((st) => st.historyMore);
   const historyLoading = useInbox((st) => st.historyLoading);
   const historyError = useInbox((st) => st.historyError);
+  const [storedFolder, setFolder] = useStored("inbox.folder");
   const [query, setQuery] = useState("");
+  const foldersShown = useFoldersShown(items);
+  // folders hidden (turned off, nothing filed): a folder picked before does not filter what can't be seen
+  const folder = foldersShown ? storedFolder : "";
   // The agents waiting, picked in the store: the list holds the store's own interaction objects, so a sessions or
   // machines push that leaves them as they were keeps the same array (useStore compares it item by item) and the list,
   // with every row in it, does not render again.
-  const agents = useStore((st) => waitingAgents(st.interactions, st.sessions, st.mutes, { source, kind, query }));
+  const agents = useStore((st) => waitingAgents(st.interactions, st.sessions, st.mutes, { source, kind, query, folder }));
   // the sections opened or closed by hand, by "<manager group>:<section>" (each manager's group keeps its own; one
   // manager: the group ""), the others as they are at first
   const [toggled, setToggled] = useState<Set<string>>(() => new Set());
@@ -98,6 +106,7 @@ export function InboxList({ selected, picked = null, onPicked }: { selected?: { 
   const more = useMenu();
   const [mutesOpen, setMutesOpen] = useState(false);
   const [rulesOpen, setRulesOpen] = useState(false);
+  const [foldersOpen, setFoldersOpen] = useState(false);
   // Clean up all over many items asks first; the items are the ones shown when it was asked.
   const [confirm, setConfirm] = useState<{ items: InboxItem[]; scope: string } | null>(null);
 
@@ -110,7 +119,9 @@ export function InboxList({ selected, picked = null, onPicked }: { selected?: { 
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedKey, loaded, storeLoaded]);
 
-  const s = useMemo(() => sections(items, { source, kind, query }), [items, source, kind, query]);
+  const s = useMemo(() => sections(items, { source, kind, query, folder }), [items, source, kind, query, folder]);
+  // what the folder bar counts: the items the other filters leave
+  const inFilters = useMemo(() => (foldersShown ? items.filter((it) => matches(it, { source, kind, query })) : []), [foldersShown, items, source, kind, query]);
   // with several managers, each one's items and waiting agents under its name, sectioned as before (docs/assistant/managers.md
   // "Clients"); one: the list as it was
   const roster = useRoster();
@@ -119,23 +130,24 @@ export function InboxList({ selected, picked = null, onPicked }: { selected?: { 
     return managerOrder(roster)
       .map((m) => ({
         manager: m,
-        sec: sections(items.filter((it) => ownerIn(roster, it.manager) === m.id), { source, kind, query }),
+        sec: sections(items.filter((it) => ownerIn(roster, it.manager) === m.id), { source, kind, query, folder }),
         ags: agents.filter((ix) => ownerIn(roster, ix.manager) === m.id),
       }))
       .filter((g) => g.ags.length || g.sec.done.length || TIERS.some((tier) => g.sec.tiers[tier.key].length));
-  }, [roster, items, agents, source, kind, query]);
+  }, [roster, items, agents, source, kind, query, folder]);
   const chips = mailAccounts(accounts, items);
   const connectors = useMemo(() => connectorSources(items), [items]);
   const failed = Boolean(error) && !items.length;
   const empty = !s.tiers.action.length && !s.tiers.working.length && !s.tiers.fyi.length && !s.tiers.noise.length && !agents.length;
   // nothing ever came in, nothing filtered: is anything connected at all? (still unknown: the plain "All caught up")
-  const sources = useInboxSources(ready && empty && !failed && !items.length && !query && !source && !kind);
+  const sources = useInboxSources(ready && empty && !failed && !items.length && !query && !source && !kind && !folder);
   const unconnected = sources && !sources.connected ? sources : null;
   // Clean up all: the open items the list shows (its filters and search); the agents waiting are not items.
   const openInView = kind === "agent" ? [] : [...s.tiers.action, ...s.tiers.working, ...s.tiers.fyi, ...s.tiers.noise];
   const filterNames = [
     source === "feishu" ? t("inbox-inboxlist.source_lark") : connectors.find((c) => c.id === source)?.name ?? mailShort(chips.find((a) => a.id === source)?.email ?? ""),
     KIND_FILTERS.find((k) => k.key === kind)?.label ?? "",
+    folder === UNFILED ? t("inbox-folders.unfiled") : folderCrumbs(folder).at(-1)?.name ?? "",
   ];
   const scope = bulkScope(filterNames, query, openInView.length);
   // Selecting (#2059): the open items in sight can be picked (in the sections shown open; In progress is always open); the
@@ -154,7 +166,7 @@ export function InboxList({ selected, picked = null, onPicked }: { selected?: { 
       const groups: InboxGroup[] = tier.key === "working" ? [] : grouping === "time" ? groupByTime(list, now, (it) => it.updated_at) : groupBySource(list, order, mailName);
       return { tier, list, waiting, groups, titled: tier.key !== "working" && (groups.length > 1 || (waiting.length > 0 && list.length > 0)) };
     });
-    const done = doneWithHistory(sec.done, manager && roster ? history.filter((it) => ownerIn(roster, it.manager) === manager.id) : history, { source, kind, query });
+    const done = doneWithHistory(sec.done, manager && roster ? history.filter((it) => ownerIn(roster, it.manager) === manager.id) : history, { source, kind, query, folder });
     return { manager, group: manager?.id ?? "", tiers, done, doneGroups: doneGroups(done, now) };
   });
   // the open items in sight: in sections and groups shown open (In progress is always open)
@@ -277,13 +289,17 @@ export function InboxList({ selected, picked = null, onPicked }: { selected?: { 
               { key: "clean-all", label: t("inbox-inboxlist.clean_all"), hint: scope, icon: "check", disabled: !openInView.length, onSelect: runBulk },
               { key: "muted", label: t("inbox-inboxlist.muted_list"), icon: "bellOff", divider: true, onSelect: () => setMutesOpen(true) },
               { key: "rules", label: t("inbox-inboxlist.rules_list"), icon: "target", onSelect: () => setRulesOpen(true) },
+              { key: "folders", label: t("inbox-folders.settings_menu"), icon: "folder", onSelect: () => setFoldersOpen(true) },
             ]} />
         )}
         {mutesOpen && <MutesDialog onClose={() => setMutesOpen(false)} />}
         {rulesOpen && <RulesDialog onClose={() => setRulesOpen(false)} />}
+        {foldersOpen && <FolderSettingsDialog onClose={() => setFoldersOpen(false)} />}
+        {foldersShown && <FolderBar items={inFilters} folder={folder} onPick={setFolder} />}
         <BulkConfirm confirm={confirm} onClose={() => setConfirm(null)} />
 
         <TriageBanner triage={triage} />
+        <UnreadNotice triage={triage} />
         {/* never loaded (an error and no items): its own empty state with "Retry", not "All caught up" under the error (#2970);
             with agents waiting the list is not empty, so the reason stays a line over it */}
         {ready && failed && !empty && <p className="mt-4 text-[12.5px] text-red">{error}</p>}
@@ -332,7 +348,7 @@ export function InboxList({ selected, picked = null, onPicked }: { selected?: { 
           const moreError = historyError[group] ?? "";
           const isSelected = (it: InboxItem) => !!selected && sameItem(it, selected);
           const row = (it: InboxItem, off = false) => (
-            <ItemRow key={itemKey(it)} it={it} selected={isSelected(it)} showAccount={chips.length > 1} onEdit={setEditing} pick={picking && !off ? pick : undefined} picked={picked?.has(itemKey(it)) ?? false} off={off && picking} />
+            <ItemRow key={itemKey(it)} it={it} selected={isSelected(it)} showAccount={chips.length > 1} folder={foldersShown ? folder : undefined} onEdit={setEditing} pick={picking && !off ? pick : undefined} picked={picked?.has(itemKey(it)) ?? false} off={off && picking} />
           );
           const groupOf = (section: string, g: { key: string; title: string; items: InboxItem[] }, body: React.ReactNode, opts: { more?: boolean; pickable?: boolean; count?: number } = {}) => {
             const id = `${group}|${section}|${g.key}`;
@@ -508,7 +524,7 @@ export async function markFromRow(it: InboxItem, done: boolean, touch = isNoHove
  * Memoized: a push that leaves this item's object as it was (or one for sessions and machines) skips the row. Selecting
  * (#2059): with `pick` the row is a checkbox that picks it instead of opening it; `off`: it cannot be picked (a done item).
  */
-const ItemRow = memo(function ItemRow({ it, selected, showAccount, onEdit, pick, picked = false, off = false }: { it: InboxItem; selected: boolean; showAccount: boolean; onEdit: (it: InboxItem) => void; pick?: (it: InboxItem) => void; picked?: boolean; off?: boolean }) {
+const ItemRow = memo(function ItemRow({ it, selected, showAccount, folder, onEdit, pick, picked = false, off = false }: { it: InboxItem; selected: boolean; showAccount: boolean; /** the folder picked; undefined: folders are not shown */ folder?: string; onEdit: (it: InboxItem) => void; pick?: (it: InboxItem) => void; picked?: boolean; off?: boolean }) {
   const to = itemRoute(it);
   const done = isDone(it);
   const label = kindLabel(it);
@@ -548,6 +564,7 @@ const ItemRow = memo(function ItemRow({ it, selected, showAccount, onEdit, pick,
                 <span className="line-clamp-2 text-[12.5px] leading-[1.5] text-ink-2">{from}</span>
               )}
               {showAccount && !isLark(it) && !it.connector && <span className="mt-0.5 block truncate text-[11px] text-ink-3">{it.account_name}</span>}
+              {folder !== undefined && <FolderLine it={it} folder={folder} />}
             </span>
             {it.count > 1 && !done && <Count n={it.count} accent={it.kind === "mention"} />}
           </span>
@@ -593,13 +610,14 @@ const ItemRow = memo(function ItemRow({ it, selected, showAccount, onEdit, pick,
         {done ? <Glyph name="undo" size={12} stroke={2.2} /> : <Icon name="check" size={12} stroke={2.6} />}
         <span className="[@media(hover:none)]:hidden">{done ? t("inbox-inboxlist.move_back") : t("inbox-inboxlist.done")}</span>
       </button>}
-      {menu && <Menu anchor={menu.anchor ?? null} point={menu.point} onClose={() => setMenu(null)} width={224} items={rowMenu(it, done)} />}
+      {menu && <Menu anchor={menu.anchor ?? null} point={menu.point} onClose={() => setMenu(null)} width={224} items={rowMenu(it, done, folder !== undefined)} />}
     </div>
   );
 });
 
-/** A row's menu: "Done" (or "Move back"), then "Mute this repository / chat / sender" with the name under it (iOS InboxView.rowMenu). */
-export function rowMenu(it: InboxItem, done: boolean): MenuItem[] {
+/** A row's menu: "Done" (or "Move back"), then "Mute this repository / chat / sender" with the name under it (iOS InboxView.rowMenu),
+ *  and "Move to folder…" when the list shows folders. */
+export function rowMenu(it: InboxItem, done: boolean, folders = false): MenuItem[] {
   const items: MenuItem[] = [
     done
       ? { key: "undone", label: t("inbox-inboxlist.move_back"), icon: "inbox", onSelect: () => void setDone(it, false) }
@@ -608,6 +626,7 @@ export function rowMenu(it: InboxItem, done: boolean): MenuItem[] {
   (it.mutes ?? []).forEach((m, i) => items.push({ key: `mute:${m.tag}:${m.value}`, label: muteTitle(m), hint: muteShortName(m), icon: "bellOff", divider: i === 0, onSelect: () => void muteItem(it, m) }));
   // then a rule for each (docs/assistant/inbox.md "Policies"): the tier its items get, what the AI twin does with them
   (it.mutes ?? []).forEach((m, i) => items.push({ key: `policy:${m.tag}:${m.value}`, label: policyMenuTitle(m), hint: muteShortName(m), icon: "target", divider: i === 0, onSelect: () => openPolicyDialog({ item: it, option: m, source: it.source }) }));
+  if (folders) items.push({ key: "folder", label: t("inbox-folders.move_menu"), hint: it.folder, icon: "folder", divider: true, onSelect: () => openFolderDialog(it) });
   return items;
 }
 
@@ -719,7 +738,7 @@ const IX_GLYPH: Record<Interaction["kind"], GlyphName | "list" | "terminal"> = {
  * only when one of those changed.
  */
 const AgentRow = memo(function AgentRow({ ix, off = false }: { ix: Interaction; off?: boolean }) {
-  const to = useStore((s) => conversationRoute(ix.machine_id, ix.session_id, s.sessions, s.assistant));
+  const to = useStore((s) => ix.session_id === "" ? requestRoute(ix) : conversationRoute(ix.machine_id, ix.session_id, s.sessions, s.assistant));
   const persona = to.name === "persona";
   const where = useStore((s) => (persona ? "Persona" : machineWithHub(ix.machine_id, s.machines)));
   const ask = interactionAsk(ix);

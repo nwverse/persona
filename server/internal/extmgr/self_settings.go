@@ -15,7 +15,7 @@ import (
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
-// The manager's part of persona_settings (docs/assistant/assistant.md "Operating Persona itself"): the settings of what moved here
+// The manager's part of persona_settings (docs/assistant/assistant.md "Current structure", Control Persona itself): the settings of what moved here
 // from the hub — the inbox's rules, the mail accounts, a source's own triage rules (self_settings_sources.go). The hub lists them with
 // its own (extwire.HubSettingsList) and hands an action on one of them here (extwire.HubSettingsTool); the card on
 // the phone is the hub's (waitInteraction). The registry is the hub's, moved as it was.
@@ -63,6 +63,7 @@ func (h *Manager) selfSettings() []selfSetting {
 				`"imap_port"?, "smtp_host"?, "smtp_port"?, "smtp_security"?: "tls|starttls"}; most providers need only the email. remove: the account id`,
 			get: h.getMailAccounts, add: h.addMailAccount, remove: h.removeMailAccount})
 	}
+	out = append(out, h.extensionSettings()...) // extension.<id> (self_settings_extensions.go)
 	sort.Slice(out, func(i, j int) bool { return out[i].key < out[j].key })
 	return out
 }

@@ -690,6 +690,9 @@ targets:
       - path: PersonaTests/AddComputerModelTests.swift
       - path: PersonaTests/NotificationActionsTests.swift
       - path: PersonaTests/NotifyPrefsTests.swift
+      - path: PersonaTests/SentSettingsNavigationTests.swift
+      - path: PersonaTests/SentModelTests.swift
+      - path: PersonaTests/ConnectorRowTests.swift
       - path: PersonaTests/NativeStateMigrationTests.swift
       - path: PersonaTests/PushCryptoTests.swift
       - path: PersonaTests/UsageWindowsTests.swift
@@ -709,7 +712,11 @@ targets:
       - path: PersonaTests/PersonaSelectionTests.swift
       - path: PersonaTests/ExtensionStreamTreeTests.swift
       - path: PersonaTests/ExtensionPageStreamTests.swift
+      - path: PersonaTests/ExtensionSettingsLifecycleTests.swift
+      - path: PersonaTests/ExtensionUpgradeTests.swift
       - path: PersonaTests/DelegateTests.swift
+      - path: PersonaTests/ChatSupervisionLinesTests.swift
+      - path: PersonaTests/SupervisionTests.swift
       - path: PersonaTests/FakeHub.swift
     dependencies:
       - target: PersonaMac
@@ -726,6 +733,9 @@ targets:
     platform: macOS
     sources:
       - path: PersonaUITests/ExtensionStreamUITests.swift
+      - path: PersonaUITests/SupervisionRoundUITests.swift
+      - path: PersonaUITests/SentNavigationUITests.swift
+      - path: PersonaUITests/ReportEvidenceUITests.swift
       - path: PersonaUITests/UITestStyle.swift
     dependencies:
       - target: PersonaMac

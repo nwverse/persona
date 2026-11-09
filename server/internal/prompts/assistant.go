@@ -1,6 +1,9 @@
 package prompts
 
-import "time"
+import (
+	"strings"
+	"time"
+)
 
 // AssistantMachine is one computer in the assistant's CLAUDE.md, as seen from where the assistant runs.
 type AssistantMachine struct {
@@ -189,10 +192,25 @@ type SnapshotWorkflow struct {
 	For                     string // how long it has run ("12 minutes"), "" under a minute
 }
 
+// SnapshotProfile is the model profile in use (docs/assistant/model-profiles.md) with its tiers, the Agent presets
+// agent_start and task_plan take; Unreadable when the profiles could not be read, Gone when the one in use was deleted
+// (a rollback to it).
+type SnapshotProfile struct {
+	ID, Name         string
+	Tiers            []SnapshotTier // by name
+	Unreadable, Gone bool
+}
+
+// SnapshotTier is one tier of the profile in use: what an Agent started on it runs on ("" model or effort: the
+// launcher's), and when to use it.
+type SnapshotTier struct {
+	Name, Launcher, Model, Effort, Description string
+}
+
 // Snapshot is the live context a starting assistant gets in its system prompt.
 type Snapshot struct {
-	ModelProfile  string    // always refreshed outside the cached sources
-	Now           time.Time // in the user's zone
+	ModelProfile  *SnapshotProfile // nil: none in use; always refreshed outside the cached sources
+	Now           time.Time        // in the user's zone
 	Zone          string
 	Machines      []SnapshotMachine
 	Needs, Unread []SnapshotAgent
@@ -543,6 +561,19 @@ func RenderTaskDone(d TaskDone) string { return render("assistant/task_done", d)
 // RenderTaskDelivery is the delivery standard a task's agent is handed after its prompt (assistant/task_delivery,
 // docs/assistant/todos.md "Delivery"): done is live and checked, and its last line says how far it got.
 func RenderTaskDelivery() string { return render("assistant/task_delivery", nil) }
+
+// TaskAttachments ends a message to an agent with the files and pictures the user gave the assistant for it (#2437):
+// where they are on the agent's computer (Copied: copied there from the assistant's), and those that could not come.
+// Pictures go last, in the <attached_images> block a picture sent straight to an agent ends with (node/send.go), so
+// the apps draw them as they do those.
+type TaskAttachments struct {
+	Files, Missing, Pictures []string
+	Copied                   bool
+}
+
+func RenderTaskAttachments(a TaskAttachments) string {
+	return strings.TrimRight(render("assistant/task_attachments", a), "\n")
+}
 
 // SideConversation preserves the provenance of a non-owner's message to a tasked Agent.
 type SideConversation struct {

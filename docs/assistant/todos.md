@@ -16,6 +16,35 @@ To-dos belong to the assistant (`todos.go`, `todo_decisions.go`, `todo_sessions.
   `POST /api/v1/sessions` and `POST /api/v1/sessions/{mid}/{sid}/messages` with `todo_id` first ask the assistant (`assistant.todo_handoff`): does the to-do exist, is it done (if handoff is disallowed, it supplies 404/409 and the message, echoed by hub), prepend decisions to the Agent's message and project context for new Agents, all in one call. After handoff, ask assistant to link it (`assistant.todo_link`; assistant determines both linked title and to-do title); workspace renames through hub notify assistant (`todos.space_renamed`). Protocol in `docs/protocol/protocol.md`, "Bus".
 - **When assistant is disconnected** (hub just started, assistant process restarting): to-do APIs return `503 assistant_offline`, "The assistant is temporarily unavailable. Try again later"; create/send with `todo_id` also return 503 (to-do existence unknown). Session-list to-do/quiet markers keep hub's last report (absent in the first second or two after hub starts before assistant reports). Hub emits no events during this period, so automatic linking, marker reconciliation and decision records wait for the next session list or answer after reconnection; workspaces renamed through hub are not migrated.
 
+## Read-only planned tasks
+
+`task_plan` treats `readonly: true` as a launch constraint. The assistant saves `permission: plan`, overriding an
+omitted mode, `default`, or an explicit writable mode. It reapplies this constraint after plan-card edits and at
+dispatch, including old saved plans and retries. Tasks without `readonly` keep their requested permissions.
+This preserves automatic dispatch for read-only work without inheriting a writable launcher default; waiting for
+Start alone would not make an unsafe permission mode read-only.
+
+The node must honor `plan` or refuse the start. Claude Code terminal starts through herdr or Orca pass
+`--permission-mode plan`. Codex terminal starts and supported terminal resumes use `--sandbox read-only
+--ask-for-approval never`: no approval can escalate past the sandbox. The node retains that constraint for later
+resumes, including a message that reopens the session. The terminal policy uses `never` because Codex 0.167 no
+longer accepts `untrusted` on its CLI; the separate thread API policy is unchanged.
+
+A Codex launcher with its own `-s` / `--sandbox`, `-a` / `--ask-for-approval`, `--full-auto`, dangerous bypass
+(including `--yolo`), or `--approve-for-me` is refused with `readonly_unsupported` and `delivered: none` instead
+of guessing which permission wins. Managed launcher arguments are checked too. A launcher argument separator
+that would turn the added flags into prompt text is also refused. Non-plan launches retain their original arguments.
+An already running Codex cannot receive new CLI flags, so it cannot be adopted by a read-only start.
+External runtime starts (including Paseo) still fail closed: their start protocol does not guarantee enforcement,
+and a runtime may ignore the mode or fall back to a different provider at dispatch.
+Update both the assistant and nodes for this behavior. This is the runtime's plan restriction on task work, not a
+promise that the runtime writes no session metadata or plan files, and it does not prevent a later explicit mode
+change by the user.
+
+Health-space plans and mixed plans still wait for Start. Existing clients show the Read-only label on a waiting
+plan, and collapse a started plan to "Started N tasks"; the saved task's `permission` is `plan`. Displaying both
+labels on the clients is separate client work.
+
 ## Data model
 
 Server state is stored in the hub's Postgres database (read/written by the assistant, above):
@@ -35,6 +64,7 @@ Server state is stored in the hub's Postgres database (read/written by the assis
 - `thread` (jsonb, NULL): the chat thread the to-do is bound to, `{"channel", "chat_id", "thread_id", "title"}` (#5279, "Chat thread" below); `NULL` while it has none. A `CHECK` requires all three keys, and a unique index `todos_thread` over `(thread->>'channel', thread->>'chat_id', thread->>'thread_id') WHERE thread IS NOT NULL` lets a thread belong to one to-do only. One value, read and written as a unit, hence a jsonb column like the ledger's `reviews` rather than four more columns on every to-do read; the binding goes with the row when the to-do is deleted.
 - `source` (jsonb, NULL): where the to-do was asked for when that is another chat, `{"channel", "chat_id", "message_id", "anchor"?, "no_report"?, "reported_at"?, "report_text"?, "report_due_at"?, "attempts"?}` (#6146, "Where it came from" below); `NULL` for any other to-do. Migration `0429` (manager side; first numbered 0428, which #6188 also took, so `db.go` renumbers it); a `CHECK` requires the three ids. Not unique (several to-dos may come from one message); one value read and written as a unit, hence jsonb like `thread`. Deleting the to-do deletes it.
 - `due_at` (timestamptz) / `due_date` (date): when it is due, a moment or a whole day in the user's time zone; at most one (`CHECK todos_due_one`). `remind_at` (timestamptz): when the phone is pushed about it; `reminded_at` (timestamptz): when that was claimed, cleared whenever `remind_at` changes. `priority` (text, NOT NULL, DEFAULT ''): `''` normal, `high`, `low` (`CHECK`). Migration `0442` (manager side, #1683, "Due date, reminder, priority" below).
+- `project` (text, NOT NULL, DEFAULT ''): the slug of the knowledge-base project the to-do belongs to, `''` for none. Migration `0461` (manager side, #2581, "Project" below). Not a foreign key: projects live in the knowledge base's files.
 - (Not in the table) `stage`, `pr_url`, `delivery`: stage strip, PR and delivery-card location, stored in settings `assistant.todo_stages`, merged when reading to-dos ("Delivery").
 
 ### 2. todo_spaces table
@@ -100,9 +130,9 @@ Link/release semantics:
 
 | Method | Path | Description |
 | --- | --- | --- |
-| GET | `/api/v1/todos` | All to-dos (`created_at` descending; the apps sort them themselves), each with `due_at` / `due_date`, `remind_at`, `reminded_at`, `priority` when set, and `spaces` and `agents` lists (removed rows filtered out; active first by `linked_at` descending, previously involved after by `released_at` descending); a to-do waiting for the owner also has `ask` ("Waiting for the owner") |
-| POST | `/api/v1/todos` | Create `{"title", "notes"?, "due_at"? \| "due_date"?, "remind_at"?, "priority"?}` → `{"todo": Todo}`; nonempty `title` required (400); `due_at` / `remind_at` RFC 3339, `due_date` `YYYY-MM-DD`, `priority` `high` / `normal` / `low` / `""`, anything else (or both due fields) 400; read-only role (watch) 403 |
-| PATCH | `/api/v1/todos/{id}` | Edit `{"title"?, "notes"?, "done"?, "due_at"? \| "due_date"?, "remind_at"?, "priority"?}` → `{"todo": Todo}`; only supplied fields change, `null` (or `""`) clears a due date or reminder; either due field replaces the other; a new `remind_at` is pushed again; user completion-state changes clear `done_by` / `done_reason`, and reopening records `reopened_at`; missing 404; read-only role 403 |
+| GET | `/api/v1/todos` | All to-dos (`created_at` descending; the apps sort them themselves), each with `due_at` / `due_date`, `remind_at`, `reminded_at`, `priority`, `project` when set, and `spaces` and `agents` lists (removed rows filtered out; active first by `linked_at` descending, previously involved after by `released_at` descending); a to-do waiting for the owner also has `ask` ("Waiting for the owner") |
+| POST | `/api/v1/todos` | Create `{"title", "notes"?, "due_at"? \| "due_date"?, "remind_at"?, "priority"?, "project"?}` → `{"todo": Todo}`; nonempty `title` required (400); `due_at` / `remind_at` RFC 3339, `due_date` `YYYY-MM-DD`, `priority` `high` / `normal` / `low` / `""`, `project` a knowledge-base project's slug or name (stored as its slug), anything else (or both due fields, or no such project) 400; read-only role (watch) 403 |
+| PATCH | `/api/v1/todos/{id}` | Edit `{"title"?, "notes"?, "done"?, "due_at"? \| "due_date"?, "remind_at"?, "priority"?, "project"?}` → `{"todo": Todo}`; only supplied fields change, `null` (or `""`) clears a due date or reminder, `""` takes it out of its project; either due field replaces the other; a new `remind_at` is pushed again; user completion-state changes clear `done_by` / `done_reason`, and reopening records `reopened_at`; missing 404; read-only role 403 |
 | POST | `/api/v1/todos/retitle` | Give short titles to task to-dos previously named from the prompt's first line ("To-do titles") → `{"dry_run", "todos": [{"id", "old_title", "new_title"}]}`; `?dry_run=1` lists without changes; read-only role 403 |
 | POST | `/api/v1/todos/{id}/accept` | Verify a to-do from a briefing's Accept button `{"asked_at"}` (the `brief` feed item's `accept[].asked_at`, `docs/protocol/protocol.md`) → `{"ok":true}`; no `asked_at` 400; not the round that waits now (the to-do was reopened or asked again since), already verified or never asked 409; a decision whose recommendation could not reach the task's Agent 502, in the request's language with the reason (nothing taken or recorded, the button works again); the stored asks could not be read or the acceptance could not be saved 503 (nothing verified, the button works again); the ask may have no Lark card (the bot is not set up, or its task reports are off); read-only role 403 |
 | POST | `/api/v1/todos/{id}/done-check` | Run an "Automatic completion" judgment read-only → `{"verdict", "reason", "would_close", "skip", "replies", "signals"}`, no database write ("Automatic completion"); missing 404; read-only role 403 |
@@ -342,7 +372,7 @@ The costliest long-task mistake is an Agent forgetting a decision already made: 
 - Recording/superseding updates to-do `updated_at` and broadcasts `{"type":"todos"}` so clients refetch decisions.
 - iOS / Mac (`apple/Persona/Views/Todos/TodoDecisionsSection.swift`, model `TodoDecisionsModel`, wire `apple/Shared/TodoDecisions.swift`): the same Decisions section in to-do details, under the notes: **Add** records one, **Revise** records one that replaces it, the row's ⋯ marks it as replacing an earlier one or undoes that, **Full History** shows the replaced ones struck through. Read again whenever the to-do's `updated_at` changes; hidden on a hub without the route (route-level 404).
 
-Not yet: the Android decision list.
+- Android (`android/feature/agents/src/main/kotlin/persona/feature/agents/TodoDecisions.kt`, wire `TasksApi.todoDecisions` / `addTodoDecision`, source `TodoDecisionsSource` that `TasksStore` implements; #1853): the same Decisions section in to-do details, under the notes: **Add** records one, **Revise** records one that replaces it (its question filled in, the earlier choice kept struck through), **Full history** shows the replaced ones struck through, and each row says when and where it came from. Typed words are asked about before the form is dropped. Read again whenever the to-do's `updated_at` changes; hidden on a hub without the route (route-level 404). So a question nobody answered can be answered on Android too ("Questions nobody answered"). Not on Android yet: marking an existing decision as replacing an earlier one, or undoing that (the iOS row's ⋯, `PATCH …/decisions/{did}`).
 
 ## Questions nobody answered
 
@@ -455,7 +485,7 @@ Step 3 of the three-loop process (#2820): Agent conclusions automatically settle
   Without model (unconfigured, quota, unparsable reply), conclusion falls back to receipt text (latest Agent reply compressed to one line, at most 120 characters), links only GitHub PRs from replies, no extracted decisions/lessons.
 - **Decision section**: record conclusion ("Completion conclusion" + conclusion/links), each decision (question/choice/reason), each lesson ("Lessons learned") separately, `source = "outcome"`, provenance latest Agent (`source_machine` / `source_session`).
   Once per completion: `source_message` is `outcome:<to-do id>:<completion time>#<index>`; duplicate triggers (two paths together, again after hub restart) check database first. Write conclusion first; only successful writer proceeds with decisions, lessons and timeline (one wins with two assistants sharing database); deleted to-do gets no writes. Reopen then complete is a new occurrence. Web provenance says "Recorded when Agent finished"; handoff includes these in established decisions, marked "Recorded when Agent finished, not decided by user".
-- **Knowledge base**: project for each Agent working directory (`kb.Engine.ProjectsForWork`: first registered code `dirs`; if none match, match directory name to projects with no registered code dirs by name/slug/alias, never name-match projects with registered dirs),
+- **Knowledge base**: the to-do's own project when it has one ("Project" below); otherwise (or when that project is gone) the project for each Agent working directory (`kb.Engine.ProjectsForWork`: first registered code `dirs`; if none match, match directory name to projects with no registered code dirs by name/slug/alias, never name-match projects with registered dirs),
   append `结论：<conclusion> <at most two links>` ("Conclusion: …") to `log.md` (at most 200 characters per line: keep links whole, truncate conclusion to remaining space), source `待办 · <title>` ("To-do · <title>", remove ` · ` from title, at most 60 characters), one line per project. Not limited by `kb.agent_turn`'s one-per-Agent-per-30-minutes rule. If knowledge base not open, retry once after 30 seconds; otherwise only record decisions.
 - **Project context at dispatch**: for a new Agent, resolve project by target directory as above, prepend project summary and latest 5 `待办 ·` conclusions (newest first; only source beginning `待办 · ` and body beginning `结论：`, not same-named group-chat records) as `<persona-context kind="context" title="项目 · <name> · 背景">` ("Project · <name> · Background", prompt `server/internal/prompts/todo/project.md`); at most two projects per directory. Send unchanged without project, both summary/conclusions absent, or knowledge base closed.
   - Assistant `task_plan` (`startTaskAgent`, retry includes decisions too), `agent_start`: prepend directly; tab names still use original title/prompt.
@@ -473,16 +503,24 @@ Not yet: manual editing/undo of conclusions (currently **Replace** in decisions)
 - The push's title is the to-do's, its body the due date (or "was due" once it has passed), the first line of the notes, and when it went out more than two minutes late (the manager was down), the time it was for.
 - A done to-do is not reminded; changing `remind_at` re-arms it; a mesh member on standby leaves it to the center, as with scheduled tasks.
 
+## Project
+
+#2581. A to-do can belong to one knowledge-base project (`todos.project`, its slug; `todo_project.go`), usually a long-term one standing for an area of the user's work. The knowledge base already keeps these areas with a summary and a timeline; the to-do only points at one.
+
+- **Setting it**: the apps through `POST` / `PATCH /api/v1/todos` (`project`), the assistant through `todo_create` / `todo_update` and each `task_plan` task's `project`. A slug, a name or an alias is accepted (`kb.Engine.FindProject`; a merged project's name leads to the one it went into) and stored as the slug; no live project of that name, or the knowledge base off or not open, is refused. The assistant's CLAUDE.md tells it to set one when the area is clear, reusing an existing project (long-term first) and never making a near-duplicate.
+- **Outcomes**: a finished task in a project writes its conclusion to that project's timeline only ("Record conclusions on completion"); the directory-inferred projects get it when it has none, or when its project was deleted or ignored since.
+- **The web To-dos page** groups open to-dos under their project's name (from `GET /api/v1/kb/projects`; the slug while the list is not loaded) before the groups by repository, which only to-dos without a project still fall into; those with neither go last under **Unsorted**. The detail picks the project from a menu (long-term projects first). An area's group never folds for being quiet and shows no "Done" when no agent is at work: its to-dos are the user's open ones. iOS, Mac and Android ignore the field for now. Checked by `scripts/test/web_todo_project_e2e.py` (mock hub, light and dark, wide and phone width).
+
 ## The assistant's todo tools
 
 #1683. The assistant has the user's to-dos as MCP tools (`todo_tools.go`, descriptions in `prompts/mcp/todo/`), so it can note what the user asks it to, or a batch of deadlines from a mail, without a hub token:
 
 | Tool | What it does | Confirmed on the phone |
 | --- | --- | --- |
-| `todo_list` | Open to-dos by default, earliest due first (none last), filtered by state, due before / after, overdue, with or without agents, words | — |
+| `todo_list` | Open to-dos by default, earliest due first (none last), filtered by state, due before / after, overdue, with or without agents, project, words | — |
 | `todo_get` | One in full: notes, agents, the task it is, decisions in force | — |
-| `todo_create` | `title`, `notes`, `due` (a day, a moment in the user's time zone or RFC 3339, `2h` / `3d`), `remind` (a moment, not past), `priority`; an open to-do with the same title and due date is returned instead of made twice | No |
-| `todo_update` | Title, notes, due, remind, priority; `""` clears | No |
+| `todo_create` | `title`, `notes`, `due` (a day, a moment in the user's time zone or RFC 3339, `2h` / `3d`), `remind` (a moment, not past), `priority`, `project`; an open to-do with the same title and due date is returned instead of made twice | No |
+| `todo_update` | Title, notes, due, remind, priority, project; `""` clears | No |
 | `todo_complete` / `todo_reopen` | Mark done / open again | Only for a task, or a to-do agents work on (completing closes its agents) |
 | `todo_delete` | Delete for good | Always |
 
@@ -495,7 +533,7 @@ A to-do it makes is the user's own (no `origin`): work for an agent still goes t
 
 ### 2. To-do list and details
 - List: search bar, unfinished list, collapsed completed group at bottom. Each row shows title, state dot, linked-Agent count and latest message from the highest-priority Agent. Tap circle or swipe left to mark done.
-- Details: edit title/notes directly; current state; linked projects (whole-project links) and active Agents (state dot, title, machine/workspace labels, latest-message summary, update time, tap to chat; beyond session time window use snapshot and mark "Ended"; launch failures show reason/removal); collapsed "Previously involved" list; persistent bottom **Hand to Agent** and **Done / Reopen** buttons; delete in top-right more menu.
+- Details: edit title/notes directly (iOS: notes can be dictated with the composer's mic, in details and in the New To-Do sheet, #2188); current state; linked projects (whole-project links) and active Agents (state dot, title, machine/workspace labels, latest-message summary, update time, tap to chat; beyond session time window use snapshot and mark "Ended"; launch failures show reason/removal); collapsed "Previously involved" list; persistent bottom **Hand to Agent** and **Done / Reopen** buttons; delete in top-right more menu.
 - **Decisions** section under notes (web): effective decisions chronologically (question, choice, reason, time, provenance), each can **Change decision** (write a replacement) or ⋯ **Which decision did this replace?** / **Undo replacement**; when superseded records exist, **View full history**, with old records struck through. Hide whole section if hub unsupported (route 404).
 - **Projects** section above Agents: each row "project · machine", with **Remove**; projects without online Agents show "No Agents currently": only sessions in current hub group, on connected computers, not offline count (same-ID computers in other groups do not; disconnected computer sessions marked unknown by hub rather than offline do not count either, matching web). Agent source says "With project <name>" or "Dispatched by <parent title>"; missing project source shows only "With project", missing parent only "Spawned", manual links unlabelled.
 
@@ -508,7 +546,7 @@ A to-do it makes is the user's own (no `origin`): work for an agent still goes t
 
 ### 4. Agents view integration
 - Agents grouping supports **By To-do** (#1836; iOS / Mac defaults by repository when no grouping chosen, #2108): each unfinished to-do with active Agents is a separate section; header shows title/state and opens details. Unlinked manually started herdr Agents (`started_by_persona` false) have a separate expanded **Manually started** section (web: **Started in terminal**, #3057), before **Unassigned** (web: **Not linked to a to-do**; web #2608, iOS / Mac #2917: without spawn relationships or linked space no automatic rule recognizes them; link through **Link to To-do…** in row menu; spawned herdr Agents whose parent is not linked cannot be distinguished on any client and count here). Remaining unlinked Agents go in final **Unassigned** section (collapsed by default when to-dos exist, expanded if any Needs you). Web remembers each browser's grouping, keeping whatever was chosen (default By To-do if never chosen, #2812; By Machine before, #1990). When list contains multiple host types, non-herdr rows label their host.
-- Web **By To-do** is a three-level tree (#2526): project › to-do › Agent. Project comes from linked Agents' repository (same `repoOf` as By Repository, merged across computers; choose repository with most Agents if several); spawned Agents (`source = "spawned"`, `via` points to another Agent in same to-do) nest beneath parent, staying top-level if parent absent or cycle. Each node has state "Needs you / Working / Done", highest priority below it (Needs you > Working > Done, interrupted counts Needs you). Completed to-dos and done branches with last activity over 1 day ago default collapsed; Manually started/Unassigned last, grouped by project inside. Unfinished to-dos on left of To-dos page also group by project, no-Agent items last. Android By To-do also uses project › to-do › Agent (#3156), without spawned indentation/one-day folding yet.
+- Web **By To-do** is a three-level tree (#2526): project › to-do › Agent. Project comes from linked Agents' repository (same `repoOf` as By Repository, merged across computers; choose repository with most Agents if several); spawned Agents (`source = "spawned"`, `via` points to another Agent in same to-do) nest beneath parent, staying top-level if parent absent or cycle. Each node has state "Needs you / Working / Done", highest priority below it (Needs you > Working > Done, interrupted counts Needs you). Completed to-dos and done branches with last activity over 1 day ago default collapsed; Manually started/Unassigned last, grouped by project inside. Unfinished to-dos on left of To-dos page also group by project: their own knowledge-base project first ("Project"), else the repository, items with neither last under **Unsorted**. Android By To-do also uses project › to-do › Agent (#3156), without spawned indentation/one-day folding yet.
 - Source label on every Agent row (#2526): botmux **Lark Group**, tapping opens a thread link in Lark when present; herdr **Terminal**; other hosts unlabelled. Quick filters add Lark Group/Terminal for just that type. iOS / Mac have labels/filters too; Android too (filters #3154, labels #3132, labels under time, #3043). The web draws it as an icon at the row's end instead of a word (`docs/web/web.md` "Source marks").
 - Other grouping modes add to-do-title labels to linked Agents.
 - By-project headers show linked to-do labels opening details; menu **Link to To-do…**, **Move to Another To-do…**, **Remove from To-do**; picker selects unfinished to-do or creates then links. Agent groups outside herdr workspaces (no workspace id) have no labels or these menu items.

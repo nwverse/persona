@@ -1,4 +1,5 @@
 import { formatDate, t } from "../i18n";
+import { noteItemManager } from "./manager-choice";
 import { reviewState, type Supervision } from "./supervision";
 import { api, ApiError, enc } from "./api";
 import { contextBody } from "./context-body";
@@ -36,6 +37,8 @@ export interface Todo {
   id: string;
   title: string;
   notes?: string;
+  /** The manager that owns this to-do on a multi-manager hub. */
+  manager?: string;
   /** When it is due (#1683, docs/assistant/todos.md "Due date, reminder, priority"): a moment, or a day ("YYYY-MM-DD",
    * due by its end in the user's time zone); at most one. Unset from hubs without them. */
   due_at?: string | null;
@@ -45,6 +48,8 @@ export interface Todo {
   reminded_at?: string | null;
   /** "high" or "low"; unset or "" is normal. */
   priority?: string;
+  /** The slug of the knowledge-base project it belongs to (#2581, docs/assistant/todos.md "Project"); unset for none. */
+  project?: string;
   done_at?: string | null;
   created_at: string;
   updated_at: string;
@@ -577,6 +582,8 @@ export interface TodoPatch {
   due_date?: string | null;
   remind_at?: string | null;
   priority?: string;
+  /** A knowledge-base project's slug; "" takes it out of its project. */
+  project?: string;
 }
 
 export async function updateTodo(id: string, patch: TodoPatch): Promise<Todo> {
@@ -589,6 +596,7 @@ export async function updateTodo(id: string, patch: TodoPatch): Promise<Todo> {
 
 export async function deleteTodo(id: string): Promise<void> {
   await api(`/todos/${enc(id)}`, { method: "DELETE" });
+  noteItemManager(`/todos/${encodeURIComponent(id)}`, undefined);
 }
 
 export async function linkAgentToTodo(todoId: string, mid: string, sid: string): Promise<void> {
