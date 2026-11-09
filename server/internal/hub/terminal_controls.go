@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 	"unicode"
@@ -29,14 +30,19 @@ const codeTerminalControls = "terminal_control_refused"
 const terminalTextMax = 32 << 20
 
 // withoutTerminalControls guards a route on which an extension's token can put text into a terminal or keep it for a
-// prompt: a request of one whose body has a terminal control character in any string, key or value, of any of its
-// JSON values is refused and audited (refuseTerminalControls), and one whose body is not JSON is refused, as nothing
-// can say what the route would read in it. Other requests go on with the body as it came.
+// prompt: a request of one with a terminal control character in its path or query (terminalControlsInURL) or in any
+// string, key or value, of any of its body's JSON values is refused and audited (refuseTerminalControls), and one
+// whose body is not JSON is refused, as nothing can say what the route would read in it. Other requests go on with
+// the body as it came.
 func (h *Hub) withoutTerminalControls(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		p := principalOf(r.Context())
 		if p.Role != roleExtension {
 			next(w, r)
+			return
+		}
+		if terminalControlsInURL(r.URL) {
+			h.refuseTerminalControls(w, r, p)
 			return
 		}
 		body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, terminalTextMax))
@@ -91,6 +97,27 @@ func terminalControls(body []byte) (bool, error) {
 			}
 		}
 	}
+}
+
+// terminalControlsInURL reports whether u's decoded path or a key or value of its query has a terminal control
+// character: a route keeps text from those too (a knowledge-base entry is named from its path). A query pair that does
+// not decode is left out here as it is by the route.
+func terminalControlsInURL(u *url.URL) bool {
+	if strings.ContainsFunc(u.Path, isTerminalControl) {
+		return true
+	}
+	q, _ := url.ParseQuery(u.RawQuery)
+	for k, vs := range q {
+		if strings.ContainsFunc(k, isTerminalControl) {
+			return true
+		}
+		for _, v := range vs {
+			if strings.ContainsFunc(v, isTerminalControl) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // isTerminalControl is a control character (Unicode Cc: C0, DEL and C1) other than newline, carriage return and tab.

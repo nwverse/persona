@@ -241,6 +241,24 @@ func TestExtensionTokensMayNotSendTerminalControls(t *testing.T) {
 			t.Fatalf("%s: the audit %s", c.name, l)
 		}
 	}
+	// In the path or the query: a route keeps text from those too.
+	inURL := []struct{ name, method, path, body string }{
+		{"a knowledge-base entry's id", put, "/api/v1/kb/projects/%1Bp1", `{}`},
+		{"a todo's id", patch, "/api/v1/todos/t%C2%9B1", `{"notes":"go"}`},
+		{"a query's value", post, "/api/v1/sessions/mb/b1/messages?a=%1B", `{"text":"go"}`},
+		{"a query's key", post, "/api/v1/todos?a%7F=1", `{"title":"go"}`},
+	}
+	for i, c := range inURL {
+		code, out := do(scoped, c.method, c.path, c.body)
+		if code != http.StatusForbidden || out["code"] != codeTerminalControls {
+			t.Fatalf("%s: %d %v, want 403 %s", c.name, code, out, codeTerminalControls)
+		}
+		all := audits()
+		if len(all) != len(routes)+i+1 || !strings.Contains(all[len(routes)+i], `"path":"`+strings.Split(c.path, "?")[0]+`"`) ||
+			strings.Contains(all[len(routes)+i], `\u001b`) {
+			t.Fatalf("%s: the audits %q", c.name, all)
+		}
+	}
 	// Not JSON: refused here, even where the route would read the first value and leave the rest.
 	for _, c := range []struct{ path, body string }{
 		{"/api/v1/sessions/mb/b1/messages", `{"text":"go`},
@@ -250,8 +268,11 @@ func TestExtensionTokensMayNotSendTerminalControls(t *testing.T) {
 			t.Fatalf("%s %s: %d %v", c.path, c.body, code, out)
 		}
 	}
-	if reached() != 0 || len(audits()) != len(routes) {
+	if reached() != 0 || len(audits()) != len(routes)+len(inURL) {
 		t.Fatalf("refused, B heard of:\n%s", b.log())
+	}
+	if got := keptOf("/api/v1/kb/projects/%1Bp1"); len(got) != 0 {
+		t.Fatalf("refused, the entry has %q", got)
 	}
 	for _, path := range records {
 		if got := keptOf(path); len(got) != 0 {
@@ -266,8 +287,13 @@ func TestExtensionTokensMayNotSendTerminalControls(t *testing.T) {
 				t.Errorf("%s, %s: %d %v", who, c.name, code, out)
 			}
 		}
+		for _, c := range inURL {
+			if code, out := do(tok, c.method, c.path, c.body); code != http.StatusOK {
+				t.Errorf("%s, %s: %d %v", who, c.name, code, out)
+			}
+		}
 	}
-	if len(audits()) != len(routes) {
+	if len(audits()) != len(routes)+len(inURL) {
 		t.Fatalf("the app's and the phone's requests were audited:\n%s", b.log())
 	}
 	for _, c := range routes {
@@ -278,7 +304,7 @@ func TestExtensionTokensMayNotSendTerminalControls(t *testing.T) {
 			}
 		}
 	}
-	if len(audits()) != len(routes) {
+	if len(audits()) != len(routes)+len(inURL) {
 		t.Fatalf("its plain text was audited:\n%s", b.log())
 	}
 	for _, path := range records {

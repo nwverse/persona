@@ -622,7 +622,8 @@ Closing is not durable merely because the card vanished: persist the interaction
   break. A path that types text as raw keys would make them Enter and Tab, and needs a stricter rule.
 - Check every string of the body as JSON decodes it, keys included, not one named field: Go's `encoding/json` matches
   a struct's field names without regard to case, so a check of `p["text"]` misses a body that spells it `"Text"`, and
-  a handler that decodes only the first value of a body leaves the rest to whatever reads it next.
+  a handler that decodes only the first value of a body leaves the rest to whatever reads it next. Check the decoded
+  path and query too: a route can keep text from them (a knowledge-base entry is named from its id).
 
 ## Profile acceptance must include launcher defaults
 
