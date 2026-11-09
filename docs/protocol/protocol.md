@@ -2659,16 +2659,18 @@ Tasks dispatched from an assistant chat ([unified-entry.md](../assistant/unified
 // brief: ref is the scheduled task's id (the morning or evening routine with `facts` on); written into the routine's own conversation when a run is sent, whether or not the Lark bot is on
 //         (`docs/extensions/bots.md` ("Morning and evening briefings")): the fixed part of that run, as it was when the run started:
 //         {"title":"the routine's name","at":"…","hours":12,"waiting_unknown"?:true,
-//          "waiting":[{"id":"<card id>","title":"what the card asks (a line, in the hub's language)","from":"who asked","link"?:"<web page>","waited_s":4800,"nudged"?:true}],
+//          "waiting":[{"id":"<card id>","title":"what the card asks (a line, in the hub's language)","from":"who asked","link"?:"<web page>","machine_id"?,"session_id"?,"waited_s":4800,"nudged"?:true}],
 //          "failed":[{"kind":"task|routine","id","ref"?,"title","at","why"?,"skipped"?}],"failed_total":3,       // as in today.failed: what didn't go through in the last `hours` hours, newest first, at most 8
 //          "done":[{"id":"<to-do id>","title","at"}],"done_total":12,                                           // to-dos closed in that window, newest first, at most 10 (those waiting to be verified are under accept only)
 //          "accept":[{"id":"<to-do id>","title","detail"?:"what changed","from"?,"link"?,"waited_s","asked_at":"…","verdict"?:"the verdict line","outcome"?:"done|cannot|decide","recommend"?:"…"}],  // to-dos waiting to be verified, or whose conclusion waits for the owner, the longest waiting first
-//          "later"?:[{"id":"<question id>","title":"what was asked (a line)","from"?,"link"?:"<the Agent's chat>","waited_s"}],"later_total"?:3,  // questions Agents left for a briefing (urgent false), the oldest first, at most 10; both left out when the queue is empty; the Handled button posts the id to POST /api/v1/later/{id}/handled
+//          "later"?:[{"id":"<question id>","title":"what was asked (a line)","from"?,"link"?:"<the Agent's chat>","machine_id"?,"session_id"?,"waited_s"}],"later_total"?:3,  // questions Agents left for a briefing (urgent false), the oldest first, at most 10; both left out when the queue is empty; the Handled button posts the id to POST /api/v1/later/{id}/handled
 //          "progress":[{"id":"<to-do id>","title","stage"?:"plan|develop|review|merge|deploy|verify"}],"progress_total":2}  // open to-dos whose Agents are working, the longest open first, at most 8
-//         waiting_unknown: the cards waiting for an answer were not read yet (the hub had just started), so `waiting` is empty for want of knowing. The Accept button posts `asked_at` to
+//         waiting_unknown: the cards waiting for an answer were not read yet (the hub had just started), so `waiting` is empty for want of knowing.
+//         machine_id / session_id (#2320): the chat a waiting card or a question that can wait came from, which the apps open; left out for a card from no chat, and by a hub from before
+//         (the iOS app then opens a waiting card it still has among its pending cards, and otherwise draws the row without a link). The Accept button posts `asked_at` to
 //         POST /api/v1/todos/{id}/accept. `accept` has a row for every deployed to-do that waits for the owner, and for every supervised to-do's conclusion (#1226), with or without the Lark bot: the ask is kept whether or not a Lark card went out.
 //         `verdict` is the verdict line word for word as the row's Lark card says it, in the bot's language ("done, deployed" for a deployed to-do); `outcome` is set for a conclusion only (decide: needs the owner's
-//         decision, and the Accept button takes `recommend`; a decision without `recommend` has nothing to take). A hub from before leaves the three out. A retry of a failed run adds no second item. Clients that don't know the kind skip the entry (iOS decodes it as `unknown`, Android's draw has no branch for it).
+//         decision, and the Accept button takes `recommend`; a decision without `recommend` has nothing to take). A hub from before leaves the three out. A retry of a failed run adds no second item. Clients that don't know the kind skip the entry (iOS builds before #2320 decode it as `unknown`, Android's draw has no branch for it).
 ```
 
 The live state of task cards and plan cards isn't in the feed: clients read the plan (`task_plan` push) and the to-do + the session state of its attached Agents by `ref` (status rules as in [todos.md](../assistant/todos.md)).
