@@ -57,9 +57,7 @@ const files = import.meta.glob<{ cases: SyncCase[] }>("../../../../../spec/fixtu
 
 /** Cases this page does not pass yet: the bug, and what every failure of the case must say. A known case that fails
  *  for another reason, or passes, fails the suite: the fixed bug comes off this list, and a new one is not hidden. */
-const KNOWN: Record<string, { issue: string; because: RegExp }> = {
-  catch_up_over_cap_asks_rest: { issue: "#1118", because: /after_seq":12\}|want \[.*Question 6/ },
-};
+const KNOWN: Record<string, { issue: string; because: RegExp }> = {};
 
 let host: HTMLDivElement;
 let root: Root;
