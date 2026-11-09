@@ -12,7 +12,7 @@ final class MessageSourceUITests: XCTestCase {
         let app = XCUIApplication()
         app.launchArguments = ["-pairURL", pair, "-app.tab", "assistant", "-tab", "assistant",
                                "-openAssistant", "server/b2e4d6f8-0000-4000-8000-000000000001",
-                               "-dev.openChat", "", "-ui.newChatLayout", "YES", "-AppleLanguages", "(zh-Hans)"]
+                               "-dev.openChat", "", "-openChatsFresh", "YES", "-ui.newChatLayout", "YES", "-AppleLanguages", "(zh-Hans)"]
         app.launchPinned()
         let any = app.descendants(matching: .any)
         let patrol = any["message-source-patrol"].firstMatch

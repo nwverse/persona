@@ -49,11 +49,17 @@ def main():
         ("cross", "conversation", "source-review", "开源巡检", cross_body),
     ]
     for index, (item_id, kind, source_id, title, body) in enumerate(entries, 2):
-        text = relay(title, source_id, body)
+        if kind == "supervision":
+            text = ("📋 督办：你派出去的任务有 1 个要你处理\n"
+                    "（这是 Persona 的督办消息，不是用户发的。这一轮默认折叠在主对话的督办记录中，不会推送给用户。）\n"
+                    '<persona-supervision level="triage" />\n' + body)
+            metadata = {"kind": "supervision"}
+        else:
+            text = relay(title, source_id, body)
+            metadata = {"kind": kind, "conversation_id": source_id, "title": title}
         message = base.it("user", "text", index, text=text)
         message.update(id=item_id, seq=index)
         if not args.legacy:
-            metadata = {"kind": kind, "conversation_id": source_id, "title": title}
             message["source"] = metadata
             encoded = json.dumps(metadata, ensure_ascii=False).replace("<", "\\u003c")
             message["text"] = f'<persona-context kind="message-source" title="">\n{encoded}\n</persona-context>\n{text}'
@@ -61,6 +67,9 @@ def main():
     messages.append(base.it("assistant", "text", 5, text="收到，我会先复核截图，再按验收清单处理。"))
     for index, message in enumerate(messages, 1):
         message["seq"] = index
+        message["ts"] = base.ago(minutes=(60 - index * 5) / 60)
+    if args.watch:
+        messages = messages[1:]
     base.ITEMS[conversation] = messages
 
     class Handler(base.H):
