@@ -61,7 +61,7 @@ type pending struct {
 // (nodeclient.ResumeWait).
 var resumeGrace = 3 * time.Minute
 
-// ixMap is the pending interactions, made on first use. Callers hold s.fleet.mu.
+// ixMapLocked is the pending interactions, made on first use. Callers hold s.fleet.mu.
 func (s *Service) ixMapLocked() map[string]*pending {
 	if s.fleet.interactions == nil {
 		s.fleet.interactions = map[string]*pending{}
@@ -786,6 +786,8 @@ func (s *Service) keepAlways(ix proto.Interaction, r proto.Resolution) {
 		}
 	}
 }
+
+// ---- a node gone, the manager restarted ----
 
 // NodeDetached: a machine's node connection ended (devices.Options.Detached): the cards waiting on it that cannot be
 // claimed again end (resumable ones wait for their hook through the next connection), its list shows it.

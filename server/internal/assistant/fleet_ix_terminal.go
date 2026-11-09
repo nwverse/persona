@@ -80,9 +80,10 @@ func (s *Service) checkPlanInteraction(machine string, p *pending) {
 	}
 }
 
-// PermissionRequest in some Claude Code versions omits tool_use_id. In that case the call immediately preceding
-// this hook is identified by its timestamp; ambiguous calls, missing timestamps and earlier results fail closed.
-// The result means only that the call ended (approval, rejection or interruption); no resolution is invented.
+// planCallFinished: items hold the result of the tool call ix asks about. PermissionRequest in some Claude Code
+// versions omits tool_use_id. In that case the call immediately preceding this hook is identified by its timestamp;
+// ambiguous calls, missing timestamps and earlier results fail closed. The result means only that the call ended
+// (approval, rejection or interruption); no resolution is invented.
 func planCallFinished(ix proto.Interaction, items []proto.Item) bool {
 	id := ix.ToolUseID
 	if id == "" {
