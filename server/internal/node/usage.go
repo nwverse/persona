@@ -68,10 +68,9 @@ func newUsageMeter() *usageMeter {
 }
 
 // usageFiles lists the transcripts that may hold usage of the window: Claude Code's (every config directory, and
-// their subagents), Codex's and the compatible CLI's rollouts.
+// their subagents, projectTranscripts), Codex's and the compatible CLI's rollouts.
 func (n *Node) usageFiles(cutoff time.Time) []string {
-	paths := n.globProjects("*", "*.jsonl")
-	paths = append(paths, n.globProjects("*", "*", "subagents", "*.jsonl")...)
+	paths := n.projectTranscripts()
 	for _, home := range []string{n.codexHome(), n.traexHome()} {
 		for _, r := range rollouts(home) {
 			paths = append(paths, r.path)
