@@ -109,6 +109,7 @@ func TestClaudeQuestionResumeAfterNodeReplacementSeesTerminalResult(t *testing.T
 // A completed older question and an outstanding identical one do not say which call a resumed attempt belongs to.
 func TestClaudeQuestionResumeWithIdenticalTranscriptCallsDoesNotGuess(t *testing.T) {
 	n := codexTestNode(t)
+	h := withCancelHub(t, n)
 	questions := []map[string]any{{"question": "Which?", "options": []map[string]any{{"label": "A"}, {"label": "B"}}}}
 	input, _ := json.Marshal(map[string]any{"questions": questions})
 	path := writeQuestionTranscript(t, input, "toolu_old", true)
@@ -128,11 +129,14 @@ func TestClaudeQuestionResumeWithIdenticalTranscriptCallsDoesNotGuess(t *testing
 	if err != nil {
 		t.Fatal(err)
 	}
-	in := hookInput{HookEventName: "PermissionRequest", SessionID: decidedSession, ToolName: "AskUserQuestion",
-		ToolInput: input, TranscriptPath: path}
-	n.rememberTranscript(in)
-	if id, completed := n.questionFromTranscript(in); id != "" {
-		t.Fatalf("ambiguous identical calls were attributed to %q (completed=%v)", id, completed)
+	permission := questionHookInput("PermissionRequest", input, "", path)
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	out, err := n.handleHook(ctx, sockRequest{Input: permission, Attempt: "a1", Resume: true})
+	waitFor(t, "the ambiguous restored card to be withdrawn", func() bool { _, cancelled := h.counts(); return cancelled == 1 })
+	asked, cancelled := h.counts()
+	if err != nil || out != nil || asked != 0 || cancelled != 1 {
+		t.Fatalf("ambiguous Resume waited instead of handing back to the terminal: %v, %v (asked=%d cancelled=%d)", out, err, asked, cancelled)
 	}
 }
 

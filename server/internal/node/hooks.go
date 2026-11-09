@@ -459,8 +459,11 @@ func (n *Node) handleHook(ctx context.Context, req sockRequest) (any, error) {
 		if proto.HasDuplicateQuestionText(ix.Questions) {
 			return permissionDecision(map[string]any{"behavior": "deny", "message": duplicateQuestionReason}), nil
 		}
-		if req.Resume {
-			n.restoreQuestionFromTranscript(in, req.Attempt, time.Now())
+		if req.Resume && n.restoreQuestionFromTranscript(in, req.Attempt, time.Now()) {
+			// Several identical calls fit no exact PostToolUse. Hand this attempt back to the terminal and withdraw
+			// its restored card instead of waiting for a completion that may never come (#2382).
+			_ = n.peer.Notify("interaction.cancel", map[string]any{"id": ix.ID})
+			return nil, nil
 		}
 		ctx, otherAnswered, stopOther := n.decided.watch(ctx, permissionKey(in))
 		defer stopOther()
