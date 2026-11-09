@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf16"
 	"unicode/utf8"
 )
 
@@ -162,6 +163,24 @@ type gcell struct {
 	style int
 }
 
+// Excel's limits (Microsoft's "Excel specifications and limits"). Past them Excel reports a problem with the file
+// and cuts or drops what does not fit, so a workbook that needs more is refused rather than written.
+const (
+	maxCellChars    = 32767   // characters of text in a cell, counted in UTF-16 as Excel does
+	maxFormulaChars = 8192    // characters of a formula after its = (MS-OI29500 on ST_Formula)
+	maxCols         = 16384   // columns, A to XFD
+	maxRows         = 1048576 // rows, the header included
+)
+
+// excelLen is how many characters Excel counts in s: UTF-16 code units, so one outside the BMP counts two.
+func excelLen(s string) int {
+	n := 0
+	for _, r := range s {
+		n += utf16.RuneLen(r)
+	}
+	return n
+}
+
 func buildGrid(s sheetSpec, st *xlsxStyles) (*grid, error) {
 	g := &grid{header: len(s.Header) > 0, sheet: &xsheet{cells: map[[2]int]*xcell{}}}
 	var rows [][]any
@@ -173,7 +192,13 @@ func buildGrid(s sheetSpec, st *xlsxStyles) (*grid, error) {
 		rows = append(rows, h)
 	}
 	rows = append(rows, s.Rows...)
+	if len(rows) > maxRows {
+		return nil, fmt.Errorf("%d rows, an Excel sheet holds at most %d (the header included)", len(rows), maxRows)
+	}
 	for ri, r := range rows {
+		if len(r) > maxCols {
+			return nil, fmt.Errorf("%s: row %d has %d cells, an Excel row holds at most %d (A to XFD)", cellRef(maxCols, ri), ri+1, len(r), maxCols)
+		}
 		row := make([]gcell, len(r))
 		for ci, v := range r {
 			if str, ok := v.(string); ok && s.csv {
@@ -218,7 +243,14 @@ func cellOf(v any, format string) (*xcell, error) {
 		return &xcell{v: value{kind: 's', str: string(v)}}, nil
 	case string:
 		if strings.HasPrefix(v, "=") && len(v) > 1 {
-			return &xcell{formula: strings.TrimPrefix(v, "=")}, nil
+			f := strings.TrimPrefix(v, "=")
+			if n := excelLen(f); n > maxFormulaChars {
+				return nil, fmt.Errorf("a formula of %d characters, Excel takes at most %d", n, maxFormulaChars)
+			}
+			return &xcell{formula: f}, nil
+		}
+		if n := excelLen(v); n > maxCellChars {
+			return nil, fmt.Errorf("%d characters, an Excel cell holds at most %d", n, maxCellChars)
 		}
 		if isDateFormat(format) {
 			if serial, ok := excelDate(v); ok {

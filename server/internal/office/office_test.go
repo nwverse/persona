@@ -321,6 +321,59 @@ func TestXlsxFromCSV(t *testing.T) {
 	}
 }
 
+// Excel's limits ("Excel specifications and limits"): a cell holds 32,767 characters counted in UTF-16, a formula
+// 8,192 after its =, a sheet A1:XFD1048576. Past them Excel repairs the file and cuts or drops what does not fit, so
+// the workbook is refused instead, naming the sheet and the cell. Text a formula joins past a cell's limit is
+// #VALUE!, as in Excel.
+func TestXlsxRefusesWhatExcelCannotHold(t *testing.T) {
+	sheet := func(header, rows string) []byte {
+		return []byte(`{"sheets":[{"name":"Data","header":` + header + `,"rows":` + rows + `}]}`)
+	}
+	text := func(s string) string {
+		b, _ := json.Marshal(s)
+		return string(b)
+	}
+	full := strings.Repeat("a", 32767)
+	longest := "=" + strings.Repeat("1+", 4095) + "11" // 8,192 characters after the =
+	data, err := Xlsx(sheet(`[]`, `[[`+text(full)+`,`+text(longest)+`,`+text(strings.Repeat("\U0001F600", 16383)+"a")+`,`+text(strings.Repeat("b", 20000))+`,"=A1&D1"]]`), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := parts(t, data)["xl/worksheets/sheet1.xml"]
+	for _, want := range []string{`<c r="A1" t="inlineStr"><is><t xml:space="preserve">` + full + `</t>`, `<c r="B1"><f>` + longest[1:] + `</f><v>4106</v></c>`,
+		`<c r="E1" t="e"><f>A1&amp;D1</f><v>#VALUE!</v></c>`} {
+		if !strings.Contains(s, want) {
+			t.Errorf("sheet has no %.80s…", want)
+		}
+	}
+	for _, c := range []struct {
+		name string
+		src  []byte
+		want []string
+	}{
+		{"a cell of 32768 characters", sheet(`[]`, `[[`+text(full+"a")+`]]`), []string{`sheet "Data": A1:`, "32768", "32767"}},
+		{"a header of 32768 characters", sheet(`["x",`+text(full+"a")+`]`, `[]`), []string{"B1", "32767"}},
+		{"16384 characters outside the BMP", sheet(`[]`, `[[1],[2,`+text(strings.Repeat("\U0001F600", 16384))+`]]`), []string{"B2", "32768", "32767"}},
+		{"a formula of 8193 characters", sheet(`[]`, `[[`+text(longest+"1")+`]]`), []string{"A1", "8193", "8192"}},
+		{"16385 cells in a row", sheet(`[]`, `[[`+strings.Repeat("1,", 16384)+`1]]`), []string{"XFE1", "16385", "16384"}},
+		{"1048577 rows", sheet(`["x"]`, `[`+strings.Repeat("[],", 1048575)+`[]]`), []string{"1048577", "1048576"}},
+	} {
+		_, err := Xlsx(c.src, "")
+		if err == nil {
+			t.Errorf("%s: written", c.name)
+			continue
+		}
+		for _, want := range c.want {
+			if !strings.Contains(err.Error(), want) {
+				t.Errorf("%s: %v has no %s", c.name, err, want)
+			}
+		}
+	}
+	if _, err := XlsxFromCSV([]byte("Name\n"+full+"a\n"), "Data", ""); err == nil || !strings.Contains(err.Error(), `sheet "Data": A2:`) {
+		t.Errorf("a CSV field of 32768 characters: %v", err)
+	}
+}
+
 // The command writes next to its input (or -o), prints the file's absolute path with what check says, and says
 // what went wrong on one line.
 func TestMain(t *testing.T) {
