@@ -446,7 +446,7 @@ func (h *Manager) attachExtensions(ctx context.Context) {
 	reg.Reserve("looks", extension.RetiredLookIDs...)
 	// No agent_sources id is reserved: the hub has no personal agents source of its own (extension_agents.go).
 	if path := siblingProgram(wechat.Program); path != "" {
-		if err := reg.AddBuiltin(wechatManifest(h, path), filepath.Dir(path), true); err != nil {
+		if err := h.addWeChatBuiltin(reg, path); err != nil {
 			h.logf("plugin wechat: %v", err)
 		}
 	}
@@ -1031,6 +1031,8 @@ func (ps *extensions) specOf(ctx context.Context, p *extension.Extension, hp *hu
 		switch method {
 		case "kb.list", "kb.get", "kb.day", "kb.search", "kb.update", "kb.owner", "kb.recent":
 			return ps.extensionKBCall(ctx, id, method, params)
+		case "assistant.conversations", "assistant.messages": // assistant.read (extension_assistant_read.go)
+			return ps.extensionAssistantCall(ctx, id, method, params)
 		case "model.complete": // assistantwire.MethodModelComplete (extension_model_calls.go)
 			return ps.extensionModelCall(ctx, id, params)
 		case connector.MethodSentRecord:

@@ -15,8 +15,9 @@ import (
 // The hub names the assistant's directories relative to HOME (".persona/assistant", ".persona/health", ".persona/guest",
 // or with the former name's spelling, which a hub sends for older nodes). The node prepares them in the state directory it
 // runs on, whichever spelling it is sent: a custom PERSONA_HOME's root (#5505, nothing written into the default
-// ~/.persona), the real one of ~/.persona and the former ~/.jarvis on the default layouts, and never a state directory
-// that is not there (#1681: the former spelling joined to HOME made ~/.jarvis again once its alias was gone).
+// ~/.persona), the real one of ~/.persona and the former state directory (compat.StateDir) on the default layouts, and
+// never a state directory that is not there (#1681: the former spelling joined to HOME made the former directory again
+// once its alias was gone).
 func TestAssistantDirsFollowTheDataDir(t *testing.T) {
 	t.Setenv("PERSONA_SKILLS_DIR", t.TempDir())
 	prepare := func(t *testing.T, n *Node, method, dir string) (string, error) {

@@ -308,6 +308,38 @@ func TestSessionsMessage(t *testing.T) {
 	}
 }
 
+// A change pushes the machine's kept list as decorated gives it, stamped with its manager, from the list itself: the
+// list is neither changed nor copied (Machine.sessions). With an older app, 2.44x the list message's size measured
+// (the encoded sessions and the message), 3.53x before.
+func TestSessionsChangedStampsWithoutCopy(t *testing.T) {
+	h := newTestHub(t)
+	m := newMachine(h, MachineConfig{ID: "box", Name: "Box", Kind: "local"})
+	h.machines, h.byID["box"] = append(h.machines, m), m
+	m.sessions = busyList()
+	m.sessions[1].Manager = "someone-else"
+	if h.machineOwner("box") == "" {
+		t.Fatal("the machine has no manager to stamp")
+	}
+	if got, want := encodeStamped(m.keptSessions(), h.machineOwner("box")), encodeSessions(h.decorated(m)); !sameSessions(got, want) {
+		t.Fatal("the stamped encoding differs from the decorated list's")
+	}
+	if m.sessions[0].Manager != "" || m.sessions[1].Manager != "someone-else" {
+		t.Fatal("stamping changed the kept list")
+	}
+
+	app := &client{out: make(chan []byte, 64), subs: map[[2]string]bool{}, role: roleFull}
+	h.clients[app] = struct{}{}
+	size := len(sessionsMessage("box", encodeSessions(h.decorated(m))))
+	per := allocated(func() {
+		h.sessionsSent = nil // the same list again goes to the older app again
+		h.sessionsChanged(m)
+		<-app.out
+	})
+	if per > size*251/100 {
+		t.Fatalf("pushing a %d-byte list allocates %d bytes", size, per)
+	}
+}
+
 // busyList is a busy machine's list (docs/server/server.md "What is pushed to the apps").
 func busyList() []proto.Session {
 	var many []proto.Session

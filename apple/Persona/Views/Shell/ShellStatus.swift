@@ -147,7 +147,7 @@ struct ShellWindowHooks: UIViewRepresentable {
 /// window of their own above the shell's: it takes no touches, so what is under a toast takes the tap (a toast over the
 /// top bar's switch took the tap meant for it, 2026-11-02), and it moves nothing (opening the status row for a toast
 /// pushed the pages and the drawer down and back, #1053). Under the link's pill while that shows; the keyboard is at
-/// the bottom, out of its way. The tabs (Old Layout, iPad) have one too, without the pill (`ToastWindowHook`).
+/// the bottom, out of its way. Regular-width tabs have one too, without the pill (`ToastWindowHook`).
 @MainActor final class ToastWindow {
     private(set) weak var over: UIWindow?
     private var window: UIWindow?
@@ -190,7 +190,7 @@ struct ShellWindowHooks: UIViewRepresentable {
     }
 }
 
-/// A toast window (`ToastWindow`, no link pill) over the window this view is in, for the tabs (Old Layout, iPad, iPhone
+/// A toast window (`ToastWindow`, no link pill) over the regular-width tabs (iPad and iPhone
 /// Duo open; `RootView`). In `RootView`'s overlay their toasts were drawn under every cover and sheet: Saved to Photos
 /// from the image viewer and the share card never showed (#1492).
 struct ToastWindowHook: UIViewRepresentable {
@@ -251,7 +251,7 @@ private struct ToastWindowRoot: View {
 #endif
 
 /// A view in a title that says the hub's link itself (`ConnectionLabel`): while it is on screen in front, the shell's
-/// floating pill does not say it too. Outside the shell (old layout, iPad, Mac) nothing.
+/// floating pill does not say it too. Outside the shell (iPad, Mac, Vision Pro) nothing.
 private struct TitleSaysLink: ViewModifier {
     @Environment(\.shell) private var shell
 

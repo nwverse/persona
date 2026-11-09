@@ -226,7 +226,7 @@ func (s *Service) captureModels(ctx context.Context) (map[string]ModelBinding, m
 		b := r.Binding
 		b.Runtime = ""
 		purposes[id] = b
-		effective, err := s.resolveModel(ctx, id)
+		effective, err := s.resolveModelRecord(ctx, id, &r)
 		if err != nil {
 			return nil, nil, nil, err
 		}

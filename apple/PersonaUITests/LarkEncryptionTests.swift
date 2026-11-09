@@ -6,8 +6,7 @@ final class LarkEncryptionFlowTests: XCTestCase {
         continueAfterFailure = false
         let app = XCUIApplication()
         let pair = "persona://pair?url=" + hub.addingPercentEncoding(withAllowedCharacters: .alphanumerics)! + "&token=mock"
-        app.launchArguments = ["-pairURL", pair, "-tab", "mail", "-demo.on", "NO", "-ui.oldLayout", "NO",
-                               "-inbox.source", "", "-inbox.kind", "mention", "-openInboxFirst", "NO"]
+        app.launchArguments = ["-pairURL", pair, "-tab", "mail", "-demo.on", "NO",                                "-inbox.source", "", "-inbox.kind", "mention", "-openInboxFirst", "NO"]
         app.launchPinned()
         let chat = app.staticTexts["设计评审"].firstMatch
         XCTAssertTrue(chat.waitForExistence(timeout: 20)); chat.tapCenter()

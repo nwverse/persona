@@ -1269,11 +1269,12 @@ nonisolated enum ChatCache {
     /// v8: folds carry the images their work looked at (`Fold.images`); v7's folds had none, and their turns no strip.
     /// v9: user lines Persona typed in for the model carry `injected` (docs/protocol/protocol.md「Persona 注入的消息」, #2358).
     /// v10: a background workflow's end notice is kind `workflow` (#3731) and the hub gives it in the App's language
-    /// (#5511); v9's copies would keep its Chinese text for English and Japanese users.
+    /// (#5511); v9's copies would keep its Chinese text for English and Japanese users. v11: folds carry the task
+    /// lists their calls left (`Fold.tasks`), the chat's plan while its TodoWrite is folded (#5602).
     /// Bump it whenever the item structure or the text the hub gives an item changes.
-    static let folder = "chats-v10"
+    static let folder = "chats-v11"
     /// The folder before, removed on the first launch with this one.
-    private static let previous = "chats-v9"
+    private static let previous = "chats-v10"
 
     /// Once per launch, before the first copy is read or written (a static let runs once, on whichever thread asks first).
     private static let dropOlder: Void = {
@@ -1380,12 +1381,14 @@ nonisolated struct PendingMessage: Identifiable, Hashable, Codable, Sendable {
     var refused: Bool?
 
     /// Comparable form: what the transcript keeps of it — the phone's image note, pasted wrappers and Claude's
-    /// "[Image #21]" placeholders removed, whitespace ignored.
+    /// "[Image #21]" placeholders removed, whitespace ignored, and a context or file block read under either
+    /// generation's tag name (a hub from before the rename keeps what `HubNaming.outbound` sent it).
     private static let normalized = TextMemo<String>(limit: 512)
 
     static func normalize(_ s: String) -> String {
         normalized(s) { s in
-            var t = s
+            var t = s.replacingOccurrences(of: #"(<\s*/?\s*)"# + HubNaming.productPattern + #"-(context|file)"#,
+                                           with: "$1persona-$2", options: .regularExpression)
             for pattern in [#"<attached_images>[\s\S]*?</attached_images>"#, #"<[\\/]*pasted_content[^>]*>"#, #"\[Image #\d+\]"#, #"\s+"#] {
                 t = t.replacingOccurrences(of: pattern, with: "", options: .regularExpression)
             }

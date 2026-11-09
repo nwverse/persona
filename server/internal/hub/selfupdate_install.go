@@ -2,6 +2,7 @@ package hub
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"os"
@@ -9,6 +10,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"slices"
+	"strconv"
 	"time"
 
 	"github.com/nwverse/persona/server/internal/i18n"
@@ -56,7 +58,11 @@ func (u *updater) install(ctx context.Context, auto bool) {
 	r := u.release
 	u.mu.Unlock()
 	started := time.Now()
+	// What this update downloads goes under staged. Once it fails nothing reads that again (another try downloads
+	// afresh), so it goes before another install can start.
+	staged := u.stagedDir(r.Manifest.Build)
 	fail := func(err error) {
+		u.removeDownloads(staged)
 		u.mu.Lock()
 		u.running, u.now = false, false
 		u.busy = nil
@@ -77,7 +83,6 @@ func (u *updater) install(ctx context.Context, auto bool) {
 		fail(err)
 		return
 	}
-	staged := filepath.Join(u.dir, fmt.Sprint(m.Build))
 	u.set("downloading", "hub", "")
 	bin, err := update.Download(ctx, u.client, u.h.build.UpdateURL, file, staged)
 	if err != nil {
@@ -201,6 +206,40 @@ func (u *updater) install(ctx context.Context, auto bool) {
 	}
 }
 
+// stagedDir is where the update to build downloads its files: the hub's binary, the node binaries in nodes/ and the
+// programs in programs/ (docs/operations/hub-update.md "Updating").
+func (u *updater) stagedDir(build int64) string {
+	return filepath.Join(u.dir, strconv.FormatInt(build, 10))
+}
+
+// removeDownloads removes an update's downloads once nothing reads them any more: after the update failed, was
+// confirmed (its node binaries are in NodeBinaryDir by then) or went back. Each one is tens to hundreds of MB.
+func (u *updater) removeDownloads(staged string) {
+	if err := os.RemoveAll(staged); err != nil {
+		u.h.logf("update: remove the downloads in %s: %v", staged, err)
+	}
+}
+
+// pruneDownloads removes the downloads of every update but the one to build keep (0: none) when the hub starts: one
+// that went back through the watchdog or the edge (both start the old build, which never knew of it), one a stop
+// cut short, and those an older build left. Only <build>/ directories go; the markers and logs beside them stay.
+func (u *updater) pruneDownloads(keep int64) {
+	entries, err := os.ReadDir(u.dir)
+	if err != nil {
+		if !errors.Is(err, os.ErrNotExist) {
+			u.h.logf("update: list the downloads: %v", err)
+		}
+		return
+	}
+	for _, e := range entries {
+		build, err := strconv.ParseInt(e.Name(), 10, 64)
+		if !e.IsDir() || err != nil || build <= 0 || build == keep || strconv.FormatInt(build, 10) != e.Name() {
+			continue
+		}
+		u.removeDownloads(filepath.Join(u.dir, e.Name()))
+	}
+}
+
 // nodePlatforms are the platforms the release publishes a node binary for, sorted. That is every platform in the
 // manifest, not only the ones the machines the hub knows now run: a machine added later, or one that had not connected
 // when the hub updated, is deployed to from these files (internal/devices nodeBinary), and nothing else fetches its
@@ -248,7 +287,9 @@ func (h *Hub) updateBusy() []busyItem {
 		m.mu.Lock()
 		resident := m.info.NodeUpdate // advertised only by a resident supervisor
 		m.mu.Unlock()
-		for _, s := range h.decorated(m) {
+		list := m.keptSessions() // only read, and no copy of it: the manager stamp is not read here
+		for i := range list {
+			s := &list[i]
 			// Terminal-host sessions outlive the node transport. Unknown hosts and
 			// direct assistant processes still wait: an ephemeral SSH node may own them.
 			if h.slot != nil && !h.upd.nodesEnabled() && m.cfg.Kind != "local" &&
@@ -258,7 +299,7 @@ func (h *Hub) updateBusy() []busyItem {
 			// On a turn, not working on in the background (#2228): a server an agent left running would hold the
 			// update back for as long as it runs, and the restart does not stop it.
 			if s.Status == proto.StatusWorking || s.State == proto.StateNeedsYou {
-				out = append(out, busyItem{MachineID: m.cfg.ID, Machine: m.name(), SessionID: s.SessionID, Title: agentTitle(s)})
+				out = append(out, busyItem{MachineID: m.cfg.ID, Machine: m.name(), SessionID: s.SessionID, Title: agentTitle(*s)})
 			}
 		}
 	}

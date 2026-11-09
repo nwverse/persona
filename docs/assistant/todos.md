@@ -34,6 +34,7 @@ Server state is stored in the hub's Postgres database (read/written by the assis
 - `reopened_at` (timestamptz): last time user reopened a completed to-do; assistant only judges automatic completion again after a new turn of work follows it.
 - `thread` (jsonb, NULL): the chat thread the to-do is bound to, `{"channel", "chat_id", "thread_id", "title"}` (#5279, "Chat thread" below); `NULL` while it has none. A `CHECK` requires all three keys, and a unique index `todos_thread` over `(thread->>'channel', thread->>'chat_id', thread->>'thread_id') WHERE thread IS NOT NULL` lets a thread belong to one to-do only. One value, read and written as a unit, hence a jsonb column like the ledger's `reviews` rather than four more columns on every to-do read; the binding goes with the row when the to-do is deleted.
 - `source` (jsonb, NULL): where the to-do was asked for when that is another chat, `{"channel", "chat_id", "message_id", "anchor"?, "no_report"?, "reported_at"?, "report_text"?, "report_due_at"?, "attempts"?}` (#6146, "Where it came from" below); `NULL` for any other to-do. Migration `0429` (manager side; first numbered 0428, which #6188 also took, so `db.go` renumbers it); a `CHECK` requires the three ids. Not unique (several to-dos may come from one message); one value read and written as a unit, hence jsonb like `thread`. Deleting the to-do deletes it.
+- `due_at` (timestamptz) / `due_date` (date): when it is due, a moment or a whole day in the user's time zone; at most one (`CHECK todos_due_one`). `remind_at` (timestamptz): when the phone is pushed about it; `reminded_at` (timestamptz): when that was claimed, cleared whenever `remind_at` changes. `priority` (text, NOT NULL, DEFAULT ''): `''` normal, `high`, `low` (`CHECK`). Migration `0442` (manager side, #1683, "Due date, reminder, priority" below).
 - (Not in the table) `stage`, `pr_url`, `delivery`: stage strip, PR and delivery-card location, stored in settings `assistant.todo_stages`, merged when reading to-dos ("Delivery").
 
 ### 2. todo_spaces table
@@ -99,11 +100,11 @@ Link/release semantics:
 
 | Method | Path | Description |
 | --- | --- | --- |
-| GET | `/api/v1/todos` | All to-dos (`created_at` descending), each with `spaces` and `agents` lists (removed rows filtered out; active first by `linked_at` descending, previously involved after by `released_at` descending) |
-| POST | `/api/v1/todos` | Create `{"title", "notes"?}` → `{"todo": Todo}`; nonempty `title` required (400); read-only role (watch) 403 |
-| PATCH | `/api/v1/todos/{id}` | Edit `{"title"?, "notes"?, "done"?}` → `{"todo": Todo}`; only supplied fields change; user completion-state changes clear `done_by` / `done_reason`, and reopening records `reopened_at`; missing 404; read-only role 403 |
+| GET | `/api/v1/todos` | All to-dos (`created_at` descending; the apps sort them themselves), each with `due_at` / `due_date`, `remind_at`, `reminded_at`, `priority` when set, and `spaces` and `agents` lists (removed rows filtered out; active first by `linked_at` descending, previously involved after by `released_at` descending) |
+| POST | `/api/v1/todos` | Create `{"title", "notes"?, "due_at"? \| "due_date"?, "remind_at"?, "priority"?}` → `{"todo": Todo}`; nonempty `title` required (400); `due_at` / `remind_at` RFC 3339, `due_date` `YYYY-MM-DD`, `priority` `high` / `normal` / `low` / `""`, anything else (or both due fields) 400; read-only role (watch) 403 |
+| PATCH | `/api/v1/todos/{id}` | Edit `{"title"?, "notes"?, "done"?, "due_at"? \| "due_date"?, "remind_at"?, "priority"?}` → `{"todo": Todo}`; only supplied fields change, `null` (or `""`) clears a due date or reminder; either due field replaces the other; a new `remind_at` is pushed again; user completion-state changes clear `done_by` / `done_reason`, and reopening records `reopened_at`; missing 404; read-only role 403 |
 | POST | `/api/v1/todos/retitle` | Give short titles to task to-dos previously named from the prompt's first line ("To-do titles") → `{"dry_run", "todos": [{"id", "old_title", "new_title"}]}`; `?dry_run=1` lists without changes; read-only role 403 |
-| POST | `/api/v1/todos/{id}/accept` | Verify a to-do from a briefing's Accept button `{"asked_at"}` (the `brief` feed item's `accept[].asked_at`, `docs/protocol/protocol.md`) → `{"ok":true}`; no `asked_at` 400; not the round that waits now (the to-do was reopened or asked again since), already verified or never asked 409; the ask may have no Lark card (the bot is not set up, or its task reports are off); read-only role 403 |
+| POST | `/api/v1/todos/{id}/accept` | Verify a to-do from a briefing's Accept button `{"asked_at"}` (the `brief` feed item's `accept[].asked_at`, `docs/protocol/protocol.md`) → `{"ok":true}`; no `asked_at` 400; not the round that waits now (the to-do was reopened or asked again since), already verified or never asked 409; the stored asks could not be read or the acceptance could not be saved 503 (nothing verified, the button works again); the ask may have no Lark card (the bot is not set up, or its task reports are off); read-only role 403 |
 | POST | `/api/v1/todos/{id}/done-check` | Run an "Automatic completion" judgment read-only → `{"verdict", "reason", "would_close", "skip", "replies", "signals"}`, no database write ("Automatic completion"); missing 404; read-only role 403 |
 | DELETE | `/api/v1/todos/{id}` | Delete to-do and associations → `{"ok": true}`; Agent sessions untouched; missing 404; read-only role 403 |
 | PUT | `/api/v1/todos/{id}/spaces/{mid}/{space...}` | Link an entire workspace project → `{"ok": true, "linked": N}`; `space` is URL-encoded project name (wildcard path); completed to-do cannot be linked (409); missing 404; read-only role 403 |
@@ -201,7 +202,8 @@ Clients calculate to-do runtime state live from linked active Agents; it is not 
 | 0 | Didn't Start | Agent for a task created from chat failed to launch; assistant ends the to-do (`done_at` + `start_error`, #1077); client shows failure/removal, not active |
 | 1 | Done | User marked done, or assistant judged a dispatched task complete (`done_at != null`; client shows **Auto-completed** for `done_by = "auto"`) |
 | 2 | Needs You | A linked active Agent is `needs_you` (waiting for question, plan approval or authorization) |
-| 2.5 | Interrupted | A linked active Agent is stopped (`unread` / `idle`) with `turn_error`: model-service failure interrupted the turn (disconnect, overload, rate limit, expired login…), unfinished (#1516); red, **Continue** on the card sends "继续" ("continue") |
+| 2.5 | Interrupted | A linked active Agent is stopped (`unread` / `idle`) with `turn_error`: model-service failure interrupted the turn (disconnect, overload, rate limit, expired login…), unfinished (#1516); red, **Continue** on the card sends "继续" ("continue"). A subscription usage limit is not this (the next row) |
+| 2.6 | Usage limit | A linked active Agent is stopped with `turn_error_kind` `usage_limit`, and the reset is not known or not more than 10 minutes past. Not red and not Interrupted: "Usage limit · resumes <time>" when the CLI or the hub will continue it, "Usage limit · resets <time>" when nothing will. An older hub that does not send the kind stays Interrupted |
 | 3 | Unread | A linked active Agent is `unread` (task finished, not viewed yet) |
 | 4 | Active | A linked active Agent is `working` (working or starting) |
 | 5 | Follow up | All linked active Agents are stalled (`idle` seen, `offline` not running, or launch failed) |
@@ -287,6 +289,14 @@ effective from the next judgment and next dispatched task. When on:
   Assistant CLAUDE.md tells it to present these together in one message; after user approves in one reply, use `agent_send` to notify the corresponding Agents separately, rather than asking anew for every item.
 
 ## Close Agents for completed tasks
+
+Completing a to-do stops Persona's automatic follow-ups for its linked Agents, including when a turn ends after
+completion: no transient-error retry, usage-limit continuation, scheduled wake or new triage card. Triage may still
+record the turn's work state. The check runs before scheduling and again before sending, including after a manager
+restart. It applies to manually linked to-dos too, regardless of whether the Agent can be closed. Released or dismissed
+links do not count, and an Agent linked to an open to-do can still receive follow-ups. Deleting a to-do leaves its Agents
+unaffected. Direct chat messages and `agent_send` still work; a user-completed to-do stays done until explicitly reopened,
+while a hub-completed task reopens on new work as described below.
 
 After a task dispatched from assistant chat (nonempty `origin`) completes—manually or automatically—its Agent no longer occupies a herdr tab:
 assistant checks every minute (`assistant/tasks_close.go`, reading hub's App-facing session list through `sessions.list`); once task completion and Agent inactivity both reach 3 minutes (`taskCloseIdle`, measured from the later of completion time and last activity), ask node to close it (`session.retire`, `node/retire.go`):
@@ -432,6 +442,29 @@ Step 3 of the three-loop process (#2820): Agent conclusions automatically settle
 
 Not yet: manual editing/undo of conclusions (currently **Replace** in decisions), Lark reporting (#2768), iOS / Android decision lists.
 
+## Due date, reminder, priority
+
+#1683. A to-do can be due at a moment (`due_at`) or on a day (`due_date`, read in the user's time zone: due by the end of it), have a reminder (`remind_at`) and a priority. The assistant's `remindLoop` (`todo_plan.go`) sleeps until the next reminder (at most a minute, woken when the to-dos change) and pushes each one once when it is due:
+
+- It claims the reminder in the store first (`reminded_at` set only while `remind_at` is still that moment, not yet pushed and the to-do not done), then pushes it like `notify_user`: to every device (opening the main conversation) and to the Feishu bot and the channels with pushes on. A claimed push that is lost is not retried; a reminder is never pushed twice, by a restart or a second manager.
+- The push's title is the to-do's, its body the due date (or "was due" once it has passed), the first line of the notes, and when it went out more than two minutes late (the manager was down), the time it was for.
+- A done to-do is not reminded; changing `remind_at` re-arms it; a mesh member on standby leaves it to the center, as with scheduled tasks.
+
+## The assistant's todo tools
+
+#1683. The assistant has the user's to-dos as MCP tools (`todo_tools.go`, descriptions in `prompts/mcp/todo/`), so it can note what the user asks it to, or a batch of deadlines from a mail, without a hub token:
+
+| Tool | What it does | Confirmed on the phone |
+| --- | --- | --- |
+| `todo_list` | Open to-dos by default, earliest due first (none last), filtered by state, due before / after, overdue, with or without agents, words | — |
+| `todo_get` | One in full: notes, agents, the task it is, decisions in force | — |
+| `todo_create` | `title`, `notes`, `due` (a day, a moment in the user's time zone or RFC 3339, `2h` / `3d`), `remind` (a moment, not past), `priority`; an open to-do with the same title and due date is returned instead of made twice | No |
+| `todo_update` | Title, notes, due, remind, priority; `""` clears | No |
+| `todo_complete` / `todo_reopen` | Mark done / open again | Only for a task, or a to-do agents work on (completing closes its agents) |
+| `todo_delete` | Delete for good | Always |
+
+A to-do it makes is the user's own (no `origin`): work for an agent still goes through `task_plan`. In a health conversation, anything that writes asks first (`confirmOutbound`, `health.md`). The generated CLAUDE.md tells the assistant to use `todo_create` when the user says to note a to-do or to remind them of something.
+
 ## Interaction design across clients
 
 ### 1. Sidebar and main navigation
@@ -442,6 +475,8 @@ Not yet: manual editing/undo of conclusions (currently **Replace** in decisions)
 - Details: edit title/notes directly; current state; linked projects (whole-project links) and active Agents (state dot, title, machine/workspace labels, latest-message summary, update time, tap to chat; beyond session time window use snapshot and mark "Ended"; launch failures show reason/removal); collapsed "Previously involved" list; persistent bottom **Hand to Agent** and **Done / Reopen** buttons; delete in top-right more menu.
 - **Decisions** section under notes (web): effective decisions chronologically (question, choice, reason, time, provenance), each can **Change decision** (write a replacement) or ⋯ **Which decision did this replace?** / **Undo replacement**; when superseded records exist, **View full history**, with old records struck through. Hide whole section if hub unsupported (route 404).
 - **Projects** section above Agents: each row "project · machine", with **Remove**; projects without online Agents show "No Agents currently": only sessions in current hub group, on connected computers, not offline count (same-ID computers in other groups do not; disconnected computer sessions marked unknown by hub rather than offline do not count either, matching web). Agent source says "With project <name>" or "Dispatched by <parent title>"; missing project source shows only "With project", missing parent only "Spawned", manual links unlabelled.
+
+- **Due date, reminder, priority** (#1683): under a row's status, a flag for high priority, the due date ("Due Thu, Nov 12, 18:00", or the day alone; red and "Was due" once it has passed) and a bell while a reminder is still to be pushed. Open to-dos are ordered with what needs the user (needs you, unread; on the web also interrupted and awaiting review) first, then by due date, earliest first, then those without one as before (iOS / Mac `TodosLogic.sortTodos`, web `sortTodos`, Android `ordered`). The detail edits them: iOS / Mac a section of switches and pickers under the title (due date with All Day, Remind Me, Priority), saved shortly after each change (`TodoPlanSection`); the web a row of date / time / datetime inputs and a priority menu (`TodoPlanEditor`); Android shows the line on the list only so far. Checked by `TodoPlanTests` (iOS UI, mock hub) and `scripts/test/web_todo_plan_e2e.py`.
 
 ### 3. Hand to Agent
 - **Start a new one** or **Hand to an existing one**.

@@ -22,9 +22,6 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
-import androidx.lifecycle.Lifecycle
-import androidx.lifecycle.LifecycleEventObserver
-import androidx.lifecycle.compose.LocalLifecycleOwner
 import persona.core.contracts.Interaction
 import persona.core.contracts.Machine
 import persona.core.contracts.Resolution
@@ -141,22 +138,13 @@ internal fun InteractionForm(
         }
     }
     val secret = interaction.secret == true
-    // Secrets live only in this visible form, never in saved state or request drafts.
-    var password by remember(interaction.id) { mutableStateOf("") }
-    val lifecycle = LocalLifecycleOwner.current.lifecycle
-    DisposableEffect(lifecycle, interaction.id) {
-        val observer = LifecycleEventObserver { _, event ->
-            if (event == Lifecycle.Event.ON_STOP) password = ""
-        }
-        lifecycle.addObserver(observer)
-        onDispose { password = ""; lifecycle.removeObserver(observer) }
-    }
+    // Secrets (a terminal's password, a password card's) live only in this visible form, never in saved state or request drafts.
     var terminalHelp by remember { mutableStateOf(false) }
     val now by produceState(Instant.now(), interaction.expiresAt) {
         while (true) { value = Instant.now(); delay(1_000) }
     }
     val expired = RequestExpiry.expired(interaction.expiresAt, now)
-    LaunchedEffect(expired, uncertain) { if (expired || uncertain) password = "" }
+    var password by rememberTransientSecret(interaction.id, clearWhen = expired || uncertain)
     // A session whose source cannot approve (blockedReason) shows the request but answers nothing, not even "Handle on computer".
     val blocked = blockedReason != null
     val context = AnswerContext(state = if (expired || uncertain || readOnly || linkVisible || blocked) "unknown" else "pending", sending = busy,
@@ -185,8 +173,13 @@ internal fun InteractionForm(
     } ?: fallback?.options.orEmpty()
     val actions: @Composable () -> Unit = {
         when (interaction.kind) {
-            // A password card is filled in only on the iPhone (#1137): here it can only be declined.
-            "permission" -> if (interaction.isSecretRun) SecretRunActions(enabled(AnswerAction.Deny)) { act(AnswerAction.Deny) } else {
+            // A password card (#1137, #1581): its password, Decline and Run, nothing else.
+            "permission" -> if (interaction.isSecretRun) SecretRunActions(password, { password = it }, editable,
+                canDecline = enabled(AnswerAction.Deny),
+                canRun = AnswerBuilder.build(interaction, AnswerAction.Allow, AnswerDraft(password = password), context).allowed,
+                onDecline = { act(AnswerAction.Deny) }, onRun = { act(AnswerAction.Allow, AnswerDraft(password = password)) },
+                // Room between the dock's divider and the field's label.
+                modifier = Modifier.padding(top = Tokens.Space.s)) else {
                 // "Always" is Claude's, or another agent's when its TUI says what it would allow (as on iOS).
                 DecisionButtons(
                     primary = JAction(stringResource(R.string.chat_request_allow), enabled = enabled(AnswerAction.Allow)) { act(AnswerAction.Allow) },

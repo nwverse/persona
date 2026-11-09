@@ -188,6 +188,8 @@ Five minutes after node starts, it logs average duration once (`metrics: a sampl
 ## Storage and retention
 
 On receipt, the manager retains the latest sample in memory (Dashboard **Now**, not current if older than 30 seconds) and writes it to `machine_metrics` (raw `step = 10` row).
+
+The main assistant's read-only `machines_list` tool combines the trusted machine list with the manager's last system information and sample, working agent count, recent failing launchers and node version status. It reports the list's completeness and excluded count; machines that belong to another manager or are not trusted are not exposed. Connection, session and launcher records have separate availability: an empty failure list means no recent failure is recorded, not that every launcher was checked. Values whose source is missing, ambiguous, offline, stale or has a future timestamp are null with a reason. Samples over 30 seconds old retain their age but are not current; a sample from before the current connection is not current either. System information is the last reported information and may persist while offline; memory and disk availability follow the collection definitions above, and disk is an aggregate rather than necessarily the work directory's filesystem. Node builds that differ cannot be ordered by their identifiers, so a different build alone is not called outdated. The tool returns facts without ranking machines.
 Every minute `metricsLoop`:
 
 1. **Downsamples** raw rows older than an hour into one row per machine per minute (`step = 60`): averages values and takes maximum totals (memory, disk, etc.).

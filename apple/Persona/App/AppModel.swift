@@ -287,6 +287,7 @@ final class AppModel {
 
     init(stateFolder: URL? = nil) {
         self.stateFolder = stateFolder
+        RetiredPreferences.clear(from: .standard)
         TextSize.current.applyToMacFonts() // what `textSize` starts at
         Task.detached(priority: .utility) { LarkAttachment.staging.sweep() }
         connection = ConnectionStatus()
@@ -612,6 +613,13 @@ final class AppModel {
         let link = makeLink("", config)
         links = [link]
         hubGroup = ""
+        // Fixture frames replace the scenario inventory, not a paired app's restored snapshot.
+        // Keep chat caches and the outbox: relaunch scenarios intentionally exercise their persistence.
+        machines = []
+        sessionsByMachine = [:]
+        sessionLists.forget()
+        pendingSessions = [:]
+        interactions = [:]
         link.live.connect(config)
     }
     #endif
@@ -2455,6 +2463,12 @@ final class AppModel {
         launcherDefaults = [:]
     }
 
+    /// The list a start picks from (New Agent, Run Agent Here): always read again, and the cache with it. Each launcher's
+    /// health on the computer (#1643) changes behind the cache: a start that fails can block one, one that works clears it.
+    func launchersForStart(_ machine: MachineRef) async throws -> [Launcher] {
+        try await launchers(machine, refresh: true)
+    }
+
     func launchers(_ machine: MachineRef, refresh: Bool = false) async throws -> [Launcher] {
         if !refresh, let cached = launcherCache[machine] { return cached }
         guard let api = api(machine.group) else { return [] }
@@ -2518,13 +2532,6 @@ final class AppModel {
 
     /// Agents (not the assistant) waiting on the user, not muted: the Agents tab's badge, the shell's Agents.
     var agentsWaiting: Int { badges.agents }
-
-    /// Settings › Appearance › Old Layout (2026-11-01, docs/apple/ios.md「新外壳」): on, the iPhone keeps the four tabs exactly as before;
-    /// off (the default), it is the ChatGPT-style shell (Assistant | Agents, the drawer, Settings as a sheet). Kept for a few days
-    /// of transition. iPad, iPhone Duo open and the Mac always use their own layouts.
-    var oldLayout: Bool = UserDefaults.standard.bool(forKey: "ui.oldLayout") {
-        didSet { UserDefaults.standard.set(oldLayout, forKey: "ui.oldLayout") }
-    }
 
     /// The shell's Settings sheet is up. Here and not in the shell's state: picking a style in it rebuilds the whole tree
     /// (`look`), and the rebuilt shell puts the sheet back on the same page (`settingsPath`).
@@ -2906,7 +2913,7 @@ final class AppModel {
             let (machines, _, ixs) = try await (m, s, i)
             guard self.link(group) === link else { return } // removed meanwhile
             replaceMachines(group, machines)
-            if page.paged { page.invalidate() }
+            // refresh() already reconciles the loaded paging window and its counts.
             replaceInteractions(group, ixs, askedAt: asked)
             link.live.ensureConnected()
         } catch {

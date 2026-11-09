@@ -366,7 +366,7 @@ struct AgentsGroupingMenu: View {
 }
 
 /// The personal agents page, one tap away beside the grouping (#140): on a phone the shell has no other way there (the
-/// old layout, iPad and Mac have the toolbar's button).
+/// iPad and Mac use the toolbar's button).
 struct AgentsPersonalPill: View {
     var open: () -> Void
 

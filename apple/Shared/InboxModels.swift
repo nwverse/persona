@@ -458,6 +458,25 @@ extension APIClient {
 
     private struct InboxText: Codable { var text: String }
     private struct InboxReplyBody: Encodable { var text: String; var changes: [InboxItem.DocChange]?; var card: String? }
+    private struct InboxHandoffBody: Encodable { var text: String; var clientID: String
+        enum CodingKeys: String, CodingKey { case text, clientID = "client_id" }
+    }
+    private nonisolated struct InboxHandoffResponse: Decodable, Sendable {
+        struct Ref: Decodable, Sendable { var machineID: String; var sessionID: String
+            enum CodingKeys: String, CodingKey { case machineID = "machine_id", sessionID = "session_id" }
+        }
+        var item: InboxItem?
+        var session: Ref
+
+        enum CodingKeys: String, CodingKey { case item, session }
+
+        /// An item this app can't read never turns a hand-off that went into a failure (its retry would send it again).
+        init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+            item = try? c.decodeIfPresent(InboxItem.self, forKey: .item)
+            session = try c.decode(Ref.self, forKey: .session)
+        }
+    }
     private struct InboxDraftBody: Encodable { var instruction: String }
 
     /// A reply drafted by the hub's model; `instruction` steers it ("Agree, but later next week").
@@ -473,10 +492,32 @@ extension APIClient {
                        timeout: 60)
     }
 
+    /// Hand to AI's main chat (#1194, docs/assistant/inbox.md "Item actions"): the item's manager sends `text` after a
+    /// block naming the item to its main conversation (starting it with it when there is none), once per `clientID`, and
+    /// links the item to it, which may then write back to the item. Answers the item as it is now and the conversation.
+    /// Older hubs and managers answer 404 / 405.
+    func inboxHandoff(_ id: String, text: String, clientID: UUID) async throws -> InboxHandoffAnswer {
+        let data = try await request("POST", "/api/v1/inbox/" + id + "/handoff",
+                                     body: InboxHandoffBody(text: HubNaming.outbound(text, canonical: personaNaming), clientID: clientID.uuidString.lowercased()),
+                                     timeout: 120)
+        // The receipt is keyed on client_id, not the operation header: a repeat the hub can't answer yet comes back as
+        // the bare receipt, which no answer looks like.
+        try Self.checkReceipt(data, status: nil)
+        let r = try JSON.decoder.decode(InboxHandoffResponse.self, from: data)
+        return InboxHandoffAnswer(item: r.item, session: SessionKey(group: group, machineID: r.session.machineID, sessionID: r.session.sessionID))
+    }
+
     /// Moves one row's status in the document; the item comes back read again.
     func inboxDocStatus(_ id: String, _ change: InboxItem.DocChange) async throws -> InboxItem {
         try await post("/api/v1/inbox/" + id + "/doc/status", body: change, timeout: 60, as: InboxItem.self)
     }
+}
+
+/// What `POST /api/v1/inbox/{id}/handoff` answers: the item (nil from a hub that leaves it out) and the conversation it
+/// was handed to.
+nonisolated struct InboxHandoffAnswer: Sendable {
+    var item: InboxItem?
+    var session: SessionKey
 }
 
 /// A mute the user set (GET /api/v1/inbox/mutes): nothing of `value` under `tag` in `source` comes into the inbox.

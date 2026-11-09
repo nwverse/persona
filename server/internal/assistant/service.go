@@ -90,6 +90,7 @@ type Service struct {
 	upReports  reportRate        // agent_control.go: report_to_supervisor
 	noteRate   reportRate        // todo_decisions.go: todo_decision_add
 	adoptMu    sync.Mutex        // agent_control.go: one agent_supervise at a time
+	placeBook  placeBook         // places.go
 	accept     acceptBook        // acceptance.go
 	later      laterBook         // later.go: questions that can wait for a briefing
 	brief      briefBook         // briefing.go
@@ -107,6 +108,8 @@ type Service struct {
 	tposts     threadPoster      // feishu_thread_posts.go: what a todo tells its chat thread
 	tevents    todoEvents        // todo_events.go: what the extensions are told of the todos
 	standing   standingBoard     // feishu_board.go: the standing "waiting for you" card
+	workbench  workbenchState    // feishu_workbench_pin.go: the pinned workbench
+	companions companionState    // feishu_companions.go: the notices for a companion bot
 	kb         kbState           // kb.go
 	inbox      inboxBook         // inbox.go
 	board      boardBook         // workspace_board.go: the workspace board
@@ -155,6 +158,7 @@ func New(o Options) *Service {
 	s.readinessRoutes()
 	s.startRoutes()
 	s.scheduleRoutes()
+	s.placeRoutes()
 	s.taskRoutes()
 	s.viewActionRoutes()
 	s.todayRoutes()
@@ -163,6 +167,7 @@ func New(o Options) *Service {
 	s.agentRoutes()
 	s.workspaceBoardRoutes()
 	s.channelRoutes()
+	s.companionRoutes()
 	s.kbInit(o.KB)
 	s.kbRoutes()
 	s.inboxRoutes()
@@ -218,7 +223,7 @@ func (s *Service) lang(ctx context.Context) i18n.Lang {
 
 // call is a DeviceCall whose answer is read into out (nil: not read).
 func (s *Service) call(ctx context.Context, device, method string, params, out any) error {
-	if p, ok := params.(map[string]any); ok && method == DeviceAssistantSend {
+	if p, ok := params.(map[string]any); ok && method == DeviceAssistantSend && p["supervision"] != true {
 		if id, _ := p["session_id"].(string); id != "" && s.supervising(id) {
 			s.releasePushes(ctx, id) // something else speaks there: its turns are pushed again (a supervision message holds them anew)
 		}
@@ -458,6 +463,8 @@ func (s *Service) TurnEnded(ctx context.Context, r SessionRef) {
 	go s.taskTurnEnded(context.WithoutCancel(ctx), r.MachineID, r.SessionID)
 	go s.workTurnEnded(context.WithoutCancel(ctx), r.MachineID, r.SessionID)    // its triage (agents_work_turns.go)
 	go s.channelTurnEnded(context.WithoutCancel(ctx), r.MachineID, r.SessionID) // a channel's answer, the sync mirror
+	// A usage limit marks the launcher there until it resets (launcher_health.go).
+	go s.launcherLimitTurnEnded(context.WithoutCancel(ctx), r.MachineID, r.SessionID)
 	s.titleAfterTurn(ctx, r.MachineID, r.SessionID)
 }
 
