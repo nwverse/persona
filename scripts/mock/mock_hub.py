@@ -255,6 +255,12 @@ def day_from_now(days):
     return (NOW + timedelta(days=days)).date().isoformat()
 
 
+def today_at(hour, minute=0, days=0):
+    """A to-do's due_at at a clock time on this machine (#2029's calendar: 18:00 today, not 50 hours from now), as UTC."""
+    local = (NOW.astimezone() + timedelta(days=days)).replace(hour=hour, minute=minute, second=0, microsecond=0)
+    return local.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
 def _mock_qr(text, n=29):
     """A QR-looking grid of "0" / "1" rows for text: three finder squares and noise from its hash (not scannable)."""
     seed = hashlib.sha256(text.encode()).digest()
@@ -1704,8 +1710,9 @@ TODOS_INIT = [
         "id": "todo_weather",
         "title": "天气 App 发 1.3 版",
         "notes": "1.3 的内容：主屏幕小组件、网络层补测试、发布说明。周五前提交审核。",
-        # Due at a moment (#1683): the list shows it under the title, the detail page edits it.
-        "due_at": later(hours=50),
+        # Due at a moment (#1683): the list shows it under the title, the detail page edits it; on the calendar (#2029)
+        # beside the blog's at the same time.
+        "due_at": today_at(18),
         # The stage bar on the todo detail (#2776): how far the work got, and the PR it is in.
         "stage": "develop",
         "pr_url": "https://example.com/pull/128",
@@ -1802,6 +1809,7 @@ TODOS_INIT = [
     {
         "id": "todo_blog",
         "title": "博客迁移到 Astro",
+        "due_at": today_at(18),
         "notes": "32 篇文章都能正常构建，旧链接全部加了 301 跳转。",
         # The stage bar on the todo detail (#2776): how far the work got, and the PR it is in.
         "stage": "review",
@@ -1828,6 +1836,7 @@ TODOS_INIT = [
     {
         "id": "todo_orders",
         "title": "排查 /orders 接口变慢",
+        "due_at": today_at(16),
         "notes": "慢在订单列表的 N+1 查询，正在改成一次 JOIN 并补索引。",
         "done_at": None,
         "created_at": ago(hours=6),
@@ -1851,6 +1860,7 @@ TODOS_INIT = [
     {
         "id": "todo_review",
         "title": "检查 PR #42",
+        "due_at": today_at(10),  # #2029: the calendar's day has a morning, an afternoon and an evening
         "notes": "PR #42 看完了：逻辑没问题，留了两条关于命名的小建议。",
         "done_at": None,
         "created_at": ago(hours=8),
@@ -4819,6 +4829,10 @@ PREFS = {"input": True, "done": "long", "live_activity": True, "lock_details": F
          # quiet hours (#5806): never set until a client sets them; MOCK_QUIET_HOURS=1 starts with 23:00–07:00 on
          "quiet": {"enabled": True, "start": "23:00", "end": "07:00"} if os.environ.get("MOCK_QUIET_HOURS") else {"enabled": False, "start": "", "end": ""}}  # one device is enough
 RESOLVED = []  # resolve calls, newest last (GET /mock/resolved)
+# The last client_hello's features, platform and version, and the X-Persona-Client of the last GET /api/v1/interactions
+# (GET /mock/hello): the hub lists MCP elicitation cards in REST answers only when the two match (docs/protocol/protocol.md
+# "MCP elicitation").
+HELLO = {}
 # Settings › Connectors › Lark bot (GET/PUT /api/v1/bots/feishu); MOCK_BOT=pairing shows a code waiting, =off a fresh hub.
 FEISHU_BOT = {"enabled": True, "app_id": "cli_example0001", "domain": "https://open.feishu.cn", "has_secret": True,
               "from_config": False, "connected": True, "bot_name": "Persona", "target": "主对话",
@@ -7959,6 +7973,26 @@ def mock_report_fold():
 
 if os.environ.get("MOCK_REPORT_FOLD") == "1":
     mock_report_fold()
+
+
+# MOCK_REPLY_BREAKS=1: a reply written line by line (#2088): bold lines with steps right under them, one list numbered
+# on from 5, and a bold line with its sentence on the next line; in an Agents chat and at the end of Persona's
+# conversation. Synthetic text.
+BREAKS = "a1f3c2d4-0000-4000-8000-0000000c1e0b"
+BREAKS_REPLY = ("有两种做法：\n\n**直接在测试环境复现**\n1. 用昨天的构建装一台测试机\n2. 按报告里的步骤操作一遍\n"
+                "3. 录屏，记下出错的那一步\n4. 把录屏发到群里\n\n**也可以先看日志，更快**\n5. 附上出错时间前后五分钟的日志\n"
+                "6. 标出第一条报错\n7. 对照最近的改动找原因\n\n**怎么确认修好了**\n同样的步骤再走一遍，页面不再卡住，日志里没有新的报错。")
+
+
+def mock_reply_breaks():
+    ITEMS[BREAKS] = [it("user", "text", 6, text="设置页偶尔卡住，怎么查？"), it("assistant", "text", 5, text=BREAKS_REPLY)]
+    SESSIONS.append(sess("macbook", BREAKS, "设置页卡住", "/Users/me/code/shop-app", "done", "unread", "shop-app", 19, "breaks", 1, 5,
+                         "怎么确认修好了。"))
+    ITEMS[ASK1] = ITEMS[ASK1] + [it("user", "text", 2, text="设置页偶尔卡住，怎么查？"), it("assistant", "text", 1, text=BREAKS_REPLY)]
+
+
+if os.environ.get("MOCK_REPLY_BREAKS") == "1":
+    mock_reply_breaks()
 
 
 # MOCK_WORK_GROUPS=1: one finished conversation with every way a work group reads (#1963, web): a short run (five steps
@@ -13854,7 +13888,9 @@ class H(BaseHTTPRequestHandler):
             t = next((x for x in TODOS if x["id"] == tid), None)
             if not t: return self.send_json({"error": "待办不存在"}, 404)
             return self.send_json({"todo": format_todo(t)})
-        if p == "/api/v1/interactions": return self.send_json({"interactions": out_by_machine(mock_interactions())})
+        if p == "/api/v1/interactions":
+            HELLO["request_client"] = self.headers.get("X-Persona-Client")
+            return self.send_json({"interactions": out_by_machine(mock_interactions())})
         if p == "/api/v1/fleet":
             return self.send_json({"fleet": mock_fleet() if MOCK_FLEET else {"phase": "", "needsYou": 0, "working": 0, "unread": 0, "items": []}})
         if p == "/api/v1/interactions/history":
@@ -13862,6 +13898,7 @@ class H(BaseHTTPRequestHandler):
         if p == "/mock/delegate": return self.send_json(*mock_delegate(q))
         if p == "/mock/reanswered": return self.send_json({"reanswered": REANSWERED})
         if p == "/mock/resolved": return self.send_json({"resolved": RESOLVED})
+        if p == "/mock/hello": return self.send_json(HELLO)
         if p == "/mock/phone":
             with FAULT_LOCK:
                 return self.send_json({"registrations": [x["registration"] for x in PHONES.values()], "results": TOOL_RESULTS})
@@ -16084,6 +16121,7 @@ class H(BaseHTTPRequestHandler):
                             hb_condition.notify()
                     with FAULT_LOCK:
                         client["features"] = set(declared)
+                    HELLO.update(features=declared, platform=msg.get("platform"), version=msg.get("version"))
                     send({"type": "client_hello_ack", "heartbeat": dict(heartbeat)})
                     continue
                 if msg.get("type") == "ping":

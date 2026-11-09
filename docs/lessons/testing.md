@@ -762,4 +762,6 @@ To check that a failure is this, move `dev.json` aside in the app's data contain
 
 - Tests that isolate the runtime home must clear both supported environment names through `compat.EnvNames`; child environments use `compat.ReservedEnv` to filter the reserved prefixes. Reuse the compatibility boundary rather than copying legacy literals into new test carriers (#2347).
 
+- Manager hello also runs on Hub instances without an updater, including the mesh harness. Withhold node deployment until the policy reader is available; do not make hello initialize an updater or assume a startup opt-in overrides an unread persisted choice (#2616).
+
 - In the mock hub's request handler, a local binding can shadow a module helper even in a route that never runs: delayed closures capture the local cell and fail before publishing. Name inbox records explicitly so the transcript item factory remains callable, and retain subprocess stderr when diagnosing missing asynchronous pushes (#2523).
