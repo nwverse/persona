@@ -623,3 +623,17 @@ A purpose-level model override does not change the managed launcher's default. L
 ## A Codex assistant conversation needs its own "process gone" row (2026-11-09, #2126)
 
 `scanOffline` reads only Claude's projects and `codexSessions` leaves the assistant's conversations out of Agents, so a Codex main conversation had no row once its idle process was reaped. A client with no row can't send, so the composer turned off and the message that would resume it could not go. `codexAssistantsAtRest` in `server/internal/node/sessions_offline.go` lists them now.
+
+## A Claude Code hint can depend on the terminal, not only the version (2026-11-09, #2467, 2.1.311)
+
+The node knew one send-now hint, `ctrl+x ctrl+s to send now` (measured on 2.1.319), and told the user to update Claude Code when it
+didn't see it. 2.1.311 binds `ctrl+x ctrl+s` and `ctrl+enter` both to `chat:sendNow`, but its hint names `ctrl+enter` only where the
+terminal reports extended keys and `$TMUX` / `$STY` are unset (a herdr pane), and `ctrl+x ctrl+s` otherwise. The same binary shows
+either one.
+
+- Capture a hint in the engine the node drives (a herdr pane, not tmux or a plain terminal) before writing the string into code; a
+  version number alone doesn't pin the text. The bundled code that chooses among a key's bindings shows which ones it may name.
+- Press the keys the screen names. When the node doesn't recognize a hint, it reports exactly that (`send_now_unrecognized`) and
+  presses nothing. Saying "update Claude Code" sent the user after a fix that didn't exist.
+- To check that a key really arrives, run a control: a plain Enter on the empty prompt left the queue as it was, while `ctrl+enter`
+  (herdr's key name, or the CSI u bytes `ESC [13;5u`) sent it. Confirm in the transcript (`queue-operation remove`), not only on screen.
