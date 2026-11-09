@@ -209,7 +209,8 @@ extension InboxPolicy {
             : String(localized: "Offline: its rules show here once it is back.")
     }
 
-    /// Takes a rule out at once (on its manager); a failure puts it back, into its manager's group.
+    /// Takes a rule out at once, naming its manager even when it is the default now (it may have changed since the list
+    /// was read); a failure puts it back, into its manager's group.
     func remove(_ p: InboxPolicy) async {
         guard case .loaded(let list) = state, let api = deps.api() else { return }
         let gone = { (q: InboxPolicy) in q.id == p.id && q.manager == p.manager }
@@ -217,7 +218,7 @@ extension InboxPolicy {
         state = .loaded(list.filter { !gone($0) })
         shares = shares?.map { var s = $0; s.items.removeAll(where: gone); return s }
         do {
-            try await api.manager(deps.roster().map { $0.naming(p.manager) } ?? p.manager).deleteInboxPolicy(p.id)
+            try await api.manager(p.manager).deleteInboxPolicy(p.id)
             // A reload read before the removal reached the hub may have brought it back.
             if case .loaded(let now) = state { state = .loaded(now.filter { !gone($0) }) }
             shares = shares?.map { var s = $0; s.items.removeAll(where: gone); return s }

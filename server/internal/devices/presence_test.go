@@ -415,7 +415,11 @@ func TestLinkRang(t *testing.T) {
 	}
 	got := make(chan bool, 1)
 	go func() { got <- d.LinkRang(context.Background(), "ix-3", 5*time.Second) }()
-	time.Sleep(50 * time.Millisecond)
+	select {
+	case ok := <-got:
+		t.Fatalf("LinkRang ended with %v before the app confirmed the card", ok)
+	case <-time.After(50 * time.Millisecond):
+	}
 	c.send(t, rangMsg("ix-3"))
 	if !<-got {
 		t.Fatal("a confirmation that came while LinkRang waited")
@@ -429,11 +433,24 @@ func TestLinkRangOutlivesAGap(t *testing.T) {
 	c, l := activeDesktop(t, d, notifying(0, "ix-1", "ix-2"))
 	got := make(chan bool, 1)
 	go func() { got <- d.LinkRang(context.Background(), "ix-1", 10*time.Second) }()
-	time.Sleep(50 * time.Millisecond)
+	select {
+	case ok := <-got:
+		t.Fatalf("LinkRang ended with %v before the gap", ok)
+	case <-time.After(50 * time.Millisecond):
+	}
 	c.send(t, presenceMsg(false, true, 0))
 	eventually(t, 5*time.Second, "no desktop", func() bool { return !isDesktop(l.m) })
 	c.send(t, rangMsg("ix-2")) // wakes the wait while there is no desktop
-	time.Sleep(50 * time.Millisecond)
+	eventually(t, 5*time.Second, "the confirmation during the gap taken", func() bool {
+		l.heldMu.Lock()
+		defer l.heldMu.Unlock()
+		return slices.Contains(l.held.rang, "ix-2")
+	})
+	select {
+	case ok := <-got:
+		t.Fatalf("LinkRang ended with %v during the gap", ok)
+	case <-time.After(50 * time.Millisecond):
+	}
 	c.send(t, presenceMsg(true, true, 60_000))
 	eventually(t, 5*time.Second, "the desktop back", func() bool { return isDesktop(l.m) })
 	c.send(t, rangMsg("ix-1"))
@@ -609,13 +626,14 @@ func TestLinkRangWithinTheDeadlineWhileTheHubIsSlow(t *testing.T) {
 	})
 	release := d.host().hold(devicewire.EventDesktops)
 	defer release()
-	d.requestDesktops(true) // the reporter is now stuck in the hub's hands
+	stuck := d.requestDesktops(true) // the reporter is now stuck in the hub's hands
+	eventually(t, 5*time.Second, "a report held at the hub", d.host().held)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	first := make(chan bool, 1)
 	go func() { first <- d.LinkRang(ctx, "ix-1", time.Minute) }()
-	time.Sleep(50 * time.Millisecond)
+	eventually(t, 5*time.Second, "LinkRang waiting for the report", func() bool { return d.desktopsRep.asked.Load() > stuck })
 
 	start := time.Now()
 	if d.LinkRang(context.Background(), "ix-2", 300*time.Millisecond) {

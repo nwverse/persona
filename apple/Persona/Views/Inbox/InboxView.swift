@@ -812,7 +812,7 @@ struct InboxDetailView: View {
         } else if let m = current.moment {
             LarkMomentsPostView(postID: m.postID, pushed: true, manager: model.linkManager(current.manager)) // the post and its comments, as a shared Moments card opens
         } else if let c = item.larkConversation {
-            LarkChatView(conversation: c)
+            LarkChatView(conversation: c, manager: model.linkManager(current.manager))
         } else if let m = item.mailSummary {
             MailDetailView(summary: m, accounts: accounts)
         } else {

@@ -27,19 +27,19 @@ extension APIClient {
 
 /// What a Feishu view can open from another: a chat, a document, a person, a company-feed (Moments) post. Persona is
 /// not a second Feishu: there are no browsing screens, only what a link or a message leads to. The navigation stack that owns a
-/// Feishu view resolves these with `.feishuRoutes()`. A document's and a post's `manager` is the one they are read
-/// through (the chat's or inbox item's the link was in, docs/assistant/managers.md "Clients"); nil: the default's.
+/// Feishu view resolves these with `.feishuRoutes()`. A chat's, a document's, a person's and a post's `manager` is the one they are
+/// read through (the chat's or inbox item's the link or profile was in, docs/assistant/managers.md "Clients"); nil: the
+/// default's.
 enum FeishuRoute: Hashable {
-    case chat(LarkConversation)
+    case chat(LarkConversation, manager: String? = nil)
     case doc(url: String, title: String?, manager: String? = nil)
-    case profile(LarkPersonRef)
+    case profile(LarkPersonRef, manager: String? = nil)
     case momentsPost(id: String, manager: String? = nil)
 
-    /// The manager it is read through; nil for the default's, and for chats and people.
+    /// The manager it is read through; nil for the default's.
     var manager: String? {
         switch self {
-        case .doc(_, _, let m), .momentsPost(_, let m): m
-        case .chat, .profile: nil
+        case .chat(_, let m), .doc(_, _, let m), .profile(_, let m), .momentsPost(_, let m): m
         }
     }
 }
@@ -150,9 +150,9 @@ struct FeishuRouteView: View {
 
     var body: some View {
         switch route {
-        case .chat(let c): LarkChatView(conversation: c)
+        case .chat(let c, let manager): LarkChatView(conversation: c, manager: manager)
         case .doc(let url, let title, let manager): FeishuDocReader(url: url, title: title, manager: manager)
-        case .profile(let p): LarkProfileView(person: p, embedded: true)
+        case .profile(let p, let manager): LarkProfileView(person: p, embedded: true).environment(\.larkManager, manager)
         case .momentsPost(let id, let manager): LarkMomentsPostView(postID: id, manager: manager)
         }
     }

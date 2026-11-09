@@ -108,6 +108,7 @@ struct LarkMomentsCard: View {
     var part: LarkPart
     @Environment(\.larkContext) private var context
     @Environment(\.larkAccount) private var larkAccount
+    @Environment(\.larkManager) private var larkManager
     @State private var preview: LarkURLPreview?
     @State private var reading = false
 
@@ -143,10 +144,10 @@ struct LarkMomentsCard: View {
         }
         .buttonStyle(.plain)
         .task(id: part.url) {
-            guard let mid = context.messageID, let url = part.url, let api = AppModel.shared.api?.lark(larkAccount) else { return }
+            guard let mid = context.messageID, let url = part.url, let api = AppModel.shared.api?.manager(larkManager).lark(larkAccount) else { return }
             preview = try? await api.larkURLPreview(message: mid, url: url)
         }
-        .sheet(isPresented: $reading) { if let id = LarkMoments.postID(part.url) { LarkMomentsPostView(postID: id, link: part.url) } }
+        .sheet(isPresented: $reading) { if let id = LarkMoments.postID(part.url) { LarkMomentsPostView(postID: id, link: part.url, manager: larkManager) } }
     }
 }
 

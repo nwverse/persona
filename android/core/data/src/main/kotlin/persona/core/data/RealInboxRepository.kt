@@ -323,7 +323,7 @@ class RealInboxRepository(
 
     override suspend fun unmute(id: String, manager: String?) {
         val transport = requireTransport()
-        asManager(manager) { transport.unmuteInbox(id) }
+        asStamped(manager) { transport.unmuteInbox(id) }
     }
 
     override suspend fun inboxPolicies(record: InboxRecord?, manager: String?): List<persona.feature.inbox.InboxPolicy> {
@@ -370,7 +370,7 @@ class RealInboxRepository(
 
     override suspend fun removePolicy(id: String, manager: String?) {
         val transport = requireTransport()
-        asManager(manager) { transport.removeInboxPolicy(id) }
+        asStamped(manager) { transport.removeInboxPolicy(id) }
     }
 
     override suspend fun setDone(items: List<InboxDoneTarget>, done: Boolean): InboxBulkResult =
@@ -1105,6 +1105,14 @@ class RealInboxRepository(
         val default = AssistantManagerChoice.current.value.defaultId
         return withContext(persona.core.contracts.api.RequestManager(manager.takeIf { it.isNotBlank() && it != default } ?: "")) { block() }
     }
+
+    /**
+     * Runs a change to something a list read from each manager stamped [manager] (several managers), naming it even when it
+     * is the default: the default may have changed since the list was read. Unstamped (one manager): as [asManager].
+     */
+    private suspend fun <T> asStamped(manager: String?, block: suspend () -> T): T =
+        if (manager.isNullOrBlank()) asManager(manager, block)
+        else withContext(persona.core.contracts.api.RequestManager(manager)) { block() }
 
     /**
      * One item as the hub has it. An answer about one item comes from its manager alone, unstamped (only the merged
