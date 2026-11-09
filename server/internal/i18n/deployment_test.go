@@ -70,7 +70,7 @@ func TestTemplateLiteralsOnlySkipMisses(t *testing.T) {
 				}
 			}
 			for _, text := range unknownTexts {
-				if name != "extension status" && f.fits(text) { // its "{name}: {err}" forms fit many texts
+				if f.fits(text) {
 					t.Errorf("%s %s fits %q: it would run its regexp on every unknown text", name, f.key, text)
 				}
 			}
@@ -117,8 +117,7 @@ func TestTemplateIndexFindsTheSameTemplate(t *testing.T) {
 var unknownTexts = []string{"ssh: connect to host example port 22: Connection refused", "connection reset by peer", "Ready"}
 
 func catalogIndexes() map[string]*templateIndex {
-	return map[string]*templateIndex{"deployment": deploymentTemplates(), "inbox": inboxTemplates(), "computer": computerTemplates(),
-		"extension status": extensionStatusTemplates()}
+	return map[string]*templateIndex{"deployment": deploymentTemplates(), "inbox": inboxTemplates(), "computer": computerTemplates()}
 }
 
 // catalogTexts are the texts a catalog's templates are tried on: the empty text, a number, the unknown texts, and each
