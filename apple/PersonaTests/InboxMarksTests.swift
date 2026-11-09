@@ -94,6 +94,17 @@ final class InboxMarksTests: XCTestCase {
         XCTAssertEqual(laid.first?.doneAt, hub.doneAt, "the hub's done time was not kept")
     }
 
+    /// Two managers may list the same id: a mark is the item's of its own manager (`InboxItem.key`).
+    func testMarksAreByManagerAndID() throws {
+        var marks = InboxMarks()
+        var mine = try item("a")
+        mine.manager = "m-1"
+        let other = try item("a")
+        _ = marks.put(mine.key, .init(doneAt: now, doneBy: "user"))
+        let laid = marks.lay([other, mine], seq: marks.beginList())
+        XCTAssertEqual(laid.map(\.isDone), [false, true], "the other manager's item of the same id was marked")
+    }
+
     /// An answer about items (not a list, seq nil) lays only the marks still out.
     func testAnswersWithoutAListNumber() throws {
         var marks = InboxMarks()

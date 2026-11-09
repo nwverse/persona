@@ -56,6 +56,10 @@ type briefBodyRow struct {
 	Verdict   string `json:"verdict,omitempty"`
 	Outcome   string `json:"outcome,omitempty"`
 	Recommend string `json:"recommend,omitempty"`
+	// waiting, later: the chat the card or the question came from, which the apps open (#2320); left out when it came from
+	// none. An app that does not know them opens what it can find, or nothing.
+	MachineID string `json:"machine_id,omitempty"`
+	SessionID string `json:"session_id,omitempty"`
 }
 
 // briefBodyDone is a task closed in the window.
@@ -82,8 +86,16 @@ func (f *briefFacts) body(s *Service, title string) briefBody {
 	row := func(r boardRow) briefBodyRow {
 		return briefBodyRow{ID: r.id, Title: r.summary, From: r.from, Link: r.link, WaitedS: int64(r.waited / time.Second), Nudged: r.nudged}
 	}
+	// A row of what waits in a chat: the chat it came from, for the apps to open (the tasks to verify open their to-do).
+	chatRow := func(r boardRow) briefBodyRow {
+		x := row(r)
+		if r.session != "" {
+			x.MachineID, x.SessionID = r.machine, r.session
+		}
+		return x
+	}
 	for _, r := range f.Waiting {
-		b.Waiting = append(b.Waiting, row(r))
+		b.Waiting = append(b.Waiting, chatRow(r))
 	}
 	for _, r := range f.Accept {
 		x := row(r)
@@ -100,7 +112,7 @@ func (f *briefFacts) body(s *Service, title string) briefBody {
 		b.Accept = append(b.Accept, x)
 	}
 	for _, r := range f.Later {
-		b.Later = append(b.Later, row(r))
+		b.Later = append(b.Later, chatRow(r))
 	}
 	b.LaterTotal = f.LaterTotal
 	for _, d := range f.Done {
@@ -164,8 +176,9 @@ func (s *Service) briefRoutes() {
 			return
 		}
 		if err != nil { // a decision's recommendation that did not reach the agent: nothing taken, the button works again
-			apierr.Write(w, http.StatusBadGateway, errors.New(i18n.T(s.botLang(r.Context()), "assistant-reports.accept_not_sent",
-				i18n.Args{"error": clip(oneLine(err.Error()), 120)})))
+			// In the request's language, the reason too when the hub words it (an offline computer, no agent).
+			apierr.Write(w, http.StatusBadGateway, i18n.Err("assistant-reports.accept_not_taken",
+				i18n.Args{"error": clip(oneLine(i18n.Localize(err, s.requestCtxLang(r.Context()))), 120)}))
 			return
 		}
 		if !ok {

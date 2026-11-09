@@ -50,9 +50,12 @@ nonisolated struct Machine: Codable, Identifiable, Hashable, Sendable {
     /// What kind of trouble `error` is (node_service_down, link_offline, never_connected, node_outdated, or a word this
     /// app does not know, which shows `error`); `error` keeps the hub's own words.
     var errorCode: String? = nil
+    /// The manager it belongs to (docs/protocol/protocol.md "Per-manager routing"); nil from a hub before managers. While
+    /// that manager is offline the computer is too, and only comes back with it (`ManagerRoster.offlineManager`).
+    var manager: String? = nil
 
     enum CodingKeys: String, CodingKey {
-        case id, name, kind, icon, online, error, hostname, os, arch, home, system, engine, engines, computer, browser, route, trust
+        case id, name, kind, icon, online, error, hostname, os, arch, home, system, engine, engines, computer, browser, route, trust, manager
         case errorCode = "error_code"
         case sshHost = "ssh_host", herdrVersion = "herdr_version", claudeVersion = "claude_version", lastSeen = "last_seen"
         case nodeMismatch = "node_mismatch", nodeVersion = "node_version", deploying, deployError = "deploy_error"
@@ -104,6 +107,7 @@ extension Machine {
         groupLabel = try? c.decodeIfPresent(String.self, forKey: .groupLabel)
         trust = try? c.decodeIfPresent(String.self, forKey: .trust)
         errorCode = try? c.decodeIfPresent(String.self, forKey: .errorCode)
+        manager = try? c.decodeIfPresent(String.self, forKey: .manager)
     }
 }
 
@@ -686,6 +690,11 @@ nonisolated struct Session: Codable, Identifiable, Hashable, Sendable {
     /// The main checkout of the repository `cwd` belongs to, when its host knows it (`repo_root`, #2840: Paseo keeps its
     /// worktrees under its own folder, whose paths name no repository). Group by repository uses it (`RepoPlace`).
     var repoRoot: String? = nil
+    /// The top of the git working tree `cwd` is in (`repoRoot` for the main checkout) and the branch checked out there,
+    /// as the node reads them (`worktree`, `branch`, #1805); nil from an older node. By Repository lists machine →
+    /// project → branch → agents with them (`RepoPlace`).
+    var worktree: String? = nil
+    var branch: String? = nil
     var state: AgentState
     var seenAt: Date?
     /// When the hub saw it enter its current state (`state_since`).
@@ -900,7 +909,7 @@ nonisolated struct Session: Codable, Identifiable, Hashable, Sendable {
         case permissionMode = "permission_mode"
         case contextTokens = "context_tokens", contextWindow = "context_window"
         case ultracode, ultracodeNote = "ultracode_note", ultracodePending = "ultracode_pending", ultracodeLostAt = "ultracode_lost_at"
-        case repoRoot = "repo_root"
+        case repoRoot = "repo_root", worktree, branch
         case machineID = "machine_id", sessionID = "session_id", paneID = "pane_id", tabID = "tab_id",
              workspaceID = "workspace_id", agentName = "agent_name", startedByPersona = "started_by_persona", assistant, archived, state,
              assistantSpace = "space",
@@ -968,6 +977,8 @@ nonisolated struct Session: Codable, Identifiable, Hashable, Sendable {
         slotIndex = try c.decodeIfPresent(Int.self, forKey: .slotIndex)
         paneIndex = try c.decodeIfPresent(Int.self, forKey: .paneIndex)
         repoRoot = try c.decodeIfPresent(String.self, forKey: .repoRoot)
+        worktree = try c.decodeIfPresent(String.self, forKey: .worktree)
+        branch = try c.decodeIfPresent(String.self, forKey: .branch)
         seenAt = try c.decodeIfPresent(Date.self, forKey: .seenAt)
         stateSince = try c.decodeIfPresent(Date.self, forKey: .stateSince)
         queued = try c.decodeIfPresent([String].self, forKey: .queued)
@@ -1564,9 +1575,12 @@ nonisolated struct Fold: Codable, Hashable, Sendable {
     /// The task lists the run's calls left (docs/protocol/protocol.md「折叠的工作」 `fold.tasks`), in order: the chat's plan
     /// while its TodoWrite is folded away (`ChatPlan.latest`, #5602).
     var tasks: [FoldTasks]? = nil
+    /// The hub proved this supervision round is user-visible, even while its visibility tools are folded away.
+    var supervisionUser: Bool? = nil
 
     enum CodingKeys: String, CodingKey {
         case items, tools, thoughts, until, images, tasks
+        case supervisionUser = "supervision_user"
         case throughSeq = "through_seq", throughID = "through_id"
     }
 }
@@ -1727,11 +1741,14 @@ nonisolated struct Item: Codable, Identifiable, Hashable, Sendable {
     /// User text Persona typed in for the model (a task's notice, a scheduled run…; docs/protocol/protocol.md「Persona 注入的消息」):
     /// drawn as one line, not a bubble. Set by the hub; nil from older hubs, which `Injected.of` reads off the text.
     var injected: Injected? = nil
+    /// Client-retained evidence of user-visible supervision. Survives overlap replacing a promoted work fold and is
+    /// encoded in the chat cache, not a request to change the hub's visibility.
+    var supervisionUser: Bool? = nil
     /// Additive display provenance; kept as JSON so future kinds and malformed optional fields remain readable.
     var source: JSONValue? = nil
 
     enum CodingKeys: String, CodingKey {
-        case id, seq, ts, role, kind, text, image, queued, from, wake, fold, task, compact, injected, source
+        case id, seq, ts, role, kind, text, image, queued, from, wake, fold, task, compact, injected, supervisionUser, source
         case toolUseID = "tool_use_id", toolName = "tool_name", toolInput = "tool_input", isError = "is_error", fullSize = "full_size",
              clientMsgID = "client_msg_id"
     }
@@ -1954,18 +1971,70 @@ nonisolated struct TranslatePrefsBody: Codable, Equatable, Sendable {
     var mail: Bool
 }
 
-/// A desktop app (the Mac app) connected to the hub, like WeChat's 「Mac 微信已登录」 (docs/protocol/protocol.md「桌面端」).
+/// A desktop the hub lists in its `desktops` event (docs/protocol/protocol.md): the Mac app connected to the hub, like WeChat's
+/// "WeChat for Mac is logged in", or a computer where Persona Link reports you at it (`kind: "link"`, only sent to clients that declare
+/// `desktops_link`). With Phone Muted on, the Mac app mutes "Needs you" and "Agent done"; Persona Link mutes only "Needs you".
 nonisolated struct DesktopDevice: Codable, Hashable, Sendable, Identifiable {
-    /// Its device token's id (what Sign Out revokes); empty when it connected with the pairing token.
+    /// Its device token's id (what Sign Out revokes); empty when it connected with the pairing token, and for Persona Link.
     var device: String
     var name: String
     var since: Date?
+    /// Absent for the Mac app.
+    var kind: Kind?
+    /// The hub's machine id, for a Persona Link entry.
+    var machineID: String?
 
-    var id: String { device.isEmpty ? "name:" + name : device }
+    enum CodingKeys: String, CodingKey { case device, name, since, kind, machineID = "machine_id" }
 
-    /// The banner's line: 「Mac 上的 Persona 已登录」, or how many when there are several.
+    /// `link` is Persona Link; a kind this build doesn't know reads as `unknown` and is left out of what the app shows (`shown`).
+    nonisolated enum Kind: String, Codable, Sendable {
+        case link, unknown
+
+        init(from decoder: Decoder) throws {
+            self = Kind(rawValue: try decoder.singleValueContainer().decode(String.self)) ?? .unknown
+        }
+    }
+
+    /// The Mac app: only an entry without `kind`.
+    var isApp: Bool { kind == nil }
+    var isLink: Bool { kind == .link }
+    /// Only a Mac app with its own device token can be signed out from the phone.
+    var canSignOut: Bool { isApp && !device.isEmpty }
+
+    /// The entries the banner and the sheet show: Mac apps and Persona Link. A kind this build doesn't know is dropped, since
+    /// neither what it mutes nor how it identifies its computer is known.
+    static func shown(_ list: [DesktopDevice]) -> [DesktopDevice] { list.filter { $0.isApp || $0.isLink } }
+
+    /// A Persona Link entry and a Mac app on the same computer stay two entries.
+    var id: String {
+        if isLink { return "link:" + (machineID ?? name) }
+        return device.isEmpty ? "name:" + name : device
+    }
+
+    /// The banner's line. Mac apps alone keep "Persona is signed in on your Mac" (a count when several); Persona Link names the computer
+    /// you're at, or counts the computers once it adds one. The hub lists each machine's Persona Link once. A Mac app has no machine
+    /// id, so Persona Link counts once with a Mac app of the same name: an approximation for this line only (two Macs sharing a
+    /// name count once, a Mac whose app and Persona Link go by different names twice); ids and the sheet keep every entry.
     static func bannerTitle(_ list: [DesktopDevice]) -> String {
-        list.count > 1 ? String(localized: "Persona is signed in on \(list.count) Macs") : String(localized: "Persona is signed in on your Mac")
+        let apps = list.filter(\.isApp)
+        let appNames = Set(apps.map(\.name))
+        let links = list.filter { $0.isLink && !appNames.contains($0.name) }
+        guard let only = links.first else {
+            return apps.count > 1 ? String(localized: "Persona is signed in on \(apps.count) Macs") : String(localized: "Persona is signed in on your Mac")
+        }
+        let computers = apps.count + links.count
+        return computers > 1 ? String(localized: "Using \(computers) computers") : String(localized: "Using “\(only.name)”")
+    }
+
+    /// The footer under Phone Muted. With a Mac app online the hub mutes as for the Mac app ("Needs you" and "Agent done"); with
+    /// only Persona Link it mutes "Needs you" until no listed computer is in use, which with several takes every one of them.
+    static func muteNote(_ list: [DesktopDevice]) -> String {
+        if list.isEmpty || list.contains(where: \.isApp) {
+            return String(localized: "While Persona is online on a Mac, this iPhone stops sending “Needs you” and “Agent done” notifications and the Mac alerts you instead. Reminders you asked Persona to set still come through.")
+        }
+        return list.count == 1
+            ? String(localized: "While you're using a computer with Persona Link, this iPhone stops sending “Needs you” notifications and Persona Link shows them there. “Agent done” and reminders you asked Persona to set still come to this iPhone. Lock that computer or quit Persona Link, and this iPhone sends “Needs you” again.")
+            : String(localized: "While you're using a computer with Persona Link, this iPhone stops sending “Needs you” notifications and Persona Link shows them there. “Agent done” and reminders you asked Persona to set still come to this iPhone. Lock each of these computers or quit Persona Link on it, and this iPhone sends “Needs you” again.")
     }
 }
 
@@ -1978,6 +2047,66 @@ nonisolated struct MuteWhileDesktopPut: Encodable, Sendable {
 /// The Live Activity's persona alone, for the prefs PUT (it merges): FleetState.look.
 nonisolated struct FleetLookPut: Encodable, Sendable {
     var look: FleetLook
+}
+
+/// The managers whose pushes this device doesn't want, alone (APIClient.setMutedManagers): a write of the whole prefs
+/// never carries them, so a page that saved other choices can't bring back one muted elsewhere.
+nonisolated struct MutedManagersPut: Encodable, Sendable {
+    var ids: [String]
+    enum CodingKeys: String, CodingKey { case ids = "muted_managers" }
+}
+
+/// Quiet hours alone (APIClient.setQuietHours).
+nonisolated struct QuietHoursPut: Encodable, Sendable {
+    var quiet: QuietHours
+}
+
+/// This device's quiet hours (the prefs' `quiet`, docs/protocol/protocol.md): no "Agent finished" inside the window, and
+/// "Needs you" without a sound. Times are "HH:MM" in `tz` (an IANA zone; empty: the user's zone the hub knows); the
+/// window may cross midnight, and start = end is no window.
+nonisolated struct QuietHours: Codable, Equatable, Sendable {
+    var enabled = false
+    var start = "23:00"
+    var end = "07:00"
+    var tz: String?
+
+    enum CodingKeys: String, CodingKey { case enabled, start, end, tz }
+
+    init(enabled: Bool = false, start: String = "23:00", end: String = "07:00", tz: String? = nil) {
+        self.enabled = enabled
+        self.start = start
+        self.end = end
+        self.tz = tz
+    }
+
+    /// Empty times (never set) take the web's defaults, 23:00 to 07:00.
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        enabled = try c.decodeIfPresent(Bool.self, forKey: .enabled) ?? false
+        start = (try c.decodeIfPresent(String.self, forKey: .start)).flatMap { $0.isEmpty ? nil : $0 } ?? "23:00"
+        end = (try c.decodeIfPresent(String.self, forKey: .end)).flatMap { $0.isEmpty ? nil : $0 } ?? "07:00"
+        tz = try c.decodeIfPresent(String.self, forKey: .tz)
+    }
+
+    /// "HH:MM" as minutes after midnight (nil: not a time).
+    static func minutes(_ hhmm: String) -> Int? {
+        let parts = hhmm.split(separator: ":")
+        guard parts.count == 2, let h = Int(parts[0]), let m = Int(parts[1]), (0..<24).contains(h), (0..<60).contains(m) else { return nil }
+        return h * 60 + m
+    }
+
+    /// Minutes after midnight as "HH:MM".
+    static func clock(_ minutes: Int) -> String {
+        let m = ((minutes % 1440) + 1440) % 1440
+        return String(format: "%02d:%02d", m / 60, m % 60)
+    }
+
+    /// The name of the zone the times are in when it isn't `here` (they were set somewhere else); nil when it is, or
+    /// when they have none.
+    func elsewhere(here: TimeZone = .current, locale: Locale = .current) -> String? {
+        guard let tz, !tz.isEmpty, let zone = TimeZone(identifier: tz), zone.identifier != here.identifier else { return nil }
+        return zone.localizedName(for: .generic, locale: locale) ?? zone.identifier
+    }
 }
 
 nonisolated struct NotifyPrefs: Codable, Equatable, Sendable {
@@ -1996,9 +2125,15 @@ nonisolated struct NotifyPrefs: Codable, Equatable, Sendable {
     var translate: TranslatePrefsBody?
     var longTurnSeconds: Int?
     var doneDelaySeconds: Int?
+    /// The managers whose pushes this device doesn't get (docs/assistant/managers.md "Clients"); nil from a hub before
+    /// per-manager switches, which then shows none. Written alone (`MutedManagersPut`), never with the rest.
+    var mutedManagers: [String]?
+    /// Quiet hours; nil from a hub without them, which then shows none. Written alone (`QuietHoursPut`).
+    var quiet: QuietHours?
 
     enum CodingKeys: String, CodingKey {
-        case input, done
+        case input, done, quiet
+        case mutedManagers = "muted_managers"
         case liveActivity = "live_activity", lockDetails = "lock_details", island, translate
         case muteWhileDesktop = "mute_while_desktop"
         case longTurnSeconds = "long_turn_seconds", doneDelaySeconds = "done_delay_seconds"
@@ -2022,6 +2157,8 @@ nonisolated struct NotifyPrefs: Codable, Equatable, Sendable {
         longTurnSeconds = try c.decodeIfPresent(Int.self, forKey: .longTurnSeconds)
         doneDelaySeconds = try c.decodeIfPresent(Int.self, forKey: .doneDelaySeconds)
         muteWhileDesktop = try c.decodeIfPresent(Bool.self, forKey: .muteWhileDesktop) ?? false
+        mutedManagers = try? c.decodeIfPresent([String].self, forKey: .mutedManagers)
+        quiet = try? c.decodeIfPresent(QuietHours.self, forKey: .quiet)
     }
 
     func encode(to encoder: Encoder) throws {
@@ -2031,7 +2168,15 @@ nonisolated struct NotifyPrefs: Codable, Equatable, Sendable {
         try c.encode(liveActivity, forKey: .liveActivity)
         try c.encode(lockDetails, forKey: .lockDetails)
         try c.encode(island, forKey: .island)
-        // muteWhileDesktop is not sent back: the banner writes it alone (MuteWhileDesktopPut).
+        // muteWhileDesktop, mutedManagers and quiet are not sent back: each is written alone (MuteWhileDesktopPut,
+        // MutedManagersPut, QuietHoursPut).
+    }
+
+    /// Whether this device turned off the pushes of manager `id`; nil is the hub's own assistant (`assistant`), whose things
+    /// the hub leaves unstamped.
+    func mutes(manager id: String?) -> Bool {
+        guard let muted = mutedManagers, !muted.isEmpty else { return false }
+        return muted.contains(id ?? "assistant")
     }
 
     /// "1 min" / "90 s": how the page words a duration from the hub.

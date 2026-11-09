@@ -5,7 +5,8 @@ import Foundation
 /// A list the hub made before it took a mark still has the item as it was, and replacing the whole list with it brought
 /// a swiped-away item back for a moment (swipe A, then B: the list after A's push has B open again).
 ///
-/// So each mark is laid over the lists that may not have it yet: while its request is out, over every list; once the
+/// Marks are by `InboxItem.key` (an id with its manager: two managers may list the same id). So each mark is laid over
+/// the lists that may not have it yet: while its request is out, over every list; once the
 /// hub took it, over the lists that started before then. It goes when none of those is still out, or when its request
 /// failed (the item is then as the hub has it). The web keeps its marks the same way (`withPending` in lib/inbox.ts).
 nonisolated struct InboxMarks {
@@ -77,7 +78,7 @@ nonisolated struct InboxMarks {
     func lay(_ items: [InboxItem], seq: Int?) -> [InboxItem] {
         guard !entries.isEmpty else { return items }
         return items.map { it in
-            guard let e = entries[it.id] else { return it }
+            guard let e = entries[it.key] else { return it }
             let stale = e.tookAt.map { took in seq.map { $0 <= took } ?? false } ?? true
             guard stale else { return it }
             var it = it

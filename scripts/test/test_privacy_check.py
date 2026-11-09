@@ -856,6 +856,251 @@ class PrivacyCheckIntegrationTests(unittest.TestCase):
         self.assert_blocked(result)
 
 
+class PublicAdministratorTests(unittest.TestCase):
+    # Synthetic public login; no private configuration values belong in fixtures.
+    LOGIN = "public-admin"
+    REFERENCES = {
+        ".github/CODEOWNERS": "/docs/SUPER_RULES.md @public-admin\n",
+        "CLAUDE.md": "GitHub issue and explicit approval from administrator `public-admin` in that issue before editing or opening a PR.\n",
+        "docs/README.md": "file require explicit approval from administrator `public-admin` in a GitHub issue before editing or opening a linked PR.\n",
+        "docs/SUPER_RULES.md": (
+            "   Wait for administrator `public-admin` to explicitly approve the proposed change in that issue. Only after that approval\n"
+            "   open the issue and wait for `public-admin`'s explicit approval before proceeding.\n"
+        ),
+    }
+
+    def setUp(self):
+        PrivacyCheckIntegrationTests.setUp(self)
+        for path, text in self.REFERENCES.items():
+            target = self.repo / path
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(text)
+        self.git("add", *self.REFERENCES)
+        self.git("commit", "-qm", "Publish governance references")
+        self.git("update-ref", "refs/remotes/origin/main", "HEAD")
+        self.config = self.home / ".config/persona/config.json"
+        self.config.parent.mkdir(parents=True)
+        self.write_config()
+
+    def write_config(self, first_name=LOGIN, extra=None):
+        config = {"app_store": {"external": {"review": {"first_name": first_name}},
+                                "testers": [{"first_name": first_name}]}}
+        if extra:
+            config.update(extra)
+        self.config.write_text(json.dumps(config))
+
+    run_command = PrivacyCheckIntegrationTests.run_command
+    git = PrivacyCheckIntegrationTests.git
+    scan = PrivacyCheckIntegrationTests.scan
+
+    def assert_private(self, result, path=None):
+        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("private value", result.stdout)
+        if path:
+            self.assertIn(path + ":", result.stdout)
+        self.assertNotIn(self.LOGIN, result.stdout + result.stderr)
+
+    def test_exact_published_references_allow_full_staged_range_and_commit(self):
+        result = self.scan()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        for path, text in self.REFERENCES.items():
+            # Line numbers are not authority; exact governance text and path are.
+            (self.repo / path).write_text("\n" + text)
+        self.git("add", *self.REFERENCES)
+        result = self.scan("--staged")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.git("commit", "-qm", "Add governance spacing")  # Real pre-commit and commit-msg hooks.
+        result = self.scan("--range", "origin/main..HEAD")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_missing_published_evidence_reproduces_all_five_hits(self):
+        self.git("update-ref", "-d", "refs/remotes/origin/main")
+        result = self.scan()
+        self.assert_private(result)
+        self.assertIn("5 hit(s)", result.stderr)
+        for path in self.REFERENCES:
+            self.assertIn(path + ":", result.stdout)
+
+    def test_worktree_and_index_cannot_publish_their_own_new_login(self):
+        new_login = "new-admin"
+        self.write_config(new_login)
+        for path, text in self.REFERENCES.items():
+            (self.repo / path).write_text(text.replace(self.LOGIN, new_login))
+        self.git("add", *self.REFERENCES)
+        for args in ((), ("--staged",)):
+            with self.subTest(args=args):
+                result = self.scan(*args)
+                self.assert_private(result)
+                self.assertIn("5 hit(s)", result.stderr)
+                self.assertNotIn(new_login, result.stdout + result.stderr)
+
+    def test_true_private_first_name_remains_blocked_in_every_governance_path(self):
+        private_name = "PrivatePerson"
+        self.write_config(private_name)
+        for path, text in self.REFERENCES.items():
+            (self.repo / path).write_text(text.replace(self.LOGIN, private_name))
+        result = self.scan()
+        self.assert_private(result)
+        self.assertIn("5 hit(s)", result.stderr)
+        self.assertNotIn(private_name, result.stdout + result.stderr)
+
+    def test_same_login_leaks_outside_exact_published_lines_are_blocked(self):
+        for path, text in self.REFERENCES.items():
+            with self.subTest(path=path):
+                target = self.repo / path
+                for changed in (text + "Private contact: " + self.LOGIN + "\n",
+                                text.splitlines()[0] + " " + self.LOGIN + "\n",
+                                text.upper()):
+                    target.write_text(changed)
+                    self.assert_private(self.scan(), path)
+                target.write_text(text)
+        # Even an exact approved line does not gain authority in an unrelated file.
+        (self.repo / "notes.txt").write_text(self.REFERENCES["CLAUDE.md"])
+        self.git("add", "notes.txt")
+        self.assert_private(self.scan(), "notes.txt")
+
+    def test_other_config_and_explicit_word_sources_override_public_first_name(self):
+        for extra in ({"machines": [{"id": self.LOGIN}]}, {"last_name": self.LOGIN}):
+            with self.subTest(extra=extra):
+                self.write_config(extra=extra)
+                self.assert_private(self.scan())
+        self.write_config()
+        listed = self.home / ".config/persona/private-words.txt"
+        for value in (self.LOGIN, self.LOGIN.upper()):
+            with self.subTest(value=value):
+                listed.write_text(value + "\n")
+                self.assert_private(self.scan())
+
+    def test_other_private_words_on_an_authorized_line_are_not_hidden(self):
+        self.write_config(extra={"last_name": "administrator"})
+        result = self.scan()
+        self.assert_private(result, "CLAUDE.md")
+        self.assertIn("config last_name", result.stdout)
+        self.assertNotIn("first_name", result.stdout)
+
+    def test_only_published_template_lines_are_authorized(self):
+        (self.repo / "CLAUDE.md").write_text("Unrelated published text.\n")
+        self.git("-c", "core.hooksPath=", "commit", "-qam", "Remove one reference")
+        self.git("update-ref", "refs/remotes/origin/main", "HEAD")
+        (self.repo / "CLAUDE.md").write_text(self.REFERENCES["CLAUDE.md"])
+        self.assert_private(self.scan(), "CLAUDE.md")
+
+    def test_messages_paths_and_range_snapshots_remain_private(self):
+        message = self.repo / ".git/test-message"
+        message.write_text(self.REFERENCES["CLAUDE.md"])
+        self.assert_private(self.scan("--message", str(message)), "commit message")
+        target = self.repo / (self.LOGIN + ".txt")
+        target.write_text("No personal content.\n")
+        self.git("add", target.name)
+        result = self.scan("--staged")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn(":path: private value", result.stdout)
+        self.git("-c", "core.hooksPath=", "commit", "-qm", "Test " + self.LOGIN)
+        target.unlink()  # Range mode must read the committed path, not this safe worktree.
+        result = self.scan("--range", "origin/main..HEAD")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn(":path: private value", result.stdout)
+        self.assertIn(" message:", result.stdout)
+
+    def test_staged_and_range_content_cannot_use_safe_worktree_as_authority(self):
+        target = self.repo / "CLAUDE.md"
+        target.write_text(self.REFERENCES["CLAUDE.md"] + "Private contact: " + self.LOGIN + "\n")
+        self.git("add", "CLAUDE.md")
+        target.write_text(self.REFERENCES["CLAUDE.md"])
+        self.assert_private(self.scan("--staged"), "CLAUDE.md")
+        self.git("-c", "core.hooksPath=", "commit", "-qm", "Test private reference")
+        self.assert_private(self.scan("--range", "origin/main..HEAD"), "CLAUDE.md")
+        self.assertEqual(self.scan().returncode, 0)
+
+    def test_symlink_text_cannot_become_an_authorized_governance_reference(self):
+        target = self.repo / "CLAUDE.md"
+        target.unlink()
+        target.symlink_to(self.REFERENCES["CLAUDE.md"].rstrip("\n"))
+        self.assert_private(self.scan(), "CLAUDE.md")
+        self.git("add", "CLAUDE.md")
+        self.assert_private(self.scan("--staged"), "CLAUDE.md")
+        self.git("-c", "core.hooksPath=", "commit", "-qm", "Test reference symlink")
+        target.unlink()
+        target.write_text(self.REFERENCES["CLAUDE.md"])
+        self.assert_private(self.scan("--range", "origin/main..HEAD"), "CLAUDE.md")
+        self.git("update-ref", "refs/remotes/origin/main", "HEAD")
+        # Even a published symlink is not prose authority for the regular worktree file.
+        self.assert_private(self.scan(), "CLAUDE.md")
+
+    def test_ambiguous_published_owner_does_not_authorize_any_reference(self):
+        target = self.repo / ".github/CODEOWNERS"
+        target.write_text(self.REFERENCES[".github/CODEOWNERS"].rstrip("\n") + " @another-admin\n")
+        self.git("-c", "core.hooksPath=", "commit", "-qam", "Test multiple owners")
+        self.git("update-ref", "refs/remotes/origin/main", "HEAD")
+        self.assert_private(self.scan())
+
+    def test_unreadable_published_evidence_fails_closed(self):
+        errors = (OSError("unavailable"), subprocess.CalledProcessError(1, "git"),
+                  subprocess.TimeoutExpired("git", 10))
+        for error in errors:
+            with self.subTest(error=type(error).__name__), patch.object(pc.subprocess, "run", side_effect=error):
+                self.assertEqual(pc.public_admin_lines(), {})
+
+
+class WhatGitRecordsTests(unittest.TestCase):
+    """Every mode reads what git records: a symlink's link text (never the file it points to), a type change, and a
+    tracked file missing from the worktree (sparse checkout, deleted but not staged)."""
+
+    run_command = PrivacyCheckIntegrationTests.run_command
+    git = PrivacyCheckIntegrationTests.git
+    scan = PrivacyCheckIntegrationTests.scan
+    HIT = "private value (9 chars) from private-words.txt"
+
+    def setUp(self):
+        PrivacyCheckIntegrationTests.setUp(self)
+        words = self.home / ".config/persona/private-words.txt"
+        words.parent.mkdir(parents=True)
+        words.write_text("secretbox\n")
+        (self.repo / "link.md").write_text("a plain note\n")
+        self.git("add", "link.md")
+        self.git("commit", "-q", "--no-verify", "-m", "base")
+        self.git("update-ref", "refs/remotes/origin/main", "HEAD")
+
+    def assert_hit(self, result, where):
+        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("%s: %s" % (where, self.HIT), result.stdout)
+        self.assertNotIn("secretbox", result.stdout + result.stderr)  # the kind and origin, never the value
+
+    def test_a_file_turned_into_a_symlink_is_scanned_by_staged_and_range(self):
+        (self.repo / "link.md").unlink()
+        os.symlink("/srv/secretbox/notes", self.repo / "link.md")
+        self.git("add", "link.md")
+        self.assertIn("T\tlink.md", self.git("diff", "--cached", "--name-status").stdout)
+        self.assert_hit(self.scan("--staged"), "link.md:1")
+        self.git("commit", "-q", "--no-verify", "-m", "link")
+        self.assert_hit(self.scan("--range", "origin/main..HEAD"), "link.md:1")
+
+    def test_tracked_scan_reads_the_link_text(self):
+        os.symlink("/srv/secretbox/other", self.repo / "new-link")
+        self.git("add", "new-link")
+        self.assert_hit(self.scan(), "new-link:1")
+
+    def test_tracked_scan_does_not_read_the_file_a_link_points_to(self):
+        (self.root / "outside.md").write_text("runs on secretbox\n")
+        os.symlink("../outside.md", self.repo / "out-link")
+        self.git("add", "out-link")
+        result = self.scan()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_tracked_scan_reads_files_missing_from_the_worktree(self):
+        (self.repo / "docs").mkdir()
+        (self.repo / "docs/note.md").write_text("runs on secretbox\n")
+        (self.repo / "gone.md").write_text("tested on secretbox\n")
+        self.git("add", "docs/note.md", "gone.md")
+        self.git("commit", "-q", "--no-verify", "-m", "notes")
+        self.git("sparse-checkout", "set", "--no-cone", "/scripts/", "/config.example.json", "/link.md", "/gone.md")
+        (self.repo / "gone.md").unlink()  # deleted, not staged: the index still records it
+        self.assertFalse((self.repo / "docs/note.md").exists())
+        result = self.scan()
+        self.assert_hit(result, "docs/note.md:1")
+        self.assertIn("gone.md:1: " + self.HIT, result.stdout)
+
+
 class RangeAndPushTests(unittest.TestCase):
     """--range scans what a branch adds on top of its base (and its messages); pre-push runs it on pushed commits."""
 
@@ -1023,6 +1268,69 @@ class RangeAndPushTests(unittest.TestCase):
         result = self.push_to(remote)
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("cannot find a scan base", result.stderr)
+
+    def orphan(self, branch, text, message="screenshots"):
+        """A one-commit branch holding only shot.md, sharing no history with the others (a PR's screenshot branch)."""
+        blob = subprocess.run(["git", "hash-object", "-w", "--stdin"], input=text, cwd=self.repo, env=self.env,
+                              capture_output=True, text=True, check=True).stdout.strip()
+        tree = subprocess.run(["git", "mktree"], input="100644 blob %s\tshot.md\n" % blob, cwd=self.repo, env=self.env,
+                              capture_output=True, text=True, check=True).stdout.strip()
+        commit = self.git("commit-tree", tree, "-m", message).stdout.strip()
+        self.git("update-ref", "refs/heads/" + branch, commit)
+        return commit
+
+    def assert_refused_cleanly(self, result, ref):
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("pre-push: refused %s;" % ref, result.stderr)
+        self.assertIn('docs/operations/testing.md, "Privacy scan"', result.stderr)
+        self.assertNotIn("Traceback", result.stdout + result.stderr)
+        self.assertNotIn("secretbox", result.stdout + result.stderr)
+
+    def test_pre_push_skips_a_stale_origin_head_from_another_history(self):
+        # A clone from before a history rewrite: origin/HEAD still names the old master, origin/main the new history.
+        self.git("update-ref", "refs/remotes/origin/main", "HEAD")
+        old = self.git("commit-tree", "HEAD^{tree}", "-m", "old history").stdout.strip()
+        self.git("update-ref", "refs/remotes/origin/master", old)
+        self.git("symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/master")
+        remote = self.root / "remote.git"
+        self.run_command("git", "init", "-q", "--bare", str(remote))
+        self.commit("clean.md", "nothing private here\n")
+        result = self.push_to(remote)  # against origin/main: old.md is main's, not this branch's
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.commit("new.md", "runs on secretbox\n")
+        result = self.push_to(remote)
+        self.assert_refused_cleanly(result, "refs/heads/topic")
+        self.assertIn("new.md:1: private value", result.stderr)
+        self.assertNotIn("old.md", result.stderr)
+
+    def test_pre_push_scans_an_orphan_branch_whole(self):
+        remote = self.root / "remote.git"
+        self.run_command("git", "init", "-q", "--bare", str(remote))
+        self.orphan("shots", "a clean picture\n")
+        result = self.run_command("git", "push", "-q", str(remote), "shots")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        for branch, text, message, hit in (("shots-file", "taken on secretbox\n", "screenshots", "shot.md:1"),
+                                           ("shots-message", "clean\n", "taken on secretbox", " message:1")):
+            with self.subTest(branch=branch):
+                self.orphan(branch, text, message)
+                result = self.run_command("git", "push", "-q", str(remote), branch)
+                self.assert_refused_cleanly(result, "refs/heads/" + branch)
+                self.assertIn(hit + ": private value", result.stderr)
+
+    def test_range_with_unrelated_ends_scans_the_whole_head(self):
+        self.orphan("shots", "a clean picture\n", message="clean")
+        self.assertEqual(self.scan("--range", "HEAD..shots").returncode, 0)
+        result = self.scan("--range", "shots..HEAD")  # every file of HEAD, old.md included
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("old.md:1: private value", result.stdout)
+        self.orphan("shots", "clean\n", message="fix\n\ntaken on secretbox")
+        self.assertIn(" message:3: private value", self.scan("--range", "HEAD..shots").stdout)
+        for args in (("--range", "nosuch..HEAD"), ("--range",), ("--message", str(self.root / "missing.txt")),
+                     ("--staged", "--commit-msg", str(self.root / "missing.txt"))):
+            with self.subTest(args=args):
+                result = self.scan(*args)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertRegex(result.stderr, r"^privacy_check: [^\n]*\n$")
 
 
 class MessageTests(unittest.TestCase):

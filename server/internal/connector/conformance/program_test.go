@@ -76,6 +76,7 @@ func TestExampleChatWireFixtures(t *testing.T) {
 		"tools.list.json": ignore(func(raw json.RawMessage) ([]proto.Tool, error) {
 			return checkToolList("examplechat", "tools", raw)
 		}),
+		"catalog.list.json":     ignore(checkCatalog),
 		"tools.call.json":       func(raw json.RawMessage) error { return decodeWire(raw, &serve.CallResult{}) },
 		"actions.list.json":     ignore(func(raw json.RawMessage) ([]proto.Tool, error) { return checkToolList("examplechat", "actions", raw) }),
 		"actions.describe.json": func(raw json.RawMessage) error { return checkDescribe("examplechat_send", raw) },
@@ -133,8 +134,9 @@ func TestExampleChatWireFixtures(t *testing.T) {
 type fixtureProgram struct {
 	edit      map[string]func(map[string]any)
 	redeliver bool
-	wrote     atomic.Bool // the program was asked to write: actions.do, inbox.reply or recall
+	wrote     atomic.Bool // the program was asked to write: actions.do, inbox.reply, recall or recall.do
 	// historyAsked counts the history calls (history.chats, archive.history, history.anchors) it answered.
+	catalogAsked atomic.Int32
 	historyAsked atomic.Int32
 	manifest     *extension.Manifest // what CheckProgram is given, when it is not the fixture's
 	signedIn     atomic.Bool
@@ -179,6 +181,9 @@ func (f *fixtureProgram) handle(t testing.TB) rpc.Handler {
 				return json.RawMessage(`{"state":"not_configured","guide":["在设置里登录示例聊天"]}`), nil
 			}
 			return f.answer(t, "status.json"), nil
+		case "connector.catalog.list":
+			f.catalogAsked.Add(1)
+			return f.answer(t, "catalog.list.json"), nil
 		case "connector.tools.list":
 			return f.answer(t, "tools.list.json"), nil
 		case "connector.tools.call":
@@ -227,7 +232,7 @@ func (f *fixtureProgram) handle(t testing.TB) rpc.Handler {
 				return f.answer(t, "login.step.done.json"), nil
 			}
 			return f.answer(t, "login.step.refused.json"), nil
-		case "connector.actions.do", "connector.inbox.reply", "connector.recall":
+		case "connector.actions.do", "connector.inbox.reply", "connector.recall", "connector.recall.do":
 			f.wrote.Store(true)
 			return json.RawMessage(`{"text":"sent"}`), nil
 		case "connector.logout":
@@ -351,7 +356,7 @@ func TestCheckProgramAcceptsADeclaredRecallAndNeverAsksIt(t *testing.T) {
 		t.Fatalf("CheckProgram failed a program that declares recall:\n%s", got)
 	}
 	if f.wrote.Load() {
-		t.Fatal("CheckProgram asked the program to write (actions.do, inbox.reply or recall): a check never sends")
+		t.Fatal("CheckProgram asked the program to write (actions.do, inbox.reply, recall or recall.do): a check never sends")
 	}
 }
 
