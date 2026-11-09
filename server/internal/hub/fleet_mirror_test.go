@@ -11,6 +11,7 @@ import (
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/devices"
 	"github.com/nwverse/persona/server/internal/i18n"
+	"github.com/nwverse/persona/server/internal/link"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/rpc"
 )
@@ -119,6 +120,8 @@ func (d *mirrorDevices) CapacitySnapshot(context.Context) proto.CapacitySnapshot
 	return proto.CapacitySnapshot{}
 }
 
+func (d *mirrorDevices) SetAttention(link.Attention) {}
+
 // mirrors are the tests' hubs' mirror devices.
 var mirrors sync.Map // *Hub → *mirrorDevices
 
@@ -179,6 +182,7 @@ func editSessions(m *Machine, edit func([]proto.Session) []proto.Session) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.sessions = edit(m.sessions)
+	m.raws, m.rawsOf = nil, keptList{} // edited in place maybe: no longer what the manager's bytes gave
 }
 
 // nodeAsks is a node's request on m as the manager takes it (devices.Options.Answer): the assistant's own, then the

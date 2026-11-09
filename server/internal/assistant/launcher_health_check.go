@@ -112,6 +112,7 @@ func (s *Service) checkMachine(ctx context.Context, d Device, cfg healthConfig, 
 	for key, r := range b.recs {
 		if r.Machine == d.ID && !slices.Contains(names, r.Launcher) {
 			delete(b.recs, key)
+			delete(b.recheckAt, key)
 		}
 	}
 	b.mu.Unlock()
@@ -150,8 +151,8 @@ func (s *Service) checkMachine(ctx context.Context, d Device, cfg healthConfig, 
 // ---- picking a machine ----
 
 // healthyMachine is another reachable machine that runs launcher and whose check of it did not fail: one where it
-// passed first, then one where it was never checked.
-func (s *Service) healthyMachine(ctx context.Context, launcher, except string) (Device, bool) {
+// passed first, then one where it was never checked. Optional filters keep candidates that can host the work.
+func (s *Service) healthyMachine(ctx context.Context, launcher, except string, suitable ...func(Device) bool) (Device, bool) {
 	best, rank := Device{}, 3
 	for _, d := range s.devices(ctx) {
 		if d.ID == except || !d.Reachable {
@@ -166,6 +167,9 @@ func (s *Service) healthyMachine(ctx context.Context, launcher, except string) (
 			n = 0
 		}
 		if n >= rank || !s.launcherOn(ctx, d.ID, launcher) {
+			continue
+		}
+		if slices.ContainsFunc(suitable, func(accept func(Device) bool) bool { return !accept(d) }) {
 			continue
 		}
 		best, rank = d, n
@@ -198,19 +202,91 @@ func rehome(dir string, from, to Device) string {
 	return dir
 }
 
+// recheckLauncherNow probes machine's launcher on the spot when its record says the launcher fails, so a fix since
+// the last round (a CLI installed, a PATH corrected) clears the record and the start stays on the asked machine.
+// A probe already running is joined; a probe within healthRecheckThrottle is not repeated (checked=false), and the
+// caller keeps the usual reroute behavior. got=false means the machine could not be asked.
+func (s *Service) recheckLauncherNow(ctx context.Context, machine, launcher string) (res healthResult, got, checked bool) {
+	rc, run := s.claimHealthRecheck(ctx, machine, launcher)
+	if rc == nil {
+		return healthResult{}, false, false
+	}
+	if run {
+		s.runHealthRecheck(ctx, machine, launcher, rc, false)
+	}
+	select {
+	case <-rc.done:
+		return rc.res, rc.got, true
+	case <-ctx.Done():
+		return healthResult{}, false, false
+	}
+}
+
+// claimHealthRecheck reserves one probe for both a failed start and the detour that follows it. A nil result is
+// throttled; run means the caller owns the probe, otherwise it joins the already reserved one.
+func (s *Service) claimHealthRecheck(ctx context.Context, machine, launcher string) (rc *healthRecheck, run bool) {
+	b := &s.health
+	key := healthKey(machine, launcher)
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	s.healthLoadLocked(ctx)
+	if rc := b.recheck[key]; rc != nil {
+		rc.waiters++
+		return rc, false
+	}
+	if at := b.recheckAt[key]; !at.IsZero() && time.Since(at) < healthRecheckThrottle {
+		return nil, false
+	}
+	rc = &healthRecheck{done: make(chan struct{})}
+	b.recheck[key] = rc
+	b.recheckAt[key] = time.Now()
+	return rc, true
+}
+
+// runHealthRecheck publishes the health result before releasing waiters. A start's follow-up records failures too;
+// an on-demand detour probe only clears an old failure, preserving the periodic repair cadence.
+func (s *Service) runHealthRecheck(ctx context.Context, machine, launcher string, rc *healthRecheck, recordFailure bool) {
+	defer func() {
+		s.health.mu.Lock()
+		delete(s.health.recheck, healthKey(machine, launcher))
+		close(rc.done)
+		s.health.mu.Unlock()
+	}()
+	rc.res, rc.got = s.probeLauncherHealth(ctx, machine, launcher)
+	if rc.got && (rc.res.ok || recordFailure) {
+		s.recordHealth(ctx, machine, launcher, rc.res)
+	}
+}
+
 // healthDetour is where a start with launcher on machine m goes instead: another machine when its last check failed
 // there and another has it healthy (moved), with a line saying so for whoever started it; no other: m, and the line
 // says it may fail. A usage limit with a known reset says when that is, and a saturated account pool (capacity.go)
 // adds the fleet-wide "no schedulable account" fact and its nearest recovery when the data is fresh.
-func (s *Service) healthDetour(ctx context.Context, m Device, launcher string) (Device, string, bool) {
+func (s *Service) healthDetour(ctx context.Context, m Device, launcher string, suitable ...func(Device) bool) (Device, string, bool) {
 	r, bad := s.launcherUnusable(ctx, m.ID, launcher)
 	if !bad {
 		return m, "", false
 	}
+	// The record can lag behind a fix: probe the machine once on the spot before moving the start elsewhere. A pass
+	// clears the record and the start stays on the asked machine (#2018). Two records cannot be settled by a probe:
+	// a subscription usage limit (the request would be refused too) and a launcher the terminal's shell cannot run
+	// (the probe's login shell runs it fine); only a real start clears those.
+	if r.Kind != errKindUsageLimit && r.Kind != errKindNotInTerminal {
+		if res, got, checked := s.recheckLauncherNow(ctx, m.ID, launcher); checked && got && res.ok {
+			return m, "", false
+		}
+		// The shared follow-up may have finished between the first read and the throttled claim. Route from its
+		// published result, not the stale failure that led us here.
+		r, bad = s.launcherUnusable(ctx, m.ID, launcher)
+		if !bad {
+			return m, "", false
+		}
+	}
+	alt, moved := s.healthyMachine(ctx, launcher, m.ID, suitable...)
 	// The pool is provider-level: resolve it once from the failed machine. Missing or stale data gives no note, and
-	// a pool with any schedulable account stays quiet too.
+	// a pool with any schedulable account stays quiet too. Read only after the on-the-spot recheck, since a passing
+	// probe returns above without any detour line.
 	poolNote := poolSuffix(s.capacityNote(ctx, s.launcherProvider(ctx, m.ID, launcher)))
-	alt, moved := s.healthyMachine(ctx, launcher, m.ID)
 	if note := r.resetNote(); note != "" {
 		what := fmt.Sprintf("launcher %s is at its subscription usage limit on %s (%s)", launcher, m.ID, note)
 		if moved {

@@ -11,6 +11,7 @@ import (
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/bus"
 	"github.com/nwverse/persona/server/internal/devices"
+	"github.com/nwverse/persona/server/internal/link"
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
@@ -71,3 +72,4 @@ func (f *fakeDevices) CapacitySnapshot(context.Context) proto.CapacitySnapshot {
 }
 
 func (f *fakeDevices) Follow(context.Context, string, string, bool) error { return nil }
+func (f *fakeDevices) SetAttention(link.Attention)                        {}

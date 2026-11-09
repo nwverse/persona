@@ -222,7 +222,7 @@ func (s *Service) decorateInventory(machine string, list []proto.Session, comple
 			}
 		}
 	}
-	seen := make(map[string]time.Time, len(list))
+	seen := make(map[string]time.Time, min(len(list), len(s.fleet.seen)))
 	for _, sess := range list {
 		if t, ok := s.fleet.seen[[2]string{machine, sess.SessionID}]; ok {
 			seen[sess.SessionID] = t
@@ -252,7 +252,8 @@ func (s *Service) decorateInventory(machine string, list []proto.Session, comple
 		}
 		if list[i].Assistant {
 			list[i].Archived = shown[list[i].SessionID].Archived
-			list[i].Origin, list[i].OriginRef = shown[list[i].SessionID].Origin, shown[list[i].SessionID].OriginRef // origins.go
+			v := shown[list[i].SessionID]
+			list[i].Origin, list[i].OriginRef, list[i].OpenedBy = v.Origin, v.OriginRef, v.OpenedBy // origins.go
 			// Messages from other conversations wait in the assistant while it runs: shown like typed-ahead input.
 			if q := shown[list[i].SessionID].Queued; len(q) > 0 {
 				list[i].Queued = append(slices.Clip(list[i].Queued), q...) // the node's slice is shared: never write into it
@@ -267,11 +268,10 @@ func (s *Service) decorateInventory(machine string, list []proto.Session, comple
 		list[i].BackgroundWaiting = backgroundWaiting(list[i])
 		list[i].TurnError, list[i].TurnErrorKind = turnError(list[i])
 		decorateLimit(&list[i]) // a subscription's usage limit and when it resets (usage_limit.go)
-		list[i].TurnErrorCode = ""
+		list[i].TurnErrorCode = sessionTurnErrorCode(list[i])
 		if list[i].TurnError != "" {
-			list[i].TurnErrorCode = proto.TurnErrorRateLimited
-			if list[i].TurnErrorKind != proto.TurnErrorUsageLimit {
-				list[i].TurnErrorCode = turnErrorCode(list[i].TurnError)
+			if list[i].TurnErrorCode == proto.TurnErrorModelFallbackUnavailable {
+				list[i].TurnErrorKind = proto.TurnErrorUser
 			}
 			// Not worth a "Continue": the user signs in, fixes the key or the model. Only where agents_work would not retry it
 			// anyway: a gateway's 5xx that mentions the model stays transient.

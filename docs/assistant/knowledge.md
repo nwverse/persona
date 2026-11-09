@@ -17,8 +17,8 @@ As part of moving hub business logic into managers (`docs/assistant/assistant.md
   `connectors.changes` (a connector's changes since a cursor), `connectors.archive_media` (attachments for a message; when the manager is elsewhere, up to 4 MB, since one bus message must not occupy a slow link longer than a heartbeat; larger ones leave `[附件]` ("[attachment]") on the line), `connectors.items` / `connectors.doc_title` (documents, meetings, events). A connector declaring `history` also offers its older history, read-only: `connectors.history_chats`, `connectors.history` and `connectors.history_anchors` (`docs/protocol/connector-protocol.md` "History").
   **The manager owns the cursor** (`cursors/<connector>.json`, same file as before), which advances only after writing the data. For Moments posts submitted by plugin programs (`posts.*`, `archive.chats`), the hub first checks
   whether "Include in knowledge base" is on, then forwards them unchanged to the manager (`kb.posts_put`, `kb.posts_comments`, `kb.posts_pending`, `kb.archived_chats`).
-- **When the hub's own features need the knowledge base**, they ask the manager over the bus through one hub function, `kbAsk` (`hub/kb.go`; those features are also moving into the manager, becoming local calls afterwards):
-  chat context for the Inbox AI twin (`kb.context`), deleting a source's data (`kb.forget`). Triage after an Agent's turn stops also moved into the assistant (`docs/assistant/agent-work.md` ("Who owns what")); the project owning its directory is read directly in the assistant, no longer via `kb.projects`.
+- **The hub itself no longer reads the knowledge base.** The extension manager reaches it through its own `kbAsk` (`server/internal/extmgr/kb.go`): deleting a source's data (`kb.forget`) and the extensions' public `kb.*` calls.
+  Triage after an Agent's turn stops moved into the assistant (`docs/assistant/agent-work.md` ("Who owns what")), which reads the project owning a directory directly; `kb.context` and `kb.projects` still answer on the bus, but nothing calls them now.
   Events seen by the hub are one-way: new source data (connector live events, enabling "Include in knowledge base", enabling "Hand to Persona" for "Information", `kb.kick`),
   and an Agent finishing a turn (before deciding notifications, `kb.agent_turn`, the project timeline entry).
 - **Models**: the knowledge base uses the manager's model configuration (`kb.compress`, `kb.project`, `kb.items`, `kb.dedupe`, `kb.moments`, defaulted by `kb.ai` in its `manager.json`),
@@ -264,9 +264,10 @@ unknown fields and rule names, an `order` that does not hold every rule exactly 
 `context` outside 0…200, `include_all` or `context` on another rule, and items without a source, a kind (`chat` / `doc`) or an id, twice, or stored without being read.
 The manager hands the document to the engine (`Engine.Selection`); an engine without one keeps everything as before.
 
+- **Web settings** (#2217): Settings → Knowledge selection targets an explicit manager independently of the chat switcher. Item overrides always precede the movable priority levels. Rules can share a level, split into a separate level, or move up/down. Chat candidates carry their source and chat id; document overrides use the original source/id from the selected document metadata, never its KB filename or display name. Failed/unsupported reads enable no save. Manager and credential changes retire pending work, and observable `kb_selection` events block dirty drafts until an explicit reload. Whole-document PUT has no revision precondition: this warning does not prevent an unobserved concurrent write atomically. Turning a rule off stops new writes; blank document days do not introduce default pruning.
+
 - **Storage and API** (`server/internal/assistant/kb_selection.go`): the manager keeps the document in its settings table under `kb.selection` (as the workflow
-  board's switch), so every client and process agrees; today it is edited through `PUT` below and `kb_history_plan`, and an app settings page (the
-  priority as a sortable list, a per-item picker) is left for a follow-up issue. `GET /api/v1/kb/selection` is the document (the defaults when none was saved);
+  board's switch), so every client and process agrees; the Web app edits it in Settings → Knowledge selection (#2217), and `kb_history_plan` keeps its existing import controls. The Web editor preserves the whole loaded document, including history and optional rule fields; native settings editors remain follow-up work. `GET /api/v1/kb/selection` is the document (the defaults when none was saved);
   `PUT /api/v1/kb/selection` takes the whole document, validated as above (400 with what is wrong; 403 from a read-only device), stores it, puts it in force at once
   and tells the apps (`kb_selection` event); `GET /api/v1/kb/selection/candidates?source=<connector id>` lists the source's chats (`connectors.history_chats`: id,
   name, kind, flags, estimate, the `source` a per-item setting names, the setting itself, and what the selection reads of it: `whole`, `personal` or `none`). While the
@@ -455,7 +456,8 @@ reads less needs no approval and applies from the next page.
   3. Once every window is read, each gap between two windows gets one omission line with the number of positions it leaves out, stamped with the older window's newest
      message (its time is all that is known of the gap); the gap below the oldest window gets one stamped a minute before it. None is written above the newest window: those
      messages may be in the live archive.
-  4. A year whose search found nothing is taken as not covered (an index may not reach back that far): in that year only, the chat is read backwards through
+  4. A year whose search found nothing is taken as not covered (an index may not reach back that far), and so is a year whose search did not finish (a later page
+     refused, or `more` with no new cursor), whatever its first pages found: in that year only, the chat is read backwards through
      `AnchorFilter`, starting below the oldest window already read in a newer year when there is one. Years before the conversation began are skipped: unless a window
      reached position 0, one page `around` position 0 says when it began. Without it, a long `text_days` would make every empty year stream the whole chat below its
      windows, the cost a personal read is there to avoid.
