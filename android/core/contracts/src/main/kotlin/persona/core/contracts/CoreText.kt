@@ -161,6 +161,7 @@ data class CoreText(val key: Key, val args: List<Any> = emptyList()) {
         EngineHerdr("herdr in a terminal"),
         EngineHerdrApp("Terminals opened in the desktop app"),
         EngineOrca("Terminals in Orca"),
+        EngineTern("Terminals in Tern"),
         EnginePaseo("Agents in Paseo"),
         EngineOffline("Offline, no detection info yet"),
         EngineUnknown("No detection info yet"),
