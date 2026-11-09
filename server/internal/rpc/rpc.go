@@ -9,7 +9,6 @@
 package rpc
 
 import (
-	"bufio"
 	"context"
 	"encoding/json"
 	"errors"
@@ -128,12 +127,11 @@ func (p *Peer) Serve(ctx context.Context, r io.Reader) error {
 		}
 		p.mu.Unlock()
 	}
-	sc := bufio.NewScanner(r)
 	maximum := 64 * 1024 * 1024
 	if p.Limits.FrameBytes > 0 {
 		maximum = p.Limits.FrameBytes
 	}
-	sc.Buffer(make([]byte, min(64*1024, maximum)), maximum)
+	sc := newLineReader(r, maximum) // a bufio.Scanner that gives back what a long line grew (linereader.go)
 	for sc.Scan() {
 		var m message
 		if err := json.Unmarshal(sc.Bytes(), &m); err != nil {
