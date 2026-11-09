@@ -837,7 +837,7 @@ export function triageUnread(tr: InboxTriage | null | undefined): string[] {
   return tr.sources
     .filter((x) => x && typeof x.read_error === "string" && x.read_error.trim())
     .map((x) => t("lib-inbox.read_failed_line", {
-      name: (x.name ?? "").trim() || x.source,
+      name: (x.name ?? "").trim() || x.source || "",
       reason: (x.read_reason ?? "").trim() || t("lib-inbox.read_failed"),
     }));
 }

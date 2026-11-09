@@ -6,8 +6,9 @@ import type { InboxTriage } from "../../lib/inbox";
 
 const draw = (triage: InboxTriage | null | undefined) => renderToStaticMarkup(<UnreadNotice triage={triage} />);
 
-// GET /api/v1/inbox `triage` as the hub sends it (server/internal/assistant/inbox_admit.go): triage ok, nothing waiting,
-// two sources not read this round (one with the hub's reason, one without), one read fine.
+// GET /api/v1/inbox `triage` shaped like the hub's (server/internal/assistant/inbox_admit.go): triage ok, nothing waiting,
+// two sources not read this round, one read fine. The hub always sends `read_reason` with `read_error`; the source
+// without one exercises the client's fallback wording (older hubs, a blank reason).
 const hub: InboxTriage = JSON.parse(`{"state":"ok","waiting":0,"sources":[
   {"source":"ext-chat","name":"示例聊天","state":"ok","waiting":0,"read_error":"timeout","read_reason":"这一轮没读到：超时了"},
   {"source":"ext-tracker","name":"","state":"ok","waiting":0,"read_error":"rate_limited"},
