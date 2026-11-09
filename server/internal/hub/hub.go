@@ -162,6 +162,7 @@ type Store interface {
 	FindQueuedPhoneWrite(ctx context.Context, tool string, args json.RawMessage) (*db.PhoneWrite, error)
 	EnqueuePhoneWrite(ctx context.Context, id, tool string, args json.RawMessage) (*db.PhoneWrite, error)
 	PhoneWrites(ctx context.Context) ([]db.PhoneWrite, error)
+	QueuedPhoneWrites(ctx context.Context) ([]db.PhoneWrite, error)
 	ClaimPhoneWrite(ctx context.Context, id string) (bool, error)
 	FinishPhoneWrite(ctx context.Context, id, state string, result json.RawMessage) error
 	CancelPhoneWrite(ctx context.Context, id string) (*db.PhoneWrite, error)
@@ -427,6 +428,8 @@ func (h *Hub) callPhone(ctx context.Context, name string, args json.RawMessage) 
 			return proto.TextResult(err.Error(), true)
 		}
 		if existing != nil {
+			h.wakePhoneWrites()
+			go h.requestPhoneWake(name)
 			return phoneWriteResult(existing)
 		}
 	}
@@ -489,10 +492,11 @@ var phoneConfirmedTools = map[string]bool{
 	"phone_health_write_sample":   true,
 }
 
-// wakePhone asks iOS to wake the app in the background (silent push) and waits briefly for it to connect.
-func (h *Hub) wakePhone(ctx context.Context, name string) *client {
+// requestPhoneWake selects a provider and asks iOS to wake it without waiting for a connection.
+// It reports whether a provider can be woken, including when a recent request throttles this push.
+func (h *Hub) requestPhoneWake(name string) bool {
 	if !h.push.ready() {
-		return nil
+		return false
 	}
 	h.mu.Lock()
 	var candidates []db.PhoneToolRegistration
@@ -534,10 +538,18 @@ func (h *Hub) wakePhone(ctx context.Context, name string) *client {
 	}
 	h.mu.Unlock()
 	if len(candidates) == 0 {
-		return nil
+		return false
 	}
 	if len(wakeIDs) > 0 {
 		h.push.wakeDevices("tool", wakeIDs)
+	}
+	return true
+}
+
+// wakePhone asks iOS to wake the app in the background (silent push) and waits briefly for it to connect.
+func (h *Hub) wakePhone(ctx context.Context, name string) *client {
+	if !h.requestPhoneWake(name) {
+		return nil
 	}
 	start := time.Now()
 	ctx, cancel := context.WithTimeout(ctx, 20*time.Second)

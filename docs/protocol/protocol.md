@@ -2725,7 +2725,10 @@ The hub adds an optional `queue_if_offline: boolean` to the schemas of `phone_ca
 `phone_reminders_create`, `phone_reminders_update`, `phone_reminders_complete`, `phone_reminders_delete`, and
 `phone_health_write_sample`. Without true, the existing immediate call and background wake behavior stays unchanged.
 With true and no connected device offering the tool, the hub persists a queue entry and immediately returns that record
-as JSON text in a successful `ToolResult`. With a connected device it calls the tool normally. The hub strips the option
+as JSON text in a successful `ToolResult`. After admission it schedules a best-effort silent push in the background,
+using the normal most-recent-device selection and 30-second wake throttle; the reply does not wait for the push or a
+connection. Without configured push, this attempt does nothing. A woken phone registers its tools and triggers delivery
+as usual. With a connected device the hub calls the tool normally. The hub strips the option
 before sending `tool_call`; existing apps need no change, and reads and writes without phone confirmation cannot queue.
 The tool must also appear in a retained phone registration before the hub accepts it into the queue. A queued receipt
 means the request was accepted for later delivery; it does not mean the change was saved.
@@ -2756,7 +2759,9 @@ At `register_phone`, the hub schedules a single asynchronous delivery loop. It p
 is currently registered by a connected phone, commits `delivering` before sending, and waits for that phone's result
 before taking another entry. The normal phone confirmation remains mandatory. Queue delivery never holds the hub's
 global lock while waiting for storage or the phone, and registration never waits for delivery. A disconnected or disabled
-tool leaves its entries queued until a capable device registers it again.
+tool leaves its entries queued until a capable device registers it again. Each delivery pass reads only queued entries
+in enqueue order, at most 100, using the queue's partial index; its idle timer does not load terminal history. The list
+API and list tool use a plain SELECT without taking the queue mutation lock or deleting records.
 
 | State | Meaning |
 | --- | --- |
@@ -2775,10 +2780,12 @@ and preserves queued entries. There is no automatic retry for terminal records.
 
 Deduplication covers only `queued` entries: the same tool and normalized JSON arguments reuse the existing ID (key order
 and whitespace are irrelevant). It does not cover already-delivering or terminal entries. The limit is 100 pending
-entries (`queued` plus `delivering`), with at most 64 KiB of arguments each. Terminal records are kept for up to 30 days
-and at most 1,000 entries, pruning the oldest during queue activity and startup. Stored results are limited to 64 KiB;
-when a phone returns more, the hub stores an explanation instead of its full result without changing the outcome state.
-Pending entries do not expire or get evicted when a queue is full.
+entries (`queued` plus `delivering`), with at most 64 KiB of arguments each. Cleanup runs only on admission and when
+recording a delivery result, removing terminal records older than 30 days and keeping the newest 1,000 terminal records.
+Reads, cancellations, and startup recovery do not clean up: older records and additional terminal records from
+cancellation or recovery remain visible until the next cleanup. The total table remains bounded at 1,100 records.
+Stored results are limited to 64 KiB; when a phone returns more, the hub stores an explanation instead of its full result
+without changing the outcome state. Pending entries do not expire or get evicted when a queue is full.
 See `docs/apple/phone-tools.md`, "Offline write queue", for caller behavior and confirmation details.
 
 ## Connector API

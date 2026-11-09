@@ -588,3 +588,5 @@ func (s *meshStore) RecoverPhoneWrites(context.Context) error { return nil }
 func (s *meshStore) FindQueuedPhoneWrite(context.Context, string, json.RawMessage) (*db.PhoneWrite, error) {
 	return nil, nil
 }
+
+func (s *meshStore) QueuedPhoneWrites(context.Context) ([]db.PhoneWrite, error) { return nil, nil }

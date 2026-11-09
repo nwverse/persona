@@ -89,6 +89,7 @@ func (h *Hub) enqueuePhoneWrite(ctx context.Context, name string, args json.RawM
 		return proto.TextResult(err.Error(), true)
 	}
 	h.wakePhoneWrites()
+	go h.requestPhoneWake(name)
 	return phoneWriteResult(write)
 }
 
@@ -149,7 +150,7 @@ func (h *Hub) withPhoneWriteTools(tools []proto.Tool) []proto.Tool {
 func (h *Hub) deliverPhoneWrites(ctx context.Context) {
 	for ctx.Err() == nil {
 		readCtx, cancel := context.WithTimeout(ctx, phoneToolsTimeout)
-		writes, err := h.store.PhoneWrites(readCtx)
+		writes, err := h.store.QueuedPhoneWrites(readCtx)
 		cancel()
 		if err != nil {
 			h.logf("read phone write queue: %v", err)
@@ -158,9 +159,6 @@ func (h *Hub) deliverPhoneWrites(ctx context.Context) {
 		var next *db.PhoneWrite
 		var phone *client
 		for i := range writes {
-			if writes[i].State != "queued" {
-				continue
-			}
 			if phone = h.phoneClient(writes[i].Tool); phone != nil {
 				next = &writes[i]
 				break

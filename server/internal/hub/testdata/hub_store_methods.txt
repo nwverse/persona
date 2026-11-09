@@ -49,6 +49,7 @@ RedeemPairToken
 # Durable delivery receipts for confirmed phone writes; phone data stays on the phone.
 EnqueuePhoneWrite
 PhoneWrites
+QueuedPhoneWrites
 ClaimPhoneWrite
 FinishPhoneWrite
 CancelPhoneWrite

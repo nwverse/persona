@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 )
 
 func openPhoneWriteQueue(t *testing.T) *DB {
@@ -225,6 +226,13 @@ func TestPhoneWriteQueueBoundsAndRetention(t *testing.T) {
 		FROM generate_series(1, $1::int) n`, PhoneWriteHistoryLimit+5); err != nil {
 		t.Fatal(err)
 	}
+	// Reads expose retained receipts without pruning; the next admission cleans old and excess history.
+	if writes, err := d.PhoneWrites(ctx); err != nil || len(writes) != PhoneWritePendingLimit+PhoneWriteHistoryLimit+6 {
+		t.Fatalf("read changed history: size=%d err=%v", len(writes), err)
+	}
+	if _, err := d.EnqueuePhoneWrite(ctx, "duplicate-after-history", "phone_reminders_create", json.RawMessage(`{"n":1}`)); err != nil {
+		t.Fatal(err)
+	}
 	writes, err := d.PhoneWrites(ctx)
 	if err != nil || len(writes) != PhoneWritePendingLimit+PhoneWriteHistoryLimit {
 		t.Fatalf("retention size=%d err=%v", len(writes), err)
@@ -236,6 +244,138 @@ func TestPhoneWriteQueueBoundsAndRetention(t *testing.T) {
 	}
 	if writes[0].ID != "pending-1" || writes[0].State != "queued" {
 		t.Fatalf("old pending receipt disappeared: %+v", writes[0])
+	}
+}
+
+func TestPhoneWriteQueueReadsDoNotLockOrDelete(t *testing.T) {
+	d, ctx := openPhoneWriteQueue(t), context.Background()
+	for _, id := range []string{"first", "second", "third"} {
+		if _, err := d.EnqueuePhoneWrite(ctx, id, "phone_reminders_create", json.RawMessage(fmt.Sprintf(`{"title":%q}`, id))); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if claimed, err := d.ClaimPhoneWrite(ctx, "third"); err != nil || !claimed {
+		t.Fatalf("claim: %v %v", claimed, err)
+	}
+	if _, err := d.pool.Exec(ctx, `INSERT INTO phone_write_queue (id, tool, args, state, updated_at)
+		VALUES ('expired', 'phone_reminders_create', '{}', 'succeeded', now() - interval '31 days')`); err != nil {
+		t.Fatal(err)
+	}
+	tx, err := d.pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback(ctx)
+	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended('phone_write_queue', 0))`); err != nil {
+		t.Fatal(err)
+	}
+	// SHARE permits ordinary reads but blocks DELETE/UPDATE on another connection.
+	if _, err := tx.Exec(ctx, `LOCK TABLE phone_write_queue IN SHARE MODE`); err != nil {
+		t.Fatal(err)
+	}
+	readCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	writes, err := d.PhoneWrites(readCtx)
+	if err != nil || len(writes) != 4 || writes[3].ID != "expired" {
+		t.Fatalf("receipt read blocked or pruned: %+v %v", writes, err)
+	}
+	queued, err := d.QueuedPhoneWrites(readCtx)
+	if err != nil || len(queued) != 2 || queued[0].ID != "first" || queued[1].ID != "second" {
+		t.Fatalf("queued read blocked or included other states: %+v %v", queued, err)
+	}
+	if write, err := d.FindQueuedPhoneWrite(readCtx, "phone_reminders_create", json.RawMessage(`{"title":"first"}`)); err != nil || write == nil || write.ID != "first" {
+		t.Fatalf("deduplication read blocked: %+v %v", write, err)
+	}
+	var count int
+	if err := tx.QueryRow(ctx, `SELECT count(*) FROM phone_write_queue WHERE id = 'expired'`).Scan(&count); err != nil || count != 1 {
+		t.Fatalf("receipt read deleted expired history: count=%d err=%v", count, err)
+	}
+}
+
+func TestQueuedPhoneWritesBoundedAndIndexed(t *testing.T) {
+	d, ctx := openPhoneWriteQueue(t), context.Background()
+	if _, err := d.pool.Exec(ctx, `INSERT INTO phone_write_queue (id, tool, args, state)
+		SELECT 'history-' || n, 'phone_reminders_create', '{}', 'succeeded'
+		FROM generate_series(1, $1::int) n`, PhoneWriteHistoryLimit); err != nil {
+		t.Fatal(err)
+	}
+	if writes, err := d.QueuedPhoneWrites(ctx); err != nil || len(writes) != 0 {
+		t.Fatalf("idle delivery read returned history: %+v %v", writes, err)
+	}
+	// An overfull fixture checks the query's defensive bound independently of admission's limit.
+	if _, err := d.pool.Exec(ctx, `INSERT INTO phone_write_queue (id, tool, args)
+		SELECT 'queued-' || n, 'phone_reminders_create', '{}' FROM generate_series(1, $1::int) n`, PhoneWritePendingLimit+5); err != nil {
+		t.Fatal(err)
+	}
+	writes, err := d.QueuedPhoneWrites(ctx)
+	if err != nil || len(writes) != PhoneWritePendingLimit {
+		t.Fatalf("pending batch size=%d err=%v", len(writes), err)
+	}
+	for i, write := range writes {
+		if write.ID != fmt.Sprintf("queued-%d", i+1) || write.State != "queued" {
+			t.Fatalf("pending order at %d: %+v", i, write)
+		}
+	}
+	tx, err := d.pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback(ctx)
+	if _, err := tx.Exec(ctx, `SET LOCAL enable_seqscan = off`); err != nil {
+		t.Fatal(err)
+	}
+	rows, err := tx.Query(ctx, `EXPLAIN `+queuedPhoneWritesSQL, PhoneWritePendingLimit)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	var plan []string
+	for rows.Next() {
+		var line string
+		if err := rows.Scan(&line); err != nil {
+			t.Fatal(err)
+		}
+		plan = append(plan, line)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(strings.Join(plan, "\n"), "phone_write_queue_pending") {
+		t.Fatalf("queued query cannot use the pending index:\n%s", strings.Join(plan, "\n"))
+	}
+}
+
+func TestPhoneWriteQueueCompletionCleansDeferredHistory(t *testing.T) {
+	d, ctx := openPhoneWriteQueue(t), context.Background()
+	for _, id := range []string{"cancel", "recover", "finish"} {
+		if _, err := d.EnqueuePhoneWrite(ctx, id, "phone_reminders_create", json.RawMessage(fmt.Sprintf(`{"title":%q}`, id))); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := d.pool.Exec(ctx, `INSERT INTO phone_write_queue (id, tool, args, state, updated_at)
+		VALUES ('expired', 'phone_reminders_create', '{}', 'succeeded', now() - interval '31 days')`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := d.CancelPhoneWrite(ctx, "cancel"); err != nil {
+		t.Fatal(err)
+	}
+	if claimed, err := d.ClaimPhoneWrite(ctx, "recover"); err != nil || !claimed {
+		t.Fatalf("claim: %v %v", claimed, err)
+	}
+	if err := d.RecoverPhoneWrites(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if writes, err := d.PhoneWrites(ctx); err != nil || len(writes) != 4 {
+		t.Fatalf("cancellation or recovery pruned history: %+v %v", writes, err)
+	}
+	if claimed, err := d.ClaimPhoneWrite(ctx, "finish"); err != nil || !claimed {
+		t.Fatalf("claim: %v %v", claimed, err)
+	}
+	if err := d.FinishPhoneWrite(ctx, "finish", "succeeded", json.RawMessage(`{"content":[]}`)); err != nil {
+		t.Fatal(err)
+	}
+	if writes, err := d.PhoneWrites(ctx); err != nil || len(writes) != 3 {
+		t.Fatalf("completion did not prune history: %+v %v", writes, err)
 	}
 }
 

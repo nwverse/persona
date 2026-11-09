@@ -116,8 +116,11 @@ registration; the hub refuses tools that no registered phone offers.
 
 - **Default unchanged**: omitting the parameter, or setting it to false, uses the existing call and background wake path;
   an unreachable phone still returns an error. With true and no connected device offering that tool, the hub saves the
-  request immediately and returns its queue record and opaque `id`. It does not wait for a background wake. With a
-  connected device, the call runs normally and waits for its result. An error after sending never turns into a new queue entry.
+  request immediately and returns its queue record and opaque `id`. After admission, it also attempts a silent push
+  in the background using the same device selection and 30-second throttle as ordinary calls. The caller waits for
+  neither the push nor reconnection. Without push configuration this attempt does nothing; the entry waits for the
+  app to connect. With a connected device, the call runs normally and waits for its result. An error after sending
+  never turns into a new queue entry.
 - **Confirmation still required**: accepting a queue entry does not mean the write happened. When a phone registers
   the needed tool, one delivery loop sends queued entries in their original order among the currently available tools,
   waiting for each result before sending the next. Every delivery uses the normal app confirmation flow and starts its
@@ -131,10 +134,12 @@ registration; the hub refuses tools that no registered phone offers.
   The hub never automatically resends these entries. A later app result cannot turn an uncertain write into a retry.
   Check the phone's actual calendar, reminders, or health data before deciding whether another write is needed.
 - **Bounded storage**: the hub accepts at most 100 pending entries (`queued` plus `delivering`), with at most 64 KiB of
-  JSON arguments per entry. Terminal records are retained for up to 30 days, with at most 1,000 retained terminal entries;
-  older terminal records are pruned during queue activity and startup. Results are limited to 64 KiB; a larger result
-  is replaced by an explanation while preserving its success, decline, or failure state. Queued entries do not expire. A full pending queue rejects new entries; it does
-  not discard accepted writes.
+  JSON arguments per entry. Cleanup runs only when admitting a write or recording a delivery result: it removes
+  terminal records older than 30 days and keeps at most 1,000 terminal records. Reads, cancellations, and startup
+  recovery do not delete records, so older or excess terminal records remain visible until the next cleanup; the
+  total stays bounded at 1,100 records. Results are limited to 64 KiB; a larger result is replaced by an explanation
+  while preserving its success, decline, or failure state. Queued entries do not expire. A full pending queue rejects
+  new entries; it does not discard accepted writes.
 
 Queue management is available to computer sessions through the same MCP route, including while every phone is offline:
 

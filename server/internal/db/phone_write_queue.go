@@ -35,6 +35,9 @@ const phoneWriteColumns = `id, tool, args, state, result, created_at, updated_at
 const findQueuedPhoneWriteSQL = `SELECT ` + phoneWriteColumns + ` FROM phone_write_queue
 	WHERE state = 'queued' AND tool = $1 AND args = $2::jsonb ORDER BY sequence LIMIT 1`
 
+const queuedPhoneWritesSQL = `SELECT ` + phoneWriteColumns + ` FROM phone_write_queue
+	WHERE state = 'queued' ORDER BY sequence LIMIT $1`
+
 func scanPhoneWrite(row pgx.Row) (*PhoneWrite, error) {
 	var write PhoneWrite
 	err := row.Scan(&write.ID, &write.Tool, &write.Args, &write.State, &write.Result, &write.CreatedAt, &write.UpdatedAt)
@@ -78,13 +81,7 @@ func (d *DB) FindQueuedPhoneWrite(ctx context.Context, tool string, args json.Ra
 	if err := validatePhoneWriteArgs(args); err != nil {
 		return nil, err
 	}
-	var write *PhoneWrite
-	err := d.phoneWriteTransaction(ctx, func(tx pgx.Tx) error {
-		var err error
-		write, err = scanPhoneWrite(tx.QueryRow(ctx, findQueuedPhoneWriteSQL, tool, args))
-		return err
-	})
-	return write, err
+	return scanPhoneWrite(d.pool.QueryRow(ctx, findQueuedPhoneWriteSQL, tool, args))
 }
 
 // EnqueuePhoneWrite returns an existing queued receipt for equal JSON, ignoring object key order and numeric spelling.
@@ -119,28 +116,31 @@ func (d *DB) EnqueuePhoneWrite(ctx context.Context, id, tool string, args json.R
 	return write, err
 }
 
-// PhoneWrites lists retained receipts in admission order, including pending writes regardless of age.
+// PhoneWrites lists receipts without changing them. Admission and completion prune terminal history.
 func (d *DB) PhoneWrites(ctx context.Context) ([]PhoneWrite, error) {
+	return d.phoneWriteRows(ctx, `SELECT `+phoneWriteColumns+` FROM phone_write_queue ORDER BY sequence`)
+}
+
+// QueuedPhoneWrites reads only unsent writes through the pending index; idle delivery polls never read history.
+func (d *DB) QueuedPhoneWrites(ctx context.Context) ([]PhoneWrite, error) {
+	return d.phoneWriteRows(ctx, queuedPhoneWritesSQL, PhoneWritePendingLimit)
+}
+
+func (d *DB) phoneWriteRows(ctx context.Context, query string, args ...any) ([]PhoneWrite, error) {
+	rows, err := d.pool.Query(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
 	writes := []PhoneWrite{}
-	err := d.phoneWriteTransaction(ctx, func(tx pgx.Tx) error {
-		if err := prunePhoneWrites(ctx, tx); err != nil {
-			return err
-		}
-		rows, err := tx.Query(ctx, `SELECT `+phoneWriteColumns+` FROM phone_write_queue ORDER BY sequence`)
+	for rows.Next() {
+		write, err := scanPhoneWrite(rows)
 		if err != nil {
-			return err
+			return nil, err
 		}
-		defer rows.Close()
-		for rows.Next() {
-			write, err := scanPhoneWrite(rows)
-			if err != nil {
-				return err
-			}
-			writes = append(writes, *write)
-		}
-		return rows.Err()
-	})
-	return writes, err
+		writes = append(writes, *write)
+	}
+	return writes, rows.Err()
 }
 
 // ClaimPhoneWrite records the delivery attempt before any bytes can be sent to the phone.
@@ -184,10 +184,7 @@ func (d *DB) CancelPhoneWrite(ctx context.Context, id string) (*PhoneWrite, erro
 		}
 		var err error
 		write, err = scanPhoneWrite(tx.QueryRow(ctx, `SELECT `+phoneWriteColumns+` FROM phone_write_queue WHERE id = $1`, id))
-		if err != nil {
-			return err
-		}
-		return prunePhoneWrites(ctx, tx)
+		return err
 	})
 	return write, err
 }
@@ -195,10 +192,8 @@ func (d *DB) CancelPhoneWrite(ctx context.Context, id string) (*PhoneWrite, erro
 // RecoverPhoneWrites never retries an attempt whose phone may have completed the write before the hub stopped.
 func (d *DB) RecoverPhoneWrites(ctx context.Context) error {
 	return d.phoneWriteTransaction(ctx, func(tx pgx.Tx) error {
-		if _, err := tx.Exec(ctx, `UPDATE phone_write_queue SET state = 'uncertain', updated_at = now()
-			WHERE state = 'delivering'`); err != nil {
-			return err
-		}
-		return prunePhoneWrites(ctx, tx)
+		_, err := tx.Exec(ctx, `UPDATE phone_write_queue SET state = 'uncertain', updated_at = now()
+			WHERE state = 'delivering'`)
+		return err
 	})
 }

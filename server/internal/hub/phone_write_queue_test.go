@@ -363,11 +363,11 @@ type stalledPhoneWriteScan struct {
 	once    sync.Once
 }
 
-func (s *stalledPhoneWriteScan) PhoneWrites(ctx context.Context) ([]db.PhoneWrite, error) {
+func (s *stalledPhoneWriteScan) QueuedPhoneWrites(ctx context.Context) ([]db.PhoneWrite, error) {
 	s.once.Do(func() { close(s.started) })
 	select {
 	case <-s.release:
-		return s.Store.PhoneWrites(ctx)
+		return s.Store.QueuedPhoneWrites(ctx)
 	case <-ctx.Done():
 		return nil, ctx.Err()
 	}
