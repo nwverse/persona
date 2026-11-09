@@ -61,5 +61,6 @@
   "minutes_request_failed": "纪要更新失败：{error}",
   "minutes_stale": "纪要已更新，正在读取最新版本；请确认行动项后再加入待办。",
   "minutes_refresh_failed": "未能读取最新纪要，请先刷新再重试：{error}",
-  "minutes_retry_refresh": "重新刷新"
+  "minutes_retry_refresh": "重新刷新",
+  "minutes_due": "截止 {date}"
 }

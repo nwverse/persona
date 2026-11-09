@@ -155,6 +155,7 @@ func (s *Service) minutesTodos(ctx context.Context, e *kb.Engine, id string, ver
 	}
 	var out []Todo
 	made := map[string]string{}
+	note := s.minutesTodoNotes(ctx, rec, m)
 	for _, aid := range dedupe(actions) {
 		a := byID[aid]
 		tid := a.TodoID
@@ -168,12 +169,16 @@ func (s *Service) minutesTodos(ctx context.Context, e *kb.Engine, id string, ver
 		if a.TodoID != "" { // made before and deleted since: the user's choice stands
 			continue
 		}
-		t, err := s.insertTodo(ctx, s.minutesTodoRow(ctx, tid, rec, m, a))
+		t, err := s.insertTodo(ctx, minutesTodoRow(tid, a, note(a)))
 		var pg *pgconn.PgError
-		if errors.As(err, &pg) && pg.Code == "23505" { // made a moment ago by a request that raced this one
+		if errors.As(err, &pg) && pg.Code == "23505" { // made a moment ago by another manager on the same store
 			t, err = Todo{ID: tid, Title: minutesTodoTitle(a)}, nil
 		}
 		if err != nil {
+			// Those made so far are recorded all the same: a retry after the user deleted one must not make it again.
+			if _, serr := e.SetMinutesTodos(rid, version, made); serr != nil && !errors.Is(serr, kb.ErrMinutesStale) {
+				s.logf("assistant: minutes to-dos of %s: %v", rid, serr)
+			}
 			return out, nil, err
 		}
 		out, made[aid] = append(out, t), tid
@@ -201,18 +206,25 @@ func minutesTodoTitle(a kb.MinutesAction) string {
 	return a.What
 }
 
-// minutesTodoRow is the plain to-do (no conversation, no task) action a of minutes m becomes: due on its date when it
-// has one, its notes saying which meeting and when it was said.
-func (s *Service) minutesTodoRow(ctx context.Context, id string, rec *kb.Recording, m *kb.Minutes, a kb.MinutesAction) db.TodoRow {
-	loc := s.location(ctx)
-	clock := rec.StartedAt.Add(time.Duration(a.At * float64(time.Second))).In(loc).Format("15:04:05")
-	notes := i18n.T(s.lang(ctx), "assistant-minutes.todo_notes", i18n.Args{"meeting": m.Title, "when": m.When, "clock": clock})
-	if a.By != "" {
-		notes += "\n" + i18n.T(s.lang(ctx), "assistant-minutes.todo_by", i18n.Args{"by": a.By})
+// minutesTodoNotes is what a to-do made of an action of minutes m of recording rec says: which meeting, when it was
+// said, the deadline as said, the recording's page. The zone, language and web address are read once a request.
+func (s *Service) minutesTodoNotes(ctx context.Context, rec *kb.Recording, m *kb.Minutes) func(kb.MinutesAction) string {
+	loc, l, link := s.location(ctx), s.lang(ctx), recordingLink(s.webBase(ctx), rec.ID)
+	return func(a kb.MinutesAction) string {
+		clock := rec.StartedAt.Add(time.Duration(a.At * float64(time.Second))).In(loc).Format("15:04:05")
+		notes := i18n.T(l, "assistant-minutes.todo_notes", i18n.Args{"meeting": m.Title, "when": m.When, "clock": clock})
+		if a.By != "" {
+			notes += "\n" + i18n.T(l, "assistant-minutes.todo_by", i18n.Args{"by": a.By})
+		}
+		if link != "" {
+			notes += "\n" + link
+		}
+		return notes
 	}
-	if link := recordingLink(s.webBase(ctx), rec.ID); link != "" {
-		notes += "\n" + link
-	}
+}
+
+// minutesTodoRow is the plain to-do (no conversation, no task) action a becomes: due on its date when it has one.
+func minutesTodoRow(id string, a kb.MinutesAction, notes string) db.TodoRow {
 	now := time.Now().UTC()
 	row := db.TodoRow{ID: id, Title: minutesTodoTitle(a), Notes: strings.TrimSpace(notes), CreatedAt: now, UpdatedAt: now}
 	if d, err := time.Parse("2006-01-02", a.DueDate); err == nil {

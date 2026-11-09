@@ -29,7 +29,7 @@ const fixture = (): KBDetailResponse => ({ detail: {
   minutes: {
     version: 2, revision: 4, generated_at: "2026-11-10T15:00:00Z", title: "Design review", when: "2026-11-10 14:00–14:30", where: "Room 3", attendees: ["Ada", "Bo"],
     points: [{ text: "Export limit", who: "Ada", at: 12 }], decisions: [{ text: "Keep the cap", at: 20.5 }],
-    actions: [{ id: "a1", who: "Bo", what: "Add coverage", by: "Friday", at: 25 }, { id: "a2", what: "Share notes", at: 40, todo_id: "todo-example" }],
+    actions: [{ id: "a1", who: "Bo", what: "Add coverage", by: "Friday", due_date: "2026-11-13", at: 25 }, { id: "a2", what: "Share notes", at: 40, todo_id: "todo-example" }],
     open: [{ text: "Per-entry limit?", at: 60 }], markdown: "# Design review\n\n- Add coverage",
   },
 } });
@@ -68,7 +68,7 @@ describe("recording minutes in Knowledge detail", () => {
   it("renders the metadata and sections in wire order before the profile", async () => {
     await load();
     expect([...section().querySelectorAll("h3")].map((h) => h.textContent)).toEqual(["Design review", "Key points", "Decisions", "Action items", "Open questions"]);
-    for (const text of ["2026-11-10 14:00–14:30", "Location: Room 3", "Attendees: Ada · Bo", "Ada · Export limit", "Bo · Add coverage · Friday", "Per-entry limit?"]) expect(section().textContent).toContain(text);
+    for (const text of ["2026-11-10 14:00–14:30", "Location: Room 3", "Attendees: Ada · Bo", "Ada · Export limit", "Bo · Add coverage · Friday · Due 2026-11-13", "Per-entry limit?"]) expect(section().textContent).toContain(text);
     expect(section().textContent).not.toContain("A short profile.");
     expect(host.textContent!.indexOf("Design review")).toBeLessThan(host.textContent!.indexOf("A short profile."));
     const added = [...section().querySelectorAll("li")].find((li) => li.textContent?.includes("Share notes"))!;

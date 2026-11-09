@@ -13,6 +13,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/nwverse/persona/server/internal/ai"
 	"github.com/nwverse/persona/server/internal/prompts"
@@ -86,7 +87,8 @@ const (
 	minutesChunk       = 12000
 	minutesMaxChunks   = 40
 	minutesCallTimeout = 3 * time.Minute
-	minutesMaxItems    = 50
+	minutesJobTimeout  = 45 * time.Minute // all the calls of one recording: the knowledge-base round waits for them
+	minutesMaxItems    = 100
 	minutesTextRunes   = 400
 	minutesLineRunes   = 4000 // a transcript line longer than this is cut (one segment, not the whole meeting)
 	// What the merging call reads of all the parts' notes: per section, at most this many items over all parts (an
@@ -105,8 +107,9 @@ func (r *Recording) isMeeting() bool {
 func (r *Recording) planMinutes() {
 	switch {
 	case !r.isMeeting():
-		if r.MinutesVersion == 0 {
-			r.MinutesState = ""
+		r.MinutesState = ""
+		if r.MinutesVersion > 0 { // minutes made while it was one: they stay, nothing more to make
+			r.MinutesState = MinutesReady
 		}
 	case r.MinutesRev > 0 && r.MinutesRev >= r.Revision:
 		r.MinutesState = MinutesReady
@@ -243,11 +246,13 @@ func (e *Engine) WriteMinutes(ctx context.Context, max int) int {
 	}
 	sort.Slice(todo, func(i, j int) bool { return todo[i].StartedAt.After(todo[j].StartedAt) })
 	n := 0
-	for _, r := range todo {
-		if n >= max || ctx.Err() != nil {
+	for i, r := range todo {
+		if i >= max || ctx.Err() != nil { // at most max tried a round, written or not
 			break
 		}
-		err := e.writeMinutes(ctx, r.ID)
+		jctx, cancel := context.WithTimeout(ctx, minutesJobTimeout)
+		err := e.writeMinutes(jctx, r.ID)
+		cancel()
 		if err == nil {
 			n++
 			continue
@@ -445,10 +450,7 @@ func (e *Engine) writeMinutes(ctx context.Context, id string) error {
 	lines := make([]minutesLine, 0, len(segs))
 	for i, sg := range segs {
 		if t := strings.Join(strings.Fields(sg.Text), " "); t != "" {
-			if r := []rune(t); len(r) > minutesLineRunes {
-				t = string(r[:minutesLineRunes]) + "…"
-			}
-			lines = append(lines, minutesLine{N: i + 1, At: sg.Start, Text: t})
+			lines = append(lines, minutesLine{N: i + 1, At: sg.Start, Text: clip(t, minutesLineRunes)})
 		}
 	}
 	chunks, partial := chunkLines(lines, minutesOneCall, minutesChunk, minutesMaxChunks)
@@ -487,6 +489,7 @@ func (e *Engine) writeMinutes(ctx context.Context, id string) error {
 		if err != nil {
 			return fmt.Errorf("merging %d parts: %w", len(chunks), err)
 		}
+		read = notedLines(read, merge.Parts) // the merging call saw the notes, not the transcript
 	}
 	m, err := e.buildMinutes(&r, ans, read, zone)
 	if err != nil {
@@ -616,6 +619,25 @@ func notesForMerge(part int, a minutesAnswer, chunk []minutesLine, start time.Ti
 	return p
 }
 
+// notedLines is the lines of read the parts' notes cite.
+func notedLines(read []minutesLine, parts []prompts.KBMinutesPart) []minutesLine {
+	cited := map[int]bool{}
+	for _, p := range parts {
+		for _, list := range [][]prompts.KBMinutesNote{p.Points, p.Decisions, p.Actions, p.Open} {
+			for _, n := range list {
+				cited[n.Line] = true
+			}
+		}
+	}
+	var out []minutesLine
+	for _, l := range read {
+		if cited[l.N] {
+			out = append(out, l)
+		}
+	}
+	return out
+}
+
 func firstN[T any](s []T, n int) []T {
 	if len(s) > n {
 		return s[:n]
@@ -626,13 +648,7 @@ func firstN[T any](s []T, n int) []T {
 func clipText(s string) string { return clipRunes(s, minutesTextRunes) }
 
 // clipRunes is s on one line, at most n runes ("…" marking a cut).
-func clipRunes(s string, n int) string {
-	s = strings.Join(strings.Fields(s), " ")
-	if r := []rune(s); len(r) > n {
-		s = string(r[:n]) + "…"
-	}
-	return s
-}
+func clipRunes(s string, n int) string { return clip(strings.Join(strings.Fields(s), " "), n) }
 
 // buildMinutes checks the model's answer against the lines it read: every item must cite one of them, a person must be
 // named in them or in the calendar, a due date must be a real day from the meeting on (within a year).
@@ -641,10 +657,11 @@ func (e *Engine) buildMinutes(r *Recording, a minutesAnswer, read []minutesLine,
 	var saidB strings.Builder
 	for _, l := range read {
 		at[l.N] = l.At
-		saidB.WriteString(strings.ToLower(l.Text))
+		saidB.WriteString(l.Text)
 		saidB.WriteByte('\n')
 	}
-	said := saidB.String()
+	raw := saidB.String()
+	said := strings.ToLower(raw)
 	var calendar []string
 	if r.Calendar != nil {
 		calendar = r.Calendar.Attendees
@@ -659,7 +676,7 @@ func (e *Engine) buildMinutes(r *Recording, a minutesAnswer, read []minutesLine,
 				return c
 			}
 		}
-		if strings.Contains(said, strings.ToLower(who)) {
+		if spoken(raw, who) {
 			return who
 		}
 		return ""
@@ -695,37 +712,44 @@ func (e *Engine) buildMinutes(r *Recording, a minutesAnswer, read []minutesLine,
 		seen[k] = true
 		return true
 	}
+	// The citation first: an item citing nothing read must not hide a later copy of it that does.
 	for _, x := range a.Points {
-		if t := clipText(x.Text); fresh("p", t) {
-			if sec, ok := line(x.Line); ok {
+		if t := clipText(x.Text); t != "" {
+			if sec, ok := line(x.Line); ok && fresh("p", t) {
 				m.Points = append(m.Points, MinutesPoint{Text: t, At: sec, Who: named(x.Who)})
 			}
 		}
 	}
 	for _, x := range a.Decisions {
-		if t := clipText(x.Text); fresh("d", t) {
-			if sec, ok := line(x.Line); ok {
+		if t := clipText(x.Text); t != "" {
+			if sec, ok := line(x.Line); ok && fresh("d", t) {
 				m.Decisions = append(m.Decisions, MinutesItem{Text: t, At: sec})
 			}
 		}
 	}
-	day := r.StartedAt.In(zone)
-	day = time.Date(day.Year(), day.Month(), day.Day(), 0, 0, 0, 0, zone)
+	day := r.StartedAt.In(zone).Format("2006-01-02")
 	for _, x := range a.Actions {
-		if t := clipText(x.What); fresh("a"+oneLine(x.Who), t) { // the same task for two people is two actions
-			if sec, ok := line(x.Line); ok {
-				m.Actions = append(m.Actions, MinutesAction{Who: named(x.Who), What: t, By: oneLine(x.By), DueDate: dueDate(x.DueDate, day), At: sec})
+		if t := clipText(x.What); t != "" {
+			// The same task for two people is two actions.
+			if sec, ok := line(x.Line); ok && fresh("a"+oneLine(x.Who), t) {
+				by := oneLine(x.By)
+				due := ""
+				if by != "" { // a date only for a deadline someone said
+					due = dueDate(x.DueDate, day)
+				}
+				m.Actions = append(m.Actions, MinutesAction{Who: named(x.Who), What: t, By: by, DueDate: due, At: sec})
 			}
 		}
 	}
 	for _, x := range a.Open {
-		if t := clipText(x.Text); fresh("o", t) {
-			if sec, ok := line(x.Line); ok {
+		if t := clipText(x.Text); t != "" {
+			if sec, ok := line(x.Line); ok && fresh("o", t) {
 				m.Open = append(m.Open, MinutesItem{Text: t, At: sec})
 			}
 		}
 	}
-	if cited == 0 && dropped > 0 {
+	// Nothing that cites the transcript (an empty or unrelated answer) is not minutes.
+	if cited == 0 {
 		return nil, errMinutesUnusable
 	}
 	sort.SliceStable(m.Points, func(i, j int) bool { return m.Points[i].At < m.Points[j].At })
@@ -746,13 +770,50 @@ func capItems[T any](s []T) []T {
 	return s
 }
 
-// dueDate is s when it is a YYYY-MM-DD day from day (the meeting's) to a year after it, else "".
-func dueDate(s string, day time.Time) string {
-	d, err := time.ParseInLocation("2006-01-02", strings.TrimSpace(s), day.Location())
-	if err != nil || d.Before(day) || d.After(day.AddDate(1, 0, 0)) {
+// dueDate is s when it is a YYYY-MM-DD day from day (the meeting's, YYYY-MM-DD) to a year after it, else "". Days are
+// compared as calendar dates (UTC midnights), so a time zone's missing midnight can't move one.
+func dueDate(s string, day string) string {
+	d, err := time.Parse("2006-01-02", strings.TrimSpace(s))
+	from, err2 := time.Parse("2006-01-02", day)
+	if err != nil || err2 != nil || d.Before(from) || d.After(from.AddDate(1, 0, 0)) {
 		return ""
 	}
 	return d.Format("2006-01-02")
+}
+
+// spoken: name is said in text. A name in Latin letters must be a whole word written as given ("Ann" is not in
+// "planning", "Will" is not "will"); any other (Chinese and the like, which have no word breaks) is found as it is.
+func spoken(text, name string) bool {
+	latin := true
+	for _, c := range name {
+		if c > unicode.MaxASCII {
+			latin = false
+			break
+		}
+	}
+	if !latin {
+		return strings.Contains(strings.ToLower(text), strings.ToLower(name))
+	}
+	for i := 0; ; {
+		j := strings.Index(text[i:], name)
+		if j < 0 {
+			return false
+		}
+		start, end := i+j, i+j+len(name)
+		if !wordByte(text, start-1) && !wordByte(text, end) {
+			return true
+		}
+		i = start + 1
+	}
+}
+
+// wordByte: text[i] is an ASCII letter or digit (false outside text).
+func wordByte(text string, i int) bool {
+	if i < 0 || i >= len(text) {
+		return false
+	}
+	c := text[i]
+	return c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9'
 }
 
 // minutesWhen is "2006-01-02 15:04–16:10" in the user's zone (the end's date too when it is another day).

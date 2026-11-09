@@ -61,5 +61,6 @@
   "minutes_request_failed": "議事録を更新できませんでした：{error}",
   "minutes_stale": "議事録が変更されました。最新版を読み込んでいます。追加する前にアクション項目を確認してください。",
   "minutes_refresh_failed": "最新の議事録を読み込めませんでした。更新してから再試行してください：{error}",
-  "minutes_retry_refresh": "再読み込み"
+  "minutes_retry_refresh": "再読み込み",
+  "minutes_due": "期限 {date}"
 }

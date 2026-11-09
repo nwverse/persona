@@ -65,7 +65,7 @@ func (s *Service) toolKB(ctx context.Context, name string, args json.RawMessage)
 		}
 		items := e.List(a.Kind, a.Tag)
 		if a.Kind == kb.KindRecording {
-			items = s.recordingLines(ctx, e, items)
+			items = s.recordingLines(ctx, e, items, a.Limit)
 		}
 		if len(items) > a.Limit {
 			items = items[:a.Limit]
@@ -369,11 +369,12 @@ func (s *Service) toolInboxDraft(ctx context.Context, self string, args json.Raw
 	return "The draft is in the user's inbox; they will send it. You're done.", nil
 }
 
-// recordingLines is kb_list's recordings newest first (what "the meeting just now" asks for), each saying when it
-// started, for how long, and whether it has minutes.
-func (s *Service) recordingLines(ctx context.Context, e *kb.Engine, items []kb.Entry) []kb.Entry {
+// recordingLines is kb_list's first limit recordings newest first (what "the meeting just now" asks for), each saying
+// when it started, for how long, and whether it has minutes.
+func (s *Service) recordingLines(ctx context.Context, e *kb.Engine, items []kb.Entry, limit int) []kb.Entry {
 	loc := s.location(ctx)
 	sort.SliceStable(items, func(i, j int) bool { return items[i].Updated.After(items[j].Updated) })
+	items = items[:min(limit, len(items))]
 	for i, x := range items {
 		r, ok := e.Store.Recording(x.ID)
 		if !ok {

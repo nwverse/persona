@@ -306,10 +306,15 @@ func TestMinutesChunked(t *testing.T) {
 			if !strings.Contains(user, "## 第 1 段") || !strings.Contains(user, "[1] 开场") || strings.Contains(user, "[9999]") {
 				return "", fmt.Errorf("merge input:\n%s", user)
 			}
+			// 150 is a line of the transcript, but no part's notes cite it: the merge can't have read it.
 			return `{"title":"长会","points":[{"text":"开场","line":1},{"text":"收尾","line":300},{"text":"没读到的","line":301}],"decisions":[{"text":"定了","line":150}]}`, nil
 		}
 		first := strings.SplitN(strings.SplitN(user, "转写：\n", 2)[1], " ", 2)[0] // "[N]"
-		return fmt.Sprintf(`{"points":[{"text":"开场","line":%q},{"text":"不在这段","line":9999}]}`, first), nil
+		last := ""
+		if strings.Contains(user, "[300] ") {
+			last = `,{"text":"收尾","line":300}`
+		}
+		return fmt.Sprintf(`{"points":[{"text":"开场","line":%q},{"text":"不在这段","line":9999}%s]}`, first, last), nil
 	}}
 	e := goldenEngine(t, model)
 	now := time.Date(2026, 11, 10, 18, 0, 0, 0, goldenZone)
@@ -325,7 +330,7 @@ func TestMinutesChunked(t *testing.T) {
 		t.Errorf("part input:\n%s", model.calls[0][1])
 	}
 	mm, _ := e.Store.ReadMinutes(recID)
-	if mm == nil || len(mm.Points) != 2 || mm.Points[1].At != 2990 || len(mm.Decisions) != 1 || mm.Partial {
+	if mm == nil || len(mm.Points) != 2 || mm.Points[1].At != 2990 || len(mm.Decisions) != 0 || mm.Partial {
 		t.Fatalf("minutes %+v", mm)
 	}
 	chunks, partial := chunkLines([]minutesLine{{N: 1, Text: "aaaa"}, {N: 2, Text: "bbbb"}, {N: 3, Text: "cccc"}}, 10, 25, 2)
@@ -537,5 +542,85 @@ func TestMinutesCallTimeoutCounts(t *testing.T) {
 	}
 	if r := recordingNow(t, e, recID); r.MinutesState != MinutesFailed {
 		t.Fatalf("%q after %d timeouts", r.MinutesState, minutesTries)
+	}
+}
+
+// What the model's answer must hold to count: something citing a line it read; a copy citing nothing doesn't hide one
+// that does; a date only for a deadline said; a name in Latin letters only as a whole word written so.
+func TestMinutesAnswerRules(t *testing.T) {
+	e := goldenEngine(t, nil)
+	r := &Recording{ID: recID, StartedAt: time.Date(2026, 11, 10, 14, 0, 0, 0, goldenZone), Duration: 600,
+		Calendar: &RecordingCalendar{Attendees: []string{"Ada"}}}
+	read := []minutesLine{{N: 1, At: 0, Text: "we will ship on Friday, planning with Ann"}, {N: 2, At: 10, Text: "张三 来写测试"}}
+	build := func(reply string) (*Minutes, error) {
+		var a minutesAnswer
+		if err := json.Unmarshal([]byte(reply), &a); err != nil {
+			t.Fatal(err)
+		}
+		return e.buildMinutes(r, a, read, goldenZone)
+	}
+	for _, empty := range []string{`{}`, `{"title":"无法总结"}`, `{"points":[{"text":"","line":1}]}`} {
+		if _, err := build(empty); !errors.Is(err, errMinutesUnusable) {
+			t.Errorf("%s: %v", empty, err)
+		}
+	}
+	m, err := build(`{"attendees":["Will","Ann","Annie","张三","Ada","Zoe"],
+	  "decisions":[{"text":"Ship Friday","line":999},{"text":"Ship Friday","line":1}],
+	  "actions":[{"who":"Will","what":"ship","line":1},{"who":"张三","what":"写测试","due_date":"2026-11-12","line":2},
+	             {"who":"Ann","what":"plan","by":"周四","due_date":"2026-11-12","line":1},{"what":"old","by":"去年","due_date":"2025-11-12","line":1}]}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(m.Decisions) != 1 || m.Decisions[0].At != 0 {
+		t.Errorf("decisions %+v", m.Decisions)
+	}
+	if got := strings.Join(m.Attendees, ","); got != "Ada,Ann,张三" {
+		t.Errorf("attendees %s", got)
+	}
+	byWhat := map[string]MinutesAction{}
+	for _, a := range m.Actions {
+		byWhat[a.What] = a
+	}
+	if len(m.Actions) != 4 || byWhat["ship"].Who != "" || byWhat["plan"].Who != "Ann" || byWhat["plan"].DueDate != "2026-11-12" ||
+		byWhat["old"].DueDate != "" || byWhat["写测试"].Who != "张三" || byWhat["写测试"].DueDate != "" {
+		t.Errorf("actions %+v", m.Actions)
+	}
+	for in, want := range map[[2]string]bool{{"Ann said", "Ann"}: true, {"planning", "Ann"}: false, {"we will", "Will"}: false,
+		{"Will, go", "Will"}: true, {"ask O'Neil", "O'Neil"}: true, {"张三来了", "张三"}: true, {"Bo2 left", "Bo"}: false} {
+		if got := spoken(in[0], in[1]); got != want {
+			t.Errorf("spoken(%q, %q) = %v", in[0], in[1], got)
+		}
+	}
+	if dueDate("2026-11-10", "2026-11-10") != "2026-11-10" || dueDate("2026-11-09", "2026-11-10") != "" || dueDate("2027-11-11", "2026-11-10") != "" {
+		t.Error("dueDate range")
+	}
+}
+
+// A recording that stops being a meeting keeps the minutes it has and asks for no more; at most max are tried a round,
+// written or not.
+func TestMinutesNoLongerMeetingAndRoundBound(t *testing.T) {
+	model := &funcModel{f: func(int, string, string) (string, error) { return `{"points":[{"text":"x","line":1}]}`, nil }}
+	e := goldenEngine(t, model)
+	now := time.Now()
+	putRecording(t, e, recID, meetingUpload(1, now.Add(-time.Hour), "一句"), now)
+	e.WriteMinutes(context.Background(), 2)
+	u := recUpload(2, now.Add(-time.Hour), true, "一句", "又一句")
+	putRecording(t, e, recID, u, now)
+	if r := recordingNow(t, e, recID); r.MinutesState != MinutesReady {
+		t.Fatalf("no longer a meeting: %q", r.MinutesState)
+	}
+	calls := len(model.calls)
+	e.WriteMinutes(context.Background(), 2)
+	if len(model.calls) != calls {
+		t.Fatal("made again for a recording that is no meeting")
+	}
+	model.f = func(int, string, string) (string, error) { return `{"points":[{"text":"x","line":99}]}`, nil }
+	for i, id := range []string{"6f8fad5b-d9cb-469f-a165-70867728950e", "7f8fad5b-d9cb-469f-a165-70867728950e", "8f8fad5b-d9cb-469f-a165-70867728950e"} {
+		putRecording(t, e, id, meetingUpload(1, now.Add(-time.Duration(i+1)*time.Minute), "一句"), now)
+	}
+	calls = len(model.calls)
+	e.WriteMinutes(context.Background(), 2)
+	if got := len(model.calls) - calls; got != 2 {
+		t.Fatalf("%d tried in a round, want 2", got)
 	}
 }

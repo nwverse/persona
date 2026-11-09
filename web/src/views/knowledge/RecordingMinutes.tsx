@@ -147,7 +147,7 @@ export function RecordingMinutes({ detail, rec, auth, current, refresh, onSaved,
           </div>
           <ul className="divide-y divide-line">
             {minutes.actions.map((action) => <li key={action.id} className="py-2 first:pt-0 last:pb-0">
-              <p className="break-words text-[13px] leading-relaxed text-ink">{[action.who, action.what, action.by].filter(Boolean).join(" · ")}</p>
+              <p className="break-words text-[13px] leading-relaxed text-ink">{[action.who, action.what, action.by, action.due_date && t("knowledge-kbdetail.minutes_due", { date: action.due_date })].filter(Boolean).join(" · ")}</p>
               <div className="mt-1.5 flex flex-wrap items-center justify-between gap-2">
                 {time(action.at)}
                 {action.todo_id ? <TonePill>{t("knowledge-kbdetail.minutes_added")}</TonePill> :
