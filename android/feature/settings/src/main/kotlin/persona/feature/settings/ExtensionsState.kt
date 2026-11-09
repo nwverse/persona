@@ -441,7 +441,9 @@ internal class ExtensionModel(
             if (source == null || !source.error.isNullOrBlank()) throw IllegalStateException(res.getString(R.string.settings_extension_market_unavailable))
             val candidate = catalog.extensions.firstOrNull { it.market == market && it.id == id }
                 ?: throw IllegalStateException(res.getString(R.string.settings_extension_market_missing))
-            if (!run { api.extension(id) }) throw IllegalStateException(state.value.error.orEmpty())
+            val loaded = run { api.extension(id) }
+            mutable.update { it.copy(loadFailed = !loaded) }
+            if (!loaded) throw IllegalStateException(state.value.error.orEmpty())
             mutable.update { it.copy(updates = it.updates.copy(checked = true, candidate = candidate)) }
         } catch (cancelled: CancellationException) { throw cancelled }
         catch (error: Exception) { mutable.update { it.copy(updates = it.updates.copy(error = failureReasonText(error).resolve(res))) } }

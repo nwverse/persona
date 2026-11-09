@@ -67,6 +67,32 @@ class CatalogExtensionManagerTest {
         assertNull(model.state.value.operation)
     }
 
+    @Test fun managerScopedHttpReceiptsWithoutManagerKeepTheirRequestOwner() = runTest {
+        val api = FakeOperations()
+        val failed = op("failed", "download", 2, "download" to "failed", retryable = true)
+        api.listed = listOf(failed)
+        val model = CatalogExtensionModel(api, "m1", "example-notes", res, manager = "m2")
+        model.load()
+        backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { model.watch {} }
+        runCurrent()
+        assertEquals(failed, model.state.value.operation)
+        assertTrue(model.retry())
+        assertEquals(ExtensionOperation.Running, model.state.value.operation?.state)
+        val held = model.state.value.operation
+        api.pushes.emit(api.started.copy(manager = "m3", state = ExtensionOperation.Succeeded, updatedAt = "2026-11-06T08:02:00Z"))
+        runCurrent()
+        assertEquals(held, model.state.value.operation)
+        // A missing manager on a broadcast is not a response to this page's manager-bound request.
+        api.pushes.emit(api.started.copy(state = ExtensionOperation.Succeeded, updatedAt = "2026-11-06T08:02:00Z"))
+        runCurrent()
+        assertEquals(held, model.state.value.operation)
+        api.pushes.emit(api.started.copy(manager = "m2", state = ExtensionOperation.Succeeded, updatedAt = "2026-11-06T08:02:00Z"))
+        runCurrent()
+        assertNull(model.state.value.operation)
+        assertTrue(model.preview())
+        assertEquals(api.started, model.state.value.operation)
+    }
+
     @Test fun defaultOwnerIsCapturedInsteadOfFollowingTheAssistantChoiceOrLaterDefault() = runTest {
         AssistantManagerChoice.choose(null, "m2", "m1")
         val api = FakeOperations()
