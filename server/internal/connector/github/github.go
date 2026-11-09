@@ -101,6 +101,9 @@ type Connector struct {
 	// (Changes) waits until searchReset.
 	searchLow   bool
 	searchReset time.Time
+	// pausedUntil: GitHub asked for a pause (a secondary rate limit, or Retry-After); only notifications are polled
+	// until then. Only notePause sets it, and only later: a good answer in between does not lift it.
+	pausedUntil time.Time
 
 	inbox inboxState   // inbox.go
 	opts  InboxOptions // rules.go
@@ -142,11 +145,48 @@ func (c *Connector) noteRate(h http.Header) {
 	}
 }
 
+// notePause records the pause GitHub asks for with a secondary rate limit (429, or 403 with "rate limit" or
+// Retry-After): until Retry-After (seconds or an HTTP date), else X-RateLimit-Reset, else an hour. It only extends
+// a pause, never shortens one; err is the request's error, h its answer's headers.
+func (c *Connector) notePause(h http.Header, err error) {
+	message := strings.ToLower(err.Error())
+	if !strings.Contains(message, " 429 ") && !(strings.Contains(message, " 403 ") && (strings.Contains(message, "rate limit") || h.Get("Retry-After") != "")) {
+		return
+	}
+	now := time.Now()
+	until := now.Add(time.Hour)
+	if seconds, parseErr := strconv.Atoi(h.Get("Retry-After")); parseErr == nil && seconds > 0 {
+		until = now.Add(time.Duration(seconds) * time.Second)
+	} else if date, parseErr := http.ParseTime(h.Get("Retry-After")); parseErr == nil && date.After(now) {
+		until = date
+	} else if epoch, parseErr := strconv.ParseInt(h.Get("X-RateLimit-Reset"), 10, 64); parseErr == nil && time.Unix(epoch, 0).After(now) {
+		until = time.Unix(epoch, 0)
+	}
+	c.mu.Lock()
+	if until.After(c.pausedUntil) {
+		c.pausedUntil = until
+	}
+	c.mu.Unlock()
+}
+
+// limitedUntil is when the rate limits stop holding the connector back: the later of a low quota's reset and a
+// pause's end, zero when neither holds at now. c.mu is held.
+func (c *Connector) limitedUntil(now time.Time) time.Time {
+	var until time.Time
+	if c.rateLow && now.Before(c.rateReset) {
+		until = c.rateReset
+	}
+	if now.Before(c.pausedUntil) && c.pausedUntil.After(until) {
+		until = c.pausedUntil
+	}
+	return until
+}
+
 // ratesLow says whether to save requests (only notifications are polled).
 func (c *Connector) ratesLow() bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	return c.rateLow && time.Now().Before(c.rateReset)
+	return !c.limitedUntil(time.Now()).IsZero()
 }
 
 // searchQuotaLow says whether the search API's minute is nearly used up.
@@ -198,10 +238,10 @@ func (c *Connector) Status(context.Context) connector.Status {
 	case c.source == SourceMachine && c.fetch != nil:
 		st.Via = "来自 " + c.machine + " 的 gh 登录"
 	}
-	if st.State == connector.StateOK && c.rateLow && time.Now().Before(c.rateReset) {
+	if until := c.limitedUntil(time.Now()); st.State == connector.StateOK && !until.IsZero() {
 		st.State = connector.StateRateLimited
 		// minutes, not a clock time: the hub's clock is not in the user's time zone
-		st.Error = fmt.Sprintf("这个小时的 GitHub 请求额度快用完了，约 %d 分钟内只看通知", int(time.Until(c.rateReset).Minutes())+1)
+		st.Error = fmt.Sprintf("这个小时的 GitHub 请求额度快用完了，约 %d 分钟内只看通知", int(time.Until(until).Minutes())+1)
 	}
 	return st
 }
