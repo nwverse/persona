@@ -108,7 +108,7 @@ interface InboxRepository : persona.core.contracts.api.InboxRepository {
 
     /**
      * "Muted" (docs/assistant/inbox.md "Muting"): what the user muted, in every source, newest first; [manager]'s (each
-     * keeps its own), else the default's.
+     * keeps its own; named even when it is the default, which may move before an Unmute), else the default's.
      */
     suspend fun inboxMutes(manager: String? = null): List<InboxMute> = error("静音尚未接入") // i18n-ignore: developer error for a repository without the hub
     /** "Mute this repository / chat / sender": the item and the open ones of its source it covers are done at once; a failure puts them back. */
@@ -118,12 +118,14 @@ interface InboxRepository : persona.core.contracts.api.InboxRepository {
 
     /**
      * "Rules" (docs/assistant/inbox.md "Policies"): every source's rules, newest first; [record]'s manager's, else
-     * [manager]'s (each keeps its own), else the default's.
+     * [manager]'s (each keeps its own; named even when it is the default, which may move before a Remove), else the
+     * default's.
      */
     suspend fun inboxPolicies(record: InboxRecord? = null, manager: String? = null): List<InboxPolicy> = error("Inbox policies unavailable")
     /**
      * Sets [target]'s rule (POST from its item, PATCH when it has one): the open, triaged items it covers take [tier] at
-     * once, back if it fails. Setting neither part removes it. Returns the hub's rule, null when removed.
+     * once, back if it fails. Setting neither part removes it; removing one opened from "Rules" names the manager it was
+     * read from even when that is the default now. Returns the hub's rule, null when removed.
      */
     suspend fun savePolicy(target: InboxPolicyTarget, tier: InboxPolicyTier, twin: InboxPolicyTwin): InboxPolicy? =
         error("Inbox policies unavailable")
