@@ -50,7 +50,19 @@ func benchmarkBroadcastSessions(b *testing.B, older int) {
 // BenchmarkTakeFleetSessionsOneChanged is the whole hop of a manager's fleet.sessions for a 150-session machine with
 // one session changed, from the event's bytes to the messages queued for five delta apps and two older ones.
 func BenchmarkTakeFleetSessionsOneChanged(b *testing.B) {
-	h := newTestHub(&testing.T{})
+	send := oneChangedHop(b, newTestHub(&testing.T{}))
+	b.ReportAllocs()
+	n := 0
+	for b.Loop() {
+		n++
+		send(n)
+	}
+}
+
+// oneChangedHop gives h a 150-session machine "box" and five delta apps and two older ones, all holding its first
+// list. send(n) takes the manager's fleet.sessions n (the bus handler) and empties the apps' queues: list n has the
+// sessions before n%150 in their next version, so it differs from list n-1 in one session only.
+func oneChangedHop(tb testing.TB, h *Hub) (send func(n int)) {
 	m := newMachine(h, MachineConfig{ID: "box", Name: "Box", Kind: "local"})
 	h.machines, h.byID["box"] = append(h.machines, m), m
 	for i := range 7 {
@@ -60,7 +72,7 @@ func BenchmarkTakeFleetSessionsOneChanged(b *testing.B) {
 		}
 		h.clients[c] = struct{}{}
 	}
-	// Two versions of each session, differing in its text: event n has the sessions before n%150 in the next version.
+	// Two versions of each session, differing in its text.
 	rows := make([][2][]byte, 150)
 	for i := range rows {
 		at := time.Unix(1700000000+int64(i), 0)
@@ -73,7 +85,15 @@ func BenchmarkTakeFleetSessionsOneChanged(b *testing.B) {
 		}
 	}
 	var params []byte
-	event := func(n int) json.RawMessage {
+	take := busEvents[assistantwire.EventFleetSessions]
+	drain := func() {
+		for c := range h.clients {
+			for len(c.out) > 0 {
+				<-c.out
+			}
+		}
+	}
+	send = func(n int) {
 		params = append(params[:0], `{"machine_id":"box","sessions":[`...)
 		for i := range rows {
 			if i > 0 {
@@ -85,32 +105,20 @@ func BenchmarkTakeFleetSessionsOneChanged(b *testing.B) {
 			}
 			params = append(params, rows[i][v%2]...)
 		}
-		return append(params, `]}`...)
+		take(h, nil, append(params, `]}`...))
+		drain()
 	}
-	take := busEvents[assistantwire.EventFleetSessions]
-	take(h, nil, event(0))
+	send(0)
 	if len(m.keptSessions()) != len(rows) {
-		b.Fatalf("%d sessions kept", len(m.keptSessions()))
+		tb.Fatalf("%d sessions kept", len(m.keptSessions()))
 	}
 	for c := range h.clients { // the delta apps connect as apps do: the list whole, then deltas
 		if c.delta {
 			h.snapshotSessions(c, m)
 		}
-		for len(c.out) > 0 {
-			<-c.out
-		}
 	}
-	b.ReportAllocs()
-	n := 0
-	for b.Loop() {
-		n++
-		take(h, nil, event(n))
-		for c := range h.clients {
-			for len(c.out) > 0 {
-				<-c.out
-			}
-		}
-	}
+	drain()
+	return send
 }
 
 // BenchmarkHubEncodeSessionRows encodes a busy machine's 150 sessions as rows, stamped with their manager, as every

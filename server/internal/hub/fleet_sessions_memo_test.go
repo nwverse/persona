@@ -172,6 +172,36 @@ func TestFleetSessionsMemoMatchesWholeLists(t *testing.T) {
 	}
 }
 
+// A manager's list with one session of 150 changed costs the hub that one session: the list is decoded by changed
+// rows (fleet_link.go) and the other sessions' rows are pushed again as the same slices (encodeKept). The oracle test
+// above sees only the bytes, which are the same either way. 43 allocations measured for the hop with five delta apps
+// and two older ones, 571 with the list decoded whole; encoding every row again is 44, told apart by the rows' identity.
+func TestFleetSessionsOneChangedReusesRows(t *testing.T) {
+	if !isolatedSessionAllocation(t) {
+		return
+	}
+	h := newTestHub(t)
+	send := oneChangedHop(t, h)
+	before := h.sessionsSent["box"]
+	send(1) // s000 changed
+	after := h.sessionsSent["box"]
+	if len(after) != len(before) || len(after) != 150 {
+		t.Fatalf("pushed %d rows, then %d", len(before), len(after))
+	}
+	for i := range after {
+		if kept := &after[i].raw[0] == &before[i].raw[0]; kept != (i > 0) {
+			t.Fatalf("row %d (%s) pushed as the same slice: %v, want %v", i, after[i].id, kept, i > 0)
+		}
+	}
+	n := 1
+	if allocs := testing.AllocsPerRun(20, func() { n++; send(n) }); allocs > 50 && !raceEnabled {
+		t.Fatalf("a list with one session changed allocates %v times", allocs)
+	}
+}
+
+// raceEnabled: built with -race, whose instrumentation allocates on its own (race_test.go).
+var raceEnabled bool
+
 // memoCompare fails unless both hubs keep the same sessions and sent each app the same bytes.
 func memoCompare(t *testing.T, step int, fast, ref *memoHub) {
 	t.Helper()

@@ -135,10 +135,36 @@ func TestSessionsChangedMatchesUnmarshal(t *testing.T) {
 // BenchmarkDevicesSessionsChanged is a node's sessions.changed for a 150-session machine with one session changed,
 // from the event's bytes to the list kept (Options.Event takes it from there).
 func BenchmarkDevicesSessionsChanged(b *testing.B) {
+	m, event := oneChangedNode(b)
+	b.ReportAllocs()
+	n := 0
+	for b.Loop() {
+		n++
+		m.onEvent("sessions.changed", event(n))
+	}
+}
+
+// A node's list with one session of 150 changed decodes that session alone (decodeSessions); the oracle test above
+// sees only the list kept, which is the same either way. 15 allocations measured from the event to the list kept,
+// 514 with the list decoded whole.
+func TestSessionsChangedOneChangedAllocations(t *testing.T) {
+	m, event := oneChangedNode(t)
+	n := 0
+	if allocs := testing.AllocsPerRun(20, func() { n++; m.onEvent("sessions.changed", event(n)) }); allocs > 20 && !raceEnabled {
+		t.Fatalf("a list with one session changed allocates %v times", allocs)
+	}
+}
+
+// raceEnabled: built with -race, whose instrumentation allocates on its own (race_test.go).
+var raceEnabled bool
+
+// oneChangedNode is a machine that kept a node's first list of 150 sessions. event(n) is the node's sessions.changed n:
+// list n has the sessions before n%150 in their next version, so it differs from list n-1 in one session only.
+func oneChangedNode(tb testing.TB) (*Machine, func(n int) json.RawMessage) {
 	d := New(Options{Hub: &fakeHost{}, Store: newMemStore(), Logf: func(string, ...any) {}})
 	d.opts.Event = func(string, string, json.RawMessage) bool { return false }
 	m := newMachine(d, MachineConfig{ID: "mac", Name: "mac"})
-	// Two versions of each session, differing in its text: event n has the sessions before n%150 in the next version.
+	// Two versions of each session, differing in its text.
 	rows := make([][2][]byte, 150)
 	for i := range rows {
 		at := time.Unix(1700000000+int64(i), 0)
@@ -167,12 +193,7 @@ func BenchmarkDevicesSessionsChanged(b *testing.B) {
 	}
 	m.onEvent("sessions.changed", event(0))
 	if len(m.sessionList()) != len(rows) {
-		b.Fatalf("%d sessions kept", len(m.sessionList()))
+		tb.Fatalf("%d sessions kept", len(m.sessionList()))
 	}
-	b.ReportAllocs()
-	n := 0
-	for b.Loop() {
-		n++
-		m.onEvent("sessions.changed", event(n))
-	}
+	return m, event
 }
