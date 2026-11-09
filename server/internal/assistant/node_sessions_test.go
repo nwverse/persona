@@ -101,7 +101,7 @@ func busyBoard(t *testing.T) *Service {
 // agentGone and the board read once each before, completionChildrenRunning twice (25.1 MB) and decoratedUnarchived
 // twice (25.8 MB; it still needs one, as its own to decorate). publishList, telling the same list again, also encoded
 // it into new bytes (28.4 MB in all); now it allocates the decorated list alone. Each bound is the measured bytes per
-// call + 3%.
+// call + 3% (GET /api/v1/workspaces measured again once its rows carried each workspace's project and lineage).
 func TestSessionReadersCopyNoList(t *testing.T) {
 	if !isolated(t) {
 		return
@@ -117,7 +117,7 @@ func TestSessionReadersCopyNoList(t *testing.T) {
 		{"completionChildrenRunning", 1690, func() { s.completionChildrenRunning("box", proto.Session{SessionID: "session-00100"}) }},
 		{"decoratedUnarchived", 13710700, func() { s.decoratedUnarchived("box") }},
 		{"publishList", 13715100, func() { s.publishList("box") }},
-		{"GET /api/v1/workspaces", 177600, func() { boardCall(board, "GET", "/api/v1/workspaces", "", roleFull) }},
+		{"GET /api/v1/workspaces", 205900, func() { boardCall(board, "GET", "/api/v1/workspaces", "", roleFull) }},
 	} {
 		c.read()
 		const runs = 20
