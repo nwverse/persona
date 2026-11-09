@@ -2009,7 +2009,7 @@ struct ChatView: View {
                 .padding(.horizontal, Theme.Space.m)
                 .padding(.vertical, Theme.Space.s)
         } else {
-            // No room of its own above: the newest message is one row gap over its first row (`newestGap`, #1108).
+            // No room of its own above: the list's margin at its newest end is the room over its first row (`newestGap`).
             mainFooter
         }
     }
@@ -2264,7 +2264,7 @@ struct ChatView: View {
         return LazyVStack(alignment: .leading, spacing: Theme.Space.l) {
             // Newest first (the list is drawn upside down): the end sentinel, live text, unsent messages, lines (a failed
             // message among them, before the first line written after it).
-            // It takes no room: the rows' spacing alone is the gap to the footer, as between any two rows (#1108).
+            // It takes no room: past it come only the rows' spacing and the list's room at its end (`endRoom`).
             Color.clear
                 .frame(height: Theme.Size.line)
                 .padding(.bottom, -Theme.Size.line)
@@ -2376,10 +2376,12 @@ struct ChatView: View {
         .onScrollTargetVisibilityChange(idType: String.self, threshold: 0.01) { ids in scratch.drawnLines = ids }
         .flippedBack() // the scroll view itself upside down; every row above is flipped back
         // Safe areas would land on the wrong ends of a flipped scroll view: ignore them and add the room ourselves.
-        // (Content top = the composer side on screen, content bottom = the navigation side.) The newest end has no
-        // margin: the rows' spacing is its gap to the footer (`newestGap`).
+        // (Content top = the composer side on screen, content bottom = the navigation side.) The newest end has the
+        // room that says the conversation ends there (`endRoom`); it scrolls with the rows, so a little way up they still
+        // go right down to the footer.
         // The header floats over the list (Agents): the oldest end leaves its full height free, so nothing hides
         // under it; the list's own frame never changes as it folds, so folding never moves the messages.
+        .contentMargins(.top, Self.endRoom, for: .scrollContent)
         .contentMargins(.bottom, headerRoom + 10, for: .scrollContent)
         .scrollIndicators(.hidden)
         // iOS 26's soft edge blur works out its region on the unflipped view and fogged the whole list.
@@ -3016,10 +3018,14 @@ struct ChatView: View {
     /// Back: out of files / Git to the chat first, then off the page.
     /// The widest the conversation gets: lines longer than this are hard to read.
     static let readableWidth: CGFloat = 760
-    /// From the newest row's bottom to the footer's first row: the rows' spacing, as between any two rows (#1108); the
-    /// end marker takes no room and neither the list nor the footer adds a margin there. The first message of a new
-    /// conversation is laid out with it before the chat takes over (`FirstMessagePending`, #1911).
-    static let newestGap: CGFloat = Theme.Space.l
+    /// The list's margin at its newest end (its top: the list is upside down): scrolled to the end, the newest message
+    /// stands clearly off the footer, so the end reads as the end (#2016). It scrolls with the rows; a little way up
+    /// they reach the footer as before.
+    static let endRoom: CGFloat = Theme.Space.xxl
+    /// From the newest row's bottom to the footer's first row at the end: the rows' spacing (#1108) and `endRoom`; the
+    /// end marker takes no room and the footer adds none. The first message of a new conversation is laid out with it
+    /// before the chat takes over (`FirstMessagePending`, #1911).
+    static let newestGap: CGFloat = Theme.Space.l + endRoom
 
     /// An Agents chat whose actions are in the system's side column (no header of its own).
     private var sideBars: Bool { style == .dev && barsVertical }

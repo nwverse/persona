@@ -1,7 +1,7 @@
 import XCTest
 
-/// The newest message sits one row gap (`Theme.Space.l`, 16 pt, as between any two rows) above the footer's first row
-/// (#1108): the chips over the composer, or what is over them (an agent's computer activity, the queued messages); with
+/// At the end of a conversation the newest message sits `ChatView.newestGap` (48 pt: a row gap, 16 pt, and the list's room
+/// at its end, 32 pt; #1108, #2016) above the footer's first row: the chips over the composer, or what is over them (an agent's computer activity, the queued messages); with
 /// the keyboard up and with an upload's bar in the composer too. A little way up, the jump-to-latest arrow is over the list, not over the footer. Light and dark;
 /// run it on the narrowest phone too (SE). Every state gets its screenshot before the gaps are checked.
 ///   PORT=18831 MOCK_TURN_IMAGES=many MOCK_QUEUE=1 python3 scripts/mock/mock_hub.py &
@@ -12,8 +12,8 @@ final class ChatBottomGapTests: XCTestCase {
     private let blog = "studio/a1f3c2d4-0000-4000-8000-000000000003"
     /// The widget conversation: working, with two messages queued (MOCK_QUEUE=1).
     private let widget = "macbook/a1f3c2d4-0000-4000-8000-000000000001"
-    /// Between two rows of the chat (`Theme.Space.l`).
-    private let rowGap: CGFloat = 16
+    /// From the newest message to the footer at the end (`ChatView.newestGap`: `Theme.Space.l` + `Theme.Space.xxl`).
+    private let endGap: CGFloat = 48
 
     override func setUpWithError() throws {
         guard let h = ProcessInfo.processInfo.environment["PERSONA_MOCK_HUB"] else {
@@ -22,7 +22,7 @@ final class ChatBottomGapTests: XCTestCase {
         hub = h
     }
 
-    @MainActor func testTheNewestMessageSitsOneRowGapAboveTheFooter() throws {
+    @MainActor func testTheNewestMessageStandsClearOfTheFooterAtTheEnd() throws {
         var gaps: [(String, CGFloat)] = []
         for scheme in ["light", "dark"] {
             var app = launch(blog, scheme)
@@ -51,7 +51,7 @@ final class ChatBottomGapTests: XCTestCase {
             app.terminate()
         }
         for (state, gap) in gaps {
-            XCTAssertEqual(gap, rowGap, accuracy: 1, "\(state): \(gap) pt from the newest message to the footer")
+            XCTAssertEqual(gap, endGap, accuracy: 1, "\(state): \(gap) pt from the newest message to the footer")
         }
     }
 
