@@ -88,13 +88,16 @@ extension LinkAttention.Item {
 
 /// Which notifications to post and take back as summaries arrive: one per session (`Item.id`), when a card first
 /// `notify`s on a connection, also when it was listed without notifying before (the assistant handed you its question);
-/// none for the cards already notifying in a connection's first summary (the web app's baseline rule); a newer card of a
-/// session replaces its notification; a session that left the summary, or whose notification is about a card it no
-/// longer waits on, takes its notification back.
+/// none for the cards already notifying in a connection's first summary (the web app's baseline rule), nor for a card
+/// whose notification is shown; a session that left the summary, or whose notification is about a card it no longer
+/// waits on, takes its notification back (a newer card's own notification follows when it goes out).
+///
+/// A post goes out later (`LinkNotifier` may wait for the permission prompt) or not at all: it counts as shown only once
+/// `adopt` takes it in, and `isCurrent` says whether it is still due.
 struct AttentionNotifications {
     /// A session of the last summary: the card it waits on ("" without one), whether it notifies now, and whether that
-    /// card notified on this connection (in the first summary too) or its notification is still shown, so it does not
-    /// notify twice.
+    /// card notified on this connection already (in the first summary too, as a post made for it, or as a notification
+    /// shown), so it does not notify twice.
     struct Entry: Equatable {
         var card: String
         var notify: Bool
@@ -103,16 +106,27 @@ struct AttentionNotifications {
 
     /// The last summary's sessions on this connection; nil until its first summary.
     private(set) var known: [String: Entry]?
-    /// The notifications shown (posted and not taken back, or found delivered at launch), with the card each is about.
+    /// The last summary was capped (`more` above 0): a session missing from it may still wait beyond the cap.
+    private(set) var capped = false
+    /// The notifications shown, with the card each is about: taken in by `adopt` (a post that went out, or one found
+    /// delivered at launch) and not taken back.
     private(set) var shown: [String: String] = [:]
     /// Counts connections whose summary went away: a post queued on an earlier one is not made.
     private(set) var connection = 0
 
     struct Changes: Equatable {
         var post: [LinkAttention.Item] = []
+        /// Notifications to take back, including the ones a post replaces (same identifier).
         var withdraw: [String] = []
         /// The connection the posts belong to (`isCurrent`).
         var connection = 0
+
+        /// What to take back at once: all but the ones a post replaces, which go only if that post does not go out.
+        /// Removing and adding are both asynchronous, so a removal made first could land after the add.
+        var withdrawNow: [String] {
+            let posting = Set(post.map(\.id))
+            return withdraw.filter { !posting.contains($0) }
+        }
     }
 
     /// `nil`: the connection has no summary (it dropped, or the hub sends none): its next summary is a baseline again.
@@ -120,6 +134,7 @@ struct AttentionNotifications {
         guard let attention else {
             if known != nil {
                 known = nil
+                capped = false
                 connection += 1
             }
             return Changes(connection: connection)
@@ -131,10 +146,13 @@ struct AttentionNotifications {
                                      notified: item.notify || shown[item.id] == item.card
                                          || before?.card == item.card && before?.notified == true)
         }
-        if attention.more > 0 {
-            // The list is capped (the oldest cut): a session missing from it may still wait beyond the cap. It keeps
-            // what is known of it, so its notification stays and its coming back is no new card.
-            for (id, entry) in known ?? [:] where current[id] == nil { current[id] = entry }
+        capped = attention.more > 0
+        if capped {
+            // A session missing from a capped list keeps its card, so its notification stays and its coming back is no
+            // new card; it is not known to wait, so a post still waiting for it is not made.
+            for (id, entry) in known ?? [:] where current[id] == nil {
+                current[id] = Entry(card: entry.card, notify: false, notified: entry.notified)
+            }
             for (id, card) in shown where current[id] == nil { current[id] = Entry(card: card, notify: false, notified: true) }
         }
         var changes = Changes(connection: connection)
@@ -143,35 +161,35 @@ struct AttentionNotifications {
                 item.notify && known[item.id].map { $0.card == item.card && $0.notified } != true
             }
         }
-        let posted = Set(changes.post.map(\.id))
-        changes.withdraw = shown.filter { id, card in current[id].map { $0.card != card && !posted.contains(id) } ?? true }
-            .keys.sorted()
+        changes.withdraw = shown.filter { id, card in current[id]?.card != card }.keys.sorted()
         for id in changes.withdraw { shown[id] = nil }
-        for item in changes.post { shown[item.id] = item.card }
         known = current
         return changes
     }
 
-    /// Takes in the notifications an earlier run left shown, with the card each is about (nil: it does not say). Returns
-    /// those to take back now: the ones that do not say, and, once a summary arrived, those whose session left it or
-    /// waits on another card. The first summary takes back the rest the same way.
+    /// Takes in notifications shown, with the card each is about (nil: it does not say): those an earlier run left, at
+    /// launch, and each post once it went out. Returns those to take back now: the ones that do not say and, once a
+    /// summary arrived, those whose session waits on another card or is missing from a summary that is not capped.
     mutating func adopt(_ delivered: [(id: String, card: String?)]) -> [String] {
         var gone: [String] = []
-        for (id, card) in delivered where shown[id] == nil { // one this run posted already replaced it
-            if let card, known.map({ $0[id]?.card == card }) ?? true {
-                shown[id] = card
-            } else {
+        for (id, card) in delivered {
+            guard let card, known.map({ $0[id].map { $0.card == card } ?? capped }) ?? true else {
+                shown[id] = nil
                 gone.append(id)
+                continue
             }
+            shown[id] = card
+            let notify = known?[id]?.notify ?? false
+            known?[id] = Entry(card: card, notify: notify, notified: true)
         }
         return gone.sorted()
     }
 
-    /// A post queued on `connection` is still due: same connection, the session still waits on this card, and it still
-    /// notifies.
+    /// A post queued on `connection` is still due: same connection, the session still waits on this card and notifies,
+    /// and no notification about it is shown yet.
     func isCurrent(_ item: LinkAttention.Item, connection: Int) -> Bool {
         connection == self.connection && known?[item.id].map { $0.card == item.card && $0.notify } == true
-            && shown[item.id] == item.card
+            && shown[item.id] != item.card
     }
 }
 

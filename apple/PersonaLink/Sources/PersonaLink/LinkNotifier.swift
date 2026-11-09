@@ -47,7 +47,7 @@ import UserNotifications
         let ask = attention != nil && !asked
         if ask { asked = true }
         run {
-            self.withdraw(changes.withdraw)
+            self.withdraw(changes.withdrawNow)
             if ask {
                 await self.requestAuthorization()
             } else if !notes.isEmpty {
@@ -55,8 +55,14 @@ import UserNotifications
             }
             // While the permission prompt waited, a later summary may have answered or replaced the card or stopped it
             // notifying (muted), or the connection may have dropped.
-            for item in notes where self.allowed && self.diff.isCurrent(item, connection: connection) {
-                await self.post(AttentionNote(item, webURL: webURL))
+            for item in notes {
+                if self.allowed, self.diff.isCurrent(item, connection: connection),
+                   await self.post(AttentionNote(item, webURL: webURL)) {
+                    // Shown only now; the summary may have moved on while it went out.
+                    self.withdraw(self.diff.adopt([(item.id, item.card)]))
+                } else if changes.withdraw.contains(item.id) {
+                    self.withdraw([item.id]) // the older notification it was to replace
+                }
             }
         }
     }
@@ -92,7 +98,8 @@ import UserNotifications
         await refreshAuthorization() // denied: the menu says so
     }
 
-    private func post(_ note: AttentionNote) async {
+    /// Whether it went out.
+    private func post(_ note: AttentionNote) async -> Bool {
         let content = UNMutableNotificationContent()
         content.title = note.title
         content.subtitle = note.subtitle
@@ -102,8 +109,10 @@ import UserNotifications
         do {
             // The same identifier replaces a notification still shown for this session.
             try await center.add(UNNotificationRequest(identifier: note.id, content: content, trigger: nil))
+            return true
         } catch {
             NSLog("Persona Link: notification not posted: %@", error.localizedDescription)
+            return false
         }
     }
 

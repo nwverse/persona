@@ -437,8 +437,11 @@ enum LinkText {
 
     /// Opens `route` of the web app in the default browser; without a web address, asks for one and opens it then.
     /// `webURL`: the hub's web address a notification carries.
+    /// The latest click wins: one that opens drops a route still waiting for an address.
     func open(route: String, webURL: String? = nil) {
-        if !openWeb(route: route, webURL: webURL) {
+        if openWeb(route: route, webURL: webURL) {
+            pendingRoute = nil
+        } else {
             pendingRoute = (route, webURL)
             requestWebAddress()
         }

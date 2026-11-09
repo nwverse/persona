@@ -107,6 +107,7 @@ final class AttentionTests: XCTestCase {
         let handed = n.apply(summary(item("d"), item("b")))
         XCTAssertEqual(handed.post.map(\.id), ["laptop/d#needs"], "d notifies now; b was notifying in the baseline")
         XCTAssertTrue(n.isCurrent(handed.post[0], connection: handed.connection))
+        XCTAssertEqual(n.adopt([("laptop/d#needs", "ix-1")]), [], "it went out")
         XCTAssertEqual(n.apply(summary(item("d"), item("b"))).post, [], "the same summary again changes nothing")
 
         // Muted and unmuted again, or a baseline card muted and unmuted: it notified on this connection already.
@@ -114,20 +115,33 @@ final class AttentionTests: XCTestCase {
         let unmuted = n.apply(summary(item("d"), item("b")))
         XCTAssertEqual(unmuted, .init(connection: unmuted.connection))
         XCTAssertEqual(n.shown, ["laptop/d#needs": "ix-1"])
+    }
 
-        // Its notification from an earlier run is still shown: that counts as notified.
-        var restart = AttentionNotifications()
-        _ = restart.adopt([("laptop/d#needs", "ix-1")])
-        _ = restart.apply(summary(item("d", notify: false, muted: true)))
-        XCTAssertEqual(restart.apply(summary(item("d"))).post, [])
+    func testACardWhoseNotificationIsShownDoesNotNotifyAgainWhicheverIsFoundFirst() {
+        // At launch, the notification an earlier run left and the first summary arrive in either order.
+        let delivered: [(id: String, card: String?)] = [("laptop/d#needs", "ix-1")]
+        var adoptFirst = AttentionNotifications()
+        XCTAssertEqual(adoptFirst.adopt(delivered), [])
+        _ = adoptFirst.apply(summary(item("d", notify: false)))
+        var summaryFirst = AttentionNotifications()
+        _ = summaryFirst.apply(summary(item("d", notify: false)))
+        XCTAssertEqual(summaryFirst.adopt(delivered), [])
+        XCTAssertEqual(summaryFirst.known, adoptFirst.known)
+        XCTAssertEqual(adoptFirst.apply(summary(item("d"))).post, [])
+        XCTAssertEqual(summaryFirst.apply(summary(item("d"))).post, [])
+
+        // With none shown, the same turn notifies.
+        var none = AttentionNotifications()
+        _ = none.apply(summary(item("d", notify: false)))
+        XCTAssertEqual(none.apply(summary(item("d"))).post.map(\.id), ["laptop/d#needs"])
     }
 
     func testASessionBeyondACappedListKeepsItsNotificationAndDoesNotNotifyAgain() {
         var n = AttentionNotifications()
         _ = n.apply(summary())
-        _ = n.apply(summary(item("old")))
+        n.send(summary(item("old")))
         // Newer sessions push it beyond the cap: it may still wait, so its notification stays.
-        let capped = n.apply(summary(item("new1"), item("new2"), more: 1))
+        let capped = n.send(summary(item("new1"), item("new2"), more: 1))
         XCTAssertEqual(capped.post.map(\.id), ["laptop/new1#needs", "laptop/new2#needs"])
         XCTAssertEqual(capped.withdraw, [])
         // Back in the list with the same card: no second notification.
@@ -136,20 +150,38 @@ final class AttentionTests: XCTestCase {
         XCTAssertEqual(n.apply(summary(item("new1"))).withdraw, ["laptop/new2#needs", "laptop/old#needs"])
     }
 
+    func testACappedFirstSummaryKeepsANotificationFoundAtLaunchWhicheverArrivesFirst() {
+        let capped = summary(item("new1"), item("new2"), more: 1)
+        let delivered: [(id: String, card: String?)] = [("laptop/old#needs", "ix-1")]
+        var adoptFirst = AttentionNotifications()
+        XCTAssertEqual(adoptFirst.adopt(delivered), [])
+        XCTAssertEqual(adoptFirst.apply(capped).withdraw, [])
+        var summaryFirst = AttentionNotifications()
+        _ = summaryFirst.apply(capped)
+        XCTAssertEqual(summaryFirst.adopt(delivered), [], "old may wait beyond the cap")
+        XCTAssertEqual(summaryFirst.shown, adoptFirst.shown)
+        XCTAssertEqual(summaryFirst.known, adoptFirst.known)
+        for var n in [adoptFirst, summaryFirst] {
+            XCTAssertEqual(n.apply(summary(item("old"), item("new1"), more: 1)).post, [], "back in the list: no new card")
+            XCTAssertEqual(n.apply(summary(item("new1"))).withdraw, ["laptop/old#needs"], "nothing cut: missing is gone")
+        }
+    }
+
     func testANewerCardOfTheSameSessionReplacesItsNotification() {
         var n = AttentionNotifications()
         _ = n.apply(summary())
-        XCTAssertEqual(n.apply(summary(item("a", card: nil))).post.map(\.interactionID), [nil])
-        let replaced = n.apply(summary(item("a", card: "ix-2")))
+        XCTAssertEqual(n.send(summary(item("a", card: nil))).post.map(\.interactionID), [nil])
+        let replaced = n.send(summary(item("a", card: "ix-2")))
         XCTAssertEqual(replaced.post.map(\.interactionID), ["ix-2"])
-        XCTAssertEqual(replaced.withdraw, [], "the same identifier replaces it; nothing to take back first")
+        XCTAssertEqual(replaced.withdraw, ["laptop/a#needs"])
+        XCTAssertEqual(replaced.withdrawNow, [], "the newer one replaces it; the older goes only if the newer does not go out")
         XCTAssertEqual(n.shown, ["laptop/a#needs": "ix-2"])
     }
 
     func testASessionThatLeftTheSummaryTakesItsNotificationBack() {
         var n = AttentionNotifications()
         _ = n.apply(summary())
-        _ = n.apply(summary(item("a"), item("b")))
+        n.send(summary(item("a"), item("b")))
         let answered = n.apply(summary(item("b")))
         XCTAssertEqual(answered.withdraw, ["laptop/a#needs"])
         XCTAssertEqual(answered.post, [])
@@ -160,7 +192,7 @@ final class AttentionTests: XCTestCase {
     func testAReconnectStartsANewBaselineAndTakesBackWhatWasAnsweredMeanwhile() {
         var n = AttentionNotifications()
         _ = n.apply(summary())
-        _ = n.apply(summary(item("a"), item("b")))
+        n.send(summary(item("a"), item("b")))
         XCTAssertEqual(n.apply(nil).withdraw, [], "the summary went away with the connection: nothing is taken back yet")
         let first = n.apply(summary(item("b"), item("c")))
         XCTAssertEqual(first.post, [], "c was already waiting when the link came back: no notification")
@@ -192,7 +224,7 @@ final class AttentionTests: XCTestCase {
         // After a reconnect: the same, with the notification this run posted.
         var reconnect = AttentionNotifications()
         _ = reconnect.apply(summary())
-        _ = reconnect.apply(summary(item("a")))
+        reconnect.send(summary(item("a")))
         _ = reconnect.apply(nil)
         XCTAssertEqual(reconnect.apply(summary(item("a", card: "ix-2"))).withdraw, ["laptop/a#needs"])
         XCTAssertEqual(reconnect.shown, [:])
@@ -200,7 +232,7 @@ final class AttentionTests: XCTestCase {
         // A muted session's newer card posts nothing, so the older card's notification goes.
         var muted = AttentionNotifications()
         _ = muted.apply(summary())
-        _ = muted.apply(summary(item("a")))
+        muted.send(summary(item("a")))
         XCTAssertEqual(muted.apply(summary(item("a", card: "ix-2", notify: false, muted: true))),
                        .init(post: [], withdraw: ["laptop/a#needs"]))
     }
@@ -224,6 +256,16 @@ final class AttentionTests: XCTestCase {
         XCTAssertFalse(n.isCurrent(waiting.post[0], connection: waiting.connection))
     }
 
+    func testAPostThatWaitedIsDroppedOnceItsSessionIsMissingFromACappedList() {
+        var n = AttentionNotifications()
+        _ = n.apply(summary())
+        let waiting = n.apply(summary(item("a")))
+        let capped = n.apply(summary(item("b"), more: 1))
+        XCTAssertEqual(capped.withdraw, [])
+        XCTAssertFalse(n.isCurrent(waiting.post[0], connection: waiting.connection), "it is not known to wait any more")
+        XCTAssertTrue(n.isCurrent(capped.post[0], connection: capped.connection))
+    }
+
     func testAPostThatWaitedIsDroppedOnceTheConnectionWentAway() {
         var n = AttentionNotifications()
         _ = n.apply(summary())
@@ -233,6 +275,56 @@ final class AttentionTests: XCTestCase {
         XCTAssertEqual(baseline.post, [], "the same card in the new connection's first summary is its baseline")
         XCTAssertNotEqual(baseline.connection, waiting.connection)
         XCTAssertFalse(n.isCurrent(waiting.post[0], connection: waiting.connection))
+    }
+
+    func testOnlyAPostThatWentOutCountsAsShown() {
+        // A newer card's post that is then dropped leaves nothing stale: the older notification it was to replace goes.
+        var replaced = AttentionNotifications()
+        _ = replaced.apply(summary())
+        replaced.send(summary(item("a")))
+        let replacing = replaced.apply(summary(item("a", card: "ix-2")))
+        XCTAssertEqual(replacing.withdraw, ["laptop/a#needs"])
+        XCTAssertEqual(replacing.withdrawNow, [])
+        _ = replaced.apply(summary(item("a", card: "ix-2", notify: false)))
+        XCTAssertFalse(replaced.isCurrent(replacing.post[0], connection: replacing.connection))
+        XCTAssertEqual(replaced.shown, [:])
+
+        // A post its connection dropped before it went out: on the next connection, a card listed without notifying in
+        // the baseline notifies when it starts to.
+        var dropped = AttentionNotifications()
+        _ = dropped.apply(summary())
+        let queued = dropped.apply(summary(item("a")))
+        _ = dropped.apply(nil)
+        _ = dropped.apply(summary(item("a", notify: false)))
+        XCTAssertFalse(dropped.isCurrent(queued.post[0], connection: queued.connection))
+        XCTAssertEqual(dropped.apply(summary(item("a"))).post.map(\.id), ["laptop/a#needs"])
+
+        // A post that failed: nothing to take back later, and no second try on this connection.
+        var failed = AttentionNotifications()
+        _ = failed.apply(summary())
+        _ = failed.apply(summary(item("a")))
+        XCTAssertEqual(failed.apply(summary(item("a"), item("b", notify: false))).post, [])
+        XCTAssertEqual(failed.apply(summary()).withdraw, [])
+
+        // One that went out after the summary moved on goes as soon as it is shown; the newer card's post is due.
+        var late = AttentionNotifications()
+        _ = late.apply(summary())
+        let slow = late.apply(summary(item("a")))
+        let newer = late.apply(summary(item("a", card: "ix-2")))
+        XCTAssertEqual(late.adopt([("laptop/a#needs", slow.post[0].card)]), ["laptop/a#needs"])
+        XCTAssertEqual(late.shown, [:])
+        XCTAssertTrue(late.isCurrent(newer.post[0], connection: newer.connection))
+
+        // Posted twice while the first waited (the session left and came back): the second is not made once the first
+        // is shown.
+        var twice = AttentionNotifications()
+        _ = twice.apply(summary())
+        let first = twice.apply(summary(item("a")))
+        _ = twice.apply(summary())
+        let second = twice.apply(summary(item("a")))
+        XCTAssertTrue(twice.isCurrent(first.post[0], connection: first.connection))
+        XCTAssertEqual(twice.adopt([("laptop/a#needs", "ix-1")]), [])
+        XCTAssertFalse(twice.isCurrent(second.post[0], connection: second.connection))
     }
 
     func testASummaryThatDoesNotDecodeKeepsTheBaseline() throws {
@@ -361,6 +453,19 @@ final class AttentionTests: XCTestCase {
         XCTAssertEqual(opened().count, 1, "the route opened once")
     }
 
+    func testAClickThatOpensDropsTheRouteWaitingForAnAddress() {
+        let (m, opened, _) = model()
+        m.open(route: "/s/laptop/a")
+        // The hub's web address arrives while the Web Address window is open; the row is clicked again.
+        var status = LinkStatus(state: "connected", mode: "passive")
+        status.attention = LinkAttention(needsYou: 0, webURL: "https://hub.example.com", items: [])
+        m.show(status)
+        m.open(route: "/s/laptop/a")
+        XCTAssertEqual(opened(), ["https://hub.example.com/s/laptop/a"])
+        m.setWebAddress("https://web.example.com")
+        XCTAssertEqual(opened().count, 1, "saving the address does not open it again")
+    }
+
     func testClosingTheWebAddressWindowDropsTheWaitingRoute() {
         let (m, opened, _) = model()
         m.open(route: "/s/laptop/a")
@@ -378,5 +483,17 @@ final class AttentionTests: XCTestCase {
         let (set, setOpened, _) = model(webAddress: "https://web.example.com", webURL: "https://hub.example.com/persona")
         set.open(route: "/s/laptop/a", webURL: "https://old.example.com")
         XCTAssertEqual(setOpened(), ["https://web.example.com/s/laptop/a"])
+    }
+}
+
+private extension AttentionNotifications {
+    /// `apply`, with every post due going out at once, as `LinkNotifier` does when nothing makes it wait.
+    @discardableResult
+    mutating func send(_ attention: LinkAttention?) -> Changes {
+        let changes = apply(attention)
+        for item in changes.post where isCurrent(item, connection: changes.connection) {
+            XCTAssertEqual(adopt([(item.id, item.card)]), [])
+        }
+        return changes
     }
 }
