@@ -13,21 +13,23 @@ import (
 // their canonical source text; extension-authored messages, manifest labels, logs and CLI output never call this.
 func ExtensionStatusText(l Lang, text string) string { return extensionStatusText(l, text, 0) }
 
-var extensionStatusTemplates = sync.OnceValue(func() []deploymentTemplate {
-	return makeCatalogTemplates(func(key string) bool {
+var extensionStatusTemplates = sync.OnceValue(func() *templateIndex {
+	return indexTemplates(makeCatalogTemplates(func(key string) bool {
 		return strings.HasPrefix(key, "extension-status.") && key != "extension-status.separator" ||
 			strings.HasPrefix(key, "extension-version.") || strings.HasPrefix(key, "extension-identity.") || key == "hub-extensions.missing" ||
 			key == "hub-extensions.socket_path_too_long" || key == "extension-market_git.git_missing" ||
 			key == "extension-sandbox.probe_tmp"
-	})
+	}))
 })
 
 func extensionStatusText(l Lang, text string, depth int) string {
 	if text == "" || depth >= 16 {
 		return text
 	}
-	for _, form := range extensionStatusTemplates() {
-		match := form.pattern.FindStringSubmatch(text)
+	forms := extensionStatusTemplates()
+	for _, n := range forms.candidates(text) {
+		form := &forms.forms[n]
+		match := form.match(text)
 		if match == nil {
 			continue
 		}
@@ -74,8 +76,10 @@ func knownExtensionStatus(text string, depth int) bool {
 	if depth >= 16 {
 		return false
 	}
-	for _, form := range extensionStatusTemplates() {
-		match := form.pattern.FindStringSubmatch(text)
+	forms := extensionStatusTemplates()
+	for _, n := range forms.candidates(text) {
+		form := &forms.forms[n]
+		match := form.match(text)
 		if match == nil {
 			continue
 		}
