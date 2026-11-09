@@ -11194,6 +11194,70 @@ def agent_live(step, n):
     return {"ok": True, "step": step}
 
 
+NARRATED = {}  # session id → machine id of the conversations /mock/narrate?step=start streamed in
+NARRATED_WORDS = {}  # session id → the words streamed there, which step=finish writes as the thinking line
+LIVE_TEXT = {}  # session id → the text being generated, sent again after a subscription's backlog as the hub does
+
+
+def narrate(step, words, answer, steps=8, ms=250, line=True, ask="帮我把网络层单元测试的事交给负责的 Agent。"):
+    """/mock/narrate: what the Persona assistant's turn with a tool call looks like on the wire (#1966). Claude Code
+    streams the words it writes before a tool call as text deltas; its transcript records them as a thinking block,
+    written with the tool call once the tool is done.
+    step=start: in every open conversation, the user's message `ask` that starts the turn, then `words` stream as deltas
+    (`steps` × `ms`). step=finish: the thinking line (`line=0`: none, a turn cut off), the tool call and its result, the
+    answer `answer`, then the clearing delta. With no app connected (GET /mock/restart?gap_ms=… between the two), the
+    lines wait for the resumed subscription and the clear is lost, as on the hub: deltas are not replayed. A text still
+    being generated is sent again after a backlog."""
+    import time
+    if step == "start":
+        NARRATED.clear(); NARRATED_WORDS.clear()
+        followers = {}  # each open conversation, once, and every socket that follows it (a closed one is skipped)
+        for send, subscribed in list(LIVE):
+            for sid in list(subscribed):
+                if ITEMS.get(sid): followers.setdefault(sid, []).append(send)
+        for sid in followers:
+            NARRATED[sid] = next((x["machine_id"] for x in all_sessions() if x["session_id"] == sid), "macbook")
+            NARRATED_WORDS[sid] = words
+            CHURN_ITEMS.setdefault(sid, list(ITEMS[sid]))  # /mock/reset takes them away again
+        for sid, sends in followers.items():
+            mid = NARRATED[sid]
+            if ask:
+                before = ITEMS[sid][-1]["seq"]
+                asked = [it("user", "text", 0, text=ask)]
+                ITEMS[sid] = ITEMS[sid] + asked
+                for send in sends:
+                    try: send({"type": "items", "machine_id": mid, "session_id": sid, "items": asked, **span(asked, before)})
+                    except Exception: pass
+            for k in range(1, steps + 1):
+                time.sleep(ms / 1000)
+                text = words[:len(words) * k // steps]
+                LIVE_TEXT[sid] = text
+                for send in sends:
+                    try: send({"type": "delta", "machine_id": mid, "session_id": sid, "text": text})
+                    except Exception: pass
+        return {"ok": True, "streamed": len(NARRATED)}
+    if step == "finish":
+        def send_all(sid, msg):  # whoever follows the conversation now (nobody during a restart's gap); how many got it
+            sent = 0
+            for out, subs in list(LIVE):
+                if sid in subs:
+                    try: out(msg); sent += 1
+                    except Exception: pass
+            return sent
+
+        cleared = 0  # sockets the clear reached
+        for sid, mid in list(NARRATED.items()):
+            before = ITEMS[sid][-1]["seq"]
+            new = ([it("assistant", "thinking", 0, text=NARRATED_WORDS.get(sid, words))] if line else []) \
+                + tool("Bash", {"command": "ls agents", "description": "找负责的 Agent"}, "找到了", 0) + [it("assistant", "text", 0, text=answer)]
+            ITEMS[sid] = ITEMS[sid] + new
+            LIVE_TEXT.pop(sid, None)
+            send_all(sid, {"type": "items", "machine_id": mid, "session_id": sid, "items": new, **span(new, before)})
+            cleared += send_all(sid, {"type": "delta", "machine_id": mid, "session_id": sid, "text": ""})
+        return {"ok": True, "finished": len(NARRATED), "cleared": cleared}
+    return {"error": "step is start or finish"}
+
+
 def say(text, user=None, stream=False, steps=10, ms=300, late=0, drop=False):
     """A reply (after `user`'s message, if given) in every conversation an app has open (/mock/say). `stream`: the
     message first, then the reply arrives as growing `delta` text over about 3 s, like the Persona assistant's. `drop`: the
@@ -13310,6 +13374,13 @@ class H(BaseHTTPRequestHandler):
         if p == "/mock/lark_send_delay": return self.send_json(set_lark_send_delay(q.get("s", [""])[0]))  # LarkSendTests
         if p == "/mock/agent_live" and AGENT_LIVE:  # an agent's reply streaming as Claude shows it (MOCK_AGENT_LIVE above)
             return self.send_json(agent_live(q.get("step", [""])[0], int(q.get("n", ["0"])[0])))
+        if p == "/mock/narrate":  # #1966: words streamed before a tool call, recorded as thinking; ?step=start|finish
+            args = (q.get("step", [""])[0], q.get("words", ["我先找一下负责的 Agent，再把任务交给它。"])[0], q.get("answer", ["已交给负责的 Agent。"])[0],
+                    int(q.get("steps", ["8"])[0]), int(q.get("ms", ["250"])[0]), q.get("line", ["1"])[0] != "0")
+            if args[0] == "start":  # streams for a few seconds: the test looks for the words meanwhile
+                threading.Thread(target=narrate, args=args, daemon=True).start()
+                return self.send_json({"ok": True})
+            return self.send_json(narrate(*args))
         if p == "/mock/say":  # ChatFollowTests: a reply arrives in every open conversation (?text=…, ?user=… a message before it)
             # &steps=50&ms=80: the hub's own pace (a delta every 80 ms, node/assistant.go).
             # &history=mock-1.r1: the transcript's history token from now on, on pushes and pages alike (a branch was abandoned,
@@ -13490,6 +13561,7 @@ class H(BaseHTTPRequestHandler):
             reset_agent_archives()  # MOCK_AGENT_ARCHIVES: the two archived agents again, the rest back in the list as they were
             PINS.update(spaces=["macbook/weather"], sessions=[])
             for sid, items in CHURN_ITEMS.items(): ITEMS[sid] = list(items)  # LiveUpdateTests, ChatFollowTests: what churn / say added goes
+            NARRATED.clear(); NARRATED_WORDS.clear(); LIVE_TEXT.clear()  # an AssistantLiveTextTests turn that died mid-stream
             for row in SESSIONS + ASSISTANT:
                 if row["session_id"] in DROPPED_AT: row["updated_at"] = DROPPED_AT[row["session_id"]]
             DROPPED_AT.clear()
@@ -15780,6 +15852,9 @@ class H(BaseHTTPRequestHandler):
                                "items": lazy_images(fold_work(page) if msg.get("fold_work") else page)}
                         served(sid, "backlog", out)
                         send(out)
+                    # What is being generated, right after the backlog, as the hub's sendLiveText does (#1966).
+                    if LIVE_TEXT.get(sid):
+                        send({"type": "delta", "machine_id": mid, "session_id": sid, "text": LIVE_TEXT[sid]})
         except Exception as e:
             LOG.write("  WS closed %r\n" % e); LOG.flush()
         SOCKETS.discard(self.connection)
