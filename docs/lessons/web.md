@@ -1,5 +1,9 @@
 # Lessons: web UI and interactions
 
+## State updaters stay pure under StrictMode (#1165)
+
+- Keep React state updaters free of mutations to refs. Echo matching claims transcript IDs, so do it in the effect, then pass captured IDs and a timestamp into a pure pending-message filter. Exercise sending and transcript delivery under StrictMode to catch double-invocation failures.
+
 ## Render-count tests must separate store pushes from live clocks (#1989)
 
 A Profiler counts every commit beneath it, including status clocks and deferred mount work unrelated to the store update under test. Drain mount timers before taking the baseline, keep time fixed during the measured push sequence, and explicitly flush the real store's batched notifications inside `act`. Freezing timers without delivering those notifications can make a zero-redraw test pass vacuously: retain all negative assertions and add a positive control proving a current-conversation update still redraws and changes the DOM. Clear timers and restore real time after unmounting each test.
@@ -256,6 +260,7 @@ Six parallel lanes (chat rendering, message actions, Agents list / Machines, Ter
 - `Menu` anchors only to elements: temporarily place a `position:fixed`, 0×0 span at the click point; delete on close (not as a side effect in a setState updater).
 - Own message bubbles originally had no action row; adding one changes chat spacing. Put an `absolute right-full` hover bar left of the bubble (already 12% margin there).
 - Browsers prohibit top-level navigation to `data:`; use `fetch(dataURL).blob()` then `URL.createObjectURL`. Image clipboard writes (`ClipboardItem`) require a secure context; hide the button on plaintext-HTTP hubs.
+- An image that displayed successfully can fail its separate download request (#1588). Check `Response.ok` before reading the body or creating a save link; use the existing failure toast and leave Download available for retry. Regress the actual viewer with JSON/HTML HTTP errors, then a successful retry, preserving original bytes, MIME, filename and Blob URL cleanup. Inspect the toast in the built app: DOM visibility alone misses a toast painted behind the full-screen viewer at the same stacking level.
 - Viewer / editor Esc handlers must run in window capture phase and `stopPropagation`, or chat's Esc interrupt fires too.
 
 ### Sidebar and Machines
