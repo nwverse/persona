@@ -6,6 +6,13 @@
 - A saved Auto-upgrade preference is not its effective execution state. Show the saved value while separately explaining extension-disabled, removed-market and manager-global pauses. Read global preferences and catalog refreshes with the same explicit manager as the extension; a default-manager read can describe the wrong same-ID copy.
 - Preserve dirty configuration when maintenance reads or lifecycle writes return an entire detail. A catalog with a newer version must not become a misleading “no new version” notice merely because the background upgrade list has not caught up; use the catalog's authoritative `upgradable` result and retain the consent preview.
 
+## Chat states need their way out, and fallbacks need a second trigger (#2450)
+
+- An action that ends a card leaves the same receipt an answer does; a card that just vanishes reads as a failure. Name it in words on its own row, not an icon in the head, so it is not mistaken for "close".
+- When the composer says Working…, Interrupt and Esc must work too: derive both from the same condition (`state === "working" || awaiting`), not one from `state` alone.
+- Do not put a native `confirm()` in front of a reversible step such as replacing the draft: replace at once and offer Undo that restores the text, its quotes and the caret.
+- An older-hub fallback that re-reads on an event the older hub never sends stays stale. Re-read when the data it reads first arrives (here: the chat's row in the store), and stop watching once it has.
+
 ## Cards in a scrolling flex box: `shrink-0`, and `overflow-clip` for sticky (#2017)
 
 - A flex child with `overflow-hidden` has a `min-height:auto` of 0, so flex squeezes it below its content when the box above the input is full. The card's footer (the answer buttons) then sits below the fold, and a receipt can be squeezed to a fraction of its content. Give every card in that box `shrink-0`, not only the one that was reported (`Card`, `AnsweredCard`, `DelegatedCard`).
