@@ -19,7 +19,7 @@ struct MessageSourceTests {
         """
         <persona-context kind="context" title="来自对话「\(title)」" url="">
         这条消息不是用户本人发的，是 Persona 的另一段对话（source-1）用 conversation_send 发来的，第 1 跳（最多 4 跳）。
-        按里面说的做。
+        按里面说的做。要把结果告诉那段对话就用 conversation_send 发回 source-1；只是确认收到就不要回，免得两段对话来回发。
         </persona-context>
         Ready for review.
         """ // i18n-ignore: exact legacy relay fixture
@@ -65,7 +65,7 @@ struct MessageSourceTests {
 
     @Test func legacySchedulingAndSupervisionStayOnSourceSide() {
         let scheduled = item("⏰ Morning review（定时任务，每 30 分钟）\n\nReview build status.") // i18n-ignore: exact legacy schedule fixture
-        #expect(MessageSource.of(scheduled)?.kind == "followup")
+        #expect(MessageSource.of(scheduled)?.kind == "patrol")
         #expect(MessageSource.body(scheduled) == "Review build status.")
         let supervision = item("""
         📋 督办：你派出去的任务有 1 个要你处理
@@ -83,8 +83,8 @@ struct MessageSourceTests {
         message.clientMsgID = "runtime-generated"
         #expect(MessageSource.of(message)?.kind == "supervision")
         #expect(MessageSource.of(message)?.name == "Patrol")
-        message.source = .object(["kind": .string("user")])
-        #expect(MessageSource.of(message) == nil)
+        message.source = .object(["kind": .string("future-source")])
+        #expect(MessageSource.of(message)?.kind == "future-source")
     }
 
     @Test func onlyAdjacentIdenticalSourceIdentitiesShareTheirLabel() {
@@ -103,6 +103,32 @@ struct MessageSourceTests {
         let result = WatchMessage.latest([item(relay())])
         #expect(result.first?.source?.kind == "conversation")
         #expect(result.first?.text == "Ready for review.")
+    }
+
+    @Test func persistedMetadataAndUserSentinelsAreAuthoritative() {
+        func wrap(_ body: String, metadata: String) -> String {
+            "<persona-context kind=\"message-source\" title=\"\">\n" + metadata + "\n</persona-context>\n" + body
+        }
+        let persisted = item(wrap("Ready", metadata: #"{"kind":"patrol","title":"Morning review","conversation_id":"source-1"}"#))
+        #expect(MessageSource.of(persisted)?.kind == "patrol")
+        #expect(MessageSource.body(persisted) == "Ready")
+        #expect(ContextRef.parse(persisted.text ?? "").refs.isEmpty)
+        #expect(WatchText.shown(persisted.text ?? "") == "Ready")
+        for invalid in [#"{"author":"user"}"#, #"{"kind":42}"#, "not json"] {
+            let protected = item(wrap(relay(), metadata: invalid))
+            #expect(MessageSource.of(protected) == nil)
+            #expect(Injected.of(protected) == nil)
+            let nested = item(wrap(persisted.text ?? "", metadata: invalid))
+            #expect(MessageSource.of(nested) == nil)
+            let scheduled = item(wrap("⏰ Morning review（定时任务）\n\nReview the build.", metadata: invalid)) // i18n-ignore: legacy schedule fixture
+            #expect(MessageSource.of(scheduled) == nil)
+            #expect(Injected.of(scheduled) == nil)
+        }
+        let context = "<persona-context kind=\"context\" title=\"Selected notes\" url=\"\">Keep this context</persona-context>\n"
+        let withContext = item(context + relay())
+        #expect(MessageSource.of(withContext)?.kind == "conversation")
+        #expect(ContextRef.parse(MessageSource.body(withContext)).refs.map(\.title) == ["Selected notes"])
+        #expect(MessageSource.of(item(relay().replacingOccurrences(of: "发回 source-1", with: "发回 source-2"))) == nil) // i18n-ignore: mismatched relay ids
     }
 
     @Test func aRelayCannotConsumeAnUnrelatedPendingMessage() {

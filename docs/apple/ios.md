@@ -1108,8 +1108,13 @@ shared `SourceMessage` component on iOS and macOS, and `WatchSourceMessage` on W
 The existing single-conversation navigation and Assistant / Agents tabs stay unchanged: no group title, participants,
 announcement or per-message avatar.
 
-- `MessageSource.of` reads additive metadata first; unknown kinds remain external sources, and malformed optional
+- `MessageSource.of` follows the source contract in `docs/protocol/protocol.md` ("Message source"): explicit `source`
+  wins, then persisted `kind="message-source"` context, existing `injected`, and exact legacy relay envelopes.
+  Kinds are `conversation`, `patrol`, `followup`, and `supervision`; daily/interval followups map to `patrol`.
+  `conversation_id` and `title` are optional. Unknown kinds remain external sources, and malformed optional
   fields do not drop an item. `Item.source` retains the JSON object for cache round-trips.
+  The first persisted metadata block is authoritative: `{"author":"user"}` or malformed metadata prevents nested
+  source inference. Provenance blocks never become selectable Context cards; genuine selected contexts remain available.
 - With an older server, only a complete leading relay context with the fixed non-user delivery sentence is recognized.
   Exact scheduled envelopes reuse `Injected`; supervision requires both its exact header and non-user notice.
   App-sent text with `client_msg_id` is never heuristically reclassified. A bare clock, clipboard, title or quoted

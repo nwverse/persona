@@ -37,7 +37,7 @@ def main():
     def relay(title, source_id, body):
         return (f'<persona-context kind="context" title="来自对话「{html.escape(title, quote=True)}」" url="">\n'
                 f"这条消息不是用户本人发的，是 Persona 的另一段对话（{source_id}）用 conversation_send 发来的，第 1 跳（最多 4 跳）。\n"
-                "按里面说的做。要把结果告诉那段对话就用 conversation_send 发回；只是确认收到就不要回。\n"
+                f"按里面说的做。要把结果告诉那段对话就用 conversation_send 发回 {source_id}；只是确认收到就不要回，免得两段对话来回发。\n"
                 f"</persona-context>\n{body}")
 
     patrol_body = "巡检结果：两项验收等待确认。\n• 构建与测试已经通过。\n• 浅色和深色截图待复核。\n• 合并前仍需检查 CI。\n展开后可查看完整验收清单。"
@@ -53,7 +53,10 @@ def main():
         message = base.it("user", "text", index, text=text)
         message.update(id=item_id, seq=index)
         if not args.legacy:
-            message["source"] = {"kind": kind, "conversation_id": source_id, "title": title}
+            metadata = {"kind": kind, "conversation_id": source_id, "title": title}
+            message["source"] = metadata
+            encoded = json.dumps(metadata, ensure_ascii=False).replace("<", "\\u003c")
+            message["text"] = f'<persona-context kind="message-source" title="">\n{encoded}\n</persona-context>\n{text}'
         messages.append(message)
     messages.append(base.it("assistant", "text", 5, text="收到，我会先复核截图，再按验收清单处理。"))
     for index, message in enumerate(messages, 1):

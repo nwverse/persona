@@ -19,7 +19,7 @@ struct SourceMessage: View, Equatable {
     }
 
     private var pinKey: String { "source-" + item.id }
-    private var text: String {
+    private var rawText: String {
         guard let fullText else { return MessageSource.body(item) }
         var whole = item
         whole.text = fullText
@@ -27,6 +27,7 @@ struct SourceMessage: View, Equatable {
         whole.injected = nil
         return MessageSource.body(whole)
     }
+    private var text: String { ContextRef.parse(rawText).rest }
     private var folds: Bool {
         item.fullSize != nil || text.count > Theme.MessageSource.foldCharacters || text.split(separator: "\n").count > Theme.MessageSource.previewLines
     }
@@ -63,6 +64,8 @@ struct SourceMessage: View, Equatable {
                     .accessibilityHint(source.origin ?? "")
                     .accessibilityIdentifier("message-source-label")
             }
+            let refs = ContextRef.parse(rawText).refs
+            if !refs.isEmpty { ContextGroup(refs: refs, key: pinKey) }
             if folds && !open {
                 Text(text)
                     .font(source.automated ? Theme.Font.secondary : Theme.Font.body)

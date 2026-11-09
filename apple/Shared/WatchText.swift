@@ -38,7 +38,7 @@ nonisolated enum WatchText {
 
     static func shown(_ raw: String) -> String {
         // The assistant's cards first: their words, not their JSON (the fence rule below would leave the JSON).
-        let text = AssistantCardText.replacingCards(AssistantActionSource.stripping(raw))
+        let text = AssistantCardText.replacingCards(AssistantActionSource.stripping(MessageSource.strippingMetadata(raw)))
         let ns = text as NSString
         let blocks = context.matches(in: text, range: NSRange(location: 0, length: ns.length))
         var t = context.stringByReplacingMatches(in: text, range: NSRange(location: 0, length: ns.length), withTemplate: "")
