@@ -50,7 +50,7 @@ func (s *Service) setSessions(machine string, list []proto.Session) {
 			newTurn := prev == proto.StatusDone || prev == proto.StatusIdle || prev == proto.StatusInterrupted
 			s.inOrder(func() { s.turnStartedObserved(context.Background(), ref, newTurn) }) // after the items that came before it
 		case prev == proto.StatusWorking && (sess.Status == proto.StatusDone || sess.Status == proto.StatusIdle):
-			go s.notifyFinished(machine, sess.SessionID, s.turnsBook().ended(key, now, backgroundRunning(sess)))
+			s.notifyFinished(machine, sess.SessionID, s.turnsBook().ended(key, now, backgroundRunning(sess)))
 			// A new assistant conversation is named after its first turn; a task from one may be done. After the
 			// items of the turn (a channel's answer is read from them).
 			ref := SessionRef{MachineID: machine, SessionID: sess.SessionID}
@@ -59,7 +59,7 @@ func (s *Service) setSessions(machine string, list []proto.Session) {
 			(sess.Status != prev || sess.Rev != was.Rev || sess.LastText != was.LastText || !sess.UpdatedAt.Equal(was.UpdatedAt)) &&
 			s.takeTaskAnswerRetry(machine, sess.SessionID):
 			ref := SessionRef{MachineID: machine, SessionID: sess.SessionID}
-			s.inOrder(func() { go s.taskTurnEnded(context.Background(), ref.MachineID, ref.SessionID) })
+			s.inOrder(func() { s.afterSettle(context.Background(), s.taskTurnSettled, ref.MachineID, ref.SessionID) })
 		}
 		if sess.Status == proto.StatusWorking && backgroundRunning(sess) {
 			s.turnsBook().sawBackground(key, now)
