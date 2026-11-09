@@ -264,6 +264,15 @@ Pitfalls, odd behavior, and the tradeoffs made at the time (originally in `CLAUD
 - Background builds/tests require pinned source snapshots; do not merge branches or edit their worktree while running. On 2026-11-05, targeted Go regression enumerated old files before a merge introduced a new caller, producing undefined-method compilation errors. Mixed snapshots cannot judge commits or count as passes. Freeze a commit in a separate detached worktree and rerun.
 - A Go test wrapper embedding a narrow `Store` interface does not gain methods by assigning real Postgres to it. Once card handlers checked optional persistence interfaces first, admin-page tests returned 503; old handlers rejected bad JSON first and hid the fixture gap. Real bus regressions explicitly pass the full DB to the assistant, while hub admin login keeps its wrapper. Retain status assertions, not longer waits or 503 as a pass.
 
+## Running the hosted CI lanes on a Mac (2026-11-09)
+
+The `scripts/ci/` lanes are written for the hosted runners; on a Mac developer machine:
+
+- `scripts/ci/server.sh` (all / `node`) first runs "Browser runner resources" (`google-chrome --version`, `free -m`, `df -h /dev/shm`), a Linux runner diagnostic that exits 127 on macOS before any node test. Run `server.sh build`, `managers` and `other`, and the node shard's own step (`scripts/ci/server-shards.py node --database-file …` against the same Postgres 18 fixture); every Go test still runs.
+- `server/internal/extension/denohost` needs `bun` on PATH at the version `.github/workflows/server-test.yml` pins (1.4.2); without it `TestTrustedAdapterMatchesOfficialSDK` fails with "Bun is required", and with another version the committed `adapter.mjs` looks stale. A pinned copy outside the global environment works: `npm install --prefix <dir> bun@1.4.2`.
+- `scripts/ci/scripts.sh` expects Python 3.11 or later with `scripts/ci/requirements.txt` (PyYAML, Pillow) and `actionlint` (CI: `go install github.com/rhysd/actionlint/cmd/actionlint@v1.7.12`). Xcode's `/usr/bin/python3` (3.9, no PyYAML) fails about twenty suites for reasons unrelated to the change; use a venv first on PATH.
+- `scripts/ci/apple.sh` refuses anything but Xcode 26.0.x (`DEVELOPER_DIR` defaults to `/Applications/Xcode_26.0.1.app`) and creates its own simulator; a Mac with only a newer Xcode, or a hung CoreSimulator, cannot run the Apple lane. Say so in the PR, with the Mac unit tests you ran instead.
+
 ## Dead-code reports depend on the selected build (2026-11-07, #5856)
 
 - `deadcode -test ./...` only analyzes the selected platform and build tags. A default Linux run reports `sysmon.ptr`, the Windows tray notification helpers and `DevelopmentLimits.valid` as unreachable, but macOS, Windows and the `persona_dev_resources` build respectively call them.
