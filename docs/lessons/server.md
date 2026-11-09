@@ -1417,6 +1417,12 @@ A connector that folds several notifications into one thread (GitHub CI failures
 - A stored file's own name must not become a second way to fetch it: the built-in copy answers `assets/<name>.gz` with a 404, as the plain site did.
 - `check_bundle_privacy.py` reads printable strings, and gzip turns a file's strings into noise: scan the plain web copy before precompressing it, or the scan of the binaries silently stops covering the web client.
 
+## Fixed heap: a lazy value evaluated as an argument, a whole set built for one member (2026-11-09, #2475)
+
+- A value made on first use is made anyway when it is passed as an argument to a call that may not need it: `writeIfMissing(p, prompts.RenderKBReadme())` parsed every prompt template on each manager start for a README that was already there. Pass the function (`writeIfMissing(p, prompts.RenderKBReadme)`) and call it after the check; a `heap?gc=1` profile of an idle process shows such frames.
+- A catalog or template set built whole on first use holds every member once any is needed: the deployment, inbox and computer indexes compiled every template of theirs (624 regexps, 2.9 MB live for the three) the first time they translated a text, and one prompt render parsed all 139 templates (1.56 MB). Keep each member's source and build it on first use (`i18n.templatePattern`, `prompts.templateSet` parsing a template with the ones its tree includes), and keep a test that builds every member, so a broken one still fails there (`TestEveryTemplateCompiles`, `Names()`).
+- A receive buffer sized for a worst case that cannot happen is kept for the life of a watch: the kernel never sends a netlink datagram over 32 KiB, so `netaddr` uses 64 KiB and retries a truncated dump with the old 1 MiB.
+
 ## Hot paths: a whole list decoded again for one changed row, one message projected per app (2026-11-09, #2250)
 
 - A session list travels whole on every change, twice (node to manager `sessions.changed`, manager to hub `fleet.sessions`), and usually one of its 150 sessions changed. Decode only the elements whose bytes changed (`proto.SessionListDecoder`): a session decoded from the same bytes is the same session, so keep each decoded session by its bytes and hand out copies; drop what the last list did not name. The callers write `MachineID` and `Rev` into the list they get, so hand out struct copies, never the kept value.
@@ -1438,3 +1444,9 @@ A catalog's recipe contains the upstream tool's argument object. Protocol field 
 ## Bound read-state snapshots by recorded entries (#2400)
 
 When decorating a large session list, reserve the timestamp snapshot by the smaller of the list and the recorded read-state table, under the same lock used to copy it. Reserving for every row wastes memory when few or no sessions have been read. The unchanged isolated publication budget can expose this cost even after workspace discovery allocations are fixed; identify the failing subcase rather than treating all session-reader failures as the same regression. Keep the original budgets and seen-state semantics.
+
+## Publication follows the explicit node policy (#1175)
+
+A Hub-only receipt requires unchanged node versions. When the user explicitly enables automatic node updates, that condition would reject legitimate guarded transfers. Require matching verified packages and unchanged machine IDs, owners and UIDs instead; report each node's observed deployment state without treating Hub confirmation as fleet completion. Never send deployment requests from the publisher. Prefer the effective policy returned by the running Hub over its bootstrap file, and retain the strict unchanged-inventory check when the policy is off.
+
+After activating matching native and downloadable packages, reapply an enabled runtime node policy through its existing settings route so managers recheck the new pointer. A filesystem pointer change has no consumer watcher. Check the current policy first so an intervening disable is respected; a failed recheck must not produce a completed publication receipt.
