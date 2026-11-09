@@ -996,7 +996,7 @@ func superviseFixture(t *testing.T, exe string, env []string) *fixtureSupervisor
 			s.cmd, s.starts = cmd, s.starts+1
 			s.mu.Unlock()
 			_ = cmd.Wait()
-			time.Sleep(50 * time.Millisecond)
+			time.Sleep(50 * time.Millisecond) // sleep-ok: the supervisor's own restart delay, not a wait for state
 		}
 	}()
 	t.Cleanup(func() {
