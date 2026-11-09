@@ -449,18 +449,52 @@ func renumberMigration(ctx context.Context, conn *pgxpool.Conn, from, to string)
 	})
 }
 
-// TruncateForTest clears tables in tests: those of them the database's sets have.
+// TruncateForTest clears tables in tests: those of them the database's sets have, with what refers to them.
 func (d *DB) TruncateForTest(ctx context.Context) error {
-	var tables []string
-	err := d.pool.QueryRow(ctx, `SELECT coalesce(array_agg(t), '{}') FROM unnest($1::text[]) AS t WHERE to_regclass(t) IS NOT NULL`,
-		[]string{"workspace_board", "workspace_snapshots", "push_device_retirements", "devices", "device_tokens", "live_activities", "phone_tools", "phone_write_queue",
-			"node_sessions", "mail_accounts", "interactions", "settings", "inbox_items", "kb_entities", "connector_secrets",
-			"machine_systems", "machine_metrics", "sent_messages", "todos", "todo_agents", "assistant_always", "machine_trust", "hub_settings",
-			"manager_outbox", "handed_over",
-			"machine_audit", "sent_as_user"}).Scan(&tables)
-	if err != nil || len(tables) == 0 {
+	cascade, err := d.truncateCascade(ctx, []string{"workspace_board", "workspace_snapshots", "push_device_retirements", "devices",
+		"device_tokens", "live_activities", "phone_tools", "phone_write_queue", "node_sessions", "mail_accounts", "interactions",
+		"settings", "inbox_items", "kb_entities", "connector_secrets", "machine_systems", "machine_metrics", "sent_messages",
+		"todos", "todo_agents", "assistant_always", "machine_trust", "hub_settings", "manager_outbox", "handed_over",
+		"machine_audit", "sent_as_user"})
+	if err != nil {
 		return err
 	}
-	_, err = d.pool.Exec(ctx, `TRUNCATE `+strings.Join(tables, ", ")+` CASCADE`)
+	return d.truncateNonEmpty(ctx, cascade)
+}
+
+// truncateCascade is what TRUNCATE tables CASCADE empties: those of tables the database has, and each table whose
+// foreign key refers to one of these, and so on.
+func (d *DB) truncateCascade(ctx context.Context, tables []string) ([]string, error) {
+	var out []string
+	err := d.pool.QueryRow(ctx, `WITH RECURSIVE c(rel) AS (
+			SELECT to_regclass(t) FROM unnest($1::text[]) AS t WHERE to_regclass(t) IS NOT NULL
+			UNION SELECT k.conrelid FROM pg_constraint k JOIN c ON k.confrelid = c.rel WHERE k.contype = 'f')
+		SELECT coalesce(array_agg(rel::regclass::text ORDER BY rel::regclass::text), '{}') FROM c`, tables).Scan(&out)
+	return out, err
+}
+
+// truncateNonEmpty empties tables (truncateCascade's) with one TRUNCATE ... CASCADE of those that have a row. TRUNCATE
+// gives every table it names new files, a row in it or not: clearing two dozen tables, mostly empty, cost a test
+// more than most of what it then did. The tables left empty are the same.
+func (d *DB) truncateNonEmpty(ctx context.Context, tables []string) error {
+	if len(tables) == 0 {
+		return nil
+	}
+	probe := make([]string, len(tables))
+	for i, t := range tables {
+		probe[i] = `SELECT ` + strconv.Itoa(i) + ` WHERE EXISTS (SELECT FROM ` + t + `)`
+	}
+	var rowful []int
+	if err := d.pool.QueryRow(ctx, `SELECT coalesce(array_agg(i), '{}') FROM (`+strings.Join(probe, " UNION ALL ")+`) AS p(i)`).Scan(&rowful); err != nil {
+		return err
+	}
+	if len(rowful) == 0 {
+		return nil
+	}
+	names := make([]string, len(rowful))
+	for i, n := range rowful {
+		names[i] = tables[n]
+	}
+	_, err := d.pool.Exec(ctx, `TRUNCATE `+strings.Join(names, ", ")+` CASCADE`)
 	return err
 }

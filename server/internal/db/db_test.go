@@ -37,7 +37,11 @@ func open(t testing.TB) *DB {
 		t.Fatal(err)
 	}
 	t.Cleanup(d.Close)
-	if _, err := d.pool.Exec(context.Background(), `TRUNCATE `+strings.Join(openTables, ", ")+` CASCADE`); err != nil {
+	openCascade.once.Do(func() { openCascade.tables, openCascade.err = d.truncateCascade(context.Background(), openTables) })
+	if openCascade.err != nil {
+		t.Fatal(openCascade.err)
+	}
+	if err := d.truncateNonEmpty(context.Background(), openCascade.tables); err != nil {
 		t.Fatal(err)
 	}
 	return d
@@ -49,6 +53,44 @@ var openTables = []string{"push_device_retirements", "lock_tests", "client_ops",
 	"device_sessions", "live_activities", "phone_tools", "node_sessions", "mail_accounts", "interactions", "settings",
 	"inbox_items", "kb_entities", "connector_secrets", "machine_systems", "machine_metrics", "machine_usage",
 	"sent_messages", "todos", "todo_agents", "assistant_always", "sent_as_user"}
+
+// open empties what TRUNCATE openTables CASCADE did, a table only the cascade reaches included, and leaves a table
+// that had no row in that cascade its files: it truncates only what has a row.
+func TestOpenTruncatesOnlyTablesWithRows(t *testing.T) {
+	d, ctx := open(t), context.Background()
+	if !slices.Contains(openCascade.tables, "todo_decisions") || slices.Contains(openTables, "todo_decisions") {
+		t.Fatalf("todo_decisions is not a table only the cascade reaches: %v", openCascade.tables)
+	}
+	if _, err := d.pool.Exec(ctx, `INSERT INTO todos (id, title) VALUES ('t1', 'x');
+		INSERT INTO todo_decisions (id, todo_id, question, choice, created_at) VALUES ('d1', 't1', 'q', 'c', now())`); err != nil {
+		t.Fatal(err)
+	}
+	file := func(table string) uint32 {
+		t.Helper()
+		var n uint32
+		if err := d.pool.QueryRow(ctx, `SELECT relfilenode FROM pg_class WHERE oid = to_regclass($1)`, table).Scan(&n); err != nil {
+			t.Fatal(err)
+		}
+		return n
+	}
+	devices := file("devices")
+	d = open(t)
+	var rows int
+	if err := d.pool.QueryRow(ctx, `SELECT (SELECT count(*) FROM todos) + (SELECT count(*) FROM todo_decisions)`).Scan(&rows); err != nil || rows != 0 {
+		t.Fatalf("%d rows left, %v", rows, err)
+	}
+	if file("devices") != devices {
+		t.Fatal("an empty table was truncated")
+	}
+}
+
+// openCascade is what TRUNCATE openTables CASCADE empties, worked out by the first open: each open migrates the same
+// database to the same tables.
+var openCascade struct {
+	once   sync.Once
+	tables []string
+	err    error
+}
 
 // templates are the databases migratedDatabase copies: one per sets, migrated once per test binary.
 var templates = struct {
