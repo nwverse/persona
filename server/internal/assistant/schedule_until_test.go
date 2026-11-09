@@ -48,7 +48,7 @@ func TestUntilExpiresAnIntervalThatIsAlreadyDue(t *testing.T) {
 	runs := scheduleRuns(h)
 	if len(runs) != 1 || runs[0].Status != runSkipped || runs[0].Error != reason || runs[0].RefID != "p" ||
 		runs[0].Kind != got.kind() || runs[0].Title != "巡检" || !runs[0].Due.Equal(end.UTC()) ||
-		!runs[0].At.Equal(now.UTC()) || !runs[0].of.Equal(now.UTC()) {
+		!runs[0].At.Equal(now.UTC()) || !runs[0].of.Equal(now.UTC()) || !runs[0].Ended {
 		t.Fatalf("skipped run: %+v", runs)
 	}
 }
@@ -237,6 +237,30 @@ func TestUntilThroughTheTaskRoutes(t *testing.T) {
 	if rec.Code != 200 || json.Unmarshal(rec.Body.Bytes(), &relative) != nil ||
 		relative.Task.Until.Before(rel.Add(2*time.Hour-time.Second)) || relative.Task.Until.After(rel.Add(2*time.Hour+time.Second)) {
 		t.Fatalf("relative until: %d %s", rec.Code, rec.Body)
+	}
+}
+
+func TestEnablingDropsAPastUntilTheClientLeftOut(t *testing.T) {
+	h := newStorelessService(t, newFakeHub())
+	do := func(method, path, body string) *httptest.ResponseRecorder {
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, httptest.NewRequest(method, path, strings.NewReader(body)))
+		return rec
+	}
+	past := time.Now().Add(-2 * time.Hour).UTC().Truncate(time.Second)
+	setTasks(h, Task{ID: "p", Title: "巡检", Prompt: "看看", Repeat: repeatInterval, EveryMinutes: 30, Enabled: false, Until: past})
+	body := `{"title":"巡检","prompt":"看看","repeat":"interval","every_minutes":30,"enabled":true`
+	rec := do("PUT", "/api/v1/assistant/tasks/p", body+"}")
+	got, _ := taskByID(h, "p")
+	if rec.Code != 200 || !got.Enabled || !got.Until.IsZero() {
+		t.Fatalf("turning it back on without until: %d %+v %s", rec.Code, got, rec.Body)
+	}
+	// Saying the past time while turning it on is still refused, and nothing is saved.
+	setTasks(h, Task{ID: "p", Title: "巡检", Prompt: "看看", Repeat: repeatInterval, EveryMinutes: 30, Enabled: false, Until: past})
+	rec = do("PUT", "/api/v1/assistant/tasks/p", body+`,"until":"`+past.Format(time.RFC3339)+`"}`)
+	got, _ = taskByID(h, "p")
+	if rec.Code != http.StatusBadRequest || got.Enabled || !got.Until.Equal(past) {
+		t.Fatalf("an explicit past until while enabling: %d %+v", rec.Code, got)
 	}
 }
 

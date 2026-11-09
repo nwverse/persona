@@ -207,6 +207,9 @@ type ScheduleRun struct {
 	// StreakTold: this run made its task's streak of runs that did not go through long enough to tell the user, who
 	// was told then (schedule_streak.go): the rest of that streak is not told again.
 	StreakTold bool `json:"streak_told,omitempty"`
+	// Ended: the task reached its end time and was turned off. Not a missed run: it does not count toward the
+	// streak of runs that did not go through, and it ends that streak (schedule_streak.go).
+	Ended bool `json:"ended,omitempty"`
 	// of is when the scheduler started this run (the task's LastRun then; "Run now"'s tap): a run that finishes after a
 	// newer one started is history only, it does not overwrite the newer one's status (recordRun).
 	of time.Time
@@ -619,6 +622,7 @@ func (s *Service) toolScheduleFollowup(ctx context.Context, machine, sessionID s
 			return "", err
 		}
 		applyUntil(&t, end, hasUntil, clearUntil) // null on a new task leaves it unset
+		dropStaleUntil(&t, hasUntil, now)
 		if err := checkUntil(&t, now); err != nil {
 			return "", err
 		}
@@ -731,6 +735,7 @@ func (s *Service) scheduleOwn(ctx context.Context, sessionID, title, rawPrompt, 
 			return "", true, untilErr
 		}
 		applyUntil(t, end, hasUntil, clearUntil)
+		dropStaleUntil(t, hasUntil, time.Now())
 	}
 	if err := checkUntil(t, time.Now()); err != nil {
 		sc.mu.Unlock()
@@ -927,6 +932,7 @@ func (s *Service) toolScheduleRoutine(ctx context.Context, self string, args jso
 		t.Push = *push
 	}
 	applyUntil(&t, end, hasUntil, clearUntil)
+	dropStaleUntil(&t, hasUntil, now)
 	if err := checkTask(&t, now); err != nil {
 		sc.mu.Unlock()
 		return "", err
@@ -1033,6 +1039,18 @@ func checkUntil(t *Task, now time.Time) error {
 		return i18n.Err("assistant-schedule.until_passed")
 	}
 	return nil
+}
+
+// dropStaleUntil forgets an end time that has already passed when this save did not mention it. The list switch and a
+// client that does not know the field omit until; keeping a past one would make turning the task back on fail.
+// An explicit past end time is still refused by checkUntil.
+func dropStaleUntil(t *Task, sent bool, now time.Time) {
+	if sent || !t.Enabled || t.Repeat == repeatOnce || t.Until.IsZero() {
+		return
+	}
+	if t.Until.Before(now.Add(-time.Minute)) {
+		t.Until = time.Time{}
+	}
 }
 
 func weekdayText(ds []int) string {
@@ -1161,7 +1179,7 @@ func (s *Service) runDue(ctx context.Context, now time.Time) {
 			t.LastRun = now.UTC()
 			t.LastStatus, t.LastError = runSkipped, reason
 			skipped = append(skipped, ScheduleRun{Kind: t.kind(), RefID: t.ID, Title: t.label(), Due: t.Until.UTC(), At: now.UTC(),
-				Status: runSkipped, Error: reason, of: now.UTC()})
+				Status: runSkipped, Error: reason, Ended: true, of: now.UTC()})
 			changed = true
 			continue
 		}
@@ -2122,6 +2140,7 @@ func (s *Service) scheduleRoutes() {
 		t := editTask(Task{ID: "task_" + randomHex(4), CreatedAt: now.UTC()}, in, now)
 		t.SessionID, t.Push = "", push
 		applyUntil(&t, end, hasUntil, clearUntil)
+		dropStaleUntil(&t, hasUntil, now)
 		if err := checkTask(&t, now); err != nil {
 			apierr.Write(w, http.StatusBadRequest, err)
 			return
@@ -2193,6 +2212,7 @@ func (s *Service) scheduleRoutes() {
 			}
 		}
 		applyUntil(&t, end, hasUntil, clearUntil)
+		dropStaleUntil(&t, hasUntil, now)
 		if err := checkTask(&t, now); err != nil {
 			sc.mu.Unlock()
 			apierr.Write(w, http.StatusBadRequest, err)
