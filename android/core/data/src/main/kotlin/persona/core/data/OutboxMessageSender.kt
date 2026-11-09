@@ -59,18 +59,19 @@ class OutboxMessageSender(
     private val processing = Mutex()
     private val initialized = CompletableDeferred<Unit>()
     private val reconcilers = mutableListOf<OutboxReconciler>()
+    /**
+     * Messages that came back waiting while the link was up, each with the code it fails with ([stall]). Memory only,
+     * under its own lock; the link going down starts every run again. Declared before `init`: its readiness collector
+     * clears them.
+     */
+    private val stalls = mutableMapOf<String, Stall>()
+    /** The one retry of the stalled messages, due in [StallRetryMillis]. */
+    private var stallRetry: Job? = null
     @Volatile private var mainResolver: MainConversationResolver? = null
     /** Transcript items that already showed a message (observeTranscript): the same item never shows a second. */
     private val claimed = mutableSetOf<Pair<SessionKey, String>>()
     /** Whether a session is at work (connectActivity): its turn may write a delivered message only when it ends. */
     @Volatile private var busy: (SessionKey) -> Boolean = { false }
-    /**
-     * Messages that came back waiting while the link was up, each with the code it fails with ([stall]). Memory only,
-     * under its own lock: the link going down starts every run again.
-     */
-    private val stalls = mutableMapOf<String, Stall>()
-    /** The one retry of the stalled messages, due in [StallRetryMillis]. */
-    private var stallRetry: Job? = null
 
     override val outbox = store.entries.map { entries ->
         entries.filter { it.state !in hidden }.map {
