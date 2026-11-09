@@ -6,6 +6,8 @@ import (
 	"slices"
 	"sync"
 	"time"
+
+	"github.com/nwverse/persona/server/internal/textfmt"
 )
 
 // A computer the user has not said is theirs yet (pending, docs/assistant/onboarding.md 4.2 "Your computers ↔ hub") is connected but
@@ -39,7 +41,7 @@ func (s *Service) pendingAssistantMachine(ctx context.Context) (Device, bool) {
 			continue
 		}
 		if chosen.ID == "" || d.ID < chosen.ID {
-			chosen = Device{ID: d.ID, Name: firstNonEmpty(d.Name, d.ID)}
+			chosen = Device{ID: d.ID, Name: textfmt.FirstNonEmpty(d.Name, d.ID)}
 		}
 	}
 	return chosen, chosen.ID != ""

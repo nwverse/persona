@@ -21,6 +21,7 @@ import (
 
 	"github.com/nwverse/persona/server/internal/kb"
 	"github.com/nwverse/persona/server/internal/lazyre"
+	"github.com/nwverse/persona/server/internal/textfmt"
 )
 
 // The history import's files, all under the knowledge base's history/ directory (search, lists and cleanup never look
@@ -220,7 +221,7 @@ func readHistoryStop(data string) (historyStop, bool) {
 	}
 	var st historyStop
 	if json.Unmarshal(raw, &st) != nil {
-		st = historyStop{historyReason: historyReason{Code: "stop_file", Text: clipRunes(strings.TrimSpace(string(raw)), 200)}}
+		st = historyStop{historyReason: historyReason{Code: "stop_file", Text: textfmt.Clip(strings.TrimSpace(string(raw)), 200)}}
 	}
 	if st.Code == "" {
 		st.Code = "stop_file"

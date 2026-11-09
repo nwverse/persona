@@ -14,6 +14,7 @@ import (
 	"github.com/nwverse/persona/server/internal/kb"
 	"github.com/nwverse/persona/server/internal/mail"
 	"github.com/nwverse/persona/server/internal/proto"
+	"github.com/nwverse/persona/server/internal/textfmt"
 )
 
 // mailConnector is mail as a connector (docs/plans/plan-connectors.md "3. Migration"): so far what goes into the knowledge
@@ -88,7 +89,7 @@ func (c mailConnector) Changes(ctx context.Context, cursor string, _ int) ([]con
 				Messages: []kb.SourceMessage{{ID: fmt.Sprint(m.UID), SenderID: addr, SenderName: name, At: at, Type: "TEXT",
 					SenderHandles: []kb.Handle{{Kind: kb.HandleEmail, Value: addr}},
 					Mine:          strings.EqualFold(addr, a.Email),
-					Text:          "【" + m.Subject + "】" + clipRunes(strings.TrimSpace(text), 4000)}},
+					Text:          "【" + m.Subject + "】" + textfmt.Clip(strings.TrimSpace(text), 4000)}},
 			})
 		}
 		st.store(cursors, a.ID)

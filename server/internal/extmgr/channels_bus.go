@@ -12,6 +12,7 @@ import (
 	"github.com/nwverse/persona/server/internal/channel"
 	"github.com/nwverse/persona/server/internal/feishubot"
 	"github.com/nwverse/persona/server/internal/rpc"
+	"github.com/nwverse/persona/server/internal/textfmt"
 )
 
 // The channels' transport the assistant asks for (app.call feishu.*, channels.*, interactions.resolve), moved here
@@ -142,7 +143,7 @@ func (h *Manager) feishuCall(ctx context.Context, method string, params json.Raw
 		}
 		id, err := h.botPostJSONKeyedOpt(ctx, api, chatID, a.ReplyTo, a.Card, a.Fallback, callerKey(a.UUID, feishuMaxUUID-4), a.InThread, a.NoDetour)
 		if err == nil {
-			h.rememberMessageChat(id, firstNonEmpty(parent, chatID)) // what it sent is in a chat the bot may use
+			h.rememberMessageChat(id, textfmt.FirstNonEmpty(parent, chatID)) // what it sent is in a chat the bot may use
 		}
 		return map[string]any{"message_id": id}, err
 	case assistantwire.FeishuText:
@@ -175,7 +176,7 @@ func (h *Manager) feishuCall(ctx context.Context, method string, params json.Raw
 		}
 		id, _, err := h.replyOrSendOpt(ctx, api, chatID, a.ReplyTo, feishubot.TypeText, feishubot.TextContent(a.Text), replyUUID, a.InThread, noDetour)
 		if err == nil && !found {
-			h.rememberMessageChat(id, firstNonEmpty(parent, chatID))
+			h.rememberMessageChat(id, textfmt.FirstNonEmpty(parent, chatID))
 		}
 		return map[string]any{"message_id": id}, err
 	case assistantwire.FeishuUpdateCard:
@@ -253,7 +254,7 @@ func (h *Manager) feishuCall(ctx context.Context, method string, params json.Raw
 		if err != nil {
 			return nil, err
 		}
-		path, err := h.uploadBytes(ctx, m, firstNonEmpty(a.Name, a.Key), data)
+		path, err := h.uploadBytes(ctx, m, textfmt.FirstNonEmpty(a.Name, a.Key), data)
 		return map[string]any{"path": path}, err
 	}
 	return nil, fmt.Errorf("app %s has no method %s", assistantwire.AppFeishu, method)

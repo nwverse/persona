@@ -90,13 +90,6 @@ func hashToken(tok string) string {
 	return hex.EncodeToString(sum[:])
 }
 
-func clipRunes(s string, n int) string {
-	if r := []rune(s); len(r) > n {
-		return string(r[:n]) + "…"
-	}
-	return s
-}
-
 func mcpTool(name string) proto.Tool {
 	t := prompts.Tool(name)
 	return proto.Tool{Name: t.Name, Description: t.Description, InputSchema: t.InputSchema}

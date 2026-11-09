@@ -18,6 +18,7 @@ import (
 	"github.com/nwverse/persona/server/internal/prompts"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/rpc"
+	"github.com/nwverse/persona/server/internal/textfmt"
 )
 
 // The channels plugins contribute (the channel extension point, docs/extensions/channels.md "How extensions contribute channels"): the program
@@ -263,10 +264,10 @@ func (s *Service) channelForward(ctx context.Context, id string, m channel.Messa
 	}
 	for _, f := range m.Files {
 		if !caps.FilesIn || len(f.Data) > channel.FileMost || rt.machine == "" {
-			in.Unsupported = append(in.Unsupported, "文件「"+firstNonEmpty(f.Name, "未命名")+"」")
+			in.Unsupported = append(in.Unsupported, "文件「"+textfmt.FirstNonEmpty(f.Name, "未命名")+"」")
 			continue
 		}
-		path, err := s.uploadBytes(ctx, rt.machine, firstNonEmpty(f.Name, "file"), f.Data)
+		path, err := s.uploadBytes(ctx, rt.machine, textfmt.FirstNonEmpty(f.Name, "file"), f.Data)
 		if err != nil {
 			return fmt.Errorf("%s%w", i18n.T(s.botLang(ctx), "assistant-channels_plugin.save_file", i18n.Args{"machine": rt.machineName}), err)
 		}
@@ -779,11 +780,6 @@ var (
 	contextOpenRe  = lazyre.New(`<` + compat.ContextPattern() + `\b`)
 )
 
-func firstNonEmpty(s ...string) string {
-	for _, x := range s {
-		if strings.TrimSpace(x) != "" {
-			return x
-		}
-	}
-	return ""
-}
+// firstNonEmpty is textfmt.FirstNonEmpty for origins.go and start.go, which open #2049 edits. Delete it once #2049
+// has merged and call textfmt.FirstNonEmpty there.
+var firstNonEmpty = textfmt.FirstNonEmpty

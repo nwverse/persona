@@ -10,6 +10,7 @@ import (
 	"github.com/nwverse/persona/sdk/go/wire"
 	"github.com/nwverse/persona/server/internal/extension"
 	"github.com/nwverse/persona/server/internal/rpc"
+	"github.com/nwverse/persona/server/internal/textfmt"
 )
 
 // The auth relay extension point (docs/operations/auth-relay.md): an authorization link one of the user's Agents stopped at is
@@ -72,6 +73,6 @@ func heldAuthRelay(r wire.AuthRelayResult) wire.AuthRelayResult {
 	if !slices.Contains(wire.AuthRelayReasons, r.Reason) || r.Status == wire.AuthRelayStatusDone {
 		r.Reason = ""
 	}
-	r.App = clipRunes(strings.Join(strings.Fields(r.App), " "), 79) // with its …, the schema's 80
+	r.App = textfmt.Clip(strings.Join(strings.Fields(r.App), " "), 79) // with its …, the schema's 80
 	return r
 }

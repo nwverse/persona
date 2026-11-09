@@ -2,6 +2,7 @@ package proto
 
 import (
 	"path/filepath"
+	"slices"
 	"strings"
 )
 
@@ -19,7 +20,7 @@ func CleanClaudeDirPatterns(in []string) []string {
 			continue
 		}
 		p = strings.TrimRight(p, "/")
-		if !containsString(out, p) {
+		if !slices.Contains(out, p) {
 			out = append(out, p)
 		}
 	}
@@ -76,15 +77,6 @@ func ClaudeDirBlockedBy(dir, home string, patterns []string) string {
 		}
 	}
 	return ""
-}
-
-func containsString(list []string, s string) bool {
-	for _, v := range list {
-		if v == s {
-			return true
-		}
-	}
-	return false
 }
 
 // ClaudeDir is one config directory of a machine as the settings page lists it (GET /api/v1/machines/{mid}/claude-dirs).
