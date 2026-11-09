@@ -96,8 +96,9 @@ interface InboxRepository : persona.core.contracts.api.InboxRepository {
     /** Download authenticated media and return a content URI suitable for a read grant. */
     suspend fun downloadFile(file: LarkPart.File): String
 
-    suspend fun momentsPost(postId: String): persona.core.contracts.LarkMomentsPost = error("Moments post unavailable")
-    suspend fun momentsComments(postId: String): List<persona.core.contracts.LarkMomentsComment> = emptyList()
+    /** A Moments post, read through [manager] (the chat or item its link was opened from; the default's, or null, names none). */
+    suspend fun momentsPost(postId: String, manager: String? = null): persona.core.contracts.LarkMomentsPost = error("Moments post unavailable")
+    suspend fun momentsComments(postId: String, manager: String? = null): List<persona.core.contracts.LarkMomentsComment> = emptyList()
     suspend fun urlPreview(messageId: String, url: String): persona.core.contracts.LarkUrlPreview? = null
     suspend fun react(messageId: String, key: String, remove: Boolean) = Unit
     suspend fun cardAction(messageId: String, actionId: String) = Unit
