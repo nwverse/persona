@@ -28,24 +28,20 @@ func identify(pid int) ProcIdentity {
 	return identifyOf(h)
 }
 
-// KillIfStill ends the process pid, but only when it is still the exact
-// instance this identity was taken from. One handle carries the check and the
-// kill — a handle names an instance, not a pid — so a pid reused in between is
-// never hit. The process being gone, or no longer that instance, is not an error.
-func (id ProcIdentity) KillIfStill(pid int) error {
-	if pid < 1 || id.Start == "" {
-		return nil
-	}
+// killPinned carries the check and the kill on one process handle — a handle
+// names an instance, not a pid — so a pid reused in between is never hit.
+func (id ProcIdentity) killPinned(pid int) (bool, error) {
 	h, err := windows.OpenProcess(windows.PROCESS_TERMINATE|windows.PROCESS_QUERY_LIMITED_INFORMATION, false, uint32(pid))
 	if err != nil {
-		return nil // no such process, or not ours to open
+		// No such process, or not ours to open: not the recorded instance.
+		return true, nil
 	}
 	defer windows.CloseHandle(h)
 	if identifyOf(h) != id {
-		return nil
+		return true, nil
 	}
 	if err := windows.TerminateProcess(h, 1); err != nil && Alive(pid) {
-		return err
+		return true, err
 	}
-	return nil
+	return true, nil
 }

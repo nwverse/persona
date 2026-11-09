@@ -6,11 +6,5 @@ package osproc
 // checks (a second-resolution start time, ownership) stay the whole identity.
 func identify(int) ProcIdentity { return ProcIdentity{} }
 
-// KillIfStill still refuses without an identity; with one it verifies and kills
-// by pid, the way the callers without an exact identity always did.
-func (id ProcIdentity) KillIfStill(pid int) error {
-	if pid < 1 || id.Start == "" {
-		return nil
-	}
-	return id.killUnpinned(pid)
-}
+// killPinned cannot pin a process instance here; the unpinned path applies.
+func (ProcIdentity) killPinned(int) (bool, error) { return false, nil }

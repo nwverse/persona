@@ -29,11 +29,20 @@ func (id ProcIdentity) StillIs(pid int) bool {
 	return identify(pid) == id
 }
 
-// killUnpinned verifies the identity and then kills by pid: the check and the
-// kill are two calls, so the window between them is one syscall wide. It is the
-// whole story where the platform cannot pin an instance, and the fallback where
-// it can but will not right now.
-func (id ProcIdentity) killUnpinned(pid int) error {
+// KillIfStill ends the process pid, but only when it is still the exact
+// instance this identity was taken from. Where the platform can pin an
+// instance (a pidfd on Linux, a process handle on Windows) the check and the
+// kill act on that one instance, so a pid reused between the two is never hit.
+// The process being gone, or no longer that instance, is not an error.
+func (id ProcIdentity) KillIfStill(pid int) error {
+	if pid < 1 || id.Start == "" {
+		return nil
+	}
+	if handled, err := id.killPinned(pid); handled {
+		return err
+	}
+	// No pinning here: verify the identity, then kill by pid — the window
+	// between the two one syscall wide.
 	if !id.StillIs(pid) {
 		return nil
 	}

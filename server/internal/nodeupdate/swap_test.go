@@ -181,6 +181,27 @@ func TestRenameStillSwapsOnlyTheFileItChecked(t *testing.T) {
 			t.Fatal("swapped source remains")
 		}
 	})
+
+	t.Run("touched-before-check-swaps", func(t *testing.T) {
+		m, _, _ := testManager(t)
+		want := hash(t, m.exe)
+		src := filepath.Join(filepath.Dir(m.exe), "src2")
+		if err := os.WriteFile(src, []byte("replacement"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		// A metadata touch that settled before the check (a backup tool) is not
+		// an in-flight rewrite: the swap must not refuse on it.
+		future := time.Now().Add(time.Minute)
+		if err := os.Chtimes(m.exe, future, future); err != nil {
+			t.Fatal(err)
+		}
+		if err := renameStill(src, m.exe, want); err != nil {
+			t.Fatal(err)
+		}
+		if got, _ := os.ReadFile(m.exe); string(got) != "replacement" {
+			t.Fatalf("swap did not land: %q", got)
+		}
+	})
 }
 
 // A resident that recorded its executable's identity at startup still refuses

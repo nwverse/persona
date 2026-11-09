@@ -426,14 +426,17 @@ func processStart(pid int) (string, error) {
 
 // aliveIs says whether pid is still the exact recorded process instance. The
 // exact identity decides whenever the marker carries one and the platform can
-// read it now; the second-resolution start is what every older version wrote
-// and still guarantees. An unreadable exact identity never passes.
+// read it now; the second-resolution start — what every older version wrote —
+// decides otherwise and stays the fallback when the exact identity cannot be
+// read right now (a masked procfs): still a guard against pid reuse.
 func aliveIs(pid int, start, precise string) bool {
 	if pid < 2 || start == "" {
 		return false
 	}
 	if precise != "" {
-		return osproc.Identify(pid).Start == precise
+		if id := osproc.Identify(pid); id.Start != "" {
+			return id.Start == precise
+		}
 	}
 	birth, err := processStart(pid)
 	return err == nil && birth != "" && birth == start
@@ -441,15 +444,16 @@ func aliveIs(pid int, start, precise string) bool {
 
 // killRecorded ends the recorded process, but only when it is still that exact
 // instance: pinned by pidfd or process handle where the platform has one, so a
-// pid reused between the identity check and the kill is never hit.
+// pid reused between the identity check and the kill is never hit. Without a
+// readable exact identity the portable start time decides.
 func killRecorded(pid int, start, precise string) error {
 	if pid < 2 || start == "" {
 		return nil
 	}
-	if precise != "" {
+	if precise != "" && osproc.Identify(pid).Start != "" {
 		return osproc.ProcIdentity{Start: precise}.KillIfStill(pid)
 	}
-	if !aliveIs(pid, start, "") {
+	if !aliveIs(pid, start, precise) {
 		return nil
 	}
 	return osproc.Kill(pid)

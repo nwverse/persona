@@ -541,18 +541,23 @@ func fileHash(path string) (string, error) {
 var errSuperseded = errors.New("node executable was replaced by another deployment")
 
 // renameStill replaces dst with src only while dst is still the file whose
-// sha256 is want. The hash is read through one open descriptor and the inode,
-// size and modification time that descriptor saw are rechecked against the
-// path immediately before the rename, so a deployment that renamed dst into
-// place or rewrote it in place (cp never takes the directory lock) after the
-// check began is detected, not overwritten. The window that remains is the one
-// between that stat and the rename, two adjacent syscalls.
+// sha256 is want. The file's inode, size and modification time are snapshotted
+// before and rechecked after the hash is read through one open descriptor, and
+// once more against the path immediately before the rename, so a deployment
+// that renamed dst into place or rewrote it in place (cp never takes the
+// directory lock) between those points is detected, not overwritten. The
+// window that remains is the one between the last check and the rename, two
+// adjacent syscalls.
 func renameStill(src, dst, want string) error {
 	f, err := os.Open(dst)
 	if err != nil {
 		return err
 	}
 	defer f.Close()
+	before, err := f.Stat()
+	if err != nil {
+		return err
+	}
 	sum := sha256.New()
 	if _, err := io.Copy(sum, f); err != nil {
 		return err
@@ -560,15 +565,18 @@ func renameStill(src, dst, want string) error {
 	if hex.EncodeToString(sum.Sum(nil)) != want {
 		return errSuperseded
 	}
-	seen, err := f.Stat()
+	after, err := f.Stat()
 	if err != nil {
 		return err
+	}
+	if !after.ModTime().Equal(before.ModTime()) || after.Size() != before.Size() {
+		return errSuperseded
 	}
 	now, err := os.Stat(dst)
 	if err != nil {
 		return err
 	}
-	if !os.SameFile(seen, now) || !seen.ModTime().Equal(now.ModTime()) || seen.Size() != now.Size() {
+	if !os.SameFile(after, now) || !now.ModTime().Equal(after.ModTime()) || now.Size() != after.Size() {
 		return errSuperseded
 	}
 	return os.Rename(src, dst)

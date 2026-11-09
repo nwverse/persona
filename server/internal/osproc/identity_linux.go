@@ -33,28 +33,23 @@ func identify(pid int) ProcIdentity {
 	return ProcIdentity{Start: "ticks:" + fields[19]}
 }
 
-// KillIfStill ends the process pid, but only when it is still the exact
-// instance this identity was taken from. A pidfd pins one instance and the
-// signal goes to that, so a pid reused between the check and the kill is never
-// hit. The process being gone, or no longer that instance, is not an error.
-func (id ProcIdentity) KillIfStill(pid int) error {
-	if pid < 1 || id.Start == "" {
-		return nil
-	}
+// killPinned pins the instance with a pidfd and signals that: a pid reused
+// between the identity check and the kill is never hit.
+func (id ProcIdentity) killPinned(pid int) (bool, error) {
 	fd, err := unix.PidfdOpen(pid, 0)
 	if err != nil {
 		// No pidfd here (a kernel before 5.3, or the process already gone):
-		// fall back to the checked-by-pid kill, its window one syscall wide.
-		return id.killUnpinned(pid)
+		// fall back to the checked-by-pid kill.
+		return false, nil
 	}
 	defer unix.Close(fd)
 	// The fd names the instance pidfd_open saw; the pid may already name a
 	// newer one. Only signal the pinned instance while the pid still does.
 	if identify(pid) != id {
-		return nil
+		return true, nil
 	}
 	if err := unix.PidfdSendSignal(fd, unix.SIGKILL, nil, 0); err != nil && !errors.Is(err, syscall.ESRCH) {
-		return err
+		return true, err
 	}
-	return nil
+	return true, nil
 }
