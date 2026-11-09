@@ -213,17 +213,19 @@ func precompressedSite(t testing.TB, site fstest.MapFS) fstest.MapFS {
 func TestWebAppServesPrecompressedAssetsAsThePlainFiles(t *testing.T) {
 	js := strings.Repeat("export const answer = 42; // a hashed chunk\n", 100)
 	plain := fstest.MapFS{
-		"index.html":              {Data: []byte("<html>" + strings.Repeat("<p>app</p>", 200) + "</html>")},
-		"sw.js":                   {Data: []byte(js)},
-		"assets/App-1.js":         {Data: []byte(strings.Repeat(js, 25))}, // past io.Copy's 32 KB buffer
-		"assets/styles-2.css":     {Data: []byte(strings.Repeat("a{color:red}\n", 200))},
-		"assets/icon-3.png":       {Data: append([]byte("\x89PNG\r\n\x1a\n"), bytes.Repeat([]byte{0, 1, 2, 3}, 600)...)},
-		"assets/small-4.js":       {Data: []byte("export {};")},
-		"admin/index.html":        {Data: []byte("<html>admin</html>")},
-		"admin/assets/admin-5.js": {Data: []byte(js)},
+		"index.html":               {Data: []byte("<html>" + strings.Repeat("<p>app</p>", 200) + "</html>")},
+		"sw.js":                    {Data: []byte(js)},
+		"assets/App-1.js":          {Data: []byte(strings.Repeat(js, 25))}, // past io.Copy's 32 KB buffer
+		"assets/styles-2.css":      {Data: []byte(strings.Repeat("a{color:red}\n", 200))},
+		"assets/icon-3.png":        {Data: append([]byte("\x89PNG\r\n\x1a\n"), bytes.Repeat([]byte{0, 1, 2, 3}, 600)...)},
+		"assets/small-4.js":        {Data: []byte("export {};")},
+		"admin/index.html":         {Data: []byte("<html>admin</html>")},
+		"admin/assets/admin-5.js":  {Data: []byte(js)},
+		"third-party-licenses.txt": {Data: []byte(strings.Repeat("MIT License, Copyright (c) the authors\n", 100))},
 	}
 	stored := precompressedSite(t, plain)
-	if _, ok := stored["assets/App-1.js"]; ok || stored["assets/App-1.js.gz"] == nil || stored["sw.js"] == nil {
+	if _, ok := stored["assets/App-1.js"]; ok || stored["assets/App-1.js.gz"] == nil || stored["sw.js"] == nil ||
+		stored["third-party-licenses.txt.gz"] == nil {
 		t.Fatalf("not precompressed as the build does: %v", slices.Sorted(maps.Keys(stored)))
 	}
 	oracle := gzipResponses(t.Logf, webFrom(t.TempDir(), plain))
@@ -242,7 +244,8 @@ func TestWebAppServesPrecompressedAssetsAsThePlainFiles(t *testing.T) {
 		{"If-Modified-Since", "GET", map[string]string{"Accept-Encoding": browser, "If-Modified-Since": "Mon, 02 Jan 2006 15:04:05 GMT"}},
 	}
 	paths := []string{"/assets/App-1.js", "/assets/styles-2.css", "/assets/icon-3.png", "/assets/small-4.js", "/",
-		"/s/laptop/abc", "/sw.js", "/admin/assets/admin-5.js", "/assets/gone-6.js", "/assets/App-1.js.gz"}
+		"/s/laptop/abc", "/sw.js", "/admin/assets/admin-5.js", "/assets/gone-6.js", "/assets/App-1.js.gz",
+		"/third-party-licenses.txt", "/third-party-licenses.txt.gz"}
 	decoded := func(w *httptest.ResponseRecorder) string {
 		if w.Header().Get("Content-Encoding") == "gzip" {
 			return gunzip(t, w.Body.Bytes())

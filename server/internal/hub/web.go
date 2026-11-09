@@ -19,8 +19,8 @@ import (
 )
 
 // webDist is the web client built into a published personad (scripts/release/publish.sh copies web/dist here before building);
-// in other builds only the placeholder is there. Its hashed assets are kept gzipped (webasset.Precompress, run by the
-// build after the copy): name.gz instead of name.
+// in other builds only the placeholder is there. Its hashed assets and its third-party-licenses.txt are kept gzipped
+// (webasset.Precompress, run by the build after the copy): name.gz instead of name.
 //
 //go:embed all:webdist
 var webDist embed.FS
@@ -30,7 +30,7 @@ var webDist embed.FS
 // into personad serves (published builds), and without either every non-API path is a 404, as before. Paths without a
 // file fall back to index.html (client-side routes).
 //
-// The built-in copy's precompressed assets (docs/web/web.md "Precompressed assets") go out as they are stored to a
+// The built-in copy's precompressed files (docs/web/web.md "Precompressed assets") go out as they are stored to a
 // client that takes gzip, and decompressed to any other request, with the headers and bytes a plain file would
 // have. The data dir's files are plain and gzipResponses compresses them as it sends them, as before.
 func webApp(dir string) http.Handler {
@@ -61,12 +61,14 @@ func webFrom(dir string, embedded fs.FS) http.Handler {
 		name := strings.TrimPrefix(path.Clean("/"+r.URL.Path), "/")
 		file := name
 		asset, hidden := strings.HasPrefix(name, "assets/"), strings.HasPrefix(path.Base(name), ".")
-		// In the built-in copy an asset's .gz is how another asset is stored, never a file of its own (Vite makes none).
-		storedForm := builtIn && asset && strings.HasSuffix(name, webasset.Suffix)
+		kept := asset || name == webasset.Licenses // a file the build may keep gzipped (webasset.Precompressible)
+		// In the built-in copy an asset's .gz is how another asset is stored, never a file of its own (Vite makes none);
+		// so is the licenses' .gz, which falls back to index.html like any other path without a file.
+		storedForm := builtIn && (asset && strings.HasSuffix(name, webasset.Suffix) || name == webasset.Licenses+webasset.Suffix)
 		stored := false // file is kept as file + webasset.Suffix
 		if name == "" || hidden || storedForm || !isFile(site, name) {
 			switch {
-			case builtIn && asset && !hidden && !storedForm && isFile(site, name+webasset.Suffix):
+			case builtIn && kept && !hidden && !storedForm && isFile(site, name+webasset.Suffix):
 				stored = true
 			case asset: // a missing hashed asset is a real 404, not the app
 				http.NotFound(w, r)
@@ -118,7 +120,7 @@ func isFile(site fs.FS, name string) bool {
 	return err == nil && !st.IsDir()
 }
 
-// serveStored serves the asset name that site keeps as name + webasset.Suffix. A request gzipResponses would
+// serveStored serves the file name that site keeps as name + webasset.Suffix. A request gzipResponses would
 // compress (gzipWanted) gets the stored bytes, marked as gzip, which gzipResponses then passes on as they are. Any
 // other (no gzip, HEAD, a range) gets them decompressed as they are read (gunzipSeeker), the same answer as for the
 // plain file.

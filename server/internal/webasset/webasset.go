@@ -21,6 +21,11 @@ const MinSize = 1024
 // Suffix is the name a precompressed file is kept under: its own name and this.
 const Suffix = ".gz"
 
+// Licenses is the web build's third-party notices beside index.html (THIRD_PARTY_NOTICES.md "Web client"): the one
+// root file big enough to be worth keeping gzipped, and read rarely enough that decompressing it for a client
+// without gzip costs nothing.
+const Licenses = "third-party-licenses.txt"
+
 // CompressibleType: a media type that gzip makes much smaller, and that is not an event stream.
 func CompressibleType(contentType string) bool {
 	mt, _, err := mime.ParseMediaType(contentType)
@@ -40,9 +45,12 @@ func CompressibleType(contentType string) bool {
 
 // Precompressible says whether the build keeps the file at name (a slash path below the web root) gzipped, when it
 // has MinSize bytes or more: a file under assets/ (Vite names them by their content hash, so they never change
-// under one name) whose extension is of a CompressibleType. index.html, sw.js, the manifest, the admin page's files
-// and the root's other files stay as they are.
+// under one name) whose extension is of a CompressibleType, and the root's Licenses. index.html, sw.js, the manifest,
+// the admin page's files and the root's other files stay as they are.
 func Precompressible(name string) bool {
+	if name == Licenses {
+		return true
+	}
 	base := path.Base(name)
 	return strings.HasPrefix(name, "assets/") && !strings.HasPrefix(base, ".") &&
 		CompressibleType(mime.TypeByExtension(path.Ext(base)))
