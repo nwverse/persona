@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/nwverse/persona/server/internal/lazyre"
@@ -154,12 +155,11 @@ func (s *Service) healthChanged(ctx context.Context, r LauncherHealth, before st
 	s.event(ctx, map[string]any{"type": "launcher_health", "record": r})
 }
 
-// recordStartFailure: an agent did not start with launcher on machine. A dropped link says nothing about the
-// launcher, nor does a start the node turned down before running it (startRefused); anything else counts, and a
-// check follows at once to tell a blink from a broken launcher. Not after a start the terminal could not run
-// (errKindNotInTerminal): the check runs where it works.
+// recordStartFailure: a dropped link, refused request or stalled agent says nothing about launcher health. Other
+// failures count, with one shared follow-up check to tell a blink from a broken launcher. A terminal-shell failure
+// (errKindNotInTerminal) skips the check: the login shell is where the launcher already works.
 func (s *Service) recordStartFailure(ctx context.Context, machine, launcher string, err error) {
-	if err == nil || launcher == "" || transientStartErr(err) || errors.Is(err, ErrNoDevice) || startRefused(err) {
+	if err == nil || launcher == "" || transientStartErr(err) || errors.Is(err, ErrNoDevice) || startRefused(err) || startStalled(err) {
 		return
 	}
 	if terminalMissing(err) {
@@ -167,12 +167,10 @@ func (s *Service) recordStartFailure(ctx context.Context, machine, launcher stri
 		return
 	}
 	s.recordHealth(ctx, machine, launcher, healthResult{err: err.Error(), source: healthSourceStart})
-	go func() {
-		ctx := context.WithoutCancel(ctx)
-		if res, ok := s.probeLauncherHealth(ctx, machine, launcher); ok {
-			s.recordHealth(ctx, machine, launcher, res)
-		}
-	}()
+	// Reserve before launching the goroutine: a task's immediate detour must join this check, even before it runs.
+	if rc, run := s.claimHealthRecheck(ctx, machine, launcher); run {
+		go s.runHealthRecheck(context.WithoutCancel(ctx), machine, launcher, rc, true)
+	}
 }
 
 // recordStartSuccess: an agent started with launcher on machine, so the terminal there runs it: a record saying it
@@ -186,6 +184,54 @@ func (s *Service) recordStartSuccess(ctx context.Context, machine, launcher stri
 		return
 	}
 	s.recordHealth(ctx, machine, launcher, healthResult{ok: true, source: healthSourceStart})
+}
+
+// recordTestPassed: the apps' Test availability (POST /api/v1/launchers/{name}/check) passed for launcher on machine.
+// It runs the same launchers.check a health check does, so a record of the launcher failing there is taken back to ok
+// as a passing check would (#1838); recordHealth keeps a not_in_terminal record, which only a start clears. Without a
+// failing record nothing is kept (a launcher the checks do not cover gets no entry), and a failed Test is not recorded:
+// the checks and the starts judge failures, and testing a launcher still being set up must not move starts off it.
+func (s *Service) recordTestPassed(ctx context.Context, machine, launcher string, res proto.LauncherCheck) {
+	if r, ok := s.launcherHealth(ctx, machine, launcher); !ok || r.State == healthOK {
+		return
+	}
+	s.recordHealth(ctx, machine, launcher, healthResult{ok: true, agent: res.Agent, model: res.Model, millis: res.Millis, source: healthSourceCheck})
+}
+
+// launcherSetupChanged: a save of a managed launcher changed what decides whether its requests get through (its key,
+// gateway, auth, model, headers or environment), so how it failed before says nothing of it now.
+func launcherSetupChanged(old, saved storedLauncher) bool {
+	return old.KeySealed != saved.KeySealed || old.BaseURL != saved.BaseURL || old.Auth != saved.Auth || old.Model != saved.Model ||
+		old.HeadersSealed != saved.HeadersSealed || old.EnvSealed != saved.EnvSealed
+}
+
+// forgetLauncherFailures drops launcher's failure records on every machine after its setup changed (#1838): it counts
+// as never checked there again, until the next check or start says otherwise. Two records stay, as the health rules
+// keep them: not_in_terminal (the terminal's shell is not the provider's; only a start clears it) and a usage limit
+// with a known reset (it holds until then).
+func (s *Service) forgetLauncherFailures(ctx context.Context, launcher string) {
+	b := &s.health
+	b.mu.Lock()
+	s.healthLoadLocked(ctx)
+	var dropped []string
+	for key, r := range b.recs {
+		if r.Launcher != launcher || r.State == healthOK || r.Kind == errKindNotInTerminal {
+			continue
+		}
+		if _, limited := r.limitReset(); limited && r.unusable() {
+			continue
+		}
+		delete(b.recs, key)
+		dropped = append(dropped, r.Machine)
+	}
+	if len(dropped) > 0 {
+		s.healthSaveLocked(ctx)
+	}
+	b.mu.Unlock()
+	if len(dropped) > 0 {
+		slices.Sort(dropped)
+		s.logf("launcher health: %s: setup changed, failure records dropped on %s", launcher, strings.Join(dropped, ", "))
+	}
 }
 
 // limitResetOf is when the usage limit r failed on resets, as r's source knew it or as its words say (at: when it
@@ -266,7 +312,7 @@ var startRequestErr = lazyre.New(`^directory .* does not exist$|^invalid launche
 // node/codex_start.go, node/openelsewhere.go…). Codes about the machine's state (engine_missing, runtime_away,
 // not_running, orca_not_registered) are not here: the launcher cannot run there now, and a task may go elsewhere.
 var startRefusalCodes = []string{"codex_needs_prompt", "codex_resume", "codex_read_only", "orca_resume", "open_elsewhere", "runtime_session",
-	"identity_conflict", "ultracode_unsupported", proto.CodeNodeOutdated}
+	"identity_conflict", "ultracode_unsupported", "readonly_unsupported", proto.CodeNodeOutdated}
 
 // startRefused: the start failed on the request, not the launcher: the node checked it and said no before running
 // anything (one of startRefusalCodes, or of startRequestErr).
@@ -279,4 +325,11 @@ func startRefused(err error) bool {
 		return slices.Contains(startRefusalCodes, re.Code)
 	}
 	return startRequestErr.MatchString(re.Message)
+}
+
+// startStalled is a node's coded timeout after opening the agent. Text from older nodes deliberately keeps the
+// previous failure handling; guessing from translated messages could suppress genuine launcher failures.
+func startStalled(err error) bool {
+	var re *rpc.Error
+	return errors.As(err, &re) && re.Code == proto.CodeAgentStartStalled
 }
