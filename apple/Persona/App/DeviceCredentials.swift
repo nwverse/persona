@@ -216,8 +216,9 @@ struct DevicesView: View {
                 .scaledFrame(width: Theme.Size.icon)
                 .foregroundStyle(Theme.accent)
             VStack(alignment: .leading, spacing: Theme.Space.xxs) {
-                HStack(spacing: Theme.Space.sm) {
+                NameWithChips {
                     Text(t.name).lineLimit(1)
+                } chips: {
                     if t.id == current { Chip(text: String(localized: "This Device"), look: .outline) }
                     if t.role == "answer" { Chip(text: String(localized: "Answer Only")) }
                 }

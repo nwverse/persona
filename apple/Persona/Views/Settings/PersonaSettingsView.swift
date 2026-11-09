@@ -35,12 +35,12 @@ struct PersonaPicker: View {
         .task { await store.refresh(model.api) }
     }
 
-    /// The chosen one's dot in each state, moving as in the top bar: in a row; at the accessibility text sizes three, then
-    /// two, where five in a row cut every name to "…" (#1796).
+    /// The chosen one's dot in each state, moving as in the top bar: in a row; at the accessibility text sizes two a row,
+    /// where five in a row cut every name to "…" and three ran them together (#1796).
     private var states: some View {
         Group {
             if typeSize.isAccessibilitySize {
-                LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: Theme.Space.xxs, alignment: .top), count: 3),
+                LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: Theme.Space.xxs, alignment: .top), count: 2),
                           spacing: Theme.Space.s) { stateCells }
             } else {
                 HStack(spacing: Theme.Space.xxs) { stateCells }
