@@ -16,7 +16,7 @@ Pages are written once. Each style provides its own design tokens (palette, typo
 | Typeface (Latin and digits) | Sora (large titles, numbers) | Manrope (everything) | Barlow Semi Condensed (numbers, fields, counts) |
 | Shapes | Cards 28dp, overlays 30–36dp capsules | Cards 24dp, everything else rows without a fill | Small 10dp corners plus a 1dp stroke |
 | Motion | Springs; the status light fades over about 1 second and drifts slowly, splitting and merging, the rest of the time (see section 3, "Status light motion") | Gentle 240ms transitions | Crisp 160ms |
-| Navigation (the same four tabs: Persona, Agents, Inbox, Settings, icons with always-visible labels) | A floating glass dock at the bottom | A paper bottom bar flush with the edge, with a thin line on top | A four-cell bottom bar, the selected cell with a bar on top |
+| Navigation (Assistant and Agents at the top; Settings in the shared sidebar) | A capsule switcher | Underlined text tabs | A ruled two-cell switcher |
 | Things for you to decide | Glass cards in lists; in chats a floating glass panel with an amber edge | Light grey cards in lists, Persona's suggestions highlighted; in chats a decision panel docked at the bottom | A neutral strip with a thin amber edge, expanding in place on tap; in chats a clearance bar under an amber line |
 | Root page title | The large title scrolls away with the content, leaving only floating round buttons in the top bar; a title capsule appears after scrolling | Home is a greeting and a one-line summary ("Good morning, 3 things need your decision."), other pages have large titles | A compact title bar with the title always in it |
 
@@ -25,7 +25,7 @@ Icons are all Phosphor (MIT), generated into `PhIcons` by `scripts/assets/gen_ph
 
 ### 1.1 Switching and saving
 
-- Entry: Settings › Interface style (`AppearanceSettings`). Each of the three options has a small preview drawn with that style's real components; tapping one applies it immediately, no restart. The preview is a one-third-size Agents page: one computer, one of its spaces and three sessions, with the style's navigation underneath (Glass's floating dock is drawn as an opaque panel, since the preview has no content to refract).
+- Entry: Settings › Interface style (`AppearanceSettings`). Each of the three options has a small preview drawn with that style's real components; tapping one applies it immediately, no restart. The preview is a one-third-size Agents page: one computer, one of its spaces and three sessions, with the same two-destination navigation above it.
 - The choice is stored on the device (`AppStyleStore`, SharedPreferences `persona-appearance`), not on the hub, and survives re-pairing.
 - Debug builds can set it at launch: `am start … --es debug.style glass|brief|board` (used by the screenshot script).
 
@@ -39,12 +39,12 @@ Icons are all Phosphor (MIT), generated into `PhIcons` by `scripts/assets/gen_ph
 | Sustained dropped frames while scrolling (`GlassFrameMonitor`: over 30% of 240 frames exceed 1.5× the frame budget) | Drops one level for this run: refractive → blurred → opaque |
 | Terminal page (always) | Opaque panels: the terminal changes every frame (every redraw by the program, every scrolled line), and glass over it would have to recompute the blur of the top bar, key bar and edges every frame (2026-11-01) |
 
-Only pieces floating over scrolling content (top bar, floating dock, input field, decision panel) use refraction or blur; cards inside the page are a translucent fill plus a gradient stroke with no live blur, so scrolling costs nothing extra.
-Under the full height of the top bar and of the bottom overlays (floating dock, input field) there is a "scroll edge": content sliding in is blurred and washed toward the background across the whole overlay area, fading out only over the last 28dp next to the content,
+Only pieces floating over scrolling content (top bar, input field, decision panel) use refraction or blur; cards inside the page are a translucent fill plus a gradient stroke with no live blur, so scrolling costs nothing extra.
+Under the full height of the top bar and of the bottom overlays (input field, decision panel) there is a "scroll edge": content sliding in is blurred and washed toward the background across the whole overlay area, fading out only over the last 28dp next to the content,
 so the gaps between overlays (between the title capsule and the task bar, between the status line and the input field) never show legible text. It washes toward the page's own background layer (the same status light, `PageBackdrop`), not a solid color:
 with no content underneath the edge is invisible, and empty pages (e.g. a chat just created in Persona) get no colored band at the top or bottom (the hard cut the user pointed out on 2026-11-01).
 List pages draw the edge only when content has actually scrolled under an overlay (not while resting at the top, saving one blur); pages without a top bar (a document embedded in a link card) draw no top edge. The opaque level does not blur; it washes the content from dense to light toward the background.
-A page embedded in another (the chat inside the Persona page) fills the whole page and slides under the host's top bar and floating dock: the host tells it how much to leave via `ChromeInsets(top, bottom)`, and it draws the edges itself (the host uses `JPage(edges = false)`).
+A page embedded in another (the chat inside the Persona page) fills the whole page and slides under the host's top bar and input overlays: the host tells it how much to leave via `ChromeInsets(top, bottom)`, and it draws the edges itself (the host uses `JPage(edges = false)`).
 Implementation note: Compose's `Canvas` does not clip by default, and glow centers laid out relative to the window often fall outside this page, so `AmbientLight` must `clipToBounds()`, or it paints onto the neighboring column.
 The blur input is quarter resolution (`LocalHazePerformanceMode` = `Performance` in `PersonaTheme`): measured on a phone, full resolution doubled the chat page's frame time, and the reduced version looks no different.
 Performance measurements are in section 5.
@@ -70,7 +70,7 @@ The old `PersonaTypography.*`, `statusTone(...)`, `PrimaryButton` / `SecondaryBu
 
 | Component | Use |
 | --- | --- |
-| `JPage` | A page with custom content. Pass the `PaddingValues` it gives you as the scroll container's contentPadding: in Glass the top bar, input field and floating dock all float over the content, and this is what leaves room for them |
+| `JPage` | A page with custom content. Pass the `PaddingValues` it gives you as the scroll container's contentPadding: in Glass the top bar and input overlays float over the content, and this is what leaves room for them |
 | `JListPage` | List pages (root pages and most second-level pages). Includes a large title, pull to refresh and content padding; `summary` is Persona's one line about this page, `greet` adds the date and a greeting (home only) |
 | `JTopBar` | Page top bar; already included in `JPage` / `JListPage`, used alone for special pages. In Glass, while the large title is still on screen (`showTitle = false`), back and actions are separate floating round buttons; only after the large title scrolls away do they merge into a capsule with the title |
 | `JFullScreen` | A full page over the current page (in-session search, full-text reading, task progress, spaces, past sessions): extends under the system bars, status bar icons follow dark/light. Do not build full pages with Compose's `Dialog` directly |
@@ -164,21 +164,22 @@ Components live in `Agents.kt` in `core:designsystem` (`MachineChip`, `AgentTree
 
 `app/…/ui/Root.kt`:
 
-- Four fixed bottom tabs: Persona / Agents / Inbox / Settings, in the same order in all three styles, each with an icon and an always-visible label; the dock / bottom bar follows each style (`AppNavigation`).
-  Settings is the fourth tab, not an entry hidden elsewhere; there are no unlabeled buttons.
+- Only Assistant and Agents are primary destinations, selected above the page through `HomeNavigation` in all three styles (#2589).
+  The avatar opens one shared history sidebar from either page; its bottom gear opens Settings. Inbox, To-dos, Computers and extension pages are secondary sidebar destinations.
 - Each tab has its own back stack and badge. Visited tabs stay composed: switching away only stops placement (no drawing or touch), and disables back handling for that tab
   (`rememberNavigationEventDispatcherOwner(enabled = false)`). Switching back leaves the page exactly as it was, with no recreation, reload, empty-state flash or spinner.
-- The dock belongs to each tab's first page (`NavEntryDecorator` wraps the root page); pushed pages (chats, documents, secondary settings) cover it and have no dock.
-  On back, the dock appears with the root page, never first on the chat page being dismissed. In Glass each page samples its own content, never blurring another page.
+- The top switcher belongs only to the two primary roots (`NavEntryDecorator`). Secondary pages cover it and carry Back instead.
+  There is no bottom dock or navigation rail. In Glass each page samples its own content, never blurring another page.
 - Transitions: on push, the entire opaque new page slides in from the right with the old page underneath; on back, the top page slides away to reveal the one below. No crossfades (two translucent pages overlap their text);
   tab switches do not animate.
-- Back on the first page of Agents, Inbox or Settings goes to the Persona tab; only another back on Persona home exits the App (requested 2026-11-01: back to Persona, then back to exit).
+- Back on the first page of Agents goes to Assistant; secondary Inbox and Settings pages return to their originating page and tab.
+  Back on Assistant home exits the App.
   With a chat open in Persona, back first goes to Persona home (handled by the assistant page itself), then another back exits.
-- Glass's floating dock floats over the root page and reports its height through `LocalChromeInsets`; `JPage` / `JListPage` automatically adds that height to content padding. Brief and Board bottom bars occupy their own space.
+- The top switcher consumes the status-bar inset once. Page composers continue to use their own navigation-bar and keyboard insets; no retired dock height is reserved.
 - There is only one background layer (requested 2026-11-01: one continuous background, divided by business cards above it): the shell, every page and detail placeholders draw `PageBackdrop`; Glass's status light is laid out across the whole window,
   so pages draw identical pixels at the same position. There are no seams between panes or between pages and embedded pages, and no separate backing panels; session cards, message cards and settings groups provide separation.
-  In Glass, the top bar, input field and dock float over this background, and scroll edges wash toward it (section 1.2). Brief is white paper throughout, with a paper bottom bar and thin line; Board is board grey throughout,
-  with white flight-strip cards; its bottom bar, input area and page-bottom action bar are also board grey with a line (the input field itself is a white card), no longer an entire white panel.
+  In Glass, page top bars and input overlays float over this background, and scroll edges wash toward it (section 1.2). Brief is white paper throughout, with paper page-action bars and thin lines; Board is board grey throughout,
+  with white flight-strip cards; its input area and page-bottom action bar are also board grey with a line (the input field itself is a white card), no longer an entire white panel.
 - The shell supplies `LocalAmbience` based on global state (waiting for you → amber; an Agent running → blue; cannot connect → red), which Glass uses for its background light. Each page shows connection state in its own title area.
 - Status light motion (requested 2026-11-03, #959): the single active state-color light slowly drifts near its resting position (12% of the short edge), with slight changes in size and brightness,
   and its color leaning a little toward a neighboring state color (blue ↔ mint; routine amber never blends toward error red). Roughly every two minutes a small blob splits off, swims toward the screen center, and later swims back to merge with the main light;
@@ -195,15 +196,15 @@ to calculate a `WindowLayout` for the design system; pages do not measure their 
 
 | Width | Navigation | List and detail |
 | --- | --- | --- |
-| compact (phone, folded foldable) | Bottom dock, four labeled tabs | One pane |
-| medium (portrait tablet, unfolded portrait foldable) | Bottom dock (under the list pane) | Two panes at width ≥ 760dp, otherwise one |
-| expanded (landscape tablet, unfolded landscape foldable) | Left navigation rail, the same four tabs, rendered per style | Two panes |
+| compact (phone, folded foldable) | Assistant / Agents at the top, shared sidebar | One pane |
+| medium (portrait tablet, unfolded portrait foldable) | The same top switcher and sidebar | Two panes at width ≥ 760dp, otherwise one |
+| expanded (landscape tablet, unfolded landscape foldable) | The same top switcher and sidebar | Two panes |
 
-- Expanded uses a left rail: initially our choice on the user's behalf (the explicit request was to retain the bottom dock for compact / medium); on 2026-11-01 the user confirmed keeping it. To return to a bottom dock later, change only the `expanded` branch in `Root.kt`.
+- Window width changes the list-detail presentation, never the primary navigation destinations. The old expanded rail is removed.
 - Two panes use Navigation 3's list-detail scene (`rememberListDetailSceneStrategy`); the shell centrally assigns list and detail roles (`paneMetadata` in `Root.kt`):
   Agents' "computer → space → session" tree | chat (terminal takeover also in the right pane); Inbox list | Lark conversation / email; settings categories | settings subpage (all settings subpages therefore use navigation).
   Persona's main chat does not split. An unselected right pane shows a placeholder.
-- Panes share the shell's single background layer (section 3): the left rail has no panel of its own (Glass no longer has a floating capsule column; Brief and Board have no vertical line or white backing either).
+- Panes share the shell's single background layer (section 3), without separate backing panels.
   Only an 8dp gap (`horizontalPartitionSpacerSize`) separates panes, with no divider line or second backing layer; right-pane placeholders and the wide-screen Persona chat list draw the same background.
 - In two-pane mode, the item currently displayed on the right is highlighted in its card on the left (`LocalDetailKey` + the component's `selected`), calculated by the shell from the route (`detailOf`). Left-pane taps, deep links, notifications, debug entries and back all stay synchronized; switching between one and two panes uses the same back stack and retains selection.
   Back in two-pane mode first closes the right detail, returning to "list + placeholder"; another back returns to Persona. The list-detail scene must use `PopUntilContentChange`:
@@ -222,7 +223,7 @@ to calculate a `WindowLayout` for the design system; pages do not measure their 
 
 - Check screenshots of every page in all three styles, dark and light; debug launch arguments `debug.style` and `debug.theme` select them directly.
 - Readability floor (`StyleContrastTest` in `core:designsystem`, WCAG contrast, with translucent Glass surfaces composited over the page background first): body, status, tertiary and link text on pages, cards, neutral status surfaces and message bubbles ≥ 4.5; primary-button text, text on the highlighter, badge numbers and words on state marks ≥ 4.5; informative graphics ≥ 3 or redundant words/shape. No shortfall exemptions remain. The former 18 palette shortfalls were removed in #6184.
-- When checking Glass, look for: legible text under overlays, content obscured by the dock or input field, refraction breaking text behind it into fragments, legible text showing through gaps between overlays, and grey bands in the status-bar and gesture-bar areas of full-page overlays.
+- When checking Glass, look for: legible text under overlays, content obscured by the top switcher or input field, refraction breaking text behind it into fragments, legible text showing through gaps between overlays, and grey bands in the status-bar and gesture-bar areas of full-page overlays.
 
 ## 5. Performance
 

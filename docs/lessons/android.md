@@ -63,6 +63,9 @@ Pitfalls in the new multi-module Android App (`android/`, `docs/android/android.
 
 ## UI and Compose
 
+- Removing a navigation enum does not necessarily reject old saved state (#2589): `JsonCodec` coerces unknown enum values to field defaults, so an old Inbox/Settings tab can become Assistant while restoring the rest of the old shell. Use a strict codec for navigation positions when the whole old position must be ignored, and assert that loading does not rewrite the file.
+- Home-navigation removal includes appearance previews and screenshot fixtures (#2589). Hiding a dock in the app still leaves misleading four-tab previews if they build their own old navigation. Remove the obsolete dock/rail components and tab-only strings, render the real shared switcher in previews, and verify Settings by tapping the sidebar gear from both primary pages.
+
 - `activity-alias` does not inherit its target Activity's metadata (2026-11-03, #758). After retaining the old launcher alias, reading `componentName` returned empty alias metadata, so the DEBUG launch adapter did not load and mock hub, style, and light / dark arguments were ignored. Query canonical `MainActivity` metadata, retaining the original key and single launcher; Release still must not register the DEBUG adapter. Screenshot scripts must verify pairing, actual mock requests, and every subprocess exit code. A welcome page or a successful later `printf` exit is not screenshot acceptance.
 
 - Android's `AndroidView` does not clip to its layout bounds. A View calling `drawColor` in `onDraw` covers siblings above it (the terminal toolbar was entirely covered by the background); add `Modifier.clipToBounds()`.

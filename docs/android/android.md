@@ -23,6 +23,27 @@ The follow-up branding / input compatibility work for #277 landed in batches: #7
 | Extension modules | Terminal, files, machine monitoring, knowledge base, phone tools, voice chat (see "Voice chat"), the cross-app floating capsule (see "Cross-app floating capsule") and demo mode are wired into the App; entries are in the "Shell" section. In demo mode, pages without sample data show an explanation and do not connect to a real hub |
 | UI | Three interface styles: Glass (default), Brief and Board, switched in Settings › Interface style; the change applies immediately and is stored on the device. The same page has the theme color (Match interface style (default) / Match avatar / five built-in palettes) and light / dark (Match system (default) / Light / Dark); see "Appearance: theme color and light / dark". Design rules, components and the rules for writing pages are in [Android interface styles and design system](android-design.md) |
 
+## Unified home navigation
+
+The home has only **Assistant** and **Agents**, selected at the top, on phones, tablets and foldables (#2589).
+The avatar opens one shared history sidebar from either page. Settings opens from its bottom gear, never a home tab;
+Back returns to the page it was opened from. Inbox, To-dos, Computers and extension `nav_page` destinations open under
+Assistant, following the iPhone sidebar mapping. Scheduled tasks and the knowledge base keep their existing Assistant
+entry points. Extension management remains in Settings and is distinct from extension-provided pages.
+
+Android also keeps its existing **Back to home**, **Session info** and **Launcher** rows in the sidebar's More section.
+It has no native Health destination or archived-chat browser; this navigation change does not invent either feature.
+Recent, pinned and automatic conversation history, pinning, archive actions and New conversation are retained.
+
+There is no old-layout selector or migration. Android previously had a fixed four-destination shell, not an equivalent
+of the retired Apple layout preference. The old Inbox/Settings tab enum values, their separate stacks, bottom dock,
+wide navigation rail, appearance-preview tabs and tab-only strings/tests are removed. Old saved shell positions containing
+those enum values are ignored as a whole, without rewriting or migrating them. Interface style, color, theme and Inbox
+chat-rendering preferences are independent of home navigation and remain available.
+
+Apple PR #1696 removed the old root-navigation switch; PR #2539 separately removed conversation-presentation settings.
+The latter is not a home-layout toggle and is not a reason to remove Android's Inbox rendering preference.
+
 ## Aligning the Agents list and the Machines page (#3038)
 
 - **Sorting**: the list settings have "Sort: **Status first** / **Recently updated**" (iOS `AgentSort`, stored on the device). With recently updated, sessions in each group sort only by time, and active spaces, repositories and computers sort by their newest session, first. With status first the sections stay the same; only the order inside a section is by time. The logic is in `AgentList.kt` in `core:domain` (`AgentListSettings.sort`).
@@ -350,7 +371,7 @@ Modules are defined by `android/settings.gradle.kts`, and direct in-repository d
 
 | Module | Responsibility | Direct dependencies |
 | --- | --- | --- |
-| `:app` | App entry, four tabs, Hilt assembly, pairing lifecycle, scope bridging, system sharing and lock-screen test | `:core:contracts`, `:core:domain`, `:core:terminal`, `:core:navigation`, `:core:hub`, `:core:data`, `:core:chatlist`, `:core:designsystem`, `:core:demo`, `:feature:chat`, `:feature:agents`, `:feature:assistant`, `:feature:inbox`, `:feature:settings`, `:feature:terminal`, `:feature:machines`, `:feature:files`, `:feature:knowledge`, `:feature:voice`, `:platform:notify`, `:platform:phonetools`, `:platform:shortcuts`, `:platform:capsule` |
+| `:app` | App entry, two primary destinations and shared sidebar, Hilt assembly, pairing lifecycle, scope bridging, system sharing and lock-screen test | `:core:contracts`, `:core:domain`, `:core:terminal`, `:core:navigation`, `:core:hub`, `:core:data`, `:core:chatlist`, `:core:designsystem`, `:core:demo`, `:feature:chat`, `:feature:agents`, `:feature:assistant`, `:feature:inbox`, `:feature:settings`, `:feature:terminal`, `:feature:machines`, `:feature:files`, `:feature:knowledge`, `:feature:voice`, `:platform:notify`, `:platform:phonetools`, `:platform:shortcuts`, `:platform:capsule` |
 | `:core:chatlist` | Inverted chat list, freezing, return to latest, reading anchors and paging effects; currently mainly used by Agent / assistant chats | No in-repository module dependencies |
 | `:core:contracts` | Pure JVM: wire models, event decoding, HubScope, repository and transport interfaces | No in-repository module dependencies |
 | `:core:data` | Room items / outbox / drafts, DataStore / Tink credentials, scopes, caches and real repositories | `:core:contracts`, `:core:domain`, `:feature:inbox` |

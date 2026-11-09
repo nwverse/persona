@@ -236,154 +236,20 @@ fun HubCard(
 @Immutable
 data class NavItem(val key: String, val label: String, val icon: PhIcon, val badge: Int = 0, val badgeText: String? = null, val dot: Boolean = false)
 
-/** A count's small dot: where there is no number to show. */
+/** Primary home navigation above the page; all auxiliary destinations belong to the sidebar. */
 @Composable
-private fun NavDot(modifier: Modifier) {
-    Box(modifier.size(8.dp).clip(CircleShape).background(PersonaTheme.palette.needsYou.dot))
-}
-
-/**
- * The app's top-level navigation in the active style: a floating glass dock, a quiet paper bar, or a board bar with
- * a rule over the selected tab. Every destination is an icon with its label. It handles the navigation bar inset.
- */
-@Composable
-fun AppNavigation(items: List<NavItem>, selected: String?, onSelect: (String) -> Unit, modifier: Modifier = Modifier) {
-    val palette = PersonaTheme.palette
-    val type = PersonaTheme.type
-    when (PersonaTheme.style) {
-        AppStyle.Glass -> Box(modifier.fillMaxWidth().navigationBarsPadding().padding(start = 16.dp, end = 16.dp, bottom = 10.dp), contentAlignment = Alignment.Center) {
-            Row(
-                Modifier.fillMaxWidth().height(DockHeight).floatingSurface(RoundedCornerShape(36.dp)).padding(horizontal = 6.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                items.forEach { DockItem(it, it.key == selected, Modifier.weight(1f), onSelect) }
-            }
-        }
-        AppStyle.Brief -> Column(modifier.fillMaxWidth().background(palette.background)) {
-            Box(Modifier.fillMaxWidth().height(1.dp).background(palette.line))
-            Row(Modifier.fillMaxWidth().height(64.dp).padding(horizontal = 12.dp)) {
-                items.forEach { item ->
-                    val on = item.key == selected
-                    Column(
-                        Modifier.weight(1f).fillMaxHeight().clickable(role = Role.Tab) { onSelect(item.key) }.semantics { this.selected = on },
-                        horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center,
-                    ) {
-                        Box {
-                            JIcon(item.icon, null, size = 24.dp, tint = if (on) palette.ink else palette.ink3, selected = on)
-                            when {
-                                item.badgeText != null -> JTag(item.badgeText, Modifier.align(Alignment.TopEnd).offset(16.dp, (-6).dp))
-                                item.badge > 0 || item.dot -> Box(Modifier.align(Alignment.TopEnd).offset(4.dp, (-2).dp).size(9.dp).clip(CircleShape).background(palette.marker).border(1.5.dp, palette.ink, CircleShape))
-                            }
-                        }
-                        Spacer(Modifier.height(4.dp))
-                        Text(item.label, style = type.micro.copy(fontWeight = if (on) FontWeight.Bold else FontWeight.Medium), color = if (on) palette.ink else palette.ink3, maxLines = 1)
-                    }
-                }
-            }
-            Spacer(Modifier.navigationBarsPadding())
-        }
-        // The board's grey runs under the bar too (a rule on top, no white plate): the tickets are the only cards.
-        AppStyle.Board -> Column(modifier.fillMaxWidth().background(palette.background).drawBehind { drawLine(palette.line, Offset(0f, 0f), Offset(size.width, 0f), 1.dp.toPx()) }) {
-            Row(Modifier.fillMaxWidth().height(60.dp)) {
-                items.forEach { item ->
-                    val on = item.key == selected
-                    Box(Modifier.weight(1f).fillMaxHeight().clickable(role = Role.Tab) { onSelect(item.key) }.semantics { this.selected = on }) {
-                        if (on) Box(Modifier.align(Alignment.TopCenter).size(28.dp, 3.dp).background(palette.ink))
-                        Column(Modifier.align(Alignment.Center), horizontalAlignment = Alignment.CenterHorizontally) {
-                            Box {
-                                JIcon(item.icon, null, size = 22.dp, tint = if (on) palette.ink else palette.ink3, selected = on)
-                                when {
-                                    item.badgeText != null -> JTag(item.badgeText, Modifier.align(Alignment.TopEnd).offset(16.dp, (-6).dp))
-                                    item.badge > 0 -> JBadge(item.badge, Modifier.align(Alignment.TopEnd).offset(12.dp, (-7).dp))
-                                    item.dot -> NavDot(Modifier.align(Alignment.TopEnd).offset(3.dp, (-1).dp))
-                                }
-                            }
-                            Spacer(Modifier.height(3.dp))
-                            Text(item.label, style = type.caption.copy(fontSize = androidx.compose.ui.unit.TextUnit(12f, androidx.compose.ui.unit.TextUnitType.Sp), fontWeight = if (on) FontWeight.Bold else FontWeight.Medium), color = if (on) palette.ink else palette.ink3, maxLines = 1)
-                        }
-                    }
-                }
-            }
-            Spacer(Modifier.navigationBarsPadding())
-        }
-    }
-}
-
-/**
- * The same destinations down the left edge in expanded windows, straight on the window's one background (no panel,
- * no rule beside it): a soft plate under the selected item in glass and brief, a bar beside it on the board.
- * Labels stay visible.
- */
-@Composable
-fun AppNavigationRail(items: List<NavItem>, selected: String?, onSelect: (String) -> Unit, modifier: Modifier = Modifier,
-                      extra: List<NavItem> = emptyList()) {
-    val style = PersonaTheme.style
-    // [extra]: the extensions' own pages (nav_page, #2951) under the app's four, after a short rule; they scroll when
-    // there are more than the rail has room for
-    val column: @Composable (Modifier) -> Unit = { inner ->
-        Column(inner.then(if (extra.isEmpty()) Modifier else Modifier.verticalScroll(rememberScrollState())),
-            verticalArrangement = Arrangement.spacedBy(6.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-            items.forEach { RailItem(it, it.key == selected, onSelect) }
-            if (extra.isNotEmpty()) {
-                Box(Modifier.padding(vertical = Tokens.Space.xs).width(Tokens.Space.xxl).height(Tokens.Space.xxs / 2).background(PersonaTheme.palette.line))
-                extra.forEach { RailItem(it, it.key == selected, onSelect) }
-            }
-        }
-    }
-    // No panel of its own: the items sit on the window's one background, like everything beside them.
-    when (style) {
-        AppStyle.Glass -> Box(modifier.fillMaxHeight().statusBarsPadding().navigationBarsPadding().padding(start = 8.dp), contentAlignment = Alignment.Center) {
-            column(Modifier.width(84.dp))
-        }
-        else -> column(modifier.width(92.dp).fillMaxHeight().statusBarsPadding().padding(top = if (style == AppStyle.Brief) 28.dp else 20.dp))
-    }
-}
-
-@Composable
-private fun RailItem(item: NavItem, on: Boolean, onSelect: (String) -> Unit) {
-    val palette = PersonaTheme.palette
-    val style = PersonaTheme.style
-    val shape = RoundedCornerShape(if (style == AppStyle.Board) 8.dp else 20.dp)
-    Box(
-        Modifier.size(72.dp, 64.dp).clip(shape)
-            .then(if (on && style != AppStyle.Board) Modifier.background(if (style == AppStyle.Glass) palette.surface else palette.ink.copy(alpha = 0.07f)) else Modifier)
-            .clickable(role = Role.Tab) { onSelect(item.key) }.semantics { selected = on },
-        contentAlignment = Alignment.Center,
-    ) {
-        if (on && style == AppStyle.Board) Box(Modifier.align(Alignment.CenterStart).size(3.dp, 28.dp).background(palette.ink))
-        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-            Box {
-                JIcon(item.icon, null, size = 24.dp, tint = if (on) palette.ink else palette.ink2, selected = on)
-                when {
-                    item.badgeText != null -> JTag(item.badgeText, Modifier.align(Alignment.TopEnd).offset(16.dp, (-6).dp))
-                    item.badge > 0 -> JBadge(item.badge, Modifier.align(Alignment.TopEnd).offset(12.dp, (-7).dp))
-                    item.dot -> NavDot(Modifier.align(Alignment.TopEnd).offset(3.dp, (-1).dp))
-                }
-            }
-            Spacer(Modifier.height(4.dp))
-            Text(item.label, style = PersonaTheme.type.caption.copy(fontWeight = if (on) FontWeight.Bold else FontWeight.Medium), color = if (on) palette.ink else palette.ink2, maxLines = 1)
-        }
-    }
-}
-
-/** Height of the glass dock itself; the shell adds the bottom margin and the navigation bar. */
-val DockHeight: Dp = 72.dp
-
-@Composable
-private fun DockItem(item: NavItem, on: Boolean, modifier: Modifier, onSelect: (String) -> Unit) {
-    val palette = PersonaTheme.palette
-    Column(
-        modifier.fillMaxHeight().clip(CircleShape).clickable(role = Role.Tab) { onSelect(item.key) }.semantics { selected = on },
-        horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center,
-    ) {
-        Box {
-            JIcon(item.icon, null, size = 24.dp, tint = if (on) palette.ink else palette.ink2, selected = on)
-            when {
-                item.badgeText != null -> JTag(item.badgeText, Modifier.align(Alignment.TopEnd).offset(16.dp, (-6).dp))
-                item.badge > 0 || item.dot -> NavDot(Modifier.align(Alignment.TopEnd).offset(3.dp, (-1).dp))
-            }
-        }
-        Spacer(Modifier.height(3.dp))
-        Text(item.label, style = PersonaTheme.type.caption.copy(fontSize = androidx.compose.ui.unit.TextUnit(12f, androidx.compose.ui.unit.TextUnitType.Sp), fontWeight = if (on) FontWeight.Bold else FontWeight.Medium), color = if (on) palette.ink else palette.ink2, maxLines = 1)
+fun HomeNavigation(
+    items: List<NavItem>,
+    selected: String,
+    onSelect: (String) -> Unit,
+    leading: @Composable () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Row(modifier.fillMaxWidth().background(PersonaTheme.palette.background).statusBarsPadding()
+        .padding(horizontal = Tokens.Space.s, vertical = Tokens.Space.xs),
+        verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(Tokens.Space.s)) {
+        leading()
+        JSegmented(items.map { JSegment(it.label, it.badge.takeIf { count -> count > 0 }) },
+            items.indexOfFirst { it.key == selected }.coerceAtLeast(0), { onSelect(items[it].key) }, Modifier.weight(1f))
     }
 }

@@ -46,6 +46,8 @@ import persona.feature.chat.ChatComposerState
 import persona.feature.chat.ChatDraftEditor
 import persona.feature.chat.rememberChatComposerState
 import persona.core.navigation.AppTab
+import persona.core.navigation.InboxRoute
+import persona.core.navigation.SettingsRoute
 import persona.core.navigation.ChatRoute
 import persona.core.navigation.ModelPurposeRoute
 import persona.core.navigation.Navigator
@@ -98,8 +100,17 @@ fun AssistantScreen(
     /** "Needs you now" over the home's suggestions; [onOpenNeed] opens a line where it lives (none: not shown). */
     needsYou: NeedsYou = NeedsYou(),
     onOpenNeed: ((NeedsYouLine) -> Unit)? = null,
-    /** "N more in the inbox": the inbox tab when not given. */
+    /** "N more in the inbox": opens the inbox as a secondary page. */
     onOpenInbox: (() -> Unit)? = null,
+    onOpenSettings: (() -> Unit)? = null,
+    /** A shared-sidebar selection brings the Assistant home to the foreground. */
+    onSidebarSelection: (() -> Unit)? = null,
+    sidebarPages: List<NavItem> = emptyList(),
+    onSidebarPage: (String) -> Unit = {},
+    inboxCount: Int = 0,
+    settingsCount: Int = 0,
+    settingsDot: Boolean = false,
+    settingsBadge: String? = null,
     /** Pins or unpins a conversation (the hub's pins); none: the history offers no pinning. */
     onTogglePin: (suspend (SessionKey) -> Unit)? = null,
     /** "Voice chat" in the title menu, when the hub runs a voice extension. */
@@ -129,7 +140,9 @@ fun AssistantScreen(
     val outbox by (mainConversationSender?.outbox ?: messageSender.outbox).collectAsStateWithLifecycle()
     val mainMessages = if (managerChoice.manager == null) outbox.filter { (it.mainTarget || it.session == PendingMainConversation) && (it.session == PendingMainConversation || it.session == snapshot.mainSession) } else emptyList()
     val scope = rememberCoroutineScope()
-    var drawerOpen by rememberSaveable { mutableStateOf(false) }
+    val sharedSidebar = LocalAssistantSidebarHost.current
+    val drawerState: MutableState<Boolean> = sharedSidebar?.opened ?: rememberSaveable { mutableStateOf(false) }
+    var drawerOpen by drawerState
     var sidebarVisible by rememberSaveable { mutableStateOf(true) }
     val snackbar = remember { SnackbarHostState() }
     val feedback = persona.core.designsystem.LocalAppFeedback.current
@@ -511,21 +524,26 @@ fun AssistantScreen(
         AssistantDrawer(query, { query = it }, groups, active, snapshot.mainSession != null,
             onEnd = if (pageManagement != null) ({ ending = it }) else null,
             onMain = {
+                onSidebarSelection?.invoke()
                 openedMain = true
                 snapshot.mainSession?.let(::openConversation) ?: run { newConversation(); viewingMainQueue = true }
                 scope.launch { drawerOpen = false }
             },
-            onOpen = { openConversation(it); scope.launch { drawerOpen = false } },
+            onOpen = { onSidebarSelection?.invoke(); openConversation(it); scope.launch { drawerOpen = false } },
             onInfo = {
+                onSidebarSelection?.invoke()
                 if (it == AssistantInfo.Knowledge && onKnowledge != null) onKnowledge()
                 else if (pageManagement != null && it == AssistantInfo.Launcher) settingsOpen = true
                 else if (pageManagement != null && it == AssistantInfo.Schedule) proactiveOpen = true
                 else info = it
                 scope.launch { drawerOpen = false }
             },
-            onNew = ::startNewConversation,
-            onHome = { newConversation() },
-            onSettings = { scope.launch { drawerOpen = false }; navigator.selectTab(AppTab.Settings) },
+            onNew = { onSidebarSelection?.invoke(); startNewConversation() },
+            onHome = { onSidebarSelection?.invoke(); newConversation() },
+            onSettings = { drawerOpen = false; onOpenSettings?.invoke() ?: navigator.navigate(SettingsRoute) },
+            onInbox = { drawerOpen = false; onOpenInbox?.invoke() ?: navigator.navigate(InboxRoute) },
+            inboxCount = inboxCount, settingsCount = settingsCount, settingsDot = settingsDot, settingsBadge = settingsBadge,
+            pages = sidebarPages, onPage = { drawerOpen = false; onSidebarPage(it) },
             onPin = if (onTogglePin != null) ({ session -> togglePins(listOf(session.key)) }) else null,
             // The hub's pins also hold the Agents list's sessions: only Persona's own conversations are unpinned here.
             onUnpinAll = if (onTogglePin != null) ({
@@ -541,17 +559,24 @@ fun AssistantScreen(
             showTodos = showTodos,
         )
     }
+    // Publish a stable slot, not a new lambda on every push: both primary pages open this same sidebar.
+    val currentSidebar = rememberUpdatedState(sidebar)
+    DisposableEffect(sharedSidebar) {
+        val content: @Composable () -> Unit = { currentSidebar.value() }
+        sharedSidebar?.content = content
+        onDispose { if (sharedSidebar?.content === content) sharedSidebar.content = null }
+    }
     val body: @Composable (Boolean) -> Unit = { wide ->
         val hasComposer = active == null || !hasChat || demo
         JPage(
             title = LocalPersonaName.current,
             modifier = Modifier.fillMaxSize().imePadding(),
             topBar = {
-                CompositionLocalProvider(LocalRootLeading provides {
+                CompositionLocalProvider(LocalRootLeading provides if (sharedSidebar == null) ({
                     JPersonaButton(faceState, stringResource(R.string.assistant_conversation_list), {
                         if (wide) sidebarVisible = !sidebarVisible else drawerOpen = true
                     })
-                }) {
+                }) else null) {
                     Column {
                         JTopBar(
                             title = LocalPersonaName.current, subtitle = connectionLabel,
@@ -656,7 +681,7 @@ fun AssistantScreen(
                         composer.value = androidx.compose.ui.text.input.TextFieldValue(it, androidx.compose.ui.text.TextRange(it.length))
                         submit()
                     }, needsYou = needsYou, onNeed = onOpenNeed,
-                    onMore = onOpenInbox ?: { navigator.selectTab(AppTab.Inbox) })
+                    onMore = onOpenInbox ?: { navigator.navigate(InboxRoute) })
             }
         }
     }
@@ -685,7 +710,9 @@ fun AssistantScreen(
         return@PersonaTheme
     }
     BoxWithConstraints(Modifier.fillMaxSize()) {
-        if (maxWidth >= 840.dp) {
+        if (sharedSidebar != null) {
+            body(false)
+        } else if (maxWidth >= 840.dp) {
             Row(Modifier.fillMaxSize()) {
                 // The list of conversations sits on the same background as the page beside it, not a panel of its own.
                 if (sidebarVisible) Box(Modifier.width(300.dp).fillMaxHeight()) {
@@ -885,6 +912,9 @@ internal fun AssistantDrawer(
     showAllRecent: Boolean = false, onShowAllRecent: () -> Unit = {},
     autoOpen: Boolean = false, onAutoOpen: (Boolean) -> Unit = {},
     onTodos: (() -> Unit)? = null, todoCount: Int = 0, showTodos: Boolean = true,
+    onInbox: (() -> Unit)? = null, inboxCount: Int = 0,
+    settingsCount: Int = 0, settingsDot: Boolean = false, settingsBadge: String? = null,
+    pages: List<NavItem> = emptyList(), onPage: (String) -> Unit = {},
 ) {
     // The origin "Automatic chats" lists when open (the first one there is, until another is picked).
     var autoPicked by rememberSaveable { mutableStateOf<String?>(null) }
@@ -899,6 +929,31 @@ internal fun AssistantDrawer(
                     onCopy = { groups.main?.let(onCopy) })
                 JDivider(Modifier.padding(vertical = Tokens.Space.s))
             }
+            item { JSectionHeader(stringResource(R.string.assistant_more)) }
+            // Assistant details remain available from the Persona tab's toolbar, not as a drawer row.
+            val totalMore = 5 + (if (showTodos && onTodos != null) 1 else 0) +
+                (if (onInbox != null) 1 else 0) + pages.size
+            // Each row's place in the group is taken while the list is built: counted inside an item's own content, it
+            // was counted again whenever only some rows recomposed, and the group's corners landed on the wrong rows.
+            var moreIndex = 0
+            fun more(content: @Composable () -> Unit) {
+                val position = GroupPosition.of(moreIndex++, totalMore)
+                item { JGroupItem(position) { content() } }
+            }
+            if (onInbox != null) more { DrawerItem(stringResource(R.string.assistant_origin_inbox), PhIcons.Tray, badge = inboxCount, onClick = onInbox) }
+            more { DrawerItem(stringResource(R.string.assistant_home), PhIcons.House, onHome) }
+            if (showTodos && onTodos != null) more { DrawerItem(stringResource(R.string.assistant_todos), PhIcons.ListChecks, badge = todoCount, onClick = onTodos) }
+            more { DrawerItem(stringResource(AssistantInfo.Schedule.title), PhIcons.Clock) { onInfo(AssistantInfo.Schedule) } }
+            more { DrawerItem(stringResource(AssistantInfo.Knowledge.title), PhIcons.BookOpen) { onInfo(AssistantInfo.Knowledge) } }
+            more { DrawerItem(stringResource(AssistantInfo.Session.title), PhIcons.Info) { onInfo(AssistantInfo.Session) } }
+            more { DrawerItem(stringResource(AssistantInfo.Launcher.title), PhIcons.RocketLaunch) { onInfo(AssistantInfo.Launcher) } }
+            pages.forEach { page -> more {
+                JRow(page.label, onClick = { onPage(page.key) }, leading = { JIcon(page.icon, null) },
+                    trailing = {
+                        if (page.badge > 0) JBadge(page.badge)
+                        else if (page.dot) JStatusDot(Status.NeedsYou)
+                    })
+            } }
             item { JSearchField(query, onQuery, stringResource(R.string.assistant_search_chats)) }
             if (groups.pinned.isNotEmpty()) item(key = "pinned-header") {
                 var pinMenu by remember { mutableStateOf(false) }
@@ -962,26 +1017,18 @@ internal fun AssistantDrawer(
                 item { JEmptyState(stringResource(if (query.isBlank()) R.string.assistant_empty_title else R.string.assistant_no_match),
                     stringResource(if (query.isBlank()) R.string.assistant_empty_detail else R.string.assistant_no_match_detail)) }
             }
-            item { JSectionHeader(stringResource(R.string.assistant_more)) }
-            // Assistant details remain available from the Persona tab's toolbar, not as a drawer row.
-            val totalMore = if (showTodos && onTodos != null) 6 else 5
-            // Each row's place in the group is taken while the list is built: counted inside an item's own content, it
-            // was counted again whenever only some rows recomposed, and the group's corners landed on the wrong rows.
-            var moreIndex = 0
-            fun more(content: @Composable () -> Unit) {
-                val position = GroupPosition.of(moreIndex++, totalMore)
-                item { JGroupItem(position) { content() } }
-            }
-            more { DrawerItem(stringResource(R.string.assistant_home), PhIcons.House, onHome) }
-            if (showTodos && onTodos != null) more { DrawerItem(stringResource(R.string.assistant_todos), PhIcons.ListChecks, badge = todoCount, onClick = onTodos) }
-            more { DrawerItem(stringResource(AssistantInfo.Schedule.title), PhIcons.Clock) { onInfo(AssistantInfo.Schedule) } }
-            more { DrawerItem(stringResource(AssistantInfo.Knowledge.title), PhIcons.BookOpen) { onInfo(AssistantInfo.Knowledge) } }
-            more { DrawerItem(stringResource(AssistantInfo.Session.title), PhIcons.Info) { onInfo(AssistantInfo.Session) } }
-            more { DrawerItem(stringResource(AssistantInfo.Launcher.title), PhIcons.RocketLaunch) { onInfo(AssistantInfo.Launcher) } }
+
         }
-        Row(Modifier.padding(vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+        Row(Modifier.padding(vertical = Tokens.Space.s), verticalAlignment = Alignment.CenterVertically) {
             JButton(stringResource(R.string.assistant_new_conversation), onNew, Modifier.weight(1f), icon = PhIcons.NotePencil)
-            JIconButton(PhIcons.Gear, stringResource(R.string.assistant_open_settings), onSettings)
+            Box {
+                JIconButton(PhIcons.Gear, stringResource(R.string.assistant_open_settings), onSettings)
+                when {
+                    settingsBadge != null -> JTag(settingsBadge, Modifier.align(Alignment.TopEnd))
+                    settingsCount > 0 -> JBadge(settingsCount, Modifier.align(Alignment.TopEnd))
+                    settingsDot -> JStatusDot(Status.NeedsYou, Modifier.align(Alignment.TopEnd))
+                }
+            }
         }
     }
 }
