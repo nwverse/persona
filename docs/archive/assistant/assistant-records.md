@@ -3,6 +3,7 @@
 Moved unchanged from the [assistant guide](../../assistant/assistant.md), which now describes only the current design.
 These are what the main chat lacked before the 2026-10-26 capability upgrade, the tests added for it on 2026-10-30 and
 2026-10-31, the 2026-10-30 capability measurements and retest on the production hub, and the 2026-10-26 end-to-end run.
+The text predates this repository's history (2026-11-07): `git blame` dates it to the move, and the commit it names (`e50f972`) is from the previous history.
 
 ## Why it was weak before 2026-10-26 (from real chat records)
 

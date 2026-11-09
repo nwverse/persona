@@ -2,6 +2,7 @@
 
 Moved unchanged from the [Lark guide](../../extensions/feishu.md) ("Topic pagination limit (H06)"), which now keeps only the conclusion.
 This is the read-only review of the gateway's source that found topic replies page only backward.
+The text predates this repository's history (2026-11-07), so `git blame` dates it to the move.
 
 ## Topic pagination: gateway source review (2026-10-31)
 
