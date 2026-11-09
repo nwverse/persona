@@ -1,9 +1,10 @@
 # Lessons: web UI and interactions
 
-## Sessionless requests are cards, not missing sessions (#1882)
+## Settings layout tests need real scroll regions (#2197)
 
-- Only an explicitly empty `session_id` bypasses session approval capability checks. A nonempty id whose session is absent or restricted must still refuse. Use the same decision for card forms, quick answers and notification actions.
-- A script request has no conversation to open. Route it by interaction id from Overview, Inbox and notifications, and reuse the existing card renderer and answer receipt. Give each sessionless request its own notification identity so answering one cannot close another's notification; retain initial-snapshot suppression and device preferences.
+- A flex child with `overflow-y-auto` also needs `min-h-0` and `min-w-0`; otherwise adding a sidebar can expand the page rather than give each side its own scroll area. Check geometry and wheel input in short windows, not just class names in jsdom, and retain 640 px / 320 px boundary checks.
+- `lib/viewport.ts` caches each MediaQueryList. A responsive test mock must expose a live `matches` getter (and deliver change events when testing an in-place resize), rather than capture its first value. Pin the test language explicitly: a shared Chrome's browser preferences can differ from the test driver's locale.
+- Continuous deep-link reloads hit a Vite development-module fetch failure during this check. Keep the failure record and rerun against the production build with the same mock hub; a working initial dev screenshot does not prove reload/share behavior.
 
 ## Message provenance is independent of model roles (#2125)
 
@@ -448,6 +449,11 @@ Six parallel lanes (chat rendering, message actions, Agents list / Machines, Ter
 
 - **`refresh()` snapshots restore just-resolved cards**: it concurrently fetches `/sessions` (seconds on busy hub) and `/interactions`, replacing state when all finish. An intervening `interaction_resolved` removes the card; the old snapshot restores it, still clickable, and another click gets 410 "no longer pending." Number every pending-card change (`changeInteraction` in `store.ts`); snapshots update only state predating the request. Android `HubInteractionCenter` uses the same approach.
 - **Collapse cards locally on successful submission**, not only on WS events (late or lost on disconnection); iOS / Android already do this. Hub idempotently returns 200 with the original answer (`already`) for answered cards; 410 only for expiry, withdrawal, or hand-back to computer. See `docs/protocol/protocol.md`.
+
+## Sessionless requests are cards, not missing sessions (#1882)
+
+- Only an explicitly empty `session_id` bypasses session approval capability checks. A nonempty id whose session is absent or restricted must still refuse. Use the same decision for card forms, quick answers and notification actions.
+- A script request has no conversation to open. Route it by interaction id from Overview, Inbox and notifications, and reuse the existing card renderer and answer receipt. Give each sessionless request its own notification identity so answering one cannot close another's notification; retain initial-snapshot suppression and device preferences.
 
 ## Chat rendering aligned with a reference client (2026-11-05, #1963)
 
