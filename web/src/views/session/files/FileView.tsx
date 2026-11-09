@@ -36,7 +36,7 @@ import { Button, copyText, cx, IconButton, Loading, toast } from "../../../ui/at
 import { Icon } from "../../../ui/icons";
 import { Markdown } from "../../../ui/Markdown";
 import { ImageViewer, type ViewerImage } from "../../chat/ImageViewer";
-import { PanelHeader } from "../../SidePanel";
+import { PanelHeader } from "../../../ui/PanelHeader";
 import { GutterNumber, LineBox, useLinePick, type LinePick } from "./LineComment";
 import { BackHeader, Empty, FileGlyph, Segmented, useWindow } from "./parts";
 import { parseNotebook } from "../../../lib/notebook";
