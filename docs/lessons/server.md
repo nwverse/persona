@@ -1,5 +1,9 @@
 # Lessons: hub / node and networking
 
+## Retained extension lists need installed managers (#1918)
+
+A relay can retain an offline manager's GET answer while the merged list drops it before the relay is called. For merged retained GET routes, enumerate installed bus identities as well as live managers; keep ordinary lists such as inbox and todos online-only. Never discover owners by scanning cache keys: a removed manager can still have cached answers. Fail closed when the installed roster cannot be read, and test the real relay warm-up followed by disconnect, missing cache, revocation, and an offline default. In external mode even the identity named `assistant` is removable: only seed it when `builtinManager` says it is built in, and return unavailable for an empty roster rather than reviving a cached default.
+
 ## Model connection tests must match the runtime (#1732)
 
 A successful connection probe can still hide a request the model server will reject: exercise the same output-token field and its narrowly scoped fallback as the runtime. Parse SSE events rather than individual `data:` lines, including multiline events and CRLF, and test empty, truncated, refused, and errored replies separately.
