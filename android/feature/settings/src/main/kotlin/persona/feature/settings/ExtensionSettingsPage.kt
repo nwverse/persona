@@ -100,7 +100,7 @@ internal fun ExtensionSettingsPage(
         item("updates-auto-note") { HostSettingsNote(stringResource(when {
             !capabilities.automatic -> if (capabilities.check) R.string.settings_extension_unknown else capabilities.reason(false)
             extension.autoUpgradePaused == "market_removed" -> R.string.settings_extension_market_removed
-            extension.autoUpgradePaused != null -> R.string.settings_ext_upgrade_paused_footer
+            extension.autoUpgradePaused != null -> ExtensionText.upgradeFooter(extension)
             updates.globalAuto == false -> R.string.settings_extension_global_off
             updates.globalAuto == null -> R.string.settings_extension_global_unknown
             else -> R.string.settings_ext_upgrade_footer
