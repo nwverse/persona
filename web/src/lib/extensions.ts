@@ -99,7 +99,7 @@ export function channelOf(p: Pick<HubExtension, "contributes">): string | null {
   return p.contributes?.channel?.find((id) => id.trim() !== "") ?? null;
 }
 
-/** An extension's program on one machine (docs/extensions/extensions.md "Programs that run on computers"). */
+/** An extension's program on one machine (docs/extensions/extensions.md "Programs running on computers"). */
 export interface ExtensionNodeState {
   machine_id: string;
   version?: string;
@@ -214,7 +214,7 @@ const base = (id: string) => `${extRoot()}/${enc(id)}/-`;
 type ListAnswer = { extensions?: HubExtension[]; plugins?: HubExtension[]; can_install?: boolean; markets?: boolean };
 
 export const listExtensions = () => api<ListAnswer>(extRoot()).then((r) => listOf(r));
-/** The list with what this hub allows: installing at all (a database), and markets (docs/extensions/extensions.md "Extension markets"). */
+/** The list with what this hub allows: installing at all (a database), and markets (docs/extensions/extensions.md "Extension marketplace"). */
 export const listExtensionsInfo = () =>
   api<ListAnswer>(extRoot()).then((r) => ({
     extensions: listOf(r),

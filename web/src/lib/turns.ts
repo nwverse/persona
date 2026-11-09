@@ -1,5 +1,5 @@
 import { CONTEXT_RE, FILE_RE, PERSONA_SERVERS, canonicalTool } from "./compatibility";
-// Items → what the chat shows (docs/apple/ios.md "Display logic"): every user message opens a segment; the segment shows
+// Items → what the chat shows (docs/apple/ios.md "Information architecture"): every user message opens a segment; the segment shows
 // the message, one work row folding the tools / thoughts / notices / intermediate replies, and the agent's last
 // words before the next message as the answer.
 

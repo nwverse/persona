@@ -116,7 +116,7 @@ export interface InboxItem {
   agent?: InboxAgent;
   /** New foreign mail translated by the hub as it came in (for a device whose Settings › Translation asks), by target language. */
   translations?: Record<string, { subject: string; preview: string }>;
-  /** What it grew out of (docs/assistant/inbox.md "Threads of origin"): another item, a todo or an agent session ("<machine>/<session>"). */
+  /** What it grew out of (docs/assistant/inbox.md "Relationships: parents and children"): another item, a todo or an agent session ("<machine>/<session>"). */
   parent?: InboxParent;
   /** The folder path it is filed under ("work/alerts/engine"; docs/assistant/inbox.md "Folders"); absent: unfiled. `folder_by`
    *  says who filed it: the model, or the user (then the model leaves it alone). */
@@ -124,7 +124,7 @@ export interface InboxItem {
   folder_by?: "model" | "user";
   /** What it can be muted by (docs/assistant/inbox.md "Muting"): its repository, chat or sender in its source. */
   mutes?: InboxMuteOption[];
-  // ── events (docs/assistant/inbox.md "Events, handling chain, suggestions"; lib/inbox-events.ts): absent from an older hub ──
+  // ── events (docs/assistant/inbox.md "Events and handling chain"; lib/inbox-events.ts): absent from an older hub ──
   /** The section of an open item; absent: by `tier` as before. */
   status?: InboxStatus;
   /** Urgent: stays in "Needs you" while the AI prepares a suggestion. */
