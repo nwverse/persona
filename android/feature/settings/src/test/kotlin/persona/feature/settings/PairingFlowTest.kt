@@ -1,5 +1,7 @@
 package persona.feature.settings
 
+import android.content.ClipData
+import android.content.ClipboardManager
 import android.content.Context
 import androidx.activity.ComponentActivity
 import androidx.compose.runtime.Composable
@@ -89,6 +91,15 @@ class PairingFlowTest {
         rule.onNodeWithText(text(R.string.settings_pairing_manual_invalid)).assertExists()
         rule.onNodeWithText(text(R.string.settings_pairing_failed_title)).assertDoesNotExist()
         rule.onAllNodesWithText("InvalidCode", substring = true).assertCountEquals(0)
+        // A link pasted after that replaces the address, and its Edit shows the form without the old reason.
+        rule.runOnUiThread {
+            rule.activity.getSystemService(ClipboardManager::class.java)
+                .setPrimaryClip(ClipData.newPlainText("link", "persona://pair?url=http%3A%2F%2F127.0.0.1%3A18760&token=mock"))
+        }
+        tap(R.string.settings_pairing_paste)
+        tap(R.string.settings_pairing_edit_input)
+        fields()[0].assert(hasText("http://127.0.0.1:18760"))
+        rule.onNodeWithText(text(R.string.settings_pairing_manual_invalid)).assertDoesNotExist()
     }
 
     @Test fun theKeyboardsActionKeysMoveThroughTheForm() {
