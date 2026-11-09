@@ -100,10 +100,13 @@ describe("mutes, rules and the Trail are each manager's", () => {
     await unmuteInbox(mutes[0]);
     expect(fetcher.mock.calls[2][0]).toBe("/api/v1/inbox/mutes/u1");
     expect(header(2)).toBe("m-1");
-    // the default's: no header
+    // the default's is named too: the device's default may be stale, and the list stamps what it read with the one it asked
     fetcher.mockResolvedValueOnce(ok({ mutes: [] }));
     await listInboxMutes("assistant");
-    expect(header(3)).toBeNull();
+    expect(header(3)).toBe("assistant");
+    fetcher.mockResolvedValueOnce(ok({ policies: [] }));
+    await listInboxPolicies("assistant");
+    expect(header(4)).toBe("assistant");
   });
 
   it("unmutes and removes the rule of the manager a list was read from after it became the default", async () => {

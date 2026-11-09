@@ -77,9 +77,10 @@ extension InboxPolicy {
         var items: () -> [InboxItem]
         var show: ([InboxItem]) -> Void
         var toast: (Toast) -> Void
+        var roster: () -> ManagerRoster? = { nil }
         static var live: Deps {
             .init(api: { AppModel.shared.api }, items: { InboxStore.shared.items }, show: { InboxStore.shared.showRuleChange($0) },
-                  toast: { AppModel.shared.toast = $0 })
+                  toast: { AppModel.shared.toast = $0 }, roster: { AppModel.shared.managerRoster })
         }
     }
 
@@ -104,7 +105,7 @@ extension InboxPolicy {
     var canSave: Bool { loaded && !busy && (policy != nil || tier != .unset || twin != .unset) }
 
     /// The manager the sheet's requests name (`ManagerRoster.naming`).
-    private var named: String? { AppModel.shared.managerRoster.map { $0.naming(target.manager) } ?? target.manager }
+    private var named: String? { deps.roster().map { $0.naming(target.manager) } ?? target.manager }
 
     /// Reads the rule this target already has; none from an older hub (no list): start from nothing.
     func load() async {
@@ -117,10 +118,12 @@ extension InboxPolicy {
         twin = same?.twin ?? .unset
     }
 
-    /// Saves the parts chosen, or neither (`remove`), which removes the rule. True when the hub took it.
+    /// Saves the parts chosen, or neither (`remove`), which removes the rule. True when the hub took it. Removing a rule
+    /// opened from the Rules list names the manager the list read it from, even when that is the default now.
     func save(remove: Bool = false) async -> Bool {
-        guard let api = deps.api()?.manager(named), !busy else { return false }
         let (tier, twin) = remove ? (InboxPolicy.Tier.unset, InboxPolicy.Twin.unset) : (self.tier, self.twin)
+        let stamped = target.item == nil && tier == .unset && twin == .unset
+        guard let api = deps.api()?.manager(stamped ? target.manager : named), !busy else { return false }
         guard policy != nil || target.item != nil else { return false }
         busy = true
         defer { busy = false }

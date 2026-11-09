@@ -1,9 +1,8 @@
 # Persona Link: the computer connects to the hub, or the hub connects to the computer
 
-> Naming (#1159): the connection helper is **Persona Link**, and the command is `persona-link`. The installer creates `persona-link` beside `persona-link` as an alias; both names run the same program,
-> and its prompts use whichever name you ran. The executable `~/.persona/bin/persona-link`, download name `persona-link-<os>-<arch>.gz`,
-> systemd unit `persona-link.service`, launchd identity and helper inside the Mac App keep their old names, so this page still says `persona-link` when referring to the program below.
-> Copyable commands from the hub and admin page also still use `persona-link`, because the hub doesn't know that computer's version, and older versions have no `persona-link`.
+> Naming (#1159): the connection helper is **Persona Link**, and the command is `persona-link`. The installer also puts the old command name beside it as an alias; both names run the same program,
+> and its prompts use whichever name you ran. The executable `~/.persona/bin/persona-link`, the download `persona-link-<os>-<arch>.gz`, the systemd unit `persona-link.service`, the launchd identity
+> and the helper inside the Mac App carry the new name; what the old names still reach is in [rolling-upgrade-compatibility.md](../protocol/rolling-upgrade-compatibility.md). Copyable commands from the hub and admin page use `persona-link`.
 
 The hub can't reliably SSH into computers such as laptops whose IP and network keep changing. Requested 2026-10-31: no Tailscale or reverse tunnels;
 instead, the client on the computer connects to the hub and reconnects on its own after a disconnect, and the hub reuses that link to talk to its node. No SSH or VPN is needed anywhere along the path.
@@ -590,7 +589,7 @@ For Linux see "Linux (headless)" below: build `persona-link`, then `persona-link
 - Unit tests: `xcrun swift test --package-path apple/PersonaLink`; the Apple CI packages lane runs them (`scripts/ci/apple.sh`).
 - Local ad-hoc signing (Sign to Run Locally), no hard-coded team.
 - Default bundle id is the placeholder `com.example.persona.link`, overrideable by `mac.link_bundle_id` in `~/.config/persona/config.json` or environment variable
-  `PERSONA_LINK_BUNDLE_ID` (old name `PERSONA_LINK_BUNDLE_ID`).
+  `PERSONA_LINK_BUNDLE_ID`.
 - After building, `vtool` changes the executable's recorded SDK version to the actual SDK used: xcodebuild records Swift packages as deployment target 15.0, making the system draw menu bar panels in the old SDK style
   ([lessons/macos.md](../lessons/macos.md), "Persona Link's panel looks old").
 - `UNIVERSAL=1` also builds Intel.
