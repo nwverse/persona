@@ -307,7 +307,7 @@ private fun ChatPage(
     var jumpItem by remember { mutableStateOf<String?>(null) }
     val lines = remember(projection, search.selected, jumpItem, feed, tasks) {
         searchVisibleLines(projection.lines, search.selected?.itemId ?: jumpItem)
-            .let { if (tasks != null) persona.core.domain.tasks.AssistantLines.lines(it, feed) else it }.asReversed()
+            .let { if (tasks != null) persona.core.domain.tasks.AssistantLines.lines(it, persona.core.domain.tasks.SentToAgents.shown(feed)) else it }.asReversed()
     }
     val searchableItems by produceState(emptyList<Item>(), snapshot.items, timelineVersion, search.visible) {
         if (search.visible) value = withContext(Dispatchers.Default) { timeline.searchItems(snapshot.items) }
