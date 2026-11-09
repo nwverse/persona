@@ -403,6 +403,15 @@ type Item struct {
 // At is when the message was sent.
 func (it Item) At() time.Time { return msTime(it.CreateTime) }
 
+// MentionList is the message's mentions, for ParseContent to turn its @_user_N keys back into names.
+func (it Item) MentionList() []Mention {
+	var out []Mention
+	for _, m := range it.Mentions {
+		out = append(out, Mention{Key: m.Key, Name: m.Name})
+	}
+	return out
+}
+
 func (c *Client) Message(ctx context.Context, messageID string) ([]Item, error) {
 	var out struct {
 		Items []Item `json:"items"`
