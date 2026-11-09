@@ -93,6 +93,32 @@ func TestDownloadRefusesAnotherFile(t *testing.T) {
 	}
 }
 
+// An archive that matches the manifest's size and sha256 but does not unpack to its binary_sha256 (or does not
+// unpack at all) is the release's, broken: it is deleted too, so nothing of it stays in dir.
+func TestDownloadRemovesAnArchiveThatDoesNotUnpack(t *testing.T) {
+	for _, broken := range []string{"binary digest", "not gzip"} {
+		t.Run(broken, func(t *testing.T) {
+			f, body := fileFor("personad-linux-amd64.gz", []byte("the real one"))
+			if broken == "binary digest" {
+				f.BinarySHA256 = hex.EncodeToString(make([]byte, sha256.Size))
+			} else {
+				body = []byte("not a gzip stream")
+				sum := sha256.Sum256(body)
+				f.Size, f.SHA256 = int64(len(body)), hex.EncodeToString(sum[:])
+			}
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.Write(body) }))
+			defer srv.Close()
+			dir := t.TempDir()
+			if _, err := Download(context.Background(), srv.Client(), srv.URL, f, dir); !errors.Is(err, errMismatch) {
+				t.Fatalf("got %v", err)
+			}
+			if left, _ := filepath.Glob(filepath.Join(dir, "*")); len(left) != 0 {
+				t.Fatalf("left behind: %v", left)
+			}
+		})
+	}
+}
+
 func TestFailedPromotionRemovesStagingFile(t *testing.T) {
 	f, gz := fileFor("program.gz", []byte("verified binary"))
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

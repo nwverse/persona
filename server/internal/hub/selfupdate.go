@@ -278,12 +278,20 @@ func (u *updater) boot() (pending bool) {
 	return true
 }
 
-// start loads the settings, records an update that went back, confirms one under way, and checks for releases.
+// start loads the settings, records an update that went back, confirms one under way, removes the downloads nothing
+// reads any more, and checks for releases.
 func (u *updater) start(ctx context.Context) {
 	u.load(ctx)
 	u.recordRolledBack(ctx)
 	var p update.Pending
-	if ok, _ := update.Load(update.PendingPath(u.dir), &p); ok && p.ToBuild == u.h.build.Number {
+	ok, _ := update.Load(update.PendingPath(u.dir), &p)
+	confirming := ok && p.ToBuild == u.h.build.Number
+	keep := int64(0) // the update this process confirms: its node binaries are put in place once it is confirmed
+	if confirming {
+		keep = p.ToBuild
+	}
+	u.pruneDownloads(keep)
+	if confirming {
 		go u.confirm(ctx, p)
 	}
 	go u.loop(ctx)
@@ -427,6 +435,7 @@ func (u *updater) confirm(ctx context.Context, p update.Pending) {
 		u.edgeConfirmed() // the edge's own check of this update ends (it would go back after 3 minutes)
 	}
 	u.updateNodes(ctx, p.Nodes)
+	u.removeDownloads(u.stagedDir(p.ToBuild)) // the node binaries are in NodeBinaryDir now
 }
 
 // offline lists which of ids are not connected.
@@ -447,10 +456,12 @@ func (u *updater) offline(ids []string) []string {
 	return out
 }
 
-// rollback writes why, puts the old binary back and runs it. It returns only when that fails.
+// rollback writes why, puts the old binary back and runs it. It returns only when that fails. The update's downloads
+// go first: the old binary comes from Prev, and nothing reads them after this.
 func (u *updater) rollback(p update.Pending, reason string) {
 	u.h.logf("update: going back to %s: %s", p.FromVersion, reason)
 	u.markRolledBack(p, reason)
+	u.removeDownloads(u.stagedDir(p.ToBuild))
 	if err := update.RestoreAll(p); err != nil {
 		u.h.logf("update: restore %s: %v", p.Prev, err)
 		return
