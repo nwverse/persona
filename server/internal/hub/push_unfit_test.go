@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"strings"
 	"testing"
-	"time"
 )
 
 // A direct push that stays over APNs' 4 KB even shortened (a background push with a big field of its own, as an
@@ -12,14 +11,11 @@ import (
 // says it failed and why.
 func TestDirectOversizePushIsNotSentAndIsRecorded(t *testing.T) {
 	h, f := testLive(t)
+	attempts := pushAttempts(h)
 	h.push.sendAs(map[string]any{"aps": map[string]any{"content-available": 1}, "blob": strings.Repeat("x", 5000)},
 		"", "background", "5", nil)
-	time.Sleep(100 * time.Millisecond)
-	f.mu.Lock()
-	sent := len(f.got)
-	f.mu.Unlock()
-	if sent != 0 {
-		t.Fatalf("APNs got %d pushes over its limit", sent)
+	if n := attempts.Load(); n != 0 {
+		t.Fatalf("the hub started %d pushes over APNs' limit", n)
 	}
 	r, _ := h.push.routeOfID("phone")
 	var n int
@@ -36,15 +32,12 @@ func TestDirectOversizePushIsNotSentAndIsRecorded(t *testing.T) {
 // A push the hub cannot seal for the relay (its body does not fit even shortened) is not sent, never in the clear, and
 // the device's route says it failed: it used to keep saying relay with nothing wrong while every such push was dropped.
 func TestRelayUnsealablePushIsRecorded(t *testing.T) {
-	h, f, _ := relayHub(t)
+	h, _, _ := relayHub(t)
+	attempts := pushAttempts(h)
 	h.push.sendAs(map[string]any{"aps": map[string]any{"content-available": 1}, "blob": strings.Repeat("x", 3000)},
 		"", "background", "5", nil)
-	time.Sleep(100 * time.Millisecond)
-	f.mu.Lock()
-	sent := len(f.got)
-	f.mu.Unlock()
-	if sent != 0 {
-		t.Fatalf("relay pushed %d", sent)
+	if n := attempts.Load(); n != 0 {
+		t.Fatalf("the hub started %d relay pushes it could not seal", n)
 	}
 	if r, _ := h.push.routeOfID("phone"); r.Route != pushRelay || r.Reason != pushFailed || !strings.HasPrefix(r.Detail, "seal: ") ||
 		!strings.Contains(r.Detail, "does not fit") {

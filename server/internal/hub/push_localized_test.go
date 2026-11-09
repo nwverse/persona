@@ -8,6 +8,7 @@ import (
 	"context"
 	"encoding/json"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -16,14 +17,31 @@ import (
 	"github.com/nwverse/persona/server/internal/i18n"
 )
 
-// localizedHub is testLive's hub with its phone in Japanese.
-func localizedHub(t *testing.T) (*Hub, *fakeAPNs) {
+// localizedHub is testLive's hub with its phone in Japanese, and the count of the pushes it starts.
+func localizedHub(t *testing.T) (*Hub, *fakeAPNs, *atomic.Int64) {
 	t.Helper()
 	h, f := testLive(t)
 	if err := h.push.register(Device{DeviceID: "phone", Name: "phone", APNSToken: "devtok", Topic: "app.example", Locale: "ja"}); err != nil {
 		t.Fatal(err)
 	}
-	return h, f
+	return h, f, pushAttempts(h)
+}
+
+// pushAttempts counts the pushes the hub starts (not Live Activity ones). sendBuiltWith notes each attempt before it
+// hands the push to a goroutine, so the count is final once the call that pushes has returned: a push that must not go
+// is checked without waiting for it.
+func pushAttempts(h *Hub) *atomic.Int64 {
+	var n atomic.Int64
+	record := h.push.traffic
+	h.push.traffic = func(k trafficKey, bytes int64, elapsed time.Duration) {
+		if record != nil {
+			record(k, bytes, elapsed)
+		}
+		if k.action == "attempt" && k.source != "liveactivity" {
+			n.Add(1)
+		}
+	}
+	return &n
 }
 
 // pushLocalized calls hub.push_localized as the assistant's manager does, failing the test (not the binary) on a panic.
@@ -47,25 +65,30 @@ func hubAppCall(t *testing.T, h *Hub, method, params string) error {
 	return err
 }
 
-// noMoreCalls waits a moment and fails if APNs got more than want pushes.
-func noMoreCalls(t *testing.T, f *fakeAPNs, want int) []apnsCall {
+// sentPushes fails unless the hub started exactly want pushes, and returns them once APNs got them all.
+func sentPushes(t *testing.T, f *fakeAPNs, attempts *atomic.Int64, want int) []apnsCall {
 	t.Helper()
-	time.Sleep(100 * time.Millisecond)
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	if len(f.got) != want {
-		t.Fatalf("APNs got %d pushes, want %d: %+v", len(f.got), want, f.got)
+	if n := attempts.Load(); n != int64(want) {
+		t.Fatalf("the hub started %d pushes, want %d", n, want)
 	}
-	return append([]apnsCall{}, f.got...)
+	f.mu.Lock()
+	got := append([]apnsCall{}, f.got...)
+	f.mu.Unlock()
+	if want > 0 {
+		got = f.calls(t, want)
+	}
+	if len(got) != want {
+		t.Fatalf("APNs got %d pushes, want %d: %+v", len(got), want, got)
+	}
+	return got
 }
 
 func TestPushLocalizedFallsBackForAMissingLanguage(t *testing.T) {
-	h, f := localizedHub(t)
+	h, f, attempts := localizedHub(t)
 	if err := pushLocalized(t, h, `{"payloads":{"en":{"aps":{"alert":{"title":"English title","body":"English body"}}}}}`); err != nil {
 		t.Fatalf("push.localized with only en: %v", err)
 	}
-	f.calls(t, 1)
-	got := noMoreCalls(t, f, 1)
+	got := sentPushes(t, f, attempts, 1)
 	if got[0].Token != "devtok" || !strings.Contains(string(got[0].Body), "English title") {
 		t.Fatalf("the Japanese phone got %s %s, want the English alert", got[0].Token, got[0].Body)
 	}
@@ -101,16 +124,16 @@ func TestPushLocalizedPrefersFallbackThenDefault(t *testing.T) {
 
 func TestPushLocalizedWithoutPayloadsIsRefused(t *testing.T) {
 	for _, params := range []string{`{}`, `{"payloads":{}}`, `{"payloads":{"en":null}}`} {
-		h, f := localizedHub(t)
+		h, f, attempts := localizedHub(t)
 		if err := pushLocalized(t, h, params); err == nil {
 			t.Errorf("push.localized %s: no error", params)
 		}
-		noMoreCalls(t, f, 0)
+		sentPushes(t, f, attempts, 0)
 	}
 }
 
 func TestSendFromSkipsALanguageWithoutPayload(t *testing.T) {
-	h, f := localizedHub(t)
+	h, f, attempts := localizedHub(t)
 	if err := h.push.register(Device{DeviceID: "tablet", Name: "tablet", APNSToken: "tok-tablet", Topic: "app.example", Locale: "en"}); err != nil {
 		t.Fatal(err)
 	}
@@ -128,13 +151,12 @@ func TestSendFromSkipsALanguageWithoutPayload(t *testing.T) {
 		}()
 		h.push.sendFrom("", build, "", nil, quietNone, nil)
 	}()
-	f.calls(t, 1)
-	if got := noMoreCalls(t, f, 1); got[0].Token != "tok-tablet" {
+	if got := sentPushes(t, f, attempts, 1); got[0].Token != "tok-tablet" {
 		t.Fatalf("the push went to %s, want only the English tablet", got[0].Token)
 	}
 
 	// Nothing in any language: no push at all.
-	h, f = localizedHub(t)
+	h, f, attempts = localizedHub(t)
 	func() {
 		defer func() {
 			if r := recover(); r != nil {
@@ -143,14 +165,14 @@ func TestSendFromSkipsALanguageWithoutPayload(t *testing.T) {
 		}()
 		h.push.sendFrom("", func(i18n.Lang) map[string]any { return nil }, "", nil, quietNone, nil)
 	}()
-	noMoreCalls(t, f, 0)
+	sentPushes(t, f, attempts, 0)
 }
 
 // push.background without a payload reaches sendBuiltWith with nil too (sendAs): no panic, no push.
 func TestPushBackgroundWithoutPayloadSendsNothing(t *testing.T) {
-	h, f := localizedHub(t)
+	h, f, attempts := localizedHub(t)
 	if err := hubAppCall(t, h, extwire.HubPushBackground, `{"devices":["phone"]}`); err != nil {
 		t.Fatalf("push.background without a payload: %v", err)
 	}
-	noMoreCalls(t, f, 0)
+	sentPushes(t, f, attempts, 0)
 }
