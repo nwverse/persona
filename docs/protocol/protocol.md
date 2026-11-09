@@ -242,6 +242,7 @@ The main API's shared error handling keeps the `error` text and adds a stable `c
 | `conflict` | 409 | A conflict with no more specific code |
 | `input_draft` / `dialog_open` / `prompt_changed` | 409 | The send or answer was explicitly refused; `retryable: false`, `delivered: none`, see below |
 | `op_id_reused` | 409 | The operation ID was already used for a different device, target or parameters; don't blindly retry with a new ID |
+| `agent_start_stalled` | 409 | The agent opened but its session was not identified before the start deadline. Launcher health is unchanged; no automatic task retry or detour. Uses the existing RPC error `code` and message, also carried in `start_error_code` and task `error_code`. New hubs retain generic failure handling for uncoded errors from older nodes; older hubs can show the new node's message but may still count it as a launcher failure |
 | `node_outdated` | 409 | The node doesn't support the requested feature, e.g. file upload |
 | `too_large` | 413, or 409 mapped from node RPC | Request / file over the limit |
 | `timeout` | 408 / 504, often 502 for node calls | Timed out; the outcome can't be judged from this code alone |
