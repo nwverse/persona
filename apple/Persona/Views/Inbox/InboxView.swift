@@ -195,8 +195,13 @@ struct InboxPage: View {
                             let first = share.manager?.id
                             if !folds.isOpen("done", manager: first) { folds.toggle("done", manager: first) }
                             let done = doneAll(share.mine(itemProjection.sortedDoneItems, model.managerRoster), share: share)
-                            try? await Task.sleep(for: .milliseconds(300))
-                            scrollTarget = done.first?.key // a row: Done's title and its group's stick above it
+                            // its newest group open (only Just Now and Today start open), then scrolled to its first row:
+                            // Done's title and the group's stick above it
+                            if let g = InboxGroups.done(done, now: .now).first {
+                                setGroupOpen("done", g.key, manager: first, true)
+                                try? await Task.sleep(for: .milliseconds(300))
+                                scrollTarget = g.items.first?.key
+                            }
                         }
                     }
                     // `-showInboxPickGroups YES`: Select with the mail group folded and picked whole and the Lark group picked.
