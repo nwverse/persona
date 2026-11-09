@@ -34,6 +34,7 @@ vi.mock("../../lib/store", async (orig) => {
 });
 
 import { resetInboxForTests, type InboxItem } from "../../lib/inbox";
+import { getState } from "../../lib/store";
 import { resetMailForTests } from "../../lib/mail";
 import { Inbox } from "./Inbox";
 
@@ -126,6 +127,18 @@ describe("收件箱分组 (#2059)", () => {
     await flush();
     expect(groups("done")).toEqual([]); // one group: no titles
     expect(host.querySelector('[data-section="done"]')?.textContent).not.toContain("+");
+  });
+
+  it("等你回复的 Agent 在「需要你」最前面单独一组，条数是 Agent 的个数", async () => {
+    act(() => root.unmount());
+    Object.assign(getState(), { interactions: [{ id: "ix1", machine_id: "m", session_id: "s1", session_title: "改登录页", kind: "question" }] });
+    resetInboxForTests();
+    root = createRoot(host);
+    act(() => root.render(<Inbox onToggleSidebar={() => {}} />));
+    await flush();
+    expect(groups("action")[0]).toBe("agents");
+    expect(head("action", "agents").textContent).toContain("Agent 在等你1");
+    Object.assign(getState(), { interactions: [] });
   });
 
   it("多选：组标题的勾整组选，折叠的组也能选；全选只选看得到的；底栏写折叠了几项", async () => {

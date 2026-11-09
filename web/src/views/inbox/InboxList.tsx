@@ -334,11 +334,11 @@ export function InboxList({ selected, picked = null, onPicked }: { selected?: { 
           const row = (it: InboxItem, off = false) => (
             <ItemRow key={itemKey(it)} it={it} selected={isSelected(it)} showAccount={chips.length > 1} onEdit={setEditing} pick={picking && !off ? pick : undefined} picked={picked?.has(itemKey(it)) ?? false} off={off && picking} />
           );
-          const groupOf = (section: string, g: { key: string; title: string; items: InboxItem[] }, body: React.ReactNode, opts: { more?: boolean; pickable?: boolean } = {}) => {
+          const groupOf = (section: string, g: { key: string; title: string; items: InboxItem[] }, body: React.ReactNode, opts: { more?: boolean; pickable?: boolean; count?: number } = {}) => {
             const id = `${group}|${section}|${g.key}`;
             const n = picking && opts.pickable ? g.items.filter((it) => picked.has(itemKey(it))).length : 0;
             return (
-              <Group key={id} id={id} title={g.title} count={g.items.length} more={opts.more} open={groupOpen(group, section, g.key)} onToggle={(open) => putFold(id, open)}
+              <Group key={id} id={id} title={g.title} count={opts.count ?? g.items.length} more={opts.more} open={groupOpen(group, section, g.key)} onToggle={(open) => putFold(id, open)}
                 pick={picking && opts.pickable ? { state: n === 0 ? "none" : n === g.items.length ? "all" : "some", picked: n, run: () => pickGroup(g.items) } : undefined}>
                 {body}
               </Group>
@@ -356,7 +356,7 @@ export function InboxList({ selected, picked = null, onPicked }: { selected?: { 
                     action={clear && list.length && !picking ? { label: clear, run: () => setAllDone(list, true) } : undefined}>
                     {titled ? (
                       <>
-                        {waiting.length > 0 && groupOf(tier.key, { key: "agents", title: t("lib-inbox.group_agents"), items: [] }, agentRows)}
+                        {waiting.length > 0 && groupOf(tier.key, { key: "agents", title: t("lib-inbox.group_agents"), items: [] }, agentRows, { count: waiting.length })}
                         {groups.map((g) => groupOf(tier.key, g, g.items.map((it) => row(it)), { pickable: true }))}
                       </>
                     ) : (
