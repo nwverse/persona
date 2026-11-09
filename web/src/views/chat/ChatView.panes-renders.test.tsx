@@ -47,13 +47,8 @@ const row = (id: string, extra: Partial<Session> = {}): Session => ({ machine_id
 const pane = (id: string, index: number, extra: Partial<Session> = {}) => row(id, { space_id: "w1", slot_id: "t1", pane_index: index, ...extra });
 const other = () => row("s3", { space_id: "w2", slot_id: "t9", pane_index: 0 });
 
-// The nav rail measures on the next frame. A real requestAnimationFrame is not flushed by the
-// timers below, so that one layout would be counted as a redraw from another agent's push.
 const settle = async () => {
-  for (let i = 0; i < 5; i++) {
-    await act(async () => { await new Promise((r) => setTimeout(r, 0)); });
-    await act(async () => { await new Promise((r) => requestAnimationFrame(() => r(undefined))); });
-  }
+  for (let i = 0; i < 3; i++) await act(async () => { await new Promise((r) => setTimeout(r, 0)); });
 };
 async function open(rows: Session[]) {
   act(() => applyCompleteSessions(rows));
