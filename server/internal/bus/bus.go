@@ -77,63 +77,180 @@ var ErrRejected = errors.New("the hub rejected the token")
 var ErrRevoked = fmt.Errorf("%w: it was revoked or replaced", ErrRejected)
 
 // Conn adapts a WebSocket to the io.Reader and io.Writer an rpc.Peer serves on: each line written goes out as one
-// text message, each message read comes back as one line.
+// text message, each message read comes back as one line. Neither side copies a whole message: a read hands the
+// message on from the WebSocket's reader as it comes, a write sends complete lines straight from the caller's bytes,
+// so a large message leaves no buffer of its size behind (one 21 MB request body kept 28 MB on each side).
 type Conn struct {
 	ws  *websocket.Conn
 	ctx context.Context
 
-	rmu sync.Mutex
-	buf []byte // the rest of the message being read, its newline included
+	rmu   sync.Mutex
+	limit int64     // the largest message read: MaxMessage
+	msg   io.Reader // the text message being read; nil between messages
+	got   int64     // its bytes handed on so far
+	tail  []byte    // owed before anything else is read: a message's newline, and a byte read past limit (atLimit)
+	one   [2]byte   // tail's storage
+	rerr  error     // owed next: the error of a message that failed part-way
 
 	wmu  sync.Mutex
 	wbuf []byte // a line written in pieces, until its newline
 }
 
+// keptLine is the largest partial-line buffer Write keeps once its line went out; a larger one is let go.
+const keptLine = 64 << 10
+
 // NewConn wraps ws; ctx bounds every read and write (canceling it closes the connection without a close frame).
-func NewConn(ctx context.Context, ws *websocket.Conn) *Conn {
-	ws.SetReadLimit(MaxMessage)
-	return &Conn{ws: ws, ctx: ctx}
+func NewConn(ctx context.Context, ws *websocket.Conn) *Conn { return newConn(ctx, ws, MaxMessage) }
+
+func newConn(ctx context.Context, ws *websocket.Conn, limit int64) *Conn {
+	ws.SetReadLimit(limit)
+	return &Conn{ws: ws, ctx: ctx, limit: limit}
 }
 
+// Read hands on the current text message, then a newline; binary messages are skipped. A message that fails part-way
+// (over MaxMessage, the connection lost, ctx canceled) may already have handed on its start: it then hands on a NUL,
+// which no JSON has there, and the error. The rpc reader takes that start as its last line and json rejects it, so
+// no handler sees any of it, as when the message was read whole.
 func (c *Conn) Read(p []byte) (int, error) {
+	if len(p) == 0 {
+		return 0, nil
+	}
 	c.rmu.Lock()
 	defer c.rmu.Unlock()
-	for len(c.buf) == 0 {
-		typ, msg, err := c.ws.Read(c.ctx)
-		if err != nil {
-			if websocket.CloseStatus(err) == websocket.StatusNormalClosure {
-				return 0, io.EOF
+	for {
+		if len(c.tail) > 0 {
+			n := copy(p, c.tail)
+			c.tail = c.tail[n:]
+			return n, nil
+		}
+		if err := c.rerr; err != nil {
+			c.rerr = nil
+			return 0, readError(err)
+		}
+		if c.msg == nil {
+			typ, r, err := c.ws.Reader(c.ctx)
+			if err != nil {
+				return 0, readError(err)
 			}
-			return 0, err
+			if typ != websocket.MessageText {
+				if _, err := io.Copy(io.Discard, r); err != nil {
+					return 0, readError(err)
+				}
+				continue
+			}
+			c.msg, c.got = r, 0
 		}
-		if typ != websocket.MessageText {
-			continue
+		// Never past the limit before atLimit has seen what follows it.
+		q := p
+		if rest := c.limit - c.got; int64(len(q)) > rest {
+			q = q[:rest]
 		}
-		c.buf = append(msg, '\n')
+		n, err := c.msg.Read(q)
+		c.got += int64(n)
+		if err == nil && c.got == c.limit {
+			err = c.atLimit()
+		}
+		if err == io.EOF { // the message is complete: its newline
+			c.msg = nil
+			if k := len(c.tail); k > 0 || n == len(p) {
+				c.one[k] = '\n'
+				c.tail = c.one[:k+1]
+			} else {
+				p[n] = '\n'
+				n++
+			}
+		} else if err != nil {
+			c.msg, c.tail = nil, nil
+			if c.got > int64(n) { // its start was handed on
+				p[0], c.rerr = 0, err
+				return 1, nil
+			}
+			return 0, readError(err)
+		}
+		if n > 0 {
+			return n, nil
+		}
 	}
-	n := copy(p, c.buf)
-	c.buf = c.buf[n:]
-	return n, nil
 }
 
+// atLimit runs once the limit's bytes of the message are out. A whole read (websocket.Conn.Read) of a longer one fails
+// on the library's limit, with its error and its 1009 close, and hands on nothing; so find out before the rpc reader
+// takes those bytes for a line too long of its own. io.EOF: the message ends here, or one byte later (in tail) where
+// the library's limit lets that byte through.
+func (c *Conn) atLimit() error {
+	for {
+		n, err := c.msg.Read(c.one[:1])
+		if n == 0 && err == nil {
+			continue
+		}
+		if n == 1 {
+			c.tail = c.one[:1]
+			if err == nil { // past the limit: the library fails the next read
+				if _, err = c.msg.Read(c.one[1:]); err == nil || err == io.EOF {
+					err = fmt.Errorf("bus: a message over %d bytes", c.limit)
+				}
+			}
+		}
+		return err
+	}
+}
+
+// readError is a read's error as the reader takes it: a normal closure is the end of the input.
+func readError(err error) error {
+	if websocket.CloseStatus(err) == websocket.StatusNormalClosure {
+		return io.EOF
+	}
+	return err
+}
+
+// Write sends each complete line as one text message, straight from p; the start of a line without its newline waits
+// in wbuf for the rest. Blank lines are not sent.
 func (c *Conn) Write(p []byte) (int, error) {
 	c.wmu.Lock()
 	defer c.wmu.Unlock()
-	c.wbuf = append(c.wbuf, p...)
-	for {
-		i := bytes.IndexByte(c.wbuf, '\n')
+	rest := p
+	if len(c.wbuf) > 0 {
+		i := bytes.IndexByte(rest, '\n')
 		if i < 0 {
+			c.wbuf = append(c.wbuf, rest...)
 			return len(p), nil
 		}
-		line := c.wbuf[:i]
-		if len(bytes.TrimSpace(line)) > 0 {
-			if err := c.ws.Write(c.ctx, websocket.MessageText, line); err != nil {
-				c.wbuf = c.wbuf[:0]
-				return 0, err
-			}
+		c.wbuf = append(c.wbuf, rest[:i]...)
+		err := c.send(c.wbuf)
+		c.dropLine()
+		if err != nil {
+			return 0, err
 		}
-		c.wbuf = c.wbuf[i+1:]
+		rest = rest[i+1:]
 	}
+	for {
+		i := bytes.IndexByte(rest, '\n')
+		if i < 0 {
+			break
+		}
+		if err := c.send(rest[:i]); err != nil {
+			return 0, err
+		}
+		rest = rest[i+1:]
+	}
+	c.wbuf = append(c.wbuf, rest...)
+	return len(p), nil
+}
+
+func (c *Conn) send(line []byte) error {
+	if len(bytes.TrimSpace(line)) == 0 {
+		return nil
+	}
+	return c.ws.Write(c.ctx, websocket.MessageText, line)
+}
+
+// dropLine empties wbuf, and lets a large one go.
+func (c *Conn) dropLine() {
+	if cap(c.wbuf) > keptLine {
+		c.wbuf = nil
+		return
+	}
+	c.wbuf = c.wbuf[:0]
 }
 
 // Close ends the connection with a normal closure (the other side reads io.EOF).
