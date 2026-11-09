@@ -22,12 +22,17 @@ const (
 
 // toolLoopState is local to the current turn. Its identity also invalidates an in-flight model call.
 type toolLoopState struct {
-	since                time.Time
-	tool                 string
-	cardID               string
-	checks, checkedCount int
-	pending, silenced    bool
-	answering            bool
+	since, updatedAt                                  time.Time
+	tool                                              string
+	cardID, expiredID                                 string
+	observedRev                                       int64 // nonzero only after seeing this candidate in this connection
+	missingRev                                        int64 // post-reconnect baseline while the candidate is missing
+	missingAdvances                                   int
+	pendingCard                                       *proto.Interaction // being committed before the card is published
+	checks, checkedCount                              int
+	pending, silenced, uncertain, silencedByInput     bool
+	answering, consuming                              bool
+	consumedSaved, pendingSaved, pendingPriorSilenced bool
 }
 
 type loopClearReason uint8
@@ -40,6 +45,26 @@ const (
 
 // clearToolLoop withdraws the card and invalidates any model call. Only a new turn resets the model budget.
 func (s *Service) clearToolLoop(k [2]string, reason loopClearReason) {
+	if sw, err := s.readTriageSwitches(context.Background()); err == nil && (!sw.Enabled || !sw.ToolLoop) {
+		return
+	}
+	if err := s.loadToolLoops(context.Background()); err != nil {
+		s.work.mu.Lock()
+		if s.work.loopLoaded {
+			s.work.mu.Unlock()
+			s.clearToolLoop(k, reason)
+			return
+		}
+		if s.work.loopInvalid == nil {
+			s.work.loopInvalid = map[[2]string]loopClearReason{}
+		}
+		if previous, ok := s.work.loopInvalid[k]; !ok || reason > previous {
+			s.work.loopInvalid[k] = reason
+		}
+		s.work.mu.Unlock()
+		s.logf("tool loop: load: %v", err)
+		return
+	}
 	s.work.mu.Lock()
 	s.work.init()
 	state := s.work.loops[k]
@@ -53,23 +78,93 @@ func (s *Service) clearToolLoop(k [2]string, reason loopClearReason) {
 				checks = 0
 			}
 			// Ignore an old session snapshot until the node reports a different loop.
-			s.work.loops[k] = &toolLoopState{since: state.since, tool: state.tool, checks: checks, silenced: true}
+			s.work.loops[k] = &toolLoopState{since: state.since, updatedAt: time.Now().UTC(), tool: state.tool, checks: checks, silenced: true, silencedByInput: true, expiredID: state.expiredID}
 		case reason == loopTurnChanged:
-			delete(s.work.loops, k)
+			if state.expiredID != "" {
+				s.work.loops[k] = &toolLoopState{updatedAt: time.Now().UTC(), expiredID: state.expiredID}
+			} else {
+				delete(s.work.loops, k)
+			}
 		case reason == loopUserInput || !state.silenced:
-			s.work.loops[k] = &toolLoopState{checks: state.checks}
+			s.work.loops[k] = &toolLoopState{updatedAt: time.Now().UTC(), checks: state.checks, expiredID: state.expiredID}
 			// Keep a silenced candidate even while it briefly disappears from the node's list.
 		}
 	}
 	s.work.mu.Unlock()
+	if state != nil {
+		if err := s.saveToolLoops(context.Background()); err != nil {
+			s.logf("tool loop: save: %v", err)
+		}
+	}
 	if changed {
 		s.publishSoon()
 	}
 }
 
+// retainUncertainLoop handles a candidate whose identity changed after its node
+// or manager was unavailable. A bounded transcript rescan can move Since even
+// for the same loop. A same-tool candidate might also be a genuinely new loop;
+// withdraw any old card and stay quiet until an unambiguous turn or tool change.
+// The caller holds work.mu.
+func (s *Service) retainUncertainLoop(k [2]string, st *toolLoopState, c proto.Session) (bool, bool) {
+	if !st.uncertain || st.silencedByInput || !eligibleToolLoop(c) || st.tool != c.ToolLoop.Tool || st.since.Equal(c.ToolLoop.Since) ||
+		!st.silenced && st.cardID == "" && st.pendingCard == nil {
+		return false, false
+	}
+	withdrawn := st.cardID != ""
+	delete(s.work.cards, st.cardID)
+	s.work.loops[k] = &toolLoopState{since: c.ToolLoop.Since, updatedAt: time.Now().UTC(), tool: st.tool, observedRev: c.Rev,
+		checks: st.checks, checkedCount: st.checkedCount, silenced: true, uncertain: true, expiredID: st.expiredID}
+	return true, withdrawn
+}
+
+// missingToolLoop distinguishes progress after a confirmed candidate from an
+// incomplete view after reconnection. Rev is the transcript size, not a proof
+// of which lines changed. The caller holds work.mu.
+func (s *Service) missingToolLoop(k [2]string, st *toolLoopState, c proto.Session, present bool) (bool, bool) {
+	if !present || c.Status != proto.StatusWorking || c.ToolLoop != nil {
+		st.uncertain, st.observedRev, st.missingRev, st.missingAdvances = true, 0, 0, 0
+		return false, false
+	}
+	if st.observedRev > 0 && c.Rev > st.observedRev {
+		withdrawn := st.cardID != ""
+		delete(s.work.cards, st.cardID)
+		s.work.loops[k] = &toolLoopState{updatedAt: time.Now().UTC(), checks: st.checks, expiredID: st.expiredID}
+		return true, withdrawn
+	}
+	// After a restart the old revision is not a safe baseline. Two further
+	// increases while still missing withdraw the stale card, but keep the
+	// same-tool silence because a tail rescan can still restore that loop.
+	if c.Rev > 0 {
+		if st.missingRev > 0 && c.Rev > st.missingRev {
+			st.missingAdvances++
+		} else if st.missingRev > 0 && c.Rev < st.missingRev {
+			st.missingAdvances = 0
+		}
+		if c.Rev != st.missingRev {
+			st.missingRev = c.Rev
+		}
+	}
+	if st.cardID != "" && st.missingAdvances >= 2 {
+		delete(s.work.cards, st.cardID)
+		s.work.loops[k] = &toolLoopState{since: st.since, updatedAt: time.Now().UTC(), tool: st.tool,
+			checks: st.checks, checkedCount: st.checkedCount, silenced: true, uncertain: true, expiredID: st.expiredID}
+		return true, true
+	}
+	st.uncertain, st.observedRev = true, 0
+	return false, false
+}
+
 // toolLoopsChanged invalidates cards and model calls as soon as a node reports a changed candidate.
 // The event is a complete list for one machine; its turn budget survives a candidate change.
 func (s *Service) toolLoopsChanged(d DeviceSessions) {
+	if sw, err := s.readTriageSwitches(context.Background()); err == nil && (!sw.Enabled || !sw.ToolLoop) {
+		return
+	}
+	if err := s.loadToolLoops(context.Background()); err != nil {
+		s.logf("tool loop: load: %v", err)
+		return
+	}
 	s.work.mu.Lock()
 	if len(s.work.loops) == 0 {
 		s.work.mu.Unlock()
@@ -79,35 +174,91 @@ func (s *Service) toolLoopsChanged(d DeviceSessions) {
 	for _, c := range d.Sessions {
 		byID[c.SessionID] = c
 	}
-	changed := false
+	changed, stateChanged := false, false
 	for k, st := range s.work.loops {
 		if k[0] != d.MachineID || st.since.IsZero() {
 			continue
 		}
 		c, ok := byID[k[1]]
 		if ok && matchesToolLoop(c, proto.ToolLoop{Tool: st.tool, Since: st.since}) {
+			st.observedRev, st.missingRev, st.missingAdvances = c.Rev, 0, 0
 			continue
 		}
-		if st.silenced && (!ok || c.ToolLoop == nil || len(c.Queued) != 0 || c.Status != proto.StatusWorking) {
+		// A temporarily missing candidate or session is not proof that a loop
+		// ended; nodes may still be reconstructing their transcripts.
+		if !ok || len(c.Queued) == 0 && (c.Status == proto.StatusOffline || c.ToolLoop == nil && c.Status == proto.StatusWorking) {
+			if retired, withdrew := s.missingToolLoop(k, st, c, ok); retired {
+				changed = changed || withdrew
+				stateChanged = true
+			}
+			continue
+		}
+		if retained, withdrew := s.retainUncertainLoop(k, st, c); retained {
+			changed = changed || withdrew
+			stateChanged = true
+			continue
+		}
+		if st.silenced && (c.ToolLoop == nil || len(c.Queued) != 0 || c.Status != proto.StatusWorking) {
 			continue
 		}
 		if st.cardID != "" {
 			delete(s.work.cards, st.cardID)
 			changed = true
 		}
+		stateChanged = true
 		if ok && len(c.Queued) != 0 {
-			s.work.loops[k] = &toolLoopState{since: st.since, tool: st.tool, checks: st.checks, silenced: true}
+			s.work.loops[k] = &toolLoopState{since: st.since, updatedAt: time.Now().UTC(), tool: st.tool, checks: st.checks, silenced: true, silencedByInput: true, expiredID: st.expiredID}
 		} else {
-			s.work.loops[k] = &toolLoopState{checks: st.checks}
+			s.work.loops[k] = &toolLoopState{updatedAt: time.Now().UTC(), checks: st.checks, expiredID: st.expiredID}
 		}
 	}
 	s.work.mu.Unlock()
+	if stateChanged {
+		if err := s.saveToolLoops(context.Background()); err != nil {
+			s.logf("tool loop: save: %v", err)
+		}
+	}
 	if changed {
 		s.publishSoon()
 	}
 }
 
 func (s *Service) checkToolLoops(ctx context.Context) {
+	if err := s.loadToolLoops(ctx); err != nil {
+		s.logf("tool loop: load: %v", err)
+		return
+	}
+	// Retry invalidations which could not be saved on an earlier event.
+	s.work.mu.Lock()
+	hasLoops := len(s.work.loops) != 0 || s.work.loopSaved
+	s.work.mu.Unlock()
+	if hasLoops {
+		if err := s.saveToolLoops(ctx); err != nil {
+			s.logf("tool loop: save: %v", err)
+			return
+		}
+	}
+	s.work.mu.Lock()
+	var due, finishing [][2]string
+	for k, st := range s.work.loops {
+		if st.expiredID != "" && !st.consuming {
+			finishing = append(finishing, k)
+		}
+		if card, ok := s.work.cards[st.cardID]; ok && !st.answering && !time.Now().Before(card.ExpiresAt) {
+			due = append(due, k)
+		}
+	}
+	s.work.mu.Unlock()
+	for _, k := range due {
+		if err := s.expireToolLoopCard(ctx, k); err != nil {
+			s.logf("tool loop: expire card: %v", err)
+			return
+		}
+		finishing = append(finishing, k)
+	}
+	for _, k := range finishing {
+		s.finishExpiredToolLoop(ctx, k)
+	}
 	sw := s.triageSwitches(ctx)
 	if !sw.Enabled || !sw.ToolLoop {
 		return
@@ -116,11 +267,39 @@ func (s *Service) checkToolLoops(ctx context.Context) {
 	seen := map[[2]string]bool{}
 	for _, d := range v.machines() {
 		if !d.Reachable {
+			s.work.mu.Lock()
+			for k, st := range s.work.loops {
+				if k[0] == d.ID {
+					st.uncertain, st.observedRev, st.missingRev, st.missingAdvances = true, 0, 0, 0
+				}
+			}
+			s.work.mu.Unlock()
 			continue
 		}
 		for _, c := range v.sessions(d.ID) {
 			k := [2]string{d.ID, c.SessionID}
 			seen[k] = true
+			if len(c.Queued) != 0 {
+				s.clearToolLoop(k, loopUserInput)
+				continue
+			}
+			if c.Status == proto.StatusOffline || c.Status == proto.StatusWorking && c.ToolLoop == nil {
+				s.work.mu.Lock()
+				var retired, withdrew bool
+				if st := s.work.loops[k]; st != nil {
+					retired, withdrew = s.missingToolLoop(k, st, c, true)
+				}
+				s.work.mu.Unlock()
+				if retired {
+					if err := s.saveToolLoops(ctx); err != nil {
+						s.logf("tool loop: save vanished candidate: %v", err)
+					}
+					if withdrew {
+						s.publishSoon()
+					}
+				}
+				continue
+			}
 			if !eligibleToolLoop(c) || v.isMuted(d.ID, c.SessionID) {
 				s.clearToolLoop(k, loopCandidateGone)
 				continue
@@ -130,49 +309,88 @@ func (s *Service) checkToolLoops(ctx context.Context) {
 	}
 	// Only a successful list can prove a session is gone; keep cards while a machine is unreachable.
 	s.work.mu.Lock()
-	removed := false
+	removed, pruned := false, false
 	for k, st := range s.work.loops {
-		if d, ok := v.devices[k[0]]; ok && d.Reachable && !v.failed[k[0]] && !seen[k] {
+		if !seen[k] {
+			st.uncertain, st.observedRev, st.missingRev, st.missingAdvances = true, 0, 0, 0
+		}
+		if d, ok := v.devices[k[0]]; ok && d.Reachable && !v.failed[k[0]] && !seen[k] && st.expiredID == "" &&
+			!st.updatedAt.IsZero() && time.Since(st.updatedAt) > workKeep {
 			delete(s.work.cards, st.cardID)
 			delete(s.work.loops, k)
+			pruned = true
 			removed = removed || st.cardID != ""
 		}
 	}
 	s.work.mu.Unlock()
+	if pruned {
+		if err := s.saveToolLoops(ctx); err != nil {
+			s.logf("tool loop: save: %v", err)
+		}
+	}
 	if removed {
 		s.publishSoon()
 	}
 }
 
 func (s *Service) considerToolLoop(ctx context.Context, machine string, c proto.Session) {
+	if err := s.loadToolLoops(ctx); err != nil {
+		s.logf("tool loop: load: %v", err)
+		return
+	}
 	loop := *c.ToolLoop
 	k := [2]string{machine, c.SessionID}
 	withdrawn := false
 	defer func() {
 		if withdrawn {
+			if err := s.saveToolLoops(context.Background()); err != nil {
+				s.logf("tool loop: save: %v", err)
+			}
 			s.publishSoon()
 		}
 	}()
 	s.work.mu.Lock()
 	s.work.init()
 	st := s.work.loops[k]
+	if st != nil {
+		if retained, withdrew := s.retainUncertainLoop(k, st, c); retained {
+			s.work.mu.Unlock()
+			if err := s.saveToolLoops(ctx); err != nil {
+				s.logf("tool loop: save reconstructed candidate: %v", err)
+			}
+			if withdrew {
+				s.publishSoon()
+			}
+			return
+		}
+	}
 	if st == nil || !st.since.Equal(loop.Since) || st.tool != loop.Tool {
-		checks := 0
+		checks, expiredID := 0, ""
 		if st != nil {
-			checks = st.checks
+			checks, expiredID = st.checks, st.expiredID
 			withdrawn = st.cardID != ""
 			delete(s.work.cards, st.cardID)
 		}
-		st = &toolLoopState{since: loop.Since, tool: loop.Tool, checks: checks}
+		st = &toolLoopState{since: loop.Since, updatedAt: time.Now().UTC(), tool: loop.Tool, checks: checks, expiredID: expiredID}
 		s.work.loops[k] = st
+	}
+	st.observedRev, st.missingRev, st.missingAdvances = c.Rev, 0, 0
+	if st.answering || st.expiredID != "" {
+		s.work.mu.Unlock()
+		return
 	}
 	if st.cardID != "" {
 		if card, ok := s.work.cards[st.cardID]; ok && !time.Now().Before(card.ExpiresAt) {
-			delete(s.work.cards, st.cardID)
-			st.cardID, st.silenced, withdrawn = "", true, true
+			s.work.mu.Unlock()
+			if err := s.expireToolLoopCard(ctx, k); err != nil {
+				s.logf("tool loop: expire card: %v", err)
+			} else {
+				s.finishExpiredToolLoop(ctx, k)
+			}
+			return
 		}
 	}
-	if st.cardID != "" || st.silenced || st.pending || loop.Count <= st.checkedCount {
+	if st.cardID != "" || st.pendingCard != nil || st.silenced || st.pending || loop.Count <= st.checkedCount {
 		s.work.mu.Unlock()
 		return
 	}
@@ -181,12 +399,24 @@ func (s *Service) considerToolLoop(ctx context.Context, machine string, c proto.
 		s.work.mu.Unlock()
 		return
 	}
+	previousChecks, previousCount := st.checks, st.checkedCount
 	st.pending = true
-	st.checkedCount = loop.Count
 	if !hard {
+		st.checkedCount = loop.Count
 		st.checks++
 	}
 	s.work.mu.Unlock()
+	// Commit the budget before a model call; a restart must not reset it.
+	if err := s.saveToolLoops(ctx); err != nil {
+		s.work.mu.Lock()
+		if s.work.loops[k] == st && st.pending {
+			st.pending = false
+			st.checks, st.checkedCount = previousChecks, previousCount
+		}
+		s.work.mu.Unlock()
+		s.logf("tool loop: save budget: %v", err)
+		return
+	}
 	go s.reviewToolLoop(context.WithoutCancel(ctx), k, st, loop, hard)
 }
 
@@ -242,7 +472,28 @@ func (s *Service) reviewToolLoop(ctx context.Context, k [2]string, st *toolLoopS
 		s.work.mu.Unlock()
 		return
 	}
-	st.pending, st.cardID = false, ix.ID
+	st.pendingCard = &ix
+	st.pendingSaved, st.pendingPriorSilenced = false, false
+	st.updatedAt = time.Now().UTC()
+	s.work.mu.Unlock()
+	if err := s.saveToolLoops(ctx, k); err != nil {
+		s.work.mu.Lock()
+		if s.work.loops[k] == st && st.pendingCard == &ix {
+			st.pendingCard, st.pending = nil, false
+			if hard {
+				st.checkedCount = 0 // retry the ceiling when storage returns
+			}
+		}
+		s.work.mu.Unlock()
+		s.logf("tool loop: save card: %v", err)
+		return
+	}
+	s.work.mu.Lock()
+	if s.work.loops[k] != st || !st.pending || st.pendingCard != &ix {
+		s.work.mu.Unlock()
+		return
+	}
+	st.pending, st.pendingCard, st.cardID = false, nil, ix.ID
 	s.work.cards[ix.ID] = ix
 	s.work.mu.Unlock()
 	s.publishSoon()
@@ -263,6 +514,9 @@ func (s *Service) toolLoopAnswer(ctx context.Context, id string, r proto.Resolut
 	if r.Cancel && !r.IsQuestionCancel() {
 		return true, errInvalidQuestionCancel
 	}
+	if err := s.loadToolLoops(ctx); err != nil {
+		return true, errors.New("the tool loop state could not be read yet")
+	}
 	s.work.mu.Lock()
 	ix, ok := s.work.cards[id]
 	k := [2]string{ix.MachineID, ix.SessionID}
@@ -276,10 +530,11 @@ func (s *Service) toolLoopAnswer(ctx context.Context, id string, r proto.Resolut
 		return true, errors.New("the loop card answer is already being processed")
 	}
 	if !time.Now().Before(ix.ExpiresAt) {
-		delete(s.work.cards, id)
-		st.cardID, st.silenced = "", true
 		s.work.mu.Unlock()
-		s.publishSoon()
+		if err := s.expireToolLoopCard(ctx, k); err != nil {
+			return true, err
+		}
+		s.finishExpiredToolLoop(ctx, k)
 		return true, errGone(id)
 	}
 	answer := strings.TrimSpace(r.Answers[ix.Questions[0].Question])
@@ -288,16 +543,35 @@ func (s *Service) toolLoopAnswer(ctx context.Context, id string, r proto.Resolut
 		s.work.mu.Unlock()
 		return true, errGone(id)
 	}
-	if !interrupt {
-		delete(s.work.cards, id)
-		st.cardID, st.silenced = "", true
+	loop := proto.ToolLoop{Tool: st.tool, Since: st.since}
+	st.answering, st.consuming, st.silenced = true, true, true
+	st.consumedSaved = false
+	st.updatedAt = time.Now().UTC()
+	s.work.mu.Unlock()
+	// Persist the terminal decision before acknowledging it or sending an
+	// interrupt. If delivery is uncertain after a crash, do not send twice.
+	if err := s.saveToolLoops(ctx, k); err != nil {
+		s.work.mu.Lock()
+		if s.work.loops[k] == st && st.cardID == id && st.consuming {
+			st.answering, st.consuming, st.silenced = false, false, false
+		}
 		s.work.mu.Unlock()
+		return true, err
+	}
+	s.work.mu.Lock()
+	valid := s.work.loops[k] == st && st.cardID == id && st.answering && st.consuming
+	if valid && !interrupt {
+		delete(s.work.cards, id)
+		st.cardID, st.answering, st.consuming = "", false, false
+	}
+	s.work.mu.Unlock()
+	if !valid {
+		return true, nil
+	}
+	if !interrupt {
 		s.publishSoon()
 		return true, nil
 	}
-	loop := proto.ToolLoop{Tool: st.tool, Since: st.since}
-	st.answering = true
-	s.work.mu.Unlock()
 
 	// A failed request may have reached the node. Replace the card under a new id so an automatic retry of this
 	// answer cannot interrupt twice; a fresh user decision can retry after the session has been checked again.
@@ -308,15 +582,31 @@ func (s *Service) toolLoopAnswer(ctx context.Context, id string, r proto.Resolut
 			return
 		}
 		delete(s.work.cards, id)
-		st.answering = false
+		st.cardID, st.answering, st.consuming = "", false, false
 		if retry {
 			ix.ID, ix.CreatedAt = toolLoopCardPrefix+randomHex(6), time.Now().UTC()
-			st.cardID = ix.ID
-			s.work.cards[ix.ID] = ix
-		} else {
-			st.cardID, st.silenced = "", true
+			st.pendingCard = &ix
+			st.pendingSaved, st.pendingPriorSilenced = false, true
+			st.silenced = false
 		}
 		s.work.mu.Unlock()
+		if retry {
+			if err := s.saveToolLoops(context.Background(), k); err != nil {
+				s.work.mu.Lock()
+				if s.work.loops[k] == st && st.pendingCard == &ix {
+					st.pendingCard, st.silenced = nil, true
+				}
+				s.work.mu.Unlock()
+				s.logf("tool loop: save retry card: %v", err)
+			} else {
+				s.work.mu.Lock()
+				if s.work.loops[k] == st && st.pendingCard == &ix {
+					st.pendingCard, st.cardID = nil, ix.ID
+					s.work.cards[ix.ID] = ix
+				}
+				s.work.mu.Unlock()
+			}
+		}
 		s.publishSoon()
 	}
 	c, ok := s.session(ctx, k[0], k[1])
@@ -325,12 +615,16 @@ func (s *Service) toolLoopAnswer(ctx context.Context, id string, r proto.Resolut
 		return true, nil
 	}
 	sw := s.triageSwitches(ctx)
+	if sw.Enabled && sw.ToolLoop && len(c.Queued) == 0 && (c.Status == proto.StatusOffline || c.Status == proto.StatusWorking && c.ToolLoop == nil) {
+		finish(true) // the node may still be reconstructing its transcript
+		return true, nil
+	}
 	if !sw.Enabled || !sw.ToolLoop || !matchesToolLoop(c, loop) {
 		finish(false)
 		return true, nil
 	}
 	s.work.mu.Lock()
-	valid := s.work.loops[k] == st && st.cardID == id && st.answering
+	valid = s.work.loops[k] == st && st.cardID == id && st.answering && st.consuming
 	s.work.mu.Unlock()
 	if !valid {
 		return true, nil
