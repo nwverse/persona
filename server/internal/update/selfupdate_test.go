@@ -183,6 +183,58 @@ func TestSwapAndRestore(t *testing.T) {
 	}
 }
 
+// noTemps fails when a .new temp file is left in dir.
+func noTemps(t *testing.T, dir string) {
+	t.Helper()
+	left, err := filepath.Glob(filepath.Join(dir, "*.new"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(left) > 0 {
+		t.Fatalf("temp files left behind: %v", left)
+	}
+}
+
+// A swap whose rename fails (target.prev is a directory that is not empty) removes its temp file and leaves target as
+// it was.
+func TestSwapLeavesNoTempWhenItFails(t *testing.T) {
+	dir := t.TempDir()
+	target, next := filepath.Join(dir, "personad"), filepath.Join(dir, "next")
+	os.WriteFile(target, []byte("old"), 0o755)
+	os.WriteFile(next, []byte("new"), 0o755)
+	if err := os.MkdirAll(filepath.Join(target+".prev", "occupied"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Swap(target, next); err == nil {
+		t.Fatal("swap over an occupied .prev succeeded")
+	}
+	noTemps(t, dir)
+	if b, _ := os.ReadFile(target); string(b) != "old" {
+		t.Fatalf("target %q", b)
+	}
+}
+
+// A marker whose rename fails (the path is a directory that is not empty) removes its temp file.
+func TestSaveLeavesNoTempWhenItFails(t *testing.T) {
+	dir := t.TempDir()
+	path := PendingPath(dir)
+	if err := os.MkdirAll(filepath.Join(path, "occupied"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := Save(path, Pending{ToVersion: "v2"}); err == nil {
+		t.Fatal("save over a directory succeeded")
+	}
+	noTemps(t, dir)
+	if err := Save(RolledBackPath(dir), RolledBack{ToVersion: "v2"}); err != nil {
+		t.Fatal(err)
+	}
+	var back RolledBack
+	if ok, err := Load(RolledBackPath(dir), &back); !ok || err != nil || back.ToVersion != "v2" {
+		t.Fatalf("%v %v %+v", ok, err, back)
+	}
+	noTemps(t, dir)
+}
+
 // The watchdog: the new build confirming ends it; one that never does is put back and restarted; the new version
 // rolling back by itself (the marker gone) ends it too.
 func TestWatch(t *testing.T) {
