@@ -33,8 +33,6 @@
   "contribution_off": "已关掉这一项",
   "change_failed": "没有改：{error}",
   "unsaved": "设置改了还没保存",
-  "keep_editing": "接着改",
-  "discard": "不保存",
   "reload": "重新读取",
   "loading": "正在读取…",
   "unavailable": "读不到",

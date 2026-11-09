@@ -1,0 +1,84 @@
+// @vitest-environment jsdom
+// Settings › Extensions keeps an extension's unsaved configuration while its page is closed (#2800): coming back from
+// another extension's page finds the edits, the save bar and the list's mark; Revert drops them.
+import { act } from "react";
+import { createRoot, type Root } from "react-dom/client";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { HubExtension, HubExtensionDetail } from "../../lib/extensions";
+
+const hub = vi.hoisted(() => ({ list: [] as unknown[], details: {} as Record<string, unknown> }));
+vi.mock("../../lib/extensions", async (original) => ({
+  ...(await original<typeof import("../../lib/extensions")>()),
+  listExtensionsInfo: () => Promise.resolve({ extensions: hub.list, canInstall: false, markets: false }),
+  extensionDetail: (id: string) => Promise.resolve(hub.details[id]),
+}));
+vi.mock("../../lib/store", async (original) => ({ ...(await original<typeof import("../../lib/store")>()), onHubEvent: () => () => {} }));
+vi.mock("../../ui/atoms", async (original) => ({ ...(await original<typeof import("../../ui/atoms")>()), toast: vi.fn() }));
+import { t } from "../../i18n";
+import { setToken } from "../../lib/api";
+import { Extensions } from "./Extensions";
+
+(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+
+const SAVED = "https://notes.example.com";
+const TYPED = "https://notes.example.org";
+const ext = (id: string, name: string): HubExtension => ({ id, name, kind: "process", status: "running", source: "installed", enabled: true });
+hub.list = [ext("example-notes", "Example Notes"), ext("example-quota", "Example Quota")];
+hub.details = {
+  "example-notes": { ...ext("example-notes", "Example Notes"), form: { fields: [{ name: "base_url", type: "string", title: "Service URL" }] }, config: { base_url: SAVED } } as HubExtensionDetail,
+  "example-quota": { ...ext("example-quota", "Example Quota"), form: { fields: [] }, config: {} } as HubExtensionDetail,
+};
+
+let host: HTMLDivElement;
+let root: Root;
+let login = 0;
+beforeEach(() => {
+  setToken(`token-${++login}`); // a new credential: nothing kept from the case before
+  host = document.createElement("div");
+  document.body.append(host);
+  root = createRoot(host);
+});
+afterEach(() => {
+  act(() => root.unmount());
+  host.remove();
+});
+
+const flush = async () => {
+  for (let i = 0; i < 8; i++) await act(async () => { await Promise.resolve(); });
+};
+const show = async (open: string | null) => {
+  act(() => root.render(<Extensions open={open} onOpen={() => {}} />));
+  await flush();
+};
+const input = () => host.querySelector<HTMLInputElement>("input");
+const button = (label: string) => [...host.querySelectorAll("button")].find((b) => b.textContent === label);
+const row = (name: string) => [...host.querySelectorAll("button")].find((b) => b.textContent?.includes(name))!;
+const typeInto = (el: HTMLInputElement, value: string) => {
+  act(() => {
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(el, value);
+    el.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+};
+
+describe("an extension's unsaved configuration", () => {
+  it.each([
+    { name: "stays when another extension is opened and is there on return", revert: false, back: TYPED, unsaved: true },
+    { name: "is gone after Revert: the saved value is there on return", revert: true, back: SAVED, unsaved: false },
+  ])("$name", async ({ revert, back, unsaved }) => {
+    await show("example-notes");
+    expect(input()!.value).toBe(SAVED);
+    typeInto(input()!, TYPED);
+    expect(button(t("settings-extensions.revert"))).toBeDefined();
+    if (revert) act(() => button(t("settings-extensions.revert"))!.click());
+
+    await show("example-quota");
+    expect(input()).toBeNull();
+    await show(null);
+    expect(row("Example Notes").textContent?.includes(t("settings-extensions.unsaved"))).toBe(unsaved);
+    expect(row("Example Quota").textContent).not.toContain(t("settings-extensions.unsaved"));
+
+    await show("example-notes");
+    expect(input()!.value).toBe(back);
+    expect(!!button(t("settings-extensions.revert"))).toBe(unsaved);
+  });
+});

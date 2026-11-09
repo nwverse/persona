@@ -33,8 +33,6 @@
   "contribution_off": "Turned off",
   "change_failed": "Not changed: {error}",
   "unsaved": "Unsaved changes",
-  "keep_editing": "Keep editing",
-  "discard": "Discard",
   "reload": "Reload",
   "loading": "Loading…",
   "unavailable": "Unavailable",

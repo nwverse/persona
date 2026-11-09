@@ -1,8 +1,8 @@
 // Settings › Extensions: all sources use the host-owned layout in ExtensionSettingsPage.
 // This controller owns manager routing, configuration drafts, authentication and mutation results;
 // extensions supply only their configuration fields and custom content (docs/extensions/extension-settings.md).
-import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { enc, errorText } from "../../lib/api";
+import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { enc, errorText, subscribeCredentialOwner } from "../../lib/api";
 import { defaultManager, pinManagerAt, useKnownDefault } from "../../lib/manager-choice";
 import { groupByManager, multiManager, useRoster } from "../../lib/managers";
 import { isResumed } from "../../lib/reconnect";
@@ -208,6 +208,7 @@ function ExtensionList({ onOpen, onMarket, onMarkets }: { onOpen: (id: string) =
   // with several managers, each one's extensions under its name (docs/assistant/managers.md "Clients"); one: as before
   const roster = useRoster();
   const groups = groupByManager(extensions ?? [], roster, (x) => x.manager);
+  const drafts = useUnsaved();
 
   return (
     <>
@@ -278,6 +279,7 @@ function ExtensionList({ onOpen, onMarket, onMarkets }: { onOpen: (id: string) =
           ),
           ...g.items.map((p) => {
             const i = (extensions ?? []).indexOf(p);
+            const kept = drafts.has(unsavedKey(p.id, p.manager));
             return (
               <button
                 key={`${p.manager ?? ""}:${p.id}`}
@@ -294,9 +296,9 @@ function ExtensionList({ onOpen, onMarket, onMarkets }: { onOpen: (id: string) =
                     <span className="truncate text-[13px] text-ink">{p.name}</span>
                     {p.source && p.source !== "installed" && <Pill>{sourceText(p.source)}</Pill>}
                   </div>
-                  {(p.needs_setup?.length || p.error || p.description) && (
-                    <div className={cx("mt-0.5 truncate text-[11.5px]", p.error ? "text-red" : p.needs_setup?.length ? "text-orange" : "text-ink-3")}>
-                      {p.error || (p.needs_setup?.length ? t("settings-extensions.needs_setup", { items: formatList(p.needs_setup, NARROW_LIST) }) : p.description)}
+                  {(kept || p.needs_setup?.length || p.error || p.description) && (
+                    <div className={cx("mt-0.5 truncate text-[11.5px]", p.error ? "text-red" : kept || p.needs_setup?.length ? "text-orange" : "text-ink-3")}>
+                      {p.error || (kept ? t("settings-extensions.unsaved") : p.needs_setup?.length ? t("settings-extensions.needs_setup", { items: formatList(p.needs_setup, NARROW_LIST) }) : p.description)}
                     </div>
                   )}
                 </div>
@@ -327,7 +329,59 @@ function usePinnedExtension(id: string, manager: string | undefined) {
   useLayoutEffect(() => pinManagerAt([`/extensions/${enc(id)}`, `/plugins/${enc(id)}`], manager), [id, manager]);
 }
 
-function ExtensionDetail({ id, manager, onBack, onPage, onUpgrade, onChannel, onConnector }: {
+// ── unsaved configuration ──────────────────────────────────
+
+type Unsaved = { draft: JsonObject; typed: Typed };
+
+/** Configuration edits not saved yet, by manager and extension (`unsavedKey`). They stay in memory while the page is
+ *  closed, so leaving it any way (another extension, another category or page, Back) and coming back finds them; saving
+ *  or Revert drops them, and so does a new credential. Never written to storage: a reload asks first instead. */
+const unsaved = new Map<string, Unsaved>();
+const unsavedListeners = new Set<() => void>();
+let unsavedVersion = 0;
+
+/** The default manager's extension has no manager in its route (the list's rows, OwnedExtension): both name it "". */
+const unsavedKey = (id: string, manager?: string) => `${manager && manager !== defaultManager() ? manager : ""}|${id}`;
+
+function warnUnsaved(e: BeforeUnloadEvent) {
+  e.preventDefault();
+  e.returnValue = ""; // older Safari and Firefox ask only when it is set
+}
+
+function unsavedChanged() {
+  unsavedVersion++;
+  if (unsaved.size) addEventListener("beforeunload", warnUnsaved);
+  else removeEventListener("beforeunload", warnUnsaved);
+  unsavedListeners.forEach((l) => l());
+}
+
+/** Keep an extension's unsaved edits, or drop them (null). The list and the reload prompt follow whether any are kept. */
+function keepUnsaved(key: string, kept: Unsaved | null) {
+  const had = unsaved.has(key);
+  if (kept) unsaved.set(key, kept);
+  else unsaved.delete(key);
+  if (had !== unsaved.has(key)) unsavedChanged();
+}
+
+// Signing out or pairing again: another person's hub (or none), so the edits are not theirs.
+subscribeCredentialOwner(() => {
+  if (!unsaved.size) return;
+  unsaved.clear();
+  unsavedChanged();
+});
+
+function subscribeUnsaved(listener: () => void) {
+  unsavedListeners.add(listener);
+  return () => void unsavedListeners.delete(listener);
+}
+
+/** The kept edits, redrawn when an extension gains or loses them. */
+function useUnsaved(): ReadonlyMap<string, Unsaved> {
+  useSyncExternalStore(subscribeUnsaved, () => unsavedVersion);
+  return unsaved;
+}
+
+function ExtensionDetail({ id, manager, onBack: back, onPage, onUpgrade, onChannel, onConnector }: {
   id: string;
   /** Whose extension it is (several managers); none: the default's. */
   manager?: string;
@@ -354,7 +408,6 @@ function ExtensionDetail({ id, manager, onBack, onPage, onUpgrade, onChannel, on
   const [saving, setSaving] = useState(false);
   const [toggling, setToggling] = useState(false);
   const [secret, setSecret] = useState<ExtensionSecret | null>(null);
-  const [leaving, setLeaving] = useState(false);
   const [dependents, setDependents] = useState<Dependent[] | null>(null);
 
   const apply = (d: HubExtensionDetail) => {
@@ -409,6 +462,28 @@ function ExtensionDetail({ id, manager, onBack, onPage, onUpgrade, onChannel, on
   const canSave = dirty && !Object.keys(problems).length && !saving && !offline;
   const fields = detail?.form?.fields ?? [];
   const editable = !!detail && !detail.read_only && detail.source !== "dev" && detail.source !== "hub.json";
+
+  // Edits outlive the page: kept while the form is dirty, and put back once the page's first read is shown, where the
+  // save bar shows them as unsaved. Saving or Revert leaves the form clean, which drops them.
+  const keptKey = unsavedKey(id, manager);
+  const restored = useRef(false);
+  useEffect(() => {
+    if (restored.current) keepUnsaved(keptKey, dirty ? { draft, typed } : null);
+  }, [keptKey, dirty, draft, typed]);
+  useEffect(() => {
+    if (!detail || restored.current) return;
+    restored.current = true;
+    const kept = unsaved.get(keptKey);
+    if (!kept) return;
+    setDraft(kept.draft);
+    setTyped(kept.typed);
+  }, [detail, keptKey]);
+  /** Back to the list once the extension is gone (uninstalled here or elsewhere): its edits go with it. */
+  const onBack = () => {
+    restored.current = false;
+    keepUnsaved(keptKey, null);
+    back();
+  };
 
   // An operation of this extension that succeeds while the page is open (an upgrade, also the hub's auto-upgrade, or
   // an install or uninstall from another device): its version, upgrades and permissions are read again. A dirty form
@@ -555,26 +630,15 @@ function ExtensionDetail({ id, manager, onBack, onPage, onUpgrade, onChannel, on
   const secretStart = () => writing();
   const secretDone = (n: number, d: HubExtensionDetail) => wrote(n, d);
 
-  const back = () => (dirty ? setLeaving(true) : onBack());
   const p = detail;
 
   return (
     <div>
       <div className="relative mb-3 flex items-center gap-2">
+        {/* unsaved edits stay (the list marks them); Revert in the save bar drops them */}
         <Button tone="quiet" icon="chevronLeft" onClick={back} className="-ml-2">
           {t("settings-extensions.title")}
         </Button>
-        {leaving && (
-          <span className="absolute top-full left-0 z-10 mt-1 flex items-center gap-1 rounded-control bg-surface p-1 shadow-overlay" style={{ animation: `pop-in 160ms ${EASE} both` }}>
-            <span className="px-2 text-[12px] whitespace-nowrap text-ink-2">{t("settings-extensions.unsaved")}</span>
-            <Button tone="quiet" onClick={() => setLeaving(false)}>
-              {t("settings-extensions.keep_editing")}
-            </Button>
-            <Button tone="danger" onClick={onBack}>
-              {t("settings-extensions.discard")}
-            </Button>
-          </span>
-        )}
         <span className="flex-1" />
         <IconButton icon="retry" label={t("settings-extensions.reload")} onClick={load} disabled={loading} />
       </div>

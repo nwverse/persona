@@ -33,8 +33,6 @@
   "contribution_off": "オフにしました",
   "change_failed": "変更できませんでした：{error}",
   "unsaved": "未保存の変更があります",
-  "keep_editing": "編集を続ける",
-  "discard": "破棄",
   "reload": "再読み込み",
   "loading": "読み込み中…",
   "unavailable": "読み込めません",
