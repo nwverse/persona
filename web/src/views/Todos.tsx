@@ -3,8 +3,10 @@ import { memo, useCallback, useEffect, useMemo, useRef, useState, useSyncExterna
 import { api, credentialOwner, enc, errorText, subscribeCredentialOwner } from "../lib/api";
 import { ago, clock, shortPath, stateOf, tabLabel, uuid } from "../lib/format";
 import { launchAgent } from "../lib/new-agent";
+import { initialLauncher, launcherBlock, usableFirst } from "../lib/launcher-health";
 import { navigate } from "../lib/router";
 import { interactionAsk } from "../lib/inbox";
+import { usageLimitLabel } from "../lib/usage-limit";
 import { plainMarkdown } from "../lib/plain-markdown";
 import { composing } from "../lib/send-history";
 import { useAgentSessions } from "../lib/sessions";
@@ -27,6 +29,9 @@ import {
   heldDelivery,
   TODO_TONE_CLASS,
   isAutoDone,
+  isOverdue,
+  todoDueDay,
+  todoDueText,
   todoStatusLabel,
   todoStatus,
   unlinkAgentFromTodo,
@@ -34,6 +39,7 @@ import {
   updateTodo,
   type Todo,
   type TodoAgent,
+  type TodoPatch,
   type TodoDecision,
   type TodoStatus,
   type SessionLookup,
@@ -44,7 +50,7 @@ import { Button, cx, Dialog, IconButton, Loading, Menu, toast, useMenu } from ".
 import { SearchField } from "../ui/SearchField";
 import { StatusMark } from "../ui/StatusMark";
 import { Icon } from "../ui/icons";
-import { t } from "../i18n";
+import { formatDate, t } from "../i18n";
 import { groupTodosByProject, treeStateLabel, type TodoProjectGroup, type TreeState } from "../lib/todo-tree";
 import { useFolded } from "../lib/use-folded";
 import { answeredLookup } from "./assistant/answered-lookup";
@@ -460,7 +466,7 @@ function steadyViews(prev: ReadonlyMap<string, TodoRowView>, next: ReadonlyMap<s
 
 // ── Project Section ──────────────────────────────────────────
 
-const TREE_TONE: Record<TreeState, string> = { needs_you: "text-attention", working: "text-orange", bg_waiting: "text-status-waiting", done: "text-ink-3" };
+const TREE_TONE: Record<TreeState, string> = { needs_you: "text-attention", working: "text-orange", bg_waiting: "text-status-waiting", waiting: "text-ink-2", done: "text-ink-3" };
 
 /** One project's open todos under a folding title with its Needs you / Working / Done (#2526). */
 const TodoProjectSection = memo(function TodoProjectSection({
@@ -530,6 +536,7 @@ export type TodoRowView = {
 const DOT_STATE: Record<TodoStatus, AgentState> = {
   needs_you: "needs_you",
   interrupted: "needs_you",
+  usage_limit: "idle",
   unread: "unread",
   working: "working",
   follow_up: "idle",
@@ -545,6 +552,12 @@ export function todoRowView(todo: Todo, lookup: SessionLookup, interactions: Int
   const activeCount = (todo.agents ?? []).filter((a) => !a.released_at).length;
   const view: TodoRowView = { status, dotState: DOT_STATE[status], age: ago(todo.updated_at || todo.created_at), activeCount, urgentLine: false, urgentLead: "", urgentText: "", ultracode: todoUltracode(todo, lookup) };
   if (todo.done_at || !urgent?.session) return view;
+  const limit = status === "usage_limit" ? usageLimitLabel(urgent.session) : undefined;
+  if (limit) {
+    view.urgentLine = true;
+    view.urgentText = limit;
+    return view;
+  }
   const urgentNow = taskNow(urgent.session, stateOf(urgent.session) === "working");
   const urgentIx = interactions.find((i) => i.machine_id === urgent.agent.machine_id && i.session_id === urgent.agent.session_id);
   // what it waits on, from its card (#4111): the question, the command; not its last words
@@ -656,6 +669,9 @@ const TodoListItem = memo(function TodoListItem({
           {!todo.done_at && <ReviewBadge todo={todo} className="ml-auto" />}
         </div>
 
+        {/* Due date, a reminder still to push, high priority (#1683) */}
+        <TodoPlanLine todo={todo} />
+
         {/* Why the hub closed it */}
         {isAutoDone(todo) && todo.done_reason && (
           <div className="mt-1 truncate text-[11.5px] text-ink-3">{todo.done_reason}</div>
@@ -681,6 +697,125 @@ const TodoListItem = memo(function TodoListItem({
     </div>
   );
 });
+
+const PLAN_FIELD = "rounded-control border border-line bg-canvas px-2 py-1 text-[12.5px] text-ink outline-none focus:border-accent";
+
+/** "YYYY-MM-DD", "HH:MM" and "YYYY-MM-DDTHH:MM" of a moment in local time, as date / time inputs take them. */
+function localParts(ms: number): { day: string; time: string } {
+  const d = new Date(ms);
+  const p = (n: number) => String(n).padStart(2, "0");
+  return { day: `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`, time: `${p(d.getHours())}:${p(d.getMinutes())}` };
+}
+
+/** The detail's due date (a day, with a time when one is set), reminder and priority; each change is saved at once. */
+function TodoPlanEditor({ todo }: { todo: Todo }) {
+  const [busy, setBusy] = useState(false);
+  const save = async (patch: TodoPatch) => {
+    setBusy(true);
+    try {
+      await updateTodo(todo.id, patch);
+      await refreshTodos();
+    } catch (e) {
+      toast(t("todos.save_plan_failed", { error: errorText(e) }), "error");
+    } finally {
+      setBusy(false);
+    }
+  };
+  const at = todo.due_at ? Date.parse(todo.due_at) : NaN;
+  const due = Number.isNaN(at) ? { day: todoDueDay(todo) === undefined ? "" : (todo.due_date ?? ""), time: "" } : localParts(at);
+  const remindAt = todo.remind_at ? Date.parse(todo.remind_at) : NaN;
+  const remind = Number.isNaN(remindAt) ? "" : `${localParts(remindAt).day}T${localParts(remindAt).time}`;
+  const moment = (day: string, time: string) => new Date(`${day}T${time}`).toISOString();
+  return (
+    <div className="mt-4 flex flex-wrap items-center gap-x-5 gap-y-2.5 text-[12.5px] text-ink-2" data-testid="todo-plan">
+      <span className="inline-flex items-center gap-1.5">
+        <Icon name="calendar" size={13} stroke={2} />
+        <span className="whitespace-nowrap">{t("todos.due_label")}</span>
+        <input
+          type="date"
+          aria-label={t("todos.due_label")}
+          value={due.day}
+          disabled={busy}
+          onChange={(e) => {
+            const day = e.target.value;
+            void save(!day ? { due_at: null } : due.time ? { due_at: moment(day, due.time) } : { due_date: day });
+          }}
+          className={PLAN_FIELD}
+          data-testid="todo-plan-due"
+        />
+        {due.day && (
+          <input
+            type="time"
+            aria-label={t("todos.due_time")}
+            value={due.time}
+            disabled={busy}
+            onChange={(e) => void save(e.target.value ? { due_at: moment(due.day, e.target.value) } : { due_date: due.day })}
+            className={PLAN_FIELD}
+            data-testid="todo-plan-due-time"
+          />
+        )}
+      </span>
+      <span className="inline-flex items-center gap-1.5">
+        <Icon name="bell" size={13} stroke={2} />
+        <span className="whitespace-nowrap">{t("todos.remind_label")}</span>
+        <input
+          type="datetime-local"
+          aria-label={t("todos.remind_label")}
+          value={remind}
+          disabled={busy}
+          onChange={(e) => void save({ remind_at: e.target.value ? new Date(e.target.value).toISOString() : null })}
+          className={PLAN_FIELD}
+          data-testid="todo-plan-remind"
+        />
+      </span>
+      <span className="inline-flex items-center gap-1.5">
+        <Icon name="flag" size={13} stroke={2} />
+        <span className="whitespace-nowrap">{t("todos.priority_label")}</span>
+        <select
+          aria-label={t("todos.priority_label")}
+          value={todo.priority ?? ""}
+          disabled={busy}
+          onChange={(e) => void save({ priority: e.target.value })}
+          className={PLAN_FIELD}
+          data-testid="todo-plan-priority"
+        >
+          <option value="high">{t("todos.priority_option_high")}</option>
+          <option value="">{t("todos.priority_normal")}</option>
+          <option value="low">{t("todos.priority_low")}</option>
+        </select>
+      </span>
+    </div>
+  );
+}
+
+/** A to-do's due date, a reminder still to push and high priority under its status (#1683); nothing without them. */
+function TodoPlanLine({ todo }: { todo: Todo }) {
+  const due = todoDueText(todo);
+  const remind = Boolean(todo.remind_at && !todo.reminded_at && !todo.done_at);
+  const high = todo.priority === "high" && !todo.done_at;
+  if (!due && !remind && !high) return null;
+  const overdue = isOverdue(todo);
+  return (
+    <div className="mt-1 flex min-w-0 items-center gap-1.5 text-[11.5px] text-ink-3" data-testid="todo-plan-line">
+      {high && (
+        <span role="img" aria-label={t("todos.priority_high")} title={t("todos.priority_high")} className="inline-flex text-orange">
+          <Icon name="flag" size={12} stroke={2} />
+        </span>
+      )}
+      {due && (
+        <span className={cx("inline-flex min-w-0 items-center gap-1", overdue && "text-red")}>
+          <Icon name="calendar" size={12} stroke={2} />
+          <span className="truncate">{t(overdue ? "todos.was_due" : "todos.due", { when: due })}</span>
+        </span>
+      )}
+      {remind && todo.remind_at && (
+        <span role="img" aria-label={t("todos.reminder_at", { when: formatDate(todo.remind_at, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }) })} className="inline-flex">
+          <Icon name="bell" size={12} stroke={2} />
+        </span>
+      )}
+    </div>
+  );
+}
 
 /** What a waiting agent's card asks, as one line of plain text; empty for a plan (its kicker says it) or no card. */
 function askText(ix: Interaction | undefined): string {
@@ -778,6 +913,8 @@ function TodoDetail({
   const dotState =
     status === "needs_you" || status === "interrupted"
       ? "needs_you"
+      : status === "usage_limit"
+        ? "idle"
       : status === "unread"
         ? "unread"
         : status === "working"
@@ -840,6 +977,9 @@ function TodoDetail({
           {todo.done_reason ? t("todos.auto_done_reason", { reason: todo.done_reason }) : t("todos.auto_done")}
         </p>
       )}
+
+      {/* Due date, reminder, priority (#1683) */}
+      <TodoPlanEditor todo={todo} />
       <ReviewChecklist todo={todo} />
 
       {/* Stage Bar (#2776): progress from plan to verified, from the hub's todo; nothing on hubs that don't send it. */}
@@ -1502,7 +1642,7 @@ function NewTodoDialog({
 
 // ── Handover to Agent Dialog ─────────────────────────────────
 
-function HandoverDialog({
+export function HandoverDialog({
   open,
   todo,
   machines,
@@ -1552,7 +1692,8 @@ function HandoverDialog({
     api<{ launchers: Launcher[] }>(`/machines/${enc(mid)}/launchers`, { signal: controller.signal })
       .then((r) => {
         setLaunchers(r.launchers ?? []);
-        if (r.launchers?.[0]) setLauncher(r.launchers[0].name);
+        // the first this computer can start now, not one its terminal can't run (#1643)
+        if (r.launchers?.length) setLauncher(initialLauncher(null, r.launchers));
       })
       .catch(() => {});
     return () => controller.abort();
@@ -1561,6 +1702,7 @@ function HandoverDialog({
   const previewCard = useMemo(() => {
     return formatTodoContext(todo.title, todo.notes);
   }, [todo]);
+  const pickedBlock = launcherBlock(launchers.find((l) => l.name === launcher));
 
   const submitNew = async () => {
     if (!mid) return;
@@ -1675,12 +1817,22 @@ function HandoverDialog({
                   onChange={(e) => setLauncher(e.target.value)}
                   className="w-full rounded-control border border-line bg-canvas px-2.5 py-1.5 text-[13px] text-ink outline-none"
                 >
-                  {launchers.map((l) => (
-                    <option key={l.name} value={l.name}>
-                      {l.name}
-                    </option>
-                  ))}
+                  {usableFirst(launchers).map((l) => {
+                    const block = launcherBlock(l);
+                    // still a choice (a start that works clears it), with why, after the ones that can start (#1643)
+                    return (
+                      <option key={l.name} value={l.name}>
+                        {block ? `${l.name} · ${block.reason}` : l.name}
+                      </option>
+                    );
+                  })}
                 </select>
+                {pickedBlock && (
+                  <p data-testid="todo-handoff-blocked" className="mt-1.5 flex min-w-0 items-start gap-1.5 text-[11.5px] leading-snug text-ink-3">
+                    <Icon name="warning" size={12} className="mt-px shrink-0 text-orange" />
+                    <span className="min-w-0">{pickedBlock.reason}</span>
+                  </p>
+                )}
               </div>
             )}
           </div>

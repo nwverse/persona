@@ -1,13 +1,13 @@
 package channel
 
 import (
-	"regexp"
 	"slices"
 	"strconv"
 	"strings"
 	"unicode"
 	"unicode/utf8"
 
+	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
@@ -58,7 +58,7 @@ var optionSplits = []func(string) []string{
 }
 
 // listWords join a list of options: "A and B" in Chinese, English and Japanese (and "plus", "&").
-var listWords = regexp.MustCompile(`(?i)\s+(?:and|plus)\s+|\s*(?:&|＆|和|跟|与|以及|还有|と)\s*`)
+var listWords = lazyre.New(`(?i)\s+(?:and|plus)\s+|\s*(?:&|＆|和|跟|与|以及|还有|と)\s*`)
 
 // matchOptions is text as one option, else (split from level on) as several, every piece an option.
 func matchOptions(opts []proto.QuestionOption, text string, level int) ([]int, bool) {
@@ -166,8 +166,8 @@ func byNumber(opts []proto.QuestionOption, n int) (int, bool) {
 // "1.5x", "1,000 rows"), or a Chinese numeral with a measure word ("three replicas", "two machines"; not "one-click
 // deploy", where the numeral is part of a word).
 var (
-	leadingDigits = regexp.MustCompile(`^(\d+)(?:$|[^\d.,]|[.,](?:$|\D))`)
-	leadingCount  = regexp.MustCompile(`^(两|[一二三四五六七八九十]+)(?:个|位|台|份|次|天|周|年|月|倍|条|项|种|小时|分钟|秒)`)
+	leadingDigits = lazyre.New(`^(\d+)(?:$|[^\d.,]|[.,](?:$|\D))`)
+	leadingCount  = lazyre.New(`^(两|[一二三四五六七八九十]+)(?:个|位|台|份|次|天|周|年|月|倍|条|项|种|小时|分钟|秒)`)
 )
 
 // leadingNumber is the number label starts with; false for none.
@@ -449,10 +449,10 @@ func negated(t string) bool {
 // needs the ordinal prefix or "option" before the numeral. The "number" suffix names a place itself, so a bare
 // "No. 2" is one too.
 var (
-	ordinalZh = regexp.MustCompile(`^(?:我|就)?(?:选|选择|要|用)?(?:(?:第|选项|序号)(\d+|[一二三四五六七八九十]+)(?:个|项|条|种|号|款|位)?(?:选项)?|(\d+|[一二三四五六七八九十]+))(?:号)?(?:吧|呢|啊|呀|的|就行|就好|好了)?$`)
-	ordinalJa = regexp.MustCompile(`^(選択肢)?(\d+|[一二三四五六七八九十]+)(番目|番|つ目|個目)?(?:の(?:選択肢|もの|やつ))?(?:で|にします|でお願いします)?$`)
-	ordinalEn = regexp.MustCompile(`^(?:(?:i(?:'ll| will)? )?(?:pick|choose|take|go with|want) )?(?:the )?(?:(option|number|choice|#) ?)?([a-z]+|\d+(?:st|nd|rd|th)?)(?: (?:one|option|choice|answer))?(?: please)?$`)
-	lastOne   = regexp.MustCompile(`^(?:(?:the )?last(?: one| option| choice)?|最后(?:一个|一项|一种|那个)?吧?|最後(?:の(?:選択肢|もの|やつ))?で?)$`)
+	ordinalZh = lazyre.New(`^(?:我|就)?(?:选|选择|要|用)?(?:(?:第|选项|序号)(\d+|[一二三四五六七八九十]+)(?:个|项|条|种|号|款|位)?(?:选项)?|(\d+|[一二三四五六七八九十]+))(?:号)?(?:吧|呢|啊|呀|的|就行|就好|好了)?$`)
+	ordinalJa = lazyre.New(`^(選択肢)?(\d+|[一二三四五六七八九十]+)(番目|番|つ目|個目)?(?:の(?:選択肢|もの|やつ))?(?:で|にします|でお願いします)?$`)
+	ordinalEn = lazyre.New(`^(?:(?:i(?:'ll| will)? )?(?:pick|choose|take|go with|want) )?(?:the )?(?:(option|number|choice|#) ?)?([a-z]+|\d+(?:st|nd|rd|th)?)(?: (?:one|option|choice|answer))?(?: please)?$`)
+	lastOne   = lazyre.New(`^(?:(?:the )?last(?: one| option| choice)?|最后(?:一个|一项|一种|那个)?吧?|最後(?:の(?:選択肢|もの|やつ))?で?)$`)
 	enOrdinal = map[string]int{"first": 1, "second": 2, "third": 3, "fourth": 4, "fifth": 5, "sixth": 6, "seventh": 7,
 		"eighth": 8, "ninth": 9, "tenth": 10}
 	enCardinal = map[string]int{"one": 1, "two": 2, "three": 3, "four": 4, "five": 5, "six": 6, "seven": 7, "eight": 8,

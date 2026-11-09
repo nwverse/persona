@@ -190,6 +190,9 @@ class HubGroupConnectionTest {
                     group(home.endpoint("lan"), home.hubId, member(other, "b-token"), member(third, null), revoked = revoked).use { connection ->
                         connection.updateNetwork(HubNetwork("network"))
                         withTimeout(10_000) { connection.state.first { it == ConnectionState.Revoked } }
+                        // The last refusal publishes Revoked first and reports its hub just after, outside the lock;
+                        // wait for that report instead of assuming it already arrived.
+                        eventually { revoked.size >= 3 }
                         assertEquals(listOf("hub-a" to true, "hub-b" to true, "hub-c" to false), (revoked.toList()).zhAny())
                         assertEquals(HubError.PairingExpired, connection.failure.value?.kind)
                         // Revoked is final: nothing is tried again.

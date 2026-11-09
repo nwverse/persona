@@ -41,6 +41,28 @@ class ShardTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 python.select_suites(suites, index, count)
 
+    def test_only_unittest_suites_run(self):
+        # Verification scripts named test_*.py take arguments and have no tests: unittest exits 5 on them from Python 3.12.
+        found = [suite for suite in ROOT.joinpath("scripts").rglob("test_*.py") if "node_modules" not in suite.parts]
+        skipped = {suite.relative_to(ROOT).as_posix() for suite in found if not python.is_suite(suite)}
+        self.assertTrue({"scripts/test/test_rolling_compatibility.py", "scripts/test/test_source_development_resources.py"} <= skipped)
+        self.assertTrue(python.is_suite(Path(__file__)))
+        self.assertTrue(python.is_suite(ROOT / "scripts/test/test_doc_paths.py"))
+
+    def test_source_server_shard_installs_the_pinned_bundler(self):
+        workflow = (ROOT / ".github/workflows/server-test.yml").read_text()
+        setup = """      - uses: oven-sh/setup-bun@v2
+        if: matrix.shard == 'other'
+        with:
+          bun-version: '1.4.2'
+"""
+        self.assertIn(setup, workflow)
+        self.assertLess(workflow.index(setup), workflow.index("      - name: Server checks"))
+        for filename in ("ci.yml", "runtimes-test.yml"):
+            self.assertIn("bun-version: '1.4.2'", (ROOT / ".github/workflows" / filename).read_text())
+        source_packages = ["example/server/internal/extension/denohost", "example/server/internal/extmgr"]
+        self.assertEqual(server.select_packages(source_packages, "other"), source_packages)
+
     def test_server_workflow_covers_build_and_every_test_shard(self):
         workflow = (ROOT / ".github/workflows/server-test.yml").read_text()
         self.assertIn("shard: [node, managers, other, build]", workflow)

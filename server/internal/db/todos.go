@@ -34,7 +34,21 @@ type TodoRow struct {
 	// Quiet: a task from the main conversation while assistant.main_tasks_quiet was on (#1731): no pushes, Live
 	// Activity or task badges; the main conversation hears about it instead. Set once, when it is made.
 	Quiet bool `json:"quiet"`
+	// DueAt is the moment it is due, DueDate the day (midnight UTC: a calendar day, read in the user's time zone);
+	// at most one is set (#1683). RemindAt is when the phone is pushed about it, RemindedAt when that was done;
+	// Priority is "" (normal), PriorityHigh or PriorityLow.
+	DueAt      *time.Time `json:"due_at"`
+	DueDate    *time.Time `json:"due_date"`
+	RemindAt   *time.Time `json:"remind_at"`
+	RemindedAt *time.Time `json:"reminded_at"`
+	Priority   string     `json:"priority"`
 }
+
+// A todo's priorities besides normal ("").
+const (
+	PriorityHigh = "high"
+	PriorityLow  = "low"
+)
 
 // DoneByAuto marks a todo the hub closed because its task's work was judged finished (docs/assistant/todos.md "Auto-complete").
 const DoneByAuto = "auto"
@@ -65,7 +79,14 @@ type TodoAgentRow struct {
 	DismissedAt *time.Time `json:"dismissed_at"`
 }
 
-const todoColumns = `id, title, notes, done_at, created_at, updated_at, origin, plan_id, start_error, done_by, done_reason, reopened_at, quiet`
+const todoColumns = `id, title, notes, done_at, created_at, updated_at, origin, plan_id, start_error, done_by, done_reason, reopened_at, quiet,
+	due_at, due_date, remind_at, reminded_at, priority`
+
+// todoDest is where a row of todoColumns is scanned to.
+func todoDest(r *TodoRow) []any {
+	return []any{&r.ID, &r.Title, &r.Notes, &r.DoneAt, &r.CreatedAt, &r.UpdatedAt, &r.Origin, &r.PlanID, &r.StartError, &r.DoneBy,
+		&r.DoneReason, &r.ReopenedAt, &r.Quiet, &r.DueAt, &r.DueDate, &r.RemindAt, &r.RemindedAt, &r.Priority}
+}
 
 // ListTodos returns all todos ordered by created_at DESC.
 func (d *DB) ListTodos(ctx context.Context) ([]TodoRow, error) {
@@ -77,7 +98,7 @@ func (d *DB) ListTodos(ctx context.Context) ([]TodoRow, error) {
 	var out []TodoRow
 	for rows.Next() {
 		var r TodoRow
-		if err := rows.Scan(&r.ID, &r.Title, &r.Notes, &r.DoneAt, &r.CreatedAt, &r.UpdatedAt, &r.Origin, &r.PlanID, &r.StartError, &r.DoneBy, &r.DoneReason, &r.ReopenedAt, &r.Quiet); err != nil {
+		if err := rows.Scan(todoDest(&r)...); err != nil {
 			return nil, err
 		}
 		out = append(out, r)
@@ -125,7 +146,7 @@ func (d *DB) ListAllTodoAgents(ctx context.Context) ([]TodoAgentRow, error) {
 func (d *DB) GetTodo(ctx context.Context, id string) (*TodoRow, error) {
 	var r TodoRow
 	err := d.pool.QueryRow(ctx, `SELECT `+todoColumns+` FROM todos WHERE id = $1`, id).
-		Scan(&r.ID, &r.Title, &r.Notes, &r.DoneAt, &r.CreatedAt, &r.UpdatedAt, &r.Origin, &r.PlanID, &r.StartError, &r.DoneBy, &r.DoneReason, &r.ReopenedAt, &r.Quiet)
+		Scan(todoDest(&r)...)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrTodoNotFound
 	}
@@ -137,13 +158,76 @@ func (d *DB) GetTodo(ctx context.Context, id string) (*TodoRow, error) {
 
 // CreateTodo inserts a new todo.
 func (d *DB) CreateTodo(ctx context.Context, t TodoRow) error {
-	_, err := d.pool.Exec(ctx, `INSERT INTO todos (id, title, notes, done_at, created_at, updated_at, origin, plan_id, start_error, done_by, done_reason, reopened_at, quiet) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)`,
-		t.ID, t.Title, t.Notes, t.DoneAt, t.CreatedAt, t.UpdatedAt, t.Origin, t.PlanID, t.StartError, t.DoneBy, t.DoneReason, t.ReopenedAt, t.Quiet)
+	_, err := d.pool.Exec(ctx, `INSERT INTO todos (id, title, notes, done_at, created_at, updated_at, origin, plan_id, start_error, done_by,
+		done_reason, reopened_at, quiet, due_at, due_date, remind_at, reminded_at, priority)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)`,
+		t.ID, t.Title, t.Notes, t.DoneAt, t.CreatedAt, t.UpdatedAt, t.Origin, t.PlanID, t.StartError, t.DoneBy, t.DoneReason, t.ReopenedAt, t.Quiet,
+		t.DueAt, t.DueDate, t.RemindAt, t.RemindedAt, t.Priority)
 	return err
 }
 
 // UpdateTodo updates only the fields that are non-nil.
 func (d *DB) UpdateTodo(ctx context.Context, id string, title *string, notes *string, done *bool, updatedAt time.Time) (*TodoRow, error) {
+	return d.EditTodo(ctx, id, TodoEdit{Title: title, Notes: notes, Done: done}, updatedAt)
+}
+
+// TodoEdit is a change to a todo by the user or the assistant on their behalf (#1683): the fields that are non-nil, and
+// the due date and the reminder when SetDue / SetRemind (nil clears them).
+type TodoEdit struct {
+	Title, Notes *string
+	Done         *bool
+	SetDue       bool
+	DueAt        *time.Time
+	DueDate      *time.Time
+	SetRemind    bool
+	RemindAt     *time.Time
+	Priority     *string
+}
+
+// Apply makes the edit to cur at the moment at: done stamps done_at (once), not done reopens it (reopened_at, no
+// longer failed); a reminder at another moment is to be pushed again. The store and the store-less memory both
+// change a todo with it.
+func (e TodoEdit) Apply(cur *TodoRow, at time.Time) {
+	if e.Title != nil {
+		cur.Title = *e.Title
+	}
+	if e.Notes != nil {
+		cur.Notes = *e.Notes
+	}
+	if e.Done != nil {
+		if *e.Done {
+			if cur.DoneAt == nil {
+				cur.DoneAt = &at
+				cur.DoneBy, cur.DoneReason = "", ""
+			}
+		} else {
+			if cur.DoneAt != nil {
+				cur.ReopenedAt = &at // the same stretch of work must not close it again
+			}
+			cur.DoneAt = nil
+			cur.StartError = "" // reopened: no longer failed
+			cur.DoneBy, cur.DoneReason = "", ""
+		}
+	}
+	if e.SetDue {
+		cur.DueAt, cur.DueDate = e.DueAt, e.DueDate
+	}
+	if e.SetRemind && !sameMoment(cur.RemindAt, e.RemindAt) {
+		cur.RemindAt, cur.RemindedAt = e.RemindAt, nil
+	}
+	if e.Priority != nil {
+		cur.Priority = *e.Priority
+	}
+	cur.UpdatedAt = at
+}
+
+func sameMoment(a, b *time.Time) bool {
+	return a == nil && b == nil || a != nil && b != nil && a.Equal(*b)
+}
+
+// EditTodo makes edit e to todo id at updatedAt (TodoEdit.Apply) and returns the row as it is now; ErrTodoNotFound when
+// it is not there.
+func (d *DB) EditTodo(ctx context.Context, id string, e TodoEdit, updatedAt time.Time) (*TodoRow, error) {
 	conn, err := d.pool.Acquire(ctx)
 	if err != nil {
 		return nil, err
@@ -154,40 +238,19 @@ func (d *DB) UpdateTodo(ctx context.Context, id string, title *string, notes *st
 	err = pgx.BeginFunc(ctx, conn, func(tx pgx.Tx) error {
 		var cur TodoRow
 		err := tx.QueryRow(ctx, `SELECT `+todoColumns+` FROM todos WHERE id = $1 FOR UPDATE`, id).
-			Scan(&cur.ID, &cur.Title, &cur.Notes, &cur.DoneAt, &cur.CreatedAt, &cur.UpdatedAt, &cur.Origin, &cur.PlanID, &cur.StartError, &cur.DoneBy, &cur.DoneReason, &cur.ReopenedAt, &cur.Quiet)
+			Scan(todoDest(&cur)...)
 		if errors.Is(err, pgx.ErrNoRows) {
 			return ErrTodoNotFound
 		}
 		if err != nil {
 			return err
 		}
-
-		if title != nil {
-			cur.Title = *title
-		}
-		if notes != nil {
-			cur.Notes = *notes
-		}
-		if done != nil {
-			if *done {
-				if cur.DoneAt == nil {
-					cur.DoneAt = &updatedAt
-					cur.DoneBy, cur.DoneReason = "", ""
-				}
-			} else {
-				if cur.DoneAt != nil {
-					cur.ReopenedAt = &updatedAt // the same stretch of work must not close it again
-				}
-				cur.DoneAt = nil
-				cur.StartError = "" // reopened: no longer failed
-				cur.DoneBy, cur.DoneReason = "", ""
-			}
-		}
-		cur.UpdatedAt = updatedAt
-
+		e.Apply(&cur, updatedAt)
 		_, err = tx.Exec(ctx, `UPDATE todos SET title = $2, notes = $3, done_at = $4, updated_at = $5, start_error = $6,
-			done_by = $7, done_reason = $8, reopened_at = $9 WHERE id = $1`,
-			cur.ID, cur.Title, cur.Notes, cur.DoneAt, cur.UpdatedAt, cur.StartError, cur.DoneBy, cur.DoneReason, cur.ReopenedAt)
+			done_by = $7, done_reason = $8, reopened_at = $9, due_at = $10, due_date = $11, remind_at = $12, reminded_at = $13,
+			priority = $14 WHERE id = $1`,
+			cur.ID, cur.Title, cur.Notes, cur.DoneAt, cur.UpdatedAt, cur.StartError, cur.DoneBy, cur.DoneReason, cur.ReopenedAt,
+			cur.DueAt, cur.DueDate, cur.RemindAt, cur.RemindedAt, cur.Priority)
 		if err != nil {
 			return err
 		}
@@ -200,13 +263,25 @@ func (d *DB) UpdateTodo(ctx context.Context, id string, title *string, notes *st
 	return &updated, nil
 }
 
+// ClaimTodoReminder marks todo id reminded at now, but only while its reminder is still the one at remindAt, not yet
+// pushed and the todo not done: true when this call claimed it (the caller pushes it), false when it is gone, done,
+// moved or already claimed. Claimed before the push, so a push is never made twice (a lost one is not retried).
+func (d *DB) ClaimTodoReminder(ctx context.Context, id string, remindAt, now time.Time) (bool, error) {
+	tag, err := d.pool.Exec(ctx, `UPDATE todos SET reminded_at = $3
+		WHERE id = $1 AND remind_at = $2 AND reminded_at IS NULL AND done_at IS NULL`, id, remindAt, now)
+	if err != nil {
+		return false, err
+	}
+	return tag.RowsAffected() == 1, nil
+}
+
 // RetitleTodo replaces a todo's title with to only while it is still from: an automatic title (#2775) never writes
 // over one the user gave meanwhile. False (and no error) when the title had changed or the todo is gone.
 func (d *DB) RetitleTodo(ctx context.Context, id, from, to string, at time.Time) (*TodoRow, bool, error) {
 	var r TodoRow
 	err := d.pool.QueryRow(ctx, `UPDATE todos SET title = $3, updated_at = $4 WHERE id = $1 AND title = $2
 		RETURNING `+todoColumns, id, from, to, at).
-		Scan(&r.ID, &r.Title, &r.Notes, &r.DoneAt, &r.CreatedAt, &r.UpdatedAt, &r.Origin, &r.PlanID, &r.StartError, &r.DoneBy, &r.DoneReason, &r.ReopenedAt, &r.Quiet)
+		Scan(todoDest(&r)...)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, false, nil
 	}
@@ -221,7 +296,7 @@ func (d *DB) FailTodo(ctx context.Context, id, startError string, at time.Time) 
 	var r TodoRow
 	err := d.pool.QueryRow(ctx, `UPDATE todos SET done_at = COALESCE(done_at, $2), start_error = $3, updated_at = $2 WHERE id = $1
 		RETURNING `+todoColumns, id, at, startError).
-		Scan(&r.ID, &r.Title, &r.Notes, &r.DoneAt, &r.CreatedAt, &r.UpdatedAt, &r.Origin, &r.PlanID, &r.StartError, &r.DoneBy, &r.DoneReason, &r.ReopenedAt, &r.Quiet)
+		Scan(todoDest(&r)...)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrTodoNotFound
 	}
@@ -238,7 +313,7 @@ func (d *DB) RetryTodo(ctx context.Context, id string, at time.Time) (*TodoRow, 
 	err := d.pool.QueryRow(ctx, `UPDATE todos SET done_at = NULL, start_error = '', done_by = '', done_reason = '',
 		reopened_at = $2, updated_at = $2 WHERE id = $1 AND done_at IS NOT NULL AND start_error <> ''
 		RETURNING `+todoColumns, id, at).
-		Scan(&r.ID, &r.Title, &r.Notes, &r.DoneAt, &r.CreatedAt, &r.UpdatedAt, &r.Origin, &r.PlanID, &r.StartError, &r.DoneBy, &r.DoneReason, &r.ReopenedAt, &r.Quiet)
+		Scan(todoDest(&r)...)
 	if errors.Is(err, pgx.ErrNoRows) {
 		if _, gerr := d.GetTodo(ctx, id); gerr != nil {
 			return nil, false, gerr
@@ -258,7 +333,7 @@ func (d *DB) AutoDoneTodo(ctx context.Context, id, reason string, at, workSince 
 	err := d.pool.QueryRow(ctx, `UPDATE todos SET done_at = $2, done_by = $3, done_reason = $4, updated_at = $2
 		WHERE id = $1 AND done_at IS NULL AND (reopened_at IS NULL OR reopened_at < $5)
 		RETURNING `+todoColumns, id, at, DoneByAuto, reason, workSince).
-		Scan(&r.ID, &r.Title, &r.Notes, &r.DoneAt, &r.CreatedAt, &r.UpdatedAt, &r.Origin, &r.PlanID, &r.StartError, &r.DoneBy, &r.DoneReason, &r.ReopenedAt, &r.Quiet)
+		Scan(todoDest(&r)...)
 	if errors.Is(err, pgx.ErrNoRows) {
 		if _, gerr := d.GetTodo(ctx, id); gerr != nil {
 			return nil, false, gerr

@@ -18,6 +18,24 @@ SPEC.loader.exec_module(ISOLATION)
 
 
 class ServerTestEnvironmentTests(unittest.TestCase):
+    def test_parent_proxy_routes_are_removed_without_changing_the_parent_or_build_inputs(self):
+        proxies = {key: "http://proxy.example.invalid:8080" for key in (
+            "HTTP_PROXY", "http_proxy", "HTTPS_PROXY", "https_proxy", "ALL_PROXY", "all_proxy",
+            "NO_PROXY", "no_proxy")}
+        parent = dict(proxies, PATH="/usr/bin", GOPROXY="https://modules.example.invalid",
+                      PERSONA_HOME="/example/live", CODEX_HOME="/example/live/codex")
+        original = dict(parent)
+        child = ISOLATION.clean_environment(parent)
+        self.assertEqual(parent, original)
+        self.assertFalse(set(proxies) & set(child))
+        self.assertEqual(child["PATH"], "/usr/bin")
+        self.assertEqual(child["GOPROXY"], parent["GOPROXY"])
+        self.assertNotIn("PERSONA_HOME", child)
+        self.assertNotIn("CODEX_HOME", child)
+        # A fixture's explicit routing is set after launch and must remain usable.
+        child["HTTPS_PROXY"] = "http://fixture.example.invalid:8080"
+        self.assertEqual(child["HTTPS_PROXY"], "http://fixture.example.invalid:8080")
+
     def test_database_url_targets_only_the_dedicated_test_database(self):
         with tempfile.TemporaryDirectory() as directory:
             config = Path(directory) / "hub.json"
@@ -94,6 +112,7 @@ class ServerTestEnvironmentTests(unittest.TestCase):
                 "CLAUDE_CONFIG_DIR": str(profile / "claude"), "CODEX_HOME": str(profile / "codex"),
                 "XDG_CONFIG_HOME": str(profile / "xdg"), "ZDOTDIR": str(profile / "shell"),
                 "BASH_ENV": str(profile / "shellrc"), "ENV": str(profile / "envrc"), "GOTOOLCHAIN": "local",
+                "HTTPS_PROXY": "http://proxy.example.invalid:8080", "https_proxy": "http://proxy.example.invalid:8080",
             }
             caches = {key: str(root / key.lower()) for key in ("GOCACHE", "GOMODCACHE", "GOPATH")}
             homes = []
@@ -102,6 +121,8 @@ class ServerTestEnvironmentTests(unittest.TestCase):
                 child = kwargs["env"]
                 if command[:2] == ["go", "env"]:
                     self.assertFalse(any(key.startswith(("PERSONA_", "PG")) for key in child))
+                    self.assertEqual(child["HTTPS_PROXY"], environment["HTTPS_PROXY"])
+                    self.assertEqual(child["https_proxy"], environment["https_proxy"])
                     return subprocess.CompletedProcess(command, 0, json.dumps(caches))
                 homes.append(Path(child["HOME"]))
                 self.assertTrue(homes[-1].is_dir())
@@ -113,6 +134,8 @@ class ServerTestEnvironmentTests(unittest.TestCase):
                 self.assertEqual(child['JARVIS_TEST_DATABASE_URL'], child['PERSONA_TEST_DATABASE_URL'])
                 self.assertEqual(urlsplit(child["PERSONA_TEST_DATABASE_URL"]).path, "/persona_test")
                 self.assertFalse(any(key.startswith("PG") for key in child))
+                self.assertNotIn("HTTPS_PROXY", child)
+                self.assertNotIn("https_proxy", child)
                 self.assertFalse(any(str(profile) in value for value in child.values()))
                 self.assertEqual(child["GOTOOLCHAIN"], "local")
                 for key, value in caches.items():
@@ -148,8 +171,12 @@ class ServerTestEnvironmentTests(unittest.TestCase):
             profile = remote / "live-profile"
             for path in (checkout / "scripts/test", checkout / "server", checkout / "spec", checkout / "apple",
                          checkout / "docs", checkout / "sdk/go/ext", checkout / "sdk/go/wire/schema",
-                         checkout / "sdk/templates/go", checkout / "schema/extension/examples/invalid", tools, profile):
+                         checkout / "sdk/templates/go", checkout / "sdk/ts/src", checkout / "sdk/ts/node_modules/typescript",
+                         checkout / "schema/extension/examples/invalid", tools, profile):
                 path.mkdir(parents=True)
+            # the extension page tests bundle the TypeScript SDK's sources on the hub; its node_modules stays here (#1947)
+            (checkout / "sdk/ts/src/index.ts").write_text("export const fixture = true;\n")
+            (checkout / "sdk/ts/node_modules/typescript/package.json").write_text('{"name":"typescript"}\n')
             (checkout / "docs/guide.md").write_text("# Fixture guide\n")
             (checkout / "sdk/templates/go/persona-extension.json").write_text('{"template":true}\n')
             sdk = checkout / "sdk/go"
@@ -165,8 +192,10 @@ class ServerTestEnvironmentTests(unittest.TestCase):
             shutil.copy2(ROOT / "scripts/test/test-server.sh", checkout / "scripts/test/test-server.sh")
             shutil.copy2(ROOT / "scripts/test/server_test_env.py", checkout / "scripts/test/server_test_env.py")
             (checkout / "scripts/persona_config.py").write_text("print('export PERSONA_HUB_SSH=fake-hub')\n")
+            identity_calls = root / "identity-calls.jsonl"
             (checkout / "scripts/persona_identity.py").write_text(
-                "import shlex,sys\n"
+                "import json,shlex,sys\n"
+                f"open({str(identity_calls)!r},'a').write(json.dumps(sys.argv[1:])+'\\n')\n"
                 f"root={str(profile)!r}\n"
                 "print('export PERSONA_HOME='+shlex.quote(root))\n"
                 "if '--prepare' in sys.argv: print('test -f \"$PERSONA_HOME/hub.json\"')\n")
@@ -193,7 +222,9 @@ class ServerTestEnvironmentTests(unittest.TestCase):
                  "else:\n"
                  " assert source.is_dir() and destination.parent.is_dir()\n"
                  " if '--delete' in sys.argv and destination.exists(): shutil.rmtree(destination)\n"
-                 " shutil.copytree(source,destination,dirs_exist_ok=True)\n"
+                 # a plain --exclude NAME leaves NAME out; with --include filters (apple/, docs/) the fixture copies all
+                 " skip=[a for i,a in enumerate(sys.argv) if i and sys.argv[i-1]=='--exclude'] if '--include' not in sys.argv else []\n"
+                 " shutil.copytree(source,destination,dirs_exist_ok=True,ignore=shutil.ignore_patterns(*skip) if skip else None)\n"
                  "if str(source)=='sdk/go':\n"
                  f" pathlib.Path({str(sdk_capture)!r}).write_text(json.dumps(sys.argv[1:]))\n"
                  "if str(source)=='schema/extension':\n"
@@ -213,6 +244,8 @@ class ServerTestEnvironmentTests(unittest.TestCase):
                  "assert not (schema/'stale.json').exists()\n"
                  "assert (base/'docs/guide.md').read_text()=='# Fixture guide\\n'\n"
                  "assert (base/'sdk/templates/go/persona-extension.json').read_text()=='{\"template\":true}\\n'\n"
+                 "assert (base/'sdk/ts/src/index.ts').read_text()=='export const fixture = true;\\n'\n"
+                 "assert not (base/'sdk/ts/node_modules').exists()\n"
                  f"pathlib.Path({str(capture)!r}).write_text(json.dumps({{'args':sys.argv[1:],'env':dict(os.environ),'sdk_source':(sdk/'ext/fixture.go').read_text()}}))\n"
                  "sys.exit(int(os.environ.get('FAKE_GO_EXIT','0')))\n")
             environment = {
@@ -251,6 +284,8 @@ class ServerTestEnvironmentTests(unittest.TestCase):
                                      ["-a", "--delete", "schema/extension/",
                                       "fake-hub:.cache/persona-test-checkout/schema/extension/"])
                     self.assertFalse((remote_schema / "stale.json").exists())
+                    # the pinned Bun lives in the hub user's ~/.local/bin, which a non-interactive shell may lack (#1947)
+                    self.assertIn(str(remote / ".local/bin"), child["PATH"].split(os.pathsep))
                     self.assertEqual(recorded["args"], expected)
                     self.assertEqual({key for key in child if key.startswith(("PERSONA_"))},
                                      {"PERSONA_TEST_DATABASE_URL"})
@@ -266,6 +301,11 @@ class ServerTestEnvironmentTests(unittest.TestCase):
                     self.assertNotIn("synthetic-live-token", result.stdout + result.stderr)
                     self.assertNotIn("synthetic-live-password", result.stdout + result.stderr)
                     self.assertNotIn("postgres://", result.stdout + result.stderr)
+                    # a test run resolves the hub's state directory and never prepares it (#1424): preparing creates the
+                    # directory and its old-name alias
+                    calls = [json.loads(line) for line in identity_calls.read_text().splitlines()]
+                    self.assertTrue(calls)
+                    self.assertFalse([call for call in calls if "--prepare" in call], calls)
             capture.unlink(missing_ok=True)
             cache_capture.unlink(missing_ok=True)
             for source in (

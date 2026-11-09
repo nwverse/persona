@@ -8,6 +8,8 @@ import "encoding/json"
 // base"'s until the user picks another). The extension never sees a key. No budget and no cap (the user's decision):
 // what a call spent comes back in its usage.
 const (
+	// MethodExtensionIdentity probes the authenticated assistant's stable extension ownership support.
+	MethodExtensionIdentity = "extensions.identity"
 	// MethodModelComplete is the extension-facing method (schema/extension/models.schema.json).
 	MethodModelComplete = "model.complete"
 	// MethodModelsExtensionComplete is how the manager hands the assistant an extension's model.complete:
@@ -26,8 +28,12 @@ const (
 	// CodeModelPaused: the connection is held (quota used up or busy, ai.IsPaused); data ModelPause. Nothing was
 	// sent: try again after until.
 	CodeModelPaused = "model_paused"
-	// CodeModelFailed: the upstream refused or failed the request (its message says why).
+	// CodeModelFailed: the upstream failed the request (its message says why): an error status, a dropped
+	// connection. A declined request is CodeModelRefused instead.
 	CodeModelFailed = "model_failed"
+	// CodeModelRefused: the model declined to answer this input (a refusal, a content filter); data ModelRefusal.
+	// Sending it again unchanged gets the same answer: split it, drop a part or report it instead.
+	CodeModelRefused = "model_refused"
 	// CodeInvalidOutput: with json_schema, the reply was still not JSON matching it after one more try; data
 	// ModelInvalidOutput.
 	CodeInvalidOutput = "invalid_output"
@@ -40,14 +46,30 @@ const ExtensionPurposePrefix = "extension."
 
 // ModelExtension is an extension with a model purpose of its own.
 type ModelExtension struct {
-	ID   string `json:"id"`
-	Name string `json:"name"`
+	StorageID string `json:"storage_id,omitempty"`
+	ID        string `json:"id"`
+	Name      string `json:"name"`
 }
 
 // ExtensionComplete is an extension's model.complete params as it sent them, and who it is.
 type ExtensionComplete struct {
+	StorageID string          `json:"storage_id,omitempty"`
 	Extension string          `json:"extension"`
 	Params    json.RawMessage `json:"params"`
+}
+
+func (x ModelExtension) StorageKey() string {
+	if x.StorageID != "" {
+		return x.StorageID
+	}
+	return x.ID
+}
+
+func (x ExtensionComplete) StorageKey() string {
+	if x.StorageID != "" {
+		return x.StorageID
+	}
+	return x.Extension
 }
 
 // ModelMessage is one turn: the user's (role user) or the model's earlier answer (role assistant).
@@ -102,4 +124,11 @@ type ModelInvalidOutput struct {
 	Problem string     `json:"problem"`
 	Text    string     `json:"text"`
 	Usage   ModelUsage `json:"usage"`
+}
+
+// ModelRefusal is the data of model_refused: what the upstream said and what the declined call spent.
+type ModelRefusal struct {
+	// StopReason is the upstream's reason: refusal or content_filter.
+	StopReason string     `json:"stop_reason,omitempty"`
+	Usage      ModelUsage `json:"usage"`
 }

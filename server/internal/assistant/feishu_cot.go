@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"maps"
-	"regexp"
 	"slices"
 	"strings"
 	"time"
@@ -14,6 +13,7 @@ import (
 	"github.com/nwverse/persona/server/internal/channel"
 	"github.com/nwverse/persona/server/internal/feishubot"
 	"github.com/nwverse/persona/server/internal/i18n"
+	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/rpc"
 )
@@ -446,7 +446,7 @@ func addProcessPanel(l i18n.Lang, c *feishubot.Card, steps []string, maxSteps in
 
 // panelEntityStart matches a dangling entity prefix the card escapers emit ("&#124;"-style number or "&sim") at
 // the cut; a literal '&' before other text stays.
-var panelEntityStart = regexp.MustCompile(`&(?:#[0-9]{0,5}|s(?:i(?:m)?)?)?$`)
+var panelEntityStart = lazyre.New(`&(?:#[0-9]{0,5}|s(?:i(?:m)?)?)?$`)
 
 // clipPanelLine cuts an already card-escaped line to n runes plus an ellipsis, never splitting an escape entity;
 // a literal '&' stays.

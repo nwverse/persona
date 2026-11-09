@@ -16,7 +16,7 @@ final class IPadSidebarTests: XCTestCase {
         }
         app = XCUIApplication()
         let pair = "persona://pair?url=" + hub.addingPercentEncoding(withAllowedCharacters: .alphanumerics)! + "&token=mock"
-        app.launchArguments = ["-pairURL", pair, "-tab", "assistant", "-ui.oldLayout", "NO"]
+        app.launchArguments = ["-pairURL", pair, "-tab", "assistant"]
     }
 
     override func tearDown() {

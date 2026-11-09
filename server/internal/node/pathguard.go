@@ -10,11 +10,11 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
-	"regexp"
 	"slices"
 	"strings"
 
 	"github.com/nwverse/persona/server/internal/identity"
+	"github.com/nwverse/persona/server/internal/lazyre"
 )
 
 // What a client may look at by a path a conversation names (fs.stat, file.read, fs.list, downloads): anything the
@@ -48,7 +48,7 @@ var keyNames = map[string]bool{"id_rsa": true, "id_dsa": true, "id_ecdsa": true,
 
 // hubKeyExt matches key files in the hub's folder, including backup suffixes. The list of the data folder's secrets is
 // shared with the agent sandbox (identity/secrets.go).
-var hubKeyExt = regexp.MustCompile(identity.DataKeyPattern)
+var hubKeyExt = lazyre.New(identity.DataKeyPattern)
 
 // procSecrets are what Linux's /proc holds besides the processes' own folders that hands out a secret: the kernel's
 // memory, its log, its symbols' addresses, the keyrings' entries and the page tables (#4172).
@@ -76,6 +76,10 @@ func (n *Node) offLimits(path string) error {
 	// The hub's, the node's and the managers' own folders: the credentials in them and the keys beside them (secret.key,
 	// handles.key, hub.key, the APNs .p8), wherever PERSONA_HOME puts the folder.
 	if slices.ContainsFunc(n.inDataDirs(p), dataSecret) {
+		return errOffLimits
+	}
+	// Agent credentials in every Claude Code config directory and Codex home the node knows (agentsecrets.go).
+	if n.agentSecret(path) {
 		return errOffLimits
 	}
 

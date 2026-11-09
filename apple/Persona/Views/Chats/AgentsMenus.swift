@@ -130,23 +130,23 @@ struct AgentsListMenu: View {
     @ViewBuilder private func label(_ chosen: MachineChoice?, hub: String?) -> some View {
             if let m = chosen {
                 HStack(spacing: Theme.Space.sm) {
-                    Image(systemName: m.symbol)
+                    ThemedIcon(m.symbol)
                     Text(m.name).lineLimit(1)
-                    Image(systemName: Theme.Icon.expand).font(Theme.Font.labelHeavy)
+                    ThemedIcon(Theme.Icon.expand).font(Theme.Font.labelHeavy)
                 }
                 .font(Theme.Font.secondaryStrong)
                 .fixedSize()
             } else if let hub {
                 // One group of hubs shown (several groups): its name in the corner, like a machine's.
                 HStack(spacing: Theme.Space.sm) {
-                    Image(systemName: Theme.Icon.hubGroup)
+                    ThemedIcon(Theme.Icon.hubGroup)
                     Text(hub).lineLimit(1)
-                    Image(systemName: Theme.Icon.expand).font(Theme.Font.labelHeavy)
+                    ThemedIcon(Theme.Icon.expand).font(Theme.Font.labelHeavy)
                 }
                 .font(Theme.Font.secondaryStrong)
                 .fixedSize()
             } else {
-                Image(systemName: shownGrouping == .standard ? "line.3.horizontal.decrease" : shownGrouping.symbol)
+                ThemedIcon(shownGrouping == .standard ? "line.3.horizontal.decrease" : shownGrouping.symbol)
             }
     }
 }
@@ -221,7 +221,9 @@ struct AgentRowMenu: View, Equatable {
             Button { model.markSeen(key) } label: { Label("Mark as Seen", systemImage: Theme.Icon.view) }
         }
         if terminal {
-            Button { if let s = now() { actions.rename(s) } } label: { Label("Rename… [Assistant Sidebar ec4cd0]", systemImage: Theme.Icon.edit) }
+            Button { if let s = now() { actions.rename(s) } } label: {
+                Label(String(localized: "agent.rename", defaultValue: "Rename Agent…"), systemImage: Theme.Icon.edit)
+            }
         }
         Button { model.toggleMute(key) } label: {
             Label(muted ? String(localized: "Unmute [Chat View 3834f9]") : String(localized: "Mute"), systemImage: muted ? Theme.Icon.unmute : Theme.Icon.mute)
@@ -351,9 +353,9 @@ struct AgentsGroupingMenu: View {
             }
         } label: {
             HStack(spacing: Theme.Space.xs) {
-                Image(systemName: shown.symbol)
+                ThemedIcon(shown.symbol)
                 Text(shown.title)
-                Image(systemName: Theme.Icon.choices).font(Theme.Font.label)
+                ThemedIcon(Theme.Icon.choices).font(Theme.Font.label)
             }
             .agentsPill()
         }
@@ -366,7 +368,7 @@ struct AgentsGroupingMenu: View {
 }
 
 /// The personal agents page, one tap away beside the grouping (#140): on a phone the shell has no other way there (the
-/// old layout, iPad and Mac have the toolbar's button).
+/// iPad and Mac use the toolbar's button).
 struct AgentsPersonalPill: View {
     var open: () -> Void
 
@@ -376,9 +378,9 @@ struct AgentsPersonalPill: View {
             open()
         } label: {
             HStack(spacing: Theme.Space.xs) {
-                Image(systemName: Theme.Icon.personalAgents)
+                ThemedIcon(Theme.Icon.personalAgents)
                 Text("Personal Agents")
-                Image(systemName: Theme.Icon.forward).font(Theme.Font.label)
+                ThemedIcon(Theme.Icon.forward).font(Theme.Font.label)
             }
             .agentsPill()
         }

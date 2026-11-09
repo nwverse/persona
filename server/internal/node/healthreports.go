@@ -7,10 +7,10 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
-	"regexp"
 	"sort"
 	"strings"
 
+	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
@@ -20,7 +20,7 @@ import (
 const healthRecordExt = ".md"
 
 // uploadStamp is the time an upload adds to a file's name (reserveName).
-var uploadStamp = regexp.MustCompile(`-\d{8}-\d{6}(?:-\d+)?$`)
+var uploadStamp = lazyre.New(`-\d{8}-\d{6}(?:-\d+)?$`)
 
 // healthReportTitle is the name the user knows a report by: the file's, without the upload's time.
 func healthReportTitle(name string) string {

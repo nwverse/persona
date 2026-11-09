@@ -14,7 +14,7 @@ final class ShellRaceTests: XCTestCase {
 
     @MainActor private func launch() {
         app = XCUIApplication()
-        app.launchArguments = ["-demo.on", "YES", "-ui.oldLayout", "NO", "-probes", "YES", "-newAssistant", "YES", "-dev.openChat", "",
+        app.launchArguments = ["-demo.on", "YES", "-probes", "YES", "-newAssistant", "YES", "-dev.openChat", "",
                                "-tab", "assistant", "-dev.folded", ""]
         app.launchPinned()
         finger = ShellFinger(app)
