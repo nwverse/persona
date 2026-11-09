@@ -253,11 +253,13 @@ func TestAddFromABuiltinDirectAPIPreset(t *testing.T) {
 		_, _ = w.Write([]byte("data: {\"type\":\"response.completed\"}\n\n"))
 	}))
 	defer gw.Close()
+	tested := 0
 	for _, b := range builtinPresets() {
 		p := b.LauncherPreset
 		if p.Kind != "api" {
 			continue
 		}
+		tested++
 		s, _, _ := modelService(t)
 		code, out := postLauncher(t, s, "en", `{"preset":"`+p.ID+`","name":"","display_name":"","api_key":"key-test"}`)
 		if code != 200 {
@@ -276,6 +278,9 @@ func TestAddFromABuiltinDirectAPIPreset(t *testing.T) {
 		if res["ok"] != true || res["model"] != presetModel(p) || path != "/v1/"+p.API {
 			t.Fatalf("%s: the key test on its protocol: %v (%s)", p.ID, res, path)
 		}
+	}
+	if tested == 0 {
+		t.Fatal("no built-in direct API to test (Grok was one)")
 	}
 }
 

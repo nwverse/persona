@@ -555,6 +555,7 @@ function KeyStep({ preset, pf, setPf, keyTest, onRetest, onOther, assign, setAss
       ) : (
         <p className="text-[11.5px] leading-relaxed text-ink-3">{t("settings-providerwizard.key_test_responses")}</p>
       )}
+      {!presetRunsClaude(preset) && <p className="text-[11.5px] leading-relaxed text-ink-3">{t("settings-providerwizard.direct_note")}</p>}
       {assign !== null && presetRunsClaude(preset) && (
         <div className="flex items-center gap-3 rounded-card bg-surface p-3 shadow-btn">
           <span className="min-w-0 flex-1">
@@ -653,7 +654,7 @@ function DoneStep({ added, readiness }: { added: Added; readiness: Readiness | n
       ))}
       {!s.assigned && (
         <p className="max-w-[420px] text-[12.5px] leading-relaxed text-ink-3">
-          {added.direct ? t("settings-providerwizard.done_direct") : t("settings-providerwizard.done_pick_later")}
+          {added.direct ? t("settings-providerwizard.direct_note") : t("settings-providerwizard.done_pick_later")}
         </p>
       )}
       {noClaude && (

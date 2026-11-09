@@ -273,6 +273,8 @@ describe("ProviderWizard from presets", () => {
     await open();
     act(() => button("示例 Responses")!.click());
     expect(document.body.querySelector('button[role="switch"]')).toBeNull();
+    // said before saving: uses with no model picked may move to it
+    expect(text()).toContain("没有单独选模型的用途，现在可能会改用它");
     type(keyInput(), "sk-test-123456");
     await waitAutoTest();
     await act(async () => button("保存")!.click());
