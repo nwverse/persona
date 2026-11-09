@@ -238,7 +238,7 @@ def fresh(c, appearance, language):
     c.hub = None
     apple_language = "en" if language == "en" else "zh-Hans"
     c.launch(extra=["-demo.on", "YES", "-openWelcome", "YES", "-openChatsFresh", "YES", "-openAgentsFresh", "YES",
-                    "-dev.openChat", "", "-ui.oldLayout", "NO", "-ui.style", "glass", "-ui.color", "style",
+                    "-dev.openChat", "", "-ui.style", "glass", "-ui.color", "style",
                     "-AppleLanguages", f"({apple_language})", "-AppleLocale", "en_US" if language == "en" else "zh_CN"])
     subprocess.run(["xcrun", "simctl", "ui", c.udid, "appearance", appearance], check=True, timeout=30)
     subprocess.run(["xcrun", "simctl", "status_bar", c.udid, "override", "--time", "9:41", "--batteryState", "charged", "--batteryLevel", "100"],

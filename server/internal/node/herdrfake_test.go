@@ -57,6 +57,7 @@ func startFileCommand(text string) (string, bool) {
 	if !ok || !strings.HasPrefix(text, ". ") && !strings.HasPrefix(text, "source ") {
 		return "", false
 	}
+	file, _, _ = strings.Cut(file, " && true ")
 	file = strings.TrimSuffix(strings.TrimPrefix(file, "'"), "'")
 	if !strings.HasPrefix(filepath.Base(file), startScriptPrefix) {
 		return "", false

@@ -160,16 +160,19 @@ func (n *Node) start(ctx context.Context, cwd, launcher, prompt, resume, workspa
 	// Give the fresh shell a moment to load ~/.zshrc; typed input is buffered either way.
 	time.Sleep(300 * time.Millisecond)
 	n.beginUltracodeProcess(id, resume != "", true, time.Now())
-	done, err := n.runAgentCommand(ctx, launch, created, ws, cmd, shells...) // typedstart.go
+	done, err := n.runAgentCommand(ctx, launch, created, ws, id, cmd, shells...) // typedstart.go
 	if err != nil {
 		return nil, err
 	}
-	a, err := n.waitReady(ctx, pane)
+	a, err := n.waitReady(ctx, pane, n.probeFor(ctx, id, launcher, shells))
 	done()
 	if err != nil {
 		screen, _ := n.readPane(ctx, pane, "recent-unwrapped", 30)
 		// Close the tab: a claude that comes up after we gave up would sit there unbound, and a retry opens another.
 		n.closeNewTab(ctx, launch, created, ws)
+		if rpcCode(err) != "" { // the tab's shell said why (shellmiss.go): its tail would only repeat the command
+			return nil, err
+		}
 		return nil, fmt.Errorf("%v\n%s", err, lastLines(screen, 12))
 	}
 	n.bindPane(pane, id)

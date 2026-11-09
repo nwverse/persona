@@ -284,7 +284,9 @@ func (h *Hub) fleetStats() FleetStats {
 
 func (la *liveActivities) run(ctx context.Context) {
 	la.load(ctx)
+	la.changed() // restart reconstructs any deferred start from the current fleet, not an old payload
 	timer := time.NewTimer(time.Hour)
+	defer timer.Stop()
 	timer.Stop()
 	tick := time.NewTicker(15 * time.Second)
 	defer tick.Stop()
@@ -496,7 +498,8 @@ func (la *liveActivities) markSent(device string, dst FleetState, now time.Time,
 	return true
 }
 
-// flush pushes st to every device that wants the activity: update a running one, or start one (once per episode).
+// flush pushes st to every device that wants the activity: update a running one, or start one (once per episode,
+// and at most once per fleetRefresh rolling window, atomically persisted across hub restarts and overlapping slots).
 // A device whose own version did not change (the change was something it does not show) is skipped unless forced; one
 // whose app is open is not pushed (it draws the activity itself); one pushed less than fleetMinGap ago gets an ordinary
 // change later: next is when the first of those is due (zero: none). A settings refresh
@@ -580,23 +583,107 @@ func (la *liveActivities) flush(st FleetState, urgent, force bool, settingsDevic
 		case r.PushToStartToken != "" && !fleetEmpty(st) && st.Phase != "done":
 			la.mu.Lock()
 			already := la.started[r.DeviceID] == episode
+			la.mu.Unlock()
+			if already {
+				continue
+			}
+			observed, _ := json.Marshal(la.snapshot())
+			due, claimed := la.claimStart(r, now)
+			if !claimed {
+				if !due.IsZero() && (next.IsZero() || due.Before(next)) {
+					next = due
+				}
+				continue
+			}
+			// Token registration or foreground entry during the database call wins.
+			// The spent budget is deliberately not refunded: a crash or ambiguous
+			// delivery must not let the other blue-green process start again.
+			la.mu.Lock()
+			current := la.rows[r.DeviceID]
+			la.mu.Unlock()
+			latest, _ := json.Marshal(la.snapshot())
+			currentDevice, present := la.h.push.device(r.DeviceID)
+			valid := current == r && bytes.Equal(observed, latest) && present && bytes.Equal(currentDevice.Prefs, d.Prefs)
+			if !valid || la.h.phoneOpen(r.DeviceID) {
+				la.h.logf("live activity start suppressed: reason=state_changed device=%s due=%s", trafficIdentity(r.DeviceID), due.UTC().Format(time.RFC3339))
+				if next.IsZero() || due.Before(next) {
+					next = due
+				}
+				continue
+			}
+			la.mu.Lock()
 			la.started[r.DeviceID] = episode
 			la.mu.Unlock()
-			if !already {
-				la.markSent(r.DeviceID, dst, now, true)
-				// "Phone Muted" while a desktop is online, the device's quiet hours (quiethours.go), or the device turned off
-				// the pushes of the manager whose agents it counts (NotifyPrefs.MutedManagers): the activity still starts,
-				// without its alert (desktops.go).
-				quiet := prefs.MuteWhileDesktop && la.h.push.desktopOnline != nil && la.h.push.desktopOnline() ||
-					la.h.push.inQuiet(prefs) || prefs.mutes(from)
-				la.sendStart(d, r, startPayloadIn(la.h.userLang(), dst, now, quiet))
-			}
+			la.markSent(r.DeviceID, dst, now, true)
+			// "Phone Muted" while a desktop is online, the device's quiet hours (quiethours.go), or the device turned off
+			// the pushes of the manager whose agents it counts (NotifyPrefs.MutedManagers): the activity still starts,
+			// without its alert (desktops.go).
+			quiet := prefs.MuteWhileDesktop && la.h.push.desktopOnline != nil && la.h.push.desktopOnline() ||
+				la.h.push.inQuiet(prefs) || prefs.mutes(from)
+			la.sendStart(d, r, startPayloadIn(la.h.userLang(), dst, now, quiet))
 		}
 	}
 	return next
 }
 
+// claimStart authorizes only push-to-start, never ordinary alerts or activity updates.
+// Persist before sending; without storage (or on any error) fail closed and retry
+// with the latest snapshot. A timer carries no payload or token across episodes.
+func (la *liveActivities) claimStart(r db.LiveActivity, now time.Time) (time.Time, bool) {
+	retry := now.Add(fleetMinGap)
+	if la.h.store == nil {
+		la.h.logf("live activity start deferred: reason=store_unavailable device=%s due=%s", trafficIdentity(r.DeviceID), retry.UTC().Format(time.RFC3339))
+		return retry, false
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), la.storeTimeout)
+	defer cancel()
+	due, claimed, err := la.h.store.ClaimLiveActivityStart(ctx, r.DeviceID, r.PushToStartToken, now, fleetRefresh, fleetMaxAge)
+	if err != nil {
+		la.h.logf("live activity start deferred: reason=claim_failed device=%s due=%s error=%v", trafficIdentity(r.DeviceID), retry.UTC().Format(time.RFC3339), err)
+		return retry, false
+	}
+	if !claimed {
+		reason := "token_changed"
+		if !due.IsZero() {
+			reason = "rolling_cooldown"
+		}
+		la.h.logf("live activity start deferred: reason=%s device=%s due=%s", reason, trafficIdentity(r.DeviceID), due.UTC().Format(time.RFC3339))
+	}
+	return due, claimed
+}
+
 func (la *liveActivities) endAll() { la.end(nil) }
+
+// endCredential withdraws only this credential's activities before signedOut forgets their push routes.
+func (la *liveActivities) endCredential(credential string) {
+	if la == nil || la.h.push == nil || credential == "" {
+		return
+	}
+	var pending []<-chan struct{}
+	for _, d := range la.h.push.list() {
+		if d.Credential != credential {
+			continue
+		}
+		la.mu.Lock()
+		r := la.rows[d.DeviceID]
+		// Stop future fleet flushes while the end is in flight. Revocation already removes persisted rows.
+		delete(la.rows, d.DeviceID)
+		delete(la.sent, d.DeviceID)
+		delete(la.sentAt, d.DeviceID)
+		delete(la.started, d.DeviceID)
+		delete(la.resend, d.DeviceID)
+		la.mu.Unlock()
+		if r.PushToken != "" {
+			// No agent details in the final state, even if dismissal is delayed by the phone.
+			pending = append(pending, la.h.push.sendLiveActivity(d, r.PushToken,
+				liveActivityPayload("end", FleetState{}, time.Now()), "10", func() {}))
+		}
+	}
+	// Dispatch every device concurrently, but keep registrations until the transports finish checking them.
+	for _, done := range pending {
+		<-done
+	}
+}
 
 // end ends the running activities: all of them (keep nil, the fleet has been over for a while), or those of the
 // devices whose settings keep does not hold on to.

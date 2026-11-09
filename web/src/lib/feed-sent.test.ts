@@ -3,7 +3,9 @@
 import { describe, expect, it } from "vitest";
 import { displayLines, firstLine, HAND_OFF_MS, sentByPersona, sentTo, shownFeed, takenIn, type FeedItem } from "./feed";
 
-const t0 = Date.parse("2026-11-08T12:00:00Z");
+// a local noon, so a few minutes either way stay the same day in any time zone
+const t0 = new Date(2026, 10, 8, 12, 0, 0).getTime();
+const today = new Date(t0 + 3_600_000);
 const at = (ms: number) => new Date(t0 + ms).toISOString();
 const card = (id: string, ref: string, ms: number, conversation = "c1"): FeedItem => ({ id, conversation, at: at(ms), kind: "task", ref });
 const persona = (id: string, ref: string, ms: number, extra: Record<string, unknown> = {}, conversation = "c1"): FeedItem => ({
@@ -32,15 +34,27 @@ describe("sent to agents (#1542)", () => {
       persona("before", "t4", 4000),
       card("card4", "t4", 5000), // written before its card: not a hand-off
     ];
-    expect([...takenIn(feed)]).toEqual(["handoff"]);
-    expect(shownFeed(feed).map((i) => i.id)).toEqual(["card", "said", "rework", "other", "card3", "elsewhere", "before", "card4"]);
+    expect([...takenIn(feed, today)]).toEqual(["handoff"]);
+    expect(shownFeed(feed, today).map((i) => i.id)).toEqual(["card", "said", "rework", "other", "card3", "elsewhere", "before", "card4"]);
     expect(sentTo(feed, "t1").map((i) => i.id)).toEqual(["handoff", "rework"]);
-    expect(takenIn([card("c", "t", 0), persona("late", "t", HAND_OFF_MS + 1)]).size).toBe(0);
-    expect([...takenIn([card("c", "t", 0), persona("edge", "t", HAND_OFF_MS)])]).toEqual(["edge"]);
+    expect(takenIn([card("c", "t", 0), persona("late", "t", HAND_OFF_MS + 1)], today).size).toBe(0);
+    expect([...takenIn([card("c", "t", 0), persona("edge", "t", HAND_OFF_MS)], today)]).toEqual(["edge"]);
+  });
+
+  it("gives the hand-off back when its card is from another day (#1668)", () => {
+    const feed = [card("card", "t1", 0), persona("handoff", "t1", 8)];
+    expect([...takenIn(feed, new Date(t0 + 11 * 3_600_000))]).toEqual(["handoff"]); // 23:00 the same day
+    expect(takenIn(feed, new Date(t0 + 13 * 3_600_000)).size).toBe(0); // 01:00 the next day
+    expect(shownFeed(feed, new Date(t0 + 13 * 3_600_000)).map((i) => i.id)).toEqual(["card", "handoff"]);
   });
 
   it("leaves the hand-off out of the chat's lines", () => {
-    const ids = displayLines([], [card("card", "t1", 0), persona("handoff", "t1", 8), persona("rework", "t1", 600_000)])
+    // displayLines reads the clock: a card from today, 00:01, with what came after it
+    const base = new Date();
+    base.setHours(0, 1, 0, 0);
+    const shift = base.getTime() - t0;
+    const at = (it: FeedItem): FeedItem => ({ ...it, at: new Date(Date.parse(it.at) + shift).toISOString() });
+    const ids = displayLines([], [card("card", "t1", 0), persona("handoff", "t1", 8), persona("rework", "t1", 600_000)].map(at))
       .filter((l) => l.kind === "feed")
       .map((l) => l.id);
     expect(ids).toEqual(["feed-card", "feed-rework"]);

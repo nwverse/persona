@@ -1,7 +1,7 @@
 import BeautifulUI
 import SwiftUI
 
-/// A new conversation in the shell (docs/apple/ios.md「新外壳」): the same welcome as the old layout's (`AssistantWelcome`:
+/// A new conversation in the shell uses the shared `AssistantWelcome`:
 /// greeting, what Persona can reach, things to ask), and over the composer what needs the user right now — agents
 /// waiting on them and the inbox's Needs You — one quiet line each, as many as fit under the welcome's first two rows of things
 /// to ask (`NeedsRoom`). While the conversation spins up, the first message and a typing line so the send feels instant.

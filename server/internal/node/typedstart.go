@@ -34,14 +34,20 @@ func startScript(path, cmd string) string {
 }
 
 // startLine is what is typed into a pane whose shell is shells to run the start file at path: `source` in fish, `.`
-// elsewhere.
-func startLine(path string, shells ...string) string {
+// elsewhere. A start's anchor (its session id, which startProbe finds the echo of the typed command by) follows as a
+// word of a no-op: the file's path does not hold it, and the shell's not-found lines for the file's command start with
+// that path (shellMisses skips the lines that hold the anchor).
+func startLine(path, anchor string, shells ...string) string {
+	line := ". " + shellQuote(path)
 	for _, s := range shells {
 		if strings.TrimPrefix(filepath.Base(s), "-") == "fish" {
-			return "source " + shellQuote(path)
+			line = "source " + shellQuote(path)
 		}
 	}
-	return ". " + shellQuote(path)
+	if anchor != "" {
+		line += " && true " + shellQuote(anchor)
+	}
+	return line
 }
 
 // writeStartScript writes the start file for cmd in dir (0600) and returns its path.
@@ -62,10 +68,10 @@ func writeStartScript(dir, cmd string) (string, error) {
 }
 
 // runAgentCommand types cmd, built with agentCommand for shells, into the new pane created: through a start file in
-// a herdr pane whose shells source one (takesAssign), else as it is. When the pane does not take it, the tab is
+// a herdr pane whose shells source one (takesAssign), with anchor on the typed line (startLine), else as it is. When the pane does not take it, the tab is
 // closed (closeNewTab) and pane_send_failed comes back as terminalNotReady. done removes the file if the shell has
 // not read it yet; call it once the start is over.
-func (n *Node) runAgentCommand(ctx context.Context, launch host.Launcher, created *host.Created, ws, cmd string, shells ...string) (done func(), err error) {
+func (n *Node) runAgentCommand(ctx context.Context, launch host.Launcher, created *host.Created, ws, anchor, cmd string, shells ...string) (done func(), err error) {
 	done = func() {}
 	line := cmd
 	if _, isHerdr := launch.(*herdrHost); isHerdr && takesAssign(shells...) {
@@ -79,7 +85,7 @@ func (n *Node) runAgentCommand(ctx context.Context, launch host.Launcher, create
 			return done, err
 		}
 		done = func() { _ = os.Remove(path) }
-		line = startLine(path, shells...)
+		line = startLine(path, anchor, shells...)
 	}
 	if err := launch.Run(ctx, created.Pane, line); err != nil {
 		done()

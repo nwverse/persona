@@ -1,0 +1,572 @@
+package assistant
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"slices"
+	"strings"
+	"time"
+
+	"github.com/nwverse/persona/server/internal/db"
+	"github.com/nwverse/persona/server/internal/i18n"
+	"github.com/nwverse/persona/server/internal/proto"
+)
+
+// The assistant's tools on Persona's todos (#1683, docs/assistant/todos.md "The assistant's todo tools"): list, read,
+// create, change, complete, reopen and delete them, as the apps do through /api/v1/todos. The user's own todos (no agent,
+// not a task) are created, changed, completed and reopened at once; deleting one is confirmed on the phone every time,
+// and so is completing or reopening a task or a todo agents work on (completing it closes its agents, tasks_close.go). A
+// health conversation asks before anything leaves its space (confirmOutbound). Plain todos only: work for an agent
+// still goes through task_plan.
+
+// The tools' descriptions and arguments are in prompts/mcp/todo (todo_list … todo_delete; tools.go lists them).
+
+func (s *Service) toolTodo(ctx context.Context, machine, self, name string, args json.RawMessage) (string, error) {
+	if err := s.ensureTodosLoaded(ctx); err != nil {
+		return "", fmt.Errorf("the todos can't be read now (%v): try again later", err)
+	}
+	switch name {
+	case "todo_list":
+		return s.toolTodoList(ctx, args)
+	case "todo_get":
+		return s.toolTodoGet(ctx, args)
+	case "todo_create":
+		return s.toolTodoCreate(ctx, machine, self, args)
+	case "todo_update":
+		return s.toolTodoUpdate(ctx, machine, self, args)
+	case "todo_complete", "todo_reopen":
+		return s.toolTodoDone(ctx, machine, self, name, args)
+	case "todo_delete":
+		return s.toolTodoDelete(ctx, machine, self, args)
+	}
+	return "", fmt.Errorf("unknown tool %s", name)
+}
+
+// ---- reading ----
+
+func (s *Service) toolTodoList(ctx context.Context, args json.RawMessage) (string, error) {
+	var a struct {
+		Status     string `json:"status"`
+		DueBefore  string `json:"due_before"`
+		DueAfter   string `json:"due_after"`
+		Overdue    bool   `json:"overdue"`
+		WithAgents *bool  `json:"with_agents"`
+		Query      string `json:"query"`
+		Limit      int    `json:"limit"`
+	}
+	if err := json.Unmarshal(args, &a); err != nil {
+		return "", fmt.Errorf("arguments: %w", err)
+	}
+	status := cmpOr(strings.ToLower(strings.TrimSpace(a.Status)), "open")
+	if status != "open" && status != "done" && status != "all" {
+		return "", fmt.Errorf("status must be open, done or all, not %q", a.Status)
+	}
+	if a.Limit <= 0 {
+		a.Limit = 50
+	}
+	a.Limit = min(a.Limit, 200)
+	now, loc := time.Now(), s.location(ctx)
+	var before, after time.Time
+	if a.DueBefore != "" {
+		at, day, err := readToolTime(a.DueBefore, now, loc)
+		if err != nil {
+			return "", fmt.Errorf("due_before: %w", err)
+		}
+		before = at
+		if day {
+			before = at.AddDate(0, 0, 1).Add(-time.Second) // through that day
+		}
+	}
+	if a.DueAfter != "" {
+		at, _, err := readToolTime(a.DueAfter, now, loc)
+		if err != nil {
+			return "", fmt.Errorf("due_after: %w", err)
+		}
+		after = at
+	}
+	q := strings.ToLower(strings.TrimSpace(a.Query))
+
+	var list []Todo
+	s.todos.mu.RLock()
+	for _, t := range s.todos.todos {
+		list = append(list, formatTodo(copyTodoLocked(t)))
+	}
+	s.todos.mu.RUnlock()
+	list = slices.DeleteFunc(list, func(t Todo) bool {
+		done := t.DoneAt != nil
+		if status == "open" && done || status == "done" && !done {
+			return true
+		}
+		by, hasDue := t.dueBy(loc)
+		if (!before.IsZero() || !after.IsZero()) && !hasDue || !before.IsZero() && by.After(before) || !after.IsZero() && by.Before(after) {
+			return true
+		}
+		if a.Overdue && !t.overdue(now, loc) {
+			return true
+		}
+		if a.WithAgents != nil && *a.WithAgents != todoHasAgents(t) {
+			return true
+		}
+		return q != "" && !strings.Contains(strings.ToLower(t.Title+"\n"+t.Notes), q)
+	})
+	sortTodosByDue(list, loc)
+
+	if len(list) == 0 {
+		return "No to-dos match.", nil
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, "%d to-do(s), times in %s:\n", len(list), loc)
+	for i, t := range list {
+		if i == a.Limit {
+			fmt.Fprintf(&b, "… and %d more: filter, or raise limit (at most 200).\n", len(list)-a.Limit)
+			break
+		}
+		b.WriteString("- " + todoLine(t, now, loc) + "\n")
+		if n := oneLine(t.Notes); n != "" {
+			b.WriteString("  notes: " + clip(n, 160) + "\n")
+		}
+	}
+	return b.String(), nil
+}
+
+func (s *Service) toolTodoGet(ctx context.Context, args json.RawMessage) (string, error) {
+	t, err := s.toolTodoArg(args)
+	if err != nil {
+		return "", err
+	}
+	now, loc := time.Now(), s.location(ctx)
+	var b strings.Builder
+	b.WriteString(todoLine(t, now, loc) + "\n")
+	fmt.Fprintf(&b, "created %s, updated %s\n", t.CreatedAt.In(loc).Format(toolTimeLayout), t.UpdatedAt.In(loc).Format(toolTimeLayout))
+	if t.DoneAt != nil {
+		fmt.Fprintf(&b, "done %s", t.DoneAt.In(loc).Format(toolTimeLayout))
+		if t.DoneBy != "" {
+			fmt.Fprintf(&b, " (by %s: %s)", t.DoneBy, clip(oneLine(t.DoneReason), 200))
+		}
+		b.WriteString("\n")
+	}
+	if t.RemindAt != nil && t.RemindedAt != nil {
+		fmt.Fprintf(&b, "reminder pushed %s\n", t.RemindedAt.In(loc).Format(toolTimeLayout))
+	}
+	if t.Origin != "" {
+		fmt.Fprintf(&b, "a task from conversation %s", t.Origin)
+		if t.PlanID != "" {
+			fmt.Fprintf(&b, " (plan %s)", t.PlanID)
+		}
+		b.WriteString("\n")
+	}
+	if t.Stage != "" || t.PRURL != "" {
+		fmt.Fprintf(&b, "stage %s %s\n", cmpOr(t.Stage, "-"), t.PRURL)
+	}
+	if strings.TrimSpace(t.Notes) != "" {
+		b.WriteString("notes:\n" + clip(strings.TrimSpace(t.Notes), 4000) + "\n")
+	}
+	if len(t.Agents) > 0 {
+		b.WriteString("agents:\n")
+		for _, ag := range t.Agents {
+			state := "no longer works on it"
+			if ag.ReleasedAt == nil {
+				state = "works on it"
+				if c, ok := s.session(ctx, ag.MachineID, ag.SessionID); ok && c.Status != "" {
+					state += ", " + string(c.Status)
+				}
+			}
+			fmt.Fprintf(&b, "- %s/%s %q %s\n", ag.MachineID, ag.SessionID, clip(oneLine(ag.Title), 80), state)
+		}
+	}
+	if st := s.todoDB(); st != nil {
+		if ds, err := st.ListTodoDecisions(ctx, t.ID, false); err == nil && len(ds) > 0 {
+			b.WriteString("decisions in force:\n")
+			for _, d := range ds {
+				fmt.Fprintf(&b, "- %s → %s", clip(oneLine(d.Question), 160), clip(oneLine(d.Choice), 160))
+				if r := oneLine(d.Reason); r != "" {
+					fmt.Fprintf(&b, " (%s)", clip(r, 160))
+				}
+				b.WriteString("\n")
+			}
+		}
+	}
+	return b.String(), nil
+}
+
+// ---- writing ----
+
+func (s *Service) toolTodoCreate(ctx context.Context, machine, self string, args json.RawMessage) (string, error) {
+	var a struct {
+		Title    string `json:"title"`
+		Notes    string `json:"notes"`
+		Due      string `json:"due"`
+		Remind   string `json:"remind"`
+		Priority string `json:"priority"`
+	}
+	if err := json.Unmarshal(args, &a); err != nil {
+		return "", fmt.Errorf("arguments: %w", err)
+	}
+	title := strings.TrimSpace(a.Title)
+	if title == "" {
+		return "", errors.New("title is required")
+	}
+	now, loc := time.Now(), s.location(ctx)
+	var plan db.TodoEdit
+	if err := setToolDue(&plan, a.Due, now, loc); err != nil {
+		return "", err
+	}
+	if err := setToolRemind(&plan, a.Remind, now, loc); err != nil {
+		return "", err
+	}
+	pr, err := todoPriority(a.Priority)
+	if err != nil {
+		return "", err
+	}
+	plan.Priority = &pr
+	if t, ok := s.openTodoLike(title, plan); ok {
+		return "Already there, not created again: " + todoLine(t, now, loc), nil
+	}
+	if ok, err := s.confirmOutbound(ctx, machine, self, "todo_create", title, args); err != nil || !ok {
+		return todoNotAllowed(err)
+	}
+	t, err := s.createPlainTodo(ctx, title, strings.TrimSpace(a.Notes), plan)
+	if err != nil {
+		return "", fmt.Errorf("the to-do could not be saved, nothing changed: %w", err)
+	}
+	return "Created: " + todoLine(t, now, loc), nil
+}
+
+func (s *Service) toolTodoUpdate(ctx context.Context, machine, self string, args json.RawMessage) (string, error) {
+	var a struct {
+		ID       string          `json:"id"`
+		Title    json.RawMessage `json:"title"`
+		Notes    json.RawMessage `json:"notes"`
+		Due      json.RawMessage `json:"due"`
+		Remind   json.RawMessage `json:"remind"`
+		Priority json.RawMessage `json:"priority"`
+	}
+	if err := json.Unmarshal(args, &a); err != nil {
+		return "", fmt.Errorf("arguments: %w", err)
+	}
+	t, ok := s.todoNow(strings.TrimSpace(a.ID))
+	if !ok {
+		return "", fmt.Errorf("no to-do %q: todo_list has their ids", a.ID)
+	}
+	now, loc := time.Now(), s.location(ctx)
+	var e db.TodoEdit
+	changed := false
+	for _, f := range []struct {
+		name string
+		raw  json.RawMessage
+		set  func(string) error
+	}{
+		{"title", a.Title, func(v string) error {
+			v = strings.TrimSpace(v)
+			if v == "" {
+				return errors.New("title can't be empty")
+			}
+			e.Title = &v
+			return nil
+		}},
+		{"notes", a.Notes, func(v string) error { v = strings.TrimSpace(v); e.Notes = &v; return nil }},
+		{"due", a.Due, func(v string) error { e.SetDue = true; return setToolDue(&e, v, now, loc) }},
+		{"remind", a.Remind, func(v string) error { e.SetRemind = true; return setToolRemind(&e, v, now, loc) }},
+		{"priority", a.Priority, func(v string) error {
+			pr, err := todoPriority(v)
+			e.Priority = &pr
+			return err
+		}},
+	} {
+		v, set, err := optionalText(f.raw, f.name)
+		if err == nil && set {
+			err = f.set(v)
+		}
+		if err != nil {
+			return "", err
+		}
+		changed = changed || set
+	}
+	if !changed {
+		return "", errors.New("nothing to change: give title, notes, due, remind or priority")
+	}
+	if ok, err := s.confirmOutbound(ctx, machine, self, "todo_update", t.Title, args); err != nil || !ok {
+		return todoNotAllowed(err)
+	}
+	out, err := s.editTodo(ctx, t.ID, e)
+	if err != nil {
+		return "", fmt.Errorf("the change could not be saved, nothing changed: %w", err)
+	}
+	return "Updated: " + todoLine(out, now, loc), nil
+}
+
+func (s *Service) toolTodoDone(ctx context.Context, machine, self, name string, args json.RawMessage) (string, error) {
+	t, err := s.toolTodoArg(args)
+	if err != nil {
+		return "", err
+	}
+	complete := name == "todo_complete"
+	now, loc := time.Now(), s.location(ctx)
+	if complete == (t.DoneAt != nil) {
+		return "Nothing to do, it already is: " + todoLine(t, now, loc), nil
+	}
+	if todoHasWork(t) {
+		key := "assistant-todos.reopen_card"
+		if complete {
+			key = "assistant-todos.complete_card"
+		}
+		said, err := s.confirmTodoCard(ctx, machine, self, name, i18n.T(s.lang(ctx), key, i18n.Args{"title": clip(t.Title, 80)}), args)
+		if err != nil || said != "" {
+			return said, err
+		}
+	} else if ok, err := s.confirmOutbound(ctx, machine, self, name, t.Title, args); err != nil || !ok {
+		return todoNotAllowed(err)
+	}
+	out, err := s.editTodo(ctx, t.ID, db.TodoEdit{Done: &complete})
+	if err != nil {
+		return "", fmt.Errorf("the change could not be saved, nothing changed: %w", err)
+	}
+	if complete {
+		return "Completed: " + todoLine(out, now, loc), nil
+	}
+	return "Reopened: " + todoLine(out, now, loc), nil
+}
+
+func (s *Service) toolTodoDelete(ctx context.Context, machine, self string, args json.RawMessage) (string, error) {
+	t, err := s.toolTodoArg(args)
+	if err != nil {
+		return "", err
+	}
+	said, err := s.confirmTodoCard(ctx, machine, self, "todo_delete",
+		i18n.T(s.lang(ctx), "assistant-todos.delete_card", i18n.Args{"title": clip(t.Title, 80)}), args)
+	if err != nil || said != "" {
+		return said, err
+	}
+	if err := s.deleteTodo(ctx, t.ID); err != nil {
+		if errors.Is(err, db.ErrTodoNotFound) {
+			return "It was already gone.", nil
+		}
+		return "", fmt.Errorf("the to-do could not be deleted, nothing changed: %w", err)
+	}
+	return fmt.Sprintf("Deleted %s %q.", t.ID, t.Title), nil
+}
+
+// confirmTodoCard asks the phone before a todo change worded as summary: "" when the user allows it, else what the
+// model is told (nothing changed).
+func (s *Service) confirmTodoCard(ctx context.Context, machine, self, tool, summary string, args json.RawMessage) (string, error) {
+	now := time.Now().UTC()
+	ix := proto.Interaction{ID: "ix_" + randomHex(6), MachineID: machine, SessionID: self, Kind: proto.IxPermission, ToolName: tool,
+		Summary: summary, ToolInput: args, SessionTitle: "Persona", CreatedAt: now, ExpiresAt: now.Add(15 * time.Minute)}
+	if conv, ok := s.session(ctx, machine, self); ok {
+		ix.Cwd = conv.Cwd
+	}
+	r, err := s.ask(ctx, ix)
+	if errors.Is(err, errUserSpoke) {
+		return "The user wrote in the conversation instead of confirming: nothing changed.", nil
+	}
+	if err != nil {
+		return "", err
+	}
+	if r.Allow == nil || !*r.Allow {
+		return "The user declined on the phone (or did not answer): nothing changed.", nil
+	}
+	return "", nil
+}
+
+// todoNotAllowed is what a health conversation is told when the user did not let a change out of the space.
+func todoNotAllowed(err error) (string, error) {
+	if err != nil {
+		return "", err
+	}
+	return "The user did not allow it on the phone: nothing changed.", nil
+}
+
+// ---- helpers ----
+
+// toolTodoArg is the todo the arguments' id names.
+func (s *Service) toolTodoArg(args json.RawMessage) (Todo, error) {
+	var a struct {
+		ID string `json:"id"`
+	}
+	if err := json.Unmarshal(args, &a); err != nil {
+		return Todo{}, fmt.Errorf("arguments: %w", err)
+	}
+	t, ok := s.todoNow(strings.TrimSpace(a.ID))
+	if !ok {
+		return Todo{}, fmt.Errorf("no to-do %q: todo_list has their ids", a.ID)
+	}
+	return formatTodo(t), nil
+}
+
+// openTodoLike is an open todo with this title and the due date of plan: a create retried (or a list of to-dos handed in
+// twice) is not made twice.
+func (s *Service) openTodoLike(title string, plan db.TodoEdit) (Todo, bool) {
+	probe := Todo{}
+	probe.setPlan(db.TodoRow{DueAt: plan.DueAt, DueDate: plan.DueDate})
+	s.todos.mu.RLock()
+	defer s.todos.mu.RUnlock()
+	for _, t := range s.todos.todos {
+		if t.DoneAt == nil && strings.TrimSpace(t.Title) == title && t.DueDate == probe.DueDate &&
+			(t.DueAt == nil) == (probe.DueAt == nil) && (t.DueAt == nil || t.DueAt.Equal(*probe.DueAt)) {
+			return formatTodo(copyTodoLocked(t)), true
+		}
+	}
+	return Todo{}, false
+}
+
+// todoHasAgents: agents work or worked on t (the ones the user dismissed do not count).
+func todoHasAgents(t Todo) bool {
+	return slices.ContainsFunc(t.Agents, func(a TodoAgent) bool { return a.DismissedAt == nil })
+}
+
+// todoHasWork: t is a task or agents work on it, so completing it closes them (tasks_close.go).
+func todoHasWork(t Todo) bool {
+	return t.Origin != "" || t.Supervision != nil || todoHasAgents(t)
+}
+
+// sortTodosByDue orders todos as the tools list them: open first, then by due moment (none last), priority, newest.
+func sortTodosByDue(list []Todo, loc *time.Location) {
+	rank := map[string]int{db.PriorityHigh: 0, "": 1, db.PriorityLow: 2}
+	slices.SortStableFunc(list, func(a, b Todo) int {
+		if (a.DoneAt == nil) != (b.DoneAt == nil) {
+			if a.DoneAt == nil {
+				return -1
+			}
+			return 1
+		}
+		ad, aok := a.dueBy(loc)
+		bd, bok := b.dueBy(loc)
+		if aok != bok {
+			if aok {
+				return -1
+			}
+			return 1
+		}
+		if c := ad.Compare(bd); aok && c != 0 {
+			return c
+		}
+		if c := rank[a.Priority] - rank[b.Priority]; c != 0 {
+			return c
+		}
+		return b.CreatedAt.Compare(a.CreatedAt)
+	})
+}
+
+// toolTimeLayout is how the tools write a moment for the model: the year and the weekday, so neither is guessed.
+const toolTimeLayout = "2006-01-02 Mon 15:04"
+
+// todoLine is one todo for the model: id, title, state, priority, due date, reminder and agents.
+func todoLine(t Todo, now time.Time, loc *time.Location) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "%s %q [", t.ID, clip(oneLine(t.Title), 120))
+	if t.DoneAt != nil {
+		b.WriteString("done")
+	} else {
+		b.WriteString("open")
+	}
+	if t.Priority != "" {
+		b.WriteString(", " + t.Priority + " priority")
+	}
+	if t.Origin != "" || t.Supervision != nil {
+		b.WriteString(", task")
+	}
+	b.WriteString("]")
+	if t.DueAt != nil {
+		fmt.Fprintf(&b, " · due %s", t.DueAt.In(loc).Format(toolTimeLayout))
+	} else if d, err := time.Parse(dayLayout, t.DueDate); err == nil {
+		fmt.Fprintf(&b, " · due %s (the whole day)", d.Format("2006-01-02 Mon"))
+	}
+	if by, ok := t.dueBy(loc); ok && t.DoneAt == nil {
+		if t.overdue(now, loc) {
+			fmt.Fprintf(&b, " (overdue, %s)", ago(by))
+		} else {
+			fmt.Fprintf(&b, " (%s)", until(by))
+		}
+	}
+	if t.RemindAt != nil {
+		fmt.Fprintf(&b, " · remind %s", t.RemindAt.In(loc).Format(toolTimeLayout))
+		if t.RemindedAt != nil {
+			b.WriteString(" (pushed)")
+		}
+	}
+	active := 0
+	for _, a := range t.Agents {
+		if a.ReleasedAt == nil && a.DismissedAt == nil {
+			active++
+		}
+	}
+	if active > 0 {
+		fmt.Fprintf(&b, " · %d agent(s) on it", active)
+	}
+	return b.String()
+}
+
+// readToolTime reads a time the model wrote, in the user's time zone loc: a day "2006-01-02" (its start; day true), a
+// moment in RFC 3339 or "2006-01-02 15:04", or 30m / 2h / 1d from now.
+func readToolTime(v string, now time.Time, loc *time.Location) (time.Time, bool, error) {
+	v = strings.TrimSpace(v)
+	if d, err := time.ParseInLocation(dayLayout, v, loc); err == nil {
+		return d, true, nil
+	}
+	if t, err := time.ParseInLocation("2006-01-02T15:04", v, loc); err == nil {
+		return t, false, nil
+	}
+	t, err := parseWhen(v, now, loc)
+	return t, false, err
+}
+
+// setToolDue sets due date v ("" clears it) into e: a day stays a day, a moment a moment.
+func setToolDue(e *db.TodoEdit, v string, now time.Time, loc *time.Location) error {
+	if strings.TrimSpace(v) == "" {
+		e.DueAt, e.DueDate = nil, nil
+		return nil
+	}
+	e.SetDue = true
+	at, day, err := readToolTime(v, now, loc)
+	if err != nil {
+		return fmt.Errorf("due: %w", err)
+	}
+	if day {
+		d := time.Date(at.Year(), at.Month(), at.Day(), 0, 0, 0, 0, time.UTC)
+		e.DueAt, e.DueDate = nil, &d
+		return nil
+	}
+	u := at.UTC()
+	e.DueAt, e.DueDate = &u, nil
+	return nil
+}
+
+// setToolRemind sets reminder v ("" clears it) into e; a moment past by more than a minute is refused (a wrong year or
+// time zone, most likely), as is a day without a time.
+func setToolRemind(e *db.TodoEdit, v string, now time.Time, loc *time.Location) error {
+	if strings.TrimSpace(v) == "" {
+		e.RemindAt = nil
+		return nil
+	}
+	e.SetRemind = true
+	at, day, err := readToolTime(v, now, loc)
+	if err != nil {
+		return fmt.Errorf("remind: %w", err)
+	}
+	if day {
+		return fmt.Errorf("remind %q is a day: give the time too (2026-11-12 09:00 or RFC 3339)", v)
+	}
+	if at.Before(now.Add(-time.Minute)) {
+		return fmt.Errorf("remind %s is in the past (now is %s)", at.In(loc).Format(toolTimeLayout), now.In(loc).Format(toolTimeLayout))
+	}
+	u := at.UTC()
+	e.RemindAt = &u
+	return nil
+}
+
+// optionalText reads an optional string argument: set false when it is left out, "" for null.
+func optionalText(raw json.RawMessage, name string) (string, bool, error) {
+	if raw == nil {
+		return "", false, nil
+	}
+	if string(raw) == "null" {
+		return "", true, nil
+	}
+	var v string
+	if err := json.Unmarshal(raw, &v); err != nil {
+		return "", false, fmt.Errorf("%s must be a string (or null to clear it)", name)
+	}
+	return v, true, nil
+}

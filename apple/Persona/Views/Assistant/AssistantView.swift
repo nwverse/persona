@@ -11,7 +11,7 @@ struct AssistantView: View {
     /// The ChatGPT-style shell (docs/apple/ios.md「新外壳」): it owns the drawer, and pushes its pages here.
     @Environment(\.shell) private var shell
     #if os(iOS)
-    /// The iPad's tabs without Inbox and Settings (`RootTabs.padSidebar`): the sidebar column lists them as the shell's does.
+    /// The iPad's tabs omit Inbox and Settings: the sidebar column lists them as the shell's does.
     @Environment(\.padRouter) private var padRouter
     #endif
     @State private var pending: PendingStart?
@@ -424,7 +424,7 @@ struct FirstMessagePending: View {
     }
 }
 
-/// The old layout's new conversation: `AssistantWelcome` (greeting, what Persona can reach, one-tap suggestions); while
+/// A new conversation outside the compact shell: `AssistantWelcome` (greeting, capabilities, one-tap suggestions); while
 /// a conversation spins up it shows the first message and a typing indicator so the send feels instant.
 struct AssistantHome: View {
     @Environment(AppModel.self) private var model

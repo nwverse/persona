@@ -1,8 +1,8 @@
 // The page's side of the terminal's focus policy: reads the facts lib/terminal-details.ts `shouldRefocus` decides on.
+import { EDITABLE } from "../../../lib/shortcuts";
 import type { FocusFacts } from "../../../lib/terminal-details";
 
 const OVERLAYS = '[role="dialog"], [role="alertdialog"], [role="menu"], [aria-modal="true"]';
-const EDITABLE = 'input, textarea, select, [contenteditable=""], [contenteditable="true"]';
 
 /** Text selected on the page inside `root` (the rows the page draws, the panel's own text). */
 export function selectionInside(root: HTMLElement): boolean {

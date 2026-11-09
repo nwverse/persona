@@ -2,6 +2,8 @@ package node
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"sort"
@@ -9,6 +11,7 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/server/internal/proto"
+	"github.com/nwverse/persona/server/internal/rpc"
 )
 
 // Starting a session in the background (docs/protocol/protocol.md "New session"). Opening a herdr tab and waiting for claude's
@@ -69,8 +72,34 @@ func (l *startLog) finish(id string, err error) {
 		r.session.Starting = false
 		r.session.Status = proto.StatusOffline
 		r.session.StartError = err.Error()
+		r.session.UpdatedAt = r.ended.UTC() // when it failed
+		// A coded refusal keeps its code and details, which the hub words in the user's language and the apps offer
+		// the remedy of (#1642); the rest is text.
+		var re *rpc.Error
+		if errors.As(err, &re) && re.Code != "" {
+			r.session.StartErrorCode = re.Code
+			r.session.StartErrorArgs = refusalArgs(re.Data)
+		}
 	}
 	close(r.done)
+}
+
+// refusalArgs are a refusal's details that are text, but whether it was delivered (a start delivers nothing).
+func refusalArgs(data json.RawMessage) map[string]string {
+	var m map[string]any
+	if len(data) == 0 || json.Unmarshal(data, &m) != nil {
+		return nil
+	}
+	out := map[string]string{}
+	for k, v := range m {
+		if s, ok := v.(string); ok && k != "delivered" {
+			out[k] = s
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }
 
 // wait blocks while the session is starting and returns the start's error, if it failed.
@@ -85,7 +114,12 @@ func (l *startLog) wait(ctx context.Context, id string) error {
 		return fmt.Errorf("这个 Agent 还在启动，没等到它准备好: %w", ctx.Err())
 	}
 	if r.err != nil {
-		return fmt.Errorf("这个 Agent 没有启动起来：%v", r.err)
+		err := fmt.Errorf("这个 Agent 没有启动起来：%v", r.err)
+		var re *rpc.Error
+		if errors.As(r.err, &re) && re.Code != "" { // the start's refusal, still coded for the hub to word
+			return &rpc.Error{Code: re.Code, Message: err.Error(), Data: re.Data}
+		}
+		return err
 	}
 	return nil
 }

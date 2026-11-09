@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 
+	"github.com/nwverse/persona/server/internal/db"
 	"github.com/nwverse/persona/server/internal/i18n"
 )
 
@@ -22,6 +23,10 @@ func (h *Hub) deviceRoutes(api *http.ServeMux) {
 		d.CredentialID = principalOf(r.Context()).ID
 		d.Credential = d.CredentialID
 		if err := h.push.register(d); err != nil {
+			if errors.Is(err, db.ErrPushRegistrationConflict) {
+				writeErr(w, http.StatusConflict, i18n.Err("http-status.conflict"))
+				return
+			}
 			writeErr(w, http.StatusServiceUnavailable, i18n.Err("http-status.unavailable"))
 			return
 		}

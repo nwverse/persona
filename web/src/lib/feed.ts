@@ -30,6 +30,9 @@ export interface PlanTask {
   why?: string;
   todo_id?: string;
   error?: string;
+  /** The failed start's coded refusal and its details (as a session's start_error_code / start_error_args). */
+  error_code?: string;
+  error_args?: Record<string, string>;
 }
 
 export interface TaskPlan {
@@ -197,11 +200,12 @@ export function sentByPersona(it: FeedItem): boolean {
 export const HAND_OFF_MS = 60_000;
 
 /** The hand-offs the task cards take in (#1542, not drawn on their own): Persona's messages within `HAND_OFF_MS` after
- *  their own task's card in the same conversation. */
-export function takenIn(feed: FeedItem[]): Set<string> {
+ *  their own task's card in the same conversation. Only a card drawn in full (from today, FeedLineView) has the list: from
+ *  another day it is a TaskLine, and its hand-off stays a folded line under it (#1668). */
+export function takenIn(feed: FeedItem[], now = new Date()): Set<string> {
   const cards = new Map<string, number[]>();
   for (const it of feed) {
-    if (it.kind !== "task" || !it.ref) continue;
+    if (it.kind !== "task" || !it.ref || !isToday(it.at, now)) continue;
     const key = it.conversation + "/" + it.ref;
     cards.set(key, [...(cards.get(key) ?? []), Date.parse(it.at)]);
   }
@@ -216,8 +220,8 @@ export function takenIn(feed: FeedItem[]): Set<string> {
 }
 
 /** The feed without the hand-offs the cards take in: what the chat draws among its lines. */
-export function shownFeed(feed: FeedItem[]): FeedItem[] {
-  const hidden = takenIn(feed);
+export function shownFeed(feed: FeedItem[], now = new Date()): FeedItem[] {
+  const hidden = takenIn(feed, now);
   return hidden.size === 0 ? feed : feed.filter((it) => !hidden.has(it.id));
 }
 
@@ -636,6 +640,7 @@ export type DisplayLine =
 
 /** When the user sent the line's message (feed items go before the first message sent after them). */
 function inputTime(line: ChatLine): number | undefined {
+  if (line.kind === "supervision") return line.lines.map(inputTime).find((at) => at !== undefined);
   if (line.kind !== "segment" || !line.seg.user?.ts) return undefined;
   return Date.parse(line.seg.user.ts);
 }
@@ -647,6 +652,7 @@ function lineTime(l: DisplayLine): number | undefined {
       return Date.parse(l.item.at);
     case "chat": {
       const c = l.line;
+      if (c.kind === "supervision") return inputTime(c);
       if (c.kind === "segment") return Date.parse(c.seg.user?.ts ?? c.seg.start ?? "") || undefined;
       if (c.kind === "notice" || c.kind === "apiError" || c.kind === "compact") return Date.parse(c.item.ts ?? "") || undefined;
       return undefined;

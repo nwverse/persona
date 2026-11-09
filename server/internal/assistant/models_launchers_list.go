@@ -215,22 +215,32 @@ func (s *Service) launcherAvailable(ctx context.Context, machine, name string) b
 }
 
 // launcherHasModel: whether the launcher offers model (its id or what an alias resolves to), from its list as it was
-// a few minutes ago at most. Unknown (an agent with no list, a failed call) counts as yes.
+// a few minutes ago at most, or the user typed it for this launcher and machine before (models_custom.go). Unknown (an
+// agent with no list, a failed call) counts as yes.
 func (s *Service) launcherHasModel(ctx context.Context, machine, launcher, model string) bool {
+	if set := s.launcherModelSet(ctx, machine, launcher); set == nil || set[model] {
+		return true
+	}
+	return s.isCustomModel(ctx, machine, launcher, model)
+}
+
+// launcherModelSet is the launcher's own /model list on machine (ids and what aliases resolve to), as it was a few
+// minutes ago at most; nil when it is not known (an agent with no list, a failed call).
+func (s *Service) launcherModelSet(ctx context.Context, machine, launcher string) map[string]bool {
 	key := machine + "\x00" + launcher
 	c := &s.models
 	c.cacheMu.Lock()
 	if c.cacheAt != nil && time.Since(c.cacheAt[key]) < 5*time.Minute {
 		set := c.have[key]
 		c.cacheMu.Unlock()
-		return set == nil || set[model]
+		return set
 	}
 	c.cacheMu.Unlock()
 	cctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 	res, err := s.askLauncherModels(cctx, machine, launcher, false)
 	if err != nil {
-		return true
+		return nil
 	}
 	set := map[string]bool{}
 	for _, x := range res.Models {
@@ -240,7 +250,7 @@ func (s *Service) launcherHasModel(ctx context.Context, machine, launcher, model
 		}
 	}
 	if len(set) == 0 {
-		return true
+		return nil
 	}
 	c.cacheMu.Lock()
 	if c.cacheAt == nil {
@@ -248,7 +258,7 @@ func (s *Service) launcherHasModel(ctx context.Context, machine, launcher, model
 	}
 	c.cacheAt[key], c.have[key] = time.Now(), set
 	c.cacheMu.Unlock()
-	return set[model]
+	return set
 }
 
 // askLauncherModels is machine's node's /model list of launcher name (node/launcher_models.go), with the models of

@@ -168,7 +168,7 @@ func (n *Node) resumeCodex(ctx context.Context, launch host.Launcher, id string,
 	n.bindPane(pane, id)               // the pane runs this thread (kept in its state): no guessing another rollout for it
 	time.Sleep(300 * time.Millisecond) // the fresh shell loads ~/.zshrc; typed input is buffered either way
 	shells := paneShells(ctx)
-	done, err := n.runAgentCommand(ctx, launch, created, ws, n.agentCommand(shellQuote(n.bin)+" codex-start "+shellQuote(file), shellQuote, shells...), shells...) // typedstart.go
+	done, err := n.runAgentCommand(ctx, launch, created, ws, "", n.agentCommand(shellQuote(n.bin)+" codex-start "+shellQuote(file), shellQuote, shells...), shells...) // typedstart.go
 	if err != nil {
 		return err
 	}

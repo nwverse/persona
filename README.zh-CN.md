@@ -30,7 +30,7 @@
 
 ## 视频介绍
 
-https://github.com/user-attachments/assets/1957768c-188a-4d9d-8c23-cd16eb72cdd4
+https://github.com/user-attachments/assets/5ef97ffd-f6d8-4136-834c-ffcddbf56846
 
 <sub>[高清视频与字幕](https://github.com/nwverse/persona/releases/tag/promo-v1)。</sub>
 

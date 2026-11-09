@@ -16,9 +16,9 @@ import (
 	"github.com/nwverse/persona/server/internal/rpc"
 )
 
-// typedStartOverDir bounds what a start types into a herdr pane beyond the node directory's path: `. '`, the start
-// file's name, `'` and Enter, whatever the command's flags (#2022).
-const typedStartOverDir = 48
+// typedStartOverDir bounds what a start types into a herdr pane beyond the node directory's path and the session id:
+// `. '`, the start file's name, `' && true ` and Enter, whatever the command's flags (#2022).
+const typedStartOverDir = 64
 
 // The worst case of #2022: a managed launcher with its settings, Persona's plugin directories and office rule, a [1m]
 // model, under a long home. The command is over the canonical limit; what is typed is the short line that sources it,
@@ -49,7 +49,8 @@ func TestHerdrStartTypesAShortLine(t *testing.T) {
 		mu.Lock()
 		defer mu.Unlock()
 		typed = c.Typed
-		file = strings.Trim(strings.TrimPrefix(c.Typed, ". "), "'")
+		file, _, _ = strings.Cut(strings.TrimPrefix(c.Typed, ". "), " ")
+		file = strings.Trim(file, "'")
 		if fi, err := os.Stat(file); err == nil {
 			mode = fi.Mode().Perm()
 		}
@@ -73,7 +74,11 @@ func TestHerdrStartTypesAShortLine(t *testing.T) {
 	if !strings.Contains(cmd, "personad launch work_gw") || len(cmd) < 1024 {
 		t.Errorf("not the worst case (%d bytes): %s", len(cmd), cmd)
 	}
-	if len(typed)+1 >= 1024 || len(typed)+1 > len(n.dir)+typedStartOverDir { // + Enter
+	_, id, _ := strings.Cut(typed, " && true ")
+	if !validID(id) || !strings.Contains(cmd, "--session-id "+id) {
+		t.Errorf("typed %q: not the session id the command starts, for the start probe", typed)
+	}
+	if len(typed)+1 >= 1024 || len(typed)+1 > len(n.dir)+len(id)+typedStartOverDir { // + Enter
 		t.Errorf("typed %d bytes (directory %d): %q", len(typed)+1, len(n.dir), typed)
 	}
 	if mode != 0o600 {
@@ -139,7 +144,7 @@ func TestStartFileInRealShells(t *testing.T) {
 					t.Fatal(err)
 				}
 				ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-				c := exec.CommandContext(ctx, bin, "-ic", startLine(file, bin))
+				c := exec.CommandContext(ctx, bin, "-ic", startLine(file, startID, bin))
 				c.Env = []string{"HOME=" + home, "ZDOTDIR=" + home, "PATH=" + path + ":/usr/bin:/bin", "PERSONA_ASSISTANT=1"}
 				out, err := c.CombinedOutput()
 				cancel()
@@ -152,6 +157,25 @@ func TestStartFileInRealShells(t *testing.T) {
 				if _, err := os.Stat(file); !os.IsNotExist(err) {
 					t.Errorf("%s (%s): start file left behind", sh.name, l)
 				}
+			}
+			// A launcher the shell does not have: its not-found line, prefixed with the file's path, is still read as one
+			// (startProbe, shellmiss.go), with the pane's shell left to the probe.
+			cmd := n.agentCommand(n.claudeCommandLine(claudeLaunch{Launcher: "nosuch"}, "--session-id "+startID, shellQuote), shellQuote, bin)
+			file, err := writeStartScript(dir, cmd)
+			if err != nil {
+				t.Fatal(err)
+			}
+			c := exec.Command(bin, "-ic", startLine(file, startID, bin))
+			c.Env = []string{"HOME=" + home, "ZDOTDIR=" + home, "PATH=" + path + ":/usr/bin:/bin"}
+			out, _ := c.CombinedOutput()
+			var miss shellMiss
+			for _, l := range strings.Split(string(out), "\n") {
+				if m, ok := parseShellMiss(l); ok {
+					miss = m
+				}
+			}
+			if miss.Word != "nosuch" || miss.Kind != missNotFound || miss.Shell != "" && miss.Shell != sh.name {
+				t.Errorf("%s: not-found line %+v in %q", sh.name, miss, out)
 			}
 		})
 	}

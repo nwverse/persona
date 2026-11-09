@@ -1,0 +1,19 @@
+{
+  "manifest_version": 1,
+  "id": "example-provider",
+  "name": "Example Provider",
+  "version": "1.0.0",
+  "contributes": {
+    "providers": [
+      {
+        "id": "example",
+        "name": "Example",
+        "kind": "api",
+        "api": "messages",
+        "base_url": "https://api.example.com",
+        "models": [{"id": "example-large", "name": "Example Large", "context_window": 200000}]
+      }
+    ]
+  },
+  "permissions": {"network": ["api.example.com"]}
+}

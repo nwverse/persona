@@ -2,6 +2,19 @@
 
 Pitfalls, odd behavior and the decisions made at the time (formerly "Lessons" in `CLAUDE.md`; index in `docs/lessons/README.md`). Add new lessons to the relevant section, or create one if none fits.
 
+## Idle-energy profiling and caller attribution (#1634)
+
+- Use an isolated mock hub and keep the build, simulator profile, data and visible-page history identical. Frame-count probes and frozen animations change the workload. A runtime-CLI root rebuild can pin `scenePhase`; use a cold launch and real tab actions instead. Home is asynchronous: verify the background transition before starting its window.
+- Simulator instrument support is not implied by the template list. Preserve unsupported/error logs and label absent counters as unavailable, not zero. Host Instruments can attribute Activity Monitor counters to the simulator app PID, but this is not phone battery or radio measurement. Long all-process recordings on Xcode 27.2 may hang while saving with overlapping-image diagnostics; a timeout is a failed trace, even when independent process counters cover the whole window. Concurrent recordings can contend for the global `kperf` lock.
+- macOS `proc_pid_rusage` CPU times are Mach ticks. Convert with `mach_timebase_info` before calculating seconds or percent; do not relabel raw ticks as nanoseconds. Process idle/interrupt wakeups and package-idle wakeups are different counters, not total hardware CPU wakeups.
+- A shared credential does not identify one device or process. Separate App, widget, intent and capability-probe callers; a short hello-only WebSocket is not the main App reconnecting. Pre-gzip body counters, decoded `Data.count`, encoded HTTP bodies and TLS/radio bytes are different quantities. Verify actual negotiation with a local gzip fixture and retain attribution caveats.
+- Tab visibility and scene activity are different scopes. Polling and animation should stop when the scene is inactive, but blindly adding scene-driven `disappear` to every tab callback can clear voice-call continuation state. Audit consumers before changing a shared lifecycle helper.
+- Hosted SwiftUI lifecycle fixtures need a window attached to a real `UIWindowScene`. A frame-only `UIWindow` can execute a timeline closure without mounting its `UIViewRepresentable`, so a missing native view is not proof of animation teardown. Serialize scene-owning fixtures, retain geometry assertions for partial visibility, and test actual native animation removal rather than weakening a missing-view assertion.
+- Profiling and offline tests on the same mock-only simulator share paired snapshots. Constructing `AppModel()` restores that inventory before a fixture installs its registry; replacing links alone is not isolation. Explicitly replace the fixture's in-memory inventory, assert it starts empty, and retain persistence needed by relaunch scenarios. Unexpected summary counts or a chat displaced from a bounded prefetch window must not be hidden by wider limits, longer waits or skipped assertions.
+- UI setup must establish an active scene, not merely find a retained element. `openAgentsFresh` resets list preferences, not paired snapshots; a clean mock launch keeps `pairURL` to suppress automation-time push registration and handles any pending system alert. A long native menu can expose children whose frames are empty: inspect its actual layout and drag inside the visible menu bounds before asserting offscreen choices or their stability. Churn fixtures use fresh interaction IDs after resolution, since the app correctly refuses to revive a resolved identity.
+- A fixed window may end after a GET starts but before its body is recorded. Keep CPU/transport endpoints fixed, audit completion separately, and label drained response totals accordingly. A pending receipt's initial zero lengths or default encoding are not a bandwidth saving or evidence that gzip negotiation failed.
+- Replaying only transcript items is not a matching workload. Clock-generated task feeds can move later than the last user message and change the visible cards; pin the source fixture clock before initialization, restore the side feeds, and keep assistant rows out of the regular-session inventory. Confirm both the warmed page history and actual screenshots, retaining rejected trial readings rather than silently treating them as comparable.
+
 ## Hosted minimum-Xcode initialization and the stock simulator boot (#1218)
 
 Pin both `DEVELOPER_DIR` and the disposable hosted runner's system Xcode selection, then run that Xcode's first-launch initialization before downloading platforms or creating a simulator: an environment variable selects foreground tools but not the system selection background platform services use. Keep system-wide selection/initialization in the hosted workflow, not the locally runnable Apple script. This did not fix the stock iOS 26.0 boot either: with it, hosted runs booted in 103 s, timed out at the 900-second `simctl bootstatus` deadline (device `Booted`, 71 GiB free), then booted in 76 s; main without it timed out twice. The hang is intermittent and its cause is still unknown. It is not the dyld shared cache: the hosted image ships only newer iOS runtimes (26.2, 26.4.1, 26.5) and downloads 26.0.1 on every run, but an explicit `xcrun simctl runtime dyld_shared_cache update com.apple.CoreSimulator.SimRuntime.iOS-26-0` right after the download returned in 0.8 s with `dyld shared cache is usable` (the identifier form is accepted), so the cache already existed before the boot. Keep the 900-second boot deadline, the stock profile, the pinned 26.0.x runtime and no automatic retries unless the maintainer decides otherwise; treat a single green boot as no proof either way and record the boot time of each hosted run.
@@ -104,9 +117,13 @@ In shells that retain pages, `onDisappear` does not mean a card has scrolled off
 
 visionOS lacks iOS drawer gestures; `DrawerPan.NoRowSwipe` (a row mark, gone since #1244 took the swipes off Agents' rows) only needed a content-free background. `Color.clear.frame(width: 0, height: 0)` adds unnecessary fixed dimensions; iOS token checks scan shared source and do not ignore visionOS branches. Return `EmptyView()` directly: no drawing, no layout space. Do not add zero-size tokens for the stand-in, raise the baseline or add exemptions.
 
+## Preserve platform defaults when simplifying navigation (#1653)
+
+Compact iPhone width uses only the shell. Regular-width iPad keeps its sidebar and Inbox / Settings routes; making compact navigation unconditional across platforms would remove that split-screen behavior. Shared root tab components still serve Mac and Vision: removing a phone-only branch is not permission to delete those components or their badges, foreground scopes and destinations. Follow every platform caller before deleting a shared view, and protect the compact shell, regular sidebar and desktop / Vision tabs with compiler-free source checks.
+
 ## Keyboard-dismiss button and model display in the composer (#2200)
 
-- 2026-11-05: the keyboard-dismiss icon has two sources: the new shell's `ShellComposerBar` (shared by main chat and Agents) and the old layout's `KeyboardDismissChip`. Removing it as requested also requires removing the old layout's conditional row created solely for the button; no transparent placeholder. `composerTyping` still controls header collapse in the sidebar layout; `Keyboard.dismiss` and `Theme.Icon.dismissKeyboard` remain used by gestures and terminal key bars and must not be deleted globally.
+- 2026-11-05: removing the keyboard-dismiss icon also requires removing any conditional row created solely for the button; no transparent placeholder. Main and Agent chats share `ShellComposerBar`. `composerTyping` still controls header collapse in the sidebar layout; `Keyboard.dismiss` and `Theme.Icon.dismissKeyboard` remain used by gestures and terminal key bars and must not be deleted globally.
 - GPT `name` formatting is display-only; preserve versions and suffixes. Model picker entries expose friendly names through computed properties; keep `AgentModel.id`, `name`, configuration values and request encoding unchanged. A distinct custom `name` takes precedence. Do not change generic `Fmt.model` or opportunistically shorten non-GPT labels that previously only lost the provider prefix. First confirm UI regression tests fail on the old implementation, then verify both layouts, main chat / Agents, keyboard shown / gesture-dismissed, and button sizes with long labels.
 
 ## A refresh task must not change its own key before the request completes (#1860)
@@ -218,7 +235,7 @@ Use an invalidation revision as the task key and handle the flag after completio
   changing `Tab.badge` rebuilds its page even without parameters, resetting open overflow menus and reevaluating entire chats.
   Wrap every `Tab` page in `TabPage { … }.equatable()`. Changing `Menu.label` relays out and resets open menus; put counts / red dots in small self-observing views beside it
   (`WaitingBadge`), with menu hosts not reading per-push data. Mock must push `inbox` and `interaction`
-  (`/mock/churn?inbox=1&waiting=1`); run both layouts since the new shell is iPhone default (`TEST_RUNNER_PERSONA_LAYOUT=shell`).
+  (`/mock/churn?inbox=1&waiting=1`); run default compact shell and regular-width sidebar navigation in both styles.
 - Row parameters containing closures or structures with strings / arrays (`Item`) make SwiftUI treat them as changed every time: each push reevaluates the page and all visible plus lazy-buffer rows
   (~45 in a long Persona main chat, 2026-11-01). Chat bubbles, replies, work rows and composer all use `Equatable` + `.equatable()`, comparing only messages;
   permanently mounted but hidden content (closed sidebar) must not read changing `allSessions`; use its previous value while hidden.
@@ -243,7 +260,7 @@ Use an invalidation revision as the task key and handle the flag after completio
 - A resizing TextField in the same tree as a long list causes root-to-page relayout and visible lazy-row remeasurement (~10 ms per typed character).
   Put it in its own hosting controller (`LayoutIsland`), measuring internally and reporting height; the page relays out only when height changes.
   Do not use `sizingOptions = .intrinsicContentSize`: tested, the composer failed to grow while typing (2026-11-01, `ComposerGrowTests`).
-  New-shell `ShellComposerBar` expands from a line to a card and does not use isolation: long-text snapshots repeatedly time out even on a new simulator; retain its tree and enable only in the old layout.
+  `ShellComposerBar` expands from a line to a card and does not use isolation: long-text snapshots repeatedly time out even on a new simulator; retain its tree. Isolation belongs only on compatible desktop composers, not the iOS shell or regular-width card.
   Content drawing beyond its bounds cannot use an island: the hosting view only accepts in-bounds taps, so visible overflow taps hit the underlying page.
   BeautifulUI `PromptBar` places `/`, `@`, + and model menus above the composer, making all untappable inside it (2026-11-02, `BeautifulStyleTests.testCommandMenuTakesTaps`); this style also skips islands.
   Do not transfer environment by replacing `.environment(\.self, context.environment)` wholesale (2026-11-04, #995, #1006): it includes the outer hosting controller's own values
@@ -314,7 +331,7 @@ Use an invalidation revision as the task key and handle the flag after completio
   Supply dark / light appearance (copy shell window `overrideUserInterfaceStyle`; later `ColorSchemeChoice` updates all scene windows), `app` text size
   (`textSize.applied(to:)`; a new window otherwise follows only system), `AppModel` and BeautifulUI theme. VoiceOver will not move to a non-touch window; announce through `AccessibilityNotification.Announcement`.
   XCUITest still finds it in the `app` tree. Place it below the shell header, not at the status bar where it covers segments (`ShellNavigationClearance.needed(at:)`).
-- The tabs (Old Layout, iPad) kept the toast in `RootView`'s overlay after the shell moved to `ToastWindow`, so every toast raised from a
+- The regular-width iOS tabs kept the toast in `RootView`'s overlay after the shell moved to `ToastWindow`, so every toast raised from a
   `fullScreenCover` or sheet was drawn under it: Saved to Photos from the image viewer and the share card never showed (#1492). `PhotoSaveTests`
   passed all along, because XCUITest finds a covered toast's words. A test that a toast is seen compares the pixels where it is with and without it
   (`PhotoSaveTests.expectDrawn`). Now the tabs get a toast window too (`ToastWindowHook`); the overlay is left only where no such window exists.
@@ -402,14 +419,14 @@ Use an invalidation revision as the task key and handle the flag after completio
   Compare intersecting frames in `ShellSearchTests`; `exists` alone misses overlap.
 - Inactive pull-down search still has only standard-button clearance, so enlarged shell buttons and avatar Inbox badges overlap (2026-11-02: avatar bottom 125 pt, search top 117 pt).
   `safeAreaPadding` does not move UIKit search. Set a space in Agents root `navigationItem.prompt` (`ShellNavigationClearance`),
-  adding one 34 pt row independent of text size, moving search and list down; remove during active search, never add to old layout. Cap header controls at `Theme.Shell.topBarLargestTypeSize`
+  adding one 34 pt row independent of text size, moving search and list down; remove during active search; this clearance belongs only to compact shell headers. Cap header controls at `Theme.Shell.topBarLargestTypeSize`
   (xxxLarge, 1.35×, `shellTopBarScaled()`), preventing accessibility-size avatar overlap. `subtitleView` and two-line prompt attempts did not grow further.
   `ShellSearchTests` cover small / standard / large expansion, input, cancel, return from results, with light / dark screenshots.
 - **Do not toggle per-page clearance on navigation containers** (#340, 2026-11-02): old outer padding by `path.isEmpty` disappeared on chat push and returned on Back.
   UINavigationController does not reposition its bar during transitions: return starts at chat coordinates (container 88 + old safe area 62 = y 150, expected 98),
   list inset is wrong, drawer search expands as `if` at top (+54), then 0.1–0.6 seconds after transition relayout jumps 52 pt and leaves a different final position with search open.
   Switching without animation at root `viewWillAppear` and forcing `setNeedsLayout` / `layoutIfNeeded` also fails: safe area is already correct but bar frame does not move.
-  Old layout stays unchanged. Keep navigation-container frame / safe area invariant during push and Back (shell status row changes root `additionalSafeAreaInsets`, moving everything together);
+  Keep navigation-container frame / safe area invariant during push and Back (shell status row changes root `additionalSafeAreaInsets`, moving everything together);
   page-specific space belongs to its navigation item for native transitions. `AgentsReturnTests` measure `probe.agents-scroll` per frame (both return gestures × search open / closed × both layouts).
 - To inspect one-frame shifts: DEBUG `-showPopFrames YES` logs `POPF` whenever window positions / insets of navigation bar, search bar or large (>300 pt) collection / scroll views change,
   combined with `simctl io recordVideo` and `log stream --predicate 'eventMessage CONTAINS "POPF"'`. UIKit transitions change presentation layers; logs show model end values,
@@ -828,7 +845,7 @@ app chooses transcoding by size (`VideoPrep`, docs/protocol/protocol.md "Sending
 
 - **Bubble width follows its widest piece**: a quote with `frame(maxWidth: .infinity)` inside normal `VStack` expands the bubble to full row width.
   `WidestColumn` (`DesignSystem/QuoteViews.swift`) first finds maximum unconstrained ideal width capped by proposal, then lays out every piece at that width.
-  Unquoted bubbles retain original `Text.padding.background`: after long-text wrapping the new layout widens bubbles by a few points, violating pixel-identical defaults.
+  Unquoted bubbles retain original `Text.padding.background`: using `WidestColumn` for unquoted long text widens bubbles by a few points, violating pixel-identical defaults.
 - **Accessibility combine changes test-visible elements**:
   - Applying `.accessibilityElement(children: .combine)` to the entire quote bar removes × as a separate button and title as static text,
     breaking `LarkSendTests` `staticTexts["回复 我"]` ("Reply to me").
@@ -852,7 +869,7 @@ also give them Chinese display names / meaningful parameters in `ToolPresentatio
 #1079 requested Agent dictation / stop buttons matching assistant; only buttons were extracted, assuming both composers used `ShellComposerBar`.
 Actually `ChatView`.Composer uses it only with `shellChat` true, set only by `AssistantView` for its `ChatView`. Agents pushes the same
 `ChatView` with false default and uses `ComposerRow` / `PromptComposer`. Buttons matched but placement did not (microphone outside pill), obvious in TestFlight.
-Before claiming reuse, follow both callers through environment, style and legacy-layout branches; screenshot both pages side by side in identical state.
+Before claiming reuse, follow both callers through environment, style and platform-width branches; screenshot both pages side by side in identical state.
 
 ### "Any online Agent?" requires more than session state (#1110)
 
@@ -872,7 +889,7 @@ When a computer disconnects, hub marks sessions unknown, not offline; `AgentStat
 - **Dragging a message while the list still scrolls** (initial follow-to-latest): first touch only stops scrolling, normal iOS behavior. Wait for settling before test drags.
 - **Header collapses after idle seconds** (`chromeIdleSeconds`): new buttons must also appear in the narrow strip or users / tests cannot find them there.
 - **Row gestures await child gestures**: `UIGestureRecognizerRepresentable` attaches through `.gesture`, not `.simultaneousGesture` (requires SwiftUI `Gesture` and does not compile).
-  - SwiftUI waits for child gesture, message long-press `LongPressAt`, to fail. Drag sometimes loses and never starts (old layout + BeautifulUI failed 2/4).
+  - SwiftUI waits for child gesture, message long-press `LongPressAt`, to fail. Drag sometimes loses and never starts (historical BeautifulUI tab-navigation run failed 2/4).
   - In subclass, do not call `require(toFail:)` for `UILongPressGestureRecognizer`; return false from `shouldRequireFailure(of:)` and `canBePrevented(by:)`. Left-drag exceeds allowed long-press movement, so both cannot succeed. Afterwards 4/4 passed.
   - Do not use `.slow` drags in tests: failing to move 10 pt within 0.35 s activates long-press first (people drag faster).
 - **View-read switches must not be `@ObservationIgnored`**: `MessageMenu.swipeQuotes` enables only in chat `onAppear` / `bindMenu`.
@@ -1296,7 +1313,7 @@ but UIKit still had a page with only Agents Back and empty content.
 - Faded out, the shell's top bar was still in the accessibility tree over the risen field (☰ found and tappable): it leaves the tree once the list takes its searching layout. And the list at rest with the field folded sits a band down from its top: `ReaderAnchor` must count that as the top, or a change at launch keeps a row and throws the list ~350 pt down.
 - Measuring: resting states pixel by pixel against master (screenshots of each state, diffed); motion from the app writing each block's place every frame (`SearchTrace`, a CADisplayLink reading presentation layers). The simulator's home indicator strip differs from one screenshot to the next (~6400 px): leave it out.
 - The shell's chrome grows with the text (`shellScaled`, the top bar up to XXXL: 50 → 60 pt tall), the navigation bar, the shell's room and the field's band do not. A timing worked out at the standard size (the bar gone by 0.35 of the field's way) let the field into the bar's rows at XXXL while the bar was still ~8 % there (#4928): derive such timings from where things are drawn, and run motion tests at a larger size too. A 60 Hz trace can step over a crossing that lasts one frame; check the geometry, not only the frames.
-- A `withAnimation { } completion:` can run before anything has moved. Opening the search from `keyboardWillShow` during the first keyboard of a launch, the change reached the list's `ListShift` (and the field) only in an update after the ~0.4 s stall. The transaction had nothing animating when it committed, so the completion ran at once (80 ms after the start, the slide still 270 ms away) and switched the list's layout early: a 54 pt jump in one frame, in about half the old-layout runs (#5999; the shell did not fail in any run). Do what has to wait for a move when the animated value itself arrives (`ListShift.arrived`), and guard against a stale arrival (`AgentsHeader.rising`).
+- A `withAnimation { } completion:` can run before anything has moved. Opening the search from `keyboardWillShow` during the first keyboard of a launch, the change reached the list's `ListShift` (and the field) only in an update after the ~0.4 s stall. The transaction had nothing animating when it committed, so the completion ran at once (80 ms after the start, the slide still 270 ms away) and switched the list's layout early: a 54 pt jump in one frame, in about half the historical tab-navigation runs (#5999; the shell did not fail in any run). Do what has to wait for a move when the animated value itself arrives (`ListShift.arrived`), and guard against a stale arrival (`AgentsHeader.rising`).
 
 ## On an iPad the chat's sideways scroll views are inset by the sidebar (2026-11-06, #5737)
 
@@ -1354,7 +1371,7 @@ DEBUG 的代码可能在 `Persona.debug.dylib` 中，40 KiB 的 `Persona` 只是
   disabled gray (about 2.3:1 on the menu's glass) and looked like an option not available now. `Section { … } header: { Text(…) }` is drawn in
   the system's secondary style, line by line on iOS with no three-line cut (a `\n` starts a new line), and stays on top of its section in a menu
   that lists its items the other way round. Nothing in a menu takes a color: a warning can only be as clear as the words around it.
-- **A menu that opens upward lists its items the other way round** (the shell composer's model menu, the old layout's chips: the items declared
+- **A menu that opens upward lists its items the other way round** (the shell composer's model menu and shared effort chips: the items declared
   first sit next to the button): a quota row declared after its switch landed above it, and a section declared after the effort went above the
   effort, out of view until a scroll. Declare them in the reverse order on iOS (`UltracodeMenuSection.leadsEffort`; the Mac keeps the declared
   order); `.menuOrder(.fixed)` would turn the whole existing menu over.
@@ -1391,3 +1408,20 @@ DEBUG 的代码可能在 `Persona.debug.dylib` 中，40 KiB 的 `Persona` 只是
 - **Now**: the open text is plain, with a Copy button under it. Don't put `.textSelection(.enabled)` directly under a header
   that toggles on tap; if a selectable body is needed, give it its own gap or make the toggle a separate control. Test the
   fold by tapping the header's words, not just its chevron.
+
+## A picker's menu drops an option's second line; a DisclosureGroup's chevron ignores the tint (2026-11-09, #1643)
+
+- **Picker in a menu**: Run Agent Here wanted to say why a launcher is unavailable before it is picked. An option drawn as
+  `VStack { Text(name); Text(reason) }`, or a `Label` whose title is two `Text`s, shows only the first line in the
+  `Picker`'s menu (iOS 27 simulator; a `Menu` button's second `Text` does become a subtitle, a `Picker` option's does
+  not). What a picker menu does show is a `Section`'s title: the blocked launchers go under a section per reason
+  (`LauncherChoices.blockedByReason`), after the usable ones. The runtime CLI's `activate` cannot choose a menu item (it
+  needs a real touch through `idb`), so a DEBUG switch picks the launcher for the screenshot instead (`-showRunHereLauncher`).
+- **DisclosureGroup**: `.tint(.secondary)` on it leaves its chevron in the primary color, so a gray "Details" label sat
+  next to a black / white chevron that read as a navigation link. Use a borderless button with the expand / collapse icon
+  in `.secondary`, as `ReadinessCard`'s Details does.
+
+## A menu inside a menu keeps the items it was first built with (2026-11-09, #1644)
+
+- **What went wrong**: the Persona chat's avatar menu nests "Launcher" › each launcher › its models. The models are read a moment after the bar comes up. An `.id` on the innermost menu (built from the list) was not enough: the "Launcher" menu around it had none, kept the launchers' submenus it was built with before the lists came in, and the claude submenu showed only Default and "Other Model…" for as long as the app ran, although the state had all ten models. Whether a run saw it depended on when the outer menu happened to be built first, so a passing UI test proved little.
+- **Now**: every level of a nested `Menu` whose items come from state that loads or changes gets an `.id` built from that state (`AssistantTopBar.launcherMenuID` on "Launcher", the list and pick on each launcher). When a menu's items look stale, log the state first: if it is right, the menu was not built again.

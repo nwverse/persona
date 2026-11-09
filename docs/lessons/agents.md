@@ -2,6 +2,8 @@
 
 Pitfalls, odd behavior, and the trade-offs made at the time (formerly in `CLAUDE.md` ("Lessons"), index in `docs/lessons/README.md`). Add new lessons to the matching section; create a section if none fits.
 
+- Task placement must preserve locality (#1175): a failed launcher check is not permission to move an explicitly targeted task to another computer with the original absolute directory. Persist fixed placement by default through preview, card edits and retries; require an explicit flexible policy for portable work. Returning from background dispatch only proves the work was queued, not that a native Agent received its first prompt.
+
 - A successful session deletion must survive a node reclassifying an unchanged offline transcript as `interrupted`. Apply persisted deletion notes to that status too, using machine/session ID and last-use time; neither a shared project name nor a missing worktree means another conversation was deleted (#5933).
 
 - Recent directories for a new development session must be filtered with `identity.IsAssistantDir` after node combines transcript directories and running Agent directories, then sorted and limited to 15 (#1662). Assistant transcripts update continuously and otherwise dominate default suggestions; don't filter solely by the directory name `assistant`, which could hide a project with that name. Filtering affects only suggestions; existing sessions and explicit directory browsing remain.
@@ -145,6 +147,7 @@ Pitfalls, odd behavior, and the trade-offs made at the time (formerly in `CLAUDE
   to an empty directory; never touch the live Orca (its socket fully controls Orca).
   New Orca terminals (#924): omit `presentation: "background"` in `terminal.create` to avoid an orphan PTY; after creation, check identity and generation via `terminal.list` using the exact handle; ordinary creation explicitly `cd`s to the target directory. Permission to create sessions isn't permission to resume ones still open elsewhere: since #5548 Orca resumes an exited Claude session like herdr, after `openElsewhereRefusal` (a live claude on the session, including a suspended one) and a check that its last pane is closed; `orca_resume` (which also kept `openElsewhereRefusal` from ever running on Orca) now refuses only non-Claude agents. Send and retire share `orcaContinues`: retire must not close what a message cannot bring back. Orca's `terminal create --agent --resume` is a CLI of some builds only and drops the session's launcher.
   Claude with background tasks (#5463): Orca's `terminal.agentStatus` says `isRunningAgent: false` while Claude Code has background Bash tasks, though its input box takes text; requiring it refused every send to such a session with nothing logged. The process scan is the foreground gate. A `tmux new-session -d` an agent runs inherits the pane's `ORCA_PANE_KEY`, and each process in it is "in front" of tmux's own pty: a `claude -p` worker with a lower pid took the pane and its manager dropped to interrupted. Without Orca's check, "in front" must mean in front of the pane's own pty: a candidate whose pty owner (first ancestor on another terminal) carries the same pane key is nested (tmux, zellij, script…) and not the pane's. Not by `TMUX=`: Orca's agent teams set it in a real pane. A refusal and a pane changing sessions are logged since.
+  A pane variable is not ownership (2026-11-08): a claude whose environment carried `ORCA_PANE_KEY` was skipped as "its engine lists it" even on a node that did not enable Orca, or when the macOS scan missed it, so every running claude in Orca's terminals showed as offline. The outside-claude list now defers to an engine only when an engine in use lists that pane with a claude in it.
 - Launchers (`docs/integrations/launchers.md`, 2026-11-01): discovery once only read `_claude_launchers` helper output; a machine with all aliases in `~/.zshrc` (41 for one user)
   listed only `claude`. Let zsh tokenize aliases (`${(@Q)${(z)value}}`), not Go quote parsing. Aliases defined by a script in `zsh -c` don't expand within that
   script (it is parsed all at once); tests must use `zsh -ic` like node and write definitions to temporary `$ZDOTDIR/.zshrc`. With `alias claude=…` in `~/.zshrc`,
@@ -263,6 +266,24 @@ other engines' panes (Orca) keep their original error.
   Manually adding `enableArtifact: false` to `launcher-settings/<name>-env-settings.json` seems ineffective: node rewrites that file at every launch, losing the edit before the next Agent starts.
   Both `enableArtifact: false` in `--settings` and environment `CLAUDE_CODE_DISABLE_ARTIFACT=1` worked in tests (interactive claude in tmux, three configs compared);
   Persona-managed launchers now carry both (`docs/integrations/launchers.md` ("How Persona-managed launchers run")).
+
+## "the tab's shell had not run it yet (is the machine busy?)" when the launcher isn't there at all (#1642)
+
+The same 3-minute error came from a start whose launcher the tab's shell simply did not have: herdr's panes ran inside a container whose `~/.bashrc` detected the container and returned early,
+so the launcher function defined further down existed in the node's `bash -ic` (where the list, "Test availability" and the health checks run) but not in the pane. The tab printed
+`bash: <launcher>: command not found` a second after the command; herdr never names an agent in such a pane, so nothing ended the wait, and the cause was buried under the echoed
+700-character command in the error's screen tail. Launcher health made it worse: the failed start was classed `other`, and the check that runs right after a failed start
+passed in the login shell and reset the launcher to `ok`, so the assistant kept picking it. App starts were not recorded at all.
+
+- Persona lists and checks launchers in one environment and runs them in another; nothing guarantees they match (a container, a different login shell than `loginShellProgram`, herdr's `default_shell`, a bash login tab reading `~/.bash_profile`).
+- While claude has not come, `waitReady` now reads the shell's own not-found line for the command it typed (`node/shellmiss.go`: bash, zsh, dash / sh, ksh, fish, Ubuntu's and Fedora's handlers, paths that are missing or can't be run)
+  and fails at once with a coded refusal. Anchor on the session id in the typed command: only lines after it are this start's (an adopted pane's scrollback is not), and a line about claude counts only after the command's last echo
+  with the shell back in front (a slow rc prints its own noise between the terminal's echo and the shell's). Accept only whole lines: Claude's output quoting a shell error (`⎿ zsh: command not found: x`) is not one.
+- A health check in the login shell cannot clear a failure only the terminal has: keep it as its own class (`not_in_terminal`), skip the follow-up check and the repairs, and clear it only on a start that works.
+- Keep a refusal's code through every hop (`control.go` used to wrap it into text with the screen tail; `startLog.finish` kept only `err.Error()`): the apps and the hub can only word what still has its code.
+- Match what the programs really print, not what they mean to: `personad launch` ends through `log.Fatal`, whose default flags put the date and time in front (a pattern anchored at the start of the line never matched it);
+  dash, ksh and busybox say `not found` of a missing path; fish follows an error inside a function with a backtrace that repeats the function's arguments, the session id with them.
+- Don't compare a node's timestamps with the manager's clock: a node whose clock ran behind made a first failed start look counted already. Keep what was counted instead (with the health records, across restarts).
 
 ## Don't default to bare claude when resuming externally created sessions (2026-11-05, #411)
 

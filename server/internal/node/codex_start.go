@@ -149,8 +149,8 @@ func (n *Node) startCodex(ctx context.Context, launch host.Launcher, cwd, launch
 	shells := paneShells(ctx)
 	cmd := n.agentCommand(shellQuote(n.bin)+" codex-start "+shellQuote(file), shellQuote, shells...) // agentenv.go
 	began := time.Now()
-	time.Sleep(300 * time.Millisecond)                                       // the fresh shell loads ~/.zshrc; typed input is buffered either way
-	done, err := n.runAgentCommand(ctx, launch, created, ws, cmd, shells...) // typedstart.go
+	time.Sleep(300 * time.Millisecond)                                           // the fresh shell loads ~/.zshrc; typed input is buffered either way
+	done, err := n.runAgentCommand(ctx, launch, created, ws, "", cmd, shells...) // typedstart.go
 	if err != nil {
 		return nil, err
 	}

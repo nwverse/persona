@@ -15,10 +15,10 @@ final class AssistantTitlesTests: XCTestCase {
         self.hub = hub
     }
 
-    @MainActor private func launch(shell: Bool) -> XCUIApplication {
+    @MainActor private func launch() -> XCUIApplication {
         let app = XCUIApplication()
         let pair = "persona://pair?url=" + hub.addingPercentEncoding(withAllowedCharacters: .alphanumerics)! + "&token=mock"
-        app.launchArguments = ["-pairURL", pair, "-tab", "assistant", "-newAssistant", "YES", "-ui.oldLayout", shell ? "NO" : "YES"]
+        app.launchArguments = ["-pairURL", pair, "-tab", "assistant", "-newAssistant", "YES"]
         app.launchPinned()
         return app
     }
@@ -41,7 +41,7 @@ final class AssistantTitlesTests: XCTestCase {
     }
 
     @MainActor func testTitlesInTheShellsDrawerAndRename() throws {
-        let app = launch(shell: true)
+        let app = launch()
         openDrawer(app)
         XCTAssertTrue(row(app, "1028 | 研究 | 这个季度读书笔记的主题和书单整理").exists, "the long one")
         shot(app, "shell")
@@ -79,13 +79,6 @@ final class AssistantTitlesTests: XCTestCase {
     /// The drawer closes behind the alert; open it again if it did.
     @MainActor private func openDrawerAgain(_ app: XCUIApplication) {
         if !row(app, "1029 | 定时 | 早报").exists { app.buttons["assistant-sidebar-button"].firstMatch.tapCenter() }
-    }
-
-    @MainActor func testTitlesInTheOldLayoutsDrawer() throws {
-        let app = launch(shell: false)
-        openDrawer(app)
-        XCTAssertTrue(row(app, "1028 | 研究 | 这个季度读书笔记的主题和书单整理").exists, "the long one")
-        shot(app, "old")
     }
 
     private func renamed() throws -> [[String: Any]] {
