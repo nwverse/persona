@@ -141,14 +141,23 @@ final class InboxHandOffModel {
             },
             plainToMain: { text in
                 let key: SessionKey
-                if let main = model.assistantMain, model.session(main)?.canSend == true {
+                let client = try api()
+                // The item's manager's main conversation: the Persona page's when it shows that manager and has read its
+                // settings, else read from them (with none known, a start would replace the main conversation).
+                let main: SessionKey?
+                if model.assistantShows(item.manager), model.assistantConfig != nil {
+                    main = model.assistantMain
+                } else {
+                    let st = try await client.assistant()
+                    main = st.main.flatMap { $0.isEmpty ? nil : SessionKey(group: client.group, machineID: st.machineID, sessionID: $0) }
+                }
+                if let main, model.session(main)?.canSend == true {
                     model.sendNow(main, text: text) // a failure shows in the conversation, with Retry
                     key = main
-                } else if let main = model.assistantMain { // sendNow does nothing for a conversation not listed
-                    try await api().send(main, text: text)
+                } else if let main { // sendNow does nothing for a conversation not listed
+                    try await client.send(main, text: text)
                     key = main
                 } else {
-                    let client = try api()
                     let s = try await AssistantStart.run(receipts: model.hubFeatures.contains(AssistantStart.feature)) { op in
                         try await client.startConversation(prompt: text, main: true, opID: op)
                     }
@@ -172,7 +181,8 @@ final class InboxHandOffModel {
                     model.openChat = key
                     model.selectedTab = .chats
                 } else {
-                    model.openAssistantConversation(key)
+                    // On the item's manager's page, which the conversation may not be listed on yet.
+                    model.openAssistantConversation(key, manager: item.manager)
                 }
             },
             markDone: { InboxStore.shared.setDone(item, true, haptic: false) }))
