@@ -38,7 +38,8 @@ def features():
                 ["messaging"] if os.environ.get("MOCK_MESSAGING") == "1" else []) + (
                 ["conversation_origin"] if os.environ.get("MOCK_AUTO_CONVERSATIONS") == "1" else []) + (
                 ["sessions_list", "sessions_lookup"] if os.environ.get("MOCK_SESSIONS_LIST") == "1" else []) + (
-                ["preview"] if os.environ.get("MOCK_PREVIEW") else [])
+                ["preview"] if os.environ.get("MOCK_PREVIEW") else []) + (
+                [] if os.environ.get("MOCK_LOOK_UPLOADS") == "off" else ["look_uploads"])
 
 
 def identity():
@@ -3084,17 +3085,25 @@ if MOCK_TASKS:
         # what is in progress. The Accept button posts to /api/v1/todos/{id}/accept (accept_brief below).
         _feed("feed_brief", 1.5, "brief", "morning", {
             "title": "早报", "at": ago(minutes=1.6), "hours": 12,
-            "waiting": [{"id": "ix_mock_1", "title": "Mock 用协议注入还是保留单例？", "from": "来自 Agent「网络层测试」", "link": "http://127.0.0.1/s/macbook/mock", "waited_s": 4800, "nudged": True},
+            # A card and a question name the chat they came from (machine_id / session_id, #2320): the apps open it. The second
+            # card names none, as a card from no chat (or a hub from before) does.
+            "waiting": [{"id": "ix_mock_1", "title": "Mock 用协议注入还是保留单例？", "from": "来自 Agent「网络层测试」", "link": "http://127.0.0.1/s/macbook/mock",
+                         "machine_id": "macbook", "session_id": TESTS, "waited_s": 4800, "nudged": True},
                         {"id": "ix_mock_2", "title": "需要你批准", "from": "来自 Persona", "waited_s": 300}],
+            # The newest rows of each, the totals counting all of them ("and 5 more"; iPhone folds them behind the heading).
             "failed": [{"kind": "task", "id": "todo_task_align", "title": "设置页按钮对齐", "at": ago(hours=3), "why": "rpc: connection closed"},
                        {"kind": "routine", "id": "patrol", "ref": "run_mock", "title": "巡检", "at": ago(hours=5), "why": "Persona 停机，错过了时间", "skipped": True}],
-            "failed_total": 2,
-            "done": [{"id": "todo_task_blog", "title": "博客迁移到 Astro", "at": ago(hours=2)}], "done_total": 1,
+            "failed_total": 3,
+            "done": [{"id": "todo_task_blog", "title": "博客迁移到 Astro", "at": ago(hours=2)},
+                     {"id": "todo_task_icons", "title": "换一套设置页图标", "at": ago(hours=6)}], "done_total": 6,
+            # A deployed to-do (Accept) and a decision with a recommendation (Take recommendation, #1226).
             "accept": [{"id": "todo_task_release", "title": "整理发布说明", "detail": "发布说明写好了，放在 docs/release-notes.md", "from": "来自 Agent「发布」",
-                        "waited_s": 7 * 3600, "asked_at": ago(hours=7)}],
+                        "waited_s": 7 * 3600, "asked_at": ago(hours=7)},
+                       {"id": "todo_task_cache", "title": "选缓存方案", "from": "来自 Agent「网络层测试」", "waited_s": 2 * 3600, "asked_at": ago(hours=2),
+                        "verdict": "需要你拍板：本地缓存还是 Redis", "outcome": "decide", "recommend": "本地缓存，先不引入 Redis"}],
             # Questions an Agent left to wait for a briefing (later.go): the Handled button posts to /api/v1/later/{id}/handled.
             "later": [{"id": "lt_mock_1", "title": "统一用 snake_case 还是 camelCase 命名新接口？", "from": "来自 Agent「网络层测试」",
-                       "link": "http://127.0.0.1/s/macbook/mock", "waited_s": 26 * 3600},
+                       "link": "http://127.0.0.1/s/macbook/mock", "machine_id": "macbook", "session_id": TESTS, "waited_s": 26 * 3600},
                       {"id": "lt_mock_2", "title": "发布说明里要不要写内部编号？", "from": "来自 Agent「发布」", "waited_s": 3 * 3600}],
             "later_total": 2,
             "progress": [{"id": "todo_task_widget", "title": "小组件横屏崩溃", "stage": "develop"}, {"id": "todo_task_tests", "title": "补齐网络层的单元测试"}],
@@ -5036,6 +5045,35 @@ ITEM_MUTES = {
 }
 for _x in INBOX:
     if _x["id"] in ITEM_MUTES: _x["mutes"] = ITEM_MUTES[_x["id"]]
+
+# Folders (docs/assistant/inbox.md "Folders", #2463): GET/PUT /api/v1/inbox/folders and PUT /api/v1/inbox/{id}/folder.
+# MOCK_INBOX_FOLDERS=1 turns automatic folders on and files most items (one by hand); the rest stay unfiled.
+FOLDER_CFG = {"enabled": bool(os.environ.get("MOCK_INBOX_FOLDERS")), "rules": ""}
+if os.environ.get("MOCK_INBOX_FOLDERS"):
+    FOLDER_CFG["rules"] = "Messages from build and alert bots go to work/alerts/<service>"
+    for _id, _f, _by in [("lark:f1:100", "projects/atlas/release", "model"), ("lark:f2:200", "projects/atlas/design", "user"),
+                         ("mail:acc1:t1:501", "work/talks", "model"), ("lark:f3:300", "personal/hiking", "model"),
+                         ("mail:acc1:t2:502", "personal/shopping", "model"), ("mail:acc1:t3:503", "subscriptions/newsletters", "model"),
+                         ("github:review12", "work/reviews/example-repo", "model"), ("github:ci7", "work/alerts/ci", "model")]:
+        for _x in INBOX:
+            if _x["id"] == _id: _x["folder"], _x["folder_by"] = _f, _by
+
+
+def folder_state(query):
+    """GET /api/v1/inbox/folders: the settings and the folders the listed items are filed in, most used first."""
+    by = {}
+    for x in inbox_for(query):
+        if not x.get("folder"): continue
+        f = by.setdefault(x["folder"], {"path": x["folder"], "count": 0, "open": 0})
+        f["count"] += 1
+        if not x.get("done_at"): f["open"] += 1
+    return dict(FOLDER_CFG, folders=sorted(by.values(), key=lambda f: (-f["count"], f["path"])))
+
+
+def normalize_folder(s):
+    """The hub's normalizeFolder, enough for the mock."""
+    segs = [" ".join(seg.split())[:40] for seg in str(s).replace("\\", "/").split("/")]
+    return "/".join([x for x in segs if x and x not in (".", "..")][:6])
 SOURCE_NAMES = {"lark": "飞书", "mail": "邮件", "github": "GitHub", "imessage": "信息", "telegram": "Telegram"}
 # The mutes the user set (GET/POST/DELETE /api/v1/inbox/mutes); MOCK_MUTES=1 starts with two.
 MUTES = [] if not os.environ.get("MOCK_MUTES") else [
@@ -9272,12 +9310,121 @@ def ext_look_personas():
     return out
 
 
+# ---------- uploaded looks (docs/apple/persona.md "Uploading an image", #2404) ----------
+# POST /api/v1/looks/uploads makes a package in a temporary directory, as the hub does in personas/u-<hex>; the mock
+# keeps the image as it came for every size and state (the hub scales it and draws the states). DELETE takes it away.
+# MOCK_LOOK_UPLOADS=off: a hub without them (no look_uploads feature, 404); =demo: one uploaded look at start.
+UPLOADED_LOOKS = tempfile.mkdtemp(prefix="mock-look-uploads-")
+PERSONA_ROOTS.append(UPLOADED_LOOKS)
+UPLOAD_STATES = ("idle", "thinking", "working", "needs_you", "offline")
+
+
+def _png_rgba(w, h, pixel):
+    """A PNG of w×h, pixel(x, y) → (r, g, b, a), without Pillow."""
+    rows = b"".join(b"\x00" + bytes(c for x in range(w) for c in pixel(x, y)) for y in range(h))
+    chunk = lambda t, d: struct.pack(">I", len(d)) + t + d + struct.pack(">I", zlib.crc32(t + d) & 0xffffffff)
+    return (b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", w, h, 8, 6, 0, 0, 0))
+            + chunk(b"IDAT", zlib.compress(rows, 9)) + chunk(b"IEND", b""))
+
+
+def _demo_upload_png(side=256):
+    """A made-up picture for the seeded upload: a warm gradient with two eyes."""
+    def px(x, y):
+        d = min(1.0, ((x - side / 2) ** 2 + (y - side * 0.47) ** 2) ** 0.5 / (side * 0.7))
+        if ((x - side * 0.37) ** 2 + (y - side * 0.42) ** 2) ** 0.5 < side * 0.05 or ((x - side * 0.63) ** 2 + (y - side * 0.42) ** 2) ** 0.5 < side * 0.05:
+            return (48, 36, 36, 255)
+        return (int(250 - 60 * d), int(196 - 90 * d), int(140 - 70 * d), 255)
+    return _png_rgba(side, side, px)
+
+
+def make_uploaded_look(name, image, subtitle="", lid=None):
+    lid = lid or "u-" + uuid.uuid4().hex[:8]
+    root = os.path.join(UPLOADED_LOOKS, lid)
+    os.makedirs(os.path.join(root, "avatar"))
+    os.makedirs(os.path.join(root, "dot"))
+    sizes = {}
+    for side in (64, 128, 256, 512):
+        open(os.path.join(root, "avatar", "%d.png" % side), "wb").write(image)
+        sizes[str(side)] = "avatar/%d.png" % side
+    for st in UPLOAD_STATES:
+        open(os.path.join(root, "dot", st + ".png"), "wb").write(image)
+    m = {"format": 1, "id": lid, "name": name, "avatar": {"sizes": sizes, "safe": 1},
+         "dot": {"size": 144, "states": {st: {"file": "dot/%s.png" % st} for st in UPLOAD_STATES}},
+         "app_icon_fallback": "persona", "source": {"kind": "upload", "uploaded_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}}
+    if subtitle:
+        m["subtitle"] = subtitle
+    json.dump(m, open(os.path.join(root, "persona.json"), "w"), ensure_ascii=False, indent=2)
+    return lid
+
+
+if os.environ.get("MOCK_LOOK_UPLOADS") == "demo":
+    make_uploaded_look("豆豆", _demo_upload_png(), lid="u-demo0001")
+
+
+def _push_live(msg):
+    for send, _ in list(LIVE):
+        try:
+            send(msg)
+        except Exception:
+            pass
+
+
+def look_uploads_route(handler, method, p, raw):
+    if os.environ.get("MOCK_LOOK_UPLOADS") == "off" or not p.startswith("/api/v1/looks/uploads"):
+        return False
+    if p == "/api/v1/looks/uploads" and method == "POST":
+        body = json.loads(raw or b"{}")
+        name = (body.get("name") or "").strip()
+        if not name:
+            handler.send_json({"error": "给形象起个名字", "code": "no_name"}, 400)
+            return True
+        data = body.get("image") or ""
+        if data.startswith("data:") and ";base64," in data:
+            data = data.split(";base64,", 1)[1]
+        try:
+            image = base64.b64decode(data + "=" * (-len(data) % 4))
+        except Exception:
+            image = b""
+        if not (image.startswith(b"\x89PNG") or image.startswith(b"\xff\xd8") or image[8:12] == b"WEBP" or image.startswith(b"GIF8")):
+            handler.send_json({"error": "这个文件不是 Persona 能读的图片，请用 PNG、JPEG、WebP 或 GIF", "code": "not_image"}, 400)
+            return True
+        lid = make_uploaded_look(name, image, (body.get("subtitle") or "").strip())
+        looks = looks_list()
+        out = {"look": next(l for l in looks if l["id"] == lid)}
+        _push_live({"type": "personas"})
+        if body.get("choose"):
+            LOOK_CHOICE.update(id=lid, updated_at=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()))
+            out["current"] = look_current(looks)
+            _push_live({"type": "look", "id": lid, "effective": lid})
+        handler.send_json(out)
+        return True
+    lid = p[len("/api/v1/looks/uploads/"):]
+    if method == "DELETE" and lid and "/" not in lid:
+        root = os.path.join(UPLOADED_LOOKS, lid)
+        if not os.path.isdir(root) or lid.startswith("."):
+            if any(x["id"] == lid for x in personas()):  # a package of the hub's not made from an upload
+                handler.send_json({"error": "这里只能删除用上传的图片做的形象", "code": "not_uploaded"}, 409)
+            else:
+                handler.send_json({"error": "这个形象已经不在 hub 上了", "code": "not_found"}, 404)
+            return True
+        shutil.rmtree(root)
+        _push_live({"type": "personas"})
+        if LOOK_CHOICE["id"] == lid:
+            LOOK_CHOICE.update(id="persona", updated_at=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()))
+            _push_live({"type": "look", "id": "persona", "effective": "persona"})
+        handler.send_json({"current": look_current()})
+        return True
+    return False
+
+
 def looks_list():
     out = [{"id": i, "source": "builtin", "name": n, "names": ns, "app_icon": i} for i, n, ns in BUILTIN_LOOKS]
     ext = _ext_looks()
     for p in personas() + ext_look_personas():
         m = p["manifest"]
         v = {"id": p["id"], "source": "hub", "name": m.get("name", ""), "app_icon": "persona", "rev": p["rev"], "bytes": p["bytes"], "manifest": m}
+        if (m.get("source") or {}).get("kind") == "upload":
+            v["uploaded"] = True
         for k in ("names", "subtitle", "subtitles"):
             if k in m:
                 v[k] = m[k]
@@ -13963,6 +14110,7 @@ class H(BaseHTTPRequestHandler):
             other = other_manager(self)
             if other and other[1]: return self.send_json(*other[1])
             return self.send_json({"mutes": OTHER_MUTES.get(other[0], []) if other else MUTES})
+        if p == "/api/v1/inbox/folders": return self.send_json(folder_state(q))
         if p == "/api/v1/inbox/policies":
             other = other_manager(self)
             if other and other[1]: return self.send_json(*other[1])
@@ -14373,6 +14521,7 @@ class H(BaseHTTPRequestHandler):
                 lark_messaging.route(self, self.command, p, parse_qs(urlparse(self.path).query), self.last_body): return
         if pins_route(self, p): return
         if file_ops_route(self, p, self.last_body): return
+        if look_uploads_route(self, self.command, p, self.last_body): return
         if looks_route(self, self.command, p, self.last_body): return
         if recordings_route(self, self.command, p): return
         if machine_rename_route(self, self.command, p, self.last_body): return
@@ -15136,6 +15285,25 @@ class H(BaseHTTPRequestHandler):
             pid = p.rsplit("/", 1)[1]
             PLACES[:] = [x for x in PLACES if x["id"] != pid]
             return self.send_json({"ok": True})
+        if p == "/api/v1/inbox/folders" and self.command == "PUT":
+            body = json.loads(self.last_body or b"{}")
+            if "enabled" in body: FOLDER_CFG["enabled"] = bool(body["enabled"])
+            if "rules" in body: FOLDER_CFG["rules"] = str(body["rules"] or "").strip()
+            return self.send_json(folder_state({}))
+        if p.startswith("/api/v1/inbox/") and p.endswith("/folder") and self.command == "PUT":
+            iid = unquote(p[len("/api/v1/inbox/"):-len("/folder")])
+            inbox_item = next((x for x in INBOX if x["id"] == iid), None)
+            if not inbox_item: return self.send_json({"error": "no such inbox item"}, 404)
+            folder = json.loads(self.last_body or b"{}").get("folder")
+            if folder is None:
+                inbox_item.pop("folder", None); inbox_item.pop("folder_by", None)
+            else:
+                f = normalize_folder(folder)
+                if not f and str(folder).strip(): return self.send_json({"error": "folder must have at least one name between the slashes"}, 400)
+                inbox_item["folder_by"] = "user"
+                if f: inbox_item["folder"] = f
+                else: inbox_item.pop("folder", None)
+            return self.send_json(dict({k: v for k, v in inbox_item.items() if k != "context"}, version=inbox_version(inbox_item)))
         if p == "/api/v1/inbox/policies" and self.command == "POST":
             other = other_manager(self)
             if other and other[1]: return self.send_json(*other[1])

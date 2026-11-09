@@ -4,7 +4,7 @@ import { compatibleEnvelope, setCompatibilityFeatures } from "./compatibility";
 
 import { chosenManager, defaultKnown, defaultManager, fromShownManager, noteConversation, noteItemManager, onDefaultManager, onManagerChoice, shownManager } from "./manager-choice";
 import { BASE } from "./base";
-import { discardFeedCache, feedCacheScope, readFeedCache } from "./feed-cache";
+import { clearMemoryPages, discardFeedCache, feedCacheScope, readFeedCache } from "./feed-cache";
 import { useRef, useSyncExternalStore } from "react";
 import { agentsChanged, refreshAgentPrefs, refreshAgentSessions, resetAgents, setAgentListMode } from "./agents";
 import { onRuntimeChanges, runtimeIdentity, runtimeRemoval, runtimeSessions, SESSIONS_LOOKUP_FEATURE } from "./runtime-list";
@@ -12,7 +12,8 @@ import { sameValue } from "./stable-lines";
 import { SESSIONS_LIST_FEATURE, type ListCounts } from "./session-list";
 import { applySessionDelta, SESSIONS_DELTA_FEATURE, sessionRefreshed, sessionSnapshot } from "./sessions-delta";
 import { dueMarks, heldRows, liveMarks, markOver, newMark, nextDue, unansweredMarks, type SeenMark, type SeenMarks } from "./seen-outbox";
-import { api, ApiError, CLIENT_FEATURES, CLIENT_PLATFORM, CLIENT_VERSION, errorText, getToken, sessionPath } from "./api";
+import { probeEdge } from "./edge-auth";
+import { api, ApiError, CLIENT_FEATURES, CLIENT_PONG_TIMEOUT, CLIENT_PLATFORM, CLIENT_VERSION, errorText, getToken, sessionPath } from "./api";
 import { currentLanguage } from "../i18n";
 import type { AgentMutes } from "./agent-groups";
 import { stateOf } from "./format";
@@ -363,6 +364,8 @@ export interface ItemsEvent {
   from_seq?: number;
   backlog?: boolean;
   more_after?: boolean;
+  /** Only on a replay counted back from the end (a subscribe without since_seq): whether older items exist. */
+  has_more?: boolean;
 }
 
 type SessionListener = {
@@ -466,7 +469,7 @@ export function connect() {
   sock.onopen = () => {
     // the interface language: this connection's text, and the user's language for pushes and the assistant (docs/protocol/i18n.md)
     // and what it can render: MCP forms and links come only to a socket that says so
-    sock.send(JSON.stringify({ type: "client_hello", platform: CLIENT_PLATFORM, version: CLIENT_VERSION, features: CLIENT_FEATURES, locale: currentLanguage() }));
+    sock.send(JSON.stringify({ type: "client_hello", platform: CLIENT_PLATFORM, version: CLIENT_VERSION, features: CLIENT_FEATURES, locale: currentLanguage(), heartbeat: { pong_timeout: CLIENT_PONG_TIMEOUT } }));
     retry = 0;
     fastTries = 0;
     lastMessage = Date.now();
@@ -496,10 +499,14 @@ export function connect() {
   };
   sock.onclose = (ev) => {
     if (ws !== sock) return;
+    const wasLive = authenticatedSocket === sock;
     ws = null;
     setCompatibilityFeatures([]);
     socketChanged(false);
     if (stopped) return;
+    // an attempt that never got a hello carries no status: ask the hub once whether a sign-in layer in front of it has
+    // expired (lib/edge-auth.ts); a socket that was live just dropped, and its reconnect attempt is the one to ask about
+    if (!wasLive && !restartNotice && ev.code !== 1001) void probeEdge();
     const now = Date.now();
     const restart = restartNotice || ev.code === 1001;
     // the drop starts while online; a restart announced on a later attempt stretches its grace
@@ -1297,6 +1304,7 @@ export function reset() {
   rowHints.clear();
   listedFull.clear();
   runtimeSessions.reset();
+  clearMemoryPages();
   clearTimeout(seenTimer);
   seenTimer = undefined;
   Object.values(state.launches).forEach((launch) => releaseAttachments(launch.attachments));
