@@ -171,7 +171,7 @@ func TestReportBeforeTheManagerCaughtUp(t *testing.T) {
 	if _, err := busRename(h, "ren-a", "New"); err != nil {
 		t.Fatal(err)
 	}
-	h.applyDeviceStatesFrom(devicesOwner, devicewire.States{Machines: []devicewire.State{{Machine: proto.Machine{ID: "ren-a", Name: "A", Kind: kindLink}}}})
+	h.applyDeviceStates(devicewire.States{Machines: []devicewire.State{{Machine: proto.Machine{ID: "ren-a", Name: "A", Kind: kindLink}}}})
 	if got := listedName(h, "ren-a"); got != "New" {
 		t.Fatalf("shown as %q", got)
 	}

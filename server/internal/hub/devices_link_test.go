@@ -398,7 +398,7 @@ func TestAWarmMachineIsNotConnectedYet(t *testing.T) {
 	h := newTestHub(t)
 	report := func(s devicewire.State) {
 		s.Machine.ID, s.Machine.Name, s.Machine.Kind = "box", "Box", "ssh"
-		h.applyDeviceStatesFrom(devicesOwner, devicewire.States{Machines: []devicewire.State{s}})
+		h.applyDeviceStates(devicewire.States{Machines: []devicewire.State{s}})
 	}
 	report(devicewire.State{Machine: proto.Machine{Online: true}, WarmUntil: time.Now().Add(time.Minute)})
 	m := h.machineByID("box")

@@ -19,8 +19,14 @@ type desktopView struct {
 	Since  time.Time `json:"since"`
 }
 
-// desktopsLocked lists the connected desktops, one per device (its newest connection: a Mac reconnecting keeps the
-// old socket for a while), earliest first. h.mu is held.
+// desktops lists the connected desktops, one per device (its newest connection: a Mac reconnecting keeps the old
+// socket for a while), earliest first.
+func (h *Hub) desktops() []desktopView {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.desktopsLocked()
+}
+
 func (h *Hub) desktopsLocked() []desktopView {
 	byDevice := map[string]desktopView{}
 	var loose []desktopView // the pairing token: no device to tell them apart
