@@ -63,6 +63,7 @@ Pitfalls in the new multi-module Android App (`android/`, `docs/android/android.
 
 ## UI and Compose
 
+- After moving Settings/Inbox from tabs into secondary pages, wide-pane collapse policy must follow the visible list, not the originating primary tab (#2589). Otherwise an Agents list hidden beside a chat can also hide a later Settings subpage. Update the splitter's policy dynamically, mask the saved collapse choice for non-collapsible lists, and preserve it when returning to Agents.
 - Removing a navigation enum does not necessarily reject old saved state (#2589): `JsonCodec` coerces unknown enum values to field defaults, so an old Inbox/Settings tab can become Assistant while restoring the rest of the old shell. Use a strict codec for navigation positions when the whole old position must be ignored, and assert that loading does not rewrite the file.
 - Home-navigation removal includes appearance previews and screenshot fixtures (#2589). Hiding a dock in the app still leaves misleading four-tab previews if they build their own old navigation. Remove the obsolete dock/rail components and tab-only strings, render the real shared switcher in previews, and verify Settings by tapping the sidebar gear from both primary pages.
 

@@ -24,6 +24,10 @@ internal fun isDetailDestination(key: NavKey): Boolean = when (key) {
     else -> false
 }
 
+/** Secondary Settings/Inbox lists never inherit the primary Agents page's collapse policy. */
+internal fun canCollapseList(stack: List<NavKey>): Boolean =
+    stack.lastOrNull { it == AgentsRoute || it == InboxRoute || it == SettingsRoute } == AgentsRoute
+
 /**
  * The detail a tab's list marks as open beside it (`LocalDetailKey`): the top of the tab's stack when that is a
  * detail, however it got there (a tap in the list, a deep link, a notification, a debug launch, back). Pages that also
