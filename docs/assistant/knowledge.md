@@ -78,7 +78,7 @@ Transcribed text from phone recordings (and watch recordings relayed through the
   produces a summary, one-line description, title (used if the user has not named it), tags and mentioned projects; projects are linked normally (a "Recording · Title" project timeline entry). At most 24k characters go to the model (keeping the beginning and end).
 - Retention follows assistant setting `recording_days` (default 14 days, independent of `text_days`): each round deletes directories and index rows whose start time predates retention; tombstones are retained equally long.
 - `kb_list` / `kb_get` / `kb_search` and the app's Knowledge page gain the `recordings` category; `kb_get` includes summary, bookmarks and full transcription (up to 12k characters). Recording content cannot be edited via `kb_update` (the phone is authoritative); only tags can change.
-- A recording with `kind: meeting` also gets structured minutes instead of only the short summary ([meeting-minutes.md](./meeting-minutes.md)): `minutes.json` in the same directory, removed with the recording, returned as `detail.minutes`.
+- A recording that is a meeting (`kind: meeting`, overlapping a calendar item, or minutes asked for) also gets structured minutes besides the short summary ([meeting-minutes.md](./meeting-minutes.md)): `minutes.json` and `minutes.md` in the same directory, from chunked calls to the same `kb.compress` model, removed and expired with the recording, returned as `detail.minutes`. `kb_get` prints them before the transcript; `kb_search` and the app search find them.
 
 ## Extra notes directories (`kb.extra_dirs`)
 
@@ -120,6 +120,8 @@ and tells it to read their AGENTS.md / CLAUDE.md before reading or writing. Pers
     segments.json           # Timestamped segments (start / end in seconds from the beginning)
     transcript.md           # One line per segment, with clock times in the user's timezone; searched by kb_search
     summary.md              # Model summary after transcription completes
+    minutes.json            # Meeting minutes (meeting-minutes.md): structured, each item at a transcript time
+    minutes.md              # The same minutes as Markdown with clock times; searched
   recordings/.deleted.json  # Deleted recording UUIDs (tombstones); late uploads within retention return 410
   cursors/<connector>.json  # A connector's archive cursor (bookkeeping, not searched)
   select/<chat id>.json     # The selection's mine-rule context of a chat between daily batches (not searched)

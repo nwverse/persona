@@ -2857,7 +2857,9 @@ Like the other knowledge base endpoints, the hub forwards them as-is to the mana
 | --- | --- | --- |
 | PUT | `/api/v1/recordings/{id}` | Upload or update a recording (idempotent, see below) |
 | DELETE | `/api/v1/recordings/{id}` | Delete: `200 {"deleted": true\|false}` (false means it did not exist); removes the files and index, leaves a tombstone |
-| GET | `/api/v1/recordings` | Reconciliation: `{"days":14,"recordings":[{"id","revision","complete","started_at"}],"deleted":["<id>"]}` |
+| GET | `/api/v1/recordings` | Reconciliation: `{"days":14,"recordings":[{"id","revision","complete","started_at","minutes_state"?}],"deleted":["<id>"]}` |
+| POST | `/api/v1/recordings/{id}/minutes` | Make or remake the meeting minutes (below) |
+| POST | `/api/v1/recordings/{id}/minutes/todos` | Turn confirmed action items of the minutes into to-dos (below) |
 
 `{id}` is the recording's UUID (case-insensitive, stored lowercase). Each PUT carries the **complete state so far** and overwrites the same record in full, so replays, reordering and transcript completion never create an extra record:
 
@@ -2881,9 +2883,13 @@ Like the other knowledge base endpoints, the hub forwards them as-is to the mana
 Minutes for a meeting recording ([meeting-minutes.md](../assistant/meeting-minutes.md)):
 
 - `kind` and `calendar` are optional and travel with the full-state upload, so a later upload replaces them. Unknown `kind` is `400`. A client sending neither is unchanged.
-- `GET /api/v1/kb/recordings/{id}` adds to `detail.meta`: `kind`, `calendar` (when sent), `meeting` (`{kind, id, name}` of an overlapping `meetings` or `events` item, when matched) and `minutes_state` (`pending`, `ready`, `failed`; absent for a note). When `minutes_state` is `ready`, `detail.minutes` is `{title, when, where?, attendees?, points:[{text, at, who?}], decisions:[{text, at}], actions:[{who?, what, by?, at}], open:[{text, at}]}`, with `at` in seconds from the start, the same clock as `segments[].start`. Absent sections and unknown names are omitted, never filled in.
-- `detail.summary` stays the short summary either way. `kb_get` returns `detail.minutes` too, and `kb_search` matches the minutes text.
-- `POST /api/v1/recordings/{id}/minutes` regenerates a meeting's minutes: `202 {"state":"pending"}`, `409` when the transcript is not `complete`, `404` when the recording does not exist. It does not change the transcript or the revision.
+- `calendar` keys other than `title`, `attendees` and `location` are ignored; a title over 200 characters, more than 100 attendees or one over 100 characters is `400`.
+- A recording is a meeting when `kind` is `meeting`, when a `meetings` or `events` item in the knowledge base overlaps a recording of at least 5 minutes, or once the user asked for minutes (`minutes_asked`).
+- `GET /api/v1/kb/recordings/{id}` adds to `detail.meta`: `kind`, `calendar` (when sent), `meeting` (`{kind, id, name}` of an overlapping `meetings` or `events` item, when matched), `minutes_state` (`pending`, `ready`, `failed`; absent when not a meeting; also on each recording of `GET /api/v1/recordings`) and `minutes_asked`. Once minutes were written, `detail.minutes` is `{version, revision, generated_at, title, when, where?, attendees?, points:[{text, at, who?}], decisions:[{text, at}], actions:[{id, who?, what, by?, due_date?, at, todo_id?}], open:[{text, at}], partial?, markdown}`, with `at` in seconds from the start, the same clock as `segments[].start`; previous minutes stay while newer ones are `pending` or `failed` (their `revision` is below `meta.revision`). Absent sections and unknown names are omitted, never filled in. `version` increases at every rewrite; `revision` is the recording revision they were made from; `due_date` (`YYYY-MM-DD`) only when the spoken `by` resolves to one date; `markdown` is the same minutes as text with clock times.
+- `detail.summary` stays the short summary either way. `kb_get` returns the minutes too, and `kb_search` matches the minutes text.
+- `POST /api/v1/recordings/{id}/minutes` (re)generates the minutes, also for a recording that is not a meeting yet (it becomes one): `202 {"state":"pending"}`, `409` when the transcript is not `complete`, `404` when the recording does not exist. It does not change the transcript or the revision.
+- `POST /api/v1/recordings/{id}/minutes/todos` `{"version": 2, "actions": ["a1"]}` creates one ordinary to-do per listed action (title `what`, prefixed `who: ` when named; due `due_date`) and writes its `todo_id` back → `200 {"todos":[Todo],"minutes":Minutes}`. An action with a `todo_id` is not created again, and a retried request creates nothing new. `409 minutes_stale` when `version` is not the current one; `404` no recording, no minutes or an unknown action; `400` empty `actions`; `403` from a device that cannot write to-dos.
+- When minutes become ready the manager sends one push (`notify.request`, kind `assistant`, a stable id per recording and `version`; a tap opens the main chat) and the same text, with the recording's web link, to the Lark bot and the channels with pushes on.
 
 - Response `200 {"id","revision","status"}`: `stored` was written (a replay of the same revision also overwrites); `stale` the stored revision is higher, nothing written; `expired` the start time is before the retention window, not stored.
 - `410`, `code: recording_deleted`: this recording was deleted (the tombstone stays until the retention window ends); the phone should stop sending it.
