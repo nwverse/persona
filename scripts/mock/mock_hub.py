@@ -2225,7 +2225,7 @@ def stamp_managers(path, obj):
     """The merged lists' `manager` on each item, as the hub adds it; the default manager's items too."""
     if not _stamps() or not isinstance(obj, dict): return obj
     dflt = MANAGERS["default"]
-    if path == "/api/v1/inbox" and isinstance(obj.get("items"), list):
+    if path in ("/api/v1/inbox", "/api/v1/inbox/done") and isinstance(obj.get("items"), list):
         obj = dict(obj, items=[dict(x, manager=inbox_owner(x.get("id"))) if isinstance(x, dict) else x for x in obj["items"]])
     for key in ("extensions", "plugins", "connectors"):
         if path == "/api/v1/" + key and isinstance(obj.get(key), list):

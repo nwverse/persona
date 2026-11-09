@@ -51,8 +51,16 @@ final class InboxStore {
             defer { historyLoading = false }
             do {
                 let page = try await api.inboxDone(after: historyNext, connectors: Self.drawsConnectors)
+                // the default manager's (no header): stamped as the merged list stamps them, so an item in both is one key
+                let stamp = AppModel.shared.managerRoster.flatMap { $0.isMulti ? $0.defaultID : nil }
+                let items = page.items.map { it in
+                    guard it.manager == nil, let stamp else { return it }
+                    var it = it
+                    it.manager = stamp
+                    return it
+                }
                 let known = Set(history.map(\.key))
-                history += page.items.filter { !known.contains($0.key) }
+                history += items.filter { !known.contains($0.key) }
                 historyNext = page.next
                 historyMore = page.next != nil
             } catch let e as APIError where e.status == 404 || e.status == 405 {
