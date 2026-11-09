@@ -123,7 +123,7 @@ read -r UDID STATE PLATFORM <<<"$INFO"
 finish() { log "$1 $PROFILE $UDID"; echo "$UDID"; exit "${2:-0}"; }
 # Keep boot progress and errors visible without mixing them with the UDID on stdout.
 wait_booted() {
-  timed "${SIM_BOOT_TIMEOUT:-900}" xcrun simctl bootstatus "$UDID" -b >&2
+  python3 "$ROOT/scripts/app/sim_boot_wait.py" --timeout "${SIM_BOOT_TIMEOUT:-900}" --udid "$UDID" >&2
   local code=$?
   if [ "$code" != 0 ]; then log "$UDID did not finish booting (bootstatus exit $code)"; fi
   return "$code"
