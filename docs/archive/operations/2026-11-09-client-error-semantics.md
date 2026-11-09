@@ -2,6 +2,9 @@
 
 Scope: #1915, including misleading gateway-status fallbacks on Web, Apple and Android.
 The reviewed upstream base was `62c6cc85cab847d93996a67d8b598083149a51f7`.
+Before delivery, upstream `6e4bb7476` was merged. The API conflict was resolved by
+retaining upstream's bounded read retries and this change's code-first presentation.
+Production-mode regression tests confirm that business refusals do not enter those retries.
 This is source and synthetic-test evidence, not deployment or real-device acceptance.
 
 ## Responsibility chain
@@ -50,6 +53,25 @@ The iOS, macOS, watchOS and visionOS targets compile `Shared` according to
 The watch records/transfers audio to the phone rather than running `RecordingSync`.
 All four Apple build targets still require verification on a Mac.
 
+Additional source-review anchors:
+
+- Knowledge: `web/src/views/knowledge/KBList.tsx`, `web/src/views/knowledge/KBDetail.tsx`,
+  `apple/Persona/Views/Knowledge/KnowledgeView.swift`,
+  `android/core/hub/src/main/kotlin/persona/core/hub/HttpKnowledgeRepository.kt`,
+  `android/feature/knowledge/src/main/kotlin/persona/feature/knowledge/KnowledgeViewModel.kt`.
+- Inbox: `web/src/views/inbox/InboxDialogs.tsx`,
+  `apple/Persona/Views/Inbox/InboxHandOffModel.swift`, `apple/Persona/Views/Settings/SentModel.swift`,
+  `android/feature/inbox/src/main/kotlin/persona/feature/inbox/ConnectorThreadModel.kt`.
+- Extensions: `apple/Persona/Views/Settings/ExtensionsModel.swift`,
+  `android/feature/settings/src/main/kotlin/persona/feature/settings/ExtensionsState.kt`,
+  `android/feature/settings/src/main/kotlin/persona/feature/settings/ExtensionMarketState.kt`,
+  `android/feature/settings/src/main/kotlin/persona/feature/settings/ExtensionUiState.kt`.
+- Model configuration: `web/src/lib/providers.ts`,
+  `apple/Persona/Views/Settings/ModelConfigurationModel.swift`,
+  `android/feature/settings/src/main/kotlin/persona/feature/settings/ModelConfigurationState.kt`.
+- Agent recovery: `web/src/lib/ops.ts`, `apple/Shared/Delegated.swift`,
+  `android/core/domain/src/main/kotlin/persona/core/domain/OperationFailure.kt`.
+
 ## Compatibility and privacy boundaries
 
 All clients recognize the older refusal only when all of these match:
@@ -83,7 +105,20 @@ business state. The focused fixed suite passed 57 tests before the final hardeni
 The full Web lane initially exposed one old Inbox expectation for raw manager text;
 that expectation was updated while retaining its no-send/no-navigation assertions.
 
-Commands and final outcomes are recorded in the associated PR. Required remaining gates:
+Final checks after upstream integration (Node 24 for the Web lane):
+
+| Command | Result |
+| --- | --- |
+| `scripts/ci/web.sh` | Passed install, lint, typecheck, tests (7,203 passed, 1 skipped), production build and privacy scan |
+| `python3 scripts/test/test_apple_l10n.py` | 60 tests passed; catalog completeness included |
+| `python3 scripts/i18n/apple_l10n.py check` | Passed en / zh-Hans / ja completeness and format checks |
+| `python3 scripts/app/android_i18n_check.py` | Passed, zero problems |
+| `python3 scripts/app/android_token_baseline.py` | Passed without raising the baseline |
+| `python3 -B test_android_i18n_check.py` / `python3 -B test_android_token_baseline.py` (from `scripts/app/`) | 10 / 3 checker tests passed |
+| `python3 scripts/test/test_doc_paths.py` / `python3 scripts/test/test_doc_go_paths.py` / `python3 scripts/test/test_doc_wire.py` | 12 / 3 / 13 tests passed |
+| `python3 scripts/privacy_check.py` and staged scan | Clean |
+
+These checks do not replace the required remaining gates:
 
 - Apple compilation, `PersonaTests`, `RecordingSyncTests`, Inbox model tests,
   PersonaKit tests and light/dark simulator screenshots: unavailable on this Linux
@@ -93,6 +128,6 @@ Commands and final outcomes are recorded in the associated PR. Required remainin
 - Rendered-browser screenshots: unavailable because `browser-use` is absent.
   jsdom component regressions are not screenshot evidence.
 
-No merge, deployment, runtime configuration change, restart, knowledge enablement,
+No PR merge, deployment, runtime configuration change, restart, knowledge enablement,
 private data-source access or paid/live model call was performed. Installed clients
 and the running hub have not been replaced by this source change.
