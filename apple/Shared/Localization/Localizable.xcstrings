@@ -254,6 +254,29 @@
         }
       }
     },
+    "Waiting messages weren't sent: their chat wasn't found on the hub.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Waiting messages weren't sent: their chat wasn't found on the hub."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "送信待ちのメッセージは送信されませんでした。送信先のチャットがハブで見つかりません。"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "等待发送的消息没有发出：在 hub 上找不到它们所在的对话。"
+          }
+        }
+      }
+    },
     "Was due %@": {
       "extractionState": "manual",
       "localizations": {
@@ -526,29 +549,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "用它检查或启动成功一次，这条提示就会消失。"
-          }
-        }
-      }
-    },
-    "A message wasn't sent: its chat is no longer on the hub." : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "A message wasn't sent: its chat is no longer on the hub."
-          }
-        },
-        "ja" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "メッセージを送信できませんでした。そのチャットはもうハブにありません。"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "有条消息没发出去：它的对话已不在 hub 上。"
           }
         }
       }

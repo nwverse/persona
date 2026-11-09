@@ -73,7 +73,7 @@ struct OutboxRestoreTests {
         #expect(back.first?.state == .waiting)
     }
 
-    /// Offline for a day is still worth sending; a week on, its chat may be long gone (#1923).
+    /// Offline for a day or two is still worth sending; a week on, its chat may be long gone.
     @Test func aWaitingMessageComesBackUntilItIsAWeekOld() async throws {
         let recent = message(.waiting, age: 86400 * 2)
         #expect(try await relaunched(with: [recent]).map(\.id) == [recent.id])
