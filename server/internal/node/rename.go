@@ -10,6 +10,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/nwverse/persona/server/internal/herdr"
 	"github.com/nwverse/persona/server/internal/host"
 )
 
@@ -47,17 +48,27 @@ func (n *Node) renameWorktree(ctx context.Context, kind, workspace, name string)
 	return fmt.Errorf("the selected worktree is no longer available")
 }
 
-// renameSpace renames a workspace (what the phone calls a space) in the host it is in (spaceOrganizer).
-func (n *Node) renameSpace(ctx context.Context, workspaceID, name string) error {
+// renameSpace renames a workspace (what the phone calls a space) in the host it is in (spaceOrganizer) and returns the
+// name it shows now: a named herdr session's with the session in front (sessionLabel, #2196), which the hub keys pins
+// and to-do links by.
+func (n *Node) renameSpace(ctx context.Context, workspaceID, name string) (string, error) {
 	name = strings.TrimSpace(name)
 	if workspaceID == "" || name == "" {
-		return fmt.Errorf("workspace and name are required")
+		return "", fmt.Errorf("workspace and name are required")
 	}
 	org, err := n.spaceOrganizer(ctx, workspaceID)
 	if err != nil {
-		return err
+		return "", err
 	}
-	return org.RenameSpace(ctx, workspaceID, name)
+	if err := org.RenameSpace(ctx, workspaceID, name); err != nil {
+		return "", err
+	}
+	if _, ok := org.(*herdrHost); ok {
+		if session, _ := herdr.SplitID(workspaceID); session != "" {
+			return sessionLabel(session, strings.TrimPrefix(name, session+sessionLabelSep)), nil
+		}
+	}
+	return name, nil
 }
 
 // spaceOrganizer is the host a space is in. Space ids carry no host kind: with one host that renames, its own (the
