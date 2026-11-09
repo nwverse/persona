@@ -282,6 +282,12 @@ func Keepalive(ctx context.Context, ws *websocket.Conn, every, timeout time.Dura
 // Dial connects to the hub's bus with a service's token. hub is the hub's base URL (http(s)://host:port, the same
 // one the apps use); client may be nil (a pinned TLS client for the hub's public port otherwise).
 func Dial(ctx context.Context, hub, token string, client *http.Client) (*websocket.Conn, error) {
+	return dial(ctx, hub, token, client, websocket.CompressionContextTakeover)
+}
+
+// dial is Dial offering compression as mode says (CompressionDisabled offers none: the hub compresses only when
+// offered).
+func dial(ctx context.Context, hub, token string, client *http.Client, mode websocket.CompressionMode) (*websocket.Conn, error) {
 	u, err := Endpoint(hub)
 	if err != nil {
 		return nil, err
@@ -289,7 +295,7 @@ func Dial(ctx context.Context, hub, token string, client *http.Client) (*websock
 	ws, resp, err := websocket.Dial(ctx, u, &websocket.DialOptions{
 		HTTPClient:      client,
 		HTTPHeader:      http.Header{"Authorization": {"Bearer " + token}},
-		CompressionMode: websocket.CompressionContextTakeover,
+		CompressionMode: mode,
 	})
 	if err != nil {
 		if resp != nil && resp.StatusCode == http.StatusUnauthorized {
