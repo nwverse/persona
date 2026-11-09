@@ -31,6 +31,9 @@ struct ShellComposerBar<Attach: View, Modes: View>: View {
     var history: String? = nil
     /// The main conversation cannot answer yet: send says what to do first and goes there, the draft stays.
     var gate: SendGate? = nil
+    /// The iPhone's 「+」 opens the composer's panel (`AttachSheet`, Telegram's attachment menu) from where the button is,
+    /// in the window; nil: the menu of `attach`.
+    var openAttach: ((CGRect) -> Void)? = nil
     var send: () -> Void
     @ViewBuilder var attach: () -> Attach
     @ViewBuilder var modes: () -> Modes
@@ -39,6 +42,7 @@ struct ShellComposerBar<Attach: View, Modes: View>: View {
     #if os(iOS)
     /// The mic held down (`ComposerHoldMic`): the box draws the strip, the circle and the lock over itself.
     @State private var hold = ComposerHold()
+    @State private var plusFrame: CGRect = .zero
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     /// The draft's height at its full width, and a line's height at the current Dynamic Type size.
     @State private var textHeight: CGFloat = 0
@@ -321,19 +325,37 @@ struct ShellComposerBar<Attach: View, Modes: View>: View {
     }
     #endif
 
-    private var plus: some View {
-        Menu { attach() } label: {
-            ThemedIcon(Theme.Icon.add)
-                .font(Theme.Font.title)
-                .fontWeight(.regular)
-                .foregroundStyle(ink)
-                .scaledFrame(width: Theme.Size.tapTarget, height: Theme.Size.tapTarget)
-                .contentShape(.circle)
+    @ViewBuilder private var plus: some View {
+        #if os(iOS)
+        if let openAttach {
+            Button { openAttach(plusFrame) } label: { plusFace }
+                .buttonStyle(.plain)
+                .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { plusFrame = $0 }
+                .accessibilityLabel("Add photo or file")
+                .accessibilityIdentifier("shell-composer-add")
+        } else {
+            plusMenu
         }
-        .menuStyle(.button)
-        .buttonStyle(.plain)
-        .accessibilityLabel("Add photo or file")
-        .accessibilityIdentifier("shell-composer-add")
+        #else
+        plusMenu
+        #endif
+    }
+
+    private var plusMenu: some View {
+        Menu { attach() } label: { plusFace }
+            .menuStyle(.button)
+            .buttonStyle(.plain)
+            .accessibilityLabel("Add photo or file")
+            .accessibilityIdentifier("shell-composer-add")
+    }
+
+    private var plusFace: some View {
+        ThemedIcon(Theme.Icon.add)
+            .font(Theme.Font.title)
+            .fontWeight(.regular)
+            .foregroundStyle(ink)
+            .scaledFrame(width: Theme.Size.tapTarget, height: Theme.Size.tapTarget)
+            .contentShape(.circle)
     }
 
     /// The model button's face, ChatGPT's: the model in the text's ink, a little bold, then the effort in the quieter

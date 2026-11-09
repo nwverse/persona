@@ -604,8 +604,100 @@ nonisolated enum Theme {
         static let holdAppear = Animation.spring(duration: 0.5, bounce: 0.3)
         static let holdAppearScale: CGFloat = 0.2
         static let holdLeave = Animation.easeOut(duration: 0.18)
+        /// The 「+」 panel (`AttachSheet`, Telegram's attachment menu). It grows out of the 「+」 button (Telegram's spring,
+        /// mass 5, stiffness 900: damping 110 opening, 124 settling), its corners rounding off quicker; the dim fades in
+        /// linearly and out eased.
+        static func attachOpen(velocity: CGFloat = 0) -> Animation {
+            .interpolatingSpring(mass: 5, stiffness: 900, damping: 110, initialVelocity: velocity)
+        }
+        static func attachSettle(velocity: CGFloat = 0) -> Animation {
+            .interpolatingSpring(mass: 5, stiffness: 900, damping: 124, initialVelocity: velocity)
+        }
+        static let attachCorner = Animation.easeInOut(duration: 0.2)
+        static let attachContentIn = Animation.easeInOut(duration: 0.2)
+        static let attachContentOut = Animation.easeInOut(duration: 0.12)
+        static let attachDimIn = Animation.linear(duration: 0.3)
+        static let attachDimOut = Animation.easeInOut(duration: 0.25)
+        static let attachSnapBack = Animation.easeInOut(duration: 0.3)
+        /// Switching tabs: the old page fades over the new; the sheet dips, then springs back with a little bounce.
+        static let attachTabFade = Animation.easeInOut(duration: 0.23)
+        static let attachTabDip = Animation.easeInOut(duration: 0.2)
+        static let attachTabBack = Animation.interpolatingSpring(mass: 5, stiffness: 900, damping: 70)
+        /// The tab bar's highlight sliding to the tab picked.
+        static let attachLens = Animation.timingCurve(0.38, 0.7, 0.125, 1, duration: 0.4)
+        /// The tab bar giving way to the caption and send, and coming back.
+        static let attachBarSwap = Animation.interpolatingSpring(mass: 1, stiffness: 555.027, damping: 47.118)
+        static let attachBarAway = Animation.easeInOut(duration: 0.1)
+        static let attachBarBack = Animation.easeInOut(duration: 0.25)
+        /// A photo's mark: picked, it fills and bounces (0.9, 1.1, 1); let go, it empties.
+        static let attachPick = Animation.easeOut(duration: 0.21)
+        static let attachUnpick = Animation.easeIn(duration: 0.15)
+        static let attachPickSqueeze: CGFloat = 0.9
+        static let attachPickBounce: CGFloat = 1.1
+        static let attachPickSqueezeTime: TimeInterval = 0.08
+        static let attachPickBounceTime: TimeInterval = 0.13
+        static let attachPickSettleTime: TimeInterval = 0.1
+
         /// The recording dot's blink, one way (it blinks while the finger holds, and stops with Reduce Motion).
         static let holdBlink = Animation.easeInOut(duration: 0.5)
+    }
+
+    /// The 「+」 panel (`AttachSheet`), Telegram's attachment menu: its sizes, thresholds and motion. A sheet that rests
+    /// with the top quarter of the screen showing the chat, a photo grid with a tab bar floating over its bottom, pulled
+    /// up to fill the screen or down to go (docs/apple/ios.md, New shell, "Attach panel").
+    enum Attach {
+        /// How much of the screen's height stays above the sheet at rest (the chat, dimmed), and on a narrow phone.
+        static let restFraction: CGFloat = 0.2488
+        static let restFractionNarrow: CGFloat = 0.15
+        static let narrowWidth: CGFloat = 320
+        /// The sheet's top under the status bar, open all the way.
+        static let topGap: CGFloat = 10
+        /// At rest the sheet is this much narrower than the screen (half each side); it widens as it is pulled up.
+        static let restInset: CGFloat = 10
+        static let topRadius: CGFloat = 38
+        /// The bottom corners follow the screen's, a little inside them.
+        static let bottomRadius: CGFloat = 60
+        static let grabberWidth: CGFloat = 36
+        static let grabberHeight: CGFloat = 5
+        static let grabberTop: CGFloat = 5
+        static let grabberOpacityLight = 0.07
+        static let grabberOpacityDark = 0.2
+        static let dim = 0.25
+        /// Let go: pulled down this far (or this fast, moving down) it goes; open all the way, a fling this fast from the
+        /// grid's top goes too. Up or down this fast, or past half the way, it opens all the way or goes back to rest.
+        static let dismissDistance: CGFloat = 60
+        static let dismissSpeed: CGFloat = 300
+        static let dismissFling: CGFloat = 1800
+        static let settleSpeed: CGFloat = 300
+        /// The grid: three columns a point apart, square cells; the camera's cell is a column wide and two rows tall.
+        static let columns = 3
+        static let gridSpacing: CGFloat = 1
+        static let headerHeight: CGFloat = 56
+        /// A cell's selection mark: its size and inset from the cell's top right, the white ring round it.
+        static let badge: CGFloat = 29
+        static let badgeInset: CGFloat = 3
+        static let badgeRing: CGFloat = 1.5
+        static let badgeTarget: CGFloat = 45
+        /// The tab bar: a pill floating this far over the sheet's bottom, a tab's cell, its icon.
+        static let barInset: CGFloat = 22
+        static let barHeight: CGFloat = 62
+        static let barTab: CGFloat = 72
+        static let barIcon: CGFloat = 30
+        static let barLensInset: CGFloat = 3
+        /// The pill's width for two, three and four tabs (five or more: the screen less `barInset` each side).
+        static let barWidths: [CGFloat] = [160, 240, 300]
+        /// Switching tabs, the sheet dips this far and springs back while the old page fades.
+        static let tabDip: CGFloat = 10
+        /// Photos picked, the tab bar shrinks to this, blurs this much and gives way to the caption and send.
+        static let barAwayScale: CGFloat = 0.85
+        static let barAwayBlur: CGFloat = 10
+        /// The tab bar's room under the grid: the pill and its inset, so the last row scrolls clear of it.
+        static var gridBottom: CGFloat { barHeight + barInset * 2 }
+        /// After the keyboard starts down, the panel follows this much later (Telegram's), the two moving together.
+        static let afterKeyboard: Duration = .milliseconds(150)
+        static let thumbnailScale: CGFloat = 3
+        /// How many photos a page of the grid asks the library for at a time.
+        static let fetchLimit = 600
     }
 
     /// Hold the mic to dictate, slide left to drop it, slide up to keep it going hands-free: Telegram's thresholds

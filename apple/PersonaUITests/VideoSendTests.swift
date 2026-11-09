@@ -89,14 +89,15 @@ final class VideoSendTests: XCTestCase {
         try closePlayer(app, "video-\(name)-player", back: card)
     }
 
-    /// + › Photos, the made-up video, Add.
+    /// + › All Photos, the made-up video, Add.
     @MainActor private func pickTheVideo(_ app: XCUIApplication) throws {
         // An enabled one: offline, the box's + is there but greyed out.
         let plus = app.buttons.matching(NSPredicate(format: "(identifier == %@ OR label IN %@) AND enabled == true", "shell-composer-add", ["添加", "Add"])).firstMatch
         XCTAssertTrue(plus.waitForExistence(timeout: 30), "no + button:\n\(app.debugDescription)")
         plus.tap()
-        let photos = app.buttons["照片"].firstMatch
-        XCTAssertTrue(photos.waitForExistence(timeout: 5), "no 照片 item:\n\(app.debugDescription)")
+        // The iPhone's + is a panel (AttachSheet): its All Photos opens the system's picker, as the menu's Photos did.
+        let photos = app.buttons["attach-all-photos"].firstMatch
+        XCTAssertTrue(photos.waitForExistence(timeout: 5), "no All Photos in the + panel:\n\(app.debugDescription)")
         photos.tap()
         let video = app.images.matching(NSPredicate(format: "label CONTAINS[c] %@ OR label CONTAINS %@", "video", "视频")).firstMatch
         XCTAssertTrue(video.waitForExistence(timeout: 20), "no video in the picker:\n\(app.debugDescription)")
