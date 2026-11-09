@@ -69,6 +69,10 @@ func (s *Service) workTick(ctx context.Context, now time.Time) {
 		}
 	}
 	for _, k := range due {
+		if e, ok := s.workEntry(k); ok && e.Work.CI != nil {
+			s.startCIPoll(ctx, k, now)
+			continue
+		}
 		s.workWake(ctx, v, k, now)
 	}
 	for _, k := range cards {
@@ -110,7 +114,7 @@ func (s *Service) wakeWaitersOn(machine, sid string) {
 }
 
 // workGuard: the manager may act on e now — the session is still stopped on the same turn, nothing pending or queued,
-// not looked at in herdr, its machine up. ownCard: the manager's card for it may be pending.
+// not looked at in herdr, its machine up, and its todo not completed. ownCard: the manager's card for it may be pending.
 func (s *Service) workGuard(v *workView, e db.SessionWork, ownCard bool) (proto.Session, string) {
 	if d, ok := v.device(e.MachineID); !ok || !d.Reachable {
 		return proto.Session{}, "offline"
@@ -118,6 +122,13 @@ func (s *Service) workGuard(v *workView, e db.SessionWork, ownCard bool) (proto.
 	c, ok := v.session(e.MachineID, e.SessionID)
 	if v.failed[e.MachineID] {
 		return c, "offline" // the hub could not say: nothing is decided on it now
+	}
+	closed, err := s.completedTodo(v.ctx, e.MachineID, e.SessionID)
+	if err != nil {
+		return c, "todo state unavailable"
+	}
+	if closed {
+		return c, "task done"
 	}
 	switch {
 	case !ok:
@@ -149,22 +160,86 @@ func (s *Service) workWake(ctx context.Context, v *workView, k [2]string, now ti
 	c, why := s.workGuard(s.newWorkView(ctx), e, false)
 	switch why {
 	case "":
-	case "offline":
+	case "offline", "todo state unavailable":
+		before := e
 		at := now.Add(time.Minute).UTC() // try again when it is back
 		e.WakeAt, e.Work.WakeAt = &at, &at
-		s.putWork(ctx, e)
+		if before.Work.CI != nil {
+			s.replaceCI(before, e)
+		} else {
+			s.putWork(ctx, e)
+		}
 		return
 	default:
 		s.logf("work %s/%s: not woken: %s", k[0], short(k[1]), why)
+		before := e
 		e.WakeAt, e.Work.WakeAt = nil, nil
-		s.putWork(ctx, e)
+		if before.Work.CI != nil {
+			e.Work.CI = nil
+			s.replaceCI(before, e)
+		} else {
+			s.putWork(ctx, e)
+		}
 		return
 	}
 	sw := s.triageSwitches(ctx)
 	if continues(e.Work) && !sw.AutoContinue || !continues(e.Work) && !sw.Wake {
+		before := e
 		e.WakeAt, e.Work.WakeAt = nil, nil // turned off since it was set
-		s.putWork(ctx, e)
+		if before.Work.CI != nil {
+			e.Work.CI = nil
+			s.replaceCI(before, e)
+		} else {
+			s.putWork(ctx, e)
+		}
 		return
+	}
+	if e.Work.CI != nil {
+		closed, _, err := s.ciClosedTodo(ctx, e.MachineID, e.SessionID, e.Work.CI.TodoProof, proto.WorkState{}, time.Time{})
+		if err != nil || closed {
+			current := e
+			if err != nil {
+				at := now.Add(time.Minute).UTC()
+				current.WakeAt, current.Work.WakeAt = &at, &at
+			} else {
+				current.WakeAt, current.Work.WakeAt, current.Work.CI = nil, nil, nil
+			}
+			s.replaceCI(e, current)
+			return
+		}
+	}
+	if e.Work.CI != nil && e.Work.CI.Message != "" {
+		_, guest, err := s.guestOf(ctx, e.MachineID, e.SessionID)
+		if err != nil || guest || s.isWorkMachine(e.MachineID) {
+			current := e
+			at := e.Work.CI.FallbackAt
+			if at.Before(now) {
+				at = now.UTC()
+			}
+			current.Work.CI = nil
+			current.WakeAt, current.Work.WakeAt = &at, &at
+			s.replaceCI(e, current)
+			return
+		}
+		s.deliverCI(ctx, e, now)
+		return
+	}
+	polled := e
+	ciLine, handled := s.pollCI(ctx, polled, c, now)
+	if handled {
+		return
+	}
+	if ciLine != "" {
+		var still bool
+		e, still = s.workEntry(k)
+		if !still || !sameCIWatch(polled, e) {
+			return
+		}
+		if latest, why := s.workGuard(s.newWorkView(ctx), e, false); why != "" {
+			return
+		} else {
+			c = latest
+		}
 	}
 	var text, kind string
 	switch {
@@ -193,7 +268,18 @@ func (s *Service) workWake(ctx context.Context, v *workView, k [2]string, now ti
 			}
 		}
 		text, kind = renderWake(wk), "woke"
+		if ciLine != "" {
+			text = ciLine + "\n\n" + text
+		}
 	default:
+		return
+	}
+	if ciLine != "" {
+		if s.prepareCI(ctx, e, text) {
+			if pending, ok := s.workEntry(k); ok {
+				s.deliverCI(ctx, pending, now)
+			}
+		}
 		return
 	}
 	e.WakeAt, e.Work.WakeAt = nil, nil
@@ -269,6 +355,8 @@ func (s *Service) cardBack(v *workView, e db.SessionWork, now time.Time) (*proto
 	case "", "looked at in herdr":
 		ix := workCard(e.MachineID, c, e.Work, e.InteractionID)
 		return &ix, true
+	case "task done":
+		return nil, false
 	case "moved on":
 		if wentOn(c, e) {
 			return nil, false
@@ -296,7 +384,7 @@ func (s *Service) cardTick(ctx context.Context, v *workView, k [2]string, now ti
 	var drop bool
 	if out {
 		c, why := s.workGuard(v, e, true)
-		drop = now.After(e.TurnAt.Add(workCardTTL)) || why == "moved on" && wentOn(c, e)
+		drop = now.After(e.TurnAt.Add(workCardTTL)) || why == "task done" || why == "moved on" && wentOn(c, e)
 	} else {
 		ix, keep := s.cardBack(v, e, now)
 		if ix != nil {

@@ -53,6 +53,7 @@ type fakeHub struct {
 	sessions      map[string][]proto.Session // by machine: the machines there are
 	sessionsFail  map[string]int             // by machine: sessions.list fails offline this many more times (then recovers)
 	items         []proto.Item               // session.items answers this
+	itemsPage     int                        // > 0: session.items with after_seq pages them by seq, this many a page
 	calls         []DeviceCall
 	known         map[string]bool  // conversations the nodes have
 	made          int              // conversations started, for the next id
@@ -230,6 +231,19 @@ func (f *fakeHub) deviceCall(ctx context.Context, p DeviceCall) (json.RawMessage
 		}
 		return json.Marshal(map[string]any{"ok": false})
 	case DeviceSessionItems:
+		if after, ok := a["after_seq"].(float64); ok && f.itemsPage > 0 {
+			page := []proto.Item{}
+			for _, it := range f.items {
+				if it.Seq > int(after) {
+					page = append(page, it)
+				}
+			}
+			more := len(page) > f.itemsPage
+			if more {
+				page = page[:f.itemsPage]
+			}
+			return json.Marshal(map[string]any{"items": page, "more_after": more})
+		}
 		return json.Marshal(map[string]any{"items": f.items})
 	case DeviceSessionRename:
 		f.sends = append(f.sends, map[string]any{"rename": a})
@@ -591,6 +605,24 @@ type memStore struct {
 	puts int
 	// failSetting: what reading a setting fails with (nil: it reads).
 	failSetting error
+	// failPut: what writing settings fails with (nil: it writes); nothing is written then.
+	failPut error
+	// failKeys: what reading one key fails with, the other keys still reading (set through failKey).
+	failKeys map[string]error
+}
+
+// failKey makes reading key fail with err from now on; nil reads it again.
+func (m *memStore) failKey(key string, err error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.failKeys == nil {
+		m.failKeys = map[string]error{}
+	}
+	if err == nil {
+		delete(m.failKeys, key)
+	} else {
+		m.failKeys[key] = err
+	}
 }
 
 // noPlans is a store without the task_plans and assistant_feed tables.
@@ -627,6 +659,9 @@ func (m *memStore) Setting(_ context.Context, key string, out any) (bool, error)
 	if m.failSetting != nil {
 		return false, m.failSetting
 	}
+	if err := m.failKeys[key]; err != nil {
+		return false, err
+	}
 	b, ok := m.vals[key]
 	if !ok {
 		return false, nil
@@ -641,6 +676,9 @@ func (m *memStore) PutSetting(_ context.Context, key string, v any) error {
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if m.failPut != nil {
+		return m.failPut
+	}
 	if m.vals == nil {
 		m.vals = map[string][]byte{}
 	}
@@ -663,6 +701,9 @@ func (m *memStore) PutSettings(ctx context.Context, values map[string]any) error
 	defer m.mu.Unlock()
 	if err := ctx.Err(); err != nil {
 		return err
+	}
+	if m.failPut != nil {
+		return m.failPut
 	}
 	if m.vals == nil {
 		m.vals = map[string][]byte{}

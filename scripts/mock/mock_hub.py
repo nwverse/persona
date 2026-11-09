@@ -249,6 +249,11 @@ def later(minutes=0, hours=0):
     return (NOW + timedelta(minutes=minutes, hours=hours)).isoformat().replace("+00:00", "Z")
 
 
+def day_from_now(days):
+    """A to-do's due_date ("YYYY-MM-DD", #1683) this many days from now (negative: past)."""
+    return (NOW + timedelta(days=days)).date().isoformat()
+
+
 def _mock_qr(text, n=29):
     """A QR-looking grid of "0" / "1" rows for text: three finder squares and noise from its hash (not scannable)."""
     seed = hashlib.sha256(text.encode()).digest()
@@ -1520,6 +1525,11 @@ def save_task(old, new):
     # "Notify after a run" (#2396): left out of an edit it stays; "asked" runs in the task's own conversation; "" is the default.
     if t.get("push") == "asked": t.pop("session_id", None)
     if not t.get("push"): t.pop("push", None)
+    # End time: left out it stays, null clears it, and a one-off never has one (the hub's until).
+    if t.get("repeat") == "once" or ("until" in new and not new.get("until")):
+        t.pop("until", None)
+    elif "until" in new:
+        t["until"] = new["until"]
     if t.get("repeat") == "daily":
         t["next_run"] = next_at(t.get("time", "09:00"), t.get("weekdays") or [])
     elif t.get("repeat") == "interval":
@@ -1602,6 +1612,36 @@ def put_routines(body):
     return schedule_routines(), None
 
 
+# Saved places (Settings › Assistant › Saved Places, #1598): the user's named places that reminders by place go off at.
+PLACES = [
+    {"id": "pl1", "name": "家", "address": "上海市黄浦区示例路 1 号", "latitude": 31.2304, "longitude": 121.4737,
+     "radius_meters": 150, "created_at": ago(days=3), "updated_at": ago(days=3)},
+    {"id": "pl2", "name": "公司", "address": "上海市浦东新区示例大道 100 号", "latitude": 31.2397, "longitude": 121.4998,
+     "radius_meters": 300, "created_at": ago(days=2), "updated_at": ago(days=2)},
+]
+
+
+def save_place(body, pid):
+    """Adds a saved place (pid None) or changes place pid, as the manager does (assistant/places.go): (answer, status)."""
+    name = str(body.get("name") or "").strip()
+    if not name or body.get("latitude") is None or body.get("longitude") is None:
+        return {"error": "地点需要名称和经纬度"}, 400
+    if any(x["name"] == name and x["id"] != pid for x in PLACES):
+        return {"error": f"已经有叫「{name}」的地点了。"}, 409
+    radius = min(max(int(body.get("radius_meters") or 150), 100), 2000)
+    place = {"name": name, "address": str(body.get("address") or "").strip(), "latitude": float(body["latitude"]),
+             "longitude": float(body["longitude"]), "radius_meters": radius, "updated_at": ago()}
+    if pid:
+        for x in PLACES:
+            if x["id"] == pid:
+                x.update(place)
+                return {"place": x}, 200
+        return {"error": "这个常用地点已经不在了。"}, 404
+    place.update(id=f"pl{uuid.uuid4().hex[:8]}", created_at=place["updated_at"])
+    PLACES.append(place)
+    return {"place": place}, 200
+
+
 MEMORY = [
     {"name": "MEMORY.md", "content": "- [早报格式](morning-format.md) — 一屏以内，结论先行", "updated_at": ago(days=1)},
     {"name": "morning-format.md", "content": "---\nname: morning-format\ndescription: 早报一屏以内\nmetadata:\n  type: feedback\n---\n\n早报一屏以内，结论先行。",
@@ -1641,6 +1681,8 @@ TODOS_INIT = [
         "id": "todo_weather",
         "title": "天气 App 发 1.3 版",
         "notes": "1.3 的内容：主屏幕小组件、网络层补测试、发布说明。周五前提交审核。",
+        # Due at a moment (#1683): the list shows it under the title, the detail page edits it.
+        "due_at": later(hours=50),
         # The stage bar on the todo detail (#2776): how far the work got, and the PR it is in.
         "stage": "develop",
         "pr_url": "https://example.com/pull/128",
@@ -1713,6 +1755,7 @@ TODOS_INIT = [
     {
         "id": "todo_photos",
         "title": "照片同步脚本支持 HEIC",
+        "due_date": day_from_now(-1),  # overdue (#1683)
         "notes": "计划写好了，等你批准后开始改。",
         "done_at": None,
         "created_at": ago(hours=3),
@@ -1809,6 +1852,10 @@ TODOS_INIT = [
         "id": "todo_nas",
         "title": "给 NAS 配自动备份",
         "notes": "配置 NAS 的定期备份任务。",
+        # The user's own to-do with a due day, a reminder still to push and high priority (#1683).
+        "due_date": day_from_now(2),
+        "remind_at": later(hours=18),
+        "priority": "high",
         "done_at": None,
         "created_at": ago(days=1),
         "updated_at": ago(days=1),
@@ -1916,6 +1963,25 @@ def format_todo(t):
     else:
         t_copy.setdefault("spaces", [])
     return t_copy
+
+
+def apply_todo_plan(t, body):
+    """A POST / PATCH body's due_at | due_date, remind_at and priority (#1683, server/internal/assistant/todo_plan.go):
+    null or "" clears; a new reminder time is pushed again. The error to answer with 400, else None."""
+    if "due_at" in body or "due_date" in body:
+        at, day = body.get("due_at") or None, body.get("due_date") or None
+        if at and day: return "give due_at or due_date, not both"
+        t["due_at"], t["due_date"] = at, day
+    if "remind_at" in body:
+        new = body.get("remind_at") or None
+        if new != t.get("remind_at"):
+            t["remind_at"], t["reminded_at"] = new, None
+    if "priority" in body:
+        pr = (body.get("priority") or "").strip().lower()
+        pr = "" if pr == "normal" else pr
+        if pr not in ("", "high", "low"): return "priority must be high, normal or low"
+        t["priority"] = pr
+    return None
 
 
 def sorted_todos():
@@ -3225,6 +3291,35 @@ if MOCK_TASKS:
                                         {"title": _title, "state": "done", "summary": "检查结果已整理好，等待验收。",
                                          "review": {"state": "awaiting", "criteria": _n}}))
 
+
+# MOCK_USAGE_LIMIT=1: two agents stopped on a subscription usage limit (docs/assistant/agent-work.md "Usage limits").
+# One the CLI continues, one nothing continues. With MOCK_TASKS=1 the first is also a task card in the main chat.
+if os.environ.get("MOCK_USAGE_LIMIT") == "1":
+    _limit_resumes = "a9e0c000-0000-4000-8000-000000000001"
+    _limit_resets = "a9e0c000-0000-4000-8000-000000000002"
+    _reset_soon = (datetime.now(timezone.utc) + timedelta(hours=3)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    _reset_later = (datetime.now(timezone.utc) + timedelta(days=2, hours=4)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    _limit_error = "You've hit your usage limit."
+    SESSIONS += [
+        sess("macbook", _limit_resumes, "等用量重置后继续修登录", "/Users/me/code/weather", "done", "idle", "weather", 1, "limit", 8, 2,
+             _limit_error, turn_error=_limit_error, turn_error_kind="usage_limit", turn_error_resets_at=_reset_soon,
+             turn_error_resumes=True, work={"phase": "blocked", "on": "external", "resets_at": _reset_soon,
+                                            "line": "用量额度用完了，重置后自己接着做"}),
+        sess("macbook", _limit_resets, "导出周报", "/Users/me/code/weather", "done", "idle", "weather", 1, "weekly", 9, 5,
+             _limit_error, turn_error=_limit_error, turn_error_kind="usage_limit", turn_error_resets_at=_reset_later,
+             work={"phase": "blocked", "on": "external", "wait": "用量重置", "resets_at": _reset_later,
+                   "line": "用量额度用完了，重置后再继续"}),
+    ]
+    ITEMS[_limit_resumes] = [it("assistant", "text", 2, text="API Error: 429 You've hit your usage limit.")]
+    if MOCK_TASKS:
+        _limit_todo = {"id": "todo_usage_limit", "title": "等用量重置后继续修登录", "notes": "", "done_at": None,
+                       "created_at": ago(minutes=3), "updated_at": ago(minutes=1), "origin": ASK1, "plan_id": "",
+                       "spaces": [], "agents": [{"machine_id": "macbook", "session_id": _limit_resumes,
+                       "linked_at": ago(minutes=3), "released_at": None, "title": "等用量重置后继续修登录",
+                       "cwd": "/Users/me/code/weather", "agent": "claude", "start_error": "", "source": "manual", "via": ""}]}
+        TODOS.append(_limit_todo)
+        TASK_FEED.setdefault(ASK1, []).append(
+            {"id": "feed_usage_limit", "conversation": ASK1, "at": ago(minutes=2), "kind": "task", "ref": "todo_usage_limit", "body": {}})
 
 RETRY_TASK_STARTED = "a1f3c2d4-0000-4000-8000-0000000000a1"
 RETRY_MODE = {"mode": os.environ.get("MOCK_RETRY", "")}
@@ -6841,6 +6936,64 @@ LAUNCHER_MODELS = {
 }
 LAUNCHER_MODELS["sonnetcc"] = dict(LAUNCHER_MODELS["claude"], locked="启动器固定了模型参数，不能覆盖具体模型")
 
+# Typing a model ID (#1644, docs/assistant/model-config.md "Typing a model ID"): MOCK_CUSTOM_MODELS=1 lists the IDs typed
+# before after a Claude Code / Codex launcher's own models (`custom: true`, none for a locked one), takes Forget
+# (DELETE …/launchers/{name}/models/custom?model=) and remembers a start's or a running session's typed model the list
+# doesn't have, as the hub does once it ran. =forgetfail: Forget answers 500 (the app puts the row back); =empty: Claude
+# Code's list is empty ("Enter Model ID…"); =fail: no list can be read (502). Every mode lists "typed_models" in the
+# features. GET /mock/custom_models: what is remembered (`?reset=1` puts the first IDs back).
+CUSTOM_MODELS_MODE = os.environ.get("MOCK_CUSTOM_MODELS", "")
+CUSTOM_MODELS_START = {"claude": ["vendor/model-x", "~vendor/model-latest[1m]"], "codex": ["gpt-next-preview"]}
+CUSTOM_MODELS = copy.deepcopy(CUSTOM_MODELS_START) if CUSTOM_MODELS_MODE else {}
+
+
+def custom_models_list(launcher, listing):
+    """A launcher's /model list with the typed IDs after its own (MOCK_CUSTOM_MODELS); None: it can't be read."""
+    if CUSTOM_MODELS_MODE == "fail": return None
+    if CUSTOM_MODELS_MODE == "empty" and listing.get("agent") == "claude": return dict(listing, models=[])
+    if listing.get("agent") not in ("claude", "codex") or listing.get("locked"): return listing
+    known = {m["id"] for m in listing["models"]}
+    typed = [{"id": i, "name": i, "description": "之前用过的模型 ID", "custom": True} for i in CUSTOM_MODELS.get(launcher, []) if i not in known]
+    return dict(listing, models=listing["models"] + typed)
+
+
+def custom_models_used(launcher, model):
+    """A start or a model switch went through with `model`: kept first unless the launcher's own list has it (at most 8)."""
+    listing = LAUNCHER_MODELS.get(launcher or "claude")
+    if not CUSTOM_MODELS_MODE or not model or not listing or listing.get("locked") or model in {m["id"] for m in listing["models"]}: return
+    CUSTOM_MODELS[launcher or "claude"] = ([model] + [i for i in CUSTOM_MODELS.get(launcher or "claude", []) if i != model])[:8]
+
+
+def custom_models_route(h, method, p, q, body=b""):
+    """MOCK_CUSTOM_MODELS: Forget, GET /mock/custom_models, and remembering what a start / a switch ran. False otherwise."""
+    if not CUSTOM_MODELS_MODE: return False
+    if p == "/mock/custom_models":
+        if q.get("reset"):
+            CUSTOM_MODELS.clear(); CUSTOM_MODELS.update(copy.deepcopy(CUSTOM_MODELS_START))
+        h.send_json({"custom": CUSTOM_MODELS, "mode": CUSTOM_MODELS_MODE}); return True
+    if method == "POST" and p == "/api/v1/sessions":
+        b = json.loads(body or b"{}")
+        custom_models_used(b.get("launcher"), b.get("model")); return False
+    m = re.fullmatch(r"/api/v1/sessions/([^/]+)/([^/]+)/modes", p)
+    if method == "POST" and m:
+        s = next((x for x in all_sessions() if x["session_id"] == m.group(2)), None)
+        custom_models_used((s or {}).get("launcher") or "claude", json.loads(body or b"{}").get("model")); return False
+    m = re.fullmatch(r"/api/v1/machines/([^/]+)/launchers/([^/]+)/models/custom", p)
+    if not m or method != "DELETE": return False
+    if CUSTOM_MODELS_MODE == "forgetfail":
+        h.send_json({"error": "数据库暂时不可用"}, 500); return True
+    model, launcher = (q.get("model") or [""])[0], unquote(m.group(2))
+    CUSTOM_MODELS[launcher] = [i for i in CUSTOM_MODELS.get(launcher, []) if i != model]
+    h.send_json({"ok": True}); return True
+
+
+_features_without_custom_models = features
+
+
+def features():
+    # The hub keeps a typed pick (proto "typed_models"): the Persona chat's chip offers "Other Model…".
+    return _features_without_custom_models() + (["typed_models"] if CUSTOM_MODELS_MODE else [])
+
 
 # Settings › Model providers: ~/.zshrc launchers, two of them through made-up example gateways a quota plugin can read.
 LAUNCHERS = [
@@ -7513,6 +7666,49 @@ def subagent_step():
             sess_["rev"] = (sess_.get("rev") or 0) + 1
             push_machine("macbook")
     return {"step": n}
+
+
+# MOCK_MESSAGE_LIFT=1: chats for the lifted message of a long press (#603): short messages, the newest one just above the
+# composer, and a long answer with a heading, a list, a code block and a table, taller than any screen. Synthetic text.
+LIFT_SHORT = "a1f3c2d4-0000-4000-8000-0000000c1e08"
+LIFT_LONG = "a1f3c2d4-0000-4000-8000-0000000c1e09"
+
+
+def mock_message_lift():
+    ITEMS[LIFT_SHORT] = [
+        it("user", "text", 30, text="登录页的按钮文字太长了，小屏上换行了"),
+        it("assistant", "text", 29, text="看到了：「使用手机号和验证码登录」在 320 宽的屏幕上折成两行。改成「验证码登录」，再把说明放到按钮下面一行小字，可以吗？"),
+        it("user", "text", 20, text="可以，就这么改"),
+        it("assistant", "text", 19, text="改好了，三种语言的文案都换了，截图在 `shots/login-after.png`。"),
+        it("user", "text", 12, text="顺手看看注册页有没有同样的问题"),
+        it("assistant", "text", 10, text="注册页的按钮没有换行，但「获取验证码」在日语下被截短了，我把它改成两个字的「送信」，其他语言不变。"),
+        it("user", "text", 3, text="好的"),
+        it("assistant", "text", 2, text="收到，都提交了。"),
+    ]
+    rows = "\n".join("| %s | %d | %d | %s |" % r for r in [
+        ("登录", 42, 42, "全部通过"), ("注册", 38, 37, "1 个超时，重跑通过"), ("找回密码", 21, 21, "全部通过"),
+        ("个人资料", 30, 28, "2 个截图对比失败"), ("设置", 25, 25, "全部通过"), ("消息列表", 56, 56, "全部通过")])
+    long = ("## 改动和验证\n\n这次一共改了三处，下面按模块说明，最后是测试结果和还没做的事。\n\n"
+            "### 1. 登录页\n\n- 按钮文字从「使用手机号和验证码登录」改成「验证码登录」，说明挪到按钮下面一行小字。\n"
+            "- 小屏（320 宽）上不再换行；大字号下按钮高度跟着字号变，不截断。\n- 深色模式下说明文字的对比度从 3.2 提到 4.8。\n\n"
+            "### 2. 注册页\n\n- 「获取验证码」在日语下被截短，改成「送信」。\n- 倒计时期间按钮显示剩余秒数，读屏会念出来。\n"
+            "- 手机号输入框加了格式提示，输错时在框下面说明原因，不再只是变红。\n\n"
+            "### 3. 共用的按钮组件\n\n按钮标签统一单行，放不下时先缩小字号，最小到 0.8 倍：\n\n"
+            "```swift\nstruct PrimaryButton: View {\n    var title: String\n    var action: () -> Void\n\n    var body: some View {\n"
+            "        Button(action: action) {\n            Text(title)\n                .lineLimit(1)\n                .minimumScaleFactor(0.8)\n"
+            "                .frame(maxWidth: .infinity)\n        }\n        .buttonStyle(.borderedProminent)\n    }\n}\n```\n\n"
+            "### 测试结果\n\n| 模块 | 用例 | 通过 | 说明 |\n| --- | --- | --- | --- |\n" + rows + "\n\n"
+            "个人资料页的两个截图对比失败是因为头像换了新的占位图，基准图要更新，和这次改动无关。\n\n"
+            "### 还没做\n\n- 安卓端的同样问题还没改，文案已经同步到共享的字符串表里。\n- 网页端的登录页用的是另一套组件，下次一起改。\n"
+            "- 截图基准图等你确认后再更新。\n\n有问题的话告诉我具体哪一页，我再调整。")
+    ITEMS[LIFT_LONG] = [it("user", "text", 15, text="把这次登录和注册页的改动整理一下，带上测试结果"),
+                        it("assistant", "text", 5, text=long)]
+    SESSIONS.append(sess("macbook", LIFT_SHORT, "登录页文案", "/Users/me/code/shop-app", "done", "done", "shop-app", 17, "lift", 1, 2, "收到，都提交了。"))
+    SESSIONS.append(sess("macbook", LIFT_LONG, "改动整理", "/Users/me/code/shop-app", "done", "done", "shop-app", 17, "lift", 2, 5, "有问题的话告诉我具体哪一页。"))
+
+
+if os.environ.get("MOCK_MESSAGE_LIFT") == "1":
+    mock_message_lift()
 
 
 # MOCK_SUBAGENT_PARALLEL=1: three subagents launched together in the live exchange (#5602, the grid): one done, one
@@ -10524,9 +10720,14 @@ def churn(rounds, ms, steps=1, final=False, inbox=False, waiting=False, real=Fal
             working[0]["updated_at"] = ago(minutes=30)
         for m in MACHINES:
             m["last_seen"] = now
-        if waiting and INTERACTIONS:  # the hub's own list follows what is pushed below (/mock/truth reads it)
-            INTERACTIONS[:] = [x for x in INTERACTIONS if x["id"] != "ix_churn"]
-            if k % 2 == 0: INTERACTIONS.append(dict(INTERACTIONS[0], id="ix_churn", created_at=now))
+        churn_removed = []
+        churn_added = None
+        if waiting:  # Resolved identities never become a different question on the real hub.
+            churn_removed = [x["id"] for x in INTERACTIONS if x["id"].startswith("ix_churn")]
+            INTERACTIONS[:] = [x for x in INTERACTIONS if x["id"] not in churn_removed]
+            if k % 2 == 0 and INTERACTIONS:
+                churn_added = "ix_churn_" + uuid.uuid4().hex
+                INTERACTIONS.append(dict(INTERACTIONS[0], id=churn_added, created_at=now))
         by = {}
         for s in out_by_machine(all_sessions()): by.setdefault(s["machine_id"], []).append(s)
         for send, subscribed in list(LIVE):
@@ -10537,11 +10738,13 @@ def churn(rounds, ms, steps=1, final=False, inbox=False, waiting=False, real=Fal
                 if inbox:
                     send({"type": "inbox"})
                     for ix in pending: send({"type": "interaction", "interaction": ix})
-                if waiting and pending:  # another agent starts waiting, then is answered elsewhere
-                    if k % 2 == 0:
-                        send({"type": "interaction", "interaction": dict(pending[0], id="ix_churn", created_at=now)})
-                    else:
-                        send({"type": "interaction_resolved", "id": "ix_churn"})
+                if waiting:  # another agent starts waiting, then is answered elsewhere
+                    for retired in churn_removed:
+                        send({"type": "interaction_resolved", "id": retired})
+                    if churn_added:
+                        added = next((ix for ix in pending if ix["id"] == churn_added), None)
+                        if added:
+                            send({"type": "interaction", "interaction": added})
                 for sid in list(subscribed):
                     items = ITEMS.get(sid)
                     if not items: continue
@@ -11554,7 +11757,7 @@ _PLUGIN_VIEW = ["id", "name", "kind", "status", "error", "version", "source", "e
 # ---------- MOCK_EXTENSIONS: declarative UI (docs/extensions/extensions.md "Declarative UI") ----------
 # example-gateway draws a page (plugin_page "home") and a section on every launcher's page (launcher_section "panel"),
 # with every kind of item; its buttons answer (a toast, a new view, a link), the form's values come back.
-_UI_STATE = {"note": "", "auto": "true", "plan": "team", "refreshed": 0, "capsule_refreshed": 0}
+_UI_STATE = {"note": "", "auto": "true", "plan": "team", "refreshed": 0, "capsule_refreshed": 0, "test_key": True}
 
 
 _DAYS = ["10-29", "10-30", "10-31", "11-01", "11-02", "11-03", "11-04"]
@@ -11635,9 +11838,12 @@ def _ui_view(ui, launcher=""):
         {"title": "Key", "footer": "停用后，用这个 Key 的启动器会立刻失败。", "items": [
             {"type": "row", "title": "工作", "subtitle": "sk-…3fa9 · 今天 1.2 万 token", "value": "¥ 12.30", "badge": {"text": "有效", "tone": "positive"},
              "action": {"id": "key:work"}},
-            {"type": "row", "title": "测试", "subtitle": "sk-…77c0 · 7 天没用", "badge": {"text": "快过期", "tone": "caution"}},
+            {"type": "row", "title": "测试", "subtitle": "sk-…77c0 · 7 天没用", "badge": {"text": "快过期", "tone": "caution"}
+             if _UI_STATE["test_key"] else {"text": "停用", "tone": "neutral"}},
             {"type": "divider"},
-            {"type": "button", "title": "停用测试 Key", "role": "destructive", "action": {"id": "disable:test", "confirm": "停用后不能恢复，确定停用？"}}]},
+            # Disabling answers with the page where the button is another one (its own key): drawn new, usable at once (#1937).
+            {"type": "button", "key": "disable-test", "title": "停用测试 Key", "role": "destructive", "action": {"id": "disable:test", "confirm": "停用后不能恢复，确定停用？"}}
+            if _UI_STATE["test_key"] else {"type": "button", "key": "enable-test", "title": "启用测试 Key", "action": {"id": "enable:test"}}]},
         {"title": "设置", "items": [
             {"type": "field", "name": "note", "label": "备注", "kind": "text", "value": _UI_STATE["note"], "placeholder": "写点什么"},
             {"type": "field", "name": "token", "label": "管理 Token", "kind": "secret", "placeholder": "不回显"},
@@ -11763,7 +11969,11 @@ def _ui_action(ui, action, values):
     if action.startswith("key:"):
         return {"open_url": "https://example.com/console/keys"}
     if action.startswith("disable:"):
-        return {"toast": "已停用"}
+        _UI_STATE["test_key"] = False
+        return {"toast": "已停用", "view": _ui_view(ui)}
+    if action.startswith("enable:"):
+        _UI_STATE["test_key"] = True
+        return {"toast": "已启用", "view": _ui_view(ui)}
     return {}
 
 
@@ -11837,7 +12047,8 @@ def _catalog_item(c):
 
 # Auto-upgrade (docs/extensions/extensions.md "Automatic upgrades"): example-gateway, from a market at 1.0.0, has 1.1.0 there asking for one more
 # host. MOCK_PLUGIN_UPGRADE picks how it stands: needs_permission (default), waiting_idle, skipped, upgraded (the last
-# one went in by itself), disabled (switched off: auto-upgrade paused, its own switch kept), none.
+# one went in by itself), disabled (switched off: auto-upgrade paused, its own switch kept), rolled_back_by_user (the
+# user rolled back from 1.1.0 by hand: skipped as the user's, #1826), none.
 AUTO_UPGRADE = {"auto": True}
 # A market plugin's upgrade while it is on, put back when it is switched on again (_auto_upgrade_paused).
 _UPGRADE_WHILE_ON = {}
@@ -11870,7 +12081,10 @@ def _gateway_upgrade(state):
         up["detail"] = "插件正在用"
     elif state == "skipped":
         pl["upgrade_note"] = {"kind": "rolled_back", "from": "1.0.0", "to": "1.1.0", "detail": "exited with status 3", "at": at(5)}
-    if state in ("needs_permission", "waiting_idle", "skipped", "disabled"):
+    elif state == "rolled_back_by_user":  # no note: the version it was upgraded to is not installed any more
+        up["state"], up["skipped_by"] = "skipped", "user"
+        up["detail"] = "你从这个版本回滚过，所以不会自动装它；要装就手动更新"  # i18n-ignore: the hub's words
+    if state in ("needs_permission", "waiting_idle", "skipped", "disabled", "rolled_back_by_user"):
         pl["upgrade"] = up
     elif state == "upgraded":
         pl["upgrade_note"] = {"kind": "upgraded", "from": "0.9.0", "to": "1.0.0", "at": at(3)}
@@ -12812,8 +13026,8 @@ def model_defaults_launchers(h, p, q):
         default = {"provider": b.get("provider", "").removeprefix("launcher."), "model": b.get("model", ""), "effort": b.get("effort", "")}
         if purpose.get("runtimes"):
             default["runtime"] = b.get("runtime") or "cli"
-    h.send_json({"launchers": [{"name": "claude", "model": "opus"}, {"name": "sonnetcc", "model": "sonnet"},
-                               {"name": "codex", "model": "gpt-5.5", "agent": "codex", "agent_type": "codex"}], "default": default})
+    h.send_json({"launchers": launcher_health_list([{"name": "claude", "model": "opus"}, {"name": "sonnetcc", "model": "sonnet"},
+                                                    {"name": "codex", "model": "gpt-5.5", "agent": "codex", "agent_type": "codex"}]), "default": default})
     return True
 
 
@@ -12822,6 +13036,54 @@ if MODEL_DEFAULTS:
         if _s["session_id"] == ASSISTANT_CONFIG["main"]:
             _s["runtime_fallback"] = MODEL_DEFAULTS_FALLBACK
 # ---------- end of area: model defaults ----------
+
+
+# ---------- area: launcher health (#1643) ----------
+# MOCK_LAUNCHER_HEALTH=1: "New Agent"'s launchers carry their health on the computer (docs/server/launcher-health.md): claude
+# checked fine, work_gw blocked because new terminal tabs can't run it (not_in_terminal, #1642), team_gw blocked on its key.
+# MOCK_LAUNCHER_HEALTH=default: Model Settings' New Agent default is work_gw too. Either way a start that runs work_gw fails
+# after MOCK_START_SECONDS with the hub's coded sentence (start_error_code launcher_missing, where terminal), and a session
+# that already failed so is listed (macbook/f1643000-0000-4000-8000-000000000001, for -openSession).
+LAUNCHER_HEALTH = os.environ.get("MOCK_LAUNCHER_HEALTH", "")
+LAUNCHER_HEALTH_FAILED = "f1643000-0000-4000-8000-000000000001"
+
+
+def launcher_health_list(launchers):
+    """The machine's launchers with health records (MOCK_LAUNCHER_HEALTH), else as they are."""
+    if not LAUNCHER_HEALTH:
+        return launchers
+    out = [dict(l, health={"state": "ok", "checked_at": ago(minutes=12)}) if l["name"] == "claude" else dict(l) for l in launchers]
+    out[1:1] = [
+        {"name": "work_gw", "model": "glm-5.3", "health": {"state": "blocked", "kind": "not_in_terminal", "checked_at": ago(minutes=3),
+                                                          "error": "bash: work_gw: command not found"}},
+        {"name": "team_gw", "model": "sonnet", "health": {"state": "blocked", "kind": "auth", "checked_at": ago(minutes=40),
+                                                         "error": 'API Error: 401 {"type":"error","error":{"type":"authentication_error","message":"invalid x-api-key"}}'}},
+    ]
+    return out
+
+
+# MOCK_LANG=en|ja|zh-Hans (default zh-Hans, the hub's default): the language of the hub's sentence, as a hub answering a
+# client in that language would write it, so a screenshot in English or Japanese is not checked against Chinese words.
+LAUNCHER_HEALTH_LANG = os.environ.get("MOCK_LANG", "zh-Hans")
+
+
+def launcher_health_refusal(machine_name):
+    """What the hub says of a start the new tab's shell could not run work_gw in: its sentence, code and details."""
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    import readiness_mock  # the hub's own catalogs (server/internal/i18n)
+    args = {"launcher": "work_gw", "where": "terminal", "missing": "work_gw", "kind": "not_found", "pane_shell": "bash",
+            "launcher_shell": "zsh", "rc_file": "~/.zshrc", "line": "bash: work_gw: command not found"}
+    text = readiness_mock.t(LAUNCHER_HEALTH_LANG, "apierr-apierr.launcher_missing_terminal", machine=machine_name, **args)
+    return {"start_error": text, "start_error_code": "launcher_missing", "start_error_args": args}
+
+
+if LAUNCHER_HEALTH == "default":
+    MODEL_BINDINGS["agent.new"] = {"revision": 1, "override": {"provider": "launcher.work_gw"}}
+if LAUNCHER_HEALTH:
+    SESSIONS.append(sess("macbook", LAUNCHER_HEALTH_FAILED, "整理天气数据", "/Users/me/code/weather-app", "offline", "offline",
+                         "weather-app", 2, "agent-3", 3, 1, "", launcher="work_gw",
+                         **launcher_health_refusal(next((m["name"] for m in MACHINES if m["id"] == "macbook"), "macbook"))))
+# ---------- end of area: launcher health ----------
 
 
 # ---------- HTTP ----------
@@ -12902,6 +13164,7 @@ class H(BaseHTTPRequestHandler):
         if p == "/api/v1/assistant/conversations/" + ASK1 + "/always":
             return self.send_json({"grants": ALWAYS_GRANTS})
         if recordings_route(self, "GET", p): return
+        if custom_models_route(self, "GET", p, q): return
         if managers_route(self, "GET", p): return
         if _sent and _sent.route(self, "GET", p, q): return
         if providers_route(self, "GET", p, q, b""): return
@@ -13349,6 +13612,8 @@ class H(BaseHTTPRequestHandler):
         if p == "/api/v1/assistant/runs":
             ref = parse_qs(urlparse(self.path).query).get("ref", [""])[0]
             return self.send_json({"runs": [r for r in RUNS if not ref or r["ref_id"] == ref]})
+        if p == "/api/v1/assistant/places":
+            return self.send_json({"places": PLACES})
         if p == "/api/v1/assistant/memory":
             if parse_qs(urlparse(self.path).query).get("space", [""])[0] == "health":
                 return self.send_json({"files": HEALTH_MEMORY, "dir": "/home/me/.persona/health/memory"})
@@ -13544,11 +13809,16 @@ class H(BaseHTTPRequestHandler):
             return self.send_json(dict(LAUNCHER_MODELS["claude"], machine="macbook"))
         if p.startswith("/api/v1/machines/") and "/launchers/" in p and p.endswith("/models"):  # "New Agent"'s model picker
             time.sleep(float(os.environ.get("MOCK_MODELS_SECONDS", "0.8")))
-            return self.send_json(LAUNCHER_MODELS.get(unquote(p.split("/")[6]), {"agent": "traex", "models": []}))
+            name = unquote(p.split("/")[6])
+            listing = LAUNCHER_MODELS.get(name, {"agent": "traex", "models": []})
+            if CUSTOM_MODELS_MODE:
+                listing = custom_models_list(name, listing)
+                if listing is None: return self.send_json({"error": "claude 没有登录：claude /login 之后再试"}, 502)
+            return self.send_json(listing)
         if doctor_route(self, p, "GET"): return
         if p.startswith("/api/v1/machines/") and p.endswith("/launchers"):
-            return self.send_json({"launchers": [{"name": "claude", "model": "opus"}, {"name": "sonnetcc", "model": "sonnet"},
-                                                 {"name": "codex", "model": "gpt-5.5", "agent": "codex", "agent_type": "codex"}]})  # Codex: "Create from the phone"
+            return self.send_json({"launchers": launcher_health_list([{"name": "claude", "model": "opus"}, {"name": "sonnetcc", "model": "sonnet"},
+                                                                      {"name": "codex", "model": "gpt-5.5", "agent": "codex", "agent_type": "codex"}])})  # Codex: "Create from the phone"
         if p.startswith("/api/v1/machines/") and p.endswith("/claude-settings"):
             return self.send_json({"settings": CLAUDE_SETTINGS.setdefault(p.split("/")[4], _claude_settings())})
         if p.startswith("/api/v1/machines/") and p.endswith("/claude-dirs"):
@@ -13756,6 +14026,7 @@ class H(BaseHTTPRequestHandler):
         self.last_body = self.body()
         p = urlparse(self.path).path
         if preview_route and preview_route(self, self.command, p, parse_qs(urlparse(self.path).query)): return
+        if custom_models_route(self, self.command, p, parse_qs(urlparse(self.path).query), self.last_body): return
         if PERSONAL_AGENTS and p.startswith("/api/v1/agents/sessions/") and p.rsplit("/", 1)[-1] in ("hide", "unhide"):
             sid, op = unquote(p[len("/api/v1/agents/sessions/"):].rsplit("/", 1)[0]), p.rsplit("/", 1)[-1]
             if sid not in [r["id"] for r in personal_rows()]: return self.send_json({"error": "no such session"}, 404)
@@ -13953,6 +14224,8 @@ class H(BaseHTTPRequestHandler):
                 "updated_at": now_str,
                 "agents": [],
             }
+            err = apply_todo_plan(new_todo, body)
+            if err: return self.send_json({"error": err}, 400)
             TODOS.insert(0, new_todo)
             push_todos()
             return self.send_json({"todo": new_todo})
@@ -14105,6 +14378,8 @@ class H(BaseHTTPRequestHandler):
                     t["title"] = title
                 if "notes" in body:
                     t["notes"] = body["notes"] or ""
+                err = apply_todo_plan(t, body)
+                if err: return self.send_json({"error": err}, 400)
                 if "done" in body:
                     if body["done"]:
                         if not t.get("done_at"):
@@ -14530,6 +14805,14 @@ class H(BaseHTTPRequestHandler):
             mute, settled = mute_item(body.get("item_id"), body.get("tag"), other[0] if other else None)
             if not mute: return self.send_json({"error": "这一条没有可静音的" + str(body.get("tag"))}, 400)
             return self.send_json({"mute": mute, "settled": settled})
+        if p == "/api/v1/assistant/places" and self.command == "POST":
+            return self.send_json(*save_place(json.loads(self.last_body or b"{}"), None))
+        if p.startswith("/api/v1/assistant/places/") and self.command == "PUT":
+            return self.send_json(*save_place(json.loads(self.last_body or b"{}"), p.rsplit("/", 1)[1]))
+        if p.startswith("/api/v1/assistant/places/") and self.command == "DELETE":
+            pid = p.rsplit("/", 1)[1]
+            PLACES[:] = [x for x in PLACES if x["id"] != pid]
+            return self.send_json({"ok": True})
         if p == "/api/v1/inbox/policies" and self.command == "POST":
             other = other_manager(self)
             if other and other[1]: return self.send_json(*other[1])
@@ -14868,10 +15151,13 @@ class H(BaseHTTPRequestHandler):
                 ITEMS[s["session_id"]] = [it("user", "text", 0, text=body["prompt"])]
             if body.get("async"):  # answered at once, claude still starting (node/starting.go); MOCK_START_SECONDS later it is up
                 s.update(status="idle", state="idle", starting=True, title=body.get("name_hint") or s["title"])
-                def started(s=s):
+                runs = body.get("launcher") or ("work_gw" if LAUNCHER_HEALTH == "default" else "claude")
+                def started(s=s, runs=runs):
                     s.pop("starting", None)
                     # MOCK_START_ERROR=<why>: claude never gets ready; the chat says "Failed to start" and sends get the error.
                     if os.environ.get("MOCK_START_ERROR"): s.update(status="offline", state="offline", start_error=os.environ["MOCK_START_ERROR"])
+                    if LAUNCHER_HEALTH and runs == "work_gw":  # the new tab's shell has no work_gw (MOCK_LAUNCHER_HEALTH)
+                        s.update(status="offline", state="offline", **launcher_health_refusal(next((m["name"] for m in MACHINES if m["id"] == s["machine_id"]), s["machine_id"])))
                 threading.Timer(float(os.environ.get("MOCK_START_SECONDS", "6")), started).start()
             SESSIONS.append(s)
             if todo_id:
@@ -16931,6 +17217,9 @@ MOCK_HELP.append("MOCK_ULTRACODE=1  Claude Code 的 ultracode 开关（#3428）�
                  "发布说明那个带版本太旧的原因、博客那个关着、菜谱那个离线（node 还记着开）；Codex 的订单会话在「极高」档；Mac Studio 的 Claude Code 太旧，新建时不能开。"
                  "POST …/modes 的 ultracode 闲着立刻生效、工作中排队 MOCK_ULTRACODE_SECONDS 秒（默认 4）；有排队时发消息回 409 ultracode_pending；"
                  "GET /mock/ultracode 看请求和消息，?reset=1 复原")
+MOCK_HELP.append("MOCK_CUSTOM_MODELS=1|forgetfail|empty|fail  手动输入模型 ID（#1644）：features 带 typed_models；Claude Code / Codex 的模型列表后面带输入过的 ID（custom），"
+                 "DELETE …/models/custom?model= 忘掉；新建和 …/modes 用了列表里没有的 ID 就记下。forgetfail：忘掉回 500；empty：Claude Code 的列表是空的；"
+                 "fail：读不到列表（502）。GET /mock/custom_models 看记着的，?reset=1 复原")
 
 # Agent session archives (docs/protocol/protocol.md "Agent session archives"; web "Archived agents"): MOCK_AGENT_ARCHIVES=1
 # advertises archives and "Archive and close" (=archive: archives only, as behind an older manager), with two agents

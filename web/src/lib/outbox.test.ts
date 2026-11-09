@@ -4,6 +4,7 @@ vi.mock("./store", () => {
   const state = {
     outbox: {} as Record<string, import("./outbox").OutboxEntry[]>,
     assistant: null as null | { machine_id: string; main?: string; conversations: unknown[] },
+    features: [] as string[], // a hub without start receipts: the start goes as it always did (lib/assistant-start.ts)
   };
   return {
     getState: () => state,
@@ -184,6 +185,14 @@ describe("where a failed message goes (#1122)", () => {
     const failed = entry({ id: "f", state: "failed", at: 10_000_000 });
     expect(placeFailed([line("l1", { ts: 10_000_000 + 60_000 })], [failed]).rest.map((e) => e.id)).toEqual(["f"]);
     expect([...placeFailed([line("l1", { ts: 10_000_000 + 180_000 })], [failed]).before.keys()]).toEqual(["l1"]);
+  });
+
+  it("keeps failed real messages outside a quiet supervision wrapper at its original input time", () => {
+    const quiet: ChatLine = { kind: "supervision", id: "quiet", live: false, lines: [line("child", { ts: 10_000_000 + 180_000 })] };
+    const failed = entry({ id: "f", state: "failed", at: 10_000_000 });
+    const placed = placeFailed([quiet], [failed]);
+    expect([...placed.before.keys()]).toEqual(["quiet"]);
+    expect(placed.rest).toEqual([]);
   });
 
   it("keepFailed puts the composer's message in the outbox as failed, with why", () => {

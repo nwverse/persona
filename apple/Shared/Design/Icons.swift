@@ -67,6 +67,12 @@ extension Theme {
         static let instructed = "quote.bubble"
         /// The manager's conclusion: done, just read it.
         static let concluded = "flag.checkered"
+        /// A to-do's due date (#1683): the list row and the detail page.
+        static let dueDate = "calendar.badge.clock"
+        /// A to-do's reminder: the phone is pushed about it at a set time (#1683).
+        static let reminder = "bell.circle"
+        /// A to-do of high priority (#1683).
+        static let highPriority = "flag.fill"
         /// Remind When Seen, Unanswered (#5096): a question the user saw and did not answer, reminded once after a while.
         static let replyReminder = "clock.badge.exclamationmark"
         /// Persona woke a waiting agent up (a message it typed in for the model, `Injected`).
@@ -265,6 +271,10 @@ extension Theme {
 
         // MARK: Things
 
+        /// A saved place (Settings › Assistant › Saved Places) and a place a reminder goes off at.
+        static let place = "mappin.and.ellipse"
+        /// The phone's current location (Use Current Location).
+        static let currentLocation = "location"
         /// The phone's own health trends (steps, sleep, weight drawn from Apple Health, #3272).
         static let healthTrends = "chart.line.uptrend.xyaxis"
         /// Persona itself (the brand's four-point star).
