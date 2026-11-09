@@ -1431,7 +1431,8 @@ DEBUG 的代码可能在 `Persona.debug.dylib` 中，40 KiB 的 `Persona` 只是
 - An App Intent without `authenticationPolicy` gets `.alwaysAllowed`. Siri runs it on a locked phone, and the hub
   credentials (`kSecAttrAccessibleAfterFirstUnlock`) are readable then, so Approve First Pending allowed permissions and
   approved plans while nobody had unlocked the phone; the notification and Live Activity buttons for the same card asked first.
-- An intent that allows, approves or instructs an agent declares `.requiresAuthentication`, as notification actions use
+- An intent that allows a permission or approves a plan declares `.requiresAuthentication`, as notification actions use
   `.authenticationRequired`, and a test pins it (`IntentsTests.approvingFromSiriNeedsUnlock`,
   `FleetIntentsTests.sayingYesNeedsUnlock`). The policy covers the whole intent, so its other replies wait for the unlock too.
+  Ask Claude and Give an Agent a Task still send messages from a locked phone; changing that is a separate decision.
 - An entry that never shows the plan in full approves plans in `acceptEdits`, never `bypassPermissions`.
