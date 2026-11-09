@@ -30,6 +30,19 @@ MANIFEST = '''N: android=http://schemas.android.com/apk/res/android (line=2)
 
 BRIDGE = "persona.core.designsystem.MarkdownRenderer$Bridge"
 
+# The shapes of R8's seeds.txt (classes, then `Class: member`) and usage.txt (`Class` removed whole, `Class:` then the
+# members removed from a kept one).
+SEEDS = """persona.core.hub.HubFailure
+persona.core.hub.HubClient$Refused
+persona.core.contracts.api.ModelPurposeNotFound
+persona.core.hub.HubFailure: java.lang.String getCode()
+androidx.work.ListenableWorker
+"""
+USAGE = """persona.core.contracts.api.ModelPurposeNotFound
+persona.core.hub.HubClient:
+    public void unused()
+"""
+
 
 def kept_release():
     init = {shrink.NO_ARGS}
@@ -68,6 +81,7 @@ class ShrinkGuardTests(unittest.TestCase):
             ("startup initializer", "androidx.work.WorkManagerInitializer"),
         ])
         self.assertEqual(shrink.problems(kept_release(), manifest), [])
+        self.assertEqual(shrink.problems(kept_release(), manifest, seeds=SEEDS, usage=USAGE), [])
 
     def test_each_removed_keep_stops_the_release(self):
         manifest = shrink.manifest_classes(MANIFEST)
@@ -98,19 +112,34 @@ class ShrinkGuardTests(unittest.TestCase):
         self.assertEqual(shrink.problems(kept_release(), manifest, "-dontwarn a.B\n"),
                          ["R8 reported missing classes (missing_rules.txt is not empty)"])
 
+    def test_a_persona_throwable_merged_into_another_class_stops_the_release(self):
+        # A seed neither in the dex nor removed was merged away: its reports would carry another class's name.
+        manifest = shrink.manifest_classes(MANIFEST)
+        merged = SEEDS + "persona.core.contracts.api.ChannelRejected\n"
+        self.assertEqual(shrink.problems(kept_release(), manifest, seeds=merged, usage=USAGE), [
+            "persona.core.contracts.api.ChannelRejected: merged into another class, so reports name that class "
+            "(keep its name in proguard-rules.pro)"])
+        # Without the rule that lists persona Throwables as seeds, the check above would see nothing.
+        self.assertEqual(shrink.problems(kept_release(), manifest, seeds="androidx.work.ListenableWorker\n", usage=USAGE),
+                         ["seeds.txt lists no persona Throwable: proguard-rules.pro lost the rule that lists them"])
+
 
     def test_release_is_shrunk_without_obfuscation_and_no_module_pulls_the_extended_icons(self):
-        # Shrinking takes the release APK from about 93 MB to 33 MB, and check_android_shrink.py passes an unshrunk APK
-        # (the rollback), so only this line notices a merge or an edit that turns it off: a rollback changes it too.
-        # Obfuscated classes would break in_app and the simple names in error reports; the extended icons were 21.9 MB
-        # of dex in debug builds for one unused button.
+        # Shrinking and optimizing take the release APK from about 93 MB to 19.5 MB, and check_android_shrink.py passes an
+        # unshrunk APK (the rollback), so only this line notices a merge or an edit that turns it off: a rollback changes
+        # it too. Obfuscated or merged classes would break in_app and the names in error reports, and the merge check
+        # reads the Throwables the keepnames rule lists as seeds; the extended icons were 21.9 MB of dex in debug builds
+        # for one unused button.
         android = Path(__file__).resolve().parents[2] / "android"
         release = re.search(r"\brelease\s*\{([^{}]*)\}", (android / "app/build.gradle.kts").read_text())
         self.assertIsNotNone(release, "no buildTypes release block in android/app/build.gradle.kts")
         self.assertEqual(re.findall(r"\bisMinifyEnabled\s*=\s*(\w+)", release[1]), ["true"])
         self.assertIn('"proguard-rules.pro"', release[1])
-        rules = (android / "app/proguard-rules.pro").read_text().split()
-        self.assertTrue({"-dontobfuscate", "-dontoptimize", "SourceFile,LineNumberTable"} <= set(rules))
+        rules = [line.strip() for line in (android / "app/proguard-rules.pro").read_text().splitlines()]
+        for rule in ("-dontobfuscate", "-keepattributes SourceFile,LineNumberTable",
+                     "-keepattributes InnerClasses,EnclosingMethod",
+                     "-keepnames class persona.** extends java.lang.Throwable"):
+            self.assertIn(rule, rules)
         builds = [android / "gradle/libs.versions.toml", *android.glob("*/build.gradle.kts"),
                   *android.glob("*/*/build.gradle.kts")]
         self.assertEqual([p.name for p in builds if "material-icons-extended" in p.read_text()], [])

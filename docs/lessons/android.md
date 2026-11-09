@@ -4,14 +4,20 @@
 
 Changing only default-open flags leaves Agent running-step previews visible. Remove the preview and tool-card exceptions, keep every call in the manual trace, and key the outside reply by its turn slot rather than its changing message ID. Preserve the actual ID for menus, jumps and receipts. `produceState` retains its previous value when keys change: a stable slot can therefore briefly draw the predecessor's parsed Markdown even after the text has changed. Carry the parse's source identity and render it only when it matches the current source; show the new plain text while parsing. A regression must render running → new text → completed under the same key, not just compare pure line lists. Test every conversation type × style × appearance, manual toggles, completion folding and restored hub-fold loading. A background wake continues the same genuine user exchange: do not truncate ordered/process rows after its latest reply or divert tail tools into a noninteractive drawer. A wake after an away recap must mark the real reopened turn live, not add a second empty working placeholder.
 
-## `-dontobfuscate` does not keep every method name (#2441)
+## `-dontobfuscate` does not keep every name (#2441, #2840)
 
 When D8 or R8 desugars a Kotlin lambda, it may rename the implementation method to `$r8$lambda$<hash>`, whatever the
-obfuscation flags say: about a third of persona's lambda methods carry such names in an unshrunk build and about half in
-the shrunk release. Error-report frames inside Compose callbacks and coroutine blocks then need `mapping.txt`; the
-release build is reproducible, so rebuilding the reported commit regenerates it. State what shrinking keeps from the built
-dex or `mapping.txt`, not from the flags' names. And pin the switch itself: the shrink check passes an unshrunk APK by
-design and hosted CI builds no release, so `scripts/release/test_check_android_shrink.py` asserts `isMinifyEnabled = true`.
+obfuscation flags say, and an optimizing R8 also inlines, merges and outlines methods. Frames from the release then need
+`mapping.txt`, which the release worker keeps gzipped with each build (`mapping-<unsigned sha256>.txt.gz`). Class names
+need more than the flag once R8 optimizes: class merging folded five thrown exceptions (`CoreTextException`,
+`ChannelRejected`, ...) into other classes, and seven nested exceptions lost the InnerClass annotation that gives
+them their simple names, so `javaClass.simpleName` in error reports would have changed for both. R8 keeps that
+annotation only when it keeps the names of both the nested class and its outer class: `-keepnames` on persona Throwables
+and on those outer classes keeps them, and either rule alone did not. The shrink check cannot see a merged class in the dex, so it reads R8's `seeds.txt` (every persona
+Throwable is listed as one) and fails on a listed class that is neither in the dex nor in `usage.txt`. State what R8
+keeps from the built dex, `seeds.txt` and `usage.txt`, not from the flags' names. And pin the switches themselves: the
+shrink check passes an unshrunk APK by design and hosted CI builds no release, so
+`scripts/release/test_check_android_shrink.py` asserts `isMinifyEnabled = true` and the rules that keep names.
 
 ## Inbox writes must not wait behind full-list reads (#2545)
 

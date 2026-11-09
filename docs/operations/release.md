@@ -479,10 +479,13 @@ When moving to rewritten history, pause the existing publisher, retain its evide
 repository. Keep the existing package, signing certificate and signing entry. Never post an old commit's status to the new repository
 or treat an old verified APK as a build of the new source. Compare migrated file content when commit IDs have changed.
 
-The release APK is shrunk by R8 without obfuscation (docs/android/android.md "Release shrinking"). After `:app:assembleRelease` and
-before the APK is copied for signing, the worker runs `scripts/release/check_android_shrink.py` on it and on R8's
-output in `app/build/outputs/mapping/release`; any class, constructor or method that Android or the app reaches only by name and
-that R8 removed fails the build, so nothing is signed or published. Before the first shrunk release, install it on a phone and
+The release APK is shrunk and optimized by R8 without obfuscation (docs/android/android.md "Release shrinking"). The worker
+removes `app/build/outputs/apk/release` and `mapping/release` before the build, so nothing an earlier build left is checked or
+signed. After `:app:assembleRelease` and before the APK is copied for signing, it runs `scripts/release/check_android_shrink.py`
+on it and on R8's output in `app/build/outputs/mapping/release`; any class, constructor or method that Android or the app
+reaches only by name and that R8 removed, and any persona exception R8 merged into another class, fails the build, so nothing
+is signed or published. It then keeps R8's `mapping.txt` gzipped as `runs/<source>/mapping-<unsigned sha256>.txt.gz` (about
+12 MB), which `retrace` needs for frames from optimized code. Before the first shrunk or optimized release, install it on a phone and
 open pairing, a chat with a formula, the Inbox, Settings, a notification action, the home-screen widget and the Quick Settings
 tile; a crash there is fixed with a keep rule in `android/app/proguard-rules.pro` (or rolled back with `isMinifyEnabled = false`
 and the test line that pins it, docs/android/android.md "Release shrinking").
