@@ -65,6 +65,8 @@ const click = async (el: Element | null | undefined) => {
 };
 
 beforeEach(async () => {
+  // a fixed afternoon: the groups are calendar days, so "an hour ago" must not cross midnight
+  vi.useFakeTimers({ now: new Date(2026, 10, 9, 15, 0), toFake: ["Date"] });
   calls.list = [];
   calls.historyStatus = 200;
   // Needs you: two Lark today, one mail yesterday, one mail 3 days ago; FYI: one Lark; Done: one today (the list's)
@@ -88,6 +90,7 @@ afterEach(() => {
   act(() => root.unmount());
   host.remove();
   vi.unstubAllGlobals();
+  vi.useRealTimers();
 });
 
 describe("收件箱分组 (#2059)", () => {
