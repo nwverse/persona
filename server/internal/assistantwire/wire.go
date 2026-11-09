@@ -1,5 +1,5 @@
 // Package assistantwire is what the hub and the assistant (internal/assistant, its own process) say to each other
-// over the bus (docs/protocol/protocol.md "Bus", docs/assistant/assistant.md "The boundary with the hub"): each method's and event's name, params
+// over the bus (docs/protocol/protocol.md "Bus", docs/assistant/assistant.md "Boundary with hub"): each method's and event's name, params
 // and result, the error codes that cross it, and the routes the hub relays. Both sides import it; neither imports
 // the other.
 package assistantwire
@@ -338,6 +338,10 @@ type SessionView struct {
 	// extension); both "" while it is not known.
 	Origin    string `json:"origin,omitempty"`
 	OriginRef string `json:"origin_ref,omitempty"`
+	// OpenedBy is the extension whose token opened it, by id: noted when it opened (StartParams.OpenedBy), never
+	// backfilled, so "" for any other and for one opened before it was noted. Only that extension's token may change
+	// its permission mode (hub/extension_modes.go).
+	OpenedBy string `json:"opened_by,omitempty"`
 	// Supervising: its current turn was started by a supervision message about the tasks it handed out (#3124): the assistant
 	// does not push its normal finish (SupervisedFinish); it pushes what the user needs to know (notify_user).
 	Supervising bool `json:"supervising,omitempty"`
