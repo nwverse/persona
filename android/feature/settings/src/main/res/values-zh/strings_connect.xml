@@ -35,6 +35,7 @@
     <string name="settings_pairing_address_label">hub 地址或配对链接</string>
     <string name="settings_pairing_code_label">配对码</string>
     <string name="settings_pairing_http_warning">HTTP 不加密，只在内网或 VPN 里使用。在外面请使用加密连接。</string>
+    <string name="settings_pairing_manual_invalid">请检查地址，例如 hub.local:18660</string>
     <string name="settings_pairing_next">下一步</string>
     <string name="settings_pairing_paste">粘贴链接</string>
     <string name="settings_pairing_back_to_scan">返回扫码配对</string>

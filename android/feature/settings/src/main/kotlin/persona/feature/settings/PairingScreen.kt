@@ -83,6 +83,8 @@ fun PairingScreen(
     var info by remember { mutableStateOf(false) }
     var notice by remember { mutableStateOf<Int?>(null) } // a string resource
     var attempt by remember { mutableStateOf<PairingAttempt?>(null) }
+    // Why the manual form's address can't be used (a string resource), shown under the field instead of a failure page.
+    var addressError by remember { mutableStateOf<Int?>(null) }
     fun recordAttempt(request: PairingRequest?, error: Throwable?) {
         attempt = pairingAttempt(request, error, progress.lastOrNull()?.stage,
             progress.lastOrNull { it.candidates.isNotEmpty() }?.candidates.orEmpty())
@@ -213,6 +215,15 @@ fun PairingScreen(
         if (value.isNullOrBlank()) notice = R.string.settings_pairing_notice_clipboard_empty else accept(value)
     }
     fun edit() { credentialsSaved = false; lastRequest = null; confirm = null; failure = null; progress = emptyList(); manual = true }
+    fun next() {
+        if (address.isBlank() || token.isBlank()) return
+        try { confirm = PairingInput.manual(address, token, metadata); addressError = null }
+        catch (error: Exception) {
+            addressError = if (pairingFailure(error) == PairingFailure.TlsRequired) R.string.settings_pairing_failure_tls_required
+                else R.string.settings_pairing_manual_invalid
+            recordAttempt(PairingRequest(address.trim(), token), error)
+        }
+    }
     BackHandler(!readiness && engineStep == null && !running && (confirm != null || manual || failure != null)) {
         confirm = null; manual = false; failure = null; progress = emptyList(); notice = null
     }
@@ -281,9 +292,10 @@ fun PairingScreen(
                     JCard {
                         Column(verticalArrangement = Arrangement.spacedBy(Tokens.Space.m)) {
                             JTextField(address, { value ->
-                                address = value; metadata = PairingInput.editedAddress(metadata, value)
+                                address = value; addressError = null; metadata = PairingInput.editedAddress(metadata, value)
                                 if (PairingInput.isLink(value)) accept(value)
                             }, label = stringResource(R.string.settings_pairing_address_label), modifier = Modifier.fillMaxWidth(),
+                                supportingText = addressError?.let { stringResource(it) }, isError = addressError != null,
                                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri), singleLine = true)
                             JTextField(token, { token = it; metadata = metadata?.copy(token = it) }, label = stringResource(R.string.settings_pairing_code_label),
                                 visualTransformation = PasswordVisualTransformation(), keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
@@ -294,13 +306,7 @@ fun PairingScreen(
                 }
                 item {
                     PairingActions {
-                        JButton(stringResource(R.string.settings_pairing_next), {
-                            try { confirm = metadata ?: PairingInput.manual(address, token) }
-                            catch (error: Exception) {
-                                failure = pairingFailure(error)
-                                recordAttempt(PairingRequest(address.trim(), token), error)
-                            }
-                        }, Modifier.fillMaxWidth(), enabled = address.isNotBlank() && token.isNotBlank())
+                        JButton(stringResource(R.string.settings_pairing_next), ::next, Modifier.fillMaxWidth(), enabled = address.isNotBlank() && token.isNotBlank())
                         JButton(stringResource(R.string.settings_pairing_paste), ::paste, Modifier.fillMaxWidth(), kind = JButtonKind.Secondary)
                         JTextButton(stringResource(R.string.settings_pairing_back_to_scan), { manual = false })
                     }
