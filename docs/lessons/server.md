@@ -900,6 +900,9 @@ against disposable Git with an independent writer at the last read before remova
   Direct `wrangler deploy` inside `site/` (done during domain change) replaces all static assets, immediately making `/dl/*` and `/install.sh` 404 and breaking hub update checks / installation.
   Recovery: find the last release with `wrangler deployments list`, then `wrangler rollback <version>` (custom domains aren't versioned, so unaffected), restored in about 3 minutes.
 - For `site/`-only changes (domains, pages), use `SITE_ONLY=1 ./scripts/release/publish.sh`: reuse published production artifacts, no new release (#951).
+- Renaming the Worker (`name` in `site/wrangler.jsonc`) deploys a new Worker without the old one's secrets: the push relay answered 503 "push relay not configured"
+  for every hub without its own APNs key until the secrets were put on the new name (2026-11-07, #1263). Move the secrets first; `publish.sh` now fails a deploy
+  after which a relay that was healthy no longer is (`docs/operations/site.md`).
   Large-file downloads on this machine often reset connections, so curl uses `--retry-all-errors` (default `--retry` doesn't retry "Connection reset").
 - Decide what happens to the old domain: shipped Apps hardcode the push-relay address and deployed personad checks old-domain `/dl/` for updates.
   With only 301 redirects, POST (push relay) isn't resent unchanged and breaks; the user accepted this on 2026-11-05, redirecting the whole old domain with 301 (#2389, `docs/operations/site.md` ("Old domain")).
