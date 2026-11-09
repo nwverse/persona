@@ -654,8 +654,9 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
 
   useEffect(() => {
     const key = (e: KeyboardEvent) => {
-      // in the terminal view Esc belongs to the program in the terminal
-      if (e.key === "Escape" && state === "working" && view !== "term" && !document.querySelector("[role=dialog],[role=menu]")) {
+      // in the terminal view Esc belongs to the program in the terminal; a message still waiting for its turn to start can be
+      // stopped as a running turn can, as the Interrupt button shows for both
+      if (e.key === "Escape" && (state === "working" || awaiting) && view !== "term" && !document.querySelector("[role=dialog],[role=menu]")) {
         e.preventDefault();
         void interrupt();
       }
@@ -663,7 +664,7 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
     addEventListener("keydown", key);
     return () => removeEventListener("keydown", key);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [state, session, view]);
+  }, [state, awaiting, session, view]);
 
   // The hub says its turn is over and a workflow it launched keeps it working (#3434): the exchange is drawn finished
   // (its work folded, the run's card in the open), and the running bar says the workflow, timed from its start, instead
@@ -1201,7 +1202,7 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
           placeholder={offlineLine ? offlineLine : !sessionCan(session, "send") && session?.source_kind ? t("chat-chatview.view_only") : state === "working" || state === "needs_you" ? t("chat-chatview.queue_placeholder") : assistant ? t("chat-chatview.ask_placeholder", { name: persona.name }) : state === "offline" ? t("chat-chatview.resume_placeholder") : t("chat-chatview.agent_placeholder")}
           machineId={mid}
           uploadDest={session?.space === "health" ? "health" : undefined}
-          working={state === "working"}
+          working={state === "working" || awaiting}
           needsYou={state === "needs_you"}
           onSend={send}
           disabled={Boolean(offlineLine) || !sessionCan(session, "send")}
