@@ -1,5 +1,14 @@
 # Lessons: hub / node and networking
 
+## The first gh on PATH may not be the GitHub CLI (#2081)
+
+Some Linux hosts have an unrelated program named `gh` in `/usr/local/bin`, and `New` puts that directory ahead of
+most of the node's PATH. `exec.LookPath("gh")` then found it, `gh auth token` printed something that was not a
+token, and the GitHub page said the machine was not signed in although the GitHub CLI there was. A service's PATH
+also misses Homebrew on Linux (`/home/linuxbrew/.linuxbrew/bin`), where that CLI usually is. The node now asks each
+`gh` on PATH, then in Homebrew's Linux prefixes, for `--version` and runs the first that answers as the GitHub CLI
+(`server/internal/node/ghpath.go`). Check what a binary is before trusting its name on PATH.
+
 ## Finish a revocation's activity push before forgetting its target (#1864)
 
 Push registration IDs differ from credential IDs: select the registrations bound
