@@ -71,6 +71,17 @@ class ResolveOpIdTest {
             awaitOnline = { true }, clockMillis = { testScheduler.currentTime })
         assertEquals(500, (runCatching { refused.resolve("ix", Resolution(allow = true)) }.exceptionOrNull() as HubFailure).status)
         assertEquals(1, attempts)
+
+        // A 503 that says nothing was delivered is the hub refusing, not a proxy that dropped the request.
+        attempts = 0
+        val undelivered = HubChatTransport({ _, _, _, _ ->
+            attempts++
+            throw HubFailure(HubError.Server, "offline", status = 503, code = "assistant_offline", delivered = "none")
+        }, awaitOnline = { true }, clockMillis = { testScheduler.currentTime })
+        assertEquals(503, (runCatching { undelivered.resolve("ix", Resolution(allow = true)) }.exceptionOrNull() as HubFailure).status)
+        assertEquals(1, attempts)
+        assertFalse(HubChatTransport.cutOff(HubFailure(HubError.Server, "offline", status = 503, delivered = "none")))
+        assertTrue(HubChatTransport.cutOff(HubFailure(HubError.Server, "gateway", status = 503, delivered = "unknown")))
         val gone = HubChatTransport({ _, _, _, _ -> throw HubFailure(HubError.Server, "HTTP 410", status = 410) },
             awaitOnline = { true }, clockMillis = { testScheduler.currentTime })
         assertTrue(runCatching { gone.resolve("ix", Resolution(allow = true)) }.exceptionOrNull() is InteractionGoneException)

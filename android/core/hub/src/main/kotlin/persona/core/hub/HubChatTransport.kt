@@ -185,11 +185,16 @@ class HubChatTransport internal constructor(
             ?.let { runCatching { JsonCodec.parseToJsonElement(it) as? JsonObject }.getOrNull() }
             ?.get(name)?.let { it as? JsonPrimitive }?.takeIf { it.isString }?.content?.takeIf { it.isNotEmpty() }
 
-        /** The connection lost the request (refused, reset, timed out, or a proxy said the hub is not there). */
-        internal fun cutOff(failure: HubFailure) = when (failure.status) {
-            null -> failure.kind in setOf(HubError.ConnectionRefused, HubError.Unreachable, HubError.Timeout,
+        /**
+         * The connection lost the request (refused, reset, timed out, or a proxy said the hub is not there).
+         * A hub body that says the write did not happen (`delivered: none`) is a refusal, even on 502/503/504
+         * (#2768): retrying it keeps the card locked for the whole bound.
+         */
+        internal fun cutOff(failure: HubFailure) = when {
+            failure.delivered == "none" -> false
+            failure.status == null -> failure.kind in setOf(HubError.ConnectionRefused, HubError.Unreachable, HubError.Timeout,
                 HubError.Transport, HubError.NoNetwork, HubError.AddressNotFound)
-            502, 503, 504 -> true
+            failure.status in setOf(502, 503, 504) -> true
             else -> false
         }
     }
