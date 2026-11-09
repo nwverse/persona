@@ -43,10 +43,12 @@ func (w authStatusWire) result(now time.Time) AuthStatus {
 		user = w.User
 	}
 	status := strings.ToLower(strings.TrimSpace(user.Status))
+	status = strings.NewReplacer("-", "_", " ", "_").Replace(status)
 	tokenStatus := user.TokenStatus
 	if tokenStatus == "" {
 		tokenStatus = user.TokenStatusSnake
 	}
+	tokenStatusLower := strings.ToLower(strings.TrimSpace(tokenStatus))
 	expires := parseTime(firstNonEmpty(user.ExpiresAt, user.ExpiresAtSnake))
 	refreshExpires := parseTime(firstNonEmpty(user.RefreshExpiresAt, user.RefreshExpiresSnake))
 	openID := firstNonEmpty(user.OpenID, user.OpenIDSnake)
@@ -58,19 +60,26 @@ func (w authStatusWire) result(now time.Time) AuthStatus {
 	if len(granted) == 0 {
 		granted = splitScopes(user.Scope)
 	}
-	expired := strings.Contains(strings.ToLower(tokenStatus), "expired") ||
-		strings.Contains(status, "expired") || (!expires.IsZero() && !expires.After(now))
+	// expiresAt belongs to the short-lived access token. lark-cli refreshes it
+	// automatically on the next user API call while refreshExpiresAt remains in
+	// the future, so it must not make the connector look signed out.
+	expired := explicitExpiryStatus(tokenStatusLower) || explicitExpiryStatus(status) ||
+		(!refreshExpires.IsZero() && !refreshExpires.After(now))
 	available := user.Available == nil || *user.Available
-	ready := status == "ready" || status == "ok" || status == "authenticated"
+	ready := status == "ready" || status == "ok" || status == "authenticated" ||
+		status == "needs_refresh" || status == "refresh_needed"
 	if status == "" {
-		ready = strings.Contains(strings.ToLower(tokenStatus), "valid") || strings.Contains(strings.ToLower(tokenStatus), "ready")
+		ready = strings.Contains(tokenStatusLower, "valid") || strings.Contains(tokenStatusLower, "ready") ||
+			strings.Contains(strings.ToLower(user.Message), "refresh")
 	}
-	tokenValid := tokenStatus == "" || strings.Contains(strings.ToLower(tokenStatus), "valid") || strings.Contains(strings.ToLower(tokenStatus), "ready")
-	loggedIn := available && ready && !expired &&
-		tokenValid
+	loggedIn := available && ready && !expired
 	return AuthStatus{LoggedIn: loggedIn, Expired: expired, UserName: name, OpenID: openID,
 		TokenStatus: tokenStatus, ExpiresAt: expires, RefreshExpiresAt: refreshExpires,
 		GrantedScopes: uniqueStrings(granted), MissingScopes: uniqueStrings(missing)}
+}
+
+func explicitExpiryStatus(value string) bool {
+	return strings.Contains(value, "expired") || strings.Contains(value, "invalid") || strings.Contains(value, "revoked")
 }
 
 func parseTime(s string) time.Time {

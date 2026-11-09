@@ -452,6 +452,7 @@ func classifyFailure(result commandResult) *Error {
 			Error struct {
 				Type           string   `json:"type"`
 				Subtype        string   `json:"subtype"`
+				Message        string   `json:"message"`
 				MissingScopes  []string `json:"missing_scopes"`
 				MissingScopes2 []string `json:"missingScopes"`
 			} `json:"error"`
@@ -462,6 +463,9 @@ func classifyFailure(result commandResult) *Error {
 		sub := strings.ToLower(env.Error.Subtype)
 		typ := strings.ToLower(env.Error.Type)
 		scopes := append(env.Error.MissingScopes, env.Error.MissingScopes2...)
+		if len(scopes) == 0 {
+			scopes = scopesFromMessage(env.Error.Message)
+		}
 		switch {
 		case sub == "missing_scope" || sub == "permission_denied" || sub == "forbidden" || typ == "permission":
 			return &Error{Kind: KindMissingPermission, MissingScopes: scopes}
@@ -477,7 +481,7 @@ func classifyFailure(result commandResult) *Error {
 	text := strings.ToLower(string(result.stdout) + "\n" + string(result.stderr))
 	switch {
 	case strings.Contains(text, "missing scope") || strings.Contains(text, "missing_scope"):
-		return &Error{Kind: KindMissingPermission}
+		return &Error{Kind: KindMissingPermission, MissingScopes: scopesFromMessage(text)}
 	case strings.Contains(text, "rate limit") || strings.Contains(text, "too many requests"):
 		return &Error{Kind: KindRateLimited}
 	case strings.Contains(text, "token expired") || strings.Contains(text, "expired"):
@@ -486,4 +490,26 @@ func classifyFailure(result commandResult) *Error {
 		return &Error{Kind: KindNotLoggedIn}
 	}
 	return nil
+}
+
+func scopesFromMessage(message string) []string {
+	lower := strings.ToLower(message)
+	const marker = "missing required scope(s):"
+	index := strings.Index(lower, marker)
+	if index < 0 {
+		return nil
+	}
+	value := message[index+len(marker):]
+	if end := strings.IndexAny(value, "\r\n"); end >= 0 {
+		value = value[:end]
+	}
+	if end := strings.IndexAny(value, "\"}"); end >= 0 {
+		value = value[:end]
+	}
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return nil
+	}
+	parts := strings.FieldsFunc(value, func(r rune) bool { return r == ',' || r == ' ' || r == '\t' })
+	return uniqueStrings(parts)
 }

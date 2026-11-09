@@ -19,9 +19,13 @@ func testConnector(t *testing.T, scenario string) *Connector {
 		t.Fatal(err)
 	}
 	t.Setenv("LARKCLI_FAKE_SCENARIO", scenario)
+	now := time.Date(2030, 1, 1, 0, 0, 0, 0, time.UTC)
+	if scenario == "needs_refresh" || scenario == "ready" {
+		now = time.Date(2026, 11, 10, 6, 0, 0, 0, time.FixedZone("CST", 8*60*60))
+	}
 	return &Connector{runner: adapter.New(adapter.Config{Bin: bin, Profile: "example", Timeout: time.Second, Now: func() time.Time {
-		return time.Date(2030, 1, 1, 0, 0, 0, 0, time.UTC)
-	}}), now: func() time.Time { return time.Date(2030, 1, 1, 0, 0, 0, 0, time.UTC) }}
+		return now
+	}}), now: func() time.Time { return now }}
 }
 
 func TestManifestAndTools(t *testing.T) {
@@ -86,10 +90,24 @@ func TestStatusCategories(t *testing.T) {
 	if adapter.KindOf(err) != adapter.KindMissingPermission {
 		t.Fatalf("kind = %q, err = %v", adapter.KindOf(err), err)
 	}
+	if !strings.Contains(err.Error(), "im:chat:read") {
+		t.Fatalf("missing scope = %v", err)
+	}
 	c = testConnector(t, "auth_missing_scope")
 	st := c.Status(context.Background())
-	if st.State != connector.StateNoPermission || !strings.Contains(st.Error, "im:message:readonly") {
+	if st.State != connector.StateNoPermission || !strings.Contains(st.Error, "search:message") || len(st.Guide) != 1 ||
+		!strings.Contains(st.Guide[0], "lark-cli auth login --domain all") {
 		t.Fatalf("missing scope status = %+v", st)
+	}
+}
+
+func TestStatusUsesRefreshExpiryAndReportsFeatureScopes(t *testing.T) {
+	for _, scenario := range []string{"needs_refresh", "ready"} {
+		st := testConnector(t, scenario).Status(context.Background())
+		if st.State != connector.StateNoPermission || strings.Contains(st.Error, "not signed") || len(st.Guide) != 1 ||
+			!strings.Contains(st.Error, "im:chat:read") || !strings.Contains(st.Guide[0], "lark-cli auth login --domain all") {
+			t.Fatalf("%s status = %+v", scenario, st)
+		}
 	}
 }
 

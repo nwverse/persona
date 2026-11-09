@@ -31,7 +31,7 @@ func TestRunnerSuccessJSONAndProfile(t *testing.T) {
 	if err != nil || !auth.LoggedIn || auth.UserName != "Example User" || auth.OpenID != "ou_example_user" {
 		t.Fatalf("auth = %+v, err = %v", auth, err)
 	}
-	if got := auth.GrantedScopes; len(got) != 2 || got[0] != "im:chat:read" || got[1] != "im:message:readonly" {
+	if got := auth.GrantedScopes; len(got) < 2 || got[0] != "im:chat:read" || got[1] != "im:message:readonly" {
 		t.Fatalf("scopes = %v", got)
 	}
 	chats, err := r.ListChats(ctx, 10)
@@ -82,6 +82,38 @@ func TestAuthStatusStates(t *testing.T) {
 	}
 }
 
+func TestAuthRefreshLifecycleFixtures(t *testing.T) {
+	now := time.Date(2026, 11, 10, 6, 0, 0, 0, time.FixedZone("CST", 8*60*60))
+	for _, tc := range []struct {
+		name       string
+		expectedIn bool
+		expectedEx bool
+		status     string
+	}{
+		{name: "needs refresh", expectedIn: true, status: "needs_refresh"},
+		{name: "ready", expectedIn: true, status: "valid"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			scenario := "needs_refresh"
+			if tc.name == "ready" {
+				scenario = "ready"
+			}
+			cfg := fakeConfig(t, scenario)
+			cfg.Now = func() time.Time { return now }
+			auth, err := New(cfg).AuthStatus(context.Background())
+			if err != nil || auth.LoggedIn != tc.expectedIn || auth.Expired != tc.expectedEx || auth.TokenStatus != tc.status {
+				t.Fatalf("auth = %+v, err = %v", auth, err)
+			}
+			if !auth.ExpiresAt.Before(now) {
+				t.Fatalf("fixture access token should already need refresh: %s", auth.ExpiresAt)
+			}
+			if days := auth.DaysUntilExpiry(now); days != 7 {
+				t.Fatalf("refresh expiry reminder days = %d", days)
+			}
+		})
+	}
+}
+
 func TestErrorCategories(t *testing.T) {
 	for _, tc := range []struct {
 		name     string
@@ -115,7 +147,7 @@ func TestErrorCategories(t *testing.T) {
 			}
 			if tc.want == KindMissingPermission {
 				var e *Error
-				if !errors.As(err, &e) || len(e.MissingScopes) != 1 || e.MissingScopes[0] != "im:message:readonly" {
+				if !errors.As(err, &e) || len(e.MissingScopes) != 1 || e.MissingScopes[0] != "im:chat:read" {
 					t.Fatalf("missing scopes = %+v", err)
 				}
 			}
@@ -147,7 +179,7 @@ func TestContextCancellation(t *testing.T) {
 }
 
 func TestRecordedFixtures(t *testing.T) {
-	for _, name := range []string{"auth_status.json", "auth_not_logged_in.json", "auth_expired.json", "auth_missing_scope.json", "chats.json", "messages.json", "search.json", "error_missing_scope.json", "error_rate_limited.json"} {
+	for _, name := range []string{"auth_status.json", "auth_needs_refresh.json", "auth_ready.json", "auth_not_logged_in.json", "auth_expired.json", "auth_missing_scope.json", "chats.json", "messages.json", "search.json", "error_missing_scope.json", "error_rate_limited.json"} {
 		raw, err := os.ReadFile(filepath.Join("testdata", name))
 		if err != nil {
 			t.Fatal(err)

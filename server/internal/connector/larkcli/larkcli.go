@@ -23,6 +23,29 @@ const (
 
 const expiryReminderDays = 7
 
+// requiredScopes is the union of the scopes used by this connector's L2
+// read commands. These names come from the lark-cli shortcut guidance and the
+// missing_scope errors returned by lark-cli 1.0.99. Keep the list here so an
+// authenticated account with an incomplete grant is reported before a tool
+// call fails.
+var requiredScopes = []string{
+	"im:chat:read",
+	"im:message:readonly",
+	"im:message.group_msg:get_as_user",
+	"im:message.p2p_msg:get_as_user",
+	"im:message.reactions:read",
+	"search:message",
+	"search:docs:read",
+	"contact:user:search",
+	"minutes:minutes.search:read",
+	"task:task:read",
+	"mail:user_mailbox.message:readonly",
+	"mail:user_mailbox.message.address:read",
+	"mail:user_mailbox.message.subject:read",
+	"mail:user_mailbox.message.body:read",
+	"calendar:calendar.event:read",
+}
+
 // Connector is enabled only when manager.json configures lark.cli. It owns no
 // credentials; the adapter delegates all authentication to lark-cli.
 type Connector struct {
@@ -73,14 +96,16 @@ func (c *Connector) Status(ctx context.Context) connector.Status {
 	if st.Account == "" {
 		st.Account = auth.OpenID
 	}
-	if len(auth.MissingScopes) > 0 {
-		return c.statusMissingScopes(ctx, st, auth.MissingScopes)
-	}
 	if auth.Expired {
 		return c.statusExpired(ctx, st)
 	}
 	if !auth.LoggedIn {
 		return c.statusNotSignedIn(ctx, st)
+	}
+	missing := append([]string(nil), auth.MissingScopes...)
+	missing = append(missing, missingRequiredScopes(auth.GrantedScopes)...)
+	if missing = uniqueScopes(missing); len(missing) > 0 {
+		return c.statusMissingScopes(ctx, st, missing)
 	}
 	st.State = connector.StateOK
 	if days := auth.DaysUntilExpiry(c.currentTime()); days > 0 && days <= expiryReminderDays {
@@ -238,6 +263,37 @@ func (c *Connector) statusMissingScopes(ctx context.Context, st connector.Status
 	st.State = connector.StateNoPermission
 	args := i18n.Args{"scope": strings.Join(scopes, ", ")}
 	st.Error = i18n.T(c.lang(ctx), "hub-connectors.missing_permission", args)
-	st.Guide = []string{i18n.T(c.lang(ctx), "hub-connectors.permission_guide")}
+	st.Guide = []string{i18n.T(c.lang(ctx), "hub-connectors.login_guide")}
 	return st
+}
+
+func missingRequiredScopes(granted []string) []string {
+	have := make(map[string]struct{}, len(granted))
+	for _, scope := range granted {
+		have[strings.TrimSpace(scope)] = struct{}{}
+	}
+	var missing []string
+	for _, scope := range requiredScopes {
+		if _, ok := have[scope]; !ok {
+			missing = append(missing, scope)
+		}
+	}
+	return missing
+}
+
+func uniqueScopes(scopes []string) []string {
+	seen := make(map[string]struct{}, len(scopes))
+	result := make([]string, 0, len(scopes))
+	for _, scope := range scopes {
+		scope = strings.TrimSpace(scope)
+		if scope == "" {
+			continue
+		}
+		if _, ok := seen[scope]; ok {
+			continue
+		}
+		seen[scope] = struct{}{}
+		result = append(result, scope)
+	}
+	return result
 }

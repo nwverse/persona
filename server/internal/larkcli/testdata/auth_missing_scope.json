@@ -1,6 +1,6 @@
 {
   "appId": "cli_example",
-  "missingScopes": ["im:message:readonly"],
+  "missingScopes": ["search:message"],
   "identities": {
     "user": {
       "status": "ready",
