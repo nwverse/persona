@@ -247,16 +247,47 @@ func TestOKOfAnEarlierRoundTakesNothing(t *testing.T) {
 	}
 }
 
-// With the Lark bot off the decision still reaches the owner: the push, and the review's answer says it went to their
-// phone with OK, so the supervisor does not ask them a second time.
-func TestDecisionWithoutTheBotIsPushedAndTheSupervisorIsTold(t *testing.T) {
+// With the Lark bot off the decision is pushed all the same. The hub taking a push does not say any phone shows its OK,
+// so the supervisor still asks them as before, and is told OK on the push may take it first.
+func TestDecisionWithoutTheBotIsPushedAndTheSupervisorStillAsks(t *testing.T) {
 	s, f, todo := newSupervisedService(t)
 	waitsForReview(t, s, f, todo.ID, "两种走法：A 先灰度，B 直接全量。")
 	res := reviewTask(t, s, todo.ID, map[string]any{"verdict": "needs_user", "reason": "先灰度还是直接全量", "recommend": "先灰度 10%"})
 	if len(decidePushes(t, f)) != 1 {
 		t.Fatalf("no decide push with the bot off: %v", f.pushed())
 	}
-	if !strings.Contains(res, "phone") || !strings.Contains(res, "Don't ask them again") {
+	if !strings.Contains(res, "Ask them") || !strings.Contains(res, "review it again once they decide") ||
+		!strings.Contains(res, "A push with your recommendation also went to their phone") || strings.Contains(res, "Don't ask them again") {
 		t.Fatalf("answer: %s", res)
+	}
+}
+
+// With the bot on, the card and the push both go, once each, and the supervisor hears of both.
+func TestDecisionWithTheBotIsCardedAndPushedOnce(t *testing.T) {
+	s, f, todo, posts, _ := conclusionService(t, false)
+	waitsForReview(t, s, f, todo.ID, "两种走法：A 先灰度，B 直接全量。")
+	res := reviewTask(t, s, todo.ID, map[string]any{"verdict": "needs_user", "reason": "先灰度还是直接全量", "recommend": "先灰度 10%"})
+	if n := len(cardsWith(posts(), "结论：")); n != 1 {
+		t.Fatalf("%d conclusion cards", n)
+	}
+	if n := len(decidePushes(t, f)); n != 1 {
+		t.Fatalf("%d decide pushes", n)
+	}
+	if !strings.Contains(res, "Don't ask them again") || !strings.Contains(res, "went to their phone") {
+		t.Fatalf("answer: %s", res)
+	}
+}
+
+// A task from a muted conversation gets no decision push (its ask is still on the to-do).
+func TestDecisionOfAMutedConversationIsNotPushed(t *testing.T) {
+	s, f, todo, _, _ := conclusionService(t, false)
+	setMutes(s, Pins{Sessions: []string{"server/" + todo.Origin}})
+	waitsForReview(t, s, f, todo.ID, "两种走法：A 先灰度，B 直接全量。")
+	reviewTask(t, s, todo.ID, map[string]any{"verdict": "needs_user", "reason": "先灰度还是直接全量", "recommend": "先灰度 10%"})
+	if pushes := decidePushes(t, f); len(pushes) != 0 {
+		t.Fatalf("decide pushes for a muted conversation: %v", pushes)
+	}
+	if listedAsk(t, s, todo.ID) == nil {
+		t.Fatal("no ask on the to-do")
 	}
 }

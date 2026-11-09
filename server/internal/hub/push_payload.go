@@ -207,8 +207,14 @@ const decideCategory = "TODO_DECIDE"
 
 // decidePayloadIn is the alert of a to-do whose conclusion waits for the owner's decision and recommends an option: the
 // texts are the assistant's (the card's words), and `todo` carries what its OK needs: the to-do, the round (asked_at, as
-// the accept route takes it) and the recommendation.
-func decidePayloadIn(machineID, machine, sessionID, title, text string, todo assistantwire.NotifyTodo) map[string]any {
+// the accept route takes it) and the recommendation, and the manager whose to-do it is (owner) unless it is the
+// assistant the hub starts, as the hub's lists and events mark them (ownership_lists.go, bus_broadcast.go): OK names it
+// in ManagerHeader.
+func decidePayloadIn(owner, machineID, machine, sessionID, title, text string, todo assistantwire.NotifyTodo) map[string]any {
+	td := map[string]any{"id": todo.ID, "asked_at": todo.AskedAt.UTC().Format(time.RFC3339Nano), "recommend": todo.Recommend}
+	if owner != "" && owner != assistantwire.AssistantID {
+		td["manager"] = owner
+	}
 	return map[string]any{
 		"aps": map[string]any{
 			"alert":              map[string]any{"title": title, "subtitle": machine, "body": text},
@@ -218,7 +224,7 @@ func decidePayloadIn(machineID, machine, sessionID, title, text string, todo ass
 			"interruption-level": "time-sensitive",
 		},
 		"machine_id": machineID, "session_id": sessionID,
-		"todo": map[string]any{"id": todo.ID, "asked_at": todo.AskedAt.UTC().Format(time.RFC3339Nano), "recommend": todo.Recommend},
+		"todo": td,
 	}
 }
 

@@ -83,6 +83,28 @@ func TestDecisionPushHasItsCategoryAndTodo(t *testing.T) {
 	if !reflect.DeepEqual(got.Todo, decideTodo) {
 		t.Fatalf("todo %v, want %v", got.Todo, decideTodo)
 	}
+	// The next round of the same to-do takes the earlier one's place on the phone (one collapse id a to-do).
+	next := decideNotification(t)
+	next.Todo.AskedAt = next.Todo.AskedAt.Add(time.Hour)
+	if err := h.deliverPush(next); err != nil {
+		t.Fatal(err)
+	}
+	calls = f.calls(t, 2)
+	if calls[0].Collapse == "" || calls[1].Collapse != calls[0].Collapse {
+		t.Fatalf("collapse ids %q and %q", calls[0].Collapse, calls[1].Collapse)
+	}
+}
+
+// A decision of another manager's to-do names that manager, which OK names in ManagerHeader; the assistant's names none,
+// as its lists and events do.
+func TestDecisionPushNamesItsManager(t *testing.T) {
+	n := decideNotification(t)
+	if td, _ := decidePayloadIn("m-0b0b0b", "mb", "mb", "b1", n.Title, n.Body, *n.Todo)["todo"].(map[string]any); td["manager"] != "m-0b0b0b" {
+		t.Fatalf("another manager's: %v", td)
+	}
+	if td, _ := decidePayloadIn(assistantwire.AssistantID, "m", "m", "conv1", n.Title, n.Body, *n.Todo)["todo"].(map[string]any); td["manager"] != nil {
+		t.Fatalf("the assistant's: %v", td)
+	}
 }
 
 // On the WebSocket it is an "assistant" notify (a client that does not know decisions shows it as any other) with the
@@ -121,10 +143,15 @@ func TestDecisionPushTakesTheInputSwitch(t *testing.T) {
 	}
 }
 
-// A decision's push without its to-do is refused: OK would have nothing to take.
+// A decision's push without its to-do, or without the option, is refused: OK would have nothing to take.
 func TestDecisionPushNeedsItsTodo(t *testing.T) {
 	h, _, _ := decideHub(t, true)
 	n := decideNotification(t)
+	noOption := n
+	noOption.Todo = &assistantwire.NotifyTodo{ID: n.Todo.ID, AskedAt: n.Todo.AskedAt}
+	if err := h.deliverPush(noOption); err == nil {
+		t.Fatal("a decide push without its option was taken")
+	}
 	raw, _ := json.Marshal(n)
 	var m map[string]any
 	_ = json.Unmarshal(raw, &m)

@@ -617,8 +617,8 @@ func (h *Hub) deliverPushFrom(from string, n assistantwire.Notification) error {
 	case assistantwire.NotifyReply:
 		h.notifyReply(from, n.DeviceID, n.Subtitle, n.SessionID, n.Title, n.Body)
 	case assistantwire.NotifyDecide:
-		if n.Todo == nil || n.Todo.ID == "" || n.Todo.AskedAt.IsZero() {
-			return errors.New("a decision's push needs its to-do and when it was asked")
+		if n.Todo == nil || n.Todo.ID == "" || n.Todo.AskedAt.IsZero() || n.Todo.Recommend == "" {
+			return errors.New("a decision's push needs its to-do, when it was asked and the option its OK takes")
 		}
 		h.notifyDecide(from, n.DeviceID, n.Subtitle, n.SessionID, n.Title, n.Body, *n.Todo)
 	default:
