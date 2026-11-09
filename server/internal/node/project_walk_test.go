@@ -1,11 +1,14 @@
 package node
 
 import (
+	"bytes"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
 	"testing"
+	"time"
 )
 
 // globProjectFiles is what walkProjects stands in for: the two globs the usage meter ran over a projects directory.
@@ -219,5 +222,93 @@ func TestProjectTranscriptsMatchesGlobProjects(t *testing.T) {
 				t.Fatalf("listed %q, want the four transcripts", got)
 			}
 		})
+	}
+}
+
+// A usage sweep reports what it reported when it listed the transcripts with the two globs and stat'ed each again
+// before reading it: Claude Code transcripts and their subagents', one written before the window, and a Codex rollout.
+func TestUsageSweepReportMatchesGlobbedFiles(t *testing.T) {
+	t.Setenv("CLAUDE_CONFIG_DIR", "")
+	n, home := testNode(t)
+	now := time.Now().UTC().Truncate(time.Minute).Add(30 * time.Second)
+	cutoff := now.Add(-usageWindow)
+	projects := filepath.Join(home, ".claude", "projects")
+	write := func(p, body string, at time.Time) {
+		t.Helper()
+		if err := os.MkdirAll(filepath.Dir(p), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chtimes(p, at, at); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write(filepath.Join(projects, "-work-app", "s1.jsonl"), claudeReply(now, "m1", "claude-opus-5-5", 2, 100, 1000, 50)+
+		claudeReply(now.Add(-time.Minute), "m2", "claude-sonnet-5-5", 5, 0, 10, 7), now)
+	write(filepath.Join(projects, "-work-app", "s1", "subagents", "agent-a.jsonl"), claudeReply(now, "a1", "claude-haiku-5-5", 1, 0, 0, 1), now)
+	write(filepath.Join(projects, "-work-web", "s2.jsonl"), claudeReply(now.Add(-2*time.Minute), "m3", "claude-opus-5-5", 3, 0, 30, 9), now)
+	write(filepath.Join(projects, "-work-web", "old.jsonl"), claudeReply(now.Add(-30*time.Hour), "m4", "claude-opus-5-5", 1, 1, 1, 1),
+		now.Add(-30*time.Hour))
+	stamp := `{"timestamp":"` + now.Format(time.RFC3339Nano) + `",`
+	writeRollout(t, home, "0199a213-81c0-7800-8aa1-bbab2a035a53", "/work/app", now, now,
+		stamp+`"type":"turn_context","payload":{"model":"gpt-6-codex"}}`,
+		stamp+`"type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"total_tokens":1000},`+
+			`"last_token_usage":{"input_tokens":900,"cached_input_tokens":800,"output_tokens":100}}}}`)
+
+	// What usageFiles listed before the walk, each scanned with its own stat.
+	var want []string
+	paths := append(n.globProjects("*", "*.jsonl"), n.globProjects("*", "*", "subagents", "*.jsonl")...)
+	for _, r := range rollouts(n.codexHome()) {
+		paths = append(paths, r.path)
+	}
+	before := newUsageMeter()
+	for _, p := range paths {
+		if st, err := os.Stat(p); err == nil && st.ModTime().After(cutoff) && n.scopedTranscriptAllows(p) {
+			want = append(want, p)
+			scanFile(t, before, p, cutoff)
+		}
+	}
+	var got []string
+	after := newUsageMeter()
+	for _, f := range n.usageFiles(cutoff) {
+		got = append(got, f.path)
+		after.scan(f.path, f.st, cutoff)
+	}
+	if !slices.Equal(got, want) || len(got) != 4 {
+		t.Fatalf("usage files %q, want %q", got, want)
+	}
+	before.prune(cutoff)
+	after.prune(cutoff)
+	report := func(m *usageMeter) string { // the buckets in a fixed order: the report lists them in its map's
+		t.Helper()
+		params, ok := m.report(now)
+		if !ok {
+			t.Fatal("no report")
+		}
+		b, err := json.Marshal(params)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var fields map[string]json.RawMessage
+		var buckets []json.RawMessage
+		if err := json.Unmarshal(b, &fields); err != nil {
+			t.Fatal(err)
+		}
+		if err := json.Unmarshal(fields["buckets"], &buckets); err != nil {
+			t.Fatal(err)
+		}
+		slices.SortFunc(buckets, func(a, b json.RawMessage) int { return bytes.Compare(a, b) })
+		if fields["buckets"], err = json.Marshal(buckets); err != nil {
+			t.Fatal(err)
+		}
+		if b, err = json.Marshal(fields); err != nil {
+			t.Fatal(err)
+		}
+		return string(b)
+	}
+	if a, b := report(after), report(before); a != b {
+		t.Fatalf("the report differs\n got %s\nwant %s", a, b)
 	}
 }
