@@ -14,7 +14,7 @@ Every row below fails inside the sandbox and works outside it (`TestDarwinAgentS
 | An agent tries to | Result |
 | --- | --- |
 | Read or copy `secret.key`, `handles.key`, any other `*.key` at the top, `hub.json`, `link.json`, a TLS key | Refused, also through `~/.persona`, a symlink elsewhere, or a child process such as Python or `cp` |
-| Read a backup or a copy being written (`secret.key.bak`, `hub.json.bak`, the `.hub.json.*` file a rewrite renames into place) | Refused |
+| Read a backup or a copy being written (`secret.key.bak`, `hub.json.bak`, the `hub.json.tmp-*` file a rewrite renames into place) | Refused |
 | Read a manager's folder (`managers/`) or an extension's sign-in data (`extensions/data/`) | Refused |
 | Read another launcher's merged settings in `launcher-settings/` | Refused; the files this start passes to its own agent stay readable |
 | Connect to an extension's proxy socket or the hub's edge socket (`extensions/run/`, `run/`) | Refused |
