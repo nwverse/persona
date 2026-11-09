@@ -1466,7 +1466,8 @@ iPhone, iPad and Mac crashes go to the hub's `error_reports` (format and rules: 
 its `manager`, and every manager lists its own built-ins, so the same id comes once per manager. With one manager, or a hub without a
 roster, none of this draws and the pages are as before.
 
-- **Roster**: Settings › Extensions (`ExtensionsModel`) and the Connectors section (`ConnectorsListModel`) read `GET /api/v1/managers`
+- **Settings placement** (#2522): Settings has one Connectors entry. Its page reuses `ConnectorsSection`, including all manager groups, and ends with Records sent as you. The ledger is a secondary destination; `[.connectors, .sent]` keeps Back and the Mac selected Settings row on Connectors, including legacy launches and native settings links.
+- **Roster**: Settings › Extensions (`ExtensionsModel`) and Settings › Connectors (`ConnectorsListModel`) read `GET /api/v1/managers`
   with their list, and again on `{"type":"managers"}` for Extensions. `ManagerRoster` (`Persona/Views/Settings/ManagerGroups.swift`)
   has `installed` (the default first, then the roster's order, installing ones left out), `isMulti`, `owner` / `named` (no stamp, or a
   manager the roster doesn't have installed, is the default's) and `groups(items)`. A roster that can't be read keeps the last one; a hub
