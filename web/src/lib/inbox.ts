@@ -295,11 +295,12 @@ export function tightCJK(text: string): string {
   return text.replace(/(?<=\p{Script=Han}) (?=\p{Script=Han})/gu, "");
 }
 
-/** A connector item's `open_url` as the browser opens it; an sms: one carries the AI twin's draft as its body. */
+/** A connector item's `open_url` as the browser opens it; an sms: one carries the reply as its body (the kept edit, or
+ *  the AI twin's draft). */
 export function openURL(it: InboxItem): string | undefined {
   const raw = it.connector?.open_url;
   if (!raw) return undefined;
-  const draft = agentDraft(it);
+  const draft = unsentReplies.get(itemKey(it)) ?? agentDraft(it);
   return raw.startsWith("sms:") && draft ? `${raw}&body=${encodeURIComponent(draft)}` : raw;
 }
 
@@ -373,6 +374,16 @@ export function sourceLine(it: InboxItem): string {
 
 export function agentDraft(it: InboxItem): string | undefined {
   return it.agent?.state === "drafted" && it.agent.draft ? it.agent.draft : undefined;
+}
+
+/** A proposed status move's key: its row and field. */
+export const docChangeKey = (c: DocChange) => `${c.ref}|${c.field}`;
+
+/** The AI twin's proposed status moves the user left ticked (`dropped`: the unticked ones' docChangeKey): what goes
+ *  with the reply. */
+export function keptChanges(it: InboxItem, dropped: readonly string[]): DocChange[] {
+  const changes = agentDraft(it) ? it.agent?.changes ?? [] : [];
+  return dropped.length ? changes.filter((c) => !dropped.includes(docChangeKey(c))) : changes;
 }
 
 export function agentWorking(it: InboxItem): boolean {
@@ -867,8 +878,60 @@ interface InboxState {
 
 let state: InboxState = { items: [], triage: null, loaded: false, loading: false, error: "", sending: [], moving: [] };
 const listeners = new Set<() => void>();
-/** Unsent reply edits and accepted generations, by item (itemKey); send clears them and a failure restores its text. */
-export const unsentReplies = new Map<string, string>();
+/** A Map that tells its watchers when it changes. The unsent replies live outside InboxState: a keystroke in the draft
+ *  dialog redraws only the card of that item (useUnsentReply), not every list and badge reading the inbox. */
+class WatchedMap<V> extends Map<string, V> {
+  readonly #watchers = new Set<() => void>();
+  /** Subscribes to every change; returns the unsubscribe (useSyncExternalStore's subscribe). */
+  readonly watch = (l: () => void) => {
+    this.#watchers.add(l);
+    return () => {
+      this.#watchers.delete(l);
+    };
+  };
+  override set(key: string, value: V): this {
+    super.set(key, value);
+    this.#watchers.forEach((l) => l());
+    return this;
+  }
+  override delete(key: string): boolean {
+    const had = super.delete(key);
+    if (had) this.#watchers.forEach((l) => l());
+    return had;
+  }
+  override clear() {
+    if (!this.size) return;
+    super.clear();
+    this.#watchers.forEach((l) => l());
+  }
+}
+
+/** Unsent reply edits and accepted generations, by item (itemKey): the draft dialog keeps them when it closes without
+ *  Cancel and the item's draft card shows and sends them. Send clears them and a failure restores its text. */
+export const unsentReplies = new WatchedMap<string>();
+/** The proposed status moves the user unticked in the draft dialog, by item (itemKey), as docChangeKey; kept, cleared
+ *  and restored with the item's text. */
+export const droppedChanges = new WatchedMap<readonly string[]>();
+
+/** Keeps the item's unticked proposed changes (none: forgets them). */
+export function keepDropped(key: string, dropped: readonly string[]) {
+  if (dropped.length) droppedChanges.set(key, dropped);
+  else droppedChanges.delete(key);
+}
+
+const NONE: readonly string[] = [];
+
+/** The item's kept reply edit (undefined: none, the AI twin's draft stands); redraws when it changes. */
+export function useUnsentReply(key: string): string | undefined {
+  const read = () => unsentReplies.get(key);
+  return useSyncExternalStore(unsentReplies.watch, read, read);
+}
+
+/** The item's unticked proposed changes (docChangeKey); redraws when they change. */
+export function useDroppedChanges(key: string): readonly string[] {
+  const read = () => droppedChanges.get(key) ?? NONE;
+  return useSyncExternalStore(droppedChanges.watch, read, read);
+}
 
 // Every request about an item names its manager where it is made (itemRequest): two managers may list the same id, so
 // nothing is looked up by path.
@@ -1365,7 +1428,8 @@ export async function setAllDone(items: InboxItem[], action: BulkAction | boolea
 }
 
 /** "Send": the hub replies in the chat / by mail / in the document (moving the rows' status in `changes` first) and
- * files the item as done. Filed at once; a failure puts the item back and keeps the text for the draft dialog. */
+ * files the item as done. Filed at once; a failure puts the item back and keeps the text and the unticked changes for
+ * the draft card and dialog. */
 export async function sendReply(item: InboxItem, text: string, changes: DocChange[] = []): Promise<boolean> {
   const key = itemKey(item);
   if (state.sending.includes(key)) return false;
@@ -1376,7 +1440,9 @@ export async function sendReply(item: InboxItem, text: string, changes: DocChang
   // (Also for an item the list does not have yet: a list that left before the send must not bring it in open.)
   putMark(key, mark);
   patchItem(item, (it) => ({ ...it, ...mark }));
+  const dropped = droppedChanges.get(key);
   unsentReplies.delete(key);
+  droppedChanges.delete(key);
   try {
     const r = await api<InboxItem>(`${itemPath(item.id)}/reply`, { method: "POST", json: { text, changes: changes.length ? changes : undefined }, headers: itemRequest(item) });
     const hub = r?.id === item.id ? keepStamp(r, item) : undefined;
@@ -1388,6 +1454,7 @@ export async function sendReply(item: InboxItem, text: string, changes: DocChang
     settleMark(key, mark, false);
     undoMarks(new Map([[key, before ?? item]]));
     if (text) unsentReplies.set(key, text);
+    if (dropped) droppedChanges.set(key, dropped);
     toast(t("lib-inbox.reply_failed", { error: errorText(e) }), "error");
     return false;
   } finally {
@@ -1495,6 +1562,7 @@ export function resetInboxForTests() {
   listsOut.clear();
   listSeq = 0;
   unsentReplies.clear();
+  droppedChanges.clear();
 }
 
 /** Someone a sent message @s: Feishu notifies them; the text holds their `@name` ("Everyone" is `user_id` "all"). */
