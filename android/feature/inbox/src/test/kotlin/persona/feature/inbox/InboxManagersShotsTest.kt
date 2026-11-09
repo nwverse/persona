@@ -13,9 +13,11 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.asAndroidBitmap
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.test.captureToImage
+import androidx.compose.ui.test.isDialog
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithTag
+import androidx.compose.ui.test.onLast
 import androidx.compose.ui.unit.dp
 import androidx.navigation3.runtime.NavKey
 import androidx.test.ext.junit.runners.AndroidJUnit4
@@ -127,6 +129,52 @@ class InboxManagersShotsTest {
         shown = ManagerRoster(listOf(roster.managers.first()), "assistant")
         rule.waitForIdle()
         assertEquals(0, rule.onAllNodesWithText("助手").fetchSemanticsNodes().size)
+    }
+
+    /** Each manager's own rules and mutes: 工作's and the default's, 家里 offline. */
+    private class ManagerLists : InboxRepository by OneInbox(InboxSnapshot()) {
+        override suspend fun inboxPolicies(record: InboxRecord?, manager: String?) = when (manager) {
+            "m-8b04d2" -> throw IllegalStateException("503")
+            "m-3fa21c" -> listOf(InboxPolicy("p1", "mail", "邮件", "sender", "boss@example.com", "王经理", InboxPolicyTier.Action, InboxPolicyTwin.First,
+                "2026-11-04T09:00:00Z"))
+            else -> listOf(InboxPolicy("p1", "github", "GitHub", "repo", "example-org/docs", "example-org/docs", InboxPolicyTier.Noise, createdAt = "2026-11-03T09:00:00Z"))
+        }
+        override suspend fun inboxMutes(manager: String?) = when (manager) {
+            "m-8b04d2" -> throw IllegalStateException("503")
+            "m-3fa21c" -> listOf(InboxMute("m1", "github", "GitHub", "repo", "example-org/example-repo", "example-org/example-repo", "2026-11-04T09:00:00Z"))
+            else -> listOf(InboxMute("m1", "mail", "邮件", "sender", "news@example.com", "news@example.com", "2026-11-03T09:00:00Z"))
+        }
+    }
+
+    @Test fun rulesAndMutedGroupByManager() {
+        var style by mutableStateOf(AppStyle.Glass)
+        var dark by mutableStateOf(false)
+        var rules by mutableStateOf(true)
+        rule.setContent {
+            PersonaTheme(darkTheme = dark, reduceMotion = true, style = style) {
+                CompositionLocalProvider(LocalManagerRoster provides roster) {
+                    Box(Modifier.testTag("shot").width(400.dp).height(900.dp).background(PersonaTheme.palette.background)) {
+                        if (rules) InboxRulesSheet(ManagerLists(), onDismiss = {}) else InboxMutesSheet(ManagerLists(), onDismiss = {})
+                    }
+                }
+            }
+        }
+        val dir = File(System.getProperty("persona.shots") ?: "build/managers-shots").also { it.mkdirs() }
+        for (r in listOf(true, false)) {
+            rules = r
+            rule.waitForIdle()
+            val (mine, theirs, away) = if (r) Triple("example-org/docs", "王经理", "离线中：它回来后这里会显示它的规则。")
+                else Triple("news@example.com", "example-org/example-repo", "离线中：它回来后这里会显示它的静音。")
+            assertTrue(top("助手") < top(mine) && top(mine) < top("工作") && top("工作") < top(theirs))
+            assertTrue(top(theirs) < top("家里") && top("家里") < top(away))
+            for (s in AppStyle.entries) for (d in listOf(false, true)) {
+                style = s; dark = d
+                rule.waitForIdle()
+                val bitmap = rule.onAllNodes(isDialog()).onLast().captureToImage().asAndroidBitmap()
+                File(dir, "inbox-${if (r) "rules" else "muted"}-${s.key}-${if (d) "dark" else "light"}.png").outputStream()
+                    .use { bitmap.compress(Bitmap.CompressFormat.PNG, 100, it) }
+            }
+        }
     }
 
     @Test fun sectionsSplitByManagerInRosterOrder() {

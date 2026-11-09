@@ -77222,6 +77222,52 @@
       },
       "extractionState" : "manual"
     },
+    "Offline: its mutes show here once it is back." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Offline: its mutes show here once it is back."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "オフラインです。戻るとここにミュートが表示されます。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "离线中：它回来后这里会显示它的静音。"
+          }
+        }
+      },
+      "extractionState" : "manual"
+    },
+    "Offline: its rules show here once it is back." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Offline: its rules show here once it is back."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "オフラインです。戻るとここにルールが表示されます。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "离线中：它回来后这里会显示它的规则。"
+          }
+        }
+      },
+      "extractionState" : "manual"
+    },
     "Offline: starts once connected" : {
       "localizations" : {
         "en" : {
