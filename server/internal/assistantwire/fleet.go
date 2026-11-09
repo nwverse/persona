@@ -71,7 +71,7 @@ type FleetInteraction struct {
 }
 
 // FleetResolved is EventFleetResolved's params; AnsweredBy says the assistant answered it, Reason why and Answers
-// with what (docs/assistant/assistant.md "The assistant answers questions first").
+// with what (docs/assistant/assistant.md "Assistant answers questions first").
 type FleetResolved struct {
 	ID         string            `json:"id"`
 	AnsweredBy string            `json:"answered_by,omitempty"`
