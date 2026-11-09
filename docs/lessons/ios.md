@@ -919,6 +919,19 @@ When a computer disconnects, hub marks sessions unknown, not offline; `AgentStat
   - Initially ignored, pre-appearance rows never redrew or attached gestures, failing 2–3/10.
   - Recognizer logs showed no touches in failures; observing the switch gave 10/10.
 
+## An edge gesture the list waits for needs a hold (2026-11-09, #2615)
+
+- **What happened**: the chat list's scroll pan waits for the right-edge navigator to fail (`shouldBeRequiredToFailBy`). The navigator began after 8 pt of vertical movement in the 16 pt band at the list's right edge, which is where a right thumb often lands for an ordinary scroll.
+  - The list stopped following the finger, and letting go jumped to the user message under the finger's last position.
+  - In the flipped list, a push up from low on the screen ends over an older message, so it looked like a jump back toward the top.
+- **Direction is not enough**: a recognizer that the list's scrolling waits for must begin on something a scroll never does. If it begins on vertical movement, it takes ordinary scrolls in the same direction.
+  - Begin only after a hold without movement (`Theme.Motion.edgeScrubHold`), and fail at once on any movement past the slop during the hold. The list then scrolls as anywhere else, and the pager and drawer still get sideways swipes.
+  - Cancel the hold's timer in `reset()`, and check that the recognizer is still `.possible` when the timer fires.
+- **A release commits only a choice**: opening on the tick under the finger is not a pick. `EdgeScrubState.moved` is set only when the finger goes past the slop to another tick than the one it opened on, and a release without it only closes the navigator.
+  - A tick change alone is not enough: a finger held still trembles by a point or two, and with many messages the ticks are `Theme.Size.edgeTickGapMin` (5 pt) apart, so a tremble over the line between two ticks would count as a pick.
+- **Tests**: UI tests that drive the navigator hold first (`press(forDuration: 0.5, thenDragTo:…)`). `testEdgeSwipeScrollsTheList` swipes quickly in the band and checks that nothing jumps and the list follows the finger.
+  - `thenHoldForDuration` after a fast synthesized drag does not stop the list from coasting once the finger lifts: the list was where the finger left it, then moved on by more than the drag itself. Measure a lower bound in the finger's direction, and tap to stop the coasting before reading frames.
+
 ## Context compaction as a divider (2026-11-04, #1064)
 
 Claude Code writes three things: `system/compact_boundary` (`compactMetadata.trigger` `manual` / `auto`; idle compaction also `auto`), a following `isCompactSummary` user line,
