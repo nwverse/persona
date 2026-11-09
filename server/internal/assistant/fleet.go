@@ -63,7 +63,7 @@ type fleetBook struct {
 	stopSig, pushedSig map[[2]string]string
 	turns              *turnTracker // "machine/session" -> the turn in progress, for the finished push
 	clients            assistantwire.Clients
-	prev               map[string][]proto.Session // each machine's list setSessions saw last
+	prev               map[string]map[string]turnPrev // each machine's list setSessions saw last, by session id
 
 	// sent: each machine's last session list told the hub (fleet.sessions), as JSON. sentMu is held while a list is
 	// decorated and told (publishList), so the lists reach the hub in the order they were made.

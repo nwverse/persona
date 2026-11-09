@@ -134,6 +134,8 @@ type Service struct {
 
 	// acceptSweepHook, when set, runs in the acceptance sweeps' unlocked window, after a todo is read (tests).
 	acceptSweepHook func(id string)
+	// sessionsSeen, when set, sees every machine's list SessionsChanged is handed (tests).
+	sessionsSeen func(DeviceSessions)
 }
 
 var _ Handler = (*Service)(nil)
@@ -521,6 +523,9 @@ func (s *Service) InteractionResolved(ctx context.Context, r InteractionResolved
 // SessionsChanged: messages from other conversations go to those no longer running; the todos follow the list
 // (todo_sessions.go).
 func (s *Service) SessionsChanged(ctx context.Context, d DeviceSessions) {
+	if f := s.sessionsSeen; f != nil {
+		f(d)
+	}
 	s.toolLoopsChanged(d)
 	s.drainRelays(d.MachineID, d.Sessions)
 	s.originsChanged(d.MachineID, d.Sessions) // conversations from before origins were noted (origins.go)

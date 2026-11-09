@@ -20,10 +20,7 @@ import (
 // setSessions takes a node's session list: the turns it shows starting and ending (the finished push, the
 // assistant's own business), then the list the apps get.
 func (s *Service) setSessions(machine string, list []proto.Session) {
-	before := map[string]proto.Session{}
-	for _, sess := range s.fleetPrevious(machine) {
-		before[sess.SessionID] = sess
-	}
+	before := s.fleetPrevious(machine)
 	now := time.Now()
 	for i := range list {
 		list[i].MachineID = machine
@@ -79,20 +76,39 @@ func (s *Service) setSessions(machine string, list []proto.Session) {
 	s.inOrder(func() { s.SessionsChanged(context.Background(), d) })
 }
 
-// fleetPrevious is the list setSessions saw last for the machine (the turns' starts and ends are against it).
-func (s *Service) fleetPrevious(machine string) []proto.Session {
+// turnPrev is what setSessions reads of a session's previous row: the turn's starts and ends are against it. Only
+// these fields, not the whole row: a session is about 1.5 KB, and the manager would keep a copy of every list.
+type turnPrev struct {
+	Status     string
+	WokeByTask bool
+	Rev        int64
+	LastText   string
+	UpdatedAt  time.Time
+}
+
+// fleetPrevious is the machine's list setSessions saw last, by session id (the turns' starts and ends are against
+// it). The map is never written once kept: fleetKeepPrevious replaces it.
+func (s *Service) fleetPrevious(machine string) map[string]turnPrev {
 	s.fleet.mu.Lock()
 	defer s.fleet.mu.Unlock()
 	return s.fleet.prev[machine]
 }
 
+// fleetKeepPrevious keeps what setSessions reads of list for the machine's next one. A session id listed twice keeps
+// its later row.
 func (s *Service) fleetKeepPrevious(machine string, list []proto.Session) {
+	next := make(map[string]turnPrev, len(list))
+	for i := range list { // by index: a range value copies every (large) session it passes
+		sess := &list[i]
+		next[sess.SessionID] = turnPrev{Status: sess.Status, WokeByTask: sess.WokeByTask, Rev: sess.Rev,
+			LastText: sess.LastText, UpdatedAt: sess.UpdatedAt}
+	}
 	s.fleet.mu.Lock()
 	defer s.fleet.mu.Unlock()
 	if s.fleet.prev == nil {
-		s.fleet.prev = map[string][]proto.Session{}
+		s.fleet.prev = map[string]map[string]turnPrev{}
 	}
-	s.fleet.prev[machine] = list
+	s.fleet.prev[machine] = next
 }
 
 func (s *Service) turnsBook() *turnTracker {
