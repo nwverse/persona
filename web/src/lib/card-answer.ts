@@ -1,7 +1,7 @@
 // Answering a card (POST /interactions/{id}/resolve): the card's own buttons (views/chat/Interactions.tsx), Overview's
 // quick answers and a system notification's Allow / Deny (lib/notification-answer.ts) go through here, so all check the
 // same, send the same and see the one answer on its way for each card.
-import { useSyncExternalStore } from "react";
+import { useEffect, useState, useSyncExternalStore } from "react";
 import { t } from "../i18n";
 import { ApiError, enc, errorText } from "./api";
 import { answerLines, endedText, type Resolution, type ResolveResult } from "./answered";
@@ -101,15 +101,26 @@ export function usePendingAnswer(id: string): Resolution | undefined {
   return useSyncExternalStore(watch, read, read);
 }
 
+/** How long an answer goes on its way with the hub connected before its card says so: one delivered at once shows no
+ *  line that comes and goes (the button that sent it spins meanwhile). With the hub away it is said at once. */
+export const PENDING_LINE_MS = 500;
+
 /**
  * An answer on its way for this card, wherever it was given (the card's buttons, Overview's row, a notification), and
  * the line that says so, the same on the chat's card and Overview's row: "Sending: Allowed", or "Sends when connected:
- * Allowed" while the hub is away. `line` is empty when there is none.
+ * Allowed" while the hub is away. `line` is empty when there is none, and for the first PENDING_LINE_MS online.
  */
 export function usePendingLine(ix: Interaction): { pending: boolean; line: string } {
   const answer = usePendingAnswer(ix.id);
   const offline = useStore((s) => s.conn !== "online");
-  if (!answer) return { pending: false, line: "" };
+  const [late, setLate] = useState(false);
+  useEffect(() => {
+    setLate(false);
+    if (!answer) return;
+    const timer = setTimeout(() => setLate(true), PENDING_LINE_MS);
+    return () => clearTimeout(timer);
+  }, [answer]);
+  if (!answer || !(offline || late)) return { pending: !!answer, line: "" };
   const words = answerLines(ix, answer).map((l) => l.answer).join(t("lib-answered.separator"));
   return { pending: true, line: t(offline ? "chat-interactions.pending_offline" : "chat-interactions.pending_sending", { answer: words }) };
 }

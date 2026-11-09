@@ -96,8 +96,9 @@ type CardKeys = ReturnType<typeof useCardKeys>;
  */
 /** The card the voice is asking about (docs/web/web.md "Voice"): InteractionCard says so, Card marks its kicker row. */
 const AskedByVoice = createContext(false);
-/** The answer on its way for the card, as a line for its footer ("Sending: Allowed"); empty when none. InteractionCard
- *  says so (lib/card-answer.ts usePendingLine, past the card's own state) and disables every answer meanwhile. */
+/** The answer on its way for the card, as a line for its footer ("Sending: Allowed"); empty when none, or for its first
+ *  moment online. InteractionCard says so (lib/card-answer.ts usePendingLine, past the card's own state) and disables
+ *  every answer meanwhile. */
 const SendingAnswer = createContext("");
 
 function Card({ title, kicker, onDismiss, busy, children, footer, looking = false, cardKeys }: { title: string; kicker: string; onDismiss?: () => void; busy?: boolean; children: React.ReactNode; footer: React.ReactNode; looking?: boolean; cardKeys?: CardKeys }) {

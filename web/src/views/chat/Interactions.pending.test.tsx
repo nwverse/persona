@@ -15,6 +15,7 @@ vi.mock("../../lib/ops", () => ({
   }),
 }));
 import { InteractionCard } from "./Interactions";
+import { PENDING_LINE_MS } from "../../lib/card-answer";
 import { getState, reset, upsertSession } from "../../lib/store";
 import { t } from "../../i18n";
 import type { Interaction, Session } from "../../lib/types";
@@ -67,5 +68,19 @@ describe("an answer on its way", () => {
     await flush();
     expect(host.querySelector("[data-card-pending]")).toBeNull();
     expect(locked(button(t("chat-interactions.deny")))).toBe(false);
+  });
+
+  it("with the hub connected, says it only once the answer takes a moment: one delivered at once shows no line", async () => {
+    vi.useFakeTimers();
+    Object.assign(getState(), { conn: "online" });
+    act(() => root.render(<InteractionCard ix={permission} />));
+    act(() => button(t("chat-interactions.allow")).click());
+    expect(locked(button(t("chat-interactions.deny")))).toBe(true);
+    expect(host.querySelector("[data-card-pending]")).toBeNull();
+    act(() => vi.advanceTimersByTime(PENDING_LINE_MS));
+    expect(host.querySelector("[data-card-pending]")?.textContent).toBe(t("chat-interactions.pending_sending", { answer: t("lib-answered.allowed") }));
+    vi.useRealTimers();
+    await act(async () => sent.finish(Promise.reject(new Error("Synthetic refusal"))));
+    await flush();
   });
 });
