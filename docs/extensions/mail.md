@@ -276,8 +276,10 @@ download route takes.
   files 0600. `dir` must be a plain relative subfolder (`bills/2026-10`): no absolute path, `~`, `..`, hidden folders,
   backslashes, colons or control characters; it is checked before anything is fetched. Folders are created one by one and
   each must resolve inside the root, so a symlink pointing out of it is refused.
-- **File names**: the sender's name is cleaned to one plain name (path parts dropped, control characters and `:` replaced,
-  leading dots removed, cut to 200 bytes on a character boundary keeping the extension; empty becomes `attachment`).
+- **File names**: the sender's name is decoded (RFC 2047 words, RFC 2231 values in any charset, also from headers with
+  unquoted or malformed parameters that Go's MIME parser rejects), then cleaned to one plain name (path parts dropped,
+  control characters and `:` replaced, leading dots removed, cut to 200 bytes on a character boundary keeping the
+  extension; empty becomes `attachment`).
   Files are created with `O_EXCL`, so an existing file (or a symlink at that name) is never written through:
   the next free `name (2).ext` … `name (99).ext` is used instead.
 - The node writes into its own data directory, which the agent sandbox leaves readable (only its secrets are closed).

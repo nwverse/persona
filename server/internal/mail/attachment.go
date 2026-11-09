@@ -22,8 +22,7 @@ import (
 
 // attachmentMetadata binds IDs to MIME order, metadata and decoded content.
 func attachmentMetadata(h *gomail.AttachmentHeader, body io.Reader, index int, dst io.Writer) (Attachment, error) {
-	name, _ := h.Filename()
-	ct, _, _ := h.ContentType()
+	name, ct := partName(h), partType(h)
 	sum := sha256.New()
 	fmt.Fprintf(sum, "%d\x00%s\x00%s\x00", index, name, ct)
 	n, err := io.Copy(io.MultiWriter(sum, dst), body)
