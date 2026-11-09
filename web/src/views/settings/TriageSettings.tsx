@@ -109,7 +109,7 @@ export function TriageSettings({ onModel }: { onModel?: () => void }) {
           <Row label={t("settings-triagesettings.wake")} hint={t("settings-triagesettings.wake_hint")}>
             <Switch on={sw.wake} onChange={flip("wake")} disabled={busy || off} label={t("settings-triagesettings.wake")} />
           </Row>
-          <Row label={t("settings-triagesettings.tool_loop")} hint={t("settings-triagesettings.tool_loop_hint")}>
+          <Row label={t("settings-triagesettings.tool_loop")} hint={t("settings-triagesettings.tool_loop_hint")} wrapHint>
             <Switch on={sw.tool_loop === true} onChange={flip("tool_loop")} disabled={busy || off} label={t("settings-triagesettings.tool_loop")} />
           </Row>
           {/* no model call, so it works with the triage off */}
