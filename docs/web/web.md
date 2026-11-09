@@ -151,9 +151,9 @@ The box for pasting the hub's master token, and the `personad hub pair --legacy`
 A pairing token the web app receives is first exchanged for its own device token (`POST /api/v1/auth/tokens`, `kind: web`, role full; older hubs store it as `other`). From then on only its own token is used,
 and the pairing token is not kept in the browser; **Settings › Devices** can revoke it on its own. You can also paste a `jd_` device token directly.
 Only a 404 from the exchange route permits the legacy fallback of keeping the original token for an older hub. A 401 rejects an invalid or already-used link; server and network failures leave sign-in unsuccessful and show an error so the user can retry. A failed exchange never replaces the browser's existing credentials.
-**One browser, one device**: the device name carries the sign-in date ("Web (Chrome · Mac · Nov 6)"). The id of this browser's previous device is kept in `localStorage` under
-`persona.tokenId` (it is not cleared when the hub returns 401 and the token is cleared). When exchanging a token it is sent as `replaces`, and the hub revokes that device (only `kind: web` ones), so the device list no longer piles up devices with the same name;
-**Disconnect this browser** already revokes and clears it. A browser whose site data was cleared cannot be recognized and gets a new device as before, told apart by date.
+**One browser, one device**: the device name carries the sign-in date ("Web (Chrome · Mac · Nov 6)"). The id of this browser's device is kept in `localStorage` under
+`persona.tokenId`, next to its token. When exchanging a token, the id this browser still has is sent as `replaces`, and the hub revokes that device (only `kind: web` ones), so the device list no longer piles up devices with the same name;
+**Disconnect this browser** revokes it and clears both, and one it signed out of without the hub revoking it is sent as `replaces` at the next sign-in here (below). A browser whose site data was cleared cannot be recognized and gets a new device as before, told apart by date.
 For browsers signed in before the upgrade, the hub stored `other` (the same kind as the Mac desktop app's credential, so they cannot be told apart), and the first sign-in again does not replace it; older same-named devices have to be revoked by hand in **Settings › Devices**.
 Step one of the sign-in page sends the user to **Settings › Devices › Connect a new device › Browser** on a signed-in device: the web app and iOS have this entry; Android gets it from the onboarding PR for connecting new devices on Android (`docs/assistant/onboarding.md` section 7, step 16). Until then, only Android users have to go through **Advanced**.
 **Sign in by link** (2026-10-31): opening `<hub address>/?token=<hub token>` (any page path works; `#token=` is also accepted, and is not sent to the server) signs you in directly, no pasting.
@@ -162,7 +162,11 @@ device token as usual. If this browser is already signed in (the link is opened 
 The hub's access log records only the path, not the query string. Note that the link itself carries full access: don't post it in group chats or store it where others can see it; if it leaks, rotate the token on the hub machine.
 A signed-in browser can generate such a sign-in link for another device in **Settings › Devices › Connect a new device** (a one-time temporary code, 10 minutes); see "Settings" below.
 The token is stored in `localStorage`. `<img>` cannot send request headers, so images use `?token=` (the hub already accepts it, and the log does not record query strings).
-**Disconnect this browser** in the top-left menu revokes this token.
+**Disconnect this browser** (the top-left menu, and **Settings › General › This browser**; #1873, `src/lib/disconnect.ts`, `src/views/DisconnectBrowser.tsx`) revokes this token before signing out:
+`DELETE /api/v1/auth/tokens/<id>`, with the id from sign-in, or for a pasted device token the `current` id `GET /api/v1/auth/tokens` names. The button (in the menu, the account row) is busy meanwhile, and the revoke gives up after 15 seconds.
+A 404 (no such device) or 401 (the hub no longer takes it) leaves nothing valid behind and signs out as a success. Any other failure (hub restarting, network down, 500 / 503, the time running out) does not sign out:
+a dialog says the token wasn't revoked and why, with **Try again**, **Sign out anyway** and **Cancel**. Signing out anyway keeps the id in `localStorage` (`persona.unrevokedTokenId`), and the next sign-in in this browser sends it as `replaces`, so the hub takes it off then (when it is a `kind: web` one).
+When there is nothing this browser can revoke (it is signed in with the hub's own token, or the hub has no device tokens), a dialog says so and signs out only on **Sign out**.
 
 **Security**: the page itself needs no auth (it is just static files); all data sits behind `/api/` and needs the token. The hub speaks plain HTTP by default, so the token is visible on the network:
 use it only on the intranet / VPN, and put an HTTPS reverse proxy in front before exposing it to the internet.
