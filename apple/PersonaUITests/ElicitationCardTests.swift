@@ -22,6 +22,18 @@ final class ElicitationCardTests: XCTestCase {
         let pair = "persona://pair?url=" + hub.addingPercentEncoding(withAllowedCharacters: .alphanumerics)! + "&token=mock"
         app.launchArguments = ["-pairURL", pair, "-openSession", review]
         app.launchPinned()
+        allowNotifications()
+    }
+
+    /// The system's notification question, answered: while an alert covers the app it isn't active, and its socket
+    /// (which brings the cards) waits.
+    private func allowNotifications() {
+        let alert = XCUIApplication(bundleIdentifier: "com.apple.springboard").alerts.firstMatch
+        guard alert.waitForExistence(timeout: 5) else { return }
+        for label in ["允许", "Allow"] where alert.buttons[label].exists {
+            alert.buttons[label].tap()
+            return
+        }
     }
 
     private func mock(_ hub: String, _ path: String) -> [String: Any] {
