@@ -14,7 +14,8 @@ Every row below fails inside the sandbox and works outside it (`TestDarwinAgentS
 | An agent tries to | Result |
 | --- | --- |
 | Read or copy `secret.key`, `handles.key`, any other `*.key` at the top, `hub.json`, `link.json`, a TLS key | Refused, also through `~/.persona`, a symlink elsewhere, or a child process such as Python or `cp` |
-| Read a backup or a copy being written (`secret.key.bak`, `hub.json.bak`, the `.hub.json.*` file a rewrite renames into place) | Refused |
+| Read a backup or a copy being written (`secret.key.bak`, `hub.json.bak`, the `hub.json.tmp-*` file a rewrite renames into place) | Refused |
+| Read the Cloudflare tunnel token (`relay-tunnel.token`), the Postgres password (`docker/db-password`), or any other `*.token` / `*.secret` / `*.password` at the top of the data directory | Refused |
 | Read a manager's folder (`managers/`) or an extension's sign-in data (`extensions/data/`) | Refused |
 | Read another launcher's merged settings in `launcher-settings/` | Refused; the files this start passes to its own agent stay readable |
 | Connect to an extension's proxy socket or the hub's edge socket (`extensions/run/`, `run/`) | Refused |
@@ -37,7 +38,9 @@ The sandbox covers only the processes Persona starts in it. These reach the secr
   daemons, botmux, sessions Herdr App or Orca open themselves, the Codex desktop app.
 - **Starts this version does not wrap**: an agent started in herdr or Orca, or resumed after herdr restarts, by a
   launcher other than `personad launch` (plain `claude`, a `~/.zshrc` alias or function); Codex conversations on the
-  assistant; a plain `codex` (see "A start is wrapped only when the agent's own sandbox is surely off").
+  assistant; a plain `codex` (see "A start is wrapped only when the agent's own sandbox is surely off"). While the
+  switch is on, the node records each such herdr or Orca start as `skipped` under `pane`, so the doctor warns; a later
+  start there through a managed launcher clears it.
 - **Code that runs later outside the sandbox**: files an agent writes for another program to run (shell startup
   files, LaunchAgents, git hooks), and programs outside the sandbox it can drive (`open`, `osascript`, `launchctl`,
   herdr's or tmux's sockets, `ssh localhost`).
@@ -108,9 +111,9 @@ data directory goes by is resolved and written once.
 
 | Rule | Covers |
 | --- | --- |
-| Read and write, by the start of the name, with an optional leading dot, and anything inside a folder by such a name | `identity.DataSecrets` at the top: `hub.json`, `link.json`, `tailcat.json`, `tailcat-hub.json`, `daemons.json`, `manager.json`, `apns`, `relay.json`, `relay.secret`, `devices.json`, `mail_accounts.json` |
-| Read and write, key files with their backups | `identity.DataKeyPattern` at the top: `\.(key|p8|pem|crt)([.~-][^/]*)?$` |
-| Read and write, whole folders | `identity.DataSecretDirs` (`launcher-settings/`, `tls/`, `link-tls/`, `extensions/data/`, `extensions/staging/`, `plugins/`, `node-plugins/`), and `managers/`, `extensions/run/`, `run/`; connecting to the sockets in `extensions/run/`, `plugins/run/` and `run/` |
+| Read and write, by the start of the name, with an optional leading dot, and anything inside a folder by such a name | `identity.DataSecrets` at the top: `hub.json`, `link.json`, `tailcat.json`, `tailcat-hub.json`, `daemons.json`, `manager.json`, `apns`, `relay.json`, `relay.secret`, `relay-tunnel.token`, `devices.json`, `mail_accounts.json` |
+| Read and write, key and credential files with their backups | `identity.DataCredentialPattern` at the top: `\.(key|p8|pem|crt|token|secret|password)([.~-][^/]*)?$` |
+| Read and write, whole folders | `identity.DataSecretDirs` (`launcher-settings/`, `tls/`, `link-tls/`, `docker/`, `extensions/data/`, `extensions/staging/`, `plugins/`, `node-plugins/`), and `managers/`, `extensions/run/`, `run/`; connecting to the sockets in `extensions/run/`, `plugins/run/` and `run/` |
 | Connect | Unix sockets under `extensions/run/` and `run/` |
 | Write | The data directory itself, every folder above it, its other names (the `~/.persona` link), every folder in it that holds a closed folder (`extensions/`), `agent-sandbox.on` |
 | Allow read | This start's own files in `launcher-settings/` (what it passes with `--settings`) |
@@ -142,8 +145,9 @@ readable.
 ## The switch is a file in the data directory
 
 Turn it on or off for every process on the machine with the file, then start the agent again; running agents keep how
-they started. Before you turn it on: it does not stop Docker (see "Some ways to the secrets stay open"), and `ps`, `top`
-and `sudo` stop working in agents. `personad node doctor` repeats both while it is on.
+they started. Before you turn it on: it does not stop Docker (see "Some ways to the secrets stay open"), it does not
+cover agents started in herdr or Orca without a managed launcher, and `ps`, `top` and `sudo` stop working in agents.
+`personad node doctor` repeats all three while it is on.
 
 ```sh
 touch ~/.persona/agent-sandbox.on   # on (use PERSONA_HOME's directory for a custom root)

@@ -225,7 +225,7 @@ releases retain their separate publishing workflow.
   - when a node's version differs from the hub's, the machine list marks it and offers **Redeploy** (`devices/deploy.go`, using binaries in `~/.persona/bin/nodes/` on the hub machine).
 - The **only difference** between the full build and the public build is `-tags public`:
   - the full build embeds the Lark gateway skill into the binary with `go:embed` (`internal/assistantskills`, copied from upstream, not redistributable);
-  - when node starts the assistant process, it installs it into the assistant directory's `.claude/skills/` and puts its command on PATH (`node/larkgate.go`);
+  - when node starts the assistant process, it installs it into the assistant directory's `.claude/skills/` and puts its command on PATH (`node/larkgate_env.go`);
   - the public build does not include it.
 - Publishing: `publish.sh` builds the public build for four platforms, gzips them and, together with `SHA256SUMS` and `VERSION`, uploads them with wrangler to `dl/` under `publish.site_url` (Cloudflare Workers static assets),
   keeping only the latest version. wrangler uses an OAuth login that expires after about an hour, so it cannot run unattended.
@@ -507,7 +507,7 @@ Download → Verify → Prepare → Wait for idle → Replace → Restart → Co
 ### Docker (step 4)
 
 - **Which image to check**: compose passes `.env`'s `PERSONA_IMAGE` into the container, and that is what the hub checks; if absent (old compose files), use the build-time
-  `main.image` (`hub-image.yml` passes `ghcr.io/<owner>/<repo>`, not hard-coded).
+  `main.image` (`release.yml` passes `ghcr.io/<owner>/<repo>`, not hard-coded).
 - **How to check**: registry `GET /v2/<repo>/tags/list`; first obtain a pull token as directed by its `WWW-Authenticate` response (public images allow anonymous access, both ghcr.io
   and Docker Hub do this), and follow `Link` for pagination. Only recognize `X.Y.Z`, and take the highest; it counts as a "new image" only if newer than the hub's own version. Its own version must also be `X.Y.Z`
   (or a prerelease such as `-rc1`): a manually built `edge` image uses `git describe`, is newer than the tag, and cannot be compared, so only the latest stable version is shown.
@@ -558,15 +558,48 @@ Download → Verify → Prepare → Wait for idle → Replace → Restart → Co
 
 | Method | Path | Description |
 | --- | --- | --- |
-| GET | `/api/v1/hub/update` | `{version, build, channel, can_update, latest?{version, build, released, notes, bad}, state, progress, busy[]{machine, session, title}, error, auto, auto_notice, last_check}` |
+| GET | `/api/v1/hub/update` | `{version, build, channel, can_update, latest?{version, build, released, notes, bad}, state, progress, busy[]{machine, session, title}, error, auto, auto_update_nodes, auto_notice, last_check}` |
 | POST | `/api/v1/hub/update/check` | Check immediately |
 | POST | `/api/v1/hub/update` | Start update (409 with a reason for non-release builds); `{"now": true}` is **Update Now** after the second confirmation, skipping the idle wait |
-| PUT | `/api/v1/hub/update/settings` | `{auto}`; `{auto_notice_seen: true}` |
+| PUT | `/api/v1/hub/update/settings` | `{auto}`; `{auto_notice_seen: true}`; `{auto_update_nodes: true\|false}` |
 | GET | `/api/v1/hub/update/history` | Update history, newest first |
 | GET | `/api/v1/skills` | Skills on the machine running the assistant: `[{name, description, source: user\|builtin}]` |
 | WS event | `hub_update` | Push to open Apps when state or progress changes |
 
 `state`: `idle` / `checking` / `available` / `downloading` / `waiting_idle` / `restarting` / `confirming` / `updated` / `rolled_back` / `failed`.
+
+### Runtime node update policy
+
+`PUT /api/v1/hub/update/settings` accepts `{"auto_update_nodes": true}` or
+`false`. The choice is persisted in Postgres under `hub_update`, independently
+of `auto` (Hub self-updates). An omitted or null field preserves the choice;
+until a choice has been saved, `hub.json`'s `auto_update_nodes` is the fallback
+(default false). GET and the successful PUT response always include the
+effective boolean, including false. A failed read returns 503; a failed save
+does not change the running choice or notify managers.
+
+After a successful choice, existing `devices.config` broadcasts and reconnect
+handshakes carry the same effective policy to managers without changing machine
+ownership. An explicit true PUT also requests `devices.update_nodes` after the
+configuration is sent, even when the value is unchanged. This requests a package
+check; it is not an installation receipt. Matching Hub versions, usable packages,
+busy checks, ownership, installation health and rollback still govern deployment.
+An offline manager receives the policy on its next handshake; node reconnects
+retain the existing automatic update path.
+
+If `bin/nodes` is a symlink, the Hub updater never swaps binaries, removes version
+markers or sets aside old binaries through it. The release publisher owns the
+immutable package directories and activates the pointer only after confirming
+Hub health. Pointer activation alone has no file-watch notification: after
+activation, repeat the authenticated true PUT to request a fresh package check
+on connected managers. Repeating false never requests deployment. Publication
+and node confirmation must be reported separately.
+
+This policy updates node executables, not an independently installed manager.
+The latter still needs its own fixed candidate, original manager/unit/config
+identity, complete activity evidence, transaction lock, guardian, health
+confirmation and rollback. A node capability or a staged manager binary alone
+does not satisfy that contract.
 
 ## 13. Tests
 

@@ -1111,6 +1111,7 @@ func weekdayText(ds []int) string {
 // Run runs what the assistant does on its own until ctx ends: the scheduled tasks, closing finished tasks' agents, the
 // knowledge base.
 func (s *Service) Run(ctx context.Context) {
+	s.running.Store(&ctx)
 	go s.taskCloseLoop(ctx)    // the agents of finished tasks (tasks_close.go)
 	go s.superviseLoop(ctx)    // the tasks the main conversation follows up (supervise_signals.go)
 	go s.workLoop(ctx)         // due wakes and retries, cards past their day, missed turns (agents_work_tick.go)
@@ -1642,10 +1643,9 @@ func (s *Service) watchScheduledRun(run ScheduleRun, t Task, m Device) {
 		return
 	}
 	text := s.lastTurnAPIError(ctx, m.ID, run.SessionID)
-	if text == "" {
-		if c, ok := s.session(ctx, m.ID, run.SessionID); ok {
-			text = c.TurnError
-		}
+	failedSession, hasSession := s.session(ctx, m.ID, run.SessionID)
+	if text == "" && hasSession {
+		text = failedSession.TurnError
 	}
 	if text == "" {
 		// The model service answered 200 with nothing in it: no reply, no tool call, no error. The run stayed "ok"
@@ -1673,6 +1673,14 @@ func (s *Service) watchScheduledRun(run ScheduleRun, t Task, m Device) {
 	}
 	if run.Retried {
 		return
+	}
+	if hasSession {
+		if failedSession.TurnError == "" {
+			failedSession.TurnError = full
+		}
+		if sessionTurnErrorCode(failedSession) == proto.TurnErrorModelFallbackUnavailable {
+			return // the unavailable refusal fallback needs the user's recovery, never an automatic replay
+		}
 	}
 	var limitTurn time.Time // the turn a usage limit stopped, when one did: the retry goes only while it is still the last
 	if reset, turn, resumes, limited := s.runLimit(ctx, m.ID, run.SessionID, full); limited {

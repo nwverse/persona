@@ -476,7 +476,7 @@ func (s *Service) historyStop(ctx context.Context, l i18n.Lang, data, words stri
 	// The owner's words stay in STOP and the status, where the owner reads them; the log gets only that it was asked
 	// (they may name a chat or a person).
 	why := reason("asked")
-	if text := clipRunes(strings.TrimSpace(words), 200); text != "" {
+	if text := clip(strings.TrimSpace(words), 200); text != "" {
 		why.Text = text
 	}
 	now := time.Now().UTC()

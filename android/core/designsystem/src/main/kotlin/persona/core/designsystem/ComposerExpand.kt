@@ -56,7 +56,12 @@ fun rememberComposerGrowLines(): Int {
     val density = LocalDensity.current
     val windowHeight = LocalConfiguration.current.screenHeightDp.dp
     val keyboard = with(density) { WindowInsets.ime.getBottom(density).toDp() }
-    val lineHeight = with(density) { PersonaTheme.type.body.lineHeight.toDp() }
+    val body = PersonaTheme.type.body
+    val measurer = androidx.compose.ui.text.rememberTextMeasurer()
+    val lineHeight = with(density) {
+        if (body.lineHeight.isSp) body.lineHeight.toDp()
+        else measurer.measure("Ag", style = body, maxLines = 1).size.height.toDp()
+    }
     return remember(windowHeight, keyboard, lineHeight) { composerGrowLines(windowHeight - keyboard, lineHeight) }
 }
 

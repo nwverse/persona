@@ -20,6 +20,7 @@ var RouteScopes = map[string]string{
 	"GET /api/v1/kb-search":                              ScopeKBRead,
 	"PUT /api/v1/kb/{kind}/{id}":                         ScopeKBWrite,
 	"GET /api/v1/inbox":                                  ScopeInboxRead,
+	"GET /api/v1/inbox/done":                             ScopeInboxRead,
 	"GET /api/v1/inbox/{id}":                             ScopeInboxRead,
 	"GET /api/v1/inbox/mutes":                            ScopeInboxRead,
 	"GET /api/v1/inbox/policies":                         ScopeInboxRead,
@@ -32,6 +33,9 @@ var RouteScopes = map[string]string{
 	"POST /api/v1/inbox/{id}/handoff":                    ScopeInboxWrite,
 	"POST /api/v1/inbox/{id}/doc/status":                 ScopeInboxWrite,
 	"PUT /api/v1/inbox/{id}/parent":                      ScopeInboxWrite,
+	"PUT /api/v1/inbox/{id}/folder":                      ScopeInboxWrite,
+	"GET /api/v1/inbox/folders":                          ScopeInboxRead,
+	"PUT /api/v1/inbox/folders":                          ScopeInboxWrite,
 	"GET /api/v1/inbox/tree/{kind}/{id...}":              ScopeInboxRead,
 	"POST /api/v1/inbox/mutes":                           ScopeInboxWrite,
 	"DELETE /api/v1/inbox/mutes/{id}":                    ScopeInboxWrite,
@@ -61,6 +65,8 @@ var RouteScopes = map[string]string{
 	"POST /api/v1/sessions/{mid}/{sid}/queue":            ScopeAgentsControl,
 	"POST /api/v1/sessions/{mid}/{sid}/queue/send-now":   ScopeAgentsControl, // #6088
 	"POST /api/v1/sessions/{mid}/{sid}/seen":             ScopeAgentsControl,
+	"POST /api/v1/sessions/{mid}/{sid}/rename":           ScopeAgentsControl,
+	"POST /api/v1/sessions/{mid}/{sid}/modes":            ScopeAgentsPermissionMode,
 	"POST /api/v1/interactions/{id}/choose":              ScopeAgentsControl,
 	"POST /api/v1/interactions/{id}/resolve":             ScopeAgentsControl,
 	"POST /api/v1/interactions/{id}/reanswer":            ScopeAgentsControl, // "Change answer": a message to the agent

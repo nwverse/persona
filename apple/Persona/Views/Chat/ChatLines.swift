@@ -29,13 +29,9 @@ struct ChatLines {
         }
     }
 
-    /// Work lines the user flipped from how they start (folded, or open while running with `opensLive`); `openAll`
-    /// flips them all (DEBUG `-openAllWork`).
+    /// Work lines the user opened; `openAll` flips them all (DEBUG `-openAllWork`).
     var openWork: Set<String>
     var openAll = false
-    /// The running work line starts open, so its tool calls list one by one as they come; once the turn ends it is
-    /// folded again (the chat forgets the user's flip of it then) and opens to all of them (#1614, the assistant).
-    var opensLive = false
     /// Runs of tool calls the user opened; `openAllRuns` flips them all (DEBUG `-showRunsOpen`).
     var openRuns: Set<String> = []
     var openAllRuns = false
@@ -43,8 +39,6 @@ struct ChatLines {
     var chipRuns = false
     /// Whether a call can join a run: a call that went to the background stays on its own line.
     var foldsIntoRun: (ToolCall) -> Bool = { _ in true }
-    /// Whether a call stays in view while its work line is folded (a running subagent's card); `live`: the line runs.
-    var showsFolded: (ToolCall, _ live: Bool) -> Bool = { _, _ in false }
 
     /// The lines of these blocks with the open work lines unfolded.
     func build(_ blocks: [ChatBlock], live: String?, streaming: Bool = false) -> [ChatLine] {
@@ -55,7 +49,86 @@ struct ChatLines {
     /// streaming in (drawn after the lines): the words before them are in its work line already, where they go once
     /// those are written. Out of it until then, they stayed under the new words as these streamed in, and then folded
     /// away: every sentence of a running turn moved the chat up two lines and down three (2026-11-04).
+    /// Supervision folding is independent of the optional conversation layout, and only enabled for Persona chats.
+    var foldSupervision = false
+    var openSupervision: Set<String> = []
+    var openAllSupervision = false
+    var active = false
+
+    static func hidesLiveSupervision(_ lines: [ChatLine], open: Set<String>, openAll: Bool = false) -> Bool {
+        // A cleared stream can remain pending until its transcript item arrives, even after the turn stops.
+        // Only the newest transcript owner matters; task/feed/day decorations do not begin another round.
+        for line in lines.reversed() {
+            switch line.content {
+            case .feed, .quick, .day: continue
+            case .supervision(let id, _, _): return open.contains(id) == openAll
+            default: return false
+            }
+        }
+        return false
+    }
+
+    /// A round can cross recaps and compactions. Only the next actual input ends it.
     func lines(_ blocks: [ChatBlock], live liveID: String?, streaming: Bool = false) -> [ChatLine] {
+        guard foldSupervision else { return flatLines(blocks, live: liveID, streaming: streaming) }
+        let all = blocks.flatMap(Self.transcriptItems)
+        let results = all.reduce(into: [String: Item]()) { out, item in
+            if item.kind == .toolResult, let id = item.toolUseID { out[id] = item }
+        }
+        var out: [ChatLine] = []
+        var round: [ChatLine]? = nil
+        var evidence: [Item] = []
+        var running = false
+        func flush() {
+            guard let trace = round, let first = trace.first else { return }
+            if Supervision.visible(evidence, results: results, live: running) {
+                out += trace
+            } else {
+                out.append(.supervision(id: "sv-" + first.id, lines: trace, live: running))
+            }
+            round = nil
+            evidence = []
+            running = false
+        }
+        for block in blocks {
+            let items = Self.transcriptItems(block)
+            if case .turn(let turn) = block, turn.ordered.contains(where: \.isUserInput) {
+                flush()
+                if items.contains(where: { Injected.of($0)?.isSupervision == true }) { round = [] }
+            }
+            let lines = flatLines([block], live: liveID, streaming: streaming)
+            if round != nil {
+                round! += lines
+                evidence += items
+                if case .turn(let turn) = block, turn.id == liveID { running = true }
+            } else { out += lines }
+        }
+        // The run can resume after a recap before its first transcript item arrives.
+        if round != nil, active { running = true }
+        flush()
+        return Self.foldRecaps(Self.foldAPIErrors(out))
+    }
+
+    static func transcriptItems(_ block: ChatBlock) -> [Item] {
+        switch block {
+        case .row(let row): return transcriptItems(row)
+        case .turn(let turn): return (turn.ordered + turn.tail + turn.trailing).flatMap(transcriptItems)
+        }
+    }
+
+    static func transcriptItems(_ row: ChatRow) -> [Item] {
+        switch row {
+        case .user(let i), .assistant(let i), .thinking(let i), .notice(let i), .image(let i), .recap(let i): return [i]
+        case .tools(let steps): return steps.flatMap { step in
+            switch step {
+            case .call(let call): return [call.use] + [call.result].compactMap { $0 }
+            case .thought(let i), .folded(let i): return [i]
+            }
+        }
+        }
+    }
+
+    private func flatLines(_ blocks: [ChatBlock], live liveID: String?, streaming: Bool = false) -> [ChatLine] {
         var out: [ChatLine] = []
         for block in blocks {
             switch block {
@@ -79,10 +152,16 @@ struct ChatLines {
                     if !photos.isEmpty { out.append(.userImages(id: "img-" + photos[0].id, items: photos)) }
                     if let u = seg.user { out.append(.row(u)) }
                     let last = live && streaming ? nil : seg.rows.lastIndex { if case .assistant = $0 { true } else { false } }
-                    // A compaction after the answer (Claude Code compacted once the turn was over: idle, /compact on
-                    // its own) is a divider after it, not a step hidden in the turn's work line.
+                    // Only an idle compaction with no later work belongs after the answer. A running turn's
+                    // latest narration is not its final answer, and tools can follow it before compaction.
+                    let idleCompaction = !live && last.map { index in
+                        seg.rows.dropFirst(index + 1).allSatisfy { row in
+                            if case .notice(let item) = row { return item.compact != nil }
+                            return false
+                        }
+                    } == true
                     let after = Set(seg.rows.indices.filter { n in
-                        guard let l = last, n > l, case .notice(let i) = seg.rows[n] else { return false }
+                        guard idleCompaction, let l = last, n > l, case .notice(let i) = seg.rows[n] else { return false }
                         return i.compact != nil
                     })
                     let work = seg.rows.enumerated().filter { $0.offset != last && !after.contains($0.offset) }.map(\.element)
@@ -188,25 +267,17 @@ struct ChatLines {
         out.reserveCapacity(lines.count)
         for line in lines {
             out.append(line)
-            if case .work(let id, let items, let live, _, _) = line.content, !isOpen(id, live: live) {
-                // Subagents launched one after another stay out together; any other call that stays out (a listed
-                // workflow run's) on its own.
-                var run: [ToolCall] = []
-                func flush() {
-                    let shown = run.filter { showsFolded($0, live) }
-                    if shown.count > 1 {
-                        out.append(.agents(group: id, calls: shown, first: true, alone: true))
-                    } else if let c = shown.first {
-                        out.append(.agentOut(group: id, call: c))
+            if case .supervision(let id, let trace, _) = line.content {
+                if openSupervision.contains(id) != openAllSupervision {
+                    let raw = trace.map { child -> ChatLine in
+                        if case .row(.user(let item)) = child.content {
+                            return .supervisionInput(item)
+                        }
+                        return child
                     }
-                    run = []
+                    out += unfold(raw)
                 }
-                for item in items {
-                    if case .step(.call(let c)) = item, SubagentCard.isAgent(c) { run.append(c); continue }
-                    flush()
-                    if case .step(.call(let c)) = item, showsFolded(c, live) { out.append(.agentOut(group: id, call: c)) }
-                }
-                flush()
+                continue
             }
             if case .work(let id, let items, let live, _, _) = line.content, isOpen(id, live: live), !items.isEmpty {
                 // The BeautifulUI style folds runs of tool calls into a line of chips; the others list every step.
@@ -220,10 +291,9 @@ struct ChatLines {
         return out
     }
 
-    /// Whether a work line is open; `live`: it is the running one. The wake drawer's work line ("dw-…") keeps folding
-    /// while it runs, as it always has: only the chat's own running line opens by itself.
+    /// Running and completed work lines both stay folded until the user opens them.
     func isOpen(_ work: String, live: Bool) -> Bool {
-        openWork.contains(work) != (openAll || (opensLive && live && !work.hasPrefix(Self.drawerWork)))
+        openWork.contains(work) != openAll
     }
     /// The id prefix of the wake drawer's work line (`ChatView.wakeLines`).
     static let drawerWork = "dw-"
