@@ -168,7 +168,7 @@ export const Answer = memo(function Answer({ item, streaming, mid, sid, fade }: 
     return (
       <MessageActions text={text}>
         <div className={ANSWER} data-answer="streaming">
-          <Markdown text={text} mid={mid} cwd={cwd} streaming />
+          <Markdown text={text} mid={mid} cwd={cwd} streaming lineBreaks />
         </div>
       </MessageActions>
     );
@@ -178,7 +178,7 @@ export const Answer = memo(function Answer({ item, streaming, mid, sid, fade }: 
       <div className={ANSWER} data-answer data-items={item?.id}>
         {/* the cards in it are this item's blocks (ui/AssistantCard.tsx): `<item id>/<n>` */}
         <CardItem.Provider value={item?.id ? { id: item.id, text } : null}>
-          <Markdown text={text} mid={mid} cwd={cwd} fade={fade || undefined} />
+          <Markdown text={text} mid={mid} cwd={cwd} fade={fade || undefined} lineBreaks />
         </CardItem.Provider>
       </div>
       {full.more}

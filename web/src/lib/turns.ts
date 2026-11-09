@@ -437,7 +437,7 @@ export function isPersonaTool(name?: string): boolean {
 
 /** Persona's tools with a verb of their own, by their bare name (iOS PersonaToolNames + ToolPresentation.verb). */
 const PERSONA_VERB_KEY: Record<string, string> = {
-  // Agents on the user's computers (docs/assistant/assistant.md "Agents and Lark tools")
+  // Agents on the user's computers (docs/assistant/assistant.md "Current structure", Agents)
   agent_read: "persona_agent_read",
   agent_send: "persona_agent_send",
   send_to_agent: "persona_agent_send",
