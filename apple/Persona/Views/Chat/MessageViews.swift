@@ -262,7 +262,8 @@ struct PeerMessage: View {
                 // A subagent's report that came as a message: one line until opened, as in its card.
                 FoldedReport(id: pinKey, text: item.text ?? "", font: Theme.Font.secondary) { words(d) }
             } else {
-                words(d)
+                // A long one: its first lines until opened, as many as an exchange shows (#2010).
+                LineFold(lines: ChatLayoutSettings.defaultLines, id: pinKey) { words(d) }
             }
         }
         .padding(Theme.Space.m)
