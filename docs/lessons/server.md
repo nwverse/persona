@@ -1,5 +1,9 @@
 # Lessons: hub / node and networking
 
+## Model connection tests must match the runtime (#1732)
+
+A successful connection probe can still hide a request the model server will reject: exercise the same output-token field and its narrowly scoped fallback as the runtime. Parse SSE events rather than individual `data:` lines, including multiline events and CRLF, and test empty, truncated, refused, and errored replies separately.
+
 ## Battery investigations need attributed transport counts (#1633)
 
 A slow/error request log is not an access log, and successful Live Activity updates
@@ -224,6 +228,12 @@ Splitting a registry at its first colon reads `[::1]:5000` as `[`, selecting HTT
 ## Copied SDK commands need their development inputs (#6132)
 
 - Copying a package's scripts without their referenced configs, helper scripts and typecheck fixtures leaves a plausible-looking but unusable SDK. Keep the official TypeScript copy complete, including its dependency lockfile; exclude installed dependencies and build output. Test a fresh destination, not only the source checkout, and verify selective copying leaves the other SDK untouched. Schema-conformance fixtures must also be collected from their canonical source into the SDK package and archive; tests cannot depend on an outer repository schema directory or silently skip missing fixtures. Installing these declared development dependencies is a build-time operation, never source-runtime dependency resolution.
+
+## Exact initialization metadata belongs at the initializer (#1777)
+
+- Namespace raw params cannot recover configuration tokens already lost before `Program.init`. Use the explicit initializer opt-in on the original `initialize.params` frame; keep parsed defaults and ordinary two-argument calls unchanged. Direct authoring probes have no raw frame and must not invent one by serializing parsed values. Raw initialization may contain credentials: never log it.
+- Preserve the initializer receiver, single getter lookup and single-flight/retry behavior. Only an own data marker opts in; inherited/accessor markers do not. Use the function's actual invocation rather than its replaceable `call` property. Resolve the initializer symbol lazily so unrelated source imports gain no new top-level side effect.
+- Optional invocation skips only null/undefined, not falsy non-callables such as false, zero or an empty string. Preserve rejection and failed-init retry for own and inherited members when factoring invocation into a helper. Run the complete portable/source-authoring gate as well as Bun tests: a browser-bundled Node fixture can pin an existing failure contract that a focused new suite misses.
 
 ## SDK transport shutdown and error identity (2026-11-07, #6125)
 
@@ -1180,3 +1190,8 @@ A connector that folds several notifications into one thread (GitHub CI failures
 
 - `regexp`'s `ReplaceAllString` and a `strings.Replacer` return a fresh copy of the text even when nothing in it matches. Run per line of every session's last words (`transcript.AskOf`), a list-mark regexp and a Markdown replacer copied each line two or three times for nothing. Cut a fixed prefix by hand (compare it with the regexp it replaces on edge cases, `TestCutListMarkMatchesRegexp`), check for the marks before running a replacer, and use `lazyre.NewGated` for a pattern most texts lack: its string replacements give such a text back as it is.
 - An answer of thousands of rows built as one slice and one buffer (`GET /api/v1/sessions` for older clients, about 10 MB for 8,000 sessions) costs memory in proportion to the answer on every request. Encode it a row at a time into a small buffer and write that out as it fills (`writeSessionLists`); compare the bytes with the old whole encoding. Benchmark such a handler with a `ResponseWriter` that keeps nothing: an `httptest.ResponseRecorder` holds the whole body, and its growth hides what the handler itself allocates.
+
+## Hot paths: a whole-input check before decoding, a list copied to read a few rows (2026-11-09, #1755)
+
+- `json.Unmarshal` checks the whole input before it decodes it, only to report errors the way it always has; on transcript lines, whose message content is decoded again as a string and as blocks, that check was about a fifth of a cold read. Where only `err != nil` is read, decode with `jsonv2.JoinOptions(json.DefaultOptionsV1(), json.ReportErrorsWithLegacySemantics(false))` (`transcript.unmarshalLine`): the same values and the same failures (compare both on every fixture line, cut and wrong-typed ones included, `TestLineJSONMatchesUnmarshal`), but a value that fails is partly decoded, so the caller has to drop it.
+- An accessor that clones a whole list costs the whole list for a caller that keeps a few rows (the assistant's view keeps about 14 of 8,200 sessions): give the store an accessor that copies out only what a predicate keeps (`Devices.SessionsWhere`). A lookup that returns its range value (`for _, s := range list { if … { return s } }`) copies every session it passes (a `proto.Session` is about 1.4 KB): `Machine.session` took 91 µs to find the last of 2,000, 6 µs ranging by index. A loop that only reads a field of the value is not copied, and by index it measured slower (`portAllowed`, 1.6 to 2.2 µs), so measure before changing one. Stamp a field only on the row returned (`Hub.decoratedSession`).

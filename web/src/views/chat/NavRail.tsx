@@ -71,10 +71,34 @@ export function NavRail({ ticks, scroller, onJump, reset }: { ticks: NavRailTick
     }, IDLE_MS);
   }, []);
 
+  // its ticks and their hover previews are a precise pointer's; a touch screen keeps the margin empty
+  const fine = useFinePointer();
   const measure = useCallback(() => {
     raf.current = 0;
     const sc = view.current;
     if (!sc) return;
+    // Nothing to draw, so no layout reads. A short chat writes no state (mounting it draws no extra frame). A touch
+    // screen drops whatever a pointer had measured and does not read the chat on this frame or the next scroll.
+    if (!fine) {
+      // Drop what a precise pointer had measured. Leaving room/left/height frozen would paint the rail from that old
+      // geometry for a frame when a pointer comes back (a trackpad undocked, the window rotated, the trackpad back).
+      // A hover or a pending jump dies with the rail: unmounting does not fire mouseleave, so those refs would stick
+      // and the rail would come back already previewing, and never dim.
+      railX.current = null;
+      hovering.current = false;
+      focused.current = false;
+      setRoom(false);
+      setActive((x) => (x === null ? x : null));
+      setPreview((x) => (x === null ? x : null));
+      setPending((x) => (x === null ? x : null));
+      return;
+    }
+    if (list.current.length < NAV_RAIL_MIN_TICKS) {
+      // The pointer-wake band goes with it; a strip rect left from an earlier rail would wake an empty margin.
+      railX.current = null;
+      setActive((x) => (x === null ? x : null));
+      return;
+    }
     // clientWidth: the column centers in the content box, and a classic scrollbar is not free margin
     const fits = hasNavRailRoom(sc.clientWidth);
     setRoom(fits);
@@ -83,7 +107,7 @@ export function NavRail({ ticks, scroller, onJump, reset }: { ticks: NavRailTick
     const strip = railRef.current?.getBoundingClientRect();
     railX.current = strip ? { left: strip.left, right: strip.right } : null;
     const now = list.current;
-    if (!fits || now.length < NAV_RAIL_MIN_TICKS) {
+    if (!fits) {
       setActive((x) => (x === null ? x : null));
       return;
     }
@@ -95,7 +119,7 @@ export function NavRail({ ticks, scroller, onJump, reset }: { ticks: NavRailTick
     // a rect read per tick (positions move with the scroll; the elements themselves do not)
     const byId = anchors.current.map;
     setActive(pickActiveTick(now.length, sc.getBoundingClientRect().top + ACTIVE_FUDGE, (i) => byId.get(now[i].id)?.firstElementChild?.getBoundingClientRect().top ?? null));
-  }, []);
+  }, [fine]);
 
   const schedule = useCallback(() => {
     if (raf.current === 0) raf.current = requestAnimationFrame(measure);
@@ -109,7 +133,10 @@ export function NavRail({ ticks, scroller, onJump, reset }: { ticks: NavRailTick
 
   useEffect(() => {
     const sc = view.current;
-    if (!sc) return;
+    // No precise pointer: nothing to draw, so a scroll must not measure or arm the idle timer. A phone's long chat
+    // would otherwise reset that timer on every scroll event and commit again when it fired. A pointer attached
+    // later re-subscribes, and the effect above measures the chat as it is then.
+    if (!sc || !fine) return;
     const onScroll = () => {
       wake();
       schedule();
@@ -129,7 +156,7 @@ export function NavRail({ ticks, scroller, onJump, reset }: { ticks: NavRailTick
       if (raf.current) cancelAnimationFrame(raf.current);
       raf.current = 0;
     };
-  }, [scroller, schedule, wake]);
+  }, [scroller, schedule, wake, fine]);
 
   // another chat: no leftover active tick, hover or pending jump; show itself once as the where-you-are hint
   useEffect(() => {
@@ -177,8 +204,6 @@ export function NavRail({ ticks, scroller, onJump, reset }: { ticks: NavRailTick
     card.style.top = `${Math.max(0, Math.min(y, rail.clientHeight - h))}px`;
   }, [preview, room, height, ticks]);
 
-  // its ticks and their hover previews are a precise pointer's; a touch screen keeps the margin empty
-  const fine = useFinePointer();
   if (!fine || !room || ticks.length < NAV_RAIL_MIN_TICKS || height < NAV_RAIL_MIN_HEIGHT) return null;
 
   const plan = planNavRailTicks(ticks.length, height);
