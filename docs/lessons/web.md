@@ -645,3 +645,7 @@ A saved credential and an empty input are different from explicitly removing tha
 ## Pairing fallback needs an unsupported-route response (#1916)
 
 A successful token check does not prove the subsequent device-token exchange succeeded: a redeemed pairing code can still read during its grace period. Keep the legacy credential only when the exchange returns 404 for an old hub. Authentication refusal, server failure and transport failure must reject sign-in without replacing browser credentials. Both opened and pasted links should classify a 401 by status, not by the exact error sentence returned by the hub.
+
+## A gateway status is not an outage diagnosis (#1915)
+
+Classify stable business codes before generic status messages, including in toast folding. A 503 can mean disabled knowledge, an unready index or a disconnected manager; it does not prove the hub or a computer is down. Keep old-hub compatibility at the REST boundary, requiring the route, status, code and exact known diagnostic together. Retain diagnostics on the error object, not inside business messages, and exercise the rendered page through the real decoder.
