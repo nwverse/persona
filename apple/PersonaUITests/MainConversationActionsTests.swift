@@ -37,7 +37,7 @@ final class MainConversationActionsTests: XCTestCase {
     }
 
     @MainActor private func openMenu(_ app: XCUIApplication) {
-        let a = app.buttons["persona-avatar"]
+        let a = app.buttons["shell-assistant"]
         XCTAssertTrue(a.waitForExistence(timeout: 15), "no avatar in the top bar:\n\(app.debugDescription)")
         a.tap()
     }

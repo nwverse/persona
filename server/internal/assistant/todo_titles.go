@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"net/http"
-	"regexp"
 	"sort"
 	"strings"
 	"sync"
@@ -16,6 +15,7 @@ import (
 	"github.com/nwverse/persona/server/internal/apierr"
 	"github.com/nwverse/persona/server/internal/db"
 	"github.com/nwverse/persona/server/internal/i18n"
+	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/prompts"
 )
 
@@ -37,16 +37,16 @@ func todoTitleMax(locale string) int {
 
 var (
 	// Words that tune the agent's thinking, at the start of a prompt (Claude Code's ultrathink and the like).
-	todoTitleKeyword = regexp.MustCompile(`(?i)^/?(?:ultrathink|ultracode|ultraplan|megathink|think\s+(?:very\s+)?hard(?:er)?|think\s+deeply|think\s+harder)\b[\s,，、:：;；.。!！-]*`)
+	todoTitleKeyword = lazyre.New(`(?i)^/?(?:ultrathink|ultracode|ultraplan|megathink|think\s+(?:very\s+)?hard(?:er)?|think\s+deeply|think\s+harder)\b[\s,，、:：;；.。!！-]*`)
 	// Where the request comes from and when: "the owner's feedback of 11-05 19:47," / "the message of 11/05 19:47:" (in Chinese). A date needs a time
 	// or what came then after it, so a version number ("fix the crash in 3.2") is not taken for one.
-	todoTitleStamp = regexp.MustCompile(`^[^\s，,:：]{0,8}\s*\d{1,4}[-/.月]\d{1,2}日?(?:\s*\d{1,2}:\d{2}(?::\d{2})?\s*(?:的)?(?:反馈|消息|要求|需求|留言)?|\s*(?:的)?(?:反馈|消息|要求|需求|留言))[\s,，、:：;；]*`)
+	todoTitleStamp = lazyre.New(`^[^\s，,:：]{0,8}\s*\d{1,4}[-/.月]\d{1,2}日?(?:\s*\d{1,2}:\d{2}(?::\d{2})?\s*(?:的)?(?:反馈|消息|要求|需求|留言)?|\s*(?:的)?(?:反馈|消息|要求|需求|留言))[\s,，、:：;；]*`)
 	// A note on who hands the work over, in brackets: "secretary hands out work (the owner allowed it…):" or "[hand out work]" (in Chinese, full-width brackets).
-	todoTitleBracket = regexp.MustCompile(`^[^\s（(【\[]{0,8}\s*(?:（[^）]*）|\([^)]*\)|【[^】]*】|\[[^\]]*\])[\s,，、:：;；]*`)
+	todoTitleBracket = lazyre.New(`^[^\s（(【\[]{0,8}\s*(?:（[^）]*）|\([^)]*\)|【[^】]*】|\[[^\]]*\])[\s,，、:：;；]*`)
 	// Permission the agent is given, which says nothing about the work.
-	todoTitleGrant = regexp.MustCompile(`^(?:已(?:经)?(?:获)?授权|授权)(?:过)?(?:，|,)?(?:直接|可以|你)?(?:开工|动手|开始|执行|做)?[\s,，、:：;；!！。]*`)
+	todoTitleGrant = lazyre.New(`^(?:已(?:经)?(?:获)?授权|授权)(?:过)?(?:，|,)?(?:直接|可以|你)?(?:开工|动手|开始|执行|做)?[\s,，、:：;；!！。]*`)
 	// The bare go-ahead before a colon: "just do it:", "start now:" (in Chinese).
-	todoTitleGo = regexp.MustCompile(`^(?:直接|就|马上|立刻)(?:做|开工|动手|开始|执行|改)\s*[:：]\s*`)
+	todoTitleGo = lazyre.New(`^(?:直接|就|马上|立刻)(?:做|开工|动手|开始|执行|改)\s*[:：]\s*`)
 )
 
 // cleanTodoTitle is s (a task's prompt, or a title made from it) on one line without what it opens with for the
@@ -57,7 +57,7 @@ func cleanTodoTitle(s string, max int) string {
 	s = strings.Join(strings.Fields(cleanTitleNoise(s)), " ")
 	for {
 		before := s
-		for _, re := range []*regexp.Regexp{todoTitleKeyword, todoTitleStamp, todoTitleBracket, todoTitleGrant, todoTitleGo} {
+		for _, re := range []*lazyre.Regexp{todoTitleKeyword, todoTitleStamp, todoTitleBracket, todoTitleGrant, todoTitleGo} {
 			if loc := re.FindStringIndex(s); loc != nil && loc[1] > 0 {
 				s = strings.TrimSpace(s[loc[1]:])
 			}
@@ -198,6 +198,7 @@ func (s *Service) retitleTodo(ctx context.Context, id, from, to string) (Todo, b
 		row = db.TodoRow{ID: cur.ID, Title: to, Notes: cur.Notes, DoneAt: cur.DoneAt, CreatedAt: cur.CreatedAt, UpdatedAt: now,
 			Origin: cur.Origin, PlanID: cur.PlanID, StartError: cur.StartError, DoneBy: cur.DoneBy, DoneReason: cur.DoneReason,
 			ReopenedAt: cur.ReopenedAt, Quiet: cur.Quiet}
+		cur.keepPlan(&row)
 	}
 	t, doneKeys, ok := s.setTodoRow(id, row, still)
 	s.todos.writing.Unlock()

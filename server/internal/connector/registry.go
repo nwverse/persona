@@ -7,17 +7,17 @@ import (
 	"fmt"
 	"math"
 	"reflect"
-	"regexp"
 	"slices"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/rpc"
 )
 
-var validID = regexp.MustCompile(`^[a-z][a-z0-9]*$`)
+var validID = lazyre.New(`^[a-z][a-z0-9]*$`)
 
 // Ask asks the user on the phone to allow a write (the hub's approval card) and says whether they did.
 type Ask func(ctx context.Context, summary string, input json.RawMessage) bool
@@ -143,7 +143,7 @@ func (r *Registry) Enabled(id string) bool {
 type Feed string
 
 const (
-	FeedArchive Feed = "archive" // its conversations into the knowledge base (Archive)
+	FeedArchive Feed = "archive" // its conversations, items and posts into the knowledge base
 	FeedInbox   Feed = "inbox"   // its things into the inbox (Inbox)
 )
 

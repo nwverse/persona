@@ -7,6 +7,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { errorText } from "../../lib/api";
 import { t } from "../../i18n";
 import { ago } from "../../lib/format";
+import { documentPage, visiblePoll } from "../../lib/visible-poll";
 import {
   botStateText, botStatus, botSummary, botTone, credentialsChanged, credentialsOf, credentialsUpdate, DEFAULT_FEATURES, DEFAULT_NUDGE_AFTER, livePairing, nudgeChoices, nudgeLabel, pairBot, pairingLeft,
   featureEdit, testBot, unpairBot, updateBot, type BotCredentials, type BotFeatures, type FeishuBotStatus,
@@ -26,6 +27,8 @@ const FEATURES: { key: keyof BotFeatures; icon: IconName; title: string; detail:
   { key: "sync", icon: "loop", title: t("settings-feishubot.feature_sync_title"), detail: t("settings-feishubot.feature_sync_detail") },
   { key: "reports", icon: "list", title: t("settings-feishubot.feature_reports_title"), detail: t("settings-feishubot.feature_reports_detail") },
   { key: "board", icon: "pin", title: t("settings-feishubot.feature_board_title"), detail: t("settings-feishubot.feature_board_detail") },
+  { key: "workbench", icon: "home", title: t("settings-feishubot.feature_workbench_title"), detail: t("settings-feishubot.feature_workbench_detail") },
+  { key: "only_conclusions", icon: "check", title: t("settings-feishubot.feature_only_conclusions_title"), detail: t("settings-feishubot.feature_only_conclusions_detail") },
   { key: "agents", icon: "agent", title: t("settings-feishubot.feature_agents_title"), detail: t("settings-feishubot.feature_agents_detail") },
 ];
 
@@ -105,12 +108,15 @@ function FeishuBotDialog({ bot, onClose }: { bot: ReturnType<typeof useBot>; onC
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [status?.app_id, status?.domain]);
 
-  // Waiting for the code: tick the countdown and look again every 3 s until someone uses it.
+  // Waiting for the code: tick the countdown and look again every 3 s until someone uses it, while the tab is shown, and
+  // once right away on coming back. The status that carried the code is fresh, so visiblePoll's immediate first read is skipped.
   useEffect(() => {
     if (!pairing || status?.owner) return;
     const tick = setInterval(() => setNow(Date.now()), 1000);
-    const poll = setInterval(() => void botStatus().then((s) => adopt(s), () => {}), 3000);
-    return () => (clearInterval(tick), clearInterval(poll));
+    let started = false;
+    const stop = visiblePoll(() => { if (started) void botStatus().then((s) => adopt(s), () => {}); }, 3000, documentPage);
+    started = true;
+    return () => (clearInterval(tick), stop());
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pairing?.code, status?.owner]);
 
@@ -248,7 +254,8 @@ function FeishuBotDialog({ bot, onClose }: { bot: ReturnType<typeof useBot>; onC
 
           <Group title={t("settings-feishubot.features")} footer={t("settings-feishubot.features_footer")}>
             {FEATURES.map((f) => {
-              const off = f.key === "all_cards" && !features.cards;
+              // "All cards" needs "cards"; "only conclusions" needs task progress, without which the hub sends no conclusions either.
+              const off = (f.key === "all_cards" && !features.cards) || (f.key === "only_conclusions" && features.reports === false);
               return (
                 <div key={f.key} className={cx("flex items-start gap-3 px-4 py-2.5", off && "opacity-50")}>
                   <Icon name={f.icon} size={15} className="mt-0.5 shrink-0 text-accent" />

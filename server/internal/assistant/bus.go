@@ -210,14 +210,14 @@ func (b *BusHub) onHello(res json.RawMessage) error {
 			if b.client.Wait(ctx) == nil {
 				d.BusUp()
 				if svc != nil {
-					svc.FleetUp(ctx) // the interactions, the lists and the fleet (fleet.go)
+					svc.FleetUp(ctx) // the interactions, the lists and the fleet (fleet_events.go)
 				}
 			}
 		}()
 	}
 	reported.seal()
 	if svc != nil && h.Mutes != nil {
-		svc.setMutes(*h.Mutes) // the hub's, before anything is pushed (fleet.go)
+		svc.setMutes(*h.Mutes) // the hub's, before anything is pushed (fleet_mutes.go)
 	}
 	if svc != nil {
 		svc.workReconnected() // turns that ended while it was away are looked for at the next tick (agents_work.go)
@@ -513,6 +513,12 @@ func (b *BusHub) request(ctx context.Context, method string, params json.RawMess
 	case assistantwire.MethodAgentStartParams, assistantwire.MethodAgentResumeParams, assistantwire.MethodAgentTabName:
 		return b.agentRequest(ctx, s, method, decode) // agents_bus.go
 	// The channels' (channels.go, feishu.go).
+	case assistantwire.MethodChannelUnbound:
+		var p ChannelUnbound
+		if err := decode(&p); err != nil {
+			return nil, err
+		}
+		return map[string]any{}, s.ChannelUnbound(ctx, p)
 	case assistantwire.MethodChannelReceive:
 		var p ChannelReceive
 		if err := decode(&p); err != nil {
@@ -543,6 +549,9 @@ func (b *BusHub) request(ctx context.Context, method string, params json.RawMess
 		return s.askHub(ctx, p.Interaction)
 	}
 	if out, ok, err := s.kbRequest(ctx, method, params); ok { // the knowledge base's (kb_bus.go)
+		return out, err
+	}
+	if out, ok, err := s.conversationsRequest(ctx, method, params); ok { // extensions' assistant.read (conversations_rpc.go)
 		return out, err
 	}
 	if out, ok, err := inboxRequest(ctx, s, method, decode); ok { // the inbox's (inbox_bus.go)
@@ -688,6 +697,12 @@ func (b *BusHub) event(ctx context.Context, ev busEvent) error {
 			return err
 		}
 		s.SessionsChanged(ctx, p)
+	case assistantwire.EventStartEnded:
+		var p StartEnded
+		if err := decode(&p); err != nil {
+			return err
+		}
+		go s.StartEnded(context.WithoutCancel(ctx), p)
 	case assistantwire.EventInteractionResolved:
 		var p InteractionResolved
 		if err := decode(&p); err != nil {
@@ -724,6 +739,12 @@ func (b *BusHub) event(ctx context.Context, ev busEvent) error {
 			return err
 		}
 		s.SessionSeen(ctx, p)
+	case assistantwire.EventModelUsed: // a typed model id ran (models_custom.go); may ask the node for its list
+		var p assistantwire.ModelUsed
+		if err := decode(&p); err != nil {
+			return err
+		}
+		go s.ModelUsed(context.WithoutCancel(ctx), p)
 	case assistantwire.EventTodoSpaceRenamed:
 		var p TodoSpaceRenamed
 		if err := decode(&p); err != nil {
@@ -775,7 +796,7 @@ func (b *BusHub) event(ctx context.Context, ev busEvent) error {
 		s.ChannelNoted(ctx, p)
 	case "managers": // the bus's roster: nothing the assistant needs
 	default:
-		if s.FleetEvent(ctx, ev.name, ev.params) { // the hub's fleet.* (fleet.go)
+		if s.FleetEvent(ctx, ev.name, ev.params) { // the hub's fleet.* (fleet_events.go)
 			return nil
 		}
 		if ok, err := s.kbEvent(ctx, ev.name, ev.params); ok { // the knowledge base's (kb_bus.go)

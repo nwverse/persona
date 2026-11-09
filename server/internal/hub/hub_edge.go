@@ -55,6 +55,7 @@ func edgeOff(b update.Build) string {
 
 // Serve is `personad hub run`: the hub behind its edge, or by itself where the edge does not run.
 func Serve(ctx context.Context, b update.Build) error {
+	claimInherited() // before anything can start a process (listen.go)
 	logger := log.New(os.Stderr, "", log.LstdFlags)
 	if why := edgeOff(b); why != "" {
 		if identity.Getenv(EnvEdge) != "" || runtime.GOOS == "linux" || runtime.GOOS == "darwin" {
@@ -104,7 +105,8 @@ func Serve(ctx context.Context, b update.Build) error {
 
 // restoreUpdate is the edge's way back from an update whose new slot failed (hubedge.Options.RestoreUpdate): the
 // pending marker's binaries go back, the rollback is written down for the old version to record (history, bad build:
-// selfupdate.go recordRolledBack), and the binary at the hub's path runs again.
+// selfupdate.go recordRolledBack), and the program the hub ran as runs again (Pending.RunPath: persona-hub for a hub
+// that ran as persona-hub; an edge older than Pending.Run goes back to personad, which serves the same hub).
 func restoreUpdate(build int64, cause error) (string, bool) {
 	return restoreUpdateIn(update.Dir(), build, cause)
 }
@@ -127,12 +129,13 @@ func restoreUpdateIn(dir string, build int64, cause error) (string, bool) {
 		log.Printf("hub edge: save rollback marker: %v", err)
 	}
 	_ = os.Remove(update.PendingPath(dir))
-	return p.Target, true
+	return p.RunPath(), true
 }
 
 // RunSlot is `personad hub slot`: the hub as the edge started it. A standby checks itself (its config, the database)
 // and waits; once activated, or started active, it serves on the edge's sockets until the edge releases it.
 func RunSlot(ctx context.Context, b update.Build) error {
+	claimInherited() // before anything can start a process (listen.go); the edge's pipes stay readable here
 	slot, err := hubedge.FromEnv()
 	if err != nil {
 		return err

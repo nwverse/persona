@@ -12,6 +12,7 @@ import (
 	"github.com/nwverse/persona/server/internal/apierr"
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/db"
+	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/identity"
 	"github.com/nwverse/persona/server/internal/proto"
 )
@@ -103,7 +104,9 @@ func (s *Service) fleetHandler(next http.Handler) http.Handler {
 func (s *Service) writeEnded(ctx context.Context, w http.ResponseWriter, id string, r proto.Resolution, err error) {
 	var status string
 	var kept *proto.Resolution
-	if st := s.fleetStore(); st != nil {
+	if just := (*answeredJustNow)(nil); errors.As(err, &just) {
+		status, kept = just.status, &just.kept // answered a moment ago: the history may not have it yet (#1230)
+	} else if st := s.fleetStore(); st != nil {
 		ctx, cancel := context.WithTimeout(ctx, historyTimeout)
 		status, kept, _ = st.InteractionOutcome(ctx, id)
 		cancel()
@@ -247,6 +250,14 @@ func (s *Service) channelResolve(ctx context.Context, ch, id string, r proto.Res
 	if !ok {
 		return map[string]any{"ok": false, "status": s.interactionOutcome(ctx, id)}, nil
 	}
+	if len(ix.Fields) > 0 {
+		// What the card asks for (a password) is typed in the app, never in a channel: there it can only be declined.
+		// Refused before the press is used up, so the card stays as it was.
+		if r.Allow == nil || *r.Allow {
+			return nil, i18n.Err("assistant-channels_plugin.fill_in_app")
+		}
+		r.Values = nil
+	}
 	if err := s.appCall(ctx, AppInteractions, assistantwire.InteractionsOwnerAction, map[string]any{"interaction_id": id,
 		"action": action, "channel": ch, "kind": ix.Kind}, nil); err != nil {
 		return nil, err
@@ -254,7 +265,7 @@ func (s *Service) channelResolve(ctx context.Context, ch, id string, r proto.Res
 	r.AnsweredBy, r.Remembered = "", false
 	if err := s.resolve(id, r); err != nil {
 		if errors.Is(err, errNotPending) {
-			return map[string]any{"ok": false, "status": s.interactionOutcome(ctx, id)}, nil
+			return map[string]any{"ok": false, "status": s.endedStatus(ctx, id, err)}, nil
 		}
 		return nil, err
 	}

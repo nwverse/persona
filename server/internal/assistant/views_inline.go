@@ -4,13 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"regexp"
 	"sort"
 	"strings"
 	"time"
 
 	"github.com/nwverse/persona/sdk/go/wire"
 	"github.com/nwverse/persona/server/internal/db"
+	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
@@ -120,7 +120,7 @@ func (s *Service) conversationViewBlockKeys(ctx context.Context, conversation st
 }
 
 // viewName is a page name or action id that can be said back to the model as it is.
-var viewName = regexp.MustCompile(`^[A-Za-z0-9_\-]{1,40}$`)
+var viewName = lazyre.New(`^[A-Za-z0-9_\-]{1,40}$`)
 
 // scrubViewNames replaces the page names and action ids of a failed view (raw) in a check's message with "…", unless
 // they are short plain names: the checks write them unquoted ("pages.<name>: …", "action.<id>: …"), and a name can

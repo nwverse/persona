@@ -1,0 +1,13 @@
+{
+  "manifest_version": 1,
+  "id": "example-usage",
+  "name": "Example Usage",
+  "version": "1.0.0",
+  "engines": {"persona": ">=202611050000", "extension_protocol": 1},
+  "runtime": {"command": {"linux-amd64": "bin/example-usage-linux-amd64"}},
+  "contributes": {
+    "ui": [
+      {"id": "usage", "title": "Usage", "placement": "nav_page", "icon": "chart", "subtitle": "Today"}
+    ]
+  }
+}

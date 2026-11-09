@@ -155,15 +155,17 @@ func (s *Service) boardRefresh() {
 	}
 	// The status first: it starts the chat afresh when the bot was paired again, and the board of the old owner goes
 	// with it.
+	// The workbench (feishu_workbench_pin.go) is the board drawn as a home card: either switch keeps it current.
 	f, ready := s.feishuFeatures(ctx)
+	on := ready && (f.Board || s.workbenchOn(f, ready))
 	p.mu.Lock()
-	if ready && f.Board {
+	if on {
 		p.offAt = time.Time{}
 	} else {
 		p.offAt = p.clock()
 	}
 	p.mu.Unlock()
-	if !ready || !f.Board {
+	if !on {
 		return
 	}
 	ref := s.boardRef(ctx)
@@ -208,7 +210,7 @@ func (s *Service) standingBoardCommand(ctx context.Context) bool {
 // that would say what the board already says is not made (the settle-time refresh; /tasks always writes). p.run is held.
 func (s *Service) boardPut(ctx context.Context, ref *botBoardRef, quiet bool) (edited bool, err error) {
 	p := &s.standing
-	card, fallback, rows := s.boardCard(ctx)
+	card, fallback, rows := s.standingCard(ctx)
 	if ref != nil && p.clock().Sub(ref.At) < boardEditFor {
 		if quiet && p.written.id == ref.MessageID && p.written.rows == rows {
 			return false, nil
@@ -226,6 +228,9 @@ func (s *Service) boardPut(ctx context.Context, ref *botBoardRef, quiet bool) (e
 	mid, err := s.botPostKeyed(ctx, "", card, fallback, s.boardKey(ctx, ref))
 	if err != nil {
 		return false, err
+	}
+	if s.workbench.on.Load() {
+		s.workbenchPin(ctx, mid) // the workbench that replaces one is pinned in its place
 	}
 	s.setBoardRef(ctx, &botBoardRef{MessageID: mid, At: p.clock()})
 	p.written.id, p.written.rows = mid, rows
@@ -281,9 +286,12 @@ func (s *Service) boardRows(ctx context.Context, l i18n.Lang, web string, now ti
 			summary: boardSummary(l, ix), from: s.boardFrom(l, ix.MachineID, ix.SessionID, ix.SessionTitle), link: link, nudged: s.cardNudged(ix.ID)})
 	}
 	for _, a := range s.awaitingAcceptance(ctx) {
-		rows = append(rows, boardRow{waited: boardWaited(now, a.since), id: a.todo,
-			summary: i18n.T(l, "assistant-feishu_cards.board_verify", i18n.Args{"title": clip(oneLine(a.title), 40)}),
-			from:    s.boardFrom(l, a.machine, a.session, ""), link: todoLink(web, a.todo), asked: a.since})
+		summary := i18n.T(l, "assistant-feishu_cards.board_verify", i18n.Args{"title": clip(oneLine(a.title), 40)})
+		if a.ask.Conclusion { // the task's conclusion, as its card says it
+			summary = i18n.T(l, "assistant-feishu_cards.board_verdict", i18n.Args{"title": clip(oneLine(a.title), 40), "verdict": verdictText(l, &a.ask)})
+		}
+		rows = append(rows, boardRow{waited: boardWaited(now, a.since), id: a.todo, summary: summary,
+			from: s.boardFrom(l, a.machine, a.session, ""), link: todoLink(web, a.todo), asked: a.since})
 	}
 	sort.SliceStable(rows, func(i, j int) bool {
 		if rows[i].blocking != rows[j].blocking {
@@ -355,6 +363,7 @@ func boardWait(l i18n.Lang, d time.Duration) string {
 type awaitingAccept struct {
 	todo, title, machine, session string
 	since                         time.Time
+	ask                           acceptAsk // its verdict for a conclusion's row (conclusion.go)
 }
 
 // awaitingAcceptance are the to-dos whose "Please verify" ask is up (with a card or without, NoCard) and not passed: the ones that can still be passed
@@ -377,10 +386,10 @@ func (s *Service) awaitingAcceptance(ctx context.Context) []awaitingAccept {
 	var out []awaitingAccept
 	for id, a := range asks {
 		t, ok := s.todoNow(id)
-		if !ok || acceptAskEnded(t) || acceptAskStale(&a, t) {
+		if !ok || acceptAskEnded(&a, t) || acceptAskStale(&a, t) {
 			continue
 		}
-		out = append(out, awaitingAccept{todo: id, title: t.Title, machine: a.MachineID, session: a.SessionID, since: a.AskedAt})
+		out = append(out, awaitingAccept{todo: id, title: t.Title, machine: a.MachineID, session: a.SessionID, since: a.AskedAt, ask: a})
 	}
 	slices.SortFunc(out, func(x, y awaitingAccept) int {
 		if c := x.since.Compare(y.since); c != 0 {

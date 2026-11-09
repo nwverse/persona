@@ -2,18 +2,20 @@ package extension
 
 import (
 	"context"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"io"
+	"net/url"
 	"os"
 	"os/exec"
 	"path"
 	"path/filepath"
-	"regexp"
 	"strings"
 	"time"
 
 	"github.com/nwverse/persona/server/internal/i18n"
+	"github.com/nwverse/persona/server/internal/lazyre"
 )
 
 // A git repository as a market (docs/extensions/extensions.md "Extension market"): the hub keeps a shallow clone in its data directory and
@@ -23,8 +25,8 @@ import (
 const gitFor = 3 * time.Minute
 
 var (
-	scpLike = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]*@[A-Za-z0-9][A-Za-z0-9.-]*:[A-Za-z0-9._~][A-Za-z0-9._/~-]*$`)
-	gitRef  = regexp.MustCompile(`^[A-Za-z0-9._/-]{1,200}$`)
+	scpLike = lazyre.New(`^[A-Za-z0-9][A-Za-z0-9._-]*@[A-Za-z0-9][A-Za-z0-9.-]*:[A-Za-z0-9._~][A-Za-z0-9._/~-]*$`)
+	gitRef  = lazyre.New(`^[A-Za-z0-9._/-]{1,200}$`)
 )
 
 // parseGit reads git:<url>[#ref], or a bare git@host:path / ssh:// URL.
@@ -64,6 +66,16 @@ func (m *Market) git(ctx context.Context, dir string, args ...string) error {
 	cmd := exec.CommandContext(ctx, "git", full...)
 	cmd.Dir = dir
 	cmd.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0", "GIT_ASKPASS=/bin/false")
+	if m.Token != "" {
+		u, err := url.Parse(m.Spec.URL)
+		if err != nil || u.Scheme != "https" || u.User != nil || u.RawQuery != "" || u.Fragment != "" || strings.ContainsAny(m.Token, "\r\n") {
+			return i18n.Err("extension-market_security.git_token")
+		}
+		// Environment config avoids argv, clone URLs, and persisted .git/config secrets.
+		header := "Authorization: Basic " + base64.StdEncoding.EncodeToString([]byte("x-access-token:"+m.Token))
+		cmd.Env = append(cmd.Env, "GIT_CONFIG_COUNT=3", "GIT_CONFIG_KEY_0=http."+m.Spec.URL+".extraHeader", "GIT_CONFIG_VALUE_0="+header,
+			"GIT_CONFIG_KEY_1=http.followRedirects", "GIT_CONFIG_VALUE_1=false", "GIT_CONFIG_KEY_2=credential.helper", "GIT_CONFIG_VALUE_2=")
+	}
 	if os.Getenv("GIT_SSH_COMMAND") == "" {
 		cmd.Env = append(cmd.Env, "GIT_SSH_COMMAND=ssh -o BatchMode=yes -o ConnectTimeout=20")
 	}
@@ -73,6 +85,9 @@ func (m *Market) git(ctx context.Context, dir string, args ...string) error {
 	}
 	if err != nil {
 		msg := strings.TrimSpace(string(out))
+		if m.Token != "" {
+			msg = i18n.T(i18n.Default, "extension-market_security.request")
+		}
 		if ctx.Err() != nil {
 			msg = i18n.T(i18n.Default, "extension-status.git_timeout")
 		}
@@ -109,7 +124,7 @@ func (m *Market) syncGit(ctx context.Context) error {
 	if ref == "" {
 		ref = "HEAD"
 	}
-	if err := m.git(ctx, dir, "fetch", "--depth", "1", "--no-tags", "origin", ref); err != nil {
+	if err := m.git(ctx, dir, "fetch", "--depth", "1", "--no-tags", "--", m.Spec.URL, ref); err != nil {
 		return err
 	}
 	return m.git(ctx, dir, "reset", "--hard", "--quiet", "FETCH_HEAD")

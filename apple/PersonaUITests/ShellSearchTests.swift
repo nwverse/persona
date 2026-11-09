@@ -51,7 +51,7 @@ final class ShellSearchTests: XCTestCase {
 
     @MainActor func testSearchTakesTheTopBarAndGivesItBack() {
         app = XCUIApplication()
-        app.launchArguments = ["-demo.on", "YES", "-ui.oldLayout", "NO", "-probes", "YES", "-app.tab", "chats", "-dev.openChat", ""]
+        app.launchArguments = ["-demo.on", "YES", "-probes", "YES", "-app.tab", "chats", "-dev.openChat", ""]
         app.launchPinned()
         // Agents (a stored tab from another test, Settings, would open its sheet over the shell).
         see(app.buttons["agents-new"].firstMatch, "新建会话 on Agents", timeout: 15)
@@ -88,7 +88,7 @@ final class ShellSearchTests: XCTestCase {
     @MainActor func testExpandedSearchClearsTheTopBarAtEveryTextSize() {
         for size in ["small", "standard", "large"] {
             app = XCUIApplication()
-            app.launchArguments = ["-demo.on", "YES", "-ui.oldLayout", "NO", "-probes", "YES", "-app.tab", "chats",
+            app.launchArguments = ["-demo.on", "YES", "-probes", "YES", "-app.tab", "chats",
                                    "-dev.openChat", "", "-ui.textSize", size]
             app.launchPinned()
             see(app.buttons["agents-new"].firstMatch, "Agents 顶栏", timeout: 15)
@@ -105,7 +105,7 @@ final class ShellSearchTests: XCTestCase {
     /// A result pushing a chat does not keep the list's top spacing; coming back restores the top bar, the search text and a layout without overlap.
     @MainActor func testSearchResultReturnsToAnUncoveredSearchField() {
         app = XCUIApplication()
-        app.launchArguments = ["-demo.on", "YES", "-ui.oldLayout", "NO", "-probes", "YES", "-app.tab", "chats", "-dev.openChat", ""]
+        app.launchArguments = ["-demo.on", "YES", "-probes", "YES", "-app.tab", "chats", "-dev.openChat", ""]
         app.launchPinned()
         see(app.buttons["agents-new"].firstMatch, "Agents 顶栏", timeout: 15)
         let field = app.revealAgentsSearch()
@@ -131,7 +131,7 @@ final class ShellSearchTests: XCTestCase {
     /// back must take the taps).
     @MainActor func testSwitchAfterASearchIsCancelled() {
         app = XCUIApplication()
-        app.launchArguments = ["-demo.on", "YES", "-ui.oldLayout", "NO", "-probes", "YES", "-tab", "assistant", "-dev.openChat", ""]
+        app.launchArguments = ["-demo.on", "YES", "-probes", "YES", "-tab", "assistant", "-dev.openChat", ""]
         app.launchPinned()
         let finger = ShellFinger(app)
         finger.switchTo(agents: true, "Agents tapped")
@@ -150,7 +150,7 @@ final class ShellSearchTests: XCTestCase {
     @MainActor func testSearchOnPagesPushedOnTheAssistant() {
         for (page, title) in [("inbox", "收件箱"), ("knowledge", "知识库")] {
             app = XCUIApplication()
-            app.launchArguments = ["-demo.on", "YES", "-ui.oldLayout", "NO", "-probes", "YES", "-newAssistant", "YES", "-openShellPage", page]
+            app.launchArguments = ["-demo.on", "YES", "-probes", "YES", "-newAssistant", "YES", "-openShellPage", page]
             app.launchPinned()
             see(app.navigationBars[title], "\(title) pushed on 助手", timeout: 15)
             let field = see(app.searchFields.firstMatch, "\(title)'s search")

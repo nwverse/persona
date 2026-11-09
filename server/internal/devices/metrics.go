@@ -73,6 +73,40 @@ func (b *metricsBook) now(machine string, at time.Time) *proto.MetricSample {
 	return &s
 }
 
+// MachineResources returns the retained machine snapshot and latest sample, including stale samples so callers can report their age.
+// A nil result means the machine is no longer managed here. It does not query the node or the metrics history.
+func (d *Devices) MachineResources(id string) (*proto.Machine, *proto.MetricSample, *bool) {
+	m := d.machineByID(id)
+	if m == nil {
+		return nil, nil, nil
+	}
+	machine := m.snapshot()
+	m.mu.Lock()
+	info, online := m.info, m.online
+	m.mu.Unlock()
+	var outdated *bool
+	if online {
+		target := d.hubVersion()
+		if m.cfg.Kind != "local" {
+			target = d.nodeTarget(info)
+		}
+		if machine.NodeIncompatible == "node_protocol_old" {
+			v := true
+			outdated = &v
+		} else if machine.NodeIncompatible == "" && target != "" && target != "dev" && target == info.Version {
+			v := false
+			outdated = &v
+		}
+	}
+	d.metrics.mu.Lock()
+	sample, ok := d.metrics.latest[id]
+	d.metrics.mu.Unlock()
+	if !ok {
+		return &machine, nil, outdated
+	}
+	return &machine, &sample, outdated
+}
+
 // forget drops a machine's latest sample (it is no longer one of the machines). What it is (systems) stays: it is
 // kept in Postgres as well and is only shown for a machine the apps list.
 func (b *metricsBook) forget(machine string) {
