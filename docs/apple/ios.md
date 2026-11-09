@@ -1500,6 +1500,9 @@ group's. With one installed manager, or a hub without a roster, nothing below sh
 - **Quiet hours**: Settings › Notifications has this device's quiet hours (a switch, then From / Until), only when the prefs answer
   has `quiet`; each change sends `quiet` alone with this device's time zone (`APIClient.setQuietHours`), as the web does. Hours set
   in another zone: the section's footer names that zone instead of this device's (`QuietHours.elsewhere`) until they are changed here.
+  The footer also says a chat bot's nudges about unanswered cards wait while any device is in its window (the hub's `quietNow`).
+  The Mac's own banners follow the window too (`QuietHours.active`, read like the hub's `activeAt`): no "agent finished", and
+  Needs You without a sound and passive.
 - **Computers of an offline manager**: `Machine.manager` decodes; an offline computer whose manager the roster has offline
   (`ManagerRoster.offlineManager`) says so on its card and has no Reconnect on its page.
 - **Extension pushes**: `extension_operation`, `extension_auth` and `plugin_ui` badges carry their event's `manager`
