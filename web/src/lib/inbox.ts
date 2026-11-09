@@ -1188,9 +1188,10 @@ export async function muteItem(item: InboxItem, o: InboxMuteOption): Promise<voi
 }
 
 /** What the user muted, in every source (GET /api/v1/inbox/mutes), newest first. `manager`: whose mutes (each manager
- *  keeps its own; stamped on each); none: the default's. */
+ *  keeps its own; named even when it is the default, which may move before an Unmute; stamped on each); none: the
+ *  default's, nothing named. */
 export async function listInboxMutes(manager?: string): Promise<InboxMute[]> {
-  const r = await api<{ mutes?: InboxMute[] }>("/inbox/mutes", { headers: itemHeaders(manager) });
+  const r = await api<{ mutes?: InboxMute[] }>("/inbox/mutes", { headers: stampedHeaders(manager) });
   return sortMutes((r.mutes ?? []).map((m) => (manager ? { ...m, manager } : m)));
 }
 
@@ -1262,9 +1263,10 @@ function policyReaches(source: string, o: InboxMuteOption, it: InboxItem, manage
   return muteCovers(source, o, it, manager) && Boolean(it.tier) && statusOf(it) !== "working";
 }
 
-/** The policies, newest first. `manager`: whose rules (stamped on each); none: the default's. */
+/** The policies, newest first. `manager`: whose rules (named even when it is the default, which may move before a
+ *  Remove; stamped on each); none: the default's, nothing named. */
 export async function listInboxPolicies(manager?: string): Promise<InboxPolicy[]> {
-  const r = await api<{ policies?: InboxPolicy[] }>("/inbox/policies", { headers: itemHeaders(manager) });
+  const r = await api<{ policies?: InboxPolicy[] }>("/inbox/policies", { headers: stampedHeaders(manager) });
   const ts = (p: InboxPolicy) => (p.created_at ? Date.parse(p.created_at) || 0 : 0);
   return [...(r.policies ?? [])].map((p) => (manager ? { ...p, manager } : p)).sort((a, b) => ts(b) - ts(a));
 }
@@ -1273,9 +1275,9 @@ export async function listInboxPolicies(manager?: string): Promise<InboxPolicy[]
  * Set the policy of what an item has under an option's tag (POST /api/v1/inbox/policies), or change it (PATCH, with
  * `id`): the open items it covers take its tier at once ("Your rule: <name>"); the hub does the same and the next
  * push confirms it; a failure puts them back. Setting neither part removes the policy. Resolves to the policy, or null
- * when the hub refused.
+ * when the hub refused. `stamped`: name `manager` even when it is the default (a rule a list read from each manager).
  */
-export async function saveInboxPolicy(target: { item?: InboxItem; option: InboxMuteOption; source: string; id?: string; manager?: string }, tier: PolicyTier, twin: PolicyTwin): Promise<InboxPolicy | null> {
+export async function saveInboxPolicy(target: { item?: InboxItem; option: InboxMuteOption; source: string; id?: string; manager?: string; stamped?: boolean }, tier: PolicyTier, twin: PolicyTwin): Promise<InboxPolicy | null> {
   const { option: o, source } = target;
   // the rule is the manager's whose item (or rule) it is: it reaches that manager's items only
   const owner = { manager: target.manager ?? target.item?.manager };
@@ -1283,7 +1285,7 @@ export async function saveInboxPolicy(target: { item?: InboxItem; option: InboxM
   const reason = t("lib-inbox.policy_reason", { name: o.name });
   const statusFor = (it: InboxItem) => (it.status && it.status !== "working" ? tier || it.status : it.status);
   set({ items: state.items.map((it) => (before.has(itemKey(it)) && it.tier !== tier ? { ...it, tier, status: statusFor(it), reason, urgent: tier === "action" ? it.urgent : false } : it)) });
-  const headers = itemHeaders(owner.manager);
+  const headers = target.stamped ? stampedHeaders(owner.manager) : itemHeaders(owner.manager);
   try {
     const r = target.id
       ? await api<{ policy: InboxPolicy }>(`/inbox/policies/${enc(target.id)}`, { method: "PATCH", json: { tier, twin }, headers })
