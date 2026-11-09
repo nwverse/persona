@@ -259,6 +259,10 @@ struct InboxHandOffSheet: View {
     let item: InboxItem
     @State private var instruction = ""
     @State private var handOff: InboxHandOffModel
+    /// Where this item's source went last time (#2121): preselected and marked Last time.
+    @State private var lastTarget: InboxHandOffModel.Target?
+    /// That was an Agent that has ended: the main chat stands in, and the section says so.
+    @State private var lastGone = false
 
     init(item: InboxItem) {
         self.item = item
@@ -267,10 +271,24 @@ struct InboxHandOffSheet: View {
 
     private static let presets = InboxAsk.allCases.map(\.ask)
 
+    /// The latest Agents, and the one this source went to last time even when it is older than those.
     private var agents: [Session] {
-        model.allSessions.filter { !$0.assistant }
+        let all = model.allSessions.filter { !$0.assistant }
             .sorted { ($0.updatedAt ?? .distantPast) > ($1.updatedAt ?? .distantPast) }
-            .prefix(8).map { $0 }
+        var shown = Array(all.prefix(8))
+        if case .agent(let key)? = lastTarget, !shown.contains(where: { $0.key == key }), let s = all.first(where: { $0.key == key }) {
+            shown.insert(s, at: 0)
+        }
+        return shown
+    }
+
+    private var memory: InboxHandOffMemory { InboxHandOffMemory(group: model.hubGroup) }
+
+    /// "Last time" after a target this source went to last time.
+    @ViewBuilder private func lastTimeMark(_ target: InboxHandOffModel.Target) -> some View {
+        if lastTarget == target {
+            Chip(text: String(localized: "Last time [Inbox Hand-Off]"), look: .tint(Theme.accent), compact: true)
+        }
     }
 
     var body: some View {
@@ -297,25 +315,49 @@ struct InboxHandOffSheet: View {
                         }
                     }
                 }
-                Section("Hand To") {
+                Section {
                     Picker("Hand To", selection: $handOff.target) {
-                        Label("Persona (Main Chat)", systemImage: Theme.Icon.persona).lineLimit(1).tag(InboxHandOffModel.Target.main)
-                        Label("Persona (New Chat)", systemImage: Theme.Icon.ai).lineLimit(1).tag(InboxHandOffModel.Target.newChat)
+                        HStack(spacing: Theme.Space.s) {
+                            Label("Persona (Main Chat)", systemImage: Theme.Icon.persona).lineLimit(1)
+                            lastTimeMark(.main)
+                        }
+                        .tag(InboxHandOffModel.Target.main)
+                        HStack(spacing: Theme.Space.s) {
+                            Label("Persona (New Chat)", systemImage: Theme.Icon.ai).lineLimit(1)
+                            lastTimeMark(.newChat)
+                        }
+                        .tag(InboxHandOffModel.Target.newChat)
                         ForEach(agents) { s in
-                            VStack(alignment: .leading, spacing: Theme.Space.xxs) {
-                                Text(s.displayTitle).lineLimit(1)
-                                Text(model.machine(s.machineRef)?.title ?? s.machineID).font(Theme.Font.label).foregroundStyle(.secondary).lineLimit(1)
+                            HStack(spacing: Theme.Space.s) {
+                                VStack(alignment: .leading, spacing: Theme.Space.xxs) {
+                                    Text(s.displayTitle).lineLimit(1)
+                                    Text(model.machine(s.machineRef)?.title ?? s.machineID).font(Theme.Font.label).foregroundStyle(.secondary).lineLimit(1)
+                                }
+                                lastTimeMark(.agent(s.key))
                             }
                             .tag(InboxHandOffModel.Target.agent(s.key))
                         }
                     }
                     .pickerStyle(.inline)
                     .labelsHidden()
+                } header: {
+                    Text("Hand To")
+                } footer: {
+                    if lastGone {
+                        Text("The Agent this went to last time has ended, so it goes to Main Chat").foregroundStyle(Theme.cautionText)
+                            .accessibilityIdentifier("handoff-last-gone")
+                    }
                 }
                 Section {
                     Toggle("Also Mark as Done", isOn: Binding(get: { handOff.markDone }, set: { handOff.setMarkDone($0) }))
                 }
                 if let error = handOff.error { Text(error).foregroundStyle(Theme.danger).font(Theme.Font.caption) }
+            }
+            .onAppear {
+                guard let r = memory.resolved(for: item, isListed: { model.session($0) != nil }) else { return }
+                handOff.target = r.target
+                lastTarget = r.lastTime ? r.target : nil
+                lastGone = r.gone
             }
             .navigationTitle("Hand to AI")
             .navigationBarTitleDisplayMode(.inline)
@@ -334,6 +376,7 @@ struct InboxHandOffSheet: View {
     private func send() async {
         let ask = instruction.trimmingCharacters(in: .whitespacesAndNewlines)
         guard await handOff.send(ask: ask.isEmpty ? Self.presets[0] : ask) else { return }
+        if let key = InboxHandOffMemory.key(item) { memory.remember(key, target: handOff.target) }
         Haptics.success()
         handOff.open()
         dismiss()

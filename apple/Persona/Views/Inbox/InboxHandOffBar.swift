@@ -47,6 +47,10 @@ struct InboxHandOffBar: View {
     @State private var typed: String?
     /// The send just went: "Sent to …" with View, for a moment.
     @State private var justSent = false
+    /// The target is the one this item's source went to last time (#2121): marked Last time until another is chosen.
+    @State private var lastTime = false
+    /// The Agent this source went to last time is gone: the main chat stands in, and the toast line says so once.
+    @State private var lastGone = false
     @FocusState private var focused: Bool
 
     init(item: InboxItem, draft: (() -> Void)?, draftTitle: String? = nil) {
@@ -78,6 +82,13 @@ struct InboxHandOffBar: View {
             } else {
                 chips.transition(.opacity)
             }
+            if lastGone {
+                Label(String(localized: "The Agent this went to last time has ended, so it goes to Main Chat"), systemImage: Theme.Icon.info)
+                    .font(Theme.Font.caption)
+                    .foregroundStyle(Theme.cautionText)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .accessibilityIdentifier("handoff-last-gone")
+            }
             bar
         }
         .padding(.horizontal, Theme.Space.page)
@@ -87,12 +98,14 @@ struct InboxHandOffBar: View {
         // What scrolls under it stays under it: the page's text never runs through the chips.
         .background(.bar, ignoresSafeAreaEdges: .bottom)
         .animation(Theme.Motion.standard, value: toastKey)
-        .onAppear { handOff.target = remembered }
-        // However it went (the Undo window ran out, View, Retry): it says so, with View.
+        .onAppear(perform: preselect)
+        // However it went (the Undo window ran out, View, Retry): it says so, with View, and this source remembers it.
         .onChange(of: handOff.sending) { was, now in
-            guard was, !now, handOff.sent != nil else { return }
+            guard was, !now, let sent = handOff.sent else { return }
             Haptics.success()
             justSent = true
+            lastGone = false
+            if let key = InboxHandOffMemory.key(item) { memory.remember(key, target: sent.target) }
         }
         .task(id: justSent) {
             guard justSent else { return }
@@ -160,6 +173,10 @@ struct InboxHandOffBar: View {
             HStack(spacing: Theme.Space.xs) {
                 ThemedIcon(symbol(handOff.target)).font(Theme.Font.label)
                 Text(name(handOff.target)).lineLimit(1)
+                if lastTime {
+                    Chip(text: String(localized: "Last time [Inbox Hand-Off]"), look: .tint(Theme.accent), compact: true)
+                        .accessibilityHidden(true)
+                }
                 ThemedIcon(Theme.Icon.choices).font(Theme.Font.label).foregroundStyle(.secondary)
             }
             .font(Theme.Font.secondaryStrong)
@@ -172,7 +189,7 @@ struct InboxHandOffBar: View {
         }
         .buttonStyle(.plain)
         .accessibilityLabel(String(localized: "Hand To"))
-        .accessibilityValue(name(handOff.target))
+        .accessibilityValue(lastTime ? String(localized: "\(name(handOff.target)), last time") : name(handOff.target))
         .accessibilityIdentifier("handoff-target")
     }
 
@@ -194,9 +211,24 @@ struct InboxHandOffBar: View {
         return t
     }
 
+    private var memory: InboxHandOffMemory { InboxHandOffMemory(group: model.hubGroup) }
+
+    /// This source's last target when there is one (#2121), else the bar's last target.
+    private func preselect() {
+        if let r = memory.resolved(for: item, isListed: { model.session($0) != nil }) {
+            handOff.target = r.target
+            lastTime = r.lastTime
+            lastGone = r.gone
+        } else {
+            handOff.target = remembered
+        }
+    }
+
     private func choose(_ t: InboxHandOffModel.Target) {
         handOff.target = t
         stored = t.stored
+        lastTime = false
+        lastGone = false
     }
 
     private func name(_ t: InboxHandOffModel.Target) -> String {
@@ -236,7 +268,8 @@ struct InboxHandOffBar: View {
     private var toast: Toast? {
         let to = name(handOff.target)
         if handOff.queued != nil {
-            return Toast(String(localized: "Handing to \(to)…"), style: .info,
+            let words = handOff.markDone ? String(localized: "Handing to \(to)… · marking done") : String(localized: "Handing to \(to)…")
+            return Toast(words, style: .info,
                          action: Toast.Action(title: String(localized: "View [Inbox Hand-Off]")) { view() },
                          secondary: Toast.Action(title: String(localized: "Undo")) { undo() })
         }
@@ -247,7 +280,9 @@ struct InboxHandOffBar: View {
             })
         }
         if justSent, let sent = handOff.sent {
-            return Toast(String(localized: "Handed to \(name(sent.target))"), style: .success,
+            let to = name(sent.target)
+            let words = handOff.markDone ? String(localized: "Handed to \(to) · marked done") : String(localized: "Handed to \(to)")
+            return Toast(words, style: .success,
                          action: Toast.Action(title: String(localized: "View [Inbox Hand-Off]")) { handOff.open() })
         }
         return nil

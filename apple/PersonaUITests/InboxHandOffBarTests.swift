@@ -68,6 +68,41 @@ final class InboxHandOffBarTests: XCTestCase {
         XCTAssertEqual(again.value as? String, "主对话")
     }
 
+    /// Per source (#2121; needs MOCK_EVENT_MUTES=1 too): an item handed to New Chat makes New Chat the next pick for
+    /// items from the same sender, marked Last time, even after the bar's own last target went back to the main chat
+    /// on another source's item.
+    @MainActor func testASourceRemembersItsTarget() throws {
+        let hub = try mockHub()
+        var app = open(hub, item: "mail:a1:ci:77")
+        var target = app.buttons["handoff-target"]
+        XCTAssertTrue(target.waitForExistence(timeout: 20), "no target capsule:\n\(app.debugDescription)")
+        target.tap()
+        app.buttons["新对话"].firstMatch.tap()
+        app.buttons["handoff-chip-summarize"].tap()
+        XCTAssertTrue(app.staticTexts.containing(NSPredicate(format: "label CONTAINS %@", "已标完成")).firstMatch
+            .waitForExistence(timeout: 15), "the hand-off did not go, or did not say it marked the item done:\n\(app.debugDescription)")
+        shot(app, "source-handed")
+
+        app.terminate()
+        app = open(hub, item: "lark:oc_demo2:200") // another source: nothing remembered, the bar's own default
+        target = app.buttons["handoff-target"]
+        XCTAssertTrue(target.waitForExistence(timeout: 20))
+        XCTAssertFalse((target.value as? String ?? "").contains("上次"), "another source's target came along")
+        target.tap()
+        app.buttons["主对话"].firstMatch.tap()
+
+        app.terminate()
+        app = open(hub, item: "mail:a1:notice:110") // the same sender
+        target = app.buttons["handoff-target"]
+        XCTAssertTrue(target.waitForExistence(timeout: 20))
+        let value = target.value as? String ?? ""
+        XCTAssertTrue(value.contains("新对话") && value.contains("上次"), "the sender's last target was not preselected: \(value)")
+        shot(app, "source-last-time")
+        target.tap()
+        sleep(1)
+        shot(app, "source-menu")
+    }
+
     @MainActor func testTheBarRidesUpWithTheKeyboard() throws {
         let hub = try mockHub()
         let app = open(hub)
@@ -94,11 +129,11 @@ final class InboxHandOffBarTests: XCTestCase {
         return hub
     }
 
-    @MainActor private func open(_ hub: String) -> XCUIApplication {
+    @MainActor private func open(_ hub: String, item: String = InboxHandOffBarTests.item) -> XCUIApplication {
         let app = XCUIApplication()
         let pair = "persona://pair?url=" + hub.addingPercentEncoding(withAllowedCharacters: .alphanumerics)! + "&token=mock"
         app.launchArguments = ["-pairURL", pair, "-tab", "mail", "-inbox.kind", "", "-inbox.source", "",
-                               "-openInboxItem", Self.item]
+                               "-openInboxItem", item]
         app.launchPinned()
         acceptIconAlert()
         return app

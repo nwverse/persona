@@ -131,6 +131,8 @@
     <string name="inbox_handoff_who">依頼先</string>
     <string name="inbox_handoff_main_chat">メインチャット</string>
     <string name="inbox_handoff_no_agents">オンラインのエージェントがいません。まずPersonaに任せることができます。</string>
+    <string name="inbox_handoff_last_time">前回</string>
+    <string name="inbox_handoff_last_gone">前回渡したエージェントは終了しているため、今回は Persona に渡します。</string>
     <string name="inbox_handoff_mark_done">同時に対応済みにする</string>
     <string name="inbox_handoff_sending">引き継ぎ中…</string>
     <string name="inbox_hand_to_persona">Personaに任せる</string>

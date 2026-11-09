@@ -6013,6 +6013,17 @@ if MOCK_INBOX_EVENTS:
     if MOCK_INBOX_EVENTS == "legacy":
         for _x in INBOX:
             for _k in EVENT_FIELDS: _x.pop(_k, None)
+    # MOCK_EVENT_MUTES=1: some events carry their mute options, so Hand to AI remembers per source (#2121): the two system
+    # notifications (a build failure, a room change) come from one sender, so handing one off preselects that target for the other.
+    # lark:oc_demo1:100 keeps none: InboxHandOffBarTests checks the bar's own last target on it.
+    if os.environ.get("MOCK_EVENT_MUTES") == "1":
+        _event_mutes = {
+            "lark:oc_demo2:200": [{"tag": "chat", "value": "oc_demo2", "name": "发布群"}],
+            "mail:a1:ci:77": [{"tag": "sender", "value": "noreply@example.com", "name": "系统通知"}],
+            "mail:a1:notice:110": [{"tag": "sender", "value": "noreply@example.com", "name": "系统通知"}],
+        }
+        for _x in INBOX:
+            if _x["id"] in _event_mutes: _x["mutes"] = _event_mutes[_x["id"]]
 
 
 def _chain_add(x, kind, text, **more):
