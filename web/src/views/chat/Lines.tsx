@@ -220,7 +220,7 @@ function RecapDrawer({ items, open, onClose }: { items: Item[]; open: boolean; o
                 {t(n === 0 && items.length > 1 ? "chat-lines.recap_newest_written" : "chat-lines.recap_written", { ago: ago(it.ts) })}
               </span>
             )}
-            <Markdown text={it.text ?? ""} />
+            <Markdown text={it.text ?? ""} lineBreaks />
           </section>
         ))}
       </div>
@@ -251,7 +251,7 @@ function RecapStrip({ item, onClose }: { item: Item; onClose: () => void }) {
           {item.ts && <span className="font-normal text-ink-3">· {ago(item.ts)}</span>}
         </span>
         <ScrollFold className="max-h-[6lh] text-[13px] leading-relaxed text-ink-2">
-          <Markdown text={item.text ?? ""} small />
+          <Markdown text={item.text ?? ""} small lineBreaks />
         </ScrollFold>
       </div>
       <button type="button" onClick={onClose} aria-label={t("chat-lines.recap_close")} title={t("chat-lines.close")} className="flex size-6 shrink-0 items-center justify-center rounded-[6px] text-ink-3 transition-colors hover:bg-hover-2 hover:text-ink">
