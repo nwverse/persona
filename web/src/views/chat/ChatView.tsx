@@ -760,8 +760,8 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
   );
   lastLines.current = lines;
   // the last two exchanges are always drawn (the one going on, the one just done); those before them skip drawing while
-  // off screen (SegmentView `offscreen`). Not on a touch screen: a script moving the view (keeping it still as one is
-  // drawn) stops a fling there.
+  // off screen (SegmentView `offscreen`). Not on a touch-only screen: a script moving the view (keeping it still as one
+  // is drawn) can stop a fling there.
   const touch = useMedia(NO_HOVER);
   const drawnLast = useMemo(() => new Set(lines.filter((l) => l.kind === "segment").slice(-2).map((l) => l.id)), [lines]);
   const offscreen = (line: ChatLine) => (!touch && line.kind === "segment" && !line.live && !drawnLast.has(line.id) ? watchSegment : undefined);
