@@ -701,7 +701,7 @@ Terminal-only Codex questions (including asynchronous rollout questions) do not 
 
 ### MCP elicitation
 
-`hello.features` adds `elicitation`. Clients must declare it explicitly in `client_hello.features`; Android and the web client declare it by default (the web client's `X-Persona-Client` gives platform web, version 1, matching the `platform` / `version` in its `client_hello`). The `interaction` object in the existing `interaction` event gains the following optional fields; no keys are added at the envelope's top level:
+`hello.features` adds `elicitation`. Clients must declare it explicitly in `client_hello.features`; Android and the web client declare it by default (the web client's `X-Persona-Client` gives platform web, version 1, matching the `platform` / `version` in its `client_hello`), and so does the iOS app (`ios-app` and its version, the two halves of its `X-Persona-Client`, `RequestClientMetadata`). The Mac and visionOS apps and the watch don't declare it. The `interaction` object in the existing `interaction` event gains the following optional fields; no keys are added at the envelope's top level:
 
 ```json
 {
