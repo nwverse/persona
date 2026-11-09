@@ -11,7 +11,7 @@ This document has three parts:
 - **III. Migration order**, **IV. Decisions**.
 
 The process and history (why it was split this way, acceptance for each step) are in `docs/plans/plan-connectors.md`; Telegram is in `docs/archive/extensions/plan-telegram.md` (an extension since 2026-11-05, #1704; code in `nwverse/persona-extensions`, #2057).
-Planned Discord support (the user's own bot, extension, #917) is in `docs/plans/plan-discord.md`.
+Discord (the user's own bot, extension, #917): the first step (D1) is the `discord` extension; the later steps are planned in `docs/plans/plan-discord.md`.
 
 ## I. Current structure (v1)
 
@@ -22,6 +22,8 @@ Planned Discord support (the user's own bot, extension, #917) is in `docs/plans/
 | `github` | GitHub | In the hub (`connector/github`) | `Archive` (`updated_at` cursor) | Yes, rule-based tiers + noise reduction (`rules.go`) | `github_search/read/diff/checks` | `github_comment`, `github_review` (gated) | Reads `gh` login from a computer (`credential.gh_token`) |
 | `imessage` | Messages | Reads on the Mac's node, with an RPC-forwarding adapter in the hub (`connector/imessage`) | `Archive` (ROWID) | Yes | `imessage_chats/read/search` | None | None (grant personad Full Disk Access on the Mac) |
 | `telegram` | Telegram | Extension `telegram` in the `nwverse/persona-extensions` marketplace (#1704, #2057, code outside this repo), called by the hub over the process extension protocol (`connector/proc`) | `Archive` | Yes | Read-only tools; reads through the `tg` CLI (`Unlisted`) | `telegram_send/forward/react/mark_read` (`tg` CLI, `Unlisted`, gated) | Stepwise `Login` (phone number, code, two-step verification password), session encrypted in `connector_secrets` |
+| `x` | X | Extension `x` in the `nwverse/persona-extensions` marketplace (nwverse/persona-extensions#179, `docs/plans/plan-x.md`), called by the hub over the process extension protocol (`connector/proc`); two optional sources: the X API (the user's own developer app, pay-per-use) or the `grok` CLI on the hub machine (the user's subscription) | None: X's deletion rules keep posts in the extension's data directory with short retention (`docs/plans/plan-x.md` ("X's rules")) | Yes, `mention` (X API source only) | `x_digest/feed/following/post/search` (`x_search` runs a Grok search) | None (read-only) | Stepwise `Login` (one step: the four X API keys), keys encrypted in `connector_secrets`; the Grok source needs no sign-in here (`grok login` on the hub machine) |
+| `discord` | Discord | Extension `discord` in the `nwverse/persona-extensions` marketplace (nwverse/persona-extensions#181, `docs/plans/plan-discord.md`), called by the hub over the process extension protocol (`connector/proc`); reads Discord's REST API as the user's own bot, through the optional `proxy` secret when the hub machine can't reach Discord | `Archive` (the channels, threads and forum posts the bot can read: a first backfill, then what moved, every 5 minutes) | Not yet (D2) | `discord_channels/messages/search` | None (read-only) | Stepwise `Login` (one step: the bot token), token encrypted in `connector_secrets` |
 | `wechat` | WeChat | Separate built-in extension program `personad-wechat` (`docs/extensions/wechat.md`): a bot in WeChat, not a data source but a channel (`docs/extensions/channels.md`); the connector handles only binding and status | None | None | None | None | QR `Login` (`kind: qr`), token encrypted in `connector_secrets` |
 | `lark` | Lark | Registered by the Lark extension since #1571 (formerly the hub's lark_connector.go wrapping the original Lark gateway code) | `Chats` (one cursor per conversation) + `Items` (documents, meetings, events) | Inbox blocks from the extension (block types in `assistant/inbox_blocks.go`; formerly the hub's inbox_own.go) | `lark_chats/messages/search` | Through the Lark extension's skill + the node's Bash gate (rules below) | Log in through the Lark gateway on the hub machine |
 | `mail` | Mail | In the hub (`extmgr/mail_connector.go`) | `Archive` (UID per account) | The hub's own Inbox blocks | `mail_accounts/search/read` | `mail_send` (gated) | Its own API: password / Gmail and Outlook OAuth (`/api/v1/mail/…`) |
@@ -140,7 +142,34 @@ are still dispatched to connectors by the hub (the manager asks through `app.cal
 ### Knowledge-base ingestion
 
 - `Archive`: one cursor per account; `Changes(cursor)` returns changed conversations. The hub stores the cursor in `cursors/<id>.json`; conversation ids are `<connector id>-<conversation id>`.
+- **What the knowledge base's selection reads** (#1523): the selection decides which chats and documents are kept by
+  what the connector reports, so every connector that reports it behaves the same. A batch's chat (`kbwire.SourceChat`)
+  has a kind (the kind rules match dm / group / bot / official / system; other kinds such as mail, issue or pr match
+  none) and the owner's flags `muted`, `collapsed` and `done`; a message has `mine`, `mentioned` (the owner by name: the
+  connector decides what counts) and `mentioned_all` (an @all / @everyone, reported apart so the selection's
+  `include_all` can decide), on `Changes` batches as on history pages; a document (`kbwire.Item`) has `signals`, the ones it can tell of `mentions`,
+  `comment_mentions`, `authored` and `viewed`. All of them are optional: a connector that cannot tell one leaves it out,
+  and its chats or documents never match that rule (a document with no signals at all is kept as before the selection).
+  Per-item settings are keyed by the stable chat id `HistoryChats`
+  lists (`GET /api/v1/kb/selection/candidates` shows that list), or by a document's item id, and the history import reads what the selection says,
+  so a connector has nothing of its own to decide about which chats are imported.
 - `Chats`: for sources like Lark with per-conversation cursors and attachments, provide `kb.Source` directly; archiving, compression and tagging stay unchanged. Older history is imported separately (`docs/assistant/knowledge.md`, "History import").
+- `History` (capability `history`, requires `archive`): a conversation's older history, which `Changes` never reaches.
+  `HistoryChats` lists the conversations that can be imported (kind dm / group / bot / official / system, the
+  `muted` / `collapsed` / `done` flags, a rough message count; a conversation id is unique across the connector's archive sources, since a query names it by
+  id alone); `History` reads one page of one conversation (before / after / around a position, or the
+  newest page). Optional `HistoryAnchors` (capability `history_anchors`) searches for the messages the owner sent or
+  was mentioned in, so a conversation can be imported as windows around them (each anchor says the source its
+  conversation is filed under, since one the account left is often missing from `HistoryChats`). All read-only. The knowledge base drives
+  the import through the hub's bus methods `connectors.history_chats`, `connectors.history` and
+  `connectors.history_anchors` (`assistantwire/kb.go`); extmgr routes them only to a connector that archives into the
+  knowledge base now and declares the capability, checks the query and cuts its limit to 200, and passes the answer and
+  any error back as they are. `connectors.archives` says which connectors have them (`history`, `history_anchors`).
+  What the caller relies on (`docs/protocol/connector-protocol.md` "History"): a page's limit is a hint and a source may
+  answer more, so the caller goes on from the cursors it answers; `more` false or an empty page is the start of the
+  conversation, unless the answer is paced or unreadable (`HistoryPage.AtStart`); a conversation the account can no longer read is `unreadable` (skip it, not a failure); `pace` asks the
+  caller to wait (`retry_after_ms`) or stop for a person (`stop`, `reason`); a read that timed out is never retried by
+  the caller.
 - `Items`: Lark documents, meetings and calendar events.
 
 ### Settings › Connectors
@@ -252,7 +281,7 @@ type Batch struct {
 - `Items`: merge into `Batch.Items`; `DocTitle` (document-title lookup by link) is not a "change", so remains an optional query (later merged into "Links" in the v1 plan).
 - Lark conversations: an adapter `connector.PerChat(kb.Source)` wraps per-conversation cursors into a composite cursor, moving the engine's conversation-selection logic into the adapter.
   **Lark is the largest source and this is the highest-risk step, so do it last**, with the M0 comparison baseline (then the hub's connector_baseline_test.go, removed with the hub's Lark source in #1571) and real-data comparison required.
-- **Kept separate**: backfill (reading older history, the opposite direction from "since last time") remains optional `Backfill`; attachments (`Download`) remain optional `Media`.
+- **Kept separate**: reading older history (the opposite direction from "since last time") is its own optional capability, `history` (`History`, read through the hub's `connectors.history*` bus methods), not part of `Changes`; the old `kb.Backfiller` / `Engine.Backfill` path is gone; the assistant's history import drives it (`docs/assistant/knowledge.md`, "History import"). Attachments (`Download`) remain optional `Media`.
   Forcing them into `Changes` makes one cursor represent two directions and harder to understand.
 
 Size: **medium** (almost mechanical for four connectors) **to large** (Lark). Moments moves with Lark.
