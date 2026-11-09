@@ -947,6 +947,18 @@ which calls `access(keyPath:)` before mutation, registering a body dependency; m
 For write-only records (trace / counts), mark storage `@ObservationIgnored`, manually `access` in computed reads and `withMutation` around writes,
 so calling bodies do not observe. `@State` initializer expressions must have no side effects; they run more than once.
 
+## A page drawn while `@Observable` tells its observers reads the old value (2026-11-09, #2189)
+
+New Chat in a long main conversation sometimes left the conversation on screen (TestFlight 213, about one tap in five in the
+simulator); #1749's "the current conversation changed but the page did not redraw" was the same. Observation tells observers in
+`willSet`, before the new value is stored. SwiftUI's `ObservationCenter.invalidate` can flush at that moment
+(`GraphHost.asyncTransaction` → `flushTransactions()`, seen when a button action's `withAnimation` change meets a pending update),
+so the page's body ran inside the setter, read the old conversation and watched it again; the store that followed told nobody.
+A page that chooses what to show from a model property set in actions: store the value first, then call `withMutation(keyPath:) {}`
+(`AppModel.assistantCurrent`), so a body drawn while observers are told reads the new value. Keep `@Observable`'s own rules: an
+equal value notifies no one, and what the property's `didSet` did runs whether or not it notified. Finding it: a DEBUG note in the
+body that comes between the action's note and the setter's, with the old value, and `Thread.callStackSymbols` from that body.
+
 ## Gray outside sidebar card corners: overlay after mask is not masked (2026-11-04, #1247)
 
 The pushed rounded page's dimming / tap-to-close `Color.black.opacity(0.06)` was an `.overlay` after `.mask { card }`.

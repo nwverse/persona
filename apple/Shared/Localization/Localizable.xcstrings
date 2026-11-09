@@ -57942,6 +57942,28 @@
       },
       "extractionState" : "manual"
     },
+    "Last New Chat Check" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Last New Chat Check"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "前回の新しいチャットのチェック"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "最近一次新对话检查"
+          }
+        }
+      }
+    },
     "Last Received" : {
       "localizations" : {
         "en" : {

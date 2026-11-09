@@ -248,14 +248,27 @@ final class AppModel {
     private(set) var assistantConfigLoadFailed = false
     @ObservationIgnored private var assistantRetryInFlight: Task<Void, Never>?
     /// The assistant conversation shown in the Chat tab (persisted across launches).
+    ///
+    /// Stored before its observers are told (#2189). Observation tells them in `willSet`, while the old value is still
+    /// there, and SwiftUI can draw right then: a tap's animated change first flushes what is pending, and the Persona
+    /// page drawn in that flush read the old conversation, watched it again and never heard of the new one, so New Chat
+    /// left the conversation on screen (and #1749's switch did not redraw the page). Stored first, a page drawn while
+    /// observers are told reads the new value. Otherwise as `@Observable`'s own setter: an equal value tells no one.
+    @ObservationIgnored private var currentStore: SessionKey?
     var assistantCurrent: SessionKey? {
-        didSet {
-            let v = assistantCurrent?.path ?? ""
-            UserDefaults.standard.set(v, forKey: "assistant.current")
+        get {
+            access(keyPath: \.assistantCurrent)
+            return currentStore
+        }
+        set {
+            let old = currentStore
+            currentStore = newValue
+            if newValue != old { withMutation(keyPath: \.assistantCurrent) {} }
+            UserDefaults.standard.set(newValue?.path ?? "", forKey: "assistant.current")
             #if DEBUG
-            if assistantCurrent != oldValue {
+            if newValue != old {
                 let name = { (k: SessionKey?) in k == nil ? "none" : k == self.assistantMain ? "main" : "other" }
-                ShellTrace.shared.note("current \(name(oldValue))->\(name(assistantCurrent)) by \(ShellTrace.caller())")
+                ShellTrace.shared.note("current \(name(old))->\(name(newValue))")
             }
             #endif
         }

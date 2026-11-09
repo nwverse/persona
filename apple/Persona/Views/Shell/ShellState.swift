@@ -189,13 +189,6 @@ extension EnvironmentValues {
     /// Each event says when, in seconds since the trace began: a test that waited too long tells what took the time.
     @ObservationIgnored private let start = Date()
 
-    /// The app's own frames that called the caller (its setter): who changed something, from a test's trace.
-    nonisolated static func caller(skip: Int = 2, count: Int = 3) -> String {
-        Thread.callStackSymbols.dropFirst(skip).filter { $0.contains("Persona") && !$0.contains("assistantCurrent") }.prefix(count)
-            .map { line in String((line.split(separator: " ").dropFirst(3).first ?? "?").replacing("$s7Persona", with: "").prefix(56)) }
-            .joined(separator: " < ")
-    }
-
     func note(_ s: String) {
         serial += 1
         withMutation(keyPath: \.events) {
