@@ -6,6 +6,305 @@
     "Couldn't read workout report settings. Turn the feature on again to start fresh.": {"extractionState": "manual", "localizations": {"en": {"stringUnit": {"state": "translated", "value": "Couldn't read workout report settings. Turn the feature on again to start fresh."}}, "ja": {"stringUnit": {"state": "translated", "value": "ワークアウトレポートの設定を読み込めませんでした。機能を再度オンにしてやり直してください。"}}, "zh-Hans": {"stringUnit": {"state": "translated", "value": "无法读取运动报告设置。请重新开启此功能以重新开始。"}}}},
     "Off by default. After you enable this, opening Persona checks for new workouts of at least 10 minutes and sends their measurements to your hub to create a report. Older workouts are not imported. Reports already submitted may finish after you turn this off.": {"extractionState": "manual", "localizations": {"en": {"stringUnit": {"state": "translated", "value": "Off by default. After you enable this, opening Persona checks for new workouts of at least 10 minutes and sends their measurements to your hub to create a report. Older workouts are not imported. Reports already submitted may finish after you turn this off."}}, "ja": {"stringUnit": {"state": "translated", "value": "初期設定はオフです。有効にすると、Persona を開いた際に新しい10分以上のワークアウトを確認し、測定データを hub に送信してレポートを作成します。有効にする前の運動は取り込みません。オフにしても、送信済みのレポートは完了する場合があります。"}}, "zh-Hans": {"stringUnit": {"state": "translated", "value": "默认关闭。开启后，打开 Persona 会检查新完成且至少持续 10 分钟的运动，并将运动数据发送到你的 hub 生成报告。不导入开启前的运动。关闭后，已提交的报告仍可能完成。"}}}},
     "Reports contain measurement cards and a heart-rate chart when data is available, followed by a brief summary. Health read permissions are managed in iOS Settings; an empty result can also mean access was not granted.": {"extractionState": "manual", "localizations": {"en": {"stringUnit": {"state": "translated", "value": "Reports contain measurement cards and a heart-rate chart when data is available, followed by a brief summary. Health read permissions are managed in iOS Settings; an empty result can also mean access was not granted."}}, "ja": {"stringUnit": {"state": "translated", "value": "レポートには測定値カード、データがある場合は心拍数グラフ、簡潔なまとめが含まれます。ヘルスケアの読み取り権限は iOS の設定で管理できます。結果が空の場合、権限が許可されていない可能性もあります。"}}, "zh-Hans": {"stringUnit": {"state": "translated", "value": "报告包含数据卡片、有数据时的心率图，以及简短总结。健康数据读取权限可在 iOS 设置中管理；没有读取到运动也可能是未授予权限。"}}}},
+    "List" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "List"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "リスト"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "列表"
+          }
+        }
+      }
+    },
+    "View" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "View"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "表示"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "视图"
+          }
+        }
+      }
+    },
+    "Day" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Day"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "日"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "日"
+          }
+        }
+      }
+    },
+    "Week" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Week"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "週"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "周"
+          }
+        }
+      }
+    },
+    "Month" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Month"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "月"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "月"
+          }
+        }
+      }
+    },
+    "Previous" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Previous"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "前へ"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "上一页"
+          }
+        }
+      }
+    },
+    "Next" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Next"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "次へ"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "下一页"
+          }
+        }
+      }
+    },
+    "Show Done" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Show Done"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "完了を表示"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "显示已完成"
+          }
+        }
+      }
+    },
+    "Calendar Options" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Calendar Options"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "カレンダーのオプション"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "日历选项"
+          }
+        }
+      }
+    },
+    "%lld without a due date" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld without a due date"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "期限なし %lld 件"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld 条没有截止"
+          }
+        }
+      }
+    },
+    "See List" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "See List"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "リストを見る"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "看列表"
+          }
+        }
+      }
+    },
+    "%lld to-dos" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld to-dos"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld 件"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld 条"
+          }
+        }
+      }
+    },
+    "Set a reminder, the priority and notes on the to-do's page." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Set a reminder, the priority and notes on the to-do's page."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "リマインダー、優先度、メモは ToDo の詳細で設定します。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "提醒、优先级和备注在待办详情里设。"
+          }
+        }
+      }
+    },
     "Fill this in": {
       "extractionState": "manual",
       "localizations": {
@@ -800,6 +1099,52 @@
         }
       }
     },
+    "Add Images or Files": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Add Images or Files"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "画像またはファイルを追加"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "添加图片或文件"
+          }
+        }
+      }
+    },
+    "Codex takes no attachments": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Codex takes no attachments"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Codex には添付ファイルを付けられません"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Codex 不能带附件"
+          }
+        }
+      }
+    },
     "Loading launchers…": {
       "extractionState": "manual",
       "localizations": {
@@ -819,6 +1164,29 @@
           "stringUnit": {
             "state": "translated",
             "value": "ランチャーを読み込み中…"
+          }
+        }
+      }
+    },
+    "Remove %@": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Remove %1$@"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%1$@を削除"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "移除 %1$@"
           }
         }
       }
@@ -1072,6 +1440,75 @@
           "stringUnit": {
             "state": "translated",
             "value": "高优先级"
+          }
+        }
+      }
+    },
+    "The files uploaded to “%@” were removed. Add them again for this computer.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The files uploaded to “%1$@” were removed. Add them again for this computer."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "「%1$@」にアップロードしたファイルは外しました。このコンピュータに送るには、もう一度追加してください。"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "上传到“%1$@”的文件已移除。要发给这台电脑，请重新添加。"
+          }
+        }
+      }
+    },
+    "This launcher can't take attachments in the first message. Pick another launcher, or start with text and send the attachments in the session.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This launcher can't take attachments in the first message. Pick another launcher, or start with text and send the attachments in the session."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "このランチャーは最初のメッセージに添付ファイルを付けられません。別のランチャーを選ぶか、テキストで開始してからセッションで添付ファイルを送ってください。"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "这个启动器的第一条消息不能带附件。换一个启动器；或者先只发文字启动，再在会话里发附件。"
+          }
+        }
+      }
+    },
+    "Waiting for the files to finish uploading": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Waiting for the files to finish uploading"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ファイルのアップロードが終わるのを待っています"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "正在等文件上传完"
           }
         }
       }
@@ -96881,24 +97318,48 @@
       },
       "extractionState" : "manual"
     },
-    "Sent as You" : {
+    "Records sent as you" : {
+      "extractionState" : "manual",
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Sent as You"
+            "value" : "Records sent as you"
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "あなたの名前で送信"
+            "value" : "あなたの名前で送信した記録"
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "以你的名义发出"
+            "value" : "以你的名义发出的记录"
+          }
+        }
+      }
+    },
+    "What Persona sent in your name, and why it was allowed" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "What Persona sent in your name, and why it was allowed"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "あなたの名前で送信した内容と、許可された理由"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "以你的名义发出过什么、为什么放行"
           }
         }
       }
