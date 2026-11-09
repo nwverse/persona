@@ -206,7 +206,8 @@ replies to my comments, and mentions of me in posts or comments. Likes and new f
 
 Connector activity needing me (`docs/plans/plan-connectors.md`) also enters the Inbox. A connector implements `connector.Inbox`, returning candidates (`InboxThing`, one per thread),
 which the manager turns into items (`server/internal/assistant/inbox_connectors.go`; hub delivers candidates each round). Rules match Lark chats: one unhandled item per thread, later activity merged with `count` incremented;
-after handling, new activity opens another. If the connector says an item ended (merged, closed, replied by me), automatically handle it (`done_by` = read / replied); read elsewhere and not Needs you means `read`.
+after handling, new activity opens another. A thing whose `at` is older than its open item's latest step is an earlier step read again (a connector re-reading after a restart): it is not counted and never moves the item back (#1527).
+A new item never takes the id of an existing one (`sha1(thread, last)`): that step already made an item, perhaps handled since. If the connector says an item ended (merged, closed, replied by me), automatically handle it (`done_by` = read / replied); read elsewhere and not Needs you means `read`.
 Triage, drafting, AI twin, done state, and retention use hub's generic logic.
 
 - **GitHub** (`server/internal/connector/github/inbox.go`): with no public hub endpoint for webhooks, poll `/notifications` (unread only), following `X-Poll-Interval` (usually 60 seconds),
@@ -220,11 +221,13 @@ Triage, drafting, AI twin, done state, and retention use hub's generic logic.
     - Human review requests, human mentions, requested changes (`CHANGES_REQUESTED`), assignments: Needs you.
     - Bot PR review requests, bot mentions / comments on my PRs, approvals, team mentions: FYI.
     - Ordinary human comments on my PRs: model decides (prompt: requests for changes / answers need you).
-  - **Group CI failures by (repository, branch)** (thread `ci:<owner>/<repo>@<branch>`). Read the branch from notification title (`<workflow> workflow run[, Attempt #N] failed for <branch> branch`;
+  - **Group CI failures by (repository, branch)** (thread `ci:<owner>/<repo>@<branch>`, title `<repo name> · <branch> 的 CI 失败` so items of several repositories' `main` differ). Read the branch from notification title (`<workflow> workflow run[, Attempt #N] failed for <branch> branch`;
     these notifications have no URL), merging reruns and later failures:
+    - The thing holds the newest failure: notifications come newest first, and one older than the thread's thing is skipped (several notifications per branch; after a restart all unread ones are read again, 30 per poll).
+    - GitHub notifies only the account that started a run, so failures from other people's pushes come from the follow-up check instead: the branch's newest failed run, ended at least 3 minutes before (its own notification, about 20 seconds after the run, is the same failure), joins the open item as its latest step.
     - Default branch and my open PRs: Needs you; other branches: FYI; automatic branches (`train/*`, configurable): excluded entirely.
-    - Automatically mark handled without deleting (`done_by=read`, explanatory `reason`) when the workflow later succeeds on that branch ("GitHub: later succeeded," immediately on a succeeded notification,
-      otherwise check Actions runs every 10 minutes), branch deleted, or PR merged / closed.
+    - Automatically mark handled without deleting (`done_by=read`, explanatory `reason`) when the branch is green again: every workflow's newest finished run on it passed, cancelled and running ones aside ("GitHub: later succeeded";
+      a succeeded notification has it checked at once, otherwise Actions runs are checked every 10 minutes), branch deleted, or PR merged / closed.
   - **Configuration** (Settings › Connectors › GitHub › Inbox; `github.inbox` in the manager's manager.json supplies defaults; stored as `connectors.options.github` in settings):
     - CI failures: Off / Default branch only / Include my PRs (default) / All (all Needs you).
     - Muted repositories: exclude all activity and handle existing items.
@@ -248,6 +251,7 @@ Triage, drafting, AI twin, done state, and retention use hub's generic logic.
 All sources work alike. Long-press an Inbox row for Done / Reopen plus available mute targets: Mute repository (GitHub), Mute chat
 (Lark chats, Messages, Telegram), Mute sender (people in Lark groups, mail senders, latest GitHub actor). Names appear below (repositories omit owner; menu labels never wrap).
 Muting handles this item and other covered open items in the same source, reason "Muted: <name>," with toast "Muted ‘…’; future items will not enter the Inbox."
+The handling chain says "Muted, done" for existing items, newly admitted items and grouped events; `done_by=read` stays unchanged for compatibility.
 Muted under More at the Inbox's top right lists all mutes (name, source · repository / chat / sender), with swipe-left or long-press Unmute. Unmuting admits only future items; already handled ones stay handled.
 
 - **APIs**: `GET /api/v1/inbox/mutes` (creation order, oldest first); `POST /api/v1/inbox/mutes {item_id, tag}` mutes the item's value for `tag` (read from the item,
@@ -317,7 +321,7 @@ awaiting response → Working; failure → Needs you; otherwise `tier` (FYI / Ne
 | `self_replied` | You reply directly at the source, outside Persona: "You replied in Lark"; item still becomes done (`done_by=replied`) | Source page |
 | `failed` | Handling fails / times out (`detail` = reason) | Expand inline |
 | `concluded` | Manager conclusion (`detail` = conclusion) | Expand inline |
-| `done` | Handled: "You marked done" / "You ignored it" / "Read elsewhere; done" / "Manager reviewed; no action needed." **An added kind outside the contract table**; Apps render unknown kinds from `text` with a generic icon | Expand inline |
+| `done` | Handled: "You marked done" / "You ignored it" / "Read elsewhere; done" / "Muted, done" / "Manager reviewed; no action needed." **An added kind outside the contract table**; Apps render unknown kinds from `text` with a generic icon | Expand inline |
 
 - Stored in item JSON (`inbox_items.data`, no new table), IDs `c1`, `c2`… increasing indefinitely; discard oldest beyond 50.
 - **Old items** (stored before this phase) have no chain. On read, backfill two entries from existing fields (`received`: start time, count, sender; if triaged, `triaged`: tier / reason), then append normally.
@@ -361,8 +365,9 @@ bound to that item (`handling` on the item; chat source `inbox`, `origin_ref` = 
   Knowledge-base tools may update people and projects along the way (`kb_update` is an allowed write).
 - Its chat appears in Chats but sends no completion push (`notifyFinished` skips it); the result is the Inbox suggestion.
 
-**Suggestion tool `inbox_suggest`** (`assistant/inbox_handle.go`, description `prompts/mcp/inbox/inbox_suggest.md`; accepts only the handling chat started for an item, rejecting other chats):
-`{kind, text, note?, handback?, outcome?, recap?, machine?, cwd?, related?, changes?}`.
+**Suggestion tool `inbox_suggest`** (`assistant/inbox_handle.go`, description `prompts/mcp/inbox/inbox_suggest.md`; accepts the handling chat started for an item, and with `item` a
+conversation the item was handed to ("Item actions", Hand to AI), rejecting other chats):
+`{item?, kind, text, note?, handback?, outcome?, recap?, machine?, cwd?, related?, changes?}`.
 
 | kind | Meaning | After confirmation |
 | --- | --- | --- |
@@ -374,6 +379,10 @@ bound to that item (`handling` on the item; chat source `inbox`, `origin_ref` = 
 - `recap` alone, without `kind`, updates only the summary (for example after a send), up to 600 characters. `related` contains IDs of related Inbox items from other chats / sources, recorded on both sides.
 - Each submission increments `suggestion.version` and invalidates the old suggestion; producing a suggestion sets `handling.state = done`. Chain records "Manager suggests a reply / an Agent / advice awaiting your decision" (`handling`, linked to the handling chat); conclusions record `concluded`.
 - Old `inbox_draft` (reply only) remains supported, equivalent to `kind: reply`, for chats started before the tool list changed.
+- `item` (an item id) is needed from a conversation the item was handed to (`assistant/inbox_handoff.go`); from the item's own handling chat it changes nothing. A tool error refuses an unknown item,
+  one not handed to this conversation (only a conversation in its `handoffs` may write back) and one the user already filed ("answer in the chat instead"; a filed item is not reopened);
+  nothing changes then. Without `item` the tool works as before. A suggestion from a hand-off records where it came from (`suggestion.conversation`), its chain entry links that
+  conversation, and the item's `agent` / `handling` stay as they were (no message card, no old-App draft).
 - **Task-related items**: for linked tasks (2′), prompts include task progress; a reply suggestion inserts a message card into the chat that started the task (`message`, retaining sent state after sending).
 
 **Confirmation API** `POST /api/v1/inbox/{id}/suggestion`: `{version, action, text?, client_id?}`, `action` = `confirm` / `reject` / `instruct`.
@@ -533,10 +542,40 @@ which users saw as one action: clear this batch they do not need to handle now. 
   Topic groups collect only the latest page of topic roots (P-04 unfinished), so the last message from someone else is the latest topic, not necessarily the one with new replies.
 - **Hand to AI**: attach the item as `<persona-context kind="context" title="Lark · Group name">` (hub `context` + feedId / mail uid, letting tools read more and
   reply), plus the requested action (default "Summarize this, tell me what I need to do, and suggest a reply," with two other presets), sent as one message.
-  Targets: **Persona (main chat)**, the default (#1194, on the web and Android): the item's own manager's main conversation (another manager's item goes to that manager's,
-  found by asking it; with none yet, the message starts it), which then opens; **Persona (new chat)** starts a new conversation with the item's manager (iOS / Mac still offer only this,
-  switching to the Persona tab); an Agent (latest 8) receives it in its session (navigate there). Marked done by default once the message got there.
-  The hand-off is still plain chat text: the item does not yet know which conversation has it, and the main conversation cannot write back to it (`inbox_suggest` accepts only an item's processing conversation).
+  Targets: **Persona (main chat)**, the default (#1194, every client): the item's own manager's main conversation (another manager's item goes to that manager's,
+  found by asking it; with none yet, the message starts it), which then opens; **Persona (new chat)** starts a new conversation with the item's manager (iOS / Mac switch to the
+  Persona tab); an Agent (latest 8) receives it in its session (navigate there). Marked done by default once the message got there, except for the main chat (below).
+  **Write-back to the item** (#1194, web, iOS and Mac): the main-chat target calls `POST /api/v1/inbox/{id}/handoff` `{text, client_id}` on the item's manager (`assistant/inbox_handoff.go`),
+  which sends the text after a block naming the item (`prompts/inbox/handoff.md`) to its main conversation through `session.send_once` (the client id is the message id, so the same
+  request again sends nothing more), or starts the main conversation with it, and answers `{item, session}`; a work machine is refused, and a failed send records nothing (`apierr.Call`'s status, as for a new conversation).
+  The item keeps the hand-off (`handoffs`: `machine_id`, `session_id`, `at`, the latest 5) and its chain gets one `handling` entry per conversation ("Handed to Persona's main chat",
+  linked to it). Its processing conversation (`agent`, `handling`) is not touched, so the AI twin's sweep and timeouts never take the main conversation for one of its own.
+  That conversation may then write back with `inbox_suggest` and `item` (above). What the user does with its suggestion is told there, wrapped to name the item
+  (`prompts/inbox/handoff_note.md`; a Persona notice sent as a plain `session.send` without a message id, a failure only logged, which the hub marks `injected` (`system` / `inbox`)
+  so the apps show one line, "Inbox: an update on “title”", not the model's text as a user bubble): reject, instruct, handback, a confirmed reply sent (which files the item as replied:
+  nobody there follows the other side's answer) and an Agent started (as that conversation's own task; the chain's `agent` entry links it). A confirmed conclusion files the item as
+  usual; a processing conversation still on the item is told it is over.
+  "Also mark as done" is off by default for the main chat (it may still write back) and on for the other targets; switching targets follows that default until the user sets the box,
+  whose choice then stays. Checked, the item is filed once the hand-off is answered, and a later `inbox_suggest` on it is refused as already filed.
+  Not covered: later messages on the item are not forwarded to the main conversation (it reads the source with its tools when asked), and filing the item is not told there.
+  iOS and Mac (`InboxHandOffModel`) send it with one `client_id` per hand-off. Whenever the answer leaves open whether the text went (no answer or a timeout, the connection lost
+  midway, a 5xx without a `code` from something in front of the hub or from the hub unable to keep its receipt, `assistant_in_doubt`, `delivered: unknown` or `yes`, the node lost
+  without `delivered: none`, a pending (`202 {"state":"pending"}`) or unknown receipt), the sheet says to check the chat before sending it again, and the same ask sent again is the
+  same hand-off: its first text, not one rebuilt from the item (which may have changed since), under the same id. From then on every other answer under that id short of success (all
+  but the three below that say nothing about an earlier try) is taken the same way, even one saying nothing went (`delivered: none`): the hub gives back what it kept for that id,
+  which may be a relay the phone or a proxy cut off (a bare `internal`), its own refusal (`op_id_reused`) or, after `assistant_in_doubt` (whose receipt it drops, and which may never
+  have reached the phone), a new run's answer at the manager. The phone can't tell which of these it got, so none is taken as final, and the sheet adds that changing the instructions
+  or reopening the sheet sends it anyway. A 404 / 405 then says to look first instead of falling back to the plain message, and a plain message that may have gone is not sent again
+  by the same ask. On any try, the id and first text are also kept through no connection, a cancelled request and `assistant_offline`, which say nothing about an earlier try and show
+  their own words (a cancelled request shows nothing). On a first try, any other answer is final for that id, and a failed load of the item, which sent nothing, says the hub can't be
+  reached (a timeout or a bare 5xx) or what went wrong. The hub answers what it kept for that id or runs it again, and the manager's `session.send_once` drops a repeat, so the same
+  ask sent again from one sheet, with no other ask handed to the main chat in between, hands the item over once (except a hand-off that started the main conversation and whose record
+  the manager lost); another ask or a reopened sheet is a new hand-off, and so is the first ask again after another one went to the main chat. Once it went, they open the main
+  conversation on the message as sent under that id (its transcript copy carries it and takes the bubble's place; no bubble when the copy is there already) and read the assistant
+  settings again, since the hand-off may have started the main conversation. Like every other inbox request from iOS and Mac, it names no manager, so it goes to the default manager.
+  Android still sends plain chat text without write-back (#1384); the web, iOS and Mac fall back to that when the hub or manager answers 404 / 405. On iOS and Mac the fallback goes
+  through the main conversation's outbox when it is listed (a failure shows there with Retry); otherwise it is sent or the conversation started from the sheet, which stays open
+  with the error when that fails.
 - **Done**: row swipe-left, top-right ✓ in details, or alongside Send / Hand to AI.
 
 ## Watch

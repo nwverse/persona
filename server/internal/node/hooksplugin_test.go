@@ -20,7 +20,8 @@ func withClaudeVersion(t *testing.T, v string) {
 	t.Cleanup(func() { claudeVersionOf = func(context.Context) string { return "" } })
 }
 
-// The node writes each set of hooks twice: in its settings file and as a plugin, the same hooks in both.
+// The node writes each set of hooks twice: in its settings file and as a plugin, the same hooks in both. The Agents'
+// MessageDisplay is a plugin of its own (TestLiveRepliesPlugin).
 func TestHooksPluginsCarryTheSettingsHooks(t *testing.T) {
 	home := t.TempDir()
 	n := &Node{home: home, dir: mkdir(t, filepath.Join(home, ".persona")), bin: "/x/personad"}
@@ -40,7 +41,7 @@ func TestHooksPluginsCarryTheSettingsHooks(t *testing.T) {
 		} else {
 			versions[v] = true
 		}
-		inPlugin := readSettings(t, filepath.Join(plugin, "hooks", "hooks.json"))["hooks"]
+		inPlugin, _ := readSettings(t, filepath.Join(plugin, "hooks", "hooks.json"))["hooks"].(map[string]any)
 		inSettings := readSettings(t, filepath.Join(n.dir, kind+"-settings.json"))["hooks"]
 		if inPlugin == nil || !reflect.DeepEqual(inPlugin, inSettings) {
 			t.Errorf("%s: the plugin's hooks %v, the settings' %v", kind, inPlugin, inSettings)
@@ -118,7 +119,7 @@ func TestClaudeStartSettings(t *testing.T) {
 }
 
 // A herdr start with a claude that loads plugins: the managed launcher's env is its only --settings, then Persona's
-// skills and hooks plugins.
+// skills and hooks plugins, and the live replies plugin (on unless the machine's setting is off).
 func TestHerdrStartManagedWithHooksPlugin(t *testing.T) {
 	withClaudeVersion(t, "2.1.318")
 	n, f, home := herdrNode(t)
@@ -144,7 +145,8 @@ func TestHerdrStartManagedWithHooksPlugin(t *testing.T) {
 		" --mcp-config "+shellQuote(filepath.Join(dir, "mcp.json"))+
 		" --plugin-dir "+shellQuote(filepath.Join(dir, "agent-plugin"))+
 		" --allowedTools "+shellQuote("Bash(sh "+filepath.Join(dir, "agent-plugin", "skills", "persona-office", "scripts", "office.sh")+" *)")+
-		" --plugin-dir "+shellQuote(filepath.Join(dir, "claude-hooks")), shellQuote)
+		" --plugin-dir "+shellQuote(filepath.Join(dir, "claude-hooks"))+
+		" --plugin-dir "+shellQuote(filepath.Join(dir, "claude-live-replies")), shellQuote)
 	if typed := f.trace("pane.send_input"); !slices.Contains(typed, call("pane.send_input", map[string]any{"pane_id": "w1:p2", "keys": []string{"Enter"}, "text": want})) {
 		t.Errorf("typed %v, want %s", typed, want)
 	}

@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"github.com/nwverse/persona/server/internal/compat"
-	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -12,6 +11,7 @@ import (
 
 	"github.com/nwverse/persona/sdk/go/wire"
 	"github.com/nwverse/persona/server/internal/i18n"
+	"github.com/nwverse/persona/server/internal/lazyre"
 )
 
 // Looks (docs/extensions/extensions.md "Looks", docs/apple/persona.md): an extension adds looks — Persona's name, face, colors and the dot's
@@ -107,7 +107,7 @@ var LookLanguages = func() []string {
 }()
 
 // lookID is a persona package's id (docs/apple/persona.md: the apps take it as a directory and cache key).
-var lookID = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,31}$`)
+var lookID = lazyre.New(`^[a-z0-9][a-z0-9-]{0,31}$`)
 
 func init() {
 	Points["looks"] = Point{Name: "looks", Namespace: "looks", Version: 1, Item: func(raw json.RawMessage) (string, error) {

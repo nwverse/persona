@@ -59,7 +59,7 @@ func TestPermissionLanguagePreservesConsentAndAuthoredData(t *testing.T) {
 			t.Fatal("legacy full-token disclosure missing")
 		}
 		for _, slot := range UISlots {
-			if slot.Shown != "" && strings.HasPrefix(permissionText(l, "slot_"+slot.Name), "extension-permissions.") {
+			if slot.Shown && strings.HasPrefix(permissionText(l, "slot_"+slot.Name), "extension-permissions.") {
 				t.Fatal("missing slot translation", slot.Name)
 			}
 		}

@@ -5,11 +5,11 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
-	"regexp"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
@@ -59,7 +59,7 @@ func providerCapacity(l proto.ManagedLauncher, model string) int {
 	return smallerCapacity(capacity, codexCapacity(l.Args))
 }
 
-var codexContextLimit = regexp.MustCompile(`(?m)^\s*model_context_window\s*=\s*([0-9][0-9_]*)\s*(?:#.*)?$`)
+var codexContextLimit = lazyre.New(`(?m)^\s*model_context_window\s*=\s*([0-9][0-9_]*)\s*(?:#.*)?$`)
 
 func codexCapacity(args []string) int {
 	capacity := 0

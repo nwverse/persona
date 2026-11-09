@@ -170,14 +170,14 @@ func TestWriteHistoryAttachments(t *testing.T) {
 	text := dayText(t, st, "wx-g", old)
 	day := old.Format("2006-01-02")
 	for _, want := range []string{
-		"甲: [附件](attachments/" + day + "/i-0.png)\n", "甲: 图文 [附件](attachments/" + day + "/p-0.jpg)\n",
+		"甲: [附件](attachments/" + day + "/messages/" + attachmentName("i", 0, "pic.png", "IMAGE") + ")\n", "甲: 图文 [附件](attachments/" + day + "/messages/" + attachmentName("p", 0, "inline", "POST") + ")\n",
 		"甲: [视频]\n", "甲: 报告 [文件]\n", "甲: [语音]\n", "甲: [附件]\n", "甲: [附件]\n", "甲: [语音]\n",
 	} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("missing %q in:\n%s", want, text)
 		}
 	}
-	if _, err := os.Stat(st.Path(KindChat, "wx-g", "attachments", day, "i-0.png")); err != nil {
+	if _, err := os.Stat(st.Path(KindChat, "wx-g", "attachments", day, "messages", attachmentName("i", 0, "pic.png", "IMAGE"))); err != nil {
 		t.Fatal(err)
 	}
 	// A source without its own days keeps the global 30: a two-year-old image is not downloaded.

@@ -220,8 +220,10 @@ nonisolated private final class ProxyPipe: @unchecked Sendable {
 }
 
 extension LocalProxyRoute {
-    /// How the forward for `hub` dials: this proxy, its login, and the hub's address from there.
-    func dial(for hub: URL) -> LocalProxyForward.Dial {
+    /// How the forward for `hub` dials: this proxy, its login, and the hub's address from there. Nonisolated like the rest
+    /// of the route (`HubTransport.swift`): Swift 6.4 gives an extension's members here the file's main actor (6.2 did
+    /// not), and refused the call from its tests (#1378).
+    nonisolated func dial(for hub: URL) -> LocalProxyForward.Dial {
         LocalProxyForward.Dial(proxyHost: host.trimmingCharacters(in: .whitespaces).trimmingCharacters(in: CharacterSet(charactersIn: "[]")), proxyPort: port,
                                targetHost: targetHost(for: hub), targetPort: targetPort(for: hub),
                                username: login?.username, password: login?.password ?? "")
@@ -395,6 +397,7 @@ final class LocalProxies {
         guard let local = forward.localURL, let url = Self.healthURL(hub: hub, via: local) else { throw LocalProxyCheck.notAHub(target) }
         var req = URLRequest(url: url, timeoutInterval: 10)
         req.httpMethod = "GET"
+        RequestClientMetadata.current.apply(to: &req)
         let data: Data, resp: URLResponse
         do {
             // A redirect is not followed: it would leave the proxy (an http port that sends to https).
@@ -424,10 +427,13 @@ final class LocalProxies {
         func set(_ e: SOCKS5Error) { lock.withLock { error = e } }
     }
 
-    /// Answers a redirect with the redirect itself.
+    /// Answers a redirect with the redirect itself. The completion-handler form: the async one crashes the compiler
+    /// (Xcode 27.1) emitting its Objective-C thunk (#1378, as `PushRelay`'s did).
     private nonisolated final class NoRedirects: NSObject, URLSessionTaskDelegate, Sendable {
         func urlSession(_ session: URLSession, task: URLSessionTask, willPerformHTTPRedirection response: HTTPURLResponse,
-                        newRequest request: URLRequest) async -> URLRequest? { nil }
+                        newRequest request: URLRequest, completionHandler: @escaping @Sendable (URLRequest?) -> Void) {
+            completionHandler(nil)
+        }
     }
 
     /// `/api/v1/health` under the hub's address (its path kept, as every request through the forward has it), on the

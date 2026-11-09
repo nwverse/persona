@@ -87,6 +87,15 @@ func runtimeListID(mid, sid string) string {
 	return string(b)
 }
 
+// startErrorRow is how much of s's start_error a row keeps: a coded refusal's whole sentence (the manager's, in the user's
+// language, its remedy last: #1642), else a summary's.
+func startErrorRow(s proto.Session) int {
+	if s.StartErrorCode != "" {
+		return proto.CodedStartErrorMax
+	}
+	return 180
+}
+
 func rowText(s string, max int) string {
 	r := []rune(s)
 	if len(r) <= max {
@@ -120,15 +129,17 @@ func runtimeSummary(s proto.Session) runtimeRowSummary {
 		ParentSpaceID: s.ParentSpaceID, SlotID: s.SlotID, SlotName: s.SlotName, SlotIndex: s.SlotIndex, PaneIndex: s.PaneIndex,
 		WorkspaceID: s.WorkspaceID, TabID: s.TabID, PaneID: s.PaneID,
 		Assistant: s.Assistant, Archived: s.Archived, ArchiveChangedAt: s.ArchiveChangedAt, Space: s.Space,
-		Starting: s.Starting, StartError: rowText(s.StartError, 180), StartedByPersona: s.StartedByPersona,
+		Starting: s.Starting, StartError: rowText(s.StartError, startErrorRow(s)), StartedByPersona: s.StartedByPersona,
+		StartErrorCode: s.StartErrorCode, StartErrorArgs: s.StartErrorArgs,
 		ReadOnlyReason: rowText(s.ReadOnlyReason, 180), Origin: s.Origin, OriginRef: s.OriginRef,
 		TurnError: rowText(s.TurnError, 180), TurnErrorKind: s.TurnErrorKind, TurnErrorCode: s.TurnErrorCode,
+		TurnErrorResetsAt: s.TurnErrorResetsAt, TurnErrorResumes: s.TurnErrorResumes,
 		PendingInteractions: s.PendingInteractions, Rev: s.Rev, Quiet: s.Quiet,
 		Model: s.Model, ContextTokens: s.ContextTokens, ContextWindow: s.ContextWindow,
 	}
 	if s.Work != nil {
 		out.Work = &proto.WorkState{Phase: s.Work.Phase, On: s.Work.On, Line: rowText(s.Work.Line, 180),
-			Wait: rowText(s.Work.Wait, 180), Then: rowText(s.Work.Then, 180), WakeAt: s.Work.WakeAt,
+			Wait: rowText(s.Work.Wait, 180), Then: rowText(s.Work.Then, 180), WakeAt: s.Work.WakeAt, ResetsAt: s.Work.ResetsAt,
 			Attempts: s.Work.Attempts, Max: s.Work.Max, Deferred: s.Work.Deferred, Agent: s.Work.Agent}
 	}
 	if s.Todo != nil {

@@ -12,8 +12,7 @@ final class LarkAttachmentFlowTests: XCTestCase {
         continueAfterFailure = false
         let app = XCUIApplication()
         let pair = "persona://pair?url=" + hub.addingPercentEncoding(withAllowedCharacters: .alphanumerics)! + "&token=mock"
-        app.launchArguments = ["-pairURL", pair, "-tab", "mail", "-demo.on", "NO", "-ui.oldLayout", "NO",
-                               "-inbox.source", "", "-inbox.kind", "mention", "-openInboxFirst", "NO",
+        app.launchArguments = ["-pairURL", pair, "-tab", "mail", "-demo.on", "NO",                                "-inbox.source", "", "-inbox.kind", "mention", "-openInboxFirst", "NO",
                                "-showLarkAttachmentDraft", draft] + (quote.map { ["-showLarkQuoteDraft", $0] } ?? []) + Self.fresh
         app.launchPinned()
         let chat = app.staticTexts["设计评审"].firstMatch
@@ -304,8 +303,7 @@ final class LarkAttachmentFlowTests: XCTestCase {
         continueAfterFailure = false
         let app = XCUIApplication()
         let pair = "persona://pair?url=" + hub.addingPercentEncoding(withAllowedCharacters: .alphanumerics)! + "&token=mock"
-        app.launchArguments = ["-pairURL", pair, "-tab", "mail", "-demo.on", "NO", "-ui.oldLayout", "NO",
-                               "-openInboxItem", "lark:f3:300", "-showLarkThreadAttachmentDraft", draft] + Self.fresh
+        app.launchArguments = ["-pairURL", pair, "-tab", "mail", "-demo.on", "NO",                                "-openInboxItem", "lark:f3:300", "-showLarkThreadAttachmentDraft", draft] + Self.fresh
         app.launchPinned()
         let thread = app.buttons.matching(NSPredicate(format: "label ENDSWITH %@", "条回复")).firstMatch
         XCTAssertTrue(thread.waitForExistence(timeout: 20), "the chat did not open at its thread")

@@ -3,10 +3,11 @@ package imessage
 import (
 	"context"
 	"fmt"
-	"regexp"
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/nwverse/persona/server/internal/lazyre"
 )
 
 // What goes to Persona' knowledge base, inbox and assistant (the user's "Hand to Persona" switch, on the hub): new
@@ -187,8 +188,8 @@ WHERE j.chat_id IN (`+ints(chats)+`) AND m.is_from_me = 1`, &rows); err != nil {
 func appleNanos(t time.Time) int64 { return (t.Unix() - appleEpoch) * 1e9 }
 
 var (
-	codeWords = regexp.MustCompile(`(?i)验证码|校验码|动态码|确认码|动态密码|安全码|激活码|\bcode\b|\botp\b|passcode|\bpin\b`)
-	codeDigit = regexp.MustCompile(`\b\d{4,8}\b`)
+	codeWords = lazyre.New(`(?i)验证码|校验码|动态码|确认码|动态密码|安全码|激活码|\bcode\b|\botp\b|passcode|\bpin\b`)
+	codeDigit = lazyre.New(`\b\d{4,8}\b`)
 )
 
 // MaskCodes hides the digits of a message that is about a code (verification code 123456 → verification code ••••): what Persona keeps

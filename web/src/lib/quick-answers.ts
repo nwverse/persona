@@ -4,7 +4,14 @@
 // are the chat card's (views/chat/Interactions.tsx sends them through the same resolve).
 import { t } from "../i18n";
 import type { Resolution } from "./answered";
+import { isSecretRun } from "./tool-detail";
 import type { Interaction } from "./types";
+
+/** A permission card only its own form can allow: it has fields to fill in (#4987), or it is a password card (#1137),
+ *  answered only with the password typed on it. Its quick paths (a row's answers, a notification's buttons) open the chat instead. */
+export function needsFieldValues(ix: Interaction): boolean {
+  return ix.kind === "permission" && (!!ix.fields?.length || isSecretRun(ix));
+}
 
 /** What a permission card's "Allow" sends. */
 export const allowBody = (): Resolution => ({ allow: true });
@@ -24,7 +31,7 @@ export interface QuickChoice {
 export function quickAnswers(ix: Interaction): QuickChoice[] | null {
   switch (ix.kind) {
     case "permission": {
-      if (ix.fields?.length) return null;
+      if (needsFieldValues(ix)) return null;
       return [
         { key: "allow", label: t("chat-interactions.allow"), body: allowBody(), primary: true },
         { key: "deny", label: t("chat-interactions.deny"), body: denyBody() },
@@ -33,8 +40,9 @@ export function quickAnswers(ix: Interaction): QuickChoice[] | null {
     case "question": {
       const qs = ix.questions ?? [];
       const q = qs[0];
-      if (qs.length !== 1 || !q || q.multi_select || !q.options.length || q.options.length > 4) return null;
-      return q.options.map((o, i) => ({ key: `o${i}`, label: o.label, body: { answers: { [q.question]: o.label } }, hint: o.description }));
+      const options = q?.options ?? [];
+      if (qs.length !== 1 || !q || q.multi_select || !options.length || options.length > 4) return null;
+      return options.map((o, i) => ({ key: `o${i}`, label: o.label, body: { answers: { [q.question]: o.label } }, hint: o.description }));
     }
     case "screen": {
       const d = ix.dialog;

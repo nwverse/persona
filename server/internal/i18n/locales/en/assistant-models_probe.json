@@ -9,9 +9,12 @@
   "status_403": "Forbidden (403): this key can’t use this model or endpoint",
   "region_blocked": "Anthropic’s official service isn’t available in this network’s region (403), so another key won’t help. Pick a provider that works here instead, such as {vendors}",
   "list_sep": ", ",
-  "status_404": "Not found (404): the Base URL may be wrong (it should be Anthropic Messages compatible)",
+  "status_404": "Not found (404): check the Base URL, model and configured protocol",
+  "status_protocol": "The endpoint rejected this request format ({status}): check the configured protocol",
   "status_429": "Rate limited (429): try again later, or the quota is used up",
   "status_other": "The gateway returned {status}",
   "said": "{head}: {said}",
-  "models_unreadable": "Couldn’t read the gateway’s model list"
+  "models_unreadable": "Couldn’t read the gateway’s model list",
+  "models_pagination": "Couldn’t finish reading the model list: invalid or excessive pagination",
+  "response_unfinished": "The Responses request did not complete successfully"
 }

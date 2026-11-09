@@ -1,6 +1,5 @@
 package persona.core.hub
 
-import persona.core.contracts.Hello
 import persona.core.contracts.HubScope
 import persona.core.contracts.JsonCodec
 import persona.core.contracts.MessageEcho
@@ -12,12 +11,10 @@ import persona.core.contracts.api.MessageTransport
 import persona.core.contracts.api.MessageTransportResult
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.stateIn
-import kotlinx.coroutines.launch
 import kotlinx.serialization.json.*
 import java.util.Base64
 import okhttp3.HttpUrl
@@ -43,16 +40,10 @@ class HttpMessageTransport(
         state == ConnectionState.Online && route != null && route === ready?.route
     }
         .stateIn(scope, SharingStarted.Eagerly, false)
-    @Volatile override var supportsClientOps = false
-        private set
-
-    init {
-        scope.launch(start = CoroutineStart.UNDISPATCHED) {
-            connection.events.collect { event ->
-                if (event is Hello) supportsClientOps = "client_ops" in event.features
-            }
-        }
-    }
+    // The authenticated hello is stored before catch-up. Queued event delivery
+    // is neither a readiness barrier nor replayed to a later transport.
+    override val supportsClientOps: Boolean
+        get() = connection.lastHello?.features?.contains("client_ops") == true
 
     /** Call at the end of the connection's onReady hook, after authoritative catch-up. */
     fun onReady() { caughtUp.value = ReadyRoute(connection.route.value) }

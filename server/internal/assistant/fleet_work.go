@@ -9,7 +9,6 @@ import (
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/proto"
-	"github.com/nwverse/persona/server/internal/transcript"
 )
 
 // Where each agent stands in its work as the session lists show it (docs/assistant/agent-work.md "Model"): what the Agents
@@ -59,6 +58,11 @@ func workOf(l i18n.Lang, sess proto.Session, reported *proto.WorkState, asking m
 	}
 	if w.WakeAt != nil && time.Since(*w.WakeAt) > wakeGrace {
 		w.WakeAt = nil // long overdue: nobody is waking it, it is no wait that ends by itself
+	}
+	if w.ResetsAt != nil && w.On == proto.WaitExternal && w.WakeAt == nil && !sess.TurnErrorResumes && w.Wait == "" {
+		// A usage-limit wait nothing ends (no continue set: auto_continue off, or dropped; a CLI that does not go on by
+		// itself): it names what it waits for, so the lists keep it for the user, not as a wait that ends by itself.
+		w.Wait = w.Line
 	}
 	return &w
 }
@@ -129,10 +133,11 @@ func interactionLine(l i18n.Lang, ix proto.Interaction) string {
 // decorateAwaits says whether sess (decorated, its work on it) stopped on a question to the user nobody answered yet
 // (Session.AwaitsReply, docs/protocol/agent-states.md "Awaiting your reply", #5096), and puts on it what it asks when the node could not
 // say (an older node, a host whose words come another way: no AsksRead): the list's last words, when they are the whole
-// reply. A node that read the reply and found no question (or found it answered) is taken at its word.
-func decorateAwaits(sess *proto.Session) {
+// reply. A node that read the reply and found no question (or found it answered) is taken at its word. asks reads them
+// (fleet_asks.go: again only when they changed since the machine's last list).
+func decorateAwaits(sess *proto.Session, asks askReader) {
 	if !sess.AsksRead && sess.Asks == "" && sess.LastText != "" && !strings.HasSuffix(sess.LastText, "…") {
-		sess.Asks = transcript.AskOf(sess.LastText)
+		sess.Asks = asks.of(sess.SessionID, sess.LastText)
 	}
 	sess.AwaitsReply = awaitsReply(*sess)
 }

@@ -394,9 +394,9 @@ struct DrawerPan: UIGestureRecognizerRepresentable {
     /// drawer); on Agents a drag to the right pages back to Assistant (the drawer opens from ☰ there).
     var pager: ShellPager? = nil
 
-    /// On Agents a drag to the right that starts on a row is the row's (Pin, Interrupt, Mark as Seen under it), unless it starts
-    /// this close to the screen's left edge, where the system's back swipe would start. To the left, from a row that
-    /// swipes left (Close), likewise unless it starts this close to the right edge.
+    /// A drag to the left that starts on a row that swipes left (a drawer conversation's Archive, `SwipeRowMark`) is the
+    /// row's, unless it starts this close to the screen's right edge, where the strip still pages (#2822). Agents' rows
+    /// do not swipe (#1244).
     static let edge: CGFloat = Theme.Space.xxl
 
     /// What a drag moves, decided when it starts.
@@ -439,10 +439,9 @@ struct DrawerPan: UIGestureRecognizerRepresentable {
             if let pager, Self.pages(pager: pager, dx: dx) {
                 if Self.sidewaysScroller(at: start, in: view, towardsRight: dx < 0) { return refused("sideways scroller") }
                 if Self.typing(at: start, in: view) { return refused("typing") }
-                if pager.page == 1, dx > 0, start.x > DrawerPan.edge, Self.onRow(at: start, in: view) { return refused("a row's swipe") }
-                // To the left the strip has a page on Agents too once Messages is on (#392): from a row that swipes left
-                // itself (an Agents row's Close, `SwipeRowMark`) the drag is the row's, except from the band at the
-                // right edge, which still pages (#2822). Rows without the mark have nothing to the left: they page.
+                // Agents' rows do not swipe (#1244: on the way to a chat the drag opened a row's buttons): along them a
+                // drag pages, to Assistant or on to Messages (#392). A row that does swipe left (a conversation's Archive
+                // in the drawer, `SwipeRowMark`) keeps that drag, except from the band at the right edge (#2822).
                 if dx < 0, start.x < view.bounds.width - DrawerPan.edge, Self.onSwipeRow(at: start, in: view) {
                     return refused("a row's swipe")
                 }
@@ -464,8 +463,8 @@ struct DrawerPan: UIGestureRecognizerRepresentable {
         /// would start in (so scrolling starts no later). Without this the conversation's pan won the race on a
         /// thumb's 40° swipe (its vertical part passed the list's threshold first) and the drawer was never asked:
         /// the swipe did nothing. A code block at its left edge likewise took a drag to the right to bounce.
-        /// In the shell the list's own swipe (a row's Pin / Close) waits too: from the edge band a drag to the right is
-        /// the strip's, elsewhere on a row it is refused at once and the row's swipe goes ahead.
+        /// In the shell a list's own swipe (a drawer conversation's Archive) waits too: refused at once on a row that
+        /// swipes, the row's swipe goes ahead.
         func gestureRecognizer(_ g: UIGestureRecognizer, shouldBeRequiredToFailBy other: UIGestureRecognizer) -> Bool {
             guard let s = other.view as? UIScrollView else { return false }
             if other === s.panGestureRecognizer { return true }
@@ -518,50 +517,12 @@ struct DrawerPan: UIGestureRecognizerRepresentable {
             return false
         }
 
-        /// The finger is on a row that swipes to the left (`SwipeRowMark`): the sidebar's conversations (Archive), the
-        /// Agents rows that can be closed (Close).
+        /// The finger is on a row that swipes to the left (`SwipeRowMark`): the sidebar's conversations (Archive).
         static func onSwipeRow(at point: CGPoint, in view: UIView) -> Bool {
             var hit = view.hitTest(point, with: nil)
             while let v = hit, v !== view {
                 if v is UICollectionViewCell || v is UITableViewCell { return SwipeRowMark.marks(v) }
                 hit = v.superview
-            }
-            return false
-        }
-
-        /// The finger is on a list row with a swipe of its own (the Agents list's rows swipe to the right to Pin / Interrupt /
-        /// Mark as Seen). A row marked `NoRowSwipe` (the filter bar, the list's first row on a phone) has none: a drag along
-        /// it turns the strip back to Assistant, as it did when the bar sat above the list.
-        static func onRow(at point: CGPoint, in view: UIView) -> Bool {
-            var hit = view.hitTest(point, with: nil)
-            while let v = hit, v !== view {
-                if v is UICollectionViewCell || v is UITableViewCell { return !NoRowSwipe.marks(v) }
-                hit = v.superview
-            }
-            return false
-        }
-    }
-
-    /// Marks a list row that has no swipe of its own (`Coordinator.onRow`): a point-sized view in the row's background,
-    /// found among the cell's subviews.
-    struct NoRowSwipe: UIViewRepresentable {
-        final class Marker: UIView {}
-
-        func makeUIView(context: Context) -> Marker {
-            let v = Marker()
-            v.isUserInteractionEnabled = false
-            v.isAccessibilityElement = false
-            return v
-        }
-
-        func updateUIView(_ uiView: Marker, context: Context) {}
-
-        /// Whether `cell` holds a marker (a few levels down: the row's hosting views).
-        static func marks(_ cell: UIView) -> Bool {
-            var level = [cell]
-            for _ in 0..<8 where !level.isEmpty {
-                if level.contains(where: { $0 is Marker }) { return true }
-                level = level.flatMap(\.subviews)
             }
             return false
         }
@@ -673,19 +634,14 @@ struct DrawerPan: UIGestureRecognizerRepresentable {
 }
 #else
 /// visionOS: a pinch-and-drag scrolls, and the sidebar opens from its ☰ button; nothing takes a sideways drag.
-struct DrawerPan {
-    /// Marks nothing: there is no drawer drag to keep off a row.
-    struct NoRowSwipe: View {
-        var body: some View { EmptyView() }
-    }
-}
+struct DrawerPan {}
 #endif
 
 #endif
 
 #if os(iOS) || os(visionOS)
-/// Marks a list row whose swipe to the left the drawer and the strip leave alone (a sidebar conversation's Archive, an
-/// Agents row's Close): they look for it in the cell under the finger.
+/// Marks a list row whose swipe to the left the drawer and the strip leave alone (a sidebar conversation's Archive):
+/// they look for it in the cell under the finger.
 struct SwipeRowMark: UIViewRepresentable {
     final class Marker: UIView {}
 
@@ -910,7 +866,7 @@ struct AssistantSidebar: View {
                     AssistantTopBar.circle(Theme.Icon.search, label: String(localized: "Search Chats [Assistant Sidebar 55c9e4]"), id: "assistant-sidebar-search", action: openSearch)
                 } else {
                     Button(action: openSearch) {
-                        Image(systemName: Theme.Icon.search)
+                        ThemedIcon(Theme.Icon.search)
                             .font(Theme.Font.heading)
                             .foregroundStyle(Color.primary)
                             .scaledFrame(width: Theme.Size.avatarL, height: Theme.Size.avatarL)
@@ -945,13 +901,13 @@ struct AssistantSidebar: View {
                 .autocorrectionDisabled()
         } else {
             HStack(spacing: Theme.Space.s) {
-                Image(systemName: Theme.Icon.search).font(Theme.Font.secondaryMedium).foregroundStyle(.secondary)
+                ThemedIcon(Theme.Icon.search).font(Theme.Font.secondaryMedium).foregroundStyle(.secondary)
                 TextField(String(localized: "Search Chats [Assistant Sidebar 55c9e4]"), text: $query)
                     .focused($searching)
                     .submitLabel(.search)
                     .autocorrectionDisabled()
                 if !query.isEmpty {
-                    Button { query = "" } label: { Image(systemName: Theme.Icon.clear).foregroundStyle(.tertiary) }
+                    Button { query = "" } label: { ThemedIcon(Theme.Icon.clear).foregroundStyle(.tertiary) }
                         .buttonStyle(.plain)
                         .accessibilityLabel("Clear Search")
                 }
@@ -1018,22 +974,23 @@ struct AssistantSidebar: View {
         let symbol = ExtensionSlots.icon(p.icon)
         Group {
             if AppStyle.current.usesBeautifulUI {
-                BUISidebarRow(p.title, symbol: symbol, action: run) {
+                BUISidebarRow(p.title, symbol: Theme.Icon.styled(symbol), action: run) {
                     if let b = p.badge { ExtensionBadgeView(badge: b) }
                 }
             } else {
                 Button(action: run) {
-                    HStack(spacing: Theme.Space.l) {
+                    HStack(spacing: Theme.Sidebar.gap) {
                         Image(systemName: symbol).resizable().scaledToFit().fontWeight(isShell ? .medium : .regular)
                             .foregroundStyle(Color.primary)
-                            .scaledFrame(width: Theme.Size.iconS, height: Theme.Size.iconS)
-                            .scaledFrame(width: Theme.Size.icon)
+                            .scaledFrame(width: Theme.Sidebar.glyph, height: Theme.Sidebar.glyph)
+                            .scaledFrame(width: Theme.Sidebar.glyphColumn)
                         Text(p.title).font(Theme.Font.body).foregroundStyle(Color.primary).lineLimit(1)
                         Spacer(minLength: 0)
                         if let b = p.badge { ExtensionBadgeView(badge: b) }
                     }
                     .padding(.horizontal, Theme.Space.m)
-                    .scaledFrame(minHeight: isShell ? Theme.Size.box50 : Theme.Size.avatarL)
+                    .padding(.vertical, Theme.Sidebar.rowPadding)
+                    .scaledFrame(minHeight: Theme.Sidebar.row)
                     .contentShape(.rect)
                 }
                 .buttonStyle(.plain)
@@ -1054,16 +1011,17 @@ struct AssistantSidebar: View {
     /// A place to go at the top of the Mac's list: a conversation row's size, its symbol where a conversation has its mark.
     private func macPlace(_ title: String, _ symbol: String, run: @escaping () -> Void) -> some View {
         Button(action: run) {
-            HStack(spacing: Theme.Space.m) {
+            HStack(spacing: Theme.Sidebar.gap) {
                 Image(systemName: symbol).resizable().scaledToFit().foregroundStyle(.secondary)
-                    .scaledFrame(width: Theme.Size.iconS, height: Theme.Size.iconS)
-                    .scaledFrame(width: Theme.Size.wellM)
+                    .scaledFrame(width: Theme.Sidebar.glyph, height: Theme.Sidebar.glyph)
+                    .scaledFrame(width: Theme.Sidebar.mark)
                 Text(title).font(Theme.Font.body).foregroundStyle(Color.primary).lineLimit(1)
                 Spacer(minLength: 0)
             }
             .padding(.horizontal, Theme.Space.m)
-            .scaledFrame(minHeight: Theme.Size.box50)
-            .macHoverShade(in: RoundedRectangle(cornerRadius: Theme.Radius.card, style: .continuous))
+            .padding(.vertical, Theme.Sidebar.rowPadding)
+            .scaledFrame(minHeight: Theme.Sidebar.row)
+            .macHoverShade(in: RoundedRectangle(cornerRadius: Theme.Sidebar.radius, style: .continuous))
             .contentShape(.rect)
         }
         .buttonStyle(.plain)
@@ -1081,11 +1039,11 @@ struct AssistantSidebar: View {
         let key = model.assistantMain
         let main = all.first { $0.key == key }
         let selected = key != nil && key == current
-        let radius = isShell ? Theme.Radius.panel : Theme.Radius.card
+        let radius = Theme.Sidebar.radius
         return Button { if let key { open(key) } else { newConversation() } } label: {
-            HStack(spacing: macPlacesGroup ? Theme.Space.m : Theme.Space.l) {
+            HStack(spacing: Theme.Sidebar.gap) {
                 // Where the places below have their symbol, the same width (on the Mac's plain list, `macPlace`'s).
-                AppGlyph(size: macPlacesGroup ? Theme.Size.wellM : Theme.Size.icon, scaled: true)
+                AppGlyph(size: macPlacesGroup ? Theme.Sidebar.mark : Theme.Sidebar.glyphColumn, scaled: true)
                 // The small "Main Chat" under the name keeps the row readable as a conversation, not a heading (#6328, as the web, #6293).
                 VStack(alignment: .leading, spacing: Theme.Space.xxs) {
                     Text(Self.mainTitle).font(Theme.Font.body).foregroundStyle(Color.primary).lineLimit(1)
@@ -1095,7 +1053,8 @@ struct AssistantSidebar: View {
                 if let main { mark(main) }
             }
             .padding(.horizontal, Theme.Space.m)
-            .scaledFrame(minHeight: isShell || macPlacesGroup ? Theme.Size.box50 : Theme.Size.avatarL)
+            .padding(.vertical, Theme.Sidebar.rowPadding)
+            .scaledFrame(minHeight: Theme.Sidebar.row)
             .background {
                 if selected { RoundedRectangle(cornerRadius: radius, style: .continuous).fill(Self.selectedFill) }
             }
@@ -1132,7 +1091,7 @@ struct AssistantSidebar: View {
     @ViewBuilder private func action(_ title: String, _ symbol: String, id: String? = nil, count: Int = 0, run: @escaping () -> Void) -> some View {
         if AppStyle.current.usesBeautifulUI {
             // SidebarNav's primary items.
-            BUISidebarRow(title, symbol: symbol, action: run) {
+            BUISidebarRow(title, symbol: Theme.Icon.styled(symbol), action: run) {
                 if count > 0 { CountBadge(count: count, look: .solid(Theme.needsYou)) }
             }
             .accessibilityIdentifier(id ?? "sidebar-" + title)
@@ -1143,17 +1102,18 @@ struct AssistantSidebar: View {
 
     private func plainAction(_ title: String, _ symbol: String, id: String? = nil, count: Int = 0, run: @escaping () -> Void) -> some View {
         Button(action: run) {
-            HStack(spacing: Theme.Space.l) {
+            HStack(spacing: Theme.Sidebar.gap) {
                 // One box for every symbol: a wide one (Knowledge's books) scales down into it instead of pushing its words.
                 Image(systemName: symbol).resizable().scaledToFit().fontWeight(isShell ? .medium : .regular).foregroundStyle(Color.primary)
-                    .scaledFrame(width: Theme.Size.iconS, height: Theme.Size.iconS)
-                    .scaledFrame(width: Theme.Size.icon)
+                    .scaledFrame(width: Theme.Sidebar.glyph, height: Theme.Sidebar.glyph)
+                    .scaledFrame(width: Theme.Sidebar.glyphColumn)
                 Text(title).font(Theme.Font.body).foregroundStyle(Color.primary).lineLimit(1)
                 Spacer(minLength: 0)
                 if count > 0 { CountBadge(count: count, look: .solid(Theme.needsYou)) }
             }
             .padding(.horizontal, Theme.Space.m)
-            .scaledFrame(minHeight: isShell ? Theme.Size.box50 : Theme.Size.avatarL)
+            .padding(.vertical, Theme.Sidebar.rowPadding)
+            .scaledFrame(minHeight: Theme.Sidebar.row)
             .contentShape(.rect)
         }
         .buttonStyle(.plain)
@@ -1226,19 +1186,20 @@ struct AssistantSidebar: View {
         } label: {
             HStack(spacing: Theme.Space.m) {
                 if !isShell {
-                    Image(systemName: Theme.Icon.autoConversations).font(Theme.Font.label).foregroundStyle(.secondary)
-                        .scaledFrame(width: Theme.Size.wellM, height: Theme.Size.wellM)
+                    ThemedIcon(Theme.Icon.autoConversations).font(Theme.Font.label).foregroundStyle(.secondary)
+                        .scaledFrame(width: Theme.Sidebar.mark, height: Theme.Sidebar.mark)
                 }
                 Text("Auto Chats").font(Theme.Font.body).foregroundStyle(Color.primary).lineLimit(1)
                 Text("\(split.auto.count)").font(Theme.Font.secondary.monospacedDigit()).foregroundStyle(.secondary).lineLimit(1)
                 Spacer(minLength: Theme.Space.xs)
                 stateMark(needsYou: split.needsYou, working: split.working, unread: split.unread)
-                Image(systemName: autoOpen ? Theme.Icon.collapse : Theme.Icon.expand)
+                ThemedIcon(autoOpen ? Theme.Icon.collapse : Theme.Icon.expand)
                     .font(Theme.Font.labelStrong).foregroundStyle(.tertiary)
             }
             .padding(.horizontal, Theme.Space.m)
-            .scaledFrame(minHeight: isShell ? Theme.Size.avatarXL : Theme.Size.box50)
-            .macHoverShade(in: RoundedRectangle(cornerRadius: isShell ? Theme.Radius.panel : Theme.Radius.card, style: .continuous))
+            .padding(.vertical, Theme.Sidebar.rowPadding)
+            .scaledFrame(minHeight: Theme.Sidebar.row)
+            .macHoverShade(in: RoundedRectangle(cornerRadius: Theme.Sidebar.radius, style: .continuous))
             .contentShape(.rect)
         }
         .buttonStyle(.plain)
@@ -1262,7 +1223,7 @@ struct AssistantSidebar: View {
                            run: @escaping () -> Void) -> some View {
         Button(action: run) {
             HStack(spacing: Theme.Space.s) {
-                Image(systemName: symbol).font(Theme.Font.label).foregroundStyle(.secondary)
+                ThemedIcon(symbol).font(Theme.Font.label).foregroundStyle(.secondary)
                     .scaledFrame(width: Theme.Size.iconS)
                 Text(name).font(Theme.Font.secondary).foregroundStyle(Color.primary).lineLimit(1)
                 if let count {
@@ -1270,12 +1231,13 @@ struct AssistantSidebar: View {
                 }
                 Spacer(minLength: Theme.Space.xs)
                 stateMark(needsYou: needsYou, working: working, unread: 0)
-                Image(systemName: Theme.Icon.disclosure).font(Theme.Font.labelStrong).foregroundStyle(.tertiary)
+                ThemedIcon(Theme.Icon.disclosure).font(Theme.Font.labelStrong).foregroundStyle(.tertiary)
             }
-            .padding(.leading, isShell ? Theme.Space.xl : Theme.Space.m + Theme.Size.wellM + Theme.Space.m)
+            .padding(.leading, isShell ? Theme.Space.xl : Theme.Space.m + Theme.Sidebar.mark + Theme.Space.m)
             .padding(.trailing, Theme.Space.m)
-            .scaledFrame(minHeight: Theme.Size.tapTarget)
-            .macHoverShade(in: RoundedRectangle(cornerRadius: Theme.Radius.control, style: .continuous))
+            .padding(.vertical, Theme.Sidebar.rowPadding)
+            .scaledFrame(minHeight: Theme.Sidebar.row)
+            .macHoverShade(in: RoundedRectangle(cornerRadius: Theme.Sidebar.radius, style: .continuous))
             .contentShape(.rect)
         }
         .buttonStyle(.plain)
@@ -1322,7 +1284,7 @@ struct AssistantSidebar: View {
     @ViewBuilder private func results(_ hits: [Session]) -> some View {
         if hits.isEmpty {
             VStack(spacing: Theme.Space.sm) {
-                Image(systemName: Theme.Icon.search).font(Theme.Font.title).foregroundStyle(.tertiary)
+                ThemedIcon(Theme.Icon.search).font(Theme.Font.title).foregroundStyle(.tertiary)
                 Text("No Results for “\(query)”").font(Theme.Font.secondary).foregroundStyle(.secondary)
             }
             .frame(maxWidth: .infinity)
@@ -1340,7 +1302,7 @@ struct AssistantSidebar: View {
             BUISidebarHeading(text) {
                 if !HeadingMenu.isEmpty(items) {
                     SwiftUI.Menu { items } label: {
-                        Image(systemName: Theme.Icon.more).font(Theme.Font.captionStrong)
+                        ThemedIcon(Theme.Icon.more).font(Theme.Font.captionStrong)
                             .scaledFrame(width: Theme.Size.tapTarget, height: Theme.Size.wellXS)
                             .contentShape(.rect)
                     }
@@ -1364,7 +1326,7 @@ struct AssistantSidebar: View {
             Spacer(minLength: 0)
             if !HeadingMenu.isEmpty(items) {
                 SwiftUI.Menu { items } label: {
-                    Image(systemName: Theme.Icon.more).font(Theme.Font.captionStrong).foregroundStyle(.tertiary)
+                    ThemedIcon(Theme.Icon.more).font(Theme.Font.captionStrong).foregroundStyle(.tertiary)
                         .scaledFrame(width: Theme.Size.tapTarget, height: Theme.Size.wellXS)
                         .contentShape(.rect)
                 }
@@ -1401,7 +1363,7 @@ struct AssistantSidebar: View {
                 // The shell's list is ChatGPT's: titles only, all in one column (the marks made it busy); the main
                 // conversation (only in search results here) keeps the app's logo, as its first row has it (#2004).
                 if isMain {
-                    AppGlyph(size: isShell ? Theme.Size.icon : Theme.Size.wellM, scaled: true)
+                    AppGlyph(size: isShell ? Theme.Sidebar.glyphColumn : Theme.Sidebar.mark, scaled: true)
                 } else if isShell {
                     EmptyView()
                 } else {
@@ -1413,14 +1375,14 @@ struct AssistantSidebar: View {
                 mark(s)
             }
             .padding(.horizontal, Theme.Space.m)
-            .scaledFrame(minHeight: isShell ? Theme.Size.avatarXL : Theme.Size.box50)
+            .padding(.vertical, Theme.Sidebar.rowPadding)
+            .scaledFrame(minHeight: Theme.Sidebar.row)
             .background {
                 if selected {
-                    // Rounder in the shell: a pill, like ChatGPT's selected chat.
-                    RoundedRectangle(cornerRadius: isShell ? Theme.Radius.panel : Theme.Radius.card, style: .continuous).fill(Self.selectedFill)
+                    RoundedRectangle(cornerRadius: Theme.Sidebar.radius, style: .continuous).fill(Self.selectedFill)
                 }
             }
-            .macHoverShade(in: RoundedRectangle(cornerRadius: isShell ? Theme.Radius.panel : Theme.Radius.card, style: .continuous))
+            .macHoverShade(in: RoundedRectangle(cornerRadius: Theme.Sidebar.radius, style: .continuous))
             .contentShape(.rect)
         }
         .buttonStyle(.plain)
@@ -1558,7 +1520,7 @@ struct AssistantSidebar: View {
             Spacer(minLength: Theme.Space.s)
             if let openSettings {
                 Button(action: openSettings) {
-                    Image(systemName: Theme.Icon.settings)
+                    ThemedIcon(Theme.Icon.settings)
                         .font(Theme.Font.heading)
                         .foregroundStyle(Color.primary)
                         .scaledFrame(width: Theme.Size.avatarL, height: Theme.Size.avatarL)
@@ -1601,7 +1563,7 @@ private struct AssistantProfileFooter: View {
                         VStack(alignment: .leading, spacing: Theme.Space.xxs) {
                             HStack(spacing: Theme.Space.xs) {
                                 Text(model.persona.name).font(Theme.Font.bodyStrong).foregroundStyle(Color.primary).lineLimit(1)
-                                Image(systemName: Theme.Icon.disclosure).font(Theme.Font.labelStrong).foregroundStyle(.tertiary)
+                                ThemedIcon(Theme.Icon.disclosure).font(Theme.Font.labelStrong).foregroundStyle(.tertiary)
                             }
                             HStack(spacing: Theme.Space.xs) {
                                 Circle().fill(online ? Theme.positive : Color.secondary.opacity(0.5))
@@ -1620,7 +1582,7 @@ private struct AssistantProfileFooter: View {
                 Spacer(minLength: Theme.Space.s)
                 if let openSettings {
                     Button(action: openSettings) {
-                        Image(systemName: Theme.Icon.settings).font(Theme.Font.title).foregroundStyle(Color.primary)
+                        ThemedIcon(Theme.Icon.settings).font(Theme.Font.title).foregroundStyle(Color.primary)
                             .scaledFrame(width: Theme.Size.tapTarget, height: Theme.Size.tapTarget)
                             .contentShape(.rect)
                     }
@@ -1682,8 +1644,8 @@ struct ConversationMark: View {
         Circle()
             .fill(hue.opacity(0.14))
             .overlay(Circle().stroke(hue.opacity(0.25), lineWidth: Theme.Size.hairline))
-            .scaledFrame(width: Theme.Size.wellM, height: Theme.Size.wellM)
-            .overlay(Image(systemName: Theme.Icon.conversation).font(Theme.Font.label).foregroundStyle(hue))
+            .scaledFrame(width: Theme.Sidebar.mark, height: Theme.Sidebar.mark)
+            .overlay(ThemedIcon(Theme.Icon.conversation).font(Theme.Font.label).foregroundStyle(hue))
             .accessibilityHidden(true)
     }
 }

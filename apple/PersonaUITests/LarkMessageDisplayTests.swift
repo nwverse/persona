@@ -4,8 +4,7 @@ final class LarkMessageDisplayFlowTests: XCTestCase {
     @MainActor private func launch(_ hub: String, settings: Bool) -> XCUIApplication {
         let app = XCUIApplication()
         let pair = "persona://pair?url=" + hub.addingPercentEncoding(withAllowedCharacters: .alphanumerics)! + "&token=mock"
-        app.launchArguments = ["-pairURL", pair, "-tab", settings ? "settings" : "mail", "-demo.on", "NO", "-ui.oldLayout", "NO",
-                               "-openConnectorFeishu", settings ? "YES" : "NO", "-inbox.source", "", "-inbox.kind", "mention", "-openInboxFirst", "NO"]
+        app.launchArguments = ["-pairURL", pair, "-tab", settings ? "settings" : "mail", "-demo.on", "NO",                                "-openConnectorFeishu", settings ? "YES" : "NO", "-inbox.source", "", "-inbox.kind", "mention", "-openInboxFirst", "NO"]
         app.launchPinned()
         return app
     }

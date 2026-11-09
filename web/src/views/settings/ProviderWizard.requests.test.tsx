@@ -100,7 +100,7 @@ describe("provider discovery ownership", () => {
   it("does not save A's deferred models into B after closing and reopening (#1314)", async () => {
     await draw(a);
     click("settings-providerwizard.discover");
-    expect(pending[0]!.body).toEqual({ name: "provider-a", base_url: "https://a.example.com", auth: "bearer" });
+    expect(pending[0]!.body).toEqual({ name: "provider-a", base_url: "https://a.example.com", auth: "bearer", api: "messages" });
     click("common.cancel");
     await draw(b);
     await settle(pending[0]!, "success");
