@@ -10,7 +10,9 @@ fallback must require the complete leading delivery envelope and exclude app-sen
 classify arbitrary clock/clipboard prefixes or source titles. Preserve unknown source kinds as external provenance,
 bump the item cache version, and carry the provenance into Watch's derived text model as well as the shared chat view.
 Group labels after feed and date insertion; adjacent rows with the same title but different conversation ids are not
-the same speaker. Use synthetic conversations for screenshots, not the user's real main conversation.
+the same speaker. `JSONValue.string` coerces booleans and numbers for generic UI: provenance fields must pattern-match
+actual JSON strings, or malformed metadata can become an invented source instead of protecting a user quotation.
+Use synthetic conversations for screenshots, not the user's real main conversation.
 
 - A session's "last edited" time must be the timestamp of its last real conversation entry (user / assistant / tool): Claude Code appends recap, ai-title,
   mode, and other lines to idle sessions, refreshing the file's mtime. Leave the timestamp blank for sessions whose transcript cannot be found; do not fall back to now (it would always show "Just now").

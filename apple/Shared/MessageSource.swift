@@ -29,9 +29,9 @@ nonisolated struct MessageSource: Hashable, Sendable {
 
     static func of(_ item: Item) -> MessageSource? {
         guard item.role == "user", item.kind == .text else { return nil }
-        if let value = item.source, let kind = clean(value["kind"]?.string) {
-            return MessageSource(kind: kind, conversationID: clean(value["conversation_id"]?.string),
-                                 title: clean(value["title"]?.string))
+        if let value = item.source, let kind = clean(string(value["kind"])) {
+            return MessageSource(kind: kind, conversationID: clean(string(value["conversation_id"])),
+                                 title: clean(string(value["title"])))
         }
         // Only unmarked runtime input is text-inferred. Explicit injected metadata still carries server provenance.
         let inferText = item.clientMsgID == nil && item.from == nil
@@ -58,6 +58,12 @@ nonisolated struct MessageSource: Hashable, Sendable {
             return injected.detail.flatMap { $0.isEmpty ? nil : $0 } ?? injected.line
         }
         return legacyBody(item.cutText)
+    }
+
+    /// JSONValue.string deliberately coerces numbers/bools for generic UI; provenance requires actual strings.
+    private static func string(_ value: JSONValue?) -> String? {
+        guard let value, case .string(let text) = value else { return nil }
+        return text
     }
 
     private static func clean(_ text: String?) -> String? {
@@ -110,11 +116,11 @@ nonisolated struct MessageSource: Hashable, Sendable {
                   let inner = Range(match.range(at: 2), in: rest) {
                 if String(rest[attrs]).contains(#"kind="message-source""#) {
                     let value = try? JSONDecoder().decode(JSONValue.self, from: Data(String(rest[inner]).utf8))
-                    guard value?["author"]?.string != "user", let kind = clean(value?["kind"]?.string) else {
+                    guard string(value?["author"]) != "user", let kind = clean(string(value?["kind"])) else {
                         return Metadata(found: true, source: nil)
                     }
                     return Metadata(found: true, source: MessageSource(kind: kind,
-                        conversationID: clean(value?["conversation_id"]?.string), title: clean(value?["title"]?.string)))
+                        conversationID: clean(string(value?["conversation_id"])), title: clean(string(value?["title"]))))
                 }
                 rest = String(rest[whole.upperBound...])
             }
