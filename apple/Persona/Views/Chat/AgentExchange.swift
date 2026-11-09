@@ -166,18 +166,35 @@ struct ExchangeText: View {
 
     nonisolated private static let memo = TextMemo<AttributedString>(limit: 512)
 
-    /// The text with its web links as links (the chat's `openURL` opens them in the link sheet).
+    /// The text as the chat shows an Agent's words (#2363): inline Markdown rendered (bold, italics, code, links; no raw
+    /// `**`), line breaks kept, a heading's `#`s dropped, and bare web links made links (the chat's `openURL` opens them in
+    /// the link sheet). Blocks stay lines of text so the lines can still be counted and folded.
     nonisolated static func linked(_ text: String) -> AttributedString {
         memo(text) { raw in
-            var out = AttributedString(raw)
+            let options = AttributedString.MarkdownParsingOptions(interpretedSyntax: .inlineOnlyPreservingWhitespace,
+                                                                  failurePolicy: .returnPartiallyParsedIfPossible)
+            var out = (try? AttributedString(markdown: withoutHeadingMarks(raw), options: options)) ?? AttributedString(raw)
+            let plain = String(out.characters)
             guard let detector = try? NSDataDetector(types: NSTextCheckingResult.CheckingType.link.rawValue) else { return out }
-            let ns = raw as NSString
-            for m in detector.matches(in: raw, range: NSRange(location: 0, length: ns.length)) {
-                guard let url = m.url, url.scheme == "http" || url.scheme == "https",
-                      let r = Range(m.range, in: raw), let ar = Range(r, in: out) else { continue }
-                out[ar].link = url
+            let ns = plain as NSString
+            for m in detector.matches(in: plain, range: NSRange(location: 0, length: ns.length)) {
+                guard let url = m.url, url.scheme == "http" || url.scheme == "https", let r = Range(m.range, in: plain) else { continue }
+                let lo = out.characters.index(out.startIndex, offsetBy: plain.distance(from: plain.startIndex, to: r.lowerBound))
+                let hi = out.characters.index(out.startIndex, offsetBy: plain.distance(from: plain.startIndex, to: r.upperBound))
+                if out[lo..<hi].runs.allSatisfy({ $0.link == nil }) { out[lo..<hi].link = url }
             }
             return out
         }
+    }
+
+    /// `## Result` → `Result`: inline parsing keeps a heading's marks as text.
+    nonisolated static func withoutHeadingMarks(_ text: String) -> String {
+        guard text.contains("#") else { return text }
+        return text.split(separator: "\n", omittingEmptySubsequences: false).map { line in
+            let trimmed = line.drop { $0 == " " }
+            let hashes = trimmed.prefix { $0 == "#" }
+            guard (1...6).contains(hashes.count), trimmed.dropFirst(hashes.count).first == " " else { return String(line) }
+            return String(trimmed.dropFirst(hashes.count + 1))
+        }.joined(separator: "\n")
     }
 }
