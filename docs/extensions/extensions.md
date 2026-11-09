@@ -2977,8 +2977,6 @@ The form's upstream has no `tools` switch, so it is auto: it declares the functi
 
 ### Taking over manager.json entries
 
-**Provider compatibility (#1229)**: `live` and `codex` are GPT-Live dialects. An ordinary ARK API Key, an OpenAI-compatible `/v1/realtime` endpoint, or a Doubao speech-service key does not make either dialect speak Volcengine's protocol. Volcengine Seeduplex uses `wss://openspeech.bytedance.com/api/v3/duplex/realtime/dialogue`, `X-Api-Key` and `session.model = "1.2.6.1"`; its adapter is tracked separately in #1229. Until it lands, this settings form requires a real GPT-Live-compatible service and key. A complete configuration (`GET /info` without `setup`) is not proof that the upstream WebSocket, account, audio or delegation works; there is no connection-test endpoint yet. The service must be enabled in its console before testing with its own credentials.
-
 - The **first** manager.json entry with empty or `voice` `kind`, `command` of `personad` / `personad` (no path), and `args[0]` of `voice` no longer runs as a manager.json extension,
   instead registering as a built-in with the same id: **id unchanged** (model-config purpose `plugin.<id>`, selected models and app voice choices remain), socket still `~/.persona/extensions/<id>.sock`,
   with `dir`, `env`, `config` supplied as before (env vars above). Entry `socket` unused; later matching entries still run as manager.json extensions.
@@ -3028,6 +3026,8 @@ plus one shared `GET /api/v1/ws` (`subscribe` main chat, receive `turn_duration`
 
 If the upstream session drops mid-conversation (service restart, network loss), the app connection stays open and shows "Disconnected, reconnecting"; the extension opens a new session with the last 40 utterances in the prompt,
 at most 3 consecutive reconnects per conversation (reset after a session lasts 60 seconds). On app `interrupt`, the extension discards unsent audio for this response (GPT-Live has no interrupt frame; the model stops when it hears the interruption).
+
+**Provider compatibility (#1229)**: `live` and `codex` are GPT-Live dialects. An ordinary ARK API Key, an OpenAI-compatible `/v1/realtime` endpoint, or a Doubao speech-service key does not make either dialect speak Volcengine's protocol. Volcengine Seeduplex uses `wss://openspeech.bytedance.com/api/v3/duplex/realtime/dialogue`, `X-Api-Key` and `session.model = "1.2.6.1"`; its adapter is tracked separately in #1229. Until it lands, this settings form requires a real GPT-Live-compatible service and key. A complete configuration (`GET /info` without `setup`) is not proof that the upstream WebSocket, account, audio or delegation works; there is no connection-test endpoint yet. The service must be enabled in its console before testing with its own credentials.
 
 ### Deployment
 
