@@ -22,6 +22,7 @@ import {
   undatedCount,
   weekdayNames,
   weekStartDay,
+  regionWeekStart,
   type CalendarEntry,
 } from "./todo-calendar";
 
@@ -132,6 +133,12 @@ describe("to-dos on the calendar (#2029)", () => {
     expect(weekdayNames(MON, false)[0]).not.toBe(weekdayNames(SUN, false)[0]);
     expect(weekStartDay("en-US")).toBe(SUN);
     expect(weekStartDay("de-DE")).toBe(MON);
+    expect(weekStartDay("zh-CN")).toBe(MON);
+    expect(weekStartDay("zh")).toBe(MON);
+    expect(weekStartDay("zh-TW")).toBe(SUN);
+    // A browser without week info goes by the region.
+    expect([regionWeekStart("CN"), regionWeekStart("US"), regionWeekStart("JP"), regionWeekStart("EG"), regionWeekStart(undefined)])
+      .toEqual([MON, SUN, SUN, 6, MON]);
     expect(dayKey(at(9, 23, 59))).toBe("2026-11-09");
     expect(parseDayKey("2026-11-09")).toBe(at(9, 0));
     expect(parseDayKey("nope")).toBeUndefined();
