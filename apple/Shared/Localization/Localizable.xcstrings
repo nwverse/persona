@@ -97175,24 +97175,48 @@
       },
       "extractionState" : "manual"
     },
-    "Sent as You" : {
+    "Records sent as you" : {
+      "extractionState" : "manual",
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Sent as You"
+            "value" : "Records sent as you"
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "あなたの名前で送信"
+            "value" : "あなたの名前で送信した記録"
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "以你的名义发出"
+            "value" : "以你的名义发出的记录"
+          }
+        }
+      }
+    },
+    "What Persona sent in your name, and why it was allowed" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "What Persona sent in your name, and why it was allowed"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "あなたの名前で送信した内容と、許可された理由"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "以你的名义发出过什么、为什么放行"
           }
         }
       }

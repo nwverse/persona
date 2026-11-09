@@ -190,6 +190,9 @@ Five minutes after node starts, it logs average duration once (`metrics: a sampl
 ## Storage and retention
 
 On receipt, the manager retains the latest sample in memory (Dashboard **Now**, not current if older than 30 seconds) and writes it to `machine_metrics` (raw `step = 10` row).
+The nodes sample on the same wall-clock tick, so one writer stores a tick's samples of every machine in one transaction (`db.InsertMetrics`: one commit and one WAL flush, not one a machine).
+It writes once every machine that sent in the last 30 seconds has sent this tick's, at most 2 seconds after the first (a single machine's sample is written at once); one machine's bad sample does not cost the others theirs.
+Samples wait in a queue of 1024; when Postgres is that far behind, a sample is dropped with a log line. A stopping manager still writes what it has, for at most 2 seconds.
 
 The main assistant's read-only `machines_list` tool combines the trusted machine list with the manager's last system information and sample, working agent count, recent failing launchers and node version status. It reports the list's completeness and excluded count; machines that belong to another manager or are not trusted are not exposed. Connection, session and launcher records have separate availability: an empty failure list means no recent failure is recorded, not that every launcher was checked. Values whose source is missing, ambiguous, offline, stale or has a future timestamp are null with a reason. Samples over 30 seconds old retain their age but are not current; a sample from before the current connection is not current either. System information is the last reported information and may persist while offline; memory and disk availability follow the collection definitions above, and disk is an aggregate rather than necessarily the work directory's filesystem. Node builds that differ cannot be ordered by their identifiers, so a different build alone is not called outdated. The tool returns facts without ranking machines.
 Every minute `metricsLoop`:
@@ -222,6 +225,7 @@ How many tokens each machine runs, for the Machines page's cards and charts (the
   its input includes the cached part, which is counted as cache read (input minus cached as input); Codex has no cache write (always 0); reasoning tokens are in its output.
   Cache hit rate = cache read / (input + cache write + cache read).
 - **Storage** (`devices/usage.go`, `db/usage.go`): the manager keeps the last 26 hours in memory (the island, the cards) and writes every notification to `machine_usage` in order, from one goroutine.
+  Each node reports on a 10-second tick of its own, so while another machine has written in the last 25 seconds, the notifications that come within 5 seconds of one go in one transaction with it (`db.PutUsages`, in order; if Postgres rejects one, each goes under a savepoint of its own); a single busy machine's are written at once.
   A bucket is its minute's whole total, so a later one replaces it; a node's whole window (`full`, after it connects) first deletes the machine's minute rows of that window, so what the node
   counts now is the record (an older node's rows without a launcher do not stay next to the new ones). Each minute the minute rows older than 27 hours are summed into one row per 10 minutes
   (`step = 600`) and rows older than 7 days and an hour are deleted. About 1 to 3 rows a machine and minute (one per model and launcher in use), 10,000 to 30,000 rows a machine for the week.
