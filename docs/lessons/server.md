@@ -1,5 +1,47 @@
 # Lessons: hub / node and networking
 
+## Finish a revocation's activity push before forgetting its target (#1864)
+
+Push registration IDs differ from credential IDs: select the registrations bound
+to the revoked credential, not just a row whose device ID happens to match. A call
+to `sendLiveActivity` only queues a goroutine; direct and relay transports recheck
+the registration before dispatch. Calling `end` before `signedOut` is therefore
+insufficient unless the revocation waits for the end attempts to finish. Send empty
+content with immediate dismissal, even for a foreground app or disabled activity
+preference, without resetting the fleet state or activities of other credentials.
+Database revocation already removes the device and its activity rows, so capture
+the live tokens from memory and do not try to persist them back after retirement.
+Transport acceptance is not proof that the phone dismissed the activity; the
+Apple-side rejected-credential fallback remains separate work.
+
+Database fixtures must also survive `go test -count`: `setupTestDB` does not clear
+`admin_sessions`. Give test sessions unique IDs and delete their own rows with
+`t.Cleanup` before the store closes; a fixed ID, even `t.Name()`, repeats within one process.
+
+## Retained extension lists need installed managers (#1918)
+
+A relay can retain an offline manager's GET answer while the merged list drops it before the relay is called. For merged retained GET routes, enumerate installed bus identities as well as live managers; keep ordinary lists such as inbox and todos online-only. Never discover owners by scanning cache keys: a removed manager can still have cached answers. Fail closed when the installed roster cannot be read, and test the real relay warm-up followed by disconnect, missing cache, revocation, and an offline default. In external mode even the identity named `assistant` is removable: only seed it when `builtinManager` says it is built in, and return unavailable for an empty roster rather than reviving a cached default.
+
+## Update checks must preserve installation state (#1912)
+
+The hub's `running` flag belongs to the installing process; it is false in the new
+process while that process confirms the update. Guard check-driven state changes
+with both install and confirmation status, under the same mutex as the write.
+Check again after the manifest request: an install can start while it is in flight.
+Successful checks may refresh release metadata and failed checks may advance the
+last-check time, but neither may replace an active update's state, progress or error.
+Apply the guard in the shared check path used by manual, startup and hourly checks,
+and keep automatic installation and held-release recording out of confirmation.
+Regression tests must observe the state while the request is blocked as well as
+after success or failure; checking only the final state misses a transient
+`checking` event that already hid the progress in every client.
+
+In timer tests, wait on a request channel with a timeout and assert the request's
+timestamp, then use `synctest.Wait` before inspecting the completed result. This
+synchronizes the observation without fixed sleeps or a shared request counter.
+Even inside `synctest`, new `time.Sleep` calls fail the repository's sleep ratchet;
+run `scripts/ci/guards.sh` as well as the server build and race checks.
+
 ## Model connection tests must match the runtime (#1732)
 
 A successful connection probe can still hide a request the model server will reject: exercise the same output-token field and its narrowly scoped fallback as the runtime. Parse SSE events rather than individual `data:` lines, including multiline events and CRLF, and test empty, truncated, refused, and errored replies separately.
@@ -602,6 +644,7 @@ home volume (docs/operations/link.md "Without systemd").
 
 ## Knowledge base (docs/assistant/knowledge.md)
 
+- A connector's knowledge-base switch must gate every ingestion path (#1835): conversations, items (documents, meetings and events), document-title lookups and program-initiated posts. Filtering the source list alone leaves direct calls open after a switch changes. Check both the feed and the main switch at the call boundary too; a shared extension process may keep running after its connector is disabled. `Registry.Feeds` does not include `Registry.Enabled`. Test both switches independently, with a connector that still answers calls, and assert that neither source reads nor post forwarding occur while off.
 - An asynchronous dedupe answer must recheck a user's split, record its verdict and merge under the same project-mutation lock as unmerge. The verdict-file mutex prevents lost JSON updates but cannot stop an already queued merge from reversing a completed split. A verdict write failure must stop the merge.
 - A checkpoint after append is a replay window (#1343): connector pages can repeat after a cursor failure, a later batch failure or a process interruption.
   Preserve stable message IDs scoped by exact source and chat, including IDs such as `body` reused across threads. Formatted-text matching loses distinct messages;
@@ -628,6 +671,14 @@ home volume (docs/operations/link.md "Without systemd").
 
 ## Port forwarding (docs/operations/ports.md)
 
+- Credential revocation must cover auxiliary WebSockets too (#1823): closing `/api/v1/ws` leaves live screens, forwarded ports and previews usable.
+  Register them with `trackRelayed` before opening a stream, recheck revocation after registration, and defer unregistering on every exit.
+  Derive the connection context from that tracked request and close the connection when it ends; a context rooted at `context.Background()` outlives revocation.
+  Abort the mux stream explicitly too: a sender waiting for flow-control acknowledgements cannot observe a closed connection. Test both ends closing,
+  multiple connections per credential, other credentials staying usable, and revocation between authentication and registration.
+  Remote setup cancellation is a separate lifecycle problem: `stream.close` for an unknown id is ignored, so a node that completes `port.dial` or
+  `preview.open` after the caller canceled can still open a backend stream. Closing the client's WebSocket prevents further access, but does not prove
+  cleanup of that late backend; established-stream tests cannot establish that guarantee.
 - RPC `OnEvent` runs in the read loop: blocking there (e.g. writing received bytes directly to a slow WebSocket) stalls every RPC on that machine.
   Queue bytes per stream and write from a separate goroutine; bound queues through windows (sender waits for ack), not dropped data.
 - coder/websocket defaults to a 32 KB message read limit (`read limited at 32769 bytes`, peer gets `StatusMessageTooBig`). Forwarded connections need `SetReadLimit`,
@@ -1057,6 +1108,15 @@ The release manifest is read only during self-update, with no later fallback: `n
 "hub has no personad for `<os>/<arch>`" if absent; repeated Redeploy fails. If an old platform binary remains from the previous release, it sends that old version and mismatch persists.
 Now download every platform in the release manifest (four, matching `deploy.sh` and images); the hub platform's node binary is the same as hub itself, so reuse that download.
 For any download/build list derived from current runtime state, consider objects appearing only after update.
+
+## A hub-only update left node builds that passed for the new version (2026-11-09, #1825)
+
+With `auto_update_nodes` off (the default), the hub's self-update replaced only its own binary. `bin/nodes/personad-<os>-<arch>` stayed the previous
+build, and the manager's package lookup takes an unlabelled personad there for a build of the hub's version, ahead of the release site: every
+Redeploy installed the old node (or failed its self-check), and the mismatch could not be fixed from the apps. Now a confirmed hub-only update to
+another version renames those unlabelled builds to `.prev`, so the lookup falls through to the release of the hub's version.
+Whenever a file's meaning is "the build of whatever version the hub runs now", whatever changes the hub's version without changing that file
+must relabel it or move it.
 
 ## Generic plans make "empty means no filter" lose indexes (2026-11-06, #4907)
 
