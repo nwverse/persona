@@ -198,7 +198,7 @@ func expiryLoopFixture(t *testing.T) (*Service, *fakeHub, *failingLoopExpiryStor
 
 func TestToolLoopExpirySaveFailureRetriesEverything(t *testing.T) {
 	s, f, store, card := expiryLoopFixture(t)
-	store.failAt.Store(store.puts.Load() + 2) // tick's initial save succeeds; expiration save fails
+	store.failAt.Store(store.puts.Load() + 1) // unchanged tick snapshot is skipped; expiration save fails
 	s.checkToolLoops(context.Background())
 	if cards := s.workCards(); len(cards) != 1 || cards[0].ID != card.ID {
 		t.Fatalf("failed expiry lost retryable card: %+v", cards)
@@ -233,7 +233,7 @@ func TestToolLoopExpirySaveFailureRetriesEverything(t *testing.T) {
 
 func TestToolLoopExpiryMarkerClearFailureRetries(t *testing.T) {
 	s, f, store, card := expiryLoopFixture(t)
-	store.failAt.Store(store.puts.Load() + 3) // initial save, expiration save, then marker clear
+	store.failAt.Store(store.puts.Load() + 2) // expiration save succeeds; marker clear fails
 	s.checkToolLoops(context.Background())
 	if status, _, _ := store.InteractionOutcome(context.Background(), card.ID); status != "expired" {
 		t.Fatalf("history did not expire: %s", status)

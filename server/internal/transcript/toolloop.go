@@ -241,7 +241,7 @@ func pollingCommand(command string) bool {
 	observed := false
 	for _, part := range parts {
 		part = strings.TrimSpace(part)
-		if part == "while true" || part == "done" {
+		if part == "" || part == "while true" || part == "done" {
 			continue
 		}
 		starts := func(re *lazyre.Regexp) bool {

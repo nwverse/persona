@@ -1,7 +1,10 @@
 package assistant
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
+	"sort"
 	"time"
 
 	"github.com/nwverse/persona/server/internal/proto"
@@ -23,6 +26,18 @@ type savedToolLoop struct {
 	Card            *proto.Interaction `json:"card,omitempty"`
 }
 
+// toolLoopSnapshot makes map iteration order irrelevant when comparing durable snapshots.
+func toolLoopSnapshot(rows []savedToolLoop) ([]byte, error) {
+	rows = append([]savedToolLoop{}, rows...)
+	sort.Slice(rows, func(i, j int) bool {
+		if rows[i].Machine != rows[j].Machine {
+			return rows[i].Machine < rows[j].Machine
+		}
+		return rows[i].Session < rows[j].Session
+	})
+	return json.Marshal(rows)
+}
+
 // loadToolLoops must finish before checking loops, answering cards or publishing
 // a snapshot. Failed reads are retried; an empty fallback would lose decisions.
 func (s *Service) loadToolLoops(ctx context.Context) error {
@@ -35,12 +50,19 @@ func (s *Service) loadToolLoops(ctx context.Context) error {
 		return nil
 	}
 	var rows []savedToolLoop
+	var snapshot []byte
 	if st := s.store(); st != nil {
 		readCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
-		_, err := st.Setting(readCtx, toolLoopsSetting, &rows)
+		found, err := st.Setting(readCtx, toolLoopsSetting, &rows)
 		cancel()
 		if err != nil {
 			return err
+		}
+		if found {
+			snapshot, err = toolLoopSnapshot(rows)
+			if err != nil {
+				return err
+			}
 		}
 	}
 	s.work.mu.Lock()
@@ -73,6 +95,7 @@ func (s *Service) loadToolLoops(ctx context.Context) error {
 	hadInvalid := len(s.work.loopInvalid) != 0
 	s.work.loopInvalid = nil
 	s.work.loopSaved = len(rows) != 0
+	s.work.loopSnapshot = snapshot
 	s.work.loopLoaded = true
 	s.work.mu.Unlock()
 	if hadInvalid {
@@ -176,11 +199,10 @@ func (s *Service) saveToolLoops(ctx context.Context, committing ...[2]string) er
 		if commit {
 			target = state
 		}
-		updatedAt := state.updatedAt
-		if updatedAt.IsZero() {
-			updatedAt = time.Now().UTC()
+		if state.updatedAt.IsZero() {
+			state.updatedAt = time.Now().UTC()
 		}
-		row := savedToolLoop{Machine: key[0], Session: key[1], Since: state.since, UpdatedAt: updatedAt, Tool: state.tool, Checks: state.checks, CheckedCount: state.checkedCount, Silenced: state.silenced, SilencedByInput: state.silencedByInput, ExpiredID: state.expiredID}
+		row := savedToolLoop{Machine: key[0], Session: key[1], Since: state.since, UpdatedAt: state.updatedAt, Tool: state.tool, Checks: state.checks, CheckedCount: state.checkedCount, Silenced: state.silenced, SilencedByInput: state.silencedByInput, ExpiredID: state.expiredID}
 		switch {
 		case state.consuming && (state.consumedSaved || commit):
 			// The terminal decision is durable; never restore its old card.
@@ -202,13 +224,22 @@ func (s *Service) saveToolLoops(ctx context.Context, committing ...[2]string) er
 		}
 		rows = append(rows, row)
 	}
+	snapshot, err := toolLoopSnapshot(rows)
+	unchanged := err == nil && bytes.Equal(snapshot, s.work.loopSnapshot)
 	s.work.mu.Unlock()
-	writeCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
-	defer cancel()
-	if err := st.PutSetting(writeCtx, toolLoopsSetting, rows); err != nil {
+	if err != nil {
 		return err
 	}
+	if !unchanged {
+		writeCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+		err = st.PutSetting(writeCtx, toolLoopsSetting, rows)
+		cancel()
+		if err != nil {
+			return err
+		}
+	}
 	s.work.mu.Lock()
+	s.work.loopSnapshot = snapshot
 	s.work.loopSaved = len(rows) != 0
 	if target != nil && s.work.loops[committing[0]] == target {
 		if target.consuming {

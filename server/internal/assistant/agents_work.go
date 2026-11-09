@@ -143,26 +143,27 @@ type workStore interface {
 
 // workBook is the manager's copy of session_work, plus what only matters while it runs.
 type workBook struct {
-	mu          sync.Mutex
-	entries     map[[2]string]*db.SessionWork
-	cards       map[string]proto.Interaction // the cards out, by id (the snapshot's interactions)
-	loaded      bool
-	triaging    map[[2]string]bool
-	ciPolling   map[[2]string]bool           // bounded concurrent check reads
-	loops       map[[2]string]*toolLoopState // running-turn loop candidates and cards
-	loopLoadMu  sync.Mutex                   // serialize loading without holding work.mu on the database
-	loopSaveMu  sync.Mutex                   // serialize durable loop snapshots
-	switchMu    sync.Mutex                   // serialize settings updates
-	loopLoaded  bool
-	loopSaved   bool
-	loopInvalid map[[2]string]loopClearReason // activity received while the saved state could not be read
-	generation  map[[2]string]uint64          // user activity invalidates in-flight triage
-	tried       map[[2]string]triedTurn       // the turn a triage was last attempted on, and when
-	sent        map[[2]string]time.Time       // when the manager itself last sent the session something
-	seen        map[[2]string]time.Time       // the turn whose first look was recorded
-	started     map[[2]string]time.Time       // local time of the latest turn-start event
-	viewed      map[[2]string]bool            // a view since that event
-	approved    map[[2]string]approval        // a risky next step the user said yes to, for the wait it ends
+	mu           sync.Mutex
+	entries      map[[2]string]*db.SessionWork
+	cards        map[string]proto.Interaction // the cards out, by id (the snapshot's interactions)
+	loaded       bool
+	triaging     map[[2]string]bool
+	ciPolling    map[[2]string]bool           // bounded concurrent check reads
+	loops        map[[2]string]*toolLoopState // running-turn loop candidates and cards
+	loopLoadMu   sync.Mutex                   // serialize loading without holding work.mu on the database
+	loopSaveMu   sync.Mutex                   // serialize durable loop snapshots
+	switchMu     sync.Mutex                   // serialize settings updates
+	loopLoaded   bool
+	loopSaved    bool
+	loopSnapshot []byte                        // last successfully persisted canonical snapshot, protected by mu
+	loopInvalid  map[[2]string]loopClearReason // activity received while the saved state could not be read
+	generation   map[[2]string]uint64          // user activity invalidates in-flight triage
+	tried        map[[2]string]triedTurn       // the turn a triage was last attempted on, and when
+	sent         map[[2]string]time.Time       // when the manager itself last sent the session something
+	seen         map[[2]string]time.Time       // the turn whose first look was recorded
+	started      map[[2]string]time.Time       // local time of the latest turn-start event
+	viewed       map[[2]string]bool            // a view since that event
+	approved     map[[2]string]approval        // a risky next step the user said yes to, for the wait it ends
 	// answering marks cards whose answer is being delivered to the agent: a repeated callback in the send window
 	// (a redelivered webhook, a second tap, phone and watch together) is the same answer, not a second one.
 	answering map[string]bool
@@ -311,8 +312,14 @@ func (s *Service) putTriageSwitches(ctx context.Context, sw TriageSwitches) erro
 		}
 		s.work.mu.Unlock()
 	}
+	var loopSnapshot []byte
 	if st := s.store(); st != nil {
 		if clearLoops {
+			var err error
+			loopSnapshot, err = toolLoopSnapshot(expired)
+			if err != nil {
+				return err
+			}
 			batch, ok := st.(interface {
 				PutSettings(context.Context, map[string]any) error
 			})
@@ -341,6 +348,7 @@ func (s *Service) putTriageSwitches(ctx context.Context, sw TriageSwitches) erro
 			s.work.loops[[2]string{row.Machine, row.Session}] = &toolLoopState{updatedAt: row.UpdatedAt, expiredID: row.ExpiredID}
 		}
 		s.work.loopLoaded, s.work.loopSaved = true, len(expired) != 0
+		s.work.loopSnapshot = loopSnapshot
 		s.work.loopInvalid = nil
 	}
 	var stale []db.SessionWork

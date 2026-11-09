@@ -72,6 +72,18 @@ func (s *Service) clearToolLoop(k [2]string, reason loopClearReason) {
 	s.work.mu.Lock()
 	s.work.init()
 	state := s.work.loops[k]
+	if state != nil && reason != loopTurnChanged {
+		// Repeated snapshots must not refresh the lifetime of an already cleared state.
+		cleared := toolLoopState{updatedAt: state.updatedAt, checks: state.checks, expiredID: state.expiredID}
+		if reason == loopUserInput && !state.since.IsZero() {
+			cleared.since, cleared.tool = state.since, state.tool
+			cleared.silenced, cleared.silencedByInput = true, true
+		}
+		if *state == cleared {
+			s.work.mu.Unlock()
+			return
+		}
+	}
 	changed := state != nil && state.cardID != ""
 	persist := state != nil && !(reason == loopCandidateGone && state.silenced && !changed)
 	if state != nil {

@@ -75,8 +75,9 @@ func readToolLoop(path string, st os.FileInfo, m quickMeta) quickMeta {
 	buf := make([]byte, st.Size()-off)
 	n, _ := f.ReadAt(buf, off)
 	if n != len(buf) {
-		// The file changed during the read; retry on the next poll.
-		m.toolLoop.detector = transcript.LoopDetector{}
+		// The file changed during the read. Discard the old position too, so
+		// the next poll reconstructs history from the bounded tail.
+		m.toolLoop = toolLoopScan{}
 		return m
 	}
 	if skipping {
