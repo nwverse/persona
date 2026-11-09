@@ -3,7 +3,7 @@ import XCTest
 /// A Jupyter notebook opens as cells with their outputs (#1296), and the ⋯ menu shows its source.
 ///   PORT=18785 MOCK_AGENTS=1 MOCK_OFFICE=1 python3 scripts/mock/mock_hub.py &
 ///   TEST_RUNNER_PERSONA_MOCK_HUB=http://127.0.0.1:18785 xcodebuild test … -only-testing:PersonaUITests/NotebookFileTests
-/// Both layouts (TEST_RUNNER_PERSONA_LAYOUT=shell) and both styles (TEST_RUNNER_PERSONA_UI_STYLE=beautiful).
+/// Both styles (TEST_RUNNER_PERSONA_UI_STYLE=beautiful).
 final class NotebookFileTests: XCTestCase {
     private var app: XCUIApplication!
 

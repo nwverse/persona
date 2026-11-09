@@ -1,7 +1,7 @@
 import XCTest
 
 /// A new Persona conversation opens on the welcome (`AssistantWelcome`: a greeting, what Persona can reach, things to ask),
-/// in the shell and the old layout, from launch and from the sidebar's New Chat. The shell once showed nothing but the
+/// in the shell, from launch and from the sidebar's New Chat. The shell once showed nothing but the
 /// composer there (2026-11-02, the user: 「之前设计的挺好的助手空状态，现在咋全空白了？」). Runs in the BeautifulUI
 /// style too (`TEST_RUNNER_PERSONA_UI_STYLE=beautiful`).
 final class AssistantWelcomeTests: XCTestCase {
@@ -11,11 +11,11 @@ final class AssistantWelcomeTests: XCTestCase {
         continueAfterFailure = false
     }
 
-    @MainActor private func launch(oldLayout: Bool, newConversation: Bool, needsYou: Bool = false) {
+    @MainActor private func launch(newConversation: Bool, needsYou: Bool = false) {
         app = XCUIApplication()
         // `-showHomeState empty`: nothing needs the user, the case that was blank. Without it, the demo's agents waiting
         // and inbox items to answer.
-        app.launchArguments = ["-demo.on", "YES", "-ui.oldLayout", oldLayout ? "YES" : "NO", "-app.tab", "assistant",
+        app.launchArguments = ["-demo.on", "YES", "-app.tab", "assistant",
                                "-dev.openChat", ""] + (needsYou ? [] : ["-showHomeState", "empty"])
             // Otherwise the demo's main conversation (the last run may have left a new one open).
             + (newConversation ? ["-newAssistant", "YES"] : ["-openAssistant", "server/b2e4d6f8-0000-4000-8000-000000000001"])
@@ -52,20 +52,15 @@ final class AssistantWelcomeTests: XCTestCase {
     }
 
     @MainActor func testTheShellsNewConversation() {
-        launch(oldLayout: false, newConversation: true)
+        launch(newConversation: true)
         assertWelcome("shell")
-    }
-
-    @MainActor func testTheOldLayoutsNewConversation() {
-        launch(oldLayout: true, newConversation: true)
-        assertWelcome("old")
     }
 
     /// What needs the user over the composer stays below the welcome's first row of things to ask: on a short screen
     /// (iPhone Duo's outer one, an SE) fewer rows, the rest in "N more" (#283: three rows and the composer took half the
     /// outer screen and cut the cards in two). Typing does not change how many.
     @MainActor func testNeedsYouLeavesTheFirstRowToAsk() {
-        launch(oldLayout: false, newConversation: true, needsYou: true)
+        launch(newConversation: true, needsYou: true)
         let needs = app.descendants(matching: .any)["shell-needs-you"].firstMatch
         XCTAssertTrue(needs.waitForExistence(timeout: 15), "nothing needs the user over the composer")
         sleep(1)
@@ -88,7 +83,7 @@ final class AssistantWelcomeTests: XCTestCase {
 
     /// From a conversation, the sidebar's New Chat opens the same welcome.
     @MainActor func testNewConversationFromTheSidebar() {
-        launch(oldLayout: false, newConversation: false)
+        launch(newConversation: false)
         let menu = app.buttons["assistant-sidebar-button"].firstMatch
         XCTAssertTrue(menu.waitForExistence(timeout: 15), "no sidebar button")
         XCTAssertFalse(app.descendants(matching: .any)["assistant-welcome"].exists, "opened on the welcome, not a conversation")

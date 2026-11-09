@@ -238,6 +238,14 @@ struct RecommendedTag: View {
     var body: some View { Chip(text: String(localized: "Recommended"), look: .tint(Theme.ai)) }
 }
 
+/// Set by a card's form while a field in it has the keyboard (on a Mac, the focus) and the form ends with what the
+/// field is for (the password card's Run and Decline): the card keeps that end in sight, also as the keyboard takes
+/// the page's room (#1581).
+struct CardFormKeepsEnd: PreferenceKey {
+    static let defaultValue = false
+    static func reduce(value: inout Bool, nextValue: () -> Bool) { value = value || nextValue() }
+}
+
 /// Full interaction UI pinned above the composer in a chat. Capped in height (scrolls inside) and collapsible,
 /// so a long question never hides the conversation it is about.
 struct InteractionPanel: View {
@@ -253,6 +261,9 @@ struct InteractionPanel: View {
     @State private var headerHeight: CGFloat = 0
     /// The plan full screen. Its button sits in this header: floating over the plan it covered the last line.
     @State private var showFullPlan = false
+    /// The form asks to keep its end in sight (`CardFormKeepsEnd`), and where its scroll area is.
+    @State private var keepsEnd = false
+    @State private var formPosition = ScrollPosition(edge: .top)
 
     /// The form's cap while the keyboard is up (`cardFits`): the area less the card's header and margins; at least a tap
     /// target, so a sliver of a form never shows (a small iPhone with the shell's composer leaves the cards little more).
@@ -278,6 +289,20 @@ struct InteractionPanel: View {
                     form.onGeometryChange(for: CGFloat.self) { $0.size.height } action: { formHeight = $0 }
                 }
                 .scrollBounceBehavior(.basedOnSize)
+                // A field taking the keyboard brings the form's end into view, and while the keyboard takes the room the
+                // area gives it up at the top, so the field and its Run stay above the keyboard (#1581). An area shorter
+                // than the field and its Run shows Run whole and the field cut at the top.
+                .scrollPosition($formPosition)
+                .defaultScrollAnchor(keepsEnd ? .bottom : nil, for: .sizeChanges)
+                .onPreferenceChange(CardFormKeepsEnd.self) { keep in
+                    keepsEnd = keep
+                    if keep { withAnimation(Theme.Motion.standard) { formPosition.scrollTo(edge: .bottom) } }
+                }
+                // Folded, the form is gone with its field: unfolded again it starts at its top, its commands first.
+                .onDisappear {
+                    keepsEnd = false
+                    formPosition = ScrollPosition(edge: .top)
+                }
                 // At most a little over half of what the page has (not the screen: iPhone Duo's displays differ), and
                 // with the keyboard up no more than lets the whole card fit the cards' area.
                 .frame(height: room > 0 ? min(formHeight == 0 ? room : formHeight, room * 0.55, fitsCap) : nil)

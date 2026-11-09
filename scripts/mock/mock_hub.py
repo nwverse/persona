@@ -2710,6 +2710,23 @@ if MOCK_WORKFLOW_CARDS:
         for _a in _w["agents"]:
             ITEMS[_a["session_id"]] = [it("user", "text", 9, text="%s：审这一块，列出问题" % _a["label"]),
                                        it("assistant", "text", 8, text=_a.get("last_text") or "这一块看完了，没有发现问题。")]
+# MOCK_BACKGROUND_WAITING=1 (#6045): an agent whose turn ended with only a `gh run watch` left in the background: Waiting
+# in the Background, apart from Working.
+BGWAIT = "a1f3c2d4-0000-4000-8000-0000000000f1"
+if os.environ.get("MOCK_BACKGROUND_WAITING") == "1":
+    SESSIONS.append(sess("macbook", BGWAIT, "等 CI 跑完再合并", "/Users/me/code/weather", "done", "working", "weather", 1, "ci", 6, 3,
+                         "PR 已推上去，CI 在跑，我在后台盯着，绿了就合并。", state_since=ago(minutes=3), background_working=True,
+                         background_waiting=True,
+                         background=[{"id": "b9", "kind": "shell", "description": "等 CI 结果", "command": "gh run watch --exit-status",
+                                      "started_at": ago(minutes=3)}]))
+    ITEMS[BGWAIT] = (
+        [it("user", "text", 6, text="推上去，CI 绿了就合并")]
+        + tool("Bash", {"command": "git push -u origin feat/widget", "description": "推送分支"},
+               "branch 'feat/widget' set up to track 'origin/feat/widget'.", 5)
+        + tool("Bash", {"command": "gh run watch --exit-status", "description": "等 CI 结果", "run_in_background": True},
+               "Command running in background with ID: b9.", 3)
+        + [it("assistant", "text", 3, text="PR 已推上去，CI 在跑，我在后台盯着，绿了就合并。")]
+    )
 ITEMS[TESTS] = (
     [it("user", "text", 5, text="给网络层补单元测试，覆盖重试和超时")]
     + tool("Glob", {"pattern": "Sources/Weather/API/*.swift"}, "Sources/Weather/API/Client.swift\nSources/Weather/API/Retry.swift\nSources/Weather/API/Forecast.swift", 4)
@@ -3088,6 +3105,30 @@ if MOCK_TASKS:
         _base = min(x["seq"] for x in ITEMS[ASK1])
         for _i, _x in enumerate(ITEMS[ASK1]):
             _x["seq"] = _base + _i
+    # MOCK_EXCHANGES=1: the new conversation layout's material (#1666): Persona's long message to a task and the task's long
+    # report with a link in its words and an evidence list (folded to three lines, no list under it), and the hub's
+    # supervision digest (injected system / supervise), drawn as Persona writing to itself.
+    if os.environ.get("MOCK_EXCHANGES") == "1":
+        TASK_FEED[ASK1] += [
+            _feed("feed_x1", 6.5, "routed", "todo_task_tests", {"text": "先别动缓存层。\n1. 网络层的重试和超时先补测试，用本地假服务器；\n"
+                                                                "2. 覆盖率按 80% 算，生成的代码不算；\n3. 每补完一块就跑一次全量测试；\n"
+                                                                "4. 做完把 PR 链接和覆盖率截图发我。", "from": "assistant"}),
+            _feed("feed_x2", 6, "report", "todo_task_tests", {"kind": "done", "text": "网络层测试补完了，PR 在 https://github.com/example/weather/pull/45 。\n"
+                                                              "重试、超时和断网三块都有用例，用本地假服务器跑，不连真实接口。\n"
+                                                              "覆盖率从 52% 到 83%，生成的代码不算在里面。\n缓存层按你说的没动。",
+                                                              "evidence": ["https://github.com/example/weather/pull/45",
+                                                                           "https://github.com/example/weather/actions/runs/1001"]}),
+        ]
+        _digest = ("📋 督办：你派出去的任务有 2 个要你处理\n（这是 Persona 的督办消息，不是用户发的。这一轮正常结束时不会推送给用户。）\n\n"
+                   "1. 任务「补齐网络层的单元测试」：hub 判断做完了，等你验收\n2. 任务「修小组件横屏崩溃」：Agent 停下了，但没做完")
+        ITEMS[ASK1] += [
+            it("user", "text", 5.8, text=_digest, injected={"kind": "system", "state": "supervise", "line": "督办：2 个派出去的任务要处理"}),
+            it("assistant", "text", 5.7, text="网络层测试我核对过了：PR 已合并，覆盖率 83%，验收通过。小组件那个我让它接着修。"),
+        ]
+        ITEMS[ASK1].sort(key=lambda x: x["ts"])
+        _base = min(x["seq"] for x in ITEMS[ASK1])
+        for _i, _x in enumerate(ITEMS[ASK1]):
+            _x["seq"] = _base + _i
     # MOCK_RELAYED=1: a message another Persona conversation sent with conversation_send (prompts/assistant/relay.md),
     # then one you typed: only yours is the pale blue bubble (#2643).
     if os.environ.get("MOCK_RELAYED") == "1":
@@ -3140,6 +3181,10 @@ if MOCK_TASKS:
         for _i, _x in enumerate(ITEMS[ASK1]):
             _x["seq"] = _base + _i
         TASK_FEED[ASK1] += [
+            # Yesterday's hand-off with the blog migration's card (#1668): that card is a line now, so this stays a folded
+            # line under it (MOCK_TASKS_AT=1559 puts it at the bottom).
+            _feed("feed_s0", 60 * 26 - 0.61, "routed", "todo_task_blog",
+                  {"text": "把博客从 Hexo 迁到 Astro。\n\n要求：\n- 32 篇文章都要能构建\n- 旧链接全部 301 到新地址\n- Lighthouse 性能分 90 以上", "from": "assistant"}),
             _feed("feed_s1", 1.05, "task", "todo_task_memory"),
             _feed("feed_s2", 1.0499, "routed", "todo_task_memory", {"text": _handoff, "from": "assistant"}),
             _feed("feed_s3", 0.6, "routed", "todo_task_widget", {"text": _rework, "from": "assistant"}),
@@ -3180,6 +3225,35 @@ if MOCK_TASKS:
                                         {"title": _title, "state": "done", "summary": "检查结果已整理好，等待验收。",
                                          "review": {"state": "awaiting", "criteria": _n}}))
 
+
+# MOCK_USAGE_LIMIT=1: two agents stopped on a subscription usage limit (docs/assistant/agent-work.md "Usage limits").
+# One the CLI continues, one nothing continues. With MOCK_TASKS=1 the first is also a task card in the main chat.
+if os.environ.get("MOCK_USAGE_LIMIT") == "1":
+    _limit_resumes = "a9e0c000-0000-4000-8000-000000000001"
+    _limit_resets = "a9e0c000-0000-4000-8000-000000000002"
+    _reset_soon = (datetime.now(timezone.utc) + timedelta(hours=3)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    _reset_later = (datetime.now(timezone.utc) + timedelta(days=2, hours=4)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    _limit_error = "You've hit your usage limit."
+    SESSIONS += [
+        sess("macbook", _limit_resumes, "等用量重置后继续修登录", "/Users/me/code/weather", "done", "idle", "weather", 1, "limit", 8, 2,
+             _limit_error, turn_error=_limit_error, turn_error_kind="usage_limit", turn_error_resets_at=_reset_soon,
+             turn_error_resumes=True, work={"phase": "blocked", "on": "external", "resets_at": _reset_soon,
+                                            "line": "用量额度用完了，重置后自己接着做"}),
+        sess("macbook", _limit_resets, "导出周报", "/Users/me/code/weather", "done", "idle", "weather", 1, "weekly", 9, 5,
+             _limit_error, turn_error=_limit_error, turn_error_kind="usage_limit", turn_error_resets_at=_reset_later,
+             work={"phase": "blocked", "on": "external", "wait": "用量重置", "resets_at": _reset_later,
+                   "line": "用量额度用完了，重置后再继续"}),
+    ]
+    ITEMS[_limit_resumes] = [it("assistant", "text", 2, text="API Error: 429 You've hit your usage limit.")]
+    if MOCK_TASKS:
+        _limit_todo = {"id": "todo_usage_limit", "title": "等用量重置后继续修登录", "notes": "", "done_at": None,
+                       "created_at": ago(minutes=3), "updated_at": ago(minutes=1), "origin": ASK1, "plan_id": "",
+                       "spaces": [], "agents": [{"machine_id": "macbook", "session_id": _limit_resumes,
+                       "linked_at": ago(minutes=3), "released_at": None, "title": "等用量重置后继续修登录",
+                       "cwd": "/Users/me/code/weather", "agent": "claude", "start_error": "", "source": "manual", "via": ""}]}
+        TODOS.append(_limit_todo)
+        TASK_FEED.setdefault(ASK1, []).append(
+            {"id": "feed_usage_limit", "conversation": ASK1, "at": ago(minutes=2), "kind": "task", "ref": "todo_usage_limit", "body": {}})
 
 RETRY_TASK_STARTED = "a1f3c2d4-0000-4000-8000-0000000000a1"
 RETRY_MODE = {"mode": os.environ.get("MOCK_RETRY", "")}
@@ -5832,6 +5906,43 @@ def inbox_suggestion_bump(iid):
     return x, 200
 
 
+# Hand to AI's main-chat target (POST /api/v1/inbox/{id}/handoff, docs/assistant/inbox.md "Item actions", #1194): the text
+# goes after a block naming the item to the main conversation (started with it when there is none), once per client_id,
+# and lands in its transcript MOCK_ASSISTANT_TRANSCRIPT_SECONDS later (default 1) under that id, as the hub's
+# session.send_once does; under none when it started the conversation (the hub's start takes no message id). The item keeps the hand-off and its chain gets one entry per conversation. What went is in
+# /mock/sent and /mock/sent_to. MOCK_HANDOFF=old: a hub from before the route (404).
+HANDOFFS = {}  # client_id -> the answer given
+
+
+def inbox_handoff(iid, body):
+    if os.environ.get("MOCK_HANDOFF") == "old": return {"error": "404 page not found"}, 404
+    x = next((x for x in INBOX if x["id"] == iid), None)
+    if x is None: return {"error": "收件箱里没有这一条", "code": "not_found"}, 404
+    text, cid = (body.get("text") or "").strip(), (body.get("client_id") or "").lower()
+    if not text: return {"error": "text is required"}, 400
+    if cid in HANDOFFS: return HANDOFFS[cid], 200
+    mid, started = ASSISTANT_CONFIG["machine_id"], not ASSISTANT_CONFIG["main"]
+    if started:
+        sid = str(uuid.uuid4())
+        session = assistant_sess(sid, "", 0, "")
+        session.update(status="working", state="working", main=True)
+        ASSISTANT_CONFIG["main"] = sid
+        ASSISTANT.append(session)
+        push_machine(mid)
+    sid = ASSISTANT_CONFIG["main"]
+    head = '<persona-context kind="context" title="收件箱事件 · %s" url="">\n用户从收件箱把这件事交给你（事件 id：%s）。\n</persona-context>\n' % (
+        x["title"].replace('"', "'"), iid)
+    sent = {"text": head + text} if started else {"text": head + text, "client_msg_id": cid}
+    echo_sent(["", "api", "v1", "sessions", mid, sid, "messages"], sent, float(os.environ.get("MOCK_ASSISTANT_TRANSCRIPT_SECONDS", "1")))
+    SENT.append(dict(sent, inbox=iid))
+    SENT_TO.append({"machine_id": mid, "session_id": sid, "client_msg_id": sent.get("client_msg_id"), "text": sent["text"]})
+    x.setdefault("handoffs", []).append({"machine_id": mid, "session_id": sid, "at": ago()})
+    if not any(e.get("kind") == "handling" and (e.get("link") or {}).get("session_id") == sid for e in x.get("chain") or []):
+        _chain_add(x, "handling", "交给了 Persona 主对话", link={"type": "session", "machine_id": mid, "session_id": sid})
+    HANDOFFS[cid] = {"item": x, "session": {"machine_id": mid, "session_id": sid}}
+    return HANDOFFS[cid], 200
+
+
 # MOCK_INBOX_LINE=1: a "Thread" (#2128): the design review grew out of the chat with the sample contact (continues), which hangs under a todo; the
 # the weekend hiking group item grew out of the design review. GET /api/v1/inbox/tree/{kind}/{id} answers from the items' parents.
 if os.environ.get("MOCK_INBOX_LINE") == "1":
@@ -7456,6 +7567,39 @@ def mock_subagent_reports():
 
 if os.environ.get("MOCK_SUBAGENT_REPORTS") == "1":
     mock_subagent_reports()
+# GET /mock/subagent-step (MOCK_SUBAGENT_CARDS): the background subagent "scrun" goes one step on, pushed to whoever
+# follows its own conversation as the hub would: its running call gets its result and it starts the next one (#5602,
+# the open card's latest steps).
+SUBSTEP = {"n": 0}
+
+
+def subagent_step():
+    sid = SUBCARDS + "@scrun"
+    SUBSTEP["n"] += 1
+    n = SUBSTEP["n"]
+    prev = "toolu_scrunb" if n == 1 else "toolu_scrun%d" % (n - 1)
+    new = [it("user", "tool_result", 0, tool_use_id=prev, text="%d passed" % (30 + n)),
+           it("assistant", "tool_use", 0, tool_use_id="toolu_scrun%d" % n, tool_name="Grep",
+              tool_input={"pattern": "filter-%d" % n, "path": "e2e"})]
+    before = ITEMS[sid][-1]["seq"]
+    for i, x in enumerate(new):
+        x["seq"] = before + 1 + i
+    ITEMS[sid] = ITEMS[sid] + new
+    for out, subs in list(LIVE):
+        try:
+            if sid in subs:
+                out({"type": "items", "machine_id": "macbook", "session_id": sid, "items": new, **span(new, before)})
+        except Exception:
+            pass
+    for sess_ in SESSIONS:
+        if sess_["session_id"] == SUBCARDS:
+            for a in sess_.get("subagents") or []:
+                if a["id"] == "scrun":
+                    a.update(steps=3 + n, last_tool={"id": "toolu_scrun%d" % n, "name": "Grep", "summary": "filter-%d" % n},
+                             updated_at=ago(minutes=0))
+            sess_["rev"] = (sess_.get("rev") or 0) + 1
+            push_machine("macbook")
+    return {"step": n}
 
 
 # MOCK_SUBAGENT_PARALLEL=1: three subagents launched together in the live exchange (#5602, the grid): one done, one
@@ -7490,6 +7634,45 @@ def mock_subagent_parallel():
 
 if os.environ.get("MOCK_SUBAGENT_PARALLEL") == "1":
     mock_subagent_parallel()
+
+
+# MOCK_REPORT_FOLD=1: subagents' reports read as one line until opened: a foreground subagent's result (a heading
+# first), a background one's notice, and that one's report again as another session's message (its handback, by its
+# type, as an older node shows it); a real peer's message stays whole.
+REPORTS = "a1f3c2d4-0000-4000-8000-0000000c1e07"
+
+
+def mock_report_fold():
+    report = ("## 结算回归：42 个用例全部通过\n\n- 下单、改地址、用优惠券三条主流程都过了。\n- 用时 1 分 48 秒，比上次快 20 秒。\n"
+              "- 没有新增的不稳定用例。")
+    bg = ("搜索和筛选的回归跑完了：120 个用例里 118 个通过，2 个失败都在价格筛选，原因是测试数据里两件下架商品没有价格。"
+          "已经在 fixtures 里补上价格，重跑后全部通过。\n\n改动：`e2e/fixtures/products.json`。")
+    _r = [it("user", "text", 12, text="把结算和搜索的回归拆给子 Agent 跑")]
+    _r += tool("Agent", {"description": "回归：结算流程", "subagent_type": "general-purpose", "prompt": "跑结算流程的回归用例，失败的列出来"},
+               report + "\nagentId: rfdone (use SendMessage with to: 'rfdone' to continue this agent)", 11)
+    _done = _r[-2]["tool_use_id"]
+    _r += tool("Agent", {"description": "回归：搜索和筛选", "subagent_type": "Explore", "prompt": "跑搜索和筛选的回归用例", "run_in_background": True},
+               "Async agent launched successfully.\nagentId: rfbg (This is an internal ID for your use)", 10.5)
+    _bg = _r[-2]["tool_use_id"]
+    _r.append(it("assistant", "text", 10, text="结算的回归跑完了，搜索和筛选的在后台跑。"))
+    _r.append(it("system", "notice", 4, text="Agent \"回归：搜索和筛选\" completed",
+                 task={"kind": "agent", "status": "completed", "title": "回归：搜索和筛选", "task_id": "rfbg", "tool_use_id": _bg, "detail": bg}))
+    _r.append(it("user", "text", 3.9, text=bg, **{"from": "Explore"}))
+    _r.append(it("user", "text", 3.5, text="发版分支已经切好了，可以开始回归。", **{"from": "release-bot"}))
+    _r.append(it("assistant", "text", 3, text="两块回归都过了：结算 42 个全过；搜索和筛选补了测试数据后全过。"))
+    ITEMS[REPORTS] = _r
+    sub = lambda i, desc, use, **kw: {"id": i, "session_id": REPORTS + "@" + i, "type": kw.pop("type", "general-purpose"), "description": desc,
+                                      "tool_use_id": use, "running": False, "started_at": ago(minutes=kw.pop("at", 11)), **kw}
+    ITEMS[REPORTS + "@rfdone"] = [it("user", "text", 11, text="跑结算流程的回归用例，失败的列出来"), it("assistant", "text", 10.8, text=report)]
+    ITEMS[REPORTS + "@rfbg"] = [it("user", "text", 10.5, text="跑搜索和筛选的回归用例"), it("assistant", "text", 4, text=bg)]
+    SESSIONS.append(sess("macbook", REPORTS, "回归报告", "/Users/me/code/shop-web", "done", "unread", "shop-web", 7, "reports", 1, 3,
+                         "两块回归都过了。", subagents=[
+                             sub("rfdone", "回归：结算流程", _done, steps=3, updated_at=ago(minutes=10.8)),
+                             sub("rfbg", "回归：搜索和筛选", _bg, at=10.5, type="Explore", background=True, steps=5, updated_at=ago(minutes=4))]))
+
+
+if os.environ.get("MOCK_REPORT_FOLD") == "1":
+    mock_report_fold()
 
 
 # MOCK_WORK_GROUPS=1: one finished conversation with every way a work group reads (#1963, web): a short run (five steps
@@ -8995,7 +9178,7 @@ def replay_next(n):
 # MOCK_ECHO_SENT=1: a message sent to a session lands in its transcript a moment later, as claude writes it: for
 # Persona's conversations (claude -p) its pictures first, as image blocks, then its text; elsewhere the text, then the
 # pictures (a pasted image Claude inlined). For the chat showing what was sent once the transcript has it.
-def echo_sent(parts, body):
+def echo_sent(parts, body, delay=None):
     if len(parts) < 7 or body.get("clear_draft"):
         return
     mid, sid = parts[4], parts[5]
@@ -9023,7 +9206,7 @@ def echo_sent(parts, body):
                 try: out({"type": "items", "machine_id": mid, "session_id": sid, "items": line, **span(line, before)})
                 except Exception: pass
         sync_moved(sid)
-    threading.Timer(float(os.environ.get("MOCK_ECHO_SECONDS", "1.5")), written).start()
+    threading.Timer(delay if delay is not None else float(os.environ.get("MOCK_ECHO_SECONDS", "1.5")), written).start()
 
 
 # MOCK_HUB_LINKS=<origin the web is served at>: the assistant's latest answer links an agent and a task as the hub's own
@@ -13098,6 +13281,8 @@ class H(BaseHTTPRequestHandler):
         if p == "/mock/session_close":
             if "fail" in q: SESSION_CLOSE["fail"] = q["fail"][0] == "1"
             return self.send_json({k: SESSION_CLOSE[k] for k in ("fail", "attempts", "closed")})
+        if p == "/mock/subagent-step" and os.environ.get("MOCK_SUBAGENT_CARDS") == "1":
+            return self.send_json(subagent_step())
         if p == "/mock/workflow" and MOCK_WORKFLOW_CARDS:  # MOCK_WORKFLOW_CARDS: the small run at ?step=0..3
             return self.send_json(set_wf_step(int(q.get("step", ["0"])[0] or 0)))
         if p == "/mock/workflow" and os.environ.get("MOCK_WORKFLOW") == "1":  # MOCK_WORKFLOW=1: parity-audit at ?step=0..4
@@ -14502,6 +14687,8 @@ class H(BaseHTTPRequestHandler):
                             st["value"] = ch.get("value")
                             return self.send_json(x)
             return self.send_json({"error": "no such row"}, 400)
+        if p.startswith("/api/v1/inbox/") and p.endswith("/handoff") and self.command == "POST":  # Hand to AI, main chat
+            return self.send_json(*inbox_handoff(unquote(p[len("/api/v1/inbox/"):-len("/handoff")]), json.loads(self.last_body or b"{}")))
         if p.startswith("/api/v1/inbox/") and p.endswith("/suggestion") and self.command == "POST":  # "Confirm" / "Reject" / "Say something"
             return self.send_json(*inbox_suggestion(unquote(p[len("/api/v1/inbox/"):-len("/suggestion")]), json.loads(self.last_body or b"{}")))
         if p.startswith("/api/v1/inbox/") and p.endswith("/draft"):  # AI draft reply
@@ -14906,13 +15093,19 @@ class H(BaseHTTPRequestHandler):
             s = next((x for x in SESSIONS if x["session_id"] == p.split("/")[5]), None)
             if not (s or {}).get("queued"):
                 return self.send_json({"code": "nothing_queued", "error": "Nothing is queued for the agent any more."}, 409)
+            refuse = os.environ.get("MOCK_SEND_NOW")  # refuses with that code, to see the app's words for it
+            if refuse:
+                return self.send_json({"error": "refused (%s)" % refuse, "code": refuse,
+                                       **({"delivered": "unknown"} if refuse == "send_now_in_doubt" else {})}, 409)
             s["queued"] = []
             push_machine(s["machine_id"])
             return self.send_json({"sent": True})
         if p.startswith("/api/v1/sessions/") and p.endswith("/queue"):  # node editQueue: pull every queued message back, re-queue `keep`
             body = json.loads(self.last_body or b"{}")
             QUEUE_EDITS.append(body)
-            s = next((x for x in all_sessions() if x["session_id"] == p.split("/")[5]), None)
+            # The stored session (all_sessions() hands out copies): the new order is what the next list says (#6088).
+            s = next((x for x in SESSIONS if x["session_id"] == p.split("/")[5]), None) \
+                or next((x for x in all_sessions() if x["session_id"] == p.split("/")[5]), None)
             pulled = list((s or {}).get("queued") or [])
             if not pulled: return self.send_json({"error": "nothing is queued"}, 502)
             s["queued"] = [pulled[k] for k in body.get("keep") or [] if 0 <= k < len(pulled)]
@@ -15526,6 +15719,7 @@ MOCK_HELP.append("MOCK_REWIND=1  检查 PR 的对话里有四条你的消息（�
 MOCK_HELP.append("MOCK_INBOX_SOURCES=none  还没接任何消息来源：收件箱空、没有邮箱账号、飞书没设置、GitHub 没登录（#4480）")
 MOCK_HELP.append("MOCK_INBOX_EXTRA=<n>  收件箱多 n 封知悉即可的示例通知，试「全部清理」的「将清理 N 件」确认")
 MOCK_HELP.append("MOCK_CHANNELS=1  设置 › 插件 › 渠道：App、飞书机器人和微信已连接、飞书 /agent 只读、一个待绑定（令牌 example-token）、一个出错、一个在市场里；主对话第一条来自微信")
+MOCK_HELP.append("MOCK_EXCHANGES=1  主对话新布局的素材（#1666）：Persona 发给任务的长消息、任务带链接和证据的长汇报、督办消息")
 MOCK_HELP.append("MOCK_AUTO_CONVERSATIONS=1  助手对话带来源 origin（feature conversation_origin）：另有 10 段自动对话（收件箱 6、定时任务 2、飞书 /agent、对话派生），侧边栏收进「自动对话」（#3264）")
 
 

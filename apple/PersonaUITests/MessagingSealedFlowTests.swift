@@ -8,8 +8,7 @@ final class MessagingSealedFlowTests: XCTestCase {
     @MainActor private func open(_ hub: String) -> XCUIApplication {
         let app = XCUIApplication()
         let pair = "persona://pair?url=" + hub.addingPercentEncoding(withAllowedCharacters: .alphanumerics)! + "&token=mock"
-        app.launchArguments = ["-pairURL", pair, "-tab", "feishu", "-demo.on", "NO", "-ui.oldLayout", "NO",
-                               "-integrations.lark.enabled", "YES", "-showLarkSendFresh", "YES"]
+        app.launchArguments = ["-pairURL", pair, "-tab", "feishu", "-demo.on", "NO",                                "-integrations.lark.enabled", "YES", "-showLarkSendFresh", "YES"]
         app.launchPinned()
         let messages = app.buttons.matching(identifier: "shell-feishu").firstMatch
         XCTAssertTrue(messages.waitForExistence(timeout: 15))

@@ -395,7 +395,7 @@ func TestCatalogLookup(t *testing.T) {
 	if m := enrichModel(proto.ProviderModel{ID: "own[1m]"}); m.ContextWindow != 1000000 {
 		t.Fatalf("1m: %+v", m)
 	}
-	for id, m := range modelCatalog() {
+	for id, m := range modelCatalog().byID {
 		if m.ID == "" || m.Name == "" || m.ContextWindow < 0 {
 			t.Errorf("catalog %s: %+v", id, m)
 		}
@@ -473,7 +473,7 @@ func TestProviderProbeRegionBlocked(t *testing.T) {
 	}
 }
 
-// Other 403s keep the 403 text with what the gateway said, and no code.
+// Other 403s keep the gateway's explanation and use the authorization code.
 func TestProviderTestOtherForbiddenUnchanged(t *testing.T) {
 	_, mux := launcherTestService(t)
 	for name, c := range map[string]struct{ body, said string }{
@@ -484,7 +484,7 @@ func TestProviderTestOtherForbiddenUnchanged(t *testing.T) {
 		gw := forbiddenGateway(t, c.body)
 		out := probeResult(t, mux, "/api/v1/launchers/test", `{"base_url":"`+gw.URL+`","api_key":"`+fakeKey+`","model":"m"}`)
 		msg := jsonText(out["error"])
-		if _, has := out["code"]; has || !strings.Contains(msg, "没有权限（403）") || !strings.Contains(msg, c.said) {
+		if out["code"] != "auth" || !strings.Contains(msg, "没有权限（403）") || !strings.Contains(msg, c.said) {
 			t.Fatalf("%s: %v", name, out)
 		}
 	}
@@ -529,7 +529,7 @@ func TestProviderTestGenericNotAllowedElsewhere(t *testing.T) {
 	gw := forbiddenGateway(t, `{"error":{"message":"Request not allowed"}}`)
 	out := probeResult(t, mux, "/api/v1/launchers/test", `{"base_url":"`+gw.URL+`","api_key":"`+fakeKey+`","model":"m"}`)
 	msg := jsonText(out["error"])
-	if _, has := out["code"]; has || !strings.Contains(msg, "没有权限（403）") || !strings.Contains(msg, "Request not allowed") {
+	if out["code"] != "auth" || !strings.Contains(msg, "没有权限（403）") || !strings.Contains(msg, "Request not allowed") {
 		t.Fatalf("%v", out)
 	}
 }

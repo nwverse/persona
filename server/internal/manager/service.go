@@ -36,6 +36,8 @@ type env struct {
 	run    func(ctx context.Context, name string, args ...string) (string, error)
 	look   func(name string) (string, error)
 	getenv func(string) string
+	// version is what a program says to `version -v` (update.BuildOf when nil).
+	version func(ctx context.Context, path string) (string, error)
 
 	// The manager's own Postgres (database.go): docker, a free port on 127.0.0.1, a connection check.
 	docker   pgdocker.Runner

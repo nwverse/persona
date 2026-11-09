@@ -35,7 +35,7 @@ Each category shows both “In Effect” and “Model Settings”:
 - Empty provider: inherit; empty specific model: use that source's default model.
 - Changing providers clears the previous model and thinking effort, preventing fields from different providers being combined.
 - “Restore defaults” clears only that category's choices; it takes effect after “Save,” and all its purposes reset together.
-- If the provider's model catalog cannot be discovered, a valid model ID can be entered. Saving is not a paid-availability test.
+- The web provider wizard can test either direct API protocol and discover paginated model lists. Catalog context windows take precedence over server-reported values; a server value fills a missing catalog window. If discovery fails, a valid model ID can be entered. Saving is not a paid-availability test.
 - Offline, protocol mismatch, missing provider, and similar states are explicit. An invalid explicit configuration never silently switches providers.
 - Concurrent edits to the same item from two devices use revision checks. Conflicts retain the draft and require reloading before saving again.
 

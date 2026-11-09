@@ -269,6 +269,9 @@ describe("Markdown tables (#5275)", () => {
     const { join } = await import("node:path");
     const css = readFileSync(join(__dirname, "../styles.css"), "utf8");
     expect(css).toMatch(/\.prose-j th,\s*\.prose-j td\s*\{[^}]*overflow-wrap:\s*anywhere;/);
+    // The copy button's wrap becomes the prose block's child, so the table would keep a top margin it used to lose.
+    expect(css).toMatch(/\.prose-j > \.md-table:first-child > table\s*\{[^}]*margin-top:\s*0/);
+    expect(css).toMatch(/\.prose-j > \.md-table:last-child > table\s*\{[^}]*margin-bottom:\s*0/);
   });
 });
 

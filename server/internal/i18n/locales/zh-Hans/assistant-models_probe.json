@@ -9,9 +9,12 @@
   "status_403": "没有权限（403）：这个 Key 不能用这个模型或接口",
   "region_blocked": "Anthropic 官方不对你现在的网络所在地区开放（403），换 Key 也没用。换一个在这里能直接用的供应商，比如 {vendors}",
   "list_sep": "、",
-  "status_404": "找不到接口（404）：Base URL 可能不对（要的是 Anthropic Messages 兼容的地址）",
+  "status_404": "找不到接口（404）：请检查 Base URL、模型和配置的协议",
+  "status_protocol": "接口不接受此请求格式（{status}）：请检查配置的协议",
   "status_429": "被限流了（429）：稍后再试，或者额度用完了",
   "status_other": "网关返回 {status}",
   "said": "{head}：{said}",
-  "models_unreadable": "网关的模型列表格式认不出来"
+  "models_unreadable": "网关的模型列表格式认不出来",
+  "models_pagination": "无法读完模型列表：分页无效或页数过多",
+  "response_unfinished": "Responses 请求未成功完成"
 }

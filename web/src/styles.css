@@ -276,6 +276,10 @@ button:disabled { cursor: default; }
 .prose-j pre { margin: .7em 0; background: var(--inset); border-radius: 10px; box-shadow: var(--shadow-hairline); padding: 10px 12px; overflow-x: auto; font-size: 12.5px; line-height: 1.6; }
 .prose-j pre code { background: none; box-shadow: none; padding: 0; font-size: inherit; }
 .prose-j table { display: block; width: max-content; max-width: 100%; overflow-x: auto; border-collapse: separate; border-spacing: 0; margin: .8em 0; font-size: 13px; border-radius: 10px; box-shadow: var(--shadow-hairline); }
+/* The copy button's wrap is what the edge rule above sees, so pass that rule through to the table. The wrap
+   adds no margin, padding or border; the table keeps its own box, scroll and margin collapse. */
+.prose-j > .md-table:first-child > table { margin-top: 0; }
+.prose-j > .md-table:last-child > table { margin-bottom: 0; }
 .prose-j th, .prose-j td { padding: 6px 10px; border-bottom: 1px solid var(--line); text-align: left; vertical-align: top; min-width: 7em; max-width: 18em; overflow-wrap: anywhere; word-break: normal; }
 .prose-j th { font-weight: 600; color: var(--ink-2); background: var(--inset); white-space: nowrap; }
 .prose-j tr:last-child td { border-bottom: 0; }

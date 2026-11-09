@@ -9,9 +9,9 @@ import persona.core.contracts.api.InteractionPromptChangedException
 import persona.core.domain.answer.AnswerDraft
 import kotlinx.coroutines.CancellationException
 
-/** Sensitive forms must never enter saved request drafts, even after submission. */
+/** Sensitive forms (a terminal's or a password card's password) must never enter saved request drafts, even after submission. */
 internal fun AnswerDraft.forStorage(interaction: Interaction): AnswerDraft =
-    if (interaction.secret == true) AnswerDraft() else copy(openedElicitationUrl = null, fields = kotlinx.serialization.json.JsonObject(fields.filterKeys { key ->
+    if (interaction.secret == true) AnswerDraft() else copy(openedElicitationUrl = null, password = "", fields = kotlinx.serialization.json.JsonObject(fields.filterKeys { key ->
         persona.core.domain.answer.ElicitationForm.fields(interaction.elicitation?.requestedSchema).none { it.key == key && it.secret }
     }))
 
