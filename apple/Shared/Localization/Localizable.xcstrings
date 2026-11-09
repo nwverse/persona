@@ -37649,6 +37649,29 @@
       },
       "extractionState" : "manual"
     },
+    "Couldn't sign out of %@. To stop notifications, revoke this device in Settings › Devices on another device." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Couldn't sign out of %1$@. To stop notifications, revoke this device in Settings › Devices on another device."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@ からサインアウトできませんでした。通知を止めるには、別のデバイスの「設定 › デバイス」でこのデバイスを取り消してください。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "没能退出 %1$@ 的登录。要停止通知，请在另一台设备的「设置 › 设备」里撤销本机。"
+          }
+        }
+      },
+      "extractionState" : "manual"
+    },
     "Couldn't start a new chat: %@" : {
       "localizations" : {
         "en" : {

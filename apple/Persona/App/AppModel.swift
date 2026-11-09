@@ -666,8 +666,8 @@ final class AppModel {
         for link in links { link.live.disconnect() }
         closeAllTunnels() // no hub left to route through a tunnel (also drops HubTransport's routes)
         LiveActivityController.shared.endAll() // its buttons would talk to a hub we no longer know
-        // No paired hub may still open a push (the notification extension tries every key left).
-        for g in Set(registry.groups).union(links.map(\.group)) { PushCrypto.removeKey(group: g) }
+        // No key may open a push any more: the notification extension tries every key left (PushCrypto.allKeys).
+        for g in Set(registry.groups).union(PushCrypto.allKeys().map(\.group)) { PushCrypto.removeKey(group: g) }
         links = []
         registry = HubRegistry()
         saveRegistry(registry)

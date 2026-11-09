@@ -262,8 +262,9 @@ struct DevicesView: View {
         do {
             try await api.revokeToken(t.id)
             Haptics.success()
-            // This device's own credential at the hub-level group's hub: that group goes (the others stay).
-            if t.id == current { model.removeGroup(model.hub?.group ?? ""); return }
+            // This device's own credential at the hub-level group's hub: that group goes (the others stay), signed out of
+            // its other hubs too.
+            if t.id == current { await model.disconnectGroup(model.hub?.group ?? ""); return }
             await load()
         } catch {
             model.show(error)

@@ -787,19 +787,11 @@ nonisolated struct APIClient: Sendable {
     func createToken(name: String, kind: String) async throws -> NewToken {
         try JSON.decoder.decode(NewToken.self, from: try await request("POST", "/api/v1/auth/tokens", body: ["name": name, "kind": kind]))
     }
-    func deviceTokens() async throws -> DeviceTokens {
-        try JSON.decoder.decode(DeviceTokens.self, from: try await request("GET", "/api/v1/auth/tokens"))
+    func deviceTokens(timeout: TimeInterval = 30) async throws -> DeviceTokens {
+        try JSON.decoder.decode(DeviceTokens.self, from: try await request("GET", "/api/v1/auth/tokens", timeout: timeout))
     }
     func revokeToken(_ id: String, timeout: TimeInterval = 30) async throws {
         _ = try await request("DELETE", "/api/v1/auth/tokens/\(id)", timeout: timeout)
-    }
-    /// Revokes the credential this client holds: the hub then forgets the pushes and Live Activities it registered
-    /// (#1824). false: the hub's master token, which has no id and cannot be revoked.
-    func revokeOwnCredential(timeout: TimeInterval = 30) async throws -> Bool {
-        let tokens = try JSON.decoder.decode(DeviceTokens.self, from: try await request("GET", "/api/v1/auth/tokens", timeout: timeout))
-        guard let id = tokens.current, !id.isEmpty else { return false }
-        try await revokeToken(id, timeout: timeout)
-        return true
     }
 
     /// A QR code's modules as the hub draws them: rows of "0" / "1".
