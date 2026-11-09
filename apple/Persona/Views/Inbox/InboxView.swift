@@ -56,6 +56,8 @@ struct InboxPage: View {
     @State private var answering: Interaction? // a card on no session, open by itself (#4059)
     @State private var showingMutes = false     // Muted
     @State private var confirming = false // Clear All over many items asks first
+    /// Selecting (#2059): the picked items' ids; nil when not selecting. Marking stays in Persona (done, with Undo).
+    @State private var picked: Set<String>?
     private var store: InboxStore { .shared }
 
     /// The kind filters, by key.
@@ -95,10 +97,18 @@ struct InboxPage: View {
                 .navigationBarTitleDisplayMode(.inline)
                 .pageSearchable(text: $query, prompt: String(localized: "Search Titles, Senders, and Content"))
                 .pageToolbar {
+                    if let picked {
+                        selectingToolbar(picked)
+                    } else {
                     ToolbarItem(placement: .principal) { ConnectionTitle(title: String(localized: "Inbox")) }
                     if model.isMultiHub {
                         // Each hub has its own inbox (docs/protocol/multi-hub.md「hub 级页面」): whose this is, and the others.
                         ToolbarItem(placement: .topBarLeading) { HubSwitcher(compact: true) }
+                    }
+                    ToolbarItem(placement: .topBarTrailing) {
+                        Button("Select") { withAnimation(Theme.Motion.standard) { picked = [] } }
+                            .disabled(pickable.isEmpty)
+                            .accessibilityIdentifier("inbox.select")
                     }
                     ToolbarItem(placement: .topBarTrailing) {
 
@@ -113,7 +123,10 @@ struct InboxPage: View {
                         .accessibilityLabel("More")
                         .accessibilityIdentifier("inbox.more")
                     }
+                    }
                 }
+                // selecting: the bar at the bottom is the selection's (as in Mail), not the tabs'
+                .toolbar(picked == nil ? .automatic : .hidden, for: .tabBar)
                 .sheet(item: $composing) { d in ComposeView(draft: d, accounts: accounts) }
                 .sheet(item: $editingDraft) { InboxDraftSheet(item: $0, accounts: accounts) }
                 .sheet(item: $answering) { SessionlessCardSheet(interaction: $0) }
@@ -150,6 +163,58 @@ struct InboxPage: View {
                     }
                     #endif
                 }
+    }
+
+    // MARK: Select (#2059)
+
+    /// What Select can pick: the open items in sight (in the sections shown open; In Progress is always open). The agents
+    /// waiting and the done items stay as they are, dimmed.
+    private var pickable: [InboxItem] {
+        guard kind != "agent" else { return [] }
+        let byTier = itemProjection.byTier
+        return InboxItem.Tier.allCases.filter { expanded.contains($0.rawValue) || !$0.folds }.flatMap { byTier[$0] ?? [] }
+    }
+
+    /// The picked items the list still has open (one filed meanwhile, elsewhere, drops out).
+    private func chosen(_ picked: Set<String>) -> [InboxItem] { openItems.filter { picked.contains($0.id) } }
+
+    @ToolbarContentBuilder private func selectingToolbar(_ picked: Set<String>) -> some ToolbarContent {
+        let pickable = pickable
+        let all = !pickable.isEmpty && pickable.allSatisfy { picked.contains($0.id) }
+        let chosen = chosen(picked)
+        ToolbarItem(placement: .principal) {
+            Text("\(chosen.count) Selected").font(Theme.Font.heading).lineLimit(1)
+        }
+        ToolbarItem(placement: .topBarLeading) {
+            Button(all ? String(localized: "Deselect All") : String(localized: "Select All")) {
+                self.picked = all ? [] : Set(pickable.map(\.id))
+            }
+            .disabled(pickable.isEmpty)
+            .accessibilityIdentifier("inbox.selectAll")
+        }
+        ToolbarItem(placement: .topBarTrailing) {
+            Button("Done") { withAnimation(Theme.Motion.standard) { self.picked = nil } }
+                .accessibilityIdentifier("inbox.selectDone")
+        }
+        ToolbarItemGroup(placement: .bottomBar) {
+            Spacer()
+            // One request per manager, versions checked, Undo on the toast (InboxStore.setDone); selecting ends.
+            Button("Mark as Done") {
+                withAnimation(Theme.Motion.standard) {
+                    store.setDone(chosen, true)
+                    self.picked = nil
+                }
+            }
+            .disabled(chosen.isEmpty)
+            .accessibilityIdentifier("inbox.markPickedDone")
+        }
+    }
+
+    private func pick(_ it: InboxItem) {
+        guard var p = picked else { return }
+        if p.contains(it.id) { p.remove(it.id) } else { p.insert(it.id) }
+        picked = p
+        Haptics.tap()
     }
 
     // MARK: Clear All
@@ -236,7 +301,7 @@ struct InboxPage: View {
                         }
                     } header: {
                         sectionHeader(tier.title, count: items.count + agents.count, key: tier.rawValue,
-                                      clear: InboxPage.clearTitle(tier).map { ($0, { store.setDone(items, true) }) })
+                                      clear: picked == nil ? InboxPage.clearTitle(tier).map { ($0, { store.setDone(items, true) }) } : nil)
                     }
                 }
             }
@@ -293,6 +358,8 @@ struct InboxPage: View {
             InboxAgentRow(interaction: ix, machine: model.machine(ix.machineRef), machineName: model.machine(ix.machineRef)?.title ?? ix.machineID)
         }
         .buttonStyle(.plain)
+        .disabled(picked != nil)
+        .opacity(picked != nil ? Theme.Fade.unavailable : 1)
         .modifier(InboxRowLook())
         .accessibilityIdentifier("inbox.agentRow")
     }
@@ -304,19 +371,41 @@ struct InboxPage: View {
         model.open(ix.sessionKey) // in its own group (another group's Persona: that group's)
     }
 
-    private func row(_ it: InboxItem) -> some View {
-        InboxRow(item: it, showAccount: accounts.count > 1, sending: store.sending.contains(it.id),
-                 send: { text in Task { await store.send(it, text: text, changes: it.agent?.changes ?? []) } }, edit: { editingDraft = it })
-            .background { NavigationLink(value: it) { EmptyView() }.opacity(0) }
-            .swipeActions(edge: .trailing, allowsFullSwipe: true) {
-                if it.isDone {
-                    Button { store.setDone(it, false) } label: { Label("Move Back", systemImage: Theme.Icon.undo) }.tint(Theme.accent)
-                } else {
-                    Button { store.setDone(it, true) } label: { Label("Done [Inbox View 59f6c8]", systemImage: Theme.Icon.done) }.tint(Theme.positive)
+    @ViewBuilder private func row(_ it: InboxItem) -> some View {
+        let content = InboxRow(item: it, showAccount: accounts.count > 1, sending: store.sending.contains(it.id),
+                               send: { text in Task { await store.send(it, text: text, changes: it.agent?.changes ?? []) } }, edit: { editingDraft = it })
+        if let picked {
+            // Selecting (#2059): a tap anywhere on the row picks it (its draft's buttons too); a done item can't be picked.
+            let on = picked.contains(it.id)
+            HStack(alignment: .top, spacing: Theme.Space.m) {
+                if !it.isDone {
+                    ThemedIcon(on ? Theme.Icon.successFilled : Theme.Icon.unchecked)
+                        .font(Theme.Font.heading)
+                        .foregroundStyle(on ? Theme.accent : Color.secondary)
+                        .scaledFrame(height: Theme.Size.avatar)
                 }
+                content.allowsHitTesting(false)
             }
-            .contextMenu { rowMenu(it) }
+            .contentShape(.rect)
+            .onTapGesture { if !it.isDone { pick(it) } }
+            .opacity(it.isDone ? Theme.Fade.unavailable : 1)
+            .accessibilityElement(children: .combine)
+            .accessibilityAddTraits(it.isDone ? [] : on ? [.isButton, .isSelected] : .isButton)
+            .accessibilityIdentifier("inbox.pickRow")
             .modifier(InboxRowLook())
+        } else {
+            content
+                .background { NavigationLink(value: it) { EmptyView() }.opacity(0) }
+                .swipeActions(edge: .trailing, allowsFullSwipe: true) {
+                    if it.isDone {
+                        Button { store.setDone(it, false) } label: { Label("Move Back", systemImage: Theme.Icon.undo) }.tint(Theme.accent)
+                    } else {
+                        Button { store.setDone(it, true) } label: { Label("Done [Inbox View 59f6c8]", systemImage: Theme.Icon.done) }.tint(Theme.positive)
+                    }
+                }
+                .contextMenu { rowMenu(it) }
+                .modifier(InboxRowLook())
+        }
     }
 
     /// A row's long-press menu: Done (or Move Back), then what the item can be muted by — its repository, chat or sender,
