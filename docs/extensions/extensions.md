@@ -397,7 +397,11 @@ The schema is `schema/extension/models.schema.json`; the Go SDK has it as `ext.H
   `cache_read_input_tokens`, `cache_creation_input_tokens`, `requests`); the manager logs one line per call with the extension, `label`, model and usage. Keep it in the extension's own report if the user should see it.
 - **A held connection**: when the connection is out of quota or busy (docs/assistant/model-config.md "Upstream rate limits") nothing is sent and the answer is `model_paused` with `{reason, until}`; try again after `until`.
 - **Errors**: `permission_denied` (`{scope: "models"}`), `invalid_params`, `assistant_offline`, `model_unavailable` (nothing callable for this extension: the user sets one up in Settings › Model configuration),
-  `model_paused`, `model_failed` (the upstream refused or failed), `timeout`, `invalid_output`.
+  `model_paused`, `model_failed` (the upstream failed: an error status, a dropped connection), `model_refused`, `timeout`, `invalid_output`.
+- **A declined input**: when the model declines to answer (the Messages API's `stop_reason: "refusal"`, a Responses API refusal part, a Chat Completions refusal, or a response stopped by a `content_filter`)
+  the answer is `model_refused` with `{stop_reason, usage}`; `usage` is what the declined call spent. Sending the same input again gets the same answer: split it into smaller pieces, drop
+  a part or report which input was declined. Match the code, never the message, which is for people and may change. Hubs older than this code answer `model_failed`
+  with the message `model.complete: ai: the model declined to answer`; an extension that supports them can keep that match as a fallback for `model_failed` only.
 - Internally the manager forwards it to the assistant as `models.extension_complete {extension, params}` (not callable by extensions), so the call is always the extension's own; the assistant lists the
   extensions with a purpose through `app.call plugins.models` (enabled, compatible, granted `models` itself).
 
