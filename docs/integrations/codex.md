@@ -31,6 +31,8 @@ and it can also be started from the phone ("Starting from the phone"). Supported
 `~/.codex/sessions/YYYY/MM/DD/rollout-<time>-<session id>.jsonl`, one `{timestamp, type, payload}` per line. The first line is `session_meta`
 (including cwd and about 20 KB of system instructions). When `transcript.ParseLine` sees a line with `payload`, it parses it as Codex (`Meta.Codex`), without a separate file type.
 
+Continuation filenames may append `_<segment UUID>` after the thread UUID. The authoritative identity is `session_meta.payload.id`; segment IDs do not create new sessions. Discovery and open-file matching use that identity and follow the newest rollout for the thread, as for resumed transcript copies. Genuine subagents retain their own metadata IDs and parent links. Incomplete continuation headers are retried rather than advertised under a guessed ID. Original files remain unchanged; older and archived rollouts remain addressable by the thread ID. This selects the current rollout rather than concatenating potentially superseded histories.
+
 | Rollout | In the chat |
 | --- | --- |
 | `event_msg/item_completed` UserMessage | User message |
