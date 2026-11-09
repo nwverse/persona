@@ -26,6 +26,12 @@ replay and uninstall, and test that a one-microsecond epoch/revision difference
 still rejects the stale operation. Real installed-source acceptance catches this
 edge even when synthetic transport fixtures all pass.
 
+A successful owner restore must restart the extension under the manager's context,
+not the HTTP request's. The committed data can be correct while a lazy runtime is
+canceled as soon as the 200 response returns, making its next page time out. Drive
+restore through the real API and open a fresh page after the response; DB-only
+restore tests do not exercise this lifetime boundary.
+
 ## The first gh on PATH may not be the GitHub CLI (#2081)
 
 Some Linux hosts have an unrelated program named `gh` in `/usr/local/bin`, and `New` puts that directory ahead of

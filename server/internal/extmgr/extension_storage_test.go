@@ -109,6 +109,22 @@ func TestStorageOwnerMetadataAndStrictRestoreInput(t *testing.T) {
 	}
 }
 
+func TestStorageRuntimeContextOutlivesRestoreRequestAndEndsWithManager(t *testing.T) {
+	manager, stopManager := context.WithCancel(t.Context())
+	defer stopManager()
+	request, finishRequest := context.WithCancel(manager)
+	ps := &extensions{ctx: manager}
+	runtime := ps.storageRuntimeContext()
+	finishRequest()
+	if request.Err() == nil || runtime.Err() != nil || runtime != manager {
+		t.Fatal("restored runtime followed the completed request instead of its manager")
+	}
+	stopManager()
+	if runtime.Err() != context.Canceled {
+		t.Fatal("restored runtime outlived its manager")
+	}
+}
+
 func TestStoragePublicErrorCategoriesHaveAllThreeLocales(t *testing.T) {
 	for _, lang := range []i18n.Lang{i18n.En, i18n.ZhHans, i18n.Ja} {
 		for _, err := range []error{storage.ErrDenied, storage.ErrInvalid, storage.ErrQuota, storage.ErrConflict, storage.ErrNotFound, storage.ErrStale, storage.ErrExpired, storage.ErrCorrupt, storage.ErrUnavailable, context.Canceled, context.DeadlineExceeded, &extension.CommitUnknownError{Err: errors.New("secret SQL")}} {

@@ -152,6 +152,15 @@ func (ps *extensions) storageStart(ctx context.Context, p *extension.Extension) 
 	return err
 }
 
+// storageRuntimeContext keeps a restored process alive until the manager stops,
+// not merely until the authenticated restore HTTP request has returned.
+func (ps *extensions) storageRuntimeContext() context.Context {
+	if ps.ctx != nil {
+		return ps.ctx
+	}
+	return context.Background()
+}
+
 func (h *Manager) storageRoutes(api *http.ServeMux) {
 	owner := func(next http.HandlerFunc) http.HandlerFunc {
 		return func(w http.ResponseWriter, r *http.Request) {
@@ -231,8 +240,9 @@ func (h *Manager) storageRoutes(api *http.ServeMux) {
 			return
 		}
 		// Replace the runtime after commit so initialization binds the restored
-		// space. A replay is harmless; a failed restore never restarts the guest.
-		h.extensions.apply(r.Context(), scope.PublicID)
+		// space. Its lifetime is the manager's, not this finished HTTP request.
+		// A replay is harmless; a failed restore never restarts the guest.
+		h.extensions.apply(h.extensions.storageRuntimeContext(), scope.PublicID)
 		writeExtensionJSON(w, r, map[string]bool{"restored": true})
 	}))
 }
