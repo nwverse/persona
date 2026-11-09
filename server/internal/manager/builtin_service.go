@@ -356,7 +356,7 @@ func (e *env) builtinService(ctx context.Context, home, bin string, bounce bool)
 			if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 				return err
 			}
-			if err := os.WriteFile(path, []byte(want), 0o644); err != nil {
+			if err := writeServiceFile(path, want); err != nil {
 				return err
 			}
 		}
@@ -392,7 +392,7 @@ func (e *env) builtinService(ctx context.Context, home, bin string, bounce bool)
 			if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 				return err
 			}
-			if err := os.WriteFile(path, []byte(want), 0o644); err != nil {
+			if err := writeServiceFile(path, want); err != nil {
 				return err
 			}
 		}

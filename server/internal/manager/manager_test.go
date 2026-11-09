@@ -19,6 +19,7 @@ import (
 
 	"github.com/nwverse/persona/server/internal/assistant"
 	"github.com/nwverse/persona/server/internal/bus"
+	"github.com/nwverse/persona/server/internal/compat"
 	"github.com/nwverse/persona/server/internal/update"
 )
 
@@ -177,6 +178,100 @@ func TestServiceFiles(t *testing.T) {
 		if !strings.Contains(plist, want) {
 			t.Errorf("plist lacks %q:\n%s", want, plist)
 		}
+	}
+}
+
+// checkReplaced: the service file at path was replaced in one step (a new file renamed over it), not rewritten in
+// place: old, opened on it before, still reads had; path is the new text, with want in it, mode 0644; no temporary
+// file is left beside it.
+func checkReplaced(t *testing.T, path string, old *os.File, had []byte, want string) {
+	t.Helper()
+	if got, err := io.ReadAll(old); err != nil || string(got) != string(had) {
+		t.Fatalf("the file opened before reads %q (%v), want what it had: written in place, not replaced", got, err)
+	}
+	now, err := os.ReadFile(path)
+	if err != nil || string(now) == string(had) || !strings.Contains(string(now), want) {
+		t.Fatalf("%s now: %s %v, want %q in it", path, now, err, want)
+	}
+	if st, err := os.Stat(path); err != nil || st.Mode().Perm() != 0o644 {
+		t.Fatalf("%s: %v %v, want mode 0644", path, st, err)
+	}
+	names, err := os.ReadDir(filepath.Dir(path))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, n := range names {
+		if strings.Contains(n.Name(), ".tmp-") {
+			t.Fatalf("temporary file left: %s", n.Name())
+		}
+	}
+}
+
+// install writes the unit (or plist) in one step: installed again with another binary, the file is replaced, never
+// cut short in place, so a crash mid-write cannot leave systemd or launchd a broken one. A former name that links to
+// the file keeps linking to it (the file it names is replaced, not the link).
+func TestInstallReplacesTheServiceFile(t *testing.T) {
+	for _, c := range []struct {
+		name, goos string
+		linked     bool
+	}{{"systemd", "linux", false}, {"launchd", "darwin", false}, {"systemd through the former name", "linux", true}} {
+		t.Run(c.name, func(t *testing.T) {
+			home := isolate(t)
+			const id = "m-0a1b2c"
+			dir := filepath.Join(home, ".persona", "managers", id)
+			if err := assistant.WriteManagerConfig(dir, assistant.ManagerConfig{ID: id, Name: "work", Hub: "http://[fd00::20]:18660", Token: "t"}); err != nil {
+				t.Fatal(err)
+			}
+			bin := "/opt/personad"
+			e := &env{stdout: io.Discard, goos: c.goos, home: home, exe: func() (string, error) { return bin, nil },
+				look:   func(name string) (string, error) { return "/usr/bin/" + name, nil },
+				getenv: func(string) string { return "" },
+				run:    func(context.Context, string, ...string) (string, error) { return "active\n", nil }}
+			(&fakeDocker{}).wire(e)
+			path := func() string {
+				if c.goos == "darwin" {
+					return e.plistPath(id)
+				}
+				return e.unitPath(id)
+			}
+			if err := cmdInstall(context.Background(), e, nil); err != nil {
+				t.Fatal(err)
+			}
+			file := path()
+			legacy := filepath.Join(filepath.Dir(file), compat.LegacyManagerUnit(id))
+			if c.linked {
+				if err := os.Symlink(filepath.Base(file), legacy); err != nil {
+					t.Fatal(err)
+				}
+				if path() != legacy {
+					t.Fatalf("install writes %s, want the former name %s", path(), legacy)
+				}
+			}
+			old, err := os.Open(file)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer old.Close()
+			had, err := os.ReadFile(file)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			bin = "/opt/new/personad"
+			if err := cmdInstall(context.Background(), e, nil); err != nil {
+				t.Fatal(err)
+			}
+			checkReplaced(t, file, old, had, bin)
+			if !c.linked {
+				return
+			}
+			if st, err := os.Lstat(legacy); err != nil || st.Mode()&os.ModeSymlink == 0 {
+				t.Fatalf("the former name is no longer a link: %v %v", st, err)
+			}
+			if err := e.checkCompatibleService(id); err != nil {
+				t.Fatalf("the two names are two files now: %v", err)
+			}
+		})
 	}
 }
 
