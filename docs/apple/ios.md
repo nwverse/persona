@@ -539,11 +539,11 @@ Apps built with older Xcode do not extend under the status bar and camera on Duo
   and two full cards with the title and the tabs took half the outer display, leaving the chat a third (2026-11-09, #2161).
   Outside the shell, Persona's top bar remains custom at the content top; its fog extends horizontally under the side status bar (`BarFog`; limiting it to content width leaves a vertical edge in dark mode).
 - **The shell's side rail** (2026-11-07, TestFlight: on the outer screen every button was at the top, out of reach of the hand holding the phone): with bars on the side, the shell's
-  top bars (Assistant's, Agents' and the moving bar while the strip slides) become a rail in that column (`ShellSideRail`; `ShellView` reads the edge once with `readsVerticalBarEdge` and
-  hands it down as `\.shellRailEdge`). Following Apple's iPhone Duo guidance (navigation first, then the prominent action, the tab bar below), the face (the drawer) and the page's
-  action (New Chat / New Session) sit low in the column and the switch is a vertical capsule at its foot (`ShellSwitch(axis: .vertical)`: each page's symbol over its name,
+  top bars (Assistant's, Agents', Messages' when it is on, and the moving bar while the strip slides) become a rail in that column (`ShellSideRail`; `ShellView` reads the edge once with `readsVerticalBarEdge` and
+  hands it down as `\.shellRailEdge`; a page whose bar skipped it put the bar back across the top while it was in front, #2318). Following Apple's iPhone Duo guidance (navigation first, then the prominent action, the tab bar below), the face (the drawer) and the page's
+  action (New Chat / New Session / Lark Settings) sit low in the column and the switch is a vertical capsule at its foot (`ShellSwitch(axis: .vertical)`: each page's symbol over its name,
   the pill gliding down with the strip), all within the thumb's reach; the status bar keeps the column's top. The pages drop the top room the bar had
-  (`AssistantTopBar.room`, Agents' list `room`), so the content starts at the top. Menus (tapping the chosen segment), the badge and the drawer work as before; horizontal bars
+  (`AssistantTopBar.room`, Agents' list `room`, Messages' top inset), so the content starts at the top. Menus (tapping the chosen segment), the badge and the drawer work as before; horizontal bars
   (ordinary iPhone, inner portrait) are unchanged. The rail measures the column as the page's width with the side's safe area less its width without: a `GeometryReader` that
   ignores the safe area reports no inset of its own on that edge.
 - **Short outer screen** (about 678pt): on Persona's new-chat page, Needs you rows above the input shrink to the remaining space (see "Empty chat" under "New shell" above).
