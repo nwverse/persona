@@ -1272,9 +1272,10 @@ nonisolated enum ChatCache {
     /// (#5511); v9's copies would keep its Chinese text for English and Japanese users. v11: folds carry the task
     /// lists their calls left (`Fold.tasks`), the chat's plan while its TodoWrite is folded (#5602).
     /// Bump it whenever the item structure or the text the hub gives an item changes.
-    static let folder = "chats-v11"
+    /// v12: relayed and automated assistant input retains additive source metadata.
+    static let folder = "chats-v12"
     /// The folder before, removed on the first launch with this one.
-    private static let previous = "chats-v10"
+    private static let previous = "chats-v11"
 
     /// Once per launch, before the first copy is read or written (a static let runs once, on whichever thread asks first).
     private static let dropOlder: Void = {
@@ -1403,7 +1404,7 @@ nonisolated struct PendingMessage: Identifiable, Hashable, Codable, Sendable {
     /// the same words (a second "Continue") is not it: the bubble of one never sent stayed gone.
     static func arrived(_ p: PendingMessage, as item: Item) -> Bool {
         if let tied = tied(item, to: p.id) { return tied }
-        guard item.role == "user", item.kind == .text, Injected.of(item) == nil else { return false }
+        guard item.role == "user", item.kind == .text, Injected.of(item) == nil, MessageSource.of(item) == nil else { return false }
         if let created = p.createdAt, let ts = item.ts, ts < created.addingTimeInterval(-120) { return false }
         guard item.fullSize != nil else { return same(item.text ?? "", p.text) }
         let start = normalize(item.cutText), whole = normalize(p.text)
