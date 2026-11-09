@@ -388,9 +388,10 @@ var ErrTruncated = errors.New("ai: reply cut off at max_tokens")
 // The same input is declined again, so sending it as is once more only spends a call.
 var ErrRefused = errors.New("ai: the model declined to answer")
 
-// RefusalError is ErrRefused with what the upstream said: StopReason is the Messages API's stop_reason "refusal", a
-// Responses API refusal part ("refusal") or an incomplete response's reason "content_filter". errors.Is(err,
-// ErrRefused) holds for it; the Reply returned with it still has the call's Model and Usage.
+// RefusalError is ErrRefused with what the upstream said: StopReason is "refusal" (the Messages API's stop_reason, a
+// Responses API refusal part or a Chat Completions refusal delta) or "content_filter" (an incomplete response's reason
+// or a Chat Completions finish_reason). errors.Is(err, ErrRefused) holds for it; the Reply returned with it still has
+// the call's Model and Usage.
 type RefusalError struct {
 	StopReason string
 }

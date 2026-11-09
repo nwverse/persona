@@ -36,6 +36,14 @@ func TestChatRefusalsCarryTheStopReasonAndUsage(t *testing.T) {
 			`{"type":"response.output_text.delta","delta":"cut"}`,
 			`{"type":"response.incomplete","response":{"model":"gpt-x","incomplete_details":{"reason":"content_filter"},"usage":{"input_tokens":10,"output_tokens":2}}}`,
 		}},
+		{"chat refusal", "chat", "refusal", []string{
+			`{"model":"gpt-x","choices":[{"index":0,"delta":{"refusal":"no"},"finish_reason":"stop"}],"usage":{"prompt_tokens":10,"completion_tokens":2}}`,
+			`[DONE]`,
+		}},
+		{"chat content filter", "chat", "content_filter", []string{
+			`{"model":"gpt-x","choices":[{"index":0,"delta":{},"finish_reason":"content_filter"}],"usage":{"prompt_tokens":10,"completion_tokens":2}}`,
+			`[DONE]`,
+		}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
