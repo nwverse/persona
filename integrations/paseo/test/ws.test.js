@@ -77,6 +77,23 @@ test('a large message, a fragmented one and a ping', async (t) => {
   assert.equal(msgs[1], 'abcdef')
 })
 
+test('UTF-8 text round-trips across the extended frame-length boundary', { timeout: 5000 }, async (t) => {
+  const payload = 'é🚀'.repeat(40)
+  assert.ok(payload.length < 126)
+  assert.ok(Buffer.byteLength(payload) > 125)
+  const received = []
+  const s = await server(t, { on: (c) => c.on('data', (line) => { received.push(line); c.write(line) }) })
+  const ws = await dialWebSocket({ port: s.port })
+  t.after(() => ws.close())
+  const back = new Promise((resolve, reject) => {
+    ws.once('message', resolve)
+    ws.once('error', reject)
+  })
+  assert.equal(ws.send(payload), true)
+  assert.equal(await back, payload)
+  assert.deepEqual(received, [payload + '\n'])
+})
+
 test('a refused handshake and a closed port fail the dial', async (t) => {
   const s = await server(t, { status: '401 Unauthorized' })
   await assert.rejects(dialWebSocket({ port: s.port }), /refused: HTTP\/1.1 401/)
