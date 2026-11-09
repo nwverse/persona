@@ -24,7 +24,7 @@ import (
 	"github.com/nwverse/persona/server/internal/extwire"
 )
 
-// serveAPIPluginForTest serves part of the app's API (/api/v1/examplefeed/…, and /api/v1/lark/… taken over from the
+// serveAPIExtensionForTest serves part of the app's API (/api/v1/examplefeed/…, and /api/v1/lark/… taken over from the
 // hub) on its socket, and pushes two events once initialized: one of a type it declared, one it did not.
 func serveAPIExtensionForTest() {
 	ln, err := net.Listen("unix", os.Getenv("PERSONA_PLUGIN_SOCKET"))
@@ -344,5 +344,21 @@ func TestExtensionConnectorUnknownCapability(t *testing.T) {
 	if err := reg.Add(proc.New(proc.Config{ID: "examplechat2", Name: "x", Manifest: declared})); err == nil ||
 		!strings.Contains(err.Error(), "unknown capability") {
 		t.Fatalf("not through a plugin: %v", err)
+	}
+}
+
+// The additive catalog capability does not replace the connector's ordinary
+// tools. Older hubs use the same unknown-capability filter for catalog (verified
+// against the pre-catalog base); current hubs retain both declarations.
+func TestExtensionConnectorCatalogRegistration(t *testing.T) {
+	ps := newExtensions(t.TempDir(), nil, func(string, ...any) {})
+	declared := connector.Manifest{Capabilities: []connector.Capability{connector.CapTools, connector.CapCatalog}}
+	kept := ps.knownOnly("example-catalog", declared)
+	if !slices.Equal(kept.Capabilities, declared.Capabilities) {
+		t.Fatalf("capabilities %v", kept.Capabilities)
+	}
+	reg := connector.NewRegistry(nil)
+	if err := reg.Add(proc.New(proc.Config{ID: "examplecatalog", Name: "Example Catalog", Manifest: kept})); err != nil {
+		t.Fatal(err)
 	}
 }

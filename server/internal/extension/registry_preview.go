@@ -185,7 +185,7 @@ func (r *Registry) PreviewMarket(ctx context.Context, mk *Market, marketID strin
 func MorePermissions(cur *Extension, m *Manifest) bool {
 	was := cur.Full
 	return !cur.Record.Granted.Covers(m.Permissions) || (m.Runtime != nil && was.Runtime == nil) || NodeAdds(was, m) ||
-		len(NewTools(was, m)) > 0 ||
+		len(NewTools(was, m)) > 0 || len(newSecrets(was, m)) > 0 ||
 		slices.ContainsFunc(m.Topics(), func(t string) bool { return !slices.Contains(was.Topics(), t) }) ||
 		slices.ContainsFunc(m.Surfaces(), func(t string) bool { return !slices.Contains(was.Surfaces(), t) }) ||
 		len(newChannels(was, m)) > 0 || len(newSendsAsUser(was, m)) > 0 ||
@@ -356,10 +356,6 @@ func (r *Registry) previewIdentity(ctx context.Context, src Source, upgrade, ren
 	return pv, nil // the check is done when the hub has resolved its bundle too (it says so)
 }
 
-// checkPackage holds a staged package to what a manifest says of it: its program is in it for this platform.
-func (r *Registry) checkPackage(m *Manifest, root string) error {
-	return r.checkPackageContext(context.Background(), m, root)
-}
 func (r *Registry) checkPackageContext(ctx context.Context, m *Manifest, root string) error {
 	return r.checkPackageFiles(ctx, m, root, true)
 }
