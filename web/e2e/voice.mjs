@@ -1,9 +1,10 @@
 // Browser acceptance for the web's voice chat (docs/web/web.md "Voice", #2273), against the mock hub's scripted protocol 2
 // voice socket (scripts/mock/voice_mock.py). Everything is made up; nothing reaches a real hub or a real voice service.
 //
-// The caller owns the services: a mock hub with MOCK_VOICE=1 (MOCK_VOICE_PACE=0.5 halves the wait; --tls-port 0 and
-// MOCK_ENDPOINTS=1 give its hello an HTTPS address for the "microphone needs HTTPS" check), and the web app served
-// against it on loopback (a secure context: the microphone is allowed there):
+// The caller owns the services: a mock hub with MOCK_VOICE=1 (MOCK_VOICE_PACE=0.5 halves the wait, and the default pace 1
+// checks the uplink over 40 s of each call: run both; --tls-port 0 and MOCK_ENDPOINTS=1 give its hello an HTTPS address
+// for the "microphone needs HTTPS" check), and the web app served against it on loopback (a secure context: the
+// microphone is allowed there):
 //
 //   MOCK_VOICE=1 MOCK_VOICE_PACE=0.5 MOCK_ENDPOINTS=1 PORT=<hub port> python3 scripts/mock/mock_hub.py --tls-port 0
 //   cd web && PERSONA_HUB_URL=http://127.0.0.1:<hub port> npx vite --port <web port> --strictPort
@@ -18,8 +19,10 @@
 // instruction refused for the computer's unsent line, Clear and send (the mock gets clear_draft) → the result read
 // out → the browser suspends the audio (Voice ended · Continue) → Continue (history and resume in the new start) → End.
 // It checks that 20 ms PCM16 frames of 640 bytes reached the mock, that they keep coming as silence while muted and
-// carry sound again after Unmute, and shoots each state, plus the explanation an
-// insecure page (plain HTTP) gets. `--quick`: one run (agent, en, light). Exits nonzero on failure or its timeout and
+// carry sound again after Unmute, that they come at 50 a second all along (at pace 1 the call is held until that spans
+// 40 s, the muted window included: Chrome moved a capture context whose output was exact silence for 30 s to a sink
+// that ran at a quarter of real time, docs/lessons/voice.md), and shoots each state, plus the explanation an insecure
+// page (plain HTTP) gets. `--quick`: one run (agent, en, light). Exits nonzero on failure or its timeout and
 // prints a one-line verdict.
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
@@ -41,6 +44,10 @@ for (const u of [base, hub]) assert.ok(["127.0.0.1", "localhost", "[::1]"].inclu
 assert.equal((await (await fetch(new URL("/api/v1/health", hub))).json()).version, "mock", "Only the mock hub is allowed");
 const info = await (await fetch(new URL("/api/v1/plugins/voice/info", hub), { headers: { Authorization: "Bearer mock" } })).json();
 assert.equal(info.protocol, 2, "Start the mock hub with MOCK_VOICE=1");
+// At the mock's real pace the call reaches the mute after about 35 s; it is held until the uplink has been watched this
+// long, past the 30 s after which Chrome moves a silent context to its fake sink.
+const pace = (await (await fetch(new URL("/mock/voice2", hub))).json()).pace ?? 1;
+const UPLINK_SECONDS = pace >= 1 ? 40 : 0;
 await mkdir(output, { recursive: true });
 
 const strings = (lang) => JSON.parse(readFileSync(new URL(`../src/i18n/locales/${lang}/voice.json`, import.meta.url), "utf8"));
@@ -67,10 +74,12 @@ if (!wav && process.platform === "darwin") {
 const launchArgs = ["--use-fake-ui-for-media-stream", "--use-fake-device-for-media-stream", ...(wav && existsSync(wav) ? [`--use-file-for-fake-audio-capture=${wav}`] : [])];
 const executable = process.env.PERSONA_E2E_CHROMIUM;
 const launch = () => chromium.launch({ headless: true, args: launchArgs, ...(executable ? { executablePath: executable } : { channel: flag("--channel") ?? "chrome" }) });
+// about a minute a run at pace 1 (each call held for 40 s), half that at 0.5
+const minutes = pace >= 1 ? 18 : 12;
 const deadline = setTimeout(() => {
-  console.log("FAIL voice e2e: timed out after 12 minutes");
+  console.log(`FAIL voice e2e: timed out after ${minutes} minutes`);
   process.exit(124);
-}, 12 * 60_000);
+}, minutes * 60_000);
 
 // On macOS, Chrome's fake capture device still waits on the system's microphone permission for the browser, which nobody
 // can grant in a headless run: getUserMedia never settles. There the same WAV (or a tone) is played through WebAudio
@@ -128,6 +137,34 @@ async function until(check, ms, what) {
   }
 }
 
+/** The mock's frame count four times a second while a call is on, for `uplinkPace` afterwards. */
+function sampleUplink() {
+  const samples = [];
+  let on = true;
+  const loop = (async () => {
+    while (on) {
+      const { audio } = await mockLog();
+      samples.push({ t: performance.now(), audio });
+      await new Promise((r) => setTimeout(r, 250));
+    }
+  })();
+  return { from: performance.now(), stop: async () => ((on = false), await loop, samples) };
+}
+
+/** Frames a second over the samples: the whole span, and the slowest and fastest window of `windowMs`. */
+function uplinkPace(samples, windowMs = 5000) {
+  const first = samples[0];
+  const last = samples.at(-1);
+  const seconds = (last.t - first.t) / 1000;
+  const rates = [];
+  for (const a of samples) {
+    const b = samples.find((s) => s.t - a.t >= windowMs);
+    if (!b) break;
+    rates.push((b.audio - a.audio) / ((b.t - a.t) / 1000));
+  }
+  return { seconds, average: (last.audio - first.audio) / seconds, min: Math.min(...rates), max: Math.max(...rates) };
+}
+
 /** What the page's audio did: buffer sources started and stopped, which are still to play, and the contexts it made
  *  (to suspend them). */
 function instrument() {
@@ -135,6 +172,13 @@ function instrument() {
   window.__voiceE2E = seen;
   /** Sources scheduled to end after now and not stopped: the voice's audio still queued. */
   seen.pending = () => [...seen.live].filter((s) => s.__end > s.context.currentTime).length;
+  /** Every kind the bar's second line took, in order: one that lasts half a second (handing, at pace 0.5) is not missed
+   *  while the runner is still busy with the screenshot before it. */
+  seen.kinds = [];
+  new MutationObserver(() => {
+    const kind = document.querySelector('[data-testid="voice-line"]')?.getAttribute("data-kind");
+    if (kind && seen.kinds.at(-1) !== kind) seen.kinds.push(kind);
+  }).observe(document, { subtree: true, childList: true, attributes: true, attributeFilter: ["data-kind"] });
   const Base = window.AudioContext;
   window.AudioContext = class extends Base {
     constructor(o) {
@@ -163,7 +207,7 @@ try {
     const L = strings(lang);
     for (const chat of chats) {
       const name = `${chat.name}-${lang}-${theme}`;
-      const run = { name, errors: [], checks: [] };
+      const run = { name, errors: [], checks: [], guard: [] };
       result.runs.push(run);
       const context = await browser.newContext({ viewport: { width: 1280, height: 860 }, deviceScaleFactor: 2, colorScheme: theme, serviceWorkers: "block" });
       await context.addInitScript(({ lang, theme }) => {
@@ -182,6 +226,8 @@ try {
       page.on("pageerror", (e) => run.errors.push(e.message));
       page.on("console", (m) => {
         if (m.type() === "error" && !/Failed to load resource/.test(m.text())) run.errors.push(m.text());
+        // audio.ts's pace check: the microphone's frames fell behind the wall clock (debug level)
+        if (m.type() === "debug" && m.text().startsWith("[voice]")) run.guard.push(m.text());
       });
       const shot = async (state) => {
         await page.evaluate(() => document.fonts.ready);
@@ -200,6 +246,7 @@ try {
       const line = page.getByTestId("voice-line");
       const phase = (p) => page.waitForFunction((p) => document.querySelector('[data-testid="voice-bar"]')?.getAttribute("data-voice-phase") === p, p, { timeout: 30_000 });
       const lineKind = (k) => page.locator(`[data-testid="voice-line"][data-kind="${k}"]`).waitFor({ timeout: 40_000 });
+      const sawLineKind = (k) => page.waitForFunction((k) => window.__voiceE2E.kinds.includes(k), k, { timeout: 40_000 });
       const singleLineButtons = async (state) => {
         const tall = await page.evaluate(() => [...document.querySelectorAll('[data-testid="voice-bar"] button, [data-testid="voice-ended"] button, [data-testid="composer-voice"]')]
           .filter((b) => b.getBoundingClientRect().height > 40 || b.scrollWidth > b.clientWidth + 1).map((b) => b.textContent || b.getAttribute("aria-label")));
@@ -224,13 +271,14 @@ try {
       await entry.click();
       await bar.waitFor();
       await phase("listening");
+      const uplink = sampleUplink();
       await shot("listening");
       await singleLineButtons("listening");
       run.checks.push("ready: listening");
 
       // the user's words as a caption, then the instruction on its way
       await page.locator('[data-voice-caption="user"][data-final]').first().waitFor();
-      await lineKind("handing");
+      await sawLineKind("handing");
       run.checks.push("captions, run sending");
 
       // the voice speaks, and the orb becomes "Interrupt the voice" (a different button from Stop <agent>)
@@ -367,6 +415,17 @@ try {
         return now.audio - now.audio_silent > muteTo.audio - muteTo.audio_silent;
       }, 10_000, "the microphone again after Unmute");
       run.checks.push(`muted: ${muted} frames, all silence; unmuted: sound again`);
+
+      // 50 frames a second from ready to here, the muted window included; at pace 1 over 40 s at least
+      const hold = uplink.from + (UPLINK_SECONDS + 1) * 1000 - performance.now();
+      if (hold > 0) await page.waitForTimeout(hold);
+      const rate = uplinkPace(await uplink.stop());
+      run.uplink = { ...rate, guard: run.guard.length };
+      const said = `${rate.average.toFixed(1)} frames/s over ${rate.seconds.toFixed(0)} s (5 s windows ${rate.min.toFixed(1)}-${rate.max.toFixed(1)})`;
+      assert.ok(rate.seconds >= UPLINK_SECONDS, `${name}: the uplink was watched ${rate.seconds.toFixed(1)} s, ${UPLINK_SECONDS} s needed`);
+      assert.ok(rate.average >= 47 && rate.average <= 53, `${name}: the uplink keeps 50 frames/s: ${said}`);
+      assert.ok(rate.min >= 40, `${name}: the uplink never slows down: ${said}`);
+      run.checks.push(`uplink ${said}${run.guard.length ? `; ${run.guard.length} pace notes` : ""}`);
 
       // the browser suspends the audio: the call ends by itself and leaves Continue
       await page.evaluate(() => Promise.all(window.__voiceE2E.contexts.filter((c) => c.state === "running").map((c) => c.suspend())));

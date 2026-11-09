@@ -199,8 +199,14 @@ class VoiceMockTests(unittest.TestCase):
             self.assertEqual(log["audio_bytes"] - before["audio_bytes"], 2560)
             self.assertGreaterEqual(log["audio_sizes"].get("640", 0), 4)
             self.assertEqual(log["audio_silent"] - before["audio_silent"], 3)
+            self.assertEqual(log["pace"], 0.1)  # web/e2e/voice.mjs checks the uplink's rate over 40 s at pace 1
         finally:
             ws.close()
+        # closed before its script was done: the conversation goes back to idle for the next call
+        deadline = time.monotonic() + 5
+        while state() != "idle" and time.monotonic() < deadline:
+            time.sleep(0.05)
+        self.assertEqual(state(), "idle")
 
     def test_protocol_1_start_gets_the_old_script(self):
         ws = Socket(self.port, "/api/v1/plugins/voice/ws")

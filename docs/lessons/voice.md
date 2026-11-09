@@ -403,9 +403,35 @@ Other values: allowing 450 tokens per append (500-token limit, rejection observe
   audio object keeps the mute itself and hands it to the worklet it makes. Likewise each frame carries the rate the worklet made it
   at (a frame already posted when `ready` named another rate is still the old one). The e2e checks that muted frames keep coming
   and are all zero (the mock counts all-zero frames, `audio_silent`).
+- **The capture context must never look silent**: at the mock's real pace (`MOCK_VOICE_PACE=1`) the uplink fell from 50 to about 20
+  frames a second some 30 seconds into every call, muted or not; the page's own binary `WebSocket.send` calls were as few, and in a 1.2 s
+  window the capture `AudioContext`'s `currentTime` moved 0.27 s while the player's moved 1.2 s. The capture graph's output was exact zeros
+  (the worklet writes no output, through a gain of 0). Chrome moves a Web Audio context whose output has been all zero for 30 seconds off
+  the audio device to a timer-driven fake sink (its silent sink suspender, to save power); in a headless Chrome on macOS that sink ran at
+  about a quarter of real time, and the worklet, which runs on the context's clock, made a quarter of the frames: the extension would
+  have heard a quarter of what was said. The suspender looks for samples that are exactly zero, so a tiny constant counts as sound.
+  `audio.ts` adds a `ConstantSourceNode` at 2^-26 (about -156 dBFS) to the capture context's output from the click on (the permission
+  prompt alone can take 30 seconds): a constant has no sound at any frequency, it is under half a step of a 24-bit converter (2^-24) so it
+  rounds to nothing on the way to the speaker, and it is far under the level at which Chrome marks a tab as playing audio. The microphone
+  still goes into the worklet only (no monitoring; `audio.test.ts` walks the graph). CPU: one node filling 128 samples per render quantum,
+  and the context stays on the device it used for the first 30 seconds anyway. With it: 50.0 frames a second over 41 s, every 5 s window
+  49.4–50.5; with the level set to 0: 39.9 on average, windows down to 12.5. The experiment before the fix (a sink gain of `1e-10` with
+  the microphone also connected to it) worked too, but a microphone that delivers exact zeros (a hardware mute switch) would put the
+  context back to sleep. The player context is left alone; the suspender is meant to hand a context back to the device once it renders
+  sound, not measured here after more than 30 seconds of silence between replies. Whether a headed, foreground Chrome's fake sink runs
+  slow as well was not checked; the fix does not depend on it.
+  The guard: `audio.ts` checks every 5 seconds (`capture-pace.ts`) and logs `[voice] microphone frames fell behind: N in 5.0 s, 250
+  expected; the capture context's clock moved X s` at debug level (DevTools' Verbose) when a window brings fewer than 90 % of the frames
+  the wall clock expects. A context clock far behind the wall clock means the sink; one on time means the page's main thread could not
+  take the frames. The e2e at pace 0.5 reaches the mute before the 30 s mark, which is why it passed: run it at pace 1 too, where it
+  holds each call until it has watched the uplink for 40 seconds (average 47–53 frames a second, every 5 s window at least 40) and keeps
+  the `[voice]` debug lines in `results.json`.
 - **The mock wrote state changes into a copy**: `voice_mock.py` took its session from `all_sessions()`, which decorates copies, so "the
   conversation turns working" never reached a sessions push. It takes the hub's own row now; a client that reads the session's state (the
-  web's Stop <agent>, iOS's working line) sees the script.
+  web's Stop <agent>, iOS's working line) sees the script. Once that worked, a call that closed after its script's "sent" and before
+  "done" (the e2e's Continue, and the reconnect after picking a voice) left the conversation working for the next run, whose line then
+  said "working" instead of "handing" (the line shows handing only while the conversation is idle): the e2e timed out there on its
+  seventh run at pace 0.5. A call that closes before done now puts the conversation back to idle.
 
 ## An address that accepts TCP but never answers TLS
 
