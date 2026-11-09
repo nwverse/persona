@@ -763,6 +763,7 @@
       "type": "object",
       "properties": {
         "kind": {"type": "string", "enum": ["docs", "meetings", "events"]},
+        "source": {"type": "string", "description": "The knowledge base's: the connector that supplied it. The collector sets it to the trusted connector id; a program leaves it out."},
         "id": {"type": "string"},
         "title": {"type": "string"},
         "url": {"type": "string"},

@@ -156,6 +156,9 @@ one leaves it out, and its chats or documents never match that rule; a hub that 
 - **A document** (`items.list`): `signals` are why it concerns the owner, each at most once: `mentions` (the document
   mentions the owner), `comment_mentions` (a comment or reply on it does), `authored` (the owner owns it), `viewed`
   (the owner opened it recently). Only what the program can list read-only; no other value.
+  The selection keeps a document by these (`docs/assistant/knowledge.md` "Selection", Documents); a per-item setting
+  names it by its `id`. A document without `signals` is kept as before the selection, so a program that cannot tell
+  any leaves the field out rather than guessing.
 
 ### History
 

@@ -3804,6 +3804,11 @@ export interface ConnectorItems {
  */
 export interface ConnectorKBItem {
   kind: string;
+  /**
+   * The knowledge base's: the connector that supplied it. The collector sets it to the trusted connector id; a
+   * program leaves it out.
+   */
+  source?: string;
   id: string;
   title: string;
   url?: string;

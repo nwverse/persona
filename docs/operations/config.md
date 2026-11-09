@@ -372,7 +372,8 @@ A manager's own sections of the configuration are in its `manager.json`, not in 
   `GET` / `PUT /api/v1/kb/selection` (the whole document, validated; a read-only device gets 403) and `GET /api/v1/kb/selection/candidates?source=<connector id>`
   (a source's chats, for a per-item picker), or per chat with `kb_history_plan`; an app settings page is a follow-up. No document saved means the defaults: mentions of you, your own messages with 50 on each side, and direct messages,
   every rule's `days` null (`kb.text_days`) and attachments as `attachment_days` / `attachment_days_by_source` say. Turning a rule off only stops writing new lines;
-  what is stored is pruned by days alone, and shorter days apply only once you set them.
+  what is stored is pruned by days alone, and shorter days apply only once you set them. Documents (`docs` rules, per-item `doc` settings) had no retention
+  before the selection, so a document is deleted only once you set days for its rule or for it; with the defaults none is.
   The knowledge base belongs to the manager, which reads the whole section here (`ai` included: it is the default of its `kb.*` model purposes);
   an assistant run elsewhere (`assistant.external`) reads the `manager.json` on its own machine, and its `extra_dirs` are paths there (`docs/assistant/knowledge.md` ("Who owns what")).
 - `agents.triage`: triage after a round stops ([agent-work.md](../assistant/agent-work.md) ("Switches")). Switches are under **Settings › Session Triage** in the App (stored in the manager's settings, all off by default),
