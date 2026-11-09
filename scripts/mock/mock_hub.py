@@ -1988,8 +1988,8 @@ def format_todo(t):
 
 
 def apply_todo_plan(t, body):
-    """A POST / PATCH body's due_at | due_date, remind_at and priority (#1683, server/internal/assistant/todo_plan.go):
-    null or "" clears; a new reminder time is pushed again. The error to answer with 400, else None."""
+    """A POST / PATCH body's due_at | due_date, remind_at, priority (#1683, server/internal/assistant/todo_plan.go) and
+    project (#2581): null or "" clears; a new reminder time is pushed again. The error to answer with 400, else None."""
     if "due_at" in body or "due_date" in body:
         at, day = body.get("due_at") or None, body.get("due_date") or None
         if at and day: return "give due_at or due_date, not both"
@@ -2003,6 +2003,14 @@ def apply_todo_plan(t, body):
         pr = "" if pr == "normal" else pr
         if pr not in ("", "high", "low"): return "priority must be high, normal or low"
         t["priority"] = pr
+    if "project" in body:  # a knowledge-base project's slug or name, "" for none (#2581, todo_project.go)
+        name = (body.get("project") or "").strip()
+        if not name:
+            t.pop("project", None)
+        else:
+            e = next((e for e in KB["projects"] if name in (e["id"], e["name"]) and not e.get("extra", "").endswith("ignored")), None)
+            if e is None: return f"no knowledge-base project {name!r}"
+            t["project"] = e["id"]
     return None
 
 
