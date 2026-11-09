@@ -21,7 +21,7 @@ Phase one is done and this document follows the code; how it was split into issu
 
 **Current state**
 
-- The hub has built-in voice extension `personad voice` (`server/internal/voice`), supporting GPT-Live's `live` and `codex` dialects. Clients: iOS (`apple/Persona/Voice/`, `apple/Persona/Views/Voice/`; section 6), the web app (6.11) and Android's voice page, which speaks protocol 1 and so always talks to the main chat.
+- The hub has built-in voice extension `personad voice` (`server/internal/voice`), supporting GPT-Live's `live` and `codex` dialects. Clients: iOS and visionOS (`apple/Persona/Voice/`, `apple/Persona/Views/Voice/`; section 6), the web app (6.11) and Android's voice page, which speaks protocol 1 and so always talks to the main chat.
 - Since #3502, the extension speaks protocol 2 (`GET /info` returns `protocol: 2`, `features`): `start` with `protocol: 2` and `target` binds to that chat (main chat, another Persona chat, or any Agent),
   with `run` / `link` frames, 409 mapping and `resend`, `状态：` (status), `停止：` (stop), `回答：` (answer), trimmed `resume`, and an interruption gate. Since #3504, questions are supported (`asks`: `ask` frames, voice answers, only category spoken for approvals),
   and since #3505 the upstream pauses (`suspend`: closed while the target works and the call has been quiet for 60 seconds, back when there is something to say or you speak, `link{paused / waking / live}`, 4.9); `features` is `[target, runs, asks, resume, suspend]`. Protocol 1 frames are unchanged.
@@ -1007,7 +1007,7 @@ Reject (ii), "add realtime type to model providers": it would need a new API ret
 
 ## 6. iOS design
 
-### 6.1 Entry (iOS only; no Mac or visionOS in phase one)
+### 6.1 Entry (iOS and visionOS; not the Mac yet)
 
 1. **Optional `voice:` callback in `ShellComposerBar`**:
    - collapsed row: idle `[+][composer][dictation][voice]`, working `[+][composer][voice][stop]`, dictation in expanded row;
@@ -1183,7 +1183,7 @@ struct VoiceDeps { var api: () -> APIClient?                 // Refetch each con
 
 ### 6.9 Mac and other platforms
 
-- Models, frames, views compile in shared iOS/Mac sources. Audio has iOS implementation only; `VoiceAvailability` unsupported on macOS/visionOS.
+- Models, frames, views compile in shared iOS/Mac sources. Call audio (`PhoneVoiceAudio`) runs on iOS and visionOS, where `VoicePlatform.current` is `.phone` (docs/apple/vision.md); the Mac gets `NoVoiceAudio` and `VoiceAvailability` is `unsupported` there.
 - Separate follow-up Mac issue. macOS `AVAudioEngine` also supports voice processing; Codex voice is desktop-first.
 - Watch compiles tokens only, no UI.
 - The web app has its own client (#2273), on the same protocol 2 and the same pure rules: 6.11.

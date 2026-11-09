@@ -4076,7 +4076,7 @@ struct Composer: View, Equatable {
         voiceNote = VoiceEntry.start(key, model: model)
     }
 
-    /// Voice Chat in the 「+」 menu (iOS only: the Mac and visionOS have no call audio yet, docs/assistant/voice.md 6.9).
+    /// Voice Chat in the 「+」 menu (iOS and visionOS: the Mac has no call audio yet, docs/assistant/voice.md 6.9).
     @ViewBuilder private var voiceMenuItem: some View {
         if VoicePlatform.current == .phone {
             Button { startVoice() } label: { Label("Voice Chat", systemImage: Theme.Icon.voiceChannel) }
