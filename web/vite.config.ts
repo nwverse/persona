@@ -1,12 +1,14 @@
 /// <reference types="vitest/config" />
+import { readFileSync } from "node:fs";
+import { basename } from "node:path";
 import { fileURLToPath } from "node:url";
 import { defineConfig, type Plugin } from "vite";
 import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
-import { localeDirs, preloadScript } from "./src/startup-preload";
+import { brotliCopies, FIRST_SCREEN_BUDGET, localeDirs, preloadScript, sentBytes, startupNamespaceGaps } from "./src/startup-preload";
 import { textScale } from "./src/lib/text-scale";
 import { classicWorkerProblem } from "./src/sw-entry-check";
-import { i18nCatalogs } from "./i18n-catalogs";
+import { catalogFiles, i18nCatalogs, startupNamespacesFile } from "./i18n-catalogs";
 import { pageTokensPlugin } from "./page-tokens";
 import { thirdPartyLicenses } from "./third-party-licenses";
 
@@ -68,50 +70,90 @@ const showcaseImages: Plugin = {
 // the catalog is set). The catalog is the preferred language's, picked like i18n/index.ts preferredLanguage (the
 // script is src/startup-preload.ts, tested against it); the live screen (/screen/<machine>, screen/screen.ts) never
 // loads App, so it gets only the catalog.
-const startupPreload: Plugin = {
-  name: "startup-preload",
-  apply: "build",
-  transformIndexHtml: {
-    order: "post",
-    handler(html, ctx) {
-      if (!ctx.bundle || ctx.chunk?.name !== "main") return html; // not admin/index.html
-      const chunks = Object.values(ctx.bundle).filter((c) => c.type === "chunk");
-      // react-dom/client shares a chunk with other modules (no facade): look a module up by the chunk holding it.
-      const byModule = (path: string) => chunks.find((c) => c.moduleIds.some((id) => id.endsWith(path)));
-      const find = (path: string) => {
-        const chunk = byModule(path);
-        if (!chunk) throw new Error(`startup-preload: no chunk holds ${path}`);
-        return chunk;
-      };
-      // Each group: the chunks of its roots and everything they import statically, the JS and the CSS, minus the
-      // files the page already loads (main and its static imports have their tags; a page group skips the shared one).
-      const group = (roots: string[], loaded: Set<string>) => {
-        const files: string[] = [];
-        const visit = (chunk: (typeof chunks)[number]) => {
-          if (loaded.has(chunk.fileName)) return;
-          loaded.add(chunk.fileName);
-          files.push(chunk.fileName, ...(chunk.viteMetadata?.importedCss ?? []));
-          for (const name of chunk.imports) visit(chunks.find((c) => c.fileName === name)!);
-        };
-        roots.forEach((r) => visit(find(r)));
-        return files;
-      };
-      const langs = localeDirs(fileURLToPath(new URL("./src/i18n/locales", import.meta.url)));
-      const main = new Set([ctx.chunk.fileName, ...ctx.chunk.imports]);
-      const shared = group(["/react-dom/client.js", "/src/lib/pwa.ts"], main);
-      const page = (roots: string[]) => group(roots, new Set([...main, ...shared]));
-      const files = {
-        shared,
-        app: page(["/src/ui/ExtensionThemePicker.tsx", "/src/App.tsx"]),
-        screen: page(["/src/screen/ScreenView.tsx"]),
-        catalogs: Object.fromEntries(Object.keys(langs).map((lang) => [lang, find(`i18n-catalog:client:${fileURLToPath(new URL(`./src/i18n/locales/${lang}/_meta.json`, import.meta.url))}.js`).fileName])),
-        matches: Object.fromEntries(Object.entries(langs).flatMap(([lang, ms]) => ms.map((m) => [m.toLowerCase(), lang]))),
-      };
-      const script = preloadScript(files);
-      return { html, tags: [{ tag: "script", children: script, injectTo: "head" }] };
+//
+// The catalog is the first screen's part of it (client-startup, web/i18n-catalogs.ts): the rest loads once the page
+// has started (i18n/index.ts startI18n), and holdLazyImports makes every other module wait for it. So the first
+// screen's chunks, all that can run before it, must name only startup namespaces: the build fails, naming the
+// namespaces to add to src/i18n/startup-namespaces.json, if they name another.
+//
+// The same files, with main and everything it imports statically and the rest of the catalog, are what a cold first
+// screen fetches: once they are written, each of 1 KB or more gets a brotli copy beside it (name.br,
+// src/startup-preload.ts brotliCopies), which the hub sends as stored to a browser that takes br (docs/web/web.md
+// "Precompressed assets"). The build then fails if any language's first screen sends more than FIRST_SCREEN_BUDGET.
+function startupPreload(): Plugin {
+  let startup: string[] | undefined; // the first screen's files, set by transformIndexHtml for the client page
+  let screens: [string, string[]][] = []; // each language's first screen of the App (not the live screen)
+  return {
+    name: "startup-preload",
+    apply: "build",
+    async writeBundle({ dir }) {
+      if (!startup) this.error("startup-preload: index.html was not transformed, so the first screen's files are unknown");
+      await brotliCopies(dir!, startup);
+      for (const [lang, files] of screens) {
+        const bytes = await sentBytes(dir!, files);
+        if (bytes > FIRST_SCREEN_BUDGET) {
+          this.error(`startup-preload: the ${lang} first screen sends ${bytes} B, over its budget of ${FIRST_SCREEN_BUDGET} B (src/startup-preload.ts FIRST_SCREEN_BUDGET)`);
+        }
+      }
     },
-  },
-};
+    transformIndexHtml: {
+      order: "post",
+      handler(html, ctx) {
+        if (!ctx.bundle || ctx.chunk?.name !== "main") return html; // not admin/index.html
+        const chunks = Object.values(ctx.bundle).filter((c) => c.type === "chunk");
+        // react-dom/client shares a chunk with other modules (no facade): look a module up by the chunk holding it.
+        const byModule = (path: string) => chunks.find((c) => c.moduleIds.some((id) => id.endsWith(path)));
+        const find = (path: string) => {
+          const chunk = byModule(path);
+          if (!chunk) throw new Error(`startup-preload: no chunk holds ${path}`);
+          return chunk;
+        };
+        // Each group: the chunks of its roots and everything they import statically, the JS and the CSS, minus the
+        // files the page already loads (main and its static imports have their tags; a page group skips the shared one).
+        const group = (roots: (typeof chunks)[number][], loaded: Set<string>) => {
+          const files: string[] = [];
+          const visit = (chunk: (typeof chunks)[number]) => {
+            if (loaded.has(chunk.fileName)) return;
+            loaded.add(chunk.fileName);
+            files.push(chunk.fileName, ...(chunk.viteMetadata?.importedCss ?? []));
+            for (const name of chunk.imports) visit(chunks.find((c) => c.fileName === name)!);
+          };
+          roots.forEach(visit);
+          return files;
+        };
+        const langs = localeDirs(fileURLToPath(new URL("./src/i18n/locales", import.meta.url)));
+        const meta = (lang: string) => fileURLToPath(new URL(`./src/i18n/locales/${lang}/_meta.json`, import.meta.url));
+        const catalogs = (kind: string) => Object.fromEntries(Object.keys(langs).map((lang) => [lang, find(`i18n-catalog:${kind}:${meta(lang)}.js`).fileName]));
+        const main = new Set([ctx.chunk.fileName, ...ctx.chunk.imports]);
+        // main, what it imports statically and their CSS: the page's own tags (Vite preloads the whole static closure)
+        const entry = group([ctx.chunk], new Set());
+        const shared = group(["/react-dom/client.js", "/src/lib/pwa.ts"].map(find), main);
+        const page = (roots: string[]) => group(roots.map(find), new Set([...main, ...shared]));
+        const files = {
+          shared,
+          app: page(["/src/ui/ExtensionThemePicker.tsx", "/src/App.tsx"]),
+          screen: page(["/src/screen/ScreenView.tsx"]),
+          catalogs: catalogs("client-startup"),
+          matches: Object.fromEntries(Object.entries(langs).flatMap(([lang, ms]) => ms.map((m) => [m.toLowerCase(), lang]))),
+        };
+        const script = preloadScript(files);
+        // What runs before the rest of the catalog is in: the groups, and main.tsx's other imports (not preloaded).
+        const first = new Set([...entry, ...shared, ...files.app, ...files.screen, ...group(["/src/lib/back-close.ts", "/src/lib/error-reports-start.ts"].map(find), new Set())]);
+        const gaps = startupNamespaceGaps(
+          chunks.filter((c) => first.has(c.fileName)).map((c) => c.code),
+          catalogFiles(meta("en"), "client").map((file) => basename(file, ".json")),
+          JSON.parse(readFileSync(startupNamespacesFile(meta("en")), "utf8")) as string[],
+        );
+        if (gaps.length) {
+          throw new Error(`startup-preload: the first screen's code names keys of ${gaps.join(", ")}, which the page reads before the rest of the catalog is in: add them to src/i18n/startup-namespaces.json`);
+        }
+        startup = [...new Set([...entry, ...shared, ...files.app, ...files.screen, ...Object.values(files.catalogs), ...Object.values(catalogs("client-rest"))])];
+        screens = Object.entries(files.catalogs).map(([lang, catalog]) => [lang, [...new Set([...entry, ...shared, ...files.app, catalog])]]);
+        return { html, tags: [{ tag: "script", children: script, injectTo: "head" }] };
+      },
+    },
+  };
+}
 
 // Build only: sw.js must not import anything (src/sw-entry-check.ts); the build fails, saying why and how to fix it.
 const classicWorker: Plugin = {
@@ -138,8 +180,22 @@ const katexFonts: Plugin = {
   },
 };
 
+// Build only: the page waits for just the first screen's part of the client catalog (src/i18n/index.ts startI18n), so
+// every lazy import of the client's code waits for the rest before it runs: `import(x)` becomes one that starts once
+// i18nRest() resolves. The download itself does not wait: Vite preloads a lazy chunk (and what it imports) before
+// calling the import. Left alone: main.tsx's own imports, which are the first screen (startupPreload checks they read
+// only its part); the catalogs' loads; and the admin UI, which waits for the whole catalog.
+const holdLazyImports: Plugin = {
+  name: "hold-lazy-imports",
+  apply: "build",
+  renderDynamicImport({ moduleId, targetModuleId }) {
+    if (moduleId.endsWith("/src/main.tsx") || moduleId.includes("/src/admin/") || targetModuleId?.startsWith("\0i18n-catalog:")) return null;
+    return { left: "Promise.resolve(globalThis.__personaI18nRest?.()).then(()=>import(", right: "))" };
+  },
+};
+
 export default defineConfig({
-  plugins: [katexFonts, i18nCatalogs, pageTokensPlugin, react(), tailwindcss(), adminFallback, showcaseImages, startupPreload, classicWorker, thirdPartyLicenses],
+  plugins: [katexFonts, i18nCatalogs, pageTokensPlugin, react(), tailwindcss(), adminFallback, showcaseImages, startupPreload(), holdLazyImports, classicWorker, thirdPartyLicenses],
   // Text size (src/lib/text-scale.ts): font sizes become calc(size * var(--text-scale, 1)), after Tailwind wrote them.
   css: { postcss: { plugins: [textScale()] } },
   server: {
