@@ -76,8 +76,10 @@ export function NavRail({ ticks, scroller, onJump, reset }: { ticks: NavRailTick
     const sc = view.current;
     if (!sc) return;
     // Fewer questions than the rail's minimum keeps it away whatever the room is, so there is nothing to measure:
-    // writing no state, mounting a short chat (or one whose lines are still loading) draws no extra frame.
+    // writing no state, mounting a short chat (or one whose lines are still loading) draws no extra frame. The
+    // pointer-wake band goes with it — a strip rect left from an earlier rail would wake an empty margin.
     if (list.current.length < NAV_RAIL_MIN_TICKS) {
+      railX.current = null;
       setActive((x) => (x === null ? x : null));
       return;
     }
