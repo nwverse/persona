@@ -3,7 +3,8 @@
 // skips the whole parse (micromark, mdast, hast, the rehype plugins, the JSX): a conversation opened again (ChatView
 // remounts per conversation) or a reply that re-renders for another reason. The key is everything that tree is made
 // from: the Markdown text, the remark plugin list (by identity), which rehype plugins run (KaTeX in or not, the
-// path-link set) and the machine and directory the link components belong to. A tree is plain data (elements and the hast nodes they carry), so one tree can be drawn
+// path-link set) and the machine and directory the link components belong to; anything new a tree is made from must
+// join the key, or a kept tree is drawn stale. A tree is plain data (elements and the hast nodes they carry), so one tree can be drawn
 // in several places at once. Streaming and fading blocks are not kept: they change at every update.
 import type { ReactElement } from "react";
 import ReactMarkdown, { type Options } from "react-markdown";
