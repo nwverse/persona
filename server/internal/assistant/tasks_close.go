@@ -46,6 +46,7 @@ func (s *Service) taskCloseLoop(ctx context.Context) {
 	t := time.NewTicker(taskCloseEvery)
 	defer t.Stop()
 	refused := taskCloseRefused{}
+	idleSeen := idleSeen{}
 	for {
 		select {
 		case <-ctx.Done():
@@ -53,6 +54,7 @@ func (s *Service) taskCloseLoop(ctx context.Context) {
 		case <-t.C:
 		}
 		s.closeDoneTaskAgents(ctx, refused)
+		s.closeIdleAgents(ctx, refused, idleSeen)
 	}
 }
 
@@ -87,6 +89,11 @@ func (s *Service) doneTaskAgents() []doneTaskAgent {
 // retirable says whether s, an agent of a task done at doneAt, may be closed now: running in a pane of the engine,
 // still since both the task was done and its last step at least taskCloseIdle ago, and with nothing going on.
 func retirable(s proto.Session, doneAt, now time.Time) bool {
+	return retirableAfter(s, doneAt, now, taskCloseIdle)
+}
+
+// retirableAfter is retirable with the time the agent must have been still.
+func retirableAfter(s proto.Session, doneAt, now time.Time, idle time.Duration) bool {
 	switch {
 	case s.Assistant, s.SourceKind != "", s.Starting, !s.StartedByPersona:
 		return false
@@ -116,7 +123,7 @@ func retirable(s proto.Session, doneAt, now time.Time) bool {
 	if s.UpdatedAt.After(last) {
 		last = s.UpdatedAt
 	}
-	return now.Sub(last) >= taskCloseIdle
+	return now.Sub(last) >= idle
 }
 
 // closeDoneTaskAgents retires the agents of done tasks that may be closed now (retirable); refused remembers the
@@ -156,26 +163,32 @@ func (s *Service) closeDoneTaskAgents(ctx context.Context, refused taskCloseRefu
 		if r, ok := refused[key]; ok && r.updated.Equal(c.UpdatedAt) && now.Sub(r.at) < taskCloseRetry {
 			continue
 		}
-		var res struct {
-			Closed bool `json:"closed"`
+		s.retireAgent(ctx, refused, "task "+a.todo, a.machine, c, now)
+	}
+}
+
+// retireAgent asks c's node to close its agent (session.retire) and remembers a refusal; who names the reason in the log.
+func (s *Service) retireAgent(ctx context.Context, refused taskCloseRefused, who, machine string, c proto.Session, now time.Time) {
+	key := [2]string{machine, c.SessionID}
+	var res struct {
+		Closed bool `json:"closed"`
+	}
+	cctx, cancel := context.WithTimeout(ctx, 20*time.Second)
+	err := s.call(cctx, machine, deviceSessionRetire, map[string]any{"session_id": c.SessionID}, &res)
+	cancel()
+	var re *rpc.Error
+	switch {
+	case err == nil:
+		delete(refused, key)
+		if res.Closed {
+			s.logf("%s: closed agent %s/%s (resumes on the next message)", who, machine, c.SessionID)
 		}
-		cctx, cancel := context.WithTimeout(ctx, 20*time.Second)
-		err := s.call(cctx, a.machine, deviceSessionRetire, map[string]any{"session_id": a.session}, &res)
-		cancel()
-		var re *rpc.Error
-		switch {
-		case err == nil:
-			delete(refused, key)
-			if res.Closed {
-				s.logf("task %s: closed its finished agent %s/%s (resumes on the next message)", a.todo, a.machine, a.session)
-			}
-		case errors.As(err, &re): // the node refused (or is too old to know session.retire): not again for a while
-			if prev, ok := refused[key]; !ok || prev.why != err.Error() {
-				s.logf("task %s: agent %s/%s left open: %v", a.todo, a.machine, a.session, err)
-			}
-			refused[key] = taskCloseRefusal{updated: c.UpdatedAt, at: now, why: err.Error()}
-		default:
-			s.logf("task %s: close agent %s/%s: %v", a.todo, a.machine, a.session, err)
+	case errors.As(err, &re): // the node refused (or is too old to know session.retire): not again for a while
+		if prev, ok := refused[key]; !ok || prev.why != err.Error() {
+			s.logf("%s: agent %s/%s left open: %v", who, machine, c.SessionID, err)
 		}
+		refused[key] = taskCloseRefusal{updated: c.UpdatedAt, at: now, why: err.Error()}
+	default:
+		s.logf("%s: close agent %s/%s: %v", who, machine, c.SessionID, err)
 	}
 }

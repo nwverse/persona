@@ -26,14 +26,14 @@ class RouterTest {
             Triple(RouteInput.Share(agent), AppTab.Agents, agent),
             Triple(RouteInput.Internal(assistant), AppTab.Persona, assistant),
             Triple(RouteInput.Internal(agent), AppTab.Agents, agent),
-            Triple(RouteInput.Internal(InboxItemRoute("item")), AppTab.Inbox, InboxItemRoute("item")),
-            Triple(RouteInput.DeepLink("persona://open?target=inbox&item=item"), AppTab.Inbox, InboxItemRoute("item")),
-            Triple(RouteInput.DeepLink("persona://open?target=lark&chat=chat"), AppTab.Inbox, LarkChatRoute("chat")),
-            Triple(RouteInput.Internal(LarkChatRoute("chat")), AppTab.Inbox, LarkChatRoute("chat")),
+            Triple(RouteInput.Internal(InboxItemRoute("item")), AppTab.Persona, InboxItemRoute("item")),
+            Triple(RouteInput.DeepLink("persona://open?target=inbox&item=item"), AppTab.Persona, InboxItemRoute("item")),
+            Triple(RouteInput.DeepLink("persona://open?target=lark&chat=chat"), AppTab.Persona, LarkChatRoute("chat")),
+            Triple(RouteInput.Internal(LarkChatRoute("chat")), AppTab.Persona, LarkChatRoute("chat")),
             Triple(RouteInput.Notification("machine/assistant", requestId = "request"), AppTab.Persona, InteractionRoute(assistant, "request")),
             Triple(RouteInput.DeepLink("persona://open?target=request&machine=machine&session=agent&request=request"), AppTab.Agents, InteractionRoute(agent, "request")),
-            Triple(RouteInput.Internal(ConnectionSettingsRoute), AppTab.Settings, SettingsPageRoute(SettingsPage.Diagnostics)),
-            Triple(RouteInput.DeepLink("persona://open?target=settings&page=notifications"), AppTab.Settings, SettingsPageRoute(SettingsPage.Notifications)),
+            Triple(RouteInput.Internal(ConnectionSettingsRoute), AppTab.Persona, SettingsPageRoute(SettingsPage.Diagnostics)),
+            Triple(RouteInput.DeepLink("persona://open?target=settings&page=notifications"), AppTab.Persona, SettingsPageRoute(SettingsPage.Notifications)),
             Triple(RouteInput.DeepLink("persona://open?machine=machine&session=a%2Fb%2Bc&kind=assistant"), AppTab.Persona,
                 ChatRoute("machine", "a/b+c", ConversationKind.Assistant)),
         )
@@ -43,15 +43,15 @@ class RouterTest {
             assertRoute(router.parseDebug(mapOf("debug.openTab" to tab.name)), tab, tabRoot(tab))
         }
         SettingsPage.entries.forEach { page ->
-            assertRoute(router.parse(RouteInput.Internal(SettingsPageRoute(page))), AppTab.Settings, SettingsPageRoute(page))
+            assertRoute(router.parse(RouteInput.Internal(SettingsPageRoute(page))), AppTab.Persona, SettingsPageRoute(page))
         }
         val pairLink = "persona://pair?url=https%3A%2F%2Fexample.com&token=example"
         val pairing = router.parse(RouteInput.DeepLink(pairLink))
-        assertRoute(pairing, AppTab.Settings, PairingRoute)
+        assertRoute(pairing, AppTab.Persona, PairingRoute)
         assertEquals(pairLink, pairing?.pairingLink)
-        assertRoute(router.parseDebug(mapOf("debug.openPairing" to pairLink)), AppTab.Settings, PairingRoute)
-        assertRoute(router.parseDebug(mapOf("debug.openPairing" to "true")), AppTab.Settings, PairingRoute)
-        assertRoute(router.parseDebug(mapOf("debug.openDiagnostics" to "true")), AppTab.Settings, SettingsPageRoute(SettingsPage.Diagnostics))
+        assertRoute(router.parseDebug(mapOf("debug.openPairing" to pairLink)), AppTab.Persona, PairingRoute)
+        assertRoute(router.parseDebug(mapOf("debug.openPairing" to "true")), AppTab.Persona, PairingRoute)
+        assertRoute(router.parseDebug(mapOf("debug.openDiagnostics" to "true")), AppTab.Persona, SettingsPageRoute(SettingsPage.Diagnostics))
         assertRoute(router.parseDebug(mapOf("debug.openSession" to "machine/assistant")), AppTab.Persona, assistant)
         assertRoute(router.parseDebug(mapOf("debug.openSession" to "machine/agent")), AppTab.Agents, agent)
         assertRoute(router.parseDebug(mapOf("debug.openRequest" to "request", "debug.session" to "machine/agent")),
@@ -73,9 +73,9 @@ class RouterTest {
     @Test fun personaDeepLinksKeepCredentialsTransient() {
         val pair = "persona://pair?url=https%3A%2F%2Fhub.example.com&token=fixture"
         val route = router.parse(RouteInput.DeepLink(pair))
-        assertRoute(route, AppTab.Settings, PairingRoute)
+        assertRoute(route, AppTab.Persona, PairingRoute)
         assertEquals(pair, route?.pairingLink)
-        assertRoute(router.parseDebug(mapOf("debug.openPairing" to pair)), AppTab.Settings, PairingRoute)
+        assertRoute(router.parseDebug(mapOf("debug.openPairing" to pair)), AppTab.Persona, PairingRoute)
         for (suffix in listOf("open/path?machine=machine&session=agent", "open?machine=machine&session=",
             "open?machine=machine&session=agent&session=assistant", "open?machine=machine&session=%ZZ", "open#fragment")) {
             assertNull(router.parse(RouteInput.DeepLink("persona://$suffix")))
@@ -134,6 +134,57 @@ class RouterTest {
         }
         val interaction = InteractionRoute(fromInbox, "request")
         assertEquals(interaction, Json.decodeFromString<InteractionRoute>(Json.encodeToString(interaction)))
+    }
+
+    @Test fun onlyPersonaAndAgentsArePrimaryTabs() {
+        assertEquals(listOf(AppTab.Persona, AppTab.Agents), AppTab.entries.toList())
+        assertEquals(listOf(AssistantRoute, AgentsRoute), AppTab.entries.map(::tabRoot))
+    }
+
+    @Test fun retiredTabLinksAndDebugLaunchesOpenSecondaryPagesUnderPersona() {
+        for ((name, key) in listOf("inbox" to InboxRoute, "settings" to SettingsRoute)) {
+            val external = router.parse(RouteInput.DeepLink("persona://open?target=tab&tab=$name"))!!
+            val debug = router.parseDebug(mapOf("debug.openTab" to name))!!
+            for (route in listOf(external, debug)) {
+                assertRoute(route, AppTab.Persona, key)
+                val stacks = AppTab.entries.associateWith { mutableListOf(tabRoot(it)) }
+                route.restore(stacks)
+                assertEquals(listOf(AssistantRoute, key), stacks.getValue(AppTab.Persona))
+                assertEquals(listOf(AgentsRoute), stacks.getValue(AppTab.Agents))
+            }
+        }
+    }
+
+    @Test fun inboxAndSettingsLinksRestoreParentsWithoutChangingExistingEntries() {
+        val cases = listOf(
+            "persona://open?target=inbox&item=item" to listOf(InboxRoute, InboxItemRoute("item")),
+            "persona://open?target=lark&chat=chat" to listOf(InboxRoute, LarkChatRoute("chat")),
+            "persona://open?target=settings&page=about" to listOf(SettingsRoute, SettingsPageRoute(SettingsPage.About)),
+            "persona://pair?url=https%3A%2F%2Fexample.com&token=fixture" to listOf(SettingsRoute, PairingRoute),
+        )
+        for ((link, pages) in cases) {
+            val origin = PushedPage
+            val stacks = AppTab.entries.associateWith { mutableListOf(tabRoot(it)) }
+            stacks.getValue(AppTab.Persona).add(origin)
+            val route = router.parse(RouteInput.DeepLink(link))!!
+            assertEquals(AppTab.Persona, route.restore(stacks))
+            route.restore(stacks)
+            assertEquals(listOf(AssistantRoute, origin) + pages, stacks.getValue(AppTab.Persona))
+            stacks.getValue(AppTab.Persona).removeAt(stacks.getValue(AppTab.Persona).lastIndex)
+            assertEquals(pages.first(), stacks.getValue(AppTab.Persona).last())
+        }
+    }
+
+    @Test fun secondaryLinksDoNotRemoveTheSamePagesFromTheOtherTab() {
+        for (page in listOf(SettingsRoute, SettingsPageRoute(SettingsPage.About), InboxRoute, InboxItemRoute("item"))) {
+            val stacks = AppTab.entries.associateWith { mutableListOf(tabRoot(it)) }
+            stacks.getValue(AppTab.Agents).add(page)
+            restoreSecondaryParents(stacks.getValue(AppTab.Agents))
+            val previous = stacks.getValue(AppTab.Agents).toList()
+            router.parse(RouteInput.Internal(page))!!.restore(stacks)
+            assertEquals(previous, stacks.getValue(AppTab.Agents))
+            assertEquals(page, stacks.getValue(AppTab.Persona).last())
+        }
     }
 
     private fun assertRoute(actual: ResolvedRoute?, tab: AppTab, key: NavKey) {

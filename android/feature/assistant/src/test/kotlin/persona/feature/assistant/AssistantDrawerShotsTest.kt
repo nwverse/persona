@@ -20,6 +20,7 @@ import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.unit.dp
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import org.junit.Assert.assertEquals
@@ -77,12 +78,14 @@ class AssistantDrawerShotsTest {
         var mainTapped = false
         var info: AssistantInfo? = null
         var settingsTapped = false
+        var inboxTapped = false
         rule.setContent {
             PersonaTheme(darkTheme = dark, reduceMotion = true, style = style) {
                 Box(Modifier.testTag("shot").width(400.dp).height(1100.dp).background(PersonaTheme.palette.background)) {
                     AssistantDrawer("", {}, groups, active = null, hasMain = groups.main != null,
                         onEnd = null, onMain = { mainTapped = true }, onOpen = { opened = it }, onInfo = { info = it },
-                        onNew = {}, onHome = {}, onSettings = { settingsTapped = true }, onTodos = {}, todoCount = 2)
+                        onNew = {}, onHome = {}, onSettings = { settingsTapped = true }, onTodos = {}, todoCount = 2,
+                        onInbox = { inboxTapped = true }, inboxCount = 5, settingsDot = true)
                 }
             }
         }
@@ -104,14 +107,17 @@ class AssistantDrawerShotsTest {
         rule.onNodeWithText("Persona").performClick()
         assertTrue(mainTapped)
         assertEquals(null, opened)
-        rule.onNodeWithText("启动器").performClick()
+        rule.onNodeWithText("启动器").performScrollTo().performClick()
         assertEquals(AssistantInfo.Launcher, info)
         rule.onNodeWithText("会话信息").performClick()
         assertEquals(AssistantInfo.Session, info)
         rule.onNodeWithContentDescription("设置").performClick()
         assertTrue(settingsTapped)
+        rule.onNodeWithText("收件箱").performScrollTo().performClick()
+        assertTrue(inboxTapped)
         for (s in AppStyle.entries) for (d in listOf(false, true)) {
             style = s; dark = d
+            androidx.compose.runtime.snapshots.Snapshot.sendApplyNotifications()
             capture("drawer-${s.name.lowercase()}-${if (d) "dark" else "light"}")
         }
         // No main conversation yet: the same row starts one.
@@ -199,7 +205,7 @@ class AssistantDrawerShotsTest {
             style = s; dark = d
             capture("drawer-auto-open-${s.name.lowercase()}-${if (d) "dark" else "light"}")
         }
-        rule.onAllNodesWithText("定时任务")[0].performClick() // the chip ("More" has a "Scheduled tasks" row too)
+        rule.onAllNodesWithText("定时任务")[1].performClick() // The More row now precedes the automatic-origin chip.
         rule.onNodeWithText("1106 | 定时 | 早报").assertExists()
     }
 }

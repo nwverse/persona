@@ -1167,15 +1167,15 @@ class RealInboxRepository(
         return fresh.copy(item = fresh.item.copy(id = previous.item.id), manager = fresh.manager ?: previous.manager)
     }
 
-    override suspend fun momentsPost(postId: String): persona.core.contracts.LarkMomentsPost {
+    override suspend fun momentsPost(postId: String, manager: String?): persona.core.contracts.LarkMomentsPost {
         val transport = requireTransport()
-        val json = transport.momentsPost(postId)
+        val json = asManager(manager) { transport.momentsPost(postId) }
         return persona.core.contracts.JsonCodec.decodeFromJsonElement(persona.core.contracts.LarkMomentsPost.serializer(), json)
     }
 
-    override suspend fun momentsComments(postId: String): List<persona.core.contracts.LarkMomentsComment> {
+    override suspend fun momentsComments(postId: String, manager: String?): List<persona.core.contracts.LarkMomentsComment> {
         val transport = requireTransport()
-        val json = transport.momentsComments(postId)
+        val json = asManager(manager) { transport.momentsComments(postId) }
         return persona.core.contracts.JsonCodec.decodeFromJsonElement(persona.core.contracts.LarkMomentsCommentsResponse.serializer(), json).comments
     }
 
