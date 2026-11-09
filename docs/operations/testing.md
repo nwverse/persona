@@ -92,7 +92,9 @@ private Actions minutes; billing multipliers and plans may change. Measure actua
 With `full=false` and `lanes=auto`, Apple is selected by Apple/shared schema/spec/simulator/localization inputs,
 not by a plain docs/web/server edit. The default `full=true` always includes it. Go/npm/Gradle/SPM download/build caches are used;
 caches on dispatched branches are read-only except for the cache-writing paths explicitly restricted to `main`, and no credentials
-are stored. The initial SPM/runtime download makes a cold Apple run materially slower. Cache and parallelization work remains
+are stored. Server Go and Robolectric caches restore with `actions/cache/restore` and save only on a `workflow_dispatch` of `main`
+(`scripts/ci/test_shards.py`, `scripts/ci/test_android_shards.py`), so branch runs cannot push main's entries out of the
+repository's 10 GB cache. The initial SPM/runtime download makes a cold Apple run materially slower. Cache and parallelization work remains
 tracked in #1214; cache-based test substitution is not allowed.
 
 Local prerequisites: Go from `server/go.mod`, Node from `web/.nvmrc`, Python 3.9+ (CI uses 3.11), Docker/Compose for server/image,
