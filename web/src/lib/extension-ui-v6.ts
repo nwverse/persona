@@ -3,7 +3,8 @@
 // tiles, new fields (date, time, datetime, multichoice, multiline), named colors, and the new charts' geometry
 // (area, candlestick, donut, pie, sparks). What is drawn is in views/extensions; the reading and the arithmetic here.
 import { withToken } from "./inbox";
-import { isHttps, readAction, type ChartSeries, type UIAction, type UITone } from "./extension-ui";
+import { isHttps, isObject, readAction } from "./extension-ui-read";
+import type { ChartSeries, UIAction, UITone } from "./extension-ui";
 
 // ── named colors ────────────────────────────────────────
 
@@ -121,8 +122,6 @@ export interface UITile {
   actions?: UIRowAction[];
   action?: UIAction;
 }
-
-const isObject = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
 
 /** A control the web can draw (a known kind, a name and an action); undefined otherwise. */
 export function readControl(raw: unknown): UIRowControl | undefined {
