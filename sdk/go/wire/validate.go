@@ -209,6 +209,10 @@ type checker struct {
 	path  []step
 	trial bool
 	fails bool
+	// keys holds the sorted member names of the objects being checked, one
+	// run per object on the way down, so an object's names take no slice of
+	// their own.
+	keys []string
 }
 
 // step is one move from a value to a part of it: a member, an item, or a
@@ -260,7 +264,7 @@ func (c *checker) full() bool { return c.fails || len(c.errs) >= errorsMost }
 func (c *checker) failed() bool { return c.fails || len(c.errs) > 0 }
 
 // trialOf is a checker for one branch, at c's location.
-func (c *checker) trialOf() checker { return checker{path: c.path, trial: true} }
+func (c *checker) trialOf() checker { return checker{path: c.path, trial: true, keys: c.keys} }
 
 func (c *checker) checkAt(s map[string]any, v any, here string, next step) {
 	c.path = append(c.path, next)
@@ -463,7 +467,15 @@ func (c *checker) check(s map[string]any, v any, here string) {
 			c.add("more than %v properties", m)
 		}
 		extra := s["additionalProperties"]
-		for _, k := range sortedKeys(x) {
+		start := len(c.keys)
+		for k := range x {
+			c.keys = append(c.keys, k)
+		}
+		sort.Strings(c.keys[start:])
+		for i := range len(x) {
+			// Checking a member appends its own object's names after these, and
+			// may move the buffer, so each name is read from c.keys as it is.
+			k := c.keys[start+i]
 			if names, ok := s["propertyNames"].(map[string]any); ok {
 				c.checkAt(names, k, here, step{kind: keyStep})
 			}
@@ -475,6 +487,7 @@ func (c *checker) check(s map[string]any, v any, here string) {
 				c.checkAt(e, x[k], here, step{member: k})
 			}
 		}
+		c.keys = c.keys[:start]
 	}
 }
 
@@ -555,13 +568,4 @@ func pattern(p string) *regexp.Regexp {
 	}
 	patterns.Store(p, re)
 	return re
-}
-
-func sortedKeys(m map[string]any) []string {
-	keys := make([]string, 0, len(m))
-	for k := range m {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
-	return keys
 }
