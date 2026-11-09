@@ -19,7 +19,11 @@
     <string name="settings_pairing_welcome_connect">Connect hub</string>
     <string name="settings_pairing_failed_title">Couldn\'t connect</string>
     <string name="settings_pairing_failed_body">Follow the tip below, then try again.</string>
-    <string name="settings_pairing_stopped_at">Stopped at \"%1$s\": %2$s</string>
+    <string name="settings_pairing_stopped_at">Stopped at \"%1$s\"</string>
+    <plurals name="settings_pairing_tried_again">
+        <item quantity="one">Tried %1$d time, still can\'t connect.</item>
+        <item quantity="other">Tried %1$d times, still can\'t connect.</item>
+    </plurals>
     <string name="settings_pairing_reload_machines">Reload machines</string>
     <string name="settings_pairing_diagnostics">Diagnostics</string>
     <string name="settings_pairing_rescan">Scan again</string>
@@ -61,7 +65,7 @@
     <string name="settings_pairing_primary">Primary</string>
     <string name="settings_pairing_alternate">Alternate %1$d</string>
     <string name="settings_pairing_identity_note">The hub\'s identity is checked when connecting.</string>
-    <string name="settings_pairing_stage_parse">Read QR code</string>
+    <string name="settings_pairing_stage_parse">Read pairing details</string>
     <string name="settings_pairing_stage_probe">Try addresses</string>
     <string name="settings_pairing_stage_verify">Verify certificate and hub</string>
     <string name="settings_pairing_stage_exchange">Get credentials</string>

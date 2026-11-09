@@ -25,6 +25,7 @@ import persona.core.contracts.Machine
 import persona.core.contracts.Session
 import persona.core.contracts.api.*
 import persona.core.designsystem.PersonaTheme
+import java.net.ConnectException
 
 /**
  * The pairing pages as a user steps through them (#2481): where Next, the keyboard's action keys, Try again and system Back
@@ -76,5 +77,22 @@ class PairingFlowTest {
         rule.onNodeWithText(text(R.string.settings_pairing_manual_invalid)).assertExists()
         rule.onNodeWithText(text(R.string.settings_pairing_failed_title)).assertDoesNotExist()
         rule.onAllNodesWithText("InvalidCode", substring = true).assertCountEquals(0)
+    }
+
+    @Test fun theFailurePageShowsNoErrorChainAndCountsRetries() {
+        val pairing = FakePairing(error = ConnectException("Failed to connect to /127.0.0.1:1"))
+        show { PairingScreen(pairing, sessions, onReady = {}, onDiagnostics = {}, skipWelcome = true) }
+        fillManual("http://127.0.0.1:1")
+        tap(R.string.settings_pairing_next)
+        tap(R.string.settings_pairing_confirm)
+        failed()
+        rule.onAllNodesWithText("Exception", substring = true).assertCountEquals(0)
+        rule.onAllNodesWithText(text(R.string.settings_pairing_stage_parse)).onFirst().assertExists()
+        val tried = rule.activity.resources.getQuantityString(R.plurals.settings_pairing_tried_again, 2, 2)
+        rule.onNodeWithText(tried).assertDoesNotExist()
+        tap(R.string.settings_pairing_recovery_retry)
+        rule.waitUntil(5_000) { pairing.attempts == 2 }
+        failed()
+        rule.onNodeWithText(tried).assertExists()
     }
 }

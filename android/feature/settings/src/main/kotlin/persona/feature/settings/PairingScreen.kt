@@ -7,6 +7,7 @@ import android.content.Context
 import android.content.pm.PackageManager
 import android.content.res.Resources
 import androidx.annotation.StringRes
+import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -85,13 +86,15 @@ fun PairingScreen(
     var attempt by remember { mutableStateOf<PairingAttempt?>(null) }
     // Why the manual form's address can't be used (a string resource), shown under the field instead of a failure page.
     var addressError by remember { mutableStateOf<Int?>(null) }
+    // Connecting failures in a row for the same input, so "Try again" visibly did something.
+    var tries by remember { mutableIntStateOf(0) }
     fun recordAttempt(request: PairingRequest?, error: Throwable?) {
         attempt = pairingAttempt(request, error, progress.lastOrNull()?.stage,
             progress.lastOrNull { it.candidates.isNotEmpty() }?.candidates.orEmpty())
         attempts?.record(attempt)
     }
     fun accept(link: String) {
-        welcome = false; readiness = false; credentialsSaved = false; lastRequest = null
+        welcome = false; readiness = false; credentialsSaved = false; lastRequest = null; tries = 0
         try {
             val request = PairingInput.parse(link)
             metadata = request; address = request.url; token = request.token; failure = null
@@ -169,6 +172,7 @@ fun PairingScreen(
                 android.util.Log.w("PersonaPairing", generateSequence(error as Throwable) { it.cause }.take(4)
                     .joinToString(" <- ") { e -> e.javaClass.name + " @ " + e.stackTrace.take(3).joinToString(", ") })
                 failure = pairingFailure(error)
+                tries++
                 if (failure == PairingFailure.Timeout && PairingLocalNetwork.needsPermission(context, request)) {
                     failure = PairingFailure.LocalPermission
                 }
@@ -214,9 +218,10 @@ fun PairingScreen(
         val value = clipboard.primaryClip?.takeIf { it.itemCount > 0 }?.getItemAt(0)?.coerceToText(context)?.toString()
         if (value.isNullOrBlank()) notice = R.string.settings_pairing_notice_clipboard_empty else accept(value)
     }
-    fun edit() { credentialsSaved = false; lastRequest = null; confirm = null; failure = null; progress = emptyList(); manual = true }
+    fun edit() { credentialsSaved = false; lastRequest = null; confirm = null; failure = null; progress = emptyList(); manual = true; tries = 0 }
     fun next() {
         if (address.isBlank() || token.isBlank()) return
+        tries = 0
         try { confirm = PairingInput.manual(address, token, metadata); addressError = null }
         catch (error: Exception) {
             addressError = if (pairingFailure(error) == PairingFailure.TlsRequired) R.string.settings_pairing_failure_tls_required
@@ -251,8 +256,12 @@ fun PairingScreen(
                 val recovery = reason.recovery()
                 item { PairingHeading(stringResource(R.string.settings_pairing_failed_title), stringResource(R.string.settings_pairing_failed_body)) }
                 item { JNotice(stringResource(reason.explanation()), status = Status.NeedsYou) }
-                attempt?.takeIf { it.failed }?.let { last ->
-                    item { SettingsCaption(stringResource(R.string.settings_pairing_stopped_at, last.step?.let { stringResource(it.labelRes()) }.orEmpty(), last.error.orEmpty()), Modifier.padding(top = Tokens.Space.s)) }
+                if (tries >= 2) item {
+                    SettingsCaption(pluralStringResource(R.plurals.settings_pairing_tried_again, tries, tries), Modifier.padding(top = Tokens.Space.s))
+                }
+                // Only the step: the error chain is for "Diagnostics", one tap away.
+                attempt?.takeIf { it.failed }?.step?.let { step ->
+                    item { SettingsCaption(stringResource(R.string.settings_pairing_stopped_at, stringResource(step.labelRes())), Modifier.padding(top = Tokens.Space.s)) }
                 }
                 item {
                     PairingActions {
