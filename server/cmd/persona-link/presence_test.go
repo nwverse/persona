@@ -28,8 +28,12 @@ func TestReadParentTakesPresenceUntilStdinEnds(t *testing.T) {
 	}
 	eventually := func(ok func() bool) {
 		t.Helper()
-		for deadline := time.Now().Add(5 * time.Second); !ok(); time.Sleep(5 * time.Millisecond) {
-			if time.Now().After(deadline) {
+		timeout := time.NewTimer(5 * time.Second)
+		defer timeout.Stop()
+		for !ok() {
+			select {
+			case <-box.Poked():
+			case <-timeout.C:
 				t.Fatal("timed out")
 			}
 		}
