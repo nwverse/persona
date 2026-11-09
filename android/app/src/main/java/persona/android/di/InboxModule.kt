@@ -207,6 +207,13 @@ class InboxDataOwner @Inject constructor(
         override suspend fun mute(record: persona.feature.inbox.InboxRecord, option: persona.feature.inbox.InboxMuteOption) =
             use { it.inbox.mute(record, option) }
         override suspend fun unmute(id: String) = use { it.inbox.unmute(id) }
+        override suspend fun inboxPolicies(record: persona.feature.inbox.InboxRecord?) = use { it.inbox.inboxPolicies(record) }
+        override suspend fun savePolicy(
+            target: persona.feature.inbox.InboxPolicyTarget,
+            tier: persona.feature.inbox.InboxPolicyTier,
+            twin: persona.feature.inbox.InboxPolicyTwin,
+        ) = use { it.inbox.savePolicy(target, tier, twin) }
+        override suspend fun removePolicy(id: String) = use { it.inbox.removePolicy(id) }
         override suspend fun larkChatPins(feedId: String, accountId: String?, cursor: String?) = use { it.inbox.larkChatPins(feedId, accountId, cursor) }
         override suspend fun larkPinTarget(feedId: String, messageId: String, accountId: String, topic: Boolean) = use { it.inbox.larkPinTarget(feedId, messageId, accountId, topic) }
         override suspend fun larkChangePin(feedId: String, messageId: String, pinId: String?, accountId: String?) =
@@ -218,6 +225,7 @@ class InboxDataOwner @Inject constructor(
         override val assistant = observe(AssistantSnapshot()) { it.assistant.assistant }
         override val pinned = observe(emptySet<persona.core.contracts.SessionKey>()) { it.assistant.pinned }
         override suspend fun refresh() = use { it.assistant.refresh() }
+        override suspend fun mainConversationOf(manager: String) = use { it.assistant.mainConversationOf(manager) }
         override suspend fun startConversation() = use { it.assistant.startConversation() }
         override suspend fun startConversation(launcher: String) = use { it.assistant.startConversation(launcher) }
     }

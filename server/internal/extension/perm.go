@@ -45,6 +45,8 @@ type Permissions struct {
 	// AuthRelay: it is handed the authorization links the user's Agents stop at, the ones its contributes.auth_relay
 	// names, to complete them with the account it is signed in with (docs/operations/auth-relay.md).
 	AuthRelay bool `json:"auth_relay,omitempty"`
+	// Storage is installation-scoped logical data, separate from credentials.
+	Storage *StoragePermission `json:"storage,omitempty"`
 }
 
 var hostPattern = lazyre.New(`^(\*\.)?([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)*[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$`)
@@ -65,6 +67,9 @@ func (p Permissions) validate() error {
 				strings.Join(HubScopes, ", "), ScopeCallPrefix))
 		}
 	}
+	if err := p.Storage.validate(); err != nil {
+		errs = append(errs, err)
+	}
 	return errors.Join(errs...)
 }
 
@@ -73,6 +78,7 @@ func (p Permissions) normalized() Permissions {
 	out := p
 	out.Network = slices.Compact(slices.Sorted(slices.Values(p.Network)))
 	out.Hub = slices.Compact(slices.Sorted(slices.Values(p.Hub)))
+	out.Storage = p.Storage.normalized()
 	return out
 }
 
@@ -80,15 +86,15 @@ func (p Permissions) normalized() Permissions {
 func (p Permissions) FullHub() bool { return p.HubAPI && len(p.Hub) == 0 }
 
 // Covers says whether p grants everything q asks (an upgrade asking for no more needs no new consent). The full token
-// covers every scope; scopes never cover the full token.
+// covers every scope but agents.permission_mode, which only a grant naming it covers; scopes never cover the full token.
 func (p Permissions) Covers(q Permissions) bool {
 	if q.FullHub() && !p.FullHub() || q.LauncherKeys && !p.LauncherKeys || q.GhLogin && !p.GhLogin ||
 		q.UsageGateways && !p.UsageGateways || q.AgentRuntimes && !p.AgentRuntimes || q.ErrorReports && !p.ErrorReports ||
-		q.AuthRelay && !p.AuthRelay {
+		q.AuthRelay && !p.AuthRelay || !p.Storage.covers(q.Storage) {
 		return false
 	}
 	for _, s := range q.Hub {
-		if !p.FullHub() && !slices.Contains(p.Hub, s) {
+		if !(p.FullHub() && InEveryScope(s)) && !slices.Contains(p.Hub, s) {
 			return false
 		}
 	}
@@ -315,6 +321,9 @@ func ExplainWith(l i18n.Lang, m *Manifest, config json.RawMessage) []PermissionL
 	if m.Permissions.ErrorReports {
 		out = append(out, permissionLine(l, "error_reports"))
 	}
+	if grant := m.Permissions.Storage; grant != nil {
+		out = append(out, storageLine(l, grant))
+	}
 	if m.Permissions.AuthRelay {
 		out = append(out, permissionLine(l, "auth_relay"))
 	}
@@ -409,10 +418,10 @@ func AddedIn(l i18n.Lang, old, m *Manifest) []PermissionLine {
 	out = append(out, configuredLines(l, m, configured, nil)...)
 	if m.Permissions.FullHub() && !old.Permissions.FullHub() {
 		out = append(out, permissionLine(l, "hub_api"))
-	} else if !m.Permissions.FullHub() && !old.Permissions.FullHub() {
+	} else if !m.Permissions.FullHub() {
 		var more []string
 		for _, s := range m.Permissions.normalized().Hub {
-			if !slices.Contains(old.Permissions.Hub, s) {
+			if !(old.Permissions.FullHub() && InEveryScope(s)) && !slices.Contains(old.Permissions.Hub, s) {
 				more = append(more, s)
 			}
 		}
@@ -434,6 +443,9 @@ func AddedIn(l i18n.Lang, old, m *Manifest) []PermissionLine {
 	}
 	if m.Permissions.ErrorReports && !old.Permissions.ErrorReports {
 		out = append(out, permissionLine(l, "error_reports"))
+	}
+	if !old.Permissions.Storage.covers(m.Permissions.Storage) {
+		out = append(out, storageLine(l, m.Permissions.Storage))
 	}
 	if m.Permissions.AuthRelay && !old.Permissions.AuthRelay {
 		out = append(out, permissionLine(l, "auth_relay"))
