@@ -50,5 +50,17 @@
   "selection": "选中的条目",
   "select_all": "全选",
   "deselect_all": "取消全选",
-  "selected_count": "已选 {count} 项"
+  "selected_count": "已选 {count} 项",
+  "grouping": "分组方式",
+  "by_source": "按来源",
+  "by_time": "按时间",
+  "jump_to": "跳到",
+  "fold_all": "全部折叠",
+  "unfold_all": "全部展开",
+  "group_picked": "已选 {count}",
+  "picked_folded": "已选 {count} 项（含折叠的 {folded} 项）",
+  "pick_group": "选中「{name}」整组",
+  "load_older": "加载更早的",
+  "loading_older": "正在加载…",
+  "older_failed": "没加载到更早的：{error}"
 }

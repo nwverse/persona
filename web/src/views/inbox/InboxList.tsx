@@ -5,8 +5,9 @@ import {
   agentDraft, agentWorking, conversationRoute, fromLine, interactionAgentTitle, interactionAsk, interactionTitle, isDone, isLark,
   itemKey, itemRoute, listInboxMutes, muteItem, muteLine, muteShortName, muteTitle, policyMenuTitle, sameItem, unmuteInbox,
   BULK_CONFIRM_AT, bulkScope, bulkScopeName, connectorSources, KIND_FILTERS, kindLabel, labelIsUrgent, mailAccounts, mailShort, reloadInbox, sections, sendReply, setAllDone, setDone, shortTime, TIERS,
-  useInbox, waitingAgents, type InboxItem, type InboxMute, type SectionKey,
+  useInbox, waitingAgents, type InboxItem, type InboxMute, type SectionKey, doneWithHistory, loadOlderDone,
 } from "../../lib/inbox";
+import { doneGroups, groupBySource, groupByTime, openAtFirst, type Grouping, type InboxGroup } from "../../lib/inbox-groups";
 import { useMailAccounts } from "../../lib/mail";
 import { hubTranslation, useTranslatePrefs } from "../../lib/translate";
 import { machineWithHub } from "../../lib/mesh";
@@ -39,6 +40,23 @@ function useStored(key: string): [string, (v: string) => void] {
   }];
 }
 
+/** The groups opened or closed by hand, kept on this device (#2059): "<manager group>|<section>|<group>" → open. */
+function useFolds(): [Record<string, boolean>, (key: string, open: boolean) => void] {
+  const [folds, setFolds] = useState<Record<string, boolean>>(() => {
+    try {
+      return JSON.parse(localStorage.getItem("inbox.folds") ?? "{}") as Record<string, boolean>;
+    } catch {
+      return {};
+    }
+  });
+  const put = (key: string, open: boolean) => setFolds((o) => {
+    const n = { ...o, [key]: open };
+    localStorage.setItem("inbox.folds", JSON.stringify(n));
+    return n;
+  });
+  return [folds, put];
+}
+
 /** The sections open at first (in every manager's group): Needs you and FYI. */
 const OPEN_AT_FIRST = new Set(["action", "fyi"]);
 
@@ -58,6 +76,14 @@ export function InboxList({ selected, picked = null, onPicked }: { selected?: { 
   const ready = loaded && storeLoaded;
   const [source, setSource] = useStored("inbox.source");
   const [kind, setKind] = useStored("inbox.kind");
+  // Needs you, FYI and Collapsed by source or by time (#2059), kept on this device; Done is always by time
+  const [groupingSaved, setGrouping] = useStored("inbox.grouping");
+  const grouping: Grouping = groupingSaved === "time" ? "time" : "source";
+  const [folds, putFold] = useFolds();
+  const history = useInbox((st) => st.history);
+  const historyMore = useInbox((st) => st.historyMore);
+  const historyLoading = useInbox((st) => st.historyLoading);
+  const historyError = useInbox((st) => st.historyError);
   const [query, setQuery] = useState("");
   // The agents waiting, picked in the store: the list holds the store's own interaction objects, so a sessions or
   // machines push that leaves them as they were keeps the same array (useStore compares it item by item) and the list,
@@ -115,9 +141,51 @@ export function InboxList({ selected, picked = null, onPicked }: { selected?: { 
   // Selecting (#2059): the open items in sight can be picked (in the sections shown open; In progress is always open); the
   // agents waiting and the done items cannot. What is picked counts and is acted on only while the list shows it.
   const picking = picked !== null;
-  const shownOpen = kind === "agent" ? [] : (byManager ?? [{ manager: null, sec: s }]).flatMap(({ manager, sec }) =>
-    TIERS.filter((tier) => tier.key === "working" || isOpen(manager?.id ?? "", tier.key)).flatMap((tier) => sec.tiers[tier.key]));
+  // What each manager's sections show (#2059): their groups, titled when there are two or more (or agents above the
+  // items), and Done with the hub's history, by when it was done.
+  const now = useMemo(() => Date.now(), [items, history]);
+  const order = ["lark", ...chips.map((a) => `mail:${a.id}`), ...connectors.map((c) => `c:${c.id}`)];
+  const mailName = (account: string) => chips.find((a) => a.id === account)?.email ?? account;
+  const groupOpen = (group: string, section: string, key: string) => folds[`${group}|${section}|${key}`] ?? openAtFirst(section, key);
+  const layout = (byManager ?? [{ manager: null, sec: s, ags: agents }]).map(({ manager, sec, ags }) => {
+    const tiers = TIERS.map((tier) => {
+      const list = sec.tiers[tier.key];
+      const waiting = tier.key === "action" ? ags : [];
+      const groups: InboxGroup[] = tier.key === "working" ? [] : grouping === "time" ? groupByTime(list, now, (it) => it.updated_at) : groupBySource(list, order, mailName);
+      return { tier, list, waiting, groups, titled: tier.key !== "working" && (groups.length > 1 || (waiting.length > 0 && list.length > 0)) };
+    });
+    const done = doneWithHistory(sec.done, manager && roster ? history.filter((it) => ownerIn(roster, it.manager) === manager.id) : history, { source, kind, query });
+    return { manager, group: manager?.id ?? "", tiers, done, doneGroups: doneGroups(done, now) };
+  });
+  // the open items in sight: in sections and groups shown open (In progress is always open)
+  const shownOpen = kind === "agent" ? [] : layout.flatMap(({ group, tiers }) => tiers.filter(({ tier }) => tier.key === "working" || isOpen(group, tier.key))
+    .flatMap(({ tier, list, groups, titled }) => (titled ? groups.filter((g) => groupOpen(group, tier.key, g.key)).flatMap((g) => g.items) : list)));
   const chosen = picking ? openInView.filter((it) => picked.has(itemKey(it))) : [];
+  const shownKeys = new Set(shownOpen.map(itemKey));
+  const chosenFolded = chosen.filter((it) => !shownKeys.has(itemKey(it))).length;
+  // a group's check: picks all of it, folded or not, or unpicks all of it when all are picked
+  const pickGroup = (list: InboxItem[]) => onPicked?.((p) => {
+    if (!p) return p;
+    const n = new Set(p);
+    const all = list.every((it) => n.has(itemKey(it)));
+    for (const it of list) {
+      if (all) n.delete(itemKey(it));
+      else n.add(itemKey(it));
+    }
+    return n;
+  });
+  const historyManagers = byManager ? byManager.map((g) => g.manager.id) : [undefined];
+  // Done's history from the hub (the list holds only the last few days): a first page once the list is in, so Done's
+  // groups and counts are there before it opens; more on "Show older"
+  useEffect(() => {
+    if (ready && !history.length && historyMore) void loadOlderDone(historyManagers);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ready]);
+  const jumpTo = (group: string, key: string) => {
+    if (!isOpen(group, "done")) toggle(group, "done");
+    putFold(`${group}|done|${key}`, true);
+    requestAnimationFrame(() => document.querySelector(`[data-group="${CSS.escape(`${group}|done|${key}`)}"]`)?.scrollIntoView({ block: "start", behavior: "smooth" }));
+  };
   const allChosen = shownOpen.length > 0 && shownOpen.every((it) => picked?.has(itemKey(it)));
   const pick = useCallback((it: InboxItem) => onPicked?.((p) => {
     if (!p) return p;
@@ -126,7 +194,8 @@ export function InboxList({ selected, picked = null, onPicked }: { selected?: { 
     else n.add(itemKey(it));
     return n;
   }), [onPicked]);
-  const pickAll = () => onPicked?.(allChosen ? new Set() : new Set(shownOpen.map(itemKey)));
+  // Select all adds what is in sight to what is picked (a folded group picked whole stays picked); Deselect all clears all
+  const pickAll = () => onPicked?.((p) => (allChosen ? new Set() : new Set([...(p ?? []), ...shownOpen.map(itemKey)])));
   // Mark as done: one bulk request per manager, then the toast with Undo (setAllDone); selecting ends.
   const markChosenDone = () => {
     void setAllDone(chosen, "done");
@@ -193,6 +262,15 @@ export function InboxList({ selected, picked = null, onPicked }: { selected?: { 
         </div>
         <IconButton icon="more" label={t("inbox-inboxlist.more")} onClick={more.open} active={Boolean(more.anchor)} />
         </div>
+        <div role="radiogroup" aria-label={t("inbox-inboxlist.grouping")} className="mt-2.5 flex w-fit gap-0.5 rounded-full bg-inset p-0.5 shadow-hairline">
+          {(["source", "time"] as const).map((g) => (
+            <button key={g} type="button" role="radio" aria-checked={grouping === g} onClick={() => setGrouping(g === "source" ? "" : g)}
+              className={cx("touch-hit relative z-10 flex h-6 items-center justify-center whitespace-nowrap rounded-full px-2.5 text-[11.5px] transition-[background-color,color,box-shadow] duration-150",
+                grouping === g ? "bg-surface font-medium text-ink shadow-btn" : "text-ink-2 hover:bg-hover hover:text-ink")}>
+              {g === "source" ? t("inbox-inboxlist.by_source") : t("inbox-inboxlist.by_time")}
+            </button>
+          ))}
+        </div>
         {more.anchor && (
           <Menu anchor={more.anchor} onClose={more.close} align="right" width={240}
             items={[
@@ -249,28 +327,59 @@ export function InboxList({ selected, picked = null, onPicked }: { selected?: { 
           </div>
         )}
 
-        {(byManager ?? [{ manager: null, sec: s, ags: agents }]).map(({ manager, sec, ags }) => {
-          const group = manager?.id ?? "";
+        {layout.map(({ manager, group, tiers, done, doneGroups: dg }) => {
           const isSelected = (it: InboxItem) => !!selected && sameItem(it, selected);
+          const row = (it: InboxItem, off = false) => (
+            <ItemRow key={itemKey(it)} it={it} selected={isSelected(it)} showAccount={chips.length > 1} onEdit={setEditing} pick={picking && !off ? pick : undefined} picked={picked?.has(itemKey(it)) ?? false} off={off && picking} />
+          );
+          const groupOf = (section: string, g: { key: string; title: string; items: InboxItem[] }, body: React.ReactNode, opts: { more?: boolean; pickable?: boolean } = {}) => {
+            const id = `${group}|${section}|${g.key}`;
+            const n = picking && opts.pickable ? g.items.filter((it) => picked.has(itemKey(it))).length : 0;
+            return (
+              <Group key={id} id={id} title={g.title} count={g.items.length} more={opts.more} open={groupOpen(group, section, g.key)} onToggle={(open) => putFold(id, open)}
+                pick={picking && opts.pickable ? { state: n === 0 ? "none" : n === g.items.length ? "all" : "some", picked: n, run: () => pickGroup(g.items) } : undefined}>
+                {body}
+              </Group>
+            );
+          };
           return (
             <Fragment key={group}>
               {manager && <ManagerHeading manager={manager} className="mt-5 px-1" />}
-              {ready && TIERS.map((tier) => {
-                const list = sec.tiers[tier.key];
-                const waiting = tier.key === "action" ? ags : [];
+              {ready && tiers.map(({ tier, list, waiting, groups, titled }) => {
                 if (!list.length && !waiting.length) return null;
                 const clear = tier.key === "fyi" ? t("inbox-inboxlist.clear_fyi") : tier.key === "noise" ? t("inbox-inboxlist.clear_noise") : undefined;
+                const agentRows = waiting.map((ix) => <AgentRow key={ix.id} ix={ix} off={picking} />);
                 return (
                   <Section key={tier.key} k={tier.key} title={tier.title} count={sectionCount(list.length, waiting.length)} open={tier.key === "working" || isOpen(group, tier.key)} onToggle={tier.key === "working" ? undefined : () => toggle(group, tier.key)}
                     action={clear && list.length && !picking ? { label: clear, run: () => setAllDone(list, true) } : undefined}>
-                    {waiting.map((ix) => <AgentRow key={ix.id} ix={ix} off={picking} />)}
-                    {list.map((it) => <ItemRow key={itemKey(it)} it={it} selected={isSelected(it)} showAccount={chips.length > 1} onEdit={setEditing} pick={picking ? pick : undefined} picked={picked?.has(itemKey(it)) ?? false} />)}
+                    {titled ? (
+                      <>
+                        {waiting.length > 0 && groupOf(tier.key, { key: "agents", title: t("lib-inbox.group_agents"), items: [] }, agentRows)}
+                        {groups.map((g) => groupOf(tier.key, g, g.items.map((it) => row(it)), { pickable: true }))}
+                      </>
+                    ) : (
+                      <>
+                        {agentRows}
+                        {list.map((it) => row(it))}
+                      </>
+                    )}
                   </Section>
                 );
               })}
-              {ready && sec.done.length > 0 && (
-                <Section k="done" title={t("inbox-inboxlist.done")} count={sectionCount(sec.done.length, 0)} open={isOpen(group, "done")} onToggle={() => toggle(group, "done")}>
-                  {sec.done.map((it) => <ItemRow key={itemKey(it)} it={it} selected={isSelected(it)} showAccount={chips.length > 1} onEdit={setEditing} off={picking} />)}
+              {ready && done.length > 0 && (
+                <Section k="done" title={t("inbox-inboxlist.done")} count={historyMore ? { text: `${done.length}+`, label: `${done.length}+` } : sectionCount(done.length, 0)} open={isOpen(group, "done")} onToggle={() => toggle(group, "done")}
+                  menu={dg.length > 1 ? [
+                    ...dg.map((g, i) => ({ key: `jump:${g.key}`, label: g.title, hint: i === dg.length - 1 && historyMore ? `${g.items.length}+` : String(g.items.length), onSelect: () => jumpTo(group, g.key) })),
+                    { key: "fold-all", label: t("inbox-inboxlist.fold_all"), divider: true, onSelect: () => dg.forEach((g) => putFold(`${group}|done|${g.key}`, false)) },
+                    { key: "unfold-all", label: t("inbox-inboxlist.unfold_all"), onSelect: () => dg.forEach((g) => putFold(`${group}|done|${g.key}`, true)) },
+                  ] : undefined}>
+                  {dg.length > 1 ? dg.map((g, i) => groupOf("done", g, g.items.map((it) => row(it, true)), { more: i === dg.length - 1 && historyMore })) : done.map((it) => row(it, true))}
+                  {historyMore && history.length > 0 && (
+                    <div className="flex items-center gap-2 px-1 pt-1">
+                      <Button tone="quiet" busy={historyLoading} onClick={() => void loadOlderDone(historyManagers)}>{historyLoading ? t("inbox-inboxlist.loading_older") : t("inbox-inboxlist.load_older")}</Button>
+                      {historyError && <span className="min-w-0 truncate text-[11.5px] text-red">{t("inbox-inboxlist.older_failed", { error: historyError })}</span>}
+                    </div>
+                  )}
                 </Section>
               )}
             </Fragment>
@@ -284,7 +393,7 @@ export function InboxList({ selected, picked = null, onPicked }: { selected?: { 
       <div role="toolbar" aria-label={t("inbox-inboxlist.selection")} data-pick-bar className="shrink-0 border-t border-line bg-inset px-3 py-2.5 sm:px-4 max-sm:pb-[calc(10px+env(safe-area-inset-bottom))]">
         <div className="mx-auto flex max-w-[760px] items-center gap-2">
           <Button tone="quiet" onClick={pickAll} disabled={!shownOpen.length}>{allChosen ? t("inbox-inboxlist.deselect_all") : t("inbox-inboxlist.select_all")}</Button>
-          <span className="min-w-0 flex-1 truncate text-[12px] text-ink-3 tabular-nums" aria-live="polite">{t("inbox-inboxlist.selected_count", { count: chosen.length })}</span>
+          <span className="min-w-0 flex-1 truncate text-[12px] text-ink-3 tabular-nums" aria-live="polite">{chosenFolded ? t("inbox-inboxlist.picked_folded", { count: chosen.length, folded: chosenFolded }) : t("inbox-inboxlist.selected_count", { count: chosen.length })}</span>
           <Button tone="primary" icon="check" disabled={!chosen.length} onClick={markChosenDone}>{t("inbox-inboxlist.mark_done_title")}</Button>
         </div>
       </div>
@@ -307,7 +416,8 @@ export function sectionCount(items: number, agents: number): { text: string; lab
 }
 
 /** A section of the list; without `onToggle` it is always open (In progress: what the AI is on never hides). */
-function Section({ k, title, count, open, onToggle, action, children }: { k: SectionKey | "done"; title: string; count: { text: string; label: string }; open: boolean; onToggle?: () => void; action?: { label: string; run: () => void }; children: React.ReactNode }) {
+function Section({ k, title, count, open, onToggle, action, menu, children }: { k: SectionKey | "done"; title: string; count: { text: string; label: string }; open: boolean; onToggle?: () => void; action?: { label: string; run: () => void }; /** Done's "Jump to": its groups with their counts. */ menu?: MenuItem[]; children: React.ReactNode }) {
+  const jump = useMenu();
   const head = (
     <>
       <span className={cx("text-[12px] font-medium whitespace-nowrap", k === "action" ? "text-ink" : "text-ink-3")} data-section-title>{title}</span>
@@ -330,11 +440,55 @@ function Section({ k, title, count, open, onToggle, action, children }: { k: Sec
             {action.label}
           </button>
         )}
+        {menu && (
+          <button type="button" onClick={jump.open} aria-haspopup="menu" aria-expanded={Boolean(jump.anchor)} className="inline-flex h-6 items-center gap-0.5 rounded-[6px] px-1.5 text-[11.5px] whitespace-nowrap text-ink-3 transition-colors hover:bg-hover hover:text-ink">
+            {t("inbox-inboxlist.jump_to")}
+            <Icon name="chevronDown" size={10} stroke={2.4} />
+          </button>
+        )}
+        {menu && jump.anchor && <Menu anchor={jump.anchor} onClose={jump.close} align="right" width={220} items={menu} />}
       </div>
-      <Collapse open={open}>
+      <Collapse open={open} unclipped>
         <div inert={!open} className="flex flex-col gap-1.5 pb-0.5">{children}</div>
       </Collapse>
     </section>
+  );
+}
+
+/** A group's tick while selecting: none, some ("–") or all of it picked. */
+function GroupTick({ state }: { state: "none" | "some" | "all" }) {
+  return (
+    <span aria-hidden className={cx("flex size-4 shrink-0 items-center justify-center rounded-chip text-white transition-colors duration-150", state === "none" ? "shadow-[inset_0_0_0_1.5px_var(--line-strong)]" : "bg-accent")}>
+      {state === "all" && <Icon name="check" size={10} stroke={3} />}
+      {state === "some" && <span className="h-[2px] w-2 rounded-full bg-white" />}
+    </span>
+  );
+}
+
+/**
+ * A group inside a section (#2059): its title sticks to the top while its rows scroll by, and folds it to the title and
+ * count. Selecting, its tick picks or unpicks all of it, folded or not; "n selected" says what is picked in it.
+ */
+function Group({ id, title, count, more, open, onToggle, pick, children }: { id: string; title: string; count: number; more?: boolean; open: boolean; onToggle: (open: boolean) => void; pick?: { state: "none" | "some" | "all"; picked: number; run: () => void }; children: React.ReactNode }) {
+  return (
+    <div data-group={id}>
+      <div className="sticky top-0 z-10 -mx-1 flex items-center gap-1.5 bg-canvas/95 px-2 pt-2 pb-1 backdrop-blur-sm">
+        {pick && (
+          <button type="button" role="checkbox" aria-checked={pick.state === "all" ? true : pick.state === "some" ? "mixed" : false} aria-label={t("inbox-inboxlist.pick_group", { name: title })} onClick={pick.run} className="touch-hit flex shrink-0 items-center">
+            <GroupTick state={pick.state} />
+          </button>
+        )}
+        <button type="button" onClick={() => onToggle(!open)} aria-expanded={open} className="flex min-w-0 flex-1 items-center gap-1.5 text-left text-[11.5px] text-ink-2">
+          <Icon name="chevronRight" size={10} stroke={2.4} className="shrink-0 text-ink-3 transition-transform duration-200" style={{ transform: open ? "rotate(90deg)" : undefined }} />
+          <span className="truncate font-medium">{title}</span>
+          <span className="shrink-0 text-ink-3 tabular-nums">{more ? `${count}+` : count}</span>
+        </button>
+        {pick && pick.picked > 0 && <span className="shrink-0 text-[11.5px] text-accent-ink tabular-nums">{t("inbox-inboxlist.group_picked", { count: pick.picked })}</span>}
+      </div>
+      <Collapse open={open}>
+        <div inert={!open} className="flex flex-col gap-1.5 pb-1">{children}</div>
+      </Collapse>
+    </div>
   );
 }
 

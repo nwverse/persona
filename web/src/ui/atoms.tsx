@@ -246,7 +246,7 @@ export function Kbd({ children }: { children: React.ReactNode }) {
  *  a fade. `lazy`: the children mount when it opens and stay while it closes, so they go down with the height instead of
  *  vanishing, then unmount (a long trace costs nothing while folded). Once closed, the content is inert. A chat list holds
  *  the clicked row still while the height runs (`anchoredScroll`, #1124). */
-export function Collapse({ open, children, className = "", lazy = false }: { open: boolean; children: React.ReactNode; className?: string; lazy?: boolean }) {
+export function Collapse({ open, children, className = "", lazy = false, unclipped = false }: { open: boolean; children: React.ReactNode; className?: string; lazy?: boolean; /** Once open and still, the content isn't clipped: sticky headers inside it stick to the scroller, not to this box. */ unclipped?: boolean }) {
   const [closing, setClosing] = useState(false);
   const [moving, setMoving] = useState(false);
   // A lazy one's new content is laid out at 0fr first and the row opens a frame later: a long trace's first layout
@@ -283,7 +283,7 @@ export function Collapse({ open, children, className = "", lazy = false }: { ope
       // inert once closed, not while it closes: switching a long trace inert is a full style pass (34 ms for 650 steps)
       inert={(!open && !moving) || undefined}
     >
-      <div className="min-h-0 overflow-hidden [contain:layout_paint]">{collapseMounted(lazy, open, closing) && children}</div>
+      <div className={unclipped && shown && !moving ? "min-h-0" : "min-h-0 overflow-hidden [contain:layout_paint]"}>{collapseMounted(lazy, open, closing) && children}</div>
     </div>
   );
 }
