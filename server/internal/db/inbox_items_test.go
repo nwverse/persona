@@ -246,7 +246,7 @@ func TestInboxJSONMigrationKeepsStoredItems(t *testing.T) {
 		{id: "github:1", data: `{"id":"github:1","source":"github","connector":{"thread":"t"}}`, done: time.Hour},
 		{id: "github:2", data: `{"id":"github:2","source":"github","connector":null}`, done: -time.Hour},
 		{id: "lark:1", data: `{"id":"lark:1","source":"lark"}`, done: -2 * time.Hour},
-		{id: "lark:2", data: `{"id":"lark:2","source":"lark"}`, open: true},
+		{id: "lark:2", data: `{"id":"lark:2","source":"lark","context":"` + strings.Repeat("the thread so far ", 300) + `"}`, open: true},
 	} {
 		var doneAt *time.Time
 		if !it.open {
@@ -282,10 +282,12 @@ func TestInboxJSONMigrationKeepsStoredItems(t *testing.T) {
 	if err := d.migrateFrom(ctx, migrations); err != nil {
 		t.Fatal(err)
 	}
-	var typ string
-	if err := d.pool.QueryRow(ctx, `SELECT format_type(atttypid, atttypmod) FROM pg_attribute
-		WHERE attrelid = 'inbox_items'::regclass AND attname = 'data'`).Scan(&typ); err != nil || typ != "json" {
-		t.Fatalf("data is %q (%v), want json", typ, err)
+	// json, and a document stored compressed before is compressed again with lz4 (the same ALTER: copied as it is it
+	// would stay pglz).
+	var typ, compression string
+	if err := d.pool.QueryRow(ctx, `SELECT pg_typeof(data)::text, pg_column_compression(data) FROM inbox_items WHERE id = 'lark:2'`).
+		Scan(&typ, &compression); err != nil || typ != "json" || compression != "lz4" {
+		t.Fatalf("data is %q compressed %q (%v), want json and lz4", typ, compression, err)
 	}
 	for _, sql := range []string{doneInboxItemsSQLBefore0471, doneInboxItemsSQL} {
 		if got := page(sql); got != want {
