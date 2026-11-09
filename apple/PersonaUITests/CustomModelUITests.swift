@@ -4,9 +4,11 @@ import XCTest
 /// Typing a model ID (#1644): New Agent's model picker lists the IDs typed before (each can be forgotten) and "Other
 /// Model…", whose field says why an ID can't be used as it is typed; the pick stays and goes with the start. A running
 /// Claude Code session's model menu and the Persona chat's launcher menu offer the same field; the session's goes
-/// through POST …/modes. Against scripts/mock/mock_hub.py with `MOCK_CUSTOM_MODELS=1`, and `=fail` for New Agent without
-/// a list (`TEST_RUNNER_PERSONA_CUSTOM_MODELS_HUB`). With PERSONA_SHOTS set the screenshots are written there too
-/// (PERSONA_SHOTS_APPEARANCE names the simulator's appearance in the file names).
+/// through POST …/modes, and once it runs that model the menu lists it by its ID, ticked. Against
+/// scripts/mock/mock_hub.py with `MOCK_CUSTOM_MODELS=1`; `=fail` for New Agent without a list, `=empty` for an empty
+/// one, `=forgetfail` for a Forget the hub refuses (`TEST_RUNNER_PERSONA_CUSTOM_MODELS_HUB`; each test skips the modes
+/// it isn't for). With PERSONA_SHOTS set the screenshots are written there too (PERSONA_SHOTS_APPEARANCE names the
+/// simulator's appearance in the file names).
 final class CustomModelUITests: XCTestCase {
     private var app: XCUIApplication!
     private var hub = ""
@@ -79,9 +81,22 @@ final class CustomModelUITests: XCTestCase {
         XCTAssertTrue(done(), what)
     }
 
-    /// The tests that need the lists with typed IDs (`MOCK_CUSTOM_MODELS=1`).
-    private func needsTypedIDs() throws {
-        guard mock("custom_models")["mode"] as? String == "1" else { throw XCTSkip("needs MOCK_CUSTOM_MODELS=1") }
+    /// The tests that need the lists with typed IDs (`MOCK_CUSTOM_MODELS=1`, or another `mode`).
+    private func needsTypedIDs(_ mode: String = "1") throws {
+        guard mock("custom_models")["mode"] as? String == mode else { throw XCTSkip("needs MOCK_CUSTOM_MODELS=\(mode)") }
+    }
+
+    /// Scrolls the list a little back down until `e` is below the navigation bar (not under it, blurred), for a picture.
+    @MainActor private func bringBelowBar(_ e: XCUIElement, bar title: String) {
+        let bar = app.navigationBars[title]
+        for _ in 0..<4 {
+            let gap = bar.frame.maxY + 8 - e.frame.minY
+            guard gap > 0 else { return }
+            let from = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.45))
+            from.press(forDuration: 0.2, thenDragTo: from.withOffset(CGVector(dx: 0, dy: gap + 24)), withVelocity: .slow, thenHoldForDuration: 0.3)
+            sleep(1)
+        }
+        XCTAssertGreaterThanOrEqual(e.frame.minY, bar.frame.maxY, "still under the bar")
     }
 
     /// Scrolls the list until `e` is on screen (a List makes its rows only as they come into view).
@@ -189,9 +204,11 @@ final class CustomModelUITests: XCTestCase {
         guard mock("custom_models")["mode"] as? String == "fail" else { throw XCTSkip("needs MOCK_CUSTOM_MODELS=fail") }
         launch(["-tab", "dev", "-showNewChat", "YES", "-newChat.machine", "macbook"])
         see(app.navigationBars["新对话"], "New Agent", timeout: 20)
-        reach(any("newChat.model.error"), "why the list couldn't be read")
+        let error = reach(any("newChat.model.error"), "why the list couldn't be read")
         let enter = reach(app.buttons["newChat.model.enter"], "Enter Model ID…")
         app.swipeUp() // out from under Start Chat, for the picture
+        bringBelowBar(error, bar: "新对话") // ...and the reason not under the bar
+        XCTAssertTrue(enter.isHittable)
         shot("list-failed")
         enter.tap()
         see(app.navigationBars["其他模型"], "the field's sheet")
@@ -200,10 +217,51 @@ final class CustomModelUITests: XCTestCase {
         let row = reach(app.buttons["newChat.model.enter"], "the typed pick")
         XCTAssertTrue(row.label.contains("acme/coder-9"), row.label)
         app.swipeUp()
+        bringBelowBar(error, bar: "新对话")
+        see(app.buttons["newChat.model.clearTyped"], "the way back to the default")
         shot("list-failed-typed")
+
+        // The typed pick can be dropped again (the start then sends no model), and typed once more.
+        app.buttons["newChat.model.clearTyped"].tap()
+        XCTAssertTrue(app.buttons["newChat.model.clearTyped"].waitForNonExistence(timeout: 3), "the clear button stays")
+        XCTAssertFalse(app.buttons["newChat.model.enter"].label.contains("acme/coder-9"), app.buttons["newChat.model.enter"].label)
+        app.buttons["newChat.model.enter"].tap()
+        see(app.navigationBars["其他模型"], "the field's sheet")
+        type("acme/coder-9")
+        app.buttons["typedModel.use"].tap()
         app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "开始对话")).firstMatch.tap()
         wait("POST /api/v1/sessions sent") { !((mock("started")["started"] as? [[String: Any]]) ?? []).isEmpty }
         XCTAssertEqual(((mock("started")["started"] as? [[String: Any]]) ?? []).last?["model"] as? String, "acme/coder-9")
+    }
+
+    /// The list is empty (`MOCK_CUSTOM_MODELS=empty`): the picker offers Default and "Enter Model ID…".
+    @MainActor func testNewAgentWithAnEmptyListOffersEnterModelID() throws {
+        try needsTypedIDs("empty")
+        launch(["-tab", "dev", "-showNewChat", "YES", "-newChat.machine", "macbook"])
+        see(app.navigationBars["新对话"], "New Agent", timeout: 20)
+        see(app.buttons["newChat.model"], "the model row", timeout: 20).tap()
+        see(app.navigationBars["模型"], "the model picker")
+        let enter = see(app.buttons["newChat.model.other"], "the row for an ID")
+        XCTAssertTrue(enter.label.contains("输入模型 ID"), enter.label)
+        shot("empty-list")
+    }
+
+    /// A Forget the hub refuses (`MOCK_CUSTOM_MODELS=forgetfail`): the row comes back and the reason is under it.
+    @MainActor func testAForgetTheHubRefusesPutsTheRowBack() throws {
+        try needsTypedIDs("forgetfail")
+        launch(["-tab", "dev", "-showNewChat", "YES", "-newChat.machine", "macbook"])
+        see(app.navigationBars["新对话"], "New Agent", timeout: 20)
+        see(app.buttons["newChat.model"], "the model row", timeout: 20).tap()
+        see(app.navigationBars["模型"], "the model picker")
+        let latest = reach(app.buttons["newChat.model.~vendor/model-latest[1m]"], "an ID typed before")
+        latest.swipeLeft()
+        see(app.buttons["newChat.model.forget.~vendor/model-latest[1m]"], "Forget").tap()
+        let why = reach(any("newChat.model.forgetError"), "why it wasn't forgotten")
+        XCTAssertTrue(why.label.contains("数据库暂时不可用"), why.label)
+        XCTAssertTrue(latest.waitForExistence(timeout: 3), "the row didn't come back")
+        reach(app.buttons["newChat.model.other"], "Other Model…")
+        bringBelowBar(app.buttons["newChat.model.vendor/model-x"], bar: "模型")
+        shot("forget-failed")
     }
 
     // MARK: A running session
@@ -231,6 +289,19 @@ final class CustomModelUITests: XCTestCase {
                 $0["session_id"] as? String == "a1f3c2d4-0000-4000-8000-000000000006" && $0["model"] as? String == "~vendor/model-latest"
             }
         }
+        clearDraft()
+
+        // Running the typed model (read afresh from the hub): it is a row of its own, by its ID, the one ticked.
+        app.terminate()
+        launch(["-ui.oldLayout", "NO", "-openSession", review])
+        modesButton().tap()
+        see(app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "其他模型")).firstMatch, "Other Model…")
+        let running = see(app.buttons.matching(NSPredicate(format: "label == %@", "~vendor/model-latest")).firstMatch, "the model it runs, by its ID")
+        XCTAssertTrue(running.isSelected, "the model it runs isn't ticked")
+        let byDefault = app.buttons.matching(NSPredicate(format: "label == %@", "默认")).firstMatch
+        XCTAssertFalse(byDefault.exists && byDefault.isSelected, "Default is ticked")
+        shot("session-running-typed")
+        app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.15)).tap() // the menu closes
         clearDraft()
     }
 

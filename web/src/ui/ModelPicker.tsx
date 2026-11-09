@@ -67,7 +67,8 @@ export function ModelPicker({ models, model, followed = {}, ownModel, open, onTo
   const otherLabel = all.some((m) => !m.default && !m.custom) ? t("ui-modelpicker.other") : t("ui-modelpicker.enter_id");
   const typedRow = (m: AgentModel) => (
     <div key={m.id} className="flex items-center gap-0.5">
-      <ModelRow name={modelName(m)} note={m.description} selected={m.id === model} onPick={() => onPick(m.id)} mono />
+      {/* under the "Typed before" heading: the hub's line saying what it is would only repeat it */}
+      <ModelRow name={modelName(m)} selected={m.id === model} onPick={() => onPick(m.id)} mono />
       {onForget && <IconButton icon="x" label={t("ui-modelpicker.forget", { id: m.id })} size={24} iconSize={12} onClick={() => onForget(m.id)} />}
     </div>
   );

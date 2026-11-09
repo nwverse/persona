@@ -14,6 +14,7 @@ vi.mock("../../lib/launcher-models", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../lib/launcher-models")>()),
   machineLaunchers: vi.fn(async () => ({ launchers: [{ name: "Claude", agent: "claude", model: "opus" }] })),
   launcherModels: vi.fn(async () => ({
+    locked: typedBefore.locked,
     models: [
       { id: "default", name: "Default (recommended)", description: "Use the default model (currently opus)", default: true },
       { id: "haiku", name: "Haiku", description: "Fastest for quick answers" },
@@ -25,12 +26,13 @@ vi.mock("../../lib/launcher-models", async (importOriginal) => ({
     return { ok: true };
   }),
 }));
-const typedBefore = vi.hoisted(() => ({ ids: [] as string[], fail: false }));
+const typedBefore = vi.hoisted(() => ({ ids: [] as string[], fail: false, locked: undefined as string | undefined }));
 
 import { AssistantLauncherChip } from "./AssistantChat";
 import { pickedModel, pickModel } from "../../lib/assistant-chat";
 import { forgetCustomModel } from "../../lib/launcher-models";
 import { Toasts } from "../../ui/atoms";
+import { getState } from "../../lib/store";
 import type { Session } from "../../lib/types";
 import { t } from "../../i18n";
 
@@ -41,6 +43,7 @@ let host: HTMLDivElement;
 let root: Root;
 
 beforeEach(() => {
+  Object.assign(getState(), { features: ["typed_models"] });
   host = document.createElement("div");
   document.body.append(host);
   root = createRoot(host);
@@ -52,6 +55,7 @@ afterEach(() => {
   pickModel("server/s-models", undefined);
   typedBefore.ids = [];
   typedBefore.fail = false;
+  typedBefore.locked = undefined;
   vi.mocked(forgetCustomModel).mockClear();
 });
 
@@ -109,10 +113,30 @@ describe("Persona chat: a typed model ID (#1644)", () => {
     expect(pickedModel("server/s-models")).toBe("~vendor/model-latest[1m]");
   });
 
+  it("offers Other model… only where the hub keeps a typed pick (typed_models)", async () => {
+    Object.assign(getState(), { features: ["ultracode"] });
+    const rows = await openModels();
+    expect(rows).toHaveLength(3); // Default model and the launcher's two
+    expect(menuButton(t("assistant-assistantchat.other_model"))).toBeUndefined();
+  });
+
+  it("says why, instead of Other model…, when the launcher passes its own --model", async () => {
+    typedBefore.locked = "启动器固定了模型参数";
+    await openModels();
+    expect(menuButton(t("assistant-assistantchat.other_model"))).toBeUndefined();
+    expect(document.querySelector('[role="menu"] [data-menu-note]')!.textContent).toContain("启动器固定了模型参数");
+  });
+
   it("lists the IDs typed before under the launcher's own, and forgets one (back when the hub says no)", async () => {
     typedBefore.ids = ["vendor/model-x"];
     const rows = await openModels();
     expect(rows.map((r) => r.textContent)).toEqual(expect.arrayContaining([expect.stringContaining("vendor/model-x")]));
+    // under their own heading (not a row), drawn as typed, without the line each would repeat
+    const heading = [...document.querySelectorAll('[role="menu"] [role="presentation"]')].find((e) => e.textContent === t("assistant-assistantchat.typed_before"));
+    expect(heading).toBeTruthy();
+    const typedRow = rows.find((r) => r.textContent?.includes("vendor/model-x"))!;
+    expect(typedRow.querySelector(".font-mono")).not.toBeNull();
+    expect(typedRow.textContent).not.toContain("之前用过的模型 ID");
     await act(async () => menuButton(t("assistant-assistantchat.forget_typed"))!.click());
     typedBefore.fail = true;
     const menus = document.querySelectorAll('[role="menu"]');

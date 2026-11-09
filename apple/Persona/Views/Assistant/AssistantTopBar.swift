@@ -347,6 +347,13 @@ struct AssistantTopBar: View {
         }
     }
 
+    /// What the launcher menu is built from (see `.id(launcherMenuID)`): the pick, whether the hub keeps a typed ID, and
+    /// every launcher's models.
+    private var launcherMenuID: [String] {
+        [launcher, pickedModel ?? "", model.hubFeatures.contains(ModelID.feature) ? ModelID.feature : ""]
+            + launchers.flatMap { l in [l.name] + (modelOptions[l.name] ?? []).map(\.id) }
+    }
+
     /// The next message's model when it is one typed for `launcherName` that its list doesn't have: the field starts with it.
     private func typedPick(_ launcherName: String) -> String {
         guard launcherName == launcher, let p = pickedModel, !(modelOptions[launcherName] ?? []).contains(where: { $0.id == p }) else { return "" }
@@ -357,6 +364,12 @@ struct AssistantTopBar: View {
     static func takesTypedModel(_ l: Launcher) -> Bool {
         guard l.baseURL != "(traex)" else { return false }
         return LauncherModels.takesTypedModel(agent: l.agent.flatMap { $0.isEmpty ? nil : $0 } ?? "claude")
+    }
+
+    /// The launcher's submenu ends with "Other Model…": its agent takes a typed ID and the hub keeps one for the next
+    /// message (`typed_models`); an older hub dropped an unlisted pick without a word.
+    static func offersTypedModel(_ l: Launcher, features: Set<String>) -> Bool {
+        features.contains(ModelID.feature) && takesTypedModel(l)
     }
 
     private func pick(_ launcher: String, model picked: String?) {
@@ -386,12 +399,13 @@ struct AssistantTopBar: View {
     private func loadModelOptions() async {
         let machine = model.hubRef(machineID)
         guard let api = model.api(machine.group), !launchers.isEmpty else { return }
-        await withTaskGroup(of: (String, [AgentModelOption]).self) { group in
+        await withTaskGroup(of: (String, [AgentModelOption]?).self) { group in
             for l in launchers {
-                group.addTask { (l.name, (try? await api.launcherModels(machine: machine.id, launcher: l.name)) ?? []) }
+                group.addTask { (l.name, try? await api.launcherModels(machine: machine.id, launcher: l.name)) }
             }
+            // An empty answer counts too (the last typed ID forgotten); a failed one keeps what was there.
             for await (name, options) in group {
-                if !options.isEmpty { modelOptions[name] = options }
+                if let options { modelOptions[name] = options }
             }
         }
     }
@@ -473,7 +487,7 @@ struct AssistantTopBar: View {
                                 if !typed.isEmpty {
                                     Section("Typed Before") { ForEach(typed) { m in modelButton(l.name, m) } }
                                 }
-                                if Self.takesTypedModel(l) {
+                                if Self.offersTypedModel(l, features: model.hubFeatures) {
                                     let picked = l.name == launcher ? pickedModel : nil
                                     let other = picked.flatMap { p in (modelOptions[l.name] ?? []).contains { $0.id == p } ? nil : p }
                                     Section {
@@ -497,6 +511,9 @@ struct AssistantTopBar: View {
                         }
                     }
                 } label: { Label("Launcher: \(launcher)", systemImage: Theme.Icon.model) }
+                // This one too keeps the items it was first built with (its launchers' submenus among them): built
+                // again when a list comes in or changes, or a pick does.
+                .id(launcherMenuID)
                 Button { showInfo = true } label: {
                     Label("Session Info", systemImage: Theme.Icon.info)
                 }

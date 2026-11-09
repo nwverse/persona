@@ -4,8 +4,12 @@
 // most 256 bytes. The apps' twin is apple/Shared/ModelID.swift; both are tested on the server's cases.
 import { t } from "../i18n";
 
-/** proto.MaxModelIDLen. */
+/** proto.MaxModelIDLen, in UTF-8 bytes (what the hub counts). */
 export const MAX_MODEL_ID_LEN = 256;
+
+/** The hub takes a typed ID where its lists lack it: an older one dropped an unlisted pick for the Persona chat's next
+ *  message without a word, so that menu offers "Other model…" only with it. */
+export const TYPED_MODELS_FEATURE = "typed_models";
 
 /** Why an ID breaks the rule: the first thing wrong, read left to right. */
 export type ModelIdProblem =

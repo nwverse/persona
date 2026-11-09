@@ -17,6 +17,9 @@ nonisolated struct LauncherModelChoice: Equatable {
     var canPick: Bool { list.locked == nil && (!list.models.isEmpty || takesTyped) }
     /// An ID the list doesn't have can be typed in: "Other Model…" (#1644).
     var takesTyped: Bool { list.takesTypedModel }
+    /// New Agent shows the locked row: the launcher passes its own --model where a model could otherwise be picked
+    /// or typed (an empty Claude Code / Codex list too; `takesTyped` is off once it is locked).
+    var showsLocked: Bool { list.locked != nil && (!list.models.isEmpty || LauncherModels.takesTypedModel(agent: list.agent)) }
     /// The model the agent runs when it is given none.
     var defaultModel: AgentModel? { list.models.first(where: \.isDefault) }
     /// What can be picked besides the default: the agent's own models, then the IDs typed before.
@@ -143,7 +146,7 @@ struct LauncherModelPicker: View {
                     if allowsCustom || typingOffered, let id = choice.unlisted {
                         row(title: SessionModes.gptModelName(id) ?? id,
                             detail: typingOffered ? String(localized: "Typed model ID: \(id)") : String(localized: "Current setting, not in the list: \(id)"),
-                            description: nil, id: id)
+                            description: nil, id: id, mono: typingOffered)
                     }
                 } footer: {
                     Text(defaultFooter)
@@ -216,7 +219,8 @@ struct LauncherModelPicker: View {
         }
     }
 
-    private func row(title: String, detail: String?, description: String?, id: String) -> some View {
+    /// `mono`: a model ID typed by hand, drawn as the field and the other lists draw one.
+    private func row(title: String, detail: String?, description: String?, id: String, mono: Bool = false) -> some View {
         Button {
             picked = id
             Haptics.tap()
@@ -224,7 +228,8 @@ struct LauncherModelPicker: View {
         } label: {
             HStack(spacing: Theme.Space.m) {
                 VStack(alignment: .leading, spacing: Theme.Space.xxs) {
-                    Text(title).font(Theme.Font.heading).foregroundStyle(.primary).lineLimit(1)
+                    Text(title).font(mono ? Theme.Font.heading.monospaced() : Theme.Font.heading).foregroundStyle(.primary)
+                        .lineLimit(1).truncationMode(mono ? .middle : .tail)
                     if let detail {
                         Text(detail).font(Theme.Font.label.monospaced()).foregroundStyle(.secondary)
                             .lineLimit(1).truncationMode(.middle)
@@ -245,7 +250,7 @@ struct LauncherModelPicker: View {
 
     /// An ID typed before: picked like the others; swiped (or right-clicked on a Mac) it can be forgotten.
     @ViewBuilder private func rememberedRow(_ m: AgentModel) -> some View {
-        let r = row(title: m.displayName, detail: m.id != m.displayName ? m.id : nil, description: nil, id: m.id)
+        let r = row(title: m.displayName, detail: m.id != m.displayName ? m.id : nil, description: nil, id: m.id, mono: true)
         if let forget {
             r.swipeActions(edge: .trailing, allowsFullSwipe: true) {
                 Button(role: .destructive) { Task { await forget(m.id) } } label: { Label("Forget", systemImage: Theme.Icon.delete) }

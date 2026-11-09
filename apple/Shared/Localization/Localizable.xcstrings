@@ -1,6 +1,29 @@
 {
   "sourceLanguage": "en",
   "strings": {
+    "Use Default Model": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Use Default Model"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "デフォルトのモデルを使う"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "改用默认模型"
+          }
+        }
+      }
+    },
     "Not in the list; this start uses the ID as typed": {
       "extractionState": "manual",
       "localizations": {
@@ -139,48 +162,48 @@
         }
       }
     },
-    "Too long: at most %lld characters": {
+    "Too long: at most %lld bytes": {
       "extractionState": "manual",
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Too long: at most %lld characters"
+            "value": "Too long: at most %lld bytes"
           }
         },
         "ja": {
           "stringUnit": {
             "state": "translated",
-            "value": "長すぎます：%lld 文字まで"
+            "value": "長すぎます：%lld バイトまで"
           }
         },
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "太长了：最多 %lld 个字符"
+            "value": "太长了：最多 %lld 字节"
           }
         }
       }
     },
-    "Letters, digits and . _ - / : @ [ ], starting with a letter or digit; a gateway's latest alias can start with ~": {
+    "Letters, digits and . _ - / : @ [ ], starting with a letter or digit; a gateway's latest alias can start with ~.": {
       "extractionState": "manual",
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Letters, digits and . _ - / : @ [ ], starting with a letter or digit; a gateway's latest alias can start with ~"
+            "value": "Letters, digits and . _ - / : @ [ ], starting with a letter or digit; a gateway's latest alias can start with ~."
           }
         },
         "ja": {
           "stringUnit": {
             "state": "translated",
-            "value": "英数字と . _ - / : @ [ ] が使え、英字か数字で始めます。ゲートウェイの latest エイリアスは ~ で始められます"
+            "value": "英数字と . _ - / : @ [ ] が使え、英字か数字で始めます。ゲートウェイの latest エイリアスは ~ で始められます。"
           }
         },
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "字母、数字和 . _ - / : @ [ ]，以字母或数字开头；网关的 latest 别名可以用 ~ 开头"
+            "value": "字母、数字和 . _ - / : @ [ ]，以字母或数字开头；网关的 latest 别名可以用 ~ 开头。"
           }
         }
       }

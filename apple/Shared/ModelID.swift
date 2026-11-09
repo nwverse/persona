@@ -5,8 +5,12 @@ import Foundation
 /// A letter or digit first (or `~` and then one: a gateway's "latest" alias), then only letters, digits and
 /// `. _ - / : @ [ ]`, at most 256 bytes. The web's twin is web/src/lib/model-id.ts; both are tested on the server's cases.
 nonisolated enum ModelID {
-    /// proto.MaxModelIDLen.
+    /// proto.MaxModelIDLen, in UTF-8 bytes (what the hub counts).
     static let maxLength = 256
+
+    /// The hub takes a typed ID where its lists lack it (`typed_models`): an older one dropped an unlisted pick for the
+    /// Persona chat's next message without a word, so that chip offers "Other Model…" only with it.
+    static let feature = "typed_models"
 
     /// Why an ID breaks the rule; the first thing wrong, read left to right.
     enum Problem: Equatable, Sendable {
@@ -28,14 +32,14 @@ nonisolated enum ModelID {
             case .space: String(localized: "A model ID can't contain spaces")
             case .control: String(localized: "A model ID can't contain line breaks or control characters")
             case .character(let c): String(localized: "“\(c)” can't be in a model ID. Use letters, digits and . _ - / : @ [ ]")
-            case .tooLong: String(localized: "Too long: at most \(ModelID.maxLength) characters")
+            case .tooLong: String(localized: "Too long: at most \(ModelID.maxLength) bytes")
             }
         }
     }
 
     /// The rule as one line, under a field that is still empty or fine.
     static var rule: String {
-        String(localized: "Letters, digits and . _ - / : @ [ ], starting with a letter or digit; a gateway's latest alias can start with ~")
+        String(localized: "Letters, digits and . _ - / : @ [ ], starting with a letter or digit; a gateway's latest alias can start with ~.")
     }
 
     static func isValid(_ id: String) -> Bool { problem(id) == nil }

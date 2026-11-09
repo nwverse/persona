@@ -9,7 +9,7 @@ import { AttachmentTray } from "../ui/AttachmentTray";
 import { modelPurpose, modelSummary, type ModelBinding } from "../lib/model-config";
 import {
   defaultLabel, effortChoices, fitEffort, followedBinding, launcherAgent, launcherModels, machineLaunchers, modelName, oneOff, pickerLauncher, startPicks,
-  takesEffort, forgetCustomModel, typedModelOffered, withoutCustom, type LauncherDefault,
+  takesEffort, takesTypedModel, forgetCustomModel, typedModelOffered, withoutCustom, type LauncherDefault,
 } from "../lib/launcher-models";
 import { BYPASS_MODE, BYPASS_WARNING, EFFORTS, effortTitle, PERMISSION_MODES } from "../lib/session-actions";
 import { baseName, shortPath } from "../lib/format";
@@ -249,6 +249,8 @@ export function NewAgent({ open, onClose, preset }: { open: boolean; onClose: ()
   const agent = launcherAgent(listLauncher, launchers, models.list);
   // a model ID can be typed (#1644): Claude Code or Codex whose launcher passes the pick on, also with an empty list or none read
   const typing = typedModelOffered(agent, models.list) && models.list !== null;
+  // a launcher that passes its own --model keeps its locked row where an ID could otherwise be typed, empty list or not
+  const lockedTyping = takesTypedModel(agent) && Boolean(models.list?.locked);
   const pickedModel = models.list?.models.find((m) => m.id === model);
   const efforts = effortChoices(models.list, model, followed);
   const effortsKey = efforts.join(" ");
@@ -477,7 +479,7 @@ export function NewAgent({ open, onClose, preset }: { open: boolean; onClose: ()
             </Field>
           )}
 
-          {listLauncher && models.status !== "idle" && !(models.status === "ready" && !models.list?.models.length && !typing) && (
+          {listLauncher && models.status !== "idle" && !(models.status === "ready" && !models.list?.models.length && !typing && !lockedTyping) && (
             <Field label={t("newagent.model")}><ModelPicker
               models={models}
               model={model}

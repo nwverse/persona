@@ -4123,11 +4123,14 @@ struct Composer: View, Equatable {
                                    + (VoicePlatform.current == .phone ? [PromptItems.voice] : []),
                                mentions: mentions,
                                commands: promptCommands,
-                               models: canPickModel ? PromptItems.claudeModels + [PromptItems.otherModel] : [],
-                               modelID: PromptItems.claudeModelID(model.session(key)?.model),
+                               models: canPickModel ? PromptItems.composerModels(running: model.session(key)?.model) : [],
+                               modelID: PromptItems.runningModelID(model.session(key)?.model),
                                pickModel: { id in
-                                   if id == PromptItems.otherModel.id { typingModel = true; return } // #1644: through …/modes
-                                   model.sendNow(key, text: "/model \(id)", images: []) // photos and quotes stay for the message
+                                   switch PromptItems.modelPick(id, running: model.session(key)?.model) {
+                                   case .typeID: typingModel = true // #1644: through …/modes
+                                   case .keep: break
+                                   case .send(let text): model.sendNow(key, text: text, images: []) // photos and quotes stay for the message
+                                   }
                                },
                                onAttach: { source in
                                    // A PhotosPicker cannot present from inside the menu: these sheets hang off the composer.

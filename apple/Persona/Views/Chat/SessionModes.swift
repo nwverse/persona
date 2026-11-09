@@ -91,9 +91,10 @@ nonisolated enum SessionModes {
         return l
     }
 
-    /// What applying a model pick sends: the alias, unless the session already runs it.
+    /// What applying a model pick sends: the alias, unless the session already runs it (Default too, while it runs a
+    /// typed ID: that is not the default, #1644).
     @MainActor static func modelPatch(_ picked: String, current: String?) -> String? {
-        picked == PromptItems.claudeModelID(current) ? nil : picked
+        picked == PromptItems.runningModelID(current) ? nil : picked
     }
 
     static func modeTint(_ id: String?) -> Color {
@@ -212,8 +213,9 @@ struct SessionModeBar: View {
                 if SessionModes.switchesModel(session) {
                     let busy = SessionModes.modelBusy(session)
                     Section("Model [Assistant View c98e11]") {
-                        Picker("Model [Assistant View c98e11]", selection: Binding(get: { PromptItems.claudeModelID(session?.model) }, set: { id in change(model: id) })) {
-                            ForEach(PromptItems.claudeModels, id: \.id) { m in
+                        // A typed model (#1644) is a row of its own, by its ID: no alias is ticked for it.
+                        Picker("Model [Assistant View c98e11]", selection: Binding(get: { PromptItems.runningModelID(session?.model) }, set: { id in change(model: id) })) {
+                            ForEach(PromptItems.runningModels(session?.model), id: \.id) { m in
                                 Text(m.name).tag(m.id)
                             }
                         }
@@ -303,11 +305,12 @@ struct SessionModesMenu: View {
         }
         Section("Model [Assistant View c98e11]") {
             if picksModel {
-                Picker("Model [Assistant View c98e11]", selection: Binding(get: { PromptItems.claudeModelID(session?.model) }, set: { id in
-                    guard id != PromptItems.claudeModelID(session?.model) else { return }
-                    model.sendNow(key, text: "/model \(id)", images: []) // photos and quotes stay for the message
+                // A typed model (#1644) is a row of its own, by its ID: no alias is ticked for it, and Default switches back.
+                Picker("Model [Assistant View c98e11]", selection: Binding(get: { PromptItems.runningModelID(session?.model) }, set: { id in
+                    guard case .send(let text) = PromptItems.modelPick(id, running: session?.model) else { return }
+                    model.sendNow(key, text: text, images: []) // photos and quotes stay for the message
                 })) {
-                    ForEach(PromptItems.claudeModels, id: \.id) { m in
+                    ForEach(PromptItems.runningModels(session?.model), id: \.id) { m in
                         Text(m.name).tag(m.id)
                     }
                 }
@@ -367,7 +370,7 @@ struct SessionTypedModelSheet: View {
     var session: Session?
 
     var body: some View {
-        TypedModelSheet(machine: key.machineRef, launcher: SessionModes.launcher(session),
+        TypedModelSheet(machine: key.machineRef, launcher: SessionModes.launcher(session), initial: PromptItems.unlistedModel(session?.model) ?? "",
                         note: String(localized: "The model you pick also becomes the default for new sessions")) { id in
             Task { await model.setModes(key, model: id) }
         }

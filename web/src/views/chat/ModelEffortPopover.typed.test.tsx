@@ -1,7 +1,8 @@
 // @vitest-environment jsdom
 // A running Claude Code session's model popover with a typed model ID (#1644): "Other model…" (also when the list is
-// empty or couldn't be read) says why an ID can't be used as it is typed, Apply sends it through POST …/modes like a
-// listed one, the field keeps its own keys, and an ID typed before can be forgotten (back when the hub says no).
+// empty or couldn't be read) says why an ID can't be used as it is typed, a good one is staged so Apply (or Enter) sends
+// it through POST …/modes like a listed one, the field keeps its own keys, an ID typed before can be forgotten (back
+// when the hub says no, the pick unmoved), and a list shown from before is read again behind it.
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -85,11 +86,30 @@ describe("the session's model popover: a typed model ID (#1644)", () => {
     const before = tab();
     key(input, "ArrowLeft");
     expect(tab()).toBe(before);
+    expect(button("应用")!.disabled).toBe(true);
     type(input, "~vendor/model-latest");
-    key(input, "Enter");
-    expect(button("~vendor/model-latest")!.getAttribute("aria-current")).toBe("true");
+    // staged as it is typed: one confirm, the footer's (the field has no "Use" of its own here)
+    expect(button("应用")!.disabled).toBe(false);
+    expect(document.body.querySelector("[data-model-id-field] button")).toBeNull();
     await act(async () => button("应用")!.click());
     expect(apply).toHaveBeenCalledWith({ model: "~vendor/model-latest" });
+  });
+
+  it("Enter in the field applies, Esc puts the last pick back", async () => {
+    const apply = await open("mac-e");
+    act(() => button("其他模型…")!.click());
+    let input = document.body.querySelector<HTMLInputElement>("[data-model-id-field] input")!;
+    type(input, "vendor/model-y");
+    key(input, "Escape");
+    expect(document.body.querySelector("[data-model-id-field]")).toBeNull();
+    expect(button("其他模型…")!.getAttribute("aria-current")).toBeNull(); // nothing was staged before it opened
+    expect(button("应用")!.disabled).toBe(true);
+    act(() => button("其他模型…")!.click());
+    input = document.body.querySelector<HTMLInputElement>("[data-model-id-field] input")!;
+    type(input, "vendor/model-y");
+    await act(async () => key(input, "Enter"));
+    await flush();
+    expect(apply).toHaveBeenCalledWith({ model: "vendor/model-y" });
   });
 
   it("offers Enter model ID… when the list couldn't be read", async () => {
@@ -108,5 +128,45 @@ describe("the session's model popover: a typed model ID (#1644)", () => {
     expect(calls.some((c) => c.method === "DELETE" && c.url.includes("/machines/mac-c/launchers/claude/models/custom?model=vendor%2Fmodel-x"))).toBe(true);
     expect(forget()).not.toBeNull();
     expect(document.body.querySelector('[role="alert"]')!.textContent).toMatch(/没能忘记「vendor\/model-x」：.*只读设备不能改/);
+  });
+
+  it("a failed Forget of a row before the pick leaves the pick where it was", async () => {
+    listAnswer = () => json({ agent: "claude", models: [
+      { id: "opus", name: "Opus 5.5", resolved: "claude-opus-5-5", efforts: ["low", "high"] },
+      { id: "sonnet", name: "Sonnet", efforts: ["low", "high"] },
+      { id: "vendor/a", name: "vendor/a", custom: true },
+      { id: "vendor/b", name: "vendor/b", custom: true },
+    ] });
+    forgetAnswer = () => json({ error: "只读设备不能改" }, 403);
+    const apply = await open("mac-f");
+    const option = (id: string) => [...document.body.querySelectorAll<HTMLButtonElement>('[role="option"]')].find((b) => b.textContent?.includes(id))!;
+    act(() => option("vendor/b").click());
+    expect(option("vendor/b").getAttribute("aria-selected")).toBe("true");
+    act(() => document.body.querySelector<HTMLButtonElement>('button[aria-label="忘记「vendor/a」"]')!.click());
+    expect(option("vendor/b").getAttribute("aria-selected")).toBe("true");
+    await flush();
+    expect(option("vendor/a")).toBeTruthy(); // back
+    expect(option("vendor/a").getAttribute("aria-selected")).toBe("false");
+    expect(option("vendor/b").getAttribute("aria-selected")).toBe("true");
+    await act(async () => button("应用")!.click());
+    expect(apply).toHaveBeenCalledWith({ model: "vendor/b" });
+  });
+
+  it("shows the list from before at once and reads it again behind it", async () => {
+    await open("mac-g");
+    act(() => root.render(<></>));
+    listAnswer = () => json({ agent: "claude", models: [
+      { id: "opus", name: "Opus 5.5", resolved: "claude-opus-5-5", efforts: ["low", "high"] },
+      { id: "vendor/model-new", name: "vendor/model-new", custom: true },
+    ] });
+    const anchor = document.createElement("button");
+    document.body.append(anchor);
+    act(() => root.render(<ModelEffortPopover session={session("mac-g")} anchor={anchor} onClose={() => {}} apply={vi.fn(async () => true)} />));
+    // at once: the last list, no "loading"
+    expect(document.body.textContent).toContain("vendor/model-x");
+    await flush();
+    expect(calls.filter((c) => c.method === "GET" && c.url.includes("/machines/mac-g/launchers/claude/models")).length).toBe(2);
+    expect(document.body.textContent).toContain("vendor/model-new");
+    expect(document.body.textContent).not.toContain("vendor/model-x");
   });
 });

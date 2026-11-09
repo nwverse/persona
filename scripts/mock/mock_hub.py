@@ -6763,8 +6763,8 @@ LAUNCHER_MODELS["sonnetcc"] = dict(LAUNCHER_MODELS["claude"], locked="启动器�
 # before after a Claude Code / Codex launcher's own models (`custom: true`, none for a locked one), takes Forget
 # (DELETE …/launchers/{name}/models/custom?model=) and remembers a start's or a running session's typed model the list
 # doesn't have, as the hub does once it ran. =forgetfail: Forget answers 500 (the app puts the row back); =empty: Claude
-# Code's list is empty ("Enter Model ID…"); =fail: no list can be read (502). GET /mock/custom_models: what is remembered
-# (`?reset=1` puts the first IDs back).
+# Code's list is empty ("Enter Model ID…"); =fail: no list can be read (502). Every mode lists "typed_models" in the
+# features. GET /mock/custom_models: what is remembered (`?reset=1` puts the first IDs back).
 CUSTOM_MODELS_MODE = os.environ.get("MOCK_CUSTOM_MODELS", "")
 CUSTOM_MODELS_START = {"claude": ["vendor/model-x", "~vendor/model-latest[1m]"], "codex": ["gpt-next-preview"]}
 CUSTOM_MODELS = copy.deepcopy(CUSTOM_MODELS_START) if CUSTOM_MODELS_MODE else {}
@@ -6808,6 +6808,14 @@ def custom_models_route(h, method, p, q, body=b""):
     model, launcher = (q.get("model") or [""])[0], unquote(m.group(2))
     CUSTOM_MODELS[launcher] = [i for i in CUSTOM_MODELS.get(launcher, []) if i != model]
     h.send_json({"ok": True}); return True
+
+
+_features_without_custom_models = features
+
+
+def features():
+    # The hub keeps a typed pick (proto "typed_models"): the Persona chat's chip offers "Other Model…".
+    return _features_without_custom_models() + (["typed_models"] if CUSTOM_MODELS_MODE else [])
 
 
 # Settings › Model providers: ~/.zshrc launchers, two of them through made-up example gateways a quota plugin can read.
@@ -16823,7 +16831,7 @@ MOCK_HELP.append("MOCK_ULTRACODE=1  Claude Code 的 ultracode 开关（#3428）�
                  "发布说明那个带版本太旧的原因、博客那个关着、菜谱那个离线（node 还记着开）；Codex 的订单会话在「极高」档；Mac Studio 的 Claude Code 太旧，新建时不能开。"
                  "POST …/modes 的 ultracode 闲着立刻生效、工作中排队 MOCK_ULTRACODE_SECONDS 秒（默认 4）；有排队时发消息回 409 ultracode_pending；"
                  "GET /mock/ultracode 看请求和消息，?reset=1 复原")
-MOCK_HELP.append("MOCK_CUSTOM_MODELS=1|forgetfail|empty|fail  手动输入模型 ID（#1644）：Claude Code / Codex 的模型列表后面带输入过的 ID（custom），"
+MOCK_HELP.append("MOCK_CUSTOM_MODELS=1|forgetfail|empty|fail  手动输入模型 ID（#1644）：features 带 typed_models；Claude Code / Codex 的模型列表后面带输入过的 ID（custom），"
                  "DELETE …/models/custom?model= 忘掉；新建和 …/modes 用了列表里没有的 ID 就记下。forgetfail：忘掉回 500；empty：Claude Code 的列表是空的；"
                  "fail：读不到列表（502）。GET /mock/custom_models 看记着的，?reset=1 复原")
 

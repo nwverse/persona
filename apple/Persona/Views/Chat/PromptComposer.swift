@@ -212,10 +212,46 @@ enum PromptItems {
     /// The model menu's last row (#1644): opens the field for a model ID typed by hand (`SessionTypedModelSheet`).
     static let otherModel = PromptModel(id: "persona.typed-model", name: String(localized: "Other Model…"), tag: String(localized: "Type a model ID"))
 
-    /// The alias a session's model reads as ("claude-opus-…" → opus).
-    static func claudeModelID(_ model: String?) -> String {
-        let m = (model ?? "").lowercased()
-        return ["opus", "sonnet", "haiku"].first { m.contains($0) } ?? "default"
+    /// What a session runs, as its model menu's selection: the alias its model reads as ("claude-opus-…" → opus),
+    /// "default" while nothing is known; any other model (one typed by hand, #1644) is its own ID, so no alias is
+    /// ticked for it and picking Default switches back.
+    static func runningModelID(_ model: String?) -> String {
+        let m = (model ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        // Not a model ID (Claude's `<synthetic>`): nothing known.
+        guard ModelID.isValid(m) else { return "default" }
+        return ["opus", "sonnet", "haiku"].first { m.lowercased().contains($0) } ?? m
+    }
+
+    /// The model a session runs when the aliases don't name it (a typed ID); nil: one of them does, or nothing is known.
+    static func unlistedModel(_ model: String?) -> String? {
+        let id = runningModelID(model)
+        return claudeModels.contains { $0.id == id } ? nil : id
+    }
+
+    /// A running session's model menu: the aliases, then the model it runs when they don't name it, by its ID (the one
+    /// ticked; a menu row has no room for a second line saying it).
+    static func runningModels(_ model: String?) -> [PromptModel] {
+        claudeModels + (unlistedModel(model).map { [PromptModel(id: $0, name: $0, tag: String(localized: "Current"))] } ?? [])
+    }
+
+    /// BeautifulUI's model menu for a running session: `runningModels` (the button names the ticked one), then "Other Model…".
+    static func composerModels(running model: String?) -> [PromptModel] {
+        runningModels(model) + [otherModel]
+    }
+
+    /// What picking a row of a running Claude Code session's model menu does where the pick is typed as `/model`
+    /// (the shell composer's, BeautifulUI's): "Other Model…" opens the field (its ID goes through POST …/modes, #1644),
+    /// the model it runs already does nothing, another row sends `/model <alias>`.
+    enum ModelPick: Equatable {
+        case typeID
+        case keep
+        case send(String)
+    }
+
+    static func modelPick(_ picked: String, running model: String?) -> ModelPick {
+        if picked == otherModel.id { return .typeID }
+        if picked == runningModelID(model) { return .keep }
+        return .send("/model \(picked)")
     }
 
     /// Files the chat's tools read or wrote, newest first: picking one types `@path` (relative to the session's

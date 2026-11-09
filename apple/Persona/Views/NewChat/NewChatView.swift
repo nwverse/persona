@@ -520,13 +520,22 @@ struct NewChatView: View {
             }
             .accessibilityIdentifier("newChat.model.error")
             if typesWithoutList {
-                Button { typingModel = true } label: {
-                    modelLabel(title: pickedModel.isEmpty ? String(localized: "Enter Model ID…") : SessionModes.gptModelName(pickedModel) ?? pickedModel,
-                               detail: pickedModel.isEmpty ? String(localized: "Without the list, a model can still be used by its ID") : String(localized: "Typed model ID"),
-                               trailing: Theme.Icon.keyboard)
+                HStack(spacing: Theme.Space.m) {
+                    Button { typingModel = true } label: {
+                        modelLabel(title: pickedModel.isEmpty ? String(localized: "Enter Model ID…") : SessionModes.gptModelName(pickedModel) ?? pickedModel,
+                                   detail: pickedModel.isEmpty ? String(localized: "Without the list, a model can still be used by its ID") : String(localized: "Typed model ID"),
+                                   trailing: pickedModel.isEmpty ? Theme.Icon.keyboard : nil)
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityIdentifier("newChat.model.enter")
+                    // A typed pick can be dropped again: the start goes with the launcher's default.
+                    if !pickedModel.isEmpty {
+                        Button { pickedModel = "" } label: { ThemedIcon(Theme.Icon.clear).foregroundStyle(.secondary) }
+                            .buttonStyle(.borderless)
+                            .accessibilityLabel("Use Default Model")
+                            .accessibilityIdentifier("newChat.model.clearTyped")
+                    }
                 }
-                .buttonStyle(.plain)
-                .accessibilityIdentifier("newChat.model.enter")
             }
         } else if let c = modelChoice, c.canPick {
             NavigationLink {
@@ -540,7 +549,7 @@ struct NewChatView: View {
                            detail: c.detail, trailing: nil)
             }
             .accessibilityIdentifier("newChat.model")
-        } else if let c = modelChoice, let locked = c.list.locked, !c.list.models.isEmpty || c.takesTyped {
+        } else if let c = modelChoice, c.showsLocked, let locked = c.list.locked {
             modelLabel(title: String(localized: "Default Model"), detail: locked, trailing: Theme.Icon.locked)
                 .accessibilityIdentifier("newChat.model.locked")
         } else if modelsLoading {

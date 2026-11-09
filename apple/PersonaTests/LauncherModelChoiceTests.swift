@@ -171,6 +171,12 @@ import Testing
         let lc = LauncherModelChoice(list: locked, picked: "glm-5")
         #expect(!lc.canPick && !lc.takesTyped && lc.sent == nil)
         #expect(!LauncherModelChoice(list: LauncherModels(agent: "claude", models: [], locked: "fixed")).canPick)
+        // The locked row stays where a model could otherwise be picked or typed, an empty list too.
+        #expect(lc.showsLocked)
+        #expect(LauncherModelChoice(list: LauncherModels(agent: "claude", models: [], locked: "fixed")).showsLocked)
+        #expect(LauncherModelChoice(list: LauncherModels(agent: "codex", models: [], locked: "fixed")).showsLocked)
+        #expect(!LauncherModelChoice(list: LauncherModels(agent: "traex", models: [], locked: "fixed")).showsLocked)
+        #expect(!LauncherModelChoice(list: LauncherModels(agent: "claude", models: [])).showsLocked)
     }
 
     @Test func aStartCarriesThePick() throws {

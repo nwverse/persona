@@ -23,7 +23,8 @@ import { UltracodeSwitchRow } from "./Ultracode";
 
 const WIDTH = 340;
 
-// a list read from the agent takes seconds the first time; later openings show it at once
+// a list read from the agent takes seconds the first time; later openings show the last one at once and read it again
+// behind it (the IDs typed before change with each switch and Forget, here or elsewhere)
 const cache = new Map<string, LauncherModels>();
 
 export function ModelEffortPopover({
@@ -66,18 +67,22 @@ export function ModelEffortPopover({
     return () => ro.disconnect();
   }, [ultracode]);
 
+  // the typed IDs whose Forget is still on its way: a list read meanwhile doesn't bring them back
+  const forgetting = useRef(new Set<string>());
   useEffect(() => {
-    if (cache.has(cacheKey)) return;
     const ctl = new AbortController();
     launcherModels(mid, launcher, { signal: ctl.signal }).then(
       (r) => {
-        if (r) cache.set(cacheKey, r);
-        setList(r);
+        if (ctl.signal.aborted) return;
+        const fresh = r && forgetting.current.size ? { ...r, models: r.models.filter((m) => !(m.custom && forgetting.current.has(m.id))) } : r;
+        if (fresh) cache.set(cacheKey, fresh);
+        else cache.delete(cacheKey);
+        setList(fresh);
         setLoading(false);
       },
       (e) => {
         if (ctl.signal.aborted) return;
-        setError(errorText(e));
+        if (!cache.has(cacheKey)) setError(errorText(e)); // a list already shown stays
         setLoading(false);
       },
     );
@@ -93,38 +98,47 @@ export function ModelEffortPopover({
   const typable = !loading && !busyNote && !locked;
   const current = session.model;
 
-  const [pick, setPick] = useState(-1); // the model chosen; -1: keep the session's
-  const [typed, setTyped] = useState(""); // a model ID typed in "Other model…"; "": none
+  // the model chosen, by its id (a Forget or a list read again moves the rows); null: keep the session's
+  const [pickId, setPickId] = useState<string | null>(null);
+  const pick = pickId === null ? -1 : models.findIndex((m) => m.id === pickId);
+  const [typed, setTyped] = useState(""); // a good model ID in "Other model…"'s field, staged for Apply; "": none
   const [entering, setEntering] = useState(false);
+  const typedBefore = useRef(""); // what Esc in the field puts back
   const [forgetError, setForgetError] = useState("");
-  const choose = (i: number) => {
+  // setters only: the key handler, registered once, calls it too
+  const chooseId = (id: string | null) => {
     setTyped("");
-    setPick(i);
+    setEntering(false);
+    setPickId(id);
   };
   // Forget an ID typed before: off the list at once, back where it was when the hub says no.
   const forget = (id: string) => {
     if (!list) return;
     const { list: without, restore } = withoutCustom(list, id);
-    const at = list.models.findIndex((m) => m.id === id);
     setForgetError("");
     setList(without);
     cache.set(cacheKey, without);
-    setPick((p) => (p === at ? -1 : p > at ? p - 1 : p));
-    forgetCustomModel(mid, launcher, id).catch((e) => {
-      setList((now) => {
-        const back = now ? restore(now) : list;
-        cache.set(cacheKey, back);
-        return back;
-      });
-      setForgetError(tr("composer.forget_failed", { id, error: errorText(e) }));
-    });
+    setPickId((p) => (p === id ? null : p));
+    forgetting.current.add(id);
+    forgetCustomModel(mid, launcher, id).then(
+      () => forgetting.current.delete(id),
+      (e) => {
+        forgetting.current.delete(id);
+        setList((now) => {
+          const back = now ? restore(now) : list;
+          cache.set(cacheKey, back);
+          return back;
+        });
+        setForgetError(tr("composer.forget_failed", { id, error: errorText(e) }));
+      },
+    );
   };
   const [effort, setEffort] = useState(session.effort ?? "");
   const seeded = useRef(false);
   useEffect(() => {
     if (seeded.current || !models.length) return;
     seeded.current = true;
-    setPick(models.findIndex((m) => isCurrentModel(m, current)));
+    setPickId(models.find((m) => isCurrentModel(m, current))?.id ?? null);
   }, [models, current]);
 
   const all = useMemo(() => effortOptions(session).map((e) => e.id), [session]);
@@ -171,7 +185,7 @@ export function ModelEffortPopover({
       e.stopPropagation();
       if (r.action === "cancel") return onClose();
       if (r.action === "apply") return void l.run();
-      if (r.state.model !== l.pick && switchable) choose(r.state.model);
+      if (r.state.model !== l.pick && switchable) chooseId(l.models[r.state.model]?.id ?? null);
       if (r.state.effort !== l.tabs.indexOf(l.effort) && r.state.effort >= 0) setEffort(l.tabs[r.state.effort]);
     };
     addEventListener("pointerdown", down);
@@ -256,7 +270,7 @@ export function ModelEffortPopover({
                 role="option"
                 aria-selected={!typed && pick === i}
                 disabled={!switchable}
-                onClick={() => choose(i)}
+                onClick={() => chooseId(m.id)}
                 onDoubleClick={() => void run()}
                 className={cx(
                   "flex min-h-9 w-full min-w-0 items-center gap-2 rounded-[6px] px-2 py-1 text-left pointer-coarse:min-h-11 disabled:opacity-50",
@@ -286,19 +300,17 @@ export function ModelEffortPopover({
       {/* outside the scrolling list, so the field and what it says stay in view */}
       {typable && (entering ? (
         <div className="px-1 pt-1 pb-0.5">
+          {/* a good ID is staged as it is typed: Apply (or Enter) switches to it, no second button */}
           <ModelIdField
             initial={typed}
             note={tr("composer.typed_note")}
-            onUse={(id) => {
+            useButton={false}
+            onValid={setTyped}
+            onUse={() => void live.current.run()}
+            onCancel={() => {
+              setTyped(typedBefore.current);
               setEntering(false);
-              const listed = models.findIndex((m) => m.id === id);
-              if (listed >= 0 && switchable) choose(listed);
-              else {
-                setPick(-1);
-                setTyped(id);
-              }
             }}
-            onCancel={() => setEntering(false)}
           />
         </div>
       ) : (
@@ -306,7 +318,10 @@ export function ModelEffortPopover({
           type="button"
           aria-current={typed ? "true" : undefined}
           data-testid="model-popover-other"
-          onClick={() => setEntering(true)}
+          onClick={() => {
+            typedBefore.current = typed;
+            setEntering(true);
+          }}
           className={cx("flex min-h-9 w-full items-center gap-2 rounded-[6px] px-2 py-1 text-left pointer-coarse:min-h-11", typed ? "bg-hover" : "hover:bg-hover")}
         >
           <Icon name="keyboard" size={13} className="shrink-0 text-ink-3" />

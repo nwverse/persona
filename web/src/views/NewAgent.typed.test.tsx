@@ -29,6 +29,7 @@ const models = () => ({ agent: "claude", models: [
 let host: HTMLDivElement;
 let root: Root;
 let forgetStatus = 200;
+let listBody: () => unknown = models;
 const requests: { method: string; url: string }[] = [];
 const flush = () => act(async () => { for (let i = 0; i < 8; i++) await Promise.resolve(); });
 const button = (text: string) => [...document.body.querySelectorAll("button")].find((b) => b.textContent?.trim() === text)!;
@@ -47,6 +48,7 @@ beforeEach(() => {
   launched.length = 0;
   requests.length = 0;
   forgetStatus = 200;
+  listBody = models;
   localStorage.clear();
   localStorage.setItem("new.cwd.mac", "/code/app");
   vi.stubGlobal("matchMedia", () => ({ matches: false, addEventListener() {}, removeEventListener() {} }));
@@ -55,7 +57,7 @@ beforeEach(() => {
     requests.push({ method: init?.method ?? "GET", url });
     if (url.includes("/model-config/purposes/")) return json({ error: "not found" }, 404);
     if (url.includes("/models/custom")) return forgetStatus === 200 ? json({ ok: true }) : json({ error: "数据库暂时不可用" }, forgetStatus);
-    if (url.includes("/launchers/") && url.includes("/models")) return json(models());
+    if (url.includes("/launchers/") && url.includes("/models")) return json(listBody());
     if (url.includes("/launchers")) return json({ launchers: [{ name: "claude", agent: "claude" }] });
     return json({ path: "/code", entries: [] });
   }));
@@ -91,6 +93,15 @@ describe("New agent: a typed model ID (#1644)", () => {
     expect(trigger().textContent).toContain("acme/coder-9");
     act(() => button("启动").click());
     expect(launched[0]).toMatchObject({ machineId: "mac", launcher: "claude", model: "acme/coder-9" });
+  });
+
+  it("keeps the locked row of a launcher that passes its own --model, also with an empty list", async () => {
+    listBody = () => ({ agent: "claude", models: [], locked: "启动器固定了模型参数" });
+    await open();
+    expect(document.body.textContent).toContain("启动器固定了模型参数");
+    expect(document.body.querySelector("[data-model-id-field]")).toBeNull();
+    act(() => button("启动").click());
+    expect(launched[0]?.model).toBeUndefined();
   });
 
   it("forgets an ID typed before at once, and puts it back with why when the hub says no", async () => {
