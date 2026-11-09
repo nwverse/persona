@@ -494,6 +494,25 @@ func TestPassiveClosesARequestWhoseBodyStalls(t *testing.T) {
 	t.Cleanup(func() { passiveReadTimeout = was }) // after the connector's cleanup has stopped it
 	node := newFakeNode(t)
 	c := startConnector(t, node.path, Options{})
+
+	// The stream is opened first: the stalled requests below each take passiveReadTimeout to be closed, so once they
+	// are, the stream's own request deadline has passed too.
+	fp, code := c.invite(t)
+	h := hubFor(t, c.addr, fp)
+	if r := h.pair(code, tokenA); r.status != http.StatusOK {
+		t.Fatalf("pair: %+v", r)
+	}
+	ws, resp, err := h.stream(tokenA)
+	if err != nil {
+		t.Fatalf("stream: %v %v", err, resp)
+	}
+	nc := websocket.NetConn(context.Background(), ws, websocket.MessageBinary)
+	defer nc.Close()
+	hello := make([]byte, len(nodeHello))
+	if _, err := io.ReadFull(nc, hello); err != nil {
+		t.Fatalf("node hello: %v", err)
+	}
+
 	for _, head := range []string{"POST " + ConnectorPairPath, "GET /elsewhere"} {
 		conn, err := tls.Dial("tcp", c.addr, &tls.Config{InsecureSkipVerify: true, NextProtos: []string{"http/1.1"}})
 		if err != nil {
@@ -512,22 +531,6 @@ func TestPassiveClosesARequestWhoseBodyStalls(t *testing.T) {
 		}
 	}
 
-	fp, code := c.invite(t)
-	h := hubFor(t, c.addr, fp)
-	if r := h.pair(code, tokenA); r.status != http.StatusOK {
-		t.Fatalf("pair: %+v", r)
-	}
-	ws, resp, err := h.stream(tokenA)
-	if err != nil {
-		t.Fatalf("stream: %v %v", err, resp)
-	}
-	nc := websocket.NetConn(context.Background(), ws, websocket.MessageBinary)
-	defer nc.Close()
-	hello := make([]byte, len(nodeHello))
-	if _, err := io.ReadFull(nc, hello); err != nil {
-		t.Fatalf("node hello: %v", err)
-	}
-	time.Sleep(3 * passiveReadTimeout)
 	if _, err := nc.Write([]byte("still here")); err != nil {
 		t.Fatalf("write after the deadline: %v", err)
 	}
