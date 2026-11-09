@@ -59,9 +59,12 @@ export function catalogFallbacks(dir: string, kind: Kind): Record<string, Catalo
   return Object.fromEntries(fallbackLangs(dir).map((l) => [l, fallbackEntries(own, readCatalog(join(dirname(dir), l), kind))]));
 }
 
-// The default form imports every namespace JSON, so the bundle and the dev server treat each as its own module.
-// The inline form (tests) reads and flattens them here into one module: under Vitest every test file loads the
-// catalogs, and ~300 JSON modules per language through the module runner were most of the suite's setup time.
+// The import form imports every namespace JSON, so the dev server treats each as its own module and an edit to one
+// reloads only it. The inline form (the build and tests) reads and flattens them here into one module holding one
+// JSON.parse of a string: in the bundle that is about 26 KB smaller gzipped per language than ~300 object literals
+// (each key's namespace prefix repeated, and per-module wrapping), and engines parse JSON faster than the same object
+// as code; under Vitest every test file loads the catalogs, and ~300 JSON modules per language through the module
+// runner were most of the suite's setup time.
 export function catalogModule(metaPath: string, kind: Kind, inline = false): string {
   const dir = dirname(metaPath);
   const fallbacks = `export const fallbacks = ${JSON.stringify(catalogFallbacks(dir, kind))};`;
@@ -79,9 +82,15 @@ export function catalogModule(metaPath: string, kind: Kind, inline = false): str
   ].join("\n");
 }
 
+/** Whether Vite is building (not serving): set by configResolved. */
+let building = false;
+
 export const i18nCatalogs: Plugin = {
   name: "i18n-resource-catalogs",
   enforce: "pre",
+  configResolved(config) {
+    building = config.command === "build";
+  },
   resolveId(source, importer) {
     const [path, query] = source.split("?");
     if (!path.endsWith("/_meta.json")) return;
@@ -94,8 +103,9 @@ export const i18nCatalogs: Plugin = {
     if (!match) return;
     const [, kind, path] = match;
     this.addWatchFile(path);
-    const inline = Boolean(process.env.VITEST);
-    // Inlined JSON is no longer an import, so watch each file for Vitest's watch mode to rerun on an edit.
+    const inline = building || Boolean(process.env.VITEST);
+    // Inlined JSON is no longer an import, so watch each file for Vitest's (and vite build --watch's) watch mode to
+    // rerun on an edit.
     if (inline) for (const file of catalogFiles(path, kind as Kind)) this.addWatchFile(file);
     // `fallbacks` reads the fallback languages' files: editing one rebuilds this module too. (Vite treats a watched
     // path as an import of the module, so only files: a directory would fail import analysis.)
