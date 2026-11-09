@@ -10007,7 +10007,8 @@ def mock_size(v):
 GIT_PULL_STATE = {"behind": 28, "mode": "success", "pulls": 0}
 # MOCK_PERSONAL_AGENTS=1 (#138): a few personal agent conversations, and Remove from list (POST …/hide, …/unhide,
 # GET /agents/hidden) kept in memory as the extension manager keeps it; GET /mock/personal-agents?reset=1 brings every one
-# back. Off: none, as on a hub without the Lark extension.
+# back. Off: none, as on a hub without the Lark extension. =unconfigured (#2613): no conversations, and the only source
+# reports why, as an extension still waiting for its settings does.
 PERSONAL_AGENTS = os.environ.get("MOCK_PERSONAL_AGENTS")
 PERSONAL_HIDDEN = {}  # session id -> when (ms)
 # #1368: GET /mock/start-fail?n=<count>&code=<code>&delay=<seconds>: the next n starts of an assistant conversation
@@ -10022,7 +10023,7 @@ def personal_rows():
              "title": title, "canSend": True, "unreadCount": unread, "rankTimeMs": now - int(hours * 3600 * 1000), "hasAvatar": False}
             for i, (prov, title, hours, unread) in enumerate(rows)]
 def personal_listed(hidden):
-    return [r for r in personal_rows() if (r["id"] in PERSONAL_HIDDEN) == hidden] if PERSONAL_AGENTS else []
+    return [r for r in personal_rows() if (r["id"] in PERSONAL_HIDDEN) == hidden] if PERSONAL_AGENTS and PERSONAL_AGENTS != "unconfigured" else []
 # MOCK_GIT_WRITE=1 (#6121): the Git panel's writes on a made-up repository that changes as they are made. GET
 # /mock/git-write?fail=<code>[&files=a,b] makes the next write refuse with that code (git_conflict lists the files);
 # ?reset=1 starts over; ?gone=1 puts the branch on an upstream deleted on the remote (#1884). The branch's pull request: ?pr=none|review|ready|auto sets it, ?pr_fail=no_gh|not_signed_in makes
@@ -14064,7 +14065,7 @@ class H(BaseHTTPRequestHandler):
             return self.send_json(file_streamed(f, q))
         # The Lark extension's personal agents (hub agents.go): none here, as on a hub without the Lark extension; the web's sidebar hid
         # the section only after these answered, and showed "Failed to load personal agents" on the 404 instead.
-        if p == "/api/v1/agents": return self.send_json({"sources": []})
+        if p == "/api/v1/agents": return self.send_json({"sources": [{"source": "example", "enabled": True, "error": "Example extension isn't set up yet: fill in its address in the extension's settings", "providers": [], "accounts": []}] if PERSONAL_AGENTS == "unconfigured" else []})
         if p == "/api/v1/agents/sessions": return self.send_json({"sessions": personal_listed(False), "items": []})
         if p == "/api/v1/agents/hidden": return self.send_json({"sessions": personal_listed(True)})
         if p == "/mock/start-fail":

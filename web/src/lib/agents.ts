@@ -76,8 +76,8 @@ const SETUP_HINTS: Record<string, string> = {
   no_accounts: t("lib-agents.setup_no_accounts"),
 };
 
-/** What to do so the sources list agents, one line per source that is not set up. */
-export const setupHints = (sources: AgentSourceStatus[]) => sources.flatMap((x) => (x.setup && SETUP_HINTS[x.setup] ? [SETUP_HINTS[x.setup]] : []));
+/** What to do so the sources list agents, or why one can't: one line per source that is not set up or is failing. */
+export const setupHints = (sources: AgentSourceStatus[]) => sources.flatMap((x) => (x.setup && SETUP_HINTS[x.setup] ? [SETUP_HINTS[x.setup]] : x.error ? [x.error] : []));
 
 export function fetchSources() {
   return api<{ sources: AgentSourceStatus[] | null }>("/agents").then((r) => r.sources ?? []);
@@ -314,8 +314,14 @@ export function refreshAgentSessions(): Promise<void> {
 
 // Called by the WebSocket handler: re-pull the list, and tell open sessions which ids moved (empty = all).
 export function agentsChanged(ids: string[]) {
-  if (bounded) personalSessions.invalidate();
-  else void refreshAgentSessions();
+  if (bounded) {
+    personalSessions.invalidate();
+    if (!ids.length) {
+      // the list itself changed, perhaps a source coming up or going: its hint may be out of date
+      const gen = listGen;
+      void fetchSources().then((sources) => { if (gen === listGen) emit({ hints: setupHints(sources) }); }).catch(() => {});
+    }
+  } else void refreshAgentSessions();
   changedListeners.forEach((l) => l(ids));
 }
 

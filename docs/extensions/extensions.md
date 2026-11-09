@@ -2275,7 +2275,7 @@ Used to connect directly to a personal Agent service (e.g. one with real-time pu
 
 - **id**: cannot duplicate another extension's. Session ids are `<id>:<sessionKey>`, so keeping the id across upgrades preserves app sessions, unread state and cache. The source appears on the Agents page when the extension is enabled and running, and is removed first on disable, uninstall or upgrade
   (the app refetches on `{"type":"agents"}`). If the process crashes, times out or fails to start, the source remains: `status` carries an error and listing all sessions or searching skips it (other sources work as usual);
-  an error is returned only when querying it alone.
+  an error is returned only when querying it by id, or when it is the only source and has listed before. A running extension that isn't configured yet can simply fail these calls, and its message reaches the app as `status`'s error.
 - **Hub calls the extension** (`agentsrc.<method>`, parameters include `contribution`; fields in `server/internal/agents/wire.go`):
 
 | Method | Parameters | Returns |
