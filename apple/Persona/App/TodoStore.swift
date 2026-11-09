@@ -177,6 +177,7 @@ final class TodoStore {
         let targetGeneration = generation
         let res = try await api.updateTodoPlan(id: id, change)
         guard generation == targetGeneration else { return res }
+        mutationRevision += 1
         var updated = todos
         if let idx = updated.firstIndex(where: { $0.id == id }) {
             updated[idx] = res
