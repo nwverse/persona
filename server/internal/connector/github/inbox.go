@@ -75,8 +75,12 @@ func (c *Connector) Watch(ctx context.Context, changed func(connector.Scope)) er
 }
 
 // poll reads the unread notifications (not at all when nothing changed: 304) and returns how long GitHub wants
-// the next poll to wait and whether a thing changed.
+// the next poll to wait and whether a thing changed. A rate limit is waited out, not returned: watchOne would
+// restart Watch long before GitHub takes another request.
 func (c *Connector) poll(ctx context.Context) (time.Duration, bool, error) {
+	if left := c.pauseLeft(); left > 0 {
+		return left, false, nil // GitHub asked for no requests until then (notePause)
+	}
 	st := &c.inbox
 	st.mu.Lock()
 	if st.things == nil {
@@ -92,6 +96,12 @@ func (c *Connector) poll(ctx context.Context) (time.Duration, bool, error) {
 	var ns []notification
 	code, h, err := c.request(ctx, http.MethodGet, "/notifications?per_page=50", hdr, nil, &ns)
 	if err != nil {
+		if code == http.StatusTooManyRequests || code == http.StatusForbidden {
+			c.notePause(h, err)
+		}
+		if left := c.pauseLeft(); left > 0 {
+			return max(left, pollDefault), false, nil
+		}
 		return 0, false, err
 	}
 	wait := pollDefault

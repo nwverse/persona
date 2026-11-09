@@ -101,8 +101,9 @@ type Connector struct {
 	// (Changes) waits until searchReset.
 	searchLow   bool
 	searchReset time.Time
-	// pausedUntil: GitHub asked for a pause (a secondary rate limit, or Retry-After); only notifications are polled
-	// until then. Only notePause sets it, and only later: a good answer in between does not lift it.
+	// pausedUntil: GitHub asked for a pause (a secondary rate limit, or Retry-After); the background reads, the
+	// notifications poll included, wait until then. Only notePause sets it, and only later: a good answer in between
+	// does not lift it.
 	pausedUntil time.Time
 
 	inbox inboxState   // inbox.go
@@ -148,9 +149,11 @@ func (c *Connector) noteRate(h http.Header) {
 // notePause records the pause GitHub asks for with a secondary rate limit (429, or 403 with "rate limit" or
 // Retry-After): until Retry-After (seconds or an HTTP date), else X-RateLimit-Reset, else an hour. It only extends
 // a pause, never shortens one; err is the request's error, h its answer's headers.
+// A 403 with X-RateLimit-Remaining 0 (the hour's requests used up) is a pause too.
 func (c *Connector) notePause(h http.Header, err error) {
 	message := strings.ToLower(err.Error())
-	if !strings.Contains(message, " 429 ") && !(strings.Contains(message, " 403 ") && (strings.Contains(message, "rate limit") || h.Get("Retry-After") != "")) {
+	if !strings.Contains(message, " 429 ") && !(strings.Contains(message, " 403 ") && (strings.Contains(message, "rate limit") || h.Get("Retry-After") != "" ||
+		h.Get("X-RateLimit-Remaining") == "0")) {
 		return
 	}
 	now := time.Now()
@@ -167,6 +170,13 @@ func (c *Connector) notePause(h http.Header, err error) {
 		c.pausedUntil = until
 	}
 	c.mu.Unlock()
+}
+
+// pauseLeft is how long the pause GitHub asked for still lasts (notePause), zero when there is none.
+func (c *Connector) pauseLeft() time.Duration {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return max(time.Until(c.pausedUntil), 0)
 }
 
 // limitedUntil is when the rate limits stop holding the connector back: the later of a low quota's reset and a
