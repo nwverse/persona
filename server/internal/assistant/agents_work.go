@@ -275,12 +275,14 @@ func (s *Service) putTriageSwitches(ctx context.Context, sw TriageSwitches) erro
 	s.work.switchMu.Lock()
 	defer s.work.switchMu.Unlock()
 	turnOff := !sw.Enabled || !sw.ToolLoop
+	clearLoops := turnOff
 	if turnOff {
-		// A pending expiry must be finished even if the feature is disabled
-		// immediately after a restart. When the old setting is already off,
-		// ordinary triage updates need not read loop state at all.
-		if previous, err := s.readTriageSwitches(ctx); err == nil && previous.Enabled && previous.ToolLoop {
-			if err := s.loadToolLoops(ctx); err != nil {
+		// If it was already off, its saved rows can still hold pending expiry
+		// history. Updating another switch must not load or overwrite them.
+		if previous, err := s.readTriageSwitches(ctx); err == nil {
+			if !previous.Enabled || !previous.ToolLoop {
+				clearLoops = false
+			} else if err := s.loadToolLoops(ctx); err != nil {
 				return err
 			}
 		}
@@ -292,7 +294,7 @@ func (s *Service) putTriageSwitches(ctx context.Context, sw TriageSwitches) erro
 			s.work.loopLoadMu.Unlock()
 		}
 	}()
-	if turnOff {
+	if clearLoops {
 		// A load or loop save must not resurrect old cards between the atomic
 		// settings commit and the in-memory clear.
 		s.work.loopLoadMu.Lock()
@@ -300,7 +302,7 @@ func (s *Service) putTriageSwitches(ctx context.Context, sw TriageSwitches) erro
 		loopLocked = true
 	}
 	var expired []savedToolLoop
-	if turnOff {
+	if clearLoops {
 		s.work.mu.Lock()
 		for k, state := range s.work.loops {
 			if state.expiredID != "" && (!state.consuming || state.consumedSaved) {
@@ -310,7 +312,7 @@ func (s *Service) putTriageSwitches(ctx context.Context, sw TriageSwitches) erro
 		s.work.mu.Unlock()
 	}
 	if st := s.store(); st != nil {
-		if turnOff {
+		if clearLoops {
 			batch, ok := st.(interface {
 				PutSettings(context.Context, map[string]any) error
 			})
@@ -330,7 +332,7 @@ func (s *Service) putTriageSwitches(ctx context.Context, sw TriageSwitches) erro
 	s.work.mu.Lock()
 	s.work.init()
 	s.work.switches = &sw
-	if turnOff {
+	if clearLoops {
 		for _, loop := range s.work.loops {
 			delete(s.work.cards, loop.cardID)
 		}

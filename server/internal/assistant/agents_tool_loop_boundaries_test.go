@@ -270,6 +270,79 @@ func TestToolLoopExpiryHistorySurvivesNewTurn(t *testing.T) {
 	}
 }
 
+type failingTriagePutStore struct {
+	*failingLoopExpiryStore
+	fail atomic.Bool
+}
+
+func (s *failingTriagePutStore) PutSetting(ctx context.Context, key string, value any) error {
+	if key == triageSettingKey && s.fail.Load() {
+		return errors.New("triage settings write failed")
+	}
+	return s.failingLoopExpiryStore.PutSetting(ctx, key, value)
+}
+
+func TestToolLoopExpirySurvivesDisabledSettingsUpdateAfterRestart(t *testing.T) {
+	for _, tc := range []struct {
+		name                      string
+		loaded, failPut, failRead bool
+	}{
+		{"unloaded", false, false, false},
+		{"loaded", true, false, false},
+		{"failed PUT", false, true, false},
+		{"loaded failed PUT", true, true, false},
+		{"loop read unavailable", false, false, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s, f, base, card := expiryLoopFixture(t)
+			base.failHistory.Store(true)
+			s.checkToolLoops(context.Background())
+			if err := s.putTriageSwitches(context.Background(), TriageSwitches{Enabled: true}); err != nil {
+				t.Fatal(err)
+			}
+			store := &failingTriagePutStore{failingLoopExpiryStore: base}
+			s = newServiceOn(t, f, store)
+			if tc.loaded {
+				if err := s.loadToolLoops(context.Background()); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if tc.failRead {
+				store.mu.Lock()
+				store.failKeys = map[string]error{toolLoopsSetting: errors.New("loop read unavailable")}
+				store.mu.Unlock()
+			}
+			store.fail.Store(tc.failPut)
+			err := s.putTriageSwitches(context.Background(), TriageSwitches{Enabled: true, Wake: true})
+			if (err != nil) != tc.failPut {
+				t.Fatalf("settings update error = %v", err)
+			}
+			store.fail.Store(false)
+			store.mu.Lock()
+			delete(store.failKeys, toolLoopsSetting)
+			store.mu.Unlock()
+			var rows []savedToolLoop
+			if ok, err := store.Setting(context.Background(), toolLoopsSetting, &rows); err != nil || !ok || len(rows) != 1 || rows[0].ExpiredID != card.ID {
+				t.Fatalf("pending expiry lost: %+v, %v", rows, err)
+			}
+			s.work.mu.Lock()
+			loaded := s.work.loopLoaded
+			s.work.mu.Unlock()
+			if loaded != tc.loaded {
+				t.Fatalf("loop loading changed: got %v, want %v", loaded, tc.loaded)
+			}
+			var saved TriageSwitches
+			if ok, err := store.Setting(context.Background(), triageSettingKey, &saved); err != nil || !ok || saved.Wake == tc.failPut {
+				t.Fatalf("unexpected saved settings: %+v, %v", saved, err)
+			}
+			s.checkToolLoops(context.Background())
+			if status, _, _ := store.InteractionOutcome(context.Background(), card.ID); status != "expired" {
+				t.Fatalf("pending expiry not completed: %s", status)
+			}
+		})
+	}
+}
+
 func TestToolLoopExpiryHistorySurvivesDisabling(t *testing.T) {
 	s, f, store, card := expiryLoopFixture(t)
 	store.failHistory.Store(true)
