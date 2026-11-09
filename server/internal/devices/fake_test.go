@@ -47,6 +47,30 @@ type fakeHost struct {
 	waiting int
 }
 
+// passOne lets one event of this kind that hold keeps waiting through; the next ones are held still. The test fails
+// when the kind is not held, or when no such event waits within 5 s.
+func (f *fakeHost) passOne(t *testing.T, event string) {
+	t.Helper()
+	f.mu.Lock()
+	gate := f.gates[event]
+	f.mu.Unlock()
+	if gate == nil {
+		t.Fatalf("%s is not held", event)
+	}
+	select {
+	case gate <- struct{}{}:
+	case <-time.After(5 * time.Second):
+		t.Fatalf("no %s waiting at the hub", event)
+	}
+}
+
+// held: the hub holds an event now (hold).
+func (f *fakeHost) held() bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.waiting > 0
+}
+
 // hold makes the hub take no event of this kind until release.
 func (f *fakeHost) hold(event string) (release func()) {
 	gate := make(chan struct{})

@@ -291,9 +291,9 @@ func TestSummaryHeld(t *testing.T) {
 }
 
 // After a handshake the hub may have lost what it had: the full report carries the machines first, then the desktops
-// again, the same list included; an ordinary report carries them only when they changed. On a new connection no
-// devices.desktops goes before its first devices.state, whatever changed meanwhile: the requests wait, and the list as
-// it is then follows the state.
+// again, the same list included; an ordinary report carries them only when they changed. On a new connection a report
+// does not wait for the full devices.state (the hub drops entries of computers it does not yet have as this manager's):
+// the full one after the state is the list as it is once the state went out.
 func TestDesktopsGoOutOnHandshake(t *testing.T) {
 	d := newTestDevices(t)
 	c, l := heldLink(t, d, laptopCfg())
@@ -316,58 +316,45 @@ func TestDesktopsGoOutOnHandshake(t *testing.T) {
 	f.mu.Unlock()
 	release := f.hold(devicewire.EventState)
 	defer release()
-	d.Hello(json.RawMessage(`{}`)) // a new connection to the hub: nothing went through it yet
+	d.Hello(json.RawMessage(`{}`)) // a new connection to the hub
 	reported := make(chan struct{})
 	go func() { d.report(true); close(reported) }()
-	eventually(t, 5*time.Second, "the machines on their way", func() bool {
-		f.mu.Lock()
-		defer f.mu.Unlock()
-		return f.waiting > 0
-	})
-	// A real change while the hub has not taken the machines, and a request waiting on it.
+	eventually(t, 5*time.Second, "the machines on their way", f.held)
+	// A real change while the hub has not taken the machines: it goes out at once, and what goes out after the state
+	// has it too.
 	c.send(t, presenceMsg(true, false, 30_000))
-	eventually(t, 5*time.Second, "the renewal taken", func() bool {
-		p := desktopOf(l.m, time.Now())
-		return p != nil && !p.Notifies
+	eventually(t, 5*time.Second, "the renewal reported before the state", func() bool {
+		_, last := sentDesktops(d)
+		return len(last.Desktops) == 1 && !last.Desktops[0].Notifies
 	})
-	pending := d.requestDesktops(false)
-	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
-	defer cancel()
-	if d.desktopsReported(ctx, pending) {
-		t.Fatal("a request was dealt with before the connection's devices.state")
-	}
-	if again, _ := sentDesktops(d); again != n {
-		t.Fatal("devices.desktops went out before the connection's devices.state")
-	}
 	release()
 	<-reported
-	ctx, cancel = context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	if !d.desktopsReported(ctx, pending) {
-		t.Fatal("the waiting request was not dealt with once the state went out")
-	}
-	again, last := sentDesktops(d)
-	if again != n+1 || len(last.Desktops) != 1 || last.Desktops[0].MachineID != l.m.cfg.ID || last.Desktops[0].Notifies {
-		t.Fatalf("after the state: %d sent, last %+v; want one, the list as it is now (notifications off)", again-n, last)
-	}
+	settle()
 	f.mu.Lock()
 	order := slices.Clone(f.notified[from:])
 	f.mu.Unlock()
-	if i, j := slices.Index(order, devicewire.EventState), slices.Index(order, devicewire.EventDesktops); i < 0 || j < i {
-		t.Fatalf("a handshake's events %v: the machines must come before the desktops", order)
+	i := slices.Index(order, devicewire.EventState)
+	if i < 0 || !slices.Contains(order[i+1:], devicewire.EventDesktops) {
+		t.Fatalf("a handshake's events %v: no devices.desktops after its devices.state", order)
+	}
+	_, last := sentDesktops(d)
+	if len(last.Desktops) != 1 || last.Desktops[0].MachineID != l.m.cfg.ID || last.Desktops[0].Notifies {
+		t.Fatalf("the desktops after the state: %+v; want the list as it is then (notifications off)", last)
 	}
 }
 
-// While the manager stops, a new connection's barrier holds no request: nothing goes out then anyway, and a push
+// While the manager stops nothing goes out (the next manager says it), and a request is dealt with at once: a push
 // waiting for the report does not wait out its deadline.
-func TestStoppingDoesNotHoldTheDesktops(t *testing.T) {
+func TestStoppingSendsNoDesktops(t *testing.T) {
 	d := newTestDevices(t)
-	d.Hello(json.RawMessage(`{}`))
 	d.stopping.Store(true)
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
-	if !d.desktopsReported(ctx, d.requestDesktops(false)) {
-		t.Fatal("a request waited for a devices.state that does not come while the manager stops")
+	if !d.desktopsReported(ctx, d.requestDesktops(true)) {
+		t.Fatal("a request waited while the manager stops")
+	}
+	if n, _ := sentDesktops(d); n != 0 {
+		t.Fatalf("%d devices.desktops sent while the manager stops", n)
 	}
 }
 
@@ -494,6 +481,76 @@ func TestLinkRangChecksTheLinkAfterTheReport(t *testing.T) {
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("LinkRang did not end on the new link's confirmation")
+	}
+}
+
+// LinkRang's check after the report takes the same link only. LinkRang found the card confirmed on the laptop's link;
+// before the report it waits for takes its list, the laptop stops counting and the box confirms the card. That report
+// lists the box, but LinkRang found the box only after the list was taken: it must not answer on the box's confirmation
+// with that report, and waits for one taken after it found the box.
+func TestLinkRangChecksTheSameLinkAfterTheReport(t *testing.T) {
+	d := newTestDevices(t)
+	d.SetAttention(notifying(0, "ix-1"))
+	d.Configure(devicewire.Config{HubID: "hub-test", HubName: "test", Machines: []json.RawMessage{linkEntry("Laptop"), linkEntryOf("box")}})
+	join := func(id string) (*testLinkClient, *mgrLink) {
+		c, l := dialTestLinkHello(t, d, link.Message{Type: "hello", Machine: id, Version: "test", Address: testHubAddress,
+			Features: []string{link.FeatureAttention}})
+		c.next(t, "attention")
+		c.send(t, presenceMsg(true, true, 60_000))
+		eventually(t, 5*time.Second, id+" a desktop", func() bool { return isDesktop(l.m) })
+		return c, l
+	}
+	lap, lapLink := join("lap")
+	box, boxLink := join("box")
+	lap.send(t, rangMsg("ix-1"))
+	eventually(t, 5*time.Second, "the laptop's confirmation taken", func() bool {
+		return d.LinkRang(context.Background(), "ix-1", 10*time.Millisecond)
+	})
+	f := d.host()
+	release := f.hold(devicewire.EventDesktops)
+	defer release()
+	stuck := d.requestDesktops(true)
+	eventually(t, 5*time.Second, "a report held at the hub", f.held)
+	base, _ := sentDesktops(d)
+
+	got := make(chan bool, 1)
+	go func() { got <- d.LinkRang(context.Background(), "ix-1", 10*time.Second) }()
+	// LinkRang asks for a report only once it found ix-1 on the laptop's link.
+	eventually(t, 5*time.Second, "LinkRang waiting for the report", func() bool { return d.desktopsRep.asked.Load() > stuck })
+	lap.send(t, presenceMsg(false, true, 0))
+	box.send(t, rangMsg("ix-1"))
+	eventually(t, 5*time.Second, "the laptop no desktop", func() bool { return !isDesktop(lapLink.m) })
+	eventually(t, 5*time.Second, "the box's confirmation taken", func() bool {
+		boxLink.heldMu.Lock()
+		defer boxLink.heldMu.Unlock()
+		return slices.Contains(boxLink.held.rang, "ix-1")
+	})
+
+	f.passOne(t, devicewire.EventDesktops) // the report held before LinkRang asked
+	eventually(t, 5*time.Second, "the report LinkRang waits for held, its list taken", func() bool {
+		n, _ := sentDesktops(d)
+		return n == base+1 && f.held()
+	})
+	before := desktopOf(boxLink.m, time.Now()).until
+	box.send(t, presenceMsg(true, true, 60_000)) // a renewal: a report taken now differs from the one held
+	eventually(t, 5*time.Second, "the box's renewal taken", func() bool {
+		p := desktopOf(boxLink.m, time.Now())
+		return p != nil && p.until.After(before)
+	})
+	f.passOne(t, devicewire.EventDesktops) // the report LinkRang asked for
+	select {
+	case ok := <-got:
+		t.Fatalf("LinkRang said %v on the box's confirmation without a report taken after it found the box", ok)
+	case <-time.After(300 * time.Millisecond):
+	}
+	release()
+	select {
+	case ok := <-got:
+		if !ok {
+			t.Fatal("the box's confirmation did not count once its report went out")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("LinkRang did not end once the box's report went out")
 	}
 }
 

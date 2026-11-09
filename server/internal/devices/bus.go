@@ -112,9 +112,7 @@ func (d *Devices) Event(name string, params json.RawMessage) bool {
 
 // Hello takes the devices section of the hub's answer to manager.hello (every handshake).
 func (d *Devices) Hello(res json.RawMessage) {
-	// Before the connection counts as up: the hub asks nothing through it yet (hubopen.go), and no devices.desktops
-	// goes through it before its first devices.state (presence.go).
-	d.desktopsRep.busBegins()
+	// Before the connection counts as up: the hub asks nothing through it yet (hubopen.go).
 	d.endHubOpened()
 	var h struct {
 		Devices *devicewire.Config `json:"devices"`

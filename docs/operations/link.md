@@ -494,8 +494,8 @@ This takes over what the native Mac App's `register_desktop` did (`docs/apple/ma
 
 **The manager** (`internal/devices/presence.go`)
 - Keeps the presence until when it heard it + `ttl_ms` (120 seconds when missing, at most 4 minutes), and reports its desktops to the hub in `devices.desktops`: one report at a time from one task, in order, a run of requests making one;
-  on every presence it hears (each renewal), when a delivery may change which computers count (a confirmation never does: it only wakes the pushes waiting for it), after a `devices.state` when the list changed, and in full after each handshake.
-  On a new connection to the hub none goes before that connection's first `devices.state` (the hub takes a computer's desktop only once it has the computer): requests meanwhile wait, and the list as it is once the state went out follows it.
+  on every presence it hears (each renewal), when a delivery may change which computers count (a confirmation never does: it only wakes the pushes waiting for it), after a `devices.state` when the list changed, and in full, as it is then, after the full `devices.state` each handshake sends.
+  Another report may reach the hub before that state: the hub drops the entry of a computer it does not yet have as this manager's, and the full list after the state brings it back.
   Each says the TTL left, which the hub counts on its own clock. A separate event, so a renewal once a minute does not resend the apps' machine list.
 - Counts only a computer that gets the "Needs you" summary as it is (see "Needs you" above): its Persona Link takes the summary, it is not waiting to be confirmed and not a work computer.
   While the hub cannot say which computers wait to be confirmed, none counts: the summary freezes then, so a new card would reach neither the computer nor the phone. A work computer never counts.

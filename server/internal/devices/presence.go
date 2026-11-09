@@ -153,9 +153,8 @@ func (m *Machine) desktop(now time.Time) (*desktopNow, *mgrLink) {
 }
 
 // desktopsReporter is the state of the one task that sends devices.desktops (reportDesktopsLoop): requests asked so
-// far and dealt with (done, reported closed at each), whether the next must go out unchanged (force), the connections
-// to the hub begun (conns) and the one whose devices.state went out (stated), and the last sent (sent, the reporter's
-// alone).
+// far and dealt with (done, reported closed at each), whether the next must go out unchanged (force), and the last sent
+// (sent, the reporter's alone).
 type desktopsReporter struct {
 	start    sync.Once
 	due      chan struct{}
@@ -164,33 +163,7 @@ type desktopsReporter struct {
 	mu       sync.Mutex
 	done     uint64
 	reported chan struct{}
-	conns    uint64
-	stated   uint64
 	sent     string
-}
-
-// busBegins: a new connection to the hub said hello; nothing went through it yet. Its desktops wait for its first
-// devices.state (stateSent): the hub takes a computer's desktop only once it has the computer.
-func (r *desktopsReporter) busBegins() {
-	r.mu.Lock()
-	r.conns++
-	r.mu.Unlock()
-}
-
-// connection is the connection to the hub now (busBegins), for stateSent.
-func (r *desktopsReporter) connection() uint64 {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	return r.conns
-}
-
-// stateSent: a devices.state went out on connection conn; if that is still the connection, its desktops may follow.
-func (r *desktopsReporter) stateSent(conn uint64) {
-	r.mu.Lock()
-	if r.conns == conn {
-		r.stated = conn
-	}
-	r.mu.Unlock()
 }
 
 // runCtx is the context the devices run in (Run's; a test's), background before there is one.
@@ -229,8 +202,9 @@ func (d *Devices) requestDesktops(force bool) uint64 {
 // reportDesktopsLoop is the desktops reporter: one devices.desktops at a time, in order, each with the computers as they
 // are then, a run of requests coalesced into one. It holds no lock while the hub takes it. A report says the TTL left
 // (the hub's own clock counts it down) and goes out when the computers, a since or a deadline changed, or a request
-// forced it. Before a new connection's first devices.state the requests only wait (stateSent): the state's report asks
-// again once it went out, and the computers as they are then go out.
+// forced it. On a new connection to the hub one may go out before the connection's full devices.state: the hub drops
+// the entry of a computer it does not yet have as this manager's, and the full report that follows that state (report)
+// brings it back.
 func (d *Devices) reportDesktopsLoop(ctx context.Context) {
 	r := &d.desktopsRep
 	for {
@@ -238,12 +212,6 @@ func (d *Devices) reportDesktopsLoop(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-r.due:
-		}
-		r.mu.Lock()
-		stated := r.stated == r.conns
-		r.mu.Unlock()
-		if !stated && !d.stopping.Load() { // stopping: nothing goes out (below), so the requests need not wait
-			continue
 		}
 		asked, force := r.asked.Load(), r.force.Swap(false)
 		if !d.stopping.Load() {
