@@ -17,13 +17,18 @@ import (
 // encoding/json's options, stays the reference: TestSessionWireMatchesReflect compares the two for each field, each
 // kind of value and each way a session is encoded, so a field added to Session without a line here fails there.
 
-// sessionWireLayout is the hash (typeLayout) of the Session fields appendSession is written for. While Session's
+// sessionWireLayout is the hash (sessionLayout) of the Session fields appendSession is written for. While Session's
 // fields differ from them (a field added, renamed, retyped or retagged by a change that did not update this file),
 // appendSession leaves every session to the reflect encoder: the session is sent whole, only slower, until its line
 // here and this hash are brought up to date. TestSessionWireMatchesReflect fails meanwhile and prints the new hash.
 const sessionWireLayout = 0x9c8c4b012694edbc
 
-var sessionWireCurrent = typeLayout(reflect.TypeFor[Session]()) == sessionWireLayout
+var sessionWireCurrent = sessionLayout() == sessionWireLayout
+
+// sessionLayout hashes the name, type and tag of each of Session's fields, in order.
+func sessionLayout() uint64 {
+	return typeLayout(reflect.TypeFor[Session]())
+}
 
 // The nested values sessions carry most, background tasks and subagents (with their latest tool), are written by hand
 // too, each type under its own layout hash: while one's fields differ from the ones written here, its values are left to

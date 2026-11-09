@@ -175,7 +175,7 @@ func checkWire(t *testing.T, what string, s Session) {
 // of value it can hold (empty, nil, escapes, unicode, bad UTF-8, times in other zones and out of range), for all of
 // them at once, and for a busy machine's list. A field added to Session without its line in appendSession fails here.
 func TestSessionWireMatchesReflect(t *testing.T) {
-	if got := typeLayout(reflect.TypeFor[Session]()); got != sessionWireLayout {
+	if got := sessionLayout(); got != sessionWireLayout {
 		t.Fatalf("Session's fields changed: give each new one its line in appendSession, then set sessionWireLayout to %#x", got)
 	}
 	checkWire(t, "an empty session", Session{})
