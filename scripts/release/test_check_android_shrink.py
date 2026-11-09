@@ -1,5 +1,6 @@
 import importlib.util
 from pathlib import Path
+import re
 import unittest
 
 SPEC = importlib.util.spec_from_file_location("check_android_shrink", Path(__file__).with_name("check_android_shrink.py"))
@@ -98,13 +99,18 @@ class ShrinkGuardTests(unittest.TestCase):
                          ["R8 reported missing classes (missing_rules.txt is not empty)"])
 
 
-    def test_shrinking_never_renames_and_no_module_pulls_the_extended_icons(self):
-        # Renamed classes would break in_app and the simple names in error reports; the extended icons were 21.9 MB of
-        # dex in debug builds for one unused button.
+    def test_release_is_shrunk_without_obfuscation_and_no_module_pulls_the_extended_icons(self):
+        # Shrinking takes the release APK from about 93 MB to 33 MB, and check_android_shrink.py passes an unshrunk APK
+        # (the rollback), so only this line notices a merge or an edit that turns it off: a rollback changes it too.
+        # Obfuscated classes would break in_app and the simple names in error reports; the extended icons were 21.9 MB
+        # of dex in debug builds for one unused button.
         android = Path(__file__).resolve().parents[2] / "android"
+        release = re.search(r"\brelease\s*\{([^{}]*)\}", (android / "app/build.gradle.kts").read_text())
+        self.assertIsNotNone(release, "no buildTypes release block in android/app/build.gradle.kts")
+        self.assertEqual(re.findall(r"\bisMinifyEnabled\s*=\s*(\w+)", release[1]), ["true"])
+        self.assertIn('"proguard-rules.pro"', release[1])
         rules = (android / "app/proguard-rules.pro").read_text().split()
         self.assertTrue({"-dontobfuscate", "-dontoptimize", "SourceFile,LineNumberTable"} <= set(rules))
-        self.assertIn('"proguard-rules.pro"', (android / "app/build.gradle.kts").read_text())
         builds = [android / "gradle/libs.versions.toml", *android.glob("*/build.gradle.kts"),
                   *android.glob("*/*/build.gradle.kts")]
         self.assertEqual([p.name for p in builds if "material-icons-extended" in p.read_text()], [])

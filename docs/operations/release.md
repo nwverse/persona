@@ -483,7 +483,8 @@ before the APK is copied for signing, the worker runs `scripts/release/check_and
 output in `app/build/outputs/mapping/release`; any class, constructor or method that Android or the app reaches only by name and
 that R8 removed fails the build, so nothing is signed or published. Before the first shrunk release, install it on a phone and
 open pairing, a chat with a formula, the Inbox, Settings, a notification action, the home-screen widget and the Quick Settings
-tile; a crash there is fixed with a keep rule in `android/app/proguard-rules.pro` (or rolled back with `isMinifyEnabled = false`).
+tile; a crash there is fixed with a keep rule in `android/app/proguard-rules.pro` (or rolled back with `isMinifyEnabled = false`
+and the test line that pins it, docs/android/android.md "Release shrinking").
 
 Versions are `version_base + first-parent commit count`; `version_base` defaults to 100000. Before enabling the new lane, choose a
 fixed nonnegative base so its first version exceeds the currently published APK. Keep that base stable thereafter. The worker rejects

@@ -250,7 +250,8 @@ def main(argv=None):
     parser.add_argument("--build-tools", help="Android build-tools directory holding aapt2")
     args = parser.parse_args(argv)
     if not (args.mapping / "usage.txt").exists():
-        # isMinifyEnabled = false (the rollback): nothing was removed, the checks below still run on the APK.
+        # isMinifyEnabled = false, a deliberate rollback (test_check_android_shrink.py pins true): nothing was removed,
+        # the checks below still run on the APK.
         print(f"check_android_shrink: no R8 output in {args.mapping}, checking the APK only")
     aapt2 = build_tools(args.build_tools) / "aapt2"
     xmltree = subprocess.run([str(aapt2), "dump", "xmltree", "--file", "AndroidManifest.xml", str(args.apk)],

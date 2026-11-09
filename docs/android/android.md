@@ -314,8 +314,10 @@ merges nothing. Resource shrinking stays off, and debug builds are not shrunk.
     app/build/outputs/mapping/release
   ```
 
-- **Rollback**: set `isMinifyEnabled = false` in `android/app/build.gradle.kts`. The rules file is then unused, and the
-  check reads only the APK.
+- **Rollback**: set `isMinifyEnabled = false` in `android/app/build.gradle.kts` and change the assertion that pins it in
+  `scripts/release/test_check_android_shrink.py` in the same commit. The test runs in the scripts CI shard and in the
+  release worker before it builds, so a merge or an edit that turns shrinking off by mistake stops there instead of
+  publishing a 93 MB APK. After a rollback the rules file is unused, and the check reads only the APK.
 - **Icons**: icons come from `PhIcons` ([android-design.md](android-design.md)); `material-icons-extended`, whose only
   use was a button nothing called, is no longer a dependency. The debug APK went from 123,355,666 to 91,537,359 bytes
   (-31.8 MB, 29 to 28 dex files); R8 had already dropped the library from the release APK.
