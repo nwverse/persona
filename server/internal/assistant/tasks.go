@@ -122,6 +122,9 @@ type tasksState struct {
 	receipted map[string]time.Time
 	// awaitingAnswer remembers a stopped status whose transcript still ends in a tool.
 	awaitingAnswer map[SessionRef]bool
+	// limitLooks: when a task agent's usage-limit wait is looked at again (taskTurnEndedAfter), one look per agent
+	// however many turns the wait's wakes end.
+	limitLooks map[SessionRef]time.Time
 	// retrying: the tasks whose agent is starting again after a failed start (one start at a time, #1396).
 	retrying map[string]bool
 	// outcomes: the completions whose outcome was recorded (todo_outcome.go, outcomeKey).
@@ -235,9 +238,9 @@ func (s *Service) appendFeedAt(ctx context.Context, conversation, kind, ref stri
 
 const feedPage = 500
 
-// feed is a conversation's items after since, oldest first (with the message cards sent after since: the client
-// has them, not that they went out), and the plans they name.
-func (s *Service) feed(ctx context.Context, conversation string, since time.Time) ([]FeedItem, map[string]*TaskPlan, error) {
+// feedItems is a conversation's items after since, oldest first (with the message cards sent after since: the client
+// has them, not that they went out), without the plans they name: for readers that look only at the items.
+func (s *Service) feedItems(ctx context.Context, conversation string, since time.Time) ([]FeedItem, error) {
 	var items []FeedItem
 	if st := s.store(); st == nil {
 		s.tasks.mu.Lock()
@@ -250,7 +253,7 @@ func (s *Service) feed(ctx context.Context, conversation string, since time.Time
 	} else {
 		rows, err := st.Feed(ctx, conversation, since, feedPage)
 		if err != nil {
-			return nil, nil, err
+			return nil, err
 		}
 		for _, r := range rows {
 			items = append(items, FeedItem{ID: r.ID, Conversation: r.Conversation, At: r.At, Kind: r.Kind, Ref: r.Ref, Body: r.Body})
@@ -258,15 +261,51 @@ func (s *Service) feed(ctx context.Context, conversation string, since time.Time
 	}
 	s.settleCards(ctx, items)
 	s.fileCards(ctx, items)
-	plans := map[string]*TaskPlan{}
+	return items, nil
+}
+
+// feed is feedItems and the plans they name.
+func (s *Service) feed(ctx context.Context, conversation string, since time.Time) ([]FeedItem, map[string]*TaskPlan, error) {
+	items, err := s.feedItems(ctx, conversation, since)
+	if err != nil {
+		return nil, nil, err
+	}
+	return items, s.feedPlans(ctx, items), nil
+}
+
+// feedPlans are the plans items' plan cards name, by id. A plan that is gone is left out, and so is every plan when
+// reading them fails: the cards still show. The database reads them all in one query, not one per card.
+func (s *Service) feedPlans(ctx context.Context, items []FeedItem) map[string]*TaskPlan {
+	var ids []string
+	seen := map[string]bool{}
 	for _, it := range items {
-		if it.Kind == feedPlan && plans[it.Ref] == nil {
-			if p, err := s.loadPlan(ctx, it.Ref); err == nil {
-				plans[it.Ref] = p
-			}
+		if it.Kind == feedPlan && !seen[it.Ref] {
+			seen[it.Ref] = true
+			ids = append(ids, it.Ref)
 		}
 	}
-	return items, plans, nil
+	plans := make(map[string]*TaskPlan, len(ids))
+	st := s.store()
+	if st == nil {
+		for _, id := range ids {
+			if p, err := s.loadPlan(ctx, id); err == nil {
+				plans[id] = p
+			}
+		}
+		return plans
+	}
+	if len(ids) == 0 {
+		return plans
+	}
+	rows, err := st.TaskPlansByID(ctx, ids)
+	if err != nil {
+		s.logf("feed: read %d plans: %v", len(ids), err)
+		return plans
+	}
+	for _, row := range rows {
+		plans[row.ID] = planFromRow(row)
+	}
+	return plans
 }
 
 // ---- the assistant's task_plan tool ----

@@ -748,6 +748,7 @@ CLI: `personad extension contributions <id>` (list), `personad extension contrib
 
 Only used on the hub machine: it reads the master token and the `listen` port from hub.json in the state directory (default `~/.persona`, see "Naming and compatibility"; the port defaults to 18660 if unset, overridden by the env var `PERSONA_LISTEN`, the old name `PERSONA_LISTEN` is also accepted), and calls "The hub's API" via `127.0.0.1`.
 If there is no hub.json on this machine it errors out; it does not connect anywhere else. `personad ext …` and `personad plugin …` (the name before #1844) are the same command. `help` prints usage to stdout; with no subcommand, usage is printed to stderr as an error with exit code 1; `contributions` / `contribution` are only listed together when a subcommand is mistyped.
+An option the command does not take, a missing argument or an extra one is refused with exit code 1 before anything is sent to the hub (a mistyped `--keep-data` does not delete the data).
 `new`, `test` and `pack` below do not need the hub; everything else needs the hub running.
 
 ```text
@@ -763,7 +764,7 @@ personad extension auth <id> [login|logout]          The extension's sign-in: st
 personad extension contributions <id>                Each contribution and its switch
 personad extension contribution <id> <point>/<cid> on|off   Turn a single contribution on or off (for a connector, this is the connector's switch)
 personad extension config <id> key=value …           Values that parse as JSON are taken as JSON, otherwise as text; key= deletes the entry
-personad extension secret <id> <name> [--delete]     The value is read from stdin (not echoed in a terminal; first line from a pipe), never as a command-line argument
+personad extension secret <id> <name> [--delete]     The value is read from stdin (not echoed in a terminal; first line from a pipe), never as a command-line argument; an empty one is refused (--delete removes it)
 personad extension uninstall <id> [--keep-data] [--cascade] [--members]   --members: also uninstall a bundle's members
 personad extension market list                       Registered marketplaces: id, name, extension count, signing, address (the official one is marked "官方" (official))
 personad extension market add <spec> [--token | --token-from=<marketplace id>]
@@ -1027,6 +1028,16 @@ Open retries keep the original request ID and complete request payload. While it
 - Global `fetch` uses a bounded broker over the **existing registered egress**. Deno's proxy-aware client still requires destination permissions, so proxy environment variables or a custom client alone are insufficient. Every target and redirect uses the registration's granted network rules; guest identity cannot select another registration. Registration replacement, settings changes and revocation cancel pending HTTP and tunnels. Input, output, bodies and pending queues are bounded. Source-only listeners also cap idle/pre-header sockets and header bytes; revocation closes sockets even before they submit a request.
 - Config, secrets, scoped tokens, grants, idle reclamation, timeout strikes and selective shutdown remain manager/`host.Proc` responsibilities. Full hub access, command-line tools, agent-runtime sockets, remote process sockets and source-runtime node programs are not supported by this stage. Existing executable node programs remain unchanged; no source program silently falls back to an unsandboxed node.
 - CLI source `test` verifies the package but refuses to label a bare engine launch as runtime acceptance. Actual-engine/namespace tests are separate from full resource acceptance; tests requiring unavailable enforcement explicitly report unavailable rather than passing via a developer bypass.
+
+### Finite source-page snapshot loading (#1184)
+
+Use `useLoadEffect(effect, dependencies)` from `@persona/extension/ui` for finite initial or navigation loads. It accepts the same abort-aware effect/cleanup forms as `useEffect`; ordinary subscriptions and long-lived effects stay on `useEffect` and are not awaited for a snapshot.
+
+The official `componentPage` factory advertises `snapshotReadiness: 1`. For an owner-bound snapshot-only HTTP session, the manager supplies `transport: "snapshot"` and waits within the existing deadline for those finite loads and their synchronous state updates. It selects this from the session's legacy transport, not from `ui_version`. Native stream sessions and old factories without the readiness contract retain immediate loading snapshots and asynchronous deltas. A caller must not turn all effects into finite loads or increase budgets to hide a nonterminating effect.
+
+Canonical `initialize` replies advertise `ui_page_cancellation: 1` for component pages. The host negotiates cancellation only for page mount/event/resume requests; SDK `rpc.cancel` targets that request's scoped `AbortSignal`, not service namespaces or a later invocation with another identity. Request cancellation, visibility and allocation-generation fences are rechecked after snapshot flushing. A canceled or suspended page cannot return a late success, and ambiguous callback receipts cannot authorize a replayed write. This does not promise preemption of arbitrary JavaScript or global serialization across independent allocations.
+
+These are SDK/manager lifecycle contracts, not new pages, permissions, source release defaults or production isolation acceptance. An installed package must include the matching official SDK and be rebuilt; native JSON remains the only UI content sent to clients.
 
 ### Opt-in exact JSON integer request params (#1201)
 
