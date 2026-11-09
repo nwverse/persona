@@ -19,6 +19,8 @@ import (
 	"syscall"
 	"testing"
 	"time"
+
+	"github.com/nwverse/persona/server/internal/managerconf"
 )
 
 // The test binary stands in for the hub and the manager (`hub run` and persona-hub's `run`, `assistant`) when
@@ -422,11 +424,21 @@ func TestStubbornProgramKilled(t *testing.T) {
 	}
 }
 
+// The hub's address on this machine is managerconf.LocalHubURL of its listen address (the hub and the manager use it
+// too); the supervisor takes the default one for a listen address without a port as well.
 func TestLoopback(t *testing.T) {
 	for listen, want := range map[string]string{"": "http://127.0.0.1:18660", ":18765": "http://127.0.0.1:18765",
 		"0.0.0.0:19000": "http://127.0.0.1:19000", "[::]:19001": "http://127.0.0.1:19001", "[fd00::20]:19002": "http://[fd00::20]:19002"} {
+		if got := managerconf.LocalHubURL(listen); got != want {
+			t.Errorf("LocalHubURL %q: %s, want %s", listen, got, want)
+		}
 		if got := loopback(listen); got != want {
 			t.Errorf("%q: %s, want %s", listen, got, want)
+		}
+	}
+	for _, listen := range []string{":", "10.0.0.1:", "[::]:"} {
+		if got := loopback(listen); got != "http://127.0.0.1:18660" {
+			t.Errorf("%q: %s, want the default address", listen, got)
 		}
 	}
 }

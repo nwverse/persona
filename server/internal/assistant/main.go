@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"io"
 	"log"
-	"net"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -106,7 +105,7 @@ func MainWith(ctx context.Context, build update.Build, stdin io.Reader, h MainHo
 		}
 		hub = strings.TrimSpace(identity.Getenv("PERSONA_ASSISTANT_HUB"))
 		if hub == "" {
-			hub = localHubURL(cfg.Listen)
+			hub = managerconf.LocalHubURL(cfg.Listen)
 		}
 	}
 	home := identity.HomeDir()
@@ -486,18 +485,6 @@ func readHubConfig() (hubConfig, error) {
 		cfg.Listen = v
 	}
 	return cfg, nil
-}
-
-// localHubURL is the hub on this machine, from its listen address.
-func localHubURL(listen string) string {
-	host, port, err := net.SplitHostPort(listen)
-	if err != nil {
-		return "http://127.0.0.1:18660"
-	}
-	if host == "" || host == "0.0.0.0" || host == "::" {
-		host = "127.0.0.1"
-	}
-	return "http://" + net.JoinHostPort(host, port)
 }
 
 // errorTee is the manager process's log writer: lines go to stderr, and its error lines become the manager's error

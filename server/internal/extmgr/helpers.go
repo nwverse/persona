@@ -49,9 +49,7 @@ func writeCode(w http.ResponseWriter, status int, code, msg string, extra map[st
 	for k, v := range extra {
 		body[k] = v
 	}
-	w.Header().Set("Content-Type", "application/json; charset=utf-8")
-	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(body)
+	apierr.WriteBody(w, status, body)
 }
 
 // readAdminJSON reads an admin page's JSON body into v (an empty body leaves v as it is).
