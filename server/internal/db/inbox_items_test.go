@@ -190,7 +190,8 @@ func TestDoneInboxItemsPages(t *testing.T) {
 }
 
 // The history's pages read inbox_items_open, (done_at, id) since 0471, from the cursor down in the pages' order, with no
-// sort; deleting a source's rows reads inbox_items_source, not every document.
+// sort; deleting a source's rows reads inbox_items_source, not every document. No index reads data or updated_at,
+// which every upsert changes, so an upsert of an open item can be HOT.
 func TestDoneInboxItemsIndexed(t *testing.T) {
 	d, ctx := open(t), context.Background()
 	tx, err := d.pool.Begin(ctx)
@@ -223,6 +224,18 @@ func TestDoneInboxItemsIndexed(t *testing.T) {
 		if !strings.Contains(plan, c.index) || strings.Contains(plan, "Sort") {
 			t.Fatalf("not read through %s in order:\n%s", c.index, plan)
 		}
+	}
+	rows, err := tx.Query(ctx, `SELECT DISTINCT coalesce(a.attname, 'an expression') FROM pg_index i
+		CROSS JOIN unnest(i.indkey::int2[]) k LEFT JOIN pg_attribute a ON a.attrelid = i.indrelid AND a.attnum = k
+		WHERE i.indrelid = 'inbox_items'::regclass
+		UNION SELECT 'a predicate' FROM pg_index WHERE indrelid = 'inbox_items'::regclass AND indpred IS NOT NULL
+		ORDER BY 1`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cols, err := pgx.CollectRows(rows, pgx.RowTo[string])
+	if got := strings.Join(cols, ","); err != nil || got != "done_at,id,source" {
+		t.Fatalf("inbox_items indexes read %s (%v), want only done_at, id and source", got, err)
 	}
 }
 
