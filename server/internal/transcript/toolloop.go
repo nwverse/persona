@@ -234,27 +234,66 @@ func pollingTool(name string, input json.RawMessage) bool {
 // or waiting. Shell expansion and redirection make that impossible to tell
 // without evaluating the command, so leave those calls eligible for triage.
 func pollingCommand(command string) bool {
-	if strings.ContainsAny(command, "'\"`$\\\\<>(){}#") {
+	parts, ok := pollingCommandParts(command)
+	if !ok {
 		return false
 	}
 	observed := false
-	for _, part := range strings.FieldsFunc(command, func(r rune) bool {
-		return r == ';' || r == '&' || r == '|' || r == '\n'
-	}) {
+	for _, part := range parts {
 		part = strings.TrimSpace(part)
 		if part == "while true" || part == "done" {
 			continue
 		}
-		if loopWaitCommand.MatchString(part) || loopLogCommand.MatchString(part) || loopCICommand.MatchString(part) ||
-			loopTailCommand.MatchString(part) && (strings.Contains(part, ".log") || strings.Contains(part, "/log/") || strings.Contains(part, "/logs/") || strings.Contains(part, "syslog")) ||
-			loopCIView.MatchString(part) && strings.Contains(part, "statuscheckrollup") ||
-			loopCIApi.MatchString(part) && !loopCIWrite.MatchString(part) && (strings.Contains(part, "check-runs") || strings.Contains(part, "check-suites") || strings.Contains(part, "/actions/runs")) {
+		starts := func(re *lazyre.Regexp) bool {
+			m := re.FindStringIndex(part)
+			return m != nil && m[0] == 0
+		}
+		if starts(loopWaitCommand) || starts(loopLogCommand) || starts(loopCICommand) ||
+			starts(loopTailCommand) && (strings.Contains(part, ".log") || strings.Contains(part, "/log/") || strings.Contains(part, "/logs/") || strings.Contains(part, "syslog")) ||
+			starts(loopCIView) && strings.Contains(part, "statuscheckrollup") ||
+			starts(loopCIApi) && !loopCIWrite.MatchString(part) && (strings.Contains(part, "check-runs") || strings.Contains(part, "check-suites") || strings.Contains(part, "/actions/runs")) {
 			observed = true
 			continue
 		}
 		return false
 	}
 	return observed
+}
+
+// Split only shell syntax we can prove has no expansion or redirection. Quoted
+// literal arguments are safe; unknown constructs stay eligible for triage.
+func pollingCommandParts(command string) ([]string, bool) {
+	var parts []string
+	var part strings.Builder
+	var quote rune
+	for _, r := range command {
+		if quote != 0 {
+			if r == quote {
+				quote = 0
+				continue
+			}
+			if r == '\n' || quote == '"' && strings.ContainsRune("$`\\\\", r) {
+				return nil, false
+			}
+			part.WriteRune(r)
+			continue
+		}
+		switch r {
+		case '\'', '"':
+			quote = r
+		case ';', '&', '|', '\n':
+			parts = append(parts, part.String())
+			part.Reset()
+		case '$', '`', '\\', '<', '>', '(', ')', '{', '}', '#':
+			return nil, false
+		default:
+			part.WriteRune(r)
+		}
+	}
+	if quote != 0 {
+		return nil, false
+	}
+	return append(parts, part.String()), true
 }
 
 func (d *LoopDetector) call(id, name string, input json.RawMessage, at time.Time) {
