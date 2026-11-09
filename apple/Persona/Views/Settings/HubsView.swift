@@ -54,7 +54,7 @@ struct HubsView: View {
         .confirmationDialog(removingGroup.map { String(localized: "Disconnect “\(model.groupName($0))”?") } ?? "", isPresented: Binding(
             get: { removingGroup != nil }, set: { if !$0 { removingGroup = nil } }
         ), titleVisibility: .visible, presenting: removingGroup) { g in
-            Button("Disconnect This Group", role: .destructive) { model.removeGroup(g); removingGroup = nil }
+            Button("Disconnect This Group", role: .destructive) { removingGroup = nil; Task { await model.disconnectGroup(g) } }
         } message: { g in
             Text(model.groupIDs.count > 1 ? String(localized: "This group's machines, agents, and cached chats are removed from this device; other groups aren't affected. To use it again, pair again.")
                                          : String(localized: "After disconnecting, you'll need to scan the code to pair again."))
@@ -62,7 +62,7 @@ struct HubsView: View {
         .confirmationDialog(removingHub.map { String(localized: "Disconnect “\($0.displayName)”?") } ?? "", isPresented: Binding(
             get: { removingHub != nil }, set: { if !$0 { removingHub = nil } }
         ), titleVisibility: .visible, presenting: removingHub) { h in
-            Button("Disconnect This Hub", role: .destructive) { model.removeHub(h.id); removingHub = nil }
+            Button("Disconnect This Hub", role: .destructive) { removingHub = nil; Task { await model.disconnectHub(h.id) } }
         } message: { _ in
             Text("Only this hub is disconnected; the group stays connected through its other hubs.")
         }

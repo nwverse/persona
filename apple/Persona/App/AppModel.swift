@@ -26,6 +26,8 @@ final class AppModel {
     /// Pairing tokens this launch traded for the device's own, to that token (DeviceCredentialTrade): a socket or a
     /// pairing link still on one goes on with the device's.
     @ObservationIgnored var tradedTokens: [String: String] = [:]
+    /// A Settings disconnect is signing this device out of its hubs (HubSignOut.swift).
+    @ObservationIgnored var signOutRunning = false
     /// One per group, in the registry's order; the demo's alone in Demo Mode.
     private(set) var links: [HubLink] = []
     /// The group hub-level pages show (`selectHub`); the first group when it is not one of them.
@@ -664,6 +666,8 @@ final class AppModel {
         for link in links { link.live.disconnect() }
         closeAllTunnels() // no hub left to route through a tunnel (also drops HubTransport's routes)
         LiveActivityController.shared.endAll() // its buttons would talk to a hub we no longer know
+        // No paired hub may still open a push (the notification extension tries every key left).
+        for g in Set(registry.groups).union(links.map(\.group)) { PushCrypto.removeKey(group: g) }
         links = []
         registry = HubRegistry()
         saveRegistry(registry)

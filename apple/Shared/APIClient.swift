@@ -790,7 +790,17 @@ nonisolated struct APIClient: Sendable {
     func deviceTokens() async throws -> DeviceTokens {
         try JSON.decoder.decode(DeviceTokens.self, from: try await request("GET", "/api/v1/auth/tokens"))
     }
-    func revokeToken(_ id: String) async throws { _ = try await request("DELETE", "/api/v1/auth/tokens/\(id)") }
+    func revokeToken(_ id: String, timeout: TimeInterval = 30) async throws {
+        _ = try await request("DELETE", "/api/v1/auth/tokens/\(id)", timeout: timeout)
+    }
+    /// Revokes the credential this client holds: the hub then forgets the pushes and Live Activities it registered
+    /// (#1824). false: the hub's master token, which has no id and cannot be revoked.
+    func revokeOwnCredential(timeout: TimeInterval = 30) async throws -> Bool {
+        let tokens = try JSON.decoder.decode(DeviceTokens.self, from: try await request("GET", "/api/v1/auth/tokens", timeout: timeout))
+        guard let id = tokens.current, !id.isEmpty else { return false }
+        try await revokeToken(id, timeout: timeout)
+        return true
+    }
 
     /// A QR code's modules as the hub draws them: rows of "0" / "1".
     struct QRRows: Decodable, Hashable, Sendable { var size: Int; var rows: [String] }

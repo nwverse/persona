@@ -282,7 +282,7 @@ struct SettingsView: View {
             .onAppear(perform: openDebugPage)
             #endif
             .confirmationDialog("After disconnecting, you'll need to scan the code to pair again.", isPresented: $confirmUnpair, titleVisibility: .visible) {
-                Button("Disconnect", role: .destructive) { model.unpair() }
+                Button("Disconnect", role: .destructive) { Task { await model.disconnectAll() } }
             }
             .sheet(isPresented: $showPair) { PairView() }
             #if os(iOS) || os(visionOS)
