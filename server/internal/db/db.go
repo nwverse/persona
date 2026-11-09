@@ -476,6 +476,10 @@ func (d *DB) truncateCascade(ctx context.Context, tables []string) ([]string, er
 // truncateNonEmpty empties tables (truncateCascade's) with one TRUNCATE ... CASCADE of those that have a row. TRUNCATE
 // gives every table it names new files, a row in it or not: clearing two dozen tables, mostly empty, cost a test
 // more than most of what it then did. The tables left empty are the same.
+//
+// The probe and the TRUNCATE are two statements: a row not yet committed when the probe looks, or written to a table it
+// found empty after it, stays, where one TRUNCATE of every table would wait for the writer's lock and clear it. So it is
+// for the start of a test, before anything it starts writes there.
 func (d *DB) truncateNonEmpty(ctx context.Context, tables []string) error {
 	if len(tables) == 0 {
 		return nil
