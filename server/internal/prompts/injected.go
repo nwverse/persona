@@ -50,6 +50,9 @@ var noticeLines = map[string]string{"done": "做完了", "needs": "在等你", "
 // ParseInjected says what text is when it is one of the messages Persona writes for the model; nil for anything
 // else (what the user wrote stays theirs: only the templates' exact shapes are taken).
 func ParseInjected(text string) *proto.Injected {
+	if UserAuthoredContext(text) {
+		return nil
+	}
 	for {
 		loc := leadContextRe.FindStringIndex(text)
 		if loc == nil {
@@ -98,7 +101,14 @@ func ParseInjected(text string) *proto.Injected {
 		if m == nil || !strings.Contains(rest, superviseMarker) {
 			return nil
 		}
-		return &proto.Injected{Kind: proto.InjectedSystem, State: "supervise", Line: "督办：" + m[1] + " 个派出去的任务要处理"}
+		level := "triage" // Messages from before levels were added are routine triage too.
+		for _, candidate := range []string{"info", "triage", "user"} {
+			if strings.Contains(rest, `<persona-supervision level="`+candidate+`" />`) {
+				level = candidate
+				break
+			}
+		}
+		return &proto.Injected{Kind: proto.InjectedSystem, State: "supervise", Level: level, Line: "督办：" + m[1] + " 个派出去的任务要处理"}
 	case strings.HasPrefix(head, "📥 收件箱事件「"):
 		// Only hubs that write it mark it: it is not in the shared fixtures the apps' own recognition runs.
 		m := inboxHeadRe.FindStringSubmatch(head)

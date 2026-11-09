@@ -482,7 +482,7 @@ export interface Item {
   queued?: boolean;
   wake?: boolean;
   task?: TaskNote;
-  fold?: { items: number; tools: number; thoughts: number; until?: string; through_seq: number; through_id?: string; images?: FoldImage[]; tasks?: FoldTaskSnapshot[]; latest_thinking?: Item };
+  fold?: { items: number; tools: number; thoughts: number; until?: string; through_seq: number; through_id?: string; images?: FoldImage[]; tasks?: FoldTaskSnapshot[]; latest_thinking?: Item; supervision_user?: boolean };
   image?: { mime: string; data?: string; lazy?: boolean; size?: number; width?: number; height?: number };
   /** Sent by another Claude session (cross-session messaging), not typed by you: its name. */
   from?: string;
@@ -493,13 +493,26 @@ export interface Item {
   compact?: CompactInfo;
   /** A message Persona typed in for the model (a task's notice, a scheduled run…), not by you (lib/injected.ts). */
   injected?: Injected;
+  /** Display provenance, independent of the model-facing role. Unknown kinds remain non-user sources. */
+  source?: MessageSource;
+  /** Client-only promotion evidence transferred from a removed Fold.supervision_user during an overlapping merge. */
+  supervisionUser?: boolean;
+}
+
+/** Message provenance supplied by the assistant, not a group-chat member or a model role. */
+export interface MessageSource {
+  kind: "conversation" | "patrol" | "followup" | "supervision" | (string & {});
+  conversation_id?: string;
+  title?: string;
 }
 
 /** What a message Persona wrote for the model is (docs/protocol/protocol.md "Messages Persona injects"). */
 export interface Injected {
   kind: "task_notice" | "followup" | "system" | (string & {});
-  /** task_notice: done | needs | interrupted | failed; followup: once | daily | interval | wake; system: lost_tasks */
+  /** task_notice: done | needs | interrupted | failed; followup: once | daily | interval | wake; system: lost_tasks | supervise */
   state?: string;
+  /** Supervision without a level is legacy triage; other injections remain informational. */
+  level?: "info" | "triage" | "user";
   title?: string;
   machine?: string;
   todo_id?: string;

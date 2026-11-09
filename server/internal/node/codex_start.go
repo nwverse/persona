@@ -126,7 +126,9 @@ func (n *Node) startCodex(ctx context.Context, launch host.Launcher, cwd, launch
 	}
 	defer os.RemoveAll(dir) // codex-start removes the file once read; the directory goes when the start ends
 	file := filepath.Join(dir, "start.json")
-	b, _ := json.Marshal(codexStartFile{Argv: argv, Prompt: prompt, Agent: herdrAgentFor(launch, "codex")})
+	owner, _ := launch.(interface{ Kind() string })
+	isolateHooks := owner != nil && owner.Kind() == host.Orca
+	b, _ := json.Marshal(codexStartFile{Argv: argv, Prompt: prompt, Agent: herdrAgentFor(launch, "codex"), IsolateHooks: isolateHooks})
 	if err := os.WriteFile(file, b, 0o600); err != nil {
 		return nil, err
 	}
@@ -146,12 +148,15 @@ func (n *Node) startCodex(ctx context.Context, launch host.Launcher, cwd, launch
 		delete(n.codexStarting, pane)
 		n.mu.Unlock()
 	}()
-	cmd := n.agentCommand(shellQuote(n.bin)+" codex-start "+shellQuote(file), shellQuote, paneShells(ctx)...) // agentenv.go
+	shells := paneShells(ctx)
+	cmd := n.agentCommand(shellQuote(n.bin)+" codex-start "+shellQuote(file), shellQuote, shells...) // agentenv.go
 	began := time.Now()
-	time.Sleep(300 * time.Millisecond) // the fresh shell loads ~/.zshrc; typed input is buffered either way
-	if err := launch.Run(ctx, created.Pane, cmd); err != nil {
-		return nil, fmt.Errorf("run launcher: %w", err)
+	time.Sleep(300 * time.Millisecond)                                           // the fresh shell loads ~/.zshrc; typed input is buffered either way
+	done, err := n.runAgentCommand(ctx, launch, created, ws, "", cmd, shells...) // typedstart.go
+	if err != nil {
+		return nil, err
 	}
+	defer done()
 	id, err := n.waitCodexThread(ctx, pane, cwd, prompt, began)
 	if err != nil {
 		screen, _ := n.readPane(ctx, pane, "recent-unwrapped", 30)
@@ -293,6 +298,8 @@ type codexStartFile struct {
 	// Agent is the HERDR_AGENT the words run with (hostherdr.go): "codex" for a Codex started in a herdr pane; "" leaves
 	// the variable as it is (tab-start, other hosts).
 	Agent string `json:"agent,omitempty"`
+	// Orca hooks belong to this terminal. A shared Codex daemon can retain another terminal's hook environment.
+	IsolateHooks bool `json:"isolate_hooks,omitempty"`
 }
 
 // CodexStart is `personad codex-start <file>`: it reads a codexStartFile (and removes it), then runs its words with the
@@ -333,6 +340,17 @@ func CodexStart(args []string) error {
 		return fmt.Errorf("%s %v", codexStartError, err)
 	}
 	argv := append([]string(nil), words...)
+	if f.IsolateHooks && !codexOnRemote(argv) && codexOwnProcess(argv) == "" {
+		// Probe the executable in the new terminal, not the node's PATH. Older CLIs have no shared daemon or flag.
+		ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+		probe := exec.CommandContext(ctx, path, "--help")
+		probe.Env = env
+		help, err := probe.Output()
+		cancel()
+		if err == nil && strings.Contains(string(help), "--no-daemon") {
+			argv = append([]string{argv[0], "--no-daemon"}, argv[1:]...)
+		}
+	}
 	if f.Prompt != "" { // a resume without a message (`personad tab-start`, pi.go) runs the words alone
 		argv = append(argv, "--", f.Prompt)
 	}

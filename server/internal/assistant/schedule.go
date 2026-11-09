@@ -208,6 +208,9 @@ type ScheduleRun struct {
 	SessionID string    `json:"session_id,omitempty"`
 	// Retried: this run is the automatic retry after a failure (so a retry that fails again does not retry forever).
 	Retried bool `json:"retried,omitempty"`
+	// NotReady: skipped because a required computer or model was not ready, including temporary offline states.
+	// It stays in the history but neither counts toward nor ends a failure streak (schedule_streak.go).
+	NotReady bool `json:"not_ready,omitempty"`
 	// StreakTold: this run made its task's streak of runs that did not go through long enough to tell the user, who
 	// was told then (schedule_streak.go): the rest of that streak is not told again.
 	StreakTold bool `json:"streak_told,omitempty"`
@@ -252,6 +255,30 @@ type schedule struct {
 	waitTold map[string]string
 	// limitWait: tests' wait before retrying a run a usage limit stopped (nil: until the reset, limitRetryWait).
 	limitWait func(reset, now time.Time) time.Duration
+}
+
+// missedRuns returns scheduled failures that have not been followed by a successful run.
+// The caller must hold sc.mu. Runs are appended when they end, so compare start times
+// across the whole history, using append order only to break equal-time ties.
+func (sc *schedule) missedRuns(since time.Time) []ScheduleRun {
+	var missed []ScheduleRun
+	for i, r := range sc.runs {
+		if r.At.Before(since) || (r.Status != runFailed && r.Status != runSkipped) || r.Manual {
+			continue
+		}
+		recovered := false
+		for j, o := range sc.runs {
+			if o.RefID == r.RefID && o.Status == runOK &&
+				(o.At.After(r.At) || (o.At.Equal(r.At) && j > i)) {
+				recovered = true
+				break
+			}
+		}
+		if !recovered {
+			missed = append(missed, r)
+		}
+	}
+	return missed
 }
 
 // defaultRoutines are the tasks a new hub starts with, titled in l (the user edits them as their own afterwards).
@@ -1353,6 +1380,14 @@ var errTaskBusy = i18n.Err("assistant-schedule.busy_skipped")
 // A repeating task whose own conversation is still on its last run (working, or waiting on the user) is skipped,
 // not queued: two runs stacked in one conversation answer twice in a row, and the second one only sees the first
 // half done. The skip is in the history like a missed one. A one-off still goes in (it would be lost otherwise).
+func taskMessageSource(t Task) *proto.MessageSource {
+	kind := proto.SourcePatrol
+	if t.Repeat == repeatOnce {
+		kind = proto.SourceFollowup
+	}
+	return &proto.MessageSource{Kind: kind, ConversationID: t.SessionID, Title: t.label()}
+}
+
 func (s *Service) runTask(t Task, due, now time.Time, manual, retried bool) (proto.Session, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
@@ -1386,7 +1421,7 @@ func (s *Service) runTask(t Task, due, now time.Time, manual, retried bool) (pro
 			// A follow-up the assistant scheduled for itself is a turn of that conversation: it keeps the
 			// conversation's launcher like a message from the phone does. On the task's category launcher (Agents
 			// then) it moved the main conversation onto another one (plain claude, not logged in there) for good (#1518).
-			params := map[string]any{"session_id": t.SessionID, "text": taskPrompt(t, due, now, loc, manual, kb, false), "permission_mode": t.PermissionMode}
+			params := map[string]any{"session_id": t.SessionID, "text": taskPrompt(t, due, now, loc, manual, kb, false), "message_source": taskMessageSource(t), "permission_mode": t.PermissionMode}
 			err := s.sendModel(ctx, t.MachineID, t.SessionID, params)
 			if err == nil {
 				err = s.call(ctx, m.ID, DeviceAssistantSend, params, nil)
@@ -1427,7 +1462,7 @@ func (s *Service) runTask(t Task, due, now time.Time, manual, retried bool) (pro
 			}
 			return proto.Session{}, err
 		default:
-			params := map[string]any{"session_id": t.RunSessionID, "text": taskPrompt(t, due, now, loc, manual, kb, true), "permission_mode": t.PermissionMode, "resume_only": true}
+			params := map[string]any{"session_id": t.RunSessionID, "text": taskPrompt(t, due, now, loc, manual, kb, true), "message_source": taskMessageSource(t), "permission_mode": t.PermissionMode, "resume_only": true}
 			err := s.applyModel(ctx, "task."+t.ID, params)
 			if err == nil {
 				err = s.call(ctx, m.ID, DeviceAssistantSend, params, nil)
@@ -1441,7 +1476,7 @@ func (s *Service) runTask(t Task, due, now time.Time, manual, retried bool) (pro
 			s.logf("task %s into its conversation %s: %v; starting a new one", t.ID, short(t.RunSessionID), err)
 		}
 	}
-	sess, err := s.startConversation(ctx, startParams{Text: taskPrompt(t, due, now, loc, manual, kb, false), PermissionMode: t.PermissionMode,
+	sess, err := s.startConversation(ctx, startParams{Text: taskPrompt(t, due, now, loc, manual, kb, false), Source: taskMessageSource(t), PermissionMode: t.PermissionMode,
 		Purpose: "task." + t.ID, Space: t.Space, Origin: OriginTask, OriginRef: t.ID})
 	if err != nil {
 		s.logf("task %s: %v", t.ID, err)
@@ -1566,6 +1601,7 @@ func (s *Service) waitKey(machine, session string, c proto.Session) string {
 
 func (s *Service) skipRun(run ScheduleRun, why error) error {
 	run.Status, run.Error = runSkipped, i18n.Localize(why, s.lang(context.Background())) // the history keeps it in the user's language
+	run.NotReady = errors.Is(why, errNotReady)
 	s.recordRun(run)
 	return why
 }

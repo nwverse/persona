@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/server/internal/i18n"
+	"github.com/nwverse/persona/server/internal/prompts"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/secretkey"
 )
@@ -108,6 +109,8 @@ type Service struct {
 	tposts     threadPoster      // feishu_thread_posts.go: what a todo tells its chat thread
 	tevents    todoEvents        // todo_events.go: what the extensions are told of the todos
 	standing   standingBoard     // feishu_board.go: the standing "waiting for you" card
+	workbench  workbenchState    // feishu_workbench_pin.go: the pinned workbench
+	companions companionState    // feishu_companions.go: the notices for a companion bot
 	kb         kbState           // kb.go
 	inbox      inboxBook         // inbox.go
 	board      boardBook         // workspace_board.go: the workspace board
@@ -165,6 +168,7 @@ func New(o Options) *Service {
 	s.agentRoutes()
 	s.workspaceBoardRoutes()
 	s.channelRoutes()
+	s.companionRoutes()
 	s.kbInit(o.KB)
 	s.kbRoutes()
 	s.inboxRoutes()
@@ -195,6 +199,13 @@ func fullRole(r *http.Request) bool {
 	return role == "" || role == roleFull
 }
 
+// todoWriter says whether r may change todos: a full device, or an extension token. The hub relays an extension's
+// request only to the routes its granted scopes open (extwire.RouteScopes: todos.write), so reaching a todo write
+// here already means the extension holds todos.write.
+func todoWriter(r *http.Request) bool {
+	return fullRole(r) || r.Header.Get(RoleHeader) == roleExtension
+}
+
 // owner is how the assistant calls the user: manager.json's assistant.owner, else the Chinese word for "user".
 func (s *Service) owner(ctx context.Context) string {
 	if o := strings.TrimSpace(s.hello(ctx).Owner); o != "" {
@@ -220,7 +231,19 @@ func (s *Service) lang(ctx context.Context) i18n.Lang {
 
 // call is a DeviceCall whose answer is read into out (nil: not read).
 func (s *Service) call(ctx context.Context, device, method string, params, out any) error {
-	if p, ok := params.(map[string]any); ok && method == DeviceAssistantSend {
+	if p, ok := params.(map[string]any); ok && (method == DeviceAssistantSend || method == DeviceSessionSend) {
+		if text, ok := p["text"].(string); ok {
+			source, _ := p["message_source"].(*proto.MessageSource)
+			if source == nil {
+				source = prompts.ItemSource(proto.Item{Role: "user", Kind: proto.KindText, Text: text})
+			}
+			if source != nil {
+				p["message_source"] = source
+				p["text"] = prompts.MessageSourceText(text, source)
+			}
+		}
+	}
+	if p, ok := params.(map[string]any); ok && method == DeviceAssistantSend && p["supervision"] != true {
 		if id, _ := p["session_id"].(string); id != "" && s.supervising(id) {
 			s.releasePushes(ctx, id) // something else speaks there: its turns are pushed again (a supervision message holds them anew)
 		}
@@ -320,12 +343,13 @@ func (s *Service) device(ctx context.Context, id string) (Device, bool) {
 
 // startParams are what a new conversation starts with.
 type startParams struct {
-	Text           string `json:"text"`
-	PermissionMode string `json:"permission_mode,omitempty"`
-	Purpose        string `json:"purpose,omitempty"` // the model configuration's purpose; "" is the assistant's
-	Space          string `json:"space,omitempty"`   // "health" starts it in the health space (docs/assistant/health.md)
-	Origin         string `json:"origin,omitempty"`  // where it comes from (origins.go); "" is the user's
-	OriginRef      string `json:"origin_ref,omitempty"`
+	Text           string               `json:"text"`
+	PermissionMode string               `json:"permission_mode,omitempty"`
+	Purpose        string               `json:"purpose,omitempty"` // the model configuration's purpose; "" is the assistant's
+	Space          string               `json:"space,omitempty"`   // "health" starts it in the health space (docs/assistant/health.md)
+	Origin         string               `json:"origin,omitempty"`  // where it comes from (origins.go); "" is the user's
+	OriginRef      string               `json:"origin_ref,omitempty"`
+	Source         *proto.MessageSource `json:"source,omitempty"`
 }
 
 // kbReady: there is a knowledge base (kb.go; on, opened or about to).

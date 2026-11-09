@@ -167,7 +167,7 @@ func TestArchiveConnectorFilesUnderItsSources(t *testing.T) {
 	if _, err := archiveConnector(context.Background(), e, "feed", sourcedArchive{}, "posts"); err != nil {
 		t.Fatal(err)
 	}
-	if c, ok := st.Chat(kb.ChatID("posts", "p9")); !ok || c.Source != "posts" || c.Kind != "moment" {
+	if c, ok := st.Chat(kb.ChatID("posts", "p9")); !ok || c.Source != "posts" || c.Connector != "feed" || c.Kind != "moment" {
 		t.Fatalf("posts-p9 %+v", c)
 	}
 	if _, ok := st.Chat(kb.ChatID("mail", "x")); ok {
@@ -201,6 +201,91 @@ func TestKBConnectorsWhenDue(t *testing.T) {
 	p := f.appParams(AppConnectors, assistantwire.ConnectorsChanges)
 	if len(p) != 2 || p[0]["id"] != "example" || p[0]["cursor"] != "" || p[1]["cursor"] != "1" || p[1]["limit"] != 20.0 {
 		t.Fatalf("not asked again once due, from where it was: %v", p)
+	}
+}
+
+// A connector that says its chats changed (connector.changed, relayed as kb.kick {connector, scope}) is read at the
+// next round, before its poll interval, but not more often than kbChangedFloor; a kick without a connector (a manager
+// before #1562) only starts the round, and the other connectors keep their poll (#1562).
+func TestKBConnectorsChangedReadSoon(t *testing.T) {
+	f := newFakeHub()
+	f.answerApp(AppConnectors, assistantwire.ConnectorsArchives, func(json.RawMessage) (any, error) {
+		return assistantwire.Archives{Archives: []assistantwire.ArchiveSource{{ID: "example"}, {ID: "other"}}}, nil // the default poll
+	})
+	f.answerApp(AppConnectors, assistantwire.ConnectorsChanges, func(json.RawMessage) (any, error) {
+		return assistantwire.ChangesResult{Next: "1"}, nil
+	})
+	s := newKBService(t, f)
+	e := kbEng(t, s)
+	ctx := context.Background()
+	asked := func(id string) int {
+		n := 0
+		for _, p := range f.appParams(AppConnectors, assistantwire.ConnectorsChanges) {
+			if p["id"] == id {
+				n++
+			}
+		}
+		return n
+	}
+	ago := func(d time.Duration) {
+		s.kb.mu.Lock()
+		s.kb.archivedAt["example"], s.kb.archivedAt["other"] = time.Now().Add(-d), time.Now().Add(-d)
+		s.kb.mu.Unlock()
+	}
+	kick := func(params string) {
+		t.Helper()
+		if ok, err := s.kbEvent(ctx, assistantwire.EventKBKick, json.RawMessage(params)); !ok || err != nil {
+			t.Fatalf("kb.kick %s: %v %v", params, ok, err)
+		}
+	}
+	s.kbConnectors(ctx, e)
+	if asked("example") != 1 || asked("other") != 1 {
+		t.Fatal("not asked the first time")
+	}
+
+	kick(`{}`) // a manager before #1562: only the round
+	ago(2 * time.Minute)
+	s.kbConnectors(ctx, e)
+	if asked("example") != 1 {
+		t.Fatal("a kick without a connector read one before its poll")
+	}
+
+	kick(`{"connector":"example","scope":"chats"}`)
+	ago(10 * time.Second) // within kbChangedFloor: not yet
+	s.kbConnectors(ctx, e)
+	if asked("example") != 1 {
+		t.Fatal("read again within kbChangedFloor")
+	}
+	ago(2 * time.Minute)
+	s.kbConnectors(ctx, e)
+	if asked("example") != 2 || asked("other") != 1 {
+		t.Fatalf("after its change: example asked %d, other %d", asked("example"), asked("other"))
+	}
+	ago(2 * time.Minute)
+	s.kbConnectors(ctx, e)
+	if asked("example") != 2 {
+		t.Fatal("one change read it twice")
+	}
+}
+
+// A connector that says its items changed has them collected the round after (at most every kbChangedFloor), not
+// only every kbItemsPoll (#1562).
+func TestKBItemsChangedCollectedSoon(t *testing.T) {
+	s := newKBService(t, newFakeHub())
+	if !s.kbItemsDue(time.Time{}) || s.kbItemsDue(time.Now().Add(-5*time.Minute)) {
+		t.Fatal("the items' own poll")
+	}
+	if _, err := s.kbEvent(context.Background(), assistantwire.EventKBKick, json.RawMessage(`{"connector":"example","scope":"items"}`)); err != nil {
+		t.Fatal(err)
+	}
+	if s.kbItemsDue(time.Now().Add(-10 * time.Second)) {
+		t.Fatal("collected again within kbChangedFloor")
+	}
+	if !s.kbItemsDue(time.Now().Add(-5 * time.Minute)) {
+		t.Fatal("not collected after a change")
+	}
+	if s.kbItemsDue(time.Now().Add(-5 * time.Minute)) {
+		t.Fatal("one change collected twice")
 	}
 }
 
@@ -262,9 +347,9 @@ func TestKBCollectsItemsThroughTheHub(t *testing.T) {
 	s := newKBService(t, f)
 	e := kbEng(t, s)
 	st := e.Store
-	_ = st.PutItem(&kb.Item{Kind: kb.KindDoc, ID: "d1", URL: "https://docs.example.com/d1"})
+	_ = st.PutItem(&kb.Item{Kind: kb.KindDoc, ID: "d1", Source: "example", URL: "https://docs.example.com/d1"})
 	s.kbCollectItems(context.Background(), e)
-	if it, ok := st.Item(kb.KindMeeting, "m1"); !ok || it.Title != "周会" {
+	if it, ok := st.Item(kb.KindMeeting, "m1"); !ok || it.Title != "周会" || it.Source != "example" {
 		t.Fatalf("meeting %+v", it)
 	}
 	if it, ok := st.Item(kb.KindDoc, "d1"); !ok || it.Title != "发布计划" {

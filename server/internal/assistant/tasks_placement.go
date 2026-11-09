@@ -40,7 +40,7 @@ func (s *Service) placeTask(ctx context.Context, t *PlanTask) bool {
 }
 
 // healthyPlace moves t off a machine where its launcher failed its health check, to one where it works
-// (launcher_health.go); its why says so. False: it stays.
+// (launcher_health_check.go); its why says so. False: it stays.
 func (s *Service) healthyPlace(ctx context.Context, t *PlanTask) bool {
 	if t.MachinePolicy != machineFlexible {
 		return false
@@ -108,9 +108,14 @@ func (s *Service) startTaskAgent(ctx context.Context, t *PlanTask, retry bool) (
 	if t.Model != "" {
 		params["model"] = t.Model
 	}
-	if t.Permission != "" {
-		params["permission_mode"] = t.Permission
+	mode := t.Permission
+	if mode == "" {
+		mode = s.settings(ctx).DefaultPermissionMode
+		if mode == "" {
+			mode = "default"
+		}
 	}
+	params["permission_mode"] = mode
 	if t.Ultracode != nil && *t.Ultracode {
 		params["ultracode"] = true
 	}

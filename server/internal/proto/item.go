@@ -41,6 +41,8 @@ type Fold struct {
 	Images []FoldImage `json:"images,omitempty"`
 	// LatestThinking is a bounded preview of the run's newest thought with words. The original item stays in the fold.
 	LatestThinking *Item `json:"latest_thinking,omitempty"`
+	// SupervisionUser preserves an explicit user-visible action hidden inside this work range.
+	SupervisionUser bool `json:"supervision_user,omitempty"`
 }
 
 // FoldImage is an image a tool call of a folded run looked at (docs/protocol/protocol.md "Images looked at this turn"): one its result
@@ -151,7 +153,10 @@ type Item struct {
 	// scheduled run, a wake-up…), not something the user wrote. Set by the hub from the line's text
 	// (prompts.ParseInjected) on its way to the apps; docs/protocol/protocol.md "Messages Persona injects".
 	Injected *Injected `json:"injected,omitempty"`
-	Fold     *Fold     `json:"fold,omitempty"`
+	// Source is the author of an automated input, independent of its model role.
+	// Unknown nonempty kinds are still not user-authored input.
+	Source *MessageSource `json:"source,omitempty"`
+	Fold   *Fold          `json:"fold,omitempty"`
 	// Task: this notice is a background task reporting back (a command, a Monitor, a subagent, or a workflow).
 	Task         *TaskNote     `json:"task,omitempty"`
 	TurnDuration *TurnDuration `json:"turn_duration,omitempty"`
@@ -159,8 +164,45 @@ type Item struct {
 	Compact *Compact `json:"compact,omitempty"`
 }
 
+// MessageSource preserves an input's provenance without changing the model's role.
+// ConversationID is a stable session id, never a peer's display name (Item.From).
+type MessageSource struct {
+	Kind           string `json:"kind"`
+	ConversationID string `json:"conversation_id,omitempty"`
+	Title          string `json:"title,omitempty"`
+}
+
+const (
+	SourceConversation = "conversation"
+	SourcePatrol       = "patrol"
+	SourceFollowup     = "followup"
+	SourceSupervision  = "supervision"
+)
+
+// SourceFromInjected upgrades existing metadata without guessing from ordinary text.
+func SourceFromInjected(in *Injected) *MessageSource {
+	if in == nil {
+		return nil
+	}
+	kind := ""
+	switch {
+	case in.Kind == InjectedFollowup && (in.State == "daily" || in.State == "interval"):
+		kind = SourcePatrol
+	case in.Kind == InjectedFollowup:
+		kind = SourceFollowup
+	case in.Kind == InjectedSystem && in.State == "supervise":
+		kind = SourceSupervision
+	}
+	if kind == "" {
+		return nil
+	}
+	return &MessageSource{Kind: kind, Title: in.Title}
+}
+
 // Injected says what a message Persona wrote for the model is, for the apps to show one line instead of it.
 type Injected struct {
+	// Level classifies supervision: info updates only, triage folds the turn, user is visible.
+	Level   string `json:"level,omitempty"`
 	Kind    string `json:"kind"`              // InjectedTaskNotice | InjectedFollowup | InjectedSystem
 	State   string `json:"state,omitempty"`   // task_notice: done|needs|interrupted|failed; followup: once|daily|interval|wake; system: lost_tasks|supervise|inbox
 	Title   string `json:"title,omitempty"`   // the task's, the scheduled task's, the inbox item's, or what a woken agent waits for

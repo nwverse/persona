@@ -640,6 +640,7 @@ export type DisplayLine =
 
 /** When the user sent the line's message (feed items go before the first message sent after them). */
 function inputTime(line: ChatLine): number | undefined {
+  if (line.kind === "supervision") return line.lines.map(inputTime).find((at) => at !== undefined);
   if (line.kind !== "segment" || !line.seg.user?.ts) return undefined;
   return Date.parse(line.seg.user.ts);
 }
@@ -651,6 +652,7 @@ function lineTime(l: DisplayLine): number | undefined {
       return Date.parse(l.item.at);
     case "chat": {
       const c = l.line;
+      if (c.kind === "supervision") return inputTime(c);
       if (c.kind === "segment") return Date.parse(c.seg.user?.ts ?? c.seg.start ?? "") || undefined;
       if (c.kind === "notice" || c.kind === "apiError" || c.kind === "compact") return Date.parse(c.item.ts ?? "") || undefined;
       return undefined;
@@ -702,6 +704,12 @@ export function displayLines(lines: ChatLine[], all: FeedItem[]): DisplayLine[] 
   }
   for (; next < feed.length; next++) out.push({ kind: "feed", id: "feed-" + feed[next].id, item: feed[next] });
   return withDays(out);
+}
+
+/** The local day of a time, as a day line takes it (`withDays`). */
+export function startOfDay(t: number): Date {
+  const d = new Date(t);
+  return new Date(d.getFullYear(), d.getMonth(), d.getDate());
 }
 
 /** A day line over the first line of each later day. The lines keep their order, which is not always the order of their
