@@ -1,4 +1,4 @@
-import { memo, startTransition, useEffect, useMemo, useRef, useState } from "react";
+import { cloneElement, isValidElement, memo, startTransition, useEffect, useMemo, useRef, useState, type ReactElement } from "react";
 import ReactMarkdown, { defaultUrlTransform, type Components } from "react-markdown";
 import remarkGfm from "./remark-gfm-parse";
 import remarkCjkFriendly from "remark-cjk-friendly/parseOnly";
@@ -18,7 +18,7 @@ import { rehypePathLinks, textPaths, writtenText } from "./PathLinks";
 import { usePathLinks } from "../lib/path-presence";
 import { StreamChunk } from "./stream/Chunk";
 import { splitChunks } from "./stream/chunks";
-import { hasLanguageFence, useHighlight } from "./stream/highlight";
+import { codeHighlight, hasLanguageFence, HighlightWanted, useAskHighlight, useBlockHighlight, useHighlight } from "./stream/highlight";
 import { useMath } from "./stream/math";
 import { useReplyMotion } from "./stream/motion";
 import { repairStreamingMarkdown } from "./stream/repair";
@@ -406,10 +406,18 @@ function textOf(node: React.ReactNode): string {
   return "";
 }
 
+// The same element at every render, so a block that colors itself does not draw its icon again.
+const COPY_ICON = <Icon name="copy" size={13} />;
+
+// A fenced block colors itself once the grammars are in and it is near the viewport (stream/highlight.ts, #2465): its
+// <code> takes rehype-highlight's classes and tokens. Copying takes its text, which highlighting does not change.
 function CodeBlock({ children }: { children: React.ReactNode }) {
+  const pre = useRef<HTMLPreElement>(null);
+  const code = Array.isArray(children) ? (children.length === 1 ? children[0] : null) : children;
+  const lit = useBlockHighlight(pre, isValidElement(code) ? codeClass(code) : undefined, textOf(children));
   return (
     <div className="group/code relative">
-      <pre>{children}</pre>
+      <pre ref={pre}>{lit && isValidElement(code) ? cloneElement(code as ReactElement<{ className?: string }>, lit) : children}</pre>
       <button
         type="button"
         aria-label={t("ui-markdown.copy_code")}
@@ -417,7 +425,7 @@ function CodeBlock({ children }: { children: React.ReactNode }) {
         onClick={() => copyText(textOf(children).replace(/\n$/, ""))}
         className="absolute top-1.5 right-1.5 flex size-6 touch-hit items-center justify-center rounded-[6px] bg-surface text-ink-3 opacity-0 shadow-btn transition-opacity duration-150 group-hover/code:opacity-100 hover:text-ink focus-visible:opacity-100 [@media(hover:none)]:opacity-100"
       >
-        <Icon name="copy" size={13} />
+        {COPY_ICON}
       </button>
     </div>
   );
@@ -519,7 +527,11 @@ export const Markdown = memo(function Markdown({ text: raw, small, compact, mid,
   const settled = streaming ? writtenText(text) : text;
   const paths = useMemo(() => (mid ? textPaths(settled) : []), [settled, mid]);
   const { linkable, key } = usePathLinks(mid, cwd, paths);
-  const highlight = useHighlight(useMemo(() => hasLanguageFence(text), [text]));
+  // Code is highlighted by its blocks (CodeBlock), or with the switch off by rehype-highlight over the whole reply.
+  const fenced = useMemo(() => hasLanguageFence(text), [text]);
+  const inBlock = codeHighlight.inBlock;
+  const highlight = useHighlight(fenced && !inBlock);
+  useAskHighlight(fenced && inBlock);
   const md = useMemo(() => linkify(normalizeMath(streaming ? repairStreamingMarkdown(text) : text), { math: true }), [text, streaming]);
   const wantsMath = useMemo(() => hasMath(md), [md]);
   const katex = useMath(wantsMath);
@@ -538,19 +550,21 @@ export const Markdown = memo(function Markdown({ text: raw, small, compact, mid,
     [chunks, md, katex, highlight, key, mid, cwd, rehypePlugins, components],
   );
   return (
-    <div className={`prose-j ${small ? "prose-sm" : ""} ${compact ? "prose-compact" : ""}`}>
-      {chunks ? (
-        chunks.map((c) => (
-          <StreamChunk key={c.start} start={c.start} content={c.content} remarkPlugins={REMARK} rehypePlugins={rehypePlugins} components={components} urlTransform={markdownUrl} fade={wordFade} plain={!streaming} wholeDocument={chunks.length === 1} />
-        ))
-      ) : tree ? (
-        tree
-      ) : (
-        <ReactMarkdown remarkPlugins={REMARK} rehypePlugins={rehypePlugins} components={components} urlTransform={markdownUrl}>
-          {md}
-        </ReactMarkdown>
-      )}
-    </div>
+    <HighlightWanted.Provider value={fenced && inBlock}>
+      <div className={`prose-j ${small ? "prose-sm" : ""} ${compact ? "prose-compact" : ""}`}>
+        {chunks ? (
+          chunks.map((c) => (
+            <StreamChunk key={c.start} start={c.start} content={c.content} remarkPlugins={REMARK} rehypePlugins={rehypePlugins} components={components} urlTransform={markdownUrl} fade={wordFade} plain={!streaming} wholeDocument={chunks.length === 1} />
+          ))
+        ) : tree ? (
+          tree
+        ) : (
+          <ReactMarkdown remarkPlugins={REMARK} rehypePlugins={rehypePlugins} components={components} urlTransform={markdownUrl}>
+            {md}
+          </ReactMarkdown>
+        )}
+      </div>
+    </HighlightWanted.Provider>
   );
 });
 
