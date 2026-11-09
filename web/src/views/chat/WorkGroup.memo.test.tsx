@@ -1,13 +1,26 @@
 // @vitest-environment jsdom
 // A streamed delta re-renders its SegmentView (the `streaming` prop changes), but not the steps of its turn: their
-// props stay the same objects, so StepView and FreshAnswer skip. FreshWords still reaches the words that just came in.
+// props stay the same objects, so StepView and FreshAnswer skip. Words that just came in still learn it
+// (fresh-words.ts): those words, and no others.
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+// every FreshAnswer render draws its Answer with `fade` set (a step drawn plain leaves it out): counted
+const drawn = vi.hoisted(() => [] as { id: string; fade?: boolean }[]);
+vi.mock("./SegmentView", async (load) => {
+  const real = await load<typeof import("./SegmentView")>();
+  const { createElement } = await import("react");
+  return { ...real, Answer: (p: Parameters<typeof real.Answer>[0]) => ("fade" in p && drawn.push({ id: p.item!.id, fade: p.fade }), createElement(real.Answer, p)) };
+});
+
 import { emptyTaskIndex } from "../../lib/tasks";
 import type { Item } from "../../lib/types";
 import type { Segment, Step } from "../../lib/turns";
-import { ChatContext, FreshWords, type ChatContextValue } from "./chat-context";
+import { ChatContext, type ChatContextValue } from "./chat-context";
+import { addFreshWords, resetFreshWords } from "./fresh-words";
+// first, so the mock above is the Answer it imports (the two import each other)
+import "./WorkGroup";
 import { SegmentView } from "./SegmentView";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -36,6 +49,7 @@ let host: HTMLDivElement;
 let root: Root;
 
 beforeEach(() => {
+  drawn.length = 0;
   host = document.createElement("div");
   document.body.append(host);
   root = createRoot(host);
@@ -44,22 +58,14 @@ beforeEach(() => {
 afterEach(() => {
   act(() => root.unmount());
   host.remove();
+  resetFreshWords("m", "s");
 });
 
-/** FreshAnswer asks FreshWords once per render: a spied `has` counts its renders. */
-function freshSet(ids: string[]) {
-  const set = new Set(ids);
-  const has = vi.spyOn(set, "has");
-  return { set, has };
-}
-
-function draw(fresh: ReadonlySet<string>, streaming: string) {
+function draw(streaming: string) {
   act(() =>
     root.render(
       <ChatContext.Provider value={ctx}>
-        <FreshWords.Provider value={fresh}>
-          <SegmentView seg={seg} live mid="m" sid="s" streaming={streaming} expandFold={expandFold} />
-        </FreshWords.Provider>
+        <SegmentView seg={seg} live mid="m" sid="s" streaming={streaming} expandFold={expandFold} />
       </ChatContext.Provider>,
     ),
   );
@@ -67,23 +73,21 @@ function draw(fresh: ReadonlySet<string>, streaming: string) {
 
 describe("StepView / FreshAnswer memo", () => {
   it("a streamed delta does not re-render the steps of its turn", () => {
-    const { set, has } = freshSet([]);
-    draw(set, "w");
-    const first = has.mock.calls.length;
-    expect(first).toBe(5); // one FreshAnswer per run of words
+    draw("w");
+    expect(drawn).toHaveLength(5); // one FreshAnswer per run of words
     expect(host.textContent).toContain("words 9");
-    for (let i = 0; i < 10; i++) draw(set, "w" + "x".repeat(i + 1));
-    expect(has).toHaveBeenCalledTimes(first);
+    for (let i = 0; i < 10; i++) draw("w" + "x".repeat(i + 1));
+    expect(drawn).toHaveLength(5);
     expect(host.querySelector('[data-answer="streaming"]')).not.toBeNull();
   });
 
-  it("words that just came in still learn it through FreshWords", () => {
-    draw(freshSet([]).set, "w");
-    const next = freshSet(["a9#0"]);
-    draw(next.set, "w");
-    // the context changed: every FreshAnswer reads it again, though its props did not
-    expect(next.has).toHaveBeenCalledTimes(5);
-    expect(next.has).toHaveBeenCalledWith("a9#0");
-    expect(next.has.mock.results.some((r) => r.value === true)).toBe(true);
+  it("words that just came in learn it, and no other words render", () => {
+    draw("w");
+    drawn.length = 0;
+    act(() => addFreshWords("m", "s", ["a9#0"]));
+    expect(drawn).toEqual([{ id: "a9#0", fade: true }]);
+    // the same words in another chat are not these
+    act(() => addFreshWords("m", "other", ["a7#0"]));
+    expect(drawn).toHaveLength(1);
   });
 });

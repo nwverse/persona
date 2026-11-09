@@ -1,7 +1,7 @@
 // An exchange's work as lib/work-groups.ts groups it (cindy's WorkGroupBlock): "Working…" with a clock and its
 // newest steps peeking out while it runs, "Worked for Xs" once done; open, every step on a 2 px rail. A finished
 // exchange's outer group is a timeline: the agent's words between inner groups that stay folded.
-import { memo, useContext, useEffect, useLayoutEffect, useMemo, useState } from "react";
+import { memo, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useState, useSyncExternalStore } from "react";
 import { useSessionLive } from "../../lib/live";
 import { subagentFor } from "../../lib/tasks";
 import type { Item } from "../../lib/types";
@@ -11,7 +11,8 @@ import type { Step } from "../../lib/turns";
 import { Collapse, cx, Spinner, useNow } from "../../ui/atoms";
 import { Icon } from "../../ui/icons";
 import { ActionRow } from "./ActionRow";
-import { FreshWords, LiveClockContext, useChatContext } from "./chat-context";
+import { LiveClockContext, useChatContext } from "./chat-context";
+import { isFreshWords, onFreshWords } from "./fresh-words";
 import { inOpenedFold, openFoldRange, useExpanded, useLiveOverride } from "./expanded";
 import { useReveal } from "./search-reveal";
 import { nodeItemIds } from "../../lib/chat-search";
@@ -170,7 +171,7 @@ export const WorkGroup = memo(function WorkGroup({ g, p }: { g: WorkGroupNode; p
 });
 
 /** Nodes in order; tool calls next to each other sit together without a gap, like cindy's tool segments. `fade`: the
- *  agent's words among them that just came in fade in (FreshWords); not inside a group. */
+ *  agent's words among them that just came in fade in (fresh-words.ts); not inside a group. */
 export function WorkNodes({ nodes, p, live, fade }: { nodes: WorkNode[]; p: WorkProps; live?: boolean; fade?: boolean }) {
   const runs: (WorkNode | ToolStep[] | AgentRun)[] = [];
   for (const n of nodes) {
@@ -238,11 +239,13 @@ function AgentGrid({ agents, p }: { agents: ToolStep[]; p: WorkProps }) {
   );
 }
 
-/** Words that fade in if they just came in: the only reader of FreshWords, so a new reply renders these, not the chat.
- *  Memo: a streamed delta re-renders the segment, not these; FreshWords still reaches them through the context. */
+/** Words that fade in if they just came in: each reads its own id in fresh-words.ts, so a new reply renders its own
+ *  words, not the chat's. Memo: a streamed delta re-renders the segment, not these. */
 const FreshAnswer = memo(function FreshAnswer({ item, mid, sid }: { item: Item; mid: string; sid: string }) {
-  const fresh = useContext(FreshWords);
-  return <Answer item={item} mid={mid} sid={sid} fade={fresh?.has(item.id)} />;
+  const subscribe = useCallback((l: () => void) => onFreshWords(mid, sid, item.id, l), [mid, sid, item.id]);
+  const fresh = () => isFreshWords(mid, sid, item.id);
+  const fade = useSyncExternalStore(subscribe, fresh, fresh);
+  return <Answer item={item} mid={mid} sid={sid} fade={fade} />;
 });
 
 /** A step on its own: in the open, or inside an open group. Memo: its props stay the same objects while the reply

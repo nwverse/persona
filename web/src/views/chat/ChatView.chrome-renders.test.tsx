@@ -35,6 +35,13 @@ vi.mock("../../lib/store", async (load) => ({
     return () => live.listeners.delete(l);
   },
 }));
+// every FreshAnswer render (the agent's words that may fade) draws its Answer with `fade` set: counted
+const words = vi.hoisted(() => [] as { id: string; fade?: boolean }[]);
+vi.mock("./SegmentView", async (load) => {
+  const real = await load<typeof import("./SegmentView")>();
+  const { createElement } = await import("react");
+  return { ...real, Answer: (p: Parameters<typeof real.Answer>[0]) => ("fade" in p && words.push({ id: p.item!.id, fade: p.fade }), createElement(real.Answer, p)) };
+});
 vi.mock("../../lib/panel", async (load) => ({ ...(await load<typeof import("../../lib/panel")>()), usePanel: () => null }));
 vi.mock("../assistant/Persona", () => ({ usePersona: () => ({ name: "Persona" }) }));
 
@@ -43,6 +50,8 @@ import { ago } from "../../lib/format";
 import { whenComposer } from "../../lib/links";
 import type { Item, Session } from "../../lib/types";
 import { t } from "../../i18n";
+// before ChatView, so the mock above is the Answer it imports (WorkGroup and SegmentView import each other)
+import "./WorkGroup";
 import { ChatView } from "./ChatView";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -99,6 +108,14 @@ it("an agent's page: pushed items leave its header and composer alone, a session
   await settle();
   expect(renders.info).toBeGreaterThan(0);
   expect(renders.modes).toBeGreaterThan(0);
+});
+
+it("a pushed reply renders its own words once, mounting them fading, and no other words", async () => {
+  await open(<ChatView mid="mac" sid="s1" inPage />);
+  for (let seq = 1; seq <= 3; seq++) await push(seq);
+  words.length = 0;
+  await push(4);
+  expect(words).toEqual([{ id: "i4", fade: true }]);
 });
 
 it("the assistant: the header draws again only when what its face reads changes", async () => {

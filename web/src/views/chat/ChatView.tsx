@@ -57,7 +57,8 @@ import { PaneTabs } from "./PaneTabs";
 import { RunningStatusBar } from "./RunningStatusBar";
 import { latestPlan, PlanPill, usePlanOutOfView } from "./PlanCard";
 import { publishPlan } from "../../lib/plan-store";
-import { ChatContext, FreshWords, LiveClockContext, type ChatContextValue } from "./chat-context";
+import { ChatContext, LiveClockContext, type ChatContextValue } from "./chat-context";
+import { addFreshWords, resetFreshWords } from "./fresh-words";
 import { backgroundLine, backgroundWaitLine, waitingOnWorkflow, workflowCalls, workflowCallsKey } from "../../lib/workflows";
 import { seekCall } from "./jump";
 import { navRailTicks, type NavRailSource } from "../../lib/nav-rail";
@@ -337,16 +338,15 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
   useEffect(() => (readOnly ? undefined : viewSession(mid, sid)), [mid, sid, readOnly]);
 
   // what came in over the WebSocket after the chat subscribed: the agent's words among it fade in (contract §3); the
-  // first page, older pages and unfolded ranges come over HTTP and do not
-  const [fresh, setFresh] = useState<ReadonlySet<string>>(() => new Set());
+  // first page, older pages and unfolded ranges come over HTTP and do not. Outside React (fresh-words.ts): a new reply
+  // renders its own words, not every exchange; added before the transcript renders it, so its words mount fading.
   useEffect(() => {
-    setFresh(new Set());
-    return listenSession(mid, sid, {
-      items: (e) => {
-        const add = freshWords(items.current, e.items ?? []);
-        if (add.length) setFresh((f) => new Set([...f, ...add]));
-      },
-    });
+    resetFreshWords(mid, sid);
+    const off = listenSession(mid, sid, { items: (e) => addFreshWords(mid, sid, freshWords(items.current, e.items ?? [])) });
+    return () => {
+      off();
+      resetFreshWords(mid, sid);
+    };
   }, [mid, sid]);
 
   // ── scrolling (lib/disclosure.ts "following the end"): the end stays in view until the reader scrolls away from it;
@@ -1057,7 +1057,6 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
             )}
             <LiveClockContext.Provider value={countClock}>
             <ChatContext.Provider value={ctx}>
-              <FreshWords.Provider value={fresh}>
               <CardConversation.Provider value={assistant ? sid : ""}>
               {assistant
                 ? displayLines(lines, feed).flatMap((d) => [
@@ -1100,7 +1099,6 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
                 />
               )])}
               </CardConversation.Provider>
-              </FreshWords.Provider>
             </ChatContext.Provider>
             </LiveClockContext.Provider>
             {/* what is on its way, and failed messages with nothing sent after them, in the order they were written */}
