@@ -131,7 +131,13 @@ func TestWatchSignals(t *testing.T) {
 // at work, and the criteria given.
 func newSupervisedService(t *testing.T) (*Service, *fakeHub, Todo) {
 	t.Helper()
-	s, f := newQuietService(t)
+	return newSupervisedServiceOn(t, nil)
+}
+
+// newSupervisedServiceOn is newSupervisedService with st as its database (nil: none).
+func newSupervisedServiceOn(t *testing.T, st Store) (*Service, *fakeHub, Todo) {
+	t.Helper()
+	s, f := newQuietServiceOn(t, st)
 	f.judge = `{"verdict":"done","reason":"PR 已合并"}`
 	raw, _ := json.Marshal(map[string]any{"tasks": []map[string]any{{
 		"title": "修登录崩溃", "prompt": "iPad 横屏时登录页崩溃，修好并补测试", "machine": "box", "cwd": "/code/app", "readonly": true,
