@@ -744,15 +744,20 @@ func (n *Node) assistantSessions() []proto.Session {
 	return out
 }
 
-// notifySessions pushes the session list right away instead of waiting for the next poll.
+// notifySessions pushes the session list right away instead of waiting for the next poll. A list the manager holds
+// already, byte for byte, does not go again (sessions_sent.go).
 func (n *Node) notifySessions() {
 	if n.peer == nil {
 		return
 	}
-	list := n.sessionList(context.Background(), false)
+	n.notifyList(n.sessionList(context.Background(), false))
+}
+
+// notifyList is notifySessions with the list built.
+func (n *Node) notifyList(list []proto.Session) {
 	n.mu.Lock()
 	n.lastList = listKey(list)
 	n.revsChanged(list)
 	n.mu.Unlock()
-	_ = n.peer.Notify("sessions.changed", map[string]any{"sessions": list})
+	n.sendSessions(list)
 }
