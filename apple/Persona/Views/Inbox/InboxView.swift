@@ -156,6 +156,17 @@ struct InboxPage: View {
                         for _ in 0..<20 where !store.items.contains(where: { $0.id == id }) { try? await Task.sleep(for: .milliseconds(500)) }
                         if let it = store.items.first(where: { $0.id == id }) { path = NavigationPath([it]) }
                     }
+                    // `-showInboxPicked <n>`: Select with the first n items in sight picked (#2059 screenshots; 0: none);
+                    // `-showInboxPickedDone YES` then marks them done (the toast with Undo).
+                    if UserDefaults.standard.object(forKey: "showInboxPicked") != nil {
+                        for _ in 0..<20 where store.open.isEmpty { try? await Task.sleep(for: .milliseconds(500)) }
+                        picked = Set(pickable.prefix(UserDefaults.standard.integer(forKey: "showInboxPicked")).map(\.id))
+                        if UserDefaults.standard.bool(forKey: "showInboxPickedDone") {
+                            try? await Task.sleep(for: .milliseconds(800))
+                            store.setDone(chosen(picked ?? []), true)
+                            picked = nil
+                        }
+                    }
                     // `-openInboxAsk <id>`: open that waiting agent's row as a tap does (a sessionless card in its sheet, #4059).
                     if let id = UserDefaults.standard.string(forKey: "openInboxAsk") {
                         for _ in 0..<20 where !model.pendingInteractions.contains(where: { $0.id == id }) { try? await Task.sleep(for: .milliseconds(500)) }
