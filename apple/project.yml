@@ -735,6 +735,7 @@ targets:
       - path: PersonaUITests/ExtensionStreamUITests.swift
       - path: PersonaUITests/SupervisionRoundUITests.swift
       - path: PersonaUITests/SentNavigationUITests.swift
+      - path: PersonaUITests/ReportEvidenceUITests.swift
       - path: PersonaUITests/UITestStyle.swift
     dependencies:
       - target: PersonaMac
