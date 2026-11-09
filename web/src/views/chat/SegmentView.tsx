@@ -1,4 +1,4 @@
-import { Fragment, memo, type ReactNode, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { type CSSProperties, Fragment, memo, type ReactNode, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { clock } from "../../lib/format";
 import { getSession, getState } from "../../lib/store";
 import { agentStatus, subagentFor } from "../../lib/tasks";
@@ -6,7 +6,7 @@ import { turnImages } from "../../lib/turn-images";
 import { TurnImages } from "./TurnImages";
 import { exchangeSteps, isLoopTick, isOwnMessage, supervisionTool, type Segment, type Step, type UserMessage } from "../../lib/turns";
 import type { Item } from "../../lib/types";
-import { foldsHoldingCalls, planSteps, thinkingDurations, workBlocks, type ToolStep } from "../../lib/work-groups";
+import { foldsHoldingCalls, planSteps, thinkingDurations, workBlocks, type ToolStep, type WorkNode } from "../../lib/work-groups";
 import { NO_WORKFLOW_CALLS } from "../../lib/workflows";
 import { channelOf, useChannels } from "../../lib/channels";
 import { splitQuotes } from "../../lib/drafts";
@@ -42,6 +42,18 @@ const FOLDED = "max-h-[10lh] overflow-y-auto";
 /** How many lines a message takes in its bubble, by its text (the bubble measures itself once drawn). */
 export function bubbleLines(text: string, perLine = CHARS_PER_LINE): number {
   return text.split("\n").reduce((n, l) => n + Math.max(1, Math.ceil([...l].length / perLine)), 0);
+}
+
+/** A finished exchange's height in px before it is first drawn (content-visibility, docs/web/web.md "Long chats"), by
+ *  its text the way bubbleLines counts it: its bubble (folded past BUBBLE_MAX_LINES), its words at 2.5 times the
+ *  bubble's characters to a line (the column is wider, and Markdown's short and blank lines take less than a line), a
+ *  row for each other block. Once drawn it keeps its own height. */
+export function segmentHeight(user: UserMessage | undefined, nodes: WorkNode[]): number {
+  const line = 24, gap = 12, row = 28;
+  const lines = user ? bubbleLines(user.text) : 0;
+  let h = user ? (lines > BUBBLE_MAX_LINES ? 10 : lines) * line + 20 + (user.images.length ? 102 : 0) : 0;
+  for (const n of nodes) h += n.kind === "step" && n.step.kind === "text" ? bubbleLines(n.step.item.text ?? "", CHARS_PER_LINE * 2.5) * line : row;
+  return Math.round(h + gap * Math.max(0, nodes.length + (user ? 1 : 0) - 1));
 }
 
 /** `sendState`: a message not in the transcript yet (a sending bubble, the outbox's), marked for the sync scenarios
@@ -197,6 +209,7 @@ export const SegmentView = memo(function SegmentView({
   expandFold,
   beforeWords,
   trace,
+  offscreen,
 }: {
   seg: Segment;
   live: boolean;
@@ -212,6 +225,9 @@ export const SegmentView = memo(function SegmentView({
   beforeWords?: ReactNode;
   /** An opened supervision round shows its original input instead of the injected hint. */
   trace?: boolean;
+  /** A finished exchange before the last two: off screen it is not drawn (the `seg-cv` class), and the chat watches its
+   *  height through this (ChatView `watchSegment`, returning the unwatch) to keep the view still when it changes. */
+  offscreen?: (section: HTMLElement) => () => void;
 }) {
   const { subagents, scope, workflowCalls = NO_WORKFLOW_CALLS, lineStyle } = useChatContext();
   const steps = useMemo(() => planSteps(exchangeSteps(seg)), [seg]);
@@ -235,8 +251,14 @@ export const SegmentView = memo(function SegmentView({
   const working = live && (streaming === undefined || batchedWords) && !nodes.some((n) => n.kind === "group" && n.live);
   const liveRow = working && <WorkGroup g={{ kind: "group", id: `work-live-${seg.id}`, children: [], live: true, startedAt: Date.parse(turnStart ?? "") || undefined }} p={p} />;
   const imageStrip = images.length > 0 && <TurnImages images={images} mid={mid} sid={sid} cwd={getSession(mid, sid)?.cwd} />;
+  const box = useRef<HTMLElement>(null);
+  useLayoutEffect(() => {
+    const el = box.current;
+    return offscreen && el ? offscreen(el) : undefined;
+  }, [offscreen]);
+  const guess = useMemo(() => (offscreen ? ({ "--seg-est": `${segmentHeight(seg.user, nodes)}px` } as CSSProperties) : undefined), [offscreen, seg.user, nodes]);
   return (
-    <section className="flex flex-col gap-3" data-segment>
+    <section ref={box} className={offscreen ? "seg-cv flex flex-col gap-3" : "flex flex-col gap-3"} style={guess} data-segment>
       {trace && seg.user?.rawInput ? <RawInjectedInput items={seg.user.rawInput} mid={mid} sid={sid} /> : seg.user && (seg.user.source ? <SourceMessage msg={seg.user} mid={mid} sid={sid} /> : seg.user.injected ? <InjectedHint msg={seg.user} sid={sid} /> : seg.user.parts ? <MergedBubble msg={seg.user} mid={mid} sid={sid} /> : seg.user.from ? <PeerMessage msg={seg.user} /> : isLoopTick(seg.user) ? <LoopTick msg={seg.user} /> : <UserBubble msg={seg.user} mid={mid} sid={sid} />)}
       {/* while the agent works, its live work stays at the bottom */}
       {live && <Fragment key="before-words">{beforeWords}</Fragment>}

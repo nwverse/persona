@@ -124,10 +124,15 @@ it("a pushed reply renders its own words once, mounting them fading, and no othe
   expect(words).toEqual([{ id: "i4", fade: true }]);
 });
 
+// the first page: this many exchanges, a question and its reply each
+const serve = (exchanges: number) => {
+  const items = Array.from({ length: exchanges }, (_, i) => [item(2 * i, { role: "user", text: `ask ${i}` }), item(2 * i + 1)]).flat();
+  fetcher.mockImplementation((url: string) => Promise.resolve(new Response(JSON.stringify(String(url).includes("/items") ? { items, to_seq: items.length - 1 } : {}), { status: 200, headers: { "Content-Type": "application/json" } })));
+};
+
 it("a turn starting or ending renders the message actions of its own exchange only", async () => {
   const flip = async (sid: string, exchanges: number) => {
-    const items = Array.from({ length: exchanges }, (_, i) => [item(2 * i, { role: "user", text: `ask ${i}` }), item(2 * i + 1)]).flat();
-    fetcher.mockImplementation((url: string) => Promise.resolve(new Response(JSON.stringify(String(url).includes("/items") ? { items, to_seq: items.length - 1 } : {}), { status: 200, headers: { "Content-Type": "application/json" } })));
+    serve(exchanges);
     await open(<ChatView mid="mac" sid={sid} inPage />, row({ session_id: sid }));
     asks.n = 0;
     for (const state of ["idle", "working"] as const) {
@@ -139,6 +144,14 @@ it("a turn starting or ending renders the message actions of its own exchange on
   const one = await flip("s1", 1);
   expect(one).toBeGreaterThan(0); // the exchange that ended, and started again
   expect(await flip("s2", 6)).toBe(one);
+});
+
+it("finished exchanges before the last two skip drawing while off screen, from a guessed height", async () => {
+  serve(5);
+  await open(<ChatView mid="mac" sid="s1" inPage />, row({ status: "idle", state: "idle" }));
+  const sections = [...host.querySelectorAll<HTMLElement>("section[data-segment]")];
+  expect(sections.map((s) => s.classList.contains("seg-cv"))).toEqual([true, true, true, false, false]);
+  expect(sections[0].style.getPropertyValue("--seg-est")).toMatch(/^[1-9]\d*px$/);
 });
 
 it("the assistant: the header draws again only when what its face reads changes", async () => {

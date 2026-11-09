@@ -36,6 +36,8 @@ export interface LineProps {
   limit?: string;
   /** Inside an opened supervision trace, show complete injected inputs. */
   trace?: boolean;
+  /** A finished exchange before the last two may skip drawing off screen (SegmentView `offscreen`). */
+  offscreen?: (section: HTMLElement) => () => void;
 }
 
 export const ChatLineView = memo(function ChatLineView(props: LineProps) {
@@ -47,7 +49,7 @@ export const ChatLineView = memo(function ChatLineView(props: LineProps) {
   );
 });
 
-function LineBody({ line, mid, sid, streaming, expandFold, onRetry, fix, assistant, limit, trace }: LineProps) {
+function LineBody({ line, mid, sid, streaming, expandFold, onRetry, fix, assistant, limit, trace, offscreen }: LineProps) {
   switch (line.kind) {
     case "supervision":
       return <SupervisionLine line={line} mid={mid} sid={sid} streaming={streaming} expandFold={expandFold} assistant={assistant} />;
@@ -63,6 +65,7 @@ function LineBody({ line, mid, sid, streaming, expandFold, onRetry, fix, assista
           batchedWords={!assistant}
           expandFold={expandFold}
           beforeWords={line.wakes && <WakeChip turn={line.wakes} mid={mid} sid={sid} expandFold={expandFold} />}
+          offscreen={offscreen}
         />
       );
     case "notice":

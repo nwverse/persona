@@ -38,6 +38,7 @@ import { awaitsReply } from "../../lib/agent-groups";
 import { StatusMark } from "../../ui/StatusMark";
 import { Icon } from "../../ui/icons";
 import { scrollBehavior } from "../../ui/stream/motion";
+import { segmentChanges, shiftAbove } from "./offscreen";
 import { glide } from "./glide";
 import { AGENT_COMMANDS, Composer, type Outgoing } from "./Composer";
 import { agentCommands } from "../../lib/composer-commands";
@@ -48,7 +49,7 @@ import { FailureNote, showsFailureNote } from "./FailureNote";
 import { AWAIT_MS, awaitingTurn, DOCK_MAX, turnStart } from "./dock";
 import { HEADER_SLOT, HEADER_SLOT_END, HEADER_SLOT_START } from "./header";
 import { ContextMeter } from "./ContextMeter";
-import { NARROW, PHONE, SHORT, useFinePointer, useMedia } from "../../lib/viewport";
+import { NARROW, NO_HOVER, PHONE, SHORT, useFinePointer, useMedia } from "../../lib/viewport";
 import { UserBubble } from "./SegmentView";
 import { scrollsAFold } from "./fold-scroll";
 import { ActivityChips, GoalChip } from "./Activity";
@@ -487,17 +488,20 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
   // content that grows by itself (images loading, a live group's steps) keeps the end in view; a held row stays put.
   // A ResizeObserver runs after layout and before paint, so the offset moves in the same frame as the height. The view
   // itself is watched too: what sits under it (the composer growing, the task dock, a question card) makes it shorter
-  // without the content changing, and at the end the newest line stays in view.
-  useEffect(() => {
-    const view = scroller.current;
-    const el = view?.firstElementChild;
-    if (!view || !el) return;
-    const ro = new ResizeObserver(() => {
+  // without the content changing, and at the end the newest line stays in view. So are the exchanges that skip drawing
+  // off screen (watchSegment): one drawn for the first time above the view swaps its guessed height for its own, and
+  // the view moves by as much, so what is on screen stays (offscreen.ts).
+  const heights = useRef(new WeakMap<Element, number>());
+  const resized = useRef<ResizeObserver | null>(null);
+  const sizes = useCallback(() => (resized.current ??= new ResizeObserver((entries) => {
       const sc = scroller.current;
-      if (!sc || gliding.current) return;
+      if (!sc) return;
+      const changes = segmentChanges(entries, heights.current);
+      if (gliding.current) return;
+      const viewTop = sc.getBoundingClientRect().top;
       const l = landing.current;
       if (l && (l.row instanceof Range ? l.row.startContainer : l.row).isConnected) {
-        const off = l.row.getBoundingClientRect().top - sc.getBoundingClientRect().top - l.at;
+        const off = l.row.getBoundingClientRect().top - viewTop - l.at;
         if (Math.abs(off) >= 0.5) {
           sc.scrollTop += off;
           holdLanding(1200);
@@ -517,11 +521,28 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
         return;
       }
       if (atEnd.current) sc.scrollTop = sc.scrollHeight;
-    });
+      else {
+        const shift = shiftAbove(changes, viewTop);
+        if (shift) sc.scrollTop += shift;
+      }
+    })), [holdLanding]);
+  useEffect(() => {
+    const view = scroller.current;
+    const el = view?.firstElementChild;
+    if (!view || !el) return;
+    const ro = sizes();
     ro.observe(el);
     ro.observe(view);
-    return () => ro.disconnect();
-  }, [scrollEl, holdLanding]);
+    return () => {
+      ro.unobserve(el);
+      ro.unobserve(view);
+    };
+  }, [scrollEl, sizes]);
+  const watchSegment = useCallback((section: HTMLElement) => {
+    const ro = sizes();
+    ro.observe(section);
+    return () => ro.unobserve(section);
+  }, [sizes]);
 
   // the reader leaving the end: the wheel or a trackpad going up, a finger pulling the list down, PageUp / ↑ / Home,
   // the scroll bar dragged up (onScroll)
@@ -738,6 +759,12 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
     [tr.items, lastLive, readOnly, outgoing],
   );
   lastLines.current = lines;
+  // the last two exchanges are always drawn (the one going on, the one just done); those before them skip drawing while
+  // off screen (SegmentView `offscreen`). Not on a touch screen: a script moving the view (keeping it still as one is
+  // drawn) stops a fling there.
+  const touch = useMedia(NO_HOVER);
+  const drawnLast = useMemo(() => new Set(lines.filter((l) => l.kind === "segment").slice(-2).map((l) => l.id)), [lines]);
+  const offscreen = (line: ChatLine) => (!touch && line.kind === "segment" && !line.live && !drawnLast.has(line.id) ? watchSegment : undefined);
   const limitOn = limitLine ? lines.reduce((id, line) => (line.kind === "apiError" ? line.id : id), "") : "";
   // failed messages where they were sent: before the first message written after them (lib/outbox.ts placeFailed)
   const placed = useMemo(() => (readOnly ? { before: new Map<string, OutboxEntry[]>(), rest: [] } : placeFailed(lines, outbox)), [readOnly, lines, outbox]);
@@ -1130,6 +1157,7 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
                         fix={d.line.id === lines.at(-1)?.id ? turnFix : undefined}
                         limit={d.line.kind === "apiError" && d.line.id === limitOn ? limitLine : undefined}
                         assistant={assistant}
+                        offscreen={offscreen(d.line)}
                       />
                     ),
                   ])
@@ -1147,6 +1175,7 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
                   onRetry={canRetry && i === lines.length - 1 ? retry : undefined}
                   limit={line.kind === "apiError" && line.id === limitOn ? limitLine : undefined}
                   assistant={assistant}
+                  offscreen={offscreen(line)}
                 />
               )])}
               </CardConversation.Provider>
