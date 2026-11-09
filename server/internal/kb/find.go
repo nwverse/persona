@@ -489,9 +489,18 @@ func (e *Engine) Matches(kind, id, query string, limit int) []Match {
 			look(e.Store.path(kind, id, f), false)
 		}
 		if kind == KindChat {
+			// The app opens a result right after a Find, whose cache (findCache.text) holds the chat's days: a day
+			// without every word costs a stat there instead of a read and a fold, which for a rare word would be every
+			// day the chat has. The days that have them are read again by look, as before. Like Search, this leaves
+			// pruning to Find.
+			gen := e.find.begin()
 			days := e.Store.Days(id)
 			for i := len(days) - 1; i >= 0 && len(out) < limit; i-- {
-				look(e.Store.path(KindChat, id, "messages", days[i]+".md"), true)
+				p := e.Store.path(KindChat, id, "messages", days[i]+".md")
+				if t, _, ok := e.find.text(p, gen); !ok || !hasAll(t.lower, ws) {
+					continue
+				}
+				look(p, true)
 			}
 		}
 	case KindRecording:

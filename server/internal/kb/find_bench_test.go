@@ -175,3 +175,30 @@ func BenchmarkSearch(b *testing.B) {
 		})
 	}
 }
+
+// BenchmarkMatches is opening a chat found by a search (GET /api/v1/kb/chats/<id>?q=, limit 40) in a chat with a year
+// of day files: a rare word (4 of the 365 days have it, so every day is looked at) and a common one (on every line: the
+// first days fill the limit). Warm is right after a Find, whose cache holds every file; cold is a new engine each time.
+func BenchmarkMatches(b *testing.B) {
+	st := benchStore(b)
+	const chat = "lark-c000"
+	warm := &Engine{Store: st}
+	warm.Find("周报", 80)
+	for _, q := range []struct{ name, query string }{{"rare", "周报 draft"}, {"common", "review"}} {
+		if m := warm.Matches(KindChat, chat, q.query, 40); len(m) == 0 {
+			b.Fatalf("%q is not found", q.query)
+		}
+		b.Run(q.name+"/warm", func(b *testing.B) {
+			b.ReportAllocs()
+			for b.Loop() {
+				warm.Matches(KindChat, chat, q.query, 40)
+			}
+		})
+		b.Run(q.name+"/cold", func(b *testing.B) {
+			b.ReportAllocs()
+			for b.Loop() {
+				(&Engine{Store: st}).Matches(KindChat, chat, q.query, 40)
+			}
+		})
+	}
+}
