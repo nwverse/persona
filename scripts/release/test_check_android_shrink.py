@@ -98,5 +98,17 @@ class ShrinkGuardTests(unittest.TestCase):
                          ["R8 reported missing classes (missing_rules.txt is not empty)"])
 
 
+    def test_shrinking_never_renames_and_no_module_pulls_the_extended_icons(self):
+        # Renamed classes would break in_app and the simple names in error reports; the extended icons were 21.9 MB of
+        # dex in debug builds for one unused button.
+        android = Path(__file__).resolve().parents[2] / "android"
+        rules = (android / "app/proguard-rules.pro").read_text().split()
+        self.assertTrue({"-dontobfuscate", "-dontoptimize", "SourceFile,LineNumberTable"} <= set(rules))
+        self.assertIn('"proguard-rules.pro"', (android / "app/build.gradle.kts").read_text())
+        builds = [android / "gradle/libs.versions.toml", *android.glob("*/build.gradle.kts"),
+                  *android.glob("*/*/build.gradle.kts")]
+        self.assertEqual([p.name for p in builds if "material-icons-extended" in p.read_text()], [])
+
+
 if __name__ == "__main__":
     unittest.main()

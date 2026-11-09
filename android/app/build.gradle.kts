@@ -102,7 +102,6 @@ dependencies {
     implementation(project(":platform:capsule"))
     implementation(libs.compose.ui)
     implementation(libs.compose.material3)
-    implementation(libs.compose.icons)
     implementation(libs.compose.preview)
     debugImplementation(libs.compose.tooling)
 
