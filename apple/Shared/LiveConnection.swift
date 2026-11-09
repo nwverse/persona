@@ -32,7 +32,10 @@ nonisolated enum ServerEvent: Sendable {
     case screen(SessionKey, text: String, status: SessionStatus)
     case delta(SessionKey, text: String)
     case interaction(Interaction)
-    case interactionResolved(String)
+    /// assistant: what the assistant answered and why, when it answered the question for the user (#544).
+    case interactionResolved(String, assistant: AssistantAnswer?)
+    /// The user changed the assistant's answer, on this device or another: only the questions that changed (#544).
+    case interactionReanswered(id: String, answers: [String: String])
     case toolCall(callID: String, name: String, args: JSONValue)
     case hookEvent(SessionKey, event: String, message: String?, lastText: String?)
     /// Transcripts that grew on a machine (session id → rev): pull them before they are opened.
@@ -157,11 +160,18 @@ nonisolated enum ServerEvent: Sendable {
         var cwd: String?
         var dirs: [String]?
         var git: Bool?
+        /// interaction_resolved's, for a question the assistant answered; raw so no other event's keys can break the envelope.
+        var answeredBy: JSONValue?
+        var reason: JSONValue?
+        var answers: JSONValue?
+        /// interaction_reanswered's.
+        var resolution: JSONValue?
 
         enum CodingKeys: String, CodingKey {
             case type, machines, sessions, upsert, remove, revision, items, backlog, text, status, interaction, id, name, args, event, message, error, revs, fleet, history
             case features, epoch, seq, full, cols, rows, data, unsupported, state, desktops, mesh, channel, build, update, item, view, action, key, conversation, plan
-            case plugin, badge, invalidate, cwd, dirs, git, operation, auth, source, conversations, account
+            case plugin, badge, invalidate, cwd, dirs, git, operation, auth, source, conversations, account, reason, answers, resolution
+            case answeredBy = "answered_by"
             case extensionID = "extension"
             case hubID = "hub_id", hubName = "hub_name", protocolVersion = "protocol", minAppBuild = "min_app_build", publicURL = "public_url"
             case settingsChanged = "settings_changed", olAccount = "ol_account"
@@ -215,7 +225,14 @@ nonisolated enum ServerEvent: Sendable {
             guard let key else { return nil }
             return .delta(key, text: e.text ?? "")
         case "interaction": return e.interaction.map { .interaction($0) }
-        case "interaction_resolved": return e.id.map { .interactionResolved($0) }
+        case "interaction_resolved":
+            guard let id = e.id else { return nil }
+            let assistant = e.answeredBy?.string == AssistantAnswer.assistant
+                ? AssistantAnswer(answers: Delegated.answers(in: e.answers), reason: e.reason?.string ?? "") : nil
+            return .interactionResolved(id, assistant: assistant)
+        case "interaction_reanswered":
+            guard let id = e.id else { return nil }
+            return .interactionReanswered(id: id, answers: Delegated.answers(in: e.resolution?["answers"]))
         case "tool_call":
             guard let id = e.callID, let name = e.name else { return nil }
             return .toolCall(callID: id, name: name, args: e.args ?? .object([:]))
@@ -298,19 +315,26 @@ nonisolated extension ServerEvent {
         case .error(let key, let message): return .error(key.map(k), message)
         case .sessionsDelta(let machine, let upsert, let remove):
             return .sessionsDelta(machineID: machine, upsert: upsert.map { var s = $0; s.group = group; return s }, remove: remove)
-        case .sessionsList, .hello, .interactionResolved, .toolCall, .revs, .lark, .messaging, .agents, .inbox, .fleet, .hubUpdate, .desktops, .todos,
+        case .sessionsList, .hello, .interactionResolved, .interactionReanswered, .toolCall, .revs, .lark, .messaging, .agents, .inbox, .fleet, .hubUpdate, .desktops, .todos,
              .personas, .managers, .assistantFeed, .assistantView, .assistantViewAction, .assistantViewBlock, .taskPlan, .pluginBadge,
              .extensionInvalidate, .fsChanged, .extensionOperation, .extensionAuth: return self
         }
     }
 }
 
-/// The Demo Mode hub's end of the socket (Persona/App/DemoHub.swift): what the app sends goes to `receive`, and it
-/// answers through `deliver` with the same JSON a hub sends.
+/// The Demo Mode hub's end of the socket (Persona/App/DemoHub.swift), and the sync scenarios' (PersonaTests/Sync): what
+/// the app sends goes to `receive`, and it answers through `deliver` with the same JSON a hub sends. `dropped`: the
+/// connection broke, as a WebSocket's failure (the app's grace and reconnect follow).
 protocol LocalSocket: AnyObject {
     func open(deliver: @escaping (Data) -> Void)
+    func open(deliver: @escaping (Data) -> Void, dropped: @escaping () -> Void)
     func receive(_ message: [String: Any])
     func close()
+}
+
+extension LocalSocket {
+    /// A socket that never breaks (Demo Mode's).
+    func open(deliver: @escaping (Data) -> Void, dropped: @escaping () -> Void) { open(deliver: deliver) }
 }
 
 /// The app's WebSocket to the hub: reconnects with backoff and replays subscriptions.
@@ -428,6 +452,11 @@ final class LiveConnection {
     /// The demo config's socket, made by `makeLocal` (DemoHub registers it at launch).
     @ObservationIgnored private var local: LocalSocket?
     @ObservationIgnored static var makeLocal: (() -> LocalSocket)?
+    #if DEBUG
+    /// Unit tests: this connection's own socket instead of `makeLocal`'s, for several models side by side, one per
+    /// device (`AppModel.linkHooksForTests`).
+    @ObservationIgnored var makeLocalForTests: (() -> LocalSocket)?
+    #endif
     @ObservationIgnored private var generation = 0
     @ObservationIgnored private var backoff: TimeInterval = 1
     /// The hub said `hub_restarting` on this socket: its close is a restart whatever the close code.
@@ -562,6 +591,7 @@ final class LiveConnection {
         var req = URLRequest(url: HubTransport.resolve(comps.url!, hub: config.url))
         req.setValue("Bearer \(config.token)", forHTTPHeaderField: "Authorization")
         req.setValue(LanguageStore.shared.launched, forHTTPHeaderField: "Accept-Language")
+        RequestClientMetadata.current.apply(to: &req)
         req.timeoutInterval = 15
         resumed = false // until this socket's hello says so
         let t = session.webSocketTask(with: req)
@@ -669,7 +699,11 @@ final class LiveConnection {
 
     /// Demo Mode: no network, no heartbeat; the made-up hub's messages arrive like a socket's.
     private func openLocal(_ gen: Int) {
-        guard let make = Self.makeLocal else {
+        var made = Self.makeLocal
+        #if DEBUG
+        if let mine = makeLocalForTests { made = mine }
+        #endif
+        guard let make = made else {
             state = .failed(String(localized: "Demo mode isn't available"))
             return
         }
@@ -677,19 +711,33 @@ final class LiveConnection {
         local = socket
         state = .connecting
         let prepare = prepareEvent
-        socket.open { [weak self] data in
+        // As a WebSocket's frames (`receive`): the hello's place in the hub's broadcasts and whether it resumed them,
+        // then the connection's start.
+        socket.open(deliver: { [weak self] data in
             guard let self, gen == self.generation else { return }
             let event = ServerEvent.decode(data)
+            let meta = FrameMeta.read(data)
             if let event { prepare?(event) }
+            let first = self.state != .connected
+            if first { self.endDrop() }
+            if meta.type != "extension_ui_stream" { self.note(meta) }
             if case .hello(let hello)? = event { self.personaContracts = hello.features.contains(HubNaming.feature) }
-            if self.state != .connected {
+            if first {
                 self.state = .connected
+                self.sayHello()
                 self.onConnected?()
             }
             self.lastHeard = .now
             self.extensionStreamFrame(data, event: event)
             if let event { self.onEvent?(event) }
-        }
+        }, dropped: { [weak self] in
+            guard let self, gen == self.generation else { return }
+            self.personaContracts = false
+            self.dropped(restart: self.restartNotice)
+            self.state = .failed(String(localized: "Connection lost"))
+            self.stalled = false
+            self.scheduleReconnect(gen)
+        })
     }
 
     /// What a message says about the connection: the broadcast stream's place, whether this hello resumed it, a

@@ -76,21 +76,21 @@ class CapsuleShotsTest {
                 Column(Modifier.testTag("shot").width(380.dp).background(PersonaTheme.palette.background).padding(16.dp),
                     verticalArrangement = Arrangement.spacedBy(16.dp)) {
                     CapsuleSurface(page.copy(badgeCount = 1), expanded = false, onExpand = {}, onCollapse = {}, onSelect = {},
-                        onSelectSection = {}, onOpen = {}, onSend = { _, _ -> }, onAction = { _, _ -> }, drafts = drafts)
+                        onSelectSection = {}, onOpen = {}, onSend = { _, _ -> }, onAction = { _, _ -> }, onViewed = { _, _, _ -> true }, windowFocused = false, drafts = drafts)
                     CapsuleCompletionNotice(CapsuleCompletion("done", task.id, task.title)) {}
                     CapsuleSurface(page, expanded = true, onExpand = {}, onCollapse = {}, onSelect = {}, onSelectSection = {},
-                        onOpen = {}, onSend = { _, _ -> }, onAction = { _, _ -> }, drafts = drafts)
+                        onOpen = {}, onSend = { _, _ -> }, onAction = { _, _ -> }, onViewed = { _, _, _ -> true }, windowFocused = false, drafts = drafts)
                 }
             }
         }
         for ((name, content) in pages) for (d in listOf(false, true)) {
             page = content; dark = d
             rule.waitForIdle()
-            if (name == "main" || name == "detail") rule.onNodeWithText(words.openChat).assertExists()
-            rule.onNodeWithText(words.collapse).assertExists()
+            rule.onNodeWithTag("capsule.open").assertExists()
+            rule.onNodeWithTag("capsule.more").assertExists()
             rule.onNodeWithText(words.done).assertExists()
-            if (name == "main") rule.onNodeWithText(words.send).assertExists()
-            if (name == "detail") rule.onNodeWithText(words.back).assertExists()
+            if (name == "main") rule.onNodeWithTag("capsule.send").assertExists()
+            if (name == "detail") rule.onNodeWithTag("capsule.back").assertExists()
             val bitmap = rule.onNodeWithTag("shot").captureToImage().asAndroidBitmap()
             File(out(), "capsule-$language-$name-${if (d) "dark" else "light"}.png").outputStream()
                 .use { bitmap.compress(Bitmap.CompressFormat.PNG, 100, it) }

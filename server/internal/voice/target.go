@@ -5,13 +5,13 @@ import (
 	"encoding/json"
 	"github.com/nwverse/persona/server/internal/compat"
 	"path"
-	"regexp"
 	"slices"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/nwverse/persona/server/internal/i18n"
+	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/prompts"
 	"github.com/nwverse/persona/server/internal/proto"
 )
@@ -159,7 +159,7 @@ func (c *conversation) prepare(ctx context.Context, machine, session string, rec
 	sess, err := hub.session(bctx, machine, session)
 	if err != nil {
 		wg.Wait()
-		c.pl.logf("bind %s/%s: %v", machine, session, err)
+		c.logf("bind %s/%s: %s", machine, session, hubOutcome(err))
 		return prepared{err: &codedError{msg: "连不上 Persona，没能找到要绑定的对话"}} // no code: not known to be gone
 	}
 	if sess == nil {
@@ -319,7 +319,7 @@ func permissionKind(tool string) string {
 
 // contextBlock is a block the apps and Persona put in a message for the model (<persona-context>…): not what the
 // user said.
-var contextBlock = regexp.MustCompile(`(?s)<` + compat.ContextPattern() + `\b[^>]*>.*?</` + compat.ContextPattern() + `>`)
+var contextBlock = lazyre.New(`(?s)<` + compat.ContextPattern() + `\b[^>]*>.*?</` + compat.ContextPattern() + `>`)
 
 // recentOf is the user's and the agent's words in items (the last turns), made speakable and cut; tool calls in a
 // row are one line of their names (docs/assistant/voice.md 4.5: "used Bash").

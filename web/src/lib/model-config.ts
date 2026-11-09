@@ -1,5 +1,7 @@
 import { t } from "../i18n";
+import { MANAGER_HEADER } from "./manager-choice";
 import { api, enc } from "./api";
+import type { ProviderAPI } from "./providers";
 
 export interface ModelBinding {
   provider?: string;
@@ -14,7 +16,7 @@ export interface ModelProvider {
   name: string;
   kind: "api" | "launcher" | "plugin";
   agent?: string;
-  api?: "messages" | "responses";
+  api?: ProviderAPI;
   model?: string;
   machines?: string[];
   hidden?: boolean;
@@ -90,8 +92,8 @@ export function runtimeChoices(p: ModelPurpose, agent?: string): { id: string; l
   return RUNTIMES.filter((r) => p.runtimes?.includes(r.id));
 }
 
-export const modelConfiguration = () => api<ModelConfigurationBody>("/model-config");
-export const modelPurpose = (id: string) => api<ModelPurposeBody>(`/model-config/purposes/${enc(id)}`);
+export const modelConfiguration = (manager?: string) => api<ModelConfigurationBody>("/model-config", { headers: manager ? { [MANAGER_HEADER]: manager } : undefined });
+export const modelPurpose = (id: string, manager?: string) => api<ModelPurposeBody>(`/model-config/purposes/${enc(id)}`, { headers: manager ? { [MANAGER_HEADER]: manager } : undefined });
 
 export function draftFor(p: ModelPurpose): ModelDraft {
   const runtime = runtimeChoices(p).length ? p.override?.runtime || p.effective?.runtime || "cli" : "";
@@ -115,8 +117,8 @@ export function modelPatch(p: ModelPurpose, draft: ModelDraft): Record<string, s
   return patch;
 }
 
-export function saveModelPurpose(p: ModelPurpose, draft: ModelDraft): Promise<ModelPurposeBody> {
-  return api(`/model-config/purposes/${enc(p.id)}`, { method: "PATCH", json: modelPatch(p, draft) });
+export function saveModelPurpose(p: ModelPurpose, draft: ModelDraft, manager?: string): Promise<ModelPurposeBody> {
+  return api(`/model-config/purposes/${enc(p.id)}`, { method: "PATCH", json: modelPatch(p, draft), headers: manager ? { [MANAGER_HEADER]: manager } : undefined });
 }
 
 export function providersFor(p: ModelPurpose, providers: ModelProvider[]): ModelProvider[] {

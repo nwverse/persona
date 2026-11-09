@@ -87,6 +87,15 @@ continues to work; an interrupted queued transfer requires another explicit
 Redeploy while the policy is off. Already installed candidates still receive their
 confirmation, so disabling upgrades cannot strand them.
 
+With the policy off, a confirmed update to another version sets aside the node builds
+the Hub leaves in `bin/nodes/`: each `personad-<os>-<arch>` with no `.version` file
+beside it becomes `personad-<os>-<arch>.prev`. The manager takes an unlabelled
+personad there for a build of the Hub's own version, so left in place it would put
+the previous version back on every computer that Redeploy reaches (#1825). Set
+aside, Redeploy fetches the Hub's version from the release (`docs/operations/node-update.md`,
+"Node packages"). A build with a `.version` file says which one it is and stays; the
+directory is never created.
+
 The manager receives this policy in `devices.config`. An old external manager that
 does not understand it must be updated separately before relying on that gate;
 the built-in manager changes together with the Hub. Existing package containment
@@ -117,6 +126,65 @@ they never restore quarantined packages. The pointer remains available for
 explicit client updates. Existing computer versions must stay unchanged during
 publication. `GET /api/v1/machines` can report package capability, but a previous
 missing-package result may remain cached for ten minutes.
+
+The same publisher also retains a consumer download mirror under the selected
+`releases/<release_namespace>/node-packages/` (the private feed stays separate from
+`releases/hub`). Each immutable `<version>/` has `manifest.json`,
+`personad-linux-amd64.gz` and `personad-darwin-arm64.gz`. These are byte-for-byte
+copies of the verified compressed archives, with canonical consumer names; their
+sizes, compressed and native hashes, source, version, build and protocol metadata
+stay unchanged. `source-manifest.json` retains the original producer descriptors.
+Existing qualified Linux native packages are reused, not rebuilt. Versioned
+mirrors are retained independently of native-cache pruning and upload cleanup.
+
+Download preparation runs inside the original `.publish.lock`, before Hub
+promotion. The version directory and download `latest.json` become public only
+after the original Hub health, confirmation and serving-process hash checks.
+Linked directories/files, changed immutable contents and a different namespace
+fail closed. Publishing these files never deploys a node or enables node updates.
+
+A directory on disk is not a working remote package source. The configured
+HTTPS provider must mount **only** this mirror as a read-only static root and map
+`<base>/<version>/manifest.json`, its two canonical archives and
+`<base>/latest.json` to it. An installation may expose only these privacy-checked
+release artifacts anonymously over HTTPS. If its provider requires authentication,
+the consumer supports credentials in `node_packages.url` through HTTP Basic;
+it does not inject the Hub API token or arbitrary custom headers. Never put
+credentials in artifact files. Allow only `latest.json`, valid versioned
+`manifest.json` and the two canonical archives. Return 404 for the release root,
+directory listings, hidden staging directories, the producer's
+`source-manifest.json`, unlisted paths and missing versions/files. A
+reverse-proxy-only route does not serve these files. Select the formal
+`node_packages.url` through the installation's managed configuration; an existing
+`off` setting remains off until that owner changes it. This helper never rewrites
+Caddy, mounts, credentials or a running Hub configuration.
+
+Before reporting a remote source ready, fetch the versioned manifest and **both**
+archives through the configured HTTPS provider, compare the manifest's
+source/version/build to the confirmed running Hub and verify both compressed
+size/hash and decompressed native hashes. Check 404 for an absent version, and
+authentication failure without credentials when the provider is private. Local
+mirror tests and Hub confirmation do not establish remote reachability or
+consumer installation. The publisher's confirmed receipt reports the relative
+mirror directory and consumer manifest hash for this separate read-only check.
+
+An explicit single-node publisher transfer can recover a transient Link failure
+without starting another publication. Only identical chunks for the already
+selected transaction, offset and bytes are retried (at most four attempts), inside
+the original install deadline. Every relay call retains the manager owner, machine
+UID, executable and platform checks. Identity conflicts and invalid offsets fail;
+expired transactions never trigger a replacement `begin`. A commit is sent once:
+a lost or gateway-error reply is ambiguous, so only a fresh matching handshake,
+required capability and guardian confirmation establish success. Rejected commits
+still fail, and cleanup errors retain the original transfer failure.
+
+The SSH publisher sends keepalives and drains node-publisher stdout and stderr
+concurrently into the original worker log, including transfer offsets and remote
+tracebacks. The existing command timeout also bounds output collection. Missing
+SSH exit status or an interrupted connection cannot create a confirmed receipt;
+it does not reconnect and replay the remote publication. Keepalives reduce idle
+connection loss but do not prove a broken route has recovered. Preserve the failed
+run and let its sole runtime owner decide a subsequent explicit retry.
 
 A Hub-only edge switch may proceed while sessions on proven resident nodes or remote herdr/herdr-core hosts run:
 their processes belong to the terminal host and survive the transport reconnect.
@@ -172,7 +240,7 @@ releases retain their separate publishing workflow.
 
 1. **Only one binary**: skills are not in the binary; every hub (ours included) runs the same release build and can update automatically.
 2. The user's skills live in their own space, and updates never touch them.
-3. The publisher releases manually (`publish.sh`); each hub (ours included) updates itself when idle, then updates its own nodes only when `auto_update_nodes` is explicitly enabled. When a master change is urgently needed, it can be deployed directly and will not be downgraded by an older public release.
+3. The publisher releases manually (`publish.sh`); each hub (ours included) updates itself when idle, then updates its own nodes only when `auto_update_nodes` is explicitly enabled. When a change on `main` is urgently needed, it can be deployed directly and will not be downgraded by an older public release.
 4. Check sha256 before installing and have the new binary self-test; if any step fails, the current binary is left alone.
 5. Do not restart while a chat is running or waiting for an answer.
 6. If the new version does not start or machines cannot connect, automatically go back to the previous version; a version that was rolled back is not retried automatically.
@@ -287,25 +355,28 @@ User: "Why sign at all? Skip signing for the Linux service, it's too complicated
 - Hubs that do not want this risk: turn automatic updates off in the App, or deploy with Docker (you decide when you pull the image; but see the next point for the node builds a Docker hub fetches).
 - Node builds the manager fetches for the computers (`docs/operations/node-update.md` ("Node packages")) are checked the same way: the manifest's sha256s over HTTPS, the build's platform and kind, and `version -v` where it can run (the manager's own platform; over the node RPC the node's `node-update-check` reads the version too, the ssh and tailcat paths do not). Not signed either. A hub sends builds of its own version (the release's of that version included) to its computers by itself, Docker hubs too and whatever the automatic-update setting; a fallback build (another version) only when someone chooses **Redeploy**, and an update queued for the hub's version never resumes as one. A build put in `bin/nodes` by hand with a `.version` of another version goes out by itself too: putting it there is the owner's choice. `node_packages.url` set to `off`, or builds put in `bin/nodes` by hand, avoids the site for them.
 
-## 6. Direct deploys (when a master change is urgently needed)
+## 6. Direct deploys (when a change on the default branch is urgently needed)
 
-The existing path of building from master and deploying directly (`deploy.sh`, plus the main session's deploy script) stays, for when waiting for a release is not an option.
+The existing path of building from the default branch and deploying directly (`deploy.sh`, plus the main session's deploy script) stays, for when waiting for a release is not an option.
 - The resulting binary also gets `channel=release`, `build` (build time, UTC `YYYYMMDDHHMM`) and `updateURL`:
   - it is newer than the public release live at the time, so the hub's auto-update will not install the older public release: **no downgrade**;
   - once the publisher releases a newer version (larger build number), the hub takes over on its own;
   - `TestNoDowngrade` guards this: if the manifest's build number is not larger than its own, it is not installed; equal is not installed either.
 - It also gets `commit` (`-X main.commit`, with `-dirty` appended when server/ has uncommitted changes): a later public release only installs itself if it contains this commit ("no regression").
 - The main session's deploy script lives outside the repo and must add the same four `-X` flags to its `go build` (the report gives the line to add).
-- **Deploy only from a working tree that contains master** (#1314): `deploy.sh` first runs `git fetch origin master`; if the current HEAD does not contain it, nothing is deployed and it exits 2 (same if master cannot be fetched);
-  deploying a branch that is behind would swap changes someone else just deployed (hub and web) back to old ones. For a deliberate rollback, use `PERSONA_DEPLOY_ANY_COMMIT=1`. See `docs/lessons/server.md` ("Deploying from a branch that is behind").
+- **Deploy only from a working tree that contains the default branch**: `deploy.sh` first fetches the remote's default branch (how it finds the branch: the comment above the check); if the current HEAD does not contain it, nothing is deployed and it exits 2 (same if it cannot be fetched);
+  deploying a branch that is behind would swap changes someone else just deployed (hub and web) back to old ones. For a deliberate rollback, use `PERSONA_DEPLOY_ANY_COMMIT=1`. See `docs/lessons/server.md` ("Deploying from a stale branch").
 - The hub machine also needs `personad-wechat` (the WeChat bot program, `docs/extensions/wechat.md`): `deploy.sh` builds the same version for the hub and puts it next to personad; nodes do not need it.
   Telegram is not here: it is an extension (#1704), installed and upgraded on the hub from the extension market.
+- **Update a hub with `deploy.sh <hub machine id>`, not by copying a binary and running `personad hub switch` by hand.** `deploy.sh` first puts this build's node packages for every platform in the hub's `bin/nodes/`, then switches the hub blue-green (no restart while the socket units are unchanged, `docs/operations/hub-restart.md`).
+  A hand switch leaves `bin/nodes/` on the previous build: the hub hands out a `personad-<os>-<arch>` there as its own version (it has no version file), so **Redeploy** in the app puts the old node back on a computer.
+  To check: every `bin/nodes/persona-node-*.version` on the hub machine equals the hub's `/api/v1/health` version.
 - No staged rollout: after a release all hubs (ours included) update at the same time when idle; problems are handled by each hub's own rollback and bad-version marking.
 
 ### No regression (2026-11-02, #454)
 
-Comparing only build numbers can go backwards: a directly deployed hub runs commit D on master (build number = deploy time); later someone runs
-`publish.sh` from code that is behind master (commit B), the build number is larger, and the hub would "update" itself to the older B. `publish.sh`'s `check-next` only compares against the live release and cannot cover directly deployed hubs.
+Comparing only build numbers can go backwards: a directly deployed hub runs commit D on `main` (build number = deploy time); later someone runs
+`publish.sh` from code that is behind `main` (commit B), the build number is larger, and the hub would "update" itself to the older B. `publish.sh`'s `check-next` only compares against the live release and cannot cover directly deployed hubs.
 
 - **How it decides**: the binary records its own commit (`-X main.commit`), and the manifest carries all commits the new version contains (`ancestors`).
   The hub only installs automatically when the new version is this very commit, or `ancestors` contains it (`update.Build.Hold`, `TestHold`).
@@ -313,7 +384,7 @@ Comparing only build numbers can go backwards: a directly deployed hub runs comm
   6 bytes per commit, 900 commits is about 7 KB (base64); a few hundred KB a year from now is still within the manifest's 1 MB limit;
   the chance that a commit not in the list happens to collide with some prefix is about 10^-10 at ten thousand commits.
 - **Cannot confirm counts as not satisfied**: the binary has no recorded commit (old deploy scripts), it has uncommitted changes (`-dirty`), the commit is too short, the manifest has no `ancestors` (old `publish.sh`), or it cannot be read.
-  A direct deploy from a PR branch that is later squash-merged into master cannot be confirmed either (the merge produces a different commit): the next deploy from master or a manual update fixes it.
+  A direct deploy from a PR branch that is later squash-merged into `main` cannot be confirmed either (the merge produces a different commit): the next deploy from `main` or a manual update fixes it.
 - **When not satisfied**:
   - It is not installed automatically. The App still says a new version is available, also when automatic updates are on; Settings › hub shows the reason (`latest.held`), and manual **Update Hub** can still be tapped;
   - The update history gets one "not installed automatically" entry per new version (`result: held`) with the reason, e.g. "新版本（提交 b2b2b2b2）不包含这个 hub 正在运行的提交 d4d4d4d4" ("the new version (commit b2b2b2b2) does not contain commit d4d4d4d4 that this hub is running"; text emitted by the hub).
@@ -324,8 +395,21 @@ Comparing only build numbers can go backwards: a directly deployed hub runs comm
 The programs (`update.ProgramNames`): `personad-wechat` (the WeChat bot), and `persona-hub` and `persona-manager`, the hub's and the manager's own programs ([../server/server.md](../server/server.md) ("Programs")).
 
 - When the manifest has `programs` for this hub's platform, they are downloaded and verified (same sha256, and `version -v` must be this version), then swapped in together with personad: placed next to personad,
-  existing ones kept as `.prev`, and ones that did not exist before recorded as newly installed. If any one fails to download or verify, the whole update is skipped.
+  existing ones kept as `.prev`, and ones that did not exist before recorded as newly installed. If any one fails to download or verify, the whole update is skipped. A program whose swap fails midway is left as it was, and going back leaves it too.
 - Rollback (the new version does not start, the watchdog, an error during the swap) swaps them back together with personad and deletes the newly installed ones (`update.RestoreAll`, `programs` in `pending.json`).
+- **Which program the hub goes on as** (`run` in `pending.json`, `Pending.RunPath`): a hub run as `persona-hub` restarts, hands over and rolls back as the `persona-hub` the update swapped, so it stays on its own program; a hub run as `personad` stays on `personad` (no `run`).
+  `target` stays `personad`, the release's main download and what the watchdog runs as `personad.prev`. A build that predates `run` (an older edge or watchdog) reads only `target` and brings the hub back as `personad hub run`, which serves the same hub; a `pending.json` an older build wrote has no `run` and goes back to `target` as before.
+  A release without `persona-hub` for this platform leaves a hub run as `persona-hub` by hand on `personad` (which the update did replace), not on a `persona-hub` it did not.
+- **Which program a service runs** is its unit's (or agent's) to say: an update replaces the files and never edits a service. On Linux `hub setup` writes the hub's unit to run `persona-hub run` and the built-in manager's to run `persona-manager assistant` when each is beside `personad` and its build ([../server/server.md](../server/server.md) ("Programs")); a Mac's agents stay on `personad` for now. A unit it wrote earlier runs `personad` until setup runs again (the install command with `--hub` runs it), which moves the unit to the program and restarts it; `PERSONA_SPLIT_PROGRAMS=0` in setup's environment keeps it on `personad`, and the unit keeps the variable until setup runs again without it. A self-update alone never moves a hub between `personad` and `persona-hub`.
+- **A release without `persona-hub` or `persona-manager` for this platform** (`hub.unreplaced`) leaves that file as it was. That is fine while nothing runs it, and the update goes ahead.
+  It is not installed while a service runs that program, because the service would go on starting the old build beside the new `personad` (`hub/selfupdate_services.go`). A service here is one of:
+  - A systemd unit whose `ExecStart` runs it: the last one in `[Service]`, drop-ins read after the unit, read as systemd and `hub-systemd.sh` read it. The user's units come from `~/.config/systemd/user`, `/etc/systemd/user`, `~/.local/share/systemd/user` and `/usr/lib/systemd/user`, the machine's from `/etc/systemd/system` and `/usr/lib/systemd/system`. A unit in an earlier directory shadows one by the same name in a later one, and drop-ins come from all of them. It counts when systemd says it is enabled (or static, generated…) or active; when `systemctl` cannot answer (no user manager to ask, say), every such unit counts.
+  - A launchd agent or daemon (`~/Library/LaunchAgents`, `/Library/LaunchAgents`, `/Library/LaunchDaemons`; XML, or binary through `plutil`) whose program is it: `Program`, else `ProgramArguments[0]`. One that says `Disabled` does not count.
+  - The systemd service the hub itself runs in, when it runs as `persona-hub` and that unit's own `ExecStart` is this `persona-hub` or `personad` (switched to `persona-hub` inside it). In any other service (a terminal multiplexer's, `systemd-run`'s) it was started by hand.
+  Not seen: units under `/run`, units under `/lib/systemd/{system,user}` where `/lib` is not merged into `/usr`, template instances (`name@instance.service`), a launchd job that says `Disabled` but was enabled in launchd's override database (`launchctl enable`, `launchctl load -w`), a program wrapped in another command (`sh -c '…/persona-hub run'`) or named without a path. Such a service does not hold the release back.
+  The services are looked at when the release is read and again just before the swap (a unit pointed at the program while the update waited for idle).
+  Settings › hub shows the reason (`latest.held`, as for a release behind this hub's code above), the history gets one `held` entry per release, and **Update Hub** is refused with the same reason (409).
+  `install.sh` also refuses such a release before anything changes, with a wider check of its own: a unit file or drop-in in those systemd directories that has the program's path in an `ExecStart` line (as is, under `%h`, or as systemd escapes it), or a property list that has it in a `<string>`. A unit a later drop-in took back to `personad`, a disabled one and a wrapper count there too, so it refuses some releases the hub would install.
 - The first update that carries programs: the watchdog running is the old personad, which does not know `programs`, so a rollback only swaps personad back; the new programs left behind do not match the old hub version, and the hub will not start them
   (status says "not the same version"), until the next update.
 
@@ -334,12 +418,13 @@ The programs (`update.ProgramNames`): `personad-wechat` (the WeChat bot), and `p
 - **Release build**:
   - The hub checks 1 minute after startup, then every hour (every 6 hours until 2026-11-07, when the user asked for hourly so a release reaches hubs sooner); the App can "Check now" (`POST /api/v1/hub/update/check`);
   - It only fetches the manifest (a few KB): there is an update only if the build number is larger than its own and not in the bad-version list; the result is broadcast to open Apps.
+  - While an install is running or the new process has not confirmed the update, checks refresh `latest` and `last_check` without changing `state`, `progress` or `error`. This applies to manual checks, the first check after startup and hourly checks, including responses to requests started before the install. A failed check advances `last_check` and keeps the previous `latest`; it still returns an error to the caller. Confirmation also prevents a check from starting another automatic install.
 - **Docker build**:
   - Every hour, query the image repository's tags (anonymous GHCR `tags/list`), take the highest stable semver, and show a notice if it is newer;
   - The hub installs nothing; Docker pulls the image and verifies by digest;
   - CI writes the image name into the binary at build time; it is not hard-coded in the source.
 - **dev**: no checks, only shows the version.
-- Network unavailable or bad manifest: log it and show the reason under **Check for Updates** in the App; do not hammer retries (keep the hourly interval).
+- Network unavailable or bad manifest: show the reason under **Check for Updates** in the App when no install or confirmation is in progress; otherwise keep the update's progress and error. Do not hammer retries (keep the hourly interval).
 
 ## 8. Updating (release build; automatic and manual use the same flow)
 
@@ -356,6 +441,7 @@ Download → Verify → Prepare → Wait for idle → Replace → Restart → Co
      now a missing platform is one that should have been in the release, and installing cannot recover it later. The release script uploads every `.gz` first, then switches the site serving `latest.json`
      (`scripts/release/publish.sh`), so "listed in the manifest but not uploaded yet" cannot happen;
    - Restart interrupted downloads, at most 3 attempts; rename the temporary file only after the download finishes.
+   - The downloads live only as long as the update: `<build>/` is removed when the update fails (download, check, swap or restart), once it is confirmed and its node binaries are in place, and when it goes back. A hub start also removes every other `<build>/` (one that went back through the watchdog or the entry process, which run the old build, or one an older build left), keeping only the one it is confirming.
 2. **Verify**:
    - Continue only if both sha256 values match the manifest; otherwise delete the download and report an error, leaving the current binary untouched;
    - After decompression, run `<new> version` once; it must report the manifest's version and the `release` channel.
@@ -376,10 +462,11 @@ Download → Verify → Prepare → Wait for idle → Replace → Restart → Co
      - The entry process first starts the new version as standby; only after its version matches and self-check passes does it hold connections, release the old version, activate the new one and switch routing;
      - If the new version cannot start, the entry process returns `switch_failed`; the old version restores the files, deletes pending and records this attempt as failed (not as a bad version, since the new version never ran);
      - No watchdog is started: the entry process is the watchdog.
-   - **Without an entry process** (Windows, `PERSONA_HUB_EDGE=0`): start the watchdog first (below), then `syscall.Exec` the new binary with the same arguments and environment.
+   - **Without an entry process** (Windows, `PERSONA_HUB_EDGE=0`): start the watchdog first (below), then `syscall.Exec` the new binary with the same arguments and environment
+     (the program the hub runs as: `persona-hub` for a hub run as `persona-hub`, see "Programs swapped together with personad").
      Carry the socket passed by systemd along (`LISTEN_FDS`, `execListenEnv` in `listen.go`; this step used to be missing, so the new process failed because the port was occupied);
      restart under the same process id, without relying on the service manager.
-   - The local node is a child process of the hub and exits with it; the new hub starts it with the new binary.
+   - The local node is a child process of the hub and exits with it; the new hub starts it with the new binary. It runs as the `personad` beside the manager's program (or as that program when no `personad` of its build is there), and as `persona-node` only when one of the new build is beside it, which the update does not put there ([../server/server.md](../server/server.md) ("Programs")).
 7. **Confirm**: on startup the new hub sees `pending.json`; success requires all three conditions below (delete pending, write update history, broadcast "Updated to …"):
    - HTTP is up;
    - The database is connected;
@@ -395,7 +482,9 @@ Download → Verify → Prepare → Wait for idle → Replace → Restart → Co
    - **Watchdog** (without an entry process; code from the old binary, `personad update-watch`, started separately before exec and detached from the process group):
      if it does not see the new build number and "confirmed" from the local `/api/v1/health` within 3 minutes, it rolls back itself:
      - Under systemd (with `INVOCATION_ID`) or launchd: restore `.prev`, kill the main process, and let the service manager start the old binary;
-     - Without a service manager: after restoring it, start the old hub in the background with the original arguments.
+     - Without a service manager: after restoring it, start the old hub in the background with the original arguments, as the program it ran as (`run` in `pending.json`, else `target`).
+     - It signals the hub only while the hub is still its parent process (SIGTERM, then SIGKILL after 10 seconds if it is still there): once the hub has exited, its pid may belong to another process.
+     - Before restoring anything it claims the marker by renaming `pending.json` to `pending.json.watch`. A confirm that removed the marker first (while the last health check was still out, or timed out) ends the watchdog with nothing undone; a confirm that finds it already claimed records nothing and leaves the update to the watchdog. If the restore fails, the marker goes back. A marker it cannot rename (an update directory that is read-only or has the wrong owner, where a confirm cannot remove it either) does not stop it: it goes back without the claim. A watchdog that dies while it holds the claim (power loss, or a stop of the hub unit: under systemd it shares the hub's cgroup) leaves `pending.json.watch`; the hub's next start renames it back to `pending.json` and handles the update as usual.
    - After rollback, record this build number in the **bad-version** list: automatic updates no longer try it and wait for a newer version. The user can still install it manually; the App says, "This version failed to start last time and was rolled back."
 9. **Update nodes along with it (only with `auto_update_nodes: true`)**:
    - After the hub confirms success, run `deploy.go` for each online machine with a different version (push binary, restart the persistent node, wait for it to reconnect), one at a time;
@@ -413,7 +502,7 @@ Download → Verify → Prepare → Wait for idle → Replace → Restart → Co
 | Restart | `exec` the new binary itself | User recreates the container | — |
 | Rollback | Automatic (`.prev`, bad versions are not retried) | Restore the previous tag | — |
 | node | Automatically redeployed with the hub | An image built with `UPDATE_URL` carries its own platform's build only, and the manager fetches the others from the release of the image's version, or the newest one it drives; one built without carries all four platforms' personad (`docs/operations/node-update.md` ("Node packages"), `docs/operations/docker.md` ("Node builds")) | The hub's `bin/nodes` (`deploy.sh`) |
-| Urgent master change | Direct deploy (stamped `release` and build time; an older public release will not downgrade it, a newer one takes over automatically) | — | — |
+| Urgent change on `main` | Direct deploy (stamped `release` and build time; an older public release will not downgrade it, a newer one takes over automatically) | — | — |
 
 ### Docker (step 4)
 
@@ -486,6 +575,7 @@ Download → Verify → Prepare → Wait for idle → Replace → Restart → Co
   - Retry after interrupted download; delete without replacing on a sha256 mismatch;
   - New version cannot start: compile a deliberately unstartable binary in the test; verify both the new process's self-check and the watchdog can roll back, record the bad version and do not retry it automatically;
   - Wait for idle: do not restart while the assistant or any Agent is busy (automatic and manual alike); `now` skips the wait;
+  - Checks during installation or confirmation preserve the update state, progress and error on success and failure, including when an install starts while the manifest request is in flight;
   - Skills: symlink creation and cleanup, automatic migration of old installs, user precedence on a name collision, gate command only present with its skill; built-in skill directory contains only redistributable skills;
   - dev / docker channels never install, however new the manifest is (API 409);
   - **No downgrade** (`TestNoDowngrade`): a directly deployed binary (build number = build time) does not install a manifest with a smaller or equal build number; only larger ones install;
@@ -512,7 +602,7 @@ The private publication and Hub-only session policies are described in "Automati
 3. No time-of-day restriction: install when the assistant and Agents are all idle. Do not restart while a chat is running or waiting for an answer.
 4. Use release time (UTC `YYYYMMDDHHMM`) as the build number.
 5. **Manual public publication**: the publisher runs publish.sh (the Worker is under their account); enforce manifest, build-number and commit-ancestry checks.
-   Our hub also updates automatically to their releases; direct deploys remain for urgent master changes and will not be downgraded.
+   Our hub also updates automatically to their releases; direct deploys remain for urgent changes on `main` and will not be downgraded.
 6. No staged rollout; all hubs update at once after release, each handles its own rollback.
 9. **No signing** (user: "Skip signing for the Linux service, it's too complicated"): the manifest has only sha256, fetched over HTTPS; install automatically when it matches. This only protects against corrupt transfers, not an impersonated or compromised publish site (see "Security").
 7. Manual updates also wait for the assistant and Agents to be idle; the App shows what it is waiting for and offers **Update Now** in a second confirmation.

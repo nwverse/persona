@@ -101,5 +101,9 @@
   "repair_title": "Re-pair \"{name}\"",
   "repair_body": "The connector on this computer no longer recognizes this hub: it was paired with another hub or reinstalled. Run {command} on that computer again (or choose \"Let the hub connect\" in the menu bar / tray) and paste the new link here.",
   "repair_address_hint": "Leave empty to keep the current address. Fill in only if it changed",
-  "pairing": "Pairing: the hub is connecting to that computer…"
+  "pairing": "Pairing: the hub is connecting to that computer…",
+  "rename": "Rename",
+  "rename_label": "New name for {id}",
+  "rename_hint": "Takes effect right away, without a restart or reconnecting. Leave it empty to use the id. The id stays the same.",
+  "renamed": "Renamed to \"{name}\""
 }

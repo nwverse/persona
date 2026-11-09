@@ -26,17 +26,19 @@ class ProviderWizardTest {
 
     private class Hub(val presets: List<ProviderPreset>) : ProviderSetup {
         override val builtinPresets = flowOf(true)
+        val owners = mutableListOf<String?>()
+        private suspend fun noteOwner() { owners += kotlinx.coroutines.currentCoroutineContext()[RequestManager]?.id }
         val created = mutableListOf<NewProvider>()
         val tests = mutableListOf<ProviderProbe>()
         val discovers = mutableListOf<ProviderProbe>()
         var answer = ProviderAdded("deepseek", "DeepSeek", assigned = listOf("assistant"), kept = listOf(KeptPurpose("agent.new", "customized")))
         var testResult = ProviderTest(ok = true, ms = 300, model = "deepseek-chat")
         var gate: CompletableDeferred<Unit>? = null
-        override suspend fun presets() = presets
+        override suspend fun presets() = presets.also { noteOwner() }
         override suspend fun add(provider: NewProvider) { created += provider }
-        override suspend fun create(provider: NewProvider): ProviderAdded { created += provider; return answer }
-        override suspend fun test(probe: ProviderProbe): ProviderTest { tests += probe; gate?.await(); return testResult }
-        override suspend fun discover(probe: ProviderProbe): ProviderDiscovery { discovers += probe; return ProviderDiscovery(listOf(PresetModel("m1"), PresetModel("m2"))) }
+        override suspend fun create(provider: NewProvider): ProviderAdded { noteOwner(); created += provider; return answer }
+        override suspend fun test(probe: ProviderProbe): ProviderTest { noteOwner(); tests += probe; gate?.await(); return testResult }
+        override suspend fun discover(probe: ProviderProbe): ProviderDiscovery { noteOwner(); discovers += probe; return ProviderDiscovery(listOf(PresetModel("m1"), PresetModel("m2"))) }
     }
 
     private fun readiness(works: Boolean, noClaude: Boolean = false) = AssistantReadiness(mode = "setup", ready = works,
@@ -44,6 +46,20 @@ class ProviderWizardTest {
             ReadinessStep("computer", "ok"),
             if (noClaude) ReadinessStep("claude", "problem", code = "claude_missing") else ReadinessStep("claude", "ok"),
             ReadinessStep("model", if (works) "ok" else "unknown")))
+
+    @Test fun aProviderWizardKeepsTheModelPagesOwnerThroughCreateAndFollowUp() = runBlocking {
+        val hub = Hub(listOf(deepseek))
+        val scoped = hub.forManager("assistant").forManager("work")
+        val model = NewProviderModel(scoped)
+        model.load(hubNames = true)
+        model.choose("builtin/deepseek")
+        model.editKey(model.state.value.draft.copy(apiKey = "sk-example-key"))
+        model.testKey()
+        assertTrue(model.saveKey())
+        assertTrue(hub.owners.size >= 3)
+        assertTrue(hub.owners.all { it == "work" })
+        assertEquals("launcher.deepseek", providerId(model.state.value.added!!.result.name))
+    }
 
     @Test fun aPresetKeyIsTestedAndSavedWithAssignWhenNothingAnswersYet() = runBlocking {
         val hub = Hub(listOf(deepseek, responses))

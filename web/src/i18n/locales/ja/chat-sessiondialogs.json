@@ -64,5 +64,8 @@
   "wt_confirm_loss": "これらの変更が失われることを理解しています",
   "wt_removed": "worktree を削除しました",
   "wt_removed_branch": "worktree とブランチを削除しました",
-  "wt_remove_failed": "worktree を削除できませんでした：{error}"
+  "wt_remove_failed": "worktree を削除できませんでした：{error}",
+  "archive_close_title": "エージェントをアーカイブして閉じる",
+  "archive_close_detail": "Persona は「{title}」をアーカイブし、{machine} 上のタブとプロセスを閉じます。会話の記録はコンピューターに残ります。「アーカイブしたエージェント」から復元でき、メッセージを送ると会話を再開します。",
+  "archive_close": "アーカイブして閉じる"
 }

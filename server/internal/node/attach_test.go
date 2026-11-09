@@ -11,6 +11,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/nwverse/persona/server/internal/link"
 )
 
 // The relay pipes both ways to whatever listens on the attach socket, and says "not relayed" when nothing does.
@@ -81,6 +83,59 @@ func TestAttachIsSingle(t *testing.T) {
 	err = Attach(ctx, func() (*Node, error) { t.Fatal("served a connection"); return nil, nil }, nil, nil)
 	if err == nil || !strings.Contains(err.Error(), "already listening") {
 		t.Fatalf("want 'already listening', got %v", err)
+	}
+}
+
+// While another resident node holds the run lock, a second one refuses to start even when nobody answers on the
+// socket (the first has not started accepting yet), and leaves the first one's socket in place. Once the lock is
+// given back, the socket is stale and a new resident node takes over.
+func TestAttachRefusesWhileLocked(t *testing.T) {
+	home := shortHome(t)
+	if err := os.MkdirAll(filepath.Join(home, ".persona"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	release, err := link.LockFile(AttachSocketPath()+".run", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The first node's socket, refusing connections: a listener closed without removing its path.
+	ln, err := net.Listen("unix", AttachSocketPath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	ln.(*net.UnixListener).SetUnlinkOnClose(false)
+	ln.Close()
+	before, err := os.Stat(AttachSocketPath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	err = Attach(ctx, func() (*Node, error) { t.Error("served a connection"); return nil, io.EOF }, nil, nil)
+	if err == nil || !strings.Contains(err.Error(), "already running") {
+		t.Fatalf("want 'already running', got %v", err)
+	}
+	if after, err := os.Stat(AttachSocketPath()); err != nil || !os.SameFile(before, after) {
+		t.Fatalf("the first node's socket was removed or replaced (%v)", err)
+	}
+
+	release()
+	ctx2, cancel2 := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- Attach(ctx2, func() (*Node, error) { return nil, io.EOF }, nil, nil) }()
+	for deadline := time.Now().Add(3 * time.Second); ; time.Sleep(50 * time.Millisecond) {
+		if c, err := net.Dial("unix", AttachSocketPath()); err == nil {
+			c.Close()
+			break
+		}
+		if time.Now().After(deadline) {
+			cancel2()
+			t.Fatal("no resident node started once the lock was free")
+		}
+	}
+	cancel2()
+	if err := <-done; err != nil {
+		t.Fatalf("Attach: %v", err)
 	}
 }
 

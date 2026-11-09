@@ -52,7 +52,26 @@ internal fun AssistantSettingsScreen(
     /** Opens an assistant conversation (one a run of "Proactive" started, or a follow-up continues). */
     onOpenConversation: (SessionKey) -> Unit = {},
     /** Opens Settings › Models for a purpose (a task's model); null leaves those rows out. */
-    onModelConfiguration: ((String) -> Unit)? = null,
+    onModelConfiguration: ((String, String) -> Unit)? = null,
+    initialManager: String? = null,
+) {
+    val roster = LocalManagerRoster.current
+    var owner by rememberSaveable(LocalManagerGroup.current, initialManager) {
+        mutableStateOf(initialManager?.takeIf(String::isNotBlank) ?: roster?.defaultManagerId
+            ?: persona.core.contracts.api.ManagerRoster.ASSISTANT_MANAGER)
+    }
+    key(management, owner) {
+        val scoped = remember(management, owner) { management.forManager(owner) }
+        AssistantSettingsDetails(scoped, machines, onBack, onMoved, inPlace, onOpenConversation, onModelConfiguration,
+            owner, { JManagerSwitcher(roster, owner, { owner = it }) })
+    }
+}
+
+@Composable
+private fun AssistantSettingsDetails(
+    management: AssistantManagement, machines: List<Machine>, onBack: () -> Unit, onMoved: suspend () -> Unit,
+    inPlace: Boolean, onOpenConversation: (SessionKey) -> Unit, onModelConfiguration: ((String, String) -> Unit)?,
+    owner: String, switcher: @Composable () -> Unit,
 ) {
     val context = LocalContext.current
     val moved by rememberUpdatedState(onMoved)
@@ -121,7 +140,8 @@ internal fun AssistantSettingsScreen(
     when (part) {
         SettingsPart.Home -> SettingsHome(shown, machine, machineName, controller.phoneZone, onBack, ::refresh,
             open = { part = it }, sheet = { sheet = it }, follow = { scope.launch { controller.setFollowPhone(it) } },
-            quietTasks = { scope.launch { controller.setMainTasksQuiet(it) } })
+            quietTasks = { scope.launch { controller.setMainTasksQuiet(it) } },
+            owner = owner, switcher = switcher, permission = { scope.launch { controller.setDefaultPermission(it) } })
         SettingsPart.Notes -> NotesPart(shown, onBack = { part = SettingsPart.Home }) { text -> controller.saveNotes(text) }
         SettingsPart.Memory -> MemoryPart(shown, machine, machineName, onBack = { part = SettingsPart.Home },
             onRefresh = { scope.launch { controller.loadMemory() } },
@@ -133,7 +153,7 @@ internal fun AssistantSettingsScreen(
             onRefresh = { scope.launch { controller.loadSkills() } })
         // Keeps its own sub-pages and back; back on its first page returns here (the handler above).
         SettingsPart.Proactive -> AssistantProactiveScreen(onBack = { part = SettingsPart.Home }, onOpenConversation = onOpenConversation,
-            onModelConfiguration = onModelConfiguration, management = management, machines = machines)
+            onModelConfiguration = onModelConfiguration?.let { open -> { purpose -> open(purpose, owner) } }, management = management, machines = machines)
     }
     when (sheet) {
         SettingsSheet.Machine -> MachineSheet(machines, state.config?.machineId, onDismiss = { sheet = null }) {
@@ -154,7 +174,7 @@ internal fun AssistantSettingsScreen(
 }
 
 @Composable
-private fun Caption(text: String) {
+internal fun Caption(text: String) {
     Text(text, Modifier.padding(top = Tokens.Space.s, start = Tokens.Space.xs, end = Tokens.Space.xs),
         style = PersonaTheme.type.caption, color = PersonaTheme.palette.ink3)
 }
@@ -191,6 +211,8 @@ private fun SettingsHome(
     onBack: () -> Unit, onRefresh: () -> Unit, open: (SettingsPart) -> Unit, sheet: (SettingsSheet) -> Unit,
     follow: (Boolean) -> Unit,
     quietTasks: (Boolean) -> Unit = {},
+    owner: String = persona.core.contracts.api.ManagerRoster.ASSISTANT_MANAGER,
+    switcher: @Composable () -> Unit = {}, permission: (String) -> Unit = {},
 ) {
     val config = state.config
     val ready = config != null && !state.busy
@@ -199,6 +221,9 @@ private fun SettingsHome(
         title = stringResource(R.string.assistant_settings_title), onBack = onBack, refreshing = state.loading && config != null, onRefresh = onRefresh,
         summary = config?.let { stringResource(R.string.assistant_settings_summary, machineName) },
     ) {
+        item("manager") {
+            switcher()
+        }
         if (state.loadFailed) item("load-failed") {
             JNotice(stringResource(R.string.assistant_settings_load_failed), status = Status.NeedsYou,
                 actionLabel = stringResource(R.string.assistant_settings_retry), onAction = onRefresh)
@@ -206,6 +231,10 @@ private fun SettingsHome(
         if (config == null && state.loading) item("loading") { JLoading(text = stringResource(R.string.assistant_settings_loading)) }
         state.notice?.let { notice -> item("notice") { JNotice(notice.text.resolve(resources), status = if (notice.error) Status.NeedsYou else Status.Unknown) } }
         if (config != null) {
+            item("default-permission") {
+                AssistantDefaultPermission(config.defaultPermissionMode ?: "default", ready,
+                    state.permissionSupported && config.manager == owner, permission)
+            }
             item("where") { JSectionHeader(stringResource(R.string.assistant_settings_where_header)) }
             rows("where", listOf(
                 { JRow(stringResource(R.string.assistant_settings_machine), value = machineName, subtitle = machineState(machine), leadingIcon = machineIcon(machine),
@@ -399,80 +428,6 @@ private fun SkillsPart(state: SkillsState, machineName: String, onBack: () -> Un
         }
         if (skills.isNotEmpty()) item("caption") { Caption(stringResource(R.string.assistant_settings_skills_caption, machine)) }
     }
-}
-
-@Composable
-private fun MemoryFilePart(
-    state: AssistantSettingsUiState, name: String?, preview: String?, onBack: () -> Unit,
-    onSave: suspend (String, String) -> Boolean, onDelete: suspend (String) -> Unit,
-) {
-    val scope = rememberCoroutineScope()
-    val resources = LocalResources.current
-    val indexTitle = stringResource(R.string.assistant_settings_memory_index)
-    val entry = state.memory.entries?.firstOrNull { it.file.name == name }
-        ?: state.memory.index?.takeIf { it.name == name }?.let { parseMemory(it).copy(title = indexTitle) }
-    // The index is Persona's own table of contents: shown, not edited by hand.
-    val editable = entry != null && entry.file.name != MEMORY_INDEX
-    var editing by remember { mutableStateOf(preview == "memory-edit") }
-    var deleting by remember { mutableStateOf(preview == "memory-delete") }
-    JListPage(
-        title = entry?.title ?: stringResource(R.string.assistant_settings_memory), onBack = onBack,
-        actions = {
-            if (editable) {
-                JIconButton(PhIcons.PencilSimple, stringResource(R.string.assistant_settings_edit), { editing = true }, enabled = !state.busy)
-                JIconButton(PhIcons.Trash, stringResource(R.string.assistant_settings_delete), { deleting = true }, enabled = !state.busy, tint = PersonaTheme.palette.danger.text)
-            }
-        },
-    ) {
-        if (entry == null) {
-            item("missing") { JEmptyState(stringResource(R.string.assistant_settings_memory_missing_title), stringResource(R.string.assistant_settings_memory_missing_text), icon = PhIcons.Brain) }
-            return@JListPage
-        }
-        item("meta") {
-            Row(Modifier.padding(top = Tokens.Space.s, bottom = Tokens.Space.s), horizontalArrangement = Arrangement.spacedBy(Tokens.Space.s),
-                verticalAlignment = Alignment.CenterVertically) {
-                entry.typeLabel(resources)?.let { JTag(it) }
-                conversationTime(entry.updated, currentLocale)?.let { Text(stringResource(R.string.assistant_settings_memory_updated, it), style = PersonaTheme.type.caption, color = PersonaTheme.palette.ink3) }
-            }
-        }
-        entry.description?.let { description ->
-            item("description") { Text(description, Modifier.padding(bottom = Tokens.Space.m), style = PersonaTheme.type.callout, color = PersonaTheme.palette.ink2) }
-        }
-        item("body") {
-            JCard {
-                SelectionContainer {
-                    Text(entry.body.ifBlank { stringResource(R.string.assistant_settings_memory_blank) }, style = PersonaTheme.type.body, color = PersonaTheme.palette.ink)
-                }
-            }
-        }
-        item("file") { Caption(entry.file.name) }
-    }
-    if (editing && entry != null) {
-        var content by rememberSaveable(entry.file.name) { mutableStateOf(entry.file.content) }
-        JSheet(onDismiss = { if (!state.busy) editing = false }, title = stringResource(R.string.assistant_settings_memory_edit_title, entry.title), dismissible = !state.busy) {
-            LazyColumn(Modifier.fillMaxWidth().weight(1f, fill = false), contentPadding = PaddingValues(bottom = Tokens.Space.l),
-                verticalArrangement = Arrangement.spacedBy(Tokens.Space.m)) {
-                item { Caption(stringResource(R.string.assistant_settings_memory_edit_caption)) }
-                state.notice?.takeIf { it.error }?.let { notice -> item { JNotice(notice.text.resolve(resources), status = Status.NeedsYou) } }
-                item {
-                    JTextField(content, { content = it }, Modifier.fillMaxWidth(), label = stringResource(R.string.assistant_settings_memory_content), enabled = !state.busy,
-                        minLines = 8, maxLines = Int.MAX_VALUE)
-                }
-            }
-            Row(horizontalArrangement = Arrangement.spacedBy(Tokens.Space.s)) {
-                JButton(stringResource(R.string.assistant_settings_cancel), { editing = false }, Modifier.weight(1f), kind = JButtonKind.Secondary, enabled = !state.busy)
-                JButton(stringResource(R.string.assistant_settings_save), { scope.launch { if (onSave(entry.file.name, content)) editing = false } }, Modifier.weight(1f),
-                    enabled = !state.busy && content != entry.file.content, loading = state.busy)
-            }
-        }
-    }
-    if (deleting && entry != null) JDialog(
-        onDismiss = { deleting = false }, title = stringResource(R.string.assistant_settings_memory_delete_title),
-        text = stringResource(R.string.assistant_settings_memory_delete_text, entry.title, MEMORY_INDEX),
-        destructive = true, confirmEnabled = !state.busy,
-        confirm = stringResource(R.string.assistant_settings_delete) to { deleting = false; scope.launch { onDelete(entry.file.name) }; Unit },
-        dismiss = stringResource(R.string.assistant_settings_cancel) to { deleting = false },
-    )
 }
 
 @Composable

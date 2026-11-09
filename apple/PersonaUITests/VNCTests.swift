@@ -208,6 +208,134 @@ final class VNCTests: XCTestCase {
         rest()
     }
 
+    /// The top bar's round buttons share one shape: Help and More (⋯) as tall and as wide as Close.
+    @MainActor func testTopBarButtonsKeepTheirShape() throws {
+        let (app, _) = try signedInMachinePage()
+        let close = app.buttons["screen-close"].firstMatch, help = app.buttons["vnc-help"].firstMatch, more = app.buttons["vnc-more"].firstMatch
+        XCTAssertTrue(more.waitForExistence(timeout: 10), "\(app.debugDescription)")
+        XCTAssertTrue(close.exists && help.exists, "\(app.debugDescription)")
+        rest()
+        shot(app, "vnc-top-bar")
+        let c = close.frame
+        for (name, b) in [("Help", help.frame), ("More", more.frame)] {
+            XCTAssertEqual(b.height, c.height, accuracy: 1, "\(name) as tall as Close: \(b) vs \(c)")
+            XCTAssertEqual(b.width, c.width, accuracy: 1, "\(name) as wide as Close: \(b) vs \(c)")
+        }
+    }
+
+    /// One display of a Mac with two (#80), against the mock started with MOCK_SCREEN_DISPLAYS=2 (its Screen Sharing lists
+    /// both, ExtendedDesktopSize) or MOCK_SCREEN_DISPLAYS=2:node (MacBook's status lists them, as a node reads them), and
+    /// TEST_RUNNER_PERSONA_SCREEN_DISPLAYS=2: All Displays shows both side by side; Display 2 shows only the green one,
+    /// a tap in its middle clicks the middle of the second display's pixels and Center Pointer centers on it; Display 1
+    /// brings the pointer onto it, where Trackpad Mode clicks; the choice is kept for the Mac across a relaunch.
+    @MainActor func testOneDisplay() throws {
+        guard ProcessInfo.processInfo.environment["PERSONA_SCREEN_DISPLAYS"] == "2" else {
+            throw XCTSkip("needs the mock with two displays: MOCK_SCREEN_DISPLAYS=2 (TEST_RUNNER_PERSONA_SCREEN_DISPLAYS=2)")
+        }
+        let (app, _) = try signedInMachinePage()
+        let screen = app.descendants(matching: .any)["vnc-screen"].firstMatch
+        XCTAssertTrue(screen.waitForExistence(timeout: 10))
+        app.buttons["vnc-more"].tap()
+        app.buttons["鼠标模式"].firstMatch.tap() // a tap clicks where it lands
+        choose(app, "全部显示器")
+        rest(2)
+        // All Displays: 960 × 300, display 1 (blue) on the left, display 2 (green) on the right; sampled on their
+        // backgrounds, clear of the windows and the pointer in the middle.
+        let both = pictureRect(screen.frame, CGSize(width: 960, height: 300))
+        XCTAssertTrue(isBlue(color(app, both, 24, 150, of: CGSize(width: 960, height: 300))), "display 1 on the left")
+        XCTAssertTrue(isGreen(color(app, both, 936, 150, of: CGSize(width: 960, height: 300))), "display 2 on the right")
+        shot(app, "vnc-displays-all")
+
+        app.buttons["vnc-more"].tap()
+        app.buttons["显示器"].firstMatch.tap()
+        XCTAssertTrue(app.buttons["显示器 2"].firstMatch.waitForExistence(timeout: 5), "the choice:\n\(app.debugDescription)")
+        shot(app, "vnc-displays-menu")
+        app.buttons["显示器 2"].firstMatch.tap()
+        rest(2)
+        try displayTwo(app, screen)
+        shot(app, "vnc-displays-one")
+
+        // Display 1 in Trackpad Mode: choosing it brings the pointer over from display 2, and a tap clicks where it is.
+        choose(app, "显示器 1")
+        rest()
+        XCTAssertEqual((try mockState()["pointer"] as? [Int] ?? []).prefix(2), [240, 150], "the pointer onto display 1")
+        app.buttons["vnc-more"].tap()
+        app.buttons["触控板模式"].firstMatch.tap()
+        try mock(hub!, "/mock/screen-password?clear=1")
+        screen.tap()
+        rest()
+        let clicks = try mockState()["clicks"] as? [[String: Any]] ?? []
+        XCTAssertEqual(clicks.first { $0["down"] as? Bool == true }?["x"] as? Int, 240, "Trackpad Mode clicks on display 1: \(clicks)")
+        app.buttons["vnc-more"].tap()
+        app.buttons["鼠标模式"].firstMatch.tap()
+        choose(app, "显示器 2")
+        rest()
+
+        // Kept for this Mac: back on Display 2 after a relaunch (the sign-in is kept too).
+        app.terminate()
+        let again = try launch(["-tab", "settings", "-openMachines", "YES", "-openMachineDetail", "macbook"])
+        let vnc = again.buttons["computer-screen"].firstMatch
+        XCTAssertTrue(vnc.waitForExistence(timeout: 30))
+        for _ in 0..<6 where !vnc.isHittable { again.swipeUp() }
+        vnc.tap()
+        XCTAssertTrue(live(again), "the page again, live")
+        rest(2)
+        try displayTwo(again, again.descendants(matching: .any)["vnc-screen"].firstMatch)
+        choose(again, "全部显示器")
+    }
+
+    /// Display 2 alone: green across the picture (no blue from display 1), a tap in the middle clicks (720, 150), and
+    /// Center Pointer puts the pointer there.
+    @MainActor private func displayTwo(_ app: XCUIApplication, _ screen: XCUIElement) throws {
+        let one = CGSize(width: 480, height: 300), r = pictureRect(screen.frame, one)
+        // Below its window, from edge to edge.
+        for x in [6.0, 240, 474] { XCTAssertTrue(isGreen(color(app, r, x, 280, of: one)), "display 2 at x \(x)") }
+        try mock(hub!, "/mock/screen-password?clear=1")
+        app.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(dx: r.midX, dy: r.midY)).tap()
+        rest()
+        let clicks = try mockState()["clicks"] as? [[String: Any]] ?? []
+        let down = clicks.first { $0["down"] as? Bool == true }
+        XCTAssertEqual(Double(down?["x"] as? Int ?? -1), 720, accuracy: 3, "the middle of display 2: \(clicks)")
+        XCTAssertEqual(Double(down?["y"] as? Int ?? -1), 150, accuracy: 3, "\(clicks)")
+        app.buttons["vnc-more"].tap()
+        app.buttons["指针居中"].firstMatch.tap()
+        rest()
+        XCTAssertEqual((try mockState()["pointer"] as? [Int] ?? []).prefix(2), [720, 150], "Center Pointer: the middle of display 2")
+    }
+
+    /// … › Displays › `label`.
+    @MainActor private func choose(_ app: XCUIApplication, _ label: String) {
+        app.buttons["vnc-more"].tap()
+        app.buttons["显示器"].firstMatch.tap()
+        let item = app.buttons[label].firstMatch
+        XCTAssertTrue(item.waitForExistence(timeout: 5), "\(label):\n\(app.debugDescription)")
+        item.tap()
+    }
+
+    /// Where a picture of this size is drawn in the screen's frame (aspect-fit, not zoomed).
+    private func pictureRect(_ frame: CGRect, _ size: CGSize) -> CGRect {
+        let k = min(frame.width / size.width, frame.height / size.height)
+        let w = size.width * k, h = size.height * k
+        return CGRect(x: frame.midX - w / 2, y: frame.midY - h / 2, width: w, height: h)
+    }
+
+    /// The screenshot's color at pixel (x, y) of a picture of this size drawn in `rect`.
+    @MainActor private func color(_ app: XCUIApplication, _ rect: CGRect, _ x: CGFloat, _ y: CGFloat, of size: CGSize) -> (r: Int, g: Int, b: Int) {
+        let image = app.screenshot().image
+        guard let cg = image.cgImage else { return (0, 0, 0) }
+        let scale = CGFloat(cg.width) / image.size.width
+        let p = CGPoint(x: (rect.minX + x / size.width * rect.width) * scale, y: (rect.minY + y / size.height * rect.height) * scale)
+        var px = [UInt8](repeating: 0, count: 4)
+        let ctx = CGContext(data: &px, width: 1, height: 1, bitsPerComponent: 8, bytesPerRow: 4, space: CGColorSpaceCreateDeviceRGB(),
+                            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)
+        ctx?.draw(cg, in: CGRect(x: -p.x.rounded(.down), y: p.y.rounded(.down) - CGFloat(cg.height) + 1, width: CGFloat(cg.width), height: CGFloat(cg.height)))
+        return (Int(px[0]), Int(px[1]), Int(px[2]))
+    }
+
+    /// The mock's display 1 is a blue gradient, display 2 a green one.
+    private func isBlue(_ c: (r: Int, g: Int, b: Int)) -> Bool { c.b > c.g + 30 && c.b > c.r + 30 }
+    private func isGreen(_ c: (r: Int, g: Int, b: Int)) -> Bool { c.g > c.b + 30 && c.g > c.r + 30 }
+
     /// The frame rate and latency the page measures (MOCK_SCREEN_ANIMATE=1: a box moving at ~30 frames a second, its
     /// frames stamped when sent): printed, for the record.
     @MainActor func testMeasure() throws {

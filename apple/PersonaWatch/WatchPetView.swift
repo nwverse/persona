@@ -189,7 +189,7 @@ final class WatchPetComplication {
             if shown != nil || FileManager.default.fileExists(atPath: file.path) {
                 try? FileManager.default.removeItem(at: file)
                 shown = nil
-                WidgetCenter.shared.reloadAllTimelines()
+                WidgetCenter.shared.reloadTimelines(ofKind: WatchPetSnapshot.widgetKind)
             }
             return
         }
@@ -209,7 +209,7 @@ final class WatchPetComplication {
         let aging = shown.map { next.at.timeIntervalSince($0.at) >= Self.reloadEvery } ?? true
         if changed || aging {
             shown = next
-            WidgetCenter.shared.reloadAllTimelines()
+            WidgetCenter.shared.reloadTimelines(ofKind: WatchPetSnapshot.widgetKind)
         }
     }
 }

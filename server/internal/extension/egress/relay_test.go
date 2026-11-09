@@ -2,10 +2,12 @@ package egress
 
 import (
 	"bufio"
+	"errors"
 	"io"
 	"net"
 	"os"
 	"path/filepath"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -13,12 +15,7 @@ import (
 // RelayUnix (#5413): every connection on the extension's socket is joined to the target, dialed then; the target
 // closing ends the extension's end too; Unregister takes no more connections.
 func TestProxyRelayUnix(t *testing.T) {
-	// sun_path holds 104 bytes on macOS: a short directory.
-	dir, err := os.MkdirTemp("/tmp", "relay")
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { os.RemoveAll(dir) })
+	dir := shortTempDir(t)
 	target, sock := filepath.Join(dir, "node.sock"), filepath.Join(dir, "ext.sock")
 	p := &Proxy{}
 	if err := p.RelayUnix("notes", sock, target); err != nil {
@@ -75,5 +72,97 @@ func TestProxyRelayUnix(t *testing.T) {
 	if c, err := net.Dial("unix", sock); err == nil {
 		c.Close()
 		t.Fatal("a connection after Unregister")
+	}
+}
+
+// An extension's runtime holds at most runtimeConnsPerListener relayed connections open: the ones over that are closed
+// without reaching the target, a connection that ends frees its place, and Unregister closes the rest.
+func TestProxyRelayUnixBoundsConnections(t *testing.T) {
+	dir := shortTempDir(t)
+	target, sock := filepath.Join(dir, "node.sock"), filepath.Join(dir, "ext.sock")
+	ln, err := net.Listen("unix", target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	var reached atomic.Int32
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			reached.Add(1)
+			go func() { // echo until the relay hangs up
+				defer c.Close()
+				_, _ = io.Copy(c, c)
+			}()
+		}
+	}()
+	p := &Proxy{}
+	defer p.Close()
+	if err := p.RelayUnix("notes", sock, target); err != nil {
+		t.Fatal(err)
+	}
+	dial := func() net.Conn {
+		t.Helper()
+		c, err := net.Dial("unix", sock)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = c.Close() })
+		return c
+	}
+	// relayed says whether c reaches the target (an echo) or was closed by the relay. A closed one fails however the
+	// platform says so (EOF, ECONNRESET, EPIPE, ENOTCONN on macOS…); only no answer at all is neither.
+	relayed := func(c net.Conn) bool {
+		t.Helper()
+		_ = c.SetDeadline(time.Now().Add(5 * time.Second))
+		b := make([]byte, 1)
+		_, err := c.Write([]byte{'x'})
+		if err == nil {
+			_, err = io.ReadFull(c, b)
+		}
+		if ne, ok := errors.AsType[net.Error](err); ok && ne.Timeout() {
+			t.Fatalf("neither relayed nor closed: %v", err)
+		}
+		return err == nil && b[0] == 'x'
+	}
+	const over = 4
+	var open []net.Conn
+	closed := 0
+	for range runtimeConnsPerListener + over {
+		c := dial()
+		if relayed(c) {
+			open = append(open, c)
+		} else {
+			closed++
+		}
+	}
+	if len(open) != runtimeConnsPerListener || closed != over || reached.Load() != runtimeConnsPerListener {
+		t.Fatalf("relayed %d, closed %d, reached the target %d; want %d, %d, %d",
+			len(open), closed, reached.Load(), runtimeConnsPerListener, over, runtimeConnsPerListener)
+	}
+	// One ends: the next connection gets its place (once the relay has seen it end).
+	_ = open[0].Close()
+	open = open[1:]
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		c := dial()
+		if relayed(c) {
+			open = append(open, c)
+			break
+		}
+		_ = c.Close()
+		if time.Now().After(deadline) {
+			t.Fatal("a connection that ended kept its place")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	p.Unregister("notes")
+	for _, c := range open {
+		if relayed(c) {
+			t.Fatal("a relayed connection outlived Unregister")
+		}
 	}
 }

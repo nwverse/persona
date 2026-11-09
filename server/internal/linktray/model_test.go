@@ -295,3 +295,41 @@ func TestErrorText(t *testing.T) {
 		}
 	}
 }
+
+// The name the hub gives this computer is the one shown, and renaming is offered only where the hub takes it: active
+// mode, connected, a hub that says the name, and a confirmed computer.
+func TestTheHubsNameAndRename(t *testing.T) {
+	st := link.Status{State: "connected", Mode: link.ModeActive, Machine: "desk", MachineName: "87K-itx", HubName: "home",
+		Address: "https://192.0.2.2:8443", Kind: "lan", Node: "online"}
+	v := Build(i18n.En, running(st))
+	if got := texts(v.Lines); got[len(got)-1] != "This computer is “87K-itx” on the hub" || v.Name != "87K-itx" {
+		t.Fatalf("lines %q name %q", got, v.Name)
+	}
+	if !hasAction(v, ActRename) {
+		t.Fatal("no rename while connected to a hub that renames")
+	}
+	older := st
+	older.MachineName = ""
+	if v := Build(i18n.En, running(older)); hasAction(v, ActRename) || v.Name != "desk" {
+		t.Fatalf("an older hub: rename %v, name %q", hasAction(v, ActRename), v.Name)
+	}
+	pending := st
+	pending.Pending = true
+	if hasAction(Build(i18n.En, running(pending)), ActRename) {
+		t.Fatal("a computer waiting to be confirmed renames itself")
+	}
+	down := st
+	down.State = "waiting"
+	if v := Build(i18n.En, running(down)); hasAction(v, ActRename) {
+		t.Fatal("rename offered while offline")
+	}
+	// Not running: the name link.json keeps.
+	s := Snapshot{Now: now, Config: paired(), Task: Task{Installed: true}}
+	s.Config.MachineName = "Studio"
+	if v := Build(i18n.En, s); v.Name != "Studio" {
+		t.Fatalf("name %q", v.Name)
+	}
+	if ErrorText(i18n.En, &link.RenameError{Code: link.RenamePending}) == "" {
+		t.Fatal("no words for a refused rename")
+	}
+}

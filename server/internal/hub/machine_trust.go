@@ -236,12 +236,20 @@ func (h *Hub) rejectMachine(ctx context.Context, id, actor, action string) error
 	}
 	// Out until the manager has let it go: from ForgetMachineTrust on it has no row, which is a confirmed one.
 	h.setLeaving(id, true)
-	if h.cfg != nil && h.cfg.dir != "" {
-		if _, err := removeMachineEntry(h.cfg.dir, id); err != nil {
+	if kept, err := h.removeKeptMachine(ctx, id); kept {
+		if err != nil { // its manager away: tried again (the expiry loop, the user)
+			h.setLeaving(id, false)
 			return err
 		}
+	} else {
+		if h.cfg != nil && h.cfg.dir != "" {
+			if _, err := removeMachineEntry(h.cfg.dir, id); err != nil {
+				return err
+			}
+		}
+		h.clearKept(ctx, id) // an old record of a manager that kept it (machines_kept.go)
+		h.removeMachineLive(id)
 	}
-	h.removeMachineLive(id)
 	revoked, err := ts.RevokeMachineCredentials(ctx, id)
 	if err != nil {
 		return err
@@ -341,7 +349,7 @@ func (h *Hub) machineTrustRoutes(api *http.ServeMux) {
 			writeErr(w, http.StatusInternalServerError, err)
 			return
 		}
-		if !ok && h.localMachine(id) == nil && h.cfgEntry(id) == nil {
+		if !ok && h.localMachine(id) == nil && h.knownEntry(id) == nil {
 			writeErrCode(w, http.StatusNotFound, "not_found", i18n.Err("hub-machine_trust.no_machine"))
 			return
 		}
@@ -357,11 +365,13 @@ func (h *Hub) machineTrustRoutes(api *http.ServeMux) {
 		err := h.rejectMachine(r.Context(), id, trustActor(p), "reject")
 		switch {
 		case errors.Is(err, errNotPending):
-			if h.localMachine(id) == nil && h.cfgEntry(id) == nil {
+			if h.localMachine(id) == nil && h.knownEntry(id) == nil {
 				writeErrCode(w, http.StatusNotFound, "not_found", i18n.Err("hub-machine_trust.no_machine"))
 				return
 			}
 			writeErrCode(w, http.StatusConflict, "not_pending", err)
+		case errors.Is(err, errKeeperAway): // the manager that keeps it is away (machines_kept.go)
+			writeErrCode(w, http.StatusServiceUnavailable, "assistant_offline", err)
 		case err != nil:
 			writeErr(w, http.StatusInternalServerError, err)
 		default:

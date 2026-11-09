@@ -131,6 +131,7 @@ extension APIClient {
 
     private struct AgentSources: Decodable { var sources: [PersonalAgentSourceStatus] }
     private struct AgentSessions: Decodable { var sessions: [PersonalAgentSession] }
+    private struct AgentHidden: Decodable { var sessions: [PersonalAgentSession]? }
     private struct AgentSend: Encodable { var clientId: String; var text: String }
 
     func personalAgentSources() async throws -> [PersonalAgentSourceStatus] {
@@ -173,5 +174,20 @@ extension APIClient {
 
     func markPersonalAgentRead(_ id: String) async throws {
         try await post(Self.agentPath(id) + "/read")
+    }
+
+    /// Remove from List (docs/protocol/protocol.md "Removing a personal Agent from the list"): Persona's own, the source
+    /// keeps the conversation and a new message brings it back.
+    func hidePersonalAgent(_ id: String) async throws {
+        try await post(Self.agentPath(id) + "/hide")
+    }
+
+    func unhidePersonalAgent(_ id: String) async throws {
+        try await post(Self.agentPath(id) + "/unhide")
+    }
+
+    /// The removed conversations the sources still list and that got nothing new since.
+    func hiddenPersonalAgents() async throws -> [PersonalAgentSession] {
+        try await get("/api/v1/agents/hidden", as: AgentHidden.self).sessions ?? []
     }
 }

@@ -1,7 +1,15 @@
 {
   "forbidden": "此设备无权归档或恢复 Agent",
-  "unsupported": "这里只支持归档 Codex 和 Claude Agent 会话",
+  "unsupported": "Persona 自己的对话在「全部对话」里归档，不在 Agent 列表里",
   "running": "此 Agent 正在运行或等待回答，请先结束或停止再归档",
   "storage": "无法保存或读取 Agent 归档，请重试",
-  "upgrade": "请更新管理器以使用 Agent 归档"
+  "upgrade": "请更新管理器以使用 Agent 归档",
+  "close_busy": "这个 Agent 正忙（在工作、等回答、跑循环、有排队消息或在跑服务），可以只归档不关闭，或等它做完",
+  "close_offline": "它所在的电脑离线，Agent 在那边还开着",
+  "close_engine": "这个会话由它的引擎或别的工具管理，没有在电脑上关闭",
+  "close_not_resumable": "关闭后没法再接着这个会话，所以没有在电脑上关闭",
+  "close_node_old": "请更新那台电脑上的 Persona，才能从这里关闭 Agent",
+  "close_refused": "电脑没有关闭这个 Agent，它还开着",
+  "close_failed": "在电脑上关闭 Agent 失败，它可能还开着",
+  "close_upgrade": "请更新管理器以使用「归档并关闭」"
 }

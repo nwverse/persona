@@ -1,0 +1,16 @@
+{
+  "title": "Archived agents",
+  "refresh": "Refresh",
+  "search_placeholder": "Search archived agents",
+  "clear_search": "Clear search",
+  "description": "Archiving keeps each conversation on its computer. Restore one to return it to Agents; new activity brings it back too.",
+  "restore": "Restore",
+  "restore_label": "Restore “{title}”",
+  "empty_title": "No archived agents",
+  "empty_body": "Archive an agent from its ⋯ menu to keep it out of the Agents list.",
+  "no_results": "Nothing matches “{query}”",
+  "load_failed": "Couldn't load archived agents",
+  "retry": "Try again",
+  "unsupported_title": "Archives aren't available",
+  "unsupported_body": "Update the hub and its managers to archive agents."
+}

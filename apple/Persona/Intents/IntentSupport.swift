@@ -140,7 +140,11 @@ nonisolated enum IntentSupport {
     /// Fresh clients every call, one per group (its first hub): the pairing can change while the app is running.
     static func clients() throws -> [APIClient] {
         let registry = HubStore.load()
-        let out = registry.groups.compactMap { g in registry.primary(g).map { APIClient(config: $0.config, group: g) } }
+        let out = registry.groups.compactMap { g in registry.primary(g).map {
+            var client = APIClient(config: $0.config, group: g)
+            client.clientMetadata = RequestClientMetadata(surface: .intent)
+            return client
+        } }
         guard !out.isEmpty else { throw IntentFailure.notPaired }
         return out
     }
@@ -227,6 +231,15 @@ nonisolated enum IntentPicker {
             case .quiet, .muted: return false
             }
         }
+    }
+
+    /// How many agents 「Persona 状态」 says are working, as the island counts them (#180): the Agents tab's at work by
+    /// the hub's `state` (not herdr's raw status). Persona's own conversations, quiet tasks' agents and muted ones are
+    /// left out, by the same rule as the waiting cards (`TabBadges.place`).
+    static func working(_ sessions: [Session], mutes: [String: Pins]) -> Int {
+        sessions.filter { s in
+            s.state == .working && TabBadges.place(s.key, session: s, quiet: s.quiet, mutes: mutes[s.group]) == .agents
+        }.count
     }
 
     /// What Siri reads out as waiting and the first of it: 「Persona 状态」 says how many and reads `first`;

@@ -6,15 +6,23 @@ import (
 	"encoding/json"
 	"errors"
 	"flag"
+	"maps"
 	"net"
 	"net/http"
 	"net/http/httptest"
+	neturl "net/url"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/jackc/pgx/v5"
+
+	"github.com/nwverse/persona/server/internal/assistantwire"
+	"github.com/nwverse/persona/server/internal/db"
 )
 
 var updateGolden = flag.Bool("update-hubjson-golden", false, "rewrite testdata/hubjson/*.golden.json")
@@ -29,6 +37,17 @@ func setupTestHome(t *testing.T) string {
 		t.Setenv(k, "")
 	}
 	return home
+}
+
+// realPath is p with symlinks resolved, as hubBinary returns the binary: macOS's default temp dir, where t.TempDir()
+// goes without GOTMPDIR, is under /var, a symlink to /private/var.
+func realPath(t *testing.T, p string) string {
+	t.Helper()
+	r, err := filepath.EvalSymlinks(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return r
 }
 
 // normalizeHost takes this machine's host name and a generated token out of a config, for goldens.
@@ -113,8 +132,15 @@ func TestNewInstallDefaultsAreNotDefaults(t *testing.T) {
 	}
 }
 
-// fakeHub answers what setup asks the running hub: health, endpoints, a pair code and a setup code.
+// fakeHub answers what setup asks the running hub: health, endpoints, a pair code and a setup code, and the roster
+// with the built-in manager online as a service of its own.
 func fakeHub(t *testing.T, token *string, passwordSet bool) (port int) {
+	t.Helper()
+	return fakeHubWith(t, token, passwordSet, func() bool { return true })
+}
+
+// fakeHubWith is fakeHub with builtinOnline saying whether the built-in manager's service is on the bus.
+func fakeHubWith(t *testing.T, token *string, passwordSet bool, builtinOnline func() bool) (port int) {
 	t.Helper()
 	mux := http.NewServeMux()
 	auth := func(r *http.Request) bool { return r.Header.Get("Authorization") == "Bearer "+*token }
@@ -132,6 +158,13 @@ func fakeHub(t *testing.T, token *string, passwordSet bool) (port int) {
 			return
 		}
 		writeJSON(w, map[string]any{"token": "jp_test", "url": "http://hub.example.com:1", "expires_at": time.Now().Add(10 * time.Minute)})
+	})
+	mux.HandleFunc("GET /api/v1/managers", func(w http.ResponseWriter, r *http.Request) {
+		if !auth(r) {
+			w.WriteHeader(401)
+			return
+		}
+		writeJSON(w, map[string]any{"managers": []managerInfo{{ID: "assistant", Builtin: true, Online: builtinOnline(), Deploy: "service"}}})
 	})
 	mux.HandleFunc("POST /api/v1/admin/setup-code", func(w http.ResponseWriter, r *http.Request) {
 		if passwordSet {
@@ -211,16 +244,19 @@ func testSetupEnv(t *testing.T, home string, o setupOptions, cmds *fakeCommands,
 			}
 			return "", errors.New("not found")
 		},
-		ask:         func(string) (bool, bool) { return false, false },
-		lanIPv4:     func() string { return ip4(192, 168, 1, 20) },
-		portFree:    func(int) bool { return true },
-		exe:         func() (string, error) { return "/nonexistent", nil },
-		pingDB:      func(context.Context, string) error { return nil },
-		doctor:      func(context.Context, string, bool) []string { return nil },
-		getenv:      func(string) string { return "" },
-		sleep:       func(time.Duration) {},
-		isContainer: func() bool { return false },
-		healthWait:  time.Second, dbWait: time.Second,
+		ask:          func(string) (bool, bool) { return false, false },
+		lanIPv4:      func() string { return ip4(192, 168, 1, 20) },
+		portFree:     func(int) bool { return true },
+		exe:          func() (string, error) { return "/nonexistent", nil },
+		pingDB:       func(context.Context, string) error { return nil },
+		doctor:       func(context.Context, string, bool) []string { return nil },
+		getenv:       func(string) string { return "" },
+		sleep:        func(time.Duration) {},
+		isContainer:  func() bool { return false },
+		builtinCode:  func(context.Context, *Config) (string, error) { return "mi_setup", nil },
+		voidCode:     func(context.Context, *Config, string) error { return nil },
+		keptMachines: func(context.Context, *Config) (map[string]string, error) { return nil, nil },
+		healthWait:   time.Second, dbWait: time.Second,
 		dbContainer: setupDBContainer, dbVolume: setupDBVolume, dbPort: setupDBPort,
 	}
 	return e, &out
@@ -276,8 +312,21 @@ func TestSetupNewInstall(t *testing.T) {
 		!strings.Contains(run, "-p 127.0.0.1:18661:5432") || !strings.HasSuffix(run, "postgres:18-alpine") || strings.Contains(run, "POSTGRES_PASSWORD=") {
 		t.Fatalf("docker run: %q", run)
 	}
-	if len(cmds.envs) != 1 || !strings.HasPrefix(cmds.envs[0], "POSTGRES_PASSWORD=") {
+	if len(cmds.envs) != 3 || !strings.HasPrefix(cmds.envs[0], "POSTGRES_PASSWORD=") {
 		t.Fatalf("password env: %v", cmds.envs)
+	}
+	// The built-in manager: its own service, bound by the manager's program with the code in its environment only.
+	if cfg.Assistant.Mode != AssistantModeService {
+		t.Fatalf("assistant.mode %q:\n%s", cfg.Assistant.Mode, b)
+	}
+	install := filepath.Join(e.root, "bin", "personad") + " manager install --builtin --join http://127.0.0.1:" + strconv.Itoa(port)
+	if !cmds.called(install) || strings.Join(cmds.envs[1:], " ") != "PERSONA_HOME="+e.root+" PERSONA_MANAGER_CODE=mi_setup" {
+		t.Fatalf("manager install: %v %v", cmds.calls, cmds.envs)
+	}
+	for _, c := range cmds.calls {
+		if strings.Contains(c, "mi_setup") {
+			t.Fatalf("the code on a command line: %q", c)
+		}
 	}
 	// hub-systemd.sh's units; the TLS address is bound, so FreeBind.
 	unitDir := filepath.Join(home, ".config", "systemd", "user")
@@ -285,7 +334,7 @@ func TestSetupNewInstall(t *testing.T) {
 	if !strings.Contains(string(socket), "ListenStream="+strconv.Itoa(port)+"\nListenStream="+lan+":18662\n") || !strings.Contains(string(socket), "FreeBind=true") {
 		t.Fatalf("socket unit:\n%s", socket)
 	}
-	for _, c := range []string{"systemctl --user daemon-reload", "systemctl --user enable personad", "systemctl --user enable personad.socket", "systemctl --user start personad"} {
+	for _, c := range []string{"systemctl --user daemon-reload", "systemctl --user enable personad", "systemctl --user stop personad.socket personad", "systemctl --user enable personad.socket", "systemctl --user start personad.socket", "systemctl --user start personad"} {
 		if !cmds.called(c) {
 			t.Fatalf("no %q in %v", c, cmds.calls)
 		}
@@ -307,7 +356,7 @@ func TestSetupNewInstall(t *testing.T) {
 			t.Fatalf("linger not offered: %q", l)
 		}
 	}
-	if strings.Join(steps, ",") != "config,database,service,health,doctor" {
+	if strings.Join(steps, ",") != "config,database,service,health,manager,doctor" {
 		t.Fatalf("steps %v", steps)
 	}
 	var done map[string]any
@@ -378,19 +427,27 @@ func TestSetupKeepsAnExistingHubJSON(t *testing.T) {
 }
 
 // A hub installed before claude / herdr (#4083): rerunning setup once they are there adds this machine while hub.json
-// has "machines": [], and restarts the running hub so it sees it; never in a container, with PERSONA_LOCAL_NODE=0, or over
-// machines already there.
+// has "machines": [], and restarts the running hub so it sees it; never in a container, with PERSONA_LOCAL_NODE=0, over
+// machines already there, or while a manager keeps any machine (their entries left hub.json for its own list). When
+// who keeps what does not read, it adds nothing and says why. It reads that after the database step, which starts a
+// stopped database.
 func TestSetupAddsTheLocalMachineLater(t *testing.T) {
 	for _, c := range []struct {
 		name, prog, machines  string
 		localNode0, container bool
+		kept                  map[string]string
+		keptErr, dbStopped    bool
 		want                  string // the one machine's kind afterwards, "" for none
 	}{
 		{name: "empty list, claude", prog: "claude", machines: `,"machines":[]`, want: "local"},
 		{name: "empty list, herdr", prog: "herdr", machines: `,"machines":[]`, want: "local"},
 		{name: "PERSONA_LOCAL_NODE=0", prog: "claude", machines: `,"machines":[]`, localNode0: true},
 		{name: "in a container", prog: "claude", machines: `,"machines":[]`, container: true},
-		{name: "machines kept", prog: "claude", machines: `,"machines":[{"id":"remote1","name":"remote1","kind":"ssh"}]`, want: "ssh"},
+		{name: "machines listed", prog: "claude", machines: `,"machines":[{"id":"remote1","name":"remote1","kind":"ssh"}]`, want: "ssh"},
+		{name: "a manager keeps this machine", prog: "claude", machines: `,"machines":[]`, kept: map[string]string{"host1": "assistant"}},
+		{name: "a manager keeps another machine", prog: "claude", machines: `,"machines":[]`, kept: map[string]string{"remote1": "mgr-b"}},
+		{name: "who keeps what does not read", prog: "claude", machines: `,"machines":[]`, keptErr: true},
+		{name: "the database was stopped", prog: "claude", machines: `,"machines":[]`, dbStopped: true, want: "local"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			home := setupTestHome(t)
@@ -405,6 +462,26 @@ func TestSetupAddsTheLocalMachineLater(t *testing.T) {
 				return ""
 			}
 			e.isContainer = func() bool { return c.container }
+			if c.dbStopped {
+				cmds.replies["docker ps -a"] = fakeReply{out: setupDBContainer + "\n"}
+				e.pingDB = func(context.Context, string) error {
+					if !cmds.called("docker start " + setupDBContainer) {
+						return errors.New("connection refused")
+					}
+					return nil
+				}
+			}
+			reads := 0
+			e.keptMachines = func(_ context.Context, cfg *Config) (map[string]string, error) {
+				reads++
+				if cfg.DatabaseURL != "postgres://x" || (c.dbStopped && !cmds.called("docker start "+setupDBContainer)) {
+					t.Errorf("who keeps what read before the database step: %q, calls %v", cfg.DatabaseURL, cmds.calls)
+				}
+				if c.keptErr {
+					return nil, errors.New("connection refused")
+				}
+				return c.kept, nil
+			}
 			write := func(machines string) {
 				file := `{"token":"existing-token","listen":":` + strconv.Itoa(port) + `","public_url":"http://hub.example.com:1","database_url":"postgres://x"` + machines + `}`
 				if err := os.WriteFile(filepath.Join(e.root, "hub.json"), []byte(file), 0o600); err != nil {
@@ -415,6 +492,9 @@ func TestSetupAddsTheLocalMachineLater(t *testing.T) {
 			write(`,"machines":[{"id":"remote1","name":"remote1","kind":"ssh"}]`)
 			if err := e.setup(context.Background()); err != nil {
 				t.Fatalf("%v\n%s", err, out)
+			}
+			if reads != 0 {
+				t.Fatalf("who keeps what read %d times over a hub.json that lists machines", reads)
 			}
 			write(c.machines)
 			cmds.calls = nil
@@ -431,10 +511,81 @@ func TestSetupAddsTheLocalMachineLater(t *testing.T) {
 				t.Fatalf("machines %+v, want one %q", cfg.Machines, c.want)
 			}
 			added := c.want == "local"
-			if strings.Contains(out.String(), "补上本机") != added || cmds.called("systemctl --user restart personad") != added {
+			if strings.Contains(out.String(), "补上本机") != added || strings.Contains(out.String(), "hub.json 补了本机") != added ||
+				cmds.called("systemctl --user restart personad") != added {
 				t.Fatalf("added=%v: calls %v, output:\n%s", added, cmds.calls, out)
 			}
+			if wantReads := c.machines == `,"machines":[]` && !c.localNode0 && !c.container; (reads == 1) != wantReads || reads > 1 {
+				t.Fatalf("who keeps what read %d times, want it read: %v", reads, wantReads)
+			}
+			if said := strings.Contains(out.String(), "有问题｜配置：hub.json 里没有电脑，但读不了哪些电脑归管理者管（connection refused）"); said != c.keptErr {
+				t.Fatalf("read failure said=%v, want %v:\n%s", said, c.keptErr, out)
+			}
 		})
+	}
+}
+
+// Setup reads who keeps what as the hub does, from the hub's own settings and migrating nothing: a machine whose manager
+// is gone does not count, none recorded reads as none, and so does a database without the hub's settings (a hub from
+// before them); any other failure is one, naming the setting.
+func TestSetupReadsTheKeptMachines(t *testing.T) {
+	url := os.Getenv("PERSONA_TEST_DATABASE_URL")
+	if url == "" {
+		t.Skip("PERSONA_TEST_DATABASE_URL not set (scripts/test/test-server.sh runs this on the hub machine)")
+	}
+	ctx := context.Background()
+	database, err := db.Open(ctx, url, db.HubSet)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(database.Close)
+	var before json.RawMessage
+	if _, err := database.Setting(ctx, machinesKeptKey, &before); err != nil {
+		t.Fatal(err)
+	}
+	put := func(v any) {
+		if err := database.PutSetting(ctx, machinesKeptKey, v); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Cleanup(func() { put(before) })
+	cfg := &Config{DatabaseURL: url}
+	put(nil)
+	if kept, err := keptMachines(ctx, cfg); err != nil || len(kept) != 0 {
+		t.Fatalf("none recorded: %v %v", kept, err)
+	}
+	put(map[string]string{"host1": assistantwire.AssistantID, "remote1": "gone-" + randomHex(6)})
+	if kept, err := keptMachines(ctx, cfg); err != nil || !maps.Equal(kept, map[string]string{"host1": assistantwire.AssistantID}) {
+		t.Fatalf("kept %v %v, want host1 by the built-in manager only", kept, err)
+	}
+	put("not a map")
+	if kept, err := keptMachines(ctx, cfg); err == nil || !strings.Contains(err.Error(), machinesKeptKey) {
+		t.Fatalf("a value that does not read: %v %v, want an error naming %s", kept, err, machinesKeptKey)
+	}
+
+	conn, err := pgx.Connect(ctx, url)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = conn.Close(context.Background()) })
+	schema := "setup_kept_" + randomHex(6)
+	if _, err := conn.Exec(ctx, "CREATE SCHEMA "+schema); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _, _ = conn.Exec(context.Background(), "DROP SCHEMA "+schema+" CASCADE") })
+	u, err := neturl.Parse(url)
+	if err != nil {
+		t.Fatal(err)
+	}
+	q := u.Query()
+	q.Set("search_path", schema)
+	u.RawQuery = q.Encode()
+	if kept, err := keptMachines(ctx, &Config{DatabaseURL: u.String()}); err != nil || len(kept) != 0 {
+		t.Fatalf("no hub_settings: %v %v, want nothing kept", kept, err)
+	}
+	var tables int
+	if err := conn.QueryRow(ctx, `SELECT count(*) FROM information_schema.tables WHERE table_schema = $1`, schema).Scan(&tables); err != nil || tables != 0 {
+		t.Fatalf("%d tables in %s afterwards (%v), want none: setup migrates nothing", tables, schema, err)
 	}
 }
 
@@ -677,7 +828,7 @@ func TestSetupMacLaunchAgent(t *testing.T) {
 		t.Fatalf("%v\n%s", err, out)
 	}
 	plist, _ := os.ReadFile(filepath.Join(home, "Library", "LaunchAgents", "com.persona.hub.plist"))
-	bin := filepath.Join(e.root, "bin", "personad")
+	bin := realPath(t, filepath.Join(e.root, "bin", "personad"))
 	if !strings.Contains(string(plist), "<string>"+bin+"</string><string>hub</string>") || !strings.Contains(string(plist), "<key>PERSONA_HOME</key><string>"+e.root+"</string>") {
 		t.Fatalf("plist:\n%s", plist)
 	}
@@ -696,8 +847,15 @@ func TestHubUnitsMatchHubSystemd(t *testing.T) {
 	if got := hubSocketUnit([]string{":18660", ":18662"}); got != want {
 		t.Fatalf("socket:\n%s", got)
 	}
-	svc := hubServiceUnit("/home/someone/.persona", true)
-	for _, line := range []string{`ExecStart="/home/someone/.persona/bin/personad" hub`, "Wants=personad.socket", `Environment="PERSONA_HOME=/home/someone/.persona"`, "Restart=always"} {
+	svc := hubServiceUnit("/home/someone/.persona", false, true, false)
+	for _, line := range []string{"Description=Persona hub (personad)", `ExecStart="/home/someone/.persona/bin/personad" hub`, "Wants=personad.socket", `Environment="PERSONA_HOME=/home/someone/.persona"`, "Restart=always"} {
+		if !strings.Contains(svc, line+"\n") {
+			t.Fatalf("no %q in:\n%s", line, svc)
+		}
+	}
+	// hub-systemd.sh's for a unit that runs persona-hub.
+	svc = hubServiceUnit("/home/someone/.persona", true, true, false)
+	for _, line := range []string{"Description=Persona hub (persona-hub)", `ExecStart="/home/someone/.persona/bin/persona-hub" run`, "Wants=personad.socket"} {
 		if !strings.Contains(svc, line+"\n") {
 			t.Fatalf("no %q in:\n%s", line, svc)
 		}
@@ -816,11 +974,16 @@ func TestSetupMacHubRunningElsewhere(t *testing.T) {
 }
 
 func TestLaunchdJob(t *testing.T) {
-	label, args, ok := launchdJob([]byte(`<plist version="1.0"><dict><key>Label</key><string>a.b</string><key>Program</key><string>/x/personad</string><key>RunAtLoad</key><true/></dict></plist>`))
-	if !ok || label != "a.b" || len(args) != 1 || args[0] != "/x/personad" {
-		t.Fatalf("%q %q %v", label, args, ok)
+	job, ok := launchdJob([]byte(`<plist version="1.0"><dict><key>Label</key><string>a.b</string><key>Program</key><string>/x/personad</string><key>RunAtLoad</key><true/></dict></plist>`))
+	if !ok || job.label != "a.b" || !slices.Equal(job.args, []string{"/x/personad"}) || job.disabled {
+		t.Fatalf("%+v %v", job, ok)
 	}
-	if _, _, ok := launchdJob([]byte("bplist00")); ok {
+	// Program is what runs; ProgramArguments[0] only names it.
+	job, ok = launchdJob([]byte(`<plist version="1.0"><dict><key>Program</key><string>/x/persona-hub</string><key>ProgramArguments</key><array><string>/x/personad</string><string>hub</string></array><key>Disabled</key><true/></dict></plist>`))
+	if !ok || !slices.Equal(job.args, []string{"/x/persona-hub", "hub"}) || !job.disabled {
+		t.Fatalf("%+v %v", job, ok)
+	}
+	if _, ok := launchdJob([]byte("bplist00")); ok {
 		t.Fatal("binary plist parsed")
 	}
 }

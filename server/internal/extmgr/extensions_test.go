@@ -57,6 +57,10 @@ func TestMain(m *testing.M) {
 		serveConnectorExtensionForTest()
 		return
 	}
+	if os.Getenv("PERSONA_TEST_PLUGIN") == "recall" {
+		serveRecallExtensionForTest()
+		return
+	}
 	if os.Getenv("PERSONA_TEST_PLUGIN") == "auth" {
 		serveAuthExtensionForTest()
 		return

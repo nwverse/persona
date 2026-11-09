@@ -14,8 +14,9 @@ import persona.core.designsystem.Tokens
 import persona.core.navigation.InboxItemUiRoute
 
 // An inbox item's page drawn by an extension (docs/extensions/extensions.md "UI slots" `inbox_item`, #1683): an extension's connector (the
-// Feishu extension's `lark`) may draw the body of the items it brings in. Opening such an item shows the app's header of
-// the item over the extension's view (InboxItemExtensionScreen); every other item, and every item on a hub that lists no
+// Feishu extension's `lark`) may draw items it brings in. Chats keep the native conversation and reply composer by default.
+// Opening another such item shows its native header over the extension's view (InboxItemExtensionScreen); every other
+// item, and every item on a hub that lists no
 // such page, opens its own page as before. When the extension cannot draw an item, its own page opens instead, saying so
 // in a line with "Retry" when the extension broke rather than declined.
 
@@ -23,7 +24,7 @@ import persona.core.navigation.InboxItemUiRoute
  * The `inbox_item` pages the hub lists, by the connector whose items each draws; [failures] are the items whose page
  * broke (item id → what to say), shown on their own pages until [retry] tries the extension's page again in place of
  * the page it is called from. Until the hub's list is [known] (at launch, before its hello), an item opens its own
- * page and [provisional] hears of it, so that the shell can put the extension's page in its place once the list comes.
+ * page and [provisional] hears of it, so the shell can replace eligible pages once the list comes.
  */
 data class InboxItemPages(
     val places: List<ExtensionUiPlace> = emptyList(),
@@ -31,6 +32,7 @@ data class InboxItemPages(
     val retry: (from: NavKey, itemId: String) -> Unit = { _, _ -> },
     val known: Boolean = true,
     val provisional: (NavKey) -> Unit = {},
+    val nativeChats: Boolean = true,
 ) {
     /** The extension's page for [record], when the connector it comes from has one; the first listed wins. */
     fun place(record: InboxRecord): ExtensionUiPlace? {
@@ -38,8 +40,11 @@ data class InboxItemPages(
         return places.firstOrNull { it.placement == Placement && it.connector == source && it.extension.isNotEmpty() && it.id.isNotEmpty() }
     }
 
-    /** Where opening [record] goes when an extension draws its page; null: the item's own page. */
-    fun route(record: InboxRecord): InboxItemUiRoute? = place(record)?.let { InboxItemUiRoute(record.item.id, it.extension, it.id, record.item.title) }
+    /** The device preference controls item chats, including late slot discovery and extension retries. */
+    fun route(record: InboxRecord): InboxItemUiRoute? {
+        if (nativeChats && inboxItemPage(record) is LarkRoute) return null
+        return place(record)?.let { InboxItemUiRoute(record.item.id, it.extension, it.id, record.item.title) }
+    }
 
     /** Opening [record] (from the list, or an item link): [inboxOpenPage], told to [provisional] while the list is unknown. */
     fun open(record: InboxRecord): NavKey = inboxOpenPage(record, this).also(::opened)
@@ -49,7 +54,7 @@ data class InboxItemPages(
 
     /**
      * Once the list is known: the item pages of [stack] opened before it was ([provisional]) whose connector's extension
-     * draws them, each with the extension's page to put in its place. A chat link was never provisional, so it stays a chat.
+     * draws them, each with the extension's page to put in its place. Native conversations stay chats while preferred, even if provisional.
      */
     fun swaps(stack: List<NavKey>, provisional: Set<NavKey>, records: List<InboxRecord>): List<Pair<NavKey, InboxItemUiRoute>> =
         stack.filter { it in provisional }.mapNotNull { key ->
@@ -77,7 +82,7 @@ fun inboxItemPage(record: InboxRecord): NavKey = record.moment?.let { LarkMoment
     ?: ConnectorThreadRoute(record.item.id).takeIf { record.isConnector && record.connector?.thread?.isNotBlank() == true && record.doc == null }
     ?: InboxItemDetailRoute(record.item.id)
 
-/** What opening [record] shows: its extension's page when [pages] has one for its connector, else its own page. */
+/** Preferred chats open natively; other items use the connector page when available, else their own page. */
 fun inboxOpenPage(record: InboxRecord, pages: InboxItemPages): NavKey = pages.route(record) ?: inboxItemPage(record)
 
 /**
@@ -93,6 +98,7 @@ fun inboxSourcePage(itemId: String, records: List<InboxRecord>): NavKey? = recor
 @Composable
 internal fun InboxExtensionNotice(itemId: String?, from: NavKey, modifier: Modifier = Modifier.padding(bottom = Tokens.Space.s)) {
     val pages = LocalInboxItemPages.current
+    if (pages.nativeChats && from is LarkRoute) return
     val message = itemId?.let { pages.failures[it] } ?: return
     JNotice(message, modifier, status = Status.NeedsYou, actionLabel = stringResource(R.string.inbox_retry), onAction = { pages.retry(from, itemId) })
 }

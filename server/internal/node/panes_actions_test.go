@@ -174,7 +174,11 @@ func TestRunAgentInAShellPane(t *testing.T) {
 					typed = append(typed, str(c.Params["pane_id"])+" "+str(c.Params["text"]))
 				}
 			}
-			if len(typed) != 1 || !strings.HasPrefix(typed[0], "w1:p2 "+tc.typed+id) {
+			want := tc.typed
+			if tc.shell == "-zsh" { // with the node's directory, without the assistant's environment (agentenv.go)
+				want = inAgentEnv(n.dir, want, shellQuote)
+			}
+			if len(typed) != 1 || !strings.HasPrefix(typed[0], "w1:p2 "+want+id) {
 				t.Errorf("typed = %q (cwd %s)", typed, cwd)
 			}
 			if f.trace("pane.close", "tab.close") != nil {

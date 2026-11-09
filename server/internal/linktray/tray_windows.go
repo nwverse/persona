@@ -628,6 +628,19 @@ func (a *app) panelMessage(r request) {
 		}
 		_ = json.Unmarshal(r.Args, &act)
 		a.action(act.ID, act.On, func(err error) { a.panel.reply(r.ID, nil, a.localize(err)) })
+	case "rename":
+		var in struct{ Name string }
+		_ = json.Unmarshal(r.Args, &in)
+		w := a.panel
+		background(a, func() (string, error) { return a.host.Rename(in.Name) }, func(name string, err error) {
+			if err == nil {
+				a.notice(TonePositive, i18n.T(a.lang, "link-tray.renamed_ok", i18n.Args{"name": name}))
+			}
+			if w == a.panel && w != nil {
+				w.reply(r.ID, map[string]string{"name": name}, a.localize(err))
+			}
+			a.refresh(false)
+		})
 	}
 }
 
@@ -679,6 +692,12 @@ func (a *app) action(id string, on bool, done func(error)) {
 		a.quit()
 	case ActPanel:
 		a.openPanel()
+	case ActRename: // the panel's own field (panel.js): from the menu, the panel opens with it
+		a.openPanel()
+		if a.panel != nil {
+			a.panel.send(map[string]any{"type": "rename"})
+		}
+		finish(nil, "")
 	}
 }
 
@@ -708,6 +727,11 @@ func (a *app) showMenu(x, y int32) {
 		}
 	}
 	add(mfString, labels[ActPair], ActPair)
+	for _, act := range a.view.Actions {
+		if act.ID == ActRename {
+			add(mfString, labels[ActRename], ActRename)
+		}
+	}
 	procAppendMenuW.Call(menu, mfSeparator, 0, 0)
 	auto := uint32(mfString)
 	if a.snap.Autostart {

@@ -7,12 +7,12 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"regexp"
 	"sort"
 	"strings"
 	"time"
 
 	"github.com/nwverse/persona/server/internal/kbwire"
+	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/prompts"
 )
 
@@ -101,7 +101,7 @@ var (
 	ErrRecordingDeleted = errors.New("this recording was deleted")
 	// ErrBadRecording wraps what is wrong with an upload.
 	ErrBadRecording = errors.New("invalid recording")
-	uuidRe          = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
+	uuidRe          = lazyre.New(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
 )
 
 // RecordingID is id as stored (lowercase), false when it is not a UUID.
@@ -404,12 +404,12 @@ func (e *Engine) unindex(kind string, ids []string) {
 
 // recordingSummary is the model's answer for a recording (kb/recording).
 type recordingSummary struct {
-	Title      string   `json:"title"`
-	Summary    string   `json:"summary"`
-	OneLine    string   `json:"one_line"`
-	Importance string   `json:"importance"`
-	Relevance  int      `json:"relevance"`
-	Tags       []string `json:"tags"`
+	Title      string     `json:"title"`
+	Summary    string     `json:"summary"`
+	OneLine    string     `json:"one_line"`
+	Importance string     `json:"importance"`
+	Relevance  modelScore `json:"relevance"`
+	Tags       []string   `json:"tags"`
 	Projects   []struct {
 		Name   string `json:"name"`
 		Update string `json:"update"`
@@ -473,7 +473,7 @@ func (e *Engine) summarizeRecording(ctx context.Context, r *Recording) error {
 			return err
 		}
 	}
-	applyTags(&cur.Tagging, out.Importance, out.Relevance, out.Tags, now)
+	applyTags(&cur.Tagging, out.Importance, int(out.Relevance), out.Tags, now)
 	cur.OneLine = oneLine(out.OneLine)
 	if t := oneLine(out.Title); t != "" {
 		cur.AITitle = t

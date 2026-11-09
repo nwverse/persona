@@ -12,6 +12,8 @@ import androidx.compose.ui.platform.LocalDensity
 import android.content.Intent
 import android.net.Uri
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.background
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.interaction.collectIsDraggedAsState
 import androidx.compose.foundation.layout.*
@@ -20,6 +22,9 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalWindowInfo
@@ -112,7 +117,13 @@ private fun LarkConversationScreen(repository: InboxRepository, route: LarkRoute
     val timeline = remember(target, conversation.windowRevision) { larkListWindow() }
     var timelineVersion by remember(target, conversation.windowRevision) { mutableIntStateOf(0) }
     val liveMessages by rememberUpdatedState(conversation.messages)
-    val displayed = remember(conversation.messages, timelineVersion, timeline) { timeline.items(conversation.messages) }
+    val confirmedReads by repository.messageReads.collectAsStateWithLifecycle()
+    val displayed = remember(conversation.messages, timelineVersion, timeline, confirmedReads, inbox.contentSource) {
+        timeline.items(conversation.messages).map { message ->
+            if (message.position != null && InboxMessageRead(inbox.contentSource?.scope.orEmpty(), route.feedId, message.id, message.position) in confirmedReads)
+                message.copy(isRead = true) else message
+        }
+    }
     SideEffect { store?.observe(displayed) }
     var thread by remember(route.feedId) { mutableStateOf<LarkMessage?>(null) }
     var more by remember { mutableStateOf(false) }
@@ -140,6 +151,7 @@ private fun LarkConversationScreen(repository: InboxRepository, route: LarkRoute
     var handingOff by remember { mutableStateOf(false) }
     var readPosition by remember { mutableStateOf(navigation.readPosition) }
     var error by remember { mutableStateOf<String?>(null) }
+    var readRetry by remember(route) { mutableStateOf<List<LarkMessage>?>(null) }
     val res = LocalResources.current
     var markingDone by remember { mutableStateOf(false) }
     var refreshing by remember { mutableStateOf(false) }
@@ -186,13 +198,17 @@ private fun LarkConversationScreen(repository: InboxRepository, route: LarkRoute
             if (visible.isNotEmpty()) {
                 delay(450)
                 try {
-                    repository.markVisible(route.feedId, visible)
+                    if (!repository.markVisible(route.feedId, visible)) {
+                        readRetry = visible
+                        return@collectLatest
+                    }
+                    readRetry = null
                     visible.mapNotNull { it.position }.maxOrNull()?.let { read ->
                         readPosition = maxOf(readPosition ?: Long.MIN_VALUE, read)
                     }
                 }
                 catch (e: CancellationException) { throw e }
-                catch (_: Exception) { /* Retry on the next viewport or verified-window change. */ }
+                catch (_: Exception) { readRetry = visible }
             }
         }
     }
@@ -371,6 +387,12 @@ private fun LarkConversationScreen(repository: InboxRepository, route: LarkRoute
                 if (record != null && !record.item.isDone) AgentDraftCard(record, composers, navigator, onEditingChange = { editingDraft = it },
                     repository = repository, onEdit = { drafting = true }, keepComposer = true)
                 if (conversation.loading || refreshing || conversation.loadingNewer) JChip(stringResource(R.string.inbox_lark_loading_messages), status = Status.Working)
+                readRetry?.let { captured -> JNotice(stringResource(R.string.inbox_conversations_read_failed),
+                    actionLabel = stringResource(R.string.inbox_retry), onAction = { scope.launch {
+                        try { if (repository.markVisible(route.feedId, captured)) readRetry = null }
+                        catch (e: CancellationException) { throw e }
+                        catch (_: Exception) { readRetry = captured }
+                    } }) }
                 (error ?: conversation.failure?.let { stringResource(it.text) } ?: conversation.error)?.let { message ->
                     JNotice(message, status = Status.NeedsYou, actionLabel = stringResource(R.string.inbox_retry), onAction = { refreshConversation() })
                 }
@@ -584,7 +606,16 @@ internal fun LarkBubble(
             }) {
                 LarkAvatar(message.senderName.ifBlank { stringResource(if (message.bot) R.string.inbox_bot else R.string.inbox_lark_avatar_fallback) }, message.avatar, onlineSince)
             }
-        }, footer = footer, content = body)
+        }, footer = footer) {
+            Box(Modifier.fillMaxWidth()) {
+                Column(if (!message.isRead) Modifier.padding(end = Tokens.Space.m) else Modifier) { body() }
+                if (!message.isRead && !message.system && message.delivery == LarkDelivery.Sent) {
+                    val unread = stringResource(R.string.inbox_conversations_unread_message)
+                    Box(Modifier.align(Alignment.TopEnd).size(Tokens.Space.s).clip(CircleShape)
+                        .background(PersonaTheme.palette.danger.dot).semantics { contentDescription = unread })
+                }
+            }
+        }
 }
 
 @Composable

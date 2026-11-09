@@ -2,6 +2,8 @@ package persona.feature.inbox
 
 import persona.core.contracts.api.*
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.async
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.*
@@ -11,6 +13,50 @@ import org.junit.Test
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class LarkConversationTest {
+    @Test fun visibleReceiptPublishesSharedReadsOnlyAfterSuccessfulTransport() = runTest {
+        val transport = FakeLarkTransport()
+        transport.pages += page(1, older = false, newer = false)
+        val repository = LarkInboxRepository(FakeInboxRepository(), MutableStateFlow(transport),
+            MutableStateFlow(ConnectionState.Online), MutableSharedFlow(), MemoryLarkCache(page(1, older = false, newer = false)))
+        var state = LarkConversation()
+        backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { repository.conversation("feed", null).collect { state = it } }
+        runCurrent()
+        transport.readGate = CompletableDeferred()
+        transport.failRead = true
+        val failed = async { runCatching { repository.markVisible("feed", state.messages) } }
+        runCurrent()
+        assertTrue(repository.messageReads.value.isEmpty())
+        assertFalse(state.messages.single().isRead)
+        transport.readGate!!.complete(Unit)
+        assertTrue(failed.await().isFailure)
+        assertTrue(repository.messageReads.value.isEmpty())
+        transport.failRead = false
+        assertTrue(repository.markVisible("feed", state.messages))
+        runCurrent()
+        assertEquals(setOf(InboxMessageRead("test-scope", "feed", "m1", 1)), repository.messageReads.value)
+        assertTrue(state.messages.single().isRead)
+        assertTrue(repository.markVisible("feed", state.messages))
+        assertEquals(2, transport.reads.size)
+    }
+
+    @Test fun appAndCapsuleDifferentWindowsShareReceiptsWithoutReassigningTheTarget() = runTest {
+        val transport = FakeLarkTransport()
+        val repository = LarkInboxRepository(FakeInboxRepository(), MutableStateFlow(transport),
+            MutableStateFlow(ConnectionState.Online), MutableSharedFlow(), MemoryLarkCache(page(1, older = false, newer = false)))
+        transport.pages += page(1, older = false, newer = false)
+        var capsule = LarkConversation()
+        backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { repository.conversation("feed", 1).collect { capsule = it } }
+        runCurrent()
+        transport.pages += page(2, older = false, newer = false)
+        var app = LarkConversation()
+        backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { repository.conversation("feed", 2).collect { app = it } }
+        runCurrent()
+        assertTrue(repository.markVisible("feed", capsule.messages))
+        assertTrue(repository.markVisible("feed", app.messages))
+        assertEquals(setOf("m1", "m2"), repository.messageReads.value.map { it.id }.toSet())
+        assertEquals(listOf(1L, 2L), transport.reads.map { it.first })
+    }
+
     @Test fun readGateRequiresEveryVisibilityCondition() {
         assertTrue(larkReadAllowed(true, true, true, false, false, true))
         assertFalse(larkReadAllowed(false, true, true, false, false, true))
@@ -125,6 +171,8 @@ private class FakeLarkTransport : LarkConversationTransport {
     val pages = ArrayDeque<JsonObject>()
     val requests = mutableListOf<Triple<Long?, String?, String?>>()
     val reads = mutableListOf<Pair<Long, List<String>>>()
+    var readGate: CompletableDeferred<Unit>? = null
+    var failRead = false
     override suspend fun messages(feedId: String, around: Long?, before: String?, after: String?): JsonObject {
         requests += Triple(around, before, after)
         return pages.removeFirst()
@@ -132,6 +180,8 @@ private class FakeLarkTransport : LarkConversationTransport {
     override suspend fun markRead(feedId: String, position: Long, badgeCount: Long?, messageIds: List<String>) {
         assertEquals(position, badgeCount)
         reads += position to messageIds
+        readGate?.await()
+        if (failRead) throw java.io.IOException("Synthetic receipt failure")
     }
     override suspend fun inbox() = error("Unused")
     override suspend fun setDone(itemId: String, done: Boolean) = error("Unused")

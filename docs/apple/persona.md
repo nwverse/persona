@@ -124,7 +124,7 @@ With Milk Frog chosen on the phone (`WatchSync.push(persona:)`), the watch's lis
 
 `WatchPet.status` in `apple/Shared/WatchPet.swift` holds these rules. Tapping the frog buzzes; when idle it glances at you (`tap`, drawn on the idle pose), otherwise the state's clip plays again. With the wrist down the system stops the animation and the page draws the clip's `still` frame.
 
-**On the watch face** (`PersonaWatchWidgets`, a WidgetKit extension in the watch app): circular, corner, rectangular and inline complications show the round face of the state, and the rectangular one its words. The face is still; the frog moves only in the app. The extension has no network, credentials or strings: after each refresh the watch app writes `WatchPetSnapshot` (state, words, the data's time) and copies the faces into `Pet/` in the App Group container, and reloads the timeline only when what the face shows changes or every 20 minutes at most. While the frog is chosen, the app asks watchOS for a background refresh about every 30 minutes. watchOS decides when one comes, so a snapshot older than an hour shows the frog in the rain with "Not updated lately" rather than an old calm. This needs the App Group on the watch's and the watch face's App IDs (`docs/operations/release.md` "App Group").
+**On the watch face** (`PetComplication`, a second widget in the watch's WidgetKit extension `PersonaWatchWidgets`, beside the extension widget): circular, corner, rectangular and inline complications show the round face of the state, and the rectangular one its words. The face is still; the frog moves only in the app. The complication needs no network, credentials or strings of its own: after each refresh the watch app writes `WatchPetSnapshot` (state, words, the data's time) and copies the faces into `Pet/` in the watch-only App Group container (`PERSONA_WATCH_APP_GROUP`, read through the `PersonaAppGroup` Info.plist key), and reloads the complication's timeline (kind `pet`, not the extension widget's) only when what the face shows changes or every 20 minutes at most. While the frog is chosen, the app asks watchOS for a background refresh about every 30 minutes. watchOS decides when one comes, so a snapshot older than an hour shows the frog in the rain with "Not updated lately" rather than an old calm. Signing needs nothing beyond the watch group's account steps the extension already has (`docs/operations/release.md` "App Group").
 
 **Where the art lives.** Like the rest of Milk Frog, `pet/` sits in the built-in package and the App bundle has none of it. The watch fetches it directly with the existing `GET /api/v1/personas/nwverse/{file…}`: first `pet/pet.json`, then every file named there, by SHA-256, shown only once all of them are here. A hub without `pet/` answers 404 and the watch shows no frog. A tier's rev and `bytes` cover only that tier's files, so phones never download `pet/`.
 
@@ -175,7 +175,7 @@ are the same in every tier; only how the character itself moves changes, so stat
 - **An incomplete tier** (missing files) gets the default tier instead; the phone never gets half an avatar.
 ## States (the top bar dot)
 
-In the Old Layout it sits at the center of Persona's top bar (above the name capsule); in the iPhone's new shell it's the button at the top left of both pages that opens the drawer (`ShellPersonaButton`, docs/apple/ios.md ("New shell")).
+In the iPhone shell it's the button at the top left of both pages that opens the drawer (`ShellPersonaButton`, docs/apple/ios.md ("New shell")).
 
 | State | `dot.states` key | When (`AppModel.personaState`) | Generation script's animation |
 | --- | --- | --- | --- |
@@ -351,7 +351,7 @@ and `GET /mock/persona-tier?tier=<tier>` changes tier at runtime and pushes `per
 DEBUG launch arguments for screenshots and recordings:
 
 - `-openPersona <id>`: select this avatar at launch (the pack must already be on the phone, or come down with the list).
-- `-showPersonaState idle|thinking|working|needs_you|offline`: pin the top bar avatar (center in the Old Layout, top left in the new shell) to one state.
+- `-showPersonaState idle|thinking|working|needs_you|offline`: pin the shell's top-left avatar to one state.
 
 Following the CLAUDE.md convention, launch argument names start with `open…` / `show…` and are added to the list in `release.sh`.
 - `-tab assistant -openAssistantPage avatars`: every avatar's picture and five states, once in light and once in dark.

@@ -64,7 +64,7 @@ func (h *Hub) pendingRestart(l i18n.Lang) restartView {
 	for _, m := range h.cfg.Machines {
 		running[m.ID] = m
 	}
-	for _, m := range h.addedLive() { // added while running: already connecting (devices_link.go addMachineLive)
+	for _, m := range h.addedLive() { // added while running: already connecting (devices_handover.go addMachineLive)
 		running[m.ID] = m
 	}
 	seen := map[string]bool{}
@@ -74,13 +74,15 @@ func (h *Hub) pendingRestart(l i18n.Lang) restartView {
 		switch {
 		case !ok:
 			v.Reasons = append(v.Reasons, i18n.T(l, "hub-admin_hub.restart_add_computer", i18n.Args{"id": m.ID}))
-		case !reflect.DeepEqual(was, m):
+		case !reflect.DeepEqual(was.withoutName(), m.withoutName()): // a name is taken at once (machine_rename.go)
 			v.Reasons = append(v.Reasons, i18n.T(l, "hub-admin_hub.restart_computer_settings", i18n.Args{"id": m.ID}))
 		}
 	}
 	gone := []string{}
 	for id := range running {
-		if !seen[id] {
+		// One its manager keeps now left hub.json without a restart, and one removed from its own list is gone already
+		// (machines_kept.go).
+		if !seen[id] && h.keptBy(id) == "" && (h.knownEntry(id) != nil || h.machineByID(id) != nil) {
 			gone = append(gone, id)
 		}
 	}

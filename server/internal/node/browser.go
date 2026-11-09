@@ -90,6 +90,7 @@ func browserStatus(ctx context.Context) proto.Browser {
 		b.Note = browserNote(b, b.Note)
 	}
 	b.ScreenSharing = screenSharing(ctx)
+	b.Displays = screenDisplays(ctx, b.ScreenSharing)
 	b.Job = egoJob.current()
 	b.Checked = time.Now().UTC() // last: the hub keeps the answer with the latest (keepBrowser)
 	return b

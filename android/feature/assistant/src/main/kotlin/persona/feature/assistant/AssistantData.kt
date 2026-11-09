@@ -57,7 +57,8 @@ internal fun conversationGroups(
     val matches = snapshot.conversations.distinctBy { it.key }.filter {
         !it.archived && (query.isBlank() || it.conversationTitle(words).contains(query.trim(), ignoreCase = true) ||
                 it.lastText.orEmpty().contains(query.trim(), ignoreCase = true))
-    }.sortedWith(compareByDescending<Session> { it.updated }.thenBy { it.key.path })
+    }.map { it to it.updated } // each time parsed once, not on every comparison
+        .sortedWith(compareByDescending<Pair<Session, java.time.Instant?>> { it.second }.thenBy { it.first.key.path }).map { it.first }
     val others = matches.filter { it.key != snapshot.mainSession && it.key !in pinned }
     // A search finds every conversation, wherever it comes from; otherwise "Recent" is the user's own.
     val searching = query.isNotBlank()

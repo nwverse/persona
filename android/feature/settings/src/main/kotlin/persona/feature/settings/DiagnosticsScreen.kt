@@ -1,5 +1,8 @@
 package persona.feature.settings
 
+import android.content.ClipData
+import androidx.compose.ui.platform.ClipEntry
+import androidx.compose.ui.platform.LocalClipboard
 import persona.core.designsystem.resolve
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyListScope
@@ -31,6 +34,9 @@ internal fun DiagnosticsScreen(services: SettingsServices, onBack: (() -> Unit)?
     val context = LocalContext.current
     val resources = context.resources
     val scope = rememberCoroutineScope()
+    val clipboard = LocalClipboard.current
+    var background by remember { mutableStateOf(BackgroundDiagnostics.read(context)) }
+    var backgroundCopied by remember { mutableStateOf(false) }
     val controller = remember(services) {
         DiagnosticsState(services.connection, services.liveDiagnostics, services.diagnostics, services.pairingAttempts)
     }
@@ -46,6 +52,8 @@ internal fun DiagnosticsScreen(services: SettingsServices, onBack: (() -> Unit)?
     val endpoints = rememberEndpointsSnapshot(services.endpoints, data.candidates, list)
     LifecycleEventEffect(Lifecycle.Event.ON_RESUME) {
         network = PhoneReadiness.network(context)
+        background = BackgroundDiagnostics.read(context)
+        backgroundCopied = false
         scope.launch { controller.refresh() }
         scope.launch { controller.refreshSummary() }
     }
@@ -81,6 +89,17 @@ internal fun DiagnosticsScreen(services: SettingsServices, onBack: (() -> Unit)?
             resources.getString(R.string.settings_diag_fingerprint) to data.fingerprint?.takeIf(String::isNotBlank)?.let { if (fingerprintExpanded) it else it.take(16) }))
         if (!data.fingerprint.isNullOrBlank()) item {
             Action(stringResource(if (fingerprintExpanded) R.string.settings_diag_fingerprint_less else R.string.settings_diag_fingerprint_more)) { fingerprintExpanded = !fingerprintExpanded }
+        }
+        diagnosticGroup(resources.getString(R.string.settings_background_title), background.rows(resources),
+            note = resources.getString(R.string.settings_background_note))
+        item {
+            JButton(stringResource(if (backgroundCopied) R.string.settings_background_copied else R.string.settings_background_copy), {
+                val report = background.copyText(resources)
+                scope.launch {
+                    clipboard.setClipEntry(ClipEntry(ClipData.newPlainText(resources.getString(R.string.settings_background_title), report)))
+                    backgroundCopied = true
+                }
+            }, Modifier.fillMaxWidth(), kind = JButtonKind.Secondary, size = JButtonSize.Small)
         }
         fun seconds(value: Int?) = value?.let { resources.getQuantityString(R.plurals.settings_seconds, it, it) }
         diagnosticGroup(resources.getString(R.string.settings_diag_heartbeat), listOf(

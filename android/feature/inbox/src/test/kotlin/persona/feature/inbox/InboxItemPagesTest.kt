@@ -9,8 +9,8 @@ import persona.core.navigation.InboxItemUiRoute
 import org.junit.Assert.*
 import org.junit.Test
 
-// docs/extensions/extensions.md "UI slots" inbox_item (#1683): an item whose connector's extension draws its page opens that page; every
-// other item, and every item on a hub that lists no such page, opens its own page as before.
+// docs/extensions/extensions.md "UI slots" inbox_item (#1683). Native conversations retain their chat and composer;
+// non-chat items keep the inbox_item extension contract.
 @RunWith(AndroidJUnit4::class)
 @Config(sdk = [35])
 class InboxItemPagesTest {
@@ -21,15 +21,31 @@ class InboxItemPagesTest {
     private val moment = InboxRecord(InboxItem("moment-1", kind = "moment"), source = "lark", moment = InboxMomentRef(postId = "post-1"))
     private val event = ExtensionUiPlace("larkext", "event", "事件", "inbox_item", connector = "lark")
 
-    @Test fun aConnectorsExtensionDrawsItsItems() {
+    @Test fun aKnownConnectorSlotKeepsChatsNativeAndStillDrawsNonChatItems() {
         val pages = InboxItemPages(listOf(event))
-        assertEquals(InboxItemUiRoute("lark:F1:1051", "larkext", "event", "周四的评审"), pages.route(lark))
-        assertEquals(InboxItemUiRoute("lark:F1:1051", "larkext", "event", "周四的评审"), inboxOpenPage(lark, pages))
-        // Every item of the connector: a Moments post from it too.
+        assertEquals(event, pages.place(lark))
+        assertNull(pages.route(lark))
+        assertEquals(LarkRoute("F1", "lark:F1:1051", 1051), inboxOpenPage(lark, pages))
+        // The connector remains available for non-chat items, including a 公司圈 post.
         assertEquals("moment-1", pages.route(moment)?.itemId)
+        assertEquals("moment-1", pages.route(moment.copy(feedId = "F1"))?.itemId)
         // Another connector's items keep their own page.
         assertNull(pages.route(mail))
         assertEquals(MailRoute("mail-1"), inboxOpenPage(mail, pages))
+    }
+
+    @Test fun disablingNativeChatsRestoresConnectorPagesAndLateSlotReplacement() {
+        val pages = InboxItemPages(listOf(event), nativeChats = false)
+        val native = LarkRoute("F1", lark.item.id, 1051)
+        val plugin = InboxItemUiRoute(lark.item.id, "larkext", "event", lark.item.title)
+        assertEquals(plugin, pages.open(lark))
+        assertEquals(plugin, pages.route(lark))
+        assertEquals(listOf(native to plugin), pages.swaps(listOf(native), setOf(native), listOf(lark)))
+        assertTrue(pages.copy(nativeChats = true).swaps(listOf(native), setOf(native), listOf(lark)).isEmpty())
+        assertEquals(native, pages.copy(nativeChats = true).open(lark))
+        assertEquals(native, InboxItemPages(nativeChats = false).open(lark))
+        assertEquals(native, inboxSourcePage(lark.item.id, listOf(lark)))
+        assertEquals(pages.open(moment), pages.copy(nativeChats = true).open(moment))
     }
 
     @Test fun withoutAPageEveryItemOpensAsBefore() {
@@ -41,9 +57,9 @@ class InboxItemPagesTest {
         // Pages that cannot be for this item: another slot, another connector, no connector, no extension or id.
         val others = InboxItemPages(listOf(event.copy(placement = "nav_page"), event.copy(connector = "github"), event.copy(connector = null),
             event.copy(extension = ""), event.copy(id = "")))
-        assertNull(others.route(lark))
+        assertNull(others.route(moment))
         // An item that says nothing of its source is nobody's.
-        assertNull(InboxItemPages(listOf(event.copy(connector = ""))).route(lark.copy(source = "")))
+        assertNull(InboxItemPages(listOf(event.copy(connector = ""))).route(moment.copy(source = "")))
     }
 
     @Test fun theFirstListedPageWins() {
@@ -79,6 +95,22 @@ class InboxItemPagesTest {
         assertEquals(MailRoute("mail-1"), inboxSourcePage("mail-1", records))
         assertEquals(LarkMomentRoute("post-1", "moment-1"), inboxSourcePage("moment-1", records))
         assertNull(inboxSourcePage("gone", records))
+        val later = lark.copy(startPosition = 1088)
+        assertNull(InboxItemPages(listOf(event)).route(later))
+        assertEquals(LarkRoute("F1", "lark:F1:1051", 1088), inboxSourcePage(later.item.id, listOf(later)))
+    }
+
+    @Test fun retryRoutingCannotReplaceANativeConversationWithTheConnectorView() {
+        val pages = InboxItemPages(listOf(event), failures = mapOf(lark.item.id to "扩展暂时不可用"))
+        assertNull(pages.route(lark))
+        assertEquals(LarkRoute("F1", lark.item.id, lark.startPosition), pages.open(lark))
+    }
+
+    @Test fun mailAndOtherConnectorsStillUseTheirDeclaredExtensionPages() {
+        val github = InboxRecord(InboxItem("github:1", kind = "unknown", title = "Review"), source = "github")
+        val pages = InboxItemPages(listOf(event.copy(connector = "mail"), event.copy(extension = "github", connector = "github")))
+        assertEquals(InboxItemUiRoute(mail.item.id, "larkext", "event", mail.item.title), pages.open(mail))
+        assertEquals(InboxItemUiRoute(github.item.id, "github", "event", github.item.title), pages.open(github))
     }
 
     // The header carries the tier (the extension's body does not), once triaged.
@@ -98,25 +130,29 @@ class InboxItemPagesTest {
 
     // At launch, before the hub's list is read, an item opens its own page and the shell hears of it; once the list
     // comes, those pages whose connector's extension draws them get the extension's page in their place.
-    @Test fun anItemOpenedBeforeTheListIsKnownTurnsIntoTheExtensionsPage() {
+    @Test fun lateSlotsLeaveProvisionalChatsNativeAndOnlyReplaceNonChatPages() {
         val heard = mutableListOf<androidx.navigation3.runtime.NavKey>()
         val unknown = InboxItemPages(known = false, provisional = { heard += it })
         assertEquals(LarkRoute("F1", "lark:F1:1051", 1051), unknown.open(lark))
         assertEquals(MailRoute("mail-1"), unknown.open(mail))
-        assertEquals(listOf(LarkRoute("F1", "lark:F1:1051", 1051), MailRoute("mail-1")), heard)
+        assertEquals(LarkMomentRoute("post-1", "moment-1"), unknown.open(moment))
+        assertEquals(listOf(LarkRoute("F1", "lark:F1:1051", 1051), MailRoute("mail-1"), LarkMomentRoute("post-1", "moment-1")), heard)
+        val provisionalChat = heard.first()
         // Known: nothing is provisional, whatever opens.
         val known = InboxItemPages(listOf(event), provisional = { heard += it })
         heard.clear()
-        assertEquals(InboxItemUiRoute("lark:F1:1051", "larkext", "event", "周四的评审"), known.open(lark))
+        assertEquals(LarkRoute("F1", "lark:F1:1051", 1051), known.open(lark))
         known.open(mail)
         assertTrue(heard.isEmpty())
 
         val chatLink = LarkRoute("F1", "lark:F1:1051", 1051).copy(startPosition = 1060)
-        val stack = listOf(persona.core.navigation.InboxRoute, LarkRoute("F1", "lark:F1:1051", 1051), MailRoute("mail-1"), chatLink)
-        val provisional = setOf(LarkRoute("F1", "lark:F1:1051", 1051), MailRoute("mail-1"))
-        // The Feishu item becomes the extension's page; the mail has no extension; a chat link was never provisional.
-        assertEquals(listOf(LarkRoute("F1", "lark:F1:1051", 1051) to InboxItemUiRoute("lark:F1:1051", "larkext", "event", "周四的评审")),
+        val post = LarkMomentRoute("post-1", "moment-1")
+        val stack = listOf(persona.core.navigation.InboxRoute, LarkRoute("F1", "lark:F1:1051", 1051), MailRoute("mail-1"), post, chatLink)
+        val provisional = setOf(LarkRoute("F1", "lark:F1:1051", 1051), MailRoute("mail-1"), post)
+        // Only the post becomes an extension page; native item chats and explicit chat links keep their positions.
+        assertEquals(listOf(post to InboxItemUiRoute("moment-1", "larkext", "event", moment.item.title)),
             known.swaps(stack, provisional, listOf(lark, mail, moment)))
+        assertTrue(known.swaps(listOf(provisionalChat), setOf(provisionalChat), listOf(lark)).isEmpty())
         // An older hub lists no pages: nothing changes.
         assertTrue(InboxItemPages().swaps(stack, provisional, listOf(lark, mail)).isEmpty())
         // Pages that have left the stack are not brought back.

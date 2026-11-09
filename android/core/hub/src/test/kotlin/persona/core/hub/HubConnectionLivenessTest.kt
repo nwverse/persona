@@ -63,6 +63,19 @@ class HubConnectionLivenessTest {
         } finally { persona.core.contracts.ClientLanguage.current = persona.core.contracts.AppLanguage.En }
     }
 
+    @Test fun wakeCutsTheRetryBackoffShort() = runBlocking {
+        Fixture().use { fixture ->
+            val socket = fixture.start()
+            fixture.advance(45_000)
+            assertTrue(socket.cancelled)
+            assertEquals(ConnectionState.Connecting, fixture.connection.state.value)
+            // Virtual time stands still: only the wake (the capsule unlocked or expanded) can start the next socket.
+            fixture.connection.onWake()
+            fixture.awaitSocket(2)
+            assertEquals(ConnectionState.Online, fixture.connection.state.value)
+        }
+    }
+
     @Test fun backgroundUsesAcknowledgedHeartbeatAndRestartsNegotiationOnForeground() = runBlocking {
         Fixture(appPing = true).use { fixture ->
             val socket = fixture.start()

@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"reflect"
 	"slices"
 	"strings"
 	"time"
@@ -87,7 +88,7 @@ func (s cuaSettings) awake() bool { return s.KeepAwake == nil || *s.KeepAwake }
 
 func (h *Manager) cua() cuaSettings { return h.machineExtension(cuaExtensionID) }
 
-// machinePlugin is a built-in plugin that is turned on per Mac (cua, ego): on or not, its Macs, whether to ask first.
+// machineExtension is a built-in plugin that is turned on per Mac (cua, ego): on or not, its Macs, whether to ask first.
 func (h *Manager) machineExtension(id string) cuaSettings {
 	if h.extensions == nil || h.extensions.reg == nil {
 		return cuaSettings{}
@@ -171,10 +172,10 @@ func (h *Manager) keepComputer(m *Machine, c proto.Computer, asked time.Time) bo
 	return old == nil || !sameComputer(*old, c)
 }
 
+// sameComputer: the same apart from when it was checked; the job and the displays by value.
 func sameComputer(a, b proto.Computer) bool {
-	aj, bj := a.Job, b.Job
-	a.Checked, b.Checked, a.Job, b.Job = time.Time{}, time.Time{}, nil, nil
-	return a == b && (aj == nil) == (bj == nil) && (aj == nil || *aj == *bj)
+	a.Checked, b.Checked = time.Time{}, time.Time{}
+	return reflect.DeepEqual(a, b)
 }
 
 // computerChanged: the plugin was turned on or off, or its machines changed: ask the Macs again (every one while it is
@@ -233,13 +234,13 @@ func (h *Manager) putComputer(w http.ResponseWriter, r *http.Request, m *Machine
 	writeJSON(w, i18n.ComputerStatus(h.requestLang(r), h.refreshComputer(r.Context(), m)))
 }
 
-// setPluginMachine turns a per-Mac plugin on or off for a machine: its config's machines (the machine page's switch,
+// setExtensionMachine turns a per-Mac plugin on or off for a machine: its config's machines (the machine page's switch,
 // the same as the plugin page's).
 func (h *Manager) setExtensionMachine(ctx context.Context, extension, machine string, on bool) error {
 	return h.setExtensionList(ctx, extension, "machines", machine, on)
 }
 
-// setPluginList puts machine in, or takes it out of, the plugin's machine list key.
+// setExtensionList puts machine in, or takes it out of, the plugin's machine list key.
 func (h *Manager) setExtensionList(ctx context.Context, extension, key, machine string, on bool) error {
 	p := h.extensions.reg.Get(extension)
 	if p == nil {

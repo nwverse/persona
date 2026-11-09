@@ -431,9 +431,9 @@ func TestClaudeResumeArgv(t *testing.T) {
 	n.setManaged([]proto.ManagedLauncher{{Name: "work_gw", BaseURL: "https://gateway.example.com", Model: "m"}})
 	argv, ok := n.claudeResumeArgv(claudeLaunch{Launcher: "work_gw", Settings: "/Users/me/.persona/launcher-settings/work_gw.json",
 		Model: "opus[1m]", Hooks: "/Users/me/my hooks"}, startID)
-	want := "HERDR_AGENT=claude /Users/me/.persona/bin/personad launch work_gw --resume " + startID +
-		" --settings /Users/me/.persona/launcher-settings/work_gw.json --mcp-config " + filepath.Join(n.dir, "mcp.json") +
-		` --model "opus[1m]" --plugin-dir "/Users/me/my hooks"`
+	want := inAgentEnv(n.dir, "HERDR_AGENT=claude /Users/me/.persona/bin/personad launch work_gw --resume "+startID+
+		" --settings /Users/me/.persona/launcher-settings/work_gw.json --mcp-config "+filepath.Join(n.dir, "mcp.json")+
+		` --model "opus[1m]" --plugin-dir "/Users/me/my hooks"`, dquote)
 	if !ok || len(argv) != 2 || argv[0] != "eval" || argv[1] != want {
 		t.Fatalf("argv %q\nwant eval %q", argv, want)
 	}
@@ -454,7 +454,7 @@ func TestClaudeResumeArgv(t *testing.T) {
 	d := "~/.claude-work"
 	n.claudeStartDir.Store(&d)
 	if argv, _ := n.claudeResumeArgv(claudeLaunch{Launcher: "claude"}, startID); !strings.HasPrefix(argv[1],
-		`HERDR_AGENT=claude CLAUDE_CONFIG_DIR="$HOME"/.claude-work claude --resume `+startID) {
+		inAgentEnv(n.dir, `HERDR_AGENT=claude CLAUDE_CONFIG_DIR="$HOME"/.claude-work claude --resume `+startID, dquote)) {
 		t.Fatalf("argv %q", argv)
 	}
 	// A Codex's resume says it is Codex; a compatible CLI and pi have no name in herdr: nothing in front.
@@ -463,7 +463,7 @@ func TestClaudeResumeArgv(t *testing.T) {
 		{traexAgent, "tx", "tx resume " + startID},
 		{piAgent, "pi", "pi resume " + startID},
 	} {
-		if argv, ok := n.agentResumeArgv(agentLaunch{Agent: tc.kind, Launcher: tc.launcher}, startID); !ok || argv[1] != tc.want {
+		if argv, ok := n.agentResumeArgv(agentLaunch{Agent: tc.kind, Launcher: tc.launcher}, startID); !ok || argv[1] != inAgentEnv(n.dir, tc.want, dquote) {
 			t.Errorf("%s: argv %q, want eval %q", tc.kind, argv, tc.want)
 		}
 	}
@@ -541,7 +541,7 @@ func TestRunningPersonaClaudeGetsItsResumeCommand(t *testing.T) {
 	time.Sleep(100 * time.Millisecond)
 	reports := f.trace("pane.report_agent_session")
 	if len(reports) != 1 || !strings.Contains(reports[0], `"pane_id":"w1:p2"`) ||
-		!strings.Contains(reports[0], `"eval","HERDR_AGENT=claude work_claude --resume `+startID) {
+		!strings.Contains(reports[0], `"eval",`+jsonPrefix(inAgentEnv(n.dir, "HERDR_AGENT=claude work_claude --resume "+startID, dquote))) {
 		t.Fatalf("reports %v", reports)
 	}
 	// Once: the next refresh reports nothing again.
@@ -561,7 +561,7 @@ func TestPersonaOtherAgentsResumeWithLauncher(t *testing.T) {
 	// 1. Direct holdResume on codex
 	spec := agentLaunch{Agent: "codex", Launcher: "work_codex", ID: startID}
 	n.holdResume(context.Background(), launch, "w1:p4", startID, spec)
-	held := resumeHeldAgent("codex", "w1:p4", startID, "HERDR_AGENT=codex work_codex resume "+startID)
+	held := resumeHeldAgent("codex", "w1:p4", startID, inAgentEnv(n.dir, "HERDR_AGENT=codex work_codex resume "+startID, dquote))
 	assertTrace(t, f.trace(), held[:])
 
 	// 2. Backfill for running Codex agent
@@ -577,7 +577,7 @@ func TestPersonaOtherAgentsResumeWithLauncher(t *testing.T) {
 	reports := f.trace("pane.report_agent_session")
 	if len(reports) != 1 || !strings.Contains(reports[0], `"pane_id":"w1:p5"`) ||
 		!strings.Contains(reports[0], `"agent":"traex"`) ||
-		!strings.Contains(reports[0], `"eval","custom_traex resume `+sidB) {
+		!strings.Contains(reports[0], `"eval",`+jsonPrefix(inAgentEnv(n.dir, "custom_traex resume "+sidB, dquote))) {
 		t.Fatalf("reports %v", reports)
 	}
 }

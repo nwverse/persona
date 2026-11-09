@@ -101,12 +101,14 @@ A device runs persona-node (`server/cmd/persona-node`), the node and the command
 ```text
 persona-link ── WSS /api/v1/link ──▶ hub TLS port (public.tls_listen)
   → hello {machine, version, address}          First message; hub closes with 4003 if machine id doesn't match credentials
-  ← endpoints {endpoints, hub_name, mesh_hubs, ping_ms?, ping_timeout_ms?, pending?}
-                                               Sent on connect and again when hub addresses, linked group, heartbeat or pending status changes
+  ← endpoints {endpoints, hub_name, mesh_hubs, ping_ms?, ping_timeout_ms?, pending?, machine_name?}
+                                               Sent on connect and again when hub addresses, linked group, heartbeat, pending status or this computer's name changes
   ← open {id}                                  hub wants to connect to node
       persona-link connects ~/.persona/node-attach.sock first, then opens WSS /api/v1/link/stream?id=<id>, forwarding bytes unchanged both ways
   → open_failed {id, error}                    Can't open (resident node not running, etc.); hub records the reason as this computer's error
   ← node {online, error}                       Whether hub connected to node, displayed in the menu bar
+  → rename {id, machine_name}                  Asks the hub to call this computer machine_name ("": its id again); see "The computer's name"
+  ← renamed {id, machine_name | code, error}   The hub's answer to that rename: the name it has now, or why not
 ```
 
 **Route selection**
@@ -127,6 +129,21 @@ persona-link ── WSS /api/v1/link ──▶ hub TLS port (public.tls_listen)
   and the manager's `endpoints` to that computer's link carries `pending: true`; once confirmed (or rejected or expired), the hub hands over the config again and the manager sends `endpoints` without `pending`.
 - `endpoints` is per machine: every message describes that computer's current state; absent `pending` means confirmed. persona-link updates `pending` in its status line accordingly.
 - Old hubs don't send it: status omits `pending` and shows confirmed (Persona Link's status page already handles this in #4198). Passive mode (hub connects to computer) doesn't have it yet.
+
+**The computer's name**
+- The hub calls each computer by its hub.json `name` (its id when it has none). The id never changes: pins, mutes, trust and credentials are all by id; only the name is shown.
+- Hubs that rename computers (hello feature `machine_rename`) say the name in `endpoints` (`machine_name`) and send `endpoints` again when it changes. persona-link keeps it as `machine_name` in link.json,
+  shows it in its status (`machine_name`), in `persona-link status` (with the id in parentheses when they differ) and in the tray / menu bar. Old hubs say nothing: everything shows the id as before.
+- It can be renamed from either end, and every side follows without a restart or reconnect:
+  - On the computer: `persona-link name <new>` (`--reset`: back to the id; no argument: shows it), the Windows tray's **Rename this computer…**. They ask the running persona-link, which sends `rename` on its link;
+    the manager asks the hub (`devices.rename`), the hub writes hub.json and answers, and persona-link reports the answer (`rename` in its status, by the request's id). The request is a file beside link.json
+    (`link.rename.json`), taken within half a second; one older than 30 seconds is dropped.
+  - On the hub: the admin page (`PUT /api/v1/admin/machines/{id}`) or a signed-in device (`PUT /api/v1/machines/{id}/name`); see [protocol.md](../protocol/protocol.md) "Computers".
+- Only a confirmed computer renames itself: one waiting for the user to confirm it (`pending`) is refused (`pending`), so it can't pass itself off as another computer by name. Passive mode has no link to ask on:
+  rename it on the hub; the hub's info reads carry the name (`X-Persona-Machine-Name`, URL-escaped) and the connector keeps it in link.json's `passive.machine_name`.
+- Pairing hands the hub what this computer's system calls it (`system_name` with the pairing request: the Mac's Computer Name, else the host name). The hub names a computer after it once, when the computer has
+  no name of its own yet (added without one, so its name is its id); a name it was given, or one the user set later, is kept. Nothing renames the computer itself.
+- Names are one line, at most 40 characters (the hub refuses longer ones with `invalid_name`).
 
 **TLS**
 - Pins the hub public-key fingerprint received during pairing (SHA-256 of SubjectPublicKeyInfo); LAN connections also use TLS.
@@ -287,6 +304,7 @@ Errors are JSON: `{"error":"<code>","message":"<human-readable Chinese>"}`.
 - Failed authentication (wrong code, missing / wrong credential) is counted per source: one IPv4 address or one IPv6 /64. **LAN and loopback count too** (the hub is usually on the LAN, which must not exempt it).
   10 failures within 60 seconds block the source for 15 minutes; blocked sources are rejected before authentication, returning `429 {"error":"rate_limited"}` and `Retry-After` (seconds) even with correct credentials. At most 4096 sources are tracked;
   when full, unblocked ones are evicted first. These are configured values, not measured results.
+- A request must arrive whole within 30 seconds, body included (headers within 10): when the body stalls, the helper answers (`400` on pairing) and closes the connection, so a peer that never authenticates cannot hold one longer. An upgraded stream is not bound by this.
 - Logs: at most one line per 30 seconds for authentication and TLS handshake failures (with the number omitted); sources are recorded only as /24 or /64.
 
 ### Recommendations for hub implementers
@@ -458,6 +476,7 @@ For Linux see "Linux (headless)" below: build `persona-link`, then `persona-link
 - `pending` (planned, #4655): `true` means the hub is waiting for the user to confirm this computer in the App; absent means confirmed.
 - `waiting` / `refused` include `error` (candidate failures separated by "；", a full-width semicolon) and `retry` (next attempt time).
 - `hub_name`, `mesh_hubs`: see "Hub name and linked group"; absent with old hubs.
+- `machine_name`: what the hub calls this computer (see "The computer's name"); absent with old hubs. `rename`: how the last rename asked of this persona-link went: `{id, name}` or `{id, code, error}`.
 - `pending`: meaningful only when `connected`; `true` means the hub is waiting for the user to confirm this computer (see "Pending confirmation"); absent or `false` means confirmed.
 - `trust`: `system` when active mode validates the hub through system CAs (reverse proxy, no fingerprint); absent when pinned.
 - No credentials included.
@@ -551,8 +570,8 @@ Two things to know about a node without systemd:
 
 | Command | Action |
 | --- | --- |
-| `persona-link status` | Mode, link (address, duration; candidate failure reasons when disconnected), hub name and group size, local node, machine id, candidate addresses, systemd service (active / enabled / linger), pid and version, log location. Passive mode instead shows: listen address, listening or hub connected, paired hub and pairing time, hub's last visit time and address, helper fingerprint, local addresses usable by hub. Exit 0 when connected (also listening in passive mode), otherwise 1 |
-| `persona-link status --json` | Same for scripts: `running`, `mode`, `paired`, `machine`, `hub_id`, `hub_name`, `endpoints`, `trust` (`pin` / `system`), `link` (last reported status), `passive` (`listen`, `paired`, `hub_id`, `hub_name`, `machine`, `paired_at`, `code_expires`, `fp`), `service`, `config`, `log`; `error` if link.json can't be read; no credential or hash |
+| `persona-link status` | Mode, link (address, duration; candidate failure reasons when disconnected), hub name and group size, local node, this computer's name on the hub (its id in parentheses when they differ), candidate addresses, systemd service (active / enabled / linger), pid and version, log location. Passive mode instead shows: listen address, listening or hub connected, paired hub and pairing time, hub's last visit time and address, helper fingerprint, local addresses usable by hub. Exit 0 when connected (also listening in passive mode), otherwise 1 |
+| `persona-link status --json` | Same for scripts: `running`, `mode`, `paired`, `machine`, `machine_name`, `hub_id`, `hub_name`, `endpoints`, `trust` (`pin` / `system`), `link` (last reported status), `passive` (`listen`, `paired`, `hub_id`, `hub_name`, `machine`, `machine_name`, `paired_at`, `code_expires`, `fp`), `service`, `config`, `log`; `error` if link.json can't be read; no credential or hash |
 | `persona-link logs [-f] [-n lines]` | Last 100 lines of `~/.persona/link.log` (change with `-n` / `--lines`); `-f` / `--follow` keeps following, including rotation; without a log file but with an installed service, reads journal. `log` is the same command |
 | `persona-link uninstall` | Stop, disable and delete systemd user service (Windows: scheduled task), preserving credentials. Linux / Mac resident-node service remains (`node uninstall` removes it); on Windows the node shares the task and stops too, but `personad.exe` remains |
 | `persona-link uninstall --purge` | Also remove credentials (link.json and `.lock` / `.run`), status, logs (including `link.log.1`), passive TLS identity `link-tls/`, `~/.persona/bin/persona-link`, and install-script `persona-link` alias (only if truly an alias); refuses while another persona-link is running (menu bar App, manually started). Revoke hub-side credentials in App **Settings › Devices** |
@@ -563,6 +582,7 @@ Two things to know about a node without systemd:
 | `persona-link discover [--wait <seconds>] [--json]` | Hubs heard on the LAN (mDNS), viewing only, no pairing; listens 3 seconds by default, `--wait` allows decimals up to 60; exit 0 if found, otherwise 1 |
 | `persona-link run [--parent] [--log <file>]` | Maintain the link in foreground, one JSON status per stdout line (see "Status line"); `--parent` exits on stdin close (used by menu bar App); `--log` writes there (rotates to `<file>.1` at 1 MB), not stderr. Used by systemd and the alternatives under "Without systemd" |
 | `persona-link address add <address>` / `address remove <address>` | Manually add / remove a hub candidate (`https://domain:port`, or just domain), stored in link.json; pairing required before adding. `remove` deletes that entry, manual or hub-provided (the hub may send it again on next connect) |
+| `persona-link name [<new>\|--reset]` | No argument: what the hub calls this computer (with the id when they differ). A name: asks the running, connected persona-link to have the hub rename this computer and prints the hub's answer; `--reset`: back to the id. Exit 1 with the reason when it can't (not running, offline, passive mode, a hub that doesn't rename computers, not confirmed yet, too long); see "The computer's name" |
 | `persona-link version` | Print version (`--version`, `-v` equivalent) |
 | `persona-link help` | Print usage (`--help`, `-h` equivalent); unknown commands / options also print usage and exit 2 |
 

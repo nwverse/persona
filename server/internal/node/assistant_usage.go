@@ -7,10 +7,10 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"regexp"
 	"strings"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/prompts"
 	"github.com/nwverse/persona/server/internal/transcript"
 )
@@ -40,10 +40,10 @@ var usageResend func(ctx context.Context, n *Node, id, cwd, launcher, text strin
 
 // usageKeyRe is a usage count in a line ("input_tokens": 1706464): a key not inside a string (a quote inside a JSON
 // string is escaped), and its digits (group 1).
-var usageKeyRe = regexp.MustCompile(`(?:^|[^\\])"(?:input_tokens|cache_read_input_tokens|cache_creation_input_tokens)"\s*:\s*(\d+)`)
+var usageKeyRe = lazyre.New(`(?:^|[^\\])"(?:input_tokens|cache_read_input_tokens|cache_creation_input_tokens)"\s*:\s*(\d+)`)
 
 // usageHintRe: a line that may carry an impossible usage, a count of six digits or more; only those are decoded.
-var usageHintRe = regexp.MustCompile(`"(?:input_tokens|cache_read_input_tokens|cache_creation_input_tokens)"\s*:\s*\d{6}`)
+var usageHintRe = lazyre.New(`"(?:input_tokens|cache_read_input_tokens|cache_creation_input_tokens)"\s*:\s*\d{6}`)
 
 // usageFix is a line of the transcript whose usage is impossible.
 type usageFix struct {

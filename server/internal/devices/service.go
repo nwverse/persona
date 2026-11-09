@@ -2,6 +2,7 @@ package devices
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"crypto/sha256"
 	"crypto/tls"
@@ -460,6 +461,7 @@ func (m *Machine) probeService(ctx context.Context) {
 		return
 	}
 	req.Header.Set("Authorization", "Bearer "+cred.token)
+	req.Header.Set(link.MachineNameHeader, url.QueryEscape(m.name())) // what the connector shows
 	start := time.Now()
 	resp, err := client.Do(req)
 	if err != nil {
@@ -543,7 +545,8 @@ func (d *Devices) PairConnector(ctx context.Context, p devicewire.PairConnector)
 		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 	cfg := d.config()
 	token := "jc_" + randomHex(32)
-	body, _ := json.Marshal(map[string]string{"code": code, "token": token, "machine": p.MachineID, "hub_id": cfg.HubID, "hub_name": cfg.HubName})
+	body, _ := json.Marshal(map[string]string{"code": code, "token": token, "machine": p.MachineID, "hub_id": cfg.HubID, "hub_name": cfg.HubName,
+		"machine_name": cmp.Or(entryNames(cfg)[p.MachineID], p.MachineID)})
 	var errs []string
 	for _, a := range addrs {
 		req, err := http.NewRequestWithContext(ctx, http.MethodPost, "https://"+a+connectorPairPath, bytes.NewReader(body))

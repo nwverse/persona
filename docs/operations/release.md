@@ -12,8 +12,8 @@ outside the repo, e.g. `~/.appstoreconnect/`), `app_store.app_id` (the app recor
 
 | Item | Notes |
 | --- | --- |
-| Bundle ID | iOS `<bundle_id>`, watch `<bundle_id>.watchkitapp`, watch face `<bundle_id>.watchkitapp.widgets`, Live Activity `<bundle_id>.liveactivity`, notification service extension `<bundle_id>.notify` (push relay, `docs/operations/push-relay.md`), share extension `<bundle_id>.share` (#4586); registered with `scripts/release/asc_signing.py` |
-| App ID capabilities | iOS: `PUSH_NOTIFICATIONS`, `USERNOTIFICATIONS_TIMESENSITIVE` (time-sensitive notifications, #1572), `HEALTHKIT`, `APP_GROUPS`; Live Activity, watch and watch face: `APP_GROUPS`. The App Group itself can only be created on the website and attached to App IDs ("App Group" below) |
+| Bundle ID | iOS `<bundle_id>`, watch `<bundle_id>.watchkitapp`, Live Activity `<bundle_id>.liveactivity`, notification service extension `<bundle_id>.notify` (push relay, `docs/operations/push-relay.md`), share extension `<bundle_id>.share` (#4586); new watch widget `app.watch_widget_bundle_id` (default `<bundle_id>.watchkitapp.widgets`, #1147). `scripts/release/asc_signing.py` covers these targets; #1147 did not register the new resources |
+| App ID capabilities | iOS: `PUSH_NOTIFICATIONS`, `USERNOTIFICATIONS_TIMESENSITIVE` (time-sensitive notifications, #1572), `HEALTHKIT`, `APP_GROUPS`; Live Activity: `APP_GROUPS`; watch app and watch widget: `APP_GROUPS` using the separate configured watch group. The App Group itself can only be created on the website and attached to App IDs ("App Group" below) |
 | Provisioning profiles | "Persona App Store", "Persona Watch App Store", "Persona Share App Store", etc. (`IOS_APP_STORE`; the share extension's was added 2026-11-06, so run `asc_signing.py` once before its first release to register its Bundle ID and profile); `asc_signing.py` deletes and recreates them and installs them into `~/Library/MobileDevice/Provisioning Profiles/` |
 | Signing identity | `Apple Distribution: … (team_id)` in the login keychain |
 | App Store Connect App ID | After creating the app record on the website, put it in the config's `app_store.app_id` |
@@ -72,6 +72,66 @@ A build shows up in TestFlight about 10–30 minutes after archiving. `asc_testf
 `processingState=VALID`, then writes the default What to Test and adds it to the `Internal` group; `INVALID` / `FAILED` exits with an error
 (the reason is on the build page in App Store Connect). **Pass the build number release.sh printed**: a just-uploaded build can't be found yet, and without the build number
 "the latest build" is the previous one (long since VALID), so What to Test gets written to the old build (hit on 2026-10-25).
+
+## Unattended default-branch releases
+
+`scripts/operations/autorelease.py` is a standard-library worker for a user-level systemd timer, not an Agent-session task.
+Install the worker in `~/.local/lib/persona-autorelease/`, its private JSON configuration in
+`~/.local/state/persona-autorelease/config.json`, and the supplied `persona-autorelease.service` and
+`persona-autorelease.timer` from `scripts/operations/` in `~/.config/systemd/user/`.
+Enable linger for the user if the service must survive logout. The timer checks every ten minutes and coalesces intervening commits.
+
+CI admission belongs to the PR head: require the automatic `CI required` check and every relevant manually selected full lane before
+merging. For this scripts-only automation change, dispatch `ci.yml` with `lanes=scripts` and verify that its script shards actually ran.
+Full server, Android, scripts, iOS and Mac tests are manual; unselected lanes are not evidence that those platforms passed.
+The unattended worker consumes the newest already-merged `origin/main`, then applies path selection and local build/release verification.
+It neither waits for a full CI check on the main commit (none is automatically created) nor dispatches full platform CI on every timer tick.
+This keeps the release gate aligned with the PR-merge policy rather than waiting indefinitely for an obsolete main-branch check.
+
+Each target has its own last-success revision, path patterns, command argument vector, and timeout. Worker events are appended to
+`worker.log` in the private state directory; `log_output: true` additionally retains command output in mode-0600 per-step files
+under its `logs/` subdirectory. Do not enable shell tracing or print credentials from action commands. Recommended triggers:
+
+| Target | Paths |
+| --- | --- |
+| Hub | `server/**`, `integrations/**`, `sdk/go/**`, `schema/**`, `spec/**`, `scripts/deploy/**`, `scripts/operations/**`, `scripts/persona_config.py`, `scripts/persona_identity.py` |
+| Web | `web/**`, `schema/extension/**`, `spec/fixtures/injected/**`, `scripts/deploy/**`, `scripts/operations/**`, `scripts/persona_config.py`, `scripts/persona_identity.py` |
+| TestFlight | `apple/**`, `schema/**`, `spec/**`, `scripts/release/**`, `scripts/i18n/**`, `scripts/operations/**`, `scripts/persona_config.py`, `scripts/persona_identity.py`, `scripts/privacy_check.py`, `scripts/app/sim-boot.sh` |
+
+A missing baseline runs that target once. Later checks compare the last successful commit directly with the newest branch HEAD,
+including deleted paths. Failure does not advance that baseline; two failures at the same HEAD suspend that target until another
+HEAD appears. Lock contention exits 75 and is a deferral, not a failure. Successful actions only log; failures invoke the configured
+notification command, retaining failed notifications in a durable outbox for subsequent delivery attempts.
+
+Use a dedicated detached clean worktree on the hub and another on the build computer. The worker refuses to discard dirty files.
+`scripts/operations/hub_action.py deploy` retains the deployment lock through a live API and serving-binary verification;
+`testflight_action.py` retains the release lock through upload, `asc_testflight.py wait 45 <build>`, and Internal-group verification.
+Its checkpoint resumes processing a previously uploaded build instead of uploading it again. Set `NO_PUBLISH=1` for TestFlight-only
+work. Do not disable the deploy script's freshness check.
+
+Manual `deploy.sh` now takes the hub's existing `releases/hub/.publish.lock`, shared with release promotion; callers on another
+computer retain it through an SSH connection. Manual `release.sh` takes the build computer's
+`~/.local/state/persona/locks/release.lock`. Older checkouts that predate these locks must be updated before manual use.
+The release script runs under `PERSONA_XCODE_RUNNER` (default `~/.local/bin/xcode-slot`) when installed, covering every xcodebuild
+subprocess, not just archive. The unattended release uses no simulator.
+
+Failure notifications use hub-local `POST /api/v1/notify`, reading the runtime token inside the process. No credentials enter
+arguments or logs. `sent:true` is hub acceptance, not a phone-display receipt; verify a controlled failure on the phone during installation.
+
+```sh
+systemctl --user daemon-reload
+systemctl --user enable --now persona-autorelease.timer
+systemctl --user list-timers persona-autorelease.timer
+systemctl --user start persona-autorelease.service             # one immediate run
+systemctl --user disable --now persona-autorelease.timer       # pause future runs
+systemctl --user stop persona-autorelease.service              # also stop an active run
+systemctl --user enable --now persona-autorelease.timer        # resume
+journalctl --user -u persona-autorelease.service -n 100 --no-pager
+python3 ~/.local/lib/persona-autorelease/autorelease.py --config ~/.local/state/persona-autorelease/config.json --inject-failure
+```
+
+Keep a private STATE document alongside the configuration, recording the actual paths, notification receipt, last successful revisions,
+and TestFlight build evidence. Runtime/build configuration and signing keys remain outside the repository.
 
 ## Releasing with asc
 
@@ -152,10 +212,13 @@ Steps on the developer website (developer.apple.com › Account › Certificates
 1. Identifiers › "+" › choose **App Groups** › Continue › Description `Persona`, Identifier `group.<bundle id>` (matching the config's `app.app_group`) › Continue › Register.
 2. Identifiers › switch the top-right filter back to App IDs › click `<bundle id>` › check **App Groups** under Capabilities › click Configure next to it (Edit if already checked) ›
    check `group.<bundle id>` › Continue › Save › Confirm in the dialog (changing capabilities invalidates this App ID's existing profiles).
-3. Do step 2 for the Dynamic Island extension's App ID `<bundle id>.liveactivity`, the watch's `<bundle id>.watchkitapp` and the watch face's `<bundle id>.watchkitapp.widgets` too (the watch face's Milk Frog, #6272). The notification extension doesn't need it.
+3. Do step 2 for the Dynamic Island extension's App ID `<bundle id>.liveactivity` too. The notification extension does not need it.
+   For #1147, register the **separate watch group** (`app.watch_app_group`, default `<phone group>.watch`) and attach it to the existing watch app and the new configured watch widget App ID. These account changes and regenerated watch profiles require explicit approval; they have not been performed as part of the code change.
 4. Profiles: cloud-signed export (automatic signing) regenerates them itself; `release.sh`'s manual signing needs a rerun of `python3 scripts/release/asc_signing.py`,
    which checks every profile for the group, and if missing prints the steps above and exits non-zero.
-5. After a release export, `scripts/release/entitlements.py check` verifies that the signatures of both the App and PersonaWidgets in the ipa carry the group.
+5. After a release export, `scripts/release/entitlements.py check` verifies the App Groups of the app and its extensions, including both watch bundles.
+
+The #1147 system-surface store is independent of Fleet's avatar files, because it contains per-device credentials. Validate first unlock, offline expiry, pairing/rotation/removal, WidgetCenter full reports (including removal of the last configuration), paired-watch direct requests, and real background `extension_widget` pushes on devices before claiming acceptance. Simulator-only unsigned builds cannot validate App Group signing or background APNs delivery. No build, screenshots or device acceptance were run for #1147 while builds were paused.
 
 ## Changing the store name
 
@@ -272,6 +335,7 @@ Let others install the server without getting the source: prebuilt `personad` an
 curl -fsSL <publish.site_url>/install.sh | sh   # install to ~/.persona/bin/personad; verify against SHA256SUMS, refuse if wrong
 ```
 
+- On the computer that runs the hub (`--hub`, a `hub.json`, or the two there already) it installs `persona-hub` and `persona-manager` with `personad`, the same release, each checked before any is put in place. A release without one of them leaves the one there as it was, unless a systemd unit or launchd agent runs it: then it is refused before anything changes ([../server/server.md](../server/server.md) ("Programs"), [hub-update.md](hub-update.md) ("A release without `persona-hub` or `persona-manager`")).
 - After installing `personad`, if herdr can't be found on this computer (PATH and directories node searches, such as `~/.local/bin`), install it with herdr's official installer (`https://herdr.dev/install.sh`)
   too, so sessions appear in Agents after the first install. Failure only prints one warning and doesn't affect `personad`; computers using Orca / Herdr App can skip it with `PERSONA_SKIP_HERDR=1`.
   `deploy.sh` does the same when installing `personad` on each computer (`scripts/deploy/ensure-herdr.sh`; keep the two sets of steps aligned).

@@ -80,7 +80,7 @@ func (h *Hub) uploadFile(w http.ResponseWriter, r *http.Request, m *Machine) {
 		if space = identity.HealthDirName(h.machineOwner(m.cfg.ID)); space == identity.SpaceHealth {
 			space = ""
 		} else if !m.hasCapability(nodeproto.HealthSpaces) {
-			writeCode(w, http.StatusConflict, proto.CodeNodeOutdated, i18n.T(h.requestLang(r), "hub-upload.outdated", i18n.Args{"name": m.cfg.Name}), nil)
+			writeCode(w, http.StatusConflict, proto.CodeNodeOutdated, i18n.T(h.requestLang(r), "hub-upload.outdated", i18n.Args{"name": m.name()}), nil)
 			return
 		} else {
 			beginParams["health_dir"] = space
@@ -94,14 +94,14 @@ func (h *Hub) uploadFile(w http.ResponseWriter, r *http.Request, m *Machine) {
 		var re *rpc.Error
 		// A node from before file.upload.*, or before dest=dir: "unknown upload destination".
 		if errors.As(err, &re) && re.Code == "" && (strings.HasPrefix(re.Message, "unknown method") || strings.HasPrefix(re.Message, "unknown upload destination")) {
-			writeCode(w, http.StatusConflict, proto.CodeNodeOutdated, i18n.T(h.requestLang(r), "hub-upload.outdated", i18n.Args{"name": m.cfg.Name}), nil)
+			writeCode(w, http.StatusConflict, proto.CodeNodeOutdated, i18n.T(h.requestLang(r), "hub-upload.outdated", i18n.Args{"name": m.name()}), nil)
 			return
 		}
 		callErr(w, err)
 		return
 	}
 	outdated := func() {
-		writeCode(w, http.StatusConflict, proto.CodeNodeOutdated, i18n.T(h.requestLang(r), "hub-upload.outdated", i18n.Args{"name": m.cfg.Name}), nil)
+		writeCode(w, http.StatusConflict, proto.CodeNodeOutdated, i18n.T(h.requestLang(r), "hub-upload.outdated", i18n.Args{"name": m.name()}), nil)
 	}
 	if dest == proto.UploadDestDir && begin.Dest != dest || begin.HealthDir != space { // an old node ignored dest (or health_dir) and opened it elsewhere
 		c, cancel := context.WithTimeout(context.Background(), 10*time.Second)

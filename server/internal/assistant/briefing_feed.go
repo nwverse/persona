@@ -50,6 +50,12 @@ type briefBodyRow struct {
 	WaitedS int64     `json:"waited_s"`          // seconds waited when the run started
 	Nudged  bool      `json:"nudged,omitempty"`  // waiting: the bot nudged under its card
 	AskedAt time.Time `json:"asked_at,omitzero"` // accept: when the round's "Please verify" ask was made (with or without a Lark card); POST /api/v1/todos/{id}/accept takes it back
+	// accept: the verdict line, word for word as its Lark card says it (#1226): "done, deployed" for a deployed task, or a
+	// supervised task's conclusion. outcome is a conclusion's verdict (done, cannot or decide; left out for a deployed task),
+	// recommend a decision's recommended option, which Accept takes.
+	Verdict   string `json:"verdict,omitempty"`
+	Outcome   string `json:"outcome,omitempty"`
+	Recommend string `json:"recommend,omitempty"`
 }
 
 // briefBodyDone is a task closed in the window.
@@ -82,6 +88,12 @@ func (f *briefFacts) body(s *Service, title string) briefBody {
 	for _, r := range f.Accept {
 		x := row(r)
 		x.Title, x.Detail, x.AskedAt = r.id, f.Changed[r.id], r.asked
+		if a, ok := f.Asks[r.id]; ok {
+			x.Verdict, x.Outcome = verdictText(f.l, &a), a.Outcome
+			if decideAsk(&a) {
+				x.Recommend = a.Recommend
+			}
+		}
 		if t, ok := s.todoNow(r.id); ok {
 			x.Title = t.Title
 		}
@@ -111,13 +123,19 @@ func (s *Service) briefFeed(session, task, title string, f *briefFacts) {
 
 func (s *Service) briefRoutes() {
 	// POST /api/v1/later/{id}/handled: the Handled button of a question in a `brief` item's later list. It leaves the queue; a
-	// question already handled, dropped (its to-do ended, or 7 days) or unknown is 409.
+	// question already handled, dropped (its to-do ended, or 7 days) or unknown is 409. A queue that can't be read or
+	// written is 503, and the question stays.
 	s.handle("POST /api/v1/later/{id}/handled", func(w http.ResponseWriter, r *http.Request) {
 		if !fullRole(r) {
 			apierr.Write(w, http.StatusForbidden, errors.New("read-only role cannot change the queue"))
 			return
 		}
-		if !s.laterHandled(r.Context(), r.PathValue("id"), time.Now()) {
+		ok, err := s.laterHandled(r.Context(), r.PathValue("id"), time.Now())
+		if err != nil {
+			apierr.Write(w, http.StatusServiceUnavailable, i18n.Err("http-status.unavailable"))
+			return
+		}
+		if !ok {
 			apierr.Write(w, http.StatusConflict, i18n.Err("assistant-feishu_cards.already_handled"))
 			return
 		}
@@ -125,7 +143,9 @@ func (s *Service) briefRoutes() {
 	})
 
 	// POST /api/v1/todos/{id}/accept {"asked_at"}: the Accept button of a `brief` item. It verifies the task when asked_at is
-	// the round that waits now; a button of an earlier round, or a task already verified, is 409.
+	// the round that waits now; a button of an earlier round, or a task already verified, is 409. A decision whose
+	// recommendation could not be sent to the task's agent is 502, and asks that cannot be read or an acceptance that
+	// cannot be saved is 503; either way nothing was taken (conclusion.go, errAcceptStore).
 	s.handle("POST /api/v1/todos/{id}/accept", func(w http.ResponseWriter, r *http.Request) {
 		if !fullRole(r) {
 			apierr.Write(w, http.StatusForbidden, errors.New("read-only role cannot change todos"))
@@ -138,7 +158,17 @@ func (s *Service) briefRoutes() {
 			apierr.Write(w, http.StatusBadRequest, errors.New("asked_at is required"))
 			return
 		}
-		if !s.acceptedFromBrief(r.Context(), r.PathValue("id"), in.AskedAt) {
+		ok, err := s.acceptTryFromBrief(r.Context(), r.PathValue("id"), in.AskedAt)
+		if errors.Is(err, errAcceptStore) { // nothing accepted: the button works again once the store answers
+			apierr.Write(w, http.StatusServiceUnavailable, i18n.Err("http-status.unavailable"))
+			return
+		}
+		if err != nil { // a decision's recommendation that did not reach the agent: nothing taken, the button works again
+			apierr.Write(w, http.StatusBadGateway, errors.New(i18n.T(s.botLang(r.Context()), "assistant-reports.accept_not_sent",
+				i18n.Args{"error": clip(oneLine(err.Error()), 120)})))
+			return
+		}
+		if !ok {
 			apierr.Write(w, http.StatusConflict, i18n.Err("assistant-feishu_cards.already_handled"))
 			return
 		}

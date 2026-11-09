@@ -36,6 +36,8 @@ type fakeHost struct {
 	credCall func()
 	// theirs are the machines devices.connected refuses as another manager's (the hub's ownsMachine).
 	theirs map[string]bool
+	// rename answers devices.rename (nil: unknown_method, as an older hub).
+	rename func(p devicewire.Rename) (devicewire.RenameReply, error)
 }
 
 func (f *fakeHost) Call(ctx context.Context, method string, params, out any) error {
@@ -89,6 +91,20 @@ func (f *fakeHost) Call(ctx context.Context, method string, params, out any) err
 		f.creds[p.MachineID] = p
 		f.mu.Unlock()
 		res = map[string]any{}
+	case devicewire.MethodRename:
+		var p devicewire.Rename
+		_ = json.Unmarshal(raw, &p)
+		f.mu.Lock()
+		fn := f.rename
+		f.mu.Unlock()
+		if fn == nil {
+			return &rpc.Error{Code: "unknown_method", Message: method}
+		}
+		reply, err := fn(p)
+		if err != nil {
+			return err
+		}
+		res = reply
 	default:
 		return &rpc.Error{Code: "unknown_method", Message: method}
 	}

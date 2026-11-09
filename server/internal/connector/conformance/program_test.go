@@ -118,7 +118,8 @@ func TestExampleChatWireFixtures(t *testing.T) {
 type fixtureProgram struct {
 	edit       map[string]func(map[string]any)
 	redeliver  bool
-	wrote      atomic.Bool // the program was asked to write: actions.do or inbox.reply
+	wrote      atomic.Bool         // the program was asked to write: actions.do, inbox.reply or recall
+	manifest   *extension.Manifest // what CheckProgram is given, when it is not the fixture's
 	signedIn   atomic.Bool
 	announced  sync.Once
 	peerCaller *rpc.Peer
@@ -192,7 +193,7 @@ func (f *fixtureProgram) handle(t testing.TB) rpc.Handler {
 				return f.answer(t, "login.step.done.json"), nil
 			}
 			return f.answer(t, "login.step.refused.json"), nil
-		case "connector.actions.do", "connector.inbox.reply":
+		case "connector.actions.do", "connector.inbox.reply", "connector.recall":
 			f.wrote.Store(true)
 			return json.RawMessage(`{"text":"sent"}`), nil
 		case "connector.logout":
@@ -241,7 +242,11 @@ func (f *fixtureProgram) check(t *testing.T, opts ...ProgramOption) string {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		CheckProgram(rec, fixtureManifest(t), run, extension.InitializeParams{},
+		m := f.manifest
+		if m == nil {
+			m = fixtureManifest(t)
+		}
+		CheckProgram(rec, m, run, extension.InitializeParams{},
 			append([]ProgramOption{WithLogin(map[string]string{"base_url": "https://chat.example.com", "app_key": goodKey}), RequireData()}, opts...)...)
 	}()
 	select {
@@ -287,6 +292,32 @@ func TestCheckProgramPassesWhatTheFixturesSay(t *testing.T) {
 	}
 	if f.wrote.Load() {
 		t.Fatal("CheckProgram asked the program to write (actions.do or inbox.reply): a check never sends")
+	}
+}
+
+// A program that declares recall passes (CheckProgram reaches the capabilities the hub can have in a program, and this
+// is one), and is never asked to take anything back: a recall deletes a message, as actions.do and inbox.reply write.
+func TestCheckProgramAcceptsADeclaredRecallAndNeverAsksIt(t *testing.T) {
+	var m map[string]any
+	if err := json.Unmarshal(fixture(t, "persona-plugin.json"), &m); err != nil {
+		t.Fatal(err)
+	}
+	conn := m["contributes"].(map[string]any)["connectors"].([]any)[0].(map[string]any)
+	conn["capabilities"] = append(conn["capabilities"].([]any), "recall")
+	raw, _ := json.Marshal(m)
+	declared, err := extension.Parse(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f := &fixtureProgram{manifest: declared, edit: map[string]func(map[string]any){"initialize.json": func(v map[string]any) {
+		c := v["contributes"].(map[string]any)["connectors"].([]any)[0].(map[string]any)
+		c["capabilities"] = append(c["capabilities"].([]any), "recall")
+	}}}
+	if got := f.check(t); got != "" {
+		t.Fatalf("CheckProgram failed a program that declares recall:\n%s", got)
+	}
+	if f.wrote.Load() {
+		t.Fatal("CheckProgram asked the program to write (actions.do, inbox.reply or recall): a check never sends")
 	}
 }
 

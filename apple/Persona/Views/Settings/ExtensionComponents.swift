@@ -9,6 +9,7 @@ struct ExtensionComponentRowLabel: View {
     var row: ExtensionRowComponent
     var model: (any ExtensionViewControlling)?
     var chevron: Bool
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         HStack(spacing: Theme.Space.m) {
@@ -18,16 +19,21 @@ struct ExtensionComponentRowLabel: View {
                 if let s = row.subtitle, !s.isEmpty { Text(s).font(Theme.Font.label).foregroundStyle(.secondary).lineLimit(2) }
             }
             Spacer(minLength: Theme.Space.s)
-            if let v = row.value, !v.isEmpty { Text(v).font(Theme.Font.body.monospacedDigit()).foregroundStyle(.secondary).lineLimit(1) }
-            if let b = row.badge { Chip(text: b.text, look: b.tone == nil || b.tone == "neutral" ? .neutral : .tint(ExtensionUIStyle.tone(b.tone))) }
+            if let v = row.value, !v.isEmpty { ExtensionChangingText(v).font(Theme.Font.body.monospacedDigit()).foregroundStyle(.secondary).lineLimit(1) }
+            if let b = row.badge {
+                // Drawn again with another tone, its colors change; with other words, they fade in (#37).
+                Chip(text: b.text, look: b.tone == nil || b.tone == "neutral" ? .neutral : .tint(ExtensionUIStyle.tone(b.tone)))
+                    .contentTransition(.opacity)
+                    .animation(reduceMotion ? nil : Theme.Motion.state, value: b)
+            }
             if let action = row.action, model?.selected(action.id) == true {
-                Image(systemName: Theme.Icon.success).font(Theme.Font.labelStrong).foregroundStyle(Theme.positive)
+                ThemedIcon(Theme.Icon.success).font(Theme.Font.labelStrong).foregroundStyle(Theme.positive)
                     .accessibilityLabel("Selected [Extension Components 7ecf1c]")
             } else if chevron {
                 if let a = row.action, model?.running == a.id {
                     ProgressView().controlSize(.small)
                 } else {
-                    Image(systemName: Theme.Icon.disclosure).font(Theme.Font.labelStrong).foregroundStyle(.tertiary)
+                    ThemedIcon(Theme.Icon.disclosure).font(Theme.Font.labelStrong).foregroundStyle(.tertiary)
                 }
             }
         }
@@ -53,7 +59,7 @@ struct ExtensionComponentRowLabel: View {
             .clipShape(.circle)
             .accessibilityHidden(true)
         } else if let i = row.icon, !i.isEmpty {
-            Image(systemName: ExtensionUIStyle.icon(i))
+            ThemedIcon(ExtensionUIStyle.icon(i))
                 .font(Theme.Font.heading)
                 .foregroundStyle(Theme.accent)
                 .scaledFrame(width: Theme.Size.icon, height: Theme.Size.icon)
@@ -90,6 +96,10 @@ struct ExtensionRemoteImage: View {
         .task(id: url) {
             image = nil
             failed = false
+            #if DEBUG && os(macOS)
+            let captureLoad = MacExtensionSnapshotBatch.beginImageLoad(url)
+            defer { MacExtensionSnapshotBatch.finishImageLoad(captureLoad, loaded: image != nil) }
+            #endif
             guard let data = try? await ExtensionRemoteImage.session.data(from: url).0, let img = UIImage(data: data) else {
                 failed = true
                 return
@@ -290,7 +300,7 @@ struct ExtensionSearchRow: View {
             TextField(search.placeholder ?? String(localized: "Search"), text: Binding(get: { model.query }, set: { model.query = $0 }))
                 .font(Theme.Font.body).textInputAutocapitalization(.never).autocorrectionDisabled()
                 .onSubmit { run() }
-            Button { run() } label: { Image(systemName: Theme.Icon.search) }
+            Button { run() } label: { ThemedIcon(Theme.Icon.search) }
                 .themedButton().accessibilityLabel("Search")
         }
         .padding(Theme.Space.s)
@@ -320,6 +330,7 @@ enum ExtensionOutcome {
 struct ExtensionChartItem: View {
     var item: ExtensionChartComponent
     @Environment(\.pluginUICompact) private var compact
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     private var series: [ExtensionChartSeries] { Array(item.series.prefix(4)) }
     /// The x axis: the first series' labels (the others line up with them).
@@ -338,6 +349,8 @@ struct ExtensionChartItem: View {
                                                displays: s.points.map(\.display))
                           },
                           stacked: item.stacked == true, format: format, compact: compact)
+                // Drawn again with other values, the bars and lines move to them (#37).
+                .animation(reduceMotion ? nil : Theme.Motion.layout, value: item.series)
                 if let d = item.detail, !d.isEmpty, !compact {
                     Text(d).font(Theme.Font.label).foregroundStyle(.secondary).lineLimit(3)
                 }
@@ -390,7 +403,7 @@ struct ExtensionStatGrid: View {
     private func cell(_ s: ExtensionStat) -> some View {
         VStack(alignment: .leading, spacing: Theme.Space.xxs) {
             Text(s.label).font(Theme.Font.label).foregroundStyle(.secondary).lineLimit(1)
-            Text(s.value).font(Theme.Font.heading.monospacedDigit()).lineLimit(1).minimumScaleFactor(0.6)
+            ExtensionChangingText(s.value).font(Theme.Font.heading.monospacedDigit()).lineLimit(1).minimumScaleFactor(0.6)
             if let d = s.detail, !d.isEmpty {
                 Text(d).font(Theme.Font.label).foregroundStyle(ExtensionUIStyle.tone(s.tone)).lineLimit(1).minimumScaleFactor(0.8)
             }
@@ -443,6 +456,7 @@ struct ExtensionActionButton<Content: View>: View {
     var title: String
     var destructive = false
     var model: any ExtensionViewControlling
+    var values: [String: String] = [:]
     @Binding var link: LinkTarget?
     @ViewBuilder var label: Content
     @State private var asking = false
@@ -465,7 +479,7 @@ struct ExtensionActionButton<Content: View>: View {
     }
 
     private func run() {
-        let execute = model.prepared(action, with: [:], displayed: displayed)
+        let execute = model.prepared(action, with: values, displayed: displayed)
         if model.managesConfirmation && displayed == nil { Keyboard.dismiss() }
         Task {
             // Let the conversation's simultaneous focus-dismiss gesture settle before presenting a native alert.

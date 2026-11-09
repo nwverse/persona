@@ -54,6 +54,11 @@ export function defaultSocketPath() {
  * @property {(params: {cwd: string, prompt?: string}) => Promise<{session: object}>} [start]
  * @property {(params: {session_id: string, title: string}) => Promise<void>} [rename]
  * @property {(params: {session_id: string}) => Promise<void>} [close]
+ * @property {(params: {session_id: string}) => Promise<void>} [archive] - the runtime's own reversible archive of an
+ *   idle session, without stopping or closing anything (caps.archive: only with unarchive too). The session the user
+ *   archives in Persona is archived here as well; already archived answers as done.
+ * @property {(params: {session_id: string}) => Promise<void>} [unarchive] - restores what archive archived (already
+ *   restored answers as done).
  * @property {(params: {session_id: string, permission_mode?: string, effort?: string}) => Promise<void>} [modes] - the
  *   phone's permission mode / effort for a session (caps.modes; values are Persona's: default / acceptEdits / plan /
  *   auto / bypassPermissions, low … max).
@@ -214,6 +219,8 @@ export function createRuntime(driver, options) {
     }
     // Said only when on: a runtime without them says what it always did.
     if (typeof driver.modes === 'function') caps.modes = true
+    // Its own archive, both ways: an archive Persona could not undo is not offered.
+    if (typeof driver.archive === 'function' && typeof driver.unarchive === 'function') caps.archive = true
     if (options.resume === true && caps.start) caps.resume = true
     // It keeps no "always allow" rule of its own: the hub remembers one per session and tool for it (#3974).
     if (options.keepAlways === true) caps.keep_always = true
@@ -454,7 +461,9 @@ export function createRuntime(driver, options) {
           const page = await driver.items({ session_id: id, after_seq: after })
           if (watched.get(id) !== w) return { ok: true }
           if ((page.items?.length ?? 0) > 0 || page.to_seq > w.last) {
-            peer?.notify('session.items', { session_id: id, items: page.items ?? [], history: page.history, from_seq: page.from_seq ?? after, to_seq: page.to_seq })
+            // As with the hub's backlog cap, only the last page of a truncated replay asks the client to fetch the rest.
+            const moreAfter = i === 7 && page.more_after === true
+            peer?.notify('session.items', { session_id: id, items: page.items ?? [], history: page.history, from_seq: page.from_seq ?? after, to_seq: page.to_seq, ...(moreAfter ? { more_after: true } : {}) })
             w.last = page.to_seq
           }
           if (page.history !== undefined) w.history = page.history
@@ -718,6 +727,12 @@ export function createRuntime(driver, options) {
         return { ok: true }
       case 'session.close':
         await need(driver.close, 'close')(params)
+        schedulePush()
+        return { ok: true }
+      case 'session.archive':
+      case 'session.unarchive':
+        if (!(typeof driver.archive === 'function' && typeof driver.unarchive === 'function')) need(undefined, 'archive')
+        await (method === 'session.archive' ? driver.archive : driver.unarchive)(params)
         schedulePush()
         return { ok: true }
       case 'session.modes':

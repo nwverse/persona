@@ -46,16 +46,20 @@ const usage = `usage:
                            unless hub.json says assistant.external (token: stdin or PERSONA_ASSISTANT_TOKEN)
   persona-manager assistant drop-shared-tables [--yes]
                            drop the built-in manager's old tables from the hub's database, once its data moved
-  persona-manager join --builtin <hub address> <code>
+  persona-manager join --builtin <hub address> [<code>] [--install]
                            bind the built-in manager's own service to the hub (persona-hub manager-code prints a code;
-                           then persona-manager assistant with PERSONA_ASSISTANT_DEPLOY=service runs it)
+                           left out, it is read from PERSONA_MANAGER_CODE, which other users of the machine cannot
+                           read); --install: then install that service (persona-hub setup does both on a new hub)
+  persona-manager install|uninstall|status --builtin
+                           the built-in manager's own service: install (and start) it, remove it, show it
   persona-manager join|run|install|uninstall|status …
                            a manager made in the app: trade its install code, run it, install it as a service
                            (docs/assistant/managers.md; persona-manager status -h for the details)
   persona-manager extension …  the extensions on this machine (docs/extensions/extensions.md "Command line")
   persona-manager voice     the built-in voice extension (the manager runs it)
   persona-manager tailcat-key  print the built-in manager's tailcat key (created the first time)
-  persona-manager node …    this computer's node, as the manager starts it (personad node …)
+  persona-manager node …    this computer's node, when the manager runs it as itself: with no persona-node or
+                           personad of its build beside it, or PERSONA_SPLIT_PROGRAMS=0 (personad node …)
   persona-manager version [-v]  the version; -v adds the channel and build number`
 
 func main() {
@@ -81,7 +85,9 @@ func main() {
 		stop()
 		os.Exit(sandbox.Run(args[1:], os.Stderr))
 	}
-	// The node of this computer the manager starts (`<self> node --stdio`, internal/devices) and the commands it runs.
+	// This computer's node, when the manager starts it as itself (`<self> node --stdio`), and the commands it runs. The
+	// manager starts persona-node or personad of its build beside it instead, and itself only when neither is there or
+	// with PERSONA_SPLIT_PROGRAMS=0 (devices.Machine.localNode).
 	if handled, err := nodecmd.Run(ctx, stop, args, nodecmd.Build{Version: version, Program: nodeproto.ProgramPersonad}); handled {
 		finish(err)
 		return

@@ -22,6 +22,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/nwverse/persona/server/internal/acceptloop"
 )
 
 // HubHost is the hub's own API as an extension behind the proxy reaches it (its loopback is not the hub's).
@@ -109,7 +111,7 @@ type Proxy struct {
 	active        map[string]map[*ioLease]struct{}
 	runtimeActive map[string]int
 	runtimeTotal  int
-	runtimeSlots  chan struct{}
+	runtimeSlots  chan struct{} // shared by every runtimeListener (runtimeSlotsPerProxy)
 }
 
 // Start listens on loopback (an unused port).
@@ -121,7 +123,7 @@ func (p *Proxy) Start() error {
 	p.mu.Lock()
 	p.ln = ln
 	p.mu.Unlock()
-	go p.serve(ln, "")
+	go p.serve(ln, "", false)
 	return nil
 }
 
@@ -215,22 +217,16 @@ func (p *Proxy) listenUnix(ext, path string, source bool) error {
 		return err
 	}
 	_ = os.Chmod(path, 0o600)
-	if source {
-		p.mu.Lock()
-		if p.runtimeSlots == nil {
-			p.runtimeSlots = make(chan struct{}, 128)
-		}
-		slots := p.runtimeSlots
-		p.mu.Unlock()
-		ln = &runtimeListener{Listener: ln, slots: slots, done: make(chan struct{}), connections: map[*runtimeConn]struct{}{}}
-	}
 	p.mu.Lock()
+	if source {
+		ln = p.boundLocked(ln)
+	}
 	if p.unix == nil {
 		p.unix = map[string]net.Listener{}
 	}
 	p.unix[ext] = ln
 	p.mu.Unlock()
-	go p.serve(ln, ext)
+	go p.serve(ln, ext, source)
 	return nil
 }
 
@@ -257,6 +253,7 @@ func (p *Proxy) Unregister(ext string) {
 // RelayUnix serves ext on a unix socket at path (made anew; only this user may connect) whose every connection is
 // joined to the unix socket at target, dialed then (so a target made anew, a restarted node's, is still reached):
 // a sandboxed agent runtime's way to this machine's node (#5413), and to nothing else. Unregister closes it.
+// Each connection holds two descriptors and three goroutines here, so the socket is bounded (runtimeListener).
 func (p *Proxy) RelayUnix(ext, path, target string) error {
 	p.mu.Lock()
 	if old := p.relay[ext]; old != nil {
@@ -274,40 +271,48 @@ func (p *Proxy) RelayUnix(ext, path, target string) error {
 	if p.relay == nil {
 		p.relay = map[string]net.Listener{}
 	}
+	ln = p.boundLocked(ln)
 	p.relay[ext] = ln
 	p.mu.Unlock()
 	go p.serveRelay(ln, ext, target)
 	return nil
 }
 
-func (p *Proxy) serveRelay(ln net.Listener, ext, target string) {
-	for {
-		c, err := ln.Accept()
-		if err != nil {
-			return
-		}
-		go func() {
-			defer c.Close()
-			var d net.Dialer
-			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-			up, err := d.DialContext(ctx, "unix", target)
-			cancel()
-			if err != nil {
-				p.logf("egress: %s: %s: %v", ext, filepath.Base(target), err)
-				return
-			}
-			defer up.Close()
-			// Either end gone ends both: the protocol on it has no half-closed state.
-			done := make(chan struct{}, 2)
-			pipe := func(dst, src net.Conn) {
-				_, _ = io.Copy(dst, src)
-				done <- struct{}{}
-			}
-			go pipe(up, c)
-			go pipe(c, up)
-			<-done
-		}()
+// boundLocked is ln bounded (runtimeListener), out of the proxy's shared runtimeSlots. p.mu held.
+func (p *Proxy) boundLocked(ln net.Listener) *runtimeListener {
+	if p.runtimeSlots == nil {
+		p.runtimeSlots = make(chan struct{}, runtimeSlotsPerProxy)
 	}
+	return &runtimeListener{Listener: ln, slots: p.runtimeSlots, done: make(chan struct{}),
+		connections: map[*runtimeConn]struct{}{}}
+}
+
+// serveRelay serves ln until it is closed (RelayUnix replacing it, Unregister, Close).
+func (p *Proxy) serveRelay(ln net.Listener, ext, target string) {
+	logf := func(format string, args ...any) { p.logf("egress: %s: %s", ext, fmt.Sprintf(format, args...)) }
+	acceptloop.Run(context.Background(), ln, logf, func(c net.Conn) { go p.relayConn(c, ext, target) })
+}
+
+func (p *Proxy) relayConn(c net.Conn, ext, target string) {
+	defer c.Close()
+	var d net.Dialer
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	up, err := d.DialContext(ctx, "unix", target)
+	cancel()
+	if err != nil {
+		p.logf("egress: %s: %s: %v", ext, filepath.Base(target), err)
+		return
+	}
+	defer up.Close()
+	// Either end gone ends both: the protocol on it has no half-closed state.
+	done := make(chan struct{}, 2)
+	pipe := func(dst, src net.Conn) {
+		_, _ = io.Copy(dst, src)
+		done <- struct{}{}
+	}
+	go pipe(up, c)
+	go pipe(c, up)
+	<-done
 }
 
 // Stats are ext's counts so far.
@@ -320,10 +325,12 @@ func (p *Proxy) Stats(ext string) Counts {
 	return Counts{}
 }
 
-func (p *Proxy) serve(ln net.Listener, ext string) {
+// serve serves ln's HTTP proxy for ext ("": the loopback listener, which asks for credentials). source: a source
+// runtime's socket, which takes only its fetch broker's requests.
+func (p *Proxy) serve(ln net.Listener, ext string, source bool) {
 	srv := &http.Server{Handler: p.handler(ext), ReadHeaderTimeout: 30 * time.Second,
 		ErrorLog: nil}
-	if _, source := ln.(*runtimeListener); source {
+	if source {
 		// The guest can open raw sockets to its broker. Enforce the bounded
 		// runtime route here, not just in the replaceable JavaScript environment.
 		handler := srv.Handler
@@ -577,18 +584,18 @@ func (p *Proxy) dialOut(ctx context.Context, host, port string, rule Rule) (net.
 		return nil, err
 	}
 	var last error = fmt.Errorf("%s: no address", host)
+	var ok []net.IP
 	for _, ip := range ips {
 		if ip.IsLoopback() || ip.IsLinkLocalUnicast() || ip.IsUnspecified() || ip.IsLinkLocalMulticast() {
 			last = fmt.Errorf("%s %w", host, errInternal)
 			continue
 		}
-		c, err := p.dial(ctx, "tcp", net.JoinHostPort(ip.String(), port))
-		if err == nil {
-			return c, nil
-		}
-		last = err
+		ok = append(ok, ip)
 	}
-	return nil, last
+	if len(ok) == 0 {
+		return nil, last
+	}
+	return dialRace(ctx, ok, port, func(ctx context.Context, target string) (net.Conn, error) { return p.dial(ctx, "tcp", target) })
 }
 
 // fromEnvironment is the hub's own proxy for u, from its environment.
@@ -714,14 +721,21 @@ func (p *Proxy) tunnel(w http.ResponseWriter, r *http.Request, dial func() (net.
 var hop = []string{"Connection", "Proxy-Connection", "Keep-Alive", "Proxy-Authorization", "Proxy-Authenticate", "Te",
 	"Trailer", "Transfer-Encoding", "Upgrade"}
 
-// forward is a plain http:// request of extension ext: sent on over a connection dial makes, the answer back.
-func (p *Proxy) forward(w http.ResponseWriter, r *http.Request, ext string, dial func() (net.Conn, error)) {
-	tr := &http.Transport{
+// forwardTransport keeps the approved dial callback while negotiating ordinary TLS HTTP/2.
+// A custom DialContext otherwise conservatively disables Go's HTTP/2 support.
+func forwardTransport(dial func() (net.Conn, error)) *http.Transport {
+	return &http.Transport{
 		Proxy:                 nil,
 		DialContext:           func(context.Context, string, string) (net.Conn, error) { return dial() },
+		ForceAttemptHTTP2:     true,
 		DisableKeepAlives:     true,
 		ResponseHeaderTimeout: 2 * time.Minute,
 	}
+}
+
+// forward sends HTTP through the approved connection and preserves the upstream response.
+func (p *Proxy) forward(w http.ResponseWriter, r *http.Request, ext string, dial func() (net.Conn, error)) {
+	tr := forwardTransport(dial)
 	defer tr.CloseIdleConnections()
 	out := r.Clone(r.Context())
 	out.RequestURI = ""
@@ -816,15 +830,7 @@ func (p *Proxy) dialConfigured(ctx context.Context, host, port string) (net.Conn
 	if up, err := upstream(&url.URL{Scheme: "https", Host: target}); err == nil && up != nil {
 		return p.connectVia(ctx, up, target)
 	}
-	var last error
-	for _, ip := range ok {
-		c, err := p.dial(ctx, "tcp", net.JoinHostPort(ip.String(), port))
-		if err == nil {
-			return c, nil
-		}
-		last = err
-	}
-	return nil, last
+	return dialRace(ctx, ok, port, func(ctx context.Context, target string) (net.Conn, error) { return p.dial(ctx, "tcp", target) })
 }
 
 // resolveAll is host's addresses (itself, for an IP).

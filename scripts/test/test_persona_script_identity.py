@@ -13,6 +13,7 @@ from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = ROOT / 'scripts/persona_identity.py'
+GIT = shutil.which('git')
 spec = importlib.util.spec_from_file_location('runtime_identity_under_test', SCRIPT)
 identity = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(identity)
@@ -75,11 +76,14 @@ class PersonaScriptIdentityTests(unittest.TestCase):
                 self.assertEqual(sorted(p.name for p in home.iterdir()), before)
                 identity.prepare_dir(home, {})
                 identity.prepare_dir(home, {})
-                self.assertTrue(os.path.samefile(former, current))
                 if initial == 'former':
+                    # a former-name store gets the current name as an alias (#1445)
+                    self.assertTrue(os.path.samefile(former, current))
                     self.assertEqual((current / 'old.fixture').read_text(), 'old-data')
-                if initial == 'current':
-                    self.assertEqual((former / 'new.fixture').read_text(), 'new-data')
+                else:
+                    # a current-name store gets no former-name alias (#1445)
+                    self.assertFalse(os.path.lexists(former))
+                    self.assertEqual(sorted(p.name for p in home.iterdir()), ['.persona'])
 
     def test_dangling_canonical_root_is_not_repaired(self):
         for target in ('./missing', './.persona/.'):
@@ -117,13 +121,28 @@ class PersonaScriptIdentityTests(unittest.TestCase):
                 self.assertFalse((external / 'missing').exists())
                 self.assertFalse((external / '.persona').exists())
 
-    def test_initialization_creates_only_an_alias_to_the_same_store(self):
+    def test_former_name_alias_only_for_a_former_name_store(self):
+        # #1445: a current-name store gets no alias under the former name, and one an operator left (or removed)
+        # stays as it is; a former-name store gets the current name as an alias to the same store
         with tempfile.TemporaryDirectory() as directory:
             home = Path(directory)
+            former = home / ('.' + FORMER_NAME)
             identity.prepare_dir(home, {})
             identity.prepare_dir(home, {})
-            self.assertEqual(os.readlink(home / ('.' + FORMER_NAME)), '.persona')
-            self.assertTrue(os.path.samefile(home / '.persona', home / ('.' + FORMER_NAME)))
+            self.assertFalse(os.path.lexists(former))
+            former.symlink_to('.persona')
+            identity.prepare_dir(home, {})
+            self.assertEqual(os.readlink(former), '.persona')
+            former.unlink()
+            identity.prepare_dir(home, {})
+            self.assertFalse(os.path.lexists(former))
+        with tempfile.TemporaryDirectory() as directory:
+            home = Path(directory)
+            former = home / ('.' + FORMER_NAME)
+            former.mkdir()
+            identity.prepare_dir(home, {})
+            self.assertEqual(os.readlink(home / '.persona'), '.' + FORMER_NAME)
+            self.assertTrue(os.path.samefile(home / '.persona', former))
 
     def test_service_root_survives_an_ssh_environment_without_prefixes(self):
         for name in ('personad.service', 'personad-node.service', 'persona-link.service'):
@@ -438,6 +457,90 @@ sys.exit(2)
         env = dict(self.env, PERSONA_DEPLOY_ANY_COMMIT='1')
         result = subprocess.run(['bash', str(self.repo / 'scripts/deploy/deploy.sh'), 'web'], env=env, capture_output=True, text=True, timeout=30)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual((self.state / 'web/index.html').read_text(), 'Persona fixture web')
+
+    def git(self, cwd, *args):
+        result = subprocess.run([GIT, '-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.com', *args], cwd=cwd,
+                                env=self.env, capture_output=True, text=True, timeout=30)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        return result.stdout.strip()
+
+    def clone_of(self, default, origin_head):
+        """Make the fixture checkout a clone of a fresh bare remote whose default branch is `default`, run with the real
+        git. origin_head: the branch the clone's refs/remotes/origin/HEAD names (one the remote may no longer have, as
+        in a clone made before the remote's default changed), None for none (a remote added by hand)."""
+        self.env['GIT_CONFIG_NOSYSTEM'] = '1'
+        remote = self.base / 'origin.git'
+        shutil.rmtree(remote, ignore_errors=True)
+        shutil.rmtree(self.repo / '.git', ignore_errors=True)
+        self.git(self.base, 'init', '-q', '--bare', '--initial-branch=' + default, str(remote))
+        self.git(self.repo, 'init', '-q', '--initial-branch=' + default)
+        self.git(self.repo, 'commit', '-q', '--allow-empty', '-m', 'fixture')  # the guard compares commits, not files
+        self.git(self.repo, 'remote', 'add', 'origin', str(remote))
+        self.git(self.repo, 'push', '-q', 'origin', default)
+        if origin_head:
+            self.git(self.repo, 'update-ref', 'refs/remotes/origin/' + origin_head, 'HEAD')
+            self.git(self.repo, 'symbolic-ref', 'refs/remotes/origin/HEAD', 'refs/remotes/origin/' + origin_head)
+        (self.commands / 'git').unlink(missing_ok=True)  # setUp's fake git
+
+    def advance_remote(self, branch):
+        """Someone else's commit lands on the remote's branch; the checkout does not have it."""
+        later = self.git(self.repo, 'commit-tree', 'HEAD^{tree}', '-p', 'HEAD', '-m', 'later')
+        self.git(self.repo, 'push', '-q', 'origin', later + ':refs/heads/' + branch)
+
+    def assert_refused(self, message):
+        """deploy.sh web exits 2 with `message` on stderr and deploys nothing."""
+        result = subprocess.run(['bash', str(self.repo / 'scripts/deploy/deploy.sh'), 'web'], env=self.env,
+                                capture_output=True, text=True, timeout=DEPLOY_TIMEOUT)
+        self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+        self.assertIn(message, result.stderr)
+        self.assertFalse((self.state / 'web/index.html').exists())
+
+    def test_an_up_to_date_clone_of_a_main_repository_deploys(self):
+        # The remote has main and no master (#1064).
+        self.clone_of('main', 'main')
+        self.run_script('scripts/deploy/deploy.sh', 'web')
+        self.assertEqual((self.state / 'web/index.html').read_text(), 'Persona fixture web')
+
+    def test_a_checkout_behind_the_remote_default_branch_deploys_nothing(self):
+        for default, origin_head in (('main', 'main'), ('main', None), ('main', 'master'), ('master', 'master')):
+            with self.subTest(default=default, origin_head=origin_head):
+                self.clone_of(default, origin_head)
+                self.advance_remote(default)
+                self.assert_refused('missing commits on origin/' + default)
+
+    def test_a_remote_that_names_no_valid_default_branch_falls_back_to_origin_head(self):
+        # ls-remote names nothing, or a name git does not allow for a branch (':' would make the fetch a refspec).
+        for listed in ('', 'ref: refs/heads/x:refs/heads/y\\tHEAD\\n'):
+            with self.subTest(listed=listed):
+                self.clone_of('main', 'main')
+                self.advance_remote('main')
+                executable(self.commands / 'git', '#!/bin/sh\n[ "$1" = ls-remote ] && { printf ' + shlex.quote(listed) +
+                           '; exit 0; }\nexec ' + shlex.quote(GIT) + ' "$@"\n')
+                self.assert_refused('missing commits on origin/main')
+
+    def test_an_unreachable_remote_deploys_nothing_unless_any_commit_is_set(self):
+        # ls-remote and fetch both fail (set -e, pipefail): the message names the clone's origin/HEAD, else master.
+        for origin_head, branch in (('main', 'main'), (None, 'master')):
+            with self.subTest(origin_head=origin_head):
+                self.clone_of('main', origin_head)
+                self.git(self.repo, 'remote', 'set-url', 'origin', str(self.base / 'missing.git'))
+                self.assert_refused('could not fetch origin/' + branch + ' to ')
+        # PERSONA_DEPLOY_ANY_COMMIT=1 skips the check, so it needs no remote.
+        self.env['PERSONA_DEPLOY_ANY_COMMIT'] = '1'
+        self.run_script('scripts/deploy/deploy.sh', 'web')
+        self.assertEqual((self.state / 'web/index.html').read_text(), 'Persona fixture web')
+
+    def test_a_default_branch_named_like_an_option_is_fetched_as_a_branch(self):
+        # Passed bare, this name would be git fetch's --upload-pack and run the command on this machine.
+        self.clone_of('main', 'main')
+        executable(self.commands / 'fixture-upload-pack', '#!/bin/sh\ntouch "$HOME/upload-pack.fixture"\nexit 1\n')
+        branch = 'refs/heads/--upload-pack=fixture-upload-pack'
+        remote = '--git-dir=' + str(self.base / 'origin.git')
+        self.git(self.base, remote, 'update-ref', branch, 'main')
+        self.git(self.base, remote, 'symbolic-ref', 'HEAD', branch)
+        self.run_script('scripts/deploy/deploy.sh', 'web')
+        self.assertFalse((self.local / 'upload-pack.fixture').exists())
         self.assertEqual((self.state / 'web/index.html').read_text(), 'Persona fixture web')
 
     def test_android_apk_publish_uses_the_remote_profile_and_config_entrypoint(self):

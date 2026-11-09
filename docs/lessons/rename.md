@@ -59,3 +59,34 @@ The node keeps each conversation's working folder in the hub's database (`node_s
 
 - A stored path that is gone is looked for by its name in the current data directory, else the default; it is never created again where it was (`storedCwd`).
 - Before a cutover, scan the database for absolute paths into the directory being moved (`node_sessions`, settings, payloads) and decide for each column whether it is read again. Historical payloads can stay; a value the code acts on cannot.
+
+## Moving the data directory moves the assistant's conversation history (2026-11-07, #164)
+
+Claude Code names each folder's conversation directory after the folder's absolute path. The cutover moved `~/.<previous-name>` to `~/.persona`, so the assistant, now running in `~/.persona/assistant`, looked in an empty project directory; its earlier conversations were all still in the one for the old path, and the user saw every earlier conversation gone. The runbook had moved the root, the database and the config, but no harness state outside the root.
+
+- A rename that moves a directory agents run in must also move every harness's per-folder state that is keyed by that path: Claude Code's `projects/<key>` in each config directory, and the same for any other agent.
+- Move it while nothing writes; don't copy it (next lesson).
+- A transcript also records the folder it ran in, and the server reads ownership from that: moving the project directory alone did not bring the conversations back into the assistant's list (#163).
+
+## A copied conversation directory diverges from its original (2026-11-08, #1533)
+
+The runbook copied Claude Code's project directories to the new keys and kept the old ones. The stored sessions still named folders in the old data directory, and an old-name alias made those folders resolve, so the restarted main conversation kept appending to the old copy while new sessions wrote to the new one. Readers picked different copies: the web took its items from one file and its revision from the other, and a sent message stayed "sending" (#1423).
+
+- Move per-folder state with its folder; when both keys exist, merge and refuse a file that differs, never pick one silently. `persona-cutover.py --claude-config-dir` does this.
+- Rewrite every stored path that is acted on in the same window (`node_sessions.cwd`): an alias hides a stale path instead of failing.
+
+## A path that only worked through an alias comes back when the alias goes (2026-11-09, #1681)
+
+The manager names the assistant's directories relative to HOME with the former spelling (`.jarvis/assistant`), which older nodes need during a rolling upgrade. The node joined that to HOME as written on the default layouts. While `~/.jarvis` was an alias of `~/.persona` the result resolved to the right place, so nothing showed; once the alias was removed (#1495), the next new conversation made `~/.jarvis/assistant` as a real directory, ran there, and Claude Code kept its transcript and memory under the former project key. It surfaced hours after the deploy, because only a conversation's start prepares the directory.
+
+- Before removing an alias, look for paths that are built with the name it stands for, not only for links pointing at it: they keep working through the alias and break only when it goes.
+- Resolve a spelling to the directory actually in use (here, the node's state directory) instead of joining it to HOME; a directory that should exist and is missing is an error, not something to make again empty.
+- With two real state directories, `identity.DataDir` without `PERSONA_HOME` picks the former one: run `personad` by hand with `PERSONA_HOME` until the stray one is gone.
+
+## A migration verified against a copy nobody reads (2026-11-09, #1686)
+
+The cutover transaction ran against the hub's database. The built-in manager had moved its tables into a database of its own on its first start after the cutover, and the hub's database kept the old ones as they were, for a build from before the move. The transaction rewrote that copy and reported every field verified, while the manager's own database kept the previous session folders and its nodes kept resuming sessions there.
+
+- Before writing a table, find out which process reads it and from where: a table with the expected name and schema can be a frozen copy.
+- Verify in the place the service reads. A zero count in a copy proves nothing.
+- Data that moves is marked where it left (`manager_moved`); a tool that writes there checks the mark and says where the live data is.

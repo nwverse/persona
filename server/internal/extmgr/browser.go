@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"reflect"
 	"slices"
 	"strings"
 	"time"
@@ -94,10 +95,10 @@ func (h *Manager) keepBrowser(m *Machine, b proto.Browser, asked time.Time) bool
 	return old == nil || !sameBrowser(*old, b)
 }
 
+// sameBrowser: the same apart from when it was checked; the job and the displays by value.
 func sameBrowser(a, b proto.Browser) bool {
-	aj, bj := a.Job, b.Job
-	a.Checked, b.Checked, a.Job, b.Job = time.Time{}, time.Time{}, nil, nil
-	return a == b && (aj == nil) == (bj == nil) && (aj == nil || *aj == *bj)
+	a.Checked, b.Checked = time.Time{}, time.Time{}
+	return reflect.DeepEqual(a, b)
 }
 
 // browserChanged: the plugin was turned on or off, or its machines changed: ask the Macs again.

@@ -2,7 +2,7 @@ import Foundation
 import Testing
 @testable import Persona
 
-/// #6272: the watch face shows what the watch app last saw, and stops standing for the agents once that is old.
+/// #55: the watch face shows what the watch app last saw, and stops standing for the agents once that is old.
 struct WatchPetSnapshotTests {
     private let at = Date(timeIntervalSince1970: 10_000)
     private var snapshot: WatchPetSnapshot {

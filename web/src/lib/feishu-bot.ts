@@ -14,6 +14,9 @@ export interface BotFeatures {
   reports?: boolean;
   /** /tasks keeps one standing "waiting for you" card, edited in place (#6052); a hub from before leaves it out. */
   board?: boolean;
+  workbench?: boolean;
+  /** Only tasks' conclusions are pushed; a finished turn, waiting and interrupted stay in the to-do list and the briefing (#1226); a hub from before leaves it out. */
+  only_conclusions?: boolean;
 }
 
 export interface FeishuBotStatus {
@@ -44,11 +47,12 @@ export interface FeishuBotUpdate {
   app_id?: string;
   app_secret?: string;
   domain?: string;
-  features?: BotFeatures;
+  /** The switches to change: the hub merges them over its own (a hub before 0.1.12 replaces them all, see `featureEdit`). */
+  features?: Partial<BotFeatures>;
   nudge_after?: number;
 }
 
-export const DEFAULT_FEATURES: BotFeatures = { main: true, cards: true, all_cards: false, pushes: false, sync: false, agents: false, reports: true, board: false };
+export const DEFAULT_FEATURES: BotFeatures = { main: true, cards: true, all_cards: false, pushes: false, sync: false, agents: false, reports: true, board: false, only_conclusions: false, workbench: false };
 
 /** What a hub from before the setting does: nudge after an hour. */
 export const DEFAULT_NUDGE_AFTER = 60;
@@ -106,6 +110,20 @@ export function withFeature(f: BotFeatures, key: keyof BotFeatures, on: boolean)
   if (key === "cards" && !on) next.all_cards = false;
   if (key === "all_cards" && on) next.cards = true;
   return next;
+}
+
+/**
+ * What turning one switch sends: that switch alone, so one changed elsewhere since this page loaded keeps its value (the
+ * hub merges the switches it is sent over its own). The pair that goes together names both ("all cards" brings "cards"
+ * along, "cards" off takes "all cards" with it): the hub does not tie them. A hub from before 0.1.12 replaces the whole
+ * object it is sent, and says so by leaving `reports` out of its status: it gets every switch, as it always did.
+ */
+export function featureEdit(f: BotFeatures, key: keyof BotFeatures, on: boolean): Partial<BotFeatures> {
+  if (f.reports === undefined) return withFeature(f, key, on);
+  const edit: Partial<BotFeatures> = { [key]: on };
+  if (key === "cards" && !on) edit.all_cards = false;
+  if (key === "all_cards" && on) edit.cards = true;
+  return edit;
 }
 
 /** What the status line says. */

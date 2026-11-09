@@ -167,7 +167,7 @@ func (n *Node) resumeCodex(ctx context.Context, launch host.Launcher, id string,
 	pane := created.Pane.String()
 	n.bindPane(pane, id)               // the pane runs this thread (kept in its state): no guessing another rollout for it
 	time.Sleep(300 * time.Millisecond) // the fresh shell loads ~/.zshrc; typed input is buffered either way
-	if err := launch.Run(ctx, created.Pane, shellQuote(n.bin)+" codex-start "+shellQuote(file)); err != nil {
+	if err := launch.Run(ctx, created.Pane, n.agentCommand(shellQuote(n.bin)+" codex-start "+shellQuote(file), shellQuote, paneShells(ctx)...)); err != nil {
 		return fmt.Errorf("run launcher: %w", err)
 	}
 	wait, cancel := context.WithTimeout(ctx, codexStartWait)

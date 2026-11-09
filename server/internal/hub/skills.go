@@ -60,5 +60,5 @@ func (h *Hub) serveSkills(w http.ResponseWriter, r *http.Request) {
 	if list == nil {
 		list = []skill{}
 	}
-	writeJSON(w, map[string]any{"machine_id": m.cfg.ID, "machine": m.cfg.Name, "skills": list})
+	writeJSON(w, map[string]any{"machine_id": m.cfg.ID, "machine": m.name(), "skills": list})
 }

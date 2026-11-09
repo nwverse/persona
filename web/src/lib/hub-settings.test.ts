@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { botStateText, botSummary, botTone, credentialsChanged, credentialsOf, credentialsUpdate, DEFAULT_FEATURES, domainChoice, livePairing, nudgeChoices, nudgeLabel, pairingLeft, withFeature, type FeishuBotStatus } from "./feishu-bot";
+import { botStateText, botSummary, botTone, credentialsChanged, credentialsOf, credentialsUpdate, DEFAULT_FEATURES, domainChoice, featureEdit, livePairing, nudgeChoices, nudgeLabel, pairingLeft, withFeature, type FeishuBotStatus } from "./feishu-bot";
 import { channelTitle, dockerSteps, DOCKER_COMMAND, latestWarning, recordTitle, recordTone, updateFinished, updateStateTitle, updateView, updateWorking, type HubUpdateStatus } from "./hub-update";
 
 const bot = (o: Partial<FeishuBotStatus> = {}): FeishuBotStatus => ({
@@ -32,6 +32,25 @@ describe("feishu bot", () => {
     expect(withFeature({ ...DEFAULT_FEATURES, all_cards: true }, "cards", false)).toMatchObject({ cards: false, all_cards: false });
     expect(withFeature({ ...DEFAULT_FEATURES, cards: false }, "all_cards", true)).toMatchObject({ cards: true, all_cards: true });
     expect(withFeature(DEFAULT_FEATURES, "sync", true)).toEqual({ ...DEFAULT_FEATURES, sync: true });
+  });
+
+  it("sends only the switch that changed, so one changed elsewhere is not put back (#74)", () => {
+    // The page may be stale: whatever it holds for the other switches stays out of the request.
+    expect(featureEdit(DEFAULT_FEATURES, "board", true)).toEqual({ board: true });
+    expect(featureEdit(DEFAULT_FEATURES, "pushes", true)).toEqual({ pushes: true });
+    expect(featureEdit({ ...DEFAULT_FEATURES, board: true }, "sync", true)).toEqual({ sync: true });
+    expect(featureEdit(DEFAULT_FEATURES, "reports", false)).toEqual({ reports: false });
+    // The pair that goes together names both, since the hub does not tie them.
+    expect(featureEdit(DEFAULT_FEATURES, "cards", false)).toEqual({ cards: false, all_cards: false });
+    expect(featureEdit(DEFAULT_FEATURES, "all_cards", true)).toEqual({ all_cards: true, cards: true });
+    expect(featureEdit(DEFAULT_FEATURES, "all_cards", false)).toEqual({ all_cards: false });
+    expect(featureEdit(DEFAULT_FEATURES, "cards", true)).toEqual({ cards: true });
+  });
+
+  it("sends every switch to a hub from before 0.1.12, which replaces the whole object (no `reports` in its status)", () => {
+    const { reports: _reports, board: _board, ...old } = DEFAULT_FEATURES;
+    expect(featureEdit(old, "pushes", true)).toEqual({ ...old, pushes: true });
+    expect(featureEdit({ ...old, all_cards: true }, "cards", false)).toEqual({ ...old, cards: false, all_cards: false });
   });
 
   it("lists the nudge delays, with the one in force among them", () => {

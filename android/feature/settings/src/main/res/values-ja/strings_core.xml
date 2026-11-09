@@ -34,6 +34,12 @@
     <string name="settings_capsule_allowed">許可済み</string>
     <string name="settings_capsule_not_allowed">未許可</string>
     <string name="settings_capsule_needs_permission">重ねて表示の権限をオンにするとカプセルが表示されます。</string>
+    <string name="settings_capsule_keeper">常に表示</string>
+    <string name="settings_capsule_keeper_subtitle">ユーザー補助 · ロックや整理の後もカプセルを表示</string>
+    <string name="settings_capsule_keeper_on">オン</string>
+    <string name="settings_capsule_keeper_off">オフ</string>
+    <string name="settings_capsule_keeper_notice">一部の端末ではロック中に Persona が終了し、アプリを開くまでカプセルが戻りません。「ユーザー補助」で「Persona フローティングカプセル」をオンにすると表示され続けます。</string>
+    <string name="settings_capsule_keeper_turn_on">オンにする</string>
     <string name="settings_capsule_allow">許可</string>
     <string name="settings_demo_identity_ok">サンプル：本人確認に成功</string>
     <string name="settings_demo_computer">サンプルのコンピューター</string>

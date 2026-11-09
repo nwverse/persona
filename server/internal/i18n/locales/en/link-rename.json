@@ -1,0 +1,11 @@
+{
+  "invalid_name": "The name can be at most 40 characters, on one line",
+  "pending": "Confirm this computer is yours in the app first, then rename it",
+  "not_running": "Persona Link isn't running on this computer, so it can't ask the hub",
+  "passive": "In passive mode the hub connects to this computer: rename it on the hub (admin page or app)",
+  "offline": "Not connected to the hub right now. Try again once it's connected",
+  "unsupported": "This hub can't rename computers yet. Update the hub, or rename it on the hub",
+  "timeout": "The hub didn't answer in time. Try again",
+  "refused": "The hub refused the name: {detail}",
+  "failed": "The computer couldn't be renamed"
+}

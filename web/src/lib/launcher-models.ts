@@ -1,8 +1,10 @@
 // "New agent"'s model picker (#794): the models a launcher's agent lists in its own /model menu
 // (GET /machines/{mid}/launchers/{name}/models, node/launcher_models.go), which launcher the picker asks, searching the
 // list, the thinking efforts a pick allows, and what a start sends. A pick is for one start only: nothing is saved.
+import { MANAGER_HEADER } from "./manager-choice";
 import { t } from "../i18n";
 import { api, ApiError, enc, pastHub } from "./api";
+import { cleanModelId, validModelId } from "./model-id";
 import type { ModelBinding } from "./model-config";
 import { EFFORTS } from "./session-actions";
 import type { Launcher } from "./types";
@@ -19,6 +21,9 @@ export interface AgentModel {
   /** Thinking efforts it takes, weakest first; none: no effort setting. */
   efforts?: string[];
   default_effort?: string;
+  /** An ID the user typed before that ran here, remembered on the hub for this computer and launcher (#1644): listed
+   *  after the agent's own, most recent first, with no efforts (not known). It can be forgotten. */
+  custom?: boolean;
 }
 
 export interface LauncherModels {
@@ -78,13 +83,13 @@ export async function launcherModels(mid: string, launcher: string, opts: { refr
 
 /** "Model configuration"'s list for a launcher provider (`launcher.<name>`, GET /model-config/providers/{id}/models, #943): asked on a
  *  machine that has the launcher, which `machine` names. null: an older hub or a provider without a list (no picker). */
-export async function providerModels(provider: string, opts: { refresh?: boolean; machine?: string; signal?: AbortSignal } = {}): Promise<(LauncherModels & { machine?: string }) | null> {
+export async function providerModels(provider: string, opts: { manager?: string; refresh?: boolean; machine?: string; signal?: AbortSignal } = {}): Promise<(LauncherModels & { machine?: string }) | null> {
   // machine: the purpose's own (a task, Lark /agent run there), so the list is that machine's launcher.
   const query = new URLSearchParams();
   if (opts.refresh) query.set("refresh", "1");
   if (opts.machine) query.set("machine", opts.machine);
   try {
-    const r = await api<LauncherModels & { machine?: string }>(`/model-config/providers/${enc(provider)}/models${query.size ? `?${query}` : ""}`, { signal: opts.signal, timeout: pastHub(MODELS_HUB_MS) });
+    const r = await api<LauncherModels & { machine?: string }>(`/model-config/providers/${enc(provider)}/models${query.size ? `?${query}` : ""}`, { signal: opts.signal, timeout: pastHub(MODELS_HUB_MS), headers: opts.manager ? { [MANAGER_HEADER]: opts.manager } : undefined });
     return { ...r, models: r.models ?? [] };
   } catch (e) {
     if (e instanceof ApiError && e.status === 404) return null;
@@ -92,10 +97,34 @@ export async function providerModels(provider: string, opts: { refresh?: boolean
   }
 }
 
-/** What is typed in the search, as an id to save when no model has exactly that id ("Model configuration" takes ids the list lacks). */
+/** What is typed in the search, as an id to use when no model has exactly that id and the hub would take it (#1644,
+ *  lib/model-id.ts): "Model configuration" and "New agent" take ids the list lacks. */
 export function customModel(models: AgentModel[], query: string): string {
-  const id = query.trim();
-  return id && !/\s/.test(id) && !models.some((m) => m.id === id) ? id : "";
+  const id = cleanModelId(query);
+  return validModelId(id) && !models.some((m) => m.id === id) ? id : "";
+}
+
+/** The agent takes a model ID typed by hand (#1644): Claude Code's `--model` / `/model` and Codex's `--model` take any
+ *  string; the hub remembers typed IDs for these two only. Other agents' lists are empty (no model row). */
+export const takesTypedModel = (agent: string) => agent === "claude" || agent === "codex";
+
+/** A typed ID can reach the agent: Claude Code or Codex, and the launcher doesn't pass its own --model. */
+export const typedModelOffered = (agent: string, list: LauncherModels | null | undefined) => takesTypedModel(agent) && !list?.locked;
+
+/** Forgets one model ID typed for `launcher` on `mid` (#1644, the list's "Forget"): the hub stops listing it. */
+export function forgetCustomModel(mid: string, launcher: string, model: string): Promise<unknown> {
+  return api(`/machines/${enc(mid)}/launchers/${enc(launcher)}/models/custom?model=${enc(model)}`, { method: "DELETE" });
+}
+
+/** `list` without the typed ID `id` (the optimistic Forget), and how to put it back where it was when the hub says no. */
+export function withoutCustom(list: LauncherModels, id: string): { list: LauncherModels; restore: (now: LauncherModels) => LauncherModels } {
+  const at = list.models.findIndex((m) => m.id === id && m.custom);
+  if (at < 0) return { list, restore: (now) => now };
+  const row = list.models[at];
+  return {
+    list: { ...list, models: list.models.filter((_, i) => i !== at) },
+    restore: (now) => (now.models.some((m) => m.id === id) ? now : { ...now, models: [...now.models.slice(0, at), row, ...now.models.slice(at)] }),
+  };
 }
 
 /** The "Model configuration" binding of "New agent" that still applies with the chosen launcher: the hub keeps its model and effort
@@ -172,7 +201,8 @@ export function effortChoices(list: LauncherModels | null | undefined, model: st
   if (!list?.models.length) return ALL_EFFORTS;
   const id = model || followed.model;
   const m = list.models.find((x) => x.id === id) ?? (id ? undefined : defaultModel(list.models));
-  return m ? (m.efforts ?? []) : ALL_EFFORTS;
+  // a typed ID (listed as typed before, or not at all): what it takes is not known
+  return m && !m.custom ? (m.efforts ?? []) : ALL_EFFORTS;
 }
 
 /** The effort kept when the choices change: one they no longer offer goes back to "Launcher default". */
@@ -181,11 +211,16 @@ export function fitEffort(effort: string, choices: string[]): string {
 }
 
 /** What a start sends: the model only when it is not the default and the launcher lets it through, the effort only to
- *  Claude Code and only one the model takes. */
+ *  Claude Code and only one the model takes. An ID the list lacks (typed, #1644) goes as it is to Claude Code and Codex,
+ *  also when the list couldn't be read (`undefined`); an older hub's `null` (no picker) sends none. */
 export function startPicks(o: { agent: string; list: LauncherModels | null | undefined; model: string; effort: string; followed?: ModelBinding }): { model?: string; effort?: string } {
   const out: { model?: string; effort?: string } = {};
   const m = o.list?.models.find((x) => x.id === o.model);
-  if (m && !m.default && !o.list?.locked) out.model = m.id;
+  if (m) {
+    if (!m.default && !o.list?.locked) out.model = m.id;
+  } else if (o.model && o.list !== null && typedModelOffered(o.agent, o.list) && validModelId(o.model)) {
+    out.model = o.model;
+  }
   if (o.effort && takesEffort(o.agent) && effortChoices(o.list, out.model ?? "", o.followed).includes(o.effort)) out.effort = o.effort;
   return out;
 }

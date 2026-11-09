@@ -301,7 +301,7 @@ func (h *Hub) serveComputerCode(w http.ResponseWriter, r *http.Request, who prin
 	if h.machinePending(id) {
 		reply.Trust = trustPending
 	}
-	if mc := h.cfgEntry(id); mc != nil {
+	if mc := h.knownEntry(id); mc != nil {
 		reply.Name = mc.Name
 	}
 	h.machineAudit(r.Context(), id, "code", actor, nil)

@@ -1,5 +1,8 @@
 # Codex support
 
+Agent renames use `thread/name/set` on a connected app-server for that Codex home, or `/rename` in a live terminal.
+They never write Claude's `custom-title` records into a Codex rollout. Worktree display names are separate host metadata.
+
 Codex (`codex` CLI) running in herdr appears in the "Agents" tab like Claude: lists, chats, live state, messaging, terminals, and closing all work,
 and it can also be started from the phone ("Starting from the phone"). Supported since 2026-10-26; `server/internal/node/codex.go` + `server/internal/transcript/codex.go`.
 
@@ -132,7 +135,7 @@ Messages to them already use `turn/start` / `turn/steer`; thinking effort is the
 ## Sessions in the Codex desktop App (App-local IPC)
 
 The desktop App's own app-server uses stdio, so external clients cannot join it. Starting another app-server to resume the same session is rejected (active writer already exists).
-But the App's main process exposes a local message bus at `<CODEX_HOME>/ipc/ipc.sock`; App windows use it to request "run a turn in the session you own."
+But the App's main process exposes a local message bus at `<CODEX_HOME>/ipc/ipc.sock` (on Windows the named pipe `\\.\pipe\codex-ipc`, see "Windows" below); App windows use it to request "run a turn in the session you own."
 The node joins as another bus client (`server/internal/node/codex_desktop.go`):
 
 - Frames are a 4-byte little-endian length + JSON. First `initialize`, then `thread-owner-discovery` to find the owning window, then `thread-follower-start-turn` to that window.
@@ -148,6 +151,23 @@ The node joins as another bus client (`server/internal/node/codex_desktop.go`):
 - Replace new-chat directives in Codex replies, `::created-thread{threadId="…"}`, with `persona://session/<machine>/<session>` links (the in-App chat-link format: Android opens that chat; iOS currently recognizes only Live Activity `persona://open?…` links, so these chat links do not yet navigate and require a release), letting users tap on the phone to open the chat.
 - Not supported yet: creating App sessions from the phone (the App's `codex_app` MCP channel validates the peer process; do not bypass it), steering a running turn, approvals.
 
+## Windows
+
+Same features as macOS, with Windows' own ways in (`codex_desktop_windows.go`, `codex_procs_windows.go`; status table and verification record in [windows.md](../operations/windows.md), "Codex"):
+
+- **Codex App**: the bus is one named pipe per user session, `\\.\pipe\codex-ipc`, not a socket in the Codex home (the App's `app.asar` picks it when `process.platform` is `win32`); frames, methods and versions are the macOS ones.
+  The node looks for the pipe in the pipe namespace (`FindFirstFile`) and connects only to send: `os.Stat` on a pipe opens it. As the pipe is the same whatever the home, an App chat is one in a home holding the App's
+  `.codex-global-state.json` (`~/.codex` for the App on this machine). An unloaded thread is opened with `codex://threads/<id>` via `ShellExecute`, once `codex://` is a registered URL protocol (the MSIX package registers it as a packaged protocol);
+  when it cannot open, the send is refused at once (`codex_desktop_not_loaded`) instead of waiting 30 seconds. List grouping and state are the macOS rules; the App's project roots and rollout directories are compared without case.
+- **Codex CLI**: `codex.exe` processes are read from the process table and the PEB, and the rollouts they hold open from their handle tables, so a CLI running in any terminal shows its thread as working / done
+  from the rollout and never as resumable (a second `codex resume` would be a second writer). With the herdr engine, an exited thread resumes in a new tab through `personad codex-start`, which runs the `codex.exe` behind npm's `codex.cmd`
+  rather than the batch file (cmd.exe would read the first message as commands). The Orca engine refuses a Codex resume (`orca_resume`), as on every platform.
+- **app-server endpoints**: a `--listen ws://127.0.0.1:<port>` app-server is joined as elsewhere. A `--listen unix://` one serves an AF_UNIX socket file; it is accepted when the socket and its directory are this user's with an access list that lets nobody else in.
+  Codex 0.163's shared daemon does not start from npm's launcher on Windows, so a plain `codex` runs in its own process there and keeps the terminal route.
+- **How to check it on your computer**: with the Codex App running and the node connected, open a chat of the App on the phone or the web: it shows "Codex App" with an input box, not "view only".
+  Send a short message to a chat you can spare (or a new one you made in the App for this); it shows in the App and the reply on the phone. For an unloaded chat, quit and restart the App, then send to a chat you have not opened since: the App comes to the front on it and runs the message.
+  For the CLI, run `codex` in a terminal outside any engine and open its thread on the phone: it is view only, its reason says Codex is running on the computer, and it shows Working while it answers.
+
 ## Starting from the phone
 
 Since 2026-11-02, choosing a Codex launcher in the phone's "New Chat" starts a new herdr tab on that computer running Codex, with the entered message as its first message.
@@ -155,7 +175,7 @@ The entry point is the same as Claude's (machine, directory, launcher); subseque
 
 - **Which launchers are Codex launchers**: `codex` on PATH adds a launcher named `codex`. Aliases in `~/.zshrc` that run a single `codex` command are listed after Claude launchers (can have preceding
   `export A=1;`, `VAR=… codex`, or wrappers such as `env` / `command`; arguments are retained, model taken from `-m` / `--model` / `-c model=…`).
-  They carry `agent: "codex"` in the launcher list and are marked "Codex" on the App's launchers page (`parseCodexAliases` in `sessions.go`). Unsupported: shell functions running Codex
+  They carry `agent: "codex"` in the launcher list and are marked "Codex" on the App's launchers page (`parseCodexAliases` in `launchers.go`). Unsupported: shell functions running Codex
   (rejected with an explanation, `codex_launcher`: functions run only in a shell, so the first message would have to pass through it), aliases doing additional work (`cd x && codex`, not listed), and the internal Codex fork.
 - **First message arrives unchanged**: Codex creates a thread only after receiving its first message, so a Codex start must include it (required in the App; otherwise `codex_needs_prompt`;
   older Apps using background startup get the same error and a prompt to update). Launcher words and message are written together to a private temporary file under the node directory (0600). The pane receives only
@@ -198,6 +218,32 @@ Code: `node/codex_resume.go`, `node/retire.go` (`resumeOther`, `resumeCodex`); #
   and the engine can open tabs (not a runtime engine, not Orca). Only the default `~/.codex` home: a thread of another home is listed under an opaque key, not its thread id.
 - The history row of such a thread is sendable (`capabilities.send`), so the apps show the input box; no client change is needed to resume by sending.
 - **Tests**: `node/codex_resume_test.go` (history row sendable / view only while held, resume on a message and on a start, Codex App thread refused), `node/retire_test.go`.
+
+## Archive
+
+Archiving a Codex session in Persona (`POST /api/v1/sessions/{mid}/{sid}/archive`, `docs/protocol/protocol.md` "Agent session archives") also archives it in Codex,
+with Codex's own reversible archive; restoring it in Persona restores it in Codex. Codex's archive moves the rollout to `<CODEX_HOME>/archived_sessions/` and back
+(and marks it in its state database), so the Codex App and `codex resume`'s picker list it as archived; nothing is deleted, and Persona moves no file itself.
+Code: `node/archive.go` (`session.archive` / `session.unarchive`), `assistant/agent_archive_native.go` (when the manager asks, retries). #88.
+
+- **Protocol** (confirmed in `codex app-server generate-json-schema` of codex-cli 0.163.0 and `codex-rs/app-server/src/request_processors/thread_processor.rs` on main):
+  `thread/archive {threadId}` → `{}` and `thread/unarchive {threadId}` → `{thread}`, notifying `thread/archived` / `thread/unarchived` to the app-server's clients.
+  Archiving a thread loaded in that app-server shuts it down there first (like the Codex App's own Archive), together with the sub-Agent threads it spawned; an archived thread can't be resumed
+  (`thread/resume` and `codex resume` answer "session … is archived. Run `codex unarchive …`").
+- **Which way**: through an app-server the node is connected to for the thread's `CODEX_HOME` (the one running it, else any of that home: the Codex App, the shared daemon),
+  so its clients see the change at once. With none, `codex archive <thread>` / `codex unarchive <thread>` (the CLI's subcommands, which run the same method on an app-server of their own),
+  in the user's interactive shell with `CODEX_HOME` set to the thread's home; with the session's own launcher when it is an alias of codex a resume would use, else plain `codex` (never a managed launcher).
+- **Not while it is open in a terminal**: never while a herdr pane still runs it (either way: archiving through the shared daemon would take the thread from under its TUI), and from the command line
+  never while any Codex process has the rollout open (`codexHeldNow`, or the processes could not all be read): refused as `native_archive_live`, and the manager tries again later,
+  so a herdr Codex is archived in Codex once its TUI exits (closing it, as a finished task's agent is closed, lets it through). A Codex App thread is archived through the App's app-server as the App's own Archive would. Codex refuses too: its cross-process writer lock
+  (`thread-writer-locks/`) makes `codex archive` fail while another process writes the thread (checked with a throwaway `CODEX_HOME`). Never while it works (`native_archive_busy`).
+- **Idempotent on Persona's side only**: Codex answers `-32600 "no rollout found for thread id …"` to archiving an archived thread (and "no archived rollout" to restoring a restored one),
+  and the command exits 1. So the node first reads where the rollout is, and answers done without a call when it already is as asked; after a call it reads it again, and the files decide:
+  moved is done even when the answer was an error (an answer lost), not moved is refused (`native_archive_failed`).
+- **After archiving**: the thread leaves the node's list (the rule below for threads archived in the Codex App). The manager keeps the archived row from its snapshot, so it stays archived and restorable in Persona.
+- **Older Codex** without the `archive` subcommand (clap's "unrecognized subcommand"): `unsupported`, Persona's archive alone.
+- **Tests**: `node/archive_test.go` (app-server route with a fake app-server moving files, answers checked on disk, a running turn, the command route with live / unknown holders,
+  an older Codex, Claude unsupported, runtimes with and without `caps.archive`, the shell wrapper with a real bash), `assistant/agent_archive_native_test.go`.
 
 ## Questions and approvals (structured cards)
 
@@ -254,6 +300,7 @@ herdr reports blocked when Codex has an unanswered async question, so `agent pro
 ## Not supported yet
 
 - Resuming from the phone covers a thread nothing has open in the default home ("Resuming from the phone"). Offline / archived history on external app-server instances is read-only; never silently start another app-server to continue it. Codex App threads continue only through the App.
+- Threads archived only in Codex (the Codex App's Archive) are not listed in Persona's archive; only Persona's own archives are mirrored to Codex ("Archive").
 - Starting Codex from the phone requires the first message. Shell functions running Codex, aliases doing other work, and the internal fork cannot be used to start sessions; permission mode and thinking effort cannot be selected at creation.
 - Permission mode cannot be changed on the phone. Only app-server sessions can change thinking effort ("Thinking effort"); terminal-route Codex and the internal fork cannot.
 - Sessions started by launchers with arguments such as `-c` are not on the shared daemon and use only the terminal route (screen reading, typing).
@@ -350,3 +397,7 @@ Read codex-rs source tags `rust-v0.153.4` / `rust-v0.163.0`, plus binaries for b
     "allow with rewritten input", not a plain allow. An inferred workaround is to use the phone answer as a denial reason, which the model reads as tool output, but the question never appears in the terminal. `notify` has only `agent-turn-complete`.
 - **Conclusion**: `PermissionRequest` can handle approvals in both versions, in-process and on the daemon. But it is mutually exclusive with "the computer user can answer first." This implementation therefore uses screen-reading cards,
   allowing either computer or phone to answer first. After B is implemented, both can answer without this hook. Before then, if fast phone answers matter more, reevaluate it as an optional short-timeout path.
+
+### Orca hook ownership when starting Codex
+
+A new local Codex launched inside Orca must keep that terminal’s hook environment. A shared Codex app-server daemon can retain a previously launched terminal’s Orca identity, attributing a new conversation and first-work naming to the wrong worktree. The phone-start helper probes the executable in the new terminal and adds `--no-daemon` when supported. It preserves explicit remote connections, already isolated launchers and older CLIs without that flag. Other terminal engines keep their existing launch behavior.

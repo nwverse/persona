@@ -19,9 +19,10 @@ struct PetComplicationView: View {
             HStack {
                 face(shown?.state).frame(maxHeight: .infinity)
                 VStack(alignment: .leading) {
-                    Text(verbatim: shown?.title ?? "Persona").font(.headline).lineLimit(2).minimumScaleFactor(0.8)
+                    Text(verbatim: shown?.title ?? "Persona").font(WatchFaceTokens.title).lineLimit(2)
+                        .minimumScaleFactor(WatchFaceTokens.titleMinScale)
                     if shown?.stale == true, let at = entry.snapshot?.at {
-                        Text(at, style: .relative).font(.caption).foregroundStyle(.secondary)
+                        Text(at, style: .relative).font(WatchFaceTokens.caption).foregroundStyle(.secondary)
                     }
                 }
                 Spacer(minLength: 0)
@@ -39,7 +40,7 @@ struct PetComplicationView: View {
            let image = UIImage(contentsOfFile: url.path) {
             Image(uiImage: image).resizable().scaledToFit().clipShape(Circle())
         } else {
-            Circle().fill(.gray.opacity(0.3))
+            Circle().fill(WatchFaceTokens.placeholder)
         }
     }
 }
@@ -51,16 +52,19 @@ struct PetComplicationPreview: View {
     var body: some View {
         let fresh = PetEntry(date: .now, snapshot: WatchPetSnapshot.read())
         let stale = PetEntry(date: fresh.snapshot?.staleDate ?? .now, snapshot: fresh.snapshot)
+        let size = WatchFaceTokens.previewRectangular
         ScrollView {
-            VStack(alignment: .leading, spacing: 8) {
+            VStack(alignment: .leading, spacing: WatchFaceTokens.previewSpacing) {
                 ForEach([fresh, stale], id: \.date) { entry in
-                    HStack(spacing: 8) {
-                        PetComplicationView(entry: entry, family: .accessoryCircular).frame(width: 50, height: 50)
-                        PetComplicationView(entry: entry, family: .accessoryCorner).frame(width: 32, height: 32)
-                        PetComplicationView(entry: entry, family: .accessoryInline).font(.footnote).lineLimit(1)
+                    HStack(spacing: WatchFaceTokens.previewSpacing) {
+                        PetComplicationView(entry: entry, family: .accessoryCircular)
+                            .frame(width: WatchFaceTokens.previewCircular, height: WatchFaceTokens.previewCircular)
+                        PetComplicationView(entry: entry, family: .accessoryCorner)
+                            .frame(width: WatchFaceTokens.previewCorner, height: WatchFaceTokens.previewCorner)
+                        PetComplicationView(entry: entry, family: .accessoryInline).font(WatchFaceTokens.previewInline).lineLimit(1)
                     }
-                    PetComplicationView(entry: entry, family: .accessoryRectangular).frame(width: 172, height: 76)
-                        .background(.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 8))
+                    PetComplicationView(entry: entry, family: .accessoryRectangular).frame(width: size.width, height: size.height)
+                        .background(WatchFaceTokens.previewWash, in: RoundedRectangle(cornerRadius: WatchFaceTokens.previewRadius))
                 }
             }
         }

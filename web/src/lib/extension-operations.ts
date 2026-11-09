@@ -82,18 +82,11 @@ export const startFromMarket = (market: string, extension: string, manager?: str
   api<Accepted>(`${extRoot()}/-/catalog/preview`, { method: "POST", json: { market, extension, plugin: extension, async: true }, headers: itemHeaders(manager) }).then((r) => track(r.operation, manager));
 /** The user agreed to the preview: the same operation goes on. */
 export const agreeTo = (pv: MarketPreview, upgradeOf?: string, manager?: string) =>
-  api<Accepted>(upgradeOf ? `${extRoot()}/${enc(upgradeOf)}/-/upgrade` : `${extRoot()}/-/install`, {
+  api<Accepted>(pv.rename_from || upgradeOf ? `${extRoot()}/${enc(pv.rename_from || upgradeOf!)}/-/upgrade` : `${extRoot()}/-/install`, {
     method: "POST",
     json: { ...previewConsent(pv), async: true },
     headers: itemHeaders(manager),
   }).then((r) => track(r.operation, manager));
-export const startUninstall = (id: string, keepData = false, cascade = false, members = false, manager?: string) => {
-  const q = new URLSearchParams({ async: "1" });
-  if (keepData) q.set("keep_data", "1");
-  if (cascade) q.set("cascade", "1");
-  if (members) q.set("members", "1");
-  return api<Accepted>(`${extRoot()}/${enc(id)}/-/?${q}`, { method: "DELETE", headers: itemHeaders(manager) }).then((r) => track(r.operation, manager));
-};
 
 // ── what the page knows ─────────────────────────────────
 

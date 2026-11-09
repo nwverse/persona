@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"strings"
 	"time"
 )
@@ -273,4 +274,43 @@ func entryID(e json.RawMessage) string {
 	}
 	_ = json.Unmarshal(e, &head)
 	return head.ID
+}
+
+// SetAsideOtherHubs keeps a copy of file's own list beside it when it is another hub's than hubID (the manager
+// joined another hub, or the hub's id changed: its database made again) and about to be replaced: path is the copy
+// (manager.json.machines-<time>, 0600: the entries' secrets with it), "" when there was nothing to keep.
+func SetAsideOtherHubs(file, hubID string) (path string, err error) {
+	b, err := readConfig(file)
+	if err != nil || b == nil {
+		return "", err
+	}
+	o, err := ParseObject(b)
+	if err != nil {
+		return "", err
+	}
+	rawFrom, ok := o.Get(MachinesFromHubKey)
+	if !ok {
+		return "", nil
+	}
+	var from MachinesFromHub
+	if json.Unmarshal(rawFrom, &from) != nil || !from.Own || from.HubID == "" || hubID == "" || from.HubID == hubID {
+		return "", nil
+	}
+	list, _ := o.Get(MachinesKey)
+	var entries []json.RawMessage
+	if json.Unmarshal(list, &entries) != nil || len(entries) == 0 {
+		return "", nil
+	}
+	aside := &Object{vals: map[string]json.RawMessage{}}
+	aside.SetRaw(MachinesKey, list)
+	aside.SetRaw(MachinesFromHubKey, rawFrom)
+	out, err := aside.Indented()
+	if err != nil {
+		return "", err
+	}
+	if real, err := filepath.EvalSymlinks(file); err == nil { // beside the file itself, as editIf writes it
+		file = real
+	}
+	path = file + ".machines-" + time.Now().UTC().Format("20060102T150405Z")
+	return path, WriteFileAtomic(path, out, 0o600)
 }

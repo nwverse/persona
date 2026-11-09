@@ -55,5 +55,9 @@
   "busiest": "最忙 {value}",
   "core_title": "核心 {n}：{value}",
   "open_space": "打开空间「{name}」",
-  "engine_pill_hint": "这台电脑的引擎，点一下到下面的「引擎」修改"
+  "engine_pill_hint": "这台电脑的引擎，点一下到下面的「引擎」修改",
+  "rename": "改名",
+  "rename_label": "电脑名字",
+  "rename_hint": "所有 App 和这台电脑的 Persona Link 都会显示这个名字；留空就用 id，id 不变。",
+  "renamed": "已改名为「{name}」"
 }

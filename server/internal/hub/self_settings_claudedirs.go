@@ -29,7 +29,7 @@ func (h *Hub) getBlockedClaudeDirs(ctx context.Context) (string, error) {
 	var b strings.Builder
 	for _, m := range h.machinesNow() {
 		st := m.claudeDirsState(ctx)
-		fmt.Fprintf(&b, "%s (%s): blocked %s\n", m.cfg.ID, m.cfg.Name, orNone(strings.Join(st.Blocked, ", ")))
+		fmt.Fprintf(&b, "%s (%s): blocked %s\n", m.cfg.ID, m.name(), orNone(strings.Join(st.Blocked, ", ")))
 		for _, d := range st.Dirs {
 			state := "listed"
 			switch {
@@ -70,7 +70,7 @@ func (h *Hub) addBlockedClaudeDir(ctx context.Context, v json.RawMessage) (*self
 	if slices.Contains(now, p) {
 		return &selfChange{summary: p + " is already blocked on " + m.cfg.ID + "."}, nil
 	}
-	return &selfChange{summary: i18n.T(h.userLang(), "hub-self_settings_claudedirs.block", i18n.Args{"machine": m.cfg.Name, "path": p}),
+	return &selfChange{summary: i18n.T(h.userLang(), "hub-self_settings_claudedirs.block", i18n.Args{"machine": m.name(), "path": p}),
 		apply: func(ctx context.Context, _ map[string]string) (string, error) {
 			now, err := m.readBlockedClaudeDirs(ctx)
 			if err != nil {
@@ -100,7 +100,7 @@ func (h *Hub) removeBlockedClaudeDir(ctx context.Context, id string) (*selfChang
 	if !slices.Contains(now, p) {
 		return nil, fmt.Errorf("%s is not blocked on %s (get lists the patterns)", p, m.cfg.ID)
 	}
-	return &selfChange{summary: i18n.T(h.userLang(), "hub-self_settings_claudedirs.unblock", i18n.Args{"machine": m.cfg.Name, "path": p}),
+	return &selfChange{summary: i18n.T(h.userLang(), "hub-self_settings_claudedirs.unblock", i18n.Args{"machine": m.name(), "path": p}),
 		apply: func(ctx context.Context, _ map[string]string) (string, error) {
 			now, err := m.readBlockedClaudeDirs(ctx)
 			if err != nil {

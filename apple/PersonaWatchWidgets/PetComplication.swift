@@ -3,16 +3,11 @@ import UIKit
 import WidgetKit
 
 /// The Milk Frog on the watch face (docs/apple/persona.md "The Milk Frog on the watch"): the face of the state the
-/// watch app last saw. Still by design; the frog moves only in the app.
-@main
-struct PersonaWatchWidgets: WidgetBundle {
-    var body: some Widget { PetComplication() }
-}
-
+/// watch app last saw, a widget of `PersonaWatchWidgetsBundle`. Still by design; the frog moves only in the app.
 struct PetComplication: Widget {
     var body: some WidgetConfiguration {
-        StaticConfiguration(kind: "pet", provider: PetProvider()) { entry in
-            PetComplicationFamilyView(entry: entry).containerBackground(.black, for: .widget)
+        StaticConfiguration(kind: WatchPetSnapshot.widgetKind, provider: PetProvider()) { entry in
+            PetComplicationFamilyView(entry: entry).containerBackground(WatchFaceTokens.background, for: .widget)
         }
         .configurationDisplayName(Text(verbatim: "Persona"))
         .supportedFamilies([.accessoryCircular, .accessoryCorner, .accessoryRectangular, .accessoryInline])

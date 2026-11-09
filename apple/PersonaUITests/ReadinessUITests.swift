@@ -62,7 +62,7 @@ final class ReadinessUITests: XCTestCase {
 
         // Something typed: send says what to do first; tapping it opens that and the draft stays.
         let field = app.textViews["shell-composer-field"].exists ? app.textViews["shell-composer-field"] : app.textFields["shell-composer-field"]
-        guard field.waitForExistence(timeout: 5) else { return } // the old layout's field has no id
+        XCTAssertTrue(field.waitForExistence(timeout: 5), "no Shell composer:\n\(app.debugDescription)")
         field.tap()
         field.typeText("你好")
         let gate = app.buttons["composer-send-gate"].firstMatch

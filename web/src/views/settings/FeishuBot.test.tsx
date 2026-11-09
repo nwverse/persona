@@ -35,6 +35,12 @@ const saved = (over: Partial<FeishuBotStatus> = {}): FeishuBotStatus => ({
 
 let host: HTMLDivElement;
 let root: Root;
+let visibility: DocumentVisibilityState = "visible";
+const show = (v: DocumentVisibilityState) =>
+  act(async () => {
+    visibility = v;
+    document.dispatchEvent(new Event("visibilitychange"));
+  });
 const input = (label: string) => document.body.querySelector<HTMLInputElement>(`input[aria-label="${label}"]`)!;
 const type = (label: string, value: string) =>
   act(() => {
@@ -54,6 +60,8 @@ async function open(status: FeishuBotStatus) {
 beforeEach(() => {
   calls.status.length = 0;
   calls.update.length = 0;
+  visibility = "visible";
+  Object.defineProperty(document, "visibilityState", { configurable: true, get: () => visibility });
   host = document.createElement("div");
   document.body.append(host);
   root = createRoot(host);
@@ -62,6 +70,7 @@ beforeEach(() => {
 afterEach(() => {
   act(() => root.unmount());
   host.remove();
+  Reflect.deleteProperty(document, "visibilityState");
   vi.useRealTimers();
 });
 
@@ -75,6 +84,52 @@ describe("Feishu bot dialog", () => {
     expect(calls.update[0].body).toHaveProperty("features");
     await act(async () => calls.update[0].resolve(saved({ features: { ...saved().features, cards: false } })));
     expect(input("App ID").value).toBe("cli_typed");
+  });
+
+  it("sends only the switch flipped, not the whole set this page last saw (#74)", async () => {
+    await open(saved());
+    // Enable, then main, cards, all cards, pushes: the fifth is "Push to Lark".
+    await act(async () => switches()[4].click());
+    expect(calls.update).toHaveLength(1);
+    expect(calls.update[0].body).toEqual({ features: { pushes: true } });
+    // The board was turned on elsewhere meanwhile; the hub's answer carries it, and the next switch leaves it alone.
+    await act(async () => calls.update[0].resolve(saved({ features: { ...saved().features, pushes: true, board: true } })));
+    await act(async () => switches()[5].click());
+    expect(calls.update[1].body).toEqual({ features: { sync: true } });
+  });
+
+  it("names both of the card switches when turning questions and approvals off", async () => {
+    await open(saved());
+    await act(async () => switches()[2].click());
+    expect(calls.update[0].body).toEqual({ features: { cards: false, all_cards: false } });
+  });
+
+  it("greys out only conclusions while task progress is off: the hub then sends neither progress nor conclusions", async () => {
+    const named = (key: string) => document.body.querySelector<HTMLButtonElement>(`[role="switch"][aria-label="${t(key)}"]`)!;
+    const onlyConclusions = () => named("settings-feishubot.feature_only_conclusions_title");
+    await open(saved({ features: { ...saved().features, reports: false, only_conclusions: false } }));
+    expect(onlyConclusions().disabled).toBe(true);
+    await act(async () => named("settings-feishubot.feature_reports_title").click());
+    expect(calls.update[0].body).toEqual({ features: { reports: true } });
+    await act(async () => calls.update[0].resolve(saved({ features: { ...saved().features, reports: true, only_conclusions: false } })));
+    expect(onlyConclusions().disabled).toBe(false);
+    await act(async () => onlyConclusions().click());
+    expect(calls.update[1].body).toEqual({ features: { only_conclusions: true } });
+  });
+
+  it("switches the workbench on its own, off by default", async () => {
+    const workbench = () => document.body.querySelector<HTMLButtonElement>(`[role="switch"][aria-label="${t("settings-feishubot.feature_workbench_title")}"]`)!;
+    await open(saved({ features: { ...saved().features, workbench: false } }));
+    expect(workbench().getAttribute("aria-checked")).toBe("false");
+    await act(async () => workbench().click());
+    expect(calls.update[0].body).toEqual({ features: { workbench: true } });
+  });
+
+  it("sends every switch to a hub from before 0.1.12, which replaces the whole set", async () => {
+    const { reports: _reports, board: _board, ...old } = saved().features;
+    await open(saved({ features: old }));
+    await act(async () => switches()[4].click());
+    expect(calls.update[0].body).toEqual({ features: { ...old, pushes: true } });
   });
 
   it("keeps a typed App ID when the bot is switched off", async () => {
@@ -94,6 +149,20 @@ describe("Feishu bot dialog", () => {
     expect(calls.status).toHaveLength(2);
     await act(async () => calls.status[1].resolve(saved({ pairing: { code: "123456", expires_at: Math.floor(Date.now() / 1000) + 597 } })));
     expect(input("App Secret").value).toBe("typed-secret");
+  });
+
+  it("stops looking for the pairing while the tab is hidden and looks once right away on coming back", async () => {
+    vi.useFakeTimers();
+    await open(saved({ pairing: { code: "123456", expires_at: Math.floor(Date.now() / 1000) + 600 } }));
+    await show("hidden");
+    await act(async () => void vi.advanceTimersByTime(9000));
+    expect(calls.status).toHaveLength(1); // only the row's first read
+    await show("visible");
+    expect(calls.status).toHaveLength(2);
+    await act(async () => calls.status[1].resolve(saved({ owner: { name: "owner-1", paired_at: Math.floor(Date.now() / 1000) } })));
+    expect(document.body.textContent).toContain("owner-1");
+    await act(async () => void vi.advanceTimersByTime(9000)); // paired: nothing left to look for
+    expect(calls.status).toHaveLength(2);
   });
 
   it("takes the hub's answer after verify and save", async () => {

@@ -16,6 +16,7 @@ import (
 	"github.com/nwverse/persona/server/internal/devicewire"
 	"github.com/nwverse/persona/server/internal/link"
 	"github.com/nwverse/persona/server/internal/proto"
+	"github.com/nwverse/persona/server/internal/rpc"
 	"github.com/nwverse/persona/server/internal/textfmt"
 )
 
@@ -146,8 +147,14 @@ func (d *Devices) acceptLink(conn *websocket.Conn, a devicewire.Accept) {
 			break
 		}
 		var msg link.Message
-		if json.Unmarshal(data, &msg) == nil && msg.Type == "open_failed" {
+		if json.Unmarshal(data, &msg) != nil {
+			continue
+		}
+		switch msg.Type {
+		case "open_failed":
 			l.deliver(msg.ID, linkStream{err: fmt.Errorf("Persona Link: %s", textfmt.Clip(msg.Error, 300))})
+		case "rename":
+			go d.linkRename(l, msg)
 		}
 	}
 	cause := context.Cause(ctx)
@@ -261,10 +268,11 @@ func (l *mgrLink) info() *proto.MachineLink {
 
 // linkEndpoints is what machine's Persona Link is told: where the hub can be found, and what it is called and how
 // many hubs its mesh has (the Mac menu bar shows both, docs/operations/link.md); the heartbeat, when hub.json sets one: Persona
-// Link pings as the hub does; and whether the computer still waits for the user to confirm it.
+// Link pings as the hub does; whether the computer still waits for the user to confirm it; and what the hub calls it.
 func (d *Devices) linkEndpoints(machine string) link.Message {
 	cfg := d.config()
-	msg := link.Message{Type: "endpoints", HubName: cfg.HubName, MeshHubs: cfg.MeshHubs, Pending: slices.Contains(cfg.Pending, machine)}
+	msg := link.Message{Type: "endpoints", HubName: cfg.HubName, MeshHubs: cfg.MeshHubs, Pending: slices.Contains(cfg.Pending, machine),
+		MachineName: entryNames(cfg)[machine]}
 	for _, e := range cfg.Endpoints {
 		msg.Endpoints = append(msg.Endpoints, link.Endpoint{URL: e.URL, Kind: e.Kind})
 	}
@@ -272,6 +280,27 @@ func (d *Devices) linkEndpoints(machine string) link.Message {
 		msg.PingMS, msg.PingTimeoutMS = int(every.Milliseconds()), int(timeout.Milliseconds())
 	}
 	return msg
+}
+
+// linkRename asks the hub to rename the computer as its Persona Link asked (rename), and answers it renamed: the name
+// the hub has now, or why not. Its endpoints carry the name too, once the hub hands the entries over again.
+func (d *Devices) linkRename(l *mgrLink, msg link.Message) {
+	reply := link.Message{Type: "renamed", ID: textfmt.Clip(msg.ID, 64)}
+	ctx, cancel := context.WithTimeout(l.ctx, 30*time.Second)
+	defer cancel()
+	var out devicewire.RenameReply
+	err := d.opts.Hub.Call(ctx, devicewire.MethodRename, devicewire.Rename{MachineID: l.m.cfg.ID, Name: msg.MachineName}, &out)
+	var re *rpc.Error
+	switch {
+	case errors.As(err, &re):
+		reply.Code, reply.Error = re.Code, textfmt.Clip(re.Message, 300)
+	case err != nil:
+		reply.Code, reply.Error = link.RenameOffline, textfmt.Clip(err.Error(), 300)
+	default:
+		reply.MachineName = out.Name
+		d.logf("[%s] renamed by its Persona Link", l.m.cfg.ID)
+	}
+	_ = l.send(reply)
 }
 
 // linkRTT is devices.link_rtt: the hub measured a link's round trip.
@@ -307,7 +336,7 @@ func (m *Machine) setLink(l *mgrLink) *mgrLink {
 		default:
 		}
 	}
-	m.d.wakeOwnerOf(m) // the machine whose path this entry is (paths.go)
+	m.d.wakeOwnerOf(m) // the machine whose path this entry is (paths_group.go)
 	m.d.changed()
 	return old
 }

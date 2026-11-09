@@ -20,6 +20,7 @@ import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
 import persona.core.designsystem.AppFeedback
 import persona.core.designsystem.LocalAppFeedback
+import persona.core.designsystem.CapsuleTokens
 import persona.core.designsystem.PersonaTheme
 
 @RunWith(AndroidJUnit4::class)
@@ -28,11 +29,22 @@ import persona.core.designsystem.PersonaTheme
 class CapsuleCompletionNoticeTest {
     @get:Rule val rule = createComposeRule()
 
+    @Test fun newMessageNoticeLabelsAndRoutesTheCapturedConversationWithoutOpeningAnInput() {
+        val notice = CapsuleCompletion("message-2", "machine/chat-2", "New reply", CapsuleNoticeKind.NewMessage)
+        var opened: CapsuleCompletion? = null
+        rule.setContent { PersonaTheme(reduceMotion = true) { CapsuleCompletionNotice(notice) { opened = it } } }
+        rule.onNodeWithText("· 新消息", useUnmergedTree = true).assertIsDisplayed()
+        rule.onNodeWithText("· 已完成", useUnmergedTree = true).assertDoesNotExist()
+        rule.onAllNodes(hasSetTextAction()).assertCountEquals(0)
+        rule.onNodeWithTag("capsule.completion").performClick()
+        assertEquals(notice, opened)
+    }
+
     @Test fun singleLineNoticeKeepsCompletionVisibleAndClicksTheCapturedTargetWithoutAComposer() {
         val completion = CapsuleCompletion("event-version", "qualified-machine/exact-session", "A very long session name that must be truncated before the completion label")
         var opened: CapsuleCompletion? = null
         rule.setContent { PersonaTheme(reduceMotion = true) { CapsuleCompletionNotice(completion) { opened = it } } }
-        rule.onNodeWithTag("capsule.completion").assertWidthIsEqualTo(216.dp).assertHeightIsEqualTo(40.dp)
+        rule.onNodeWithTag("capsule.completion").assertWidthIsEqualTo(216.dp).assertHeightIsEqualTo(CapsuleTokens.orb)
         rule.onNodeWithText("· 已完成", useUnmergedTree = true).assertIsDisplayed()
         rule.onAllNodes(hasSetTextAction()).assertCountEquals(0)
         rule.onNodeWithTag("capsule.card").assertDoesNotExist()

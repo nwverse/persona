@@ -77,6 +77,14 @@ describe("parseUserText", () => {
     expect(parseUserText("没有图").photos).toEqual([]);
   });
 
+  it("does not take the path: lines the node adds for Claude Code as photos (#32)", () => {
+    const sent = parseUserText("看这个\n\n<attached_images>\n/tmp/persona/a.jpg\npath: /tmp/persona/a.jpg\n</attached_images>");
+    expect(sent).toMatchObject({ text: "看这个", photos: ["/tmp/persona/a.jpg"] });
+    // Claude's transcript: the bare path became the picture; only its path: line is left in the block
+    const recorded = parseUserText("[Image #1]看这个\n<attached_images>\npath: /tmp/persona/a.jpg\n</attached_images>");
+    expect(recorded).toMatchObject({ text: "看这个", photos: [] });
+  });
+
   it("puts a message's photos on its user message", () => {
     const items: Item[] = [{ id: "u1#0", seq: 1, role: "user", kind: "text", text: "<attached_images>\n/tmp/persona/a.jpg\n</attached_images>" }];
     const [seg] = segments(items);
@@ -378,6 +386,7 @@ it("personaToolVerb names Persona's own tools by what they do, and nothing else"
   expect(personaToolVerb("mcp__persona__send_to_agent")).toEqual({ verb: "给 Agent 发消息" });
   expect(personaToolVerb("mcp__persona__conversation_new")).toEqual({ verb: "新开对话" });
   expect(personaToolVerb("mcp__persona__computer_run")).toEqual({ verb: "操控电脑" });
+  expect(personaToolVerb("mcp__persona__secret_run")).toEqual({ verb: "用密码运行" });
   expect(personaToolVerb("mcp__persona__phone_contacts_search")).toEqual({ verb: "iPhone", what: "contacts search" });
   expect(personaToolVerb("mcp__persona__mail_send")).toEqual({ verb: "邮件", what: "send" });
   // no verb of its own: keeps "Called Persona · …"

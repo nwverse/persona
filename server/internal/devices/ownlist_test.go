@@ -189,6 +189,11 @@ func TestTheOwnListAtItsEdges(t *testing.T) {
 	if d.cfgMachine("mine") == nil || d.cfgMachine("theirs") != nil {
 		t.Fatal("another hub's own list was taken as this one's")
 	}
+	if copies, _ := filepath.Glob(file + ".machines-*"); len(copies) != 1 {
+		t.Fatalf("another hub's own list not kept aside: %v", copies)
+	} else if b, _ := os.ReadFile(copies[0]); !strings.Contains(string(b), "theirs") {
+		t.Fatalf("the copy: %s", b)
+	}
 	for _, bad := range []string{`{"ID":"caps","kind":"link"}`, `{"id":"typed","kind":"link","botmux":"yes"}`} {
 		if err := d.putMachine(ctx, json.RawMessage(bad)); !isCode(err, "invalid_params") {
 			t.Fatalf("put %s: %v", bad, err)

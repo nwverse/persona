@@ -66,17 +66,20 @@ func (b *inboxBook) applyMigrated(id string, things []connector.InboxThing, now 
 			switch {
 			case open.Last != t.Last:
 				prev := seenOf(open)
+				b.roundWrite(open)
 				fillMigrated(open, t)
 				b.noteReceived(open, prev, nil)
 				open.Read = false
 				changed = append(changed, open)
 			case blocksDiffer(open, t.Extra):
 				// The same move, read further (a chat's read position) or read again (a document's rows): blocks only.
+				b.roundWrite(open)
 				setBlocks(open, t.Extra)
 				changed = append(changed, open)
 			}
 			index.note(open) // its blocks may be another thread's now
 			if t.Read && !open.Read {
+				b.roundWrite(open)
 				open.Read, open.Count = true, t.Extra.Count
 				if open.Tier != "" && open.Tier != TierAction { // untriaged ones are settled by triage
 					b.file(open, now, "read")
@@ -102,6 +105,7 @@ func (b *inboxBook) applyMigrated(id string, things []connector.InboxThing, now 
 		fillMigrated(it, t)
 		b.noteReceived(it, inboxSeen{}, nil)
 		b.add(id, it)
+		b.roundNew(it)
 		index.note(it)
 		changed = append(changed, it)
 	}

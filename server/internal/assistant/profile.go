@@ -14,7 +14,6 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/server/internal/apierr"
-	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/identity"
 	"github.com/nwverse/persona/server/internal/kb"
 	"github.com/nwverse/persona/server/internal/proto"
@@ -30,7 +29,10 @@ import (
 const settingsKey = "assistant"
 
 // assistantRel is this manager's assistant directory on a machine, relative to its home (node assistant.prepare):
-// .persona/assistant for the built-in manager, .persona/assistant-<id> for another (identity.AssistantDirName).
+// assistant for the built-in manager, assistant-<id> for another (identity.AssistantDirName), in the state directory. It
+// is spelled with the former state directory's name (compat.StateDir), which older nodes join to HOME as it is; a
+// current node resolves either spelling to the state directory it runs on (node/assistant_guest.go assistantDirOf,
+// #1681), so the spelling never decides where the directory is.
 func (s *Service) assistantRel() string {
 	return path.Join(compat.StateDir, identity.AssistantDirName(s.id))
 }
@@ -43,6 +45,9 @@ const settingsFresh = 5 * time.Second
 type Settings struct {
 	MachineID string `json:"machine_id"`
 	Launcher  string `json:"launcher"`
+	// DefaultPermissionMode applies only to new non-guest conversations without an explicit mode.
+	// Empty keeps the runtime's existing default; it never changes an existing conversation.
+	DefaultPermissionMode string `json:"default_permission_mode,omitempty"`
 	// Timezone is the phone's (IANA name): routines and the snapshot read times in it, and the hub its own.
 	Timezone string `json:"timezone,omitempty"`
 	// Notes, once edited in the app, replace manager.json's assistant.notes.
@@ -313,10 +318,12 @@ func stateDirOn(home, dataDir, name string) string {
 
 type assistantView struct {
 	Settings
-	Cwd            string          `json:"cwd"`
-	Conversations  []proto.Session `json:"conversations"`
-	NotesEffective string          `json:"notes_effective"`  // what the assistant is told about the user
-	MainTasksQuiet bool            `json:"main_tasks_quiet"` // in effect (the setting's own is left out while unset)
+	Manager            string             `json:"manager"`
+	PermissionDefaults permissionDefaults `json:"permission_defaults"`
+	Cwd                string             `json:"cwd"`
+	Conversations      []proto.Session    `json:"conversations"`
+	NotesEffective     string             `json:"notes_effective"`  // what the assistant is told about the user
+	MainTasksQuiet     bool               `json:"main_tasks_quiet"` // in effect (the setting's own is left out while unset)
 	// StartRequestedTasks is in effect, like MainTasksQuiet.
 	StartRequestedTasks bool `json:"start_requested_tasks"`
 	// RecordingDays and DoneNeedsDelivery are in effect, like MainTasksQuiet.
@@ -334,12 +341,21 @@ func (s *Service) view(ctx context.Context, withArchived bool, space ...string) 
 	}
 	v := s.settings(ctx)
 	v.Launcher = s.launcherNow(ctx)
-	out := assistantView{Settings: v, Conversations: []proto.Session{}, NotesEffective: s.notes(ctx), MainTasksQuiet: quietOn(v.MainTasksQuiet),
+	out := assistantView{Settings: v, Manager: s.managerIdentity(), PermissionDefaults: s.permissionDefaults(), Conversations: []proto.Session{}, NotesEffective: s.notes(ctx), MainTasksQuiet: quietOn(v.MainTasksQuiet),
 		StartRequestedTasks: quietOn(v.StartRequestedTasks), RecordingDays: s.recordingDays(ctx),
 		DoneNeedsDelivery: v.DoneNeedsDelivery != nil && *v.DoneNeedsDelivery}
 	if d, ok := s.device(ctx, v.MachineID); ok {
 		out.Cwd = s.spaceCwd(d, sp)
-		list, _ := s.sessions(ctx, d.ID)
+		var list []proto.Session
+		if s.fleetOn() {
+			// Select the headless conversations before copying, decorating or serializing the inventory: coding
+			// sessions can outnumber them by thousands.
+			if m, found := s.fleetMachine(d.ID); found {
+				list = s.decorateInventory(m.ID, s.assistantSessions(m), false)
+			}
+		} else {
+			list, _ = s.sessions(ctx, d.ID)
+		}
 		for _, c := range list {
 			if c.Assistant && spaceOf(c) == sp && (withArchived || !c.Archived) {
 				out.Conversations = append(out.Conversations, c)
@@ -414,136 +430,6 @@ func (s *Service) profileRoutes() {
 		}
 		apierr.WriteJSON(w, map[string]any{"ok": true})
 	})
-}
-
-// putSettings is PUT /api/v1/assistant: what the body sets changes ("-" as main clears it); a launcher is checked
-// on the assistant's machine and goes into Model configuration › Main chat too.
-func (s *Service) putSettings(w http.ResponseWriter, r *http.Request) {
-	if !fullRole(r) {
-		apierr.Write(w, http.StatusForbidden, errors.New("read-only role cannot change settings"))
-		return
-	}
-	ctx := r.Context()
-	var in Settings
-	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
-		apierr.Write(w, http.StatusBadRequest, err)
-		return
-	}
-	machine := s.settings(ctx).MachineID
-	if in.MachineID != "" {
-		if _, ok := s.device(ctx, in.MachineID); !ok {
-			apierr.Write(w, http.StatusBadRequest, errors.New("unknown machine"))
-			return
-		}
-		machine = in.MachineID
-	}
-	if s.isWorkMachine(machine) {
-		apierr.Write(w, http.StatusBadRequest, i18n.Err("assistant-start.work_machine"))
-		return
-	}
-	if in.Launcher != "" {
-		if err := s.checkLauncher(ctx, machine, in.Launcher); err != nil {
-			apierr.Write(w, http.StatusBadRequest, err)
-			return
-		}
-	}
-	if d := in.RecordingDays; d != nil && (*d < minRecordingDays || *d > maxRecordingDays) {
-		apierr.Write(w, http.StatusBadRequest, errors.New("recording_days must be 1–365"))
-		return
-	}
-	if in.Timezone != "" {
-		if _, err := time.LoadLocation(in.Timezone); err != nil {
-			apierr.Write(w, http.StatusBadRequest, err)
-			return
-		}
-	}
-	if in.Launcher != "" {
-		rec, err := s.modelRecord(ctx, "assistant")
-		if err == nil {
-			rec.Binding = mergeModel(rec.Binding, ModelBinding{Provider: "launcher." + in.Launcher})
-			err = s.saveModel(ctx, "assistant", rec)
-		}
-		if err != nil {
-			apierr.Write(w, http.StatusInternalServerError, err)
-			return
-		}
-	}
-	launcher := s.launcherNow(ctx)
-	if _, err := s.updateSettings(ctx, func(v *Settings) error {
-		*v = s.effective(ctx, *v) // saved as they are in effect, as the hub saved them
-		v.MachineID, v.Launcher = machine, launcher
-		if in.Launcher != "" {
-			v.Launcher = in.Launcher
-		}
-		if in.Main == "-" {
-			v.Main = ""
-		} else if in.Main != "" {
-			v.Main = in.Main
-		}
-		if in.Timezone != "" {
-			v.Timezone = in.Timezone
-		}
-		if in.Notes != nil {
-			v.Notes = in.Notes
-		}
-		if in.OwnerAliases != nil {
-			v.OwnerAliases = ownerAliases(in.OwnerAliases)
-		}
-		if in.MainTasksQuiet != nil {
-			v.MainTasksQuiet = in.MainTasksQuiet
-		}
-		if in.StartRequestedTasks != nil {
-			v.StartRequestedTasks = in.StartRequestedTasks
-		}
-		if in.RecordingDays != nil {
-			v.RecordingDays = in.RecordingDays
-		}
-		if in.DoneNeedsDelivery != nil {
-			v.DoneNeedsDelivery = in.DoneNeedsDelivery
-		}
-		return nil
-	}); err != nil {
-		apierr.Write(w, http.StatusInternalServerError, err)
-		return
-	}
-	s.settingsChanged(ctx)
-	apierr.WriteJSON(w, s.view(ctx, false))
-}
-
-// checkLauncher: the assistant runs Claude Code (claude -p), Codex (codex app-server) or an agent runtime that says it
-// can (its launcher has assistant: docs/integrations/runtimes.md "Assistant"); anything else would fail every message. One that can't
-// be probed now goes.
-func (s *Service) checkLauncher(ctx context.Context, machine, launcher string) error {
-	if launcher == "claude" {
-		return nil
-	}
-	if _, ok := s.device(ctx, machine); !ok || s.runtimeAssistantLauncher(ctx, machine, launcher) {
-		return nil
-	}
-	var res struct {
-		Detail proto.LauncherDetail `json:"detail"`
-	}
-	pctx, cancel := context.WithTimeout(ctx, 20*time.Second)
-	err := s.call(pctx, machine, DeviceLaunchersProbe, map[string]any{"name": launcher}, &res)
-	cancel()
-	if err == nil && res.Detail.Agent != "" && res.Detail.Agent != "claude" && res.Detail.Agent != "codex" {
-		return i18n.Err("assistant-profile.launcher_agent", i18n.Args{"launcher": launcher, "agent": res.Detail.Agent})
-	}
-	return nil
-}
-
-// runtimeAssistantLauncher: launcher is one an agent runtime on machine offers to run the assistant (the node's
-// launchers.list says assistant), not a login-shell launcher to probe.
-func (s *Service) runtimeAssistantLauncher(ctx context.Context, machine, launcher string) bool {
-	ctx, cancel := context.WithTimeout(ctx, 20*time.Second)
-	defer cancel()
-	var res struct {
-		Launchers []proto.Launcher `json:"launchers"`
-	}
-	if err := s.call(ctx, machine, DeviceLaunchersList, map[string]any{}, &res); err != nil {
-		return false
-	}
-	return slices.ContainsFunc(res.Launchers, func(l proto.Launcher) bool { return l.Name == launcher && l.Assistant })
 }
 
 // warm gets a process ready on the assistant's machine (node assistant.warm) for the launcher ("" is the one new

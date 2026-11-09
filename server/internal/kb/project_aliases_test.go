@@ -139,19 +139,20 @@ func TestMergeProjectsValidatesAliases(t *testing.T) {
 
 // Aliases collected before the rules are pruned to what the rules allow: not another live project's name, not the
 // project's own name, a repeat or too generic, at most maxProjectAliases, plus the names of projects merged into
-// it. An alias two live projects share and aliases set by hand stay; recency does not change; a second pass is a no-op.
+// it, directly or through another merged project. An alias two live projects share and aliases set by hand stay; recency does not change; a second pass is a no-op.
 func TestPruneProjectAliases(t *testing.T) {
 	e := testEngine(t, nil)
 	aliases := []string{"Beta 迁移", "阿尔法", "阿尔法", "Alpha发布", "ss", "项目", "共享名"}
 	for i := range 15 {
 		aliases = append(aliases, fmt.Sprintf("别名%02d", i))
 	}
-	aliases = append(aliases, "旧名")
+	aliases = append(aliases, "旧名", "更旧的名字")
 	_ = e.Store.PutProject(&Project{Slug: "alpha", Name: "Alpha 发布", Status: "active", Aliases: aliases})
 	_ = e.Store.PutProject(&Project{Slug: "beta", Name: "Beta 迁移", Status: "active", Aliases: []string{"共享名"}})
 	_ = e.Store.PutProject(&Project{Slug: "gamma", Name: "Gamma", Status: "active", Aliases: []string{"Alpha 发布", "ss"},
 		Tagging: Tagging{LockedFields: []string{"aliases"}}})
 	_ = e.Store.PutProject(&Project{Slug: "old", Name: "旧名", Status: "merged", MergedInto: "alpha"})
+	_ = e.Store.PutProject(&Project{Slug: "older", Name: "更旧的名字", Status: "merged", MergedInto: "old"})
 	before, _ := e.Store.Project("alpha")
 
 	if n := e.PruneProjectAliases(); n != 10 {
@@ -162,7 +163,7 @@ func TestPruneProjectAliases(t *testing.T) {
 	for i := range maxProjectAliases - 2 {
 		want = append(want, fmt.Sprintf("别名%02d", i))
 	}
-	want = append(want, "旧名")
+	want = append(want, "旧名", "更旧的名字")
 	if !slices.Equal(alpha.Aliases, want) {
 		t.Fatalf("alpha aliases = %v\nwant %v", alpha.Aliases, want)
 	}
@@ -174,8 +175,10 @@ func TestPruneProjectAliases(t *testing.T) {
 			t.Fatalf("%s aliases = %v", slug, p.Aliases)
 		}
 	}
-	if p := e.FindProject("Beta 迁移"); p == nil || p.Slug != "beta" {
-		t.Fatalf("Beta 迁移 -> %+v", p)
+	for name, want := range map[string]string{"Beta 迁移": "beta", "更旧的名字": "alpha"} {
+		if p := e.FindProject(name); p == nil || p.Slug != want {
+			t.Fatalf("%s -> %+v", name, p)
+		}
 	}
 	if n := e.PruneProjectAliases(); n != 0 {
 		t.Fatalf("second pass pruned %d", n)

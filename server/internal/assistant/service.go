@@ -10,6 +10,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/nwverse/persona/server/internal/i18n"
@@ -44,6 +45,8 @@ type Options struct {
 type Service struct {
 	// id is Options.ID: the manager this assistant is.
 	id string
+	// nodeAnswering: the computers' requests being answered now, but the ones that wait on a person (idle.go).
+	nodeAnswering atomic.Int64
 	// ext is the extensions' tools in this process (extensions.go SetExtensions); nil: none (tests).
 	ext ExtensionTools
 
@@ -60,7 +63,7 @@ type Service struct {
 	// shorten it).
 	taskRetry time.Duration
 	// superviseTimes are how supervision messages gather and space out (zero fields: the package's; tests shorten
-	// them, supervise.go superviseTimings).
+	// them, supervise_signals.go superviseTimings).
 	superviseTimes superviseTimings
 	// retryNow is the clock a due retry checks the task's time against (retryStillDue; nil: time.Now, tests set it).
 	retryNow func() time.Time
@@ -82,11 +85,12 @@ type Service struct {
 	guests     guestBook         // guest.go
 	relays     relayBook         // conversations.go
 	quiet      quietBook         // quiet.go
-	supervise  superviseBook     // supervise.go
+	supervise  superviseBook     // supervise_signals.go
 	reports    reportBook        // reports.go
 	upReports  reportRate        // agent_control.go: report_to_supervisor
 	noteRate   reportRate        // todo_decisions.go: todo_decision_add
 	adoptMu    sync.Mutex        // agent_control.go: one agent_supervise at a time
+	placeBook  placeBook         // places.go
 	accept     acceptBook        // acceptance.go
 	later      laterBook         // later.go: questions that can wait for a briefing
 	brief      briefBook         // briefing.go
@@ -94,6 +98,7 @@ type Service struct {
 	sched      schedule          // schedule.go
 	tasks      tasksState        // tasks.go
 	questions  questions         // tools.go (ask_user)
+	askTodos   askTodoBook       // ask_todo.go: the questions nobody answered, now to-dos
 	live       contextState      // context.go
 	todos      todoBook          // todos.go
 	work       workBook          // agents_work.go: the Agents business
@@ -103,6 +108,8 @@ type Service struct {
 	tposts     threadPoster      // feishu_thread_posts.go: what a todo tells its chat thread
 	tevents    todoEvents        // todo_events.go: what the extensions are told of the todos
 	standing   standingBoard     // feishu_board.go: the standing "waiting for you" card
+	workbench  workbenchState    // feishu_workbench_pin.go: the pinned workbench
+	companions companionState    // feishu_companions.go: the notices for a companion bot
 	kb         kbState           // kb.go
 	inbox      inboxBook         // inbox.go
 	board      boardBook         // workspace_board.go: the workspace board
@@ -110,11 +117,14 @@ type Service struct {
 
 	devs          Devices // the computers (devices.go); nil: no fleet
 	agentArchives agentArchiveBook
-	fleet         fleetBook // what comes from the nodes (fleet.go)
+	agentNative   agentNativeBook // the tools' own archives (agent_archive_native.go)
+	fleet         fleetBook       // what comes from the nodes (fleet.go)
 	// delegateHook stands in for Delegate in tests (fleet_delegate.go).
 	delegateHook func(context.Context, DelegateParams) (DelegateResult, error)
 	// fleetEnded, when set, sees every card's end the channels are told (tests).
 	fleetEnded func(ix proto.Interaction, r *proto.Resolution)
+	// ixResolved, when set, sees every answered card the assistant is told of (tests).
+	ixResolved func(InteractionResolved)
 	models     modelsState   // models.go: the model configuration
 	health     healthBook    // launcher_health.go: each machine's launchers
 	trust      trustBook     // machine_trust.go: the computers waiting to be confirmed
@@ -148,6 +158,7 @@ func New(o Options) *Service {
 	s.readinessRoutes()
 	s.startRoutes()
 	s.scheduleRoutes()
+	s.placeRoutes()
 	s.taskRoutes()
 	s.viewActionRoutes()
 	s.todayRoutes()
@@ -156,6 +167,7 @@ func New(o Options) *Service {
 	s.agentRoutes()
 	s.workspaceBoardRoutes()
 	s.channelRoutes()
+	s.companionRoutes()
 	s.kbInit(o.KB)
 	s.kbRoutes()
 	s.inboxRoutes()
@@ -211,7 +223,7 @@ func (s *Service) lang(ctx context.Context) i18n.Lang {
 
 // call is a DeviceCall whose answer is read into out (nil: not read).
 func (s *Service) call(ctx context.Context, device, method string, params, out any) error {
-	if p, ok := params.(map[string]any); ok && method == DeviceAssistantSend {
+	if p, ok := params.(map[string]any); ok && method == DeviceAssistantSend && p["supervision"] != true {
 		if id, _ := p["session_id"].(string); id != "" && s.supervising(id) {
 			s.releasePushes(ctx, id) // something else speaks there: its turns are pushed again (a supervision message holds them anew)
 		}
@@ -352,7 +364,7 @@ func (s *Service) publish(ctx context.Context) {
 	snap.Epoch, snap.Seq, snap.At = s.epoch, s.seq, time.Now().UTC()
 	s.pubMu.Unlock()
 	if s.fleetOn() {
-		s.fleetTakeSnapshot(snap) // the lists' decoration, its own cards on the phone (fleet.go)
+		s.fleetTakeSnapshot(snap) // the lists' decoration, its own cards on the phone (fleet_snapshot.go)
 		snap.Interactions = nil
 	}
 	if _, err := s.hub.Snapshot(ctx, snap); err != nil && !errors.Is(err, ErrStaleSnapshot) {
@@ -406,7 +418,7 @@ func (s *Service) snapshot(ctx context.Context) Snapshot {
 		view(id, here).Queued = q // a conversation sent to is on the assistant's machine
 	}
 	for _, id := range s.heldConversations() {
-		view(id, here).Supervising = true // a supervision message started its turn: not pushed (supervise.go)
+		view(id, here).Supervising = true // a supervision message started its turn: not pushed (supervise_digest.go)
 	}
 	if cfg.Main != "" { // not snap.Profile: that is left out while a settings read fails
 		view(cfg.Main, cfg.MachineID).Title = mainTitle // never its first message, a model's name or a rename (#1313)
@@ -429,7 +441,7 @@ func (s *Service) snapshot(ctx context.Context) Snapshot {
 // UserSpoke: the user is talking in the conversation again: back in the list, and it works for them, not for a chain
 // of conversations.
 func (s *Service) UserSpoke(ctx context.Context, r SessionRef) {
-	s.releasePushes(ctx, r.SessionID) // the user speaks: its turns are pushed as ever (supervise.go)
+	s.releasePushes(ctx, r.SessionID) // the user speaks: its turns are pushed as ever (supervise_digest.go)
 	s.withdrawAskUser(r.SessionID)    // a question it waits on is taken back: the user's words are not left behind its turn
 	s.unarchiveOnSend(r.MachineID, r.SessionID)
 	s.userSpoke(r.SessionID)
@@ -449,14 +461,19 @@ func (s *Service) TurnStarted(ctx context.Context, r SessionRef) {
 func (s *Service) TurnEnded(ctx context.Context, r SessionRef) {
 	go s.registerInlineTurn(context.WithoutCancel(ctx), r)
 	go s.taskTurnEnded(context.WithoutCancel(ctx), r.MachineID, r.SessionID)
-	go s.workTurnEnded(context.WithoutCancel(ctx), r.MachineID, r.SessionID)    // the turn's triage (agents_work.go)
+	go s.workTurnEnded(context.WithoutCancel(ctx), r.MachineID, r.SessionID)    // its triage (agents_work_turns.go)
 	go s.channelTurnEnded(context.WithoutCancel(ctx), r.MachineID, r.SessionID) // a channel's answer, the sync mirror
+	// A usage limit marks the launcher there until it resets (launcher_health.go).
+	go s.launcherLimitTurnEnded(context.WithoutCancel(ctx), r.MachineID, r.SessionID)
 	s.titleAfterTurn(ctx, r.MachineID, r.SessionID)
 }
 
 // InteractionResolved: the user dealt with a card of a task's agent: the conversation keeps a record of it, and the
 // todo of the agent the calls made in it (its decisions).
 func (s *Service) InteractionResolved(ctx context.Context, r InteractionResolved) {
+	if f := s.ixResolved; f != nil {
+		f(r)
+	}
 	s.taskAnswered(ctx, r.Interaction, r.Resolution, r.Status)
 	s.cardDecisions(ctx, r.Interaction, r.Resolution, r.Status)
 	// A quiet task's waiting notice may still be in its delay window or queued behind a turn: drop it now unless the
@@ -477,6 +494,8 @@ func (s *Service) SessionsChanged(ctx context.Context, d DeviceSessions) {
 	s.drainRelays(d.MachineID, d.Sessions)
 	s.originsChanged(d.MachineID, d.Sessions) // conversations from before origins were noted (origins.go)
 	s.todosSessionsChanged(ctx, d)
+	s.nativeArchivesListed(d.MachineID) // agent_archive_native.go
+	s.followStarts(ctx, d)              // the app's starts, for launcher health (launcher_health_starts.go)
 }
 
 func randomHex(n int) string {

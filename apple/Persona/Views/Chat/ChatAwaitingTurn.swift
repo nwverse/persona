@@ -37,6 +37,28 @@ nonisolated enum ChatAwaitingTurn: Equatable {
         return .echoed(id: t.id)
     }
 
+    /// Whether the work the hub reports is for a message of yours the transcript does not have yet, not for the chat's
+    /// newest turn: the session went to work (`stateSince`) after one of them was written, within `window` of it, and
+    /// the transcript has nothing newer than that message. Drawn on the newest turn's work line, that work would read as
+    /// more of the turn before until the message comes in. A message sent while the agent was already at work joins the
+    /// running turn (Claude takes it in mid-turn) and leaves that line alone. So does work the transcript shows after
+    /// the message: the hub resets `stateSince` on every change of state (blocked and back, its own restart), and a
+    /// bubble whose copy is never matched would keep the running turn's line dark to its end.
+    /// - Parameters:
+    ///   - pending: messages sent from here that the transcript does not have yet, minus those Claude holds in its queue.
+    ///   - status: the session's status as the hub last pushed it.
+    ///   - stateSince: when the hub saw the session enter its current state.
+    ///   - newestLine: the time of the chat's newest line that has one (nil: none has).
+    static func workIsForPending(_ pending: [PendingMessage], status: SessionStatus, stateSince: Date?,
+                                 newestLine: Date?) -> Bool {
+        guard status.isActive, let since = stateSince else { return false }
+        return pending.contains { p in
+            guard onItsWay(p), let at = p.createdAt else { return false }
+            if let newestLine, newestLine >= at { return false }
+            return since >= at && within(at, since)
+        }
+    }
+
     /// When the wait that starts at the newest of these ends: nil for none still going.
     static func deadline(pending: [PendingMessage], last: ChatBlock?) -> Date? {
         let echoed: Date? = { if case .turn(let t) = last, t.steps.isEmpty, t.answer == nil { t.startedAt } else { nil } }()
@@ -46,8 +68,11 @@ nonisolated enum ChatAwaitingTurn: Equatable {
     /// The newest message still on its way: one that waits for the network or failed is not being worked on. One with
     /// no time (an outbox saved before messages kept it) starts no wait: taking now for it would never let it age out.
     private static func sentAt(_ pending: [PendingMessage]) -> Date? {
-        pending.filter { $0.state == .sending || $0.state == .sent }.compactMap(\.createdAt).max()
+        pending.filter(onItsWay).compactMap(\.createdAt).max()
     }
+
+    /// Sending or sent: on its way to the agent (not waiting for the network, not failed).
+    private static func onItsWay(_ p: PendingMessage) -> Bool { p.state == .sending || p.state == .sent }
 
     private static func within(_ at: Date, _ now: Date) -> Bool { now.timeIntervalSince(at) < window }
 

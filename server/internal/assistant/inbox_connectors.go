@@ -55,11 +55,13 @@ func (s *Service) settleConnector(ctx context.Context, id string) []*InboxItem {
 	var changed []*InboxItem
 	b.mu.Lock()
 	defer b.mu.Unlock()
+	defer b.settleRound()
 	for _, it := range b.items {
 		if it.Source != id || it.Connector == nil || !it.open() {
 			continue
 		}
 		if why, ok := res.Over[it.Connector.Thread]; ok {
+			b.roundWrite(it)
 			b.file(it, now, "read")
 			it.Reason = why
 			changed = append(changed, it)
@@ -87,8 +89,11 @@ func (b *inboxBook) applyConnector(id, name string, things []connector.InboxThin
 			continue
 		}
 		if open != nil {
-			if open.Last != t.Last {
+			// A thing older than the item's newest move is an earlier move read again (a connector restarted, or
+			// several notifications of one thread): not a new move, and it never winds the item back.
+			if open.Last != t.Last && (t.At.IsZero() || !t.At.Before(open.UpdatedAt)) {
 				prev := seenOf(open)
+				b.roundWrite(open)
 				open.Count++
 				fillConnectorItem(open, t)
 				b.noteReceived(open, prev, nil)
@@ -100,11 +105,13 @@ func (b *inboxBook) applyConnector(id, name string, things []connector.InboxThin
 				changed = append(changed, open)
 			} else if t.Tier != "" && (open.Tier != string(t.Tier) || open.Reason != t.Why) {
 				// The rules decide this one now (an item tiered before, or under other options).
+				b.roundWrite(open)
 				setRuleTier(open, t)
 				b.noteTriaged(open)
 				changed = append(changed, open)
 			}
 			if t.Read && !open.Read {
+				b.roundWrite(open)
 				open.Read = true
 				if open.Tier != "" && open.Tier != TierAction { // untriaged ones are settled by triage
 					b.file(open, now, "read")
@@ -120,8 +127,11 @@ func (b *inboxBook) applyConnector(id, name string, things []connector.InboxThin
 			continue
 		}
 		sum := sha1.Sum([]byte(t.Thread + "\n" + t.Last))
-		it := &InboxItem{ID: id + ":" + hex.EncodeToString(sum[:8]), Source: id, Account: id, AccountName: name,
-			StartedAt: t.At, Count: 1}
+		itemID := id + ":" + hex.EncodeToString(sum[:8])
+		if b.has(itemID) {
+			continue // this move started an item already (one handled since): adding it again would replace that item
+		}
+		it := &InboxItem{ID: itemID, Source: id, Account: id, AccountName: name, StartedAt: t.At, Count: 1}
 		fillConnectorItem(it, t)
 		b.noteReceived(it, inboxSeen{}, nil)
 		if t.Tier != "" {
@@ -129,6 +139,7 @@ func (b *inboxBook) applyConnector(id, name string, things []connector.InboxThin
 		}
 		b.offerParent(it, thingParent(t))
 		b.add(id, it)
+		b.roundNew(it)
 		index.note(it)
 		changed = append(changed, it)
 	}
@@ -140,10 +151,11 @@ func (b *inboxBook) applyConnector(id, name string, things []connector.InboxThin
 // A "replied" that is the reply Persona just sent for a confirmed suggestion is not the user's: the event stays open,
 // waiting for the other side (false: nothing changed).
 func (b *inboxBook) settleThing(open *InboxItem, t connector.InboxThing, now time.Time) bool {
+	if t.Done == connector.DoneReplied && ownSend(open, t.Last) {
+		return false
+	}
+	b.roundWrite(open)
 	if t.Done == connector.DoneReplied {
-		if ownSend(open, t.Last) {
-			return false
-		}
 		b.noteSelfReplied(open, now)
 		open.done(now, t.Done)
 		b.closeHandling(open, "self_replied", now) // told on the AI twin's next pass (deliverPending)

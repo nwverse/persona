@@ -29,12 +29,13 @@ struct PersonaStatusIntent: AppIntent {
         }
     }
 
-    /// What it says. Waiting counts the cards the app shows (muted agents' and quiet tasks' left out) and reads the
-    /// first of them, the card ApproveFirstIntent settles (`IntentPicker.waiting`, #5257).
+    /// What it says. Working counts the agents the island does (`IntentPicker.working`, #180). Waiting counts the
+    /// cards the app shows (muted agents' and quiet tasks' left out) and reads the first of them, the card
+    /// ApproveFirstIntent settles (`IntentPicker.waiting`, #5257).
     static func text(sessions: [Session], interactions: [Interaction], mutes: [String: Pins]) -> String {
         let waiting = IntentPicker.waiting(interactions, sessions: sessions, mutes: mutes)
         return IntentText.status(
-            working: sessions.filter { $0.status == .working }.count,
+            working: IntentPicker.working(sessions, mutes: mutes),
             waiting: waiting.cards.count,
             first: waiting.first.map(IntentText.waitingPrompt)
         )

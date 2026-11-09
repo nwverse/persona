@@ -4,7 +4,7 @@ package hub
 // computer, so an unrestricted alias must not undo a work entry's restrictions.
 func (h *Hub) machineIsWork(id string) bool {
 	m := h.machineByID(id)
-	for _, entry := range h.cfgEntries() {
+	for _, entry := range h.knownEntries() {
 		if entry.Trust == "work" && (entry.ID == id || m != nil && h.machineByID(entry.ID) == m) {
 			return true
 		}

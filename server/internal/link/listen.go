@@ -11,6 +11,7 @@ import (
 	"net"
 	"net/http"
 	"net/netip"
+	"net/url"
 	"os"
 	"runtime"
 	"strconv"
@@ -32,6 +33,12 @@ var errBadCode = errors.New("bad pairing code")
 
 // pairBodyMax caps a pairing request (a settings value).
 const pairBodyMax = 16 << 10
+
+// passiveReadTimeout bounds how long one request may take to arrive, body included (a settings value). Pairing reads
+// its body before any code is checked, and net/http drains a small unread body before it answers, so without it a peer
+// that sends headers and then stalls the body holds a goroutine and a connection forever. Streams are not cut: net/http
+// clears the deadline when websocket.Accept hijacks the connection. A variable so that tests can shrink it.
+var passiveReadTimeout = 30 * time.Second
 
 // streamClose is why the listener ends a stream itself: the credential it came with is no longer the one (another
 // hub paired), or persona-link stops listening (it stops, or switched to active mode).
@@ -112,7 +119,7 @@ func runPassive(ctx context.Context, o Options, rep *reporter) {
 			retry := time.Now().Add(wait)
 			o.Logf("passive: listen %s: %v; next attempt in %s", listen, err, wait.Round(time.Second))
 			rep.set(func(s *Status) {
-				*s = Status{State: "waiting", Listen: listen, Machine: p.Machine, HubName: p.HubName, Retry: &retry,
+				*s = Status{State: "waiting", Listen: listen, Machine: p.Machine, HubName: p.HubName, MachineName: p.MachineName, Retry: &retry,
 					Error: listen + "：" + describeListen(err)}
 			})
 			o.wait(ctx, wait)
@@ -159,6 +166,7 @@ func (s *passive) serve(ctx context.Context, ln net.Listener) {
 	srv := &http.Server{
 		Handler:           s,
 		ReadHeaderTimeout: 10 * time.Second,
+		ReadTimeout:       passiveReadTimeout,
 		IdleTimeout:       2 * time.Minute,
 		MaxHeaderBytes:    16 << 10,
 		TLSConfig: &tls.Config{MinVersion: tls.VersionTLS12, NextProtos: []string{"http/1.1"},
@@ -273,7 +281,8 @@ func (s *passive) report() {
 
 func (s *passive) reportLocked() {
 	now := time.Now()
-	st := Status{Listen: s.listen, Machine: s.cfg.Machine, HubName: s.cfg.HubName, Addrs: s.addrs, Node: s.node, NodeError: s.nodeErr}
+	st := Status{Listen: s.listen, Machine: s.cfg.Machine, HubName: s.cfg.HubName, MachineName: s.cfg.MachineName, Addrs: s.addrs,
+		Node: s.node, NodeError: s.nodeErr}
 	if !s.lastSeen.IsZero() {
 		seen := s.lastSeen
 		st.LastSeen, st.From = &seen, s.from
@@ -407,6 +416,8 @@ type pairRequest struct {
 	Machine string `json:"machine"`
 	HubID   string `json:"hub_id"`
 	HubName string `json:"hub_name"`
+	// MachineName: what the hub calls this computer (hubs that rename computers).
+	MachineName string `json:"machine_name"`
 }
 
 func (s *passive) pair(w http.ResponseWriter, r *http.Request) {
@@ -440,6 +451,7 @@ func (s *passive) pair(w http.ResponseWriter, r *http.Request) {
 		}
 		at := now.UTC()
 		p.HubID, p.HubName, p.Machine, p.TokenSHA256, p.PairedAt, p.Code = hubID, hubName, machine, hashHex(req.Token), &at, nil
+		p.MachineName = clipName(req.MachineName)
 		paired = *p
 		return nil
 	})
@@ -496,7 +508,34 @@ func (s *passive) info(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.seen(r)
+	s.keepMachineName(p, r.Header.Get(MachineNameHeader))
 	writeJSON(w, http.StatusOK, map[string]string{"machine": p.Machine, "version": s.o.Version})
+}
+
+// keepMachineName keeps what the paired hub calls this computer (MachineNameHeader, escaped) in link.json, when it
+// changed.
+func (s *passive) keepMachineName(p Passive, escaped string) {
+	raw, err := url.QueryUnescape(escaped)
+	name := clipName(raw)
+	if err != nil || name == "" || name == p.MachineName {
+		return
+	}
+	var kept Passive
+	err = Update(s.o.Path, func(c *Config) error {
+		if c.Passive == nil || c.Passive.TokenSHA256 != p.TokenSHA256 {
+			return errPairedAgain
+		}
+		c.Passive.MachineName = name
+		kept = *c.Passive
+		return nil
+	})
+	if err != nil {
+		return
+	}
+	s.mu.Lock()
+	s.cfg = kept
+	s.mu.Unlock()
+	s.report()
 }
 
 func isUpgrade(r *http.Request) bool {

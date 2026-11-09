@@ -175,7 +175,8 @@ internal fun AgentsScreen(
         } else { model.opened(row); open(row.session.key) }
     }
     fun newSession(space: AgentSpacePreset? = null) { creationModel?.startIn(space); newAgent = true }
-    val spaces = remember(page.sessions, page.preferences) { agentSpaces(page.sessions.map { it.listSession(page.preferences) }) }
+    // Built with the page off the main thread (AgentsViewModel).
+    val spaces = page.spaces
     // The list rows and the space page share one session menu and one space menu.
     val resources = agentResources()
     val rowMenu: @Composable (AgentSession) -> List<JAction> = { row ->
@@ -223,21 +224,7 @@ internal fun AgentsScreen(
     val tree = remember(page.list, page.settings.machineFilter, tabs, page.preferences.foldedTabs, page.preferences.mutes, expandedTasks) {
         agentTreeEntries(page.list, page.settings.machineFilter, tabs, page.preferences.foldedTabs, page.preferences.mutes, expandedTasks)
     }
-    val spacesById = remember(spaces, page.preferences.grouping, page.list) {
-        when (page.preferences.grouping) {
-            AgentGrouping.MachineSpace -> spaces.associateBy { it.id }
-            // A repository whose sessions are all in one herdr space (the usual case) takes that space's marks and ⋯ (iOS).
-            AgentGrouping.Repo -> {
-                val byId = spaces.associateBy { it.id }
-                page.list.groups.filter { it.repo == RepoLevel.Repository }.mapNotNull { repo ->
-                    val members = repo.rows + page.list.groups.filter { it.under == repo.id }.flatMap { it.rows }
-                    agentSpaces(members).singleOrNull()?.takeIf { it.members.first().session.spaceId != null }
-                        ?.let { byId[it.id] }?.let { repo.id to it }
-                }.toMap()
-            }
-            else -> emptyMap()
-        }
-    }
+    val spacesById = page.spacesById
 
     val working = page.list.counts[AgentQuickFilter.Working] ?: 0
     val unread = page.list.counts[AgentQuickFilter.Unread] ?: 0
@@ -259,6 +246,9 @@ internal fun AgentsScreen(
     Box(Modifier.fillMaxSize()) {
         JListPage(
             title = if (connection == ConnectionState.Online) names[page.settings.machineFilter] ?: "Agents" else connection.title,
+            // The list holds text fields (search, a password card's password, #1581): it ends above the keyboard so the
+            // focused one scrolls into view; the root leaves keyboard padding to each page (#867).
+            modifier = Modifier.imePadding(),
             state = listState,
             summary = summary, subtitle = subtitle, greet = true,
             titleBusy = connection in setOf(ConnectionState.Connecting, ConnectionState.Updating),
@@ -840,3 +830,19 @@ internal fun AgentSession.rowStatusText(muted: Boolean): String? = when {
 internal fun StateDot(state: AgentState, breathe: Boolean = false) {
     JStatusMark(state.designStatus, animated = breathe)
 }
+
+/** The space shown for each group heading: the herdr space itself, or the one space a repository's sessions are all in. */
+internal fun spacesByGroup(list: AgentListResult, grouping: AgentGrouping, spaces: List<AgentSpace>): Map<String, AgentSpace> =
+    when (grouping) {
+        AgentGrouping.MachineSpace -> spaces.associateBy { it.id }
+        // A repository whose sessions are all in one herdr space (the usual case) takes that space's marks and ⋯ (iOS).
+        AgentGrouping.Repo -> {
+            val byId = spaces.associateBy { it.id }
+            list.groups.filter { it.repo == RepoLevel.Repository }.mapNotNull { repo ->
+                val members = repo.rows + list.groups.filter { it.under == repo.id }.flatMap { it.rows }
+                agentSpaces(members).singleOrNull()?.takeIf { it.members.first().session.spaceId != null }
+                    ?.let { byId[it.id] }?.let { repo.id to it }
+            }.toMap()
+        }
+        else -> emptyMap()
+    }

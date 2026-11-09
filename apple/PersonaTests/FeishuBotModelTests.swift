@@ -41,9 +41,9 @@ import Testing
         #expect(FeishuBotModel.domainChoice("https://larksuite.com") == "lark")
     }
 
-    /// A switch sends every feature (the hub merges them over the current ones); "all cards" brings "cards" along, and turning
-    /// "cards" off takes "all cards" with it.
-    @Test func featuresGoAsAWhole() async throws {
+    /// A hub from before 0.1.12 replaces the whole `features` object it is sent (no `reports` in its status): a switch sends
+    /// every feature to it, as it always did. "all cards" brings "cards" along, and turning "cards" off takes "all cards" with it.
+    @Test func anOlderHubThatReplacesTheObjectGetsEverySwitch() async throws {
         let hub = FakeHub()
         hub.on("GET", "/api/v1/bots/feishu", json: Self.status)
         var bodies: [[String: Any]] = []
@@ -53,9 +53,11 @@ import Testing
         }
         let m = model(hub)
         await m.load()
+        #expect(m.features.hubMergesFeatures == false)
         await m.set(\.cards, false)
         var f = try #require(bodies.last?["features"] as? [String: Bool])
         #expect(f["cards"] == false && f["all_cards"] == false && f["main"] == true)
+        #expect(f.count == 7) // main cards all_cards pushes sync agents reports; no board, the hub doesn't know it
         await m.set(\.allCards, true)
         f = try #require(bodies.last?["features"] as? [String: Bool])
         #expect(f["cards"] == true && f["all_cards"] == true)
@@ -82,8 +84,71 @@ import Testing
         #expect(m.nudgeAfter == 60 && !m.features.board)
         await m.set(\.pushes, true)
         let f = try #require(bodies.last?["features"] as? [String: Bool])
-        #expect(f["pushes"] == true && f["board"] == nil)
+        #expect(f["pushes"] == true && f["board"] == nil && f["only_conclusions"] == nil)
         #expect(bodies.last?["nudge_after"] == nil)
+    }
+
+    /// The status of a hub that also has "only conclusions" (#1226).
+    private static func newestStatus(onlyConclusions: Bool) -> String {
+        newerStatus.replacingOccurrences(of: "\"board\":false}", with: "\"board\":false,\"only_conclusions\":\(onlyConclusions)}")
+    }
+
+    /// The switch shows what the hub has, on or off.
+    @Test func onlyConclusionsReadsWhatTheHubHas() async throws {
+        for on in [true, false] {
+            let hub = FakeHub()
+            hub.on("GET", "/api/v1/bots/feishu", json: Self.newestStatus(onlyConclusions: on))
+            let m = model(hub)
+            await m.load()
+            #expect(m.hubKnowsOnlyConclusions)
+            #expect(m.features.onlyConclusions == on)
+        }
+    }
+
+    /// Turning it on or off sends that switch alone, and the page shows what the hub answered; another switch does not
+    /// carry it along.
+    @Test func onlyConclusionsGoesAlone() async throws {
+        let hub = FakeHub()
+        hub.on("GET", "/api/v1/bots/feishu", json: Self.newestStatus(onlyConclusions: false))
+        var bodies: [[String: Any]] = []
+        var hubOn = false
+        hub.on("PUT", "/api/v1/bots/feishu") { req in
+            let body = try JSONSerialization.jsonObject(with: req.body ?? Data()) as? [String: Any] ?? [:]
+            bodies.append(body)
+            hubOn = (body["features"] as? [String: Bool])?["only_conclusions"] ?? hubOn
+            return Data(Self.newestStatus(onlyConclusions: hubOn).utf8)
+        }
+        let m = model(hub)
+        await m.load()
+        await m.set(\.onlyConclusions, true)
+        #expect(bodies.count == 1 && bodies[0].count == 1)
+        #expect(bodies[0]["features"] as? [String: Bool] == ["only_conclusions": true])
+        #expect(m.features.onlyConclusions && m.error == nil)
+        await m.set(\.reports, false)
+        #expect(bodies.last?["features"] as? [String: Bool] == ["reports": false])
+        await m.set(\.onlyConclusions, false)
+        #expect(bodies.last?["features"] as? [String: Bool] == ["only_conclusions": false])
+        #expect(!m.features.onlyConclusions)
+    }
+
+    /// A hub from before #1226 (it has the board and the nudge, not this switch) leaves it out: the page has no switch
+    /// for it, reads it as off, and sends nothing of it with another switch.
+    @Test func aHubWithoutOnlyConclusionsHidesItAndSendsNothingOfIt() async throws {
+        let hub = FakeHub()
+        hub.on("GET", "/api/v1/bots/feishu", json: Self.newerStatus)
+        var bodies: [[String: Any]] = []
+        hub.on("PUT", "/api/v1/bots/feishu") { req in
+            bodies.append(try JSONSerialization.jsonObject(with: req.body ?? Data()) as? [String: Any] ?? [:])
+            return Data(Self.newerStatus.utf8)
+        }
+        let m = model(hub)
+        await m.load()
+        #expect(m.hubKnowsBoard && !m.hubKnowsOnlyConclusions && !m.features.onlyConclusions)
+        await m.set(\.pushes, true)
+        #expect(bodies.last?["features"] as? [String: Bool] == ["pushes": true])
+        // Encoding the whole object (as for a hub that replaces it) leaves the unknown switch out too.
+        let whole = try JSONSerialization.jsonObject(with: JSONEncoder().encode(m.features)) as? [String: Bool]
+        #expect(whole?["only_conclusions"] == nil && whole?["board"] == false)
     }
 
     /// A hub with the board but not the nudge setting: the board switch shows, the picker does not.
@@ -96,7 +161,8 @@ import Testing
         #expect(m.nudgeAfter == 60)
     }
 
-    @Test func theBoardSwitchGoesWithTheOtherFeatures() async throws {
+    /// A hub that merges per switch gets the changed switch alone, whatever this page last saw of the others.
+    @Test func aSwitchGoesAlone() async throws {
         let hub = FakeHub()
         hub.on("GET", "/api/v1/bots/feishu", json: Self.newerStatus)
         var bodies: [[String: Any]] = []
@@ -106,14 +172,72 @@ import Testing
         }
         let m = model(hub)
         await m.load()
-        #expect(m.hubKnowsBoard && m.hubKnowsNudge && !m.features.board)
+        #expect(m.hubKnowsBoard && m.hubKnowsNudge && m.features.hubMergesFeatures && !m.features.board)
         await m.set(\.board, true)
-        let f = try #require(bodies.last?["features"] as? [String: Bool])
-        #expect(f["board"] == true && f["cards"] == true && f["reports"] == true)
-        #expect(bodies.last?["nudge_after"] == nil)
+        #expect(bodies.count == 1 && bodies[0].count == 1)
+        #expect(bodies[0]["features"] as? [String: Bool] == ["board": true])
         #expect(m.features.board)
-        await m.set(\.cards, false) // the board stays as the hub has it
-        #expect(try #require(bodies.last?["features"] as? [String: Bool])["board"] == true)
+        await m.set(\.pushes, true)
+        #expect(bodies.last?["features"] as? [String: Bool] == ["pushes": true]) // the board is not put back or sent
+    }
+
+    /// The page was opened with the board off; the board is turned on elsewhere; "Push to Lark" is turned on here. The
+    /// request names "pushes" only, so the hub keeps the board as it is now (#74).
+    @Test func aStaleModelDoesNotPutBackASwitchChangedElsewhere() async throws {
+        let hub = FakeHub()
+        hub.on("GET", "/api/v1/bots/feishu", json: Self.newerStatus) // board off
+        var hubBoard = false
+        var bodies: [[String: Any]] = []
+        hub.on("PUT", "/api/v1/bots/feishu") { req in
+            let body = try JSONSerialization.jsonObject(with: req.body ?? Data()) as? [String: Any] ?? [:]
+            bodies.append(body)
+            // The hub as it merges: the switches in the request over what it has now.
+            let sent = body["features"] as? [String: Bool] ?? [:]
+            let pushes = sent["pushes"] ?? false
+            let board = sent["board"] ?? hubBoard
+            return Data(Self.newerStatus
+                .replacingOccurrences(of: "\"pushes\":false", with: "\"pushes\":\(pushes)")
+                .replacingOccurrences(of: "\"board\":false", with: "\"board\":\(board)").utf8)
+        }
+        let m = model(hub)
+        await m.load()
+        #expect(!m.features.board)
+        hubBoard = true // turned on in the web app after this page loaded
+        await m.set(\.pushes, true)
+        let sent = try #require(bodies.last?["features"] as? [String: Bool])
+        #expect(sent == ["pushes": true])
+        #expect(m.features.pushes && m.features.board) // the page shows what the hub answered
+    }
+
+    /// "all cards" and "cards" go together, and the hub does not tie them, so the request names both.
+    @Test func theCardSwitchesNameTheirPartner() async throws {
+        let hub = FakeHub()
+        hub.on("GET", "/api/v1/bots/feishu", json: Self.newerStatus)
+        var bodies: [[String: Any]] = []
+        hub.on("PUT", "/api/v1/bots/feishu") { req in
+            bodies.append(try JSONSerialization.jsonObject(with: req.body ?? Data()) as? [String: Any] ?? [:])
+            return Data(Self.newerStatus.utf8)
+        }
+        let m = model(hub)
+        await m.load()
+        await m.set(\.cards, false)
+        #expect(bodies.last?["features"] as? [String: Bool] == ["cards": false, "all_cards": false])
+        await m.set(\.allCards, true)
+        #expect(bodies.last?["features"] as? [String: Bool] == ["all_cards": true, "cards": true])
+        await m.set(\.allCards, false)
+        #expect(bodies.last?["features"] as? [String: Bool] == ["all_cards": false])
+        await m.set(\.cards, true)
+        #expect(bodies.last?["features"] as? [String: Bool] == ["cards": true])
+        await m.set(\.sync, true)
+        #expect(bodies.last?["features"] as? [String: Bool] == ["sync": true])
+        await m.set(\.agents, true)
+        #expect(bodies.last?["features"] as? [String: Bool] == ["agents": true])
+        await m.set(\.main, false)
+        #expect(bodies.last?["features"] as? [String: Bool] == ["main": false])
+        await m.set(\.reports, false)
+        #expect(bodies.last?["features"] as? [String: Bool] == ["reports": false])
+        await m.set(\.board, true)
+        #expect(bodies.last?["features"] as? [String: Bool] == ["board": true])
     }
 
     /// The nudge delay goes alone, 0 included (0 is off, not absent); the picker lists the usual delays and the one in force.

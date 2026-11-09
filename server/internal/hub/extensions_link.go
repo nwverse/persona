@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"maps"
 	"net"
 	"net/http"
 	"net/http/httputil"
@@ -130,10 +131,8 @@ func machineExtrasEqual(a, b map[string]extwire.MachineExtras) bool {
 
 // features are the hub's features with those of the extensions serving part of the API.
 func (h *Hub) features() []string {
-	out := append(slices.Clone(proto.Features), featureSessionsList, featureSessionsLookup)
-	if h.agentSessionArchivesSupported() {
-		out = append(out, featureAgentSessionArchives)
-	}
+	out := append(slices.Clone(proto.Features), featureSessionsList, featureSessionsLookup, featureMachineRename)
+	out = append(out, h.agentSessionArchiveFeatures()...)
 	// The assistant's card interfaces that answer now (docs/assistant/assistant-views.md): assistant_views is declarative actions
 	// (expected_version), live cards and transcript cards; assistant_html_bridge is …/html-actions with both switches
 	// on. Neither says a client may run HTML: that is each platform's own security sign-off, else fallback.
@@ -144,7 +143,7 @@ func (h *Hub) features() []string {
 		}
 	}
 	for _, f := range h.extReport().Features {
-		if f == featureAgentSessionArchives {
+		if f == featureAgentSessionArchives || f == featureAgentSessionArchiveClose {
 			continue
 		} // only manager hello can promise fleet archive support
 		if !slices.Contains(out, f) {
@@ -213,7 +212,7 @@ func (h *Hub) extensionRoutesRelayed(api *http.ServeMux) {
 	for _, pattern := range extwire.Routes {
 		api.HandleFunc(pattern, func(w http.ResponseWriter, r *http.Request) { h.relayToManager(w, r, false) })
 	}
-	// The lists: every manager's extensions and sources (ownership.go).
+	// The lists: every manager's extensions and sources (ownership_lists.go).
 	for pattern, key := range mergedLists {
 		if p, ok := strings.CutPrefix(pattern, "GET "); ok && slices.Contains(extwire.Routes, p) {
 			api.HandleFunc(pattern, func(w http.ResponseWriter, r *http.Request) {
@@ -509,6 +508,23 @@ func (h *Hub) pushPayloadAllowed(from string, payload map[string]any) error {
 	return nil
 }
 
+// localizedPayload is the payload of an extension's push.localized for a device in lang. One it left lang out of
+// gets the one its text would fall back to (i18n.T: the fallback language, then the default), else the first by
+// language code, so the pick does not change between pushes. nil: no language has one.
+func localizedPayload(payloads map[string]map[string]any, lang i18n.Lang) map[string]any {
+	for _, l := range []i18n.Lang{lang, i18n.Fallback, i18n.Default} {
+		if pl := payloads[string(l)]; len(pl) > 0 {
+			return pl
+		}
+	}
+	for _, l := range slices.Sorted(maps.Keys(payloads)) {
+		if pl := payloads[l]; len(pl) > 0 {
+			return pl
+		}
+	}
+	return nil
+}
+
 // ---- an extension's token on the hub's own routes ----
 
 // extTokenPrefix starts every extension's token (the manager makes them).
@@ -588,13 +604,16 @@ func (h *Hub) extAppCall(ctx context.Context, from string, p assistantwire.AppCa
 	}
 	switch p.Method {
 	case extwire.HubPushLocalized:
+		if localizedPayload(a.Payloads, i18n.Default) == nil {
+			return nil, true, errors.New("hub: push.localized without a payload in any language")
+		}
 		for _, pl := range a.Payloads {
 			if err := h.pushPayloadAllowed(from, pl); err != nil {
 				return nil, true, err
 			}
 		}
 		// the manager's extension's: not to the devices that turned that manager's pushes off
-		h.push.sendFrom(from, func(l i18n.Lang) map[string]any { return a.Payloads[string(l)] }, a.CollapseID, nil, quietNone, nil)
+		h.push.sendFrom(from, func(l i18n.Lang) map[string]any { return localizedPayload(a.Payloads, l) }, a.CollapseID, nil, quietNone, nil)
 		out = map[string]any{}
 	case extwire.HubPushBackground:
 		if err := h.pushPayloadAllowed(from, a.Payload); err != nil {

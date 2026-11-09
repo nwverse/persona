@@ -11,7 +11,7 @@
   "custom": "自定义",
   "separately_configured": "单独设置",
   "follow_agents": "跟随 Agents",
-  "manage_providers": "管理模型供应商",
+  "manage_providers": "管理共享模型提供者",
   "restored": "已恢复继承",
   "saved": "已保存，下一次运行生效",
   "conflict": "配置已在别处修改。你的编辑已保留；重新加载后再修改并保存。",

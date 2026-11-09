@@ -177,6 +177,9 @@ function MachineRow({
   const member = m.kind === "hub" ? paths[0]?.hub || mesh?.hubs.find((h) => h.hub_id === m.hub_id)?.name || "" : "";
   const repair = needsRepair(m);
   const icon: AdminIconName = m.kind === "hub" ? "mesh" : m.kind === "link" ? "link" : "machine";
+  // A computer of this hub's hub.json (a member's is renamed on its own hub), once it runs.
+  const renamable = active && m.kind !== "hub";
+  const [editing, setEditing] = useState(false);
   return (
     <div className={cx("px-4 py-3", m.state === "pending_remove" && "opacity-60")}>
       <div className="flex flex-wrap items-start gap-x-3 gap-y-2">
@@ -184,10 +187,15 @@ function MachineRow({
           <AdminIcon name={icon} size={16} />
         </span>
         <div className="min-w-[200px] flex-1">
-          <div className="flex min-w-0 items-center gap-2">
-            <span className="truncate text-[13.5px] font-medium text-ink">{m.name || m.id}</span>
-            <span className="shrink-0 font-mono text-[11.5px] text-ink-3">{m.id}</span>
-          </div>
+          {editing ? (
+            <RenameForm m={m} onDone={(saved) => (setEditing(false), saved && onChanged())} />
+          ) : (
+            <div className="flex min-w-0 items-center gap-2">
+              <span className="truncate text-[13.5px] font-medium text-ink">{m.name || m.id}</span>
+              <span className="shrink-0 font-mono text-[11.5px] text-ink-3">{m.id}</span>
+              {renamable && <IconButton icon="write" label={t("admin-pages-machines.rename")} size={24} iconSize={12} onClick={() => setEditing(true)} />}
+            </div>
+          )}
           <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-[11.5px] text-ink-3">
             <span className="flex items-center gap-1.5 whitespace-nowrap">
               <Dot tone={st.tone} />
@@ -265,6 +273,45 @@ function MachineRow({
       </div>
       {paths.length > 1 && <Paths rows={paths} />}
     </div>
+  );
+}
+
+// RenameForm edits what the hub calls a computer, in place of its name: written to hub.json and taken at once, without
+// a restart or a reconnect (docs/operations/admin.md "Computers"). Empty is its id again.
+function RenameForm({ m, onDone }: { m: AdminMachine; onDone: (saved: boolean) => void }) {
+  const [value, setValue] = useState(m.name && m.name !== m.id ? m.name : "");
+  const [busy, setBusy] = useState(false);
+  const save = async (e?: React.FormEvent) => {
+    e?.preventDefault();
+    setBusy(true);
+    try {
+      const r = await adminApi<{ name: string }>(`/machines/${enc(m.id)}`, "PUT", { name: value.trim() });
+      toast(t("admin-pages-machines.renamed", { name: r.name }), "ok");
+      onDone(true);
+    } catch (err) {
+      toast(errorText(err), "error");
+      setBusy(false);
+    }
+  };
+  return (
+    <form onSubmit={save} className="flex flex-wrap items-center gap-2" onKeyDown={(e) => e.key === "Escape" && (e.stopPropagation(), onDone(false))}>
+      <input
+        autoFocus
+        value={value}
+        onChange={(e) => setValue(e.target.value)}
+        placeholder={m.id}
+        aria-label={t("admin-pages-machines.rename_label", { id: m.id })}
+        maxLength={40}
+        className="h-8 w-[220px] max-w-full rounded-control bg-inset px-2.5 text-[13px] text-ink shadow-hairline outline-none placeholder:text-ink-3 focus:shadow-[0_0_0_1px_var(--line-strong),0_0_0_3px_var(--accent-tint)]"
+      />
+      <Button tone="quiet" className="h-8" onClick={() => onDone(false)}>
+        {t("common.cancel")}
+      </Button>
+      <Button tone="primary" type="submit" className="h-8" busy={busy}>
+        {t("common.save")}
+      </Button>
+      <span className="w-full text-[11.5px] text-ink-3">{t("admin-pages-machines.rename_hint")}</span>
+    </form>
   );
 }
 

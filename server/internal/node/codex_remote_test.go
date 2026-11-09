@@ -39,6 +39,11 @@ type remoteFixture struct {
 	// models answers model/list; threadModel / threadEffort are the threads' configured model and effort (codex_effort.go).
 	models                    any
 	threadModel, threadEffort string
+	// archive plays thread/archive and thread/unarchive on the home's files (archive_test.go), before any reject.
+	archive func(method, thread string)
+	// backgroundReply overrides the versioned inventory fixture's terminal response.
+	backgroundReply map[string]any
+	backgroundPages map[string]map[string]any
 }
 
 func (f *remoteFixture) serve(w http.ResponseWriter, r *http.Request) {
@@ -63,7 +68,9 @@ func (f *remoteFixture) serve(w http.ResponseWriter, r *http.Request) {
 		f.got = append(f.got, m)
 		ids := append([]string(nil), f.threads...)
 		drop, reject, code, ephemeral, hangup := f.drop, f.reject, f.rejectCode, f.ephemeral, f.hangup
-		models, model, effort := f.models, f.threadModel, f.threadEffort
+		models, model, effort, archive := f.models, f.threadModel, f.threadEffort, f.archive
+		background := f.backgroundReply
+		backgroundPages := f.backgroundPages
 		f.mu.Unlock()
 		if code == 0 {
 			code = -32600
@@ -82,6 +89,13 @@ func (f *remoteFixture) serve(w http.ResponseWriter, r *http.Request) {
 		}
 		if m.Method == hangup {
 			return
+		}
+		if archive != nil && (m.Method == "thread/archive" || m.Method == "thread/unarchive") {
+			var p struct {
+				ThreadID string `json:"threadId"`
+			}
+			_ = json.Unmarshal(m.Params, &p)
+			archive(m.Method, p.ThreadID)
 		}
 		if m.Method == reject {
 			f.push(map[string]any{"id": m.ID, "error": map[string]any{"code": code, "message": "rejected"}})
@@ -116,6 +130,15 @@ func (f *remoteFixture) serve(w http.ResponseWriter, r *http.Request) {
 				d = map[string]any{"id": thread, "ephemeral": true, "path": nil, "threadSource": "thread_title", "cwd": f.home, "status": map[string]any{"type": "active", "activeFlags": []string{}}}
 			}
 			result = map[string]any{"thread": d}
+		case "thread/backgroundTerminals/list":
+			result = map[string]any{"data": []any{}}
+			if background != nil {
+				result = background
+			}
+			if backgroundPages != nil {
+				cursor, _ := p["cursor"].(string)
+				result = backgroundPages[cursor]
+			}
 		case "thread/resume":
 			result = map[string]any{"thread": d}
 		case "turn/start":

@@ -1,6 +1,7 @@
 package hub
 
 import (
+	"bytes"
 	"cmp"
 	"context"
 	"encoding/base64"
@@ -9,7 +10,6 @@ import (
 	"io"
 	"net/http"
 	"path/filepath"
-	"regexp"
 	"slices"
 	"strings"
 	"sync"
@@ -21,11 +21,14 @@ import (
 	"github.com/nwverse/persona/server/internal/apierr"
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/bus"
+	"github.com/nwverse/persona/server/internal/compat"
 	"github.com/nwverse/persona/server/internal/db"
 	"github.com/nwverse/persona/server/internal/extwire"
 	"github.com/nwverse/persona/server/internal/i18n"
+	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/link"
 	"github.com/nwverse/persona/server/internal/proto"
+	"github.com/nwverse/persona/server/internal/rpc"
 	"github.com/nwverse/persona/server/internal/sessionlist"
 )
 
@@ -37,139 +40,18 @@ func (h *Hub) routes() http.Handler {
 	if h.upd != nil {
 		h.upd.routes(api)
 	}
-	api.HandleFunc("GET /api/v1/machines", func(w http.ResponseWriter, r *http.Request) {
-		list := h.machineList()
-		if em := extensionManager(r); em != "" { // an extension's token: its manager's machines only
-			list = slices.DeleteFunc(list, func(m proto.Machine) bool { return h.machineOwner(m.ID) != em })
-		}
-		writeJSON(w, map[string]any{"machines": localizedMachines(h.requestLang(r), list)})
-	})
-	// Confirm / reject a computer (machine_trust.go).
+	h.machineRoutes(api)
+	// Confirm / reject / rename a computer (machine_trust.go, machine_rename.go).
 	h.machineTrustRoutes(api)
-	h.deviceRoutesRelayed(api) // the manager's own: reconnect, engine, herdr, deploy, claude-dirs (devices_link.go)
-	api.HandleFunc("GET /api/v1/machines/{mid}/dirs", h.proxy("dirs.list", func(r *http.Request) any {
-		return map[string]any{"path": r.URL.Query().Get("path")}
-	}))
-	api.HandleFunc("GET /api/v1/machines/{mid}/file/download", h.withMachine(h.downloadFile))
-	api.HandleFunc("GET /api/v1/machines/{mid}/file/thumb", h.withMachine(h.fileThumb))
-	api.HandleFunc("GET /api/v1/machines/{mid}/file/convert", h.withMachine(h.fileConvert))
-	// stream=1: a binary file comes back described (stream, revision), its bytes from file/download.
-	api.HandleFunc("GET /api/v1/machines/{mid}/file", h.proxy("file.read", func(r *http.Request) any {
-		q := r.URL.Query()
-		return map[string]any{"path": q.Get("path"), "cwd": q.Get("cwd"), "offset": atoi(q.Get("offset")), "stream": q.Get("stream") == "1"}
-	}))
-	// Which of the paths a conversation mentions are there on the machine (?paths=a%0Ab or ?path=a&path=b, and cwd):
-	// the phone links only those.
-	api.HandleFunc("GET /api/v1/machines/{mid}/stat", h.proxy("fs.stat", func(r *http.Request) any {
-		q := r.URL.Query()
-		paths := q["path"]
-		if s := q.Get("paths"); s != "" {
-			paths = append(paths, strings.Split(s, "\n")...)
-		}
-		return map[string]any{"paths": paths, "cwd": q.Get("cwd")}
-	}))
-	api.HandleFunc("GET /api/v1/machines/{mid}/fs", h.proxy("fs.list", func(r *http.Request) any {
-		return map[string]any{"path": r.URL.Query().Get("path"), "cwd": r.URL.Query().Get("cwd")}
-	}))
-	// #2438 files-find: every file under cwd (git-aware), for the web palette's file search. Read like /fs: full
-	// credentials only (an answer-only device has no machines/{mid}/ route, routeScopes has no entry for it).
-	api.HandleFunc("GET /api/v1/machines/{mid}/fs/find", h.proxy("fs.find", func(r *http.Request) any {
-		return map[string]any{"cwd": r.URL.Query().Get("cwd"), "limit": atoi(r.URL.Query().Get("limit"))}
-	}))
-	api.HandleFunc("GET /api/v1/machines/{mid}/git/status", h.proxy("git.status", func(r *http.Request) any {
-		return map[string]any{"cwd": r.URL.Query().Get("cwd")}
-	}))
-	api.HandleFunc("POST /api/v1/machines/{mid}/git/pull", h.proxyBody("git.pull"))
-	// One version of a file, written into the node's cache for comparing (docs/protocol/protocol.md "File preview").
-	api.HandleFunc("GET /api/v1/machines/{mid}/git/blob", h.proxy("git.blob", func(r *http.Request) any {
-		q := r.URL.Query()
-		return map[string]any{"cwd": q.Get("cwd"), "path": q.Get("path"), "rev": q.Get("rev")}
-	}))
-	api.HandleFunc("GET /api/v1/machines/{mid}/git/diff", h.proxy("git.diff", func(r *http.Request) any {
-		q := r.URL.Query()
-		return map[string]any{"cwd": q.Get("cwd"), "path": q.Get("path"), "staged": q.Get("staged") == "1"}
-	}))
-	api.HandleFunc("GET /api/v1/machines/{mid}/git/show", h.proxy("git.show", func(r *http.Request) any {
-		return map[string]any{"cwd": r.URL.Query().Get("cwd"), "hash": r.URL.Query().Get("hash")}
-	}))
-	api.HandleFunc("GET /api/v1/machines/{mid}/git/log", h.proxy("git.log", func(r *http.Request) any {
-		q := r.URL.Query()
-		return map[string]any{"cwd": q.Get("cwd"), "skip": atoi(q.Get("skip")), "limit": atoi(q.Get("limit"))}
-	}))
-	// The Git panel's writes and the branch's pull request (#6121, node gitwrite.go / gitpr.go): each one a click of
-	// the user's that the client confirmed; a commit's hooks and a push may take a while.
-	api.HandleFunc("GET /api/v1/machines/{mid}/git/branches", h.proxy("git.branches", func(r *http.Request) any {
-		return map[string]any{"cwd": r.URL.Query().Get("cwd")}
-	}))
-	api.HandleFunc("GET /api/v1/machines/{mid}/git/pr", h.proxy("git.pr", func(r *http.Request) any {
-		return map[string]any{"cwd": r.URL.Query().Get("cwd")}
-	}))
-	api.HandleFunc("POST /api/v1/machines/{mid}/git/stage", h.proxyBody("git.stage"))
-	api.HandleFunc("POST /api/v1/machines/{mid}/git/commit", h.proxyBodyFor("git.commit", 5*time.Minute))
-	api.HandleFunc("POST /api/v1/machines/{mid}/git/push", h.proxyBodyFor("git.push", 3*time.Minute))
-	api.HandleFunc("POST /api/v1/machines/{mid}/git/switch", h.proxyBody("git.switch"))
-	api.HandleFunc("POST /api/v1/machines/{mid}/git/stash", h.proxyBody("git.stash"))
-	api.HandleFunc("POST /api/v1/machines/{mid}/git/pr", h.proxyBodyFor("git.pr_create", 2*time.Minute))
-	api.HandleFunc("POST /api/v1/machines/{mid}/git/pr/merge", h.proxyBodyFor("git.pr_merge", 3*time.Minute))
-	api.HandleFunc("POST /api/v1/machines/{mid}/files", h.withMachine(h.uploadFile))
-	api.HandleFunc("GET /api/v1/machines/{mid}/claude-settings", h.proxy("claude.settings", func(r *http.Request) any {
-		return map[string]any{"locale": h.requestLang(r)}
-	}))
-	api.HandleFunc("PUT /api/v1/machines/{mid}/claude-settings", h.proxyBody("claude.settings.set"))
-	api.HandleFunc("GET /api/v1/machines/{mid}/codex-settings", h.proxy("codex.settings", nil))
-	api.HandleFunc("PUT /api/v1/machines/{mid}/codex-settings", h.proxyBody("codex.settings.set"))
-	api.HandleFunc("GET /api/v1/machines/{mid}/agy-settings", h.proxy("agy.settings", nil))
-	api.HandleFunc("PUT /api/v1/machines/{mid}/agy-settings", h.proxyBody("agy.settings.set"))
-	api.HandleFunc("GET /api/v1/machines/{mid}/omp-settings", h.proxy("omp.settings", nil))
-	api.HandleFunc("PUT /api/v1/machines/{mid}/omp-settings", h.proxyBody("omp.settings.set"))
-	api.HandleFunc("GET /api/v1/sessions", h.listSessions)
-	api.HandleFunc("POST /api/v1/sessions", h.withClientOp("start", h.startSession))
-	api.HandleFunc("GET /api/v1/sessions/{mid}/{sid}/items", h.withMachine(h.sessionItems))
-	api.HandleFunc("GET /api/v1/sessions/{mid}/{sid}/items/{iid}/image", h.withMachine(h.sessionImage))
-	api.HandleFunc("GET /api/v1/sessions/{mid}/{sid}/items/{iid}/full", h.withMachine(h.sessionItemFull))
-	api.HandleFunc("POST /api/v1/sessions/{mid}/{sid}/messages", h.withClientOp("message", h.withMachine(h.sendMessage)))
-	api.HandleFunc("POST /api/v1/sessions/{mid}/{sid}/attach", h.proxyBody("session.attach"))
-	api.HandleFunc("POST /api/v1/sessions/{mid}/{sid}/interrupt", h.withClientOp("interrupt", h.withMachine(h.interruptSession)))
-	api.HandleFunc("POST /api/v1/sessions/{mid}/{sid}/keys", h.proxyBody("session.keys"))
-	// #2436: rewind a Claude session to before one of its messages (rewind.go); a full device only, it restores files
-	api.HandleFunc("POST /api/v1/sessions/{mid}/{sid}/rewind", h.withClientOp("rewind", h.withMachine(h.rewindSession)))
-	api.HandleFunc("POST /api/v1/sessions/{mid}/{sid}/fork", h.withClientOp("fork", h.proxyBody("session.fork"))) // "Branch to new chat" (node/fork.go)
-	api.HandleFunc("POST /api/v1/sessions/{mid}/{sid}/close", h.withClientOp("close", h.proxyBody("session.close")))
-	api.HandleFunc("POST /api/v1/sessions/{mid}/{sid}/queue", h.proxyBody("session.queue.edit"))
-	api.HandleFunc("POST /api/v1/sessions/{mid}/{sid}/queue/send-now", h.proxyBody("session.queue.send_now")) // #6088
-	api.HandleFunc("POST /api/v1/sessions/{mid}/{sid}/rename", h.withClientOp("rename", h.withMachine(h.renameSession)))
-	api.HandleFunc("DELETE /api/v1/sessions/{mid}/{sid}", h.withMachine(h.deleteSession))
-	// Model, permission, effort and the independent ultracode switch may each be left out (ultracode.go).
-	api.HandleFunc("POST /api/v1/sessions/{mid}/{sid}/modes", h.withClientOp("modes", h.withMachine(h.sessionModes)))
-	api.HandleFunc("POST /api/v1/machines/{mid}/spaces/{wid}/rename", h.withMachine(h.renameSpace))
-	api.HandleFunc("GET /api/v1/sessions/{mid}/{sid}/info", h.proxy("session.info", func(r *http.Request) any {
-		return map[string]any{"session_id": r.PathValue("sid")}
-	}))
-	api.HandleFunc("POST /api/v1/sessions/{mid}/{sid}/screen/before", paneAddressFullOnly(h.proxyBody("session.screen.before")))
-	api.HandleFunc("GET /api/v1/sessions/{mid}/{sid}/screen", paneAddressFullOnly(h.proxy("session.screen", func(r *http.Request) any {
-		q := r.URL.Query()
-		return map[string]any{"session_id": r.PathValue("sid"), "lines": atoi(q.Get("lines")), "source": q.Get("source"), "format": q.Get("format")}
-	})))
-	// The terminal browser (docs/integrations/terminal.md "Standalone terminals"): a machine's workspaces, tabs and panes with plain shells, and
-	// "New terminal". A pane is full shell access on the computer: full devices only (paneRoutesFullOnly).
-	api.HandleFunc("GET /api/v1/machines/{mid}/panes", h.proxy("panes.list", nil))
-	api.HandleFunc("POST /api/v1/machines/{mid}/panes", h.withMachine(h.newShell))
-	// close / split / run an agent / git in a pane, close / rename a tab: full devices only (panes.go)
-	api.HandleFunc("POST /api/v1/machines/{mid}/panes/close", h.nodeAction(nodeActions["panes/close"]))
-	api.HandleFunc("POST /api/v1/machines/{mid}/panes/split", h.nodeAction(nodeActions["panes/split"]))
-	api.HandleFunc("POST /api/v1/machines/{mid}/panes/agent", h.nodeAction(nodeActions["panes/agent"]))
-	api.HandleFunc("POST /api/v1/machines/{mid}/panes/git", h.nodeAction(nodeActions["panes/git"]))
-	api.HandleFunc("POST /api/v1/machines/{mid}/tabs/close", h.nodeAction(nodeActions["tabs/close"]))
-	api.HandleFunc("POST /api/v1/machines/{mid}/tabs/rename", h.nodeAction(nodeActions["tabs/rename"]))
-	// #2429 node self-check (node_doctor.go): the report, and rewriting Persona's own generated files; full devices only
-	api.HandleFunc("GET /api/v1/machines/{mid}/doctor", h.nodeDoctor("node.doctor", 45*time.Second))
-	api.HandleFunc("POST /api/v1/machines/{mid}/doctor/fix", h.nodeDoctor("node.doctor.fix", 60*time.Second))
-	// #2431 "New worktree…": what the dialog starts from, and the worktree (full devices only, panes.go)
-	api.HandleFunc("POST /api/v1/machines/{mid}/worktree/prepare", h.nodeAction(nodeActions["worktree/prepare"]))
-	api.HandleFunc("POST /api/v1/machines/{mid}/worktree/create", h.nodeAction(nodeActions["worktree/create"]))
-	api.HandleFunc("POST /api/v1/machines/{mid}/worktree/add", h.nodeAction(nodeActions["worktree/add"]))
-	api.HandleFunc("POST /api/v1/machines/{mid}/worktree/status", h.nodeAction(nodeActions["worktree/status"]))
-	api.HandleFunc("POST /api/v1/machines/{mid}/worktree/remove", h.nodeAction(nodeActions["worktree/remove"]))
+	h.machineRenameRoutes(api)
+	h.deviceRoutesRelayed(api) // the manager's own: reconnect, engine, herdr, deploy, claude-dirs (devices_routes.go)
+	h.fileRoutes(api)
+	h.gitRoutes(api)
+	h.agentSettingsRoutes(api)
+	h.sessionRoutes(api)
+	h.paneRoutes(api)
+	h.nodeDoctorRoutes(api)
+	h.nodeUpdateRelayRoutes(api)
 	api.HandleFunc("GET /api/v1/interactions", func(w http.ResponseWriter, r *http.Request) {
 		ixs := visibleInteractions(h.pendingInteractions(), h.requestHasElicitation(r))
 		if em := extensionManager(r); em != "" { // an extension's token: its manager's cards only
@@ -179,63 +61,17 @@ func (h *Hub) routes() http.Handler {
 	})
 	api.HandleFunc("GET /api/v1/ops/{id}", h.getClientOp)
 	h.fleetRoutesRelayed(api) // resolve, history, seen: the manager's (fleet_link.go)
-	api.HandleFunc("POST /api/v1/devices", func(w http.ResponseWriter, r *http.Request) {
-		var d Device
-		if err := decodeJSONBody(w, r, &d, 16<<10); err != nil || d.DeviceID == "" {
-			writeBodyErr(w, err, errors.New("device_id is required"))
-			return
-		}
-		// Both name the device token that registered it: credential_id picks the phone a tool call or wake goes to,
-		// credential stops the pushes when it is revoked (Pusher.signedOut).
-		d.Locale = string(i18n.Resolve(d.Locale)) // its pushes' language; "" (an older app) is the user's
-		d.CredentialID = principalOf(r.Context()).ID
-		d.Credential = d.CredentialID
-		if err := h.push.register(d); err != nil {
-			writeErr(w, http.StatusServiceUnavailable, i18n.Err("http-status.unavailable"))
-			return
-		}
-		resp := map[string]any{"ok": true}
-		if route, ok := h.push.routeOfID(d.DeviceID); ok {
-			resp["push"] = route // the app's Settings › Notifications says which way, or why none (#5998)
-		}
-		writeJSON(w, resp)
-	})
+	h.deviceRoutes(api)
 	h.pushRoutes(api)
 	h.live.routes(api)
-	h.metricsRoutesRelayed(api) // the monitoring is the manager's (devices_link.go)
-	api.HandleFunc("GET /api/v1/devices/{id}/sessions", h.serveDeviceSessions)
+	h.metricsRoutesRelayed(api) // the monitoring is the manager's (devices_routes.go)
 	h.lockTestRoutes(api)
-	// Which pushes this device wants (notify.go NotifyPrefs); the app's Settings › Notifications.
-	api.HandleFunc("GET /api/v1/devices/{id}/prefs", func(w http.ResponseWriter, r *http.Request) {
-		writeJSON(w, h.prefsView(h.push.prefs(r.PathValue("id"))))
-	})
-	api.HandleFunc("PUT /api/v1/devices/{id}/prefs", func(w http.ResponseWriter, r *http.Request) {
-		prefs := h.push.prefs(r.PathValue("id"))
-		if err := decodeJSONBody(w, r, &prefs, 16<<10); err != nil {
-			writeBodyErr(w, err, err)
-			return
-		}
-		if err := prefs.Quiet.validate(); err != nil {
-			writeErr(w, http.StatusBadRequest, err)
-			return
-		}
-		// only the roster's managers: a removed one's id would hold one of the 64 places for good (notify.go)
-		prefs.MutedManagers = h.rosterManagers(r.Context(), prefs.MutedManagers)
-		raw, _ := json.Marshal(prefs)
-		prefs = devicePrefs(raw) // normalizes an unknown "done"
-		if err := h.push.setPrefsBy(r.PathValue("id"), principalOf(r.Context()).ID, prefs); err != nil {
-			writeErr(w, http.StatusInternalServerError, err)
-			return
-		}
-		h.live.settingsChanged()
-		writeJSON(w, h.prefsView(prefs))
-	})
 	h.assistantRoutes(api)
 	h.pinRoutes(api)
 	h.notifyRoutes(api)
 	h.personaRoutes(api)
 	h.lookRoutes(api)
-	// usage windows (#2432): the manager's (devices_link.go)
+	// usage windows (#2432): the manager's (devices_routes.go)
 	h.usageRoutesRelayed(api)
 	h.inboxRoutesRelayed(api)
 	// the extensions', connectors', bots', mail's, Cua's and ego's: the manager's (extensions_link.go)
@@ -243,6 +79,7 @@ func (h *Hub) routes() http.Handler {
 	api.HandleFunc("GET /api/v1/ws", h.serveWS)
 	h.tokenRoutes(api)
 	h.portRoutes(api)
+	h.previewRoutes(api)
 	h.pairRoutes(api)
 	h.managerRoutes(api) // the roster (managers.go)
 	h.linkRoutes(api)
@@ -455,7 +292,7 @@ func (h *Hub) auth(next http.Handler) http.Handler {
 		// API answers are live data: without this the phone's URLCache kept a copy of every page it pulled (megabytes,
 		// never read again). Images and media that may be cached set their own Cache-Control.
 		w.Header().Set("Cache-Control", "no-store")
-		next.ServeHTTP(w, r)
+		h.observeClientRequest(next, w, r, p)
 	})
 }
 
@@ -494,7 +331,10 @@ func (s *statusWriter) Unwrap() http.ResponseWriter { return s.ResponseWriter }
 func logRequests(h *Hub, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
-		client := parseRequestClient(r.Header.Get("X-Persona-Client"))
+		client := requestClient{}
+		if !compat.HeaderConflict(r.Header, "X-Persona-Client") {
+			client = parseRequestClient(compat.Header(r.Header, "X-Persona-Client"))
+		}
 		r = r.WithContext(context.WithValue(r.Context(), requestClientKey{}, client))
 		id := requestID(r.Header.Get("X-Client-Request-Id"))
 		w.Header().Set("X-Request-Id", id)
@@ -559,7 +399,7 @@ func atoi(s string) int {
 
 // agentTypeRe is what POST /api/v1/sessions takes as agent_type: claude, codex, traex, or a runtime's agent as the
 // launcher list says (a runtime's launcher starts through its runtime, whatever the type); the node checks the rest.
-var agentTypeRe = regexp.MustCompile(`^[a-z][a-z0-9_-]{0,31}$`)
+var agentTypeRe = lazyre.New(`^[a-z][a-z0-9_-]{0,31}$`)
 
 func (h *Hub) withMachine(fn func(http.ResponseWriter, *http.Request, *Machine)) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
@@ -603,8 +443,14 @@ func (h *Hub) proxy(method string, params func(*http.Request) any) http.HandlerF
 // fetches each one from sessionImage when it scrolls into view); older apps still get them inline.
 func (h *Hub) sessionItems(w http.ResponseWriter, r *http.Request, m *Machine) {
 	q := r.URL.Query()
-	params := map[string]any{"session_id": r.PathValue("sid"), "before_seq": atoi(q.Get("before_seq")), "limit": atoi(q.Get("limit")),
-		"turns": atoi(q.Get("turns"))}
+	params := map[string]any{"session_id": r.PathValue("sid")}
+	// Only the paging the app gave: one it left out or sent empty (iOS's latest page has before_seq=) is not 0 to a
+	// runtime, which may take before_seq 0 as a bad value and refuse every page, and the app's sync then asks again.
+	for _, k := range []string{"before_seq", "limit", "turns"} {
+		if v := q.Get(k); v != "" {
+			params[k] = atoi(v)
+		}
+	}
 	if q.Has("after_seq") { // what came after the app's newest item (background sync); has_more is meaningless here
 		params["after_seq"] = atoi(q.Get("after_seq"))
 	}
@@ -752,14 +598,70 @@ func (h *Hub) listSessions(w http.ResponseWriter, r *http.Request) {
 		writeErrCode(w, http.StatusForbidden, codeOtherManager, errOtherManager)
 		return
 	}
-	out := []proto.Session{}
+	// Each machine's list as kept, written out a session at a time with its manager (decorated): with thousands of
+	// sessions, a copy of all the lists and the whole answer in one buffer were most of what an answer allocated.
+	var lists []stampedList
 	for _, m := range h.machinesNow() {
 		if mid != "" && m.cfg.ID != mid || em != "" && h.machineOwner(m.cfg.ID) != em {
 			continue
 		}
-		out = append(out, h.shown(m.cfg.ID, h.decorated(m))...)
+		lists = append(lists, stampedList{h.shown(m.cfg.ID, m.keptSessions()), h.machineOwner(m.cfg.ID)})
 	}
-	writeJSON(w, map[string]any{"sessions": out})
+	writeSessionLists(w, lists)
+}
+
+// stampedList is a machine's list as kept, and the manager its sessions go out with.
+type stampedList struct {
+	list    []proto.Session
+	manager string
+}
+
+// sessionsFlushAt is how much of the answer writeSessionLists holds before writing it out; its buffer has room for
+// one more session of up to 8 KB on top.
+const sessionsFlushAt = 32 << 10
+
+// writeSessionLists writes {"sessions":[...]} of every session of lists, each stamped with its list's manager: the
+// bytes writeJSON gives for the stamped lists put together, encoded a session at a time and written out every
+// sessionsFlushAt bytes, so neither a copy of the lists nor the whole answer is held. A session that fails to encode
+// is left out, as a push leaves it out (encodeRows). The lists are only read.
+func writeSessionLists(w http.ResponseWriter, lists []stampedList) {
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	var buf bytes.Buffer
+	buf.Grow(sessionsFlushAt + 8<<10)
+	buf.WriteString(`{"sessions":[`)
+	enc := json.NewEncoder(&buf) // escapes HTML, as writeJSON does
+	var scratch *proto.Session
+	n := 0
+	for _, l := range lists {
+		for i := range l.list {
+			s := &l.list[i]
+			if s.Manager != l.manager {
+				if scratch == nil {
+					scratch = new(proto.Session)
+				}
+				*scratch = *s
+				scratch.Manager, s = l.manager, scratch
+			}
+			mark := buf.Len()
+			if n > 0 {
+				buf.WriteByte(',')
+			}
+			if enc.Encode(s) != nil {
+				buf.Truncate(mark)
+				continue
+			}
+			buf.Truncate(buf.Len() - 1) // the '\n' Encode ends each value with
+			n++
+			if buf.Len() >= sessionsFlushAt {
+				if _, err := w.Write(buf.Bytes()); err != nil {
+					return // the client is gone
+				}
+				buf.Reset()
+			}
+		}
+	}
+	buf.WriteString("]}\n")
+	_, _ = w.Write(buf.Bytes())
 }
 
 func (h *Hub) startSession(w http.ResponseWriter, r *http.Request) {
@@ -878,8 +780,21 @@ func (h *Hub) startSession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := m.call(ctx, "session.start", params, &res); err != nil {
-		callErr(w, err)
+		h.startEnded(m.cfg.ID, p.ResumeSessionID, params, err)
+		callErr(w, apierr.OnMachine(err, m.name())) // a launcher the new tab cannot run "on <name>'s MacBook"
 		return
+	}
+	if !async {
+		h.startEnded(m.cfg.ID, p.ResumeSessionID, params, nil)
+	}
+	if model, _ := params["model"].(string); p.Model != "" && p.ResumeSessionID == "" && model == strings.TrimSpace(p.Model) {
+		launcher, _ := params["launcher"].(string) // the one it ran with: the manager filled it in
+		if async {
+			// Acknowledged before it ran: the launcher's check and the agent coming up are still to come.
+			go h.modelUsedOnceStarted(m.cfg.ID, res.Session.SessionID, launcher, model)
+		} else {
+			h.modelUsed(h.machineOwner(m.cfg.ID), m.cfg.ID, launcher, model)
+		}
 	}
 	res.Session.MachineID = m.cfg.ID
 	if shown, ok := h.awaitListed(ctx, m, res.Session.SessionID); ok {
@@ -917,6 +832,29 @@ func (h *Hub) startSession(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// startEnded tells the machine's manager how an app's start went, for launcher health (#1642,
+// assistant/launcher_health_starts.go): one that failed, or one the node ran before answering that worked; the manager
+// follows one answered at once (async) in the session list. A start whose outcome the hub does not know (the machine
+// away, the call timed out) is not told, nor a resume on the launcher it had (which one the node ran is its).
+func (h *Hub) startEnded(mid, resume string, params map[string]any, err error) {
+	launcher, _ := params["launcher"].(string)
+	if launcher == "" && resume != "" {
+		return
+	}
+	r := assistantwire.StartEnded{MachineID: mid, SessionID: resume, Launcher: launcher, OK: err == nil}
+	if err != nil {
+		if code := apierr.NodeCode(err); code == "timeout" || code == "node_unreachable" || errors.Is(err, context.Canceled) {
+			return
+		}
+		r.Error = err.Error()
+		var re *rpc.Error
+		if errors.As(err, &re) {
+			r.Code, r.Data = re.Code, re.Data
+		}
+	}
+	h.asstOf(h.machineOwner(mid)).notify(assistantwire.EventStartEnded, r)
+}
+
 // startsAsync: a start the app asked to have answered at once is, when the node can acknowledge it before the session
 // is ready (only Claude can, and not a resume).
 func startsAsync(asked bool, resume, agentType string) bool {
@@ -944,6 +882,7 @@ type client struct {
 	conn           *websocket.Conn
 	out            chan []byte
 	mu             sync.Mutex
+	traffic        trafficAttribution // inferred once from the upgrade; hello may refine platform
 	subs           map[[2]string]bool
 	fsw            map[[3]string]fsWatchReq // {machine id, cwd, asked id} -> the folders this browser has open there (fswatch.go)
 	phone          bool
@@ -1088,13 +1027,18 @@ type (
 	}
 )
 
-// itemsToSubscribers fans new items out, without image data to clients that load images on demand.
-func (h *Hub) itemsToSubscribers(machineID, sessionID string, items []proto.Item, span itemSpan) {
+// itemsToSubscribers fans new items out, without image data to clients that load images on demand. moreAfter marks
+// a producer's capped replay batch, whose remaining items the client must fetch.
+func (h *Hub) itemsToSubscribers(machineID, sessionID string, items []proto.Item, span itemSpan, moreAfter bool) {
 	if items == nil {
 		items = []proto.Item{}
 	}
 	msg := func(items []proto.Item) []byte {
-		b, _ := json.Marshal(span.into(map[string]any{"type": "items", "machine_id": machineID, "session_id": sessionID, "items": items}))
+		out := span.into(map[string]any{"type": "items", "machine_id": machineID, "session_id": sessionID, "items": items})
+		if moreAfter {
+			out["more_after"] = true
+		}
+		b, _ := json.Marshal(out)
 		return b
 	}
 	// One message per language and image mode: the node's Chinese lines read in each connection's (transcript_text.go).
@@ -1165,6 +1109,7 @@ func (h *Hub) serveWS(w http.ResponseWriter, r *http.Request) {
 	c := &client{cancel: cancel, hub: h, conn: conn, out: make(chan []byte, 512), subs: map[[2]string]bool{}, since: time.Now(),
 		device: who.ID, role: who.Role, delta: wantsFeature(r, featureSessionsDelta), listMode: wantsFeature(r, featureSessionsList), have: map[string]map[string][]byte{},
 		urlFeatures: urlFeatures(r), acceptLang: i18n.FromRequest(r), meta: clientMeta{updates: make(chan heartbeatConfig, 512), done: ctx.Done()}}
+	c.traffic = h.requestTrafficAttribution(r, who)
 	c.uiConnection = randomHex(24)
 	c.uiRequests = make(chan struct{}, 8)
 	c.uiManagers = map[string]bool{}
@@ -1264,6 +1209,7 @@ func (h *Hub) serveWS(w http.ResponseWriter, r *http.Request) {
 			c.clean = s == websocket.StatusNormalClosure || s == websocket.StatusGoingAway
 			return
 		}
+		c.recordSocketTraffic("websocket_frame", "received", int64(len(data)), 0)
 		h.onClientMessage(ctx, c, data)
 	}
 }

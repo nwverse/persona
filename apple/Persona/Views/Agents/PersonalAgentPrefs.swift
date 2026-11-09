@@ -43,6 +43,8 @@ nonisolated struct PersonalAgentPrefs: Codable, Hashable, Sendable {
     var view = PersonalAgentView()
     var sections: [PersonalAgentSection] = []
     var assign: [String: String] = [:]
+    /// Removed from the list: session id → when (ms). Changed only through hide / unhide; the hub keeps its own on a save.
+    var hidden: [String: Int64]?
 
     init() {}
     init(from decoder: Decoder) throws {
@@ -51,8 +53,9 @@ nonisolated struct PersonalAgentPrefs: Codable, Hashable, Sendable {
         view = try c.decodeIfPresent(PersonalAgentView.self, forKey: .view) ?? PersonalAgentView()
         sections = try c.decodeIfPresent([PersonalAgentSection].self, forKey: .sections) ?? []
         assign = try c.decodeIfPresent([String: String].self, forKey: .assign) ?? [:]
+        hidden = try c.decodeIfPresent([String: Int64].self, forKey: .hidden)
     }
-    enum CodingKeys: String, CodingKey { case pins, view, sections, assign }
+    enum CodingKeys: String, CodingKey { case pins, view, sections, assign, hidden }
 
     func isPinned(_ id: String) -> Bool { pins.contains(id) }
     mutating func togglePin(_ id: String) {

@@ -2,7 +2,6 @@ import XCTest
 
 /// The iPad draws the iPhone's composer (`ShellComposerBar`, #2779): one line, [+] the field [mic], that grows into a
 /// card while typing, in an agent's conversation and the assistant's, no wider than the conversation and centered on it.
-/// Old Layout keeps its own composer, so these launch with it off (UI tests default to it on).
 /// Against scripts/mock/mock_hub.py (PERSONA_MOCK_HUB), on an iPad simulator; skipped on iPhone.
 /// TEST_RUNNER_PERSONA_SHOTS=<dir> keeps a screenshot of each.
 final class IPadComposerTests: XCTestCase {
@@ -62,7 +61,7 @@ final class IPadComposerTests: XCTestCase {
     @MainActor func testAgentConversation() {
         for (name, orientation) in [("portrait", UIDeviceOrientation.portrait), ("landscape", .landscapeLeft)] {
             XCUIDevice.shared.orientation = orientation
-            app.launchArguments = ["-pairURL", pair, "-ui.oldLayout", "NO", "-openSession", "macbook/a1f3c2d4-0000-4000-8000-000000000001"]
+            app.launchArguments = ["-pairURL", pair, "-openSession", "macbook/a1f3c2d4-0000-4000-8000-000000000001"]
             app.launchPinned()
             checkComposer("agent-\(name)", geometry: orientation == .portrait)
             app.terminate()
@@ -70,7 +69,7 @@ final class IPadComposerTests: XCTestCase {
     }
 
     @MainActor func testAssistantConversation() {
-        app.launchArguments = ["-pairURL", pair, "-ui.oldLayout", "NO", "-tab", "assistant"]
+        app.launchArguments = ["-pairURL", pair, "-tab", "assistant"]
         app.launchPinned()
         checkComposer("assistant")
         // The modes live in the composer's model button, not in chips over it.

@@ -71,6 +71,61 @@ func TestCallExplainsCodedRefusals(t *testing.T) {
 	}
 }
 
+// A start whose new tab's shell could not run the launcher (#1642, node/shellmiss.go) is said as the terminal's
+// problem, naming the shells and the rc file, in each language; a path the shell could not run and a missing claude
+// have words of their own. The shell's line stays the detail, the remedy the launcher's.
+func TestCallExplainsTerminalRefusals(t *testing.T) {
+	data := func(code, kind, missing string) *rpc.Error {
+		b, _ := json.Marshal(map[string]string{"delivered": "none", "launcher": "cc", "missing": missing, "kind": kind, "where": "terminal",
+			"pane_shell": "bash", "launcher_shell": "zsh", "rc_file": "~/.zshrc", "line": "bash: " + missing + ": command not found"})
+		return &rpc.Error{Code: code, Message: "the new tab's shell (bash) has no command " + missing, Data: b}
+	}
+	for _, tc := range []struct {
+		name   string
+		lang   i18n.Lang
+		err    error
+		action string
+		want   []string
+	}{
+		{"default", "", OnMachine(data(proto.CodeLauncherMissing, "not_found", "cc"), "mbp"), "connect_model",
+			[]string{"mbp 上新开的终端标签页（bash）里没有「cc」", "「cc」", "zsh（~/.zshrc）"}},
+		{"English, here", i18n.En, data(proto.CodeLauncherMissing, "not_found", "cc"), "connect_model",
+			[]string{"new terminal tabs on this computer (bash) has no command “cc”", "“cc”", "zsh (~/.zshrc)"}},
+		{"Japanese", i18n.Ja, OnMachine(data(proto.CodeLauncherMissing, "not_found", "cc"), "mbp"), "connect_model",
+			[]string{"mbp の新しいターミナルタブ（bash）には「cc」", "「cc」", "zsh（~/.zshrc）"}},
+		{"a path", i18n.En, OnMachine(data(proto.CodeLauncherMissing, "no_such_file", "/opt/p/personad"), "mbp"), "connect_model",
+			[]string{"new terminal tabs on mbp (bash) can't run “/opt/p/personad”", "“cc”"}},
+		{"claude", i18n.En, OnMachine(data(proto.CodeClaudeMissing, "not_found", "claude"), "mbp"), "install_claude",
+			[]string{"new terminal tabs on mbp (bash) can't find Claude Code (“claude”)", "“cc”"}},
+	} {
+		rec := httptest.NewRecorder()
+		body := call(t, langWriter{rec, tc.lang}, rec, tc.err)
+		text, _ := body["error"].(string)
+		for _, w := range tc.want {
+			if !strings.Contains(text, w) {
+				t.Errorf("%s: %q lacks %q", tc.name, text, w)
+			}
+		}
+		if rec.Code != http.StatusConflict || body["action"] != tc.action || body["where"] != "terminal" || body["pane_shell"] != "bash" ||
+			!strings.HasPrefix(body["detail"].(string), "the new tab's shell") || strings.Contains(text, "{") {
+			t.Errorf("%s: %d %v", tc.name, rec.Code, body)
+		}
+	}
+	if got := Sentence(i18n.En, "input_draft", nil); got != "" {
+		t.Errorf("a refusal the hub does not word: %q", got)
+	}
+	// A tab whose shell the node could not tell (herdr on Windows names none): the default shell, in the language.
+	for l, want := range map[i18n.Lang]string{i18n.En: "(the default shell)", i18n.ZhHans: "（默认的 shell）", i18n.Ja: "（既定のシェル）"} {
+		for _, code := range []string{proto.CodeLauncherMissing, proto.CodeClaudeMissing} {
+			got := Sentence(l, code, map[string]any{"launcher": "cc", "missing": "cc", "kind": "not_found", "where": "terminal",
+				"launcher_shell": "zsh", "rc_file": "~/.zshrc"})
+			if !strings.Contains(got, want) || strings.Contains(got, "{") {
+				t.Errorf("%s %s, no pane_shell: %q", l, code, got)
+			}
+		}
+	}
+}
+
 // Other coded refusals keep the words the node wrote; OnMachine leaves them and plain errors alone.
 func TestCallKeepsOtherRefusals(t *testing.T) {
 	rec := httptest.NewRecorder()
@@ -156,6 +211,12 @@ func TestRPCFailureLocalePreservesOutcomeAndDiagnostics(t *testing.T) {
 		{"partial delivery", &rpc.Error{Code: "internal", Message: "original diagnostic", Data: json.RawMessage(`{"delivered":"yes","retryable":false}`)}, "rpc-errors.failed"},
 		{"busy", &rpc.Error{Code: "attach_busy", Message: "original diagnostic"}, "rpc-errors.attach_busy"},
 		{"old node", &rpc.Error{Code: "node_outdated", Message: "original diagnostic"}, "rpc-errors.node_outdated"},
+		// a Claude session outside Persona's terminals: refused before anything reached it, or handed over unconfirmed
+		{"peer refused", &rpc.Error{Code: "peer_unsupported", Message: "node's own words", Data: json.RawMessage(`{"delivered":"none","pid":42}`)}, "rpc-errors.peer_unsupported"},
+		{"peer gone", &rpc.Error{Code: "peer_unreachable", Message: "node's own words", Data: json.RawMessage(`{"delivered":"none"}`)}, "rpc-errors.peer_unreachable"},
+		{"peer long", &rpc.Error{Code: "peer_too_long", Message: "node's own words", Data: json.RawMessage(`{"delivered":"none"}`)}, "rpc-errors.peer_too_long"},
+		{"peer command", &rpc.Error{Code: "peer_command", Message: "node's own words", Data: json.RawMessage(`{"delivered":"none"}`)}, "rpc-errors.peer_command"},
+		{"peer unconfirmed", &rpc.Error{Code: "peer_unconfirmed", Message: "node's own words", Data: json.RawMessage(`{"delivered":"unknown"}`)}, "rpc-errors.peer_unconfirmed"},
 	}
 	for _, tc := range cases {
 		legacy := httptest.NewRecorder()

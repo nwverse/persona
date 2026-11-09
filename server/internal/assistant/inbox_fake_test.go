@@ -53,12 +53,14 @@ type fakeInbox struct {
 	inDoubt bool
 }
 
-// fakeMail is the hub's mail: accounts with their latest messages, the full texts, the replies sent.
+// fakeMail is the hub's mail: accounts with their latest messages, the full texts, the replies sent. fetched runs
+// when a text was read, before it is answered (a round's mail step has let the inbox go meanwhile).
 type fakeMail struct {
 	accounts []assistantwire.InboxMailAccount
 	bodies   map[uint32]assistantwire.InboxMailMessage
 	reads    int
 	sent     []map[string]any
+	fetched  func(uid uint32)
 }
 
 func newFakeInbox() *fakeInbox {
@@ -231,15 +233,19 @@ func (in *fakeInbox) answer(ctx context.Context, p AppCall) (json.RawMessage, bo
 		var ref assistantwire.InboxMailRef
 		_ = json.Unmarshal(p.Params, &ref)
 		in.mu.Lock()
+		var fetched func(uint32)
 		if in.mail == nil {
 			err = errors.New("mail is not set up")
 		} else if m, ok := in.mail.bodies[ref.UID]; ok {
 			in.mail.reads++
-			out = m
+			out, fetched = m, in.mail.fetched
 		} else {
 			err = fmt.Errorf("no mail %d", ref.UID)
 		}
 		in.mu.Unlock()
+		if fetched != nil {
+			fetched(ref.UID)
+		}
 	case assistantwire.InboxReplyMail:
 		var a map[string]any
 		_ = json.Unmarshal(p.Params, &a)

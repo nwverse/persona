@@ -20,6 +20,22 @@ import kotlinx.serialization.json.put
  * real model consumer, never something the app invents. Bound to the active pairing.
  */
 interface ModelConfiguration {
+    /** Capture the owner when opening a page; every later request keeps that identity. */
+    fun forManager(manager: String): ModelConfiguration {
+        require(manager.isNotBlank())
+        val source = this
+        val owner = RequestManager(manager)
+        return object : ModelConfiguration {
+            override fun forManager(manager: String) = source.forManager(manager)
+            override suspend fun catalog() = kotlinx.coroutines.withContext(owner) { source.catalog() }
+            override suspend fun purpose(id: String) = kotlinx.coroutines.withContext(owner) { source.purpose(id) }
+            override suspend fun save(purpose: ModelPurpose, draft: ModelConfigurationDraft) =
+                kotlinx.coroutines.withContext(owner) { source.save(purpose, draft) }
+            override suspend fun providerModels(provider: String, refresh: Boolean, machine: String?) =
+                kotlinx.coroutines.withContext(owner) { source.providerModels(provider, refresh, machine) }
+        }
+    }
+
     /** `GET /api/v1/model-config`; [ModelConfigurationUnsupported] from hubs without it. */
     suspend fun catalog(): ModelCatalog
 

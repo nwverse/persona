@@ -82,7 +82,7 @@ class SourcesShotsTest {
                             Page.Feishu -> FeishuConnectorPage(Connectors, onBack = {}, onAgentModel = {})
                             Page.Channels -> ChannelsPage(Channels, onBack = {}, onChannel = {}, onMarketExtension = { _, _ -> })
                             Page.Channel -> ChannelPage(Channels, "chat", onBack = {}, onOpen = {})
-                            Page.Models -> ModelConfigurationPage(Models, onBack = {}, onPurpose = {}, providers = Providers)
+                            Page.Models -> ModelConfigurationPage(Models, onBack = {}, onPurpose = { _, _ -> }, providers = Providers)
                             Page.Purpose -> ModelPurposePage(Models, "agent.new", onBack = {}, providers = Providers)
                             Page.NewProvider -> NewProviderPage(Providers, onBack = {}, onSaved = {})
                             Page.NewPreset -> NewProviderPage(Providers, onBack = {}, onSaved = {}, preferPreset = true)

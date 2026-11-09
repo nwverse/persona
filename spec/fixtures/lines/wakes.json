@@ -3,12 +3,12 @@
   "domain": "lines",
   "cases": [
     {
-      "name": "long_answer_before_wake",
-      "description": "唤醒前的完整回复比后续短回复长时保留在主列表。",
+      "name": "short_reply_after_wake_is_the_answer",
+      "description": "A long reply before a wake does not keep the answer: the shorter reply after the wake is the answer, and the earlier reply and the wake fold into the work line.",
       "source": [
         "ios/Shared/ChatStore.swift: buildRows / ChatBlock.build",
         "ios/Persona/Views/Chat/ChatView.swift: chatLines / workItems / unfoldWork",
-        "ios/PersonaTests/ChatStoreTests.swift: backgroundWakeKeepsTheSubstantialAnswer"
+        "ios/PersonaTests/ChatStoreTests.swift: backgroundWakeEndsOnTheNewestWords"
       ],
       "input": {
         "items": [
@@ -89,23 +89,46 @@
                 "result_text": null,
                 "running": true,
                 "type": "tool"
+              },
+              {
+                "type": "narration",
+                "id": "t-3#0",
+                "item_id": "3#0",
+                "text": "检查已完成：示例配置、文档和测试均已核对，可以继续下一项。"
+              },
+              {
+                "id": "4#0",
+                "type": "notice",
+                "text": "后台任务完成"
+              },
+              {
+                "type": "tool",
+                "id": "5#0",
+                "call_id": "b",
+                "name": "Bash",
+                "result_id": null,
+                "result_text": null,
+                "running": true,
+                "failed": false,
+                "image_count": 0
               }
             ],
             "summary_full": [
-              "工具 1"
+              "工具 3",
+              "回复 1"
             ],
             "summary_short": [
-              "工具 1"
+              "工具 3"
             ],
             "thoughts": 0,
-            "tools": 1,
+            "tools": 2,
             "type": "work",
-            "unresolved_tools": 1
+            "unresolved_tools": 2
           },
           {
-            "id": "3#0",
+            "id": "6#0",
             "is_input": false,
-            "text": "检查已完成：示例配置、文档和测试均已核对，可以继续下一项。",
+            "text": "后台完成",
             "type": "reply"
           },
           {
@@ -173,26 +196,28 @@
               "tools-5#0",
               "6#0"
             ],
-            "answer_id": "3#0",
+            "answer_id": "6#0",
             "end": null,
             "id": "1#0",
-            "interim_count": 0,
+            "interim_count": 1,
             "ordered_ids": [
               "1#0",
               "tools-2#0",
-              "3#0"
-            ],
-            "process_ids": [
-              "tools-2#0"
-            ],
-            "start": null,
-            "tail_ids": [
+              "3#0",
               "4#0",
               "tools-5#0",
               "6#0"
             ],
+            "process_ids": [
+              "tools-2#0",
+              "3#0",
+              "4#0",
+              "tools-5#0"
+            ],
+            "start": null,
+            "tail_ids": [],
             "thought_count": 0,
-            "tool_count": 1,
+            "tool_count": 2,
             "trailing_ids": [],
             "user_ids": [
               "1#0"
@@ -203,15 +228,15 @@
           }
         ]
       },
-      "from_test": "backgroundWakeKeepsTheSubstantialAnswer"
+      "from_test": "backgroundWakeEndsOnTheNewestWords"
     },
     {
       "name": "long_answer_after_wake",
-      "description": "唤醒后的完整回复更长时，之前的回复和唤醒并入工作行。",
+      "description": "The reply after the wake is the answer; the earlier reply and the wake fold into the work line.",
       "source": [
         "ios/Shared/ChatStore.swift: buildRows / ChatBlock.build",
         "ios/Persona/Views/Chat/ChatView.swift: chatLines / workItems / unfoldWork",
-        "ios/PersonaTests/ChatStoreTests.swift: backgroundWakeKeepsTheSubstantialAnswer"
+        "ios/PersonaTests/ChatStoreTests.swift: backgroundWakeEndsOnTheNewestWords"
       ],
       "input": {
         "items": [
@@ -431,7 +456,7 @@
           }
         ]
       },
-      "from_test": "backgroundWakeKeepsTheSubstantialAnswer"
+      "from_test": "backgroundWakeEndsOnTheNewestWords"
     },
     {
       "name": "notification_without_wake",
@@ -439,7 +464,7 @@
       "source": [
         "ios/Shared/ChatStore.swift: buildRows / ChatBlock.build",
         "ios/Persona/Views/Chat/ChatView.swift: chatLines / workItems / unfoldWork",
-        "ios/PersonaTests/ChatStoreTests.swift: backgroundWakeKeepsTheSubstantialAnswer"
+        "ios/PersonaTests/ChatStoreTests.swift: backgroundWakeEndsOnTheNewestWords"
       ],
       "input": {
         "items": [
@@ -552,11 +577,11 @@
           }
         ]
       },
-      "from_test": "backgroundWakeKeepsTheSubstantialAnswer"
+      "from_test": "backgroundWakeEndsOnTheNewestWords"
     },
     {
       "name": "wake_after_recap_reopens_turn",
-      "description": "回顾后的后台唤醒仍归原轮，回顾标记位置保持不变。",
+      "description": "A wake after a recap stays in its exchange and its reply is the answer; the recap stays where it was.",
       "source": [
         "ios/Shared/ChatStore.swift: buildRows / ChatBlock.build",
         "ios/Persona/Views/Chat/ChatView.swift: chatLines / workItems / unfoldWork",
@@ -619,73 +644,120 @@
             "type": "user"
           },
           {
-            "id": "2#0",
+            "id": "w-1#0",
             "is_input": false,
-            "text": "检查已完成：示例配置、文档和测试均已核对，可以继续下一项。",
-            "type": "reply"
+            "type": "work",
+            "live": false,
+            "open": false,
+            "start": null,
+            "end": null,
+            "elapsed_seconds": null,
+            "duration_text": "",
+            "tools": 1,
+            "thoughts": 0,
+            "known_failed_tools": 0,
+            "unresolved_tools": 1,
+            "contains_fold": false,
+            "summary_full": [
+              "工具 2",
+              "回复 1"
+            ],
+            "summary_short": [
+              "工具 2"
+            ],
+            "steps": [
+              {
+                "type": "narration",
+                "id": "t-2#0",
+                "item_id": "2#0",
+                "text": "检查已完成：示例配置、文档和测试均已核对，可以继续下一项。"
+              },
+              {
+                "id": "4#0",
+                "type": "notice",
+                "text": "后台任务完成"
+              },
+              {
+                "type": "tool",
+                "id": "5#0",
+                "call_id": "b",
+                "name": "Bash",
+                "result_id": null,
+                "result_text": null,
+                "running": true,
+                "failed": false,
+                "image_count": 0
+              }
+            ]
           },
           {
+            "id": "6#0",
+            "is_input": false,
+            "type": "reply",
+            "text": "后台完成"
+          },
+          {
+            "id": "wk-1#0",
+            "is_input": false,
+            "type": "wakes",
+            "notice_ids": [
+              "4#0"
+            ],
+            "live": false,
             "drawer_lines": [
               {
-                "contains_fold": false,
-                "duration_text": "",
-                "elapsed_seconds": null,
-                "end": null,
                 "id": "dw-4#0",
                 "is_input": false,
-                "known_failed_tools": 0,
+                "type": "work",
                 "live": false,
                 "open": false,
                 "start": null,
-                "steps": [
-                  {
-                    "id": "4#0",
-                    "text": "后台任务完成",
-                    "type": "notice"
-                  },
-                  {
-                    "call_id": "b",
-                    "failed": false,
-                    "id": "5#0",
-                    "image_count": 0,
-                    "name": "Bash",
-                    "result_id": null,
-                    "result_text": null,
-                    "running": true,
-                    "type": "tool"
-                  }
-                ],
+                "end": null,
+                "elapsed_seconds": null,
+                "duration_text": "",
+                "tools": 1,
+                "thoughts": 0,
+                "known_failed_tools": 0,
+                "unresolved_tools": 1,
+                "contains_fold": false,
                 "summary_full": [
                   "工具 2"
                 ],
                 "summary_short": [
                   "工具 2"
                 ],
-                "thoughts": 0,
-                "tools": 1,
-                "type": "work",
-                "unresolved_tools": 1
+                "steps": [
+                  {
+                    "id": "4#0",
+                    "type": "notice",
+                    "text": "后台任务完成"
+                  },
+                  {
+                    "type": "tool",
+                    "id": "5#0",
+                    "call_id": "b",
+                    "name": "Bash",
+                    "result_id": null,
+                    "result_text": null,
+                    "running": true,
+                    "failed": false,
+                    "image_count": 0
+                  }
+                ]
               },
               {
                 "id": "6#0",
                 "is_input": false,
-                "text": "后台完成",
-                "type": "reply"
+                "type": "reply",
+                "text": "后台完成"
               }
-            ],
-            "id": "wk-1#0",
-            "is_input": false,
-            "live": false,
-            "notice_ids": [
-              "4#0"
-            ],
-            "type": "wakes"
+            ]
           },
           {
             "id": "3#0",
             "is_input": false,
-            "text": "recap",
-            "type": "recap"
+            "type": "recap",
+            "text": "recap"
           }
         ],
         "turns": [
@@ -695,23 +767,26 @@
               "tools-5#0",
               "6#0"
             ],
-            "answer_id": "2#0",
+            "answer_id": "6#0",
             "end": null,
             "id": "1#0",
-            "interim_count": 0,
+            "interim_count": 1,
             "ordered_ids": [
               "1#0",
-              "2#0"
-            ],
-            "process_ids": [],
-            "start": null,
-            "tail_ids": [
+              "2#0",
               "4#0",
               "tools-5#0",
               "6#0"
             ],
+            "process_ids": [
+              "2#0",
+              "4#0",
+              "tools-5#0"
+            ],
+            "start": null,
+            "tail_ids": [],
             "thought_count": 0,
-            "tool_count": 0,
+            "tool_count": 1,
             "trailing_ids": [],
             "user_ids": [
               "1#0"
@@ -725,8 +800,8 @@
       "from_test": "wakeAfterARecapStaysInItsExchange"
     },
     {
-      "name": "multiple_wakes_pick_middle_answer",
-      "description": "多次唤醒只保留最长候选回复，之后内容进入抽屉。",
+      "name": "multiple_wakes_pick_latest_answer",
+      "description": "Several wakes: the latest run's reply is the answer, the earlier replies and wakes fold into the work line, nothing is left behind the chip.",
       "source": [
         "ios/Shared/ChatStore.swift: buildRows / ChatBlock.build",
         "ios/Persona/Views/Chat/ChatView.swift: chatLines / workItems / unfoldWork"
@@ -832,24 +907,57 @@
                 "id": "3#0",
                 "text": "后台任务完成",
                 "type": "notice"
+              },
+              {
+                "type": "narration",
+                "id": "t-4#0",
+                "item_id": "4#0",
+                "text": "检查已完成：示例配置、文档和测试均已核对，可以继续下一项。"
+              },
+              {
+                "id": "5#0",
+                "type": "notice",
+                "text": "后台任务完成"
+              },
+              {
+                "type": "narration",
+                "id": "t-6#0",
+                "item_id": "6#0",
+                "text": "结束"
+              },
+              {
+                "id": "7#0",
+                "type": "notice",
+                "text": "后台任务完成"
+              },
+              {
+                "type": "tool",
+                "id": "8#0",
+                "call_id": "call_a",
+                "name": "Bash",
+                "result_id": null,
+                "result_text": null,
+                "running": true,
+                "failed": false,
+                "image_count": 0
               }
             ],
             "summary_full": [
-              "工具 1",
-              "回复 1"
+              "工具 4",
+              "回复 3"
             ],
             "summary_short": [
-              "工具 1"
+              "工具 4"
             ],
             "thoughts": 0,
-            "tools": 0,
+            "tools": 1,
             "type": "work",
-            "unresolved_tools": 0
+            "unresolved_tools": 1
           },
           {
-            "id": "4#0",
+            "id": "9#0",
             "is_input": false,
-            "text": "检查已完成：示例配置、文档和测试均已核对，可以继续下一项。",
+            "text": "已完成",
             "type": "reply"
           },
           {
@@ -946,30 +1054,34 @@
               "tools-8#0",
               "9#0"
             ],
-            "answer_id": "4#0",
+            "answer_id": "9#0",
             "end": null,
             "id": "1#0",
-            "interim_count": 1,
+            "interim_count": 3,
             "ordered_ids": [
               "1#0",
               "2#0",
               "3#0",
-              "4#0"
-            ],
-            "process_ids": [
-              "2#0",
-              "3#0"
-            ],
-            "start": null,
-            "tail_ids": [
+              "4#0",
               "5#0",
               "6#0",
               "7#0",
               "tools-8#0",
               "9#0"
             ],
+            "process_ids": [
+              "2#0",
+              "3#0",
+              "4#0",
+              "5#0",
+              "6#0",
+              "7#0",
+              "tools-8#0"
+            ],
+            "start": null,
+            "tail_ids": [],
             "thought_count": 0,
-            "tool_count": 0,
+            "tool_count": 1,
             "trailing_ids": [],
             "user_ids": [
               "1#0"
@@ -985,181 +1097,8 @@
       "derived": true
     },
     {
-      "name": "equal_length_prefers_later_answer",
-      "description": "候选回复等长时取后一次唤醒后的回复。",
-      "source": [
-        "ios/Shared/ChatStore.swift: buildRows / ChatBlock.build",
-        "ios/Persona/Views/Chat/ChatView.swift: chatLines / workItems / unfoldWork"
-      ],
-      "input": {
-        "items": [
-          {
-            "id": "1#0",
-            "seq": 1,
-            "role": "user",
-            "kind": "text",
-            "text": "请检查示例项目"
-          },
-          {
-            "id": "2#0",
-            "seq": 2,
-            "role": "assistant",
-            "kind": "text",
-            "text": "甲乙丙丁"
-          },
-          {
-            "id": "3#0",
-            "seq": 3,
-            "role": "system",
-            "kind": "notice",
-            "text": "后台任务完成",
-            "wake": true
-          },
-          {
-            "id": "4#0",
-            "seq": 4,
-            "role": "assistant",
-            "kind": "text",
-            "text": "一二三四"
-          }
-        ]
-      },
-      "expected": {
-        "lines": [
-          {
-            "id": "1#0",
-            "is_input": true,
-            "text": "请检查示例项目",
-            "type": "user"
-          },
-          {
-            "contains_fold": false,
-            "duration_text": "",
-            "elapsed_seconds": null,
-            "end": null,
-            "id": "w-1#0",
-            "is_input": false,
-            "known_failed_tools": 0,
-            "live": false,
-            "open": false,
-            "start": null,
-            "steps": [
-              {
-                "id": "t-2#0",
-                "item_id": "2#0",
-                "text": "甲乙丙丁",
-                "type": "narration"
-              },
-              {
-                "id": "3#0",
-                "text": "后台任务完成",
-                "type": "notice"
-              }
-            ],
-            "summary_full": [
-              "工具 1",
-              "回复 1"
-            ],
-            "summary_short": [
-              "工具 1"
-            ],
-            "thoughts": 0,
-            "tools": 0,
-            "type": "work",
-            "unresolved_tools": 0
-          },
-          {
-            "id": "4#0",
-            "is_input": false,
-            "text": "一二三四",
-            "type": "reply"
-          },
-          {
-            "drawer_lines": [
-              {
-                "contains_fold": false,
-                "duration_text": "",
-                "elapsed_seconds": null,
-                "end": null,
-                "id": "dw-3#0",
-                "is_input": false,
-                "known_failed_tools": 0,
-                "live": false,
-                "open": false,
-                "start": null,
-                "steps": [
-                  {
-                    "id": "3#0",
-                    "text": "后台任务完成",
-                    "type": "notice"
-                  }
-                ],
-                "summary_full": [
-                  "工具 1"
-                ],
-                "summary_short": [
-                  "工具 1"
-                ],
-                "thoughts": 0,
-                "tools": 0,
-                "type": "work",
-                "unresolved_tools": 0
-              },
-              {
-                "id": "4#0",
-                "is_input": false,
-                "text": "一二三四",
-                "type": "reply"
-              }
-            ],
-            "id": "wk-1#0",
-            "is_input": false,
-            "live": false,
-            "notice_ids": [
-              "3#0"
-            ],
-            "type": "wakes"
-          }
-        ],
-        "turns": [
-          {
-            "after_wake_ids": [
-              "3#0",
-              "4#0"
-            ],
-            "answer_id": "4#0",
-            "end": null,
-            "id": "1#0",
-            "interim_count": 1,
-            "ordered_ids": [
-              "1#0",
-              "2#0",
-              "3#0",
-              "4#0"
-            ],
-            "process_ids": [
-              "2#0",
-              "3#0"
-            ],
-            "start": null,
-            "tail_ids": [],
-            "thought_count": 0,
-            "tool_count": 0,
-            "trailing_ids": [],
-            "user_ids": [
-              "1#0"
-            ],
-            "wake_ids": [
-              "3#0"
-            ]
-          }
-        ]
-      },
-      "derived": true
-    },
-    {
       "name": "only_last_reply_in_each_wake_is_candidate",
-      "description": "每次唤醒之间只以最后一条回复参加长度比较。",
+      "description": "Only the last reply of the latest run is the answer; the replies before it are narration in the work line.",
       "source": [
         "ios/Shared/ChatStore.swift: buildRows / ChatBlock.build",
         "ios/Persona/Views/Chat/ChatView.swift: chatLines / workItems / unfoldWork"
@@ -1990,7 +1929,7 @@
     },
     {
       "name": "photos_after_wake_stay_with_message",
-      "description": "唤醒后被吸收的图片保留在用户消息处，不进入后续抽屉。",
+      "description": "Pictures absorbed after a wake stay with their message, never in the tail or the drawer; the latest reply is the answer.",
       "source": [
         "ios/Shared/ChatStore.swift: buildRows / ChatBlock.build",
         "ios/Persona/Views/Chat/ChatView.swift: chatLines / workItems / unfoldWork",
@@ -2064,10 +2003,46 @@
             "text": "开始"
           },
           {
-            "id": "2#0",
+            "id": "w-1#0",
+            "is_input": false,
+            "type": "work",
+            "live": false,
+            "open": false,
+            "start": null,
+            "end": null,
+            "elapsed_seconds": null,
+            "duration_text": "",
+            "tools": 0,
+            "thoughts": 0,
+            "known_failed_tools": 0,
+            "unresolved_tools": 0,
+            "contains_fold": false,
+            "summary_full": [
+              "工具 1",
+              "回复 1"
+            ],
+            "summary_short": [
+              "工具 1"
+            ],
+            "steps": [
+              {
+                "type": "narration",
+                "id": "t-2#0",
+                "item_id": "2#0",
+                "text": "好的，在跑"
+              },
+              {
+                "id": "3#0",
+                "type": "notice",
+                "text": "后台任务完成"
+              }
+            ]
+          },
+          {
+            "id": "4#0",
             "is_input": false,
             "type": "reply",
-            "text": "好的，在跑"
+            "text": "跑完了，结果如下：示例检查已全部完成"
           },
           {
             "id": "img-message#1",
@@ -2080,35 +2055,39 @@
           {
             "id": "message#0",
             "is_input": true,
-            "text": "看这个",
-            "type": "user"
+            "type": "user",
+            "text": "看这个"
           },
           {
+            "id": "6#0",
+            "is_input": false,
+            "type": "reply",
+            "text": "收到"
+          },
+          {
+            "id": "wk-1#0",
+            "is_input": false,
+            "type": "wakes",
+            "notice_ids": [
+              "3#0"
+            ],
+            "live": false,
             "drawer_lines": [
               {
-                "contains_fold": false,
-                "duration_text": "",
-                "elapsed_seconds": null,
-                "end": null,
                 "id": "dw-3#0",
                 "is_input": false,
-                "known_failed_tools": 0,
+                "type": "work",
                 "live": false,
                 "open": false,
                 "start": null,
-                "steps": [
-                  {
-                    "id": "3#0",
-                    "text": "后台任务完成",
-                    "type": "notice"
-                  },
-                  {
-                    "id": "t-4#0",
-                    "item_id": "4#0",
-                    "text": "跑完了，结果如下：示例检查已全部完成",
-                    "type": "narration"
-                  }
-                ],
+                "end": null,
+                "elapsed_seconds": null,
+                "duration_text": "",
+                "tools": 0,
+                "thoughts": 0,
+                "known_failed_tools": 0,
+                "unresolved_tools": 0,
+                "contains_fold": false,
                 "summary_full": [
                   "工具 1",
                   "回复 1"
@@ -2116,25 +2095,27 @@
                 "summary_short": [
                   "工具 1"
                 ],
-                "thoughts": 0,
-                "tools": 0,
-                "type": "work",
-                "unresolved_tools": 0
+                "steps": [
+                  {
+                    "id": "3#0",
+                    "type": "notice",
+                    "text": "后台任务完成"
+                  },
+                  {
+                    "type": "narration",
+                    "id": "t-4#0",
+                    "item_id": "4#0",
+                    "text": "跑完了，结果如下：示例检查已全部完成"
+                  }
+                ]
               },
               {
                 "id": "6#0",
                 "is_input": false,
-                "text": "收到",
-                "type": "reply"
+                "type": "reply",
+                "text": "收到"
               }
-            ],
-            "id": "wk-1#0",
-            "is_input": false,
-            "live": false,
-            "notice_ids": [
-              "3#0"
-            ],
-            "type": "wakes"
+            ]
           }
         ],
         "turns": [
@@ -2144,25 +2125,27 @@
               "4#0",
               "6#0"
             ],
-            "answer_id": "2#0",
+            "answer_id": "6#0",
             "end": null,
             "id": "1#0",
-            "interim_count": 0,
+            "interim_count": 2,
             "ordered_ids": [
               "1#0",
               "2#0",
+              "3#0",
+              "4#0",
               "message#0",
-              "message#1"
+              "message#1",
+              "6#0"
             ],
             "process_ids": [
+              "2#0",
+              "3#0",
+              "4#0",
               "message#1"
             ],
             "start": null,
-            "tail_ids": [
-              "3#0",
-              "4#0",
-              "6#0"
-            ],
+            "tail_ids": [],
             "thought_count": 0,
             "tool_count": 0,
             "trailing_ids": [],
@@ -2177,178 +2160,6 @@
         ]
       },
       "from_test": "picturesSentAfterAWakeStayWithTheirMessage"
-    },
-    {
-      "name": "answer_length_uses_grapheme_clusters",
-      "description": "候选回复按 Swift 字符数比较，复合表情计作一个字符。",
-      "source": [
-        "ios/Shared/ChatStore.swift: Turn.pickAnswerAcrossWakes length(_:)"
-      ],
-      "derived": true,
-      "input": {
-        "items": [
-          {
-            "id": "1#0",
-            "seq": 1,
-            "role": "user",
-            "kind": "text",
-            "text": "继续检查"
-          },
-          {
-            "id": "2#0",
-            "seq": 2,
-            "role": "assistant",
-            "kind": "text",
-            "text": "👨‍👩‍👧‍👦"
-          },
-          {
-            "id": "3#0",
-            "seq": 3,
-            "role": "system",
-            "kind": "notice",
-            "text": "后台完成",
-            "wake": true
-          },
-          {
-            "id": "4#0",
-            "seq": 4,
-            "role": "assistant",
-            "kind": "text",
-            "text": "甲乙"
-          }
-        ]
-      },
-      "expected": {
-        "lines": [
-          {
-            "id": "1#0",
-            "is_input": true,
-            "text": "继续检查",
-            "type": "user"
-          },
-          {
-            "contains_fold": false,
-            "duration_text": "",
-            "elapsed_seconds": null,
-            "end": null,
-            "id": "w-1#0",
-            "is_input": false,
-            "known_failed_tools": 0,
-            "live": false,
-            "open": false,
-            "start": null,
-            "steps": [
-              {
-                "id": "t-2#0",
-                "item_id": "2#0",
-                "text": "👨‍👩‍👧‍👦",
-                "type": "narration"
-              },
-              {
-                "id": "3#0",
-                "text": "后台完成",
-                "type": "notice"
-              }
-            ],
-            "summary_full": [
-              "工具 1",
-              "回复 1"
-            ],
-            "summary_short": [
-              "工具 1"
-            ],
-            "thoughts": 0,
-            "tools": 0,
-            "type": "work",
-            "unresolved_tools": 0
-          },
-          {
-            "id": "4#0",
-            "is_input": false,
-            "text": "甲乙",
-            "type": "reply"
-          },
-          {
-            "drawer_lines": [
-              {
-                "contains_fold": false,
-                "duration_text": "",
-                "elapsed_seconds": null,
-                "end": null,
-                "id": "dw-3#0",
-                "is_input": false,
-                "known_failed_tools": 0,
-                "live": false,
-                "open": false,
-                "start": null,
-                "steps": [
-                  {
-                    "id": "3#0",
-                    "text": "后台完成",
-                    "type": "notice"
-                  }
-                ],
-                "summary_full": [
-                  "工具 1"
-                ],
-                "summary_short": [
-                  "工具 1"
-                ],
-                "thoughts": 0,
-                "tools": 0,
-                "type": "work",
-                "unresolved_tools": 0
-              },
-              {
-                "id": "4#0",
-                "is_input": false,
-                "text": "甲乙",
-                "type": "reply"
-              }
-            ],
-            "id": "wk-1#0",
-            "is_input": false,
-            "live": false,
-            "notice_ids": [
-              "3#0"
-            ],
-            "type": "wakes"
-          }
-        ],
-        "turns": [
-          {
-            "after_wake_ids": [
-              "3#0",
-              "4#0"
-            ],
-            "answer_id": "4#0",
-            "end": null,
-            "id": "1#0",
-            "interim_count": 1,
-            "ordered_ids": [
-              "1#0",
-              "2#0",
-              "3#0",
-              "4#0"
-            ],
-            "process_ids": [
-              "2#0",
-              "3#0"
-            ],
-            "start": null,
-            "tail_ids": [],
-            "thought_count": 0,
-            "tool_count": 0,
-            "trailing_ids": [],
-            "user_ids": [
-              "1#0"
-            ],
-            "wake_ids": [
-              "3#0"
-            ]
-          }
-        ]
-      }
     }
   ]
 }

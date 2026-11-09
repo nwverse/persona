@@ -65,7 +65,10 @@ class HubPairingClientTest {
                 try {
                     client.download(paired.token, update.copy(sha256 = "0".repeat(64)), ByteArrayOutputStream())
                     fail("Checksum mismatch must fail")
-                } catch (_: IllegalStateException) { }
+                } catch (error: HubFailure) {
+                    assertEquals("apk_checksum_mismatch", error.code)
+                    assertFalse(error.retryable)
+                }
                 try {
                     client.download(paired.token, update.copy(downloadUrl = "https://example.com/apk"), ByteArrayOutputStream())
                     fail("Cross-origin download must fail")

@@ -15,11 +15,11 @@ import (
 	"fmt"
 	"github.com/nwverse/persona/server/internal/compat"
 	"github.com/nwverse/persona/server/internal/identity"
+	"github.com/nwverse/persona/server/internal/lazyre"
 	"io/fs"
 	"os"
 	"path"
 	"path/filepath"
-	"regexp"
 	"sort"
 	"strings"
 	"sync"
@@ -46,7 +46,7 @@ var Packages = map[string][]string{
 const OverrideEnv = "PERSONA_RUNTIME_PACKAGES"
 
 // NameRe: a package name.
-var NameRe = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,63}$`)
+var NameRe = lazyre.New(`^[a-z0-9][a-z0-9._-]{0,63}$`)
 
 // MaxSize bounds a package (all its files): far above what a runtime's JS is, far below a message the peers refuse.
 const MaxSize = 8 << 20

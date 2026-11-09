@@ -44,6 +44,14 @@ The `/` front door still opens the main conversation. Previous short assistant U
 
 The runtime reads only `PERSONA_HOME`, lexically resolves an absolute path, `~/…`, or a path relative to HOME, and otherwise uses `~/.persona`. A query does not create files. Initialization creates that one directory and never creates a compatibility symlink or merges another store. An existing valid custom symlink may be used; a dangling or cyclic link is refused rather than repaired into an empty store. A custom root does not create default-directory aliases.
 
+**Two independent stores** (#744). A machine that has not been through the cutover can still have its older default directory (`~/.<previous-name>`) next to `~/.persona` as a store of its own, not an alias. In that case:
+
+- With `PERSONA_HOME` naming one of them, as a node's or Persona Link's service definition does, initialization uses that one. It never aliases the other over it or merges the two.
+- Without `PERSONA_HOME`, initialization (hub, node, Persona Link) refuses: "independent state directories exist". It changes neither directory.
+- A client run without that variable (`personad mcp`, `hook`, `launch`, `notify`) resolves the older directory and dials a socket no node listens on.
+
+Agents never run with the node's environment, so the node writes its root into everything it hands them: `PERSONA_HOME` in the `env` of `mcp.json`'s server, in front of the hook command, and in front of the commands it types into a pane (`docs/integrations/engines.md`, "What a start types").
+
 `PERSONA_CONFIG` selects the build/deploy config; otherwise only `~/.config/persona/config.json` is read. The config script emits only `PERSONA_*` build variables and uses the existing configured registration values unchanged. It does not export tokens or bridge environment names.
 
 <a id="部署脚本按服务恢复运行目录"></a>
@@ -62,6 +70,6 @@ The resolver supports systemd unit resets, sorted drop-ins, `XDG_CONFIG_HOME`, `
 - Compile and unit-test Android with the available Linux SDK; keep the Health Connect `ViewPermissionUsageActivity` alias, which is a platform permission entry rather than a previous-brand alias.
 - On this Linux lane, Apple changes are text-only. Validate plist/YAML/symbol references statically, then build the project, all apps/extensions, tests, AppIntents and signing artifacts on a Mac. Screenshots and real-device upgrade behavior are separate acceptance checks.
 - Generate extension wire code centrally with `python3 scripts/gen/extension_schema.py`; `--check` must show no drift. Do not hand-edit generated Swift/Kotlin/Go/TypeScript.
-- Rebase onto the latest master before the single PR is pushed, rename any newly merged previous-brand additions, rerun affected verification, and scan the merged `origin/master` again.
+- Rebase onto the latest `origin/main` before the single PR is pushed, rename any newly merged previous-brand additions, rerun affected verification, and scan the merged `origin/main` again.
 
 Historical [acceptance](rename.md) and [audit](rename.md) records describe earlier stages, not authorization to run this incompatible cutover. Previous compatibility guarantees no longer apply to this version. Do not deploy, publish, restart live services, move live data or change live MCP configuration until the user approves the operational plan.

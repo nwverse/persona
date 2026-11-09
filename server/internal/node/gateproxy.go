@@ -15,13 +15,13 @@ import (
 	"net/http/httputil"
 	"net/url"
 	"reflect"
-	"regexp"
 	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
@@ -308,8 +308,17 @@ func (p *gateProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		isJSON = len(body) <= gateBodyMax // longer: no rule's body matches it, nor does a body confirmed
 		if isJSON {
 			c.Body = string(body)
+			// All of the body is in hand, so it goes on from here and not from the server's: once the proxy begins to
+			// answer, net/http closes the server's body and a read of it fails, and the transport does read it, past the
+			// body's length, to see that there was no more. Where that read comes after the API's answer has begun, the
+			// failed read closes the connection to the API with the answer half read.
+			r.Body = io.NopCloser(bytes.NewReader(body))
+		} else {
+			r.Body = io.NopCloser(io.MultiReader(bytes.NewReader(body), gateRest(r, len(body))))
 		}
-		r.Body = io.NopCloser(io.MultiReader(bytes.NewReader(body), r.Body))
+	} else if r.ContentLength > 0 {
+		// Not read here: it goes on from the server's, to the length it says and no further (see gateRest).
+		r.Body = gateBody{gateRest(r, 0), r.Body}
 	}
 	// How the call was let through, for the ledger once the API has taken it.
 	session, through := gk.session, proto.LarkLetThrough{}
@@ -373,6 +382,24 @@ func (p *gateProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		},
 	}
 	rp.ServeHTTP(sw, r)
+}
+
+// gateBody is a request's body on its way to the API: what is read of it, and the server's body to close.
+type gateBody struct {
+	io.Reader
+	io.Closer
+}
+
+// gateRest is what is left of the request's body after got bytes of it were read, no more than its Content-Length says.
+// The transport reads once past the length of a body it sends, to see that there was no more, and that read must end
+// here and not reach the server's body: net/http closes that as soon as the proxy begins to answer, and a read of it
+// then fails and closes the connection to the API with the answer half read. A body of unknown length (chunked) goes
+// on as it is: it is sent to its end, and nothing reads past that.
+func gateRest(r *http.Request, got int) io.Reader {
+	if r.ContentLength < 0 {
+		return r.Body
+	}
+	return io.LimitReader(r.Body, max(r.ContentLength-int64(got), 0))
 }
 
 // statusWriter keeps the status the API answered with, which ReverseProxy writes through it, and, for a write (reply is
@@ -541,7 +568,7 @@ func gatePassHeader(name string, allowed []string) bool {
 	return name != "authorization" && slices.Contains(allowed, name)
 }
 
-var gateAuthRef = regexp.MustCompile(`\$\{([A-Z_][A-Z0-9_]*)\}`)
+var gateAuthRef = lazyre.New(`\$\{([A-Z_][A-Z0-9_]*)\}`)
 
 // gateAuthValue is a gate's Auth.Value with its credentials filled in.
 func gateAuthValue(tmpl string, env map[string]string) string {

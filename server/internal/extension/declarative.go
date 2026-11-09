@@ -4,10 +4,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
-	"regexp"
 	"strconv"
 	"strings"
 	"unicode/utf8"
+
+	"github.com/nwverse/persona/server/internal/lazyre"
 )
 
 // Declarative contributions (docs/extensions/extensions.md "Declarative-only contributions", #1854): an extension made of a manifest and a few files,
@@ -58,7 +59,7 @@ type TriageTemplateItem struct {
 // TriageTemplateMost is the longest template (runes), as triage_rules is read.
 const TriageTemplateMost = 4000
 
-var hexColor = regexp.MustCompile(`^#[0-9A-Fa-f]{6}$`)
+var hexColor = lazyre.New(`^#[0-9A-Fa-f]{6}$`)
 
 func init() {
 	Points["skills"] = Point{Name: "skills", Namespace: "skills", Version: 1, Item: func(raw json.RawMessage) (string, error) {

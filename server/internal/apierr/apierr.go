@@ -218,6 +218,12 @@ var rpcFailureKeys = map[string]string{
 	"worktree_in_use":   "rpc-errors.worktree_in_use",
 	"worktree_dirty":    "rpc-errors.worktree_dirty",
 	"worktree_unmerged": "rpc-errors.worktree_unmerged",
+	// a Claude session outside Persona's terminals, through its peer inbox (node/claudepeer.go)
+	"peer_unsupported": "rpc-errors.peer_unsupported",
+	"peer_unreachable": "rpc-errors.peer_unreachable",
+	"peer_too_long":    "rpc-errors.peer_too_long",
+	"peer_unconfirmed": "rpc-errors.peer_unconfirmed",
+	"peer_command":     "rpc-errors.peer_command",
 }
 
 func localizeFailure(body map[string]any, status int, err error, l i18n.Lang) {
@@ -306,21 +312,46 @@ func OnMachine(err error, name string) error {
 
 // explain makes body say code's refusal in plain words in l (none: the default language): error is the sentence for
 // people, detail what the caller wrote (the shell's own words: only for the "Details"), action what to do unless the caller
-// said. The caller's data may name the machine (machine_name, OnMachine; else the text says "this computer") and the launcher.
+// said. The caller's data may name the machine (machine_name, OnMachine; else the text says "this computer"), the launcher,
+// and where it failed (Sentence).
 func explain(body map[string]any, code, message string, l i18n.Lang) {
-	name, _ := body["machine_name"].(string)
-	launcher, _ := body["launcher"].(string)
-	key := "apierr-apierr." + code
-	if name == "" && i18n.Has(key+"_here") {
-		key += "_here" // "this computer"
-	}
-	body["error"] = i18n.T(l, key, i18n.Args{"machine": name, "launcher": launcher})
+	body["error"] = Sentence(l, code, body)
 	if d, _ := body["detail"].(string); d == "" {
 		body["detail"] = message
 	}
 	if a, _ := body["action"].(string); a == "" {
 		body["action"] = codeActions[code]
 	}
+}
+
+// Sentence is the plain words in l of code, one of the refusals the hub words itself (codeActions; "" for any other),
+// by its data: machine_name (else "this computer"), launcher, and of a start the new tab's shell could not run
+// (where "terminal", node/shellmiss.go) what it could not run (missing, kind), that shell (pane_shell) and the shell
+// and rc file the launchers are listed in (launcher_shell, rc_file). What a 409 says, and a session's start_error.
+func Sentence(l i18n.Lang, code string, data map[string]any) string {
+	if _, ok := codeActions[code]; !ok {
+		return ""
+	}
+	arg := func(k string) string { s, _ := data[k].(string); return s }
+	key := "apierr-apierr." + code
+	if arg("where") == "terminal" {
+		v := key + "_terminal"
+		if k := arg("kind"); (k == "no_such_file" || k == "permission_denied") && i18n.Has(v+"_path") {
+			v += "_path" // a path the shell could not run (a managed launcher's personad)
+		}
+		if i18n.Has(v) {
+			key = v
+		}
+	}
+	if arg("machine_name") == "" && i18n.Has(key+"_here") {
+		key += "_here" // "this computer"
+	}
+	pane := arg("pane_shell")
+	if pane == "" && arg("where") == "terminal" { // the node could not tell which shell the tab runs
+		pane = i18n.T(l, "apierr-apierr.terminal_default_shell")
+	}
+	return i18n.T(l, key, i18n.Args{"machine": arg("machine_name"), "launcher": arg("launcher"), "missing": arg("missing"),
+		"pane_shell": pane, "launcher_shell": arg("launcher_shell"), "rc_file": arg("rc_file")})
 }
 
 // Reason is the failure in an error body read back from another hub or service: the original text when the summary

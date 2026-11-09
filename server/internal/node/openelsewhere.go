@@ -52,6 +52,10 @@ type claudeProc struct {
 	// ProcStart is when that process started, as Claude Code writes it (on Linux the starttime of /proc/<pid>/stat): a
 	// file left by a claude that exited names a pid that may belong to another program by now.
 	ProcStart string `json:"procStart"`
+	// The claude's peer inbox (claudepeer.go): where it listens and the protocol it speaks.
+	MessagingSocketPath string `json:"messagingSocketPath"`
+	PeerProtocol        int    `json:"peerProtocol"`
+	dir                 string // the sessions directory the file is in (its key file is next to it)
 }
 
 // liveClaudes reads the sessions/<pid>.json of every claude still running, in every config directory, once per pid.
@@ -59,7 +63,8 @@ func (n *Node) liveClaudes() []claudeProc {
 	var out []claudeProc
 	seen := map[int]bool{}
 	for _, dir := range n.claudeConfigDirs() {
-		files, _ := filepath.Glob(filepath.Join(dir, "sessions", "*.json"))
+		sessions := filepath.Join(dir, "sessions")
+		files, _ := filepath.Glob(filepath.Join(sessions, "*.json"))
 		for _, f := range files {
 			p, err := strconv.Atoi(strings.TrimSuffix(filepath.Base(f), ".json"))
 			if err != nil || p <= 0 || seen[p] {
@@ -73,7 +78,7 @@ func (n *Node) liveClaudes() []claudeProc {
 			if err != nil {
 				continue
 			}
-			c := claudeProc{pid: p}
+			c := claudeProc{pid: p, dir: sessions}
 			if json.Unmarshal(b, &c) != nil || !sameProcess(p, claudeFileStart(c.ProcStart)) {
 				continue // a file left by a claude that exited (its pid may have been reused)
 			}
@@ -84,10 +89,11 @@ func (n *Node) liveClaudes() []claudeProc {
 	return out
 }
 
-// whereOpen names the client a claude runs in, from its entrypoint.
+// whereOpen names the client a claude runs in, from its entrypoint. The desktop app writes "claude-desktop" and, in
+// some builds, a suffix ("claude-desktop-3p"); all of them are the desktop app.
 func whereOpen(entrypoint string) string {
 	switch {
-	case entrypoint == "claude-desktop":
+	case desktopEntrypoint(entrypoint):
 		return "Claude 桌面版"
 	case entrypoint == "cli":
 		return "电脑上的一个终端"
@@ -96,6 +102,11 @@ func whereOpen(entrypoint string) string {
 	default:
 		return "电脑上的另一个地方"
 	}
+}
+
+// desktopEntrypoint: the claude runs in Claude's desktop app.
+func desktopEntrypoint(entrypoint string) bool {
+	return strings.HasPrefix(entrypoint, "claude-desktop")
 }
 
 // openElsewhereRefusal is the refusal for a resume of a session open in another client, nil when none has it open.

@@ -19,14 +19,17 @@ struct ImagePagerView: UIViewRepresentable {
     var onPullEnd: (Bool) -> Void
     /// A page came on (or next to) the screen without its picture: load it.
     var onNeed: (Int) -> Void
+    /// Pages whose picture did not load (#182): they draw `failure` instead of a spinner.
+    var failed: Set<Int> = []
+    var failure: (Int) -> AnyView = { _ in AnyView(EmptyView()) }
 
     func makeUIView(context: Context) -> PagerScrollView { PagerScrollView() }
 
     func updateUIView(_ v: PagerScrollView, context: Context) {
         let index = $index
-        v.handlers = .init(tap: onTap, pull: onPull, pullEnd: onPullEnd, need: onNeed,
+        v.handlers = .init(tap: onTap, pull: onPull, pullEnd: onPullEnd, need: onNeed, failure: failure,
                            page: { i in if index.wrappedValue != i { index.wrappedValue = i } })
-        v.update(count: count, images: images, page: index.wrappedValue)
+        v.update(count: count, images: images, failed: failed, page: index.wrappedValue)
     }
 }
 
@@ -36,6 +39,8 @@ final class PagerScrollView: UIScrollView, UIScrollViewDelegate {
         var pull: (CGFloat) -> Void = { _ in }
         var pullEnd: (Bool) -> Void = { _ in }
         var need: (Int) -> Void = { _ in }
+        /// What a page that did not load says.
+        var failure: (Int) -> AnyView = { _ in AnyView(EmptyView()) }
         /// The pages came to rest on this one.
         var page: (Int) -> Void = { _ in }
     }
@@ -43,6 +48,7 @@ final class PagerScrollView: UIScrollView, UIScrollViewDelegate {
     var handlers = Handlers()
     private var count = 0
     private var images: [Int: UIImage] = [:]
+    private var failed: Set<Int> = []
     /// The page at rest (where a size change keeps the pages).
     private var page = 0
     private var pages: [Int: PagerPage] = [:]
@@ -82,14 +88,16 @@ final class PagerScrollView: UIScrollView, UIScrollViewDelegate {
         return super.gestureRecognizerShouldBegin(g)
     }
 
-    /// From SwiftUI: how many, the pictures so far, the page it wants (a thumbnail tapped, or the one it opened on).
-    func update(count: Int, images: [Int: UIImage], page wanted: Int) {
+    /// From SwiftUI: how many, the pictures so far, the ones that did not load, the page it wants (a thumbnail tapped,
+    /// or the one it opened on).
+    func update(count: Int, images: [Int: UIImage], failed: Set<Int> = [], page wanted: Int) {
         if count != self.count { self.count = count; setNeedsLayout() }
         #if DEBUG
         ImagePagingProbe.shared.updated(images, previous: self.images)
         #endif
         self.images = images
-        for (i, p) in pages { p.show(images[i]) }
+        self.failed = failed
+        for (i, p) in pages { show(p, i) }
         let target = min(max(0, wanted), max(0, count - 1))
         // A swipe under way decides where it ends; the binding catches up when it comes to rest.
         guard target != page, resting, !moving else { return }
@@ -157,9 +165,14 @@ final class PagerScrollView: UIScrollView, UIScrollViewDelegate {
             })
         pages[i] = p
         addSubview(p)
-        p.show(images[i])
-        if images[i] == nil { handlers.need(i) }
+        show(p, i)
+        // One that did not load waits for Retry.
+        if images[i] == nil, !failed.contains(i) { handlers.need(i) }
         return p
+    }
+
+    private func show(_ p: PagerPage, _ i: Int) {
+        p.show(images[i], failure: images[i] == nil && failed.contains(i) ? handlers.failure(i) : nil)
     }
 
     /// Ends on the nearest whole page, then says which.
@@ -218,12 +231,15 @@ final class PagerScrollView: UIScrollView, UIScrollViewDelegate {
     }
 }
 
-/// One page: a spinner until its picture is there, then the zooming picture.
+/// One page: a spinner until its picture is there, then the zooming picture; what the viewer says instead when the
+/// picture did not load (#182). That is SwiftUI inside the page, so a swipe starting on it still turns the page and it
+/// moves with the page.
 final class PagerPage: UIView {
     var handlers = ZoomScrollView.Handlers()
     private let index: Int
     private let spinner = UIActivityIndicatorView(style: .medium)
     private var zoom: ZoomScrollView?
+    private var failure: UIHostingController<AnyView>?
 
     init(index: Int) {
         self.index = index
@@ -236,7 +252,21 @@ final class PagerPage: UIView {
 
     required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
 
-    func show(_ image: UIImage?) {
+    func show(_ image: UIImage?, failure said: AnyView? = nil) {
+        if let said, image == nil {
+            spinner.stopAnimating()
+            if let failure { failure.rootView = said; return }
+            let host = UIHostingController(rootView: said)
+            host.view.backgroundColor = .clear
+            host.safeAreaRegions = [] // the viewer's bars sit over the page; the words center in the whole page
+            host.view.frame = bounds
+            host.view.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+            addSubview(host.view)
+            failure = host
+            return
+        }
+        failure?.view.removeFromSuperview()
+        failure = nil
         guard let image else {
             spinner.startAnimating()
             return

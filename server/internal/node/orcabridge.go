@@ -706,18 +706,20 @@ func orcaWriteErr(err error) error {
 	return err
 }
 
-// orcaImageDir holds the phone's images while Orca reads them (Orca takes images as files on this machine).
-func orcaImageDir() string { return filepath.Join(os.TempDir(), "persona-orca-images") }
+// orcaImageKeep is how long an image written for Orca stays: it only has to last until Orca has read it.
+const orcaImageKeep = 24 * time.Hour
 
-// orcaImages writes the phone's images out as files for Orca, named by their content.
+// orcaImages writes the phone's images out as files for Orca (Orca takes images as files on this machine), named by
+// their content, in a folder of this user only; images older than orcaImageKeep go first.
 func orcaImages(images []proto.Image) ([]string, error) {
 	if len(images) == 0 {
 		return nil, nil
 	}
-	dir := orcaImageDir()
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return nil, err
+	dir, err := privateCacheDir("orca-images")
+	if err != nil {
+		return nil, fmt.Errorf("image: %w", err)
 	}
+	pruneOlder(dir, orcaImageKeep)
 	var paths []string
 	for _, img := range images {
 		data := img.Data

@@ -4,8 +4,10 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -20,12 +22,20 @@ import (
 
 const (
 	convertTimeout = 90 * time.Second
-	convertKeep    = 7 * 24 * time.Hour // converted copies older than this are removed on the next conversion
+	convertKeep    = 7 * 24 * time.Hour // converted copies not used for this long are removed on the next conversion
 	convertMax     = 200 << 20          // bigger documents are not handed to LibreOffice
+
+	// cacheTouchAfter: a hit refreshes a cached copy's modification time once it is this old, so pruning by age spares
+	// the copies in use. Not on every hit: the time is part of the revision a download in progress is pinned to.
+	cacheTouchAfter = time.Hour
 )
 
 // converting lets one LibreOffice run at a time: it is heavy, and two runs on one profile refuse each other.
 var converting sync.Mutex
+
+// renameConverted is os.Rename, for moving LibreOffice's PDF into the cache; tests make it fail as it does when the
+// temp folder is on another file system.
+var renameConverted = os.Rename
 
 // sofficePath finds LibreOffice: on PATH (soffice, libreoffice), else the app bundle on a Mac.
 func sofficePath() string {
@@ -44,15 +54,6 @@ func sofficePath() string {
 	return ""
 }
 
-// convertDir keeps converted copies, named by the file and its version, so opening it again is instant.
-func convertDir() string {
-	base, err := os.UserCacheDir()
-	if err != nil {
-		base = os.TempDir()
-	}
-	return filepath.Join(base, "persona", "convert")
-}
-
 // convertFile turns a document a browser cannot show (doc, ppt, rtf, odt, pages, key, or a docx / pptx the web's
 // renderer could not draw) into a PDF with LibreOffice, when the machine has it (docs/protocol/protocol.md "File preview"). The
 // PDF lands in the node's cache and is read back like any file (file/download).
@@ -68,11 +69,22 @@ func (n *Node) convertFile(ctx context.Context, p proto.FileConvertRequest) (*pr
 	if st.Size() > convertMax {
 		return nil, fmt.Errorf("file is too big to convert (%d bytes)", st.Size())
 	}
+	// converted copies are kept, named by the file and its version, so opening it again is instant
+	dir, err := privateCacheDir("convert")
+	if err != nil {
+		return nil, fmt.Errorf("conversion cache: %w", err)
+	}
 	sum := sha256.Sum256([]byte(path + "\x00" + fileRevision(st)))
-	dir := convertDir()
 	out := filepath.Join(dir, hex.EncodeToString(sum[:12])+".pdf")
-	if st, err := os.Stat(out); err == nil && st.Size() > 0 {
-		return &proto.FileConverted{Path: out, Size: st.Size(), Mime: "application/pdf"}, nil
+	cached := func() *proto.FileConverted {
+		info, err := os.Stat(out)
+		if err != nil || info.Size() == 0 || !usedCached(out, info) {
+			return nil
+		}
+		return &proto.FileConverted{Path: out, Size: info.Size(), Mime: "application/pdf"}
+	}
+	if c := cached(); c != nil {
+		return c, nil
 	}
 	soffice := sofficePath()
 	if soffice == "" {
@@ -80,11 +92,11 @@ func (n *Node) convertFile(ctx context.Context, p proto.FileConvertRequest) (*pr
 	}
 	converting.Lock()
 	defer converting.Unlock()
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return nil, err
+	if c := cached(); c != nil { // converted while this request waited for the lock
+		return c, nil
 	}
 	pruneConverted(dir)
-	work, err := os.MkdirTemp("", "persona-convert-")
+	work, err := os.MkdirTemp("", "persona-soffice-")
 	if err != nil {
 		return nil, err
 	}
@@ -112,8 +124,14 @@ func (n *Node) convertFile(ctx context.Context, p proto.FileConvertRequest) (*pr
 	if err != nil || got.Size() == 0 {
 		return nil, fmt.Errorf("LibreOffice did not write a PDF")
 	}
-	if err := os.Rename(pdf, out); err != nil {
-		if err := copyFile(pdf, out); err != nil {
+	if err := renameConverted(pdf, out); err != nil {
+		// the temp folder is on another file system: copy it in, never writing the cache's name in place
+		src, err := os.Open(pdf)
+		if err != nil {
+			return nil, err
+		}
+		defer src.Close()
+		if err := writeAtomic(out, src); err != nil {
 			return nil, err
 		}
 	}
@@ -138,13 +156,26 @@ func copyFile(from, to string) error {
 }
 
 // pruneConverted removes copies older than convertKeep.
-func pruneConverted(dir string) {
+func pruneConverted(dir string) { pruneOlder(dir, convertKeep) }
+
+// usedCached marks a cached copy as used (cacheTouchAfter) and answers whether it is still there: another request's
+// prune may have removed an old one since info was read. A copy whose time cannot be set is still handed out.
+func usedCached(path string, info os.FileInfo) bool {
+	if time.Since(info.ModTime()) < cacheTouchAfter {
+		return true
+	}
+	now := time.Now()
+	return !errors.Is(os.Chtimes(path, now, now), fs.ErrNotExist)
+}
+
+// pruneOlder removes the files in dir whose modification time is more than keep ago.
+func pruneOlder(dir string, keep time.Duration) {
 	ents, err := os.ReadDir(dir)
 	if err != nil {
 		return
 	}
 	for _, e := range ents {
-		if info, err := e.Info(); err == nil && time.Since(info.ModTime()) > convertKeep {
+		if info, err := e.Info(); err == nil && time.Since(info.ModTime()) > keep {
 			os.Remove(filepath.Join(dir, e.Name()))
 		}
 	}

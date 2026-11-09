@@ -50,5 +50,14 @@
   "updated": "{when}に更新",
   "empty_body": "（空）",
   "runs_on_none": "まだ実行するパソコンが選ばれていません。パソコンをつなぐと、会話はそこでバックグラウンド実行されます。",
-  "machine_none": "未選択"
+  "machine_none": "未選択",
+  "configuration_target": "設定するアシスタント",
+  "configuration_target_hint": "以下の設定はこのアシスタントにのみ適用されます。切り替えても他のアシスタントは変更されません。",
+  "configuration_target_missing": "このアシスタントは利用できなくなりました。別のアシスタントを選択してください。",
+  "default_permissions": "新規セッションの既定の権限",
+  "default_permissions_hint": "権限を明示していない新規の非ゲストセッションにのみ適用されます。既存のセッションは変更されません。実行時のポリシーはプラットフォームによって制限される場合があります。",
+  "default_permissions_unset": "未設定（従来の動作）",
+  "task_models": "タスクのモデル",
+  "main_chat_model": "メインチャットのモデル",
+  "default_permissions_unconfirmed": "アシスタントがこの権限設定を確認できませんでした。再読み込みしてからお試しください。"
 }

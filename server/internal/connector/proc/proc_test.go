@@ -37,8 +37,14 @@ func TestMain(m *testing.M) {
 		if os.Getenv("PERSONA_PROC_KIND") == "loud" { // a log line far longer than a pipe holds, before it serves
 			fmt.Fprintf(os.Stderr, "%s\nafter the long line\n", strings.Repeat("x", 200<<10))
 		}
+		if os.Getenv("PERSONA_PROC_KIND") == "raw-recall" { // an extension written against the protocol alone (recall_test.go)
+			serveRawRecall()
+			os.Exit(0)
+		}
 		err := serve.Main(context.Background(), os.Stdin, os.Stdout, func(cfg json.RawMessage, s connector.Secrets) (connector.Connector, error) {
 			switch os.Getenv("PERSONA_PROC_KIND") {
+			case "recall-go", "recall-go-undeclared":
+				return &recallGoProgram{exampleProgram: &exampleProgram{secrets: s}, declare: os.Getenv("PERSONA_PROC_KIND") == "recall-go"}, nil
 			case "settings":
 				return &settingsProgram{}, nil
 			case "slow-tools":
@@ -852,10 +858,10 @@ func TestWriteSaysWhichMessageItMade(t *testing.T) {
 	}
 }
 
-// A program's connector cannot take a message back yet (the extension protocol has no such method): it implements
-// every capability interface as a proxy, so it must not be a Recaller, or the ledger would offer a recall it cannot make.
-func TestAProgramCannotRecall(t *testing.T) {
+// A program's connector implements every capability interface as a proxy, so it is a Recaller only when its manifest
+// declares recall, or the ledger would offer a recall it cannot make: this one does not.
+func TestAProgramThatDoesNotDeclareRecallCannotRecall(t *testing.T) {
 	if _, ok := connector.RecallerOf(New(program(t, &memSecrets{}))); ok {
-		t.Fatal("a program's connector is a Recaller")
+		t.Fatal("a program's connector that does not declare recall is a Recaller")
 	}
 }

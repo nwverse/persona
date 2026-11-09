@@ -185,6 +185,12 @@ func (h trayHost) RemoveAddress(url string) error {
 	return link.RemoveAddress(h.e.configPath(), url)
 }
 
+func (h trayHost) Rename(name string) (string, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), nameWait)
+	defer cancel()
+	return link.RequestRename(ctx, h.e.configPath(), name)
+}
+
 // systemTray is the tray of this computer: its entries in the user's registry and the running tray.
 func systemTray() trayControl {
 	return trayControl{setAutostart: linktray.SetAutostart, autostart: linktray.Autostart,

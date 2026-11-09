@@ -1,5 +1,6 @@
 import type { AgentState, Session, SessionCapabilities } from "./types";
 import { formatDate, formatRelative, t } from "../i18n";
+import { usageLimitLabel } from "./usage-limit";
 import { workLine } from "./work";
 
 // Missing session metadata is not permission to write; legacy sources retain their existing behavior.
@@ -13,6 +14,9 @@ export function sourceSubtitle(s?: Session): string {
   if (!s?.source_kind) return "";
   const label = s.source_kind === "codex_app_server" ? t("lib-format.source_codex_live") : s.source_kind === "codex_history" ? t("lib-format.source_codex_history") : s.source_kind === "identity_conflict" ? t("lib-format.source_identity_conflict")
     : s.source_kind === "claude_bg" ? t("lib-format.source_claude_background")
+    // Claude outside Persona's terminals (docs/integrations/claude-integration.md "Claude outside Persona's terminals")
+    : s.source_kind === "claude_desktop" ? t("lib-format.source_claude_desktop")
+    : s.source_kind === "claude_cli" ? t("lib-format.source_claude_terminal")
     : s.source_kind === "runtime" ? s.agent_label || s.agent || "runtime" // an agent runtime's session (docs/integrations/runtimes.md): its own name
     : s.source_kind;
   const detail = s.source_kind !== "identity_conflict" && s.agent_name ? ` · ${s.agent_name}` : "";
@@ -111,7 +115,7 @@ export function attentionReason(s: Session): string | undefined {
  *  error, else where its work stands when the hub triaged its turn (docs/assistant/agent-work.md), else its last words (iOS
  *  listPreview). */
 export function sessionPreview(s: Session): string {
-  return attentionReason(s) ?? failureReason(s) ?? workLine(s) ?? s.last_text ?? "";
+  return attentionReason(s) ?? failureReason(s) ?? usageLimitLabel(s) ?? workLine(s) ?? s.last_text ?? "";
 }
 
 /** A failure notice without the warning sign botmux starts it with: the page draws its own (iOS Session.failureText). */

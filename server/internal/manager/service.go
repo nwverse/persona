@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/server/internal/assistant"
+	"github.com/nwverse/persona/server/internal/managerconf"
 	"github.com/nwverse/persona/server/internal/pgdocker"
 )
 
@@ -36,6 +37,8 @@ type env struct {
 	run    func(ctx context.Context, name string, args ...string) (string, error)
 	look   func(name string) (string, error)
 	getenv func(string) string
+	// version is what a program says to `version -v` (update.BuildOf when nil).
+	version func(ctx context.Context, path string) (string, error)
 
 	// The manager's own Postgres (database.go): docker, a free port on 127.0.0.1, a connection check.
 	docker   pgdocker.Runner
@@ -75,6 +78,16 @@ func (e *env) unitPath(id string) string {
 
 func (e *env) plistPath(id string) string {
 	return filepath.Join(e.home, "Library", "LaunchAgents", e.compatLabel(id)+".plist")
+}
+
+// writeServiceFile writes a unit or plist in one step (managerconf.WriteFileAtomic: temporary file, fsync, rename), so
+// a crash or a full disk mid-write never leaves systemd or launchd a file cut short. Through a link it replaces the
+// file the link names: a former name linked to it (checkCompatibleService) stays the same file.
+func writeServiceFile(path, text string) error {
+	if file, err := filepath.EvalSymlinks(path); err == nil {
+		path = file
+	}
+	return managerconf.WriteFileAtomic(path, []byte(text), 0o644)
 }
 
 // binary is what the service runs: the hub machine's <data dir>/bin/personad when there is one (install.sh puts it
@@ -217,7 +230,7 @@ func cmdInstall(ctx context.Context, e *env, args []string) error {
 		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 			return err
 		}
-		if err := os.WriteFile(path, []byte(e.compatUnitText(c.ID, serviceUnit(c.ID, bin, dir))), 0o644); err != nil {
+		if err := writeServiceFile(path, e.compatUnitText(c.ID, serviceUnit(c.ID, bin, dir))); err != nil {
 			return err
 		}
 		for _, step := range [][]string{{"daemon-reload"}, {"enable", e.compatUnit(c.ID)}, {"restart", e.compatUnit(c.ID)}} {
@@ -236,12 +249,12 @@ func cmdInstall(ctx context.Context, e *env, args []string) error {
 		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 			return err
 		}
-		if err := os.WriteFile(path, []byte(e.compatLabelText(c.ID, servicePlist(c.ID, bin, dir, e.home))), 0o644); err != nil {
+		if err := writeServiceFile(path, e.compatLabelText(c.ID, servicePlist(c.ID, bin, dir, e.home))); err != nil {
 			return err
 		}
 		domain := "gui/" + strconv.Itoa(e.uid)
 		_, _ = e.run(ctx, "launchctl", "bootout", domain+"/"+e.compatLabel(c.ID))
-		if out, err := e.run(ctx, "launchctl", "bootstrap", domain, path); err != nil {
+		if out, err := bootstrapAgent(ctx, e, domain, path); err != nil {
 			return fmt.Errorf("launchctl bootstrap 失败：%s", firstLine(out+" "+err.Error()))
 		}
 		fmt.Fprintf(e.stdout, "装好了：管理者「%s」（%s）是 launchd 服务 %s，登录后自动运行。\n  日志：%s\n",
@@ -335,6 +348,13 @@ func (e *env) removeService(ctx context.Context, c *assistant.ManagerConfig) err
 }
 
 func cmdStatus(ctx context.Context, e *env, args []string) error {
+	if isBuiltin(args) {
+		if len(args) != 1 {
+			return errUsage
+		}
+		e.builtinStatus(ctx, true)
+		return nil
+	}
 	var dirs []string
 	if len(args) > 0 {
 		d, _, err := dirFlag(e, "status", args)
@@ -344,6 +364,9 @@ func cmdStatus(ctx context.Context, e *env, args []string) error {
 		dirs = []string{d}
 	} else {
 		dirs = localManagers()
+	}
+	if len(args) == 0 {
+		defer e.builtinStatus(ctx, false) // the built-in manager's own service too, when it has one or a binding
 	}
 	if len(dirs) == 0 {
 		fmt.Fprintf(e.stdout, "%s 下没有管理者\n", managersRoot())

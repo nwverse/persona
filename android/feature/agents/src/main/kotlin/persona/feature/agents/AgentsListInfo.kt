@@ -8,6 +8,7 @@ import persona.core.contracts.toolDisplayName
 import android.content.res.Resources
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import persona.core.designsystem.LocalizedFormats
+import persona.core.designsystem.resolve
 import kotlinx.coroutines.flow.*
 import java.time.Instant
 import java.time.ZoneId
@@ -65,7 +66,8 @@ internal fun Interaction.cardTitle(res: Resources): String {
     val who = agentDisplayName
     return when (kind) {
         "question" -> if (who != null) res.getString(R.string.agents_card_question_by, who) else res.getString(R.string.agents_card_question)
-        "permission" -> {
+        // A password card names the computer it runs on (#1137).
+        "permission" -> if (isSecretRun) headline.resolve(res) else {
             val tool = toolName?.takeIf { it.isNotEmpty() }?.let(::toolDisplayName) ?: res.getString(R.string.agents_card_tool)
             if (who != null) res.getString(R.string.agents_card_permission_by, who, tool) else res.getString(R.string.agents_card_permission, tool)
         }
@@ -85,9 +87,12 @@ internal fun Interaction.cardSummary(res: Resources): String = summary?.takeIf {
     else -> res.getString(R.string.agents_card_open_session)
 }
 
+// Compiled once: the preview runs for every line of every row as the list draws.
+private val MarkdownHeading = Regex("^#{1,6}\\s+")
+
 /** Plain text for a short preview: drop Markdown heading, emphasis and code markers and blank lines. */
 internal fun markdownPreview(text: String): String = text.lineSequence()
-    .map { it.trim().replace(Regex("^#{1,6}\\s+"), "").replace("**", "").replace("`", "") }
+    .map { it.trim().replace(MarkdownHeading, "").replace("**", "").replace("`", "") }
     .filter { it.isNotBlank() }
     .joinToString("\n")
 

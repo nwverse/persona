@@ -303,16 +303,41 @@ func TestShellFirstWord(t *testing.T) {
 		"  /bin/x":                     "/bin/x",
 		"":                             "",
 		"'/unterminated hook":          "",
+		// The node's directory in front (rootAssign) is not the program.
+		"PERSONA_HOME=/h/.persona /usr/bin/personad hook":          "/usr/bin/personad",
+		"PERSONA_HOME='/h/my dir' A=1 '/opt/my dir/personad' hook": "/opt/my dir/personad",
+		"PERSONA_HOME=/h/.persona":                                 "",
+		"'/opt/a=b/personad' hook":                                 "/opt/a=b/personad",
+		"/opt/a=b/personad hook":                                   "/opt/a=b/personad",
+		`PERSONA_HOME='/it'\''s' '/opt/it'\''s/personad' hook`:     "/opt/it's/personad",
 	} {
 		if got := shellFirstWord(in); got != want {
 			t.Errorf("shellFirstWord(%q) = %q, want %q", in, got, want)
 		}
 	}
-	// Whatever shellQuote writes reads back the same.
+	// Whatever shellQuote writes reads back the same, with or without a directory in front.
 	for _, p := range []string{"/a/b", "/a b/c", "/it's/x", "/q\"x/y"} {
 		if got := shellFirstWord(shellQuote(p) + " hook"); got != p {
 			t.Errorf("round trip of %q: %q", p, got)
 		}
+		if got := shellFirstWord(rootAssign(p+"/.persona", shellQuote) + shellQuote(p) + " hook"); got != p {
+			t.Errorf("round trip of %q after its directory: %q", p, got)
+		}
+	}
+}
+
+// A shell-form hook's program is its command line's first word; an exec-form one's ("args" given) is its command as it
+// is, spaces included.
+func TestConfigCommandsBothForms(t *testing.T) {
+	b := []byte(`{"hooks": {
+		"Stop": [{"hooks": [{"type": "command", "command": "'/opt/my dir/personad' hook"}]}],
+		"MessageDisplay": [{"hooks": [{"type": "command", "command": "/opt/my dir/persona-node", "args": ["hook"]}]}],
+		"Notification": [{"hooks": [{"type": "command", "command": "/opt/no args", "args": []}]}]
+	}}`)
+	got := configCommands(b)
+	slices.Sort(got)
+	if want := []string{"/opt/my dir/persona-node", "/opt/my dir/personad", "/opt/no args"}; !slices.Equal(got, want) {
+		t.Fatalf("configCommands = %q, want %q", got, want)
 	}
 }
 

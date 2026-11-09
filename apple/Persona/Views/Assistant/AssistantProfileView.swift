@@ -9,6 +9,7 @@ struct AssistantProfileView: View {
     @State private var tasks: [APIClient.ScheduledTask]?
     @State private var runs: [APIClient.ScheduleRun]?
     @State private var memoryCount: Int?
+    @State private var placeCount: Int?
     #if DEBUG
     @State private var debugPage: String?
     #endif
@@ -43,6 +44,7 @@ struct AssistantProfileView: View {
             case "routines", "routine", "newRoutine", "followups", "followup", "intervalTask", "bypassTask": AssistantRoutinesView()
             case "runs": AssistantRunsView()
             case "memory", "memoryFile", "memoryEdit": AssistantMemoryView()
+            case "places", "place", "newPlace": SavedPlacesView()
             default: AssistantNotesView()
             }
         }
@@ -69,7 +71,7 @@ struct AssistantProfileView: View {
                     })
                 }
                 NavigationLink { AssistantRunsView() } label: {
-                    row("Run History", "clock.arrow.circlepath", detail: runs.flatMap(\.first).map { AssistantRunText.statusWord($0) + " · " + Fmt.relative($0.at) })
+                    row("Run History", Theme.Icon.recent, detail: runs.flatMap(\.first).map { AssistantRunText.statusWord($0) + " · " + Fmt.relative($0.at) })
                 }
                 NavigationLink { TaskTrustView() } label: { row("Auto-Start Tasks", Theme.Icon.taskTrust, detail: nil) }
             } header: {
@@ -83,6 +85,9 @@ struct AssistantProfileView: View {
                 }
                 NavigationLink { AssistantMemoryView() } label: {
                     row("Memory [Assistant Profile View 7a6335]", "brain", detail: memoryCount.flatMap { $0 > 0 ? String(localized: "\($0) items [Assistant Profile View 29b8db]", comment: "Memory count") : nil })
+                }
+                NavigationLink { SavedPlacesView() } label: {
+                    row("Saved Places", Theme.Icon.place, detail: placesDetail)
                 }
             } header: {
                 Text("Knowing You")
@@ -144,7 +149,7 @@ struct AssistantProfileView: View {
                         })
                     }
                     NavigationLink { AssistantRunsView() } label: {
-                        buiRow("Run History", "clock.arrow.circlepath", detail: runs.flatMap(\.first).map { AssistantRunText.statusWord($0) + " · " + Fmt.relative($0.at) })
+                        buiRow("Run History", Theme.Icon.recent, detail: runs.flatMap(\.first).map { AssistantRunText.statusWord($0) + " · " + Fmt.relative($0.at) })
                     }
                     NavigationLink { TaskTrustView() } label: { buiRow("Auto-Start Tasks", Theme.Icon.taskTrust, detail: nil) }
                 }
@@ -155,10 +160,13 @@ struct AssistantProfileView: View {
                     NavigationLink { AssistantMemoryView() } label: {
                         buiRow("Memory [Assistant Profile View 7a6335]", "brain", detail: memoryCount.flatMap { $0 > 0 ? String(localized: "\($0) items [Assistant Profile View 29b8db]", comment: "Memory count") : nil })
                     }
+                    NavigationLink { SavedPlacesView() } label: {
+                        buiRow("Saved Places", Theme.Icon.place, detail: placesDetail)
+                    }
                 }
                 if let quiet = quietTasks {
                     BUIListSection(String(localized: "Task Notifications"), footer: Self.quietFooter) {
-                        BUIListRow(Self.quietTitle) { BUIIconTile(Theme.Icon.notifications, tint: Theme.accent) } trailing: {
+                        BUIListRow(Self.quietTitle) { IconTile(Theme.Icon.notifications, tint: Theme.accent) } trailing: {
                             Toggle(Self.quietTitle, isOn: quiet).labelsHidden()
                                 .accessibilityIdentifier("assistant-main-tasks-quiet")
                         }
@@ -255,12 +263,12 @@ struct AssistantProfileView: View {
 
     /// The BeautifulUI style's row that opens a page: its mark, its name, what is there now.
     private func buiRow(_ title: LocalizedStringResource, _ symbol: String, detail: String?) -> some View {
-        BUIListRow(String(localized: title), value: detail, accessory: .disclosure) { BUIIconTile(symbol, tint: Theme.accent) }
+        BUIListRow(String(localized: title), value: detail, accessory: .disclosure) { IconTile(symbol, tint: Theme.accent) }
     }
 
     /// The BeautifulUI style's row for what Persona can reach.
     private func buiReach(_ text: String, _ symbol: String) -> some View {
-        BUIListRow(text) { BUIIconTile(symbol, tint: Theme.Hue.gray) }
+        BUIListRow(text) { IconTile(symbol, tint: Theme.Hue.gray) }
     }
 
     /// Reloaded each time the page shows (coming back from a sub-page included).
@@ -269,11 +277,18 @@ struct AssistantProfileView: View {
         async let r = try? api.scheduledTasks()
         async let h = try? api.scheduleRuns()
         async let m = try? api.assistantMemory()
+        async let p = try? api.savedPlaces()
         // The switch shows once the hub says it has the setting (#1731): a hub updated since the app read it, too.
         if model.assistantConfig?.mainTasksQuiet == nil { await model.refreshAssistant() }
         tasks = await r
         runs = await h
         if let files = await m { memoryCount = files.filter { $0.name != AssistantMemoryEntry.index }.count }
+        placeCount = (await p)?.count
+    }
+
+    /// Saved Places' row detail: how many there are, nothing when none.
+    private var placesDetail: String? {
+        placeCount.flatMap { $0 > 0 ? String(localized: "\($0) places", comment: "Saved places count") : nil }
     }
 }
 
@@ -316,7 +331,7 @@ struct AssistantUpcomingRow: View {
     private var beautiful: some View {
         BUIListRow(item.title, detail: "\(item.detail) · \(AssistantScheduleText.until(item.at))",
                    value: "\(AssistantScheduleText.day(item.at)) \(AssistantScheduleText.hm(item.at))") {
-            BUIIconTile(item.routine ? Theme.Icon.recurring : Theme.Icon.followOn, tint: Theme.accent)
+            IconTile(item.routine ? Theme.Icon.recurring : Theme.Icon.followOn, tint: Theme.accent)
         }
         .accessibilityElement(children: .combine)
     }
@@ -331,7 +346,7 @@ struct AssistantUpcomingRow: View {
             .scaledFrame(width: Theme.Size.box58, alignment: .leading)
             VStack(alignment: .leading, spacing: Theme.Space.xs) {
                 HStack(spacing: Theme.Space.sm) {
-                    Image(systemName: item.routine ? Theme.Icon.recurring : Theme.Icon.followOn)
+                    ThemedIcon(item.routine ? Theme.Icon.recurring : Theme.Icon.followOn)
                         .font(Theme.Font.labelHeavy)
                         .foregroundStyle(Theme.accent)
                     Text(item.title).font(Theme.Font.heading).lineLimit(1)
@@ -473,7 +488,7 @@ struct AssistantRunRow: View {
     @ViewBuilder private var plain: some View {
         let (symbol, tint) = AssistantRunText.symbol(run)
         let content = HStack(spacing: Theme.Space.m) {
-            Image(systemName: symbol).font(Theme.Font.title).foregroundStyle(tint)
+            ThemedIcon(symbol).font(Theme.Font.title).foregroundStyle(tint)
             VStack(alignment: .leading, spacing: Theme.Space.xxs) {
                 Text(showTitle ? run.title : AssistantScheduleText.moment(run.at))
                     .font(Theme.Font.heading).foregroundStyle(Color.primary).lineLimit(1)
@@ -485,7 +500,7 @@ struct AssistantRunRow: View {
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             if run.key != nil {
-                Image(systemName: Theme.Icon.disclosure).font(Theme.Font.captionStrong).foregroundStyle(Color(uiColor: .tertiaryLabel))
+                ThemedIcon(Theme.Icon.disclosure).font(Theme.Font.captionStrong).foregroundStyle(Color(uiColor: .tertiaryLabel))
             }
         }
         if let key = run.key {

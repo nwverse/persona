@@ -4,7 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/nwverse/persona/server/internal/acceptloop"
 	"github.com/nwverse/persona/server/internal/identity"
+	"github.com/nwverse/persona/server/internal/link"
 	"io"
 	"net"
 	"os"
@@ -98,7 +100,20 @@ func Attach(ctx context.Context, newNode func() (*Node, error), extra <-chan net
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return err
 	}
-	// Only one resident node: a second one would steal relays from the first. A socket nobody answers on is stale.
+	// Only one resident node: a second one would steal relays from the first. The run lock next to the socket, held
+	// until Attach returns, decides it: two nodes starting together could both find nobody answering on the socket,
+	// and the second would remove the first one's fresh socket. It also keeps a second start from dialing the live
+	// node, whose next connection would replace the hub's. The process ending gives the lock back, however it ends.
+	release, err := link.LockFile(path+".run", false)
+	if errors.Is(err, link.ErrLocked) {
+		return fmt.Errorf("a resident node is already running (%s.run is locked)", path)
+	}
+	if err != nil {
+		return fmt.Errorf("resident node lock: %w", err)
+	}
+	defer release()
+	// A resident node from a build without the lock is found by answering. A socket nobody answers on, with the lock
+	// free, is stale.
 	if c, err := net.DialTimeout("unix", path, time.Second); err == nil {
 		c.Close()
 		return fmt.Errorf("a resident node is already listening on %s", path)
@@ -111,36 +126,29 @@ func Attach(ctx context.Context, newNode func() (*Node, error), extra <-chan net
 	_ = os.Chmod(path, 0o600)
 	ln.(*net.UnixListener).SetUnlinkOnClose(false) // a replacement may already own the path (hooks.go has the same trap)
 	go func() { <-ctx.Done(); ln.Close() }()
+	logf := func(f string, a ...any) { fmt.Fprintf(os.Stderr, "node: "+f+"\n", a...) }
 	if runtimes != nil {
 		if err := runtimes.Listen(ctx); err != nil {
-			fmt.Fprintf(os.Stderr, "node: runtime socket: %v\n", err)
+			logf("runtime socket: %v", err)
 			runtimes = nil // each connection's Node opens its own, as without a resident node
 		}
 	}
 	relayed := make(chan net.Conn)
 	go func() {
 		defer close(relayed)
-		for {
-			c, err := ln.Accept()
-			if err != nil {
-				if ctx.Err() != nil || errors.Is(err, net.ErrClosed) {
-					return
-				}
-				continue
-			}
+		acceptloop.Run(ctx, ln, logf, func(c net.Conn) {
 			select {
 			case relayed <- c:
-			case <-ctx.Done():
+			case <-ctx.Done(): // ctx closes ln too, which ends the loop
 				c.Close()
-				return
 			}
-		}
+		})
 	}()
 
 	keeper := newAssistantKeeper()
 	// No manager connected yet (or between connections): standby answers node.sock (spool.go).
 	sp := openSpool(SpoolPath())
-	sb := newStandby(sp, func(f string, a ...any) { fmt.Fprintf(os.Stderr, "node: "+f+"\n", a...) })
+	sb := newStandby(sp, logf)
 	sb.want()
 	defer sb.unwant()
 	var mu sync.Mutex        // served, and standby's want / unwant with it

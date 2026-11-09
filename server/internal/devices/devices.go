@@ -9,6 +9,7 @@
 package devices
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -106,7 +107,9 @@ type Devices struct {
 	// as it is then.
 	early   bool
 	ownMu   sync.Mutex
-	ownSaid string        // the last trouble keeping the list said (ownMu)
+	ownSaid string // the last trouble keeping the list said (ownMu)
+	// ownHeld: the list running is the own list, held as its own in manager.json (reported: States.OwnList).
+	ownHeld bool
 	ownWait time.Duration // ownListWait as New found it
 	// ready is closed once the machines of the first config are made (the hub's, or the own list's: ownlist.go):
 	// nothing is reported before (an empty list would have the hub forget them). The hello's config is taken before
@@ -272,10 +275,27 @@ func (d *Devices) Configure(cfg devicewire.Config) {
 	d.changed()
 }
 
-// linkSays is what the links are told of the hub in cfg (linkEndpoints): with its heartbeat, which they follow.
+// linkSays is what the links are told of the hub in cfg (linkEndpoints): with its heartbeat, which they follow, and
+// what it calls each computer.
 func linkSays(cfg devicewire.Config) string {
-	b, _ := json.Marshal([]any{cfg.HubName, cfg.MeshHubs, cfg.Endpoints, cfg.LinkPingMS, cfg.LinkPingTimeoutMS, cfg.Pending})
+	b, _ := json.Marshal([]any{cfg.HubName, cfg.MeshHubs, cfg.Endpoints, cfg.LinkPingMS, cfg.LinkPingTimeoutMS, cfg.Pending,
+		entryNames(cfg)})
 	return string(b)
+}
+
+// entryNames is what cfg's entries call each computer, by id (an entry that names it nothing: its id).
+func entryNames(cfg devicewire.Config) map[string]string {
+	out := map[string]string{}
+	for _, raw := range cfg.Machines {
+		var mc struct {
+			ID   string `json:"id"`
+			Name string `json:"name"`
+		}
+		if json.Unmarshal(raw, &mc) == nil && mc.ID != "" {
+			out[mc.ID] = cmp.Or(mc.Name, mc.ID)
+		}
+	}
+	return out
 }
 
 // config is the hub's handover as it is now.
@@ -304,7 +324,7 @@ func (d *Devices) PendingMachineIDs(context.Context) ([]string, error) {
 // startMachines makes a machine for every hub.json entry it has none for and starts its run loop; an entry no
 // longer there stops.
 func (d *Devices) startMachines(ctx context.Context) {
-	var started, replaced []*Machine
+	var started, replaced, renamed []*Machine
 	d.mu.Lock()
 	cfg := d.cfg // read with the machines it is laid over: an edit meanwhile is never undone by an older list
 	seen := map[string]bool{}
@@ -320,6 +340,9 @@ func (d *Devices) startMachines(ctx context.Context) {
 			old.mu.Lock()
 			old.raw = raw // keys it does not read may have changed: reported as the hub has them (states)
 			old.mu.Unlock()
+			if old.setName(mc.Name) { // renamed: the same machine, connected as it is
+				renamed = append(renamed, old)
+			}
 			keep = append(keep, old)
 			continue
 		}
@@ -356,6 +379,9 @@ func (d *Devices) startMachines(ctx context.Context) {
 		m.stop()
 		m.closeLink("no longer in the list") // acceptLink refuses it when it comes back
 		d.forgetMachine(m.cfg.ID)
+	}
+	for _, m := range renamed {
+		d.logf("[%s] renamed", m.cfg.ID)
 	}
 	for _, m := range replaced {
 		d.logf("[%s] its entry changed: connected again with it", m.cfg.ID)
@@ -468,6 +494,9 @@ func (d *Devices) states() devicewire.States {
 		out.Absorbed[from.cfg.ID] = to.cfg.ID
 	}
 	d.fleet.mu.Unlock()
+	d.mu.Lock()
+	out.OwnList = d.ownHeld
+	d.mu.Unlock()
 	for _, m := range d.cfgMachines() {
 		avail, rtt := m.reachableHere()
 		// Its entry too, an absorbed one's included: the hub keeps what each manager has (hub machine_entries.go).
@@ -629,7 +658,7 @@ func (d *Devices) List() []Summary {
 	out := []Summary{}
 	for _, m := range d.machinesNow() {
 		m.mu.Lock()
-		s := Summary{ID: m.cfg.ID, Name: m.cfg.Name, Kind: m.cfg.Kind, SSHHost: m.cfg.SSHHost, Home: m.info.Home,
+		s := Summary{ID: m.cfg.ID, Name: m.name(), Kind: m.cfg.Kind, SSHHost: m.cfg.SSHHost, Home: m.info.Home,
 			DataDir: m.info.DataDir, Online: m.online}
 		m.mu.Unlock()
 		s.Trust = d.machineTrust(m)
@@ -651,7 +680,7 @@ func (d *Devices) Views() []View {
 	out := []View{}
 	for _, m := range d.machinesNow() {
 		m.mu.Lock()
-		v := View{Summary: Summary{ID: m.cfg.ID, Name: m.cfg.Name, Kind: m.cfg.Kind, SSHHost: m.cfg.SSHHost, Home: m.info.Home,
+		v := View{Summary: Summary{ID: m.cfg.ID, Name: m.name(), Kind: m.cfg.Kind, SSHHost: m.cfg.SSHHost, Home: m.info.Home,
 			DataDir: m.info.DataDir, Online: m.online}, Info: m.info, Sessions: slices.Clone(m.sessions)}
 		m.mu.Unlock()
 		v.Trust = d.machineTrust(m)
@@ -724,6 +753,17 @@ func (d *Devices) Sessions(id string) ([]proto.Session, bool) {
 		return nil, false
 	}
 	return m.sessionList(), true
+}
+
+// SessionsWhere are those of a machine's sessions keep accepts, copied out without the rest; false when there is no
+// such machine. keep reads each session in place, under the machine's lock: it must not change or keep it, nor call
+// the devices.
+func (d *Devices) SessionsWhere(id string, keep func(*proto.Session) bool) ([]proto.Session, bool) {
+	m := d.machineByID(id)
+	if m == nil {
+		return nil, false
+	}
+	return m.sessionsWhere(keep), true
 }
 
 // Canonical is the id of the machine id names (an entry another one absorbed: that one's); id itself when there is

@@ -2,6 +2,7 @@ package devices
 
 import (
 	"bufio"
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -10,18 +11,22 @@ import (
 	"net"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/nwverse/persona/server/internal/apierr"
+	"github.com/nwverse/persona/server/internal/compat"
 	"github.com/nwverse/persona/server/internal/db"
 	"github.com/nwverse/persona/server/internal/devicewire"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/nodeproto"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/rpc"
+	"github.com/nwverse/persona/server/internal/update"
 )
 
 var errOffline = apierr.ErrOffline
@@ -58,11 +63,14 @@ type MachineConfig struct {
 // connection to its resident node, a stream on the Persona Link it keeps to the hub (kind link, link.go), a
 // connector's stream (kind service), or a stream through a member hub (a derived machine).
 type Machine struct {
-	cfg  MachineConfig
-	raw  json.RawMessage // the entry as the hub gave it (for a derived machine, the member's)
-	d    *Devices
-	ctx  context.Context
-	stop context.CancelFunc
+	cfg MachineConfig
+	// named is what the computer is called now: cfg.Name until the hub renames it, which changes nothing else of the
+	// running machine (startMachines); read through name().
+	named atomic.Pointer[string]
+	raw   json.RawMessage // the entry as the hub gave it (for a derived machine, the member's)
+	d     *Devices
+	ctx   context.Context
+	stop  context.CancelFunc
 
 	spooled spoolSeen // spool_ids of what a resident node replayed (spooldedupe.go)
 
@@ -127,6 +135,9 @@ type Machine struct {
 	claudeDirsMu sync.Mutex
 	// nodeCmd replaces the node command (tests).
 	nodeCmd func(context.Context) *exec.Cmd
+	// localNote is why the last start of a local node passed a program beside it over (localNode), said once until it
+	// changes.
+	localNote string
 	// dialTailcat replaces dialing the node over tailcat, probeDirect checking that ssh works (tests).
 	dialTailcat func(context.Context) (net.Conn, error)
 	probeDirect func(context.Context) error
@@ -146,6 +157,7 @@ func newMachine(d *Devices, cfg MachineConfig) *Machine {
 	m := &Machine{cfg: cfg, d: d, watched: map[string]bool{}, lastSeq: map[string]int{}, kick: make(chan struct{}, 1),
 		timings: defaultTailcatTimings, deployRetry: 2 * time.Second, reconnectGrace: reconnectGrace,
 		linkUp: make(chan struct{}, 1), first: make(chan struct{})}
+	m.setName(cfg.Name)
 	if dial := d.opts.DialNode; dial != nil {
 		m.dialNode = dial(cfg.ID)
 	}
@@ -158,10 +170,30 @@ func newMachine(d *Devices, cfg MachineConfig) *Machine {
 	return m
 }
 
+// sameConfig: a and b are the same entry but perhaps for the name, which a running machine takes as it is (rename).
 func sameConfig(a, b MachineConfig) bool {
+	a.Name, b.Name = "", ""
 	x, _ := json.Marshal(a)
 	y, _ := json.Marshal(b)
 	return string(x) == string(y)
+}
+
+// name is what the computer is called now: as its entry last named it (renamed or not), else its id.
+func (m *Machine) name() string {
+	if n := m.named.Load(); n != nil {
+		return *n
+	}
+	return cmp.Or(m.cfg.Name, m.cfg.ID)
+}
+
+// setName renames the computer ("": its id); true when that changed its name.
+func (m *Machine) setName(name string) bool {
+	name = cmp.Or(name, m.cfg.ID)
+	if old := m.named.Load(); old != nil && *old == name {
+		return false
+	}
+	m.named.Store(&name)
+	return true
 }
 
 // snapshot is the machine as the apps get it, but for what the hub adds (computer, browser).
@@ -219,7 +251,7 @@ func (m *Machine) snapshot() proto.Machine {
 		link = m.link.info()
 	}
 	return proto.Machine{
-		ID: m.cfg.ID, Name: m.cfg.Name, Kind: m.cfg.Kind, Icon: icon, SSHHost: m.cfg.SSHHost, Online: m.online || warm, Error: m.err,
+		ID: m.cfg.ID, Name: m.name(), Kind: m.cfg.Kind, Icon: icon, SSHHost: m.cfg.SSHHost, Online: m.online || warm, Error: m.err,
 		Hostname: m.info.Hostname, OS: m.info.OS, Arch: m.info.Arch, Home: m.info.Home,
 		HerdrVersion: m.info.HerdrVersion, ClaudeVersion: m.info.ClaudeVersion, LastSeen: m.lastSeen,
 		NodeVersion: m.info.Version, NodeMismatch: m.online && nodeMismatch(version, m.info),
@@ -262,7 +294,7 @@ func (m *Machine) command(ctx context.Context) *exec.Cmd {
 	}
 	if m.cfg.Kind == "local" {
 		self, _ := os.Executable()
-		return exec.CommandContext(ctx, self, "node", "--stdio")
+		return exec.CommandContext(ctx, m.localNode(ctx, self, nil), "node", "--stdio")
 	}
 	bin := m.cfg.RemoteBin
 	if bin == "" {
@@ -277,6 +309,40 @@ func (m *Machine) command(ctx context.Context) *exec.Cmd {
 	// on a LAN it costs next to nothing.
 	return exec.CommandContext(ctx, "ssh", "-T", "-o", "BatchMode=yes", "-o", "ConnectTimeout=15", "-o", "Compression=yes",
 		"-o", "ServerAliveInterval=15", "-o", "ServerAliveCountMax=3", host, bin+" node --stdio")
+}
+
+// localNode is the program the node of the hub's computer runs as (docs/server/server.md "Programs"): persona-node
+// beside self when it is self's build, else personad beside self when it is self's build (so the node and what it
+// writes into hooks stay off the manager's program), else self. update.SplitEnv 0 keeps self. version is
+// update.BuildOf when nil.
+func (m *Machine) localNode(ctx context.Context, self string, version func(context.Context, string) (string, error)) string {
+	if update.SplitOff() {
+		return self
+	}
+	p, note := update.SplitBeside(ctx, self, nodeproto.ProgramPersonaNode, version)
+	name := strings.TrimSuffix(filepath.Base(self), filepath.Ext(self))
+	if p == "" && name != nodeproto.ProgramPersonad && name != compat.DaemonBinary {
+		var also string
+		p, also = update.SplitBeside(ctx, self, nodeproto.ProgramPersonad, version)
+		if also != "" {
+			note = strings.TrimPrefix(note+"; "+also, "; ")
+		}
+	}
+	if p == "" {
+		p = self
+	}
+	if ctx.Err() != nil {
+		// A connection given up while asking (a reconnect) starts no node, so it says nothing about one.
+		return p
+	}
+	m.mu.Lock()
+	said := m.localNote
+	m.localNote = note
+	m.mu.Unlock()
+	if note != "" && note != said {
+		m.d.logf("[%s] %s: the node runs as %s", m.cfg.ID, note, filepath.Base(p))
+	}
+	return p
 }
 
 // nodePipe is one way to a node: what it says, where to write, and why it failed (ssh's last stderr line). It is an
@@ -420,17 +486,21 @@ func (m *Machine) call(ctx context.Context, method string, params any, out any) 
 			return &rpc.Error{Code: proto.CodeNodeOutdated, Message: i18n.T(i18n.From(ctx), "hub-ultracode.node_outdated")}
 		}
 	}
+	if method == proto.MethodSecretRun && !nodeHas(info, nodeproto.SecretRun) {
+		// An older node would answer "unknown method"; this says what to do about it before the user types anything.
+		return &rpc.Error{Code: proto.CodeNodeOutdated, Message: i18n.T(i18n.From(ctx), "hub-machine.node_no_secret_run")}
+	}
 	if p == nil && (m.waitWarm(ctx) || m.waitFirst(ctx)) { // the manager just started: its node is on its way (warm.go)
 		m.mu.Lock()
 		p = m.peer
 		m.mu.Unlock()
 	}
 	if p == nil {
-		return fmt.Errorf("%s: %w", m.cfg.Name, errOffline)
+		return fmt.Errorf("%s: %w", m.name(), errOffline)
 	}
 	select {
 	case <-p.Done(): // closed, a new connection on its way: nothing was sent
-		return fmt.Errorf("%s: %w", m.cfg.Name, errOffline)
+		return fmt.Errorf("%s: %w", m.name(), errOffline)
 	default:
 	}
 	return p.Call(ctx, method, params, out)
@@ -519,6 +589,19 @@ func (m *Machine) sessionList() []proto.Session {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return slices.Clone(m.sessions)
+}
+
+// sessionsWhere copies out the sessions keep accepts (Devices.SessionsWhere).
+func (m *Machine) sessionsWhere(keep func(*proto.Session) bool) []proto.Session {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var out []proto.Session
+	for i := range m.sessions { // by index: a range value copies every (large) session it passes
+		if keep(&m.sessions[i]) {
+			out = append(out, m.sessions[i])
+		}
+	}
+	return out
 }
 
 func (m *Machine) session(id string) (proto.Session, bool) {

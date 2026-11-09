@@ -66,6 +66,8 @@ type nodeAction struct {
 	required []string
 	optional []string
 	flags    []string // booleans, passed only when true
+	// Fields required unless the named boolean flag is true. Unknown/string flags never bypass validation.
+	requiredUnless map[string][]string
 }
 
 func (h *Hub) nodeAction(a nodeAction) http.HandlerFunc {
@@ -96,6 +98,17 @@ func (h *Hub) nodeAction(a nodeAction) http.HandlerFunc {
 				return
 			}
 		}
+		for flag, fields := range a.requiredUnless {
+			if params[flag] == true {
+				continue
+			}
+			for _, k := range fields {
+				if params[k] == nil {
+					writeErr(w, http.StatusBadRequest, errors.New(k+" is required"))
+					return
+				}
+			}
+		}
 		ctx, cancel := context.WithTimeout(r.Context(), a.timeout)
 		defer cancel()
 		var out json.RawMessage
@@ -122,10 +135,35 @@ var nodeActions = map[string]nodeAction{
 	// #2431 "New worktree…": the repository of a workspace the host lists, and a Git worktree of it opened as a workspace.
 	// The branch and the path are typed in the dialog; the node refuses a path that holds something and never forces.
 	"worktree/prepare": {method: "worktree.prepare", timeout: 30 * time.Second, required: []string{"workspace_id"}, optional: []string{"kind"}},
-	"worktree/create":  {method: "worktree.create", timeout: 150 * time.Second, required: []string{"workspace_id", "branch", "path"}, optional: []string{"kind"}},
+	"worktree/rename":  {method: "worktree.rename", timeout: 30 * time.Second, required: []string{"workspace_id", "name"}, optional: []string{"kind"}},
+	"worktree/create": {method: "worktree.create", timeout: 150 * time.Second, required: []string{"workspace_id"},
+		optional: []string{"kind", "parent_workspace_id", "branch", "path"}, flags: []string{"auto_name"},
+		requiredUnless: map[string][]string{"auto_name": {"branch", "path"}}},
 	// #6115 a new agent in a worktree of its own: made from its folder, told apart, removed when it is closed and the
 	// user says so (the node refuses uncommitted work and unmerged branches unless force, which the user confirms).
 	"worktree/add":    {method: "worktree.add", timeout: 150 * time.Second, required: []string{"cwd"}, optional: []string{"branch", "name_hint", "kind"}},
 	"worktree/status": {method: "worktree.status", timeout: 30 * time.Second, required: []string{"cwd"}, optional: []string{"kind"}},
 	"worktree/remove": {method: "worktree.remove", timeout: 90 * time.Second, required: []string{"path"}, optional: []string{"kind"}, flags: []string{"delete_branch", "force"}},
+}
+
+// paneRoutes are the terminal browser's (panes, tabs) and the "New worktree…" dialog's.
+func (h *Hub) paneRoutes(api *http.ServeMux) {
+	// The terminal browser (docs/integrations/terminal.md "Standalone terminals"): a machine's workspaces, tabs and panes with plain shells, and
+	// "New terminal". A pane is full shell access on the computer: full devices only (paneRoutesFullOnly).
+	api.HandleFunc("GET /api/v1/machines/{mid}/panes", h.proxy("panes.list", nil))
+	api.HandleFunc("POST /api/v1/machines/{mid}/panes", h.withMachine(h.newShell))
+	// close / split / run an agent / git in a pane, close / rename a tab: full devices only (panes.go)
+	api.HandleFunc("POST /api/v1/machines/{mid}/panes/close", h.nodeAction(nodeActions["panes/close"]))
+	api.HandleFunc("POST /api/v1/machines/{mid}/panes/split", h.nodeAction(nodeActions["panes/split"]))
+	api.HandleFunc("POST /api/v1/machines/{mid}/panes/agent", h.nodeAction(nodeActions["panes/agent"]))
+	api.HandleFunc("POST /api/v1/machines/{mid}/panes/git", h.nodeAction(nodeActions["panes/git"]))
+	api.HandleFunc("POST /api/v1/machines/{mid}/tabs/close", h.nodeAction(nodeActions["tabs/close"]))
+	api.HandleFunc("POST /api/v1/machines/{mid}/tabs/rename", h.nodeAction(nodeActions["tabs/rename"]))
+	// #2431 "New worktree…": what the dialog starts from, and the worktree (full devices only, panes.go)
+	api.HandleFunc("POST /api/v1/machines/{mid}/worktree/prepare", h.nodeAction(nodeActions["worktree/prepare"]))
+	api.HandleFunc("POST /api/v1/machines/{mid}/worktree/create", h.withClientOp("worktree_create", h.nodeAction(nodeActions["worktree/create"])))
+	api.HandleFunc("POST /api/v1/machines/{mid}/worktree/rename", h.nodeAction(nodeActions["worktree/rename"]))
+	api.HandleFunc("POST /api/v1/machines/{mid}/worktree/add", h.nodeAction(nodeActions["worktree/add"]))
+	api.HandleFunc("POST /api/v1/machines/{mid}/worktree/status", h.nodeAction(nodeActions["worktree/status"]))
+	api.HandleFunc("POST /api/v1/machines/{mid}/worktree/remove", h.nodeAction(nodeActions["worktree/remove"]))
 }

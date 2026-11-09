@@ -13,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/acceptloop"
 	"github.com/nwverse/persona/server/internal/identity"
 	"github.com/nwverse/persona/server/internal/nodeclient"
 	"github.com/nwverse/persona/server/internal/nodeproto"
@@ -232,6 +233,8 @@ type standby struct {
 	now  func() time.Time
 	// retry is how often standby looks whether it can (or still does) own node.sock while it is wanted.
 	retry time.Duration
+	// afterAsk, in tests only, runs between asking whether anything answers on node.sock and taking it.
+	afterAsk func()
 
 	mu      sync.Mutex
 	wanted  bool
@@ -281,18 +284,30 @@ func (s *standby) loop() {
 	t := time.NewTicker(s.retry)
 	defer t.Stop()
 	for range t.C {
-		s.mu.Lock()
-		if !s.wanted {
-			s.looping = false
-			s.mu.Unlock()
+		if !s.check() {
 			return
 		}
-		if s.ln != nil && !s.ownsPathLocked() {
-			s.closeLocked() // a node serving by itself took the path: let it be, and take it back when it is gone
-		}
-		s.mu.Unlock()
-		s.tryListen()
 	}
+}
+
+// check is one look of loop: false once standby is no longer wanted (the loop ends).
+func (s *standby) check() bool {
+	s.mu.Lock()
+	if !s.wanted {
+		s.looping = false
+		s.mu.Unlock()
+		return false
+	}
+	if s.ln != nil && !s.ownsPathLocked() {
+		// A node serving by itself took the path, or is taking it (it removes the file, then listens): let it be for
+		// this round, and take it back once nothing answers there. Listening again now could beat that node's listen.
+		s.closeLocked()
+		s.mu.Unlock()
+		return true
+	}
+	s.mu.Unlock()
+	s.tryListen()
+	return true
 }
 
 func (s *standby) closeLocked() {
@@ -308,7 +323,9 @@ func (s *standby) ownsPathLocked() bool {
 }
 
 // tryListen listens on node.sock unless standby already does or something else answers there. It asks outside mu (a
-// ping takes up to 1.3 s, and holding, managerSeen and unwant wait for mu) and looks again under it.
+// ping takes up to 1.3 s, and holding, managerSeen and unwant wait for mu) and looks again under it. It takes only
+// what it asked about: the file that did not answer, or a path with nothing there. A node serving by itself may take
+// the path meanwhile (remove, then listen); standby removing that node's new file kept the path for good (#1556).
 func (s *standby) tryListen() {
 	s.mu.Lock()
 	skip := !s.wanted || s.ln != nil
@@ -317,8 +334,12 @@ func (s *standby) tryListen() {
 		return
 	}
 	path := nodeclient.SocketPath()
+	asked, _ := os.Lstat(path) // nil: nothing there
 	if answers(path) {
 		return // a live node serves it
+	}
+	if s.afterAsk != nil {
+		s.afterAsk()
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -329,7 +350,11 @@ func (s *standby) tryListen() {
 		s.logf("standby: %v", err)
 		return
 	}
-	_ = os.Remove(path)
+	if now, _ := os.Lstat(path); !sameEntry(asked, now) {
+		return // a node is taking the path: ask again next time
+	} else if now != nil {
+		_ = os.Remove(path)
+	}
 	ln, err := net.Listen("unix", path)
 	if err != nil {
 		s.logf("standby: %v", err)
@@ -345,28 +370,31 @@ func (s *standby) tryListen() {
 		return
 	}
 	s.ln, s.lnFile = ln, fi
-	go func() {
-		for {
-			c, err := ln.Accept()
-			if err != nil {
-				return
-			}
-			s.mu.Lock()
-			current := s.ln == ln
-			if current {
-				s.conns.Add(1) // under mu: unwant's Wait sees every request taken before it closed ln
-			}
-			s.mu.Unlock()
-			if !current {
-				c.Close()
-				return
-			}
-			go func() {
-				defer s.conns.Done()
-				s.serve(c)
-			}()
+	// Ends when closeLocked closes ln; a transient Accept error does not end it (acceptloop.Run).
+	go acceptloop.Run(context.Background(), ln, s.logf, func(c net.Conn) {
+		s.mu.Lock()
+		current := s.ln == ln
+		if current {
+			s.conns.Add(1) // under mu: unwant's Wait sees every request taken before it closed ln
 		}
-	}()
+		s.mu.Unlock()
+		if !current {
+			c.Close() // ln was closed: the next Accept ends the loop
+			return
+		}
+		go func() {
+			defer s.conns.Done()
+			s.serve(c)
+		}()
+	})
+}
+
+// sameEntry says whether a and b (from os.Lstat; nil: nothing there) are the same file, or both nothing.
+func sameEntry(a, b os.FileInfo) bool {
+	if a == nil || b == nil {
+		return a == nil && b == nil
+	}
+	return os.SameFile(a, b)
 }
 
 // answers says whether a node serves path: it answers a ping (a listener that is closing, or a stopped process whose

@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="settings_update_v7_identity">hub 身份校验失败，请核对配对信息。</string>
+    <string name="settings_update_v7_pair_expired">hub 配对已失效，请重新配对后检查更新。</string>
+    <string name="settings_update_v7_local_permission">缺少本地网络访问权限，请在系统设置中允许后重试。</string>
+    <string name="settings_update_v7_address_policy">此下载地址不符合连接安全要求，请检查 hub 地址。</string>
+    <string name="settings_update_v7_invalid_info">hub 未能提供有效的更新信息，请稍后重试。</string>
+    <string name="settings_update_v7_missing_apk">hub 未能提供安装包，请稍后重试。</string>
+    <string name="settings_update_v7_check_network">无法连接 hub 检查更新，请检查网络后重试。</string>
+    <string name="settings_update_v7_download_network">下载更新失败，请检查与 hub 的网络连接后重试。</string>
+    <string name="settings_update_v7_save_storage">无法保存安装包，请检查存储空间后重试。</string>
+    <string name="settings_update_v7_digest">安装包校验失败，请重新下载。</string>
+    <string name="settings_update_v7_digest_missing">更新信息缺少有效的 SHA-256 校验值，请重新检查更新。</string>
+    <string name="settings_update_v7_permission">尚未允许安装应用，请在系统设置中允许后重试。</string>
+    <string name="settings_update_v7_archive">无法读取安装包，请重新下载。</string>
+    <string name="settings_update_v7_package">安装包不属于当前应用，已取消安装。</string>
+    <string name="settings_update_v7_metadata_version">安装包版本与更新信息不一致，请重新检查更新。</string>
+    <string name="settings_update_v7_not_newer">安装包版本不高于当前版本，已取消安装。</string>
+    <string name="settings_update_v7_signer_missing">无法读取应用签名，已取消安装。</string>
+    <string name="settings_update_v7_signer">安装包签名与当前应用不一致，已取消安装。</string>
+    <string name="settings_update_v7_launch">无法启动系统安装器，请检查存储空间和安装权限后重试。</string>
+    <string name="settings_update_v7_system_permission">系统未允许安装应用，请检查安装权限后重试。</string>
+    <string name="settings_update_v7_read_launch">无法读取安装包或启动系统安装器，请重新下载后重试。</string>
+    <string name="settings_update_v7_system_downgrade">安装包版本低于当前版本，系统已拒绝安装。</string>
+    <string name="settings_update_v7_system_signature">安装包签名与当前应用不一致，系统已拒绝安装。</string>
+    <string name="settings_update_v7_system_invalid">系统判定安装包无效或签名校验失败，请重新下载。</string>
+    <string name="settings_update_v7_system_storage">存储空间不足，请清理后重试。</string>
+    <string name="settings_update_v7_system_blocked">系统阻止了安装，请检查安装权限和系统安全设置。</string>
+    <string name="settings_update_v7_system_incompatible">安装包与当前设备不兼容。</string>
+    <string name="settings_update_v7_system_conflict">安装包与当前应用冲突，请核对版本和签名。</string>
+    <string name="settings_update_v7_system_failed">系统安装未完成，请重试。</string>
+    <string name="settings_update_v7_native_title">默认打开原生聊天</string>
+    <string name="settings_update_v7_native_subtitle">开启使用左右气泡聊天；关闭使用插件事件详情。下次打开事项时生效。</string>
+    <string name="settings_update_v7_native_section">收件箱</string>
+</resources>

@@ -9,6 +9,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import java.util.UUID
+import persona.core.contracts.SessionKey
 import persona.core.contracts.LarkReaction
 import persona.core.contracts.api.ConnectionState
 import persona.core.contracts.api.MailTransport
@@ -20,9 +21,13 @@ private val emptyReplyComposers: StateFlow<ReplyComposers?> = MutableStateFlow(n
 
 private val disconnectedMail: StateFlow<MailTransport?> = MutableStateFlow(null)
 private val emptyPersonaOutbox: StateFlow<List<OutboxMessage>> = MutableStateFlow(emptyList())
+private val emptyConversationInbox: StateFlow<InboxConversations?> = MutableStateFlow(null)
+private val emptyMessageReads: StateFlow<Set<InboxMessageRead>> = MutableStateFlow(emptySet())
 
 /** Feature capabilities until the shared repository contract exposes inbox details. */
 interface InboxRepository : persona.core.contracts.api.InboxRepository {
+    val conversationInbox: StateFlow<InboxConversations?> get() = emptyConversationInbox
+    val messageReads: StateFlow<Set<InboxMessageRead>> get() = emptyMessageReads
     val supportsThreadOutbox: Boolean get() = false
     val replyComposers: StateFlow<ReplyComposers?> get() = emptyReplyComposers
     suspend fun readingStore(): LarkReadingStore? = null
@@ -53,7 +58,7 @@ interface InboxRepository : persona.core.contracts.api.InboxRepository {
         error("建议尚未接入") // i18n-ignore: developer error for a repository without the hub
 
     /** "Hand to AI": the item as context with what to do, queued for Persona's main conversation or a running Agent. */
-    suspend fun handOff(request: InboxHandOffRequest): Unit = error("交给 AI 尚未接入") // i18n-ignore: developer error for a repository without the hub
+    suspend fun handOff(request: InboxHandOffRequest): SessionKey? = error("交给 AI 尚未接入") // i18n-ignore: developer error for a repository without the hub
     fun replyUpdates(target: ReplyTarget): Flow<Unit> = kotlinx.coroutines.flow.emptyFlow()
     suspend fun replyStatus(target: ReplyTarget, clientId: String): ReplyDelivery = ReplyDelivery.Ready
     suspend fun verifyReply(target: ReplyTarget, clientId: String): ReplyDelivery = ReplyDelivery.Unknown
@@ -62,7 +67,12 @@ interface InboxRepository : persona.core.contracts.api.InboxRepository {
     suspend fun refreshConversation(feedId: String)
     suspend fun loadNewer(feedId: String) = refreshConversation(feedId)
     suspend fun latestConversation(feedId: String) = refreshConversation(feedId)
-    suspend fun markVisible(feedId: String, messages: List<LarkMessage>) = Unit
+    suspend fun markVisible(feedId: String, messages: List<LarkMessage>): Boolean = false
+    /**
+     * 全部已读 / 下一条 on a conversation not loaded here: acknowledge its newest message from someone else, from one raw
+     * page (no window, no card parsing). False when there is no Feishu transport or nothing to acknowledge.
+     */
+    suspend fun markLatestRead(feedId: String): Boolean = false
     suspend fun setDone(itemId: String, done: Boolean)
     /**
      * Mark all as seen / Clear all and their Undo: [items] done (or back) in one request, each as listed, so one

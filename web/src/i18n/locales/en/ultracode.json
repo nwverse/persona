@@ -18,5 +18,8 @@
   "quota_week": "weekly {percent}",
   "quota_warn": "Quota is running low; ultracode uses it up faster",
   "start_refused": "Couldn't start with ultracode: {error}. Retry starts without it",
-  "send_waits": "Sends once the ultracode change applies after this turn"
+  "send_waits": "Sends once the ultracode change applies after this turn",
+  "plan_on": "Starts with ultracode: every task runs as a multi-agent workflow, which uses a lot of quota. Click to start without it",
+  "plan_off": "Starts without ultracode. Click to start with it: every task runs as a multi-agent workflow, which uses a lot of quota",
+  "plan_blocked": "Starts without ultracode: {reason}"
 }

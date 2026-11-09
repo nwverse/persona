@@ -33,6 +33,12 @@ func runRelease(args []string) error {
 		if err := fs.Parse(args[1:]); err != nil {
 			return err
 		}
+		if err := noReleaseArgs("release manifest", fs.Args()); err != nil {
+			return err
+		}
+		if *dir == "" || *out == "" {
+			return usageError("release manifest needs --dir and --out\n" + releaseUsage())
+		}
 		n, err := update.ParseNumber(*num)
 		if err != nil {
 			return err
@@ -69,12 +75,21 @@ func runRelease(args []string) error {
 		if err := fs.Parse(args[2:]); err != nil {
 			return err
 		}
+		if err := noReleaseArgs("release check-next", fs.Args()); err != nil {
+			return err
+		}
 		n, err := update.ParseNumber(*num)
 		if err != nil {
 			return err
 		}
+		// Nothing served is a missing or empty file (publish.sh writes an empty one when the fetch fails). Any other
+		// read error fails the check: a nil manifest passes it whatever the build and commit.
 		var m *update.Manifest
-		if b, err := os.ReadFile(served); err == nil && len(strings.TrimSpace(string(b))) > 0 {
+		b, err := os.ReadFile(served)
+		if err != nil && !errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("read the served manifest: %w", err)
+		}
+		if len(strings.TrimSpace(string(b))) > 0 {
 			if m, err = update.ParseManifest(b); err != nil {
 				return err
 			}
@@ -89,6 +104,15 @@ func runRelease(args []string) error {
 		})
 	}
 	return usageError(fmt.Sprintf("unknown release command %q\n%s", args[0], releaseUsage()))
+}
+
+// noReleaseArgs refuses what is left after a release subcommand's flags: flag parsing stops at the first argument
+// that is not a flag, so a misplaced or mistyped one would drop every flag after it.
+func noReleaseArgs(cmd string, rest []string) error {
+	if len(rest) > 0 {
+		return usageError(fmt.Sprintf("%s: unexpected argument %q\n%s", cmd, rest[0], releaseUsage()))
+	}
+	return nil
 }
 
 // releaseUsage is what `release` without a known subcommand prints.

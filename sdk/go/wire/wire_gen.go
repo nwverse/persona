@@ -888,6 +888,8 @@ type InitializeResult struct {
 	Version  string `json:"version"`
 	// A subset of the manifest's.
 	Contributes map[string]json.RawMessage `json:"contributes,omitempty"`
+	// Request-ID scoped rpc.cancel for mounted page lifecycle calls only.
+	UIPageCancellation int `json:"ui_page_cancellation,omitempty"`
 }
 
 // UIParams: ui.render's and ui.action's parameters: what to draw, where, for whom.
@@ -2877,23 +2879,28 @@ type MessagingError struct {
 }
 
 // ConnectorErrorCode: error.code a program answers or gets besides the base ErrorCode: rate_limited (tools.call /
-// actions.do, and the hub's answer to too many sent.record; data {retry_after} in seconds, fractional allowed), and
-// why credentials.gh_token has no token.
+// actions.do, and the hub's answer to too many sent.record; data {retry_after} in seconds, fractional allowed), why
+// credentials.gh_token has no token, and what recall answers: not_recallable (nothing was sent: the program cannot
+// take that message back) and recall_unknown (the request may have taken effect). not_signed_in, offline and
+// rate_limited also say that recall could not act now.
 const (
-	ConnectorErrorCodeRateLimited = "rate_limited"
-	ConnectorErrorCodeNoMachine   = "no_machine"
-	ConnectorErrorCodeOffline     = "offline"
-	ConnectorErrorCodeNodeTooOld  = "node_too_old"
-	ConnectorErrorCodeNoGh        = "no_gh"
-	ConnectorErrorCodeNotSignedIn = "not_signed_in"
+	ConnectorErrorCodeRateLimited   = "rate_limited"
+	ConnectorErrorCodeNoMachine     = "no_machine"
+	ConnectorErrorCodeOffline       = "offline"
+	ConnectorErrorCodeNodeTooOld    = "node_too_old"
+	ConnectorErrorCodeNoGh          = "no_gh"
+	ConnectorErrorCodeNotSignedIn   = "not_signed_in"
+	ConnectorErrorCodeNotRecallable = "not_recallable"
+	ConnectorErrorCodeRecallUnknown = "recall_unknown"
 )
 
 // ConnectorErrorCodes are the values of ConnectorErrorCode, in order.
-var ConnectorErrorCodes = []string{"rate_limited", "no_machine", "offline", "node_too_old", "no_gh", "not_signed_in"}
+var ConnectorErrorCodes = []string{"rate_limited", "no_machine", "offline", "node_too_old", "no_gh", "not_signed_in", "not_recallable", "recall_unknown"}
 
 // ConnectorCapability: what a connector declares (ConnectorItem.capabilities): the hub calls only the methods of
-// declared ones. fallback has no method: every inbox thing promises extra.rule_tier. An extension's connector with
-// one this hub does not know loses only that capability.
+// declared ones. fallback has no method: every inbox thing promises extra.rule_tier. recall is the program's word
+// that it can take back what it sent: the hub then calls connector.recall (only after the user agreed), and the
+// install preview says so. An extension's connector with one this hub does not know loses only that capability.
 const (
 	ConnectorCapabilityStatus   = "status"
 	ConnectorCapabilityTools    = "tools"
@@ -2912,10 +2919,11 @@ const (
 	ConnectorCapabilityMeta     = "meta"
 	ConnectorCapabilityFallback = "fallback"
 	ConnectorCapabilityMachines = "machines"
+	ConnectorCapabilityRecall   = "recall"
 )
 
 // ConnectorCapabilities are the values of ConnectorCapability, in order.
-var ConnectorCapabilities = []string{"status", "tools", "actions", "events", "inbox", "settle", "archive", "chats", "items", "login", "options", "threads", "snapshot", "group", "meta", "fallback", "machines"}
+var ConnectorCapabilities = []string{"status", "tools", "actions", "events", "inbox", "settle", "archive", "chats", "items", "login", "options", "threads", "snapshot", "group", "meta", "fallback", "machines", "recall"}
 
 // ConnectorState: connectorStatus.state. disabled is the hub's own (the user switched it off); a program never
 // answers it.
@@ -3112,6 +3120,36 @@ type ConnectorDoParams struct {
 	Name         string          `json:"name"`
 	Args         json.RawMessage `json:"args,omitempty"`
 	RequestID    string          `json:"request_id"`
+}
+
+// ConnectorRecallParams: recall: take back a message the connector's program sent in the user's name, which the
+// sent-as-user ledger has a row of (docs/extensions/connectors.md "Sent as the user"). Only for a connector that
+// declares the capability recall, and only once the user agreed on their own device; the program never starts one.
+// The fields are the row's, as the hub kept them: nothing of what the message said. A repeat after success is a
+// success too. Answer with ConnectorRecallResult (recalled true) only when the service confirms the message is no
+// longer there, one that was already gone included; otherwise an error: not_recallable (it cannot, and nothing was
+// sent), not_signed_in, offline or rate_limited (it cannot act now), recall_unknown (it may have gone through), any
+// other error is the service refusing, with one sentence for people (no secret, no text of the message).
+type ConnectorRecallParams struct {
+	Contribution string `json:"contribution"`
+	// What wrote it: the tool's name (actions.do), sent.record, or, for a write the node's gate forwarded, "METHOD
+	// /path".
+	Action string `json:"action"`
+	// The sent message's id on the other side, as the program gave it (actions.do or sent.record) or as the service's
+	// answer did (a write through the node's gate).
+	MessageRef string `json:"message_ref"`
+	// Where it went, as the ledger kept it (short values): the program's own for a send it recorded; for a write through
+	// the node's gate also method, path and command (the gate's name), and the ids its path names.
+	Target map[string]json.RawMessage `json:"target,omitempty"`
+	// When the ledger wrote the row, right after the send.
+	At time.Time `json:"at,omitzero"`
+}
+
+// ConnectorRecallResult: recall's answer: recalled true is the program's word that the service confirmed the message
+// is no longer there. Anything else (no recalled, false) is not taken for a yes: the hub then knows nothing, writes
+// nothing and lets the user ask again.
+type ConnectorRecallResult struct {
+	Recalled bool `json:"recalled"`
 }
 
 // ConnectorThreadParams: thread.page: one page of an inbox thread, oldest first; no before is the newest page.
@@ -4218,21 +4256,24 @@ type TodoDecisionEvent struct {
 // ModelErrorCode: error.code of model.complete besides permission_denied (data {scope: "models"}): invalid_params;
 // assistant_offline (the manager is away: try again); model_unavailable (nothing to call for this extension: the user
 // picks a model for it in Settings › Model configuration); model_paused (the connection is held for quota or load,
-// nothing was sent; data ModelPause: try again after until); model_failed (the upstream refused or failed the
-// request); timeout (past timeout_seconds); invalid_output (with json_schema, the reply was still not JSON matching
-// it after one more try; data ModelInvalidOutput).
+// nothing was sent; data ModelPause: try again after until); model_failed (the upstream failed the request: an error
+// status or a dropped connection); model_refused (the model declined to answer this input, a refusal or a content
+// filter: sending it again unchanged gets the same answer, so split it, drop a part or report it; data ModelRefusal);
+// timeout (past timeout_seconds); invalid_output (with json_schema, the reply was still not JSON matching it after
+// one more try; data ModelInvalidOutput).
 const (
 	ModelErrorCodeInvalidParams    = "invalid_params"
 	ModelErrorCodeAssistantOffline = "assistant_offline"
 	ModelErrorCodeModelUnavailable = "model_unavailable"
 	ModelErrorCodeModelPaused      = "model_paused"
 	ModelErrorCodeModelFailed      = "model_failed"
+	ModelErrorCodeModelRefused     = "model_refused"
 	ModelErrorCodeTimeout          = "timeout"
 	ModelErrorCodeInvalidOutput    = "invalid_output"
 )
 
 // ModelErrorCodes are the values of ModelErrorCode, in order.
-var ModelErrorCodes = []string{"invalid_params", "assistant_offline", "model_unavailable", "model_paused", "model_failed", "timeout", "invalid_output"}
+var ModelErrorCodes = []string{"invalid_params", "assistant_offline", "model_unavailable", "model_paused", "model_failed", "model_refused", "timeout", "invalid_output"}
 
 // ModelMessage: one turn of the conversation: the user's, or the model's earlier answer.
 type ModelMessage struct {
@@ -4303,6 +4344,100 @@ type ModelInvalidOutput struct {
 	Problem string     `json:"problem"`
 	Text    string     `json:"text"`
 	Usage   ModelUsage `json:"usage"`
+}
+
+// ModelRefusal: the data of model_refused: what the upstream said and what the declined call spent.
+type ModelRefusal struct {
+	// The upstream's reason: refusal (a refusal stop or part) or content_filter.
+	StopReason string     `json:"stop_reason,omitempty"`
+	Usage      ModelUsage `json:"usage"`
+}
+
+// AssistantErrorCode: error.code of the assistant calls besides permission_denied (data {scope: "assistant.read"}):
+// invalid_params; not_found (assistant.messages: no such conversation in the assistant's own space);
+// assistant_offline (the manager is away: try again); machine_offline (the assistant's computer is not connected or
+// not set up: try again).
+const (
+	AssistantErrorCodeInvalidParams    = "invalid_params"
+	AssistantErrorCodeNotFound         = "not_found"
+	AssistantErrorCodeAssistantOffline = "assistant_offline"
+	AssistantErrorCodeMachineOffline   = "machine_offline"
+)
+
+// AssistantErrorCodes are the values of AssistantErrorCode, in order.
+var AssistantErrorCodes = []string{"invalid_params", "not_found", "assistant_offline", "machine_offline"}
+
+// AssistantConversationsParams: assistant.conversations (assistant.read): the conversations last active at or after
+// since, newest first.
+type AssistantConversationsParams struct {
+	// An RFC 3339 time: last active at or after it.
+	Since string `json:"since"`
+	// An RFC 3339 time: those known to have started at or after it are left out.
+	Until           string `json:"until,omitempty"`
+	IncludeArchived bool   `json:"include_archived,omitempty"`
+	// 0 is 50.
+	Limit  int `json:"limit,omitempty"`
+	Offset int `json:"offset,omitempty"`
+}
+
+type AssistantConversation struct {
+	ID string `json:"id"`
+	// Empty while it has none.
+	Title string `json:"title"`
+	// The main conversation.
+	Main     bool `json:"main,omitempty"`
+	Archived bool `json:"archived,omitempty"`
+	// Who opened it: user, channel, inbox, task, spawned, lark_agent or extension.
+	Origin string `json:"origin"`
+	// When it began, when known.
+	Started time.Time `json:"started,omitzero"`
+	// Its last activity.
+	Updated time.Time `json:"updated"`
+}
+
+type AssistantConversationsResult struct {
+	Items      []AssistantConversation `json:"items"`
+	Total      int                     `json:"total"`
+	NextOffset *int                    `json:"next_offset,omitempty"`
+}
+
+// AssistantMessagesParams: assistant.messages (assistant.read): one conversation's words in time order, paged by seq.
+type AssistantMessagesParams struct {
+	// The conversation (assistant.conversations' id).
+	ID string `json:"id"`
+	// An RFC 3339 time: messages at or after it.
+	Since string `json:"since,omitempty"`
+	// An RFC 3339 time: messages before it.
+	Until string `json:"until,omitempty"`
+	// Continue after this seq (the last page's next_seq).
+	AfterSeq *int `json:"after_seq,omitempty"`
+	// 0 is 200.
+	Limit int `json:"limit,omitempty"`
+}
+
+type AssistantMessage struct {
+	Seq  int       `json:"seq"`
+	At   time.Time `json:"at"`
+	Role string    `json:"role"`
+	Text string    `json:"text"`
+	// The text was cut for pages (a very long message).
+	Truncated bool `json:"truncated,omitempty"`
+}
+
+// Values of AssistantRole.
+const (
+	AssistantRoleUser      = "user"
+	AssistantRoleAssistant = "assistant"
+)
+
+// AssistantRoles are the values of AssistantRole, in order.
+var AssistantRoles = []string{"user", "assistant"}
+
+// AssistantMessagesResult: next_seq is set while there is more to read (pass it as after_seq), even when this page
+// has no messages.
+type AssistantMessagesResult struct {
+	Messages []AssistantMessage `json:"messages"`
+	NextSeq  *int               `json:"next_seq,omitempty"`
 }
 
 // Bounded JSON scalar, not executable content. Strings at most 4096 code points; finite numbers in the JSON-safe
@@ -5184,6 +5319,8 @@ var newDef = map[string]func() any{
 	"ConnectorAction":              func() any { return new(ConnectorAction) },
 	"ConnectorDescribeResult":      func() any { return new(ConnectorDescribeResult) },
 	"ConnectorDoParams":            func() any { return new(ConnectorDoParams) },
+	"ConnectorRecallParams":        func() any { return new(ConnectorRecallParams) },
+	"ConnectorRecallResult":        func() any { return new(ConnectorRecallResult) },
 	"ConnectorThreadParams":        func() any { return new(ConnectorThreadParams) },
 	"ConnectorThreadPage":          func() any { return new(ConnectorThreadPage) },
 	"ConnectorThreadChat":          func() any { return new(ConnectorThreadChat) },
@@ -5302,6 +5439,13 @@ var newDef = map[string]func() any{
 	"ModelCompleteResult":          func() any { return new(ModelCompleteResult) },
 	"ModelPause":                   func() any { return new(ModelPause) },
 	"ModelInvalidOutput":           func() any { return new(ModelInvalidOutput) },
+	"ModelRefusal":                 func() any { return new(ModelRefusal) },
+	"AssistantConversationsParams": func() any { return new(AssistantConversationsParams) },
+	"AssistantConversation":        func() any { return new(AssistantConversation) },
+	"AssistantConversationsResult": func() any { return new(AssistantConversationsResult) },
+	"AssistantMessagesParams":      func() any { return new(AssistantMessagesParams) },
+	"AssistantMessage":             func() any { return new(AssistantMessage) },
+	"AssistantMessagesResult":      func() any { return new(AssistantMessagesResult) },
 	"UIStreamCapability":           func() any { return new(UIStreamCapability) },
 	"UIStreamSnapshot":             func() any { return new(UIStreamSnapshot) },
 	"UIStreamDelta":                func() any { return new(UIStreamDelta) },
@@ -5335,6 +5479,7 @@ var Calls = map[string]Call{
 	"connector.actions.list":         {Name: "connector.actions.list", From: "hub", Params: "ConnectorParams", Result: "ConnectorTools"},
 	"connector.actions.describe":     {Name: "connector.actions.describe", From: "hub", Params: "ConnectorCallParams", Result: "ConnectorDescribeResult"},
 	"connector.actions.do":           {Name: "connector.actions.do", From: "hub", Params: "ConnectorDoParams", Result: "ConnectorCallResult"},
+	"connector.recall":               {Name: "connector.recall", From: "hub", Params: "ConnectorRecallParams", Result: "ConnectorRecallResult"},
 	"connector.thread.page":          {Name: "connector.thread.page", From: "hub", Params: "ConnectorThreadParams", Result: "ConnectorThreadPage"},
 	"connector.thread.media":         {Name: "connector.thread.media", From: "hub", Params: "ConnectorMediaParams", Result: "ConnectorMedia"},
 	"connector.inbox.collect":        {Name: "connector.inbox.collect", From: "hub", Params: "ConnectorParams", Result: "ConnectorCollectResult"},
@@ -5382,4 +5527,6 @@ var Calls = map[string]Call{
 	"event.todo.changed":             {Name: "event.todo.changed", From: "hub", Params: "TodoChangedEvent", Result: "", Event: true},
 	"event.todo.decision":            {Name: "event.todo.decision", From: "hub", Params: "TodoDecisionEvent", Result: "", Event: true},
 	"model.complete":                 {Name: "model.complete", From: "program", Params: "ModelCompleteParams", Result: "ModelCompleteResult"},
+	"assistant.conversations":        {Name: "assistant.conversations", From: "program", Params: "AssistantConversationsParams", Result: "AssistantConversationsResult"},
+	"assistant.messages":             {Name: "assistant.messages", From: "program", Params: "AssistantMessagesParams", Result: "AssistantMessagesResult"},
 }

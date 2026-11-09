@@ -343,6 +343,13 @@ func TestComputerJobs(t *testing.T) {
 	if !sameComputer(same, again) || sameComputer(same, proto.Computer{}) {
 		t.Fatal("jobs compare by value")
 	}
+	two := func() []proto.Display {
+		return []proto.Display{{ID: 1, Width: 1512, Height: 982, Main: true}, {ID: 2, X: 1512, Width: 1920, Height: 1080}}
+	}
+	if !sameComputer(proto.Computer{Displays: two()}, proto.Computer{Displays: two()}) || sameComputer(proto.Computer{Displays: two()}, proto.Computer{}) ||
+		!sameBrowser(proto.Browser{Displays: two()}, proto.Browser{Displays: two()}) || sameBrowser(proto.Browser{Displays: two()}, proto.Browser{Displays: two()[:1]}) {
+		t.Fatal("displays compare by value: a display plugged in or out goes out to the apps")
+	}
 	mac.mu.Lock()
 	mac.online = false
 	mac.mu.Unlock()

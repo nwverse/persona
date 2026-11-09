@@ -2,6 +2,7 @@
 // checking for and installing a release, what an update waits for, auto-update, the history; and the assistant's
 // skills (GET /api/v1/skills). Pure helpers here; the page is views/settings/HubSettings.tsx.
 import { t } from "../i18n";
+import { MANAGER_HEADER } from "./manager-choice";
 import { api } from "./api";
 
 export interface BusyItem {
@@ -62,7 +63,7 @@ export const checkHubUpdate = () => api<HubUpdateStatus>("/hub/update/check", { 
 export const startHubUpdate = (now: boolean) => api<HubUpdateStatus>("/hub/update", { method: "POST", json: now ? { now: true } : {} });
 export const setHubUpdateSettings = (s: { auto?: boolean; auto_notice_seen?: boolean }) => api<HubUpdateStatus>("/hub/update/settings", { method: "PUT", json: s });
 export const hubUpdateHistory = () => api<{ history: HubUpdateRecord[] | null }>("/hub/update/history").then((r) => r.history ?? []);
-export const skills = () => api<{ machine_id: string; machine?: string; skills: Skill[] | null }>("/skills");
+export const skills = (manager?: string) => api<{ machine_id: string; machine?: string; skills: Skill[] | null }>("/skills", { headers: manager ? { [MANAGER_HEADER]: manager } : undefined });
 
 export const DOCKER_COMMAND = "docker compose pull && docker compose up -d";
 

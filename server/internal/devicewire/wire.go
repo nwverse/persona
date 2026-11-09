@@ -37,6 +37,27 @@ const (
 	// the hub; MethodConnectorPaired ConnectorCred → {}: pairing made new ones, the hub seals and keeps them.
 	MethodConnectorCred   = "devices.connector_cred"
 	MethodConnectorPaired = "devices.connector_paired"
+	// MethodRename Rename → RenameReply: a computer's Persona Link asked for another name (persona-link name, the
+	// tray, the menu bar); the hub writes it to hub.json and hands the entries over again (EventConfig). Refused with
+	// an rpc.Error of a RenameCode*.
+	MethodRename = "devices.rename"
+)
+
+// Rename is devices.rename's params: Name "" is the computer's id again.
+type Rename struct {
+	MachineID string `json:"machine_id"`
+	Name      string `json:"name"`
+}
+
+// RenameReply is the name the hub calls the computer now.
+type RenameReply struct {
+	Name string `json:"name"`
+}
+
+// Why a rename was refused (devices.rename's rpc.Error codes; the link's renamed carries them as they are).
+const (
+	RenameCodeInvalidName = "invalid_name" // too long, or not one line
+	RenameCodePending     = "pending"      // the computer waits for the user to confirm it
 )
 
 // Hub → manager.
@@ -137,7 +158,8 @@ type Config struct {
 	// Machines are hub.json's machines (and those the admin page added since), each the JSON hub.json has.
 	Machines []json.RawMessage `json:"machines"`
 	// MachinesOwn: the manager's own list (its manager.json) is the list, and the hub relays its edits
-	// (devices.machines.*). Machines is then taken over only the first time, as the manager's own.
+	// (devices.machines.*). Machines is then taken over only the first time, as the manager's own; once its report says
+	// it holds that list (States.OwnList), the hub hands none (null).
 	MachinesOwn bool `json:"machines_own,omitempty"`
 	// HubID, HubName, HubVersion: the hub's; a node of another build than HubVersion is flagged (and redeployed).
 	HubID      string `json:"hub_id"`
@@ -250,6 +272,9 @@ type States struct {
 	// has it (Cfg; a manager from before leaves it out) and how it reaches it. The hub's mesh record lists them, and
 	// the hub keeps what each manager has from them (hub machine_entries.go).
 	Entries []RecMachine `json:"entries,omitempty"`
+	// OwnList: the manager keeps Entries as its own list in its manager.json (it was handed MachinesOwn and holds the
+	// list as its own): the hub may take them out of hub.json.
+	OwnList bool `json:"own_list,omitempty"`
 }
 
 // NodeEvent is devices.event's and devices.notify's params.
@@ -322,6 +347,8 @@ var Routes = []string{
 	"POST /api/v1/machines/{mid}/deploy",
 	"GET /api/v1/machines/{mid}/claude-dirs",
 	"PUT /api/v1/machines/{mid}/claude-dirs/blocked",
+	"GET /api/v1/machines/{mid}/claude-live-replies",
+	"PUT /api/v1/machines/{mid}/claude-live-replies",
 }
 
 // MetricsRoutes are the machines' monitoring's routes (internal/devices metrics.go), relayed the same way: every

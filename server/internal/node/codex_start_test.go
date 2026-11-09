@@ -111,7 +111,7 @@ func TestCodexStartAnswersWithTheThread(t *testing.T) {
 	// On the screen (and in the shell's history) only codex-start and its file: not the message, not the launcher's
 	// words (an alias can carry a key).
 	cmd := (*cmds)[0]
-	if m := startFileRE.FindStringSubmatch(cmd); m == nil || cmd != shellQuote(n.bin)+" codex-start "+shellQuote(m[1]) {
+	if m := startFileRE.FindStringSubmatch(cmd); m == nil || cmd != inAgentEnv(n.dir, shellQuote(n.bin)+" codex-start "+shellQuote(m[1]), shellQuote) {
 		t.Errorf("command %q", cmd)
 	} else if _, err := os.Stat(filepath.Dir(m[1])); !os.IsNotExist(err) {
 		t.Error("the file's directory outlived the start")
@@ -255,6 +255,48 @@ func TestCodexStartHelper(t *testing.T) {
 	}
 	if _, err := os.Stat(file); !os.IsNotExist(err) {
 		t.Error("the file was left behind")
+	}
+}
+
+func TestCodexStartScopesOrcaHooksWithoutChangingExplicitLaunchers(t *testing.T) {
+	for _, tc := range []struct {
+		name, help string
+		isolate    bool
+		args, want []string
+	}{
+		{"Orca local", "--no-daemon", true, nil, []string{"--no-daemon"}},
+		{"older CLI", "other options", true, nil, nil},
+		{"other host", "--no-daemon", false, nil, nil},
+		{"explicit remote", "--no-daemon", true, []string{"--remote", "unix:///server"}, []string{"--remote", "unix:///server"}},
+		{"already isolated", "--no-daemon", true, []string{"-c", "model=example"}, []string{"-c", "model=example"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			program, file, out := filepath.Join(dir, "codex"), filepath.Join(dir, "start.json"), filepath.Join(dir, "out")
+			script := "#!/bin/sh\nif [ \"$1\" = --help ]; then printf '%s' \"$CLI_HELP\"; exit 0; fi\nprintf '%s\\n' \"$@\" > \"$OUT\"\n"
+			if err := os.WriteFile(program, []byte(script), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			words := append([]string{program}, tc.args...)
+			b, _ := json.Marshal(codexStartFile{Argv: words, Prompt: "one complete prompt", IsolateHooks: tc.isolate})
+			if err := os.WriteFile(file, b, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			args, _ := json.Marshal([]string{file})
+			cmd := exec.Command(os.Args[0], "-test.run=^TestCodexStartHelper$")
+			cmd.Env = append(os.Environ(), "PERSONA_CODEX_START_HELPER=1", "PERSONA_CODEX_START_ARGS="+string(args), "OUT="+out, "CLI_HELP="+tc.help)
+			if b, err := cmd.CombinedOutput(); err != nil {
+				t.Fatalf("%v: %s", err, b)
+			}
+			got, err := os.ReadFile(out)
+			if err != nil {
+				t.Fatal(err)
+			}
+			want := append(append([]string(nil), tc.want...), "--", "one complete prompt")
+			if string(got) != strings.Join(want, "\n")+"\n" {
+				t.Fatalf("argv: %q, want %q", got, want)
+			}
+		})
 	}
 }
 

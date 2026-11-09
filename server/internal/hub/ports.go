@@ -166,11 +166,17 @@ func (h *Hub) connectPort(w http.ResponseWriter, r *http.Request, m *Machine) {
 	}
 	mux := m.portStreams()
 	if mux == nil {
-		writeErr(w, http.StatusServiceUnavailable, fmt.Errorf("%s: %w", m.cfg.Name, errOffline))
+		writeErr(w, http.StatusServiceUnavailable, fmt.Errorf("%s: %w", m.name(), errOffline))
 		return
 	}
 	if mux.Len() >= maxPortStreams {
 		writeErr(w, http.StatusTooManyRequests, errors.New("too many connections to this machine's ports"))
+		return
+	}
+	r, untrack := h.trackRelayed(r)
+	defer untrack()
+	if err := r.Context().Err(); err != nil {
+		callErr(w, err)
 		return
 	}
 	id := "p" + strconv.FormatInt(streamSeq.Add(1), 10)
@@ -203,14 +209,16 @@ func (h *Hub) connectPort(w http.ResponseWriter, r *http.Request, m *Machine) {
 	}
 	c.SetReadLimit(1 << 20)
 	// The handler holds the request (its context is the connection's) until the stream ends.
-	ctx, done := context.WithCancel(context.Background())
+	ctx, done := context.WithCancel(r.Context())
 	defer done()
 	conn := &endConn{Conn: websocket.NetConn(ctx, c, websocket.MessageBinary), end: done}
+	defer conn.Close()
 	mux.Start(id, conn)
-	select {
-	case <-ctx.Done():
-	case <-r.Context().Done():
-		_ = conn.Close()
+	<-ctx.Done()
+	if err := r.Context().Err(); err != nil {
+		_ = c.CloseNow()
+		// A stream waiting for acknowledgements cannot notice the closed connection itself.
+		mux.Abort(id, err)
 	}
 }
 

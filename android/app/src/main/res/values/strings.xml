@@ -92,4 +92,11 @@
         <item quantity="one">%1$d attachment</item>
         <item quantity="other">%1$d attachments</item>
     </plurals>
+    <string name="app_capsule_keeper_label">Persona floating capsule</string>
+    <string name="app_capsule_keeper_description">Keeps the floating capsule on screen after you lock the phone. Persona does not read the screen or what you type here.</string>
+    <string name="app_capsule_turned_off">Capsule closed. Turn it back on in Settings › Floating capsule.</string>
+    <string name="app_capsule_lark_group">Feishu messages</string>
+    <string name="app_capsule_keeper_channel">Floating capsule</string>
+    <string name="app_capsule_keeper_off_title">Floating capsule was turned off</string>
+    <string name="app_capsule_keeper_off_text">The system turned off “Persona floating capsule” after the update. Tap to turn it back on in Accessibility so the capsule stays after you lock the phone.</string>
 </resources>

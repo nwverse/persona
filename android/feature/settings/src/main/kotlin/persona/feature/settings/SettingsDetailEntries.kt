@@ -33,7 +33,7 @@ fun EntryProviderScope<NavKey>.settingsDetailEntries(navigator: Navigator, servi
     }
     entry<ModelPurposeRoute> { route ->
         ModelPurposePage(services.models.takeUnless { demo }, route.purposeId, onBack = navigator::back,
-            providers = services.providers.takeUnless { demo })
+            providers = services.providers.takeUnless { demo }, manager = route.manager)
     }
     entry<ExtensionRoute> { route ->
         ExtensionPage(services.extensions.takeUnless { demo }, route.extensionId, onBack = navigator::back, startSignIn = route.signIn,

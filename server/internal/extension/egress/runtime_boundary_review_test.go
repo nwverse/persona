@@ -21,7 +21,7 @@ func TestRuntimeBusyRejectDoesNotDrainBody(t *testing.T) {
 	defer p.Close()
 	p.runtimeActive = map[string]int{"a": 4}
 	p.runtimeTotal = 4
-	socket := filepath.Join(t.TempDir(), "proxy.sock")
+	socket := filepath.Join(shortTempDir(t), "proxy.sock")
 	if err := p.ListenRuntimeUnix("a", socket); err != nil {
 		t.Fatal(err)
 	}

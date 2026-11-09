@@ -71,6 +71,7 @@ func (d *Devices) keepOwnListLocked() {
 	if d.opts.ConfigFile == "" {
 		return
 	}
+	defer d.checkOwnHeld()
 	d.mu.Lock()
 	cfg, got := d.cfg, d.got
 	d.mu.Unlock()
@@ -96,6 +97,14 @@ func (d *Devices) keepOwnListLocked() {
 	}
 	from := managerconf.MachinesFromHub{TailcatDERPMapURL: cfg.TailcatDERPMapURL, HubID: cfg.HubID, Mesh: cfg.Mesh != nil,
 		Own: cfg.MachinesOwn}
+	if cfg.MachinesOwn { // taking the hand-over over as its own: another hub's own list is kept aside first
+		if path, err := managerconf.SetAsideOtherHubs(d.opts.ConfigFile, cfg.HubID); err != nil {
+			d.sayOwn("own list of machines: another hub's list could not be kept aside: " + err.Error() + ": not written over")
+			return
+		} else if path != "" {
+			d.logf("own list of machines: %s's was another hub's: kept as %s before the hub's is taken over", d.opts.ConfigFile, path)
+		}
+	}
 	changed, skipped, replaced, err := managerconf.KeepMachines(d.opts.ConfigFile, cfg.Machines, from)
 	var say string
 	switch {
@@ -107,6 +116,43 @@ func (d *Devices) keepOwnListLocked() {
 		say = "own list of machines: kept in " + d.opts.ConfigFile + " without what does not read: " + skipped.Error()
 	}
 	d.sayOwn(say)
+}
+
+// checkOwnHeld says whether the list running is the own list, held as its own in manager.json: the hub handed
+// MachinesOwn, and the file's list reads, is marked its own and is the one running (the hub takes those machines out
+// of hub.json only then: States.OwnList). d.ownMu is held.
+func (d *Devices) checkOwnHeld() {
+	held := false
+	list, from, ok, err := managerconf.OwnMachines(d.opts.ConfigFile)
+	d.mu.Lock()
+	if d.got && d.cfg.MachinesOwn && err == nil && ok && from.Own && sameList(list, d.cfg.Machines) {
+		held = true
+	}
+	changed := d.ownHeld != held
+	d.ownHeld = held
+	d.mu.Unlock()
+	if changed {
+		d.changed()
+	}
+}
+
+// sameList: a and b are the same entries in the same order (as JSON).
+func sameList(a, b []json.RawMessage) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		var x, y any
+		if json.Unmarshal(a[i], &x) != nil || json.Unmarshal(b[i], &y) != nil {
+			return false
+		}
+		xb, _ := json.Marshal(x)
+		yb, _ := json.Marshal(y)
+		if string(xb) != string(yb) {
+			return false
+		}
+	}
+	return true
 }
 
 // sayOwn logs the trouble with the own list once, not at every hand-over ("": none now); d.ownMu is held.
@@ -134,7 +180,7 @@ func (d *Devices) withOwnList(cfg devicewire.Config) devicewire.Config {
 			cfg.Machines = d.cfg.Machines
 		}
 		d.mu.Unlock()
-	case ok && from.Own:
+	case ok && from.Own && (from.HubID == "" || cfg.HubID == "" || from.HubID == cfg.HubID): // not another hub's
 		cfg.Machines = list
 	}
 	return cfg
@@ -231,6 +277,7 @@ func (d *Devices) applyOwnList(list []json.RawMessage) {
 	d.cfg.Machines = list
 	run := d.ctx
 	d.mu.Unlock()
+	d.checkOwnHeld()
 	if run != nil {
 		d.startMachines(run)
 	}

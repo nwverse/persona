@@ -7,12 +7,12 @@ import (
 	"errors"
 	"fmt"
 	"net"
-	"regexp"
 	"slices"
 	"strings"
 
 	"github.com/nwverse/persona/server/internal/channel"
 	"github.com/nwverse/persona/server/internal/i18n"
+	"github.com/nwverse/persona/server/internal/lazyre"
 )
 
 // Permissions are what a plugin asks for (docs/plans/plan-extensions.md "Permissions"). The vocabulary is closed: a manifest naming
@@ -47,7 +47,7 @@ type Permissions struct {
 	AuthRelay bool `json:"auth_relay,omitempty"`
 }
 
-var hostPattern = regexp.MustCompile(`^(\*\.)?([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)*[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$`)
+var hostPattern = lazyre.New(`^(\*\.)?([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)*[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$`)
 
 func (p Permissions) validate() error {
 	var errs []error
@@ -332,6 +332,16 @@ func ExplainWith(l i18n.Lang, m *Manifest, config json.RawMessage) []PermissionL
 	}
 	if sends := m.SendsAsUser(); len(sends) > 0 {
 		out = append(out, sendsAsUserLine(l, permissionText(l, "sends_as_user_title"), sends))
+	}
+	// What it can take back is shown, not agreed to: only here, never in the digest, in AddedIn or in MorePermissions, as a
+	// recall happens only once the user asked for it on their own device.
+	if recalls := m.Recalls(); len(recalls) > 0 {
+		var names []string
+		for _, c := range recalls {
+			names = append(names, c.Name)
+		}
+		out = append(out, PermissionLine{Key: "recalls_sent", Title: permissionText(l, "recalls_sent_title"),
+			Detail: permissionText(l, "recalls_sent_detail", i18n.Args{"names": strings.Join(names, permissionText(l, "list_separator"))})})
 	}
 	if topics := m.Topics(); len(topics) > 0 {
 		var what []string

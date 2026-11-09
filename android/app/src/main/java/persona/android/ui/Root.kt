@@ -349,6 +349,8 @@ private fun PersonaShell(session: ShellSession, openNavigation: MutableState<((R
     }
     // The pages extensions draw for their connectors' inbox items (inbox_item, #1683): the inbox list and inbox links
     // open those. An item whose page broke opens its own page, which says so until "Retry" tries the extension's page again.
+    val nativeInboxChats = persona.core.designsystem.LocalAppStyleStore.current?.nativeInboxChats?.collectAsState()?.value ?: true
+    val currentNativeInboxChats by rememberUpdatedState(nativeInboxChats)
     val itemPagePlaces = slotsState?.inboxItems.orEmpty()
     val itemPageFailures = remember(session.identity) { mutableStateMapOf<String, String>() }
     val currentItemPlaces by rememberUpdatedState(itemPagePlaces)
@@ -356,7 +358,7 @@ private fun PersonaShell(session: ShellSession, openNavigation: MutableState<((R
     val retryItemPage = remember(itemPageFailures) {
         { from: NavKey, itemId: String ->
             itemPageFailures.remove(itemId)
-            currentRecords.firstOrNull { it.item.id == itemId }?.let { InboxItemPages(currentItemPlaces).route(it) }?.let { replace(from, it) }
+            currentRecords.firstOrNull { it.item.id == itemId }?.let { InboxItemPages(currentItemPlaces, nativeChats = currentNativeInboxChats).route(it) }?.let { replace(from, it) }
             Unit
         }
     }
@@ -365,10 +367,10 @@ private fun PersonaShell(session: ShellSession, openNavigation: MutableState<((R
     val itemPagesKnown = extensionSlots == null || slotsState?.inboxItemsKnown == true
     val provisionalPages = remember(session.identity) { mutableSetOf<NavKey>() }
     val notePage = remember(provisionalPages) { { page: NavKey -> provisionalPages += page; Unit } }
-    val inboxItemPages = InboxItemPages(itemPagePlaces, itemPageFailures.toMap(), retryItemPage, itemPagesKnown, notePage)
+    val inboxItemPages = InboxItemPages(itemPagePlaces, itemPageFailures.toMap(), retryItemPage, itemPagesKnown, notePage, nativeChats = nativeInboxChats)
     LaunchedEffect(itemPagesKnown) {
         if (!itemPagesKnown) return@LaunchedEffect
-        val pages = InboxItemPages(currentItemPlaces)
+        val pages = InboxItemPages(currentItemPlaces, nativeChats = currentNativeInboxChats)
         stacks.values.forEach { stack -> pages.swaps(stack.toList(), provisionalPages, currentRecords).forEach { (from, to) -> replace(from, to) } }
         provisionalPages.clear()
     }

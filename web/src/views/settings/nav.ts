@@ -54,10 +54,10 @@ export function settingsAt(search: string): { tab: Tab | null; sub: string | nul
 
 /** The URL of a category (and its open item). "General" is plain /settings on a wide screen, where that opens it; on a
  *  phone /settings is the list, so it is named. */
-export function settingsHref(tab: Tab, id: string | null, phone: boolean): string {
+export function settingsHref(tab: Tab, id: string | null, phone: boolean, manager?: string | null): string {
   if (tab === "general" && !phone) return "/settings";
   const param = SUB[tab];
-  return `/settings?tab=${tab}${id && param ? `&${param}=${encodeURIComponent(id)}` : ""}`;
+  return `/settings?tab=${tab}${id && param ? `&${param}=${encodeURIComponent(id)}` : ""}${manager ? `&manager=${encodeURIComponent(manager)}` : ""}`;
 }
 
 /** The history state of a category opened from the phone's list: Back from it returns to the list. */

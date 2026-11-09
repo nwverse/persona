@@ -274,7 +274,10 @@ class HubHttpClient(
         expectedPin: String? = null,
     ): Health {
         val url = endpoint.baseUrl().hubUrl("/api/v1/health")
-        val caller = if (!fresh) client else client.newBuilder().connectionPool(ConnectionPool(0, 1, TimeUnit.SECONDS)).build()
+        // A pool of its own, keeping its one connection a second after the call: with no idle connection allowed, OkHttp
+        // closes it as soon as the body's Content-Length bytes are read, and over HTTP/2 the stream's end can still be on
+        // its way in a frame of its own; the read that waits for it then fails ("Connection failed", #1519).
+        val caller = if (!fresh) client else client.newBuilder().connectionPool(ConnectionPool(1, 1, TimeUnit.SECONDS)).build()
         caller.newCall(Request.Builder().url(url).build()).awaitResponse().use { response ->
             if (url.isHttps) {
                 // The trust manager accepts every pin of the group; the leaf must be this endpoint's own hub's.
@@ -288,6 +291,16 @@ class HubHttpClient(
             if (expectedHubId != null && health.hubId != expectedHubId) throw HubFailure(HubError.HubMismatch, retryable = false)
             return health
         }
+    }
+
+    /**
+     * Drops the pooled connections. After the WebSocket went silent (a relay or NAT dropping the flow without a reset)
+     * the idle HTTP connections on that path are just as dead, and the next health probe would wait out the read
+     * timeout on one of them before reconnecting (#2124: 102s instead of 45s). Off the caller's thread, as in [close].
+     */
+    fun evictConnections() {
+        if (closed.get()) return
+        runCatching { client.dispatcher.executorService.execute { client.connectionPool.evictAll() } }
     }
 
     private val closed = AtomicBoolean()

@@ -8,7 +8,9 @@ import { api, ApiError, errorText, sessionPath } from "./api";
 import { stateOf } from "./format";
 import { hasModes } from "./session-actions";
 import { flushPushes, getSession, hubHas, upsertSession } from "./store";
-import type { Session } from "./types";
+import type { PlanTask } from "./feed";
+import type { SessionLookup, Todo } from "./todos";
+import type { Machine, Session } from "./types";
 import { isWarn, liveAccounts, windowMinutes, type UsageAccount } from "./usage-windows";
 
 /** The hub takes the switch (hello `features`): an older hub never shows it. */
@@ -32,6 +34,26 @@ export function ultracodeOn(s: Pick<Session, "ultracode" | "assistant" | "agent"
   return s.ultracode === true && !s.assistant && isClaude(s);
 }
 
+/** The workflow mark on an Agent list row (and so on a to-do): on, and not offline: the node keeps the last value it saw
+ *  after the process is gone, and a resume starts it off. */
+export function ultracodeMarkShown(s: Session): boolean {
+  return stateOf(s) !== "offline" && ultracodeOn(s);
+}
+
+/** The workflow mark on a to-do (#12): one of its agents shows it on its Agent list row; before any agent started, the
+ *  plan task it starts from asks for it. Never on a to-do that is done or did not start. */
+export function todoUltracode(todo: Todo, lookup: SessionLookup, planned?: Pick<PlanTask, "ultracode">): boolean {
+  if (todo.done_at || todo.start_error) return false;
+  const agents = todo.agents ?? [];
+  // the plan's choice only until an agent starts: one moved to another to-do or taken out leaves nothing running here
+  if (agents.length === 0) return planned?.ultracode === true;
+  return agents.some((a) => {
+    if (a.released_at) return false;
+    const s = lookup(a.machine_id, a.session_id);
+    return s !== undefined && ultracodeMarkShown(s);
+  });
+}
+
 /** Whether "New agent" offers it: the hub has it and the agent that starts is Claude Code. */
 export function ultracodeStartOffered(features: string[], agent: string): boolean {
   return hubHas(features, ULTRACODE_FEATURE) && agent === "claude";
@@ -51,6 +73,12 @@ export function versionTooOld(version: string | undefined, min: readonly [number
 /** Why "New agent" can't start with it on this computer, "" when it can. */
 export function startBlocked(claudeVersion: string | undefined): string {
   return versionTooOld(claudeVersion) ? t("ultracode.version_low", { version: claudeVersion!.trim(), min: ULTRACODE_MIN_VERSION.join(".") }) : "";
+}
+
+/** Why an agent can't start with it on computer `machine` (a plan task's, #12), "" when it can or the hub has no
+ *  ultracode (then nothing about it is shown or sent). */
+export function machineStartBlocked(s: { features: string[]; machines: Pick<Machine, "id" | "claude_version">[] }, machine: string): string {
+  return hubHas(s.features, ULTRACODE_FEATURE) ? startBlocked(s.machines.find((m) => m.id === machine)?.claude_version) : "";
 }
 
 // ── what this page asked for ─────────────────────────────

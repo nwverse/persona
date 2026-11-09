@@ -38,6 +38,52 @@ struct TabActivityTests {
         #expect(calls.log == ["appear", "disappear"])
     }
 
+    @Test func retainedChatReleasesItsStreamAndResumesOncePerSwitch() {
+        let state = TabVisibilityState(), calls = Calls()
+        update(state, calls, mounted: true, active: false)
+        #expect(calls.log.isEmpty, "building a hidden chat must not subscribe")
+        for _ in 0..<20 {
+            update(state, calls, active: true)
+            update(state, calls, active: true)
+            update(state, calls, active: false)
+            update(state, calls, active: false)
+        }
+        #expect(calls.log == Array(repeating: ["appear", "disappear"], count: 20).flatMap { $0 })
+        update(state, calls, mounted: false)
+        #expect(calls.log.count == 40, "unmounting an already hidden chat must not release another owner")
+    }
+
+    @Test func chatVisibilityPreservesStoreAndOtherSubscriptionOwners() {
+        let model = AppModel()
+        // This group has no API or socket: never read a test runner's paired hub.
+        let key = SessionKey(group: "visibility-fixture", machineID: "box", sessionID: "visibility-fixture")
+        let owner = UUID(), other = UUID(), state = TabVisibilityState()
+        let store = model.chat(key)
+        let appear = {
+            model.subscribe(key, by: owner)
+            model.show(key, by: owner)
+        }
+        let disappear = {
+            model.unsubscribe(key, by: owner)
+            model.hide(by: owner)
+        }
+        state.update(mounted: true, active: false, appear: appear, disappear: disappear)
+        #expect(!model.isSubscribed(key) && model.visibleSession != key)
+        state.update(active: true, appear: appear, disappear: disappear)
+        #expect(model.isSubscribed(key) && model.visibleSession == key)
+        state.update(active: false, appear: appear, disappear: disappear)
+        #expect(!model.isSubscribed(key) && model.visibleSession != key)
+        state.update(active: true, appear: appear, disappear: disappear)
+        #expect(model.chat(key) === store, "returning must not reload or rebuild the chat store")
+        model.subscribe(key, by: other)
+        model.show(key, by: other)
+        state.update(active: false, appear: appear, disappear: disappear)
+        #expect(model.isSubscribed(key) && model.visibleSession == key, "another visible view still owns the stream")
+        model.unsubscribe(key, by: other)
+        model.hide(by: other)
+        #expect(!model.isSubscribed(key) && model.visibleSession != key)
+    }
+
     @Test func comingBackToTheFrontAppearsAgainWhicheverArrivesFirst() {
         let state = TabVisibilityState(), calls = Calls()
         update(state, calls, mounted: true, active: true)
@@ -59,6 +105,8 @@ struct TabActiveTaskTests {
 
     @Observable @MainActor final class Front {
         var active = true
+        var phase: ScenePhase = .active
+        var key = 0
     }
 
     private struct Page: View {
@@ -67,7 +115,7 @@ struct TabActiveTaskTests {
 
         var body: some View {
             Color.clear
-                .tabActiveTask {
+                .tabActiveTask(id: front.key) {
                     calls.log.append("start")
                     await withTaskCancellationHandler {
                         try? await Task.sleep(for: .seconds(60))
@@ -76,6 +124,7 @@ struct TabActiveTaskTests {
                     }
                 }
                 .environment(\.tabIsActive, front.active)
+                .environment(\.scenePhase, front.phase)
         }
     }
 
@@ -86,6 +135,7 @@ struct TabActiveTaskTests {
         let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 200, height: 200))
         window.rootViewController = UIHostingController(rootView: Page(front: front, calls: calls))
         window.makeKeyAndVisible()
+        defer { window.isHidden = true; window.rootViewController = nil }
         await settle()
         #expect(calls.log == ["start"])
 
@@ -96,7 +146,55 @@ struct TabActiveTaskTests {
         front.active = true
         await settle()
         #expect(calls.log == ["start", "cancel", "start"]) // back in front: from the top
-        window.isHidden = true
+    }
+
+    @Test func backgroundCancelsAndManualKeysCannotStartUntilOneResume() async {
+        let front = Front(), calls = Calls()
+        let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 200, height: 200))
+        window.rootViewController = UIHostingController(rootView: Page(front: front, calls: calls))
+        window.makeKeyAndVisible()
+        defer { window.isHidden = true; window.rootViewController = nil }
+        await settle()
+        #expect(calls.log == ["start"])
+
+        front.phase = .background
+        await settle()
+        #expect(calls.log == ["start", "cancel"])
+        front.key += 1
+        await settle()
+        front.active = false
+        front.key += 1
+        await settle()
+        #expect(calls.log == ["start", "cancel"], "manual refresh keys cannot start background work")
+
+        front.phase = .active
+        await settle()
+        #expect(calls.log == ["start", "cancel"], "an active scene does not resume a hidden tab")
+        front.active = true
+        await settle()
+        #expect(calls.log == ["start", "cancel", "start"])
+        front.phase = .inactive
+        await settle()
+        #expect(calls.log == ["start", "cancel", "start", "cancel"])
+        front.phase = .active
+        await settle()
+        #expect(calls.log == ["start", "cancel", "start", "cancel", "start"])
+    }
+
+    @Test func initiallyBackgroundManualKeyWaitsForForeground() async {
+        let front = Front(), calls = Calls()
+        front.phase = .background
+        let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 200, height: 200))
+        window.rootViewController = UIHostingController(rootView: Page(front: front, calls: calls))
+        window.makeKeyAndVisible()
+        defer { window.isHidden = true; window.rootViewController = nil }
+        await settle()
+        front.key += 1
+        await settle()
+        #expect(calls.log.isEmpty)
+        front.phase = .active
+        await settle()
+        #expect(calls.log == ["start"])
     }
 }
 #endif

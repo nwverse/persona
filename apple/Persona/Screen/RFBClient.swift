@@ -96,6 +96,12 @@ nonisolated final class RFBClient: @unchecked Sendable {
         case noCredentials
     }
 
+    /// One of the server's screens (ExtendedDesktopSize): its id and where it is on the framebuffer, in pixels.
+    struct Screen: Sendable, Equatable {
+        var id: UInt32
+        var frame: CGRect
+    }
+
     /// The Mac's cursor (the Cursor pseudo-encoding): BGRA pixels with the mask applied, and its hot spot.
     struct Cursor: Sendable {
         var width: Int, height: Int, hotX: Int, hotY: Int
@@ -123,9 +129,11 @@ nonisolated final class RFBClient: @unchecked Sendable {
     var onCursor: @Sendable (Cursor) -> Void = { _ in }
     /// The Mac's screen took a new size mid-session (DesktopSize): its width and height, before the frame drawn at it.
     var onResize: @Sendable (Int, Int) -> Void = { _, _ in }
+    /// The server's screens on the framebuffer (ExtendedDesktopSize), with the first full update and on every change.
+    var onScreens: @Sendable ([Screen]) -> Void = { _ in }
 
-    /// Encodings asked for, best first: ZRLE, CopyRect, Raw, then DesktopSize, Cursor and LastRect.
-    static let encodings: [Int32] = [16, 1, 0, -223, -239, -224]
+    /// Encodings asked for, best first: ZRLE, CopyRect, Raw, then DesktopSize, ExtendedDesktopSize, Cursor and LastRect.
+    static let encodings: [Int32] = [16, 1, 0, -223, -308, -239, -224]
 
     init(transport: RFBTransport, credentials: @escaping @Sendable () async -> Credentials?) {
         self.transport = transport
@@ -302,6 +310,18 @@ nonisolated final class RFBClient: @unchecked Sendable {
                 onResize(w, h)
                 dirty = CGRect(x: 0, y: 0, width: w, height: h)
                 continue
+            case -308:
+                // ExtendedDesktopSize: x is the reason, y the status, w × h the framebuffer; then the screens. A
+                // failed status answers a client's resize request, which this client never sends.
+                let screens = try await extendedScreens()
+                guard y == 0 else { continue }
+                if w != framebuffer.width || h != framebuffer.height {
+                    framebufferLock.withLock { framebuffer.resize(width: w, height: h) }
+                    onResize(w, h)
+                    dirty = CGRect(x: 0, y: 0, width: w, height: h)
+                }
+                onScreens(screens)
+                continue
             case -239:
                 let pixels = try await reader.bytes(w * h * 4), mask = try await reader.bytes((w + 7) / 8 * h)
                 onCursor(Self.cursor(width: w, height: h, hotX: x, hotY: y, pixels: pixels, mask: mask))
@@ -316,6 +336,20 @@ nonisolated final class RFBClient: @unchecked Sendable {
         }
         if !dirty.isNull { onFrame(framebuffer, dirty) }
         try await request(incremental: true)
+    }
+
+    /// ExtendedDesktopSize's screens: a count, three bytes of padding, then id, x, y, width, height and flags for each.
+    private func extendedScreens() async throws -> [Screen] {
+        let count = Int(try await reader.u8())
+        _ = try await reader.bytes(3)
+        var screens: [Screen] = []
+        for _ in 0..<count {
+            let id = try await reader.u32()
+            let x = try await reader.u16(), y = try await reader.u16(), w = try await reader.u16(), h = try await reader.u16()
+            _ = try await reader.u32() // flags
+            screens.append(Screen(id: id, frame: CGRect(x: x, y: y, width: w, height: h)))
+        }
+        return screens
     }
 
     /// The cursor's pixels, see-through where its mask says.

@@ -12,16 +12,25 @@ import (
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
-const featureAgentSessionArchives = assistantwire.CapabilityAgentSessionArchives
+const (
+	featureAgentSessionArchives     = assistantwire.CapabilityAgentSessionArchives
+	featureAgentSessionArchiveClose = assistantwire.CapabilityAgentSessionArchiveClose
+)
 
 // Archive state belongs to managers. The hub only gates a rolling upgrade,
 // routes to the owner and projects its pre-existing delete tombstones.
 func (h *Hub) archiveManagerStatus(id string) int {
+	return h.archiveManagerHas(id, assistantwire.CapabilityAgentSessionArchives)
+}
+
+// archiveManagerHas is 200 when manager id is connected and named capability in its hello, 503 when it is not
+// connected, 501 when it is too old.
+func (h *Hub) archiveManagerHas(id, capability string) int {
 	if h.busConnOf(id) == nil {
 		return http.StatusServiceUnavailable
 	}
 	for _, manager := range h.busRoster() {
-		if manager.ID == id && slices.Contains(manager.Capabilities, assistantwire.CapabilityAgentSessionArchives) {
+		if manager.ID == id && slices.Contains(manager.Capabilities, capability) {
 			return http.StatusOK
 		}
 	}
@@ -42,18 +51,29 @@ func (h *Hub) archiveManagers(ctx context.Context) []string {
 // A Hub-wide feature cannot promise support for only part of its fleet. Mixed
 // versions or an offline owner disable the controls until every owner is ready.
 func (h *Hub) agentSessionArchivesSupported() bool {
+	return slices.Contains(h.agentSessionArchiveFeatures(), featureAgentSessionArchives)
+}
+
+// agentSessionArchiveFeatures are the archive features every owner supports now: archives, and "Archive and close"
+// with them (one look at the managers for both).
+func (h *Hub) agentSessionArchiveFeatures() []string {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 	ids := h.archiveManagers(ctx)
 	if len(ids) == 0 {
-		return false
+		return nil
 	}
+	closeToo := true
 	for _, id := range ids {
 		if h.archiveManagerStatus(id) != http.StatusOK {
-			return false
+			return nil
 		}
+		closeToo = closeToo && h.archiveManagerHas(id, assistantwire.CapabilityAgentSessionArchiveClose) == http.StatusOK
 	}
-	return true
+	if closeToo {
+		return []string{featureAgentSessionArchives, featureAgentSessionArchiveClose}
+	}
+	return []string{featureAgentSessionArchives}
 }
 
 func (h *Hub) archiveManagerReady(w http.ResponseWriter, id string) bool {
@@ -77,6 +97,11 @@ func (h *Hub) forwardAgentArchives(w http.ResponseWriter, r *http.Request) {
 		}
 		owner, ok := h.owner(w, r, h.byMachine)
 		if !ok || !h.archiveManagerReady(w, owner) {
+			return
+		}
+		// An older manager would take ?close=1 for a plain archive and leave the agent open while the app says closed.
+		if r.URL.Query().Get("close") == "1" && h.archiveManagerHas(owner, assistantwire.CapabilityAgentSessionArchiveClose) != http.StatusOK {
+			writeErrCode(w, http.StatusNotImplemented, "agent_archive_close_unsupported", i18n.Err("hub-agent_archives.close_upgrade"))
 			return
 		}
 		h.forwardHTTP(w, r, owner)

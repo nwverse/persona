@@ -31,9 +31,11 @@ const (
 
 // programCaps are the capabilities the hub can reach in a program: connector/proc.Conn implements their interfaces, and a
 // manifest declaring another one does not pass connector.Check there. CapFallback has none: it is a promise about the
-// inbox things (checkCollect holds them to it).
+// inbox things (checkCollect holds them to it). CapRecall has none either: it is a program's word that connector.recall
+// is there, which CheckProgram never calls (a recall deletes a message).
 var programCaps = []connector.Capability{connector.CapStatus, connector.CapTools, connector.CapActions, connector.CapEvents,
-	connector.CapInbox, connector.CapArchive, connector.CapItems, connector.CapLogin, connector.CapThreads, connector.CapFallback}
+	connector.CapInbox, connector.CapArchive, connector.CapItems, connector.CapLogin, connector.CapThreads, connector.CapFallback,
+	connector.CapRecall}
 
 // ProgramOption tunes CheckProgram.
 type ProgramOption func(*programOptions)

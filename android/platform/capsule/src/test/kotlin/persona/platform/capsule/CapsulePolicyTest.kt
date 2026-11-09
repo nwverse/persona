@@ -4,6 +4,13 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class CapsulePolicyTest {
+    @Test fun unreadKeepsAnInactiveCapsuleVisibleUntilReadWithoutBypassingHardGates() {
+        assertTrue(CapsuleVisibility.visible(CapsuleMode.Active, false, true, false, unread = true))
+        assertFalse(CapsuleVisibility.visible(CapsuleMode.Active, false, true, false, unread = false))
+        assertFalse(CapsuleVisibility.visible(CapsuleMode.Off, false, true, false, unread = true))
+        assertFalse(CapsuleVisibility.visible(CapsuleMode.Active, true, true, false, unread = true))
+        assertFalse(CapsuleVisibility.visible(CapsuleMode.Active, false, false, false, unread = true))
+    }
     @Test fun sectionModeUsesGlobalActivityEvenWhenTheSelectedListIsEmpty() {
         val sections = listOf(CapsuleSection("unread", "未读", 3), CapsuleSection("main", "主对话", list = false), CapsuleSection("inbox", "收件箱", 6))
         val global = CapsuleEntry("urgent", "Waiting", "", CapsuleState.NeedsYou)

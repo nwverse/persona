@@ -55,5 +55,9 @@
   "busiest": "最大{value}",
   "core_title": "コア{n}：{value}",
   "open_space": "スペース「{name}」を開く",
-  "engine_pill_hint": "このコンピューターのエンジン。クリックすると下の「エンジン」で変更できます"
+  "engine_pill_hint": "このコンピューターのエンジン。クリックすると下の「エンジン」で変更できます",
+  "rename": "名前を変更",
+  "rename_label": "コンピュータ名",
+  "rename_hint": "すべてのアプリとこのコンピュータの Persona Link に表示されます。空欄なら ID を使います。ID は変わりません。",
+  "renamed": "「{name}」に変更しました"
 }

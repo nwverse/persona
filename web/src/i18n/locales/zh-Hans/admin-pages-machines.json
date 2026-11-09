@@ -100,5 +100,9 @@
   "repair_title": "重新配对「{name}」",
   "repair_body": "这台电脑上的连接器不认这台 hub 了：它配对给了别的 hub，或者重装过。在那台电脑上再运行一次 {command}（或在菜单栏 / 托盘里选「让 hub 来连」），把新打印的链接粘贴进来。",
   "repair_address_hint": "不填就用原来的地址；地址变了才填",
-  "pairing": "正在配对：hub 正在连那台电脑…"
+  "pairing": "正在配对：hub 正在连那台电脑…",
+  "rename": "改名",
+  "rename_label": "{id} 的新名字",
+  "rename_hint": "马上生效，不用重启、不会断线；留空就用 id。id 不变。",
+  "renamed": "已改名为「{name}」"
 }

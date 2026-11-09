@@ -10,8 +10,8 @@ export function OutboxBubbles({ mid, sid, entries }: { mid: string; sid: string;
   return (
     <>
       {entries.map((e) => (
-        <div key={e.id} className="flex flex-col gap-1.5">
-          <UserBubble msg={outboxMessage(e)} mid={mid} sid={sid} pending={e.state === "sending"} />
+        <div key={e.id} data-outbox={e.id} className="flex flex-col gap-1.5">
+          <UserBubble msg={outboxMessage(e)} mid={mid} sid={sid} pending={e.state === "sending"} sendState={e.state} />
           {e.state === "failed" && (
             <div role="alert" className="flex flex-wrap items-center justify-end gap-x-2 gap-y-1 pl-[12%] text-[11.5px]">
               <span className="min-w-0 text-red">{t("chat-outboxbubbles.failed", { error: e.error ?? "" })}</span>

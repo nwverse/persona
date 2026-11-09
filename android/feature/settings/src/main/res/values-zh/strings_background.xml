@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="settings_background_title">后台诊断</string>
+    <string name="settings_background_copy">复制后台诊断</string>
+    <string name="settings_background_copied">已复制后台诊断</string>
+    <string name="settings_background_app_version">App 版本</string>
+    <string name="settings_background_android">Android 版本</string>
+    <string name="settings_background_manufacturer">厂商</string>
+    <string name="settings_background_model">型号</string>
+    <string name="settings_background_battery">电池优化豁免</string>
+    <string name="settings_background_exempt">已豁免</string>
+    <string name="settings_background_not_exempt">未豁免</string>
+    <string name="settings_background_restriction">系统后台限制</string>
+    <string name="settings_background_restricted">受限制</string>
+    <string name="settings_background_not_restricted">此系统设置未限制</string>
+    <string name="settings_background_history">最近主进程退出</string>
+    <string name="settings_background_history_count">%1$d 条系统记录</string>
+    <string name="settings_background_no_history">未获取：系统最近记录中没有主进程退出</string>
+    <string name="settings_background_unavailable">未获取：无法读取</string>
+    <string name="settings_background_exit">退出记录 %1$d</string>
+    <string name="settings_background_note">仅含本机主进程记录，不含聊天或连接信息，不能直接认定本次消失原因。原因 10 无法细分具体操作，Android 14 之前还可能包括应用更新。PSS/RSS 为采样值，0 可能表示尚未采样。</string>
+    <string name="settings_background_reason_self">进程自行退出</string>
+    <string name="settings_background_reason_signal">收到信号后终止</string>
+    <string name="settings_background_reason_memory">系统报告低内存</string>
+    <string name="settings_background_reason_crash">App 崩溃</string>
+    <string name="settings_background_reason_native">原生代码崩溃</string>
+    <string name="settings_background_reason_anr">App 无响应（ANR）</string>
+    <string name="settings_background_reason_initialization">初始化失败</string>
+    <string name="settings_background_reason_permission">权限变化</string>
+    <string name="settings_background_reason_resource">资源使用过量</string>
+    <string name="settings_background_reason_requested">用户操作或任务移除，无法细分</string>
+    <string name="settings_background_reason_user_stopped">Android 用户已停止（多用户设备）</string>
+    <string name="settings_background_reason_dependency">依赖进程退出</string>
+    <string name="settings_background_reason_freezer">系统进程冻结机制终止</string>
+    <string name="settings_background_reason_package_state">App 或组件状态变化</string>
+    <string name="settings_background_reason_update">App 更新</string>
+    <string name="settings_background_reason_other">系统报告其他原因</string>
+    <string name="settings_background_reason_unknown">未知或未识别的系统原因</string>
+</resources>

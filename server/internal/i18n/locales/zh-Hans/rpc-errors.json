@@ -15,5 +15,10 @@
   "not_our_worktree": "这个文件夹不是 Persona 建的 worktree。",
   "worktree_in_use": "还有 Agent 在这个 worktree 里运行，先关掉它。",
   "worktree_dirty": "这个 worktree 里有没提交的改动。",
-  "worktree_unmerged": "这个分支上有主分支没有的提交。"
+  "worktree_unmerged": "这个分支上有主分支没有的提交。",
+  "peer_unsupported": "这个 Claude 会话没有 Persona 能用的消息通道（Claude Code 版本较旧，或那边关掉了会话之间的消息）。请在电脑上接着用它。",
+  "peer_unreachable": "连不上这个 Claude 会话的消息通道（它可能刚重启或退出）。请稍后再发，或在电脑上接着用它。",
+  "peer_too_long": "消息太长，消息通道一次放不下。请分成几条发。",
+  "peer_unconfirmed": "消息已交给这个 Claude 会话，但它还没有收下：可能在等电脑上批准，也可能因为重复被丢掉了。请先在电脑上看一眼再决定要不要重发。",
+  "peer_command": "消息通道只送普通消息，不执行斜杠命令。请在电脑上输入命令。"
 }

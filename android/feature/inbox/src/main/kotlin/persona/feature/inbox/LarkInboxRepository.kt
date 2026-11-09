@@ -20,10 +20,11 @@ class LarkInboxRepository(
     private val localMessages: ((String) -> Flow<List<LarkMessage>>)? = null,
     private val onMessages: suspend (String, List<JsonObject>) -> Unit = { _, _ -> },
 ) : InboxRepository by base {
+    private val confirmedReads = MutableStateFlow<Set<InboxMessageRead>>(emptySet())
+    override val messageReads: StateFlow<Set<InboxMessageRead>> = confirmedReads.asStateFlow()
     private class Window(val transport: LarkConversationTransport, val feed: String, val around: Long?) {
         val state = MutableStateFlow(LarkConversation(loading = true))
         val lock = Mutex()
-        val readLock = Mutex()
         var raw = emptyList<JsonObject>()
         var older: String? = null
         var newer: String? = null
@@ -31,8 +32,25 @@ class LarkInboxRepository(
         val readIds = mutableSetOf<String>()
     }
     private val windows = mutableMapOf<String, Window>()
+    private val readers = mutableMapOf<Window, Int>()
+    private val readLocks = mutableMapOf<String, Mutex>()
     private fun window(feed: String) = synchronized(windows) { requireNotNull(windows[feed]) }
     private fun owns(w: Window) = transports.value === w.transport
+
+    /**
+     * Windows nobody reads any more, newest last. Only [RELEASED_WINDOWS] of them stay (reopening one is instant);
+     * older ones leave [windows] and reload from the disk cache. Without this every conversation ever opened kept its
+     * parsed pages for the life of the process. Call with [windows] locked.
+     */
+    private val released = ArrayDeque<Window>()
+    private fun release(w: Window) {
+        released.remove(w)
+        released.addLast(w)
+        while (released.size > RELEASED_WINDOWS) {
+            val old = released.removeFirst()
+            if (old !in readers && windows[old.feed] === old) windows.remove(old.feed)
+        }
+    }
 
     override fun conversation(feedId: String, startPosition: Long?): Flow<LarkConversation> = transports.flatMapLatest { transport ->
         if (transport == null) flowOf(LarkConversation(failure = LarkFailure.NotPaired)) else channelFlow {
@@ -40,6 +58,8 @@ class LarkInboxRepository(
                 windows.entries.removeAll { it.value.transport !== transport }
                 windows[feedId]?.takeIf { it.around == startPosition } ?: Window(transport, feedId, startPosition).also { windows[feedId] = it }
             }
+            synchronized(windows) { readers[w] = (readers[w] ?: 0) + 1; released.remove(w) }
+            try {
             launch {
                 w.lock.withLock {
                     if (w.raw.isEmpty()) cache.read(transport.scope, feedId, startPosition)?.let { saved ->
@@ -65,6 +85,10 @@ class LarkInboxRepository(
                 state.copy(title = row?.item?.title ?: state.title, messages = state.messages + pending,
                     isGroup = row?.isGroup ?: state.isGroup, isTopic = row?.isTopic ?: state.isTopic)
             }.collect { send(it) }
+            } finally { synchronized(windows) {
+                val users = (readers[w] ?: 1) - 1
+                if (users == 0) { readers.remove(w); release(w) } else readers[w] = users
+            } }
         }
     }
 
@@ -228,7 +252,9 @@ class LarkInboxRepository(
         w.raw = rows.associateBy { it.text("id") }.values.sortedBy { it.number("position") ?: Long.MAX_VALUE }
         w.older = page.cursor("older_cursor")
         w.newer = page.cursor("newer_cursor")
-        w.state.update { it.copy(messages = w.raw.map { row -> larkMessage(row, w.transport, w.feed) }, loading = false,
+        w.state.update { it.copy(messages = w.raw.map { row -> larkMessage(row, w.transport, w.feed).let { message ->
+            if (InboxMessageRead(w.transport.scope, w.feed, message.id, message.position ?: -1) in confirmedReads.value) message.copy(isRead = true) else message
+        } }, loading = false,
             hasOlder = page.flag("has_older"), hasNewer = page.flag("has_newer"), loadingOlder = false, loadingNewer = false,
             verified = verified, error = null, failure = null, windowRevision = it.windowRevision + if (revision) 1 else 0) }
         if (verified) {
@@ -239,19 +265,64 @@ class LarkInboxRepository(
         }
     }
 
-    override suspend fun markVisible(feedId: String, messages: List<LarkMessage>) {
-        val w = window(feedId)
-        w.readLock.withLock {
-            if (!owns(w) || !w.state.value.verified) return@withLock
+    override suspend fun markLatestRead(feedId: String): Boolean {
+        val transport = transports.value ?: return false
+        val others = transport.messages(feedId).messages().filter { !it.flag("is_mine") && !it.flag("mine") && it.number("position") != null }
+        val last = others.maxByOrNull { it.number("position")!! } ?: return false
+        val position = last.number("position")!!
+        transport.markRead(feedId, position, last.number("badge_count"),
+            others.takeLast(LATEST_READ_IDS).map { it.text("id") }.filter { it.isNotBlank() })
+        // A window of it already loaded here (a prefetched one) shows those messages read too, as markVisible does;
+        // otherwise its row stayed unread on the messages it still held.
+        synchronized(windows) { (listOfNotNull(windows[feedId]) + readers.keys).distinct().filter { it.feed == feedId && it.transport === transport } }
+            .forEach { window ->
+                window.readPosition = maxOf(window.readPosition, position)
+                val acknowledged = window.state.value.messages.filter { !it.mine && it.position != null && it.position <= position }
+                confirmedReads.update { old -> old.filterTo(mutableSetOf()) { it.scope == transport.scope } +
+                    acknowledged.map { InboxMessageRead(transport.scope, feedId, it.id, it.position!!) } }
+                window.state.update { state -> state.copy(messages = state.messages.map { message ->
+                    if (!message.mine && message.position != null && message.position <= position) message.copy(isRead = true) else message
+                }) }
+            }
+        return true
+    }
+
+    override suspend fun markVisible(feedId: String, messages: List<LarkMessage>): Boolean {
+        val readLock = synchronized(windows) { readLocks.getOrPut(feedId) { Mutex() } }
+        return readLock.withLock {
+            val w = synchronized(windows) { (listOfNotNull(windows[feedId]) + readers.keys).distinct().firstOrNull { candidate ->
+                candidate.feed == feedId && owns(candidate) && candidate.state.value.verified && messages.all { message ->
+                    candidate.state.value.messages.any { it.id == message.id && it.position == message.position }
+                }
+            } } ?: return@withLock false
+            if (!owns(w) || !w.state.value.verified) return@withLock false
             val visible = messages.mapNotNull { candidate -> w.state.value.messages.firstOrNull {
                 it.id == candidate.id && it.position == candidate.position && it.position != null && it.delivery == LarkDelivery.Sent
             } }
-            val highest = visible.maxByOrNull { it.position!! } ?: return@withLock
-            if (highest.position!! < w.readPosition) return@withLock
-            val ids = visible.filter { !it.mine && !it.isRead && it.id !in w.readIds }.map { it.id }
-            if (highest.position == w.readPosition && ids.isEmpty()) return@withLock
+            if (visible.size != messages.size) return@withLock false
+            val highest = visible.maxByOrNull { it.position!! } ?: return@withLock false
+            if (visible.all { it.mine || it.isRead || InboxMessageRead(w.transport.scope, feedId, it.id, it.position!!) in confirmedReads.value }) return@withLock true
+            if (highest.position!! < w.readPosition) return@withLock visible.all { it.isRead || it.id in w.readIds }
+            val ids = visible.filter { !it.mine && !it.isRead && it.id !in w.readIds &&
+                InboxMessageRead(w.transport.scope, feedId, it.id, it.position!!) !in confirmedReads.value }.map { it.id }
+            if (highest.position == w.readPosition && ids.isEmpty()) return@withLock true
             w.transport.markRead(feedId, highest.position, highest.badgeCount, ids)
-            if (owns(w)) { w.readPosition = highest.position; w.readIds += ids }
+            if (!owns(w)) return@withLock false
+            w.readPosition = highest.position; w.readIds += ids
+            val opened = synchronized(windows) { (listOf(w) + readers.keys).distinct().filter { it.feed == feedId && owns(it) } }
+            val acknowledged = opened.flatMap { it.state.value.messages }.filter { !it.mine && it.position != null && it.position <= highest.position }
+            confirmedReads.update { old -> old.filterTo(mutableSetOf()) { it.scope == w.transport.scope } +
+                acknowledged.map { InboxMessageRead(w.transport.scope, feedId, it.id, it.position!!) } }
+            opened.forEach { window -> window.state.update { state -> state.copy(messages = state.messages.map { message ->
+                if (!message.mine && message.position != null && message.position <= highest.position) message.copy(isRead = true) else message
+            }) } }
+            true
         }
     }
 }
+
+/** Idle conversation windows kept in memory after their last reader leaves (see LarkInboxRepository.release). */
+private const val RELEASED_WINDOWS = 4
+
+/** The newest message ids sent with a receipt that acknowledges a conversation unseen here. */
+private const val LATEST_READ_IDS = 20

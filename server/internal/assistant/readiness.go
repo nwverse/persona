@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
-	"regexp"
 	"slices"
 	"strings"
 	"sync"
@@ -14,6 +13,7 @@ import (
 	"github.com/nwverse/persona/server/internal/apierr"
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/i18n"
+	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/rpc"
 )
@@ -445,7 +445,19 @@ func (s *Service) readinessMain(ctx context.Context, machine, main string) (prot
 	if main == "" {
 		return proto.Session{}, false
 	}
-	list, _ := s.sessions(ctx, machine)
+	var list []proto.Session
+	if s.fleetOn() {
+		if m, ok := s.fleetMachine(machine); ok {
+			if sess, found := s.nodeSession(m.ID, main); found && m.isAssistant(sess) {
+				// Readiness needs one headless conversation, not a decorated
+				// and serialized copy of every coding session on the machine.
+				list = s.decorateInventory(m.ID, []proto.Session{sess}, false)
+			}
+		}
+	}
+	if list == nil {
+		list, _ = s.sessions(ctx, machine)
+	}
 	for _, sess := range list {
 		if sess.SessionID == main {
 			if text, kind := turnError(sess); text != "" && sess.TurnError == "" {
@@ -484,10 +496,18 @@ func (s *Service) readinessModel(ctx context.Context, lang i18n.Lang, d Device, 
 			ev = append(ev, readinessEvidence{at: main.UpdatedAt, ok: true})
 		}
 	}
-	if h, ok := s.launcherHealth(ctx, d.ID, launcher); ok && time.Since(h.CheckedAt) < healthStale && h.State != "" {
-		if h.State == healthOK {
+	// A launcher only the terminal cannot run says nothing of the main conversation, which runs in the login shell.
+	if h, ok := s.launcherHealth(ctx, d.ID, launcher); ok && h.State != "" && h.Kind != errKindNotInTerminal {
+		switch {
+		case h.Kind == errKindUsageLimit:
+			// The subscription's limit, used up: it recovers on its own, and says nothing once it reset.
+			if h.unusable() {
+				ev = append(ev, readinessEvidence{at: h.CheckedAt, code: proto.TurnErrorRateLimited})
+			}
+		case time.Since(h.CheckedAt) >= healthStale:
+		case h.State == healthOK:
 			ev = append(ev, readinessEvidence{at: h.CheckedAt, ok: true})
-		} else if missingCode(h.Error) == "" { // a start that found no claude is the claude step's
+		case missingCode(h.Error) == "": // a start that found no claude is the claude step's
 			ev = append(ev, readinessEvidence{at: h.CheckedAt, text: h.Error})
 		}
 	}
@@ -583,7 +603,7 @@ func (s *Service) readinessClaude(ctx context.Context, lang i18n.Lang, d Device,
 		}
 		s.clearStart(ctx, *st)
 	}
-	if h, ok := s.launcherUnusable(ctx, d.ID, launcher); ok && !modelOK {
+	if h, ok := s.launcherUnusable(ctx, d.ID, launcher); ok && !modelOK && h.Kind != errKindNotInTerminal {
 		switch missingCode(h.Error) { // the launcher's health record: its start or check found no such command
 		case proto.CodeClaudeMissing:
 			return problem(proto.CodeClaudeMissing, "install_claude")
@@ -725,9 +745,9 @@ const (
 // assistant launcher counts as not Claude Code) and whether it is there.
 func (s *Service) readinessLauncher(ctx context.Context, machine, launcher string) (string, int) {
 	// A managed launcher runs Claude Code through personad launch, and so does a direct API provider speaking Messages
-	// (its gateway, #2455); a Responses one cannot start Claude.
+	// (its gateway, #2455); other direct API protocols cannot start Claude.
 	if slices.ContainsFunc(s.storedLaunchers(ctx), func(l storedLauncher) bool {
-		return l.Name == launcher && !(l.Kind == "api" && l.API == "responses")
+		return l.Name == launcher && !(l.Kind == "api" && !messagesAPI(l.API))
 	}) {
 		return "", launcherThere
 	}
@@ -828,21 +848,31 @@ func (s *Service) askAhead(machine, launcher string) {
 }
 
 // claudeAuthStatus is launcher's sign-in status on machine (claude.auth_status), cached readinessAuthFresh, and
-// readinessClaudeRetry when signed out or not answered (readinessAuthFresh for an old node). done false when the node did not answer within wait (the
+// readinessClaudeRetry when signed out or not answered (readinessAuthFresh for an old node). An expired answer that
+// said nothing is answered at once while it is asked again. done false when the node did not answer within wait (the
 // question goes on, and is cached).
 func (s *Service) claudeAuthStatus(ctx context.Context, machine, launcher string, wait time.Duration) (claudeAuth, bool) {
 	key := machine + "/" + launcher
 	b := &s.ready
 	b.mu.Lock()
+	var stale *claudeAuth
 	if a, ok := b.auth[key]; ok {
 		fresh := readinessAuthFresh
-		if !a.known && !a.old || a.st.State == proto.ClaudeNotLoggedIn ||
-			a.st.State == proto.ClaudeAuthUnknown && (a.st.Reason == proto.ClaudeAuthTimeout || a.st.Reason == proto.ClaudeAuthUnreadable) {
+		saidNothing := !a.known && !a.old ||
+			a.st.State == proto.ClaudeAuthUnknown && (a.st.Reason == proto.ClaudeAuthTimeout || a.st.Reason == proto.ClaudeAuthUnreadable)
+		if saidNothing || a.st.State == proto.ClaudeNotLoggedIn {
 			fresh = readinessClaudeRetry
 		}
 		if time.Since(a.at) < fresh {
 			b.mu.Unlock()
 			return a, true
+		}
+		if saidNothing {
+			// The last ask said nothing (no answer, a timeout, output with no status): asked again below, but not
+			// waited for. A launcher whose status cannot be read says so again on every ask, and each ask runs the
+			// login shell and Claude Code (seconds, up to claudeAuthTimeout); the readiness takes unknown as not
+			// known either way. Signed out is still waited for: the user may have just signed in.
+			stale = &a
 		}
 	}
 	ch := b.authIn[key]
@@ -855,6 +885,9 @@ func (s *Service) claudeAuthStatus(ctx context.Context, machine, launcher string
 		go s.askClaudeAuth(machine, launcher, key, ch)
 	}
 	b.mu.Unlock()
+	if stale != nil {
+		return *stale, true
+	}
 	if wait <= 0 {
 		return claudeAuth{}, false
 	}
@@ -902,7 +935,7 @@ const deviceNodeDoctor = "node.doctor"
 
 // doctorVersion is the version at the start of the claude-version check's detail ("2.1.308, supports --plugin-dir");
 // none when it could not read one.
-var doctorVersion = regexp.MustCompile(`^\s*v?(\d+\.\d+\.\d+[0-9A-Za-z.+-]*)`)
+var doctorVersion = lazyre.New(`^\s*v?(\d+\.\d+\.\d+[0-9A-Za-z.+-]*)`)
 
 // missingCode is the start refusal's code a launcher error reads as (Claude Code or the command missing), "" else.
 func missingCode(text string) string {

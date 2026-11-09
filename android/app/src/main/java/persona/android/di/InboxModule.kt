@@ -52,7 +52,8 @@ class InboxDataOwner @Inject constructor(
     private val app = application as PersonaApp
     private data class Repositories(val data: ScopedHubData, val inbox: persona.feature.inbox.InboxRepository,
         val assistant: AssistantConversations, val mail: StateFlow<MailTransport?>,
-        val composers: ReplyComposers, val reading: LarkReadingStore, val names: GroupNames)
+        val composers: ReplyComposers, val reading: LarkReadingStore, val names: GroupNames,
+        val conversations: InboxConversations)
     // The inbox and Persona are the selected group's (docs/android/android.md "Multiple hubs"): its own transports speak its plain
     // ids, which are moved into the merged lists' ids on the way out. Agent requests in the inbox stay merged.
     private val current = runtime.scopedData.mapLatest { data ->
@@ -121,8 +122,9 @@ class InboxDataOwner @Inject constructor(
             val assistant = RealAssistantRepository(connection, stack.repositories.shownRepository, data.coroutineScope, snapshots,
                 stack.repositories.preferences ?: preferences.takeIf { names.plain })
             persona = assistant.inGroup(names, data.coroutineScope)
+            val composers = ReplyComposers(wrapped, data.coroutineScope)
             Repositories(data, wrapped, checkNotNull(persona), mail,
-                ReplyComposers(wrapped, data.coroutineScope), reading, names)
+                composers, reading, names, InboxConversations(wrapped, data.scope.path, data.coroutineScope, composers))
         }?.await()
     }.stateIn(app.scope, SharingStarted.Eagerly, null)
 
@@ -144,6 +146,8 @@ class InboxDataOwner @Inject constructor(
 
     val inbox = object : persona.feature.inbox.InboxRepository {
         override val supportsThreadOutbox = true
+        override val conversationInbox = observe<InboxConversations?>(null) { flowOf(it.conversations) }
+        override val messageReads = observe(emptySet<InboxMessageRead>()) { it.inbox.messageReads }
         override val replyComposers = observe<ReplyComposers?>(null) { flowOf(it.composers) }
         override suspend fun readingStore() = use { it.reading }
         override fun replyUpdates(target: ReplyTarget) = current.flatMapLatest {
@@ -190,7 +194,7 @@ class InboxDataOwner @Inject constructor(
         override suspend fun askPersona(request: InboxPersonaRequest) = use { it.inbox.askPersona(request) }
         override suspend fun personaContext(itemId: String) = use { it.inbox.personaContext(itemId) }
         override suspend fun draftReply(itemId: String, instruction: String) = use { it.inbox.draftReply(itemId, instruction) }
-        override suspend fun handOff(request: InboxHandOffRequest) = use { it.inbox.handOff(request) }
+        override suspend fun handOff(request: InboxHandOffRequest): persona.core.contracts.SessionKey? = use { it.inbox.handOff(request) }
         override suspend fun momentsPost(postId: String) = use { it.inbox.momentsPost(postId) }
         override suspend fun momentsComments(postId: String) = use { it.inbox.momentsComments(postId) }
         override suspend fun urlPreview(messageId: String, url: String) = use { it.inbox.urlPreview(messageId, url) }

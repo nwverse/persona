@@ -18,6 +18,9 @@ val AssignPurposes = listOf("assistant", "agent.new")
  * typed in or taken from an extension's preset. Bound to the active pairing, like model configuration.
  */
 interface ProviderSetup {
+    /** Pin the wizard and its follow-up requests to the assistant that opened it. */
+    fun forManager(manager: String): ProviderSetup = ManagerProviderSetup(this, manager)
+
     /** `GET /api/v1/launchers/presets`: the providers the hub's extensions offer; none from a hub without them (404). */
     suspend fun presets(): List<ProviderPreset>
 

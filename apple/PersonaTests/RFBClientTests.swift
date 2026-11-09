@@ -108,7 +108,7 @@ struct RFBClientTests {
         #expect(sent[4] == plain, "Plain: the account and password")
         #expect(sent[5] == [1], "shared")
         #expect(sent[6] == [0, 0, 0, 0, 32, 24, 0, 1, 0, 255, 0, 255, 0, 255, 16, 8, 0, 0, 0, 0], "32-bit BGRA")
-        #expect(sent[7].prefix(4) == [2, 0, 0, 6] && sent[7].count == 4 + 6 * 4)
+        #expect(sent[7].prefix(4) == [2, 0, 0, 7] && sent[7].count == 4 + 7 * 4)
         var whole: [UInt8] = [3, 0, 0, 0, 0, 0]; whole += u16(130); whole += u16(72)
         #expect(sent[8] == whole, "the whole screen first")
         #expect(sent[9][1] == 1 && sent[10][1] == 1, "then what changed")
@@ -188,6 +188,42 @@ struct RFBClientTests {
         #expect(!t.sent.contains { $0.first == 5 }, "no PointerEvent sent for the resize")
     }
 
+    /// ExtendedDesktopSize (-308, #80): asked for; the server's screens come with the first update, in framebuffer pixels,
+    /// before the rectangles drawn after them; a later one at another size resizes first; one whose status is not 0 (an
+    /// answer to a resize request, which this client never makes) changes nothing.
+    @Test func extendedDesktopSizeGivesTheScreens() async throws {
+        func u16(_ v: Int) -> [UInt8] { [UInt8(v >> 8), UInt8(v & 0xff)] }
+        func rect(_ x: Int, _ y: Int, _ w: Int, _ h: Int, _ e: Int32) -> [UInt8] { u16(x) + u16(y) + u16(w) + u16(h) + RFBAuth.be32(UInt32(bitPattern: e)) }
+        func screen(_ id: UInt32, _ x: Int, _ w: Int) -> [UInt8] { RFBAuth.be32(id) + u16(x) + u16(0) + u16(w) + u16(2) + RFBAuth.be32(0) }
+        var server: [UInt8] = u16(8) + u16(2); server += [UInt8](repeating: 0, count: 16); server += RFBAuth.be32(0)
+        var first: [UInt8] = [0, 0] + u16(2); first += rect(0, 0, 8, 2, -308); first += [2, 0, 0, 0]
+        first += screen(7, 0, 4); first += screen(9, 4, 4); first += rect(7, 1, 1, 1, 0); first += [1, 2, 3, 0]
+        var refused: [UInt8] = [0, 0] + u16(1); refused += rect(1, 3, 99, 99, -308); refused += [1, 0, 0, 0]; refused += screen(1, 0, 99)
+        var wider: [UInt8] = [0, 0] + u16(1); wider += rect(0, 0, 12, 2, -308); wider += [3, 0, 0, 0]
+        wider += screen(7, 0, 4); wider += screen(9, 4, 4); wider += screen(11, 8, 4)
+        let t = ScriptedTransport([Array("RFB 003.889\n".utf8), [1, 1], RFBAuth.be32(0), server, first, refused, wider])
+        let seen = Seen()
+        let client = RFBClient(transport: t) { nil }
+        client.onState = { s in Task { await seen.state(s) } }
+        client.onResize = { w, h in Task { await seen.resized(w, h) } }
+        client.onScreens = { screens in Task { await seen.gotScreens(screens) } }
+        client.onFrame = { fb, _ in let p = fb.pixel(7, 1), w = UInt8(fb.width); Task { await seen.frame([w], p, []) } }
+        client.start()
+        try await seen.until { $0.ended }
+
+        let encodings = try #require(t.sent.first { $0.first == 2 })
+        let asked = stride(from: 4, to: encodings.count, by: 4).map { i in
+            Int32(bitPattern: UInt32(encodings[i]) << 24 | UInt32(encodings[i + 1]) << 16 | UInt32(encodings[i + 2]) << 8 | UInt32(encodings[i + 3]))
+        }
+        #expect(asked.contains(-308), "ExtendedDesktopSize asked for: \(asked)")
+        let s = await seen.snapshot
+        let two = [RFBClient.Screen(id: 7, frame: CGRect(x: 0, y: 0, width: 4, height: 2)), RFBClient.Screen(id: 9, frame: CGRect(x: 4, y: 0, width: 4, height: 2))]
+        #expect(s.screens == [two, two + [RFBClient.Screen(id: 11, frame: CGRect(x: 8, y: 0, width: 4, height: 2))]])
+        #expect(s.resizes == [[12, 2]], "the same size is no resize, and the refused answer none either")
+        #expect(s.frames.map(\.0) == [[8], [12]])
+        #expect(s.frames.first?.1 == [1, 2, 3, 0], "the Raw rectangle after the screens")
+    }
+
     /// The pointer, keys and clipboard go out once signed in, in the order they came (a key's down before its up).
     @Test func pointerKeysAndClipboardOutInOrder() async throws {
         let t = ScriptedTransport([Array("RFB 003.889\n".utf8), [1, 1], RFBAuth.be32(0),
@@ -249,6 +285,7 @@ private actor Seen {
         var frames: [([UInt8], [UInt8], [UInt8])] = []
         var cuts: [String] = []
         var resizes: [[Int]] = []
+        var screens: [[RFBClient.Screen]] = []
         var ended: Bool { states.contains { if case .failed = $0 { true } else if case .refused = $0 { true } else { $0 == .closed } } }
     }
 
@@ -258,6 +295,7 @@ private actor Seen {
     func frame(_ a: [UInt8], _ b: [UInt8], _ c: [UInt8]) { snapshot.frames.append((a, b, c)) }
     func cut(_ s: String) { snapshot.cuts.append(s) }
     func resized(_ w: Int, _ h: Int) { snapshot.resizes.append([w, h]) }
+    func gotScreens(_ s: [RFBClient.Screen]) { snapshot.screens.append(s) }
 
     func until(_ done: (Snapshot) -> Bool) async throws {
         for _ in 0..<500 where !done(snapshot) { try await Task.sleep(for: .milliseconds(10)) }

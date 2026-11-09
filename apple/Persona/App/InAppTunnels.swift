@@ -99,8 +99,7 @@ final class InAppTunnels {
         } catch {
             if current(), tunnels[id]?.route == route, tunnels[id]?.hub == hub {
                 // Up before (a reopen whose connect failed): it is not the way to the hub any more.
-                tunnels[id] = nil
-                HubTransport.route(hub, via: nil)
+                if let local = tunnels.removeValue(forKey: id)?.local { HubTransport.unroute(hub, from: local) }
                 routed.remove(id)
             }
             if current(), !(error is CancellationError) { states[id] = .down(error.localizedDescription) }
@@ -125,7 +124,7 @@ final class InAppTunnels {
         if forget { recent.remove(id) }
         states[id] = nil
         if let t = tunnels.removeValue(forKey: id) {
-            HubTransport.route(t.hub, via: nil)
+            HubTransport.unroute(t.hub, from: t.local)
             let target = t.route.target
             let shared = tunnels.values.contains { $0.route.target == target }
             enqueue { if !shared { await InAppTunnel.stopForward(target) } }
@@ -190,6 +189,7 @@ final class InAppTunnels {
         let local = try await InAppTunnel.forward(route, port: 0)
         var req = URLRequest(url: local.appending(path: "api/v1/health"), timeoutInterval: 10)
         req.httpMethod = "GET"
+        RequestClientMetadata.current.apply(to: &req)
         let (data, resp) = try await URLSession.shared.data(for: req)
         guard (resp as? HTTPURLResponse)?.statusCode == 200,
               let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any], obj["ok"] as? Bool == true else {

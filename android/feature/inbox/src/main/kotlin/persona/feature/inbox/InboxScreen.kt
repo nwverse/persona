@@ -13,7 +13,6 @@ import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import android.content.res.Resources
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -22,7 +21,6 @@ import persona.core.domain.inbox.*
 import persona.core.navigation.ChatRoute
 import persona.core.navigation.ConnectionSettingsRoute
 import persona.core.navigation.Navigator
-import persona.core.navigation.LocalDetailKey
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
 
@@ -38,6 +36,9 @@ fun InboxScreen(repository: InboxRepository, navigator: Navigator, onOpenCard: (
     val res = LocalResources.current
     val scope = rememberCoroutineScope()
     val composers = rememberReplyComposers(repository)
+    val conversations by repository.conversationInbox.collectAsStateWithLifecycle()
+    val conversationList by (conversations?.state ?: remember { kotlinx.coroutines.flow.MutableStateFlow(InboxConversationList()) })
+        .collectAsStateWithLifecycle()
     var filters by remember(repository) { mutableStateOf<InboxPreferences?>(null) }
     val currentFilters = filters ?: savedPreferences
     val query = currentFilters.query
@@ -70,16 +71,23 @@ fun InboxScreen(repository: InboxRepository, navigator: Navigator, onOpenCard: (
             record.item.copy(doneAt = if (done) java.time.Instant.now().toString() else null)
         } ?: record.item
     })
-    fun list(settings: InboxListSettings) = buildInboxList(
-        items = items, interactions = snapshot.interactions, sessions = snapshot.sessions, mutes = snapshot.mutes, settings = settings,
-    )
-    val result = list(InboxListSettings(source, kind, query, expanded.toSet() + section))
+    fun list(settings: InboxListSettings): InboxConversationView {
+        val original = buildInboxList(
+            items = items, interactions = snapshot.interactions, sessions = snapshot.sessions,
+            mutes = snapshot.mutes, settings = settings,
+        )
+        return conversationInboxView(original, if (conversations == null) null else conversationList, settings, pending,
+            persona.core.contracts.CoreText.plain(res.getString(R.string.inbox_conversations_read_pending)))
+    }
+    val view = list(InboxListSettings(source, kind, query, expanded.toSet() + section))
+    val result = view.list
+    val conversationRows = view.conversations.associateBy { it.itemId }
     // In progress: the hub says so (`status`, inbox phase 1), or, from an older hub, the AI twin is drafting a reply.
     fun working(row: InboxRow) = row.type == InboxRowType.Item && records[row.id]?.agentWorking == true
     // A hub that sends `status` calls the section In progress; an older hub's is the AI twin's "Persona is working on it" as before.
     val eventHub = snapshot.records.any { it.item.status != null }
     // The summary speaks for the whole inbox, so it reads the unfiltered list.
-    val overall = if (query.isEmpty() && source.isEmpty() && kind.isEmpty()) result else list(InboxListSettings())
+    val overall = if (query.isEmpty() && source.isEmpty() && kind.isEmpty()) result else list(InboxListSettings()).list
     val workingRows = result.groups.filter { it.id != "done" }.flatMap { it.rows }.filter(::working)
     val triageGroups = result.groups.mapNotNull { group ->
         if (group.id == "done") group else {
@@ -167,11 +175,15 @@ fun InboxScreen(repository: InboxRepository, navigator: Navigator, onOpenCard: (
         }
     }
     var showMutes by remember { mutableStateOf(false) }
+    val sectionReader = rememberInboxSectionReader(conversations, conversationRows)
     if (showMutes) InboxMutesSheet(repository, onDismiss = { showMutes = false })
     LaunchedEffect(repository) { refresh(collectNow = false) }
     // The title while the hub is out of reach opens why, since when and "Retry now" in place (iOS ConnectionTitle).
     val connectionDetails = rememberConnectionDetails(shownConnection, { navigator.navigate(ConnectionSettingsRoute) }, onRetry = { refresh(collectNow = false) })
-    val bulk = bulkTargets(groups, records)
+    fun allTargets(shown: List<InboxGroup>) = shown.filter { it.id != "done" }.flatMap { it.rows }
+        .filter { it.type == InboxRowType.Item }.flatMap { row -> conversationRows[row.id]?.records ?: listOfNotNull(records[row.id]) }
+        .filterNot { it.item.isDone }.distinctBy { it.item.id }.map { persona.core.contracts.api.InboxDoneTarget(it.item.id, it.item.version) }
+    val bulk = allTargets(groups)
     val scopeText = bulkScope(res, section, sources.firstOrNull { it.first == source && source.isNotEmpty() }?.second,
         if (kind == "agent") "Agent" else kindLabel(res, kind), query)
     var showMore by remember { mutableStateOf(false) }
@@ -262,6 +274,10 @@ fun InboxScreen(repository: InboxRepository, navigator: Navigator, onOpenCard: (
                 item("error") { StatusText(message, isError = true) }
             }
             if (preferenceError) item("preference-error") { StatusText(stringResource(R.string.inbox_filters_not_saved), isError = true) }
+            sectionReader.notice?.let { notice -> item("section-read-result") {
+                JNotice(notice, actionLabel = sectionReader.retry?.let { stringResource(R.string.inbox_retry) },
+                    onAction = sectionReader.retry)
+            } }
             if (groups.isEmpty() && !loadingFirst) item("empty") {
                 val filtered = query.isNotEmpty() || source.isNotEmpty() || kind.isNotEmpty() || section.isNotEmpty()
                 when {
@@ -289,10 +305,10 @@ fun InboxScreen(repository: InboxRepository, navigator: Navigator, onOpenCard: (
                             filter(currentFilters.copy(section = if (section == group.id) "" else section,
                                 expanded = if (group.id in expanded) expanded - group.id else expanded + group.id))
                         }),
-                        action = if (group.id in setOf("fyi", "noise")) ({
-                            JTextButton(if (group.id == "fyi") stringResource(R.string.inbox_mark_all_seen) else stringResource(R.string.inbox_clear_all), {
-                                markAll(bulkTargets(listOf(group), records), InboxBulkAction.Done)
-                            })
+                        action = if (group.id in setOf("action", "fyi", "noise")) ({
+                            JTextButton(if (group.id != "noise") stringResource(R.string.inbox_conversations_read_all) else stringResource(R.string.inbox_clear_all), {
+                                if (group.id != "noise") sectionReader.read(group) else markAll(allTargets(listOf(group)), InboxBulkAction.Done)
+                            }, enabled = !sectionReader.busy)
                         }) else null,
                     )
                 }
@@ -309,7 +325,14 @@ fun InboxScreen(repository: InboxRepository, navigator: Navigator, onOpenCard: (
                                         ?: navigator.selectTab(persona.core.navigation.AppTab.Agents)
                                 })
                         }
-                    } else records[row.id]?.let { record ->
+                    } else conversationRows[row.id]?.let { conversation ->
+                        val done = conversation.records.all { pending[it.item.id] ?: it.item.isDone }
+                        InboxConversationItemRow(conversation, navigator, position, onlineSince,
+                            done = done, busy = conversation.records.any { it.item.id in pending },
+                            onHandOff = { handingOff = conversation.itemId },
+                            onDone = { markAll(conversation.records.filter { it.item.isDone == done }.map { persona.core.contracts.api.InboxDoneTarget(it.item.id, it.item.version) },
+                                if (done) InboxBulkAction.Reopen else InboxBulkAction.Done) })
+                    } ?: records[row.id]?.let { record ->
                         val done = pending[record.item.id] ?: record.item.isDone
                         InboxItemRow(record, repository, navigator, composers, position, done, record.item.id in pending, onlineSince,
                             onDone = { markDone(record.item.id, !done) }, onHandOff = { handingOff = record.item.id },
@@ -354,64 +377,6 @@ internal fun inboxByManager(
     }
 }
 
-@Composable
-internal fun InboxItemRow(record: InboxRecord, repository: InboxRepository, navigator: Navigator,
-    composers: ReplyComposers, position: GroupPosition, done: Boolean, busy: Boolean, onlineSince: Long?, onDone: () -> Unit,
-    onHandOff: () -> Unit,
-    onMute: (InboxMuteOption) -> Unit = {},
-) {
-    val item = record.item
-    val groupEvent = record.feedId != null && record.isGroup != false && item.kind in setOf("group", "mention", "bot")
-    val pages = LocalInboxItemPages.current
-    val translated = rememberItemTranslation(record)
-    var menu by remember { mutableStateOf(false) }
-    val res = LocalResources.current
-    val doneLabel = stringResource(if (done) R.string.inbox_move_back else R.string.inbox_done)
-    val handOffLabel = stringResource(R.string.inbox_hand_to_ai)
-    if (menu) JActionSheet(title = item.title, onDismiss = { menu = false }, actions = buildList {
-        add(JAction(doneLabel, PhIcons.Check, enabled = !busy, onClick = onDone))
-        add(JAction(handOffLabel, PhIcons.Robot, onClick = onHandOff))
-        // What the item can be muted by, the name with each (iOS `rowMenu`): its repository, chat or sender.
-        record.mutes.forEachIndexed { i, option ->
-            add(JAction(res.getString(R.string.inbox_mute_option, res.getString(option.title), option.shortName), PhIcons.Prohibit,
-                separatorBefore = i == 0) { onMute(option) })
-        }
-    })
-    JSwipeActions(
-        start = if (busy) null else SwipeAction(doneLabel, PhIcons.Check, Status.Unread, onDone),
-        end = SwipeAction(handOffLabel, PhIcons.Robot, Status.Working, onHandOff),
-    ) {
-        MessageItem(sender = item.sender.orEmpty().ifBlank { item.title }, title = if (groupEvent) record.groupName ?: stringResource(R.string.inbox_kind_group)
-                else translated?.subject?.ifBlank { null } ?: item.title,
-            heading = item.title.takeIf { groupEvent },
-            titleIcon = translated?.let { PhIcons.Translate }, titleIconLabel = translated?.let { stringResource(R.string.inbox_translated) },
-            selected = isInboxItemSelected(LocalDetailKey.current, item.id, record.feedId),
-            position = position, avatar = rememberLarkAvatar(record.avatar.takeIf { record.doc == null }, onlineSince), avatarIcon = record.doc?.let { docIcon(it.type) },
-            // A hub connector's item is any connector's (#2726): a neutral mark and the hub's name for it, never a brand.
-            source = when { record.isConnector -> MessageSource.Other; record.feedId != null || record.source == "lark" -> MessageSource.Lark; else -> MessageSource.Mail },
-            sourceLabel = if (record.isConnector) record.sourceLabel
-                else stringResource(if (record.feedId != null || record.source == "lark") R.string.inbox_source_lark else R.string.inbox_source_mail),
-            group = record.groupName.takeIf { groupEvent },
-            time = item.updatedAt?.let { displayTime(it, currentLocale) },
-            preview = item.summary?.takeIf { it.isNotBlank() } ?: translated?.preview?.ifBlank { null }
-                ?: record.doc?.let { listOf(docTypeName(res, it.type), item.preview).filter { s -> s.isNotBlank() }.joinToString(" · ") } ?: item.preview,
-            status = when { done -> null; item.isWorking || record.agent?.state in setOf("running", "queued") -> Status.Working
-                item.section == InboxTier.Action.wire -> Status.NeedsYou; else -> null },
-            // The hub names its own sources Lark and Mail; the row already shows those as its source.
-            tags = listOfNotNull(kindLabel(res, record).takeIf { it.isNotBlank() },
-                record.sourceLabel.takeIf { !record.isConnector && it.isNotBlank() && it !in setOf("飞书", "邮件") }, // i18n-ignore: hub source labels it matches
-                pluralStringResource(R.plurals.inbox_messages_count, record.count, record.count).takeIf { record.count > 0 }),
-            // An extension may draw the page of its connector's items (inbox_item); the rest open their own page.
-            // An event (inbox phase 1) opens its own page; an item from an older hub its source, as always.
-            onClick = { navigator.navigate(inboxRowPage(record, pages)) }, onLongClick = { menu = true }, extra = {
-                record.localDelivery?.pendingStatus()?.let { PendingBadge(it) }
-                    ?: record.localStatus?.let { InboxLocalStatus(it) }
-                if (!done) eventMark(record)?.let { EventRowMark(it) }
-                if (!done) AgentDraftCard(record, composers, navigator, repository = repository)
-            })
-    }
-}
-
 /** A section's title by its id; :core:domain's titles are Chinese, and a group this app does not know keeps its own. */
 @Composable
 private fun inboxGroupTitle(group: InboxGroup): String = when (group.id) {
@@ -420,6 +385,7 @@ private fun inboxGroupTitle(group: InboxGroup): String = when (group.id) {
     "fyi" -> stringResource(R.string.inbox_group_fyi)
     "noise" -> stringResource(R.string.inbox_section_folded)
     "done" -> stringResource(R.string.inbox_done)
+    "read-pending" -> stringResource(R.string.inbox_conversations_read_pending)
     else -> group.title.text()
 }
 
@@ -466,10 +432,6 @@ internal fun kindLabel(res: Resources, record: InboxRecord): String = when {
     else -> kindLabel(res, record.item.kind)
 }
 
-/** A row's time in the language the app is in: "Nov 5, 2:30 PM" in English, the same in each language's own form. */
-internal fun displayTime(value: String, locale: java.util.Locale, zone: java.time.ZoneId = java.time.ZoneId.systemDefault()): String =
-    runCatching { LocalizedFormats.format(java.time.Instant.parse(value), LocalizedFormats.MONTH_DAY_TIME, locale, zone) }.getOrDefault("")
-
 /**
  * The connection state the inbox title shows. Every reconnect passes through Connecting and Updating, usually for a
  * moment; shown at once, they put a spinner and a line under the title and push the list down, then take them away.
@@ -500,27 +462,3 @@ internal fun inboxTitle(state: ConnectionState): String = stringResource(when (s
 /** [InboxRecord.localStatus] tokens the repositories write (`RealInboxRepository`, [InboxExperienceRepository]). */
 internal const val LOCAL_DRAFT = "草稿 · " // i18n-ignore: token the repositories write, shown via inbox_local_draft
 internal const val LOCAL_UNCONFIRMED = "结果待确认 · 打开核对" // i18n-ignore: token, shown via inbox_local_unconfirmed
-
-@Composable
-private fun InboxLocalStatus(label: String) {
-    // A pending reply shows as its badge from [InboxRecord.localDelivery]; the real repository words the rest in the
-    // shown language already, and the demo one writes the tokens above, which turn into the shown language here.
-    val draft = label.removePrefix(LOCAL_DRAFT).takeIf { label.startsWith(LOCAL_DRAFT) }
-    val shown = when {
-        draft != null -> stringResource(R.string.inbox_local_draft, draft)
-        label == LOCAL_UNCONFIRMED -> stringResource(R.string.inbox_local_unconfirmed)
-        else -> label
-    }
-    Text(shown, style = PersonaTheme.type.micro,
-        color = if (draft != null) PersonaTheme.palette.cautionText else PersonaTheme.palette.ink3)
-}
-
-@Composable
-internal fun ReplyStatus(state: ReplyComposerState) {
-    state.delivery.pendingStatus()?.let { PendingBadge(it) }
-        ?: if (state.sending) PendingBadge(PendingStatus.Sending) else Unit
-    state.error?.let { JNotice(androidx.compose.ui.res.stringResource(it.text), status = Status.NeedsYou) }
-}
-
-/** As iOS InboxStore: filing an item as "Done" buzzes success at once, putting it back a light tap. */
-internal fun doneHaptic(done: Boolean): Haptic = if (done) Haptic.Success else Haptic.Tap

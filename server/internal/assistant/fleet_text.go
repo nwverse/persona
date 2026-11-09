@@ -4,6 +4,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/nwverse/persona/server/internal/apierr"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/transcript"
@@ -56,7 +57,7 @@ func activityText(l i18n.Lang, s string) string {
 	return out
 }
 
-// queuedFrom starts a queued message another session sent (transcript.go applyQueue).
+// queuedFrom starts a queued message another session sent (transcript/user_text.go applyQueue).
 const queuedFrom = "【来自 "
 
 // localizeSession rewrites s's node-written lines in l: its activity, a background command's stand-in description, the
@@ -70,6 +71,8 @@ func localizeSession(l i18n.Lang, s *proto.Session) {
 	localizeWorkflows(l, s)
 	localizeSubagents(l, s)
 	s.RuntimeFallback = runtimeFallbackText(l, s.RuntimeFallback)
+	s.ReadOnlyReason = claudeLiveText(l, s.ReadOnlyReason)
+	s.AttentionReason = claudeLiveText(l, s.AttentionReason)
 	copied := false
 	for i, b := range s.Background {
 		if b.Description == "超时转到后台的命令" {
@@ -166,6 +169,23 @@ func workLogLine(sess proto.Session) string {
 	return sess.LastText
 }
 
+// claudeLiveTexts are what the node says about a Claude session outside Persona's terminals (proto/claudelive.go),
+// with their keys.
+var claudeLiveTexts = map[string]string{
+	proto.ReadOnlyClaudeBg:        "read_only_claude_bg",
+	proto.ReadOnlyClaudeNoInbox:   "read_only_claude_no_inbox",
+	proto.ReadOnlyClaudeInbox:     "read_only_claude_inbox",
+	proto.AttentionClaudeComputer: "attention_claude_computer",
+}
+
+// claudeLiveText is one of them in l; anything else stays as it is.
+func claudeLiveText(l i18n.Lang, s string) string {
+	if key, ok := claudeLiveTexts[s]; ok {
+		return tt(l, key)
+	}
+	return s
+}
+
 // runtimeFallbacks are the node's reasons for running an Agent SDK conversation on the CLI (proto.Fallback*) and their
 // keys; the cause after one that takes it stays as it is.
 var runtimeFallbacks = []struct {
@@ -199,4 +219,21 @@ func runtimeFallbackText(l i18n.Lang, s string) string {
 		}
 	}
 	return s
+}
+
+// startErrorText is a failed start's start_error in l: for a start the node refused with a code the hub words itself
+// (a launcher or claude the new tab's shell does not have, node/shellmiss.go, #1642) that sentence, naming machine,
+// for every app in the user's language; else the node's text as it is. The code and its details stay on the session.
+func startErrorText(l i18n.Lang, machine string, s proto.Session) string {
+	if s.StartErrorCode == "" {
+		return s.StartError
+	}
+	data := map[string]any{"machine_name": machine}
+	for k, v := range s.StartErrorArgs {
+		data[k] = v
+	}
+	if text := apierr.Sentence(l, s.StartErrorCode, data); text != "" {
+		return text
+	}
+	return s.StartError
 }

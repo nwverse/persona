@@ -112,7 +112,10 @@ class ConnectionRuntime @Inject constructor(application: Application) : HubConne
     override val lastHello: Hello? get() = selected.value?.hello?.value
     private var started = false
     private var startup: Job? = null
+    /** Live cadence: the app is in front, or the floating capsule is usable on an unlocked screen. */
     @Volatile private var foreground = false
+    @Volatile private var appForeground = false
+    @Volatile private var capsuleAttention = false
     /** The last group went away because no hub accepts this phone any more. */
     @Volatile private var lastRevoked = false
 
@@ -207,7 +210,8 @@ class ConnectionRuntime @Inject constructor(application: Application) : HubConne
         if (started) return
         started = true
         ProcessLifecycleOwner.get().lifecycle.addObserver(this)
-        foreground = ProcessLifecycleOwner.get().lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)
+        appForeground = ProcessLifecycleOwner.get().lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)
+        foreground = appForeground || capsuleAttention
         manager.registerDefaultNetworkCallback(object : ConnectivityManager.NetworkCallback() {
             override fun onAvailable(network: Network) = refreshNetwork()
             override fun onLost(network: Network) = refreshNetwork()
@@ -606,17 +610,36 @@ class ConnectionRuntime @Inject constructor(application: Application) : HubConne
     override fun send(message: JsonObject): Boolean = selected.value?.connectionOrNull?.send(message) ?: false
 
     override fun onStart(owner: LifecycleOwner) {
-        foreground = true
-        groups.value.forEach { group ->
-            group.setForeground(true)
-            group.onWake()
-        }
+        appForeground = true
+        applyForeground(wake = true)
         refreshNetwork()
     }
 
     override fun onStop(owner: LifecycleOwner) {
-        foreground = false
-        groups.value.forEach { it.setForeground(false) }
+        appForeground = false
+        applyForeground(wake = false)
+    }
+
+    /**
+     * The floating capsule shows hub content over other apps, so while it is usable (enabled, screen on and unlocked)
+     * the connection keeps the foreground cadence: a socket that died during sleep or on a network change is found
+     * within seconds of unlocking instead of after the background heartbeat (240s), which showed stale replies (#2124).
+     */
+    fun setCapsuleAttention(value: Boolean) {
+        if (capsuleAttention == value) return
+        capsuleAttention = value
+        applyForeground(wake = value)
+    }
+
+    /** Validates every open connection now, as coming to the front does; a dead socket reconnects. */
+    fun wake() { groups.value.forEach { it.onWake() } }
+
+    private fun applyForeground(wake: Boolean) {
+        foreground = appForeground || capsuleAttention
+        groups.value.forEach { group ->
+            group.setForeground(foreground)
+            if (wake) group.onWake()
+        }
     }
 
     private fun refreshNetwork() {

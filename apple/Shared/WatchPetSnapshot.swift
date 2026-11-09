@@ -17,7 +17,9 @@ nonisolated struct WatchPetSnapshot: Codable, Equatable, Sendable {
     static let staleAfter: TimeInterval = 60 * 60
     static let offlineState = "offline"
     static let fileName = "pet.json"
-    /// Info.plist key of the App Group both bundles share.
+    /// The complication's WidgetKit kind: the watch app reloads only its timelines, not the extension widgets'.
+    static let widgetKind = "pet"
+    /// Info.plist key of the App Group both bundles share: the watch-only group (`PERSONA_WATCH_APP_GROUP`).
     static let groupKey = "PersonaAppGroup"
 
     var staleDate: Date { at.addingTimeInterval(Self.staleAfter) }

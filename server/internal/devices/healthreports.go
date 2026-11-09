@@ -21,7 +21,7 @@ import (
 // spaces (nodeproto.HealthSpaces: it would answer about the built-in's), says so in words the app can show.
 func (d *Devices) healthReportCall(w http.ResponseWriter, r *http.Request, m *Machine, method string, params map[string]any) {
 	outdated := func() {
-		msg := i18n.T(i18n.FromRequest(r), "hub-health.reports_outdated", i18n.Args{"name": m.cfg.Name})
+		msg := i18n.T(i18n.FromRequest(r), "hub-health.reports_outdated", i18n.Args{"name": m.name()})
 		writeErrCode(w, http.StatusConflict, proto.CodeNodeOutdated, errors.New(msg))
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)

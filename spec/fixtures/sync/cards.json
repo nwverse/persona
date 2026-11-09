@@ -1,0 +1,1081 @@
+{
+  "version": 1,
+  "cases": [
+    {
+      "name": "card_answer_then_resolved",
+      "description": "Answering a card takes it out of reach at once; the hub's resolve ends it.",
+      "source": {
+        "rule": "No revived cards",
+        "code": {
+          "web": "web/src/lib/card-answer.ts",
+          "ios": "AppModel.resolve",
+          "android": "HubInteractionCenter"
+        }
+      },
+      "chat": {
+        "machine_id": "m1",
+        "session_id": "s1",
+        "assistant": true
+      },
+      "devices": [
+        "a"
+      ],
+      "start": {
+        "hub": {
+          "history": "h1",
+          "lines": [
+            {
+              "id": "l1#0",
+              "seq": 1,
+              "ts": "2026-01-02T03:04:05Z",
+              "role": "user",
+              "kind": "text",
+              "text": "Plan a weekend trip."
+            },
+            {
+              "id": "l2#0",
+              "seq": 2,
+              "ts": "2026-01-02T03:04:05Z",
+              "role": "assistant",
+              "kind": "text",
+              "text": "Saturday hike, Sunday museum."
+            }
+          ],
+          "to_seq": 3,
+          "interactions": [
+            {
+              "id": "ix1",
+              "machine_id": "m1",
+              "session_id": "s1",
+              "session_title": "Weekend trip",
+              "cwd": "/home/user/project",
+              "kind": "permission",
+              "created_at": "2026-01-02T03:04:05Z",
+              "expires_at": "2026-01-02T05:04:05Z",
+              "tool_name": "Bash",
+              "tool_use_id": "call_ix1",
+              "tool_input": {
+                "command": "ls"
+              },
+              "summary": "List the project folder"
+            }
+          ],
+          "session": {
+            "state": "needs_you"
+          },
+          "event_stream": "ev1",
+          "event_seq": 10
+        }
+      },
+      "steps": [
+        {
+          "user": {
+            "device": "a",
+            "answer": {
+              "id": "ix1",
+              "resolution": {
+                "allow": true
+              }
+            }
+          },
+          "expect": {
+            "a": {
+              "cards": {
+                "ix1": "answering"
+              },
+              "requests": [
+                {
+                  "post": "resolve",
+                  "id": "ix1"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "reply": {
+            "device": "a",
+            "write": "ix1",
+            "status": 200,
+            "body": {
+              "ok": true
+            }
+          }
+        },
+        {
+          "hub": {
+            "end": {
+              "id": "ix1",
+              "status": "answered",
+              "by": "a"
+            },
+            "session": {
+              "state": "working"
+            }
+          }
+        },
+        {
+          "frames": {
+            "a": [
+              {
+                "type": "interaction_resolved",
+                "id": "ix1",
+                "event_seq": 11
+              },
+              {
+                "type": "sessions_delta",
+                "machine_id": "m1",
+                "upsert": [
+                  {
+                    "machine_id": "m1",
+                    "session_id": "s1",
+                    "title": "Weekend trip",
+                    "cwd": "/home/user/project",
+                    "status": "working",
+                    "assistant": true,
+                    "state": "working",
+                    "updated_at": "2026-01-02T03:04:05Z",
+                    "rev": 100
+                  }
+                ],
+                "remove": []
+              }
+            ]
+          },
+          "expect": {
+            "a": {
+              "cards": {
+                "ix1": "answered"
+              }
+            }
+          }
+        }
+      ],
+      "end": {
+        "a": {
+          "messages": [
+            {
+              "from": "user",
+              "text": "Plan a weekend trip.",
+              "state": "shown"
+            },
+            {
+              "from": "agent",
+              "text": "Saturday hike, Sunday museum."
+            }
+          ],
+          "cards": {},
+          "status": "working"
+        }
+      }
+    },
+    {
+      "name": "card_tap_then_reconnect_snapshot",
+      "description": "A card tapped just before the socket drops is not answerable again when the reconnect snapshot still lists it.",
+      "source": {
+        "rule": "No revived cards: a snapshot taken before the answer must not undo it",
+        "found": "Reading the iOS app: the interaction handler does not skip cards this device ended, though the full-list path does",
+        "code": {
+          "ios": "AppModel.handle .interaction, replaceInteractions",
+          "web": "web/src/lib/store.ts mergeInteractions",
+          "android": "HubInteractionCenter ended"
+        }
+      },
+      "chat": {
+        "machine_id": "m1",
+        "session_id": "s1",
+        "assistant": true
+      },
+      "devices": [
+        "a"
+      ],
+      "start": {
+        "hub": {
+          "history": "h1",
+          "lines": [
+            {
+              "id": "l1#0",
+              "seq": 1,
+              "ts": "2026-01-02T03:04:05Z",
+              "role": "user",
+              "kind": "text",
+              "text": "Plan a weekend trip."
+            },
+            {
+              "id": "l2#0",
+              "seq": 2,
+              "ts": "2026-01-02T03:04:05Z",
+              "role": "assistant",
+              "kind": "text",
+              "text": "Saturday hike, Sunday museum."
+            }
+          ],
+          "to_seq": 3,
+          "interactions": [
+            {
+              "id": "ix1",
+              "machine_id": "m1",
+              "session_id": "s1",
+              "session_title": "Weekend trip",
+              "cwd": "/home/user/project",
+              "kind": "permission",
+              "created_at": "2026-01-02T03:04:05Z",
+              "expires_at": "2026-01-02T05:04:05Z",
+              "tool_name": "Bash",
+              "tool_use_id": "call_ix1",
+              "tool_input": {
+                "command": "ls"
+              },
+              "summary": "List the project folder"
+            }
+          ],
+          "session": {
+            "state": "needs_you"
+          },
+          "event_stream": "ev1",
+          "event_seq": 10
+        }
+      },
+      "steps": [
+        {
+          "user": {
+            "device": "a",
+            "answer": {
+              "id": "ix1",
+              "resolution": {
+                "allow": true
+              }
+            }
+          },
+          "expect": {
+            "a": {
+              "cards": {
+                "ix1": "answering"
+              }
+            }
+          }
+        },
+        {
+          "socket": {
+            "device": "a",
+            "drop": true
+          }
+        },
+        {
+          "socket": {
+            "device": "a",
+            "open": {
+              "resumed": false
+            }
+          },
+          "frames": {
+            "a": [
+              {
+                "type": "interaction",
+                "interaction": {
+                  "id": "ix1",
+                  "machine_id": "m1",
+                  "session_id": "s1",
+                  "session_title": "Weekend trip",
+                  "cwd": "/home/user/project",
+                  "kind": "permission",
+                  "created_at": "2026-01-02T03:04:05Z",
+                  "expires_at": "2026-01-02T05:04:05Z",
+                  "tool_name": "Bash",
+                  "tool_use_id": "call_ix1",
+                  "tool_input": {
+                    "command": "ls"
+                  },
+                  "summary": "List the project folder"
+                }
+              }
+            ]
+          },
+          "expect": {
+            "a": {
+              "cards": {
+                "ix1": "answering"
+              }
+            }
+          }
+        },
+        {
+          "reply": {
+            "device": "a",
+            "write": "ix1",
+            "status": 200,
+            "body": {
+              "ok": true
+            }
+          }
+        },
+        {
+          "hub": {
+            "end": {
+              "id": "ix1",
+              "status": "answered",
+              "by": "a"
+            },
+            "session": {
+              "state": "working"
+            }
+          }
+        },
+        {
+          "frames": {
+            "a": [
+              {
+                "type": "interaction_resolved",
+                "id": "ix1",
+                "event_seq": 11
+              },
+              {
+                "type": "sessions_delta",
+                "machine_id": "m1",
+                "upsert": [
+                  {
+                    "machine_id": "m1",
+                    "session_id": "s1",
+                    "title": "Weekend trip",
+                    "cwd": "/home/user/project",
+                    "status": "working",
+                    "assistant": true,
+                    "state": "working",
+                    "updated_at": "2026-01-02T03:04:05Z",
+                    "rev": 100
+                  }
+                ],
+                "remove": []
+              }
+            ]
+          }
+        }
+      ],
+      "end": {
+        "a": {
+          "messages": [
+            {
+              "from": "user",
+              "text": "Plan a weekend trip.",
+              "state": "shown"
+            },
+            {
+              "from": "agent",
+              "text": "Saturday hike, Sunday museum."
+            }
+          ],
+          "cards": {},
+          "status": "working"
+        }
+      }
+    },
+    {
+      "name": "card_answered_then_resumed_snapshot",
+      "description": "A card this device answered is not answerable again when, after a hello that resumes the event stream, the hub's pending-card snapshot still lists it (the node has not ended it yet).",
+      "source": {
+        "rule": "No revived cards: once this device's answer succeeded, the card is never open again",
+        "found": "#1112: after a hello that does not resume, the full card list read next hides it; a resumed hello is followed by no such read, only the snapshot",
+        "code": {
+          "ios": "AppModel.handle .interaction, replaceInteractions",
+          "web": "web/src/lib/store.ts mergeInteractions",
+          "android": "HubInteractionCenter ended"
+        }
+      },
+      "chat": {
+        "machine_id": "m1",
+        "session_id": "s1",
+        "assistant": true
+      },
+      "devices": [
+        "a"
+      ],
+      "start": {
+        "hub": {
+          "history": "h1",
+          "lines": [
+            {
+              "id": "l1#0",
+              "seq": 1,
+              "ts": "2026-01-02T03:04:05Z",
+              "role": "user",
+              "kind": "text",
+              "text": "Plan a weekend trip."
+            },
+            {
+              "id": "l2#0",
+              "seq": 2,
+              "ts": "2026-01-02T03:04:05Z",
+              "role": "assistant",
+              "kind": "text",
+              "text": "Saturday hike, Sunday museum."
+            }
+          ],
+          "to_seq": 3,
+          "interactions": [
+            {
+              "id": "ix1",
+              "machine_id": "m1",
+              "session_id": "s1",
+              "session_title": "Weekend trip",
+              "cwd": "/home/user/project",
+              "kind": "permission",
+              "created_at": "2026-01-02T03:04:05Z",
+              "expires_at": "2026-01-02T05:04:05Z",
+              "tool_name": "Bash",
+              "tool_use_id": "call_ix1",
+              "tool_input": {
+                "command": "ls"
+              },
+              "summary": "List the project folder"
+            }
+          ],
+          "session": {
+            "state": "needs_you"
+          },
+          "event_stream": "ev1",
+          "event_seq": 10
+        }
+      },
+      "steps": [
+        {
+          "user": {
+            "device": "a",
+            "answer": {
+              "id": "ix1",
+              "resolution": {
+                "allow": true
+              }
+            }
+          },
+          "expect": {
+            "a": {
+              "cards": {
+                "ix1": "answering"
+              }
+            }
+          }
+        },
+        {
+          "reply": {
+            "device": "a",
+            "write": "ix1",
+            "status": 200,
+            "body": {
+              "ok": true
+            }
+          },
+          "expect": {
+            "a": {
+              "cards": {
+                "ix1": "answered"
+              }
+            }
+          }
+        },
+        {
+          "socket": {
+            "device": "a",
+            "drop": true
+          }
+        },
+        {
+          "socket": {
+            "device": "a",
+            "open": {
+              "resumed": true
+            }
+          },
+          "frames": {
+            "a": [
+              {
+                "type": "interaction",
+                "interaction": {
+                  "id": "ix1",
+                  "machine_id": "m1",
+                  "session_id": "s1",
+                  "session_title": "Weekend trip",
+                  "cwd": "/home/user/project",
+                  "kind": "permission",
+                  "created_at": "2026-01-02T03:04:05Z",
+                  "expires_at": "2026-01-02T05:04:05Z",
+                  "tool_name": "Bash",
+                  "tool_use_id": "call_ix1",
+                  "tool_input": {
+                    "command": "ls"
+                  },
+                  "summary": "List the project folder"
+                }
+              }
+            ]
+          },
+          "expect": {
+            "a": {
+              "cards": {
+                "ix1": "answered"
+              }
+            }
+          }
+        },
+        {
+          "hub": {
+            "end": {
+              "id": "ix1",
+              "status": "answered",
+              "by": "a"
+            },
+            "session": {
+              "state": "working"
+            }
+          }
+        },
+        {
+          "frames": {
+            "a": [
+              {
+                "type": "interaction_resolved",
+                "id": "ix1",
+                "event_seq": 11
+              },
+              {
+                "type": "sessions_delta",
+                "machine_id": "m1",
+                "upsert": [
+                  {
+                    "machine_id": "m1",
+                    "session_id": "s1",
+                    "title": "Weekend trip",
+                    "cwd": "/home/user/project",
+                    "status": "working",
+                    "assistant": true,
+                    "state": "working",
+                    "updated_at": "2026-01-02T03:04:05Z",
+                    "rev": 100
+                  }
+                ],
+                "remove": []
+              }
+            ]
+          }
+        }
+      ],
+      "end": {
+        "a": {
+          "messages": [
+            {
+              "from": "user",
+              "text": "Plan a weekend trip.",
+              "state": "shown"
+            },
+            {
+              "from": "agent",
+              "text": "Saturday hike, Sunday museum."
+            }
+          ],
+          "cards": {},
+          "status": "working"
+        }
+      }
+    },
+    {
+      "name": "card_old_list_after_answer",
+      "description": "A card list fetched before the answer, landing after the hub resolved the card, does not bring it back.",
+      "source": {
+        "rule": "No revived cards",
+        "found": "A past bug: an answered card came back clickable from an older list, and answering again said it was no longer pending",
+        "code": {
+          "web": "web/src/lib/store.ts mergeInteractions",
+          "ios": "replaceInteractions endedInteractionIDs",
+          "android": "HubInteractionCenter refresh"
+        }
+      },
+      "chat": {
+        "machine_id": "m1",
+        "session_id": "s1",
+        "assistant": true
+      },
+      "devices": [
+        "a"
+      ],
+      "start": {
+        "hub": {
+          "history": "h1",
+          "lines": [
+            {
+              "id": "l1#0",
+              "seq": 1,
+              "ts": "2026-01-02T03:04:05Z",
+              "role": "user",
+              "kind": "text",
+              "text": "Plan a weekend trip."
+            },
+            {
+              "id": "l2#0",
+              "seq": 2,
+              "ts": "2026-01-02T03:04:05Z",
+              "role": "assistant",
+              "kind": "text",
+              "text": "Saturday hike, Sunday museum."
+            }
+          ],
+          "to_seq": 3,
+          "interactions": [
+            {
+              "id": "ix1",
+              "machine_id": "m1",
+              "session_id": "s1",
+              "session_title": "Weekend trip",
+              "cwd": "/home/user/project",
+              "kind": "permission",
+              "created_at": "2026-01-02T03:04:05Z",
+              "expires_at": "2026-01-02T05:04:05Z",
+              "tool_name": "Bash",
+              "tool_use_id": "call_ix1",
+              "tool_input": {
+                "command": "ls"
+              },
+              "summary": "List the project folder"
+            }
+          ],
+          "session": {
+            "state": "needs_you"
+          },
+          "event_stream": "ev1",
+          "event_seq": 10
+        }
+      },
+      "steps": [
+        {
+          "socket": {
+            "device": "a",
+            "drop": true
+          }
+        },
+        {
+          "hold": {
+            "device": "a",
+            "get": "/interactions"
+          }
+        },
+        {
+          "socket": {
+            "device": "a",
+            "open": {
+              "resumed": false
+            }
+          },
+          "frames": {
+            "a": [
+              {
+                "type": "interaction",
+                "interaction": {
+                  "id": "ix1",
+                  "machine_id": "m1",
+                  "session_id": "s1",
+                  "session_title": "Weekend trip",
+                  "cwd": "/home/user/project",
+                  "kind": "permission",
+                  "created_at": "2026-01-02T03:04:05Z",
+                  "expires_at": "2026-01-02T05:04:05Z",
+                  "tool_name": "Bash",
+                  "tool_use_id": "call_ix1",
+                  "tool_input": {
+                    "command": "ls"
+                  },
+                  "summary": "List the project folder"
+                }
+              }
+            ]
+          }
+        },
+        {
+          "user": {
+            "device": "a",
+            "answer": {
+              "id": "ix1",
+              "resolution": {
+                "allow": true
+              }
+            }
+          }
+        },
+        {
+          "reply": {
+            "device": "a",
+            "write": "ix1",
+            "status": 200,
+            "body": {
+              "ok": true
+            }
+          }
+        },
+        {
+          "hub": {
+            "end": {
+              "id": "ix1",
+              "status": "answered",
+              "by": "a"
+            },
+            "session": {
+              "state": "working"
+            }
+          }
+        },
+        {
+          "frames": {
+            "a": [
+              {
+                "type": "interaction_resolved",
+                "id": "ix1",
+                "event_seq": 11
+              },
+              {
+                "type": "sessions_delta",
+                "machine_id": "m1",
+                "upsert": [
+                  {
+                    "machine_id": "m1",
+                    "session_id": "s1",
+                    "title": "Weekend trip",
+                    "cwd": "/home/user/project",
+                    "status": "working",
+                    "assistant": true,
+                    "state": "working",
+                    "updated_at": "2026-01-02T03:04:05Z",
+                    "rev": 100
+                  }
+                ],
+                "remove": []
+              }
+            ]
+          }
+        },
+        {
+          "release": {
+            "device": "a",
+            "get": "/interactions"
+          },
+          "expect": {
+            "a": {
+              "cards": {
+                "ix1": "answered"
+              }
+            }
+          }
+        }
+      ],
+      "end": {
+        "a": {
+          "messages": [
+            {
+              "from": "user",
+              "text": "Plan a weekend trip.",
+              "state": "shown"
+            },
+            {
+              "from": "agent",
+              "text": "Saturday hike, Sunday museum."
+            }
+          ],
+          "cards": {},
+          "status": "working"
+        }
+      }
+    },
+    {
+      "name": "card_answer_fails_card_back",
+      "description": "When the hub definitely did not take the answer, the card is answerable again.",
+      "source": {
+        "rule": "No revived cards, except when the answer definitely failed",
+        "code": {
+          "ios": "AppModel.putBack",
+          "web": "web/src/lib/card-answer.ts"
+        }
+      },
+      "chat": {
+        "machine_id": "m1",
+        "session_id": "s1",
+        "assistant": true
+      },
+      "devices": [
+        "a"
+      ],
+      "start": {
+        "hub": {
+          "history": "h1",
+          "lines": [
+            {
+              "id": "l1#0",
+              "seq": 1,
+              "ts": "2026-01-02T03:04:05Z",
+              "role": "user",
+              "kind": "text",
+              "text": "Plan a weekend trip."
+            },
+            {
+              "id": "l2#0",
+              "seq": 2,
+              "ts": "2026-01-02T03:04:05Z",
+              "role": "assistant",
+              "kind": "text",
+              "text": "Saturday hike, Sunday museum."
+            }
+          ],
+          "to_seq": 3,
+          "interactions": [
+            {
+              "id": "ix1",
+              "machine_id": "m1",
+              "session_id": "s1",
+              "session_title": "Weekend trip",
+              "cwd": "/home/user/project",
+              "kind": "permission",
+              "created_at": "2026-01-02T03:04:05Z",
+              "expires_at": "2026-01-02T05:04:05Z",
+              "tool_name": "Bash",
+              "tool_use_id": "call_ix1",
+              "tool_input": {
+                "command": "ls"
+              },
+              "summary": "List the project folder"
+            }
+          ],
+          "session": {
+            "state": "needs_you"
+          },
+          "event_stream": "ev1",
+          "event_seq": 10
+        }
+      },
+      "steps": [
+        {
+          "user": {
+            "device": "a",
+            "answer": {
+              "id": "ix1",
+              "resolution": {
+                "allow": true
+              }
+            }
+          },
+          "expect": {
+            "a": {
+              "cards": {
+                "ix1": "answering"
+              }
+            }
+          }
+        },
+        {
+          "reply": {
+            "device": "a",
+            "write": "ix1",
+            "status": 503,
+            "body": {
+              "error": "The assistant is temporarily unreachable, try again later",
+              "code": "assistant_offline"
+            }
+          },
+          "expect": {
+            "a": {
+              "cards": {
+                "ix1": "open"
+              }
+            }
+          }
+        }
+      ],
+      "end": {
+        "a": {
+          "messages": [
+            {
+              "from": "user",
+              "text": "Plan a weekend trip.",
+              "state": "shown"
+            },
+            {
+              "from": "agent",
+              "text": "Saturday hike, Sunday museum."
+            }
+          ],
+          "cards": {
+            "ix1": "open"
+          },
+          "status": "needs_you"
+        }
+      }
+    },
+    {
+      "name": "card_prompt_changed_only_new_card",
+      "description": "When the prompt changed under the answer, only the new card is answerable; the old one stays gone.",
+      "source": {
+        "rule": "An error answer does not bring back a card the hub ended",
+        "found": "A past iOS bug put the dead card back next to its replacement",
+        "code": {
+          "ios": "AnsweringInteractions",
+          "web": "web/src/lib/card-answer.ts"
+        }
+      },
+      "chat": {
+        "machine_id": "m1",
+        "session_id": "s1",
+        "assistant": true
+      },
+      "devices": [
+        "a"
+      ],
+      "start": {
+        "hub": {
+          "history": "h1",
+          "lines": [
+            {
+              "id": "l1#0",
+              "seq": 1,
+              "ts": "2026-01-02T03:04:05Z",
+              "role": "user",
+              "kind": "text",
+              "text": "Plan a weekend trip."
+            },
+            {
+              "id": "l2#0",
+              "seq": 2,
+              "ts": "2026-01-02T03:04:05Z",
+              "role": "assistant",
+              "kind": "text",
+              "text": "Saturday hike, Sunday museum."
+            }
+          ],
+          "to_seq": 3,
+          "interactions": [
+            {
+              "id": "ix1",
+              "machine_id": "m1",
+              "session_id": "s1",
+              "session_title": "Weekend trip",
+              "cwd": "/home/user/project",
+              "kind": "permission",
+              "created_at": "2026-01-02T03:04:05Z",
+              "expires_at": "2026-01-02T05:04:05Z",
+              "tool_name": "Bash",
+              "tool_use_id": "call_ix1",
+              "tool_input": {
+                "command": "ls"
+              },
+              "summary": "List the project folder"
+            }
+          ],
+          "session": {
+            "state": "needs_you"
+          },
+          "event_stream": "ev1",
+          "event_seq": 10
+        }
+      },
+      "steps": [
+        {
+          "user": {
+            "device": "a",
+            "answer": {
+              "id": "ix1",
+              "resolution": {
+                "allow": true
+              }
+            }
+          }
+        },
+        {
+          "hub": {
+            "end": {
+              "id": "ix1",
+              "status": "cancelled",
+              "by": "agent"
+            },
+            "raise": {
+              "id": "ix2",
+              "machine_id": "m1",
+              "session_id": "s1",
+              "session_title": "Weekend trip",
+              "cwd": "/home/user/project",
+              "kind": "permission",
+              "created_at": "2026-01-02T03:04:05Z",
+              "expires_at": "2026-01-02T05:04:05Z",
+              "tool_name": "Bash",
+              "tool_use_id": "call_ix2",
+              "tool_input": {
+                "command": "rm -r build"
+              },
+              "summary": "Remove the build folder"
+            }
+          }
+        },
+        {
+          "frames": {
+            "a": [
+              {
+                "type": "interaction_resolved",
+                "id": "ix1",
+                "event_seq": 11
+              },
+              {
+                "type": "interaction",
+                "interaction": {
+                  "id": "ix2",
+                  "machine_id": "m1",
+                  "session_id": "s1",
+                  "session_title": "Weekend trip",
+                  "cwd": "/home/user/project",
+                  "kind": "permission",
+                  "created_at": "2026-01-02T03:04:05Z",
+                  "expires_at": "2026-01-02T05:04:05Z",
+                  "tool_name": "Bash",
+                  "tool_use_id": "call_ix2",
+                  "tool_input": {
+                    "command": "rm -r build"
+                  },
+                  "summary": "Remove the build folder"
+                },
+                "event_seq": 12
+              }
+            ]
+          }
+        },
+        {
+          "reply": {
+            "device": "a",
+            "write": "ix1",
+            "status": 409,
+            "body": {
+              "error": "The prompt on the computer changed",
+              "code": "prompt_changed"
+            }
+          },
+          "expect": {
+            "a": {
+              "cards": {
+                "ix2": "open"
+              }
+            }
+          }
+        }
+      ],
+      "end": {
+        "a": {
+          "messages": [
+            {
+              "from": "user",
+              "text": "Plan a weekend trip.",
+              "state": "shown"
+            },
+            {
+              "from": "agent",
+              "text": "Saturday hike, Sunday museum."
+            }
+          ],
+          "cards": {
+            "ix2": "open"
+          },
+          "status": "needs_you"
+        }
+      }
+    }
+  ]
+}

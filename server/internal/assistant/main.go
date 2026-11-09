@@ -32,6 +32,7 @@ import (
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/identity"
 	"github.com/nwverse/persona/server/internal/managerconf"
+	"github.com/nwverse/persona/server/internal/managerupdate"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/update"
 )
@@ -42,6 +43,17 @@ import (
 // hub's machine (DeployService, hub.json assistant.mode service) has it in its manager.json (managerconf.Binding). It keeps its state in the hub's Postgres,
 // found as the hub finds it: hub.json's database_url, PERSONA_DATABASE_URL over it.
 func Main(ctx context.Context, build update.Build, stdin io.Reader) error {
+	return MainWith(ctx, build, stdin, MainHooks{})
+}
+
+// MainHooks are what a caller of MainWith gets of the running manager besides.
+type MainHooks struct {
+	// Ready is given the manager's Idle once it is made (before it connects to the hub).
+	Ready func(Idle)
+}
+
+// MainWith is Main with h.
+func MainWith(ctx context.Context, build update.Build, stdin io.Reader, h MainHooks) error {
 	errs := newErrorTee(build) // its log's error lines become error reports (docs/extensions/extensions.md "Error reports")
 	logger := log.New(errs, "assistant: ", log.LstdFlags)
 	cfg, err := readHubConfig()
@@ -114,7 +126,7 @@ func Main(ctx context.Context, build update.Build, stdin io.Reader) error {
 	// itself again): nothing of it runs next to the one that has the token (manager.RunBuiltin waits for a new one).
 	o.Fingerprint, o.StopWhenRevoked, o.TokenFirst = fingerprint, deploy == DeployService, deploy == DeployService
 	o.RotateSecretKey = true
-	o.Logf, o.ExtConfig = logger.Printf, ext
+	o.Logf, o.ExtConfig, o.Ready = logger.Printf, ext, h.Ready
 	// Its own database, its data moved there once (owndb.go); the hub's while that cannot be yet.
 	if o.DatabaseURL, o.OnHubDatabase, err = builtinDatabase(ctx, home, cfg.DatabaseURL, provisionOwn, logger.Printf); err != nil {
 		return err
@@ -240,6 +252,8 @@ type runOptions struct {
 	// of its own (a version from before this mode), or bound another service.
 	TokenFirst bool
 	Logf       func(format string, args ...any)
+	// Ready is given the manager's Idle once its service is made (MainHooks.Ready); nil: nobody asks.
+	Ready func(Idle)
 	// Errors is the process's log writer that reports its error lines (newErrorTee); nil: run makes one.
 	Errors *errorTee
 }
@@ -329,13 +343,17 @@ func run(ctx context.Context, build update.Build, o runOptions) error {
 	devs := devices.New(devices.Options{Store: database, ConfigFile: o.ConfigFile, TailcatKey: o.TailcatKey, ManagerID: o.ID,
 		Logf: log.New(stderr, "devices: ", log.LstdFlags).Printf,
 		Answer: func(ctx context.Context, machine, method string, params json.RawMessage) (any, bool, error) {
+			if !waitsOnPerson(method) { // a tool call, a write the gate forwarded: idle (idle.go) waits for it
+				svc.nodeAnswering.Add(1)
+				defer svc.nodeAnswering.Add(-1)
+			}
 			if err := svc.machineTrust(ctx, machine); err != nil { // not confirmed yet: nothing of the assistant's (machine_trust.go)
 				return nil, true, err
 			}
 			if out, ok, err := svc.NodeAnswer(ctx, machine, method, params); ok {
 				return out, ok, err
 			}
-			return svc.NodeRequest(ctx, machine, method, params) // the interactions, the MCP tools (fleet.go)
+			return svc.NodeRequest(ctx, machine, method, params) // the interactions, the MCP tools (fleet_events.go)
 		},
 		Event:    func(machine, event string, params json.RawMessage) bool { return svc.NodeEvent(machine, event, params) },
 		Detached: func(machine string) { svc.NodeDetached(machine) },
@@ -344,17 +362,10 @@ func run(ctx context.Context, build update.Build, o runOptions) error {
 		Own:         func(ctx context.Context, machine string) map[string]json.RawMessage { return ext.Own(ctx, machine) },
 		OnConnected: func(machine string) { ext.NodeConnected(machine) },
 		OnEvent:     func(machine, event string, params json.RawMessage) bool { return ext.NodeEvent(machine, event, params) },
-		// A node's new connection gets the launchers added in Persona, with their keys (models_launchers.go).
+		// A node's new connection gets the launchers added in Persona, with their keys (models_launchers_push.go).
 		// Not one waiting to be confirmed: it gets them when it is (trustChanged, machine_trust.go).
 		NodeCalls: func(ctx context.Context, machine string) []devicewire.NodeCall {
-			if svc.machinePending(ctx, machine) {
-				return nil
-			}
-			b, err := json.Marshal(map[string]any{"launchers": svc.managedForNodes(ctx)})
-			if err != nil {
-				return nil
-			}
-			return []devicewire.NodeCall{{MachineID: machine, Method: DeviceLaunchersManaged, Params: b}}
+			return svc.managedNodeCalls(ctx, machine)
 		},
 		DialRelay: func(ctx context.Context, query string) (*websocket.Conn, error) {
 			return bus.DialAt(ctx, hub, token, httpClient, devicewire.RelayPath, query)
@@ -396,6 +407,9 @@ func run(ctx context.Context, build update.Build, o runOptions) error {
 		KB: &KBOptions{Dir: o.KBDir, KeyDir: o.HandlesDir}, SecretKey: o.SecretKey,
 		Trust: devs, ID: o.ID})
 	svc.SetExtensions(ext) // the connectors', Cua's and ego's tools, in this process (fleet_tools.go)
+	if o.Ready != nil {
+		o.Ready(func(ctx context.Context) (bool, string) { return managerIdle(ctx, bh, svc, ext) })
+	}
 	logf("connecting to %s as %s", hub, o.ID)
 	done := make(chan struct{})
 	go func() {
@@ -407,6 +421,15 @@ func run(ctx context.Context, build update.Build, o runOptions) error {
 		defer close(extDone)
 		_ = ext.Run(ctx) // after ctx: stops the extensions' programs (they are the manager's children)
 	}()
+	if o.ID != "assistant" {
+		go func() {
+			if err := bh.Wait(ctx); err == nil {
+				if err := managerupdate.MarkReady(home, build); err != nil {
+					logf("manager update readiness: %v", err)
+				}
+			}
+		}()
+	}
 	err = bh.Run(ctx, svc)
 	stop() // a refused token ends Run before ctx: the computers and the extensions stop with it
 	<-done

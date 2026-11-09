@@ -18,9 +18,14 @@ The table below is for Orca; where the herdr engine differs is in the table in t
 | Send messages (multi-line as one), keys, interrupt | ✅ | Bracketed paste works under ConPTY |
 | Answer dialogs (AskUserQuestion, permissions) | ✅ | Answered by reading the screen, same as Orca on macOS |
 | Close a session | ✅ | |
-| Create a session from the phone, resume a session that isn't running | ❌ | The Orca engine doesn't support this on any platform yet ([plan-orca-support.md](../plans/plan-orca-support.md), "Phase 2"); not a Windows problem |
+| Create a session from the phone, resume a Claude session that isn't running | ✅ | Since #5548 Orca opens a terminal in the session's worktree and runs `claude --resume` there, as herdr does; other agents' sessions are refused with why (`orca_resume`) |
+| Claude in the desktop app or in a terminal Persona does not drive | ✅ | Listed as running with its own state, transcript streamed; messages go through the session's peer inbox (a named pipe). Questions and permission prompts there stay on the computer. See "Claude outside Persona's terminals" below |
 | Machine monitoring (CPU, memory, swap, network, disk, system info) | ✅ | Win32 calls, no processes spawned; the metrics follow the Windows column of [machines.md](../server/machines.md) ("Collection metrics") (#1943) |
-| Port forwarding, Codex / compatible Codex forks discovery | ❌ | Depends on `ps` / `lsof` / `/proc`; silently unavailable on Windows (#1179) |
+| Port forwarding | ❌ | Depends on `ps` / `lsof` / `/proc`; silently unavailable on Windows (#1179) |
+| Codex discovery (processes, homes, `--listen` endpoints, which rollouts a process holds open) | ✅ | Win32 calls, no processes spawned: Toolhelp32 and the PEB for `codex.exe`, each one's handle table for its open rollouts ("Codex" below). Compatible Codex forks are still not discovered |
+| Codex desktop App chats: list, state, send text and images | ✅ | Through the App's bus, the named pipe `\\.\pipe\codex-ipc` ("Codex" below) |
+| Codex CLI running in a plain terminal | ✅ view, state | Seen as running from the rollout it holds open (working / done as on macOS), so never resumed into a second writer; view only, as on macOS. On a `--listen` app-server it joins like anywhere else |
+| Resume an exited Codex CLI thread from the phone | ❌ | The Orca engine does not resume Codex on any platform; it works with the herdr engine (herdr table below) |
 | Processes the node starts itself: managed launchers, `codex` start | ✅ | `osproc.Exec`: Windows has no exec, so it starts a child in the same console and exits with its exit code ("herdr" below) |
 | hub self-update | ❌ | Still `syscall.Exec`; the hub doesn't run natively on Windows (#1179) |
 | Updating the resident node through the hub ([node-update.md](node-update.md)) | ❌ | The node reports it as unsupported ("resident node is not managed by launchd/systemd"), and the App shows why; to upgrade, run `persona-link install --personad <new personad.exe>` again |
@@ -69,6 +74,7 @@ is a release or your own `go build`, the supervisor is the same program. Approac
 | --- | --- |
 | `persona-link status` | An extra line "Background service: scheduled task "Persona Link" · state · starts at logon"; the state is whatever schtasks prints in the system language (Running / 正在运行, the Chinese-locale "Running"…), shown but not parsed. Then a line for the tray: running or not, starts at sign-in or not (`tray` in `--json`) |
 | `persona-link uninstall [--purge]` | Ends and deletes the scheduled task (the node stops with it), deletes `persona-link-task.xml` and `persona-link-service.exe`; quits the tray and removes its sign-in entry, its link handlers and WebView2's cache. `--purge` is as on Linux and also deletes the supervisor's logs and lock |
+| `persona-link name [<new>\|--reset]` | As on Linux: shows or changes what the hub calls this computer ([link.md](link.md), "The computer's name") |
 | `persona-link tray [--open <link>]` | Runs the tray (what the sign-in entry runs). A second one shows the running tray's panel, or hands it the link |
 | `persona-link node install` / `node uninstall` | Not installed separately: the node is in the same scheduled task; use `install` (with node) / `install --no-node` |
 | `persona-link node status [--json]` | Whether the scheduled task includes the node, and the task's state |
@@ -91,6 +97,8 @@ It is part of persona-link (`internal/linktray`, `persona-link tray`), not a sep
 - **Panel and pairing window**: HTML pages (`internal/linktray/web`; every size and color comes from `tokens.css`) loaded from memory, with no server and nothing fetched. The panel is a flyout over acrylic next to the icon, on the taskbar's side;
   the pairing window (active and passive, as in the Mac App) is a normal window over Mica. Both follow the system's light or dark mode, accent color, transparency setting and the monitor's DPI (per-monitor v2).
   The backdrops need Windows 11 22H2 (build 22621); earlier builds get a solid background. Slow actions (install, restart, pair) run off the UI thread, and their result shows in the panel in the user's words.
+- **Rename this computer…**: in the panel (and the right-click menu) while connected to a hub that renames computers and once the computer is confirmed. It opens a name field in the panel; Save asks the running
+  persona-link to have the hub rename it, as `persona-link name` does ([link.md](link.md), "The computer's name"), and the panel says the hub's answer. The status line shows the name the hub gives the computer.
 - **Notifications**: once when the hub waits for your OK on this computer, and once when a link that was up has been down for a minute.
 - **Links**: `persona://` links, and the previous brand's ones that older hubs print, open the pairing window with the link filled in (`HKCU\Software\Classes\<scheme>`, running `tray --open "%1"`).
   A scheme that another program already handles is left alone (a desktop App's phone link must keep working), and uninstall removes only the handlers that are ours.
@@ -137,6 +145,9 @@ herdr has a native Windows build since 0.9.5 (ConPTY panes, [official notes](htt
 | Send messages (multi-line as one), keys, interrupt | ✅ | |
 | Answer question / permission cards | ✅ | Via Claude Code hooks, no screen reading |
 | Live terminal (`terminal session observe`) | ❌ | herdr has no direct terminal attach on Windows; falls back to reading the screen |
+| Codex in a herdr tab: list, send, answer cards | ✅ (tests) | The terminal route as elsewhere ([codex.md](../integrations/codex.md)); not run against a real herdr on Windows |
+| Resume an exited Codex thread from the phone | ✅ (tests) | `codex resume <id>` in a new tab through `personad codex-start`, which runs the `codex.exe` behind npm's `codex.cmd` ("Codex" below); not run against a real herdr on Windows |
+| Claude in the desktop app or in a terminal Persona does not drive | ✅ | As in the Orca table above |
 
 - **socket**: herdr's API on Windows is a named pipe, named `\\.\pipe\` plus the socket path (`\\.\pipe\C:\Users\<you>\AppData\Roaming\herdr\herdr.sock`);
   the config directory is `%APPDATA%\herdr` (or `herdr` under `$XDG_CONFIG_HOME` if that's set). `socket_windows.go` in `internal/herdr` dials by this rule, matching herdr's own
@@ -174,11 +185,60 @@ Limits: the path can't exceed 108 bytes (a very deep `%USERPROFILE%` gives `bind
 - **Screen-reading card**: Orca reports the session as blocked as soon as the AskUserQuestion PreToolUse hook fires, but starting a hook process on Windows takes a few seconds, so the dialog appears late.
   The card the manager built at that moment couldn't read the dialog ("can't read this dialog yet"); after that the manager looks at the screen again every 500 ms (up to 30 seconds) and swaps in a card with options as soon as the dialog appears (`assistant.upgradeScreenCard` in `assistant/fleet_ix.go`, on all platforms).
 
+## Codex
+
+What the node needs to know about Codex on macOS / Linux comes from `ps`, `lsof` and `/proc`; on Windows from Win32 calls, without starting a process ([codex.md](../integrations/codex.md) has the rest).
+
+- **Processes** (`codex_procs_windows.go`): Toolhelp32 lists the processes; only `codex.exe` ones (the CLI's npm shim starts the native `codex.exe`, the Codex App bundles one as its app-server) have their command line and
+  `CODEX_HOME` / `HERDR_PANE_ID` read from the PEB, as for Orca. A `codex.exe` of this logon session that cannot be read (an elevated one) makes the scan "could not tell", so a resume refuses rather than guess.
+- **Which rollouts a process holds open**: its handle table (`NtQueryInformationProcess(ProcessHandleInformation)`); each File handle is duplicated for a moment, and only disk files are asked their path
+  (`GetFinalPathNameByHandle`). A Codex App app-server has about 700 handles; one pass takes 3–10 ms. Asking each rollout who holds it instead (`FileProcessIdsUsingFileInformation`, the Restart Manager's `RmGetList`)
+  took about 40 ms per file, seconds for a home with a few hundred rollouts. The scan runs every 30 seconds and again right before a resume.
+- **The Codex App** (`codex_desktop_windows.go`): its bus is not `<CODEX_HOME>/ipc/ipc.sock` but one named pipe per user session, `\\.\pipe\codex-ipc` (the App's main process is `ChatGPT.exe`, package `OpenAI.Codex`).
+  Frames and methods are the macOS ones. The pipe is looked for in the pipe namespace (`FindFirstFile`), never opened just to see it: `os.Stat` opens it, which takes one of the App's free pipe instances or connects.
+  The pipe does not say which Codex home the App uses, so an App chat is one in a home with the App's `.codex-global-state.json`.
+  A thread the App has not loaded is opened with `codex://threads/<id>` through `ShellExecute` (no console window), only once `HKEY_CLASSES_ROOT\codex` is a URL protocol with a handler: the package registers it as a packaged app's protocol, with no `shell\open\command`.
+- **`personad codex-start`**: npm installs `codex` as `codex.cmd`, and a batch file has `cmd.exe` read its arguments again, the first message among them (quotes, `&`, `%`, line breaks). codex-start runs the `codex.exe` the shim would start
+  (with the `CODEX_MANAGED_*` variables its `codex.js` sets); another batch file launcher is refused when there is a message.
+- **app-server on `--listen unix://`**: Codex on Windows serves its control socket as an AF_UNIX file too. Windows has no mode bits, so the socket and its directory must be this user's, with an access list that lets nobody else in
+  (SYSTEM and Administrators aside); a `unix://C:\…` endpoint is a path, not a URL with a host. Codex's background daemon (`codex app-server daemon start`) does not start from npm's launcher on Windows, so a plain `codex` there runs in its own process.
+
+## Claude outside Persona's terminals
+
+The desktop app's Code page and a `claude` in an ordinary terminal (Windows Terminal, PowerShell) run where neither herdr nor Orca has a pane. The node finds them by their `sessions/<pid>.json` and lists them live; a message from the phone goes through the session's peer inbox, never by starting a second `claude --resume` on the same transcript. Design and the protocol: [claude-integration.md](../integrations/claude-integration.md), "Claude outside Persona's terminals".
+
+- **The inbox is a named pipe**, `\\.\pipe\LOCAL\cc-msg-<32 hex>`, dialed with `tailscale/go-winio`. On Windows it requires an auth line first: the token is in the key file next to `sessions/<pid>.json` (`<pid>.<sha256 of the pipe path, lower-cased>.key`), readable only by the user, as Persona's node is. Without it the session lists read-only, saying why.
+- **The desktop app's entrypoint** is `claude-desktop`, or in some builds `claude-desktop-3p`: both are the desktop app (also in the "open elsewhere" refusal's words).
+- **A terminal Persona drives is told apart by the claude process's environment**: a pane variable (`HERDR_PANE_ID`, `ORCA_PANE_KEY`…) read from its PEB, naming a pane an engine in use lists with a claude in it, means the engine lists it, so it is not listed twice.
+- **Pid reuse**: Claude Code writes `procStart` as the process's creation time (a FILETIME); the node compares it with the running process's (`procinfo.StartMark`), so a reused pid is not taken for the claude.
+- **Held messages**: the desktop app often runs sessions in bypass permissions mode, which holds a message from another sender until the person at the computer approves it in the session; the phone says the message is waiting there. `"crossSessionInbound": "accept"` in that Claude Code's settings delivers without asking.
+
 ## shell
 
 When the node runs shell scripts on Windows, such as launcher probing and `claude --version`, it uses Git for Windows' bash (`loginShellProgram`: `CLAUDE_CODE_GIT_BASH_PATH`,
 otherwise found from `git`'s location and common install directories), the same as Claude Code itself on Windows. It doesn't use a bare `bash`: in the PATH the service gets, `System32\bash.exe` comes first, and that's WSL.
 If Git Bash can't be found, these commands don't start (the machine info has no Claude version); they never end up running in WSL.
+
+## Verification record: Codex (2026-11-07, real Windows 11 machine)
+
+- Codex App 26.1027 (MSIX `OpenAI.Codex`, its app-server a bundled `codex.exe … app-server` on stdio), Codex CLI 0.163 from npm (`codex.cmd`). No herdr on the machine; the node ran in tests only.
+- The App's bus: `\\.\pipe\codex-ipc` is in the pipe namespace while the App runs; `go test -tags codexipclive -run TestCodexIPCLive ./internal/node/` (read only) connected, said `initialize`, and got
+  `no-client-found` asking the owner of a made-up thread id. Nothing was sent to any conversation, and no `codex://` link was opened.
+- The handle-table scan found the App's app-server holding 11 rollouts open in a few milliseconds per pass (`RmGetList` took about 40 ms per file, so it was not used).
+- A test pipe (`TestCodexPipeUpDoesNotConnect`) showed `os.Stat` connecting to a pipe and `FindFirstFile` not.
+- Tests on Windows: the fake App bus on a named pipe (`codex_desktop_windows_test.go`: initialize, owner discovery, start turn, a thread opened then retried, an image, no wait when `codex://` cannot open),
+  the handle-table scan against a child holding a rollout open, the `codex.exe` scan against a copy of the test binary named `codex.exe` (its `CODEX_HOME`, herdr pane and `--listen`, and no other variable),
+  a running CLI's thread neither resumable nor sendable, the private-socket check, npm's `codex.cmd` resolved to its `codex.exe`. On Linux, the whole `internal/node` package fails only where master fails on the same machine.
+- Not verified: sending from the phone into a real App chat end to end (it would write into a conversation of the user's; see [codex.md](../integrations/codex.md), "Windows", for how to check it);
+  opening an unloaded thread with `codex://` (it brings the App to the front); Codex in a real herdr on Windows (no herdr here); a CLI on a `--listen unix://` app-server
+  (Codex's daemon does not start from npm's launcher on Windows: "this Windows launcher prevents background processes from outliving it").
+
+## Verification record: Claude outside Persona's terminals (2026-11-07, real Windows 11 machine)
+
+- Claude Code 2.1.308 (the desktop app's own) and 2.1.291 (the CLI on PATH). Read only: every running session's `sessions/<pid>.json` had `messagingSocketPath` (a pipe that exists), `peerProtocol: 1`, `peerFeatures` `notify_idle` / `artifact_yield`, and a key file whose name is the sha256 of the lower-cased pipe path; `procStart` equalled each process's creation time.
+- End to end on a throwaway `claude` 2.1.291 (its own `CLAUDE_CONFIG_DIR`, an empty directory, a pseudo console; started for the test and closed after): the node's send was taken in 0.15–0.3 s and answered in the transcript ("reply with OK" → "OK"); a second message while it worked was queued and answered next; the transcript reader showed the message from "Persona" with only the user's words. With `--dangerously-skip-permissions` the message was held for approval in the terminal, as the code says.
+- Tests: the peer path against a fake inbox on a named pipe (`claudepeer_test.go`), listing, refusals and the echo; Windows start marks (`internal/procinfo`).
+- Not verified: sending into a session of the desktop app (only its files were read: no message was sent to a session in use); the phone and web UI against a real hub; macOS and Linux inboxes against a real claude (the code dials a unix socket; the tests run against a fake one on Linux).
 
 ## Verification record: tray (2026-11-07, real Windows 11 25H2 machine, build 26200)
 
@@ -204,7 +264,7 @@ If Git Bash can't be found, these commands don't start (the machine info has no 
 - `personad tab-start`: with the argv from a file, started `claude -p` (replied normally), `cmd /c exit 3` (exit code 3), and a command prefixed with `A=1` (the environment variable came through); the file is deleted after use.
 - Tests: `internal/herdr` (`TestPipeName`, `TestSocketPathWindows`, and the RPC / subscription tests with the test herdr switched to listening on a named pipe) and `internal/osproc` (`TestExecExitCode`, `TestExecSurvivesCtrlC`: fails when switched back to `signal.Ignore`)
   passed on this Windows machine; the few tests that use shell scripts posing as the herdr executable are skipped on Windows. On Linux, `internal/herdr`, `internal/osproc`, `internal/node` and `internal/hub` passed.
-- Not verified: the App UI (the same hub APIs the App calls were used); Codex; herdr's live terminal (herdr doesn't support it on Windows).
+- Not verified: the App UI (the same hub APIs the App calls were used); Codex (see "Verification record: Codex" below); herdr's live terminal (herdr doesn't support it on Windows).
 ## Verification record: install and start at logon (2026-11-04, the same real Windows 11 machine)
 
 - Replaced the previously hand-added registry Run entry with `persona-link install --personad personad.exe`: the scheduled task registered and started, connected to the hub within seconds, and the local node came online;

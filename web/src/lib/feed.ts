@@ -24,10 +24,15 @@ export interface PlanTask {
   launcher?: string;
   model?: string;
   permission?: string;
+  /** The agent starts with Claude Code's ultracode on (#12). On start, `true` / `false` overrides it; left out, the hub keeps the assistant's choice. */
+  ultracode?: boolean;
   readonly?: boolean;
   why?: string;
   todo_id?: string;
   error?: string;
+  /** The failed start's coded refusal and its details (as a session's start_error_code / start_error_args). */
+  error_code?: string;
+  error_args?: Record<string, string>;
 }
 
 export interface TaskPlan {
@@ -76,6 +81,11 @@ export interface BriefRow {
   nudged?: boolean;
   /** accept: when the round's "Please verify" ask was made (with or without a Lark card); the Accept button sends it back. */
   asked_at?: string;
+  /** accept: the verdict line, word for word as the Lark card says it (#1226), in the bot's language; a hub from before leaves it out. */
+  verdict?: string;
+  /** accept: a conclusion's verdict (left out for a deployed task); decide waits for the user's decision, and Accept takes `recommend`. */
+  outcome?: "done" | "cannot" | "decide";
+  recommend?: string;
 }
 
 export interface BriefFailed {
@@ -177,6 +187,58 @@ export function field(it: FeedItem, key: string): string | undefined {
 export function feedNotice(it: FeedItem): string | undefined {
   if (it.kind !== "notice") return undefined;
   return field(it, "text")?.trim() || undefined;
+}
+
+/** `routed`: Persona wrote it to the task's agent (agent_send with a task, agent_interrupt's then, a rework; #1542), so
+ *  it is drawn folded as Persona's (`SentLine`), never as the user's bubble. What the user sent has no `from`. */
+export function sentByPersona(it: FeedItem): boolean {
+  return it.kind === "routed" && it.body?.from === "assistant";
+}
+
+/** How long after its task's card a message of Persona's counts as the card's hand-off: agent_send with a task writes the
+ *  card and, right after it, what it sent. */
+export const HAND_OFF_MS = 60_000;
+
+/** The hand-offs the task cards take in (#1542, not drawn on their own): Persona's messages within `HAND_OFF_MS` after
+ *  their own task's card in the same conversation. Only a card drawn in full (from today, FeedLineView) has the list: from
+ *  another day it is a TaskLine, and its hand-off stays a folded line under it (#1668). */
+export function takenIn(feed: FeedItem[], now = new Date()): Set<string> {
+  const cards = new Map<string, number[]>();
+  for (const it of feed) {
+    if (it.kind !== "task" || !it.ref || !isToday(it.at, now)) continue;
+    const key = it.conversation + "/" + it.ref;
+    cards.set(key, [...(cards.get(key) ?? []), Date.parse(it.at)]);
+  }
+  const out = new Set<string>();
+  if (cards.size === 0) return out;
+  for (const it of feed) {
+    if (!sentByPersona(it) || !it.ref) continue;
+    const at = Date.parse(it.at);
+    if ((cards.get(it.conversation + "/" + it.ref) ?? []).some((c) => c <= at && at - c <= HAND_OFF_MS)) out.add(it.id);
+  }
+  return out;
+}
+
+/** The feed without the hand-offs the cards take in: what the chat draws among its lines. */
+export function shownFeed(feed: FeedItem[], now = new Date()): FeedItem[] {
+  const hidden = takenIn(feed, now);
+  return hidden.size === 0 ? feed : feed.filter((it) => !hidden.has(it.id));
+}
+
+/** Persona's messages to task `todoId`, oldest first: what its card lists. */
+export function sentTo(feed: FeedItem[], todoId: string): FeedItem[] {
+  return feed
+    .filter((it) => sentByPersona(it) && it.ref === todoId)
+    .sort((a, b) => Date.parse(a.at) - Date.parse(b.at) || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+}
+
+/** The first line with words in it, trimmed: what a folded message shows. */
+export function firstLine(text: string): string {
+  for (const line of text.split(/\r?\n/)) {
+    const t = line.trim();
+    if (t) return t;
+  }
+  return "";
 }
 
 /** A receipt's outcome: an `interrupted` one (#1516), or a `done` one from a hub before it whose summary is the API
@@ -353,29 +415,60 @@ onHubEvent("task_plan", (m) => {
 
 // ── actions ──
 
-/** The fields of a plan's task "Edit" lets the user change before it starts (iOS PlanEditSheet). */
-export type PlanTaskEdit = Pick<PlanTask, "title" | "machine" | "cwd" | "model" | "permission" | "prompt">;
+/** The fields of a plan's task "Edit" lets the user change before it starts (iOS PlanEditSheet), ultracode included (#12). */
+export type PlanTaskEdit = Pick<PlanTask, "title" | "machine" | "cwd" | "model" | "permission" | "prompt"> & { ultracode: boolean };
 
 export const PLAN_PERMISSIONS = ["default", "acceptEdits", "plan", "bypassPermissions"] as const;
 
-/** A plan's tasks as "Edit" starts them: every editable field filled in (an unset permission is "Ask every step"). */
-export function planEditsOf(plan: TaskPlan): PlanTaskEdit[] {
-  return plan.tasks.map((t) => ({ title: t.title, machine: t.machine, cwd: t.cwd, model: t.model ?? "", permission: t.permission || "default", prompt: t.prompt }));
+/** A plan's tasks as "Edit" starts them: every editable field filled in (an unset permission is "Ask every step").
+ *  `ultracode`: the card's own choice per task, where it has one; else the assistant's. */
+export function planEditsOf(plan: TaskPlan, ultracode?: readonly boolean[]): PlanTaskEdit[] {
+  return plan.tasks.map((t, i) => ({
+    title: t.title,
+    machine: t.machine,
+    cwd: t.cwd,
+    model: t.model ?? "",
+    permission: t.permission || "default",
+    prompt: t.prompt,
+    ultracode: ultracode?.[i] ?? t.ultracode === true,
+  }));
 }
 
-/** Whether "Edit" changed anything (closing it then asks before throwing the changes away). */
-export function planEditsChanged(plan: TaskPlan, edits: PlanTaskEdit[]): boolean {
-  const before = planEditsOf(plan);
+/** Whether "Edit" changed anything since it opened with `before` (closing it then asks before throwing the changes away). */
+export function planEditsChanged(before: PlanTaskEdit[], edits: PlanTaskEdit[]): boolean {
   return edits.some((e, i) => (Object.keys(e) as (keyof PlanTaskEdit)[]).some((k) => (e[k] ?? "") !== (before[i]?.[k] ?? "")));
 }
 
-/** What "Start" sends from "Edit": the edited tasks, leaving out an "Ask every step" the plan never set (the agent's own default). */
-export function planEditsToSend(plan: TaskPlan, edits: PlanTaskEdit[]): Partial<PlanTask>[] {
+/** Whether a computer can't start an agent with ultracode (lib/ultracode machineStartBlocked); a task chosen with it
+ *  there starts without. */
+export type UltracodeBlocked = (machine: string) => boolean;
+
+/** A task's ultracode as Start sends it (#12): the choice, off on a computer that can't; undefined when that is the
+ *  assistant's own (left out, the hub keeps it). */
+function ultracodeToSend(planned: PlanTask | undefined, on: boolean, machine: string, blocked: UltracodeBlocked): boolean | undefined {
+  const sent = on && !blocked(machine);
+  return sent === (planned?.ultracode === true) ? undefined : sent;
+}
+
+/** What "Start" sends from "Edit": the edited tasks, leaving out an "Ask every step" the plan never set (the agent's own
+ *  default) and an ultracode the same as the assistant's. */
+export function planEditsToSend(plan: TaskPlan, edits: PlanTaskEdit[], blocked: UltracodeBlocked = () => false): Partial<PlanTask>[] {
   return edits.map((e, i) => {
-    const out: Partial<PlanTask> = { ...e };
+    const out: Partial<PlanTask> = { ...e, ultracode: ultracodeToSend(plan.tasks[i], e.ultracode, e.machine, blocked) };
     if (e.permission === "default" && !plan.tasks[i]?.permission) delete out.permission;
+    if (out.ultracode === undefined) delete out.ultracode;
     return out;
   });
+}
+
+/** What the card's own "Start" sends (#12): `ultracode` for each task whose choice, as sent, differs from the
+ *  assistant's and nothing for the rest; undefined when nothing differs, so it starts the plan as it is. */
+export function planUltracodeToSend(plan: TaskPlan, ultracode: readonly boolean[], blocked: UltracodeBlocked = () => false): Partial<PlanTask>[] | undefined {
+  const edits = plan.tasks.map((t, i): Partial<PlanTask> => {
+    const sent = ultracodeToSend(t, ultracode[i], t.machine, blocked);
+    return sent === undefined ? {} : { ultracode: sent };
+  });
+  return edits.some((e) => "ultracode" in e) ? edits : undefined;
 }
 
 export async function startPlan(plan: TaskPlan, remember: boolean, edits?: Partial<PlanTask>[]) {
@@ -547,6 +640,7 @@ export type DisplayLine =
 
 /** When the user sent the line's message (feed items go before the first message sent after them). */
 function inputTime(line: ChatLine): number | undefined {
+  if (line.kind === "supervision") return line.lines.map(inputTime).find((at) => at !== undefined);
   if (line.kind !== "segment" || !line.seg.user?.ts) return undefined;
   return Date.parse(line.seg.user.ts);
 }
@@ -558,6 +652,7 @@ function lineTime(l: DisplayLine): number | undefined {
       return Date.parse(l.item.at);
     case "chat": {
       const c = l.line;
+      if (c.kind === "supervision") return inputTime(c);
       if (c.kind === "segment") return Date.parse(c.seg.user?.ts ?? c.seg.start ?? "") || undefined;
       if (c.kind === "notice" || c.kind === "apiError" || c.kind === "compact") return Date.parse(c.item.ts ?? "") || undefined;
       return undefined;
@@ -585,7 +680,9 @@ export function quickResult(use: Item, result?: Item): QuickResult | undefined {
 
 /** The chat's lines with the feed among them (each item at the end of the exchange it happened in), each exchange's
  *  quick results after it, and a day line over the first line of each day. */
-export function displayLines(lines: ChatLine[], feed: FeedItem[]): DisplayLine[] {
+export function displayLines(lines: ChatLine[], all: FeedItem[]): DisplayLine[] {
+  // the hand-offs the task cards take in are drawn there, not among the lines (#1542)
+  const feed = shownFeed(all);
   const out: DisplayLine[] = [];
   let next = 0;
   for (const line of lines) {

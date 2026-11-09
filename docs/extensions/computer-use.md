@@ -229,6 +229,7 @@ Only through the hub tunnel, no new externally exposed port:
   - Read-only devices (like the watch) still get 403.
 - hub ⇄ node: `port.dial`; the node only connects to its own `127.0.0.1:5900`.
 - `computer.status` adds `screen_sharing`: the node connects to `127.0.0.1:5900` and checks for an RFB version greeting (macOS: `RFB 003.889`). This determines whether the machine page offers VNC or explains how to enable Screen Sharing.
+  While it answers, `computer.status` and `browser.status` also carry `displays`, the Mac's display arrangement ("Displays" below).
 - Each stream's unacknowledged limit remains 512 KB: about 10 MB/s at 50 ms round-trip, sufficient for VNC; unchanged.
 
 **Screen Sharing limitations**:
@@ -275,7 +276,7 @@ Picture in Picture (`AVSampleBufferDisplayLayer`) needs access to each frame, wh
   - Account/password come from saved credentials (`ScreenCredentials`, #1322).
 - **Frames** (`RFBFramebuffer`):
   - Requests 32-bit, depth 24, little-endian pixels with red at bit 16; BGRA in memory, directly usable as `CVPixelBuffer` 32BGRA.
-  - Encoding preference: ZRLE (16), CopyRect (1), Raw (0), plus DesktopSize, Cursor and LastRect pseudo-encodings.
+  - Encoding preference: ZRLE (16), CopyRect (1), Raw (0), plus DesktopSize, ExtendedDesktopSize, Cursor and LastRect pseudo-encodings.
   - One zlib stream for ZRLE over the whole connection, using Compression raw DEFLATE after skipping the two-byte zlib header.
   - All five ZRLE tile types: raw, solid, packed palette, plain RLE, palette RLE.
 - **Sending back**: pointer (button bits: left, middle, right, wheel up/down), keys (keysym), clipboard (ClientCutText; RFB only carries Latin-1, other characters go through the node, see "Clipboard" below).
@@ -289,6 +290,32 @@ Picture in Picture (`AVSampleBufferDisplayLayer`) needs access to each frame, wh
     - ARD handshake and rejected login;
     - pointer, key and clipboard bytes and order (pre-handshake messages after handshake; 120 messages in original order).
   - Mock `MOCK_SCREEN=fake` now offers ARD first like macOS (DH in Python, AES with openssl), then ZRLE or Raw as the client requests. It records pointer, clicks, wheel and clipboard (read at `/mock/screen-password`; `?clip=…` sends clipboard to the client). `MOCK_SCREEN_ANIMATE=1` moves a square at about 30 frames per second to measure frame rate.
+
+### Displays (#80)
+
+macOS Screen Sharing sends one framebuffer with every display, laid out as System Settings › Displays arranges them. On iOS, iPadOS
+and visionOS the VNC page's "…" › Displays offers All Displays (the default) or one display; one display is cropped out of the
+framebuffer, zooming and panning stay inside it, and touches still send whole-framebuffer pixels. The choice is kept per Mac on the
+device (`VNCDisplayChoice`, as Mouse / Trackpad Mode). The Mac app, the web page and Picture in Picture show every display.
+
+Where the layout comes from (`VNCDisplays`), most trusted first:
+
+1. **The server's screens**: the client asks for ExtendedDesktopSize (-308); a server that supports it sends every screen's rectangle in
+   framebuffer pixels with the first full update and on changes. Used when it lists two or more screens that lie on the framebuffer.
+2. **The node's arrangement**: macOS's server is not known to send ExtendedDesktopSize, so while Screen Sharing answers the node reads
+   `NSScreen` through `osascript -l JavaScript` (about 0.2 s; `server/internal/node/displays.go`) and reports `displays` in
+   `computer.status` / `browser.status`: id (macOS's display number), x, y, width, height in points in the global display space (origin
+   at the main display's top-left corner, y down), `main`. No display names. The app scales the arrangement's bounding box onto the
+   framebuffer; when the box's aspect ratio is more than 2% off the framebuffer's (a display changed since the last status, or a server
+   that draws the displays at different scales), it offers nothing rather than crop the wrong place.
+3. **Neither**: no choice; the page shows the whole framebuffer.
+
+Without a GUI session (logged out, a node started as a daemon) `osascript` sees no screens and the node sends none. Older nodes send no
+`displays` and older apps ignore it.
+
+Known gaps: the aspect check cannot catch an arrangement whose bounding box happens to have the framebuffer's shape while the server
+sends something else (four equal displays in a 2 × 2 grid, of which the server sends one); such a crop would be wrong. The menu numbers
+displays left to right, then top to bottom, by their top-left corners.
 
 ### App
 

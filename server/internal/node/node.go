@@ -2,6 +2,7 @@
 package node
 
 import (
+	"bytes"
 	"cmp"
 	"context"
 	"encoding/json"
@@ -13,7 +14,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"regexp"
 	"runtime"
 	"strings"
 	"sync"
@@ -23,6 +23,7 @@ import (
 	"github.com/nwverse/persona/server/internal/assistantskills"
 	"github.com/nwverse/persona/server/internal/host"
 	"github.com/nwverse/persona/server/internal/i18n"
+	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/nodeproto"
 	"github.com/nwverse/persona/server/internal/nodeupdate"
 	"github.com/nwverse/persona/server/internal/proto"
@@ -52,7 +53,7 @@ type Node struct {
 	sock   os.FileInfo
 
 	// claudeStart, claudeReady: when set, how long a start waits for the shell to run claude, then for claude's
-	// input box, in place of claudeStartWait and claudeReadyWait (tests; control.go).
+	// input box, in place of claudeStartWait and claudeReadyWait (tests; claudeready.go).
 	claudeStart, claudeReady time.Duration
 
 	// doctorAt replaces the places node.doctor looks at (tests; doctor_rpc.go).
@@ -86,11 +87,11 @@ type Node struct {
 	fsw            fsWatcher // the folders the web panels have open (fswatch.go)
 
 	mu      sync.Mutex
-	titleMu sync.Mutex // orders the custom-title lines renames write (control.go retitle)
+	titleMu sync.Mutex // orders the custom-title lines renames write (rename.go retitle)
 	state   *stateFile
 	files   map[string]*transcript.File // session id -> parsed transcript
 	paths   map[string]string           // session id -> transcript path
-	pathsAt map[string]time.Time        // when a path not told by a hook was last chosen (transcriptPath)
+	pathsAt map[string]time.Time        // when a path was last reported or chosen (transcriptPath looks again after 30 s)
 	watches map[string]*watch
 	// waiting: watches of sessions with no transcript yet (watchFor), so session.unwatch finds them (#5389).
 	waiting map[string]*watch
@@ -101,16 +102,18 @@ type Node struct {
 	// suspended), to tell the two apart when a send finds it gone on a host that cannot resume it.
 	lastPanes map[string]string
 	launches  map[string]claudeLaunch    // herdr pane -> how Persona started its Claude, for herdr's restore (herdrresume.go)
+	resumes   resumeLocks                // one resume report at a time per herdr pane (herdrresume.go reportResume)
 	panes     map[string]string          // pane id -> session id (learned from hooks)
 	layouts   map[string]layout          // host kind -> space / slot names from its last snapshot
 	shellTabs *shellTabs                 // the sweep's memory; nil: the process's own (shelltabs.go)
 	procs     map[string]*assistantProc  // headless assistant conversations (assistant.go)
-	titles    map[string]string          // session id -> title given before its transcript existed (control.go retitle)
+	titles    map[string]string          // session id -> title given before its transcript existed (rename.go retitle)
 	spare     *assistantProc             // warm process waiting for the next new conversation
 	akeys     map[string]*assistantProc  // the key a Codex conversation's MCP server reports until its thread exists
 	lastList  string                     // serialized last sessions.changed payload
 	lastRevs  map[string]int64           // session id -> rev as last pushed (sessions.changed or sessions.revs)
-	metas     map[string]quickMeta       // transcript path -> cached meta
+	metas     map[string]quickMeta       // transcript path -> cached meta; deleted ones leave it (meta_prune.go)
+	goneDirs  map[string]time.Time       // cwd -> newest mtime of a deleted transcript pruned from metas (dirsByUse)
 	bgScans   map[string]*bgScan         // transcript path -> incremental background-task scan
 	panePIDs  map[string]panePID         // pane -> its claude pid (machines without herdr's claude integration)
 	paneSeen  map[string]time.Time       // claude pane without a host session id -> first seen (zero: there when node started)
@@ -128,14 +131,15 @@ type Node struct {
 	hostSig   map[string]*watcherSignals // change signals of the registered watcher hosts, by host kind (herdrevents.go)
 	cdirs     *claudeDirs                // Claude Code config directories in use (claudedirs.go)
 	hooks     *hookTurns                 // per-session turn counters from Persona's hooks (hookturn.go)
+	live      liveReplies                // the replies Claude is showing, from its MessageDisplay hook (livereply.go)
 	bgWait    bgWatch                    // whether background commands only wait (bgwait.go)
 	codices   *codexRegistry
 	usageWin  usageWindowsState // subscription rate-limit windows (usagewindows.go, #2432)
 	machineID string
 	sends     sentLog         // recent client_msg_ids (sendsafe.go)
 	echoes    echoLog         // sends tied to their transcript lines (echo.go)
-	typing    typingLocks     // one send at a time per session (sendsafe.go)
-	sendOrder sendQueue       // sends waiting for a start, in the order they came (sendsafe.go)
+	typing    typingLocks     // one send at a time per session (sendsafe_turns.go)
+	sendOrder sendQueue       // sends waiting for a start, in the order they came (sendsafe_turns.go)
 	cx        codexCards      // Codex questions and approvals listed to the hub (codexask.go)
 	kept      map[string]bool // sessions always listed (node.configure keep_sessions)
 	forked    map[string]bool // sessions "Branch to new chat" made (fork.go): listed however short they are
@@ -184,9 +188,15 @@ type Node struct {
 	// ports: the agents' listening ports (ports.go); streams: the forwarded connections to them (streams.Mux).
 	ports   portState
 	streams *streams.Mux
+	// preview: the headless browser of dev server previews (preview_browser.go), made on first use.
+	preview     *previewHost
+	previewOnce sync.Once
 
 	// hostAgents: each host's agents in its last answer (refreshHosts), kept for a host that does not answer.
 	hostAgents map[string][]host.Agent
+	// paneClaudes: when the outside-claude list first saw each claude whose environment names an engine pane, by pid
+	// (claudeInPane's grace while its engine has not reported it yet).
+	paneClaudes map[int]paneClaudeSeen
 	// workspaceDirs avoids resolving every listed session directory every second.
 	workspaceDirs workspaceDirectoryCache
 
@@ -319,12 +329,7 @@ func (n *Node) Serve(ctx context.Context, r io.Reader, w io.Writer) error {
 		adopted = n.keeper.adopt(n)
 	}
 	n.startState(ctx, adopted)
-	ln, err := n.listenHookSocket(ctx)
-	if err != nil {
-		n.logger.Printf("hook socket: %v", err)
-	} else {
-		defer ln.Close()
-	}
+	// The runtimes before the hook socket: its MCP requests read n.runtimes, which attach sets (clicall.go mcpAssistantOf).
 	if rh := n.runtimeHost; rh != nil { // a resident node's: runtimes stay connected across hub connections
 		rh.attach(n)
 		defer rh.detach(n)
@@ -332,6 +337,12 @@ func (n *Node) Serve(ctx context.Context, r io.Reader, w io.Writer) error {
 		n.logger.Printf("runtime socket: %v", err)
 	} else {
 		defer rh.detach(n)
+	}
+	ln, err := n.listenHookSocket(ctx)
+	if err != nil {
+		n.logger.Printf("hook socket: %v", err)
+	} else {
+		defer ln.Close()
 	}
 	go n.startWhenConfigured(ctx) // polling and the engine's events, once the hub said which engine (engine.go)
 	go n.warmTranscripts(ctx)
@@ -457,6 +468,8 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 		return n.doctor(ctx, params, false)
 	case "node.doctor.fix": // the same path as `node doctor --fix`: Persona's own generated files only
 		return n.doctor(ctx, params, true)
+	case proto.MethodSecretRun: // the password card's commands (secretrun.go); its params never reach the decoding below
+		return n.secretRun(ctx, params)
 	}
 	if strings.HasPrefix(method, "plugin.node.") { // plugins' programs on this computer (plugins.go)
 		return n.handlePlugins(ctx, method, params)
@@ -522,6 +535,9 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 		Configured     bool            `json:"configured"` // launchers.models, .probe, .http, .model.check: hub.json names this launcher
 		Guest          *guestParams    `json:"guest"`      // assistant.send: a new guest conversation (assistant_guest.go)
 		Raw            json.RawMessage `json:"-"`
+
+		ParentWorkspaceID string `json:"parent_workspace_id"` // worktree.create: independent of the Git source
+		AutoName          bool   `json:"auto_name"`           // worktree.create: host-generated branch and path
 	}
 	if len(params) > 0 {
 		if err := json.Unmarshal(params, &p); err != nil {
@@ -656,6 +672,9 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 			// AgentFilters: the extensions' filters of sessions left out (agentfilters.go); nil (an older hub, a call
 			// that says nothing of them) leaves them as they are.
 			AgentFilters *[]proto.AgentFilter `json:"agent_filters"`
+			// ClaudeLiveReplies: the Agents' starts load the live replies plugin (Settings › Claude Code, hooksplugin.go,
+			// #1309); nil (an older hub) leaves it as it is, on at first.
+			ClaudeLiveReplies *bool `json:"claude_live_replies"`
 		}
 		if err := json.Unmarshal(params, &c); err != nil {
 			return nil, err
@@ -702,6 +721,9 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 		}
 		if c.AgentFilters != nil {
 			n.setAgentFilters(*c.AgentFilters)
+		}
+		if c.ClaudeLiveReplies != nil {
+			n.setLiveReplies(*c.ClaudeLiveReplies)
 		}
 		return map[string]any{"claude_dirs": n.claudeConfigDirs()}, nil
 	case "usage.windows": // subscription rate-limit windows read from local files (usagewindows.go, #2432)
@@ -995,7 +1017,13 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 	case "worktree.prepare": // "New worktree…": what the dialog starts from (worktree.go)
 		return n.worktreePrepare(ctx, p.Kind, p.WorkspaceID, p.Cwd)
 	case "worktree.create": // a Git worktree of a workspace's repository, opened as a workspace (worktree.go)
-		return n.worktreeCreate(ctx, p.Kind, p.WorkspaceID, p.Cwd, p.Branch, p.Path)
+		if p.AutoName {
+			if strings.TrimSpace(p.Branch) != "" || strings.TrimSpace(p.Path) != "" {
+				return nil, errors.New("Choose automatic naming or an explicit branch and path")
+			}
+			return n.worktreeCreateAutomatic(ctx, p.Kind, p.WorkspaceID, p.Cwd, p.ParentWorkspaceID)
+		}
+		return n.worktreeCreate(ctx, p.Kind, p.WorkspaceID, p.Cwd, p.Branch, p.Path, p.ParentWorkspaceID)
 	case "worktree.add", "worktree.status", "worktree.remove": // a new agent's own worktree (agentworktree.go, #6115)
 		var a struct {
 			NameHint     string `json:"name_hint"`
@@ -1171,6 +1199,8 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 		return map[string]any{"settings": list}, err
 	case "file.upload.begin", "file.upload.chunk", "file.upload.end", "file.upload.abort":
 		return n.uploadCall(method, params)
+	case "file.rename", "file.move", "file.trash", "file.restore":
+		return n.fileEditCall(method, params)
 	case "health.reports.list", "health.reports.delete":
 		return n.healthReportsCall(method, params)
 	case "file.chunk":
@@ -1203,6 +1233,12 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 		return n.portDial(ctx, params)
 	case "port.probe":
 		return n.portProbeRPC(ctx, params)
+	case "preview.servers": // a session folder's dev servers, from its .claude/launch.json (preview_launch.go)
+		return n.previewServersRPC(ctx, params)
+	case "preview.start": // run one of them in a new terminal tab, after the user confirmed its command
+		return n.previewStartRPC(ctx, params)
+	case "preview.open": // a headless browser tab on a port of this computer, on a stream (preview.go)
+		return n.previewOpenRPC(ctx, params)
 	// The built-in programs cua and ego by their old names, for a hub from before builtin_programs (builtin.go).
 	case "computer.status", "computer.call", "computer.install", "computer.grant", "computer.cancel", "computer.clipboard",
 		"computer.cursor", "computer.nolock", "computer.lock",
@@ -1213,6 +1249,8 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 		return map[string]any{"stats": n.statPaths(p.Paths, p.Cwd)}, nil
 	case "space.rename":
 		return ok(n.renameSpace(ctx, p.WorkspaceID, p.Name))
+	case "worktree.rename":
+		return ok(n.renameWorktree(ctx, p.Kind, p.WorkspaceID, p.Name))
 	case "session.rename":
 		return ok(n.renameSession(ctx, p.SessionID, p.TabName, p.Title))
 	case "todo.sync_session_tokens":
@@ -1237,6 +1275,12 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 		return n.gitDiff(ctx, p.Cwd, p.Path, p.Staged)
 	case "git.show":
 		return n.gitShow(ctx, p.Cwd, p.Hash)
+	case "git.review": // every file a scope changed, with its hunks, for the web's Review panel (gitreview.go)
+		var rv proto.GitReviewRequest
+		if err := json.Unmarshal(params, &rv); err != nil {
+			return nil, err
+		}
+		return n.gitReview(ctx, rv)
 	case "git.log":
 		list, err := n.gitLog(ctx, p.Cwd, p.Skip, p.Limit)
 		return map[string]any{"commits": list}, err
@@ -1271,7 +1315,10 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 		if err := json.Unmarshal(params, &a); err != nil || a.Dir == "" || strings.Contains(a.Dir, "..") {
 			return nil, fmt.Errorf("bad assistant dir")
 		}
-		dir := n.assistantDirOf(a.Dir)
+		dir, err := n.preparedDir(a.Dir)
+		if err != nil {
+			return nil, err
+		}
 		if err := os.MkdirAll(dir, 0o700); err != nil {
 			return nil, err
 		}
@@ -1324,6 +1371,8 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 			return ok(nil)
 		}
 		return ok(n.close(ctx, p.SessionID))
+	case "session.archive", "session.unarchive": // the tool's own archive (archive.go); a runtime's answers above
+		return n.nativeArchive(ctx, p.SessionID, method == "session.archive")
 	}
 	return nil, fmt.Errorf("unknown method %s", method)
 }
@@ -1460,9 +1509,9 @@ func parseClaudeVersion(out string) string {
 }
 
 // terminalEscapes are OSC (ESC ] … BEL or ESC \\, e.g. iTerm2's shell integration) and CSI (colors) sequences.
-var terminalEscapes = regexp.MustCompile(`\x1b\][^\x07\x1b]*(\x07|\x1b\\)|\x1b\[[0-9;?]*[A-Za-z]`)
+var terminalEscapes = lazyre.New(`\x1b\][^\x07\x1b]*(\x07|\x1b\\)|\x1b\[[0-9;?]*[A-Za-z]`)
 
-var claudeVersionLine = regexp.MustCompile(`^\s*v?(\d+\.\d+\.\d+\S*)\s*(\(Claude Code\))?\s*$`)
+var claudeVersionLine = lazyre.New(`^\s*v?(\d+\.\d+\.\d+\S*)\s*(\(Claude Code\))?\s*$`)
 
 // interactiveShell is the shell a launcher runs in interactively, so its rc file defines the launcher function:
 // loginShellProgram. On Windows that is Git Bash, never a bare bash, which is WSL there (a claude handed to WSL found
@@ -1484,13 +1533,29 @@ func loginShell(ctx context.Context, script string) *exec.Cmd {
 
 func marshalJSON(v any) ([]byte, error) { return json.MarshalIndent(v, "", "  ") }
 
-// writeFileAtomic replaces path whole: a reader sees the old file or the new one.
-func writeFileAtomic(path string, b []byte) error {
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, b, 0o600); err != nil {
+// writeFileAtomic replaces path whole with b (writeAtomic).
+func writeFileAtomic(path string, b []byte) error { return writeAtomic(path, bytes.NewReader(b)) }
+
+// writeAtomic replaces path whole with what r reads: a reader sees the old file or the new one. The new one is written
+// to a temp file of its own in the same folder (0600), so two writers of one path do not share it and the rename never
+// crosses file systems.
+func writeAtomic(path string, r io.Reader) error {
+	f, err := os.CreateTemp(filepath.Dir(path), "."+filepath.Base(path)+".*.tmp")
+	if err != nil {
 		return err
 	}
-	return os.Rename(tmp, path)
+	tmp := f.Name()
+	_, err = io.Copy(f, r)
+	if cerr := f.Close(); err == nil {
+		err = cerr
+	}
+	if err == nil {
+		err = os.Rename(tmp, path)
+	}
+	if err != nil {
+		os.Remove(tmp)
+	}
+	return err
 }
 
 func shellQuote(s string) string {

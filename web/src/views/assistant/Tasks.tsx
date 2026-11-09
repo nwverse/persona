@@ -15,8 +15,10 @@ import {
   getFeedState,
   receiptState,
   isToday,
+  sentByPersona,
   later,
   planEditsToSend,
+  planUltracodeToSend,
   removeTask,
   retryKey,
   retryTask,
@@ -34,6 +36,7 @@ import {
 } from "../../lib/feed";
 import { runningWorkflows, workflowLine } from "../../lib/workflows";
 import { dockAgents, type DockAgent, interruption, isRemovable, mostUrgentAgent, runningSubagents, taskNow, todoStatus, TODO_STATUS_INFO, type SessionLookup, type Todo, type TodoStatus } from "../../lib/todos";
+import { usageLimitContinues, usageLimitLabel } from "../../lib/usage-limit";
 import { parseAPIError } from "../../lib/api-errors";
 import { boardSections, type BoardSectionKey } from "../../lib/task-board";
 import { openPanel } from "../../lib/panel";
@@ -42,7 +45,7 @@ import { plainMarkdown } from "../../lib/plain-markdown";
 import { Markdown } from "../../ui/Markdown";
 import { LiveCard } from "../../ui/AssistantCard";
 import type { AssistantView } from "../../lib/extension-wire";
-import { getState, useStore, type State } from "../../lib/store";
+import { getState, hubHas, useStore, type State } from "../../lib/store";
 import type { AgentState, Interaction, Machine, Session } from "../../lib/types";
 import { Button, Collapse, cx, Dialog, IconButton, Menu, toast, useNow } from "../../ui/atoms";
 import { StatusMark } from "../../ui/StatusMark";
@@ -50,6 +53,7 @@ import { useClamped } from "../../ui/use-clamped";
 import { Icon, type IconName } from "../../ui/icons";
 import { ReportLine, ReviewBadge, ReviewLine } from "./Supervision";
 import { BriefCard } from "./Brief";
+import { SentLine, TaskSentList } from "./Sent";
 import { progressLine } from "../../lib/supervision";
 import { planLabel, planLine, planShown } from "../../lib/plan";
 import { AnsweredCard, InteractionCard } from "../chat/Interactions";
@@ -60,6 +64,8 @@ import { interactionAsk } from "../../lib/inbox";
 import { answeredLookup, answeredSessions } from "./answered-lookup";
 import { Empty } from "./parts";
 import { PlanEditDialog } from "./PlanEdit";
+import { machineStartBlocked, todoUltracode, ULTRACODE_FEATURE } from "../../lib/ultracode";
+import { UltraMark, UltracodeChip } from "../chat/Ultracode";
 import { byTime } from "../../lib/times";
 import { stateName } from "../../lib/state-labels";
 
@@ -93,6 +99,26 @@ function useTaskStatus(todo: Todo | undefined): TodoStatus | undefined {
 function useTaskNow(todo: Todo | undefined): { status: TodoStatus; lead?: Session } | undefined {
   const plans = useFeed((s) => s.plans);
   return useStore((s) => (todo ? taskNowIn(s, todo, plans) : undefined));
+}
+
+/** Whether a task shows the Agent list row's ultracode mark (#12, lib/ultracode todoUltracode): its agents', else its
+ *  plan task's before any agent started. */
+function useTaskUltracode(todo: Todo | undefined): boolean {
+  const plans = useFeed((s) => s.plans);
+  const planned = todo?.plan_id ? plans[todo.plan_id]?.tasks.find((p) => p.todo_id === todo.id) : undefined;
+  return useStore((s) => (todo ? todoUltracode(todo, answeredLookup(s.sessions, s.interactions, s.answered), planned) : false));
+}
+
+/** A task's title on its card and its folded line, with the Agent list row's ultracode mark right after it while on
+ *  (#12); without it, the title is drawn as before. */
+function TaskTitle({ title, ultra, mark, className }: { title: string; ultra: boolean; mark: number; className: string }) {
+  if (!ultra) return <span className={cx("min-w-0 flex-1 truncate", className)}>{title}</span>;
+  return (
+    <span className="flex min-w-0 flex-1 items-center gap-1.5">
+      <span className={cx("min-w-0 truncate", className)}>{title}</span>
+      <UltraMark size={mark} />
+    </span>
+  );
 }
 
 /** Two rows with the same fields, each the same value or object. */
@@ -155,7 +181,7 @@ function useTaskMenu(todo: Todo | undefined, status: TodoStatus | undefined) {
 
 /** The task's state as an agent state, for its dot and tone. */
 function dotState(st: TodoStatus): AgentState {
-  return st === "needs_you" || st === "interrupted" ? "needs_you" : st === "working" || st === "not_started" ? "working" : st === "unread" ? "unread" : st === "follow_up" ? "idle" : "offline"; // done, failed
+  return st === "needs_you" || st === "interrupted" ? "needs_you" : st === "usage_limit" ? "idle" : st === "working" || st === "not_started" ? "working" : st === "unread" ? "unread" : st === "follow_up" ? "idle" : "offline"; // done, failed
 }
 
 const TONE: Record<string, string> = {
@@ -167,6 +193,7 @@ const TONE: Record<string, string> = {
 };
 
 function TaskMark({ status, size = 9 }: { status: TodoStatus; size?: number }) {
+  if (status === "usage_limit") return <Icon name="clock" size={size + 4} stroke={2.4} className="text-orange" />;
   if (status === "failed" || status === "interrupted") return <Icon name="info" size={size + 4} stroke={2.4} className="text-red" />;
   if (status === "done" || status === "unread")
     return <Icon name="check" size={size + 4} stroke={2.4} className={status === "done" ? "text-ink-3" : "text-green"} />;
@@ -272,10 +299,24 @@ function PlanTaskFailed({ task, conversation }: { task: PlanTask; conversation: 
   return <span className="text-red">{t("assistant-tasks.plan_task_failed", { title: task.title, error })}</span>;
 }
 
+/** Why each task's computer can't start with ultracode (#12; a known Claude Code too old), "" where it can; undefined
+ *  where the hub has no ultracode, and the card shows none. Nothing is read for a plan no longer open. */
+function usePlanUltracodeBlocked(plan: TaskPlan): string[] | undefined {
+  const open = plan.state === "open";
+  const offered = useStore((s) => open && hubHas(s.features, ULTRACODE_FEATURE));
+  const rows = useStoreRows((s) => (open ? plan.tasks.map((task) => ({ why: machineStartBlocked(s, task.machine) })) : []));
+  return offered ? rows.map((r) => r.why) : undefined;
+}
+
+/** A computer can't start with ultracode now (what Start sends checks it as it goes). */
+const ultracodeBlockedNow = (machine: string) => Boolean(machineStartBlocked(getState(), machine));
+
 export function PlanCard({ plan }: { plan: TaskPlan }) {
   const busy = useFeed((s) => s.busy[plan.id]);
   const [remember, setRemember] = useState(false);
   const [editing, setEditing] = useState(false);
+  const [ultraChoice, setUltraChoice] = useState<Record<number, boolean>>({});
+  const blocked = usePlanUltracodeBlocked(plan);
   if (plan.state !== "open") {
     const failed = plan.tasks.filter((t) => t.error);
     return (
@@ -291,6 +332,9 @@ export function PlanCard({ plan }: { plan: TaskPlan }) {
     );
   }
   const run = (f: () => Promise<void>) => f().catch((e) => toast(t("assistant-tasks.start_failed", { error: String(e instanceof Error ? e.message : e) }), "error"));
+  // each task's choice, the card's own else the assistant's: the chip draws it (off where the computer can't), "Edit"
+  // opens with it (so a task moved there to a computer that can has it again), and Start sends it, off where it can't
+  const ultracode = plan.tasks.map((task, i) => ultraChoice[i] ?? task.ultracode === true);
   return (
     <div className="flex flex-col gap-3 rounded-card bg-surface p-4 shadow-card">
       <div className="flex items-center gap-1.5 text-[12px] font-medium text-ink-2">
@@ -298,14 +342,14 @@ export function PlanCard({ plan }: { plan: TaskPlan }) {
         {plan.tasks.length > 1 ? t("assistant-tasks.plan_split", { count: plan.tasks.length }) : t("assistant-tasks.plan_single")}
       </div>
       {plan.tasks.map((t, i) => (
-        <PlanTaskRow key={i} n={i + 1} task={t} numbered={plan.tasks.length > 1} />
+        <PlanTaskRow key={i} n={i + 1} task={t} numbered={plan.tasks.length > 1} ultra={blocked && { on: ultracode[i], blocked: blocked[i] }} busy={busy} onUltra={(on) => setUltraChoice((c) => ({ ...c, [i]: on }))} />
       ))}
       <label className="flex cursor-pointer items-center gap-2 text-[12.5px] text-ink-2">
         <input type="checkbox" checked={remember} onChange={(e) => setRemember(e.target.checked)} className="accent-[var(--accent)]" />
         {t("assistant-tasks.plan_remember")}
       </label>
       <div className="flex gap-2">
-        <Button tone="accent" busy={busy} onClick={() => run(() => startPlan(plan, remember))} className="flex-1">
+        <Button tone="accent" busy={busy} onClick={() => run(() => startPlan(plan, remember, planUltracodeToSend(plan, ultracode, ultracodeBlockedNow)))} className="flex-1">
           {plan.tasks.length > 1 ? t("assistant-tasks.plan_start_n", { count: plan.tasks.length }) : t("assistant-tasks.plan_start")}
         </Button>
         <Button disabled={busy} onClick={() => setEditing(true)}>
@@ -318,10 +362,11 @@ export function PlanCard({ plan }: { plan: TaskPlan }) {
       {editing && (
         <PlanEditDialog
           plan={plan}
+          ultracode={ultracode}
           onClose={() => setEditing(false)}
           onStart={(edits) => {
             setEditing(false);
-            void run(() => startPlan(plan, remember, planEditsToSend(plan, edits)));
+            void run(() => startPlan(plan, remember, planEditsToSend(plan, edits, ultracodeBlockedNow)));
           }}
         />
       )}
@@ -329,7 +374,7 @@ export function PlanCard({ plan }: { plan: TaskPlan }) {
   );
 }
 
-function PlanTaskRow({ n, task, numbered }: { n: number; task: PlanTask; numbered: boolean }) {
+function PlanTaskRow({ n, task, numbered, ultra, busy, onUltra }: { n: number; task: PlanTask; numbered: boolean; ultra?: { on: boolean; blocked: string }; busy?: boolean; onUltra: (on: boolean) => void }) {
   const machines = useStore((s) => s.machines);
   const machine = machines.find((m) => m.id === task.machine)?.name ?? task.machine;
   const chips: { icon: IconName; text: string }[] = [
@@ -353,7 +398,10 @@ function PlanTaskRow({ n, task, numbered }: { n: number; task: PlanTask; numbere
         <span className={cx("inline-flex h-6 items-center rounded-full px-2 text-[12px]", task.readonly ? "bg-accent-tint text-accent" : "bg-field text-ink-2")}>
           {task.readonly ? t("assistant-tasks.readonly") : PERMISSION[task.permission || "default"] ?? task.permission}
         </span>
+        {ultra && <UltracodeChip on={ultra.on} blocked={ultra.blocked} disabled={busy} onChange={onUltra} />}
       </div>
+      {/* it is asked for where it can't run: say it starts without */}
+      {ultra?.blocked && ultra.on && <div className="text-[12px] text-orange">{t("ultracode.plan_blocked", { reason: ultra.blocked })}</div>}
       {task.why && <div className="text-[12px] text-ink-2">{task.why}</div>}
     </div>
   );
@@ -377,9 +425,10 @@ function useTaskCard(todoId: string) {
 
 export function TaskCard({ todoId, conversation }: { todoId: string; conversation: string }) {
   const { todo, status, lead, ix, where, plans } = useTaskCard(todoId);
+  const ultra = useTaskUltracode(todo);
   const menu = useTaskMenu(todo, status);
   const retrying = useRetrying(todoId);
-  useNow(30_000, status === "working"); // how long its step has gone on
+  useNow(30_000, status === "working" || status === "usage_limit"); // a step's age, and the limit's grace running out
   // its turn ended to wait for a background workflow (#2935): the run's progress, under its own.
   // Called before the early return: a card drawn before its todo arrives must call the same hooks once it has (#5422).
   const wfNow = useNow(60_000, runningWorkflows(lead).length > 0);
@@ -387,11 +436,14 @@ export function TaskCard({ todoId, conversation }: { todoId: string; conversatio
   const info = TODO_STATUS_INFO[status];
   const startError = todo.agents?.find((a) => a.start_error)?.start_error;
   const cut = status === "interrupted" ? interruption(lead) : undefined;
+  const limitText = status === "usage_limit" ? (usageLimitLabel(lead) ?? t("lib-usage-limit.short")) : undefined;
   const progress = progressOf(lead);
   const now =
     status === "needs_you"
       ? (taskAsk(ix) ?? t("assistant-tasks.needs_answer"))
-      : cut
+      : limitText
+        ? limitText
+        : cut
         ? t("assistant-tasks.interrupted_reason", { reason: cut.reason })
         : status === "failed"
         ? t("assistant-tasks.start_failed", { error: startFailure(todo, plans) ?? t("assistant-tasks.unknown_reason") })
@@ -421,12 +473,12 @@ export function TaskCard({ todoId, conversation }: { todoId: string; conversatio
     >
       <div className="flex items-center gap-2">
         <TaskMark status={status} />
-        <span className="min-w-0 flex-1 truncate text-[14.5px] font-semibold">{todo.title}</span>
+        <TaskTitle title={todo.title} ultra={ultra} mark={12} className="text-[14.5px] font-semibold" />
         {status !== "done" && status !== "failed" && <span className="shrink-0 text-[12px] text-ink-3">{since(todo.created_at)}</span>}
       </div>
       <div className="truncate text-[12px] text-ink-2">{where}</div>
       <div className={cx("flex items-start gap-2 rounded-control bg-field px-3 py-2 text-[13px]", status === "needs_you" ? "text-attention" : (status === "failed" || cut) && "text-red")}>
-        <Icon name={status === "needs_you" ? "hand" : status === "failed" || cut ? "info" : "terminal"} size={13} className="mt-0.5 shrink-0 text-ink-2" />
+        <Icon name={status === "needs_you" ? "hand" : limitText ? "clock" : status === "failed" || cut ? "info" : "terminal"} size={13} className="mt-0.5 shrink-0 text-ink-2" />
         <span className="flex min-w-0 flex-col gap-0.5">
           <span className="line-clamp-2">
             {now}
@@ -459,6 +511,8 @@ export function TaskCard({ todoId, conversation }: { todoId: string; conversatio
           )}
         </span>
       </div>
+      {/* what Persona sent its agent (#1542): the hand-off sent with this card is drawn only here */}
+      <TaskSentList todoId={todo.id} conversation={conversation} />
       {status === "done" && todo.supervision && (
         <div className="flex items-center text-[12.5px]">
           <ReviewBadge todo={todo} />
@@ -498,8 +552,9 @@ export function TaskCard({ todoId, conversation }: { todoId: string; conversatio
             </span>
           ) : (
             <span className="flex items-center gap-4">
-              {cut?.canContinue && (
-                // The model service cut its turn off: "Continue" tells its agent to go on, as the chat's "Retry" does (#1516).
+              {(cut?.canContinue || (limitText && lead && !usageLimitContinues(lead))) && (
+                // The model service cut its turn off, or a usage limit nothing will take up: "Continue" tells its agent
+                // to go on. Hidden while the CLI or the hub will continue it (a message would cancel that).
                 <button
                   type="button"
                   disabled={retrying}
@@ -513,17 +568,19 @@ export function TaskCard({ todoId, conversation }: { todoId: string; conversatio
                   {t("assistant-tasks.continue")}
                 </button>
               )}
-              <button
-                type="button"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  setRoute(conversation, todo.id);
-                }}
-                className="inline-flex items-center gap-1 whitespace-nowrap font-semibold text-accent hover:underline"
-              >
-                <Icon name="send" size={12} />
-                {t("assistant-tasks.say_something")}
-              </button>
+              {!(limitText && lead && usageLimitContinues(lead)) && (
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setRoute(conversation, todo.id);
+                  }}
+                  className="inline-flex items-center gap-1 whitespace-nowrap font-semibold text-accent hover:underline"
+                >
+                  <Icon name="send" size={12} />
+                  {t("assistant-tasks.say_something")}
+                </button>
+              )}
             </span>
           )}
         </div>
@@ -538,13 +595,14 @@ export function TaskLine({ todoId }: { todoId: string }) {
   const todo = useTodo(todoId);
   const status = useTaskStatus(todo);
   const menu = useTaskMenu(todo, status);
+  const ultra = useTaskUltracode(todo);
   if (!todo || !status) return null;
   const info = TODO_STATUS_INFO[status];
   return (
     <>
     <button type="button" onClick={() => openTask(todo.id)} onContextMenu={menu.onContextMenu} className="flex w-full items-center gap-2 rounded-control bg-field px-3 py-2 text-left text-[13px] hover:bg-hover">
       <TaskMark status={status} />
-      <span className="min-w-0 flex-1 truncate font-medium">{todo.title}</span>
+      <TaskTitle title={todo.title} ultra={ultra} mark={11} className="font-medium" />
       <span className={cx("shrink-0 text-[12px]", TONE[info.tone])}>{info.label}</span>
       <Icon name="chevronRight" size={13} className="text-ink-3" />
     </button>
@@ -576,6 +634,9 @@ export const FeedLineView = memo(function FeedLineView({ item }: { item: FeedIte
     case "report":
       return <ReportLine item={item} title={title} onOpenTask={known && item.ref ? () => openTask(item.ref!) : undefined} />;
     case "routed":
+      // Persona's own message to the task's agent is folded, never the user's bubble (#1542)
+      if (sentByPersona(item)) return <SentLine item={item} title={title} onOpenTask={known && item.ref ? () => openTask(item.ref!) : undefined} />;
+      // what the user said straight to the task (its card's Message); interrupted: from a hub before #1542
       return (
         <div className="flex flex-col items-end gap-1 pl-10">
           <span className="inline-flex items-center gap-1 text-[12px] font-medium text-accent">
@@ -662,10 +723,31 @@ function ReceiptCard({ item }: { item: FeedItem }) {
  *  a quiet line that opens the task (a later receipt says how it ended). */
 function InterruptedReceipt({ item }: { item: FeedItem }) {
   const todo = useTodo(item.ref);
-  const now = useTaskNow(todo);
+  const task = useTaskNow(todo);
+  const clock = useNow(30_000, task?.status === "usage_limit");
   const retrying = useRetrying(todo?.id);
-  const status = now?.status;
+  const status = task?.status;
   const title = field(item, "title") ?? t("assistant-tasks.task_fallback");
+  if (todo && task?.status === "usage_limit") {
+    const goesOn = task.lead ? usageLimitContinues(task.lead) : false;
+    return (
+      <div className="flex gap-3 rounded-card bg-field p-4">
+        <Icon name="clock" size={18} stroke={2.4} className="text-orange" />
+        <div className="flex min-w-0 flex-1 flex-col gap-1">
+          <div className="text-[14.5px] font-semibold">{title}</div>
+          <div className="text-[13px] text-ink-2">{usageLimitLabel(task.lead, clock) ?? t("lib-usage-limit.short")}</div>
+          <div className="mt-1 flex gap-2">
+            {!goesOn && (
+              <Button icon="retry" busy={retrying} disabled={retrying} onClick={() => retryTaskNow(todo, "continue")}>
+                {t("assistant-tasks.continue")}
+              </Button>
+            )}
+            {item.ref && <Button onClick={() => openTask(item.ref!)}>{t("assistant-tasks.look")}</Button>}
+          </div>
+        </div>
+      </div>
+    );
+  }
   if (todo && status && status !== "interrupted") {
     return (
       <button type="button" onClick={() => openTask(todo.id)} className="flex items-center gap-1.5 self-start text-left text-[13px] text-ink-2 hover:text-ink">
@@ -674,7 +756,7 @@ function InterruptedReceipt({ item }: { item: FeedItem }) {
       </button>
     );
   }
-  const cut = todo ? interruption(now?.lead) : undefined;
+  const cut = todo ? interruption(task?.lead) : undefined;
   const raw = field(item, "error") ?? field(item, "summary");
   const reason = cut?.reason ?? parseAPIError(raw)?.reason;
   const canContinue = todo && (cut ? cut.canContinue : true);
@@ -705,9 +787,10 @@ function OutcomeReceipt({ item, failed }: { item: FeedItem; failed: boolean }) {
   // A done receipt ends a stretch of work, not the task: while its todo is open (the agent stopped unfinished, waits on
   // the user…) it says so, not "done"; it turns green once the todo is done (#6153). One gone from the list stands on its receipt.
   const stopped = !failed && !!linked && !linked.done_at;
-  // Review is a receipt-time hint. Once the linked todo is done, its current completion wins (#4893).
+  // A receipt is historical. Only the current todo can say it actually awaits acceptance now.
   const review = stopped ? item.body?.review as { state?: string; criteria?: number } | undefined : undefined;
-  const criteria = review?.criteria ?? 0;
+  const awaitingReview = stopped && linked?.supervision?.state === "pending_review";
+  const criteria = review?.criteria ?? linked?.supervision?.done_when?.length ?? 0;
   const plans = useFeed((s) => s.plans);
   const retrying = useRetrying(todo?.id);
   const status = useTaskStatus(todo);
@@ -762,7 +845,8 @@ function OutcomeReceipt({ item, failed }: { item: FeedItem; failed: boolean }) {
             )}
             {!failed && item.ref && <Button onClick={() => openTask(item.ref!)}>{t("assistant-tasks.look")}</Button>}
           </div>
-          {review?.state === "awaiting" && (
+          {!awaitingReview && (review?.state === "checking" || review?.state === "awaiting") && <div className="text-xs text-ink-3">{t("assistant-tasks.receipt_review_followup")}</div>}
+          {awaitingReview && (
             <div className="text-xs text-ink-3">
               {criteria > 0
                 ? t("assistant-tasks.receipt_review_criteria", { count: criteria })
@@ -994,6 +1078,8 @@ function MessageCard({ item }: { item: FeedItem }) {
 }
 
 // ── above the composer ──
+// The chat re-renders on every streamed item and hands these only the conversation: they are memo and read the rest
+// from the store and the feed themselves, so an item that changes nothing they show renders none of them.
 
 /** The oldest question the conversation's tasks' agents ask, under its task's name ("N more"). */
 function questionsIn(s: State, conversation: string) {
@@ -1010,7 +1096,7 @@ function questionsIn(s: State, conversation: string) {
   return { asks: out.sort((a, b) => byTime(a.ix.created_at, b.ix.created_at)), answered: done };
 }
 
-export function TaskQuestions({ conversation }: { conversation: string }) {
+export const TaskQuestions = memo(function TaskQuestions({ conversation }: { conversation: string }) {
   // a card for another agent coming or going leaves these rows as they were: no render
   const asks = useStoreRows((s) => questionsIn(s, conversation).asks);
   const answered = useStoreRows((s) => questionsIn(s, conversation).answered);
@@ -1034,25 +1120,33 @@ export function TaskQuestions({ conversation }: { conversation: string }) {
       )}
     </div>
   );
-}
+});
 
 /** The dock: "All N" held at its left edge (it does not scroll), then a pill for each task going on (waiting first) and,
  * in the main conversation, each agent going on that no task stands for (#1113), scrolling on their own (iOS TaskDock). */
 // Failed, done and stopped tasks are not in the dock.
-const DOCK_RANK: Partial<Record<TodoStatus, number>> = { needs_you: 0, interrupted: 0, working: 1, not_started: 1, unread: 2 };
+const DOCK_RANK: Partial<Record<TodoStatus, number>> = { needs_you: 0, interrupted: 0, usage_limit: 0, working: 1, not_started: 1, unread: 2 };
 
 /** The dock's task pills, waiting first: each task going on, its status and what it waits on (#3463). */
-function dockTasksIn(s: State, conversation: string, plans: Record<string, TaskPlan>): { t: Todo; st: TodoStatus; ask?: string }[] {
+function dockTasksIn(s: State, conversation: string, plans: Record<string, TaskPlan>): { t: Todo; st: TodoStatus; ask?: string; limit?: string }[] {
   const lookup = answeredLookup(s.sessions, s.interactions, s.answered);
   return s.todos
     .filter((t) => t.origin === conversation)
     .map((t) => ({ t, st: statusOf(t, lookup, plans) }))
     .filter((x) => DOCK_RANK[x.st] !== undefined)
     .sort((a, b) => DOCK_RANK[a.st]! - DOCK_RANK[b.st]! || byTime(b.t.created_at, a.t.created_at))
-    .map(({ t, st }) => ({ t, st, ask: st === "needs_you" ? taskAsk(taskInteraction(t, s.interactions, mostUrgentAgent(t, lookup)?.session)) : undefined }));
+    .map(({ t: todo, st }) => {
+      const lead = mostUrgentAgent(todo, lookup)?.session;
+      return {
+        t: todo,
+        st,
+        ask: st === "needs_you" ? taskAsk(taskInteraction(todo, s.interactions, lead)) : undefined,
+        limit: st === "usage_limit" ? (usageLimitLabel(lead) ?? t("lib-usage-limit.short")) : undefined,
+      };
+    });
 }
 
-export function TaskDock({ conversation }: { conversation: string }) {
+export const TaskDock = memo(function TaskDock({ conversation }: { conversation: string }) {
   const plans = useFeed((s) => s.plans);
   const [menuFor, setMenuFor] = useState<{ todo: Todo; el: HTMLElement } | null>(null);
   const [board, setBoard] = useState(false);
@@ -1080,9 +1174,9 @@ export function TaskDock({ conversation }: { conversation: string }) {
         // The scroller pads by the focus ring's width and takes it back, so the ring is not clipped and the row
         // stays a pill high.
         <div className="scrollbar-none -my-1 flex min-w-0 flex-1 items-center gap-2 overflow-x-auto py-1">
-          {going.map(({ t: todo, st, ask }) => {
+          {going.map(({ t: todo, st, ask, limit }) => {
             // a waiting task says what it waits on when hovered or read out (#3463)
-            const label = ask ? t("assistant-tasks.dock_task_asks", { title: todo.title, ask }) : undefined;
+            const label = ask ? t("assistant-tasks.dock_task_asks", { title: todo.title, ask }) : limit ? `${todo.title} · ${limit}` : undefined;
             return (
             <button
               key={todo.id}
@@ -1101,6 +1195,7 @@ export function TaskDock({ conversation }: { conversation: string }) {
               <span className="truncate">{todo.title}</span>
               {st === "needs_you" && <span className="shrink-0">{stateName("needs_you")}</span>}
               {st === "interrupted" && <span className="shrink-0">{stateName("interrupted")}</span>}
+              {st === "usage_limit" && <span className="shrink-0">{t("lib-usage-limit.short")}</span>}
             </button>
             );
           })}
@@ -1131,10 +1226,10 @@ export function TaskDock({ conversation }: { conversation: string }) {
       {board && <TaskBoard open conversation={conversation} onClose={() => setBoard(false)} />}
     </div>
   );
-}
+});
 
 /** "Talking to "xx"" while the next message goes straight to a task; × gives it back to Persona. */
-export function RouteChip({ conversation }: { conversation: string }) {
+export const RouteChip = memo(function RouteChip({ conversation }: { conversation: string }) {
   const todoId = useFeed((s) => s.routes[conversation]);
   const todo = useTodo(todoId);
   if (!todo) return null;
@@ -1149,7 +1244,7 @@ export function RouteChip({ conversation }: { conversation: string }) {
       </span>
     </div>
   );
-}
+});
 
 export function DayLine({ date }: { date: Date }) {
   return <div className="py-1 text-center text-[12px] text-ink-3">{dayLabel(date)}</div>;
@@ -1208,7 +1303,8 @@ export function TaskBoard({ open, conversation, onClose }: { open: boolean; conv
     const where = place(todo, lead);
     const failure = status === "failed" ? startFailure(todo, plans) : undefined;
     const ask = status === "needs_you" ? taskAsk(taskInteraction(todo, interactions, lead)) : undefined;
-    const now = failure ?? ask ?? progressOf(lead)?.text;
+    const limit = status === "usage_limit" ? (usageLimitLabel(lead) ?? t("lib-usage-limit.short")) : undefined;
+    const now = failure ?? ask ?? limit ?? progressOf(lead)?.text;
     return [where, now].filter(Boolean).join(" · ");
   };
   return (

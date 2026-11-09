@@ -5,6 +5,7 @@ import persona.core.contracts.api.ExtensionUiPlace
 import persona.core.domain.inbox.InboxItem
 import persona.core.navigation.*
 import persona.feature.inbox.InboxItemPages
+import persona.feature.inbox.InboxDocRef
 import persona.feature.inbox.InboxMomentRef
 import persona.feature.inbox.InboxRecord
 import persona.feature.inbox.LarkMomentRoute
@@ -69,16 +70,26 @@ class ShellRoutesTest {
         assertNull(inboxDestination(InboxRoute, records, true))
     }
 
-    // inbox_item (#1683): a link to an item whose connector's extension draws its page opens that page, as the list does;
-    // a chat link is still the chat.
-    @Test fun inboxLinksOpenTheExtensionsPageOfAnItem() {
+    // Item and chat links retain the native conversation; non-chat items still use their connector's page.
+    @Test fun inboxLinksKeepChatsNativeWithAnActiveConnectorSlot() {
         val lark = InboxRecord(InboxItem("lark-item", kind = "group", title = "评审"), feedId = "chat", startPosition = 42, source = "lark")
         val mail = InboxRecord(InboxItem("mail-item", kind = "mail"), source = "mail")
+        val moment = InboxRecord(InboxItem("moment-item", kind = "moment", title = "动态"), source = "lark", moment = InboxMomentRef(postId = "post-1"))
+        val doc = InboxRecord(InboxItem("doc-item", kind = "doc", title = "文档"), source = "lark", doc = InboxDocRef("https://example.larkoffice.com/docx/D1"))
         val pages = InboxItemPages(listOf(ExtensionUiPlace("larkext", "event", "事件", "inbox_item", connector = "lark")))
-        assertEquals(InboxDestination.Open(InboxItemUiRoute("lark-item", "larkext", "event", "评审")),
+        assertEquals(InboxDestination.Open(LarkRoute("chat", "lark-item", 42)),
             inboxDestination(InboxItemRoute("lark-item"), listOf(lark, mail), false, pages))
+        assertEquals(InboxDestination.Open(InboxItemUiRoute("moment-item", "larkext", "event", "动态")),
+            inboxDestination(InboxItemRoute("moment-item"), listOf(moment), false, pages))
+        assertEquals(InboxDestination.Open(InboxItemUiRoute("doc-item", "larkext", "event", "文档")),
+            inboxDestination(InboxItemRoute("doc-item"), listOf(doc), false, pages))
         assertEquals(InboxDestination.Open(MailRoute("mail-item")), inboxDestination(InboxItemRoute("mail-item"), listOf(lark, mail), false, pages))
         assertEquals(InboxDestination.Open(LarkRoute("chat", "lark-item", 42)), inboxDestination(LarkChatRoute("chat"), listOf(lark), false, pages))
+        val pluginPages = pages.copy(nativeChats = false)
+        assertEquals(InboxDestination.Open(InboxItemUiRoute("lark-item", "larkext", "event", "评审")),
+            inboxDestination(InboxItemRoute("lark-item"), listOf(lark), false, pluginPages))
+        assertEquals(InboxDestination.Open(LarkRoute("chat", "lark-item", 42)),
+            inboxDestination(LarkChatRoute("chat"), listOf(lark), false, pluginPages))
         // No pages (an older hub): the item's own page.
         assertEquals(InboxDestination.Open(LarkRoute("chat", "lark-item", 42)), inboxDestination(InboxItemRoute("lark-item"), listOf(lark), false))
     }

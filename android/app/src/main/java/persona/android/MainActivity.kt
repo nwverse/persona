@@ -65,6 +65,7 @@ class MainActivity : ComponentActivity() {
     @Inject lateinit var shell: AppServices
     @Inject lateinit var platformPairing: PlatformPairing
     @Inject lateinit var translator: persona.feature.inbox.Translator
+    @Inject lateinit var capsules: persona.android.capsule.CapsuleRuntime
     @Inject lateinit var managerRoster: persona.android.di.ManagerRosterSource
 
     /** A destination from a notification, deep link or share; resolved once session metadata allows. */
@@ -149,7 +150,12 @@ class MainActivity : ComponentActivity() {
                     val hub by app.hub.collectAsStateWithLifecycle()
                     val ready by app.pairingReady.collectAsStateWithLifecycle()
                     val failed by app.pairingRestoreError.collectAsStateWithLifecycle()
-                    if (ready) PlatformRoot(hub = hub, openNavigation = openNavigation, services = settingsServices, shell = shell)
+                    val capsuleFullScreen by capsules.fullScreen.collectAsStateWithLifecycle()
+                    if (ready && capsuleFullScreen) persona.android.capsule.CapsuleFullScreen(capsules) {
+                        capsules.returnToCapsule()
+                        moveTaskToBack(true)
+                    }
+                    else if (ready) PlatformRoot(hub = hub, openNavigation = openNavigation, services = settingsServices, shell = shell)
                     else Surface(Modifier.fillMaxSize()) {
                         Column(Modifier.fillMaxSize().safeDrawingPadding().padding(24.dp)) {
                             if (failed) {
@@ -166,6 +172,7 @@ class MainActivity : ComponentActivity() {
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         setIntent(intent)
+        if (intent.data != null || intent.hasExtra(EXTRA_SESSION) || intent.hasExtra("debug.openTab")) capsules.leaveFullScreen()
         handle(intent)
     }
 

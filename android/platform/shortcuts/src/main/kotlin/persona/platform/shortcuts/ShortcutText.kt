@@ -126,6 +126,10 @@ object ShortcutText {
 object RecentAgents {
     const val COUNT = 2
 
+    // Each session's time is parsed once: `updated` parses its text on every read, and reading it inside the
+    // comparator parsed every session's date on each comparison of each push.
     fun pick(sessions: Collection<Session>): List<Session> = sessions.filter { !it.assistant && it.isLive }
-        .sortedWith(compareByDescending<Session> { it.updated ?: Instant.EPOCH }.thenBy { it.key.path }).take(COUNT)
+        .map { it to (it.updated ?: Instant.EPOCH) }
+        .sortedWith(compareByDescending<Pair<Session, Instant>> { it.second }.thenBy { it.first.key.path })
+        .take(COUNT).map { it.first }
 }

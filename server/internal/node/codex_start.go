@@ -9,13 +9,13 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"regexp"
 	"strings"
 	"time"
 
 	"github.com/nwverse/persona/server/internal/extension/sandbox"
 	"github.com/nwverse/persona/server/internal/host"
 	"github.com/nwverse/persona/server/internal/identity"
+	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/osproc"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/screen"
@@ -126,7 +126,9 @@ func (n *Node) startCodex(ctx context.Context, launch host.Launcher, cwd, launch
 	}
 	defer os.RemoveAll(dir) // codex-start removes the file once read; the directory goes when the start ends
 	file := filepath.Join(dir, "start.json")
-	b, _ := json.Marshal(codexStartFile{Argv: argv, Prompt: prompt, Agent: herdrAgentFor(launch, "codex")})
+	owner, _ := launch.(interface{ Kind() string })
+	isolateHooks := owner != nil && owner.Kind() == host.Orca
+	b, _ := json.Marshal(codexStartFile{Argv: argv, Prompt: prompt, Agent: herdrAgentFor(launch, "codex"), IsolateHooks: isolateHooks})
 	if err := os.WriteFile(file, b, 0o600); err != nil {
 		return nil, err
 	}
@@ -146,7 +148,7 @@ func (n *Node) startCodex(ctx context.Context, launch host.Launcher, cwd, launch
 		delete(n.codexStarting, pane)
 		n.mu.Unlock()
 	}()
-	cmd := shellQuote(n.bin) + " codex-start " + shellQuote(file)
+	cmd := n.agentCommand(shellQuote(n.bin)+" codex-start "+shellQuote(file), shellQuote, paneShells(ctx)...) // agentenv.go
 	began := time.Now()
 	time.Sleep(300 * time.Millisecond) // the fresh shell loads ~/.zshrc; typed input is buffered either way
 	if err := launch.Run(ctx, created.Pane, cmd); err != nil {
@@ -237,7 +239,7 @@ func (n *Node) waitCodexThread(ctx context.Context, pane, cwd, prompt string, be
 
 // codexTrustRE is Codex's folder trust dialog with "trust and continue" selected (0.163: "› 1. Trust and continue";
 // 0.153: "› 1. Yes, continue"): enter picks it.
-var codexTrustRE = regexp.MustCompile(`(?m)^\s*›\s*1\.\s+(?:Trust and continue|Yes, continue)\s*$`)
+var codexTrustRE = lazyre.New(`(?m)^\s*›\s*1\.\s+(?:Trust and continue|Yes, continue)\s*$`)
 
 // codexThreadStart is when a rollout's thread began (its session_meta) and the text of its first user message ("" when
 // there is none yet).
@@ -293,6 +295,8 @@ type codexStartFile struct {
 	// Agent is the HERDR_AGENT the words run with (hostherdr.go): "codex" for a Codex started in a herdr pane; "" leaves
 	// the variable as it is (tab-start, other hosts).
 	Agent string `json:"agent,omitempty"`
+	// Orca hooks belong to this terminal. A shared Codex daemon can retain another terminal's hook environment.
+	IsolateHooks bool `json:"isolate_hooks,omitempty"`
 }
 
 // CodexStart is `personad codex-start <file>`: it reads a codexStartFile (and removes it), then runs its words with the
@@ -327,7 +331,23 @@ func CodexStart(args []string) error {
 	if err != nil {
 		return fmt.Errorf("%s %s not found in PATH", codexStartError, words[0])
 	}
+	// On Windows the launcher may be a batch file (npm's codex.cmd): the program behind it, never cmd.exe with the message.
+	path, env, err = codexStartProgram(path, f.Prompt != "", env)
+	if err != nil {
+		return fmt.Errorf("%s %v", codexStartError, err)
+	}
 	argv := append([]string(nil), words...)
+	if f.IsolateHooks && !codexOnRemote(argv) && codexOwnProcess(argv) == "" {
+		// Probe the executable in the new terminal, not the node's PATH. Older CLIs have no shared daemon or flag.
+		ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+		probe := exec.CommandContext(ctx, path, "--help")
+		probe.Env = env
+		help, err := probe.Output()
+		cancel()
+		if err == nil && strings.Contains(string(help), "--no-daemon") {
+			argv = append([]string{argv[0], "--no-daemon"}, argv[1:]...)
+		}
+	}
 	if f.Prompt != "" { // a resume without a message (`personad tab-start`, pi.go) runs the words alone
 		argv = append(argv, "--", f.Prompt)
 	}

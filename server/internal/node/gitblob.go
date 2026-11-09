@@ -5,18 +5,25 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"regexp"
 	"strings"
 	"time"
 
+	"golang.org/x/sync/singleflight"
+
+	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
 // maxBlobBytes: bigger versions are not written out for comparing.
 const maxBlobBytes = 200 << 20
 
+// blobWrites lets one request at a time look a version up in the cache and write it there on a miss; requests for it at
+// the same time share that one's copy. Each writing its own would rename a second copy over one already handed out,
+// under a download pinned to its revision.
+var blobWrites singleflight.Group
+
 // blobRev: HEAD, INDEX (the staged version), or a commit (full or short hash) optionally followed by ^ (its parent).
-var blobRev = regexp.MustCompile(`^(HEAD|INDEX|[0-9a-f]{4,64}\^?)$`)
+var blobRev = lazyre.New(`^(HEAD|INDEX|[0-9a-f]{4,64}\^?)$`)
 
 // gitBlob writes one version of a file into the node's cache so a client can read it like any file (file/download):
 // the web compares a changed PDF / docx / pptx / picture with the version before (docs/protocol/protocol.md "File preview").
@@ -60,31 +67,26 @@ func (n *Node) gitBlob(ctx context.Context, p proto.GitBlobRequest) (*proto.GitB
 	if n64 > maxBlobBytes {
 		return nil, fmt.Errorf("version is too big to compare (%d bytes)", n64)
 	}
+	cache, err := privateCacheDir("blobs")
+	if err != nil {
+		return nil, fmt.Errorf("version cache: %w", err)
+	}
 	// named by the blob's id (content-addressed: never stale) and the file's extension, which the viewers go by
-	base, err := os.UserCacheDir()
-	if err != nil {
-		base = os.TempDir()
-	}
-	cache := filepath.Join(base, "persona", "blobs")
 	out := filepath.Join(cache, sha+strings.ToLower(filepath.Ext(path)))
-	if st, err := os.Stat(out); err == nil && st.Size() == n64 {
-		os.Chtimes(out, time.Now(), time.Now())
-		return &proto.GitBlob{Path: out, Size: n64}, nil
-	}
-	if err := os.MkdirAll(cache, 0o700); err != nil {
-		return nil, err
-	}
-	pruneConverted(cache)
-	data, err := gitTimed(ctx, root, time.Minute, "cat-file", "blob", sha)
+	_, err, _ = blobWrites.Do(out, func() (any, error) {
+		if st, err := os.Stat(out); err == nil && st.Size() == n64 && usedCached(out, st) {
+			return nil, nil
+		}
+		pruneConverted(cache)
+		// the waiting requests share this run, so one of them giving up does not end it
+		data, err := gitTimed(context.WithoutCancel(ctx), root, time.Minute, "cat-file", "blob", sha)
+		if err != nil {
+			return nil, err
+		}
+		return nil, writeAtomic(out, strings.NewReader(data))
+	})
 	if err != nil {
 		return nil, err
 	}
-	tmp := out + ".tmp"
-	if err := os.WriteFile(tmp, []byte(data), 0o600); err != nil {
-		return nil, err
-	}
-	if err := os.Rename(tmp, out); err != nil {
-		return nil, err
-	}
-	return &proto.GitBlob{Path: out, Size: int64(len(data))}, nil
+	return &proto.GitBlob{Path: out, Size: n64}, nil
 }

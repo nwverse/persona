@@ -36,6 +36,9 @@ internal data class AgentsPageState(
      */
     val loaded: Boolean = false,
     val pagination: SessionListStatus = SessionListStatus(),
+    /** Built with the list on listContext: sorting every session into spaces in composition stalled the screen. */
+    val spaces: List<AgentSpace> = emptyList(),
+    val spacesById: Map<String, AgentSpace> = emptyMap(),
 )
 
 /**
@@ -204,8 +207,15 @@ internal class AgentsViewModel(
             machineCounts(knownMachines, everywhere), everywhere.size, groupCounts(everySession, everyMachine, prefs, effective, ops),
             // With botmux shown, "All"'s own "Lark groups" count is it; hidden, counted without a fourth list.
             botmuxCount = if (effective.hideBotmux) botmuxCount(rows, prefs, effective)
-                else all.counts[AgentQuickFilter.Feishu] ?: 0, loaded = true)
-    }.flowOn(listContext)
+                else all.counts[AgentQuickFilter.Feishu] ?: 0, loaded = true).let { state ->
+            val spaces = agentSpaces(rows)
+            state.copy(spaces = spaces, spacesById = spacesByGroup(result, prefs.grouping, spaces))
+        }
+    // The app (listContext set) builds only from the latest inputs and redraws at most every PAGE_MILLIS: with an
+    // accessibility service on, Compose diffs the whole semantics tree on each recomposition, and one per pushed
+    // session event kept the long list janky. Tests (no listContext) stay synchronous.
+    }.let { built -> if (listContext == kotlin.coroutines.EmptyCoroutineContext) built.flowOn(listContext)
+        else built.conflate().flowOn(listContext).throttleLatest(PAGE_MILLIS) }
     @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
     val page = combine(projectedPage, repository.listStatus, flow {
         // Apply filters only while the page is observed; hidden/destroyed screens retain no filter worker.
@@ -660,7 +670,8 @@ internal class AgentsViewModel(
             try {
                 interactions.resolve(interaction.id, resolution)
                 _delivery.update { it + (interaction.id to RequestDelivery.Sent) }
-                _notice.value = AgentText.receipt(persona.feature.chat.AnswerReceipt(latest, resolution))
+                // The notice outlives the card: it keeps the answer without a password card's typed value (#1581).
+                _notice.value = AgentText.receipt(persona.feature.chat.AnswerReceipt(latest, resolution.copy(values = null)))
                 _haptics.tryEmit(Haptic.Success)
             } catch (e: CancellationException) {
                 _delivery.update { it + (interaction.id to RequestDelivery.Unknown) }
@@ -701,4 +712,17 @@ internal fun answerFailureHaptic(error: Exception): Haptic? = when (error) {
     is InteractionPromptChangedException -> Haptic.Attention
     is InteractionGoneException -> null
     else -> Haptic.Error
+}
+
+/** How often the app's Agents page redraws at most while sessions stream in. */
+private const val PAGE_MILLIS = 300L
+
+/** The first value at once, then at most one per [millis]: the latest of those that came meanwhile. */
+internal fun <T> Flow<T>.throttleLatest(millis: Long): Flow<T> = channelFlow {
+    val latest = kotlinx.coroutines.channels.Channel<T>(kotlinx.coroutines.channels.Channel.CONFLATED)
+    launch { collect { latest.send(it) }; latest.close() }
+    for (value in latest) {
+        send(value)
+        kotlinx.coroutines.delay(millis)
+    }
 }

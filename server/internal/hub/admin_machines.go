@@ -6,11 +6,11 @@ import (
 	"errors"
 	"net/http"
 	"net/url"
-	"regexp"
 	"strings"
 	"time"
 
 	"github.com/nwverse/persona/server/internal/i18n"
+	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
@@ -21,7 +21,7 @@ import (
 // service: its persona://connector link pasted here). ssh is not offered any more; hub.json entries of kind ssh keep
 // working.
 
-var adminMachineID = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,62}$`)
+var adminMachineID = lazyre.New(`^[a-z0-9][a-z0-9._-]{0,62}$`)
 
 type adminMachine struct {
 	ID           string             `json:"id"`
@@ -84,7 +84,7 @@ func (h *Hub) adminMachines() []adminMachine {
 	}
 	// Entries the hub has that the manager has not reported (yet): connecting. An entry whose computer another one
 	// has is that one's.
-	for _, mc := range h.cfgEntries() {
+	for _, mc := range h.knownEntries() {
 		if listed[mc.ID] || h.machineByID(mc.ID) != nil {
 			continue
 		}
@@ -97,7 +97,7 @@ func (h *Hub) adminMachines() []adminMachine {
 	}
 	if disk != nil {
 		for _, m := range disk.Machines {
-			if h.cfgEntry(m.ID) != nil {
+			if h.knownEntry(m.ID) != nil {
 				continue
 			}
 			icon := m.Icon
@@ -149,7 +149,7 @@ func (h *Hub) adminMachineRoutes(mux *http.ServeMux) {
 			return
 		case kindLink:
 		case kindService:
-			if h.localMachine(mc.ID) != nil || h.cfgEntry(mc.ID) != nil {
+			if h.localMachine(mc.ID) != nil || h.knownEntry(mc.ID) != nil {
 				writeErrCode(w, http.StatusConflict, "exists", i18n.Err("hub-admin_machines.exists"))
 				return
 			}
@@ -192,8 +192,37 @@ func (h *Hub) adminMachineRoutes(mux *http.ServeMux) {
 		}
 		writeJSON(w, map[string]any{"machine": added, "restart": h.pendingRestart(h.requestLang(r))})
 	})
+	mux.HandleFunc("PUT /api/v1/admin/machines/{id}", func(w http.ResponseWriter, r *http.Request) {
+		var in struct {
+			Name *string `json:"name"`
+		}
+		if !readAdminJSON(w, r, &in) {
+			return
+		}
+		if in.Name == nil { // the name is the one thing to change here
+			writeErrCode(w, http.StatusBadRequest, "bad_request", errors.New("name: the computer's new name (\"\": its id)"))
+			return
+		}
+		name, err := h.renameMachine(r.Context(), r.PathValue("id"), *in.Name, "admin", "admin")
+		if err != nil {
+			writeAddMachineErr(w, err)
+			return
+		}
+		writeJSON(w, map[string]any{"ok": true, "name": name})
+	})
 	mux.HandleFunc("DELETE /api/v1/admin/machines/{id}", func(w http.ResponseWriter, r *http.Request) {
 		id := r.PathValue("id")
+		// One its manager keeps: it lets it go now (machines_kept.go).
+		if kept, err := h.removeKeptMachine(r.Context(), id); kept {
+			if err != nil {
+				status, code := keeperErr(err)
+				writeErrCode(w, status, code, err)
+				return
+			}
+			h.logf("admin: machine %q removed", id)
+			writeJSON(w, map[string]any{"ok": true, "restart": h.pendingRestart(h.requestLang(r))})
+			return
+		}
 		found, err := removeMachineEntry(h.cfg.dir, id)
 		if err != nil {
 			writeErr(w, http.StatusInternalServerError, err)
@@ -203,6 +232,7 @@ func (h *Hub) adminMachineRoutes(mux *http.ServeMux) {
 			writeErrCode(w, http.StatusNotFound, "not_found", errors.New("hub.json has no such machine"))
 			return
 		}
+		h.clearKept(r.Context(), id) // an old record of a manager that kept it (machines_kept.go)
 		h.logf("admin: machine %q removed from hub.json", id)
 		writeJSON(w, map[string]any{"ok": true, "restart": h.pendingRestart(h.requestLang(r))})
 	})
@@ -216,7 +246,7 @@ func (h *Hub) adminMachineRoutes(mux *http.ServeMux) {
 		if !readAdminJSON(w, r, &in) {
 			return
 		}
-		mc := h.cfgEntry(id)
+		mc := h.knownEntry(id)
 		if mc == nil || mc.Kind != kindService {
 			writeErrCode(w, http.StatusBadRequest, "not_service", errors.New("only a computer of kind service pairs a connector"))
 			return
@@ -234,12 +264,21 @@ func (h *Hub) adminMachineRoutes(mux *http.ServeMux) {
 		}
 		restart := false
 		if addr != mc.Address {
-			err := editHubJSON(h.cfg.dir, func(o *jsonObject) error { return setMachineField(o, id, "address", addr) })
-			if err != nil {
-				writeErr(w, http.StatusInternalServerError, err)
-				return
+			// One its manager keeps: changed in its list, connected again at once (machines_kept.go).
+			if kept, err := h.editKeptMachine(r.Context(), id, map[string]any{"address": addr}); kept {
+				if err != nil {
+					status, code := keeperErr(err)
+					writeErrCode(w, status, code, err)
+					return
+				}
+			} else {
+				err := editHubJSON(h.cfg.dir, func(o *jsonObject) error { return setMachineField(o, id, "address", addr) })
+				if err != nil {
+					writeErr(w, http.StatusInternalServerError, err)
+					return
+				}
+				restart = true
 			}
-			restart = true
 		}
 		writeJSON(w, map[string]any{"ok": true, "address": addr, "version": version, "restart_required": restart})
 	})
@@ -254,7 +293,7 @@ func (h *Hub) adminMachineRoutes(mux *http.ServeMux) {
 	})
 	mux.HandleFunc("POST /api/v1/admin/machines/{id}/link-pair", func(w http.ResponseWriter, r *http.Request) {
 		id := r.PathValue("id")
-		mc := h.cfgEntry(id)
+		mc := h.knownEntry(id)
 		if mc == nil {
 			writeErrCode(w, http.StatusConflict, "not_active", errors.New("restart the hub first: it reads new machines when it starts"))
 			return

@@ -100,11 +100,11 @@ Computers belong to the manager, and so does everything they send: the hub's exi
 | Manager responsibility | Code |
 | --- | --- |
 | Interactions: waiting for `interaction.create`, resumable cards (retain for 3 minutes after node disconnect for hook reclaim; recover from `interactions` after manager restart, without another push on reclaim), expiry, always allow for session, screen cards (read, keypress, recheck), Codex cards, plans answered in terminal, history table, assistant questions/cards, questions from hub-owned features (`fleet.ask`: sending mail, Cua apps, persona_settings) | `fleet_ix.go` |
-| Session lists: unified state, background tasks, model errors, seen (`session_seen`), state start time, to-do / quiet / work state / channel markers / assistant-chat titles | `fleet.go`, `fleet_work.go`, `fleet_text.go` |
+| Session lists: unified state, background tasks, model errors, seen (`session_seen`), state start time, to-do / quiet / work state / channel markers / assistant-chat titles | `fleet.go`, `fleet_sessions.go`, `fleet_seen.go`, `fleet_work.go`, `fleet_text.go` |
 | Push decisions: waiting and filtering for done notifications (seen, muted, answered through a channel, Inbox twin, notify_user already pushed, no duplicate push for one Stop), card notifications | `fleet_push.go` |
 | Live Activity content (FleetState) and Dynamic Island counts | `fleet_live.go` |
 | Node MCP tools (`mcp.tools` / `mcp.call` dispatch) and `assistant.lark` | `fleet_tools.go` |
-| `lark.sent`: a write the node's gate proxy forwarded, kept in the sent-as-user ledger | `fleet.go` (`NodeRequest`), `extmgr/sent_ledger.go` |
+| `lark.sent`: a write the node's gate proxy forwarded, kept in the sent-as-user ledger | `fleet_events.go` (`NodeRequest`), `extmgr/sent_ledger.go` |
 | Channel-followed chats (`session.follow`: node sends items and generating text to manager, delivered to channels with turn starts/ends in node order) | `fleet_follow.go`, `devices.Follow` |
 | Machine monitoring (samples, 24-hour history, downsampling, cleanup) and token usage | `devices/metrics.go` |
 
@@ -188,6 +188,8 @@ Five minutes after node starts, it logs average duration once (`metrics: a sampl
 ## Storage and retention
 
 On receipt, the manager retains the latest sample in memory (Dashboard **Now**, not current if older than 30 seconds) and writes it to `machine_metrics` (raw `step = 10` row).
+
+The main assistant's read-only `machines_list` tool combines the trusted machine list with the manager's last system information and sample, working agent count, recent failing launchers and node version status. It reports the list's completeness and excluded count; machines that belong to another manager or are not trusted are not exposed. Connection, session and launcher records have separate availability: an empty failure list means no recent failure is recorded, not that every launcher was checked. Values whose source is missing, ambiguous, offline, stale or has a future timestamp are null with a reason. Samples over 30 seconds old retain their age but are not current; a sample from before the current connection is not current either. System information is the last reported information and may persist while offline; memory and disk availability follow the collection definitions above, and disk is an aggregate rather than necessarily the work directory's filesystem. Node builds that differ cannot be ordered by their identifiers, so a different build alone is not called outdated. The tool returns facts without ranking machines.
 Every minute `metricsLoop`:
 
 1. **Downsamples** raw rows older than an hour into one row per machine per minute (`step = 60`): averages values and takes maximum totals (memory, disk, etc.).
@@ -292,7 +294,7 @@ Follow dataviz rules:
   with the chart and the numbers on the left and **By Model** / **By Launcher** on the right on a wide screen; hovering a chart or ← → on it holds a moment in both, Esc lets go.
   The Machines list has **Today's tokens** across the top and a **Tokens** cell on each card, and uses up to three columns on a wide screen (it used to stop at 1000px).
   Colors are the CSS tokens `--usage-input` … `--usage-cache-read` (`styles.css`), the same values as `UsageColor`; `formatTokens` follows `TokenFormat`'s rules (`tokens.test.ts` has the same table).
-- Screenshots: the mock hub serves usage for every machine (the Mac Studio's node is an older one, the NAS is offline); `MOCK_TOKENS=none` is a hub without it, `=empty` one where nothing ran; `-openUsageRange 1h|24h|7d` opens a range.
+- Screenshots: the mock hub serves usage for every machine (the Mac Studio's node is an older one, the NAS is offline); `MOCK_TOKENS=none` is a hub without it, `=empty` one where nothing ran, `=lopsided` one where the server ran nearly all of it; `-openUsageRange 1h|24h|7d` opens a range.
 
 ## Doctor: what this computer can do (#2429)
 
@@ -312,6 +314,13 @@ iOS / Mac machine detail (#3018, `apple/Persona/Views/Machines/NodeHealthSection
   unrecognized text adds nothing, no guessing. Planned restarts during deployment don't count.
 - Mock-hub screenshots: `MOCK_DOCTOR=healthy|stale|broken|mixed|old|error|slow`, `MOCK_DOCTOR_OLD=<machine id,…>` (`scripts/mock/mock_hub.py`).
 - Tests: `node/doctor_rpc_test.go` (temporary directories; no writes without fix, fix only generated files and never user settings.json, check names match web grouping), `hub/node_doctor_test.go` (permissions), `web/src/lib/node-health.test.ts` (grouping, summary, fixing, old node, connection classification), `apple/PersonaTests/NodeHealthTests.swift` (same grouping table, decoding, old node / hub, model check/fix).
+
+## Renaming a computer
+
+A computer's name is its hub.json `name`; its id never changes. It can be renamed from the admin page, the web app's machine details (and, once PR 2 lands, the iOS / Mac / Android ones), the computer's
+Persona Link (`persona-link name`, the Windows tray) — see [protocol.md](../protocol/protocol.md) "Renaming a computer" and [link.md](../operations/link.md) "The computer's name". The hub writes hub.json and takes it at once:
+`hub/machine_rename.go` updates the entries it hands the manager and the name it shows (`Machine.name()`, never `cfg.Name`: the entry is read without a lock and stays as it was made); the manager keeps the machine
+when only the name changed (`sameConfig` ignores it) and tells the link (`endpoints`'s `machine_name`, part of `linkSays`); a member's rename reaches the center through its record (`derivedName`).
 
 ## API
 

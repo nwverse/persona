@@ -91,4 +91,11 @@
     <plurals name="app_share_attachments">
         <item quantity="other">%1$d 个附件</item>
     </plurals>
+    <string name="app_capsule_keeper_label">Persona 悬浮胶囊</string>
+    <string name="app_capsule_keeper_description">锁屏、清理后台后让悬浮胶囊继续显示。Persona 不会读取屏幕内容或你输入的文字。</string>
+    <string name="app_capsule_turned_off">已关闭胶囊，可在「设置 › 悬浮胶囊」重新打开</string>
+    <string name="app_capsule_lark_group">飞书消息</string>
+    <string name="app_capsule_keeper_channel">悬浮胶囊</string>
+    <string name="app_capsule_keeper_off_title">悬浮胶囊的保持常驻被关闭了</string>
+    <string name="app_capsule_keeper_off_text">更新后系统关闭了「Persona 悬浮胶囊」无障碍服务。点此到「无障碍」重新开启，锁屏后胶囊才不会消失。</string>
 </resources>

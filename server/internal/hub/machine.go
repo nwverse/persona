@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"slices"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/nwverse/persona/server/internal/apierr"
@@ -29,6 +30,9 @@ var errOffline = apierr.ErrOffline
 type Machine struct {
 	cfg MachineConfig
 	hub *Hub
+	// named is what the computer is called now: cfg.Name until it is renamed (renameMachineLive, the manager's
+	// report), which changes nothing else of it; read through name().
+	named atomic.Pointer[string]
 
 	mu sync.Mutex
 	// peer is how calls reach the node: the manager over the bus (busNode) for a machine it reported, or a test's
@@ -45,12 +49,14 @@ type Machine struct {
 	// engineHosts: the set the last manager handed over (#2576), nil when it handed over none (a single engine then).
 	engineHosts *proto.EngineChoice
 	// warmUntil: shown as before a restart until then — the hub's, while the manager comes back (calls wait for it in
-	// busNode), or the manager's, while the node comes back (its report's) (devices_link.go).
+	// busNode), or the manager's, while the node comes back (its report's) (devices_warm.go).
 	warmUntil time.Time
 	err       string
 	lastSeen  time.Time
-	sessions  []proto.Session
-	watchers  map[string]int // session id -> subscribed clients
+	// sessions is the manager's last list. A list once kept is never changed in place, only replaced (a change copies
+	// it first): keptSessions hands it out without a copy, to be read after m.mu is let go.
+	sessions []proto.Session
+	watchers map[string]int // session id -> subscribed clients
 	// What the node was told about each session's watch (syncWatch): watchMu orders the session.watch /
 	// session.unwatch calls per session (a 1-slot channel, so a wait for it can end with the caller's ctx), nodeWatch
 	// is what the last of them left (absent: not watched). A slot goes when no call holds or waits for it and the
@@ -66,7 +72,7 @@ type Machine struct {
 	// derived: a computer only a member hub has in hub.json; the center reaches it through that hub.
 	derived bool
 
-	// The manager's report (devices_link.go): managed is set once one came for this machine (or the hub made it for
+	// The manager's report (devices_reports.go): managed is set once one came for this machine (or the hub made it for
 	// one the manager will report); snap is the machine as it said; connected, a call would reach the node now;
 	// hookedAt, the connection the hub did its part for (devices.connected); paths, its ways for the admin page.
 	managed bool
@@ -113,7 +119,24 @@ func (m *Machine) ownerOrCarrier() string {
 }
 
 func newMachine(h *Hub, cfg MachineConfig) *Machine {
-	return &Machine{cfg: cfg, hub: h, watchers: map[string]int{}, lastSeq: map[string]int{}}
+	m := &Machine{cfg: cfg, hub: h, watchers: map[string]int{}, lastSeq: map[string]int{}}
+	m.setName(cfg.Name)
+	return m
+}
+
+// name is what the computer is called now: as renamed, else its entry's name, else its id.
+func (m *Machine) name() string {
+	if n := m.named.Load(); n != nil && *n != "" {
+		return *n
+	}
+	return cmp.Or(m.cfg.Name, m.cfg.ID)
+}
+
+// setName renames the computer; "" leaves the name as it is.
+func (m *Machine) setName(name string) {
+	if name != "" {
+		m.named.Store(&name)
+	}
 }
 
 func (m *Machine) snapshot() proto.Machine {
@@ -125,13 +148,14 @@ func (m *Machine) snapshot() proto.Machine {
 	var s proto.Machine
 	if m.snap != nil {
 		s = *m.snap
+		s.Name = m.name() // renamed since it was reported: as it is called now
 	} else {
 		// Not reported yet (the hub just started, or a test's machine): what the hub has.
 		icon := m.cfg.Icon
 		if icon == "" {
 			icon = "laptop"
 		}
-		s = proto.Machine{ID: m.cfg.ID, Name: m.cfg.Name, Kind: m.cfg.Kind, Icon: icon, SSHHost: m.cfg.SSHHost,
+		s = proto.Machine{ID: m.cfg.ID, Name: m.name(), Kind: m.cfg.Kind, Icon: icon, SSHHost: m.cfg.SSHHost,
 			Hostname: m.info.Hostname, OS: m.info.OS, Arch: m.info.Arch, Home: m.info.Home, HerdrVersion: m.info.HerdrVersion,
 			ClaudeVersion: m.info.ClaudeVersion, LastSeen: m.lastSeen, NodeVersion: m.info.Version, Engine: cmp.Or(m.engine, proto.EngineHerdr),
 			Tailcat: m.cfg.TailcatAddr != ""}
@@ -210,11 +234,11 @@ func (m *Machine) call(ctx context.Context, method string, params any, out any) 
 		}
 	}
 	if p == nil {
-		return fmt.Errorf("%s: %w", m.cfg.Name, errOffline)
+		return fmt.Errorf("%s: %w", m.name(), errOffline)
 	}
 	select {
 	case <-p.Done(): // closed, a new connection on its way: nothing was sent
-		return fmt.Errorf("%s: %w", m.cfg.Name, errOffline)
+		return fmt.Errorf("%s: %w", m.name(), errOffline)
 	default:
 	}
 	return p.Call(ctx, method, params, out)
@@ -246,7 +270,7 @@ func (m *Machine) notify(event string, params any) error {
 	p := m.peer
 	m.mu.Unlock()
 	if p == nil {
-		return fmt.Errorf("%s: %w", m.cfg.Name, errOffline)
+		return fmt.Errorf("%s: %w", m.name(), errOffline)
 	}
 	return p.Notify(event, params)
 }
@@ -259,12 +283,20 @@ func (m *Machine) sessionList() []proto.Session {
 	return out
 }
 
+// keptSessions is the machine's list itself, not a copy: only to be read (Machine.sessions). The pushes read a busy
+// machine's ~200 KB list on every change of one session; a copy each time was most of what they allocated.
+func (m *Machine) keptSessions() []proto.Session {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.sessions
+}
+
 func (m *Machine) session(id string) (proto.Session, bool) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	for _, s := range m.sessions {
-		if s.SessionID == id {
-			return s, true
+	for i := range m.sessions { // by index: a range value copies every (large) session it passes
+		if m.sessions[i].SessionID == id {
+			return m.sessions[i], true
 		}
 	}
 	return proto.Session{}, false
@@ -522,6 +554,7 @@ func (m *Machine) onEvent(event string, params json.RawMessage) {
 			return
 		}
 		m.mu.Lock()
+		m.sessions = slices.Clone(m.sessions) // the kept list may be being read (keptSessions)
 		for i := range m.sessions {
 			if r, ok := p.Revs[m.sessions[i].SessionID]; ok {
 				m.sessions[i].Rev = r
@@ -535,6 +568,7 @@ func (m *Machine) onEvent(event string, params json.RawMessage) {
 		var p struct {
 			SessionID string       `json:"session_id"`
 			Items     []proto.Item `json:"items"`
+			MoreAfter bool         `json:"more_after"`
 			itemSpan
 		}
 		// A batch without items still matters when it has a span: it moves the apps' "complete up to" forward.
@@ -554,7 +588,7 @@ func (m *Machine) onEvent(event string, params json.RawMessage) {
 		}
 		m.mu.Unlock()
 		p.Items = m.hub.withInjected(p.Items)
-		m.hub.itemsToSubscribers(m.cfg.ID, p.SessionID, p.Items, p.itemSpan)
+		m.hub.itemsToSubscribers(m.cfg.ID, p.SessionID, p.Items, p.itemSpan, p.MoreAfter)
 	case "session.screen":
 		var p struct {
 			SessionID string `json:"session_id"`

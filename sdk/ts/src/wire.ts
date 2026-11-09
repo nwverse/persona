@@ -854,6 +854,8 @@ export interface InitializeResult {
   version: string;
   /** A subset of the manifest's. */
   contributes?: Record<string, unknown>;
+  /** Request-ID scoped rpc.cancel for mounted page lifecycle calls only. */
+  ui_page_cancellation?: 1;
 }
 
 /**
@@ -3026,19 +3028,22 @@ export interface MessagingError {
 
 /**
  * error.code a program answers or gets besides the base ErrorCode: rate_limited (tools.call / actions.do, and the
- * hub's answer to too many sent.record; data {retry_after} in seconds, fractional allowed), and why
- * credentials.gh_token has no token.
+ * hub's answer to too many sent.record; data {retry_after} in seconds, fractional allowed), why credentials.gh_token
+ * has no token, and what recall answers: not_recallable (nothing was sent: the program cannot take that message back)
+ * and recall_unknown (the request may have taken effect). not_signed_in, offline and rate_limited also say that
+ * recall could not act now.
  */
-export type ConnectorErrorCode = "rate_limited" | "no_machine" | "offline" | "node_too_old" | "no_gh" | "not_signed_in" | (string & {});
-export const CONNECTOR_ERROR_CODES = ["rate_limited", "no_machine", "offline", "node_too_old", "no_gh", "not_signed_in"] as const;
+export type ConnectorErrorCode = "rate_limited" | "no_machine" | "offline" | "node_too_old" | "no_gh" | "not_signed_in" | "not_recallable" | "recall_unknown" | (string & {});
+export const CONNECTOR_ERROR_CODES = ["rate_limited", "no_machine", "offline", "node_too_old", "no_gh", "not_signed_in", "not_recallable", "recall_unknown"] as const;
 
 /**
  * What a connector declares (ConnectorItem.capabilities): the hub calls only the methods of declared ones. fallback
- * has no method: every inbox thing promises extra.rule_tier. An extension's connector with one this hub does not know
- * loses only that capability.
+ * has no method: every inbox thing promises extra.rule_tier. recall is the program's word that it can take back what
+ * it sent: the hub then calls connector.recall (only after the user agreed), and the install preview says so. An
+ * extension's connector with one this hub does not know loses only that capability.
  */
-export type ConnectorCapability = "status" | "tools" | "actions" | "events" | "inbox" | "settle" | "archive" | "chats" | "items" | "login" | "options" | "threads" | "snapshot" | "group" | "meta" | "fallback" | "machines" | (string & {});
-export const CONNECTOR_CAPABILITIES = ["status", "tools", "actions", "events", "inbox", "settle", "archive", "chats", "items", "login", "options", "threads", "snapshot", "group", "meta", "fallback", "machines"] as const;
+export type ConnectorCapability = "status" | "tools" | "actions" | "events" | "inbox" | "settle" | "archive" | "chats" | "items" | "login" | "options" | "threads" | "snapshot" | "group" | "meta" | "fallback" | "machines" | "recall" | (string & {});
+export const CONNECTOR_CAPABILITIES = ["status", "tools", "actions", "events", "inbox", "settle", "archive", "chats", "items", "login", "options", "threads", "snapshot", "group", "meta", "fallback", "machines", "recall"] as const;
 
 /**
  * ConnectorStatus.state. disabled is the hub's own (the user switched it off); a program never answers it.
@@ -3226,6 +3231,46 @@ export interface ConnectorDoParams {
   name: string;
   args?: unknown;
   request_id: string;
+}
+
+/**
+ * recall: take back a message the connector's program sent in the user's name, which the sent-as-user ledger has a
+ * row of (docs/extensions/connectors.md "Sent as the user"). Only for a connector that declares the capability
+ * recall, and only once the user agreed on their own device; the program never starts one. The fields are the row's,
+ * as the hub kept them: nothing of what the message said. A repeat after success is a success too. Answer with
+ * ConnectorRecallResult (recalled true) only when the service confirms the message is no longer there, one that was
+ * already gone included; otherwise an error: not_recallable (it cannot, and nothing was sent), not_signed_in, offline
+ * or rate_limited (it cannot act now), recall_unknown (it may have gone through), any other error is the service
+ * refusing, with one sentence for people (no secret, no text of the message).
+ */
+export interface ConnectorRecallParams {
+  contribution: string;
+  /**
+   * What wrote it: the tool's name (actions.do), sent.record, or, for a write the node's gate forwarded, "METHOD
+   * /path".
+   */
+  action: string;
+  /**
+   * The sent message's id on the other side, as the program gave it (actions.do or sent.record) or as the service's
+   * answer did (a write through the node's gate).
+   */
+  message_ref: string;
+  /**
+   * Where it went, as the ledger kept it (short values): the program's own for a send it recorded; for a write
+   * through the node's gate also method, path and command (the gate's name), and the ids its path names.
+   */
+  target?: Record<string, unknown>;
+  /** When the ledger wrote the row, right after the send. */
+  at?: string;
+}
+
+/**
+ * recall's answer: recalled true is the program's word that the service confirmed the message is no longer there.
+ * Anything else (no recalled, false) is not taken for a yes: the hub then knows nothing, writes nothing and lets the
+ * user ask again.
+ */
+export interface ConnectorRecallResult {
+  recalled: boolean;
 }
 
 /**
@@ -4469,12 +4514,14 @@ export interface TodoDecisionEvent {
  * error.code of model.complete besides permission_denied (data {scope: "models"}): invalid_params; assistant_offline
  * (the manager is away: try again); model_unavailable (nothing to call for this extension: the user picks a model for
  * it in Settings › Model configuration); model_paused (the connection is held for quota or load, nothing was sent;
- * data ModelPause: try again after until); model_failed (the upstream refused or failed the request); timeout (past
+ * data ModelPause: try again after until); model_failed (the upstream failed the request: an error status or a
+ * dropped connection); model_refused (the model declined to answer this input, a refusal or a content filter: sending
+ * it again unchanged gets the same answer, so split it, drop a part or report it; data ModelRefusal); timeout (past
  * timeout_seconds); invalid_output (with json_schema, the reply was still not JSON matching it after one more try;
  * data ModelInvalidOutput).
  */
-export type ModelErrorCode = "invalid_params" | "assistant_offline" | "model_unavailable" | "model_paused" | "model_failed" | "timeout" | "invalid_output" | (string & {});
-export const MODEL_ERROR_CODES = ["invalid_params", "assistant_offline", "model_unavailable", "model_paused", "model_failed", "timeout", "invalid_output"] as const;
+export type ModelErrorCode = "invalid_params" | "assistant_offline" | "model_unavailable" | "model_paused" | "model_failed" | "model_refused" | "timeout" | "invalid_output" | (string & {});
+export const MODEL_ERROR_CODES = ["invalid_params", "assistant_offline", "model_unavailable", "model_paused", "model_failed", "model_refused", "timeout", "invalid_output"] as const;
 
 /**
  * One turn of the conversation: the user's, or the model's earlier answer.
@@ -4550,6 +4597,94 @@ export interface ModelInvalidOutput {
   problem: string;
   text: string;
   usage: ModelUsage;
+}
+
+/**
+ * The data of model_refused: what the upstream said and what the declined call spent.
+ */
+export interface ModelRefusal {
+  /** The upstream's reason: refusal (a refusal stop or part) or content_filter. */
+  stop_reason?: string;
+  usage: ModelUsage;
+}
+
+/**
+ * error.code of the assistant calls besides permission_denied (data {scope: "assistant.read"}): invalid_params;
+ * not_found (assistant.messages: no such conversation in the assistant's own space); assistant_offline (the manager
+ * is away: try again); machine_offline (the assistant's computer is not connected or not set up: try again).
+ */
+export type AssistantErrorCode = "invalid_params" | "not_found" | "assistant_offline" | "machine_offline" | (string & {});
+export const ASSISTANT_ERROR_CODES = ["invalid_params", "not_found", "assistant_offline", "machine_offline"] as const;
+
+/**
+ * assistant.conversations (assistant.read): the conversations last active at or after since, newest first.
+ */
+export interface AssistantConversationsParams {
+  /** An RFC 3339 time: last active at or after it. */
+  since: string;
+  /** An RFC 3339 time: those known to have started at or after it are left out. */
+  until?: string;
+  include_archived?: boolean;
+  /** 0 is 50. */
+  limit?: number;
+  offset?: number;
+}
+
+export interface AssistantConversation {
+  id: string;
+  /** Empty while it has none. */
+  title: string;
+  /** The main conversation. */
+  main?: boolean;
+  archived?: boolean;
+  /** Who opened it: user, channel, inbox, task, spawned, lark_agent or extension. */
+  origin: string;
+  /** When it began, when known. */
+  started?: string;
+  /** Its last activity. */
+  updated: string;
+}
+
+export interface AssistantConversationsResult {
+  items: AssistantConversation[];
+  total: number;
+  next_offset?: number;
+}
+
+/**
+ * assistant.messages (assistant.read): one conversation's words in time order, paged by seq.
+ */
+export interface AssistantMessagesParams {
+  /** The conversation (assistant.conversations' id). */
+  id: string;
+  /** An RFC 3339 time: messages at or after it. */
+  since?: string;
+  /** An RFC 3339 time: messages before it. */
+  until?: string;
+  /** Continue after this seq (the last page's next_seq). */
+  after_seq?: number;
+  /** 0 is 200. */
+  limit?: number;
+}
+
+export interface AssistantMessage {
+  seq: number;
+  at: string;
+  role: AssistantRole;
+  text: string;
+  /** The text was cut for pages (a very long message). */
+  truncated?: boolean;
+}
+
+export type AssistantRole = "user" | "assistant" | (string & {});
+export const ASSISTANT_ROLES = ["user", "assistant"] as const;
+
+/**
+ * next_seq is set while there is more to read (pass it as after_seq), even when this page has no messages.
+ */
+export interface AssistantMessagesResult {
+  messages: AssistantMessage[];
+  next_seq?: number;
 }
 
 /**
@@ -4902,6 +5037,7 @@ export const CALLS: Record<string, Call> = {
   "connector.actions.list": { from: "hub", params: "ConnectorParams", result: "ConnectorTools" },
   "connector.actions.describe": { from: "hub", params: "ConnectorCallParams", result: "ConnectorDescribeResult" },
   "connector.actions.do": { from: "hub", params: "ConnectorDoParams", result: "ConnectorCallResult" },
+  "connector.recall": { from: "hub", params: "ConnectorRecallParams", result: "ConnectorRecallResult" },
   "connector.thread.page": { from: "hub", params: "ConnectorThreadParams", result: "ConnectorThreadPage" },
   "connector.thread.media": { from: "hub", params: "ConnectorMediaParams", result: "ConnectorMedia" },
   "connector.inbox.collect": { from: "hub", params: "ConnectorParams", result: "ConnectorCollectResult" },
@@ -4949,4 +5085,6 @@ export const CALLS: Record<string, Call> = {
   "event.todo.changed": { from: "hub", params: "TodoChangedEvent", event: true },
   "event.todo.decision": { from: "hub", params: "TodoDecisionEvent", event: true },
   "model.complete": { from: "program", params: "ModelCompleteParams", result: "ModelCompleteResult" },
+  "assistant.conversations": { from: "program", params: "AssistantConversationsParams", result: "AssistantConversationsResult" },
+  "assistant.messages": { from: "program", params: "AssistantMessagesParams", result: "AssistantMessagesResult" },
 };

@@ -10,7 +10,7 @@ final class QuickActionsTests: XCTestCase {
 
     @MainActor private func launch() {
         app = XCUIApplication()
-        app.launchArguments = ["-demo.on", "YES", "-ui.oldLayout", "NO", "-probes", "YES", "-newAssistant", "YES", "-dev.openChat", "",
+        app.launchArguments = ["-demo.on", "YES", "-probes", "YES", "-newAssistant", "YES", "-dev.openChat", "",
                                "-tab", "assistant"]
         app.launchPinned()
         XCTAssertTrue(app.buttons["assistant-sidebar-button"].firstMatch.waitForExistence(timeout: 15), "no shell")

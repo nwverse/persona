@@ -45,6 +45,8 @@ type reportedEntry struct {
 	// Info is the computer as its node last described itself (none: not seen since the manager had it).
 	Info     proto.NodeInfo `json:"info,omitzero"`
 	LastSeen time.Time      `json:"last_seen,omitzero"`
+	// Tailcat: the entry has a tailcat address (left out of Cfg).
+	Tailcat bool `json:"tailcat,omitempty"`
 }
 
 // loadMachineEntries reads what the managers last reported (startDevices). Unreadable: nothing until they report, and
@@ -81,7 +83,7 @@ func (h *Hub) readMachineEntries(ctx context.Context) (reportedMachines, error) 
 		}
 	}
 	handed := map[string]bool{}
-	for _, mc := range h.cfgEntries() {
+	for _, mc := range h.knownEntries() {
 		handed[mc.ID] = true
 	}
 	roster := h.managerStore() != nil // without one (tests) the roster is not known: none is dropped
@@ -160,7 +162,7 @@ func (h *Hub) takeMachineEntries(owner string, st devicewire.States) {
 		add(e.ID)
 	}
 	handed := map[string]MachineConfig{}
-	for _, mc := range h.cfgEntries() {
+	for _, mc := range h.knownEntries() { // hub.json's and those their managers keep (machines_kept.go)
 		handed[mc.ID] = mc
 	}
 	next := map[string]reportedEntry{}
@@ -171,14 +173,14 @@ func (h *Hub) takeMachineEntries(owner string, st devicewire.States) {
 			refused = append(refused, id)
 			continue
 		}
-		e := reportedEntry{Cfg: keptEntry(cfgs[id], id)}
-		if e.Cfg == nil {
-			e.Cfg = keptEntry(states[id].Config, id)
+		src := cfgs[id]
+		if keptEntry(src, id) == nil {
+			src = states[id].Config
 		}
-		if e.Cfg == nil {
-			b, _ := json.Marshal(mc)
-			e.Cfg = keptEntry(b, id)
+		if keptEntry(src, id) == nil {
+			src, _ = json.Marshal(mc)
 		}
+		e := reportedEntry{Cfg: keptEntry(src, id), Tailcat: hasTailcat(src)}
 		if s, ok := states[id]; ok {
 			e.Info, e.LastSeen = s.Info, s.Machine.LastSeen
 		}
@@ -208,6 +210,15 @@ func (h *Hub) takeMachineEntries(owner string, st devicewire.States) {
 	}
 	if d.reported == nil {
 		d.reported = reportedMachines{}
+	}
+	for mid, k := range d.kept { // a kept machine its report lacks (its list does not read): as last reported
+		if k == owner {
+			if _, has := next[mid]; !has {
+				if p, had := prev[mid]; had {
+					next[mid] = p
+				}
+			}
+		}
 	}
 	d.reported[owner] = next
 	if d.reportedSince == nil {
@@ -243,6 +254,35 @@ func sameReported(a, b reportedEntry) bool {
 	ja, _ := json.Marshal(a)
 	jb, _ := json.Marshal(b)
 	return string(ja) == string(jb)
+}
+
+// hasTailcat: entry raw has a tailcat address.
+func hasTailcat(raw json.RawMessage) bool {
+	var e struct {
+		TailcatAddr string `json:"tailcat_addr"`
+	}
+	return json.Unmarshal(raw, &e) == nil && e.TailcatAddr != ""
+}
+
+// seedMachineEntry is what the hub shows of a machine it just put to manager o (machines_kept.go), until o reports it.
+func (h *Hub) seedMachineEntry(o, mid string, entry json.RawMessage) {
+	cfg := keptEntry(entry, mid)
+	if cfg == nil {
+		return
+	}
+	d := &h.devices
+	d.mu.Lock()
+	if d.reported == nil {
+		d.reported = reportedMachines{}
+	}
+	if d.reported[o] == nil {
+		d.reported[o] = map[string]reportedEntry{}
+	}
+	e := d.reported[o][mid]
+	e.Cfg, e.Tailcat = cfg, hasTailcat(entry)
+	d.reported[o][mid] = e
+	d.mu.Unlock()
+	h.machineEntriesChanged()
 }
 
 // keptEntry is entry id as the hub keeps it, nil when raw is no entry with that id: without its secrets (the tailcat

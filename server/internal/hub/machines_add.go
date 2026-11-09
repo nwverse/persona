@@ -1,6 +1,7 @@
 package hub
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -55,9 +56,10 @@ func writeAddMachineErr(w http.ResponseWriter, err error) {
 	writeErrorBody(w, e.status, body)
 }
 
-// addMachine checks mc's name and icon (filling in the defaults), writes it to hub.json and hands it to the manager,
-// which connects it now (no restart). by is who added it, for the log. An entry with its id already there is 409
-// exists.
+// addMachine checks mc's name and icon (filling in the defaults) and hands it to the carrier, which connects it now (no
+// restart): put in its own list when it keeps one and is connected (machines_kept.go), else written to hub.json (it
+// moves into the carrier's own list when that one reports). by is who added it, for the log. A machine with its id
+// already there is 409 exists.
 func (h *Hub) addMachine(mc *MachineConfig, by string) error {
 	h.devices.moving.Lock()
 	defer h.devices.moving.Unlock()
@@ -85,7 +87,27 @@ func (h *Hub) addMachineMoving(mc *MachineConfig, by string) error {
 	default:
 		mc.Icon = "laptop"
 	}
-	exists := h.cfgEntry(mc.ID) != nil
+	exists := h.knownEntry(mc.ID) != nil
+	d := &h.devices
+	d.mu.Lock()
+	target := cmp.Or(d.assign[mc.ID], devicesOwner) // a dedicated machine's reserved owner (machines_owned_local.go)
+	d.mu.Unlock()
+	if !exists && h.keepsList(target) {
+		entry, err := marshalNoEscape(*mc)
+		if err != nil {
+			return err
+		}
+		err = h.putKept(context.Background(), target, mc.ID, entry) // d.moving is held
+		if err == nil {
+			h.logf("%s: machine %q (%s) added to %s's own list", by, mc.ID, mc.Kind, target)
+			h.setLeaving(mc.ID, false) // added again after a reject (machine_trust.go)
+			return nil
+		}
+		if !errors.Is(err, errKeeperAway) {
+			return err
+		}
+		// Gone meanwhile: hub.json until it is back.
+	}
 	err := editHubJSON(h.cfg.dir, func(o *jsonObject) error {
 		list, err := machineEntries(o)
 		if err != nil {
@@ -112,13 +134,16 @@ func (h *Hub) addMachineMoving(mc *MachineConfig, by string) error {
 		return refuseAdd(http.StatusConflict, "exists", i18n.Err("hub-admin_machines.exists"))
 	}
 	h.logf("%s: machine %q (%s) added to hub.json", by, mc.ID, mc.Kind)
-	h.addMachineLive(*mc) // the manager connects it now, no restart (devices_link.go)
+	h.addMachineLive(*mc) // the manager connects it now, no restart (devices_handover.go)
 	return nil
 }
 
+// maxMachineName is how long a computer's name may be, in characters (link.MaxMachineName says the same).
+const maxMachineName = 40
+
 // checkMachineName refuses a computer's name that is too long or has line breaks or tabs.
 func checkMachineName(name string) error {
-	if len([]rune(name)) > 40 || strings.ContainsAny(name, "\n\r\t") {
+	if len([]rune(name)) > maxMachineName || strings.ContainsAny(name, "\n\r\t") {
 		return refuseAdd(http.StatusBadRequest, "invalid_name", i18n.Err("hub-admin_machines.invalid_name"))
 	}
 	return nil
@@ -169,7 +194,7 @@ func machineSlug(name, os string) string {
 // machineIDTaken: something answers to id already (an entry the hub has or hub.json has, a computer the manager
 // reports, the local one).
 func (h *Hub) machineIDTaken(id string) bool {
-	if h.cfgEntry(id) != nil || h.machineByID(id) != nil {
+	if h.knownEntry(id) != nil || h.machineByID(id) != nil {
 		return true
 	}
 	for _, m := range h.machineList() {
@@ -210,7 +235,7 @@ func (h *Hub) pendingCount() int {
 // for it must not let another computer be it). added: it was added now.
 func (h *Hub) computerFor(ctx context.Context, machine string, add *machineAddRequest, fromDevice bool, actor string) (id string, added bool, err error) {
 	if add == nil {
-		mc := h.cfgEntry(machine)
+		mc := h.knownEntry(machine)
 		if mc == nil || mc.Kind != kindLink {
 			if fromDevice {
 				return "", false, refuseAdd(http.StatusNotFound, "not_found", i18n.Err("hub-pairing.no_computer"))
@@ -255,7 +280,7 @@ func (h *Hub) computerFor(ctx context.Context, machine string, add *machineAddRe
 		if !adminMachineID.MatchString(id) {
 			return "", false, refuseAdd(http.StatusBadRequest, "invalid_id", i18n.Err("hub-admin_machines.invalid_id"))
 		}
-		if mc := h.cfgEntry(id); reusable(mc) {
+		if mc := h.knownEntry(id); reusable(mc) {
 			return reuse(id)
 		}
 		if h.machineIDTaken(id) {
@@ -272,7 +297,7 @@ func (h *Hub) computerFor(ctx context.Context, machine string, add *machineAddRe
 				id = base + "-" + strconv.Itoa(n)
 			}
 			// The one this name made before and that never connected: its code again, not a second computer.
-			if mc := h.cfgEntry(id); mc != nil && mc.Name == name && reusable(mc) {
+			if mc := h.knownEntry(id); mc != nil && mc.Name == name && reusable(mc) {
 				return reuse(id)
 			}
 			if !h.machineIDTaken(id) {
@@ -358,7 +383,7 @@ func (h *Hub) computerInstall(pairURL string) map[string]string {
 // the devices' notification prefs, mute or desktop-open suppression (sendBuilt, not sendLocalized).
 func (h *Hub) notifyComputerCode(by principal, machine string) {
 	name := machine
-	if mc := h.cfgEntry(machine); mc != nil && mc.Name != "" {
+	if mc := h.knownEntry(machine); mc != nil && mc.Name != "" {
 		name = mc.Name
 	}
 	if !h.push.ready() {
@@ -422,7 +447,7 @@ func devicePairedPayload(l i18n.Lang, name, credential string) map[string]any {
 // confirm.
 func (h *Hub) notifyComputerJoining(machine string) {
 	name := machine
-	if mc := h.cfgEntry(machine); mc != nil && mc.Name != "" {
+	if mc := h.knownEntry(machine); mc != nil && mc.Name != "" {
 		name = mc.Name
 	}
 	if !h.push.ready() {

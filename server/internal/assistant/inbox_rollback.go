@@ -19,7 +19,7 @@ type inboxWrite struct {
 	it      *InboxItem
 	prev    []byte // the item's stored form before the change; nil for an item the change created
 	told    int    // the agent's in-memory note count before the change
-	applied []byte // the stored form the change left (settle)
+	applied []byte // the stored form the change left (settle); nil while a round's step is changing it (roundWrite)
 	gen     uint64 // the mutation stamp settle took
 	undone  bool   // its row failed and the change was undone (saveWrites)
 }
@@ -87,6 +87,89 @@ func (b *inboxBook) restore(w *inboxWrite) {
 		*handling = *p.Handling
 		cur.Handling = handling
 	}
+}
+
+// A collection round (InboxCollected) is written the same way (#91). It changes items in steps, and some steps let
+// b.mu go before they change anything (a mail's text and a connector's settling are asked for meanwhile), so each
+// step takes the round's write of an item before it changes the item (roundWrite, roundNew) and settles those
+// writes before it lets b.mu go (settleRound). A write that still holds at a later step is taken up again, its
+// snapshot staying what the row held before the round; an item something else moved in between gets a new write
+// from there, the other move saving what the round had done before. Undoing is safe because the sources hand the
+// same things in again: a connector's Collect answers from what it holds, a mail round reads each account's newest
+// page, a settling connector is asked every round. What is undone comes back with the next round.
+
+// roundWrite is called before the running round changes an item, under b.mu; outside a round it does nothing.
+func (b *inboxBook) roundWrite(it *InboxItem) {
+	r := b.batch
+	if r == nil {
+		return
+	}
+	if w := r.writes[it.ID]; w != nil && w.it == it {
+		if w.applied == nil { // this step changed it already
+			return
+		}
+		if b.roundHolds(w) {
+			w.applied = nil
+			return
+		}
+	}
+	r.writes[it.ID] = beginWrite(it)
+}
+
+// roundNew stands for an item the running round creates, under b.mu: undone, it is forgotten.
+func (b *inboxBook) roundNew(it *InboxItem) {
+	if r := b.batch; r != nil {
+		r.writes[it.ID] = newWrite(it)
+	}
+}
+
+// settleRound settles what the running round's step changed, under b.mu, before the step lets it go.
+func (b *inboxBook) settleRound() {
+	if r := b.batch; r != nil {
+		for _, w := range r.writes {
+			if w.applied == nil {
+				b.settle(w)
+			}
+		}
+	}
+}
+
+// roundHolds is holds for a write of the running round, whose new plugin items wait in its batch. Under b.mu.
+func (b *inboxBook) roundHolds(w *inboxWrite) bool {
+	if r := b.batch; r != nil && r.items[w.it.ID] == w.it {
+		return b.mark[w.it.ID] == w.gen && bytes.Equal(itemState(w.it), w.applied)
+	}
+	return b.holds(w)
+}
+
+// roundMuted takes the filings of the round's mutes (applyMutes) into its writes, under b.mu, for its last step: an
+// item the round changed already keeps the round's write, whose snapshot is from before both.
+func (b *inboxBook) roundMuted(ws []*inboxWrite) []*InboxItem {
+	r := b.batch
+	out := make([]*InboxItem, 0, len(ws))
+	for _, w := range ws {
+		if cur := r.writes[w.it.ID]; cur == nil || cur.it != w.it || cur.applied != nil {
+			w.applied = nil
+			r.writes[w.it.ID] = w
+		}
+		out = append(out, w.it)
+	}
+	return out
+}
+
+// roundSaved is the running round's writes of the items it saves now, once settled; under b.mu. The new plugin
+// items that wait for the model are admission's to write (admit).
+func (b *inboxBook) roundSaved(changed []*InboxItem) []*inboxWrite {
+	r := b.batch
+	var ws []*inboxWrite
+	taken := map[*inboxWrite]bool{}
+	for _, it := range changed {
+		if w := r.writes[it.ID]; w != nil && w.it == it && !taken[w] {
+			taken[w] = true
+			ws = append(ws, w)
+		}
+	}
+	return ws
 }
 
 // saveWrites persists the items of settled writes and restores, inside the saving window (saveInboxUndo), each one

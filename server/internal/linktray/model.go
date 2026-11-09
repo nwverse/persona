@@ -6,6 +6,7 @@
 package linktray
 
 import (
+	"cmp"
 	"strings"
 	"time"
 
@@ -152,6 +153,8 @@ const (
 	ActAutostart = "autostart"
 	ActQuit      = "quit"
 	ActPanel     = "open_panel"
+	// ActRename opens the panel's name field; the page saves it with the "rename" command (Host.Rename).
+	ActRename = "rename"
 )
 
 // Action is a row of the panel.
@@ -173,6 +176,8 @@ type View struct {
 	Lines   []Line   `json:"lines"`
 	Actions []Action `json:"actions"`
 	Mode    string   `json:"mode"`
+	// Name is what the hub calls this computer now (its id with older hubs), the rename field's first text.
+	Name string `json:"name,omitempty"`
 }
 
 // Build turns a snapshot into what the tray shows, in language l.
@@ -184,7 +189,33 @@ func Build(l i18n.Lang, s Snapshot) View {
 		v.Tooltip += " · " + name
 	}
 	v.Actions = actions(l, s, look)
+	v.Name = machineName(s)
 	return v
+}
+
+// machineName is what the hub calls this computer in the current mode, as far as anything here knows it: the
+// running persona-link's word, else link.json's; the id when the hub has said nothing (an older hub).
+func machineName(s Snapshot) string {
+	if st := s.live(); st != nil && st.MachineName != "" {
+		return st.MachineName
+	}
+	c := s.Config
+	switch {
+	case c == nil:
+		return ""
+	case s.Mode() == link.ModePassive && c.Passive != nil:
+		return cmp.Or(c.Passive.MachineName, c.Passive.Machine)
+	case s.Mode() == link.ModePassive:
+		return ""
+	}
+	return cmp.Or(c.MachineName, c.Machine)
+}
+
+// renamable: the panel offers to rename this computer: active mode, connected to a hub that says what it calls it
+// (one that renames computers), and confirmed (a pending computer cannot rename itself).
+func renamable(s Snapshot) bool {
+	st := s.live()
+	return st != nil && st.Mode != link.ModePassive && st.State == "connected" && st.MachineName != "" && !st.Pending
 }
 
 func pill(l i18n.Lang, look Look) string {
@@ -302,7 +333,7 @@ func failures(text string) []Line {
 }
 
 func activeLines(l i18n.Lang, s Snapshot, st *link.Status) []Line {
-	machine := machineLine(l, st.Machine)
+	machine := machineLine(l, cmp.Or(st.MachineName, st.Machine))
 	mesh := 0
 	if st.State == "connected" {
 		mesh = st.MeshHubs
@@ -371,7 +402,7 @@ func passiveLines(l i18n.Lang, s Snapshot, st *link.Status) []Line {
 		}
 	}
 	mode := Line{Icon: "arrow_in", Text: i18n.T(l, "link-tray.mode_passive_listen", i18n.Args{"mode": i18n.T(l, "link-tray.mode_passive"), "listen": listen})}
-	machine := machineLine(l, st.Machine)
+	machine := machineLine(l, cmp.Or(st.MachineName, st.Machine))
 	hub := hubLine(l, st.HubName, 0)
 	var seen []Line
 	if st.LastSeen != nil {
@@ -437,6 +468,9 @@ func actions(l i18n.Lang, s Snapshot, look Look) []Action {
 		pair.Label = i18n.T(l, "link-tray.action_pair_paste")
 	}
 	out = append(out, pair)
+	if renamable(s) {
+		out = append(out, Action{ID: ActRename, Label: i18n.T(l, "link-tray.action_rename"), Icon: "pencil"})
+	}
 	switch {
 	case !s.Task.Installed:
 		out = append(out, Action{ID: ActInstall, Label: i18n.T(l, "link-tray.action_install"), Icon: "download"})

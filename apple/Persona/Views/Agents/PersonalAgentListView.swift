@@ -4,13 +4,14 @@ import SwiftUI
 struct PersonalAgentsRoute: Hashable {}
 
 /// The Lark gateway's personal agents (grok_bot, muse, …) with a view menu like the Lark gateway's (Group By / Sort By / Display /
-/// New Group / Reset to Default / View All), search, pins (swipe or long-press) and custom sections. Prefs are shared with
-/// the web through the hub. Re-pulls on the hub's `agents` events.
+/// New Group / Reset to Default / View All), search, and in a row's long-press menu pins, custom sections and Remove from
+/// List, with a folded Removed (N) section at the end (#138). Prefs are shared with the web through the hub. Re-pulls on the hub's
+/// `agents` events.
 struct PersonalAgentListView: View {
     @Environment(AppModel.self) private var model
     @State private var list = PersonalAgentListModel()
     @State private var paginationArmed = false
-    private var sessions: [PersonalAgentSession] { list.page?.rows ?? [] }
+    private var sessions: [PersonalAgentSession] { (list.page?.rows ?? []).filter { !list.going.contains($0.id) } }
     @State private var sources: [PersonalAgentSourceStatus] = []
     @State private var error: String?
     private var loaded: Bool { list.page?.loaded == true }
@@ -18,6 +19,7 @@ struct PersonalAgentListView: View {
     @State private var query = ""
     @State private var naming = false
     @State private var newSection = ""
+    @State private var showRemoved = false
     private var store: PersonalAgentPrefsStore { .shared }
 
     private var prefs: PersonalAgentPrefs { store.prefs }
@@ -52,19 +54,14 @@ struct PersonalAgentListView: View {
             ForEach(groups) { g in
                 Section {
                     ForEach(g.sessions) { s in
+                        // No swipe actions (the owner asked, #138): pin, groups and Remove from List are in the long-press menu.
                         NavigationLink(value: s) { PersonalAgentRow(session: s, pinned: prefs.isPinned(s.id)) }
-                            .swipeActions(edge: .leading) {
-                                Button { update { $0.togglePin(s.id) } } label: {
-                                    prefs.isPinned(s.id) ? Label("Unpin [Personal Agent List View c92179]", systemImage: Theme.Icon.unpin) : Label("Pin [Personal Agent List View 173f88]", systemImage: Theme.Icon.pin)
-                                }
-                                .tint(.orange)
-                            }
                             .contextMenu { rowMenu(s) }
                     }
                 } header: {
                     if !g.label.isEmpty {
                         HStack(spacing: Theme.Space.xs) {
-                            if g.id == "pinned" { Image(systemName: Theme.Icon.pinned).imageScale(.small) }
+                            if g.id == "pinned" { ThemedIcon(Theme.Icon.pinned).imageScale(.small) }
                             Text(g.label)
                             Spacer()
                             if list.page?.paged != true, g.unread > 0 { Text("\(g.unread)").monospacedDigit() }
@@ -90,6 +87,7 @@ struct PersonalAgentListView: View {
             } else if loaded && groups.isEmpty && error == nil {
                 Text("No matching sessions").foregroundStyle(.secondary)
             }
+            if !list.removed.isEmpty { removedSection }
         }
         .navigationTitle("Personal Agents")
         .pageSearchable(text: $query, prompt: String(localized: "Search Chats [Personal Agent List View feb955]"))
@@ -166,9 +164,31 @@ struct PersonalAgentListView: View {
                 update { $0.view.show = nil; $0.view.providers = nil }
             } label: { Label("View All", systemImage: Theme.Icon.listView) }
         } label: {
-            Image(systemName: prefs.view.isDefault ? Theme.Icon.filter : Theme.Icon.filterActive)
+            ThemedIcon(prefs.view.isDefault ? Theme.Icon.filter : Theme.Icon.filterActive)
         }
         .accessibilityLabel("Filter and sort")
+    }
+
+    /// Removed (N), folded: what Remove from List took out, each with Restore. A new message brings one back by itself.
+    private var removedSection: some View {
+        Section {
+            DisclosureGroup(isExpanded: $showRemoved) {
+                ForEach(list.removed) { s in
+                    HStack(spacing: Theme.Space.m) {
+                        PersonalAgentRow(session: s)
+                        Button { restore(s) } label: { Text("Restore").lineLimit(1) }
+                            .themedButton()
+                            .accessibilityIdentifier("personalAgents.restore")
+                    }
+                }
+            } label: {
+                // On the label: on the group it would name every row inside too.
+                Label("Removed (\(list.removed.count))", systemImage: Theme.Icon.hide).lineLimit(1)
+                    .accessibilityIdentifier("personalAgents.removed")
+            }
+        } footer: {
+            if showRemoved { Text("Removed chats stay with their source and come back on their own when a new message arrives.") }
+        }
     }
 
     @ViewBuilder private func rowMenu(_ s: PersonalAgentSession) -> some View {
@@ -187,6 +207,36 @@ struct PersonalAgentListView: View {
                 }
             } label: { Label("Move to Group", systemImage: Theme.Icon.folder) }
         }
+        Divider()
+        Button(role: .destructive) { remove(s) } label: { Label("Remove from List", systemImage: Theme.Icon.hide) }
+    }
+
+    private static func title(_ s: PersonalAgentSession) -> String { s.title.isEmpty ? s.sessionKey : s.title }
+
+    /// The row goes at once; the toast offers Undo; a refusal brings it back and says why.
+    private func remove(_ s: PersonalAgentSession) {
+        guard let api = model.api else { return }
+        Task {
+            do {
+                try await list.remove(s, api: api)
+                model.toast = Toast(String(localized: "Removed “\(Self.title(s))”. It comes back when it gets a new message."), style: .success,
+                                    action: Toast.Action(title: String(localized: "Undo")) { restore(s) })
+            } catch {
+                model.toast = Toast(String(localized: "Couldn't remove from the list: \(error.localizedDescription)"), style: .error)
+            }
+        }
+    }
+
+    private func restore(_ s: PersonalAgentSession) {
+        guard let api = model.api else { return }
+        Task {
+            do {
+                try await list.restore(s, api: api)
+                model.toast = Toast(String(localized: "Restored “\(Self.title(s))”"), style: .success)
+            } catch {
+                model.toast = Toast(String(localized: "Couldn't restore: \(error.localizedDescription)"), style: .error)
+            }
+        }
     }
 
     private func load() async {
@@ -203,6 +253,7 @@ struct PersonalAgentListView: View {
             // Say it plainly instead of showing stale rows as if they were current (§6 step 1).
             self.error = String(localized: "Can't connect to personal agents: \(error.localizedDescription)")
         }
+        await list.loadRemoved(api)
         _ = await p
     }
 }
@@ -213,7 +264,7 @@ private struct PersonalAgentRow: View {
 
     var body: some View {
         HStack(spacing: Theme.Space.m) {
-            if pinned { Image(systemName: Theme.Icon.pinned).imageScale(.small).foregroundStyle(.orange).accessibilityLabel("Pinned [Personal Agent List View fb47db]") }
+            if pinned { ThemedIcon(Theme.Icon.pinned).imageScale(.small).foregroundStyle(.orange).accessibilityLabel("Pinned [Personal Agent List View fb47db]") }
             PersonalAgentAvatar(session: session, size: 32)
             VStack(alignment: .leading, spacing: Theme.Space.xxs) {
                 Text(session.title.isEmpty ? session.sessionKey : session.title).lineLimit(1)
@@ -223,7 +274,7 @@ private struct PersonalAgentRow: View {
             .padding(.leading, session.parentSessionKey == nil ? 0 : Theme.Space.l)
             Spacer(minLength: Theme.Space.s)
             if !session.canSend {
-                Image(systemName: Theme.Icon.locked).foregroundStyle(.secondary)
+                ThemedIcon(Theme.Icon.locked).foregroundStyle(.secondary)
             }
             if session.unreadCount > 0 {
                 CountBadge(count: session.unreadCount, look: .tone(StatusPalette.unread))

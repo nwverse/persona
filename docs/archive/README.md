@@ -9,6 +9,9 @@ Place necessary historical text under its module directory and list it below.
 
 | File | Contents |
 | --- | --- |
+| `android/2026-11-09-inbox-completion-section-read.md` | Completion projection, assistant-section read controls and synthetic UI/API checks (#1807) |
+| `android/2026-11-08-inbox-conversation-identity.md` | Grouped inbox chat-kind and sender identity loss, historical negative controls and native render checks (#1583) |
+| `android/2026-11-08-android-inbox-swipe.md` | Grouped inbox swipe regression, historical cause, synthetic pointer and reconciliation checks (#1491) |
 | `assistant/task-completion-6525.md` | Completion race reproductions, reconnect ordering, and historical evidence limits (#6525) |
 | `apple/apple-rolling-compatibility-6192-acceptance.md` | Actual pre-rename hub interoperability, final Apple full-suite counts, inspected GUI evidence, preserved baseline failures and native-system limits (#6192 / #6277) |
 | `apple/apple-extension-stream-6176.md` | Apple native extension streams: isolated-hub acceptance, atomic reduction, consent/fences and remaining GUI/unit gates (#6176) |
@@ -28,6 +31,8 @@ Place necessary historical text under its module directory and list it below.
 | `integrations/msg-render-plan.md` | Message reading and rendering pipeline: diagnosis and rework plan |
 | `integrations/msg-render-verification.md` | Real-data verification of the message pipeline lane (stages 2–4) |
 | `integrations/session-verify.md` | Real-data verification of session reading and message sending (2026-10-31) |
+| `operations/tab-switch-performance-739.md` | Persona/Agents switching CPU and request measurements, targeted fixes and the separate Mac/TestFlight acceptance boundary (#739) |
+| `operations/apple-tab-switch-validation-739.md` | Original Apple 240-sample matrix, cadence/payload observations, hidden HTTP follow-up and open acceptance gates (#739 / #1159) |
 | `operations/node-link-update-validation.md` | Persona Link node update acceptance (#1158) |
 | `operations/persona-only-277-acceptance.md` | Persona-only naming acceptance (#277) |
 | `apple/plan-chat-topbar.md` | Superseded Apple chat-header proposal and decisions; current implementation is in the iOS guide |
@@ -49,6 +54,7 @@ Place necessary historical text under its module directory and list it below.
 | `redesign/research/persona-protocol.md` | Persona hub protocol research (for a new Android client) |
 | `redesign/research/public-direct-ipv6.md` | Direct public connectivity, IPv6, TLS, and persistent-connection keepalive: research notes |
 | `redesign/ux.md` | Interaction and UI specification (shared by both platforms) |
+| `apple/2026-11-09-ios-idle-energy.md` | Six synthetic before/after energy-workload windows, single-flight boundaries, lifecycle regressions and preserved Instruments/device acceptance gaps (#1634 / #1633) |
 
 The [historical redesign index](redesign/README.md) groups the retained interaction drafts and research.
 The retained [chat-header prototype](apple/prototypes/chat-topbar.html) is a text-only historical design, not a production screen.

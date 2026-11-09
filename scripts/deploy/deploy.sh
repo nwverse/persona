@@ -4,13 +4,17 @@
 #   ./scripts/deploy/deploy.sh <hub machine>   # only the hub
 #   ./scripts/deploy/deploy.sh <machine id>    # only one machine (node binary; the hub restarts its connection)
 #   ./scripts/deploy/deploy.sh web             # only the web client (web/, docs/web/web.md): no restart
-# The checkout must contain origin/master (it fetches it first), else nothing is deployed; PERSONA_DEPLOY_ANY_COMMIT=1
-# skips the check.
+# The checkout must contain the remote's default branch (it fetches it first), else nothing is deployed;
+# PERSONA_DEPLOY_ANY_COMMIT=1 skips the check.
 # Who may open the hub's admin UI (docs/operations/admin.md): --admin-access <loopback|lan|cidrs|any> [--admin-cidrs a,b] (or
 # PERSONA_ADMIN_ACCESS / PERSONA_ADMIN_CIDRS) sets it on the hub; without them a hub that never had one chosen asks on
 # a terminal, else keeps the default (lan) and says so.
 set -euo pipefail
 cd "$(dirname "$0")/../.."
+# All callers, including remote build computers, serialize against the hub's lock.
+if [ "${PERSONA_OPERATION_DEPLOY_LOCKED:-}" != 1 ]; then
+  exec python3 scripts/operations/operation_lock.py deploy -- bash "$PWD/scripts/deploy/deploy.sh" "$@"
+fi
 # Normalize caller overrides before reading deployment options; never print their values.
 eval "$(python3 scripts/persona_identity.py --env)"
 # The question and its explanations live in install.sh (the public installer asks the same).
@@ -33,26 +37,36 @@ if [ -n "$ADMIN_ACCESS" ] && ! admin_access_valid "$ADMIN_ACCESS" "$ADMIN_CIDRS"
   exit 2
 fi
 set -- ${ARGS[@]+"${ARGS[@]}"}
-# Only from a checkout that has everything already on master (#1314): a hub or web deploy from an older branch puts
-# back what other people deployed since (2026-11-04: one from before #1283 undid its web change 13 minutes later).
+# Only from a checkout that has everything already on the default branch: a hub or web deploy from an older branch
+# puts back what other people deployed since (docs/lessons/server.md "Deploying from a stale branch").
 # PERSONA_DEPLOY_ANY_COMMIT=1 deploys anyway, e.g. to roll back on purpose.
+# The default branch is the one the remote names now; else the clone's origin/HEAD, which is set at clone time and
+# can name a branch the remote no longer has; else master. The remote's answer counts only if it is a valid branch
+# name, and the branch is fetched as refs/heads/<name>: a bare name starting with "-" would be a git fetch option.
 if [ -z "${PERSONA_DEPLOY_ANY_COMMIT:-}" ]; then
-  if ! git fetch -q origin master 2>/dev/null; then
-    echo "deploy: could not fetch origin/master to check this checkout is up to date; PERSONA_DEPLOY_ANY_COMMIT=1 deploys anyway" >&2
+  DEFAULT_BRANCH=$(git ls-remote --symref origin HEAD 2>/dev/null |
+    awk '$1 == "ref:" && $3 == "HEAD" && sub("^refs/heads/", "", $2) { print $2; exit }') || true
+  if [ -z "$DEFAULT_BRANCH" ] || ! git check-ref-format "refs/heads/$DEFAULT_BRANCH"; then
+    DEFAULT_BRANCH=$(git symbolic-ref --quiet refs/remotes/origin/HEAD 2>/dev/null) || true
+    DEFAULT_BRANCH=${DEFAULT_BRANCH#refs/remotes/origin/}
+  fi
+  DEFAULT_BRANCH=${DEFAULT_BRANCH:-master}
+  if ! git fetch -q origin "refs/heads/$DEFAULT_BRANCH" 2>/dev/null; then
+    echo "deploy: could not fetch origin/$DEFAULT_BRANCH to check this checkout is up to date; PERSONA_DEPLOY_ANY_COMMIT=1 deploys anyway" >&2
     exit 2
   fi
   if ! git merge-base --is-ancestor FETCH_HEAD HEAD; then
-    echo "deploy: this checkout ($(git rev-parse --short HEAD)) is missing commits on origin/master ($(git rev-parse --short FETCH_HEAD))." >&2
-    echo "  Deploying it would undo what was deployed from them: merge origin/master in or rebase onto it (or deploy from a fresh" >&2
-    echo "  'git worktree add --detach <dir> origin/master'); PERSONA_DEPLOY_ANY_COMMIT=1 deploys it anyway." >&2
+    echo "deploy: this checkout ($(git rev-parse --short HEAD)) is missing commits on origin/$DEFAULT_BRANCH ($(git rev-parse --short FETCH_HEAD))." >&2
+    echo "  Deploying it would undo what was deployed from them: merge origin/$DEFAULT_BRANCH in or rebase onto it (or deploy from a fresh" >&2
+    echo "  'git worktree add --detach <dir> origin/$DEFAULT_BRANCH'); PERSONA_DEPLOY_ANY_COMMIT=1 deploys it anyway." >&2
     exit 2
   fi
 fi
 _env=$(python3 scripts/persona_config.py env) || exit $?
 eval "$_env"; unset _env
 cd server
-# Straight from master, for when a change cannot wait for a release: the build number is the build time (UTC), so an
-# older release never replaces it and the next release does (docs/operations/hub-update.md "Deploying directly").
+# Straight from the default branch, for when a change cannot wait for a release: the build number is the build time
+# (UTC), so an older release never replaces it and the next release does (docs/operations/hub-update.md "Direct deploys").
 BUILD="$(date -u +%Y%m%d%H%M)"
 VERSION="$(git describe --always --dirty 2>/dev/null || echo dev)-$BUILD"
 TARGETS=("$@")
@@ -253,19 +267,28 @@ $command")
 # install_program <hub machine id> <os-arch> <program>: a program released with personad (update.ProgramNames) next to
 # the hub's personad, the same build as personad: personad-wechat (the WeChat bot, docs/extensions/wechat.md; the hub
 # starts it only when `version -v` matches; Telegram's connector is an extension now, #1704), and persona-hub and
-# persona-manager, the hub's and the manager's own programs (docs/server/server.md "Programs").
+# persona-manager, the hub's and the manager's own programs (docs/server/server.md "Programs"). Those two keep a .prev
+# of the one replaced (none when there was none, so no older one is left there): a hub run as persona-hub goes back
+# on them with personad when the switch fails (hub-systemd.sh).
 install_program() {
-  local id=$1 plat=$2 name=$3 bin
+  local id=$1 plat=$2 name=$3 bin keep=
   bin="bin/$name-$plat"
   GOOS=${plat%-*} GOARCH=${plat#*-} CGO_ENABLED=0 go build -trimpath -ldflags "$LDFLAGS" -o "$bin" "./cmd/$name" || return 1
+  case $name in persona-hub | persona-manager)
+    keep="{ if [ -f \"\$PERSONA_HOME/bin/$name\" ]; then cp -p \"\$PERSONA_HOME/bin/$name\" \"\$PERSONA_HOME/bin/$name.prev\"; else rm -f \"\$PERSONA_HOME/bin/$name.prev\"; fi; } && " ;;
+  esac
   if is_here "$id"; then
     local root
     root=$(state_root)
     mkdir -p "$root/bin"
-    cp "$bin" "$root/bin/$name.new" && mv "$root/bin/$name.new" "$root/bin/$name"
+    if [ -n "$keep" ]; then
+      PERSONA_HOME="$root" sh -c "${keep% && }" || return 1
+    fi
+    local target="$root/bin/$name"
+    cp "$bin" "$target.new" && { [ ! -L "$target" ] || rm -f "$target"; } && mv "$target.new" "$target" || return 1
     python3 ../scripts/persona_identity.py --alias-binaries "$root/bin"
   else
-    remote_state "$PERSONA_HUB_SSH" "mkdir -p \"\$PERSONA_HOME/bin\" && cat > \"\$PERSONA_HOME/bin/$name.new\" && chmod 755 \"\$PERSONA_HOME/bin/$name.new\" && mv \"\$PERSONA_HOME/bin/$name.new\" \"\$PERSONA_HOME/bin/$name\" && persona_alias_binaries \"\$PERSONA_HOME/bin\"" < "$bin"
+    remote_state "$PERSONA_HUB_SSH" "$keep""mkdir -p \"\$PERSONA_HOME/bin\" && cat > \"\$PERSONA_HOME/bin/$name.new\" && chmod 755 \"\$PERSONA_HOME/bin/$name.new\" && { [ ! -L \"\$PERSONA_HOME/bin/$name\" ] || rm -f \"\$PERSONA_HOME/bin/$name\"; } && mv \"\$PERSONA_HOME/bin/$name.new\" \"\$PERSONA_HOME/bin/$name\" && persona_alias_binaries \"\$PERSONA_HOME/bin\"" < "$bin"
   fi
 }
 

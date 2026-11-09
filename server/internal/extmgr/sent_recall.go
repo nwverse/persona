@@ -95,6 +95,9 @@ func (h *Manager) recallCheck(ctx context.Context, row db.SentAsUser, now time.T
 	case !rc.CanRecall(row.Action, 0):
 		return nil, recallErr(RecallNotRecallable, c.Name()+" cannot take back this kind of message")
 	}
+	if rerr := h.recallOwnerCheck(c, row); rerr != nil {
+		return nil, rerr
+	}
 	age := max(now.Sub(row.At), 0)
 	if limit, limited := h.recallWindow(); (limited && age > limit) || !rc.CanRecall(row.Action, age) {
 		return nil, recallErr(RecallTooOld, "this message was sent too long ago to be taken back")
@@ -143,7 +146,7 @@ func (h *Manager) RecallSent(ctx context.Context, id int64, confirm RecallConfir
 		return row, err
 	}
 	cctx, cancel := context.WithTimeout(ctx, sentRecallTimeout)
-	err = rc.Recall(cctx, connector.SentMessage{Action: row.Action, Ref: row.MessageRef, Target: row.Target})
+	err = rc.Recall(cctx, connector.SentMessage{Action: row.Action, Ref: row.MessageRef, Target: row.Target, At: row.At})
 	unfinished := cctx.Err() != nil // asked too long, or the request went away: the connector may not have heard how it ended
 	cancel()
 	if err != nil {
