@@ -1413,6 +1413,7 @@ A connector that folds several notifications into one thread (GitHub CI failures
 - A literal gate still checks every template of a catalog on a text that matches none (265 for `InboxText`): index the templates by the first byte of their first literal, and try the ones that start with a placeholder for every text (`i18n.templateIndex`).
 - Background tasks, subagents and a subagent's latest tool are written by hand too, each type under its own layout hash (`backgroundWireLayout`, `subagentWireLayout`, `workflowToolWireLayout`). A field added to one needs its line in `session_wire.go` and that hash; until then that type goes back to reflection.
 - The paged index rebuilt every row's item (a summary marshalled, the full row and search text joined) on each list update and `sessions.revs`, for one changed row: 2.65 MB for 150 rows. The index's own item is the memo: when its stored full row is the row's new encoding with the same suffix, its summary is the row's too, since the summary is cut from the fields that encoding holds (`indexedRow`, 0.10 MB). Text read from the row itself is still compared, because the encoding folds every invalid UTF-8 byte into the same escape. The keys must line up: a list with two rows under one id pairs one row's summary with the other's bytes, so after such a list, and for the list after it, compute every row. Prove it with the full computation run beside it on changing lists, step for step (`TestIndexRowReuseMatchesFullPath`), and let `Replace` keep a payload that is the stored slice itself without walking it by reflection (`sessionlist.sameItem`).
+- With the index's rows reused, a `sessions.revs` reindex still copied the whole list to stamp the manager on it and encoded every row again: 7.26 MB and 10.5 ms for 2,000 rows, one changed (#2783). Take the rows from the push's kept encodings and read the scalars from the kept list itself; stamp the manager only where the index reads it, the summary of a row marshalled again (1.05 MB, 4.0 ms). A benchmark that bumps a rev in place on a list set without its bytes measures only the path that encodes everything: keep the list as the manager's are (`setSessionListRaws`, then a push) and hand over a copy per revs, as `onEvent` does.
 
 ## Hot paths: compressing the same file on every request, a privacy scan that cannot read gzip (2026-11-09, #2219)
 
@@ -1489,3 +1490,37 @@ field, so `-race` reports it, and it may end up serving the new peer too. Pass w
 records the node's lines) into the constructor, and serve the peer through a local variable. A rule test also needs
 steps that differ only in the guarded rule: revs followed by a list that differs anyway, or a `call` that waits for the
 pending count to drop, pass with the rule deleted.
+
+## Inbox rows as json: compression, HOT and the NUL guard (2026-11-10, #2779)
+
+- **Compression goes in the same `ALTER` as the rewrite.** `ALTER COLUMN … SET COMPRESSION lz4` on its own changes only
+  future writes, and `VACUUM FULL` or a same-type `ALTER … TYPE jsonb` copies each value with its old compression: 0 of
+  28,600 rows turned lz4 either way. A type change resets the column's compression to the default, so a `SET
+  COMPRESSION` run before it is lost too (`USING data::text::jsonb` after it: all pglz). Put the type change (`USING
+  data::json`) and `SET COMPRESSION` in one `ALTER TABLE`, in either order: every value is computed again and compressed
+  with lz4 (28,600 of 28,600, about 2 s). Check with `pg_column_compression`. For servers built without lz4
+  (`feature_not_supported`) or before Postgres 14 (`syntax_error`), catch the error in a `DO` block around `EXECUTE`: a
+  statement written into the block is parsed when the block is compiled, so a syntax error escapes the handler.
+- **json, not jsonb, when every reader unmarshals the bytes.** The manager's start read of 3,999 items spent 59 of its
+  67 ms sending the rows (jsonb back to text after pglz); as lz4 json it takes about 30 ms. Each half alone saves less:
+  jsonb with lz4 -20 ms, json with pglz -13 ms, both -34 ms (same rows, 11 rotated rounds). Old prepared statements see
+  a changed result type once (`cached plan must not change result type`); pgx drops the statement on that error and
+  prepares it again on the next call.
+- **A generated column, not an expression index, for a lookup into the document.** An index on `(data->>'source')`
+  makes every update of `data` touch that index, so no update is HOT (0 of 4,800); a stored generated column whose
+  value did not change leaves HOT possible (1,481 of 4,800 on the same updates; 142 to 300 of 300 per round on upserts
+  shaped like `PutInboxItem`, from 0, once `updated_at` left `inbox_items_open`). An index on a column every upsert
+  changes rules out HOT as well; `TestDoneInboxItemsIndexed` allows only `done_at`, `id` and `source` in indexes.
+- **The generated column is also the NUL guard.** json accepts `\u0000` in a string, jsonb refused it on write.
+  `data->>'source'` parses the whole document, so a write with `\u0000` anywhere still fails with 22P05, as before.
+  Without the column such a row would be stored, and the done page's `data->'connector'` would fail on it later. Keep a
+  computed column (or a check) that parses the document if `source` ever goes or becomes a column Go writes:
+  `TestInboxItemWithNULRefused` fails without one.
+- **A compatibility overload makes untyped calls ambiguous.** `jsonb_typeof(json)`, added so a pre-0471 build's done
+  page still runs, makes `jsonb_typeof('…')` or `jsonb_typeof($1)` with an unknown-typed argument fail in the whole
+  database (`function jsonb_typeof(unknown) is not unique`). Every existing call passes a typed value; new SQL casts
+  the argument (`$1::jsonb`) until a later migration drops the shim, once no pre-0471 build can run.
+
+## Optional filesystem labels must not gate inventory (2026-11-10, #2750)
+
+A regular Git HEAD can block in open despite stat succeeding. Keep project labels outside authoritative session discovery, cap concurrent metadata readers, and deduplicate pending paths across cache refreshes. Return all discovered session identities and busy states even when labels are unavailable; never replace a failed session read with an empty idle inventory. Test with a HEAD whose read cannot complete until after the inventory response, and retain a synchronous negative control.

@@ -2,6 +2,7 @@ package assistant
 
 import (
 	"cmp"
+	"context"
 	"slices"
 	"time"
 	"unicode/utf8"
@@ -83,6 +84,21 @@ func linkAttention(l i18n.Lang, agents []fleetInput, ixs []proto.Interaction, to
 		out.Items = append(out.Items, it)
 	}
 	return out
+}
+
+// linkCovers is whether card ix, told, is what Persona Link's summary (linkAttention, as liveLoop works it out next)
+// shows for its agent and rings for: the card that stands for the agent, notifying, among the listed items, not in
+// More. Only such a card's push may a Persona Link desktop take over from the phone (hub: notifyInteraction): another
+// card of the same agent and one past the cap ring nowhere, and one whose row does not say "Needs you" yet is not
+// rung for by the next summary.
+func (s *Service) linkCovers(ix proto.Interaction) bool {
+	agents, ixs, told := s.fleetInputs()
+	for _, it := range linkAttention(s.lang(context.Background()), agents, ixs, told).Items {
+		if it.InteractionID == ix.ID && it.MachineID == ix.MachineID && it.SessionID == ix.SessionID {
+			return it.Notify
+		}
+	}
+	return false
 }
 
 // waitingSince is when the agent started waiting: its card's time, else when it went "Needs you" (zero: unknown).
