@@ -124,7 +124,8 @@ export function withExactInit(handler: ExactInitializer): NonNullable<Program["i
 
 function initializeProgram(prog: Program, init: Init, hub: Hub, rawFrame: string): ReturnType<NonNullable<Program["init"]>> {
   const handler = prog.init;
-  if (!handler) return;
+  if (handler == null) return;
+  if (typeof handler !== "function") throw new TypeError("prog.init is not a function");
   // Only the wrapper's own inert data marker opts in; inherited/getter markers do not.
   if (Object.getOwnPropertyDescriptor(handler, Symbol.for(EXACT_INIT_KEY))?.value === true) {
     const exact = ExactJSON.parse(rawFrame).field("params");

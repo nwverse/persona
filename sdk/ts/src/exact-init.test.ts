@@ -37,6 +37,35 @@ test("default initialization keeps parsed values, two arguments and receiver", a
   } finally { h.conn.close(); }
 });
 
+test("nullish initializers keep optional-call behavior for own and inherited values", async () => {
+  for (const inherited of [false, true]) for (const init of [undefined, null]) {
+    const identity = { id: "fixture", version: "1" };
+    const program = (inherited ? Object.assign(Object.create({ init }), identity) : { ...identity, init }) as Program;
+    const h = harness(program);
+    try {
+      expect((await h.call("initialize", `{${base}}`)).error).toBeUndefined();
+      expect((await h.call("ping", "{}")).error).toBeUndefined();
+    } finally { h.conn.close(); }
+  }
+});
+
+test("non-callable initializers fail without initializing and can retry after replacement", async () => {
+  for (const inherited of [false, true]) for (const init of [false, 0, "", true, 1, "invalid", {}]) {
+    const identity = { id: "fixture", version: "1" };
+    const program = (inherited ? Object.assign(Object.create({ init }), identity) : { ...identity, init }) as unknown as Program;
+    const h = harness(program);
+    try {
+      const failure = await h.call("initialize", `{${base}}`);
+      expect(failure.result).toBeUndefined();
+      expect(failure.error.message).toMatch(/init is not a function/);
+      expect((await h.call("ping", "{}")).error.code).toBe("not_initialized");
+      Object.defineProperty(program, "init", { value: function() { expect(this).toBe(program); expect(arguments.length).toBe(2); } });
+      expect((await h.call("initialize", `{${base}}`)).error).toBeUndefined();
+      expect((await h.call("ping", "{}")).error).toBeUndefined();
+    } finally { h.conn.close(); }
+  }
+});
+
 test("opted initialization retains lexical config and duplicate order without changing parsed Init", async () => {
   const config = '{"large":9223372036854775807,"exponent":1e0,"n":"invalid","n":2,"nil":null}';
   const params = `{${base},"config":${config}}`;
