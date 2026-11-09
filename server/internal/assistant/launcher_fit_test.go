@@ -205,6 +205,17 @@ func TestUnreadableLauncherListDoesNotBlock(t *testing.T) {
 	if params, err := s.AgentStartParams(ctx, AgentStartParams{MachineID: "server", Params: map[string]any{"launcher": "gateway"}}); err != nil || params["launcher"] != "gateway" {
 		t.Fatalf("new agent: %v %v", params, err)
 	}
+	// An answer that names none of the node's own launchers is no list either (a node that read its shell names
+	// claude at least): l4 says nothing now.
+	f.mu.Lock()
+	f.zshrc["l4"] = []proto.Launcher{}
+	f.mu.Unlock()
+	if params, err := s.AgentStartParams(ctx, AgentStartParams{MachineID: "l4", Params: map[string]any{"launcher": "gateway"}}); err != nil || params["launcher"] != "gateway" {
+		t.Fatalf("an empty answer: %v %v", params, err)
+	}
+	if params, err := s.AgentStartParams(ctx, AgentStartParams{MachineID: "l4", Params: map[string]any{}}); err != nil || params["launcher"] != "gateway" || params["model"] != "gw-model" {
+		t.Fatalf("an empty answer, the default: %v %v", params, err)
+	}
 }
 
 // A plan made while the list could not be read swaps at dispatch, and the card then shows it.

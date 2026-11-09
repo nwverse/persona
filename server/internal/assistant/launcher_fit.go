@@ -78,12 +78,13 @@ func (s *Service) fitLauncher(ctx context.Context, m Device, own startPick, para
 
 // launchersHere is what machine can start: machineLaunchers (its own launchers but the hidden ones, and the managed
 // ones) and those hub.json names for it (a wrapper the node may not list, configuredLauncher). known false when its
-// list can't be read.
+// list can't be read, or the answer names none of its own: a node that read its shell lists plain claude at least
+// (node mergeLaunchers), so such an answer is no list.
 func (s *Service) launchersHere(ctx context.Context, machine string) (list []proto.Launcher, known bool) {
 	cctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 	list, err := s.machineLaunchers(cctx, machine)
-	if err != nil {
+	if err != nil || !slices.ContainsFunc(list, func(l proto.Launcher) bool { return compat.Source(l.Source) != "persona" }) {
 		return nil, false
 	}
 	for _, c := range s.hello(ctx).Models.Launchers[machine] {
