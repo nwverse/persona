@@ -378,8 +378,17 @@ export function listenSession(mid: string, sid: string, l: SessionListener) {
   if (!sessionListeners.has(k)) sessionListeners.set(k, new Set());
   sessionListeners.get(k)!.add(l);
   return () => {
-    sessionListeners.get(k)?.delete(l);
+    const ls = sessionListeners.get(k);
+    ls?.delete(l);
+    // the last listener of a chat takes its set along: every reader treats a missing key as an empty set, and the
+    // reconnect walk would otherwise visit one for every chat ever opened
+    if (ls?.size === 0) sessionListeners.delete(k);
   };
+}
+
+/** Tests only: how many sessions have a listener set. */
+export function sessionListenerKeysForTests() {
+  return sessionListeners.size;
 }
 
 // ── other pushes (inbox, lark, terminal…): pages that need them listen by type ──
