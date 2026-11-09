@@ -27,6 +27,13 @@ var ciArtifactRepo = lazyre.New(`^([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)#([1-9][0-9]*
 var ciWaitSignal = lazyre.New(`(?i)\b(ci|checks?|pipeline|workflows?|builds?|tests?)\b|持续集成|构建|测试|检查|ビルド|テスト|チェック`)                 // i18n-ignore: match model output
 var ciOtherWait = lazyre.New(`(?i)\b(review|reviews|approval|deployment|deploy|feedback)\b|审核|审查|评审|部署|上线|反馈|レビュー|承認|デプロイ|フィードバック`) // i18n-ignore: match model output
 
+// ciWaitIntent is shared by triage and watch registration so unrelated waits
+// never require a second transcript read.
+func ciWaitIntent(w *proto.WorkState) bool {
+	wait := w.Wait + " " + w.Line
+	return !ciOtherWait.MatchString(wait) && ciWaitSignal.MatchString(wait)
+}
+
 // startCIWatch records only an unambiguous PR. A number without a repository
 // can be checked only against the session directory's current branch.
 func startCIWatch(c proto.Session, e *db.SessionWork, now time.Time, ask, reply string) {
@@ -34,8 +41,7 @@ func startCIWatch(c proto.Session, e *db.SessionWork, now time.Time, ask, reply 
 	if e.WakeAt == nil || w.On != proto.WaitExternal || w.ResetsAt != nil {
 		return
 	}
-	wait := w.Wait + " " + w.Line
-	if ciOtherWait.MatchString(wait) || !ciWaitSignal.MatchString(wait) {
+	if !ciWaitIntent(w) {
 		return
 	}
 	texts := []string{w.Wait, w.Line, c.LastText, ask, reply}

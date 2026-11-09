@@ -1457,3 +1457,61 @@ func TestCIWatchCompletedWithSkippedUsesAccurateWording(t *testing.T) {
 		})
 	}
 }
+
+func TestCIWatchTranscriptReadOnlyForCIWait(t *testing.T) {
+	for _, tc := range []struct {
+		name, wait, line string
+		reads            int
+		watch            bool
+	}{
+		{"customer feedback", "customer feedback", "Waiting for feedback", 1, false},
+		{"review", "code review", "Waiting for review", 1, false},
+		{"deployment", "deployment", "Waiting for deployment", 1, false},
+		{"CI checks", "CI checks", "Waiting for CI", 2, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s, f := workService(t)
+			c := stopped("ci", "PR #12; tests already passed")
+			f.sessions["box"] = []proto.Session{c}
+			raw, _ := json.Marshal(map[string]any{"phase": "blocked", "on": "external", "line": tc.line, "wait": map[string]any{"what": tc.wait, "check_minutes": 10}})
+			f.triage = string(raw)
+			reads, gets := 0, 0
+			f.answerNode(DeviceSessionItems, func(_ string, _ json.RawMessage) (any, error) { reads++; return map[string]any{"items": []any{}}, nil })
+			f.answerNode(DeviceSessionGet, func(_ string, _ json.RawMessage) (any, error) {
+				gets++
+				return map[string]any{"session": c, "ok": true}, nil
+			})
+			triage(t, s, "ci")
+			e := entryOf(t, s, "ci")
+			if reads != tc.reads || gets != 2 || (e.Work.CI != nil) != tc.watch || e.WakeAt == nil {
+				t.Fatalf("reads %d gets %d work %+v", reads, gets, e)
+			}
+		})
+	}
+}
+
+func TestNonCIWaitStillRejectsActivityDuringTriage(t *testing.T) {
+	ctx := context.Background()
+	s, f := workService(t)
+	c := stopped("ci", "Waiting for customer feedback")
+	f.sessions["box"] = []proto.Session{c}
+	f.triage = `{"phase":"blocked","on":"external","line":"Waiting for feedback","wait":{"what":"customer feedback","check_minutes":10}}`
+	gets := 0
+	h := &ciSwapHub{fakeHub: f}
+	h.onDevice = func(p DeviceCall) {
+		if p.Method == DeviceSessionGet {
+			gets++
+			if gets == 2 {
+				s.workStarted(ctx, "box", "ci", time.Now())
+			}
+		}
+	}
+	s.hub = h
+	triage(t, s, "ci")
+	if gets != 2 {
+		t.Fatalf("session reads %d", gets)
+	}
+	if e, ok := s.workEntry([2]string{"box", "ci"}); ok && e.WakeAt != nil {
+		t.Fatalf("activity revived non-CI wait: %+v", e)
+	}
+}

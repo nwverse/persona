@@ -239,8 +239,10 @@ func (s *Service) triageTurn(ctx context.Context, v *workView, machine string, c
 	}
 	s.actOn(ctx, v, machine, c, &e)
 	if e.WakeAt != nil && e.Work.On == proto.WaitExternal && e.Work.ResetsAt == nil {
-		ask, reply := s.lastTurnOf(ctx, machine, c.SessionID)
-		startCIWatch(c, &e, time.Now(), ask, reply)
+		if ciWaitIntent(&e.Work) {
+			ask, reply := s.lastTurnOf(ctx, machine, c.SessionID)
+			startCIWatch(c, &e, time.Now(), ask, reply)
+		}
 		if e.Work.CI != nil {
 			closed, proof, err := s.ciClosedTodo(ctx, machine, c.SessionID, "", last.Work, c.UpdatedAt)
 			if err != nil {
