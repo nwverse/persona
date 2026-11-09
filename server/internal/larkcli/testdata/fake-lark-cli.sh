@@ -27,7 +27,9 @@ case "${1:-}" in
     case "$scenario" in
       not_logged_in) cat "$base/auth_not_logged_in.json" ;;
       expired) cat "$base/auth_expired.json" ;;
-	  auth_missing_scope) cat "$base/auth_missing_scope.json" ;;
+      auth_missing_scope) cat "$base/auth_missing_scope.json" ;;
+      needs_refresh) cat "$base/auth_needs_refresh.json" ;;
+      ready) cat "$base/auth_ready.json" ;;
       expiring) cat "$base/auth_expiring.json" ;;
       *) cat "$base/auth_status.json" ;;
     esac
@@ -37,7 +39,7 @@ case "${1:-}" in
     case "$scenario" in
       timeout) sleep 5; exit 0 ;;
       missing_scope) cat "$base/error_missing_scope.json"; exit 3 ;;
-	  rate_limited) cat "$base/error_rate_limited.json"; exit 4 ;;
+      rate_limited) cat "$base/error_rate_limited.json"; exit 4 ;;
       nonzero) printf '%s\n' 'message-body-example' >&2; exit 17 ;;
     esac
     case "$scenario:${2:-}" in

@@ -25,13 +25,14 @@ type AuthStatus struct {
 	MissingScopes    []string  `json:"missing_scopes,omitempty"`
 }
 
-// DaysUntilExpiry returns the rounded-up number of calendar days remaining. A
-// positive sub-day duration is reported as one day.
+// DaysUntilExpiry returns the rounded-up number of calendar days remaining for
+// the refresh token. The access token can be renewed automatically before this
+// deadline, so its expires_at value is not a login expiry.
 func (a AuthStatus) DaysUntilExpiry(now time.Time) int {
-	if a.ExpiresAt.IsZero() {
+	if a.RefreshExpiresAt.IsZero() {
 		return 0
 	}
-	d := a.ExpiresAt.Sub(now)
+	d := a.RefreshExpiresAt.Sub(now)
 	if d <= 0 {
 		return 0
 	}
