@@ -175,6 +175,7 @@ struct InboxHandOffBar: View {
                 Text(name(handOff.target)).lineLimit(1)
                 if lastTime {
                     Chip(text: String(localized: "Last time [Inbox Hand-Off]"), look: .tint(Theme.accent), compact: true)
+                        .fixedSize()
                         .accessibilityHidden(true)
                 }
                 ThemedIcon(Theme.Icon.choices).font(Theme.Font.label).foregroundStyle(.secondary)
@@ -184,7 +185,8 @@ struct InboxHandOffBar: View {
             .padding(.horizontal, Theme.Space.s)
             .padding(.vertical, Theme.Space.sm)
             .background(Theme.accent.opacity(0.12), in: .capsule)
-            .frame(maxWidth: Theme.Size.box120, alignment: .leading)
+            // Room for the Last time mark next to the name: at the usual width the name was squeezed to "…".
+            .frame(maxWidth: lastTime ? Theme.Size.box200 : Theme.Size.box120, alignment: .leading)
             .fixedSize(horizontal: false, vertical: true)
         }
         .buttonStyle(.plain)
