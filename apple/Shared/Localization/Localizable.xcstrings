@@ -119611,6 +119611,29 @@
       },
       "extractionState" : "manual"
     },
+    "The main conversation and Agents can't run on it. Processing, Sorting and other uses without a picked model may now use it; change that under Models." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "主对话和 Agent 不能用它。信息处理、信息筛选等没有单独选模型的用途，现在可能会改用它；要调整，到「模型配置」里选。"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The main conversation and Agents can't run on it. Processing, Sorting and other uses without a picked model may now use it; change that under Models."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "メインの会話と Agent では使えません。情報処理や仕分けなど、モデルを選んでいない用途ではこれが使われることがあります。変更は「モデル設定」で。"
+          }
+        }
+      },
+      "extractionState" : "manual"
+    },
     "To use it for the main conversation or agents, pick it in Model Settings." : {
       "localizations" : {
         "zh-Hans" : {
