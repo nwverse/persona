@@ -1,5 +1,10 @@
 # Lessons: testing and validation
 
+- UI screenshot evidence must be unobscured, not merely present in the accessibility tree (#2705). A localized
+  notification prompt left the chat's elements discoverable while covering the screenshot. Handle the current
+  language's permission button, assert that the summary and reply are hittable, check for system alerts before
+  capturing, and actually inspect every image before publication.
+
 - A second failed start inside the automatic launcher-health throttle does not schedule another probe (#2600). A retry fixture that models recovery must invoke the supported explicit health check and observe its passing record; polling the record alone cannot create recovery. Keep the production throttle, terminal-only failure rules, and retry assertions unchanged.
 
 - On Linux, replacing a running executable requires a new file and rename; direct writes fail with `ETXTBSY`. Use a ready handshake and reap the fixture process to test the real overlap.
@@ -570,6 +575,7 @@ Pin the visual style, not an alternate navigation tree. A shared launch helper t
 ## Lazy timelines: unscrolled rows do not exist, and identical text may occur elsewhere (2026-11-04, #1055)
 
 - GitHub thread timelines use `LazyVStack`; the bottom comment is absent from accessibility until scrolled into view, so `waitForExistence` alone waits in vain.
+  Settings forms are the same: an extension's field below the fold (cua's no-auto-lock list, #2446) exists only once scrolled to, so scroll first, then assert.
 - Retained navigation pages may keep Inbox in the tree, whose comment preview has the same text. Text waits accidentally passed in Liquid Glass but failed in BeautifulUI's different previews.
 - Wait for page-specific elements (header), then search row identifiers (`github.entry.<id>`) while swiping up. Before screenshots, move the target into the upper half;
   otherwise "one row barely visible" counts as found and several screenshots capture the same screen.
@@ -586,6 +592,7 @@ Pin the visual style, not an alternate navigation tree. A shared launch helper t
 
 - **Container `accessibilityIdentifier` overrides its children's identifiers**: identifying a row `VStack` made its `Menu` `market-menu-…` unfindable. Identify only clickable controls,
   or first apply `.accessibilityElement(children: .contain)` to the container.
+  Again in an extension's machine list (#2446): the field row's `plugin-field-…` replaced each Mac's `extension-machine-setup-<id>`; the row now leaves the identifier to the list's title and switches.
 - **A `lineLimit`-cut `Text` still reads in full to XCUITest**: its label is the whole string, so "the last line is not there" never proves folding (#1666, `NewChatLayoutTests`). Assert the fold's control (Expand) and look at the screenshot.
 - **First taps just after sheet dismissal can be swallowed** (keyboard focus is still settling). Immediately tapping a list button after form Add does nothing, with no confirmation dialog.
   Wait for sheet-field `waitForNonExistence`, tap a harmless button (Refresh) first, then the target button.
