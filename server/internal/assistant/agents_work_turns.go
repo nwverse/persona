@@ -15,8 +15,8 @@ import (
 // retireTodoWork withdraws the manager's pending follow-ups for the agents of a todo that just ended (completed or a
 // failed start): the scheduled wake — one postponed while the machine was offline included — and the open work card
 // are cleared, so neither can wake the finished agent nor let a card answer back into the finished turn. The turn's
-// own work state is kept, as workStarted keeps it: with no wake and no card the tick never acts on the entry, and
-// triage never redoes a turn it already triaged.
+// own work state is kept, as workStartedObserved keeps it: with no wake and no card the tick never acts on the entry,
+// and triage never redoes a turn it already triaged.
 func (s *Service) retireTodoWork(keys ...[2]string) {
 	now := time.Now().UTC()
 	for _, k := range keys {
