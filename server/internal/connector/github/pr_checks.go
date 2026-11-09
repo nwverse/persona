@@ -76,10 +76,7 @@ func (c *Connector) PRChecks(ctx context.Context, repo string, number int) (PRCh
 	}
 	prPath := fmt.Sprintf("/repos/%s/pulls/%d", repo, number)
 	get := func(path string, out any) error {
-		header, err := c.Get(ctx, path, out)
-		if err != nil {
-			c.notePause(header, err)
-		}
+		_, err := c.Get(ctx, path, out) // a rate limit pauses the connector (request, notePause)
 		return err
 	}
 	readHead := func() (string, error) {

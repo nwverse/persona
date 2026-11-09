@@ -57,6 +57,11 @@ func TestRateLimitedPollWaitsItOut(t *testing.T) {
 			"", 119 * time.Second, 120 * time.Second},
 		{"secondary 403 with Retry-After", http.StatusForbidden, func(h http.Header) { h.Set("Retry-After", "90") },
 			"You have exceeded a secondary rate limit.", 89 * time.Second, 90 * time.Second},
+		{"secondary 403 without Retry-After", http.StatusForbidden, func(h http.Header) { // the quota's reset is not the end
+			h.Set("X-RateLimit-Limit", "5000")
+			h.Set("X-RateLimit-Remaining", "4000")
+			h.Set("X-RateLimit-Reset", strconv.FormatInt(time.Now().Add(50*time.Minute).Unix(), 10))
+		}, "You have exceeded a secondary rate limit.", 59 * time.Second, 60 * time.Second},
 		{"403 with the hour used up", http.StatusForbidden, func(h http.Header) {
 			h.Set("X-RateLimit-Limit", "5000")
 			h.Set("X-RateLimit-Remaining", "0")

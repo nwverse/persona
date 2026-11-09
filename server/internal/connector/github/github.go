@@ -105,6 +105,9 @@ type Connector struct {
 	// notifications poll included, wait until then. Only notePause sets it, and only later: a good answer in between
 	// does not lift it.
 	pausedUntil time.Time
+	// pauseStep: the length of the last pause notePause chose itself (GitHub named no time), doubled while the limit
+	// keeps coming back right after a pause.
+	pauseStep time.Duration
 
 	inbox inboxState   // inbox.go
 	opts  InboxOptions // rules.go
@@ -146,30 +149,52 @@ func (c *Connector) noteRate(h http.Header) {
 	}
 }
 
-// notePause records the pause GitHub asks for with a secondary rate limit (429, or 403 with "rate limit" or
-// Retry-After): until Retry-After (seconds or an HTTP date), else X-RateLimit-Reset, else an hour. It only extends
-// a pause, never shortens one; err is the request's error, h its answer's headers.
-// A 403 with X-RateLimit-Remaining 0 (the hour's requests used up) is a pause too.
+// How long notePause pauses when GitHub names no time: at least a minute, doubling (up to pauseLongest) while the
+// limit comes back right after a pause.
+var (
+	pauseFirst   = time.Minute
+	pauseLongest = time.Hour
+)
+
+// notePause records the pause GitHub asks for with a rate limit (429, or 403 with "rate limit", Retry-After or
+// X-RateLimit-Remaining 0), as GitHub's docs say: until Retry-After (seconds or an HTTP date); else, with the hour's
+// core requests used up (X-RateLimit-Remaining 0), until X-RateLimit-Reset; else for pauseFirst, doubled when the
+// last pause ended less than its own length ago. X-RateLimit-Reset alone says nothing: every answer carries the
+// core quota's, a secondary limit's too. Another quota used up (search) is no pause: noteRate keeps it apart.
+// It only extends a pause, never shortens one; err is the request's error, h its answer's headers.
 func (c *Connector) notePause(h http.Header, err error) {
 	message := strings.ToLower(err.Error())
-	if !strings.Contains(message, " 429 ") && !(strings.Contains(message, " 403 ") && (strings.Contains(message, "rate limit") || h.Get("Retry-After") != "" ||
-		h.Get("X-RateLimit-Remaining") == "0")) {
+	usedUp := h.Get("X-RateLimit-Remaining") == "0"
+	if !strings.Contains(message, " 429 ") && !(strings.Contains(message, " 403 ") && (strings.Contains(message, "rate limit") || h.Get("Retry-After") != "" || usedUp)) {
+		return
+	}
+	if resource := h.Get("X-RateLimit-Resource"); usedUp && resource != "" && resource != "core" && h.Get("Retry-After") == "" {
 		return
 	}
 	now := time.Now()
-	until := now.Add(time.Hour)
+	var until time.Time
 	if seconds, parseErr := strconv.Atoi(h.Get("Retry-After")); parseErr == nil && seconds > 0 {
 		until = now.Add(time.Duration(seconds) * time.Second)
 	} else if date, parseErr := http.ParseTime(h.Get("Retry-After")); parseErr == nil && date.After(now) {
 		until = date
-	} else if epoch, parseErr := strconv.ParseInt(h.Get("X-RateLimit-Reset"), 10, 64); parseErr == nil && time.Unix(epoch, 0).After(now) {
+	} else if epoch, parseErr := strconv.ParseInt(h.Get("X-RateLimit-Reset"), 10, 64); parseErr == nil && usedUp && time.Unix(epoch, 0).After(now) {
 		until = time.Unix(epoch, 0)
 	}
 	c.mu.Lock()
+	defer c.mu.Unlock()
+	if until.IsZero() {
+		if now.Before(c.pausedUntil) {
+			return // already paused: another read ran into the same limit
+		}
+		step := pauseFirst
+		if c.pauseStep > 0 && now.Before(c.pausedUntil.Add(c.pauseStep)) {
+			step = min(2*c.pauseStep, pauseLongest)
+		}
+		c.pauseStep, until = step, now.Add(step)
+	}
 	if until.After(c.pausedUntil) {
 		c.pausedUntil = until
 	}
-	c.mu.Unlock()
 }
 
 // pauseLeft is how long the pause GitHub asked for still lasts (notePause), zero when there is none.
@@ -438,7 +463,12 @@ func (c *Connector) request(ctx context.Context, method, path string, hdr http.H
 				Message string `json:"message"`
 			}
 			_ = json.Unmarshal(raw, &e)
-			return code, resp.Header, fmt.Errorf("GitHub %s %s: %d %s", method, path, code, Scrub(e.Message))
+			err := fmt.Errorf("GitHub %s %s: %d %s", method, path, code, Scrub(e.Message))
+			if code == http.StatusTooManyRequests || code == http.StatusForbidden {
+				// A secondary limit or the core quota holds for the whole token: whichever read runs into it pauses them all.
+				c.notePause(resp.Header, err)
+			}
+			return code, resp.Header, err
 		}
 		if readErr != nil {
 			return code, resp.Header, fmt.Errorf("GitHub %s %s: read response: %s", method, path, Scrub(readErr.Error()))

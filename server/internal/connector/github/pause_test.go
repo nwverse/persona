@@ -118,3 +118,81 @@ func TestPrimaryQuotaBesidePause(t *testing.T) {
 		t.Fatalf("resume at %v, not at the pause's end", got)
 	}
 }
+
+// Without Retry-After a limit pauses for a minute, as GitHub's docs say, unless the hour's core requests are used up
+// (X-RateLimit-Remaining 0): X-RateLimit-Reset, which every answer carries, is only the end of that. Another quota
+// used up (search) is noteRate's and pauses nothing.
+func TestPauseWithoutRetryAfter(t *testing.T) {
+	in := func(d time.Duration) string { return strconv.FormatInt(time.Now().Add(d).Unix(), 10) }
+	quota := func(left, reset, resource string) http.Header {
+		h := http.Header{}
+		h.Set("X-RateLimit-Limit", "5000")
+		h.Set("X-RateLimit-Remaining", left)
+		h.Set("X-RateLimit-Reset", reset)
+		if resource != "" {
+			h.Set("X-RateLimit-Resource", resource)
+		}
+		return h
+	}
+	secondary := errors.New("GitHub GET /notifications: 403 You have exceeded a secondary rate limit")
+	for _, tc := range []struct {
+		name     string
+		h        http.Header
+		err      error
+		min, max time.Duration
+	}{
+		{"secondary 403, quota left", quota("4000", in(50*time.Minute), "core"), secondary, 59 * time.Second, time.Minute},
+		{"429 without headers", http.Header{}, secondaryLimit, 59 * time.Second, time.Minute},
+		{"the hour used up", quota("0", in(5*time.Minute), ""), errors.New("GitHub GET /x: 403 API rate limit exceeded"),
+			4*time.Minute + 58*time.Second, 5 * time.Minute},
+		{"the hour used up, reset passed", quota("0", in(-time.Minute), "core"), secondary, 59 * time.Second, time.Minute},
+		{"the search minute used up", quota("0", in(30*time.Second), "search"), errors.New("GitHub GET /search/issues: 403 API rate limit exceeded"), 0, 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c := healthyGitHub(t)
+			c.notePause(tc.h, tc.err)
+			if left := c.pauseLeft(); left < tc.min || left > tc.max {
+				t.Fatalf("paused for %s, want [%s, %s]", left, tc.min, tc.max)
+			}
+		})
+	}
+}
+
+// A limit that comes back right after a pause GitHub named no time for doubles it, up to an hour; reads that run into
+// it during the pause add nothing, and a quiet while later it starts over at a minute.
+func TestPauseBacksOff(t *testing.T) {
+	c := healthyGitHub(t)
+	limit := func() time.Duration {
+		c.notePause(http.Header{}, secondaryLimit)
+		return c.pauseLeft()
+	}
+	ended := func(ago time.Duration) {
+		c.mu.Lock()
+		c.pausedUntil = time.Now().Add(-ago)
+		c.mu.Unlock()
+	}
+	near := func(got, want time.Duration) bool { return got > want-2*time.Second && got <= want }
+	if got := limit(); !near(got, time.Minute) {
+		t.Fatalf("first pause %s", got)
+	}
+	if got := limit(); !near(got, time.Minute) {
+		t.Fatalf("a second read during the pause made it %s", got)
+	}
+	for _, want := range []time.Duration{2 * time.Minute, 4 * time.Minute, 8 * time.Minute} {
+		ended(time.Second)
+		if got := limit(); !near(got, want) {
+			t.Fatalf("again right after the pause: %s, want %s", got, want)
+		}
+	}
+	c.mu.Lock()
+	c.pauseStep = 40 * time.Minute
+	c.mu.Unlock()
+	ended(time.Second)
+	if got := limit(); !near(got, time.Hour) {
+		t.Fatalf("not capped at an hour: %s", got)
+	}
+	ended(2 * time.Hour)
+	if got := limit(); !near(got, time.Minute) {
+		t.Fatalf("long after the last pause: %s, want a minute", got)
+	}
+}

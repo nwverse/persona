@@ -100,10 +100,7 @@ func (c *Connector) poll(ctx context.Context) (time.Duration, bool, error) {
 	var ns []notification
 	code, h, err := c.request(ctx, http.MethodGet, notificationsPath(1), hdr, nil, &ns)
 	if err != nil {
-		if code == http.StatusTooManyRequests || code == http.StatusForbidden {
-			c.notePause(h, err)
-		}
-		if left := c.pauseLeft(); left > 0 {
+		if left := c.pauseLeft(); left > 0 { // a rate limit (request records it: notePause)
 			return max(left, pollDefault), false, nil
 		}
 		return 0, false, err
@@ -135,7 +132,8 @@ func notificationsPath(page int) string {
 
 // laterNotifications reads the pages after the first one, ns, while they come full, up to maxNotificationPages, and
 // says whether the list is complete (it ended on a short page). A page that fails ends the list incomplete without
-// an error: what was read still counts, and the next poll reads again.
+// an error: what was read still counts, and the next poll reads again; a rate limit is recorded (request) and
+// holds back the threads' details too.
 func (c *Connector) laterNotifications(ctx context.Context, ns []notification) ([]notification, bool) {
 	batch := len(ns)
 	for page := 2; page <= maxNotificationPages && batch == notificationsPage; page++ {
@@ -148,14 +146,18 @@ func (c *Connector) laterNotifications(ctx context.Context, ns []notification) (
 	return ns, batch < notificationsPage
 }
 
-// applyNotifications reads the threads that moved (at most maxDetails, none while requests run low) and, when ns
-// is the complete unread list, marks those no longer in it as read elsewhere.
+// applyNotifications reads the threads that moved (at most maxDetails, none while requests run low or GitHub asks
+// for a pause) and marks those no longer in ns, the unread list newest first, as read elsewhere: any when ns is
+// complete, else only those that moved after its oldest notification (one still unread would have been in it).
 func (c *Connector) applyNotifications(ctx context.Context, ns []notification, complete bool, now time.Time) bool {
 	st := &c.inbox
 	me := c.Status(ctx).Account
 	budget := maxDetails
-	if c.ratesLow() {
-		budget = 0
+	var oldest time.Time
+	for _, n := range ns {
+		if oldest.IsZero() || n.UpdatedAt.Before(oldest) {
+			oldest = n.UpdatedAt
+		}
 	}
 	unread := map[string]bool{}
 	moved := false
@@ -189,6 +191,10 @@ func (c *Connector) applyNotifications(ctx context.Context, ns []notification, c
 		}
 		st.mu.Unlock()
 		if known || older || budget == 0 {
+			continue
+		}
+		if c.ratesLow() { // checked per thread: a detail read may have run into a rate limit
+			budget = 0
 			continue
 		}
 		budget--
@@ -234,7 +240,7 @@ func (c *Connector) applyNotifications(ctx context.Context, ns []notification, c
 		switch {
 		case now.Sub(t.At) > forgetAfter:
 			delete(st.things, thread)
-		case complete && !unread[thread] && !t.Read && t.Done == "":
+		case (complete || !oldest.IsZero() && t.At.After(oldest)) && !unread[thread] && !t.Read && t.Done == "":
 			t.Read, moved = true, true
 		}
 	}
