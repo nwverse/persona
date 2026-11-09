@@ -169,7 +169,10 @@ Messages have the `archive.changes` shape (see `mentioned` below) and are filed 
   system (the service's own notices); `muted`, `collapsed` and `done` are the owner's flags at the source (“Chat flags
   and document signals”); `estimate` roughly how many messages
   it has (0 or absent: unknown), to size the import; `source` as a batch's. An `id` is unique across all of the
-  program's sources: a query, a page and an anchor name a conversation by `id` alone.
+  program's sources: a query, a page and an anchor name a conversation by `id` alone. The same list is what
+  `GET /api/v1/kb/selection/candidates` returns for picking per-item settings, and per-item settings are keyed by this `id`, so it must
+  stay the same when the conversation is renamed. What is read of each conversation is the knowledge base's selection,
+  not the program's: the whole conversation, only around the owner's messages and mentions, or nothing.
 - **`archive.history`** reads one page. At most one of `before`, `after` and `around` (a position or a cursor the
   program answered, handed back as it is); none is the newest page. Messages are oldest first. `older` is the cursor to
   go further back, `newer` the one to go forward.
@@ -189,7 +192,8 @@ Messages have the `archive.changes` shape (see `mentioned` below) and are filed 
   answer's `next`. The caller reads the page around each (`archive.history` with `around: position`), instead of the
   whole conversation. `message` is the hit itself: the only way to keep one from an unreadable conversation. `source`
   is the name its conversation is filed under, as in `history.chats` (one the account left is often missing there). A
-  search hit may carry no `sender_id`.
+  search hit may carry no `sender_id`. Say `mine` or `mention` for every hit: the caller reads the `mine` rule's context
+  around the owner's own messages but only the message itself for a mention (a hit that says neither counts as mine).
 - **`mentioned`** on a message (here and in `archive.changes`): the owner is mentioned by name in it. The program decides
   (an @-mention of the owner, or a match of the owner's display names); an @all alone is `mentioned_all`, not `mentioned`.
 - **Pace**: an answer may carry `pace: {retry_after_ms?, stop?, reason?}`. `retry_after_ms` asks the caller to wait that

@@ -147,7 +147,9 @@ are still dispatched to connectors by the hub (the manager asks through `app.cal
   connector decides what counts) and `mentioned_all` (an @all / @everyone, reported apart so the selection's
   `include_all` can decide), on `Changes` batches as on history pages; a document (`kbwire.Item`) has `signals`, the ones it can tell of `mentions`,
   `comment_mentions`, `authored` and `viewed`. All of them are optional: a connector that cannot tell one leaves it out,
-  and its chats or documents never match that rule.
+  and its chats or documents never match that rule. Per-item settings are keyed by the stable chat id `HistoryChats`
+  lists (`GET /api/v1/kb/selection/candidates` shows that list), and the history import reads what the selection says,
+  so a connector has nothing of its own to decide about which chats are imported.
 - `Chats`: for sources like Lark with per-conversation cursors and attachments, provide `kb.Source` directly; archiving, compression and tagging stay unchanged. Older history is imported separately (`docs/assistant/knowledge.md`, "History import").
 - `History` (capability `history`, requires `archive`): a conversation's older history, which `Changes` never reaches.
   `HistoryChats` lists the conversations that can be imported (kind dm / group / bot / official / system, the
@@ -276,7 +278,7 @@ type Batch struct {
 - `Items`: merge into `Batch.Items`; `DocTitle` (document-title lookup by link) is not a "change", so remains an optional query (later merged into "Links" in the v1 plan).
 - Lark conversations: an adapter `connector.PerChat(kb.Source)` wraps per-conversation cursors into a composite cursor, moving the engine's conversation-selection logic into the adapter.
   **Lark is the largest source and this is the highest-risk step, so do it last**, with the M0 comparison baseline (then the hub's connector_baseline_test.go, removed with the hub's Lark source in #1571) and real-data comparison required.
-- **Kept separate**: reading older history (the opposite direction from "since last time") is its own optional capability, `history` (`History`, read through the hub's `connectors.history*` bus methods), not part of `Changes`; the older `kb.Backfiller` / `Engine.Backfill` path is unused and is to be replaced by a history driver in the knowledge base. Attachments (`Download`) remain optional `Media`.
+- **Kept separate**: reading older history (the opposite direction from "since last time") is its own optional capability, `history` (`History`, read through the hub's `connectors.history*` bus methods), not part of `Changes`; the old `kb.Backfiller` / `Engine.Backfill` path is gone; the assistant's history import drives it (`docs/assistant/knowledge.md`, "History import"). Attachments (`Download`) remain optional `Media`.
   Forcing them into `Changes` makes one cursor represent two directions and harder to understand.
 
 Size: **medium** (almost mechanical for four connectors) **to large** (Lark). Moments moves with Lark.
