@@ -227,7 +227,7 @@ func (n *Node) refresh(id string, f *transcript.File) error {
 
 // watchPump reads every watched session on one ticker while any is watched, and ends when none is left. It used to be
 // two tickers per watch, each in a goroutine of its own (250 ms for the transcript, 1 s for the status line): four
-// watched sessions at rest woke the node twenty times a second, about 70 ms of CPU a minute each. A tick only stats
+// watched sessions at rest woke the node twenty times a second, about 65 ms of CPU a minute each. A tick only stats
 // each transcript (transcript.File.Changed); reading new lines and reading a screen run in goroutines of their own,
 // one at a time per session, so a slow parse or a slow herdr never holds up another session.
 func (n *Node) watchPump() {

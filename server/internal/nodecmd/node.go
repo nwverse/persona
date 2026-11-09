@@ -86,8 +86,8 @@ func exitNodeUsage(err error) {
 
 // nodeProcs is the most Ps (GOMAXPROCS) the node that serves a hub keeps unless the environment says otherwise. It
 // sleeps most of the time, between a few timers and reads; on a machine with many cores every P Go keeps is one more to
-// wake and search for work on each of those, and more threads and per-P caches held (on a 64-core host: 28 threads
-// against 11, and 6.5 MB more resident than with 4).
+// wake and search for work on each of those, and more threads and per-P caches held (on a 64-core host with 4 watched
+// sessions: 28 threads against 12, and about 4 MB more resident than with 4).
 const nodeProcs = 4
 
 // capProcs lowers GOMAXPROCS to nodeProcs for `node --stdio` and `node --attach`, unless the GOMAXPROCS environment
