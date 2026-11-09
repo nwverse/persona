@@ -240,7 +240,7 @@ func cellOf(v any, format string) (*xcell, error) {
 	case float64:
 		return &xcell{v: num(v)}, nil
 	case csvText:
-		return &xcell{v: value{kind: 's', str: string(v)}}, nil
+		return textCell(string(v))
 	case string:
 		if strings.HasPrefix(v, "=") && len(v) > 1 {
 			f := strings.TrimPrefix(v, "=")
@@ -249,17 +249,22 @@ func cellOf(v any, format string) (*xcell, error) {
 			}
 			return &xcell{formula: f}, nil
 		}
-		if n := excelLen(v); n > maxCellChars {
-			return nil, fmt.Errorf("%d characters, an Excel cell holds at most %d", n, maxCellChars)
-		}
 		if isDateFormat(format) {
 			if serial, ok := excelDate(v); ok {
 				return &xcell{v: num(serial)}, nil
 			}
 		}
-		return &xcell{v: value{kind: 's', str: v}}, nil
+		return textCell(v)
 	}
 	return nil, fmt.Errorf("a cell is text, a number, true / false or null, not %T", v)
+}
+
+// textCell is a cell of text s, refused when s is longer than an Excel cell holds (JSON and CSV text alike).
+func textCell(s string) (*xcell, error) {
+	if n := excelLen(s); n > maxCellChars {
+		return nil, fmt.Errorf("%d characters, an Excel cell holds at most %d", n, maxCellChars)
+	}
+	return &xcell{v: value{kind: 's', str: s}}, nil
 }
 
 func (g *grid) xml(book *xbook, s sheetSpec) string {
