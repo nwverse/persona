@@ -70,8 +70,16 @@ func (s *Service) bindRetiredTurn(k [2]string, retiredAt time.Time) {
 // workStarted: a session began working (again). Whatever the manager was going to do for its last turn is off; a card
 // for it is withdrawn. How long the turn waited is recorded.
 func (s *Service) workStarted(ctx context.Context, machine, sid string, now time.Time) {
+	s.workStartedObserved(ctx, machine, sid, now, true)
+}
+
+// A first or reconnected working list observes a running turn; it does not
+// prove that the turn started while this manager was connected.
+func (s *Service) workStartedObserved(ctx context.Context, machine, sid string, now time.Time, newTurn bool) {
 	k := [2]string{machine, sid}
-	s.clearToolLoop(k, loopTurnChanged)
+	if newTurn {
+		s.clearToolLoop(k, loopTurnChanged)
+	}
 	s.work.mu.Lock()
 	s.work.init()
 	s.work.started[k] = now

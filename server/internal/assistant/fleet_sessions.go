@@ -45,7 +45,11 @@ func (s *Service) setSessions(machine string, list []proto.Session) {
 			s.turnsBook().working(key, now)
 			s.replyWorked(machine, sess.SessionID) // answered: a question it asks next is a new one (agents_reply.go)
 			ref := SessionRef{MachineID: machine, SessionID: sess.SessionID}
-			s.inOrder(func() { s.TurnStarted(context.Background(), ref) }) // after the items that came before it
+			// A first list or an offline-to-working transition can be a
+			// reconnect to the same turn. Only a known stopped turn proves a
+			// new one and resets its persisted loop state.
+			newTurn := prev == proto.StatusDone || prev == proto.StatusIdle || prev == proto.StatusInterrupted
+			s.inOrder(func() { s.turnStartedObserved(context.Background(), ref, newTurn) }) // after the items that came before it
 		case prev == proto.StatusWorking && (sess.Status == proto.StatusDone || sess.Status == proto.StatusIdle):
 			go s.notifyFinished(machine, sess.SessionID, s.turnsBook().ended(key, now, backgroundRunning(sess)))
 			// A new assistant conversation is named after its first turn; a task from one may be done. After the
