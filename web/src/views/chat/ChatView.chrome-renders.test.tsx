@@ -42,6 +42,12 @@ vi.mock("./SegmentView", async (load) => {
   const { createElement } = await import("react");
   return { ...real, Answer: (p: Parameters<typeof real.Answer>[0]) => ("fade" in p && words.push({ id: p.item!.id, fade: p.fade }), createElement(real.Answer, p)) };
 });
+// every message's actions ask for the chat's actions each time they render: counted
+const asks = vi.hoisted(() => ({ n: 0 }));
+vi.mock("./chat-actions", async (load) => {
+  const real = await load<typeof import("./chat-actions")>();
+  return { ...real, useChatActions: () => (asks.n++, real.useChatActions()) };
+});
 vi.mock("../../lib/panel", async (load) => ({ ...(await load<typeof import("../../lib/panel")>()), usePanel: () => null }));
 vi.mock("../assistant/Persona", () => ({ usePersona: () => ({ name: "Persona" }) }));
 
@@ -116,6 +122,23 @@ it("a pushed reply renders its own words once, mounting them fading, and no othe
   words.length = 0;
   await push(4);
   expect(words).toEqual([{ id: "i4", fade: true }]);
+});
+
+it("a turn starting or ending renders the message actions of its own exchange only", async () => {
+  const flip = async (sid: string, exchanges: number) => {
+    const items = Array.from({ length: exchanges }, (_, i) => [item(2 * i, { role: "user", text: `ask ${i}` }), item(2 * i + 1)]).flat();
+    fetcher.mockImplementation((url: string) => Promise.resolve(new Response(JSON.stringify(String(url).includes("/items") ? { items, to_seq: items.length - 1 } : {}), { status: 200, headers: { "Content-Type": "application/json" } })));
+    await open(<ChatView mid="mac" sid={sid} inPage />, row({ session_id: sid }));
+    asks.n = 0;
+    for (const state of ["idle", "working"] as const) {
+      act(() => applyCompleteSessions([row({ session_id: sid, status: state, state })]));
+      await settle();
+    }
+    return asks.n;
+  };
+  const one = await flip("s1", 1);
+  expect(one).toBeGreaterThan(0); // the exchange that ended, and started again
+  expect(await flip("s2", 6)).toBe(one);
 });
 
 it("the assistant: the header draws again only when what its face reads changes", async () => {

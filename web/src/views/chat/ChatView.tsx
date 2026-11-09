@@ -70,7 +70,7 @@ import { archiveItems } from "../AgentMenus";
 import { appArchiveDeps, deleteInsteadOfArchive, restoreAgent, useArchived } from "../../lib/agent-archives";
 import { UltracodeLostNote } from "./Ultracode";
 import { isUltracodeQueued, ultracodeQueueDone } from "../../lib/ultracode";
-import { ChatActionsContext, type ChatActions } from "./chat-actions";
+import { ChatActionsContext, liveValue, type ChatActions } from "./chat-actions";
 import { QueueStrip } from "./QueueStrip";
 import { ChatSearch, type LoadOutcome } from "./ChatSearch";
 import { forgetReveals, revealItem, undoReveals, clearReveal } from "./search-reveal";
@@ -294,8 +294,11 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
   const named = session ?? archivedHere;
   const title = isMain ? MAIN_TITLE : named ? (assistant ? conversationTitle(named) : sessionTitle(named)) : assistant ? t("chat-chatview.new_chat") : t("chat-chatview.session");
   const canFork = Boolean(session?.can_fork) && !readOnly;
-  // "Rewind to here" (#2436): offered on your messages of a session in a terminal; off with a reason while it cannot
+  // "Rewind to here" (#2436): offered on your messages of a session in a terminal; off with a reason while it cannot. Live
+  // (chat-actions.ts): it changes with every turn, and in `actions` it would render every message's actions again.
   const rewindOff = rewindBlock(session, working);
+  const [rewindLive] = useState(() => liveValue(rewindOff));
+  useLayoutEffect(() => rewindLive.set(rewindOff), [rewindLive, rewindOff]);
   const canRewind = canCompose && !readOnly && !assistant;
   const actions = useMemo<ChatActions>(
     () => ({
@@ -306,9 +309,9 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
       speaker: assistant ? persona.name : "Agent",
       images: () => items.current.filter((i) => i.kind === "image"),
       fork: canFork ? (itemId: string) => void forkAt(mid, sid, itemId, Boolean(assistant), session?.space) : undefined,
-      rewind: canRewind ? { block: rewindOff, run: (messageId, text, restore) => rewindTo(mid, sid, draftKey, items.current, messageId, text, restore) } : undefined,
+      rewind: canRewind ? { block: rewindLive, run: (messageId, text, restore) => rewindTo(mid, sid, draftKey, items.current, messageId, text, restore) } : undefined,
     }),
-    [draftKey, title, canCompose, canFork, canRewind, rewindOff, mid, sid, assistant, persona.name],
+    [draftKey, title, canCompose, canFork, canRewind, rewindLive, mid, sid, assistant, persona.name],
   );
   // the assistant works on any computer, so its @ menu offers workspaces too
   const mention = useMemo(() => ({ cwd: session?.cwd, self: draftKey, files: () => chatFiles(items.current), workspaces: Boolean(assistant) }), [session?.cwd, draftKey, assistant]);

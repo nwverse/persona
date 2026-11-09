@@ -6,7 +6,7 @@ import { initI18n } from "../../i18n";
 import { addContext, getContexts, registerComposer, removeContext } from "../../lib/links";
 import { askPersona } from "../../lib/outbox";
 import { toast } from "../../ui/atoms";
-import { ChatActionsContext, type ChatActions } from "./chat-actions";
+import { ChatActionsContext, liveValue, type ChatActions } from "./chat-actions";
 import { MessageActions, messageContextActions } from "./MessageActions";
 
 const media = vi.hoisted(() => ({ noHover: false }));
@@ -26,6 +26,17 @@ vi.mock("../../lib/outbox", () => ({ askPersona: vi.fn(async () => {}) }));
 vi.mock("../../lib/links", async (original) => {
   const actual = await original<typeof import("../../lib/links")>();
   return { ...actual, addContext: vi.fn(actual.addContext) };
+});
+// counted: every MessageActions render asks for the chat's actions, every icon draws
+const counts = vi.hoisted(() => ({ actions: 0, icons: 0 }));
+vi.mock("./chat-actions", async (original) => {
+  const actual = await original<typeof import("./chat-actions")>();
+  return { ...actual, useChatActions: () => (counts.actions++, actual.useChatActions()) };
+});
+vi.mock("../../ui/icons", async (original) => {
+  const actual = await original<typeof import("../../ui/icons")>();
+  const { createElement } = await import("react");
+  return { ...actual, Icon: (p: Parameters<typeof actual.Icon>[0]) => (counts.icons++, createElement(actual.Icon, p)) };
 });
 vi.mock("../../ui/atoms", async (original) => ({
   ...(await original<typeof import("../../ui/atoms")>()),
@@ -178,7 +189,7 @@ describe("message context interaction paths", () => {
 
   it("keeps the side bar compact and separates context actions from rewind in More", () => {
     act(() => root.render(
-      <ChatActionsContext.Provider value={{ ...chat, rewind: { block: "", run: async () => {} } }}>
+      <ChatActionsContext.Provider value={{ ...chat, rewind: { block: liveValue(""), run: async () => {} } }}>
         <MessageActions text="Original message" isUser side messageId="message#0"><p>Original message</p></MessageActions>
       </ChatActionsContext.Provider>,
     ));
@@ -191,5 +202,41 @@ describe("message context interaction paths", () => {
       "交给 Persona", "作为上下文", "回退到这里",
     ]);
     expect(menu.querySelectorAll('[role="separator"]')).toHaveLength(1);
+  });
+});
+
+describe("why rewind is off, as the session starts and stops working", () => {
+  it("renders no message's actions, and an open menu follows it", () => {
+    vi.useFakeTimers({ toFake: ["Date"] }); // fixed time (lesson #1989): only the block's changes are under test
+    const block = liveValue("");
+    const value: ChatActions = { ...chat, rewind: { block, run: async () => {} } };
+    const draw = (v: ChatActions) => act(() => root.render(
+      <ChatActionsContext.Provider value={v}>
+        {["u1#0", "u2#0", "u3#0"].map((id) => (
+          <MessageActions key={id} text={`Message ${id}`} isUser side messageId={id}><p>{id}</p></MessageActions>
+        ))}
+      </ChatActionsContext.Provider>,
+    ));
+    draw(value);
+    Object.assign(counts, { actions: 0, icons: 0 });
+    for (const why of ["工作中", "", "工作中", ""]) act(() => block.set(why));
+    expect(counts).toEqual({ actions: 0, icons: 0 });
+
+    act(() => host.querySelector<HTMLButtonElement>('button[aria-label="更多"]')!.click());
+    const rewind = () => [...document.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')].find((b) => b.textContent?.includes("回退到这里"))!;
+    expect(rewind().disabled).toBe(false);
+    act(() => block.set("工作中"));
+    expect(rewind().disabled).toBe(true);
+    expect(rewind().textContent).toContain("工作中");
+    act(() => block.set(""));
+    expect(rewind().disabled).toBe(false);
+    expect(rewind().textContent).not.toContain("工作中");
+
+    // the counts are live: new chat actions still reach every message
+    Object.assign(counts, { actions: 0, icons: 0 });
+    draw({ ...value, canCompose: false });
+    expect(counts.actions).toBeGreaterThanOrEqual(3);
+    expect(counts.icons).toBeGreaterThan(0);
+    expect(host.querySelector('button[aria-label="引用"]')).toBeNull();
   });
 });
