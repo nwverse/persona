@@ -107,6 +107,14 @@ export function mergeItems(have: Item[], batch: Item[]): Item[] {
   return sortItems(kept.map((i) => realWork.has(i) && promotedFolds.some((f) => i.seq >= f.seq && i.seq <= f.fold!.through_seq) ? { ...i, supervisionUser: true } : i));
 }
 
+/** `have` without what a fold of this fresh page now stands for. Left in, a step kept from before the fold existed
+ *  would make mergeItems drop the fold as if it had been expanded, and every other step in it would be lost. */
+export function withoutFolded(have: Item[], page: Item[]): Item[] {
+  const folds = page.filter((f) => f.fold);
+  if (!folds.length) return have;
+  return have.filter((i) => !((i.kind === "thinking" || i.kind === "fold" || i.tool_use_id) && folds.some((f) => i.seq >= f.seq && i.seq <= f.fold!.through_seq)));
+}
+
 // Only the canonical persona-context tag is recognized.
 
 const ATTR_RE = /(\w+)="([^"]*)"/g;
@@ -420,7 +428,7 @@ export function isPersonaTool(name?: string): boolean {
 
 /** Persona's tools with a verb of their own, by their bare name (iOS PersonaToolNames + ToolPresentation.verb). */
 const PERSONA_VERB_KEY: Record<string, string> = {
-  // Agents on the user's computers (docs/assistant/assistant.md "Agents and Lark tools")
+  // Agents on the user's computers (docs/assistant/assistant.md "Current structure", Agents)
   agent_read: "persona_agent_read",
   agent_send: "persona_agent_send",
   send_to_agent: "persona_agent_send",
