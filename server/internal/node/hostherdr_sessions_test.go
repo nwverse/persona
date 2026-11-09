@@ -183,6 +183,10 @@ func TestHerdrHostRoutesEachCallToItsSession(t *testing.T) {
 		f.reply("pane.split", map[string]any{"pane": map[string]any{"pane_id": "w4:p2"}})
 		f.reply("tab.create", map[string]any{"tab": map[string]any{"tab_id": "w4:t2"}, "root_pane": map[string]any{"pane_id": "w4:p3"}})
 		f.reply("pane.list", map[string]any{"panes": []any{map[string]any{"pane_id": "w4:p1", "tab_id": "w4:t1"}}})
+		f.reply("pane.layout", map[string]any{"layout": map[string]any{"panes": []any{map[string]any{"pane_id": "w4:p1",
+			"rect": map[string]any{"x": 0, "y": 0, "width": 80, "height": 24}}}}})
+		f.reply("worktree.create", map[string]any{"workspace": map[string]any{"workspace_id": "w9"},
+			"tab": map[string]any{"tab_id": "w9:t1"}, "root_pane": map[string]any{"pane_id": "w9:p1"}})
 		f.setScreen("w4:p1", "screen of "+f.sock)
 	}
 	drive := func(session string) {
@@ -224,6 +228,14 @@ func TestHerdrHostRoutesEachCallToItsSession(t *testing.T) {
 		must("resume", h.PaneReportResume(ctx, pane, resumeSource, "claude", sidA, []string{"claude", "--resume", sidA}))
 		must("focus", h.FocusPane(ctx, pane))
 		must("metadata", h.ReportMetadata(ctx, pane, "persona", map[string]*string{}))
+		_, err = h.PaneForeground(ctx, pane)
+		must("foreground", err)
+		_, _, err = h.PaneSize(ctx, pane)
+		must("size", err)
+		wt, err := h.CreateWorktree(ctx, q("w4"), "b", "/tmp/wt")
+		if err != nil || wt.SpaceID != q("w9") || wt.SlotID != q("w9:t1") || wt.Pane.ID != q("w9:p1") {
+			t.Errorf("worktree of %s: %+v %v", q("w4"), wt, err)
+		}
 	}
 	// Each call's ids as herdr got them: never qualified, and the session's own.
 	idsOf := func(f *fakeHerdr) []string {
@@ -244,6 +256,7 @@ func TestHerdrHostRoutesEachCallToItsSession(t *testing.T) {
 		"tab.rename label=tab", "workspace.rename workspace_id=w4", "workspace.rename label=renamed", "pane.list workspace_id=w4",
 		"tab.close tab_id=w4:t1", "tab.close tab_id=w4:t1", "pane.report_agent pane_id=w4:p1",
 		"pane.report_agent_session pane_id=w4:p1", "pane.focus pane_id=w4:p1", "pane.report_metadata pane_id=w4:p1",
+		"pane.process_info pane_id=w4:p1", "pane.layout pane_id=w4:p1", "worktree.create workspace_id=w4",
 	}
 
 	drive("build")
@@ -313,7 +326,7 @@ func TestNamedSessionThatHangsHoldsNothingUp(t *testing.T) {
 	calls.Add(1)
 	fs.build.handle("session.snapshot", func(map[string]any) any {
 		defer calls.Done()
-		time.Sleep(time.Second) // a hung server, as far as the listing is concerned
+		time.Sleep(2 * time.Second) // a hung server, as far as the listing is concerned: longer than the three listings
 		return sessionSnapshot(sidB)
 	})
 	for i := range 3 { // the second and third find the first call still out and do not ask again
@@ -541,10 +554,9 @@ func TestEnginePaneRefsTellSessionsApart(t *testing.T) {
 	}
 }
 
-// A hook in a named session names its session (nodeclient.HookPane); the node takes its own server's session off
-// again, so a node on a session it was told to use binds its own panes as before.
+// A hook in a named session names its session (nodeclient.HookPane); a node on a session of its own translates, so it
+// binds its own panes as before and never takes the default server's for them.
 func TestHookPanesOfNamedSessions(t *testing.T) {
-	t.Setenv("PERSONA_HOME", "")
 	env := func(kv ...string) func(string) string {
 		return func(k string) string {
 			for i := 0; i+1 < len(kv); i += 2 {
@@ -568,22 +580,25 @@ func TestHookPanesOfNamedSessions(t *testing.T) {
 			t.Errorf("HookPane = %q, want %q", got, c.want)
 		}
 	}
-	// The session of this data directory's own node (a custom PERSONA_HOME) is that node's own server: bare.
-	t.Setenv("PERSONA_HOME", filepath.Join(t.TempDir(), "test-node"))
-	own := herdr.OwnSession()
-	if own == "" {
-		t.Skip("no data-directory session here")
-	}
-	if got := nodeclient.HookPane(env(herdrPaneEnv, "w4:p1", herdrSessionEnv, own)); got != "w4:p1" {
-		t.Errorf("own data directory's session: %q", got)
-	}
 
+	// A node whose own herdr server is a named session writes that session's panes bare and the default server's
+	// qualified: it translates what hooks, CLIs and runtimes send (written as the default server sees them).
 	n, _, _ := herdrNode(t)
-	n.hosts = herdrHosts(&herdr.Client{Socket: "/tmp/x/h.sock", Session: "work"})
-	for in, want := range map[string]string{"@work:w1:p1": "w1:p1", "@build:w1:p1": "@build:w1:p1", "w1:p1": "w1:p1", "": ""} {
+	for in, want := range map[string]string{"@work:w1:p1": "@work:w1:p1", "w1:p1": "w1:p1", "": "", "orca:t1:l1": "orca:t1:l1"} {
 		if got := n.ownPane(in); got != want {
-			t.Errorf("ownPane(%q) = %q, want %q", in, got, want)
+			t.Errorf("default-server node: ownPane(%q) = %q, want %q", in, got, want)
 		}
+	}
+	n.hosts = herdrHosts(&herdr.Client{Socket: "/tmp/x/h.sock", Session: "work"})
+	for in, want := range map[string]string{"@work:w1:p1": "w1:p1", "w1:p1": "@default:w1:p1", "@build:w1:p1": "@build:w1:p1",
+		"": "", "orca:t1:l1": "orca:t1:l1", "herdr-core:t7": "herdr-core:t7"} {
+		if got := n.ownPane(in); got != want {
+			t.Errorf("node on session work: ownPane(%q) = %q, want %q", in, got, want)
+		}
+	}
+	// A pane of the default server never resolves on such a node: it does not drive that server.
+	if err := n.sendKeys(context.Background(), "@default:w1:p1", "esc"); !errors.Is(err, errNoSuchSession) {
+		t.Errorf("keys to the default server from a node on another session: %v", err)
 	}
 }
 
@@ -661,7 +676,7 @@ func TestNamedSessionsFollowHerdr(t *testing.T) {
 		defer mu.Unlock()
 		return slices.Clone(infos), nil
 	}}}
-	if got := h.named.running(context.Background()); len(got) != 0 {
+	if got := h.named.running(context.Background(), time.Now().Add(namedWait)); len(got) != 0 {
 		t.Fatalf("running %v", got)
 	}
 	mu.Lock()
@@ -683,7 +698,144 @@ func TestNamedSessionsFollowHerdr(t *testing.T) {
 	h.named.sessions["build"].c.Socket = bld.sock
 	h.named.mu.Unlock()
 	h.named.refresh(context.Background())
-	if got := h.named.running(context.Background()); len(got) != 0 {
+	if got := h.named.running(context.Background(), time.Now().Add(namedWait)); len(got) != 0 {
 		t.Errorf("a stopped session is still driven: %v", got)
+	}
+}
+
+// A call on an id of a session the last list did not have waits for the list being asked for, and finds it there.
+func TestLookupWaitsForTheListOut(t *testing.T) {
+	own, bld := newFakeHerdr(t), newFakeHerdr(t)
+	c := &herdr.Client{Socket: own.sock}
+	h := &herdrHost{c: c, named: &herdrSessions{own: c, list: func(context.Context) ([]herdr.SessionInfo, error) {
+		time.Sleep(300 * time.Millisecond)
+		return []herdr.SessionInfo{{Name: "build", Running: true, Socket: bld.sock}}, nil
+	}}}
+	h.named.at = time.Now().Add(-time.Hour) // a list long out of date: running asks again in the background
+	if got := h.named.running(context.Background(), time.Now()); len(got) != 0 {
+		t.Fatalf("running %v before the answer", got)
+	}
+	if err := h.SendKeys(context.Background(), host.PaneRef{Kind: host.Herdr, ID: "@build:w1:p1"}, "esc"); err != nil {
+		t.Fatalf("keys while the list is out: %v", err)
+	}
+	if tr := bld.trace("pane.send_keys"); len(tr) != 1 {
+		t.Errorf("build keys %v", tr)
+	}
+}
+
+// Watch streams a named session its panes are in even when the list it started from did not have that session yet.
+func TestWatchFollowsASessionTheListMissed(t *testing.T) {
+	own, bld := newEventsFake(t), newEventsFake(t)
+	var mu sync.Mutex
+	infos := []herdr.SessionInfo{{Name: "default", Default: true, Running: true, Socket: own.sock}}
+	c := &herdr.Client{Socket: own.sock}
+	h := &herdrHost{c: c, named: &herdrSessions{own: c, list: func(context.Context) ([]herdr.SessionInfo, error) {
+		mu.Lock()
+		defer mu.Unlock()
+		return slices.Clone(infos), nil
+	}}}
+	h.named.running(context.Background(), time.Now().Add(namedWait)) // taken before the session started
+	mu.Lock()
+	infos = append(infos, herdr.SessionInfo{Name: "build", Running: true, Socket: bld.sock})
+	mu.Unlock()
+	h.named.mu.Lock()
+	h.named.at = time.Now().Add(-2 * time.Second) // over a second old: a call on one of its ids asks again
+	h.named.mu.Unlock()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() { _ = h.Watch(ctx, []host.PaneRef{{Kind: host.Herdr, ID: "@build:w4:p1"}}, func(bool) {}) }()
+	for _, f := range []*eventsFake{own, bld} {
+		select {
+		case <-f.subs:
+		case <-time.After(5 * time.Second):
+			t.Fatalf("no stream on %s", f.sock)
+		}
+	}
+}
+
+// A runtime in a named session's pane (pi's extension) names it qualified; its row joins the herdr pane's, and a
+// pane in the node's own session is taken without the session.
+func TestRuntimePanesOfNamedSessions(t *testing.T) {
+	for _, p := range []string{"w4:p1", "@build:w4:p1"} {
+		if !validPane(p) {
+			t.Errorf("%q should be a valid pane", p)
+		}
+	}
+	for _, p := range []string{"@build", "@a b:w4:p1", "@build:-x", "@:w4:p1"} {
+		if validPane(p) {
+			t.Errorf("%q should not be a valid pane", p)
+		}
+	}
+	reg := &runtimeRegistry{conns: map[int]*runtimeConn{1: {
+		sessions: []proto.Session{{SessionID: "s1", Status: proto.StatusIdle}, {SessionID: "s2", Status: proto.StatusIdle}},
+		panes:    map[string]string{"s1": "@build:w4:p1", "s2": "@work:w4:p1"},
+	}}}
+	own := func(p string) string { return strings.TrimPrefix(p, "@work:") }
+	for pane, want := range map[string]string{"@build:w4:p1": "s1", "w4:p1": "s2", "@review:w4:p1": ""} {
+		if got := reg.sessionInPane(pane, own); got != want {
+			t.Errorf("sessionInPane(%q) = %q, want %q", pane, got, want)
+		}
+	}
+}
+
+// The engine's herdr host on the default server drives the named sessions; tests' plain hosts do not.
+func TestEngineHerdrHostDrivesNamedSessions(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("no named sessions on Windows")
+	}
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	t.Setenv("HERDR_SOCKET_PATH", "")
+	t.Setenv("HERDR_SESSION", "")
+	t.Setenv("PERSONA_HOME", "")
+	hs := engineHosts(proto.EngineHerdr, nil)
+	if h, ok := hs[0].(*herdrHost); !ok || h.named == nil {
+		t.Fatalf("engine host %#v drives no named sessions", hs[0])
+	}
+	t.Setenv("HERDR_SESSION", "work") // a node told to use a session of its own
+	if h := engineHosts(proto.EngineHerdr, nil)[0].(*herdrHost); h.named != nil || h.ownSession() != "work" {
+		t.Errorf("a node on session work: named %v, own %q", h.named, h.ownSession())
+	}
+}
+
+// The terminal stream and the full herdr view of a named session's pane run herdr's CLI on that session's server.
+func TestNamedSessionStreamsUseItsServer(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("the stand-in herdr is a shell script")
+	}
+	dir := t.TempDir()
+	record := filepath.Join(dir, "calls")
+	bin := filepath.Join(dir, "herdr")
+	script := "#!/bin/sh\necho \"$* | session=$HERDR_SESSION socket=$HERDR_SOCKET_PATH\" >> " + record + "\n"
+	if err := os.WriteFile(bin, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	h, fs := namedHerdr(t, nil)
+	h.c.Bin = bin
+	h.named.own.Bin = bin
+	ctx := context.Background()
+	pane := host.PaneRef{Kind: host.Herdr, ID: "@build:w4:p1"}
+	_ = h.Observe(ctx, pane, 80, 24, func(host.Frame) {})
+	fc, err := h.StartFullClient(ctx, host.FullClientOptions{Cols: 80, Rows: 24, Pane: &pane}, func([]byte) {})
+	if err == nil {
+		select {
+		case <-fc.Done():
+		case <-time.After(5 * time.Second):
+		}
+		fc.Close()
+	}
+	b, _ := os.ReadFile(record)
+	got := strings.TrimSpace(string(b))
+	wantObserve := "terminal session observe w4:p1 --cols 80 --rows 24 | session=build socket=" + fs.build.sock
+	if !strings.Contains(got, wantObserve) {
+		t.Errorf("observe ran\n%s\nwant a line\n%s", got, wantObserve)
+	}
+	if err != nil || !strings.Contains(got, "session attach build |") {
+		t.Errorf("full client (%v) ran\n%s\nwant it attached to session build", err, got)
+	}
+	if tr := fs.build.trace("pane.focus"); len(tr) != 1 {
+		t.Errorf("the full view did not show the pane in its session first: %v", tr)
+	}
+	if calls := fs.own.calls(); len(calls) != 0 {
+		t.Errorf("the own server was asked: %v", calls)
 	}
 }

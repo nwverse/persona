@@ -30,8 +30,13 @@ import (
 // sessionsEvery is how long the list of running sessions is used before herdr is asked again.
 const sessionsEvery = 5 * time.Second
 
-// namedWait is how long a listing waits for the named sessions' answers once it asked them.
+// namedWait is how long a listing waits for the named sessions, from its start: for their list (the first time) and
+// their answers.
 var namedWait = 2 * time.Second
+
+// lookupWait is how long a call on an id of a session not known waits for herdr's list of sessions (`herdr session
+// list` gives up after 5 s).
+const lookupWait = 6 * time.Second
 
 // namedCallTimeout bounds one call to a named session that goes on after the listing stopped waiting for it.
 const namedCallTimeout = 15 * time.Second
@@ -43,8 +48,8 @@ type herdrSessions struct {
 	logf func(format string, args ...any)                       // nil: silent
 
 	mu       sync.Mutex
-	at       time.Time // the last time herdr was asked (zero: never)
-	listing  bool      // asking now
+	at       time.Time     // the last time herdr answered or failed to (zero: never)
+	listing  chan struct{} // closed when the ask now out ends; nil: none out
 	sessions map[string]*herdrSession
 	skipped  map[string]bool // names logged once as left alone
 	fails    herdr.LogBackoff
@@ -78,66 +83,86 @@ func (s *herdrSessions) log(format string, args ...any) {
 }
 
 // running are the running named sessions, by name. A list sessionsEvery old is asked for again in the background
-// (callers get it as it was meanwhile); only the very first call waits for herdr's answer, at most namedWait.
-func (s *herdrSessions) running(ctx context.Context) []*herdrSession {
+// (callers get it as it was meanwhile); only the very first call waits for herdr's answer, until until at most.
+func (s *herdrSessions) running(ctx context.Context, until time.Time) []*herdrSession {
 	if s == nil {
 		return nil
 	}
 	s.mu.Lock()
 	first := s.at.IsZero()
 	var done chan struct{}
-	if !s.listing && (first || time.Since(s.at) >= sessionsEvery) {
-		s.listing = true
-		done = make(chan struct{})
-		go func() {
-			defer close(done)
-			cctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), namedCallTimeout)
-			defer cancel()
-			s.refresh(cctx)
-		}()
+	if first || time.Since(s.at) >= sessionsEvery {
+		done = s.listLocked(ctx)
 	}
 	s.mu.Unlock()
-	if first && done != nil {
-		select {
-		case <-done:
-		case <-time.After(namedWait):
-		case <-ctx.Done():
-		}
+	if first {
+		waitUntil(ctx, done, until)
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.sortedLocked()
 }
 
-// lookup is the running named session called name; one not known is looked for again (it may have just started),
-// at most once a second.
+// lookup is the running named session called name. One not known is looked for again, at most once a second (it may
+// have just started), and waited for while an ask is out (its answer may have it).
 func (s *herdrSessions) lookup(ctx context.Context, name string) *herdrSession {
 	if s == nil {
 		return nil
 	}
 	s.mu.Lock()
 	ns := s.sessions[name]
-	again := ns == nil && !s.listing && time.Since(s.at) >= time.Second
-	if again {
-		s.listing = true
+	var done chan struct{}
+	if ns == nil && (s.listing != nil || time.Since(s.at) >= time.Second) {
+		done = s.listLocked(ctx)
 	}
 	s.mu.Unlock()
-	if !again {
+	if done == nil {
 		return ns
 	}
-	s.refresh(ctx)
+	waitUntil(ctx, done, time.Now().Add(lookupWait))
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.sessions[name]
 }
 
+// listLocked asks herdr for its sessions in the background unless an ask is out already, and returns the channel
+// closed when the ask out ends. s.mu is held.
+func (s *herdrSessions) listLocked(ctx context.Context) chan struct{} {
+	if s.listing != nil {
+		return s.listing
+	}
+	done := make(chan struct{})
+	s.listing = done
+	go func() {
+		cctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), namedCallTimeout)
+		defer cancel()
+		s.refresh(cctx)
+		s.mu.Lock()
+		s.listing = nil
+		s.mu.Unlock()
+		close(done)
+	}()
+	return done
+}
+
+// waitUntil waits for done, at most until until (and while ctx lasts).
+func waitUntil(ctx context.Context, done <-chan struct{}, until time.Time) {
+	t := time.NewTimer(time.Until(until))
+	defer t.Stop()
+	select {
+	case <-done:
+	case <-t.C:
+	case <-ctx.Done():
+	}
+}
+
 // refresh asks herdr for its sessions and keeps the running named ones it may drive; a failed ask keeps the ones it
-// had. s.listing is set by the caller and cleared here.
+// had.
 func (s *herdrSessions) refresh(ctx context.Context) {
 	infos, err := s.list(ctx)
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.listing, s.at = false, time.Now()
+	s.at = time.Now()
 	if err != nil {
 		if s.fails.Due(time.Now()) {
 			s.log("herdr sessions: %v (the named sessions stay as they were)", err)
@@ -220,9 +245,9 @@ func (ns *herdrSession) lastSpaces() ([]host.Space, bool) {
 	return ns.spaces, ns.spaces != nil
 }
 
-// fromNamed asks every named session at once (get) and gives each one's answer as it comes within namedWait, else
-// its last one (last; nothing for a session that never answered). A session with a call still out is not asked again.
-func fromNamed[T any](ctx context.Context, sessions []*herdrSession, get func(context.Context, *herdrSession) (T, error), last func(*herdrSession) (T, bool)) []T {
+// fromNamed asks every named session at once (get) and gives each one's answer as it comes by until, else its last
+// one (last; nothing for a session that never answered). A session with a call still out is not asked again.
+func fromNamed[T any](ctx context.Context, until time.Time, sessions []*herdrSession, get func(context.Context, *herdrSession) (T, error), last func(*herdrSession) (T, bool)) []T {
 	type answer struct {
 		i  int
 		v  T
@@ -244,7 +269,7 @@ func fromNamed[T any](ctx context.Context, sessions []*herdrSession, get func(co
 		}()
 	}
 	got := make([]*T, len(sessions))
-	timer := time.NewTimer(namedWait)
+	timer := time.NewTimer(time.Until(until))
 	defer timer.Stop()
 wait:
 	for ; asked > 0; asked-- {
@@ -314,15 +339,25 @@ func (h *herdrHost) targets(ctx context.Context, pane string, ids ...string) (he
 	return t, bare, nil
 }
 
-// ownPane is a pane a hook or a CLI sent, as this node's herdr host writes it: one qualified with the session of the
-// host's own server (a hook cannot always tell that session is this node's, nodeclient.HookPane) without it.
+// ownPane is a pane a hook, a CLI or a runtime sent — written as the default server sees it: its own panes bare,
+// another session's qualified (nodeclient.HookPane) — as this node's herdr host writes it. That is the same on a node
+// on the default server; a node whose own server is a named session takes that session off its own panes and
+// qualifies the default server's ("@default:…", which it does not drive).
 func (n *Node) ownPane(pane string) string {
-	session, bare := herdr.SplitID(pane)
-	if session == "" {
+	h, ok := n.hosts.Get(host.Herdr).(*herdrHost)
+	if !ok || pane == "" || host.ParsePane(pane).Kind != host.Herdr {
 		return pane
 	}
-	if h, ok := n.hosts.Get(host.Herdr).(*herdrHost); ok && h.ownSession() == session {
+	own := h.ownSession()
+	if own == "" {
+		return pane
+	}
+	session, bare := herdr.SplitID(pane)
+	switch session {
+	case own:
 		return bare
+	case "":
+		return herdr.PaneOf(pane, "", own)
 	}
 	return pane
 }

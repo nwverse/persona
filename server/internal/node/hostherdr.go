@@ -124,33 +124,43 @@ func (h *herdrHost) Version(ctx context.Context) string { return h.c.Version(ctx
 // Snapshot is the own server's layout with every running named session's (each one's last when it does not answer
 // in time). The own server failing is the host failing, whatever the named sessions say.
 func (h *herdrHost) Snapshot(ctx context.Context) (*host.Layout, error) {
-	named := h.named.running(ctx)
-	if len(named) == 0 {
+	if h.named == nil {
 		return layoutOf(ctx, h.c, "")
 	}
-	var others []*host.Layout
-	done := make(chan struct{})
-	go func() {
-		defer close(done)
-		others = fromNamed(ctx, named, func(ctx context.Context, ns *herdrSession) (*host.Layout, error) {
-			l, err := layoutOf(ctx, ns.c, ns.name)
-			if err == nil {
-				ns.mu.Lock()
-				ns.layout, ns.spaces = l, nil
-				ns.mu.Unlock()
-			}
-			return l, err
-		}, (*herdrSession).lastLayout)
-	}()
+	others := fromNamedSessions(ctx, h.named, func(ctx context.Context, ns *herdrSession) (*host.Layout, error) {
+		l, err := layoutOf(ctx, ns.c, ns.name)
+		if err == nil {
+			ns.mu.Lock()
+			ns.layout, ns.spaces = l, nil
+			ns.mu.Unlock()
+		}
+		return l, err
+	}, (*herdrSession).lastLayout)
 	l, err := layoutOf(ctx, h.c, "")
-	<-done
+	named := others()
 	if err != nil {
 		return nil, err
 	}
-	for _, o := range others {
+	for _, o := range named {
 		mergeLayout(l, o)
 	}
 	return l, nil
+}
+
+// fromNamedSessions asks s's running sessions alongside the own server: it starts at once (fromNamed) and the
+// function it returns waits for what they answered by namedWait from now.
+func fromNamedSessions[T any](ctx context.Context, s *herdrSessions, get func(context.Context, *herdrSession) (T, error), last func(*herdrSession) (T, bool)) func() []T {
+	var out []T
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		until := time.Now().Add(namedWait)
+		out = fromNamed(ctx, until, s.running(ctx, until), get, last)
+	}()
+	return func() []T {
+		<-done
+		return out
+	}
 }
 
 // layoutOf is one server's snapshot as a layout, its ids qualified with session ("" the own server: as they are).
@@ -203,26 +213,23 @@ func mergeLayout(l, o *host.Layout) {
 }
 
 func (h *herdrHost) Agents(ctx context.Context) ([]host.Agent, error) {
-	named := h.named.running(ctx)
-	var others [][]host.Agent
-	done := make(chan struct{})
-	go func() {
-		defer close(done)
-		others = fromNamed(ctx, named, func(ctx context.Context, ns *herdrSession) ([]host.Agent, error) {
-			agents, err := ns.c.Agents(ctx)
-			return fromHerdrAgents(ns.name, agents), err
-		}, func(ns *herdrSession) ([]host.Agent, bool) {
-			l, ok := ns.lastLayout()
-			if !ok {
-				return nil, false
-			}
-			return l.Agents, true
-		})
-	}()
+	if h.named == nil {
+		agents, err := h.c.Agents(ctx)
+		return fromHerdrAgents("", agents), err
+	}
+	others := fromNamedSessions(ctx, h.named, func(ctx context.Context, ns *herdrSession) ([]host.Agent, error) {
+		agents, err := ns.c.Agents(ctx)
+		return fromHerdrAgents(ns.name, agents), err
+	}, func(ns *herdrSession) ([]host.Agent, bool) {
+		l, ok := ns.lastLayout()
+		if !ok {
+			return nil, false
+		}
+		return l.Agents, true
+	})
 	agents, err := h.c.Agents(ctx)
-	<-done
 	out := fromHerdrAgents("", agents)
-	for _, o := range others {
+	for _, o := range others() {
 		out = append(out, o...)
 	}
 	return out, err
@@ -336,51 +343,97 @@ func (h *herdrHost) PaneReportResume(ctx context.Context, pane host.PaneRef, sou
 }
 
 // Watch is one events.subscribe per server: the lifecycle events plus agent status for each of its panes (herdr only
-// sends those per pane). A status change into or out of blocked is urgent. It ends when the own server's stream does;
-// a named session's stream that ends is opened again meanwhile (its events lost in between are covered by the
-// snapshots its first event brings).
+// sends those per pane). A status change into or out of blocked is urgent. It ends when the own server's stream does.
+// The named sessions watched are the running ones and those the panes are in, looked at again every sessionsEvery (a
+// session started since gets its stream, a stopped one's ends); a named session's stream that ends is opened again
+// (the events lost in between are covered by the snapshot its first event brings).
 func (h *herdrHost) Watch(ctx context.Context, panes []host.PaneRef, changed func(urgent bool)) error {
-	byOwn := map[string][]string{}
+	byServer := map[string][]string{}
 	for _, p := range panes {
 		session, id := herdr.SplitID(p.ID)
-		byOwn[session] = append(byOwn[session], id)
+		byServer[session] = append(byServer[session], id)
 	}
-	named := h.named.running(ctx)
-	if len(named) == 0 {
-		return watchServer(ctx, h.c, byOwn[""], changed)
+	if h.named == nil {
+		return watchServer(ctx, h.c, byServer[""], changed)
 	}
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
-	var mu sync.Mutex // changed comes from one stream at a time, as with one server
+	var mu sync.Mutex // changed is called by one stream at a time, as with one server
 	one := func(urgent bool) {
 		mu.Lock()
 		defer mu.Unlock()
 		changed(urgent)
 	}
-	var wg sync.WaitGroup
-	for _, ns := range named {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			backoff := time.Second
-			for ctx.Err() == nil {
-				started := time.Now()
-				_ = watchServer(ctx, ns.c, byOwn[ns.name], one)
-				if time.Since(started) > time.Minute {
-					backoff = time.Second
-				}
-				select {
-				case <-ctx.Done():
-				case <-time.After(backoff):
-				}
-				backoff = min(backoff*2, 30*time.Second)
-			}
-		}()
+	own := make(chan error, 1)
+	go func() { own <- watchServer(ctx, h.c, byServer[""], one) }()
+
+	type watched struct {
+		ns   *herdrSession
+		stop context.CancelFunc
 	}
-	err := watchServer(ctx, h.c, byOwn[""], one)
-	cancel()
-	wg.Wait()
-	return err
+	streams := map[string]watched{}
+	var wg sync.WaitGroup
+	reconcile := func() {
+		want := map[string]*herdrSession{}
+		for _, ns := range h.named.running(ctx, time.Now().Add(namedWait)) {
+			want[ns.name] = ns
+		}
+		for name := range byServer {
+			if name != "" && want[name] == nil {
+				if ns := h.named.lookup(ctx, name); ns != nil {
+					want[name] = ns
+				}
+			}
+		}
+		for name, w := range streams {
+			if want[name] != w.ns { // stopped, or a new server under the same name
+				w.stop()
+				delete(streams, name)
+			}
+		}
+		for name, ns := range want {
+			if _, ok := streams[name]; ok {
+				continue
+			}
+			sctx, stop := context.WithCancel(ctx)
+			streams[name] = watched{ns: ns, stop: stop}
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				watchNamed(sctx, ns.c, byServer[name], one)
+			}()
+		}
+	}
+	defer wg.Wait()
+	defer cancel()
+	reconcile()
+	tick := time.NewTicker(sessionsEvery)
+	defer tick.Stop()
+	for {
+		select {
+		case err := <-own:
+			return err
+		case <-tick.C:
+			reconcile()
+		}
+	}
+}
+
+// watchNamed keeps a named session's stream open until ctx ends, opening it again with a growing pause when it ends.
+func watchNamed(ctx context.Context, c *herdr.Client, panes []string, changed func(urgent bool)) {
+	backoff := time.Second
+	for ctx.Err() == nil {
+		started := time.Now()
+		_ = watchServer(ctx, c, panes, changed)
+		if time.Since(started) > time.Minute {
+			backoff = time.Second
+		}
+		select {
+		case <-ctx.Done():
+		case <-time.After(backoff):
+		}
+		backoff = min(backoff*2, 30*time.Second)
+	}
 }
 
 // watchServer is one events.subscribe on c for panes (herdr's ids there).
@@ -418,36 +471,36 @@ func subscriptions(panes []string) []herdr.Subscription {
 // Spaces are the own server's workspaces and every running named session's (each one's last when it does not answer
 // in time).
 func (h *herdrHost) Spaces(ctx context.Context) ([]host.Space, error) {
-	named := h.named.running(ctx)
-	var others [][]host.Space
-	done := make(chan struct{})
-	go func() {
-		defer close(done)
-		others = fromNamed(ctx, named, func(ctx context.Context, ns *herdrSession) ([]host.Space, error) {
-			wss, err := ns.c.Workspaces(ctx)
-			if err != nil {
-				return nil, err
-			}
-			out := make([]host.Space, 0, len(wss))
-			for _, w := range wss {
-				out = append(out, fromHerdrWorkspace(ns.name, w))
-			}
-			ns.mu.Lock()
-			ns.spaces = out
-			ns.mu.Unlock()
-			return out, nil
-		}, (*herdrSession).lastSpaces)
-	}()
-	wss, err := h.c.Workspaces(ctx)
-	<-done
-	out := make([]host.Space, 0, len(wss))
-	for _, w := range wss {
-		out = append(out, fromHerdrWorkspace("", w))
+	if h.named == nil {
+		wss, err := h.c.Workspaces(ctx)
+		return spacesOf("", wss), err
 	}
-	for _, o := range others {
+	others := fromNamedSessions(ctx, h.named, func(ctx context.Context, ns *herdrSession) ([]host.Space, error) {
+		wss, err := ns.c.Workspaces(ctx)
+		if err != nil {
+			return nil, err
+		}
+		out := spacesOf(ns.name, wss)
+		ns.mu.Lock()
+		ns.spaces = out
+		ns.mu.Unlock()
+		return out, nil
+	}, (*herdrSession).lastSpaces)
+	wss, err := h.c.Workspaces(ctx)
+	out := spacesOf("", wss)
+	for _, o := range others() {
 		out = append(out, o...)
 	}
 	return out, err
+}
+
+// spacesOf are the workspaces of session ("" the own server) as spaces.
+func spacesOf(session string, wss []herdr.Workspace) []host.Space {
+	out := make([]host.Space, 0, len(wss))
+	for _, w := range wss {
+		out = append(out, fromHerdrWorkspace(session, w))
+	}
+	return out
 }
 
 // CreateSpace opens the workspace on the own server: pane-less work never goes to a named session.

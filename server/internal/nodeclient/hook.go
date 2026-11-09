@@ -36,16 +36,13 @@ const GlobalHookFlag = "--persona-global"
 const HomeFlag = "--persona-home"
 
 // HookPane is the pane a hook runs in, from its environment, as a stored PaneRef: herdr's HERDR_PANE_ID as it always
-// was — qualified with its session ("@<session>:w4:p1", herdr.QualifyID) in a named session other than the one of
-// this data directory's node (#2196) —, else herdr-core's HC_TERMINAL_ID ("herdr-core:t7"), else Orca's ORCA_PANE_KEY
-// (or its older ORCA_AGENT_PANE: "orca:<tabId>:<leafId>"); "" in none. A node on a session it was told to use
-// takes its own session's off again (node ownPane).
+// was in the default server, qualified with its session in a named one ("@<session>:w4:p1", herdr.PaneOf, #2196),
+// else herdr-core's HC_TERMINAL_ID ("herdr-core:t7"), else Orca's ORCA_PANE_KEY (or its older ORCA_AGENT_PANE:
+// "orca:<tabId>:<leafId>"); "" in none. A node whose own herdr server is a named session writes its panes the other
+// way round and translates (node ownPane).
 func HookPane(getenv func(string) string) string {
 	if p := getenv(HerdrPaneEnv); p != "" {
-		if s := herdr.EnvSession(getenv); s != "" && s != herdr.OwnSession() {
-			return herdr.QualifyID(s, p)
-		}
-		return p
+		return herdr.PaneOf(p, herdr.EnvSession(getenv), "")
 	}
 	if t := getenv(HerdrCorePaneEnv); t != "" {
 		return host.PaneRef{Kind: host.HerdrCore, ID: t}.String()

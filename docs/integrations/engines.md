@@ -178,21 +178,27 @@ of them at once. A node on the default herdr server drives every **running** nam
 
 - **Ids**: a named session's pane, tab and workspace ids are `@<session>:<id>` (`@build:w4:p1`, `herdr.QualifyID`); the default server's stay
   bare, so stored rows, hooks and clients read as before. No host kind starts with `@`, so the hub and every client take them for herdr panes, and they
-  hold no `/` a path could split on. Sessions and their live rows are listed, read, sent to, interrupted, closed, renamed, split, streamed and focused
-  on the session the id names; ids herdr hands back (a split, a new tab) are qualified again.
-- **Showing the session**: a named session's spaces are labelled `<session> · <workspace label>`; renaming one given with that prefix renames
-  the workspace without it.
+  hold no `/` a path could split on. Sessions and their live rows are listed, read, sent to, interrupted, closed, renamed, split, streamed (observe,
+  control, the full herdr view) and given resume commands on the session the id names; ids herdr hands back (a split, a new tab, a worktree) are
+  qualified again.
+- **Showing the session**: a named session's spaces are labelled `<session> · <workspace label>`. Renaming one sets herdr's label without that
+  prefix (typed or not), and `space.rename` answers the name the space shows now, which the hub keys pins, mutes and to-do links by.
 - **Left alone**: stopped sessions, the `persona-<hash>` sessions of other nodes' data directories (`herdr/session.go`), names that cannot stand in an
   id, and every other session on a node that runs on a session of its own or on a socket `HERDR_SOCKET_PATH` moved. Windows drives the default server only.
-- **Pane identity from processes**: hooks, MCP calls and the process scans read `HERDR_SESSION` (or the session directory in `HERDR_SOCKET_PATH`)
-  with `HERDR_PANE_ID` (`nodeclient.HookPane`, `herdr.PaneOf`), so a hook in a named session's `w4:p1` never binds the default server's `w4:p1`.
-- **Never in the default server's way**: the session list is asked again at most every 5 s, in the background; each named session is asked alongside the
-  default server, and what it has not answered within 2 s comes from its last answer, with one call to it out at a time. A named session that does not
-  answer keeps its last agents; the default server failing is the herdr host failing, as before. Each session has its own event stream; one that ends
-  is opened again on its own.
+- **Pane identity from processes**: hooks, MCP calls, the pi extension (`herdrPaneOf`) and the process scans read `HERDR_SESSION` (or the session
+  directory in `HERDR_SOCKET_PATH`) with `HERDR_PANE_ID` (`nodeclient.HookPane`, `herdr.PaneOf`), so a hook in a named session's `w4:p1` never binds
+  the default server's `w4:p1`. They write panes as the default server sees them; a node whose own server is a named session translates
+  (`node ownPane`): its own session's panes bare, the default server's `@default:<id>`, which it does not drive.
+- **Never in the default server's way**: `herdr session list` runs in the background, again once the list is 5 s old; an id of a session the list
+  does not have makes the node ask again (at most once a second) and wait up to 6 s for the answer. Each listing asks the named sessions alongside
+  the default server and waits at most 2 s from its start for them (and, the first time, for the list); what a session has not answered by then
+  comes from its last answer, with one call to it out at a time. The default server failing is the herdr host failing, as before: while it is down
+  the herdr host lists nothing, the named sessions included, and keeps its last list. Each server has its own event stream; the named ones are
+  looked at again every 5 s (a session started since gets one, a stopped one's ends), and one that ends is opened again on its own.
 - **Pane-less work stays on the default server**: new workspaces, and new sessions started without naming a workspace (a named session's labels
-  never match a start's directory name). A start or a new tab in a named session's workspace opens there.
-- Focus following (`herdr.client.focus`) is the default server's: it is the computer's own herdr window.
+  never match a start's directory name). A start, a new tab or a worktree in a named session's workspace opens there.
+- **Focus** following (`herdr.client.focus`) is the default server's: it is the computer's own herdr window. Focusing a named session's pane works
+  but brings no echo back.
 
 ## When herdr is not running
 
