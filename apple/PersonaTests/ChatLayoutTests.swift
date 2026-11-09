@@ -193,6 +193,8 @@ struct ChatLayoutTests {
         #expect(linked.runs.contains { $0.inlinePresentationIntent?.contains(.code) == true })
         #expect(linked.runs.compactMap(\.link) == [URL(string: "https://github.com/example/weather/pull/45")!, URL(string: "https://example.com/log")!])
         #expect(ExchangeText.withoutHeadingMarks("#123 is a PR, not a heading") == "#123 is a PR, not a heading")
+        // A folded line's header: the words without the marks.
+        #expect(ExchangeText.plain("**Fix** the `cache` first") == "Fix the cache first")
     }
 
     /// The boxes' words are the primary color: black on the light boxes, white on the dark ones, both well past 4.5:1;

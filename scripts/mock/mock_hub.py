@@ -3266,6 +3266,21 @@ if MOCK_TASKS:
         _base = min(x["seq"] for x in ITEMS[ASK1])
         for _i, _x in enumerate(ITEMS[ASK1]):
             _x["seq"] = _base + _i
+    # MOCK_MARKDOWN=1 (with MOCK_TASKS=1, and MOCK_EXCHANGES=1 for the exchanges): the words as Agents and Persona write them,
+    # with **bold**, `code` and a heading (#2363), in Persona's message to the task, the task's report and the release
+    # notes receipt: drawn rendered, never as raw marks.
+    if os.environ.get("MOCK_MARKDOWN") == "1":
+        _markdown = {
+            "feed_x1": ("text", "**先别动缓存层。**\n1. 网络层的重试和超时先补测试，用 `LocalStubServer`；\n2. 覆盖率按 **80%** 算，生成的代码不算；\n"
+                                "3. 每补完一块就跑一次全量测试。"),
+            "feed_x2": ("text", "## 结果\n**网络层测试补完了**，PR 在 https://github.com/example/weather/pull/45 。\n"
+                                "重试、超时和断网三块都有用例，用 `LocalStubServer` 跑。\n覆盖率从 **52%** 到 **83%**。"),
+            "feed_m7": ("summary", "**整理好了**：这周合并了 7 个 PR，分成新功能、修复和其他三组，写在 `docs/release-notes.md` 里，等你过目。"),
+        }
+        for _f in TASK_FEED.get(ASK1, []):
+            if _f["id"] in _markdown and isinstance(_f.get("body"), dict):
+                _key, _text = _markdown[_f["id"]]
+                _f["body"][_key] = _text
     # MOCK_SUPERVISION=1: native quiet-round coverage, with synthetic audit and visible promotion receipts only.
     if os.environ.get("MOCK_SUPERVISION") == "1":
         TASK_FEED[ASK1] = []
@@ -16513,6 +16528,7 @@ MOCK_HELP.append("MOCK_INBOX_SOURCES=none  还没接任何消息来源：收件�
 MOCK_HELP.append("MOCK_INBOX_EXTRA=<n>  收件箱多 n 封知悉即可的示例通知，试「全部清理」的「将清理 N 件」确认")
 MOCK_HELP.append("MOCK_CHANNELS=1  设置 › 插件 › 渠道：App、飞书机器人和微信已连接、飞书 /agent 只读、一个待绑定（令牌 example-token）、一个出错、一个在市场里；主对话第一条来自微信")
 MOCK_HELP.append("MOCK_EXCHANGES=1  主对话新布局的素材（#1666）：Persona 发给任务的长消息、任务带链接和证据的长汇报、督办消息")
+MOCK_HELP.append("MOCK_MARKDOWN=1  任务往来和回执里带 **粗体**、`代码`、标题的原话（#2363）：应渲染成 Markdown，不露标记")
 MOCK_HELP.append("MOCK_AUTO_CONVERSATIONS=1  助手对话带来源 origin（feature conversation_origin）：另有 10 段自动对话（收件箱 6、定时任务 2、飞书 /agent、对话派生），侧边栏收进「自动对话」（#3264）")
 
 

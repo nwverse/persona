@@ -197,6 +197,9 @@ struct ExchangeText: View {
         }
     }
 
+    /// The same text with the Markdown marks dropped, for a one-line header that can't hold styling or links.
+    nonisolated static func plain(_ text: String) -> String { String(linked(text).characters) }
+
     /// `## Result` → `Result`: inline parsing keeps a heading's marks as text.
     nonisolated static func withoutHeadingMarks(_ text: String) -> String {
         guard text.contains("#") else { return text }
