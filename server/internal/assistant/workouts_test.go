@@ -3,6 +3,8 @@ package assistant
 import (
 	"context"
 	"math"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
@@ -20,6 +22,8 @@ func TestWorkoutValidation(t *testing.T) {
 		t.Fatal(err)
 	}
 	for name, change := range map[string]func(*WorkoutReport){
+		"invalid UUID":      func(v *WorkoutReport) { v.ID = "12345678-1234-1234-1234-123456789abz" },
+		"short UUID":        func(v *WorkoutReport) { v.ID = "12345678-1234-1234-1234-123456789ab" },
 		"before consent":    func(v *WorkoutReport) { v.EnabledAt = v.Start.Add(time.Second) },
 		"short":             func(v *WorkoutReport) { v.Duration = 599 },
 		"duration overflow": func(v *WorkoutReport) { v.Duration = 3602 },
@@ -73,4 +77,24 @@ func TestWorkoutReceiptSurvivesRestartAndDeletion(t *testing.T) {
 }
 func TestGoldenWorkoutReport(t *testing.T) {
 	golden(t, "workout_report", prompts.RenderWorkoutReport(`{"activity":"Running","duration":600,"heart_rate":[]}`))
+}
+
+func TestWorkoutUploadRequiresFullRole(t *testing.T) {
+	s := newServiceOn(t, newFakeHub(), &memStore{})
+	for _, role := range []string{"answer", "read", "extension", "full"} {
+		t.Run(role, func(t *testing.T) {
+			// Invalid input reaches validation only after the role check; it never creates a task.
+			r := httptest.NewRequest(http.MethodPost, "/api/v1/assistant/health/workouts", strings.NewReader(`{}`))
+			r.Header.Set(RoleHeader, role)
+			w := httptest.NewRecorder()
+			s.ServeHTTP(w, r)
+			want := http.StatusForbidden
+			if role == "full" {
+				want = http.StatusBadRequest
+			}
+			if w.Code != want {
+				t.Fatalf("status = %d, want %d: %s", w.Code, want, w.Body.String())
+			}
+		})
+	}
 }

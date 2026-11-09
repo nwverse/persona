@@ -6,12 +6,12 @@ import (
 	"errors"
 	"math"
 	"net/http"
-	"regexp"
 	"slices"
 	"strings"
 	"time"
 
 	"github.com/nwverse/persona/server/internal/apierr"
+	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/prompts"
 )
 
@@ -34,7 +34,7 @@ type WorkoutHeartRate struct {
 	BPM    float64 `json:"bpm"`
 }
 
-var workoutUUID = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
+var workoutUUID = lazyre.New(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
 
 func (v WorkoutReport) validate(now time.Time) error {
 	if !workoutUUID.MatchString(v.ID) || v.EnabledAt.IsZero() || v.Start.Before(v.EnabledAt) || !v.End.After(v.Start) || v.End.After(now.Add(time.Minute)) || v.Duration < 600 || v.Duration > v.End.Sub(v.Start).Seconds()+1 || v.End.Sub(v.Start) > 7*24*time.Hour || len(v.Title) > 200 || len(v.Source) > 256 || len(v.Activity) > 80 || len(v.HeartRate) > 10080 {
