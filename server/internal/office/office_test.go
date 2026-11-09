@@ -13,6 +13,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -184,6 +185,86 @@ func TestPptx(t *testing.T) {
 	}
 	if slides := check(t, data, ".pptx")["slides"].([]any); len(slides) != 2 || slides[1].(map[string]any)["paragraphs"] != 3.0 {
 		t.Fatalf("by headings %v", slides)
+	}
+}
+
+// Backslash escapes and entity references read as the characters they stand for (CommonMark 2.4, 2.5) in text,
+// table cells, link targets and picture paths; a code span keeps its words as written, its line ending a space.
+func TestMarkdownEscapesAndReferences(t *testing.T) {
+	dir := t.TempDir()
+	writePNG(t, dir, "q3_chart.png", 40, 30)
+	src := []byte("AT&amp;T &copy; 2026 &#x4E2D; 5 \\* 3 \\_name\\_ &lt;tag&gt;\n\n" +
+		"| a | b |\n| --- | --- |\n| x \\| y | `a\\*b` |\n\n" +
+		"[link \\[1\\]](https://e.com/a\\_b) and `one\ntwo`\n\n---\n\n![c](q3\\_chart.png)\n")
+	want := []string{"AT&T © 2026 中 5 * 3 _name_ <tag>", "x | y", `a\*b`, "link [1]", "one two"}
+
+	data, err := Docx(src, dir, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := parts(t, data)
+	got := elementTexts(t, p["word/document.xml"], xml.Name{Space: "http://schemas.openxmlformats.org/wordprocessingml/2006/main", Local: "t"})
+	for _, w := range want {
+		if !slices.Contains(got, w) {
+			t.Errorf("document has no w:t %q: %q", w, got)
+		}
+	}
+	if rels := p["word/_rels/document.xml.rels"]; !strings.Contains(rels, `Target="https://e.com/a_b" TargetMode="External"`) {
+		t.Errorf("rels %s", rels)
+	}
+	if _, ok := p["word/media/image1.png"]; !ok {
+		t.Error("no picture")
+	}
+
+	data, err = Pptx(src, dir, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	p = parts(t, data)
+	got = elementTexts(t, p["ppt/slides/slide1.xml"], xml.Name{Space: "http://schemas.openxmlformats.org/drawingml/2006/main", Local: "t"})
+	for _, w := range want {
+		if !slices.Contains(got, w) {
+			t.Errorf("slide has no a:t %q: %q", w, got)
+		}
+	}
+	if rels := p["ppt/slides/_rels/slide1.xml.rels"]; !strings.Contains(rels, `Target="https://e.com/a_b" TargetMode="External"`) {
+		t.Errorf("slide rels %s", rels)
+	}
+	if _, ok := p["ppt/media/image1.png"]; !ok {
+		t.Error("no picture in the deck")
+	}
+}
+
+// elementTexts are the words of each element called name in an XML part, in order.
+func elementTexts(t *testing.T, part string, name xml.Name) []string {
+	t.Helper()
+	var out []string
+	var b strings.Builder
+	inside := false
+	d := xml.NewDecoder(strings.NewReader(part))
+	for {
+		tok, err := d.Token()
+		if errors.Is(err, io.EOF) {
+			return out
+		} else if err != nil {
+			t.Fatal(err)
+		}
+		switch tok := tok.(type) {
+		case xml.StartElement:
+			if tok.Name == name {
+				inside = true
+				b.Reset()
+			}
+		case xml.CharData:
+			if inside {
+				b.Write(tok)
+			}
+		case xml.EndElement:
+			if inside && tok.Name == name {
+				inside = false
+				out = append(out, b.String())
+			}
+		}
 	}
 }
 
