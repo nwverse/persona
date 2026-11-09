@@ -245,6 +245,17 @@ describe("Composer suggestion", () => {
     expect(onSend).toHaveBeenCalledWith({ text: "跑一下测试", images: [] });
   });
 
+  it("sends once while the send is on its way, and can come back after the agent has worked", async () => {
+    const onSend = vi.fn(() => new Promise<boolean>(() => {}));
+    show({ onSend });
+    await act(async () => pill()!.querySelectorAll("button")[1].click());
+    expect(pill()).toBeNull();
+    expect(onSend).toHaveBeenCalledTimes(1);
+    show({ onSend, working: true });
+    show({ onSend });
+    expect(pill()).not.toBeNull();
+  });
+
   it("is not there while the agent works or something is in the box", () => {
     show({ working: true });
     expect(pill()).toBeNull();

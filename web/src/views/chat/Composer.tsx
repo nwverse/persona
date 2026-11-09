@@ -128,6 +128,11 @@ export const Composer = memo(function Composer({
 }) {
   const [draft, setDraft] = useState(() => storedValue(`draft:${draftKey}`) ?? "");
   const [atts, setAtts] = useState<Attachment[]>([]);
+  // The suggestion just sent with its arrow: it stays on the hub until the agent starts, and each tap would be a new message.
+  const [sentPill, setSentPill] = useState<string | null>(null);
+  useEffect(() => {
+    if (working) setSentPill(null);
+  }, [working]);
   // "Quote" and comments (lib/comments.ts): bars above the input, sent as `> ` blocks in front of the message (lib/drafts.ts)
   const quotes = useQuotes(draftKey).list;
   // files still on their way to the machine, per conversation: the spinner belongs to the one they were picked in
@@ -486,7 +491,7 @@ export const Composer = memo(function Composer({
   // Claude's suggested next message (iOS SuggestionPill): while the box is empty and the agent waits for a message
   // (not working, not on a card); a tap fills it
   // in, "Send now" sends it as it is (the node drops it once the agent works again)
-  const pill = suggestion && !blocked && !draft && !atts.length && !contexts.length && !quote && !working && !needsYou && !disabled ? suggestion : null;
+  const pill = suggestion && suggestion !== sentPill && !blocked && !draft && !atts.length && !contexts.length && !quote && !working && !needsYou && !disabled ? suggestion : null;
   const fillSuggestion = (text: string) => {
     setDraft(text);
     setDismissed(true);
@@ -602,7 +607,7 @@ export const Composer = memo(function Composer({
         <MentionMenu rows={mRows} active={Math.min(mActive, Math.max(mRows.length - 1, 0))} loading={mLoading} browsing={Boolean(token && browseTarget(token.query, mention?.cwd))} onHover={setMActive} onPick={pickMention} />
       )}
 
-      {pill && <SuggestionPill text={pill} onFill={() => fillSuggestion(pill)} onSend={() => void submit(pill)} />}
+      {pill && <SuggestionPill text={pill} onFill={() => fillSuggestion(pill)} onSend={() => { setSentPill(pill); void submit(pill); }} />}
 
       <div
         className={cx(
