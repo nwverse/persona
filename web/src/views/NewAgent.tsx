@@ -1,5 +1,6 @@
 // Start an agent on one of your computers: machine, folder (recent ones first), launcher, model and effort for this
-// start, Claude Code's ultracode switch (#3428: off each time, never remembered), the first message.
+// start, Claude Code's ultracode switch (#3428: off each time, never remembered), the first message. On top, the recent
+// setups (#2134): a tap fills every field with one that started an agent before, and never starts.
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { hubLabel } from "../lib/mesh";
 import { api, ApiError, credentialOwner, enc, errorText, getToken, isAbort, subscribeCredentialOwner } from "../lib/api";
@@ -12,13 +13,16 @@ import {
   defaultLabel, effortChoices, fitEffort, followedBinding, launcherAgent, launcherModels, machineLaunchers, modelName, oneOff, pickerLauncher, startPicks,
   takesEffort, takesTypedModel, forgetCustomModel, typedModelOffered, withoutCustom, type LauncherDefault,
 } from "../lib/launcher-models";
-import { BYPASS_MODE, BYPASS_WARNING, EFFORTS, effortTitle, PERMISSION_MODES } from "../lib/session-actions";
+import { BYPASS_MODE, BYPASS_WARNING, EFFORTS, effortTitle, modeTitle, PERMISSION_MODES } from "../lib/session-actions";
+import {
+  clearRecentSetups, forgetSetup, formHolds, loadRecentSetups, machineModel, recentCards, rememberSetup, setupKey, setupTime, type RecentCard, type RecentSetup,
+} from "../lib/recent-setups";
 import { baseName, shortPath } from "../lib/format";
 import { addAgentWorktree, agentBranch, agentNameHint, suggestedPath, worktreeStatus, type WorktreeStatus } from "../lib/worktree";
 import { getState, useStore } from "../lib/store";
-import type { Launcher } from "../lib/types";
+import type { Launcher, Machine } from "../lib/types";
 import { AgentMark } from "../ui/AgentMark";
-import { Button, cx, Dialog, Spinner, Switch, toast } from "../ui/atoms";
+import { Button, cx, Dialog, IconButton, Menu, Spinner, Switch, toast, useMenu } from "../ui/atoms";
 import { Pill } from "./settings/SettingsParts";
 import { startBlocked, ultracodeStartOffered } from "../lib/ultracode";
 import { UltracodeStartRow } from "./chat/Ultracode";
@@ -102,6 +106,16 @@ export function NewAgent({ open, onClose, preset }: { open: boolean; onClose: ()
   };
   // a preset's folder, put in once its computer is the chosen one (choosing a computer loads that one's last folder)
   const presetCwd = useRef<{ mid: string; cwd: string } | null>(null);
+  // The recent setups (#2134), read again each time the sheet opens; the card a tap filled the form from (its mark stays
+  // while the form still holds what it put in).
+  const [recents, setRecents] = useState(loadRecentSetups);
+  const [pickedSetup, setPickedSetup] = useState("");
+  // a card for another computer (or one whose launchers are still being read): its folder and mode go in with the
+  // computer, its launcher and model once that computer's launchers are read
+  const pendingSetup = useRef<RecentSetup | null>(null);
+  // the model that goes with the launcher a computer's pick put in: the card's, or that computer's latest one for it
+  const restoredModel = useRef<{ mid: string; launcher: string; model: string } | null>(null);
+  const firstMessage = useRef<HTMLTextAreaElement>(null);
   const attachmentsRef = useRef(attachments);
   attachmentsRef.current = attachments;
 
@@ -109,6 +123,8 @@ export function NewAgent({ open, onClose, preset }: { open: boolean; onClose: ()
     if (!open) return;
     submitted.current = false;
     setEffort("");
+    setRecents(loadRecentSetups());
+    setPickedSetup("");
     setUltracode(false);
     setInWorktree(false);
     setWtBranch("");
@@ -172,6 +188,20 @@ export function NewAgent({ open, onClose, preset }: { open: boolean; onClose: ()
     if (open && !presetCwd.current && (!mid || !online.some((m) => m.id === mid)) && online[0]) setMid(online[0].id);
   }, [open, online, mid]);
 
+  // The launcher a computer's pick puts in once its launchers are read, and the model that goes with it (#2134): a card's own
+  // when its launcher is still there; else the model configuration (`effective`; null: not followed) or the last one used
+  // here, unless this computer can't run it now (#1643: then the first that can), with this computer's latest model for it
+  // in the recent setups. No model list for it (the configuration runs no launcher): no model.
+  const restoreLauncher = (machine: string, card: RecentSetup | null, ls: Launcher[], effective: ModelBinding | null) => {
+    const own = card && (card.launcher ? ls.some((l) => l.name === card.launcher) : effective !== null);
+    const chosen = own ? card.launcher : effective !== null ? "" : initialLauncher(localStorage.getItem(`new.launcher.${machine}`), ls);
+    const runs = pickerLauncher(chosen, followedBinding(chosen, effective));
+    const picked = !runs ? "" : own ? card.model : machineModel(loadRecentSetups(), machine, chosen);
+    restoredModel.current = { mid: machine, launcher: chosen, model: picked };
+    setLauncher(chosen);
+    setModel(picked);
+  };
+
   useEffect(() => {
     if (!open || !mid) return;
     localStorage.setItem("new.machine", mid);
@@ -200,18 +230,18 @@ export function NewAgent({ open, onClose, preset }: { open: boolean; onClose: ()
         if (config) {
           setModelDefault(modelSummary(config.purpose, config.providers));
           setConfigured(config.purpose.effective ?? {});
-          setLauncher("");
-        } else {
-          // the last one used here, unless this computer can't run it now (#1643): then the first that can
-          setLauncher(initialLauncher(localStorage.getItem(`new.launcher.${mid}`), ls));
         }
+        const card = pendingSetup.current?.machine === mid ? pendingSetup.current : null;
+        if (card) pendingSetup.current = null;
+        restoreLauncher(mid, card, ls, config ? (config.purpose.effective ?? {}) : null);
       })
       .catch((e) => { if (!controller.signal.aborted) toast(errorText(e), "error"); })
       .finally(() => { if (!controller.signal.aborted) setLoadingModels(false); });
     const p = presetCwd.current;
     if (p?.mid === mid) presetCwd.current = null;
-    setCwd(p?.mid === mid ? p.cwd : (localStorage.getItem(`new.cwd.${mid}`) ?? ""));
-    setMode(localStorage.getItem(`new.mode.${mid}`) ?? "");
+    const card = pendingSetup.current?.machine === mid ? pendingSetup.current : null;
+    setCwd(card ? card.cwd : p?.mid === mid ? p.cwd : (localStorage.getItem(`new.cwd.${mid}`) ?? ""));
+    setMode(card?.agent_type === "claude" ? card.mode : (localStorage.getItem(`new.mode.${mid}`) ?? ""));
     setBrowse("");
     return () => {
       controller.abort();
@@ -230,14 +260,17 @@ export function NewAgent({ open, onClose, preset }: { open: boolean; onClose: ()
     return () => controller.abort();
   }, [open, mid, browse]);
 
-  // The model list of the launcher that will run (the chosen one, or the model configuration's); a new machine or launcher starts over
-  // from the default. Starting never waits for it.
+  // The model list of the launcher that will run (the chosen one, or the model configuration's); a launcher picked by hand starts
+  // over from the default, the one a computer's pick put in has its model (restoreLauncher). Starting never waits for it.
   const followed = followedBinding(launcher, unified ? configured : null);
   const listLauncher = launchersOf === mid ? pickerLauncher(launcher, followed) : "";
   useEffect(() => {
-    setModel("");
+    const restored = restoredModel.current;
+    if (listLauncher) restoredModel.current = null;
+    setModel(restored && listLauncher && restored.mid === mid && restored.launcher === launcher ? restored.model : "");
     setPicking(false);
     setQuery("");
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- `launcher` is read as it is when the list's launcher changes
   }, [open, mid, listLauncher]);
   useEffect(() => {
     if (!open || !mid || !listLauncher) {
@@ -305,6 +338,32 @@ export function NewAgent({ open, onClose, preset }: { open: boolean; onClose: ()
   const ultracodeShown = !loadingModels && efforts.length > 0 && ultracodeStartOffered(features, agent);
   const ultracodeBlocked = ultracodeShown ? startBlocked(picked?.claude_version) : "";
 
+  // The recent setups' cards (#2134): not when another page opened the sheet on a folder of its own (a space's or a
+  // knowledge entry's New agent), which a card would replace.
+  const cards = useMemo(() => recentCards(recents, machines), [recents, machines]);
+  const presetFolder = Boolean(preset?.machineId && preset.cwd);
+  const settled = launchersOf === mid && !loadingModels;
+  const pickedCard = pickedSetup ? cards.find((c) => setupKey(c.setup) === pickedSetup) : undefined;
+  const pickedShown = pickedCard && (!settled || formHolds(pickedCard.setup, { machine: mid, cwd, launcher, model, mode, effort })) ? pickedSetup : "";
+  // A tap fills every field and puts the focus in the first message; Start stays the user's.
+  const pickSetup = ({ setup, online: up }: RecentCard) => {
+    if (!up || !online.some((m) => m.id === setup.machine)) return;
+    setPickedSetup(setupKey(setup));
+    setEffort(setup.agent_type === "claude" ? setup.effort : "");
+    pendingSetup.current = null;
+    if (setup.machine !== mid) {
+      pendingSetup.current = setup;
+      setMid(setup.machine);
+    } else {
+      setCwd(setup.cwd);
+      setBrowse("");
+      if (setup.agent_type === "claude") setMode(setup.mode);
+      if (launchersOf === mid) restoreLauncher(mid, setup, launchers, unified ? configured : null);
+      else pendingSetup.current = setup; // the launchers being read put it in
+    }
+    firstMessage.current?.focus();
+  };
+
   const start = () => {
     if (!open || submitted.current || loadingModels || !online.some((m) => m.id === mid) || !cwd.trim()) return;
     submitted.current = true;
@@ -327,12 +386,17 @@ export function NewAgent({ open, onClose, preset }: { open: boolean; onClose: ()
       else localStorage.removeItem(`new.mode.${mid}`);
     }
     const opensIn = host && host !== currentHosts(picked ?? {}).default ? host : undefined; // only a choice away from the default
+    // this start as a recent setup (#2134): the folder picked (not the worktree made from it), the model and effort sent;
+    // mode and effort only for Claude Code
+    const claude = agent === "claude";
+    const setup = { machine: mid, cwd: cwd.trim(), launcher, model: picks.model ?? "", agent_type: agent, mode: claude ? permissionMode : "", effort: claude ? (picks.effort ?? "") : "" };
     // only an explicit "on" is sent: off is what a new Claude is anyway
     const ultra = ultracodeShown && !ultracodeBlocked && ultracode ? true : undefined;
     const launch = (dir: string) => {
       if (!current()) return;
       // The launch owns its previews; removing or unmounting the editable draft cannot revoke them.
       const sent = snapshot.attachments.map((a) => ({ ...a, url: a.url ? URL.createObjectURL(a.file) : undefined }));
+      rememberSetup({ ...setup, at: setupTime() });
       launchAgent({ machineId: mid, cwd: dir, launcher, ...picks, permissionMode: permissionMode || undefined, host: opensIn, ultracode: ultra, text: snapshot.text, attachments: sent });
       const ids = new Set(snapshot.attachments.map((a) => a.id));
       releaseAttachments(attachmentsRef.current.filter((a) => ids.has(a.id)));
@@ -424,6 +488,19 @@ export function NewAgent({ open, onClose, preset }: { open: boolean; onClose: ()
         }
       >
         <div className="flex flex-col gap-4">
+          {cards.length > 0 && !presetFolder && (
+            <RecentSetups
+              cards={cards}
+              machines={machines}
+              picked={pickedShown}
+              onPick={pickSetup}
+              onForget={(setup) => setRecents(forgetSetup(setup))}
+              onClear={() => {
+                setRecents(clearRecentSetups());
+                setPickedSetup("");
+              }}
+            />
+          )}
           <Field label={t("newagent.computer")}>
             <div className="flex flex-wrap gap-1.5">
               {machines.map((m) => (
@@ -683,6 +760,7 @@ export function NewAgent({ open, onClose, preset }: { open: boolean; onClose: ()
                 setAttachments((current) => current.filter((a) => a.id !== id));
               }} /></div>}
               <textarea
+                ref={firstMessage}
                 value={prompt}
                 onChange={(e) => { promptRevision.current++; setPrompt(e.target.value); }}
                 onPaste={(e) => { if (e.clipboardData.files.length) { e.preventDefault(); addFiles(e.clipboardData.files); } }}
@@ -714,6 +792,80 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
     <div>
       <div className="mb-1.5 text-[12px] font-medium text-ink-2">{label}</div>
       {children}
+    </div>
+  );
+}
+
+// The recent setups (#2134): up to three cards in a row, each a setup that started an agent (folder · computer, then launcher
+// · model · mode · effort); an offline computer's is dimmed and can't be picked. The ⋯ removes one or clears them all.
+function RecentSetups({ cards, machines, picked, onPick, onForget, onClear }: { cards: RecentCard[]; machines: Machine[]; /** The card the form holds (setupKey); "": none. */ picked: string; onPick: (card: RecentCard) => void; onForget: (setup: RecentSetup) => void; onClear: () => void }) {
+  const menu = useMenu();
+  const title = (s: RecentSetup) => `${baseName(shortPath(s.cwd))} · ${machines.find((m) => m.id === s.machine)?.name ?? s.machine}`;
+  return (
+    <div data-testid="recent-setups">
+      <div className="mb-1.5 flex h-[18px] items-center justify-between gap-2">
+        <span className="text-[12px] font-medium text-ink-2">{t("newagent.recent_setups")}</span>
+        <IconButton icon="more" size={22} iconSize={14} label={t("newagent.recent_options")} onClick={menu.open} active={Boolean(menu.anchor)} />
+        {menu.anchor && (
+          <Menu
+            anchor={menu.anchor}
+            onClose={menu.close}
+            align="right"
+            width={232}
+            items={[
+              { key: "remove", label: t("newagent.recent_remove"), icon: "x", onSelect: () => {}, children: cards.map((c) => ({ key: setupKey(c.setup), label: title(c.setup), onSelect: () => onForget(c.setup) })) },
+              { key: "clear", label: t("newagent.recent_clear"), icon: "trash", danger: true, divider: true, onSelect: onClear },
+            ]}
+          />
+        )}
+      </div>
+      <div className="grid grid-cols-1 gap-1.5 sm:grid-cols-3">
+        {cards.map((c) => {
+          const s = c.setup;
+          const on = picked === setupKey(s);
+          const claude = s.agent_type === "claude";
+          const parts: React.ReactNode[] = [
+            s.launcher ? <span key="l" className="font-mono">{s.launcher}</span> : t("newagent.follow_model_settings"),
+            s.model && <span key="m" className="font-mono">{s.model}</span>,
+            // "Allow everything" said with the warning it has in the form
+            claude && s.mode && (s.mode === BYPASS_MODE
+              ? <span key="p" className="inline-flex items-center gap-0.5 font-medium text-orange"><Icon name="warning" size={11} className="shrink-0" />{modeTitle(s.mode)}</span>
+              : modeTitle(s.mode)),
+            claude && s.effort && effortTitle(s.effort),
+            !c.online && t("machines.offline"),
+          ].filter(Boolean);
+          return (
+            <button
+              key={setupKey(s)}
+              type="button"
+              data-recent-setup
+              data-bypass={(claude && s.mode === BYPASS_MODE) || undefined}
+              aria-pressed={on}
+              disabled={!c.online}
+              title={shortPath(s.cwd)}
+              onClick={() => onPick(c)}
+              className={cx(
+                "flex min-w-0 flex-col gap-0.5 rounded-control px-2.5 py-2 text-left transition-[background-color,box-shadow,opacity] disabled:opacity-45",
+                on ? "bg-accent-tint shadow-[0_0_0_1.5px_var(--accent)]" : "bg-surface shadow-btn enabled:hover:bg-hover",
+              )}
+            >
+              <span className="flex min-w-0 items-baseline gap-1 text-[12.5px] leading-snug">
+                <span className={cx("min-w-0 shrink truncate font-medium", on ? "text-accent-ink" : "text-ink")}>{baseName(shortPath(s.cwd))}</span>
+                <span className="shrink-0 text-ink-3">·</span>
+                <span className="min-w-0 shrink-[2] truncate text-ink-2">{machines.find((m) => m.id === s.machine)?.name ?? s.machine}</span>
+              </span>
+              <span className="line-clamp-2 text-[11.5px] leading-snug text-ink-3">
+                {parts.map((p, i) => (
+                  <span key={i}>
+                    {i > 0 && " · "}
+                    {p}
+                  </span>
+                ))}
+              </span>
+            </button>
+          );
+        })}
+      </div>
     </div>
   );
 }

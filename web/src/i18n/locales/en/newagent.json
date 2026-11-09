@@ -49,5 +49,9 @@
   "add_provider": "Add model provider",
   "try_anyway": "Try anyway",
   "close_help": "Close",
-  "forget_failed": "Couldn't forget “{id}”: {error}"
+  "forget_failed": "Couldn't forget “{id}”: {error}",
+  "recent_setups": "Recent",
+  "recent_options": "Recent setup options",
+  "recent_remove": "Remove from Recent",
+  "recent_clear": "Clear recent setups"
 }
