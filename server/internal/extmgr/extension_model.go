@@ -115,6 +115,104 @@ func (h *Manager) takeDependentsOf(w http.ResponseWriter, r *http.Request, ids [
 	return true
 }
 
+// switchExtension is PUT …/-/enabled of the regular and admin routes; it writes the error itself and then says false.
+// A pack takes its installed members with it (docs/extensions/extensions.md "Dependencies, exports and packs", #1830):
+// off switches off the members that are on, after the same has_dependents question as for the pack's own
+// dependents, and remembers them on the pack (Record.PackOff); on switches the pack and then those members back on,
+// not the ones the user had turned off. A member switched by itself is forgotten by its pack. A member that cannot go
+// back on is a warning, the pack is on either way.
+func (h *Manager) switchExtension(w http.ResponseWriter, r *http.Request, p *extension.Extension, on, cascade bool, actor string) (warnings []string, ok bool) {
+	ps, id, ctx := h.extensions, p.Record.ID, r.Context()
+	if !p.Full.IsPack() {
+		if !on && !h.takeDependents(w, r, id, cascade) {
+			return nil, false
+		}
+		if err := ps.reg.SetEnabled(ctx, id, on, actor); err != nil {
+			writeExtensionChangeError(w, r, http.StatusConflict, "read_only", err)
+			return nil, false
+		}
+		if err := ps.reg.ForgetPackOff(ctx, id); err != nil {
+			h.logf("extensions: %s switched by itself, but its pack still remembers switching it off: %v", id, err)
+		}
+		return nil, true
+	}
+	cur := ps.reg.Snapshot(id)
+	if cur == nil {
+		writeExtensionResponseError(w, r, http.StatusNotFound, "not_found", errNoExtension)
+		return nil, false
+	}
+	if on {
+		if err := ps.reg.SetPackEnabled(ctx, id, true, nil, actor); err != nil {
+			writeExtensionChangeError(w, r, http.StatusConflict, "read_only", err)
+			return nil, false
+		}
+		pending, failed := ps.turnOnAll(ctx, cur.Record.PackOff, actor)
+		lang := h.contextLang(ctx)
+		for _, mid := range pending {
+			name := mid
+			if m := ps.reg.Snapshot(mid); m != nil {
+				name = m.Full.Name
+			}
+			warnings = append(warnings, i18n.T(lang, "hub-extension_model.pack_member_not_on", i18n.Args{"name": name, "error": i18n.Localize(failed[mid], lang)}))
+		}
+		return warnings, true
+	}
+	members := ps.packMembers(p)
+	if !h.takeDependentsOf(w, r, append([]string{id}, members...), cascade) {
+		return nil, false
+	}
+	off := slices.Clone(cur.Record.PackOff)
+	var done []string
+	undo := func(err error) (warnings []string, ok bool) {
+		ps.turnOnAll(ctx, done, actor)
+		writeExtensionChangeError(w, r, http.StatusConflict, "read_only", err)
+		return nil, false
+	}
+	for _, mid := range members {
+		m := ps.reg.Snapshot(mid)
+		if m == nil || !m.Record.Enabled {
+			continue // off already: the user's, left off when the pack goes on
+		}
+		if err := ps.reg.SetEnabled(ctx, mid, false, actor); err != nil {
+			return undo(err)
+		}
+		done = append(done, m.Record.ID)
+		if !slices.Contains(off, m.Record.ID) {
+			off = append(off, m.Record.ID)
+		}
+	}
+	if err := ps.reg.SetPackEnabled(ctx, id, false, off, actor); err != nil {
+		return undo(err)
+	}
+	return nil, true
+}
+
+// turnOnAll switches the installed extensions ids on that are off. A member may depend on one listed after it, so
+// it goes round until a round turns nothing on; pending are the ones still off, with why (failed).
+func (ps *extensions) turnOnAll(ctx context.Context, ids []string, actor string) (pending []string, failed map[string]error) {
+	pending, failed = slices.Clone(ids), map[string]error{}
+	for progress := true; progress && len(pending) > 0; {
+		progress = false
+		var next []string
+		for _, id := range pending {
+			m := ps.reg.Snapshot(id)
+			if m == nil || m.Record.Source != extension.SourceInstalled || m.Record.Enabled {
+				delete(failed, id)
+				continue // removed since, or already on again
+			}
+			if err := ps.reg.SetEnabled(ctx, id, true, actor); err != nil {
+				failed[id] = err
+				next = append(next, id)
+				continue
+			}
+			delete(failed, id)
+			progress = true
+		}
+		pending = next
+	}
+	return pending, failed
+}
+
 // packMembers are the installed members of pack p, to remove with it.
 func (ps *extensions) packMembers(p *extension.Extension) []string {
 	var out []string
