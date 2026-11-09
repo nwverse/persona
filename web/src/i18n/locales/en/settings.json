@@ -152,5 +152,6 @@
   "launchers_failed": "Couldn't load the providers: {error}",
   "search_settings": "Search settings",
   "search_in_page": "In this page",
-  "search_no_results": "No matching settings"
+  "search_no_results": "No matching settings",
+  "search_placeholder_settings": "Search settings"
 }

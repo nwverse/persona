@@ -149,5 +149,6 @@
   "launchers_failed": "没有拿到供应商列表：{error}",
   "search_settings": "搜索设置",
   "search_in_page": "页面内",
-  "search_no_results": "没有匹配的设置"
+  "search_no_results": "没有匹配的设置",
+  "search_placeholder_settings": "搜索设置"
 }

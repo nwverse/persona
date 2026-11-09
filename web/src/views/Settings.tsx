@@ -331,7 +331,7 @@ function SettingsNav({ tab, query, onQuery, search, shown, onPick, onGroup, cont
         <div className="text-[14px] font-semibold text-ink">{t("settings.title")}</div>
         <label className="mt-2 flex h-8 items-center gap-2 rounded-control bg-surface px-2.5 shadow-btn focus-within:shadow-[inset_0_0_0_1px_var(--accent)]">
           <Icon name="search" size={13} stroke={2} className="shrink-0 text-ink-3" />
-          <input value={query} onChange={(e) => onQuery(e.target.value)} placeholder={t("settings.search_placeholder")} aria-label={t("settings.search_settings")} className="min-w-0 flex-1 bg-transparent text-[13px] text-ink outline-none placeholder:text-ink-3" />
+          <input value={query} onChange={(e) => onQuery(e.target.value)} placeholder={t("settings.search_placeholder_settings")} aria-label={t("settings.search_settings")} className="min-w-0 flex-1 bg-transparent text-[13px] text-ink outline-none placeholder:text-ink-3" />
           {query && <IconButton icon="x" label={t("settings.clear")} size={22} iconSize={12} onClick={() => onQuery("")} />}
         </label>
       </div>
