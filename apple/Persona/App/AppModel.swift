@@ -26,6 +26,8 @@ final class AppModel {
     /// Pairing tokens this launch traded for the device's own, to that token (DeviceCredentialTrade): a socket or a
     /// pairing link still on one goes on with the device's.
     @ObservationIgnored var tradedTokens: [String: String] = [:]
+    /// What a Settings disconnect is signing this device out of (HubSignOut.swift); nil when none runs.
+    var hubSignOut: HubSignOutScope?
     /// One per group, in the registry's order; the demo's alone in Demo Mode.
     private(set) var links: [HubLink] = []
     /// The group hub-level pages show (`selectHub`); the first group when it is not one of them.
@@ -513,6 +515,7 @@ final class AppModel {
     /// `ssh`: the SSH tunnel set up on the pairing page (docs/operations/network.md「经 SSH 隧道连 hub」): pairing goes through it
     /// when the address does not answer (or always, with Always Use SSH), and the hub keeps it.
     func pair(_ new: ServerConfig, ssh: SSHRoute? = nil) async throws {
+        try refusePairingWhileSigningOut()
         retryRegistry()
         // Unknown pairings would be written over (the keychain is not readable before the first unlock).
         guard !registryUnreadable else { throw APIError(status: 0, message: String(localized: "Can't read your saved pairings right now. Unlock your phone and try again.")) }
@@ -532,6 +535,12 @@ final class AppModel {
             throw error
         }
         let identity = try? await client.identity()
+        do {
+            try refusePairingWhileSigningOut() // one may have started while the hub answered
+        } catch {
+            tunnels.close(SSHTunnels.pairingID)
+            throw error
+        }
         if isDemo { leaveDemo() } // a real hub ends Demo Mode
         var r = registry
         let group: String
@@ -671,6 +680,8 @@ final class AppModel {
         for link in links { link.live.disconnect() }
         closeAllTunnels() // no hub left to route through a tunnel (also drops HubTransport's routes)
         LiveActivityController.shared.endAll() // its buttons would talk to a hub we no longer know
+        // No key may open a push any more: the notification extension tries every key left (PushCrypto.allKeys).
+        for g in Set(registry.groups).union(PushCrypto.allKeys().map(\.group)) { PushCrypto.removeKey(group: g) }
         links = []
         registry = HubRegistry()
         saveRegistry(registry)
@@ -3079,7 +3090,7 @@ final class AppModel {
         // A task's agent asking: the watch names the task (docs/assistant/unified-entry.md「手表」). Muted agents and spaces
         // stay off the wrist too (#4360), the same rule as the Agents badge and the inbox.
         let tasks = TasksStore.shared
-        let interactions = asking.filter { !isQuiet($0.sessionKey) && !isMuted($0.sessionKey) }.map { ix in
+        let interactions = asking.filter { $0.showsOnWatch && !isQuiet($0.sessionKey) && !isMuted($0.sessionKey) }.map { ix in
             var ix = ix
             ix.taskTitle = tasks.task(of: ix.sessionKey)?.title
             return ix
