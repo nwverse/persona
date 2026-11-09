@@ -88,6 +88,10 @@ func lastLine(screen string) string {
 // shellSettleWait it returns nil anyway, as the start went on before. A screen that cannot be read returns at once. A
 // startup question on the last line is waited out for shellQuestionWait; one still there ends the start: shellWaiting.
 func (n *Node) settleShell(ctx context.Context, pane string) error {
+	if n.shellPause > 0 {
+		time.Sleep(n.shellPause)
+		return nil
+	}
 	settle, quiet, ask := n.shellWaits()
 	began := time.Now()
 	last, since := "", began

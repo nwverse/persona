@@ -272,7 +272,7 @@ func (n *Node) startTabFailed(ctx context.Context, launch host.Launcher, created
 	if rpcCode(err) != "" { // the tab's shell said why (shellmiss.go): its tail would only repeat the command
 		return err
 	}
-	return fmt.Errorf("%v\n%s", err, tail)
+	return fmt.Errorf("%w\n%s", err, tail)
 }
 
 // checkStart validates a start's arguments and returns the directory (~ expanded, home when empty) and launcher.

@@ -41,6 +41,9 @@ func TestShellQuestion(t *testing.T) {
 	}
 }
 
+// watchShell has n's starts wait for the new tab's shell to settle, as a node does (testNode pauses instead).
+func watchShell(n *Node) { n.shellPause = 0 }
+
 // startLinePath is the start file of a line a start typed (". <path> && true <id>", quoted when it must be).
 var startLinePath = regexp.MustCompile(`^(?:\.|source) '?([^' ]+)'?`)
 
@@ -123,6 +126,7 @@ func startData(t *testing.T, err error) map[string]string {
 func TestStartLeavesAStartupQuestionAndKeepsTheTab(t *testing.T) {
 	withPaneShell(t, "/bin/zsh")
 	n, f, home := herdrNode(t)
+	watchShell(n)
 	withStartWaits(n, time.Minute, time.Minute)
 	n.shellSettle, n.shellAsk = 10*time.Second, 600*time.Millisecond
 	newShellTab(f, "zsh")
@@ -170,6 +174,7 @@ func TestStartLeavesAStartupQuestionAndKeepsTheTab(t *testing.T) {
 func TestKeptStartTabWithAnAgentStays(t *testing.T) {
 	withPaneShell(t, "/bin/zsh")
 	n, f, home := herdrNode(t)
+	watchShell(n)
 	withStartWaits(n, time.Minute, time.Minute)
 	n.shellAsk = 300 * time.Millisecond
 	newShellTab(f, "zsh")
@@ -192,6 +197,7 @@ func TestKeptStartTabWithAnAgentStays(t *testing.T) {
 func TestStartTypesOnceTheQuestionIsAnswered(t *testing.T) {
 	withPaneShell(t, "/bin/zsh")
 	n, f, home := herdrNode(t)
+	watchShell(n)
 	withStartWaits(n, 1500*time.Millisecond, time.Minute)
 	n.shellSettle, n.shellQuiet, n.shellAsk = 10*time.Second, 300*time.Millisecond, 10*time.Second
 	newShellTab(f, "zsh")
@@ -215,6 +221,7 @@ func TestStartTypesOnceTheQuestionIsAnswered(t *testing.T) {
 func TestStartWaitsForTheShellToSettle(t *testing.T) {
 	withPaneShell(t, "/bin/zsh")
 	n, f, home := herdrNode(t)
+	watchShell(n)
 	withStartWaits(n, 1500*time.Millisecond, time.Minute)
 	n.shellSettle, n.shellQuiet = 10*time.Second, 300*time.Millisecond
 	newShellTab(f, "zsh")
@@ -247,6 +254,7 @@ func TestStartSettlesOnBashAndFish(t *testing.T) {
 		t.Run(tc.shell, func(t *testing.T) {
 			withPaneShell(t, "/bin/"+tc.shell)
 			n, f, home := herdrNode(t)
+			watchShell(n)
 			withStartWaits(n, time.Second, time.Minute)
 			n.shellSettle, n.shellQuiet = 10*time.Second, 300*time.Millisecond
 			newShellTab(f, tc.shell)
@@ -271,6 +279,7 @@ func TestStartSettlesOnBashAndFish(t *testing.T) {
 func TestStartTypesARejectedLineAgain(t *testing.T) {
 	withPaneShell(t, "/bin/zsh")
 	n, f, home := herdrNode(t)
+	watchShell(n)
 	withStartWaits(n, time.Minute, time.Minute)
 	n.shellQuiet = 200 * time.Millisecond
 	newShellTab(f, "zsh")
@@ -319,6 +328,7 @@ func TestStartTypesARejectedLineAgain(t *testing.T) {
 func TestStartLineRejectedTwiceClosesTheTab(t *testing.T) {
 	withPaneShell(t, "/bin/zsh")
 	n, f, home := herdrNode(t)
+	watchShell(n)
 	withStartWaits(n, time.Minute, time.Minute)
 	n.shellQuiet = 200 * time.Millisecond
 	newShellTab(f, "zsh")
