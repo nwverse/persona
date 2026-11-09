@@ -122,6 +122,9 @@ nonisolated struct APIClient: Sendable {
     /// The Feishu account (gateway account number) the `/api/v1/lark` requests are about, sent as `ol_account`
     /// (docs/extensions/feishu.md「多账号」). nil: the hub's own (lark.account).
     var larkAccount: Int?
+    /// The manager every request names (`X-Persona-Manager`, docs/protocol/protocol.md "Per-manager routing"): another
+    /// manager's extension or connector. nil: none named, so the hub asks the default manager, as before.
+    var managerID: String?
     /// The hub has the extension routes (`features` has `extensions`, #1844): extension requests go to
     /// /api/v1/extensions and answer with the new keys; an older hub only has /api/v1/plugins (docs/extensions/extensions.md「命名和兼容」).
     var extensionsAPI = false
@@ -175,6 +178,20 @@ nonisolated struct APIClient: Sendable {
         return c
     }
 
+    static let managerHeader = "X-Persona-Manager"
+
+    /// This client for one manager's things (an item a merged list stamped with that manager): every request names it.
+    /// nil or empty: the default manager's, and nothing is named, as before. Each page makes its requests through its own
+    /// copy, so a request that goes out after the page moved on still names the manager it was made for.
+    func manager(_ id: String?) -> APIClient {
+        var c = self
+        c.managerID = id?.isEmpty == false ? id : nil
+        return c
+    }
+
+    /// What every request carries besides the caller's own headers: the manager it names.
+    private var routing: [String: String] { managerID.map { [Self.managerHeader: $0] } ?? [:] }
+
     /// `query` with the Feishu account a `/api/v1/lark` request is about, unless it names one already (a media URL
     /// the hub handed out for that account).
     func larkScoped(_ path: String, _ query: [String: String]) -> [String: String] {
@@ -191,6 +208,7 @@ nonisolated struct APIClient: Sendable {
                  timeout: TimeInterval = 30, opID: UUID? = nil) async throws -> Data {
         let query = larkScoped(path, query)
         let headers = clientMetadata.headers.merging(opID.map(HubNaming.operationHeaders) ?? [:]) { _, operation in operation }
+            .merging(routing) { _, manager in manager }
         if let answer = transport ?? (config.isDemo ? Self.local : nil) {
             let data = try await answer(LocalRequest(method: method, path: path, query: query.filter { !$0.value.isEmpty },
                                                      body: try body.map { try JSON.encoder.encode(AnyEncodable($0)) }, headers: headers))
@@ -257,6 +275,7 @@ nonisolated struct APIClient: Sendable {
         let requestID = String(UUID().uuidString.prefix(8)).lowercased()
         req.setValue(requestID, forHTTPHeaderField: "X-Client-Request-Id")
         if let etag { req.setValue(etag, forHTTPHeaderField: "If-None-Match") }
+        for (name, value) in routing { req.setValue(value, forHTTPHeaderField: name) }
         let (data, resp) = try await Self.uncachedSession.data(for: req) // our own cache: URLSession's would hide the 304
         let http = resp as? HTTPURLResponse
         if http?.statusCode == 304 { return (nil, etag) }
@@ -268,7 +287,8 @@ nonisolated struct APIClient: Sendable {
         let query = larkScoped(path, query)
         if config.isDemo { throw APIError(status: 403, message: DemoText.notSent) }
         if let transport {
-            return try await transport(LocalRequest(method: "POST", path: path, query: query, body: Data(contentsOf: file), headers: clientMetadata.headers))
+            return try await transport(LocalRequest(method: "POST", path: path, query: query, body: Data(contentsOf: file),
+                                                    headers: clientMetadata.headers.merging(routing) { _, manager in manager }))
         }
         var req = URLRequest(url: url(path, query: query), timeoutInterval: timeout)
         req.httpMethod = "POST"
@@ -278,6 +298,7 @@ nonisolated struct APIClient: Sendable {
         req.setValue("application/octet-stream", forHTTPHeaderField: "Content-Type")
         let requestID = String(UUID().uuidString.prefix(8)).lowercased()
         req.setValue(requestID, forHTTPHeaderField: "X-Client-Request-Id")
+        for (name, value) in routing { req.setValue(value, forHTTPHeaderField: name) }
         let (data, response) = try await session.upload(for: req, fromFile: file)
         return try checked(data, response, requestID: requestID)
     }
@@ -331,6 +352,7 @@ nonisolated struct APIClient: Sendable {
         clientMetadata.apply(to: &req)
         let requestID = String(UUID().uuidString.prefix(8)).lowercased()
         req.setValue(requestID, forHTTPHeaderField: "X-Client-Request-Id")
+        for (name, value) in routing { req.setValue(value, forHTTPHeaderField: name) }
         let (temp, response) = try await Self.uncachedSession.download(for: req, delegate: DownloadProgress(progress))
         defer { try? FileManager.default.removeItem(at: temp) }
         let status = (response as? HTTPURLResponse)?.statusCode ?? 0
@@ -515,6 +537,12 @@ nonisolated struct APIClient: Sendable {
     func launcherModels(machine: String, launcher: String, refresh: Bool = false) async throws -> LauncherModels {
         let path = "/api/v1/machines/\(machine)/launchers/\(launcher.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? launcher)/models"
         return try JSON.decoder.decode(LauncherModels.self, from: await request("GET", path, query: refresh ? ["refresh": "1"] : [:], timeout: 75))
+    }
+    /// Forgets one model ID typed for this launcher on this computer (#1644, the list's Forget): the hub stops listing
+    /// it (`custom: true`). Forgetting one it doesn't remember is fine too.
+    func forgetCustomModel(machine: String, launcher: String, model: String) async throws {
+        let path = "/api/v1/machines/\(machine)/launchers/\(launcher.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? launcher)/models/custom"
+        _ = try await request("DELETE", path, query: ["model": model])
     }
     /// Model Settings' list for a launcher provider (`launcher.<name>`, #943), asked on a machine that has the launcher (its
     /// `machine`); nil: an older hub, or a provider without a list (a plugin brings its own, an API has none).
@@ -1119,6 +1147,47 @@ nonisolated struct APIClient: Sendable {
         return try JSON.decoder.decode(TaskBody.self, from: data).task
     }
     func deleteTask(_ id: String) async throws { try await delete("/api/v1/assistant/tasks/\(id)") }
+
+    /// A saved place (Settings › Assistant › Saved Places, #1598): what a reminder by place goes off at when the user says
+    /// "home" or "the office". The hub keeps them; the assistant reads them (`list_places`).
+    struct SavedPlace: Codable, Identifiable, Hashable, Sendable {
+        /// The reminder's circle: 150 m by default, 100–2000 m (the hub and `PlaceTrigger` clamp to the same).
+        static let defaultRadius = 150
+        static let radiusRange = 100...2000
+
+        var id: String = ""          // "" until the hub has it
+        var name: String = ""
+        var address: String = ""
+        var latitude: Double = 0
+        var longitude: Double = 0
+        var radiusMeters: Int = SavedPlace.defaultRadius
+        enum CodingKeys: String, CodingKey { case id, name, address, latitude, longitude, radiusMeters = "radius_meters" }
+
+        init(id: String = "", name: String = "", address: String = "", latitude: Double = 0, longitude: Double = 0,
+             radiusMeters: Int = SavedPlace.defaultRadius) {
+            self.id = id; self.name = name; self.address = address
+            self.latitude = latitude; self.longitude = longitude; self.radiusMeters = radiusMeters
+        }
+        init(from d: Decoder) throws {
+            let c = try d.container(keyedBy: CodingKeys.self)
+            id = try c.decode(String.self, forKey: .id)
+            name = try c.decode(String.self, forKey: .name)
+            address = try c.decodeIfPresent(String.self, forKey: .address) ?? ""
+            latitude = try c.decode(Double.self, forKey: .latitude)
+            longitude = try c.decode(Double.self, forKey: .longitude)
+            radiusMeters = try c.decodeIfPresent(Int.self, forKey: .radiusMeters) ?? SavedPlace.defaultRadius
+        }
+    }
+    struct PlacesBody: Decodable { var places: [SavedPlace] }
+    struct PlaceBody: Decodable { var place: SavedPlace }
+    func savedPlaces() async throws -> [SavedPlace] { try await get("/api/v1/assistant/places", as: PlacesBody.self).places }
+    /// Adds `p` (no id yet) or saves the user's changes to it; returns it as the hub has it.
+    func savePlace(_ p: SavedPlace) async throws -> SavedPlace {
+        let data = p.id.isEmpty ? try await request("POST", "/api/v1/assistant/places", body: p)
+                                : try await request("PUT", "/api/v1/assistant/places/\(p.id)", body: p)
+        return try JSON.decoder.decode(PlaceBody.self, from: data).place
+    }
+    func deletePlace(_ id: String) async throws { try await delete("/api/v1/assistant/places/\(id)") }
     struct TaskRun: Decodable {
         var sessionID: String
         var machineID: String
