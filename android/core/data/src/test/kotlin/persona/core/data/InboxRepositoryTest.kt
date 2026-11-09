@@ -1074,6 +1074,14 @@ class InboxRepositoryTest {
                 repository.removePolicy("p1", "m-3")
                 repository.unmute("u1", "m-3")
                 assertEquals(listOf("DELETE p1 m-3", "DELETE mute u1 m-3"), transport.policyCalls.takeLast(2))
+                // Each manager's lists name it now that it is the default, and so does removing a rule opened from "Rules";
+                // the rule of the default's item names none, as before.
+                repository.inboxPolicies(manager = "m-3")
+                repository.inboxMutes("m-3")
+                repository.savePolicy(InboxPolicyTarget.of(checkNotNull(saved).copy(manager = "m-3")), InboxPolicyTier.None, InboxPolicyTwin.None)
+                repository.inboxPolicies(d)
+                repository.savePolicy(InboxPolicyTarget.of(d, d.mutes.single()).copy(policy = saved), InboxPolicyTier.None, InboxPolicyTwin.None)
+                assertEquals(listOf("GET m-3", "GET mutes m-3", "PATCH p1   m-3", "GET ", "PATCH p1   "), transport.policyCalls.takeLast(5))
             } finally {
                 AssistantManagerChoice.reset()
             }
