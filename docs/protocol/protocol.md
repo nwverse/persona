@@ -1259,7 +1259,7 @@ Client → server:
 
 ### Event resume (`event_seq`, 2026-11-04)
 
-Broadcasts the hub sends to all clients (everything in this table except `hello`, connection snapshots, `sessions_delta`, `sessions_list`, `managers`, `extension_ui_stream`, `items`, `delta`, `terminal*`, `tool_call`, `notify`, `lock_test`, `pong`, `error`,
+Broadcasts the hub sends to all clients (everything in this table except `hello`, connection snapshots, `sessions_delta`, `sessions_list`, `managers`, `extension_operation`, `extension_ui_stream`, `items`, `delta`, `terminal*`, `tool_call`, `notify`, `lock_test`, `pong`, `error`,
 `client_hello_ack`, `hub_restarting`) carry `event_seq`: it increments by one per event within a stream (`hello.event_stream`), and numbering continues after a hub restart.
 
 - The client remembers `event_stream` and the highest `event_seq` it received, and passes them when reconnecting: `/api/v1/ws?event_stream=<stream>&event_seq=<n>` (both are required).

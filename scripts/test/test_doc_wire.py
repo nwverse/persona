@@ -9,8 +9,9 @@ and checks:
       server -> client table under protocol.md "WebSocket /api/v1/ws";
   (b) every case of the switch on msg.Type in onClientMessage (server/internal/hub/http.go) has a row in its
       client -> server table;
-  (c) every feature in proto.Features, and those the hub's features() adds (server/internal/hub/extensions_link.go),
-      is named in protocol.md "Health check and feature flags";
+  (c) every feature in proto.Features, and every one the hub's features() appends
+      (server/internal/hub/extensions_link.go; an h.method()... spread is followed into that method's returns), is
+      named in protocol.md "Health check and feature flags";
   (d) every extension point in extension.Points has a row `| `x` (version N)` in extensions.md "Extension points",
       N its Version, and the manifest schema's $defs.Contributes lists the same points;
   (e) every property of the schema's $defs.Manifest has a row in the field table of extensions.md's manifest section.
@@ -148,6 +149,43 @@ def resolve(element, package):
     raise AssertionError(f"no constant {element} in {INTERNAL}/{package}")
 
 
+def returned(package, method):
+    """The values of the `return []string{…}` statements of the Hub method `func (h *Hub) method() []string` defined in
+    a non-test file of package (a `return nil` adds none; any other return fails)."""
+    opening = f"func (h *Hub) {method}() []string {{"
+    for source in sorted((ROOT / INTERNAL / package).glob("*.go")):
+        code = source.read_text()
+        if source.name.endswith("_test.go") or "\n" + opening not in code:
+            continue
+        found = set()
+        for statement in re.findall(r"\breturn\b([^\n]*)", strip_comments(block(code, opening))):
+            statement = statement.strip()
+            if statement == "nil":
+                continue
+            literal = re.fullmatch(r"\[\]string\{(.*)\}", statement)
+            if not literal:
+                raise AssertionError(f"{opening!r} returns {statement!r}: only []string{{…}} or nil can be read")
+            found |= {resolve(element, package) for element in split_arguments(literal.group(1))}
+        return found
+    raise AssertionError(f"no {opening!r} in {INTERNAL}/{package}")
+
+
+def appended(code, function, package):
+    """Every value function appends: each argument after the first (the slice appended to) of every append(…) in
+    it, resolved in package, and each `h.method()...` followed into that method's returns. A variable of a
+    `for … range` loop is left out (the values come in at run time); anything else that cannot be read fails."""
+    ranged = set(re.findall(r"\bfor\s+(?:\w+\s*,\s*)?(\w+)\s*:?=\s*range\b", strip_comments(block(code, function))))
+    found = set()
+    for arguments in appends(code, function):
+        for argument in arguments[1:]:
+            spread = re.fullmatch(r"h\.(\w+)\(\)\.\.\.", argument)
+            if spread:
+                found |= returned(package, spread.group(1))
+            elif argument not in ranged:
+                found.add(resolve(argument, package))
+    return found
+
+
 def point_versions(sources):
     """{name: version as written} of the extension points registered in sources ({file name: Go text}): the entries
     of `var Points = map[string]Point{…}` and every `Points["x"] = Point{…}`."""
@@ -229,14 +267,10 @@ def documented_websocket_types():
 
 
 def features():
-    """proto.Features and the features the hub's features() adds to them."""
+    """proto.Features and every feature the hub's features() appends to them (those the managers report at run time
+    aside)."""
     found = {resolve(element, "proto") for element in slice_elements(read(f"{INTERNAL}/proto/proto.go"), "Features")}
-    for arguments in appends(read(f"{INTERNAL}/hub/extensions_link.go"), "func (h *Hub) features() []string {"):
-        if arguments[0] == "slices.Clone(proto.Features)":
-            found |= {resolve(argument, "hub") for argument in arguments[1:]}
-        else:
-            found |= {resolve(argument, "hub") for argument in arguments[1:] if argument.startswith('"')}
-    return found
+    return found | appended(read(f"{INTERNAL}/hub/extensions_link.go"), "func (h *Hub) features() []string {", "hub")
 
 
 def points():
@@ -316,6 +350,29 @@ class ParserTests(unittest.TestCase):
                     with self.assertRaises(AssertionError):
                         resolve(unknown, "hub")
 
+    def test_appended(self):
+        features = ('package hub\n\nconst (\n\tfeatureA = "a"\n\tfeatureB = "b"\n\tfeatureC = "c"\n)\n\n'
+                    'func (h *Hub) features() []string {\n\tout := append(slices.Clone(proto.Features), featureA)\n'
+                    '\tout = append(out, h.more()...)\n\tif x {\n\t\tout = append(out, featureB, "lit")\n\t}\n'
+                    '\tfor _, f := range h.report().Features {\n\t\tif !slices.Contains(out, f) {\n'
+                    '\t\t\tout = append(out, f)\n\t\t}\n\t}\n\treturn out\n}\n')
+        more = ('package hub\n\nfunc (h *Hub) more() []string {\n\tif y {\n\t\treturn nil\n\t}\n'
+                '\tif z {\n\t\treturn []string{featureC}\n\t}\n\treturn []string{featureC, "d"}\n}\n\n'
+                'func (h *Hub) none() []string {\n\treturn h.more()\n}\n')
+        opening = "func (h *Hub) features() []string {"
+        with tempfile.TemporaryDirectory(prefix="doc-wire-") as directory:
+            root = Path(directory)
+            (root / INTERNAL / "hub").mkdir(parents=True)
+            (root / INTERNAL / "hub/features.go").write_text(features)
+            (root / INTERNAL / "hub/more.go").write_text(more)
+            with patch(__name__ + ".ROOT", root):
+                # Every append counts, conditional or not; a spread method is followed; the loop's f is left out.
+                self.assertEqual({"a", "b", "c", "d", "lit"}, appended(features, opening, "hub"))
+                # A new kind of argument fails rather than being skipped.
+                for argument in ("local...", "h.none()...", "h.gone()...", "featureZ"):
+                    with self.assertRaises(AssertionError, msg=argument):
+                        appended(features.replace("featureB, ", argument + ", "), opening, "hub")
+
     def test_point_versions(self):
         sources = {
             "points.go": ('package extension\n\nvar Points = map[string]Point{\n'
@@ -375,8 +432,8 @@ class DocWireTests(unittest.TestCase):
 
     def test_feature_flags_are_documented(self):
         have = features()
-        self.assertTrue({"tls", "client_hello", "persona_contracts_v1", "sessions_list", "assistant_views"} <= have,
-                        sorted(have))
+        self.assertTrue({"tls", "client_hello", "persona_contracts_v1", "sessions_list", "assistant_views",
+                         "agent_session_archives", "agent_session_archive_close"} <= have, sorted(have))
         documented = backticked(section(read(PROTOCOL_DOC), "Health check and feature flags"))
         self.assertEqual([], missing(have, documented),
                          f"features in the hub's hello and /health not named in {PROTOCOL_DOC} "

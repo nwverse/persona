@@ -216,6 +216,19 @@ class CheckFastScriptsTests(unittest.TestCase):
         self.assertIn("PASS     scripts/test/test_doc_wire.py", out)
         self.assertNotIn("no fast check maps to", out)
 
+    def test_a_change_to_the_wire_lists_runs_the_doc_wire_suite(self):
+        # test_doc_wire.py reads these sources: a new message type, flag, point or field breaks it from the code side.
+        self.break_suite("test_doc_wire.py")
+        for path in ("server/internal/proto/proto.go", "server/internal/hub/extensions_link.go",
+                     "server/internal/extension/points.go", "schema/extension/manifest.schema.json"):
+            with self.subTest(path=path):
+                self.write(path, "changed\n")
+                code, out = self.check_fast(path=self.toolchain_without_node_and_go())
+                self.git("clean", "-fdq", "--", path.split("/", 1)[0])
+                self.assertEqual(1, code, out)
+                self.assertIn("FAIL     scripts/test/test_doc_wire.py", out)
+                self.assertNotIn("test_doc_paths.py", out)
+
     def test_an_apple_change_runs_the_l10n_suite(self):
         self.break_suite("test_apple_l10n.py")
         self.write("apple/Persona/Views/Settings/Options.swift", 'let s = "中文"\n')
@@ -325,11 +338,13 @@ class CheckFastScriptsTests(unittest.TestCase):
         self.assertIn("1 suite(s) timed out: scripts/tools/test_slow.py", out)
 
     def toolchain_without_node_and_go(self):
-        # A PATH with only the tools check-fast.sh itself needs, so node and go are missing on any machine.
-        bin_dir = self.repo / ".bin"
-        if bin_dir.is_dir():
-            return str(bin_dir)
-        bin_dir.mkdir()
+        # A PATH with only the tools check-fast.sh itself needs, so node and go are missing on any machine. It lives
+        # outside the repository, so a diff-mode run does not count it as a change.
+        if getattr(self, "bin_dir", None):
+            return str(self.bin_dir)
+        self.bin_dir = Path(tempfile.mkdtemp(prefix="check-fast-bin-"))
+        self.addCleanup(shutil.rmtree, self.bin_dir)
+        bin_dir = self.bin_dir
         for tool in ("bash", "python3", "timeout", "gtimeout", "git", "mktemp", "rm", "dirname", "basename", "find",
                      "sort", "tee", "tail", "grep", "sed", "awk", "tr", "wc", "cut", "cat", "env"):
             found = shutil.which(tool)
