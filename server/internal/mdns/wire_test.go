@@ -1,6 +1,7 @@
 package mdns
 
 import (
+	"errors"
 	"maps"
 	"math/rand/v2"
 	"net/netip"
@@ -410,6 +411,57 @@ func TestCompressionPointers(t *testing.T) {
 	}
 	if len(m.answers) != 1 || m.answers[0].name.String() != "local." || m.answers[0].addr != netip.MustParseAddr("192.0.2.1") {
 		t.Errorf("got %+v", m.answers)
+	}
+}
+
+// pointerChain is a 9000-byte query whose every question name runs through the names of all the questions before it:
+// q0 is the root name at 12 and its TYPE field holds a pointer to 12; each later 6-byte question has a name and a
+// TYPE field that both point at the previous question's TYPE field. Every pointer points backwards, yet question k
+// follows k+1 pointers, so 1498 questions cost about 1.1M jumps.
+func pointerChain() []byte {
+	msg := []byte{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xC0, 12, 0, 1} // header, q0: root, TYPE -> 12, CLASS IN
+	prevType, qd := 13, 1
+	for len(msg)+6 <= maxPacket {
+		hi, lo := byte(0xC0|prevType>>8), byte(prevType)
+		prevType = len(msg) + 2
+		msg = append(msg, hi, lo, hi, lo, 0, 1)
+		qd++
+	}
+	msg[4], msg[5] = byte(qd>>8), byte(qd)
+	return msg
+}
+
+func TestCompressionPointerChain(t *testing.T) {
+	msg := pointerChain()
+	if _, err := unpackMessage(msg); !errors.Is(err, errMalformed) {
+		t.Errorf("pointer chain: err = %v, want errMalformed", err)
+	}
+
+	// Chained pointers of a real message still parse: the answer's PTR target runs 34 -> 23 -> 12.
+	msg = []byte{0, 0, 0x84, 0, 0, 2, 0, 1, 0, 0, 0, 0,
+		5, 'l', 'o', 'c', 'a', 'l', 0, 0, 1, 0, 1, // 12: question local. A IN
+		4, '_', 't', 'c', 'p', 0xC0, 12, 0, 1, 0, 1, // 23: question _tcp.local. A IN
+		3, 'h', 'u', 'b', 0xC0, 23, 0, 12, 0, 1, 0, 0, 0, 10, 0, 2, // 34: answer hub._tcp.local. PTR
+		0xC0, 34} // its target, hub._tcp.local. again
+	m, err := unpackMessage(msg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(m.answers) != 1 || m.answers[0].target.String() != "hub._tcp.local." {
+		t.Errorf("got %+v", m.answers)
+	}
+	// The budget covers rdata names too: running out in the PTR target fails the message instead of skipping the record.
+	jumps := 4 // the answer's name takes 2, its target 3
+	if _, _, _, err := readRecord(msg, 34, &jumps); !errors.Is(err, errTooManyPointers) {
+		t.Errorf("PTR target over budget: err = %v, want errTooManyPointers", err)
+	}
+}
+
+func BenchmarkUnpackPointerChain(b *testing.B) {
+	msg := pointerChain()
+	b.ReportAllocs()
+	for b.Loop() {
+		_, _ = unpackMessage(msg)
 	}
 }
 
