@@ -38,7 +38,8 @@ def features():
                 ["messaging"] if os.environ.get("MOCK_MESSAGING") == "1" else []) + (
                 ["conversation_origin"] if os.environ.get("MOCK_AUTO_CONVERSATIONS") == "1" else []) + (
                 ["sessions_list", "sessions_lookup"] if os.environ.get("MOCK_SESSIONS_LIST") == "1" else []) + (
-                ["preview"] if os.environ.get("MOCK_PREVIEW") else [])
+                ["preview"] if os.environ.get("MOCK_PREVIEW") else []) + (
+                ["session_navigation_v1"] if os.environ.get("MOCK_NAVIGATION") == "1" else [])
 
 
 def identity():
@@ -9456,7 +9457,8 @@ def assistant_run(sid, mid):
 
 def last_turns(items, n):
     """The last n turns of items (each from a user's message on) and whether anything is left before them."""
-    starts = [i for i, x in enumerate(items) if x.get("role") == "user" and x.get("kind") == "text"]
+    starts = [i for i, x in enumerate(items) if x.get("role") == "user" and x.get("kind") == "text"
+              and (os.environ.get("MOCK_NAVIGATION") != "1" or not x.get("injected"))]
     cut = starts[-n] if len(starts) >= n else 0
     return items[cut:], cut > 0
 
@@ -13144,6 +13146,14 @@ if LAUNCHER_HEALTH:
 
 
 # ---------- HTTP ----------
+# MOCK_NAVIGATION=1: independent 40-input index and around windows for #2035's iOS gesture verification.
+_navigation = None
+if os.environ.get("MOCK_NAVIGATION") == "1":
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    import mock_navigation as _navigation
+    _navigation.install(globals())
+
+
 class H(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
 
@@ -13217,6 +13227,7 @@ class H(BaseHTTPRequestHandler):
         u = urlparse(self.path); p = u.path; q = parse_qs(u.query)
         HITS["GET " + p] = HITS.get("GET " + p, 0) + 1
         if self.token_refused(): return
+        if _navigation and _navigation.route(self, p, q, globals()): return
         if preview_route and preview_route(self, "GET", p, q): return
         if p == "/api/v1/assistant/conversations/" + ASK1 + "/always":
             return self.send_json({"grants": ALWAYS_GRANTS})
@@ -13509,6 +13520,7 @@ class H(BaseHTTPRequestHandler):
             INTERACTIONS[:] = [x for x in INTERACTIONS if x["id"] not in codex] + copy.deepcopy(CODEX_INTERACTIONS)
             RESOLVED[:] = [r for r in RESOLVED if r["id"] not in codex]
             INTERACTION_HISTORY[:] = [x for x in INTERACTION_HISTORY if x["id"] not in codex]
+            if _navigation: _navigation.install(globals())
             return self.send_json({"ok": True})
         if p == "/mock/session_close":
             if "fail" in q: SESSION_CLOSE["fail"] = q["fail"][0] == "1"
