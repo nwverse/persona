@@ -191,8 +191,134 @@ func (h *Hub) pagedList(w http.ResponseWriter, r *http.Request, key string, ask 
 	writeMerged(w, key, []listAnswer{{id: id, status: cmp.Or(bw.status, http.StatusOK), header: bw.header, body: bw.body.Bytes()}})
 }
 
-// writeMerged writes answers merged (see mergeList).
+// writeMerged writes answers merged (see mergeList): the top level of the first answer that is a JSON object (the
+// default's, unless it failed), its list under key holding every such answer's items stamped with their manager, keys
+// sorted, as encoding/json writes a map. Nobody answered that way: the default's answer as it is.
+//
+// Its bytes are those of decoding each answer and encoding it again (writeDecoded), written from one scan of each
+// (writeScanned, merged_scan.go): 400 inbox items took 13 ms and 6.9 MB that way, about 3.5 ms and 0.5 MB this way.
 func writeMerged(w http.ResponseWriter, key string, answers []listAnswer) {
+	if !writeScanned(w, key, answers) {
+		writeDecoded(w, key, answers)
+	}
+}
+
+// writeScanned is writeMerged from a scan of each answer; false, having written nothing, when an answer is one only
+// decoding reads right (scanDecode) or nobody answered.
+func writeScanned(w http.ResponseWriter, key string, answers []listAnswer) bool {
+	type part struct {
+		id    string
+		items []scannedItem
+	}
+	var base *listAnswer
+	var top []jsonMember
+	var parts []part
+	size := 0
+	for i := range answers {
+		a := &answers[i]
+		if !a.ok() {
+			continue
+		}
+		s, use := scanAnswer(a.body, key)
+		switch use {
+		case scanSkip:
+			continue
+		case scanDecode:
+			return false
+		}
+		if base == nil {
+			base, top = a, s.members
+			for _, m := range top {
+				size += len(m.key) + len(m.val) + len(`"":,`)
+			}
+		}
+		parts = append(parts, part{a.id, s.items})
+		for _, it := range s.items {
+			size += len(it.raw) + len(`{"manager":"",},`) + len(a.id)
+		}
+	}
+	if base == nil {
+		return false
+	}
+	out := make([]byte, 0, size+len(key)+8)
+	out = append(out, '{')
+	listAt, _ := slices.BinarySearchFunc(top, key, func(m jsonMember, key string) int { return cmp.Compare(string(m.key), key) })
+	for j := 0; j <= len(top); j++ {
+		if j == listAt {
+			if len(out) > 1 {
+				out = append(out, ',')
+			}
+			out = append(out, '"')
+			out = append(out, key...)
+			out = append(out, `":[`...)
+			first := true
+			for _, p := range parts {
+				idJSON, _ := json.Marshal(p.id)
+				for _, it := range p.items {
+					if !first {
+						out = append(out, ',')
+					}
+					first = false
+					var ok bool
+					if out, ok = appendStamped(out, it, p.id, idJSON); !ok {
+						return false
+					}
+				}
+			}
+			out = append(out, ']')
+		}
+		if j == len(top) {
+			break
+		}
+		if len(out) > 1 {
+			out = append(out, ',')
+		}
+		m := top[j]
+		out = append(out, '"')
+		out = append(out, m.key...)
+		out = append(out, '"', ':')
+		if m.asIs {
+			out = append(out, m.val...)
+			continue
+		}
+		var b bytes.Buffer
+		enc := json.NewEncoder(&b)
+		enc.SetEscapeHTML(false)
+		if enc.Encode(json.RawMessage(m.val)) != nil {
+			return false
+		}
+		out = append(out, bytes.TrimSuffix(b.Bytes(), []byte{'\n'})...)
+	}
+	out = append(out, '}', '\n')
+	copyHeader(w.Header(), base.header)
+	w.Header().Del("Content-Length")
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(base.status)
+	_, _ = w.Write(out)
+	return true
+}
+
+// appendStamped appends item with "manager": id as json.Marshal writes stampManager's item in a list.
+func appendStamped(out []byte, it scannedItem, id string, idJSON []byte) ([]byte, bool) {
+	switch it.shape {
+	case itemAsIs:
+		return append(out, it.raw...), true
+	case itemStamp:
+		out = append(out, `{"manager":`...)
+		out = append(out, idJSON...)
+		if it.raw[1] == '}' {
+			return append(out, '}'), true
+		}
+		out = append(out, ',')
+		return append(out, it.raw[1:]...), true
+	}
+	b, err := json.Marshal(json.RawMessage(stampManager(it.raw, id)))
+	return append(out, b...), err == nil
+}
+
+// writeDecoded is writeMerged by decoding each answer and encoding the merge again. A body that is not a JSON object
+// (null included) is no answer.
+func writeDecoded(w http.ResponseWriter, key string, answers []listAnswer) {
 	var base *listAnswer
 	var items []json.RawMessage
 	var top map[string]json.RawMessage
@@ -202,7 +328,7 @@ func writeMerged(w http.ResponseWriter, key string, answers []listAnswer) {
 			continue
 		}
 		var t map[string]json.RawMessage
-		if json.Unmarshal(a.body, &t) != nil {
+		if json.Unmarshal(a.body, &t) != nil || t == nil {
 			continue
 		}
 		raw, has := t[key]
