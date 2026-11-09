@@ -870,8 +870,9 @@ nonisolated struct Session: Codable, Identifiable, Hashable, Sendable {
     /// Claude Code (or an older hub that does not name the agent): what the Claude-only controls (modes, /clear,
     /// /model) are for. Any other agent — named or not yet known to this app — does not get them.
     var isClaude: Bool { !isCodex && (agent == nil || agent == "" || agent == "claude") }
-    /// Its queue can be sent now and reordered (#6088): a Claude Code in a terminal pane, whose own send-now ("ctrl+x
-    /// ctrl+s to send now") the node presses. Other agents refuse it (`send_now_unsupported`).
+    /// Its queue can be sent now and reordered (#6088): a Claude Code in a terminal pane, whose own send-now ("ctrl+enter
+    /// to send now" or "ctrl+x ctrl+s to send now", #2467) the node presses. Other agents refuse it
+    /// (`send_now_unsupported`).
     var steersQueue: Bool { isClaude && !assistant && !hasSource && paneID != nil && canSend }
     /// Only the thinking effort changes from the phone, among `efforts` (the hub says so by listing them): a Codex
     /// thread driven through its app-server. Claude Code and the assistant change both, the rest neither.
