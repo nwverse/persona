@@ -57,7 +57,17 @@ final class SentAsYouTests: XCTestCase {
 
     @MainActor private func shot(_ app: XCUIApplication, _ name: String) {
         guard let dir = env["PERSONA_SHOTS"] else { return }
-        try? app.screenshot().pngRepresentation.write(to: URL(fileURLWithPath: dir).appending(path: "\(name).png"))
+        let png = URL(fileURLWithPath: dir).appending(path: "\(name).png")
+        try? app.screenshot().pngRepresentation.write(to: png)
+        if env["PERSONA_SIMCTL_SHOTS"] == "1", name.hasPrefix("ios-") {
+            let ready = png.appendingPathExtension("ready")
+            let captured = png.appendingPathExtension("captured")
+            try? FileManager.default.removeItem(at: captured)
+            try? Data().write(to: ready)
+            let receipt = expectation(for: NSPredicate { _, _ in FileManager.default.fileExists(atPath: captured.path) }, evaluatedWith: nil)
+            wait(for: [receipt], timeout: 30)
+            try? FileManager.default.removeItem(at: ready)
+        }
     }
 
     // MARK: the entry
