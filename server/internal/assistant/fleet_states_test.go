@@ -356,7 +356,8 @@ func TestRedactedText(t *testing.T) {
 		want string
 	}{
 		{"secret", proto.Interaction{Secret: true}, redactedValue},
-		{"terminal", proto.Interaction{Dialog: &dialogwire.Dialog{}}, redactedValue},
+		{"secret terminal", proto.Interaction{Secret: true, Dialog: &dialogwire.Dialog{}}, redactedValue},
+		{"terminal", proto.Interaction{Dialog: &dialogwire.Dialog{}}, "synthetic input"},
 		{"ordinary", proto.Interaction{}, "synthetic input"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

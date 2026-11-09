@@ -1005,9 +1005,11 @@ func (s *Service) channelsEnded(ix proto.Interaction, r *proto.Resolution) {
 // redactedValue stands for what was typed into a secret field (or a terminal) wherever the answer is kept or told.
 const redactedValue = "<redacted>"
 
-// redacted is the resolution as the history keeps it: secret fields say they were filled in, not what with.
+// redacted is the resolution as the history keeps it: secret fields say they were filled in, not what with. A secret
+// card's typed text is masked here too; a terminal's other text reaches the channels as typed and only the history masks
+// it (resolveRemembered's kept).
 func redacted(ix proto.Interaction, r proto.Resolution) proto.Resolution {
-	if (ix.Secret || ix.Dialog != nil) && r.Text != "" {
+	if ix.Secret && r.Text != "" {
 		r.Text = redactedValue
 	}
 	if len(r.Values) > 0 {
