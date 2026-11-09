@@ -186,3 +186,22 @@ func TestViewsMemoEvicts(t *testing.T) {
 		t.Fatalf("evicted conversation read %d cards, %v", st.read-before, err)
 	}
 }
+
+// Budget: a snapshot of 200 unchanged cards decodes nothing. Measured 12 allocations with Go 1.27 (the snapshot map and
+// the fake store's key list); reading every card makes about 1,900.
+func TestViewsMemoHitAllocations(t *testing.T) {
+	st := &keyedViewsStore{}
+	at := time.Now().UTC()
+	for i := 0; i < 200; i++ {
+		view := fmt.Sprintf(`{"fallback":"Card %d","sections":[{"items":[{"type":"text","text":"Line"},{"type":"progress","label":"Build","ratio":0.5}]}]}`, i)
+		st.put(db.AssistantViewRow{ID: fmt.Sprintf("view_%03d", i), Conversation: "conversation-a", MachineID: "server", View: json.RawMessage(view), Version: 1, CreatedAt: at, UpdatedAt: at})
+	}
+	s := newServiceOn(t, newFakeHub().withMachine(), st)
+	ctx := context.Background()
+	if _, err := s.conversationViews(ctx, "conversation-a"); err != nil {
+		t.Fatal(err)
+	}
+	if n := testing.AllocsPerRun(20, func() { _, _ = s.conversationViews(ctx, "conversation-a") }); n > 13 {
+		t.Fatalf("a snapshot of unchanged cards allocates %v times, want at most 13", n)
+	}
+}
