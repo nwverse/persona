@@ -63,7 +63,7 @@ Why it works this way (tried on real claude on 2026-11-04):
 - Slides: if there is `---`, split on it; otherwise each `#` / `##` heading starts a slide. The first heading on a slide is its title.
 - Cover: if the first slide has only a `#` heading and paragraphs, it becomes a cover, with the paragraphs as subtitle.
 - Body: lists are bullet points (numbered lists keep their numbers); other paragraphs are lines without bullets.
-- Images and tables: one image or one table per slide. With text, the image goes on the right and the table below.
+- Images and tables: one image and one table per slide (later ones are left out). With text, the image goes on the right and the table below. With both, the picture is on the right and the words and the table share the left column.
 - Font size: shrinks automatically with the amount of text on the slide (24 → 20 → 18 → 14 pt). Many viewers do not auto-shrink text the way PowerPoint does while editing.
 
 **xlsx (JSON or CSV)**:
