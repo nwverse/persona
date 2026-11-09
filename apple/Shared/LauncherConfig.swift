@@ -409,8 +409,13 @@ nonisolated struct LauncherPreset: Decodable, Hashable, Sendable, Identifiable {
               let scheme = u.scheme?.lowercased(), scheme == "https" || scheme == "http", u.host() != nil else { return nil }
         return u
     }
-    /// The hub's key test speaks the Messages protocol only: a Responses API cannot be tested.
-    var testable: Bool { !(kind == "api" && api == "responses") }
+    /// Claude Code needs a Messages endpoint; Responses and Chat Completions serve only the hub's direct-API calls.
+    var runsClaude: Bool { kind != "api" || api == nil || api == "" || api == "messages" }
+    /// The hub's key test supports Messages, Responses and Chat Completions (an empty protocol means Messages).
+    var testable: Bool {
+        guard let api, !api.isEmpty else { return true }
+        return ["messages", "responses", "chat"].contains(api)
+    }
     /// The host it talks to, "" when the address does not parse.
     var host: String { URL(string: baseURL)?.host() ?? "" }
 

@@ -1517,8 +1517,12 @@ group's. With one installed manager, or a hub without a roster, nothing below sh
 - **Inbox items are their id and their manager** (`InboxItem.key`): the store, the bulk arithmetic (`InboxBulk`), the reply and status
   spinners, the Mac's selection, item windows and Quick Open use it. An answer about one item is put back with the manager asked
   (`InboxStore.put(_:manager:)`), and a bulk answer is stamped with it (`InboxBulkResult.stamped`), skipped ids too. An item's
-  rule sheet reads and saves its manager's rules and moves only that manager's items (`InboxPolicyTarget.manager`); the Rules
-  list is still the default manager's.
+  rule sheet reads and saves its manager's rules and moves only that manager's items (`InboxPolicyTarget.manager`).
+- **Rules and Muted per manager**: both lists read every installed manager's at once, each one named
+  (`ManagerRoster.readEach`), and show each one's under its name (`ManagerHeading`), the default first, a manager with none
+  left out; one that can't be read says so in its place (offline: that they show once it is back). Each entry is stamped
+  with the manager it came from (`InboxPolicy.manager`, `InboxMute.manager`), so Edit, Remove and Unmute go to it
+  (`InboxRulesModel`, `InboxMutesModel`; tests `InboxManagerListsTests`).
 - **Bulk actions per manager**: Done on several, a section's Clear all and Clean up all send one request per manager
   (`InboxBulk.byManager`). One that fails puts back only its own items and the toast says how many weren't changed and why
   (`InboxBulk.partly`); only when every one fails is it the old error. Undo after one manager's clean-up sends that manager's `undo`;

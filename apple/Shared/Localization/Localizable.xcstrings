@@ -13961,24 +13961,24 @@
       },
       "extractionState" : "manual"
     },
-    "A Responses API key can't be tested here; save it and use it." : {
+    "This API protocol's key can't be tested here; save it and use it." : {
       "localizations" : {
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Responses 协议的 Key 没法在这里测试，保存后直接用就行。"
+            "value" : "这种协议的 Key 没法在这里测试，保存后直接用就行。"
           }
         },
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "A Responses API key can't be tested here; save it and use it."
+            "value" : "This API protocol's key can't be tested here; save it and use it."
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Responses プロトコルのキーはここではテストできません。保存してそのまま使えます。"
+            "value" : "この種類のAPIのキーはここではテストできません。保存してそのまま使えます。"
           }
         }
       },
@@ -77222,6 +77222,52 @@
       },
       "extractionState" : "manual"
     },
+    "Offline: its mutes show here once it is back." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Offline: its mutes show here once it is back."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "オフラインです。戻るとここにミュートが表示されます。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "离线中：它回来后这里会显示它的静音。"
+          }
+        }
+      },
+      "extractionState" : "manual"
+    },
+    "Offline: its rules show here once it is back." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Offline: its rules show here once it is back."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "オフラインです。戻るとここにルールが表示されます。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "离线中：它回来后这里会显示它的规则。"
+          }
+        }
+      },
+      "extractionState" : "manual"
+    },
     "Offline: starts once connected" : {
       "localizations" : {
         "en" : {
@@ -119652,6 +119698,29 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "仍要发送的话，改一下「要它做什么」，或重新打开「交给 AI」"
+          }
+        }
+      },
+      "extractionState" : "manual"
+    },
+    "The main chat and Agents can't run on it. Processing, Sorting and other uses without a picked model may now use it; change that under Models." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "主对话和 Agent 不能用它。信息处理、信息筛选等没有单独选模型的用途，现在可能会改用它；要调整，到「模型配置」里选。"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The main chat and Agents can't run on it. Processing, Sorting and other uses without a picked model may now use it; change that under Models."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "メインチャットとエージェントでは使えません。情報処理や仕分けなど、モデルを選んでいない用途ではこれが使われることがあります。変更は「モデル設定」で。"
           }
         }
       },

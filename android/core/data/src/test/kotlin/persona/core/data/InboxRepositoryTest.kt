@@ -1027,7 +1027,21 @@ class InboxRepositoryTest {
             val d = repository.snapshot.value.records.single { it.hubItemId == "d" }
             repository.inboxPolicies(d)
             repository.removePolicy("p1")
-            assertEquals(listOf("GET null", "GET m-3", "DELETE p1"), transport.policyCalls.takeLast(3))
+            assertEquals(listOf("GET null", "GET m-3", "DELETE p1 null"), transport.policyCalls.takeLast(3))
+
+            // From another manager's "Rules" and "Muted": read and changed on it (the default's names none), moving only its items.
+            val during = mutableListOf<Map<String, String>>()
+            transport.onUpdatePolicy = { _, _, _ -> during += sections(); buildJsonObject { put("applied", 1) } }
+            repository.inboxPolicies(manager = "m-3")
+            repository.savePolicy(InboxPolicyTarget.of(checkNotNull(saved).copy(manager = "m-3")), InboxPolicyTier.Fyi, InboxPolicyTwin.None)
+            repository.removePolicy("p1", "m-3")
+            repository.removePolicy("p1", "assistant")
+            repository.inboxMutes("m-3")
+            repository.unmute("u1", "m-3")
+            repository.unmute("u1")
+            assertEquals(listOf("GET m-3", "PATCH p1 fyi  m-3", "DELETE p1 m-3", "DELETE p1 ", "GET mutes m-3", "DELETE mute u1 m-3",
+                "DELETE mute u1 null"), transport.policyCalls.takeLast(7))
+            assertEquals("fyi/fyi/false" to "noise/noise/false", during.single().let { it["d"] to it["a"] })
         } finally {
             owner.coroutineContext[Job]!!.cancelAndJoin()
             directory.deleteRecursively()
@@ -1256,6 +1270,8 @@ class InboxRepositoryTest {
             policyCalls += "PATCH $id $tier $twin ${manager()}"
             return onUpdatePolicy(id, tier, twin)
         }
-        override suspend fun removeInboxPolicy(id: String) { policyCalls += "DELETE $id" }
+        override suspend fun removeInboxPolicy(id: String) { policyCalls += "DELETE $id ${manager()}" }
+        override suspend fun inboxMutes(): JsonObject { policyCalls += "GET mutes ${manager()}"; return buildJsonObject { put("mutes", JsonArray(emptyList())) } }
+        override suspend fun unmuteInbox(id: String) { policyCalls += "DELETE mute $id ${manager()}" }
     }
 }
