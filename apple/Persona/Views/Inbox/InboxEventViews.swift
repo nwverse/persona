@@ -608,7 +608,7 @@ struct InboxEventPage: View {
         self.item = item
         self.accounts = accounts
         self.draft = draft
-        _suggestion = State(initialValue: InboxSuggestionModel.live(item.id))
+        _suggestion = State(initialValue: InboxSuggestionModel.live(item.id, manager: item.manager))
     }
 
     var body: some View {

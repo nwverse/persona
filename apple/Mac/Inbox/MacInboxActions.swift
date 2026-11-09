@@ -37,7 +37,7 @@ struct MacInboxActions: View {
         self.handOff = handOff
         self.openItem = openItem
         self.openSource = openSource
-        _suggestion = State(initialValue: InboxSuggestionModel.live(item.id))
+        _suggestion = State(initialValue: InboxSuggestionModel.live(item.id, manager: item.manager))
     }
 
     var body: some View {

@@ -43,6 +43,9 @@ nonisolated struct InboxItem: Codable, Identifiable, Hashable, Sendable {
     var version: String?
     /// What it grew out of (docs/assistant/inbox.md「thread line」, #2128): another item, a todo or an agent session; older hubs leave it out.
     var parent: InboxParent?
+    /// The manager it belongs to, as the hub stamps a merged list (docs/protocol/protocol.md "Per-manager routing"); nil
+    /// from a hub before managers. What is done to it goes to that manager (`APIClient.manager(_:)`).
+    var manager: String?
     /// Inbox phase 1 (docs/assistant/inbox.md): the section the hub put an open item in (action | working | fyi | noise;
     /// nil from an older hub: the list goes by `tier`), urgent (someone waits), the manager's recap, the processing
     /// conversation, the current suggestion, the chain and related items. Older hubs leave them all out.
@@ -248,7 +251,7 @@ nonisolated struct InboxItem: Codable, Identifiable, Hashable, Sendable {
 
     enum CodingKeys: String, CodingKey {
         case id, source, kind, account, title, sender, avatar, preview, count, tier, summary, reason, read, lark, mail, doc, moment, context, agent, translations, connector, mutes, version, parent
-        case status, urgent, recap, handling, suggestion, chain, related
+        case status, urgent, recap, handling, suggestion, chain, related, manager
         case accountName = "account_name", startedAt = "started_at", updatedAt = "updated_at", doneAt = "done_at", doneBy = "done_by"
     }
 

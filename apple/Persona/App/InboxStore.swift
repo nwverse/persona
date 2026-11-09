@@ -94,7 +94,7 @@ final class InboxStore {
     func setDone(_ list: [InboxItem], _ done: Bool, undoable: Bool = true) {
         guard let api = AppModel.shared.api else { return }
         run(list, done: done, action: .done) { targets in
-            let r = try await self.fileDone(targets, done, api: api)
+            let r = try await Self.byManager(targets, api) { api, mine in try await self.fileDone(mine, done, api: api) }
             return (r, undoable && !r.changed.isEmpty ? .legacy(r.changed) : nil)
         }
     }
@@ -106,9 +106,19 @@ final class InboxStore {
         guard let api = AppModel.shared.api else { return }
         let action = InboxBulk.Action.dismiss
         run(list, done: true, action: action) { targets in
-            try await InboxBulk.perform(action, targets,
-                                        bulk: { try await api.bulkInbox($0.rawValue, $1) },
-                                        legacy: { try await self.fileDone($0, true, api: api) })
+            let groups = Self.managers(targets)
+            guard groups.count > 1 else {
+                let api = api.manager(groups.first?.key)
+                return try await InboxBulk.perform(action, targets,
+                                                   bulk: { try await api.bulkInbox($0.rawValue, $1) },
+                                                   legacy: { try await self.fileDone($0, true, api: api) })
+            }
+            // Several managers' items: each its own request; no Undo for them all at once (each manager keeps its own).
+            let r = try await Self.byManager(targets, api) { api, mine in
+                try await InboxBulk.perform(action, mine, bulk: { try await api.bulkInbox($0.rawValue, $1) },
+                                            legacy: { try await self.fileDone($0, true, api: api) }).result
+            }
+            return (r, nil)
         }
     }
 
@@ -141,12 +151,37 @@ final class InboxStore {
         case .legacy(let moved):
             setDone(moved, !done, undoable: false)
         case .bulk(let u):
-            guard let api = AppModel.shared.api else { return }
             let ids = Set(u.ids)
+            guard let api = AppModel.shared.api?.manager(items.first { ids.contains($0.id) }?.manager) else { return }
             run(items.filter { ids.contains($0.id) }, done: false, action: .done) { _ in
                 (InboxBulk.result(try await api.undoInboxBulk(u)), nil)
             }
         }
+    }
+
+    /// Items by the manager each belongs to (docs/assistant/managers.md): a manager knows only its own, so each gets its
+    /// own request.
+    nonisolated static func managers(_ items: [InboxItem]) -> [(key: String?, items: [InboxItem])] {
+        var order: [String?] = []
+        var by: [String?: [InboxItem]] = [:]
+        for it in items {
+            if by[it.manager] == nil { order.append(it.manager) }
+            by[it.manager, default: []].append(it)
+        }
+        return order.map { ($0, by[$0] ?? []) }
+    }
+
+    /// `each` for every manager's share of `targets`, its answers together.
+    private static func byManager(_ targets: [InboxItem], _ api: APIClient,
+                                  _ each: (APIClient, [InboxItem]) async throws -> InboxBulkResult) async throws -> InboxBulkResult {
+        var out = InboxBulkResult(changed: [], unchanged: [], skipped: [])
+        for g in managers(targets) {
+            let r = try await each(api.manager(g.key), g.items)
+            out.changed += r.changed
+            out.unchanged += r.unchanged
+            out.skipped += r.skipped
+        }
+        return out
     }
 
     /// The Done request for many, one at a time on a hub from before it.
@@ -179,7 +214,7 @@ final class InboxStore {
         if haptic { Haptics.tap() }
         Task {
             do {
-                try await AppModel.shared.api?.setInboxDone(item.id, done)
+                try await AppModel.shared.api?.manager(item.manager).setInboxDone(item.id, done)
             } catch {
                 if let j = items.firstIndex(where: { $0.id == item.id }) { items[j] = before }
                 AppModel.shared.show(error)
@@ -192,7 +227,7 @@ final class InboxStore {
     func mute(_ item: InboxItem, _ option: InboxItem.MuteOption) {
         let before = items
         let covers = { (it: InboxItem) in
-            it.source == item.source && !it.isDone && (it.mutes ?? []).contains { $0.tag == option.tag && $0.value == option.value }
+            it.source == item.source && it.manager == item.manager && !it.isDone && (it.mutes ?? []).contains { $0.tag == option.tag && $0.value == option.value }
         }
         for i in items.indices where covers(items[i]) {
             items[i].doneAt = .now
@@ -202,7 +237,7 @@ final class InboxStore {
         Haptics.success()
         Task {
             do {
-                _ = try await AppModel.shared.api?.muteInbox(item.id, tag: option.tag)
+                _ = try await AppModel.shared.api?.manager(item.manager).muteInbox(item.id, tag: option.tag)
                 AppModel.shared.toast = Toast(String(localized: "Muted “\(option.name)”. It won’t come to the Inbox anymore."), style: .success)
             } catch {
                 items = before
@@ -222,7 +257,7 @@ final class InboxStore {
     /// seconds); a failure puts the item back and keeps the text for the reply sheet. `card`: sent from that message card.
     @discardableResult
     func send(_ item: InboxItem, text: String, changes: [InboxItem.DocChange] = [], card: String? = nil) async -> Bool {
-        guard let api = AppModel.shared.api, !sending.contains(item.id) else { return false }
+        guard let api = AppModel.shared.api?.manager(item.manager), !sending.contains(item.id) else { return false }
         sending.insert(item.id)
         defer { sending.remove(item.id) }
         let before = items.first { $0.id == item.id }
@@ -251,9 +286,11 @@ final class InboxStore {
     /// The hub's copy of one item, as an answer returned it (acting on its suggestion): replaces the list's, kept on disk.
     func put(_ item: InboxItem) {
         guard let i = items.firstIndex(where: { $0.id == item.id }) else { return }
-        // An answer carries no `version` of the listing; keep the one listed so a bulk Done still sees it.
+        // An answer carries no `version` of the listing, nor the manager its list stamped: keep the ones listed, so a
+        // bulk Done still sees the version and what is done to it still goes to its manager.
         var fresh = item
         if fresh.version == nil { fresh.version = items[i].version }
+        if fresh.manager == nil { fresh.manager = items[i].manager }
         guard items[i] != fresh else { return }
         items[i] = fresh
         let snapshot = items
@@ -266,7 +303,7 @@ final class InboxStore {
     /// Moves a row's status in its document: shown at once, written by the hub, the item replaced by the hub's fresh
     /// read; a failure puts the old value back.
     func setDocStatus(_ item: InboxItem, row: InboxItem.DocRow, status: InboxItem.DocStatus, to value: String) {
-        guard value != status.value, let api = AppModel.shared.api else { return }
+        guard value != status.value, let api = AppModel.shared.api?.manager(item.manager) else { return }
         let key = item.id + "|" + row.ref + "|" + status.field
         guard !moving.contains(key), let i = items.firstIndex(where: { $0.id == item.id }) else { return }
         let before = items[i]
@@ -276,7 +313,8 @@ final class InboxStore {
         Task {
             defer { moving.remove(key) }
             do {
-                let fresh = try await api.inboxDocStatus(item.id, .init(ref: row.ref, field: status.field, value: value))
+                var fresh = try await api.inboxDocStatus(item.id, .init(ref: row.ref, field: status.field, value: value))
+                if fresh.manager == nil { fresh.manager = item.manager }
                 if let j = items.firstIndex(where: { $0.id == item.id }) { items[j] = fresh }
                 let snapshot = items
                 saver.run { StateCache.save(Self.stateName, snapshot) }
