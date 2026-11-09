@@ -38,6 +38,7 @@ import { awaitsReply } from "../../lib/agent-groups";
 import { StatusMark } from "../../ui/StatusMark";
 import { Icon } from "../../ui/icons";
 import { scrollBehavior } from "../../ui/stream/motion";
+import { glide } from "./glide";
 import { AGENT_COMMANDS, Composer, type Outgoing } from "./Composer";
 import { agentCommands } from "../../lib/composer-commands";
 import { PendingCards } from "./Interactions";
@@ -367,12 +368,44 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
   // the jump's smooth scroll running: its first frames, a few px off the end, do not start following again
   const jumping = useRef(0);
   const [away, setAway] = useState(false);
+  // A row a jump brought into view (the rail, a search hit, a comment): it stays `at` px under the view's top while what
+  // is around it settles (pictures coming in, exchanges drawn for the first time). Held while the view moves and a
+  // moment after; the reader scrolling, or the view going to the end, lets it go.
+  const landing = useRef<{ row: Element | Range; at: number; quiet: number } | null>(null);
+  const holdLanding = useCallback((ms: number) => {
+    const l = landing.current;
+    if (!l) return;
+    clearTimeout(l.quiet);
+    l.quiet = window.setTimeout(() => (landing.current = null), ms);
+  }, []);
+  const land = useCallback((row: Element | Range, at: number) => {
+    clearTimeout(landing.current?.quiet);
+    landing.current = { row, at, quiet: 0 };
+    holdLanding(1200);
+  }, [holdLanding]);
+  // a smooth jump on its way (glide.ts): it reads where to go each frame, and the ResizeObserver leaves the view to it
+  const gliding = useRef<(() => void) | null>(null);
+  const stopGlide = useCallback(() => {
+    gliding.current?.();
+    gliding.current = null;
+  }, []);
+  useEffect(() => stopGlide, [stopGlide]);
+  const glideTo = useCallback((aim: () => number) => {
+    const sc = scroller.current;
+    stopGlide();
+    if (!sc) return;
+    if (scrollBehavior() === "auto") sc.scrollTop = aim();
+    else gliding.current = glide(sc, aim, () => (gliding.current = null));
+  }, [stopGlide]);
   // something came in since the reader left the end: the pill says "New messages"
   const [newSince, setNewSince] = useState(false);
   const follow = useCallback((on: boolean) => {
     atEnd.current = on;
     setAway(!on);
-    if (on) setNewSince(false);
+    if (on) {
+      setNewSince(false);
+      landing.current = null;
+    }
   }, []);
   const lastTop = useRef(0);
   const dragging = useRef(false);
@@ -421,6 +454,8 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
     const readerMoves = () => {
       moved = true;
       drop();
+      stopGlide();
+      landing.current = null;
     };
     const onClick = (e: MouseEvent) => {
       const el = e.target instanceof Element ? e.target.closest("button[aria-expanded]") : null;
@@ -447,7 +482,7 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
       sc.removeEventListener("click", onClick, true);
       for (const ev of ["wheel", "touchstart", "keydown", "pointerdown"]) sc.removeEventListener(ev, readerMoves);
     };
-  }, [follow, scrollEl]);
+  }, [follow, scrollEl, stopGlide]);
 
   // content that grows by itself (images loading, a live group's steps) keeps the end in view; a held row stays put.
   // A ResizeObserver runs after layout and before paint, so the offset moves in the same frame as the height. The view
@@ -459,7 +494,16 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
     if (!view || !el) return;
     const ro = new ResizeObserver(() => {
       const sc = scroller.current;
-      if (!sc) return;
+      if (!sc || gliding.current) return;
+      const l = landing.current;
+      if (l && (l.row instanceof Range ? l.row.startContainer : l.row).isConnected) {
+        const off = l.row.getBoundingClientRect().top - sc.getBoundingClientRect().top - l.at;
+        if (Math.abs(off) >= 0.5) {
+          sc.scrollTop += off;
+          holdLanding(1200);
+        }
+        return;
+      }
       const a = anchor.current;
       if (a && a.el.isConnected) {
         const r = a.el.getBoundingClientRect();
@@ -477,7 +521,7 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
     ro.observe(el);
     ro.observe(view);
     return () => ro.disconnect();
-  }, [scrollEl]);
+  }, [scrollEl, holdLanding]);
 
   // the reader leaving the end: the wheel or a trackpad going up, a finger pulling the list down, PageUp / ↑ / Home,
   // the scroll bar dragged up (onScroll)
@@ -524,6 +568,7 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
     const gap = el.scrollHeight - el.scrollTop - el.clientHeight;
     const delta = el.scrollTop - lastTop.current;
     lastTop.current = el.scrollTop;
+    holdLanding(600);
     if (atEnd.current) {
       if (leavesOnScrollbarDrag({ dragging: dragging.current, delta })) follow(false);
     } else if (!anchor.current && !jumping.current && followsAgain({ gap, delta })) follow(true);
@@ -540,7 +585,7 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
     const el = scroller.current;
     if (!el) return;
     follow(true);
-    el.scrollTo({ top: el.scrollHeight, behavior: scrollBehavior() });
+    glideTo(() => el.scrollHeight - el.clientHeight);
   };
 
   // ── sending ──
@@ -706,18 +751,19 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
   // The loaded-message adapter is deliberately separate from the rail's gestures. An independent-index adapter
   // can replace its ticks and resolve missing target content in select, without fetching while hovering.
   const railTicks = useMemo(() => navRailTicks(lines), [lines]);
-  /** Brings a row into view in the chat's own scroller (scrollIntoView would also scroll an opening group's clipped
-   *  box): following the end stops, and the jump's first frames do not pick it up again (`jumping`). */
+  /** Brings a row (or a run of words) into view in the chat's own scroller (scrollIntoView would also scroll an opening
+   *  group's clipped box): following the end stops, and the jump's first frames do not pick it up again (`jumping`). */
   const landRow = useCallback(
-    (row: HTMLElement, topOffset: number) => {
+    (row: HTMLElement | Range, topOffset: number) => {
       const sc = scroller.current;
       if (!sc) return;
       follow(false);
       clearTimeout(jumping.current);
       jumping.current = window.setTimeout(() => (jumping.current = 0), 1200);
-      sc.scrollTo({ top: sc.scrollTop + row.getBoundingClientRect().top - sc.getBoundingClientRect().top + topOffset, behavior: scrollBehavior() });
+      land(row, -topOffset);
+      glideTo(() => sc.scrollTop + row.getBoundingClientRect().top - sc.getBoundingClientRect().top + topOffset);
     },
-    [follow],
+    [follow, land, glideTo],
   );
   const railJump = useCallback(
     (lineId: string) => {
@@ -845,16 +891,18 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
       const el = r.value;
       const tall = el.getBoundingClientRect().height > sc.clientHeight;
       el.scrollIntoView({ block: tall ? "start" : "center", behavior: "auto" });
+      land(el, el.getBoundingClientRect().top - sc.getBoundingClientRect().top);
       unlight();
       void el.getBoundingClientRect(); // the same row picked again lights again
       el.setAttribute("data-search-hit", "");
       lit.current = { el, timer: window.setTimeout(unlight, HIT_MS) };
     });
-  }, [ctx.scope, follow, unlight]);
+  }, [ctx.scope, follow, unlight, land]);
   const backToOrigin = useCallback(() => {
     const o = origin.current;
     origin.current = null;
     setPicked(false);
+    landing.current = null;
     const run = ++going.current;
     unlight();
     undoReveals();
@@ -1119,7 +1167,7 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
               </div>
             )}
           </div>
-          {!readOnly && <CommentMarks scroller={scroller} />}
+          {!readOnly && <CommentMarks scroller={scroller} jump={landRow} />}
           </ChatActionsContext.Provider>
         </div>
         {/* A transient edge overlay; native scrolling and the centered text column keep their existing layout. */}
