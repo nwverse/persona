@@ -1,5 +1,6 @@
 # Lessons: web UI and interactions
 
+
 ## Extension lifecycle controls use manager metadata, not configuration (#2355)
 
 - `source: installed` does not grant a full-rights web client owner-only management of local or attached installations. Market lifecycle actions follow the manager-owned `origin` and the existing endpoint policy; a manifest field or arbitrary URL cannot grant that capability. Keep unavailable controls visible with a reason rather than inventing an API request.
@@ -47,6 +48,10 @@
 - The navigation rail may linger after activity, but a hover card must leave in its mouse-leave handler. Connect rail/card hit zones with the card wrapper's padding rather than a grace timeout; clicking or selecting card text must not bubble into the rail's pointer-capture gesture. Keep captured drags and keyboard selections distinct from pointer-owned previews.
 - The current viewport input is not an interactive preview (#2298). Without a preview, every mark stays at the short tick width and height; current-position emphasis uses color only. Generate bell-shaped shoulders only for hover, keyboard selection or captured dragging, and check equal idle geometry after scrolling and pointer exit in the actual browser.
 - An interactive preview can appear under a stationary pointer while keyboard selection moves. Entering that card must retain the selected identity/window, not recenter it on the viewport owner. Browser tests must move outside both hit zones before checking idle fade, and measure actual exit-to-removal time rather than waiting for the old delay to expire.
+
+## Full-history positions are not a tail-window count (#2338)
+
+The web's `turns=2` initial page and two-turn cache deliberately preserve a small first screen; projecting ticks from those lines cannot enumerate the conversation. Fetch only server count/identity/sequence metadata for the rail, and wait for selection before loading older bodies. Keep backward coverage contiguous; do not merge isolated target windows into live coverage. Count genuine queued inputs by identity, deduplicate text/image siblings, and never use model-role `user` or `session.info.turns` alone as the total. If a richer independent navigation API is being developed elsewhere, keep the temporary adapter narrow and document its migration boundary rather than taking over that task.
 
 ## Render-count tests must separate store pushes from live clocks (#1989)
 
@@ -197,6 +202,11 @@ An auth status push rerenders the sign-in group and replaces inline completion c
 - A credential generation read during render is only a snapshot. Subscribe mounted editors to same-document token changes and cross-tab storage events, then remount and re-read for the new owner without transferring the retired draft. Explicit-token API requests bypass ordinary 401 recovery; opt into it with the captured generation and require a matching current token, so a current 401 signs out while a retired request or a different probe token cannot sign out the replacement.
 - Acknowledgements advance the saved baseline without replacing current text. On leave, compare against the last admitted snapshot too: typing back to the original baseline while A is pending still needs a restoring write. Deduplicate an unchanged pending snapshot, let rejection release the queue for retry, and fence retired callbacks from newer editors.
 - Regress the actual settings component through the real API with deferred, abort-aware synthetic fetches. Assert authoritative stored notes, remounted drafts, rejection/retry, empty overrides versus hub fallback, and owner isolation; response-only mocks hide dispatch-time credential lookup.
+
+## Whole-document knowledge settings keep their owner and original identity (#2217)
+
+A settings editor must wait for the loaded document, preserve history, optional rule fields, nulls and tied priority levels, and target the selected manager on every read, picker request and write. Retire old responses when the credential, manager or picker changes. Chat and document `read` without `store` have different fallthrough rules; null document days does not schedule default pruning. Display names and sanitized KB filenames are not item identities: read the original source/id in document metadata. An observed change can fence a dirty draft, but a whole-document PUT without a revision precondition cannot promise atomic conflict prevention.
+
 
 ## Panel identity for workspaces without sessions (2026-11-04, #1646)
 
