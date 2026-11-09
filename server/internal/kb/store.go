@@ -5,12 +5,14 @@
 package kb
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -421,15 +423,27 @@ func (s *Store) Log(slug string, n int) []string {
 	_, _ = s.settleLogLocked(slug)
 	s.mu.Unlock()
 	raw, _ := os.ReadFile(s.path(KindProject, slug, "log.md"))
+	return lastLogLines(raw, n)
+}
+
+// lastLogLines are the last n "- " lines of a timeline, oldest first, taken from its end so that the lines before them
+// are never collected. nil when it has none; empty when n <= 0 and it has one.
+func lastLogLines(raw []byte, n int) []string {
 	var lines []string
-	for _, l := range strings.Split(string(raw), "\n") {
-		if strings.HasPrefix(l, "- ") {
-			lines = append(lines, l)
+	for end := len(raw); end >= 0; {
+		start := bytes.LastIndexByte(raw[:end], '\n') + 1
+		if l := raw[start:end]; bytes.HasPrefix(l, []byte("- ")) {
+			if n <= 0 {
+				return []string{}
+			}
+			lines = append(lines, string(l))
+			if len(lines) == n {
+				break
+			}
 		}
+		end = start - 1
 	}
-	if len(lines) > n {
-		lines = lines[len(lines)-n:]
-	}
+	slices.Reverse(lines)
 	return lines
 }
 
