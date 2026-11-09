@@ -373,7 +373,8 @@ curl -fsSL <publish.site_url>/install.sh | sh   # install to ~/.persona/bin/pers
   `min_app_build` in `latest.json`) to the build containing it so old Apps prompt for an update. Raising `min_app_build` makes every older App unable to use this hub; ask the user first.
 - Only the latest version is hosted (R2 also retains the previous one, as above). Bucket uploads and deployment use configured `publish.wrangler` (otherwise `npx wrangler`). Cloudflare OAuth expires after one hour;
   on an auth error, run `cf auth login` and retry. After deployment it reads back `dl/VERSION`, `dl/SHA256SUMS`, `dl/latest.json`, `dl/SLOT` to confirm the just-built version is live, and checks every archive's size with `HEAD`.
-  The push relay is in the same Worker (`/relay/*`) and is redeployed on each publish too.
+  The push relay is in the same Worker (`/relay/*`) and is redeployed on each publish too: when `/relay/v1/health` answered `ok` and `apns` before the deploy,
+  the publish fails unless it still does within about two minutes after it (#1263; a site without a working relay only gets a note).
 - Push relay deployed (2026-11-02): resident `personad relay` + Cloudflare Tunnel + website Worker forwarding; public health, origin protection, registration and authentication verified.
   Release config needs `app.push_relay`; only a new TestFlight with the notification extension registers. Notification decryption on real devices still needs separate acceptance; see `docs/operations/push-relay.md`.
 - Not yet available (others can install, but it's still awkward; see `docs/operations/config.md`):
@@ -477,6 +478,14 @@ an old checkpoint without that identity is rejected rather than silently attribu
 When moving to rewritten history, pause the existing publisher, retain its evidence and use a separate `state_directory` for the new
 repository. Keep the existing package, signing certificate and signing entry. Never post an old commit's status to the new repository
 or treat an old verified APK as a build of the new source. Compare migrated file content when commit IDs have changed.
+
+The release APK is shrunk by R8 without obfuscation (docs/android/android.md "Release shrinking"). After `:app:assembleRelease` and
+before the APK is copied for signing, the worker runs `scripts/release/check_android_shrink.py` on it and on R8's
+output in `app/build/outputs/mapping/release`; any class, constructor or method that Android or the app reaches only by name and
+that R8 removed fails the build, so nothing is signed or published. Before the first shrunk release, install it on a phone and
+open pairing, a chat with a formula, the Inbox, Settings, a notification action, the home-screen widget and the Quick Settings
+tile; a crash there is fixed with a keep rule in `android/app/proguard-rules.pro` (or rolled back with `isMinifyEnabled = false`
+and the test line that pins it, docs/android/android.md "Release shrinking").
 
 Versions are `version_base + first-parent commit count`; `version_base` defaults to 100000. Before enabling the new lane, choose a
 fixed nonnegative base so its first version exceeds the currently published APK. Keep that base stable thereafter. The worker rejects
