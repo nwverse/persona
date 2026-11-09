@@ -1,6 +1,7 @@
 package node
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -112,6 +113,44 @@ func TestToolLoopPollPush(t *testing.T) {
 	appendFile(t, path, `{"type":"user","message":{"content":"new prompt"}}`+"\n")
 	if s := nextWorkflowPush(t, pushes, 5*time.Second); s.ToolLoop != nil {
 		t.Fatalf("loop was not cleared: %+v", s.ToolLoop)
+	}
+}
+
+func TestToolLoopHeadlessClaudeSession(t *testing.T) {
+	n, _, home := herdrNode(t)
+	const cwd = "/tmp/loop-headless"
+	at := time.Now().UTC().Add(-time.Minute)
+	path := writeTranscript(t, home, cwd, sidA, at, `{"type":"user","timestamp":"`+at.Format(time.RFC3339)+`","message":{"role":"user","content":"Check"}}`)
+	var body strings.Builder
+	for i := 0; i < 4; i++ {
+		ts := at.Add(time.Duration(i) * time.Second).Format(time.RFC3339)
+		fmt.Fprintf(&body, `{"type":"assistant","timestamp":%q,"message":{"content":[{"type":"tool_use","id":%q,"name":"Read","input":{}}]}}`+"\n"+`{"type":"user","timestamp":%q,"message":{"content":[{"type":"tool_result","tool_use_id":%q,"content":"ok"}]}}`+"\n", ts, fmt.Sprint(i), ts, fmt.Sprint(i))
+	}
+	appendFile(t, path, body.String())
+	p := &assistantProc{id: sidA, cwd: cwd, agent: "claude", busy: true}
+	n.mu.Lock()
+	n.paths[sidA] = path
+	n.procs[sidA] = p
+	n.mu.Unlock()
+	row := func() proto.Session {
+		t.Helper()
+		for _, s := range n.sessionList(context.Background(), false) {
+			if s.SessionID == sidA {
+				return s
+			}
+		}
+		t.Fatal("headless session missing")
+		return proto.Session{}
+	}
+	s := row()
+	if s.Agent != "" || s.Status != proto.StatusWorking || s.ToolLoop == nil || s.ToolLoop.Count != 4 {
+		t.Fatalf("working headless Claude session: agent=%q status=%q loop=%+v", s.Agent, s.Status, s.ToolLoop)
+	}
+	p.mu.Lock()
+	p.busy = false
+	p.mu.Unlock()
+	if s := row(); s.Status != proto.StatusDone || s.ToolLoop != nil {
+		t.Fatalf("finished headless session: status=%q loop=%+v", s.Status, s.ToolLoop)
 	}
 }
 
