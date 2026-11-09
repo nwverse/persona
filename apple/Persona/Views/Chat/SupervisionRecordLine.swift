@@ -42,6 +42,7 @@ struct SupervisionInputLine: View {
                 .foregroundStyle(.secondary)
             Text(full ?? item.cutText)
                 .font(Theme.Font.secondary)
+                .foregroundStyle(.primary)
                 .textSelection(.enabled)
                 .fixedSize(horizontal: false, vertical: true)
             if item.fullSize != nil, full == nil {
@@ -52,8 +53,7 @@ struct SupervisionInputLine: View {
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(Theme.Space.m)
-        .surface(in: .rect(cornerRadius: Theme.Radius.card))
+        .chatBoxed(Theme.ChatBox.persona)
         .accessibilityIdentifier("supervision-input")
         .task(id: item.id) {
             if item.fullSize != nil, let loadFullText { full = try? await loadFullText(item.id) }
