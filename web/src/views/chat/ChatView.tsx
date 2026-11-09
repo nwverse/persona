@@ -959,7 +959,7 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
   const wfKey = workflowCallsKey(runs);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   const wfCalls = useMemo(() => workflowCalls(runs), [wfKey]);
-  // a Persona conversation's work lines open while it runs wherever it is opened, the Agents page's /s/<machine>/<id> too
+  // Preserve conversation identity; execution summaries have the same collapsed default everywhere (#2602).
   const lineStyle = workLineStyle(assistant, (session ?? archivedHere)?.assistant);
   const ctx = useMemo<ChatContextValue>(
     () => ({ tasks, subagents: assistant ? NO_SUBAGENTS : (subagents ?? NO_SUBAGENTS), scope: `${mid}/${sid}:`, jumpToCall: jump, workflowCalls: wfCalls, lineStyle }),

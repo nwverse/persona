@@ -1,17 +1,17 @@
 // @vitest-environment jsdom
 // A streamed delta re-renders its SegmentView (the `streaming` prop changes), but not the steps of its turn: their
 // props stay the same objects, so StepView and FreshAnswer skip. Words that just came in still learn it
-// (fresh-words.ts): those words, and no others.
-import { act } from "react";
+// (fresh-words.ts): only the latest visible words (#2602), and no others.
+import { act, type ComponentProps } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-// every FreshAnswer render draws its Answer with `fade` set (a step drawn plain leaves it out): counted
-const drawn = vi.hoisted(() => [] as { id: string; fade?: boolean }[]);
-vi.mock("./SegmentView", async (load) => {
-  const real = await load<typeof import("./SegmentView")>();
+// every render of the agent's persisted words (Answer draws them through Markdown with `fade` given, set or not): counted
+const drawn = vi.hoisted(() => [] as { text: string; fade?: boolean }[]);
+vi.mock("../../ui/Markdown", async (load) => {
+  const real = await load<typeof import("../../ui/Markdown")>();
   const { createElement } = await import("react");
-  return { ...real, Answer: (p: Parameters<typeof real.Answer>[0]) => ("fade" in p && drawn.push({ id: p.item!.id, fade: p.fade }), createElement(real.Answer, p)) };
+  return { ...real, Markdown: (p: ComponentProps<typeof real.Markdown>) => ("fade" in p && drawn.push({ text: p.text, fade: p.fade }), createElement(real.Markdown, p)) };
 });
 
 import { emptyTaskIndex } from "../../lib/tasks";
@@ -19,8 +19,6 @@ import type { Item } from "../../lib/types";
 import type { Segment, Step } from "../../lib/turns";
 import { ChatContext, type ChatContextValue } from "./chat-context";
 import { addFreshWords, resetFreshWords } from "./fresh-words";
-// first, so the mock above is the Answer it imports (the two import each other)
-import "./WorkGroup";
 import { SegmentView } from "./SegmentView";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -61,7 +59,7 @@ afterEach(() => {
   resetFreshWords("m", "s");
 });
 
-function draw(streaming: string) {
+function draw(streaming?: string) {
   act(() =>
     root.render(
       <ChatContext.Provider value={ctx}>
@@ -74,20 +72,22 @@ function draw(streaming: string) {
 describe("StepView / FreshAnswer memo", () => {
   it("a streamed delta does not re-render the steps of its turn", () => {
     draw("w");
-    expect(drawn).toHaveLength(5); // one FreshAnswer per run of words
-    expect(host.textContent).toContain("words 9");
+    expect(drawn).toHaveLength(0); // old persisted narration is hidden while the single live text streams
+    expect(host.querySelector("[data-work-detail]")).toBeNull();
+    expect(host.textContent).not.toContain("words 9");
     for (let i = 0; i < 10; i++) draw("w" + "x".repeat(i + 1));
-    expect(drawn).toHaveLength(5);
+    expect(drawn).toHaveLength(0);
     expect(host.querySelector('[data-answer="streaming"]')).not.toBeNull();
   });
 
   it("words that just came in learn it, and no other words render", () => {
-    draw("w");
+    draw();
     drawn.length = 0;
     act(() => addFreshWords("m", "s", ["a9#0"]));
-    expect(drawn).toEqual([{ id: "a9#0", fade: true }]);
-    // the same words in another chat are not these
-    act(() => addFreshWords("m", "other", ["a7#0"]));
+    expect(drawn).toEqual([{ text: "words 9", fade: true }]);
+    // words hidden in the summary, and the same words in another chat, are not these
+    act(() => addFreshWords("m", "s", ["a7#0"]));
+    act(() => addFreshWords("m", "other", ["a9#0"]));
     expect(drawn).toHaveLength(1);
   });
 });

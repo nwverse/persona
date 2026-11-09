@@ -2,7 +2,7 @@
 // Each item pushed to the open conversation renders ChatView again (its transcript changed). The header and the composer
 // around it did not change, so they stay put: counted through a leaf each one draws (the header's "Session info" dialog,
 // the composer's context chips, the composer footer's mode chips).
-import { act } from "react";
+import { act, type ComponentProps } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 vi.hoisted(() => {
@@ -35,12 +35,12 @@ vi.mock("../../lib/store", async (load) => ({
     return () => live.listeners.delete(l);
   },
 }));
-// every FreshAnswer render (the agent's words that may fade) draws its Answer with `fade` set: counted
-const words = vi.hoisted(() => [] as { id: string; fade?: boolean }[]);
-vi.mock("./SegmentView", async (load) => {
-  const real = await load<typeof import("./SegmentView")>();
+// every render of the agent's persisted words (Answer draws them through Markdown with `fade` given, set or not): counted
+const words = vi.hoisted(() => [] as { text: string; fade?: boolean }[]);
+vi.mock("../../ui/Markdown", async (load) => {
+  const real = await load<typeof import("../../ui/Markdown")>();
   const { createElement } = await import("react");
-  return { ...real, Answer: (p: Parameters<typeof real.Answer>[0]) => ("fade" in p && words.push({ id: p.item!.id, fade: p.fade }), createElement(real.Answer, p)) };
+  return { ...real, Markdown: (p: ComponentProps<typeof real.Markdown>) => ("fade" in p && words.push({ text: p.text, fade: p.fade }), createElement(real.Markdown, p)) };
 });
 // every message's actions ask for the chat's actions each time they render: counted
 const asks = vi.hoisted(() => ({ n: 0 }));
@@ -56,8 +56,6 @@ import { ago } from "../../lib/format";
 import { whenComposer } from "../../lib/links";
 import type { Item, Session } from "../../lib/types";
 import { t } from "../../i18n";
-// before ChatView, so the mock above is the Answer it imports (WorkGroup and SegmentView import each other)
-import "./WorkGroup";
 import { ChatView } from "./ChatView";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -121,7 +119,7 @@ it("a pushed reply renders its own words once, mounting them fading, and no othe
   for (let seq = 1; seq <= 3; seq++) await push(seq);
   words.length = 0;
   await push(4);
-  expect(words).toEqual([{ id: "i4", fade: true }]);
+  expect(words).toEqual([{ text: "row 4", fade: true }]);
 });
 
 // the first page: this many exchanges, a question and its reply each

@@ -1,6 +1,7 @@
 // Items pushed over the WebSocket after a chat subscribed (not the first page, older pages or an unfolded range): their
 // words fade in once (Markdown's `fade`). A store outside React, read per message: each new reply renders its own
 // words, not every exchange of the chat (a context handed every reader a new set with each reply).
+import { useCallback, useSyncExternalStore } from "react";
 
 type Listener = () => void;
 
@@ -48,4 +49,13 @@ export function onFreshWords(mid: string, sid: string, id: string, l: Listener) 
     ls.delete(l);
     if (!ls.size && listeners.get(k) === ls) listeners.delete(k);
   };
+}
+
+const unwatched = () => {};
+
+/** Whether this message's words just came in; renders its reader only when that changes. No id: never fresh. */
+export function useFreshWords(mid: string, sid: string, id: string | undefined): boolean {
+  const subscribe = useCallback((l: Listener) => (id ? onFreshWords(mid, sid, id, l) : unwatched), [mid, sid, id]);
+  const get = () => (id ? isFreshWords(mid, sid, id) : false);
+  return useSyncExternalStore(subscribe, get, get);
 }
