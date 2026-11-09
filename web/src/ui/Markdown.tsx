@@ -22,6 +22,7 @@ import { hasLanguageFence, useHighlight } from "./stream/highlight";
 import { useMath } from "./stream/math";
 import { useReplyMotion } from "./stream/motion";
 import { repairStreamingMarkdown } from "./stream/repair";
+import { remarkSoftBreaks, replyBreaks } from "./reply-breaks";
 import { useThrottledText } from "./stream/throttle";
 import { whenIdle } from "./stream/idle";
 import { createWordFadeState, rememberShown, remainingMs, shownBefore, type WordFadeState } from "./stream/wordFade";
@@ -487,7 +488,9 @@ function TableBlock({ children, ref: _ref, ...rest }: React.ComponentProps<"tabl
 // (only the last is parsed again), what the growing end leaves open closed for the moment, its words fading in.
 // `fade`: a block that just arrived whole: its words fade in once, then it is rendered plain. Neither fades with
 // "Reply animation" off or reduced motion; once streaming ends it is plain Markdown again, without the fade's spans.
-export const Markdown = memo(function Markdown({ text: raw, small, compact, mid, cwd, streaming, fade }: { text: string; small?: boolean; compact?: boolean; mid?: string; cwd?: string; streaming?: boolean; fade?: boolean }) {
+// `lineBreaks`: a reply, read line by line as it was written (#2088, `reply-breaks.ts`): a single line break is one,
+// and steps numbered on from 5 right under a line of text are a list.
+export const Markdown = memo(function Markdown({ text: raw, small, compact, mid, cwd, streaming, fade, lineBreaks }: { text: string; small?: boolean; compact?: boolean; mid?: string; cwd?: string; streaming?: boolean; fade?: boolean; lineBreaks?: boolean }) {
   const components = useMemo<Components>(() => mid ? {
     ...markdownComponents,
     a: ({ href, children, node }) => {
@@ -503,7 +506,11 @@ export const Markdown = memo(function Markdown({ text: raw, small, compact, mid,
   const paths = useMemo(() => (mid ? textPaths(settled) : []), [settled, mid]);
   const { linkable, key } = usePathLinks(mid, cwd, paths);
   const highlight = useHighlight(useMemo(() => hasLanguageFence(text), [text]));
-  const md = useMemo(() => linkify(normalizeMath(streaming ? repairStreamingMarkdown(text) : text), { math: true }), [text, streaming]);
+  const md = useMemo(() => {
+    const lines = lineBreaks ? replyBreaks(text) : text;
+    return linkify(normalizeMath(streaming ? repairStreamingMarkdown(lines) : lines), { math: true });
+  }, [text, streaming, lineBreaks]);
+  const remarkPlugins = lineBreaks ? REMARK_LINES : REMARK;
   const wantsMath = useMemo(() => hasMath(md), [md]);
   const katex = useMath(wantsMath);
   const rehypePlugins = useMemo<PluggableList>(
@@ -516,10 +523,10 @@ export const Markdown = memo(function Markdown({ text: raw, small, compact, mid,
     <div className={`prose-j ${small ? "prose-sm" : ""} ${compact ? "prose-compact" : ""}`}>
       {chunks ? (
         chunks.map((c) => (
-          <StreamChunk key={c.start} start={c.start} content={c.content} remarkPlugins={REMARK} rehypePlugins={rehypePlugins} components={components} urlTransform={markdownUrl} fade={wordFade} plain={!streaming} wholeDocument={chunks.length === 1} />
+          <StreamChunk key={c.start} start={c.start} content={c.content} remarkPlugins={remarkPlugins} rehypePlugins={rehypePlugins} components={components} urlTransform={markdownUrl} fade={wordFade} plain={!streaming} wholeDocument={chunks.length === 1} />
         ))
       ) : (
-        <ReactMarkdown remarkPlugins={REMARK} rehypePlugins={rehypePlugins} components={components} urlTransform={markdownUrl}>
+        <ReactMarkdown remarkPlugins={remarkPlugins} rehypePlugins={rehypePlugins} components={components} urlTransform={markdownUrl}>
           {md}
         </ReactMarkdown>
       )}
@@ -529,6 +536,7 @@ export const Markdown = memo(function Markdown({ text: raw, small, compact, mid,
 
 // remark-cjk-friendly: **bold** right next to full-width CJK punctuation is still emphasis (CommonMark's flanking rules miss it).
 const REMARK: PluggableList = [remarkGfm, remarkMath, remarkCjkFriendly];
+const REMARK_LINES: PluggableList = [...REMARK, remarkSoftBreaks];
 
 /**
  * The message's fade timeline: while it streams (a fresh one per stream), or for a block that arrived whole until its
