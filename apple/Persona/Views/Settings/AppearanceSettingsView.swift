@@ -70,11 +70,7 @@ struct PersonaSettingsPage: View {
                         String(localized: "Avatars other than Mochi download from the hub when selected. To use an avatar’s colors, choose Match Avatar under Theme Color."))
                     if !model.isDemo, model.hubFeatures.contains(AvatarUploadsModel.feature) {
                         // The hub makes avatars from images (#2405): how to make one, and how to delete one made that way.
-                        #if os(macOS)
-                        Text("New from Photo makes an avatar from an image of your own. Control-click one you made to delete it.")
-                        #else
-                        Text("New from Photo makes an avatar from an image of your own. Touch and hold one you made to delete it.")
-                        #endif
+                        Text("New from Photo makes an avatar from an image of your own. To delete one you made, use the delete button in its corner.")
                     }
                     #if !os(macOS)
                     if let failure = model.appIcon.failure {

@@ -390,48 +390,25 @@
         }
       }
     },
-    "New from Photo makes an avatar from an image of your own. Control-click one you made to delete it.": {
+    "New from Photo makes an avatar from an image of your own. To delete one you made, use the delete button in its corner.": {
       "extractionState": "manual",
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "New from Photo makes an avatar from an image of your own. Control-click one you made to delete it."
+            "value": "New from Photo makes an avatar from an image of your own. To delete one you made, use the delete button in its corner."
           }
         },
         "ja": {
           "stringUnit": {
             "state": "translated",
-            "value": "「写真から作成」で自分の画像からアバターを作れます。作ったアバターは Control キーを押しながらクリックすると削除できます。"
+            "value": "「写真から作成」で自分の画像からアバターを作れます。作ったアバターは、隅の削除ボタンで削除できます。"
           }
         },
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "「从照片新建」可以用你自己的图片做一个形象。按住 Control 点按你做的形象可以删除它。"
-          }
-        }
-      }
-    },
-    "New from Photo makes an avatar from an image of your own. Touch and hold one you made to delete it.": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "New from Photo makes an avatar from an image of your own. Touch and hold one you made to delete it."
-          }
-        },
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "「写真から作成」で自分の画像からアバターを作れます。作ったアバターは長押しで削除できます。"
-          }
-        },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "「从照片新建」可以用你自己的图片做一个形象。长按你做的形象可以删除它。"
+            "value": "「从照片新建」可以用你自己的图片做一个形象。要删除你做的形象，点它角上的删除按钮。"
           }
         }
       }

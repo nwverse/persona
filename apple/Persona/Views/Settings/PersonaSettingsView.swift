@@ -5,7 +5,7 @@ import SwiftUI
 /// colors only under Theme Color › Match Avatar (`ThemeColorPicker`). The tree is rebuilt, as for a style; Appearance stays open because
 /// the settings path is AppModel's. A package is downloaded first and kept on the phone.
 /// With a hub that makes avatars from images (`look_uploads`, #2405), New from Photo ends the grid (`AvatarCropView`), and an
-/// avatar made that way can be deleted from its card's menu.
+/// avatar made that way can be deleted with the button in its card's corner (`UploadedAvatarDelete`).
 struct PersonaPicker: View {
     @Environment(AppModel.self) private var model
     @Environment(\.dynamicTypeSize) private var typeSize
@@ -14,7 +14,7 @@ struct PersonaPicker: View {
     @State private var cropping: AvatarUploadModel?
     @State private var choosingPhoto = false
     @State private var choosingFile = false
-    /// The uploaded avatar whose deletion is being confirmed.
+    /// The uploaded avatar whose deletion is being confirmed: the one dialog for the grid deletes exactly this one.
     @State private var confirmingDelete: Persona?
 
     private var store: PersonaStore { model.personas }
@@ -44,6 +44,18 @@ struct PersonaPicker: View {
                 }
                 if uploads.available { newCard }
             }
+            // One question for the grid, about the avatar whose button asked (on the iPad and in iOS 26 a popover,
+            // pointing at the cards); Delete deletes exactly that one.
+            .confirmationDialog(confirmingDelete.map { String(localized: "Delete “\($0.name)”?") } ?? "",
+                                isPresented: Binding(get: { confirmingDelete != nil }, set: { if !$0 { confirmingDelete = nil } }),
+                                titleVisibility: .visible, presenting: confirmingDelete) { p in
+                Button(String(localized: "Delete Avatar"), role: .destructive) {
+                    Task { if await uploads.delete(p) { Haptics.success() } else { Haptics.error() } }
+                }
+                .accessibilityIdentifier("persona-delete-confirm")
+            } message: { _ in
+                Text("It is deleted from the hub and from your other devices. Where it is in use, the default avatar comes back.")
+            }
             states
             if let error = store.error, !model.isDemo {
                 Label(error, systemImage: Theme.Icon.error)
@@ -61,45 +73,52 @@ struct PersonaPicker: View {
 
     /// New from Photo: after the avatars, a card with nothing in it yet. The phone opens Photos (Files from the card's
     /// menu); the Mac opens an image file, which its open panel also finds in Photos (Photos itself from the menu).
+    /// The menu is the card's own, not a `.contextMenu`: in a Form row that becomes the whole row's, and a long press on
+    /// any avatar lifted the grid and offered Photos and Files.
     private var newCard: some View {
-        Button {
+        Group {
             #if os(macOS)
-            choosingFile = true
+            Button { choosingFile = true } label: { newCardLabel }
+                .buttonStyle(.plain)
+                .macBoundedContextMenu { newCardMenu }
             #else
-            choosingPhoto = true
+            Menu { newCardMenu } label: { newCardLabel } primaryAction: { choosingPhoto = true }
+                .menuStyle(.button).buttonStyle(.plain).menuIndicator(.hidden)
             #endif
-        } label: {
-            VStack(spacing: Theme.Space.s) {
-                RoundedRectangle(cornerRadius: Theme.Radius.card, style: .continuous)
-                    .fill(Theme.Fill.well)
-                    .overlay {
-                        if uploads.loading {
-                            ProgressView()
-                        } else {
-                            ThemedIcon(Theme.Icon.newAvatar).font(Theme.Font.title).foregroundStyle(Theme.accent)
-                        }
-                    }
-                    .overlay(RoundedRectangle(cornerRadius: Theme.Radius.card, style: .continuous)
-                        .strokeBorder(Theme.AddCard.edge, style: StrokeStyle(lineWidth: Theme.Size.lineMedium, dash: Theme.AddCard.dash)))
-                    .frame(maxWidth: .infinity)
-                    .frame(height: Self.cardHeight)
-                VStack(spacing: Theme.Space.xxs) {
-                    Text("New from Photo").font(Theme.Font.captionStrong).lineLimit(1).minimumScaleFactor(0.8)
-                    Text("Crop and upload").font(Theme.Font.label).foregroundStyle(.secondary).lineLimit(1).minimumScaleFactor(0.8)
-                }
-            }
-            .frame(maxWidth: .infinity)
-            .contentShape(.rect)
         }
-        .buttonStyle(.plain)
         .disabled(uploads.loading)
-        .contextMenu {
-            Button { choosingPhoto = true } label: { Label(String(localized: "Choose from Photos"), systemImage: Theme.Icon.photos) }
-            Button { choosingFile = true } label: { Label(String(localized: "Choose Image File"), systemImage: Theme.Icon.file) }
-        }
         .accessibilityLabel(String(localized: "New from Photo"))
         .accessibilityHint(String(localized: "Makes an avatar from an image of your own"))
         .accessibilityIdentifier("persona-new")
+    }
+
+    @ViewBuilder private var newCardMenu: some View {
+        Button { choosingPhoto = true } label: { Label(String(localized: "Choose from Photos"), systemImage: Theme.Icon.photos) }
+        Button { choosingFile = true } label: { Label(String(localized: "Choose Image File"), systemImage: Theme.Icon.file) }
+    }
+
+    private var newCardLabel: some View {
+        VStack(spacing: Theme.Space.s) {
+            RoundedRectangle(cornerRadius: Theme.Radius.card, style: .continuous)
+                .fill(Theme.Fill.well)
+                .overlay {
+                    if uploads.loading {
+                        ProgressView()
+                    } else {
+                        ThemedIcon(Theme.Icon.newAvatar).font(Theme.Font.title).foregroundStyle(Theme.accent)
+                    }
+                }
+                .overlay(RoundedRectangle(cornerRadius: Theme.Radius.card, style: .continuous)
+                    .strokeBorder(Theme.AddCard.edge, style: StrokeStyle(lineWidth: Theme.Size.lineMedium, dash: Theme.AddCard.dash)))
+                .frame(maxWidth: .infinity)
+                .frame(height: Self.cardHeight)
+            VStack(spacing: Theme.Space.xxs) {
+                Text("New from Photo").font(Theme.Font.captionStrong).lineLimit(1).minimumScaleFactor(0.8)
+                Text("Crop and upload").font(Theme.Font.label).foregroundStyle(.secondary).lineLimit(1).minimumScaleFactor(0.8)
+            }
+        }
+        .frame(maxWidth: .infinity)
+        .contentShape(.rect)
     }
 
     #if DEBUG
@@ -215,36 +234,50 @@ struct PersonaPicker: View {
                             : p.isBuiltin ? p.cardTitle : here ? p.name : String(localized: "\(p.name), downloads when selected"))
         .accessibilityAddTraits(selected ? .isSelected : [])
         .accessibilityIdentifier("persona-\(p.id)")
-        .modifier(UploadedAvatarMenu(deletable: uploads.canDelete(p)) { confirmingDelete = p })
-        .confirmationDialog(Text("Delete “\(p.name)”?"), isPresented: Binding(get: { confirmingDelete?.id == p.id },
-                                                                              set: { if !$0 { confirmingDelete = nil } }),
-                            titleVisibility: .visible) {
-            Button(String(localized: "Delete Avatar"), role: .destructive) {
-                Task { if await uploads.delete(p) { Haptics.success() } else { Haptics.error() } }
-            }
-            .accessibilityIdentifier("persona-delete-confirm")
-        } message: {
-            Text("It is deleted from the hub and from your other devices. Where it is in use, the default avatar comes back.")
-        }
+        .modifier(UploadedAvatarDelete(persona: p, deletable: uploads.canDelete(p), deleting: uploads.deleting.contains(p.id)) {
+            confirmingDelete = p
+        })
     }
 }
 
-/// An avatar made from an upload: Delete in its card's menu (long press, right click) and as a VoiceOver action.
-private struct UploadedAvatarMenu: ViewModifier {
+/// An avatar made from an upload: a Delete button in its card's top trailing corner, always shown (as the web's), and the
+/// same as a VoiceOver action on the card; both ask first. Not a context menu: the grid is one Form row, and iOS and the
+/// Mac give a row one menu, so a long press on one card lifted the whole grid and ran whichever card's menu SwiftUI kept
+/// (it deleted another avatar). The button lies over the card, not inside its label, so it never chooses the card.
+private struct UploadedAvatarDelete: ViewModifier {
+    var persona: Persona
     var deletable: Bool
+    /// Being deleted: the card shows its progress, and the button goes until it is done.
+    var deleting: Bool
     var delete: () -> Void
 
     func body(content: Content) -> some View {
         if deletable {
             content
-                .contextMenu {
-                    Button(role: .destructive, action: delete) {
-                        Label(String(localized: "Delete Avatar"), systemImage: Theme.Icon.delete)
-                    }
-                }
                 .accessibilityAction(named: Text("Delete Avatar"), delete)
+                .overlay(alignment: .topTrailing) { if !deleting { button } }
         } else {
             content
         }
+    }
+
+    private var button: some View {
+        Button(action: delete) {
+            ThemedIcon(Theme.Icon.delete)
+                .font(Theme.Font.label)
+                .foregroundStyle(Theme.danger)
+                .scaledFrame(width: Theme.Size.iconS, height: Theme.Size.iconS)
+                // The style's round button over a picture, as the image viewer's (glass, BeautifulUI's raised circle,
+                // or Clay / Island / Lark's own surface).
+                .chromeSurface(in: Circle())
+                .padding(Theme.Space.xs)
+                // The whole corner answers, a finger's size even at the smaller text sizes.
+                .tapTargetFrame(alignment: .topTrailing)
+                .contentShape(.rect)
+        }
+        .buttonStyle(.plain)
+        .help(String(localized: "Delete \(persona.name)"))
+        .accessibilityLabel(String(localized: "Delete \(persona.name)"))
+        .accessibilityIdentifier("persona-delete-\(persona.id)")
     }
 }

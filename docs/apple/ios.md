@@ -913,6 +913,7 @@ iOS, Mac, visionOS, watch and extensions support Simplified Chinese, English and
     Page sides `Theme.Space.page` 16, aligned search/filters/group titles/cards/capsules, not individual paddings.
   - `Theme.Size` (requested 2026-10-31): named text-adjacent icons/dots/avatars/tap targets/thumbnails/label widths, default original points,
     `.scaledFrame(width:height:)` / `.scaledFrame(minWidth:…)` follows text up to 1.6× accessibility (44pt buttons not a third of screen).
+    `.tapTargetFrame(alignment:)`: a hit area that grows like `scaledFrame` but never under `tapTarget` (44pt) at Small / smaller system sizes, for small controls hit wider than drawn (uploaded avatar's corner delete).
     Lines/dividers/progress ≤4pt stay unscaled `frame`; geometric sizes unchanged; watch keeps own sizes, not App text sizing.
   - Dynamic Type + Settings › Appearance › Interface Style › Text Size (Small/Standard/Large, `TextSize`, `ui.textSize`) offsets system one level via RootView `.dynamicTypeSize`,
     changing text styles, `@ScaledMetric`, MarkdownUI and BeautifulUI together, ratios intact.
