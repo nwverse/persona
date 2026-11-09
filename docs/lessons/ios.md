@@ -7,6 +7,12 @@ Pitfalls, odd behavior and the decisions made at the time (formerly "Lessons" in
 - The relay writes the outer `aps` itself, `"sound":"default"` included, so the "New message" fallback rings. The notification service extension starts from `request.content.mutableCopy()`, which keeps that sound: replacing the texts, category and interruption level from the sealed payload is not enough. `PushCrypto.apply` sets the sound from the sealed `aps` and clears it when there is none; a silent notification that rings through the relay but not with direct APNs points here.
 - `apple/Shared` compiles for watchOS 10 too, and some UserNotifications APIs don't exist there: `UNNotificationSound(named:)` builds for iOS and the Mac and fails only in the watch build (hosted "iOS and Watch" job). A Mac unit test of shared code does not catch it.
 
+## Nested settings navigation (#2522)
+
+- A nested settings page must keep its parent in programmatic paths too. Apple Connectors was an inline section, not a page: moving the sent ledger required a real Connectors destination and `[.connectors, .sent]` for legacy launches. A generic `connectors/<id>` parser needs a distinct ledger sentinel: use `connectors/-sent` as the web does, retain a connector whose ID is `sent`, keep unrelated URL/security rules unchanged, and test Back in compact and Mac split layouts.
+
+- When refreshing a disposable Apple build snapshot, mirror removed Swift inputs as well as additions (#2522). A file-list `rsync` leaves a deleted settings page behind; XcodeGen still compiles that stale file against the new immutable preference type. Remove only the stale files in the owned snapshot, retain the failure evidence, and rerun against the actual checkout before blaming a merged product change.
+
 ## Retiring a conversation preference (#2477)
 
 - Removing an Appearance row also requires removing its destination case, DEBUG deep link and localized strings. Ignore the retired `openAppearance chat` value rather than falling through to the Avatar page. The Appearance section is on the settings root, not a separate overview page.
@@ -912,6 +918,19 @@ When a computer disconnects, hub marks sessions unknown, not offline; `AgentStat
 - **View-read switches must not be `@ObservationIgnored`**: `MessageMenu.swipeQuotes` enables only in chat `onAppear` / `bindMenu`.
   - Initially ignored, pre-appearance rows never redrew or attached gestures, failing 2–3/10.
   - Recognizer logs showed no touches in failures; observing the switch gave 10/10.
+
+## An edge gesture the list waits for needs a hold (2026-11-09, #2615)
+
+- **What happened**: the chat list's scroll pan waits for the right-edge navigator to fail (`shouldBeRequiredToFailBy`). The navigator began after 8 pt of vertical movement in the 16 pt band at the list's right edge, which is where a right thumb often lands for an ordinary scroll.
+  - The list stopped following the finger, and letting go jumped to the user message under the finger's last position.
+  - In the flipped list, a push up from low on the screen ends over an older message, so it looked like a jump back toward the top.
+- **Direction is not enough**: a recognizer that the list's scrolling waits for must begin on something a scroll never does. If it begins on vertical movement, it takes ordinary scrolls in the same direction.
+  - Begin only after a hold without movement (`Theme.Motion.edgeScrubHold`), and fail at once on any movement past the slop during the hold. The list then scrolls as anywhere else, and the pager and drawer still get sideways swipes.
+  - Cancel the hold's timer in `reset()`, and check that the recognizer is still `.possible` when the timer fires.
+- **A release commits only a choice**: opening on the tick under the finger is not a pick. `EdgeScrubState.moved` is set only when the finger goes past the slop to another tick than the one it opened on, and a release without it only closes the navigator.
+  - A tick change alone is not enough: a finger held still trembles by a point or two, and with many messages the ticks are `Theme.Size.edgeTickGapMin` (5 pt) apart, so a tremble over the line between two ticks would count as a pick.
+- **Tests**: UI tests that drive the navigator hold first (`press(forDuration: 0.5, thenDragTo:…)`). `testEdgeSwipeScrollsTheList` swipes quickly in the band and checks that nothing jumps and the list follows the finger.
+  - `thenHoldForDuration` after a fast synthesized drag does not stop the list from coasting once the finger lifts: the list was where the finger left it, then moved on by more than the drag itself. Measure a lower bound in the finger's direction, and tap to stop the coasting before reading frames.
 
 ## Context compaction as a divider (2026-11-04, #1064)
 
