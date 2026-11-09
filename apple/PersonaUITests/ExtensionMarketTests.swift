@@ -110,6 +110,15 @@ final class ExtensionMarketTests: XCTestCase {
         XCTAssertTrue(toggle.waitForExistence(timeout: 15), "no 自动升级 switch:\n\(app.debugDescription)")
         XCTAssertEqual(toggle.value as? String, "1", "on by default")
         shot(app, "auto-upgrade-\(state)")
+        if state == "renamed" { // MOCK_PLUGIN_UPGRADE=renamed (#2511)
+            // The row says the ID changes, and Review opens the market page under the new ID, not "no longer has it".
+            XCTAssertTrue(app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "example-gateway-next")).firstMatch.exists,
+                          "the ID change is not said:\n\(app.debugDescription)")
+            app.buttons["plugin-upgrade"].firstMatch.tap()
+            XCTAssertTrue(app.buttons["market-upgrade"].waitForExistence(timeout: 10), "the renamed upgrade did not open:\n\(app.debugDescription)")
+            shot(app, "auto-upgrade-renamed-market")
+            return
+        }
         guard state == "needs_permission" else { return }
         XCTAssertTrue(app.staticTexts["有新版本 1.1.0"].exists, "the newer version is not shown:\n\(app.debugDescription)")
         XCTAssertTrue(app.staticTexts.matching(NSPredicate(format: "label == %@", "要多一项权限：访问更多网络（status.example.com）")).firstMatch.exists, "what it asks for more")

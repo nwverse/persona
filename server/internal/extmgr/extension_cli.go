@@ -3,6 +3,7 @@ package extmgr
 import (
 	"bufio"
 	"bytes"
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -730,7 +731,8 @@ func printUpgrades(w io.Writer, v upgradesView) {
 			line := fmt.Sprintf("  %-20s %s → %s", up.ID, up.From, up.To)
 			switch {
 			case up.State == upgradeNeedsConsent:
-				line += "  " + morePermissionsText(i18n.Default, up.AddedPermissions) + "（App 的 设置 › 扩展，或 personad extension install market:" + up.Market + "/" + up.ID + "）"
+				// A renamed extension is in its market under its new ID (#2511).
+				line += "  " + upgradeConsentText(i18n.Default, up) + "（App 的 设置 › 扩展，或 personad extension install market:" + up.Market + "/" + cmp.Or(up.RenameTo, up.ID) + "）"
 			case up.Detail != "":
 				line += "  " + what[up.State] + "：" + up.Detail
 			default:

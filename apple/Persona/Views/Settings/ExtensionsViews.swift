@@ -356,7 +356,7 @@ struct ExtensionDetailView: View {
             .accessibilityIdentifier("plugin-auto-upgrade")
             if let u = p.upgrade {
                 if let action = ExtensionText.upgradeAction(u) {
-                    NavigationLink(value: SettingsPage.marketExtension(market: u.market, id: u.id)) {
+                    NavigationLink(value: SettingsPage.marketExtension(market: u.market, id: u.marketID)) {
                         // The action stays at the end of the row however long what it asks for is.
                         HStack(spacing: Theme.Space.m) {
                             ExtensionUpgradeLine(title: String(localized: "New Version \(u.to) [Extensions Views fc9053]"), detail: ExtensionText.upgradeDetail(u),

@@ -83,11 +83,13 @@ nonisolated struct ExtensionCatalogItem: Codable, Hashable, Sendable, Identifiab
     var installedSource: String?
     var fromThisMarket: Bool?
     var upgradable: Bool?
+    /// The ID this one takes over in its market (a rename, docs/extensions/extensions.md "Declared identity changes").
+    var replaces: String?
 
     var id: String { market + "/" + pluginID }
 
     enum CodingKeys: String, CodingKey {
-        case market, name, version, description, publisher, homepage, tags, contributes, permissions, problem, installed, upgradable
+        case market, name, version, description, publisher, homepage, tags, contributes, permissions, problem, installed, upgradable, replaces
         case pluginID = "id", marketName = "market_name", installedSource = "installed_source", fromThisMarket = "from_this_market"
     }
 }
@@ -454,7 +456,8 @@ enum ExtensionMarketText {
         defer { loading = false }
         do {
             let c = try await api().pluginCatalog(market: market)
-            guard let it = c.plugins.first(where: { $0.pluginID == pluginID }) else {
+            // A link from before a rename names the old ID; the market lists the extension under its new one (#2511).
+            guard let it = c.plugins.first(where: { $0.pluginID == pluginID }) ?? c.plugins.first(where: { $0.replaces == pluginID }) else {
                 throw APIError(status: 404, message: String(localized: "This market no longer has this extension"))
             }
             item = it
