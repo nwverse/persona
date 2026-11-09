@@ -73,13 +73,16 @@ func (h *Hub) notifyInteraction(owner string, ix proto.Interaction, machine stri
 		"interaction_id": ix.ID, "kind": ix.Kind, "summary": ix.Summary})
 	wants := pushWants{Kind: "input"}
 	if ix.Kind == proto.IxElicitation {
+		// Only what can show an MCP form or link: the phones that registered for one (#2433; a tap opens the card,
+		// the push has no buttons) and the connections that declared it.
+		h.push.sendCard(owner, build, ix.ID, wants.fn(), wants.quiet(), takesElicitation)
 		h.notifyWSFrom(owner, "interaction", build, wants.fn(), wants.quiet(), "elicitation")
 	} else {
 		// A card owner's Persona Link summary rings for: "Phone Muted" holds it back while one of owner's Persona Link
 		// desktops is there too (desktops.go); which cards those are is owner's to say. The desktop app's online check
 		// follows in sendCard and notifyWSFrom.
 		fn := alertWanted(wants.fn(), linkCovered && h.linkDesktopOnline(owner))
-		h.push.sendCard(owner, build, ix.ID, fn, wants.quiet())
+		h.push.sendCard(owner, build, ix.ID, fn, wants.quiet(), nil)
 		h.notifyWSFrom(owner, "interaction", build, fn, wants.quiet())
 	}
 }

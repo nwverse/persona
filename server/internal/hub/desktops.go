@@ -293,6 +293,7 @@ func (h *Hub) registerDesktop(c *client, name, pushDevice string) {
 	c.desktop, c.name, c.since, c.pushDevice = true, name, time.Now(), pushDevice
 	h.announceDesktopsLocked(false)
 	h.mu.Unlock()
+	go h.fleetClientsChanged() // Phone Muted holds back a phone's MCP form pushes now (fleet_link.go)
 	h.logf("desktop %q connected (device %s)", name, c.device)
 }
 
