@@ -266,6 +266,49 @@ func TestInstallSystemd(t *testing.T) {
 	}
 }
 
+// install on a Mac boots the agent out and bootstraps it again; a bootstrap refused right after the bootout
+// (5: Input/output error) is tried again instead of leaving the manager unloaded.
+func TestInstallLaunchdRetriesBootstrap(t *testing.T) {
+	home := isolate(t)
+	dir := filepath.Join(home, ".persona", "managers", "m-0a1b2c")
+	if err := assistant.WriteManagerConfig(dir, assistant.ManagerConfig{ID: "m-0a1b2c", Name: "Work", Hub: "http://[fd00::20]:18660", Token: "t"}); err != nil {
+		t.Fatal(err)
+	}
+	defer func(w time.Duration) { bootstrapWait = w }(bootstrapWait)
+	bootstrapWait = time.Millisecond
+	var calls []string
+	var out bytes.Buffer
+	fails := 1
+	e := &env{stdout: &out, goos: "darwin", uid: 501, home: home, exe: func() (string, error) { return "/opt/personad", nil },
+		look:   func(name string) (string, error) { return "/usr/bin/" + name, nil },
+		getenv: func(string) string { return "" },
+		run: func(_ context.Context, name string, args ...string) (string, error) {
+			calls = append(calls, name+" "+strings.Join(args, " "))
+			if name == "launchctl" && args[0] == "bootstrap" && fails > 0 {
+				fails--
+				return "Bootstrap failed: 5: Input/output error", errors.New("exit status 5")
+			}
+			return "", nil
+		}}
+	(&fakeDocker{}).wire(e)
+	if err := cmdInstall(context.Background(), e, []string{"--dir", dir}); err != nil {
+		t.Fatalf("%v\ncalls: %s", err, strings.Join(calls, "; "))
+	}
+	plist := filepath.Join(home, "Library", "LaunchAgents", "com.persona.manager.m-0a1b2c.plist")
+	bootstraps := 0
+	for _, c := range calls {
+		if strings.HasPrefix(c, "launchctl bootstrap ") {
+			bootstraps++
+			if c != "launchctl bootstrap gui/501 "+plist {
+				t.Fatalf("bootstrap call %q", c)
+			}
+		}
+	}
+	if bootstraps != 2 || !fileExists(plist) || !strings.Contains(out.String(), "com.persona.manager.m-0a1b2c") {
+		t.Fatalf("%d bootstraps, calls: %s\n%s", bootstraps, strings.Join(calls, "; "), out.String())
+	}
+}
+
 // An http:// hub on the public internet is refused before the code is traded (the token would cross it in the
 // clear) unless --allow-plaintext; a code the hub doesn't take is a configuration error (exit 2), so a container's
 // restart doesn't loop on it.

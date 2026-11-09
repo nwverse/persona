@@ -243,7 +243,7 @@ func cmdInstall(ctx context.Context, e *env, args []string) error {
 		}
 		domain := "gui/" + strconv.Itoa(e.uid)
 		_, _ = e.run(ctx, "launchctl", "bootout", domain+"/"+e.compatLabel(c.ID))
-		if out, err := e.run(ctx, "launchctl", "bootstrap", domain, path); err != nil {
+		if out, err := bootstrapAgent(ctx, e, domain, path); err != nil {
 			return fmt.Errorf("launchctl bootstrap 失败：%s", firstLine(out+" "+err.Error()))
 		}
 		fmt.Fprintf(e.stdout, "装好了：管理者「%s」（%s）是 launchd 服务 %s，登录后自动运行。\n  日志：%s\n",
