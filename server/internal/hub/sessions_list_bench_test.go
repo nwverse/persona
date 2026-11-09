@@ -3,10 +3,12 @@
 package hub
 
 import (
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"runtime"
+	"slices"
 	"strings"
 	"syscall"
 	"testing"
@@ -56,18 +58,46 @@ func indexedMachineHub(n int) (*Hub, *Machine) {
 	return h, m
 }
 
+// revsMachineHub is indexedMachineHub with the machine's list kept as the manager's lists are: with the bytes each
+// session came in (setSessionListRaws), and revs is what onEvent("sessions.revs") keeps for each revs after the
+// first: list, a copy of the kept list with the new revs, now described by the same bytes. It is handed copies whose
+// row 0 has another rev in turn, so that what is measured is the hub's reindex alone, not onEvent's copy of the list.
+func revsMachineHub(n int) (h *Hub, m *Machine, revs func(list []proto.Session)) {
+	h, m = indexedMachineHub(n)
+	raws := make([]string, len(m.sessions))
+	for i := range m.sessions {
+		b, _ := json.Marshal(m.sessions[i])
+		raws[i] = string(b)
+	}
+	m.setSessionListRaws(m.sessions, raws)
+	return h, m, func(list []proto.Session) {
+		m.mu.Lock()
+		defer m.mu.Unlock()
+		if m.rawsOf == keptListOf(m.sessions) {
+			m.rawsOf = keptListOf(list)
+		}
+		m.sessions = list
+	}
+}
+
 // BenchmarkReindexOneRev is one sessions.revs for one working session: what the hub redoes for its paged index
-// (machine.go "sessions.revs" -> reindexSessions) on a machine of 150 and of 2,000 sessions.
+// (machine.go "sessions.revs" -> reindexSessions) on a machine of 150 and of 2,000 sessions whose list came from
+// the manager with its bytes.
 func BenchmarkReindexOneRev(b *testing.B) {
 	for _, n := range []int{150, 2000} {
 		b.Run(fmt.Sprint(n), func(b *testing.B) {
-			h, m := indexedMachineHub(n)
+			h, m, revs := revsMachineHub(n)
+			var lists [2][]proto.Session
+			for i := range lists {
+				lists[i] = slices.Clone(m.sessions)
+				lists[i][0].Rev = int64(i + 1)
+			}
 			b.ReportAllocs()
+			i := 0
 			for b.Loop() {
-				m.mu.Lock()
-				m.sessions[0].Rev++
-				m.mu.Unlock()
+				revs(lists[i])
 				h.reindexSessions(m)
+				i ^= 1
 			}
 		})
 	}
