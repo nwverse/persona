@@ -44,17 +44,39 @@ type fleetCache struct {
 	muted        map[string][]string                 // machine → its sessions whose pushes are off, as the manager said
 	live         *assistantwire.FleetLive            // the assistant's
 	lives        map[string]*assistantwire.FleetLive // the other managers' (manager_state.go)
-	elicitation  bool                                // what fleet.clients said last
+	clients      assistantwire.Clients               // what fleet.clients said last
 	clientsSent  bool
+	// clientsSend holds one fleet.clients from working out what is true to telling it (fleetClientsChanged).
+	clientsSend sync.Mutex
 }
 
 func init() {
 	handleBusEvent(assistantwire.EventFleetSessions, func(h *Hub, c *busConn, params json.RawMessage) {
-		var p assistantwire.FleetSessions
-		if json.Unmarshal(params, &p) != nil || h.ownsMachine(c, p.MachineID) != nil {
-			return // only its manager lists a machine's sessions (ownership.go)
+		rest, rows, scanned := proto.ScanSessionList(params)
+		if !scanned || !proto.DecodeChangedSessions {
+			var p assistantwire.FleetSessions
+			if json.Unmarshal(params, &p) != nil || h.ownsMachine(c, p.MachineID) != nil {
+				return // only its manager lists a machine's sessions (ownership.go)
+			}
+			h.takeFleetSessions(p)
+			return
 		}
-		h.takeFleetSessions(p)
+		// The list apart from the rest (proto.ScanSessionList): decoded the same, but only its sessions whose bytes
+		// changed since the machine's last list (Machine.lists); what does not decode drops the whole event, as before.
+		var p assistantwire.FleetSessions
+		if json.Unmarshal(rest, &p) != nil || h.ownsMachine(c, p.MachineID) != nil {
+			return
+		}
+		m := h.localMachine(p.MachineID)
+		if m == nil {
+			return
+		}
+		list, raws, err := m.lists.Decode(rows)
+		if err != nil {
+			return
+		}
+		p.Sessions = list
+		h.takeFleetSessionsFrom(m, p, raws)
 	})
 	handleBusEvent(assistantwire.EventFleetInteraction, func(h *Hub, c *busConn, params json.RawMessage) {
 		var p assistantwire.FleetInteraction
@@ -137,15 +159,18 @@ func init() {
 
 // takeFleetSessions keeps a machine's list as the manager reported it and sends it to the apps.
 func (h *Hub) takeFleetSessions(p assistantwire.FleetSessions) {
-	m := h.localMachine(p.MachineID)
-	if m == nil {
-		return
+	if m := h.localMachine(p.MachineID); m != nil {
+		h.takeFleetSessionsFrom(m, p, nil)
 	}
+}
+
+// takeFleetSessionsFrom is takeFleetSessions for machine m, with raws, what each session came in (nil: unknown).
+func (h *Hub) takeFleetSessionsFrom(m *Machine, p assistantwire.FleetSessions, raws []string) {
 	list := p.Sessions
 	if list == nil {
 		list = []proto.Session{}
 	}
-	m.setSessionList(list)
+	m.setSessionListRaws(list, raws)
 	f := &h.reported
 	f.mu.Lock()
 	if f.muted == nil {
@@ -369,21 +394,48 @@ func (h *Hub) waitInteraction(ctx context.Context, ix proto.Interaction) (proto.
 
 // ---- what the hub tells the manager of the apps ----
 
-// fleetClientsChanged tells the manager what the connected apps can take now, when it changed (fleet.clients).
+// fleetClientsChanged tells the managers what the apps can take now, when it changed (fleet.clients): an app that
+// takes MCP forms and links is connected, or a phone that registered for them would be pushed one (#2433). It runs
+// after an app connects, says hello or goes, and after the devices or their settings change. One at a time, each with
+// what is true then, so an older state never overtakes a newer one.
 func (h *Hub) fleetClientsChanged() {
-	el := h.hasElicitationClient()
 	f := &h.reported
+	f.clientsSend.Lock()
+	defer f.clientsSend.Unlock()
+	c := assistantwire.Clients{Elicitation: h.hasElicitationClient(), ElicitationPush: h.push.pushesElicitation(h.desktopOnline())}
 	f.mu.Lock()
-	same := f.clientsSent && f.elicitation == el
-	f.elicitation, f.clientsSent = el, true
+	same := f.clientsSent && f.clients == c
+	f.clients, f.clientsSent = c, true
 	f.mu.Unlock()
 	if !same {
-		if err := h.notifyManagers(assistantwire.EventClients, assistantwire.Clients{Elicitation: el}); err != nil {
+		if err := h.notifyManagers(assistantwire.EventClients, c); err != nil {
 			f.mu.Lock()
 			f.clientsSent = false
 			f.mu.Unlock()
 		}
 	}
+}
+
+// clientsSettle runs on a manager connection's first word after its handshake, as mutesSettle does, and tells it what
+// the apps can take now (fleet.clients). The hub says it again only when it changes, and at a handshake only to the
+// assistant: a manager connected since would not know a phone takes MCP forms by push, which seldom changes (#2433).
+// After the first word it lands after the hello's answer.
+func (h *Hub) clientsSettle(c *busConn) {
+	if c == nil || c.ident.Role != bus.RoleManager || !c.clientsSettled.CompareAndSwap(false, true) {
+		return
+	}
+	go func() {
+		h.fleetClientsChanged() // a change not told yet goes to every manager
+		f := &h.reported
+		f.clientsSend.Lock()
+		defer f.clientsSend.Unlock()
+		f.mu.Lock()
+		clients := f.clients
+		f.mu.Unlock()
+		if h.busCurrent(c) {
+			_ = c.peer.Notify(assistantwire.EventClients, clients)
+		}
+	}()
 }
 
 // fleetConnected: the manager's handshake went through: it is told what of the apps it needs.
@@ -511,6 +563,12 @@ func (h *Hub) fleetRoutesRelayed(api *http.ServeMux) {
 		if answerOnly(r) && (!answerMayResolve(res) || h.picksFreeText(r.PathValue("id"), res)) {
 			writeErr(w, http.StatusForbidden, errors.New("this device can only answer with a card's own choices"))
 			return
+		}
+		if pr := principalOf(r.Context()); pr.Role == roleExtension {
+			if why, mode, mid, sid := h.extensionResolveRefused(pr, r.PathValue("id"), res); why != "" { // extension_modes.go
+				h.refuseExtensionMode(w, r, pr, mid, sid, mode, why)
+				return
+			}
 		}
 		r.Body = io.NopCloser(bytes.NewReader(body))
 		h.forwardOwned(w, r, h.byInteraction)

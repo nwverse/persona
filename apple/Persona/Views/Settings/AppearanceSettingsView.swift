@@ -38,8 +38,7 @@ struct AppearanceSection: View {
                 }
                 .accessibilityIdentifier("settings-language")
                 #if os(iOS)
-                // How the Agents list draws its agents and Persona's conversation on iPhone and iPad (#2530, #1666); the
-                // Mac and Vision Pro keep their look.
+                // How the Agents list draws its agents on iPhone and iPad (#2530); the Mac and Vision Pro keep their look.
                 NavigationLink(value: SettingsPage.layout) {
                     SettingsRow(title: String(localized: "Layout"), symbol: Theme.Icon.listView, tint: Theme.Hue.orange,
                                 value: layoutDisplay.display.title, look: .oneLine)

@@ -31,8 +31,12 @@ import (
 const (
 	inboxWindow   = 7 * 24 * time.Hour // older unread chats / mail are history, not inbox
 	inboxKeepDone = 3 * 24 * time.Hour // done items stay listed (for undo) this long
-	inboxForget   = 8 * 24 * time.Hour // and are remembered (so old unread messages don't come back) this long
-	inboxText     = 600                // characters of one message kept for triage
+	inboxForget   = 8 * 24 * time.Hour // and are held in memory (so old unread messages don't come back) this long
+	// inboxKeepHistory: done items stay in the database this long, paged by GET /api/v1/inbox/done (inbox_history.go);
+	// inboxPurgeEvery is how often the rounds delete those past it.
+	inboxKeepHistory = 90 * 24 * time.Hour
+	inboxPurgeEvery  = time.Hour
+	inboxText        = 600 // characters of one message kept for triage
 )
 
 // Item kinds.
@@ -93,6 +97,10 @@ type InboxItem struct {
 	TriagedBy string `json:"triaged_by,omitempty"`
 	// Parent is what the item grew out of: another item, a todo or an agent session (inbox_parent.go, #2128).
 	Parent *InboxParent `json:"parent,omitempty"`
+	// Folder is the "/"-separated folder path the item is filed under ("" none); FolderBy says who filed it, "model"
+	// or "user" (inbox_folders.go, #2463).
+	Folder   string `json:"folder,omitempty"`
+	FolderBy string `json:"folder_by,omitempty"`
 
 	// The event's part (inbox_events.go, inbox_handling.go): its section (listed only), urgent (someone waits, a
 	// deadline is near), the manager's recap, the processing conversation, the one current suggestion, the handling chain
@@ -113,6 +121,7 @@ type InboxItem struct {
 	TriagedAt string `json:"triaged_at,omitempty"` // Last when it was triaged
 	BodyOf    string `json:"body_of,omitempty"`    // mail: Last when the full text was read into Preview / Context
 	JudgedAt  string `json:"judged_at,omitempty"`  // Last when model 2 looked at it
+	FolderOf  string `json:"folder_of,omitempty"`  // Last when the model was asked for its folder
 	// Rules are the item's own triage rules, from its connector (InboxThing.Rules): they replace inbox.rules for it.
 	Rules string `json:"rules,omitempty"`
 	// ArrivedAt is the clock here when the item first held Last (ArrivedOf), as listed or saved: a bulk "Done" over a
@@ -197,7 +206,7 @@ func conversationOf(it *InboxItem) *wire.MessagingConversationRef {
 // listed is the item as the list shows it (no context).
 func (it *InboxItem) listed() InboxItem {
 	c := *it
-	c.Context, c.Last, c.TriagedAt, c.BodyOf, c.JudgedAt, c.Rules, c.ArrivedOf = "", "", "", "", "", "", ""
+	c.Context, c.Last, c.TriagedAt, c.BodyOf, c.JudgedAt, c.Rules, c.ArrivedOf, c.FolderOf = "", "", "", "", "", "", "", ""
 	c.ArrivedAt = time.Time{}
 	c.Meta, c.Group = nil, nil
 	c.ChainSeq, c.SuggestSeq = 0, 0
@@ -284,6 +293,9 @@ type inboxBook struct {
 	mutesMu     sync.Mutex // one read-change-save of the kept mutes at a time
 	policies    []InboxPolicy
 	policiesMu  sync.Mutex // one read-change-save of the kept policies at a time (inbox_policies.go)
+	folderCfg   InboxFolderConfig
+	folderCfgMu sync.Mutex // one read-change-save of the folder settings at a time (inbox_folders.go)
+	foldering   sync.Mutex // one folder pass at a time
 	cardSends   cardLocks  // a message card's id → the lock its "Send" holds (sendFromCard)
 	// translations are the translations made, by model, text or mail and language (inbox_translate.go).
 	translations translateCache
@@ -310,6 +322,8 @@ type inboxBook struct {
 	cfgMu sync.Mutex
 	cfg   assistantwire.InboxConfig // the hub's (InboxConfigMethod), as last read
 	cfgAt time.Time
+
+	purgedAt time.Time // the last purge of the done items past inboxKeepHistory (purgeInboxHistory), under mu
 }
 
 func (b *inboxBook) init() {
@@ -516,10 +530,12 @@ var errCannotReply = i18n.ErrEnglish("inbox-errors.cannot_reply")
 func (s *Service) inboxRoutes() {
 	s.inboxMuteRoutes()
 	s.inboxPolicyRoutes()
+	s.inboxFolderRoutes()
 	s.inboxParentRoutes()
 	s.inboxBulkRoutes()
 	s.inboxSuggestionRoutes()
 	s.inboxHandoffRoutes()
+	s.inboxHistoryRoutes()
 	s.translateRoutes()
 	// Items of connectors (GitHub…) only go to apps that draw them (?sources=all): an older app would show a PR as
 	// a mail and send a reply as one. triage says how many new items wait for the model, and why (inbox_admit.go).
@@ -543,6 +559,14 @@ func (s *Service) inboxRoutes() {
 			c.Context = it.Context
 		}
 		b.mu.Unlock()
+		if !ok { // a done item of the history memory no longer holds (inbox_history.go)
+			var err error
+			if c, ok, err = s.storedInboxItem(r.Context(), r.PathValue("id")); err != nil {
+				s.logf("inbox: read a done item: %v", err)
+				apierr.WriteCode(w, http.StatusServiceUnavailable, assistantwire.CodeInboxUnavailable, errInboxUnavailable)
+				return
+			}
+		}
 		if !ok {
 			apierr.Write(w, http.StatusNotFound, errNoInboxItem)
 			return
@@ -747,6 +771,9 @@ func (s *Service) inboxListAt(all bool) ([]InboxItem, time.Time) {
 }
 
 func (s *Service) setInboxDone(ctx context.Context, id string, done, dismiss bool) (InboxItem, error) {
+	if !done {
+		s.restoreInbox(ctx, []string{id}) // done past inboxForget: its row comes back to be reopened (inbox_history.go)
+	}
 	b := &s.inbox
 	b.mu.Lock()
 	it, ok := b.items[id]
@@ -803,7 +830,8 @@ func (s *Service) InboxItemJSON(ctx context.Context, id string) (json.RawMessage
 	return raw, true
 }
 
-// InboxForget is inbox.forget: the user deleted a source's data; its items go too. It says how many went.
+// InboxForget is inbox.forget: the user deleted a source's data; its items go too, those kept only as history (done
+// past inboxForget) included. It says how many went.
 func (s *Service) InboxForget(ctx context.Context, source string) (int, error) {
 	if err := s.inboxReady(ctx); err != nil {
 		return 0, err
@@ -818,17 +846,25 @@ func (s *Service) InboxForget(ctx context.Context, source string) (int, error) {
 		}
 	}
 	b.mu.Unlock()
-	if len(ids) == 0 {
-		b.saving.Unlock()
-		return 0, nil
+	gone := map[string]bool{}
+	for _, id := range ids {
+		gone[id] = true
 	}
 	// Persist the deletion first: if it fails the items stay in memory, so a retry collects the same ids and
 	// finishes the job (the connector delete contract relies on a retry cleaning up what is left).
 	if st := s.inboxDB(); st != nil {
-		if err := st.DeleteInboxItems(ctx, ids); err != nil {
+		deleted, err := st.DeleteInboxSource(ctx, source, ids)
+		if err != nil {
 			b.saving.Unlock()
 			return 0, err
 		}
+		for _, id := range deleted {
+			gone[id] = true
+		}
+	}
+	if len(gone) == 0 {
+		b.saving.Unlock()
+		return 0, nil
 	}
 	b.mu.Lock()
 	for _, id := range ids {
@@ -837,7 +873,7 @@ func (s *Service) InboxForget(ctx context.Context, source string) (int, error) {
 	b.mu.Unlock()
 	b.saving.Unlock()
 	s.inboxChanged(ctx, nil)
-	return len(ids), nil
+	return len(gone), nil
 }
 
 // inboxReport is what the hub shows of the inbox (the snapshot's inbox): the AI twin's conversations; nil while the
