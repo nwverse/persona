@@ -183,6 +183,93 @@ class PromotionNodePackageTests(unittest.TestCase):
         self.assertEqual([path for path, method in self.calls if method == 'POST'], ['hub/update/check'])
         self.assertEqual(json.loads((self.root / 'hub.json').read_text())['auto_update_nodes'], False)
 
+    def enable_automatic(self):
+        (self.root / 'hub.json').write_text('{"auto_update_nodes":true}')
+        self.inventory['machines'][0].update(manager='manager-a', machine_uid='node-uid')
+
+    def test_automatic_policy_allows_existing_guarded_deployment(self):
+        self.enable_automatic()
+        self.inventory['machines'][0]['deploying'] = True
+        original_api = self.api
+        def advancing(root, path, method='GET'):
+            if path == 'hub/update/check':
+                self.inventory['machines'][0].update(node_version=self.node_manifest['version'],
+                                                     online=False)
+            return original_api(root, path, method)
+        with patch.object(self, 'api', side_effect=advancing):
+            self.execute()
+        self.assertEqual((self.root / 'bin/nodes').resolve().name, self.node_manifest['version'])
+        self.assertEqual([path for path, method in self.calls if method == 'POST'], ['hub/update/check'])
+
+    def test_automatic_policy_preserves_busy_nodes_without_forcing_deployment(self):
+        self.enable_automatic()
+        self.execute()
+        self.assertEqual(self.inventory['machines'][0]['node_version'], 'unchanged')
+        self.assertEqual([path for path, method in self.calls if method == 'POST'], ['hub/update/check'])
+
+    def test_automatic_policy_requires_matching_packages_before_publication(self):
+        self.enable_automatic()
+        with self.assertRaisesRegex(ValueError, 'matching verified'):
+            self.execute(enabled=False)
+        self.assert_unchanged_and_no_update_requested()
+
+    def test_automatic_policy_rejects_missing_identity_before_publication(self):
+        self.enable_automatic()
+        del self.inventory['machines'][0]['machine_uid']
+        with self.assertRaisesRegex(RuntimeError, 'registered machine identities'):
+            self.execute()
+        self.assert_unchanged_and_no_update_requested()
+
+    def assert_identity_change_rejected(self, field):
+        self.enable_automatic()
+        original_api = self.api
+        def changed(root, path, method='GET'):
+            if path == 'hub/update/check':
+                self.inventory['machines'][0][field] = 'changed'
+            return original_api(root, path, method)
+        with patch.object(self, 'api', side_effect=changed):
+            with self.assertRaisesRegex(RuntimeError, 'ownership or identity'):
+                self.execute()
+        self.assertEqual((self.root / 'bin/nodes').resolve(), self.old_pointer)
+
+    def test_automatic_policy_rejects_owner_change(self):
+        self.assert_identity_change_rejected('manager')
+
+    def test_automatic_policy_rejects_uid_change(self):
+        self.assert_identity_change_rejected('machine_uid')
+
+    def test_runtime_policy_takes_precedence_over_bootstrap_configuration(self):
+        self.enable_automatic()
+        original_api = self.api
+        def runtime_disabled(root, path, method='GET'):
+            result = original_api(root, path, method)
+            if path == 'hub/update':
+                result['auto_update_nodes'] = False
+            return result
+        with patch.object(self, 'api', side_effect=runtime_disabled):
+            self.execute()
+        self.assertEqual(self.inventory['machines'][0]['node_version'], 'unchanged')
+
+    def test_runtime_can_enable_policy_with_bootstrap_default_off(self):
+        self.enable_automatic()
+        (self.root / 'hub.json').write_text('{"auto_update_nodes":false}')
+        self.inventory['machines'][0]['deploying'] = True
+        original_api = self.api
+        def runtime_enabled(root, path, method='GET'):
+            result = original_api(root, path, method)
+            if path == 'hub/update':
+                result['auto_update_nodes'] = True
+            return result
+        with patch.object(self, 'api', side_effect=runtime_enabled):
+            self.execute()
+        self.assertEqual((self.root / 'bin/nodes').resolve().name, self.node_manifest['version'])
+
+    def test_non_boolean_automatic_policy_is_rejected(self):
+        (self.root / 'hub.json').write_text('{"auto_update_nodes":"true"}')
+        with self.assertRaisesRegex(ValueError, 'must be a boolean'):
+            self.execute()
+        self.assert_unchanged_and_no_update_requested()
+
     def test_unmanaged_pointer_blocks_all_publication_before_any_api(self):
         (self.root / 'bin/nodes').unlink()
         (self.root / 'bin/nodes').mkdir()
