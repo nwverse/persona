@@ -16,6 +16,7 @@
       "endpoints": [],
       "features": [
         "persona_contracts_v1",
+        "look_uploads",
         "locale",
         "assistant_compact",
         "assistant_main_new",
@@ -119,6 +120,7 @@
       "fields": {
         "/features": [
           "persona_contracts_v1",
+          "look_uploads",
           "locale",
           "assistant_compact",
           "assistant_main_new",
@@ -213,6 +215,7 @@
       "channel": "",
       "features": [
         "persona_contracts_v1",
+        "look_uploads",
         "locale",
         "assistant_compact",
         "assistant_main_new",
@@ -306,6 +309,7 @@
       "fields": {
         "/features": [
           "persona_contracts_v1",
+          "look_uploads",
           "locale",
           "assistant_compact",
           "assistant_main_new",
