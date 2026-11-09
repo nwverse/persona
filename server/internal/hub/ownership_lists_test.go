@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -99,6 +100,36 @@ type mergeCase struct {
 	name    string
 	key     string
 	answers []listAnswer
+}
+
+// legacyInboxMerge is the old inbox pipeline: relayHTTP localized each answer whole (i18n.InboxJSON), then the merge.
+func legacyInboxMerge(l i18n.Lang, key string, answers []listAnswer) *httptest.ResponseRecorder {
+	local := cloneAnswers(answers)
+	for i := range local {
+		if loc := i18n.InboxJSON(l, local[i].body); !bytes.Equal(loc, local[i].body) {
+			local[i].body = loc
+			local[i].header.Del("Content-Length")
+		}
+	}
+	rec := httptest.NewRecorder()
+	legacyWriteMerged(rec, key, local)
+	return rec
+}
+
+// inboxMerge is the new one: a 2xx answer reaches the merge as its manager gave it, any other localized by the relay.
+func inboxMerge(forms *inboxForms, l i18n.Lang, route, key string, answers []listAnswer) *httptest.ResponseRecorder {
+	local := cloneAnswers(answers)
+	for i := range local {
+		if local[i].ok() {
+			local[i].localize = &inboxLocalize{forms: forms, slot: inboxSlot{route: route, manager: local[i].id, lang: l}}
+		} else if loc := i18n.InboxJSON(l, local[i].body); !bytes.Equal(loc, local[i].body) {
+			local[i].body = loc
+			local[i].header.Del("Content-Length")
+		}
+	}
+	rec := httptest.NewRecorder()
+	writeMerged(rec, key, local)
+	return rec
 }
 
 func cloneAnswers(answers []listAnswer) []listAnswer {
@@ -217,7 +248,8 @@ func mergeCases(tb testing.TB) []mergeCase {
 	}
 }
 
-// The merge writes what the old one wrote, byte for byte, header and status too.
+// The merge writes what the old one wrote, byte for byte, header and status too; for the inbox, in every language,
+// what localizing each answer whole before merging it wrote.
 func TestWriteMergedMatchesDecoding(t *testing.T) {
 	for _, c := range mergeCases(t) {
 		want := httptest.NewRecorder()
@@ -225,6 +257,15 @@ func TestWriteMergedMatchesDecoding(t *testing.T) {
 		got := httptest.NewRecorder()
 		writeMerged(got, c.key, cloneAnswers(c.answers))
 		sameResponse(t, c.name, got, want)
+		if c.key != "items" {
+			continue
+		}
+		forms := &inboxForms{}
+		for _, l := range []i18n.Lang{i18n.En, i18n.ZhHans, i18n.Ja, i18n.En} { // en again: from the kept forms
+			for _, route := range []string{"/api/v1/inbox", "/api/v1/inbox/done"} {
+				sameResponse(t, fmt.Sprintf("%s, %s %s", c.name, l, route), inboxMerge(forms, l, route, c.key, c.answers), legacyInboxMerge(l, c.key, c.answers))
+			}
+		}
 	}
 }
 
@@ -235,6 +276,59 @@ func TestWriteMergedNullBody(t *testing.T) {
 	if rec.Code != 200 || rec.Body.String() != `{"items":[{"manager":"m-b","id":"b"}]}`+"\n" || rec.Header().Get("X-Kept") != "m-b" {
 		t.Fatalf("%d %v %s", rec.Code, rec.Header(), rec.Body)
 	}
+}
+
+// Each localized item is kept for its slot by its bytes, only the latest answer's: a GET after one item changed
+// localizes that one and writes what a cold merge writes; another language or route is a slot of its own.
+func TestInboxFormsKeepTheLatestAnswer(t *testing.T) {
+	body := inboxBody(t, 40)
+	var v map[string]any
+	dec := json.NewDecoder(bytes.NewReader(body))
+	dec.UseNumber()
+	if err := dec.Decode(&v); err != nil {
+		t.Fatal(err)
+	}
+	forms := &inboxForms{}
+	merge := func(l i18n.Lang, route string, body []byte) {
+		t.Helper()
+		answers := []listAnswer{listOf("assistant", 200, string(body))}
+		sameResponse(t, string(l)+" "+route, inboxMerge(forms, l, route, "items", answers), inboxMerge(&inboxForms{}, l, route, "items", answers))
+		sameResponse(t, string(l)+" "+route+" whole", inboxMerge(forms, l, route, "items", answers), legacyInboxMerge(l, "items", answers))
+	}
+	slotOf := func(l i18n.Lang, route string) map[inboxKey]inboxForm {
+		forms.mu.Lock()
+		defer forms.mu.Unlock()
+		return forms.slots[inboxSlot{route: route, manager: "assistant", lang: l}].forms
+	}
+	merge(i18n.En, "/api/v1/inbox", body)
+	first := maps.Clone(slotOf(i18n.En, "/api/v1/inbox"))
+	if len(first) != 40 {
+		t.Fatalf("kept %d items, want 40", len(first))
+	}
+
+	items := v["items"].([]any)
+	items[7].(map[string]any)["title"] = "changed <title>"
+	v["items"] = items[:30]
+	var b bytes.Buffer
+	_ = json.NewEncoder(&b).Encode(v)
+	merge(i18n.En, "/api/v1/inbox", b.Bytes())
+	next := slotOf(i18n.En, "/api/v1/inbox")
+	fresh := 0
+	for k := range next {
+		if _, ok := first[k]; !ok {
+			fresh++
+		}
+	}
+	if len(next) != 30 || fresh != 1 {
+		t.Fatalf("kept %d items, %d new; want the 30 of the latest answer, 1 new", len(next), fresh)
+	}
+
+	merge(i18n.ZhHans, "/api/v1/inbox", b.Bytes())
+	merge(i18n.En, "/api/v1/inbox/done", body)
+	if len(slotOf(i18n.ZhHans, "/api/v1/inbox")) != 30 || len(slotOf(i18n.En, "/api/v1/inbox")) != 30 || len(slotOf(i18n.En, "/api/v1/inbox/done")) != 40 {
+		t.Fatal("a language or a route did not keep its own items")
+	}
+	merge(i18n.En, "/api/v1/inbox", body) // back to the first answer
 }
 
 func FuzzWriteMerged(f *testing.F) {
@@ -250,5 +344,8 @@ func FuzzWriteMerged(f *testing.F) {
 		got := httptest.NewRecorder()
 		writeMerged(got, "items", cloneAnswers(answers))
 		sameResponse(t, "merge", got, want)
+		if strings.Contains(string(body), "\"") { // anything InboxJSON could visit
+			sameResponse(t, "inbox", inboxMerge(&inboxForms{}, i18n.En, "/api/v1/inbox", "items", answers), legacyInboxMerge(i18n.En, "items", answers))
+		}
 	})
 }

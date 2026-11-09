@@ -39,15 +39,19 @@ type listAnswer struct {
 	status int
 	header http.Header
 	body   []byte
+	// localize: a 2xx inbox list as its manager gave it, localized as it is merged (inbox_forms.go); nil when the body
+	// is as the app reads it.
+	localize *inboxLocalize
 }
 
 func (a listAnswer) ok() bool { return a.status >= 200 && a.status < 300 }
 
 // bufferedWriter keeps what a handler writes (a manager's answer to a list request).
 type bufferedWriter struct {
-	header http.Header
-	status int
-	body   bytes.Buffer
+	header   http.Header
+	status   int
+	body     bytes.Buffer
+	localize *inboxLocalize // what its listAnswer gets (forwardInboxList)
 }
 
 func newBufferedWriter() *bufferedWriter { return &bufferedWriter{header: http.Header{}} }
@@ -159,7 +163,7 @@ func (h *Hub) mergeList(w http.ResponseWriter, r *http.Request, key string, ask 
 	for _, id := range ids {
 		bw := newBufferedWriter()
 		ask(bw, withBody(r, body), id)
-		ans := listAnswer{id: id, status: cmp.Or(bw.status, http.StatusOK), header: bw.header, body: bw.body.Bytes()}
+		ans := listAnswer{id: id, status: cmp.Or(bw.status, http.StatusOK), header: bw.header, body: bw.body.Bytes(), localize: bw.localize}
 		if key == "todos" && ans.ok() {
 			var t struct {
 				Todos []struct {
@@ -188,19 +192,24 @@ func (h *Hub) pagedList(w http.ResponseWriter, r *http.Request, key string, ask 
 	}
 	bw := newBufferedWriter()
 	ask(bw, r, id)
-	writeMerged(w, key, []listAnswer{{id: id, status: cmp.Or(bw.status, http.StatusOK), header: bw.header, body: bw.body.Bytes()}})
+	writeMerged(w, key, []listAnswer{{id: id, status: cmp.Or(bw.status, http.StatusOK), header: bw.header, body: bw.body.Bytes(), localize: bw.localize}})
 }
 
 // writeMerged writes answers merged (see mergeList): the top level of the first answer that is a JSON object (the
 // default's, unless it failed), its list under key holding every such answer's items stamped with their manager, keys
-// sorted, as encoding/json writes a map. Nobody answered that way: the default's answer as it is.
+// sorted, as encoding/json writes a map. An inbox answer its relay left to be localized here (listAnswer.localize)
+// reads as InboxJSON on its whole body would have made it. Nobody answered that way: the default's answer as it is.
 //
 // Its bytes are those of decoding each answer and encoding it again (writeDecoded), written from one scan of each
 // (writeScanned, merged_scan.go): 400 inbox items took 13 ms and 6.9 MB that way, about 3.5 ms and 0.5 MB this way.
 func writeMerged(w http.ResponseWriter, key string, answers []listAnswer) {
-	if !writeScanned(w, key, answers) {
-		writeDecoded(w, key, answers)
+	if writeScanned(w, key, answers) {
+		return
 	}
+	for i := range answers {
+		answers[i].localizeWhole()
+	}
+	writeDecoded(w, key, answers)
 }
 
 // writeScanned is writeMerged from a scan of each answer; false, having written nothing, when an answer is one only
@@ -219,7 +228,7 @@ func writeScanned(w http.ResponseWriter, key string, answers []listAnswer) bool 
 		if !a.ok() {
 			continue
 		}
-		s, use := scanAnswer(a.body, key)
+		s, use := a.scan(key)
 		switch use {
 		case scanSkip:
 			continue
