@@ -70,7 +70,7 @@ struct TodoCalendarView: View {
     @StoredValue("todos.calendar.showDone") private var showDone = true
     @State private var adding: TodoCalendarSlot?
 
-    private let calendar = Calendar.current
+    private let calendar = TodoCalendar.userCalendar
 
     var body: some View {
         GeometryReader { geo in

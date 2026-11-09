@@ -71,6 +71,17 @@ struct TodoCalendarTests {
         var sunday = cal
         sunday.firstWeekday = 1
         #expect(TodoCalendar.days(.week, anchor: anchor, calendar: sunday).first == at(8, 0))
+        // Simplified Chinese and the Chinese mainland start on Monday though Apple's data says Sunday; a first weekday
+        // the user chose wins; elsewhere it is the region's.
+        func first(_ id: String, chosen: Bool = false) -> Int {
+            var c = Calendar(identifier: .gregorian)
+            c.locale = Locale(identifier: id)
+            return TodoCalendar.firstWeekday(locale: Locale(identifier: id), calendar: c, chosen: chosen)
+        }
+        #expect(first("zh_CN") == 2 && first("zh-Hans_US") == 2 && first("en_CN") == 2)
+        #expect(first("zh_TW") == 1 && first("en_US") == 1 && first("ja_JP") == 1 && first("de_DE") == 2)
+        #expect(first("zh_CN@fw=sun") == 1 && first("en_US@fw=mon") == 2)
+        #expect(first("zh_CN", chosen: true) == 1)
         // A month that fits in five weeks gets five.
         let february = cal.date(from: DateComponents(year: 2027, month: 2, day: 10))!
         #expect(TodoCalendar.days(.month, anchor: february, calendar: cal).count == 28)

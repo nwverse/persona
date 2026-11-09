@@ -182,7 +182,7 @@ struct TodoCalendarWeekStrip: View {
     var entries: [CalendarEntry]
     var pick: (Date) -> Void
 
-    private let calendar = Calendar.current
+    private let calendar = TodoCalendar.userCalendar
 
     var body: some View {
         let days = TodoCalendar.days(.week, anchor: anchor, calendar: calendar)
@@ -241,7 +241,7 @@ struct TodoCalendarTimeline: View {
     var add: (TodoCalendarSlot) -> Void
 
     @Environment(\.displayScale) private var displayScale
-    private let calendar = Calendar.current
+    private let calendar = TodoCalendar.userCalendar
     private let hour = Theme.CalendarGrid.hour
     /// One device pixel: the grid's lines (0.5 pt is nothing on a 1x screen).
     private var pixel: CGFloat { 1 / displayScale }
@@ -479,7 +479,7 @@ struct TodoCalendarMonth: View {
     var pickDay: (Date) -> Void
 
     @Environment(\.displayScale) private var displayScale
-    private let calendar = Calendar.current
+    private let calendar = TodoCalendar.userCalendar
     /// One device pixel: the grid's lines.
     private var pixel: CGFloat { 1 / displayScale }
 

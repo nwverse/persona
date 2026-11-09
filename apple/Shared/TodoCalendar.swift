@@ -88,7 +88,25 @@ nonisolated enum TodoCalendar {
 
     // MARK: Days
 
-    /// The first day of the week `date` is in, as the user's region starts weeks (Monday in most, Sunday in some).
+    /// The user's calendar, its weeks starting on `firstWeekday(locale:calendar:chosen:)`: the one calendar the day's
+    /// strip, the week and the month all use.
+    static var userCalendar: Calendar {
+        var calendar = Calendar.current
+        calendar.firstWeekday = firstWeekday(locale: .current, calendar: calendar,
+                                             chosen: UserDefaults.standard.object(forKey: "AppleFirstWeekday") != nil)
+        return calendar
+    }
+
+    /// The weekday weeks start on (1 Sunday … 7 Saturday): the one the user chose (Language & Region's first day of the
+    /// week); else Monday in Simplified Chinese or on the Chinese mainland, where Apple's data still has Sunday (current
+    /// CLDR, the browsers and so the web's calendar have Monday); else the region's.
+    static func firstWeekday(locale: Locale, calendar: Calendar, chosen: Bool = false) -> Int {
+        if chosen || Locale.Components(locale: locale).firstDayOfWeek != nil { return calendar.firstWeekday }
+        if locale.language.script?.identifier == "Hans" || locale.region?.identifier == "CN" { return 2 }
+        return calendar.firstWeekday
+    }
+
+    /// The first day of the week `date` is in, as `calendar` starts weeks (`userCalendar`: as the user's do).
     static func startOfWeek(_ date: Date, calendar: Calendar) -> Date {
         calendar.dateInterval(of: .weekOfYear, for: date)?.start ?? calendar.startOfDay(for: date)
     }

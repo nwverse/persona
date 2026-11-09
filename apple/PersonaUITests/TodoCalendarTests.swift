@@ -17,7 +17,8 @@ final class TodoCalendarTests: XCTestCase {
         let pair = "persona://pair?url=" + hub.addingPercentEncoding(withAllowedCharacters: .alphanumerics)! + "&token=mock"
         // The view and the mode are switched here, not by launch arguments: a value in the argument domain could not be
         // changed by the taps below.
-        app.launchArguments = ["-pairURL", pair, "-tab", "assistant", "-openAssistantPage", "todos"]
+        app.launchArguments = ["-pairURL", pair, "-tab", "assistant", "-openAssistantPage", "todos",
+                               "-AppleLanguages", "(zh-Hans)", "-AppleLocale", "zh_CN"]
         // An iPad on its side: the calendar beside the sidebar is wide enough for the full week (Theme.CalendarGrid.wide).
         let pad = UIDevice.current.userInterfaceIdiom == .pad
         if pad { XCUIDevice.shared.orientation = .landscapeLeft }
