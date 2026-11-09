@@ -743,6 +743,30 @@ func TestInteractions(t *testing.T) {
 	}
 }
 
+func TestLoopInteractionRestart(t *testing.T) {
+	d, ctx := open(t), context.Background()
+	for _, id := range []string{"tool_loop_kept", "tool_loop_orphan"} {
+		if err := d.InsertInteraction(ctx, proto.Interaction{ID: id, MachineID: "box", SessionID: "session", Kind: proto.IxQuestion, CreatedAt: time.Now()}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := d.PutSetting(ctx, "agents.tool_loops", []any{map[string]any{"card": map[string]any{"id": "tool_loop_kept"}}, map[string]any{"silenced": true}}); err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		var value any
+		_, _ = d.TakeSetting(ctx, "agents.tool_loops", &value)
+	}()
+	if _, err := d.ExpireStaleInteractions(ctx); err != nil {
+		t.Fatal(err)
+	}
+	for id, want := range map[string]string{"tool_loop_kept": "pending", "tool_loop_orphan": "cancelled"} {
+		if status, _, err := d.InteractionOutcome(ctx, id); err != nil || status != want {
+			t.Fatalf("%s status = %s, %v; want %s", id, status, err, want)
+		}
+	}
+}
+
 // The startup lookup of pending interactions can use the partial index instead of scanning every past interaction.
 func TestPendingInteractionsIndexed(t *testing.T) {
 	d, ctx := open(t), context.Background()

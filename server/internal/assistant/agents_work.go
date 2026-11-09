@@ -142,20 +142,25 @@ type workStore interface {
 
 // workBook is the manager's copy of session_work, plus what only matters while it runs.
 type workBook struct {
-	mu         sync.Mutex
-	entries    map[[2]string]*db.SessionWork
-	cards      map[string]proto.Interaction // the cards out, by id (the snapshot's interactions)
-	loaded     bool
-	triaging   map[[2]string]bool
-	ciPolling  map[[2]string]bool           // bounded concurrent check reads
-	loops      map[[2]string]*toolLoopState // running-turn loop candidates and cards
-	generation map[[2]string]uint64         // user activity invalidates in-flight triage
-	tried      map[[2]string]triedTurn      // the turn a triage was last attempted on, and when
-	sent       map[[2]string]time.Time      // when the manager itself last sent the session something
-	seen       map[[2]string]time.Time      // the turn whose first look was recorded
-	started    map[[2]string]time.Time      // local time of the latest turn-start event
-	viewed     map[[2]string]bool           // a view since that event
-	approved   map[[2]string]approval       // a risky next step the user said yes to, for the wait it ends
+	mu          sync.Mutex
+	entries     map[[2]string]*db.SessionWork
+	cards       map[string]proto.Interaction // the cards out, by id (the snapshot's interactions)
+	loaded      bool
+	triaging    map[[2]string]bool
+	ciPolling   map[[2]string]bool           // bounded concurrent check reads
+	loops       map[[2]string]*toolLoopState // running-turn loop candidates and cards
+	loopLoadMu  sync.Mutex                   // serialize loading without holding work.mu on the database
+	loopSaveMu  sync.Mutex                   // serialize durable loop snapshots
+	loopLoaded  bool
+	loopSaved   bool
+	loopInvalid map[[2]string]loopClearReason // activity received while the saved state could not be read
+	generation  map[[2]string]uint64          // user activity invalidates in-flight triage
+	tried       map[[2]string]triedTurn       // the turn a triage was last attempted on, and when
+	sent        map[[2]string]time.Time       // when the manager itself last sent the session something
+	seen        map[[2]string]time.Time       // the turn whose first look was recorded
+	started     map[[2]string]time.Time       // local time of the latest turn-start event
+	viewed      map[[2]string]bool            // a view since that event
+	approved    map[[2]string]approval        // a risky next step the user said yes to, for the wait it ends
 	// answering marks cards whose answer is being delivered to the agent: a repeated callback in the send window
 	// (a redelivered webhook, a second tap, phone and watch together) is the same answer, not a second one.
 	answering map[string]bool
@@ -265,6 +270,7 @@ func (s *Service) workOn(ctx context.Context) bool { return s.triageSwitches(ctx
 // putTriageSwitches saves the switches. What they turn off stops at once: the cards are withdrawn, due retries and
 // wakes dropped; the apps hear of it ({"type":"agents.triage"}) and the lists follow the next snapshot.
 func (s *Service) putTriageSwitches(ctx context.Context, sw TriageSwitches) error {
+	loopLoadErr := s.loadToolLoops(ctx)
 	if st := s.store(); st != nil {
 		if err := st.PutSetting(ctx, triageSettingKey, sw); err != nil {
 			return err
@@ -293,6 +299,22 @@ func (s *Service) putTriageSwitches(ctx context.Context, sw TriageSwitches) erro
 		}
 	}
 	s.work.mu.Unlock()
+	if !sw.Enabled || !sw.ToolLoop {
+		if loopLoadErr != nil {
+			// A PUT remains usable when settings cannot be read. Turning the
+			// switch off discards every loop even if it could not be loaded.
+			if st := s.store(); st != nil {
+				s.work.loopSaveMu.Lock()
+				err := st.PutSetting(ctx, toolLoopsSetting, []savedToolLoop{})
+				s.work.loopSaveMu.Unlock()
+				if err != nil {
+					return err
+				}
+			}
+		} else if err := s.saveToolLoops(ctx); err != nil {
+			return err
+		}
+	}
 	for _, e := range stale {
 		s.saveWork(e)
 	}
@@ -509,6 +531,10 @@ func (s *Service) publishSoon() {
 
 // workReport is the snapshot's work: the stored states (with the switches' On), nil while they could not be read.
 func (s *Service) workReport(ctx context.Context) *WorkReport {
+	if err := s.loadToolLoops(ctx); err != nil {
+		s.logf("tool loop: load: %v", err)
+		return nil
+	}
 	if !s.loadWork(ctx) {
 		return nil
 	}
