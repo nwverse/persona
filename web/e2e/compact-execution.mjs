@@ -89,6 +89,10 @@ async function verify(browser, kind, theme, width) {
   assert.equal(await chat.getByText("First progress: the example files are loaded.", { exact: true }).count(), 0);
   await slot.evaluate((el) => { el.dataset.identity = "fixed-text-slot"; });
   const shot = async (state) => {
+    if (state.endsWith("expanded")) await page.waitForFunction(() => {
+      const frame = document.querySelector("[data-work-detail]")?.parentElement?.parentElement;
+      return frame && frame.getBoundingClientRect().height > 120 && Number(getComputedStyle(frame).opacity) > 0.99;
+    });
     assert.deepEqual(errors, [], "no page errors");
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false, "no horizontal overflow");
     await page.screenshot({ path: join(shots, `web-${kind}-${width}-${theme}-${state}.png`) });
