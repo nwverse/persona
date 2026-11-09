@@ -26,9 +26,11 @@ type Collector interface {
 type cpuTimes struct{ busy, total uint64 }
 
 // cpuPercent is the busy share between two readings; nil when there is nothing to compare (the first reading,
-// a counter that went backwards).
+// a counter that went backwards). Busy grows by more than total when idle + iowait went backwards (Linux iowait
+// may decrease, proc(5)): that is also a counter going backwards, so one sample is lost rather than a CPU above
+// 100% drawn.
 func cpuPercent(prev, cur cpuTimes) *float64 {
-	if prev.total == 0 || cur.total <= prev.total || cur.busy < prev.busy {
+	if prev.total == 0 || cur.total <= prev.total || cur.busy < prev.busy || cur.busy-prev.busy > cur.total-prev.total {
 		return nil
 	}
 	v := round1(100 * float64(cur.busy-prev.busy) / float64(cur.total-prev.total))
