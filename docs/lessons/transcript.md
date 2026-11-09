@@ -2,6 +2,18 @@
 
 Pitfalls, unusual behavior, and the trade-offs made at the time (originally in "Lessons" in `CLAUDE.md`; see the index in `docs/lessons/README.md`). Add new lessons to the relevant section, or start a section if none fits.
 
+## Display provenance is not a model role (#2130)
+
+Persona's `conversation_send` relay is model input with role `user`, not the user's own words. Its existing `from`
+field belongs to runtime peer messages, not Persona conversation ids. Prefer structured source metadata; an older-server
+fallback must require the complete leading delivery envelope and exclude app-sent `client_msg_id` messages. Do not
+classify arbitrary clock/clipboard prefixes or source titles. Preserve unknown source kinds as external provenance,
+bump the item cache version, and carry the provenance into Watch's derived text model as well as the shared chat view.
+Group labels after feed and date insertion; adjacent rows with the same title but different conversation ids are not
+the same speaker. `JSONValue.string` coerces booleans and numbers for generic UI: provenance fields must pattern-match
+actual JSON strings, or malformed metadata can become an invented source instead of protecting a user quotation.
+Use synthetic conversations for screenshots, not the user's real main conversation.
+
 - A session's "last edited" time must be the timestamp of its last real conversation entry (user / assistant / tool): Claude Code appends recap, ai-title,
   mode, and other lines to idle sessions, refreshing the file's mtime. Leave the timestamp blank for sessions whose transcript cannot be found; do not fall back to now (it would always show "Just now").
 - Queued messages: transcript queue-operation entries (enqueue / dequeue / remove / popAll) reconstruct the queue precisely. In the TUI, ↑ brings **all** queued messages back into the input field.
@@ -15,6 +27,7 @@ Pitfalls, unusual behavior, and the trade-offs made at the time (originally in "
   A rename is the same: the Feishu /agent names its conversation right after starting it, and the custom-title line had nowhere to go, so the node
   answered "transcript … not found" and the manager kept no title. The node now keeps the title of a running assistant conversation and writes it once the
   transcript appears; if renamed again meanwhile, the newest title wins; if the process ends first, the title is dropped (`retitle`, #5866).
+- A two-turn page or cache must count user questions, not every `role=user` text item (#2011, 2026-11-09). Automatic supervision is model input too; counting it can leave only the latest real question in both Apple and web. The node pages before the hub attaches `injected`, so its page predicate must recognize the same exact templates, with user provenance taking precedence. Apply the same predicate to `PageTurns`, its window-loading boundary, and client cache tails; retain the automatic messages as rows. Test several real questions, repeated compactions, and supervision interleaved, including older-page recovery. Invalidate old shallow Apple caches, whose `covered` cursor otherwise only catches up forward.
 - Only a response paginated from the newest end knows "whether there are earlier messages" (`has_more`). Subscription catch-up with since_seq used to send `has_more: false`;
   if it arrived before the first HTTP page, the App assumed it had reached the start of history and stopped upward scrolling at the earliest loaded message (2026-10-26). The hub now omits this field in catch-up,
   and the App treats its absence as unknown. A batch that does not cover the earliest local message must not set it to false either. Reproduce with `-showScrollToOldest YES`, scrolling all the way up while logging.
