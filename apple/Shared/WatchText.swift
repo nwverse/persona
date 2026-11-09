@@ -73,17 +73,20 @@ nonisolated struct WatchMessage: Identifiable, Equatable, Sendable {
     var injected: Injected?
     /// Sent from a card's button (`AssistantActionSource`).
     var fromCard: Bool
+    /// Model-role user messages with external provenance never become the watch user's bubble.
+    var source: MessageSource? = nil
 
     /// The newest messages of a page that have words to show, oldest first; the agent's work is left out.
     static func latest(_ page: [Item]) -> [WatchMessage] {
         var out: [WatchMessage] = []
         for item in page.reversed() where item.kind == .text {
             let raw = item.text ?? ""
-            let text = WatchText.shown(raw)
+            let source = MessageSource.of(item)
+            let text = WatchText.shown(source == nil ? raw : MessageSource.body(item))
             guard !text.isEmpty else { continue }
             out.append(WatchMessage(id: item.id, ts: item.ts, role: item.role, text: text, from: item.from,
                                     clientMsgID: item.clientMsgID, injected: Injected.of(item),
-                                    fromCard: item.role == "user" && AssistantActionSource.parse(raw) != nil))
+                                    fromCard: item.role == "user" && AssistantActionSource.parse(raw) != nil, source: source))
             if out.count == limit { break }
         }
         return out.reversed()

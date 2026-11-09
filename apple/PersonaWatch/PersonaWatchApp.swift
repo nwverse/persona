@@ -756,7 +756,9 @@ struct WatchSessionView: View {
                 ForEach(liveCards.lines(messages).suffix(WatchMessage.limit)) { line in
                     switch line {
                     case .message(let it):
-                    if let n = it.injected {
+                    if let source = it.source {
+                        WatchSourceMessage(message: it, source: source)
+                    } else if let n = it.injected {
                         // Persona's message for the model (a task's notice, a scheduled run…): its line, centered, never
                         // its words (docs/protocol/protocol.md「Persona 注入的消息」).
                         Label { Text(n.line) } icon: { Image(systemName: InjectedLook.icon(n)).foregroundStyle(InjectedLook.tint(n)) }
