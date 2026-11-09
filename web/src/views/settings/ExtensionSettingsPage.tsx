@@ -28,7 +28,7 @@ export function ExtensionSettingsPage({ detail: d, manager, busy, offline = fals
   const marketManaged = d.source === "installed" && !d.attached && !d.read_only && !!market;
   const uninstallable = d.source === "installed" && !d.attached && !d.read_only && !!marketOf(d.origin);
   const automatic = d.source === "installed" && !d.attached && !d.read_only && d.auto_upgrade !== undefined;
-  const noUpdates = offline ? t("settings-extensions.manager_offline") : lifecycleReason(d, false);
+  const noUpdates = offline ? t("settings-extensions.manager_offline") : marketManaged && !automatic ? t("settings-extensions.action_unknown") : lifecycleReason(d, false);
   const noUninstall = offline ? t("settings-extensions.manager_offline") : lifecycleReason(d, true);
   const blocked = busy || offline;
   return (

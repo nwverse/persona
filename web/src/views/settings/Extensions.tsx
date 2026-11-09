@@ -615,7 +615,7 @@ function ExtensionDetail({ id, manager, onBack, onPage, onUpgrade, onChannel, on
           configuration={<>
           {p.auth && <AuthGroup id={p.id} auth={p.auth} enabled={p.enabled ?? true} start={startSignIn} onChange={authChanged} />}
           {onChannel && channelOf(p) && <ChannelLink id={channelOf(p)!} manager={manager} onOpen={onChannel} />}
-          {!editable && <Group><Row label={t("settings-extensions.read_only")} wrapHint /></Group>}
+          {!editable && <Group><Row label={t(p.read_only || p.source === "hub.json" ? "settings-extensions.read_only" : "settings-extensions.externally_managed")} wrapHint /></Group>}
           {editable && !fields.length && !p.secrets?.length && !shownPages(p.ui, p.auth).length && !p.auth && !channelOf(p) && !p.contributes?.connectors?.length && <Group><Row label={t("settings-extensions.no_configuration")} /></Group>}
 
           {shownPages(p.ui, p.auth).length > 0 && (

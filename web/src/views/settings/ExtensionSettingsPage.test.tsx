@@ -73,6 +73,14 @@ describe("host-owned extension settings", () => {
     if (source === "builtin" || source === "installed") expect(host.querySelector('[data-extension-section="configuration"]')!.textContent).toContain("无需配置");
   });
 
+  it("does not call a market installation externally managed when an older manager omits auto-upgrade", async () => {
+    render({ ...BASE, auto_upgrade: undefined }); await flush();
+    expect(button("检查更新").disabled).toBe(false);
+    expect(button("自动升级").disabled).toBe(true);
+    expect(host.querySelector('[data-extension-section="updates"]')?.textContent).toContain("没有提供此操作");
+    expect(host.querySelector('[data-extension-section="updates"]')?.textContent).not.toContain("不由扩展市场管理");
+  });
+
   it("keeps the enabled switch visible but disabled for configured extensions", async () => {
     const callbacks = render({ ...BASE, source: "hub.json", read_only: true }); await flush();
     const sw = button("启用"); expect(sw.disabled).toBe(true); act(() => sw.click());

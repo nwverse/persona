@@ -52,7 +52,7 @@ Show rows in this order:
 | **Runtime** | Declared runtime kind, or **Not provided**. Runtime connectivity is a separate status, not Enabled. |
 | **Installed from** | Host-provided installation provenance when available; **Not provided** otherwise. Never expose local installation directories or credentials as provenance. |
 
-The page title and description come from the localized extension manifest; the information labels and source classifications come from the host. Manager identity, when needed to disambiguate copies, is host chrome, not extension content.
+The page title and description come from the localized extension manifest; the information labels and source classifications come from the host. Manager identity, when needed to disambiguate copies, is host chrome, not extension content. Optional **Publisher**, **Command-line tools**, **Homepage** and **Warning** rows follow the required identity rows when that metadata is present. Homepages must be valid HTTPS links; warnings retain the manager's explanation.
 
 Keep the host's existing contribution switches, isolation status, declared permissions, dependencies and pack-member details. These form an advanced, host-owned part of Information after the identity rows; extensions cannot supply or override their controls. They must not interrupt the extension configuration form or appear after the Danger zone. Disclosure sections may reduce visual noise, but do not hide a failed isolation state or a dependency blocker.
 
