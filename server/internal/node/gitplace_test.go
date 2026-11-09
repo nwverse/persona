@@ -48,6 +48,23 @@ func TestReadGitPlace(t *testing.T) {
 	writeGitFile(t, filepath.Join(sub, ".git"), "gitdir: ../../.git/modules/lib\n")
 	writeGitFile(t, filepath.Join(subMeta, "HEAD"), "ref: refs/heads/trunk\n")
 
+	// git -C vendor/lib worktree add ../lib-linked -b linked: the shared git dir is under the parent's .git/modules,
+	// and its config names the submodule's checkout.
+	writeGitFile(t, filepath.Join(subMeta, "config"), "[core]\n\tbare = false\n\tworktree = ../../../vendor/lib\n")
+	subTree := filepath.Join(repo, "vendor", "lib-linked")
+	subTreeMeta := filepath.Join(subMeta, "worktrees", "lib-linked")
+	writeGitFile(t, filepath.Join(subTree, ".git"), "gitdir: "+subTreeMeta+"\n")
+	writeGitFile(t, filepath.Join(subTreeMeta, "commondir"), "../..\n")
+	writeGitFile(t, filepath.Join(subTreeMeta, "HEAD"), "ref: refs/heads/linked\n")
+
+	// A bare repository's worktree: the bare repository is the project.
+	bare := filepath.Join(home, "bare.git")
+	writeGitFile(t, filepath.Join(bare, "config"), "[core]\n\tbare = true\n")
+	bareTree := filepath.Join(home, "bare-wt")
+	writeGitFile(t, filepath.Join(bareTree, ".git"), "gitdir: "+filepath.Join(bare, "worktrees", "bare-wt")+"\n")
+	writeGitFile(t, filepath.Join(bare, "worktrees", "bare-wt", "commondir"), "../..\n")
+	writeGitFile(t, filepath.Join(bare, "worktrees", "bare-wt", "HEAD"), "ref: refs/heads/main\n")
+
 	plain := filepath.Join(home, "notes")
 	if err := os.MkdirAll(plain, 0o755); err != nil {
 		t.Fatal(err)
@@ -63,6 +80,8 @@ func TestReadGitPlace(t *testing.T) {
 		{"linked worktree elsewhere", tree, gitPlace{repo, tree, "fix/login"}},
 		{"detached worktree inside the repo", inner, gitPlace{repo, inner, ""}},
 		{"submodule", sub, gitPlace{sub, sub, "trunk"}},
+		{"submodule's linked worktree", subTree, gitPlace{sub, subTree, "linked"}},
+		{"bare repository's worktree", bareTree, gitPlace{bare, bareTree, "main"}},
 		{"not a repository", plain, gitPlace{}},
 		{"relative path", "Code/app", gitPlace{}},
 		{"empty", "", gitPlace{}},

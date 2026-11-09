@@ -91,11 +91,7 @@ func readGitPlace(cwd string) gitPlace {
 				}
 				root := dir
 				if common := commonDir(gitDir); common != "" {
-					if filepath.Base(common) == ".git" {
-						root = filepath.Dir(common)
-					} else {
-						root = common // a bare repository's worktree: the bare repository is the project
-					}
+					root = mainCheckout(common)
 				}
 				return gitPlace{root: root, worktree: dir, branch: headBranch(gitDir)}
 			}
@@ -140,6 +136,48 @@ func commonDir(gitDir string) string {
 		path = filepath.Join(gitDir, path)
 	}
 	return filepath.Clean(path)
+}
+
+// mainCheckout is the working tree a linked worktree's shared git dir belongs to: the folder holding a ".git" dir, a
+// submodule's checkout (git keeps a submodule's git dir under the parent's .git/modules and names its checkout in
+// core.worktree), else the bare repository itself, which has no checkout of its own.
+func mainCheckout(common string) string {
+	if filepath.Base(common) == ".git" {
+		return filepath.Dir(common)
+	}
+	if tree := coreWorktree(common); tree != "" {
+		return tree
+	}
+	return common
+}
+
+// coreWorktree is core.worktree from a git dir's config, relative to that git dir; "" when unset or unreadable.
+func coreWorktree(gitDir string) string {
+	b, err := os.ReadFile(filepath.Join(gitDir, "config"))
+	if err != nil {
+		return ""
+	}
+	core := false
+	for _, line := range strings.Split(string(b), "\n") {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, "[") {
+			core = strings.EqualFold(strings.TrimSpace(strings.Trim(line, "[]")), "core")
+			continue
+		}
+		key, value, ok := strings.Cut(line, "=")
+		if !core || !ok || !strings.EqualFold(strings.TrimSpace(key), "worktree") {
+			continue
+		}
+		path := strings.Trim(strings.TrimSpace(value), `"`)
+		if path == "" {
+			return ""
+		}
+		if !filepath.IsAbs(path) {
+			path = filepath.Join(gitDir, path)
+		}
+		return filepath.Clean(path)
+	}
+	return ""
 }
 
 // headBranch is the branch HEAD names ("ref: refs/heads/<branch>"); "" when detached or unreadable.
