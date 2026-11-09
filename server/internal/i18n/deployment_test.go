@@ -134,6 +134,36 @@ func TestEveryTemplateCompiles(t *testing.T) {
 	}
 }
 
+// Building an index compiles no regexp; a text compiles only those of the templates it fits, up to the one it matches
+// (#2475).
+func TestTemplatesCompileOnFirstFit(t *testing.T) {
+	x := indexTemplates(makeDeploymentTemplates())
+	compiled := func() (n int) {
+		for i := range x.forms {
+			if x.forms[i].pattern.rx != nil {
+				n++
+			}
+		}
+		return n
+	}
+	if n := compiled(); n != 0 {
+		t.Fatalf("building the index compiled %d regexps", n)
+	}
+	text := T(ZhHans, "devices-deploy.install_failed", Args{"err": "disk full"})
+	fits := 0
+	for _, n := range x.candidates(text) {
+		if x.forms[n].fits(text) {
+			fits++
+		}
+		if x.forms[n].match(text) != nil {
+			break
+		}
+	}
+	if n := compiled(); n == 0 || n > fits {
+		t.Fatalf("matching one text compiled %d regexps, for %d templates it fits", n, fits)
+	}
+}
+
 var unknownTexts = []string{"ssh: connect to host example port 22: Connection refused", "connection reset by peer", "Ready"}
 
 func catalogIndexes() map[string]*templateIndex {

@@ -57,8 +57,8 @@ func TestEveryTemplateIsUsed(t *testing.T) {
 }
 
 // A template is parsed the first time it is rendered, with the templates it includes. On a fresh set, rendering any
-// one of them parses every template it may run, read here from the printed trees of the fully parsed set: no data and
-// no branch reaches "no such template" (#2475).
+// one of them parses every template it may run, read here from the printed trees of the fully parsed set, so no data
+// and no branch reaches "no such template"; and only those, so a process holds only the prompts it writes (#2475).
 func TestEachTemplateParsesItsIncludes(t *testing.T) {
 	names := Names()
 	included := map[string][]string{}
@@ -87,6 +87,15 @@ func TestEachTemplateParsesItsIncludes(t *testing.T) {
 				t.Errorf("rendering %s did not parse %s, which it may run", name, n)
 			}
 			todo = append(todo, included[n]...)
+		}
+		parsed := 0
+		for _, p := range fresh.root.Templates() {
+			if p.Name() != "" {
+				parsed++
+			}
+		}
+		if parsed != len(seen) {
+			t.Errorf("rendering %s parsed %d templates, not only the %d it may run", name, parsed, len(seen))
 		}
 	}
 }
