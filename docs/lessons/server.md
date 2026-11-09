@@ -1,5 +1,9 @@
 # Lessons: hub / node and networking
 
+## A credential bound to an id outlives the entry (#1869)
+
+Deleting a Link computer in admin removed its hub.json entry but left its credential and unused pairing codes valid: the link only failed while no entry had that id, so adding the id again, for any computer, let the old one back in. Now deleting a computer in admin, rejecting it, and a pending one expiring revoke what is bound to its id (`device_tokens.machine_id`, `pair_tokens.machine_id`), and so does adding a computer under an id not in use, from the admin console, an app or `personad hub pair --add`. An entry dropped another way (a manager's `drop_machines`, a hand edit of hub.json) is not revoked then, only when its id is added again through the hub; one written back into hub.json by hand is not covered at all. The revocation filters on the role it means, because a peer hub's credential binds its hub id in the same column.
+
 ## Finish a revocation's activity push before forgetting its target (#1864)
 
 Push registration IDs differ from credential IDs: select the registrations bound
@@ -809,6 +813,7 @@ home volume (docs/operations/link.md "Without systemd").
 
 ## File preview foundations (2026-11-04, #1292)
 
+- **JPEG pixels are stored before EXIF orientation** (#1303): apply all eight primary-image orientations, including mirrors, before sizing a thumbnail; re-encoding alone drops the orientation metadata. Keep metadata scans bounded and separate from nested/thumbnail IFDs. A derived thumbnail's ETag also needs a processing version, but clients must reach that validator: revalidate persisted disk thumbnails once per launch even when a listing's size/time match, and give browser thumbnail URLs a new page-load identity. Test both upgrade orders with a seeded old image; a new client may see an old node first. Unupdated clients can retain their private caches until they refresh or upgrade.
 - **Go `mime.TypeByExtension` varies by machine**: it reads `/etc/mime.types` and other system files; docx / xlsx / ipynb / heic may be known on one machine and empty on another, making MIME-selected viewers differ for the same file. Keep a fixed preview-type table in node (`node/filemime.go`); outside it, consult the system, then sniff initial bytes.
 - **`qlmanage -t` hangs on locked Macs** (still running after 30 seconds measured), without errors. System thumbnail tools need timeouts, cooldown after a timeout, and one concurrent execution: a file list may request dozens, otherwise node fills with stuck processes waiting on every thumbnail.
 - **Hub and web share an origin; isolate inline files**: standalone `Content-Disposition: inline` SVG / HTML scripts run as the web app and can read localStorage tokens. Inline only images, audio/video, PDF, with `Content-Security-Policy: sandbox`; PDF is exempt because Chrome won't display sandboxed PDFs.
