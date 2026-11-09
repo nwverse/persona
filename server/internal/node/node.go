@@ -1038,6 +1038,12 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 			return n.worktreeStatus(ctx, p.Kind, p.Cwd)
 		}
 		return n.worktreeRemove(ctx, p.Kind, p.Path, a.DeleteBranch, a.Force)
+	case "worktree.snapshot": // a reviewer's own copy of an agent's change (reviewsnapshot.go, #2173)
+		var a struct {
+			NameHint string `json:"name_hint"`
+		}
+		_ = json.Unmarshal(params, &a)
+		return n.worktreeSnapshot(ctx, p.Kind, p.Cwd, a.NameHint)
 	case "tabs.close":
 		return ok(n.closeTab(ctx, p.Kind, p.TabID))
 	case "tabs.rename":

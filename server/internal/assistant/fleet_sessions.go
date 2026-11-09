@@ -129,6 +129,16 @@ func (s *Service) publishList(machine string) []proto.Session {
 	f.sentMu.Lock()
 	defer f.sentMu.Unlock()
 	list := s.decorated(machine)
+	// A review's reviewer is no agent of the user's (supervise_autoreview.go): its result is on the task it reviewed.
+	if hide := s.reviewerSessions(); len(hide) > 0 {
+		kept := make([]proto.Session, 0, len(list))
+		for _, sess := range list {
+			if !hide[[2]string{machine, sess.SessionID}] {
+				kept = append(kept, sess)
+			}
+		}
+		list = kept
+	}
 	msg := assistantwire.FleetSessions{MachineID: machine, Sessions: list, Muted: s.mutedSessions(machine, list)}
 	// json.Marshal's bytes, compared with the list told last as they are written: a list that is the same (most of them)
 	// is not kept, and one that differs is copied once.

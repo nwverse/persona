@@ -137,3 +137,18 @@ type DelegateOption struct {
 func RenderAgentDelegateInput(in AgentDelegateInput) string {
 	return render("agents/delegate_input", in)
 }
+
+// AgentReview is the first message of the independent reviewer of a supervised task's finished change (agents/review,
+// #2173, docs/assistant/unified-entry.md "Independent review"): it sees the task's ask, its criteria and the change,
+// never the agent that did the work, and ends with a machine-readable count line.
+type AgentReview struct {
+	Language string   // the language to answer in by its own name ("" is Chinese)
+	Title    string   // the task's title
+	Ask      string   // what the task asked for (the todo's notes), clipped
+	DoneWhen []string // what done means
+	Scope    string   // what the diff is compared with, one line
+	Diff     string   // the capped diff text
+	Omitted  int      // files left out of the diff once the budget ran out
+}
+
+func RenderAgentReview(r AgentReview) string { return render("agents/review", r) }

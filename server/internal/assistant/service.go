@@ -86,6 +86,7 @@ type Service struct {
 	relays     relayBook         // conversations.go
 	quiet      quietBook         // quiet.go
 	supervise  superviseBook     // supervise_signals.go
+	autoRuns   autoReviewBook    // supervise_autoreview.go
 	reports    reportBook        // reports.go
 	upReports  reportRate        // agent_control.go: report_to_supervisor
 	noteRate   reportRate        // todo_decisions.go: todo_decision_add
@@ -468,6 +469,8 @@ func (s *Service) TurnStarted(ctx context.Context, r SessionRef) {
 func (s *Service) TurnEnded(ctx context.Context, r SessionRef) {
 	go s.registerInlineTurn(context.WithoutCancel(ctx), r)
 	go s.taskTurnEnded(context.WithoutCancel(ctx), r.MachineID, r.SessionID)
+	// A review's reviewer answered (supervise_autoreview.go).
+	go s.autoReviewTurnEnded(context.WithoutCancel(ctx), r.MachineID, r.SessionID)
 	go s.workTurnEnded(context.WithoutCancel(ctx), r.MachineID, r.SessionID)    // its triage (agents_work_turns.go)
 	go s.channelTurnEnded(context.WithoutCancel(ctx), r.MachineID, r.SessionID) // a channel's answer, the sync mirror
 	// A usage limit marks the launcher there until it resets (launcher_health.go).

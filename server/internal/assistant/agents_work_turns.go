@@ -181,6 +181,9 @@ func (s *Service) triageTurn(ctx context.Context, v *workView, machine string, c
 	if c.Assistant || c.Status == proto.StatusOffline || c.Status == proto.StatusWorking || c.Starting {
 		return
 	}
+	if s.isReviewer(machine, c.SessionID) {
+		return // a review's reviewer: its turn is the review's (supervise_autoreview.go), never the user's to decide
+	}
 	k := [2]string{machine, c.SessionID}
 	s.work.mu.Lock()
 	s.work.init()
