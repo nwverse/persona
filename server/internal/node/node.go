@@ -194,6 +194,9 @@ type Node struct {
 
 	// hostAgents: each host's agents in its last answer (refreshHosts), kept for a host that does not answer.
 	hostAgents map[string][]host.Agent
+	// paneClaudes: when the outside-claude list first saw each claude whose environment names an engine pane, by pid
+	// (claudeInPane's grace while its engine has not reported it yet).
+	paneClaudes map[int]paneClaudeSeen
 	// workspaceDirs avoids resolving every listed session directory every second.
 	workspaceDirs workspaceDirectoryCache
 
@@ -532,6 +535,9 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 		Configured     bool            `json:"configured"` // launchers.models, .probe, .http, .model.check: hub.json names this launcher
 		Guest          *guestParams    `json:"guest"`      // assistant.send: a new guest conversation (assistant_guest.go)
 		Raw            json.RawMessage `json:"-"`
+
+		ParentWorkspaceID string `json:"parent_workspace_id"` // worktree.create: independent of the Git source
+		AutoName          bool   `json:"auto_name"`           // worktree.create: host-generated branch and path
 	}
 	if len(params) > 0 {
 		if err := json.Unmarshal(params, &p); err != nil {
@@ -1011,7 +1017,13 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 	case "worktree.prepare": // "New worktree…": what the dialog starts from (worktree.go)
 		return n.worktreePrepare(ctx, p.Kind, p.WorkspaceID, p.Cwd)
 	case "worktree.create": // a Git worktree of a workspace's repository, opened as a workspace (worktree.go)
-		return n.worktreeCreate(ctx, p.Kind, p.WorkspaceID, p.Cwd, p.Branch, p.Path)
+		if p.AutoName {
+			if strings.TrimSpace(p.Branch) != "" || strings.TrimSpace(p.Path) != "" {
+				return nil, errors.New("Choose automatic naming or an explicit branch and path")
+			}
+			return n.worktreeCreateAutomatic(ctx, p.Kind, p.WorkspaceID, p.Cwd, p.ParentWorkspaceID)
+		}
+		return n.worktreeCreate(ctx, p.Kind, p.WorkspaceID, p.Cwd, p.Branch, p.Path, p.ParentWorkspaceID)
 	case "worktree.add", "worktree.status", "worktree.remove": // a new agent's own worktree (agentworktree.go, #6115)
 		var a struct {
 			NameHint     string `json:"name_hint"`
@@ -1237,6 +1249,8 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 		return map[string]any{"stats": n.statPaths(p.Paths, p.Cwd)}, nil
 	case "space.rename":
 		return ok(n.renameSpace(ctx, p.WorkspaceID, p.Name))
+	case "worktree.rename":
+		return ok(n.renameWorktree(ctx, p.Kind, p.WorkspaceID, p.Name))
 	case "session.rename":
 		return ok(n.renameSession(ctx, p.SessionID, p.TabName, p.Title))
 	case "todo.sync_session_tokens":

@@ -150,6 +150,13 @@ Apply in order; on a match, do not call the model:
 
 ## Automatic actions
 
+An Agent still linked to a completed to-do, with no open to-do linked to it, receives no automatic continuation,
+wakeup or triage card. Triage can record its work state, but checks the current to-do links before acting; pending
+wakes are checked again before sending. Released and dismissed links do not count. A later manual message is allowed;
+to resume follow-ups while keeping the completed link, reopen the to-do or link the Agent to an open to-do (see
+`docs/assistant/todos.md`, "Close Agents for completed tasks"). If the to-do state cannot be read, triage and wakes retry
+later without sending.
+
 ### Transient errors: automatic continuation
 
 - Backoff: 30 seconds, 2 minutes, 8 minutes; up to 3 attempts (`agents.triage.max_retries`). Reset after a normal (non-error) turn completion.
@@ -163,9 +170,12 @@ A subscription's usage limit gets no backoff "Continue" (each would be refused a
 ### Waiting: scheduled wakeups
 
 - `external`: register `wake_at` using the model's `check_minutes` (2 minutes to 4 hours, default 10 minutes); double the interval for each further wait (up to 1 hour), with at most 6 wakeups (`max_wakes`).
-  At the scheduled time, Persona sends a wakeup message (`prompts/agents/wake.md`): what the previous turn said it was waiting for, what to do afterward, and a request to check for itself. If ready, continue; if not, say how much longer.
+  When the wait itself names CI and a GitHub PR is identifiable, Persona first polls its checks without another model turn. The active GitHub connector reads the PR head's check runs and commit statuses, including all pages, and checks the head again; the node's current-branch PR reader is the fallback when it can prove the result complete and the PR matches. Empty, incomplete, or still-running checks never count as complete; an empty set that persists until the original scheduled wake falls back to that wake. Rate limits defer polling, and source errors are retried with backoff; after three consecutive attempts where no source yields usable checks, the ordinary scheduled wake takes over. A valid pending check or explicit rate limit resets that error count and remains monitored. After all reported checks finish, Persona waits two minutes and verifies the same check set on the same head before waking the agent. This observation window reduces early wakes, but a provider can register checks later and no finite window proves it will not. Polling backs off to a capped interval and continues while checks are available, including after a long offline period; it falls back to the scheduled wake if neither source can read the PR; work machines and guest conversations use scheduled wakes to preserve their privacy boundary. The wake contains a localized result and bounded, escaped failing check names explicitly marked as untrusted data, without logs. The watch and its pending message are persisted, and the hub's once-only send guard avoids duplicate messages on retry; an uncertain delivery is not resent. A new turn, a user message or viewing that turn in an app cancels it, and the wake switch controls it.
+  For other waits, or when no check source works, Persona sends a wakeup message (`prompts/agents/wake.md`): what the previous turn said it was waiting for, what to do afterward, and a request to check for itself. If ready, continue; if not, say how much longer.
   Triage the resulting turn as usual; register again if still waiting. After 6 wakeups without completion, show a card "Still waiting for 'X' after 6 wakeups", with options "Keep waiting" / "Stop waiting".
 - `agent`: the model identifies the target among the working Agents shown to it (short id). Wake this Agent when the target's turn ends (or it goes offline), with `check_minutes` as a fallback.
+
+A GitHub extension may opt into machine-readable polling with the read tool `github_ci_snapshot_v1`, called with `{"repo":"owner/repo","number":12}`. Its JSON response has `version: 1`, `host: "github.com"`, matching `repo` and `number`, `head` and `head_after` containing the same full commit hash, `complete: true`, and both `check_runs` and `statuses` arrays. Each check run has `id`, `name`, `status`, and `conclusion`; each commit status has `context` and `state`. The extension must read every page of both sources, then verify the head again; it must not include logs. Unknown versions or fields, missing arrays, duplicate items, mismatched targets or heads, and incomplete results are rejected. An extension offering only the existing human-readable `github_checks` does not provide this contract: Persona uses the node fallback or scheduled wake instead.
 
 ### User decisions: cards
 
@@ -213,7 +223,8 @@ Any next step involving **pushing code, deploying / releasing, messaging others,
 
 - It is still the triaged turn (`updated_at` unchanged), stopped (not working), with no pending interaction or queued input (`queued`);
 - The host is `done`, not `idle`: if you focused this tab in herdr (watching it at the computer), leave it alone and only record work state. Hosts that keep reporting `idle` after stopping therefore get no automatic actions (better not to interfere);
-- The computer is online.
+- The computer is online;
+- It is not linked to a completed to-do without an open to-do as well (released and dismissed links do not count).
 
 Sending a message yourself or typing on the computer starts the session working: all retries, wakeups, and cards for that turn become invalid. Triage again after the new turn ends.
 The same applies to "Retry" on an App error card (work begins, invalidating queued automatic retries). Persona records continuations and wakeups in `session_work`, sending each only once per turn.
@@ -242,7 +253,7 @@ Users enable them under **Settings › Session Triage** (web, Android, iOS / Mac
 A process can be redeployed and cleared at any time, so triage results, retry counts, wakeup times, and cards are persisted (`0331_session_work.sql`, read and written only by the manager):
 
 - `session_work`: one row per session, with the latest turn's work state (`work` JSON), turn-end time `turn_at`, next action `wake_at`, retry / wakeup counts, and card id.
-  On startup the manager restores it: continue due actions and restore unanswered cards (only if still the same stopped turn, with the same id; wait for the computer to connect before restoring cards).
+  On startup the manager restores recent turns and, beyond the usual 48-hour window, CI watches with a pending wake, including prepared messages, and recently retired turns. The 30-day cleanup retains active CI watches until they finish or are cancelled, and retains recent retirement markers even when their original turn is older. A todo that ends while its agent's turn is settling records its retirement and, when available, that stopped turn's node timestamp, preventing it from registering a new wake without comparing the node's clock to the manager's. Before scheduling automatic follow-ups or sending a wake, the manager also checks the current todo links, so a failed retirement-state write cannot revive follow-ups for a still-linked completed todo unless there is an open todo too. If todo state cannot be read during triage, the turn stays untriaged and the usual backfill retries it after ten minutes while it remains unread and within the 24-hour catch-up window; a later read failure for an existing watch postpones its next attempt. A later turn-start event or a newer node turn verified against the retired turn can clear the retirement marker, but automatic follow-ups still require that no completed todo blocks them. Reopening the todo or linking the Agent to an open todo allows new follow-ups, including after a restart. A persisted CI proof from an older manager never overrides a currently completed todo. If the retired turn's identity and a new turn-start event are both unavailable, the manager conservatively waits for another start. Continue due actions and restore unanswered cards only if still the same stopped turn, with the same id; wait for the computer to connect before restoring cards.
 - `session_work_events`: one row per triage, automatic continuation, wakeup, card creation, card answer, and wait completion (30 days), for evaluation below.
 
 ## What Persona knows

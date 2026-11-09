@@ -320,12 +320,14 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
     users.forEach((user) => acknowledgeLaunch(mid, sid, user));
     settleOutbox(mid, sid, users);
     if (!pending.length) return;
+    const shown = echoed(pending, users, (p) => ({ id: p.id, text: p.msg.text, images: p.msg.images, at: p.at }), claimed.current);
+    const drop = new Set([...shown].map((p) => p.id));
+    const now = Date.now();
     setPending((ps) => {
-      const shown = echoed(ps, users, (p) => ({ id: p.id, text: p.msg.text, images: p.msg.images, at: p.at }), claimed.current);
       // a sent one waits for its copy while the agent works and SENT_GRACE_MS after, as the outbox and the apps do: the
       // transcript can write it late (a long context compacted first, #1119); one held back for an ultracode change
       // waits as long as the turn does
-      return ps.filter((p) => !shown.has(p) && (p.waits || state === "working" || Date.now() - p.at < SENT_GRACE_MS));
+      return ps.filter((p) => !drop.has(p.id) && (p.waits || state === "working" || now - p.at < SENT_GRACE_MS));
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [segs]);
@@ -958,7 +960,7 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
   // the run's time counts from the turn's start, as its "Working…" does (not from the session's last state change)
   const stateSince = session?.state_since;
   const runStart = useMemo(() => {
-    const live = lines.findLast((l) => l.kind === "segment" && l.live);
+    const live = lines.flatMap((l) => l.kind === "supervision" ? l.lines : [l]).findLast((l) => l.kind === "segment" && l.live);
     return (live?.kind === "segment" ? turnStart(live.seg) : undefined) ?? stateSince;
   }, [lines, stateSince]);
   const planPill = plan && planOut && (lastLive || !planProgress(plan.todos).allDone) ? (
@@ -1069,7 +1071,7 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
                         line={d.line}
                         mid={mid}
                         sid={sid}
-                        streaming={d.line.kind === "segment" && d.line.live ? tr.streaming || undefined : undefined}
+                        streaming={(d.line.kind === "segment" || d.line.kind === "supervision") && d.line.live ? tr.streaming || undefined : undefined}
                         expandFold={tr.expandFold}
                         onRetry={canRetry && d.line.id === lines.at(-1)?.id ? retry : undefined}
                         fix={d.line.id === lines.at(-1)?.id ? turnFix : undefined}
@@ -1087,7 +1089,7 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
                   // only a live line streams: the others keep their memo
                   mid={mid}
                   sid={sid}
-                  streaming={line.kind === "segment" && line.live ? tr.streaming || undefined : undefined}
+                  streaming={(line.kind === "segment" || line.kind === "supervision") && line.live ? tr.streaming || undefined : undefined}
                   expandFold={tr.expandFold}
                   onRetry={canRetry && i === lines.length - 1 ? retry : undefined}
                   limit={line.kind === "apiError" && line.id === limitOn ? limitLine : undefined}

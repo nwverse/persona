@@ -249,6 +249,11 @@ def later(minutes=0, hours=0):
     return (NOW + timedelta(minutes=minutes, hours=hours)).isoformat().replace("+00:00", "Z")
 
 
+def day_from_now(days):
+    """A to-do's due_date ("YYYY-MM-DD", #1683) this many days from now (negative: past)."""
+    return (NOW + timedelta(days=days)).date().isoformat()
+
+
 def _mock_qr(text, n=29):
     """A QR-looking grid of "0" / "1" rows for text: three finder squares and noise from its hash (not scannable)."""
     seed = hashlib.sha256(text.encode()).digest()
@@ -287,9 +292,28 @@ if os.environ.get("MOCK_NODE_MISMATCH"):  # a machine whose personad is another 
 def mock_workspaces():
     rows = [("server", "herdr", "persona", "/home/me/code/persona", "master"), ("macbook", "herdr", "weather-app", "/Users/me/code/weather-app", "main"),
             ("macbook", "session", "notes", "/Users/me/notes", ""), ("studio", "herdr", "site", "/Users/me/code/site", "redesign")]
-    return [{"id": f"{m}:{src}:{i}", "machine_id": m, "source": src, "source_id": str(i), "title": t, "cwd": cwd,
+    result = [{"id": f"{m}:{src}:{i}", "machine_id": m, "source": src, "source_id": str(i), "title": t, "cwd": cwd,
              **({"branch": br} if br else {}), "online": True, "available": True, "last_seen": ago()}
             for i, (m, src, t, cwd, br) in enumerate(rows)]
+    if os.environ.get("MOCK_ORCA_CHILDREN"):
+        result.append({"id": "orca-collection", "machine_id": "macbook", "source": "orca", "source_id": "orca:collection",
+                       "title": "Workspace collection", "cwd": "/Users/me/code", "index": 1, "online": True, "available": True})
+        result.append({"id": "orca-archived", "machine_id": "macbook", "source": "orca", "source_id": "orca:archived",
+                       "title": "Archived workspace", "cwd": "/Users/me/code/archived", "index": 8, "parent_source_id": "orca:collection",
+                       "online": True, "available": True})
+        for s in SESSIONS:
+            if s.get("space_kind") == "orca":
+                result.append({"id": "catalog-" + s["space_id"], "machine_id": s["machine_id"], "source": "orca",
+                               "source_id": s["space_id"], "title": s["space_name"], "cwd": s["cwd"],
+                               "parent_source_id": s.get("parent_space_id") or "orca:collection",
+                               "index": s.get("space_index", 1), "online": True, "available": True})
+        for mid, rows in WORKTREES.items():
+            for wid, label, path, branch in rows:
+                if (mid, wid) in WORKSPACE_LINEAGE:
+                    result.append({"id": "catalog-" + wid, "machine_id": mid, "source": "orca", "source_id": wid,
+                                   "title": branch, "cwd": path, "index": 20, "parent_source_id": WORKSPACE_LINEAGE[mid, wid],
+                                   "online": True, "available": True})
+    return list({(w["machine_id"], w["source"], w["source_id"]): w for w in result}.values())
 
 
 # ---------- node self-check (#2429, docs/server/machines.md "Self-check") ----------
@@ -994,13 +1018,16 @@ if os.environ.get("MOCK_ORCA_CHILDREN"):
                   slot_index=1, tab_id="tab-" + wt, workspace_id=wid, pane_id="orca:tab-" + wt + ":leaf1")
         if parent:
             kw["parent_space_id"] = "app::/Users/me/code/app" + ("" if parent == "main" else "/.worktrees/" + parent)
-        return sess("macbook", sid, title, "/Users/me/code/app", status, state, wt, idx, "claude", 1, minutes, last, **kw)
+        return sess("macbook", sid, title, wid.split("::", 1)[1], status, state, wt, idx, "claude", 1, minutes, last, **kw)
     SESSIONS += [
         _orca("c2073000-0000-4000-8000-000000000001", "拆分登录流程", "main", 1, "done", "idle", 20, "拆成三个子任务，各开了一个工作区。"),
         _orca("c2073000-0000-4000-8000-000000000002", "登录页表单", "login-form", 2, "blocked", "needs_you", 1, "要不要保留旧的记住我选项？", parent="main"),
         _orca("c2073000-0000-4000-8000-000000000003", "会话续期", "session-refresh", 3, "working", "working", 0, "在补续期失败的测试。", parent="main"),
         _orca("c2073000-0000-4000-8000-000000000004", "续期的文档", "refresh-docs", 4, "done", "unread", 3, "文档写好了。", parent="session-refresh"),
         _orca("c2073000-0000-4000-8000-000000000005", "登录埋点", "login-metrics", 5, "done", "unread", 6, "埋点加好了，等你看。", parent="main"),
+        sess("macbook", "c2073000-0000-4000-8000-000000000006", "Earlier workspace notes", "/Users/me/code/archived", "offline", "offline",
+             "legacy-provider", 8, "codex", 1, 60, "Saved workspace history", space_kind="codex_app", space_id="provider-project",
+             pane_id=None, workspace_id=None, capabilities={"read": True, "send": False}),
     ]
 # MOCK_MANUAL_HERDR=1: two agents opened by hand in herdr (started_by_persona false) on no todo: Agents' "By to-do" lists them
 # in "Opened manually" (#2608 web, #2917 iOS / Mac).
@@ -1676,6 +1703,8 @@ TODOS_INIT = [
         "id": "todo_weather",
         "title": "天气 App 发 1.3 版",
         "notes": "1.3 的内容：主屏幕小组件、网络层补测试、发布说明。周五前提交审核。",
+        # Due at a moment (#1683): the list shows it under the title, the detail page edits it.
+        "due_at": later(hours=50),
         # The stage bar on the todo detail (#2776): how far the work got, and the PR it is in.
         "stage": "develop",
         "pr_url": "https://example.com/pull/128",
@@ -1748,6 +1777,7 @@ TODOS_INIT = [
     {
         "id": "todo_photos",
         "title": "照片同步脚本支持 HEIC",
+        "due_date": day_from_now(-1),  # overdue (#1683)
         "notes": "计划写好了，等你批准后开始改。",
         "done_at": None,
         "created_at": ago(hours=3),
@@ -1844,6 +1874,10 @@ TODOS_INIT = [
         "id": "todo_nas",
         "title": "给 NAS 配自动备份",
         "notes": "配置 NAS 的定期备份任务。",
+        # The user's own to-do with a due day, a reminder still to push and high priority (#1683).
+        "due_date": day_from_now(2),
+        "remind_at": later(hours=18),
+        "priority": "high",
         "done_at": None,
         "created_at": ago(days=1),
         "updated_at": ago(days=1),
@@ -1951,6 +1985,25 @@ def format_todo(t):
     else:
         t_copy.setdefault("spaces", [])
     return t_copy
+
+
+def apply_todo_plan(t, body):
+    """A POST / PATCH body's due_at | due_date, remind_at and priority (#1683, server/internal/assistant/todo_plan.go):
+    null or "" clears; a new reminder time is pushed again. The error to answer with 400, else None."""
+    if "due_at" in body or "due_date" in body:
+        at, day = body.get("due_at") or None, body.get("due_date") or None
+        if at and day: return "give due_at or due_date, not both"
+        t["due_at"], t["due_date"] = at, day
+    if "remind_at" in body:
+        new = body.get("remind_at") or None
+        if new != t.get("remind_at"):
+            t["remind_at"], t["reminded_at"] = new, None
+    if "priority" in body:
+        pr = (body.get("priority") or "").strip().lower()
+        pr = "" if pr == "normal" else pr
+        if pr not in ("", "high", "low"): return "priority must be high, normal or low"
+        t["priority"] = pr
+    return None
 
 
 def sorted_todos():
@@ -2578,6 +2631,11 @@ EDIT_NEW = """    func makeEntry(for date: Date) -> WeatherEntry {
     }"""
 
 ITEMS = {}
+if os.environ.get("MOCK_ORCA_CHILDREN"):
+    ITEMS["c2073000-0000-4000-8000-000000000006"] = [
+        it("user", "text", 61, text="Review the prior work in this workspace."),
+        it("assistant", "text", 60, text="Saved workspace history. You can start a new session here."),
+    ]
 for _a, _label, _phase, _run, _text in MOCK_WORKFLOW_AGENTS:  # MOCK_WORKFLOWS: each workflow agent's conversation
     ITEMS[f"{WIDGET}@{_a}"] = [it("user", "text", 13, text=f"{_label}：审计小组件的这一块，列出问题")] + (
         [it("assistant", "text", 1, text=_text)] if _text else [])
@@ -4256,6 +4314,7 @@ CLOSED_PANES, CLOSED_TABS, TAB_NAMES, SPLIT_PANES = set(), set(), {}, {}
 # #2431 "New worktree…": worktree/create adds a workspace (with one shell pane) next to the persona one; a branch or a path
 # containing "taken" is refused the way git refuses a branch checked out elsewhere / a directory with files in it.
 WORKTREES = {}  # machine id -> [(workspace id, label, path, branch)]
+WORKSPACE_LINEAGE = {}  # (machine, workspace) -> parent source id for Orca-created children
 
 
 def mock_panes(mid):
@@ -4300,7 +4359,8 @@ def worktree_route(h, p, body):
     mid, verb = p.split("/")[4], p.split("/")[6]
     NODE_ACTIONS.append({"machine": mid, "route": "worktree/" + verb, **body})
     if verb == "prepare":
-        return h.send_json({"root": "/home/me/persona", "repoName": "persona", "branch": "main", "path": "/home/me/.herdr/worktrees/persona"})
+        return h.send_json({"root": "/home/me/persona", "repoName": "persona", "branch": "main", "path": "/home/me/.herdr/worktrees/persona",
+                            "choose_parent": body.get("kind") == "orca"})
     branch, path = str(body.get("branch", "")), str(body.get("path", ""))
     if "taken" in branch:
         return h.send_json({"error": "'%s' is already used by worktree at '/home/me/persona'" % branch, "code": "internal"}, 502)
@@ -4308,7 +4368,9 @@ def worktree_route(h, p, body):
         return h.send_json({"error": "检出路径已存在且不是空目录"}, 502)
     wid = "w%d" % (3 + len(WORKTREES.setdefault(mid, [])))
     WORKTREES[mid].append((wid, "persona", path, branch))
-    return h.send_json({"workspace_id": wid, "tab_id": wid + ":t1", "pane": wid + ":p1", "terminal": "pane:" + wid + ":p1", "path": path, "branch": branch})
+    parent = body.get("parent_workspace_id") or body.get("workspace_id", "")
+    if body.get("kind") == "orca": WORKSPACE_LINEAGE[mid, wid] = parent
+    return h.send_json({"workspace_id": wid, "parent_workspace_id": parent, "tab_id": wid + ":t1", "pane": wid + ":p1", "terminal": "pane:" + wid + ":p1", "path": path, "branch": branch})
 
 
 # MOCK_AGENT_WORKTREE=1 (#6115): a new agent in a worktree of its own. worktree/status says a folder under
@@ -7635,6 +7697,49 @@ def subagent_step():
             sess_["rev"] = (sess_.get("rev") or 0) + 1
             push_machine("macbook")
     return {"step": n}
+
+
+# MOCK_MESSAGE_LIFT=1: chats for the lifted message of a long press (#603): short messages, the newest one just above the
+# composer, and a long answer with a heading, a list, a code block and a table, taller than any screen. Synthetic text.
+LIFT_SHORT = "a1f3c2d4-0000-4000-8000-0000000c1e08"
+LIFT_LONG = "a1f3c2d4-0000-4000-8000-0000000c1e09"
+
+
+def mock_message_lift():
+    ITEMS[LIFT_SHORT] = [
+        it("user", "text", 30, text="登录页的按钮文字太长了，小屏上换行了"),
+        it("assistant", "text", 29, text="看到了：「使用手机号和验证码登录」在 320 宽的屏幕上折成两行。改成「验证码登录」，再把说明放到按钮下面一行小字，可以吗？"),
+        it("user", "text", 20, text="可以，就这么改"),
+        it("assistant", "text", 19, text="改好了，三种语言的文案都换了，截图在 `shots/login-after.png`。"),
+        it("user", "text", 12, text="顺手看看注册页有没有同样的问题"),
+        it("assistant", "text", 10, text="注册页的按钮没有换行，但「获取验证码」在日语下被截短了，我把它改成两个字的「送信」，其他语言不变。"),
+        it("user", "text", 3, text="好的"),
+        it("assistant", "text", 2, text="收到，都提交了。"),
+    ]
+    rows = "\n".join("| %s | %d | %d | %s |" % r for r in [
+        ("登录", 42, 42, "全部通过"), ("注册", 38, 37, "1 个超时，重跑通过"), ("找回密码", 21, 21, "全部通过"),
+        ("个人资料", 30, 28, "2 个截图对比失败"), ("设置", 25, 25, "全部通过"), ("消息列表", 56, 56, "全部通过")])
+    long = ("## 改动和验证\n\n这次一共改了三处，下面按模块说明，最后是测试结果和还没做的事。\n\n"
+            "### 1. 登录页\n\n- 按钮文字从「使用手机号和验证码登录」改成「验证码登录」，说明挪到按钮下面一行小字。\n"
+            "- 小屏（320 宽）上不再换行；大字号下按钮高度跟着字号变，不截断。\n- 深色模式下说明文字的对比度从 3.2 提到 4.8。\n\n"
+            "### 2. 注册页\n\n- 「获取验证码」在日语下被截短，改成「送信」。\n- 倒计时期间按钮显示剩余秒数，读屏会念出来。\n"
+            "- 手机号输入框加了格式提示，输错时在框下面说明原因，不再只是变红。\n\n"
+            "### 3. 共用的按钮组件\n\n按钮标签统一单行，放不下时先缩小字号，最小到 0.8 倍：\n\n"
+            "```swift\nstruct PrimaryButton: View {\n    var title: String\n    var action: () -> Void\n\n    var body: some View {\n"
+            "        Button(action: action) {\n            Text(title)\n                .lineLimit(1)\n                .minimumScaleFactor(0.8)\n"
+            "                .frame(maxWidth: .infinity)\n        }\n        .buttonStyle(.borderedProminent)\n    }\n}\n```\n\n"
+            "### 测试结果\n\n| 模块 | 用例 | 通过 | 说明 |\n| --- | --- | --- | --- |\n" + rows + "\n\n"
+            "个人资料页的两个截图对比失败是因为头像换了新的占位图，基准图要更新，和这次改动无关。\n\n"
+            "### 还没做\n\n- 安卓端的同样问题还没改，文案已经同步到共享的字符串表里。\n- 网页端的登录页用的是另一套组件，下次一起改。\n"
+            "- 截图基准图等你确认后再更新。\n\n有问题的话告诉我具体哪一页，我再调整。")
+    ITEMS[LIFT_LONG] = [it("user", "text", 15, text="把这次登录和注册页的改动整理一下，带上测试结果"),
+                        it("assistant", "text", 5, text=long)]
+    SESSIONS.append(sess("macbook", LIFT_SHORT, "登录页文案", "/Users/me/code/shop-app", "done", "done", "shop-app", 17, "lift", 1, 2, "收到，都提交了。"))
+    SESSIONS.append(sess("macbook", LIFT_LONG, "改动整理", "/Users/me/code/shop-app", "done", "done", "shop-app", 17, "lift", 2, 5, "有问题的话告诉我具体哪一页。"))
+
+
+if os.environ.get("MOCK_MESSAGE_LIFT") == "1":
+    mock_message_lift()
 
 
 # MOCK_SUBAGENT_PARALLEL=1: three subagents launched together in the live exchange (#5602, the grid): one done, one
@@ -11683,7 +11788,7 @@ _PLUGIN_VIEW = ["id", "name", "kind", "status", "error", "version", "source", "e
 # ---------- MOCK_EXTENSIONS: declarative UI (docs/extensions/extensions.md "Declarative UI") ----------
 # example-gateway draws a page (plugin_page "home") and a section on every launcher's page (launcher_section "panel"),
 # with every kind of item; its buttons answer (a toast, a new view, a link), the form's values come back.
-_UI_STATE = {"note": "", "auto": "true", "plan": "team", "refreshed": 0, "capsule_refreshed": 0}
+_UI_STATE = {"note": "", "auto": "true", "plan": "team", "refreshed": 0, "capsule_refreshed": 0, "test_key": True}
 
 
 _DAYS = ["10-29", "10-30", "10-31", "11-01", "11-02", "11-03", "11-04"]
@@ -11764,9 +11869,12 @@ def _ui_view(ui, launcher=""):
         {"title": "Key", "footer": "停用后，用这个 Key 的启动器会立刻失败。", "items": [
             {"type": "row", "title": "工作", "subtitle": "sk-…3fa9 · 今天 1.2 万 token", "value": "¥ 12.30", "badge": {"text": "有效", "tone": "positive"},
              "action": {"id": "key:work"}},
-            {"type": "row", "title": "测试", "subtitle": "sk-…77c0 · 7 天没用", "badge": {"text": "快过期", "tone": "caution"}},
+            {"type": "row", "title": "测试", "subtitle": "sk-…77c0 · 7 天没用", "badge": {"text": "快过期", "tone": "caution"}
+             if _UI_STATE["test_key"] else {"text": "停用", "tone": "neutral"}},
             {"type": "divider"},
-            {"type": "button", "title": "停用测试 Key", "role": "destructive", "action": {"id": "disable:test", "confirm": "停用后不能恢复，确定停用？"}}]},
+            # Disabling answers with the page where the button is another one (its own key): drawn new, usable at once (#1937).
+            {"type": "button", "key": "disable-test", "title": "停用测试 Key", "role": "destructive", "action": {"id": "disable:test", "confirm": "停用后不能恢复，确定停用？"}}
+            if _UI_STATE["test_key"] else {"type": "button", "key": "enable-test", "title": "启用测试 Key", "action": {"id": "enable:test"}}]},
         {"title": "设置", "items": [
             {"type": "field", "name": "note", "label": "备注", "kind": "text", "value": _UI_STATE["note"], "placeholder": "写点什么"},
             {"type": "field", "name": "token", "label": "管理 Token", "kind": "secret", "placeholder": "不回显"},
@@ -11892,7 +12000,11 @@ def _ui_action(ui, action, values):
     if action.startswith("key:"):
         return {"open_url": "https://example.com/console/keys"}
     if action.startswith("disable:"):
-        return {"toast": "已停用"}
+        _UI_STATE["test_key"] = False
+        return {"toast": "已停用", "view": _ui_view(ui)}
+    if action.startswith("enable:"):
+        _UI_STATE["test_key"] = True
+        return {"toast": "已启用", "view": _ui_view(ui)}
     return {}
 
 
@@ -11966,7 +12078,8 @@ def _catalog_item(c):
 
 # Auto-upgrade (docs/extensions/extensions.md "Automatic upgrades"): example-gateway, from a market at 1.0.0, has 1.1.0 there asking for one more
 # host. MOCK_PLUGIN_UPGRADE picks how it stands: needs_permission (default), waiting_idle, skipped, upgraded (the last
-# one went in by itself), disabled (switched off: auto-upgrade paused, its own switch kept), none.
+# one went in by itself), disabled (switched off: auto-upgrade paused, its own switch kept), rolled_back_by_user (the
+# user rolled back from 1.1.0 by hand: skipped as the user's, #1826), none.
 AUTO_UPGRADE = {"auto": True}
 # A market plugin's upgrade while it is on, put back when it is switched on again (_auto_upgrade_paused).
 _UPGRADE_WHILE_ON = {}
@@ -11999,7 +12112,10 @@ def _gateway_upgrade(state):
         up["detail"] = "插件正在用"
     elif state == "skipped":
         pl["upgrade_note"] = {"kind": "rolled_back", "from": "1.0.0", "to": "1.1.0", "detail": "exited with status 3", "at": at(5)}
-    if state in ("needs_permission", "waiting_idle", "skipped", "disabled"):
+    elif state == "rolled_back_by_user":  # no note: the version it was upgraded to is not installed any more
+        up["state"], up["skipped_by"] = "skipped", "user"
+        up["detail"] = "你从这个版本回滚过，所以不会自动装它；要装就手动更新"  # i18n-ignore: the hub's words
+    if state in ("needs_permission", "waiting_idle", "skipped", "disabled", "rolled_back_by_user"):
         pl["upgrade"] = up
     elif state == "upgraded":
         pl["upgrade_note"] = {"kind": "upgraded", "from": "0.9.0", "to": "1.0.0", "at": at(3)}
@@ -14139,6 +14255,8 @@ class H(BaseHTTPRequestHandler):
                 "updated_at": now_str,
                 "agents": [],
             }
+            err = apply_todo_plan(new_todo, body)
+            if err: return self.send_json({"error": err}, 400)
             TODOS.insert(0, new_todo)
             push_todos()
             return self.send_json({"todo": new_todo})
@@ -14291,6 +14409,8 @@ class H(BaseHTTPRequestHandler):
                     t["title"] = title
                 if "notes" in body:
                     t["notes"] = body["notes"] or ""
+                err = apply_todo_plan(t, body)
+                if err: return self.send_json({"error": err}, 400)
                 if "done" in body:
                     if body["done"]:
                         if not t.get("done_at"):
@@ -15057,6 +15177,11 @@ class H(BaseHTTPRequestHandler):
                      "working", "working", body.get("cwd", "").rsplit("/", 1)[-1] or "new", 9, body.get("tab_name") or "agent-%d" % n, n, 0, "",
                      agent="codex" if codex else "claude")
             s["launcher"] = body.get("launcher") or "claude"
+            if os.environ.get("MOCK_ORCA_CHILDREN") and body.get("workspace_id"):
+                w = next((w for w in mock_workspaces() if w["machine_id"] == s["machine_id"] and w["source_id"] == body["workspace_id"] and w["source"] == "orca"), None)
+                if w:
+                    s.update(space_kind="orca", space_id=w["source_id"], workspace_id=w["source_id"], space_name=w["title"], space_index=w["index"])
+                    if w.get("parent_source_id"): s["parent_space_id"] = w["parent_source_id"]
             if body.get("model"): s["model"] = body["model"]  # picked in "New Agent"
             if codex:  # the node answers once the first message is in the thread's rollout
                 ITEMS[s["session_id"]] = [it("user", "text", 0, text=body["prompt"])]
