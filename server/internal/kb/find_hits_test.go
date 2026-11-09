@@ -22,7 +22,8 @@ func findReference(e *Engine, query string, limit int) []Result {
 		return nil
 	}
 	ws := words(query)
-	files, days := e.files()
+	w := e.files()
+	files, days := walkPaths(w.files), walkPaths(w.days)
 	type fileHits struct {
 		key   string
 		found []Found

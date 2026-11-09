@@ -151,7 +151,7 @@ type (
 // hits.
 func (e *Engine) Search(query string, messages bool, limit int) []Hit {
 	match := matcher(query)
-	if match == nil {
+	if match == nil || limit <= 0 {
 		return nil
 	}
 	ws := words(query)
@@ -181,31 +181,17 @@ func (e *Engine) Search(query string, messages bool, limit int) []Hit {
 			}
 		}
 	}
-	var files, days, moments []string
-	sep := string(filepath.Separator)
-	_ = filepath.WalkDir(e.Store.Dir, func(p string, d os.DirEntry, err error) error {
-		if err != nil || d.IsDir() {
-			return nil
-		}
-		switch {
-		case strings.Contains(p, sep+"moments"+sep+"posts"+sep):
-			// The Moments archive (moments.go): thousands of posts, read after everything else so they never crowd it out.
-			if strings.HasSuffix(p, ".md") {
-				moments = append(moments, p)
-			}
-		case strings.Contains(p, string(filepath.Separator)+"attachments"+string(filepath.Separator)):
-		case strings.Contains(p, string(filepath.Separator)+"messages"+string(filepath.Separator)):
-			if messages {
-				days = append(days, p)
-			}
-		case filepath.Base(p) == "segments.json": // a recording's: transcript.md has the same text
-		case !e.searchable(p):
-		case strings.HasSuffix(p, ".md") || strings.HasSuffix(p, ".json"):
-			files = append(files, p)
-		}
-		return nil
-	})
+	// The data dir's files come from Find's walk (searchFiles), kept while no directory changed: profile files, the
+	// ExtraDirs, the message days newest first, then the Moments archive (moments.go), thousands of posts read after
+	// everything else so they never crowd it out.
+	o := e.searchFiles()
+	for _, d := range o.files {
+		scan(d.path)
+	}
 	for _, dir := range e.ExtraDirs {
+		if len(hits) >= limit {
+			break
+		}
 		_ = filepath.WalkDir(dir, func(p string, d os.DirEntry, err error) error {
 			if err != nil {
 				return nil
@@ -214,27 +200,24 @@ func (e *Engine) Search(query string, messages bool, limit int) []Hit {
 				return filepath.SkipDir // .git and the like
 			}
 			if !d.IsDir() && strings.HasSuffix(p, ".md") {
-				files = append(files, p)
+				scan(p)
 			}
 			return nil
 		})
 	}
-	for _, p := range files {
-		scan(p)
+	if messages {
+		for _, d := range o.days {
+			if len(hits) >= limit {
+				break
+			}
+			scan(d.path)
+		}
 	}
-	sort.Slice(days, func(i, j int) bool { return filepath.Base(days[i]) > filepath.Base(days[j]) })
-	for _, p := range days {
+	for _, d := range o.moments {
 		if len(hits) >= limit {
 			break
 		}
-		scan(p)
-	}
-	sort.Slice(moments, func(i, j int) bool { return moments[i] > moments[j] }) // newer post ids first
-	for _, p := range moments {
-		if len(hits) >= limit {
-			break
-		}
-		scan(p)
+		scan(d.path)
 	}
 	return hits
 }
