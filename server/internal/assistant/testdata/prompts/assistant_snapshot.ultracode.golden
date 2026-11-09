@@ -5,5 +5,5 @@
   - 需要你：审查方案〔ultracode=on：每个实质任务都会跑多 Agent workflow，等结果时别催〕（box，session_id=needson）
   - 完成未看：修复测试〔ultracode=off〕（box，session_id=doneoff）
   - 工作中：读代码；实现功能〔ultracode=on：每个实质任务都会跑多 Agent workflow，等结果时别催〕
-- iPhone：App 不在前台，phone_* 工具会先尝试在后台唤醒 App，失败就请他打开 App
+- iPhone: App is offline. Phone tools normally try to wake it; if that fails, ask the user to open Persona. For a confirmed write whose schema offers queue_if_offline, use true when the user wants it kept until the phone reconnects. Report the returned queue ID as pending, not written; use phone_write_queue_list to check it and phone_write_queue_cancel to cancel an unsent entry. Never automatically retry an uncertain write; check the phone data first.
 - 已安排的跟进：没有

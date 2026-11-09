@@ -5,5 +5,5 @@
 - 从对话开的任务（task_plan；问已有结果看这里，不够用 agent_read 读它的对话；要它新查、新做或改方向才用 agent_send）：
   - 修登录（todo_d）：做完了（用户还没看）；交付：停在 PR，卡在「等用户批准合并」，要用户点头
 - 等用户点头才能上线的（1 件；合到一起一次列给用户批，别一件件问）：「修登录」（todo_d）停在 PR，等用户批准合并
-- iPhone：App 不在前台，phone_* 工具会先尝试在后台唤醒 App，失败就请他打开 App
+- iPhone: App is offline. Phone tools normally try to wake it; if that fails, ask the user to open Persona. For a confirmed write whose schema offers queue_if_offline, use true when the user wants it kept until the phone reconnects. Report the returned queue ID as pending, not written; use phone_write_queue_list to check it and phone_write_queue_cancel to cancel an unsent entry. Never automatically retry an uncertain write; check the phone data first.
 - 已安排的跟进：没有

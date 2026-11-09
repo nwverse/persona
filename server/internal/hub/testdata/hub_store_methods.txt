@@ -45,3 +45,12 @@ TouchDeviceToken
 CreatePairToken
 PairTokenByHash
 RedeemPairToken
+
+# Durable delivery receipts for confirmed phone writes; phone data stays on the phone.
+EnqueuePhoneWrite
+PhoneWrites
+ClaimPhoneWrite
+FinishPhoneWrite
+CancelPhoneWrite
+RecoverPhoneWrites
+FindQueuedPhoneWrite

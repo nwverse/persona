@@ -18,7 +18,7 @@
 {{end}}{{with .Asked}}- 你用 ask_user 问过、到点没人回、转成待办在等用户拍板的（用户在待办里记了决定会作为新消息发给发问的对话；别再问，也别先按某个选项去做，除非用户已经在对话里直接答了）：{{range $i, $a := .}}{{if $i}}；{{end}}「{{$a.Question}}」（{{$a.TodoID}}，{{$a.At.Format "01-02 15:04"}} 问的）{{end}}
 {{end}}{{with .Unaccepted}}- 等用户验收的（已部署的请验收，或任务的结论卡，用户还没回「通过」「OK」）：{{range $i, $a := .}}{{if $i}}；{{end}}「{{$a.Title}}」：{{$a.Verdict}}{{with $a.Changed}}；{{.}}{{end}}{{with $a.Link}}（{{.}}）{{end}}，{{$a.Since.Format "01-02"}} 起{{end}}{{if gt $.UnacceptedTotal (len .)}} 等 {{$.UnacceptedTotal}} 个{{end}}
 {{end}}{{if .PhoneOnline}}- iPhone：App 在线，phone_* 工具可用
-{{else}}- iPhone：App 不在前台，phone_* 工具会先尝试在后台唤醒 App，失败就请他打开 App
+{{else}}- iPhone: App is offline. Phone tools normally try to wake it; if that fails, ask the user to open Persona. For a confirmed write whose schema offers queue_if_offline, use true when the user wants it kept until the phone reconnects. Report the returned queue ID as pending, not written; use phone_write_queue_list to check it and phone_write_queue_cancel to cancel an unsent entry. Never automatically retry an uncertain write; check the phone data first.
 {{end}}{{with .KB}}- 知识库（kb_get 看详情）：
 {{indent "  " .}}{{end}}{{with .Chats}}{{if .Total}}- 飞书未读会话 {{.Total}} 个（免打扰的不算；用 lark_chats / lark_messages 看）
 {{with .AtMe}}  - @我：{{range $i, $c := first 6 .}}{{if $i}}；{{end}}{{$c.Name}}（{{$c.Unread}} 条）：{{$c.Preview}}{{end}}
