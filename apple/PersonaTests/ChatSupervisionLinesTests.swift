@@ -81,7 +81,7 @@ import Testing
     @Test func liveTriageHidesStreamingUntilOpenedAndPendingQuestionPromotes() {
         let items = [input(), item(2)]
         let folded = build(items, active: true, streaming: true)
-        guard let header = quiet(folded) else { return }
+        guard let header = quiet(folded) else { Issue.record("Expected a quiet supervision record"); return }
         #expect(ChatLines.hidesLiveSupervision(folded, open: []))
         #expect(!ChatLines.hidesLiveSupervision(folded, open: [header.id]))
         #expect(!ChatLines.hidesLiveSupervision(folded, open: [], openAll: true))
@@ -97,6 +97,27 @@ import Testing
         #expect(ChatLines.hidesLiveSupervision(lines, open: []))
     }
 
+    @Test func stoppedQuietRoundStillHidesItsPendingStreamUntilTheNextInput() {
+        let folded = build([input(), item(2)])
+        guard let header = quiet(folded) else { Issue.record("Expected a quiet supervision record"); return }
+        #expect(ChatLines.hidesLiveSupervision(folded, open: []))
+        #expect(ChatLines.hidesLiveSupervision(folded + [.day(Date(timeIntervalSince1970: 0))], open: []))
+        #expect(!ChatLines.hidesLiveSupervision(folded, open: [header.id]))
+        let next = item(3, role: "user", text: "A genuine next input")
+        #expect(!ChatLines.hidesLiveSupervision(build([input(), item(2), next, item(4)]), open: []))
+    }
+
+    @Test func splitInjectedInputPartsAreAllRawAuditContentRatherThanUserBubbles() {
+        var extra = item(1, role: "user", text: "Additional synthetic model instructions")
+        extra.id = "synthetic-1#1"
+        let items = [input(), extra, item(2)]
+        let folded = build(items)
+        guard let header = quiet(folded) else { Issue.record("Expected a quiet supervision record"); return }
+        let expanded = build(items, open: [header.id])
+        #expect(!expanded.contains { if case .row(.user) = $0.content { true } else { false } })
+        #expect(expanded.contains { if case .supervisionInput(let i) = $0.content { i.text?.contains("Additional synthetic") == true } else { false } })
+    }
+
     @Test func automaticLiveWorkExpansionNeverOpensAQuietRecord() {
         var call = item(2, kind: .toolUse)
         call.toolName = "Bash"
@@ -107,7 +128,7 @@ import Testing
         let folded = renderer.build(blocks, live: turn.id)
         #expect(folded.count == 1)
         #expect(ChatLines.hidesLiveSupervision(folded, open: []))
-        guard let header = quiet(folded) else { return }
+        guard let header = quiet(folded) else { Issue.record("Expected a quiet supervision record"); return }
         renderer.openSupervision = [header.id]
         let expanded = renderer.build(blocks, live: turn.id)
         #expect(expanded.contains { if case .workStep(_, .step(.call(let c)), _) = $0.content { c.id == call.id } else { false } })

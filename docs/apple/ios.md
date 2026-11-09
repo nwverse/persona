@@ -1116,7 +1116,8 @@ be expanded separately, including server-folded ranges. Successful Persona `noti
 `fold.supervision_user` promotes the whole round. A pending live `ask_user` stays visible before its result arrives.
 Failed calls, arguments without success receipts and silent finishes do not establish or reverse promotion.
 
-The separate streaming answer also stays hidden inside a closed quiet record. Retained promotion survives overlapping
+The separate streaming answer stays hidden inside a closed quiet record, including text waiting for its transcript
+item after a turn stops. Frozen history uses its captured live turn, not a later turn's activity. Retained promotion survives overlapping
 page merges and cache serialization; the chat cache schema changes with these fields. Tests: `ChatSupervisionLinesTests`,
 `ChatSupervisionTests` and `SupervisionRoundUITests`. Screenshots use `MOCK_TASKS=1 MOCK_SUPERVISION=1` on a fresh test device;
 `-showSupervisionOpen YES` opens the record, and `-openAllWork YES` exposes its internal work for inspection.

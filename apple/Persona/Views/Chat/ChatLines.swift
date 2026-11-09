@@ -48,10 +48,16 @@ struct ChatLines {
     var active = false
 
     static func hidesLiveSupervision(_ lines: [ChatLine], open: Set<String>, openAll: Bool = false) -> Bool {
-        lines.contains { line in
-            if case .supervision(let id, _, let live) = line.content { return live && open.contains(id) == openAll }
-            return false
+        // A cleared stream can remain pending until its transcript item arrives, even after the turn stops.
+        // Only the newest transcript owner matters; task/feed/day decorations do not begin another round.
+        for line in lines.reversed() {
+            switch line.content {
+            case .feed, .quick, .day: continue
+            case .supervision(let id, _, _): return open.contains(id) == openAll
+            default: return false
+            }
         }
+        return false
     }
 
     /// A round can cross recaps and compactions. Only the next actual input ends it.
@@ -265,7 +271,7 @@ struct ChatLines {
             if case .supervision(let id, let trace, _) = line.content {
                 if openSupervision.contains(id) != openAllSupervision {
                     let raw = Self.visibilityTools(trace).map { child -> ChatLine in
-                        if case .row(.user(let item)) = child.content, Injected.of(item) != nil {
+                        if case .row(.user(let item)) = child.content {
                             return .supervisionInput(item)
                         }
                         return child

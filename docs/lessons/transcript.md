@@ -52,7 +52,9 @@ Pitfalls, unusual behavior, and the trade-offs made at the time (originally in "
   input must not be absorbed into the quiet round. Preserve successful visibility evidence when overlapping raw pages
   replace server folds, persist that client-side evidence and invalidate caches when adding the fields. Structure-only
   chat diagnostics must also handle the new line kinds without logging the input or answer. Automatic live-work
-  expansion belongs inside an opened supervision trace; it must never open the quiet round itself.
+  expansion belongs inside an opened supervision trace; it must never open the quiet round itself. Keep the pending
+  stream hidden after the turn stops too: the store can retain it until its transcript item arrives. Determine its
+  newest transcript owner, not only whether the round is still running.
 
 ## A tail window may contain no words at all (2026-11-04, #1163)
 
