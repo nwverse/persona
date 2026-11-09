@@ -51,6 +51,12 @@ struct InboxPage: View {
     }
     /// Sections shown open: tiers (action, working, fyi, noise) and "done". Collapsed and Done start closed.
     @State private var expanded: Set<String> = ["action", "working", "fyi"]
+    /// Needs You, FYI and Collapsed by source or by time (#2059), kept on this device; Done is always by time.
+    @StoredValue("inbox.grouping") private var grouping = "" // "" by source, "time"
+    /// The groups opened or closed by hand, kept on this device: JSON of "<section>|<group>" → open.
+    @StoredValue("inbox.folds") private var foldsJSON = ""
+    /// A title to scroll to (Done's, for the DEBUG `-showInboxDone`).
+    @State private var scrollTarget: String?
     @State private var composing: ComposeDraft?
     @State private var editingDraft: InboxItem? // Edit on the AI Twin's draft
     @State private var answering: Interaction? // a card on no session, open by itself (#4059)
@@ -167,6 +173,25 @@ struct InboxPage: View {
                             picked = nil
                         }
                     }
+                    // `-showInboxDone YES`: Done open and scrolled to, its groups' titles sticking (#2059 screenshots).
+                    if UserDefaults.standard.bool(forKey: "showInboxDone") {
+                        for _ in 0..<20 where store.items.isEmpty || store.history.isEmpty { try? await Task.sleep(for: .milliseconds(500)) }
+                        expanded.insert("done")
+                        try? await Task.sleep(for: .milliseconds(300))
+                        scrollTarget = "done"
+                    }
+                    // `-showInboxPickGroups YES`: Select with the mail group folded and picked whole and the Lark group picked.
+                    if UserDefaults.standard.bool(forKey: "showInboxPickGroups") {
+                        for _ in 0..<20 where store.open.isEmpty { try? await Task.sleep(for: .milliseconds(500)) }
+                        let groups = groupsOf(itemProjection.byTier[.action] ?? [])
+                        if let mail = groups.first(where: { $0.key.hasPrefix("mail:") }) { setGroupOpen("action", mail.key, false) }
+                        picked = Set(groups.filter { $0.key == "lark" || $0.key.hasPrefix("mail:") }.flatMap(\.items).map(\.id))
+                        if UserDefaults.standard.bool(forKey: "showInboxPickedDone") {
+                            try? await Task.sleep(for: .milliseconds(800))
+                            store.setDone(chosen(picked ?? []), true)
+                            picked = nil
+                        }
+                    }
                     // `-openInboxAsk <id>`: open that waiting agent's row as a tap does (a sessionless card in its sheet, #4059).
                     if let id = UserDefaults.standard.string(forKey: "openInboxAsk") {
                         for _ in 0..<20 where !model.pendingInteractions.contains(where: { $0.id == id }) { try? await Task.sleep(for: .milliseconds(500)) }
@@ -176,6 +201,86 @@ struct InboxPage: View {
                 }
     }
 
+    // MARK: Groups (#2059)
+
+    private var folds: [String: Bool] { (try? JSONDecoder().decode([String: Bool].self, from: Data(foldsJSON.utf8))) ?? [:] }
+
+    private func groupOpen(_ section: String, _ key: String) -> Bool {
+        folds["\(section)|\(key)"] ?? InboxGroups.openAtFirst(section: section, key: key)
+    }
+
+    private func setGroupOpen(_ section: String, _ key: String, _ open: Bool) {
+        var f = folds
+        f["\(section)|\(key)"] = open
+        foldsJSON = (try? JSONEncoder().encode(f)).flatMap { String(data: $0, encoding: .utf8) } ?? ""
+    }
+
+    /// A section's items by source (the chips' order) or by time.
+    private func groupsOf(_ items: [InboxItem]) -> [InboxGroups.Group] {
+        if grouping == InboxGroups.Grouping.time.rawValue {
+            return InboxGroups.byTime(items, now: .now, at: \.updatedAt)
+        }
+        let order = ["lark"] + accounts.map { "mail:\($0.id)" } + connectorSources.map { "c:\($0.id)" }
+        return InboxGroups.bySource(items, order: order) { id in accounts.first { $0.id == id }?.email ?? id }
+    }
+
+    /// Whether a section shows its groups' titles: two groups or more, or the agents waiting above its items.
+    private func titled(_ tier: InboxItem.Tier, groups: [InboxItem.Tier: [InboxGroups.Group]], agents: Int) -> Bool {
+        tier != .working && ((groups[tier]?.count ?? 0) > 1 || (agents > 0 && !(groups[tier]?.isEmpty ?? true)))
+    }
+
+    /// Done as shown: the list's done items, then the history's it doesn't have, newest done first.
+    private func doneAll(_ listed: [InboxItem]) -> [InboxItem] {
+        let have = Set(listed.map(\.id))
+        let filter = InboxProjection.Filter(source: source, kind: kind, query: query)
+        let older = store.history.filter { $0.isDone && !have.contains($0.id) && filter.matches($0) }
+        return older.isEmpty ? listed : (listed + older).sorted { ($0.doneAt ?? .distantPast) > ($1.doneAt ?? .distantPast) }
+    }
+
+    /// A group's title: it opens / closes the group (sticking at the top while its rows scroll by); selecting, its tick
+    /// picks or unpicks all of it, folded or not, and "n selected" says what is picked in it.
+    private func groupHeader(_ section: String, _ g: InboxGroups.Group, count: Int, more: Bool = false, pickable: Bool) -> some View {
+        let open = groupOpen(section, g.key)
+        let n = picked.map { p in g.items.filter { p.contains($0.id) }.count } ?? 0
+        return HStack(spacing: Theme.Space.sm) {
+            if picked != nil && pickable {
+                Button { pickGroup(g.items) } label: {
+                    ThemedIcon(n == 0 ? Theme.Icon.unchecked : n == g.items.count ? Theme.Icon.successFilled : Theme.Icon.partlyChecked)
+                        .font(Theme.Font.heading)
+                        .foregroundStyle(n == 0 ? Color.secondary : Theme.accent)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(String(localized: "Select All in \(g.title)"))
+            }
+            Button {
+                withAnimation(Theme.Motion.standard) { setGroupOpen(section, g.key, !open) }
+            } label: {
+                HStack(spacing: Theme.Space.sm) {
+                    ThemedIcon(Theme.Icon.disclosure).font(Theme.Font.labelHeavy).foregroundStyle(.tertiary)
+                        .rotationEffect(.degrees(open ? 90 : 0))
+                    Text(g.title).font(Theme.Font.secondaryStrong).foregroundStyle(.secondary)
+                    Text(verbatim: more ? "\(count)+" : "\(count)").font(Theme.Font.secondary).foregroundStyle(.tertiary)
+                    Spacer(minLength: 0)
+                }
+                .lineLimit(1)
+                .contentShape(.rect)
+            }
+            .buttonStyle(.plain)
+            if n > 0 { Text("\(n) Picked").font(Theme.Font.secondary).foregroundStyle(Theme.accent).lineLimit(1) }
+        }
+        .textCase(nil)
+        .padding(.vertical, Theme.Space.xxs)
+        .id("\(section)|\(g.key)")
+    }
+
+    private func pickGroup(_ items: [InboxItem]) {
+        guard var p = picked else { return }
+        let ids = items.map(\.id)
+        if ids.allSatisfy(p.contains) { p.subtract(ids) } else { p.formUnion(ids) }
+        picked = p
+        Haptics.tap()
+    }
+
     // MARK: Select (#2059)
 
     /// What Select can pick: the open items in sight (in the sections shown open; In Progress is always open). The agents
@@ -183,7 +288,13 @@ struct InboxPage: View {
     private var pickable: [InboxItem] {
         guard kind != "agent" else { return [] }
         let byTier = itemProjection.byTier
-        return InboxItem.Tier.allCases.filter { expanded.contains($0.rawValue) || !$0.folds }.flatMap { byTier[$0] ?? [] }
+        let agents = waitingAgents.count
+        return InboxItem.Tier.allCases.filter { expanded.contains($0.rawValue) || !$0.folds }.flatMap { tier -> [InboxItem] in
+            let items = byTier[tier] ?? []
+            let groups = tier == .working ? [] : groupsOf(items)
+            guard titled(tier, groups: [tier: groups], agents: tier == .action ? agents : 0) else { return items }
+            return groups.filter { groupOpen(tier.rawValue, $0.key) }.flatMap(\.items)
+        }
     }
 
     /// The picked items the list still has open (one filed meanwhile, elsewhere, drops out).
@@ -198,7 +309,7 @@ struct InboxPage: View {
         }
         ToolbarItem(placement: .topBarLeading) {
             Button(all ? String(localized: "Deselect All") : String(localized: "Select All")) {
-                self.picked = all ? [] : Set(pickable.map(\.id))
+                self.picked = all ? [] : picked.union(pickable.map(\.id))
             }
             .disabled(pickable.isEmpty)
             .accessibilityIdentifier("inbox.selectAll")
@@ -275,14 +386,22 @@ struct InboxPage: View {
         let projection = itemProjection
         let openItems = projection.openItems
         let byTier = projection.byTier
-        let doneItems = projection.doneItems
-        let shownDone = expanded.contains("done") ? projection.sortedDoneItems : []
         let waitingAgents = waitingAgents
-        return List {
+        return ScrollViewReader { proxy in
+        List {
             filters
                 .listRowInsets(EdgeInsets(top: 4, leading: 0, bottom: 8, trailing: 0))
                 .listRowSeparator(.hidden)
                 .themedRow()
+            Picker("Group By", selection: $grouping) {
+                Text("By Source").tag("")
+                Text("By Time").tag(InboxGroups.Grouping.time.rawValue)
+            }
+            .pickerStyle(.segmented)
+            .accessibilityIdentifier("inbox.grouping")
+            .listRowInsets(EdgeInsets(top: 0, leading: Theme.Space.page, bottom: Theme.Space.sm, trailing: Theme.Space.page))
+            .listRowSeparator(.hidden)
+            .themedRow()
             // New items the hub holds back until the model sorts them (#1773): above the first item.
             if let line = InboxTriageText.line(store.triage) {
                 InboxTriageBanner(line: line, configurable: InboxTriageText.configurable(store.triage, mayChangeSettings: !model.isDemo))
@@ -300,27 +419,68 @@ struct InboxPage: View {
                     .listRowBackground(Color.clear)
                     .listRowSeparator(.hidden)
             }
-            // The AI's triage: Needs You (and what it has not looked at yet), FYI, Collapsed (noise).
+            // The AI's triage: Needs You (and what it has not looked at yet), FYI, Collapsed (noise); each by source or
+            // by time (#2059): a group is its own section, so its title sticks while its rows scroll by.
             ForEach(InboxItem.Tier.allCases, id: \.self) { tier in
                 let items = kind == "agent" ? [] : byTier[tier] ?? []
                 let agents = tier == .action ? waitingAgents : []
                 if !items.isEmpty || !agents.isEmpty {
-                    Section {
-                        if expanded.contains(tier.rawValue) || !tier.folds {
-                            ForEach(agents) { agentRow($0) }
-                            ForEach(items) { row($0) }
+                    let groups = tier == .working ? [] : groupsOf(items)
+                    let open = expanded.contains(tier.rawValue) || !tier.folds
+                    let header = sectionHeader(tier.title, count: items.count + agents.count, key: tier.rawValue,
+                                               clear: picked == nil ? InboxPage.clearTitle(tier).map { ($0, { store.setDone(items, true) }) } : nil)
+                    if titled(tier, groups: [tier: groups], agents: agents.count) {
+                        Section { EmptyView() } header: { header }
+                        if open {
+                            if !agents.isEmpty {
+                                let g = InboxGroups.Group(key: "agents", title: String(localized: "Agents Waiting on You"), items: [])
+                                Section { if groupOpen(tier.rawValue, g.key) { ForEach(agents) { agentRow($0) } } } header: {
+                                    groupHeader(tier.rawValue, g, count: agents.count, pickable: false)
+                                }
+                            }
+                            ForEach(groups) { g in
+                                Section { if groupOpen(tier.rawValue, g.key) { ForEach(g.items) { row($0) } } } header: {
+                                    groupHeader(tier.rawValue, g, count: g.items.count, pickable: true)
+                                }
+                            }
                         }
-                    } header: {
-                        sectionHeader(tier.title, count: items.count + agents.count, key: tier.rawValue,
-                                      clear: picked == nil ? InboxPage.clearTitle(tier).map { ($0, { store.setDone(items, true) }) } : nil)
+                    } else {
+                        Section {
+                            if open {
+                                ForEach(agents) { agentRow($0) }
+                                ForEach(items) { row($0) }
+                            }
+                        } header: { header }
                     }
                 }
             }
-            if !doneItems.isEmpty {
-                Section {
-                    if expanded.contains("done") { ForEach(shownDone) { row($0) } }
-                } header: {
-                    sectionHeader(String(localized: "Done [Inbox View 59f6c8]"), count: doneItems.count, key: "done", clear: nil)
+            // Done, by when it was done, with the hub's history after the list's few days.
+            let done = doneAll(projection.sortedDoneItems)
+            if !done.isEmpty {
+                let dg = InboxGroups.done(done, now: .now)
+                let count = store.historyMore && !store.history.isEmpty ? "\(done.count)+" : "\(done.count)"
+                if dg.count > 1 {
+                    Section { EmptyView() } header: { doneHeader(count: count, groups: dg, proxy: proxy) }
+                    if expanded.contains("done") {
+                        ForEach(Array(dg.enumerated()), id: \.element.key) { i, g in
+                            Section { if groupOpen("done", g.key) { ForEach(g.items) { row($0) } } } header: {
+                                groupHeader("done", g, count: g.items.count, more: i == dg.count - 1 && store.historyMore, pickable: false)
+                            }
+                        }
+                        if store.historyMore && !store.history.isEmpty {
+                            Button(store.historyLoading ? String(localized: "Loading…") : String(localized: "Show Older")) { store.loadOlderDone() }
+                                .disabled(store.historyLoading)
+                                .lineLimit(1)
+                                .listRowSeparator(.hidden)
+                                .themedRow()
+                        }
+                    }
+                } else {
+                    Section {
+                        if expanded.contains("done") { ForEach(done) { row($0) } }
+                    } header: {
+                        doneHeader(count: count, groups: [], proxy: proxy)
+                    }
                 }
             }
         }
@@ -328,6 +488,60 @@ struct InboxPage: View {
         .themedPage()
         .refreshable { await store.refresh() }
         .overlay { if store.loading && store.items.isEmpty { ProgressView() } }
+        // Done's history: a first page once the list is in, so Done's groups and counts are there before it opens
+        .task(id: store.listed) { if store.listed && store.history.isEmpty { store.loadOlderDone() } }
+        .onChange(of: scrollTarget) { _, id in
+            guard let id else { return }
+            withAnimation(Theme.Motion.standard) { proxy.scrollTo(id, anchor: .top) }
+            scrollTarget = nil
+        }
+        }
+    }
+
+    /// Done's title: opens / closes it; "Jump To" lists its groups with their counts, and collapses or expands them all.
+    private func doneHeader(count: String, groups: [InboxGroups.Group], proxy: ScrollViewProxy) -> some View {
+        let open = expanded.contains("done")
+        return HStack(spacing: Theme.Space.sm) {
+            Button {
+                withAnimation(Theme.Motion.standard) { if open { expanded.remove("done") } else { expanded.insert("done") } }
+            } label: {
+                HStack(spacing: Theme.Space.sm) {
+                    Text(verbatim: "\(String(localized: "Done [Inbox View 59f6c8]")) · \(count)").font(Theme.Font.sectionHeader).foregroundStyle(.secondary)
+                    ThemedIcon(Theme.Icon.disclosure).font(Theme.Font.labelHeavy).foregroundStyle(.secondary)
+                        .rotationEffect(.degrees(open ? 90 : 0))
+                    Spacer(minLength: 0)
+                }
+                .lineLimit(1)
+                .contentShape(.rect)
+            }
+            .buttonStyle(.plain)
+            if groups.count > 1 {
+                Menu {
+                    ForEach(groups) { g in
+                        Button { jump(to: g.key, proxy: proxy) } label: { Text(g.title); Text(verbatim: "\(g.items.count)") }
+                    }
+                    Divider()
+                    Button("Collapse All") { for g in groups { setGroupOpen("done", g.key, false) } }
+                    Button("Expand All") { for g in groups { setGroupOpen("done", g.key, true) } }
+                } label: {
+                    Text("Jump To").font(Theme.Font.secondary).lineLimit(1)
+                }
+                .accessibilityIdentifier("inbox.jumpTo")
+            }
+        }
+        .textCase(nil)
+        .padding(.vertical, Theme.Space.xxs)
+        .id("done")
+    }
+
+    /// Jump To one of Done's groups: Done and the group open, then scrolled to its title.
+    private func jump(to key: String, proxy: ScrollViewProxy) {
+        expanded.insert("done")
+        setGroupOpen("done", key, true)
+        Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(80))
+            withAnimation(Theme.Motion.standard) { proxy.scrollTo("done|\(key)", anchor: .top) }
+        }
     }
 
     /// A section title that opens / closes the section, with an optional action on the right (List headers take no
