@@ -766,6 +766,9 @@ struct ChatView: View {
         .onChange(of: scenePhase) { _, phase in if phase == .background { rememberReadPosition() } }
         .onDisappear {
             ChatTrace.shared.note(shownKey, "close")
+            #if DEBUG
+            ShellTrace.shared.note("chat disappeared \(style == .assistant ? "assistant" : "agents")")
+            #endif
         }
         // Kept shell pages do not disappear. Only the visible chat owns its
         // transcript stream; the Agent keeps working on the hub while hidden.

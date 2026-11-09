@@ -150,6 +150,9 @@ struct AssistantView: View {
     private var stack: some View {
         NavigationStack(path: $path) {
             Group {
+                #if DEBUG
+                let _ = ShellTrace.shared.note("assistant page \(NewChatCheck.name(current, main: model.assistantMain)) pending=\(pending != nil)")
+                #endif
                 if let key = current, pending == nil {
                     ChatView(key: key, style: .assistant)
                         .id(key)
@@ -160,11 +163,18 @@ struct AssistantView: View {
                               effort: $starterEffort, openInbox: { path.append($0) }, resend: resend, delete: deleteFailed) { text, images in
                         Task { await start(text, images) }
                     }
+                    .onAppear {
+                        NewChatCheck.shared.homeAppeared()
+                        #if DEBUG
+                        ShellTrace.shared.note("home appeared")
+                        #endif
+                    }
                 } else {
                     AssistantHome(pending: shownStart, error: failedStart.message?.reason, launcher: $starterLauncher, mode: $starterMode,
                                   effort: $starterEffort, resend: resend, delete: deleteFailed) { text, images in
                         Task { await start(text, images) }
                     }
+                    .onAppear { NewChatCheck.shared.homeAppeared() }
                 }
             }
             // No system bar: the top bar floats over the conversation with a fog under it (it scrolls beneath).
@@ -307,13 +317,30 @@ struct AssistantView: View {
     }
 
     private func newConversation() {
+        let from = NewChatCheck.name(current, main: model.assistantMain)
         #if DEBUG
-        ShellTrace.shared.note("new conversation from \(current == nil ? "none" : current == model.assistantMain ? "main" : "other")")
+        ShellTrace.shared.note("new conversation from \(from)")
         #endif
+        if from != "none" {
+            // The page must come to the new-conversation page; a miss is kept and reported, labels only (#2189).
+            NewChatCheck.shared.watch(from: from, current: { [model] in NewChatCheck.name(model.assistantCurrent, main: model.assistantMain) },
+                                      miss: { [model] line in Self.newChatMissed(line, model: model) })
+        }
         withAnimation(Theme.Motion.standard) {
             model.assistantCurrent = nil
             pending = nil
         }
+    }
+
+    /// New Chat did not bring the new-conversation page: the line is kept on the device, and sent where the hub takes
+    /// error reports.
+    private static func newChatMissed(_ line: String, model: AppModel) {
+        UserDefaults.standard.set("\(Date.now.formatted(.iso8601)) \(line)", forKey: NewChatCheck.defaultsKey)
+        #if os(iOS) || os(macOS)
+        if ErrorReportQueue.shared.write(ErrorReports.report(kind: "log", level: "warning", message: line)), let group = model.hub?.group {
+            model.flushErrorReports(group)
+        }
+        #endif
     }
 
     /// The first message the page shows: the one spinning up, else one whose start failed (#1368).

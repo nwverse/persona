@@ -32,20 +32,14 @@ final class NewChatTopBarTests: XCTestCase {
         var failed = 0, notes: [String] = []
         let runs = Int(ProcessInfo.processInfo.environment["NEWCHAT_RUNS"] ?? "") ?? 5
         for run in 1...runs {
-            let app = launch(["-openAssistant", "server/\(conversations[0].1)", "-probes", "YES"])
+            let app = launch(["-openAssistant", "server/\(conversations[0].1)"])
             let new = app.buttons["assistant-new"].firstMatch
             XCTAssertTrue(new.waitForExistence(timeout: 20), "run \(run): no New Chat")
             _ = waitUntil(15) { new.isEnabled && !self.welcome(app).exists }
             RunLoop.current.run(until: Date().addingTimeInterval(1))
             let before = app.shellShown
-            if ProcessInfo.processInfo.environment["NEWCHAT_TAP"] == "center" {
-                new.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
-            } else {
-                new.tap()
-            }
-            let came = welcome(app).waitForExistence(timeout: 5)
-            print("NEWCHAT run \(run) \(came ? "ok" : "nothing"): " + (app.shellShown?.trace ?? []).filter { $0.contains("touch") || $0.contains("new conversation") || $0.contains("current") }.joined(separator: " | "))
-            if !came {
+            tapCenter(new)
+            if !welcome(app).waitForExistence(timeout: 5) {
                 failed += 1
                 shot(app, "shell main run \(run) nothing")
                 let after = app.shellShown
@@ -100,7 +94,7 @@ final class NewChatTopBarTests: XCTestCase {
     @MainActor private func launch(_ extra: [String]) -> XCUIApplication {
         let app = XCUIApplication()
         let pair = "persona://pair?url=" + hub.addingPercentEncoding(withAllowedCharacters: .alphanumerics)! + "&token=mock"
-        app.launchArguments = ["-pairURL", pair, "-app.tab", "assistant", "-dev.openChat", "", "-openChatsFresh", "YES"] + extra
+        app.launchArguments = ["-pairURL", pair, "-app.tab", "assistant", "-dev.openChat", "", "-openChatsFresh", "YES", "-probes", "YES"] + extra
         app.launchPinned()
         dismissAlerts()
         return app
@@ -117,10 +111,17 @@ final class NewChatTopBarTests: XCTestCase {
         XCTAssertTrue(waitUntil(15) { new.isEnabled && !self.welcome(app).exists }, "\(label): not in a conversation, or New Chat disabled")
         RunLoop.current.run(until: Date().addingTimeInterval(1))
         shot(app, "\(label) before New Chat")
-        new.tap()
+        tapCenter(new)
         let came = welcome(app).waitForExistence(timeout: 5)
         shot(app, "\(label) after New Chat")
-        XCTAssertTrue(came, "\(label): New Chat did nothing (enabled \(new.isEnabled), hittable \(new.isHittable))\n\(app.debugDescription)")
+        XCTAssertTrue(came, "\(label): New Chat did nothing (enabled \(new.isEnabled), hittable \(new.isHittable)) "
+                      + "trace=\((app.shellShown?.trace ?? []).suffix(14).joined(separator: " | "))")
+    }
+
+    /// A finger's tap: the middle of the round button. In a long conversation XCUITest's own point for it is the square's
+    /// corner (the chat's rows under the floating bar cover its middle for accessibility), outside the circle that takes taps (#2189).
+    @MainActor private func tapCenter(_ e: XCUIElement) {
+        e.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
     }
 
     @MainActor private func send(_ app: XCUIApplication, _ text: String) {
