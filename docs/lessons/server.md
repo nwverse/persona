@@ -1474,3 +1474,28 @@ field, so `-race` reports it, and it may end up serving the new peer too. Pass w
 records the node's lines) into the constructor, and serve the peer through a local variable. A rule test also needs
 steps that differ only in the guarded rule: revs followed by a list that differs anyway, or a `call` that waits for the
 pending count to drop, pass with the rule deleted.
+
+## Inbox rows as json: compression, HOT and the NUL guard (2026-11-10, #2779)
+
+- **Compression goes in the same `ALTER` as the rewrite.** `ALTER COLUMN … SET COMPRESSION lz4` on its own changes only
+  future writes, and `VACUUM FULL` or a same-type `ALTER … TYPE jsonb` copies each value with its old compression: 0 of
+  28,600 rows turned lz4 either way. A type change resets the column's compression to the default, so a `SET
+  COMPRESSION` run before it is lost too (`USING data::text::jsonb` after it: all pglz). Put the type change (`USING
+  data::json`) and `SET COMPRESSION` in one `ALTER TABLE`, in either order: every value is computed again and compressed
+  with lz4 (28,600 of 28,600, about 2 s). Check with `pg_column_compression`. For servers built without lz4
+  (`feature_not_supported`) or before Postgres 14 (`syntax_error`), catch the error in a `DO` block around `EXECUTE`: a
+  statement written into the block is parsed when the block is compiled, so a syntax error escapes the handler.
+- **json, not jsonb, when every reader unmarshals the bytes.** The manager's start read of 3,999 items spent 59 of its
+  67 ms sending the rows (jsonb back to text after pglz); as lz4 json it takes about 30 ms. Each half alone saves less:
+  jsonb with lz4 -20 ms, json with pglz -13 ms, both -34 ms (same rows, 11 rotated rounds). Old prepared statements see
+  a changed result type once (`cached plan must not change result type`); pgx drops the statement on that error and
+  prepares it again on the next call.
+- **A generated column, not an expression index, for a lookup into the document.** An index on `(data->>'source')`
+  makes every update of `data` touch that index, so no update is HOT (0 of 4,800); a stored generated column whose
+  value did not change leaves HOT possible (1,481 of 4,800 on the same updates; 142 to 300 of 300 per round on upserts
+  shaped like `PutInboxItem`, from 0, once `updated_at` left `inbox_items_open`). An index on a column every upsert
+  changes rules out HOT as well.
+- **The generated column is also the NUL guard.** json accepts `\u0000` in a string, jsonb refused it on write.
+  `data->>'source'` parses the whole document, so a write with `\u0000` anywhere still fails with 22P05, as before.
+  Without the column such a row would be stored, and the done page's `data->'connector'` would fail on it later. Keep a
+  computed column (or a check) that parses the document if `source` ever goes.
