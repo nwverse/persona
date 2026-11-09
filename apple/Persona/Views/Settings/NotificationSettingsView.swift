@@ -204,11 +204,10 @@ struct NotificationSettingsView: View {
                     .accessibilityIdentifier("notify.quiet.end")
             }
         } footer: {
-            VStack(alignment: .leading, spacing: 6) {
+            if let zone = quiet.elsewhere() {
+                Text("During these hours you're not told when an agent finishes (the morning's Today card sums it up), and things that need you arrive without a sound. Reminders you asked the assistant for still come as usual. They're in \(zone), where they were set; changing them here puts them in this device's time zone.")
+            } else {
                 Text("During these hours you're not told when an agent finishes (the morning's Today card sums it up), and things that need you arrive without a sound. Reminders you asked the assistant for still come as usual. In this device's time zone.")
-                if let zone = quiet.elsewhere() {
-                    Text("These times are in \(zone), where they were set. Changing them here puts them in this device's time zone.")
-                }
             }
         }
     }

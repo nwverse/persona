@@ -1449,7 +1449,7 @@ group's. With one installed manager, or a hub without a roster, nothing below sh
   way when a page saves doesn't put the old prefs back (`AppModel.savedNotifyPrefs`).
 - **Quiet hours**: Settings › Notifications has this device's quiet hours (a switch, then From / Until), only when the prefs answer
   has `quiet`; each change sends `quiet` alone with this device's time zone (`APIClient.setQuietHours`), as the web does. Hours set
-  in another zone say which under the page (`QuietHours.elsewhere`) until they are changed here.
+  in another zone: the section's footer names that zone instead of this device's (`QuietHours.elsewhere`) until they are changed here.
 - **Computers of an offline manager**: `Machine.manager` decodes; an offline computer whose manager the roster has offline
   (`ManagerRoster.offlineManager`) says so on its card and has no Reconnect on its page.
 - **Extension pushes**: `extension_operation`, `extension_auth` and `plugin_ui` badges carry their event's `manager`
