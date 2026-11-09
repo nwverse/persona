@@ -1522,7 +1522,7 @@ group's. With one installed manager, or a hub without a roster, nothing below sh
   `.aPushIsThePagesOwnUnlessAnotherManagerSentIt`,
   `ExtensionOperationsTests.anotherManagersOperationIsKeptApart`, `MacAttentionTests.aManagerSwitchedOffHereRingsNoBanner`.
 
-## The Persona page's manager (ISSUE)
+## The Persona page's manager (#2664)
 
 [managers.md](../assistant/managers.md) "Clients": with more than one installed manager the Persona page (iPhone, iPad and the
 Mac) has a row of chips under its top bar (`ManagerSwitcher`, `Views/Assistant/ManagerSwitcher.swift`), one per manager, the default
