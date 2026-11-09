@@ -102,6 +102,7 @@ type Service struct {
 	live       contextState      // context.go
 	todos      todoBook          // todos.go
 	work       workBook          // agents_work.go: the Agents business
+	reviews    reviewBook        // agents_review.go: the independent reviews (#1808)
 	reply      replyBook         // agents_reply.go: the reminders of questions left unanswered
 	chans      channelsBook      // channels.go
 	fbot       feishuBook        // feishu.go
@@ -163,6 +164,7 @@ func New(o Options) *Service {
 	s.briefRoutes()
 	s.todoRoutes()
 	s.agentRoutes()
+	s.agentReviewRoutes()
 	s.workspaceBoardRoutes()
 	s.channelRoutes()
 	s.kbInit(o.KB)
@@ -425,6 +427,7 @@ func (s *Service) snapshot(ctx context.Context) Snapshot {
 	snap.Work = s.workReport(ctx) // before the cards: they are read back with it
 	snap.Partial = snap.Partial || snap.Work == nil
 	snap.Interactions = append(s.pendingQuestions(), s.workCards()...)
+	snap.Interactions = append(snap.Interactions, s.reviewCards()...)
 	snap.Sessions = make([]SessionView, 0, len(views))
 	for _, v := range views {
 		snap.Sessions = append(snap.Sessions, *v)
@@ -460,6 +463,7 @@ func (s *Service) TurnEnded(ctx context.Context, r SessionRef) {
 	go s.taskTurnEnded(context.WithoutCancel(ctx), r.MachineID, r.SessionID)
 	go s.workTurnEnded(context.WithoutCancel(ctx), r.MachineID, r.SessionID)    // its triage (agents_work_turns.go)
 	go s.channelTurnEnded(context.WithoutCancel(ctx), r.MachineID, r.SessionID) // a channel's answer, the sync mirror
+	go s.reviewTurnEnded(context.WithoutCancel(ctx), r.MachineID, r.SessionID)  // a running review's reviewer finished (agents_review.go)
 	// A usage limit marks the launcher there until it resets (launcher_health.go).
 	go s.launcherLimitTurnEnded(context.WithoutCancel(ctx), r.MachineID, r.SessionID)
 	s.titleAfterTurn(ctx, r.MachineID, r.SessionID)

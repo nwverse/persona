@@ -11,11 +11,12 @@ import { openPanel, togglePanel, usePanel } from "../../lib/panel";
 import { machineWithHub } from "../../lib/mesh";
 import { hasEffortOnly, hasModes, isMuted, toggleMute } from "../../lib/session-actions";
 import { attachLive, flipPin } from "../../lib/agent-actions";
+import { AGENT_REVIEW_FEATURE, busyReason, startAgentReview } from "../../lib/agent-review";
 import { isPinned } from "../../lib/pins";
 import { acknowledgeLaunch, launchMessageId } from "../../lib/new-agent";
 import { useRuntimeSession } from "../../lib/runtime-session";
 import { ArchivedNotice, SessionDetailNotice } from "../../ui/SessionDetailNotice";
-import { REVIEW_FEATURE } from "../../lib/session-review";
+import { loadReview, REVIEW_FEATURE } from "../../lib/session-review";
 import { getSession, getState, hubHas, listenSession, refresh, refreshTodos, saveMutes, useStore, viewSession } from "../../lib/store";
 import { PREVIEW_FEATURE } from "../../lib/preview";
 import { agentsWorking, buildTaskIndex, stableSubagents, STOP_LOOP_MESSAGE, subagentParent, type TaskIndex } from "../../lib/tasks";
@@ -1482,6 +1483,50 @@ export const Header = memo(function Header({
   const openPreview = () => session && togglePanel({ kind: "preview", mid: session.machine_id, sid: session.session_id, cwd: session.cwd });
   const openReview = () => session && togglePanel({ kind: "review", mid: session.machine_id, sid: session.session_id, cwd: session.cwd });
   const reviews = useStore((s) => hubHas(s.features, REVIEW_FEATURE));
+  // an independent review of this work (#1808): a fresh read-only reviewer agent on the same machine; the findings
+  // arrive as a card on this chat. While the agent is busy the entry stays, disabled; anything else the hub refuses
+  // with its own words, which the toast shows as they come
+  const agentReviews = useStore((s) => hubHas(s.features, AGENT_REVIEW_FEATURE));
+  const reviewBusy = session ? busyReason(session) : undefined;
+  const [reviewCheck, setReviewCheck] = useState<"unknown" | "checking" | "clean">("unknown");
+  const reviewMid = session?.machine_id;
+  const reviewSid = session?.session_id;
+  const reviewCwd = session?.workspace_cwd || session?.cwd;
+  // Each menu opening gets a fresh answer. Clear before paint and discard replies after closing or changing sessions.
+  useLayoutEffect(() => {
+    setReviewCheck("unknown");
+    if (!menu.anchor || !agentReviews || !showFiles || !reviewMid || !reviewSid || !reviewCwd || reviewBusy) return;
+    setReviewCheck("checking");
+    const controller = new AbortController();
+    let active = true;
+    const check = async () => {
+      try {
+        let result;
+        try {
+          result = await loadReview(reviewMid, reviewCwd, { scope: "branch" }, controller.signal);
+        } catch (e) {
+          if (!(e instanceof ApiError) || (e.code !== "no_default_branch" && e.code !== "no_merge_base")) throw e;
+          if (!active) return;
+          result = await loadReview(reviewMid, reviewCwd, { scope: "uncommitted" }, controller.signal);
+        }
+        if (active) setReviewCheck(Array.isArray(result.files) && result.files.length === 0 && !result.truncated ? "clean" : "unknown");
+      } catch {
+        // Unknown remains enabled; the hub will explain any refusal when starting the review.
+        if (active) setReviewCheck("unknown");
+      }
+    };
+    void check();
+    return () => { active = false; controller.abort(); };
+  }, [menu.anchor, agentReviews, showFiles, reviewMid, reviewSid, reviewCwd, reviewBusy]);
+  const startReview = async () => {
+    if (!session) return;
+    try {
+      await startAgentReview(session.machine_id, session.session_id);
+      toast(t("chat-agent-review.started"), "info");
+    } catch (e) {
+      toast(errorText(e), "error");
+    }
+  };
   const othersNeed = others.some((s) => stateOf(s) === "needs_you");
   const phone = useMedia(PHONE);
   const spaceRows: MenuItem[] = siblings
@@ -1545,6 +1590,7 @@ export const Header = memo(function Header({
         ...(allowed.includes("attach") ? [{ key: "attach", label: t("chat-chatview.attach"), icon: "link" as const, onSelect: () => void attach() }] : []),
         ...(showTerminal ? [{ key: "terminal", label: t("chat-chatview.terminal"), icon: "terminal" as const, checked: view === "term", onSelect: flipView }] : []),
         ...(showFiles ? [{ key: "files", label: t("chat-chatview.files"), icon: "folder" as const, checked: here(panel, "files"), onSelect: openFiles }, { key: "git", label: "Git", icon: "git" as const, checked: here(panel, "git"), onSelect: openGit }, ...(reviews ? [{ key: "review", label: t("chat-chatview.review_changes"), icon: "pullRequest" as const, checked: here(panel, "review"), onSelect: openReview }] : [])] : []),
+        ...(showFiles && agentReviews ? [{ key: "agent-review", label: t("chat-chatview.review_work"), icon: "eye" as const, disabled: reviewBusy !== undefined || reviewCheck !== "unknown", hint: reviewBusy ?? (reviewCheck === "checking" ? t("chat-agent-review.checking_changes") : reviewCheck === "clean" ? t("chat-agent-review.no_changes") : undefined), onSelect: () => void startReview() }] : []),
         ...(showFiles && previews ? [{ key: "preview", label: t("chat-chatview.preview"), icon: "web" as const, checked: here(panel, "preview"), onSelect: openPreview }] : []),
         ...(allowed.includes("stop") ? [{ key: "stop", label: t("chat-chatview.interrupt"), icon: "stop" as const, hint: "Esc", onSelect: onInterrupt }] : []),
         ...(feishu ? [{ key: "feishu", label: t("chat-chatview.open_in_lark"), icon: "external" as const, onSelect: () => openLink(feishu) }] : []),
