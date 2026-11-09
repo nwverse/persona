@@ -16,10 +16,12 @@ import (
 func (u *updater) nodesEnabled() bool {
 	u.mu.Lock()
 	defer u.mu.Unlock()
-	ctx, cancel := context.WithTimeout(context.Background(), updateRequestLimit)
-	defer cancel()
-	if err := u.loadLocked(ctx); err != nil {
-		return false // An unread persisted choice must never enable deployment.
+	if !u.loaded {
+		ctx, cancel := context.WithTimeout(context.Background(), updateRequestLimit)
+		defer cancel()
+		if err := u.loadLocked(ctx); err != nil {
+			return false // An unread persisted choice must never enable deployment.
+		}
 	}
 	return u.nodesEnabledLocked()
 }
