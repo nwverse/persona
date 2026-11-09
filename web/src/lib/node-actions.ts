@@ -84,8 +84,12 @@ export interface NodeActionOptions {
   omit?: readonly string[];
 }
 
-/** Closing, splitting, renaming and git are herdr's: another host (Orca, herdr-core, botmux) is not asked to do them. */
+/** Closing, splitting, git and running an agent in a shell are herdr's: another host (Orca, herdr-core, Tern, botmux) is
+ *  not asked to do them. */
 export const canChangeHost = (host: string | undefined) => !host || host === "herdr";
+
+/** Renaming a workspace or a tab is herdr's and Tern's (the capability table in docs/integrations/engines.md). */
+export const canRenameIn = (host: string | undefined) => canChangeHost(host) || host === "tern";
 
 /** Only the agents a launcher starts the way "New agent" does without a first message: Claude Code. */
 export const launchableHere = (l: Launcher) => (l.agent_type || l.agent || "claude") === "claude";
@@ -101,6 +105,7 @@ export function nodeActions(node: MenuNode, deps: NodeActionDeps, opts: NodeActi
   const { mid } = node;
   const online = node.online !== false;
   const writes = online && canChangeHost(node.host);
+  const renames = online && canRenameIn(node.host);
   const kind = node.host ? { kind: node.host } : {};
   const fail = (key: string, e: unknown) => new Error(t(key, { error: errorText(e) }));
 
@@ -128,7 +133,7 @@ export function nodeActions(node: MenuNode, deps: NodeActionDeps, opts: NodeActi
   // ── rename ──
   const renameValue = node.label ?? "";
   group(
-    node.kind === "workspace" && writes && Boolean(node.workspaceId) && {
+    node.kind === "workspace" && renames && Boolean(node.workspaceId) && {
       key: "node-rename",
       label: t("lib-node-actions.rename"),
       icon: "pencil",
@@ -144,7 +149,7 @@ export function nodeActions(node: MenuNode, deps: NodeActionDeps, opts: NodeActi
         },
       },
     },
-    node.kind === "tab" && writes && Boolean(node.tabId) && {
+    node.kind === "tab" && renames && Boolean(node.tabId) && {
       key: "node-rename",
       label: t("lib-node-actions.rename"),
       icon: "pencil",

@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { MenuItem } from "../ui/menu-model";
-import { canChangeHost, machineNode, nodeActions, sessionNode, termPaneNode, termSpaceNode, termTabNode, type MenuNode, type NodeActionDeps } from "./node-actions";
+import { canChangeHost, canRenameIn, machineNode, nodeActions, sessionNode, termPaneNode, termSpaceNode, termTabNode, type MenuNode, type NodeActionDeps } from "./node-actions";
 import { buildTerminalTree, shellsOnly, type PanesResponse } from "./terminals";
 import type { Session } from "./types";
 
@@ -186,6 +186,29 @@ describe("what a computer that cannot be changed is offered", () => {
     expect(canChangeHost(undefined)).toBe(true);
     expect(canChangeHost("herdr")).toBe(true);
     expect(canChangeHost("herdr-core")).toBe(false);
+  });
+});
+
+describe("a Tern node (#2154)", () => {
+  const ternTab: MenuNode = { ...tab, host: "tern", workspaceId: "s1", tabId: "t2", paneId: "tern:5" };
+  const ternSpace: MenuNode = { kind: "workspace", mid: "m1", host: "tern", label: "proj", workspaceId: "s1", cwd: "/home/me/proj", branch: "main", canWorktree: true };
+
+  it("renames its tabs and workspaces, and is not asked to split, run an agent, git, close or make a worktree", async () => {
+    const d = deps({ newWorktree: vi.fn() });
+    expect(keys(nodeActions(ternTab, d))).toEqual(["node-rename", "node-copy-path", "node-copy-id", "node-copy-branch"]);
+    expect(keys(nodeActions(ternSpace, d))).toEqual(["node-new-agent", "node-rename", "node-copy-path", "node-copy-id", "node-copy-branch"]);
+    await by(nodeActions(ternTab, d), "node-rename").rename!.commit("deploy");
+    expect(d.renameTab).toHaveBeenCalledWith(ternTab, "deploy");
+    await by(nodeActions(ternSpace, d), "node-rename").rename!.commit("docs");
+    expect(d.renameWorkspace).toHaveBeenCalledWith(ternSpace, "docs");
+  });
+
+  it("renames nothing while its machine is offline; the other hosts still rename nothing", () => {
+    expect(keys(nodeActions({ ...ternTab, online: false }, deps()))).not.toContain("node-rename");
+    for (const host of ["orca", "herdr-core", "botmux"]) expect(keys(nodeActions({ ...ternTab, host }, deps()))).not.toContain("node-rename");
+    expect(canRenameIn("tern")).toBe(true);
+    expect(canRenameIn(undefined)).toBe(true);
+    expect(canChangeHost("tern")).toBe(false);
   });
 });
 
