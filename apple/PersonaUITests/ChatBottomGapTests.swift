@@ -1,7 +1,7 @@
 import XCTest
 
 /// At the end of a conversation the newest message sits `ChatView.newestGap` (48 pt: a row gap, 16 pt, and the list's room
-/// at its end, 32 pt; #1108, #2016) above the footer's first row: the chips over the composer, or what is over them (an agent's computer activity, the queued messages); with
+/// at its end, 32 pt; #1108, #2016) above the footer's first row: the composer, or what is over it (an agent's computer activity, the queued messages); with
 /// the keyboard up and with an upload's bar in the composer too. A little way up, the jump-to-latest arrow is over the list, not over the footer. Light and dark;
 /// run it on the narrowest phone too (SE). Every state gets its screenshot before the gaps are checked.
 ///   PORT=18831 MOCK_TURN_IMAGES=many MOCK_QUEUE=1 python3 scripts/mock/mock_hub.py &
@@ -26,14 +26,14 @@ final class ChatBottomGapTests: XCTestCase {
         var gaps: [(String, CGFloat)] = []
         for scheme in ["light", "dark"] {
             var app = launch(blog, scheme)
-            _ = chips(app)
+            _ = composer(app)
             gaps.append(("\(scheme) at the newest", try gap(app, shot: "\(scheme)-bottom")))
             try arrow(app, shot: "\(scheme)-arrow")
             app.terminate()
 
             app = launch(blog, scheme, ["-focusComposer", "YES"])
             XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 15), "no keyboard")
-            _ = chips(app)
+            _ = composer(app)
             gaps.append(("\(scheme) with the keyboard", try gap(app, shot: "\(scheme)-keyboard")))
             app.terminate()
 
@@ -46,7 +46,7 @@ final class ChatBottomGapTests: XCTestCase {
             // Terminated while it uploads: the path never lands in the draft, which later runs would keep.
             app = launch(blog, scheme, ["-openUploadDemo", "季度报告.pdf"])
             XCTAssertTrue(app.buttons["取消上传 季度报告.pdf"].waitForExistence(timeout: 20), "no upload bar")
-            _ = chips(app)
+            _ = composer(app)
             gaps.append(("\(scheme) uploading", try gap(app, shot: "\(scheme)-upload")))
             app.terminate()
         }
@@ -66,11 +66,12 @@ final class ChatBottomGapTests: XCTestCase {
         return app
     }
 
-    /// The chips over the composer (permission mode, effort): the footer's first row when nothing is queued.
-    @MainActor private func chips(_ app: XCUIApplication) -> XCUIElement {
-        let chip = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "权限模式")).firstMatch
-        XCTAssertTrue(chip.waitForExistence(timeout: 20), "no mode chips:\n\(app.debugDescription)")
-        return chip
+    /// The composer's field: the footer is up (since #1696 an Agents chat on the iPhone has the shell's composer, with no
+    /// chips row over it).
+    @MainActor private func composer(_ app: XCUIApplication) -> XCUIElement {
+        let field = app.descendants(matching: .any)["shell-composer-field"].firstMatch
+        XCTAssertTrue(field.waitForExistence(timeout: 20), "no composer:\n\(app.debugDescription)")
+        return field
     }
 
     /// From the newest message's bottom to the footer's first row, once the page stops moving. Its screenshot is taken
