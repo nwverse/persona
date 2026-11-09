@@ -569,7 +569,7 @@ struct InboxSourcePage: View {
         } else if let m = item.moment {
             LarkMomentsPostView(postID: m.postID, pushed: true, manager: model.linkManager(item.manager))
         } else if let c = conversation {
-            LarkChatView(conversation: c)
+            LarkChatView(conversation: c, manager: model.linkManager(item.manager))
         } else if let m = mail {
             MailDetailView(summary: m, accounts: accounts)
         } else {
