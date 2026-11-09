@@ -214,7 +214,19 @@ func TestLinkNumbersOutliveARestart(t *testing.T) {
 	})
 	connected := func(s Status) bool { return s.State == "connected" }
 	first := waitFor(t, runAgainst(t, srv, "jd_x", Options{}), connected)
-	time.Sleep(5 * time.Millisecond)
+	// Each run seeds its counter from Unix milliseconds, then increments it for the first link.
+	// Start the next run only once its seed is past the earlier link's number.
+	tick := time.NewTicker(time.Millisecond)
+	defer tick.Stop()
+	timeout := time.NewTimer(5 * time.Second)
+	defer timeout.Stop()
+	for uint64(time.Now().UnixMilli()) <= first.Conn {
+		select {
+		case <-tick.C:
+		case <-timeout.C:
+			t.Fatal("clock did not advance past the earlier link's number")
+		}
+	}
 	second := waitFor(t, runAgainst(t, srv, "jd_x", Options{}), connected)
 	if second.Conn <= first.Conn {
 		t.Fatalf("a later run's first link is %d, the earlier run's %d", second.Conn, first.Conn)

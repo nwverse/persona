@@ -95,13 +95,21 @@ func permissionCard(id, session string, at time.Time) proto.Interaction {
 func (cf *coverFlow) pushes(t *testing.T, n int) map[string]Notification {
 	t.Helper()
 	out := map[string]Notification{}
-	for deadline := time.Now().Add(10 * time.Second); len(out) < n; time.Sleep(10 * time.Millisecond) {
-		if time.Now().After(deadline) {
-			t.Fatalf("%d card pushes, want %d", len(out), n)
-		}
+	timeout := time.NewTimer(10 * time.Second)
+	defer timeout.Stop()
+	tick := time.NewTicker(10 * time.Millisecond)
+	defer tick.Stop()
+	for len(out) < n {
 		for _, p := range cf.f.pushed() {
 			if p.Kind == assistantwire.NotifyInput && p.Interaction != nil {
 				out[p.Interaction.ID] = p
+			}
+		}
+		if len(out) < n {
+			select {
+			case <-tick.C:
+			case <-timeout.C:
+				t.Fatalf("%d card pushes, want %d", len(out), n)
 			}
 		}
 	}
