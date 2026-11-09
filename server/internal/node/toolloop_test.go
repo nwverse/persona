@@ -161,30 +161,38 @@ type toolLoopStaleInfo struct {
 
 func (s toolLoopStaleInfo) Size() int64 { return s.size }
 
-func TestToolLoopRetriesAfterShortRead(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "transcript.jsonl")
-	if err := os.WriteFile(path, nil, 0600); err != nil {
-		t.Fatal(err)
-	}
-	n := &Node{paths: map[string]string{"s": path}, metas: map[string]quickMeta{}}
-	var records [4]string
-	for i := range records {
-		records[i] = fmt.Sprintf(`{"type":"assistant","timestamp":"2026-01-01T00:00:0%dZ","message":{"content":[{"type":"tool_use","id":"%d","name":"Read","input":{}}]}}`+"\n"+`{"type":"user","timestamp":"2026-01-01T00:00:0%dZ","message":{"content":[{"type":"tool_result","tool_use_id":"%d","content":"ok"}]}}`+"\n", i, i, i, i)
-	}
-	appendFile(t, path, strings.Join(records[:3], ""))
-	if got := n.toolLoopOf("s"); got != nil {
-		t.Fatalf("early candidate: %+v", got)
-	}
-	st, err := os.Stat(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	// Simulate the file shrinking between Stat and ReadAt without sleeping or a race.
-	m := readToolLoop(path, toolLoopStaleInfo{FileInfo: st, size: st.Size() + 100}, n.metas[path])
-	n.metas[path] = m
-	appendFile(t, path, records[3])
-	if got := n.toolLoopOf("s"); got == nil || got.Count != 4 {
-		t.Fatalf("short read lost the preceding calls: %+v", got)
+func TestToolLoopRetriesAfterReadFailure(t *testing.T) {
+	for _, mode := range []string{"short read", "open failure"} {
+		t.Run(mode, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "transcript.jsonl")
+			if err := os.WriteFile(path, nil, 0600); err != nil {
+				t.Fatal(err)
+			}
+			n := &Node{paths: map[string]string{"s": path}, metas: map[string]quickMeta{}}
+			var records [4]string
+			for i := range records {
+				records[i] = fmt.Sprintf(`{"type":"assistant","timestamp":"2026-01-01T00:00:0%dZ","message":{"content":[{"type":"tool_use","id":"%d","name":"Read","input":{}}]}}`+"\n"+`{"type":"user","timestamp":"2026-01-01T00:00:0%dZ","message":{"content":[{"type":"tool_result","tool_use_id":"%d","content":"ok"}]}}`+"\n", i, i, i, i)
+			}
+			appendFile(t, path, strings.Join(records[:3], ""))
+			if got := n.toolLoopOf("s"); got != nil {
+				t.Fatalf("early candidate: %+v", got)
+			}
+			st, err := os.Stat(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			// Simulate a stale Stat or an open failure without sleeping or a race.
+			readPath := path
+			if mode == "open failure" {
+				readPath += ".missing"
+			}
+			m := readToolLoop(readPath, toolLoopStaleInfo{FileInfo: st, size: st.Size() + 100}, n.metas[path])
+			n.metas[path] = m
+			appendFile(t, path, records[3])
+			if got := n.toolLoopOf("s"); got == nil || got.Count != 4 {
+				t.Fatalf("read failure lost the preceding calls: %+v", got)
+			}
+		})
 	}
 }
 

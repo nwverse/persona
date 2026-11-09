@@ -62,7 +62,8 @@ func readToolLoop(path string, st os.FileInfo, m quickMeta) quickMeta {
 	}
 	f, err := os.Open(path)
 	if err != nil {
-		m.toolLoop.detector = transcript.LoopDetector{}
+		// A failed read must retry from a safe boundary, just like a short read.
+		m.toolLoop = toolLoopScan{}
 		return m
 	}
 	defer f.Close()
