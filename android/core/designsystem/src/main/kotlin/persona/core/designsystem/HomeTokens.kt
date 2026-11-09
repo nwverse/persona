@@ -13,6 +13,9 @@ internal object HomeTokens {
     val drawerLight = Color(0xFFF9F9F9)
     val drawerDark = Color(0xFF171717)
     val drawerRowHeight = 52.dp
+    val sidebarBadgeSize = 22.dp
+    val chromeLight = Color(0xCCFFFFFF)
+    val chromeDark = Color(0xB83A3A3C)
     val settingsGlyph = 54.dp
     val repositoryLight = Color(0xFFF5F5F5)
     val repositoryDark = Color(0xFF2A2A2A)
@@ -24,6 +27,10 @@ internal object HomeTokens {
     const val composerShadowAlpha = 0.08f
     val composerLight = Color.White
     val composerDark = Color(0xFF1F1F21)
+    val personaAnswerLight = Color(0xFFF0F0F3)
+    val personaAnswerDark = Color(0xFF2A2A2E)
+    val userMessageLight = Color(0xFFE3EDFD)
+    val userMessageDark = Color(0xFF1C2F47)
     val composerStrokeLight = Color(0xFFE3E3E3)
     val composerStrokeDark = Color(0xFF3A3A3C)
     val homeFaceSize = 46.dp

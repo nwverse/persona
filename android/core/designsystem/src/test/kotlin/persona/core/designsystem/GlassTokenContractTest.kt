@@ -72,6 +72,61 @@ class GlassTokenContractTest {
         assertEquals(20.dp, Tokens.Radius.bubble)
     }
 
+    @Test fun compactChromeAndSidebarBadgesKeepReadableText() {
+        assertEquals(Color(0xB83A3A3C), HomeTokens.chromeDark)
+        assertEquals(22.dp, HomeTokens.sidebarBadgeSize)
+        for (palette in listOf(Palettes.GlassLight, Palettes.GlassDark)) {
+            val fill = sidebarActionFill(palette)
+            assertEquals(Color.White, ExtensionThemeColors.on(fill))
+            assertTrue(ExtensionThemeColors.contrast(Color.White, fill) >= 4.5)
+            val chrome = (if (palette.dark) HomeTokens.chromeDark else HomeTokens.chromeLight)
+                .compositeOn(palette.background)
+            assertTrue(ExtensionThemeColors.contrast(palette.ink2, chrome) >= 4.5)
+        }
+    }
+
+    @Test fun compactSidebarRetainsCustomAccentColors() {
+        val custom = Palettes.GlassDark.copy(accent = Color.Magenta)
+        assertEquals(custom.accent, sidebarActionFill(custom))
+        assertTrue(ExtensionThemeColors.contrast(ExtensionThemeColors.on(custom.accent), custom.accent) >= 4.5)
+    }
+
+    @Test fun onlyFinalDefaultHomeAnswersUseTheNeutralBox() {
+        val items = listOf(NavItem("assistant", "Assistant", persona.core.designsystem.icons.PhIcons.Sparkle),
+            NavItem("agents", "Agents", persona.core.designsystem.icons.PhIcons.Terminal))
+        val home = HomeChrome(items, "assistant", {}, {})
+        assertTrue(boxesHomeAnswer(true, AppStyle.Glass, home))
+        assertTrue(!boxesHomeAnswer(false, AppStyle.Glass, home))
+        assertTrue(!boxesHomeAnswer(true, AppStyle.Glass, null))
+        assertTrue(!boxesHomeAnswer(true, AppStyle.Glass, HomeChrome(items, "agents", {}, {})))
+        for (style in listOf(AppStyle.Brief, AppStyle.Board)) assertTrue(!boxesHomeAnswer(true, style, home))
+    }
+
+    @Test fun neutralAnswerBoxesMatchTheReferenceAndReadWithNativeRoles() {
+        assertEquals(Color(0xFFF0F0F3), HomeTokens.personaAnswerLight)
+        assertEquals(Color(0xFF2A2A2E), HomeTokens.personaAnswerDark)
+        for (palette in listOf(Palettes.GlassLight, Palettes.GlassDark)) {
+            val fill = homeAnswerFill(palette)
+            for (ink in listOf(palette.ink, palette.ink2, palette.accent)) {
+                assertTrue(ExtensionThemeColors.contrast(ink, fill) >= 4.5)
+            }
+            val custom = palette.copy(customRoles = true, surfaceOpaque = palette.background)
+            assertEquals(custom.surfaceOpaque, homeAnswerFill(custom))
+        }
+    }
+
+    @Test fun standardHomeUserColorsMatchTheNewLayoutWithoutReplacingCustomBubbles() {
+        val home = HomeChrome(listOf(NavItem("assistant", "Assistant", persona.core.designsystem.icons.PhIcons.Sparkle)), "assistant", {}, {})
+        for (palette in listOf(Palettes.GlassLight, Palettes.GlassDark)) {
+            val expected = if (palette.dark) Color(0xFF1C2F47) else Color(0xFFE3EDFD)
+            assertEquals(expected, homeUserFill(palette, home))
+            assertTrue(ExtensionThemeColors.contrast(palette.ink, expected) >= 4.5)
+            assertEquals(palette.userBubble, homeUserFill(palette, null))
+            val custom = palette.copy(userBubble = Color.Magenta)
+            assertEquals(custom.userBubble, homeUserFill(custom, home))
+        }
+    }
+
     /** Pin entire non-Glass definitions, including fonts, heights, statuses, source badges and shared scale helper. */
     @Test fun briefAndBoardDefinitionsRemainByteIdentical() {
         val expected = mapOf(

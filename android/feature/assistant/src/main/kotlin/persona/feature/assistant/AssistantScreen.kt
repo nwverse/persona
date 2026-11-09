@@ -1033,7 +1033,8 @@ internal fun AssistantDrawer(
         }
         Row(Modifier.then(if (drawer) Modifier.padding(horizontal = Tokens.Space.l) else Modifier)
             .padding(vertical = if (drawer) Tokens.Space.m else Tokens.Space.s), verticalAlignment = Alignment.CenterVertically) {
-            JSidebarNewChat(stringResource(R.string.assistant_new_conversation), onNew, Modifier.weight(1f))
+            JSidebarNewChat(stringResource(R.string.assistant_new_conversation), onNew, if (drawer) Modifier else Modifier.weight(1f))
+            if (drawer) Spacer(Modifier.weight(1f))
             Box {
                 JIconButton(PhIcons.Gear, stringResource(R.string.assistant_open_settings), onSettings, raised = drawer)
                 when {

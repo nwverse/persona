@@ -35,7 +35,7 @@ import persona.core.designsystem.icons.PhIcons
  * rest in place (R3).
  */
 @Composable
-internal fun MessageContent(item: Item, user: Boolean, update: ChatTextUpdate? = null) {
+internal fun MessageContent(item: Item, user: Boolean, update: ChatTextUpdate? = null, boxed: Boolean = false) {
     var whole by remember(item.id) { mutableStateOf<String?>(null) }
     val cut = item.fullSize != null && whole == null && update?.streaming != true
     val text = whole ?: update?.text ?: item.text.orEmpty().let { if (item.fullSize != null) cutText(it) else it }
@@ -44,7 +44,7 @@ internal fun MessageContent(item: Item, user: Boolean, update: ChatTextUpdate? =
     Column(Modifier.fillMaxWidth().messageMenu(MessageTarget(item.id, model.plain, user, model.editText()))) {
         MessageContextGroup(model.contexts, "${item.id}/contexts", uri::openUri, alignEnd = user)
         AttachedFileCards(model.attached, alignEnd = user)
-        MessageParts(model.parts, user, item.id)
+        MessageParts(model.parts, user, item.id, boxed = boxed)
         if (cut) FullTextButton(item) { whole = it } else ReaderEntry(text)
         if (update?.streaming == true) StreamingCursor()
         // An answer's documents as cards with their first page (iOS #1543), the rest as chips.
@@ -66,7 +66,7 @@ private fun StreamingCursor() {
 }
 
 @Composable
-private fun MessageParts(parts: List<MessagePart>, user: Boolean, id: String, onLastLine: ((Int) -> Unit)? = null) {
+private fun MessageParts(parts: List<MessagePart>, user: Boolean, id: String, onLastLine: ((Int) -> Unit)? = null, boxed: Boolean = false) {
     // Bubble padding below the last text line, so the reported extent reaches the bottom of the row.
     val bottomPadding = with(LocalDensity.current) { Tokens.Space.m.roundToPx() }
     // A reply's ```persona-view blocks are numbered across the whole text item: `<item id>/<n>`, the hub's key.
@@ -86,8 +86,10 @@ private fun MessageParts(parts: List<MessagePart>, user: Boolean, id: String, on
                     if (index == parts.lastIndex && layout.lineCount > 0)
                         onLastLine?.invoke((layout.size.height - layout.getLineTop(layout.lineCount - 1)).toInt() + bottomPadding)
                 })
-                else ChatMarkdown(part.text, "$id/$index", selectable = false,
-                    viewKeys = { n -> persona.core.domain.views.AssistantFences.key(id, firstCard[index] + n) })
+                else AssistantAnswerFrame(boxed) {
+                    ChatMarkdown(part.text, "$id/$index", selectable = false,
+                        viewKeys = { n -> persona.core.domain.views.AssistantFences.key(id, firstCard[index] + n) })
+                }
             is MessagePart.Source -> JGroupItem(GroupPosition.Single) {
                 Column(Modifier.fillMaxWidth().padding(10.dp)) {
                     Text(stringResource(R.string.chat_content_from, part.name.ifBlank { stringResource(R.string.chat_content_other_session) }), style = PersonaTheme.type.caption, color = PersonaTheme.palette.ink2)

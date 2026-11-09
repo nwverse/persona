@@ -111,7 +111,7 @@ fun ChatTopBar(
 }
 
 /** The user's message: a neutral glass bubble, wash bubble or bordered box. Right-aligned, at most 86% wide.
- *  [own] uses a stronger neutral surface; forwarded messages keep the ordinary surface. */
+ *  [own] uses the user's bubble color; forwarded messages keep the ordinary surface. */
 @Composable
 fun UserBubbleFrame(modifier: Modifier = Modifier, footer: (@Composable () -> Unit)? = null, own: Boolean = true,
     content: @Composable ColumnScope.() -> Unit) {
@@ -126,7 +126,7 @@ fun UserBubbleFrame(modifier: Modifier = Modifier, footer: (@Composable () -> Un
         Column(
             Modifier.fillMaxWidth(0.86f).wrapContentWidth(Alignment.End).clip(shape)
                 .then(when (style) {
-                    AppStyle.Glass -> Modifier.background(if (own) palette.userBubble else palette.surface)
+                    AppStyle.Glass -> Modifier.background(if (own) homeUserFill(palette, LocalHomeChrome.current) else palette.surface)
                         .border(HomeTokens.composerStroke, palette.line, shape)
                     AppStyle.Brief -> Modifier.background(if (own) palette.statusSurface else palette.surface)
                     AppStyle.Board -> Modifier.background(if (own) palette.statusSurface else palette.surface).border(1.dp, palette.line, shape)

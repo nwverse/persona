@@ -3,13 +3,17 @@ package persona.core.designsystem
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import persona.core.designsystem.icons.PhIcons
+
+internal fun sidebarActionFill(palette: PersonaPalette): Color =
+    if (palette.dark && palette.accent == Palettes.GlassDark.accent) Palettes.GlassLight.accent else palette.accent
 
 @Composable
 fun JSidebarNewChat(text: String, onClick: () -> Unit, modifier: Modifier = Modifier) {
     val palette = PersonaTheme.palette
     val compact = LocalHomeDrawer.current && PersonaTheme.style == AppStyle.Glass
-    val fill = if (compact && palette.dark && palette.accent == Palettes.GlassDark.accent) Palettes.GlassLight.accent else palette.accent
+    val fill = if (compact) sidebarActionFill(palette) else palette.accent
     CompositionLocalProvider(LocalPalette provides if (compact) palette.copy(action = fill, onAction = ExtensionThemeColors.on(fill)) else palette) {
         JButton(text, onClick, modifier, icon = PhIcons.NotePencil)
     }
