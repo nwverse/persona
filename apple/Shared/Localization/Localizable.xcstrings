@@ -47,6 +47,52 @@
         }
       }
     },
+    "Add Images or Files": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Add Images or Files"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "画像またはファイルを追加"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "添加图片或文件"
+          }
+        }
+      }
+    },
+    "Codex takes no attachments": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Codex takes no attachments"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Codex には添付ファイルを付けられません"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Codex 不能带附件"
+          }
+        }
+      }
+    },
     "Loading launchers…": {
       "extractionState": "manual",
       "localizations": {
@@ -66,6 +112,29 @@
           "stringUnit": {
             "state": "translated",
             "value": "ランチャーを読み込み中…"
+          }
+        }
+      }
+    },
+    "Remove %@": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Remove %1$@"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%1$@を削除"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "移除 %1$@"
           }
         }
       }
@@ -319,6 +388,75 @@
           "stringUnit": {
             "state": "translated",
             "value": "高优先级"
+          }
+        }
+      }
+    },
+    "The files uploaded to “%@” were removed. Add them again for this computer.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The files uploaded to “%1$@” were removed. Add them again for this computer."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "「%1$@」にアップロードしたファイルは外しました。このコンピュータに送るには、もう一度追加してください。"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "上传到“%1$@”的文件已移除。要发给这台电脑，请重新添加。"
+          }
+        }
+      }
+    },
+    "This launcher can't take attachments in the first message. Pick another launcher, or start with text and send the attachments in the session.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This launcher can't take attachments in the first message. Pick another launcher, or start with text and send the attachments in the session."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "このランチャーは最初のメッセージに添付ファイルを付けられません。別のランチャーを選ぶか、テキストで開始してからセッションで添付ファイルを送ってください。"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "这个启动器的第一条消息不能带附件。换一个启动器；或者先只发文字启动，再在会话里发附件。"
+          }
+        }
+      }
+    },
+    "Waiting for the files to finish uploading": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Waiting for the files to finish uploading"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ファイルのアップロードが終わるのを待っています"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "正在等文件上传完"
           }
         }
       }
